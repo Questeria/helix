@@ -167,6 +167,43 @@ def test_self_int_compare_folds():
     assert cmps == 0, f"expected CMP_EQ folded, got {cmps}"
 
 
+def test_x_times_one_folds():
+    """x * 1 should be forwarded to x — the MUL op disappears."""
+    mod = lower_and_fold("fn main() -> i32 { let x = 7; x * 1 }")
+    muls = count_ops(mod, tir.OpKind.MUL)
+    assert muls == 0, f"expected x*1 to fold, MUL count = {muls}"
+
+
+def test_one_times_x_folds():
+    mod = lower_and_fold("fn main() -> i32 { let x = 7; 1 * x }")
+    muls = count_ops(mod, tir.OpKind.MUL)
+    assert muls == 0, f"expected 1*x to fold, MUL count = {muls}"
+
+
+def test_x_plus_zero_folds():
+    mod = lower_and_fold("fn main() -> i32 { let x = 7; x + 0 }")
+    adds = count_ops(mod, tir.OpKind.ADD)
+    assert adds == 0, f"expected x+0 to fold, ADD count = {adds}"
+
+
+def test_zero_plus_x_folds():
+    mod = lower_and_fold("fn main() -> i32 { let x = 7; 0 + x }")
+    adds = count_ops(mod, tir.OpKind.ADD)
+    assert adds == 0, f"expected 0+x to fold, ADD count = {adds}"
+
+
+def test_x_div_one_folds():
+    mod = lower_and_fold("fn main() -> i32 { let x = 7; x / 1 }")
+    divs = count_ops(mod, tir.OpKind.DIV)
+    assert divs == 0, f"expected x/1 to fold, DIV count = {divs}"
+
+
+def test_x_minus_zero_folds():
+    mod = lower_and_fold("fn main() -> i32 { let x = 7; x - 0 }")
+    subs = count_ops(mod, tir.OpKind.SUB)
+    assert subs == 0, f"expected x-0 to fold, SUB count = {subs}"
+
+
 def main():
     tests = [(name, fn) for name, fn in globals().items()
              if name.startswith("test_") and callable(fn)]

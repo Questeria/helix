@@ -144,7 +144,93 @@ def fold_function(fn: tir.FnIR) -> int:
                 else:
                     new_ops.append(op)
             blk.ops = new_ops
+
+        # Identity forwarding: x*1, 1*x, x+0, 0+x, x/1, x-0 → forward x.
+        # Builds a substitution {result_id: forwarded_value}, applies it
+        # to all subsequent operands, and drops the identity ops as dead.
+        if _propagate_identities(fn, defs):
+            changed = True
+            folded += 1
     return folded
+
+
+def _propagate_identities(fn: tir.FnIR, defs: dict) -> bool:
+    """One pass of SSA-style value forwarding for algebraic identities.
+    Returns True if any substitution was made."""
+    subst: dict[int, "tir.Value"] = {}
+    for blk in fn.blocks:
+        for op in blk.ops:
+            ident = _algebraic_forward(op, defs)
+            if ident is not None:
+                subst[op.results[0].id] = ident
+    if not subst:
+        return False
+    # Apply transitively — if a -> b and b -> c, then a -> c.
+    changed = True
+    while changed:
+        changed = False
+        for k, v in list(subst.items()):
+            if v.id in subst:
+                subst[k] = subst[v.id]
+                changed = True
+    # Rewrite operand lists; drop ops whose result is now in subst.
+    for blk in fn.blocks:
+        new_ops: list[tir.Op] = []
+        for op in blk.ops:
+            if op.results and op.results[0].id in subst:
+                continue  # dead (forwarded)
+            op.operands = [subst.get(o.id, o) for o in op.operands]
+            new_ops.append(op)
+        blk.ops = new_ops
+    return True
+
+
+def _algebraic_forward(op: tir.Op, defs: dict) -> "tir.Value | None":
+    """If `op` is `x op K` (or `K op x`) where K is an algebraic identity,
+    return the value that should replace `op.results[0]`. Else None.
+
+    Identities forwarded:
+        x*1 → x,  1*x → x   (int + float)
+        x+0 → x,  0+x → x   (int + float)
+        x-0 → x             (int + float)
+        x/1 → x             (int + float; div-by-1 is exact)
+    """
+    if not op.results or len(op.operands) != 2:
+        return None
+    l_def = defs.get(op.operands[0].id)
+    r_def = defs.get(op.operands[1].id)
+
+    def is_const(d, value: int | float) -> bool:
+        if d is None:
+            return False
+        if d.kind == tir.OpKind.CONST_INT:
+            return int(d.attrs.get("value", -1)) == value
+        if d.kind == tir.OpKind.CONST_FLOAT:
+            try:
+                return float(d.attrs.get("value", 0.0)) == float(value)
+            except Exception:
+                return False
+        return False
+
+    # x * 1, 1 * x  → x
+    if op.kind == tir.OpKind.MUL:
+        if is_const(r_def, 1):
+            return op.operands[0]
+        if is_const(l_def, 1):
+            return op.operands[1]
+    # x + 0, 0 + x  → x
+    if op.kind == tir.OpKind.ADD:
+        if is_const(r_def, 0):
+            return op.operands[0]
+        if is_const(l_def, 0):
+            return op.operands[1]
+    # x - 0  → x  (note: 0 - x is NEG; we don't forward that here)
+    if op.kind == tir.OpKind.SUB and is_const(r_def, 0):
+        return op.operands[0]
+    # x / 1  → x  (int + float)
+    if op.kind == tir.OpKind.DIV and is_const(r_def, 1):
+        return op.operands[0]
+    return None
 
 
 def _try_fold_op(op: tir.Op, defs: dict) -> tir.Op | None:
