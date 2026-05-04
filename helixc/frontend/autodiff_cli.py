@@ -50,13 +50,8 @@ def main():
         sys.exit(1)
 
     differentiate_var = var or target.params[0].name
-    body_expr = target.body.final_expr
-    if body_expr is None:
-        print(f"error: function {fn_name!r} has no expression body to differentiate",
-              file=sys.stderr)
-        sys.exit(1)
-
-    deriv = differentiate(body_expr, differentiate_var)
+    # Pass the whole block so let-bindings are inlined before differentiating
+    deriv = differentiate(target.body, differentiate_var)
     print(f"d({fn_name})/d({differentiate_var}) = {fmt(deriv)}")
 
 
