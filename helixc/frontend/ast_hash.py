@@ -185,6 +185,42 @@ def _hash_into(h: "hashlib._Hash", node: Any,
         _hash_into(h, node.transformation, binders)
         _hash_into(h, node.verifier, binders)
         return
+    if isinstance(node, A.Range):
+        _emit(h, "Range")
+        _hash_into(h, node.start, binders)
+        _hash_into(h, node.end, binders)
+        return
+    if isinstance(node, A.TupleLit):
+        _emit(h, "TupleLit", len(node.elems))
+        for e in node.elems:
+            _hash_into(h, e, binders)
+        return
+    if isinstance(node, A.ArrayLit):
+        _emit(h, "ArrayLit", len(node.elems))
+        for e in node.elems:
+            _hash_into(h, e, binders)
+        return
+    if isinstance(node, A.Field):
+        _emit(h, "Field", node.name)
+        _hash_into(h, node.obj, binders)
+        return
+    if isinstance(node, A.Match):
+        _emit(h, "Match", len(node.arms))
+        _hash_into(h, node.scrutinee, binders)
+        for arm in node.arms:
+            _emit(h, "Arm")
+            _hash_pattern(h, arm.pattern, binders)
+            # Extend binder map with any names introduced by the pattern
+            # so that references in the guard / body resolve via index,
+            # making `y => y+1` and `z => z+1` hash equally.
+            local = dict(binders)
+            depth = max(local.values(), default=-1) + 1
+            for name in _pattern_binders(arm.pattern):
+                local[name] = depth
+                depth += 1
+            _hash_into(h, arm.guard, local)
+            _hash_into(h, arm.body, local)
+        return
     if isinstance(node, A.FnDecl):
         # Hash a top-level fn by: name, attrs, param COUNT + TYPES (not
         # names — alpha-equivalence), body. Param names get de-Bruijn
@@ -200,6 +236,55 @@ def _hash_into(h: "hashlib._Hash", node: Any,
     # This is conservative: it prevents collisions but two different
     # instances of the same class share a hash.
     _emit(h, "Unknown", type(node).__name__)
+
+
+def _pattern_binders(pat: A.Pattern) -> list[str]:
+    """Names introduced by the pattern, in left-to-right order. Used to
+    extend the de-Bruijn binder map for arm-body hashing."""
+    if isinstance(pat, A.PatBind):
+        return [pat.name]
+    if isinstance(pat, A.PatTuple):
+        out: list[str] = []
+        for sub in pat.elems:
+            out.extend(_pattern_binders(sub))
+        return out
+    if isinstance(pat, A.PatOr):
+        # All alternatives must bind the same names — take from first.
+        return _pattern_binders(pat.alts[0]) if pat.alts else []
+    return []
+
+
+def _hash_pattern(h: "hashlib._Hash", pat: A.Pattern,
+                  binders: dict[str, int]) -> None:
+    """Hash a match pattern. Binder names use de-Bruijn-style depth (so
+    `x => x+1` and `y => y+1` hash equally as patterns); literal/range
+    endpoints are folded in by their normal expression hash."""
+    if isinstance(pat, A.PatWildcard):
+        _emit(h, "PatWildcard")
+        return
+    if isinstance(pat, A.PatBind):
+        _emit(h, "PatBind")
+        return
+    if isinstance(pat, A.PatLit):
+        _emit(h, "PatLit")
+        _hash_into(h, pat.value, binders)
+        return
+    if isinstance(pat, A.PatTuple):
+        _emit(h, "PatTuple", len(pat.elems))
+        for sub in pat.elems:
+            _hash_pattern(h, sub, binders)
+        return
+    if isinstance(pat, A.PatOr):
+        _emit(h, "PatOr", len(pat.alts))
+        for alt in pat.alts:
+            _hash_pattern(h, alt, binders)
+        return
+    if isinstance(pat, A.PatRange):
+        _emit(h, "PatRange", pat.inclusive)
+        _hash_into(h, pat.lo, binders)
+        _hash_into(h, pat.hi, binders)
+        return
+    _emit(h, "PatUnknown", type(pat).__name__)
 
 
 def short_hash(h: str) -> str:
