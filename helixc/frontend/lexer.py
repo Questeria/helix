@@ -361,7 +361,9 @@ class Lexer:
         if esc == "x":
             h1 = self._advance() if not self._at_eof() else ""
             h2 = self._advance() if not self._at_eof() else ""
-            if not (h1 + h2).isalnum() or len(h1 + h2) != 2:
+            hex_chars = "0123456789abcdefABCDEF"
+            if (len(h1 + h2) != 2 or h1 not in hex_chars
+                    or h2 not in hex_chars):
                 raise LexError(r"\x escape needs 2 hex digits", line, col)
             return chr(int(h1 + h2, 16))
         if esc == "u":

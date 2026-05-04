@@ -869,7 +869,16 @@ class Parser:
             first = self._parse_expr()
             if self._match(T.COMMA):
                 elems = [first]
+                # Guarded loop: track i to detect an iteration that fails
+                # to advance — that's a parser bug producing infinite loop
+                # on malformed input. Bail loudly.
+                last_i = self.i - 1
                 while not self._at(T.RPAREN):
+                    if self.i == last_i:
+                        raise ParseError(
+                            "tuple literal: malformed element (parser made "
+                            "no progress)", self._tok())
+                    last_i = self.i
                     elems.append(self._parse_expr())
                     if not self._match(T.COMMA):
                         break

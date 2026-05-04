@@ -828,9 +828,14 @@ class TypeChecker:
                 return TyUnit()
             return ts[0]
         if isinstance(expr, A.For):
-            self._check_expr(expr.iter_expr, scope)
+            iter_ty = self._check_expr(expr.iter_expr, scope)
             inner = Scope(parent=scope)
-            inner.define(expr.var_name, TyPrim("i64"))   # default loop var
+            # Loop variable inherits the iterator's element type. For a
+            # range expression `0..n` the iter_expr is currently typed
+            # as i32 (or whatever the operands are); fall back to i64
+            # only when we can't determine a concrete element type.
+            loop_var_ty = iter_ty if iter_ty is not None else TyPrim("i64")
+            inner.define(expr.var_name, loop_var_ty)
             self._check_block(expr.body, inner)
             return TyUnit()
         if isinstance(expr, A.While):

@@ -230,6 +230,8 @@ class Lowerer:
             return
         if isinstance(stmt, A.ConstStmt):
             v = self._lower_expr(stmt.value)
+            if v is None:
+                v = self.builder.const_int(0)
             self._bind(stmt.name, v)
             return
 
@@ -534,7 +536,19 @@ class Lowerer:
             self.builder.switch_to(exit_blk)
             return None
         if isinstance(expr, A.Loop):
+            # `loop { body }` — same skeleton as While but with no exit
+            # condition (caller expected to break, which we don't yet
+            # support, so this becomes effectively infinite). Without a
+            # header→body→header back-edge, the body would just fall
+            # through into whatever follows, which was the prior bug.
+            header_blk = self.builder.new_block()
+            body_blk = self.builder.new_block()
+            self.builder.emit(tir.OpKind.BR, attrs={"target_block": header_blk.id})
+            self.builder.switch_to(header_blk)
+            self.builder.emit(tir.OpKind.BR, attrs={"target_block": body_blk.id})
+            self.builder.switch_to(body_blk)
             self._lower_block(expr.body)
+            self.builder.emit(tir.OpKind.BR, attrs={"target_block": header_blk.id})
             return None
         if isinstance(expr, A.Match):
             self._lower_expr(expr.scrutinee)

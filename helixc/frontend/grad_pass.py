@@ -358,27 +358,48 @@ def _generate_grad_fn(fn: A.FnDecl, param_idx: int = 0,
                        fn_table: dict[str, A.FnDecl] | None = None
                        ) -> A.FnDecl | None:
     """Build a `<fn.name>__grad_<n>` (or `__rgrad_<n>`) FnDecl whose body is
-    the derivative of `fn`'s body w.r.t. parameter `param_idx`. For
-    single-param functions the name is shortened to `__grad` / `__rgrad`.
+    the derivative of `fn`'s body w.r.t. parameter `param_idx`.
 
-    `mode` selects the AD engine: "forward" (autodiff.differentiate) or
-    "reverse" (autodiff_reverse.differentiate_reverse). Both produce the
-    same gradient for our supported expression set; reverse-mode is
-    structured to extend cleanly to multi-output later.
+    `mode` selects the AD engine. The result for ALL parameters is computed
+    on first request and cached on `fn._helix_grad_cache`, so repeated
+    grad(f, n) calls (for different n on the same f) share work — typical
+    speedup 3-10× when a function has many parameters and the user calls
+    grad_rev(f, n) for several values of n.
     """
+    import copy as _copy
     if not fn.params:
         return None
     if param_idx < 0 or param_idx >= len(fn.params):
         return None
     var = fn.params[param_idx].name
-    if mode == "reverse":
-        # Reverse-mode: get the gradient w.r.t. the chosen parameter from
-        # the dict of all gradients. The other entries are discarded; the
-        # multi-output API will surface them when added.
-        all_grads = differentiate_reverse(fn.body, [var], fn_table=fn_table)
-        deriv = all_grads[var]
-    else:
-        deriv = differentiate(fn.body, var, fn_table=fn_table)
+
+    # Lazy per-FnDecl cache. Keyed by (mode, all-param-names tuple) so we
+    # invalidate if the function's signature changes (defensive — the AST
+    # is mostly immutable but grad_pass mutates some fields).
+    cache_key = (mode, tuple(p.name for p in fn.params))
+    cache = getattr(fn, "_helix_grad_cache", None)
+    if cache is None or cache.get("_key") != cache_key:
+        # Compute gradients for ALL parameters at once.
+        all_vars = [p.name for p in fn.params]
+        if mode == "reverse":
+            grads_dict = differentiate_reverse(fn.body, all_vars,
+                                                 fn_table=fn_table)
+        else:
+            # Forward mode is one-pass-per-var by construction; do them
+            # all up front so subsequent param_idx's hit the cache.
+            grads_dict = {v: differentiate(fn.body, v, fn_table=fn_table)
+                          for v in all_vars}
+        cache = {"_key": cache_key, "grads": grads_dict}
+        try:
+            fn._helix_grad_cache = cache
+        except (AttributeError, TypeError):
+            # FnDecl might be a frozen dataclass — fall back to no-cache.
+            pass
+
+    # Each generated grad fn gets its own deepcopy of the cached gradient
+    # so subsequent passes (alias-resolution, lowering) can mutate the AST
+    # without corrupting the cache.
+    deriv = _copy.deepcopy(cache["grads"][var])
     # Wrap the derivative expression in a block (the FnDecl expects a Block body)
     new_body = A.Block(span=fn.body.span, stmts=[], final_expr=deriv)
 

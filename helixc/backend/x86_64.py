@@ -1017,15 +1017,26 @@ class FnCompiler:
             name = op.attrs["name"]
             var_slot = self.var_slots[name]
             res_slot = self._slot_of(op.results[0])
-            self.asm.mov_eax_mem_rbp(var_slot)
-            self.asm.mov_mem_rbp_eax(res_slot)
+            # Use 32-bit moves for both int and f32 since the bit pattern
+            # round-trips correctly. For f64 (not yet supported) we'd
+            # need a 64-bit path. Same for STORE_VAR below.
+            if self._is_float_type(op.results[0].ty):
+                self.asm.movss_xmm0_mem_rbp(var_slot)
+                self.asm.movss_mem_rbp_xmm0(res_slot)
+            else:
+                self.asm.mov_eax_mem_rbp(var_slot)
+                self.asm.mov_mem_rbp_eax(res_slot)
             return
         if op.kind == tir.OpKind.STORE_VAR:
             name = op.attrs["name"]
             var_slot = self.var_slots[name]
             src_slot = self._slot_of(op.operands[0])
-            self.asm.mov_eax_mem_rbp(src_slot)
-            self.asm.mov_mem_rbp_eax(var_slot)
+            if self._is_float_type(op.operands[0].ty):
+                self.asm.movss_xmm0_mem_rbp(src_slot)
+                self.asm.movss_mem_rbp_xmm0(var_slot)
+            else:
+                self.asm.mov_eax_mem_rbp(src_slot)
+                self.asm.mov_mem_rbp_eax(var_slot)
             return
 
         # AGI primitives
