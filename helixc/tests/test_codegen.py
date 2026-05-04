@@ -1305,6 +1305,54 @@ def test_three_level_nested_struct():
     assert code == 42, f"expected 42, got {code}"
 
 
+def test_struct_lit_with_name_field_copies_slots():
+    """`BinExpr { lhs: a, rhs: b }` where a, b are existing struct
+    bindings must copy each slot from the named source."""
+    src = """
+    struct Token { kind: i32, value: i32 }
+    struct BinExpr { op_kind: i32, lhs: Token, rhs: Token }
+    fn main() -> i32 {
+        let a = Token { kind: 0, value: 42 };
+        let b = Token { kind: 0, value: 99 };
+        let bx = BinExpr { op_kind: 2, lhs: a, rhs: b };
+        bx.lhs.value
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_field_arg_passed_to_helper():
+    """`helper(e.lhs)` where e is a struct param and lhs is a sub-struct
+    field — call-site arg expansion locates the field's flat-path offset."""
+    src = """
+    struct Token { kind: i32, value: i32 }
+    struct BinExpr { op_kind: i32, lhs: Token, rhs: Token }
+    fn token_value(t: Token) -> i32 { t.value }
+    fn lhs_value(e: BinExpr) -> i32 { token_value(e.lhs) }
+    fn main() -> i32 {
+        let a = Token { kind: 0, value: 42 };
+        let b = Token { kind: 0, value: 99 };
+        let bx = BinExpr { op_kind: 2, lhs: a, rhs: b };
+        lhs_value(bx)
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_hbs_sample_visitor_runs():
+    """HBS sample: AST visitor with struct + enum + match + struct
+    pass-by-value to helper fns. Computes (6 * 7) = 42."""
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    sample_path = os.path.join(proj_root, "helixc", "examples",
+                               "hbs_sample_visitor.hx")
+    with open(sample_path, "r", encoding="utf-8") as f:
+        src = f.read()
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
 def test_struct_passed_to_helper_returns_value():
     """Tier F #22: passing a struct value to a function should preserve
     field access. Multi-slot ABI: each struct param expands to N i32

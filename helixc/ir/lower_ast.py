@@ -143,6 +143,51 @@ class Lowerer:
                 return sc[name]
         return None
 
+    def _resolve_path_value(self, slit: "A.StructLit",
+                              path: tuple[str, ...]) -> "Optional[tir.Value]":
+        """Resolve a flat path through a (possibly-nested) StructLit, with
+        a fallback to LOAD_ELEM from any Name binding the walk encounters
+        mid-path. Returns the lowered value or None if the path can't be
+        resolved."""
+        cur: A.Expr = slit
+        consumed = 0
+        for seg in path:
+            if isinstance(cur, A.StructLit):
+                found = None
+                for fname, fexpr in cur.fields:
+                    if fname == seg:
+                        found = fexpr
+                        break
+                if found is None:
+                    return None
+                cur = found
+                consumed += 1
+                continue
+            if isinstance(cur, A.Name):
+                # Remaining path segments must be resolved via the Name's
+                # struct binding's flat-path table.
+                struct_name = self._lookup_struct(cur.name)
+                if struct_name is None:
+                    return None
+                src_paths = self._struct_flat_paths.get(struct_name, [])
+                remaining = path[consumed:]
+                try:
+                    idx_int = src_paths.index(remaining)
+                except ValueError:
+                    return None
+                arr = self._lookup_array(cur.name)
+                if arr is None:
+                    return None
+                elem_ty, _ = arr
+                idx_v = self.builder.const_int(idx_int)
+                return self.builder.emit(
+                    tir.OpKind.LOAD_ELEM, idx_v,
+                    result_ty=elem_ty,
+                    attrs={"name": cur.name})
+            return None
+        # Reached the leaf via path traversal of nested StructLits.
+        return self._lower_expr(cur)
+
     def _aggregate_slot_count(self, ty: "A.TyNode") -> Optional[int]:
         """If `ty` is a struct or enum decl name, return the number of
         i32 slots it occupies (struct: flat field count; enum: max
@@ -363,12 +408,14 @@ class Lowerer:
                     self._bind(stmt.name, self.builder.const_int(0))
                     return
                 # For each flat path, walk the (possibly nested) StructLit
-                # value to resolve the leaf expression. Missing fields fall
-                # back to const_int(0).
+                # value to resolve the leaf expression. If the walk hits a
+                # Name (existing struct binding) before consuming the full
+                # path, dereference the remaining path against the Name's
+                # array binding via LOAD_ELEM. Missing fields fall back
+                # to const_int(0).
                 elem_vals = []
                 for path in flat_paths:
-                    leaf = _resolve_struct_leaf(slit, path)
-                    v = self._lower_expr(leaf) if leaf is not None else None
+                    v = self._resolve_path_value(slit, path)
                     if v is None:
                         v = self.builder.const_int(0)
                     elem_vals.append(v)
@@ -700,6 +747,42 @@ class Lowerer:
                                     else:
                                         args.append(self.builder.const_int(0))
                                 expanded = True
+                        # Field chain: passing a sub-struct of a struct.
+                        # E.g. `mul_tokens(e.lhs, e.rhs)` where e.lhs is a
+                        # Token (sub-struct) of e (BinExpr). Locate the
+                        # field's flat-path prefix in the parent's layout
+                        # and emit n_slots LOAD_ELEMs starting at that
+                        # offset.
+                        if not expanded and isinstance(a, A.Field):
+                            base, segs = _walk_field_chain(a)
+                            if base is not None:
+                                struct_name = self._lookup_struct(base)
+                                if struct_name is not None:
+                                    parent_paths = self._struct_flat_paths.get(
+                                        struct_name, [])
+                                    prefix = tuple(segs)
+                                    # Find indices of paths whose prefix
+                                    # matches `segs`. Their suffixes form
+                                    # the sub-struct's flat layout.
+                                    base_idx = None
+                                    for idx_int, p in enumerate(parent_paths):
+                                        if p[:len(prefix)] == prefix:
+                                            if base_idx is None:
+                                                base_idx = idx_int
+                                    if base_idx is not None:
+                                        arr = self._lookup_array(base)
+                                        if arr is not None:
+                                            elem_ty, _ = arr
+                                            for j in range(n_slots):
+                                                idx_v = self.builder.const_int(
+                                                    base_idx + j)
+                                                loaded = self.builder.emit(
+                                                    tir.OpKind.LOAD_ELEM,
+                                                    idx_v,
+                                                    result_ty=elem_ty,
+                                                    attrs={"name": base})
+                                                args.append(loaded)
+                                            expanded = True
                         if not expanded:
                             # Generic case: lower the arg as a scalar,
                             # treat it as the tag (slot 0), pad the rest
