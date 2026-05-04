@@ -1485,6 +1485,18 @@ def test_hbs_sample_recursion_runs():
     assert code == 120, f"expected 120 (5!), got {code}"
 
 
+def test_hbs_reference_500loc_runs():
+    """The HBS-frozen reference program: exercises every shipped feature
+    in 500+ LOC (currently 426). Computes 65 as the exit code."""
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    sample_path = os.path.join(proj_root, "helixc", "examples",
+                               "hbs_reference_500loc.hx")
+    with open(sample_path, "r", encoding="utf-8") as f:
+        src = f.read()
+    code = compile_and_run(src)
+    assert code == 65, f"expected 65, got {code}"
+
+
 def test_hbs_sample_symbol_table_runs():
     """HBS sample: assoc-list symbol table built on the arena builtins.
     Inserts 3 (key, decl) pairs, looks up the third — returns decl=42."""
