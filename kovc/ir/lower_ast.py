@@ -541,6 +541,15 @@ class Lowerer:
         if isinstance(expr, A.Field):
             self._lower_expr(expr.obj)
             return None
+        if isinstance(expr, A.Cast):
+            inner = self._lower_expr(expr.value)
+            if inner is None:
+                inner = self.builder.const_int(0)
+            target = self._lower_type(expr.target_ty)
+            return self.builder.emit(tir.OpKind.CAST, inner,
+                                     result_ty=target,
+                                     attrs={"from_ty": inner.ty,
+                                            "to_ty": target})
         return None
 
 

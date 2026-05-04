@@ -390,6 +390,64 @@ def test_large_array_sum():
     assert compile_and_run(src) == 16   # 528 mod 256
 
 
+def test_float_const_to_int():
+    # Simplest float test: cast a constant
+    src = "fn main() -> i32 { 42.5 as i32 }"
+    # truncating: 42.5 -> 42
+    assert compile_and_run(src) == 42
+
+
+def test_float_addition():
+    src = "fn main() -> i32 { (40.0 + 2.0) as i32 }"
+    assert compile_and_run(src) == 42
+
+
+def test_float_multiplication():
+    src = "fn main() -> i32 { (6.0 * 7.0) as i32 }"
+    assert compile_and_run(src) == 42
+
+
+def test_float_division():
+    # 168.0 / 4.0 = 42.0
+    src = "fn main() -> i32 { (168.0 / 4.0) as i32 }"
+    assert compile_and_run(src) == 42
+
+
+def test_float_subtraction():
+    src = "fn main() -> i32 { (50.0 - 8.0) as i32 }"
+    assert compile_and_run(src) == 42
+
+
+def test_int_to_float_round_trip():
+    # int -> float -> int (no change for representable values)
+    src = """
+    fn main() -> i32 {
+        let x = 42 as f32;
+        x as i32
+    }
+    """
+    assert compile_and_run(src) == 42
+
+
+def test_float_complex_expression():
+    # (2.5 * 8.0) + (24.0 / 2.0) + 10.0 = 20.0 + 12.0 + 10.0 = 42.0
+    src = "fn main() -> i32 { ((2.5 * 8.0) + (24.0 / 2.0) + 10.0) as i32 }"
+    assert compile_and_run(src) == 42
+
+
+def test_float_with_let_binding():
+    src = """
+    fn main() -> i32 {
+        let pi = 3.14;
+        let r = 4.0;
+        let area = pi * r * r;
+        area as i32
+    }
+    """
+    # 3.14 * 16 = 50.24 -> 50
+    assert compile_and_run(src) == 50
+
+
 def test_real_matmul_3x3_via_arrays():
     # 3x3 matmul: c[i][j] = sum_k a[i][k] * b[k][j]
     # We use flat 9-element arrays with row-major indexing: a[i*3+j]

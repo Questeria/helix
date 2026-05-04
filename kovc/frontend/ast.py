@@ -280,6 +280,13 @@ class Assign(Expr):
     value: "Expr"
 
 
+@dataclass
+class Cast(Expr):
+    """expr as TargetType — type conversion (e.g., 3.14 as i32)"""
+    value: "Expr"
+    target_ty: "TyNode"
+
+
 # ============================================================================
 # Statement AST
 # ============================================================================

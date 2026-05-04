@@ -438,6 +438,9 @@ class TypeChecker:
             return TyArray(elem, TyPrim(f"size_{len(ts)}"))
         if isinstance(expr, (A.Break, A.Continue, A.Return)):
             return TyUnit()
+        if isinstance(expr, A.Cast):
+            self._check_expr(expr.value, scope)
+            return self._resolve_type(expr.target_ty, scope)
         return TyUnknown(hint=f"unhandled {type(expr).__name__}")
 
     # ---- compatibility (simplified) ----

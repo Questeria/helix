@@ -316,6 +316,57 @@ class Asm:
         # 85 C0
         self.b.emit(0x85, 0xC0)
 
+    # ============================================================
+    # Float (SSE) instructions — operate on xmm0/xmm1
+    # ============================================================
+    def movss_xmm0_mem_rbp(self, disp: int) -> None:
+        # F3 0F 10 45 disp8   (mod=01, reg=000=xmm0, r/m=101=rbp+disp)
+        if -128 <= disp <= 127:
+            self.b.emit(0xF3, 0x0F, 0x10, 0x45, disp & 0xFF)
+        else:
+            self.b.emit(0xF3, 0x0F, 0x10, 0x85)
+            self.b.emit_bytes(struct.pack("<i", disp))
+
+    def movss_xmm1_mem_rbp(self, disp: int) -> None:
+        # F3 0F 10 4D disp8   (reg=001=xmm1)
+        if -128 <= disp <= 127:
+            self.b.emit(0xF3, 0x0F, 0x10, 0x4D, disp & 0xFF)
+        else:
+            self.b.emit(0xF3, 0x0F, 0x10, 0x8D)
+            self.b.emit_bytes(struct.pack("<i", disp))
+
+    def movss_mem_rbp_xmm0(self, disp: int) -> None:
+        # F3 0F 11 45 disp8
+        if -128 <= disp <= 127:
+            self.b.emit(0xF3, 0x0F, 0x11, 0x45, disp & 0xFF)
+        else:
+            self.b.emit(0xF3, 0x0F, 0x11, 0x85)
+            self.b.emit_bytes(struct.pack("<i", disp))
+
+    def addss_xmm0_xmm1(self) -> None:  # xmm0 = xmm0 + xmm1
+        self.b.emit(0xF3, 0x0F, 0x58, 0xC1)
+
+    def subss_xmm0_xmm1(self) -> None:
+        self.b.emit(0xF3, 0x0F, 0x5C, 0xC1)
+
+    def mulss_xmm0_xmm1(self) -> None:
+        self.b.emit(0xF3, 0x0F, 0x59, 0xC1)
+
+    def divss_xmm0_xmm1(self) -> None:
+        self.b.emit(0xF3, 0x0F, 0x5E, 0xC1)
+
+    def cvttss2si_eax_xmm0(self) -> None:
+        # F3 0F 2C C0   (truncating float -> signed int32)
+        self.b.emit(0xF3, 0x0F, 0x2C, 0xC0)
+
+    def cvtsi2ss_xmm0_eax(self) -> None:
+        # F3 0F 2A C0
+        self.b.emit(0xF3, 0x0F, 0x2A, 0xC0)
+
+    def comiss_xmm0_xmm1(self) -> None:
+        # NP 0F 2F C1
+        self.b.emit(0x0F, 0x2F, 0xC1)
+
     def syscall(self) -> None:
         self.b.emit(0x0F, 0x05)
 
@@ -447,49 +498,108 @@ class FnCompiler:
             for op in blk.ops:
                 self._emit_op(op, frame_size)
 
+    def _is_float_type(self, ty: tir.TIRType) -> bool:
+        return isinstance(ty, tir.TIRScalar) and ty.name in ("f16", "bf16", "f32", "f64")
+
     def _emit_op(self, op: tir.Op, frame_size: int) -> None:
         if op.kind == tir.OpKind.CONST_INT:
             slot = self._slot_of(op.results[0])
             self.asm.mov_eax_imm32(int(op.attrs["value"]))
             self.asm.mov_mem_rbp_eax(slot)
             return
+        if op.kind == tir.OpKind.CONST_FLOAT:
+            # Pack the f32 value into 4 bytes, store at the result's slot via eax
+            slot = self._slot_of(op.results[0])
+            value = float(op.attrs["value"])
+            bits = struct.unpack("<I", struct.pack("<f", value))[0]
+            # mov eax, <bits>; mov [rbp+slot], eax
+            self.asm.mov_eax_imm32(bits)
+            self.asm.mov_mem_rbp_eax(slot)
+            return
+        if op.kind == tir.OpKind.CAST:
+            src_slot = self._slot_of(op.operands[0])
+            res_slot = self._slot_of(op.results[0])
+            from_ty = op.operands[0].ty
+            to_ty = op.results[0].ty
+            # i32 -> f32: load int, cvtsi2ss, store float
+            if not self._is_float_type(from_ty) and self._is_float_type(to_ty):
+                self.asm.mov_eax_mem_rbp(src_slot)
+                self.asm.cvtsi2ss_xmm0_eax()
+                self.asm.movss_mem_rbp_xmm0(res_slot)
+                return
+            # f32 -> i32: load float, cvttss2si, store int
+            if self._is_float_type(from_ty) and not self._is_float_type(to_ty):
+                self.asm.movss_xmm0_mem_rbp(src_slot)
+                self.asm.cvttss2si_eax_xmm0()
+                self.asm.mov_mem_rbp_eax(res_slot)
+                return
+            # Same kind: just memory copy
+            if self._is_float_type(from_ty) == self._is_float_type(to_ty):
+                self.asm.mov_eax_mem_rbp(src_slot)
+                self.asm.mov_mem_rbp_eax(res_slot)
+                return
+            return
         if op.kind == tir.OpKind.ADD:
             l_slot = self._slot_of(op.operands[0])
             r_slot = self._slot_of(op.operands[1])
             res_slot = self._slot_of(op.results[0])
-            self.asm.mov_eax_mem_rbp(l_slot)
-            self.asm.mov_ecx_mem_rbp(r_slot)
-            self.asm.add_eax_ecx()
-            self.asm.mov_mem_rbp_eax(res_slot)
+            if self._is_float_type(op.results[0].ty):
+                self.asm.movss_xmm0_mem_rbp(l_slot)
+                self.asm.movss_xmm1_mem_rbp(r_slot)
+                self.asm.addss_xmm0_xmm1()
+                self.asm.movss_mem_rbp_xmm0(res_slot)
+            else:
+                self.asm.mov_eax_mem_rbp(l_slot)
+                self.asm.mov_ecx_mem_rbp(r_slot)
+                self.asm.add_eax_ecx()
+                self.asm.mov_mem_rbp_eax(res_slot)
             return
         if op.kind == tir.OpKind.SUB:
             l_slot = self._slot_of(op.operands[0])
             r_slot = self._slot_of(op.operands[1])
             res_slot = self._slot_of(op.results[0])
-            self.asm.mov_eax_mem_rbp(l_slot)
-            self.asm.mov_ecx_mem_rbp(r_slot)
-            self.asm.sub_eax_ecx()
-            self.asm.mov_mem_rbp_eax(res_slot)
+            if self._is_float_type(op.results[0].ty):
+                self.asm.movss_xmm0_mem_rbp(l_slot)
+                self.asm.movss_xmm1_mem_rbp(r_slot)
+                self.asm.subss_xmm0_xmm1()
+                self.asm.movss_mem_rbp_xmm0(res_slot)
+            else:
+                self.asm.mov_eax_mem_rbp(l_slot)
+                self.asm.mov_ecx_mem_rbp(r_slot)
+                self.asm.sub_eax_ecx()
+                self.asm.mov_mem_rbp_eax(res_slot)
             return
         if op.kind == tir.OpKind.MUL:
             l_slot = self._slot_of(op.operands[0])
             r_slot = self._slot_of(op.operands[1])
             res_slot = self._slot_of(op.results[0])
-            self.asm.mov_eax_mem_rbp(l_slot)
-            self.asm.mov_ecx_mem_rbp(r_slot)
-            self.asm.imul_eax_ecx()
-            self.asm.mov_mem_rbp_eax(res_slot)
+            if self._is_float_type(op.results[0].ty):
+                self.asm.movss_xmm0_mem_rbp(l_slot)
+                self.asm.movss_xmm1_mem_rbp(r_slot)
+                self.asm.mulss_xmm0_xmm1()
+                self.asm.movss_mem_rbp_xmm0(res_slot)
+            else:
+                self.asm.mov_eax_mem_rbp(l_slot)
+                self.asm.mov_ecx_mem_rbp(r_slot)
+                self.asm.imul_eax_ecx()
+                self.asm.mov_mem_rbp_eax(res_slot)
             return
         if op.kind == tir.OpKind.DIV:
             l_slot = self._slot_of(op.operands[0])
             r_slot = self._slot_of(op.operands[1])
             res_slot = self._slot_of(op.results[0])
-            self.asm.mov_eax_mem_rbp(l_slot)
-            self.asm.mov_ecx_mem_rbp(r_slot)
-            self.asm.cdq()
-            self.asm.idiv_ecx()
-            # eax = quotient
-            self.asm.mov_mem_rbp_eax(res_slot)
+            if self._is_float_type(op.results[0].ty):
+                self.asm.movss_xmm0_mem_rbp(l_slot)
+                self.asm.movss_xmm1_mem_rbp(r_slot)
+                self.asm.divss_xmm0_xmm1()
+                self.asm.movss_mem_rbp_xmm0(res_slot)
+            else:
+                self.asm.mov_eax_mem_rbp(l_slot)
+                self.asm.mov_ecx_mem_rbp(r_slot)
+                self.asm.cdq()
+                self.asm.idiv_ecx()
+                # eax = quotient
+                self.asm.mov_mem_rbp_eax(res_slot)
             return
         if op.kind == tir.OpKind.MOD:
             l_slot = self._slot_of(op.operands[0])

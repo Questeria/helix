@@ -678,6 +678,12 @@ class Parser:
     def _parse_postfix(self) -> ast.Expr:
         expr = self._parse_primary()
         while True:
+            if self._at(T.KW_AS):
+                # `expr as Type` — cast
+                self.i += 1
+                target_ty = self._parse_type()
+                expr = ast.Cast(span=expr.span, value=expr, target_ty=target_ty)
+                continue
             if self._at(T.DOT):
                 self.i += 1
                 name = self._eat(T.IDENT).value
