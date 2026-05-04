@@ -41,6 +41,7 @@ License: Apache 2.0
 
 from __future__ import annotations
 
+import copy
 from typing import Optional
 
 from . import ast_nodes as A
@@ -138,9 +139,15 @@ def _propagate(node: A.Expr, adj: A.Expr, acc: dict[str, list[A.Expr]]) -> None:
             zero = A.FloatLit(span=node.span, value=0.0)
             sum_then = _sum_exprs(then_acc[p], node.span) if had_then else zero
             sum_else = _sum_exprs(else_acc[p], node.span) if had_else else zero
+            # Deep-copy the cond so the gradient AST doesn't share a
+            # reference with the original program. Subsequent passes
+            # (e.g. grad_pass._resolve_let_aliases) mutate Call/Name
+            # nodes in-place; without this clone, mutation of the
+            # original cond would silently propagate to the gradient.
+            cond_copy = copy.deepcopy(node.cond)
             wrapped = A.If(
                 span=node.span,
-                cond=node.cond,
+                cond=cond_copy,
                 then=A.Block(span=node.span, stmts=[], final_expr=sum_then),
                 else_=A.Block(span=node.span, stmts=[], final_expr=sum_else),
             )

@@ -14,8 +14,10 @@
 // (positive gradient sign for a value below the optimum), the verifier
 // rejects.
 //
-// Final exit code = current_parameter + 37, so a value of 5 (the optimum
-// for the given loss) yields 42.
+// Final exit code = current_parameter + 38. The agent climbs from 0 to
+// 4 by accepted updates; the gradient-aware verifier rejects the step
+// to 5 (since gradient is zero there — already at the optimum, no work
+// to do). 4 + 38 = 42.
 
 // The loss function the agent is minimizing. Pure: no I/O, no mutation.
 @pure
