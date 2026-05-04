@@ -131,6 +131,17 @@ def test_multiple_modifications_compose():
     assert compile_and_run(src) == 42
 
 
+def test_flagship_self_improving_agent_example():
+    # Compiles and runs helixc/examples/self_improving_agent.hx — the
+    # flagship demo composing reverse-mode AD + reflection + verifier
+    # gating + effect annotations all in one program.
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    example_path = os.path.join(proj_root, "helixc", "examples", "self_improving_agent.hx")
+    with open(example_path) as f:
+        src = f.read()
+    assert compile_and_run(src) == 42
+
+
 def test_verifier_can_bound_state():
     # An agent learns by gradient descent; verifier ensures the state
     # never exceeds a safe range. This is the AGI demo in miniature.
