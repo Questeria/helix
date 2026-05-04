@@ -1149,7 +1149,10 @@ class FnCompiler:
             # Bounds check: if idx >= len, return 0.
             buf.emit(0x81, 0xF9)                       # cmp ecx, len
             buf.emit_bytes(struct.pack("<i", len(data)))
-            buf.emit(0x7C, 0x07)                       # jl in_range (+7)
+            # jb (unsigned below) — catches negative indices too. Signed
+            # `jl` would let idx=-1 fall through to the movzx and read
+            # one byte BEFORE the literal.
+            buf.emit(0x72, 0x07)                       # jb in_range (+7)
             self.asm.mov_eax_imm32(0)                  # out-of-range → 0 (5 bytes)
             buf.emit(0xEB, 0x04)                       # jmp store_result (+4 over movzx)
             # in_range: movzx eax, byte [rax + rcx]
@@ -1723,8 +1726,10 @@ def compile_module_to_elf(module: tir.Module, entry_fn: str = "main") -> bytes:
     # Arena region: a single shared bump-allocated i32 buffer. Slot 0
     # holds the cursor (current length); slots 1..HELIX_ARENA_CAP hold
     # data. Used by self-host machinery for AST/IR/symbol-table storage.
+    # Allocate HELIX_ARENA_CAP+1 slots so cursor + HELIX_ARENA_CAP data
+    # all fit (audit-8 fix: previously 1 slot short).
     buf.define_symbol("__helix_arena_base")
-    buf.emit_bytes(b"\x00" * (HELIX_ARENA_CAP * 4))
+    buf.emit_bytes(b"\x00" * ((HELIX_ARENA_CAP + 1) * 4))
 
     buf.patch()
     return emit_elf(bytes(buf.bytes_))

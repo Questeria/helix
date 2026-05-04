@@ -1485,6 +1485,30 @@ def test_hbs_sample_recursion_runs():
     assert code == 120, f"expected 120 (5!), got {code}"
 
 
+def test_hbs_sample_lexer_skeleton_runs():
+    """HBS sample: skeleton tokenizer using __strbyte + arena ops.
+    Demonstrates self-host lexer patterns. Exits 42."""
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    sample_path = os.path.join(proj_root, "helixc", "examples",
+                               "hbs_sample_lexer_skeleton.hx")
+    with open(sample_path, "r", encoding="utf-8") as f:
+        src = f.read()
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_strbyte_negative_index_returns_zero():
+    """Audit-8 fix: __strbyte with negative index used signed jl that
+    let -1 fall through to OOB read. Now uses jb (unsigned) — returns 0."""
+    src = """
+    fn main() -> i32 {
+        __strbyte("abc", 0 - 1)
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 0, f"expected 0 for negative-idx, got {code}"
+
+
 def test_hbs_reference_500loc_runs():
     """The HBS-frozen reference program: exercises every shipped feature
     in 500+ LOC (currently 426). Computes 65 as the exit code."""
