@@ -349,6 +349,15 @@ class FnCompiler:
         # Map SSA value id -> stack frame offset (relative to rbp). Negative = below rbp.
         self.slots: dict[int, int] = {}
         self.next_slot: int = 0   # will decrement as we allocate
+        # Mutable variable name -> stack slot
+        self.var_slots: dict[str, int] = {}
+
+    def _alloc_var(self, name: str) -> int:
+        if name in self.var_slots:
+            return self.var_slots[name]
+        self.next_slot -= 8
+        self.var_slots[name] = self.next_slot
+        return self.next_slot
 
     def _alloc_slot(self, v: tir.Value) -> int:
         # Allocate 8 bytes per value (we treat everything as int64-aligned for simplicity)
@@ -360,6 +369,14 @@ class FnCompiler:
         return self.slots[v.id]
 
     def compile(self) -> None:
+        # Pre-allocate slots for mutable variables (ALLOC_VAR ops)
+        for blk in self.fn.blocks:
+            for op in blk.ops:
+                if op.kind == tir.OpKind.ALLOC_VAR:
+                    name = op.attrs.get("name")
+                    if name and name not in self.var_slots:
+                        self._alloc_var(name)
+
         # Pre-allocate slots for all SSA values across ALL blocks (not just entry)
         for blk in self.fn.blocks:
             for p in blk.params:
@@ -574,6 +591,25 @@ class FnCompiler:
             # If cond != 0, jump to true_label; else jump to false_label
             self.asm.jne_rel32(true_label)
             self.asm.jmp_rel32(false_label)
+            return
+
+        # Mutable variables
+        if op.kind == tir.OpKind.ALLOC_VAR:
+            # Slot already pre-allocated; nothing to emit
+            return
+        if op.kind == tir.OpKind.LOAD_VAR:
+            name = op.attrs["name"]
+            var_slot = self.var_slots[name]
+            res_slot = self._slot_of(op.results[0])
+            self.asm.mov_eax_mem_rbp(var_slot)
+            self.asm.mov_mem_rbp_eax(res_slot)
+            return
+        if op.kind == tir.OpKind.STORE_VAR:
+            name = op.attrs["name"]
+            var_slot = self.var_slots[name]
+            src_slot = self._slot_of(op.operands[0])
+            self.asm.mov_eax_mem_rbp(src_slot)
+            self.asm.mov_mem_rbp_eax(var_slot)
             return
         # Unsupported op — emit nothing (placeholder); v0.2 will lower
         # tensor ops to runtime calls.

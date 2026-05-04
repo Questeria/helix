@@ -27,8 +27,11 @@ class Lowerer:
         self.prog = prog
         self.module = tir.Module()
         self.builder = tir.IRBuilder(self.module)
-        # name -> Value (locals + params)
+        # name -> Value (locals + params, immutable)
         self.scope: list[dict[str, tir.Value]] = []
+        # Mutable variables: a separate set of names that are stored as cells
+        # (LOAD_VAR/STORE_VAR ops). Their type comes from initial binding.
+        self.mut_scope: list[dict[str, tir.TIRType]] = []
         # name -> FnIR (registered functions)
         self.functions: dict[str, tir.FnIR] = {}
 
@@ -45,12 +48,23 @@ class Lowerer:
         return self.module
 
     # ---- scope ----
-    def _push_scope(self) -> None: self.scope.append({})
-    def _pop_scope(self) -> None: self.scope.pop()
+    def _push_scope(self) -> None:
+        self.scope.append({})
+        self.mut_scope.append({})
+    def _pop_scope(self) -> None:
+        self.scope.pop()
+        self.mut_scope.pop()
     def _bind(self, name: str, v: tir.Value) -> None:
         self.scope[-1][name] = v
+    def _bind_mut(self, name: str, ty: tir.TIRType) -> None:
+        self.mut_scope[-1][name] = ty
     def _lookup(self, name: str) -> Optional[tir.Value]:
         for sc in reversed(self.scope):
+            if name in sc:
+                return sc[name]
+        return None
+    def _lookup_mut(self, name: str) -> Optional[tir.TIRType]:
+        for sc in reversed(self.mut_scope):
             if name in sc:
                 return sc[name]
         return None
@@ -156,9 +170,16 @@ class Lowerer:
             if stmt.value is not None:
                 v = self._lower_expr(stmt.value)
             if v is None:
-                # Default: emit a unit-typed placeholder
                 v = self.builder.const_int(0)
-            self._bind(stmt.name, v)
+            if stmt.is_mut:
+                # Allocate a mutable cell, store the initial value
+                self.builder.emit(tir.OpKind.ALLOC_VAR,
+                                  attrs={"name": stmt.name, "dtype": v.ty})
+                self.builder.emit(tir.OpKind.STORE_VAR, v,
+                                  attrs={"name": stmt.name})
+                self._bind_mut(stmt.name, v.ty)
+            else:
+                self._bind(stmt.name, v)
             return
         if isinstance(stmt, A.ExprStmt):
             self._lower_expr(stmt.expr)
@@ -181,11 +202,15 @@ class Lowerer:
             v = self._lookup(expr.name)
             if v is not None:
                 return v
+            # Mutable variable -> emit LOAD_VAR
+            mut_ty = self._lookup_mut(expr.name)
+            if mut_ty is not None:
+                return self.builder.emit(tir.OpKind.LOAD_VAR,
+                                         result_ty=mut_ty,
+                                         attrs={"name": expr.name})
             # Maybe a function reference (v0.1: emit a call-able marker)
             if expr.name in self.functions:
-                # We don't have function-pointer values yet; treat as opaque placeholder
                 return self.builder.const_int(0)
-            # Unbound: emit a unit constant
             return self.builder.const_int(0)
         if isinstance(expr, A.Path):
             # Treat as opaque call target
@@ -285,8 +310,37 @@ class Lowerer:
             self._lower_block(expr.body)
             return None
         if isinstance(expr, A.While):
-            self._lower_expr(expr.cond)
+            # Real CFG-based loop:
+            #   br header_block
+            # header_block:
+            #   cond = lower(expr.cond)
+            #   cond_br cond, body_block, exit_block
+            # body_block:
+            #   lower(expr.body)
+            #   br header_block
+            # exit_block:
+            #   (continues with following code)
+            header_blk = self.builder.append_block()
+            body_blk = self.builder.append_block()
+            exit_blk = self.builder.append_block()
+            # Branch from current block to header
+            self.builder.emit(tir.OpKind.BR,
+                              attrs={"target_block": header_blk.id})
+            # Header
+            self.builder.switch_to(header_blk)
+            cond = self._lower_expr(expr.cond)
+            if cond is None:
+                cond = self.builder.const_int(0)
+            self.builder.emit(tir.OpKind.COND_BR, cond,
+                              attrs={"true_block": body_blk.id,
+                                     "false_block": exit_blk.id})
+            # Body
+            self.builder.switch_to(body_blk)
             self._lower_block(expr.body)
+            self.builder.emit(tir.OpKind.BR,
+                              attrs={"target_block": header_blk.id})
+            # Exit
+            self.builder.switch_to(exit_blk)
             return None
         if isinstance(expr, A.Loop):
             self._lower_block(expr.body)
@@ -303,7 +357,29 @@ class Lowerer:
         if isinstance(expr, A.Range):
             return None
         if isinstance(expr, A.Assign):
-            self._lower_expr(expr.value)
+            v = self._lower_expr(expr.value)
+            if v is None:
+                v = self.builder.const_int(0)
+            # If target is a mutable variable name, emit STORE_VAR.
+            # Compound assignments (+=, etc.) need a load+op+store.
+            if isinstance(expr.target, A.Name) and self._lookup_mut(expr.target.name):
+                if expr.op == "=":
+                    self.builder.emit(tir.OpKind.STORE_VAR, v,
+                                      attrs={"name": expr.target.name})
+                else:
+                    # Compound: load, op, store
+                    op_map = {
+                        "+=": tir.OpKind.ADD, "-=": tir.OpKind.SUB,
+                        "*=": tir.OpKind.MUL, "/=": tir.OpKind.DIV,
+                        "%=": tir.OpKind.MOD,
+                    }
+                    cur = self.builder.emit(tir.OpKind.LOAD_VAR,
+                                            result_ty=v.ty,
+                                            attrs={"name": expr.target.name})
+                    new = self.builder.emit(op_map[expr.op], cur, v,
+                                            result_ty=v.ty)
+                    self.builder.emit(tir.OpKind.STORE_VAR, new,
+                                      attrs={"name": expr.target.name})
             return None
         if isinstance(expr, A.TupleLit):
             for e in expr.elems:

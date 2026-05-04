@@ -217,6 +217,63 @@ def test_division_recursive_gcd():
     assert compile_and_run(src) == 42
 
 
+def test_mutable_let():
+    # Mutable variable assignment
+    src = """
+    fn main() -> i32 {
+        let mut x = 10;
+        x = 42;
+        x
+    }
+    """
+    assert compile_and_run(src) == 42
+
+
+def test_compound_assign():
+    src = """
+    fn main() -> i32 {
+        let mut x = 10;
+        x += 32;
+        x
+    }
+    """
+    assert compile_and_run(src) == 42
+
+
+def test_while_loop_sum():
+    # Sum 1..=8 via while loop -> 36 (no, 1+2+3+4+5+6+7+8 = 36, want 42)
+    # Sum 1..=9 = 45
+    # Sum 0..=8: 36
+    # Use a target of 42: e.g., sum from 6 to 14 inclusive = (6+14)*9/2 = 90 (no)
+    # Easier: count up to 42
+    src = """
+    fn main() -> i32 {
+        let mut x = 0;
+        while x < 42 {
+            x += 1;
+        }
+        x
+    }
+    """
+    assert compile_and_run(src) == 42
+
+
+def test_while_loop_factorial():
+    # Iterative factorial: 5! = 120
+    src = """
+    fn main() -> i32 {
+        let mut n = 5;
+        let mut result = 1;
+        while n > 1 {
+            result *= n;
+            n -= 1;
+        }
+        result
+    }
+    """
+    assert compile_and_run(src) == 120
+
+
 def main():
     tests = [(name, fn) for name, fn in globals().items()
              if name.startswith("test_") and callable(fn)]

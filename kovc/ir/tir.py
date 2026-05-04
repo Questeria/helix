@@ -209,6 +209,11 @@ class OpKind(Enum):
     COND_BR = "cond_br"          # conditional branch
     RETURN = "return"
 
+    # Mutable local variables (stack-resident cells)
+    ALLOC_VAR = "var.alloc"      # attrs: name, dtype
+    LOAD_VAR = "var.load"        # attrs: name
+    STORE_VAR = "var.store"      # operand: value, attrs: name
+
     # Effectful ops (kept distinct so transforms can avoid them)
     PRINT = "io.print"
 
