@@ -104,6 +104,18 @@ where N % 16 == 0,
 }
 
 // ---------------------------------------------------------------------
+// 6. AUTO-CURRICULUM: learn_to() returns a Skill<F>
+// ---------------------------------------------------------------------
+fn build_skill() -> i32 {
+    // The runtime maintains a registry of skills with measured difficulties.
+    // The AGI can request "skills at difficulty 0.7" and receive the
+    // closest learned match, or propose a new learning task.
+    let _matmul_skill = learn_to("matmul", 0.5, 100);
+    let _proof_skill = learn_to("theorem_proving", 0.9, 1000);
+    0
+}
+
+// ---------------------------------------------------------------------
 // What this program demonstrates:
 // - Compile-time shape constraints with Presburger reasoning
 // - Capability-based safety: @pure cannot accidentally call @io

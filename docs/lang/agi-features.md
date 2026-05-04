@@ -188,7 +188,7 @@ a *language primitive* with type-level guarantees is novel.
 | 7. Agent type declarations | ✅ parsing | 4 parser | `agent Foo { fn ...; }` |
 | 8. Tile types in codegen | ⏳ type-level only | — | Tile IR exists, no GPU lowering yet |
 | 9. Composable transforms (`grad`/`vmap`) | ✅ engine working (CLI) | 13 autodiff | symbolic forward-mode AD; CLI prints derivatives |
-| 10. Auto-curriculum (`learn_to`) | ⏳ not started | — | type-level work |
+| 10. Auto-curriculum (`learn_to`) | ✅ working (type-level) | 2 typecheck | returns Skill<F>; runtime registry TBD |
 
 As of the latest commit: **40 commits, 263 tests across 11 test files, all passing.**
 
