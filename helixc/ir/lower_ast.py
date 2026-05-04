@@ -257,6 +257,40 @@ class Lowerer:
 
     def _lower_stmt(self, stmt: A.Stmt) -> None:
         if isinstance(stmt, A.Let):
+            # Special case: payload-bearing enum constructor.
+            #     let m = Maybe::Some(42)
+            # Allocates a [tag, payload, ...] array. The tag is the
+            # variant's positional index in the enum decl. The payload
+            # slots are the call args, lowered in order. For tag-only
+            # variants (no args), this still allocates a 1-slot array
+            # holding just the tag.
+            if (stmt.value is not None
+                    and isinstance(stmt.value, A.Call)
+                    and isinstance(stmt.value.callee, A.Path)
+                    and len(stmt.value.callee.segments) == 2):
+                ename, vname = stmt.value.callee.segments
+                variants = self._enum_variants.get(ename)
+                if variants is not None and vname in variants:
+                    tag_v = self.builder.const_int(variants[vname])
+                    arg_vals = []
+                    for a in stmt.value.args:
+                        v = self._lower_expr(a)
+                        if v is None:
+                            v = self.builder.const_int(0)
+                        arg_vals.append(v)
+                    slots = [tag_v] + arg_vals
+                    elem_ty = slots[0].ty
+                    n = len(slots)
+                    self.builder.emit(tir.OpKind.ALLOC_ARRAY,
+                                      attrs={"name": stmt.name,
+                                             "dtype": elem_ty,
+                                             "length": n})
+                    for i, ev in enumerate(slots):
+                        idx = self.builder.const_int(i)
+                        self.builder.emit(tir.OpKind.STORE_ELEM, idx, ev,
+                                          attrs={"name": stmt.name})
+                    self._bind_array(stmt.name, elem_ty, n)
+                    return
             # Special case: struct literal initializer -> back it with a
             # fixed-length stack array indexed by flat-path order.
             if stmt.value is not None and isinstance(stmt.value, A.StructLit):

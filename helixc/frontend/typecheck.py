@@ -816,6 +816,41 @@ class TypeChecker:
             # Arithmetic: take the left type (simplified)
             return l
         if isinstance(expr, A.Call):
+            # Payload-bearing enum constructor: `Maybe::Some(42)`.
+            if (isinstance(expr.callee, A.Path)
+                    and len(expr.callee.segments) == 2):
+                ename, vname = expr.callee.segments
+                edecl = getattr(self, "_enum_decls", {}).get(ename)
+                if edecl is not None:
+                    for v in edecl.variants:
+                        if v.name == vname:
+                            # Type-check args against payload_tys.
+                            arg_tys = [self._check_expr(a, scope) for a in expr.args]
+                            if len(arg_tys) != len(v.payload_tys):
+                                self.errors.append(TypeError_(
+                                    f"enum variant {ename}::{vname} expects "
+                                    f"{len(v.payload_tys)} payload arg(s), "
+                                    f"got {len(arg_tys)}",
+                                    expr.span,
+                                ))
+                            else:
+                                for i, (at, pt) in enumerate(zip(arg_tys, v.payload_tys)):
+                                    expected = self._resolve_type(pt, scope)
+                                    if not self._compatible(at, expected):
+                                        self.errors.append(TypeError_(
+                                            f"enum {ename}::{vname} arg {i}: "
+                                            f"expected {self._fmt(expected)}, "
+                                            f"got {self._fmt(at)}",
+                                            expr.span,
+                                        ))
+                            return TyPrim("i32")  # tagged value backed by [tag, ...payload]
+                    self.errors.append(TypeError_(
+                        f"enum {ename!r} has no variant {vname!r}",
+                        expr.span,
+                    ))
+                    for a in expr.args:
+                        self._check_expr(a, scope)
+                    return TyUnknown(hint=f"enum {ename}")
             callee = self._check_expr(expr.callee, scope)
             arg_tys = [self._check_expr(a, scope) for a in expr.args]
             # Built-in functions for type-level transitions

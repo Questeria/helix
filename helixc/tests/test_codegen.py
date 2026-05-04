@@ -1079,6 +1079,35 @@ def test_enum_variant_in_match_pattern():
     assert code == 42, f"expected 6*7=42 (Op::Mul branch), got {code}"
 
 
+def test_enum_payload_constructor_runs():
+    """Maybe::Some(42) constructs a tagged value [tag=1, payload=42].
+    We index into it to extract both pieces."""
+    src = """
+    enum Maybe { None, Some(i32) }
+    fn main() -> i32 {
+        let m = Maybe::Some(42);
+        let tag = m[0];
+        let payload = m[1];
+        if tag == 1 { payload } else { 0 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_enum_payload_with_two_args():
+    """Variants can take multiple payload args; their indices are 1, 2, ..."""
+    src = """
+    enum Pair { Empty, Cons(i32, i32) }
+    fn main() -> i32 {
+        let p = Pair::Cons(10, 32);
+        p[1] + p[2]
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 10+32=42, got {code}"
+
+
 def test_enum_in_match():
     """Match on a tag-only enum dispatches by variant index."""
     src = """
