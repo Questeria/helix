@@ -232,6 +232,12 @@ class PatTuple(Pattern):
 
 
 @dataclass
+class PatOr(Pattern):
+    """`a | b | c` — match if any alternative matches."""
+    alts: list["Pattern"]
+
+
+@dataclass
 class For(Expr):
     """for x in iter { body }"""
     var_name: str

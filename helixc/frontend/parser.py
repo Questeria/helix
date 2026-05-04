@@ -950,6 +950,16 @@ class Parser:
         return ast.Match(span=self._span_of(kw), scrutinee=scrutinee, arms=arms)
 
     def _parse_pattern(self) -> ast.Pattern:
+        """Parse a pattern, optionally with `|` alternatives at top level."""
+        first = self._parse_pattern_atom()
+        if not self._at(T.PIPE):
+            return first
+        alts: list[ast.Pattern] = [first]
+        while self._match(T.PIPE):
+            alts.append(self._parse_pattern_atom())
+        return ast.PatOr(span=first.span, alts=alts)
+
+    def _parse_pattern_atom(self) -> ast.Pattern:
         t = self._peek()
         if t.kind == T.IDENT and t.value == "_":
             self.i += 1

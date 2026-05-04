@@ -87,6 +87,63 @@ def test_match_guard_must_be_bool():
         f"expected 'guard must be bool' error, got: {errs}"
 
 
+def test_arm_body_type_mismatch_errors():
+    """All arm bodies must agree on a single result type."""
+    src = """
+    fn f(x: i32) -> i32 {
+        match x {
+            _ => 1,
+            _ => true,
+        }
+    }
+    """
+    errs = _check(src)
+    assert any("incompatible" in repr(e).lower() or "mismatch" in repr(e).lower()
+               for e in errs), f"expected arm-type-mismatch error, got: {errs}"
+
+
+def test_non_exhaustive_bool_errors():
+    """A `match` on bool with only `true` arm should error: missing `false`."""
+    src = """
+    fn f(b: bool) -> i32 {
+        match b {
+            true => 1,
+        }
+    }
+    """
+    errs = _check(src)
+    assert any("non-exhaustive" in repr(e).lower() and "false" in repr(e).lower()
+               for e in errs), f"expected non-exhaustive-bool error, got: {errs}"
+
+
+def test_exhaustive_bool_with_both_arms_ok():
+    """`match b { true => 1, false => 0 }` is exhaustive — no error."""
+    src = """
+    fn f(b: bool) -> i32 {
+        match b {
+            true => 1,
+            false => 0,
+        }
+    }
+    """
+    errs = _check(src)
+    assert errs == [], f"unexpected typecheck errors: {errs}"
+
+
+def test_or_pattern_typechecks():
+    """Or-pattern `1 | 2 | 3` should typecheck and bind nothing."""
+    src = """
+    fn f(x: i32) -> i32 {
+        match x {
+            1 | 2 | 3 => 42,
+            _ => 0,
+        }
+    }
+    """
+    errs = _check(src)
+    assert errs == [], f"unexpected typecheck errors: {errs}"
+
+
 def main():
     tests = [(name, fn) for name, fn in globals().items()
              if name.startswith("test_") and callable(fn)]

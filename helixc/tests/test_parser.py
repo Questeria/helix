@@ -439,6 +439,30 @@ def test_agent_alongside_fn():
     assert isinstance(p.items[1], ast.FnDecl)
 
 
+def test_or_pattern_parses():
+    """Pattern `1 | 2 | 3 => ...` parses as PatOr with three alternatives."""
+    src = """
+    fn f(x: i32) -> i32 {
+        match x {
+            1 | 2 | 3 => 42,
+            _ => 0,
+        }
+    }
+    """
+    prog = parse(src)
+    fn = prog.items[0]
+    assert isinstance(fn, ast.FnDecl)
+    match_expr = fn.body.final_expr
+    assert isinstance(match_expr, ast.Match)
+    arm0 = match_expr.arms[0]
+    assert isinstance(arm0.pattern, ast.PatOr), \
+        f"expected PatOr, got {type(arm0.pattern).__name__}"
+    assert len(arm0.pattern.alts) == 3
+    # All three alts are literal patterns
+    for alt in arm0.pattern.alts:
+        assert isinstance(alt, ast.PatLit)
+
+
 # ============================================================================
 # Test runner
 # ============================================================================

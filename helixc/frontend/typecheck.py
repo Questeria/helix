@@ -836,6 +836,7 @@ class TypeChecker:
                             arm.span,
                         ))
                 arm_tys.append(self._check_expr(arm.body, inner))
+            self._check_match_exhaustive(expr, scrut_ty)
             if not arm_tys:
                 return TyUnit()
             first = arm_tys[0]
@@ -908,6 +909,69 @@ class TypeChecker:
                 for sub_pat in pat.elems:
                     self._bind_pattern(sub_pat, TyUnknown(hint="tuple-pat"), scope)
             return
+        if isinstance(pat, A.PatOr):
+            # Each alternative must bind the same set of names. For now we
+            # only typecheck literal-or-wildcard alternatives (most common
+            # case); a future ticket can require binder-set agreement.
+            for alt in pat.alts:
+                self._bind_pattern(alt, scrut_ty, scope)
+            return
+
+    def _pattern_covers(self, pat: A.Pattern, value) -> bool:
+        """Does `pat` definitely match the given concrete `value`?
+        Used by exhaustiveness for finite enumerable types."""
+        if isinstance(pat, (A.PatWildcard, A.PatBind)):
+            return True
+        if isinstance(pat, A.PatLit):
+            v = pat.value
+            if isinstance(v, A.BoolLit) and isinstance(value, bool):
+                return v.value == value
+            return False
+        if isinstance(pat, A.PatOr):
+            return any(self._pattern_covers(a, value) for a in pat.alts)
+        if isinstance(pat, A.PatTuple) and isinstance(value, tuple) \
+                and len(value) == 0 and len(pat.elems) == 0:
+            return True
+        return False
+
+    def _check_match_exhaustive(self, expr: A.Match, scrut_ty: Type) -> None:
+        """Cheap exhaustiveness for finite types: bool ({true,false}) and
+        unit (only ()). Anything else needs a wildcard or PatBind to be
+        considered exhaustive."""
+        # Any arm with no guard and a wildcard / bare-name binder is total.
+        for arm in expr.arms:
+            if arm.guard is None and isinstance(arm.pattern, (A.PatWildcard, A.PatBind)):
+                return
+        if isinstance(scrut_ty, TyPrim) and scrut_ty.name == "bool":
+            covers_true = any(arm.guard is None and self._pattern_covers(arm.pattern, True)
+                              for arm in expr.arms)
+            covers_false = any(arm.guard is None and self._pattern_covers(arm.pattern, False)
+                               for arm in expr.arms)
+            missing = []
+            if not covers_true:  missing.append("true")
+            if not covers_false: missing.append("false")
+            if missing:
+                self.errors.append(TypeError_(
+                    f"non-exhaustive match on bool: missing {', '.join(missing)}",
+                    expr.span,
+                ))
+            return
+        if isinstance(scrut_ty, TyUnit):
+            covers_unit = any(arm.guard is None and self._pattern_covers(arm.pattern, ())
+                              for arm in expr.arms)
+            if not covers_unit:
+                self.errors.append(TypeError_(
+                    "non-exhaustive match on unit: missing ()",
+                    expr.span,
+                ))
+            return
+        # For any other type (i32, f32, tuples with content, etc.) we need
+        # a wildcard / binder arm to be exhaustive — the early-return above
+        # handles this. Without one, emit a diagnostic.
+        self.errors.append(TypeError_(
+            f"non-exhaustive match on {self._fmt(scrut_ty)}: add a `_` arm",
+            expr.span,
+        ))
 
     # ---- compatibility (simplified) ----
     def _compatible(self, a: Type, b: Type) -> bool:
