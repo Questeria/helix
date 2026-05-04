@@ -139,6 +139,24 @@ def test_dogfood_01_one_param_gradient_descent():
     assert compile_and_run(src) == 42
 
 
+def test_dogfood_02_linreg():
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    p = os.path.join(proj_root, "helixc", "examples", "dogfood_02_linreg.hx")
+    with open(p) as f:
+        src = f.read()
+    assert compile_and_run(src) == 42
+
+
+def test_dogfood_03_affine_with_f32_cells():
+    # Affine fit exercising the f32-cell path (splice_f / modify_f) and the
+    # newly-correct float calling convention (xmm-args).
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    p = os.path.join(proj_root, "helixc", "examples", "dogfood_03_affine.hx")
+    with open(p) as f:
+        src = f.read()
+    assert compile_and_run(src) == 42
+
+
 def test_flagship_self_improving_agent_example():
     # Compiles and runs helixc/examples/self_improving_agent.hx — the
     # flagship demo composing reverse-mode AD + reflection + verifier

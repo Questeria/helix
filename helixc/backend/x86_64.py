@@ -408,6 +408,28 @@ class Asm:
             self.b.emit(0xF3, 0x0F, 0x11, 0x85)
             self.b.emit_bytes(struct.pack("<i", disp))
 
+    # --- Generic movss for arbitrary xmm0..xmm7 (for SysV float arg passing).
+    # Encoding: F3 0F 10 (load) or 0F 11 (store), then ModRM with reg=xmmN.
+    # ModRM encoding when r/m is [rbp + disp]: mod=01 disp8 / mod=10 disp32,
+    # rm=101 (rbp). reg field is xmm number (0-7).
+    def _movss_load_xmmN(self, n: int, disp: int) -> None:
+        modrm_disp8 = (0b01 << 6) | (n << 3) | 0b101
+        modrm_disp32 = (0b10 << 6) | (n << 3) | 0b101
+        if -128 <= disp <= 127:
+            self.b.emit(0xF3, 0x0F, 0x10, modrm_disp8, disp & 0xFF)
+        else:
+            self.b.emit(0xF3, 0x0F, 0x10, modrm_disp32)
+            self.b.emit_bytes(struct.pack("<i", disp))
+
+    def _movss_store_xmmN(self, n: int, disp: int) -> None:
+        modrm_disp8 = (0b01 << 6) | (n << 3) | 0b101
+        modrm_disp32 = (0b10 << 6) | (n << 3) | 0b101
+        if -128 <= disp <= 127:
+            self.b.emit(0xF3, 0x0F, 0x11, modrm_disp8, disp & 0xFF)
+        else:
+            self.b.emit(0xF3, 0x0F, 0x11, modrm_disp32)
+            self.b.emit_bytes(struct.pack("<i", disp))
+
     def addss_xmm0_xmm1(self) -> None:  # xmm0 = xmm0 + xmm1
         self.b.emit(0xF3, 0x0F, 0x58, 0xC1)
 
@@ -552,8 +574,10 @@ class FnCompiler:
         if frame_size > 0:
             self.asm.sub_rsp_imm32(frame_size)
 
-        # Spill args from arg registers into stack slots (System V ABI: 6 regs)
-        ARG_SPILLS = [
+        # Spill args from arg registers into stack slots. SysV ABI splits by
+        # type: int args land in (edi, esi, edx, ecx, r8d, r9d); float args
+        # land in (xmm0..xmm7). Each class has its own counter.
+        INT_SPILLS = [
             self.asm.mov_mem_rbp_edi,
             self.asm.mov_mem_rbp_esi,
             self.asm.mov_mem_rbp_edx,
@@ -561,11 +585,22 @@ class FnCompiler:
             self.asm.mov_mem_rbp_r8d,
             self.asm.mov_mem_rbp_r9d,
         ]
-        for i, p in enumerate(self.fn.params):
-            if i >= len(ARG_SPILLS):
-                raise NotImplementedError(f"v0.1 supports up to {len(ARG_SPILLS)} parameters")
+        int_idx = 0
+        xmm_idx = 0
+        for p in self.fn.params:
             slot = self._slot_of(p)
-            ARG_SPILLS[i](slot)
+            if self._is_float_type(p.ty):
+                if xmm_idx >= 8:
+                    raise NotImplementedError("v0.1 supports up to 8 float params")
+                self.asm._movss_store_xmmN(xmm_idx, slot)
+                xmm_idx += 1
+            else:
+                if int_idx >= len(INT_SPILLS):
+                    raise NotImplementedError(
+                        f"v0.1 supports up to {len(INT_SPILLS)} int params"
+                    )
+                INT_SPILLS[int_idx](slot)
+                int_idx += 1
 
         # Emit each block in order, with a label per block
         for blk in self.fn.blocks:
@@ -864,7 +899,7 @@ class FnCompiler:
             return
         if op.kind == tir.OpKind.CALL:
             target = op.attrs.get("target", "?")
-            ARG_REGS_LOAD = [
+            INT_REGS = [
                 self.asm.mov_edi_mem_rbp,
                 self.asm.mov_esi_mem_rbp,
                 self.asm.mov_edx_mem_rbp,
@@ -872,20 +907,43 @@ class FnCompiler:
                 self.asm.mov_r8d_mem_rbp,
                 self.asm.mov_r9d_mem_rbp,
             ]
-            for i, arg in enumerate(op.operands):
-                if i >= len(ARG_REGS_LOAD):
-                    raise NotImplementedError("v0.1 supports up to 6 call args")
+            # SysV ABI splits args by class: int → INT_REGS, float → xmm0..xmm7.
+            # Each class has its own counter.
+            int_idx = 0
+            xmm_idx = 0
+            for arg in op.operands:
                 arg_slot = self._slot_of(arg)
-                ARG_REGS_LOAD[i](arg_slot)
+                if self._is_float_type(arg.ty):
+                    if xmm_idx >= 8:
+                        raise NotImplementedError(
+                            "v0.1 supports up to 8 float args via xmm0..xmm7"
+                        )
+                    self.asm._movss_load_xmmN(xmm_idx, arg_slot)
+                    xmm_idx += 1
+                else:
+                    if int_idx >= len(INT_REGS):
+                        raise NotImplementedError(
+                            "v0.1 supports up to 6 int args"
+                        )
+                    INT_REGS[int_idx](arg_slot)
+                    int_idx += 1
             self.asm.call_rel32(str(target))
             if op.results:
                 res_slot = self._slot_of(op.results[0])
-                self.asm.mov_mem_rbp_eax(res_slot)
+                # SysV: float return in xmm0, int return in eax.
+                if self._is_float_type(op.results[0].ty):
+                    self.asm.movss_mem_rbp_xmm0(res_slot)
+                else:
+                    self.asm.mov_mem_rbp_eax(res_slot)
             return
         if op.kind == tir.OpKind.RETURN:
             if op.operands:
                 slot = self._slot_of(op.operands[0])
-                self.asm.mov_eax_mem_rbp(slot)
+                # SysV: float return in xmm0, int return in eax.
+                if self._is_float_type(op.operands[0].ty):
+                    self.asm.movss_xmm0_mem_rbp(slot)
+                else:
+                    self.asm.mov_eax_mem_rbp(slot)
             else:
                 self.asm.mov_eax_imm32(0)
             # Epilogue
@@ -1039,9 +1097,15 @@ class FnCompiler:
             jge_off = buf.offset() - 1
             jge_after = buf.offset()
 
-            # In-range: pass args to verifier (edi=handle, esi=new_value)
+            # In-range: pass args to verifier. ABI:
+            #   default i32 verifier — edi=handle, esi=new_value
+            #   f32 verifier (modify_f) — edi=handle, xmm0=new_value
+            value_kind = op.attrs.get("value_kind", "i32")
             self.asm.mov_edi_mem_rbp(handle_slot)
-            self.asm.mov_esi_mem_rbp(new_val_slot)
+            if value_kind == "f32":
+                self.asm.movss_xmm0_mem_rbp(new_val_slot)
+            else:
+                self.asm.mov_esi_mem_rbp(new_val_slot)
             self.asm.call_rel32(verifier_name)
             # eax now holds verifier's return value
             self.asm.test_eax_eax()

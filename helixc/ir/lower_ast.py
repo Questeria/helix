@@ -289,6 +289,44 @@ class Lowerer:
                 return self.builder.emit(tir.OpKind.NEG, inner, result_ty=inner.ty)
             return inner
         if isinstance(expr, A.Call):
+            # Intercept built-in float-cell reflection ops before treating as
+            # an ordinary function call.
+            if (isinstance(expr.callee, A.Name)
+                    and expr.callee.name == "splice_f"
+                    and len(expr.args) == 1):
+                handle = self._lower_expr(expr.args[0]) or self.builder.const_int(0)
+                # Emit a SPLICE op tagged with f32 result type. Codegen looks
+                # at the result type to decide whether to use mov vs movss
+                # for the cell read; the bit pattern in the cell is
+                # interpreted as f32.
+                return self.builder.emit(tir.OpKind.SPLICE, handle,
+                                         result_ty=tir.TIRScalar("f32"),
+                                         attrs={"value_kind": "f32"})
+            if (isinstance(expr.callee, A.Name)
+                    and expr.callee.name == "modify_f"
+                    and len(expr.args) == 3):
+                target_v = self._lower_expr(expr.args[0]) or self.builder.const_int(0)
+                xform_v = self._lower_expr(expr.args[1]) or self.builder.const_int(0)
+                attrs: dict[str, object] = {"value_kind": "f32"}
+                v_arg = expr.args[2]
+                if (isinstance(v_arg, A.Name)
+                        and v_arg.name in self.functions
+                        and self._lookup(v_arg.name) is None
+                        and self._lookup_mut(v_arg.name) is None
+                        and self._verifier_abi_matches_f(v_arg.name)):
+                    attrs["verifier_fn"] = v_arg.name
+                    placeholder = self.builder.const_int(0)
+                    return self.builder.emit(tir.OpKind.MODIFY,
+                                             target_v, xform_v, placeholder,
+                                             result_ty=tir.TIRScalar("i32"),
+                                             attrs=attrs)
+                # No matching verifier — fallback to runtime-value form.
+                vrt = self._lower_expr(v_arg) or self.builder.const_int(0)
+                return self.builder.emit(tir.OpKind.MODIFY,
+                                         target_v, xform_v, vrt,
+                                         result_ty=tir.TIRScalar("i32"),
+                                         attrs=attrs)
+
             args: list[tir.Value] = []
             for a in expr.args:
                 v = self._lower_expr(a)
@@ -617,6 +655,26 @@ class Lowerer:
         """Compute a stable hash over an AST structure for QUOTE handles.
         For v0.1 we use Python's hash of a stringified form."""
         return abs(hash(_pretty(node))) & 0x7FFFFFFF
+
+    def _verifier_abi_matches_f(self, fn_name: str) -> bool:
+        """A modify_f verifier takes (handle: i32, val: f32) and returns
+        i32/bool. System V passes the f32 in xmm0 and the int in edi."""
+        ir_fn = self.functions.get(fn_name)
+        if ir_fn is None or len(ir_fn.params) != 2:
+            return False
+        p0, p1 = ir_fn.params
+        if not (isinstance(p0.ty, tir.TIRScalar) and p0.ty.name == "i32"):
+            return False
+        if not (isinstance(p1.ty, tir.TIRScalar) and p1.ty.name == "f32"):
+            return False
+        if not (isinstance(ir_fn.return_ty, tir.TIRScalar)
+                and ir_fn.return_ty.name in ("i32", "bool")):
+            raise ValueError(
+                f"verifier function {fn_name!r} has parameters (i32, f32) "
+                f"but returns {ir_fn.return_ty!r} — verifiers must return "
+                f"i32 or bool"
+            )
+        return True
 
     def _verifier_abi_matches(self, fn_name: str) -> bool:
         """A verifier function must take exactly two i32 params and return
