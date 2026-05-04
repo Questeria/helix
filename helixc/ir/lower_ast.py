@@ -134,6 +134,8 @@ class Lowerer:
         attrs: dict[str, object] = {}
         for a in fn.attrs:
             attrs[a] = True
+        if fn.is_pub:
+            attrs["is_pub"] = True
         ir_fn = self.builder.begin_function(fn.name, params, ret, attrs=attrs)
         self.functions[fn.name] = ir_fn
         # Don't lower body yet — that's pass 2

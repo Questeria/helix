@@ -809,6 +809,37 @@ def test_grad_through_if_else_branch():
     assert compile_and_run(src) == 42
 
 
+def test_grad_rev_through_if_then_branch():
+    # Reverse-mode through an if: must produce conditional gradient,
+    # NOT a sum of both branches' adjoints.
+    # f(x) = if x > 0 then x*x else x*3
+    # At x=5 (then branch): ∂f/∂x = 2x = 10. 10 + 32 = 42.
+    src = """
+    fn f(x: f32) -> f32 {
+        if x > 0.0 { x * x } else { x * 3.0 }
+    }
+    fn main() -> i32 {
+        let g = grad_rev(f)(5.0);
+        (g + 32.0) as i32
+    }
+    """
+    assert compile_and_run(src) == 42
+
+
+def test_grad_rev_through_if_else_branch():
+    # At x=-1 (else branch): ∂f/∂x = 3. 3 + 39 = 42.
+    src = """
+    fn f(x: f32) -> f32 {
+        if x > 0.0 { x * x } else { x * 3.0 }
+    }
+    fn main() -> i32 {
+        let g = grad_rev(f)(-1.0);
+        (g + 39.0) as i32
+    }
+    """
+    assert compile_and_run(src) == 42
+
+
 def test_real_matmul_3x3_via_arrays():
     # 3x3 matmul: c[i][j] = sum_k a[i][k] * b[k][j]
     # We use flat 9-element arrays with row-major indexing: a[i*3+j]

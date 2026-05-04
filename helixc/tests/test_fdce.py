@@ -84,6 +84,20 @@ def test_no_main_means_no_drops():
     assert "other" in mod.functions
 
 
+def test_pub_function_kept_even_if_unreachable():
+    # A `pub fn` is an exported entry point and should not be dropped even
+    # when nothing inside the module calls it. This caught a silent
+    # miscompile where lower_ast wasn't propagating fn.is_pub to FnIR.attrs.
+    src = """
+    pub fn exported_helper() -> i32 { 7 }
+    fn main() -> i32 { 42 }
+    """
+    remaining, _ = lower_and_fdce(src)
+    assert "exported_helper" in remaining, \
+        f"pub fn should not be dropped, got {remaining}"
+    assert "main" in remaining
+
+
 def main():
     tests = [(name, fn) for name, fn in globals().items()
              if name.startswith("test_") and callable(fn)]

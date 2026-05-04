@@ -182,14 +182,13 @@ def _rewrite_in_expr(expr: A.Expr, fn_by_name: dict[str, A.FnDecl],
         c = _rewrite_in_block(expr, fn_by_name, new_fns)
         return (expr, c)
     if isinstance(expr, A.If):
-        c, c1 = _rewrite_in_expr(expr.cond, fn_by_name, new_fns)
-        expr.cond = c
-        c2 = _rewrite_in_block(expr.then, fn_by_name, new_fns)
-        c3 = 0
-        if expr.else_ is not None:
-            if isinstance(expr.else_, A.Block):
-                c3 = _rewrite_in_block(expr.else_, fn_by_name, new_fns)
-        return (expr, c1 + c2 + c3)
+        new_cond, c_cond = _rewrite_in_expr(expr.cond, fn_by_name, new_fns)
+        expr.cond = new_cond
+        c_then = _rewrite_in_block(expr.then, fn_by_name, new_fns)
+        c_else = 0
+        if expr.else_ is not None and isinstance(expr.else_, A.Block):
+            c_else = _rewrite_in_block(expr.else_, fn_by_name, new_fns)
+        return (expr, c_cond + c_then + c_else)
     if isinstance(expr, A.Cast):
         new_inner, c = _rewrite_in_expr(expr.value, fn_by_name, new_fns)
         expr.value = new_inner

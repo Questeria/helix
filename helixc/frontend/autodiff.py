@@ -129,7 +129,6 @@ def _diff(expr: A.Expr, var: str) -> A.Expr:
             return A.Binary(span=span, op="-", left=dl, right=dr)
         if expr.op == "*":
             # Product rule: d(a*b)/dx = (da/dx)*b + a*(db/dx)
-            term1 = A.Binary(span=span, op="*", left=dl, right=l)  # actually dl*r
             term1 = A.Binary(span=span, op="*", left=dl, right=r)
             term2 = A.Binary(span=span, op="*", left=l, right=dr)
             return A.Binary(span=span, op="+", left=term1, right=term2)

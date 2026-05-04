@@ -110,16 +110,41 @@ def _propagate(node: A.Expr, adj: A.Expr, acc: dict[str, list[A.Expr]]) -> None:
             _propagate(node.final_expr, adj, acc)
         return
     if isinstance(node, A.If):
-        # Differentiating across both branches: deposit adj into both then & else.
-        # (Cond's derivative is zero — it's a discrete choice, not differentiable.)
-        # If else is missing, treat as zero contribution from the missing branch.
-        if isinstance(node.then, A.Block) and node.then.final_expr is not None:
-            _propagate(node.then.final_expr, adj, acc)
-        if node.else_ is not None:
-            if isinstance(node.else_, A.Block) and node.else_.final_expr is not None:
-                _propagate(node.else_.final_expr, adj, acc)
-            elif not isinstance(node.else_, A.Block):
-                _propagate(node.else_, adj, acc)
+        # The runtime `if` picks one branch, so the gradient through it is also
+        # an `if` — NOT a sum of both branches. Compute each branch's adjoint
+        # contributions into separate buckets, then wrap them as
+        # If(cond, sum_then, sum_else) per-parameter and append to the main
+        # accumulator. (Cond's own derivative is zero — discrete choice.)
+        then_acc: dict[str, list[A.Expr]] = {p: [] for p in acc}
+        else_acc: dict[str, list[A.Expr]] = {p: [] for p in acc}
+
+        def _into(branch: A.Expr | None, bucket: dict[str, list[A.Expr]]) -> None:
+            if branch is None:
+                return
+            if isinstance(branch, A.Block):
+                if branch.final_expr is not None:
+                    _propagate(branch.final_expr, adj, bucket)
+            else:
+                _propagate(branch, adj, bucket)
+
+        _into(node.then, then_acc)
+        _into(node.else_, else_acc)
+
+        for p in acc:
+            had_then = bool(then_acc[p])
+            had_else = bool(else_acc[p])
+            if not had_then and not had_else:
+                continue
+            zero = A.FloatLit(span=node.span, value=0.0)
+            sum_then = _sum_exprs(then_acc[p], node.span) if had_then else zero
+            sum_else = _sum_exprs(else_acc[p], node.span) if had_else else zero
+            wrapped = A.If(
+                span=node.span,
+                cond=node.cond,
+                then=A.Block(span=node.span, stmts=[], final_expr=sum_then),
+                else_=A.Block(span=node.span, stmts=[], final_expr=sum_else),
+            )
+            acc[p].append(wrapped)
         return
     # Unsupported nodes: silently produce no contribution.
 
