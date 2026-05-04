@@ -361,6 +361,23 @@ def test_non_exhaustive_enum_errors():
                for e in errs), f"expected missing-variant error, got: {errs}"
 
 
+def test_or_pattern_covers_multiple_variants_for_exhaustiveness():
+    """`E::A | E::C => ...` arm covers BOTH variants for exhaustiveness.
+    Pre-fix the audit caught: only the first variant was counted, falsely
+    flagging E::C as missing."""
+    src = """
+    enum E { A, B, C }
+    fn f(o: i32) -> i32 {
+        match o {
+            E::A | E::C => 0,
+            E::B => 1,
+        }
+    }
+    """
+    errs = _check(src)
+    assert errs == [], f"or-pattern E::A | E::C should cover both, got {errs}"
+
+
 def test_exhaustive_enum_match_ok():
     """All variants covered → no error."""
     src = """

@@ -1200,28 +1200,30 @@ class TypeChecker:
 
     def _arm_variant_name(self, pat: A.Pattern,
                             expected_enum: str) -> "Optional[str]":
-        """If pat is a Path or PatVariant referring to expected_enum, return
-        the variant name. Otherwise None."""
+        """First-match helper used by callers that want a single variant
+        name (e.g. error reporting). Use _arm_variant_names_all for
+        exhaustiveness counting since PatOr arms cover multiple variants."""
+        names = self._arm_variant_names_all(pat, expected_enum)
+        return names[0] if names else None
+
+    def _arm_variant_names_all(self, pat: A.Pattern,
+                                expected_enum: str) -> list[str]:
+        """Collect EVERY variant name an arm pattern covers from
+        expected_enum. PatOr alts each contribute their own variant; this
+        is what exhaustiveness counting needs (rather than first-match)."""
+        out: list[str] = []
         if isinstance(pat, A.PatLit) and isinstance(pat.value, A.Path):
             segs = pat.value.segments
             if len(segs) == 2 and segs[0] == expected_enum:
-                return segs[1]
-        if isinstance(pat, A.PatVariant):
+                out.append(segs[1])
+        elif isinstance(pat, A.PatVariant):
             segs = pat.path.segments
             if len(segs) == 2 and segs[0] == expected_enum:
-                return segs[1]
-        if isinstance(pat, A.PatOr):
-            # PatOr counts as covering ANY of its alts' variants. We expand
-            # by collecting all variant names the alts cover.
+                out.append(segs[1])
+        elif isinstance(pat, A.PatOr):
             for alt in pat.alts:
-                # Note: this is an approximation; it doesn't tell the
-                # caller about multiple variants. For exhaustiveness we'd
-                # want to expand, but for the simple "first variant"
-                # signature we just return the first match.
-                v = self._arm_variant_name(alt, expected_enum)
-                if v is not None:
-                    return v
-        return None
+                out.extend(self._arm_variant_names_all(alt, expected_enum))
+        return out
 
     def _infer_enum_name_from_arms(self,
                                     arms: list[A.MatchArm]) -> "Optional[str]":
@@ -1281,8 +1283,11 @@ class TypeChecker:
                 for arm in expr.arms:
                     if arm.guard is not None:
                         continue
-                    name = self._arm_variant_name(arm.pattern, enum_name)
-                    if name is not None:
+                    # Collect ALL variants this arm covers — PatOr alts
+                    # each contribute one; without this fix `E::A | E::C`
+                    # would count only E::A and falsely flag E::C missing.
+                    for name in self._arm_variant_names_all(
+                            arm.pattern, enum_name):
                         covered.add(name)
                 missing = [v.name for v in edecl.variants
                            if v.name not in covered]

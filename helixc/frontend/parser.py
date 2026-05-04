@@ -32,6 +32,31 @@ class ParseError(Exception):
     def __init__(self, msg: str, tok: Token):
         super().__init__(f"{tok.line}:{tok.col}: parse error: {msg} (got {tok.kind.name} {tok.value!r})")
         self.token = tok
+        self.msg = msg
+
+    def render(self, source: "str | None" = None,
+               filename: str = "<input>") -> str:
+        """Format with source-line + caret display (mirrors
+        TypeError_.render). Falls back to bare str(self) if source is
+        None or the line is out of range."""
+        if source is None:
+            return str(self)
+        lines = source.splitlines()
+        line = self.token.line
+        col = self.token.col
+        if 1 <= line <= len(lines):
+            src_line = lines[line - 1]
+            ln_str = str(line)
+            pad = " " * len(ln_str)
+            caret_pad = " " * max(0, col - 1)
+            return (
+                f"parse error: {self.msg}\n"
+                f"{pad} --> {filename}:{line}:{col}\n"
+                f"{pad}  |\n"
+                f"{ln_str} | {src_line}\n"
+                f"{pad}  | {caret_pad}^"
+            )
+        return str(self)
 
 
 class Parser:
