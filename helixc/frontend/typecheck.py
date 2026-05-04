@@ -247,12 +247,15 @@ class TypeChecker:
                 except TypeError_ as e:
                     self.errors.append(e)
 
-        # Pass 1.5: index struct decls so StructLit can type-check
-        # against them (and so Field access can know field types).
+        # Pass 1.5: index struct + enum decls so StructLit / Path can
+        # type-check against them.
         self._struct_decls: dict[str, A.StructDecl] = {}
+        self._enum_decls: dict[str, A.EnumDecl] = {}
         for item in self.prog.items:
             if isinstance(item, A.StructDecl):
                 self._struct_decls[item.name] = item
+            elif isinstance(item, A.EnumDecl):
+                self._enum_decls[item.name] = item
 
         # Pass 2: check function bodies
         for item in self.prog.items:
@@ -746,7 +749,27 @@ class TypeChecker:
             self._unbound_name_suggestion(expr.name, expr.span, scope)
             return TyUnknown(hint=f"unbound {expr.name}")
         if isinstance(expr, A.Path):
-            # v0.1: paths are unresolved (e.g., tensor::zeros, tile::matmul)
+            # Check for `EnumName::VariantName` paths.
+            if len(expr.segments) == 2:
+                ename, vname = expr.segments
+                edecl = getattr(self, "_enum_decls", {}).get(ename)
+                if edecl is not None:
+                    for v in edecl.variants:
+                        if v.name == vname:
+                            # Payload-bearing variants need constructor-call
+                            # form; bare path on those is an error.
+                            if v.payload_tys:
+                                self.errors.append(TypeError_(
+                                    f"enum variant {ename}::{vname} has "
+                                    f"payload — call as a function instead",
+                                    expr.span,
+                                ))
+                            return TyPrim("i32")  # tag-only variant
+                    self.errors.append(TypeError_(
+                        f"enum {ename!r} has no variant {vname!r}",
+                        expr.span,
+                    ))
+            # v0.1: other paths are unresolved (e.g., tensor::zeros).
             return TyUnknown(hint=f"path {'::'.join(expr.segments)}")
         # Builtins: detach, attach for D<T>; consolidate for memory tiers
         # (Recognized by name in Call expressions below.)

@@ -1031,6 +1031,50 @@ def test_chained_ors_normalized():
     assert code == 42, f"expected 42 (r should be a strict bool 1), got {code}"
 
 
+def test_enum_constant_returns_variant_index():
+    """`Color::Green` evaluates to 1 (second variant)."""
+    src = """
+    enum Color { Red, Green, Blue }
+    fn main() -> i32 {
+        Color::Green
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 1, f"expected 1 (Color::Green), got {code}"
+
+
+def test_enum_constants_arithmetic():
+    """Tag-only enum variants are integers; basic arithmetic works."""
+    src = """
+    enum Op { Add, Sub, Mul, Div }
+    fn main() -> i32 {
+        let a = Op::Add;
+        let b = Op::Mul;
+        a + b
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 2, f"expected 0+2=2, got {code}"
+
+
+def test_enum_in_match():
+    """Match on a tag-only enum dispatches by variant index."""
+    src = """
+    enum Op { Add, Sub, Mul }
+    fn main() -> i32 {
+        let op = Op::Mul;
+        match op {
+            0 => 100,
+            1 => 200,
+            2 => 42,
+            _ => 0,
+        }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42 (Op::Mul -> arm 2), got {code}"
+
+
 def test_struct_basic_e2e():
     """Construct a Point, read both fields, sum them."""
     src = """

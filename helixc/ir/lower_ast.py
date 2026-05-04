@@ -40,6 +40,8 @@ class Lowerer:
         # struct-decl-name -> ordered list of field names (declaration order).
         # Built from prog.items at lower-time.
         self._struct_fields: dict[str, list[str]] = {}
+        # enum-decl-name -> {variant-name: index}.
+        self._enum_variants: dict[str, dict[str, int]] = {}
         # name -> FnIR (registered functions)
         self.functions: dict[str, tir.FnIR] = {}
         # quote-handle assignment table: maps AST pretty-form -> unique cell
@@ -51,10 +53,15 @@ class Lowerer:
 
     # ---- entry ----
     def lower(self) -> tir.Module:
-        # Pass 0: index struct decls so StructLit / Field can resolve.
+        # Pass 0: index struct + enum decls so StructLit / Field / Path
+        # can resolve.
         for item in self.prog.items:
             if isinstance(item, A.StructDecl):
                 self._struct_fields[item.name] = [p.name for p in item.fields]
+            elif isinstance(item, A.EnumDecl):
+                self._enum_variants[item.name] = {
+                    v.name: i for i, v in enumerate(item.variants)
+                }
         # Pass 1: register function signatures (so calls work)
         for item in self.prog.items:
             if isinstance(item, A.FnDecl):
@@ -314,7 +321,15 @@ class Lowerer:
                 return self.builder.const_int(0)
             return self.builder.const_int(0)
         if isinstance(expr, A.Path):
-            # Treat as opaque call target
+            # Lower `EnumName::VariantName` to const_int(variant_index).
+            # Tag-only variants only — payload variants need separate
+            # constructor-call lowering (TBD).
+            if len(expr.segments) == 2:
+                ename, vname = expr.segments
+                variants = self._enum_variants.get(ename)
+                if variants is not None and vname in variants:
+                    return self.builder.const_int(variants[vname])
+            # Other paths still treated as opaque.
             return self.builder.const_int(0)
         if isinstance(expr, A.Binary):
             l = self._lower_expr(expr.left)
