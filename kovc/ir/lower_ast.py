@@ -304,10 +304,80 @@ class Lowerer:
         if isinstance(expr, A.Block):
             return self._lower_block(expr)
         if isinstance(expr, A.For):
-            # v0.1: for loops not yet lowered to CFG. Emit a placeholder call so
-            # the IR stays well-formed.
-            self._lower_expr(expr.iter_expr)
-            self._lower_block(expr.body)
+            # Desugar `for i in start..end { body }` into:
+            #   let mut __for_i = start
+            #   let __for_end = end       (immutable cache)
+            #   while __for_i < __for_end {
+            #       <body with i bound to LOAD_VAR(__for_i)>
+            #       __for_i += 1
+            #   }
+            # We generate unique var names by prefixing with __for_<linenum>_
+            if not isinstance(expr.iter_expr, A.Range) or expr.iter_expr.start is None or expr.iter_expr.end is None:
+                # Non-range for: not supported in v0.1
+                self._lower_expr(expr.iter_expr)
+                self._lower_block(expr.body)
+                return None
+
+            tag = f"__for_{expr.span.line}_{expr.span.col}_"
+            iter_var = tag + expr.var_name
+            end_var = tag + "end"
+
+            start_v = self._lower_expr(expr.iter_expr.start) or self.builder.const_int(0)
+            self.builder.emit(tir.OpKind.ALLOC_VAR,
+                              attrs={"name": iter_var, "dtype": start_v.ty})
+            self.builder.emit(tir.OpKind.STORE_VAR, start_v,
+                              attrs={"name": iter_var})
+
+            end_v = self._lower_expr(expr.iter_expr.end) or self.builder.const_int(0)
+            self.builder.emit(tir.OpKind.ALLOC_VAR,
+                              attrs={"name": end_var, "dtype": end_v.ty})
+            self.builder.emit(tir.OpKind.STORE_VAR, end_v,
+                              attrs={"name": end_var})
+
+            self._bind_mut(iter_var, start_v.ty)
+            self._bind_mut(end_var, end_v.ty)
+
+            # Loop CFG
+            header_blk = self.builder.append_block()
+            body_blk = self.builder.append_block()
+            exit_blk = self.builder.append_block()
+            self.builder.emit(tir.OpKind.BR,
+                              attrs={"target_block": header_blk.id})
+
+            # Header: cond = iter < end
+            self.builder.switch_to(header_blk)
+            i_val = self.builder.emit(tir.OpKind.LOAD_VAR, result_ty=start_v.ty,
+                                      attrs={"name": iter_var})
+            e_val = self.builder.emit(tir.OpKind.LOAD_VAR, result_ty=end_v.ty,
+                                      attrs={"name": end_var})
+            cond = self.builder.emit(tir.OpKind.CMP_LT, i_val, e_val,
+                                     result_ty=tir.TIRScalar("bool"))
+            self.builder.emit(tir.OpKind.COND_BR, cond,
+                              attrs={"true_block": body_blk.id,
+                                     "false_block": exit_blk.id})
+
+            # Body: bind expr.var_name to a load of iter_var, lower body, then i += 1
+            self.builder.switch_to(body_blk)
+            self._push_scope()
+            try:
+                # Each body iteration loads the current i value
+                cur = self.builder.emit(tir.OpKind.LOAD_VAR, result_ty=start_v.ty,
+                                        attrs={"name": iter_var})
+                self._bind(expr.var_name, cur)
+                self._lower_block(expr.body)
+            finally:
+                self._pop_scope()
+            # Increment i
+            cur_i = self.builder.emit(tir.OpKind.LOAD_VAR, result_ty=start_v.ty,
+                                      attrs={"name": iter_var})
+            one = self.builder.const_int(1)
+            new_i = self.builder.emit(tir.OpKind.ADD, cur_i, one, result_ty=start_v.ty)
+            self.builder.emit(tir.OpKind.STORE_VAR, new_i,
+                              attrs={"name": iter_var})
+            self.builder.emit(tir.OpKind.BR,
+                              attrs={"target_block": header_blk.id})
+
+            self.builder.switch_to(exit_blk)
             return None
         if isinstance(expr, A.While):
             # Real CFG-based loop:

@@ -274,6 +274,49 @@ def test_while_loop_factorial():
     assert compile_and_run(src) == 120
 
 
+def test_for_loop_sum():
+    src = """
+    fn main() -> i32 {
+        let mut total = 0;
+        for i in 0 .. 10 {
+            total += i;
+        }
+        total
+    }
+    """
+    # 0+1+2+3+4+5+6+7+8+9 = 45
+    assert compile_and_run(src) == 45
+
+
+def test_for_loop_count_to_42():
+    src = """
+    fn main() -> i32 {
+        let mut x = 0;
+        for _i in 0 .. 42 {
+            x += 1;
+        }
+        x
+    }
+    """
+    assert compile_and_run(src) == 42
+
+
+def test_for_loop_nested():
+    src = """
+    fn main() -> i32 {
+        let mut count = 0;
+        for i in 0 .. 6 {
+            for j in 0 .. 7 {
+                count += 1;
+            }
+        }
+        count
+    }
+    """
+    # 6 * 7 = 42
+    assert compile_and_run(src) == 42
+
+
 def main():
     tests = [(name, fn) for name, fn in globals().items()
              if name.startswith("test_") and callable(fn)]
