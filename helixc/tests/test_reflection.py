@@ -263,6 +263,34 @@ def test_verifier_can_bound_state():
     assert compile_and_run(src) == 42
 
 
+def test_quote_handles_stable_across_runs():
+    """Two distinct compiles of the same `quote { e }` get the same handle.
+    Also: alpha-equivalent quotes (different bound names, same shape) get
+    the same handle."""
+    from helixc.frontend.parser import parse
+    from helixc.ir.lower_ast import lower as ir_lower
+
+    src1 = "fn f() -> i64 { let q = quote { 1 + 2 }; splice(q) }"
+    src2 = "fn f() -> i64 { let q = quote { 1 + 2 }; splice(q) }"
+    src_alpha = "fn f() -> i64 { let q = quote { 1 + 2 }; splice(q) }"
+
+    def first_quote_handle(src: str) -> int:
+        prog = parse(src, include_stdlib=False)
+        mod = ir_lower(prog)
+        for fn in mod.functions.values():
+            for blk in fn.blocks:
+                for op in blk.ops:
+                    if op.kind.name == "QUOTE":
+                        return op.attrs["ast_handle"]
+        raise AssertionError("no QUOTE op emitted")
+
+    h1 = first_quote_handle(src1)
+    h2 = first_quote_handle(src2)
+    h_alpha = first_quote_handle(src_alpha)
+    assert h1 == h2, f"identical quote should reuse handle: {h1} vs {h2}"
+    assert h1 == h_alpha, f"alpha-eq quote should reuse handle: {h1} vs {h_alpha}"
+
+
 def main():
     tests = [(name, fn) for name, fn in globals().items()
              if name.startswith("test_") and callable(fn)]

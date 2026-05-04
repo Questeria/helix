@@ -661,11 +661,17 @@ class Lowerer:
         if isinstance(expr, A.Quote):
             # quote { ... } captures the inner AST as a constant value of
             # type AstNode. The handle is a stable cell index assigned by
-            # this lowerer — same AST → same cell, distinct ASTs → distinct
-            # cells (no hash-collision aliasing). Backed by HELIX_NUM_CELLS
-            # mutable cells in the binary.
+            # this lowerer — alpha-equivalent ASTs share a cell (via
+            # structural_hash), distinct shapes get distinct cells (no
+            # collision aliasing). Backed by HELIX_NUM_CELLS mutable cells
+            # in the binary.
             from ..backend.x86_64 import HELIX_NUM_CELLS
-            key = _pretty(expr.inner)
+            from ..frontend.ast_hash import structural_hash
+            try:
+                key = structural_hash(expr.inner)
+            except Exception:
+                # Fall back to pretty-string if hashing fails for any reason.
+                key = _pretty(expr.inner)
             if key not in self._quote_handle_table:
                 idx = len(self._quote_handle_table)
                 if idx >= HELIX_NUM_CELLS:
@@ -679,7 +685,7 @@ class Lowerer:
             return self.builder.emit(tir.OpKind.QUOTE,
                                      result_ty=tir.TIRScalar("i64"),
                                      attrs={"ast_handle": ast_handle,
-                                            "ast_pretty": key})
+                                            "ast_pretty": _pretty(expr.inner)})
         if isinstance(expr, A.Splice):
             inner = self._lower_expr(expr.inner)
             if inner is None:
