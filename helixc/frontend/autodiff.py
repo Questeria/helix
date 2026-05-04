@@ -30,16 +30,154 @@ from typing import Optional
 from . import ast_nodes as A
 
 
-def differentiate(expr: A.Expr, var: str) -> A.Expr:
+def differentiate(expr: A.Expr, var: str,
+                  fn_table: dict[str, "A.FnDecl"] | None = None) -> A.Expr:
     """Return the AST of d(expr)/d(var), simplified.
+
+    Optionally accepts a `fn_table` mapping function names to FnDecls. When
+    provided, calls to user-defined @pure functions in the expression are
+    inlined (their bodies substituted for the call) before differentiation.
+    This makes grad work across function boundaries — `grad(f)` where f's
+    body calls a helper `g(x)` propagates the gradient through g.
 
     If `expr` is a Block, the block's let-bindings are inlined first so
     that subsequent uses of the bound names refer to their definitions.
-    Then the block's final expression is differentiated.
     """
+    if fn_table:
+        expr = _inline_user_calls(expr, fn_table)
     inlined = _inline_lets(expr, {})
     deriv = _diff(inlined, var)
     return _simplify(deriv)
+
+
+def _inline_user_calls(expr: A.Expr, fn_table: dict[str, "A.FnDecl"],
+                        depth: int = 0, max_depth: int = 4) -> A.Expr:
+    """Walk `expr` and replace each Call(Name(f), args) where f is a known
+    @pure function in `fn_table` with a deepcopy of f's body, with each
+    parameter substituted by the corresponding argument expression.
+
+    Skips:
+      - Transcendental builtins (`__exp`, `__log`, etc.) — they have
+        analytic AD chain rules already wired into _diff.
+      - Recursive calls (depth limit prevents infinite expansion).
+      - Functions not in fn_table (treated as opaque external).
+    """
+    import copy as _copy
+
+    TRANSCENDENTALS = {"__exp", "__log", "__sin", "__cos", "__sqrt",
+                       "__relu", "__sigmoid"}
+
+    def go(e: A.Expr) -> A.Expr:
+        if isinstance(e, A.Call):
+            new_callee = go(e.callee)
+            new_args = [go(a) for a in e.args]
+            if (isinstance(new_callee, A.Name)
+                    and new_callee.name in fn_table
+                    and new_callee.name not in TRANSCENDENTALS
+                    and depth < max_depth):
+                fn = fn_table[new_callee.name]
+                # Only inline @pure functions — others may have effects
+                # whose differentiation is unsound.
+                if "pure" not in fn.attrs:
+                    return A.Call(span=e.span, callee=new_callee, args=new_args)
+                if len(fn.params) != len(new_args):
+                    return A.Call(span=e.span, callee=new_callee, args=new_args)
+                # Build substitution map: param name -> arg expression
+                substitutions = {p.name: a for p, a in zip(fn.params, new_args)}
+                # Deepcopy the body so we don't share references with the
+                # original function (downstream passes mutate in-place).
+                body_copy = _copy.deepcopy(fn.body)
+                substituted = _substitute_names(body_copy, substitutions)
+                # Recursively inline within the substituted body — this
+                # handles nested user calls. depth+1 prevents runaway
+                # expansion on accidental recursion.
+                return _inline_user_calls(substituted, fn_table, depth + 1,
+                                           max_depth)
+            return A.Call(span=e.span, callee=new_callee, args=new_args)
+        if isinstance(e, A.Binary):
+            return A.Binary(span=e.span, op=e.op, left=go(e.left), right=go(e.right))
+        if isinstance(e, A.Unary):
+            return A.Unary(span=e.span, op=e.op, operand=go(e.operand))
+        if isinstance(e, A.Block):
+            new_stmts = []
+            for s in e.stmts:
+                if isinstance(s, A.Let) and s.value is not None:
+                    new_stmts.append(A.Let(span=s.span, name=s.name,
+                                            ty=s.ty, value=go(s.value),
+                                            is_mut=s.is_mut))
+                elif isinstance(s, A.ConstStmt):
+                    new_stmts.append(A.ConstStmt(span=s.span, name=s.name,
+                                                  ty=s.ty, value=go(s.value)))
+                else:
+                    new_stmts.append(s)
+            new_final = go(e.final_expr) if e.final_expr is not None else None
+            return A.Block(span=e.span, stmts=new_stmts, final_expr=new_final)
+        if isinstance(e, A.If):
+            new_then = go(e.then) if isinstance(e.then, A.Block) else e.then
+            new_else = (go(e.else_)
+                        if e.else_ is not None and isinstance(e.else_, A.Block)
+                        else e.else_)
+            return A.If(span=e.span, cond=go(e.cond),
+                        then=new_then, else_=new_else)
+        return e
+
+    return go(expr)
+
+
+def _substitute_names(expr: A.Expr, subs: dict[str, A.Expr]) -> A.Expr:
+    """Replace each occurrence of A.Name(n) where n in subs with subs[n].
+    Block-scoped: a `let` shadowing a substituted name removes it from the
+    scope of the rest of the block."""
+    import copy as _copy
+
+    def go(e: A.Expr, env: dict[str, A.Expr]) -> A.Expr:
+        if isinstance(e, A.Name):
+            if e.name in env:
+                # Each substitution site gets its own copy so downstream
+                # in-place mutation doesn't cross-contaminate.
+                return _copy.deepcopy(env[e.name])
+            return e
+        if isinstance(e, A.Binary):
+            return A.Binary(span=e.span, op=e.op,
+                            left=go(e.left, env), right=go(e.right, env))
+        if isinstance(e, A.Unary):
+            return A.Unary(span=e.span, op=e.op, operand=go(e.operand, env))
+        if isinstance(e, A.Call):
+            return A.Call(span=e.span, callee=go(e.callee, env),
+                          args=[go(a, env) for a in e.args])
+        if isinstance(e, A.If):
+            new_then = (_go_block(e.then, env) if isinstance(e.then, A.Block)
+                        else go(e.then, env))
+            new_else = (_go_block(e.else_, env)
+                        if e.else_ is not None and isinstance(e.else_, A.Block)
+                        else (go(e.else_, env) if e.else_ is not None else None))
+            return A.If(span=e.span, cond=go(e.cond, env),
+                        then=new_then, else_=new_else)
+        if isinstance(e, A.Block):
+            return _go_block(e, env)
+        return e
+
+    def _go_block(blk: A.Block, env: dict[str, A.Expr]) -> A.Block:
+        local_env = dict(env)
+        new_stmts = []
+        for s in blk.stmts:
+            if isinstance(s, A.Let) and s.value is not None:
+                new_val = go(s.value, local_env)
+                # The let shadows any incoming substitution for the same name
+                local_env.pop(s.name, None)
+                new_stmts.append(A.Let(span=s.span, name=s.name, ty=s.ty,
+                                        value=new_val, is_mut=s.is_mut))
+            elif isinstance(s, A.ConstStmt):
+                new_val = go(s.value, local_env)
+                local_env.pop(s.name, None)
+                new_stmts.append(A.ConstStmt(span=s.span, name=s.name,
+                                              ty=s.ty, value=new_val))
+            else:
+                new_stmts.append(s)
+        new_final = go(blk.final_expr, local_env) if blk.final_expr is not None else None
+        return A.Block(span=blk.span, stmts=new_stmts, final_expr=new_final)
+
+    return go(expr, subs)
 
 
 def _inline_lets(expr: A.Expr | None, env: dict[str, A.Expr]) -> A.Expr | None:

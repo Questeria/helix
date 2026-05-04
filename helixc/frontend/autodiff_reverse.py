@@ -45,13 +45,20 @@ import copy
 from typing import Optional
 
 from . import ast_nodes as A
-from .autodiff import _inline_lets, _simplify
+from .autodiff import _inline_lets, _simplify, _inline_user_calls
 
 
-def differentiate_reverse(expr: A.Expr, param_names: list[str]) -> dict[str, A.Expr]:
+def differentiate_reverse(expr: A.Expr, param_names: list[str],
+                          fn_table: dict[str, "A.FnDecl"] | None = None
+                          ) -> dict[str, A.Expr]:
     """Return a dict {param_name: ∂(expr)/∂(param_name), …} for each name in
-    `param_names`. The expression is first inlined (let-bindings substituted)
-    and the resulting derivatives are simplified."""
+    `param_names`. The expression is first inlined (user calls + let
+    bindings) and the resulting derivatives are simplified.
+
+    Pass `fn_table` to enable inlining of @pure user-defined function calls
+    so the gradient propagates through them."""
+    if fn_table:
+        expr = _inline_user_calls(expr, fn_table)
     flat = _inline_lets(expr, {})
     if flat is None:
         return {p: A.FloatLit(span=expr.span, value=0.0) for p in param_names}

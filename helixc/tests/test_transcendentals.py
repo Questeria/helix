@@ -79,6 +79,37 @@ def test_grad_through_relu_positive():
     assert compile_and_run(src) == 42
 
 
+def test_grad_through_user_defined_function_call():
+    # AD now inlines @pure user-defined function calls during gradient
+    # generation, so grad_rev propagates through them. Earlier this gave
+    # zero (the call was treated as opaque).
+    src = """
+    @pure fn helper(x: f32) -> f32 { x * x }
+    @pure fn loss(x: f32) -> f32 { helper(x) + 5.0 }
+    fn main() -> i32 {
+        // d/dx helper(x) = 2x; at x=3 = 6; +36=42
+        let g = grad_rev(loss)(3.0);
+        (g as i32) + 36
+    }
+    """
+    assert compile_and_run(src) == 42
+
+
+def test_grad_through_chain_of_user_calls():
+    # f(x) = h(g(x)); d/dx = h'(g(x)) * g'(x). With g(x)=x*x, h(x)=2x:
+    # f(x) = 2x^2, df/dx = 4x. At x=2: 8. +34=42.
+    src = """
+    @pure fn g(x: f32) -> f32 { x * x }
+    @pure fn h(x: f32) -> f32 { 2.0 * x }
+    @pure fn loss(x: f32) -> f32 { h(g(x)) }
+    fn main() -> i32 {
+        let r = grad_rev(loss)(2.0);
+        (r as i32) + 34
+    }
+    """
+    assert compile_and_run(src) == 42
+
+
 def test_grad_through_relu_via_let_alias():
     # Exercise the path where grad_pass.resolve_let_aliases walks the
     # gradient AST. Earlier the ReLU gradient's FloatLit(0.0) was shared

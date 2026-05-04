@@ -167,7 +167,8 @@ def _rewrite_in_expr(expr: A.Expr, fn_by_name: dict[str, A.FnDecl],
             param_idx = _extract_param_idx_from_args(new_args, target,
                                                       kind=new_callee.name)
             mode = "reverse" if new_callee.name == "grad_rev" else "forward"
-            grad_fn = _generate_grad_fn(target, param_idx, mode=mode)
+            grad_fn = _generate_grad_fn(target, param_idx, mode=mode,
+                                         fn_table=fn_by_name)
             if grad_fn is not None:
                 # Don't add duplicates if grad(f, n) is called multiple times
                 if grad_fn.name not in fn_by_name:
@@ -261,7 +262,9 @@ def _extract_param_idx_from_args(args: list[A.Expr], target: A.FnDecl,
 
 
 def _generate_grad_fn(fn: A.FnDecl, param_idx: int = 0,
-                       mode: str = "forward") -> A.FnDecl | None:
+                       mode: str = "forward",
+                       fn_table: dict[str, A.FnDecl] | None = None
+                       ) -> A.FnDecl | None:
     """Build a `<fn.name>__grad_<n>` (or `__rgrad_<n>`) FnDecl whose body is
     the derivative of `fn`'s body w.r.t. parameter `param_idx`. For
     single-param functions the name is shortened to `__grad` / `__rgrad`.
@@ -280,10 +283,10 @@ def _generate_grad_fn(fn: A.FnDecl, param_idx: int = 0,
         # Reverse-mode: get the gradient w.r.t. the chosen parameter from
         # the dict of all gradients. The other entries are discarded; the
         # multi-output API will surface them when added.
-        all_grads = differentiate_reverse(fn.body, [var])
+        all_grads = differentiate_reverse(fn.body, [var], fn_table=fn_table)
         deriv = all_grads[var]
     else:
-        deriv = differentiate(fn.body, var)
+        deriv = differentiate(fn.body, var, fn_table=fn_table)
     # Wrap the derivative expression in a block (the FnDecl expects a Block body)
     new_body = A.Block(span=fn.body.span, stmts=[], final_expr=deriv)
 

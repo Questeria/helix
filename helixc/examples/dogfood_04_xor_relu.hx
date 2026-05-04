@@ -13,15 +13,21 @@
 //
 // Final exit code 42 if both forward and gradient evaluate as expected.
 
-// loss_01: forward pass + squared error for input (0, 1) target 1.
-// Inlined (no separate forward fn) because reverse-mode AD doesn't yet
-// chain-rule across user-defined function calls — only across the
-// stdlib transcendentals. Inlining keeps everything visible to grad_rev.
+// 2-layer ReLU forward pass — separate function. AD now inlines @pure
+// user functions during gradient generation, so loss_01 calling forward
+// works correctly: grad_rev(loss_01)(...) propagates through forward.
+@pure fn forward(x0: f32, x1: f32,
+                  w0: f32, w1: f32,
+                  w2: f32, w3: f32,
+                  w4: f32, w5: f32) -> f32 {
+    let h0 = __relu(w0 * x0 + w1 * x1);
+    let h1 = __relu(w2 * x0 + w3 * x1);
+    w4 * h0 + w5 * h1
+}
+
 @pure fn loss_01(w0: f32, w1: f32, w2: f32, w3: f32,
                   w4: f32, w5: f32) -> f32 {
-    let h0 = __relu(w0 * 0.0 + w1 * 1.0);
-    let h1 = __relu(w2 * 0.0 + w3 * 1.0);
-    let p = w4 * h0 + w5 * h1;
+    let p = forward(0.0, 1.0, w0, w1, w2, w3, w4, w5);
     let d = p - 1.0;
     d * d
 }
@@ -51,10 +57,8 @@ fn main() -> i32 {
 
     // Loss at the current weights for input (0, 1).
     let l = loss_01(w0, w1, w2, w3, w4, w5);
-    // Synthesise a "prediction" too — same forward pass, just outside loss.
-    let h0 = __relu(w0 * 0.0 + w1 * 1.0);
-    let h1 = __relu(w2 * 0.0 + w3 * 1.0);
-    let pred = w4 * h0 + w5 * h1;
+    // Synthesise a prediction by directly calling forward.
+    let pred = forward(0.0, 1.0, w0, w1, w2, w3, w4, w5);
     // Gradient w.r.t. w1 (input (0,1) ⇒ x1=1, so changes to w1 propagate
     // through to the loss; using w0 would give zero because x0=0 zeroes
     // its contribution).
