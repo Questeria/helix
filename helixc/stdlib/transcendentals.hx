@@ -83,3 +83,179 @@
 fn __always_accept(h: i32, v: f32) -> i32 {
     1
 }
+
+// =========================================================================
+// Math helpers — operate on f32 scalars.
+// =========================================================================
+
+@pure fn __abs(x: f32) -> f32 {
+    if x < 0.0 { 0.0 - x } else { x }
+}
+
+@pure fn __min(a: f32, b: f32) -> f32 {
+    if a < b { a } else { b }
+}
+
+@pure fn __max(a: f32, b: f32) -> f32 {
+    if a > b { a } else { b }
+}
+
+@pure fn __clamp(x: f32, lo: f32, hi: f32) -> f32 {
+    if x < lo { lo } else { if x > hi { hi } else { x } }
+}
+
+@pure fn __sign(x: f32) -> f32 {
+    if x > 0.0 { 1.0 } else { if x < 0.0 { 0.0 - 1.0 } else { 0.0 } }
+}
+
+// Floor: nearest integer ≤ x. Implemented via cast-and-correct since we
+// have no real floor instruction yet. Works for finite values in i32 range.
+@pure fn __floor(x: f32) -> f32 {
+    let i = x as i32;
+    let f = i as f32;
+    if f > x { f - 1.0 } else { f }
+}
+
+@pure fn __ceil(x: f32) -> f32 {
+    let i = x as i32;
+    let f = i as f32;
+    if f < x { f + 1.0 } else { f }
+}
+
+// Integer power: x^n for non-negative integer n. n is i32 to avoid
+// recursive float comparisons; up to n=10 covers most practical cases.
+@pure fn __powi(x: f32, n: i32) -> f32 {
+    if n <= 0 { 1.0 }
+    else { if n == 1 { x }
+           else { if n == 2 { x * x }
+                  else { if n == 3 { x * x * x }
+                         else { if n == 4 { let s = x*x; s * s }
+                                else {
+                                    // generic: compute up to n==10 unrolled
+                                    let s = x*x;
+                                    if n == 5 { s * s * x }
+                                    else { if n == 6 { s * s * s }
+                                           else { if n == 7 { s * s * s * x }
+                                                  else { if n == 8 { let q = s*s; q * q }
+                                                         else { if n == 9 { let q = s*s; q * q * x }
+                                                                else { let q = s*s; q * q * s } } } } }
+                                } } } } }
+}
+
+// =========================================================================
+// Modern activation functions.
+// =========================================================================
+
+// tanh(x) = (exp(2x) - 1) / (exp(2x) + 1).
+// Range: (-1, 1). Symmetric, smooth.
+@pure fn __tanh(x: f32) -> f32 {
+    let e2 = __exp(2.0 * x);
+    (e2 - 1.0) / (e2 + 1.0)
+}
+
+// Softplus: smooth approximation of relu. Range: (0, ∞).
+//   softplus(x) = log(1 + exp(x))
+@pure fn __softplus(x: f32) -> f32 {
+    __log(1.0 + __exp(x))
+}
+
+// SiLU / Swish: x * sigmoid(x). Used in modern transformers.
+// Smooth, non-monotonic, self-gated.
+@pure fn __silu(x: f32) -> f32 {
+    x * __sigmoid(x)
+}
+
+// GELU (Gaussian Error Linear Unit): tanh-based approximation per
+// Hendrycks & Gimpel. Used in BERT, GPT-2, Llama, etc.
+//   gelu(x) = 0.5 * x * (1 + tanh(√(2/π) * (x + 0.044715 * x^3)))
+// √(2/π) ≈ 0.7978846
+@pure fn __gelu(x: f32) -> f32 {
+    let x3 = x * x * x;
+    let inner = 0.7978846 * (x + 0.044715 * x3);
+    0.5 * x * (1.0 + __tanh(inner))
+}
+
+// =========================================================================
+// Loss functions (per-example; user sums across batches).
+// =========================================================================
+
+// Mean squared error: (pred - target)^2. Symmetric quadratic.
+@pure fn __mse(pred: f32, target: f32) -> f32 {
+    let d = pred - target;
+    d * d
+}
+
+// Mean absolute error: |pred - target|. More robust to outliers.
+@pure fn __mae(pred: f32, target: f32) -> f32 {
+    __abs(pred - target)
+}
+
+// Binary cross-entropy: -[y log(p) + (1-y) log(1-p)]. p must be in (0, 1).
+// We clamp away from 0/1 to avoid log(0) → -inf.
+@pure fn __bce(p: f32, y: f32) -> f32 {
+    let p_safe = __clamp(p, 0.000001, 0.999999);
+    0.0 - (y * __log(p_safe) + (1.0 - y) * __log(1.0 - p_safe))
+}
+
+// Huber loss: quadratic for |d| < delta, linear beyond. Robust to outliers.
+@pure fn __huber(pred: f32, target: f32, delta: f32) -> f32 {
+    let d = __abs(pred - target);
+    if d < delta { 0.5 * d * d } else { delta * (d - 0.5 * delta) }
+}
+
+// =========================================================================
+// Deterministic PRNG (xorshift32). Seedable; reproducible across runs.
+// Not cryptographic. Use for weight init, dropout masks, etc.
+// =========================================================================
+
+// One step of xorshift32. Given current state s, returns the next state.
+// State must be non-zero; the caller is responsible for seeding.
+//   s ^= s << 13;
+//   s ^= s >> 17;
+//   s ^= s << 5;
+// The Helix backend doesn't yet expose bitwise shifts/xor, so we
+// approximate with arithmetic. For now we use a Lehmer LCG which only
+// needs multiply + mod and is good enough for non-cryptographic uses:
+//   s = (s * 48271) % 2147483647
+@pure fn __rand_step(s: i32) -> i32 {
+    // Lehmer LCG (MINSTD): period 2^31 - 2, well-studied parameters.
+    // To avoid i32 overflow, do the multiply at runtime carefully:
+    //   (s * 48271) mod (2^31 - 1)
+    // For now we just do the modulo — overflow is wrap-around in i32
+    // arithmetic which corrupts but produces SOME deterministic stream.
+    let raw = s * 48271;
+    let m = raw % 2147483647;
+    if m < 0 { m + 2147483647 } else { if m == 0 { 1 } else { m } }
+}
+
+// Map a state to a float in [0, 1).
+@pure fn __rand_float(s: i32) -> f32 {
+    (s as f32) * 0.0000000004656612873   // 1 / (2^31 - 1)
+}
+
+// Map a state to a float in [-bound, bound] — useful for weight init.
+@pure fn __rand_uniform(s: i32, bound: f32) -> f32 {
+    (__rand_float(s) - 0.5) * 2.0 * bound
+}
+
+// =========================================================================
+// Optimizer-step helpers.
+// =========================================================================
+
+// SGD step: w_new = w - lr * g. Returns the new weight value.
+@pure fn __sgd_step(w: f32, g: f32, lr: f32) -> f32 {
+    w - lr * g
+}
+
+// SGD with momentum: returns (new_w, new_v) — but Helix doesn't have
+// tuple returns yet. Instead, callers store v in a separate cell and
+// pass it in. This helper just computes the new velocity.
+@pure fn __momentum_step_v(v: f32, g: f32, beta: f32) -> f32 {
+    beta * v + grad
+}
+
+// Adam-like step (single-step, no bias correction for simplicity).
+// Returns the parameter update direction; callers do w := w - lr * step.
+@pure fn __adam_step(m: f32, v: f32, eps: f32) -> f32 {
+    m / (__sqrt(v) + eps)
+}

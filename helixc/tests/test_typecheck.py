@@ -456,6 +456,29 @@ def test_learn_to_wrong_arity():
 # ============================================================================
 # Test runner
 # ============================================================================
+def test_unbound_name_did_you_mean_suggests_close_match():
+    src = """
+    fn main() -> i32 {
+        let counter = 5;
+        countr + 1
+    }
+    """
+    errs = check(src)
+    assert any("unbound" in s and "countr" in s for s in errs), \
+        f"expected unbound 'countr', got {errs}"
+    assert any("counter" in s for s in errs), \
+        f"expected hint mentioning 'counter', got {errs}"
+
+
+def test_unbound_builtin_not_flagged():
+    src = """
+    fn use_grad(x: D<f32>) -> f32 { detach(x) }
+    """
+    errs = check(src)
+    assert not any("unbound" in s for s in errs), \
+        f"unexpected unbound error for builtin: {errs}"
+
+
 def main():
     tests = [(name, fn) for name, fn in globals().items()
              if name.startswith("test_") and callable(fn)]

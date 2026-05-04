@@ -192,13 +192,73 @@ def _propagate(node: A.Expr, adj: A.Expr, acc: dict[str, list[A.Expr]]) -> None:
                 _propagate(u, new_adj, acc)
                 return
             if name == "__sigmoid":
-                s = call1("__sigmoid", u)
+                # Two distinct sigmoid(u) call nodes (deepcopy u for each)
+                # so they don't share argument trees with each other.
+                s1 = call1("__sigmoid", copy.deepcopy(u))
+                s2 = call1("__sigmoid", copy.deepcopy(u))
                 one_minus = A.Binary(span=node.span, op="-",
                                      left=A.FloatLit(span=node.span, value=1.0),
-                                     right=s)
-                deriv = A.Binary(span=node.span, op="*", left=s, right=one_minus)
+                                     right=s2)
+                deriv = A.Binary(span=node.span, op="*", left=s1, right=one_minus)
                 new_adj = A.Binary(span=node.span, op="*", left=adj,
                                    right=deriv)
+                _propagate(u, new_adj, acc)
+                return
+            if name == "__tanh":
+                # d(tanh(u))/dx = (1 - tanh(u)^2) * du
+                t = call1("__tanh", copy.deepcopy(u))
+                t_sq = A.Binary(span=node.span, op="*",
+                                left=t, right=copy.deepcopy(t))
+                one_minus = A.Binary(span=node.span, op="-",
+                                     left=A.FloatLit(span=node.span, value=1.0),
+                                     right=t_sq)
+                new_adj = A.Binary(span=node.span, op="*", left=adj,
+                                   right=one_minus)
+                _propagate(u, new_adj, acc)
+                return
+            if name == "__softplus":
+                # d(softplus(u))/dx = sigmoid(u) * du
+                deriv = call1("__sigmoid", copy.deepcopy(u))
+                new_adj = A.Binary(span=node.span, op="*", left=adj,
+                                   right=deriv)
+                _propagate(u, new_adj, acc)
+                return
+            if name == "__silu":
+                # d(silu)/du = sigmoid(u) * (1 + u*(1 - sigmoid(u)))
+                s1 = call1("__sigmoid", copy.deepcopy(u))
+                s2 = call1("__sigmoid", copy.deepcopy(u))
+                one_minus_s = A.Binary(span=node.span, op="-",
+                                       left=A.FloatLit(span=node.span, value=1.0),
+                                       right=s2)
+                u_times_oms = A.Binary(span=node.span, op="*",
+                                       left=copy.deepcopy(u),
+                                       right=one_minus_s)
+                inner = A.Binary(span=node.span, op="+",
+                                 left=A.FloatLit(span=node.span, value=1.0),
+                                 right=u_times_oms)
+                deriv = A.Binary(span=node.span, op="*", left=s1, right=inner)
+                new_adj = A.Binary(span=node.span, op="*", left=adj,
+                                   right=deriv)
+                _propagate(u, new_adj, acc)
+                return
+            if name == "__abs":
+                # d(abs(u))/dx = sign(u) * du; at u=0 use 0.
+                u_c = copy.deepcopy(u)
+                zero = A.FloatLit(span=node.span, value=0.0)
+                cond_pos = A.Binary(span=node.span, op=">", left=u_c,
+                                    right=A.FloatLit(span=node.span, value=0.0))
+                cond_neg = A.Binary(span=node.span, op="<", left=copy.deepcopy(u),
+                                    right=A.FloatLit(span=node.span, value=0.0))
+                inner_else = A.If(span=node.span, cond=cond_neg,
+                                  then=A.Block(span=node.span, stmts=[],
+                                               final_expr=A.FloatLit(span=node.span, value=-1.0)),
+                                  else_=A.Block(span=node.span, stmts=[], final_expr=zero))
+                gated = A.If(span=node.span, cond=cond_pos,
+                             then=A.Block(span=node.span, stmts=[],
+                                          final_expr=A.FloatLit(span=node.span, value=1.0)),
+                             else_=A.Block(span=node.span, stmts=[],
+                                           final_expr=inner_else))
+                new_adj = A.Binary(span=node.span, op="*", left=adj, right=gated)
                 _propagate(u, new_adj, acc)
                 return
         # Other calls: opaque, contributes 0 to gradient.

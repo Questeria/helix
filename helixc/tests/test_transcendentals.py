@@ -206,6 +206,66 @@ def test_grad_through_relu_negative_is_zero():
     assert compile_and_run(src) == 42
 
 
+def test_grad_through_tanh():
+    # d(tanh(x)) at 0 = 1 - tanh(0)^2 = 1; +41 = 42
+    src = """
+    @pure fn loss(x: f32) -> f32 { __tanh(x) }
+    fn main() -> i32 {
+        let g = grad_rev(loss)(0.0);
+        (g as i32) + 41
+    }
+    """
+    assert compile_and_run(src) == 42
+
+
+def test_grad_through_softplus():
+    # d(softplus(x)) at 0 = sigmoid(0) = 0.5; (0.5*84) = 42
+    src = """
+    @pure fn loss(x: f32) -> f32 { __softplus(x) }
+    fn main() -> i32 {
+        let g = grad_rev(loss)(0.0);
+        ((g * 84.0) as i32)
+    }
+    """
+    assert compile_and_run(src) == 42
+
+
+def test_grad_through_silu():
+    # d(silu(x)) at 0 = sigmoid(0) * (1 + 0*(1-sigmoid(0))) = 0.5; ×84 = 42
+    src = """
+    @pure fn loss(x: f32) -> f32 { __silu(x) }
+    fn main() -> i32 {
+        let g = grad_rev(loss)(0.0);
+        ((g * 84.0) as i32)
+    }
+    """
+    assert compile_and_run(src) == 42
+
+
+def test_grad_through_abs_positive():
+    # d(abs(x)) at x=5 = 1; +41 = 42
+    src = """
+    @pure fn loss(x: f32) -> f32 { __abs(x) }
+    fn main() -> i32 {
+        let g = grad_rev(loss)(5.0);
+        (g as i32) + 41
+    }
+    """
+    assert compile_and_run(src) == 42
+
+
+def test_grad_through_abs_negative():
+    # d(abs(x)) at x=-3 = -1; +43 = 42
+    src = """
+    @pure fn loss(x: f32) -> f32 { __abs(x) }
+    fn main() -> i32 {
+        let g = grad_rev(loss)(0.0 - 3.0);
+        (g as i32) + 43
+    }
+    """
+    assert compile_and_run(src) == 42
+
+
 def main():
     tests = [(name, fn) for name, fn in globals().items()
              if name.startswith("test_") and callable(fn)]

@@ -368,6 +368,51 @@ def _diff_call_chain_rule(call: A.Call, var: str,
         one_minus = A.Binary(span=span, op="-",
                              left=A.FloatLit(span=span, value=1.0), right=s1)
         return mul(mul(s2, one_minus), du)
+    if name == "__tanh":
+        # d(tanh(u))/dx = (1 - tanh(u)^2) * du/dx
+        import copy as _copy
+        t = call1("__tanh", _copy.deepcopy(u))
+        t_sq = A.Binary(span=span, op="*", left=t,
+                        right=_copy.deepcopy(t))
+        one_minus = A.Binary(span=span, op="-",
+                             left=A.FloatLit(span=span, value=1.0), right=t_sq)
+        return mul(one_minus, du)
+    if name == "__softplus":
+        # d(softplus(u))/dx = sigmoid(u) * du/dx
+        return mul(call1("__sigmoid", u), du)
+    if name == "__silu":
+        # d(silu(u))/dx = sigmoid(u) + u * sigmoid(u) * (1 - sigmoid(u)) * du/dx
+        # = sigmoid(u) * (1 + u * (1 - sigmoid(u))) * du/dx
+        import copy as _copy
+        s1 = call1("__sigmoid", _copy.deepcopy(u))
+        s2 = call1("__sigmoid", _copy.deepcopy(u))
+        one_minus_s = A.Binary(span=span, op="-",
+                               left=A.FloatLit(span=span, value=1.0), right=s2)
+        u_times_oms = A.Binary(span=span, op="*", left=_copy.deepcopy(u),
+                               right=one_minus_s)
+        inner = A.Binary(span=span, op="+",
+                         left=A.FloatLit(span=span, value=1.0),
+                         right=u_times_oms)
+        return mul(mul(s1, inner), du)
+    if name == "__abs":
+        # d(abs(u))/dx = sign(u) * du/dx; at u=0 use 0.
+        # Implement as if u>0 then 1 else (if u<0 then -1 else 0) * du.
+        import copy as _copy
+        u_copy = _copy.deepcopy(u)
+        zero = A.FloatLit(span=span, value=0.0)
+        cond_pos = A.Binary(span=span, op=">", left=u_copy,
+                            right=A.FloatLit(span=span, value=0.0))
+        cond_neg = A.Binary(span=span, op="<", left=_copy.deepcopy(u),
+                            right=A.FloatLit(span=span, value=0.0))
+        inner_else = A.If(span=span, cond=cond_neg,
+                          then=A.Block(span=span, stmts=[],
+                                       final_expr=A.FloatLit(span=span, value=-1.0)),
+                          else_=A.Block(span=span, stmts=[], final_expr=zero))
+        gated = A.If(span=span, cond=cond_pos,
+                     then=A.Block(span=span, stmts=[],
+                                  final_expr=A.FloatLit(span=span, value=1.0)),
+                     else_=A.Block(span=span, stmts=[], final_expr=inner_else))
+        return mul(gated, du)
     return None
 
 

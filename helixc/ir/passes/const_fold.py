@@ -28,6 +28,52 @@ import struct
 from .. import tir
 
 
+def _try_algebraic_identity(op: tir.Op, defs: dict,
+                             res: "tir.Value") -> "tir.Op | None":
+    """Apply algebraic identities that simplify ops with one literal operand:
+        x + 0 = x, 0 + x = x
+        x - 0 = x
+        x * 1 = x, 1 * x = x
+        x * 0 = 0, 0 * x = 0
+        x / 1 = x
+        x - x = 0    (if both operands are the same SSA value)
+
+    Returns a replacement Op (CONST_INT/FLOAT for zero results, or a
+    pass-through using ADD with 0 to keep the SSA shape — actually we
+    materialize as a CONST or a simple-pass via CONST_INT 0 + x but
+    that's not allowed without changing operand id. So we either fold
+    to a const result OR leave the op alone. For 'x op identity = x'
+    we cannot rewrite the op to "yield x" in SSA without the caller
+    seeing x's id change; we settle for folding only the cases that
+    produce a constant. The +0 / *1 identities are captured by the
+    AST simplifier in autodiff.py before this pass runs.)
+    """
+    # x * 0 = 0 (int)
+    if op.kind == tir.OpKind.MUL and len(op.operands) == 2:
+        l_def = defs.get(op.operands[0].id)
+        r_def = defs.get(op.operands[1].id)
+        # Either side is const-int 0
+        if l_def is not None and l_def.kind == tir.OpKind.CONST_INT \
+                and int(l_def.attrs["value"]) == 0:
+            return tir.Op(kind=tir.OpKind.CONST_INT, operands=[],
+                          results=[res], attrs={"value": 0}, span=op.span)
+        if r_def is not None and r_def.kind == tir.OpKind.CONST_INT \
+                and int(r_def.attrs["value"]) == 0:
+            return tir.Op(kind=tir.OpKind.CONST_INT, operands=[],
+                          results=[res], attrs={"value": 0}, span=op.span)
+    # x - x = 0 (same SSA value on both sides)
+    if op.kind == tir.OpKind.SUB and len(op.operands) == 2 \
+            and op.operands[0].id == op.operands[1].id:
+        # Determine result type from the operand
+        ty = op.operands[0].ty
+        if isinstance(ty, tir.TIRScalar) and ty.name in ("f32", "f64", "f16", "bf16"):
+            return tir.Op(kind=tir.OpKind.CONST_FLOAT, operands=[],
+                          results=[res], attrs={"value": 0.0}, span=op.span)
+        return tir.Op(kind=tir.OpKind.CONST_INT, operands=[],
+                      results=[res], attrs={"value": 0}, span=op.span)
+    return None
+
+
 def _is_int_const(op: tir.Op, consts: dict) -> bool:
     return op.kind == tir.OpKind.CONST_INT
 
@@ -77,6 +123,14 @@ def _try_fold_op(op: tir.Op, defs: dict) -> tir.Op | None:
     if not op.results:
         return None
     res = op.results[0]
+
+    # Algebraic identities — applied before constant folding to catch
+    # half-constant cases (one operand is a literal, the other isn't).
+    # Each rule rewrites the op into a no-op or a simpler form whose
+    # result is bit-identical to the original.
+    identity = _try_algebraic_identity(op, defs, res)
+    if identity is not None:
+        return identity
 
     # Binary on two int consts
     if op.kind in (tir.OpKind.ADD, tir.OpKind.SUB, tir.OpKind.MUL,

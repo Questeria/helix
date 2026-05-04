@@ -134,10 +134,15 @@ class TySkill(Type):
 # Type errors
 # ============================================================================
 class TypeError_(Exception):
-    def __init__(self, msg: str, span: A.Span):
-        super().__init__(f"{span.line}:{span.col}: type error: {msg}")
+    def __init__(self, msg: str, span: A.Span,
+                 hint: Optional[str] = None):
+        full = f"{span.line}:{span.col}: type error: {msg}"
+        if hint:
+            full += f"\n  hint: {hint}"
+        super().__init__(full)
         self.span = span
         self.msg = msg
+        self.hint = hint
 
     def render(self, source: Optional[str] = None,
                filename: str = "<input>") -> str:
@@ -555,6 +560,45 @@ class TypeChecker:
                 call.span,
             ))
 
+    # Names recognized as built-in operators by the typechecker — they're
+    # only meaningful as Call callees and shouldn't fire "unbound" when
+    # referenced bare.
+    _BUILTIN_NAMES = frozenset({
+        "detach", "attach", "consolidate", "recall", "learn_to",
+        "grad", "grad_rev", "grad_rev_all",
+        "quote", "splice", "splice_f", "modify", "modify_f",
+        "print_str", "write_file", "read_file_int",
+    })
+
+    def _unbound_name_suggestion(self, name: str, span: A.Span,
+                                  scope: "Scope") -> None:
+        """Emit a typecheck error for an unbound name, with a Levenshtein
+        'did you mean?' suggestion drawn from in-scope names + functions.
+        Suppresses duplicate diagnostics for the same name and skips the
+        small set of compiler-recognized builtins."""
+        if name in self._BUILTIN_NAMES:
+            return
+        from difflib import get_close_matches
+        if not hasattr(self, "_seen_unbound"):
+            self._seen_unbound: set[str] = set()
+        if name in self._seen_unbound:
+            return
+        self._seen_unbound.add(name)
+        # Build candidate set from current scope + function names + builtins
+        candidates: list[str] = list(self.functions.keys())
+        candidates.extend(self._BUILTIN_NAMES)
+        s: "Scope | None" = scope
+        while s is not None:
+            candidates.extend(s.locals.keys())
+            s = s.parent
+        suggestions = get_close_matches(name, candidates, n=1, cutoff=0.6)
+        hint = None
+        if suggestions:
+            hint = f"did you mean {suggestions[0]!r}?"
+        self.errors.append(TypeError_(
+            f"unbound name {name!r}", span, hint=hint
+        ))
+
     def _add_where_constraint(self, solver: P.Solver, expr: A.Expr,
                               scope: Scope) -> None:
         """Translate a where-clause expression into Presburger constraints."""
@@ -663,6 +707,11 @@ class TypeChecker:
             if expr.name in self.functions:
                 sig = self.functions[expr.name]
                 return TyFn(tuple(t for _, t in sig.params), sig.ret)
+            # Name truly unbound. Emit a soft diagnostic with a Levenshtein
+            # "did you mean?" suggestion drawn from in-scope names + known
+            # functions. Don't raise — return TyUnknown so cascade-style
+            # downstream errors are suppressed.
+            self._unbound_name_suggestion(expr.name, expr.span, scope)
             return TyUnknown(hint=f"unbound {expr.name}")
         if isinstance(expr, A.Path):
             # v0.1: paths are unresolved (e.g., tensor::zeros, tile::matmul)
