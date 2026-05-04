@@ -79,6 +79,35 @@ def test_grad_through_relu_positive():
     assert compile_and_run(src) == 42
 
 
+def test_grad_through_relu_via_let_alias():
+    # Exercise the path where grad_pass.resolve_let_aliases walks the
+    # gradient AST. Earlier the ReLU gradient's FloatLit(0.0) was shared
+    # between cond and else_; in-place mutation would corrupt both. This
+    # test compiles a program where grad_rev produces a ReLU-derivative
+    # AST and the alias resolver subsequently runs.
+    src = """
+    @pure fn loss(x: f32) -> f32 { __relu(x) * __relu(x) }
+    fn main() -> i32 {
+        // d/dx (relu(x))^2 = 2*relu(x)*relu'(x). At x=3 -> 6. +36=42.
+        let g = grad_rev(loss)(3.0);
+        (g as i32) + 36
+    }
+    """
+    assert compile_and_run(src) == 42
+
+
+def test_grad_through_sigmoid_at_zero():
+    # sigmoid'(0) = 0.25. So d/dx (5*sigmoid(x)) at x=0 = 1.25; truncate=1; +41=42.
+    src = """
+    @pure fn loss(x: f32) -> f32 { __sigmoid(x) * 5.0 }
+    fn main() -> i32 {
+        let g = grad_rev(loss)(0.0);
+        (g as i32) + 41
+    }
+    """
+    assert compile_and_run(src) == 42
+
+
 def test_grad_through_relu_negative_is_zero():
     # At x=-3, relu(-3)=0, d/dx (x*relu(x)) = relu(-3) + x*relu'(-3) = 0 + 0 = 0
     src = """

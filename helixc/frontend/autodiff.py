@@ -201,19 +201,28 @@ def _diff_call_chain_rule(call: A.Call, var: str,
         return mul(recip, du)
     if name == "__relu":
         # d(relu(u))/dx = (1 if u > 0 else 0) * du/dx
-        zero = A.FloatLit(span=span, value=0.0)
-        cond = A.Binary(span=span, op=">", left=u, right=zero)
+        # IMPORTANT: cond and else_ each get their OWN FloatLit(0.0) — they
+        # must not share a node, otherwise downstream in-place AST mutation
+        # passes (grad_pass alias resolution) corrupt both branches at once.
+        cond = A.Binary(span=span, op=">", left=u,
+                        right=A.FloatLit(span=span, value=0.0))
         gated = A.If(span=span, cond=cond,
                      then=A.Block(span=span, stmts=[],
                                   final_expr=A.FloatLit(span=span, value=1.0)),
-                     else_=A.Block(span=span, stmts=[], final_expr=zero))
+                     else_=A.Block(span=span, stmts=[],
+                                   final_expr=A.FloatLit(span=span, value=0.0)))
         return mul(gated, du)
     if name == "__sigmoid":
         # d(sigmoid(u))/dx = sigmoid(u) * (1 - sigmoid(u)) * du/dx
-        s = call1("__sigmoid", u)
+        # The two __sigmoid(u) call nodes get DEEPCOPIES of u so the second
+        # call doesn't share its argument tree with the first — protects
+        # against in-place mutation by later passes.
+        import copy as _copy
+        s1 = call1("__sigmoid", _copy.deepcopy(u))
+        s2 = call1("__sigmoid", _copy.deepcopy(u))
         one_minus = A.Binary(span=span, op="-",
-                             left=A.FloatLit(span=span, value=1.0), right=s)
-        return mul(mul(call1("__sigmoid", u), one_minus), du)
+                             left=A.FloatLit(span=span, value=1.0), right=s1)
+        return mul(mul(s2, one_minus), du)
     return None
 
 

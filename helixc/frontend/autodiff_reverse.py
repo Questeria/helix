@@ -161,13 +161,16 @@ def _propagate(node: A.Expr, adj: A.Expr, acc: dict[str, list[A.Expr]]) -> None:
                 _propagate(u, new_adj, acc)
                 return
             if name == "__relu":
-                zero = A.FloatLit(span=node.span, value=0.0)
-                cond = A.Binary(span=node.span, op=">", left=u, right=zero)
+                # cond and else_ get distinct FloatLit(0.0) nodes — sharing
+                # one would let in-place mutation passes corrupt both
+                # places at once. (See C-1 audit fix in autodiff.py.)
+                cond = A.Binary(span=node.span, op=">", left=u,
+                                right=A.FloatLit(span=node.span, value=0.0))
                 gated = A.If(span=node.span, cond=cond,
                              then=A.Block(span=node.span, stmts=[],
                                           final_expr=A.FloatLit(span=node.span, value=1.0)),
                              else_=A.Block(span=node.span, stmts=[],
-                                           final_expr=zero))
+                                           final_expr=A.FloatLit(span=node.span, value=0.0)))
                 new_adj = A.Binary(span=node.span, op="*", left=adj, right=gated)
                 _propagate(u, new_adj, acc)
                 return
