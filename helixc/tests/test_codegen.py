@@ -636,6 +636,18 @@ def test_grad_linear():
     assert compile_and_run(src) == 42
 
 
+def test_grad_let_aliased():
+    # 'let f = grad(loss); f(x)' should work: f is aliased to loss__grad
+    src = """
+    fn loss(x: f32) -> f32 { x * x }
+    fn main() -> i32 {
+        let f = grad(loss);
+        f(21.0) as i32
+    }
+    """
+    assert compile_and_run(src) == 42
+
+
 def test_real_matmul_3x3_via_arrays():
     # 3x3 matmul: c[i][j] = sum_k a[i][k] * b[k][j]
     # We use flat 9-element arrays with row-major indexing: a[i*3+j]

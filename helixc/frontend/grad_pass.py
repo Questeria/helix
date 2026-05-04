@@ -24,7 +24,10 @@ from .autodiff import differentiate, _inline_lets
 
 def grad_pass(prog: A.Program) -> int:
     """Walk the program; rewrite all grad(f) calls into references to
-    generated f__grad functions. Returns count of grad calls rewritten."""
+    generated f__grad functions. Returns count of grad calls rewritten.
+
+    Also resolves let-aliases: 'let f = grad(loss); f(x)' is rewritten so
+    the call to f becomes a direct call to loss__grad."""
     # First: index existing functions by name
     fn_by_name: dict[str, A.FnDecl] = {}
     for item in prog.items:
@@ -34,18 +37,75 @@ def grad_pass(prog: A.Program) -> int:
     new_fns: list[A.FnDecl] = []
     rewrite_count = 0
 
-    # Walk all function bodies
+    # Walk all function bodies; rewrite grad(f) calls
     for item in prog.items:
         if isinstance(item, A.FnDecl):
             rewrite_count += _rewrite_in_block(item.body, fn_by_name, new_fns)
 
-    # Add generated grad functions to the program
+    # Add generated grad functions to the program FIRST (so the alias pass
+    # can see them in fn_by_name)
     for new_fn in new_fns:
         if new_fn.name not in fn_by_name:
             prog.items.append(new_fn)
             fn_by_name[new_fn.name] = new_fn
 
+    # Second pass: resolve let-aliases.
+    # 'let f = some_name;' creates an alias. When we see f(args), we
+    # rewrite the call's callee to some_name (if some_name is a known fn).
+    for item in prog.items:
+        if isinstance(item, A.FnDecl):
+            _resolve_let_aliases(item.body, fn_by_name, {})
+
     return rewrite_count
+
+
+def _resolve_let_aliases(block: A.Block, fn_by_name: dict[str, A.FnDecl],
+                         alias_env: dict[str, str]) -> None:
+    """Walk a block. Track let-bindings that alias a function name. Rewrite
+    Call expressions whose callee is an alias to point at the underlying
+    function name."""
+    local_env = dict(alias_env)
+    for stmt in block.stmts:
+        if isinstance(stmt, A.Let) and stmt.value is not None:
+            # If the value is a Name pointing at a known function, track the
+            # alias.
+            _resolve_in_expr(stmt.value, fn_by_name, local_env)
+            if isinstance(stmt.value, A.Name) and stmt.value.name in fn_by_name:
+                local_env[stmt.name] = stmt.value.name
+        elif isinstance(stmt, A.ExprStmt):
+            _resolve_in_expr(stmt.expr, fn_by_name, local_env)
+    if block.final_expr is not None:
+        _resolve_in_expr(block.final_expr, fn_by_name, local_env)
+
+
+def _resolve_in_expr(expr: A.Expr, fn_by_name: dict[str, A.FnDecl],
+                     alias_env: dict[str, str]) -> None:
+    if isinstance(expr, A.Call):
+        # Resolve callee aliases
+        if isinstance(expr.callee, A.Name) and expr.callee.name in alias_env:
+            expr.callee = A.Name(span=expr.callee.span,
+                                 name=alias_env[expr.callee.name])
+        _resolve_in_expr(expr.callee, fn_by_name, alias_env)
+        for a in expr.args:
+            _resolve_in_expr(a, fn_by_name, alias_env)
+    elif isinstance(expr, A.Binary):
+        _resolve_in_expr(expr.left, fn_by_name, alias_env)
+        _resolve_in_expr(expr.right, fn_by_name, alias_env)
+    elif isinstance(expr, A.Unary):
+        _resolve_in_expr(expr.operand, fn_by_name, alias_env)
+    elif isinstance(expr, A.Cast):
+        _resolve_in_expr(expr.value, fn_by_name, alias_env)
+    elif isinstance(expr, A.Block):
+        _resolve_let_aliases(expr, fn_by_name, alias_env)
+    elif isinstance(expr, A.If):
+        _resolve_in_expr(expr.cond, fn_by_name, alias_env)
+        _resolve_let_aliases(expr.then, fn_by_name, alias_env)
+        if expr.else_ is not None and isinstance(expr.else_, A.Block):
+            _resolve_let_aliases(expr.else_, fn_by_name, alias_env)
+    elif isinstance(expr, A.Index):
+        _resolve_in_expr(expr.callee, fn_by_name, alias_env)
+        for i in expr.indices:
+            _resolve_in_expr(i, fn_by_name, alias_env)
 
 
 def _rewrite_in_block(block: A.Block, fn_by_name: dict[str, A.FnDecl],
