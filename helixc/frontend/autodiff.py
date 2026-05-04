@@ -123,7 +123,7 @@ def _inline_user_calls(expr: A.Expr, fn_table: dict[str, "A.FnDecl"],
     # silently-wrong gradients when the body uses if/while.
     TRANSCENDENTALS = {"__exp", "__log", "__sin", "__cos", "__sqrt",
                        "__relu", "__sigmoid", "__tanh", "__softplus",
-                       "__silu", "__abs", "__gelu"}
+                       "__silu", "__abs", "__gelu", "__powi"}
     visiting = visiting or frozenset()
 
     def go(e: A.Expr) -> A.Expr:
@@ -363,7 +363,31 @@ def _diff_call_chain_rule(call: A.Call, var: str,
                           span: A.Span) -> Optional[A.Expr]:
     """Apply the analytic derivative for known transcendental builtins.
     Returns None if the callee isn't a recognised transcendental."""
-    if not (isinstance(call.callee, A.Name) and len(call.args) == 1):
+    if not isinstance(call.callee, A.Name):
+        return None
+    # Handle __powi(x, n) separately: 2-arg with n literal int.
+    # d(x^n)/dx = n * x^(n-1) * dx/dvar.
+    if call.callee.name == "__powi" and len(call.args) == 2:
+        x = call.args[0]
+        n_arg = call.args[1]
+        if isinstance(n_arg, A.IntLit):
+            n_val = n_arg.value
+            dx = _diff(x, var)
+            if n_val <= 0:
+                # x^0 = 1 → derivative 0; x^negative not supported in __powi
+                return A.FloatLit(span=span, value=0.0)
+            # n * __powi(x, n-1) * dx
+            n_lit = A.FloatLit(span=span, value=float(n_val))
+            n_minus_one = A.IntLit(span=span, value=n_val - 1)
+            x_pow = A.Call(span=span,
+                           callee=A.Name(span=span, name="__powi"),
+                           args=[x, n_minus_one])
+            return A.Binary(span=span, op="*",
+                            left=A.Binary(span=span, op="*",
+                                          left=n_lit, right=x_pow),
+                            right=dx)
+        # Non-literal n: fall through to zero derivative.
+    if len(call.args) != 1:
         return None
     name = call.callee.name
     u = call.args[0]

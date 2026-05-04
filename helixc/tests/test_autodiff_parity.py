@@ -41,6 +41,13 @@ def _eval(expr: A.Expr, env: dict[str, float]) -> float:
             if name == "__silu": return x * (1.0 / (1.0 + math.exp(-x)))
             if name == "__relu": return max(0.0, x)
             if name == "__abs": return abs(x)
+        if len(args) == 2 and name == "__powi":
+            x, n = args
+            n_i = int(n)
+            if n_i <= 0:
+                return 1.0
+            cap = min(n_i, 16)
+            return x ** cap
         # Unknown call — return 0 (the AD engine treats it as opaque).
         return 0.0
     if isinstance(expr, A.Unary) and expr.op == "-":
@@ -147,6 +154,18 @@ def test_parity_transcendentals():
     for src in cases:
         # Avoid x=0 for __abs / __relu (gradient is undefined there)
         _agree(src, "x", [-2.0, -0.5, 0.5, 1.5])
+
+
+def test_pow_int_parity():
+    """Forward + reverse mode AD on __powi(x, n) must agree at several inputs."""
+    cases = [
+        "fn f(x: f32) -> f32 { __powi(x, 2) }",
+        "fn f(x: f32) -> f32 { __powi(x, 3) }",
+        "fn f(x: f32) -> f32 { __powi(x, 4) }",
+        "fn f(x: f32) -> f32 { __powi(x, 2) + __powi(x, 3) }",
+    ]
+    for src in cases:
+        _agree(src, "x", [-2.0, -0.5, 0.5, 1.5, 3.0])
 
 
 def test_parity_multi_variable():

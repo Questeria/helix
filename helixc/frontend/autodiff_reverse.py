@@ -128,6 +128,25 @@ def _propagate(node: A.Expr, adj: A.Expr, acc: dict[str, list[A.Expr]]) -> None:
             _propagate(node.final_expr, adj, acc)
         return
     if isinstance(node, A.Call):
+        # __powi(x, n) where n is a literal int: adj_x = adj * n * x^(n-1).
+        if (isinstance(node.callee, A.Name) and node.callee.name == "__powi"
+                and len(node.args) == 2 and isinstance(node.args[1], A.IntLit)):
+            x = node.args[0]
+            n_val = node.args[1].value
+            if n_val <= 0:
+                return  # x^0 = 1 → derivative 0
+            n_lit = A.FloatLit(span=node.span, value=float(n_val))
+            n_minus_one = A.IntLit(span=node.span, value=n_val - 1)
+            x_pow = A.Call(span=node.span,
+                           callee=A.Name(span=node.span, name="__powi"),
+                           args=[x, n_minus_one])
+            new_adj = A.Binary(
+                span=node.span, op="*",
+                left=A.Binary(span=node.span, op="*", left=adj, right=n_lit),
+                right=x_pow,
+            )
+            _propagate(x, new_adj, acc)
+            return
         # Chain rule for known transcendentals: propagate adj * f'(u) into u.
         if (isinstance(node.callee, A.Name) and len(node.args) == 1):
             name = node.callee.name
