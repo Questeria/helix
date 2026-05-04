@@ -42,12 +42,14 @@ def grad_pass(prog: A.Program) -> int:
         if isinstance(item, A.FnDecl):
             rewrite_count += _rewrite_in_block(item.body, fn_by_name, new_fns)
 
-    # Add generated grad functions to the program FIRST (so the alias pass
-    # can see them in fn_by_name)
+    # Add generated grad functions to the program. fn_by_name was already
+    # updated inline as each grad function was generated (so nested grads
+    # could resolve), so we only need to splice into prog.items here.
+    existing_names = {item.name for item in prog.items if isinstance(item, A.FnDecl)}
     for new_fn in new_fns:
-        if new_fn.name not in fn_by_name:
+        if new_fn.name not in existing_names:
             prog.items.append(new_fn)
-            fn_by_name[new_fn.name] = new_fn
+            existing_names.add(new_fn.name)
 
     # Second pass: resolve let-aliases.
     # 'let f = some_name;' creates an alias. When we see f(args), we
@@ -135,18 +137,10 @@ def _rewrite_in_expr(expr: A.Expr, fn_by_name: dict[str, A.FnDecl],
                      new_fns: list[A.FnDecl]) -> tuple[A.Expr, int]:
     count = 0
     if isinstance(expr, A.Call):
-        # Check if this is grad(f)
-        if (isinstance(expr.callee, A.Name) and expr.callee.name == "grad"
-                and len(expr.args) == 1
-                and isinstance(expr.args[0], A.Name)
-                and expr.args[0].name in fn_by_name):
-            target = fn_by_name[expr.args[0].name]
-            grad_fn = _generate_grad_fn(target)
-            if grad_fn is not None:
-                new_fns.append(grad_fn)
-                # Replace grad(f) with a Name pointing at f__grad
-                return (A.Name(span=expr.span, name=grad_fn.name), 1)
-        # Recurse into callee + args
+        # Post-order: recurse into args FIRST so inner grad(f) -> Name("f__grad")
+        # is visible when we then check the outer grad pattern. This makes
+        # grad(grad(f)) work: inner is rewritten + f__grad is registered in
+        # fn_by_name, then the outer call is detected as grad(f__grad).
         new_callee, c1 = _rewrite_in_expr(expr.callee, fn_by_name, new_fns)
         new_args = []
         c2 = 0
@@ -154,6 +148,21 @@ def _rewrite_in_expr(expr: A.Expr, fn_by_name: dict[str, A.FnDecl],
             na, ca = _rewrite_in_expr(a, fn_by_name, new_fns)
             new_args.append(na)
             c2 += ca
+
+        # Now check if the (possibly-rewritten) call is grad(f) or grad(f, n)
+        if (isinstance(new_callee, A.Name) and new_callee.name == "grad"
+                and len(new_args) in (1, 2)
+                and isinstance(new_args[0], A.Name)
+                and new_args[0].name in fn_by_name):
+            target = fn_by_name[new_args[0].name]
+            param_idx = _extract_param_idx_from_args(new_args, target)
+            grad_fn = _generate_grad_fn(target, param_idx)
+            if grad_fn is not None:
+                # Don't add duplicates if grad(f, n) is called multiple times
+                if grad_fn.name not in fn_by_name:
+                    new_fns.append(grad_fn)
+                    fn_by_name[grad_fn.name] = grad_fn
+                return (A.Name(span=expr.span, name=grad_fn.name), c1 + c2 + 1)
         return (A.Call(span=expr.span, callee=new_callee, args=new_args),
                 c1 + c2)
     if isinstance(expr, A.Binary):
@@ -196,12 +205,49 @@ def _rewrite_in_expr(expr: A.Expr, fn_by_name: dict[str, A.FnDecl],
     return (expr, count)
 
 
-def _generate_grad_fn(fn: A.FnDecl) -> A.FnDecl | None:
-    """Build a `<fn.name>__grad` FnDecl whose body is the derivative of
-    `fn`'s body w.r.t. its first parameter."""
+def _extract_param_idx_from_args(args: list[A.Expr], target: A.FnDecl) -> int:
+    """Pull the param index from `grad(f, n)` args, or default to 0 for
+    single-param functions. Multi-param functions REQUIRE an explicit index
+    — silently differentiating only param 0 of a multi-param function is a
+    correctness footgun.
+
+    Raises ValueError on bad input so the user sees the problem, instead of
+    getting a silently-wrong gradient.
+    """
+    if len(args) == 1:
+        if len(target.params) > 1:
+            raise ValueError(
+                f"grad({target.name}) is ambiguous: {target.name} has "
+                f"{len(target.params)} parameters. Use grad({target.name}, n) "
+                f"to choose which parameter to differentiate w.r.t. "
+                f"(0-indexed)."
+            )
+        return 0
+    # Two args: grad(f, n) — n must be a non-negative IntLit in range
+    idx_arg = args[1]
+    if not isinstance(idx_arg, A.IntLit):
+        raise ValueError(
+            f"grad({target.name}, n): the index n must be a literal integer, "
+            f"got {type(idx_arg).__name__}."
+        )
+    idx = idx_arg.value
+    if idx < 0 or idx >= len(target.params):
+        raise ValueError(
+            f"grad({target.name}, {idx}): index out of range "
+            f"(function has {len(target.params)} parameter(s))."
+        )
+    return idx
+
+
+def _generate_grad_fn(fn: A.FnDecl, param_idx: int = 0) -> A.FnDecl | None:
+    """Build a `<fn.name>__grad_<n>` FnDecl whose body is the derivative of
+    `fn`'s body w.r.t. parameter `param_idx`. For single-param functions the
+    name is shortened to `<fn.name>__grad` for backwards compatibility."""
     if not fn.params:
         return None
-    var = fn.params[0].name
+    if param_idx < 0 or param_idx >= len(fn.params):
+        return None
+    var = fn.params[param_idx].name
     deriv = differentiate(fn.body, var)
     # Wrap the derivative expression in a block (the FnDecl expects a Block body)
     new_body = A.Block(span=fn.body.span, stmts=[], final_expr=deriv)
@@ -213,9 +259,10 @@ def _generate_grad_fn(fn: A.FnDecl) -> A.FnDecl | None:
         for p in fn.params
     ]
 
+    suffix = "__grad" if len(fn.params) == 1 else f"__grad_{param_idx}"
     return A.FnDecl(
         span=fn.span,
-        name=f"{fn.name}__grad",
+        name=f"{fn.name}{suffix}",
         generics=[],
         params=new_params,
         return_ty=A.TyName(span=fn.span, name="f32"),

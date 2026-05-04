@@ -628,12 +628,42 @@ def test_grad_linear():
     src = """
     fn linear(x: f32, y: f32) -> f32 { 3.0 * x + 5.0 * y }
     fn main() -> i32 {
-        // grad(linear) differentiates w.r.t. first param x
-        let g = grad(linear)(0.0, 0.0);
+        // explicit index 0 -> differentiate w.r.t. x
+        let g = grad(linear, 0)(0.0, 0.0);
         (g + 39.0) as i32
     }
     """
     assert compile_and_run(src) == 42
+
+
+def test_grad_linear_second_param():
+    # d(3x + 5y)/dy = 5; call at any x,y -> 5; +37 = 42
+    src = """
+    fn linear(x: f32, y: f32) -> f32 { 3.0 * x + 5.0 * y }
+    fn main() -> i32 {
+        // explicit index 1 -> differentiate w.r.t. y
+        let g = grad(linear, 1)(2.0, 9.0);
+        (g + 37.0) as i32
+    }
+    """
+    assert compile_and_run(src) == 42
+
+
+def test_grad_multi_param_without_index_errors():
+    # grad(f) on a multi-param function must raise, not silently use param 0
+    src = """
+    fn linear(x: f32, y: f32) -> f32 { 3.0 * x + 5.0 * y }
+    fn main() -> i32 {
+        let g = grad(linear)(0.0, 0.0);
+        g as i32
+    }
+    """
+    try:
+        compile_and_run(src)
+    except ValueError as e:
+        assert "ambiguous" in str(e)
+        return
+    raise AssertionError("expected grad(multi_param) to error, but it succeeded")
 
 
 def test_grad_let_aliased():
@@ -643,6 +673,18 @@ def test_grad_let_aliased():
     fn main() -> i32 {
         let f = grad(loss);
         f(21.0) as i32
+    }
+    """
+    assert compile_and_run(src) == 42
+
+
+def test_grad_grad_quadratic():
+    # d^2(x*x)/dx^2 = 2 (constant); call at any x -> 2; +40 = 42
+    src = """
+    fn loss(x: f32) -> f32 { x * x }
+    fn main() -> i32 {
+        let g2 = grad(grad(loss))(7.0);
+        (g2 + 40.0) as i32
     }
     """
     assert compile_and_run(src) == 42
