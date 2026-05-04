@@ -1258,6 +1258,17 @@ def test_hash_i32_distinguishes():
     assert code == 1, f"expected hash distinguishes, got {code}"
 
 
+def test_generic_identity_function():
+    """Generic fn type parameter `[T]` round-trips through parse +
+    typecheck + codegen. Audit-10 found this had no test coverage."""
+    src = """
+    fn identity[T](x: T) -> T { x }
+    fn main() -> i32 { identity(42) }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42 (identity(42)), got {code}"
+
+
 def test_hbs_integration_arena_stress_runs():
     """Stress test: push 1000 values into the arena, read all back,
     verify each matches expected. 0 errors → exit 42."""
