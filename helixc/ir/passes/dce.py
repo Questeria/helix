@@ -48,6 +48,10 @@ SIDE_EFFECT_KINDS = {
     # REFLECT_HASH is similar: it provides a stable testing handle that
     # downstream code may reach via cell indexing.
     tir.OpKind.REFLECT_HASH,
+    # Arena ops mutate a global region — even if the result (slot index)
+    # is unused, the push/set must still execute for downstream reads.
+    tir.OpKind.ARENA_PUSH,
+    tir.OpKind.ARENA_SET,
 }
 
 

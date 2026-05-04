@@ -650,6 +650,35 @@ class Lowerer:
                 return self.builder.emit(tir.OpKind.PRINT, v,
                                           result_ty=tir.TIRScalar("i32"),
                                           attrs={"_kind": "print_int"})
+            # Arena allocator builtins — bump-alloc i32 region in the
+            # binary's data section. Foundation for self-hosted compiler
+            # storage of AST/IR/symbol-table.
+            if isinstance(expr.callee, A.Name):
+                bn = expr.callee.name
+                if bn == "__arena_push" and len(expr.args) == 1:
+                    v = self._lower_expr(expr.args[0]) \
+                        or self.builder.const_int(0)
+                    return self.builder.emit(
+                        tir.OpKind.ARENA_PUSH, v,
+                        result_ty=tir.TIRScalar("i32"))
+                if bn == "__arena_get" and len(expr.args) == 1:
+                    i = self._lower_expr(expr.args[0]) \
+                        or self.builder.const_int(0)
+                    return self.builder.emit(
+                        tir.OpKind.ARENA_GET, i,
+                        result_ty=tir.TIRScalar("i32"))
+                if bn == "__arena_set" and len(expr.args) == 2:
+                    i = self._lower_expr(expr.args[0]) \
+                        or self.builder.const_int(0)
+                    v = self._lower_expr(expr.args[1]) \
+                        or self.builder.const_int(0)
+                    return self.builder.emit(
+                        tir.OpKind.ARENA_SET, i, v,
+                        result_ty=tir.TIRScalar("i32"))
+                if bn == "__arena_len" and len(expr.args) == 0:
+                    return self.builder.emit(
+                        tir.OpKind.ARENA_LEN,
+                        result_ty=tir.TIRScalar("i32"))
             # Intercept write_file(path_literal, content_literal) — emits
             # a sequence of open/write/close syscalls. Returns 0 on
             # success, the negative errno on failure.

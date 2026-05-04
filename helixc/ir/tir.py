@@ -225,6 +225,14 @@ class OpKind(Enum):
     MODIFY = "agi.modify"        # operands: target, transformation, verifier
     REFLECT_HASH = "agi.reflect_hash"  # placeholder: hash an AstNode for testing
 
+    # Arena allocator — single shared bump-allocated i32 region. Used by
+    # the eventual self-hosted compiler for AST/IR/symbol-table storage
+    # without needing real malloc. Backed by a fixed-size R+W data section.
+    ARENA_PUSH = "arena.push"    # operand: value (i32) → result: slot index
+    ARENA_GET = "arena.get"      # operand: index (i32) → result: value
+    ARENA_SET = "arena.set"      # operands: index, value → no result
+    ARENA_LEN = "arena.len"      # no operand → result: current length
+
     # Effectful ops (kept distinct so transforms can avoid them)
     PRINT = "io.print"
 

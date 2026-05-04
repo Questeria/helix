@@ -1200,6 +1200,46 @@ def test_payload_pattern_dispatch_by_tag():
     assert code == 42, f"expected 7*6=42 (Square branch), got {code}"
 
 
+def test_arena_push_and_get():
+    """__arena_push returns the slot index; __arena_get reads back."""
+    src = """
+    fn main() -> i32 {
+        let i0 = __arena_push(10);
+        let i1 = __arena_push(32);
+        __arena_get(i0) + __arena_get(i1)
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 10+32=42, got {code}"
+
+
+def test_arena_len():
+    """__arena_len returns the cursor (count of pushes)."""
+    src = """
+    fn main() -> i32 {
+        __arena_push(0);
+        __arena_push(0);
+        __arena_push(0);
+        __arena_len()
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 3, f"expected 3 pushes, got {code}"
+
+
+def test_arena_set_overwrites():
+    """__arena_set writes to a previously-pushed slot."""
+    src = """
+    fn main() -> i32 {
+        let i = __arena_push(0);
+        __arena_set(i, 42);
+        __arena_get(i)
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42 after set, got {code}"
+
+
 def test_inline_enum_ctor_as_fn_arg():
     """`f(Maybe::Some(42))` should work without let-binding first."""
     src = """

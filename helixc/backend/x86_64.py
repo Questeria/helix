@@ -46,6 +46,11 @@ ENTRY_OFFSET = 0x1000  # entry virtual address: ELF_BASE + ENTRY_OFFSET
 # segment. Each cell is 8 bytes, addressed by index. Used for verifier-gated
 # self-modification (quote/splice/modify primitives).
 HELIX_NUM_CELLS = 64
+# Arena capacity: 32K i32 slots = 128KB. Slot 0 reserved for the cursor;
+# slots 1..HELIX_ARENA_CAP available for user data. Sized to fit a self-
+# hosted compiler's working set (AST nodes + IR ops + symbol table) for
+# small-to-medium programs without reallocation.
+HELIX_ARENA_CAP = 32768
 HELIX_CELL_SIZE = 8
 
 
@@ -1079,6 +1084,64 @@ class FnCompiler:
             return
 
         # AGI primitives
+        if op.kind == tir.OpKind.ARENA_PUSH:
+            # cursor (slot 0) holds the count of used slots after slot 0.
+            # Push: load cursor into eax, store value at base + (cursor+1)*4,
+            # increment cursor, return old cursor (the new slot's index).
+            buf = self.asm.b
+            val_slot = self._slot_of(op.operands[0])
+            res_slot = self._slot_of(op.results[0])
+            # Load value into edx so we can use eax for cursor arithmetic.
+            self.asm.mov_eax_mem_rbp(val_slot)   # eax = value
+            buf.emit(0x89, 0xC2)                 # mov edx, eax
+            # Load cursor (32-bit at offset 0 of arena base).
+            self.asm.lea_rax_rip_rel("__helix_arena_base")
+            buf.emit(0x8B, 0x08)                 # mov ecx, [rax]
+            # Store value at base + (cursor+1)*4 = base + 4 + cursor*4.
+            # rax = base, rcx = cursor. Use SIB: [rax + rcx*4 + 4].
+            buf.emit(0x89, 0x54, 0x88, 0x04)     # mov [rax + rcx*4 + 4], edx
+            # Increment cursor and store back.
+            buf.emit(0xFF, 0xC1)                 # inc ecx
+            buf.emit(0x89, 0x08)                 # mov [rax], ecx
+            # Result: the OLD cursor (i.e. the slot index just written).
+            buf.emit(0xFF, 0xC9)                 # dec ecx (recover old)
+            buf.emit(0x89, 0xC8)                 # mov eax, ecx
+            self.asm.mov_mem_rbp_eax(res_slot)
+            return
+        if op.kind == tir.OpKind.ARENA_GET:
+            # Return arena[idx + 1] (slot 0 is cursor).
+            buf = self.asm.b
+            idx_slot = self._slot_of(op.operands[0])
+            res_slot = self._slot_of(op.results[0])
+            self.asm.mov_ecx_mem_rbp(idx_slot)   # ecx = index
+            self.asm.lea_rax_rip_rel("__helix_arena_base")
+            # eax = [rax + rcx*4 + 4]
+            buf.emit(0x8B, 0x44, 0x88, 0x04)     # mov eax, [rax + rcx*4 + 4]
+            self.asm.mov_mem_rbp_eax(res_slot)
+            return
+        if op.kind == tir.OpKind.ARENA_SET:
+            buf = self.asm.b
+            idx_slot = self._slot_of(op.operands[0])
+            val_slot = self._slot_of(op.operands[1])
+            self.asm.mov_eax_mem_rbp(val_slot)   # eax = value
+            buf.emit(0x89, 0xC2)                 # mov edx, eax
+            self.asm.mov_ecx_mem_rbp(idx_slot)   # ecx = index
+            self.asm.lea_rax_rip_rel("__helix_arena_base")
+            buf.emit(0x89, 0x54, 0x88, 0x04)     # mov [rax + rcx*4 + 4], edx
+            if op.results:
+                # Return value (for chaining); store 0 as placeholder.
+                res_slot = self._slot_of(op.results[0])
+                self.asm.mov_eax_imm32(0)
+                self.asm.mov_mem_rbp_eax(res_slot)
+            return
+        if op.kind == tir.OpKind.ARENA_LEN:
+            # Return cursor (the i32 at slot 0 of the arena).
+            buf = self.asm.b
+            res_slot = self._slot_of(op.results[0])
+            self.asm.lea_rax_rip_rel("__helix_arena_base")
+            buf.emit(0x8B, 0x00)                 # mov eax, [rax]
+            self.asm.mov_mem_rbp_eax(res_slot)
+            return
         if op.kind == tir.OpKind.PRINT:
             kind = op.attrs.get("_kind", "print_str")
             if kind == "write_file":
@@ -1634,6 +1697,12 @@ def compile_module_to_elf(module: tir.Module, entry_fn: str = "main") -> bytes:
     # MODIFY/SPLICE codegen uses RIP-relative LEA to address it.
     buf.define_symbol("__helix_state_base")
     buf.emit_bytes(b"\x00" * (HELIX_NUM_CELLS * HELIX_CELL_SIZE))
+
+    # Arena region: a single shared bump-allocated i32 buffer. Slot 0
+    # holds the cursor (current length); slots 1..HELIX_ARENA_CAP hold
+    # data. Used by self-host machinery for AST/IR/symbol-table storage.
+    buf.define_symbol("__helix_arena_base")
+    buf.emit_bytes(b"\x00" * (HELIX_ARENA_CAP * 4))
 
     buf.patch()
     return emit_elf(bytes(buf.bytes_))
