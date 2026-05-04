@@ -439,6 +439,32 @@ def test_agent_alongside_fn():
     assert isinstance(p.items[1], ast.FnDecl)
 
 
+def test_partial_attribute_parses():
+    """`@partial` attribute should appear in FnDecl.attrs."""
+    src = """
+    @partial
+    fn loop_forever() -> i32 {
+        loop { 0 }
+    }
+    """
+    prog = parse(src)
+    fn = prog.items[0]
+    assert isinstance(fn, ast.FnDecl)
+    assert "partial" in fn.attrs, f"expected 'partial' in attrs, got {fn.attrs}"
+
+
+def test_total_attribute_parses():
+    """`@total` attribute should appear in FnDecl.attrs."""
+    src = """
+    @total
+    fn safe_add(a: i32, b: i32) -> i32 { a + b }
+    """
+    prog = parse(src)
+    fn = prog.items[0]
+    assert isinstance(fn, ast.FnDecl)
+    assert "total" in fn.attrs, f"expected 'total' in attrs, got {fn.attrs}"
+
+
 def test_match_arm_span_covers_pattern():
     """Each arm.span should point at the start of its pattern (including
     or-pattern alternatives and range pattern endpoints)."""
