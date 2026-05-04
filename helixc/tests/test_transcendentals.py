@@ -95,6 +95,42 @@ def test_grad_through_user_defined_function_call():
     assert compile_and_run(src) == 42
 
 
+def test_grad_rev_all_multi_output():
+    # grad_rev_all(f)(args, base) writes all gradients in one pass to
+    # cells[base..base+n]. This is multi-output reverse-mode AD: one
+    # source-level analysis, N gradient writes.
+    src = """
+    @pure fn loss(x: f32, y: f32) -> f32 { x*x + y*y }
+    fn main() -> i32 {
+        // ∂loss/∂x = 2x = 6 at (3, _); ∂loss/∂y = 2y = 8 at (_, 4)
+        // Sum = 14; +28 = 42.
+        grad_rev_all(loss)(3.0, 4.0, 0);
+        let g0 = splice_f(quote(0));
+        let g1 = splice_f(quote(1));
+        ((g0 + g1) as i32) + 28
+    }
+    """
+    assert compile_and_run(src) == 42
+
+
+def test_grad_rev_all_three_params():
+    # Three-parameter loss: ∂/∂x = 2x, ∂/∂y = 4y, ∂/∂z = 6z
+    # At (1, 2, 3): (2, 8, 18) → sum 28 → +14 = 42.
+    src = """
+    @pure fn loss(x: f32, y: f32, z: f32) -> f32 {
+        x*x + 2.0*y*y + 3.0*z*z
+    }
+    fn main() -> i32 {
+        grad_rev_all(loss)(1.0, 2.0, 3.0, 0);
+        let gx = splice_f(quote(0));
+        let gy = splice_f(quote(1));
+        let gz = splice_f(quote(2));
+        ((gx + gy + gz) as i32) + 14
+    }
+    """
+    assert compile_and_run(src) == 42
+
+
 def test_grad_through_recursive_user_call_terminates():
     # If a user function is (accidentally) recursive, the inliner must not
     # expand it exponentially. With visiting-set guard the recursive call

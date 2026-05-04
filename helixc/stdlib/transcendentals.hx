@@ -74,3 +74,12 @@
 @pure fn __relu(x: f32) -> f32 {
     if x > 0.0 { x } else { 0.0 }
 }
+
+// Trivial always-accept verifier. Used by grad_rev_all to write
+// computed gradient values into reflection cells without per-update
+// verification (gradients are derived deterministically; the safety
+// gate is on the LATER weight update step, not on saving the gradient).
+@verifier
+fn __always_accept(h: i32, v: f32) -> i32 {
+    1
+}

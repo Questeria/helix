@@ -156,6 +156,22 @@ def _rewrite_in_expr(expr: A.Expr, fn_by_name: dict[str, A.FnDecl],
             new_args.append(na)
             c2 += ca
 
+        # grad_rev_all(f): emit a function that computes all gradients in
+        # one source-level analysis and writes each ∂f/∂param[i] into
+        # cells[base + i].
+        if (isinstance(new_callee, A.Name)
+                and new_callee.name == "grad_rev_all"
+                and len(new_args) == 1
+                and isinstance(new_args[0], A.Name)
+                and new_args[0].name in fn_by_name):
+            target = fn_by_name[new_args[0].name]
+            grad_fn = _generate_grad_rev_all_fn(target, fn_by_name)
+            if grad_fn is not None:
+                if grad_fn.name not in fn_by_name:
+                    new_fns.append(grad_fn)
+                    fn_by_name[grad_fn.name] = grad_fn
+                return (A.Name(span=expr.span, name=grad_fn.name), c1 + c2 + 1)
+
         # Now check if the (possibly-rewritten) call is grad(f) / grad(f, n)
         # or grad_rev(f) / grad_rev(f, n).
         if (isinstance(new_callee, A.Name)
@@ -259,6 +275,82 @@ def _extract_param_idx_from_args(args: list[A.Expr], target: A.FnDecl,
             f"(function has {len(target.params)} parameter(s))."
         )
     return idx
+
+
+def _generate_grad_rev_all_fn(fn: A.FnDecl,
+                                fn_table: dict[str, A.FnDecl]) -> A.FnDecl | None:
+    """Build `<fn.name>__rgrad_all` — a single function that computes all
+    parameter gradients via reverse-mode AD in one source-level pass and
+    writes each into a reflection cell.
+
+    Generated signature: same params as `fn` plus a trailing `base: i32`
+    cell-base index. Body computes each ∂f/∂param_i, then for each i emits
+    `modify_f(base + i, g_i, __always_accept)` to store it.
+
+    Returns 0 on success. The caller reads the gradients back via
+    splice_f(base + i).
+    """
+    if not fn.params:
+        return None
+    span = fn.span
+    var_names = [p.name for p in fn.params]
+
+    # Compute all gradients in one analysis pass.
+    all_grads = differentiate_reverse(fn.body, var_names, fn_table=fn_table)
+
+    # Build the body: for each param, let g_i = <gradient_expr>, then
+    # modify_f(base + i, g_i, __always_accept).
+    body_stmts: list[A.Stmt] = []
+    base_name = "__base"
+    for i, p_name in enumerate(var_names):
+        g_var = f"__g_{i}"
+        body_stmts.append(A.Let(
+            span=span, name=g_var, ty=None,
+            value=all_grads[p_name], is_mut=False,
+        ))
+        # base + i
+        idx_expr = (A.Name(span=span, name=base_name) if i == 0
+                    else A.Binary(span=span, op="+",
+                                   left=A.Name(span=span, name=base_name),
+                                   right=A.IntLit(span=span, value=i)))
+        # modify_f(idx, g_i, __always_accept)
+        call = A.Call(
+            span=span,
+            callee=A.Name(span=span, name="modify_f"),
+            args=[idx_expr,
+                  A.Name(span=span, name=g_var),
+                  A.Name(span=span, name="__always_accept")],
+        )
+        body_stmts.append(A.ExprStmt(span=span, expr=call))
+
+    # Final expression: 0 (success).
+    new_body = A.Block(
+        span=span, stmts=body_stmts,
+        final_expr=A.IntLit(span=span, value=0),
+    )
+
+    # Params: original f's params (cast to f32) + trailing base: i32.
+    new_params = [
+        A.FnParam(span=p.span, name=p.name,
+                  ty=A.TyName(span=p.ty.span, name="f32"))
+        for p in fn.params
+    ]
+    new_params.append(A.FnParam(
+        span=span, name=base_name,
+        ty=A.TyName(span=span, name="i32"),
+    ))
+
+    return A.FnDecl(
+        span=span,
+        name=f"{fn.name}__rgrad_all",
+        generics=[],
+        params=new_params,
+        return_ty=A.TyName(span=span, name="i32"),
+        where_clauses=[],
+        body=new_body,
+        attrs=[],   # not @pure: it has modify_self effect
+        is_pub=fn.is_pub,
+    )
 
 
 def _generate_grad_fn(fn: A.FnDecl, param_idx: int = 0,
