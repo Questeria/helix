@@ -167,6 +167,47 @@ def test_diff_const_let_unaffected():
     assert fmt(deriv) == "5"
 
 
+def test_grad_through_match():
+    """Differentiating through a `match` requires that match has been
+    desugared to if/let. With the match_lower pass at grad_pass entry,
+    this should yield the right derivative for each arm body."""
+    from helixc.frontend.match_lower import lower_matches
+    full = """
+    fn f(cond: bool, x: f32) -> f32 {
+        match cond {
+            true => 2.0 * x,
+            false => 3.0 * x,
+        }
+    }
+    """
+    prog = parse(full)
+    lower_matches(prog)  # match_lower pass
+    fn = prog.items[0]
+    deriv = differentiate(fn.body, "x")
+
+    # Collect all numeric literals in the derivative.
+    seen: list[float] = []
+    def walk(n):
+        if isinstance(n, (A.FloatLit, A.IntLit)):
+            seen.append(float(n.value))
+        for attr in ("left", "right", "cond", "then", "else_",
+                     "operand", "value", "expr", "final_expr"):
+            if hasattr(n, attr):
+                v = getattr(n, attr)
+                if v is not None:
+                    walk(v)
+        if hasattr(n, "stmts"):
+            for s in n.stmts:
+                walk(s)
+        if hasattr(n, "args"):
+            for a in n.args:
+                walk(a)
+    walk(deriv)
+    # Both 2 and 3 should appear as constants somewhere in the deriv.
+    assert 2.0 in seen, f"expected 2 in derivative literals, got {seen}"
+    assert 3.0 in seen, f"expected 3 in derivative literals, got {seen}"
+
+
 # ============================================================================
 # Test runner
 # ============================================================================

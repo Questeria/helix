@@ -29,6 +29,10 @@ def grad_pass(prog: A.Program) -> int:
 
     Also resolves let-aliases: 'let f = grad(loss); f(x)' is rewritten so
     the call to f becomes a direct call to loss__grad."""
+    # Pre-pass: rewrite `match` to nested `if/let` so autodiff (which only
+    # knows the smaller AST surface) never sees a Match node.
+    from .match_lower import lower_matches
+    lower_matches(prog)
     # First: index existing functions by name
     fn_by_name: dict[str, A.FnDecl] = {}
     for item in prog.items:
