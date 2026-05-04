@@ -20,28 +20,32 @@ This is the from-scratch implementation of Kovostov: a local AI system where eve
 - **Runtime**: `helixrt`
 - **Bootstrap chain**: stage0 (hand-encoded hex) → hex1 → M0 (assembler) → M1 → M2 (C-subset compiler) → helixc-bootstrap (in C-subset) → helixc (self-hosted in Helix)
 
-## Status (2026-05-04)
+## Status (2026-05-04 evening)
 
-47 commits, **269 tests passing** across the entire pipeline.
+**376 tests passing**, ~80 commits across the pipeline.
+
+Major direction shift this session: Helix is now being optimized **for AI to USE and EXTEND, not for human developers**. Where ergonomics conflicts with structural regularity, structural regularity wins.
 
 What works today:
 - Hand-authored 299-byte ELF (`stage0/hex0/hex0.bin`) — the raw-binary foundation
-- Working Helix compiler (`helixc`): parse → typecheck → IR → const-fold + CSE + DCE → x86-64 → Linux ELF
-- Real running programs: arithmetic, recursion, loops (for/while), arrays, floats (SSE), 3×3 matmul, neural-network forward pass
-- 8 unique compile-time AGI features the type checker enforces:
-  1. Tensor shape constraints via Presburger arithmetic
-  2. Effect/capability typing (`@pure`, `@io`, etc.)
-  3. Differentiable types `D<T>` with gradient propagation
-  4. Memory-tier types (Working / Episodic / Semantic / Procedural)
-  5. Reflection primitives (`quote`/`splice`/`modify`)
-  6. Agent declarations (society of mind)
-  7. Type-level transitions (`detach`/`attach`/`consolidate`/`recall`)
-  8. Auto-curriculum primitive (`learn_to`)
-- Symbolic forward-mode autodiff CLI
-- Rust-style error messages with source-line context
-- 9 working `.hx` example programs
+- Working Helix compiler (`helixc`): parse → typecheck → IR → const-fold + CSE + DCE + fdce + effect-check → x86-64 → Linux ELF
+- **Source-level forward + reverse-mode autodiff** as language built-ins (`grad`, `grad_rev`, `grad_rev_all`), with chain rules across user-defined function calls (via inlining) and stdlib transcendentals (analytic rules)
+- **Verifier-gated reflection runtime**: 64 mutable cells in the binary's writable region. `quote`/`splice_f`/`modify_f` actually call your verifier function before committing
+- **IR-level effect verification**: @pure functions transitively prohibited from effectful code
+- 8 unique compile-time AGI type-system features (Presburger shapes, D<T>, memory tiers, agents, etc.)
+- 30+ stdlib builtins: math, range-reduced exp/log/sin/cos, modern activations (sigmoid/tanh/silu/gelu/softplus/relu), losses (mse/mae/bce/huber), PRNG, optimizer steps. AD chain rules wired for all activations.
+- I/O: `print_str`, `write_file`, `read_file_int` via raw syscalls
+- 6 dogfood programs running real ML in Helix-emitted binaries:
+  - 1-param gradient descent
+  - 4-point linear regression (i32 cells)
+  - Affine fit with f32 cells (200 iterations)
+  - 2-layer ReLU net touching XOR
+  - Logistic regression w/ sigmoid + BCE + multi-output AD ✨
+  - Self-improving agent (flagship, composes everything)
+- Did-you-mean error suggestions, algebraic identity folds (x*0, x-x, etc.)
+- Property test verifying forward and reverse AD agree numerically
 
-See [QUICKSTART.md](QUICKSTART.md) for build-and-run instructions, `docs/PLAN.md` for the full plan, `docs/lang/spec.md` for the language reference, `docs/lang/tutorial.md` for a 10-step beginner guide, `docs/lang/agi-features.md` for the unique-features deep dive, and `docs/research-log.md` for the daily implementation log.
+See [QUICKSTART.md](QUICKSTART.md) for build-and-run instructions, [`docs/ROADMAP.md`](docs/ROADMAP.md) for prioritized roadmap, [`docs/research/WAVE1_FINDINGS.md`](docs/research/WAVE1_FINDINGS.md) for the synthesized research direction, `docs/lang/spec.md` for the language reference, `docs/lang/tutorial.md` for a beginner guide, `docs/lang/agi-features.md` for the AGI-specific features deep dive.
 
 ## License
 
