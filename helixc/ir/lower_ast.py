@@ -38,8 +38,15 @@ class Lowerer:
         # `p.field_x` to a LOAD_ELEM at the correct field index).
         self.struct_scope: list[dict[str, str]] = []
         # struct-decl-name -> ordered list of field names (declaration order).
-        # Built from prog.items at lower-time.
+        # Built from prog.items at lower-time. Used for the flat (single-
+        # level) struct case where every field is i32.
         self._struct_fields: dict[str, list[str]] = {}
+        # Same struct decls but with nested-struct fields recursively
+        # flattened into dot-paths. For `Outer { count: i32, inner: Inner }`
+        # with `Inner { value: i32 }`, this becomes:
+        #   {"Outer": [("count",), ("inner", "value")], "Inner": [("value",)]}.
+        # Used for nested StructLit + chained Field access.
+        self._struct_flat_paths: dict[str, list[tuple[str, ...]]] = {}
         # enum-decl-name -> {variant-name: index}.
         self._enum_variants: dict[str, dict[str, int]] = {}
         # name -> FnIR (registered functions)
@@ -62,6 +69,43 @@ class Lowerer:
                 self._enum_variants[item.name] = {
                     v.name: i for i, v in enumerate(item.variants)
                 }
+        # Build flat paths for each struct. Requires all referenced sub-
+        # struct decls already indexed (above).  Iterate to fixpoint to
+        # handle forward references.
+        struct_decls = {it.name: it for it in self.prog.items
+                        if isinstance(it, A.StructDecl)}
+
+        def _ty_struct_name(ty) -> Optional[str]:
+            """Return the struct-decl name a type refers to, or None."""
+            if isinstance(ty, A.TyName) and ty.name in struct_decls:
+                return ty.name
+            return None
+
+        def _flat_paths_for(name: str, visiting: frozenset[str]) -> list[tuple[str, ...]]:
+            if name in visiting:
+                # Recursive struct (illegal without indirection); just
+                # treat as a single-slot leaf.
+                return [(name,)]
+            decl = struct_decls.get(name)
+            if decl is None:
+                return [()]
+            paths: list[tuple[str, ...]] = []
+            for p in decl.fields:
+                ty = p.ty
+                # Detect a nested struct field by checking if the type
+                # resolves to another known struct decl name.
+                sub_name = _ty_struct_name(ty)
+                if sub_name is not None and sub_name in struct_decls:
+                    sub_paths = _flat_paths_for(sub_name, visiting | {name})
+                    for sp in sub_paths:
+                        paths.append((p.name,) + sp)
+                else:
+                    paths.append((p.name,))
+            return paths
+
+        for name in struct_decls:
+            self._struct_flat_paths[name] = _flat_paths_for(
+                name, frozenset())
         # Pass 1: register function signatures (so calls work)
         for item in self.prog.items:
             if isinstance(item, A.FnDecl):
@@ -212,23 +256,22 @@ class Lowerer:
     def _lower_stmt(self, stmt: A.Stmt) -> None:
         if isinstance(stmt, A.Let):
             # Special case: struct literal initializer -> back it with a
-            # fixed-length stack array indexed by field-declaration order.
+            # fixed-length stack array indexed by flat-path order.
             if stmt.value is not None and isinstance(stmt.value, A.StructLit):
                 slit = stmt.value
-                field_order = self._struct_fields.get(slit.name)
-                if field_order is None:
+                flat_paths = self._struct_flat_paths.get(slit.name)
+                if flat_paths is None:
                     # Unknown struct (typecheck would have flagged) — fall
                     # through to default-value binding to avoid crashing.
                     self._bind(stmt.name, self.builder.const_int(0))
                     return
-                given = dict(slit.fields)
-                # Lower each field's value in declaration order. Missing
-                # fields fall back to const_int(0); typecheck would have
-                # already flagged the missing-field error.
+                # For each flat path, walk the (possibly nested) StructLit
+                # value to resolve the leaf expression. Missing fields fall
+                # back to const_int(0).
                 elem_vals = []
-                for fname in field_order:
-                    expr = given.get(fname)
-                    v = self._lower_expr(expr) if expr is not None else None
+                for path in flat_paths:
+                    leaf = _resolve_struct_leaf(slit, path)
+                    v = self._lower_expr(leaf) if leaf is not None else None
                     if v is None:
                         v = self.builder.const_int(0)
                     elem_vals.append(v)
@@ -721,26 +764,28 @@ class Lowerer:
                 self._lower_expr(i)
             return None
         if isinstance(expr, A.Field):
-            # Struct field access: if the obj is a Name pointing to a
-            # struct-bound let, resolve the field index from the struct
-            # decl and emit a LOAD_ELEM at that index.
-            if isinstance(expr.obj, A.Name):
-                struct_name = self._lookup_struct(expr.obj.name)
+            # Struct field access. May be a chain: o.inner.value. Walk the
+            # Field-of-Field chain to find the base Name, accumulate path
+            # segments, then look up the path in the flat-path table.
+            base_name, path_segs = _walk_field_chain(expr)
+            if base_name is not None:
+                struct_name = self._lookup_struct(base_name)
                 if struct_name is not None:
-                    field_order = self._struct_fields.get(struct_name, [])
+                    flat_paths = self._struct_flat_paths.get(struct_name, [])
+                    target = tuple(path_segs)
                     try:
-                        idx_int = field_order.index(expr.name)
+                        idx_int = flat_paths.index(target)
                     except ValueError:
                         idx_int = -1
                     if idx_int >= 0:
-                        arr = self._lookup_array(expr.obj.name)
+                        arr = self._lookup_array(base_name)
                         if arr is not None:
                             elem_ty, _ = arr
                             idx_v = self.builder.const_int(idx_int)
                             return self.builder.emit(
                                 tir.OpKind.LOAD_ELEM, idx_v,
                                 result_ty=elem_ty,
-                                attrs={"name": expr.obj.name})
+                                attrs={"name": base_name})
             self._lower_expr(expr.obj)
             return None
         if isinstance(expr, A.Cast):
@@ -900,6 +945,38 @@ def _pretty(node: A.Expr | A.Block) -> str:
         last = _pretty(node.final_expr) if node.final_expr else ""
         return f"block({stmts};{last})"
     return f"<{type(node).__name__}>"
+
+
+def _walk_field_chain(field: A.Field) -> tuple[Optional[str], list[str]]:
+    """Walk a chain like `Name.f1.f2.f3` and return (base_name, [f1, f2, f3]).
+    Returns (None, []) if the chain isn't rooted at a Name."""
+    segs: list[str] = []
+    cur: A.Expr = field
+    while isinstance(cur, A.Field):
+        segs.append(cur.name)
+        cur = cur.obj
+    if isinstance(cur, A.Name):
+        segs.reverse()
+        return cur.name, segs
+    return None, []
+
+
+def _resolve_struct_leaf(slit: A.StructLit, path: tuple[str, ...]) -> Optional[A.Expr]:
+    """Walk a (possibly-nested) StructLit by a dot-path, return the leaf
+    expr at that path or None if the path doesn't fully resolve."""
+    cur: A.Expr = slit
+    for seg in path:
+        if not isinstance(cur, A.StructLit):
+            return None
+        found = None
+        for fname, fexpr in cur.fields:
+            if fname == seg:
+                found = fexpr
+                break
+        if found is None:
+            return None
+        cur = found
+    return cur
 
 
 def lower(prog: A.Program) -> tir.Module:

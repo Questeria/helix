@@ -1124,6 +1124,37 @@ def test_struct_field_access_in_branch():
     assert code == 42, f"expected 42, got {code}"
 
 
+def test_nested_struct_e2e():
+    """A struct holding another struct as a field, with chained field
+    access. Outer { count, inner: Inner { value } }; o.count + o.inner.value
+    should equal 10 + 32 = 42."""
+    src = """
+    struct Inner { value: i32 }
+    struct Outer { count: i32, inner: Inner }
+    fn main() -> i32 {
+        let o = Outer { count: 10, inner: Inner { value: 32 } };
+        o.count + o.inner.value
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_three_level_nested_struct():
+    """Deeper nesting: Outer holds Mid holds Inner."""
+    src = """
+    struct Inner { v: i32 }
+    struct Mid { i: Inner }
+    struct Outer { m: Mid }
+    fn main() -> i32 {
+        let o = Outer { m: Mid { i: Inner { v: 42 } } };
+        o.m.i.v
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
 def test_struct_passed_to_helper():
     """Field access inside a helper fn that's called from main."""
     src = """
