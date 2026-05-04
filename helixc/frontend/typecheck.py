@@ -121,6 +121,15 @@ class TyMemTier(Type):
     inner: Type
 
 
+@dataclass(frozen=True)
+class TySkill(Type):
+    """Skill<F> — a learned procedure with a known difficulty. Produced by
+    `learn_to`; called like a function. The runtime maintains a registry
+    of skills so the AGI can request "skills at difficulty X"."""
+    inner: Type           # the function-like inner type
+    task: str = ""        # task identifier (compile-time-known)
+
+
 # ============================================================================
 # Type errors
 # ============================================================================
@@ -699,6 +708,20 @@ class TypeChecker:
                         expr.span,
                     ))
                     return arg_tys[0]
+                if bn == "learn_to":
+                    # learn_to(task: &str, difficulty: f32, budget: i32) -> Skill<...>
+                    if len(arg_tys) != 3:
+                        self.errors.append(TypeError_(
+                            f"learn_to() requires 3 args (task, difficulty, "
+                            f"budget); got {len(arg_tys)}",
+                            expr.span,
+                        ))
+                        return TySkill(inner=TyUnknown(hint="learn_to"))
+                    # Extract task name if it's a string literal
+                    task_name = ""
+                    if (isinstance(expr.args[0], A.StrLit)):
+                        task_name = expr.args[0].value
+                    return TySkill(inner=TyUnknown(hint=task_name), task=task_name)
             # If callee is a known function (by name), do checks
             if isinstance(expr.callee, A.Name) and expr.callee.name in self.functions:
                 sig = self.functions[expr.callee.name]
@@ -811,6 +834,9 @@ class TypeChecker:
             cap = {"working": "WorkingMem", "episodic": "EpisodicMem",
                    "semantic": "SemanticMem", "procedural": "ProceduralMem"}
             return f"{cap.get(t.tier, t.tier)}<{self._fmt(t.inner)}>"
+        if isinstance(t, TySkill):
+            tag = f' "{t.task}"' if t.task else ""
+            return f"Skill<{self._fmt(t.inner)}{tag}>"
         if isinstance(t, TyUnknown): return f"?{{{t.hint}}}"
         return repr(t)
 

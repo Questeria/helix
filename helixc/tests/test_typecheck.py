@@ -428,6 +428,32 @@ def test_arg_int_vs_float():
 
 
 # ============================================================================
+# Auto-curriculum primitive: learn_to (Phase 3-ix)
+# ============================================================================
+def test_learn_to_returns_skill():
+    # learn_to(task, difficulty, budget) is a builtin returning Skill<...>
+    src = """
+    fn main() -> i32 {
+        let skill = learn_to("matmul", 0.5, 100);
+        0
+    }
+    """
+    # Should typecheck cleanly
+    assert check(src) == []
+
+
+def test_learn_to_wrong_arity():
+    src = """
+    fn main() -> i32 {
+        let skill = learn_to("foo");
+        0
+    }
+    """
+    errs = check(src)
+    assert any("requires 3 args" in e for e in errs), errs
+
+
+# ============================================================================
 # Test runner
 # ============================================================================
 def main():
