@@ -1161,6 +1161,19 @@ def test_stdlib_int_min_max_clamp():
     assert code == 18, f"expected 18 (3+5+10), got {code}"
 
 
+def test_hbs_sample_enum_struct_runs():
+    """HBS sample using enums + structs together (a 2D shape calculator).
+    Demonstrates Kind::Circle/Square/Rectangle as enum variants combined
+    with Shape struct holding kind + dimensions. Exit 129 by design."""
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    sample_path = os.path.join(proj_root, "helixc", "examples",
+                               "hbs_sample_enum_struct.hx")
+    with open(sample_path, "r", encoding="utf-8") as f:
+        src = f.read()
+    code = compile_and_run(src)
+    assert code == 129, f"expected 129, got {code}"
+
+
 def test_hbs_sample_loss_fn_runs():
     """HBS-only sample using stdlib (loss + manual grad + 5 SGD steps).
     From w0=0.0 with lr=0.1 toward a local min near w=3.0 — after 5
