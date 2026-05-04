@@ -1257,6 +1257,20 @@ def test_hash_i32_distinguishes():
     assert code == 1, f"expected hash distinguishes, got {code}"
 
 
+def test_hbs_pattern_struct_return_runs():
+    """Demonstrates struct-return-by-arena-output-param pattern. Simulates
+    `fn build_pair() -> Pair { Pair { a: 10, b: 32 } }` via:
+      caller allocates N slots → callee fills → caller reads.
+    Computes (10+32) + (-100) + 100 = 42."""
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    sample_path = os.path.join(proj_root, "helixc", "examples",
+                               "hbs_pattern_struct_return.hx")
+    with open(sample_path, "r", encoding="utf-8") as f:
+        src = f.read()
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
 def test_hbs_lib_vec_runs():
     """Vec<T> over arena library: build [10,20,7,5,30], find sum 72,
     max 30; sum-max = 42 (with verification index_of(7) = 2)."""
