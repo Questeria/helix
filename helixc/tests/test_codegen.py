@@ -1031,6 +1031,39 @@ def test_chained_ors_normalized():
     assert code == 42, f"expected 42 (r should be a strict bool 1), got {code}"
 
 
+def test_check_cli_clean_file():
+    """`python -m helixc.check <good.hx>` exits 0 with summary lines."""
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    src_dir = os.path.join(proj_root, "helixc", "tests", "_tmp")
+    os.makedirs(src_dir, exist_ok=True)
+    src_path = os.path.join(src_dir, "_check_clean.hx")
+    with open(src_path, "w", encoding="utf-8") as f:
+        f.write("fn main() -> i32 { 42 }\n")
+    r = subprocess.run([sys.executable, "-m", "helixc.check", src_path],
+                       capture_output=True, cwd=proj_root)
+    assert r.returncode == 0, f"expected 0, got {r.returncode}; stderr={r.stderr!r}"
+    out = r.stdout.decode("utf-8")
+    assert "parse:    OK" in out
+    assert "typecheck: OK" in out
+    assert "totality:  OK" in out
+
+
+def test_check_cli_typecheck_error():
+    """`python -m helixc.check <bad.hx>` exits 1 on unbound name."""
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    src_dir = os.path.join(proj_root, "helixc", "tests", "_tmp")
+    os.makedirs(src_dir, exist_ok=True)
+    src_path = os.path.join(src_dir, "_check_bad.hx")
+    with open(src_path, "w", encoding="utf-8") as f:
+        f.write("fn main() -> i32 { undefined_thing }\n")
+    r = subprocess.run([sys.executable, "-m", "helixc.check", src_path],
+                       capture_output=True, cwd=proj_root)
+    assert r.returncode == 1, f"expected 1, got {r.returncode}"
+    out = r.stdout.decode("utf-8")
+    assert "ERRORS" in out
+    assert "undefined_thing" in out
+
+
 def test_dump_ast_hashes_flag():
     """`autodiff_cli --dump-ast-hashes <file>` prints `<fn> : <hex12>`
     deterministically across two runs on the same input."""
