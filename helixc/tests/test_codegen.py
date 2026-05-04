@@ -1255,6 +1255,53 @@ def test_streq_unequal():
     assert code == 0, f"expected 0, got {code}"
 
 
+def test_recursive_enum_list_sum():
+    """Recursive enum List = Nil | Cons(i32, List). Build a 3-element
+    list via arena indirection, sum it: 1+2+3=6."""
+    src = """
+    enum List { Nil, Cons(i32, List) }
+    fn sum_list(l: List) -> i32 {
+        match l {
+            List::Nil => 0,
+            List::Cons(x, tail) => x + sum_list(tail),
+        }
+    }
+    fn main() -> i32 {
+        let n = List::Nil;
+        let l1 = List::Cons(1, n);
+        let l2 = List::Cons(2, l1);
+        let l3 = List::Cons(3, l2);
+        sum_list(l3)
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 6, f"expected 1+2+3=6, got {code}"
+
+
+def test_recursive_enum_tree_sum():
+    """Recursive enum Tree = Leaf(i32) | Node(Tree, Tree). Build a
+    binary tree, sum the leaf values."""
+    src = """
+    enum Tree { Leaf(i32), Node(Tree, Tree) }
+    fn tree_sum(t: Tree) -> i32 {
+        match t {
+            Tree::Leaf(x) => x,
+            Tree::Node(l, r) => tree_sum(l) + tree_sum(r),
+        }
+    }
+    fn main() -> i32 {
+        let a = Tree::Leaf(10);
+        let b = Tree::Leaf(20);
+        let c = Tree::Leaf(12);
+        let n1 = Tree::Node(a, b);
+        let n2 = Tree::Node(n1, c);
+        tree_sum(n2)
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 10+20+12=42, got {code}"
+
+
 def test_arena_push_and_get():
     """__arena_push returns the slot index; __arena_get reads back."""
     src = """

@@ -37,6 +37,11 @@ class Lowerer:
         # Structs: binding-name -> struct-decl-name (so we can resolve
         # `p.field_x` to a LOAD_ELEM at the correct field index).
         self.struct_scope: list[dict[str, str]] = []
+        # Recursive enums: binding-name -> enum-decl-name. The binding
+        # holds a scalar i32 (arena index); Index(Name, k) on it emits
+        # ARENA_GET(arena_index + k) — the dispatch primitive for
+        # recursive-enum match.
+        self.rec_enum_scope: list[dict[str, str]] = []
         # struct-decl-name -> ordered list of field names (declaration order).
         # Built from prog.items at lower-time. Used for the flat (single-
         # level) struct case where every field is i32.
@@ -108,6 +113,37 @@ class Lowerer:
         for name in struct_decls:
             self._struct_flat_paths[name] = _flat_paths_for(
                 name, frozenset())
+
+        # Detect recursive enum types: any enum where a variant payload
+        # references the enum itself (directly or transitively). Recursive
+        # enums use arena-indirection storage (a value is the i32 arena
+        # index of [tag, payload0, payload1, ...]) instead of flat-array
+        # storage. This sidesteps the unbounded slot-count problem.
+        enum_decls = {it.name: it for it in self.prog.items
+                      if isinstance(it, A.EnumDecl)}
+
+        def _enum_references(name: str, target: str,
+                             visiting: frozenset[str]) -> bool:
+            if name == target and visiting:
+                return True
+            if name in visiting:
+                return False
+            decl = enum_decls.get(name)
+            if decl is None:
+                return False
+            for v in decl.variants:
+                for pty in v.payload_tys:
+                    if isinstance(pty, A.TyName) and pty.name in enum_decls:
+                        if _enum_references(pty.name, target,
+                                            visiting | {name}):
+                            return True
+            return False
+
+        self._recursive_enums: set[str] = set()
+        for ename in enum_decls:
+            if _enum_references(ename, ename, frozenset()):
+                self._recursive_enums.add(ename)
+
         # Pass 1: register function signatures (so calls work)
         for item in self.prog.items:
             if isinstance(item, A.FnDecl):
@@ -124,11 +160,20 @@ class Lowerer:
         self.mut_scope.append({})
         self.array_scope.append({})
         self.struct_scope.append({})
+        self.rec_enum_scope.append({})
     def _pop_scope(self) -> None:
         self.scope.pop()
         self.mut_scope.pop()
         self.array_scope.pop()
         self.struct_scope.pop()
+        self.rec_enum_scope.pop()
+    def _bind_rec_enum(self, name: str, enum_name: str) -> None:
+        self.rec_enum_scope[-1][name] = enum_name
+    def _lookup_rec_enum(self, name: str) -> Optional[str]:
+        for sc in reversed(self.rec_enum_scope):
+            if name in sc:
+                return sc[name]
+        return None
     def _bind(self, name: str, v: tir.Value) -> None:
         self.scope[-1][name] = v
     def _bind_mut(self, name: str, ty: tir.TIRType) -> None:
@@ -191,14 +236,18 @@ class Lowerer:
     def _aggregate_slot_count(self, ty: "A.TyNode") -> Optional[int]:
         """If `ty` is a struct or enum decl name, return the number of
         i32 slots it occupies (struct: flat field count; enum: max
-        payload count + 1 for tag). None for non-aggregate types."""
+        payload count + 1 for tag, OR 1 if recursive — arena index).
+        None for non-aggregate types."""
         if not isinstance(ty, A.TyName):
             return None
         # Struct: flat-path length already encodes nested-struct flattening.
         flat = self._struct_flat_paths.get(ty.name)
         if flat is not None:
             return len(flat)
-        # Enum: tag (1) + max payload arity across variants.
+        # Recursive enum: the value is a single i32 arena index.
+        if ty.name in getattr(self, "_recursive_enums", set()):
+            return 1
+        # Non-recursive enum: tag (1) + max payload arity across variants.
         if ty.name in self._enum_variants:
             decl = next(
                 (it for it in self.prog.items
@@ -282,6 +331,11 @@ class Lowerer:
         # _lower_fn_body.
         params: list[tuple[str, tir.TIRType]] = []
         for p in fn.params:
+            # Recursive enum: single i32 arena index (no slot expansion).
+            if (isinstance(p.ty, A.TyName)
+                    and p.ty.name in self._recursive_enums):
+                params.append((p.name, tir.TIRScalar("i32")))
+                continue
             n_slots = self._aggregate_slot_count(p.ty)
             # Aggregate-typed params always go through the multi-slot
             # path, even single-field ones — the body uses field-access
@@ -318,6 +372,16 @@ class Lowerer:
         # access transparently.
         ir_param_idx = 0
         for p in fn.params:
+            # Recursive-enum-typed param: scalar i32 arena index. Bind as
+            # scalar + register in rec_enum scope so Index access emits
+            # ARENA_GET against it.
+            if (isinstance(p.ty, A.TyName)
+                    and p.ty.name in self._recursive_enums):
+                v = ir_fn.params[ir_param_idx]
+                ir_param_idx += 1
+                self._bind(p.name, v)
+                self._bind_rec_enum(p.name, p.ty.name)
+                continue
             n_slots = self._aggregate_slot_count(p.ty)
             if n_slots is not None and n_slots >= 1:
                 # Take next n_slots IR params, allocate array, store each.
@@ -378,6 +442,24 @@ class Lowerer:
             # When passed to a function expecting an enum-typed param,
             # the call-site multi-slot expansion handles them via the
             # generic-scalar-padding path.
+            #
+            # EXCEPTION: tag-only path of a RECURSIVE enum needs to be
+            # arena-allocated (the binding's value is the arena index,
+            # not the tag itself).
+            if (stmt.value is not None
+                    and isinstance(stmt.value, A.Path)
+                    and len(stmt.value.segments) == 2):
+                ename, vname = stmt.value.segments
+                variants = self._enum_variants.get(ename)
+                if (variants is not None and vname in variants
+                        and ename in self._recursive_enums):
+                    tag_v = self.builder.const_int(variants[vname])
+                    pushed = self.builder.emit(
+                        tir.OpKind.ARENA_PUSH, tag_v,
+                        result_ty=tir.TIRScalar("i32"))
+                    self._bind(stmt.name, pushed)
+                    self._bind_rec_enum(stmt.name, ename)
+                    return
             if (stmt.value is not None
                     and isinstance(stmt.value, A.Call)
                     and isinstance(stmt.value.callee, A.Path)
@@ -393,6 +475,21 @@ class Lowerer:
                             v = self.builder.const_int(0)
                         arg_vals.append(v)
                     slots = [tag_v] + arg_vals
+                    # Recursive enum: arena-indirected. Push slots into
+                    # the arena, bind name to the start index (scalar
+                    # i32). Match dispatch will use ARENA_GET against
+                    # the index.
+                    if ename in self._recursive_enums:
+                        start_idx = None
+                        for ev in slots:
+                            pushed = self.builder.emit(
+                                tir.OpKind.ARENA_PUSH, ev,
+                                result_ty=tir.TIRScalar("i32"))
+                            if start_idx is None:
+                                start_idx = pushed
+                        self._bind(stmt.name, start_idx)
+                        self._bind_rec_enum(stmt.name, ename)
+                        return
                     elem_ty = slots[0].ty
                     n = len(slots)
                     self.builder.emit(tir.OpKind.ALLOC_ARRAY,
@@ -499,6 +596,15 @@ class Lowerer:
             if (stmt.value is not None and isinstance(stmt.value, A.Name)
                     and not stmt.is_mut):
                 src_name = stmt.value.name
+                # Recursive-enum aliasing: just copy the scalar arena
+                # index; both bindings refer to the same arena slot.
+                src_rec = self._lookup_rec_enum(src_name)
+                if src_rec is not None:
+                    src_v = self._lookup(src_name)
+                    if src_v is not None:
+                        self._bind(stmt.name, src_v)
+                        self._bind_rec_enum(stmt.name, src_rec)
+                        return
                 src_arr = self._lookup_array(src_name)
                 if src_arr is not None:
                     elem_ty, length = src_arr
@@ -1141,6 +1247,26 @@ class Lowerer:
         if isinstance(expr, A.Index):
             # If callee is a Name pointing to an array, emit LOAD_ELEM.
             if isinstance(expr.callee, A.Name):
+                # Recursive-enum binding: scalar value is the arena
+                # index. Index(name, k) lowers to ARENA_GET(idx + k).
+                rec_enum = self._lookup_rec_enum(expr.callee.name)
+                if rec_enum is not None and len(expr.indices) == 1:
+                    base_idx = self._lookup(expr.callee.name)
+                    if base_idx is not None:
+                        offset_v = self._lower_expr(expr.indices[0])
+                        if offset_v is None:
+                            offset_v = self.builder.const_int(0)
+                        # Compute idx + offset.
+                        if (isinstance(expr.indices[0], A.IntLit)
+                                and expr.indices[0].value == 0):
+                            full_idx = base_idx
+                        else:
+                            full_idx = self.builder.emit(
+                                tir.OpKind.ADD, base_idx, offset_v,
+                                result_ty=tir.TIRScalar("i32"))
+                        return self.builder.emit(
+                            tir.OpKind.ARENA_GET, full_idx,
+                            result_ty=tir.TIRScalar("i32"))
                 arr = self._lookup_array(expr.callee.name)
                 if arr is not None and len(expr.indices) == 1:
                     elem_ty, _length = arr
