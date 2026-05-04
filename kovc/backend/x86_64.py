@@ -351,6 +351,10 @@ class FnCompiler:
         self.next_slot: int = 0   # will decrement as we allocate
         # Mutable variable name -> stack slot
         self.var_slots: dict[str, int] = {}
+        # Arrays: name -> (base_slot_offset, length, element_size_in_bytes)
+        # Elements occupy contiguous 8-byte slots starting at base_slot_offset
+        # (base_slot_offset is the offset of element 0; elem i is at base + i*8)
+        self.array_info: dict[str, tuple[int, int, int]] = {}
 
     def _alloc_var(self, name: str) -> int:
         if name in self.var_slots:
@@ -358,6 +362,18 @@ class FnCompiler:
         self.next_slot -= 8
         self.var_slots[name] = self.next_slot
         return self.next_slot
+
+    def _alloc_array(self, name: str, length: int, elem_size: int = 8) -> int:
+        """Allocate a contiguous block of length * elem_size bytes on the stack.
+        We use 8 bytes per element (i32 zero-padded) for simplicity in v0.1."""
+        if name in self.array_info:
+            return self.array_info[name][0]
+        # Reserve length * 8 bytes
+        self.next_slot -= length * 8
+        # base_slot_offset points to element 0
+        base = self.next_slot
+        self.array_info[name] = (base, length, 8)
+        return base
 
     def _alloc_slot(self, v: tir.Value) -> int:
         # Allocate 8 bytes per value (we treat everything as int64-aligned for simplicity)
@@ -369,6 +385,15 @@ class FnCompiler:
         return self.slots[v.id]
 
     def compile(self) -> None:
+        # Pre-allocate slots for arrays (ALLOC_ARRAY ops) before vars/SSA values
+        for blk in self.fn.blocks:
+            for op in blk.ops:
+                if op.kind == tir.OpKind.ALLOC_ARRAY:
+                    name = op.attrs.get("name")
+                    length = int(op.attrs.get("length", 0))
+                    if name and name not in self.array_info:
+                        self._alloc_array(name, length)
+
         # Pre-allocate slots for mutable variables (ALLOC_VAR ops)
         for blk in self.fn.blocks:
             for op in blk.ops:
@@ -610,6 +635,43 @@ class FnCompiler:
             src_slot = self._slot_of(op.operands[0])
             self.asm.mov_eax_mem_rbp(src_slot)
             self.asm.mov_mem_rbp_eax(var_slot)
+            return
+
+        # Arrays
+        if op.kind == tir.OpKind.ALLOC_ARRAY:
+            return  # already pre-allocated
+        if op.kind == tir.OpKind.LOAD_ELEM:
+            name = op.attrs["name"]
+            base, length, esize = self.array_info[name]
+            # Index is the operand
+            idx_slot = self._slot_of(op.operands[0])
+            res_slot = self._slot_of(op.results[0])
+            # Compute address: rcx = idx * 8; rdx = rbp + base; eax = [rdx + rcx]
+            # Simpler: use rcx as index in 64-bit, scale via [rbp + rcx*8 + base]
+            # mov ecx, [rbp + idx_slot]    (8B 4D <disp>)
+            self.asm.mov_ecx_mem_rbp(idx_slot)
+            # movsxd rcx, ecx (sign-extend ecx to rcx)  48 63 C9
+            self.asm.b.emit(0x48, 0x63, 0xC9)
+            # mov eax, [rbp + rcx*8 + base]
+            # 8B 84 CD <disp32>   mov eax, [rbp + rcx*8 + disp32]
+            self.asm.b.emit(0x8B, 0x84, 0xCD)
+            self.asm.b.emit_bytes(struct.pack("<i", base))
+            self.asm.mov_mem_rbp_eax(res_slot)
+            return
+        if op.kind == tir.OpKind.STORE_ELEM:
+            name = op.attrs["name"]
+            base, length, esize = self.array_info[name]
+            idx_slot = self._slot_of(op.operands[0])
+            val_slot = self._slot_of(op.operands[1])
+            # rcx = idx (sign-extended)
+            self.asm.mov_ecx_mem_rbp(idx_slot)
+            self.asm.b.emit(0x48, 0x63, 0xC9)
+            # eax = value
+            self.asm.mov_eax_mem_rbp(val_slot)
+            # mov [rbp + rcx*8 + base], eax
+            # 89 84 CD <disp32>
+            self.asm.b.emit(0x89, 0x84, 0xCD)
+            self.asm.b.emit_bytes(struct.pack("<i", base))
             return
         # Unsupported op — emit nothing (placeholder); v0.2 will lower
         # tensor ops to runtime calls.

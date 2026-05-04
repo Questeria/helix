@@ -32,6 +32,8 @@ class Lowerer:
         # Mutable variables: a separate set of names that are stored as cells
         # (LOAD_VAR/STORE_VAR ops). Their type comes from initial binding.
         self.mut_scope: list[dict[str, tir.TIRType]] = []
+        # Arrays: name -> (elem_ty, length)
+        self.array_scope: list[dict[str, tuple[tir.TIRType, int]]] = []
         # name -> FnIR (registered functions)
         self.functions: dict[str, tir.FnIR] = {}
 
@@ -51,13 +53,17 @@ class Lowerer:
     def _push_scope(self) -> None:
         self.scope.append({})
         self.mut_scope.append({})
+        self.array_scope.append({})
     def _pop_scope(self) -> None:
         self.scope.pop()
         self.mut_scope.pop()
+        self.array_scope.pop()
     def _bind(self, name: str, v: tir.Value) -> None:
         self.scope[-1][name] = v
     def _bind_mut(self, name: str, ty: tir.TIRType) -> None:
         self.mut_scope[-1][name] = ty
+    def _bind_array(self, name: str, elem_ty: tir.TIRType, length: int) -> None:
+        self.array_scope[-1][name] = (elem_ty, length)
     def _lookup(self, name: str) -> Optional[tir.Value]:
         for sc in reversed(self.scope):
             if name in sc:
@@ -65,6 +71,11 @@ class Lowerer:
         return None
     def _lookup_mut(self, name: str) -> Optional[tir.TIRType]:
         for sc in reversed(self.mut_scope):
+            if name in sc:
+                return sc[name]
+        return None
+    def _lookup_array(self, name: str):
+        for sc in reversed(self.array_scope):
             if name in sc:
                 return sc[name]
         return None
@@ -166,6 +177,31 @@ class Lowerer:
 
     def _lower_stmt(self, stmt: A.Stmt) -> None:
         if isinstance(stmt, A.Let):
+            # Special case: array literal initializer -> allocate stack array
+            if stmt.value is not None and isinstance(stmt.value, A.ArrayLit):
+                elems = stmt.value.elems
+                if not elems:
+                    self._bind(stmt.name, self.builder.const_int(0))
+                    return
+                # Lower each element (collect SSA values)
+                elem_vals = []
+                for e in elems:
+                    v = self._lower_expr(e)
+                    if v is None:
+                        v = self.builder.const_int(0)
+                    elem_vals.append(v)
+                elem_ty = elem_vals[0].ty
+                n = len(elem_vals)
+                self.builder.emit(tir.OpKind.ALLOC_ARRAY,
+                                  attrs={"name": stmt.name, "dtype": elem_ty,
+                                         "length": n})
+                for i, ev in enumerate(elem_vals):
+                    idx = self.builder.const_int(i)
+                    self.builder.emit(tir.OpKind.STORE_ELEM, idx, ev,
+                                      attrs={"name": stmt.name})
+                self._bind_array(stmt.name, elem_ty, n)
+                return
+
             v: Optional[tir.Value] = None
             if stmt.value is not None:
                 v = self._lower_expr(stmt.value)
@@ -430,6 +466,32 @@ class Lowerer:
             v = self._lower_expr(expr.value)
             if v is None:
                 v = self.builder.const_int(0)
+            # Array element assignment: arr[i] = e (or compound)
+            if isinstance(expr.target, A.Index) and isinstance(expr.target.callee, A.Name):
+                arr_name = expr.target.callee.name
+                arr = self._lookup_array(arr_name)
+                if arr is not None and len(expr.target.indices) == 1:
+                    elem_ty, _ = arr
+                    idx_v = self._lower_expr(expr.target.indices[0])
+                    if idx_v is None:
+                        idx_v = self.builder.const_int(0)
+                    if expr.op == "=":
+                        self.builder.emit(tir.OpKind.STORE_ELEM, idx_v, v,
+                                          attrs={"name": arr_name})
+                    else:
+                        op_map = {
+                            "+=": tir.OpKind.ADD, "-=": tir.OpKind.SUB,
+                            "*=": tir.OpKind.MUL, "/=": tir.OpKind.DIV,
+                            "%=": tir.OpKind.MOD,
+                        }
+                        cur = self.builder.emit(tir.OpKind.LOAD_ELEM, idx_v,
+                                                result_ty=elem_ty,
+                                                attrs={"name": arr_name})
+                        new = self.builder.emit(op_map[expr.op], cur, v,
+                                                result_ty=elem_ty)
+                        self.builder.emit(tir.OpKind.STORE_ELEM, idx_v, new,
+                                          attrs={"name": arr_name})
+                    return None
             # If target is a mutable variable name, emit STORE_VAR.
             # Compound assignments (+=, etc.) need a load+op+store.
             if isinstance(expr.target, A.Name) and self._lookup_mut(expr.target.name):
@@ -460,6 +522,18 @@ class Lowerer:
                 self._lower_expr(e)
             return None
         if isinstance(expr, A.Index):
+            # If callee is a Name pointing to an array, emit LOAD_ELEM.
+            if isinstance(expr.callee, A.Name):
+                arr = self._lookup_array(expr.callee.name)
+                if arr is not None and len(expr.indices) == 1:
+                    elem_ty, _length = arr
+                    idx_v = self._lower_expr(expr.indices[0])
+                    if idx_v is None:
+                        idx_v = self.builder.const_int(0)
+                    return self.builder.emit(tir.OpKind.LOAD_ELEM, idx_v,
+                                             result_ty=elem_ty,
+                                             attrs={"name": expr.callee.name})
+            # Fallback: opaque
             self._lower_expr(expr.callee)
             for i in expr.indices:
                 self._lower_expr(i)

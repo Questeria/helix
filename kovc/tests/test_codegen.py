@@ -317,6 +317,89 @@ def test_for_loop_nested():
     assert compile_and_run(src) == 42
 
 
+def test_array_literal_and_index():
+    src = """
+    fn main() -> i32 {
+        let xs = [10, 20, 12];
+        xs[0] + xs[1] + xs[2]
+    }
+    """
+    # 10 + 20 + 12 = 42
+    assert compile_and_run(src) == 42
+
+
+def test_array_assign():
+    src = """
+    fn main() -> i32 {
+        let xs = [0, 0, 0];
+        xs[0] = 10;
+        xs[1] = 32;
+        xs[0] + xs[1] + xs[2]
+    }
+    """
+    # 10 + 32 + 0 = 42
+    assert compile_and_run(src) == 42
+
+
+def test_array_loop_sum():
+    src = """
+    fn main() -> i32 {
+        let xs = [1, 2, 3, 4, 5, 6, 7, 8, 9, 0];
+        let mut total = 0;
+        for i in 0 .. 10 {
+            total += xs[i];
+        }
+        total
+    }
+    """
+    # 1+2+3+4+5+6+7+8+9+0 = 45 — wait, want 42. Let me change.
+    # Use 0+1+2+3+4+5+6+7+8+9 = 45 isn't 42. Use first 9: 0..=8 sum = 36
+    # Actually just check sum = 45
+    assert compile_and_run(src) == 45
+
+
+def test_array_compound_assign():
+    src = """
+    fn main() -> i32 {
+        let xs = [10, 0, 0];
+        xs[0] += 32;
+        xs[0]
+    }
+    """
+    assert compile_and_run(src) == 42
+
+
+def test_real_matmul_3x3_via_arrays():
+    # 3x3 matmul: c[i][j] = sum_k a[i][k] * b[k][j]
+    # We use flat 9-element arrays with row-major indexing: a[i*3+j]
+    # A = identity, B = identity -> A*B = identity, sum = 3
+    # Better: A = [[1,0,0],[0,1,0],[0,0,1]] B = [[14,0,0],[0,14,0],[0,0,14]]
+    #         A*B = 14*identity, sum = 42
+    src = """
+    fn main() -> i32 {
+        let a = [1, 0, 0, 0, 1, 0, 0, 0, 1];
+        let b = [14, 0, 0, 0, 14, 0, 0, 0, 14];
+        let c = [0, 0, 0, 0, 0, 0, 0, 0, 0];
+        for i in 0 .. 3 {
+            for j in 0 .. 3 {
+                let mut acc = 0;
+                for k in 0 .. 3 {
+                    acc += a[i * 3 + k] * b[k * 3 + j];
+                }
+                c[i * 3 + j] = acc;
+            }
+        }
+        let mut total = 0;
+        for i in 0 .. 9 {
+            total += c[i];
+        }
+        total
+    }
+    """
+    # trace: 14 + 14 + 14 = 42. Whole sum: 42 (only diagonal nonzero).
+    assert compile_and_run(src) == 42
+
+
 def main():
     tests = [(name, fn) for name, fn in globals().items()
              if name.startswith("test_") and callable(fn)]

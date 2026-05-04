@@ -214,6 +214,11 @@ class OpKind(Enum):
     LOAD_VAR = "var.load"        # attrs: name
     STORE_VAR = "var.store"      # operand: value, attrs: name
 
+    # Stack-allocated arrays
+    ALLOC_ARRAY = "array.alloc"      # attrs: name, dtype, length
+    LOAD_ELEM = "array.load_elem"    # operands: index_value; attrs: name
+    STORE_ELEM = "array.store_elem"  # operands: index, value; attrs: name
+
     # Effectful ops (kept distinct so transforms can avoid them)
     PRINT = "io.print"
 
