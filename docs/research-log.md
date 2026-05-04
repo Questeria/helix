@@ -393,3 +393,49 @@ system enforces FOUR things no other AI language enforces at compile time:
 - grad as compiler primitive (source-level AD)
 - society::dispatch semantics
 - Real reflection (runtime AST query)
+
+---
+
+## 2026-05-04 (Phase 4) — Optimizations + better diagnostics + stronger type checking
+
+### What landed
+- Constant folding pass (`helixc/ir/passes/const_fold.py`): folds int/float
+  arithmetic, comparisons, NEG on constant operands. Iterates to fixpoint.
+- Dead code elimination (`helixc/ir/passes/dce.py`): removes ops whose
+  results are unused, preserves side-effecting ops (RETURN, CALL,
+  STORE_VAR, etc.)
+- Pipeline integration: helixc.backend.x86_64 main now runs typecheck
+  (warnings) + fold + DCE. Flags: `--strict`, `--no-opt`.
+- Better error messages: TypeError_.render() produces Rust-style output
+  with source-line context and caret pointing at the column.
+- Stronger function-call type checking: arg count mismatch, primitive
+  type mismatch (e.g., i32 passed where f32 expected).
+- Type-level bridge functions: detach, attach, consolidate, recall.
+
+### Validation
+- All 52 codegen end-to-end tests (real Linux ELFs) pass with optimizations
+  active. const-fold + DCE preserve program behavior on every program tested.
+
+### Documentation
+- `docs/lang/tutorial.md`: 10-step beginner walkthrough.
+- `docs/lang/agi-features.md`: live status of unique features.
+
+### Compile-time bug detection (9 classes)
+1. Tensor shape mismatches via Presburger
+2. Effect/capability violations
+3. Differentiability gradient loss (D<T>)
+4. Memory tier confusion
+5. Argument count mismatches
+6. Primitive type mismatches
+7. Return-type mismatches
+8. if/else branch type divergence
+9. Duplicate function definitions
+
+### Total session deltas (Phase 0 → Phase 4)
+- 37 commits on main
+- 250 tests passing
+- ~10k lines of build-time tooling
+- 299-byte hand-authored hex0.bin (raw binary foundation)
+- Full pipeline: parse → typecheck → IR → fold → DCE → x86-64 → ELF
+- 9 .hx test programs working end-to-end
+- Real numerical kernels (3x3 matmul, recursive GCD, iterative factorial)
