@@ -15,6 +15,7 @@ disasm.txt
 
 # Test temp dirs
 kovc/tests/_tmp/
+helixc/tests/_tmp/
 
 # Editor / IDE
 .vscode/
