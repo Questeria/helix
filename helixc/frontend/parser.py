@@ -880,7 +880,7 @@ class Parser:
                     if self.i == last_i:
                         raise ParseError(
                             "tuple literal: malformed element (parser made "
-                            "no progress)", self._tok())
+                            "no progress)", self._peek())
                     last_i = self.i
                     if not self._match(T.COMMA):
                         break

@@ -511,6 +511,37 @@ def test_struct_field_access_unknown_field_errors():
         f"expected unknown-field-access error, got {errs}"
 
 
+def test_nested_struct_field_type_tracks_correctly():
+    """A struct-typed field's value must resolve to TyStruct (not TyUnknown)
+    so chained field access types correctly. Pre-fix this was silently
+    TyUnknown, which made `o.inner` incompatible-with-anything pass."""
+    src = """
+    struct Inner { value: i32 }
+    struct Outer { count: i32, inner: Inner }
+    fn main() -> i32 {
+        let o = Outer { count: 10, inner: Inner { value: 32 } };
+        o.count + o.inner.value
+    }
+    """
+    errs = check(src)
+    assert errs == [], f"unexpected errors: {errs}"
+
+
+def test_three_segment_path_on_known_enum_errors():
+    """`Op::Sub::Variant` should surface a clear error rather than
+    silent TyUnknown propagation."""
+    src = """
+    enum Op { Add, Sub }
+    fn main() -> i32 {
+        let v = Op::Sub::SomethingExtra;
+        0
+    }
+    """
+    errs = check(src)
+    assert any("3+ segments" in s or "v0.1" in s for s in errs), \
+        f"expected 3-segment path error, got {errs}"
+
+
 def test_struct_field_returns_correct_type():
     """p.x of struct Point { x: i32, y: i32 } types as i32, allowing
     further i32 ops without errors."""

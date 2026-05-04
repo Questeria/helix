@@ -330,6 +330,13 @@ class TypeChecker:
             looked = scope.lookup(ty.name)
             if looked is not None:
                 return looked
+            # Recognise nominal struct types so field-access on a struct-
+            # typed field (e.g. nested struct: `inner: Inner`) gets a real
+            # TyStruct instead of falling all the way to TyUnknown — that
+            # was breaking chained field-type tracking and causing every
+            # struct-field-typecheck to trivially pass.
+            if ty.name in getattr(self, "_struct_decls", {}):
+                return TyStruct(name=ty.name)
             # Unresolved: treat as unknown user type for v0.1
             return TyUnknown(hint=f"unknown name {ty.name}")
         if isinstance(ty, A.TyTuple):
@@ -767,6 +774,23 @@ class TypeChecker:
                             return TyPrim("i32")  # tag-only variant
                     self.errors.append(TypeError_(
                         f"enum {ename!r} has no variant {vname!r}",
+                        expr.span,
+                    ))
+            # 3+-segment paths aren't yet supported — emit a clear error
+            # so users don't silently get TyUnknown propagation that masks
+            # downstream type errors.
+            if len(expr.segments) >= 3:
+                # Allow well-known stdlib-shaped 3+-paths through as
+                # opaque (e.g., tensor::ops::matmul) without erroring.
+                # For now: only flag enum-like paths that start with a
+                # known struct/enum name and exceed 2 segments.
+                first = expr.segments[0]
+                if (first in getattr(self, "_enum_decls", {})
+                        or first in getattr(self, "_struct_decls", {})):
+                    self.errors.append(TypeError_(
+                        f"path {'::'.join(expr.segments)} has 3+ segments; "
+                        f"only `EnumName::Variant` (2 segments) is supported "
+                        f"in v0.1",
                         expr.span,
                     ))
             # v0.1: other paths are unresolved (e.g., tensor::zeros).

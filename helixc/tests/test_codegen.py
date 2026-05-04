@@ -1192,6 +1192,19 @@ def test_stdlib_int_min_max_clamp():
     assert code == 18, f"expected 18 (3+5+10), got {code}"
 
 
+def test_hbs_sample_tree_eval_runs():
+    """HBS sample: tiny AST evaluator demonstrating enum-dispatch over
+    node kinds. Computes (1+2)*7 = 21 inline by chaining match arms
+    for Op::Const / Op::Add / Op::Mul / Op::Neg. Exit 21 by design."""
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    sample_path = os.path.join(proj_root, "helixc", "examples",
+                               "hbs_sample_tree_eval.hx")
+    with open(sample_path, "r", encoding="utf-8") as f:
+        src = f.read()
+    code = compile_and_run(src)
+    assert code == 21, f"expected 21, got {code}"
+
+
 def test_hbs_sample_enum_struct_runs():
     """HBS sample using enums + structs together (a 2D shape calculator).
     Demonstrates Kind::Circle/Square/Rectangle as enum variants combined

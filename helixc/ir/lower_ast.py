@@ -83,9 +83,11 @@ class Lowerer:
 
         def _flat_paths_for(name: str, visiting: frozenset[str]) -> list[tuple[str, ...]]:
             if name in visiting:
-                # Recursive struct (illegal without indirection); just
-                # treat as a single-slot leaf.
-                return [(name,)]
+                # Recursive struct without indirection: skip emitting any
+                # leaf for this back-edge so the parent's slot count stays
+                # accurate. Returning [(name,)] would inject a bogus path
+                # like ("inner", "Outer") and corrupt the array sizing.
+                return []
             decl = struct_decls.get(name)
             if decl is None:
                 return [()]
