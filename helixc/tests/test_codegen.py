@@ -1275,6 +1275,18 @@ def test_inline_recursive_enum_ctor_as_fn_arg():
     assert code == 42, f"expected 42, got {code}"
 
 
+def test_helix_ast_with_let_bindings():
+    """Helix-side AST with let-bindings + name resolution via arena
+    env stack. eval(let x = 6 in x * 7) = 42."""
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    sample_path = os.path.join(proj_root, "helixc", "examples",
+                               "hbs_sample_helix_ast.hx")
+    with open(sample_path, "r", encoding="utf-8") as f:
+        src = f.read()
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42 (let x=6 in x*7), got {code}"
+
+
 def test_recursive_enum_ast_eval():
     """Real recursive-enum AST: enum Expr { Const(i32), Add(Expr, Expr),
     Mul(Expr, Expr), Neg(Expr) } with a recursive eval. Computes
