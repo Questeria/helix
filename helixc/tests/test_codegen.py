@@ -1258,6 +1258,20 @@ def test_hash_i32_distinguishes():
     assert code == 1, f"expected hash distinguishes, got {code}"
 
 
+def test_hbs_integration_calculator_runs():
+    """Comprehensive integration test: recursive Expr eval + tuple
+    classify + range patterns + factorial + arena + hash + string
+    iteration + or-pattern + stdlib + bool match. Exits 42 only if
+    every micro-test (~25) passes."""
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    sample_path = os.path.join(proj_root, "helixc", "examples",
+                               "hbs_integration_calculator.hx")
+    with open(sample_path, "r", encoding="utf-8") as f:
+        src = f.read()
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42 (canary), got {code}"
+
+
 def test_hbs_pattern_struct_return_runs():
     """Demonstrates struct-return-by-arena-output-param pattern. Simulates
     `fn build_pair() -> Pair { Pair { a: 10, b: 32 } }` via:
