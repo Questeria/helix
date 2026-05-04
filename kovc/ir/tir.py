@@ -187,6 +187,14 @@ class OpKind(Enum):
     SELECT = "select"           # ternary if (cond, a, b) elementwise
     WHERE = "where"             # masked select
 
+    # Comparisons (produce bool/i1 results)
+    CMP_EQ = "cmp.eq"
+    CMP_NE = "cmp.ne"
+    CMP_LT = "cmp.lt"
+    CMP_LE = "cmp.le"
+    CMP_GT = "cmp.gt"
+    CMP_GE = "cmp.ge"
+
     # Compositional transforms (compiler-level, materialized via passes)
     GRAD = "transform.grad"
     JVP = "transform.jvp"

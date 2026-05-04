@@ -86,6 +86,47 @@ def test_three_arg_call():
     assert compile_and_run(src) == 42
 
 
+def test_compare_lt_true():
+    # (3 < 5) -> 1; +41 -> 42
+    src = "fn main() -> i32 { let b = 3 < 5; b + 41 }"
+    assert compile_and_run(src) == 42
+
+
+def test_compare_eq_true():
+    src = "fn main() -> i32 { let b = 7 == 7; b + 41 }"
+    assert compile_and_run(src) == 42
+
+
+def test_compare_eq_false():
+    # (7 == 8) -> 0; +42 -> 42
+    src = "fn main() -> i32 { let b = 7 == 8; b + 42 }"
+    assert compile_and_run(src) == 42
+
+
+def test_compare_gt_false():
+    src = "fn main() -> i32 { let b = 3 > 5; b + 42 }"
+    assert compile_and_run(src) == 42
+
+
+def test_if_select_then_branch():
+    # condition true -> 42
+    src = "fn main() -> i32 { if 1 < 2 { 42 } else { 99 } }"
+    assert compile_and_run(src) == 42
+
+
+def test_if_select_else_branch():
+    # condition false -> else
+    src = "fn main() -> i32 { if 1 > 2 { 99 } else { 42 } }"
+    assert compile_and_run(src) == 42
+
+
+def test_unary_neg_returns_neg_value():
+    # neg(-42) for an i32 in main becomes the exit code (Linux truncates to low 8 bits)
+    # Choose a positive result instead: -(-42) = 42
+    src = "fn main() -> i32 { -(-42) }"
+    assert compile_and_run(src) == 42
+
+
 def main():
     tests = [(name, fn) for name, fn in globals().items()
              if name.startswith("test_") and callable(fn)]

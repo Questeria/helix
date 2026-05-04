@@ -225,6 +225,23 @@ class Asm:
     def syscall(self) -> None:
         self.b.emit(0x0F, 0x05)
 
+    # ---- comparisons ----
+    def cmp_eax_ecx(self) -> None:
+        # 39 C8  cmp eax, ecx
+        self.b.emit(0x39, 0xC8)
+
+    # setcc al — produces 1 if condition else 0 in al; we then movzx to eax
+    def sete_al(self) -> None:    self.b.emit(0x0F, 0x94, 0xC0)
+    def setne_al(self) -> None:   self.b.emit(0x0F, 0x95, 0xC0)
+    def setl_al(self) -> None:    self.b.emit(0x0F, 0x9C, 0xC0)
+    def setle_al(self) -> None:   self.b.emit(0x0F, 0x9E, 0xC0)
+    def setg_al(self) -> None:    self.b.emit(0x0F, 0x9F, 0xC0)
+    def setge_al(self) -> None:   self.b.emit(0x0F, 0x9D, 0xC0)
+
+    def movzx_eax_al(self) -> None:
+        # 0F B6 C0   movzx eax, al
+        self.b.emit(0x0F, 0xB6, 0xC0)
+
 
 # ============================================================================
 # Function compiler (one IR function -> machine code)
@@ -324,6 +341,52 @@ class FnCompiler:
             res_slot = self._slot_of(op.results[0])
             self.asm.mov_eax_mem_rbp(slot)
             self.asm.neg_eax()
+            self.asm.mov_mem_rbp_eax(res_slot)
+            return
+        # Comparisons
+        cmp_setters = {
+            tir.OpKind.CMP_EQ: self.asm.sete_al,
+            tir.OpKind.CMP_NE: self.asm.setne_al,
+            tir.OpKind.CMP_LT: self.asm.setl_al,
+            tir.OpKind.CMP_LE: self.asm.setle_al,
+            tir.OpKind.CMP_GT: self.asm.setg_al,
+            tir.OpKind.CMP_GE: self.asm.setge_al,
+        }
+        if op.kind in cmp_setters:
+            l_slot = self._slot_of(op.operands[0])
+            r_slot = self._slot_of(op.operands[1])
+            res_slot = self._slot_of(op.results[0])
+            self.asm.mov_eax_mem_rbp(l_slot)
+            self.asm.mov_ecx_mem_rbp(r_slot)
+            self.asm.cmp_eax_ecx()
+            cmp_setters[op.kind]()
+            self.asm.movzx_eax_al()
+            self.asm.mov_mem_rbp_eax(res_slot)
+            return
+        # SELECT (cond, a, b) — a if cond else b. v0.1: branchless via cmov-equivalent
+        # using arithmetic: result = (cond * a) + ((1-cond) * b). Implementing as
+        # eax = b; if cond { eax = a; } using a small branch.
+        if op.kind == tir.OpKind.SELECT:
+            cond_slot = self._slot_of(op.operands[0])
+            a_slot = self._slot_of(op.operands[1])
+            b_slot = self._slot_of(op.operands[2])
+            res_slot = self._slot_of(op.results[0])
+            # Load cond, test
+            self.asm.mov_eax_mem_rbp(cond_slot)
+            # test eax, eax
+            self.asm.b.emit(0x85, 0xC0)
+            # je over-a (placeholder, 8-bit)
+            # We need a forward jump. Use a fixup-friendly relative computation.
+            # For simplicity, compute the jump distance manually.
+            # Sequence: je SKIP_A; mov eax, [rbp+a]; jmp END; SKIP_A: mov eax, [rbp+b]; END: mov [rbp+res], eax
+            # Sizes: each mov_eax_mem_rbp is 3 bytes (when disp8); jmp rel8 is 2 bytes.
+            # je rel8 = 2 bytes; "load a" = 3 bytes; jmp rel8 = 2 bytes; "load b" = 3 bytes.
+            # je target: skip past (load_a + jmp) = 3 + 2 = 5
+            self.asm.b.emit(0x74, 0x05)             # je +5
+            self.asm.mov_eax_mem_rbp(a_slot)        # 3 bytes (assumes disp8)
+            self.asm.b.emit(0xEB, 0x03)             # jmp +3 (skip load_b)
+            self.asm.mov_eax_mem_rbp(b_slot)        # 3 bytes
+            # END:
             self.asm.mov_mem_rbp_eax(res_slot)
             return
         if op.kind == tir.OpKind.CALL:

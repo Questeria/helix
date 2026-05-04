@@ -195,14 +195,22 @@ class Lowerer:
             r = self._lower_expr(expr.right)
             if l is None or r is None:
                 return None
-            kind_map = {
+            arith = {
                 "+": tir.OpKind.ADD, "-": tir.OpKind.SUB,
                 "*": tir.OpKind.MUL, "/": tir.OpKind.DIV,
-                # comparisons emit bool result, but for v0.1 we treat as elementwise
+                "%": tir.OpKind.DIV,  # placeholder
             }
-            if expr.op in kind_map:
-                return self.builder.emit(kind_map[expr.op], l, r, result_ty=l.ty)
-            # Comparisons: emit a SELECT-style placeholder
+            cmp_ = {
+                "==": tir.OpKind.CMP_EQ, "!=": tir.OpKind.CMP_NE,
+                "<": tir.OpKind.CMP_LT, "<=": tir.OpKind.CMP_LE,
+                ">": tir.OpKind.CMP_GT, ">=": tir.OpKind.CMP_GE,
+            }
+            if expr.op in arith:
+                return self.builder.emit(arith[expr.op], l, r, result_ty=l.ty)
+            if expr.op in cmp_:
+                return self.builder.emit(cmp_[expr.op], l, r,
+                                         result_ty=tir.TIRScalar("bool"))
+            # Logical or/and — short-circuit eval not yet wired; treat as bitwise for v0.1
             return self.builder.emit(tir.OpKind.ADD, l, r, result_ty=tir.TIRScalar("bool"))
         if isinstance(expr, A.Unary):
             inner = self._lower_expr(expr.operand)
