@@ -73,9 +73,28 @@ def _inline_lets(expr: A.Expr | None, env: dict[str, A.Expr]) -> A.Expr | None:
             return _inline_lets(expr.final_expr, local_env)
         return A.FloatLit(span=expr.span, value=0.0)
     if isinstance(expr, A.If):
-        # For now we simply return the then-branch; proper AD over branches
-        # needs to handle both cases conditionally. v0.1 approximation.
-        return _inline_lets(expr.then, env)
+        # Inline both branches and re-wrap in an If — the inliner only flattens
+        # let-bindings, branch selection stays a runtime decision. Differentiate
+        # both branches; the derivative is then the same conditional.
+        new_then = _inline_lets(expr.then, env) if isinstance(expr.then, A.Block) else expr.then
+        new_else = None
+        if expr.else_ is not None:
+            if isinstance(expr.else_, A.Block):
+                new_else = _inline_lets(expr.else_, env)
+            else:
+                new_else = _inline_lets(expr.else_, env)
+        # Wrap any non-block result in a Block(final_expr=) so If's children
+        # are valid. The inliner returns expressions, not blocks.
+        def _wrap(e: A.Expr | None) -> A.Block | None:
+            if e is None:
+                return None
+            if isinstance(e, A.Block):
+                return e
+            return A.Block(span=e.span, stmts=[], final_expr=e)
+        wrapped_then = _wrap(new_then)
+        wrapped_else = _wrap(new_else)
+        return A.If(span=expr.span, cond=expr.cond,
+                    then=wrapped_then, else_=wrapped_else)
     return expr
 
 
@@ -121,8 +140,31 @@ def _diff(expr: A.Expr, var: str) -> A.Expr:
             num = A.Binary(span=span, op="-", left=num1, right=num2)
             denom = A.Binary(span=span, op="*", left=r, right=r)
             return A.Binary(span=span, op="/", left=num, right=denom)
+    if isinstance(expr, A.If):
+        # d/dx (if c then a else b) = if c then da/dx else db/dx.
+        # Cond contributes nothing — it's a discrete choice, not differentiable.
+        d_then = _diff_block_or_expr(expr.then, var, span)
+        d_else = (_diff_block_or_expr(expr.else_, var, span)
+                  if expr.else_ is not None
+                  else A.Block(span=span, stmts=[], final_expr=A.FloatLit(span=span, value=0.0)))
+        return A.If(span=span, cond=expr.cond, then=d_then, else_=d_else)
+    if isinstance(expr, A.Block):
+        return _diff_block_or_expr(expr, var, span)
     # Unsupported: emit zero (placeholder)
     return A.FloatLit(span=expr.span, value=0.0)
+
+
+def _diff_block_or_expr(node: A.Expr | A.Block, var: str, span: A.Span) -> A.Block:
+    """Differentiate a Block by differentiating its final_expr; or wrap a bare
+    Expr in a single-final-expr block. The result is always a Block, suitable
+    for use as a then/else child of an If."""
+    if isinstance(node, A.Block):
+        if node.final_expr is None:
+            return A.Block(span=span, stmts=[], final_expr=A.FloatLit(span=span, value=0.0))
+        d = _diff(node.final_expr, var)
+        return A.Block(span=node.span, stmts=[], final_expr=d)
+    d = _diff(node, var)
+    return A.Block(span=span, stmts=[], final_expr=d)
 
 
 # ============================================================================
@@ -177,7 +219,21 @@ def _simplify(expr: A.Expr) -> A.Expr:
         if expr.op == "-" and _is_zero(sub):
             return A.FloatLit(span=expr.span, value=0.0)
         return A.Unary(span=expr.span, op=expr.op, operand=sub)
+    if isinstance(expr, A.If):
+        # Recursively simplify branches.
+        new_then = _simplify_block(expr.then) if expr.then is not None else None
+        new_else = _simplify_block(expr.else_) if expr.else_ is not None else None
+        return A.If(span=expr.span, cond=expr.cond, then=new_then, else_=new_else)
+    if isinstance(expr, A.Block):
+        return _simplify_block(expr)
     return expr
+
+
+def _simplify_block(blk: A.Block) -> A.Block:
+    if blk.final_expr is None:
+        return blk
+    return A.Block(span=blk.span, stmts=blk.stmts,
+                   final_expr=_simplify(blk.final_expr))
 
 
 def _is_zero(e: A.Expr) -> bool:

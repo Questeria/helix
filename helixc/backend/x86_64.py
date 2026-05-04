@@ -124,9 +124,12 @@ class Asm:
 
     # ---- arithmetic on eax (32-bit forms; high half auto-zeroed) ----
     def mov_eax_imm32(self, imm: int) -> None:
-        # B8 <imm32>
+        # B8 <imm32>. Accept any 32-bit bit pattern (signed or unsigned) by
+        # masking to 32 bits and re-packing as unsigned. Required for callers
+        # that pass packed float bits — e.g. the bit pattern for -1.0
+        # (0xBF800000) doesn't fit in signed i32.
         self.b.emit(0xB8)
-        self.b.emit_bytes(struct.pack("<i", imm))
+        self.b.emit_bytes(struct.pack("<I", imm & 0xFFFFFFFF))
 
     def mov_eax_mem_rbp(self, disp8: int) -> None:
         """mov eax, [rbp + disp8]"""

@@ -20,6 +20,7 @@ from __future__ import annotations
 
 from . import ast_nodes as A
 from .autodiff import differentiate, _inline_lets
+from .autodiff_reverse import differentiate_reverse
 
 
 def grad_pass(prog: A.Program) -> int:
@@ -149,14 +150,18 @@ def _rewrite_in_expr(expr: A.Expr, fn_by_name: dict[str, A.FnDecl],
             new_args.append(na)
             c2 += ca
 
-        # Now check if the (possibly-rewritten) call is grad(f) or grad(f, n)
-        if (isinstance(new_callee, A.Name) and new_callee.name == "grad"
+        # Now check if the (possibly-rewritten) call is grad(f) / grad(f, n)
+        # or grad_rev(f) / grad_rev(f, n).
+        if (isinstance(new_callee, A.Name)
+                and new_callee.name in ("grad", "grad_rev")
                 and len(new_args) in (1, 2)
                 and isinstance(new_args[0], A.Name)
                 and new_args[0].name in fn_by_name):
             target = fn_by_name[new_args[0].name]
-            param_idx = _extract_param_idx_from_args(new_args, target)
-            grad_fn = _generate_grad_fn(target, param_idx)
+            param_idx = _extract_param_idx_from_args(new_args, target,
+                                                      kind=new_callee.name)
+            mode = "reverse" if new_callee.name == "grad_rev" else "forward"
+            grad_fn = _generate_grad_fn(target, param_idx, mode=mode)
             if grad_fn is not None:
                 # Don't add duplicates if grad(f, n) is called multiple times
                 if grad_fn.name not in fn_by_name:
@@ -205,11 +210,12 @@ def _rewrite_in_expr(expr: A.Expr, fn_by_name: dict[str, A.FnDecl],
     return (expr, count)
 
 
-def _extract_param_idx_from_args(args: list[A.Expr], target: A.FnDecl) -> int:
-    """Pull the param index from `grad(f, n)` args, or default to 0 for
-    single-param functions. Multi-param functions REQUIRE an explicit index
-    — silently differentiating only param 0 of a multi-param function is a
-    correctness footgun.
+def _extract_param_idx_from_args(args: list[A.Expr], target: A.FnDecl,
+                                  kind: str = "grad") -> int:
+    """Pull the param index from `grad(f, n)` / `grad_rev(f, n)` args, or
+    default to 0 for single-param functions. Multi-param functions REQUIRE
+    an explicit index — silently differentiating only param 0 of a
+    multi-param function is a correctness footgun.
 
     Raises ValueError on bad input so the user sees the problem, instead of
     getting a silently-wrong gradient.
@@ -217,38 +223,52 @@ def _extract_param_idx_from_args(args: list[A.Expr], target: A.FnDecl) -> int:
     if len(args) == 1:
         if len(target.params) > 1:
             raise ValueError(
-                f"grad({target.name}) is ambiguous: {target.name} has "
-                f"{len(target.params)} parameters. Use grad({target.name}, n) "
+                f"{kind}({target.name}) is ambiguous: {target.name} has "
+                f"{len(target.params)} parameters. Use {kind}({target.name}, n) "
                 f"to choose which parameter to differentiate w.r.t. "
                 f"(0-indexed)."
             )
         return 0
-    # Two args: grad(f, n) — n must be a non-negative IntLit in range
+    # Two args: kind(f, n) — n must be a non-negative IntLit in range
     idx_arg = args[1]
     if not isinstance(idx_arg, A.IntLit):
         raise ValueError(
-            f"grad({target.name}, n): the index n must be a literal integer, "
+            f"{kind}({target.name}, n): the index n must be a literal integer, "
             f"got {type(idx_arg).__name__}."
         )
     idx = idx_arg.value
     if idx < 0 or idx >= len(target.params):
         raise ValueError(
-            f"grad({target.name}, {idx}): index out of range "
+            f"{kind}({target.name}, {idx}): index out of range "
             f"(function has {len(target.params)} parameter(s))."
         )
     return idx
 
 
-def _generate_grad_fn(fn: A.FnDecl, param_idx: int = 0) -> A.FnDecl | None:
-    """Build a `<fn.name>__grad_<n>` FnDecl whose body is the derivative of
-    `fn`'s body w.r.t. parameter `param_idx`. For single-param functions the
-    name is shortened to `<fn.name>__grad` for backwards compatibility."""
+def _generate_grad_fn(fn: A.FnDecl, param_idx: int = 0,
+                       mode: str = "forward") -> A.FnDecl | None:
+    """Build a `<fn.name>__grad_<n>` (or `__rgrad_<n>`) FnDecl whose body is
+    the derivative of `fn`'s body w.r.t. parameter `param_idx`. For
+    single-param functions the name is shortened to `__grad` / `__rgrad`.
+
+    `mode` selects the AD engine: "forward" (autodiff.differentiate) or
+    "reverse" (autodiff_reverse.differentiate_reverse). Both produce the
+    same gradient for our supported expression set; reverse-mode is
+    structured to extend cleanly to multi-output later.
+    """
     if not fn.params:
         return None
     if param_idx < 0 or param_idx >= len(fn.params):
         return None
     var = fn.params[param_idx].name
-    deriv = differentiate(fn.body, var)
+    if mode == "reverse":
+        # Reverse-mode: get the gradient w.r.t. the chosen parameter from
+        # the dict of all gradients. The other entries are discarded; the
+        # multi-output API will surface them when added.
+        all_grads = differentiate_reverse(fn.body, [var])
+        deriv = all_grads[var]
+    else:
+        deriv = differentiate(fn.body, var)
     # Wrap the derivative expression in a block (the FnDecl expects a Block body)
     new_body = A.Block(span=fn.body.span, stmts=[], final_expr=deriv)
 
@@ -259,7 +279,8 @@ def _generate_grad_fn(fn: A.FnDecl, param_idx: int = 0) -> A.FnDecl | None:
         for p in fn.params
     ]
 
-    suffix = "__grad" if len(fn.params) == 1 else f"__grad_{param_idx}"
+    suffix_base = "__grad" if mode == "forward" else "__rgrad"
+    suffix = suffix_base if len(fn.params) == 1 else f"{suffix_base}_{param_idx}"
     return A.FnDecl(
         span=fn.span,
         name=f"{fn.name}{suffix}",

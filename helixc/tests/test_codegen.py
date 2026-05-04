@@ -690,6 +690,123 @@ def test_grad_grad_quadratic():
     assert compile_and_run(src) == 42
 
 
+# ============================================================================
+# Reverse-mode AD via grad_rev(f) / grad_rev(f, n)
+# ============================================================================
+def test_grad_rev_simple_quadratic():
+    # d(x*x)/dx at x=21 = 42, computed via reverse-mode
+    src = """
+    fn loss(x: f32) -> f32 { x * x }
+    fn main() -> i32 {
+        grad_rev(loss)(21.0) as i32
+    }
+    """
+    assert compile_and_run(src) == 42
+
+
+def test_grad_rev_linear_two_params():
+    # d(3x + 5y)/dx = 3 (constant); call at x=0 -> 3; +39 = 42
+    src = """
+    fn linear(x: f32, y: f32) -> f32 { 3.0 * x + 5.0 * y }
+    fn main() -> i32 {
+        let gx = grad_rev(linear, 0)(0.0, 0.0);
+        let gy = grad_rev(linear, 1)(0.0, 0.0);
+        (gx + gy + 34.0) as i32
+    }
+    """
+    # gx=3, gy=5, +34 = 42
+    assert compile_and_run(src) == 42
+
+
+def test_grad_rev_sharing_via_let():
+    # f(x) = let a = x+1; let b = x+2; a*b
+    # f(3) = 4*5 = 20; ∂f/∂x = (x+2) + (x+1) = 2x+3; at x=3 -> 9
+    # 9 + 33 = 42
+    src = """
+    fn f(x: f32) -> f32 {
+        let a = x + 1.0;
+        let b = x + 2.0;
+        a * b
+    }
+    fn main() -> i32 {
+        let g = grad_rev(f)(3.0);
+        (g + 33.0) as i32
+    }
+    """
+    assert compile_and_run(src) == 42
+
+
+def test_grad_rev_equivalent_to_grad_for_simple_cases():
+    # For pure expressions both engines should produce the same numeric result.
+    src_fwd = """
+    fn f(x: f32, y: f32) -> f32 { x * x + 2.0 * x * y + y * y }
+    fn main() -> i32 {
+        // ∂f/∂x at (3, 4) = 2x + 2y = 14
+        let g = grad(f, 0)(3.0, 4.0);
+        (g + 28.0) as i32
+    }
+    """
+    src_rev = """
+    fn f(x: f32, y: f32) -> f32 { x * x + 2.0 * x * y + y * y }
+    fn main() -> i32 {
+        let g = grad_rev(f, 0)(3.0, 4.0);
+        (g + 28.0) as i32
+    }
+    """
+    fwd = compile_and_run(src_fwd)
+    rev = compile_and_run(src_rev)
+    assert fwd == rev == 42, f"forward={fwd}, reverse={rev}"
+
+
+def test_grad_rev_multi_param_without_index_errors():
+    # grad_rev(f) on multi-param must raise, just like grad
+    src = """
+    fn f(x: f32, y: f32) -> f32 { x + y }
+    fn main() -> i32 {
+        let g = grad_rev(f)(0.0, 0.0);
+        g as i32
+    }
+    """
+    try:
+        compile_and_run(src)
+    except ValueError as e:
+        assert "ambiguous" in str(e)
+        return
+    raise AssertionError("expected grad_rev(multi_param) to error")
+
+
+def test_grad_through_if_takes_correct_branch():
+    # f(x) = if x > 0 then x*x else x*3
+    # ∂f/∂x at x=5 = 2x = 10. (Was previously broken: the autodiff would
+    # always take the then branch's derivative even at x=-1, ignoring else.)
+    src = """
+    fn f(x: f32) -> f32 {
+        if x > 0.0 { x * x } else { x * 3.0 }
+    }
+    fn main() -> i32 {
+        let g = grad(f)(5.0);
+        (g + 32.0) as i32
+    }
+    """
+    # 10 + 32 = 42
+    assert compile_and_run(src) == 42
+
+
+def test_grad_through_if_else_branch():
+    # Same f as above. At x=-1 we should hit the else branch: ∂(x*3)/∂x = 3.
+    # 3 + 39 = 42
+    src = """
+    fn f(x: f32) -> f32 {
+        if x > 0.0 { x * x } else { x * 3.0 }
+    }
+    fn main() -> i32 {
+        let g = grad(f)(-1.0);
+        (g + 39.0) as i32
+    }
+    """
+    assert compile_and_run(src) == 42
+
+
 def test_real_matmul_3x3_via_arrays():
     # 3x3 matmul: c[i][j] = sum_k a[i][k] * b[k][j]
     # We use flat 9-element arrays with row-major indexing: a[i*3+j]
