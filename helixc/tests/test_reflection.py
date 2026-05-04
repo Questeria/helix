@@ -142,6 +142,36 @@ def test_flagship_self_improving_agent_example():
     assert compile_and_run(src) == 42
 
 
+def test_splice_oob_handle_returns_zero_not_crash():
+    # A negative handle would, without bounds-check, do a wild read into
+    # code memory. The bounds check turns OOB into a clean 0 read.
+    src = """
+    fn always_yes(h: i32, v: i32) -> i32 { 1 }
+    fn main() -> i32 {
+        let bad_handle = -1;
+        let v = splice(bad_handle);
+        // v must be 0 (OOB safe path); add 42 for the success exit code.
+        v + 42
+    }
+    """
+    assert compile_and_run(src) == 42
+
+
+def test_modify_oob_handle_does_not_write():
+    # An out-of-range handle must not be allowed to write past the cell array.
+    # MODIFY returns 0 for OOB without calling the verifier.
+    src = """
+    fn always_yes(h: i32, v: i32) -> i32 { 1 }
+    fn main() -> i32 {
+        // 100 is way past HELIX_NUM_CELLS (= 64) — OOB.
+        let r = modify(100, 999, always_yes);
+        // r must be 0 (rejected); add 42.
+        r + 42
+    }
+    """
+    assert compile_and_run(src) == 42
+
+
 def test_verifier_can_bound_state():
     # An agent learns by gradient descent; verifier ensures the state
     # never exceeds a safe range. This is the AGI demo in miniature.

@@ -87,6 +87,12 @@ def callees(fn: tir.FnIR) -> set[str]:
                     out.add(target)
                 else:
                     out.add("<indirect>")
+            elif op.kind == tir.OpKind.MODIFY:
+                # Verifier functions called via MODIFY's verifier_fn attr
+                # contribute to this function's effect closure.
+                vfn = op.attrs.get("verifier_fn")
+                if isinstance(vfn, str):
+                    out.add(vfn)
     return out
 
 

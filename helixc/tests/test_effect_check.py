@@ -116,6 +116,33 @@ def test_verify_module_passes_on_clean_module():
     verify_module(mod)  # must not raise
 
 
+def test_verifier_effects_propagate_to_caller_via_modify():
+    # If a function uses modify(h, v, my_verifier) and my_verifier transitively
+    # has effect "io", the caller's closure must include "io" — otherwise a
+    # @pure caller could sneak I/O via the verifier.
+    src = """
+    fn shouts() -> i32 {
+        print_int(7);
+        1
+    }
+    fn my_verifier(h: i32, v: i32) -> i32 {
+        shouts()
+    }
+    @pure fn caller() -> i32 {
+        let h = quote(0);
+        modify(h, 1, my_verifier);
+        0
+    }
+    fn main() -> i32 { caller() }
+    """
+    mod = lower_only(src)
+    errs = check_module(mod)
+    # caller is @pure; its closure should now include the verifier's effects
+    # (which include "unknown" from print_int being unresolved). Earlier this
+    # was missed because callees() only inspected CALL ops.
+    assert any("@pure" in e and "caller" in e for e in errs), f"got {errs}"
+
+
 def test_recursive_pure_function_has_empty_closure():
     src = """
     @pure fn fact(n: i32) -> i32 {

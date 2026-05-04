@@ -447,6 +447,12 @@ class Asm:
     def setle_al(self) -> None:   self.b.emit(0x0F, 0x9E, 0xC0)
     def setg_al(self) -> None:    self.b.emit(0x0F, 0x9F, 0xC0)
     def setge_al(self) -> None:   self.b.emit(0x0F, 0x9D, 0xC0)
+    # Unsigned variants (used for float compares: ucomiss sets CF/ZF in the
+    # unsigned-compare sense — CF=1 when xmm0 < xmm1).
+    def seta_al(self) -> None:    self.b.emit(0x0F, 0x97, 0xC0)
+    def setae_al(self) -> None:   self.b.emit(0x0F, 0x93, 0xC0)
+    def setb_al(self) -> None:    self.b.emit(0x0F, 0x92, 0xC0)
+    def setbe_al(self) -> None:   self.b.emit(0x0F, 0x96, 0xC0)
 
     def movzx_eax_al(self) -> None:
         # 0F B6 C0   movzx eax, al
@@ -751,8 +757,16 @@ class FnCompiler:
             self.asm.neg_eax()
             self.asm.mov_mem_rbp_eax(res_slot)
             return
-        # Comparisons
-        cmp_setters = {
+        # Comparisons. Integer and float paths are different:
+        #   integer: cmp eax, ecx + signed setcc (setl/setg/...)
+        #   float:   ucomiss xmm0, xmm1 + unsigned setcc (setb/seta/...).
+        # The float path uses unsigned condition codes because ucomiss writes
+        # CF=1 when xmm0 < xmm1 (and CF=0 when xmm0 >= xmm1) — i.e. the
+        # below/above semantics of unsigned cmp. The integer path's signed
+        # setcc on raw float bit patterns silently miscompiled negative-
+        # value compares (e.g. -2.0 < -0.001 returned false because the
+        # integer interpretation of those bit patterns reverses the order).
+        int_cmp_setters = {
             tir.OpKind.CMP_EQ: self.asm.sete_al,
             tir.OpKind.CMP_NE: self.asm.setne_al,
             tir.OpKind.CMP_LT: self.asm.setl_al,
@@ -760,14 +774,30 @@ class FnCompiler:
             tir.OpKind.CMP_GT: self.asm.setg_al,
             tir.OpKind.CMP_GE: self.asm.setge_al,
         }
-        if op.kind in cmp_setters:
+        float_cmp_setters = {
+            tir.OpKind.CMP_EQ: self.asm.sete_al,
+            tir.OpKind.CMP_NE: self.asm.setne_al,
+            tir.OpKind.CMP_LT: self.asm.setb_al,
+            tir.OpKind.CMP_LE: self.asm.setbe_al,
+            tir.OpKind.CMP_GT: self.asm.seta_al,
+            tir.OpKind.CMP_GE: self.asm.setae_al,
+        }
+        if op.kind in int_cmp_setters:
             l_slot = self._slot_of(op.operands[0])
             r_slot = self._slot_of(op.operands[1])
             res_slot = self._slot_of(op.results[0])
-            self.asm.mov_eax_mem_rbp(l_slot)
-            self.asm.mov_ecx_mem_rbp(r_slot)
-            self.asm.cmp_eax_ecx()
-            cmp_setters[op.kind]()
+            # Choose path by operand type, not result type (result is bool).
+            if (self._is_float_type(op.operands[0].ty) or
+                    self._is_float_type(op.operands[1].ty)):
+                self.asm.movss_xmm0_mem_rbp(l_slot)
+                self.asm.movss_xmm1_mem_rbp(r_slot)
+                self.asm.comiss_xmm0_xmm1()
+                float_cmp_setters[op.kind]()
+            else:
+                self.asm.mov_eax_mem_rbp(l_slot)
+                self.asm.mov_ecx_mem_rbp(r_slot)
+                self.asm.cmp_eax_ecx()
+                int_cmp_setters[op.kind]()
             self.asm.movzx_eax_al()
             self.asm.mov_mem_rbp_eax(res_slot)
             return
@@ -917,19 +947,50 @@ class FnCompiler:
             return
         if op.kind == tir.OpKind.SPLICE:
             # splice(handle): load the i64 value at __helix_cell_<handle>.
-            # Handle is dynamic (operand value), so we compute the address
-            # at runtime: lea rax, [rip + __helix_state_base]; mov rax, [rax + rcx*8].
+            # Handle is dynamic (runtime operand value); we sign-extend it
+            # to 64 bits then index the cell array. CRITICAL: a malicious
+            # or buggy handle outside [0, HELIX_NUM_CELLS) would read past
+            # the cells region into other code memory. We bounds-check
+            # before indexing and return 0 for OOB.
             in_slot = self._slot_of(op.operands[0])
             res_slot = self._slot_of(op.results[0])
-            # rcx = handle (as 64-bit; handle is i32, sign-extend)
+            buf = self.asm.b
+            # ecx = handle
             self.asm.mov_ecx_mem_rbp(in_slot)
+            # cmp ecx, 0   (83 F9 00) ; jl bad   (7C rel8)
+            buf.emit(0x83, 0xF9, 0x00)
+            buf.emit(0x7C, 0x00)
+            jl_off = buf.offset() - 1
+            jl_after = buf.offset()
+            # cmp ecx, HELIX_NUM_CELLS  (81 F9 imm32) ; jge bad  (7D rel8)
+            buf.emit(0x81, 0xF9)
+            buf.emit_bytes(struct.pack("<i", HELIX_NUM_CELLS))
+            buf.emit(0x7D, 0x00)
+            jge_off = buf.offset() - 1
+            jge_after = buf.offset()
+            # In-range path:
             # movsxd rcx, ecx
-            self.asm.b.emit(0x48, 0x63, 0xC9)
-            # rax = address of state base
+            buf.emit(0x48, 0x63, 0xC9)
             self.asm.lea_rax_rip_rel("__helix_state_base")
-            # rax = [rax + rcx*8]
             self.asm.mov_rax_mem_rax_rcx8()
-            # store rax low 32 bits to result slot (i32 result for now)
+            # jmp done
+            buf.emit(0xEB, 0x00)
+            jmp_done_off = buf.offset() - 1
+            jmp_done_after = buf.offset()
+            # bad: eax = 0 (and rax = 0 — write through eax suffices since
+            # mov eax, imm32 zero-extends into rax)
+            bad_addr = buf.offset()
+            self.asm.mov_eax_imm32(0)
+            done_addr = buf.offset()
+            # Patch jl→bad, jge→bad, jmp→done
+            for d, off, name in (
+                (bad_addr - jl_after, jl_off, "jl"),
+                (bad_addr - jge_after, jge_off, "jge"),
+                (done_addr - jmp_done_after, jmp_done_off, "jmp_done"),
+            ):
+                if not (-128 <= d <= 127):
+                    raise ValueError(f"SPLICE {name} disp out of rel8: {d}")
+                buf.bytes_[off] = d & 0xFF
             self.asm.mov_mem_rbp_eax(res_slot)
             return
         if op.kind == tir.OpKind.MODIFY:
@@ -957,7 +1018,20 @@ class FnCompiler:
                 return
 
             buf = self.asm.b
-            # Pass args to verifier: edi = handle, esi = new_value (System V)
+            # Bounds-check the handle BEFORE calling the verifier so that
+            # OOB never reaches the cell array. ecx = handle.
+            self.asm.mov_ecx_mem_rbp(handle_slot)
+            buf.emit(0x83, 0xF9, 0x00)        # cmp ecx, 0
+            buf.emit(0x7C, 0x00)              # jl bad
+            jl_off = buf.offset() - 1
+            jl_after = buf.offset()
+            buf.emit(0x81, 0xF9)              # cmp ecx, HELIX_NUM_CELLS
+            buf.emit_bytes(struct.pack("<i", HELIX_NUM_CELLS))
+            buf.emit(0x7D, 0x00)              # jge bad
+            jge_off = buf.offset() - 1
+            jge_after = buf.offset()
+
+            # In-range: pass args to verifier (edi=handle, esi=new_value)
             self.asm.mov_edi_mem_rbp(handle_slot)
             self.asm.mov_esi_mem_rbp(new_val_slot)
             self.asm.call_rel32(verifier_name)
@@ -987,19 +1061,36 @@ class FnCompiler:
             jmp_done_off = buf.offset() - 1
             jmp_done_after = buf.offset()
 
-            # skip_apply: eax = 0
+            # skip_apply: eax = 0  (verifier rejected)
             skip_addr = buf.offset()
+            self.asm.mov_eax_imm32(0)
+            # jmp done — share the OOB path's done since both produce eax=0
+            buf.emit(0xEB, 0x00)
+            skip_jmp_off = buf.offset() - 1
+            skip_jmp_after = buf.offset()
+
+            # bad (OOB handle): eax = 0
+            bad_addr = buf.offset()
             self.asm.mov_eax_imm32(0)
             done_addr = buf.offset()
 
-            # Patch je_off → skip_addr; jmp_done_off → done_addr
-            d_je = skip_addr - je_after
-            d_jmp = done_addr - jmp_done_after
-            for d, name in ((d_je, "je"), (d_jmp, "jmp_done")):
+            # Patch jumps:
+            #   je_off       → skip_addr  (verifier returned 0)
+            #   jmp_done_off → done_addr  (apply branch jumps over both fallbacks)
+            #   jl_off       → bad_addr   (handle < 0)
+            #   jge_off      → bad_addr   (handle >= NUM_CELLS)
+            #   skip_jmp_off → done_addr  (after eax=0, fall through to done)
+            jumps = (
+                (skip_addr - je_after, je_off, "je_skip"),
+                (done_addr - jmp_done_after, jmp_done_off, "jmp_done"),
+                (bad_addr - jl_after, jl_off, "jl_bad"),
+                (bad_addr - jge_after, jge_off, "jge_bad"),
+                (done_addr - skip_jmp_after, skip_jmp_off, "skip_to_done"),
+            )
+            for d, off, name in jumps:
                 if not (-128 <= d <= 127):
                     raise ValueError(f"MODIFY {name} disp out of rel8: {d}")
-            buf.bytes_[je_off] = d_je & 0xFF
-            buf.bytes_[jmp_done_off] = d_jmp & 0xFF
+                buf.bytes_[off] = d & 0xFF
 
             self.asm.mov_mem_rbp_eax(res_slot)
             return

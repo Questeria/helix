@@ -36,6 +36,12 @@ class Lowerer:
         self.array_scope: list[dict[str, tuple[tir.TIRType, int]]] = []
         # name -> FnIR (registered functions)
         self.functions: dict[str, tir.FnIR] = {}
+        # quote-handle assignment table: maps AST pretty-form -> unique cell
+        # index in [0, HELIX_NUM_CELLS). Sequential allocation prevents
+        # silent hash collisions; two quote() sites with the same AST share
+        # a cell, but two distinct ASTs always get distinct cells (until
+        # we run out and raise).
+        self._quote_handle_table: dict[str, int] = {}
 
     # ---- entry ----
     def lower(self) -> tir.Module:
@@ -556,14 +562,26 @@ class Lowerer:
         # AGI primitives
         if isinstance(expr, A.Quote):
             # quote { ... } captures the inner AST as a constant value of
-            # type AstNode. We represent AstNode as i64 — a hash/handle into
-            # an AST registry that the runtime / build-time tooling can
-            # inspect. For v0.1 we just hash the AST structure.
-            ast_handle = self._hash_ast(expr.inner)
+            # type AstNode. The handle is a stable cell index assigned by
+            # this lowerer — same AST → same cell, distinct ASTs → distinct
+            # cells (no hash-collision aliasing). Backed by HELIX_NUM_CELLS
+            # mutable cells in the binary.
+            from ..backend.x86_64 import HELIX_NUM_CELLS
+            key = _pretty(expr.inner)
+            if key not in self._quote_handle_table:
+                idx = len(self._quote_handle_table)
+                if idx >= HELIX_NUM_CELLS:
+                    raise ValueError(
+                        f"too many distinct quote() expressions: limit is "
+                        f"{HELIX_NUM_CELLS}; this AST is the {idx + 1}-th "
+                        f"distinct one"
+                    )
+                self._quote_handle_table[key] = idx
+            ast_handle = self._quote_handle_table[key]
             return self.builder.emit(tir.OpKind.QUOTE,
                                      result_ty=tir.TIRScalar("i64"),
                                      attrs={"ast_handle": ast_handle,
-                                            "ast_pretty": _pretty(expr.inner)})
+                                            "ast_pretty": key})
         if isinstance(expr, A.Splice):
             inner = self._lower_expr(expr.inner)
             if inner is None:
@@ -582,7 +600,8 @@ class Lowerer:
             if (isinstance(expr.verifier, A.Name)
                     and expr.verifier.name in self.functions
                     and self._lookup(expr.verifier.name) is None
-                    and self._lookup_mut(expr.verifier.name) is None):
+                    and self._lookup_mut(expr.verifier.name) is None
+                    and self._verifier_abi_matches(expr.verifier.name)):
                 attrs["verifier_fn"] = expr.verifier.name
                 verifier_v = self.builder.const_int(0)
                 return self.builder.emit(tir.OpKind.MODIFY, target, xform,
@@ -598,6 +617,24 @@ class Lowerer:
         """Compute a stable hash over an AST structure for QUOTE handles.
         For v0.1 we use Python's hash of a stringified form."""
         return abs(hash(_pretty(node))) & 0x7FFFFFFF
+
+    def _verifier_abi_matches(self, fn_name: str) -> bool:
+        """A verifier function must take exactly two i32 params and return
+        an integer. Otherwise the System V int-register call convention
+        used by MODIFY's call to the verifier doesn't apply (e.g. f32 args
+        would land in xmm0/xmm1 instead of edi/esi). When the ABI doesn't
+        match we fall back to the legacy verifier-as-runtime-value path."""
+        ir_fn = self.functions.get(fn_name)
+        if ir_fn is None or len(ir_fn.params) != 2:
+            return False
+        for p in ir_fn.params:
+            if not (isinstance(p.ty, tir.TIRScalar) and p.ty.name == "i32"):
+                return False
+        # Return type must also be a scalar int (i32 or compatible).
+        if not (isinstance(ir_fn.return_ty, tir.TIRScalar)
+                and ir_fn.return_ty.name in ("i32", "bool")):
+            return False
+        return True
 
 
 def _pretty(node: A.Expr | A.Block) -> str:

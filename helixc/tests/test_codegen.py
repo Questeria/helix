@@ -872,6 +872,21 @@ def test_idiv_normal_division_still_works():
     assert compile_and_run(src) == 42
 
 
+def test_float_compare_with_negative_values():
+    # Earlier the compiler used signed integer cmp on float bit patterns,
+    # silently miscompiling negative-value comparisons. Now uses ucomiss.
+    cases = [
+        ("fn main() -> i32 { let a = -2.0; if a < -0.001 { 42 } else { 0 } }", 42),
+        ("fn main() -> i32 { let a = -2.0; if a > -0.001 { 0 } else { 42 } }", 42),
+        ("fn main() -> i32 { let a = -5.0; let b = -10.0; if a > b { 42 } else { 0 } }", 42),
+        ("fn main() -> i32 { let a = -1.0; let b = -1.0; if a == b { 42 } else { 0 } }", 42),
+        ("fn main() -> i32 { let a = -1.5; let b = 2.5; if a < b { 42 } else { 0 } }", 42),
+    ]
+    for src, expected in cases:
+        got = compile_and_run(src)
+        assert got == expected, f"src={src!r}: got {got}, expected {expected}"
+
+
 def test_real_matmul_3x3_via_arrays():
     # 3x3 matmul: c[i][j] = sum_k a[i][k] * b[k][j]
     # We use flat 9-element arrays with row-major indexing: a[i*3+j]
