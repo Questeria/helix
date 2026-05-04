@@ -60,15 +60,18 @@ def _try_algebraic_identity(op: tir.Op, defs: dict,
             # left alone to preserve IEEE-754 semantics. Only safe when
             # we can statically rule out NaN, which we can't here.
 
-    # x - x = 0 (same SSA value on both sides)
+    # x - x = 0 (same SSA value on both sides). Only safe for INTEGERS:
+    # for floats, NaN - NaN = NaN (not 0.0), and we can't statically
+    # prove the operand isn't NaN.
     if op.kind == tir.OpKind.SUB and len(op.operands) == 2 \
             and op.operands[0].id == op.operands[1].id:
         ty = op.operands[0].ty
-        if isinstance(ty, tir.TIRScalar) and ty.name in ("f32", "f64", "f16", "bf16"):
-            return tir.Op(kind=tir.OpKind.CONST_FLOAT, operands=[],
-                          results=[res], attrs={"value": 0.0}, span=op.span)
-        return tir.Op(kind=tir.OpKind.CONST_INT, operands=[],
-                      results=[res], attrs={"value": 0}, span=op.span)
+        is_float = isinstance(ty, tir.TIRScalar) and ty.name in (
+            "f32", "f64", "f16", "bf16"
+        )
+        if not is_float:
+            return tir.Op(kind=tir.OpKind.CONST_INT, operands=[],
+                          results=[res], attrs={"value": 0}, span=op.span)
 
     # x % 1 = 0 (integer modulo by 1 always 0)
     if op.kind == tir.OpKind.MOD and len(op.operands) == 2:

@@ -205,10 +205,12 @@ def _propagate(node: A.Expr, adj: A.Expr, acc: dict[str, list[A.Expr]]) -> None:
                 _propagate(u, new_adj, acc)
                 return
             if name == "__tanh":
-                # d(tanh(u))/dx = (1 - tanh(u)^2) * du
-                t = call1("__tanh", copy.deepcopy(u))
-                t_sq = A.Binary(span=node.span, op="*",
-                                left=t, right=copy.deepcopy(t))
+                # d(tanh(u))/dx = (1 - tanh(u)^2) * du. Two independent
+                # tanh(u) calls — each with its own deepcopy of u — so
+                # the square doesn't share AST structure between halves.
+                t1 = call1("__tanh", copy.deepcopy(u))
+                t2 = call1("__tanh", copy.deepcopy(u))
+                t_sq = A.Binary(span=node.span, op="*", left=t1, right=t2)
                 one_minus = A.Binary(span=node.span, op="-",
                                      left=A.FloatLit(span=node.span, value=1.0),
                                      right=t_sq)

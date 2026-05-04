@@ -32,12 +32,21 @@
 //   ln(2) ≈ 0.69314718
 //   1/ln(2) ≈ 1.44269504
 @pure fn __exp(x: f32) -> f32 {
-    // k = round(x / ln2). We use floor(x*1.44269504 + 0.5) as i32.
-    let k_f = x * 1.44269504 + 0.5;
-    let k = (k_f as i32) - if k_f < 0.0 { 1 } else { 0 };
-    let k_corrected = if (k as f32) > k_f { k - 1 } else { k };
+    // k = round(x / ln2). The cast `as i32` truncates toward zero, so for
+    // positive `x*1/ln2` we get the right answer adding 0.5 then casting;
+    // for negative `x*1/ln2` truncation toward zero gives the WRONG
+    // direction. We compute floor(x/ln2 + 0.5) by handling the two signs
+    // separately.
+    //   z = x * 1/ln2 + 0.5
+    //   if z >= 0: k = (z as i32)
+    //   if z <  0: k = (z as i32) - 1   if (z as i32) as f32 > z else (z as i32)
+    let z = x * 1.44269504 + 0.5;
+    let k_trunc = z as i32;
+    let k = if z >= 0.0 { k_trunc }
+            else { if (k_trunc as f32) > z { k_trunc - 1 } else { k_trunc } };
     // r = x - k*ln2
-    let r = x - (k_corrected as f32) * 0.69314718;
+    let r = x - (k as f32) * 0.69314718;
+    let k_corrected = k;
     // exp(r) via Taylor; accurate for |r| < ln2/2 ≈ 0.347
     let exp_r = __exp_taylor(r);
     // 2^k via the integer power loop (cap at ±48 to stay in f32 range).
@@ -140,18 +149,30 @@ fn __always_accept(h: i32, v: f32) -> i32 {
     if x > 0.0 { 1.0 } else { if x < 0.0 { 0.0 - 1.0 } else { 0.0 } }
 }
 
-// Floor: nearest integer ≤ x. Implemented via cast-and-correct since we
-// have no real floor instruction yet. Works for finite values in i32 range.
+// Floor: nearest integer ≤ x. Cast-and-correct via i32. For |x| outside
+// i32 range (~±2.1e9) the cast invokes UB; we guard by passing through
+// untouched (large floats are already integer-valued for any practical
+// purpose since float spacing exceeds 1.0 above 2^23).
 @pure fn __floor(x: f32) -> f32 {
-    let i = x as i32;
-    let f = i as f32;
-    if f > x { f - 1.0 } else { f }
+    if x > 2000000000.0 { x }
+    else { if x < 0.0 - 2000000000.0 { x }
+           else {
+               let i = x as i32;
+               let f = i as f32;
+               if f > x { f - 1.0 } else { f }
+           }
+    }
 }
 
 @pure fn __ceil(x: f32) -> f32 {
-    let i = x as i32;
-    let f = i as f32;
-    if f < x { f + 1.0 } else { f }
+    if x > 2000000000.0 { x }
+    else { if x < 0.0 - 2000000000.0 { x }
+           else {
+               let i = x as i32;
+               let f = i as f32;
+               if f < x { f + 1.0 } else { f }
+           }
+    }
 }
 
 // Integer power: x^n via iterative multiplication. Uses a loop bounded
@@ -190,8 +211,30 @@ fn __always_accept(h: i32, v: f32) -> i32 {
 
 // Softplus: smooth approximation of relu. Range: (0, ∞).
 //   softplus(x) = log(1 + exp(x))
+// __log is a 5-term Taylor around 1, accurate only for x ≈ 1 ⇒ this
+// formulation works only for very small x. For larger x the asymptotic
+// limit log(exp(x)) = x is exact to machine precision; for very negative
+// x, exp(x) ≈ 0 so softplus(x) ≈ exp(x). Saturate via the standard
+// numerical stable form: softplus(x) = max(x, 0) + log(1 + exp(-|x|)).
+// Since __log is only good near 1, we approximate log(1+y) ≈ y for very
+// small y (large |x|): the asymptote.
 @pure fn __softplus(x: f32) -> f32 {
-    __log(1.0 + __exp(x))
+    if x > 15.0 { x }
+    else { if x < 0.0 - 15.0 { __exp(x) }
+           else {
+               // |x| within the accurate range of __log(1+y) when
+               // y = exp(x) - 1 stays small. For x in [-1, 1], y is
+               // in [-0.63, 1.72] — passable. Outside [-1, 1] but
+               // within [-15, 15] we use the symmetric formulation:
+               //   softplus(x) = max(x, 0) + log(1 + exp(-|x|))
+               // and approximate log(1+y) ≈ y - y²/2 for the small y.
+               let abs_x = if x < 0.0 { 0.0 - x } else { x };
+               let y = __exp(0.0 - abs_x);
+               let log_1py = y - y * y * 0.5 + y * y * y * 0.33333333;
+               let pos_part = if x > 0.0 { x } else { 0.0 };
+               pos_part + log_1py
+           }
+    }
 }
 
 // SiLU / Swish: x * sigmoid(x). Used in modern transformers.
@@ -244,15 +287,14 @@ fn __always_accept(h: i32, v: f32) -> i32 {
 // =========================================================================
 
 // Small LCG sized to fit safely in i32 multiplication.
-// State range: [0, 32768). Period: 32768. Adequate for seeded
-// reproducibility in test programs; not strong enough for serious
-// statistical sampling. The previous version used a 48271×x multiply
-// which overflowed i32 for any seed > ~44k, silently corrupting the
-// stream. This version's 25173×x peaks at 25173×32767 ≈ 8.25e8 — well
-// under i32 max (2.15e9) — so the multiply is exact.
+// State range: [0, 32768). Period: at MOST 32768 — possibly less because
+// the 0-state is remapped to 1, which can collapse two trajectories into
+// one. Empirical period is verified by the corresponding test. Adequate
+// for seeded reproducibility in test programs; NOT strong enough for
+// statistical sampling. Previous 48271×x version overflowed i32 for any
+// seed > ~44k; the 25173×x multiply peaks at 8.25e8, well under i32 max.
 @pure fn __rand_step(s: i32) -> i32 {
-    // Park-Miller-style LCG with parameters from Numerical Recipes.
-    // s_{n+1} = (s_n * 25173 + 13849) mod 32768
+    // Numerical Recipes parameters: s_{n+1} = (s_n * 25173 + 13849) mod 32768
     let raw = s * 25173 + 13849;
     let m = raw % 32768;
     if m < 0 { m + 32768 } else { if m == 0 { 1 } else { m } }

@@ -139,10 +139,14 @@ def test_x_minus_x_int_folds():
     assert subs == 0
 
 
-def test_x_minus_x_float_folds():
-    mod = lower_and_fold("fn main() -> f32 { let x = 1.5; x - x }")
+def test_x_minus_x_float_NOT_folded_for_nan_safety():
+    # NaN - NaN = NaN, not 0.0. The algebraic identity fold is restricted
+    # to integers so this stays preserved at runtime. Using a function
+    # parameter (not a literal) so const-fold can't fold via numerical
+    # evaluation of the operands.
+    mod = lower_and_fold("fn main(x: f32) -> f32 { x - x }")
     subs = count_ops(mod, tir.OpKind.SUB)
-    assert subs == 0
+    assert subs == 1, f"float x-x must NOT fold (NaN-NaN=NaN); got {subs} SUBs"
 
 
 def test_x_mod_one_folds_to_zero():

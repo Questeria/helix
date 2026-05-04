@@ -68,8 +68,14 @@ def _inline_user_calls(expr: A.Expr, fn_table: dict[str, "A.FnDecl"],
     """
     import copy as _copy
 
+    # Functions with analytic AD chain rules in _diff_call_chain_rule /
+    # autodiff_reverse._propagate. Inlining these would force the AD
+    # engine to differentiate through their (potentially conditional)
+    # bodies instead of using the closed-form derivative — producing
+    # silently-wrong gradients when the body uses if/while.
     TRANSCENDENTALS = {"__exp", "__log", "__sin", "__cos", "__sqrt",
-                       "__relu", "__sigmoid"}
+                       "__relu", "__sigmoid", "__tanh", "__softplus",
+                       "__silu", "__abs", "__gelu"}
     visiting = visiting or frozenset()
 
     def go(e: A.Expr) -> A.Expr:
@@ -369,11 +375,15 @@ def _diff_call_chain_rule(call: A.Call, var: str,
                              left=A.FloatLit(span=span, value=1.0), right=s1)
         return mul(mul(s2, one_minus), du)
     if name == "__tanh":
-        # d(tanh(u))/dx = (1 - tanh(u)^2) * du/dx
+        # d(tanh(u))/dx = (1 - tanh(u)^2) * du/dx. Two distinct __tanh(u)
+        # call nodes (each with deep-copied u) so neither side of the
+        # square shares structure with the other — same protection used
+        # by __sigmoid below to survive in-place AST mutation by
+        # downstream passes.
         import copy as _copy
-        t = call1("__tanh", _copy.deepcopy(u))
-        t_sq = A.Binary(span=span, op="*", left=t,
-                        right=_copy.deepcopy(t))
+        t1 = call1("__tanh", _copy.deepcopy(u))
+        t2 = call1("__tanh", _copy.deepcopy(u))
+        t_sq = A.Binary(span=span, op="*", left=t1, right=t2)
         one_minus = A.Binary(span=span, op="-",
                              left=A.FloatLit(span=span, value=1.0), right=t_sq)
         return mul(one_minus, du)
