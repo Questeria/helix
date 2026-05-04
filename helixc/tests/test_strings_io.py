@@ -79,6 +79,35 @@ def test_write_file_creates_file():
     assert p.stdout == "test_content"
 
 
+def test_read_file_int_round_trips():
+    # Setup: write a known 4-byte integer to a temp file via WSL python.
+    setup = subprocess.run(
+        ["wsl", "--", "bash", "-c",
+         'python3 -c "open(\\"/tmp/helix_rt.bin\\", \\"wb\\").write((42).to_bytes(4, \\"little\\"))"'],
+        capture_output=True, text=True
+    )
+    assert setup.returncode == 0, setup.stderr
+
+    src = '''
+    fn main() -> i32 {
+        read_file_int("/tmp/helix_rt.bin")
+    }
+    '''
+    rc, _, _ = _build_and_run(src)
+    assert rc == 42
+
+
+def test_read_file_int_missing_file_returns_zero():
+    src = '''
+    fn main() -> i32 {
+        let r = read_file_int("/tmp/this_file_does_not_exist_xyz.bin");
+        r + 42  // r should be 0; result 42
+    }
+    '''
+    rc, _, _ = _build_and_run(src)
+    assert rc == 42
+
+
 def test_hello_world_example_runs():
     proj_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     p = os.path.join(proj_root, "helixc", "examples", "hello_world.hx")

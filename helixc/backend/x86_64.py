@@ -1108,6 +1108,87 @@ class FnCompiler:
                     self.asm.mov_mem_rbp_eax(res_slot)
                 return
 
+            if kind == "read_file_int":
+                # Opens path read-only, reads 4 bytes into a stack buffer,
+                # closes the fd, returns those 4 bytes interpreted as i32.
+                # On any error or short read, returns 0.
+                path_str = op.attrs["path"]
+                assert isinstance(path_str, str)
+                path_data = path_str.encode("utf-8") + b"\x00"
+                path_sym = f"__helix_path_{id(op):x}"
+                self._pending_strings.append((path_sym, path_data))
+                buf = self.asm.b
+
+                # ---- sys_open(path, O_RDONLY=0, mode=0) ----
+                buf.emit(0x48, 0x8D, 0x3D)  # lea rdi, [rip + path_sym]
+                off = buf.offset()
+                buf.emit_bytes(b"\x00\x00\x00\x00")
+                buf.fixups.append(Fixup(offset=off, target=path_sym,
+                                         size=4, rel_base=off + 4))
+                self.asm.mov_esi_imm32(0)      # O_RDONLY
+                self.asm.mov_edx_imm32(0)      # mode (ignored)
+                self.asm.mov_eax_imm32(2)      # sys_open
+                self.asm.syscall()
+                # rax = fd. Push rax (fd) onto stack.
+                buf.emit(0x50)
+                # Allocate 8 bytes on the stack for the read buffer
+                # (sub rsp, 8 — really 4 needed, but stay 8-aligned).
+                # 48 83 EC 08
+                buf.emit(0x48, 0x83, 0xEC, 0x08)
+                # Initialise buffer to 0 so a short read leaves the high
+                # bytes clean: mov qword [rsp], 0 → 48 C7 04 24 00 00 00 00
+                buf.emit(0x48, 0xC7, 0x04, 0x24, 0x00, 0x00, 0x00, 0x00)
+
+                # ---- read(fd, buf=rsp, 4) ----
+                # mov rdi, [rsp+8]  (fd is below the buffer)
+                buf.emit(0x48, 0x8B, 0x7C, 0x24, 0x08)
+                # mov rsi, rsp  (48 89 E6)
+                buf.emit(0x48, 0x89, 0xE6)
+                self.asm.mov_edx_imm32(4)
+                self.asm.mov_eax_imm32(0)  # sys_read
+                self.asm.syscall()
+                # rax = bytes read. Push to stack — Linux syscalls clobber
+                # rcx and r11, so we cannot use a register to hold this
+                # across the upcoming close syscall.
+                buf.emit(0x50)  # push rax  → stack: [bytes_read, buf, fd]
+
+                # ---- close(fd) ----
+                # mov rdi, [rsp+16]  (fd is now two slots down)
+                buf.emit(0x48, 0x8B, 0x7C, 0x24, 0x10)
+                self.asm.mov_eax_imm32(3)  # sys_close
+                self.asm.syscall()
+
+                # Pop bytes_read into rcx for the comparison.
+                # pop rcx (= 8B C1)... actually pop rcx is just 0x59
+                buf.emit(0x59)
+                # If read returned exactly 4, eax = [rsp]; else eax = 0.
+                # mov eax, [rsp]   (8B 04 24)
+                buf.emit(0x8B, 0x04, 0x24)
+                # cmp ecx, 4   (83 F9 04)
+                buf.emit(0x83, 0xF9, 0x04)
+                # je keep   (74 rel8)
+                buf.emit(0x74, 0x00)
+                je_off = buf.offset() - 1
+                je_after = buf.offset()
+                # short / error: eax = 0
+                self.asm.mov_eax_imm32(0)
+                keep_addr = buf.offset()
+                d = keep_addr - je_after
+                if not (-128 <= d <= 127):
+                    raise ValueError(f"read_file_int je disp out of rel8: {d}")
+                buf.bytes_[je_off] = d & 0xFF
+
+                # Tear down stack: pop the 8-byte buffer + the fd push.
+                # add rsp, 8  (buffer)  →  48 83 C4 08
+                buf.emit(0x48, 0x83, 0xC4, 0x08)
+                # add rsp, 8  (fd push) →  48 83 C4 08
+                buf.emit(0x48, 0x83, 0xC4, 0x08)
+
+                if op.results:
+                    res_slot = self._slot_of(op.results[0])
+                    self.asm.mov_mem_rbp_eax(res_slot)
+                return
+
             # Default: print_str — write the string bytes to stdout.
             text = op.attrs.get("text", "")
             assert isinstance(text, str)

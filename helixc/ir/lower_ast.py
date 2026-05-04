@@ -313,6 +313,18 @@ class Lowerer:
                                           attrs={"_kind": "write_file",
                                                   "path": expr.args[0].value,
                                                   "content": expr.args[1].value})
+            # Intercept read_file_int(path_literal) — opens the file,
+            # reads the first 4 bytes interpreted as i32 little-endian,
+            # closes the fd. Returns the i32 value on success or 0 on
+            # any error / short read.
+            if (isinstance(expr.callee, A.Name)
+                    and expr.callee.name == "read_file_int"
+                    and len(expr.args) == 1
+                    and isinstance(expr.args[0], A.StrLit)):
+                return self.builder.emit(tir.OpKind.PRINT,
+                                          result_ty=tir.TIRScalar("i32"),
+                                          attrs={"_kind": "read_file_int",
+                                                  "path": expr.args[0].value})
             # Intercept built-in float-cell reflection ops before treating as
             # an ordinary function call.
             if (isinstance(expr.callee, A.Name)
