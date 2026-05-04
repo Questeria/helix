@@ -1031,6 +1031,35 @@ def test_chained_ors_normalized():
     assert code == 42, f"expected 42 (r should be a strict bool 1), got {code}"
 
 
+def test_hbs_sample_loss_fn_runs():
+    """HBS-only sample using stdlib (loss + manual grad + 5 SGD steps).
+    From w0=0.0 with lr=0.1 toward a local min near w=3.0 — after 5
+    iterations we expect convergence-direction-correct, not yet at min.
+    Exit is `(w5 * 10) as i32`. Empirically lands at 20."""
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    sample_path = os.path.join(proj_root, "helixc", "examples",
+                               "hbs_sample_loss_fn.hx")
+    with open(sample_path, "r", encoding="utf-8") as f:
+        src = f.read()
+    code = compile_and_run(src)
+    # Allow a small range to absorb stdlib precision drift; the SGD path
+    # should always yield 0 < w5 < 3 after 5 steps from w0=0 with lr=0.1.
+    assert 1 <= code <= 30, f"expected convergence-direction value 1..=30, got {code}"
+
+
+def test_hbs_sample_calculator_runs():
+    """HBS-only sample (helixc/examples/hbs_sample_calculator.hx) — 9 fns,
+    pattern matching with guards/or-patterns/ranges, totality-checked
+    recursion (factorial, fib, sum_to_n). Exits 47 by design."""
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    sample_path = os.path.join(proj_root, "helixc", "examples",
+                               "hbs_sample_calculator.hx")
+    with open(sample_path, "r", encoding="utf-8") as f:
+        src = f.read()
+    code = compile_and_run(src)
+    assert code == 47, f"expected 47, got {code}"
+
+
 def test_check_cli_clean_file():
     """`python -m helixc.check <good.hx>` exits 0 with summary lines."""
     proj_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
