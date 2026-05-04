@@ -908,6 +908,7 @@ if __name__ == "__main__":
     import sys
     from ..frontend.parser import parse
     from ..frontend.typecheck import typecheck
+    from ..frontend.grad_pass import grad_pass
     from ..ir.lower_ast import lower
     from ..ir.passes.const_fold import fold_module
     from ..ir.passes.dce import dce_module
@@ -922,6 +923,11 @@ if __name__ == "__main__":
     with open(sys.argv[1]) as f:
         src = f.read()
     prog = parse(src)
+    # Pre-pass: rewrite `grad(f)` calls into references to generated f__grad
+    # functions. Adds new FnDecls to the program.
+    grad_count = grad_pass(prog)
+    if grad_count > 0:
+        print(f"grad: {grad_count} grad(f) call(s) rewritten", file=sys.stderr)
     # Type-check; print as warnings, abort if --strict
     type_errors = typecheck(prog)
     if type_errors:
