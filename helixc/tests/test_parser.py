@@ -439,6 +439,41 @@ def test_agent_alongside_fn():
     assert isinstance(p.items[1], ast.FnDecl)
 
 
+def test_struct_lit_parses():
+    """Struct literal `Point { x: 10, y: 20 }` parses to StructLit."""
+    src = """
+    struct Point { x: i32, y: i32 }
+    fn main() -> i32 {
+        let p = Point { x: 10, y: 20 };
+        p.x
+    }
+    """
+    prog = parse(src)
+    fn = next(it for it in prog.items if isinstance(it, ast.FnDecl))
+    let_stmt = fn.body.stmts[0]
+    assert isinstance(let_stmt, ast.Let)
+    assert isinstance(let_stmt.value, ast.StructLit)
+    assert let_stmt.value.name == "Point"
+    assert len(let_stmt.value.fields) == 2
+    assert let_stmt.value.fields[0][0] == "x"
+    assert let_stmt.value.fields[1][0] == "y"
+
+
+def test_struct_lit_disambiguated_from_block():
+    """`if cond { ... }` should not be parsed as a struct literal even
+    though the syntax overlaps. Disambig: struct lit requires `{ IDENT :`."""
+    src = """
+    fn main() -> i32 {
+        if true { 42 } else { 0 }
+    }
+    """
+    prog = parse(src)
+    fn = next(it for it in prog.items if isinstance(it, ast.FnDecl))
+    if_expr = fn.body.final_expr
+    assert isinstance(if_expr, ast.If), \
+        f"expected If, got {type(if_expr).__name__}"
+
+
 def test_partial_attribute_parses():
     """`@partial` attribute should appear in FnDecl.attrs."""
     src = """

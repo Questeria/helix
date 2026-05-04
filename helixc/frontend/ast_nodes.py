@@ -178,6 +178,15 @@ class ArrayLit(Expr):
 
 
 @dataclass
+class StructLit(Expr):
+    """`Point { x: 1, y: 2 }` — struct construction by name + named fields.
+    Field order in `fields` matches source order; typecheck reorders to
+    the declaration's order and verifies all required fields are present."""
+    name: str
+    fields: list[tuple[str, "Expr"]]
+
+
+@dataclass
 class Block(Expr):
     """{ stmt; stmt; expr? }"""
     stmts: list["Stmt"]

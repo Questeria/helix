@@ -904,6 +904,14 @@ class Parser:
         # Identifier (also accept some "type" keywords as identifiers in expr context — gpu(0), cpu, etc.)
         if t.kind == T.IDENT:
             self.i += 1
+            # Struct literal: `Name { f: v, ... }`. Disambiguate against the
+            # ambiguous "Name followed by a block" by requiring `{` then
+            # `IDENT :` (i.e., named-field syntax). If the brace contents
+            # don't look like fields, fall through to treating Name as a
+            # bare identifier (the surrounding parser may then consume the
+            # brace as a separate block).
+            if self._at(T.LBRACE) and self._peek_struct_lit_start():
+                return self._parse_struct_lit_after_name(t.value, t)
             return ast.Name(span=self._span_of(t), name=t.value)
         # Allow type-like keywords as expression names: tensor::zeros(), gpu(0),
         # cpu, smem, reg, hbm, tmem (device/memspace markers), grad/jvp/vjp/vmap (transforms)
@@ -917,6 +925,47 @@ class Parser:
             return ast.Name(span=self._span_of(t), name=t.value)
 
         raise ParseError("expected expression", t)
+
+    def _peek_struct_lit_start(self) -> bool:
+        """Are we positioned at `{ IDENT :` (the start of a struct literal)?
+        Lookahead-only; never advances `self.i`. Also accepts an empty brace
+        `{ }` (a unit-struct literal). Returns False otherwise so the brace
+        can be reinterpreted as a regular block."""
+        if not self._at(T.LBRACE):
+            return False
+        save_i = self.i
+        try:
+            self.i += 1  # consume '{'
+            if self._at(T.RBRACE):
+                # Empty `{}` could be a unit struct or an empty block. Treat
+                # as block by default (less surprising); user can write
+                # `Foo {}` explicitly later if we want literal-empty-struct.
+                return False
+            if self._at(T.IDENT):
+                save2 = self.i
+                self.i += 1
+                ok = self._at(T.COLON)
+                self.i = save2
+                return ok
+            return False
+        finally:
+            self.i = save_i
+
+    def _parse_struct_lit_after_name(self, name: str,
+                                      name_tok) -> ast.StructLit:
+        """We've consumed the IDENT; now consume `{ field: val, ... }`."""
+        self._eat(T.LBRACE)
+        fields: list[tuple[str, ast.Expr]] = []
+        while not self._at(T.RBRACE):
+            fname = self._eat(T.IDENT).value
+            self._eat(T.COLON)
+            fval = self._parse_expr()
+            fields.append((fname, fval))
+            if not self._match(T.COMMA):
+                break
+        self._eat(T.RBRACE)
+        return ast.StructLit(span=self._span_of(name_tok), name=name,
+                             fields=fields)
 
     def _parse_if_expr(self) -> ast.If:
         kw = self._eat(T.KW_IF)

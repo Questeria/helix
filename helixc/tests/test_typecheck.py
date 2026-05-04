@@ -456,6 +456,60 @@ def test_learn_to_wrong_arity():
 # ============================================================================
 # Test runner
 # ============================================================================
+def test_struct_lit_typechecks_clean():
+    """A well-formed struct literal should typecheck without errors."""
+    src = """
+    struct Point { x: i32, y: i32 }
+    fn main() -> i32 {
+        let p = Point { x: 10, y: 20 };
+        p.x
+    }
+    """
+    errs = check(src)
+    assert errs == [], f"unexpected errors: {errs}"
+
+
+def test_struct_lit_missing_field_errors():
+    """Forgetting a field surfaces a 'missing field(s)' error."""
+    src = """
+    struct Point { x: i32, y: i32 }
+    fn main() -> i32 {
+        let p = Point { x: 10 };
+        p.x
+    }
+    """
+    errs = check(src)
+    assert any("missing field" in s and "y" in s for s in errs), \
+        f"expected missing-field error, got {errs}"
+
+
+def test_struct_lit_unknown_field_errors():
+    """A field not in the decl surfaces an 'unknown field(s)' error."""
+    src = """
+    struct Point { x: i32, y: i32 }
+    fn main() -> i32 {
+        let p = Point { x: 10, y: 20, z: 30 };
+        p.x
+    }
+    """
+    errs = check(src)
+    assert any("unknown field" in s and "z" in s for s in errs), \
+        f"expected unknown-field error, got {errs}"
+
+
+def test_struct_lit_unknown_struct_errors():
+    """A struct lit referencing an undeclared struct surfaces an error."""
+    src = """
+    fn main() -> i32 {
+        let p = Nope { x: 10 };
+        0
+    }
+    """
+    errs = check(src)
+    assert any("unknown struct" in s for s in errs), \
+        f"expected unknown-struct error, got {errs}"
+
+
 def test_call_did_you_mean_suggests_builtin():
     """Misspelled stdlib call: `__exf(x)` should suggest `__exp`."""
     src = """

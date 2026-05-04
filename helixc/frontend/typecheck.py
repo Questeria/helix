@@ -241,6 +241,13 @@ class TypeChecker:
                 except TypeError_ as e:
                     self.errors.append(e)
 
+        # Pass 1.5: index struct decls so StructLit can type-check
+        # against them (and so Field access can know field types).
+        self._struct_decls: dict[str, A.StructDecl] = {}
+        for item in self.prog.items:
+            if isinstance(item, A.StructDecl):
+                self._struct_decls[item.name] = item
+
         # Pass 2: check function bodies
         for item in self.prog.items:
             if isinstance(item, A.FnDecl):
@@ -898,6 +905,45 @@ class TypeChecker:
             ts = [self._check_expr(e, scope) for e in expr.elems]
             elem = ts[0] if ts else TyUnknown(hint="empty array")
             return TyArray(elem, TyPrim(f"size_{len(ts)}"))
+        if isinstance(expr, A.StructLit):
+            decl = getattr(self, "_struct_decls", {}).get(expr.name)
+            if decl is None:
+                self.errors.append(TypeError_(
+                    f"unknown struct {expr.name!r}", expr.span,
+                ))
+                # Still type-check the field values for downstream errors.
+                for _, v in expr.fields:
+                    self._check_expr(v, scope)
+                return TyUnknown(hint=f"struct {expr.name}")
+            # Verify every required field is present and no extras.
+            decl_fields = {p.name for p in decl.fields}
+            given_fields = {fname for fname, _ in expr.fields}
+            missing = decl_fields - given_fields
+            extra = given_fields - decl_fields
+            if missing:
+                self.errors.append(TypeError_(
+                    f"struct {expr.name!r}: missing field(s) "
+                    f"{sorted(missing)}", expr.span,
+                ))
+            if extra:
+                self.errors.append(TypeError_(
+                    f"struct {expr.name!r}: unknown field(s) "
+                    f"{sorted(extra)}", expr.span,
+                ))
+            # Type-check each given field's value against the declared type.
+            field_decl_by_name = {p.name: p for p in decl.fields}
+            for fname, fval in expr.fields:
+                v_ty = self._check_expr(fval, scope)
+                p = field_decl_by_name.get(fname)
+                if p is not None:
+                    expected = self._resolve_type(p.ty, scope)
+                    if not self._compatible(v_ty, expected):
+                        self.errors.append(TypeError_(
+                            f"struct {expr.name!r}.{fname}: expected "
+                            f"{self._fmt(expected)}, got {self._fmt(v_ty)}",
+                            fval.span,
+                        ))
+            return TyUnknown(hint=f"struct {expr.name}")
         if isinstance(expr, (A.Break, A.Continue, A.Return)):
             return TyUnit()
         if isinstance(expr, A.Cast):
