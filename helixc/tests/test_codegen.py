@@ -1342,6 +1342,18 @@ def test_stdlib_int_min_max_clamp():
     assert code == 18, f"expected 18 (3+5+10), got {code}"
 
 
+def test_hbs_sample_option_runs():
+    """HBS sample: Maybe<i32>-style enum + payload pattern extraction.
+    Extracts Some(40) + Some(2) = 42; also unpacks Pair::Cons(15, 25)."""
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    sample_path = os.path.join(proj_root, "helixc", "examples",
+                               "hbs_sample_option.hx")
+    with open(sample_path, "r", encoding="utf-8") as f:
+        src = f.read()
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
 def test_hbs_sample_tree_eval_runs():
     """HBS sample: tiny AST evaluator demonstrating enum-dispatch over
     node kinds. Computes (1+2)*7 = 21 inline by chaining match arms

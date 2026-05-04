@@ -91,11 +91,22 @@ Phase 2: migrate one pass at a time to Helix. Order suggested: DCE → const-fol
 
 ## What's verified today
 
-As of 2026-05-04 (commit `bbf7a05`):
-- AST hashing (`helixc.frontend.ast_hash.structural_hash`) covers all HBS expression types except `Quote`/`Splice`/`Modify` (those are reflection — OUT of HBS but we hash them anyway for content-addressing).
-- Pattern matching with all 7 sub-features (binders, exhaustiveness, guards, or-patterns, ranges, codegen, AD) — all FROZEN HBS.
-- Totality stub (`helixc.frontend.totality`) checks structural recursion for HBS-recursion shapes (`p - k`, `p / k`).
-- Test count: 440 (all green); 13 commits this session including the full pattern-matching epic.
+As of 2026-05-04 (commit `cc9c01f`):
+- AST hashing (`helixc.frontend.ast_hash.structural_hash`) covers all HBS expression types including Match, TupleLit, ArrayLit, Field, Range. `Quote`/`Splice`/`Modify` are reflection and OUT of HBS but hashed for content-addressing.
+- Pattern matching: all 7 sub-features (binders, exhaustiveness, guards, or-patterns, ranges, codegen, AD) plus payload-bearing variants (`Maybe::Some(x) => x`) and enum-variant exhaustiveness — all FROZEN HBS.
+- Structs: parse + typecheck + codegen + Field access + nested-struct flattening (TyStruct type tracking).
+- Tag-only enums + payload-bearing constructors: `Maybe::Some(42)` allocates `[tag, payload]`. Tag-only variants used as integer constants.
+- Tuples: `(a, b, c)` literals + field access `.0`, `.1` (incl. inline `(1,2,3).0`).
+- Static int-literal overflow check (`let x: i32 = 5_000_000_000` errors with did-you-mean `i64`).
+- Totality stub (`helixc.frontend.totality`) checks structural recursion for HBS shapes (`p - k`, `p / k`).
+- Diagnostic IO: `print_int(i32)` writes decimal to stdout; `print_str("...")` for literals.
+- Tooling: `helixc check` runs parse + typecheck + totality with source-with-caret error display and `--emit-ir` IR dump.
+- Test count: 501 (all green); 38 commits this session.
+
+### Known limitations (deferred)
+- Pass-by-value of structs/enums to functions. Inside a fn, a struct/enum-typed parameter loses its array binding — payload extraction yields 0. Workaround: keep struct manipulation in main / one fn for now.
+- AST as first-class Helix value (Phase 1 below) — `quote` is still an opaque handle, not an algebraic data type.
+- Full Maranget-style exhaustiveness for nested patterns (we have wildcard / first-level enum).
 
 ## Open questions
 
