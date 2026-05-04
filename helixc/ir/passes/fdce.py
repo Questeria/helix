@@ -33,6 +33,13 @@ def fdce_module(module: tir.Module, entry_fn: str = "main") -> int:
     # Build the call graph. Functions are "called" via:
     #   - direct CALL op (target attr)
     #   - MODIFY op's verifier_fn attr (verifier-gated reflection)
+    #   - QUOTE op's ast_pretty: a pretty-printed AST may name any fn
+    #     that appears free in the quoted expression — splicing the
+    #     quote at runtime indirectly invokes those fns. Conservative:
+    #     scan ast_pretty for identifiers that match module fn names.
+    import re
+    _ID_RE = re.compile(r"\b[a-zA-Z_][a-zA-Z0-9_]*\b")
+    all_fn_names = set(module.functions.keys())
     callees: dict[str, set[str]] = {}
     for name, fn in module.functions.items():
         called = set()
@@ -46,6 +53,12 @@ def fdce_module(module: tir.Module, entry_fn: str = "main") -> int:
                     vfn = op.attrs.get("verifier_fn")
                     if isinstance(vfn, str):
                         called.add(vfn)
+                elif op.kind == tir.OpKind.QUOTE:
+                    pretty = op.attrs.get("ast_pretty", "")
+                    if isinstance(pretty, str) and pretty:
+                        for ident in _ID_RE.findall(pretty):
+                            if ident in all_fn_names:
+                                called.add(ident)
         callees[name] = called
 
     # Roots: entry_fn + any pub-prefixed function (cheap interop hook)

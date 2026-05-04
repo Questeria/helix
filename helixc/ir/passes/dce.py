@@ -41,6 +41,13 @@ SIDE_EFFECT_KINDS = {
     tir.OpKind.MODIFY,
     tir.OpKind.SPLICE,
     tir.OpKind.PRINT,
+    # QUOTE has the side effect of reserving a reflection cell handle
+    # for the binary's runtime; even if the i32 result isn't directly
+    # used, downstream MODIFY/SPLICE may target the cell by index.
+    tir.OpKind.QUOTE,
+    # REFLECT_HASH is similar: it provides a stable testing handle that
+    # downstream code may reach via cell indexing.
+    tir.OpKind.REFLECT_HASH,
 }
 
 

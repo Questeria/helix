@@ -504,6 +504,16 @@ class Asm:
     def setae_al(self) -> None:   self.b.emit(0x0F, 0x93, 0xC0)
     def setb_al(self) -> None:    self.b.emit(0x0F, 0x92, 0xC0)
     def setbe_al(self) -> None:   self.b.emit(0x0F, 0x96, 0xC0)
+    # Parity-flag setters for IEEE-NaN-aware float comparisons.
+    # PF=1 after ucomiss iff either operand is NaN ("unordered").
+    # setp/setnp into cl so we can AND/OR with the al result of the
+    # primary cmp setter without clobbering al.
+    def setp_cl(self) -> None:    self.b.emit(0x0F, 0x9A, 0xC1)
+    def setnp_cl(self) -> None:   self.b.emit(0x0F, 0x9B, 0xC1)
+    # 8-bit logical AND/OR between al and cl (used to combine the
+    # primary cmp with the parity-flag check).
+    def and_al_cl(self) -> None:  self.b.emit(0x20, 0xC8)
+    def or_al_cl(self) -> None:   self.b.emit(0x08, 0xC8)
 
     def movzx_eax_al(self) -> None:
         # 0F B6 C0   movzx eax, al
@@ -869,6 +879,29 @@ class FnCompiler:
                 # differs on SNaN exception behavior, which we don't need.
                 self.asm.ucomiss_xmm0_xmm1()
                 float_cmp_setters[op.kind]()
+                # IEEE 754 NaN handling: ucomiss with NaN sets ZF=1, PF=1,
+                # CF=1 (the "unordered" combination). The base setters above
+                # would erroneously fire for several relations:
+                #   sete  (CMP_EQ): would say NaN==NaN (wrong; should be 0)
+                #   setne (CMP_NE): would say NaN!=NaN false (wrong; should be 1)
+                #   setb  (CMP_LT): would say NaN<x true (wrong; should be 0)
+                #   setbe (CMP_LE): would say NaN<=x true (wrong; should be 0)
+                # The seta/setae setters already produce 0 in the NaN case
+                # (CF=1 makes them fail), so they need no fixup.
+                #
+                # Fix: AND/OR the al result with a parity-based guard.
+                if op.kind == tir.OpKind.CMP_EQ:
+                    # ordered AND equal: al &= !PF
+                    self.asm.setnp_cl()
+                    self.asm.and_al_cl()
+                elif op.kind == tir.OpKind.CMP_NE:
+                    # not-equal OR unordered: al |= PF
+                    self.asm.setp_cl()
+                    self.asm.or_al_cl()
+                elif op.kind in (tir.OpKind.CMP_LT, tir.OpKind.CMP_LE):
+                    # ordered AND (less / less-or-equal): al &= !PF
+                    self.asm.setnp_cl()
+                    self.asm.and_al_cl()
             else:
                 self.asm.mov_eax_mem_rbp(l_slot)
                 self.asm.mov_ecx_mem_rbp(r_slot)

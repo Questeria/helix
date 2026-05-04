@@ -957,6 +957,47 @@ def test_real_matmul_3x3_via_arrays():
     assert compile_and_run(src) == 42
 
 
+def test_float_eq_with_nan_returns_false():
+    """Per IEEE 754, NaN == NaN is false. Construct NaN via 0/0 and
+    compare it against itself; result should be 0 (false), not 1."""
+    src = """
+    fn main() -> i32 {
+        let zero: f32 = 0.0;
+        let nan_val: f32 = zero / zero;
+        if nan_val == nan_val { 1 } else { 42 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42 (NaN==NaN should be false), got {code}"
+
+
+def test_float_neq_with_nan_returns_true():
+    """Per IEEE 754, NaN != NaN is true."""
+    src = """
+    fn main() -> i32 {
+        let zero: f32 = 0.0;
+        let nan_val: f32 = zero / zero;
+        if nan_val != nan_val { 42 } else { 0 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42 (NaN!=NaN should be true), got {code}"
+
+
+def test_float_lt_with_nan_returns_false():
+    """NaN < x is false."""
+    src = """
+    fn main() -> i32 {
+        let zero: f32 = 0.0;
+        let nan_val: f32 = zero / zero;
+        let one: f32 = 1.0;
+        if nan_val < one { 1 } else { 42 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42 (NaN<x should be false), got {code}"
+
+
 def test_or_chain_normalized_to_bool():
     """Without `||` result normalization, `1 || 1` lowered as ADD = 2,
     and `(a || b) == 1` would silently fail. With ADD-then-CMP_NE, the
