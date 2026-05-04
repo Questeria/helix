@@ -193,6 +193,30 @@ def test_recursion_count_down():
     assert compile_and_run(src) == 28
 
 
+def test_division():
+    # 100 / 7 = 14 (integer division), then * 3 = 42
+    src = "fn main() -> i32 { (100 / 7) * 3 }"
+    assert compile_and_run(src) == 42
+
+
+def test_modulo():
+    # 100 % 58 = 42
+    src = "fn main() -> i32 { 100 % 58 }"
+    assert compile_and_run(src) == 42
+
+
+def test_division_recursive_gcd():
+    # Euclidean GCD via recursion
+    src = """
+    fn gcd(a: i32, b: i32) -> i32 {
+        if b == 0 { a } else { gcd(b, a % b) }
+    }
+    fn main() -> i32 { gcd(126, 84) }
+    """
+    # gcd(126, 84) = 42
+    assert compile_and_run(src) == 42
+
+
 def main():
     tests = [(name, fn) for name, fn in globals().items()
              if name.startswith("test_") and callable(fn)]

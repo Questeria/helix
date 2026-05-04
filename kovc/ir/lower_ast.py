@@ -198,7 +198,7 @@ class Lowerer:
             arith = {
                 "+": tir.OpKind.ADD, "-": tir.OpKind.SUB,
                 "*": tir.OpKind.MUL, "/": tir.OpKind.DIV,
-                "%": tir.OpKind.DIV,  # placeholder
+                "%": tir.OpKind.MOD,
             }
             cmp_ = {
                 "==": tir.OpKind.CMP_EQ, "!=": tir.OpKind.CMP_NE,

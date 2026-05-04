@@ -142,6 +142,7 @@ class OpKind(Enum):
     SUB = "elem.sub"
     MUL = "elem.mul"
     DIV = "elem.div"
+    MOD = "elem.mod"
     MAXIMUM = "elem.maximum"
     MINIMUM = "elem.minimum"
     POW = "elem.pow"

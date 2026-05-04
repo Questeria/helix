@@ -161,6 +161,17 @@ class Asm:
     def imul_eax_ecx(self) -> None:
         self.b.emit(0x0F, 0xAF, 0xC1)          # imul eax, ecx
 
+    def cdq(self) -> None:
+        self.b.emit(0x99)                      # sign-extend eax into edx
+
+    def idiv_ecx(self) -> None:
+        # F7 F9   idiv ecx (signed); edx:eax / ecx -> eax=quotient, edx=remainder
+        self.b.emit(0xF7, 0xF9)
+
+    def mov_eax_edx(self) -> None:
+        # 89 D0   mov eax, edx
+        self.b.emit(0x89, 0xD0)
+
     def neg_eax(self) -> None:
         self.b.emit(0xF7, 0xD8)                # neg eax
 
@@ -425,6 +436,29 @@ class FnCompiler:
             self.asm.mov_eax_mem_rbp(l_slot)
             self.asm.mov_ecx_mem_rbp(r_slot)
             self.asm.imul_eax_ecx()
+            self.asm.mov_mem_rbp_eax(res_slot)
+            return
+        if op.kind == tir.OpKind.DIV:
+            l_slot = self._slot_of(op.operands[0])
+            r_slot = self._slot_of(op.operands[1])
+            res_slot = self._slot_of(op.results[0])
+            self.asm.mov_eax_mem_rbp(l_slot)
+            self.asm.mov_ecx_mem_rbp(r_slot)
+            self.asm.cdq()
+            self.asm.idiv_ecx()
+            # eax = quotient
+            self.asm.mov_mem_rbp_eax(res_slot)
+            return
+        if op.kind == tir.OpKind.MOD:
+            l_slot = self._slot_of(op.operands[0])
+            r_slot = self._slot_of(op.operands[1])
+            res_slot = self._slot_of(op.results[0])
+            self.asm.mov_eax_mem_rbp(l_slot)
+            self.asm.mov_ecx_mem_rbp(r_slot)
+            self.asm.cdq()
+            self.asm.idiv_ecx()
+            # edx = remainder; copy to eax
+            self.asm.mov_eax_edx()
             self.asm.mov_mem_rbp_eax(res_slot)
             return
         if op.kind == tir.OpKind.NEG:
