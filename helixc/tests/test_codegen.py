@@ -5,6 +5,7 @@ import os, sys, subprocess, tempfile
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 from helixc.frontend.parser import parse
+from helixc.frontend.grad_pass import grad_pass
 from helixc.ir.lower_ast import lower
 from helixc.ir.passes.const_fold import fold_module
 from helixc.ir.passes.dce import dce_module
@@ -15,9 +16,11 @@ from helixc.backend.x86_64 import compile_module_to_elf
 def compile_and_run(src: str, optimize: bool = True) -> int:
     """Compile Helix source to ELF, run via WSL, return exit code.
 
+    Pipeline: parse -> grad_pass -> lower -> [opt] -> codegen -> ELF.
     optimize=True (default): runs const-fold + CSE + DCE before codegen.
     """
     prog = parse(src)
+    grad_pass(prog)
     mod = lower(prog)
     if optimize:
         fold_module(mod)
@@ -584,6 +587,50 @@ def test_modify_verifier_rejects():
         let verifier_fail = 0;
         let result = modify(target, xform, verifier_fail);
         if result == 0 { 42 } else { 0 }
+    }
+    """
+    assert compile_and_run(src) == 42
+
+
+# ============================================================================
+# grad(f) as a real language builtin
+# ============================================================================
+def test_grad_simple_quadratic():
+    # d(x*x)/dx at x=21 = 42
+    src = """
+    fn loss(x: f32) -> f32 { x * x }
+    fn main() -> i32 {
+        grad(loss)(21.0) as i32
+    }
+    """
+    assert compile_and_run(src) == 42
+
+
+def test_grad_with_let_bindings():
+    # d/dx (2x-4)^2 at x=5 = 8*5 - 16 = 24; +18 = 42
+    src = """
+    fn loss(x: f32) -> f32 {
+        let pred = x * 2.0 + 3.0;
+        let target = 7.0;
+        let diff = pred - target;
+        diff * diff
+    }
+    fn main() -> i32 {
+        let g = grad(loss)(5.0);
+        (g + 18.0) as i32
+    }
+    """
+    assert compile_and_run(src) == 42
+
+
+def test_grad_linear():
+    # d(3x + 5y)/dx = 3 (constant); call at x=0 -> 3; +39 = 42
+    src = """
+    fn linear(x: f32, y: f32) -> f32 { 3.0 * x + 5.0 * y }
+    fn main() -> i32 {
+        // grad(linear) differentiates w.r.t. first param x
+        let g = grad(linear)(0.0, 0.0);
+        (g + 39.0) as i32
     }
     """
     assert compile_and_run(src) == 42

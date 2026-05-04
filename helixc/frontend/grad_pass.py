@@ -116,6 +116,23 @@ def _rewrite_in_expr(expr: A.Expr, fn_by_name: dict[str, A.FnDecl],
             if isinstance(expr.else_, A.Block):
                 c3 = _rewrite_in_block(expr.else_, fn_by_name, new_fns)
         return (expr, c1 + c2 + c3)
+    if isinstance(expr, A.Cast):
+        new_inner, c = _rewrite_in_expr(expr.value, fn_by_name, new_fns)
+        expr.value = new_inner
+        return (expr, c)
+    if isinstance(expr, A.Assign):
+        new_val, c = _rewrite_in_expr(expr.value, fn_by_name, new_fns)
+        expr.value = new_val
+        return (expr, c)
+    if isinstance(expr, A.Index):
+        new_callee, c1 = _rewrite_in_expr(expr.callee, fn_by_name, new_fns)
+        expr.callee = new_callee
+        c2 = 0
+        for i, idx in enumerate(expr.indices):
+            new_idx, ci = _rewrite_in_expr(idx, fn_by_name, new_fns)
+            expr.indices[i] = new_idx
+            c2 += ci
+        return (expr, c1 + c2)
     return (expr, count)
 
 
