@@ -151,6 +151,67 @@ def test_shape_check_size_polymorphic_match():
 
 
 # ============================================================================
+# Effect/capability type system (Phase 3-ii)
+# ============================================================================
+def test_pure_calls_pure_ok():
+    src = """
+    @pure fn helper() -> i32 { 7 }
+    @pure fn caller() -> i32 { helper() }
+    """
+    assert check(src) == []
+
+
+def test_pure_calls_effectful_rejected():
+    # @pure cannot call a function with side effects
+    src = """
+    @effect fn writes_disk() {}
+    @pure fn caller() { writes_disk() }
+    """
+    errs = check(src)
+    assert any("cannot call" in e or "non-pure" in e for e in errs), errs
+
+
+def test_effectful_can_call_effectful():
+    # caller declares the same effects, so the call is permitted
+    src = """
+    @io fn writes_disk() {}
+    @io fn caller() { writes_disk() }
+    """
+    assert check(src) == []
+
+
+def test_caller_missing_capability_rejected():
+    # io-capable function called from a function without that capability
+    src = """
+    @io fn read_file() -> i32 { 0 }
+    fn naive_caller() { read_file(); }
+    """
+    errs = check(src)
+    assert any("requires effect" in e or "does not declare" in e for e in errs), errs
+
+
+def test_pure_and_effect_conflict():
+    # Function declared both @pure and @effect — conflict
+    src = """
+    @pure
+    @io
+    fn confused() {}
+    """
+    errs = check(src)
+    assert any("cannot be both" in e for e in errs), errs
+
+
+def test_pure_calls_unmarked_function_rejected():
+    # Unmarked function is treated as non-pure (default has no @pure)
+    src = """
+    fn does_anything() -> i32 { 7 }
+    @pure fn caller() -> i32 { does_anything() }
+    """
+    errs = check(src)
+    assert any("cannot call" in e or "non-pure" in e for e in errs), errs
+
+
+# ============================================================================
 # Test runner
 # ============================================================================
 def main():

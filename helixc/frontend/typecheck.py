@@ -145,6 +145,9 @@ class FunctionSig:
     generics: list[A.GenericParam]
     params: list[tuple[str, Type]]
     ret: Type
+    # AGI-specific: effect/capability set
+    is_pure: bool = False                    # @pure attribute
+    effects: frozenset[str] = frozenset()    # @effect(...) declared capabilities
 
 
 # ============================================================================
@@ -156,6 +159,10 @@ class TypeChecker:
         self.functions: dict[str, FunctionSig] = {}
         self.constraints: list[A.Expr] = []   # collected, not solved (v0.1)
         self.errors: list[TypeError_] = []
+        # Effect-checking state: current function's pure/effect declaration
+        self._current_pure: bool = False
+        self._current_effects: frozenset[str] = frozenset()
+        self._current_fn_name: str = ""
 
     # ---- entry point ----
     def check(self) -> list[TypeError_]:
@@ -207,7 +214,27 @@ class TypeChecker:
         for w in fn.where_clauses:
             self.constraints.append(w.constraint)
 
-        sig = FunctionSig(name=fn.name, generics=fn.generics, params=params, ret=ret)
+        # Effect/capability inference from attributes
+        is_pure = "pure" in fn.attrs
+        effects: set[str] = set()
+        for a in fn.attrs:
+            # accept "effect" attribute that mentions a list of capabilities
+            if a == "effect":
+                effects.add("unknown_effect")
+            elif a.startswith("effect:"):
+                effects.add(a[len("effect:"):])
+            elif a in ("io", "network", "modify_self", "rng", "time", "fs"):
+                effects.add(a)
+        if is_pure and effects:
+            self.errors.append(TypeError_(
+                f"function {fn.name!r}: cannot be both @pure and have @effect(...)",
+                fn.span,
+            ))
+
+        sig = FunctionSig(
+            name=fn.name, generics=fn.generics, params=params, ret=ret,
+            is_pure=is_pure, effects=frozenset(effects),
+        )
         if fn.name in self.functions:
             raise TypeError_(f"duplicate function {fn.name!r}", fn.span)
         self.functions[fn.name] = sig
@@ -387,6 +414,35 @@ class TypeChecker:
                 call.span,
             ))
 
+    def _check_call_effects(self, call: A.Call, sig: FunctionSig) -> None:
+        """Verify that calling a function with effects is permitted in the
+        current calling context.
+
+        Rules:
+        - A @pure function may only call other @pure functions (no effects).
+        - A function with declared effects E may only call functions whose
+          effects are a subset of E.
+        - Calls to undeclared functions are not checked here (handled by
+          shape-check or treated as opaque).
+        """
+        if self._current_pure and (sig.effects or not sig.is_pure):
+            self.errors.append(TypeError_(
+                f"@pure function {self._current_fn_name!r} cannot call "
+                f"non-pure {sig.name!r}",
+                call.span,
+            ))
+            return
+        # Check effect inclusion: callee's effects must subset caller's
+        missing = sig.effects - self._current_effects
+        if missing:
+            missing_list = ", ".join(sorted(missing))
+            self.errors.append(TypeError_(
+                f"function {self._current_fn_name!r} calls {sig.name!r} "
+                f"which requires effect(s) {{{missing_list}}}, "
+                f"but caller does not declare them",
+                call.span,
+            ))
+
     def _add_where_constraint(self, solver: P.Solver, expr: A.Expr,
                               scope: Scope) -> None:
         """Translate a where-clause expression into Presburger constraints."""
@@ -408,6 +464,21 @@ class TypeChecker:
         sig = self.functions.get(fn.name)
         if sig is None:
             return
+        # Set effect-checking context for this function
+        prev_pure = self._current_pure
+        prev_effects = self._current_effects
+        prev_name = self._current_fn_name
+        self._current_pure = sig.is_pure
+        self._current_effects = sig.effects
+        self._current_fn_name = sig.name
+        try:
+            self._check_fn_body(fn, sig)
+        finally:
+            self._current_pure = prev_pure
+            self._current_effects = prev_effects
+            self._current_fn_name = prev_name
+
+    def _check_fn_body(self, fn: A.FnDecl, sig: FunctionSig) -> None:
         gen_scope = Scope()
         for g in fn.generics:
             if g.kind == "size":
@@ -497,10 +568,11 @@ class TypeChecker:
         if isinstance(expr, A.Call):
             callee = self._check_expr(expr.callee, scope)
             arg_tys = [self._check_expr(a, scope) for a in expr.args]
-            # If callee is a known function (by name), do shape checking
+            # If callee is a known function (by name), do shape + effect checking
             if isinstance(expr.callee, A.Name) and expr.callee.name in self.functions:
                 sig = self.functions[expr.callee.name]
                 self._check_call_shapes(expr, sig, arg_tys, scope)
+                self._check_call_effects(expr, sig)
                 return sig.ret
             if isinstance(callee, TyFn):
                 return callee.ret
