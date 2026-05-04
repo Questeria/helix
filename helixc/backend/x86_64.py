@@ -910,6 +910,7 @@ if __name__ == "__main__":
     from ..frontend.typecheck import typecheck
     from ..ir.lower_ast import lower
     from ..ir.passes.const_fold import fold_module
+    from ..ir.passes.dce import dce_module
 
     if len(sys.argv) < 3:
         print("usage: python -m helixc.backend.x86_64 <input.hx> <output.bin> [--strict] [--no-opt]",
@@ -938,6 +939,9 @@ if __name__ == "__main__":
         folded = fold_module(mod)
         if folded > 0:
             print(f"const-fold: {folded} ops folded", file=sys.stderr)
+        removed = dce_module(mod)
+        if removed > 0:
+            print(f"dce: {removed} ops removed", file=sys.stderr)
     elf = compile_module_to_elf(mod)
     with open(sys.argv[2], "wb") as f:
         f.write(elf)
