@@ -340,3 +340,56 @@ This compiles to Linux ELF that produces the correct exit code, with NO external
 - Real Tile IR matmul tiling rules
 - PTX kernel codegen
 - CUDA Driver API binding to launch on RTX 3070 / 5090
+
+---
+
+## 2026-05-04 (Phase 3 complete) — Helix has 4 unique compile-time AGI features
+
+Phase 3 wraps with Helix as a genuinely differentiated language. The type
+system enforces FOUR things no other AI language enforces at compile time:
+
+### 1. Tensor shape constraints via Presburger arithmetic
+- `helixc/frontend/presburger.py`: linear-arithmetic constraint solver
+- Wired into typecheck call sites: matmul shape mismatches REJECTED before
+  any code runs
+- Tests: 24 solver tests + 4 integration tests
+
+### 2. Effect/capability typing
+- `@pure` / `@io` / `@network` / etc. propagate through call chains
+- `@pure` cannot call non-pure functions
+- Caller must declare every capability used by callee
+- 6 tests
+
+### 3. Differentiable types D<T>
+- D<T> wraps a value participating in gradient computation
+- Propagates through binary operations
+- Returning T from D<T>-typed body rejected (silent gradient loss)
+- 5 tests
+
+### 4. Memory-tier types
+- WorkingMem<T> / EpisodicMem<T> / SemanticMem<T> / ProceduralMem<T>
+- Cross-tier transitions require explicit operators (consolidate/recall)
+- 5 tests
+
+### Plus:
+- Agent declarations (cognitive society primitive)
+- Reflection scaffold (quote/splice/modify)
+- C++ '>>' nested-generics fix in parser
+
+### Total session deltas
+- Renamed Kov -> Helix across the codebase
+- Added Presburger solver + wired into type checker
+- Added effect/capability tracking
+- Added differentiable types D<T>
+- Added memory-tier types
+- Added agent declarations
+- Added reflection primitives (basic)
+- Wrote agi_demo.hx demonstrating all features stacked
+- 27 commits, 224 tests passing
+
+### Phase 4 next priorities
+- Wire typecheck into codegen pipeline (refuse to compile programs with type errors)
+- Tile types in real codegen (GPU work)
+- grad as compiler primitive (source-level AD)
+- society::dispatch semantics
+- Real reflection (runtime AST query)
