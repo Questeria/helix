@@ -1,0 +1,36 @@
+# Build outputs
+/build/
+/target/
+*.o
+*.so
+*.dll
+*.exe
+*.a
+
+# Stage outputs (generated binaries — keep .hex source, regenerate .bin)
+stage*/*.bin
+!stage0/hex0.bin
+
+# Editor / IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Trained model artifacts (large; tracked separately or by hash manifest)
+*.safetensors
+*.bin.weights
+*.gguf
+/checkpoints/
+/data/raw/
+/data/cache/
+
+# Logs
+*.log
+/runs/
