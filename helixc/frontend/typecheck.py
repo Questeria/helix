@@ -416,6 +416,34 @@ class TypeChecker:
         return f"<{type(expr).__name__}>"
 
     # ------------------------------------------------------------------
+    # Argument count + basic type checking for function calls
+    # ------------------------------------------------------------------
+    def _check_call_basic(self, call: A.Call, sig: FunctionSig,
+                          arg_tys: list[Type]) -> None:
+        """Check argument count and primitive type compatibility.
+        Tensor-shape checking is in _check_call_shapes."""
+        if len(arg_tys) != len(sig.params):
+            self.errors.append(TypeError_(
+                f"call to {sig.name!r}: expected {len(sig.params)} args, "
+                f"got {len(arg_tys)}",
+                call.span,
+            ))
+            return
+        for (pname, pty), aty in zip(sig.params, arg_tys):
+            # For primitives, require an exact name match (i32 vs f32 etc.)
+            if isinstance(pty, TyPrim) and isinstance(aty, TyPrim):
+                if pty.name != aty.name:
+                    # Treat 'size_N' (concrete sizes from shapes) loosely;
+                    # they're not user-facing types.
+                    if not (pty.name.startswith("size_")
+                            or aty.name.startswith("size_")):
+                        self.errors.append(TypeError_(
+                            f"call to {sig.name!r}: arg {pname!r} expects "
+                            f"{pty.name}, got {aty.name}",
+                            call.span,
+                        ))
+
+    # ------------------------------------------------------------------
     # Compile-time shape checking for function calls
     # ------------------------------------------------------------------
     def _check_call_shapes(self, call: A.Call, sig: FunctionSig,
@@ -671,9 +699,10 @@ class TypeChecker:
                         expr.span,
                     ))
                     return arg_tys[0]
-            # If callee is a known function (by name), do shape + effect checking
+            # If callee is a known function (by name), do checks
             if isinstance(expr.callee, A.Name) and expr.callee.name in self.functions:
                 sig = self.functions[expr.callee.name]
+                self._check_call_basic(expr, sig, arg_tys)
                 self._check_call_shapes(expr, sig, arg_tys, scope)
                 self._check_call_effects(expr, sig)
                 return sig.ret

@@ -381,6 +381,53 @@ def test_recall_rejects_non_semantic():
 
 
 # ============================================================================
+# Argument count + primitive type checking on function calls
+# ============================================================================
+def test_arg_count_too_few():
+    src = """
+    fn add(a: i32, b: i32) -> i32 { a + b }
+    fn caller() -> i32 { add(1) }
+    """
+    errs = check(src)
+    assert any("expected 2 args, got 1" in e for e in errs), errs
+
+
+def test_arg_count_too_many():
+    src = """
+    fn id(x: i32) -> i32 { x }
+    fn caller() -> i32 { id(1, 2, 3) }
+    """
+    errs = check(src)
+    assert any("expected 1 args, got 3" in e for e in errs), errs
+
+
+def test_arg_type_mismatch():
+    src = """
+    fn takes_int(x: i32) -> i32 { x }
+    fn caller() -> i32 { takes_int(true) }
+    """
+    errs = check(src)
+    assert any("expects i32, got bool" in e for e in errs), errs
+
+
+def test_arg_type_match_ok():
+    src = """
+    fn add(a: i32, b: i32) -> i32 { a + b }
+    fn caller() -> i32 { add(1, 2) }
+    """
+    assert check(src) == []
+
+
+def test_arg_int_vs_float():
+    src = """
+    fn takes_float(x: f32) -> f32 { x }
+    fn caller() -> f32 { takes_float(42) }
+    """
+    errs = check(src)
+    assert any("expects f32, got i32" in e for e in errs), errs
+
+
+# ============================================================================
 # Test runner
 # ============================================================================
 def main():
