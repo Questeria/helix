@@ -241,3 +241,42 @@ This proves the whole pipeline works with NO PYTHON in the runtime. Once Phase 4
 - Test that compiles a small matmul.kov, runs it on the RTX 3070 (or 5090 once it arrives), produces correct output
 
 This is the Phase 1 verifiable artifact. Substantial work but each piece is now ~200-500 lines on top of an existing pipeline that already works.
+
+---
+
+## 2026-05-03 (continued) — 6-arg ABI + matmul confirmed
+
+- Extended x86-64 codegen from 3 args to **6 args** (full System V AMD64 ABI: rdi, rsi, rdx, rcx, r8, r9). Added REX-prefixed encodings for r8d/r9d on the spill (callee-side) and load (caller-side) paths.
+- Added test `test_six_arg_call` — `sum6(1,2,3,4,5,27)` returns 42 ✓
+- Added test `test_matmul_2x2_trace` — full inline 2x2 matmul trace returns 69 ✓
+
+### Final session status — 145/145 Python tests + 3/3 hex0 = 148 tests passing
+
+12 git commits on main. Pipeline produces real running ELF binaries from `.kov` source. The compiler is real, end-to-end, in ~6000 lines of build-time Python.
+
+### Session summary (entire arc)
+**Started**: planning conversation about building AGI from raw binary.
+**Ended**: working compiler producing real binaries.
+
+What was built (in order):
+1. `hex0` — 299-byte hand-authored x86_64 Linux ELF (raw binary)
+2. Kov language v0.1 spec (~280 lines)
+3. Lexer + AST + Parser + Type checker (1900 lines, 96 tests)
+4. Tensor IR + AST→TIR lowering (650 lines, 13 tests)
+5. Tile IR + TIR→Tile lowering (250 lines, 7 tests)
+6. x86-64 backend (~450 lines, 18 end-to-end tests, real ELFs)
+7. PTX backend skeleton (200 lines, 8 tests)
+8. Master test runner
+
+Demonstrated programs:
+- `exit42.kov`: `fn main() -> i32 { 42 }` → exit 42
+- `matmul_2x2.kov`: 2x2 matrix mul trace → exit 69
+
+This is the foundation. Future sessions extend it with:
+- Real loops (for/while compile to actual cmp+jcc)
+- Recursion (already structurally supported; needs testing with Fibonacci)
+- Array indexing (will require real Tensor IR support)
+- Real Tile IR lowering (matmul tiling rules)
+- PTX kernel codegen for tile_load/tile_matmul
+- CUDA Driver API binding to launch kernels on the 3070 / 5090
+- "Hello matmul" with actual GPU execution

@@ -127,6 +127,32 @@ def test_unary_neg_returns_neg_value():
     assert compile_and_run(src) == 42
 
 
+def test_six_arg_call():
+    # System V ABI: 6 integer args via rdi/rsi/rdx/rcx/r8/r9
+    src = """
+    fn sum6(a: i32, b: i32, c: i32, d: i32, e: i32, f: i32) -> i32 {
+        a + b + c + d + e + f
+    }
+    fn main() -> i32 { sum6(1, 2, 3, 4, 5, 27) }
+    """
+    # 1+2+3+4+5+27 = 42
+    assert compile_and_run(src) == 42
+
+
+def test_matmul_2x2_trace():
+    # The full 2x2 matmul trace example expressed with let-bindings inline
+    src = """
+    fn main() -> i32 {
+        let a00 = 1; let a01 = 2; let a10 = 3; let a11 = 4;
+        let b00 = 5; let b01 = 6; let b10 = 7; let b11 = 8;
+        let c00 = a00 * b00 + a01 * b10;
+        let c11 = a10 * b01 + a11 * b11;
+        c00 + c11
+    }
+    """
+    assert compile_and_run(src) == 69   # 19 + 50
+
+
 def main():
     tests = [(name, fn) for name, fn in globals().items()
              if name.startswith("test_") and callable(fn)]

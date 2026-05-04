@@ -186,6 +186,30 @@ class Asm:
             self.b.emit(0x89, 0x95)
             self.b.emit_bytes(struct.pack("<i", disp8))
 
+    # ECX, R8D, R9D — extended arg-register stores
+    def mov_mem_rbp_ecx(self, disp8: int) -> None:
+        if -128 <= disp8 <= 127:
+            self.b.emit(0x89, 0x4D, disp8 & 0xFF)
+        else:
+            self.b.emit(0x89, 0x8D)
+            self.b.emit_bytes(struct.pack("<i", disp8))
+
+    def mov_mem_rbp_r8d(self, disp8: int) -> None:
+        # 44 89 45 <disp8>   mov [rbp+disp], r8d (REX.R)
+        if -128 <= disp8 <= 127:
+            self.b.emit(0x44, 0x89, 0x45, disp8 & 0xFF)
+        else:
+            self.b.emit(0x44, 0x89, 0x85)
+            self.b.emit_bytes(struct.pack("<i", disp8))
+
+    def mov_mem_rbp_r9d(self, disp8: int) -> None:
+        # 44 89 4D <disp8>   mov [rbp+disp], r9d
+        if -128 <= disp8 <= 127:
+            self.b.emit(0x44, 0x89, 0x4D, disp8 & 0xFF)
+        else:
+            self.b.emit(0x44, 0x89, 0x8D)
+            self.b.emit_bytes(struct.pack("<i", disp8))
+
     def mov_edi_eax(self) -> None:
         self.b.emit(0x89, 0xC7)               # mov edi, eax
 
@@ -209,6 +233,31 @@ class Asm:
             self.b.emit(0x8B, 0x55, disp8 & 0xFF)
         else:
             self.b.emit(0x8B, 0x95)
+            self.b.emit_bytes(struct.pack("<i", disp8))
+
+    def mov_ecx_mem_rbp(self, disp8: int) -> None:  # noqa
+        # already defined above for the arithmetic path; this is the
+        # arg-load form (same encoding as the existing one)
+        if -128 <= disp8 <= 127:
+            self.b.emit(0x8B, 0x4D, disp8 & 0xFF)
+        else:
+            self.b.emit(0x8B, 0x8D)
+            self.b.emit_bytes(struct.pack("<i", disp8))
+
+    def mov_r8d_mem_rbp(self, disp8: int) -> None:
+        # 44 8B 45 <disp8>   mov r8d, [rbp+disp]
+        if -128 <= disp8 <= 127:
+            self.b.emit(0x44, 0x8B, 0x45, disp8 & 0xFF)
+        else:
+            self.b.emit(0x44, 0x8B, 0x85)
+            self.b.emit_bytes(struct.pack("<i", disp8))
+
+    def mov_r9d_mem_rbp(self, disp8: int) -> None:
+        # 44 8B 4D <disp8>
+        if -128 <= disp8 <= 127:
+            self.b.emit(0x44, 0x8B, 0x4D, disp8 & 0xFF)
+        else:
+            self.b.emit(0x44, 0x8B, 0x8D)
             self.b.emit_bytes(struct.pack("<i", disp8))
 
     # ---- control flow ----
@@ -286,18 +335,20 @@ class FnCompiler:
         if frame_size > 0:
             self.asm.sub_rsp_imm32(frame_size)
 
-        # Spill args from arg registers into stack slots
-        ARG_REGS = ["edi", "esi", "edx"]   # only support 3 args in v0.1
+        # Spill args from arg registers into stack slots (System V ABI: 6 regs)
+        ARG_SPILLS = [
+            self.asm.mov_mem_rbp_edi,
+            self.asm.mov_mem_rbp_esi,
+            self.asm.mov_mem_rbp_edx,
+            self.asm.mov_mem_rbp_ecx,
+            self.asm.mov_mem_rbp_r8d,
+            self.asm.mov_mem_rbp_r9d,
+        ]
         for i, p in enumerate(self.fn.params):
-            if i >= len(ARG_REGS):
-                raise NotImplementedError(f"v0.1 only supports {len(ARG_REGS)} parameters")
+            if i >= len(ARG_SPILLS):
+                raise NotImplementedError(f"v0.1 supports up to {len(ARG_SPILLS)} parameters")
             slot = self._slot_of(p)
-            if ARG_REGS[i] == "edi":
-                self.asm.mov_mem_rbp_edi(slot)
-            elif ARG_REGS[i] == "esi":
-                self.asm.mov_mem_rbp_esi(slot)
-            elif ARG_REGS[i] == "edx":
-                self.asm.mov_mem_rbp_edx(slot)
+            ARG_SPILLS[i](slot)
 
         # Emit ops in order
         for op in self.fn.entry.ops:
@@ -395,10 +446,13 @@ class FnCompiler:
                 self.asm.mov_edi_mem_rbp,
                 self.asm.mov_esi_mem_rbp,
                 self.asm.mov_edx_mem_rbp,
+                self.asm.mov_ecx_mem_rbp,
+                self.asm.mov_r8d_mem_rbp,
+                self.asm.mov_r9d_mem_rbp,
             ]
             for i, arg in enumerate(op.operands):
                 if i >= len(ARG_REGS_LOAD):
-                    raise NotImplementedError("v0.1 supports up to 3 call args")
+                    raise NotImplementedError("v0.1 supports up to 6 call args")
                 arg_slot = self._slot_of(arg)
                 ARG_REGS_LOAD[i](arg_slot)
             self.asm.call_rel32(str(target))
