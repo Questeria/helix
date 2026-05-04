@@ -101,6 +101,16 @@ class TyUnknown(Type):
     hint: str = ""
 
 
+@dataclass(frozen=True)
+class TyDiff(Type):
+    """D<T> — a value of type T that participates in gradient computation.
+    Operations on TyDiff values propagate differentiability through results.
+    Mixing TyDiff with non-Diff values is allowed (the result becomes
+    TyDiff). The only way to extract the underlying T without gradient
+    tracking is `detach(x)`."""
+    inner: Type
+
+
 # ============================================================================
 # Type errors
 # ============================================================================
@@ -274,6 +284,9 @@ class TypeChecker:
             memspace = self._stringify_marker(ty.memspace, scope) or "?"
             return TyTile(dtype, shape, memspace)
         if isinstance(ty, A.TyGeneric):
+            # Differentiable wrapper: D<T>
+            if ty.base == "D" and len(ty.args) == 1:
+                return TyDiff(inner=self._resolve_type(ty.args[0], scope))
             # User type with generic args — v0.1 unknown
             return TyUnknown(hint=f"generic {ty.base}")
         return TyUnknown(hint=f"unknown ty node {type(ty).__name__}")
@@ -563,6 +576,14 @@ class TypeChecker:
             r = self._check_expr(expr.right, scope)
             if expr.op in ("==", "!=", "<", "<=", ">", ">=", "&&", "||"):
                 return TyPrim("bool")
+            # Differentiability propagation: if either operand is D<T>,
+            # the result is D<T>. Mixing D<T1> with D<T2>: result is D<T1>
+            # (simplified; real compiler would unify innerness).
+            l_is_diff = isinstance(l, TyDiff)
+            r_is_diff = isinstance(r, TyDiff)
+            if l_is_diff or r_is_diff:
+                inner = l.inner if l_is_diff else r.inner if r_is_diff else l
+                return TyDiff(inner=inner)
             # Arithmetic: take the left type (simplified)
             return l
         if isinstance(expr, A.Call):
@@ -668,6 +689,7 @@ class TypeChecker:
         if isinstance(t, TyFn):
             return f"fn({', '.join(self._fmt(p) for p in t.params)}) -> {self._fmt(t.ret)}"
         if isinstance(t, TyUnit): return "()"
+        if isinstance(t, TyDiff): return f"D<{self._fmt(t.inner)}>"
         if isinstance(t, TyUnknown): return f"?{{{t.hint}}}"
         return repr(t)
 

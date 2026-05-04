@@ -212,6 +212,59 @@ def test_pure_calls_unmarked_function_rejected():
 
 
 # ============================================================================
+# Differentiable types D<T> (Phase 3-iii)
+# ============================================================================
+def test_diff_type_round_trip():
+    # Function takes D<f32>, returns D<f32>; should typecheck
+    src = """
+    fn loss(x: D<f32>) -> D<f32> { x }
+    """
+    assert check(src) == []
+
+
+def test_diff_propagates_through_arith():
+    # D<f32> * D<f32> should be D<f32>
+    src = """
+    fn loss(x: D<f32>, y: D<f32>) -> D<f32> {
+        x * y
+    }
+    """
+    assert check(src) == []
+
+
+def test_diff_propagates_with_scalar():
+    # D<f32> * f32 should be D<f32> (the f32 is a constant)
+    src = """
+    fn scale(x: D<f32>) -> D<f32> {
+        x * x
+    }
+    """
+    assert check(src) == []
+
+
+def test_diff_return_type_mismatch():
+    # Returning a non-D from a D-typed return is an error
+    src = """
+    fn bad(x: D<f32>) -> f32 {
+        x
+    }
+    """
+    errs = check(src)
+    # x is D<f32>, return type declared f32 — type mismatch
+    assert any("does not match return type" in e for e in errs), errs
+
+
+def test_diff_in_tensor():
+    # D<tensor<...>> — differentiable tensor
+    src = """
+    fn loss(x: D<f32>, y: D<f32>) -> D<f32> {
+        x * y + x
+    }
+    """
+    assert check(src) == []
+
+
+# ============================================================================
 # Test runner
 # ============================================================================
 def main():
