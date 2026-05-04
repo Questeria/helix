@@ -20,11 +20,28 @@ This is the from-scratch implementation of Kovostov: a local AI system where eve
 - **Runtime**: `helixrt`
 - **Bootstrap chain**: stage0 (hand-encoded hex) → hex1 → M0 (assembler) → M1 → M2 (C-subset compiler) → helixc-bootstrap (in C-subset) → helixc (self-hosted in Helix)
 
-## Status
+## Status (2026-05-04)
 
-Phase 0 — bootstrap chain. Project initialized 2026-05-03.
+47 commits, **269 tests passing** across the entire pipeline.
 
-See `docs/PLAN.md` for the full plan, `docs/research-log.md` for daily progress, and `docs/decisions/` for the dated decision history.
+What works today:
+- Hand-authored 299-byte ELF (`stage0/hex0/hex0.bin`) — the raw-binary foundation
+- Working Helix compiler (`helixc`): parse → typecheck → IR → const-fold + CSE + DCE → x86-64 → Linux ELF
+- Real running programs: arithmetic, recursion, loops (for/while), arrays, floats (SSE), 3×3 matmul, neural-network forward pass
+- 8 unique compile-time AGI features the type checker enforces:
+  1. Tensor shape constraints via Presburger arithmetic
+  2. Effect/capability typing (`@pure`, `@io`, etc.)
+  3. Differentiable types `D<T>` with gradient propagation
+  4. Memory-tier types (Working / Episodic / Semantic / Procedural)
+  5. Reflection primitives (`quote`/`splice`/`modify`)
+  6. Agent declarations (society of mind)
+  7. Type-level transitions (`detach`/`attach`/`consolidate`/`recall`)
+  8. Auto-curriculum primitive (`learn_to`)
+- Symbolic forward-mode autodiff CLI
+- Rust-style error messages with source-line context
+- 9 working `.hx` example programs
+
+See [QUICKSTART.md](QUICKSTART.md) for build-and-run instructions, `docs/PLAN.md` for the full plan, `docs/lang/spec.md` for the language reference, `docs/lang/tutorial.md` for a 10-step beginner guide, `docs/lang/agi-features.md` for the unique-features deep dive, and `docs/research-log.md` for the daily implementation log.
 
 ## License
 
