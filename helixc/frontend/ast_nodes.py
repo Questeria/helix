@@ -238,6 +238,14 @@ class PatOr(Pattern):
 
 
 @dataclass
+class PatRange(Pattern):
+    """`lo..hi` (exclusive) or `lo..=hi` (inclusive)."""
+    lo: "Expr"
+    hi: "Expr"
+    inclusive: bool
+
+
+@dataclass
 class For(Expr):
     """for x in iter { body }"""
     var_name: str

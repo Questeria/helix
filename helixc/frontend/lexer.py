@@ -63,7 +63,7 @@ class T(Enum):
     PLUSEQ = auto(); MINUSEQ = auto(); STAREQ = auto(); SLASHEQ = auto(); PERCENTEQ = auto()
     ARROW = auto(); FATARROW = auto()
     COLON = auto(); COLONCOLON = auto(); SEMI = auto(); COMMA = auto()
-    DOT = auto(); DOTDOT = auto()
+    DOT = auto(); DOTDOT = auto(); DOTDOTEQ = auto()
     LPAREN = auto(); RPAREN = auto()
     LBRACK = auto(); RBRACK = auto()
     LBRACE = auto(); RBRACE = auto()
@@ -408,7 +408,7 @@ class Lexer:
             ("+=", T.PLUSEQ), ("-=", T.MINUSEQ), ("*=", T.STAREQ),
             ("/=", T.SLASHEQ), ("%=", T.PERCENTEQ),
             ("->", T.ARROW), ("=>", T.FATARROW),
-            ("::", T.COLONCOLON), ("..", T.DOTDOT),
+            ("::", T.COLONCOLON), ("..=", T.DOTDOTEQ), ("..", T.DOTDOT),
         ]:
             if self._consume(s):
                 return Token(kind, s, line, col)

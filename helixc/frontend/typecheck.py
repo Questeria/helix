@@ -916,6 +916,11 @@ class TypeChecker:
             for alt in pat.alts:
                 self._bind_pattern(alt, scrut_ty, scope)
             return
+        if isinstance(pat, A.PatRange):
+            # Type-check both endpoints in the surrounding scope.
+            self._check_expr(pat.lo, scope)
+            self._check_expr(pat.hi, scope)
+            return
 
     def _pattern_covers(self, pat: A.Pattern, value) -> bool:
         """Does `pat` definitely match the given concrete `value`?

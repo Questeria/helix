@@ -439,6 +439,30 @@ def test_agent_alongside_fn():
     assert isinstance(p.items[1], ast.FnDecl)
 
 
+def test_range_pattern_parses():
+    """Pattern `0..10 => ...` parses as PatRange (exclusive)."""
+    src = """
+    fn f(x: i32) -> i32 {
+        match x {
+            0..10 => 1,
+            10..=20 => 2,
+            _ => 0,
+        }
+    }
+    """
+    prog = parse(src)
+    fn = prog.items[0]
+    assert isinstance(fn, ast.FnDecl)
+    match_expr = fn.body.final_expr
+    assert isinstance(match_expr, ast.Match)
+    arm0 = match_expr.arms[0]
+    assert isinstance(arm0.pattern, ast.PatRange)
+    assert arm0.pattern.inclusive is False
+    arm1 = match_expr.arms[1]
+    assert isinstance(arm1.pattern, ast.PatRange)
+    assert arm1.pattern.inclusive is True
+
+
 def test_or_pattern_parses():
     """Pattern `1 | 2 | 3 => ...` parses as PatOr with three alternatives."""
     src = """

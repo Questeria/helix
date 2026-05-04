@@ -969,8 +969,13 @@ class Parser:
             self.i += 1
             return ast.PatBind(span=self._span_of(t), name=t.value, is_mut=False)
         if t.kind in (T.INT, T.FLOAT, T.STRING, T.CHAR, T.KW_TRUE, T.KW_FALSE):
-            # Literal pattern: parse as a primary expr then wrap
+            # Literal pattern, or `lo..hi` / `lo..=hi` range pattern.
             lit = self._parse_primary()
+            if self._at(T.DOTDOTEQ) or self._at(T.DOTDOT):
+                inclusive = self._at(T.DOTDOTEQ)
+                self.i += 1
+                hi = self._parse_primary()
+                return ast.PatRange(span=lit.span, lo=lit, hi=hi, inclusive=inclusive)
             return ast.PatLit(span=lit.span, value=lit)
         if t.kind == T.LPAREN:
             self.i += 1
