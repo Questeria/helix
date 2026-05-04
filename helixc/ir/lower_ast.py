@@ -895,6 +895,52 @@ class Lowerer:
                 expanded = False
                 if callee_ast is not None and i < len(callee_ast.params):
                     p_ty = callee_ast.params[i].ty
+                    # Recursive-enum-typed param: callee expects a SINGLE
+                    # i32 (the arena index). For inline constructors, we
+                    # must arena-push and pass the resulting index — NOT
+                    # expand into flat slots like the non-recursive case.
+                    if (isinstance(p_ty, A.TyName)
+                            and p_ty.name in self._recursive_enums):
+                        if (isinstance(a, A.Call)
+                                and isinstance(a.callee, A.Path)
+                                and len(a.callee.segments) == 2):
+                            ename2, vname2 = a.callee.segments
+                            variants2 = self._enum_variants.get(ename2)
+                            if variants2 is not None and vname2 in variants2:
+                                tag_v = self.builder.const_int(
+                                    variants2[vname2])
+                                arg_vals = [
+                                    self._lower_expr(x)
+                                    or self.builder.const_int(0)
+                                    for x in a.args]
+                                start_idx = None
+                                for ev in [tag_v] + arg_vals:
+                                    pushed = self.builder.emit(
+                                        tir.OpKind.ARENA_PUSH, ev,
+                                        result_ty=tir.TIRScalar("i32"))
+                                    if start_idx is None:
+                                        start_idx = pushed
+                                args.append(start_idx)
+                                expanded = True
+                        elif (isinstance(a, A.Path)
+                              and len(a.segments) == 2):
+                            ename2, vname2 = a.segments
+                            variants2 = self._enum_variants.get(ename2)
+                            if variants2 is not None and vname2 in variants2:
+                                tag_v = self.builder.const_int(
+                                    variants2[vname2])
+                                pushed = self.builder.emit(
+                                    tir.OpKind.ARENA_PUSH, tag_v,
+                                    result_ty=tir.TIRScalar("i32"))
+                                args.append(pushed)
+                                expanded = True
+                        if not expanded:
+                            # Existing rec-enum binding: pass the scalar
+                            # arena index directly via _lower_expr.
+                            v = self._lower_expr(a)
+                            args.append(v or self.builder.const_int(0))
+                            expanded = True
+                        continue
                     n_slots = self._aggregate_slot_count(p_ty)
                     if n_slots is not None and n_slots >= 1:
                         # Inline enum constructor as fn arg, e.g.
