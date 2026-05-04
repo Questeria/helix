@@ -128,6 +128,35 @@ class TypeError_(Exception):
     def __init__(self, msg: str, span: A.Span):
         super().__init__(f"{span.line}:{span.col}: type error: {msg}")
         self.span = span
+        self.msg = msg
+
+    def render(self, source: Optional[str] = None,
+               filename: str = "<input>") -> str:
+        """Format with source-line context like:
+
+          error: <msg>
+            --> file:line:col
+             | <source line>
+             | ^
+
+        If `source` is None, falls back to the bare 'line:col: msg' form.
+        """
+        if source is None:
+            return str(self)
+        lines = source.splitlines()
+        if 1 <= self.span.line <= len(lines):
+            src_line = lines[self.span.line - 1]
+            ln_str = str(self.span.line)
+            pad = " " * len(ln_str)
+            caret_pad = " " * max(0, self.span.col - 1)
+            return (
+                f"error: {self.msg}\n"
+                f"{pad} --> {filename}:{self.span.line}:{self.span.col}\n"
+                f"{pad}  |\n"
+                f"{ln_str} | {src_line}\n"
+                f"{pad}  | {caret_pad}^"
+            )
+        return str(self)
 
 
 # ============================================================================
@@ -765,12 +794,15 @@ if __name__ == "__main__":
     import sys
     from .parser import parse
     if len(sys.argv) > 1:
-        with open(sys.argv[1]) as f:
+        filename = sys.argv[1]
+        with open(filename) as f:
             src = f.read()
     else:
+        filename = "<stdin>"
         src = sys.stdin.read()
     prog = parse(src)
     errors = typecheck(prog)
     for e in errors:
-        print(e, file=sys.stderr)
+        print(e.render(source=src, filename=filename), file=sys.stderr)
+        print(file=sys.stderr)
     sys.exit(1 if errors else 0)
