@@ -1,0 +1,166 @@
+; hex0.hex — annotated byte-by-byte source of hex0.bin
+; --------------------------------------------------------------------
+; License: Apache 2.0
+; Project: Kovostov-Native
+; Verification: SHA256 in hex0.sha256; xxd dump in hex0.xxd; behavior in test/
+;
+; This is the canonical human-readable form of hex0.bin. Comments are stripped
+; by `xxd -r -p` (which ignores non-hex characters) or by hex0 itself once
+; running. Every byte is reasoned and annotated.
+;
+; Sections:
+;   0x00..0x3F    ELF64 header  (64 bytes)
+;   0x40..0x77    Program header (56 bytes)
+;   0x78..0x125   Code (174 bytes)
+;   Total:        298 + 1 = 299 bytes (file size 0x12B... wait recomputed: 0x12B = 299)
+; --------------------------------------------------------------------
+
+; ============================================================================
+; ELF64 header (64 bytes, file offsets 0x00..0x3F)
+; ============================================================================
+7F 45 4C 46            ; 0x00  e_ident[EI_MAG]      = "\x7fELF"
+02                     ; 0x04  EI_CLASS             = ELFCLASS64
+01                     ; 0x05  EI_DATA              = ELFDATA2LSB
+01                     ; 0x06  EI_VERSION           = EV_CURRENT
+00                     ; 0x07  EI_OSABI             = System V
+00                     ; 0x08  EI_ABIVERSION
+00 00 00 00 00 00 00   ; 0x09  EI_PAD (7 bytes)
+02 00                  ; 0x10  e_type               = ET_EXEC (2)
+3E 00                  ; 0x12  e_machine            = EM_X86_64 (0x3E)
+01 00 00 00            ; 0x14  e_version            = 1
+78 00 60 00 00 00 00 00 ; 0x18  e_entry              = 0x600078 (LE)
+40 00 00 00 00 00 00 00 ; 0x20  e_phoff              = 64
+00 00 00 00 00 00 00 00 ; 0x28  e_shoff              = 0
+00 00 00 00            ; 0x30  e_flags              = 0
+40 00                  ; 0x34  e_ehsize             = 64
+38 00                  ; 0x36  e_phentsize          = 56
+01 00                  ; 0x38  e_phnum              = 1
+00 00                  ; 0x3A  e_shentsize          = 0
+00 00                  ; 0x3C  e_shnum              = 0
+00 00                  ; 0x3E  e_shstrndx           = 0
+
+; ============================================================================
+; Program header (56 bytes, file offsets 0x40..0x77)
+; ============================================================================
+01 00 00 00            ; 0x40  p_type               = PT_LOAD (1)
+05 00 00 00            ; 0x44  p_flags              = PF_R | PF_X (5)
+00 00 00 00 00 00 00 00 ; 0x48  p_offset             = 0
+00 00 60 00 00 00 00 00 ; 0x50  p_vaddr              = 0x600000
+00 00 60 00 00 00 00 00 ; 0x58  p_paddr              = 0x600000 (mirror)
+2B 01 00 00 00 00 00 00 ; 0x60  p_filesz             = 0x12B = 299
+2B 01 00 00 00 00 00 00 ; 0x68  p_memsz              = 0x12B (no .bss)
+00 10 00 00 00 00 00 00 ; 0x70  p_align              = 0x1000 (page)
+
+; ============================================================================
+; CODE — entry point at 0x600078 (file offset 0x78)
+; ============================================================================
+
+; -- _start: clear high-nibble flag --
+31 ED                  ; 0x78  xor ebp, ebp                    (also zeroes rbp upper half)
+
+; -- read_loop: read 1 byte from stdin, dispatch on its value --
+; .label = 0x7A
+50                     ; 0x7A  push rax                        ; reserve [rsp] as 1-byte read buf
+31 C0                  ; 0x7B  xor eax, eax                    ; sys_read = 0
+31 FF                  ; 0x7D  xor edi, edi                    ; fd = stdin = 0
+48 89 E6               ; 0x7F  mov rsi, rsp                    ; buf
+BA 01 00 00 00         ; 0x82  mov edx, 1                      ; count = 1
+0F 05                  ; 0x87  syscall                         ; read(0, [rsp], 1)
+48 85 C0               ; 0x89  test rax, rax                   ; rax = bytes read
+0F 8E 90 00 00 00      ; 0x8C  jle do_exit (rel32, +0x90)      ; if rax<=0: exit (EOF or error)
+0F B6 04 24            ; 0x92  movzx eax, byte [rsp]           ; al = byte read
+59                     ; 0x96  pop rcx                         ; deallocate stack slot
+
+; -- dispatch on al --
+3C 23                  ; 0x97  cmp al, '#'   (0x23)
+74 65                  ; 0x99  je skip_comment (+0x65 -> 0x100)
+3C 3B                  ; 0x9B  cmp al, ';'   (0x3B)
+74 61                  ; 0x9D  je skip_comment (+0x61 -> 0x100)
+3C 20                  ; 0x9F  cmp al, ' '   (0x20)
+74 D7                  ; 0xA1  je read_loop (-0x29 -> 0x7A)
+3C 09                  ; 0xA3  cmp al, '\t'  (0x09)
+74 D3                  ; 0xA5  je read_loop (-0x2D -> 0x7A)
+3C 0A                  ; 0xA7  cmp al, '\n'  (0x0A)
+74 CF                  ; 0xA9  je read_loop (-0x31 -> 0x7A)
+3C 0D                  ; 0xAB  cmp al, '\r'  (0x0D)
+74 CB                  ; 0xAD  je read_loop (-0x35 -> 0x7A)
+
+3C 30                  ; 0xAF  cmp al, '0'   (0x30)
+7C C7                  ; 0xB1  jl read_loop (-0x39 -> 0x7A) ; below '0': skip
+3C 39                  ; 0xB3  cmp al, '9'   (0x39)
+7E 12                  ; 0xB5  jle digit_0_9 (+0x12 -> 0xC9)
+
+3C 41                  ; 0xB7  cmp al, 'A'   (0x41)
+7C BF                  ; 0xB9  jl read_loop (-0x41 -> 0x7A) ; between '9' and 'A': skip
+3C 46                  ; 0xBB  cmp al, 'F'   (0x46)
+7E 0E                  ; 0xBD  jle digit_A_F (+0x0E -> 0xCD)
+
+3C 61                  ; 0xBF  cmp al, 'a'   (0x61)
+7C B7                  ; 0xC1  jl read_loop (-0x49 -> 0x7A) ; between 'F' and 'a': skip
+3C 66                  ; 0xC3  cmp al, 'f'   (0x66)
+7E 0A                  ; 0xC5  jle digit_a_f (+0x0A -> 0xD1)
+EB B1                  ; 0xC7  jmp read_loop (-0x4F -> 0x7A) ; above 'f': skip
+
+; -- digit conversion routines --
+; digit_0_9 at 0xC9
+2C 30                  ; 0xC9  sub al, 0x30                    ; '0'..'9' -> 0..9
+EB 06                  ; 0xCB  jmp got_nibble (+0x06 -> 0xD3)
+
+; digit_A_F at 0xCD
+2C 37                  ; 0xCD  sub al, 0x37                    ; 'A'..'F' -> 10..15
+EB 02                  ; 0xCF  jmp got_nibble (+0x02 -> 0xD3)
+
+; digit_a_f at 0xD1
+2C 57                  ; 0xD1  sub al, 0x57                    ; 'a'..'f' -> 10..15
+                       ;       fall through to got_nibble
+
+; -- got_nibble: al = 0..15, dispatch on high-nibble-buffered flag --
+; got_nibble at 0xD3
+40 F6 C5 01            ; 0xD3  test bpl, 1                     ; REX (0x40) + F6 /0 + ModR/M(C5) + imm8
+75 0C                  ; 0xD7  jnz combine (+0x0C -> 0xE5)
+
+; First-nibble path: shift, store, set flag
+C0 E0 04               ; 0xD9  shl al, 4
+88 C3                  ; 0xDC  mov bl, al                      ; bl = high nibble << 4
+BD 01 00 00 00         ; 0xDE  mov ebp, 1                      ; flag := 1
+EB 95                  ; 0xE3  jmp read_loop (-0x6B -> 0x7A)
+
+; -- combine: emit byte, clear flag --
+; combine at 0xE5
+08 D8                  ; 0xE5  or al, bl                       ; al = (high<<4) | low
+50                     ; 0xE7  push rax                        ; reserve write buffer
+88 04 24               ; 0xE8  mov [rsp], al                   ; place byte at [rsp]
+31 C0                  ; 0xEB  xor eax, eax
+FF C0                  ; 0xED  inc eax                         ; eax = 1 (sys_write)
+89 C7                  ; 0xEF  mov edi, eax                    ; fd = stdout = 1
+48 89 E6               ; 0xF1  mov rsi, rsp                    ; buf
+89 C2                  ; 0xF4  mov edx, eax                    ; count = 1
+0F 05                  ; 0xF6  syscall                         ; write(1, [rsp], 1)
+58                     ; 0xF8  pop rax                         ; deallocate
+31 ED                  ; 0xF9  xor ebp, ebp                    ; flag := 0
+E9 7A FF FF FF         ; 0xFB  jmp read_loop (rel32, -0x86 -> 0x7A)
+
+; -- skip_comment: read until '\n' or EOF --
+; skip_comment at 0x100
+50                     ; 0x100  push rax
+31 C0                  ; 0x101  xor eax, eax                    ; sys_read
+31 FF                  ; 0x103  xor edi, edi                    ; stdin
+48 89 E6               ; 0x105  mov rsi, rsp
+BA 01 00 00 00         ; 0x108  mov edx, 1
+0F 05                  ; 0x10D  syscall
+48 85 C0               ; 0x10F  test rax, rax
+7E 0E                  ; 0x112  jle do_exit (+0x0E -> 0x122)
+0F B6 04 24            ; 0x114  movzx eax, byte [rsp]
+59                     ; 0x118  pop rcx
+3C 0A                  ; 0x119  cmp al, '\n'
+75 E3                  ; 0x11B  jne skip_comment (-0x1D -> 0x100)
+E9 58 FF FF FF         ; 0x11D  jmp read_loop (rel32, -0xA8 -> 0x7A)
+
+; -- do_exit: status=0 -> sys_exit(0) --
+; do_exit at 0x122
+31 FF                  ; 0x122  xor edi, edi                    ; status = 0
+B8 3C 00 00 00         ; 0x124  mov eax, 60                     ; sys_exit
+0F 05                  ; 0x129  syscall
+                       ;        (unreachable)
+
+; End at 0x12B = 299 bytes

@@ -8,8 +8,10 @@
 *.a
 
 # Stage outputs (generated binaries — keep .hex source, regenerate .bin)
-stage*/*.bin
-!stage0/hex0.bin
+# We DO track stage0/hex0/hex0.bin because it's the audited shipped artifact
+stage*/build/
+*.fromhex.bin
+disasm.txt
 
 # Editor / IDE
 .vscode/

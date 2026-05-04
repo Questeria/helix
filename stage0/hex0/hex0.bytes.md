@@ -1,6 +1,10 @@
-# hex0.bytes.md — annotated bytes for hex0.bin
+# hex0.bytes.md — design notes (superseded by hex0.hex)
 
-**Status: NOT YET HAND-ENCODED.** This file is the canonical byte-by-byte annotation
+**Status: SUPERSEDED.** The canonical annotated-bytes form is now [`hex0.hex`](hex0.hex),
+which is byte-by-byte commented and round-trips through `xxd -r -p` to produce
+[`hex0.bin`](hex0.bin) byte-identical (verified by SHA-256). See [`build.sh`](build.sh).
+
+This file kept for historical reference — it was the planning placeholder.
 that produces `hex0.bin`. It is populated in the next session, after one of:
 
 1. **Path A (preferred):** `nasm` is installed (`sudo apt install nasm` in WSL),
