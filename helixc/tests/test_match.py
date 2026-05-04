@@ -223,6 +223,120 @@ def test_match_bind_runs():
     assert code == 42, f"expected exit 42 (y*2), got {code}"
 
 
+def test_match_bind_with_guard_runs():
+    """End-to-end: PatBind + arm guard. y if y > 10 should fire only
+    when scrutinee > 10."""
+    try:
+        from helixc.tests.test_codegen import compile_and_run
+    except Exception:
+        return
+    src = """
+    fn main() -> i32 {
+        let x = 21;
+        match x {
+            y if y > 10 => y * 2,
+            _ => 0,
+        }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected exit 42 (y > 10 path), got {code}"
+
+
+def test_match_guard_falsy_falls_through():
+    """End-to-end: guard returning false should skip to next arm."""
+    try:
+        from helixc.tests.test_codegen import compile_and_run
+    except Exception:
+        return
+    src = """
+    fn main() -> i32 {
+        let x = 5;
+        match x {
+            y if y > 100 => 1,
+            y if y > 50 => 2,
+            y if y > 0 => 42,
+            _ => 99,
+        }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42 (third guard fires), got {code}"
+
+
+def test_match_inclusive_range_endpoint():
+    """Inclusive range: 7 should match 0..=7 but not 0..7."""
+    try:
+        from helixc.tests.test_codegen import compile_and_run
+    except Exception:
+        return
+    src_inclusive = """
+    fn main() -> i32 {
+        match 7 {
+            0..=7 => 42,
+            _ => 0,
+        }
+    }
+    """
+    src_exclusive = """
+    fn main() -> i32 {
+        match 7 {
+            0..7 => 42,
+            _ => 0,
+        }
+    }
+    """
+    assert compile_and_run(src_inclusive) == 42, \
+        "expected 7 to match 0..=7"
+    assert compile_and_run(src_exclusive) == 0, \
+        "expected 7 NOT to match 0..7 (exclusive)"
+
+
+def test_match_nested_in_let():
+    """Match expression nested as the value of a let-binding."""
+    try:
+        from helixc.tests.test_codegen import compile_and_run
+    except Exception:
+        return
+    src = """
+    fn main() -> i32 {
+        let r = match 3 {
+            1 => 10,
+            2 => 20,
+            3 => 42,
+            _ => 0,
+        };
+        r
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_match_nested_match():
+    """Match inside the body of another match arm."""
+    try:
+        from helixc.tests.test_codegen import compile_and_run
+    except Exception:
+        return
+    src = """
+    fn main() -> i32 {
+        let outer = 1;
+        let inner = 2;
+        match outer {
+            1 => match inner {
+                1 => 10,
+                2 => 42,
+                _ => 0,
+            },
+            _ => 99,
+        }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42 (inner arm 2), got {code}"
+
+
 def main():
     tests = [(name, fn) for name, fn in globals().items()
              if name.startswith("test_") and callable(fn)]

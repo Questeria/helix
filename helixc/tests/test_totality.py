@@ -65,6 +65,32 @@ def test_division_by_two_accepted():
     assert fails == [], f"expected n/2 recursion accepted, got {fails}"
 
 
+def test_recursion_inside_branch_must_decrease_in_all_paths():
+    """A self-call through one branch with no decrease should reject,
+    even if another branch is fine."""
+    src = """
+    fn maybe_dec(n: i32, b: bool) -> i32 {
+        if b { maybe_dec(n - 1, b) } else { maybe_dec(n, b) }
+    }
+    """
+    fails = check_totality(parse(src))
+    names = [name for name, _ in fails]
+    assert "maybe_dec" in names, \
+        f"expected maybe_dec rejected (false-branch doesn't decrease), got {fails}"
+
+
+def test_partial_attribute_disables_check():
+    """@partial silences the check even on absurd recursion."""
+    src = """
+    @partial
+    fn whatever(n: i32) -> i32 {
+        whatever(n + 1)
+    }
+    """
+    fails = check_totality(parse(src))
+    assert fails == [], f"expected @partial to disable check, got {fails}"
+
+
 def test_constant_arg_recursion_rejected():
     """Calling self with the same arg unchanged — non-terminating."""
     src = """
