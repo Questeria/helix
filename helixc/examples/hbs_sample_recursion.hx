@@ -1,11 +1,13 @@
 // hbs_sample_recursion.hx
 //
-// HBS dogfood: recursive functions taking enum payloads.
+// HBS dogfood: recursive functions taking enum payloads. Demonstrates
+// that the match → enum-let → pass-by-value chain works across
+// self-call boundaries — exactly the shape an AST-walking compiler
+// pass needs. Computes 5! = 120 via Maybe-style state machine.
 //
-// STATUS: KNOWN LIMITATION — currently returns 1 not 120. The
-// recursive call through an enum payload doesn't propagate state
-// correctly. Plain i32 recursion works fine; this case stresses the
-// match → enum-let → pass-by-value chain. Filed for follow-up.
+// LIMITATION: inline enum constructors as fn args (e.g.
+// step(State::Continue(n-1), ...)) don't yet work — must let-bind
+// first. Workaround used below.
 //
 // Computes factorial(n) using a Maybe wrapper to model "in progress"
 // vs "done" state. Also exercises payload pattern extraction in a

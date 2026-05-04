@@ -1341,6 +1341,19 @@ def test_field_arg_passed_to_helper():
     assert code == 42, f"expected 42, got {code}"
 
 
+def test_hbs_sample_recursion_runs():
+    """HBS sample: recursive factorial via State::Continue(n) enum
+    payload + match dispatch. Stresses match → enum-let → pass-by-value
+    across self-call. 5! = 120."""
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    sample_path = os.path.join(proj_root, "helixc", "examples",
+                               "hbs_sample_recursion.hx")
+    with open(sample_path, "r", encoding="utf-8") as f:
+        src = f.read()
+    code = compile_and_run(src)
+    assert code == 120, f"expected 120 (5!), got {code}"
+
+
 def test_hbs_sample_visitor_runs():
     """HBS sample: AST visitor with struct + enum + match + struct
     pass-by-value to helper fns. Computes (6 * 7) = 42."""

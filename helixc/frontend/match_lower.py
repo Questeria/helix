@@ -213,6 +213,22 @@ def _pattern_test(pat: A.Pattern, scrut: str, span: A.Span) -> A.Expr:
     if isinstance(pat, (A.PatWildcard, A.PatBind)):
         return A.BoolLit(span=span, value=True)
     if isinstance(pat, A.PatLit):
+        # Special case: PatLit wrapping a Path (e.g. `match m { Maybe::None
+        # => ... }`) — when the scrut is a tagged value (array), the bare
+        # `__scrut == path` doesn't compare slot 0 (the tag), it compares
+        # the whole binding which lowers wrong. Emit `__scrut[0] == path`
+        # so payload-bearing enum scrutinees dispatch correctly. The
+        # codegen for Index on a scalar binding falls through gracefully
+        # (the lowerer already handles non-array Index) — but to be safe,
+        # only force-Index when the value is a Path (i.e. enum variant).
+        if isinstance(pat.value, A.Path):
+            tag_load = A.Index(
+                span=span,
+                callee=A.Name(span=span, name=scrut),
+                indices=[A.IntLit(span=span, value=0)],
+            )
+            return A.Binary(span=span, op="==",
+                            left=tag_load, right=pat.value)
         return A.Binary(
             span=span, op="==",
             left=A.Name(span=span, name=scrut),

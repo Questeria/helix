@@ -1061,6 +1061,16 @@ class Lowerer:
                     return self.builder.emit(tir.OpKind.LOAD_ELEM, idx_v,
                                              result_ty=elem_ty,
                                              attrs={"name": expr.callee.name})
+                # Fallback for tag-only enum scrutinees: if the binding is
+                # scalar (not array) and the requested index is 0, return
+                # the scalar directly — for a tag-only enum binding the
+                # whole value IS the tag. This makes match_lower's
+                # `__scrut[0] == ...` test work uniformly.
+                scalar_v = self._lookup(expr.callee.name)
+                if (scalar_v is not None and len(expr.indices) == 1
+                        and isinstance(expr.indices[0], A.IntLit)
+                        and expr.indices[0].value == 0):
+                    return scalar_v
             # Fallback: opaque
             self._lower_expr(expr.callee)
             for i in expr.indices:
