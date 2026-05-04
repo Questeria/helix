@@ -280,3 +280,63 @@ This is the foundation. Future sessions extend it with:
 - PTX kernel codegen for tile_load/tile_matmul
 - CUDA Driver API binding to launch kernels on the 3070 / 5090
 - "Hello matmul" with actual GPU execution
+
+---
+
+## 2026-05-03 (continued) — Phase 1 COMPLETE: real numerical kernels work
+
+### What landed (this stretch)
+- Phase 1-i: real CFG-based if/else (cond_br + br + merge block param)
+- Phase 1-ii: recursion (fib, fact, count_down, GCD)
+- Phase 1-iii: integer division + modulo (cdq + idiv)
+- Phase 1-iv: while-loops + mutable variables (ALLOC_VAR/LOAD_VAR/STORE_VAR)
+- Phase 1-v: for-loops over ranges, nested
+- Phase 1-vi: stack arrays (literals, indexing, assignment, compound assign)
+- Phase 1-vii: REAL 3x3 MATMUL end-to-end via for-loops + arrays
+
+### Verified end-to-end Kov programs:
+- `fn main() -> i32 { 42 }` → 42
+- `fib(9) = 34` (recursive, two recursive calls per node)
+- `fact(5) = 120` (recursive AND iterative)
+- `gcd(126, 84) = 42` (Euclidean, recursive)
+- 2x2 matrix mul trace = 69
+- 3x3 matmul (identity * 14*identity) → 42
+- 32-element array sum = 528 (mod 256 = 16)
+
+### Compiler now expressible:
+```
+fn main() -> i32 {
+    let a = [1, 0, 0, 0, 1, 0, 0, 0, 1];     // 3x3 identity
+    let b = [14, 0, 0, 0, 14, 0, 0, 0, 14];   // 14 * identity
+    let c = [0, 0, 0, 0, 0, 0, 0, 0, 0];
+    for i in 0 .. 3 {
+        for j in 0 .. 3 {
+            let mut acc = 0;
+            for k in 0 .. 3 {
+                acc += a[i * 3 + k] * b[k * 3 + j];
+            }
+            c[i * 3 + j] = acc;
+        }
+    }
+    let mut total = 0;
+    for i in 0 .. 9 { total += c[i]; }
+    total   // = 42
+}
+```
+
+This compiles to Linux ELF that produces the correct exit code, with NO external assembler/compiler/library used.
+
+### Final session totals
+- **17 git commits on main**
+- **164 tests passing** (37 codegen + 42 lex + 42 parse + 12 typecheck + 13 IR + 7 tile_ir + 8 PTX + 3 hex0)
+- **~7000 lines of build-time Python tooling**
+- **299-byte hand-authored hex0.bin** (raw binary foundation)
+- Apache 2.0 / CC0 licensed
+
+### Next session priorities
+- Function calls with array params/returns (matmul as a reusable function)
+- f32 floats (xmm regs + SSE instructions) — required for ML
+- Print syscall for richer observability (currently only exit codes)
+- Real Tile IR matmul tiling rules
+- PTX kernel codegen
+- CUDA Driver API binding to launch on RTX 3070 / 5090

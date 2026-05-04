@@ -369,6 +369,27 @@ def test_array_compound_assign():
     assert compile_and_run(src) == 42
 
 
+def test_large_array_sum():
+    # 32-element array sum stress test
+    src = """
+    fn main() -> i32 {
+        let a = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10,
+                 11, 12, 13, 14, 15, 16, 17, 18, 19, 20,
+                 21, 22, 23, 24, 25, 26, 27, 28, 29, 30,
+                 31, 32];
+        let mut total = 0;
+        for i in 0 .. 32 {
+            total += a[i];
+        }
+        total
+    }
+    """
+    # 1+2+...+32 = 32*33/2 = 528. Mod 256 = 16 (since exit codes are 8-bit on Linux)
+    # Actually Linux exit codes are %256, so we need a value <= 255.
+    # Sum of 1..=32 = 528 % 256 = 16.
+    assert compile_and_run(src) == 16   # 528 mod 256
+
+
 def test_real_matmul_3x3_via_arrays():
     # 3x3 matmul: c[i][j] = sum_k a[i][k] * b[k][j]
     # We use flat 9-element arrays with row-major indexing: a[i*3+j]
