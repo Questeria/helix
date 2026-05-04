@@ -1258,6 +1258,18 @@ def test_hash_i32_distinguishes():
     assert code == 1, f"expected hash distinguishes, got {code}"
 
 
+def test_hbs_integration_arena_stress_runs():
+    """Stress test: push 1000 values into the arena, read all back,
+    verify each matches expected. 0 errors → exit 42."""
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    sample_path = os.path.join(proj_root, "helixc", "examples",
+                               "hbs_integration_arena_stress.hx")
+    with open(sample_path, "r", encoding="utf-8") as f:
+        src = f.read()
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42 (zero errors), got {code}"
+
+
 def test_hbs_integration_bst_runs():
     """Integration test #2: binary search tree with insert + contains +
     in-order traversal. Builds 7-node BST, verifies in-order property
