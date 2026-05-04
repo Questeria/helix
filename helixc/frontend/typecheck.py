@@ -226,6 +226,10 @@ class TypeChecker:
         self._current_pure: bool = False
         self._current_effects: frozenset[str] = frozenset()
         self._current_fn_name: str = ""
+        # Cascade-suppression set for unbound-name diagnostics. Initialized
+        # here so re-running check() on the same instance doesn't carry
+        # stale entries that would silence real new errors.
+        self._seen_unbound: set[str] = set()
 
     # ---- entry point ----
     def check(self) -> list[TypeError_]:
@@ -575,12 +579,11 @@ class TypeChecker:
         """Emit a typecheck error for an unbound name, with a Levenshtein
         'did you mean?' suggestion drawn from in-scope names + functions.
         Suppresses duplicate diagnostics for the same name and skips the
-        small set of compiler-recognized builtins."""
+        small set of compiler-recognized builtins. The _seen_unbound set
+        is initialised in __init__ so a re-checked instance starts clean."""
         if name in self._BUILTIN_NAMES:
             return
         from difflib import get_close_matches
-        if not hasattr(self, "_seen_unbound"):
-            self._seen_unbound: set[str] = set()
         if name in self._seen_unbound:
             return
         self._seen_unbound.add(name)

@@ -272,17 +272,21 @@ def _propagate(node: A.Expr, adj: A.Expr, acc: dict[str, list[A.Expr]]) -> None:
         then_acc: dict[str, list[A.Expr]] = {p: [] for p in acc}
         else_acc: dict[str, list[A.Expr]] = {p: [] for p in acc}
 
-        def _into(branch: A.Expr | None, bucket: dict[str, list[A.Expr]]) -> None:
+        def _into(branch: A.Expr | None, bucket: dict[str, list[A.Expr]],
+                   adj_for_branch: A.Expr) -> None:
             if branch is None:
                 return
             if isinstance(branch, A.Block):
                 if branch.final_expr is not None:
-                    _propagate(branch.final_expr, adj, bucket)
+                    _propagate(branch.final_expr, adj_for_branch, bucket)
             else:
-                _propagate(branch, adj, bucket)
+                _propagate(branch, adj_for_branch, bucket)
 
-        _into(node.then, then_acc)
-        _into(node.else_, else_acc)
+        # Deepcopy adj for the else-branch so the two branches don't
+        # share an adjoint AST node — same hazard the Binary rules
+        # already deepcopy around.
+        _into(node.then, then_acc, adj)
+        _into(node.else_, else_acc, copy.deepcopy(adj))
 
         for p in acc:
             had_then = bool(then_acc[p])

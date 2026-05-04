@@ -66,8 +66,12 @@
 }
 
 // Sigmoid: bounded activation in (0, 1). Used for binary classification.
+// Saturates to 0 / 1 outside __exp's accurate range (~|x| < 4).
 @pure fn __sigmoid(x: f32) -> f32 {
-    1.0 / (1.0 + __exp(0.0 - x))
+    if x > 4.0 { 1.0 }
+    else { if x < -4.0 { 0.0 }
+           else { 1.0 / (1.0 + __exp(0.0 - x)) }
+    }
 }
 
 // ReLU: x if x > 0, else 0. Common neural-net activation.
@@ -122,35 +126,41 @@ fn __always_accept(h: i32, v: f32) -> i32 {
     if f < x { f + 1.0 } else { f }
 }
 
-// Integer power: x^n for non-negative integer n. n is i32 to avoid
-// recursive float comparisons; up to n=10 covers most practical cases.
+// Integer power: x^n via iterative multiplication. Uses a loop bounded
+// at 16 iterations as a safety cap (n > 16 saturates to x^16). Out of
+// range or n <= 0 returns 1.0.
 @pure fn __powi(x: f32, n: i32) -> f32 {
     if n <= 0 { 1.0 }
-    else { if n == 1 { x }
-           else { if n == 2 { x * x }
-                  else { if n == 3 { x * x * x }
-                         else { if n == 4 { let s = x*x; s * s }
-                                else {
-                                    // generic: compute up to n==10 unrolled
-                                    let s = x*x;
-                                    if n == 5 { s * s * x }
-                                    else { if n == 6 { s * s * s }
-                                           else { if n == 7 { s * s * s * x }
-                                                  else { if n == 8 { let q = s*s; q * q }
-                                                         else { if n == 9 { let q = s*s; q * q * x }
-                                                                else { let q = s*s; q * q * s } } } } }
-                                } } } } }
+    else {
+        let mut result: f32 = 1.0;
+        let mut i: i32 = 0;
+        let cap = if n < 16 { n } else { 16 };
+        while i < cap {
+            result = result * x;
+            i = i + 1;
+        }
+        result
+    }
 }
 
 // =========================================================================
 // Modern activation functions.
 // =========================================================================
 
-// tanh(x) = (exp(2x) - 1) / (exp(2x) + 1).
-// Range: (-1, 1). Symmetric, smooth.
+// tanh(x) = (exp(2x) - 1) / (exp(2x) + 1). Range (-1, 1).
+// IMPORTANT: __exp is a 8-term Taylor approximation accurate only for
+// roughly |x| < 4 ⇒ this __tanh is accurate only for |x| < 2 (since
+// it evaluates exp(2x)). For |x| > ~2 we clamp the result to ±1, the
+// asymptotic limit. Saturation matters for activation use in NNs
+// where logits frequently exceed |10|.
 @pure fn __tanh(x: f32) -> f32 {
-    let e2 = __exp(2.0 * x);
-    (e2 - 1.0) / (e2 + 1.0)
+    if x > 2.0 { 1.0 }
+    else { if x < -2.0 { 0.0 - 1.0 }
+           else {
+               let e2 = __exp(2.0 * x);
+               (e2 - 1.0) / (e2 + 1.0)
+           }
+    }
 }
 
 // Softplus: smooth approximation of relu. Range: (0, ∞).
@@ -208,29 +218,24 @@ fn __always_accept(h: i32, v: f32) -> i32 {
 // Not cryptographic. Use for weight init, dropout masks, etc.
 // =========================================================================
 
-// One step of xorshift32. Given current state s, returns the next state.
-// State must be non-zero; the caller is responsible for seeding.
-//   s ^= s << 13;
-//   s ^= s >> 17;
-//   s ^= s << 5;
-// The Helix backend doesn't yet expose bitwise shifts/xor, so we
-// approximate with arithmetic. For now we use a Lehmer LCG which only
-// needs multiply + mod and is good enough for non-cryptographic uses:
-//   s = (s * 48271) % 2147483647
+// Small LCG sized to fit safely in i32 multiplication.
+// State range: [0, 32768). Period: 32768. Adequate for seeded
+// reproducibility in test programs; not strong enough for serious
+// statistical sampling. The previous version used a 48271×x multiply
+// which overflowed i32 for any seed > ~44k, silently corrupting the
+// stream. This version's 25173×x peaks at 25173×32767 ≈ 8.25e8 — well
+// under i32 max (2.15e9) — so the multiply is exact.
 @pure fn __rand_step(s: i32) -> i32 {
-    // Lehmer LCG (MINSTD): period 2^31 - 2, well-studied parameters.
-    // To avoid i32 overflow, do the multiply at runtime carefully:
-    //   (s * 48271) mod (2^31 - 1)
-    // For now we just do the modulo — overflow is wrap-around in i32
-    // arithmetic which corrupts but produces SOME deterministic stream.
-    let raw = s * 48271;
-    let m = raw % 2147483647;
-    if m < 0 { m + 2147483647 } else { if m == 0 { 1 } else { m } }
+    // Park-Miller-style LCG with parameters from Numerical Recipes.
+    // s_{n+1} = (s_n * 25173 + 13849) mod 32768
+    let raw = s * 25173 + 13849;
+    let m = raw % 32768;
+    if m < 0 { m + 32768 } else { if m == 0 { 1 } else { m } }
 }
 
-// Map a state to a float in [0, 1).
+// Map a state to a float in [0, 1). State should be in [0, 32768).
 @pure fn __rand_float(s: i32) -> f32 {
-    (s as f32) * 0.0000000004656612873   // 1 / (2^31 - 1)
+    (s as f32) * 0.000030517578125   // 1 / 32768
 }
 
 // Map a state to a float in [-bound, bound] — useful for weight init.
@@ -251,7 +256,7 @@ fn __always_accept(h: i32, v: f32) -> i32 {
 // tuple returns yet. Instead, callers store v in a separate cell and
 // pass it in. This helper just computes the new velocity.
 @pure fn __momentum_step_v(v: f32, g: f32, beta: f32) -> f32 {
-    beta * v + grad
+    beta * v + g
 }
 
 // Adam-like step (single-step, no bias correction for simplicity).
