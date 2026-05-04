@@ -283,7 +283,10 @@ class Lowerer:
         params: list[tuple[str, tir.TIRType]] = []
         for p in fn.params:
             n_slots = self._aggregate_slot_count(p.ty)
-            if n_slots is not None and n_slots > 1:
+            # Aggregate-typed params always go through the multi-slot
+            # path, even single-field ones — the body uses field-access
+            # syntax which expects an array binding.
+            if n_slots is not None and n_slots >= 1:
                 for i in range(n_slots):
                     params.append((f"{p.name}__slot{i}",
                                    tir.TIRScalar("i32")))
@@ -316,7 +319,7 @@ class Lowerer:
         ir_param_idx = 0
         for p in fn.params:
             n_slots = self._aggregate_slot_count(p.ty)
-            if n_slots is not None and n_slots > 1:
+            if n_slots is not None and n_slots >= 1:
                 # Take next n_slots IR params, allocate array, store each.
                 slot_vals = list(ir_fn.params[ir_param_idx:
                                               ir_param_idx + n_slots])
@@ -731,7 +734,7 @@ class Lowerer:
                 if callee_ast is not None and i < len(callee_ast.params):
                     p_ty = callee_ast.params[i].ty
                     n_slots = self._aggregate_slot_count(p_ty)
-                    if n_slots is not None and n_slots > 1:
+                    if n_slots is not None and n_slots >= 1:
                         if isinstance(a, A.Name):
                             arr = self._lookup_array(a.name)
                             if arr is not None:
