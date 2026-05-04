@@ -167,15 +167,20 @@ def _build_chain(scrut: str, arms: list[A.MatchArm], span: A.Span) -> A.Expr:
     arm = arms[0]
     rest = arms[1:]
     # Build the arm body with binders prepended as let-statements.
-    binds = _collect_binds(arm.pattern, scrut, span)
-    body_block = _wrap_body_with_binds(arm.body, binds, span)
+    # IMPORTANT: deepcopy the binds for guard vs body so the two `Let`
+    # nodes don't share state — downstream passes mutate AST nodes in
+    # place, and a shared `Let` whose `.value` is rewritten in the body
+    # would also corrupt the guard.
+    import copy as _copy
+    body_binds = _collect_binds(arm.pattern, scrut, span)
+    body_block = _wrap_body_with_binds(arm.body, body_binds, span)
 
     # Build the test: pattern-test && guard?
     pat_test = _pattern_test(arm.pattern, scrut, span)
     if arm.guard is not None:
-        # Bindings introduced by the pattern must be visible in the guard.
-        # Wrap the guard in a Block with the binds, ANDed with pat_test.
-        guard_block = _wrap_body_with_binds(arm.guard, binds, span)
+        # Fresh binds (deep-copied) for the guard scope.
+        guard_binds = [_copy.deepcopy(b) for b in body_binds]
+        guard_block = _wrap_body_with_binds(arm.guard, guard_binds, span)
         cond = _and(pat_test, guard_block, span)
     else:
         cond = pat_test

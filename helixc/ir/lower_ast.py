@@ -281,14 +281,20 @@ class Lowerer:
             if expr.op in cmp_:
                 return self.builder.emit(cmp_[expr.op], l, r,
                                          result_ty=tir.TIRScalar("bool"))
-            # Logical or/and — no short-circuit yet; both operands are
-            # already-evaluated booleans (0/1). MUL is logical AND, ADD-then-
-            # nonzero-test is logical OR (any 1 → truthy). Branching just
-            # needs a nonzero→true test, so MUL/ADD suffice for now.
+            # Logical or/and — no short-circuit yet, but we DO normalize
+            # the result to a strict bool (0 or 1) so downstream uses can
+            # safely CMP_EQ against 1 / treat the value as a typed bool.
+            #   &&: MUL (true & true = 1*1 = 1, otherwise 0)
+            #   ||: ADD-then-CMP_NE-against-zero (avoids `1 || 1 = 2` polluting
+            #       compares like `(a||b) == 1`)
             if expr.op == "&&":
                 return self.builder.emit(tir.OpKind.MUL, l, r,
                                          result_ty=tir.TIRScalar("bool"))
-            return self.builder.emit(tir.OpKind.ADD, l, r,
+            # ||: emit (l + r) != 0
+            sum_ = self.builder.emit(tir.OpKind.ADD, l, r,
+                                     result_ty=tir.TIRScalar("bool"))
+            zero = self.builder.const_int(0)
+            return self.builder.emit(tir.OpKind.CMP_NE, sum_, zero,
                                      result_ty=tir.TIRScalar("bool"))
         if isinstance(expr, A.Unary):
             inner = self._lower_expr(expr.operand)

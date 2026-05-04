@@ -957,6 +957,39 @@ def test_real_matmul_3x3_via_arrays():
     assert compile_and_run(src) == 42
 
 
+def test_or_chain_normalized_to_bool():
+    """Without `||` result normalization, `1 || 1` lowered as ADD = 2,
+    and `(a || b) == 1` would silently fail. With ADD-then-CMP_NE, the
+    result is strictly 0 or 1 again."""
+    src = """
+    fn main() -> i32 {
+        let a = 1 == 1;
+        let b = 1 == 1;
+        let c = a || b;
+        if c == true { 42 } else { 0 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42 (c should be a strict bool 1), got {code}"
+
+
+def test_chained_ors_normalized():
+    """Multiple ||'s in a row — without normalization, repeated ADD
+    accumulates to ≥3 quickly, breaking any downstream equality check."""
+    src = """
+    fn main() -> i32 {
+        let a = 1 == 1;
+        let b = 1 == 1;
+        let c = 1 == 1;
+        let d = 1 == 1;
+        let r = a || b || c || d;
+        if r == true { 42 } else { 0 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42 (r should be a strict bool 1), got {code}"
+
+
 def test_dump_ast_hashes_flag():
     """`autodiff_cli --dump-ast-hashes <file>` prints `<fn> : <hex12>`
     deterministically across two runs on the same input."""

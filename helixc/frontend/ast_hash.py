@@ -139,7 +139,10 @@ def _hash_into(h: "hashlib._Hash", node: Any,
             _emit(h, "NoFinal")
         return
     if isinstance(node, A.For):
-        _emit(h, "For", node.var_name)
+        # NB: don't include var_name in the tag emission — the de-Bruijn
+        # binder map below already encodes the binding, so two For-loops
+        # that differ only in loop variable name should hash equally.
+        _emit(h, "For")
         _hash_into(h, node.iter_expr, binders)
         local = dict(binders)
         depth = max(local.values(), default=-1) + 1

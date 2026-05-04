@@ -204,6 +204,21 @@ def test_x_minus_zero_folds():
     assert subs == 0, f"expected x-0 to fold, SUB count = {subs}"
 
 
+def test_identity_forwarding_runs_correctly_across_blocks():
+    """End-to-end check that identity forwarding preserves correctness
+    when the identity op's result is used in a different block."""
+    from helixc.tests.test_codegen import compile_and_run
+    src = """
+    fn main() -> i32 {
+        let x = 21;
+        let y = x * 1;
+        if y > 0 { y * 2 } else { 0 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42 (x*1=21, y*2=42), got {code}"
+
+
 def main():
     tests = [(name, fn) for name, fn in globals().items()
              if name.startswith("test_") and callable(fn)]

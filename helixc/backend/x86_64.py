@@ -722,6 +722,12 @@ class FnCompiler:
             self.asm.mov_eax_imm32(int(op.attrs["value"]))
             self.asm.mov_mem_rbp_eax(slot)
             return
+        if op.kind == tir.OpKind.CONST_BOOL:
+            # bool is stored as i32: 0 for false, 1 for true.
+            slot = self._slot_of(op.results[0])
+            self.asm.mov_eax_imm32(1 if bool(op.attrs["value"]) else 0)
+            self.asm.mov_mem_rbp_eax(slot)
+            return
         if op.kind == tir.OpKind.CONST_FLOAT:
             # Pack the f32 value into 4 bytes, store at the result's slot via eax
             slot = self._slot_of(op.results[0])

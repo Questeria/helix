@@ -106,15 +106,11 @@ def test_quote_different_inner_diff_hash():
 
 
 def test_for_loop_alpha_equivalence():
-    """`for i in 0..10` and `for j in 0..10` with same body should hash equal
-    when the body doesn't reference the binder; differ when it does."""
-    body_no_use_a = _body_of("fn f() -> i32 { for i in 0..10 { } 0 }")
-    body_no_use_b = _body_of("fn f() -> i32 { for j in 0..10 { } 0 }")
-    # Note: ast_hash currently keys For by its var_name — rename the
-    # variable, hash should track. So these COULD differ. Just assert
-    # both are deterministic strings.
-    assert isinstance(structural_hash(body_no_use_a), str)
-    assert isinstance(structural_hash(body_no_use_b), str)
+    """`for i in 0..10 { i+1 }` and `for j in 0..10 { j+1 }` are alpha-
+    equivalent — same shape, renamed binder. Should hash equal."""
+    h_i = structural_hash(_body_of("fn f() -> i32 { for i in 0..10 { i + 1; } 0 }"))
+    h_j = structural_hash(_body_of("fn f() -> i32 { for j in 0..10 { j + 1; } 0 }"))
+    assert h_i == h_j, f"alpha-eq mismatch for For: {h_i} != {h_j}"
 
 
 def test_range_endpoints_matter():
