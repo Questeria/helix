@@ -1,0 +1,57 @@
+module examples::hello
+
+// First Kov program — exercises lexer + parser end-to-end.
+
+@pure
+fn add(a: i32, b: i32) -> i32 {
+    a + b
+}
+
+@pure
+fn fib(n: i32) -> i32 {
+    if n < 2 {
+        n
+    } else {
+        fib(n - 1) + fib(n - 2)
+    }
+}
+
+@pure
+fn matmul[N: size, M: size, P: size](
+    a: tensor<f32, [N, M]>,
+    b: tensor<f32, [M, P]>,
+) -> tensor<f32, [N, P]>
+where N % 16 == 0, M % 16 == 0, P % 16 == 0,
+{
+    let mut c = tensor::zeros();
+    for i in 0 .. N / 16 {
+        for j in 0 .. P / 16 {
+            for k in 0 .. M / 16 {
+                let a_tile = tile::load(a, [i, k]);
+                let b_tile = tile::load(b, [k, j]);
+                tile::matmul(a_tile, b_tile);
+            }
+        }
+    }
+    c
+}
+
+@kernel
+fn add_kernel[N: size](
+    a: tile<bf16, [N], reg>,
+    b: tile<bf16, [N], reg>,
+) -> tile<bf16, [N], reg> {
+    a
+}
+
+struct Point {
+    x: f32,
+    y: f32,
+}
+
+enum Maybe[T] {
+    None,
+    Some(T),
+}
+
+const MAX_BLOCK: i32 = 1024;

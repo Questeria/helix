@@ -114,3 +114,29 @@ Once hex0 works, every subsequent stage feeds higher-level text into the previou
 - **Hex1**: human-readable assembly format with labels and comments. Adds: label resolution, multi-byte numeric forms. Decision needed: write our own from scratch (~3-5 PM) OR vendor `oriansj/stage0-posix-amd64/hex1` and audit (~few weeks). Tentative: vendor hex1+ since Phase 0a is the load-bearing "raw binary" claim.
 - **kov-libc design**: minimal libc shim in M2 C-subset to avoid GPL-3.0 contagion when M2-Planet is vendored.
 - **Cross-reference vs oriansj's hex0**: confirm our encoding decisions match theirs for analogous instructions.
+
+---
+
+## 2026-05-03 (continued) — Phase 0b: Kov frontend WORKING
+
+**Pivot decision recorded.** Continuing the literal stage0 chain (hex1 → M0 → M1) was deemed low-novelty for current AGI velocity. Instead, jumped to Kov language design. Bootstrap chain rejoins via vendoring M2-Planet later for kov-libc + kovc-bootstrap.c. The hex0 we shipped is the durable "raw binary" claim.
+
+### What landed
+- **`docs/lang/spec.md`** — Kov v0.1 spec (~280 lines): grammar, types, tile/tensor primitives, autodiff API, kernels, examples.
+- **`kovc/frontend/lexer.py`** — full tokenizer (~430 lines)
+- **`kovc/frontend/ast.py`** — 40+ AST node types (~250 lines)
+- **`kovc/frontend/parser.py`** — recursive-descent parser with precedence climbing (~750 lines)
+- **`kovc/tests/test_lexer.py`** — 42/42 PASS
+- **`kovc/tests/test_parser.py`** — 42/42 PASS
+- **`kovc/examples/hello.kov`** — first real Kov source: lexes to 304 tokens, parses to 7 top-level items (4 fns including a kernel, 1 struct, 1 enum, 1 const)
+
+### Bug fixes during testing
+- Number lexer was greedy-eating underscores after digits, breaking `42_i32` suffix detection. Fixed by only consuming `_` if followed by another digit.
+- Parser's `>` was treated as comparison inside tensor type generic args, breaking `tensor<bf16, [N, M], gpu(0)>`. Fixed via context flag `_no_cmp_lt_gt` that disables `<` / `>` as binary ops inside generic-arg parsing.
+- Path segments and use-decls couldn't accept `tensor`, `module`, etc. as path elements. Fixed via `_eat_name_token()` that accepts any alphanumeric keyword as a name.
+- `for`/`while`/`loop` were being miscategorized as `final_expr` of a block when followed by `}`. They never produce values, so always treat as stmts now.
+
+### Next session
+- Type checker scaffold (size-constraint solver via Presburger arithmetic)
+- Tensor IR data structures
+- x86-64 codegen for arithmetic + control flow (tiny subset)
