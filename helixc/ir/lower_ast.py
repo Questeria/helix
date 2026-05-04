@@ -622,18 +622,35 @@ class Lowerer:
         """A verifier function must take exactly two i32 params and return
         an integer. Otherwise the System V int-register call convention
         used by MODIFY's call to the verifier doesn't apply (e.g. f32 args
-        would land in xmm0/xmm1 instead of edi/esi). When the ABI doesn't
-        match we fall back to the legacy verifier-as-runtime-value path."""
+        would land in xmm0/xmm1 instead of edi/esi).
+
+        When the ABI looks "almost right" (function exists, has 2 i32
+        params, but the return type is wrong — e.g. unit/void), we raise
+        an explicit compile error rather than silently routing to the
+        legacy fallback (which would always reject every modify, with no
+        diagnostic). When the ABI is clearly different (wrong arity or
+        non-i32 params), we silently fall back; that case is plausibly
+        the user passing a runtime expression that happens to have the
+        same name as a function.
+        """
         ir_fn = self.functions.get(fn_name)
         if ir_fn is None or len(ir_fn.params) != 2:
             return False
         for p in ir_fn.params:
             if not (isinstance(p.ty, tir.TIRScalar) and p.ty.name == "i32"):
                 return False
-        # Return type must also be a scalar int (i32 or compatible).
+        # Two i32 params — looks like a verifier. Now require an integer-
+        # like return type or raise a clear error.
         if not (isinstance(ir_fn.return_ty, tir.TIRScalar)
                 and ir_fn.return_ty.name in ("i32", "bool")):
-            return False
+            ret_str = (ir_fn.return_ty.name
+                       if isinstance(ir_fn.return_ty, tir.TIRScalar)
+                       else type(ir_fn.return_ty).__name__)
+            raise ValueError(
+                f"verifier function {fn_name!r} has parameters (i32, i32) "
+                f"but returns {ret_str!r} — verifiers must return i32 or "
+                f"bool (1=accept, 0=reject)"
+            )
         return True
 
 

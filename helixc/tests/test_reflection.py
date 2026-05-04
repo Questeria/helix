@@ -157,6 +157,29 @@ def test_splice_oob_handle_returns_zero_not_crash():
     assert compile_and_run(src) == 42
 
 
+def test_verifier_with_unit_return_raises_clear_error():
+    # A verifier with the right param shape but missing return type would
+    # previously fall back silently to the legacy "treat verifier as a
+    # runtime value" path, where every modify is then rejected with no
+    # diagnostic. Now it should raise a compile-time ValueError.
+    src = """
+    fn bad_verifier(handle: i32, new_val: i32) {
+        // No final expression and no return type → unit
+    }
+    fn main() -> i32 {
+        let h = quote(0);
+        modify(h, 1, bad_verifier);
+        0
+    }
+    """
+    try:
+        compile_and_run(src)
+    except ValueError as e:
+        assert "verifier" in str(e).lower(), f"got {e}"
+        return
+    raise AssertionError("expected ValueError for unit-return verifier")
+
+
 def test_modify_oob_handle_does_not_write():
     # An out-of-range handle must not be allowed to write past the cell array.
     # MODIFY returns 0 for OOB without calling the verifier.

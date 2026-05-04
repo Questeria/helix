@@ -428,6 +428,11 @@ class Asm:
         # F3 0F 2A C0
         self.b.emit(0xF3, 0x0F, 0x2A, 0xC0)
 
+    def ucomiss_xmm0_xmm1(self) -> None:
+        # 0F 2E C1   ucomiss xmm0, xmm1 (unordered: SNaN doesn't raise #IA)
+        # CF=1 if xmm0 < xmm1; ZF=1 if equal or unordered (NaN).
+        self.b.emit(0x0F, 0x2E, 0xC1)
+
     def comiss_xmm0_xmm1(self) -> None:
         # NP 0F 2F C1
         self.b.emit(0x0F, 0x2F, 0xC1)
@@ -791,7 +796,10 @@ class FnCompiler:
                     self._is_float_type(op.operands[1].ty)):
                 self.asm.movss_xmm0_mem_rbp(l_slot)
                 self.asm.movss_xmm1_mem_rbp(r_slot)
-                self.asm.comiss_xmm0_xmm1()
+                # ucomiss (0F 2E) — unordered compare; SNaN inputs don't
+                # raise #IA. comiss (0F 2F) is also available but only
+                # differs on SNaN exception behavior, which we don't need.
+                self.asm.ucomiss_xmm0_xmm1()
                 float_cmp_setters[op.kind]()
             else:
                 self.asm.mov_eax_mem_rbp(l_slot)
