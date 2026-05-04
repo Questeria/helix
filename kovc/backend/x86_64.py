@@ -271,6 +271,40 @@ class Asm:
             rel_base=offset + 4,
         ))
 
+    def jmp_rel32(self, target: str) -> None:
+        # E9 <rel32>
+        self.b.emit(0xE9)
+        offset = self.b.offset()
+        self.b.emit_bytes(b"\x00\x00\x00\x00")
+        self.b.fixups.append(Fixup(
+            offset=offset, target=target, size=4,
+            rel_base=offset + 4,
+        ))
+
+    def je_rel32(self, target: str) -> None:
+        # 0F 84 <rel32>
+        self.b.emit(0x0F, 0x84)
+        offset = self.b.offset()
+        self.b.emit_bytes(b"\x00\x00\x00\x00")
+        self.b.fixups.append(Fixup(
+            offset=offset, target=target, size=4,
+            rel_base=offset + 4,
+        ))
+
+    def jne_rel32(self, target: str) -> None:
+        # 0F 85 <rel32>
+        self.b.emit(0x0F, 0x85)
+        offset = self.b.offset()
+        self.b.emit_bytes(b"\x00\x00\x00\x00")
+        self.b.fixups.append(Fixup(
+            offset=offset, target=target, size=4,
+            rel_base=offset + 4,
+        ))
+
+    def test_eax_eax(self) -> None:
+        # 85 C0
+        self.b.emit(0x85, 0xC0)
+
     def syscall(self) -> None:
         self.b.emit(0x0F, 0x05)
 
@@ -315,14 +349,17 @@ class FnCompiler:
         return self.slots[v.id]
 
     def compile(self) -> None:
-        # Pre-allocate slots for all SSA values used in the body
+        # Pre-allocate slots for all SSA values across ALL blocks (not just entry)
         for blk in self.fn.blocks:
+            for p in blk.params:
+                self._alloc_slot(p)
             for op in blk.ops:
                 for r in op.results:
                     self._alloc_slot(r)
-        # Pre-allocate slots for params
+        # Pre-allocate slots for fn params (they share entry block params slot conceptually)
         for p in self.fn.params:
-            self._alloc_slot(p)
+            if p.id not in self.slots:
+                self._alloc_slot(p)
 
         frame_size = (-self.next_slot + 15) & ~15  # 16-byte align
 
@@ -350,9 +387,12 @@ class FnCompiler:
             slot = self._slot_of(p)
             ARG_SPILLS[i](slot)
 
-        # Emit ops in order
-        for op in self.fn.entry.ops:
-            self._emit_op(op, frame_size)
+        # Emit each block in order, with a label per block
+        for blk in self.fn.blocks:
+            block_label = f"{self.fn.name}_bb{blk.id}"
+            self.asm.b.define_symbol(block_label)
+            for op in blk.ops:
+                self._emit_op(op, frame_size)
 
     def _emit_op(self, op: tir.Op, frame_size: int) -> None:
         if op.kind == tir.OpKind.CONST_INT:
@@ -470,6 +510,36 @@ class FnCompiler:
             self.asm.mov_rsp_rbp()
             self.asm.pop_rbp()
             self.asm.ret()
+            return
+        # Branches
+        if op.kind == tir.OpKind.BR:
+            # br target_block(value) — copy value into target block's param slot,
+            # then jmp to label.
+            target_id = op.attrs["target_block"]
+            target_label = f"{self.fn.name}_bb{target_id}"
+            # Find target block to get its param slot (for now: single param assumed)
+            target_blk = next((b for b in self.fn.blocks if b.id == target_id), None)
+            if target_blk is None:
+                raise ValueError(f"BR to unknown block {target_id}")
+            if op.operands and target_blk.params:
+                src_slot = self._slot_of(op.operands[0])
+                dst_slot = self._slot_of(target_blk.params[0])
+                self.asm.mov_eax_mem_rbp(src_slot)
+                self.asm.mov_mem_rbp_eax(dst_slot)
+            self.asm.jmp_rel32(target_label)
+            return
+        if op.kind == tir.OpKind.COND_BR:
+            # cond_br cond, true_block, false_block
+            cond_slot = self._slot_of(op.operands[0])
+            true_id = op.attrs["true_block"]
+            false_id = op.attrs["false_block"]
+            true_label = f"{self.fn.name}_bb{true_id}"
+            false_label = f"{self.fn.name}_bb{false_id}"
+            self.asm.mov_eax_mem_rbp(cond_slot)
+            self.asm.test_eax_eax()
+            # If cond != 0, jump to true_label; else jump to false_label
+            self.asm.jne_rel32(true_label)
+            self.asm.jmp_rel32(false_label)
             return
         # Unsupported op — emit nothing (placeholder); v0.2 will lower
         # tensor ops to runtime calls.

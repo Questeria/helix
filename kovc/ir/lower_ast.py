@@ -238,20 +238,44 @@ class Lowerer:
             return self.builder.emit(tir.OpKind.CALL, *args,
                                      result_ty=ret_ty, attrs={"target": target})
         if isinstance(expr, A.If):
-            # v0.1: lower as eager branchless eval — both arms compute, select picks.
-            # Real CFG-with-blocks lowering comes in v0.2.
+            # Real CFG-based if/else: cond_br -> then_block | else_block,
+            # both branches end with br merge_block(value). Result is the
+            # merge block's parameter.
             cond = self._lower_expr(expr.cond)
+            if cond is None:
+                cond = self.builder.const_int(0)
+            then_blk = self.builder.append_block()
+            else_blk = self.builder.append_block()
+            merge_blk = self.builder.append_block()
+
+            # Emit conditional branch: if cond, go to then_blk; else, else_blk
+            self.builder.emit(tir.OpKind.COND_BR, cond,
+                              attrs={"true_block": then_blk.id,
+                                     "false_block": else_blk.id})
+
+            # Then arm
+            self.builder.switch_to(then_blk)
             t_val = self._lower_block(expr.then)
-            e_val = None
-            if expr.else_ is not None:
-                if isinstance(expr.else_, A.Block):
-                    e_val = self._lower_block(expr.else_)
-                else:
-                    e_val = self._lower_expr(expr.else_)
-            if t_val is None: t_val = self.builder.const_int(0)
-            if e_val is None: e_val = self.builder.const_int(0)
-            return self.builder.emit(tir.OpKind.SELECT, cond, t_val, e_val,
-                                     result_ty=t_val.ty)
+            if t_val is None:
+                t_val = self.builder.const_int(0)
+            self.builder.emit(tir.OpKind.BR, t_val,
+                              attrs={"target_block": merge_blk.id})
+
+            # Else arm
+            self.builder.switch_to(else_blk)
+            if expr.else_ is None:
+                e_val = self.builder.const_int(0)
+            elif isinstance(expr.else_, A.Block):
+                e_val = self._lower_block(expr.else_) or self.builder.const_int(0)
+            else:
+                e_val = self._lower_expr(expr.else_) or self.builder.const_int(0)
+            self.builder.emit(tir.OpKind.BR, e_val,
+                              attrs={"target_block": merge_blk.id})
+
+            # Merge: the if's value is the merge block's single param
+            self.builder.switch_to(merge_blk)
+            result = self.builder.new_block_param(t_val.ty, hint="if_result")
+            return result
         if isinstance(expr, A.Block):
             return self._lower_block(expr)
         if isinstance(expr, A.For):

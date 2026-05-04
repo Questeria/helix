@@ -153,6 +153,46 @@ def test_matmul_2x2_trace():
     assert compile_and_run(src) == 69   # 19 + 50
 
 
+def test_recursion_fib():
+    # Fibonacci — the canonical proof that real CFG-based branching works
+    # (SELECT-based if would infinite-recurse since it evaluates both arms)
+    src = """
+    fn fib(n: i32) -> i32 {
+        if n < 2 {
+            n
+        } else {
+            fib(n - 1) + fib(n - 2)
+        }
+    }
+    fn main() -> i32 { fib(9) }
+    """
+    # fib(9) = 34
+    assert compile_and_run(src) == 34
+
+
+def test_recursion_factorial():
+    src = """
+    fn fact(n: i32) -> i32 {
+        if n < 2 { 1 } else { n * fact(n - 1) }
+    }
+    fn main() -> i32 { fact(5) }
+    """
+    # 5! = 120
+    assert compile_and_run(src) == 120
+
+
+def test_recursion_count_down():
+    # tail-recursive style: counts down to 0 then returns base value
+    src = """
+    fn count(n: i32, acc: i32) -> i32 {
+        if n == 0 { acc } else { count(n - 1, acc + n) }
+    }
+    fn main() -> i32 { count(7, 0) }
+    """
+    # 7+6+5+4+3+2+1 = 28
+    assert compile_and_run(src) == 28
+
+
 def main():
     tests = [(name, fn) for name, fn in globals().items()
              if name.startswith("test_") and callable(fn)]

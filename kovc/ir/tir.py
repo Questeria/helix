@@ -307,6 +307,23 @@ class IRBuilder:
         self.current_fn = None
         self.current_block = None
 
+    def append_block(self) -> "Block":
+        """Create a new block in the current function and return it (without
+        switching to it)."""
+        assert self.current_fn is not None
+        b = self.new_block()
+        self.current_fn.blocks.append(b)
+        return b
+
+    def switch_to(self, block: "Block") -> None:
+        self.current_block = block
+
+    def new_block_param(self, ty: TIRType, hint: Optional[str] = None) -> Value:
+        assert self.current_block is not None
+        v = self.new_value(ty, hint)
+        self.current_block.params.append(v)
+        return v
+
     # ---- ops ----
     def emit(self, kind: OpKind, *operands: Value,
              result_ty: Optional[TIRType] = None,

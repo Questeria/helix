@@ -121,12 +121,20 @@ def test_kernel_attribute():
     assert fn.attrs.get("kernel") is True
 
 
-def test_if_select_lowered():
+def test_if_lowered_to_cfg():
     src = "fn f(b: bool) -> i32 { if b { 1 } else { 2 } }"
     mod = lower_src(src)
     fn = mod.functions["f"]
-    selects = [op for op in fn.entry.ops if op.kind == tir.OpKind.SELECT]
-    assert len(selects) == 1
+    # CFG-based lowering creates extra blocks (then/else/merge) and
+    # emits cond_br + br ops
+    cond_brs = [op for blk in fn.blocks for op in blk.ops
+                if op.kind == tir.OpKind.COND_BR]
+    brs = [op for blk in fn.blocks for op in blk.ops
+           if op.kind == tir.OpKind.BR]
+    assert len(cond_brs) == 1
+    assert len(brs) >= 2  # one from each arm to merge
+    # Merge block should have a single param for the if-result
+    assert len(fn.blocks) >= 4  # entry + then + else + merge
 
 
 def test_unary_neg():
