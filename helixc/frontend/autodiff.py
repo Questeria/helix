@@ -25,14 +25,49 @@ License: Apache 2.0
 
 from __future__ import annotations
 
+import copy as _copy
 from typing import Optional
 
 from . import ast_nodes as A
+from .ast_hash import structural_hash
+
+
+# Module-level memoization for `differentiate()`. Keyed on:
+#   (structural_hash(expr), var, fn_table_signature)
+# A returned value is a deepcopy so callers can mutate freely without
+# corrupting the cache. Cleared by `clear_diff_cache()` if needed.
+_DIFF_CACHE: dict[tuple[str, str, str], A.Expr] = {}
+_DIFF_CACHE_HITS = [0]
+_DIFF_CACHE_MISSES = [0]
+
+
+def clear_diff_cache() -> None:
+    """Reset the differentiate-memo cache (for tests)."""
+    _DIFF_CACHE.clear()
+    _DIFF_CACHE_HITS[0] = 0
+    _DIFF_CACHE_MISSES[0] = 0
+
+
+def diff_cache_stats() -> tuple[int, int]:
+    """Return (hits, misses) since last `clear_diff_cache()`."""
+    return (_DIFF_CACHE_HITS[0], _DIFF_CACHE_MISSES[0])
+
+
+def _fn_table_sig(fn_table: dict[str, "A.FnDecl"] | None) -> str:
+    if not fn_table:
+        return ""
+    # The set of *names* available is the relevant key — body changes
+    # invalidate the expr hash already, but adding a new fn could change
+    # inlining behavior.
+    return "|".join(sorted(fn_table.keys()))
 
 
 def differentiate(expr: A.Expr, var: str,
                   fn_table: dict[str, "A.FnDecl"] | None = None) -> A.Expr:
     """Return the AST of d(expr)/d(var), simplified.
+
+    Memoized by structural hash of `expr` + var + fn_table signature.
+    Returns a deepcopy of the cached deriv so callers can mutate.
 
     Optionally accepts a `fn_table` mapping function names to FnDecls. When
     provided, calls to user-defined @pure functions in the expression are
@@ -43,11 +78,24 @@ def differentiate(expr: A.Expr, var: str,
     If `expr` is a Block, the block's let-bindings are inlined first so
     that subsequent uses of the bound names refer to their definitions.
     """
+    try:
+        key = (structural_hash(expr), var, _fn_table_sig(fn_table))
+    except Exception:
+        key = None  # hash failure → bypass cache
+    if key is not None and key in _DIFF_CACHE:
+        _DIFF_CACHE_HITS[0] += 1
+        return _copy.deepcopy(_DIFF_CACHE[key])
+
     if fn_table:
         expr = _inline_user_calls(expr, fn_table)
     inlined = _inline_lets(expr, {})
     deriv = _diff(inlined, var)
-    return _simplify(deriv)
+    out = _simplify(deriv)
+
+    if key is not None:
+        _DIFF_CACHE_MISSES[0] += 1
+        _DIFF_CACHE[key] = _copy.deepcopy(out)
+    return out
 
 
 def _inline_user_calls(expr: A.Expr, fn_table: dict[str, "A.FnDecl"],

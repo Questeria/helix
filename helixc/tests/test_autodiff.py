@@ -167,6 +167,35 @@ def test_diff_const_let_unaffected():
     assert fmt(deriv) == "5"
 
 
+def test_diff_memo_hits():
+    """Two structurally-equal differentiate() calls should hit the cache."""
+    from helixc.frontend.autodiff import (clear_diff_cache, diff_cache_stats,
+                                          differentiate as _diff)
+    clear_diff_cache()
+    src1 = "fn _f(x: f32) -> f32 { x*x + 2.0*x + 1.0 }"
+    src2 = "fn _f(x: f32) -> f32 { x*x + 2.0*x + 1.0 }"  # identical
+    body1 = parse(src1).items[0].body.final_expr
+    body2 = parse(src2).items[0].body.final_expr
+    _diff(body1, "x")
+    hits_a, misses_a = diff_cache_stats()
+    _diff(body2, "x")
+    hits_b, misses_b = diff_cache_stats()
+    assert misses_a == 1, f"expected 1 miss after first diff, got {misses_a}"
+    assert hits_b == hits_a + 1, f"expected cache hit on second diff, got hits {hits_b}"
+
+
+def test_diff_memo_returns_independent_copy():
+    """Mutating the cached result must not corrupt subsequent retrievals."""
+    from helixc.frontend.autodiff import (clear_diff_cache,
+                                          differentiate as _diff)
+    clear_diff_cache()
+    src = "fn _f(x: f32) -> f32 { x * x }"
+    body = parse(src).items[0].body.final_expr
+    d1 = _diff(body, "x")
+    d2 = _diff(body, "x")
+    assert d1 is not d2, "cache should return distinct deepcopies"
+
+
 def test_grad_through_match():
     """Differentiating through a `match` requires that match has been
     desugared to if/let. With the match_lower pass at grad_pass entry,
