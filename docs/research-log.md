@@ -200,3 +200,44 @@ This proves the whole pipeline works with NO PYTHON in the runtime. Once Phase 4
 - PTX backend
 - First matmul (scalar version, then SIMD, then PTX)
 - Hello matmul end-to-end (Phase 1 verifiable artifact)
+
+---
+
+## 2026-05-03 (continued) — Tile IR + PTX backend skeleton
+
+### What landed
+- **`kovc/ir/tile_ir.py`** (~250 lines): Tile IR data structures with explicit memory spaces (HBM/SMEM/REG/TMEM/CPU), 25+ tile op kinds, Tensor IR -> Tile IR lowering. 7/7 tests passing.
+- **`kovc/backend/ptx.py`** (~200 lines): NVIDIA PTX text emitter. .version 8.3, .target sm_75, kernel/.func directives, register pools, scalar arithmetic (mov, add, mul). 8/8 tests passing.
+- **`scripts/run_all_tests.sh`**: master test runner — discovers test_*.py files + runs hex0 fixtures.
+
+### Status
+**TOTAL: 143/143 tests passing.**
+- hex0 fixtures: 3/3
+- lexer: 42/42
+- parser: 42/42
+- typecheck: 12/12
+- Tensor IR: 13/13
+- Tile IR: 7/7
+- x86-64 codegen (end-to-end): 16/16
+- PTX emission: 8/8
+
+### Pipeline now demonstrated end-to-end
+```
+.kov source
+  -> lex
+  -> parse
+  -> typecheck
+  -> Tensor IR (SSA, named ops)
+  -> Tile IR (memory spaces, tile-level ops)
+  -> EITHER:
+     - x86-64 machine code -> Linux ELF -> runs (CPU path)
+     - PTX text -> would feed CUDA Driver JIT (GPU path, when wired)
+```
+
+### What's left for the matmul milestone
+- Real Tile IR lowering of tensor ops (matmul splitting into tile.load + tile.matmul + tile.store)
+- PTX codegen for tile_load/tile_matmul/tile_store
+- CUDA Driver API wrapper (Python + ctypes) to load PTX module and launch kernel
+- Test that compiles a small matmul.kov, runs it on the RTX 3070 (or 5090 once it arrives), produces correct output
+
+This is the Phase 1 verifiable artifact. Substantial work but each piece is now ~200-500 lines on top of an existing pipeline that already works.
