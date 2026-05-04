@@ -15,10 +15,10 @@ This is the from-scratch implementation of Kovostov: a local AI system where eve
 ## Stack identity
 
 - **System / AI**: Kovostov
-- **Language**: Kov (`.kov` source files)
-- **Compiler**: `kovc`
-- **Runtime**: `kovrt`
-- **Bootstrap chain**: stage0 (hand-encoded hex) → hex1 → M0 (assembler) → M1 → M2 (C-subset compiler) → kovc-bootstrap (in C-subset) → kovc (self-hosted in Kov)
+- **Language**: Helix (`.hx` source files)
+- **Compiler**: `helixc`
+- **Runtime**: `helixrt`
+- **Bootstrap chain**: stage0 (hand-encoded hex) → hex1 → M0 (assembler) → M1 → M2 (C-subset compiler) → helixc-bootstrap (in C-subset) → helixc (self-hosted in Helix)
 
 ## Status
 

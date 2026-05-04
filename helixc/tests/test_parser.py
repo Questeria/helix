@@ -1,11 +1,11 @@
-"""Tests for kovc.frontend.parser."""
+"""Tests for helixc.frontend.parser."""
 
 from __future__ import annotations
 import os, sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
-from kovc.frontend.parser import parse, ParseError
-from kovc.frontend import ast
+from helixc.frontend.parser import parse, ParseError
+from helixc.frontend import ast
 
 
 def first_item(src: str) -> ast.Item:

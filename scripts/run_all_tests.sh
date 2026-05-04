@@ -6,7 +6,7 @@ cd "$(dirname "$0")/.."
 TOTAL_PASS=0
 TOTAL_FAIL=0
 
-for test in kovc/tests/test_*.py; do
+for test in helixc/tests/test_*.py; do
     name=$(basename "$test" .py)
     output=$(python "$test" 2>&1)
     last_line=$(echo "$output" | tail -1)

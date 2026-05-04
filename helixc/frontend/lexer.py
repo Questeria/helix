@@ -1,9 +1,9 @@
 """
-kovc/frontend/lexer.py — Kov language lexer (Python prototype).
+helixc/frontend/lexer.py — Helix language lexer (Python prototype).
 
-Build-time only. Will be replaced by self-hosted Kov implementation in Phase 4.
+Build-time only. Will be replaced by self-hosted Helix implementation in Phase 4.
 
-Token kinds match the Kov spec at docs/lang/spec.md.
+Token kinds match the Helix spec at docs/lang/spec.md.
 
 License: Apache 2.0
 """
@@ -47,6 +47,11 @@ class T(Enum):
     KW_HBM = auto(); KW_SMEM = auto(); KW_REG = auto(); KW_TMEM = auto()
     KW_KERNEL = auto(); KW_GRAD = auto(); KW_JVP = auto(); KW_VJP = auto(); KW_VMAP = auto()
     KW_SIZE = auto()
+    # AGI-specific keywords
+    KW_QUOTE = auto(); KW_SPLICE = auto()
+    KW_MODIFY = auto(); KW_VERIFIER = auto()
+    KW_AGENT = auto(); KW_SOCIETY = auto()
+    KW_PURE = auto(); KW_EFFECT = auto()
 
     # Operators / punctuation
     PLUS = auto(); MINUS = auto(); STAR = auto(); SLASH = auto(); PERCENT = auto()
@@ -92,6 +97,10 @@ KEYWORDS = {
     "kernel": T.KW_KERNEL, "grad": T.KW_GRAD, "jvp": T.KW_JVP,
     "vjp": T.KW_VJP, "vmap": T.KW_VMAP,
     "size": T.KW_SIZE,
+    "quote": T.KW_QUOTE, "splice": T.KW_SPLICE,
+    "modify": T.KW_MODIFY, "verifier": T.KW_VERIFIER,
+    "agent": T.KW_AGENT, "society": T.KW_SOCIETY,
+    "pure": T.KW_PURE, "effect": T.KW_EFFECT,
 }
 
 

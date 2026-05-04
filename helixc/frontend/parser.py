@@ -1,7 +1,7 @@
 """
-kovc/frontend/parser.py — Kov recursive-descent parser.
+helixc/frontend/parser.py — Helix recursive-descent parser.
 
-Consumes tokens from kovc.frontend.lexer, produces AST in kovc.frontend.ast.
+Consumes tokens from helixc.frontend.lexer, produces AST in helixc.frontend.ast.
 
 Operator precedence (lowest -> highest):
     1.  =, +=, -=, *=, /=, %=         (right-assoc, statement-level)
@@ -788,6 +788,37 @@ class Parser:
             if not self._at_any(T.SEMI, T.RBRACE):
                 value = self._parse_expr()
             return ast.Return(span=self._span_of(t), value=value)
+
+        # AGI-specific primaries
+        if t.kind == T.KW_QUOTE:
+            # quote { expr }  or  quote(expr)
+            self.i += 1
+            if self._at(T.LBRACE):
+                inner = self._parse_block()
+            elif self._at(T.LPAREN):
+                self._eat(T.LPAREN)
+                inner = self._parse_expr()
+                self._eat(T.RPAREN)
+            else:
+                raise ParseError("expected '{' or '(' after quote", self._peek())
+            return ast.Quote(span=self._span_of(t), inner=inner)
+        if t.kind == T.KW_SPLICE:
+            self.i += 1
+            self._eat(T.LPAREN)
+            inner = self._parse_expr()
+            self._eat(T.RPAREN)
+            return ast.Splice(span=self._span_of(t), inner=inner)
+        if t.kind == T.KW_MODIFY:
+            self.i += 1
+            self._eat(T.LPAREN)
+            target = self._parse_expr()
+            self._eat(T.COMMA)
+            transformation = self._parse_expr()
+            self._eat(T.COMMA)
+            verifier = self._parse_expr()
+            self._eat(T.RPAREN)
+            return ast.Modify(span=self._span_of(t), target=target,
+                              transformation=transformation, verifier=verifier)
 
         # Parenthesized / tuple
         if t.kind == T.LPAREN:

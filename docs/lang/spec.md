@@ -1,9 +1,9 @@
-# Kov Language Specification (v0.1 draft)
+# Helix Language Specification (v0.1 draft)
 
 **Status**: living draft — updated as the implementation teaches us.
 **Date**: 2026-05-03
 
-Kov is the from-scratch programming language for the Kovostov AGI project. Designed to be (a) AI-author-friendly, (b) tile/tensor-native for GPU kernels, (c) compile cleanly to x86-64 and NVIDIA PTX without LLVM, (d) shape-typed with optional refinements.
+Helix is the from-scratch programming language for the Kovostov AGI project. Designed to be (a) AI-author-friendly, (b) tile/tensor-native for GPU kernels, (c) compile cleanly to x86-64 and NVIDIA PTX without LLVM, (d) shape-typed with optional refinements.
 
 ## Design principles (in priority order)
 
@@ -17,7 +17,7 @@ Kov is the from-scratch programming language for the Kovostov AGI project. Desig
 
 ## File extension and source structure
 
-- `.kov` — Kov source files
+- `.hx` — Helix source files
 - `module path/to/module` declaration at the top
 - One module per file is conventional but not required
 
@@ -270,7 +270,7 @@ priv fn internal() { ... }
 
 ## Example program
 
-```kov
+```helix
 module examples::matmul
 
 @pure
@@ -299,7 +299,7 @@ where N % 16 == 0, M % 16 == 0, P % 16 == 0,
 ## Implementation status (2026-05-03)
 
 - Spec: this document, v0.1 draft
-- Lexer: in progress (Python prototype in `kovc/frontend/lexer.py`)
+- Lexer: in progress (Python prototype in `helixc/frontend/lexer.py`)
 - Parser: not started
 - Type checker: not started
 - IR: not started

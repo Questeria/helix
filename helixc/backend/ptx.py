@@ -1,5 +1,5 @@
 """
-kovc/backend/ptx.py — NVIDIA PTX backend (text emission).
+helixc/backend/ptx.py — NVIDIA PTX backend (text emission).
 
 PTX is a *text-format virtual ISA*. We don't need an assembler — we just
 write strings that the NVIDIA driver JIT-compiles to SASS at module-load

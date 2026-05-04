@@ -1,12 +1,12 @@
-"""Tests for kovc.ir.tile_ir (Tile IR + Tensor IR lowering)."""
+"""Tests for helixc.ir.tile_ir (Tile IR + Tensor IR lowering)."""
 
 from __future__ import annotations
 import os, sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
-from kovc.frontend.parser import parse
-from kovc.ir.lower_ast import lower
-from kovc.ir.tile_ir import lower_to_tile, TileOpKind, MemSpace
+from helixc.frontend.parser import parse
+from helixc.ir.lower_ast import lower
+from helixc.ir.tile_ir import lower_to_tile, TileOpKind, MemSpace
 
 
 def lower_chain(src: str):

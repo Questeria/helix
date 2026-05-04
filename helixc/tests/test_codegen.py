@@ -1,22 +1,22 @@
-"""End-to-end codegen tests: parse Kov source, produce ELF, run, check exit code."""
+"""End-to-end codegen tests: parse Helix source, produce ELF, run, check exit code."""
 
 from __future__ import annotations
 import os, sys, subprocess, tempfile
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
-from kovc.frontend.parser import parse
-from kovc.ir.lower_ast import lower
-from kovc.backend.x86_64 import compile_module_to_elf
+from helixc.frontend.parser import parse
+from helixc.ir.lower_ast import lower
+from helixc.backend.x86_64 import compile_module_to_elf
 
 
 def compile_and_run(src: str) -> int:
-    """Compile Kov source to ELF, run via WSL, return exit code."""
+    """Compile Helix source to ELF, run via WSL, return exit code."""
     prog = parse(src)
     mod = lower(prog)
     elf = compile_module_to_elf(mod)
     # Write to a temp file in the project tree (since WSL accesses /mnt/c)
     proj_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    out_dir = os.path.join(proj_root, "kovc", "tests", "_tmp")
+    out_dir = os.path.join(proj_root, "helixc", "tests", "_tmp")
     os.makedirs(out_dir, exist_ok=True)
     out_path = os.path.join(out_dir, "test.bin")
     with open(out_path, "wb") as f:
@@ -446,6 +446,137 @@ def test_float_with_let_binding():
     """
     # 3.14 * 16 = 50.24 -> 50
     assert compile_and_run(src) == 50
+
+
+def test_float_array_sum():
+    src = """
+    fn main() -> i32 {
+        let xs = [10.5, 11.5, 12.0, 8.0];
+        let mut total = 0.0;
+        for i in 0 .. 4 {
+            total += xs[i];
+        }
+        total as i32
+    }
+    """
+    # 10.5 + 11.5 + 12.0 + 8.0 = 42.0
+    assert compile_and_run(src) == 42
+
+
+def test_float_dot_product():
+    # Real ML kernel: dot product of two vectors
+    src = """
+    fn main() -> i32 {
+        let a = [1.0, 2.0, 3.0, 4.0];
+        let b = [4.0, 5.0, 6.0, 2.0];
+        let mut acc = 0.0;
+        for i in 0 .. 4 {
+            acc += a[i] * b[i];
+        }
+        acc as i32
+    }
+    """
+    # 1*4 + 2*5 + 3*6 + 4*2 = 4 + 10 + 18 + 8 = 40 (close, want 42)
+    # Adjust to: 1*4 + 2*5 + 3*6 + 5*2 = 4+10+18+10 = 42
+    src2 = """
+    fn main() -> i32 {
+        let a = [1.0, 2.0, 3.0, 5.0];
+        let b = [4.0, 5.0, 6.0, 2.0];
+        let mut acc = 0.0;
+        for i in 0 .. 4 {
+            acc += a[i] * b[i];
+        }
+        acc as i32
+    }
+    """
+    assert compile_and_run(src2) == 42
+
+
+def test_real_float_matmul_3x3():
+    # 3x3 matmul with floats — the actual ML matmul kernel
+    src = """
+    fn main() -> i32 {
+        let a = [1.0, 0.0, 0.0,
+                 0.0, 1.0, 0.0,
+                 0.0, 0.0, 1.0];
+        let b = [14.0, 0.0, 0.0,
+                 0.0, 14.0, 0.0,
+                 0.0, 0.0, 14.0];
+        let c = [0.0, 0.0, 0.0,
+                 0.0, 0.0, 0.0,
+                 0.0, 0.0, 0.0];
+        for i in 0 .. 3 {
+            for j in 0 .. 3 {
+                let mut acc = 0.0;
+                for k in 0 .. 3 {
+                    acc += a[i * 3 + k] * b[k * 3 + j];
+                }
+                c[i * 3 + j] = acc;
+            }
+        }
+        let mut total = 0.0;
+        for i in 0 .. 9 {
+            total += c[i];
+        }
+        total as i32
+    }
+    """
+    # trace = 14+14+14 = 42; total = 42
+    assert compile_and_run(src) == 42
+
+
+def test_quote_basic():
+    # quote { ... } produces a stable handle (i64); two identical quotes
+    # yield equal handles, different ones differ.
+    src = """
+    fn main() -> i32 {
+        let h1 = quote { 1 + 2 };
+        let h2 = quote { 1 + 2 };
+        if h1 == h2 { 42 } else { 0 }
+    }
+    """
+    # Wait — h1 and h2 are i64; comparison gives bool; if/else picks branch.
+    # But i64 storage in 8-byte slot reads only low 32 bits via mov_eax_mem_rbp.
+    # Hashes may differ in upper bits. v0.1: check low 32 bits agree.
+    assert compile_and_run(src) == 42
+
+
+def test_quote_different_asts_differ():
+    src = """
+    fn main() -> i32 {
+        let h1 = quote { 1 + 2 };
+        let h2 = quote { 3 * 4 };
+        if h1 != h2 { 42 } else { 0 }
+    }
+    """
+    assert compile_and_run(src) == 42
+
+
+def test_modify_verifier_accepts():
+    # modify(target, transformation, verifier) returns 1 if verifier non-zero, else 0
+    src = """
+    fn main() -> i32 {
+        let target = 0;
+        let xform = 0;
+        let verifier_pass = 1;
+        let result = modify(target, xform, verifier_pass);
+        if result == 1 { 42 } else { 0 }
+    }
+    """
+    assert compile_and_run(src) == 42
+
+
+def test_modify_verifier_rejects():
+    src = """
+    fn main() -> i32 {
+        let target = 0;
+        let xform = 0;
+        let verifier_fail = 0;
+        let result = modify(target, xform, verifier_fail);
+        if result == 0 { 42 } else { 0 }
+    }
+    """
+    assert compile_and_run(src) == 42
 
 
 def test_real_matmul_3x3_via_arrays():

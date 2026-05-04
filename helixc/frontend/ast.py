@@ -1,5 +1,5 @@
 """
-kovc/frontend/ast.py — Kov AST node definitions.
+helixc/frontend/ast.py — Helix AST node definitions.
 
 Plain Python dataclasses. Source positions on every node for diagnostics.
 
@@ -288,6 +288,32 @@ class Cast(Expr):
 
 
 # ============================================================================
+# AGI-specific expression nodes
+# ============================================================================
+@dataclass
+class Quote(Expr):
+    """quote { ... } — captures the contained expression as an AST value of
+    type AstNode. Unique to Helix: programs can read their own source as data."""
+    inner: "Expr"
+
+
+@dataclass
+class Splice(Expr):
+    """splice(ast_value) — re-injects an AstNode value at the source position
+    where it appears. The inverse of `quote`."""
+    inner: "Expr"
+
+
+@dataclass
+class Modify(Expr):
+    """modify(target, transformation, verifier) — verifier-gated self-modification.
+    The AGI proposes a transformation; the verifier must accept it before commit."""
+    target: "Expr"
+    transformation: "Expr"
+    verifier: "Expr"
+
+
+# ============================================================================
 # Statement AST
 # ============================================================================
 @dataclass
@@ -414,6 +440,6 @@ class ModuleDecl(Item):
 # ============================================================================
 @dataclass
 class Program:
-    """A whole .kov file."""
+    """A whole .hx file."""
     module: Optional[ModuleDecl]
     items: list[Item]

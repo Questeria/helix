@@ -1,5 +1,5 @@
 """
-kovc/ir/lower_ast.py — lower Kov AST into Tensor IR.
+helixc/ir/lower_ast.py — lower Helix AST into Tensor IR.
 
 For v0.1 we lower the *scalar/control-flow* subset directly: function decls,
 arithmetic on primitive types, if/else, while, calls, returns.
@@ -550,7 +550,64 @@ class Lowerer:
                                      result_ty=target,
                                      attrs={"from_ty": inner.ty,
                                             "to_ty": target})
+
+        # AGI primitives
+        if isinstance(expr, A.Quote):
+            # quote { ... } captures the inner AST as a constant value of
+            # type AstNode. We represent AstNode as i64 — a hash/handle into
+            # an AST registry that the runtime / build-time tooling can
+            # inspect. For v0.1 we just hash the AST structure.
+            ast_handle = self._hash_ast(expr.inner)
+            return self.builder.emit(tir.OpKind.QUOTE,
+                                     result_ty=tir.TIRScalar("i64"),
+                                     attrs={"ast_handle": ast_handle,
+                                            "ast_pretty": _pretty(expr.inner)})
+        if isinstance(expr, A.Splice):
+            inner = self._lower_expr(expr.inner)
+            if inner is None:
+                inner = self.builder.const_int(0)
+            return self.builder.emit(tir.OpKind.SPLICE, inner,
+                                     result_ty=tir.TIRScalar("i64"))
+        if isinstance(expr, A.Modify):
+            target = self._lower_expr(expr.target) or self.builder.const_int(0)
+            xform = self._lower_expr(expr.transformation) or self.builder.const_int(0)
+            verifier = self._lower_expr(expr.verifier) or self.builder.const_int(0)
+            return self.builder.emit(tir.OpKind.MODIFY, target, xform, verifier,
+                                     result_ty=tir.TIRScalar("i32"))
         return None
+
+    def _hash_ast(self, node: A.Expr) -> int:
+        """Compute a stable hash over an AST structure for QUOTE handles.
+        For v0.1 we use Python's hash of a stringified form."""
+        return abs(hash(_pretty(node))) & 0x7FFFFFFF
+
+
+def _pretty(node: A.Expr | A.Block) -> str:
+    """Best-effort textual form of an AST node — used for stable hashing of
+    `quote { ... }` capture. Recursive but avoids cycles by class+attr scan."""
+    if isinstance(node, A.IntLit):
+        return f"int({node.value})"
+    if isinstance(node, A.FloatLit):
+        return f"float({node.value})"
+    if isinstance(node, A.BoolLit):
+        return f"bool({node.value})"
+    if isinstance(node, A.Name):
+        return f"name({node.name})"
+    if isinstance(node, A.Binary):
+        return f"binary({node.op},{_pretty(node.left)},{_pretty(node.right)})"
+    if isinstance(node, A.Unary):
+        return f"unary({node.op},{_pretty(node.operand)})"
+    if isinstance(node, A.Call):
+        args = ",".join(_pretty(a) for a in node.args)
+        return f"call({_pretty(node.callee)},[{args}])"
+    if isinstance(node, A.If):
+        return f"if({_pretty(node.cond)},{_pretty(node.then)})"
+    if isinstance(node, A.Block):
+        stmts = ";".join(_pretty(s.expr) if isinstance(s, A.ExprStmt) else "<stmt>"
+                         for s in node.stmts)
+        last = _pretty(node.final_expr) if node.final_expr else ""
+        return f"block({stmts};{last})"
+    return f"<{type(node).__name__}>"
 
 
 def lower(prog: A.Program) -> tir.Module:

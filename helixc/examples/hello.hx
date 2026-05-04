@@ -1,6 +1,6 @@
 module examples::hello
 
-// First Kov program — exercises lexer + parser end-to-end.
+// First Helix program — exercises lexer + parser end-to-end.
 
 @pure
 fn add(a: i32, b: i32) -> i32 {

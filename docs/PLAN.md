@@ -15,17 +15,17 @@
 
 ## Vision
 
-Kovostov is an artificial general intelligence built layer-by-layer from raw binary, with every layer auditable. The bootstrap chain produces a custom programming language (Kov) and compiler (kovc) targeting x86-64 + NVIDIA PTX directly. The language is designed for AI to read and write; an AI written in Kov runs on the Kov runtime; that AI eventually rewrites and extends itself under verifier gates.
+Kovostov is an artificial general intelligence built layer-by-layer from raw binary, with every layer auditable. The bootstrap chain produces a custom programming language (Helix) and compiler (helixc) targeting x86-64 + NVIDIA PTX directly. The language is designed for AI to read and write; an AI written in Helix runs on the Helix runtime; that AI eventually rewrites and extends itself under verifier gates.
 
 ## Stack identity
 
 | Component | Name | Purpose |
 |---|---|---|
 | System / AI | **Kovostov** | the AGI-aspirational artifact |
-| Language | **Kov** (`.kov`) | typed AI-focused language |
-| Compiler | **`kovc`** | Kov → x86-64 + PTX |
-| Runtime | **`kovrt`** | loads compiled kernels, manages devices |
-| Bootstrap chain | hex0 → hex1 → M0 → M1 → M2 → C-subset → kovc-bootstrap → kovc (self-hosted) | stage0 lineage |
+| Language | **Helix** (`.hx`) | typed AI-focused language |
+| Compiler | **`helixc`** | Helix → x86-64 + PTX |
+| Runtime | **`helixrt`** | loads compiled kernels, manages devices |
+| Bootstrap chain | hex0 → hex1 → M0 → M1 → M2 → C-subset → helixc-bootstrap → helixc (self-hosted) | stage0 lineage |
 
 ## The bootstrap chain (Phase 0–1)
 
@@ -47,14 +47,14 @@ M1 (~larger, in M0 input format)
 M2-Planet (port; ~few hundred KB, in M1 input format)
    accepts: a tiny C subset
    ↓
-kovc-bootstrap (in M2 C-subset, ~5–10 kLOC)
-   accepts: the bootstrap subset of Kov
+helixc-bootstrap (in M2 C-subset, ~5–10 kLOC)
+   accepts: the bootstrap subset of Helix
    ↓
-kovc (in Kov, self-hosted)
-   accepts: full Kov
+helixc (in Helix, self-hosted)
+   accepts: full Helix
 ```
 
-**Target**: linux-x86_64 ELF (we use WSL2 on Windows for the bootstrap chain because ELF is dramatically simpler than PE). The eventual `kovrt` runtime targets Windows native (so the AI can use the RTX 5090 via the CUDA Driver API directly).
+**Target**: linux-x86_64 ELF (we use WSL2 on Windows for the bootstrap chain because ELF is dramatically simpler than PE). The eventual `helixrt` runtime targets Windows native (so the AI can use the RTX 5090 via the CUDA Driver API directly).
 
 ## Language design (committed)
 
@@ -73,7 +73,7 @@ Synthesized from the deep-research phase (see `docs/research/2026-05-03-language
 ## Compiler architecture
 
 ```
-.kov source
+.hx source
   ↓ lex + parse (recursive descent)
 Surface AST (typed, source positions)
   ↓ type inference + size constraint solving (Presburger)
@@ -97,22 +97,22 @@ Tile IR (explicit tiles, memory spaces, async ops, layouts)
 ### Phase 0 — Stage0 bootstrap chain (months 1–6)
 - hex0 seed (hand-encoded)
 - hex1 → M0 → M1 → M2-Planet
-- kovc-bootstrap in C-subset
+- helixc-bootstrap in C-subset
 - "Hello, world" through full chain, byte-audited
 - **Verifiable artifact**: a string `"Hello, Kovostov.\n"` written to stdout, produced by a binary that compiled itself through the entire stage0 chain from hand-typed hex.
 
-### Phase 1 — Kov language MVP (months 6–10)
-- Full Kov frontend (lexer, parser, type checker, size constraints)
+### Phase 1 — Helix language MVP (months 6–10)
+- Full Helix frontend (lexer, parser, type checker, size constraints)
 - Tensor IR + Tile IR + ~40 passes
 - x86-64 backend (basic, with AVX-512)
 - PTX backend (with WMMA + async TMA)
 - Autotune harness
 - AD compiler pass (`linearize` + `transpose`)
-- ~50 stdlib ops written in Kov
-- **Verifiable artifact**: train a 1M-param toy MLP on MNIST end-to-end in Kov, compiled by kovc, run on the 3070. Loss curves match a PyTorch reference.
+- ~50 stdlib ops written in Helix
+- **Verifiable artifact**: train a 1M-param toy MLP on MNIST end-to-end in Helix, compiled by helixc, run on the 3070. Loss curves match a PyTorch reference.
 
 ### Phase 2 — First Kovostov model (months 10–14)
-- Mamba2 + sparse attention hybrid architecture, in Kov
+- Mamba2 + sparse attention hybrid architecture, in Helix
 - Byte-level tokenizer
 - Data pipeline: stream + tokenize FineWeb-Edu / SlimPajama / The Stack v2
 - Pretrain a 100M–350M param model (BF16 baseline) on the 5090
@@ -130,7 +130,7 @@ Tile IR (explicit tiles, memory spaces, async ops, layouts)
 - Specialists: planner, world-model, critic, retriever, executor, prover, curriculum-generator
 - Global workspace blackboard + attention auction
 - Active inference outer loop (free-energy minimization)
-- **Decision point**: complete self-hosting of kovc (kovc rewritten in Kov)
+- **Decision point**: complete self-hosting of helixc (helixc rewritten in Helix)
 - **Verifiable artifact**: multi-step reasoning ≥ 2× base LM on held-out benchmarks.
 
 ### Phase 5 — Self-play + auto-curriculum (months 24–36)
@@ -167,7 +167,7 @@ Cumulative cloud over the life of the project: $1k–3k.
 ## Risk register
 
 1. **Stage0 timeline blow-up.** Hand-encoded bootstrap is notorious for unexpected effort. Mitigation: month-3 gate — if hex0 + hex1 + M0 are not working at month 3, evaluate downscoping (e.g., adopt M2-Planet's existing seed verbatim instead of writing our own).
-2. **Compiler complexity.** Full Kov compiler with own backend is ~25k LOC. Mitigation: phase boundaries are commit gates with verifiable artifacts; no Phase N+1 work until Phase N's artifact passes.
+2. **Compiler complexity.** Full Helix compiler with own backend is ~25k LOC. Mitigation: phase boundaries are commit gates with verifiable artifacts; no Phase N+1 work until Phase N's artifact passes.
 3. **Open-source lift.** Eventually we publish. Mitigation: develop in the open from day one. Public git, public docs, public design log.
 4. **AGI-never-arrives.** Probably true on any short horizon. Mitigation: define success in terms of measurable AGI-property progress, not arrival.
 5. **Self-modification Goodhart.** Phase 6 risks the system "improving" by gaming verifiers. Mitigation: held-out verifiers, transfer measurement.

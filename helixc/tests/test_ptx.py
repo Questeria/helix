@@ -1,13 +1,13 @@
-"""Tests for kovc.backend.ptx (PTX emission)."""
+"""Tests for helixc.backend.ptx (PTX emission)."""
 
 from __future__ import annotations
 import os, sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
-from kovc.frontend.parser import parse
-from kovc.ir.lower_ast import lower
-from kovc.ir.tile_ir import lower_to_tile
-from kovc.backend.ptx import emit_ptx
+from helixc.frontend.parser import parse
+from helixc.ir.lower_ast import lower
+from helixc.ir.tile_ir import lower_to_tile
+from helixc.backend.ptx import emit_ptx
 
 
 def emit(src: str) -> str:

@@ -1,11 +1,11 @@
-"""Tests for kovc.frontend.typecheck (v0.1 scaffold)."""
+"""Tests for helixc.frontend.typecheck (v0.1 scaffold)."""
 
 from __future__ import annotations
 import os, sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
-from kovc.frontend.parser import parse
-from kovc.frontend.typecheck import typecheck
+from helixc.frontend.parser import parse
+from helixc.frontend.typecheck import typecheck
 
 
 def check(src: str) -> list[str]:

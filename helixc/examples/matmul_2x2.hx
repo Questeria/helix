@@ -1,4 +1,4 @@
-// matmul_2x2.kov — 2x2 matrix multiplication via scalar ops.
+// matmul_2x2.hx — 2x2 matrix multiplication via scalar ops.
 //
 // We don't have arrays + indexing yet, so this version operates on individual
 // elements. The trace of A*B is computed and returned.

@@ -1,5 +1,5 @@
 """
-kovc/ir/tile_ir.py — Tile IR (mid-level, explicit memory + async).
+helixc/ir/tile_ir.py — Tile IR (mid-level, explicit memory + async).
 
 The Tile IR is the layer between the value-semantic Tensor IR and the raw
 backend (x86-64 / PTX). Its job is to expose:

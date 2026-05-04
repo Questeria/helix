@@ -1,5 +1,5 @@
 """
-kovc/backend/x86_64.py — minimal x86-64 backend (Linux ELF emission).
+helixc/backend/x86_64.py — minimal x86-64 backend (Linux ELF emission).
 
 v0.1 scope (the smallest viable subset):
 - Functions with i32 parameters and i32 return type
@@ -747,6 +747,36 @@ class FnCompiler:
             self.asm.mov_mem_rbp_eax(var_slot)
             return
 
+        # AGI primitives
+        if op.kind == tir.OpKind.QUOTE:
+            # QUOTE is materialized as the AST hash (an i64) stored in the
+            # result slot. v0.1 stores only the low 32 bits since exit codes
+            # are 8-bit anyway.
+            res_slot = self._slot_of(op.results[0])
+            handle = int(op.attrs.get("ast_handle", 0))
+            self.asm.mov_eax_imm32(handle & 0xFFFFFFFF)
+            self.asm.mov_mem_rbp_eax(res_slot)
+            return
+        if op.kind == tir.OpKind.SPLICE:
+            # v0.1 stub: pass the operand through (no real splice yet)
+            in_slot = self._slot_of(op.operands[0])
+            res_slot = self._slot_of(op.results[0])
+            self.asm.mov_eax_mem_rbp(in_slot)
+            self.asm.mov_mem_rbp_eax(res_slot)
+            return
+        if op.kind == tir.OpKind.MODIFY:
+            # v0.1 stub: returns 1 (success) if verifier slot is non-zero, 0 otherwise
+            verifier_slot = self._slot_of(op.operands[2])
+            res_slot = self._slot_of(op.results[0])
+            self.asm.mov_eax_mem_rbp(verifier_slot)
+            self.asm.test_eax_eax()
+            # If verifier non-zero, eax = 1; else eax = 0
+            # setne al; movzx eax, al
+            self.asm.setne_al()
+            self.asm.movzx_eax_al()
+            self.asm.mov_mem_rbp_eax(res_slot)
+            return
+
         # Arrays
         if op.kind == tir.OpKind.ALLOC_ARRAY:
             return  # already pre-allocated
@@ -880,7 +910,7 @@ if __name__ == "__main__":
     from ..ir.lower_ast import lower
 
     if len(sys.argv) < 3:
-        print("usage: python -m kovc.backend.x86_64 <input.kov> <output.bin>",
+        print("usage: python -m helixc.backend.x86_64 <input.hx> <output.bin>",
               file=sys.stderr)
         sys.exit(1)
     with open(sys.argv[1]) as f:

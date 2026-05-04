@@ -16,8 +16,8 @@ Daily / per-session notes. Append-only. Every meaningful learning, dead end, or 
 ### Decisions taken (see `decisions/2026-05-03-go.md`)
 - Project name: Kovostov-Native (sibling to `C:/Projects/Kovostov`, the Claude-shell framework that has been the cognitive scaffold during planning)
 - AI / system name: **Kovostov**
-- Language name: **Kov** (`.kov` extension)
-- Compiler: **kovc**
+- Language name: **Helix** (`.hx` extension)
+- Compiler: **helixc**
 - Bootstrap target: linux-x86_64 ELF (via WSL2 on Windows; ELF dramatically simpler than PE)
 - Final runtime target for AI: Windows-native (CUDA Driver API → RTX 5090)
 - License: Apache 2.0 (code) / CC-BY 4.0 (docs) / CC0 (weights)
@@ -35,7 +35,7 @@ These findings are crystallized in `PLAN.md`. Original agent reports archived in
 ### Phase 0 starting point
 The first artifact will be **the hex0 seed monitor**: a tiny program (~150–250 bytes of hand-encoded x86-64 ELF) that reads hex characters from stdin, skips whitespace, pairs digits, and writes bytes to stdout. Every byte will be annotated.
 
-Once hex0 works, every subsequent stage feeds higher-level text into the previous stage's binary, producing the next stage's binary. The chain ends with a self-hosted kovc.
+Once hex0 works, every subsequent stage feeds higher-level text into the previous stage's binary, producing the next stage's binary. The chain ends with a self-hosted helixc.
 
 ### Open questions (this session)
 - Should we adopt the existing M2-Planet seed verbatim (proven, audited, ~12 months saved) or write our own from scratch (purer, +months of effort)? Working assumption: write our own hex0 from scratch; consider adopting M2-Planet's later stages (M0/M1) since the marginal purity gain shrinks at each stage.
@@ -69,7 +69,7 @@ Once hex0 works, every subsequent stage feeds higher-level text into the previou
 
 **Decisions log:**
 - Bootstrap target OS: Linux x86_64 ELF (via WSL2). Decision recorded in 2026-05-03-go.md.
-- License contagion: kov-libc to be hand-written, not adopted from M2libc (avoids GPL-3.0 contagion into kovc-bootstrap binary).
+- License contagion: helix-libc to be hand-written, not adopted from M2libc (avoids GPL-3.0 contagion into helixc-bootstrap binary).
 
 ---
 
@@ -112,23 +112,23 @@ Once hex0 works, every subsequent stage feeds higher-level text into the previou
 
 ### Next session
 - **Hex1**: human-readable assembly format with labels and comments. Adds: label resolution, multi-byte numeric forms. Decision needed: write our own from scratch (~3-5 PM) OR vendor `oriansj/stage0-posix-amd64/hex1` and audit (~few weeks). Tentative: vendor hex1+ since Phase 0a is the load-bearing "raw binary" claim.
-- **kov-libc design**: minimal libc shim in M2 C-subset to avoid GPL-3.0 contagion when M2-Planet is vendored.
+- **helix-libc design**: minimal libc shim in M2 C-subset to avoid GPL-3.0 contagion when M2-Planet is vendored.
 - **Cross-reference vs oriansj's hex0**: confirm our encoding decisions match theirs for analogous instructions.
 
 ---
 
-## 2026-05-03 (continued) — Phase 0b: Kov frontend WORKING
+## 2026-05-03 (continued) — Phase 0b: Helix frontend WORKING
 
-**Pivot decision recorded.** Continuing the literal stage0 chain (hex1 → M0 → M1) was deemed low-novelty for current AGI velocity. Instead, jumped to Kov language design. Bootstrap chain rejoins via vendoring M2-Planet later for kov-libc + kovc-bootstrap.c. The hex0 we shipped is the durable "raw binary" claim.
+**Pivot decision recorded.** Continuing the literal stage0 chain (hex1 → M0 → M1) was deemed low-novelty for current AGI velocity. Instead, jumped to Helix language design. Bootstrap chain rejoins via vendoring M2-Planet later for helix-libc + helixc-bootstrap.c. The hex0 we shipped is the durable "raw binary" claim.
 
 ### What landed
-- **`docs/lang/spec.md`** — Kov v0.1 spec (~280 lines): grammar, types, tile/tensor primitives, autodiff API, kernels, examples.
-- **`kovc/frontend/lexer.py`** — full tokenizer (~430 lines)
-- **`kovc/frontend/ast.py`** — 40+ AST node types (~250 lines)
-- **`kovc/frontend/parser.py`** — recursive-descent parser with precedence climbing (~750 lines)
-- **`kovc/tests/test_lexer.py`** — 42/42 PASS
-- **`kovc/tests/test_parser.py`** — 42/42 PASS
-- **`kovc/examples/hello.kov`** — first real Kov source: lexes to 304 tokens, parses to 7 top-level items (4 fns including a kernel, 1 struct, 1 enum, 1 const)
+- **`docs/lang/spec.md`** — Helix v0.1 spec (~280 lines): grammar, types, tile/tensor primitives, autodiff API, kernels, examples.
+- **`helixc/frontend/lexer.py`** — full tokenizer (~430 lines)
+- **`helixc/frontend/ast.py`** — 40+ AST node types (~250 lines)
+- **`helixc/frontend/parser.py`** — recursive-descent parser with precedence climbing (~750 lines)
+- **`helixc/tests/test_lexer.py`** — 42/42 PASS
+- **`helixc/tests/test_parser.py`** — 42/42 PASS
+- **`helixc/examples/hello.hx`** — first real Helix source: lexes to 304 tokens, parses to 7 top-level items (4 fns including a kernel, 1 struct, 1 enum, 1 const)
 
 ### Bug fixes during testing
 - Number lexer was greedy-eating underscores after digits, breaking `42_i32` suffix detection. Fixed by only consuming `_` if followed by another digit.
@@ -145,13 +145,13 @@ Once hex0 works, every subsequent stage feeds higher-level text into the previou
 
 ## 2026-05-03 (continued) — Phase 0d: x86-64 backend WORKING. END-TO-END.
 
-**🎯 First Kov program compiled, ran, exited correctly.**
+**🎯 First Helix program compiled, ran, exited correctly.**
 
 ```
-$ cat kovc/examples/exit42.kov
+$ cat helixc/examples/exit42.hx
 fn main() -> i32 { 42 }
 
-$ python -m kovc.backend.x86_64 kovc/examples/exit42.kov exit42.bin
+$ python -m helixc.backend.x86_64 helixc/examples/exit42.hx exit42.bin
 Wrote exit42.bin (4137 bytes)
 
 $ ./exit42.bin; echo $?
@@ -159,15 +159,15 @@ $ ./exit42.bin; echo $?
 ```
 
 ### What landed
-- `kovc/backend/x86_64.py` (~400 lines)
+- `helixc/backend/x86_64.py` (~400 lines)
   - System V AMD64 ABI compliant
   - Naive register allocation: every IR value gets a stack slot, reload to/from eax/ecx/edx for arithmetic
   - Encodes: prologue/epilogue, mov imm/mem, add/sub/imul/neg, call rel32 with fixups, ret, syscall
   - ELF emission: 64-byte ELF header + 56-byte program header + page-aligned code
   - Up to 3 args (rdi, rsi, rdx) — sufficient for v0.1
   - Entry stub: calls `main`, exits with rax as status
-- `kovc/examples/exit42.kov` — first end-to-end program
-- `kovc/tests/test_codegen.py` — 9 end-to-end tests, ALL PASS:
+- `helixc/examples/exit42.hx` — first end-to-end program
+- `helixc/tests/test_codegen.py` — 9 end-to-end tests, ALL PASS:
   - test_exit_zero (exit 0)
   - test_exit_42 (exit 42)
   - test_exit_addition (17 + 25 = 42)
@@ -182,17 +182,17 @@ $ ./exit42.bin; echo $?
 - 118/118 tests across the entire pipeline
 - ~4500 lines of Python build-time tooling
 - 6 git commits on main
-- Pipeline: .kov source → lex → parse → typecheck → Tensor IR → x86-64 codegen → Linux ELF → runs and produces correct exit code
+- Pipeline: .hx source → lex → parse → typecheck → Tensor IR → x86-64 codegen → Linux ELF → runs and produces correct exit code
 
 ### Compilation flow demonstrated
-1. **Parse** (lexer + parser): `.kov` → AST
+1. **Parse** (lexer + parser): `.hx` → AST
 2. **Typecheck**: AST validated, types resolved
 3. **Lower**: AST → SSA Tensor IR with named ops
 4. **Codegen**: TIR → x86-64 machine bytes
 5. **ELF wrap**: bytes → valid Linux executable
 6. **Run**: exit code matches the program's value
 
-This proves the whole pipeline works with NO PYTHON in the runtime. Once Phase 4 self-hosts kovc in Kov, even Python disappears from the build.
+This proves the whole pipeline works with NO PYTHON in the runtime. Once Phase 4 self-hosts helixc in Helix, even Python disappears from the build.
 
 ### Up next
 - More codegen: comparisons, if-as-control-flow (currently SELECT only), loops
@@ -206,8 +206,8 @@ This proves the whole pipeline works with NO PYTHON in the runtime. Once Phase 4
 ## 2026-05-03 (continued) — Tile IR + PTX backend skeleton
 
 ### What landed
-- **`kovc/ir/tile_ir.py`** (~250 lines): Tile IR data structures with explicit memory spaces (HBM/SMEM/REG/TMEM/CPU), 25+ tile op kinds, Tensor IR -> Tile IR lowering. 7/7 tests passing.
-- **`kovc/backend/ptx.py`** (~200 lines): NVIDIA PTX text emitter. .version 8.3, .target sm_75, kernel/.func directives, register pools, scalar arithmetic (mov, add, mul). 8/8 tests passing.
+- **`helixc/ir/tile_ir.py`** (~250 lines): Tile IR data structures with explicit memory spaces (HBM/SMEM/REG/TMEM/CPU), 25+ tile op kinds, Tensor IR -> Tile IR lowering. 7/7 tests passing.
+- **`helixc/backend/ptx.py`** (~200 lines): NVIDIA PTX text emitter. .version 8.3, .target sm_75, kernel/.func directives, register pools, scalar arithmetic (mov, add, mul). 8/8 tests passing.
 - **`scripts/run_all_tests.sh`**: master test runner — discovers test_*.py files + runs hex0 fixtures.
 
 ### Status
@@ -223,7 +223,7 @@ This proves the whole pipeline works with NO PYTHON in the runtime. Once Phase 4
 
 ### Pipeline now demonstrated end-to-end
 ```
-.kov source
+.hx source
   -> lex
   -> parse
   -> typecheck
@@ -238,7 +238,7 @@ This proves the whole pipeline works with NO PYTHON in the runtime. Once Phase 4
 - Real Tile IR lowering of tensor ops (matmul splitting into tile.load + tile.matmul + tile.store)
 - PTX codegen for tile_load/tile_matmul/tile_store
 - CUDA Driver API wrapper (Python + ctypes) to load PTX module and launch kernel
-- Test that compiles a small matmul.kov, runs it on the RTX 3070 (or 5090 once it arrives), produces correct output
+- Test that compiles a small matmul.hx, runs it on the RTX 3070 (or 5090 once it arrives), produces correct output
 
 This is the Phase 1 verifiable artifact. Substantial work but each piece is now ~200-500 lines on top of an existing pipeline that already works.
 
@@ -252,7 +252,7 @@ This is the Phase 1 verifiable artifact. Substantial work but each piece is now 
 
 ### Final session status — 145/145 Python tests + 3/3 hex0 = 148 tests passing
 
-12 git commits on main. Pipeline produces real running ELF binaries from `.kov` source. The compiler is real, end-to-end, in ~6000 lines of build-time Python.
+12 git commits on main. Pipeline produces real running ELF binaries from `.hx` source. The compiler is real, end-to-end, in ~6000 lines of build-time Python.
 
 ### Session summary (entire arc)
 **Started**: planning conversation about building AGI from raw binary.
@@ -260,7 +260,7 @@ This is the Phase 1 verifiable artifact. Substantial work but each piece is now 
 
 What was built (in order):
 1. `hex0` — 299-byte hand-authored x86_64 Linux ELF (raw binary)
-2. Kov language v0.1 spec (~280 lines)
+2. Helix language v0.1 spec (~280 lines)
 3. Lexer + AST + Parser + Type checker (1900 lines, 96 tests)
 4. Tensor IR + AST→TIR lowering (650 lines, 13 tests)
 5. Tile IR + TIR→Tile lowering (250 lines, 7 tests)
@@ -269,8 +269,8 @@ What was built (in order):
 8. Master test runner
 
 Demonstrated programs:
-- `exit42.kov`: `fn main() -> i32 { 42 }` → exit 42
-- `matmul_2x2.kov`: 2x2 matrix mul trace → exit 69
+- `exit42.hx`: `fn main() -> i32 { 42 }` → exit 42
+- `matmul_2x2.hx`: 2x2 matrix mul trace → exit 69
 
 This is the foundation. Future sessions extend it with:
 - Real loops (for/while compile to actual cmp+jcc)
@@ -294,7 +294,7 @@ This is the foundation. Future sessions extend it with:
 - Phase 1-vi: stack arrays (literals, indexing, assignment, compound assign)
 - Phase 1-vii: REAL 3x3 MATMUL end-to-end via for-loops + arrays
 
-### Verified end-to-end Kov programs:
+### Verified end-to-end Helix programs:
 - `fn main() -> i32 { 42 }` → 42
 - `fib(9) = 34` (recursive, two recursive calls per node)
 - `fact(5) = 120` (recursive AND iterative)

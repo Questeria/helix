@@ -1,5 +1,5 @@
 """
-kovc/ir/tir.py — Tensor IR (high-level, value-semantic).
+helixc/ir/tir.py — Tensor IR (high-level, value-semantic).
 
 The Tensor IR is the primary optimization layer:
 - Whole-tensor operations (matmul, conv, elementwise, reduce, broadcast)
@@ -218,6 +218,12 @@ class OpKind(Enum):
     ALLOC_ARRAY = "array.alloc"      # attrs: name, dtype, length
     LOAD_ELEM = "array.load_elem"    # operands: index_value; attrs: name
     STORE_ELEM = "array.store_elem"  # operands: index, value; attrs: name
+
+    # AGI-specific
+    QUOTE = "agi.quote"          # attrs: ast (the captured AST as a Python object)
+    SPLICE = "agi.splice"        # operand: AstNode value
+    MODIFY = "agi.modify"        # operands: target, transformation, verifier
+    REFLECT_HASH = "agi.reflect_hash"  # placeholder: hash an AstNode for testing
 
     # Effectful ops (kept distinct so transforms can avoid them)
     PRINT = "io.print"

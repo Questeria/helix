@@ -1,5 +1,5 @@
 """
-kovc/frontend/typecheck.py — Kov type checker (v0.1 scaffold).
+helixc/frontend/typecheck.py — Helix type checker (v0.1 scaffold).
 
 Scope of v0.1:
 - Resolve names (functions, generic params, locals)

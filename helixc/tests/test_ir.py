@@ -1,12 +1,12 @@
-"""Tests for kovc.ir.lower_ast (Tensor IR lowering)."""
+"""Tests for helixc.ir.lower_ast (Tensor IR lowering)."""
 
 from __future__ import annotations
 import os, sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
-from kovc.frontend.parser import parse
-from kovc.ir.lower_ast import lower
-from kovc.ir import tir
+from helixc.frontend.parser import parse
+from helixc.ir.lower_ast import lower
+from helixc.ir import tir
 
 
 def lower_src(src: str) -> tir.Module:
