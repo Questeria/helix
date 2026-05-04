@@ -1485,6 +1485,18 @@ def test_hbs_sample_recursion_runs():
     assert code == 120, f"expected 120 (5!), got {code}"
 
 
+def test_hbs_sample_symbol_table_runs():
+    """HBS sample: assoc-list symbol table built on the arena builtins.
+    Inserts 3 (key, decl) pairs, looks up the third — returns decl=42."""
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    sample_path = os.path.join(proj_root, "helixc", "examples",
+                               "hbs_sample_symbol_table.hx")
+    with open(sample_path, "r", encoding="utf-8") as f:
+        src = f.read()
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
 def test_hbs_sample_visitor_runs():
     """HBS sample: AST visitor with struct + enum + match + struct
     pass-by-value to helper fns. Computes (6 * 7) = 42."""
