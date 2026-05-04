@@ -1,17 +1,17 @@
 """
-helixc/frontend/typecheck.py — Helix type checker (v0.1 scaffold).
+helixc/frontend/typecheck.py — Helix type checker with compile-time shape checking.
 
-Scope of v0.1:
-- Resolve names (functions, generic params, locals)
-- Check basic primitive type compatibility
-- Track size-parameters as opaque integer-valued symbols
-- Defer the real Presburger constraint solver to v0.2
+Phase 3-iv adds real Presburger-backed shape checking at function call sites.
+When a function declares parameters with size-typed tensor shapes, the type
+checker:
+  1. Treats each `size` generic param as a Presburger variable
+  2. Unifies the formal parameter's shape with the argument's actual shape,
+     producing equality constraints between variables and concrete values
+  3. Adds the function's `where` clauses to the constraint set
+  4. Asks the solver: "is the call shape-consistent?" If the solver can prove
+     a contradiction, the call is rejected with a diagnostic.
 
-Out of scope for v0.1:
-- Full Presburger arithmetic on size constraints (records constraints; doesn't solve)
-- Trait resolution
-- Effect inference
-- Linear/affine borrow checking
+This catches matmul-style bugs (inner dims must match) at compile time.
 
 License: Apache 2.0
 """
@@ -22,6 +22,7 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 from . import ast_nodes as A
+from . import presburger as P
 
 
 # ============================================================================
@@ -266,6 +267,52 @@ class TypeChecker:
             return TyUnknown(hint=f"size expr {expr.op}")
         return TyUnknown(hint=f"size expr {type(expr).__name__}")
 
+    # ------------------------------------------------------------------
+    # Convert a resolved size type to a Presburger LinExpr, for solver use.
+    # Returns None if the type can't be represented (e.g., dynamic shapes).
+    # ------------------------------------------------------------------
+    def _size_type_to_lin(self, t: Type) -> Optional[P.LinExpr]:
+        if isinstance(t, TySize):
+            return P.var(t.name)
+        if isinstance(t, TyPrim) and t.name.startswith("size_"):
+            try:
+                n = int(t.name[len("size_"):])
+                return P.lit(n)
+            except ValueError:
+                return None
+        if isinstance(t, TyVar):
+            return P.var(t.name)
+        return None
+
+    def _size_expr_to_lin(self, expr: A.Expr, scope: Scope) -> Optional[P.LinExpr]:
+        """Convert a size expression (in AST form) to a Presburger LinExpr,
+        looking up generic parameters via scope."""
+        if isinstance(expr, A.IntLit):
+            return P.lit(expr.value)
+        if isinstance(expr, A.Name):
+            looked = scope.lookup(expr.name)
+            if looked is not None:
+                return self._size_type_to_lin(looked)
+            return P.var(expr.name)  # treat unbound as fresh var
+        if isinstance(expr, A.Binary):
+            l = self._size_expr_to_lin(expr.left, scope)
+            r = self._size_expr_to_lin(expr.right, scope)
+            if l is None or r is None:
+                return None
+            if expr.op == "+":
+                return l + r
+            if expr.op == "-":
+                return l - r
+            if expr.op == "*":
+                # Linear-only: one side must be a constant
+                if l.is_const():
+                    return r * l.const
+                if r.is_const():
+                    return l * r.const
+                return None  # nonlinear
+            return None
+        return None
+
     def _stringify_marker(self, expr: A.Expr | None, scope: Scope) -> Optional[str]:
         """Best-effort string for device/layout/memspace markers like
         `gpu(0)`, `cpu`, `smem`, etc."""
@@ -278,6 +325,83 @@ class TypeChecker:
                             for a in expr.args)
             return f"{expr.callee.name}({args})"
         return f"<{type(expr).__name__}>"
+
+    # ------------------------------------------------------------------
+    # Compile-time shape checking for function calls
+    # ------------------------------------------------------------------
+    def _check_call_shapes(self, call: A.Call, sig: FunctionSig,
+                           arg_tys: list[Type], scope: Scope) -> None:
+        """Build a Presburger constraint set from formal-vs-actual shape
+        unification + where clauses, then check satisfiability.
+
+        Each tensor parameter contributes per-axis equality constraints
+        between the formal shape (in solver vars / consts) and the actual
+        shape (in solver vars / consts). Where-clauses contribute
+        additional Eq/Divides constraints.
+        """
+        solver = P.Solver()
+
+        # Walk param/arg pairs and add shape-equality constraints.
+        for (pname, pty), aty in zip(sig.params, arg_tys):
+            if isinstance(pty, TyTensor) and isinstance(aty, TyTensor):
+                if len(pty.shape) != len(aty.shape):
+                    self.errors.append(TypeError_(
+                        f"call to {sig.name!r}: arg {pname!r} has rank "
+                        f"{len(aty.shape)}, expected {len(pty.shape)}",
+                        call.span,
+                    ))
+                    continue
+                for axis, (pdim, adim) in enumerate(zip(pty.shape, aty.shape)):
+                    p_lin = self._size_type_to_lin(pdim)
+                    a_lin = self._size_type_to_lin(adim)
+                    if p_lin is None or a_lin is None:
+                        continue  # unknown shapes — skip (could warn)
+                    solver.add_eq_pair(p_lin, a_lin)
+
+        # Add where-clause constraints (translate AST -> LinExpr).
+        # We need a scope where the function's generic params are visible
+        # as Presburger vars.
+        where_scope = Scope()
+        for g in sig.generics:
+            if g.kind == "size":
+                where_scope.define(g.name, TySize(g.name))
+            else:
+                where_scope.define(g.name, TyVar(g.name))
+        for fn in self.prog.items:
+            if isinstance(fn, A.FnDecl) and fn.name == sig.name:
+                for w in fn.where_clauses:
+                    self._add_where_constraint(solver, w.constraint, where_scope)
+
+        # Verify each constraint is satisfied (i.e., solver does not refute it).
+        # We focus on the explicit Eqs added above.
+        contradictions = []
+        for c in solver.constraints:
+            verdict = solver.implies(c)
+            if verdict is False:
+                contradictions.append(c)
+
+        if contradictions:
+            details = "; ".join(c.pretty() for c in contradictions[:3])
+            self.errors.append(TypeError_(
+                f"call to {sig.name!r}: shape constraint violated ({details})",
+                call.span,
+            ))
+
+    def _add_where_constraint(self, solver: P.Solver, expr: A.Expr,
+                              scope: Scope) -> None:
+        """Translate a where-clause expression into Presburger constraints."""
+        if isinstance(expr, A.Binary) and expr.op == "==":
+            l = self._size_expr_to_lin(expr.left, scope)
+            r = self._size_expr_to_lin(expr.right, scope)
+            if l is not None and r is not None:
+                solver.add_eq_pair(l, r)
+        elif isinstance(expr, A.Binary) and expr.op == "%" and \
+             isinstance(expr.right, A.IntLit):
+            # `expr % k` — record as Divides
+            l = self._size_expr_to_lin(expr.left, scope)
+            if l is not None:
+                solver.add_divides(l, expr.right.value)
+        # Other forms: skip for v0.1
 
     # ---- function body checking ----
     def _check_fn(self, fn: A.FnDecl) -> None:
@@ -372,8 +496,12 @@ class TypeChecker:
             return l
         if isinstance(expr, A.Call):
             callee = self._check_expr(expr.callee, scope)
-            for a in expr.args:
-                self._check_expr(a, scope)
+            arg_tys = [self._check_expr(a, scope) for a in expr.args]
+            # If callee is a known function (by name), do shape checking
+            if isinstance(expr.callee, A.Name) and expr.callee.name in self.functions:
+                sig = self.functions[expr.callee.name]
+                self._check_call_shapes(expr, sig, arg_tys, scope)
+                return sig.ret
             if isinstance(callee, TyFn):
                 return callee.ret
             return TyUnknown(hint="call")

@@ -96,6 +96,61 @@ def test_duplicate_function():
 
 
 # ============================================================================
+# Compile-time shape checking via Presburger solver (Phase 3-iv)
+# ============================================================================
+def test_shape_check_concrete_match():
+    # Both args have concrete shape [4, 4]; should typecheck cleanly.
+    src = """
+    fn matmul(a: tensor<f32, [4, 4]>, b: tensor<f32, [4, 4]>) -> tensor<f32, [4, 4]> {
+        a
+    }
+    fn caller(x: tensor<f32, [4, 4]>, y: tensor<f32, [4, 4]>) {
+        matmul(x, y);
+    }
+    """
+    assert check(src) == []
+
+
+def test_shape_check_concrete_mismatch():
+    # Caller passes [5, 4] where formal expects [4, 4] — should reject.
+    src = """
+    fn matmul(a: tensor<f32, [4, 4]>, b: tensor<f32, [4, 4]>) -> tensor<f32, [4, 4]> {
+        a
+    }
+    fn caller(x: tensor<f32, [4, 4]>, z: tensor<f32, [5, 4]>) {
+        matmul(x, z);
+    }
+    """
+    errs = check(src)
+    assert any("shape constraint violated" in e or "rank" in e for e in errs), errs
+
+
+def test_shape_check_rank_mismatch():
+    src = """
+    fn takes2d(a: tensor<f32, [4, 4]>) {}
+    fn caller(x: tensor<f32, [4]>) {
+        takes2d(x);
+    }
+    """
+    errs = check(src)
+    assert any("rank" in e for e in errs), errs
+
+
+def test_shape_check_size_polymorphic_match():
+    src = """
+    fn matmul[N: size, M: size, P: size](
+        a: tensor<f32, [N, M]>,
+        b: tensor<f32, [M, P]>,
+    ) -> tensor<f32, [N, P]> { a }
+    fn caller(x: tensor<f32, [3, 4]>, y: tensor<f32, [4, 5]>) {
+        matmul(x, y);
+    }
+    """
+    errs = check(src)
+    assert not any("shape constraint violated" in e for e in errs), errs
+
+
+# ============================================================================
 # Test runner
 # ============================================================================
 def main():
