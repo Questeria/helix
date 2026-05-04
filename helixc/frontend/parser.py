@@ -57,6 +57,15 @@ class Parser:
 
     def _eat(self, kind: T) -> Token:
         t = self._peek()
+        # Special case: when expecting GT, accept SHR ('>>') as two GTs.
+        # This handles nested generics like D<tensor<f32, [N, N]>>
+        # where the lexer emits SHR for the closing '>>'.
+        if kind == T.GT and t.kind == T.SHR:
+            # Replace the SHR token with a single GT in place; consume one half.
+            self.toks[self.i] = Token(
+                T.GT, ">", t.line, t.col + 1,
+            )
+            return Token(T.GT, ">", t.line, t.col)
         if t.kind != kind:
             raise ParseError(f"expected {kind.name}", t)
         self.i += 1
