@@ -33,7 +33,11 @@ def compile_and_run(src: str, optimize: bool = True) -> int:
     proj_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     out_dir = os.path.join(proj_root, "helixc", "tests", "_tmp")
     os.makedirs(out_dir, exist_ok=True)
-    out_path = os.path.join(out_dir, "test.bin")
+    # Use a hash of the source so concurrent / interleaved test runs
+    # don't overwrite each other's binaries before WSL executes them.
+    import hashlib
+    h = hashlib.sha256(elf).hexdigest()[:12]
+    out_path = os.path.join(out_dir, f"test_{h}.bin")
     with open(out_path, "wb") as f:
         f.write(elf)
     os.chmod(out_path, 0o755)
@@ -1273,6 +1277,19 @@ def test_inline_recursive_enum_ctor_as_fn_arg():
     """
     code = compile_and_run(src)
     assert code == 42, f"expected 42, got {code}"
+
+
+def test_hbs_sample_constant_fold_runs():
+    """A real compiler pass written in Helix: constant folding over the
+    recursive Expr AST. fold((3+4)*6) = Lit(42) — verifies that simplify
+    actually collapsed the tree to a literal AND eval still gives 42."""
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    sample_path = os.path.join(proj_root, "helixc", "examples",
+                               "hbs_sample_constant_fold.hx")
+    with open(sample_path, "r", encoding="utf-8") as f:
+        src = f.read()
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42 (folded value), got {code}"
 
 
 def test_helix_ast_with_let_bindings():

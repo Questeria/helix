@@ -683,6 +683,13 @@ class Lowerer:
             # Lower `EnumName::VariantName` to const_int(variant_index).
             # Tag-only variants only — payload variants need separate
             # constructor-call lowering (TBD).
+            # NOTE: a bare Path as a value-position EXPRESSION in a
+            # recursive-enum context (e.g. `match ... { _ => List::Nil }`)
+            # is currently lowered as the tag i32 — the let-stmt path
+            # is the only place that arena-allocates. This means a bare
+            # Path in expr position for a recursive enum produces just
+            # the tag (not an arena index), which breaks downstream
+            # match. Workaround: bind via a let first.
             if len(expr.segments) == 2:
                 ename, vname = expr.segments
                 variants = self._enum_variants.get(ename)
@@ -733,6 +740,29 @@ class Lowerer:
                 return self.builder.emit(tir.OpKind.NEG, inner, result_ty=inner.ty)
             return inner
         if isinstance(expr, A.Call):
+            # Recursive enum constructor as a value expression (i.e. NOT
+            # a fn arg, but appearing as the result of a match arm body
+            # or a let value in expression position). Push slots into
+            # the arena and return the start index as the value.
+            if (isinstance(expr.callee, A.Path)
+                    and len(expr.callee.segments) == 2):
+                ename, vname = expr.callee.segments
+                variants = self._enum_variants.get(ename)
+                if (variants is not None and vname in variants
+                        and ename in self._recursive_enums):
+                    tag_v = self.builder.const_int(variants[vname])
+                    arg_vals = []
+                    for a in expr.args:
+                        v = self._lower_expr(a) or self.builder.const_int(0)
+                        arg_vals.append(v)
+                    start_idx = None
+                    for ev in [tag_v] + arg_vals:
+                        pushed = self.builder.emit(
+                            tir.OpKind.ARENA_PUSH, ev,
+                            result_ty=tir.TIRScalar("i32"))
+                        if start_idx is None:
+                            start_idx = pushed
+                    return start_idx
             # Intercept print_str(string_literal) — emits a PRINT op whose
             # attr carries the literal bytes; backend writes them to stdout
             # via a write(1, ptr, len) syscall.
