@@ -640,30 +640,57 @@ class FnCompiler:
             self.asm.movzx_eax_al()
             self.asm.mov_mem_rbp_eax(res_slot)
             return
-        # SELECT (cond, a, b) — a if cond else b. v0.1: branchless via cmov-equivalent
-        # using arithmetic: result = (cond * a) + ((1-cond) * b). Implementing as
-        # eax = b; if cond { eax = a; } using a small branch.
+        # SELECT (cond, a, b) — a if cond else b.
+        # Branch sequence:
+        #   mov eax, [cond]
+        #   test eax, eax
+        #   je SKIP_A          ; if cond == 0 jump to b
+        #   mov eax, [a]       ; size depends on a's displacement (disp8 vs disp32)
+        #   jmp END
+        # SKIP_A:
+        #   mov eax, [b]
+        # END:
+        #   mov [res], eax
+        # We can't pre-compute the je/jmp displacements because the mov sizes
+        # depend on whether the slots fit in disp8. Emit placeholder rel8s
+        # then patch with the actual byte-counted distance.
         if op.kind == tir.OpKind.SELECT:
             cond_slot = self._slot_of(op.operands[0])
             a_slot = self._slot_of(op.operands[1])
             b_slot = self._slot_of(op.operands[2])
             res_slot = self._slot_of(op.results[0])
-            # Load cond, test
+            buf = self.asm.b
+            # mov eax, [cond]
             self.asm.mov_eax_mem_rbp(cond_slot)
             # test eax, eax
-            self.asm.b.emit(0x85, 0xC0)
-            # je over-a (placeholder, 8-bit)
-            # We need a forward jump. Use a fixup-friendly relative computation.
-            # For simplicity, compute the jump distance manually.
-            # Sequence: je SKIP_A; mov eax, [rbp+a]; jmp END; SKIP_A: mov eax, [rbp+b]; END: mov [rbp+res], eax
-            # Sizes: each mov_eax_mem_rbp is 3 bytes (when disp8); jmp rel8 is 2 bytes.
-            # je rel8 = 2 bytes; "load a" = 3 bytes; jmp rel8 = 2 bytes; "load b" = 3 bytes.
-            # je target: skip past (load_a + jmp) = 3 + 2 = 5
-            self.asm.b.emit(0x74, 0x05)             # je +5
-            self.asm.mov_eax_mem_rbp(a_slot)        # 3 bytes (assumes disp8)
-            self.asm.b.emit(0xEB, 0x03)             # jmp +3 (skip load_b)
-            self.asm.mov_eax_mem_rbp(b_slot)        # 3 bytes
-            # END:
+            buf.emit(0x85, 0xC0)
+            # je rel8 — write 0x74 + placeholder, remember placeholder offset
+            buf.emit(0x74, 0x00)
+            je_disp_off = buf.offset() - 1
+            je_after = buf.offset()
+            # load a
+            self.asm.mov_eax_mem_rbp(a_slot)
+            # jmp rel8 — placeholder
+            buf.emit(0xEB, 0x00)
+            jmp_disp_off = buf.offset() - 1
+            jmp_after = buf.offset()
+            # SKIP_A: load b
+            skip_a_addr = buf.offset()
+            self.asm.mov_eax_mem_rbp(b_slot)
+            end_addr = buf.offset()
+            # Patch je: skip past (load_a + jmp), targeting skip_a_addr
+            je_disp = skip_a_addr - je_after
+            jmp_disp = end_addr - jmp_after
+            if not (-128 <= je_disp <= 127) or not (-128 <= jmp_disp <= 127):
+                # Should not happen for a single mov + jmp, but guard anyway —
+                # current load is at most 7 bytes (disp32 + REX), so disp <= 9.
+                raise ValueError(
+                    f"SELECT branch displacement out of rel8 range: "
+                    f"je={je_disp}, jmp={jmp_disp}"
+                )
+            buf.bytes_[je_disp_off] = je_disp & 0xFF
+            buf.bytes_[jmp_disp_off] = jmp_disp & 0xFF
+            # store result
             self.asm.mov_mem_rbp_eax(res_slot)
             return
         if op.kind == tir.OpKind.CALL:
