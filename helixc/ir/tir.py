@@ -233,6 +233,11 @@ class OpKind(Enum):
     ARENA_SET = "arena.set"      # operands: index, value → no result
     ARENA_LEN = "arena.len"      # no operand → result: current length
 
+    # String operations on string literals. Self-host needs byte access to
+    # source code; for v0.1 only literal strings are supported (no runtime
+    # buffers yet). attrs: text=str literal.
+    STR_BYTE = "str.byte"        # operand: index → result: byte at literal[i]
+
     # Effectful ops (kept distinct so transforms can avoid them)
     PRINT = "io.print"
 

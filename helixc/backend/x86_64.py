@@ -1134,6 +1134,28 @@ class FnCompiler:
                 self.asm.mov_eax_imm32(0)
                 self.asm.mov_mem_rbp_eax(res_slot)
             return
+        if op.kind == tir.OpKind.STR_BYTE:
+            # Load one byte from a literal string at runtime index.
+            text = op.attrs.get("text", "")
+            assert isinstance(text, str)
+            data = text.encode("utf-8")
+            sym = f"__helix_strbyte_{id(op):x}"
+            self._pending_strings.append((sym, data))
+            buf = self.asm.b
+            idx_slot = self._slot_of(op.operands[0])
+            res_slot = self._slot_of(op.results[0])
+            self.asm.mov_ecx_mem_rbp(idx_slot)         # ecx = idx
+            self.asm.lea_rax_rip_rel(sym)              # rax = &literal
+            # Bounds check: if idx >= len, return 0.
+            buf.emit(0x81, 0xF9)                       # cmp ecx, len
+            buf.emit_bytes(struct.pack("<i", len(data)))
+            buf.emit(0x7C, 0x07)                       # jl in_range (+7)
+            self.asm.mov_eax_imm32(0)                  # out-of-range → 0 (5 bytes)
+            buf.emit(0xEB, 0x04)                       # jmp store_result (+4 over movzx)
+            # in_range: movzx eax, byte [rax + rcx]
+            buf.emit(0x0F, 0xB6, 0x04, 0x08)           # movzx eax, [rax+rcx]
+            self.asm.mov_mem_rbp_eax(res_slot)
+            return
         if op.kind == tir.OpKind.ARENA_LEN:
             # Return cursor (the i32 at slot 0 of the arena).
             buf = self.asm.b

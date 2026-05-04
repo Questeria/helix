@@ -679,6 +679,28 @@ class Lowerer:
                     return self.builder.emit(
                         tir.OpKind.ARENA_LEN,
                         result_ty=tir.TIRScalar("i32"))
+                # String builtins on literals.
+                # __strlen("literal") → compile-time const_int(len).
+                if (bn == "__strlen" and len(expr.args) == 1
+                        and isinstance(expr.args[0], A.StrLit)):
+                    s = expr.args[0].value
+                    return self.builder.const_int(len(s.encode("utf-8")))
+                # __strbyte("literal", i) → runtime byte at index i.
+                if (bn == "__strbyte" and len(expr.args) == 2
+                        and isinstance(expr.args[0], A.StrLit)):
+                    s = expr.args[0].value
+                    i = self._lower_expr(expr.args[1]) \
+                        or self.builder.const_int(0)
+                    return self.builder.emit(
+                        tir.OpKind.STR_BYTE, i,
+                        result_ty=tir.TIRScalar("i32"),
+                        attrs={"text": s})
+                # __streq("a", "b") → compile-time const 0/1.
+                if (bn == "__streq" and len(expr.args) == 2
+                        and isinstance(expr.args[0], A.StrLit)
+                        and isinstance(expr.args[1], A.StrLit)):
+                    eq = 1 if expr.args[0].value == expr.args[1].value else 0
+                    return self.builder.const_int(eq)
             # Intercept write_file(path_literal, content_literal) — emits
             # a sequence of open/write/close syscalls. Returns 0 on
             # success, the negative errno on failure.

@@ -1200,6 +1200,61 @@ def test_payload_pattern_dispatch_by_tag():
     assert code == 42, f"expected 7*6=42 (Square branch), got {code}"
 
 
+def test_strlen_compile_time_const():
+    """__strlen('hello') is computed at compile time."""
+    src = """
+    fn main() -> i32 {
+        __strlen("hello")
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 5, f"expected 5, got {code}"
+
+
+def test_strbyte_runtime_index():
+    """__strbyte('abc', 1) returns 'b' = 98."""
+    src = """
+    fn main() -> i32 {
+        __strbyte("abc", 1)
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 98, f"expected 98 ('b'), got {code}"
+
+
+def test_strbyte_out_of_range_returns_zero():
+    """__strbyte('abc', 10) is out of range → 0."""
+    src = """
+    fn main() -> i32 {
+        __strbyte("abc", 10)
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 0, f"expected 0, got {code}"
+
+
+def test_streq_equal():
+    """__streq returns 1 for equal literals."""
+    src = """
+    fn main() -> i32 {
+        __streq("foo", "foo")
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 1, f"expected 1, got {code}"
+
+
+def test_streq_unequal():
+    """__streq returns 0 for unequal literals."""
+    src = """
+    fn main() -> i32 {
+        __streq("foo", "bar")
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 0, f"expected 0, got {code}"
+
+
 def test_arena_push_and_get():
     """__arena_push returns the slot index; __arena_get reads back."""
     src = """
