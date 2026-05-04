@@ -29,9 +29,17 @@ def main():
     if len(sys.argv) < 3:
         print(__doc__.strip(), file=sys.stderr)
         sys.exit(1)
-    path = sys.argv[1]
-    fn_name = sys.argv[2]
-    var = sys.argv[3] if len(sys.argv) > 3 else None
+    args = [a for a in sys.argv[1:] if not a.startswith("--")]
+    flags = {a for a in sys.argv[1:] if a.startswith("--")}
+
+    if len(args) < 2:
+        print(__doc__.strip(), file=sys.stderr)
+        sys.exit(1)
+
+    path = args[0]
+    fn_name = args[1]
+    var = args[2] if len(args) > 2 else None
+    emit_function = "--as-function" in flags
 
     with open(path, "r", encoding="utf-8") as f:
         src = f.read()
@@ -50,9 +58,23 @@ def main():
         sys.exit(1)
 
     differentiate_var = var or target.params[0].name
-    # Pass the whole block so let-bindings are inlined before differentiating
     deriv = differentiate(target.body, differentiate_var)
-    print(f"d({fn_name})/d({differentiate_var}) = {fmt(deriv)}")
+
+    if emit_function:
+        # Emit a complete Helix function definition: fn <name>__grad(...) -> ... {
+        #     <expr>
+        # }
+        # Use the same parameter list as the source (minus D wrappers, since
+        # the gradient takes plain floats).
+        params_str = ", ".join(
+            f"{p.name}: f32" for p in target.params
+        )
+        ret_str = "f32"
+        print(f"fn {fn_name}__grad({params_str}) -> {ret_str} {{")
+        print(f"    {fmt(deriv)}")
+        print(f"}}")
+    else:
+        print(f"d({fn_name})/d({differentiate_var}) = {fmt(deriv)}")
 
 
 if __name__ == "__main__":
