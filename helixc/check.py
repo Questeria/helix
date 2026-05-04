@@ -54,8 +54,7 @@ def main(argv: list[str] | None = None) -> int:
     except ParseError as e:
         # Use render() with source for caret display, fall back to bare
         # str(e) if the parse error doesn't have render().
-        rendered = e.render(source=src, filename=path) \
-            if hasattr(e, "render") else str(e)
+        rendered = e.render(source=src, filename=path)
         print(f"PARSE ERROR:", file=sys.stderr)
         for line in rendered.splitlines():
             print(f"  {line}", file=sys.stderr)

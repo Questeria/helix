@@ -51,11 +51,21 @@ PURE_KINDS = {
 
 
 def _op_hash(op: tir.Op) -> tuple:
-    """Stable hash key for an op based on its semantic equivalence."""
+    """Stable hash key for an op based on its semantic equivalence.
+    Includes the result type so `&&` MUL (bool) doesn't merge with i32 MUL,
+    and CAST ops with different target types stay distinct (audit-10)."""
     operand_ids = tuple(o.id for o in op.operands)
+    # Include attrs that are primitive types (skip complex ones like
+    # TIRType objects — those go through repr in the key tail below).
     attrs_items = tuple(sorted((k, v) for k, v in op.attrs.items()
                                if isinstance(v, (int, float, str, bool))))
-    return (op.kind, operand_ids, attrs_items)
+    # Include repr of any non-primitive attrs (TIRType, etc.) so CAST's
+    # from_ty/to_ty don't collide on result-type alone.
+    attrs_complex = tuple(sorted(
+        (k, repr(v)) for k, v in op.attrs.items()
+        if not isinstance(v, (int, float, str, bool))))
+    result_ty_key = repr(op.results[0].ty) if op.results else None
+    return (op.kind, operand_ids, attrs_items, attrs_complex, result_ty_key)
 
 
 def cse_module(module: tir.Module) -> int:

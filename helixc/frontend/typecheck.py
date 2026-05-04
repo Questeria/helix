@@ -1086,7 +1086,17 @@ class TypeChecker:
     def _check_int_lit_fits(self, lit: A.IntLit, ty: "TyPrim") -> None:
         """Static check: the literal value must fit in the declared width.
         On overflow, surface a typecheck error with did-you-mean for a
-        wider type."""
+        wider type. The literal's own type_suffix takes precedence over
+        the contextual `ty` (audit-10 #2: `let x: i32 = 5_000_000_000_i64`
+        should be checked against i64, not i32)."""
+        # If the literal has a suffix, use that as the actual type; the
+        # contextual `ty` only applies to suffix-less literals.
+        eff_name = lit.type_suffix or ty.name
+        bounds = self._INT_BOUNDS.get(eff_name)
+        if bounds is None:
+            return
+        # Refit the rest of the function against eff_name.
+        ty = TyPrim(eff_name)
         bounds = self._INT_BOUNDS.get(ty.name)
         if bounds is None:
             return
@@ -1273,8 +1283,17 @@ class TypeChecker:
         unit (only ()). Anything else needs a wildcard or PatBind to be
         considered exhaustive."""
         # Any arm with no guard and a wildcard / bare-name binder is total.
+        # Also: an or-pattern containing a wildcard or binder is total
+        # (matches anything). Audit-10 finding #4 — `E::A | _` was
+        # falsely flagged non-exhaustive.
+        def _arm_is_total(p: A.Pattern) -> bool:
+            if isinstance(p, (A.PatWildcard, A.PatBind)):
+                return True
+            if isinstance(p, A.PatOr):
+                return any(_arm_is_total(a) for a in p.alts)
+            return False
         for arm in expr.arms:
-            if arm.guard is None and isinstance(arm.pattern, (A.PatWildcard, A.PatBind)):
+            if arm.guard is None and _arm_is_total(arm.pattern):
                 return
         # Enum-shaped match: if every non-trivial arm uses a Path / PatVariant
         # rooted at the same enum, check coverage of that enum's variants.

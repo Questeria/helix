@@ -255,9 +255,6 @@ def _pattern_test(pat: A.Pattern, scrut: str, span: A.Span) -> A.Expr:
                            indices=[A.IntLit(span=span, value=0)])
         tag_test = A.Binary(span=span, op="==",
                             left=tag_load, right=pat.path)
-        # Sub-pattern tests (most are trivially true since binders / wild-
-        # cards always succeed; PatLit / nested PatVariant produce real
-        # comparisons but require knowing the slot offset).
         sub_tests: list[A.Expr] = []
         for i, sub in enumerate(pat.sub_patterns):
             slot_idx = i + 1
@@ -266,10 +263,6 @@ def _pattern_test(pat: A.Pattern, scrut: str, span: A.Span) -> A.Expr:
                 callee=A.Name(span=span, name=scrut),
                 indices=[A.IntLit(span=span, value=slot_idx)],
             )
-            # For each sub-pattern, lower as if its scrutinee were the
-            # slot value. Cheapest path: re-use the slot_load as the
-            # comparison left-hand side for PatLit; for PatBind / PatWild
-            # the test is trivially true (binder is added separately).
             if isinstance(sub, A.PatLit):
                 sub_tests.append(A.Binary(span=span, op="==",
                                           left=slot_load, right=sub.value))
@@ -282,8 +275,18 @@ def _pattern_test(pat: A.Pattern, scrut: str, span: A.Span) -> A.Expr:
                     right=A.Binary(span=span, op=op_hi,
                                    left=slot_load, right=sub.hi),
                 ))
-            # PatBind / PatWildcard: trivially true; binder handled in
-            # _collect_binds.
+            elif isinstance(sub, A.PatVariant):
+                # Nested variant: the sub-slot is itself a tagged value
+                # (typically arena index of a recursive enum). Compare
+                # the sub-slot against its variant's tag — an
+                # approximation that covers the common AST-walking case
+                # but not full recursive sub-pattern dispatch. Deeper
+                # binders inside the nested variant are still extracted
+                # by _collect_binds.
+                sub_tests.append(A.Binary(span=span, op="==",
+                                          left=slot_load, right=sub.path))
+            # PatBind / PatWildcard / nested PatTuple: trivially true;
+            # binder handled in _collect_binds.
         if sub_tests:
             full = tag_test
             for t in sub_tests:
@@ -302,20 +305,31 @@ def _collect_binds(pat: A.Pattern, scrut: str, span: A.Span) -> list[A.Let]:
             value=A.Name(span=span, name=scrut),
         ))
     elif isinstance(pat, A.PatVariant):
-        # For each sub-pattern that's a PatBind, emit `let name = scrut[i+1]`
-        # (slot i+1 because slot 0 holds the tag).
+        # For each sub-pattern, emit a let-binding for the slot value.
+        # PatBind: `let name = scrut[i+1]`.
+        # Nested PatVariant/PatTuple: recurse via a synthetic temp so
+        # inner PatBinds (e.g. `Cons(Some(x), tail)`) still get bound.
         for i, sub in enumerate(pat.sub_patterns):
             slot_idx = i + 1
+            slot_load = A.Index(
+                span=span,
+                callee=A.Name(span=span, name=scrut),
+                indices=[A.IntLit(span=span, value=slot_idx)],
+            )
             if isinstance(sub, A.PatBind):
-                slot_load = A.Index(
-                    span=span,
-                    callee=A.Name(span=span, name=scrut),
-                    indices=[A.IntLit(span=span, value=slot_idx)],
-                )
                 binds.append(A.Let(
                     span=span, name=sub.name, is_mut=False, ty=None,
                     value=slot_load,
                 ))
+            elif isinstance(sub, (A.PatVariant, A.PatTuple)):
+                # Synthesize a temp let, then recurse into the sub-pat
+                # against that temp's name so nested binders are emitted.
+                tmp = _fresh_name(prefix="__sub")
+                binds.append(A.Let(
+                    span=span, name=tmp, is_mut=False, ty=None,
+                    value=slot_load,
+                ))
+                binds.extend(_collect_binds(sub, tmp, span))
     # PatTuple element-binds are deferred (see _pattern_test note).
     return binds
 

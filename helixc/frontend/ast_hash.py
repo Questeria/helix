@@ -251,6 +251,11 @@ def _pattern_binders(pat: A.Pattern) -> list[str]:
         for sub in pat.elems:
             out.extend(_pattern_binders(sub))
         return out
+    if isinstance(pat, A.PatVariant):
+        out: list[str] = []
+        for sub in pat.sub_patterns:
+            out.extend(_pattern_binders(sub))
+        return out
     if isinstance(pat, A.PatOr):
         # All alternatives must bind the same names — take from first.
         return _pattern_binders(pat.alts[0]) if pat.alts else []
@@ -286,6 +291,15 @@ def _hash_pattern(h: "hashlib._Hash", pat: A.Pattern,
         _emit(h, "PatRange", pat.inclusive)
         _hash_into(h, pat.lo, binders)
         _hash_into(h, pat.hi, binders)
+        return
+    if isinstance(pat, A.PatVariant):
+        # Hash by path segments + recursive sub-pattern hashes. Crucial
+        # for AD memoization correctness: two `match m { Some(x) => x }`
+        # vs `match m { None => 0 }` must hash differently.
+        segs = tuple(pat.path.segments)
+        _emit(h, "PatVariant", segs, len(pat.sub_patterns))
+        for sub in pat.sub_patterns:
+            _hash_pattern(h, sub, binders)
         return
     _emit(h, "PatUnknown", type(pat).__name__)
 

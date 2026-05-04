@@ -1097,7 +1097,17 @@ class FnCompiler:
             # Load cursor (32-bit at offset 0 of arena base).
             self.asm.lea_rax_rip_rel("__helix_arena_base")
             buf.emit(0x8B, 0x08)                 # mov ecx, [rax]
-            # Store value at base + (cursor+1)*4 = base + 4 + cursor*4.
+            # Bounds check: cursor must be < HELIX_ARENA_CAP. Overflow
+            # writes past the data section. On overflow: store -1 to
+            # res_slot and skip the actual push (audit-10 critical fix).
+            buf.emit(0x81, 0xF9)                 # cmp ecx, HELIX_ARENA_CAP
+            buf.emit_bytes(struct.pack("<I", HELIX_ARENA_CAP))
+            # jb in_bounds (+7 — skip mov-eax-imm32 [5 bytes] + jmp [2 bytes])
+            buf.emit(0x72, 0x07)
+            # Overflow path: mov eax, -1 (5 bytes); jmp store_result (+12 over in_bounds)
+            self.asm.mov_eax_imm32(0xFFFFFFFF)   # eax = -1
+            buf.emit(0xEB, 0x0C)                 # jmp store_result (+12 over in_bounds 12 bytes)
+            # in_bounds: store value at base + (cursor+1)*4.
             # rax = base, rcx = cursor. Use SIB: [rax + rcx*4 + 4].
             buf.emit(0x89, 0x54, 0x88, 0x04)     # mov [rax + rcx*4 + 4], edx
             # Increment cursor and store back.
@@ -1106,6 +1116,7 @@ class FnCompiler:
             # Result: the OLD cursor (i.e. the slot index just written).
             buf.emit(0xFF, 0xC9)                 # dec ecx (recover old)
             buf.emit(0x89, 0xC8)                 # mov eax, ecx
+            # store_result:
             self.asm.mov_mem_rbp_eax(res_slot)
             return
         if op.kind == tir.OpKind.ARENA_GET:

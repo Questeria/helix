@@ -123,7 +123,12 @@ def _inline_user_calls(expr: A.Expr, fn_table: dict[str, "A.FnDecl"],
     # silently-wrong gradients when the body uses if/while.
     TRANSCENDENTALS = {"__exp", "__log", "__sin", "__cos", "__sqrt",
                        "__relu", "__sigmoid", "__tanh", "__softplus",
-                       "__silu", "__abs", "__gelu", "__powi"}
+                       "__silu", "__abs", "__gelu", "__powi",
+                       # min/max/clamp aren't differentiable at switch
+                       # points; treat as opaque (zero gradient) rather
+                       # than try to inline (audit-10).
+                       "__min", "__max", "__clamp",
+                       "__min_i32", "__max_i32", "__clamp_i32"}
     visiting = visiting or frozenset()
 
     def go(e: A.Expr) -> A.Expr:
@@ -262,10 +267,15 @@ def _inline_lets(expr: A.Expr | None, env: dict[str, A.Expr]) -> A.Expr | None:
     if isinstance(expr, A.Block):
         local_env = dict(env)
         for stmt in expr.stmts:
-            if isinstance(stmt, A.Let) and stmt.value is not None:
+            # Skip mutable lets — inlining them would substitute the
+            # initial value at every use site, ignoring later
+            # assignments. Audit-10 critical: this silently produced
+            # wrong derivatives for `let mut x = a; x = x + 1; x`.
+            if (isinstance(stmt, A.Let) and stmt.value is not None
+                    and not stmt.is_mut):
                 local_env[stmt.name] = _inline_lets(stmt.value, local_env)
             # ExprStmt: ignore (no derivative meaning)
-            # ConstStmt: similar to Let
+            # ConstStmt: similar to Let (immutable by construction)
             elif isinstance(stmt, A.ConstStmt):
                 local_env[stmt.name] = _inline_lets(stmt.value, local_env)
         if expr.final_expr is not None:

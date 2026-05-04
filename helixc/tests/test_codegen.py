@@ -47,6 +47,7 @@ def compile_and_run(src: str, optimize: bool = True) -> int:
     result = subprocess.run(
         ["wsl", "--", "bash", "-c", f"chmod +x {wsl_path} && {wsl_path}"],
         capture_output=True,
+        timeout=30,
     )
     return result.returncode
 

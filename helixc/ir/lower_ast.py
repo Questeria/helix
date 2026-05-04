@@ -1290,10 +1290,16 @@ class Lowerer:
             self.builder.emit(tir.OpKind.BR, attrs={"target_block": header_blk.id})
             return None
         if isinstance(expr, A.Match):
-            self._lower_expr(expr.scrutinee)
-            for arm in expr.arms:
-                self._lower_expr(arm.body)
-            return None
+            # All Match nodes should have been desugared by match_lower
+            # before reaching the IR lowerer. If we hit one here, it means
+            # `lower_matches` missed a position (currently it walks only
+            # FnDecl bodies — Match nodes inside ConstStmt or other items
+            # would slip through). Loud failure beats silent miscompile.
+            raise AssertionError(
+                "A.Match should not reach _lower_expr — match_lower must "
+                "rewrite it to if/let chains first. Got at "
+                f"{expr.span.line}:{expr.span.col}. If you've added a new "
+                "AST item type that holds expressions, extend lower_matches.")
         if isinstance(expr, A.Return):
             v = self._lower_expr(expr.value) if expr.value is not None else None
             self.builder.ret(v)
