@@ -573,6 +573,22 @@ class Lowerer:
         if isinstance(expr, A.Modify):
             target = self._lower_expr(expr.target) or self.builder.const_int(0)
             xform = self._lower_expr(expr.transformation) or self.builder.const_int(0)
+            attrs: dict[str, object] = {}
+            # If the verifier expression is a Name pointing at a known function
+            # (NOT a local variable), resolve it to a compile-time call: the
+            # backend emits a direct call to the verifier before applying the
+            # modification. Otherwise fall back to the legacy "is the value
+            # nonzero?" form so existing dynamic-verifier tests keep working.
+            if (isinstance(expr.verifier, A.Name)
+                    and expr.verifier.name in self.functions
+                    and self._lookup(expr.verifier.name) is None
+                    and self._lookup_mut(expr.verifier.name) is None):
+                attrs["verifier_fn"] = expr.verifier.name
+                verifier_v = self.builder.const_int(0)
+                return self.builder.emit(tir.OpKind.MODIFY, target, xform,
+                                         verifier_v,
+                                         result_ty=tir.TIRScalar("i32"),
+                                         attrs=attrs)
             verifier = self._lower_expr(expr.verifier) or self.builder.const_int(0)
             return self.builder.emit(tir.OpKind.MODIFY, target, xform, verifier,
                                      result_ty=tir.TIRScalar("i32"))

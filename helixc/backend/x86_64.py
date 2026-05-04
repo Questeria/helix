@@ -42,6 +42,12 @@ ELF_BASE = 0x400000
 CODE_OFFSET = 0x1000   # code segment starts at this file offset (page-aligned)
 ENTRY_OFFSET = 0x1000  # entry virtual address: ELF_BASE + ENTRY_OFFSET
 
+# Reflection cells: 64 i64 mutable cells appended at the end of the code
+# segment. Each cell is 8 bytes, addressed by index. Used for verifier-gated
+# self-modification (quote/splice/modify primitives).
+HELIX_NUM_CELLS = 64
+HELIX_CELL_SIZE = 8
+
 
 # ============================================================================
 # Code emitter — appends bytes, tracks fixups for forward references
@@ -318,6 +324,62 @@ class Asm:
     def test_eax_eax(self) -> None:
         # 85 C0
         self.b.emit(0x85, 0xC0)
+
+    # ---- RIP-relative load/store for reflection cells ----
+    def mov_rax_rip_rel(self, target: str) -> None:
+        """mov rax, [rip + disp32]   (load 64-bit)
+        48 8B 05 <disp32>"""
+        self.b.emit(0x48, 0x8B, 0x05)
+        offset = self.b.offset()
+        self.b.emit_bytes(b"\x00\x00\x00\x00")
+        self.b.fixups.append(Fixup(offset=offset, target=target,
+                                   size=4, rel_base=offset + 4))
+
+    def mov_rip_rel_rax(self, target: str) -> None:
+        """mov [rip + disp32], rax   (store 64-bit)
+        48 89 05 <disp32>"""
+        self.b.emit(0x48, 0x89, 0x05)
+        offset = self.b.offset()
+        self.b.emit_bytes(b"\x00\x00\x00\x00")
+        self.b.fixups.append(Fixup(offset=offset, target=target,
+                                   size=4, rel_base=offset + 4))
+
+    def lea_rax_rip_rel(self, target: str) -> None:
+        """lea rax, [rip + disp32]   (load address)
+        48 8D 05 <disp32>"""
+        self.b.emit(0x48, 0x8D, 0x05)
+        offset = self.b.offset()
+        self.b.emit_bytes(b"\x00\x00\x00\x00")
+        self.b.fixups.append(Fixup(offset=offset, target=target,
+                                   size=4, rel_base=offset + 4))
+
+    def mov_rax_mem_rax_rcx8(self) -> None:
+        """mov rax, [rax + rcx*8]
+        48 8B 04 C8  (REX.W + 8B + ModRM(00, 000, 100) + SIB(scale=11, idx=001, base=000))"""
+        self.b.emit(0x48, 0x8B, 0x04, 0xC8)
+
+    def mov_mem_rax_rcx8_rdx(self) -> None:
+        """mov [rax + rcx*8], rdx
+        48 89 14 C8"""
+        self.b.emit(0x48, 0x89, 0x14, 0xC8)
+
+    def mov_rcx_mem_rbp(self, disp: int) -> None:
+        """mov rcx, [rbp + disp]   (load 64-bit into rcx)
+        48 8B 4D <disp8>  or  48 8B 8D <disp32>"""
+        if -128 <= disp <= 127:
+            self.b.emit(0x48, 0x8B, 0x4D, disp & 0xFF)
+        else:
+            self.b.emit(0x48, 0x8B, 0x8D)
+            self.b.emit_bytes(struct.pack("<i", disp))
+
+    def mov_rdx_mem_rbp(self, disp: int) -> None:
+        """mov rdx, [rbp + disp]   (load 64-bit into rdx)
+        48 8B 55 <disp8>  or  48 8B 95 <disp32>"""
+        if -128 <= disp <= 127:
+            self.b.emit(0x48, 0x8B, 0x55, disp & 0xFF)
+        else:
+            self.b.emit(0x48, 0x8B, 0x95)
+            self.b.emit_bytes(struct.pack("<i", disp))
 
     # ============================================================
     # Float (SSE) instructions — operate on xmm0/xmm1
@@ -845,31 +907,100 @@ class FnCompiler:
 
         # AGI primitives
         if op.kind == tir.OpKind.QUOTE:
-            # QUOTE is materialized as the AST hash (an i64) stored in the
-            # result slot. v0.1 stores only the low 32 bits since exit codes
-            # are 8-bit anyway.
+            # QUOTE returns a stable cell handle in [0, HELIX_NUM_CELLS). The
+            # handle is derived at compile time from the AST hash; runtime
+            # state cells live in the binary's writable region.
             res_slot = self._slot_of(op.results[0])
-            handle = int(op.attrs.get("ast_handle", 0))
+            handle = int(op.attrs.get("ast_handle", 0)) % HELIX_NUM_CELLS
             self.asm.mov_eax_imm32(handle & 0xFFFFFFFF)
             self.asm.mov_mem_rbp_eax(res_slot)
             return
         if op.kind == tir.OpKind.SPLICE:
-            # v0.1 stub: pass the operand through (no real splice yet)
+            # splice(handle): load the i64 value at __helix_cell_<handle>.
+            # Handle is dynamic (operand value), so we compute the address
+            # at runtime: lea rax, [rip + __helix_state_base]; mov rax, [rax + rcx*8].
             in_slot = self._slot_of(op.operands[0])
             res_slot = self._slot_of(op.results[0])
-            self.asm.mov_eax_mem_rbp(in_slot)
+            # rcx = handle (as 64-bit; handle is i32, sign-extend)
+            self.asm.mov_ecx_mem_rbp(in_slot)
+            # movsxd rcx, ecx
+            self.asm.b.emit(0x48, 0x63, 0xC9)
+            # rax = address of state base
+            self.asm.lea_rax_rip_rel("__helix_state_base")
+            # rax = [rax + rcx*8]
+            self.asm.mov_rax_mem_rax_rcx8()
+            # store rax low 32 bits to result slot (i32 result for now)
             self.asm.mov_mem_rbp_eax(res_slot)
             return
         if op.kind == tir.OpKind.MODIFY:
-            # v0.1 stub: returns 1 (success) if verifier slot is non-zero, 0 otherwise
-            verifier_slot = self._slot_of(op.operands[2])
+            # modify(handle, new_value, verifier_fn_name):
+            #   call verifier(handle, new_value) → eax (truthy=accept)
+            #   if accepted: state[handle] = new_value, return 1
+            #   else: return 0
+            handle_slot = self._slot_of(op.operands[0])
+            new_val_slot = self._slot_of(op.operands[1])
             res_slot = self._slot_of(op.results[0])
-            self.asm.mov_eax_mem_rbp(verifier_slot)
+            verifier_name = op.attrs.get("verifier_fn")
+            if not isinstance(verifier_name, str):
+                # Fallback: legacy behavior (just check verifier slot truthy).
+                # Operand[2] in the legacy form was a runtime value.
+                if len(op.operands) >= 3:
+                    legacy_slot = self._slot_of(op.operands[2])
+                    self.asm.mov_eax_mem_rbp(legacy_slot)
+                    self.asm.test_eax_eax()
+                    self.asm.setne_al()
+                    self.asm.movzx_eax_al()
+                    self.asm.mov_mem_rbp_eax(res_slot)
+                else:
+                    self.asm.mov_eax_imm32(0)
+                    self.asm.mov_mem_rbp_eax(res_slot)
+                return
+
+            buf = self.asm.b
+            # Pass args to verifier: edi = handle, esi = new_value (System V)
+            self.asm.mov_edi_mem_rbp(handle_slot)
+            self.asm.mov_esi_mem_rbp(new_val_slot)
+            self.asm.call_rel32(verifier_name)
+            # eax now holds verifier's return value
             self.asm.test_eax_eax()
-            # If verifier non-zero, eax = 1; else eax = 0
-            # setne al; movzx eax, al
-            self.asm.setne_al()
-            self.asm.movzx_eax_al()
+            # je skip_apply (rel8 placeholder)
+            buf.emit(0x74, 0x00)
+            je_off = buf.offset() - 1
+            je_after = buf.offset()
+
+            # Apply: state[handle] = new_value (sign-extend 32-bit value to 64)
+            # rcx = handle (sign-extended)
+            self.asm.mov_ecx_mem_rbp(handle_slot)
+            buf.emit(0x48, 0x63, 0xC9)   # movsxd rcx, ecx
+            # rdx = new_value (sign-extended)
+            self.asm.mov_eax_mem_rbp(new_val_slot)
+            # movsxd rdx, eax: 48 63 D0
+            buf.emit(0x48, 0x63, 0xD0)
+            # rax = state base address
+            self.asm.lea_rax_rip_rel("__helix_state_base")
+            # [rax + rcx*8] = rdx
+            self.asm.mov_mem_rax_rcx8_rdx()
+            # eax = 1 (success)
+            self.asm.mov_eax_imm32(1)
+            # jmp done (rel8)
+            buf.emit(0xEB, 0x00)
+            jmp_done_off = buf.offset() - 1
+            jmp_done_after = buf.offset()
+
+            # skip_apply: eax = 0
+            skip_addr = buf.offset()
+            self.asm.mov_eax_imm32(0)
+            done_addr = buf.offset()
+
+            # Patch je_off → skip_addr; jmp_done_off → done_addr
+            d_je = skip_addr - je_after
+            d_jmp = done_addr - jmp_done_after
+            for d, name in ((d_je, "je"), (d_jmp, "jmp_done")):
+                if not (-128 <= d <= 127):
+                    raise ValueError(f"MODIFY {name} disp out of rel8: {d}")
+            buf.bytes_[je_off] = d_je & 0xFF
+            buf.bytes_[jmp_done_off] = d_jmp & 0xFF
+
             self.asm.mov_mem_rbp_eax(res_slot)
             return
 
@@ -917,11 +1048,18 @@ class FnCompiler:
 # ELF emission
 # ============================================================================
 def emit_elf(code: bytes, entry_offset: int = ENTRY_OFFSET) -> bytes:
-    """Wrap the given code bytes in a minimal x86-64 Linux ELF executable."""
+    """Wrap the given code bytes in a minimal x86-64 Linux ELF executable.
+
+    Note: the segment is mapped R+W+X (flag = 7) so the reflection-cells
+    region embedded at the end of `code` can be modified at runtime by
+    MODIFY ops. This is a deliberate choice for an experimental compiler;
+    a production version would split into separate R-X .text and R-W .data
+    segments to enforce W^X.
+    """
     # Layout:
     #   0x00: ELF header (64 B)
     #   0x40: Program header (56 B)
-    #   0x1000: Code (page-aligned)
+    #   0x1000: Code + reflection cells (page-aligned)
     code_vaddr = ELF_BASE + entry_offset
     file_size_to_code = CODE_OFFSET
     total_filesz = file_size_to_code + len(code)
@@ -949,9 +1087,9 @@ def emit_elf(code: bytes, entry_offset: int = ENTRY_OFFSET) -> bytes:
     ehdr += struct.pack("<H", 0)              # e_shnum
     ehdr += struct.pack("<H", 0)              # e_shstrndx
 
-    # Program header (PT_LOAD, R+X)
+    # Program header (PT_LOAD, R+W+X — see docstring above)
     phdr = struct.pack("<I", 1)               # p_type = PT_LOAD
-    phdr += struct.pack("<I", 5)              # p_flags = R | X
+    phdr += struct.pack("<I", 7)              # p_flags = R | W | X
     phdr += struct.pack("<Q", 0)              # p_offset = 0
     phdr += struct.pack("<Q", ELF_BASE)       # p_vaddr
     phdr += struct.pack("<Q", ELF_BASE)       # p_paddr
@@ -995,6 +1133,12 @@ def compile_module_to_elf(module: tir.Module, entry_fn: str = "main") -> bytes:
     # Compile each function
     for fn in module.functions.values():
         FnCompiler(fn, asm).compile()
+
+    # Reflection cells: append HELIX_NUM_CELLS * 8 bytes of zero-init storage
+    # immediately after the code. The base symbol is __helix_state_base.
+    # MODIFY/SPLICE codegen uses RIP-relative LEA to address it.
+    buf.define_symbol("__helix_state_base")
+    buf.emit_bytes(b"\x00" * (HELIX_NUM_CELLS * HELIX_CELL_SIZE))
 
     buf.patch()
     return emit_elf(bytes(buf.bytes_))

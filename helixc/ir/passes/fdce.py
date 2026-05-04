@@ -30,7 +30,9 @@ def fdce_module(module: tir.Module, entry_fn: str = "main") -> int:
     if entry_fn not in module.functions:
         return 0
 
-    # Build the call graph
+    # Build the call graph. Functions are "called" via:
+    #   - direct CALL op (target attr)
+    #   - MODIFY op's verifier_fn attr (verifier-gated reflection)
     callees: dict[str, set[str]] = {}
     for name, fn in module.functions.items():
         called = set()
@@ -40,6 +42,10 @@ def fdce_module(module: tir.Module, entry_fn: str = "main") -> int:
                     target = op.attrs.get("target")
                     if isinstance(target, str):
                         called.add(target)
+                elif op.kind == tir.OpKind.MODIFY:
+                    vfn = op.attrs.get("verifier_fn")
+                    if isinstance(vfn, str):
+                        called.add(vfn)
         callees[name] = called
 
     # Roots: entry_fn + any pub-prefixed function (cheap interop hook)
