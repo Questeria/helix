@@ -99,6 +99,33 @@ python -m helixc.frontend.autodiff_cli loss.hx linear y
 # d(linear)/d(y) = 5
 ```
 
+### Round-trip: generate a derivative function, then compile and run it
+
+The CLI's `--as-function` flag emits a full Helix function definition,
+ready to paste into another file:
+
+```bash
+$ cat my_loss.hx
+fn loss(x: f32) -> f32 {
+    let pred = x * 2.0 + 3.0;
+    let target = 7.0;
+    let diff = pred - target;
+    diff * diff
+}
+
+$ python -m helixc.frontend.autodiff_cli my_loss.hx loss --as-function
+fn loss__grad(x: f32) -> f32 {
+    ((2 * (((x * 2) + 3) - 7)) + ((((x * 2) + 3) - 7) * 2))
+}
+```
+
+Paste that into your file, compile, and you have a working
+`loss__grad(x)` function.
+
+Helix is the only AI language that does autodiff at compile time as
+plain symbolic AST manipulation — the result is just another Helix
+function you can read, edit, optimize, or hand-tune.
+
 ## Run the test suite
 
 ```bash
