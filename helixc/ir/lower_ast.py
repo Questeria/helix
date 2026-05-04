@@ -142,6 +142,32 @@ class Lowerer:
             if name in sc:
                 return sc[name]
         return None
+
+    def _aggregate_slot_count(self, ty: "A.TyNode") -> Optional[int]:
+        """If `ty` is a struct or enum decl name, return the number of
+        i32 slots it occupies (struct: flat field count; enum: max
+        payload count + 1 for tag). None for non-aggregate types."""
+        if not isinstance(ty, A.TyName):
+            return None
+        # Struct: flat-path length already encodes nested-struct flattening.
+        flat = self._struct_flat_paths.get(ty.name)
+        if flat is not None:
+            return len(flat)
+        # Enum: tag (1) + max payload arity across variants.
+        if ty.name in self._enum_variants:
+            decl = next(
+                (it for it in self.prog.items
+                 if isinstance(it, A.EnumDecl) and it.name == ty.name),
+                None,
+            )
+            if decl is None:
+                return 1
+            max_payload = max(
+                (len(v.payload_tys) for v in decl.variants),
+                default=0,
+            )
+            return 1 + max_payload
+        return None
     def _lookup(self, name: str) -> Optional[tir.Value]:
         for sc in reversed(self.scope):
             if name in sc:
@@ -204,10 +230,21 @@ class Lowerer:
 
     # ---- function registration ----
     def _register_fn(self, fn: A.FnDecl) -> None:
+        # Build the IR-level param list. AGGREGATE-typed AST params (struct
+        # or enum) expand to N i32 IR params, where N is the slot count.
+        # The callee uses param-name suffixed with "__slot{i}" to
+        # distinguish; reassembly into an array binding happens in
+        # _lower_fn_body.
         params: list[tuple[str, tir.TIRType]] = []
         for p in fn.params:
-            t = self._lower_type(p.ty)
-            params.append((p.name, t))
+            n_slots = self._aggregate_slot_count(p.ty)
+            if n_slots is not None and n_slots > 1:
+                for i in range(n_slots):
+                    params.append((f"{p.name}__slot{i}",
+                                   tir.TIRScalar("i32")))
+            else:
+                t = self._lower_type(p.ty)
+                params.append((p.name, t))
         ret = self._lower_type(fn.return_ty) if fn.return_ty else tir.TIRUnit()
         attrs: dict[str, object] = {}
         for a in fn.attrs:
@@ -227,11 +264,35 @@ class Lowerer:
         self.builder.current_fn = ir_fn
         self.builder.current_block = ir_fn.entry
         self._push_scope()
-        # Bind params to their SSA values
-        for ((name, _ty), v) in zip(
-            [(p.name, p.ty) for p in fn.params], ir_fn.params,
-        ):
-            self._bind(name, v)
+        # Bind params to their SSA values. AGGREGATE-typed params were
+        # expanded to N consecutive IR params in _register_fn — reassemble
+        # them into an array binding here so the body can use field/index
+        # access transparently.
+        ir_param_idx = 0
+        for p in fn.params:
+            n_slots = self._aggregate_slot_count(p.ty)
+            if n_slots is not None and n_slots > 1:
+                # Take next n_slots IR params, allocate array, store each.
+                slot_vals = list(ir_fn.params[ir_param_idx:
+                                              ir_param_idx + n_slots])
+                ir_param_idx += n_slots
+                elem_ty = tir.TIRScalar("i32")
+                self.builder.emit(tir.OpKind.ALLOC_ARRAY,
+                                  attrs={"name": p.name,
+                                         "dtype": elem_ty,
+                                         "length": n_slots})
+                for i, sv in enumerate(slot_vals):
+                    idx = self.builder.const_int(i)
+                    self.builder.emit(tir.OpKind.STORE_ELEM, idx, sv,
+                                      attrs={"name": p.name})
+                self._bind_array(p.name, elem_ty, n_slots)
+                if isinstance(p.ty, A.TyName) \
+                        and p.ty.name in self._struct_flat_paths:
+                    self._bind_struct(p.name, p.ty.name)
+            else:
+                v = ir_fn.params[ir_param_idx]
+                ir_param_idx += 1
+                self._bind(p.name, v)
         # Lower body block
         body_val = self._lower_block(fn.body)
         # Emit return
@@ -600,11 +661,61 @@ class Lowerer:
                                          result_ty=tir.TIRScalar("i32"),
                                          attrs=attrs)
 
+            # Look up the callee's AST decl to know which params are
+            # aggregate-typed (struct/enum) — those receive multi-slot
+            # expansion at the call site.
+            callee_ast = None
+            if isinstance(expr.callee, A.Name):
+                for it in self.prog.items:
+                    if isinstance(it, A.FnDecl) and it.name == expr.callee.name:
+                        callee_ast = it
+                        break
             args: list[tir.Value] = []
-            for a in expr.args:
-                v = self._lower_expr(a)
-                if v is not None:
-                    args.append(v)
+            for i, a in enumerate(expr.args):
+                # If the corresponding param is aggregate-typed, expand
+                # into N i32 args so the callee's reassembled-array
+                # binding sees the full layout. Three sub-cases:
+                #   (a) arg is a Name pointing to an array binding →
+                #       emit N LOAD_ELEMs (pad with 0 if source is shorter)
+                #   (b) arg is a tag-only enum path (Maybe::None) →
+                #       emit [const_int(tag), 0, 0, ...]
+                #   (c) anything else → lower normally, pad to N slots
+                expanded = False
+                if callee_ast is not None and i < len(callee_ast.params):
+                    p_ty = callee_ast.params[i].ty
+                    n_slots = self._aggregate_slot_count(p_ty)
+                    if n_slots is not None and n_slots > 1:
+                        if isinstance(a, A.Name):
+                            arr = self._lookup_array(a.name)
+                            if arr is not None:
+                                elem_ty, length = arr
+                                for j in range(n_slots):
+                                    if j < length:
+                                        idx_v = self.builder.const_int(j)
+                                        loaded = self.builder.emit(
+                                            tir.OpKind.LOAD_ELEM, idx_v,
+                                            result_ty=elem_ty,
+                                            attrs={"name": a.name})
+                                        args.append(loaded)
+                                    else:
+                                        args.append(self.builder.const_int(0))
+                                expanded = True
+                        if not expanded:
+                            # Generic case: lower the arg as a scalar,
+                            # treat it as the tag (slot 0), pad the rest
+                            # with zero. Covers tag-only enum paths
+                            # (Maybe::None) and accidental scalar args.
+                            v = self._lower_expr(a)
+                            if v is None:
+                                v = self.builder.const_int(0)
+                            args.append(v)
+                            for _ in range(n_slots - 1):
+                                args.append(self.builder.const_int(0))
+                            expanded = True
+                if not expanded:
+                    v = self._lower_expr(a)
+                    if v is not None:
+                        args.append(v)
             # Determine call target name
             target = "<unknown>"
             if isinstance(expr.callee, A.Name):

@@ -1305,6 +1305,62 @@ def test_three_level_nested_struct():
     assert code == 42, f"expected 42, got {code}"
 
 
+def test_struct_passed_to_helper_returns_value():
+    """Tier F #22: passing a struct value to a function should preserve
+    field access. Multi-slot ABI: each struct param expands to N i32
+    physical params; callee reassembles into an array binding."""
+    src = """
+    struct Coord { x: i32, y: i32 }
+    fn sum_xy(c: Coord) -> i32 { c.x + c.y }
+    fn main() -> i32 {
+        let c = Coord { x: 10, y: 32 };
+        sum_xy(c)
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 10+32=42, got {code}"
+
+
+def test_enum_payload_passed_to_helper():
+    """Tier F #22: passing a Maybe::Some(42) to a function preserves
+    payload extraction inside the function."""
+    src = """
+    enum Maybe { None, Some(i32) }
+    fn unwrap_or(m: Maybe, default: i32) -> i32 {
+        match m {
+            Maybe::Some(x) => x,
+            Maybe::None => default,
+        }
+    }
+    fn main() -> i32 {
+        let m = Maybe::Some(42);
+        unwrap_or(m, 0)
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42 (Some(42) extracted), got {code}"
+
+
+def test_enum_none_passed_to_helper_uses_default():
+    """Tier F #22: tag-only Maybe::None passed to function should hit
+    the None branch and return the default."""
+    src = """
+    enum Maybe { None, Some(i32) }
+    fn unwrap_or(m: Maybe, default: i32) -> i32 {
+        match m {
+            Maybe::Some(x) => x,
+            Maybe::None => default,
+        }
+    }
+    fn main() -> i32 {
+        let m = Maybe::None;
+        unwrap_or(m, 42)
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected default=42 (None branch), got {code}"
+
+
 def test_struct_passed_to_helper():
     """Field access inside a helper fn that's called from main."""
     src = """
