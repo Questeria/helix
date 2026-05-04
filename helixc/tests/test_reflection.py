@@ -131,6 +131,14 @@ def test_multiple_modifications_compose():
     assert compile_and_run(src) == 42
 
 
+def test_dogfood_01_one_param_gradient_descent():
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    p = os.path.join(proj_root, "helixc", "examples", "dogfood_01_one_param.hx")
+    with open(p) as f:
+        src = f.read()
+    assert compile_and_run(src) == 42
+
+
 def test_flagship_self_improving_agent_example():
     # Compiles and runs helixc/examples/self_improving_agent.hx — the
     # flagship demo composing reverse-mode AD + reflection + verifier

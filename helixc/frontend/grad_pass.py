@@ -206,6 +206,16 @@ def _rewrite_in_expr(expr: A.Expr, fn_by_name: dict[str, A.FnDecl],
             expr.indices[i] = new_idx
             c2 += ci
         return (expr, c1 + c2)
+    if isinstance(expr, A.While):
+        new_cond, c1 = _rewrite_in_expr(expr.cond, fn_by_name, new_fns)
+        expr.cond = new_cond
+        c2 = _rewrite_in_block(expr.body, fn_by_name, new_fns)
+        return (expr, c1 + c2)
+    if isinstance(expr, A.For):
+        new_iter, c1 = _rewrite_in_expr(expr.iter_expr, fn_by_name, new_fns)
+        expr.iter_expr = new_iter
+        c2 = _rewrite_in_block(expr.body, fn_by_name, new_fns)
+        return (expr, c1 + c2)
     return (expr, count)
 
 
