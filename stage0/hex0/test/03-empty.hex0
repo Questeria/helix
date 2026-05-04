@@ -1,0 +1,4 @@
+; test 03: empty input (only comments and whitespace) -> empty output
+; nothing here
+
+   ; really nothing

@@ -47,3 +47,26 @@ Once hex0 works, every subsequent stage feeds higher-level text into the previou
 2. `git init` + first commit
 3. Spawn parallel research agents for: (a) ELF64 minimal-header byte layout, (b) Linux x86_64 syscall numbers and calling convention, (c) the M2-Planet bootstrap chain study
 4. Begin hex0 design — annotated bytes in `stage0/hex0.annotated.md` and the binary file itself
+
+---
+
+## 2026-05-03 (continued) — hex0 design complete
+
+**Session 1 progress:**
+- Founding docs committed (initial commit `1ea237f`)
+- 5 deep-research agents returned: ELF64 byte layout, Linux syscall table, x86-64 instruction encoding, stage0 ecosystem, recommended chain approach
+- Decision: **hybrid** — hand-write hex0 ourselves (the literal "raw binary" hard constraint), re-evaluate adoption of stage0-posix from hex1 onwards at month-2 gate
+- `stage0/hex0/hex0.s` written: full annotated NASM assembly, ~140-byte estimate for code section, total ELF ~260–320 bytes
+- `stage0/hex0/hex0_reference.py` written: Python behavioral oracle
+- 3 test fixtures (`01-hello`, `02-comments-ws`, `03-empty`) — all pass against Python reference
+- `stage0/hex0/build.sh` written: assembles via nasm (cross-check only) + runs tests + verifies `cmp`-equivalence with hex0.bin (when present)
+- `stage0/hex0/hex0.bytes.md` placeholder for hand-encoded byte form
+
+**Blocker for next session:**
+- `nasm` not installed in WSL; install requires user's sudo password. Two paths forward: (A) user installs nasm, we use it as cross-check while hand-encoding; (B) compute every byte from Intel SDM independently, cross-check against `oriansj/stage0-posix-amd64/hex0_AMD64.hex0` only.
+
+**Tooling note:** WSL2 confirmed working with gcc, as, ld. Linux 6.6.87.2-microsoft-standard-WSL2.
+
+**Decisions log:**
+- Bootstrap target OS: Linux x86_64 ELF (via WSL2). Decision recorded in 2026-05-03-go.md.
+- License contagion: kov-libc to be hand-written, not adopted from M2libc (avoids GPL-3.0 contagion into kovc-bootstrap binary).

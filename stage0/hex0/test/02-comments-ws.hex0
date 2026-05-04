@@ -1,0 +1,6 @@
+; test 02: comments and whitespace handling
+; the output should be: "Kovostov\n"
+4B 6f       ; K, o (lowercase hex digit accepted)
+76 6F       # mixed comment marker
+73    74    6F  76     ; lots of whitespace
+0A          ; newline
