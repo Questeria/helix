@@ -840,6 +840,38 @@ def test_grad_rev_through_if_else_branch():
     assert compile_and_run(src) == 42
 
 
+def test_idiv_int_min_div_neg_one_does_not_trap():
+    # x86 `idiv ecx` raises #DE for INT_MIN / -1. We emit a runtime guard
+    # that defines INT_MIN / -1 = INT_MIN and INT_MIN % -1 = 0 instead of
+    # crashing. To exercise the runtime path (not const_fold) we hide the
+    # operands behind function args.
+    src = """
+    fn divide(a: i32, b: i32) -> i32 { a / b }
+    fn modulo(a: i32, b: i32) -> i32 { a % b }
+    fn main() -> i32 {
+        let int_min = -2147483648;
+        let q = divide(int_min, -1);
+        let r = modulo(int_min, -1);
+        // q should be INT_MIN; r should be 0. INT_MIN as exit code wraps
+        // around; verify by reducing to a small known value.
+        let q_ok = if q == int_min { 1 } else { 0 };
+        let r_ok = if r == 0 { 1 } else { 0 };
+        // 1 + 1 + 40 = 42 if both pass, else < 42
+        q_ok + r_ok + 40
+    }
+    """
+    assert compile_and_run(src) == 42
+
+
+def test_idiv_normal_division_still_works():
+    # Make sure the new guard didn't break normal division.
+    src = """
+    fn divide(a: i32, b: i32) -> i32 { a / b }
+    fn main() -> i32 { divide(84, 2) }
+    """
+    assert compile_and_run(src) == 42
+
+
 def test_real_matmul_3x3_via_arrays():
     # 3x3 matmul: c[i][j] = sum_k a[i][k] * b[k][j]
     # We use flat 9-element arrays with row-major indexing: a[i*3+j]

@@ -504,6 +504,83 @@ class FnCompiler:
     def _is_float_type(self, ty: tir.TIRType) -> bool:
         return isinstance(ty, tir.TIRScalar) and ty.name in ("f16", "bf16", "f32", "f64")
 
+    def _emit_idiv_guarded(self, l_slot: int, r_slot: int, res_slot: int,
+                           *, want_quotient: bool) -> None:
+        """Emit signed 32-bit integer division with the INT_MIN/-1 trap-avoidance
+        guard. On x86, `idiv ecx` raises #DE when eax = INT_MIN and ecx = -1
+        (the quotient INT_MIN/-1 = INT_MIN+1 doesn't fit signed 32, but at the
+        hardware level the well-known trap is INT_MIN/-1 producing #DE).
+        We define INT_MIN/-1 = INT_MIN (matching wraparound) and INT_MIN%-1 = 0.
+
+        Sequence:
+          mov  eax, [l]
+          mov  ecx, [r]
+          cmp  ecx, -1
+          jne  do_div
+          cmp  eax, 0x80000000
+          jne  do_div
+          ; INT_MIN/-1 path: skip idiv, set quotient=INT_MIN or remainder=0
+          jmp  done
+        do_div:
+          cdq
+          idiv ecx
+          (if !want_quotient: mov eax, edx)
+        done:
+          mov  [res], eax
+        """
+        buf = self.asm.b
+        self.asm.mov_eax_mem_rbp(l_slot)
+        self.asm.mov_ecx_mem_rbp(r_slot)
+
+        # cmp ecx, -1   (83 F9 FF; rel8 sign-extended imm8)
+        buf.emit(0x83, 0xF9, 0xFF)
+        # jne do_div  (placeholder rel8)
+        buf.emit(0x75, 0x00)
+        jne1_disp_off = buf.offset() - 1
+        jne1_after = buf.offset()
+
+        # cmp eax, 0x80000000   (3D <imm32> = cmp eax, imm32)
+        buf.emit(0x3D)
+        buf.emit_bytes(struct.pack("<I", 0x80000000))
+        # jne do_div
+        buf.emit(0x75, 0x00)
+        jne2_disp_off = buf.offset() - 1
+        jne2_after = buf.offset()
+
+        # INT_MIN/-1 path: produce eax = INT_MIN (for div) or 0 (for mod)
+        if want_quotient:
+            # mov eax, 0x80000000
+            self.asm.mov_eax_imm32(0x80000000)
+        else:
+            # xor eax, eax  (31 C0)
+            buf.emit(0x31, 0xC0)
+        # jmp done (rel8 placeholder)
+        buf.emit(0xEB, 0x00)
+        jmp_done_disp_off = buf.offset() - 1
+        jmp_done_after = buf.offset()
+
+        # do_div:
+        do_div_addr = buf.offset()
+        self.asm.cdq()
+        self.asm.idiv_ecx()
+        if not want_quotient:
+            self.asm.mov_eax_edx()
+
+        done_addr = buf.offset()
+
+        # Patch the three rel8 jumps
+        d1 = do_div_addr - jne1_after
+        d2 = do_div_addr - jne2_after
+        d3 = done_addr - jmp_done_after
+        for d, name in ((d1, "jne1"), (d2, "jne2"), (d3, "jmp_done")):
+            if not (-128 <= d <= 127):
+                raise ValueError(f"idiv-guard {name} disp out of rel8: {d}")
+        buf.bytes_[jne1_disp_off] = d1 & 0xFF
+        buf.bytes_[jne2_disp_off] = d2 & 0xFF
+        buf.bytes_[jmp_done_disp_off] = d3 & 0xFF
+
+        self.asm.mov_mem_rbp_eax(res_slot)
+
     def _emit_op(self, op: tir.Op, frame_size: int) -> None:
         if op.kind == tir.OpKind.CONST_INT:
             slot = self._slot_of(op.results[0])
@@ -597,24 +674,13 @@ class FnCompiler:
                 self.asm.divss_xmm0_xmm1()
                 self.asm.movss_mem_rbp_xmm0(res_slot)
             else:
-                self.asm.mov_eax_mem_rbp(l_slot)
-                self.asm.mov_ecx_mem_rbp(r_slot)
-                self.asm.cdq()
-                self.asm.idiv_ecx()
-                # eax = quotient
-                self.asm.mov_mem_rbp_eax(res_slot)
+                self._emit_idiv_guarded(l_slot, r_slot, res_slot, want_quotient=True)
             return
         if op.kind == tir.OpKind.MOD:
             l_slot = self._slot_of(op.operands[0])
             r_slot = self._slot_of(op.operands[1])
             res_slot = self._slot_of(op.results[0])
-            self.asm.mov_eax_mem_rbp(l_slot)
-            self.asm.mov_ecx_mem_rbp(r_slot)
-            self.asm.cdq()
-            self.asm.idiv_ecx()
-            # edx = remainder; copy to eax
-            self.asm.mov_eax_edx()
-            self.asm.mov_mem_rbp_eax(res_slot)
+            self._emit_idiv_guarded(l_slot, r_slot, res_slot, want_quotient=False)
             return
         if op.kind == tir.OpKind.NEG:
             slot = self._slot_of(op.operands[0])
