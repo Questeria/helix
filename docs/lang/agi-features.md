@@ -187,10 +187,37 @@ a *language primitive* with type-level guarantees is novel.
 | 6. Shape-typed tensors + Presburger | ✅ working | 28 (24 solver + 4 integration) | catches matmul mismatches at compile time |
 | 7. Agent type declarations | ✅ parsing | 4 parser | `agent Foo { fn ...; }` |
 | 8. Tile types in codegen | ⏳ type-level only | — | Tile IR exists, no GPU lowering yet |
-| 9. Composable transforms (`grad`/`vmap`) | ⏳ not started | — | requires source-level AD pass |
+| 9. Composable transforms (`grad`/`vmap`) | ✅ engine working (CLI) | 13 autodiff | symbolic forward-mode AD; CLI prints derivatives |
 | 10. Auto-curriculum (`learn_to`) | ⏳ not started | — | type-level work |
 
-As of the latest commit: **27 commits, 224 tests across 8 test files, all passing.**
+As of the latest commit: **40 commits, 263 tests across 11 test files, all passing.**
+
+### Autodiff usage
+
+Helix has a working forward-mode autodiff engine. Use the CLI:
+
+```bash
+$ cat loss.hx
+fn loss(x: f32) -> f32 { x * x }
+
+$ python -m helixc.frontend.autodiff_cli loss.hx loss
+d(loss)/d(x) = (x + x)
+```
+
+Or programmatically:
+
+```python
+from helixc.frontend.parser import parse
+from helixc.frontend.autodiff import differentiate, fmt
+prog = parse("fn f(x: f32) -> f32 { x * x * x }")
+fn = prog.items[0]
+deriv = differentiate(fn.body.final_expr, "x")
+print(fmt(deriv))   # = (((x + x) * x) + (x * x))
+```
+
+This is the engine that will eventually power a `grad(f)` builtin in the
+language. The engine handles +, -, *, /, unary -, constants, and variables.
+Future work: chain rule for function calls, blocks/let-bindings, reverse-mode.
 
 ## What this gives Helix as a foundation
 
