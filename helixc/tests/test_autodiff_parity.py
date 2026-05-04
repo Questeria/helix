@@ -168,6 +168,20 @@ def test_pow_int_parity():
         _agree(src, "x", [-2.0, -0.5, 0.5, 1.5, 3.0])
 
 
+def test_pow_int_cap_consistency():
+    """__powi runtime caps n at 16. The AD chain rule must match the cap
+    so the gradient is consistent with what runtime returns. For n>16,
+    forward and reverse should both produce the saturated derivative
+    (16 * x^15) — and they must agree with each other."""
+    cases = [
+        "fn f(x: f32) -> f32 { __powi(x, 17) }",
+        "fn f(x: f32) -> f32 { __powi(x, 20) }",
+        "fn f(x: f32) -> f32 { __powi(x, 100) }",
+    ]
+    for src in cases:
+        _agree(src, "x", [1.0, 1.5, 2.0])
+
+
 def test_parity_multi_variable():
     body = _fn_body_from("fn f(x: f32, y: f32) -> f32 { x*x + 2.0*x*y + y*y }")
     # Check both partials.

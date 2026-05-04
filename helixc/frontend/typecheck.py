@@ -923,11 +923,25 @@ class TypeChecker:
                     self._bind_pattern(sub_pat, TyUnknown(hint="tuple-pat"), scope)
             return
         if isinstance(pat, A.PatOr):
-            # Each alternative must bind the same set of names. For now we
-            # only typecheck literal-or-wildcard alternatives (most common
-            # case); a future ticket can require binder-set agreement.
+            # Or-pattern semantics: a name is bound in the arm body iff
+            # it is bound by EVERY alternative (the intersection). If a
+            # name is bound by some alternatives but not all, accepting
+            # it would be a type-safety hole — references in the body
+            # could read uninitialized scope. Compute each alternative's
+            # binder set in a throwaway scope, then define only the
+            # intersection in the outer scope.
+            alt_scopes: list[Scope] = []
             for alt in pat.alts:
-                self._bind_pattern(alt, scrut_ty, scope)
+                alt_scope = Scope(parent=None)
+                self._bind_pattern(alt, scrut_ty, alt_scope)
+                alt_scopes.append(alt_scope)
+            if alt_scopes:
+                common = set(alt_scopes[0].locals.keys())
+                for s in alt_scopes[1:]:
+                    common &= set(s.locals.keys())
+                for name in common:
+                    # Use the type from the first alternative's scope.
+                    scope.define(name, alt_scopes[0].locals[name])
             return
         if isinstance(pat, A.PatRange):
             # Type-check both endpoints in the surrounding scope.

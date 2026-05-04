@@ -135,6 +135,9 @@ def _propagate(node: A.Expr, adj: A.Expr, acc: dict[str, list[A.Expr]]) -> None:
             n_val = node.args[1].value
             if n_val <= 0:
                 return  # x^0 = 1 → derivative 0
+            # Match the n<=16 cap from stdlib's __powi (transcendentals.hx).
+            if n_val > 16:
+                n_val = 16
             n_lit = A.FloatLit(span=node.span, value=float(n_val))
             n_minus_one = A.IntLit(span=node.span, value=n_val - 1)
             x_pow = A.Call(span=node.span,

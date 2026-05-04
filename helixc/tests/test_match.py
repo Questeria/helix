@@ -313,6 +313,38 @@ def test_match_nested_in_let():
     assert code == 42, f"expected 42, got {code}"
 
 
+def test_or_pattern_only_intersected_binders_visible_in_body():
+    """A name bound in only one alternative of an or-pattern must NOT be
+    visible in the arm body (it would be uninitialized for the other
+    alternatives). The `y` here is bound only in alt 1, not in alt 2."""
+    src = """
+    fn f(x: i32) -> i32 {
+        match x {
+            y | 0 => y,
+            _ => 0,
+        }
+    }
+    """
+    errs = _check(src)
+    # `y` should be unbound in body (since it's only bound in one alt).
+    assert any("unbound" in repr(e).lower() and "y" in repr(e)
+               for e in errs), \
+        f"expected `y` unbound in or-arm body, got: {errs}"
+
+
+def test_or_pattern_uniform_binders_visible_in_body():
+    """If every alternative binds the same name, that name IS visible."""
+    src = """
+    fn f(x: i32) -> i32 {
+        match x {
+            y => y,
+        }
+    }
+    """
+    errs = _check(src)
+    assert errs == [], f"expected uniform binder visible, got: {errs}"
+
+
 def test_match_nested_match():
     """Match inside the body of another match arm."""
     try:
