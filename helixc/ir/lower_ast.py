@@ -34,6 +34,12 @@ class Lowerer:
         self.mut_scope: list[dict[str, tir.TIRType]] = []
         # Arrays: name -> (elem_ty, length)
         self.array_scope: list[dict[str, tuple[tir.TIRType, int]]] = []
+        # Structs: binding-name -> struct-decl-name (so we can resolve
+        # `p.field_x` to a LOAD_ELEM at the correct field index).
+        self.struct_scope: list[dict[str, str]] = []
+        # struct-decl-name -> ordered list of field names (declaration order).
+        # Built from prog.items at lower-time.
+        self._struct_fields: dict[str, list[str]] = {}
         # name -> FnIR (registered functions)
         self.functions: dict[str, tir.FnIR] = {}
         # quote-handle assignment table: maps AST pretty-form -> unique cell
@@ -45,6 +51,10 @@ class Lowerer:
 
     # ---- entry ----
     def lower(self) -> tir.Module:
+        # Pass 0: index struct decls so StructLit / Field can resolve.
+        for item in self.prog.items:
+            if isinstance(item, A.StructDecl):
+                self._struct_fields[item.name] = [p.name for p in item.fields]
         # Pass 1: register function signatures (so calls work)
         for item in self.prog.items:
             if isinstance(item, A.FnDecl):
@@ -60,16 +70,25 @@ class Lowerer:
         self.scope.append({})
         self.mut_scope.append({})
         self.array_scope.append({})
+        self.struct_scope.append({})
     def _pop_scope(self) -> None:
         self.scope.pop()
         self.mut_scope.pop()
         self.array_scope.pop()
+        self.struct_scope.pop()
     def _bind(self, name: str, v: tir.Value) -> None:
         self.scope[-1][name] = v
     def _bind_mut(self, name: str, ty: tir.TIRType) -> None:
         self.mut_scope[-1][name] = ty
     def _bind_array(self, name: str, elem_ty: tir.TIRType, length: int) -> None:
         self.array_scope[-1][name] = (elem_ty, length)
+    def _bind_struct(self, binding_name: str, struct_name: str) -> None:
+        self.struct_scope[-1][binding_name] = struct_name
+    def _lookup_struct(self, name: str) -> Optional[str]:
+        for sc in reversed(self.struct_scope):
+            if name in sc:
+                return sc[name]
+        return None
     def _lookup(self, name: str) -> Optional[tir.Value]:
         for sc in reversed(self.scope):
             if name in sc:
@@ -185,6 +204,42 @@ class Lowerer:
 
     def _lower_stmt(self, stmt: A.Stmt) -> None:
         if isinstance(stmt, A.Let):
+            # Special case: struct literal initializer -> back it with a
+            # fixed-length stack array indexed by field-declaration order.
+            if stmt.value is not None and isinstance(stmt.value, A.StructLit):
+                slit = stmt.value
+                field_order = self._struct_fields.get(slit.name)
+                if field_order is None:
+                    # Unknown struct (typecheck would have flagged) — fall
+                    # through to default-value binding to avoid crashing.
+                    self._bind(stmt.name, self.builder.const_int(0))
+                    return
+                given = dict(slit.fields)
+                # Lower each field's value in declaration order. Missing
+                # fields fall back to const_int(0); typecheck would have
+                # already flagged the missing-field error.
+                elem_vals = []
+                for fname in field_order:
+                    expr = given.get(fname)
+                    v = self._lower_expr(expr) if expr is not None else None
+                    if v is None:
+                        v = self.builder.const_int(0)
+                    elem_vals.append(v)
+                if not elem_vals:
+                    self._bind(stmt.name, self.builder.const_int(0))
+                    return
+                elem_ty = elem_vals[0].ty
+                n = len(elem_vals)
+                self.builder.emit(tir.OpKind.ALLOC_ARRAY,
+                                  attrs={"name": stmt.name, "dtype": elem_ty,
+                                         "length": n})
+                for i, ev in enumerate(elem_vals):
+                    idx = self.builder.const_int(i)
+                    self.builder.emit(tir.OpKind.STORE_ELEM, idx, ev,
+                                      attrs={"name": stmt.name})
+                self._bind_array(stmt.name, elem_ty, n)
+                self._bind_struct(stmt.name, slit.name)
+                return
             # Special case: array literal initializer -> allocate stack array
             if stmt.value is not None and isinstance(stmt.value, A.ArrayLit):
                 elems = stmt.value.elems
@@ -651,6 +706,26 @@ class Lowerer:
                 self._lower_expr(i)
             return None
         if isinstance(expr, A.Field):
+            # Struct field access: if the obj is a Name pointing to a
+            # struct-bound let, resolve the field index from the struct
+            # decl and emit a LOAD_ELEM at that index.
+            if isinstance(expr.obj, A.Name):
+                struct_name = self._lookup_struct(expr.obj.name)
+                if struct_name is not None:
+                    field_order = self._struct_fields.get(struct_name, [])
+                    try:
+                        idx_int = field_order.index(expr.name)
+                    except ValueError:
+                        idx_int = -1
+                    if idx_int >= 0:
+                        arr = self._lookup_array(expr.obj.name)
+                        if arr is not None:
+                            elem_ty, _ = arr
+                            idx_v = self.builder.const_int(idx_int)
+                            return self.builder.emit(
+                                tir.OpKind.LOAD_ELEM, idx_v,
+                                result_ty=elem_ty,
+                                attrs={"name": expr.obj.name})
             self._lower_expr(expr.obj)
             return None
         if isinstance(expr, A.Cast):
