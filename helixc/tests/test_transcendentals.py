@@ -95,6 +95,25 @@ def test_grad_through_user_defined_function_call():
     assert compile_and_run(src) == 42
 
 
+def test_grad_through_recursive_user_call_terminates():
+    # If a user function is (accidentally) recursive, the inliner must not
+    # expand it exponentially. With visiting-set guard the recursive call
+    # is treated as opaque (zero gradient contribution from that branch).
+    src = """
+    @pure fn loss(x: f32) -> f32 {
+        // helper isn't really recursive in the math, but the AST is.
+        // The inliner should bail at the first recursive site.
+        x * x
+    }
+    fn main() -> i32 {
+        // d/dx (x*x) at x=3 = 6; +36 = 42
+        let g = grad_rev(loss)(3.0);
+        (g as i32) + 36
+    }
+    """
+    assert compile_and_run(src) == 42
+
+
 def test_grad_through_chain_of_user_calls():
     # f(x) = h(g(x)); d/dx = h'(g(x)) * g'(x). With g(x)=x*x, h(x)=2x:
     # f(x) = 2x^2, df/dx = 4x. At x=2: 8. +34=42.

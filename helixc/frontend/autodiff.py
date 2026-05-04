@@ -51,7 +51,8 @@ def differentiate(expr: A.Expr, var: str,
 
 
 def _inline_user_calls(expr: A.Expr, fn_table: dict[str, "A.FnDecl"],
-                        depth: int = 0, max_depth: int = 4) -> A.Expr:
+                        depth: int = 0, max_depth: int = 4,
+                        visiting: frozenset[str] | None = None) -> A.Expr:
     """Walk `expr` and replace each Call(Name(f), args) where f is a known
     @pure function in `fn_table` with a deepcopy of f's body, with each
     parameter substituted by the corresponding argument expression.
@@ -59,13 +60,17 @@ def _inline_user_calls(expr: A.Expr, fn_table: dict[str, "A.FnDecl"],
     Skips:
       - Transcendental builtins (`__exp`, `__log`, etc.) — they have
         analytic AD chain rules already wired into _diff.
-      - Recursive calls (depth limit prevents infinite expansion).
+      - Functions currently in `visiting` (mutual / direct recursion
+        guard — prevents exponential AST expansion when inlining cycles
+        like a→b→a).
+      - depth >= max_depth (safety net).
       - Functions not in fn_table (treated as opaque external).
     """
     import copy as _copy
 
     TRANSCENDENTALS = {"__exp", "__log", "__sin", "__cos", "__sqrt",
                        "__relu", "__sigmoid"}
+    visiting = visiting or frozenset()
 
     def go(e: A.Expr) -> A.Expr:
         if isinstance(e, A.Call):
@@ -74,6 +79,7 @@ def _inline_user_calls(expr: A.Expr, fn_table: dict[str, "A.FnDecl"],
             if (isinstance(new_callee, A.Name)
                     and new_callee.name in fn_table
                     and new_callee.name not in TRANSCENDENTALS
+                    and new_callee.name not in visiting
                     and depth < max_depth):
                 fn = fn_table[new_callee.name]
                 # Only inline @pure functions — others may have effects
@@ -88,11 +94,12 @@ def _inline_user_calls(expr: A.Expr, fn_table: dict[str, "A.FnDecl"],
                 # original function (downstream passes mutate in-place).
                 body_copy = _copy.deepcopy(fn.body)
                 substituted = _substitute_names(body_copy, substitutions)
-                # Recursively inline within the substituted body — this
-                # handles nested user calls. depth+1 prevents runaway
-                # expansion on accidental recursion.
+                # Recursively inline within the substituted body. Add this
+                # function to the visiting set so any recursive (direct or
+                # mutual) call back to it is treated as opaque.
                 return _inline_user_calls(substituted, fn_table, depth + 1,
-                                           max_depth)
+                                           max_depth,
+                                           visiting | {new_callee.name})
             return A.Call(span=e.span, callee=new_callee, args=new_args)
         if isinstance(e, A.Binary):
             return A.Binary(span=e.span, op=e.op, left=go(e.left), right=go(e.right))
@@ -113,10 +120,10 @@ def _inline_user_calls(expr: A.Expr, fn_table: dict[str, "A.FnDecl"],
             new_final = go(e.final_expr) if e.final_expr is not None else None
             return A.Block(span=e.span, stmts=new_stmts, final_expr=new_final)
         if isinstance(e, A.If):
-            new_then = go(e.then) if isinstance(e.then, A.Block) else e.then
-            new_else = (go(e.else_)
-                        if e.else_ is not None and isinstance(e.else_, A.Block)
-                        else e.else_)
+            # Recurse into then/else regardless of whether they're Blocks
+            # — defensively handle hand-built ASTs with bare-expr branches.
+            new_then = go(e.then) if e.then is not None else None
+            new_else = go(e.else_) if e.else_ is not None else None
             return A.If(span=e.span, cond=go(e.cond),
                         then=new_then, else_=new_else)
         return e

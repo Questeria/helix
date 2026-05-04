@@ -1047,8 +1047,11 @@ class FnCompiler:
                 self._pending_strings.append((content_sym, content_data))
 
                 # ---- sys_open(path, flags=O_WRONLY|O_CREAT|O_TRUNC, mode=0o644) ----
-                # rdi = path_ptr (lea rdi, [rip + path_sym]), rsi = flags,
-                # rdx = mode, rax = 2 (sys_open).
+                # We use the stack directly via push/pop to persist the fd
+                # and write's return across syscalls. This avoids relying
+                # on callee-saved registers (which would require prologue
+                # save/restore not currently emitted) and avoids fragile
+                # post-prologue frame extension.
                 buf = self.asm.b
                 buf.emit(0x48, 0x8D, 0x3D)  # lea rdi, [rip + disp32]
                 off = buf.offset()
@@ -1059,28 +1062,47 @@ class FnCompiler:
                 self.asm.mov_edx_imm32(0x1A4)  # mode 0644
                 self.asm.mov_eax_imm32(2)      # sys_open
                 self.asm.syscall()
-                # eax = fd. Move to rdi for write/close (preserve via rbx? No,
-                # main has eax already = fd, we need it to persist. Move to a
-                # callee-saved reg: r12).
-                # mov r12, rax  (49 89 C4)
-                buf.emit(0x49, 0x89, 0xC4)
+                # rax = fd. Push rax to stack.   50 = push rax
+                buf.emit(0x50)
 
                 # ---- write(fd, content, len) ----
-                # mov rdi, r12  (4C 89 E7)
-                buf.emit(0x4C, 0x89, 0xE7)
-                # lea rsi, [rip + content_sym]
+                # mov rdi, [rsp]  — load fd from top of stack
+                # 48 8B 3C 24
+                buf.emit(0x48, 0x8B, 0x3C, 0x24)
                 self.asm.lea_rsi_rip_rel(content_sym)
                 self.asm.mov_edx_imm32(len(content_data))
                 self.asm.mov_eax_imm32(1)  # sys_write
                 self.asm.syscall()
+                # rax = write_ret. Push rax → [write_ret, fd] on stack.
+                buf.emit(0x50)
 
                 # ---- close(fd) ----
-                # mov rdi, r12
-                buf.emit(0x4C, 0x89, 0xE7)
+                # mov rdi, [rsp + 8]  — load fd (now under write_ret)
+                # 48 8B 7C 24 08
+                buf.emit(0x48, 0x8B, 0x7C, 0x24, 0x08)
                 self.asm.mov_eax_imm32(3)  # sys_close
                 self.asm.syscall()
+                # close's return is in rax — discard. Pop write_ret and fd.
+                # pop rax  (= write_ret)
+                buf.emit(0x58)
+                # pop rcx  (= fd, discarded)  59
+                buf.emit(0x59)
+                # eax now holds write_ret. If negative, that's the diagnostic
+                # return; otherwise return 0.
+                #   cmp eax, 0
+                buf.emit(0x83, 0xF8, 0x00)
+                # jl keep_eax  (rel8)
+                buf.emit(0x7C, 0x00)
+                jl_off = buf.offset() - 1
+                jl_after = buf.offset()
+                # write_ret >= 0: eax = 0 (success)
+                self.asm.mov_eax_imm32(0)
+                keep_addr = buf.offset()
+                d = keep_addr - jl_after
+                if not (-128 <= d <= 127):
+                    raise ValueError(f"write_file jl disp out of rel8: {d}")
+                buf.bytes_[jl_off] = d & 0xFF
 
-                # Result slot = eax (close's return: 0 success, -1 fail)
                 if op.results:
                     res_slot = self._slot_of(op.results[0])
                     self.asm.mov_mem_rbp_eax(res_slot)
