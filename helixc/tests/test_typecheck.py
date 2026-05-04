@@ -497,6 +497,34 @@ def test_struct_lit_unknown_field_errors():
         f"expected unknown-field error, got {errs}"
 
 
+def test_struct_field_access_unknown_field_errors():
+    """Reading p.z where Point only has x, y surfaces an error."""
+    src = """
+    struct Point { x: i32, y: i32 }
+    fn main() -> i32 {
+        let p = Point { x: 10, y: 20 };
+        p.z
+    }
+    """
+    errs = check(src)
+    assert any("no field" in s and "z" in s for s in errs), \
+        f"expected unknown-field-access error, got {errs}"
+
+
+def test_struct_field_returns_correct_type():
+    """p.x of struct Point { x: i32, y: i32 } types as i32, allowing
+    further i32 ops without errors."""
+    src = """
+    struct Point { x: i32, y: i32 }
+    fn main() -> i32 {
+        let p = Point { x: 10, y: 20 };
+        p.x + p.y + 1
+    }
+    """
+    errs = check(src)
+    assert errs == [], f"unexpected errors: {errs}"
+
+
 def test_struct_lit_unknown_struct_errors():
     """A struct lit referencing an undeclared struct surfaces an error."""
     src = """

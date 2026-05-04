@@ -102,6 +102,12 @@ class TyUnknown(Type):
 
 
 @dataclass(frozen=True)
+class TyStruct(Type):
+    """A nominal struct type; field types resolved via TypeChecker._struct_decls."""
+    name: str
+
+
+@dataclass(frozen=True)
 class TyDiff(Type):
     """D<T> — a value of type T that participates in gradient computation.
     Operations on TyDiff values propagate differentiability through results.
@@ -826,7 +832,17 @@ class TypeChecker:
                 self._check_expr(i, scope)
             return TyUnknown(hint="index")
         if isinstance(expr, A.Field):
-            self._check_expr(expr.obj, scope)
+            obj_ty = self._check_expr(expr.obj, scope)
+            if isinstance(obj_ty, TyStruct):
+                decl = getattr(self, "_struct_decls", {}).get(obj_ty.name)
+                if decl is not None:
+                    for p in decl.fields:
+                        if p.name == expr.name:
+                            return self._resolve_type(p.ty, scope)
+                    self.errors.append(TypeError_(
+                        f"struct {obj_ty.name!r} has no field {expr.name!r}",
+                        expr.span,
+                    ))
             return TyUnknown(hint=f"field .{expr.name}")
         if isinstance(expr, A.Block):
             return self._check_block(expr, scope)
@@ -943,7 +959,7 @@ class TypeChecker:
                             f"{self._fmt(expected)}, got {self._fmt(v_ty)}",
                             fval.span,
                         ))
-            return TyUnknown(hint=f"struct {expr.name}")
+            return TyStruct(name=expr.name)
         if isinstance(expr, (A.Break, A.Continue, A.Return)):
             return TyUnit()
         if isinstance(expr, A.Cast):
