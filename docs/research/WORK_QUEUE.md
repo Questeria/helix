@@ -74,7 +74,7 @@ Parser + AST already support `match`, `if`-guards, `PatLit | PatBind | PatWildca
 - **Files:** stdlib + autodiff rule tables (Binary case).
 - **Test:** `test_autodiff_parity.py::test_atan2_parity`.
 
-### 14. Add `__abs` with AD subgradient at 0 documented (S)
+### 14. Add `__abs` with AD subgradient at 0 documented (S) [done 128fb31]
 - **Files:** stdlib + autodiff. At 0 return 0 for the subgradient; document choice in `docs/lang/agi-features.md`.
 - **Test:** `test_autodiff.py::test_abs_subgrad_at_zero_is_zero`.
 
@@ -90,11 +90,11 @@ Parser + AST already support `match`, `if`-guards, `PatLit | PatBind | PatWildca
 
 ## Tier D — Total-by-default groundwork (Tier 1 in roadmap)
 
-### 17. Parse `@partial` and `@total` attribute on `fn` decls (S)
+### 17. Parse `@partial` and `@total` attribute on `fn` decls (S) [done 128fb31]
 - **File:** `helixc/frontend/parser.py` — extend the existing `attrs` recognizer (it already accepts `@pure`, `@effect(...)`).
 - **Test:** `test_parser.py::test_partial_attribute_parses`.
 
-### 18. Static structural-recursion checker stub (M)
+### 18. Static structural-recursion checker stub (M) [done 128fb31]
 - **File:** new `helixc/frontend/totality.py` — for fns without `@partial`, walk body; flag any recursion that does not strictly decrease a syntactic measure on at least one arg. Conservative — accept obvious tail cases, reject unknown.
 - **Test:** new `helixc/tests/test_totality.py::test_factorial_accepted, ::test_collatz_rejected_without_partial`.
 
