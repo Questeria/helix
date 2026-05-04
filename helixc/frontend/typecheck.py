@@ -822,11 +822,31 @@ class TypeChecker:
                     ))
             return t
         if isinstance(expr, A.Match):
-            self._check_expr(expr.scrutinee, scope)
-            ts = [self._check_expr(arm.body, scope) for arm in expr.arms]
-            if not ts:
+            scrut_ty = self._check_expr(expr.scrutinee, scope)
+            arm_tys: list[Type] = []
+            for arm in expr.arms:
+                inner = Scope(parent=scope)
+                self._bind_pattern(arm.pattern, scrut_ty, inner)
+                if arm.guard is not None:
+                    g_ty = self._check_expr(arm.guard, inner)
+                    if not (isinstance(g_ty, TyPrim) and g_ty.name == "bool") \
+                            and not isinstance(g_ty, TyUnknown):
+                        self.errors.append(TypeError_(
+                            f"match guard must be bool, got {self._fmt(g_ty)}",
+                            arm.span,
+                        ))
+                arm_tys.append(self._check_expr(arm.body, inner))
+            if not arm_tys:
                 return TyUnit()
-            return ts[0]
+            first = arm_tys[0]
+            for i, t in enumerate(arm_tys[1:], start=1):
+                if not self._compatible(first, t):
+                    self.errors.append(TypeError_(
+                        f"match arm {i} body type {self._fmt(t)} incompatible "
+                        f"with arm 0 type {self._fmt(first)}",
+                        expr.arms[i].span,
+                    ))
+            return first
         if isinstance(expr, A.For):
             iter_ty = self._check_expr(expr.iter_expr, scope)
             inner = Scope(parent=scope)
@@ -867,6 +887,27 @@ class TypeChecker:
             self._check_expr(expr.value, scope)
             return self._resolve_type(expr.target_ty, scope)
         return TyUnknown(hint=f"unhandled {type(expr).__name__}")
+
+    # ---- pattern binders ----
+    def _bind_pattern(self, pat: A.Pattern, scrut_ty: Type, scope: Scope) -> None:
+        """Recursively walk a match pattern and define any variable binders
+        in `scope` with the appropriate inferred type from `scrut_ty`."""
+        if isinstance(pat, A.PatWildcard):
+            return
+        if isinstance(pat, A.PatLit):
+            self._check_expr(pat.value, scope)
+            return
+        if isinstance(pat, A.PatBind):
+            scope.define(pat.name, scrut_ty)
+            return
+        if isinstance(pat, A.PatTuple):
+            if isinstance(scrut_ty, TyTuple) and len(scrut_ty.elems) == len(pat.elems):
+                for sub_pat, sub_ty in zip(pat.elems, scrut_ty.elems):
+                    self._bind_pattern(sub_pat, sub_ty, scope)
+            else:
+                for sub_pat in pat.elems:
+                    self._bind_pattern(sub_pat, TyUnknown(hint="tuple-pat"), scope)
+            return
 
     # ---- compatibility (simplified) ----
     def _compatible(self, a: Type, b: Type) -> bool:
