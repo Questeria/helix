@@ -24,6 +24,25 @@ def _eval(expr: A.Expr, env: dict[str, float]) -> float:
         return float(expr.value)
     if isinstance(expr, A.Name):
         return env[expr.name]
+    if isinstance(expr, A.Call) and isinstance(expr.callee, A.Name):
+        # Built-in transcendentals — evaluate using Python's math.
+        name = expr.callee.name
+        args = [_eval(a, env) for a in expr.args]
+        if len(args) == 1:
+            x = args[0]
+            if name == "__exp": return math.exp(x)
+            if name == "__log": return math.log(x)
+            if name == "__sin": return math.sin(x)
+            if name == "__cos": return math.cos(x)
+            if name == "__sqrt": return math.sqrt(x)
+            if name == "__tanh": return math.tanh(x)
+            if name == "__softplus": return math.log(1.0 + math.exp(x))
+            if name == "__sigmoid": return 1.0 / (1.0 + math.exp(-x))
+            if name == "__silu": return x * (1.0 / (1.0 + math.exp(-x)))
+            if name == "__relu": return max(0.0, x)
+            if name == "__abs": return abs(x)
+        # Unknown call — return 0 (the AD engine treats it as opaque).
+        return 0.0
     if isinstance(expr, A.Unary) and expr.op == "-":
         return -_eval(expr.operand, env)
     if isinstance(expr, A.Binary):
@@ -110,6 +129,24 @@ def test_parity_neg_and_subtraction():
     ]
     for src in cases:
         _agree(src, "x", [-2.0, -1.0, 0.0, 1.0, 2.0])
+
+
+def test_parity_transcendentals():
+    cases = [
+        "fn f(x: f32) -> f32 { __exp(x) }",
+        "fn f(x: f32) -> f32 { __sin(x) }",
+        "fn f(x: f32) -> f32 { __cos(x) }",
+        "fn f(x: f32) -> f32 { __sigmoid(x) }",
+        "fn f(x: f32) -> f32 { __tanh(x) }",
+        "fn f(x: f32) -> f32 { __softplus(x) }",
+        "fn f(x: f32) -> f32 { __silu(x) }",
+        "fn f(x: f32) -> f32 { __relu(x) }",
+        "fn f(x: f32) -> f32 { __abs(x) }",
+        "fn f(x: f32) -> f32 { x * __sigmoid(x) + __tanh(x) }",
+    ]
+    for src in cases:
+        # Avoid x=0 for __abs / __relu (gradient is undefined there)
+        _agree(src, "x", [-2.0, -0.5, 0.5, 1.5])
 
 
 def test_parity_multi_variable():
