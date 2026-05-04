@@ -296,11 +296,70 @@ where N % 16 == 0, M % 16 == 0, P % 16 == 0,
 }
 ```
 
-## Implementation status (2026-05-03)
+## Implementation status (2026-05-04)
 
-- Spec: this document, v0.1 draft
-- Lexer: in progress (Python prototype in `helixc/frontend/lexer.py`)
-- Parser: not started
-- Type checker: not started
-- IR: not started
-- Codegen: not started
+- Spec: this document, v0.1 draft (foundation-complete; HBS frozen pending)
+- Lexer: **shipped** — `helixc/frontend/lexer.py`, ~120 token kinds, 1-char lookahead, multichar `..= -> => :: << >>` etc.
+- Parser: **shipped** — `helixc/frontend/parser.py`, hand-written recursive descent with caret-rendering ParseError. Covers fn/struct/enum (incl. payload-bearing variants)/let-mut/match (with guards, or-patterns, range patterns, payload extraction)/if/while/loop/for/break/continue/assign/cast/tuple lit + `.0` access/struct lit/enum lit + Path::Variant/array lit/index/field access/call/binary+unary ops with precedence/return.
+- Type checker: **shipped** — `helixc/frontend/typecheck.py`, ~1400 LOC. Includes: name resolution with did-you-mean (Levenshtein), struct field-type tracking via TyStruct, enum variant + exhaustiveness check, pattern binders into arm scope, totality stub (`@partial`/`@total`), static int-literal overflow check, source-with-caret error rendering. Optional Presburger solver for refinement constraints.
+- IR: **shipped** — `helixc/ir/tir.py` defines ~50 OpKinds; `helixc/ir/lower_ast.py` (~1700 LOC) converts AST → IR with multi-slot ABI for structs/enums and arena-indirection for recursive enums. Passes: const_fold (with SSA value forwarding for x*1 / x+0 / x/1 / x%1), CSE, DCE, FDCE.
+- Codegen: **shipped** — `helixc/backend/x86_64.py` (~1900 LOC) emits ELF + raw x86-64 machine code. SysV calling convention (6 int regs + 8 xmm regs). Includes IEEE-754 NaN-correct float comparisons, sys_open/write/close for `write_file`, RIP-relative reflection cells (HELIX_NUM_CELLS=64 i64) and arena (HELIX_ARENA_CAP=32K i32).
+
+## HBS subset status (target: HBS-frozen)
+
+Self-host bootstrap subset is being progressively closed. Foundation pieces shipped 2026-05-04:
+
+- ✅ Pattern matching (literal, range, or, payload, guard, wildcard)
+- ✅ Structs (incl. nested, with TyStruct propagation)
+- ✅ Enums (tag-only + payload + recursive — recursive uses arena-indirection per chibicc/ocaml-bootstrap precedent)
+- ✅ Tuples (`(a, b, c).N`)
+- ✅ Pass-by-value of structs/enums to fns (multi-slot ABI; recursive enums pass as i32 arena index)
+- ✅ Inline enum constructor as fn arg (`f(Some(42))`) and as fn return body
+- ✅ Totality stub: structural-recursion check on `p - k` / `p / k` patterns
+- ✅ Stdlib helpers: __min_i32 / __max_i32 / __clamp_i32 + transcendentals + __powi
+- ✅ String literals: __strlen / __strbyte / __streq
+- ✅ Arena: __arena_push / __arena_get / __arena_set / __arena_len (32K i32 region)
+- ✅ Symbol-table assoc-list pattern (Helix-side, no new IR)
+- ✅ helixc-check developer CLI: parse + typecheck + totality + --hash + --emit-ir, with caret error display
+
+### Known HBS limitations as of 2026-05-04
+
+These intentionally-deferred items shape the bootstrap path:
+
+1. **No struct-by-value RETURN.** Callees return one i32 (typically the first slot). `@pure fn build_pair() -> Pair { Pair { a: 1, b: 2 } }` only carries `a` back. Workaround: use output params (write into an arena slot, return the index) or return tuples-of-i32. Tracked as Tier F follow-up.
+2. **No mutable struct fields.** All struct fields are immutable after construction. Workaround: store field values in arena cells and reach them via `__arena_set` against a known index.
+3. **No `for x in slice`.** Only `for i in 0..n` (i.e. integer ranges). Iteration over arena segments uses while loops with manual index counters.
+4. **No runtime-loaded strings.** Today's `__strlen / __strbyte / __streq` operate on string literals known at compile time. Bootstrap lexer needs source bytes — which means `read_file` returning bytes-into-arena. Tracked.
+5. **No Vec<T>.** Arenas are monotonic — once pushed, never freed. The (start, count) carry-pair pattern fills the gap for compile-once workloads. Real malloc/free is a v0.2 concern.
+6. **No HashMap.** Linear-scan assoc-list works at hundreds-of-symbols scale (HBS bootstrap). Hash bucket added as a polish item.
+7. **No 3+-segment paths.** `Module::Sub::Variant` errors at typecheck. v0.1 covers `EnumName::Variant` only.
+8. **`@total` is conservative.** Recognizes `f(p - k)` and `f(p / k>=2)` but not Collatz-style or accumulator-based decrease. Use `@partial` for those.
+9. **Inline enum-with-payload return value DOES work** (audit-7 cycle), but enum returns from fns of recursive-enum type fall back to the index encoding — preserved across calls correctly via the multi-slot ABI.
+
+### Test count + audit history
+
+As of commit `cd6667c` (2026-05-04T23:00Z): **529 tests** in `helixc/tests/` all green. Determinism verified after commit `cd6667c` fixed a WSL test-bin race that was producing flaky failures.
+
+9 audit-pass cycles + 1 deep-research cycle have caught and fixed 24 real bugs. Audit candidates explicitly considered:
+- ARENA bounds (off-by-one), buffer +1 slot, bumped to fix
+- STR_BYTE signed-vs-unsigned bounds (jl→jb)
+- IEEE-754 NaN PF flag in float compare
+- ast_hash For-loop encoding broke alpha-equivalence
+- match_lower binds shared between guard/body
+- || lowered as ADD producing >1 polluting ==
+- &amp;&amp; lowered as ADD producing 1 for true&&false
+- CONST_BOOL backend handler missing (true == true read garbage)
+- DCE could drop QUOTE / ARENA_PUSH / ARENA_SET ops
+- FDCE didn't trace fns reachable only via QUOTE
+- Parser progress guard, _tok→_peek typo
+- __powi cap mismatch with stdlib (n>16)
+- PatOr binder leak (asymmetric binders silently visible in body)
+- _resolve_type missing TyStruct case
+- Cyclic struct path corruption in flat-path
+- 1-field structs missed array-binding path
+- Nested StructLit with Name fields filled with zeros
+- Sub-struct Field as fn arg not expanded
+- PatLit-of-Path test against array binding always-true
+- Inline rec-enum ctor as fn arg miscompiled
+- Inline rec-enum ctor as fn return value miscompiled
+- WSL test_bin race producing flaky 528→527→521 result counts

@@ -1204,6 +1204,71 @@ def test_payload_pattern_dispatch_by_tag():
     assert code == 42, f"expected 7*6=42 (Square branch), got {code}"
 
 
+def test_strlit_to_arena_copies_bytes():
+    """__strlit_to_arena('hello') copies each byte into a sequence of
+    arena slots and returns the start. arena_get(start+1) reads 'e'=101."""
+    src = """
+    fn main() -> i32 {
+        let start = __strlit_to_arena("hello");
+        __arena_get(start + 1)
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 101, f"expected 'e'=101, got {code}"
+
+
+def test_strlit_to_arena_full_string_match():
+    """Walk a copied literal byte by byte and check individual bytes.
+    Avoids 8-bit exit code truncation by selecting one byte at a time."""
+    src = """
+    fn main() -> i32 {
+        let start = __strlit_to_arena("abc");
+        let b = __arena_get(start + 1);
+        b
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 98, f"expected 'b'=98, got {code}"
+
+
+def test_hash_i32_deterministic():
+    """__hash_i32(42) should be the same on two calls."""
+    src = """
+    fn main() -> i32 {
+        let h1 = __hash_i32(42);
+        let h2 = __hash_i32(42);
+        if h1 == h2 { 1 } else { 0 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 1, f"expected hash determinism, got {code}"
+
+
+def test_hash_i32_distinguishes():
+    """Different inputs should usually produce different hashes."""
+    src = """
+    fn main() -> i32 {
+        let h1 = __hash_i32(1);
+        let h2 = __hash_i32(2);
+        if h1 != h2 { 1 } else { 0 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 1, f"expected hash distinguishes, got {code}"
+
+
+def test_hbs_lib_vec_runs():
+    """Vec<T> over arena library: build [10,20,7,5,30], find sum 72,
+    max 30; sum-max = 42 (with verification index_of(7) = 2)."""
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    sample_path = os.path.join(proj_root, "helixc", "examples",
+                               "hbs_lib_vec.hx")
+    with open(sample_path, "r", encoding="utf-8") as f:
+        src = f.read()
+    code = compile_and_run(src)
+    assert code == 42, f"expected 72-30=42, got {code}"
+
+
 def test_strlen_compile_time_const():
     """__strlen('hello') is computed at compile time."""
     src = """

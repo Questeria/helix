@@ -596,7 +596,8 @@ class TypeChecker:
         "quote", "splice", "splice_f", "modify", "modify_f",
         "print_str", "print_int", "write_file", "read_file_int",
         "__arena_push", "__arena_get", "__arena_set", "__arena_len",
-        "__strlen", "__strbyte", "__streq",
+        "__strlen", "__strbyte", "__streq", "__strlit_to_arena",
+        "__hash_i32",
     })
 
     # Names of well-known stdlib functions that are surfaced as

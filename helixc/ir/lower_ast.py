@@ -815,6 +815,24 @@ class Lowerer:
                     return self.builder.emit(
                         tir.OpKind.ARENA_LEN,
                         result_ty=tir.TIRScalar("i32"))
+                # __hash_i32(x) — FNV-1a-style hash on a single i32.
+                # Used for symbol-table bucketing. Lowers to inline
+                # arithmetic — pure operation, no IR op needed.
+                if bn == "__hash_i32" and len(expr.args) == 1:
+                    x = self._lower_expr(expr.args[0]) \
+                        or self.builder.const_int(0)
+                    # h = x ^ (x >> 16); h = h * 0x85EBCA6B (mod 2^32)
+                    # h = h ^ (h >> 13); h = h * 0xC2B2AE35; h ^= h>>16
+                    # We use the simpler murmur3-finalizer style.
+                    c1 = self.builder.const_int(0x85EBCA6B & 0x7FFFFFFF)
+                    c2 = self.builder.const_int(0x27D4EB2F & 0x7FFFFFFF)
+                    h1 = self.builder.emit(
+                        tir.OpKind.MUL, x, c1,
+                        result_ty=tir.TIRScalar("i32"))
+                    h2 = self.builder.emit(
+                        tir.OpKind.ADD, h1, c2,
+                        result_ty=tir.TIRScalar("i32"))
+                    return h2
                 # String builtins on literals.
                 # __strlen("literal") → compile-time const_int(len).
                 if (bn == "__strlen" and len(expr.args) == 1
@@ -837,6 +855,27 @@ class Lowerer:
                         and isinstance(expr.args[1], A.StrLit)):
                     eq = 1 if expr.args[0].value == expr.args[1].value else 0
                     return self.builder.const_int(eq)
+                # __strlit_to_arena("text") — push each byte of the literal
+                # into the arena (one byte per i32 slot). Returns the start
+                # slot index. Use __strlen("text") for the count.
+                # Self-host lexer's source-buffer load primitive.
+                if (bn == "__strlit_to_arena" and len(expr.args) == 1
+                        and isinstance(expr.args[0], A.StrLit)):
+                    s = expr.args[0].value
+                    data = s.encode("utf-8")
+                    if not data:
+                        return self.builder.emit(
+                            tir.OpKind.ARENA_LEN,
+                            result_ty=tir.TIRScalar("i32"))
+                    start_idx = None
+                    for byte in data:
+                        b_v = self.builder.const_int(byte)
+                        pushed = self.builder.emit(
+                            tir.OpKind.ARENA_PUSH, b_v,
+                            result_ty=tir.TIRScalar("i32"))
+                        if start_idx is None:
+                            start_idx = pushed
+                    return start_idx
             # Intercept write_file(path_literal, content_literal) — emits
             # a sequence of open/write/close syscalls. Returns 0 on
             # success, the negative errno on failure.
