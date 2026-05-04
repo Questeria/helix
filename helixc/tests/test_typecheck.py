@@ -318,6 +318,69 @@ def test_let_episodic_to_working_rejected():
 
 
 # ============================================================================
+# Built-in type transitions: detach, attach, consolidate, recall
+# ============================================================================
+def test_detach_strips_diff():
+    # detach(x: D<f32>) -> f32
+    src = """
+    fn use_grad(x: D<f32>) -> f32 {
+        let plain = detach(x);
+        plain
+    }
+    """
+    assert check(src) == []
+
+
+def test_attach_adds_diff():
+    src = """
+    fn add_grad(x: f32) -> D<f32> {
+        let g = attach(x);
+        g
+    }
+    """
+    assert check(src) == []
+
+
+def test_consolidate_episodic_to_semantic():
+    src = """
+    fn store(e: EpisodicMem<i32>) -> SemanticMem<i32> {
+        consolidate(e)
+    }
+    """
+    assert check(src) == []
+
+
+def test_consolidate_rejects_non_episodic():
+    # consolidate() must take EpisodicMem<T>, not Working
+    src = """
+    fn bad(w: WorkingMem<i32>) -> SemanticMem<i32> {
+        consolidate(w)
+    }
+    """
+    errs = check(src)
+    assert any("requires EpisodicMem" in e for e in errs), errs
+
+
+def test_recall_semantic_to_working():
+    src = """
+    fn fetch(s: SemanticMem<i32>) -> WorkingMem<i32> {
+        recall(s)
+    }
+    """
+    assert check(src) == []
+
+
+def test_recall_rejects_non_semantic():
+    src = """
+    fn bad(e: EpisodicMem<i32>) -> WorkingMem<i32> {
+        recall(e)
+    }
+    """
+    errs = check(src)
+    assert any("requires SemanticMem" in e for e in errs), errs
+
+
+# ============================================================================
 # Test runner
 # ============================================================================
 def main():

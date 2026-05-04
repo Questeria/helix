@@ -588,6 +588,8 @@ class TypeChecker:
         if isinstance(expr, A.Path):
             # v0.1: paths are unresolved (e.g., tensor::zeros, tile::matmul)
             return TyUnknown(hint=f"path {'::'.join(expr.segments)}")
+        # Builtins: detach, attach for D<T>; consolidate for memory tiers
+        # (Recognized by name in Call expressions below.)
         if isinstance(expr, A.Unary):
             inner = self._check_expr(expr.operand, scope)
             return inner
@@ -609,6 +611,37 @@ class TypeChecker:
         if isinstance(expr, A.Call):
             callee = self._check_expr(expr.callee, scope)
             arg_tys = [self._check_expr(a, scope) for a in expr.args]
+            # Built-in functions for type-level transitions
+            if isinstance(expr.callee, A.Name):
+                bn = expr.callee.name
+                if bn == "detach" and len(arg_tys) == 1:
+                    if isinstance(arg_tys[0], TyDiff):
+                        return arg_tys[0].inner
+                    return arg_tys[0]
+                if bn == "attach" and len(arg_tys) == 1:
+                    if isinstance(arg_tys[0], TyDiff):
+                        return arg_tys[0]
+                    return TyDiff(inner=arg_tys[0])
+                if bn == "consolidate" and len(arg_tys) == 1:
+                    # Episodic -> Semantic
+                    if isinstance(arg_tys[0], TyMemTier) and arg_tys[0].tier == "episodic":
+                        return TyMemTier(tier="semantic", inner=arg_tys[0].inner)
+                    self.errors.append(TypeError_(
+                        f"consolidate() requires EpisodicMem<T>, got "
+                        f"{self._fmt(arg_tys[0])}",
+                        expr.span,
+                    ))
+                    return arg_tys[0]
+                if bn == "recall" and len(arg_tys) == 1:
+                    # Semantic -> Working (retrieve into working memory)
+                    if isinstance(arg_tys[0], TyMemTier) and arg_tys[0].tier == "semantic":
+                        return TyMemTier(tier="working", inner=arg_tys[0].inner)
+                    self.errors.append(TypeError_(
+                        f"recall() requires SemanticMem<T>, got "
+                        f"{self._fmt(arg_tys[0])}",
+                        expr.span,
+                    ))
+                    return arg_tys[0]
             # If callee is a known function (by name), do shape + effect checking
             if isinstance(expr.callee, A.Name) and expr.callee.name in self.functions:
                 sig = self.functions[expr.callee.name]
