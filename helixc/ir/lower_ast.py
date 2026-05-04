@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from ..frontend import ast as A
+from ..frontend import ast_nodes as A
 from . import tir
 
 

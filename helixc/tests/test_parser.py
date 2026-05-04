@@ -5,7 +5,7 @@ import os, sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 from helixc.frontend.parser import parse, ParseError
-from helixc.frontend import ast
+from helixc.frontend import ast_nodes as ast
 
 
 def first_item(src: str) -> ast.Item:

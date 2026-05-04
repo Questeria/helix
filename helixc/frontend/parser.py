@@ -25,7 +25,7 @@ License: Apache 2.0
 from __future__ import annotations
 
 from .lexer import Token, T, lex
-from . import ast
+from . import ast_nodes as ast
 
 
 class ParseError(Exception):

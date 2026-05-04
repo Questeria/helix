@@ -21,7 +21,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Optional
 
-from . import ast as A
+from . import ast_nodes as A
 
 
 # ============================================================================
