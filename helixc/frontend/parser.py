@@ -986,9 +986,36 @@ class Parser:
         return ast.Loop(span=self._span_of(kw), body=body)
 
 
-def parse(source: str, filename: str = "<input>") -> ast.Program:
-    """Convenience: lex and parse a full source string."""
-    return Parser(lex(source, filename)).parse_program()
+def parse(source: str, filename: str = "<input>",
+          include_stdlib: bool = False) -> ast.Program:
+    """Convenience: lex and parse a full source string.
+
+    Pass include_stdlib=True to also append the stdlib transcendentals
+    (__exp/__log/__sin/__cos/__sqrt/__sigmoid/__relu) to the program.
+    The function-DCE pass drops unused stdlib functions, so this is
+    cheap. The end-to-end test runners enable it by default; callers
+    that operate on raw user-AST (e.g. counting specific op kinds in
+    optimizer tests) leave it off.
+    """
+    user_prog = Parser(lex(source, filename)).parse_program()
+    if include_stdlib:
+        import os as _os
+        stdlib_path = _os.path.join(
+            _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))),
+            "stdlib", "transcendentals.hx"
+        )
+        if _os.path.isfile(stdlib_path):
+            with open(stdlib_path, encoding="utf-8") as f:
+                stdlib_src = f.read()
+            stdlib_prog = Parser(lex(stdlib_src, stdlib_path)).parse_program()
+            # Don't redefine functions the user already defined with the same
+            # name — user wins.
+            user_names = {item.name for item in user_prog.items
+                          if isinstance(item, ast.FnDecl)}
+            for item in stdlib_prog.items:
+                if isinstance(item, ast.FnDecl) and item.name not in user_names:
+                    user_prog.items.append(item)
+    return user_prog
 
 
 # ============================================================================

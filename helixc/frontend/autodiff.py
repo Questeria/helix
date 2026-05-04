@@ -149,8 +149,72 @@ def _diff(expr: A.Expr, var: str) -> A.Expr:
         return A.If(span=span, cond=expr.cond, then=d_then, else_=d_else)
     if isinstance(expr, A.Block):
         return _diff_block_or_expr(expr, var, span)
+    if isinstance(expr, A.Call):
+        # Chain rule for known transcendentals: d(f(u))/dx = f'(u) * du/dx.
+        # The call is rewritten so the derivative goes through the same
+        # named function whose derivative is hardcoded here.
+        deriv = _diff_call_chain_rule(expr, var, span)
+        if deriv is not None:
+            return deriv
     # Unsupported: emit zero (placeholder)
     return A.FloatLit(span=expr.span, value=0.0)
+
+
+def _diff_call_chain_rule(call: A.Call, var: str,
+                          span: A.Span) -> Optional[A.Expr]:
+    """Apply the analytic derivative for known transcendental builtins.
+    Returns None if the callee isn't a recognised transcendental."""
+    if not (isinstance(call.callee, A.Name) and len(call.args) == 1):
+        return None
+    name = call.callee.name
+    u = call.args[0]
+    du = _diff(u, var)
+
+    def mul(a: A.Expr, b: A.Expr) -> A.Expr:
+        return A.Binary(span=span, op="*", left=a, right=b)
+
+    def call1(fn: str, arg: A.Expr) -> A.Expr:
+        return A.Call(span=span, callee=A.Name(span=span, name=fn), args=[arg])
+
+    if name == "__exp":
+        # d(exp(u))/dx = exp(u) * du/dx
+        return mul(call1("__exp", u), du)
+    if name == "__log":
+        # d(log(u))/dx = (1/u) * du/dx
+        recip = A.Binary(span=span, op="/",
+                         left=A.FloatLit(span=span, value=1.0), right=u)
+        return mul(recip, du)
+    if name == "__sin":
+        # d(sin(u))/dx = cos(u) * du/dx
+        return mul(call1("__cos", u), du)
+    if name == "__cos":
+        # d(cos(u))/dx = -sin(u) * du/dx
+        neg_sin = A.Unary(span=span, op="-", operand=call1("__sin", u))
+        return mul(neg_sin, du)
+    if name == "__sqrt":
+        # d(sqrt(u))/dx = (1 / (2*sqrt(u))) * du/dx
+        sqrt_u = call1("__sqrt", u)
+        denom = A.Binary(span=span, op="*",
+                         left=A.FloatLit(span=span, value=2.0), right=sqrt_u)
+        recip = A.Binary(span=span, op="/",
+                         left=A.FloatLit(span=span, value=1.0), right=denom)
+        return mul(recip, du)
+    if name == "__relu":
+        # d(relu(u))/dx = (1 if u > 0 else 0) * du/dx
+        zero = A.FloatLit(span=span, value=0.0)
+        cond = A.Binary(span=span, op=">", left=u, right=zero)
+        gated = A.If(span=span, cond=cond,
+                     then=A.Block(span=span, stmts=[],
+                                  final_expr=A.FloatLit(span=span, value=1.0)),
+                     else_=A.Block(span=span, stmts=[], final_expr=zero))
+        return mul(gated, du)
+    if name == "__sigmoid":
+        # d(sigmoid(u))/dx = sigmoid(u) * (1 - sigmoid(u)) * du/dx
+        s = call1("__sigmoid", u)
+        one_minus = A.Binary(span=span, op="-",
+                             left=A.FloatLit(span=span, value=1.0), right=s)
+        return mul(mul(call1("__sigmoid", u), one_minus), du)
+    return None
 
 
 def _diff_block_or_expr(node: A.Expr | A.Block, var: str, span: A.Span) -> A.Block:

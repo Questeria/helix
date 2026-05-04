@@ -21,7 +21,7 @@ from helixc.backend.x86_64 import compile_module_to_elf
 
 
 def compile_and_run(src: str) -> int:
-    prog = parse(src)
+    prog = parse(src, include_stdlib=True)
     grad_pass(prog)
     mod = lower(prog)
     fold_module(mod)
@@ -152,6 +152,16 @@ def test_dogfood_03_affine_with_f32_cells():
     # newly-correct float calling convention (xmm-args).
     proj_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     p = os.path.join(proj_root, "helixc", "examples", "dogfood_03_affine.hx")
+    with open(p) as f:
+        src = f.read()
+    assert compile_and_run(src) == 42
+
+
+def test_dogfood_04_xor_relu_perceptron():
+    # Two-layer ReLU net touching XOR. Confirms grad_rev composes through
+    # the stdlib __relu chain rule and 6-float-arg SysV calling convention.
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    p = os.path.join(proj_root, "helixc", "examples", "dogfood_04_xor_relu.hx")
     with open(p) as f:
         src = f.read()
     assert compile_and_run(src) == 42

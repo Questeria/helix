@@ -20,7 +20,7 @@ def compile_and_run(src: str, optimize: bool = True) -> int:
     Pipeline: parse -> grad_pass -> lower -> [opt] -> codegen -> ELF.
     optimize=True (default): runs const-fold + CSE + DCE + fdce before codegen.
     """
-    prog = parse(src)
+    prog = parse(src, include_stdlib=True)
     grad_pass(prog)
     mod = lower(prog)
     if optimize:

@@ -110,6 +110,79 @@ def _propagate(node: A.Expr, adj: A.Expr, acc: dict[str, list[A.Expr]]) -> None:
         if node.final_expr is not None:
             _propagate(node.final_expr, adj, acc)
         return
+    if isinstance(node, A.Call):
+        # Chain rule for known transcendentals: propagate adj * f'(u) into u.
+        if (isinstance(node.callee, A.Name) and len(node.args) == 1):
+            name = node.callee.name
+            u = node.args[0]
+
+            def call1(fn: str, arg: A.Expr) -> A.Expr:
+                return A.Call(span=node.span,
+                              callee=A.Name(span=node.span, name=fn),
+                              args=[arg])
+
+            if name == "__exp":
+                # adj_u = adj * exp(u)
+                new_adj = A.Binary(span=node.span, op="*", left=adj,
+                                   right=call1("__exp", u))
+                _propagate(u, new_adj, acc)
+                return
+            if name == "__log":
+                # adj_u = adj * (1/u)
+                recip = A.Binary(span=node.span, op="/",
+                                 left=A.FloatLit(span=node.span, value=1.0),
+                                 right=u)
+                new_adj = A.Binary(span=node.span, op="*", left=adj,
+                                   right=recip)
+                _propagate(u, new_adj, acc)
+                return
+            if name == "__sin":
+                new_adj = A.Binary(span=node.span, op="*", left=adj,
+                                   right=call1("__cos", u))
+                _propagate(u, new_adj, acc)
+                return
+            if name == "__cos":
+                neg_sin = A.Unary(span=node.span, op="-",
+                                  operand=call1("__sin", u))
+                new_adj = A.Binary(span=node.span, op="*", left=adj,
+                                   right=neg_sin)
+                _propagate(u, new_adj, acc)
+                return
+            if name == "__sqrt":
+                sqrt_u = call1("__sqrt", u)
+                denom = A.Binary(span=node.span, op="*",
+                                 left=A.FloatLit(span=node.span, value=2.0),
+                                 right=sqrt_u)
+                recip = A.Binary(span=node.span, op="/",
+                                 left=A.FloatLit(span=node.span, value=1.0),
+                                 right=denom)
+                new_adj = A.Binary(span=node.span, op="*", left=adj,
+                                   right=recip)
+                _propagate(u, new_adj, acc)
+                return
+            if name == "__relu":
+                zero = A.FloatLit(span=node.span, value=0.0)
+                cond = A.Binary(span=node.span, op=">", left=u, right=zero)
+                gated = A.If(span=node.span, cond=cond,
+                             then=A.Block(span=node.span, stmts=[],
+                                          final_expr=A.FloatLit(span=node.span, value=1.0)),
+                             else_=A.Block(span=node.span, stmts=[],
+                                           final_expr=zero))
+                new_adj = A.Binary(span=node.span, op="*", left=adj, right=gated)
+                _propagate(u, new_adj, acc)
+                return
+            if name == "__sigmoid":
+                s = call1("__sigmoid", u)
+                one_minus = A.Binary(span=node.span, op="-",
+                                     left=A.FloatLit(span=node.span, value=1.0),
+                                     right=s)
+                deriv = A.Binary(span=node.span, op="*", left=s, right=one_minus)
+                new_adj = A.Binary(span=node.span, op="*", left=adj,
+                                   right=deriv)
+                _propagate(u, new_adj, acc)
+                return
+        # Other calls: opaque, contributes 0 to gradient.
+        return
     if isinstance(node, A.If):
         # The runtime `if` picks one branch, so the gradient through it is also
         # an `if` — NOT a sum of both branches. Compute each branch's adjoint
