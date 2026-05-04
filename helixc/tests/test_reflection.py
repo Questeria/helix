@@ -157,6 +157,17 @@ def test_dogfood_03_affine_with_f32_cells():
     assert compile_and_run(src) == 42
 
 
+def test_dogfood_05_binary_classifier():
+    # Sigmoid-based logistic regression with BCE loss + grad_rev_all.
+    # First Helix program that trains an actual probabilistic classifier
+    # end-to-end. Required range-reduced __exp.
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    p = os.path.join(proj_root, "helixc", "examples", "dogfood_05_binary_classifier.hx")
+    with open(p) as f:
+        src = f.read()
+    assert compile_and_run(src) == 42
+
+
 def test_dogfood_04_xor_relu_perceptron():
     # Two-layer ReLU net touching XOR. Confirms grad_rev composes through
     # the stdlib __relu chain rule and 6-float-arg SysV calling convention.

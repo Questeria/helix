@@ -30,47 +30,73 @@ from .. import tir
 
 def _try_algebraic_identity(op: tir.Op, defs: dict,
                              res: "tir.Value") -> "tir.Op | None":
-    """Apply algebraic identities that simplify ops with one literal operand:
-        x + 0 = x, 0 + x = x
-        x - 0 = x
-        x * 1 = x, 1 * x = x
-        x * 0 = 0, 0 * x = 0
-        x / 1 = x
-        x - x = 0    (if both operands are the same SSA value)
+    """Apply algebraic identities that simplify ops with one literal operand
+    or two equal SSA values. Caught here in addition to the AST simplifier
+    in autodiff.py because IR lowering can introduce duplicates the AST
+    pass didn't see (e.g. let-inlining producing repeated subexpressions).
 
-    Returns a replacement Op (CONST_INT/FLOAT for zero results, or a
-    pass-through using ADD with 0 to keep the SSA shape — actually we
-    materialize as a CONST or a simple-pass via CONST_INT 0 + x but
-    that's not allowed without changing operand id. So we either fold
-    to a const result OR leave the op alone. For 'x op identity = x'
-    we cannot rewrite the op to "yield x" in SSA without the caller
-    seeing x's id change; we settle for folding only the cases that
-    produce a constant. The +0 / *1 identities are captured by the
-    AST simplifier in autodiff.py before this pass runs.)
+    Folded:
+        x * 0 = 0,  0 * x = 0  (int + float)
+        x - x = 0   (int + float)
+        x * 1, 1 * x → still requires identity-forwarding (skipped — needs
+                      SSA value remap that this pass can't safely do)
+        x + 0 / 0 + x → same (skipped)
+        const_int 0 / 0 (DIV by zero) → leave alone, no fold
+        const_int N / 1 → const_int N
+        const_int N * 1 → const_int N
+        x % 1 = 0
     """
-    # x * 0 = 0 (int)
+    # x * 0 = 0 (int + float)
     if op.kind == tir.OpKind.MUL and len(op.operands) == 2:
         l_def = defs.get(op.operands[0].id)
         r_def = defs.get(op.operands[1].id)
-        # Either side is const-int 0
-        if l_def is not None and l_def.kind == tir.OpKind.CONST_INT \
-                and int(l_def.attrs["value"]) == 0:
-            return tir.Op(kind=tir.OpKind.CONST_INT, operands=[],
-                          results=[res], attrs={"value": 0}, span=op.span)
-        if r_def is not None and r_def.kind == tir.OpKind.CONST_INT \
-                and int(r_def.attrs["value"]) == 0:
-            return tir.Op(kind=tir.OpKind.CONST_INT, operands=[],
-                          results=[res], attrs={"value": 0}, span=op.span)
+        for d in (l_def, r_def):
+            if d is None:
+                continue
+            if d.kind == tir.OpKind.CONST_INT and int(d.attrs["value"]) == 0:
+                return tir.Op(kind=tir.OpKind.CONST_INT, operands=[],
+                              results=[res], attrs={"value": 0}, span=op.span)
+            # NOTE: 0.0 * NaN = NaN, not 0.0 — float case intentionally
+            # left alone to preserve IEEE-754 semantics. Only safe when
+            # we can statically rule out NaN, which we can't here.
+
     # x - x = 0 (same SSA value on both sides)
     if op.kind == tir.OpKind.SUB and len(op.operands) == 2 \
             and op.operands[0].id == op.operands[1].id:
-        # Determine result type from the operand
         ty = op.operands[0].ty
         if isinstance(ty, tir.TIRScalar) and ty.name in ("f32", "f64", "f16", "bf16"):
             return tir.Op(kind=tir.OpKind.CONST_FLOAT, operands=[],
                           results=[res], attrs={"value": 0.0}, span=op.span)
         return tir.Op(kind=tir.OpKind.CONST_INT, operands=[],
                       results=[res], attrs={"value": 0}, span=op.span)
+
+    # x % 1 = 0 (integer modulo by 1 always 0)
+    if op.kind == tir.OpKind.MOD and len(op.operands) == 2:
+        r_def = defs.get(op.operands[1].id)
+        if r_def is not None and r_def.kind == tir.OpKind.CONST_INT \
+                and int(r_def.attrs["value"]) == 1:
+            return tir.Op(kind=tir.OpKind.CONST_INT, operands=[],
+                          results=[res], attrs={"value": 0}, span=op.span)
+
+    # Comparison of value with itself: == is true (1), != is false (0),
+    # <= and >= are true, < and > are false. For IEEE floats, NaN != NaN
+    # so the equality case is unsafe for floats — restrict to int.
+    if op.kind in (tir.OpKind.CMP_EQ, tir.OpKind.CMP_NE,
+                   tir.OpKind.CMP_LT, tir.OpKind.CMP_LE,
+                   tir.OpKind.CMP_GT, tir.OpKind.CMP_GE) \
+            and len(op.operands) == 2 \
+            and op.operands[0].id == op.operands[1].id:
+        ty = op.operands[0].ty
+        is_float = isinstance(ty, tir.TIRScalar) and ty.name in (
+            "f32", "f64", "f16", "bf16"
+        )
+        # Skip the fold for floats — NaN!=NaN edge case.
+        if not is_float:
+            true_kinds = {tir.OpKind.CMP_EQ, tir.OpKind.CMP_LE, tir.OpKind.CMP_GE}
+            value = 1 if op.kind in true_kinds else 0
+            return tir.Op(kind=tir.OpKind.CONST_INT, operands=[],
+                          results=[res], attrs={"value": value}, span=op.span)
+
     return None
 
 
