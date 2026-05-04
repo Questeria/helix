@@ -97,6 +97,25 @@ def test_read_file_int_round_trips():
     assert rc == 42
 
 
+def test_read_file_int_endianness_is_little_endian():
+    # Disambiguates LE from BE: byte sequence 01 00 00 00 reads as 1 LE
+    # but 16777216 BE. We want LE (which is what x86-64 native i32 uses).
+    setup = subprocess.run(
+        ["wsl", "--", "bash", "-c",
+         'python3 -c "open(\\"/tmp/helix_le.bin\\", \\"wb\\").write(bytes([1, 0, 0, 0]))"'],
+        capture_output=True, text=True
+    )
+    assert setup.returncode == 0
+    src = '''
+    fn main() -> i32 {
+        let v = read_file_int("/tmp/helix_le.bin");
+        v + 41  // v=1 (LE), result 42; v=16777216 (BE) would overflow exit code
+    }
+    '''
+    rc, _, _ = _build_and_run(src)
+    assert rc == 42, f"got {rc}; if 0 or large, endianness is wrong"
+
+
 def test_read_file_int_missing_file_returns_zero():
     src = '''
     fn main() -> i32 {

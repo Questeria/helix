@@ -88,26 +88,36 @@ def _propagate(node: A.Expr, adj: A.Expr, acc: dict[str, list[A.Expr]]) -> None:
             _propagate(node.operand, neg, acc)
         return
     if isinstance(node, A.Binary):
+        # Deepcopy `adj` whenever it appears in more than one place so
+        # downstream in-place mutation passes (grad_pass alias resolution)
+        # can't corrupt one branch by mutating the other.
         l, r, op = node.left, node.right, node.op
         if op == "+":
             _propagate(l, adj, acc)
-            _propagate(r, adj, acc)
+            _propagate(r, copy.deepcopy(adj), acc)
         elif op == "-":
             _propagate(l, adj, acc)
-            neg = A.Unary(span=node.span, op="-", operand=adj)
+            neg = A.Unary(span=node.span, op="-",
+                          operand=copy.deepcopy(adj))
             _propagate(r, neg, acc)
         elif op == "*":
-            adj_l = A.Binary(span=node.span, op="*", left=adj, right=r)
-            adj_r = A.Binary(span=node.span, op="*", left=adj, right=l)
+            adj_l = A.Binary(span=node.span, op="*",
+                             left=adj, right=copy.deepcopy(r))
+            adj_r = A.Binary(span=node.span, op="*",
+                             left=copy.deepcopy(adj), right=copy.deepcopy(l))
             _propagate(l, adj_l, acc)
             _propagate(r, adj_r, acc)
         elif op == "/":
             # adj_l = adj / r
-            adj_l = A.Binary(span=node.span, op="/", left=adj, right=r)
+            adj_l = A.Binary(span=node.span, op="/",
+                             left=adj, right=copy.deepcopy(r))
             # adj_r = -adj * l / (r * r)
-            r_sq = A.Binary(span=node.span, op="*", left=r, right=r)
-            l_over_r2 = A.Binary(span=node.span, op="/", left=l, right=r_sq)
-            mag = A.Binary(span=node.span, op="*", left=adj, right=l_over_r2)
+            r_sq = A.Binary(span=node.span, op="*",
+                            left=copy.deepcopy(r), right=copy.deepcopy(r))
+            l_over_r2 = A.Binary(span=node.span, op="/",
+                                 left=copy.deepcopy(l), right=r_sq)
+            mag = A.Binary(span=node.span, op="*",
+                           left=copy.deepcopy(adj), right=l_over_r2)
             adj_r = A.Unary(span=node.span, op="-", operand=mag)
             _propagate(l, adj_l, acc)
             _propagate(r, adj_r, acc)
