@@ -468,6 +468,8 @@ class TypeChecker:
         solver = P.Solver()
 
         # Walk param/arg pairs and add shape-equality constraints.
+        # We also track per-constraint readable labels for diagnostics.
+        constraint_labels: list[str] = []
         for (pname, pty), aty in zip(sig.params, arg_tys):
             if isinstance(pty, TyTensor) and isinstance(aty, TyTensor):
                 if len(pty.shape) != len(aty.shape):
@@ -482,7 +484,16 @@ class TypeChecker:
                     a_lin = self._size_type_to_lin(adim)
                     if p_lin is None or a_lin is None:
                         continue  # unknown shapes — skip (could warn)
+                    diff = p_lin - a_lin
+                    # Solver skips trivially-true (0 == 0) constraints. Only
+                    # track a label if the constraint will actually be added.
+                    if diff.is_zero():
+                        continue
                     solver.add_eq_pair(p_lin, a_lin)
+                    constraint_labels.append(
+                        f"arg {pname!r} dim {axis}: expected {p_lin.pretty()}, "
+                        f"got {a_lin.pretty()}"
+                    )
 
         # Add where-clause constraints (translate AST -> LinExpr).
         # We need a scope where the function's generic params are visible
@@ -501,15 +512,17 @@ class TypeChecker:
         # Verify each constraint is satisfied (i.e., solver does not refute it).
         # We focus on the explicit Eqs added above.
         contradictions = []
-        for c in solver.constraints:
+        for i, c in enumerate(solver.constraints):
             verdict = solver.implies(c)
             if verdict is False:
-                contradictions.append(c)
+                # Pair the constraint with its label (if available)
+                label = constraint_labels[i] if i < len(constraint_labels) else c.pretty()
+                contradictions.append(label)
 
         if contradictions:
-            details = "; ".join(c.pretty() for c in contradictions[:3])
+            details = "; ".join(contradictions[:3])
             self.errors.append(TypeError_(
-                f"call to {sig.name!r}: shape constraint violated ({details})",
+                f"call to {sig.name!r}: shape constraint violated — {details}",
                 call.span,
             ))
 
