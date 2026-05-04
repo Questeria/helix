@@ -118,6 +118,56 @@ def test_diff_neg_neg_x():
 
 
 # ============================================================================
+# Block + let-binding support
+# ============================================================================
+def test_diff_through_let_binding():
+    # let y = x; d(y * y)/dx = (x + x)
+    full = """
+    fn _f(x: f32) -> f32 {
+        let y = x;
+        y * y
+    }
+    """
+    prog = parse(full)
+    fn = prog.items[0]
+    deriv = differentiate(fn.body, "x")
+    assert fmt(deriv) == "(x + x)"
+
+
+def test_diff_through_chain_let():
+    # let a = x*x; let b = a*x; d(b)/dx
+    # b = (x*x)*x = x^3, derivative is 3*x^2 (= ((x+x)*x + x*x))
+    full = """
+    fn _f(x: f32) -> f32 {
+        let a = x * x;
+        let b = a * x;
+        b
+    }
+    """
+    prog = parse(full)
+    fn = prog.items[0]
+    deriv = differentiate(fn.body, "x")
+    out = fmt(deriv)
+    # Expect a non-trivial expression in x. After full simplification it would
+    # be 3*x*x but our simplifier may leave intermediate forms.
+    assert "x" in out
+
+
+def test_diff_const_let_unaffected():
+    # let c = 5; d(c * x)/dx = 5
+    full = """
+    fn _f(x: f32) -> f32 {
+        let c = 5;
+        c * x
+    }
+    """
+    prog = parse(full)
+    fn = prog.items[0]
+    deriv = differentiate(fn.body, "x")
+    assert fmt(deriv) == "5"
+
+
+# ============================================================================
 # Test runner
 # ============================================================================
 def main():

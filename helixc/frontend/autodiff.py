@@ -31,9 +31,52 @@ from . import ast_nodes as A
 
 
 def differentiate(expr: A.Expr, var: str) -> A.Expr:
-    """Return the AST of d(expr)/d(var), simplified."""
-    deriv = _diff(expr, var)
+    """Return the AST of d(expr)/d(var), simplified.
+
+    If `expr` is a Block, the block's let-bindings are inlined first so
+    that subsequent uses of the bound names refer to their definitions.
+    Then the block's final expression is differentiated.
+    """
+    inlined = _inline_lets(expr, {})
+    deriv = _diff(inlined, var)
     return _simplify(deriv)
+
+
+def _inline_lets(expr: A.Expr | None, env: dict[str, A.Expr]) -> A.Expr | None:
+    """Walk expr, replacing references to let-bound names with the bound
+    expression. Used to flatten blocks before differentiation."""
+    if expr is None:
+        return None
+    if isinstance(expr, (A.IntLit, A.FloatLit, A.BoolLit, A.StrLit, A.CharLit)):
+        return expr
+    if isinstance(expr, A.Name):
+        if expr.name in env:
+            return env[expr.name]
+        return expr
+    if isinstance(expr, A.Unary):
+        return A.Unary(span=expr.span, op=expr.op,
+                       operand=_inline_lets(expr.operand, env))
+    if isinstance(expr, A.Binary):
+        return A.Binary(span=expr.span, op=expr.op,
+                        left=_inline_lets(expr.left, env),
+                        right=_inline_lets(expr.right, env))
+    if isinstance(expr, A.Block):
+        local_env = dict(env)
+        for stmt in expr.stmts:
+            if isinstance(stmt, A.Let) and stmt.value is not None:
+                local_env[stmt.name] = _inline_lets(stmt.value, local_env)
+            # ExprStmt: ignore (no derivative meaning)
+            # ConstStmt: similar to Let
+            elif isinstance(stmt, A.ConstStmt):
+                local_env[stmt.name] = _inline_lets(stmt.value, local_env)
+        if expr.final_expr is not None:
+            return _inline_lets(expr.final_expr, local_env)
+        return A.FloatLit(span=expr.span, value=0.0)
+    if isinstance(expr, A.If):
+        # For now we simply return the then-branch; proper AD over branches
+        # needs to handle both cases conditionally. v0.1 approximation.
+        return _inline_lets(expr.then, env)
+    return expr
 
 
 # ============================================================================
