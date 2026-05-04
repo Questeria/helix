@@ -141,7 +141,9 @@ class Parser:
             return self._parse_use_decl()
         if t.kind == T.KW_CONST:
             return self._parse_const_decl(is_pub)
-        raise ParseError(f"expected item (fn/struct/enum/type/use/const)", t)
+        if t.kind == T.KW_AGENT:
+            return self._parse_agent_decl(is_pub)
+        raise ParseError(f"expected item (fn/struct/enum/type/use/const/agent)", t)
 
     def _parse_attributes(self) -> list[str]:
         attrs: list[str] = []
@@ -329,6 +331,35 @@ class Parser:
         self._eat(T.SEMI)
         return ast.ConstDecl(span=self._span_of(kw), name=name,
                              ty=ty, value=value, is_pub=is_pub)
+
+    def _parse_agent_decl(self, is_pub: bool) -> ast.AgentDecl:
+        """agent Foo { fn method_name(args) -> ReturnTy; ... }"""
+        kw = self._eat(T.KW_AGENT)
+        name = self._eat(T.IDENT).value
+        self._eat(T.LBRACE)
+        methods: list[ast.AgentMethod] = []
+        while not self._at(T.RBRACE):
+            mt_start = self._eat(T.KW_FN)
+            mname = self._eat(T.IDENT).value
+            self._eat(T.LPAREN)
+            params: list[ast.FnParam] = []
+            if not self._at(T.RPAREN):
+                params.append(self._parse_fn_param())
+                while self._match(T.COMMA):
+                    if self._at(T.RPAREN): break
+                    params.append(self._parse_fn_param())
+            self._eat(T.RPAREN)
+            ret_ty: ast.TyNode | None = None
+            if self._match(T.ARROW):
+                ret_ty = self._parse_type()
+            self._eat(T.SEMI)
+            methods.append(ast.AgentMethod(
+                span=self._span_of(mt_start), name=mname,
+                params=params, return_ty=ret_ty,
+            ))
+        self._eat(T.RBRACE)
+        return ast.AgentDecl(span=self._span_of(kw), name=name,
+                             methods=methods, is_pub=is_pub)
 
     # ========================================================================
     # Types

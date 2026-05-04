@@ -390,6 +390,56 @@ def test_unclosed_brace():
 
 
 # ============================================================================
+# Agent declarations (Phase 3-viii)
+# ============================================================================
+def test_simple_agent():
+    src = """
+    agent Planner {
+        fn propose(state: i32) -> i32;
+    }
+    """
+    p = parse(src)
+    assert isinstance(p.items[0], ast.AgentDecl)
+    assert p.items[0].name == "Planner"
+    assert len(p.items[0].methods) == 1
+    assert p.items[0].methods[0].name == "propose"
+
+
+def test_multi_method_agent():
+    src = """
+    agent Critic {
+        fn evaluate(state: i32, action: i32) -> bool;
+        fn score(action: i32) -> f32;
+    }
+    """
+    p = parse(src)
+    a = p.items[0]
+    assert isinstance(a, ast.AgentDecl)
+    assert len(a.methods) == 2
+    assert a.methods[0].name == "evaluate"
+    assert len(a.methods[0].params) == 2
+    assert a.methods[1].name == "score"
+
+
+def test_pub_agent():
+    src = "pub agent Foo { fn bar() -> i32; }"
+    a = parse(src).items[0]
+    assert isinstance(a, ast.AgentDecl)
+    assert a.is_pub
+
+
+def test_agent_alongside_fn():
+    src = """
+    agent A { fn act() -> i32; }
+    fn main() -> i32 { 0 }
+    """
+    p = parse(src)
+    assert len(p.items) == 2
+    assert isinstance(p.items[0], ast.AgentDecl)
+    assert isinstance(p.items[1], ast.FnDecl)
+
+
+# ============================================================================
 # Test runner
 # ============================================================================
 def main():

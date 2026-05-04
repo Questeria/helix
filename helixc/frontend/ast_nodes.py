@@ -430,6 +430,25 @@ class ConstDecl(Item):
 
 
 @dataclass
+class AgentMethod:
+    """Method signature inside an agent declaration."""
+    span: Span
+    name: str
+    params: list[FnParam] = field(default_factory=list)
+    return_ty: Optional["TyNode"] = None
+
+
+@dataclass
+class AgentDecl(Item):
+    """agent Planner { fn propose(state: i32) -> i32; ... }
+    A cognitive-architecture primitive: a typed bundle of methods
+    that participate in society::dispatch."""
+    name: str
+    methods: list[AgentMethod] = field(default_factory=list)
+    is_pub: bool = False
+
+
+@dataclass
 class ModuleDecl(Item):
     """module path::to::module"""
     path: list[str]
