@@ -289,6 +289,30 @@ class Lowerer:
                 return self.builder.emit(tir.OpKind.NEG, inner, result_ty=inner.ty)
             return inner
         if isinstance(expr, A.Call):
+            # Intercept print_str(string_literal) — emits a PRINT op whose
+            # attr carries the literal bytes; backend writes them to stdout
+            # via a write(1, ptr, len) syscall.
+            if (isinstance(expr.callee, A.Name)
+                    and expr.callee.name == "print_str"
+                    and len(expr.args) == 1
+                    and isinstance(expr.args[0], A.StrLit)):
+                s = expr.args[0].value
+                return self.builder.emit(tir.OpKind.PRINT,
+                                          result_ty=tir.TIRScalar("i32"),
+                                          attrs={"text": s})
+            # Intercept write_file(path_literal, content_literal) — emits
+            # a sequence of open/write/close syscalls. Returns 0 on
+            # success, the negative errno on failure.
+            if (isinstance(expr.callee, A.Name)
+                    and expr.callee.name == "write_file"
+                    and len(expr.args) == 2
+                    and isinstance(expr.args[0], A.StrLit)
+                    and isinstance(expr.args[1], A.StrLit)):
+                return self.builder.emit(tir.OpKind.PRINT,
+                                          result_ty=tir.TIRScalar("i32"),
+                                          attrs={"_kind": "write_file",
+                                                  "path": expr.args[0].value,
+                                                  "content": expr.args[1].value})
             # Intercept built-in float-cell reflection ops before treating as
             # an ordinary function call.
             if (isinstance(expr.callee, A.Name)

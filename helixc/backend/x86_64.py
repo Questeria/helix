@@ -462,6 +462,30 @@ class Asm:
     def syscall(self) -> None:
         self.b.emit(0x0F, 0x05)
 
+    # ---- imm-to-reg moves used by syscall plumbing ----
+    def mov_edi_imm32(self, imm: int) -> None:
+        # BF <imm32>
+        self.b.emit(0xBF)
+        self.b.emit_bytes(struct.pack("<I", imm & 0xFFFFFFFF))
+
+    def mov_esi_imm32(self, imm: int) -> None:
+        # BE <imm32>
+        self.b.emit(0xBE)
+        self.b.emit_bytes(struct.pack("<I", imm & 0xFFFFFFFF))
+
+    def mov_edx_imm32(self, imm: int) -> None:
+        # BA <imm32>
+        self.b.emit(0xBA)
+        self.b.emit_bytes(struct.pack("<I", imm & 0xFFFFFFFF))
+
+    def lea_rsi_rip_rel(self, target: str) -> None:
+        """lea rsi, [rip + disp32]   48 8D 35 <disp32>"""
+        self.b.emit(0x48, 0x8D, 0x35)
+        offset = self.b.offset()
+        self.b.emit_bytes(b"\x00\x00\x00\x00")
+        self.b.fixups.append(Fixup(offset=offset, target=target,
+                                   size=4, rel_base=offset + 4))
+
     # ---- comparisons ----
     def cmp_eax_ecx(self) -> None:
         # 39 C8  cmp eax, ecx
@@ -504,6 +528,9 @@ class FnCompiler:
         # Elements occupy contiguous 8-byte slots starting at base_slot_offset
         # (base_slot_offset is the offset of element 0; elem i is at base + i*8)
         self.array_info: dict[str, tuple[int, int, int]] = {}
+        # Pending strings (sym, bytes) emitted by PRINT ops in this function;
+        # collected by the module driver and appended to the binary.
+        self._pending_strings: list[tuple[str, bytes]] = []
 
     def _alloc_var(self, name: str) -> int:
         if name in self.var_slots:
@@ -1002,6 +1029,81 @@ class FnCompiler:
             return
 
         # AGI primitives
+        if op.kind == tir.OpKind.PRINT:
+            kind = op.attrs.get("_kind", "print_str")
+            if kind == "write_file":
+                # open(path, O_WRONLY|O_CREAT|O_TRUNC, 0o644)
+                # write(fd, content, len)
+                # close(fd)
+                path_str = op.attrs["path"]
+                content = op.attrs["content"]
+                assert isinstance(path_str, str) and isinstance(content, str)
+                # Path needs a NUL terminator since open() expects C-string
+                path_data = path_str.encode("utf-8") + b"\x00"
+                content_data = content.encode("utf-8")
+                path_sym = f"__helix_path_{id(op):x}"
+                content_sym = f"__helix_content_{id(op):x}"
+                self._pending_strings.append((path_sym, path_data))
+                self._pending_strings.append((content_sym, content_data))
+
+                # ---- sys_open(path, flags=O_WRONLY|O_CREAT|O_TRUNC, mode=0o644) ----
+                # rdi = path_ptr (lea rdi, [rip + path_sym]), rsi = flags,
+                # rdx = mode, rax = 2 (sys_open).
+                buf = self.asm.b
+                buf.emit(0x48, 0x8D, 0x3D)  # lea rdi, [rip + disp32]
+                off = buf.offset()
+                buf.emit_bytes(b"\x00\x00\x00\x00")
+                buf.fixups.append(Fixup(offset=off, target=path_sym,
+                                         size=4, rel_base=off + 4))
+                self.asm.mov_esi_imm32(0x241)  # O_WRONLY|O_CREAT|O_TRUNC
+                self.asm.mov_edx_imm32(0x1A4)  # mode 0644
+                self.asm.mov_eax_imm32(2)      # sys_open
+                self.asm.syscall()
+                # eax = fd. Move to rdi for write/close (preserve via rbx? No,
+                # main has eax already = fd, we need it to persist. Move to a
+                # callee-saved reg: r12).
+                # mov r12, rax  (49 89 C4)
+                buf.emit(0x49, 0x89, 0xC4)
+
+                # ---- write(fd, content, len) ----
+                # mov rdi, r12  (4C 89 E7)
+                buf.emit(0x4C, 0x89, 0xE7)
+                # lea rsi, [rip + content_sym]
+                self.asm.lea_rsi_rip_rel(content_sym)
+                self.asm.mov_edx_imm32(len(content_data))
+                self.asm.mov_eax_imm32(1)  # sys_write
+                self.asm.syscall()
+
+                # ---- close(fd) ----
+                # mov rdi, r12
+                buf.emit(0x4C, 0x89, 0xE7)
+                self.asm.mov_eax_imm32(3)  # sys_close
+                self.asm.syscall()
+
+                # Result slot = eax (close's return: 0 success, -1 fail)
+                if op.results:
+                    res_slot = self._slot_of(op.results[0])
+                    self.asm.mov_mem_rbp_eax(res_slot)
+                return
+
+            # Default: print_str — write the string bytes to stdout.
+            text = op.attrs.get("text", "")
+            assert isinstance(text, str)
+            data = text.encode("utf-8")
+            # Emit a unique symbol per call site
+            sym = f"__helix_str_{id(op):x}"
+            # Stash the bytes for later emission with their symbol
+            self._pending_strings.append((sym, data))
+            self.asm.mov_edi_imm32(1)
+            self.asm.lea_rsi_rip_rel(sym)
+            self.asm.mov_edx_imm32(len(data))
+            self.asm.mov_eax_imm32(1)  # sys_write
+            self.asm.syscall()
+            # PRINT's result slot gets the syscall return (#bytes written)
+            if op.results:
+                res_slot = self._slot_of(op.results[0])
+                self.asm.mov_mem_rbp_eax(res_slot)
+            return
         if op.kind == tir.OpKind.QUOTE:
             # QUOTE returns a stable cell handle in [0, HELIX_NUM_CELLS). The
             # handle is derived at compile time from the AST hash; runtime
@@ -1300,9 +1402,18 @@ def compile_module_to_elf(module: tir.Module, entry_fn: str = "main") -> bytes:
     asm.mov_eax_imm32(60)
     asm.syscall()
 
-    # Compile each function
+    # Compile each function and harvest any pending PRINT-string bytes.
+    pending_strings: list[tuple[str, bytes]] = []
     for fn in module.functions.values():
-        FnCompiler(fn, asm).compile()
+        fc = FnCompiler(fn, asm)
+        fc.compile()
+        pending_strings.extend(fc._pending_strings)
+
+    # Append PRINT string bodies. Each gets its symbol so the RIP-relative
+    # LEA from the syscall sequence resolves to the literal bytes.
+    for sym, data in pending_strings:
+        buf.define_symbol(sym)
+        buf.emit_bytes(data)
 
     # Reflection cells: append HELIX_NUM_CELLS * 8 bytes of zero-init storage
     # immediately after the code. The base symbol is __helix_state_base.
