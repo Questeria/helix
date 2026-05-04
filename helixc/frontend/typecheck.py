@@ -111,6 +111,16 @@ class TyDiff(Type):
     inner: Type
 
 
+@dataclass(frozen=True)
+class TyMemTier(Type):
+    """A value tagged with a memory tier: Working / Episodic / Semantic /
+    Procedural. Each tier has different consolidation, decay, and retrieval
+    semantics. Cross-tier operations require explicit transitions
+    (consolidate, recall, retrieve)."""
+    tier: str        # "working", "episodic", "semantic", "procedural"
+    inner: Type
+
+
 # ============================================================================
 # Type errors
 # ============================================================================
@@ -287,6 +297,16 @@ class TypeChecker:
             # Differentiable wrapper: D<T>
             if ty.base == "D" and len(ty.args) == 1:
                 return TyDiff(inner=self._resolve_type(ty.args[0], scope))
+            # Memory-tier wrappers: WorkingMem<T>, EpisodicMem<T>, etc.
+            tier_map = {
+                "WorkingMem": "working",
+                "EpisodicMem": "episodic",
+                "SemanticMem": "semantic",
+                "ProceduralMem": "procedural",
+            }
+            if ty.base in tier_map and len(ty.args) == 1:
+                return TyMemTier(tier=tier_map[ty.base],
+                                 inner=self._resolve_type(ty.args[0], scope))
             # User type with generic args — v0.1 unknown
             return TyUnknown(hint=f"generic {ty.base}")
         return TyUnknown(hint=f"unknown ty node {type(ty).__name__}")
@@ -668,6 +688,12 @@ class TypeChecker:
     def _compatible(self, a: Type, b: Type) -> bool:
         if isinstance(a, TyUnknown) or isinstance(b, TyUnknown):
             return True
+        # Memory-tier types are incompatible across tiers (must explicitly
+        # consolidate / recall to convert)
+        if isinstance(a, TyMemTier) and isinstance(b, TyMemTier):
+            return a.tier == b.tier and self._compatible(a.inner, b.inner)
+        if isinstance(a, TyMemTier) or isinstance(b, TyMemTier):
+            return False
         return a == b
 
     def _fmt(self, t: Type) -> str:
@@ -690,6 +716,10 @@ class TypeChecker:
             return f"fn({', '.join(self._fmt(p) for p in t.params)}) -> {self._fmt(t.ret)}"
         if isinstance(t, TyUnit): return "()"
         if isinstance(t, TyDiff): return f"D<{self._fmt(t.inner)}>"
+        if isinstance(t, TyMemTier):
+            cap = {"working": "WorkingMem", "episodic": "EpisodicMem",
+                   "semantic": "SemanticMem", "procedural": "ProceduralMem"}
+            return f"{cap.get(t.tier, t.tier)}<{self._fmt(t.inner)}>"
         if isinstance(t, TyUnknown): return f"?{{{t.hint}}}"
         return repr(t)
 

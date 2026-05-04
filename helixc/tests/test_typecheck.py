@@ -265,6 +265,59 @@ def test_diff_in_tensor():
 
 
 # ============================================================================
+# Memory-tier types (Phase 3-v)
+# ============================================================================
+def test_working_mem_type():
+    src = """
+    fn f(x: WorkingMem<i32>) -> WorkingMem<i32> { x }
+    """
+    assert check(src) == []
+
+
+def test_episodic_mem_type():
+    src = """
+    fn store(e: EpisodicMem<i32>) -> EpisodicMem<i32> { e }
+    """
+    assert check(src) == []
+
+
+def test_cannot_pass_episodic_as_semantic():
+    # EpisodicMem and SemanticMem are different tiers — must explicitly
+    # consolidate. Direct passing should be rejected.
+    src = """
+    fn takes_semantic(x: SemanticMem<i32>) -> SemanticMem<i32> { x }
+    fn caller(e: EpisodicMem<i32>) -> SemanticMem<i32> {
+        let s: SemanticMem<i32> = e;
+        s
+    }
+    """
+    errs = check(src)
+    assert any("declared SemanticMem" in e or "declared" in e for e in errs), errs
+
+
+def test_same_tier_compatible():
+    src = """
+    fn takes_working(x: WorkingMem<i32>) -> WorkingMem<i32> { x }
+    fn caller(w: WorkingMem<i32>) -> WorkingMem<i32> {
+        let y: WorkingMem<i32> = w;
+        y
+    }
+    """
+    assert check(src) == []
+
+
+def test_let_episodic_to_working_rejected():
+    src = """
+    fn f(e: EpisodicMem<i32>) -> WorkingMem<i32> {
+        let w: WorkingMem<i32> = e;
+        w
+    }
+    """
+    errs = check(src)
+    assert any("declared" in e for e in errs), errs
+
+
+# ============================================================================
 # Test runner
 # ============================================================================
 def main():
