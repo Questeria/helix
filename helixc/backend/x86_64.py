@@ -907,15 +907,29 @@ def compile_module_to_elf(module: tir.Module, entry_fn: str = "main") -> bytes:
 if __name__ == "__main__":
     import sys
     from ..frontend.parser import parse
+    from ..frontend.typecheck import typecheck
     from ..ir.lower_ast import lower
 
     if len(sys.argv) < 3:
-        print("usage: python -m helixc.backend.x86_64 <input.hx> <output.bin>",
+        print("usage: python -m helixc.backend.x86_64 <input.hx> <output.bin> [--strict]",
               file=sys.stderr)
         sys.exit(1)
+    strict = "--strict" in sys.argv
     with open(sys.argv[1]) as f:
         src = f.read()
     prog = parse(src)
+    # Type-check; print as warnings, abort if --strict
+    type_errors = typecheck(prog)
+    if type_errors:
+        for e in type_errors:
+            print(f"warning: {e}", file=sys.stderr)
+        if strict:
+            print(f"\n{len(type_errors)} type error(s); --strict aborts.",
+                  file=sys.stderr)
+            sys.exit(1)
+        else:
+            print(f"\n({len(type_errors)} type warning(s); compiling anyway. "
+                  f"Use --strict to fail on warnings.)", file=sys.stderr)
     mod = lower(prog)
     elf = compile_module_to_elf(mod)
     with open(sys.argv[2], "wb") as f:
