@@ -373,6 +373,11 @@ class Lowerer:
             # slots are the call args, lowered in order. For tag-only
             # variants (no args), this still allocates a 1-slot array
             # holding just the tag.
+            # NOTE: tag-only enum let-values (e.g. `let m = Maybe::None;`)
+            # remain bound as scalars (Path lowers to const_int(tag)).
+            # When passed to a function expecting an enum-typed param,
+            # the call-site multi-slot expansion handles them via the
+            # generic-scalar-padding path.
             if (stmt.value is not None
                     and isinstance(stmt.value, A.Call)
                     and isinstance(stmt.value.callee, A.Path)
@@ -735,7 +740,40 @@ class Lowerer:
                     p_ty = callee_ast.params[i].ty
                     n_slots = self._aggregate_slot_count(p_ty)
                     if n_slots is not None and n_slots >= 1:
-                        if isinstance(a, A.Name):
+                        # Inline enum constructor as fn arg, e.g.
+                        # `f(Maybe::Some(42))`. Recognize the pattern and
+                        # emit [tag, payload, ...] directly without an
+                        # intermediate let-bind.
+                        if (isinstance(a, A.Call)
+                                and isinstance(a.callee, A.Path)
+                                and len(a.callee.segments) == 2):
+                            ename, vname = a.callee.segments
+                            variants = self._enum_variants.get(ename)
+                            if variants is not None and vname in variants:
+                                args.append(self.builder.const_int(
+                                    variants[vname]))
+                                for arg_expr in a.args:
+                                    av = self._lower_expr(arg_expr)
+                                    if av is None:
+                                        av = self.builder.const_int(0)
+                                    args.append(av)
+                                # Pad to n_slots if variant has fewer args.
+                                payload_count = len(a.args)
+                                for _ in range(n_slots - 1 - payload_count):
+                                    args.append(self.builder.const_int(0))
+                                expanded = True
+                        # Inline tag-only path as fn arg, e.g. `f(Maybe::None)`.
+                        if (not expanded and isinstance(a, A.Path)
+                                and len(a.segments) == 2):
+                            ename, vname = a.segments
+                            variants = self._enum_variants.get(ename)
+                            if variants is not None and vname in variants:
+                                args.append(self.builder.const_int(
+                                    variants[vname]))
+                                for _ in range(n_slots - 1):
+                                    args.append(self.builder.const_int(0))
+                                expanded = True
+                        if not expanded and isinstance(a, A.Name):
                             arr = self._lookup_array(a.name)
                             if arr is not None:
                                 elem_ty, length = arr

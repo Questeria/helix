@@ -1200,6 +1200,42 @@ def test_payload_pattern_dispatch_by_tag():
     assert code == 42, f"expected 7*6=42 (Square branch), got {code}"
 
 
+def test_inline_enum_ctor_as_fn_arg():
+    """`f(Maybe::Some(42))` should work without let-binding first."""
+    src = """
+    enum Maybe { None, Some(i32) }
+    fn unwrap_or(m: Maybe, d: i32) -> i32 {
+        match m {
+            Maybe::Some(x) => x,
+            Maybe::None => d,
+        }
+    }
+    fn main() -> i32 {
+        unwrap_or(Maybe::Some(42), 0) + unwrap_or(Maybe::None, 0)
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_inline_tag_only_enum_as_fn_arg():
+    """Inline tag-only enum path (Maybe::None) directly as fn arg."""
+    src = """
+    enum Maybe { None, Some(i32) }
+    fn is_none(m: Maybe) -> i32 {
+        match m {
+            Maybe::None => 42,
+            Maybe::Some(x) => 0,
+        }
+    }
+    fn main() -> i32 {
+        is_none(Maybe::None)
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
 def test_enum_payload_constructor_runs():
     """Maybe::Some(42) constructs a tagged value [tag=1, payload=42].
     We index into it to extract both pieces."""

@@ -212,38 +212,28 @@ def _pattern_test(pat: A.Pattern, scrut: str, span: A.Span) -> A.Expr:
     """Build a boolean expression that's true iff `pat` matches scrut."""
     if isinstance(pat, (A.PatWildcard, A.PatBind)):
         return A.BoolLit(span=span, value=True)
-    if isinstance(pat, A.PatLit):
-        # Special case: PatLit wrapping a Path (e.g. `match m { Maybe::None
-        # => ... }`) — when the scrut is a tagged value (array), the bare
-        # `__scrut == path` doesn't compare slot 0 (the tag), it compares
-        # the whole binding which lowers wrong. Emit `__scrut[0] == path`
-        # so payload-bearing enum scrutinees dispatch correctly. The
-        # codegen for Index on a scalar binding falls through gracefully
-        # (the lowerer already handles non-array Index) — but to be safe,
-        # only force-Index when the value is a Path (i.e. enum variant).
-        if isinstance(pat.value, A.Path):
-            tag_load = A.Index(
-                span=span,
-                callee=A.Name(span=span, name=scrut),
-                indices=[A.IntLit(span=span, value=0)],
-            )
-            return A.Binary(span=span, op="==",
-                            left=tag_load, right=pat.value)
-        return A.Binary(
-            span=span, op="==",
-            left=A.Name(span=span, name=scrut),
-            right=pat.value,
+    # For both PatLit and PatRange, the test reads "the tag" of __scrut.
+    # We always go through Index(__scrut, 0) so the same code works for
+    # both array-backed (enum/struct) and scalar scrutinees — the
+    # lowerer's Index handler falls back to returning the scalar value
+    # directly when the binding is scalar.
+    def _scrut_tag() -> A.Expr:
+        return A.Index(
+            span=span,
+            callee=A.Name(span=span, name=scrut),
+            indices=[A.IntLit(span=span, value=0)],
         )
+    if isinstance(pat, A.PatLit):
+        return A.Binary(span=span, op="==",
+                        left=_scrut_tag(), right=pat.value)
     if isinstance(pat, A.PatRange):
         op_hi = "<=" if pat.inclusive else "<"
         return A.Binary(
             span=span, op="&&",
             left=A.Binary(span=span, op=">=",
-                          left=A.Name(span=span, name=scrut),
-                          right=pat.lo),
+                          left=_scrut_tag(), right=pat.lo),
             right=A.Binary(span=span, op=op_hi,
-                           left=A.Name(span=span, name=scrut),
-                           right=pat.hi),
+                           left=_scrut_tag(), right=pat.hi),
         )
     if isinstance(pat, A.PatOr):
         # alts || alts || ...
