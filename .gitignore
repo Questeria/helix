@@ -13,6 +13,9 @@ stage*/build/
 *.fromhex.bin
 disasm.txt
 
+# Test temp dirs
+kovc/tests/_tmp/
+
 # Editor / IDE
 .vscode/
 .idea/

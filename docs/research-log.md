@@ -140,3 +140,63 @@ Once hex0 works, every subsequent stage feeds higher-level text into the previou
 - Type checker scaffold (size-constraint solver via Presburger arithmetic)
 - Tensor IR data structures
 - x86-64 codegen for arithmetic + control flow (tiny subset)
+
+---
+
+## 2026-05-03 (continued) — Phase 0d: x86-64 backend WORKING. END-TO-END.
+
+**🎯 First Kov program compiled, ran, exited correctly.**
+
+```
+$ cat kovc/examples/exit42.kov
+fn main() -> i32 { 42 }
+
+$ python -m kovc.backend.x86_64 kovc/examples/exit42.kov exit42.bin
+Wrote exit42.bin (4137 bytes)
+
+$ ./exit42.bin; echo $?
+42
+```
+
+### What landed
+- `kovc/backend/x86_64.py` (~400 lines)
+  - System V AMD64 ABI compliant
+  - Naive register allocation: every IR value gets a stack slot, reload to/from eax/ecx/edx for arithmetic
+  - Encodes: prologue/epilogue, mov imm/mem, add/sub/imul/neg, call rel32 with fixups, ret, syscall
+  - ELF emission: 64-byte ELF header + 56-byte program header + page-aligned code
+  - Up to 3 args (rdi, rsi, rdx) — sufficient for v0.1
+  - Entry stub: calls `main`, exits with rax as status
+- `kovc/examples/exit42.kov` — first end-to-end program
+- `kovc/tests/test_codegen.py` — 9 end-to-end tests, ALL PASS:
+  - test_exit_zero (exit 0)
+  - test_exit_42 (exit 42)
+  - test_exit_addition (17 + 25 = 42)
+  - test_exit_subtraction (100 - 58 = 42)
+  - test_exit_multiplication (6 * 7 = 42)
+  - test_let_binding_then_use (let bindings)
+  - test_function_call (one user-defined function calling another)
+  - test_nested_calls (double(15) inside add)
+  - test_three_arg_call (3-argument function)
+
+### Total status
+- 118/118 tests across the entire pipeline
+- ~4500 lines of Python build-time tooling
+- 6 git commits on main
+- Pipeline: .kov source → lex → parse → typecheck → Tensor IR → x86-64 codegen → Linux ELF → runs and produces correct exit code
+
+### Compilation flow demonstrated
+1. **Parse** (lexer + parser): `.kov` → AST
+2. **Typecheck**: AST validated, types resolved
+3. **Lower**: AST → SSA Tensor IR with named ops
+4. **Codegen**: TIR → x86-64 machine bytes
+5. **ELF wrap**: bytes → valid Linux executable
+6. **Run**: exit code matches the program's value
+
+This proves the whole pipeline works with NO PYTHON in the runtime. Once Phase 4 self-hosts kovc in Kov, even Python disappears from the build.
+
+### Up next
+- More codegen: comparisons, if-as-control-flow (currently SELECT only), loops
+- Tile IR for GPU kernels
+- PTX backend
+- First matmul (scalar version, then SIMD, then PTX)
+- Hello matmul end-to-end (Phase 1 verifiable artifact)
