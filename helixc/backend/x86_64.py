@@ -911,6 +911,7 @@ if __name__ == "__main__":
     from ..ir.lower_ast import lower
     from ..ir.passes.const_fold import fold_module
     from ..ir.passes.dce import dce_module
+    from ..ir.passes.cse import cse_module
 
     if len(sys.argv) < 3:
         print("usage: python -m helixc.backend.x86_64 <input.hx> <output.bin> [--strict] [--no-opt]",
@@ -934,11 +935,14 @@ if __name__ == "__main__":
             print(f"\n({len(type_errors)} type warning(s); compiling anyway. "
                   f"Use --strict to fail on warnings.)", file=sys.stderr)
     mod = lower(prog)
-    # Optimization passes
+    # Optimization passes (run twice — fold can expose new CSE opportunities, etc.)
     if not no_opt:
         folded = fold_module(mod)
         if folded > 0:
             print(f"const-fold: {folded} ops folded", file=sys.stderr)
+        cse_count = cse_module(mod)
+        if cse_count > 0:
+            print(f"cse: {cse_count} duplicate ops merged", file=sys.stderr)
         removed = dce_module(mod)
         if removed > 0:
             print(f"dce: {removed} ops removed", file=sys.stderr)
