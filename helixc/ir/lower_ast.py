@@ -326,6 +326,30 @@ class Lowerer:
                 self._bind_array(stmt.name, elem_ty, n)
                 self._bind_struct(stmt.name, slit.name)
                 return
+            # Special case: tuple literal initializer -> back it with an
+            # array (positional access via `t.0`, `t.1`, ...).
+            if stmt.value is not None and isinstance(stmt.value, A.TupleLit):
+                elems = stmt.value.elems
+                if not elems:
+                    self._bind(stmt.name, self.builder.const_int(0))
+                    return
+                elem_vals = []
+                for e in elems:
+                    v = self._lower_expr(e)
+                    if v is None:
+                        v = self.builder.const_int(0)
+                    elem_vals.append(v)
+                elem_ty = elem_vals[0].ty
+                n = len(elem_vals)
+                self.builder.emit(tir.OpKind.ALLOC_ARRAY,
+                                  attrs={"name": stmt.name, "dtype": elem_ty,
+                                         "length": n})
+                for i, ev in enumerate(elem_vals):
+                    idx = self.builder.const_int(i)
+                    self.builder.emit(tir.OpKind.STORE_ELEM, idx, ev,
+                                      attrs={"name": stmt.name})
+                self._bind_array(stmt.name, elem_ty, n)
+                return
             # Special case: array literal initializer -> allocate stack array
             if stmt.value is not None and isinstance(stmt.value, A.ArrayLit):
                 elems = stmt.value.elems
@@ -817,6 +841,20 @@ class Lowerer:
                         arr = self._lookup_array(base_name)
                         if arr is not None:
                             elem_ty, _ = arr
+                            idx_v = self.builder.const_int(idx_int)
+                            return self.builder.emit(
+                                tir.OpKind.LOAD_ELEM, idx_v,
+                                result_ty=elem_ty,
+                                attrs={"name": base_name})
+                # Tuple field access: `t.0`, `t.1`. Single-segment digit
+                # name on an array binding lowers directly to LOAD_ELEM.
+                if (len(path_segs) == 1 and path_segs[0].isdigit()
+                        and struct_name is None):
+                    arr = self._lookup_array(base_name)
+                    if arr is not None:
+                        elem_ty, length = arr
+                        idx_int = int(path_segs[0])
+                        if 0 <= idx_int < length:
                             idx_v = self.builder.const_int(idx_int)
                             return self.builder.emit(
                                 tir.OpKind.LOAD_ELEM, idx_v,

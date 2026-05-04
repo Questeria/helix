@@ -1079,6 +1079,33 @@ def test_enum_variant_in_match_pattern():
     assert code == 42, f"expected 6*7=42 (Op::Mul branch), got {code}"
 
 
+def test_tuple_field_access_e2e():
+    """`(10, 20, 12).0 + ...` — tuple field access by integer index works."""
+    src = """
+    fn main() -> i32 {
+        let t = (10, 20, 12);
+        t.0 + t.1 + t.2
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_tuple_in_match():
+    """Tuple field access combined with match dispatch."""
+    src = """
+    fn main() -> i32 {
+        let t = (1, 42);
+        match t.0 {
+            1 => t.1,
+            _ => 0,
+        }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42 (t.1 via t.0=1 arm), got {code}"
+
+
 def test_enum_payload_constructor_runs():
     """Maybe::Some(42) constructs a tagged value [tag=1, payload=42].
     We index into it to extract both pieces."""

@@ -925,6 +925,16 @@ class TypeChecker:
                         f"struct {obj_ty.name!r} has no field {expr.name!r}",
                         expr.span,
                     ))
+            # Tuple field access: `t.0`, `t.1`. The field "name" is a
+            # stringified integer (per parser convention).
+            if isinstance(obj_ty, TyTuple) and expr.name.isdigit():
+                idx = int(expr.name)
+                if 0 <= idx < len(obj_ty.elems):
+                    return obj_ty.elems[idx]
+                self.errors.append(TypeError_(
+                    f"tuple index {idx} out of range (tuple has "
+                    f"{len(obj_ty.elems)} elems)", expr.span,
+                ))
             return TyUnknown(hint=f"field .{expr.name}")
         if isinstance(expr, A.Block):
             return self._check_block(expr, scope)

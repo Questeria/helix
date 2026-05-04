@@ -726,8 +726,18 @@ class Parser:
                 continue
             if self._at(T.DOT):
                 self.i += 1
-                name = self._eat(T.IDENT).value
-                expr = ast.Field(span=expr.span, obj=expr, name=name)
+                # Tuple field access: `tup.0`, `tup.1`. The "name" is a
+                # stringified integer (e.g. "0") so the existing Field AST
+                # is reused. Typecheck distinguishes by checking whether
+                # obj_ty is a TyTuple.
+                if self._at(T.INT):
+                    idx_tok = self._peek()
+                    self.i += 1
+                    expr = ast.Field(span=expr.span, obj=expr,
+                                     name=str(idx_tok.int_value))
+                else:
+                    name = self._eat(T.IDENT).value
+                    expr = ast.Field(span=expr.span, obj=expr, name=name)
             elif self._at(T.LPAREN):
                 self.i += 1
                 args: list[ast.Expr] = []
