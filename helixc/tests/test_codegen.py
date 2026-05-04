@@ -1057,6 +1057,28 @@ def test_enum_constants_arithmetic():
     assert code == 2, f"expected 0+2=2, got {code}"
 
 
+def test_enum_variant_in_match_pattern():
+    """`match op { Op::Add => ..., Op::Mul => ... }` dispatches by variant
+    name — much more readable than literal integer indices."""
+    src = """
+    enum Op { Add, Sub, Mul, Div }
+    fn dispatch(op: i32, x: i32, y: i32) -> i32 {
+        match op {
+            Op::Add => x + y,
+            Op::Sub => x - y,
+            Op::Mul => x * y,
+            _ => 0,
+        }
+    }
+    fn main() -> i32 {
+        let m = Op::Mul;
+        dispatch(m, 6, 7)
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 6*7=42 (Op::Mul branch), got {code}"
+
+
 def test_enum_in_match():
     """Match on a tag-only enum dispatches by variant index."""
     src = """

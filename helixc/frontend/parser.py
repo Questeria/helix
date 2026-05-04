@@ -1016,8 +1016,39 @@ class Parser:
             self.i += 1
             return ast.PatWildcard(span=self._span_of(t))
         if t.kind == T.IDENT:
-            # variable bind (or could be enum variant in v0.2)
+            # IDENT followed by `::` is a path pattern (enum variant). If
+            # the variant has a payload `Some(x)` we accept that too — for
+            # now the payload binders aren't bound (codegen doesn't yet
+            # emit per-variant payload extraction). Bare `IDENT` without
+            # `::` is a variable binder.
             self.i += 1
+            if self._at(T.COLONCOLON):
+                segments = [t.value]
+                while self._match(T.COLONCOLON):
+                    seg = self._eat(T.IDENT)
+                    segments.append(seg.value)
+                # Optional payload: `Variant(arg1, arg2)` — parse but discard
+                # (will become PatLit-of-Path for the bare-tag case).
+                # The path is treated as a literal whose value at runtime is
+                # the variant tag. Wrapping it as PatLit gets us pattern
+                # equality dispatch through match_lower.
+                path_expr = ast.Path(
+                    span=self._span_of(t),
+                    segments=segments,
+                )
+                if self._at(T.LPAREN):
+                    # Skip the payload args for now — bare-tag match still
+                    # works for tag-only variants.
+                    self.i += 1
+                    depth = 1
+                    while depth > 0:
+                        tk = self._peek()
+                        if tk.kind == T.EOF:
+                            raise ParseError("unclosed payload pattern", tk)
+                        if tk.kind == T.LPAREN: depth += 1
+                        elif tk.kind == T.RPAREN: depth -= 1
+                        self.i += 1
+                return ast.PatLit(span=self._span_of(t), value=path_expr)
             return ast.PatBind(span=self._span_of(t), name=t.value, is_mut=False)
         if t.kind in (T.INT, T.FLOAT, T.STRING, T.CHAR, T.KW_TRUE, T.KW_FALSE):
             # Literal pattern, or `lo..hi` / `lo..=hi` range pattern.
