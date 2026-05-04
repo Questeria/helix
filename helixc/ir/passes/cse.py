@@ -66,64 +66,43 @@ def cse_module(module: tir.Module) -> int:
 
 
 def cse_function(fn: tir.FnIR) -> int:
-    """Within a single block, find duplicate pure ops and rewrite later
-    references to use the earlier op's results.
+    """Per-block CSE. Within each block, find duplicate pure ops and rewrite
+    later operand references in that SAME block to use the earlier op's
+    results.
 
-    For v0.1 we don't try to do CSE across blocks (would need dominance
-    analysis). Per-block is straightforward and catches most cases.
+    We deliberately do not propagate CSE rewrites across block boundaries:
+    that would require dominance analysis (a value defined in block A is
+    only safely usable from block B if A dominates B in the CFG). For v0.1
+    per-block is sound and catches most cases.
     """
-    # value_id -> replacement_value_id (transitive)
-    rewrites: dict[int, int] = {}
     found = 0
-
     for blk in fn.blocks:
-        seen: dict[tuple, list[tir.Value]] = {}  # hash -> earlier op's results
+        # block-scoped: hash -> earlier op's results
+        seen: dict[tuple, list[tir.Value]] = {}
+        # block-scoped: value_id -> replacement Value object
+        rewrites: dict[int, tir.Value] = {}
+
         for op in blk.ops:
+            # First, apply known rewrites to operand references inside this block
+            for i, o in enumerate(op.operands):
+                if o.id in rewrites:
+                    op.operands[i] = rewrites[o.id]
+
             if op.kind not in PURE_KINDS:
                 continue
-            # Apply known rewrites to operands first
-            new_operand_ids = []
-            for o in op.operands:
-                new_id = rewrites.get(o.id, o.id)
-                new_operand_ids.append(new_id)
-            # Synthesize a fresh hash with rewritten operand ids
+
+            # Hash the (potentially-rewritten) op
             attrs_items = tuple(sorted((k, v) for k, v in op.attrs.items()
                                        if isinstance(v, (int, float, str, bool))))
-            key = (op.kind, tuple(new_operand_ids), attrs_items)
+            operand_ids = tuple(o.id for o in op.operands)
+            key = (op.kind, operand_ids, attrs_items)
             if key in seen:
-                # CSE: rewrite each result of THIS op to point at the earlier op's
-                # corresponding result.
                 earlier_results = seen[key]
                 for new_r, old_r in zip(op.results, earlier_results):
-                    rewrites[new_r.id] = old_r.id
+                    rewrites[new_r.id] = old_r
                 found += 1
             else:
                 seen[key] = op.results
-
-    if not rewrites:
-        return 0
-
-    # Apply rewrites to ALL operand references in the function (across blocks)
-    def resolve(idval: int) -> int:
-        # Walk transitive rewrites
-        seen_walk = set()
-        cur = idval
-        while cur in rewrites and cur not in seen_walk:
-            seen_walk.add(cur)
-            cur = rewrites[cur]
-        return cur
-
-    for blk in fn.blocks:
-        for op in blk.ops:
-            for i, o in enumerate(op.operands):
-                target = resolve(o.id)
-                if target != o.id:
-                    # Find a Value with this id... we don't have a registry.
-                    # Easier: scan all blocks for the matching value object.
-                    # (Inefficient but simple.)
-                    found_val = _find_value_by_id(fn, target)
-                    if found_val is not None:
-                        op.operands[i] = found_val
 
     return found
 

@@ -92,6 +92,34 @@ def test_fold_does_not_break_running_program():
                for op in blk.ops)
 
 
+def test_fold_div_negative_dividend():
+    # C semantics: -7 / 2 = -3 (truncation toward zero), NOT -4 (Python //)
+    mod = lower_and_fold("fn main() -> i32 { -7 / 2 }")
+    consts = [op for fn in mod.functions.values() for blk in fn.blocks
+              for op in blk.ops if op.kind == tir.OpKind.CONST_INT]
+    # Find the const that was the result of the division: it should be -3
+    values = [op.attrs["value"] for op in consts]
+    assert -3 in values, f"expected fold to produce -3 (C semantics), got {values}"
+
+
+def test_fold_div_negative_divisor():
+    # C semantics: 7 / -2 = -3
+    mod = lower_and_fold("fn main() -> i32 { 7 / (-2) }")
+    consts = [op for fn in mod.functions.values() for blk in fn.blocks
+              for op in blk.ops if op.kind == tir.OpKind.CONST_INT]
+    values = [op.attrs["value"] for op in consts]
+    assert -3 in values, f"expected fold to produce -3 (C semantics), got {values}"
+
+
+def test_fold_mod_negative_dividend():
+    # C semantics: -7 % 2 = -1 (sign of dividend), NOT 1 (Python %)
+    mod = lower_and_fold("fn main() -> i32 { -7 % 2 }")
+    consts = [op for fn in mod.functions.values() for blk in fn.blocks
+              for op in blk.ops if op.kind == tir.OpKind.CONST_INT]
+    values = [op.attrs["value"] for op in consts]
+    assert -1 in values, f"expected fold to produce -1 (C semantics), got {values}"
+
+
 def main():
     tests = [(name, fn) for name, fn in globals().items()
              if name.startswith("test_") and callable(fn)]

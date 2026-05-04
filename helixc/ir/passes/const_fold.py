@@ -100,13 +100,17 @@ def _try_fold_op(op: tir.Op, defs: dict) -> tir.Op | None:
                 elif op.kind == tir.OpKind.DIV:
                     if r == 0:
                         return None
-                    v = int(l / r) if l * r >= 0 else -(-l // r) if l < 0 else l // r
-                    # Use C-style truncating division
-                    v = int(l / r) if (l < 0) ^ (r < 0) and l % r != 0 else l // r
+                    # C / x86 idiv semantics: truncate toward zero.
+                    # Python's // truncates toward -inf, so we must compute
+                    # |l| // |r| and apply the sign.
+                    sign = -1 if (l < 0) != (r < 0) else 1
+                    v = sign * (abs(l) // abs(r))
                 elif op.kind == tir.OpKind.MOD:
                     if r == 0:
                         return None
-                    v = l - (l // r) * r if (l < 0) ^ (r < 0) and l % r != 0 else l % r
+                    # C/idiv semantics: result has the sign of the dividend.
+                    sign = -1 if l < 0 else 1
+                    v = sign * (abs(l) % abs(r))
                 else:
                     return None
             except Exception:
