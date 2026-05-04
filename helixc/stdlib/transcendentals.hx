@@ -331,3 +331,21 @@ fn __always_accept(h: i32, v: f32) -> i32 {
 @pure fn __adam_step(m: f32, v: f32, eps: f32) -> f32 {
     m / (__sqrt(v) + eps)
 }
+
+// =========================================================================
+// Integer min/max/clamp. The float versions __min/__max/__clamp already
+// exist higher up; these are i32-typed for callers that stay in integer
+// arithmetic (loop bounds, opcode dispatch, totality measure tracking).
+// =========================================================================
+
+@pure fn __min_i32(a: i32, b: i32) -> i32 {
+    if a < b { a } else { b }
+}
+
+@pure fn __max_i32(a: i32, b: i32) -> i32 {
+    if a > b { a } else { b }
+}
+
+@pure fn __clamp_i32(x: i32, lo: i32, hi: i32) -> i32 {
+    if x < lo { lo } else { if x > hi { hi } else { x } }
+}

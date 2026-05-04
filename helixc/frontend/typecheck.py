@@ -583,6 +583,9 @@ class TypeChecker:
         "__relu", "__sigmoid", "__tanh", "__softplus", "__silu",
         "__abs", "__gelu", "__floor", "__ceil",
         "__rand_step", "__momentum_step_v",
+        "__min", "__max", "__clamp",
+        "__min_i32", "__max_i32", "__clamp_i32",
+        "__sgd_step", "__adam_step",
     })
 
     def _unbound_name_suggestion(self, name: str, span: A.Span,

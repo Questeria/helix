@@ -1031,6 +1031,20 @@ def test_chained_ors_normalized():
     assert code == 42, f"expected 42 (r should be a strict bool 1), got {code}"
 
 
+def test_stdlib_int_min_max_clamp():
+    """__min_i32 / __max_i32 / __clamp_i32 from stdlib end-to-end."""
+    src = """
+    fn main() -> i32 {
+        let a = __min_i32(5, 3);
+        let b = __max_i32(5, 3);
+        let c = __clamp_i32(100, 0, 10);
+        a + b + c
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 18, f"expected 18 (3+5+10), got {code}"
+
+
 def test_hbs_sample_loss_fn_runs():
     """HBS-only sample using stdlib (loss + manual grad + 5 SGD steps).
     From w0=0.0 with lr=0.1 toward a local min near w=3.0 — after 5
