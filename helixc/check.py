@@ -52,7 +52,13 @@ def main(argv: list[str] | None = None) -> int:
     try:
         prog = parse(src, include_stdlib=("--stdlib" in flags))
     except ParseError as e:
-        print(f"PARSE ERROR: {e}", file=sys.stderr)
+        # Use render() with source for caret display, fall back to bare
+        # str(e) if the parse error doesn't have render().
+        rendered = e.render(source=src, filename=path) \
+            if hasattr(e, "render") else str(e)
+        print(f"PARSE ERROR:", file=sys.stderr)
+        for line in rendered.splitlines():
+            print(f"  {line}", file=sys.stderr)
         return 1
     fn_count = sum(1 for it in prog.items if isinstance(it, A.FnDecl))
     print(f"   parse:    OK  ({fn_count} fns, {len(prog.items)} items)")
