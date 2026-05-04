@@ -1115,13 +1115,20 @@ class FnCompiler:
             je_after = buf.offset()
 
             # Apply: state[handle] = new_value (sign-extend 32-bit value to 64)
-            # rcx = handle (sign-extended)
+            # rcx = handle (sign-extended — handle is always a non-negative i32)
             self.asm.mov_ecx_mem_rbp(handle_slot)
             buf.emit(0x48, 0x63, 0xC9)   # movsxd rcx, ecx
-            # rdx = new_value (sign-extended)
+            # rdx = new_value. For i32 we sign-extend; for f32 we zero-extend
+            # so the cell's upper 32 bits stay clean. Negative floats have bit
+            # 31 set; sign-extending would corrupt the high half of the cell.
             self.asm.mov_eax_mem_rbp(new_val_slot)
-            # movsxd rdx, eax: 48 63 D0
-            buf.emit(0x48, 0x63, 0xD0)
+            if value_kind == "f32":
+                # mov edx, eax (89 C0 → no, that's mov eax, eax; 89 C2 is
+                # mov edx, eax). Implicitly zero-extends rdx upper 32 bits.
+                buf.emit(0x89, 0xC2)
+            else:
+                # movsxd rdx, eax  (48 63 D0)
+                buf.emit(0x48, 0x63, 0xD0)
             # rax = state base address
             self.asm.lea_rax_rip_rel("__helix_state_base")
             # [rax + rcx*8] = rdx

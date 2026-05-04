@@ -109,6 +109,12 @@ def _resolve_in_expr(expr: A.Expr, fn_by_name: dict[str, A.FnDecl],
         _resolve_in_expr(expr.callee, fn_by_name, alias_env)
         for i in expr.indices:
             _resolve_in_expr(i, fn_by_name, alias_env)
+    elif isinstance(expr, A.While):
+        _resolve_in_expr(expr.cond, fn_by_name, alias_env)
+        _resolve_let_aliases(expr.body, fn_by_name, alias_env)
+    elif isinstance(expr, A.For):
+        _resolve_in_expr(expr.iter_expr, fn_by_name, alias_env)
+        _resolve_let_aliases(expr.body, fn_by_name, alias_env)
 
 
 def _rewrite_in_block(block: A.Block, fn_by_name: dict[str, A.FnDecl],

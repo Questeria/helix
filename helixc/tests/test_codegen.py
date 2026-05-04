@@ -872,6 +872,45 @@ def test_idiv_normal_division_still_works():
     assert compile_and_run(src) == 42
 
 
+def test_interleaved_int_float_params_calling_convention():
+    # SysV ABI splits args by class: int -> (edi, esi, edx, ecx, r8d, r9d),
+    # float -> (xmm0..xmm7). Each class has its own counter; they don't
+    # share registers. Test interleaved signatures to ensure the prologue
+    # spill and the call-site arg load route each arg to the right register.
+    src = """
+    fn mix(a: i32, b: f32, c: i32, d: f32) -> i32 {
+        // SysV: a -> edi, b -> xmm0, c -> esi, d -> xmm1.
+        // Compute: a + (b as i32) + c + (d as i32)  i.e. 1 + 10 + 2 + 20 = 33
+        let bf = b as i32;
+        let df = d as i32;
+        a + bf + c + df
+    }
+    fn main() -> i32 {
+        let r = mix(1, 10.5, 2, 20.5);
+        // r should be 1 + 10 + 2 + 20 = 33; +9 = 42
+        r + 9
+    }
+    """
+    assert compile_and_run(src) == 42
+
+
+def test_interleaved_float_int_returns_float():
+    # Another permutation, with float return.
+    src = """
+    fn mix2(a: f32, b: i32, c: f32, d: i32) -> f32 {
+        // SysV: a -> xmm0, b -> edi, c -> xmm1, d -> esi.
+        // Compute a + (b as f32) + c + (d as f32) = 1.5 + 10 + 2.5 + 20 = 34.0
+        a + (b as f32) + c + (d as f32)
+    }
+    fn main() -> i32 {
+        let r = mix2(1.5, 10, 2.5, 20);
+        (r as i32) + 8
+    }
+    """
+    # 34 + 8 = 42
+    assert compile_and_run(src) == 42
+
+
 def test_float_compare_with_negative_values():
     # Earlier the compiler used signed integer cmp on float bit patterns,
     # silently miscompiling negative-value comparisons. Now uses ucomiss.

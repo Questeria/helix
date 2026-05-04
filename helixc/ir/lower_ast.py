@@ -321,6 +321,9 @@ class Lowerer:
                                              result_ty=tir.TIRScalar("i32"),
                                              attrs=attrs)
                 # No matching verifier — fallback to runtime-value form.
+                # Drop the f32 hint so the backend doesn't emit movss from an
+                # operand slot whose actual type wasn't validated as float.
+                attrs.pop("value_kind", None)
                 vrt = self._lower_expr(v_arg) or self.builder.const_int(0)
                 return self.builder.emit(tir.OpKind.MODIFY,
                                          target_v, xform_v, vrt,
