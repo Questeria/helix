@@ -3,8 +3,13 @@ helixc/frontend/autodiff_cli.py — print the symbolic derivative of a function.
 
 Usage:
     python -m helixc.frontend.autodiff_cli <file.hx> <function_name> [<var_name>]
+    python -m helixc.frontend.autodiff_cli --dump-ast-hashes <file.hx>
 
 If <var_name> is omitted, differentiates w.r.t. the first parameter.
+
+--dump-ast-hashes prints `<fn_name> : <12-char hex hash>` for every top-level
+fn in the file. The hash is the structural (alpha-equivalent) hash of the
+fn AST and is stable across runs.
 
 Example:
     $ cat loss.hx
@@ -23,16 +28,33 @@ import sys
 from .parser import parse
 from . import ast_nodes as A
 from .autodiff import differentiate, fmt
+from .ast_hash import structural_hash, short_hash
+
+
+def _dump_ast_hashes(path: str) -> int:
+    with open(path, "r", encoding="utf-8") as f:
+        src = f.read()
+    prog = parse(src)
+    for it in prog.items:
+        if isinstance(it, A.FnDecl):
+            print(f"{it.name} : {short_hash(structural_hash(it))}")
+    return 0
 
 
 def main():
-    if len(sys.argv) < 3:
+    if len(sys.argv) < 2:
         print(__doc__.strip(), file=sys.stderr)
         sys.exit(1)
     args = [a for a in sys.argv[1:] if not a.startswith("--")]
     flags = {a for a in sys.argv[1:] if a.startswith("--")}
 
-    if len(args) < 2:
+    if "--dump-ast-hashes" in flags:
+        if len(args) < 1:
+            print("usage: --dump-ast-hashes <file.hx>", file=sys.stderr)
+            sys.exit(1)
+        sys.exit(_dump_ast_hashes(args[0]))
+
+    if len(sys.argv) < 3 or len(args) < 2:
         print(__doc__.strip(), file=sys.stderr)
         sys.exit(1)
 

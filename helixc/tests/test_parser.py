@@ -439,6 +439,32 @@ def test_agent_alongside_fn():
     assert isinstance(p.items[1], ast.FnDecl)
 
 
+def test_match_arm_span_covers_pattern():
+    """Each arm.span should point at the start of its pattern (including
+    or-pattern alternatives and range pattern endpoints)."""
+    src = """
+fn f(x: i32) -> i32 {
+    match x {
+        0..10 => 1,
+        20 | 30 | 40 => 2,
+        y => y,
+    }
+}
+"""
+    prog = parse(src)
+    fn = prog.items[0]
+    match_expr = fn.body.final_expr
+    assert isinstance(match_expr, ast.Match)
+    arm0 = match_expr.arms[0]
+    assert arm0.span == arm0.pattern.span, \
+        f"arm.span {arm0.span} != pattern.span {arm0.pattern.span}"
+    arm1 = match_expr.arms[1]
+    assert arm1.span.line == arm1.pattern.span.line
+    assert arm1.span.col == arm1.pattern.span.col
+    arm2 = match_expr.arms[2]
+    assert arm2.span == arm2.pattern.span
+
+
 def test_range_pattern_parses():
     """Pattern `0..10 => ...` parses as PatRange (exclusive)."""
     src = """

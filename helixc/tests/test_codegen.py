@@ -957,6 +957,35 @@ def test_real_matmul_3x3_via_arrays():
     assert compile_and_run(src) == 42
 
 
+def test_dump_ast_hashes_flag():
+    """`autodiff_cli --dump-ast-hashes <file>` prints `<fn> : <hex12>`
+    deterministically across two runs on the same input."""
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    src_dir = os.path.join(proj_root, "helixc", "tests", "_tmp")
+    os.makedirs(src_dir, exist_ok=True)
+    src_path = os.path.join(src_dir, "_dump_hashes.hx")
+    with open(src_path, "w", encoding="utf-8") as f:
+        f.write("""
+fn f(x: f32) -> f32 { x * x }
+fn g(y: f32) -> f32 { y + 1.0 }
+""")
+    cmd = [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+           "--dump-ast-hashes", src_path]
+    r1 = subprocess.run(cmd, capture_output=True, cwd=proj_root)
+    assert r1.returncode == 0, r1.stderr
+    r2 = subprocess.run(cmd, capture_output=True, cwd=proj_root)
+    assert r2.returncode == 0, r2.stderr
+    out1 = r1.stdout.decode("utf-8").strip().splitlines()
+    out2 = r2.stdout.decode("utf-8").strip().splitlines()
+    assert out1 == out2, f"hashes not stable: {out1!r} vs {out2!r}"
+    assert len(out1) == 2
+    for line in out1:
+        name, _, h = line.partition(" : ")
+        assert name in ("f", "g"), f"unexpected fn {name!r}"
+        assert len(h) == 12 and all(c in "0123456789abcdef" for c in h), \
+            f"bad hash: {h!r}"
+
+
 def main():
     tests = [(name, fn) for name, fn in globals().items()
              if name.startswith("test_") and callable(fn)]
