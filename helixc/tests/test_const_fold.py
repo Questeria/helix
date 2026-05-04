@@ -120,6 +120,49 @@ def test_fold_mod_negative_dividend():
     assert -1 in values, f"expected fold to produce -1 (C semantics), got {values}"
 
 
+def test_x_times_zero_int_folds():
+    # x * 0 = 0 for integers
+    mod = lower_and_fold("fn main() -> i32 { let x = 17; x * 0 }")
+    muls = count_ops(mod, tir.OpKind.MUL)
+    assert muls == 0, f"expected MUL folded away, got {muls}"
+
+
+def test_zero_times_x_int_folds():
+    mod = lower_and_fold("fn main() -> i32 { let x = 17; 0 * x }")
+    muls = count_ops(mod, tir.OpKind.MUL)
+    assert muls == 0
+
+
+def test_x_minus_x_int_folds():
+    mod = lower_and_fold("fn main() -> i32 { let x = 17; x - x }")
+    subs = count_ops(mod, tir.OpKind.SUB)
+    assert subs == 0
+
+
+def test_x_minus_x_float_folds():
+    mod = lower_and_fold("fn main() -> f32 { let x = 1.5; x - x }")
+    subs = count_ops(mod, tir.OpKind.SUB)
+    assert subs == 0
+
+
+def test_x_mod_one_folds_to_zero():
+    mod = lower_and_fold("fn main() -> i32 { let x = 17; x % 1 }")
+    mods = count_ops(mod, tir.OpKind.MOD)
+    assert mods == 0
+
+
+def test_self_int_compare_folds():
+    # x == x (int) should fold to 1
+    mod = lower_and_fold("""
+    fn main() -> i32 {
+        let x = 5;
+        if x == x { 1 } else { 0 }
+    }
+    """)
+    cmps = count_ops(mod, tir.OpKind.CMP_EQ)
+    assert cmps == 0, f"expected CMP_EQ folded, got {cmps}"
+
+
 def main():
     tests = [(name, fn) for name, fn in globals().items()
              if name.startswith("test_") and callable(fn)]
