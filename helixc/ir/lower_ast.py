@@ -281,8 +281,15 @@ class Lowerer:
             if expr.op in cmp_:
                 return self.builder.emit(cmp_[expr.op], l, r,
                                          result_ty=tir.TIRScalar("bool"))
-            # Logical or/and — short-circuit eval not yet wired; treat as bitwise for v0.1
-            return self.builder.emit(tir.OpKind.ADD, l, r, result_ty=tir.TIRScalar("bool"))
+            # Logical or/and — no short-circuit yet; both operands are
+            # already-evaluated booleans (0/1). MUL is logical AND, ADD-then-
+            # nonzero-test is logical OR (any 1 → truthy). Branching just
+            # needs a nonzero→true test, so MUL/ADD suffice for now.
+            if expr.op == "&&":
+                return self.builder.emit(tir.OpKind.MUL, l, r,
+                                         result_ty=tir.TIRScalar("bool"))
+            return self.builder.emit(tir.OpKind.ADD, l, r,
+                                     result_ty=tir.TIRScalar("bool"))
         if isinstance(expr, A.Unary):
             inner = self._lower_expr(expr.operand)
             if inner is None:
@@ -794,6 +801,11 @@ def _pretty(node: A.Expr | A.Block) -> str:
 
 
 def lower(prog: A.Program) -> tir.Module:
+    # Pre-pass: rewrite `match` expressions into nested if/let chains so
+    # the rest of the pipeline (IR lowering, autodiff, x86 backend) is
+    # match-agnostic.
+    from ..frontend.match_lower import lower_matches
+    lower_matches(prog)
     return Lowerer(prog).lower()
 
 

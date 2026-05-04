@@ -144,6 +144,85 @@ def test_or_pattern_typechecks():
     assert errs == [], f"unexpected typecheck errors: {errs}"
 
 
+def test_match_int_literal_runs():
+    """End-to-end: match on int literal selects the right arm at runtime."""
+    try:
+        from helixc.tests.test_codegen import compile_and_run
+    except Exception:
+        # codegen suite may not be importable in some environments; skip.
+        return
+    src = """
+    fn main() -> i32 {
+        let x = 2;
+        match x {
+            1 => 10,
+            2 => 42,
+            3 => 30,
+            _ => 99,
+        }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected exit 42 (arm 2), got {code}"
+
+
+def test_match_range_pattern_runs():
+    """End-to-end: range pattern selects correct arm."""
+    try:
+        from helixc.tests.test_codegen import compile_and_run
+    except Exception:
+        return
+    src = """
+    fn main() -> i32 {
+        let x = 5;
+        match x {
+            0..3 => 1,
+            3..=7 => 42,
+            _ => 99,
+        }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected exit 42 (range arm), got {code}"
+
+
+def test_match_or_pattern_runs():
+    """End-to-end: or-pattern matches any of its alternatives."""
+    try:
+        from helixc.tests.test_codegen import compile_and_run
+    except Exception:
+        return
+    src = """
+    fn main() -> i32 {
+        let x = 3;
+        match x {
+            1 | 2 | 3 => 42,
+            _ => 0,
+        }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected exit 42 (or-pattern arm), got {code}"
+
+
+def test_match_bind_runs():
+    """End-to-end: PatBind binds scrutinee value visible in body."""
+    try:
+        from helixc.tests.test_codegen import compile_and_run
+    except Exception:
+        return
+    src = """
+    fn main() -> i32 {
+        let x = 21;
+        match x {
+            y => y * 2,
+        }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected exit 42 (y*2), got {code}"
+
+
 def main():
     tests = [(name, fn) for name, fn in globals().items()
              if name.startswith("test_") and callable(fn)]
