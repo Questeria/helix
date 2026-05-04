@@ -10,6 +10,7 @@ from helixc.ir.lower_ast import lower
 from helixc.ir.passes.const_fold import fold_module
 from helixc.ir.passes.dce import dce_module
 from helixc.ir.passes.cse import cse_module
+from helixc.ir.passes.fdce import fdce_module
 from helixc.backend.x86_64 import compile_module_to_elf
 
 
@@ -17,7 +18,7 @@ def compile_and_run(src: str, optimize: bool = True) -> int:
     """Compile Helix source to ELF, run via WSL, return exit code.
 
     Pipeline: parse -> grad_pass -> lower -> [opt] -> codegen -> ELF.
-    optimize=True (default): runs const-fold + CSE + DCE before codegen.
+    optimize=True (default): runs const-fold + CSE + DCE + fdce before codegen.
     """
     prog = parse(src)
     grad_pass(prog)
@@ -26,6 +27,7 @@ def compile_and_run(src: str, optimize: bool = True) -> int:
         fold_module(mod)
         cse_module(mod)
         dce_module(mod)
+        fdce_module(mod)
     elf = compile_module_to_elf(mod)
     # Write to a temp file in the project tree (since WSL accesses /mnt/c)
     proj_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
