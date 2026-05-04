@@ -345,6 +345,37 @@ def test_or_pattern_uniform_binders_visible_in_body():
     assert errs == [], f"expected uniform binder visible, got: {errs}"
 
 
+def test_non_exhaustive_enum_errors():
+    """`match o { Op::Add => 0, Op::Sub => 1 }` errors when Op has Mul too."""
+    src = """
+    enum Op { Add, Sub, Mul }
+    fn f(o: i32) -> i32 {
+        match o {
+            Op::Add => 0,
+            Op::Sub => 1,
+        }
+    }
+    """
+    errs = _check(src)
+    assert any("non-exhaustive" in repr(e).lower() and "Mul" in repr(e)
+               for e in errs), f"expected missing-variant error, got: {errs}"
+
+
+def test_exhaustive_enum_match_ok():
+    """All variants covered → no error."""
+    src = """
+    enum Op { Add, Sub }
+    fn f(o: i32) -> i32 {
+        match o {
+            Op::Add => 0,
+            Op::Sub => 1,
+        }
+    }
+    """
+    errs = _check(src)
+    assert errs == [], f"unexpected errors: {errs}"
+
+
 def test_match_nested_match():
     """Match inside the body of another match arm."""
     try:

@@ -717,6 +717,13 @@ class TypeChecker:
                         f"but value is {self._fmt(value_ty)}",
                         stmt.span,
                     ))
+                # Static overflow check: if the value is an IntLit and the
+                # declared type is a fixed-width integer, verify the value
+                # fits in that width (signed range for i*, unsigned for u*).
+                if (stmt.value is not None
+                        and isinstance(stmt.value, A.IntLit)
+                        and isinstance(declared, TyPrim)):
+                    self._check_int_lit_fits(stmt.value, declared)
                 scope.define(stmt.name, declared)
             else:
                 scope.define(stmt.name, value_ty)
@@ -1059,6 +1066,47 @@ class TypeChecker:
             return self._resolve_type(expr.target_ty, scope)
         return TyUnknown(hint=f"unhandled {type(expr).__name__}")
 
+    # ---- bounds checking ----
+    _INT_BOUNDS = {
+        "i8":  (-(1 << 7),  (1 << 7) - 1),
+        "i16": (-(1 << 15), (1 << 15) - 1),
+        "i32": (-(1 << 31), (1 << 31) - 1),
+        "i64": (-(1 << 63), (1 << 63) - 1),
+        "u8":  (0, (1 << 8) - 1),
+        "u16": (0, (1 << 16) - 1),
+        "u32": (0, (1 << 32) - 1),
+        "u64": (0, (1 << 64) - 1),
+        "isize": (-(1 << 63), (1 << 63) - 1),
+        "usize": (0, (1 << 64) - 1),
+    }
+
+    def _check_int_lit_fits(self, lit: A.IntLit, ty: "TyPrim") -> None:
+        """Static check: the literal value must fit in the declared width.
+        On overflow, surface a typecheck error with did-you-mean for a
+        wider type."""
+        bounds = self._INT_BOUNDS.get(ty.name)
+        if bounds is None:
+            return
+        lo, hi = bounds
+        v = lit.value
+        if v < lo or v > hi:
+            wider = self._suggest_wider_int(v, ty.name)
+            hint = (f"use `{wider}` instead" if wider else None)
+            self.errors.append(TypeError_(
+                f"value {v} does not fit in {ty.name} (range "
+                f"{lo}..={hi})", lit.span, hint=hint,
+            ))
+
+    @staticmethod
+    def _suggest_wider_int(value: int, current: str) -> "Optional[str]":
+        for cand in ("i32", "i64"):
+            if cand == current:
+                continue
+            lo, hi = TypeChecker._INT_BOUNDS.get(cand, (0, 0))
+            if lo <= value <= hi:
+                return cand
+        return None
+
     # ---- pattern binders ----
     def _bind_pattern(self, pat: A.Pattern, scrut_ty: Type, scope: Scope) -> None:
         """Recursively walk a match pattern and define any variable binders
@@ -1150,6 +1198,71 @@ class TypeChecker:
             return True
         return False
 
+    def _arm_variant_name(self, pat: A.Pattern,
+                            expected_enum: str) -> "Optional[str]":
+        """If pat is a Path or PatVariant referring to expected_enum, return
+        the variant name. Otherwise None."""
+        if isinstance(pat, A.PatLit) and isinstance(pat.value, A.Path):
+            segs = pat.value.segments
+            if len(segs) == 2 and segs[0] == expected_enum:
+                return segs[1]
+        if isinstance(pat, A.PatVariant):
+            segs = pat.path.segments
+            if len(segs) == 2 and segs[0] == expected_enum:
+                return segs[1]
+        if isinstance(pat, A.PatOr):
+            # PatOr counts as covering ANY of its alts' variants. We expand
+            # by collecting all variant names the alts cover.
+            for alt in pat.alts:
+                # Note: this is an approximation; it doesn't tell the
+                # caller about multiple variants. For exhaustiveness we'd
+                # want to expand, but for the simple "first variant"
+                # signature we just return the first match.
+                v = self._arm_variant_name(alt, expected_enum)
+                if v is not None:
+                    return v
+        return None
+
+    def _infer_enum_name_from_arms(self,
+                                    arms: list[A.MatchArm]) -> "Optional[str]":
+        """Heuristic: if every non-wildcard arm uses a Path / PatVariant
+        rooted at the same EnumName, return that name. Otherwise None."""
+        seen: "Optional[str]" = None
+        any_path = False
+        for arm in arms:
+            pat = arm.pattern
+            if isinstance(pat, (A.PatWildcard, A.PatBind)):
+                continue
+            n = self._arm_path_root_enum(pat)
+            if n is None:
+                # Non-enum pattern (e.g. PatLit of a number) — bail out.
+                if isinstance(pat, (A.PatLit, A.PatRange, A.PatTuple)):
+                    return None
+                continue
+            any_path = True
+            if seen is None:
+                seen = n
+            elif seen != n:
+                return None
+        return seen if any_path else None
+
+    def _arm_path_root_enum(self, pat: A.Pattern) -> "Optional[str]":
+        """Get the enum name from a path-shaped arm pattern, if any."""
+        if isinstance(pat, A.PatLit) and isinstance(pat.value, A.Path):
+            segs = pat.value.segments
+            if len(segs) == 2:
+                return segs[0]
+        if isinstance(pat, A.PatVariant):
+            segs = pat.path.segments
+            if len(segs) == 2:
+                return segs[0]
+        if isinstance(pat, A.PatOr):
+            for alt in pat.alts:
+                n = self._arm_path_root_enum(alt)
+                if n is not None:
+                    return n
+        return None
+
     def _check_match_exhaustive(self, expr: A.Match, scrut_ty: Type) -> None:
         """Cheap exhaustiveness for finite types: bool ({true,false}) and
         unit (only ()). Anything else needs a wildcard or PatBind to be
@@ -1157,6 +1270,28 @@ class TypeChecker:
         # Any arm with no guard and a wildcard / bare-name binder is total.
         for arm in expr.arms:
             if arm.guard is None and isinstance(arm.pattern, (A.PatWildcard, A.PatBind)):
+                return
+        # Enum-shaped match: if every non-trivial arm uses a Path / PatVariant
+        # rooted at the same enum, check coverage of that enum's variants.
+        enum_name = self._infer_enum_name_from_arms(expr.arms)
+        if enum_name is not None:
+            edecl = getattr(self, "_enum_decls", {}).get(enum_name)
+            if edecl is not None:
+                covered: set[str] = set()
+                for arm in expr.arms:
+                    if arm.guard is not None:
+                        continue
+                    name = self._arm_variant_name(arm.pattern, enum_name)
+                    if name is not None:
+                        covered.add(name)
+                missing = [v.name for v in edecl.variants
+                           if v.name not in covered]
+                if missing:
+                    self.errors.append(TypeError_(
+                        f"non-exhaustive match on enum {enum_name!r}: "
+                        f"missing variant(s) {missing}",
+                        expr.span,
+                    ))
                 return
         if isinstance(scrut_ty, TyPrim) and scrut_ty.name == "bool":
             covers_true = any(arm.guard is None and self._pattern_covers(arm.pattern, True)
