@@ -375,6 +375,40 @@ class Lowerer:
                 self._bind_array(stmt.name, elem_ty, n)
                 return
 
+            # Aliasing case: `let new = old_array_binding;` should make
+            # `new` refer to the same backing array (so subsequent
+            # `new[k]`, `new.field` etc. work). This is what makes match-
+            # lowering's `let __scrut_N = m;` correctly preserve m's
+            # tagged-value structure when m is an enum/tuple/struct.
+            if (stmt.value is not None and isinstance(stmt.value, A.Name)
+                    and not stmt.is_mut):
+                src_name = stmt.value.name
+                src_arr = self._lookup_array(src_name)
+                if src_arr is not None:
+                    elem_ty, length = src_arr
+                    self._bind_array(stmt.name, elem_ty, length)
+                    src_struct = self._lookup_struct(src_name)
+                    if src_struct is not None:
+                        self._bind_struct(stmt.name, src_struct)
+                    # Also alias the storage at the IR level: rebind the
+                    # old array name to the new name via STORE_ELEM/LOAD_
+                    # ELEM aliasing. The simplest correct way is to copy
+                    # element-by-element into a fresh ALLOC_ARRAY.
+                    self.builder.emit(tir.OpKind.ALLOC_ARRAY,
+                                      attrs={"name": stmt.name,
+                                             "dtype": elem_ty,
+                                             "length": length})
+                    for i in range(length):
+                        idx = self.builder.const_int(i)
+                        loaded = self.builder.emit(
+                            tir.OpKind.LOAD_ELEM, idx,
+                            result_ty=elem_ty,
+                            attrs={"name": src_name})
+                        self.builder.emit(
+                            tir.OpKind.STORE_ELEM, idx, loaded,
+                            attrs={"name": stmt.name})
+                    return
+
             v: Optional[tir.Value] = None
             if stmt.value is not None:
                 v = self._lower_expr(stmt.value)

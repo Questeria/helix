@@ -1037,27 +1037,25 @@ class Parser:
                 while self._match(T.COLONCOLON):
                     seg = self._eat(T.IDENT)
                     segments.append(seg.value)
-                # Optional payload: `Variant(arg1, arg2)` — parse but discard
-                # (will become PatLit-of-Path for the bare-tag case).
-                # The path is treated as a literal whose value at runtime is
-                # the variant tag. Wrapping it as PatLit gets us pattern
-                # equality dispatch through match_lower.
                 path_expr = ast.Path(
                     span=self._span_of(t),
                     segments=segments,
                 )
+                # Payload pattern: `Variant(p1, p2, ...)` — parse each
+                # sub-pattern and build a PatVariant. Tag-only stays as
+                # PatLit-of-Path (legacy path, simpler test).
                 if self._at(T.LPAREN):
-                    # Skip the payload args for now — bare-tag match still
-                    # works for tag-only variants.
                     self.i += 1
-                    depth = 1
-                    while depth > 0:
-                        tk = self._peek()
-                        if tk.kind == T.EOF:
-                            raise ParseError("unclosed payload pattern", tk)
-                        if tk.kind == T.LPAREN: depth += 1
-                        elif tk.kind == T.RPAREN: depth -= 1
-                        self.i += 1
+                    sub_pats: list[ast.Pattern] = []
+                    if not self._at(T.RPAREN):
+                        sub_pats.append(self._parse_pattern())
+                        while self._match(T.COMMA):
+                            if self._at(T.RPAREN): break
+                            sub_pats.append(self._parse_pattern())
+                    self._eat(T.RPAREN)
+                    return ast.PatVariant(span=self._span_of(t),
+                                          path=path_expr,
+                                          sub_patterns=sub_pats)
                 return ast.PatLit(span=self._span_of(t), value=path_expr)
             return ast.PatBind(span=self._span_of(t), name=t.value, is_mut=False)
         if t.kind in (T.INT, T.FLOAT, T.STRING, T.CHAR, T.KW_TRUE, T.KW_FALSE):

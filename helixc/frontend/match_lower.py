@@ -240,6 +240,50 @@ def _pattern_test(pat: A.Pattern, scrut: str, span: A.Span) -> A.Expr:
         # codegen, so PatTuple for now matches as wildcard.  TODO when
         # tuple element access lands.
         return A.BoolLit(span=span, value=True)
+    if isinstance(pat, A.PatVariant):
+        # Test: __scrut[0] == tag_value AND each sub-pattern test against
+        # __scrut[1], __scrut[2], ...  The scrut is expected to be a
+        # tagged-value array: [tag, payload0, payload1, ...].
+        scrut_name = A.Name(span=span, name=scrut)
+        tag_load = A.Index(span=span, callee=scrut_name,
+                           indices=[A.IntLit(span=span, value=0)])
+        tag_test = A.Binary(span=span, op="==",
+                            left=tag_load, right=pat.path)
+        # Sub-pattern tests (most are trivially true since binders / wild-
+        # cards always succeed; PatLit / nested PatVariant produce real
+        # comparisons but require knowing the slot offset).
+        sub_tests: list[A.Expr] = []
+        for i, sub in enumerate(pat.sub_patterns):
+            slot_idx = i + 1
+            slot_load = A.Index(
+                span=span,
+                callee=A.Name(span=span, name=scrut),
+                indices=[A.IntLit(span=span, value=slot_idx)],
+            )
+            # For each sub-pattern, lower as if its scrutinee were the
+            # slot value. Cheapest path: re-use the slot_load as the
+            # comparison left-hand side for PatLit; for PatBind / PatWild
+            # the test is trivially true (binder is added separately).
+            if isinstance(sub, A.PatLit):
+                sub_tests.append(A.Binary(span=span, op="==",
+                                          left=slot_load, right=sub.value))
+            elif isinstance(sub, A.PatRange):
+                op_hi = "<=" if sub.inclusive else "<"
+                sub_tests.append(A.Binary(
+                    span=span, op="&&",
+                    left=A.Binary(span=span, op=">=",
+                                  left=slot_load, right=sub.lo),
+                    right=A.Binary(span=span, op=op_hi,
+                                   left=slot_load, right=sub.hi),
+                ))
+            # PatBind / PatWildcard: trivially true; binder handled in
+            # _collect_binds.
+        if sub_tests:
+            full = tag_test
+            for t in sub_tests:
+                full = A.Binary(span=span, op="&&", left=full, right=t)
+            return full
+        return tag_test
     return A.BoolLit(span=span, value=True)
 
 
@@ -251,6 +295,21 @@ def _collect_binds(pat: A.Pattern, scrut: str, span: A.Span) -> list[A.Let]:
             span=span, name=pat.name, is_mut=False, ty=None,
             value=A.Name(span=span, name=scrut),
         ))
+    elif isinstance(pat, A.PatVariant):
+        # For each sub-pattern that's a PatBind, emit `let name = scrut[i+1]`
+        # (slot i+1 because slot 0 holds the tag).
+        for i, sub in enumerate(pat.sub_patterns):
+            slot_idx = i + 1
+            if isinstance(sub, A.PatBind):
+                slot_load = A.Index(
+                    span=span,
+                    callee=A.Name(span=span, name=scrut),
+                    indices=[A.IntLit(span=span, value=slot_idx)],
+                )
+                binds.append(A.Let(
+                    span=span, name=sub.name, is_mut=False, ty=None,
+                    value=slot_load,
+                ))
     # PatTuple element-binds are deferred (see _pattern_test note).
     return binds
 

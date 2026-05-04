@@ -1106,6 +1106,56 @@ def test_tuple_in_match():
     assert code == 42, f"expected 42 (t.1 via t.0=1 arm), got {code}"
 
 
+def test_payload_pattern_extracts_binder():
+    """`match m { Maybe::Some(x) => x, _ => 0 }` should extract the
+    payload value into the binder x and return it."""
+    src = """
+    enum Maybe { None, Some(i32) }
+    fn main() -> i32 {
+        let m = Maybe::Some(42);
+        match m {
+            Maybe::Some(x) => x,
+            _ => 0,
+        }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_payload_pattern_two_args():
+    """Payload pattern with two binders extracts both slots."""
+    src = """
+    enum Pair { Empty, Cons(i32, i32) }
+    fn main() -> i32 {
+        let p = Pair::Cons(10, 32);
+        match p {
+            Pair::Cons(a, b) => a + b,
+            _ => 0,
+        }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 10+32=42, got {code}"
+
+
+def test_payload_pattern_dispatch_by_tag():
+    """Match dispatches by tag, not just first arm."""
+    src = """
+    enum Shape { Circle(i32), Square(i32) }
+    fn main() -> i32 {
+        let s = Shape::Square(7);
+        match s {
+            Shape::Circle(r) => 3 * r * r,
+            Shape::Square(side) => side * 6,
+            _ => 0,
+        }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 7*6=42 (Square branch), got {code}"
+
+
 def test_enum_payload_constructor_runs():
     """Maybe::Some(42) constructs a tagged value [tag=1, payload=42].
     We index into it to extract both pieces."""

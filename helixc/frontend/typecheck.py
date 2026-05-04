@@ -1105,6 +1105,33 @@ class TypeChecker:
             self._check_expr(pat.lo, scope)
             self._check_expr(pat.hi, scope)
             return
+        if isinstance(pat, A.PatVariant):
+            # Look up the enum + variant; bind each sub-pattern against
+            # its corresponding payload type.
+            if len(pat.path.segments) == 2:
+                ename, vname = pat.path.segments
+                edecl = getattr(self, "_enum_decls", {}).get(ename)
+                if edecl is not None:
+                    for v in edecl.variants:
+                        if v.name == vname:
+                            if len(pat.sub_patterns) != len(v.payload_tys):
+                                self.errors.append(TypeError_(
+                                    f"variant {ename}::{vname} expects "
+                                    f"{len(v.payload_tys)} payload(s), got "
+                                    f"{len(pat.sub_patterns)}",
+                                    pat.span,
+                                ))
+                            for sub, pty in zip(pat.sub_patterns,
+                                                v.payload_tys):
+                                self._bind_pattern(
+                                    sub, self._resolve_type(pty, scope),
+                                    scope)
+                            return
+                    self.errors.append(TypeError_(
+                        f"enum {ename!r} has no variant {vname!r}",
+                        pat.span,
+                    ))
+            return
 
     def _pattern_covers(self, pat: A.Pattern, value) -> bool:
         """Does `pat` definitely match the given concrete `value`?

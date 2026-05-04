@@ -255,6 +255,16 @@ class PatRange(Pattern):
 
 
 @dataclass
+class PatVariant(Pattern):
+    """`EnumName::Variant(p1, p2, ...)` — match the variant tag AND
+    recursively match each payload sub-pattern. Empty sub_patterns
+    means tag-only (equivalent to PatLit-of-Path in legacy form, but
+    explicitly typed as a variant pattern)."""
+    path: "Path"
+    sub_patterns: list["Pattern"]
+
+
+@dataclass
 class For(Expr):
     """for x in iter { body }"""
     var_name: str
