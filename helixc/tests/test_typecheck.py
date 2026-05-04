@@ -456,6 +456,20 @@ def test_learn_to_wrong_arity():
 # ============================================================================
 # Test runner
 # ============================================================================
+def test_call_did_you_mean_suggests_builtin():
+    """Misspelled stdlib call: `__exf(x)` should suggest `__exp`."""
+    src = """
+    fn main(x: f32) -> f32 {
+        __exf(x)
+    }
+    """
+    errs = check(src)
+    assert any("unbound" in s and "__exf" in s for s in errs), \
+        f"expected unbound '__exf', got {errs}"
+    assert any("__exp" in s for s in errs), \
+        f"expected hint mentioning '__exp', got {errs}"
+
+
 def test_unbound_name_did_you_mean_suggests_close_match():
     src = """
     fn main() -> i32 {

@@ -574,6 +574,17 @@ class TypeChecker:
         "print_str", "write_file", "read_file_int",
     })
 
+    # Names of well-known stdlib functions that are surfaced as
+    # did-you-mean candidates even when the stdlib hasn't been parsed in
+    # (e.g. when a user invokes the typechecker on a fragment without
+    # `include_stdlib=True`). Keep aligned with helixc/stdlib/transcendentals.hx.
+    _STDLIB_HINTS = frozenset({
+        "__exp", "__log", "__sin", "__cos", "__sqrt", "__powi",
+        "__relu", "__sigmoid", "__tanh", "__softplus", "__silu",
+        "__abs", "__gelu", "__floor", "__ceil",
+        "__rand_step", "__momentum_step_v",
+    })
+
     def _unbound_name_suggestion(self, name: str, span: A.Span,
                                   scope: "Scope") -> None:
         """Emit a typecheck error for an unbound name, with a Levenshtein
@@ -588,8 +599,10 @@ class TypeChecker:
             return
         self._seen_unbound.add(name)
         # Build candidate set from current scope + function names + builtins
+        # + stdlib hints (helps when stdlib wasn't parsed in).
         candidates: list[str] = list(self.functions.keys())
         candidates.extend(self._BUILTIN_NAMES)
+        candidates.extend(self._STDLIB_HINTS)
         s: "Scope | None" = scope
         while s is not None:
             candidates.extend(s.locals.keys())
