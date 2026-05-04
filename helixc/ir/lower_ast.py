@@ -522,6 +522,18 @@ class Lowerer:
                 return self.builder.emit(tir.OpKind.PRINT,
                                           result_ty=tir.TIRScalar("i32"),
                                           attrs={"text": s})
+            # Intercept print_int(i32) — formats the value as decimal on
+            # stdout. Carries the value as an SSA operand so a runtime
+            # int can be printed (unlike print_str which is literal-only).
+            if (isinstance(expr.callee, A.Name)
+                    and expr.callee.name == "print_int"
+                    and len(expr.args) == 1):
+                v = self._lower_expr(expr.args[0])
+                if v is None:
+                    v = self.builder.const_int(0)
+                return self.builder.emit(tir.OpKind.PRINT, v,
+                                          result_ty=tir.TIRScalar("i32"),
+                                          attrs={"_kind": "print_int"})
             # Intercept write_file(path_literal, content_literal) — emits
             # a sequence of open/write/close syscalls. Returns 0 on
             # success, the negative errno on failure.
@@ -858,6 +870,14 @@ class Lowerer:
                 self._lower_expr(i)
             return None
         if isinstance(expr, A.Field):
+            # Inline tuple/struct field access: `(1, 2, 3).1` — no Name
+            # base, so _walk_field_chain wouldn't resolve. Lower the
+            # tuple's elements directly and pick the indexed value.
+            if (isinstance(expr.obj, A.TupleLit)
+                    and expr.name.isdigit()):
+                idx = int(expr.name)
+                if 0 <= idx < len(expr.obj.elems):
+                    return self._lower_expr(expr.obj.elems[idx])
             # Struct field access. May be a chain: o.inner.value. Walk the
             # Field-of-Field chain to find the base Name, accumulate path
             # segments, then look up the path in the flat-path table.

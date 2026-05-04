@@ -62,7 +62,12 @@ def main(argv: list[str] | None = None) -> int:
     if errs:
         print(f"   typecheck: {len(errs)} ERRORS")
         for e in errs[:20]:
-            print(f"     {e}")
+            # Render with source-line + caret if the error has a render()
+            # method (it does — see TypeError_.render).
+            rendered = e.render(source=src, filename=path) \
+                if hasattr(e, "render") else str(e)
+            for line in rendered.splitlines():
+                print(f"     {line}")
         if len(errs) > 20:
             print(f"     ... and {len(errs) - 20} more")
         return 1
@@ -85,6 +90,21 @@ def main(argv: list[str] | None = None) -> int:
         for it in prog.items:
             if isinstance(it, A.FnDecl):
                 print(f"     {it.name:<40} {short_hash(structural_hash(it))}")
+
+    # 5. Optional IR dump for parity / debugging.
+    if "--emit-ir" in flags:
+        from .ir.lower_ast import lower
+        mod = lower(prog)
+        print(f"   ir:")
+        for fn in mod.functions.values():
+            print(f"     fn {fn.name}:")
+            for blk in fn.blocks:
+                print(f"       block {blk.id}:")
+                for op in blk.ops:
+                    operands = ",".join(str(o.id) for o in op.operands)
+                    results = ",".join(str(r.id) for r in op.results)
+                    attrs_str = (" " + str(dict(op.attrs))) if op.attrs else ""
+                    print(f"         {op.kind.name} ({operands}) -> ({results}){attrs_str}")
 
     print(f"-- clean")
     return 0

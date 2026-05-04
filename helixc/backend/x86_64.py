@@ -1239,6 +1239,67 @@ class FnCompiler:
                     self.asm.mov_mem_rbp_eax(res_slot)
                 return
 
+            if kind == "print_int":
+                # Convert i32 -> ASCII decimal and write(1, buf, len).
+                # Strategy: load value into eax, build digits backwards
+                # into a 12-byte stack buffer, then issue sys_write.
+                # For simplicity, only positive values are supported in
+                # v0.1; negative values produce a leading '-' but no
+                # two's-complement handling (i.e. INT_MIN gets garbled
+                # which is acceptable for diagnostic output).
+                val_slot = self._slot_of(op.operands[0])
+                self.asm.mov_eax_mem_rbp(val_slot)
+                # Allocate 16 bytes on stack for the digit buffer.
+                buf = self.asm.b
+                buf.emit(0x48, 0x83, 0xEC, 0x10)  # sub rsp, 16
+                # Digit pointer starts past the end (rsp+15) and walks down.
+                # Use rdi as the digit pointer, ecx as divisor=10.
+                buf.emit(0x48, 0x8D, 0x7C, 0x24, 0x10)  # lea rdi, [rsp+16]
+                # mov ecx, 10  (B9 0A 00 00 00)
+                buf.emit(0xB9, 0x0A, 0x00, 0x00, 0x00)
+                # If value is negative, neg it and remember sign.
+                # bl = sign byte (0=pos, 1=neg)
+                buf.emit(0x31, 0xDB)            # xor ebx, ebx
+                buf.emit(0x85, 0xC0)            # test eax, eax
+                buf.emit(0x79, 0x04)            # jns +4 (skip neg branch)
+                buf.emit(0xF7, 0xD8)            # neg eax
+                buf.emit(0xB3, 0x01)            # mov bl, 1
+                # Digit loop: divide eax by 10, remainder→digit char.
+                # do { dec rdi; mov[rdi], (eax%10)+'0'; eax /= 10; } while eax>0
+                # First iteration always runs (handles eax=0 case).
+                # Loop start label position:
+                loop_start = buf.offset()
+                buf.emit(0x31, 0xD2)            # xor edx, edx
+                buf.emit(0xF7, 0xF1)            # div ecx (eax /= 10, edx = digit)
+                buf.emit(0x80, 0xC2, 0x30)      # add dl, '0'
+                buf.emit(0x48, 0xFF, 0xCF)      # dec rdi
+                buf.emit(0x88, 0x17)            # mov [rdi], dl
+                buf.emit(0x85, 0xC0)            # test eax, eax
+                # jnz back to loop_start: rel8 = loop_start - (offset_after_jnz)
+                jnz_at = buf.offset()
+                rel = loop_start - (jnz_at + 2)
+                buf.emit(0x75, rel & 0xFF)      # jnz loop_start
+                # If negative, prepend '-'.
+                buf.emit(0x80, 0xFB, 0x01)      # cmp bl, 1
+                buf.emit(0x75, 0x06)            # jne +6 (skip the prepend)
+                buf.emit(0x48, 0xFF, 0xCF)      # dec rdi
+                buf.emit(0xC6, 0x07, 0x2D)      # mov byte [rdi], '-'
+                # write(fd=1, buf=rdi, len=(rsp+16)-rdi).
+                buf.emit(0x48, 0x8D, 0x74, 0x24, 0x10)  # lea rsi, [rsp+16]
+                buf.emit(0x48, 0x29, 0xFE)      # sub rsi, rdi  (rsi = end - start)
+                # Compute len in edx, ptr in rsi (rdi → start of digits).
+                buf.emit(0x48, 0x89, 0xF2)      # mov rdx, rsi  (len)
+                buf.emit(0x48, 0x89, 0xFE)      # mov rsi, rdi  (ptr)
+                self.asm.mov_edi_imm32(1)       # fd=1 (stdout)
+                self.asm.mov_eax_imm32(1)       # sys_write
+                self.asm.syscall()
+                # Restore stack, store return value in result slot.
+                buf.emit(0x48, 0x83, 0xC4, 0x10)  # add rsp, 16
+                if op.results:
+                    res_slot = self._slot_of(op.results[0])
+                    self.asm.mov_mem_rbp_eax(res_slot)
+                return
+
             # Default: print_str — write the string bytes to stdout.
             text = op.attrs.get("text", "")
             assert isinstance(text, str)

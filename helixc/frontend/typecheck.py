@@ -594,7 +594,7 @@ class TypeChecker:
         "detach", "attach", "consolidate", "recall", "learn_to",
         "grad", "grad_rev", "grad_rev_all",
         "quote", "splice", "splice_f", "modify", "modify_f",
-        "print_str", "write_file", "read_file_int",
+        "print_str", "print_int", "write_file", "read_file_int",
     })
 
     # Names of well-known stdlib functions that are surfaced as

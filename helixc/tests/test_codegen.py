@@ -1079,6 +1079,50 @@ def test_enum_variant_in_match_pattern():
     assert code == 42, f"expected 6*7=42 (Op::Mul branch), got {code}"
 
 
+def test_inline_tuple_field_access():
+    """Inline tuple-field-access without an intermediate let:
+    `(10, 32, 0).0 + (10, 32, 0).1` should compile and run."""
+    src = """
+    fn main() -> i32 {
+        (10, 32, 0).0 + (10, 32, 0).1
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 10+32=42, got {code}"
+
+
+def test_check_cli_error_has_caret_display():
+    """helixc.check shows source-with-caret on typecheck errors."""
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    src_dir = os.path.join(proj_root, "helixc", "tests", "_tmp")
+    os.makedirs(src_dir, exist_ok=True)
+    src_path = os.path.join(src_dir, "_check_caret.hx")
+    with open(src_path, "w", encoding="utf-8") as f:
+        f.write("fn main() -> i32 { undefined_thing }\n")
+    r = subprocess.run([sys.executable, "-m", "helixc.check", src_path],
+                       capture_output=True, cwd=proj_root)
+    assert r.returncode == 1
+    out = r.stdout.decode("utf-8")
+    assert "^" in out, "expected caret in source-line display"
+    assert "undefined_thing" in out
+
+
+def test_check_cli_emit_ir_flag():
+    """helixc.check --emit-ir dumps IR ops to stdout."""
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    src_dir = os.path.join(proj_root, "helixc", "tests", "_tmp")
+    os.makedirs(src_dir, exist_ok=True)
+    src_path = os.path.join(src_dir, "_check_emit_ir.hx")
+    with open(src_path, "w", encoding="utf-8") as f:
+        f.write("fn main() -> i32 { 1 + 2 }\n")
+    r = subprocess.run([sys.executable, "-m", "helixc.check", "--emit-ir",
+                        src_path], capture_output=True, cwd=proj_root)
+    assert r.returncode == 0, f"got {r.returncode}, stderr={r.stderr!r}"
+    out = r.stdout.decode("utf-8")
+    assert "ADD" in out, f"expected ADD op, got {out!r}"
+    assert "RET" in out or "RETURN" in out, "expected RETURN/RET op"
+
+
 def test_tuple_field_access_e2e():
     """`(10, 20, 12).0 + ...` — tuple field access by integer index works."""
     src = """

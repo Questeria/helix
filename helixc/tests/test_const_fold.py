@@ -204,6 +204,20 @@ def test_x_minus_zero_folds():
     assert subs == 0, f"expected x-0 to fold, SUB count = {subs}"
 
 
+def test_x_div_one_folds():
+    """x / 1 should drop the DIV op entirely via SSA forwarding."""
+    mod = lower_and_fold("fn main() -> i32 { let x = 7; x / 1 }")
+    divs = count_ops(mod, tir.OpKind.DIV)
+    assert divs == 0, f"expected x/1 to fold, DIV count = {divs}"
+
+
+def test_x_mod_one_folds_to_zero():
+    """x % 1 = 0 — the MOD should be replaced with const_int(0)."""
+    mod = lower_and_fold("fn main() -> i32 { let x = 7; x % 1 }")
+    mods = count_ops(mod, tir.OpKind.MOD)
+    assert mods == 0, f"expected x%1 to fold, MOD count = {mods}"
+
+
 def test_identity_forwarding_runs_correctly_across_blocks():
     """End-to-end check that identity forwarding preserves correctness
     when the identity op's result is used in a different block."""

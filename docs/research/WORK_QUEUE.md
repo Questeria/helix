@@ -130,3 +130,65 @@ Parser + AST already support `match`, `if`-guards, `PatLit | PatBind | PatWildca
 - Provenance-typed `D<S, T>` (Tier 3)
 
 When Tier A through Tier D above are mostly green, regenerate this file from the next research wave.
+
+---
+
+## Tier F — Wave 2 work (post-2026-05-04)
+
+Generated 2026-05-04 evening after the enum-payload + struct-flatten + tuple-field epic landed (commits `a39a9aa`..`3a83a38`). This wave focuses on (1) **closing the self-host gap** — payload pattern-extraction and struct-by-value are the two features that block writing a real `helixc-bootstrap` in HBS — (2) **paying down latent bugs** surfaced when struct/enum codegen landed, and (3) **tightening UX** so dogfood programs stop hitting "unsupported" papercuts. Expected to take this branch from 484 → ~520 green tests.
+
+### 21. Payload pattern extraction in match arms (M) [done f5fa4a7]
+Today `Maybe::Some(x) => body` parses but the parser **discards the payload binders** (parser.py:1040-1060: "Skip the payload args for now") and lowers the whole arm as a tag-only `PatLit`. So users must write `match m[0] { 1 => m[1], _ => 0 }` — defeats the abstraction. Fix in three places:
+- **Files:** `helixc/frontend/ast_nodes.py` add `class PatEnum(Pattern): enum_name: str, variant: str, binders: list[Pattern]`. `helixc/frontend/parser.py::_parse_pattern_atom` (~line 1040) — replace the "skip payload" branch with a real `_parse_pattern()` loop that collects sub-patterns. `helixc/frontend/match_lower.py::_pattern_test` add a `PatEnum` arm: emit `__scrut[0] == variant_idx` test and per-binder `let bi = __scrut[i+1]` lets injected before the body.
+- **Test:** `helixc/tests/test_match.py::test_match_extracts_enum_payload` — `enum Maybe { None, Some(i32) } fn main() -> i32 { let m = Maybe::Some(42); match m { Maybe::Some(x) => x, Maybe::None => 0 } }` should exit 42, not require manual `m[1]`.
+
+### 22. Struct pass-by-value flattens slot range into call args (M)
+`test_struct_passed_to_helper` is currently a `try/except` that accepts both 42 and 0 because `lower_ast.py::_lower_expr(A.Call)` passes the struct's first slot only (line 559: `v = self._lower_expr(a)` returns one tir.Value). Real fix: at call sites, look up `_struct_flat_paths[struct_name]` for any arg whose typecheck'd type is `TyStruct`, emit one `LOAD_ELEM` per flat slot, and append all slot values to the args list. Callee's parameter binding in `_lower_fn` must also expand the struct param into N consecutive slots.
+- **Files:** `helixc/ir/lower_ast.py` — patch `Call` arg-lowering loop (~line 557-561) and `_lower_fn` parameter setup (around line 220 `self._bind(name, ...)` for params). May need a new helper `_lower_struct_arg(name, slit_or_arr) -> list[tir.Value]`.
+- **Test:** `helixc/tests/test_codegen.py::test_struct_passed_to_helper_returns_value` — copy the existing test but assert `code == 42` strictly (drop the `try`/0-fallback).
+
+### 23. Make `(1, 2, 3).1` work without an intermediate `let` (S)
+`test_tuple_field_access_e2e` only works because the tuple is bound to `t` first. A literal-tuple-with-immediate-field `(1, 2, 3).1` falls through `_lower_expr(A.Field)` because there's no base Name — `_walk_field_chain` returns `base_name=None`. Allocate an anonymous array for inline TupleLit (mirror the `let stmt` special case) and load_elem from it.
+- **File:** `helixc/ir/lower_ast.py::_lower_expr(A.Field)` (~line 826-864) — when `expr.obj` is a TupleLit and `expr.name.isdigit()`, lower elements, allocate a temp array, store, load_elem with the indexed slot. Same for direct `(1,2,3).0` via temp-binding-on-the-fly.
+- **Test:** `helixc/tests/test_codegen.py::test_inline_tuple_field_access` — `fn main() -> i32 { (10, 32, 0).0 + (10, 32, 0).1 }` should exit 42.
+
+### 24. `print_int(i32)` builtin for diagnostic output (S)
+Today `print_str` only emits a literal — there's no way to print a runtime i32 from Helix code, which makes the dogfood programs print-statement-debug impossible. Add `print_int(n: i32)` that emits a `PRINT` op tagged `_kind="print_int"`. Backend formats decimal via repeated divide-by-10 into a 12-byte buffer + write(1, buf, len).
+- **Files:** `helixc/frontend/typecheck.py` — add `"print_int"` to `_BUILTIN_NAMES` plus a Call handler returning `i32`. `helixc/ir/lower_ast.py::_lower_expr(A.Call)` add an intercept similar to `print_str`. `helixc/backend/x86_64.py` — emit a small int→ASCII routine inline (or a single emitted helper labelled `__print_int`).
+- **Test:** `helixc/tests/test_strings_io.py::test_print_int_decimal_output` — capture stdout from `fn main() -> i32 { print_int(2026); 0 }`, assert it contains `b"2026"`.
+
+### 25. Parser progress guard for `_parse_pattern_atom` payload-skip block (S)
+The current "skip payload" branch (parser.py:1052-1060) advances `self.i` based on paren depth but does not check for unmatched `{`/`[` or recursive calls into other parsers. Audit-pass-3 fixed a similar issue elsewhere; harden this one too by replacing the manual depth-counter with a real `_parse_pattern()` recursion (becomes a no-op once #21 lands; do this first as a defensive cleanup).
+- **File:** `helixc/frontend/parser.py` lines 1049-1060.
+- **Test:** `helixc/tests/test_parser.py::test_pattern_payload_handles_nested_parens` — `Foo::Bar((1, 2), 3)` should parse to a PatEnum (after #21) or skip cleanly (before #21) without dropping or eating the `=>`.
+
+### 26. Static int-literal overflow check (S)
+Today `let x: i32 = 5_000_000_000;` silently truncates because `IntLit.value` is a Python int and lowering does `const_int(value & 0xFFFFFFFF)` (or similar). Add a typecheck-time bounds check: for any `IntLit` whose contextual type is fixed-width (`i8/i16/i32/i64/u8/...`), assert the value fits in that width's signed/unsigned range, else error with did-you-mean ("use `i64`?").
+- **File:** `helixc/frontend/typecheck.py` — add `_check_int_lit_fits(lit, ty)`. Call it from `Let` (typed), `FnDecl` parameter defaults if any, and `Cast`.
+- **Test:** `helixc/tests/test_typecheck.py::test_int_literal_overflow_errors` — `let x: i32 = 5000000000;` errors with "value 5000000000 does not fit in i32".
+
+### 27. Const-fold for division/modulo by literal one (S)
+`x / 1 = x` and `x % 1 = 0` aren't currently folded. The const-fold pass already handles `x*1`, `x+0`, etc. (Tier C #15). Mirror those rules.
+- **File:** find the const-fold table (grep `"x \\* 1"` in `helixc/ir/`); add `(DIV, x, 1) -> x` and `(MOD, x, 1) -> 0`.
+- **Test:** `helixc/tests/test_const_fold.py::test_x_div_one_folds`, `::test_x_mod_one_folds_to_zero`.
+
+### 28. `helixc check` shows source-with-caret on errors (S)
+`TypeError_.format_with_source(src, filename)` exists at typecheck.py:160 and renders the Rust-style `^` caret display, but `helixc/check.py:64` only does `print(f"     {e}")` — bare `__str__`. Wire `format_with_source` through.
+- **File:** `helixc/check.py` lines 60-68.
+- **Test:** `helixc/tests/test_codegen.py::test_check_cli_error_has_caret_display` — invoke check.py on a known-bad file, assert stdout contains `^` and the offending source line.
+
+### 29. `--emit-ir` flag on `helixc check` for IR inspection (S)
+Long-horizon: when self-hosting begins, the bootstrap compiler will need to dump IR for parity comparison against the Python pipeline. A `--emit-ir <file.hx>` flag that runs lower_ast + the canonical pass pipeline and prints `tir.OpKind.NAME args -> result` for every op gives us the parity oracle. Reuse the format from existing `tir.Op.__repr__` if any.
+- **File:** `helixc/check.py` — add `--emit-ir` flag handling. Lower with `lower_ast.lower_program(prog)`, then iterate functions, then ops.
+- **Test:** `helixc/tests/test_codegen.py::test_check_cli_emit_ir_flag` — invoke on `fn main() -> i32 { 1 + 2 }`, assert stdout contains `ADD` and `RET`.
+
+### 30. `enum_variants[name]` exhaustive check in match (M)
+Tier A #2 implemented exhaustiveness for `bool` and `unit`. Now the lowerer indexes enum variants (`_enum_variants` in lower_ast.py:51) — surface that to typecheck so `match op { Op::Add => ..., Op::Sub => ... }` errors when `Op` has 3 variants. Hook into the existing `_check_match_exhaustive`. After #21 lands, also recurse into PatEnum sub-patterns; before #21, only a flat enumeration of `EnumName::VariantName` PatLit-of-Path tags is required.
+- **File:** `helixc/frontend/typecheck.py` — extend `_check_match_exhaustive` with a TyEnum-or-by-name case; need a small `_enum_decls` map populated in pass 0 alongside `_struct_decls`. Diagnose missing variants by name.
+- **Test:** `helixc/tests/test_match.py::test_non_exhaustive_enum_errors` — `enum Op { Add, Sub, Mul } fn f(o: Op) -> i32 { match o { Op::Add => 0, Op::Sub => 1 } }` errors with "missing variant: `Op::Mul`".
+
+---
+
+### Foreground priority for Tier F
+
+Prioritize 21 → 22 → 23 (the three self-host blockers) before 24-30. After #21+#22+#23 land, real pass-by-struct compiler IR can be expressed in HBS, which unlocks the `kovc-bootstrap` direction in stage4-m2 / kovc/. Tickets 25-27 are quick latent-bug paydowns; 24/28/29 are dev-velocity wins; 30 is a polish item that should land last because it'll grow once #21 reshapes the pattern AST.

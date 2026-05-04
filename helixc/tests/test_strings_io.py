@@ -127,6 +127,45 @@ def test_read_file_int_missing_file_returns_zero():
     assert rc == 42
 
 
+def test_print_int_decimal_output():
+    """`print_int(2026)` writes the digits "2026" to stdout."""
+    src = """
+    fn main() -> i32 {
+        print_int(2026);
+        0
+    }
+    """
+    rc, out, _ = _build_and_run(src)
+    assert rc == 0
+    assert "2026" in out, f"got {out!r}"
+
+
+def test_print_int_zero():
+    """`print_int(0)` writes "0" — the loop must run once even when value=0."""
+    src = """
+    fn main() -> i32 {
+        print_int(0);
+        0
+    }
+    """
+    rc, out, _ = _build_and_run(src)
+    assert rc == 0
+    assert "0" in out, f"got {out!r}"
+
+
+def test_print_int_negative():
+    """`print_int(-42)` writes "-42"."""
+    src = """
+    fn main() -> i32 {
+        print_int(0 - 42);
+        0
+    }
+    """
+    rc, out, _ = _build_and_run(src)
+    assert rc == 0
+    assert "-42" in out, f"got {out!r}"
+
+
 def test_hello_world_example_runs():
     proj_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     p = os.path.join(proj_root, "helixc", "examples", "hello_world.hx")
