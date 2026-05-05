@@ -188,6 +188,50 @@ fn emit_idiv_eax_ecx() -> i32 {
     3
 }
 
+// AST_LT: cmp eax, ecx; mov eax, 0; setl al — leaves 0 or 1 in eax.
+//   39 C8         cmp eax, ecx
+//   B8 00 00 00 00   mov eax, 0
+//   0F 9C C0      setl al
+fn emit_lt_eax_ecx() -> i32 {
+    emit_byte(0x39); emit_byte(0xC8);
+    emit_byte(0xB8); emit_byte(0); emit_byte(0); emit_byte(0); emit_byte(0);
+    emit_byte(0x0F); emit_byte(0x9C); emit_byte(0xC0);
+    10
+}
+
+// test eax, eax — sets ZF if eax == 0.
+fn emit_test_eax_eax() -> i32 {
+    emit_byte(0x85); emit_byte(0xC0);
+    2
+}
+
+// je rel32 (placeholder) — 6 bytes (0F 84 + 4-byte disp). Returns
+// the arena slot index of the first disp byte so the caller can
+// backpatch once the target is known.
+fn emit_je_rel32_placeholder() -> i32 {
+    emit_byte(0x0F); emit_byte(0x84);
+    let disp_slot = __arena_len();
+    emit_byte(0); emit_byte(0); emit_byte(0); emit_byte(0);
+    disp_slot
+}
+
+// jmp rel32 (placeholder) — 5 bytes (E9 + 4-byte disp).
+fn emit_jmp_rel32_placeholder() -> i32 {
+    emit_byte(0xE9);
+    let disp_slot = __arena_len();
+    emit_byte(0); emit_byte(0); emit_byte(0); emit_byte(0);
+    disp_slot
+}
+
+// Patch a 4-byte disp32 placeholder. `disp_slot` is the arena index
+// where the disp bytes live; `target_slot` is the arena index of
+// the instruction we want to land at. The displacement is from the
+// END of the rel32 (= disp_slot + 4) to the target.
+fn patch_rel32(disp_slot: i32, target_slot: i32) -> i32 {
+    let disp = target_slot - (disp_slot + 4);
+    patch_u32_le(disp_slot, disp)
+}
+
 // Trailing exit-stub: take the top-of-eax value as the exit code
 // and call sys_exit. Always 7 bytes.
 //   89 C7      mov edi, eax
@@ -247,12 +291,45 @@ fn emit_ast_code(idx: i32) -> i32 {
         let ni = emit_ast_code(p1);
         let nn = emit_ast_neg_suffix();
         ni + nn
+    } else { if t == 6 {
+        // AST_LT: lhs in eax, push, rhs in eax, mov ecx, eax, pop, lt.
+        let n1 = emit_ast_code(p1);
+        let np = emit_push_rax();
+        let n2 = emit_ast_code(p2);
+        let nm = emit_mov_ecx_eax();
+        let no = emit_pop_rax();
+        let na = emit_lt_eax_ecx();
+        n1 + np + n2 + nm + no + na
+    } else { if t == 7 {
+        // AST_IF(cond, then, else):
+        //   <cond>           leaves 0 or 1 in eax
+        //   test eax, eax
+        //   je else_label
+        //   <then>
+        //   jmp merge_label
+        // else_label:
+        //   <else>
+        // merge_label:
+        let p3 = __arena_get(idx + 3);
+        let n_cond = emit_ast_code(p1);
+        let n_test = emit_test_eax_eax();
+        let je_disp = emit_je_rel32_placeholder();
+        let n_then = emit_ast_code(p2);
+        let jmp_disp = emit_jmp_rel32_placeholder();
+        let else_label = __arena_len();
+        let n_else = emit_ast_code(p3);
+        let merge_label = __arena_len();
+        // Backpatch je -> else_label, jmp -> merge_label.
+        patch_rel32(je_disp, else_label);
+        patch_rel32(jmp_disp, merge_label);
+        // Total bytes: cond + test(2) + je(6) + then + jmp(5) + else.
+        n_cond + n_test + 6 + n_then + 5 + n_else
     } else {
         // Unsupported tag — emit `mov eax, 0` as a safe default so
         // the binary at least runs. The caller can detect this by
         // checking if the produced binary exits with 0 unexpectedly.
         emit_ast_int(0)
-    }}}}}}
+    }}}}}}}}
 }
 
 // --------------------------------------------------------------

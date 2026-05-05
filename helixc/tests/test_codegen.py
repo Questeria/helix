@@ -1092,6 +1092,15 @@ fn main() -> i32 {
     assert compile_and_exec("(1 + 2) * 3") == 9, "grouping"
     assert compile_and_exec("100 - 50 - 8") == 42, "left-assoc subtraction"
     assert compile_and_exec("-5") == 251, "unary negation (-5 mod 256)"
+    # AST_LT + AST_IF (control flow added in this commit)
+    assert compile_and_exec("1 < 2") == 1, "LT true"
+    assert compile_and_exec("5 < 2") == 0, "LT false"
+    assert compile_and_exec("if 1 < 2 { 7 } else { 9 }") == 7, "IF true branch"
+    assert compile_and_exec("if 5 < 2 { 7 } else { 9 }") == 9, "IF false branch"
+    assert compile_and_exec("if 5 < 2 { 3 } else { 6 * 7 }") == 42, \
+        "IF false branch with arithmetic"
+    assert compile_and_exec("if 1 < 2 { 10 } else { 20 } + 5") == 15, \
+        "IF expression value flows into surrounding ADD"
 
 
 def test_bootstrap_kovc_demo_emits_ast_int_42():
