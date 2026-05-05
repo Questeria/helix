@@ -695,6 +695,7 @@ fn bn_global_slot() -> i32 {
 //                       jmp loop_start (rel8 -48)
 //   postlude (14 bytes): add rsp, BUF ; add rsp, 8 ; mov rax, r10
 fn emit_read_file_to_arena_body(patch_state: i32, arena_base_s: i32) -> i32 {
+    let body_start = __arena_len();
     // ---- sys_open(rdi=path, esi=0=O_RDONLY, edx=0) ----
     emit_byte(0xBE); emit_byte(0); emit_byte(0); emit_byte(0); emit_byte(0);   // mov esi, 0
     emit_byte(0xBA); emit_byte(0); emit_byte(0); emit_byte(0); emit_byte(0);   // mov edx, 0
@@ -781,9 +782,7 @@ fn emit_read_file_to_arena_body(patch_state: i32, arena_base_s: i32) -> i32 {
     emit_byte(0x48); emit_byte(0x83); emit_byte(0xC4); emit_byte(0x08);
     // mov rax, r10 (return bytes_read)
     emit_byte(0x4C); emit_byte(0x89); emit_byte(0xD0);
-    // Total bytes (excluding the lea rdi already emitted by caller):
-    //   prelude (75) + loop (48) + postlude (14) = 137
-    137
+    __arena_len() - body_start
 }
 
 // emit_write_file_to_arena_body: emit the inline asm sequence for
@@ -795,6 +794,7 @@ fn emit_read_file_to_arena_body(patch_state: i32, arena_base_s: i32) -> i32 {
 // (push rbx/r12/r13/r14 = 32 bytes; sub rsp, 16 = 16 more = 48
 // bytes pushed), the args sit at [rsp+48] and [rsp+56].
 fn emit_write_file_to_arena_body(patch_state: i32, arena_base_s: i32) -> i32 {
+    let body_start = __arena_len();
     // Save callee-saved regs we'll use as state.
     emit_byte(0x53);                              // push rbx
     emit_byte(0x41); emit_byte(0x54);             // push r12
@@ -906,7 +906,7 @@ fn emit_write_file_to_arena_body(patch_state: i32, arena_base_s: i32) -> i32 {
     emit_byte(0x5B);
     // add rsp, 16 (drop the 2 args pushed by caller)
     emit_byte(0x48); emit_byte(0x83); emit_byte(0xC4); emit_byte(0x10);
-    0   // bytes are tracked by emit_byte itself; arena_len delta is the truth
+    __arena_len() - body_start
 }
 
 // Try to recognize a builtin call. If matched, emit the inline
@@ -1021,14 +1021,8 @@ fn try_emit_builtin_call(name_s: i32, name_l: i32, args_head: i32,
             // Now load path into rdi via str_table.
             let path_disp_slot = emit_lea_rdi_rip_placeholder();
             str_table_add(bn_state, path_disp_slot, body_s, body_l);
-            emit_write_file_to_arena_body(patch_state, arena_base_s);
-            // We can't easily compute exact bytes — caller doesn't
-            // need them since emit_byte tracks via __arena_push. The
-            // return-value-as-byte-count contract for try_emit_builtin
-            // _call is "any positive value means handled"; the actual
-            // bytes were already pushed into the arena. Return a
-            // sentinel non-zero to signal handled.
-            n3 + n3p + n2 + n2p + 7 + 1
+            let body_bytes = emit_write_file_to_arena_body(patch_state, arena_base_s);
+            n3 + n3p + n2 + n2p + 7 + body_bytes
         }
     } else {
         0
