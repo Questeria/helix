@@ -2550,6 +2550,7 @@ if __name__ == "__main__":
     from ..frontend.grad_pass import grad_pass
     from ..frontend.monomorphize import monomorphize
     from ..frontend.flatten_modules import flatten_modules
+    from ..frontend.flatten_impls import flatten_impls
     from ..ir.lower_ast import lower
     from ..ir.passes.const_fold import fold_module
     from ..ir.passes.dce import dce_module
@@ -2567,6 +2568,9 @@ if __name__ == "__main__":
     mod_count = flatten_modules(prog)
     if mod_count > 0:
         print(f"mod: {mod_count} item(s) lifted from block modules", file=sys.stderr)
+    impl_count = flatten_impls(prog)
+    if impl_count > 0:
+        print(f"impl: {impl_count} method(s) lifted from impl blocks", file=sys.stderr)
     mono_count = monomorphize(prog)
     if mono_count > 0:
         print(f"mono: {mono_count} generic instantiation(s)", file=sys.stderr)

@@ -499,6 +499,22 @@ class ModBlock(Item):
     is_pub: bool = False
 
 
+@dataclass
+class ImplBlock(Item):
+    """`impl TypeName { fn method(self, ...) ... }` — inherent impl block.
+    Resolved by the flatten_impls pass: every method is lifted to a top-
+    level fn named `TypeName__method_name`, and every `x.method(args)`
+    call where `method` matches an impl-block method is rewritten to
+    `TypeName__method(x, args)`.
+    Trait impls (`impl Trait for Type`) are accepted as the same shape;
+    Phase 1.8 only does inherent dispatch (trait_name field is metadata).
+    """
+    target: str           # type name being impl'd, e.g. "Point"
+    methods: list["FnDecl"]
+    trait_name: Optional[str] = None  # for `impl Trait for Type`
+    is_pub: bool = False
+
+
 # ============================================================================
 # Program
 # ============================================================================

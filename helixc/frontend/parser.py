@@ -24,6 +24,8 @@ License: Apache 2.0
 
 from __future__ import annotations
 
+from typing import Optional
+
 from .lexer import Token, T, lex
 from . import ast_nodes as ast
 
@@ -170,7 +172,76 @@ class Parser:
             return self._parse_agent_decl(is_pub)
         if t.kind == T.KW_MOD:
             return self._parse_mod_block(is_pub)
-        raise ParseError(f"expected item (fn/struct/enum/type/use/const/agent/mod)", t)
+        if t.kind == T.KW_IMPL:
+            return self._parse_impl_block(is_pub)
+        if t.kind == T.KW_TRAIT:
+            return self._parse_trait_decl(is_pub)
+        raise ParseError(f"expected item (fn/struct/enum/type/use/const/agent/mod/impl/trait)", t)
+
+    def _parse_impl_block(self, is_pub: bool) -> ast.ImplBlock:
+        kw = self._eat(T.KW_IMPL)
+        # Allow `impl Trait for Type` and `impl Type` forms.
+        first_name = self._eat_name_token().value
+        trait_name: Optional[str] = None
+        target_name = first_name
+        if self._at(T.KW_FOR):
+            self._eat(T.KW_FOR)
+            trait_name = first_name
+            target_name = self._eat_name_token().value
+        self._eat(T.LBRACE)
+        methods: list[ast.FnDecl] = []
+        while not self._at(T.RBRACE):
+            attrs = self._parse_attributes()
+            is_pub_method = bool(self._match(T.KW_PUB))
+            if self._at(T.KW_FN):
+                methods.append(self._parse_fn_decl(is_pub_method, attrs))
+            else:
+                raise ParseError("expected fn inside impl block", self._peek())
+        self._eat(T.RBRACE)
+        return ast.ImplBlock(span=self._span_of(kw), target=target_name,
+                             methods=methods, trait_name=trait_name,
+                             is_pub=is_pub)
+
+    def _parse_trait_decl(self, is_pub: bool) -> ast.ImplBlock:
+        # Phase 1.8: traits are accepted but only as documentation.
+        # Their method signatures are not yet checked against impls.
+        # Parse `trait Name { fn sig; ... }` and discard methods (since
+        # they have no bodies). Returns a stub ImplBlock just so the
+        # item type is uniform — the lift-pass treats no-bodies as no-op.
+        kw = self._eat(T.KW_TRAIT)
+        name = self._eat_name_token().value
+        # Optional generics: trait Name[T] {}
+        self._parse_generic_params()
+        self._eat(T.LBRACE)
+        # Skip method signatures (with optional default bodies).
+        while not self._at(T.RBRACE):
+            self._parse_attributes()
+            self._match(T.KW_PUB)
+            if self._at(T.KW_FN):
+                self.i += 1
+                self._eat(T.IDENT)
+                self._parse_generic_params()
+                self._eat(T.LPAREN)
+                while not self._at(T.RPAREN):
+                    if self._at(T.COMMA):
+                        self.i += 1
+                        continue
+                    self.i += 1
+                self._eat(T.RPAREN)
+                if self._at(T.ARROW):
+                    self.i += 1
+                    self._parse_type()
+                if self._at(T.LBRACE):
+                    # default body — skip it
+                    self._parse_block()
+                else:
+                    self._match(T.SEMI)
+            else:
+                # Skip unknown tokens up to the closing brace.
+                self.i += 1
+        self._eat(T.RBRACE)
+        return ast.ImplBlock(span=self._span_of(kw), target=name,
+                             methods=[], trait_name=None, is_pub=is_pub)
 
     def _parse_mod_block(self, is_pub: bool) -> ast.ModBlock:
         kw = self._eat(T.KW_MOD)

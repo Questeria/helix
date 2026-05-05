@@ -8,6 +8,7 @@ from helixc.frontend.parser import parse
 from helixc.frontend.grad_pass import grad_pass
 from helixc.frontend.monomorphize import monomorphize
 from helixc.frontend.flatten_modules import flatten_modules
+from helixc.frontend.flatten_impls import flatten_impls
 from helixc.ir.lower_ast import lower
 from helixc.ir.passes.const_fold import fold_module
 from helixc.ir.passes.dce import dce_module
@@ -24,6 +25,7 @@ def compile_and_run(src: str, optimize: bool = True) -> int:
     """
     prog = parse(src, include_stdlib=True)
     flatten_modules(prog)
+    flatten_impls(prog)
     monomorphize(prog)
     grad_pass(prog)
     mod = lower(prog)
@@ -2902,6 +2904,85 @@ def test_generic_nested_call():
     fn id[T](x: T) -> T { x }
     fn double_id[T](x: T) -> T { id::<T>(x) }
     fn main() -> i32 { double_id::<i32>(42) }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_impl_inherent_method_basic():
+    """Phase 1.8: inherent impl block. `impl Type { fn method(self) }` lifts
+    to `Type__method`. `obj.method(args)` rewrites to `Type__method(obj, args)`."""
+    src = """
+    fn dbl(x: i32) -> i32 { x + x }
+    impl I32Util {
+        fn doubled(x: i32) -> i32 { dbl(x) }
+    }
+    fn main() -> i32 {
+        I32Util__doubled(21)
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_impl_method_call_dispatch():
+    """`obj.method(args)` rewrites via flatten_impls."""
+    src = """
+    impl Math {
+        fn quadruple(x: i32) -> i32 { x * 4 }
+    }
+    fn main() -> i32 {
+        let n = 10;
+        n.quadruple() + 2
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_impl_two_methods_one_block():
+    """Two methods in one impl block."""
+    src = """
+    impl Helper {
+        fn inc(x: i32) -> i32 { x + 1 }
+        fn dbl(x: i32) -> i32 { x * 2 }
+    }
+    fn main() -> i32 {
+        let n = 20;
+        n.dbl() + n.inc() + 1
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 62, f"expected 62 (40+21+1), got {code}"
+
+
+def test_trait_decl_no_op():
+    """`trait T { fn sigs }` is parsed but generates no code (Phase 1.8 does
+    only inherent dispatch). Verify it doesn't break compilation."""
+    src = """
+    trait Add {
+        fn add(self, other: i32) -> i32;
+    }
+    fn main() -> i32 { 42 }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_impl_trait_for_type():
+    """`impl Trait for Type { ... }` shape: methods are lifted just like
+    inherent impls. Trait dispatch is metadata-only for Phase 1.8."""
+    src = """
+    trait Doubler {
+        fn doubled(x: i32) -> i32;
+    }
+    impl Doubler for I32 {
+        fn doubled(x: i32) -> i32 { x + x }
+    }
+    fn main() -> i32 {
+        let n = 21;
+        n.doubled()
+    }
     """
     code = compile_and_run(src)
     assert code == 42, f"expected 42, got {code}"
