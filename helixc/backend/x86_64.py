@@ -50,7 +50,11 @@ HELIX_NUM_CELLS = 64
 # slots 1..HELIX_ARENA_CAP available for user data. Sized to fit a self-
 # hosted compiler's working set (AST nodes + IR ops + symbol table) for
 # small-to-medium programs without reallocation.
-HELIX_ARENA_CAP = 32768
+# 524288 slots × 4 bytes = 2 MB BSS arena. Big enough to hold
+# kovc.hx's own source (~75KB) plus tokens, AST, and ELF output
+# during a self-compile pass. The arena lives in BSS (no file
+# bytes) so the cap bump doesn't inflate produced binaries.
+HELIX_ARENA_CAP = 524288
 HELIX_CELL_SIZE = 8
 
 
@@ -1325,10 +1329,12 @@ class FnCompiler:
                 # for larger sizes. Bug: previously BUF_SIZE=128 used disp8
                 # which sign-extended to -128 — adding 128 to rsp instead
                 # of subtracting (clobbering parent stack frame).
-                # 32 KB buffer — large enough for any single source file
-                # in the bootstrap chain. Uses disp32 form everywhere so
-                # the audit-2 disp8 sign-extension trap can't recur.
-                BUF_SIZE = 0x8000
+                # 256 KB buffer — large enough to fit the entire
+                # lexer.hx + parser.hx + kovc.hx concatenation
+                # (~111 KB) in a single sys_read. Uses disp32 form
+                # everywhere so the audit-2 disp8 sign-extension
+                # trap can't recur.
+                BUF_SIZE = 0x40000
 
                 # ---- sys_open(path, O_RDONLY=0) ----
                 buf.emit(0x48, 0x8D, 0x3D)            # lea rdi, [rip+disp]
@@ -1958,8 +1964,14 @@ class FnCompiler:
 # ============================================================================
 # ELF emission
 # ============================================================================
-def emit_elf(code: bytes, entry_offset: int = ENTRY_OFFSET) -> bytes:
+def emit_elf(code: bytes, entry_offset: int = ENTRY_OFFSET,
+             extra_memsz: int = 0) -> bytes:
     """Wrap the given code bytes in a minimal x86-64 Linux ELF executable.
+
+    `extra_memsz` extends p_memsz beyond p_filesz so the kernel zero-fills
+    additional pages (BSS-style). Used to give compiled binaries an arena
+    region without paying file-size cost for the zeros. The additional
+    virtual address range starts at p_vaddr + p_filesz.
 
     Note: the segment is mapped R+W+X (flag = 7) so the reflection-cells
     region embedded at the end of `code` can be modified at runtime by
@@ -1974,7 +1986,7 @@ def emit_elf(code: bytes, entry_offset: int = ENTRY_OFFSET) -> bytes:
     code_vaddr = ELF_BASE + entry_offset
     file_size_to_code = CODE_OFFSET
     total_filesz = file_size_to_code + len(code)
-    total_memsz = total_filesz
+    total_memsz = total_filesz + extra_memsz
 
     # ELF64 header
     ehdr = b"\x7fELF"            # EI_MAG
@@ -2063,13 +2075,16 @@ def compile_module_to_elf(module: tir.Module, entry_fn: str = "main") -> bytes:
     # Arena region: a single shared bump-allocated i32 buffer. Slot 0
     # holds the cursor (current length); slots 1..HELIX_ARENA_CAP hold
     # data. Used by self-host machinery for AST/IR/symbol-table storage.
-    # Allocate HELIX_ARENA_CAP+1 slots so cursor + HELIX_ARENA_CAP data
-    # all fit (audit-8 fix: previously 1 slot short).
+    # Lives in BSS — symbol points at the position right after the code
+    # but the bytes are NOT in the file. p_memsz > p_filesz makes the
+    # kernel zero-fill the arena range. This keeps produced binaries
+    # small (~2-30K instead of 130K+) and lets us bump HELIX_ARENA_CAP
+    # to large values without disk-cost penalty.
     buf.define_symbol("__helix_arena_base")
-    buf.emit_bytes(b"\x00" * ((HELIX_ARENA_CAP + 1) * 4))
+    arena_extra = (HELIX_ARENA_CAP + 1) * 4
 
     buf.patch()
-    return emit_elf(bytes(buf.bytes_))
+    return emit_elf(bytes(buf.bytes_), extra_memsz=arena_extra)
 
 
 if __name__ == "__main__":

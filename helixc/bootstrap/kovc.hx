@@ -666,8 +666,8 @@ fn str_table_add(b: i32, disp_slot: i32, body_s: i32, body_l: i32) -> i32 {
 
 // HELIX_ARENA_CAP mirrored as kovc constant (kovc emits its own
 // arena in the produced binary so the compiled programs match the
-// Python-codegen layout: 32K data slots + 1 cursor slot).
-fn helix_arena_cap() -> i32 { 32768 }
+// Python-codegen layout: 524288 data slots + 1 cursor slot).
+fn helix_arena_cap() -> i32 { 524288 }
 
 // Single global slot pointing at bn_state. Set during
 // emit_elf_for_ast_to_path; read by try_emit_builtin_call which
@@ -1632,10 +1632,11 @@ fn emit_elf_for_ast_to_path(ast_root: i32) -> i32 {
     let code_end = __arena_len();
     let total_filesz = 4096 + (code_end - code_start);
     // p_memsz extends past p_filesz to give the produced binary's
-    // arena 132076 bytes of BSS-allocated zero memory (4 bytes cursor
-    // + 32768 * 4 bytes data). Without this gap, an arena_push past
-    // file bounds would SIGSEGV.
-    let total_memsz = total_filesz + 4 + 131072;
+    // arena ~2 MB of BSS-allocated zero memory (4 bytes cursor +
+    // 524288 * 4 bytes data). Without this gap, an arena_push past
+    // file bounds would SIGSEGV. Sized to match HELIX_ARENA_CAP in
+    // helixc/backend/x86_64.py (the host compiler's bound).
+    let total_memsz = total_filesz + 4 + 2097152;
     patch_u64_le_split(elf_start + 64 + 32, total_filesz, 0);
     patch_u64_le_split(elf_start + 64 + 40, total_memsz, 0);
     total_filesz
