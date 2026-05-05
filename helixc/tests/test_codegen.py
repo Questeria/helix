@@ -703,6 +703,33 @@ def test_f64_compare_ge():
     assert compile_and_run(src) == 1
 
 
+def test_f64_negation():
+    """Phase 1.3: -x for f64 must flip the sign bit, not do two's complement
+    on the bit pattern. -3.5 + 5.0 = 1.5 -> 1."""
+    src = """
+    fn main() -> i32 {
+        let a: f64 = 3.5_f64;
+        let b: f64 = -a + 5.0_f64;
+        b as i32
+    }
+    """
+    assert compile_and_run(src) == 1
+
+
+def test_f32_negation_sign_bit():
+    """Phase 1.3 (regression-class): f32 negation must flip the sign bit,
+    too. The OLD code used integer two's-complement which was incorrect
+    for any non-zero value. Verify -2.0 + 2.0 = 0."""
+    src = """
+    fn main() -> i32 {
+        let a: f32 = 2.0;
+        let b: f32 = -a + 2.0;
+        b as i32
+    }
+    """
+    assert compile_and_run(src) == 0
+
+
 def test_f64_nan_neq_nan():
     """Phase 1.2: NaN != NaN must hold (IEEE 754). Use 0.0/0.0 to make NaN."""
     src = """

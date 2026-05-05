@@ -1003,6 +1003,36 @@ class FnCompiler:
         if op.kind == tir.OpKind.NEG:
             slot = self._slot_of(op.operands[0])
             res_slot = self._slot_of(op.results[0])
+            ty = op.operands[0].ty
+            if self._is_f64_type(ty):
+                # f64 negation: copy 8 bytes, then flip sign bit (bit 63
+                # = high bit of byte 7). Avoid integer neg semantics.
+                self.asm.mov_eax_mem_rbp(slot)
+                self.asm.mov_mem_rbp_eax(res_slot)
+                self.asm.mov_eax_mem_rbp(slot + 4)
+                self.asm.mov_mem_rbp_eax(res_slot + 4)
+                # xor BYTE PTR [rbp + res_slot + 7], 0x80
+                disp = res_slot + 7
+                if -128 <= disp <= 127:
+                    self.asm.b.emit(0x80, 0x75, disp & 0xFF, 0x80)
+                else:
+                    self.asm.b.emit(0x80, 0xB5)
+                    self.asm.b.emit_bytes(struct.pack("<i", disp))
+                    self.asm.b.emit(0x80)
+                return
+            if self._is_float_type(ty):
+                # f32 negation: copy 4 bytes, flip sign bit at byte +3.
+                self.asm.mov_eax_mem_rbp(slot)
+                self.asm.mov_mem_rbp_eax(res_slot)
+                disp = res_slot + 3
+                if -128 <= disp <= 127:
+                    self.asm.b.emit(0x80, 0x75, disp & 0xFF, 0x80)
+                else:
+                    self.asm.b.emit(0x80, 0xB5)
+                    self.asm.b.emit_bytes(struct.pack("<i", disp))
+                    self.asm.b.emit(0x80)
+                return
+            # Integer NEG: two's-complement, neg eax.
             self.asm.mov_eax_mem_rbp(slot)
             self.asm.neg_eax()
             self.asm.mov_mem_rbp_eax(res_slot)
