@@ -2909,6 +2909,81 @@ def test_generic_nested_call():
     assert code == 42, f"expected 42, got {code}"
 
 
+def test_tensor_1d_dot():
+    """Phase 2.2: 1D integer-tensor dot product. [1,2,3] . [10,20,30] = 140."""
+    src = """
+    fn main() -> i32 {
+        let x = ti2d_new(1, 3);
+        ti1d_set(x, 0, 1); ti1d_set(x, 1, 2); ti1d_set(x, 2, 3);
+        let y = ti2d_new(1, 3);
+        ti1d_set(y, 0, 10); ti1d_set(y, 1, 20); ti1d_set(y, 2, 30);
+        ti1d_dot(x, y, 3)
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 140, f"expected 140, got {code}"
+
+
+def test_tensor_1d_axpy():
+    """y = a*x + y. [1,2,3] + 2*[1,1,1] = [3,4,5]; sum = 12."""
+    src = """
+    fn main() -> i32 {
+        let x = t1d_new(3);
+        ti1d_set(x, 0, 1); ti1d_set(x, 1, 1); ti1d_set(x, 2, 1);
+        let y = t1d_new(3);
+        ti1d_set(y, 0, 1); ti1d_set(y, 1, 2); ti1d_set(y, 2, 3);
+        ti1d_axpy(y, 2, x, 3);
+        ti1d_sum(y, 3)
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 12, f"expected 12 (3+4+5), got {code}"
+
+
+def test_tensor_2d_matvec():
+    """W = [[1,2],[3,4]] @ x = [10, 20]. y = [50, 110]; sum = 160."""
+    src = """
+    fn main() -> i32 {
+        let w = ti2d_new(2, 2);
+        ti2d_set(w, 2, 0, 0, 1);
+        ti2d_set(w, 2, 0, 1, 2);
+        ti2d_set(w, 2, 1, 0, 3);
+        ti2d_set(w, 2, 1, 1, 4);
+        let x = t1d_new(2);
+        ti1d_set(x, 0, 10);
+        ti1d_set(x, 1, 20);
+        let y = t1d_new(2);
+        ti2d_matvec(w, 2, 2, x, y);
+        ti1d_sum(y, 2)
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 160, f"expected 160 (50+110), got {code}"
+
+
+def test_tensor_relu_then_add():
+    """relu([-3, 0, 4]) = [0, 0, 4]; + [1, 2, 3] = [1, 2, 7]; sum = 10."""
+    src = """
+    fn main() -> i32 {
+        let x = t1d_new(3);
+        ti1d_set(x, 0, 0 - 3);
+        ti1d_set(x, 1, 0);
+        ti1d_set(x, 2, 4);
+        let r = t1d_new(3);
+        ti1d_relu(x, r, 3);
+        let b = t1d_new(3);
+        ti1d_set(b, 0, 1);
+        ti1d_set(b, 1, 2);
+        ti1d_set(b, 2, 3);
+        let z = t1d_new(3);
+        ti1d_add(r, b, z, 3);
+        ti1d_sum(z, 3)
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 10, f"expected 10 (1+2+7), got {code}"
+
+
 def test_autodiff_polynomial_derivative():
     """Phase 2.1: forward-mode AD via dual numbers in Helix.
     f(x) = x*x + 2x + 1; df/dx = 2x+2; at x=3 -> 8."""
