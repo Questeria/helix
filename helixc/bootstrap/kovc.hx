@@ -232,6 +232,143 @@ fn patch_rel32(disp_slot: i32, target_slot: i32) -> i32 {
     patch_u32_le(disp_slot, disp)
 }
 
+// --------------------------------------------------------------
+// Function prologue and epilogue. The emitted binary's entry stub
+// reserves 64 slots (= 512 bytes) of stack space for let-bindings.
+// Slot offsets [rbp-8, rbp-16, ..., rbp-512] are addressable via
+// disp8 ModRM (since 8..512 fits in signed-disp8 only for offsets
+// up to 128; we use disp32 for safety on every access).
+//
+//   55                push rbp
+//   48 89 E5          mov rbp, rsp
+//   48 81 EC 00 02 00 00   sub rsp, 512
+fn emit_prologue() -> i32 {
+    emit_byte(0x55);
+    emit_byte(0x48); emit_byte(0x89); emit_byte(0xE5);
+    emit_byte(0x48); emit_byte(0x81); emit_byte(0xEC);
+    emit_u32_le(512);
+    11
+}
+
+//   48 89 EC          mov rsp, rbp
+//   5D                pop rbp
+fn emit_epilogue() -> i32 {
+    emit_byte(0x48); emit_byte(0x89); emit_byte(0xEC);
+    emit_byte(0x5D);
+    4
+}
+
+// Store eax into [rbp - offset] using disp32 form for any offset.
+//   89 85 disp32      mov [rbp + disp32], eax
+fn emit_mov_local_eax(offset: i32) -> i32 {
+    emit_byte(0x89); emit_byte(0x85);
+    emit_u32_le(0 - offset);
+    6
+}
+
+// Load [rbp - offset] into eax.
+//   8B 85 disp32      mov eax, [rbp + disp32]
+fn emit_mov_eax_local(offset: i32) -> i32 {
+    emit_byte(0x8B); emit_byte(0x85);
+    emit_u32_le(0 - offset);
+    6
+}
+
+// --------------------------------------------------------------
+// Compile-time binding table: a stack of (name_start, name_len,
+// stack_offset) triples in the arena. We pass `bind_base` (start
+// of the table) and `bind_top` (just past the last entry) through
+// recursive emit calls. Entries are 3 slots wide.
+//
+// Lookup walks backwards (top -> base, 3 at a time) to find the
+// most-recent binding of a name, providing lexical shadowing.
+// Returns the matching binding's offset, or 0 if unbound.
+// --------------------------------------------------------------
+@pure
+fn kovc_byte_eq(src_a: i32, len_a: i32, src_b: i32, len_b: i32) -> i32 {
+    if len_a != len_b { 0 }
+    else {
+        let mut i: i32 = 0;
+        let mut ok: i32 = 1;
+        while i < len_a {
+            if ok == 1 {
+                let ba = __arena_get(src_a + i);
+                let bb = __arena_get(src_b + i);
+                if ba != bb { ok = 0; };
+            };
+            i = i + 1;
+        }
+        ok
+    }
+}
+
+// bind_state layout (3 i32 slots + a fixed-capacity table inline):
+//   slot 0: next free stack offset (init 8, grows by 8 per let)
+//   slot 1: number of entries currently in table (init 0)
+//   slot 2: arena slot index of entry 0 (= bind_state + 3)
+//   slot 3..3 + cap*3: pre-allocated entries [name_start, name_len, offset]
+//
+// Capacity is fixed at compile-time (NUM_BINDINGS_CAP = 64). Table
+// uses __arena_set to write entries — never __arena_push, so the
+// code region can grow contiguously after bind_state.
+fn bind_init() -> i32 {
+    let state = __arena_push(8);            // next_offset = 8
+    __arena_push(0);                        // top = 0
+    __arena_push(state + 3);                // table_base = state + 3
+    let mut i: i32 = 0;
+    while i < 192 {                         // 64 entries * 3 slots
+        __arena_push(0);
+        i = i + 1;
+    }
+    state
+}
+
+fn bind_push(state: i32, name_start: i32, name_len: i32, offset: i32) -> i32 {
+    let top = __arena_get(state + 1);
+    let table_base = __arena_get(state + 2);
+    let entry = table_base + top * 3;
+    __arena_set(entry, name_start);
+    __arena_set(entry + 1, name_len);
+    __arena_set(entry + 2, offset);
+    __arena_set(state + 1, top + 1);
+    0
+}
+
+fn bind_pop(state: i32) -> i32 {
+    let top = __arena_get(state + 1);
+    __arena_set(state + 1, top - 1);
+    0
+}
+
+fn bind_alloc_offset(state: i32) -> i32 {
+    let off = __arena_get(state);
+    __arena_set(state, off + 8);
+    off
+}
+
+fn bind_lookup(state: i32, name_start: i32, name_len: i32) -> i32 {
+    let top = __arena_get(state + 1);
+    let table_base = __arena_get(state + 2);
+    let mut i: i32 = top - 1;
+    let mut found: i32 = 0;
+    let mut offset: i32 = 0;
+    while i >= 0 {
+        if found == 0 {
+            let entry = table_base + i * 3;
+            let ns = __arena_get(entry);
+            let nl = __arena_get(entry + 1);
+            if kovc_byte_eq(ns, nl, name_start, name_len) == 1 {
+                offset = __arena_get(entry + 2);
+                found = 1;
+            };
+            i = i - 1;
+        } else {
+            i = 0 - 1;
+        };
+    }
+    offset
+}
+
 // Trailing exit-stub: take the top-of-eax value as the exit code
 // and call sys_exit. Always 7 bytes.
 //   89 C7      mov edi, eax
@@ -248,88 +385,99 @@ fn emit_exit_with_eax() -> i32 {
 // AST walker: dispatch on tag and emit the matching code. Returns
 // the number of bytes emitted. AST node layout matches stage-2
 // parser.hx: [tag, p1, p2, p3].
+//
+// Compile-time state:
+//   bind_state holds (next_offset_slot, bind_table_top_slot) — both
+//   arena slot indices that the recursive emit calls read/update.
+//   Slot[bind_state]   = next free stack offset (starts at 8)
+//   Slot[bind_state+1] = bind table top (= __arena_len() when empty)
 // --------------------------------------------------------------
-fn emit_ast_code(idx: i32) -> i32 {
+fn emit_ast_code(idx: i32, bind_state: i32) -> i32 {
     let t = __arena_get(idx);
     let p1 = __arena_get(idx + 1);
     let p2 = __arena_get(idx + 2);
     if t == 0 {
         emit_ast_int(p1)
     } else { if t == 2 {
-        let n1 = emit_ast_code(p1);
+        let n1 = emit_ast_code(p1, bind_state);
         let np = emit_push_rax();
-        let n2 = emit_ast_code(p2);
+        let n2 = emit_ast_code(p2, bind_state);
         let nm = emit_mov_ecx_eax();
         let no = emit_pop_rax();
         let na = emit_add_eax_ecx();
         n1 + np + n2 + nm + no + na
     } else { if t == 3 {
-        let n1 = emit_ast_code(p1);
+        let n1 = emit_ast_code(p1, bind_state);
         let np = emit_push_rax();
-        let n2 = emit_ast_code(p2);
+        let n2 = emit_ast_code(p2, bind_state);
         let nm = emit_mov_ecx_eax();
         let no = emit_pop_rax();
         let na = emit_sub_eax_ecx();
         n1 + np + n2 + nm + no + na
     } else { if t == 4 {
-        let n1 = emit_ast_code(p1);
+        let n1 = emit_ast_code(p1, bind_state);
         let np = emit_push_rax();
-        let n2 = emit_ast_code(p2);
+        let n2 = emit_ast_code(p2, bind_state);
         let nm = emit_mov_ecx_eax();
         let no = emit_pop_rax();
         let na = emit_imul_eax_ecx();
         n1 + np + n2 + nm + no + na
     } else { if t == 5 {
-        let n1 = emit_ast_code(p1);
+        let n1 = emit_ast_code(p1, bind_state);
         let np = emit_push_rax();
-        let n2 = emit_ast_code(p2);
+        let n2 = emit_ast_code(p2, bind_state);
         let nm = emit_mov_ecx_eax();
         let no = emit_pop_rax();
         let na = emit_idiv_eax_ecx();
         n1 + np + n2 + nm + no + na
     } else { if t == 9 {
-        let ni = emit_ast_code(p1);
+        let ni = emit_ast_code(p1, bind_state);
         let nn = emit_ast_neg_suffix();
         ni + nn
     } else { if t == 6 {
-        // AST_LT: lhs in eax, push, rhs in eax, mov ecx, eax, pop, lt.
-        let n1 = emit_ast_code(p1);
+        let n1 = emit_ast_code(p1, bind_state);
         let np = emit_push_rax();
-        let n2 = emit_ast_code(p2);
+        let n2 = emit_ast_code(p2, bind_state);
         let nm = emit_mov_ecx_eax();
         let no = emit_pop_rax();
         let na = emit_lt_eax_ecx();
         n1 + np + n2 + nm + no + na
     } else { if t == 7 {
-        // AST_IF(cond, then, else):
-        //   <cond>           leaves 0 or 1 in eax
-        //   test eax, eax
-        //   je else_label
-        //   <then>
-        //   jmp merge_label
-        // else_label:
-        //   <else>
-        // merge_label:
+        // AST_IF(cond, then, else)
         let p3 = __arena_get(idx + 3);
-        let n_cond = emit_ast_code(p1);
+        let n_cond = emit_ast_code(p1, bind_state);
         let n_test = emit_test_eax_eax();
         let je_disp = emit_je_rel32_placeholder();
-        let n_then = emit_ast_code(p2);
+        let n_then = emit_ast_code(p2, bind_state);
         let jmp_disp = emit_jmp_rel32_placeholder();
         let else_label = __arena_len();
-        let n_else = emit_ast_code(p3);
+        let n_else = emit_ast_code(p3, bind_state);
         let merge_label = __arena_len();
-        // Backpatch je -> else_label, jmp -> merge_label.
         patch_rel32(je_disp, else_label);
         patch_rel32(jmp_disp, merge_label);
-        // Total bytes: cond + test(2) + je(6) + then + jmp(5) + else.
         n_cond + n_test + 6 + n_then + 5 + n_else
+    } else { if t == 1 {
+        // AST_VAR: p1 = name start, p2 = name len.
+        let off = bind_lookup(bind_state, p1, p2);
+        emit_mov_eax_local(off)
+    } else { if t == 8 {
+        // AST_LET: p1 = name start, p2 = name len, p3 = packed
+        // (value_idx * 65536 + body_idx).
+        let p3 = __arena_get(idx + 3);
+        let value_idx = p3 / 65536;
+        let body_idx = p3 - value_idx * 65536;
+        let n_val = emit_ast_code(value_idx, bind_state);
+        let off = bind_alloc_offset(bind_state);
+        let n_store = emit_mov_local_eax(off);
+        bind_push(bind_state, p1, p2, off);
+        let n_body = emit_ast_code(body_idx, bind_state);
+        bind_pop(bind_state);
+        // Slot is leaked (we don't reset next_offset) — fine since
+        // the function frame is pre-sized at 512 bytes (64 slots).
+        n_val + n_store + n_body
     } else {
-        // Unsupported tag — emit `mov eax, 0` as a safe default so
-        // the binary at least runs. The caller can detect this by
-        // checking if the produced binary exits with 0 unexpectedly.
         emit_ast_int(0)
-    }}}}}}}}
+    }}}}}}}}}}
 }
 
 // --------------------------------------------------------------
@@ -341,22 +489,25 @@ fn emit_ast_code(idx: i32) -> i32 {
 // Returns the byte count written to disk.
 // --------------------------------------------------------------
 fn emit_elf_for_ast_to_path(ast_root: i32) -> i32 {
+    // Pre-allocate bind_state BEFORE the ELF region so it doesn't
+    // pollute the contiguous code byte stream. bind_init pushes
+    // 3 + 64*3 = 195 slots and writes them via __arena_set during
+    // codegen — never __arena_push, which would interleave with
+    // the code bytes.
+    let bind_state = bind_init();
     let elf_start = __arena_len();
-    // Phase 1: ELF header + program header with placeholder size.
     emit_elf_header(0);
     emit_program_header(0);
     emit_padding_to_code();
-    // Phase 2: AST-driven code, then the exit stub.
     let code_start = __arena_len();
-    emit_ast_code(ast_root);
+    emit_prologue();
+    emit_ast_code(ast_root, bind_state);
+    emit_epilogue();
     emit_exit_with_eax();
     let code_end = __arena_len();
-    let code_size = code_end - code_start;
-    let total_filesz = 4096 + code_size;
-    // Phase 3: patch p_filesz (offset 0x60 = 96) and p_memsz
-    // (offset 0x68 = 104) with actual size.
-    patch_u64_le_split(elf_start + 64 + 32, total_filesz, 0);   // p_filesz
-    patch_u64_le_split(elf_start + 64 + 40, total_filesz, 0);   // p_memsz
+    let total_filesz = 4096 + (code_end - code_start);
+    patch_u64_le_split(elf_start + 64 + 32, total_filesz, 0);
+    patch_u64_le_split(elf_start + 64 + 40, total_filesz, 0);
     total_filesz
 }
 
@@ -366,11 +517,13 @@ fn emit_elf_for_ast_to_path(ast_root: i32) -> i32 {
 // produced binary externally; its exit code should be 42.
 // --------------------------------------------------------------
 fn main() -> i32 {
-    // Build AST_INT(42) directly in arena.
-    let ast_root = __arena_push(0);   // tag = 0 (AST_INT)
-    __arena_push(42);                 // p1 = literal value
+    let ast_root = __arena_push(0);
+    __arena_push(42);
     __arena_push(0); __arena_push(0);
+    // emit_elf_for_ast_to_path allocates bind_state internally
+    // (195 slots) BEFORE the ELF, so the ELF byte range begins at
+    // ast_root + 4 + 195 = ast_root + 199.
     let total = emit_elf_for_ast_to_path(ast_root);
-    let elf_offset = ast_root + 4;
+    let elf_offset = ast_root + 4 + 195;
     write_file_to_arena("/tmp/kovc_ast_int.bin", elf_offset, total)
 }

@@ -1066,6 +1066,9 @@ def test_bootstrap_kovc_full_pipeline_arithmetic():
              f"printf %s {repr(source_text)} > /tmp/helix_src_pipe.hx"],
             check=True, timeout=10,
         )
+        # emit_elf_for_ast_to_path internally allocates 195 slots
+        # for bind_state BEFORE the ELF region, so the byte stream
+        # starts at elf_start_pre + 195.
         driver = lexer_no_main + parser_body + kovc_lib + """
 fn main() -> i32 {
     let src_start = __arena_len();
@@ -1073,8 +1076,9 @@ fn main() -> i32 {
     let tok_base = __arena_len();
     lex(src_start, src_len);
     let ast_root = parse_top(tok_base);
-    let elf_start = __arena_len();
+    let elf_start_pre = __arena_len();
     let total = emit_elf_for_ast_to_path(ast_root);
+    let elf_start = elf_start_pre + 195;
     write_file_to_arena("/tmp/kovc_pipeline.bin", elf_start, total)
 }
 """
@@ -1101,6 +1105,15 @@ fn main() -> i32 {
         "IF false branch with arithmetic"
     assert compile_and_exec("if 1 < 2 { 10 } else { 20 } + 5") == 15, \
         "IF expression value flows into surrounding ADD"
+    # AST_LET + AST_VAR (added in this commit)
+    assert compile_and_exec("let x = 5 ; x") == 5, "let-bind + var ref"
+    assert compile_and_exec("let x = 5 ; x * x") == 25, "var ref twice"
+    assert compile_and_exec("let x = 5 ; let y = 7 ; x + y") == 12, "two lets"
+    # The metacircular_eval demo's exact expression now compiled to
+    # native machine code by Helix-side kovc:
+    assert compile_and_exec(
+        "let x = 5 ; if x < 10 { x * (x + 3) } else { x - 99 }"
+    ) == 40, "demo expression: 5 * (5+3) via let + if + var"
 
 
 def test_bootstrap_kovc_demo_emits_ast_int_42():
@@ -1111,12 +1124,13 @@ def test_bootstrap_kovc_demo_emits_ast_int_42():
     proj = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     src = open(os.path.join(proj, "helixc", "bootstrap", "kovc.hx")).read()
     compile_and_run(src)
-    # ELF wrapper (4096) + AST_INT(5) + exit_with_eax(9) = 4110 bytes.
+    # ELF wrapper (4096) + prologue(11) + AST_INT(5) + epilogue(4)
+    # + exit_with_eax(9) = 4125 bytes.
     size_proc = subprocess.run(
         ["wsl", "-e", "bash", "-c", "wc -c < /tmp/kovc_ast_int.bin"],
         capture_output=True, timeout=10,
     )
-    assert size_proc.stdout.strip() == b"4110", size_proc.stdout
+    assert size_proc.stdout.strip() == b"4125", size_proc.stdout
     type_proc = subprocess.run(
         ["wsl", "-e", "bash", "-c", "file /tmp/kovc_ast_int.bin"],
         capture_output=True, timeout=10,
@@ -1127,6 +1141,9 @@ def test_bootstrap_kovc_demo_emits_ast_int_42():
          "chmod +x /tmp/kovc_ast_int.bin && /tmp/kovc_ast_int.bin"],
         capture_output=True, timeout=10,
     )
+    # Demo binary now also includes prologue + epilogue (15 bytes added),
+    # so the file is 4096 + 11 (prologue) + 5 (mov eax, 42) + 4 (epilogue)
+    # + 9 (exit stub) = 4125 bytes.
     assert run_proc.returncode == 42, f"expected exit 42, got {run_proc.returncode}"
 
 
