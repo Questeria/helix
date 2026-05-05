@@ -133,11 +133,12 @@ def _propagate(node: A.Expr, adj: A.Expr, acc: dict[str, list[A.Expr]]) -> None:
                 and len(node.args) == 2 and isinstance(node.args[1], A.IntLit)):
             x = node.args[0]
             n_val = node.args[1].value
-            if n_val <= 0:
-                return  # x^0 = 1 → derivative 0
-            # Match the n<=16 cap from stdlib's __powi (transcendentals.hx).
-            if n_val > 16:
-                n_val = 16
+            if n_val <= 0 or n_val > 16:
+                # Both edges return 1.0 from stdlib (constant), so the
+                # derivative is 0. Previously we capped n_val to 16,
+                # producing a wrong gradient for n > 16 — the function
+                # returns the constant 1, but AD reported `n * x^15`.
+                return
             n_lit = A.FloatLit(span=node.span, value=float(n_val))
             n_minus_one = A.IntLit(span=node.span, value=n_val - 1)
             x_pow = A.Call(span=node.span,

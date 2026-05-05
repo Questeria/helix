@@ -831,6 +831,79 @@ def test_print_int_preserves_rbx():
         "expected push rbx (0x53) and pop rbx (0x5B) in print_int sequence"
 
 
+def test_sqrt_zero_returns_zero():
+    """Cycle-5 audit: __sqrt(0) used to return ~0.031 from Newton iteration
+    that never reached 0. Now explicitly returns 0 for x <= 0."""
+    src = """
+    fn main() -> i32 {
+        (__sqrt(0.0) * 1000.0) as i32
+    }
+    """
+    assert compile_and_run(src) == 0
+
+
+def test_sqrt_negative_returns_zero():
+    """__sqrt of a negative number divides by zero in iteration 1
+    (y0 = -0.5 -> -inf), producing NaN that propagates. Now explicitly
+    returns 0 for x <= 0."""
+    src = """
+    fn main() -> i32 {
+        (__sqrt(0.0 - 4.0) * 1000.0) as i32
+    }
+    """
+    assert compile_and_run(src) == 0
+
+
+def test_sqrt_positive_unchanged():
+    """Sanity: positive sqrt still works post-fix."""
+    src = """
+    fn main() -> i32 {
+        (__sqrt(4.0) * 100.0) as i32
+    }
+    """
+    assert compile_and_run(src) == 200
+
+
+def test_powi_n_above_16_returns_one():
+    """Cycle-5: __powi previously saturated to x^16 for n > 16, silently
+    producing wrong results. Now matches the docstring: out-of-range
+    returns 1.0."""
+    src = """
+    fn main() -> i32 {
+        let v = __powi(2.0, 17) as i32;
+        v
+    }
+    """
+    assert compile_and_run(src) == 1
+
+
+def test_powi_n_within_range_unchanged():
+    """Sanity: __powi(2, 10) = 1024 still works post-fix.
+    Exit code is low byte; 1024 mod 256 = 0; 1024/256 = 4."""
+    src = """
+    fn main() -> i32 {
+        (__powi(2.0, 10) as i32) / 256
+    }
+    """
+    assert compile_and_run(src) == 4
+
+
+def test_hash_i32_breaks_linearity():
+    """Cycle-5: __hash_i32 was a linear function `x*c1 + c2`, so
+    adjacent integers produced hashes differing by a constant —
+    maximally collision-prone for sequential symbol IDs. Now uses a
+    quadratic mixer; adjacent-input hash differences vary."""
+    src = """
+    fn main() -> i32 {
+        let h0 = __hash_i32(0);
+        let h1 = __hash_i32(1);
+        let h2 = __hash_i32(2);
+        if (h1 - h0) == (h2 - h1) { 1 } else { 0 }
+    }
+    """
+    assert compile_and_run(src) == 0  # 0 = nonlinear (good)
+
+
 def test_int_to_float_round_trip():
     # int -> float -> int (no change for representable values)
     src = """

@@ -92,14 +92,21 @@
 }
 
 @pure fn __sqrt(x: f32) -> f32 {
-    // Newton's method: y_{n+1} = (y_n + x/y_n) / 2.
-    // 4 iterations from a rough initial guess.
-    let y0 = x * 0.5 + 0.5;
-    let y1 = (y0 + x / y0) * 0.5;
-    let y2 = (y1 + x / y1) * 0.5;
-    let y3 = (y2 + x / y2) * 0.5;
-    let y4 = (y3 + x / y3) * 0.5;
-    y4
+    // Defined as 0 for x <= 0 to avoid divide-by-zero in Newton's method
+    // (y0 = x*0.5 + 0.5; for x = -1, y0 = 0 -> x/y0 = inf, propagates NaN
+    // through the iteration). For x = 0, y0 = 0.5, but x/y0 = 0 keeps the
+    // sequence at 0.25, 0.125, ... never reaching 0. We define sqrt(0) = 0
+    // explicitly for both edges.
+    if x <= 0.0 {
+        0.0
+    } else {
+        let y0 = x * 0.5 + 0.5;
+        let y1 = (y0 + x / y0) * 0.5;
+        let y2 = (y1 + x / y1) * 0.5;
+        let y3 = (y2 + x / y2) * 0.5;
+        let y4 = (y3 + x / y3) * 0.5;
+        y4
+    }
 }
 
 // Sigmoid: bounded activation in (0, 1). Now backed by range-reduced exp.
@@ -175,21 +182,22 @@ fn __always_accept(h: i32, v: f32) -> i32 {
     }
 }
 
-// Integer power: x^n via iterative multiplication. Uses a loop bounded
-// at 16 iterations as a safety cap (n > 16 saturates to x^16). Out of
-// range or n <= 0 returns 1.0.
+// Integer power: x^n via iterative multiplication. Loop bounded at 16
+// iterations as a safety cap. Returns 1.0 for n <= 0 OR n > 16 (out of
+// range). Previously saturated silently to x^16 for n > 16, which
+// disagreed with the docstring and silently produced wrong results.
 @pure fn __powi(x: f32, n: i32) -> f32 {
     if n <= 0 { 1.0 }
+    else { if n > 16 { 1.0 }
     else {
         let mut result: f32 = 1.0;
         let mut i: i32 = 0;
-        let cap = if n < 16 { n } else { 16 };
-        while i < cap {
+        while i < n {
             result = result * x;
             i = i + 1;
         }
         result
-    }
+    }}
 }
 
 // =========================================================================

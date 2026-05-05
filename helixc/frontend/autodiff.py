@@ -432,15 +432,13 @@ def _diff_call_chain_rule(call: A.Call, var: str,
         if isinstance(n_arg, A.IntLit):
             n_val = n_arg.value
             dx = _diff(x, var)
-            if n_val <= 0:
-                # x^0 = 1 → derivative 0; x^negative not supported in __powi
+            if n_val <= 0 or n_val > 16:
+                # __powi(x, n) returns constant 1.0 for n <= 0 or n > 16
+                # (stdlib transcendentals.hx) — derivative is 0. Previously
+                # we capped n_val to 16 here, producing a wrong gradient
+                # `16 * x^15` for n > 16 even though the function itself
+                # is constant at those inputs.
                 return A.FloatLit(span=span, value=0.0)
-            # __powi caps at 16 in stdlib (transcendentals.hx). Match the cap
-            # in the chain rule so the gradient stays consistent with the
-            # value the runtime actually produces. Derivative for n>16 is
-            # therefore 16 * x^15 (the saturated tail).
-            if n_val > 16:
-                n_val = 16
             # n * __powi(x, n-1) * dx
             n_lit = A.FloatLit(span=span, value=float(n_val))
             n_minus_one = A.IntLit(span=span, value=n_val - 1)

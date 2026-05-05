@@ -896,18 +896,25 @@ class Lowerer:
                 if bn == "__hash_i32" and len(expr.args) == 1:
                     x = self._lower_expr(expr.args[0]) \
                         or self.builder.const_int(0)
-                    # h = x ^ (x >> 16); h = h * 0x85EBCA6B (mod 2^32)
-                    # h = h ^ (h >> 13); h = h * 0xC2B2AE35; h ^= h>>16
-                    # We use the simpler murmur3-finalizer style.
-                    c1 = self.builder.const_int(0x85EBCA6B & 0x7FFFFFFF)
-                    c2 = self.builder.const_int(0x27D4EB2F & 0x7FFFFFFF)
-                    h1 = self.builder.emit(
-                        tir.OpKind.MUL, x, c1,
-                        result_ty=tir.TIRScalar("i32"))
-                    h2 = self.builder.emit(
-                        tir.OpKind.ADD, h1, c2,
-                        result_ty=tir.TIRScalar("i32"))
-                    return h2
+                    # Quadratic mixer: h = x*x*c1 + x*c2 + c3 (mod 2^32 via
+                    # signed wraparound). Without bitwise XOR/SHR in TIR,
+                    # we can't do a real murmur3 finalizer; the previous
+                    # `h = x*c1 + c2` was linear, so adjacent integers
+                    # produced hashes differing by a fixed constant —
+                    # maximally collision-prone for sequential symbol
+                    # IDs (the primary use case). The quadratic form
+                    # makes the difference between h(x+1) and h(x)
+                    # depend on x, breaking linearity.
+                    c1 = self.builder.const_int(0x05EBCA6B)
+                    c2 = self.builder.const_int(0x27D4EB2F)
+                    c3 = self.builder.const_int(0x165667B1)
+                    i32 = tir.TIRScalar("i32")
+                    x_sq = self.builder.emit(tir.OpKind.MUL, x, x, result_ty=i32)
+                    quad = self.builder.emit(tir.OpKind.MUL, x_sq, c1, result_ty=i32)
+                    lin = self.builder.emit(tir.OpKind.MUL, x, c2, result_ty=i32)
+                    sum1 = self.builder.emit(tir.OpKind.ADD, quad, lin, result_ty=i32)
+                    out = self.builder.emit(tir.OpKind.ADD, sum1, c3, result_ty=i32)
+                    return out
                 # String builtins on literals.
                 # __strlen("literal") → compile-time const_int(len).
                 if (bn == "__strlen" and len(expr.args) == 1
