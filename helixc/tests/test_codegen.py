@@ -1029,40 +1029,96 @@ def test_write_file_to_arena_zero_length():
     assert out.stdout.strip() == b"0", f"expected size 0, got {out.stdout!r}"
 
 
-def test_bootstrap_kovc_emits_valid_exit_zero_elf():
-    """Stage 4 minimum: kovc.hx (Helix-side codegen) emits a complete
-    x86-64 Linux ELF executable byte stream, then write_file_to_arena
-    flushes it to disk. The binary must be recognized by `file` as
-    an ELF and run + exit(0) when executed.
+def test_bootstrap_kovc_full_pipeline_arithmetic():
+    """Stage-4 milestone: the entire Helix-self-hosted pipeline runs
+    end-to-end on real source text. Each input is:
 
-    This is the moment Helix becomes able to produce binaries by
-    itself. The Python compiler still compiles `kovc.hx` for now;
-    once we expand kovc to handle the full AST and self-compile,
-    the bootstrap is closed and Python retires."""
+        source bytes on disk
+          -> Helix lexer (lexer.hx)
+          -> Helix parser (parser.hx)
+          -> Helix kovc codegen (kovc.hx)
+          -> ELF binary on disk
+          -> execute the produced binary
+          -> exit code matches what Python-Helix would compute
+
+    This is the proof that the bootstrap chain is real. The Python
+    compiler compiles `lexer + parser + kovc` ONCE; the resulting
+    binary then compiles arbitrary `.hx` files. Until kovc supports
+    enough of Helix to compile ITSELF (let, if, while, fn, ...),
+    we still need Python for the bootstrap-bin step."""
+    import os, subprocess
+    proj = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    lexer = open(os.path.join(proj, "helixc", "bootstrap", "lexer.hx")).read()
+    lexer_no_main = lexer.rsplit(
+        "// --------------------------------------------------------------\n// Demo:",
+        1,
+    )[0]
+    parser_body = open(os.path.join(proj, "helixc", "bootstrap", "parser.hx")).read()
+    kovc = open(os.path.join(proj, "helixc", "bootstrap", "kovc.hx")).read()
+    kovc_lib = kovc.rsplit(
+        "// --------------------------------------------------------------\n// Demo:",
+        1,
+    )[0]
+
+    def compile_and_exec(source_text: str) -> int:
+        subprocess.run(
+            ["wsl", "-e", "bash", "-c",
+             f"printf %s {repr(source_text)} > /tmp/helix_src_pipe.hx"],
+            check=True, timeout=10,
+        )
+        driver = lexer_no_main + parser_body + kovc_lib + """
+fn main() -> i32 {
+    let src_start = __arena_len();
+    let src_len = read_file_to_arena("/tmp/helix_src_pipe.hx");
+    let tok_base = __arena_len();
+    lex(src_start, src_len);
+    let ast_root = parse_top(tok_base);
+    let elf_start = __arena_len();
+    let total = emit_elf_for_ast_to_path(ast_root);
+    write_file_to_arena("/tmp/kovc_pipeline.bin", elf_start, total)
+}
+"""
+        compile_and_run(driver)
+        run = subprocess.run(
+            ["wsl", "-e", "bash", "-c",
+             "chmod +x /tmp/kovc_pipeline.bin && /tmp/kovc_pipeline.bin; echo $?"],
+            capture_output=True, timeout=10,
+        )
+        return int(run.stdout.decode().strip())
+
+    assert compile_and_exec("42") == 42, "literal"
+    assert compile_and_exec("1 + 2") == 3, "addition"
+    assert compile_and_exec("2 + 3 * 4") == 14, "precedence: ADD over MUL"
+    assert compile_and_exec("(1 + 2) * 3") == 9, "grouping"
+    assert compile_and_exec("100 - 50 - 8") == 42, "left-assoc subtraction"
+    assert compile_and_exec("-5") == 251, "unary negation (-5 mod 256)"
+
+
+def test_bootstrap_kovc_demo_emits_ast_int_42():
+    """Stage 4 demo: kovc.hx's main() builds AST_INT(42) by hand,
+    compiles it, and writes the resulting ELF to disk. The produced
+    binary must be a valid x86-64 ELF and exit with code 42."""
     import os, subprocess
     proj = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     src = open(os.path.join(proj, "helixc", "bootstrap", "kovc.hx")).read()
-    n = compile_and_run(src)
-    # main() returns 4105 (4096 ELF wrapper + 9 code bytes). Exit
-    # byte = 4105 mod 256 = 9.
-    assert n == 9, f"expected exit byte 9 (= 4105 mod 256), got {n}"
-    # Verify the file on disk: size and that it runs to exit 0.
+    compile_and_run(src)
+    # ELF wrapper (4096) + AST_INT(5) + exit_with_eax(9) = 4110 bytes.
     size_proc = subprocess.run(
-        ["wsl", "-e", "bash", "-c", "wc -c < /tmp/kovc_exit0.bin"],
+        ["wsl", "-e", "bash", "-c", "wc -c < /tmp/kovc_ast_int.bin"],
         capture_output=True, timeout=10,
     )
-    assert size_proc.stdout.strip() == b"4105", size_proc.stdout
+    assert size_proc.stdout.strip() == b"4110", size_proc.stdout
     type_proc = subprocess.run(
-        ["wsl", "-e", "bash", "-c", "file /tmp/kovc_exit0.bin"],
+        ["wsl", "-e", "bash", "-c", "file /tmp/kovc_ast_int.bin"],
         capture_output=True, timeout=10,
     )
     assert b"ELF 64-bit" in type_proc.stdout, type_proc.stdout
     run_proc = subprocess.run(
         ["wsl", "-e", "bash", "-c",
-         "chmod +x /tmp/kovc_exit0.bin && /tmp/kovc_exit0.bin"],
+         "chmod +x /tmp/kovc_ast_int.bin && /tmp/kovc_ast_int.bin"],
         capture_output=True, timeout=10,
     )
-    assert run_proc.returncode == 0, f"kovc-emitted ELF exited {run_proc.returncode}"
+    assert run_proc.returncode == 42, f"expected exit 42, got {run_proc.returncode}"
 
 
 def test_bootstrap_parser_no_eof_runaway_on_malformed_input():

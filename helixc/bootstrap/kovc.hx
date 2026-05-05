@@ -124,54 +124,176 @@ fn emit_padding_to_code() -> i32 {
 }
 
 // --------------------------------------------------------------
-// Stage-4 minimum: the entire emitted code is a fixed `exit(0)`
-// sequence. The next commit expands to dispatch on AST tag.
-//
-//   B8 3C 00 00 00   mov eax, 60     (sys_exit)
-//   31 FF            xor edi, edi    (status = 0)
-//   0F 05            syscall
+// Patching: rewrite bytes that were emitted earlier with
+// placeholder zeros. Used to fill in p_filesz/p_memsz once the
+// code size is known.
 // --------------------------------------------------------------
-fn emit_exit_zero_code() -> i32 {
+fn patch_u32_le(idx: i32, v: i32) -> i32 {
+    __arena_set(idx, v % 256);
+    __arena_set(idx + 1, (v / 256) % 256);
+    __arena_set(idx + 2, (v / 65536) % 256);
+    __arena_set(idx + 3, (v / 16777216) % 256);
+    0
+}
+
+fn patch_u64_le_split(idx: i32, lo: i32, hi: i32) -> i32 {
+    patch_u32_le(idx, lo);
+    patch_u32_le(idx + 4, hi);
+    0
+}
+
+// --------------------------------------------------------------
+// Code emission per AST tag. Each emit_*_code function appends
+// machine-code bytes to the arena and returns the count emitted.
+//
+// Calling convention for the emitted program: each AST node's
+// code leaves its result in eax. The top-level wrapper takes
+// eax and turns it into the exit-status syscall.
+// --------------------------------------------------------------
+
+// AST_INT(v): mov eax, imm32   (5 bytes: B8 imm32_le)
+fn emit_ast_int(v: i32) -> i32 {
+    emit_byte(0xB8);
+    emit_u32_le(v);
+    5
+}
+
+// AST_NEG(inner): emit inner code, then `neg eax`.
+//   F7 D8   neg eax
+// (inner already left its value in eax.)
+fn emit_ast_neg_suffix() -> i32 {
+    emit_byte(0xF7); emit_byte(0xD8);
+    2
+}
+
+// AST_ADD-style binary op suffix. The protocol is:
+//   1. Emit lhs code (leaves lhs in eax)
+//   2. push rax                                  (50)
+//   3. Emit rhs code (leaves rhs in eax)
+//   4. mov ecx, eax                              (89 C1)
+//   5. pop rax                                   (58)
+//   6. <op-specific instruction(s) using eax + ecx, result in eax>
+fn emit_push_rax() -> i32 { emit_byte(0x50); 1 }
+fn emit_pop_rax()  -> i32 { emit_byte(0x58); 1 }
+fn emit_mov_ecx_eax() -> i32 { emit_byte(0x89); emit_byte(0xC1); 2 }
+fn emit_add_eax_ecx() -> i32 { emit_byte(0x01); emit_byte(0xC8); 2 }
+fn emit_sub_eax_ecx() -> i32 { emit_byte(0x29); emit_byte(0xC8); 2 }
+fn emit_imul_eax_ecx() -> i32 { emit_byte(0x0F); emit_byte(0xAF); emit_byte(0xC1); 3 }
+// idiv requires sign-extension into edx; we emit `cdq; idiv ecx`.
+//   99       cdq
+//   F7 F9    idiv ecx
+fn emit_idiv_eax_ecx() -> i32 {
+    emit_byte(0x99);
+    emit_byte(0xF7); emit_byte(0xF9);
+    3
+}
+
+// Trailing exit-stub: take the top-of-eax value as the exit code
+// and call sys_exit. Always 7 bytes.
+//   89 C7      mov edi, eax
+//   B8 3C 00 00 00   mov eax, 60
+//   0F 05      syscall
+fn emit_exit_with_eax() -> i32 {
+    emit_byte(0x89); emit_byte(0xC7);
     emit_byte(0xB8); emit_byte(0x3C); emit_byte(0); emit_byte(0); emit_byte(0);
-    emit_byte(0x31); emit_byte(0xFF);
     emit_byte(0x0F); emit_byte(0x05);
     9
 }
 
 // --------------------------------------------------------------
-// Top-level: emit a complete ELF that runs exit(0) and write it
-// to `path`. Returns the number of bytes written.
+// AST walker: dispatch on tag and emit the matching code. Returns
+// the number of bytes emitted. AST node layout matches stage-2
+// parser.hx: [tag, p1, p2, p3].
 // --------------------------------------------------------------
-fn emit_elf_exit_zero(path_idx: i32) -> i32 {
-    let elf_start = __arena_len();
-    let code_size = 9;
-    emit_elf_header(code_size);
-    emit_program_header(code_size);
-    emit_padding_to_code();
-    emit_exit_zero_code();
-    let total = __arena_len() - elf_start;
-    // Note: Helix doesn't yet pass paths as runtime values to
-    // write_file_to_arena (the path is a literal). For Phase-0,
-    // the caller provides a literal-path version of this function.
-    // The path_idx arg is reserved for future when we add runtime
-    // paths.
-    total
+fn emit_ast_code(idx: i32) -> i32 {
+    let t = __arena_get(idx);
+    let p1 = __arena_get(idx + 1);
+    let p2 = __arena_get(idx + 2);
+    if t == 0 {
+        emit_ast_int(p1)
+    } else { if t == 2 {
+        let n1 = emit_ast_code(p1);
+        let np = emit_push_rax();
+        let n2 = emit_ast_code(p2);
+        let nm = emit_mov_ecx_eax();
+        let no = emit_pop_rax();
+        let na = emit_add_eax_ecx();
+        n1 + np + n2 + nm + no + na
+    } else { if t == 3 {
+        let n1 = emit_ast_code(p1);
+        let np = emit_push_rax();
+        let n2 = emit_ast_code(p2);
+        let nm = emit_mov_ecx_eax();
+        let no = emit_pop_rax();
+        let na = emit_sub_eax_ecx();
+        n1 + np + n2 + nm + no + na
+    } else { if t == 4 {
+        let n1 = emit_ast_code(p1);
+        let np = emit_push_rax();
+        let n2 = emit_ast_code(p2);
+        let nm = emit_mov_ecx_eax();
+        let no = emit_pop_rax();
+        let na = emit_imul_eax_ecx();
+        n1 + np + n2 + nm + no + na
+    } else { if t == 5 {
+        let n1 = emit_ast_code(p1);
+        let np = emit_push_rax();
+        let n2 = emit_ast_code(p2);
+        let nm = emit_mov_ecx_eax();
+        let no = emit_pop_rax();
+        let na = emit_idiv_eax_ecx();
+        n1 + np + n2 + nm + no + na
+    } else { if t == 9 {
+        let ni = emit_ast_code(p1);
+        let nn = emit_ast_neg_suffix();
+        ni + nn
+    } else {
+        // Unsupported tag — emit `mov eax, 0` as a safe default so
+        // the binary at least runs. The caller can detect this by
+        // checking if the produced binary exits with 0 unexpectedly.
+        emit_ast_int(0)
+    }}}}}}
 }
 
 // --------------------------------------------------------------
-// Demo: emit an ELF that runs exit(0) and write it to a fixed
-// path. Test by running the produced binary in WSL and verifying
-// the exit code is 0.
+// Top-level: lay out an ELF executable that runs `eval(ast_root)`.
+// Patching strategy: emit the ELF header with placeholder filesz
+// fields (zeros), emit padding + code, then go back and rewrite
+// the filesz / memsz bytes once the actual code size is known.
+//
+// Returns the byte count written to disk.
+// --------------------------------------------------------------
+fn emit_elf_for_ast_to_path(ast_root: i32) -> i32 {
+    let elf_start = __arena_len();
+    // Phase 1: ELF header + program header with placeholder size.
+    emit_elf_header(0);
+    emit_program_header(0);
+    emit_padding_to_code();
+    // Phase 2: AST-driven code, then the exit stub.
+    let code_start = __arena_len();
+    emit_ast_code(ast_root);
+    emit_exit_with_eax();
+    let code_end = __arena_len();
+    let code_size = code_end - code_start;
+    let total_filesz = 4096 + code_size;
+    // Phase 3: patch p_filesz (offset 0x60 = 96) and p_memsz
+    // (offset 0x68 = 104) with actual size.
+    patch_u64_le_split(elf_start + 64 + 32, total_filesz, 0);   // p_filesz
+    patch_u64_le_split(elf_start + 64 + 40, total_filesz, 0);   // p_memsz
+    total_filesz
+}
+
+// --------------------------------------------------------------
+// Demo: build a tiny AST_INT(42) by hand, compile it, write the
+// resulting ELF to /tmp/kovc_ast_int.bin. The caller runs the
+// produced binary externally; its exit code should be 42.
 // --------------------------------------------------------------
 fn main() -> i32 {
-    let elf_start = __arena_len();
-    let code_size = 9;
-    emit_elf_header(code_size);
-    emit_program_header(code_size);
-    emit_padding_to_code();
-    emit_exit_zero_code();
-    let total = __arena_len() - elf_start;
-    // Fixed path for this minimum-viable demo. The caller chmods
-    // and runs the produced binary externally.
-    write_file_to_arena("/tmp/kovc_exit0.bin", elf_start, total)
+    // Build AST_INT(42) directly in arena.
+    let ast_root = __arena_push(0);   // tag = 0 (AST_INT)
+    __arena_push(42);                 // p1 = literal value
+    __arena_push(0); __arena_push(0);
+    let total = emit_elf_for_ast_to_path(ast_root);
+    let elf_offset = ast_root + 4;
+    write_file_to_arena("/tmp/kovc_ast_int.bin", elf_offset, total)
 }
