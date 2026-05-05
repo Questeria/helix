@@ -1029,6 +1029,42 @@ def test_write_file_to_arena_zero_length():
     assert out.stdout.strip() == b"0", f"expected size 0, got {out.stdout!r}"
 
 
+def test_bootstrap_kovc_emits_valid_exit_zero_elf():
+    """Stage 4 minimum: kovc.hx (Helix-side codegen) emits a complete
+    x86-64 Linux ELF executable byte stream, then write_file_to_arena
+    flushes it to disk. The binary must be recognized by `file` as
+    an ELF and run + exit(0) when executed.
+
+    This is the moment Helix becomes able to produce binaries by
+    itself. The Python compiler still compiles `kovc.hx` for now;
+    once we expand kovc to handle the full AST and self-compile,
+    the bootstrap is closed and Python retires."""
+    import os, subprocess
+    proj = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    src = open(os.path.join(proj, "helixc", "bootstrap", "kovc.hx")).read()
+    n = compile_and_run(src)
+    # main() returns 4105 (4096 ELF wrapper + 9 code bytes). Exit
+    # byte = 4105 mod 256 = 9.
+    assert n == 9, f"expected exit byte 9 (= 4105 mod 256), got {n}"
+    # Verify the file on disk: size and that it runs to exit 0.
+    size_proc = subprocess.run(
+        ["wsl", "-e", "bash", "-c", "wc -c < /tmp/kovc_exit0.bin"],
+        capture_output=True, timeout=10,
+    )
+    assert size_proc.stdout.strip() == b"4105", size_proc.stdout
+    type_proc = subprocess.run(
+        ["wsl", "-e", "bash", "-c", "file /tmp/kovc_exit0.bin"],
+        capture_output=True, timeout=10,
+    )
+    assert b"ELF 64-bit" in type_proc.stdout, type_proc.stdout
+    run_proc = subprocess.run(
+        ["wsl", "-e", "bash", "-c",
+         "chmod +x /tmp/kovc_exit0.bin && /tmp/kovc_exit0.bin"],
+        capture_output=True, timeout=10,
+    )
+    assert run_proc.returncode == 0, f"kovc-emitted ELF exited {run_proc.returncode}"
+
+
 def test_bootstrap_parser_no_eof_runaway_on_malformed_input():
     """Audit-7 fix: parse_primary used to advance the cursor past
     TK_EOF on any unexpected token, then parse_add/parse_mul read
