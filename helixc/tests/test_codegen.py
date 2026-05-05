@@ -967,6 +967,49 @@ def test_bootstrap_lexer_token_count():
     assert compile_and_run(src) == 13
 
 
+def test_bootstrap_parser_root_tag_matches_grammar():
+    """Stage-2 parser: lex + parse a small program, verify the root
+    AST node's tag matches what the grammar would produce. Tag table
+    is documented at the top of helixc/bootstrap/parser.hx."""
+    import os, subprocess
+    proj = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    lexer = open(os.path.join(proj, "helixc", "bootstrap", "lexer.hx")).read()
+    lexer_no_main = lexer.rsplit(
+        "// --------------------------------------------------------------\n// Demo:",
+        1,
+    )[0]
+    parser_body = open(os.path.join(proj, "helixc", "bootstrap", "parser.hx")).read()
+
+    def root_tag(input_text: str) -> int:
+        subprocess.run(
+            ["wsl", "-e", "bash", "-c",
+             f"printf %s {repr(input_text)} > /tmp/helix_lex_input.hx"],
+            check=True, timeout=10,
+        )
+        src = lexer_no_main + parser_body + """
+fn main() -> i32 {
+    let src_start = __arena_len();
+    let src_len = read_file_to_arena("/tmp/helix_lex_input.hx");
+    let tok_base = __arena_len();
+    lex(src_start, src_len);
+    let root = parse_top(tok_base);
+    __arena_get(root)
+}
+"""
+        return compile_and_run(src)
+
+    assert root_tag("42") == 0,                       "AST_INT"
+    assert root_tag("1 + 2") == 2,                    "AST_ADD"
+    assert root_tag("1 + 2 * 3") == 2,                "ADD over MUL (precedence)"
+    assert root_tag("2 * 3 + 1") == 2,                "ADD over MUL (left)"
+    assert root_tag("(1 + 2) * 3") == 4,              "AST_MUL with grouped lhs"
+    assert root_tag("-5") == 9,                       "AST_NEG"
+    assert root_tag("x") == 1,                        "AST_VAR"
+    assert root_tag("a < b") == 6,                    "AST_LT"
+    assert root_tag("let x = 1 ; x") == 8,            "AST_LET"
+    assert root_tag("if 1 < 2 { 3 } else { 4 }") == 7, "AST_IF"
+
+
 def test_bootstrap_lexer_recognizes_each_token_class():
     """End-to-end: each character class produces the expected first
     token tag. INT=1, IDENT=2, LPAREN=3, LBRACE=5, PLUS=7. Whitespace
