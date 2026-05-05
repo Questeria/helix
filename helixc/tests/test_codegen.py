@@ -2909,6 +2909,78 @@ def test_generic_nested_call():
     assert code == 42, f"expected 42, got {code}"
 
 
+def test_nn_dense_layer():
+    """Phase 3 step 1: dense layer z = W @ x + b. W=[[2,1],[1,2]], x=[3,1], b=[0,0].
+    Expected z = [7, 5]; sum = 12."""
+    src = """
+    fn main() -> i32 {
+        let x = t1d_new(2);
+        ti1d_set(x, 0, 3); ti1d_set(x, 1, 1);
+        let w = ti2d_new(2, 2);
+        ti2d_set(w, 2, 0, 0, 2); ti2d_set(w, 2, 0, 1, 1);
+        ti2d_set(w, 2, 1, 0, 1); ti2d_set(w, 2, 1, 1, 2);
+        let b = t1d_new(2);
+        ti1d_set(b, 0, 0); ti1d_set(b, 1, 0);
+        let z = t1d_new(2);
+        dense_layer_forward(w, 2, 2, x, b, z);
+        ti1d_sum(z, 2)
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 12, f"expected 12 (2*3+1=7, 1*3+2=5, sum=12), got {code}"
+
+
+def test_nn_dense_relu_chain():
+    """Compose dense + relu. Negative pre-activations should clamp to 0.
+    W = [[1,-2]], x = [1, 1], b = [0]. z = [1*1 + (-2)*1] = [-1]. relu = [0]."""
+    src = """
+    fn main() -> i32 {
+        let x = t1d_new(2);
+        ti1d_set(x, 0, 1); ti1d_set(x, 1, 1);
+        let w = ti2d_new(1, 2);
+        ti2d_set(w, 2, 0, 0, 1);
+        ti2d_set(w, 2, 0, 1, 0 - 2);
+        let b = t1d_new(1);
+        ti1d_set(b, 0, 0);
+        let z = t1d_new(1);
+        let h = t1d_new(1);
+        dense_layer_forward(w, 1, 2, x, b, z);
+        relu_layer(z, h, 1);
+        ti1d_get(h, 0)
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 0, f"expected 0 (relu(-1) = 0), got {code}"
+
+
+def test_nn_argmax():
+    """argmax of [3, 7, 2] = index 1."""
+    src = """
+    fn main() -> i32 {
+        let x = t1d_new(3);
+        ti1d_set(x, 0, 3); ti1d_set(x, 1, 7); ti1d_set(x, 2, 2);
+        argmax(x, 3)
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 1, f"expected 1, got {code}"
+
+
+def test_nn_mse_loss():
+    """MSE: y = [3, 5], target = [4, 5]. (3-4)^2 + (5-5)^2 = 1."""
+    src = """
+    fn main() -> i32 {
+        let y = t1d_new(2);
+        ti1d_set(y, 0, 3); ti1d_set(y, 1, 5);
+        let t = t1d_new(2);
+        ti1d_set(t, 0, 4); ti1d_set(t, 1, 5);
+        mse_loss(y, t, 2)
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 1, f"expected 1, got {code}"
+
+
 def test_tensor_1d_dot():
     """Phase 2.2: 1D integer-tensor dot product. [1,2,3] . [10,20,30] = 140."""
     src = """
