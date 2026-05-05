@@ -1,0 +1,455 @@
+"""
+helixc/frontend/monomorphize.py
+
+Monomorphization pass: instantiates generic functions with concrete type args.
+
+Input: A.Program with FnDecls that have generic params (e.g., fn id[T](x: T) -> T)
+       and call sites with turbofish (e.g., id::<i32>(x))
+Output: A.Program with concrete instantiations replacing generic calls.
+
+Algorithm:
+  1. Collect all FnDecls with non-empty generics into a generics-table.
+  2. Walk the program, find Calls whose callee is Name with non-empty generics.
+  3. For each unique (fn_name, type_args) pair:
+     - Generate mangled name (id__i32, pair__i32_f64).
+     - Clone the FnDecl, substituting type variables in params/return_ty/body.
+     - Add to prog.items (only once per unique pair).
+     - Replace the callee with Name(mangled_name, generics=[]).
+  4. Repeat until no more generic calls remain (cloned fns may call other generics).
+  5. Drop original generic FnDecls from prog.items at the end.
+
+License: Apache 2.0
+"""
+
+from __future__ import annotations
+from copy import deepcopy
+from typing import Optional
+
+from . import ast_nodes as A
+
+
+def mangle(name: str, ty_args: list[A.TyNode]) -> str:
+    """Generate a unique mangled name for a (fn_name, type_args) pair.
+
+    Conventions:
+      id::<i32>           -> id__i32
+      pair::<i32, f64>    -> pair__i32_f64
+      box::<(i32, i64)>   -> box__tup_i32_i64
+    """
+    parts = [_mangle_ty(t) for t in ty_args]
+    return f"{name}__" + "_".join(parts)
+
+
+def _mangle_ty(t: A.TyNode) -> str:
+    if isinstance(t, A.TyName):
+        return t.name
+    if isinstance(t, A.TyTuple):
+        return "tup_" + "_".join(_mangle_ty(e) for e in t.elems)
+    if isinstance(t, A.TyArray):
+        return "arr_" + _mangle_ty(t.elem)
+    if isinstance(t, A.TyRef):
+        return ("refmut_" if t.is_mut else "ref_") + _mangle_ty(t.inner)
+    if isinstance(t, A.TyFn):
+        return "fn_" + "_".join(_mangle_ty(p) for p in t.params) + "_to_" + _mangle_ty(t.ret)
+    if isinstance(t, A.TyTensor):
+        return "tensor_" + _mangle_ty(t.dtype)
+    if isinstance(t, A.TyTile):
+        return "tile_" + _mangle_ty(t.dtype)
+    if isinstance(t, A.TyGeneric):
+        return t.base + "_" + "_".join(_mangle_ty(a) for a in t.args)
+    return "X"
+
+
+def substitute_ty(t: A.TyNode, subst: dict[str, A.TyNode]) -> A.TyNode:
+    """Substitute generic type variables with concrete types throughout t."""
+    if isinstance(t, A.TyName):
+        if t.name in subst:
+            return deepcopy(subst[t.name])
+        return t
+    if isinstance(t, A.TyTuple):
+        return A.TyTuple(span=t.span, elems=[substitute_ty(e, subst) for e in t.elems])
+    if isinstance(t, A.TyArray):
+        return A.TyArray(span=t.span, elem=substitute_ty(t.elem, subst), size=t.size)
+    if isinstance(t, A.TyRef):
+        return A.TyRef(span=t.span, inner=substitute_ty(t.inner, subst), is_mut=t.is_mut)
+    if isinstance(t, A.TyFn):
+        return A.TyFn(span=t.span,
+                      params=[substitute_ty(p, subst) for p in t.params],
+                      ret=substitute_ty(t.ret, subst))
+    if isinstance(t, A.TyTensor):
+        return A.TyTensor(span=t.span, dtype=substitute_ty(t.dtype, subst),
+                          shape=t.shape, device=t.device, layout=t.layout)
+    if isinstance(t, A.TyTile):
+        return A.TyTile(span=t.span, dtype=substitute_ty(t.dtype, subst),
+                        shape=t.shape, memspace=t.memspace)
+    if isinstance(t, A.TyGeneric):
+        return A.TyGeneric(span=t.span, base=t.base,
+                           args=[substitute_ty(a, subst) for a in t.args])
+    return t
+
+
+def _walk_subst_expr(e: A.Expr, subst: dict[str, A.TyNode]) -> A.Expr:
+    """Walk an expression tree, substituting types where they appear (Cast.target_ty,
+    nested Block/If/Match/etc).
+    """
+    if isinstance(e, A.Cast):
+        return A.Cast(span=e.span,
+                      value=_walk_subst_expr(e.value, subst),
+                      target_ty=substitute_ty(e.target_ty, subst))
+    if isinstance(e, A.Block):
+        return A.Block(span=e.span,
+                       stmts=[_walk_subst_stmt(s, subst) for s in e.stmts],
+                       final_expr=_walk_subst_expr(e.final_expr, subst) if e.final_expr is not None else None)
+    if isinstance(e, A.If):
+        else_ = e.else_
+        if isinstance(else_, A.Block):
+            else_ = _walk_subst_expr(else_, subst)
+        elif isinstance(else_, A.If):
+            else_ = _walk_subst_expr(else_, subst)
+        return A.If(span=e.span,
+                    cond=_walk_subst_expr(e.cond, subst),
+                    then=_walk_subst_expr(e.then, subst),
+                    else_=else_)
+    if isinstance(e, A.Match):
+        return A.Match(span=e.span,
+                       scrutinee=_walk_subst_expr(e.scrutinee, subst),
+                       arms=[A.MatchArm(span=a.span, pattern=a.pattern,
+                                        guard=_walk_subst_expr(a.guard, subst) if a.guard else None,
+                                        body=_walk_subst_expr(a.body, subst)) for a in e.arms])
+    if isinstance(e, A.For):
+        return A.For(span=e.span, var_name=e.var_name,
+                     iter_expr=_walk_subst_expr(e.iter_expr, subst),
+                     body=_walk_subst_expr(e.body, subst))
+    if isinstance(e, A.While):
+        return A.While(span=e.span,
+                       cond=_walk_subst_expr(e.cond, subst),
+                       body=_walk_subst_expr(e.body, subst))
+    if isinstance(e, A.Loop):
+        return A.Loop(span=e.span, body=_walk_subst_expr(e.body, subst))
+    if isinstance(e, A.Binary):
+        return A.Binary(span=e.span, op=e.op,
+                        left=_walk_subst_expr(e.left, subst),
+                        right=_walk_subst_expr(e.right, subst))
+    if isinstance(e, A.Unary):
+        return A.Unary(span=e.span, op=e.op, operand=_walk_subst_expr(e.operand, subst))
+    if isinstance(e, A.Call):
+        return A.Call(span=e.span,
+                      callee=_walk_subst_expr(e.callee, subst),
+                      args=[_walk_subst_expr(a, subst) for a in e.args])
+    if isinstance(e, A.Index):
+        return A.Index(span=e.span,
+                       callee=_walk_subst_expr(e.callee, subst),
+                       indices=[_walk_subst_expr(a, subst) for a in e.indices])
+    if isinstance(e, A.Field):
+        return A.Field(span=e.span, obj=_walk_subst_expr(e.obj, subst), name=e.name)
+    if isinstance(e, A.TupleLit):
+        return A.TupleLit(span=e.span, elems=[_walk_subst_expr(x, subst) for x in e.elems])
+    if isinstance(e, A.ArrayLit):
+        return A.ArrayLit(span=e.span, elems=[_walk_subst_expr(x, subst) for x in e.elems])
+    if isinstance(e, A.StructLit):
+        return A.StructLit(span=e.span, name=e.name,
+                           fields=[(n, _walk_subst_expr(v, subst)) for (n, v) in e.fields])
+    if isinstance(e, A.Assign):
+        return A.Assign(span=e.span, target=_walk_subst_expr(e.target, subst),
+                        op=e.op, value=_walk_subst_expr(e.value, subst))
+    if isinstance(e, A.Return):
+        return A.Return(span=e.span,
+                        value=_walk_subst_expr(e.value, subst) if e.value is not None else None)
+    if isinstance(e, A.Break):
+        return A.Break(span=e.span,
+                       value=_walk_subst_expr(e.value, subst) if e.value is not None else None)
+    if isinstance(e, A.Range):
+        return A.Range(span=e.span,
+                       start=_walk_subst_expr(e.start, subst) if e.start is not None else None,
+                       end=_walk_subst_expr(e.end, subst) if e.end is not None else None)
+    if isinstance(e, A.Quote):
+        return A.Quote(span=e.span, inner=_walk_subst_expr(e.inner, subst))
+    if isinstance(e, A.Splice):
+        return A.Splice(span=e.span, inner=_walk_subst_expr(e.inner, subst))
+    if isinstance(e, A.Modify):
+        return A.Modify(span=e.span,
+                        target=_walk_subst_expr(e.target, subst),
+                        transformation=_walk_subst_expr(e.transformation, subst),
+                        verifier=_walk_subst_expr(e.verifier, subst))
+    return e
+
+
+def _walk_subst_stmt(s: A.Stmt, subst: dict[str, A.TyNode]) -> A.Stmt:
+    if isinstance(s, A.Let):
+        return A.Let(span=s.span, name=s.name, is_mut=s.is_mut,
+                     ty=substitute_ty(s.ty, subst) if s.ty is not None else None,
+                     value=_walk_subst_expr(s.value, subst) if s.value is not None else None)
+    if isinstance(s, A.ExprStmt):
+        return A.ExprStmt(span=s.span, expr=_walk_subst_expr(s.expr, subst))
+    if isinstance(s, A.ConstStmt):
+        return A.ConstStmt(span=s.span, name=s.name,
+                           ty=substitute_ty(s.ty, subst),
+                           value=_walk_subst_expr(s.value, subst))
+    return s
+
+
+# ============================================================================
+# Call-site rewriting + instantiation
+# ============================================================================
+class Monomorphizer:
+    def __init__(self, prog: A.Program):
+        self.prog = prog
+        self.generic_fns: dict[str, A.FnDecl] = {}
+        for item in prog.items:
+            if isinstance(item, A.FnDecl) and item.generics:
+                self.generic_fns[item.name] = item
+        self.instantiated: dict[tuple[str, str], A.FnDecl] = {}
+
+    def run(self) -> int:
+        """Run monomorphization. Returns count of new fns added.
+
+        Generic fns with at least one turbofish call site get cloned per
+        unique type-arg-tuple. Generic fns without any turbofish call sites
+        (only un-annotated calls like `identity(42)`) are left in place so
+        the legacy "T silently i32" lower path still works for backward
+        compatibility.
+        """
+        if not self.generic_fns:
+            return 0
+        # Iteratively rewrite calls. Each pass may add new fns whose bodies
+        # contain further generic calls. Fixed point when no new instantiations.
+        changed = True
+        while changed:
+            changed = False
+            for item in list(self.prog.items):
+                if isinstance(item, A.FnDecl):
+                    new_body = self._rewrite_calls_in_block(item.body, item)
+                    if new_body is not item.body:
+                        item.body = new_body
+                        changed = True
+        # Append instantiated clones; keep original generic fns intact so
+        # legacy un-turbofished call sites keep resolving.
+        added = len(self.instantiated)
+        self.prog.items = list(self.prog.items) + list(self.instantiated.values())
+        return added
+
+    def _rewrite_calls_in_block(self, blk: A.Block, owner: A.FnDecl) -> A.Block:
+        new_stmts = []
+        any_change = False
+        for s in blk.stmts:
+            ns = self._rewrite_calls_in_stmt(s, owner)
+            if ns is not s:
+                any_change = True
+            new_stmts.append(ns)
+        new_final = blk.final_expr
+        if blk.final_expr is not None:
+            new_final = self._rewrite_calls_in_expr(blk.final_expr, owner)
+            if new_final is not blk.final_expr:
+                any_change = True
+        if any_change:
+            return A.Block(span=blk.span, stmts=new_stmts, final_expr=new_final)
+        return blk
+
+    def _rewrite_calls_in_stmt(self, s: A.Stmt, owner: A.FnDecl) -> A.Stmt:
+        if isinstance(s, A.Let):
+            new_value = s.value
+            if s.value is not None:
+                new_value = self._rewrite_calls_in_expr(s.value, owner)
+            if new_value is s.value:
+                return s
+            return A.Let(span=s.span, name=s.name, is_mut=s.is_mut, ty=s.ty, value=new_value)
+        if isinstance(s, A.ExprStmt):
+            new_e = self._rewrite_calls_in_expr(s.expr, owner)
+            if new_e is s.expr:
+                return s
+            return A.ExprStmt(span=s.span, expr=new_e)
+        if isinstance(s, A.ConstStmt):
+            new_e = self._rewrite_calls_in_expr(s.value, owner)
+            if new_e is s.value:
+                return s
+            return A.ConstStmt(span=s.span, name=s.name, ty=s.ty, value=new_e)
+        return s
+
+    def _rewrite_calls_in_expr(self, e: A.Expr, owner: A.FnDecl) -> A.Expr:
+        if isinstance(e, A.Call):
+            new_callee = self._rewrite_calls_in_expr(e.callee, owner)
+            new_args = [self._rewrite_calls_in_expr(a, owner) for a in e.args]
+            # Detect generic call site
+            if isinstance(new_callee, A.Name) and new_callee.generics and new_callee.name in self.generic_fns:
+                fn = self.generic_fns[new_callee.name]
+                if len(new_callee.generics) != len(fn.generics):
+                    # Mismatch — leave alone, typecheck will flag
+                    return A.Call(span=e.span, callee=new_callee, args=new_args)
+                # Build substitution map
+                subst: dict[str, A.TyNode] = {}
+                for gp, ty_arg in zip(fn.generics, new_callee.generics):
+                    subst[gp.name] = ty_arg
+                mangled = mangle(fn.name, new_callee.generics)
+                key = (fn.name, mangled)
+                if key not in self.instantiated:
+                    self.instantiated[key] = self._instantiate(fn, mangled, subst)
+                # Replace callee with non-generic Name
+                new_callee = A.Name(span=new_callee.span, name=mangled, generics=[])
+                return A.Call(span=e.span, callee=new_callee, args=new_args)
+            if new_callee is e.callee and all(a is b for a, b in zip(new_args, e.args)):
+                return e
+            return A.Call(span=e.span, callee=new_callee, args=new_args)
+        if isinstance(e, A.Block):
+            return self._rewrite_calls_in_block(e, owner)
+        if isinstance(e, A.If):
+            new_cond = self._rewrite_calls_in_expr(e.cond, owner)
+            new_then = self._rewrite_calls_in_expr(e.then, owner)
+            new_else = e.else_
+            if new_else is not None:
+                new_else = self._rewrite_calls_in_expr(new_else, owner)
+            if new_cond is e.cond and new_then is e.then and new_else is e.else_:
+                return e
+            return A.If(span=e.span, cond=new_cond, then=new_then, else_=new_else)
+        if isinstance(e, A.Match):
+            new_scrut = self._rewrite_calls_in_expr(e.scrutinee, owner)
+            new_arms = []
+            any_change = new_scrut is not e.scrutinee
+            for arm in e.arms:
+                new_body = self._rewrite_calls_in_expr(arm.body, owner)
+                new_guard = arm.guard
+                if arm.guard is not None:
+                    new_guard = self._rewrite_calls_in_expr(arm.guard, owner)
+                if new_body is arm.body and new_guard is arm.guard:
+                    new_arms.append(arm)
+                else:
+                    any_change = True
+                    new_arms.append(A.MatchArm(span=arm.span, pattern=arm.pattern,
+                                               guard=new_guard, body=new_body))
+            if any_change:
+                return A.Match(span=e.span, scrutinee=new_scrut, arms=new_arms)
+            return e
+        if isinstance(e, A.For):
+            new_it = self._rewrite_calls_in_expr(e.iter_expr, owner)
+            new_body = self._rewrite_calls_in_expr(e.body, owner)
+            if new_it is e.iter_expr and new_body is e.body:
+                return e
+            return A.For(span=e.span, var_name=e.var_name, iter_expr=new_it, body=new_body)
+        if isinstance(e, A.While):
+            new_cond = self._rewrite_calls_in_expr(e.cond, owner)
+            new_body = self._rewrite_calls_in_expr(e.body, owner)
+            if new_cond is e.cond and new_body is e.body:
+                return e
+            return A.While(span=e.span, cond=new_cond, body=new_body)
+        if isinstance(e, A.Loop):
+            new_body = self._rewrite_calls_in_expr(e.body, owner)
+            if new_body is e.body:
+                return e
+            return A.Loop(span=e.span, body=new_body)
+        if isinstance(e, A.Binary):
+            new_l = self._rewrite_calls_in_expr(e.left, owner)
+            new_r = self._rewrite_calls_in_expr(e.right, owner)
+            if new_l is e.left and new_r is e.right:
+                return e
+            return A.Binary(span=e.span, op=e.op, left=new_l, right=new_r)
+        if isinstance(e, A.Unary):
+            new_op = self._rewrite_calls_in_expr(e.operand, owner)
+            if new_op is e.operand:
+                return e
+            return A.Unary(span=e.span, op=e.op, operand=new_op)
+        if isinstance(e, A.Cast):
+            new_v = self._rewrite_calls_in_expr(e.value, owner)
+            if new_v is e.value:
+                return e
+            return A.Cast(span=e.span, value=new_v, target_ty=e.target_ty)
+        if isinstance(e, A.Index):
+            new_callee = self._rewrite_calls_in_expr(e.callee, owner)
+            new_idx = [self._rewrite_calls_in_expr(i, owner) for i in e.indices]
+            if new_callee is e.callee and all(a is b for a, b in zip(new_idx, e.indices)):
+                return e
+            return A.Index(span=e.span, callee=new_callee, indices=new_idx)
+        if isinstance(e, A.Field):
+            new_obj = self._rewrite_calls_in_expr(e.obj, owner)
+            if new_obj is e.obj:
+                return e
+            return A.Field(span=e.span, obj=new_obj, name=e.name)
+        if isinstance(e, A.TupleLit):
+            new_elems = [self._rewrite_calls_in_expr(x, owner) for x in e.elems]
+            if all(a is b for a, b in zip(new_elems, e.elems)):
+                return e
+            return A.TupleLit(span=e.span, elems=new_elems)
+        if isinstance(e, A.ArrayLit):
+            new_elems = [self._rewrite_calls_in_expr(x, owner) for x in e.elems]
+            if all(a is b for a, b in zip(new_elems, e.elems)):
+                return e
+            return A.ArrayLit(span=e.span, elems=new_elems)
+        if isinstance(e, A.StructLit):
+            new_fields = [(n, self._rewrite_calls_in_expr(v, owner)) for (n, v) in e.fields]
+            if all(nv is ov for (_, nv), (_, ov) in zip(new_fields, e.fields)):
+                return e
+            return A.StructLit(span=e.span, name=e.name, fields=new_fields)
+        if isinstance(e, A.Assign):
+            new_t = self._rewrite_calls_in_expr(e.target, owner)
+            new_v = self._rewrite_calls_in_expr(e.value, owner)
+            if new_t is e.target and new_v is e.value:
+                return e
+            return A.Assign(span=e.span, target=new_t, op=e.op, value=new_v)
+        if isinstance(e, A.Return):
+            new_v = e.value
+            if e.value is not None:
+                new_v = self._rewrite_calls_in_expr(e.value, owner)
+            if new_v is e.value:
+                return e
+            return A.Return(span=e.span, value=new_v)
+        if isinstance(e, A.Break):
+            new_v = e.value
+            if e.value is not None:
+                new_v = self._rewrite_calls_in_expr(e.value, owner)
+            if new_v is e.value:
+                return e
+            return A.Break(span=e.span, value=new_v)
+        if isinstance(e, A.Range):
+            new_s = e.start
+            new_end = e.end
+            if e.start is not None:
+                new_s = self._rewrite_calls_in_expr(e.start, owner)
+            if e.end is not None:
+                new_end = self._rewrite_calls_in_expr(e.end, owner)
+            if new_s is e.start and new_end is e.end:
+                return e
+            return A.Range(span=e.span, start=new_s, end=new_end)
+        if isinstance(e, A.Quote):
+            new_inner = self._rewrite_calls_in_expr(e.inner, owner)
+            if new_inner is e.inner:
+                return e
+            return A.Quote(span=e.span, inner=new_inner)
+        if isinstance(e, A.Splice):
+            new_inner = self._rewrite_calls_in_expr(e.inner, owner)
+            if new_inner is e.inner:
+                return e
+            return A.Splice(span=e.span, inner=new_inner)
+        if isinstance(e, A.Modify):
+            new_t = self._rewrite_calls_in_expr(e.target, owner)
+            new_tr = self._rewrite_calls_in_expr(e.transformation, owner)
+            new_v = self._rewrite_calls_in_expr(e.verifier, owner)
+            if new_t is e.target and new_tr is e.transformation and new_v is e.verifier:
+                return e
+            return A.Modify(span=e.span, target=new_t, transformation=new_tr, verifier=new_v)
+        return e
+
+    def _instantiate(self, fn: A.FnDecl, mangled: str, subst: dict[str, A.TyNode]) -> A.FnDecl:
+        """Clone fn, substitute T-vars with concrete types, drop generics."""
+        new_params = [
+            A.FnParam(span=p.span, name=p.name,
+                      ty=substitute_ty(p.ty, subst), is_mut=p.is_mut)
+            for p in fn.params
+        ]
+        new_ret = substitute_ty(fn.return_ty, subst) if fn.return_ty is not None else None
+        new_body_block = _walk_subst_expr(fn.body, subst)
+        if not isinstance(new_body_block, A.Block):
+            new_body_block = fn.body
+        return A.FnDecl(
+            span=fn.span,
+            name=mangled,
+            generics=[],
+            params=new_params,
+            return_ty=new_ret,
+            where_clauses=fn.where_clauses,
+            body=new_body_block,
+            attrs=list(fn.attrs),
+            is_pub=fn.is_pub,
+        )
+
+
+def monomorphize(prog: A.Program) -> int:
+    """Run monomorphization on a program. Returns count of fns added."""
+    return Monomorphizer(prog).run()

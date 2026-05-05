@@ -6,6 +6,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 
 from helixc.frontend.parser import parse
 from helixc.frontend.grad_pass import grad_pass
+from helixc.frontend.monomorphize import monomorphize
 from helixc.ir.lower_ast import lower
 from helixc.ir.passes.const_fold import fold_module
 from helixc.ir.passes.dce import dce_module
@@ -21,6 +22,7 @@ def compile_and_run(src: str, optimize: bool = True) -> int:
     optimize=True (default): runs const-fold + CSE + DCE + fdce before codegen.
     """
     prog = parse(src, include_stdlib=True)
+    monomorphize(prog)
     grad_pass(prog)
     mod = lower(prog)
     if optimize:
@@ -1305,35 +1307,44 @@ def test_bootstrap_kovc_full_pipeline_arithmetic():
         1,
     )[0]
 
+    import uuid
+
     def compile_and_exec(source_text: str) -> int:
+        # Unique paths per call: avoids stale-binary flakes when the test
+        # suite leaves /tmp/kovc_pipeline.bin behind from earlier tests
+        # (or earlier calls within this same test) and the next chmod+run
+        # picks up the OLD binary before the driver flushes the new one.
+        tag = uuid.uuid4().hex[:10]
+        src_path = f"/tmp/helix_src_pipe_{tag}.hx"
+        bin_path = f"/tmp/kovc_pipeline_{tag}.bin"
         subprocess.run(
             ["wsl", "-e", "bash", "-c",
-             f"printf %s {repr(source_text)} > /tmp/helix_src_pipe.hx"],
+             f"printf %s {repr(source_text)} > {src_path}"],
             check=True, timeout=10,
         )
         # The ELF bytes always live in the LAST `total` slots of
         # the arena; computing elf_start as __arena_len() - total
         # is robust against changes in bind_state / resolve-pre-pass
         # arena pushes.
-        driver = lexer_no_main + parser_body + kovc_lib + """
-fn main() -> i32 {
+        driver = lexer_no_main + parser_body + kovc_lib + f"""
+fn main() -> i32 {{
     let src_start = __arena_len();
-    let src_len = read_file_to_arena("/tmp/helix_src_pipe.hx");
+    let src_len = read_file_to_arena("{src_path}");
     let tok_base = __arena_len();
     lex(src_start, src_len);
     let ast_root = parse_top(tok_base);
     let total = emit_elf_for_ast_to_path(ast_root);
     let elf_start = __arena_len() - total;
-    write_file_to_arena("/tmp/kovc_pipeline.bin", elf_start, total)
-}
+    write_file_to_arena("{bin_path}", elf_start, total)
+}}
 """
         compile_and_run(driver)
         run = subprocess.run(
             ["wsl", "-e", "bash", "-c",
-             "chmod +x /tmp/kovc_pipeline.bin && /tmp/kovc_pipeline.bin; echo $?"],
+             f"sync && chmod +x {bin_path} && {bin_path}; echo $?; rm -f {src_path} {bin_path}"],
             capture_output=True, timeout=10,
         )
-        return int(run.stdout.decode().strip())
+        return int(run.stdout.decode().strip().splitlines()[0])
 
     assert compile_and_exec("42") == 42, "literal"
     assert compile_and_exec("1 + 2") == 3, "addition"
@@ -1494,34 +1505,39 @@ def test_bootstrap_kovc_inline_write_file_to_arena():
         "// --------------------------------------------------------------\n// Demo:",
         1,
     )[0]
+    import uuid
+    tag = uuid.uuid4().hex[:10]
+    src_path = f"/tmp/helix_src_pipe_{tag}.hx"
+    bin_path = f"/tmp/kovc_pipeline_wfta_{tag}.bin"
+    out_path = f"/tmp/kovc_wfta_hostless_{tag}.out"
     src_text = (
         'fn main() -> i32 { '
         'let p = __arena_push(72) ; '
         '__arena_push(73) ; '
-        'write_file_to_arena("/tmp/kovc_wfta_hostless.out", p, 2) }'
+        f'write_file_to_arena("{out_path}", p, 2) }}'
     )
     subprocess.run(
         ["wsl", "-e", "bash", "-c",
-         f"printf %s {repr(src_text)} > /tmp/helix_src_pipe.hx"],
+         f"printf %s {repr(src_text)} > {src_path}"],
         check=True, timeout=10,
     )
-    driver = lexer_no_main + parser_body + kovc_lib + """
-fn main() -> i32 {
+    driver = lexer_no_main + parser_body + kovc_lib + f"""
+fn main() -> i32 {{
     let src_start = __arena_len();
-    let src_len = read_file_to_arena("/tmp/helix_src_pipe.hx");
+    let src_len = read_file_to_arena("{src_path}");
     let tok_base = __arena_len();
     lex(src_start, src_len);
     let ast_root = parse_top(tok_base);
     let total = emit_elf_for_ast_to_path(ast_root);
     let elf_start = __arena_len() - total;
-    write_file_to_arena("/tmp/kovc_pipeline_wfta.bin", elf_start, total)
-}
+    write_file_to_arena("{bin_path}", elf_start, total)
+}}
 """
     compile_and_run(driver)
     run = subprocess.run(
         ["wsl", "-e", "bash", "-c",
-         "chmod +x /tmp/kovc_pipeline_wfta.bin && /tmp/kovc_pipeline_wfta.bin; "
-         "echo $? && cat /tmp/kovc_wfta_hostless.out"],
+         f"sync && chmod +x {bin_path} && {bin_path}; "
+         f"echo $? && cat {out_path}; rm -f {src_path} {bin_path} {out_path}"],
         capture_output=True, timeout=10,
     )
     out = run.stdout
@@ -1547,37 +1563,42 @@ def test_bootstrap_kovc_inline_read_file_to_arena():
         "// --------------------------------------------------------------\n// Demo:",
         1,
     )[0]
+    import uuid
+    tag = uuid.uuid4().hex[:10]
+    in_path = f"/tmp/kovc_rfta_hostless_{tag}.in"
+    src_path = f"/tmp/helix_src_pipe_{tag}.hx"
+    bin_path = f"/tmp/kovc_pipeline_rfta_{tag}.bin"
     subprocess.run(
-        ["wsl", "-e", "bash", "-c", "printf 'AB' > /tmp/kovc_rfta_hostless.in"],
+        ["wsl", "-e", "bash", "-c", f"printf 'AB' > {in_path}"],
         check=True, timeout=10,
     )
     src_text = (
         'fn main() -> i32 { '
         'let s = __arena_len() ; '
-        'let n = read_file_to_arena("/tmp/kovc_rfta_hostless.in") ; '
+        f'let n = read_file_to_arena("{in_path}") ; '
         '__arena_get(s) }'
     )
     subprocess.run(
         ["wsl", "-e", "bash", "-c",
-         f"printf %s {repr(src_text)} > /tmp/helix_src_pipe.hx"],
+         f"printf %s {repr(src_text)} > {src_path}"],
         check=True, timeout=10,
     )
-    driver = lexer_no_main + parser_body + kovc_lib + """
-fn main() -> i32 {
+    driver = lexer_no_main + parser_body + kovc_lib + f"""
+fn main() -> i32 {{
     let src_start = __arena_len();
-    let src_len = read_file_to_arena("/tmp/helix_src_pipe.hx");
+    let src_len = read_file_to_arena("{src_path}");
     let tok_base = __arena_len();
     lex(src_start, src_len);
     let ast_root = parse_top(tok_base);
     let total = emit_elf_for_ast_to_path(ast_root);
     let elf_start = __arena_len() - total;
-    write_file_to_arena("/tmp/kovc_pipeline_rfta.bin", elf_start, total)
-}
+    write_file_to_arena("{bin_path}", elf_start, total)
+}}
 """
     compile_and_run(driver)
     run = subprocess.run(
         ["wsl", "-e", "bash", "-c",
-         "chmod +x /tmp/kovc_pipeline_rfta.bin && /tmp/kovc_pipeline_rfta.bin; echo $?"],
+         f"sync && chmod +x {bin_path} && {bin_path}; echo $?; rm -f {in_path} {src_path} {bin_path}"],
         capture_output=True, timeout=10,
     )
     assert b"65" in run.stdout, f"expected 65 (ascii 'A'), got {run.stdout!r}"
@@ -2834,6 +2855,74 @@ def test_generic_identity_function():
     """
     code = compile_and_run(src)
     assert code == 42, f"expected 42 (identity(42)), got {code}"
+
+
+def test_generic_identity_turbofish_i32():
+    """Phase 1.6: monomorphization. `identity::<i32>(42)` instantiates
+    a concrete copy `identity__i32(x: i32) -> i32` and the call resolves
+    to it. Distinct from the un-turbofished test above."""
+    src = """
+    fn identity[T](x: T) -> T { x }
+    fn main() -> i32 { identity::<i32>(42) }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_generic_two_distinct_instantiations():
+    """One generic fn called with two different concrete types should
+    spawn two distinct instantiations. Both must work in the same program."""
+    src = """
+    fn dbl[T](x: T) -> T { x + x }
+    fn main() -> i32 {
+        let a: i32 = dbl::<i32>(15);
+        let b: i32 = dbl::<i32>(6);
+        a + b
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42 (15*2 + 6*2), got {code}"
+
+
+def test_generic_two_type_params():
+    """`fn pair[A, B](a: A, b: B) -> A` — multi-param generics."""
+    src = """
+    fn first[A, B](a: A, b: B) -> A { a }
+    fn main() -> i32 { first::<i32, i32>(42, 99) }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_generic_nested_call():
+    """A generic fn calls another generic fn. Both must instantiate."""
+    src = """
+    fn id[T](x: T) -> T { x }
+    fn double_id[T](x: T) -> T { id::<T>(x) }
+    fn main() -> i32 { double_id::<i32>(42) }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_generic_instantiation_count_in_module():
+    """Verify the monomorphizer adds the expected number of fns."""
+    from helixc.frontend.parser import parse
+    from helixc.frontend.monomorphize import monomorphize
+    src = """
+    fn id[T](x: T) -> T { x }
+    fn main() -> i32 {
+        let a = id::<i32>(1);
+        let b = id::<i32>(2);
+        a + b
+    }
+    """
+    prog = parse(src, include_stdlib=False)
+    n_before = sum(1 for it in prog.items if hasattr(it, 'name'))
+    added = monomorphize(prog)
+    assert added == 1, f"expected exactly 1 instantiation (id::<i32>), got {added}"
+    n_after = sum(1 for it in prog.items if hasattr(it, 'name'))
+    assert n_after == n_before + 1
 
 
 def test_hbs_integration_arena_stress_runs():
