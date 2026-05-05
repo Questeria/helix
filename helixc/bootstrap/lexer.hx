@@ -196,7 +196,9 @@ fn punct_kind(b: i32) -> i32 {
     else { if b == 60 { 16 }      // '<'
     else { if b == 62 { 17 }      // '>'
     else { if b == 33 { 18 }      // '!'
-    else { 0 }}}}}}}}}}}}}}}}
+    else { if b == 64 { 24 }      // '@' (used by @pure / @effect attrs;
+                                  // parser skips them as no-ops)
+    else { 0 }}}}}}}}}}}}}}}}}
 }
 
 // --------------------------------------------------------------

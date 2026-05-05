@@ -454,6 +454,10 @@ fn parse_top(tok_base: i32) -> i32 {
     // Peek the first token. If it's `fn`, parse a function decl.
     // Otherwise treat the whole input as a single expression
     // (legacy mode) for backward compat with all existing tests.
+    // Skip leading attributes (`@pure`, `@effect`, etc.) — Phase 0
+    // doesn't enforce them, just parses past so kovc.hx and other
+    // attribute-decorated source compiles.
+    skip_attributes(tok_base, cur_slot);
     let k = cur_get(cur_slot);
     if tok_tag(tok_base, k) == 2 {
         let id_s = tok_p2(tok_base, k);
@@ -468,6 +472,37 @@ fn parse_top(tok_base: i32) -> i32 {
     }
 }
 
+// Consume zero or more `@<IDENT>` (or `@<IDENT>(<args>)`) attribute
+// markers. Currently we just skip them; future Phase-1 work could
+// store them on the surrounding fn decl.
+fn skip_attributes(tok_base: i32, sb: i32) -> i32 {
+    let mut keep: i32 = 1;
+    while keep == 1 {
+        if tok_tag(tok_base, cur_get(sb)) == 24 {
+            cur_advance(sb);     // consume '@'
+            // Optional IDENT after the '@'.
+            if tok_tag(tok_base, cur_get(sb)) == 2 {
+                cur_advance(sb);
+            };
+            // Optional `(args)` — skip everything until matching ')'.
+            if tok_tag(tok_base, cur_get(sb)) == 3 {
+                cur_advance(sb);     // '('
+                let mut depth: i32 = 1;
+                while depth > 0 {
+                    let tt = tok_tag(tok_base, cur_get(sb));
+                    if tt == 3 { depth = depth + 1; };
+                    if tt == 4 { depth = depth - 1; };
+                    if tt == 0 { depth = 0; };       // EOF safety
+                    cur_advance(sb);
+                };
+            };
+        } else {
+            keep = 0;
+        };
+    }
+    0
+}
+
 // Parse a sequence of one or more `fn` declarations at the top
 // level, returning a linked list head. If only one fn is present,
 // the list has a single node. The codegen looks up "main" by name
@@ -475,15 +510,12 @@ fn parse_top(tok_base: i32) -> i32 {
 // callable once AST_CALL lands.
 fn parse_program(tok_base: i32, sb: i32) -> i32 {
     let first_fn = parse_fn_decl(tok_base, sb);
-    // Build list backwards: collect fn idxs then chain. But we
-    // can't materialize an array easily here, so do it forward:
-    // build the head node first, then attach further nodes by
-    // patching the previous node's `next` field. We track the
-    // previous-list-node's slot to patch it in place.
     let head = mk_node(15, first_fn, 0, 0);
     let mut prev_list = head;
     let mut keep: i32 = 1;
     while keep == 1 {
+        // Skip any attributes before the next fn decl.
+        skip_attributes(tok_base, sb);
         let k2 = cur_get(sb);
         let t2 = tok_tag(tok_base, k2);
         if t2 == 0 {
@@ -494,7 +526,6 @@ fn parse_program(tok_base: i32, sb: i32) -> i32 {
             if byte_eq(s, l, kw_fn_s(sb), kw_fn_n(sb)) == 1 {
                 let next_fn = parse_fn_decl(tok_base, sb);
                 let new_node = mk_node(15, next_fn, 0, 0);
-                // Patch prev_list's p2 (slot prev_list+2) to point at new_node.
                 __arena_set(prev_list + 2, new_node);
                 prev_list = new_node;
             } else {

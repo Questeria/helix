@@ -1204,6 +1204,18 @@ fn main() -> i32 {
         "fn fact(n: i32) -> i32 { if n == 1 { 1 } else { n * fact(n - 1) } } "
         "fn main() -> i32 { fact(5) }"
     ) == 120, "factorial with == base case"
+    # `@pure`, `@effect(io)` etc. attribute parsing — Phase 0 just
+    # skips them. Lets kovc.hx and other attribute-decorated source
+    # parse through unchanged.
+    assert compile_and_exec(
+        "@pure fn id(x: i32) -> i32 { x } fn main() -> i32 { id(42) }"
+    ) == 42, "@pure attribute on fn decl"
+    assert compile_and_exec(
+        "@effect(io) fn p() -> i32 { 7 } fn main() -> i32 { p() }"
+    ) == 7, "@effect(io) — attribute with parenthesized arg"
+    assert compile_and_exec(
+        "@pure @inline fn f() -> i32 { 9 } fn main() -> i32 { f() }"
+    ) == 9, "multiple attributes on a fn"
 
 
 def test_bootstrap_kovc_demo_emits_ast_int_42():
