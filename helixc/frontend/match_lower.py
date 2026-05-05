@@ -140,6 +140,13 @@ def _rewrite_expr(expr: A.Expr) -> A.Expr:
     if isinstance(expr, A.Return) and expr.value is not None:
         expr.value = _rewrite_expr(expr.value)
         return expr
+    if isinstance(expr, A.StructLit):
+        expr.fields = [(name, _rewrite_expr(value))
+                       for name, value in expr.fields]
+        return expr
+    if isinstance(expr, A.Field):
+        expr.obj = _rewrite_expr(expr.obj)
+        return expr
     return expr
 
 

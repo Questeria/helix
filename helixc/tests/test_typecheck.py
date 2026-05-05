@@ -201,14 +201,30 @@ def test_pure_and_effect_conflict():
     assert any("cannot be both" in e for e in errs), errs
 
 
-def test_pure_calls_unmarked_function_rejected():
-    # Unmarked function is treated as non-pure (default has no @pure)
+def test_pure_calls_unmarked_function_allowed():
+    """Surface typecheck: @pure may call unannotated functions whose
+    declared effect set is empty. The IR-level effect_check.py is the
+    soundness layer — it computes transitive effects from PRINT ops
+    and catches actual impurity. The surface check is intentionally
+    permissive about unannotated callees so users don't have to
+    @pure-annotate every helper just to call it from a @pure caller."""
     src = """
     fn does_anything() -> i32 { 7 }
     @pure fn caller() -> i32 { does_anything() }
     """
     errs = check(src)
-    assert any("cannot call" in e or "non-pure" in e for e in errs), errs
+    assert errs == [], f"expected no surface errors, got: {errs}"
+
+
+def test_pure_calls_explicit_effect_rejected():
+    """@pure must still be rejected when the callee declares effects."""
+    src = """
+    @effect(io)
+    fn print_thing() -> i32 { 42 }
+    @pure fn caller() -> i32 { print_thing() }
+    """
+    errs = check(src)
+    assert any("@pure" in e and "effectful" in e for e in errs), errs
 
 
 # ============================================================================

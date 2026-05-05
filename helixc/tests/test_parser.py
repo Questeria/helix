@@ -389,6 +389,34 @@ def test_unclosed_brace():
         pass
 
 
+def test_unclosed_block_error_names_open_brace():
+    """Cycle-3 audit: a truncated block should produce an error that
+    points at the unclosed `{`, not 'expected expression got EOF'."""
+    try:
+        parse("fn f() { if true { 1 } else { 0 }")
+        assert False, "should have raised"
+    except ParseError as e:
+        msg = str(e)
+        assert "unclosed" in msg.lower() and "1:8" in msg, f"got {msg}"
+
+
+def test_range_with_arithmetic_rhs_groups_correctly():
+    """`0..n*2` must parse as Range(0, Binary(n,*,2)), not
+    Binary(Range(0,n),*,2)."""
+    import helixc.frontend.ast_nodes as A
+    p = parse("fn f() -> i32 { let mut s = 0; for i in 0 .. 3 * 2 { s = s + i; }; s }")
+    fn = next(item for item in p.items if isinstance(item, A.FnDecl))
+    for_stmt = fn.body.stmts[1]
+    if isinstance(for_stmt, A.ExprStmt):
+        for_stmt = for_stmt.expr
+    assert isinstance(for_stmt, A.For), f"expected For, got {type(for_stmt).__name__}"
+    assert isinstance(for_stmt.iter_expr, A.Range), \
+        f"iter_expr should be Range, got {type(for_stmt.iter_expr).__name__}"
+    end = for_stmt.iter_expr.end
+    assert isinstance(end, A.Binary) and end.op == "*", \
+        f"end should be Binary(*), got {type(end).__name__}"
+
+
 # ============================================================================
 # Agent declarations (Phase 3-viii)
 # ============================================================================

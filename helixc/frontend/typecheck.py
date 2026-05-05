@@ -563,16 +563,20 @@ class TypeChecker:
         current calling context.
 
         Rules:
-        - A @pure function may only call other @pure functions (no effects).
+        - A @pure function may only call other functions whose declared
+          effects are empty. Unannotated callees are allowed (their
+          actual effect set is computed transitively by the IR-level
+          effect_check pass — that's the soundness layer; this surface
+          check only flags directly-declared effects).
         - A function with declared effects E may only call functions whose
           effects are a subset of E.
         - Calls to undeclared functions are not checked here (handled by
           shape-check or treated as opaque).
         """
-        if self._current_pure and (sig.effects or not sig.is_pure):
+        if self._current_pure and sig.effects:
             self.errors.append(TypeError_(
                 f"@pure function {self._current_fn_name!r} cannot call "
-                f"non-pure {sig.name!r}",
+                f"effectful {sig.name!r}",
                 call.span,
             ))
             return

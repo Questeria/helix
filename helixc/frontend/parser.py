@@ -575,6 +575,12 @@ class Parser:
         final_expr: ast.Expr | None = None
         while not self._at(T.RBRACE):
             t = self._peek()
+            if t.kind == T.EOF:
+                raise ParseError(
+                    f"unclosed block — expected '}}' to close the '{{' opened at "
+                    f"{kw.line}:{kw.col}",
+                    t,
+                )
             if t.kind == T.KW_LET:
                 stmts.append(self._parse_let_stmt())
             elif t.kind == T.KW_CONST:
@@ -731,14 +737,19 @@ class Parser:
         return left
 
     def _parse_range(self) -> ast.Expr:
-        # Ranges only at this precedence: a .. b
+        # Ranges sit between multiplicative and unary in the call chain,
+        # but the END operand is parsed at additive precedence so
+        # `0 .. n * 2` and `0 .. n + 1` correctly group as
+        # `0 .. (n * 2)` / `0 .. (n + 1)` (matching Rust). Without this,
+        # `0..3*2` parsed as `(0..3) * 2` and broke for-loops with
+        # arithmetic bounds.
         left = self._parse_unary()
         if self._at(T.DOTDOT):
             tok = self._peek(); self.i += 1
             # Optional end
             if self._at_any(T.RPAREN, T.RBRACK, T.RBRACE, T.SEMI, T.COMMA, T.LBRACE):
                 return ast.Range(span=left.span, start=left, end=None)
-            end = self._parse_unary()
+            end = self._parse_additive()
             return ast.Range(span=left.span, start=left, end=end)
         return left
 

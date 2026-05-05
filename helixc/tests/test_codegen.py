@@ -747,6 +747,67 @@ def test_unknown_3segment_path_errors():
         compile_and_run(src)
 
 
+def test_match_inside_struct_literal_field():
+    """Cycle-3 audit: match expression in a struct field initializer
+    must be desugared by match_lower._rewrite_expr — was crashing at
+    IR lowering with `A.Match should not reach _lower_expr`."""
+    src = """
+    struct Point { x: i32, y: i32 }
+    fn main() -> i32 {
+        let v = 1;
+        let p = Point { x: match v { 1 => 10, _ => 0 }, y: 0 };
+        p.x
+    }
+    """
+    assert compile_and_run(src) == 10
+
+
+def test_match_on_struct_field_access():
+    """`match obj.field { ... }` works (Field expr-rewriting wasn't
+    broken before, but verify the fix didn't regress it)."""
+    src = """
+    struct Point { x: i32, y: i32 }
+    fn main() -> i32 {
+        let p = Point { x: 7, y: 8 };
+        match p.x {
+            7 => 100,
+            _ => 200
+        }
+    }
+    """
+    assert compile_and_run(src) == 100
+
+
+def test_range_rhs_includes_multiplication():
+    """Cycle-3 audit: `0..n*2` must group as `0..(n*2)`, not `(0..n)*2`."""
+    src = """
+    fn main() -> i32 {
+        let mut s = 0;
+        for i in 0 .. 3 * 2 {
+            s = s + i;
+        };
+        s
+    }
+    """
+    # range [0, 6) iterates i = 0,1,2,3,4,5; sum = 15
+    assert compile_and_run(src) == 15
+
+
+def test_range_rhs_includes_addition():
+    """`0..n+1` must group as `0..(n+1)`, not `(0..n)+1`."""
+    src = """
+    fn main() -> i32 {
+        let n = 4;
+        let mut count = 0;
+        for i in 0 .. n + 1 {
+            count = count + 1;
+        };
+        count
+    }
+    """
+    assert compile_and_run(src) == 5
+
+
 def test_int_to_float_round_trip():
     # int -> float -> int (no change for representable values)
     src = """
