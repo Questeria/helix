@@ -7,6 +7,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 from helixc.frontend.parser import parse
 from helixc.frontend.grad_pass import grad_pass
 from helixc.frontend.monomorphize import monomorphize
+from helixc.frontend.flatten_modules import flatten_modules
 from helixc.ir.lower_ast import lower
 from helixc.ir.passes.const_fold import fold_module
 from helixc.ir.passes.dce import dce_module
@@ -22,6 +23,7 @@ def compile_and_run(src: str, optimize: bool = True) -> int:
     optimize=True (default): runs const-fold + CSE + DCE + fdce before codegen.
     """
     prog = parse(src, include_stdlib=True)
+    flatten_modules(prog)
     monomorphize(prog)
     grad_pass(prog)
     mod = lower(prog)
@@ -2900,6 +2902,80 @@ def test_generic_nested_call():
     fn id[T](x: T) -> T { x }
     fn double_id[T](x: T) -> T { id::<T>(x) }
     fn main() -> i32 { double_id::<i32>(42) }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_module_block_basic():
+    """Phase 1.7: block module. `mod math { fn add(a, b) { a + b } }`
+    flattens to `math__add`, called as `math::add(...)`."""
+    src = """
+    mod math { fn add(a: i32, b: i32) -> i32 { a + b } }
+    fn main() -> i32 { math::add(20, 22) }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_module_block_two_fns():
+    """Multiple fns in one block module."""
+    src = """
+    mod math {
+        fn add(a: i32, b: i32) -> i32 { a + b }
+        fn sub(a: i32, b: i32) -> i32 { a - b }
+    }
+    fn main() -> i32 { math::add(40, 10) - math::sub(20, 12) }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_module_block_two_modules_no_clash():
+    """Two block modules with the same fn name. Different mangled names
+    means no clash."""
+    src = """
+    mod a { fn val() -> i32 { 13 } }
+    mod b { fn val() -> i32 { 29 } }
+    fn main() -> i32 { a::val() + b::val() }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42 (13+29), got {code}"
+
+
+def test_module_use_imports_alias():
+    """`use foo::bar` brings foo__bar into scope as `bar`. Subsequent
+    bare-name calls resolve to the mangled name."""
+    src = """
+    mod foo { fn answer() -> i32 { 42 } }
+    use foo::answer;
+    fn main() -> i32 { answer() }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_module_nested_blocks():
+    """Nested mod blocks: `mod outer { mod inner { fn f() } }` flattens
+    to `outer__inner__f`, callable as `outer::inner::f()`."""
+    src = """
+    mod outer {
+        mod inner {
+            fn f() -> i32 { 42 }
+        }
+    }
+    fn main() -> i32 { outer::inner::f() }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_module_with_generics():
+    """Block module containing a generic fn. flatten_modules runs first
+    so monomorphizer sees mangled names."""
+    src = """
+    mod util { fn id[T](x: T) -> T { x } }
+    fn main() -> i32 { util::id::<i32>(42) }
     """
     code = compile_and_run(src)
     assert code == 42, f"expected 42, got {code}"

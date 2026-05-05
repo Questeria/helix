@@ -487,6 +487,18 @@ class ModuleDecl(Item):
     path: list[str]
 
 
+@dataclass
+class ModBlock(Item):
+    """`mod foo { items... }` — a block module that namespaces a group
+    of items. Resolved by the flatten_modules pass: every nested item is
+    lifted out and renamed to `foo__name`, while every `foo::name(...)`
+    call is rewritten to `foo__name(...)`.
+    """
+    name: str
+    items: list["Item"]
+    is_pub: bool = False
+
+
 # ============================================================================
 # Program
 # ============================================================================

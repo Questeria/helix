@@ -168,7 +168,19 @@ class Parser:
             return self._parse_const_decl(is_pub)
         if t.kind == T.KW_AGENT:
             return self._parse_agent_decl(is_pub)
-        raise ParseError(f"expected item (fn/struct/enum/type/use/const/agent)", t)
+        if t.kind == T.KW_MOD:
+            return self._parse_mod_block(is_pub)
+        raise ParseError(f"expected item (fn/struct/enum/type/use/const/agent/mod)", t)
+
+    def _parse_mod_block(self, is_pub: bool) -> ast.ModBlock:
+        kw = self._eat(T.KW_MOD)
+        name = self._eat(T.IDENT).value
+        self._eat(T.LBRACE)
+        items: list[ast.Item] = []
+        while not self._at(T.RBRACE):
+            items.append(self._parse_item())
+        self._eat(T.RBRACE)
+        return ast.ModBlock(span=self._span_of(kw), name=name, items=items, is_pub=is_pub)
 
     def _parse_attributes(self) -> list[str]:
         attrs: list[str] = []
