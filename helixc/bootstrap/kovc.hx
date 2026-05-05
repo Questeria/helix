@@ -210,16 +210,26 @@ fn emit_idiv_eax_ecx() -> i32 {
     3
 }
 
-// AST_LT: cmp eax, ecx; mov eax, 0; setl al — leaves 0 or 1 in eax.
-//   39 C8         cmp eax, ecx
-//   B8 00 00 00 00   mov eax, 0
-//   0F 9C C0      setl al
-fn emit_lt_eax_ecx() -> i32 {
+// Comparison helpers. Each emits cmp eax, ecx; mov eax, 0; setX al.
+// The setX opcode varies per comparison:
+//   setl  = 0F 9C C0   (signed less)
+//   setg  = 0F 9F C0   (signed greater)
+//   sete  = 0F 94 C0   (equal)
+//   setne = 0F 95 C0   (not equal)
+//   setle = 0F 9E C0   (signed less-or-equal)
+//   setge = 0F 9D C0   (signed greater-or-equal)
+fn emit_cmp_setX(op_byte: i32) -> i32 {
     emit_byte(0x39); emit_byte(0xC8);
     emit_byte(0xB8); emit_byte(0); emit_byte(0); emit_byte(0); emit_byte(0);
-    emit_byte(0x0F); emit_byte(0x9C); emit_byte(0xC0);
+    emit_byte(0x0F); emit_byte(op_byte); emit_byte(0xC0);
     10
 }
+fn emit_lt_eax_ecx() -> i32 { emit_cmp_setX(0x9C) }
+fn emit_gt_eax_ecx() -> i32 { emit_cmp_setX(0x9F) }
+fn emit_eq_eax_ecx() -> i32 { emit_cmp_setX(0x94) }
+fn emit_ne_eax_ecx() -> i32 { emit_cmp_setX(0x95) }
+fn emit_le_eax_ecx() -> i32 { emit_cmp_setX(0x9E) }
+fn emit_ge_eax_ecx() -> i32 { emit_cmp_setX(0x9D) }
 
 // test eax, eax — sets ZF if eax == 0.
 fn emit_test_eax_eax() -> i32 {
@@ -557,6 +567,46 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32) -> i32 {
         let no = emit_pop_rax();
         let na = emit_lt_eax_ecx();
         n1 + np + n2 + nm + no + na
+    } else { if t == 19 {
+        let n1 = emit_ast_code(p1, bind_state, patch_state);
+        let np = emit_push_rax();
+        let n2 = emit_ast_code(p2, bind_state, patch_state);
+        let nm = emit_mov_ecx_eax();
+        let no = emit_pop_rax();
+        let na = emit_gt_eax_ecx();
+        n1 + np + n2 + nm + no + na
+    } else { if t == 20 {
+        let n1 = emit_ast_code(p1, bind_state, patch_state);
+        let np = emit_push_rax();
+        let n2 = emit_ast_code(p2, bind_state, patch_state);
+        let nm = emit_mov_ecx_eax();
+        let no = emit_pop_rax();
+        let na = emit_eq_eax_ecx();
+        n1 + np + n2 + nm + no + na
+    } else { if t == 21 {
+        let n1 = emit_ast_code(p1, bind_state, patch_state);
+        let np = emit_push_rax();
+        let n2 = emit_ast_code(p2, bind_state, patch_state);
+        let nm = emit_mov_ecx_eax();
+        let no = emit_pop_rax();
+        let na = emit_ne_eax_ecx();
+        n1 + np + n2 + nm + no + na
+    } else { if t == 22 {
+        let n1 = emit_ast_code(p1, bind_state, patch_state);
+        let np = emit_push_rax();
+        let n2 = emit_ast_code(p2, bind_state, patch_state);
+        let nm = emit_mov_ecx_eax();
+        let no = emit_pop_rax();
+        let na = emit_le_eax_ecx();
+        n1 + np + n2 + nm + no + na
+    } else { if t == 23 {
+        let n1 = emit_ast_code(p1, bind_state, patch_state);
+        let np = emit_push_rax();
+        let n2 = emit_ast_code(p2, bind_state, patch_state);
+        let nm = emit_mov_ecx_eax();
+        let no = emit_pop_rax();
+        let na = emit_ge_eax_ecx();
+        n1 + np + n2 + nm + no + na
     } else { if t == 7 {
         // AST_IF(cond, then, else)
         let p3 = __arena_get(idx + 3);
@@ -721,7 +771,7 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32) -> i32 {
         n_cond + n_test + 6 + n_body + 5 + n_zero
     } else {
         emit_ast_int(0)
-    }}}}}}}}}}}}}}}}}
+    }}}}}}}}}}}}}}}}}}}}}}
 }
 
 // --------------------------------------------------------------

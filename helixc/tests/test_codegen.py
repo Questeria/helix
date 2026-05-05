@@ -1193,6 +1193,17 @@ fn main() -> i32 {
         "fn is_odd(n: i32) -> i32 { if n < 1 { 0 } else { is_even(n - 1) } } "
         "fn main() -> i32 { is_even(10) }"
     ) == 1, "mutual recursion"
+    # All six comparison ops (>, ==, !=, <=, >=, < was earlier).
+    assert compile_and_exec("if 5 == 5 { 1 } else { 0 }") == 1, "=="
+    assert compile_and_exec("if 5 == 4 { 1 } else { 0 }") == 0, "== false"
+    assert compile_and_exec("if 5 != 4 { 1 } else { 0 }") == 1, "!="
+    assert compile_and_exec("if 5 > 4 { 1 } else { 0 }") == 1, ">"
+    assert compile_and_exec("if 5 >= 5 { 1 } else { 0 }") == 1, ">="
+    assert compile_and_exec("if 5 <= 5 { 1 } else { 0 }") == 1, "<="
+    assert compile_and_exec(
+        "fn fact(n: i32) -> i32 { if n == 1 { 1 } else { n * fact(n - 1) } } "
+        "fn main() -> i32 { fact(5) }"
+    ) == 120, "factorial with == base case"
 
 
 def test_bootstrap_kovc_demo_emits_ast_int_42():

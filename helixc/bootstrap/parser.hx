@@ -49,6 +49,11 @@
 //                    Linked list of fn decl params. Stored at the
 //                    head index referenced by AST_FN_DECL.p3 (packed
 //                    with body_idx the same way AST_LET does).
+//  19  AST_GT        p1 = lhs, p2 = rhs.  result = (lhs > rhs ? 1 : 0)
+//  20  AST_EQ        p1 = lhs, p2 = rhs.  result = (lhs == rhs ? 1 : 0)
+//  21  AST_NE        p1 = lhs, p2 = rhs.  result = (lhs != rhs ? 1 : 0)
+//  22  AST_LE        p1 = lhs, p2 = rhs.  result = (lhs <= rhs ? 1 : 0)
+//  23  AST_GE        p1 = lhs, p2 = rhs.  result = (lhs >= rhs ? 1 : 0)
 //  99  AST_ERR       p1 = unexpected token tag
 //
 // Grammar (recursive descent, classic precedence climbing):
@@ -178,11 +183,49 @@ fn parse_expr(tok_base: i32, sb: i32) -> i32 {
 fn parse_expr_basic(tok_base: i32, sb: i32) -> i32 {
     let lhs = parse_add(tok_base, sb);
     let k = cur_get(sb);
-    if tok_tag(tok_base, k) == 16 {     // 16 = TK_LT
-        cur_advance(sb);
-        let rhs = parse_add(tok_base, sb);
-        mk_node(6, lhs, rhs, 0)
-    } else { lhs }
+    let t = tok_tag(tok_base, k);
+    let t2 = tok_tag(tok_base, k + 1);
+    // Token tags: 15='=', 16='<', 17='>', 18='!'.
+    // Compound comparisons require the next char to be `=`.
+    if t == 16 {
+        if t2 == 15 {
+            // `<=`
+            cur_advance(sb); cur_advance(sb);
+            let rhs = parse_add(tok_base, sb);
+            mk_node(22, lhs, rhs, 0)
+        } else {
+            // `<`
+            cur_advance(sb);
+            let rhs = parse_add(tok_base, sb);
+            mk_node(6, lhs, rhs, 0)
+        }
+    } else { if t == 17 {
+        if t2 == 15 {
+            // `>=`
+            cur_advance(sb); cur_advance(sb);
+            let rhs = parse_add(tok_base, sb);
+            mk_node(23, lhs, rhs, 0)
+        } else {
+            // `>`
+            cur_advance(sb);
+            let rhs = parse_add(tok_base, sb);
+            mk_node(19, lhs, rhs, 0)
+        }
+    } else { if t == 15 {
+        if t2 == 15 {
+            // `==`
+            cur_advance(sb); cur_advance(sb);
+            let rhs = parse_add(tok_base, sb);
+            mk_node(20, lhs, rhs, 0)
+        } else { lhs }
+    } else { if t == 18 {
+        if t2 == 15 {
+            // `!=`
+            cur_advance(sb); cur_advance(sb);
+            let rhs = parse_add(tok_base, sb);
+            mk_node(21, lhs, rhs, 0)
+        } else { lhs }
+    } else { lhs }}}}
 }
 
 fn parse_add(tok_base: i32, sb: i32) -> i32 {
@@ -302,10 +345,18 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
             let next = cur_get(sb);
             let nt = tok_tag(tok_base, next);
             if nt == 15 {
-                // ASSIGN: name = value
-                cur_advance(sb);
-                let value = parse_expr_basic(tok_base, sb);
-                mk_node(11, id_start, id_len, value)
+                // Could be `=` (assign) or `==` (equality). Peek one
+                // more ahead: if it's also `=`, this is `name == ...`,
+                // and we should NOT consume the `=`s here — leave
+                // them for parse_expr_basic to handle as a comparison.
+                let nt2 = tok_tag(tok_base, cur_get(sb) + 1);
+                if nt2 == 15 {
+                    mk_node(1, id_start, id_len, 0)
+                } else {
+                    cur_advance(sb);
+                    let value = parse_expr_basic(tok_base, sb);
+                    mk_node(11, id_start, id_len, value)
+                }
             } else { if nt == 3 {
                 // CALL: name(arg1, arg2, ...). Args become AST_ARG
                 // linked list; head index goes in CALL.p3 (or 0 if
