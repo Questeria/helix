@@ -967,6 +967,49 @@ def test_bootstrap_lexer_token_count():
     assert compile_and_run(src) == 13
 
 
+def test_bootstrap_pipeline_end_to_end():
+    """Stage 3: full lex + parse + eval pipeline runs against source
+    files on disk. Each input is text -> tokens -> AST -> i32. This
+    proves the entire Helix-self-hosted front-end works on real
+    source files; full ELF emission is the only Python piece left."""
+    import os, subprocess
+    proj = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    lexer = open(os.path.join(proj, "helixc", "bootstrap", "lexer.hx")).read()
+    lexer_no_main = lexer.rsplit(
+        "// --------------------------------------------------------------\n// Demo:",
+        1,
+    )[0]
+    parser_body = open(os.path.join(proj, "helixc", "bootstrap", "parser.hx")).read()
+    evaluator = open(os.path.join(proj, "helixc", "bootstrap", "evaluator.hx")).read()
+
+    def run(input_text: str) -> int:
+        subprocess.run(
+            ["wsl", "-e", "bash", "-c",
+             f"printf %s {repr(input_text)} > /tmp/helix_lex_input.hx"],
+            check=True, timeout=10,
+        )
+        src = lexer_no_main + parser_body + evaluator + """
+fn main() -> i32 {
+    let src_start = __arena_len();
+    let src_len = read_file_to_arena("/tmp/helix_lex_input.hx");
+    if src_len <= 0 { 0 - 1 } else { run_source(src_start, src_len) }
+}
+"""
+        return compile_and_run(src)
+
+    assert run("42") == 42, "literal"
+    assert run("1 + 2") == 3, "addition"
+    assert run("1 + 2 * 3") == 7, "precedence: ADD over MUL"
+    assert run("(1 + 2) * 3") == 9, "grouping"
+    assert run("-5") == 251, "unary minus (-5 mod 256)"
+    assert run("let x = 5 ; x * x") == 25, "let-bind + ref"
+    assert run("let x = 5 ; let y = 7 ; x + y") == 12, "nested let"
+    assert run("if 1 < 2 { 7 } else { 9 }") == 7, "if true branch"
+    assert run("if 5 < 2 { 7 } else { 9 }") == 9, "if false branch"
+    assert run("let x = 5 ; if x < 10 { x * (x + 3) } else { x - 99 }") == 40, \
+        "the metacircular_eval demo's same expression, now via real lex+parse"
+
+
 def test_bootstrap_parser_root_tag_matches_grammar():
     """Stage-2 parser: lex + parse a small program, verify the root
     AST node's tag matches what the grammar would produce. Tag table
