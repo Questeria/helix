@@ -738,24 +738,30 @@ fn emit_read_file_to_arena_body(patch_state: i32, arena_base_s: i32) -> i32 {
     emit_byte(0x0F); emit_byte(0x05);                                           // syscall
     // push rax (fd on stack)
     emit_byte(0x50);
-    // sub rsp, 0x8000 (32K read buffer)
+    // Audit-18b: bumped read buffer 0x8000 (32K) -> 0x40000 (256K) so a
+    // single sys_read can swallow the whole bootstrap source (~116K).
+    // Without this, K2's read truncates at 32K, K2 only sees lexer +
+    // start of parser, never reaches `main`, fn_table lookup for "main"
+    // fails, and the entry-stub call gets ud2-patched -> SIGILL on K3.
+    // Matches BUF_SIZE in helixc/backend/x86_64.py (the host backend).
+    // sub rsp, 0x40000 (256K read buffer)
     emit_byte(0x48); emit_byte(0x81); emit_byte(0xEC);
-    emit_u32_le(32768);
-    // mov rdi, [rsp+0x8000] (load fd back into rdi)
+    emit_u32_le(262144);
+    // mov rdi, [rsp+0x40000] (load fd back into rdi)
     emit_byte(0x48); emit_byte(0x8B); emit_byte(0xBC); emit_byte(0x24);
-    emit_u32_le(32768);
+    emit_u32_le(262144);
     // mov rsi, rsp (buffer = rsp)
     emit_byte(0x48); emit_byte(0x89); emit_byte(0xE6);
-    // mov edx, 0x8000 (count)
-    emit_byte(0xBA); emit_byte(0x00); emit_byte(0x80); emit_byte(0x00); emit_byte(0x00);
+    // mov edx, 0x40000 (count)
+    emit_byte(0xBA); emit_byte(0x00); emit_byte(0x00); emit_byte(0x04); emit_byte(0x00);
     // mov eax, 0 (sys_read); syscall
     emit_byte(0xB8); emit_byte(0); emit_byte(0); emit_byte(0); emit_byte(0);
     emit_byte(0x0F); emit_byte(0x05);
     // mov r10, rax (save bytes_read)
     emit_byte(0x49); emit_byte(0x89); emit_byte(0xC2);
-    // mov rdi, [rsp+0x8000]; mov eax, 3 (sys_close); syscall
+    // mov rdi, [rsp+0x40000]; mov eax, 3 (sys_close); syscall
     emit_byte(0x48); emit_byte(0x8B); emit_byte(0xBC); emit_byte(0x24);
-    emit_u32_le(32768);
+    emit_u32_le(262144);
     emit_byte(0xB8); emit_byte(3); emit_byte(0); emit_byte(0); emit_byte(0);
     emit_byte(0x0F); emit_byte(0x05);
     // test r10, r10 ; jns +3 ; xor r10, r10 (clamp negative to 0)
@@ -810,9 +816,9 @@ fn emit_read_file_to_arena_body(patch_state: i32, arena_base_s: i32) -> i32 {
     let jge_disp = end_addr - jge_after;
     __arena_set(jge_disp_slot, jge_disp);
     // ---- postlude ----
-    // add rsp, 0x8000
+    // add rsp, 0x40000 (must match the sub above)
     emit_byte(0x48); emit_byte(0x81); emit_byte(0xC4);
-    emit_u32_le(32768);
+    emit_u32_le(262144);
     // add rsp, 8 (drop fd)
     emit_byte(0x48); emit_byte(0x83); emit_byte(0xC4); emit_byte(0x08);
     // mov rax, r10 (return bytes_read)
