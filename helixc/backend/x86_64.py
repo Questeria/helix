@@ -1506,6 +1506,12 @@ class FnCompiler:
                 self.asm.mov_eax_mem_rbp(val_slot)
                 # Allocate 16 bytes on stack for the digit buffer.
                 buf = self.asm.b
+                # rbx is callee-saved under SysV — print_int uses bl/ebx
+                # as a sign flag, so we must preserve the caller's rbx.
+                # `push rbx` (1 byte: 53) + matching pop after the
+                # syscall keeps the ABI invariant intact for any future
+                # caller that depends on rbx surviving the call.
+                buf.emit(0x53)                    # push rbx
                 buf.emit(0x48, 0x83, 0xEC, 0x10)  # sub rsp, 16
                 # Digit pointer starts past the end (rsp+15) and walks down.
                 # Use rdi as the digit pointer, ecx as divisor=10.
@@ -1550,6 +1556,7 @@ class FnCompiler:
                 self.asm.syscall()
                 # Restore stack, store return value in result slot.
                 buf.emit(0x48, 0x83, 0xC4, 0x10)  # add rsp, 16
+                buf.emit(0x5B)                    # pop rbx (restore caller's rbx)
                 if op.results:
                     res_slot = self._slot_of(op.results[0])
                     self.asm.mov_mem_rbp_eax(res_slot)

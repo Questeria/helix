@@ -198,6 +198,39 @@ def test_match_chain_rule():
     assert "match" in out and "x" in out, f"got {out}"
 
 
+def test_two_param_if_zero_literals_distinct_objects():
+    """Cycle-4 audit: the FloatLit(0.0) used as a placeholder when one
+    arm has no contribution must be a distinct Python object per
+    parameter — sharing would let in-place mutation passes corrupt
+    cross-parameter gradient ASTs."""
+    body = _body_of("""
+    fn f(x: f32, y: f32, c: bool) -> f32 {
+        if c { x } else { y }
+    }
+    """)
+    grads = differentiate_reverse(body, ["x", "y"])
+
+    def collect_zero_ids(node, results):
+        if node is None:
+            return
+        if isinstance(node, A.FloatLit) and node.value == 0.0:
+            results.append(id(node))
+        for attr in ("cond", "then", "else_", "final_expr",
+                     "left", "right", "operand", "value"):
+            if hasattr(node, attr):
+                collect_zero_ids(getattr(node, attr), results)
+        for attr in ("stmts", "args", "elems"):
+            if hasattr(node, attr):
+                for c in getattr(node, attr) or []:
+                    collect_zero_ids(c, results)
+
+    zx, zy = [], []
+    collect_zero_ids(grads["x"], zx)
+    collect_zero_ids(grads["y"], zy)
+    shared = set(zx) & set(zy)
+    assert not shared, f"x and y grads share zero literal objects: {shared}"
+
+
 def main():
     tests = [(name, fn) for name, fn in globals().items()
              if name.startswith("test_") and callable(fn)]

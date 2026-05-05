@@ -246,6 +246,49 @@ def _substitute_names(expr: A.Expr, subs: dict[str, A.Expr]) -> A.Expr:
     return go(expr, subs)
 
 
+def _is_reassigned_after(stmts: list, name: str, start_idx: int) -> bool:
+    """Return True if any statement after `start_idx` reassigns `name` via
+    A.Assign anywhere in its expression tree. Used by `_inline_lets` to
+    decide whether a `let mut` is effectively single-assignment (safe to
+    inline) or genuinely mutable (must be left alone)."""
+    def _has_assign(node) -> bool:
+        if node is None:
+            return False
+        if isinstance(node, A.Assign):
+            if isinstance(node.target, A.Name) and node.target.name == name:
+                return True
+            return _has_assign(node.value)
+        # Recurse into common containers
+        for attr in ("operand", "left", "right", "value", "expr",
+                     "scrutinee", "cond", "iter_expr", "callee", "obj"):
+            if hasattr(node, attr) and _has_assign(getattr(node, attr)):
+                return True
+        for attr in ("args", "elems", "stmts", "indices", "alts",
+                     "sub_patterns"):
+            if hasattr(node, attr):
+                for child in getattr(node, attr) or []:
+                    if _has_assign(child):
+                        return True
+        if isinstance(node, A.Block):
+            for s in node.stmts:
+                if _has_assign(s):
+                    return True
+            if node.final_expr is not None and _has_assign(node.final_expr):
+                return True
+        if isinstance(node, A.If):
+            if _has_assign(node.then) or _has_assign(node.else_):
+                return True
+        if isinstance(node, A.Match):
+            for arm in node.arms:
+                if _has_assign(arm.body):
+                    return True
+        return False
+    for i in range(start_idx + 1, len(stmts)):
+        if _has_assign(stmts[i]):
+            return True
+    return False
+
+
 def _inline_lets(expr: A.Expr | None, env: dict[str, A.Expr]) -> A.Expr | None:
     """Walk expr, replacing references to let-bound names with the bound
     expression. Used to flatten blocks before differentiation."""
@@ -267,12 +310,18 @@ def _inline_lets(expr: A.Expr | None, env: dict[str, A.Expr]) -> A.Expr | None:
     if isinstance(expr, A.Block):
         local_env = dict(env)
         for stmt in expr.stmts:
-            # Skip mutable lets — inlining them would substitute the
-            # initial value at every use site, ignoring later
-            # assignments. Audit-10 critical: this silently produced
-            # wrong derivatives for `let mut x = a; x = x + 1; x`.
+            # Inline `let` and `let mut` bindings whose name is never
+            # reassigned within the rest of the block. The conservative
+            # mut-skip from audit-10 was over-restrictive: it produced
+            # gradient 0 for `let mut acc = x; acc` (no reassignment),
+            # because `acc` had no inlining and the differentiator
+            # treated the bare Name as a non-var. Cycle-4 fix: only
+            # skip mutable lets that ARE actually reassigned later in
+            # the same block. Single-assignment mut bindings are
+            # functionally pure for AD purposes.
             if (isinstance(stmt, A.Let) and stmt.value is not None
-                    and not stmt.is_mut):
+                    and (not stmt.is_mut
+                         or not _is_reassigned_after(expr.stmts, stmt.name, expr.stmts.index(stmt)))):
                 local_env[stmt.name] = _inline_lets(stmt.value, local_env)
             # ExprStmt: ignore (no derivative meaning)
             # ConstStmt: similar to Let (immutable by construction)

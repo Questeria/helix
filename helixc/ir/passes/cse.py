@@ -101,11 +101,13 @@ def cse_function(fn: tir.FnIR) -> int:
             if op.kind not in PURE_KINDS:
                 continue
 
-            # Hash the (potentially-rewritten) op
-            attrs_items = tuple(sorted((k, v) for k, v in op.attrs.items()
-                                       if isinstance(v, (int, float, str, bool))))
-            operand_ids = tuple(o.id for o in op.operands)
-            key = (op.kind, operand_ids, attrs_items)
+            # Hash the (potentially-rewritten) op. Use the same shape as
+            # `_op_hash` (defined above) so the audit-10 fix (include
+            # result_ty and complex attrs) actually applies. Without
+            # this, bool MUL and i32 MUL with the same operands hashed
+            # to the same key and got merged — producing a bool result
+            # where i32 was expected, or vice versa.
+            key = _op_hash(op)
             if key in seen:
                 earlier_results = seen[key]
                 for new_r, old_r in zip(op.results, earlier_results):
