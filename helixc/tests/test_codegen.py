@@ -1029,6 +1029,50 @@ def test_write_file_to_arena_zero_length():
     assert out.stdout.strip() == b"0", f"expected size 0, got {out.stdout!r}"
 
 
+def test_bootstrap_parser_no_eof_runaway_on_malformed_input():
+    """Audit-7 fix: parse_primary used to advance the cursor past
+    TK_EOF on any unexpected token, then parse_add/parse_mul read
+    junk values from uninitialized arena slots — non-deterministic
+    output. With the EOF guard in place, malformed inputs return
+    AST_ERR(99) deterministically without walking off the token
+    stream."""
+    import os, subprocess
+    proj = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    lexer = open(os.path.join(proj, "helixc", "bootstrap", "lexer.hx")).read()
+    lexer_no_main = lexer.rsplit(
+        "// --------------------------------------------------------------\n// Demo:",
+        1,
+    )[0]
+    parser_body = open(os.path.join(proj, "helixc", "bootstrap", "parser.hx")).read()
+
+    def root_tag(text: str) -> int:
+        subprocess.run(
+            ["wsl", "-e", "bash", "-c",
+             f"printf %s {repr(text)} > /tmp/helix_lex_input.hx"],
+            check=True, timeout=10,
+        )
+        src = lexer_no_main + parser_body + """
+fn main() -> i32 {
+    let src_start = __arena_len();
+    let src_len = read_file_to_arena("/tmp/helix_lex_input.hx");
+    let tok_base = __arena_len();
+    lex(src_start, src_len);
+    let root = parse_top(tok_base);
+    __arena_get(root)
+}
+"""
+        return compile_and_run(src)
+
+    # `(` alone -> primary recurses into parse_expr inside parens,
+    # immediately hits EOF, returns AST_ERR. Then outer parse_primary
+    # tries to consume `)` (cur_advance), but the cursor is held at
+    # EOF so this is a no-op. Outer returns the inner AST_ERR.
+    assert root_tag("(") == 99, "AST_ERR for unmatched ("
+    # 5 nested unmatched opens — used to produce non-deterministic
+    # tag values. Now deterministically AST_ERR.
+    assert root_tag("(((((") == 99, "deterministic AST_ERR for runaway nesting"
+
+
 def test_bootstrap_pipeline_end_to_end():
     """Stage 3: full lex + parse + eval pipeline runs against source
     files on disk. Each input is text -> tokens -> AST -> i32. This

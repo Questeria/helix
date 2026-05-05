@@ -207,7 +207,16 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
         cur_advance(sb);     // ')'
         inner
     } else {
-        cur_advance(sb);
+        // Audit-7 fix: don't advance past TK_EOF (tag 0). Without
+        // this guard, a malformed input like `1 + (` walks the
+        // cursor past the EOF sentinel into uninitialized arena
+        // slots, and the parse_add/parse_mul while-loops then read
+        // arbitrary values as if they were tokens — non-deterministic
+        // junk AST. We return AST_ERR but hold the cursor at EOF
+        // so callers immediately re-encounter EOF and unwind cleanly.
+        if t != 0 {
+            cur_advance(sb);
+        };
         mk_node(99, t, 0, 0)
     }}}
 }
