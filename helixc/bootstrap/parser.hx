@@ -494,8 +494,20 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
         // arbitrary values as if they were tokens — non-deterministic
         // junk AST. We return AST_ERR but hold the cursor at EOF
         // so callers immediately re-encounter EOF and unwind cleanly.
+        //
+        // Audit-16 extension: also don't advance past `}` (tag 6) or
+        // `)` (tag 4). Empty blocks like `else {}` (used in kovc.hx's
+        // pidx-register switch fallthrough) were broken — parse_expr
+        // descended into parse_primary on the `}` of the empty body,
+        // the catch-all consumed it, and the if-handler's followup
+        // cur_advance then ate the OUTER `}`. Cursor desynced for the
+        // rest of the file. Same idea for `)` in calls like `f()`.
         if t != 0 {
-            cur_advance(sb);
+            if t != 6 {
+                if t != 4 {
+                    cur_advance(sb);
+                };
+            };
         };
         mk_node(99, t, 0, 0)
     }}}}
