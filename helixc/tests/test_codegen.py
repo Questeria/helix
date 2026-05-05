@@ -2909,6 +2909,64 @@ def test_generic_nested_call():
     assert code == 42, f"expected 42, got {code}"
 
 
+def test_agi_wmt_predict():
+    """Phase 4 step 5: tabular world model. Set transition (0,0)->1; verify."""
+    src = """
+    fn main() -> i32 {
+        let wmt = wmt_new(3, 2);
+        wmt_set(wmt, 0, 0, 1);
+        wmt_set(wmt, 0, 1, 2);
+        wmt_predict(wmt, 0, 0) + wmt_predict(wmt, 0, 1) * 10
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 21, f"expected 21 (1 + 2*10), got {code}"
+
+
+def test_agi_wml_predict():
+    """Linear scalar world model: w_s*state + w_a*action + b.
+    With w_s=2, w_a=3, b=10: predict(s=4, a=1) = 8+3+10 = 21."""
+    src = """
+    fn main() -> i32 {
+        let wml = wml_new(2, 3, 10);
+        wml_predict(wml, 4, 1)
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 21, f"expected 21, got {code}"
+
+
+def test_agi_wm_prediction_error():
+    """Absolute error: |predicted - actual|."""
+    src = """
+    fn main() -> i32 {
+        wm_prediction_error(10, 7) + wm_prediction_error(5, 12)
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 10, f"expected 10 (3 + 7), got {code}"
+
+
+def test_agi_wmt_rollout():
+    """Imagination rollout: chain transitions through 3 steps.
+    states: 0 -a0-> 1 -a0-> 2 -a0-> 0 (cycle)."""
+    src = """
+    fn main() -> i32 {
+        let wmt = wmt_new(3, 2);
+        wmt_set(wmt, 0, 0, 1);
+        wmt_set(wmt, 1, 0, 2);
+        wmt_set(wmt, 2, 0, 0);
+        let actions = t1d_new(3);
+        ti1d_set(actions, 0, 0);
+        ti1d_set(actions, 1, 0);
+        ti1d_set(actions, 2, 0);
+        wmt_rollout(wmt, 0, actions, 3) + 42
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42 (0 + 42), got {code}"
+
+
 def test_agi_tree_eq_shallow():
     """Phase 4 step 4: tree-node structural equality."""
     src = """
