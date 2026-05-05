@@ -327,6 +327,16 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
             let name_start = tok_p2(tok_base, nk);
             let name_len = tok_p3(tok_base, nk);
             cur_advance(sb);     // name
+            // Optional `: T` type annotation. Phase-0 only has `i32`
+            // so we silently skip both the colon and the following
+            // ident. Without this, `let mut i: i32 = 0` would mis-
+            // align the cursor and break self-host of the bootstrap
+            // parser.
+            let after_name_tag = tok_tag(tok_base, cur_get(sb));
+            if after_name_tag == 14 {
+                cur_advance(sb);    // consume ':'
+                cur_advance(sb);    // consume type IDENT
+            };
             cur_advance(sb);     // '='
             // value uses parse_expr_basic so the `;` after the
             // value belongs to the let-terminator, not a sequencer.
