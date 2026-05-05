@@ -122,9 +122,11 @@ fn eval_ast(idx: i32, env_base: i32, env_top: i32) -> i32 {
             eval_ast(p3, env_base, env_top)
         }
     } else { if t == 8 {
-        // LET: p1=name_start, p2=name_len, p3 = packed (value*65536 + body)
-        let value_idx = p3 / 65536;
-        let body_idx = p3 - value_idx * 65536;
+        // LET: p1=name_start, p2=name_len, p3 = body_idx, p4 = value_idx.
+        // Audit-14: split out of legacy packed encoding to support
+        // arena indices > 65535 (full self-host).
+        let body_idx = p3;
+        let value_idx = __arena_get(idx + 4);
         let v = eval_ast(value_idx, env_base, env_top);
         env_push(p1, p2, v);
         eval_ast(body_idx, env_base, env_top + 3)

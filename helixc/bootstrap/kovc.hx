@@ -494,16 +494,15 @@ fn fn_table_lookup(state: i32, name_start: i32, name_len: i32) -> i32 {
 }
 
 // patch_table: records pending CALL + LEA backpatches. Each entry:
-// [disp_slot, target_name_start, target_name_len]. Capacity is
-// generous (1024) because kovc.hx self-compiling fires one LEA per
-// inline arena builtin call (one per __arena_push/get/set/len invocation
-// in the source) — easily hundreds across the lexer + parser + kovc
-// concatenation.
+// [disp_slot, target_name_start, target_name_len]. Capacity 4096 —
+// kovc.hx self-compiling has ~1500 patch entries (1159 fn calls +
+// 339 inline-builtin LEAs across lexer + parser + kovc). 4096
+// gives 2.7x headroom.
 fn patch_table_init() -> i32 {
     let state = __arena_push(0);            // top = 0
     __arena_push(state + 2);                // table_base = state + 2
     let mut i: i32 = 0;
-    while i < 3072 {                        // 1024 entries * 3 slots
+    while i < 12288 {                       // 4096 entries * 3 slots
         __arena_push(0);
         i = i + 1;
     }
@@ -666,8 +665,9 @@ fn str_table_add(b: i32, disp_slot: i32, body_s: i32, body_l: i32) -> i32 {
 
 // HELIX_ARENA_CAP mirrored as kovc constant (kovc emits its own
 // arena in the produced binary so the compiled programs match the
-// Python-codegen layout: 524288 data slots + 1 cursor slot).
-fn helix_arena_cap() -> i32 { 524288 }
+// Python-codegen layout: 2097152 data slots + 1 cursor slot,
+// sized for self-host).
+fn helix_arena_cap() -> i32 { 2097152 }
 
 // Single global slot pointing at bn_state. Set during
 // emit_elf_for_ast_to_path; read by try_emit_builtin_call which
@@ -1252,11 +1252,11 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         let off = bind_lookup(bind_state, p1, p2);
         emit_mov_eax_local(off)
     } else { if t == 8 {
-        // AST_LET: p1 = name start, p2 = name len, p3 = packed
-        // (value_idx * 65536 + body_idx).
-        let p3 = __arena_get(idx + 3);
-        let value_idx = p3 / 65536;
-        let body_idx = p3 - value_idx * 65536;
+        // AST_LET: p1 = name_start, p2 = name_len, p3 = body_idx,
+        // p4 = value_idx (audit-14: split out of the legacy packed
+        // p3 to avoid 16-bit overflow on large sources).
+        let body_idx = __arena_get(idx + 3);
+        let value_idx = __arena_get(idx + 4);
         let n_val = emit_ast_code(value_idx, bind_state, patch_state, bn_state);
         let off = bind_alloc_offset(bind_state);
         let n_store = emit_mov_local_eax(off);
@@ -1268,9 +1268,9 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         // AST_LET_MUT: identical codegen to AST_LET. Mutability is
         // a surface-language constraint; the runtime representation
         // is the same. (Reassignment via AST_ASSIGN works on either.)
-        let p3 = __arena_get(idx + 3);
-        let value_idx = p3 / 65536;
-        let body_idx = p3 - value_idx * 65536;
+        // Same 5-slot layout as AST_LET (audit-14).
+        let body_idx = __arena_get(idx + 3);
+        let value_idx = __arena_get(idx + 4);
         let n_val = emit_ast_code(value_idx, bind_state, patch_state, bn_state);
         let off = bind_alloc_offset(bind_state);
         let n_store = emit_mov_local_eax(off);
@@ -1505,9 +1505,8 @@ fn emit_elf_for_ast_to_path(ast_root: i32) -> i32 {
             let fn_idx = __arena_get(cur_list + 1);
             let fn_name_s = __arena_get(fn_idx + 1);
             let fn_name_l = __arena_get(fn_idx + 2);
-            let fn_packed = __arena_get(fn_idx + 3);
-            let params_head = fn_packed / 65536;
-            let fn_body = fn_packed - params_head * 65536;
+            let fn_body = __arena_get(fn_idx + 3);
+            let params_head = __arena_get(fn_idx + 4);
             let fn_code_offset = __arena_len();
             fn_table_add(fn_state, fn_name_s, fn_name_l, fn_code_offset);
             bind_reset(bind_state);
@@ -1632,11 +1631,11 @@ fn emit_elf_for_ast_to_path(ast_root: i32) -> i32 {
     let code_end = __arena_len();
     let total_filesz = 4096 + (code_end - code_start);
     // p_memsz extends past p_filesz to give the produced binary's
-    // arena ~2 MB of BSS-allocated zero memory (4 bytes cursor +
-    // 524288 * 4 bytes data). Without this gap, an arena_push past
+    // arena ~8 MB of BSS-allocated zero memory (4 bytes cursor +
+    // 2097152 * 4 bytes data). Without this gap, an arena_push past
     // file bounds would SIGSEGV. Sized to match HELIX_ARENA_CAP in
     // helixc/backend/x86_64.py (the host compiler's bound).
-    let total_memsz = total_filesz + 4 + 2097152;
+    let total_memsz = total_filesz + 4 + 8388608;
     patch_u64_le_split(elf_start + 64 + 32, total_filesz, 0);
     patch_u64_le_split(elf_start + 64 + 40, total_memsz, 0);
     total_filesz

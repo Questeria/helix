@@ -165,7 +165,20 @@ fn byte_eq(src_a: i32, len_a: i32, src_b: i32, len_b: i32) -> i32 {
 fn parse_expr(tok_base: i32, sb: i32) -> i32 {
     let first = parse_expr_basic(tok_base, sb);
     let k = cur_get(sb);
-    if tok_tag(tok_base, k) == 12 {     // 12 = TK_SEMI
+    let kt = tok_tag(tok_base, k);
+    // Audit-15: implicit `;` after a statement-like expression
+    // whose result is a `}` block. Specifically: AST_WHILE (10),
+    // AST_IF (7), AST_LET (8), AST_LET_MUT (12) — these chain into
+    // the next expression even without an explicit semicolon. This
+    // matches surface-Helix semantics; without it, the bootstrap
+    // source's many `while ... { ... } <expr>` patterns split into
+    // two unrelated expressions and the latter falls off the parser.
+    let first_tag = __arena_get(first);
+    let first_is_block = if first_tag == 10 { 1 }
+        else { if first_tag == 7 { 1 }
+        else { if first_tag == 8 { 1 }
+        else { if first_tag == 12 { 1 } else { 0 }}}};
+    if kt == 12 {     // 12 = TK_SEMI
         cur_advance(sb);
         // Don't chain `;` if the next token signals end-of-block
         // (the `;` was just a terminator after a statement-like
@@ -182,7 +195,23 @@ fn parse_expr(tok_base: i32, sb: i32) -> i32 {
             let rest = parse_expr(tok_base, sb);
             mk_node(13, first, rest, 0)
         }}}
-    } else { first }
+    } else { if first_is_block == 1 {
+        // No explicit `;` but `first` is a statement-block.
+        // Implicitly chain with the next expression unless we're
+        // at end-of-block (`}`/EOF/`)`).
+        if kt == 0 {
+            first
+        } else { if kt == 6 {
+            first
+        } else { if kt == 4 {
+            first
+        } else {
+            let rest = parse_expr(tok_base, sb);
+            mk_node(13, first, rest, 0)
+        }}}
+    } else {
+        first
+    }}
 }
 
 fn parse_expr_basic(tok_base: i32, sb: i32) -> i32 {
@@ -343,19 +372,46 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
             let value = parse_expr_basic(tok_base, sb);
             cur_advance(sb);     // ';'
             let body = parse_expr(tok_base, sb);
-            let packed = value * 65536 + body;
+            // Audit-14: AST_LET / AST_LET_MUT used to pack
+            // `value_idx * 65536 + body_idx` into p3, but arena
+            // indices for large sources easily exceed 16 bits
+            // (kovc.hx self-host has AST nodes at slot 150K+).
+            // Extend the node to 5 slots: p3 = body_idx, p4 =
+            // value_idx, both 32-bit.
             let tag = if is_mut == 1 { 12 } else { 8 };
-            mk_node(tag, name_start, name_len, packed)
+            let node = mk_node(tag, name_start, name_len, body);
+            __arena_push(value);
+            node
         } else { if byte_eq(id_start, id_len, kw_if_s(sb), kw_if_n(sb)) == 1 {
             cur_advance(sb);
             let cond = parse_expr_basic(tok_base, sb);
             cur_advance(sb);     // '{'
             let then_e = parse_expr(tok_base, sb);
             cur_advance(sb);     // '}'
-            cur_advance(sb);     // 'else'
-            cur_advance(sb);     // '{'
-            let else_e = parse_expr(tok_base, sb);
-            cur_advance(sb);     // '}'
+            // Optional `else` arm. If next token is `else` (ident),
+            // parse `else { ... }`. Otherwise the if-expr's value
+            // when cond is false is 0 (the AST_INT(0) emitted from
+            // the synthetic else branch). Audit-15: bootstrap parser
+            // used to require else; without this guard, byte_eq's
+            // `if ba != bb { ok = 0; };` (no else) shifted the cursor
+            // and corrupted everything downstream during self-host.
+            let after_then_tok = cur_get(sb);
+            let after_then_tag = tok_tag(tok_base, after_then_tok);
+            let mut else_e: i32 = 0;
+            if after_then_tag == 2 {
+                let ats_s = tok_p2(tok_base, after_then_tok);
+                let ats_l = tok_p3(tok_base, after_then_tok);
+                if byte_eq(ats_s, ats_l, kw_else_s(sb), kw_else_n(sb)) == 1 {
+                    cur_advance(sb);     // 'else'
+                    cur_advance(sb);     // '{'
+                    else_e = parse_expr(tok_base, sb);
+                    cur_advance(sb);     // '}'
+                } else {
+                    else_e = mk_node(0, 0, 0, 0);   // AST_INT(0)
+                };
+            } else {
+                else_e = mk_node(0, 0, 0, 0);       // AST_INT(0)
+            };
             mk_node(7, cond, then_e, else_e)
         } else { if byte_eq(id_start, id_len, kw_while_s(sb), kw_while_n(sb)) == 1 {
             // while expr { body } — Phase-0 returns 0.
@@ -611,6 +667,10 @@ fn parse_fn_decl(tok_base: i32, sb: i32) -> i32 {
     cur_advance(sb);     // '{'
     let body = parse_expr(tok_base, sb);
     cur_advance(sb);     // '}'
-    let packed = params_head * 65536 + body;
-    mk_node(14, name_start, name_len, packed)
+    // Audit-14: same overflow issue as AST_LET — packed encoding
+    // breaks for arena indices > 65535. Extend to 5 slots: p3 =
+    // body_idx, p4 = params_head.
+    let node = mk_node(14, name_start, name_len, body);
+    __arena_push(params_head);
+    node
 }

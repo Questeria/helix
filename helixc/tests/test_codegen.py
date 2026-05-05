@@ -1338,6 +1338,137 @@ fn main() -> i32 {
     assert b"65" in run.stdout, f"expected 65 (ascii 'A'), got {run.stdout!r}"
 
 
+import pytest
+
+
+@pytest.mark.skip(reason="Self-host work in progress: K1 parses 46 of 117 "
+                  "bootstrap fns (audit-15 for if/while/let chaining); "
+                  "remaining gap: more parser features needed for full "
+                  "kovc.hx self-compile.")
+def test_bootstrap_kovc_self_host_loop():
+    """Full self-host: P0 (kovc-by-Python) compiles the entire
+    bootstrap source (lexer.hx + parser.hx + kovc.hx + driver_main)
+    into binary K1. K1 reads the SAME bootstrap source from disk
+    (with paths swapped so it reads K2's input and writes K2's
+    output), produces K2. K2 reads a small Helix expression,
+    produces K3. K3 runs and returns the expected value.
+
+    This closes the bootstrap loop: a Helix-side compiler
+    (kovc.hx) compiles itself into a binary capable of compiling
+    arbitrary Helix sources, including itself again.
+
+    Important: this exercises the cap bump (HELIX_ARENA_CAP =
+    524288) since K1's arena must hold the entire bootstrap
+    source (~111 KB), tokens (~150 KB), AST (~50 KB), and ELF
+    output (~30 KB) simultaneously.
+    """
+    import os, subprocess
+    proj = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    lexer = open(os.path.join(proj, "helixc", "bootstrap", "lexer.hx")).read()
+    lexer_no_main = lexer.rsplit(
+        "// --------------------------------------------------------------\n// Demo:",
+        1,
+    )[0]
+    parser_body = open(os.path.join(proj, "helixc", "bootstrap", "parser.hx")).read()
+    kovc = open(os.path.join(proj, "helixc", "bootstrap", "kovc.hx")).read()
+    kovc_lib = kovc.rsplit(
+        "// --------------------------------------------------------------\n// Demo:",
+        1,
+    )[0]
+
+    # K1 reads K1_INPUT and writes K1_OUTPUT.
+    k1_main = """
+fn main() -> i32 {
+    let src_start = __arena_len();
+    let src_len = read_file_to_arena("/tmp/sh_k1_in.hx");
+    let tok_base = __arena_len();
+    lex(src_start, src_len);
+    let ast_root = parse_top(tok_base);
+    let total = emit_elf_for_ast_to_path(ast_root);
+    let elf_start = __arena_len() - total;
+    write_file_to_arena("/tmp/sh_k1_out.bin", elf_start, total)
+}
+"""
+    # K2 (= what K1 produces) reads K2_INPUT and writes K2_OUTPUT.
+    k2_main = """
+fn main() -> i32 {
+    let src_start = __arena_len();
+    let src_len = read_file_to_arena("/tmp/sh_k2_in.hx");
+    let tok_base = __arena_len();
+    lex(src_start, src_len);
+    let ast_root = parse_top(tok_base);
+    let total = emit_elf_for_ast_to_path(ast_root);
+    let elf_start = __arena_len() - total;
+    write_file_to_arena("/tmp/sh_k2_out.bin", elf_start, total)
+}
+"""
+
+    # P0 compiles k1_driver (the bootstrap source + k1_main).
+    k1_driver = lexer_no_main + parser_body + kovc_lib + k1_main
+    # K1 reads the bootstrap source again (with k2_main embedded so
+    # K2 will use the K2 paths). Pipe via stdin to avoid the Windows
+    # cmdline length cap (~32 KB; our source is ~111 KB).
+    k1_input = lexer_no_main + parser_body + kovc_lib + k2_main
+    subprocess.run(
+        ["wsl", "-e", "bash", "-c", "cat > /tmp/sh_k1_in.hx"],
+        input=k1_input.encode("utf-8"),
+        check=True, timeout=20,
+    )
+
+    # Compile k1_driver via Python -> K1 binary at /tmp/sh_k1_out.bin
+    # The compile_and_run helper runs the program; the binary's main
+    # writes K1 to /tmp/sh_k1_out.bin as a side effect.
+    compile_and_run(k1_driver)
+
+    # Step 2: stage K2's input (a small Helix expression).
+    subprocess.run(
+        ["wsl", "-e", "bash", "-c",
+         "printf %s 'fn main() -> i32 { 6 * 7 }' > /tmp/sh_k2_in.hx"],
+        check=True, timeout=10,
+    )
+    # Run K1 — it reads /tmp/sh_k1_in.hx (= bootstrap source with
+    # k2_main) and writes K2 to /tmp/sh_k1_out.bin.
+    # Note: /tmp/sh_k1_out.bin is K1 from the Python compile_and_run
+    # above. We need to RE-RUN that to produce K2 from a different
+    # input. Confusing naming — the test stage 1 wrote K1, but K1 is
+    # also the binary we're about to run. Let me use a different scheme.
+    #
+    # Re-do: Python compiled K1 = k1_driver. K1's binary is at
+    # /tmp/sh_k1_out.bin (it was written by k1_driver's main when
+    # compile_and_run executed it). But now we want K1 to read k1_input
+    # and produce K2 at /tmp/sh_k1_out.bin (overwriting itself, then
+    # we move).
+    # Actually compile_and_run runs the binary just compiled; it
+    # doesn't return the binary. So we need to read what main wrote.
+    # K1's main wrote /tmp/sh_k1_out.bin = the produced binary. That
+    # IS K2 already! Because K1 (k1_driver compiled) had main that
+    # reads /tmp/sh_k1_in.hx (= bootstrap source for K2) and writes
+    # /tmp/sh_k1_out.bin. So /tmp/sh_k1_out.bin == K2 already. Done
+    # with one compile_and_run.
+
+    # Step 3: K2 is at /tmp/sh_k1_out.bin. Run it.
+    run_k2 = subprocess.run(
+        ["wsl", "-e", "bash", "-c",
+         "chmod +x /tmp/sh_k1_out.bin && /tmp/sh_k1_out.bin"],
+        capture_output=True, timeout=30,
+    )
+    assert run_k2.returncode == 0, (
+        f"K2 (compiled by K1 from bootstrap source) failed: "
+        f"exit={run_k2.returncode} stderr={run_k2.stderr!r}"
+    )
+
+    # K2's main wrote K3 to /tmp/sh_k2_out.bin. Run K3.
+    run_k3 = subprocess.run(
+        ["wsl", "-e", "bash", "-c",
+         "chmod +x /tmp/sh_k2_out.bin && /tmp/sh_k2_out.bin; echo exit=$?"],
+        capture_output=True, timeout=10,
+    )
+    assert b"exit=42" in run_k3.stdout, (
+        f"K3 (the program K2 compiled) didn't return 42: "
+        f"stdout={run_k3.stdout!r}"
+    )
+
+
 def test_bootstrap_kovc_demo_emits_ast_int_42():
     """Stage 4 demo: kovc.hx's main() builds AST_INT(42) by hand,
     compiles it, and writes the resulting ELF to disk. The produced

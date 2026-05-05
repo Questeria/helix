@@ -50,11 +50,15 @@ HELIX_NUM_CELLS = 64
 # slots 1..HELIX_ARENA_CAP available for user data. Sized to fit a self-
 # hosted compiler's working set (AST nodes + IR ops + symbol table) for
 # small-to-medium programs without reallocation.
-# 524288 slots × 4 bytes = 2 MB BSS arena. Big enough to hold
-# kovc.hx's own source (~75KB) plus tokens, AST, and ELF output
-# during a self-compile pass. The arena lives in BSS (no file
-# bytes) so the cap bump doesn't inflate produced binaries.
-HELIX_ARENA_CAP = 524288
+# 2 097 152 slots × 4 bytes = 8 MB BSS arena. Sized for self-host:
+# the bootstrap source (lexer + parser + kovc, ~111 KB) lands as
+# 111 K slots; each Helix source byte gets pushed as a one-byte
+# value into a full i32 slot. Tokens add ~30 K * 4 = 120 K slots;
+# AST adds ~5 K nodes * 5 slots = 25 K. ELF output is ~30 K. Total
+# ~290 K slots — well under 2 M with room for compile-time state
+# (fn_table, patch_table, str_state). The arena lives in BSS so
+# the cap bump doesn't inflate produced binary file sizes.
+HELIX_ARENA_CAP = 2097152
 HELIX_CELL_SIZE = 8
 
 
