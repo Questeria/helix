@@ -1338,14 +1338,6 @@ fn main() -> i32 {
     assert b"65" in run.stdout, f"expected 65 (ascii 'A'), got {run.stdout!r}"
 
 
-import pytest
-
-
-@pytest.mark.skip(reason="Self-host work in progress: K1 now parses all 120 "
-                  "bootstrap fns (audit-15 + AST_MOD), but K2 hangs when "
-                  "compiling multi-fn input. Likely a subtle codegen "
-                  "regression from the recent parser refactor; needs "
-                  "audit-16 to isolate.")
 def test_bootstrap_kovc_self_host_loop():
     """Full self-host: P0 (kovc-by-Python) compiles the entire
     bootstrap source (lexer.hx + parser.hx + kovc.hx + driver_main)
@@ -1448,13 +1440,17 @@ fn main() -> i32 {
     # with one compile_and_run.
 
     # Step 3: K2 is at /tmp/sh_k1_out.bin. Run it.
+    # K2 reads /tmp/sh_k2_in.hx (= "fn main() -> i32 { 6 * 7 }") and
+    # writes /tmp/sh_k2_out.bin (= K3). K2's exit code is bytes_written
+    # mod 256 — not 0. We just check that K2 ran without crashing
+    # (no signal-128+) and produced a non-empty K3.
     run_k2 = subprocess.run(
         ["wsl", "-e", "bash", "-c",
          "chmod +x /tmp/sh_k1_out.bin && /tmp/sh_k1_out.bin"],
         capture_output=True, timeout=30,
     )
-    assert run_k2.returncode == 0, (
-        f"K2 (compiled by K1 from bootstrap source) failed: "
+    assert run_k2.returncode < 128, (
+        f"K2 (compiled by K1 from bootstrap source) crashed: "
         f"exit={run_k2.returncode} stderr={run_k2.stderr!r}"
     )
 

@@ -124,27 +124,78 @@ fn skip_line_comment(src_start: i32, src_len: i32, pos: i32) -> i32 {
 }
 
 // --------------------------------------------------------------
-// Lex an integer literal starting at byte index `pos`. Reads digits
-// while is_digit() holds, accumulates the value, emits a single
-// TK_INT token. Returns the byte index after the last digit.
+// Lex an integer literal starting at byte index `pos`. Recognises a
+// `0x` / `0X` prefix for hex literals (digits 0-9, a-f, A-F); falls
+// back to decimal otherwise. Emits a single TK_INT token whose
+// payload is the parsed value. Returns the byte index after the
+// last consumed digit.
+//
+// The Python reference lexer (helixc/frontend/lexer.py) accepts
+// `0x401000` and friends; the bootstrap MUST do the same, otherwise
+// any hex literal in `kovc.hx` (e.g. `emit_u64_le_split(0x401000,
+// 0)` in `emit_elf_header`) silently splits into a TK_INT(0)
+// followed by an `x401000` IDENT, which the parser folds into an
+// extra call argument that codegen resolves to `[rbp+0x0]` (the
+// saved rbp slot). Result: the self-compiled K2 emits an ELF whose
+// e_entry is a stack pointer, and any further use of K2 segfaults.
 // --------------------------------------------------------------
 fn lex_int(src_start: i32, src_len: i32, pos: i32) -> i32 {
     let mut p: i32 = pos;
     let end = src_start + src_len;
     let mut value: i32 = 0;
-    let mut keep: i32 = 1;
-    while keep == 1 {
-        if p >= end {
-            keep = 0;
-        } else {
-            let b = __arena_get(p);
-            if is_digit(b) == 1 {
-                value = value * 10 + (b - 48);
-                p = p + 1;
-            } else {
-                keep = 0;
-            };
+    // Detect a `0x` / `0X` prefix. We need at least two more bytes
+    // and the first must be `0`; otherwise fall through to decimal.
+    let mut is_hex: i32 = 0;
+    if p + 1 < end {
+        let c0 = __arena_get(p);
+        let c1 = __arena_get(p + 1);
+        if c0 == 48 {
+            // 'x' = 120, 'X' = 88
+            if c1 == 120 { is_hex = 1; }
+            else { if c1 == 88 { is_hex = 1; } };
         };
+    };
+    if is_hex == 1 {
+        p = p + 2;     // consume `0x`
+        let mut keep_h: i32 = 1;
+        while keep_h == 1 {
+            if p >= end {
+                keep_h = 0;
+            } else {
+                let b = __arena_get(p);
+                // 0..9 → b-48; a..f → b-87; A..F → b-55
+                if is_digit(b) == 1 {
+                    value = value * 16 + (b - 48);
+                    p = p + 1;
+                } else { if b >= 97 {
+                    if b <= 102 {
+                        value = value * 16 + (b - 87);
+                        p = p + 1;
+                    } else { keep_h = 0; }
+                } else { if b >= 65 {
+                    if b <= 70 {
+                        value = value * 16 + (b - 55);
+                        p = p + 1;
+                    } else { keep_h = 0; }
+                } else { keep_h = 0; }};
+                };
+            };
+        }
+    } else {
+        let mut keep: i32 = 1;
+        while keep == 1 {
+            if p >= end {
+                keep = 0;
+            } else {
+                let b = __arena_get(p);
+                if is_digit(b) == 1 {
+                    value = value * 10 + (b - 48);
+                    p = p + 1;
+                } else {
+                    keep = 0;
+                };
+            };
+        }
     }
     let length = p - pos;
     push_token(1, value, pos, length);
