@@ -210,6 +210,17 @@ fn emit_idiv_eax_ecx() -> i32 {
     3
 }
 
+// Modulo via idiv: cdq; idiv ecx; mov eax, edx (remainder).
+//   99             cdq
+//   F7 F9          idiv ecx
+//   89 D0          mov eax, edx
+fn emit_imod_eax_ecx() -> i32 {
+    emit_byte(0x99);
+    emit_byte(0xF7); emit_byte(0xF9);
+    emit_byte(0x89); emit_byte(0xD0);
+    5
+}
+
 // Comparison helpers. Each emits cmp eax, ecx; mov eax, 0; setX al.
 // The setX opcode varies per comparison:
 //   setl  = 0F 9C C0   (signed less)
@@ -1181,6 +1192,16 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         let no = emit_pop_rax();
         let na = emit_idiv_eax_ecx();
         n1 + np + n2 + nm + no + na
+    } else { if t == 24 {
+        // AST_MOD: same setup as DIV, then emit_imod (cdq; idiv;
+        // mov eax, edx) so the remainder lands in eax.
+        let n1 = emit_ast_code(p1, bind_state, patch_state, bn_state);
+        let np = emit_push_rax();
+        let n2 = emit_ast_code(p2, bind_state, patch_state, bn_state);
+        let nm = emit_mov_ecx_eax();
+        let no = emit_pop_rax();
+        let na = emit_imod_eax_ecx();
+        n1 + np + n2 + nm + no + na
     } else { if t == 9 {
         let ni = emit_ast_code(p1, bind_state, patch_state, bn_state);
         let nn = emit_ast_neg_suffix();
@@ -1415,7 +1436,7 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         emit_ast_int(0)
     } else {
         emit_ast_int(0)
-    }}}}}}}}}}}}}}}}}}}}}}}
+    }}}}}}}}}}}}}}}}}}}}}}}}
 }
 
 // --------------------------------------------------------------

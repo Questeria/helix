@@ -297,9 +297,16 @@ fn parse_mul(tok_base: i32, sb: i32) -> i32 {
             cur_advance(sb);
             let rhs = parse_unary(tok_base, sb);
             lhs = mk_node(5, lhs, rhs, 0);
+        } else { if t == 11 {
+            // Modulo (`%`). AST_MOD = tag 24 (chosen to avoid the
+            // existing 19-23 comparison range; codegen handler in
+            // kovc.hx maps it to idiv + remainder-in-edx).
+            cur_advance(sb);
+            let rhs = parse_unary(tok_base, sb);
+            lhs = mk_node(24, lhs, rhs, 0);
         } else {
             keep = 0;
-        }};
+        }}};
     }
     lhs
 }

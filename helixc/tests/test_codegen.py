@@ -1341,10 +1341,11 @@ fn main() -> i32 {
 import pytest
 
 
-@pytest.mark.skip(reason="Self-host work in progress: K1 parses 46 of 117 "
-                  "bootstrap fns (audit-15 for if/while/let chaining); "
-                  "remaining gap: more parser features needed for full "
-                  "kovc.hx self-compile.")
+@pytest.mark.skip(reason="Self-host work in progress: K1 now parses all 120 "
+                  "bootstrap fns (audit-15 + AST_MOD), but K2 hangs when "
+                  "compiling multi-fn input. Likely a subtle codegen "
+                  "regression from the recent parser refactor; needs "
+                  "audit-16 to isolate.")
 def test_bootstrap_kovc_self_host_loop():
     """Full self-host: P0 (kovc-by-Python) compiles the entire
     bootstrap source (lexer.hx + parser.hx + kovc.hx + driver_main)
