@@ -1039,12 +1039,18 @@ class FnCompiler:
             # Choose path by operand type, not result type (result is bool).
             if (self._is_float_type(op.operands[0].ty) or
                     self._is_float_type(op.operands[1].ty)):
-                self.asm.movss_xmm0_mem_rbp(l_slot)
-                self.asm.movss_xmm1_mem_rbp(r_slot)
-                # ucomiss (0F 2E) — unordered compare; SNaN inputs don't
-                # raise #IA. comiss (0F 2F) is also available but only
-                # differs on SNaN exception behavior, which we don't need.
-                self.asm.ucomiss_xmm0_xmm1()
+                if (self._is_f64_type(op.operands[0].ty) or
+                        self._is_f64_type(op.operands[1].ty)):
+                    self.asm.movsd_xmm0_mem_rbp(l_slot)
+                    self.asm.movsd_xmm1_mem_rbp(r_slot)
+                    self.asm.ucomisd_xmm0_xmm1()
+                else:
+                    self.asm.movss_xmm0_mem_rbp(l_slot)
+                    self.asm.movss_xmm1_mem_rbp(r_slot)
+                    # ucomiss (0F 2E) — unordered compare; SNaN inputs don't
+                    # raise #IA. comiss (0F 2F) is also available but only
+                    # differs on SNaN exception behavior, which we don't need.
+                    self.asm.ucomiss_xmm0_xmm1()
                 float_cmp_setters[op.kind]()
                 # IEEE 754 NaN handling: ucomiss with NaN sets ZF=1, PF=1,
                 # CF=1 (the "unordered" combination). The base setters above

@@ -667,6 +667,54 @@ def test_f64_div():
     assert compile_and_run(src) == 25
 
 
+def test_f64_compare_lt():
+    """Phase 1.2: f64 less-than. 1.5 < 2.5 = true (returns 1)."""
+    src = """
+    fn main() -> i32 {
+        let x: f64 = 1.5_f64;
+        let y: f64 = 2.5_f64;
+        if x < y { 1 } else { 0 }
+    }
+    """
+    assert compile_and_run(src) == 1
+
+
+def test_f64_compare_eq():
+    """Phase 1.2: f64 equality on a non-trivially-computed value."""
+    src = """
+    fn main() -> i32 {
+        let x: f64 = 1.5_f64 + 2.5_f64;
+        let y: f64 = 4.0_f64;
+        if x == y { 7 } else { 13 }
+    }
+    """
+    assert compile_and_run(src) == 7
+
+
+def test_f64_compare_ge():
+    """Phase 1.2: f64 greater-or-equal."""
+    src = """
+    fn main() -> i32 {
+        let a: f64 = 3.0_f64;
+        let b: f64 = 3.0_f64;
+        if a >= b { 1 } else { 0 }
+    }
+    """
+    assert compile_and_run(src) == 1
+
+
+def test_f64_nan_neq_nan():
+    """Phase 1.2: NaN != NaN must hold (IEEE 754). Use 0.0/0.0 to make NaN."""
+    src = """
+    fn main() -> i32 {
+        let zero: f64 = 0.0_f64;
+        let nan: f64 = zero / zero;
+        if nan == nan { 1 } else { 0 }
+    }
+    """
+    assert compile_and_run(src) == 0  # NaN != NaN
+
+
 def test_f64_int_to_float_to_int():
     """Phase 1.1: round-trip i32 -> f64 -> i32. The f64 path preserves
     the value because f64 has 53-bit mantissa (any i32 fits). Use a
