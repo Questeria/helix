@@ -783,7 +783,14 @@ fn emit_elf_for_ast_to_path(ast_root: i32) -> i32 {
             emit_ret();
             cur_list = __arena_get(cur_list + 2);
         }
-        // Backpatch all CALL placeholders.
+        // Backpatch all CALL placeholders. For unresolved names,
+        // overwrite the entire 5-byte CALL with `ud2` + 3 NOPs
+        // (audit-11 fix). The previous "leave disp at 0" silently
+        // pushed an unmatched return address (call +0 falls through
+        // to next instr, but rsp is now off by 8 — the caller's
+        // ret pops garbage and jumps to a wild address). ud2 raises
+        // SIGILL: clear, immediate failure rather than data
+        // corruption that surfaces blocks later.
         let patch_top = __arena_get(patch_state);
         let patch_table_base = __arena_get(patch_state + 1);
         let mut pi: i32 = 0;
@@ -793,13 +800,18 @@ fn emit_elf_for_ast_to_path(ast_root: i32) -> i32 {
             let target_name_s = __arena_get(entry + 1);
             let target_name_l = __arena_get(entry + 2);
             let target_offset = fn_table_lookup(fn_state, target_name_s, target_name_l);
-            // disp = target_offset - (disp_slot + 4). For unresolved
-            // names (target_offset == -1), leave disp as 0 — the
-            // CALL falls through to whatever follows; the program
-            // will misbehave but won't smash the stack.
             if target_offset >= 0 {
                 let disp = target_offset - (disp_slot + 4);
                 patch_u32_le(disp_slot, disp);
+            } else {
+                // ud2 = 0F 0B; pad remaining 3 bytes with NOP (90).
+                // disp_slot points at byte 1 of the original 5-byte
+                // E8+disp instruction; opcode E8 is at disp_slot-1.
+                __arena_set(disp_slot - 1, 0x0F);
+                __arena_set(disp_slot, 0x0B);
+                __arena_set(disp_slot + 1, 0x90);
+                __arena_set(disp_slot + 2, 0x90);
+                __arena_set(disp_slot + 3, 0x90);
             };
             pi = pi + 1;
         }
