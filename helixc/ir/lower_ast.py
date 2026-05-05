@@ -986,6 +986,26 @@ class Lowerer:
                     result_ty=tir.TIRScalar("i32"),
                     attrs={"_kind": "read_file_to_arena",
                            "path": expr.args[0].value})
+            # Intercept write_file_to_arena(path_literal, arena_start, n_bytes)
+            # — opens the file (O_WRONLY|O_CREAT|O_TRUNC, mode 0644), writes
+            # n_bytes whose values are read from arena slots
+            # [arena_start .. arena_start+n_bytes) (low byte of each i32),
+            # closes the fd. Returns the count of bytes successfully
+            # written. Symmetric to read_file_to_arena. Required for
+            # the bootstrap-stage-3 codegen to emit ELF binaries to disk.
+            if (isinstance(expr.callee, A.Name)
+                    and expr.callee.name == "write_file_to_arena"
+                    and len(expr.args) == 3
+                    and isinstance(expr.args[0], A.StrLit)):
+                arena_start = self._lower_expr(expr.args[1]) \
+                    or self.builder.const_int(0)
+                n_bytes = self._lower_expr(expr.args[2]) \
+                    or self.builder.const_int(0)
+                return self.builder.emit(
+                    tir.OpKind.PRINT, arena_start, n_bytes,
+                    result_ty=tir.TIRScalar("i32"),
+                    attrs={"_kind": "write_file_to_arena",
+                           "path": expr.args[0].value})
             # Intercept read_file_int(path_literal) — opens the file,
             # reads the first 4 bytes interpreted as i32 little-endian,
             # closes the fd. Returns the i32 value on success or 0 on

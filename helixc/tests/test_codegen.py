@@ -967,6 +967,68 @@ def test_bootstrap_lexer_token_count():
     assert compile_and_run(src) == 13
 
 
+def test_write_file_to_arena_basic():
+    """write_file_to_arena writes the low byte of each arena slot to
+    the named file. Symmetric to read_file_to_arena. Verifies via
+    `cat` that 'Hello' lands on disk verbatim."""
+    import subprocess
+    src = """
+    fn main() -> i32 {
+        let arena_start = __arena_len();
+        __arena_push(72);
+        __arena_push(101);
+        __arena_push(108);
+        __arena_push(108);
+        __arena_push(111);
+        write_file_to_arena("/tmp/helix_wfta_basic.out", arena_start, 5)
+    }
+    """
+    n = compile_and_run(src)
+    assert n == 5, f"expected 5 bytes written, got {n}"
+    out = subprocess.run(
+        ["wsl", "-e", "bash", "-c", "cat /tmp/helix_wfta_basic.out"],
+        capture_output=True, timeout=10,
+    )
+    assert out.stdout == b"Hello", f"expected 'Hello', got {out.stdout!r}"
+
+
+def test_write_file_to_arena_round_trip():
+    """Helix writes a file, then Helix reads it back. Verifies the
+    write+read pair are correct end-to-end."""
+    src = """
+    fn main() -> i32 {
+        let w_start = __arena_len();
+        __arena_push(72); __arena_push(101); __arena_push(108);
+        __arena_push(108); __arena_push(111); __arena_push(10);
+        let w = write_file_to_arena("/tmp/helix_wfta_rt.out", w_start, 6);
+        if w != 6 { 0 - 1 } else {
+            let r_start = __arena_len();
+            let n = read_file_to_arena("/tmp/helix_wfta_rt.out");
+            if n != 6 { 0 - 2 } else {
+                if __arena_get(r_start) == 72 { 100 } else { 0 - 3 }
+            }
+        }
+    }
+    """
+    assert compile_and_run(src) == 100
+
+
+def test_write_file_to_arena_zero_length():
+    """Writing zero bytes still creates the file (and returns 0)."""
+    import subprocess
+    src = """
+    fn main() -> i32 {
+        write_file_to_arena("/tmp/helix_wfta_empty.out", 0, 0)
+    }
+    """
+    assert compile_and_run(src) == 0
+    out = subprocess.run(
+        ["wsl", "-e", "bash", "-c", "stat -c %s /tmp/helix_wfta_empty.out"],
+        capture_output=True, timeout=10,
+    )
+    assert out.stdout.strip() == b"0", f"expected size 0, got {out.stdout!r}"
+
+
 def test_bootstrap_pipeline_end_to_end():
     """Stage 3: full lex + parse + eval pipeline runs against source
     files on disk. Each input is text -> tokens -> AST -> i32. This

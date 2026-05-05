@@ -1413,6 +1413,160 @@ class FnCompiler:
                     self.asm.mov_mem_rbp_eax(res_slot)
                 return
 
+            if kind == "write_file_to_arena":
+                # Symmetric to read_file_to_arena: open the file
+                # O_WRONLY|O_CREAT|O_TRUNC mode 0644, then write
+                # n_bytes from the arena (one byte per slot, low byte)
+                # via per-byte sys_write. Return the count actually
+                # written. Operands: arena_start (slot 0), n_bytes (slot 1).
+                path_str = op.attrs["path"]
+                assert isinstance(path_str, str)
+                path_data = path_str.encode("utf-8") + b"\x00"
+                path_sym = f"__helix_wftoa_path_{id(op):x}"
+                self._pending_strings.append((path_sym, path_data))
+                buf = self.asm.b
+
+                arena_start_slot = self._slot_of(op.operands[0])
+                n_bytes_slot = self._slot_of(op.operands[1])
+
+                # Save callee-saved registers we will use as state
+                # carriers across syscalls (rbx, r12-r15).
+                buf.emit(0x53)                              # push rbx
+                buf.emit(0x41, 0x54)                        # push r12
+                buf.emit(0x41, 0x55)                        # push r13
+                buf.emit(0x41, 0x56)                        # push r14
+
+                # Reserve 16-byte stack frame: 1 byte buffer + 8 bytes fd.
+                buf.emit(0x48, 0x83, 0xEC, 0x10)            # sub rsp, 16
+
+                # ---- sys_open(path, O_WRONLY|O_CREAT|O_TRUNC, 0644) ----
+                buf.emit(0x48, 0x8D, 0x3D)                  # lea rdi, [rip+disp]
+                off = buf.offset()
+                buf.emit_bytes(b"\x00\x00\x00\x00")
+                buf.fixups.append(Fixup(offset=off, target=path_sym,
+                                         size=4, rel_base=off + 4))
+                self.asm.mov_esi_imm32(0x241)               # O_WRONLY|O_CREAT|O_TRUNC
+                self.asm.mov_edx_imm32(0x1A4)               # mode 0644
+                self.asm.mov_eax_imm32(2)                   # sys_open
+                self.asm.syscall()
+                buf.emit(0x48, 0x89, 0x44, 0x24, 0x08)      # mov [rsp+8], rax (fd)
+
+                # If fd < 0, skip the loop and return 0.
+                buf.emit(0x48, 0x85, 0xC0)                  # test rax, rax
+                # Place a forward jl placeholder; we'll patch after we
+                # know the body length.
+                buf.emit(0x7C, 0x00)                        # jl error_close (placeholder)
+                err_jmp_off = buf.offset() - 1
+
+                # Initialize state regs.
+                # r12d = arena_start, r13d = n_bytes, r14d = counter (0).
+                self.asm.mov_eax_mem_rbp(arena_start_slot)  # eax = arena_start
+                buf.emit(0x41, 0x89, 0xC4)                  # mov r12d, eax
+                self.asm.mov_eax_mem_rbp(n_bytes_slot)      # eax = n_bytes
+                buf.emit(0x41, 0x89, 0xC5)                  # mov r13d, eax
+                buf.emit(0x45, 0x31, 0xF6)                  # xor r14d, r14d
+
+                # Loop:
+                #   if r14 >= r13 -> done
+                #   eax = arena[r12 + r14]
+                #   [rsp] = al
+                #   sys_write(fd, &[rsp], 1)
+                #   inc r14
+                #   jmp loop
+                loop_start = buf.offset()
+                buf.emit(0x45, 0x39, 0xEE)                  # cmp r14d, r13d
+                buf.emit(0x7D, 0x00)                        # jge done (placeholder)
+                jge_off = buf.offset() - 1
+                jge_after = buf.offset()
+
+                # idx = r12 + r14 (in eax)
+                buf.emit(0x44, 0x89, 0xE0)                  # mov eax, r12d
+                buf.emit(0x44, 0x01, 0xF0)                  # add eax, r14d
+
+                # Load arena base into rdx for the lea.
+                self.asm.lea_rax_rip_rel("__helix_arena_base")  # rax = base
+                # We need to use an index register for [rax + idx*4 + 4].
+                # Move idx to rcx.
+                buf.emit(0x44, 0x89, 0xE1)                  # mov ecx, r12d
+                buf.emit(0x44, 0x01, 0xF1)                  # add ecx, r14d
+                # Bounds check: ecx < HELIX_ARENA_CAP
+                buf.emit(0x81, 0xF9)                        # cmp ecx, HELIX_ARENA_CAP
+                buf.emit_bytes(struct.pack("<I", HELIX_ARENA_CAP))
+                buf.emit(0x73, 0x00)                        # jae done (placeholder)
+                jae_off = buf.offset() - 1
+                jae_after = buf.offset()
+                buf.emit(0x8B, 0x44, 0x88, 0x04)            # mov eax, [rax + rcx*4 + 4]
+                buf.emit(0x88, 0x04, 0x24)                  # mov [rsp], al
+
+                # sys_write(fd, &byte, 1)
+                buf.emit(0x48, 0x8B, 0x7C, 0x24, 0x08)      # mov rdi, [rsp+8]
+                buf.emit(0x48, 0x89, 0xE6)                  # mov rsi, rsp
+                self.asm.mov_edx_imm32(1)                   # rdx = 1
+                self.asm.mov_eax_imm32(1)                   # sys_write
+                self.asm.syscall()
+
+                # inc r14
+                buf.emit(0x41, 0xFF, 0xC6)                  # inc r14d
+                # Loop back.
+                buf.emit(0xEB, 0x00)                        # jmp loop_start (placeholder)
+                back_jmp_off = buf.offset() - 1
+                back_jmp_after = buf.offset()
+                back_disp = loop_start - back_jmp_after
+                if not (-128 <= back_disp <= 127):
+                    raise ValueError("write_file_to_arena loop disp out of rel8")
+                buf.bytes_[back_jmp_off] = back_disp & 0xFF
+
+                # done:
+                done_addr = buf.offset()
+                # patch jge and jae forward jumps
+                fwd1 = done_addr - jge_after
+                fwd2 = done_addr - jae_after
+                if not (-128 <= fwd1 <= 127):
+                    raise ValueError("write_file_to_arena jge disp out of rel8")
+                if not (-128 <= fwd2 <= 127):
+                    raise ValueError("write_file_to_arena jae disp out of rel8")
+                buf.bytes_[jge_off] = fwd1 & 0xFF
+                buf.bytes_[jae_off] = fwd2 & 0xFF
+
+                # close(fd)
+                buf.emit(0x48, 0x8B, 0x7C, 0x24, 0x08)      # mov rdi, [rsp+8]
+                self.asm.mov_eax_imm32(3)                   # sys_close
+                self.asm.syscall()
+
+                # Return r14 (count).
+                buf.emit(0x44, 0x89, 0xF0)                  # mov eax, r14d
+                # Skip error path.
+                buf.emit(0xEB, 0x00)                        # jmp epilogue (placeholder)
+                skip_err_off = buf.offset() - 1
+                skip_err_after = buf.offset()
+
+                # error_close: open failed; rax already < 0; return 0.
+                err_addr = buf.offset()
+                err_disp = err_addr - (err_jmp_off + 1)
+                if not (-128 <= err_disp <= 127):
+                    raise ValueError("write_file_to_arena err jmp disp out of rel8")
+                buf.bytes_[err_jmp_off] = err_disp & 0xFF
+                self.asm.mov_eax_imm32(0)                   # return 0
+
+                # epilogue:
+                ep_addr = buf.offset()
+                skip_disp = ep_addr - skip_err_after
+                if not (-128 <= skip_disp <= 127):
+                    raise ValueError("write_file_to_arena skip-err disp out of rel8")
+                buf.bytes_[skip_err_off] = skip_disp & 0xFF
+
+                # Tear down stack and restore callee-saved regs.
+                buf.emit(0x48, 0x83, 0xC4, 0x10)            # add rsp, 16
+                buf.emit(0x41, 0x5E)                        # pop r14
+                buf.emit(0x41, 0x5D)                        # pop r13
+                buf.emit(0x41, 0x5C)                        # pop r12
+                buf.emit(0x5B)                              # pop rbx
+
+                if op.results:
+                    res_slot = self._slot_of(op.results[0])
+                    self.asm.mov_mem_rbp_eax(res_slot)
+                return
+
             if kind == "read_file_int":
                 # Opens path read-only, reads 4 bytes into a stack buffer,
                 # closes the fd, returns those 4 bytes interpreted as i32.
