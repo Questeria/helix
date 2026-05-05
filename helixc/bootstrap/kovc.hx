@@ -412,8 +412,18 @@ fn bind_push(state: i32, name_start: i32, name_len: i32, offset: i32) -> i32 {
 }
 
 fn bind_pop(state: i32) -> i32 {
+    // Audit-18: roll back next_offset by 8 in addition to dropping the
+    // top binding. Without this, sequential nested AST_LETs allocate
+    // offsets monotonically (8, 16, 24, ...) and never reuse them after
+    // pop. parse_primary nests ~30 lets, blowing past the 512-byte
+    // prologue allocation; emit_mov_local_eax(-560) writes into the
+    // parent frame's saved rbp/return-address. The fix mirrors the
+    // implicit invariant that bind_pop is paired with the most recent
+    // bind_push (LIFO scope), so rolling back the offset is safe.
     let top = __arena_get(state + 1);
+    let cur_off = __arena_get(state);
     __arena_set(state + 1, top - 1);
+    __arena_set(state, cur_off - 8);
     0
 }
 
