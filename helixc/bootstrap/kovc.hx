@@ -537,10 +537,17 @@ fn emit_ast_code(idx: i32, bind_state: i32) -> i32 {
         // AST_FN_DECL: Phase-0 supports a single `fn main() -> i32 {
         // expr }` form as a syntactic alternative to a bare expr.
         // The codegen treats the body as the program. Multi-fn
-        // programs (with calls and per-fn prologue/epilogue) are
-        // a future slice.
+        // programs use AST_FN_LIST (tag 15) which dispatches to a
+        // walker that finds main.
         let p3 = __arena_get(idx + 3);
         emit_ast_code(p3, bind_state)
+    } else { if t == 15 {
+        // AST_FN_LIST: by the time we get here, the top-level
+        // wrapper should have already resolved the list to `main`'s
+        // body (see resolve_program_root). If we still see a
+        // FN_LIST tag, fall through to emit 0 — this guards against
+        // accidental nested lists.
+        emit_ast_int(0)
     } else { if t == 13 {
         // AST_SEQ(first, second): emit first (discard eax), emit
         // second (its eax is the result). Helix's calling convention
@@ -572,7 +579,7 @@ fn emit_ast_code(idx: i32, bind_state: i32) -> i32 {
         n_cond + n_test + 6 + n_body + 5 + n_zero
     } else {
         emit_ast_int(0)
-    }}}}}}}}}}}}}}}
+    }}}}}}}}}}}}}}}}
 }
 
 // --------------------------------------------------------------
@@ -583,7 +590,50 @@ fn emit_ast_code(idx: i32, bind_state: i32) -> i32 {
 //
 // Returns the byte count written to disk.
 // --------------------------------------------------------------
+// Walk the AST root to find the body that should be compiled. For
+// AST_FN_LIST, find the fn named "main" and return its body. For
+// AST_FN_DECL, return its body. For anything else, return the
+// node itself (legacy single-expression program). Done BEFORE code
+// emission so any arena_push for the "main" string template doesn't
+// pollute the code byte stream.
+fn resolve_program_root(ast_root: i32) -> i32 {
+    let t = __arena_get(ast_root);
+    if t == 14 {
+        __arena_get(ast_root + 3)
+    } else { if t == 15 {
+        // Stash "main" bytes — these slots end up before the ELF
+        // region in the arena, so they don't interleave with code.
+        let main_s = __arena_push(109);   // 'm'
+        __arena_push(97); __arena_push(105); __arena_push(110);
+        let mut cur_list: i32 = ast_root;
+        let mut found_body: i32 = 0;
+        let mut keep: i32 = 1;
+        while keep == 1 {
+            if cur_list == 0 {
+                keep = 0;
+            } else {
+                let fn_idx = __arena_get(cur_list + 1);
+                let fn_name_s = __arena_get(fn_idx + 1);
+                let fn_name_l = __arena_get(fn_idx + 2);
+                if kovc_byte_eq(fn_name_s, fn_name_l, main_s, 4) == 1 {
+                    found_body = __arena_get(fn_idx + 3);
+                    keep = 0;
+                } else {
+                    cur_list = __arena_get(cur_list + 2);
+                };
+            };
+        }
+        found_body
+    } else {
+        ast_root
+    }}
+}
+
 fn emit_elf_for_ast_to_path(ast_root: i32) -> i32 {
+    // Resolve `main` (or single-expr root) BEFORE allocating
+    // bind_state, so any arena pushes from the lookup land before
+    // the code region.
+    let resolved_root = resolve_program_root(ast_root);
     // Pre-allocate bind_state BEFORE the ELF region so it doesn't
     // pollute the contiguous code byte stream. bind_init pushes
     // 3 + 64*3 = 195 slots and writes them via __arena_set during
@@ -596,7 +646,7 @@ fn emit_elf_for_ast_to_path(ast_root: i32) -> i32 {
     emit_padding_to_code();
     let code_start = __arena_len();
     emit_prologue();
-    emit_ast_code(ast_root, bind_state);
+    emit_ast_code(resolved_root, bind_state);
     emit_epilogue();
     emit_exit_with_eax();
     let code_end = __arena_len();

@@ -34,6 +34,10 @@
 //                    annotation parsed but ignored, body is a single
 //                    expression. Codegen treats the body as the
 //                    main expression.
+//  15  AST_FN_LIST   p1 = current fn_decl_idx, p2 = next list node
+//                    idx (or 0 at end). Linked list of top-level fn
+//                    declarations. Built by parse_top when source
+//                    has multiple `fn ... { ... }` items.
 //  99  AST_ERR       p1 = unexpected token tag
 //
 // Grammar (recursive descent, classic precedence climbing):
@@ -364,13 +368,52 @@ fn parse_top(tok_base: i32) -> i32 {
         let id_s = tok_p2(tok_base, k);
         let id_l = tok_p3(tok_base, k);
         if byte_eq(id_s, id_l, kw_fn_s(cur_slot), kw_fn_n(cur_slot)) == 1 {
-            parse_fn_decl(tok_base, cur_slot)
+            parse_program(tok_base, cur_slot)
         } else {
             parse_expr(tok_base, cur_slot)
         }
     } else {
         parse_expr(tok_base, cur_slot)
     }
+}
+
+// Parse a sequence of one or more `fn` declarations at the top
+// level, returning a linked list head. If only one fn is present,
+// the list has a single node. The codegen looks up "main" by name
+// and emits its body; other fns are placed in the binary but only
+// callable once AST_CALL lands.
+fn parse_program(tok_base: i32, sb: i32) -> i32 {
+    let first_fn = parse_fn_decl(tok_base, sb);
+    // Build list backwards: collect fn idxs then chain. But we
+    // can't materialize an array easily here, so do it forward:
+    // build the head node first, then attach further nodes by
+    // patching the previous node's `next` field. We track the
+    // previous-list-node's slot to patch it in place.
+    let head = mk_node(15, first_fn, 0, 0);
+    let mut prev_list = head;
+    let mut keep: i32 = 1;
+    while keep == 1 {
+        let k2 = cur_get(sb);
+        let t2 = tok_tag(tok_base, k2);
+        if t2 == 0 {
+            keep = 0;
+        } else { if t2 == 2 {
+            let s = tok_p2(tok_base, k2);
+            let l = tok_p3(tok_base, k2);
+            if byte_eq(s, l, kw_fn_s(sb), kw_fn_n(sb)) == 1 {
+                let next_fn = parse_fn_decl(tok_base, sb);
+                let new_node = mk_node(15, next_fn, 0, 0);
+                // Patch prev_list's p2 (slot prev_list+2) to point at new_node.
+                __arena_set(prev_list + 2, new_node);
+                prev_list = new_node;
+            } else {
+                keep = 0;
+            };
+        } else {
+            keep = 0;
+        }};
+    }
+    head
 }
 
 // Parse `fn name() -> i32 { body }`. Phase 0: no params, single

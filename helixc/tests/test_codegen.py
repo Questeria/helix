@@ -1066,9 +1066,10 @@ def test_bootstrap_kovc_full_pipeline_arithmetic():
              f"printf %s {repr(source_text)} > /tmp/helix_src_pipe.hx"],
             check=True, timeout=10,
         )
-        # emit_elf_for_ast_to_path internally allocates 195 slots
-        # for bind_state BEFORE the ELF region, so the byte stream
-        # starts at elf_start_pre + 195.
+        # The ELF bytes always live in the LAST `total` slots of
+        # the arena; computing elf_start as __arena_len() - total
+        # is robust against changes in bind_state / resolve-pre-pass
+        # arena pushes.
         driver = lexer_no_main + parser_body + kovc_lib + """
 fn main() -> i32 {
     let src_start = __arena_len();
@@ -1076,9 +1077,8 @@ fn main() -> i32 {
     let tok_base = __arena_len();
     lex(src_start, src_len);
     let ast_root = parse_top(tok_base);
-    let elf_start_pre = __arena_len();
     let total = emit_elf_for_ast_to_path(ast_root);
-    let elf_start = elf_start_pre + 195;
+    let elf_start = __arena_len() - total;
     write_file_to_arena("/tmp/kovc_pipeline.bin", elf_start, total)
 }
 """
@@ -1140,6 +1140,15 @@ fn main() -> i32 {
     assert compile_and_exec(
         "fn main() -> i32 { let x = 5 ; x * x }"
     ) == 25, "fn-decl with let-bound expr body"
+    # Multi-fn programs: parser builds AST_FN_LIST, kovc finds main
+    # by name and emits its body (other fns silently skipped — they
+    # become reachable once AST_CALL lands).
+    assert compile_and_exec(
+        "fn helper() -> i32 { 99 } fn main() -> i32 { 7 }"
+    ) == 7, "main found among multiple fn decls"
+    assert compile_and_exec(
+        "fn a() -> i32 { 1 } fn main() -> i32 { 50 } fn c() -> i32 { 3 }"
+    ) == 50, "main resolved regardless of source position"
 
 
 def test_bootstrap_kovc_demo_emits_ast_int_42():
