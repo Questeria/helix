@@ -1325,7 +1325,10 @@ class FnCompiler:
                 # for larger sizes. Bug: previously BUF_SIZE=128 used disp8
                 # which sign-extended to -128 — adding 128 to rsp instead
                 # of subtracting (clobbering parent stack frame).
-                BUF_SIZE = 0x40   # 64 bytes — fits signed disp8 cleanly
+                # 32 KB buffer — large enough for any single source file
+                # in the bootstrap chain. Uses disp32 form everywhere so
+                # the audit-2 disp8 sign-extension trap can't recur.
+                BUF_SIZE = 0x8000
 
                 # ---- sys_open(path, O_RDONLY=0) ----
                 buf.emit(0x48, 0x8D, 0x3D)            # lea rdi, [rip+disp]
@@ -1337,13 +1340,17 @@ class FnCompiler:
                 self.asm.mov_edx_imm32(0)
                 self.asm.mov_eax_imm32(2)              # sys_open
                 self.asm.syscall()
-                # Push fd to stack, allocate read buffer (disp8-sized).
+                # Push fd to stack, allocate read buffer (disp32 form).
                 buf.emit(0x50)                          # push rax (fd)
-                buf.emit(0x48, 0x83, 0xEC, BUF_SIZE)    # sub rsp, BUF_SIZE (disp8)
+                # sub rsp, imm32 form: 48 81 EC imm32
+                buf.emit(0x48, 0x81, 0xEC)
+                buf.emit_bytes(struct.pack("<I", BUF_SIZE))
 
                 # ---- read(fd, buf=rsp, BUF_SIZE) ----
-                # mov rdi, [rsp+BUF_SIZE] using disp8.
-                buf.emit(0x48, 0x8B, 0x7C, 0x24, BUF_SIZE)
+                # mov rdi, [rsp+BUF_SIZE] using disp32 form:
+                #   48 8B BC 24 disp32
+                buf.emit(0x48, 0x8B, 0xBC, 0x24)
+                buf.emit_bytes(struct.pack("<I", BUF_SIZE))
                 buf.emit(0x48, 0x89, 0xE6)              # mov rsi, rsp
                 self.asm.mov_edx_imm32(BUF_SIZE)
                 self.asm.mov_eax_imm32(0)               # sys_read
@@ -1352,7 +1359,8 @@ class FnCompiler:
                 buf.emit(0x49, 0x89, 0xC2)
 
                 # ---- close(fd) ----
-                buf.emit(0x48, 0x8B, 0x7C, 0x24, BUF_SIZE)  # mov rdi, [rsp+BUF_SIZE]
+                buf.emit(0x48, 0x8B, 0xBC, 0x24)        # mov rdi, [rsp+BUF_SIZE] disp32
+                buf.emit_bytes(struct.pack("<I", BUF_SIZE))
                 self.asm.mov_eax_imm32(3)               # sys_close
                 self.asm.syscall()
 
@@ -1402,8 +1410,9 @@ class FnCompiler:
                     raise ValueError("read_file_to_arena jge disp out of rel8")
                 buf.bytes_[jge_off] = fwd_disp & 0xFF
 
-                # Restore stack.
-                buf.emit(0x48, 0x83, 0xC4, BUF_SIZE)    # add rsp, BUF_SIZE
+                # Restore stack (disp32 form for the buffer).
+                buf.emit(0x48, 0x81, 0xC4)              # add rsp, imm32
+                buf.emit_bytes(struct.pack("<I", BUF_SIZE))
                 buf.emit(0x48, 0x83, 0xC4, 0x08)        # add rsp, 8 (fd)
 
                 # Return r10 (bytes pushed).

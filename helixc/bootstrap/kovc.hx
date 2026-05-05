@@ -494,9 +494,37 @@ fn emit_ast_code(idx: i32, bind_state: i32) -> i32 {
         bind_push(bind_state, p1, p2, off);
         let n_body = emit_ast_code(body_idx, bind_state);
         bind_pop(bind_state);
-        // Slot is leaked (we don't reset next_offset) — fine since
-        // the function frame is pre-sized at 512 bytes (64 slots).
         n_val + n_store + n_body
+    } else { if t == 12 {
+        // AST_LET_MUT: identical codegen to AST_LET. Mutability is
+        // a surface-language constraint; the runtime representation
+        // is the same. (Reassignment via AST_ASSIGN works on either.)
+        let p3 = __arena_get(idx + 3);
+        let value_idx = p3 / 65536;
+        let body_idx = p3 - value_idx * 65536;
+        let n_val = emit_ast_code(value_idx, bind_state);
+        let off = bind_alloc_offset(bind_state);
+        let n_store = emit_mov_local_eax(off);
+        bind_push(bind_state, p1, p2, off);
+        let n_body = emit_ast_code(body_idx, bind_state);
+        bind_pop(bind_state);
+        n_val + n_store + n_body
+    } else { if t == 11 {
+        // AST_ASSIGN: emit value (eax = new value), look up name's
+        // stack offset, store eax there. Result IS the assigned
+        // value (still in eax). p3 = value_idx.
+        let p3 = __arena_get(idx + 3);
+        let n_val = emit_ast_code(p3, bind_state);
+        let off = bind_lookup(bind_state, p1, p2);
+        let n_store = emit_mov_local_eax(off);
+        n_val + n_store
+    } else { if t == 13 {
+        // AST_SEQ(first, second): emit first (discard eax), emit
+        // second (its eax is the result). Helix's calling convention
+        // here is "value left in eax", so we just chain.
+        let n1 = emit_ast_code(p1, bind_state);
+        let n2 = emit_ast_code(p2, bind_state);
+        n1 + n2
     } else { if t == 10 {
         // AST_WHILE(cond, body):
         //   loop_top:
@@ -521,7 +549,7 @@ fn emit_ast_code(idx: i32, bind_state: i32) -> i32 {
         n_cond + n_test + 6 + n_body + 5 + n_zero
     } else {
         emit_ast_int(0)
-    }}}}}}}}}}}
+    }}}}}}}}}}}}}}
 }
 
 // --------------------------------------------------------------

@@ -1115,12 +1115,24 @@ fn main() -> i32 {
         "let x = 5 ; if x < 10 { x * (x + 3) } else { x - 99 }"
     ) == 40, "demo expression: 5 * (5+3) via let + if + var"
     # AST_WHILE: while-expr returns 0; entry/exit path tested.
-    # Body iteration requires let-mut + assign which lands later.
     assert compile_and_exec("while 0 { 1 }") == 0, "while exits when cond=false"
     assert compile_and_exec("while 0 { 1 } + 5") == 5, \
         "while value (0) flows into surrounding ADD"
     assert compile_and_exec("while 1 < 0 { 99 } + 7") == 7, \
         "while with comparison cond"
+    # AST_LET_MUT + AST_ASSIGN + AST_SEQ: real iteration
+    assert compile_and_exec(
+        "let mut x = 0 ; x = 7 ; x"
+    ) == 7, "single mut + assign"
+    assert compile_and_exec(
+        "let mut x = 1 ; x = x + 10 ; x"
+    ) == 11, "compound assign via name+ref"
+    assert compile_and_exec(
+        "let mut i = 0 ; let mut s = 0 ; while i < 5 { s = s + i ; i = i + 1 } ; s"
+    ) == 10, "real while iteration: 0+1+2+3+4 = 10"
+    assert compile_and_exec(
+        "let mut i = 0 ; let mut s = 0 ; while i < 10 { s = s + i ; i = i + 1 } ; s"
+    ) == 45, "0..10 sum compiled by Helix-self-hosted kovc"
 
 
 def test_bootstrap_kovc_demo_emits_ast_int_42():

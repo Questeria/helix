@@ -20,6 +20,15 @@
 //                    p3 = packed (value_idx * 65536 + body_idx)
 //   9  AST_NEG       p1 = inner
 //  10  AST_WHILE     p1 = cond, p2 = body. Always returns 0.
+//  11  AST_ASSIGN    p1 = name byte start, p2 = name length,
+//                    p3 = value_idx. Stores eax to the binding's
+//                    stack slot; result IS the assigned value.
+//  12  AST_LET_MUT   same payload shape as AST_LET; codegen treats
+//                    them identically. Distinct tag preserved for
+//                    future static analysis (e.g. mutability check).
+//  13  AST_SEQ       p1 = first_idx, p2 = second_idx. Evaluate
+//                    first (discard), then second (return its value).
+//                    Built by `;` chaining inside parse_expr.
 //  99  AST_ERR       p1 = unexpected token tag
 //
 // Grammar (recursive descent, classic precedence climbing):
@@ -44,6 +53,8 @@
 //   state_base+6   kw_else_len
 //   state_base+7   kw_while_start
 //   state_base+8   kw_while_len
+//   state_base+9   kw_mut_start
+//   state_base+10  kw_mut_len
 //
 // License: Apache 2.0.
 
@@ -68,6 +79,8 @@ fn kw_else_s(sb: i32) -> i32 { __arena_get(sb + 5) }
 fn kw_else_n(sb: i32) -> i32 { __arena_get(sb + 6) }
 fn kw_while_s(sb: i32) -> i32 { __arena_get(sb + 7) }
 fn kw_while_n(sb: i32) -> i32 { __arena_get(sb + 8) }
+fn kw_mut_s(sb: i32) -> i32 { __arena_get(sb + 9) }
+fn kw_mut_n(sb: i32) -> i32 { __arena_get(sb + 10) }
 
 // --------------------------------------------------------------
 // AST builder.
@@ -106,7 +119,39 @@ fn byte_eq(src_a: i32, len_a: i32, src_b: i32, len_b: i32) -> i32 {
 // tok_base + state_base; arena slots store the rest.
 // --------------------------------------------------------------
 
+// `parse_expr` is the public entry that chains expressions with the
+// sequencing operator `;`. Each segment between `;`s is parsed by
+// `parse_expr_basic`. Right-associative: `a ; b ; c` becomes
+// AST_SEQ(a, AST_SEQ(b, c)). Evaluation order: a, b, c (left-to-right);
+// final value is c.
+//
+// `parse_expr_basic` is the place to call when the caller does NOT
+// want sequencing — e.g., the value position of a let-binding or
+// assignment, where `;` is the let-terminator, not a sequencer.
 fn parse_expr(tok_base: i32, sb: i32) -> i32 {
+    let first = parse_expr_basic(tok_base, sb);
+    let k = cur_get(sb);
+    if tok_tag(tok_base, k) == 12 {     // 12 = TK_SEMI
+        cur_advance(sb);
+        // Don't chain `;` if the next token signals end-of-block
+        // (the `;` was just a terminator after a statement-like
+        // expression). End-of-block tokens: `}` (6), EOF (0), `)` (4).
+        let nk = cur_get(sb);
+        let nt = tok_tag(tok_base, nk);
+        if nt == 0 {
+            first
+        } else { if nt == 6 {
+            first
+        } else { if nt == 4 {
+            first
+        } else {
+            let rest = parse_expr(tok_base, sb);
+            mk_node(13, first, rest, 0)
+        }}}
+    } else { first }
+}
+
+fn parse_expr_basic(tok_base: i32, sb: i32) -> i32 {
     let lhs = parse_add(tok_base, sb);
     let k = cur_get(sb);
     if tok_tag(tok_base, k) == 16 {     // 16 = TK_LT
@@ -181,19 +226,34 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
         let id_len = tok_p3(tok_base, k);
         if byte_eq(id_start, id_len, kw_let_s(sb), kw_let_n(sb)) == 1 {
             cur_advance(sb);
+            // Optional `mut` keyword.
+            let nk0 = cur_get(sb);
+            let nk0_tag = tok_tag(tok_base, nk0);
+            let mut is_mut: i32 = 0;
+            if nk0_tag == 2 {
+                let nk0_s = tok_p2(tok_base, nk0);
+                let nk0_l = tok_p3(tok_base, nk0);
+                if byte_eq(nk0_s, nk0_l, kw_mut_s(sb), kw_mut_n(sb)) == 1 {
+                    is_mut = 1;
+                    cur_advance(sb);
+                };
+            };
             let nk = cur_get(sb);
             let name_start = tok_p2(tok_base, nk);
             let name_len = tok_p3(tok_base, nk);
             cur_advance(sb);     // name
             cur_advance(sb);     // '='
-            let value = parse_expr(tok_base, sb);
+            // value uses parse_expr_basic so the `;` after the
+            // value belongs to the let-terminator, not a sequencer.
+            let value = parse_expr_basic(tok_base, sb);
             cur_advance(sb);     // ';'
             let body = parse_expr(tok_base, sb);
             let packed = value * 65536 + body;
-            mk_node(8, name_start, name_len, packed)
+            let tag = if is_mut == 1 { 12 } else { 8 };
+            mk_node(tag, name_start, name_len, packed)
         } else { if byte_eq(id_start, id_len, kw_if_s(sb), kw_if_n(sb)) == 1 {
             cur_advance(sb);
-            let cond = parse_expr(tok_base, sb);
+            let cond = parse_expr_basic(tok_base, sb);
             cur_advance(sb);     // '{'
             let then_e = parse_expr(tok_base, sb);
             cur_advance(sb);     // '}'
@@ -203,18 +263,28 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
             cur_advance(sb);     // '}'
             mk_node(7, cond, then_e, else_e)
         } else { if byte_eq(id_start, id_len, kw_while_s(sb), kw_while_n(sb)) == 1 {
-            // while expr { body } — Phase-0 returns 0 (no useful
-            // result; body must produce side effects via assign,
-            // which lands in a future commit).
+            // while expr { body } — Phase-0 returns 0.
             cur_advance(sb);
-            let cond = parse_expr(tok_base, sb);
+            let cond = parse_expr_basic(tok_base, sb);
             cur_advance(sb);     // '{'
             let body = parse_expr(tok_base, sb);
             cur_advance(sb);     // '}'
             mk_node(10, cond, body, 0)
         } else {
+            // Plain identifier. Could be a var ref OR an assignment
+            // (`name = expr`). Peek the NEXT token: if it's TK_EQ
+            // (15), this is an assign; otherwise a var ref.
             cur_advance(sb);
-            mk_node(1, id_start, id_len, 0)
+            let next = cur_get(sb);
+            if tok_tag(tok_base, next) == 15 {
+                cur_advance(sb);     // consume '='
+                // assign value uses basic expression: the `;` after
+                // the value is a sequencer, not part of the value.
+                let value = parse_expr_basic(tok_base, sb);
+                mk_node(11, id_start, id_len, value)
+            } else {
+                mk_node(1, id_start, id_len, 0)
+            }
         }}}
     } else { if t == 3 {
         cur_advance(sb);
@@ -255,6 +325,10 @@ fn install_keywords(sb: i32) -> i32 {
     __arena_push(108); __arena_push(101);
     __arena_set(sb + 7, while_s);
     __arena_set(sb + 8, 5);
+    // "mut" = 109 117 116
+    let mut_s = __arena_push(109); __arena_push(117); __arena_push(116);
+    __arena_set(sb + 9, mut_s);
+    __arena_set(sb + 10, 3);
     0
 }
 
@@ -263,10 +337,11 @@ fn install_keywords(sb: i32) -> i32 {
 // Reserves 7 state slots, then dispatches into parse_expr.
 // --------------------------------------------------------------
 fn parse_top(tok_base: i32) -> i32 {
-    // 9 state slots: cursor + 4 keyword (start, len) pairs.
+    // 11 state slots: cursor + 5 keyword (start, len) pairs.
     let cur_slot = __arena_push(0);
     __arena_push(0); __arena_push(0); __arena_push(0); __arena_push(0);
     __arena_push(0); __arena_push(0); __arena_push(0); __arena_push(0);
+    __arena_push(0); __arena_push(0);
     install_keywords(cur_slot);
     parse_expr(tok_base, cur_slot)
 }
