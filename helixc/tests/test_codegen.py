@@ -3028,6 +3028,63 @@ def test_agi_sequence_match():
     assert code == 2, f"expected 2 (positions 0 and 2 match), got {code}"
 
 
+def test_agi_pq_min_pop():
+    """Phase 4 perfection: priority queue. Insert 3 (state, score) pairs;
+    pop_min returns the lowest-scoring state."""
+    src = """
+    fn main() -> i32 {
+        let q = pq_new();
+        pq_insert(q, 10, 5);
+        pq_insert(q, 20, 3);
+        pq_insert(q, 30, 7);
+        pq_pop_min(q)
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 20, f"expected 20, got {code}"
+
+
+def test_agi_pq_size():
+    """pq_size tracks count after insert/pop."""
+    src = """
+    fn main() -> i32 {
+        let q = pq_new();
+        pq_insert(q, 1, 100);
+        pq_insert(q, 2, 50);
+        pq_insert(q, 3, 75);
+        let s1 = pq_size(q);
+        pq_pop_min(q);
+        let s2 = pq_size(q);
+        s1 * 10 + s2
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 32, f"expected 32 (3*10+2), got {code}"
+
+
+def test_agi_attention_dot():
+    """Attention: query=[1,1], keys=[[1,0],[0,1]], values=[[10,0],[0,10]].
+    dot(q, k0) = 1, dot(q, k1) = 1; both weighted equal; output ~= [5, 5]."""
+    src = """
+    fn main() -> i32 {
+        let q = t1d_new(2);
+        ti1d_set(q, 0, 1); ti1d_set(q, 1, 1);
+        let keys = ti2d_new(2, 2);
+        ti2d_set(keys, 2, 0, 0, 1); ti2d_set(keys, 2, 0, 1, 0);
+        ti2d_set(keys, 2, 1, 0, 0); ti2d_set(keys, 2, 1, 1, 1);
+        let vals = ti2d_new(2, 2);
+        ti2d_set(vals, 2, 0, 0, 10); ti2d_set(vals, 2, 0, 1, 0);
+        ti2d_set(vals, 2, 1, 0, 0); ti2d_set(vals, 2, 1, 1, 10);
+        let out = t1d_new(2);
+        attention_dot(q, keys, vals, 2, 2, out);
+        ti1d_get(out, 0) + ti1d_get(out, 1)
+    }
+    """
+    code = compile_and_run(src)
+    # Each weight = 1, total = 2; output = (1*[10,0] + 1*[0,10])/2 = [5,5]; sum = 10
+    assert code == 10, f"expected 10, got {code}"
+
+
 def test_agi_bfs_queue_fifo():
     """Phase 4 step 3: BFS FIFO queue. enqueue 10,20,30; dequeue twice
     yields 10 then 20."""
