@@ -2909,6 +2909,77 @@ def test_generic_nested_call():
     assert code == 42, f"expected 42, got {code}"
 
 
+def test_agi_wm_store_and_load():
+    """Phase 4 step 1: working memory key-value store. Store 3 keys,
+    retrieve one. Demonstrates the AGI's short-term scratchpad."""
+    src = """
+    fn main() -> i32 {
+        let wm = wm_new();
+        wm_store(wm, 100, 42);
+        wm_store(wm, 200, 7);
+        wm_store(wm, 300, 99);
+        wm_load(wm, 100)
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_agi_wm_overwrite_in_place():
+    """Storing the same key twice overwrites in place (no growth)."""
+    src = """
+    fn main() -> i32 {
+        let wm = wm_new();
+        wm_store(wm, 5, 100);
+        wm_store(wm, 5, 200);
+        let v = wm_load(wm, 5);
+        let s = wm_size(wm);
+        v + s
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 201, f"expected 201 (200 + 1 size), got {code}"
+
+
+def test_agi_wm_lru_eviction():
+    """Fill WM beyond capacity (16). Earliest key gets evicted (LRU)."""
+    src = """
+    fn main() -> i32 {
+        let wm = wm_new();
+        let mut k: i32 = 0;
+        // Insert 17 distinct keys; the first (key=0) should evict.
+        while k < 17 {
+            wm_store(wm, k, k * 10);
+            k = k + 1;
+        }
+        // wm_load(0) should return -1 (evicted).
+        // wm_load(16) should return 160 (still present).
+        let v0 = wm_load(wm, 0);
+        let v16 = wm_load(wm, 16);
+        v16 - v0
+    }
+    """
+    code = compile_and_run(src)
+    # v0 = -1 (evicted), v16 = 160. v16 - v0 = 160 - (-1) = 161.
+    assert code == 161, f"expected 161 (160 - (-1)), got {code}"
+
+
+def test_agi_wm_clear():
+    """wm_clear resets size to 0."""
+    src = """
+    fn main() -> i32 {
+        let wm = wm_new();
+        wm_store(wm, 1, 100);
+        wm_store(wm, 2, 200);
+        wm_store(wm, 3, 300);
+        wm_clear(wm);
+        wm_size(wm) + 42
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42 (0 + 42), got {code}"
+
+
 def test_nn_sgd_step_scalar():
     """SGD step: w_new = w - lr*grad. w=10, lr=1, grad=3 -> 7."""
     src = """
