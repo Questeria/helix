@@ -197,8 +197,45 @@ fn lex_int(src_start: i32, src_len: i32, pos: i32) -> i32 {
             };
         }
     }
-    let length = p - pos;
-    push_token(1, value, pos, length);
+    // Phase 1.10 float-literal lookahead: if we hit `.` AND the next
+    // byte is a digit, this is a float (e.g. `1.5`). Switch to float
+    // lexing — keep consuming digits and emit TK_FLOATLIT (tag 26).
+    // The token's payload carries byte_start + byte_len of the LITERAL
+    // TEXT (similar to TK_STRLIT); the parser/codegen must convert
+    // the text to IEEE 754 bits at parse time. (Direct bit-conversion
+    // here would need 8-byte arithmetic which Phase-0 Helix lacks.)
+    let mut is_float: i32 = 0;
+    if is_hex == 0 {
+        if p < end {
+            let dot = __arena_get(p);
+            if dot == 46 {
+                if p + 1 < end {
+                    let nxt = __arena_get(p + 1);
+                    if is_digit(nxt) == 1 {
+                        is_float = 1;
+                        p = p + 1;
+                        let mut keep_f: i32 = 1;
+                        while keep_f == 1 {
+                            if p >= end {
+                                keep_f = 0;
+                            } else {
+                                let b = __arena_get(p);
+                                if is_digit(b) == 1 { p = p + 1; }
+                                else { keep_f = 0; };
+                            };
+                        }
+                    };
+                };
+            };
+        };
+    }
+    if is_float == 1 {
+        let flen = p - pos;
+        push_token(26, pos, pos, flen);
+    } else {
+        let length = p - pos;
+        push_token(1, value, pos, length);
+    };
     p
 }
 
