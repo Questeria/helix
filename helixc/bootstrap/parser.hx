@@ -329,6 +329,17 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
         let v = tok_p1(tok_base, k);
         cur_advance(sb);
         mk_node(0, v, 0, 0)
+    } else { if t == 26 {
+        // Float literal (TK_FLOATLIT). Phase 1.10b: parser emits
+        // AST_FLOATLIT (tag 27) carrying byte_start + byte_len of the
+        // literal text. Codegen converts to IEEE 754 bits at compile
+        // time. Until codegen lands, emit-with-AST_ERR fallback so
+        // bootstrap-compiled programs that touch floats fail loudly
+        // instead of silently miscompiling.
+        let body_s = tok_p2(tok_base, k);
+        let body_l = tok_p3(tok_base, k);
+        cur_advance(sb);
+        mk_node(27, body_s, body_l, 0)
     } else { if t == 25 {
         // String literal (TK_STRLIT). Token slots:
         //   payload   = body byte_start (in the source buffer)
@@ -510,7 +521,7 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
             };
         };
         mk_node(99, t, 0, 0)
-    }}}}
+    }}}}}
 }
 
 // --------------------------------------------------------------
