@@ -127,3 +127,106 @@ fn wm_load(start: i32, key: i32) -> i32 {
         __arena_get(off + 1)
     }
 }
+
+// =========================================================================
+// Phase 4 step 2: episodic memory — timestamped event log.
+// =========================================================================
+//
+// Append-only ring buffer of (timestamp, event_kind, payload) triples.
+// The AGI's "what happened when" memory. Capacity 64; oldest entries
+// overwrite when full. Useful for credit assignment, planning by
+// retrospection, and "I tried X earlier" deduplication.
+//
+// Layout:
+//   slot 0: head (next write index, 0..cap)
+//   slot 1: count (entries written, capped at cap once filled)
+//   slot 2: tick (monotonic event timestamp)
+//   slot 3..3+cap*3: cap entries, each 3 slots (tick, kind, payload)
+
+@pure fn ep_capacity() -> i32 { 64 }
+
+fn ep_new() -> i32 {
+    let start = __arena_len();
+    __arena_push(0);   // head
+    __arena_push(0);   // count
+    __arena_push(0);   // tick
+    let mut i: i32 = 0;
+    let cap = ep_capacity();
+    while i < cap {
+        __arena_push(0);   // tick
+        __arena_push(0);   // kind
+        __arena_push(0);   // payload
+        i = i + 1;
+    }
+    start
+}
+
+@pure fn ep_count(start: i32) -> i32 {
+    __arena_get(start + 1)
+}
+
+@pure fn ep_tick(start: i32) -> i32 {
+    __arena_get(start + 2)
+}
+
+// Append an event (kind, payload). Returns new tick.
+fn ep_record(start: i32, kind: i32, payload: i32) -> i32 {
+    let cap = ep_capacity();
+    let head = __arena_get(start);
+    let new_tick = __arena_get(start + 2) + 1;
+    __arena_set(start + 2, new_tick);
+    let off = start + 3 + head * 3;
+    __arena_set(off, new_tick);
+    __arena_set(off + 1, kind);
+    __arena_set(off + 2, payload);
+    let new_head = (head + 1) % cap;
+    __arena_set(start, new_head);
+    let cnt = __arena_get(start + 1);
+    if cnt < cap {
+        __arena_set(start + 1, cnt + 1);
+    }
+    new_tick
+}
+
+// Read i'th event payload (chronological; 0 = oldest still in buffer).
+// Returns -1 if i >= count.
+@pure
+fn ep_payload_at(start: i32, i: i32) -> i32 {
+    let cap = ep_capacity();
+    let cnt = __arena_get(start + 1);
+    if i >= cnt { 0 - 1 }
+    else {
+        let head = __arena_get(start);
+        let pos = if cnt < cap {
+            i
+        } else {
+            (head + i) % cap
+        };
+        let off = start + 3 + pos * 3;
+        __arena_get(off + 2)
+    }
+}
+
+// Search backwards for the most recent event of `kind`. Return its
+// payload, or -1 if no event of that kind in the buffer.
+@pure
+fn ep_recent_kind(start: i32, kind: i32) -> i32 {
+    let cap = ep_capacity();
+    let cnt = __arena_get(start + 1);
+    let head = __arena_get(start);
+    let mut i: i32 = 0;
+    let mut found: i32 = 0 - 1;
+    while i < cnt {
+        let pos = if cnt < cap {
+            cnt - 1 - i
+        } else {
+            (head + cap - 1 - i) % cap
+        };
+        let off = start + 3 + pos * 3;
+        if __arena_get(off + 1) == kind {
+            if found < 0 { found = __arena_get(off + 2); }
+        }
+        i = i + 1;
+    }
+    found
+}

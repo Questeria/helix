@@ -2909,6 +2909,54 @@ def test_generic_nested_call():
     assert code == 42, f"expected 42, got {code}"
 
 
+def test_agi_ep_record_and_count():
+    """Phase 4 step 2: episodic memory. Record 3 events, check count."""
+    src = """
+    fn main() -> i32 {
+        let ep = ep_new();
+        ep_record(ep, 1, 100);
+        ep_record(ep, 2, 200);
+        ep_record(ep, 1, 50);
+        ep_count(ep) + 39
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42 (3 + 39), got {code}"
+
+
+def test_agi_ep_recent_kind():
+    """Search for most recent event of a kind."""
+    src = """
+    fn main() -> i32 {
+        let ep = ep_new();
+        ep_record(ep, 1, 100);
+        ep_record(ep, 2, 200);
+        ep_record(ep, 1, 50);
+        ep_recent_kind(ep, 1)
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 50, f"expected 50, got {code}"
+
+
+def test_agi_ep_chronological_read():
+    """ep_payload_at reads events in chronological order (0 = oldest)."""
+    src = """
+    fn main() -> i32 {
+        let ep = ep_new();
+        ep_record(ep, 1, 11);
+        ep_record(ep, 1, 22);
+        ep_record(ep, 1, 33);
+        let a = ep_payload_at(ep, 0);
+        let b = ep_payload_at(ep, 1);
+        let c = ep_payload_at(ep, 2);
+        a + b + c
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 66, f"expected 66 (11+22+33), got {code}"
+
+
 def test_agi_wm_store_and_load():
     """Phase 4 step 1: working memory key-value store. Store 3 keys,
     retrieve one. Demonstrates the AGI's short-term scratchpad."""
