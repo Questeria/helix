@@ -3406,6 +3406,78 @@ def test_tensor_relu_then_add():
     assert code == 10, f"expected 10 (1+2+7), got {code}"
 
 
+def test_revad_grad_mul():
+    """Phase 2.1 step 2: reverse-mode AD. f = x * y. df/dx = y; df/dy = x."""
+    src = """
+    fn main() -> i32 {
+        let tape = rev_tape_new(5);
+        let x = rev_leaf(tape, 5);
+        let y = rev_leaf(tape, 7);
+        let f = rev_mul(tape, x, y);
+        let adj = rev_alloc_adjoints(tape);
+        rev_seed(adj, f, 1);
+        rev_backward(tape, adj);
+        rev_grad(adj, x) + rev_grad(adj, y)
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 12, f"expected 12 (df/dx=7 + df/dy=5), got {code}"
+
+
+def test_revad_grad_add():
+    """f = x + y. df/dx = 1; df/dy = 1."""
+    src = """
+    fn main() -> i32 {
+        let tape = rev_tape_new(5);
+        let x = rev_leaf(tape, 10);
+        let y = rev_leaf(tape, 20);
+        let f = rev_add(tape, x, y);
+        let adj = rev_alloc_adjoints(tape);
+        rev_seed(adj, f, 1);
+        rev_backward(tape, adj);
+        rev_grad(adj, x) + rev_grad(adj, y) * 41
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42 (1 + 1*41), got {code}"
+
+
+def test_revad_chain_polynomial():
+    """f(x) = x*x + x. df/dx = 2x + 1. At x=3: df/dx = 7."""
+    src = """
+    fn main() -> i32 {
+        let tape = rev_tape_new(10);
+        let x = rev_leaf(tape, 3);
+        let xx = rev_mul(tape, x, x);
+        let f = rev_add(tape, xx, x);
+        let adj = rev_alloc_adjoints(tape);
+        rev_seed(adj, f, 1);
+        rev_backward(tape, adj);
+        rev_grad(adj, x)
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 7, f"expected 7 (2*3+1), got {code}"
+
+
+def test_revad_neg_propagates():
+    """f = -x. df/dx = -1."""
+    src = """
+    fn main() -> i32 {
+        let tape = rev_tape_new(5);
+        let x = rev_leaf(tape, 5);
+        let f = rev_neg(tape, x);
+        let adj = rev_alloc_adjoints(tape);
+        rev_seed(adj, f, 1);
+        rev_backward(tape, adj);
+        // df/dx should be -1; +43 to make positive exit code
+        rev_grad(adj, x) + 43
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42 (-1 + 43), got {code}"
+
+
 def test_autodiff_polynomial_derivative():
     """Phase 2.1: forward-mode AD via dual numbers in Helix.
     f(x) = x*x + 2x + 1; df/dx = 2x+2; at x=3 -> 8."""
