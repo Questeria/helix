@@ -3211,6 +3211,90 @@ def test_agi_wm_clear():
     assert code == 42, f"expected 42 (0 + 42), got {code}"
 
 
+def test_nn_softmax_argmax():
+    """Phase 3 perfection: softmax. [1, 2, 3] -> argmax = 2."""
+    src = """
+    fn main() -> i32 {
+        let x = t1d_new(3);
+        tf1d_set(x, 0, 1.0_f32);
+        tf1d_set(x, 1, 2.0_f32);
+        tf1d_set(x, 2, 3.0_f32);
+        let y = t1d_new(3);
+        softmax_layer(x, y, 3);
+        tf1d_argmax(y, 3)
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 2, f"expected 2, got {code}"
+
+
+def test_nn_softmax_sums_to_one():
+    """Softmax probs sum to ~1.0."""
+    src = """
+    fn main() -> i32 {
+        let x = t1d_new(4);
+        tf1d_set(x, 0, 0.5_f32);
+        tf1d_set(x, 1, 1.0_f32);
+        tf1d_set(x, 2, 1.5_f32);
+        tf1d_set(x, 3, 2.0_f32);
+        let y = t1d_new(4);
+        softmax_layer(x, y, 4);
+        (tf1d_sum(y, 4) * 100.0_f32) as i32
+    }
+    """
+    code = compile_and_run(src)
+    assert code >= 99 and code <= 101, f"expected ~100, got {code}"
+
+
+def test_nn_tanh_layer():
+    """tanh: 0->0, big->1, -big->-1; sum~=0; +42 = 42."""
+    src = """
+    fn main() -> i32 {
+        let x = t1d_new(3);
+        tf1d_set(x, 0, 0.0_f32);
+        tf1d_set(x, 1, 5.0_f32);
+        tf1d_set(x, 2, 0.0_f32 - 5.0_f32);
+        let y = t1d_new(3);
+        tanh_layer(x, y, 3);
+        (tf1d_sum(y, 3) as i32) + 42
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_nn_leaky_relu():
+    """leaky_relu(-2, 0.1) = -0.2, leaky_relu(5) = 5; sum=4.8; *10 = 48."""
+    src = """
+    fn main() -> i32 {
+        let x = t1d_new(2);
+        tf1d_set(x, 0, 0.0_f32 - 2.0_f32);
+        tf1d_set(x, 1, 5.0_f32);
+        let y = t1d_new(2);
+        leaky_relu_layer(x, 0.1_f32, y, 2);
+        (tf1d_sum(y, 2) * 10.0_f32) as i32
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 48, f"expected 48, got {code}"
+
+
+def test_nn_sgd_f32_step():
+    """f32 SGD: w-lr*g over array. w=[10,20], lr=0.5, g=[1,2] -> [9.5, 19.0]; sum*2=57."""
+    src = """
+    fn main() -> i32 {
+        let w = t1d_new(2);
+        tf1d_set(w, 0, 10.0_f32); tf1d_set(w, 1, 20.0_f32);
+        let g = t1d_new(2);
+        tf1d_set(g, 0, 1.0_f32); tf1d_set(g, 1, 2.0_f32);
+        sgd_f32_step(w, g, 0.5_f32, 2);
+        (tf1d_sum(w, 2) * 2.0_f32) as i32
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 57, f"expected 57, got {code}"
+
+
 def test_nn_sgd_step_scalar():
     """SGD step: w_new = w - lr*grad. w=10, lr=1, grad=3 -> 7."""
     src = """

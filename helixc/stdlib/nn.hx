@@ -134,3 +134,130 @@ fn sgd_f32_step(w_start: i32, g_start: i32, lr: f32, n: i32) -> i32 {
     }
     0
 }
+
+// MSE on f32 tensors.
+@pure
+fn mse_loss_f32(y_start: i32, t_start: i32, n: i32) -> f32 {
+    if n == 0 { 0.0_f32 }
+    else {
+        let mut i: i32 = 0;
+        let mut total: f32 = 0.0_f32;
+        while i < n {
+            let yv = __f32_from_bits(__arena_get(y_start + i));
+            let tv = __f32_from_bits(__arena_get(t_start + i));
+            let d = yv - tv;
+            total = total + d * d;
+            i = i + 1;
+        }
+        total / (n as f32)
+    }
+}
+
+fn dense_layer_f32_forward(w_start: i32, w_rows: i32, w_cols: i32,
+                           x_start: i32, b_start: i32, y_start: i32) -> i32 {
+    tf2d_matvec(w_start, w_rows, w_cols, x_start, y_start);
+    let mut r: i32 = 0;
+    while r < w_rows {
+        let cur = __f32_from_bits(__arena_get(y_start + r));
+        let bv = __f32_from_bits(__arena_get(b_start + r));
+        __arena_set(y_start + r, __bits_of_f32(cur + bv));
+        r = r + 1;
+    }
+    0
+}
+
+// Leaky ReLU.
+fn leaky_relu_layer(x_start: i32, alpha: f32, y_start: i32, n: i32) -> i32 {
+    let mut i: i32 = 0;
+    while i < n {
+        let xi = __f32_from_bits(__arena_get(x_start + i));
+        let v = if xi > 0.0_f32 { xi } else { alpha * xi };
+        __arena_set(y_start + i, __bits_of_f32(v));
+        i = i + 1;
+    }
+    0
+}
+
+// Momentum SGD.
+fn momentum_step(w_start: i32, v_start: i32, g_start: i32,
+                 beta: f32, lr: f32, n: i32) -> i32 {
+    let mut i: i32 = 0;
+    while i < n {
+        let w_i = __f32_from_bits(__arena_get(w_start + i));
+        let v_i = __f32_from_bits(__arena_get(v_start + i));
+        let g_i = __f32_from_bits(__arena_get(g_start + i));
+        let new_v = beta * v_i + g_i;
+        __arena_set(v_start + i, __bits_of_f32(new_v));
+        __arena_set(w_start + i, __bits_of_f32(w_i - lr * new_v));
+        i = i + 1;
+    }
+    0
+}
+
+// tanh layer (uses __exp).
+fn tanh_layer(x_start: i32, y_start: i32, n: i32) -> i32 {
+    let mut i: i32 = 0;
+    while i < n {
+        let xi = __f32_from_bits(__arena_get(x_start + i));
+        let e2x = __exp(2.0_f32 * xi);
+        let v = (e2x - 1.0_f32) / (e2x + 1.0_f32);
+        __arena_set(y_start + i, __bits_of_f32(v));
+        i = i + 1;
+    }
+    0
+}
+
+// sigmoid layer (uses __sigmoid).
+fn sigmoid_layer(x_start: i32, y_start: i32, n: i32) -> i32 {
+    let mut i: i32 = 0;
+    while i < n {
+        let xi = __f32_from_bits(__arena_get(x_start + i));
+        let v = __sigmoid(xi);
+        __arena_set(y_start + i, __bits_of_f32(v));
+        i = i + 1;
+    }
+    0
+}
+
+// Softmax (max-subtract, uses __exp + tf1d_max).
+fn softmax_layer(x_start: i32, y_start: i32, n: i32) -> i32 {
+    if n == 0 { 0 }
+    else {
+        let max_v = tf1d_max(x_start, n);
+        let mut i: i32 = 0;
+        let mut sum_e: f32 = 0.0_f32;
+        while i < n {
+            let xi = __f32_from_bits(__arena_get(x_start + i));
+            let e = __exp(xi - max_v);
+            __arena_set(y_start + i, __bits_of_f32(e));
+            sum_e = sum_e + e;
+            i = i + 1;
+        }
+        let mut j: i32 = 0;
+        while j < n {
+            let e = __f32_from_bits(__arena_get(y_start + j));
+            __arena_set(y_start + j, __bits_of_f32(e / sum_e));
+            j = j + 1;
+        }
+        0
+    }
+}
+
+// BCE.
+@pure
+fn bce_loss_scalar(p: f32, t: f32) -> f32 {
+    let eps = 0.0001_f32;
+    let pc = __max(__min(p, 1.0_f32 - eps), eps);
+    let inv = 1.0_f32 - t;
+    let one_minus_pc = 1.0_f32 - pc;
+    0.0_f32 - (t * __log(pc) + inv * __log(one_minus_pc))
+}
+
+// Cross-entropy.
+@pure
+fn ce_loss(p_start: i32, target_idx: i32) -> f32 {
+    let p = __f32_from_bits(__arena_get(p_start + target_idx));
+    let eps = 0.0001_f32;
+    let pc = __max(p, eps);
+    0.0_f32 - __log(pc)
+}
