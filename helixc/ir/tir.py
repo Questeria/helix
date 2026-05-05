@@ -181,6 +181,7 @@ class OpKind(Enum):
 
     # Cast / quantize
     CAST = "cast"
+    BITCAST = "bitcast"  # bit-level reinterpret (f32 <-> i32, f64 <-> i64)
     QUANTIZE = "quantize"
     DEQUANTIZE = "dequantize"
 

@@ -1035,6 +1035,22 @@ class FnCompiler:
                 self.asm.mov_eax_imm32(bits)
                 self.asm.mov_mem_rbp_eax(slot)
             return
+        if op.kind == tir.OpKind.BITCAST:
+            # Bit-level reinterpret: same bytes, different type label.
+            # f32 <-> i32: 4-byte mov; f64 <-> i64: 8-byte mov.
+            src_slot = self._slot_of(op.operands[0])
+            res_slot = self._slot_of(op.results[0])
+            res_ty = op.results[0].ty
+            wide = self._is_f64_type(res_ty) or self._is_i64_type(res_ty) \
+                   or self._is_f64_type(op.operands[0].ty) \
+                   or self._is_i64_type(op.operands[0].ty)
+            if wide:
+                self.asm.mov_rax_mem_rbp(src_slot)
+                self.asm.mov_mem_rbp_rax(res_slot)
+            else:
+                self.asm.mov_eax_mem_rbp(src_slot)
+                self.asm.mov_mem_rbp_eax(res_slot)
+            return
         if op.kind == tir.OpKind.CAST:
             src_slot = self._slot_of(op.operands[0])
             res_slot = self._slot_of(op.results[0])

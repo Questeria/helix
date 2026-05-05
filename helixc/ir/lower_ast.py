@@ -890,6 +890,30 @@ class Lowerer:
                     return self.builder.emit(
                         tir.OpKind.ARENA_LEN,
                         result_ty=tir.TIRScalar("i32"))
+                # f32/f64 bit-reinterpret. Used by Helix-side stdlib to
+                # store float bit patterns in the arena (which is i32-typed).
+                # bits_of: f32->i32 / f64->i64 (just relabel the same 4/8 bytes)
+                # from_bits: i32->f32 / i64->f64
+                if bn == "__bits_of_f32" and len(expr.args) == 1:
+                    v = self._lower_expr(expr.args[0])
+                    return self.builder.emit(
+                        tir.OpKind.BITCAST, v,
+                        result_ty=tir.TIRScalar("i32"))
+                if bn == "__f32_from_bits" and len(expr.args) == 1:
+                    v = self._lower_expr(expr.args[0])
+                    return self.builder.emit(
+                        tir.OpKind.BITCAST, v,
+                        result_ty=tir.TIRScalar("f32"))
+                if bn == "__bits_of_f64" and len(expr.args) == 1:
+                    v = self._lower_expr(expr.args[0])
+                    return self.builder.emit(
+                        tir.OpKind.BITCAST, v,
+                        result_ty=tir.TIRScalar("i64"))
+                if bn == "__f64_from_bits" and len(expr.args) == 1:
+                    v = self._lower_expr(expr.args[0])
+                    return self.builder.emit(
+                        tir.OpKind.BITCAST, v,
+                        result_ty=tir.TIRScalar("f64"))
                 # __hash_i32(x) — FNV-1a-style hash on a single i32.
                 # Used for symbol-table bucketing. Lowers to inline
                 # arithmetic — pure operation, no IR op needed.

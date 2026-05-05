@@ -3406,6 +3406,73 @@ def test_tensor_relu_then_add():
     assert code == 10, f"expected 10 (1+2+7), got {code}"
 
 
+def test_tensor_f32_sum():
+    """Phase 2.2 step 2: f32 tensor via bit-reinterpret arena storage.
+    [1.5, 2.5, 3.0] sums to 7.0; cast to i32 = 7."""
+    src = """
+    fn main() -> i32 {
+        let x = t1d_new(3);
+        tf1d_set(x, 0, 1.5_f32);
+        tf1d_set(x, 1, 2.5_f32);
+        tf1d_set(x, 2, 3.0_f32);
+        tf1d_sum(x, 3) as i32
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 7, f"expected 7, got {code}"
+
+
+def test_tensor_f32_dot():
+    """f32 dot product: [0.5, 1.5] . [2.0, 2.0] = 4.0; cast to i32 = 4."""
+    src = """
+    fn main() -> i32 {
+        let a = t1d_new(2);
+        tf1d_set(a, 0, 0.5_f32); tf1d_set(a, 1, 1.5_f32);
+        let b = t1d_new(2);
+        tf1d_set(b, 0, 2.0_f32); tf1d_set(b, 1, 2.0_f32);
+        tf1d_dot(a, b, 2) as i32
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 4, f"expected 4, got {code}"
+
+
+def test_tensor_f32_relu():
+    """relu([-1.5, 2.5, 0.0]) = [0, 2.5, 0]. Sum = 2.5; *2 cast i32 = 5."""
+    src = """
+    fn main() -> i32 {
+        let x = t1d_new(3);
+        tf1d_set(x, 0, 0.0_f32 - 1.5_f32);
+        tf1d_set(x, 1, 2.5_f32);
+        tf1d_set(x, 2, 0.0_f32);
+        let r = t1d_new(3);
+        tf1d_relu(x, r, 3);
+        (tf1d_sum(r, 3) * 2.0_f32) as i32
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 5, f"expected 5 (2.5*2), got {code}"
+
+
+def test_tensor_f32_matvec():
+    """f32 2x2 matvec. W = [[1.5, 0.5], [0.5, 1.5]] @ x = [2.0, 2.0]
+    -> y = [4.0, 4.0]. Sum = 8.0."""
+    src = """
+    fn main() -> i32 {
+        let w = ti2d_new(2, 2);
+        tf2d_set(w, 2, 0, 0, 1.5_f32); tf2d_set(w, 2, 0, 1, 0.5_f32);
+        tf2d_set(w, 2, 1, 0, 0.5_f32); tf2d_set(w, 2, 1, 1, 1.5_f32);
+        let x = t1d_new(2);
+        tf1d_set(x, 0, 2.0_f32); tf1d_set(x, 1, 2.0_f32);
+        let y = t1d_new(2);
+        tf2d_matvec(w, 2, 2, x, y);
+        tf1d_sum(y, 2) as i32
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 8, f"expected 8, got {code}"
+
+
 def test_revad_grad_mul():
     """Phase 2.1 step 2: reverse-mode AD. f = x * y. df/dx = y; df/dy = x."""
     src = """

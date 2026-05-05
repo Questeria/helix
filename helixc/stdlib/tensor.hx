@@ -147,3 +147,94 @@ fn ti1d_add(x_start: i32, y_start: i32, z_start: i32, n: i32) -> i32 {
     }
     0
 }
+
+// =========================================================================
+// Phase 2.2 step 2: f32 tensor primitives via __bits_of_f32 reinterpret.
+// =========================================================================
+// f32 values stored as their IEEE 754 bit pattern in arena slots (4 bytes
+// each, same width as i32). The codegen primitive __bits_of_f32 /
+// __f32_from_bits relabels the same 4 bytes — no instruction emitted, just
+// a type-system shim.
+
+fn tf1d_set(start: i32, i: i32, x: f32) -> i32 {
+    __arena_set(start + i, __bits_of_f32(x));
+    0
+}
+
+@pure fn tf1d_get(start: i32, i: i32) -> f32 {
+    __f32_from_bits(__arena_get(start + i))
+}
+
+@pure
+fn tf1d_sum(start: i32, n: i32) -> f32 {
+    let mut i: i32 = 0;
+    let mut total: f32 = 0.0_f32;
+    while i < n {
+        total = total + __f32_from_bits(__arena_get(start + i));
+        i = i + 1;
+    }
+    total
+}
+
+@pure
+fn tf1d_dot(a_start: i32, b_start: i32, n: i32) -> f32 {
+    let mut i: i32 = 0;
+    let mut total: f32 = 0.0_f32;
+    while i < n {
+        let av = __f32_from_bits(__arena_get(a_start + i));
+        let bv = __f32_from_bits(__arena_get(b_start + i));
+        total = total + av * bv;
+        i = i + 1;
+    }
+    total
+}
+
+fn tf1d_axpy(y_start: i32, a: f32, x_start: i32, n: i32) -> i32 {
+    let mut i: i32 = 0;
+    while i < n {
+        let cur = __f32_from_bits(__arena_get(y_start + i));
+        let xi = __f32_from_bits(__arena_get(x_start + i));
+        __arena_set(y_start + i, __bits_of_f32(cur + a * xi));
+        i = i + 1;
+    }
+    0
+}
+
+fn tf1d_relu(x_start: i32, y_start: i32, n: i32) -> i32 {
+    let mut i: i32 = 0;
+    while i < n {
+        let xi = __f32_from_bits(__arena_get(x_start + i));
+        let v = if xi > 0.0_f32 { xi } else { 0.0_f32 };
+        __arena_set(y_start + i, __bits_of_f32(v));
+        i = i + 1;
+    }
+    0
+}
+
+@pure
+fn tf2d_get(start: i32, cols: i32, i: i32, j: i32) -> f32 {
+    __f32_from_bits(__arena_get(start + i * cols + j))
+}
+
+fn tf2d_set(start: i32, cols: i32, i: i32, j: i32, x: f32) -> i32 {
+    __arena_set(start + i * cols + j, __bits_of_f32(x));
+    0
+}
+
+fn tf2d_matvec(w_start: i32, w_rows: i32, w_cols: i32,
+               x_start: i32, y_start: i32) -> i32 {
+    let mut r: i32 = 0;
+    while r < w_rows {
+        let mut c: i32 = 0;
+        let mut acc: f32 = 0.0_f32;
+        while c < w_cols {
+            let wv = __f32_from_bits(__arena_get(w_start + r * w_cols + c));
+            let xv = __f32_from_bits(__arena_get(x_start + c));
+            acc = acc + wv * xv;
+            c = c + 1;
+        }
+        __arena_set(y_start + r, __bits_of_f32(acc));
+        r = r + 1;
+    }
+    0
+}
