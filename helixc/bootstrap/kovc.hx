@@ -604,14 +604,70 @@ fn bn_global_slot() -> i32 {
 // asm and return the byte count. If not, return 0 (caller falls
 // back to regular CALL emission).
 //
-// Phase-0 stub: returns 0 always so existing tests pass. The
-// builtin infrastructure (install_builtin_names, bn_state,
-// emit_lea_rax_rip_placeholder) is staged but the actual
-// dispatch is wired up in a follow-up session. Doing it now in
-// one shot risks bugs we won't catch quickly.
+// Recognize each arena builtin and emit its inline asm. Returns
+// the byte count emitted, or 0 if the name doesn't match any
+// known builtin (caller falls back to regular CALL emission).
 fn try_emit_builtin_call(name_s: i32, name_l: i32, args_head: i32,
-                          bind_state: i32, patch_state: i32) -> i32 {
-    0
+                          bind_state: i32, patch_state: i32, bn_state: i32) -> i32 {
+    let arena_base_s = bn_helix_arena_base_s(bn_state);
+    if kovc_byte_eq(name_s, name_l, bn_arena_len_s(bn_state), 11) == 1 {
+        // __arena_len(): lea rax, [arena]; mov eax, [rax]
+        let disp_slot = emit_lea_rax_rip_placeholder();
+        patch_table_add(patch_state, disp_slot, arena_base_s, 18);
+        emit_byte(0x8B); emit_byte(0x00);
+        9
+    } else { if kovc_byte_eq(name_s, name_l, bn_arena_get_s(bn_state), 11) == 1 {
+        // __arena_get(idx): eval idx in eax; mov ecx, eax;
+        //                    lea rax, arena; mov eax, [rax+rcx*4+4]
+        let arg_idx = __arena_get(args_head + 1);
+        let n_arg = emit_ast_code(arg_idx, bind_state, patch_state, bn_state);
+        emit_byte(0x89); emit_byte(0xC1);                  // mov ecx, eax
+        let disp_slot = emit_lea_rax_rip_placeholder();
+        patch_table_add(patch_state, disp_slot, arena_base_s, 18);
+        emit_byte(0x8B); emit_byte(0x44); emit_byte(0x88); emit_byte(0x04);
+        n_arg + 2 + 7 + 4
+    } else { if kovc_byte_eq(name_s, name_l, bn_arena_push_s(bn_state), 12) == 1 {
+        // __arena_push(val): eval val in eax; bounds-checked
+        // write to arena; return old cursor.
+        let arg_idx = __arena_get(args_head + 1);
+        let n_arg = emit_ast_code(arg_idx, bind_state, patch_state, bn_state);
+        emit_byte(0x89); emit_byte(0xC2);                  // mov edx, eax (val)
+        let disp_slot = emit_lea_rax_rip_placeholder();    // 7 bytes
+        patch_table_add(patch_state, disp_slot, arena_base_s, 18);
+        emit_byte(0x8B); emit_byte(0x08);                  // mov ecx, [rax]
+        emit_byte(0x81); emit_byte(0xF9);                  // cmp ecx, CAP (6 bytes)
+        emit_u32_le(helix_arena_cap());
+        emit_byte(0x72); emit_byte(0x07);                  // jb in_bounds (skip 7)
+        emit_byte(0xB8); emit_byte(0xFF); emit_byte(0xFF); emit_byte(0xFF); emit_byte(0xFF);
+        emit_byte(0xEB); emit_byte(0x0C);                  // jmp end (skip 12)
+        emit_byte(0x89); emit_byte(0x54); emit_byte(0x88); emit_byte(0x04);  // mov [rax+rcx*4+4], edx
+        emit_byte(0x89); emit_byte(0xCA);                  // mov edx, ecx (save old cursor)
+        emit_byte(0xFF); emit_byte(0xC1);                  // inc ecx
+        emit_byte(0x89); emit_byte(0x08);                  // mov [rax], ecx (update cursor)
+        emit_byte(0x89); emit_byte(0xD0);                  // mov eax, edx (return old cursor)
+        n_arg + 2 + 7 + 2 + 6 + 2 + 5 + 2 + 4 + 2 + 2 + 2 + 2
+    } else { if kovc_byte_eq(name_s, name_l, bn_arena_set_s(bn_state), 11) == 1 {
+        // __arena_set(idx, val): eval idx, push; eval val in eax,
+        //                        mov ecx, eax; pop rax = idx;
+        //                        mov edx, eax (idx); lea rax, arena;
+        //                        mov [rax+rdx*4+4], ecx; xor eax, eax
+        let a0 = __arena_get(args_head + 1);
+        let next_arg = __arena_get(args_head + 2);
+        let a1 = __arena_get(next_arg + 1);
+        let n0 = emit_ast_code(a0, bind_state, patch_state, bn_state);
+        let np = emit_push_rax();
+        let n1 = emit_ast_code(a1, bind_state, patch_state, bn_state);
+        emit_byte(0x89); emit_byte(0xC1);                  // mov ecx, eax (val)
+        emit_byte(0x58);                                    // pop rax (idx)
+        emit_byte(0x89); emit_byte(0xC2);                  // mov edx, eax (idx)
+        let disp_slot = emit_lea_rax_rip_placeholder();
+        patch_table_add(patch_state, disp_slot, arena_base_s, 18);
+        emit_byte(0x89); emit_byte(0x4C); emit_byte(0x90); emit_byte(0x04);
+        emit_byte(0x31); emit_byte(0xC0);                  // xor eax, eax
+        n0 + np + n1 + 2 + 1 + 2 + 7 + 4 + 2
+    } else {
+        0
+    }}}}
 }
 
 // Unreachable in this commit; reference impl preserved for next
@@ -630,7 +686,7 @@ fn try_emit_builtin_call_impl(name_s: i32, name_l: i32, args_head: i32,
         // __arena_get(idx): eax = idx; mov ecx, eax;
         // lea rax, arena; mov eax, [rax + rcx*4 + 4]
         let arg_idx = __arena_get(args_head + 1);
-        let n_arg = emit_ast_code(arg_idx, bind_state, patch_state);
+        let n_arg = emit_ast_code(arg_idx, bind_state, patch_state, bn_state);
         emit_byte(0x89); emit_byte(0xC1);                  // mov ecx, eax
         let disp_slot = emit_lea_rax_rip_placeholder();
         patch_table_add(patch_state, disp_slot, arena_base_s, 18);
@@ -640,7 +696,7 @@ fn try_emit_builtin_call_impl(name_s: i32, name_l: i32, args_head: i32,
         // __arena_push(val): eax = val; ecx = cursor; bounds check;
         // write [arena+ecx*4+4] = val; eax = old cursor; cursor++
         let arg_idx = __arena_get(args_head + 1);
-        let n_arg = emit_ast_code(arg_idx, bind_state, patch_state);
+        let n_arg = emit_ast_code(arg_idx, bind_state, patch_state, bn_state);
         emit_byte(0x89); emit_byte(0xC2);                  // mov edx, eax (val)
         let disp_slot = emit_lea_rax_rip_placeholder();
         patch_table_add(patch_state, disp_slot, arena_base_s, 18);
@@ -672,9 +728,9 @@ fn try_emit_builtin_call_impl(name_s: i32, name_l: i32, args_head: i32,
         let a0 = __arena_get(args_head + 1);
         let next_arg_idx = __arena_get(args_head + 2);
         let a1 = __arena_get(next_arg_idx + 1);
-        let n0 = emit_ast_code(a0, bind_state, patch_state);
+        let n0 = emit_ast_code(a0, bind_state, patch_state, bn_state);
         let np = emit_push_rax();
-        let n1 = emit_ast_code(a1, bind_state, patch_state);
+        let n1 = emit_ast_code(a1, bind_state, patch_state, bn_state);
         emit_byte(0x89); emit_byte(0xC1);                  // mov ecx, eax (val)
         emit_byte(0x58);                                    // pop rax (idx)
         emit_byte(0x89); emit_byte(0xC2);                  // mov edx, eax (idx)
@@ -714,92 +770,92 @@ fn bn_global_slot_address() -> i32 {
 // SysV 6-int-param limit forced bn_state into a global slot rather
 // than a function arg.
 // --------------------------------------------------------------
-fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32) -> i32 {
+fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> i32 {
     let t = __arena_get(idx);
     let p1 = __arena_get(idx + 1);
     let p2 = __arena_get(idx + 2);
     if t == 0 {
         emit_ast_int(p1)
     } else { if t == 2 {
-        let n1 = emit_ast_code(p1, bind_state, patch_state);
+        let n1 = emit_ast_code(p1, bind_state, patch_state, bn_state);
         let np = emit_push_rax();
-        let n2 = emit_ast_code(p2, bind_state, patch_state);
+        let n2 = emit_ast_code(p2, bind_state, patch_state, bn_state);
         let nm = emit_mov_ecx_eax();
         let no = emit_pop_rax();
         let na = emit_add_eax_ecx();
         n1 + np + n2 + nm + no + na
     } else { if t == 3 {
-        let n1 = emit_ast_code(p1, bind_state, patch_state);
+        let n1 = emit_ast_code(p1, bind_state, patch_state, bn_state);
         let np = emit_push_rax();
-        let n2 = emit_ast_code(p2, bind_state, patch_state);
+        let n2 = emit_ast_code(p2, bind_state, patch_state, bn_state);
         let nm = emit_mov_ecx_eax();
         let no = emit_pop_rax();
         let na = emit_sub_eax_ecx();
         n1 + np + n2 + nm + no + na
     } else { if t == 4 {
-        let n1 = emit_ast_code(p1, bind_state, patch_state);
+        let n1 = emit_ast_code(p1, bind_state, patch_state, bn_state);
         let np = emit_push_rax();
-        let n2 = emit_ast_code(p2, bind_state, patch_state);
+        let n2 = emit_ast_code(p2, bind_state, patch_state, bn_state);
         let nm = emit_mov_ecx_eax();
         let no = emit_pop_rax();
         let na = emit_imul_eax_ecx();
         n1 + np + n2 + nm + no + na
     } else { if t == 5 {
-        let n1 = emit_ast_code(p1, bind_state, patch_state);
+        let n1 = emit_ast_code(p1, bind_state, patch_state, bn_state);
         let np = emit_push_rax();
-        let n2 = emit_ast_code(p2, bind_state, patch_state);
+        let n2 = emit_ast_code(p2, bind_state, patch_state, bn_state);
         let nm = emit_mov_ecx_eax();
         let no = emit_pop_rax();
         let na = emit_idiv_eax_ecx();
         n1 + np + n2 + nm + no + na
     } else { if t == 9 {
-        let ni = emit_ast_code(p1, bind_state, patch_state);
+        let ni = emit_ast_code(p1, bind_state, patch_state, bn_state);
         let nn = emit_ast_neg_suffix();
         ni + nn
     } else { if t == 6 {
-        let n1 = emit_ast_code(p1, bind_state, patch_state);
+        let n1 = emit_ast_code(p1, bind_state, patch_state, bn_state);
         let np = emit_push_rax();
-        let n2 = emit_ast_code(p2, bind_state, patch_state);
+        let n2 = emit_ast_code(p2, bind_state, patch_state, bn_state);
         let nm = emit_mov_ecx_eax();
         let no = emit_pop_rax();
         let na = emit_lt_eax_ecx();
         n1 + np + n2 + nm + no + na
     } else { if t == 19 {
-        let n1 = emit_ast_code(p1, bind_state, patch_state);
+        let n1 = emit_ast_code(p1, bind_state, patch_state, bn_state);
         let np = emit_push_rax();
-        let n2 = emit_ast_code(p2, bind_state, patch_state);
+        let n2 = emit_ast_code(p2, bind_state, patch_state, bn_state);
         let nm = emit_mov_ecx_eax();
         let no = emit_pop_rax();
         let na = emit_gt_eax_ecx();
         n1 + np + n2 + nm + no + na
     } else { if t == 20 {
-        let n1 = emit_ast_code(p1, bind_state, patch_state);
+        let n1 = emit_ast_code(p1, bind_state, patch_state, bn_state);
         let np = emit_push_rax();
-        let n2 = emit_ast_code(p2, bind_state, patch_state);
+        let n2 = emit_ast_code(p2, bind_state, patch_state, bn_state);
         let nm = emit_mov_ecx_eax();
         let no = emit_pop_rax();
         let na = emit_eq_eax_ecx();
         n1 + np + n2 + nm + no + na
     } else { if t == 21 {
-        let n1 = emit_ast_code(p1, bind_state, patch_state);
+        let n1 = emit_ast_code(p1, bind_state, patch_state, bn_state);
         let np = emit_push_rax();
-        let n2 = emit_ast_code(p2, bind_state, patch_state);
+        let n2 = emit_ast_code(p2, bind_state, patch_state, bn_state);
         let nm = emit_mov_ecx_eax();
         let no = emit_pop_rax();
         let na = emit_ne_eax_ecx();
         n1 + np + n2 + nm + no + na
     } else { if t == 22 {
-        let n1 = emit_ast_code(p1, bind_state, patch_state);
+        let n1 = emit_ast_code(p1, bind_state, patch_state, bn_state);
         let np = emit_push_rax();
-        let n2 = emit_ast_code(p2, bind_state, patch_state);
+        let n2 = emit_ast_code(p2, bind_state, patch_state, bn_state);
         let nm = emit_mov_ecx_eax();
         let no = emit_pop_rax();
         let na = emit_le_eax_ecx();
         n1 + np + n2 + nm + no + na
     } else { if t == 23 {
-        let n1 = emit_ast_code(p1, bind_state, patch_state);
+        let n1 = emit_ast_code(p1, bind_state, patch_state, bn_state);
         let np = emit_push_rax();
-        let n2 = emit_ast_code(p2, bind_state, patch_state);
+        let n2 = emit_ast_code(p2, bind_state, patch_state, bn_state);
         let nm = emit_mov_ecx_eax();
         let no = emit_pop_rax();
         let na = emit_ge_eax_ecx();
@@ -807,13 +863,13 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32) -> i32 {
     } else { if t == 7 {
         // AST_IF(cond, then, else)
         let p3 = __arena_get(idx + 3);
-        let n_cond = emit_ast_code(p1, bind_state, patch_state);
+        let n_cond = emit_ast_code(p1, bind_state, patch_state, bn_state);
         let n_test = emit_test_eax_eax();
         let je_disp = emit_je_rel32_placeholder();
-        let n_then = emit_ast_code(p2, bind_state, patch_state);
+        let n_then = emit_ast_code(p2, bind_state, patch_state, bn_state);
         let jmp_disp = emit_jmp_rel32_placeholder();
         let else_label = __arena_len();
-        let n_else = emit_ast_code(p3, bind_state, patch_state);
+        let n_else = emit_ast_code(p3, bind_state, patch_state, bn_state);
         let merge_label = __arena_len();
         patch_rel32(je_disp, else_label);
         patch_rel32(jmp_disp, merge_label);
@@ -828,11 +884,11 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32) -> i32 {
         let p3 = __arena_get(idx + 3);
         let value_idx = p3 / 65536;
         let body_idx = p3 - value_idx * 65536;
-        let n_val = emit_ast_code(value_idx, bind_state, patch_state);
+        let n_val = emit_ast_code(value_idx, bind_state, patch_state, bn_state);
         let off = bind_alloc_offset(bind_state);
         let n_store = emit_mov_local_eax(off);
         bind_push(bind_state, p1, p2, off);
-        let n_body = emit_ast_code(body_idx, bind_state, patch_state);
+        let n_body = emit_ast_code(body_idx, bind_state, patch_state, bn_state);
         bind_pop(bind_state);
         n_val + n_store + n_body
     } else { if t == 12 {
@@ -842,11 +898,11 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32) -> i32 {
         let p3 = __arena_get(idx + 3);
         let value_idx = p3 / 65536;
         let body_idx = p3 - value_idx * 65536;
-        let n_val = emit_ast_code(value_idx, bind_state, patch_state);
+        let n_val = emit_ast_code(value_idx, bind_state, patch_state, bn_state);
         let off = bind_alloc_offset(bind_state);
         let n_store = emit_mov_local_eax(off);
         bind_push(bind_state, p1, p2, off);
-        let n_body = emit_ast_code(body_idx, bind_state, patch_state);
+        let n_body = emit_ast_code(body_idx, bind_state, patch_state, bn_state);
         bind_pop(bind_state);
         n_val + n_store + n_body
     } else { if t == 11 {
@@ -865,7 +921,7 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32) -> i32 {
         // still holds the assigned value so expressions like
         // `(x = 5) + 1` evaluate correctly.
         let p3 = __arena_get(idx + 3);
-        let n_val = emit_ast_code(p3, bind_state, patch_state);
+        let n_val = emit_ast_code(p3, bind_state, patch_state, bn_state);
         let off = bind_lookup(bind_state, p1, p2);
         if off == 0 {
             n_val
@@ -880,7 +936,7 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32) -> i32 {
         // programs use AST_FN_LIST (tag 15) which dispatches to a
         // walker that finds main.
         let p3 = __arena_get(idx + 3);
-        emit_ast_code(p3, bind_state, patch_state)
+        emit_ast_code(p3, bind_state, patch_state, bn_state)
     } else { if t == 15 {
         // AST_FN_LIST: by the time we get here, the top-level
         // wrapper should have already resolved the list to `main`'s
@@ -894,7 +950,7 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32) -> i32 {
         // to the inline emitter. Otherwise fall through to the
         // regular SysV call sequence.
         let p3 = __arena_get(idx + 3);
-        let builtin_bytes = try_emit_builtin_call(p1, p2, p3, bind_state, patch_state);
+        let builtin_bytes = try_emit_builtin_call(p1, p2, p3, bind_state, patch_state, bn_state);
         if builtin_bytes > 0 {
             builtin_bytes
         } else {
@@ -910,7 +966,7 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32) -> i32 {
         let mut arg_count: i32 = 0;
         while arg_cur != 0 {
             let arg_expr = __arena_get(arg_cur + 1);
-            let n_arg = emit_ast_code(arg_expr, bind_state, patch_state);
+            let n_arg = emit_ast_code(arg_expr, bind_state, patch_state, bn_state);
             let n_push = emit_push_rax();
             bytes_emitted = bytes_emitted + n_arg + n_push;
             arg_count = arg_count + 1;
@@ -951,8 +1007,8 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32) -> i32 {
         // AST_SEQ(first, second): emit first (discard eax), emit
         // second (its eax is the result). Helix's calling convention
         // here is "value left in eax", so we just chain.
-        let n1 = emit_ast_code(p1, bind_state, patch_state);
-        let n2 = emit_ast_code(p2, bind_state, patch_state);
+        let n1 = emit_ast_code(p1, bind_state, patch_state, bn_state);
+        let n2 = emit_ast_code(p2, bind_state, patch_state, bn_state);
         n1 + n2
     } else { if t == 10 {
         // AST_WHILE(cond, body):
@@ -966,10 +1022,10 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32) -> i32 {
         //   end_label:
         //     mov eax, 0      Helix while-expr returns unit (0)
         let loop_top = __arena_len();
-        let n_cond = emit_ast_code(p1, bind_state, patch_state);
+        let n_cond = emit_ast_code(p1, bind_state, patch_state, bn_state);
         let n_test = emit_test_eax_eax();
         let je_disp = emit_je_rel32_placeholder();
-        let n_body = emit_ast_code(p2, bind_state, patch_state);
+        let n_body = emit_ast_code(p2, bind_state, patch_state, bn_state);
         let jmp_disp = emit_jmp_rel32_placeholder();
         let end_label = __arena_len();
         patch_rel32(je_disp, end_label);
@@ -1034,6 +1090,7 @@ fn emit_elf_for_ast_to_path(ast_root: i32) -> i32 {
     let bind_state = bind_init();
     let fn_state = fn_table_init();
     let patch_state = patch_table_init();
+    let bn_state = install_builtin_names();
     // Resolve main (single-expr legacy or AST_FN_LIST → main body).
     let resolved_root = resolve_program_root(ast_root);
     // Stash "main" bytes for the _start stub's call patch (the
@@ -1112,11 +1169,19 @@ fn emit_elf_for_ast_to_path(ast_root: i32) -> i32 {
                 pidx = pidx + 1;
                 pcur = __arena_get(pcur + 3);
             }
-            emit_ast_code(fn_body, bind_state, patch_state);
+            emit_ast_code(fn_body, bind_state, patch_state, bn_state);
             emit_epilogue();
             emit_ret();
             cur_list = __arena_get(cur_list + 2);
         }
+        // After all fns emitted, register the arena base symbol
+        // and emit the actual arena data right after the last fn's
+        // ret. This lets inline arena-builtin code (LEA via
+        // patch_table) resolve __helix_arena_base correctly.
+        let arena_base_offset = __arena_len();
+        fn_table_add(fn_state, bn_helix_arena_base_s(bn_state), 18, arena_base_offset);
+        // Arena layout: 4 bytes cursor + 32K * 4 = 131072 bytes data.
+        emit_zeros(4 + 131072);
         // Backpatch all CALL placeholders. For unresolved names,
         // overwrite the entire 5-byte CALL with `ud2` + 3 NOPs
         // (audit-11 fix). The previous "leave disp at 0" silently
@@ -1153,7 +1218,7 @@ fn emit_elf_for_ast_to_path(ast_root: i32) -> i32 {
         // Legacy / fn-decl: single fn whose body is the program.
         // Same prologue+body+epilogue+exit_stub layout as before.
         emit_prologue();
-        emit_ast_code(resolved_root, bind_state, patch_state);
+        emit_ast_code(resolved_root, bind_state, patch_state, bn_state);
         emit_epilogue();
         emit_exit_with_eax();
     }

@@ -1216,6 +1216,19 @@ fn main() -> i32 {
     assert compile_and_exec(
         "@pure @inline fn f() -> i32 { 9 } fn main() -> i32 { f() }"
     ) == 9, "multiple attributes on a fn"
+    # Inline arena builtins (no longer routed through patch_table —
+    # kovc emits the asm directly, with a `__helix_arena_base`
+    # symbol resolved by the same backpatch machinery as CALL).
+    assert compile_and_exec("fn main() -> i32 { __arena_len() }") == 0, "empty arena"
+    assert compile_and_exec(
+        "fn main() -> i32 { __arena_push(42) ; __arena_get(0) }"
+    ) == 42, "arena push then get round-trips"
+    assert compile_and_exec(
+        "fn main() -> i32 { __arena_push(1) ; __arena_push(2) ; __arena_len() }"
+    ) == 2, "arena_len after pushes"
+    assert compile_and_exec(
+        "fn main() -> i32 { __arena_push(0) ; __arena_set(0, 99) ; __arena_get(0) }"
+    ) == 99, "arena_set then arena_get"
 
 
 def test_bootstrap_kovc_demo_emits_ast_int_42():
