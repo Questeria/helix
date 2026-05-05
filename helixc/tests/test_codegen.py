@@ -716,6 +716,107 @@ def test_f64_negation():
     assert compile_and_run(src) == 1
 
 
+def test_i64_basic():
+    """Phase 1.4: i64 type round-trip via i32 cast (small values)."""
+    src = """
+    fn main() -> i32 {
+        let x: i64 = 42_i64;
+        x as i32
+    }
+    """
+    assert compile_and_run(src) == 42
+
+
+def test_i64_add_beyond_i32():
+    """Phase 1.4: i64 addition with values that overflow i32. 5B / 1B = 5."""
+    src = """
+    fn main() -> i32 {
+        let big: i64 = 5_000_000_000_i64;
+        let one_b: i64 = 1_000_000_000_i64;
+        let q: i64 = big / one_b;
+        q as i32
+    }
+    """
+    assert compile_and_run(src) == 5
+
+
+def test_i64_multiply_beyond_i32():
+    """Phase 1.4: i64 multiply: 3B * 2 = 6B (would overflow i32). 6B / 1B = 6."""
+    src = """
+    fn main() -> i32 {
+        let a: i64 = 3_000_000_000_i64;
+        let b: i64 = 2_i64;
+        let c: i64 = a * b;
+        let one_b: i64 = 1_000_000_000_i64;
+        (c / one_b) as i32
+    }
+    """
+    assert compile_and_run(src) == 6
+
+
+def test_i64_compare_beyond_i32():
+    """Phase 1.4: i64 cmp on big values."""
+    src = """
+    fn main() -> i32 {
+        let a: i64 = 5_000_000_000_i64;
+        let b: i64 = 4_000_000_000_i64;
+        if a > b { 1 } else { 0 }
+    }
+    """
+    assert compile_and_run(src) == 1
+
+
+def test_i64_negation():
+    """Phase 1.4: i64 unary minus uses neg rax."""
+    src = """
+    fn main() -> i32 {
+        let a: i64 = 100_i64;
+        let b: i64 = -a + 105_i64;
+        b as i32
+    }
+    """
+    assert compile_and_run(src) == 5
+
+
+def test_i64_fn_arg():
+    """Phase 1.4: i64 in fn args/return uses 64-bit reg passing."""
+    src = """
+    fn double_i64(x: i64) -> i64 { x + x }
+    fn main() -> i32 {
+        let r: i64 = double_i64(3_000_000_000_i64);
+        let one_b: i64 = 1_000_000_000_i64;
+        (r / one_b) as i32
+    }
+    """
+    assert compile_and_run(src) == 6
+
+
+def test_i32_to_i64_sign_extend():
+    """Phase 1.4: i32 -> i64 cast sign-extends."""
+    src = """
+    fn main() -> i32 {
+        let small: i32 = 0 - 7;
+        let wide: i64 = small as i64;
+        let big: i64 = wide + 12_i64;
+        big as i32
+    }
+    """
+    assert compile_and_run(src) == 5
+
+
+def test_i64_to_f64_then_back():
+    """Phase 1.4 + 1.1: i64 -> f64 -> i32 round-trip."""
+    src = """
+    fn main() -> i32 {
+        let big: i64 = 1_000_000_000_i64;
+        let f: f64 = big as f64;
+        let g: f64 = f / 100_000_000.0_f64;
+        g as i32
+    }
+    """
+    assert compile_and_run(src) == 10
+
+
 def test_f32_negation_sign_bit():
     """Phase 1.3 (regression-class): f32 negation must flip the sign bit,
     too. The OLD code used integer two's-complement which was incorrect

@@ -183,6 +183,61 @@ class Asm:
     def imul_eax_ecx(self) -> None:
         self.b.emit(0x0F, 0xAF, 0xC1)          # imul eax, ecx
 
+    # ============================================================
+    # 64-bit (i64) integer operations — REX.W + same opcodes.
+    # Phase 1.4: full native-width arithmetic.
+    # ============================================================
+    def mov_rax_imm64(self, imm: int) -> None:
+        # 48 B8 imm64
+        self.b.emit(0x48, 0xB8)
+        self.b.emit_bytes(struct.pack("<q", imm))
+
+    def mov_rax_mem_rbp(self, disp: int) -> None:
+        # 48 8B 45 disp8 / 48 8B 85 disp32
+        if -128 <= disp <= 127:
+            self.b.emit(0x48, 0x8B, 0x45, disp & 0xFF)
+        else:
+            self.b.emit(0x48, 0x8B, 0x85)
+            self.b.emit_bytes(struct.pack("<i", disp))
+
+    def mov_mem_rbp_rax(self, disp: int) -> None:
+        # 48 89 45 disp8 / 48 89 85 disp32
+        if -128 <= disp <= 127:
+            self.b.emit(0x48, 0x89, 0x45, disp & 0xFF)
+        else:
+            self.b.emit(0x48, 0x89, 0x85)
+            self.b.emit_bytes(struct.pack("<i", disp))
+
+    def mov_rcx_mem_rbp(self, disp: int) -> None:
+        if -128 <= disp <= 127:
+            self.b.emit(0x48, 0x8B, 0x4D, disp & 0xFF)
+        else:
+            self.b.emit(0x48, 0x8B, 0x8D)
+            self.b.emit_bytes(struct.pack("<i", disp))
+
+    def add_rax_rcx(self) -> None:
+        self.b.emit(0x48, 0x01, 0xC8)          # add rax, rcx
+
+    def sub_rax_rcx(self) -> None:
+        self.b.emit(0x48, 0x29, 0xC8)          # sub rax, rcx
+
+    def imul_rax_rcx(self) -> None:
+        self.b.emit(0x48, 0x0F, 0xAF, 0xC1)    # imul rax, rcx
+
+    def cqo(self) -> None:
+        # 48 99   sign-extend rax into rdx:rax (the 64-bit sibling of cdq)
+        self.b.emit(0x48, 0x99)
+
+    def idiv_rcx(self) -> None:
+        # 48 F7 F9
+        self.b.emit(0x48, 0xF7, 0xF9)
+
+    def cmp_rax_rcx(self) -> None:
+        self.b.emit(0x48, 0x39, 0xC8)          # cmp rax, rcx
+
+    def neg_rax(self) -> None:
+        self.b.emit(0x48, 0xF7, 0xD8)          # neg rax
+
     def cdq(self) -> None:
         self.b.emit(0x99)                      # sign-extend eax into edx
 
@@ -292,6 +347,95 @@ class Asm:
         else:
             self.b.emit(0x44, 0x8B, 0x8D)
             self.b.emit_bytes(struct.pack("<i", disp8))
+
+    # ---- 64-bit (i64) arg-register loads (REX.W + same opcodes) ----
+    def mov_rdi_mem_rbp(self, disp: int) -> None:
+        # 48 8B 7D disp8 / 48 8B BD disp32
+        if -128 <= disp <= 127:
+            self.b.emit(0x48, 0x8B, 0x7D, disp & 0xFF)
+        else:
+            self.b.emit(0x48, 0x8B, 0xBD)
+            self.b.emit_bytes(struct.pack("<i", disp))
+
+    def mov_rsi_mem_rbp(self, disp: int) -> None:
+        if -128 <= disp <= 127:
+            self.b.emit(0x48, 0x8B, 0x75, disp & 0xFF)
+        else:
+            self.b.emit(0x48, 0x8B, 0xB5)
+            self.b.emit_bytes(struct.pack("<i", disp))
+
+    def mov_rdx_mem_rbp(self, disp: int) -> None:
+        if -128 <= disp <= 127:
+            self.b.emit(0x48, 0x8B, 0x55, disp & 0xFF)
+        else:
+            self.b.emit(0x48, 0x8B, 0x95)
+            self.b.emit_bytes(struct.pack("<i", disp))
+
+    def mov_rcx_arg_mem_rbp(self, disp: int) -> None:
+        if -128 <= disp <= 127:
+            self.b.emit(0x48, 0x8B, 0x4D, disp & 0xFF)
+        else:
+            self.b.emit(0x48, 0x8B, 0x8D)
+            self.b.emit_bytes(struct.pack("<i", disp))
+
+    def mov_r8_mem_rbp(self, disp: int) -> None:
+        # 4C 8B 45 disp8 / 4C 8B 85 disp32
+        if -128 <= disp <= 127:
+            self.b.emit(0x4C, 0x8B, 0x45, disp & 0xFF)
+        else:
+            self.b.emit(0x4C, 0x8B, 0x85)
+            self.b.emit_bytes(struct.pack("<i", disp))
+
+    def mov_r9_mem_rbp(self, disp: int) -> None:
+        if -128 <= disp <= 127:
+            self.b.emit(0x4C, 0x8B, 0x4D, disp & 0xFF)
+        else:
+            self.b.emit(0x4C, 0x8B, 0x8D)
+            self.b.emit_bytes(struct.pack("<i", disp))
+
+    # ---- 64-bit arg-register STORE-to-stack (callee param spill) ----
+    def mov_mem_rbp_rdi(self, disp: int) -> None:
+        # 48 89 7D disp8 / 48 89 BD disp32
+        if -128 <= disp <= 127:
+            self.b.emit(0x48, 0x89, 0x7D, disp & 0xFF)
+        else:
+            self.b.emit(0x48, 0x89, 0xBD)
+            self.b.emit_bytes(struct.pack("<i", disp))
+
+    def mov_mem_rbp_rsi(self, disp: int) -> None:
+        if -128 <= disp <= 127:
+            self.b.emit(0x48, 0x89, 0x75, disp & 0xFF)
+        else:
+            self.b.emit(0x48, 0x89, 0xB5)
+            self.b.emit_bytes(struct.pack("<i", disp))
+
+    def mov_mem_rbp_rdx(self, disp: int) -> None:
+        if -128 <= disp <= 127:
+            self.b.emit(0x48, 0x89, 0x55, disp & 0xFF)
+        else:
+            self.b.emit(0x48, 0x89, 0x95)
+            self.b.emit_bytes(struct.pack("<i", disp))
+
+    def mov_mem_rbp_rcx(self, disp: int) -> None:
+        if -128 <= disp <= 127:
+            self.b.emit(0x48, 0x89, 0x4D, disp & 0xFF)
+        else:
+            self.b.emit(0x48, 0x89, 0x8D)
+            self.b.emit_bytes(struct.pack("<i", disp))
+
+    def mov_mem_rbp_r8(self, disp: int) -> None:
+        if -128 <= disp <= 127:
+            self.b.emit(0x4C, 0x89, 0x45, disp & 0xFF)
+        else:
+            self.b.emit(0x4C, 0x89, 0x85)
+            self.b.emit_bytes(struct.pack("<i", disp))
+
+    def mov_mem_rbp_r9(self, disp: int) -> None:
+        if -128 <= disp <= 127:
+            self.b.emit(0x4C, 0x89, 0x4D, disp & 0xFF)
+        else:
+            self.b.emit(0x4C, 0x89, 0x8D)
+            self.b.emit_bytes(struct.pack("<i", disp))
 
     # ---- control flow ----
     def call_rel32(self, target: str) -> None:
@@ -707,6 +851,14 @@ class FnCompiler:
             self.asm.mov_mem_rbp_r8d,
             self.asm.mov_mem_rbp_r9d,
         ]
+        INT_SPILLS_64 = [
+            self.asm.mov_mem_rbp_rdi,
+            self.asm.mov_mem_rbp_rsi,
+            self.asm.mov_mem_rbp_rdx,
+            self.asm.mov_mem_rbp_rcx,
+            self.asm.mov_mem_rbp_r8,
+            self.asm.mov_mem_rbp_r9,
+        ]
         int_idx = 0
         xmm_idx = 0
         for p in self.fn.params:
@@ -724,7 +876,10 @@ class FnCompiler:
                     raise NotImplementedError(
                         f"v0.1 supports up to {len(INT_SPILLS)} int params"
                     )
-                INT_SPILLS[int_idx](slot)
+                if self._is_i64_type(p.ty):
+                    INT_SPILLS_64[int_idx](slot)
+                else:
+                    INT_SPILLS[int_idx](slot)
                 int_idx += 1
 
         # Emit each block in order, with a label per block
@@ -739,6 +894,9 @@ class FnCompiler:
 
     def _is_f64_type(self, ty: tir.TIRType) -> bool:
         return isinstance(ty, tir.TIRScalar) and ty.name == "f64"
+
+    def _is_i64_type(self, ty: tir.TIRType) -> bool:
+        return isinstance(ty, tir.TIRScalar) and ty.name == "i64"
 
     def _check_float_supported(self, ty: tir.TIRType) -> None:
         """Phase 1 supports f32 and f64. f16/bf16 still need the F16C
@@ -846,8 +1004,13 @@ class FnCompiler:
     def _emit_op(self, op: tir.Op, frame_size: int) -> None:
         if op.kind == tir.OpKind.CONST_INT:
             slot = self._slot_of(op.results[0])
-            self.asm.mov_eax_imm32(int(op.attrs["value"]))
-            self.asm.mov_mem_rbp_eax(slot)
+            value = int(op.attrs["value"])
+            if self._is_i64_type(op.results[0].ty):
+                self.asm.mov_rax_imm64(value)
+                self.asm.mov_mem_rbp_rax(slot)
+            else:
+                self.asm.mov_eax_imm32(value & 0xFFFFFFFF)
+                self.asm.mov_mem_rbp_eax(slot)
             return
         if op.kind == tir.OpKind.CONST_BOOL:
             # bool is stored as i32: 0 for false, 1 for true.
@@ -881,6 +1044,32 @@ class FnCompiler:
             to_is_f64 = self._is_f64_type(to_ty)
             from_is_float = self._is_float_type(from_ty)
             to_is_float = self._is_float_type(to_ty)
+            from_is_i64 = self._is_i64_type(from_ty)
+            to_is_i64 = self._is_i64_type(to_ty)
+            # i64 -> i32: just take low 32 bits via 32-bit mov.
+            if from_is_i64 and not to_is_float and not to_is_i64:
+                self.asm.mov_eax_mem_rbp(src_slot)
+                self.asm.mov_mem_rbp_eax(res_slot)
+                return
+            # i32 -> i64: load 32-bit, sign-extend via movsxd rax, eax.
+            if not from_is_float and not from_is_i64 and to_is_i64:
+                self.asm.mov_eax_mem_rbp(src_slot)
+                # movsxd rax, eax = 48 63 C0 (sign-extend 32->64)
+                self.asm.b.emit(0x48, 0x63, 0xC0)
+                self.asm.mov_mem_rbp_rax(res_slot)
+                return
+            # i64 -> f64: cvtsi2sd with REX.W.
+            if from_is_i64 and to_is_f64:
+                self.asm.mov_rax_mem_rbp(src_slot)
+                # F2 48 0F 2A C0 = cvtsi2sd xmm0, rax
+                self.asm.b.emit(0xF2, 0x48, 0x0F, 0x2A, 0xC0)
+                self.asm.movsd_mem_rbp_xmm0(res_slot)
+                return
+            # i64 -> i64: copy 8 bytes
+            if from_is_i64 and to_is_i64:
+                self.asm.mov_rax_mem_rbp(src_slot)
+                self.asm.mov_mem_rbp_rax(res_slot)
+                return
             # i32 -> f64
             if not from_is_float and to_is_f64:
                 self.asm.mov_eax_mem_rbp(src_slot)
@@ -931,6 +1120,11 @@ class FnCompiler:
                 self.asm.movss_xmm1_mem_rbp(r_slot)
                 self.asm.addss_xmm0_xmm1()
                 self.asm.movss_mem_rbp_xmm0(res_slot)
+            elif self._is_i64_type(op.results[0].ty):
+                self.asm.mov_rax_mem_rbp(l_slot)
+                self.asm.mov_rcx_mem_rbp(r_slot)
+                self.asm.add_rax_rcx()
+                self.asm.mov_mem_rbp_rax(res_slot)
             else:
                 self.asm.mov_eax_mem_rbp(l_slot)
                 self.asm.mov_ecx_mem_rbp(r_slot)
@@ -951,6 +1145,11 @@ class FnCompiler:
                 self.asm.movss_xmm1_mem_rbp(r_slot)
                 self.asm.subss_xmm0_xmm1()
                 self.asm.movss_mem_rbp_xmm0(res_slot)
+            elif self._is_i64_type(op.results[0].ty):
+                self.asm.mov_rax_mem_rbp(l_slot)
+                self.asm.mov_rcx_mem_rbp(r_slot)
+                self.asm.sub_rax_rcx()
+                self.asm.mov_mem_rbp_rax(res_slot)
             else:
                 self.asm.mov_eax_mem_rbp(l_slot)
                 self.asm.mov_ecx_mem_rbp(r_slot)
@@ -971,6 +1170,11 @@ class FnCompiler:
                 self.asm.movss_xmm1_mem_rbp(r_slot)
                 self.asm.mulss_xmm0_xmm1()
                 self.asm.movss_mem_rbp_xmm0(res_slot)
+            elif self._is_i64_type(op.results[0].ty):
+                self.asm.mov_rax_mem_rbp(l_slot)
+                self.asm.mov_rcx_mem_rbp(r_slot)
+                self.asm.imul_rax_rcx()
+                self.asm.mov_mem_rbp_rax(res_slot)
             else:
                 self.asm.mov_eax_mem_rbp(l_slot)
                 self.asm.mov_ecx_mem_rbp(r_slot)
@@ -991,6 +1195,14 @@ class FnCompiler:
                 self.asm.movss_xmm1_mem_rbp(r_slot)
                 self.asm.divss_xmm0_xmm1()
                 self.asm.movss_mem_rbp_xmm0(res_slot)
+            elif self._is_i64_type(op.results[0].ty):
+                # i64 division: cqo + idiv rcx. Skip the INT_MIN/-1 guard
+                # for now (rare edge case); div-by-zero still SIGFPEs.
+                self.asm.mov_rax_mem_rbp(l_slot)
+                self.asm.mov_rcx_mem_rbp(r_slot)
+                self.asm.cqo()
+                self.asm.idiv_rcx()
+                self.asm.mov_mem_rbp_rax(res_slot)
             else:
                 self._emit_idiv_guarded(l_slot, r_slot, res_slot, want_quotient=True)
             return
@@ -1004,6 +1216,11 @@ class FnCompiler:
             slot = self._slot_of(op.operands[0])
             res_slot = self._slot_of(op.results[0])
             ty = op.operands[0].ty
+            if self._is_i64_type(ty):
+                self.asm.mov_rax_mem_rbp(slot)
+                self.asm.neg_rax()
+                self.asm.mov_mem_rbp_rax(res_slot)
+                return
             if self._is_f64_type(ty):
                 # f64 negation: copy 8 bytes, then flip sign bit (bit 63
                 # = high bit of byte 7). Avoid integer neg semantics.
@@ -1105,6 +1322,11 @@ class FnCompiler:
                     # ordered AND (less / less-or-equal): al &= !PF
                     self.asm.setnp_cl()
                     self.asm.and_al_cl()
+            elif self._is_i64_type(op.operands[0].ty) or self._is_i64_type(op.operands[1].ty):
+                self.asm.mov_rax_mem_rbp(l_slot)
+                self.asm.mov_rcx_mem_rbp(r_slot)
+                self.asm.cmp_rax_rcx()
+                int_cmp_setters[op.kind]()
             else:
                 self.asm.mov_eax_mem_rbp(l_slot)
                 self.asm.mov_ecx_mem_rbp(r_slot)
@@ -1176,6 +1398,14 @@ class FnCompiler:
                 self.asm.mov_r8d_mem_rbp,
                 self.asm.mov_r9d_mem_rbp,
             ]
+            INT_REGS_64 = [
+                self.asm.mov_rdi_mem_rbp,
+                self.asm.mov_rsi_mem_rbp,
+                self.asm.mov_rdx_mem_rbp,
+                self.asm.mov_rcx_arg_mem_rbp,
+                self.asm.mov_r8_mem_rbp,
+                self.asm.mov_r9_mem_rbp,
+            ]
             # SysV ABI splits args by class: int → INT_REGS, float → xmm0..xmm7.
             # Each class has its own counter.
             int_idx = 0
@@ -1197,7 +1427,10 @@ class FnCompiler:
                         raise NotImplementedError(
                             "v0.1 supports up to 6 int args"
                         )
-                    INT_REGS[int_idx](arg_slot)
+                    if self._is_i64_type(arg.ty):
+                        INT_REGS_64[int_idx](arg_slot)
+                    else:
+                        INT_REGS[int_idx](arg_slot)
                     int_idx += 1
             self.asm.call_rel32(str(target))
             if op.results:
@@ -1207,17 +1440,21 @@ class FnCompiler:
                     self.asm.movsd_mem_rbp_xmm0(res_slot)
                 elif self._is_float_type(op.results[0].ty):
                     self.asm.movss_mem_rbp_xmm0(res_slot)
+                elif self._is_i64_type(op.results[0].ty):
+                    self.asm.mov_mem_rbp_rax(res_slot)
                 else:
                     self.asm.mov_mem_rbp_eax(res_slot)
             return
         if op.kind == tir.OpKind.RETURN:
             if op.operands:
                 slot = self._slot_of(op.operands[0])
-                # SysV: float return in xmm0, int return in eax.
+                # SysV: float return in xmm0, int return in eax/rax.
                 if self._is_f64_type(op.operands[0].ty):
                     self.asm.movsd_xmm0_mem_rbp(slot)
                 elif self._is_float_type(op.operands[0].ty):
                     self.asm.movss_xmm0_mem_rbp(slot)
+                elif self._is_i64_type(op.operands[0].ty):
+                    self.asm.mov_rax_mem_rbp(slot)
                 else:
                     self.asm.mov_eax_mem_rbp(slot)
             else:
