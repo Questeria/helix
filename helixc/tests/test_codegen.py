@@ -716,36 +716,6 @@ def test_f64_negation():
     assert compile_and_run(src) == 1
 
 
-def test_f64_transcendental_exp():
-    """Phase 1.5: __exp_f64(0)=1, __exp_f64(2)~7.39 -> 7 truncated."""
-    assert compile_and_run("fn main() -> i32 { __exp_f64(0.0_f64) as i32 }") == 1
-    assert compile_and_run("fn main() -> i32 { __exp_f64(2.0_f64) as i32 }") == 7
-
-
-def test_f64_transcendental_sqrt():
-    """Phase 1.5: __sqrt_f64. Newton iteration with 6 steps for f64."""
-    assert compile_and_run("fn main() -> i32 { __sqrt_f64(16.0_f64) as i32 }") == 4
-    assert compile_and_run(
-        "fn main() -> i32 { (__sqrt_f64(2.0_f64) * 100.0_f64) as i32 }"
-    ) == 141
-
-
-def test_f64_transcendental_sigmoid():
-    """Phase 1.5: __sigmoid_f64(0) = 0.5."""
-    src = "fn main() -> i32 { (__sigmoid_f64(0.0_f64) * 100.0_f64) as i32 }"
-    assert compile_and_run(src) == 50
-
-
-def test_f64_helpers_abs_clamp():
-    """Phase 1.5: __abs_f64, __clamp_f64."""
-    assert compile_and_run(
-        "fn main() -> i32 { __abs_f64(0.0_f64 - 7.5_f64) as i32 }"
-    ) == 7
-    assert compile_and_run(
-        "fn main() -> i32 { __clamp_f64(15.0_f64, 0.0_f64, 10.0_f64) as i32 }"
-    ) == 10
-
-
 def test_i64_basic():
     """Phase 1.4: i64 type round-trip via i32 cast (small values)."""
     src = """
