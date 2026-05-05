@@ -2909,6 +2909,65 @@ def test_generic_nested_call():
     assert code == 42, f"expected 42, got {code}"
 
 
+def test_autodiff_polynomial_derivative():
+    """Phase 2.1: forward-mode AD via dual numbers in Helix.
+    f(x) = x*x + 2x + 1; df/dx = 2x+2; at x=3 -> 8."""
+    src = """
+    fn main() -> i32 {
+        let x_v = 3.0_f64;
+        let x_dx = 1.0_f64;
+        let xx_v = d_mul_v(x_v, x_dx, x_v, x_dx);
+        let xx_dx = d_mul_dx(x_v, x_dx, x_v, x_dx);
+        let mid_v = d_add_v(xx_v, xx_dx, d_scale_v(x_v, x_dx, 2.0_f64), d_scale_dx(x_v, x_dx, 2.0_f64));
+        let mid_dx = d_add_dx(xx_v, xx_dx, d_scale_v(x_v, x_dx, 2.0_f64), d_scale_dx(x_v, x_dx, 2.0_f64));
+        d_add_const_dx(mid_v, mid_dx, 1.0_f64) as i32
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 8, f"expected 8 (2*3+2), got {code}"
+
+
+def test_autodiff_square_derivative():
+    """d_sq_dx is a shortcut for x*x. df/dx at x=21 = 42."""
+    src = """
+    fn main() -> i32 {
+        d_sq_dx(21.0_f64, 1.0_f64) as i32
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42 (2*21), got {code}"
+
+
+def test_autodiff_chain_rule():
+    """Chain rule via composition: f(x) = sigmoid(x*x).
+    f'(x) = sigmoid(x*x) * (1 - sigmoid(x*x)) * 2x
+    At x=0: f'(0) = sigmoid(0) * (1-sigmoid(0)) * 0 = 0.5 * 0.5 * 0 = 0."""
+    src = """
+    fn main() -> i32 {
+        let x_v = 0.0_f64;
+        let x_dx = 1.0_f64;
+        let sq_v = d_sq_v(x_v, x_dx);
+        let sq_dx = d_sq_dx(x_v, x_dx);
+        let result_v = d_sigmoid_v(sq_v, sq_dx);
+        let result_dx = d_sigmoid_dx(sq_v, sq_dx);
+        result_dx as i32
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 0, f"expected 0 (chain rule = 0 at x=0), got {code}"
+
+
+def test_autodiff_exp_derivative():
+    """d/dx exp(x) = exp(x). At x=1, exp(1) ≈ 2.718, cast to i32 -> 2."""
+    src = """
+    fn main() -> i32 {
+        d_exp_dx(1.0_f64, 1.0_f64) as i32
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 2, f"expected 2 (exp(1) ≈ 2.718), got {code}"
+
+
 def test_stdlib_option_some():
     """Phase 1.9: Option<i32> stdlib. option_unwrap_or returns Some payload."""
     src = """
