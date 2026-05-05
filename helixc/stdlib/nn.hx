@@ -122,3 +122,15 @@ fn lin_reg_grad_b(w: i32, b: i32, x: i32, target: i32) -> i32 {
     let err = pred - target;
     2 * err
 }
+
+// f32 SGD step over an array: w[i] = w[i] - lr * g[i].
+fn sgd_f32_step(w_start: i32, g_start: i32, lr: f32, n: i32) -> i32 {
+    let mut i: i32 = 0;
+    while i < n {
+        let w_i = __f32_from_bits(__arena_get(w_start + i));
+        let g_i = __f32_from_bits(__arena_get(g_start + i));
+        __arena_set(w_start + i, __bits_of_f32(w_i - lr * g_i));
+        i = i + 1;
+    }
+    0
+}
