@@ -513,11 +513,26 @@ fn emit_ast_code(idx: i32, bind_state: i32) -> i32 {
         // AST_ASSIGN: emit value (eax = new value), look up name's
         // stack offset, store eax there. Result IS the assigned
         // value (still in eax). p3 = value_idx.
+        //
+        // Audit-10: bind_lookup returns 0 for unbound names. Since
+        // bind_alloc_offset starts at 8 and grows by 8, 0 is an
+        // unambiguous "not found" sentinel. Without this guard,
+        // emit_mov_local_eax(0) would emit `mov [rbp+0], eax` —
+        // overwriting the saved rbp at the start of the function
+        // frame. After the epilogue (`mov rsp, rbp ; pop rbp`)
+        // rbp would be the assigned value, and any later stack
+        // op would crash. Skip the store on unbound writes; eax
+        // still holds the assigned value so expressions like
+        // `(x = 5) + 1` evaluate correctly.
         let p3 = __arena_get(idx + 3);
         let n_val = emit_ast_code(p3, bind_state);
         let off = bind_lookup(bind_state, p1, p2);
-        let n_store = emit_mov_local_eax(off);
-        n_val + n_store
+        if off == 0 {
+            n_val
+        } else {
+            let n_store = emit_mov_local_eax(off);
+            n_val + n_store
+        }
     } else { if t == 13 {
         // AST_SEQ(first, second): emit first (discard eax), emit
         // second (its eax is the result). Helix's calling convention
