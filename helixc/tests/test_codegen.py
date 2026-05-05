@@ -1231,6 +1231,113 @@ fn main() -> i32 {
     ) == 99, "arena_set then arena_get"
 
 
+def test_bootstrap_kovc_inline_write_file_to_arena():
+    """kovc.hx self-hosted file builtin: write_file_to_arena emits a
+    file from arena bytes. Drive the bootstrap pipeline with a source
+    that pushes 'HI' (bytes 72, 73) to the arena then writes them to
+    /tmp/kovc_wfta_hostless.out. Verify file contents == 'HI'."""
+    import os, subprocess
+    proj = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    lexer = open(os.path.join(proj, "helixc", "bootstrap", "lexer.hx")).read()
+    lexer_no_main = lexer.rsplit(
+        "// --------------------------------------------------------------\n// Demo:",
+        1,
+    )[0]
+    parser_body = open(os.path.join(proj, "helixc", "bootstrap", "parser.hx")).read()
+    kovc = open(os.path.join(proj, "helixc", "bootstrap", "kovc.hx")).read()
+    kovc_lib = kovc.rsplit(
+        "// --------------------------------------------------------------\n// Demo:",
+        1,
+    )[0]
+    src_text = (
+        'fn main() -> i32 { '
+        'let p = __arena_push(72) ; '
+        '__arena_push(73) ; '
+        'write_file_to_arena("/tmp/kovc_wfta_hostless.out", p, 2) }'
+    )
+    subprocess.run(
+        ["wsl", "-e", "bash", "-c",
+         f"printf %s {repr(src_text)} > /tmp/helix_src_pipe.hx"],
+        check=True, timeout=10,
+    )
+    driver = lexer_no_main + parser_body + kovc_lib + """
+fn main() -> i32 {
+    let src_start = __arena_len();
+    let src_len = read_file_to_arena("/tmp/helix_src_pipe.hx");
+    let tok_base = __arena_len();
+    lex(src_start, src_len);
+    let ast_root = parse_top(tok_base);
+    let total = emit_elf_for_ast_to_path(ast_root);
+    let elf_start = __arena_len() - total;
+    write_file_to_arena("/tmp/kovc_pipeline_wfta.bin", elf_start, total)
+}
+"""
+    compile_and_run(driver)
+    run = subprocess.run(
+        ["wsl", "-e", "bash", "-c",
+         "chmod +x /tmp/kovc_pipeline_wfta.bin && /tmp/kovc_pipeline_wfta.bin; "
+         "echo $? && cat /tmp/kovc_wfta_hostless.out"],
+        capture_output=True, timeout=10,
+    )
+    out = run.stdout
+    assert b"2\nHI" in out, f"expected exit 2 + 'HI' in output, got {out!r}"
+
+
+def test_bootstrap_kovc_inline_read_file_to_arena():
+    """kovc.hx self-hosted file builtin: read_file_to_arena loads a
+    file's bytes into the arena and returns count. Pre-stage the file
+    /tmp/kovc_rfta_hostless.in with bytes 'AB'. Compile a source that
+    reads the file then returns __arena_get(0). Run produced ELF;
+    expect exit code 65 (= ascii 'A')."""
+    import os, subprocess
+    proj = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    lexer = open(os.path.join(proj, "helixc", "bootstrap", "lexer.hx")).read()
+    lexer_no_main = lexer.rsplit(
+        "// --------------------------------------------------------------\n// Demo:",
+        1,
+    )[0]
+    parser_body = open(os.path.join(proj, "helixc", "bootstrap", "parser.hx")).read()
+    kovc = open(os.path.join(proj, "helixc", "bootstrap", "kovc.hx")).read()
+    kovc_lib = kovc.rsplit(
+        "// --------------------------------------------------------------\n// Demo:",
+        1,
+    )[0]
+    subprocess.run(
+        ["wsl", "-e", "bash", "-c", "printf 'AB' > /tmp/kovc_rfta_hostless.in"],
+        check=True, timeout=10,
+    )
+    src_text = (
+        'fn main() -> i32 { '
+        'let s = __arena_len() ; '
+        'let n = read_file_to_arena("/tmp/kovc_rfta_hostless.in") ; '
+        '__arena_get(s) }'
+    )
+    subprocess.run(
+        ["wsl", "-e", "bash", "-c",
+         f"printf %s {repr(src_text)} > /tmp/helix_src_pipe.hx"],
+        check=True, timeout=10,
+    )
+    driver = lexer_no_main + parser_body + kovc_lib + """
+fn main() -> i32 {
+    let src_start = __arena_len();
+    let src_len = read_file_to_arena("/tmp/helix_src_pipe.hx");
+    let tok_base = __arena_len();
+    lex(src_start, src_len);
+    let ast_root = parse_top(tok_base);
+    let total = emit_elf_for_ast_to_path(ast_root);
+    let elf_start = __arena_len() - total;
+    write_file_to_arena("/tmp/kovc_pipeline_rfta.bin", elf_start, total)
+}
+"""
+    compile_and_run(driver)
+    run = subprocess.run(
+        ["wsl", "-e", "bash", "-c",
+         "chmod +x /tmp/kovc_pipeline_rfta.bin && /tmp/kovc_pipeline_rfta.bin; echo $?"],
+        capture_output=True, timeout=10,
+    )
+    assert b"65" in run.stdout, f"expected 65 (ascii 'A'), got {run.stdout!r}"
+
+
 def test_bootstrap_kovc_demo_emits_ast_int_42():
     """Stage 4 demo: kovc.hx's main() builds AST_INT(42) by hand,
     compiles it, and writes the resulting ELF to disk. The produced

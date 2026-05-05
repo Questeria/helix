@@ -26,6 +26,10 @@
 //  16  TK_LT        "<"
 //  17  TK_GT        ">"
 //  18  TK_BANG      "!"
+//  25  TK_STRLIT    payload = body byte_start, src_len = body length
+//                  (BOTH exclude the surrounding quotes). Phase-0 has
+//                  no escape sequences — `\` inside a string is taken
+//                  literally. Multi-line strings allowed.
 //
 // Whitespace (space, tab, newline, CR) and `//` line comments are
 // skipped silently. Keywords like `let`, `fn`, `if` are emitted as
@@ -174,6 +178,37 @@ fn lex_ident(src_start: i32, src_len: i32, pos: i32) -> i32 {
 }
 
 // --------------------------------------------------------------
+// Lex a string literal. Caller has verified bytes[pos] == 34 ('"').
+// Walks forward to the next unescaped '"' (Phase-0: no escape
+// processing yet — '\' is treated as a literal byte). Emits a
+// TK_STRLIT whose payload = body byte_start, src_len = body length
+// (both EXCLUDE the quotes). Returns byte index AFTER the closing
+// quote, or AFTER end-of-source if string was unterminated (we
+// emit anyway so the parser sees something coherent).
+// --------------------------------------------------------------
+fn lex_string(src_start: i32, src_len: i32, pos: i32) -> i32 {
+    let body_start = pos + 1;
+    let mut p: i32 = body_start;
+    let end = src_start + src_len;
+    let mut keep: i32 = 1;
+    while keep == 1 {
+        if p >= end {
+            keep = 0;
+        } else {
+            let b = __arena_get(p);
+            if b == 34 {
+                keep = 0;
+            } else {
+                p = p + 1;
+            };
+        };
+    }
+    let body_len = p - body_start;
+    push_token(25, body_start, body_start, body_len);
+    if p < end { p + 1 } else { p }
+}
+
+// --------------------------------------------------------------
 // Lex a single-character punctuation token. Returns the kind tag
 // (3..18 per the table at the top of this file), or 0 if `b` is
 // not a known punctuation byte.
@@ -231,6 +266,9 @@ fn lex(src_start: i32, src_len: i32) -> i32 {
             pos = lex_int(src_start, src_len, pos);
         } else { if is_alpha(b) == 1 {
             pos = lex_ident(src_start, src_len, pos);
+        } else { if b == 34 {
+            // '"' — string literal.
+            pos = lex_string(src_start, src_len, pos);
         } else {
             let pk = punct_kind(b);
             if pk == 0 {
@@ -242,7 +280,7 @@ fn lex(src_start: i32, src_len: i32) -> i32 {
                 push_token(pk, 0, pos, 1);
                 pos = pos + 1;
             };
-        }}}};
+        }}}}};
     }
     push_token(0, 0, pos, 0);   // TK_EOF sentinel
     let after = __arena_len();

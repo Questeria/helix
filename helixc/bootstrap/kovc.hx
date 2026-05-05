@@ -274,6 +274,18 @@ fn emit_lea_rax_rip_placeholder() -> i32 {
     disp_slot
 }
 
+// lea rdi, [rip + disp32] (placeholder) — 7 bytes (48 8D 3D + 4-byte disp).
+// Returns the arena slot index of the disp bytes for backpatching.
+// ModRM differs from rax form (3D vs 05) because the reg-field
+// encodes rdi (111) instead of rax (000). Used by file builtins
+// to load a string-literal path directly into rdi for syscalls.
+fn emit_lea_rdi_rip_placeholder() -> i32 {
+    emit_byte(0x48); emit_byte(0x8D); emit_byte(0x3D);
+    let disp_slot = __arena_len();
+    emit_byte(0); emit_byte(0); emit_byte(0); emit_byte(0);
+    disp_slot
+}
+
 // ret — 1 byte (C3).
 fn emit_ret() -> i32 { emit_byte(0xC3); 1 }
 
@@ -432,13 +444,15 @@ fn bind_reset(state: i32) -> i32 {
 }
 
 // fn_table: maps fn names to arena slot indices where their code
-// starts. Entry layout: [name_start, name_len, code_offset]. Up to
-// 16 entries.
+// starts. Entry layout: [name_start, name_len, code_offset]. Capacity
+// 256 — generous so the lexer + parser + kovc concatenation (60-100
+// fn declarations) fits comfortably with room for the
+// __helix_arena_base symbol entry.
 fn fn_table_init() -> i32 {
     let state = __arena_push(0);            // top = 0
     __arena_push(state + 2);                // table_base = state + 2
     let mut i: i32 = 0;
-    while i < 48 {                          // 16 entries * 3 slots
+    while i < 768 {                         // 256 entries * 3 slots
         __arena_push(0);
         i = i + 1;
     }
@@ -479,13 +493,17 @@ fn fn_table_lookup(state: i32, name_start: i32, name_len: i32) -> i32 {
     offset
 }
 
-// patch_table: records pending CALL backpatches. Each entry:
-// [disp_slot, target_name_start, target_name_len]. Up to 64.
+// patch_table: records pending CALL + LEA backpatches. Each entry:
+// [disp_slot, target_name_start, target_name_len]. Capacity is
+// generous (1024) because kovc.hx self-compiling fires one LEA per
+// inline arena builtin call (one per __arena_push/get/set/len invocation
+// in the source) — easily hundreds across the lexer + parser + kovc
+// concatenation.
 fn patch_table_init() -> i32 {
     let state = __arena_push(0);            // top = 0
     __arena_push(state + 2);                // table_base = state + 2
     let mut i: i32 = 0;
-    while i < 192 {                         // 64 entries * 3 slots
+    while i < 3072 {                        // 1024 entries * 3 slots
         __arena_push(0);
         i = i + 1;
     }
@@ -530,10 +548,27 @@ fn emit_exit_with_eax() -> i32 {
 //   slot 2: __arena_set     bytes (11 chars)
 //   slot 3: __arena_len     bytes (11 chars)
 //   slot 4: __helix_arena_base bytes (18 chars; for the .data symbol)
+//   slot 5: read_file_to_arena  bytes (18 chars; first-arg-must-be-strlit
+//                                 file builtin)
+//   slot 6: write_file_to_arena bytes (19 chars)
+//   slot 7: str_state.top — counter of string literals registered
+//   slot 8: str_state.table_base — first entry slot (= bn_state + 9)
+//   slots 9..56: 16 str_state entries × 3 i32 each (disp_slot,
+//                body_byte_start, body_byte_len). Resolved after the
+//                .data section is emitted; each string body is then
+//                appended (with a NUL terminator) and the LEA disp32
+//                placeholder is patched.
 // --------------------------------------------------------------
 fn install_builtin_names() -> i32 {
     let bn_state = __arena_push(0);          // slot 0 placeholder
     __arena_push(0); __arena_push(0); __arena_push(0); __arena_push(0);
+    // Reserve slots 5..56 (52 more slots: 2 file-name slots + 2
+    // str_state header slots + 48 entry slots).
+    let mut i: i32 = 0;
+    while i < 52 {
+        __arena_push(0);
+        i = i + 1;
+    }
 
     // "__arena_push"
     let s0 = __arena_push(95); __arena_push(95); __arena_push(97); __arena_push(114);
@@ -567,6 +602,26 @@ fn install_builtin_names() -> i32 {
     __arena_push(115); __arena_push(101);
     __arena_set(bn_state + 4, s4);
 
+    // "read_file_to_arena"  (18 chars: r e a d _ f i l e _ t o _ a r e n a)
+    let s5 = __arena_push(114); __arena_push(101); __arena_push(97); __arena_push(100);
+    __arena_push(95); __arena_push(102); __arena_push(105); __arena_push(108);
+    __arena_push(101); __arena_push(95); __arena_push(116); __arena_push(111);
+    __arena_push(95); __arena_push(97); __arena_push(114); __arena_push(101);
+    __arena_push(110); __arena_push(97);
+    __arena_set(bn_state + 5, s5);
+
+    // "write_file_to_arena" (19 chars)
+    let s6 = __arena_push(119); __arena_push(114); __arena_push(105); __arena_push(116);
+    __arena_push(101); __arena_push(95); __arena_push(102); __arena_push(105);
+    __arena_push(108); __arena_push(101); __arena_push(95); __arena_push(116);
+    __arena_push(111); __arena_push(95); __arena_push(97); __arena_push(114);
+    __arena_push(101); __arena_push(110); __arena_push(97);
+    __arena_set(bn_state + 6, s6);
+
+    // str_state header: slot 7 = top, slot 8 = table_base.
+    __arena_set(bn_state + 7, 0);
+    __arena_set(bn_state + 8, bn_state + 9);
+
     bn_state
 }
 
@@ -575,6 +630,25 @@ fn bn_arena_get_s(b: i32) -> i32  { __arena_get(b + 1) }
 fn bn_arena_set_s(b: i32) -> i32  { __arena_get(b + 2) }
 fn bn_arena_len_s(b: i32) -> i32  { __arena_get(b + 3) }
 fn bn_helix_arena_base_s(b: i32) -> i32 { __arena_get(b + 4) }
+fn bn_read_file_to_arena_s(b: i32) -> i32 { __arena_get(b + 5) }
+fn bn_write_file_to_arena_s(b: i32) -> i32 { __arena_get(b + 6) }
+// str_state accessors. The state lives within the bn_state region.
+fn str_top(b: i32) -> i32 { __arena_get(b + 7) }
+fn str_top_set(b: i32, v: i32) -> i32 { __arena_set(b + 7, v); 0 }
+fn str_table_base(b: i32) -> i32 { __arena_get(b + 8) }
+// Add a pending LEA backpatch entry for a string literal. Each
+// entry is 3 i32: [disp_slot, body_byte_start, body_byte_len].
+// Returns the entry index (0..15).
+fn str_table_add(b: i32, disp_slot: i32, body_s: i32, body_l: i32) -> i32 {
+    let top = str_top(b);
+    let base = str_table_base(b);
+    let entry = base + top * 3;
+    __arena_set(entry, disp_slot);
+    __arena_set(entry + 1, body_s);
+    __arena_set(entry + 2, body_l);
+    str_top_set(b, top + 1);
+    top
+}
 
 // HELIX_ARENA_CAP mirrored as kovc constant (kovc emits its own
 // arena in the produced binary so the compiled programs match the
@@ -598,6 +672,241 @@ fn bn_global_slot() -> i32 {
     // Lazily allocated; returns the slot containing bn_state.
     // The first call writes; subsequent calls read.
     0
+}
+
+// emit_read_file_to_arena_body: emit the inline asm sequence for
+// read_file_to_arena AFTER the path has already been loaded into
+// rdi (via emit_lea_rdi_rip_placeholder + str_table_add). Returns
+// total bytes emitted (including the lea — caller adds 7).
+//
+// Layout (offsets relative to AFTER the lea rdi):
+//   prelude (76 bytes): mov esi/edx/eax for sys_open, syscall,
+//                       push fd, sub rsp BUF, mov rdi=fd, mov rsi=rsp,
+//                       mov edx=BUF, mov eax=0, syscall (sys_read),
+//                       mov r10,rax (bytes_read),
+//                       mov rdi=fd, mov eax=3, syscall (sys_close),
+//                       test/jns/xor r10 (clamp negative to 0),
+//                       xor ecx, ecx (loop counter)
+//   loop (48 bytes):    cmp rcx,r10 ; jge end ; movzx eax,[rsp+rcx] ;
+//                       mov edx, eax ; lea rax,[rip+arena] ; mov r11d,[rax] ;
+//                       cmp r11d, CAP ; jb in_bounds ; jmp loop_advance ;
+//                       in_bounds: mov [rax+r11*4+4], edx ; inc r11d ;
+//                       mov [rax], r11d ; loop_advance: inc rcx ;
+//                       jmp loop_start (rel8 -48)
+//   postlude (14 bytes): add rsp, BUF ; add rsp, 8 ; mov rax, r10
+fn emit_read_file_to_arena_body(patch_state: i32, arena_base_s: i32) -> i32 {
+    // ---- sys_open(rdi=path, esi=0=O_RDONLY, edx=0) ----
+    emit_byte(0xBE); emit_byte(0); emit_byte(0); emit_byte(0); emit_byte(0);   // mov esi, 0
+    emit_byte(0xBA); emit_byte(0); emit_byte(0); emit_byte(0); emit_byte(0);   // mov edx, 0
+    emit_byte(0xB8); emit_byte(2); emit_byte(0); emit_byte(0); emit_byte(0);   // mov eax, 2
+    emit_byte(0x0F); emit_byte(0x05);                                           // syscall
+    // push rax (fd on stack)
+    emit_byte(0x50);
+    // sub rsp, 0x8000 (32K read buffer)
+    emit_byte(0x48); emit_byte(0x81); emit_byte(0xEC);
+    emit_u32_le(32768);
+    // mov rdi, [rsp+0x8000] (load fd back into rdi)
+    emit_byte(0x48); emit_byte(0x8B); emit_byte(0xBC); emit_byte(0x24);
+    emit_u32_le(32768);
+    // mov rsi, rsp (buffer = rsp)
+    emit_byte(0x48); emit_byte(0x89); emit_byte(0xE6);
+    // mov edx, 0x8000 (count)
+    emit_byte(0xBA); emit_byte(0x00); emit_byte(0x80); emit_byte(0x00); emit_byte(0x00);
+    // mov eax, 0 (sys_read); syscall
+    emit_byte(0xB8); emit_byte(0); emit_byte(0); emit_byte(0); emit_byte(0);
+    emit_byte(0x0F); emit_byte(0x05);
+    // mov r10, rax (save bytes_read)
+    emit_byte(0x49); emit_byte(0x89); emit_byte(0xC2);
+    // mov rdi, [rsp+0x8000]; mov eax, 3 (sys_close); syscall
+    emit_byte(0x48); emit_byte(0x8B); emit_byte(0xBC); emit_byte(0x24);
+    emit_u32_le(32768);
+    emit_byte(0xB8); emit_byte(3); emit_byte(0); emit_byte(0); emit_byte(0);
+    emit_byte(0x0F); emit_byte(0x05);
+    // test r10, r10 ; jns +3 ; xor r10, r10 (clamp negative to 0)
+    emit_byte(0x4D); emit_byte(0x85); emit_byte(0xD2);
+    emit_byte(0x7D); emit_byte(0x03);
+    emit_byte(0x4D); emit_byte(0x31); emit_byte(0xD2);
+    // xor ecx, ecx (counter = 0)
+    emit_byte(0x31); emit_byte(0xC9);
+    // ---- loop_start (offset will be tracked) ----
+    let loop_start = __arena_len();
+    // cmp rcx, r10
+    emit_byte(0x4C); emit_byte(0x39); emit_byte(0xD1);
+    // jge end (placeholder — patch with disp = (post-loop) - (loop_start+5))
+    emit_byte(0x7D); emit_byte(0);
+    let jge_disp_slot = __arena_len() - 1;
+    let jge_after = __arena_len();
+    // movzx eax, byte [rsp+rcx]
+    emit_byte(0x0F); emit_byte(0xB6); emit_byte(0x04); emit_byte(0x0C);
+    // mov edx, eax
+    emit_byte(0x89); emit_byte(0xC2);
+    // lea rax, [rip+arena_base] (patched via patch_table)
+    let arena_lea_slot = emit_lea_rax_rip_placeholder();
+    patch_table_add(patch_state, arena_lea_slot, arena_base_s, 18);
+    // mov r11d, [rax] (cursor)
+    emit_byte(0x44); emit_byte(0x8B); emit_byte(0x18);
+    // cmp r11d, CAP
+    emit_byte(0x41); emit_byte(0x81); emit_byte(0xFB);
+    emit_u32_le(helix_arena_cap());
+    // jb in_bounds (+2)
+    emit_byte(0x72); emit_byte(0x02);
+    // jmp loop_advance (+11)
+    emit_byte(0xEB); emit_byte(0x0B);
+    // in_bounds: mov [rax+r11*4+4], edx
+    emit_byte(0x42); emit_byte(0x89); emit_byte(0x54); emit_byte(0x98); emit_byte(0x04);
+    // inc r11d
+    emit_byte(0x41); emit_byte(0xFF); emit_byte(0xC3);
+    // mov [rax], r11d (update cursor)
+    emit_byte(0x44); emit_byte(0x89); emit_byte(0x18);
+    // loop_advance: inc rcx
+    emit_byte(0x48); emit_byte(0xFF); emit_byte(0xC1);
+    // jmp loop_start (rel8 backward; emit placeholder, patch with disp8)
+    emit_byte(0xEB); emit_byte(0);
+    let back_disp_slot = __arena_len() - 1;
+    let back_jmp_after = __arena_len();
+    let back_disp = loop_start - back_jmp_after;
+    // Encode signed disp8: (back_disp & 0xFF) but Helix has truncated
+    // div, so add 256 if negative.
+    let back_disp_byte = (back_disp + 256) % 256;
+    __arena_set(back_disp_slot, back_disp_byte);
+    // end: patch jge forward.
+    let end_addr = __arena_len();
+    let jge_disp = end_addr - jge_after;
+    __arena_set(jge_disp_slot, jge_disp);
+    // ---- postlude ----
+    // add rsp, 0x8000
+    emit_byte(0x48); emit_byte(0x81); emit_byte(0xC4);
+    emit_u32_le(32768);
+    // add rsp, 8 (drop fd)
+    emit_byte(0x48); emit_byte(0x83); emit_byte(0xC4); emit_byte(0x08);
+    // mov rax, r10 (return bytes_read)
+    emit_byte(0x4C); emit_byte(0x89); emit_byte(0xD0);
+    // Total bytes (excluding the lea rdi already emitted by caller):
+    //   prelude (75) + loop (48) + postlude (14) = 137
+    137
+}
+
+// emit_write_file_to_arena_body: emit the inline asm sequence for
+// write_file_to_arena AFTER the path has been loaded into rdi.
+// Operand registers on entry: rdi = path. The caller has pushed
+// (n_bytes, arena_start) onto the stack — top = arena_start, below
+// = n_bytes. We can't `pop` them up front because the prologue
+// must save callee-saved regs first; instead, after the prologue
+// (push rbx/r12/r13/r14 = 32 bytes; sub rsp, 16 = 16 more = 48
+// bytes pushed), the args sit at [rsp+48] and [rsp+56].
+fn emit_write_file_to_arena_body(patch_state: i32, arena_base_s: i32) -> i32 {
+    // Save callee-saved regs we'll use as state.
+    emit_byte(0x53);                              // push rbx
+    emit_byte(0x41); emit_byte(0x54);             // push r12
+    emit_byte(0x41); emit_byte(0x55);             // push r13
+    emit_byte(0x41); emit_byte(0x56);             // push r14
+    // sub rsp, 16 (1 byte buffer + 8 byte fd; aligned)
+    emit_byte(0x48); emit_byte(0x83); emit_byte(0xEC); emit_byte(0x10);
+    // sys_open(path, O_WRONLY|O_CREAT|O_TRUNC=0x241, mode=0644=0x1A4)
+    // mov esi, 0x241 (5 bytes)
+    emit_byte(0xBE); emit_byte(0x41); emit_byte(0x02); emit_byte(0x00); emit_byte(0x00);
+    // mov edx, 0x1A4 (5 bytes)
+    emit_byte(0xBA); emit_byte(0xA4); emit_byte(0x01); emit_byte(0x00); emit_byte(0x00);
+    // mov eax, 2; syscall
+    emit_byte(0xB8); emit_byte(0x02); emit_byte(0x00); emit_byte(0x00); emit_byte(0x00);
+    emit_byte(0x0F); emit_byte(0x05);
+    // mov [rsp+8], rax (save fd)
+    emit_byte(0x48); emit_byte(0x89); emit_byte(0x44); emit_byte(0x24); emit_byte(0x08);
+    // test rax, rax ; jl error_close (placeholder)
+    emit_byte(0x48); emit_byte(0x85); emit_byte(0xC0);
+    emit_byte(0x7C); emit_byte(0x00);
+    let err_jmp_slot = __arena_len() - 1;
+    let err_jmp_after = __arena_len();
+    // Load args from stack via [rsp+48] (arena_start) and [rsp+56]
+    // (n_bytes). Encoding: 8B 44 24 disp8 = mov eax, [rsp+disp8].
+    emit_byte(0x8B); emit_byte(0x44); emit_byte(0x24); emit_byte(0x30);  // arena_start
+    emit_byte(0x41); emit_byte(0x89); emit_byte(0xC4);                    // mov r12d, eax
+    emit_byte(0x8B); emit_byte(0x44); emit_byte(0x24); emit_byte(0x38);  // n_bytes
+    emit_byte(0x41); emit_byte(0x89); emit_byte(0xC5);                    // mov r13d, eax
+    // xor r14d, r14d (counter)
+    emit_byte(0x45); emit_byte(0x31); emit_byte(0xF6);
+    // ---- loop_start ----
+    let loop_start = __arena_len();
+    // cmp r14d, r13d
+    emit_byte(0x45); emit_byte(0x39); emit_byte(0xEE);
+    // jge done (placeholder)
+    emit_byte(0x7D); emit_byte(0x00);
+    let jge_disp_slot = __arena_len() - 1;
+    let jge_after = __arena_len();
+    // mov ecx, r12d ; add ecx, r14d (ecx = arena_start + counter)
+    emit_byte(0x44); emit_byte(0x89); emit_byte(0xE1);
+    emit_byte(0x44); emit_byte(0x01); emit_byte(0xF1);
+    // cmp ecx, CAP
+    emit_byte(0x81); emit_byte(0xF9);
+    emit_u32_le(helix_arena_cap());
+    // jae done (placeholder)
+    emit_byte(0x73); emit_byte(0x00);
+    let jae_disp_slot = __arena_len() - 1;
+    let jae_after = __arena_len();
+    // lea rax, [rip+arena_base]
+    let arena_lea_slot = emit_lea_rax_rip_placeholder();
+    patch_table_add(patch_state, arena_lea_slot, arena_base_s, 18);
+    // mov eax, [rax+rcx*4+4]
+    emit_byte(0x8B); emit_byte(0x44); emit_byte(0x88); emit_byte(0x04);
+    // mov [rsp], al
+    emit_byte(0x88); emit_byte(0x04); emit_byte(0x24);
+    // sys_write(fd, &byte, 1)
+    // mov rdi, [rsp+8]
+    emit_byte(0x48); emit_byte(0x8B); emit_byte(0x7C); emit_byte(0x24); emit_byte(0x08);
+    // mov rsi, rsp
+    emit_byte(0x48); emit_byte(0x89); emit_byte(0xE6);
+    // mov edx, 1
+    emit_byte(0xBA); emit_byte(0x01); emit_byte(0x00); emit_byte(0x00); emit_byte(0x00);
+    // mov eax, 1; syscall
+    emit_byte(0xB8); emit_byte(0x01); emit_byte(0x00); emit_byte(0x00); emit_byte(0x00);
+    emit_byte(0x0F); emit_byte(0x05);
+    // inc r14d
+    emit_byte(0x41); emit_byte(0xFF); emit_byte(0xC6);
+    // jmp loop_start (rel8 backward, placeholder)
+    emit_byte(0xEB); emit_byte(0x00);
+    let back_disp_slot = __arena_len() - 1;
+    let back_jmp_after = __arena_len();
+    let back_disp = loop_start - back_jmp_after;
+    let back_disp_byte = (back_disp + 256) % 256;
+    __arena_set(back_disp_slot, back_disp_byte);
+    // ---- done: patch jge and jae ----
+    let done_addr = __arena_len();
+    let jge_disp = done_addr - jge_after;
+    let jae_disp = done_addr - jae_after;
+    __arena_set(jge_disp_slot, jge_disp);
+    __arena_set(jae_disp_slot, jae_disp);
+    // close(fd)
+    emit_byte(0x48); emit_byte(0x8B); emit_byte(0x7C); emit_byte(0x24); emit_byte(0x08);
+    emit_byte(0xB8); emit_byte(0x03); emit_byte(0x00); emit_byte(0x00); emit_byte(0x00);
+    emit_byte(0x0F); emit_byte(0x05);
+    // mov eax, r14d (return count)
+    emit_byte(0x44); emit_byte(0x89); emit_byte(0xF0);
+    // jmp epilogue (placeholder; we want to skip the error block)
+    emit_byte(0xEB); emit_byte(0x00);
+    let skip_err_slot = __arena_len() - 1;
+    let skip_err_after = __arena_len();
+    // ---- error_close: open failed; just set return = 0 and fall
+    // through. The args are still on the stack — they're cleaned up
+    // by the unified epilogue below (add rsp, 16 after pop).
+    let err_addr = __arena_len();
+    let err_disp = err_addr - err_jmp_after;
+    __arena_set(err_jmp_slot, err_disp);
+    // mov eax, 0
+    emit_byte(0xB8); emit_byte(0x00); emit_byte(0x00); emit_byte(0x00); emit_byte(0x00);
+    // ---- epilogue ----
+    let ep_addr = __arena_len();
+    let skip_disp = ep_addr - skip_err_after;
+    __arena_set(skip_err_slot, skip_disp);
+    // add rsp, 16 (drop buffer + fd)
+    emit_byte(0x48); emit_byte(0x83); emit_byte(0xC4); emit_byte(0x10);
+    // pop r14, r13, r12, rbx
+    emit_byte(0x41); emit_byte(0x5E);
+    emit_byte(0x41); emit_byte(0x5D);
+    emit_byte(0x41); emit_byte(0x5C);
+    emit_byte(0x5B);
+    // add rsp, 16 (drop the 2 args pushed by caller)
+    emit_byte(0x48); emit_byte(0x83); emit_byte(0xC4); emit_byte(0x10);
+    0   // bytes are tracked by emit_byte itself; arena_len delta is the truth
 }
 
 // Try to recognize a builtin call. If matched, emit the inline
@@ -665,9 +974,65 @@ fn try_emit_builtin_call(name_s: i32, name_l: i32, args_head: i32,
         emit_byte(0x89); emit_byte(0x4C); emit_byte(0x90); emit_byte(0x04);
         emit_byte(0x31); emit_byte(0xC0);                  // xor eax, eax
         n0 + np + n1 + 2 + 1 + 2 + 7 + 4 + 2
+    } else { if kovc_byte_eq(name_s, name_l, bn_read_file_to_arena_s(bn_state), 18) == 1 {
+        // read_file_to_arena(path: STRLIT) -> i32 (bytes_read).
+        // First arg MUST be AST_STR_LIT. We inspect args_head's
+        // first AST_ARG → expr; the expr's tag must be 25.
+        let arg_idx = __arena_get(args_head + 1);
+        let arg_tag = __arena_get(arg_idx);
+        if arg_tag != 25 {
+            // Not a string literal — Phase 0 only supports literal
+            // paths. Emit ud2 trap so misuse is loud.
+            emit_byte(0x0F); emit_byte(0x0B);
+            2
+        } else {
+            let body_s = __arena_get(arg_idx + 1);
+            let body_l = __arena_get(arg_idx + 2);
+            let path_disp_slot = emit_lea_rdi_rip_placeholder();
+            str_table_add(bn_state, path_disp_slot, body_s, body_l);
+            let body_bytes = emit_read_file_to_arena_body(patch_state, arena_base_s);
+            7 + body_bytes
+        }
+    } else { if kovc_byte_eq(name_s, name_l, bn_write_file_to_arena_s(bn_state), 19) == 1 {
+        // write_file_to_arena(path: STRLIT, arena_start: i32,
+        //                      n_bytes: i32) -> i32 (bytes_written).
+        // First arg MUST be AST_STR_LIT.
+        let arg_idx = __arena_get(args_head + 1);
+        let arg_tag = __arena_get(arg_idx);
+        if arg_tag != 25 {
+            emit_byte(0x0F); emit_byte(0x0B);
+            2
+        } else {
+            let body_s = __arena_get(arg_idx + 1);
+            let body_l = __arena_get(arg_idx + 2);
+            // Eval arg2 (arena_start) and arg3 (n_bytes), push each
+            // so the body can pop them. The body pops arena_start
+            // FIRST (top of stack), then n_bytes. So we must push
+            // n_bytes FIRST, then arena_start. Order: eval arg3,
+            // push; eval arg2, push.
+            let next1 = __arena_get(args_head + 2);    // AST_ARG #2
+            let next2 = __arena_get(next1 + 2);        // AST_ARG #3
+            let a2 = __arena_get(next1 + 1);           // arena_start expr
+            let a3 = __arena_get(next2 + 1);           // n_bytes expr
+            let n3 = emit_ast_code(a3, bind_state, patch_state, bn_state);
+            let n3p = emit_push_rax();
+            let n2 = emit_ast_code(a2, bind_state, patch_state, bn_state);
+            let n2p = emit_push_rax();
+            // Now load path into rdi via str_table.
+            let path_disp_slot = emit_lea_rdi_rip_placeholder();
+            str_table_add(bn_state, path_disp_slot, body_s, body_l);
+            emit_write_file_to_arena_body(patch_state, arena_base_s);
+            // We can't easily compute exact bytes — caller doesn't
+            // need them since emit_byte tracks via __arena_push. The
+            // return-value-as-byte-count contract for try_emit_builtin
+            // _call is "any positive value means handled"; the actual
+            // bytes were already pushed into the arena. Return a
+            // sentinel non-zero to signal handled.
+            n3 + n3p + n2 + n2p + 7 + 1
+        }
     } else {
         0
-    }}}}
+    }}}}}}
 }
 
 // Unreachable in this commit; reference impl preserved for next
@@ -1032,9 +1397,17 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         patch_rel32(jmp_disp, loop_top);
         let n_zero = emit_ast_int(0);
         n_cond + n_test + 6 + n_body + 5 + n_zero
+    } else { if t == 25 {
+        // AST_STR_LIT used as a value. Phase-0: strings are only
+        // meaningful as the FIRST arg of a file builtin (handled in
+        // try_emit_builtin_call). When used elsewhere — e.g., as the
+        // value of a let or as an integer expression — emit `mov
+        // eax, 0` so codegen completes cleanly. Trying to use the
+        // result is undefined behavior at this stage.
+        emit_ast_int(0)
     } else {
         emit_ast_int(0)
-    }}}}}}}}}}}}}}}}}}}}}}
+    }}}}}}}}}}}}}}}}}}}}}}}
 }
 
 // --------------------------------------------------------------
@@ -1174,14 +1547,39 @@ fn emit_elf_for_ast_to_path(ast_root: i32) -> i32 {
             emit_ret();
             cur_list = __arena_get(cur_list + 2);
         }
-        // After all fns emitted, register the arena base symbol
-        // and emit the actual arena data right after the last fn's
-        // ret. This lets inline arena-builtin code (LEA via
-        // patch_table) resolve __helix_arena_base correctly.
+        // After all fns emitted, emit any string-literal bodies first
+        // (so they live in the file), then register the arena base
+        // at the next position. Important: the arena itself lives in
+        // BSS — we set p_memsz > p_filesz so the kernel zero-fills
+        // the arena range without consuming file bytes. Without this,
+        // the kovc-host arena (32K slots = HELIX_ARENA_CAP) would
+        // overflow trying to emit a 132K-byte .data section, silently
+        // truncating the produced ELF and dropping any later string
+        // bodies.
+        let str_count = str_top(bn_state);
+        let str_base_table = str_table_base(bn_state);
+        let mut si: i32 = 0;
+        while si < str_count {
+            let s_entry = str_base_table + si * 3;
+            let s_disp_slot = __arena_get(s_entry);
+            let s_body_s = __arena_get(s_entry + 1);
+            let s_body_l = __arena_get(s_entry + 2);
+            let s_data_offset = __arena_len();
+            let mut bi: i32 = 0;
+            while bi < s_body_l {
+                emit_byte(__arena_get(s_body_s + bi));
+                bi = bi + 1;
+            }
+            emit_byte(0);     // NUL terminator
+            let s_disp = s_data_offset - (s_disp_slot + 4);
+            patch_u32_le(s_disp_slot, s_disp);
+            si = si + 1;
+        }
         let arena_base_offset = __arena_len();
         fn_table_add(fn_state, bn_helix_arena_base_s(bn_state), 18, arena_base_offset);
-        // Arena layout: 4 bytes cursor + 32K * 4 = 131072 bytes data.
-        emit_zeros(4 + 131072);
+        // No emit_zeros for the arena: the kernel allocates the
+        // 4-byte cursor + 131072 bytes of zero-filled data via BSS
+        // when p_memsz > p_filesz (patched at the bottom).
         // Backpatch all CALL placeholders. For unresolved names,
         // overwrite the entire 5-byte CALL with `ud2` + 3 NOPs
         // (audit-11 fix). The previous "leave disp at 0" silently
@@ -1225,8 +1623,13 @@ fn emit_elf_for_ast_to_path(ast_root: i32) -> i32 {
 
     let code_end = __arena_len();
     let total_filesz = 4096 + (code_end - code_start);
+    // p_memsz extends past p_filesz to give the produced binary's
+    // arena 132076 bytes of BSS-allocated zero memory (4 bytes cursor
+    // + 32768 * 4 bytes data). Without this gap, an arena_push past
+    // file bounds would SIGSEGV.
+    let total_memsz = total_filesz + 4 + 131072;
     patch_u64_le_split(elf_start + 64 + 32, total_filesz, 0);
-    patch_u64_le_split(elf_start + 64 + 40, total_filesz, 0);
+    patch_u64_le_split(elf_start + 64 + 40, total_memsz, 0);
     total_filesz
 }
 

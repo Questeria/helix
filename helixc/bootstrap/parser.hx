@@ -54,6 +54,11 @@
 //  21  AST_NE        p1 = lhs, p2 = rhs.  result = (lhs != rhs ? 1 : 0)
 //  22  AST_LE        p1 = lhs, p2 = rhs.  result = (lhs <= rhs ? 1 : 0)
 //  23  AST_GE        p1 = lhs, p2 = rhs.  result = (lhs >= rhs ? 1 : 0)
+//  25  AST_STR_LIT   p1 = body byte_start, p2 = body byte_len.
+//                    Phase-0: as a value, lowers to mov eax, 0.
+//                    Recognized as the first arg of read_file_to_arena
+//                    or write_file_to_arena, where the body bytes get
+//                    embedded in the produced binary's .data section.
 //  99  AST_ERR       p1 = unexpected token tag
 //
 // Grammar (recursive descent, classic precedence climbing):
@@ -288,6 +293,19 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
         let v = tok_p1(tok_base, k);
         cur_advance(sb);
         mk_node(0, v, 0, 0)
+    } else { if t == 25 {
+        // String literal (TK_STRLIT). Token slots:
+        //   payload   = body byte_start (in the source buffer)
+        //   src_len   = body byte length (excluding quotes)
+        // We forward both to AST_STR_LIT so codegen can emit the
+        // exact bytes into a .data blob. As a value, AST_STR_LIT
+        // currently lowers to `mov eax, 0` — strings are only
+        // meaningful as the FIRST argument of a file builtin in
+        // Phase 0.
+        let body_s = tok_p2(tok_base, k);
+        let body_l = tok_p3(tok_base, k);
+        cur_advance(sb);
+        mk_node(25, body_s, body_l, 0)
     } else { if t == 2 {
         let id_start = tok_p2(tok_base, k);
         let id_len = tok_p3(tok_base, k);
@@ -407,7 +425,7 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
             cur_advance(sb);
         };
         mk_node(99, t, 0, 0)
-    }}}
+    }}}}
 }
 
 // --------------------------------------------------------------
