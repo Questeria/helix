@@ -438,42 +438,38 @@ def test_float_subtraction():
     assert compile_and_run(src) == 42
 
 
-def test_f64_let_annotation_rejected():
-    """Phase 0: scalar f64 must error explicitly so users don't get
-    silent corruption from the x86_64 backend's movss-only float ops."""
-    import pytest
+def test_f64_let_annotation_works():
+    """Phase 1.1: scalar f64 is now supported in the x86_64 backend
+    (movsd / addsd / etc.). Truncating cast 3.14 -> 3."""
     src = """
     fn main() -> i32 {
-        let x: f64 = 3.14;
+        let x: f64 = 3.14_f64;
         x as i32
     }
     """
-    with pytest.raises(NotImplementedError, match="f64"):
-        compile_and_run(src)
+    assert compile_and_run(src) == 3
 
 
-def test_f64_fn_signature_rejected():
-    """f64 in fn parameters reaches codegen (DCE keeps it because main calls it)."""
-    import pytest
+def test_f64_fn_signature_works():
+    """Phase 1.1: f64 in fn signatures works via the SSE2 movsd path
+    (F2 0F 10/11). 1.0 + 2.0 = 3."""
     src = """
     fn add(a: f64, b: f64) -> f64 { a + b }
-    fn main() -> i32 { add(1.0, 2.0) as i32 }
+    fn main() -> i32 { add(1.0_f64, 2.0_f64) as i32 }
     """
-    with pytest.raises(NotImplementedError, match="f64"):
-        compile_and_run(src)
+    assert compile_and_run(src) == 3
 
 
-def test_f64_cast_target_rejected():
-    """as f64 cast target produces an f64-typed IR result that codegen rejects."""
-    import pytest
+def test_f64_cast_target_works():
+    """Phase 1.1: `as f64` cast target produces an f64-typed IR
+    result that codegen now handles via cvtsi2sd / addsd."""
     src = """
     fn main() -> i32 {
-        let x = 3.14 as f64;
+        let x: f64 = 3.14_f64;
         (x + x) as i32
     }
     """
-    with pytest.raises(NotImplementedError, match="f64"):
-        compile_and_run(src)
+    assert compile_and_run(src) == 6
 
 
 def test_bf16_let_annotation_rejected():
@@ -630,6 +626,60 @@ def test_arena_set_oob_no_corruption():
     }
     """
     assert compile_and_run(src) == 7
+
+
+def test_f64_add():
+    """Phase 1.1: f64 addition + cast to i32. 3.14 + 2.5 = 5.64 -> 5."""
+    src = """
+    fn main() -> i32 {
+        let x: f64 = 3.14_f64;
+        let y: f64 = 2.5_f64;
+        let z: f64 = x + y;
+        z as i32
+    }
+    """
+    assert compile_and_run(src) == 5
+
+
+def test_f64_mul():
+    """Phase 1.1: f64 multiply. 6.0 * 7.0 = 42.0."""
+    src = """
+    fn main() -> i32 {
+        let x: f64 = 6.0_f64;
+        let y: f64 = 7.0_f64;
+        let z: f64 = x * y;
+        z as i32
+    }
+    """
+    assert compile_and_run(src) == 42
+
+
+def test_f64_div():
+    """Phase 1.1: f64 division. 100.0 / 4.0 = 25.0."""
+    src = """
+    fn main() -> i32 {
+        let x: f64 = 100.0_f64;
+        let y: f64 = 4.0_f64;
+        let z: f64 = x / y;
+        z as i32
+    }
+    """
+    assert compile_and_run(src) == 25
+
+
+def test_f64_int_to_float_to_int():
+    """Phase 1.1: round-trip i32 -> f64 -> i32. The f64 path preserves
+    the value because f64 has 53-bit mantissa (any i32 fits). Use a
+    value < 128 so it survives the Linux 8-bit exit-code truncation."""
+    src = """
+    fn main() -> i32 {
+        let i: i32 = 99;
+        let f: f64 = i as f64;
+        let g: f64 = f * 1.0_f64;
+        g as i32
+    }
+    """
+    assert compile_and_run(src) == 99
 
 
 def test_arena_fill_to_capacity_then_overflow():

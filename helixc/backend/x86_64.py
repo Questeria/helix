@@ -468,6 +468,75 @@ class Asm:
         # CF=1 if xmm0 < xmm1; ZF=1 if equal or unordered (NaN).
         self.b.emit(0x0F, 0x2E, 0xC1)
 
+    # ============================================================
+    # Double-precision (f64) SSE2 instructions — same shape as
+    # the f32 (movss / addss / ...) ops above, but with the F2
+    # prefix instead of F3 and 8-byte slot loads/stores. Phase-1.1.
+    # ============================================================
+    def movsd_xmm0_mem_rbp(self, disp: int) -> None:
+        # F2 0F 10 45 disp8 (mod=01, reg=000=xmm0, r/m=101=rbp+disp)
+        if -128 <= disp <= 127:
+            self.b.emit(0xF2, 0x0F, 0x10, 0x45, disp & 0xFF)
+        else:
+            self.b.emit(0xF2, 0x0F, 0x10, 0x85)
+            self.b.emit_bytes(struct.pack("<i", disp))
+
+    def movsd_xmm1_mem_rbp(self, disp: int) -> None:
+        if -128 <= disp <= 127:
+            self.b.emit(0xF2, 0x0F, 0x10, 0x4D, disp & 0xFF)
+        else:
+            self.b.emit(0xF2, 0x0F, 0x10, 0x8D)
+            self.b.emit_bytes(struct.pack("<i", disp))
+
+    def movsd_mem_rbp_xmm0(self, disp: int) -> None:
+        if -128 <= disp <= 127:
+            self.b.emit(0xF2, 0x0F, 0x11, 0x45, disp & 0xFF)
+        else:
+            self.b.emit(0xF2, 0x0F, 0x11, 0x85)
+            self.b.emit_bytes(struct.pack("<i", disp))
+
+    def _movsd_load_xmmN(self, n: int, disp: int) -> None:
+        modrm_disp8 = (0b01 << 6) | (n << 3) | 0b101
+        modrm_disp32 = (0b10 << 6) | (n << 3) | 0b101
+        if -128 <= disp <= 127:
+            self.b.emit(0xF2, 0x0F, 0x10, modrm_disp8, disp & 0xFF)
+        else:
+            self.b.emit(0xF2, 0x0F, 0x10, modrm_disp32)
+            self.b.emit_bytes(struct.pack("<i", disp))
+
+    def _movsd_store_xmmN(self, n: int, disp: int) -> None:
+        modrm_disp8 = (0b01 << 6) | (n << 3) | 0b101
+        modrm_disp32 = (0b10 << 6) | (n << 3) | 0b101
+        if -128 <= disp <= 127:
+            self.b.emit(0xF2, 0x0F, 0x11, modrm_disp8, disp & 0xFF)
+        else:
+            self.b.emit(0xF2, 0x0F, 0x11, modrm_disp32)
+            self.b.emit_bytes(struct.pack("<i", disp))
+
+    def addsd_xmm0_xmm1(self) -> None:
+        self.b.emit(0xF2, 0x0F, 0x58, 0xC1)
+
+    def subsd_xmm0_xmm1(self) -> None:
+        self.b.emit(0xF2, 0x0F, 0x5C, 0xC1)
+
+    def mulsd_xmm0_xmm1(self) -> None:
+        self.b.emit(0xF2, 0x0F, 0x59, 0xC1)
+
+    def divsd_xmm0_xmm1(self) -> None:
+        self.b.emit(0xF2, 0x0F, 0x5E, 0xC1)
+
+    def cvttsd2si_eax_xmm0(self) -> None:
+        # F2 0F 2C C0   (truncating f64 -> signed int32)
+        self.b.emit(0xF2, 0x0F, 0x2C, 0xC0)
+
+    def cvtsi2sd_xmm0_eax(self) -> None:
+        # F2 0F 2A C0
+        self.b.emit(0xF2, 0x0F, 0x2A, 0xC0)
+
+    def ucomisd_xmm0_xmm1(self) -> None:
+        # 66 0F 2E C1
+        self.b.emit(0x66, 0x0F, 0x2E, 0xC1)
+
     def comiss_xmm0_xmm1(self) -> None:
         # NP 0F 2F C1
         self.b.emit(0x0F, 0x2F, 0xC1)
@@ -645,7 +714,10 @@ class FnCompiler:
             if self._is_float_type(p.ty):
                 if xmm_idx >= 8:
                     raise NotImplementedError("v0.1 supports up to 8 float params")
-                self.asm._movss_store_xmmN(xmm_idx, slot)
+                if self._is_f64_type(p.ty):
+                    self.asm._movsd_store_xmmN(xmm_idx, slot)
+                else:
+                    self.asm._movss_store_xmmN(xmm_idx, slot)
                 xmm_idx += 1
             else:
                 if int_idx >= len(INT_SPILLS):
@@ -665,15 +737,18 @@ class FnCompiler:
     def _is_float_type(self, ty: tir.TIRType) -> bool:
         return isinstance(ty, tir.TIRScalar) and ty.name in ("f16", "bf16", "f32", "f64")
 
+    def _is_f64_type(self, ty: tir.TIRType) -> bool:
+        return isinstance(ty, tir.TIRScalar) and ty.name == "f64"
+
     def _check_float_supported(self, ty: tir.TIRType) -> None:
-        """Phase 0 only supports f32 in the x86_64 backend. f16/bf16 are
-        narrower (and need the F16C/AVX-512 paths) and f64 needs movsd
-        (8-byte) ops we don't yet emit. Treating them as f32 silently
+        """Phase 1 supports f32 and f64. f16/bf16 still need the F16C
+        / AVX-512 paths — error on those. Treating them as f32 silently
         corrupts results, so we error explicitly."""
-        if isinstance(ty, tir.TIRScalar) and ty.name in ("f16", "bf16", "f64"):
+        if isinstance(ty, tir.TIRScalar) and ty.name in ("f16", "bf16"):
             raise NotImplementedError(
-                f"x86_64 backend supports only f32 in Phase 0; got '{ty.name}'. "
-                f"Either change to f32 or implement movsd/F16C codegen."
+                f"x86_64 backend supports only f32 and f64 currently; "
+                f"got '{ty.name}'. Either change to f32/f64 or implement "
+                f"the F16C / AVX-512 codegen path."
             )
 
     def _emit_idiv_guarded(self, l_slot: int, r_slot: int, res_slot: int,
@@ -781,33 +856,63 @@ class FnCompiler:
             self.asm.mov_mem_rbp_eax(slot)
             return
         if op.kind == tir.OpKind.CONST_FLOAT:
-            # Pack the f32 value into 4 bytes, store at the result's slot via eax
             slot = self._slot_of(op.results[0])
             value = float(op.attrs["value"])
-            bits = struct.unpack("<I", struct.pack("<f", value))[0]
-            # mov eax, <bits>; mov [rbp+slot], eax
-            self.asm.mov_eax_imm32(bits)
-            self.asm.mov_mem_rbp_eax(slot)
+            if self._is_f64_type(op.results[0].ty):
+                # Pack as 8 bytes; store via two 32-bit moves (lo then hi)
+                bits64 = struct.unpack("<Q", struct.pack("<d", value))[0]
+                lo = bits64 & 0xFFFFFFFF
+                hi = (bits64 >> 32) & 0xFFFFFFFF
+                self.asm.mov_eax_imm32(lo)
+                self.asm.mov_mem_rbp_eax(slot)
+                self.asm.mov_eax_imm32(hi)
+                self.asm.mov_mem_rbp_eax(slot + 4)
+            else:
+                bits = struct.unpack("<I", struct.pack("<f", value))[0]
+                self.asm.mov_eax_imm32(bits)
+                self.asm.mov_mem_rbp_eax(slot)
             return
         if op.kind == tir.OpKind.CAST:
             src_slot = self._slot_of(op.operands[0])
             res_slot = self._slot_of(op.results[0])
             from_ty = op.operands[0].ty
             to_ty = op.results[0].ty
-            # i32 -> f32: load int, cvtsi2ss, store float
-            if not self._is_float_type(from_ty) and self._is_float_type(to_ty):
+            from_is_f64 = self._is_f64_type(from_ty)
+            to_is_f64 = self._is_f64_type(to_ty)
+            from_is_float = self._is_float_type(from_ty)
+            to_is_float = self._is_float_type(to_ty)
+            # i32 -> f64
+            if not from_is_float and to_is_f64:
+                self.asm.mov_eax_mem_rbp(src_slot)
+                self.asm.cvtsi2sd_xmm0_eax()
+                self.asm.movsd_mem_rbp_xmm0(res_slot)
+                return
+            # i32 -> f32
+            if not from_is_float and to_is_float:
                 self.asm.mov_eax_mem_rbp(src_slot)
                 self.asm.cvtsi2ss_xmm0_eax()
                 self.asm.movss_mem_rbp_xmm0(res_slot)
                 return
-            # f32 -> i32: load float, cvttss2si, store int
-            if self._is_float_type(from_ty) and not self._is_float_type(to_ty):
+            # f64 -> i32
+            if from_is_f64 and not to_is_float:
+                self.asm.movsd_xmm0_mem_rbp(src_slot)
+                self.asm.cvttsd2si_eax_xmm0()
+                self.asm.mov_mem_rbp_eax(res_slot)
+                return
+            # f32 -> i32
+            if from_is_float and not to_is_float:
                 self.asm.movss_xmm0_mem_rbp(src_slot)
                 self.asm.cvttss2si_eax_xmm0()
                 self.asm.mov_mem_rbp_eax(res_slot)
                 return
-            # Same kind: just memory copy
-            if self._is_float_type(from_ty) == self._is_float_type(to_ty):
+            # Same float-or-not: memory copy. For f64-to-f64, copy 8 bytes.
+            if from_is_f64 and to_is_f64:
+                self.asm.mov_eax_mem_rbp(src_slot)
+                self.asm.mov_mem_rbp_eax(res_slot)
+                self.asm.mov_eax_mem_rbp(src_slot + 4)
+                self.asm.mov_mem_rbp_eax(res_slot + 4)
+                return
+            if from_is_float == to_is_float:
                 self.asm.mov_eax_mem_rbp(src_slot)
                 self.asm.mov_mem_rbp_eax(res_slot)
                 return
@@ -816,7 +921,12 @@ class FnCompiler:
             l_slot = self._slot_of(op.operands[0])
             r_slot = self._slot_of(op.operands[1])
             res_slot = self._slot_of(op.results[0])
-            if self._is_float_type(op.results[0].ty):
+            if self._is_f64_type(op.results[0].ty):
+                self.asm.movsd_xmm0_mem_rbp(l_slot)
+                self.asm.movsd_xmm1_mem_rbp(r_slot)
+                self.asm.addsd_xmm0_xmm1()
+                self.asm.movsd_mem_rbp_xmm0(res_slot)
+            elif self._is_float_type(op.results[0].ty):
                 self.asm.movss_xmm0_mem_rbp(l_slot)
                 self.asm.movss_xmm1_mem_rbp(r_slot)
                 self.asm.addss_xmm0_xmm1()
@@ -831,7 +941,12 @@ class FnCompiler:
             l_slot = self._slot_of(op.operands[0])
             r_slot = self._slot_of(op.operands[1])
             res_slot = self._slot_of(op.results[0])
-            if self._is_float_type(op.results[0].ty):
+            if self._is_f64_type(op.results[0].ty):
+                self.asm.movsd_xmm0_mem_rbp(l_slot)
+                self.asm.movsd_xmm1_mem_rbp(r_slot)
+                self.asm.subsd_xmm0_xmm1()
+                self.asm.movsd_mem_rbp_xmm0(res_slot)
+            elif self._is_float_type(op.results[0].ty):
                 self.asm.movss_xmm0_mem_rbp(l_slot)
                 self.asm.movss_xmm1_mem_rbp(r_slot)
                 self.asm.subss_xmm0_xmm1()
@@ -846,7 +961,12 @@ class FnCompiler:
             l_slot = self._slot_of(op.operands[0])
             r_slot = self._slot_of(op.operands[1])
             res_slot = self._slot_of(op.results[0])
-            if self._is_float_type(op.results[0].ty):
+            if self._is_f64_type(op.results[0].ty):
+                self.asm.movsd_xmm0_mem_rbp(l_slot)
+                self.asm.movsd_xmm1_mem_rbp(r_slot)
+                self.asm.mulsd_xmm0_xmm1()
+                self.asm.movsd_mem_rbp_xmm0(res_slot)
+            elif self._is_float_type(op.results[0].ty):
                 self.asm.movss_xmm0_mem_rbp(l_slot)
                 self.asm.movss_xmm1_mem_rbp(r_slot)
                 self.asm.mulss_xmm0_xmm1()
@@ -861,7 +981,12 @@ class FnCompiler:
             l_slot = self._slot_of(op.operands[0])
             r_slot = self._slot_of(op.operands[1])
             res_slot = self._slot_of(op.results[0])
-            if self._is_float_type(op.results[0].ty):
+            if self._is_f64_type(op.results[0].ty):
+                self.asm.movsd_xmm0_mem_rbp(l_slot)
+                self.asm.movsd_xmm1_mem_rbp(r_slot)
+                self.asm.divsd_xmm0_xmm1()
+                self.asm.movsd_mem_rbp_xmm0(res_slot)
+            elif self._is_float_type(op.results[0].ty):
                 self.asm.movss_xmm0_mem_rbp(l_slot)
                 self.asm.movss_xmm1_mem_rbp(r_slot)
                 self.asm.divss_xmm0_xmm1()
@@ -1026,7 +1151,10 @@ class FnCompiler:
                         raise NotImplementedError(
                             "v0.1 supports up to 8 float args via xmm0..xmm7"
                         )
-                    self.asm._movss_load_xmmN(xmm_idx, arg_slot)
+                    if self._is_f64_type(arg.ty):
+                        self.asm._movsd_load_xmmN(xmm_idx, arg_slot)
+                    else:
+                        self.asm._movss_load_xmmN(xmm_idx, arg_slot)
                     xmm_idx += 1
                 else:
                     if int_idx >= len(INT_REGS):
@@ -1039,7 +1167,9 @@ class FnCompiler:
             if op.results:
                 res_slot = self._slot_of(op.results[0])
                 # SysV: float return in xmm0, int return in eax.
-                if self._is_float_type(op.results[0].ty):
+                if self._is_f64_type(op.results[0].ty):
+                    self.asm.movsd_mem_rbp_xmm0(res_slot)
+                elif self._is_float_type(op.results[0].ty):
                     self.asm.movss_mem_rbp_xmm0(res_slot)
                 else:
                     self.asm.mov_mem_rbp_eax(res_slot)
@@ -1048,7 +1178,9 @@ class FnCompiler:
             if op.operands:
                 slot = self._slot_of(op.operands[0])
                 # SysV: float return in xmm0, int return in eax.
-                if self._is_float_type(op.operands[0].ty):
+                if self._is_f64_type(op.operands[0].ty):
+                    self.asm.movsd_xmm0_mem_rbp(slot)
+                elif self._is_float_type(op.operands[0].ty):
                     self.asm.movss_xmm0_mem_rbp(slot)
                 else:
                     self.asm.mov_eax_mem_rbp(slot)

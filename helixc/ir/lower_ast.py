@@ -480,12 +480,12 @@ class Lowerer:
             # ptx backend handles them.
             if (stmt.ty is not None
                     and isinstance(stmt.ty, A.TyName)
-                    and stmt.ty.name in ("f16", "bf16", "f64")):
+                    and stmt.ty.name in ("f16", "bf16")):
                 raise NotImplementedError(
                     f"scalar float type '{stmt.ty.name}' is not supported "
-                    f"in Phase 0; only f32 is implemented in the x86_64 "
-                    f"backend. Either change to f32 or implement "
-                    f"movsd/F16C codegen."
+                    f"yet — f32 and f64 are implemented in the x86_64 "
+                    f"backend; f16/bf16 need the F16C / AVX-512 codegen "
+                    f"path."
                 )
             # Special case: payload-bearing enum constructor.
             #     let m = Maybe::Some(42)
