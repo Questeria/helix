@@ -39,8 +39,16 @@
 //                    declarations. Built by parse_top when source
 //                    has multiple `fn ... { ... }` items.
 //  16  AST_CALL      p1 = name byte start, p2 = name byte length,
-//                    p3 = 0 (no args in this slice). Detected by
+//                    p3 = args_head_idx (linked list of AST_ARG
+//                    nodes), or 0 if no args. Detected by
 //                    parse_primary when IDENT is followed by `(`.
+//  17  AST_ARG       p1 = expr_idx (the arg's value expression),
+//                    p2 = next_arg_idx (or 0). Linked-list element
+//                    used by AST_CALL.
+//  18  AST_PARAM     p1 = name_start, p2 = name_len, p3 = next_param_idx.
+//                    Linked list of fn decl params. Stored at the
+//                    head index referenced by AST_FN_DECL.p3 (packed
+//                    with body_idx the same way AST_LET does).
 //  99  AST_ERR       p1 = unexpected token tag
 //
 // Grammar (recursive descent, classic precedence climbing):
@@ -299,10 +307,33 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
                 let value = parse_expr_basic(tok_base, sb);
                 mk_node(11, id_start, id_len, value)
             } else { if nt == 3 {
-                // CALL: name() — Phase 0 supports no-arg calls only.
+                // CALL: name(arg1, arg2, ...). Args become AST_ARG
+                // linked list; head index goes in CALL.p3 (or 0 if
+                // no args).
                 cur_advance(sb);     // consume '('
+                let mut args_head: i32 = 0;
+                let mut prev_arg: i32 = 0;
+                let mut k_keep: i32 = 1;
+                while k_keep == 1 {
+                    let at = tok_tag(tok_base, cur_get(sb));
+                    if at == 4 {
+                        k_keep = 0;
+                    } else { if at == 13 {
+                        cur_advance(sb);
+                    } else {
+                        let arg_expr = parse_expr_basic(tok_base, sb);
+                        let new_arg = mk_node(17, arg_expr, 0, 0);
+                        if args_head == 0 {
+                            args_head = new_arg;
+                            prev_arg = new_arg;
+                        } else {
+                            __arena_set(prev_arg + 2, new_arg);
+                            prev_arg = new_arg;
+                        };
+                    }};
+                }
                 cur_advance(sb);     // consume ')'
-                mk_node(16, id_start, id_len, 0)
+                mk_node(16, id_start, id_len, args_head)
             } else {
                 // Var ref
                 mk_node(1, id_start, id_len, 0)
@@ -425,9 +456,10 @@ fn parse_program(tok_base: i32, sb: i32) -> i32 {
     head
 }
 
-// Parse `fn name() -> i32 { body }`. Phase 0: no params, single
-// expression body, return type parsed but ignored. The result is
-// AST_FN_DECL with body_idx in p3.
+// Parse `fn name(arg1: T, arg2: T, ...) -> i32 { body }`. Each arg
+// becomes an AST_PARAM node in a linked list; the head index is
+// stored in the fn_decl's p3 packed with body_idx (head*65536+body).
+// 0 head_idx means no params. Phase 0: types are parsed but ignored.
 fn parse_fn_decl(tok_base: i32, sb: i32) -> i32 {
     cur_advance(sb);     // consume 'fn'
     let nk = cur_get(sb);
@@ -435,6 +467,33 @@ fn parse_fn_decl(tok_base: i32, sb: i32) -> i32 {
     let name_len = tok_p3(tok_base, nk);
     cur_advance(sb);     // name
     cur_advance(sb);     // '('
+    // Param list: zero or more `name: T` separated by `,`.
+    let mut params_head: i32 = 0;
+    let mut prev_param: i32 = 0;
+    let mut keep: i32 = 1;
+    while keep == 1 {
+        let pt = tok_tag(tok_base, cur_get(sb));
+        if pt == 4 {
+            keep = 0;            // ')'
+        } else { if pt == 13 {
+            cur_advance(sb);     // ','
+        } else {
+            let pname_tok = cur_get(sb);
+            let pname_s = tok_p2(tok_base, pname_tok);
+            let pname_l = tok_p3(tok_base, pname_tok);
+            cur_advance(sb);     // param name
+            cur_advance(sb);     // ':'
+            cur_advance(sb);     // type IDENT (ignored)
+            let new_param = mk_node(18, pname_s, pname_l, 0);
+            if params_head == 0 {
+                params_head = new_param;
+                prev_param = new_param;
+            } else {
+                __arena_set(prev_param + 3, new_param);
+                prev_param = new_param;
+            };
+        }};
+    }
     cur_advance(sb);     // ')'
     cur_advance(sb);     // '-' (part of '->')
     cur_advance(sb);     // '>' (the second char of '->')
@@ -442,5 +501,6 @@ fn parse_fn_decl(tok_base: i32, sb: i32) -> i32 {
     cur_advance(sb);     // '{'
     let body = parse_expr(tok_base, sb);
     cur_advance(sb);     // '}'
-    mk_node(14, name_start, name_len, body)
+    let packed = params_head * 65536 + body;
+    mk_node(14, name_start, name_len, packed)
 }

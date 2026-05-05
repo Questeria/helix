@@ -642,14 +642,54 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32) -> i32 {
         // accidental nested lists.
         emit_ast_int(0)
     } else { if t == 16 {
-        // AST_CALL(name, _, _): emit `call rel32 placeholder` and
-        // record the disp_slot + target name in the patch_table.
-        // The actual disp gets resolved after all fns are emitted.
-        // The callee leaves its return value in eax (per our
-        // calling convention), so the call's result is also eax.
+        // AST_CALL(name, _, args_head): evaluate each arg LEFT-to-
+        // RIGHT, pushing each rax onto the stack. After all args
+        // pushed, pop into SysV arg regs in REVERSE order so rdi
+        // holds arg0, rsi holds arg1, ..., r9 holds arg5. Then
+        // emit `call rel32 placeholder` for backpatching.
+        let p3 = __arena_get(idx + 3);
+        let mut bytes_emitted: i32 = 0;
+        // Pass 1: emit each arg, push rax. Track count.
+        let mut arg_cur: i32 = p3;
+        let mut arg_count: i32 = 0;
+        while arg_cur != 0 {
+            let arg_expr = __arena_get(arg_cur + 1);
+            let n_arg = emit_ast_code(arg_expr, bind_state, patch_state);
+            let n_push = emit_push_rax();
+            bytes_emitted = bytes_emitted + n_arg + n_push;
+            arg_count = arg_count + 1;
+            arg_cur = __arena_get(arg_cur + 2);
+        }
+        // Pass 2: pop into SysV regs in reverse-of-push order.
+        // pushed: arg0, arg1, ..., argN-1 (top is argN-1).
+        // We want rdi=arg0, rsi=arg1, ..., r9=argN-1.
+        // So pop top first (=argN-1) into the LAST register, then
+        // unwind backwards: pop into arg(N-2)'s reg, ..., pop into rdi.
+        // Encodings: pop rdi=5F, pop rsi=5E, pop rdx=5A, pop rcx=59,
+        //            pop r8=41 58, pop r9=41 59.
+        // We emit pops in order: register-for-argN-1, argN-2, ..., arg0.
+        let mut pi: i32 = arg_count - 1;
+        while pi >= 0 {
+            if pi == 0 {
+                emit_byte(0x5F); bytes_emitted = bytes_emitted + 1;       // pop rdi
+            } else { if pi == 1 {
+                emit_byte(0x5E); bytes_emitted = bytes_emitted + 1;       // pop rsi
+            } else { if pi == 2 {
+                emit_byte(0x5A); bytes_emitted = bytes_emitted + 1;       // pop rdx
+            } else { if pi == 3 {
+                emit_byte(0x59); bytes_emitted = bytes_emitted + 1;       // pop rcx
+            } else { if pi == 4 {
+                emit_byte(0x41); emit_byte(0x58);
+                bytes_emitted = bytes_emitted + 2;                        // pop r8
+            } else { if pi == 5 {
+                emit_byte(0x41); emit_byte(0x59);
+                bytes_emitted = bytes_emitted + 2;                        // pop r9
+            } else {} }}}}};
+            pi = pi - 1;
+        }
         let disp_slot = emit_call_rel32_placeholder();
         patch_table_add(patch_state, disp_slot, p1, p2);
-        5
+        bytes_emitted + 5
     } else { if t == 13 {
         // AST_SEQ(first, second): emit first (discard eax), emit
         // second (its eax is the result). Helix's calling convention
@@ -770,14 +810,51 @@ fn emit_elf_for_ast_to_path(ast_root: i32) -> i32 {
             let fn_idx = __arena_get(cur_list + 1);
             let fn_name_s = __arena_get(fn_idx + 1);
             let fn_name_l = __arena_get(fn_idx + 2);
-            let fn_body = __arena_get(fn_idx + 3);
-            // Record this fn's code-offset BEFORE emitting its body.
+            let fn_packed = __arena_get(fn_idx + 3);
+            let params_head = fn_packed / 65536;
+            let fn_body = fn_packed - params_head * 65536;
             let fn_code_offset = __arena_len();
             fn_table_add(fn_state, fn_name_s, fn_name_l, fn_code_offset);
-            // Reset bind_state for this fn (each fn has its own
-            // stack frame; bindings don't leak across fns).
             bind_reset(bind_state);
             emit_prologue();
+            // Copy each param's SysV arg register into a fresh stack
+            // slot and register the binding so the body can reference
+            // params by name. Phase 0: up to 6 params (rdi/rsi/rdx/
+            // rcx/r8/r9). Encoding: 89 BD disp32 = mov [rbp+disp32],
+            // edi; ModRM second-byte differs per source register.
+            let mut pcur: i32 = params_head;
+            let mut pidx: i32 = 0;
+            while pcur != 0 {
+                if pidx < 6 {
+                    let pname_s = __arena_get(pcur + 1);
+                    let pname_l = __arena_get(pcur + 2);
+                    let off = bind_alloc_offset(bind_state);
+                    bind_push(bind_state, pname_s, pname_l, off);
+                    if pidx == 0 {
+                        // mov [rbp+disp32], edi  : 89 BD disp32
+                        emit_byte(0x89); emit_byte(0xBD); emit_u32_le(0 - off);
+                    } else { if pidx == 1 {
+                        // mov [rbp+disp32], esi  : 89 B5 disp32
+                        emit_byte(0x89); emit_byte(0xB5); emit_u32_le(0 - off);
+                    } else { if pidx == 2 {
+                        // mov [rbp+disp32], edx  : 89 95 disp32
+                        emit_byte(0x89); emit_byte(0x95); emit_u32_le(0 - off);
+                    } else { if pidx == 3 {
+                        // mov [rbp+disp32], ecx  : 89 8D disp32
+                        emit_byte(0x89); emit_byte(0x8D); emit_u32_le(0 - off);
+                    } else { if pidx == 4 {
+                        // mov [rbp+disp32], r8d  : 44 89 85 disp32
+                        emit_byte(0x44); emit_byte(0x89); emit_byte(0x85);
+                        emit_u32_le(0 - off);
+                    } else { if pidx == 5 {
+                        // mov [rbp+disp32], r9d  : 44 89 8D disp32
+                        emit_byte(0x44); emit_byte(0x89); emit_byte(0x8D);
+                        emit_u32_le(0 - off);
+                    } else {} }}}}};
+                };
+                pidx = pidx + 1;
+                pcur = __arena_get(pcur + 3);
+            }
             emit_ast_code(fn_body, bind_state, patch_state);
             emit_epilogue();
             emit_ret();

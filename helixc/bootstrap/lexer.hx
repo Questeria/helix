@@ -61,10 +61,19 @@ fn is_digit(b: i32) -> i32 {
 
 @pure
 fn is_alpha(b: i32) -> i32 {
-    if b >= 65 { if b <= 90 { 1 }            // 'A'..'Z'
-    else { if b >= 97 { if b <= 122 { 1 }    // 'a'..'z'
-    else { 0 }} else { 0 }}}
-    else { if b == 95 { 1 } else { 0 }}      // '_'
+    // '_' (byte 95) lives BETWEEN 'A' (65) and 'z' (122), so check
+    // it before the case-letter ranges. The previous structure put
+    // the underscore check in the `else` of `b >= 65`, which is
+    // unreachable for byte 95 — silently broke any identifier
+    // containing an underscore (e.g. `sum_to` lexed as `sum`,
+    // TK_ERR, `to`).
+    if b == 95 { 1 }
+    else { if b >= 65 {
+        if b <= 90 { 1 }
+        else { if b >= 97 {
+            if b <= 122 { 1 } else { 0 }
+        } else { 0 }}
+    } else { 0 }}
 }
 
 @pure

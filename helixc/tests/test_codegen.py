@@ -1163,6 +1163,36 @@ fn main() -> i32 {
     assert compile_and_exec(
         "fn h() -> i32 { let x = 21 ; x + x } fn main() -> i32 { h() }"
     ) == 42, "callee uses let-binding internally"
+    # Function arguments via SysV regs (rdi/rsi/rdx/rcx/r8/r9):
+    assert compile_and_exec(
+        "fn dbl(x: i32) -> i32 { x + x } fn main() -> i32 { dbl(21) }"
+    ) == 42, "single-arg fn"
+    assert compile_and_exec(
+        "fn add(a: i32, b: i32) -> i32 { a + b } fn main() -> i32 { add(20, 22) }"
+    ) == 42, "two-arg fn"
+    assert compile_and_exec(
+        "fn t(a: i32, b: i32, c: i32) -> i32 { a + b + c } fn main() -> i32 { t(10, 20, 12) }"
+    ) == 42, "three-arg fn"
+    # Recursion (audit-12 fix needed: lexer is_alpha now recognizes
+    # underscore — names like fact / sum_to / is_even all work).
+    assert compile_and_exec(
+        "fn fact(n: i32) -> i32 { if n < 2 { 1 } else { n * fact(n - 1) } } "
+        "fn main() -> i32 { fact(5) }"
+    ) == 120, "recursive factorial"
+    assert compile_and_exec(
+        "fn fib(n: i32) -> i32 { if n < 2 { n } else { fib(n - 1) + fib(n - 2) } } "
+        "fn main() -> i32 { fib(10) }"
+    ) == 55, "recursive fibonacci"
+    assert compile_and_exec(
+        "fn sum_to(n: i32, acc: i32) -> i32 "
+        "{ if n < 1 { acc } else { sum_to(n - 1, acc + n) } } "
+        "fn main() -> i32 { sum_to(10, 0) }"
+    ) == 55, "tail-recursion with 2 args + underscore in name"
+    assert compile_and_exec(
+        "fn is_even(n: i32) -> i32 { if n < 1 { 1 } else { is_odd(n - 1) } } "
+        "fn is_odd(n: i32) -> i32 { if n < 1 { 0 } else { is_even(n - 1) } } "
+        "fn main() -> i32 { is_even(10) }"
+    ) == 1, "mutual recursion"
 
 
 def test_bootstrap_kovc_demo_emits_ast_int_42():
