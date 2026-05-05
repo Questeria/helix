@@ -497,9 +497,31 @@ fn emit_ast_code(idx: i32, bind_state: i32) -> i32 {
         // Slot is leaked (we don't reset next_offset) — fine since
         // the function frame is pre-sized at 512 bytes (64 slots).
         n_val + n_store + n_body
+    } else { if t == 10 {
+        // AST_WHILE(cond, body):
+        //   loop_top:
+        //     <cond>           leaves 0/1 in eax
+        //     test eax, eax
+        //     je end_label
+        //     <body>
+        //     jmp loop_top    (backward — exercises emit_u32_le on
+        //                       negative disp, the audit-8 fix)
+        //   end_label:
+        //     mov eax, 0      Helix while-expr returns unit (0)
+        let loop_top = __arena_len();
+        let n_cond = emit_ast_code(p1, bind_state);
+        let n_test = emit_test_eax_eax();
+        let je_disp = emit_je_rel32_placeholder();
+        let n_body = emit_ast_code(p2, bind_state);
+        let jmp_disp = emit_jmp_rel32_placeholder();
+        let end_label = __arena_len();
+        patch_rel32(je_disp, end_label);
+        patch_rel32(jmp_disp, loop_top);
+        let n_zero = emit_ast_int(0);
+        n_cond + n_test + 6 + n_body + 5 + n_zero
     } else {
         emit_ast_int(0)
-    }}}}}}}}}}
+    }}}}}}}}}}}
 }
 
 // --------------------------------------------------------------

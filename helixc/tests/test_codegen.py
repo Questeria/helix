@@ -1114,6 +1114,13 @@ fn main() -> i32 {
     assert compile_and_exec(
         "let x = 5 ; if x < 10 { x * (x + 3) } else { x - 99 }"
     ) == 40, "demo expression: 5 * (5+3) via let + if + var"
+    # AST_WHILE: while-expr returns 0; entry/exit path tested.
+    # Body iteration requires let-mut + assign which lands later.
+    assert compile_and_exec("while 0 { 1 }") == 0, "while exits when cond=false"
+    assert compile_and_exec("while 0 { 1 } + 5") == 5, \
+        "while value (0) flows into surrounding ADD"
+    assert compile_and_exec("while 1 < 0 { 99 } + 7") == 7, \
+        "while with comparison cond"
 
 
 def test_bootstrap_kovc_demo_emits_ast_int_42():

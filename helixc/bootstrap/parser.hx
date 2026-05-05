@@ -19,6 +19,7 @@
 //   8  AST_LET       p1 = name byte index, p2 = name length,
 //                    p3 = packed (value_idx * 65536 + body_idx)
 //   9  AST_NEG       p1 = inner
+//  10  AST_WHILE     p1 = cond, p2 = body. Always returns 0.
 //  99  AST_ERR       p1 = unexpected token tag
 //
 // Grammar (recursive descent, classic precedence climbing):
@@ -41,6 +42,8 @@
 //   state_base+4   kw_if_len
 //   state_base+5   kw_else_start
 //   state_base+6   kw_else_len
+//   state_base+7   kw_while_start
+//   state_base+8   kw_while_len
 //
 // License: Apache 2.0.
 
@@ -63,6 +66,8 @@ fn kw_if_s(sb: i32) -> i32   { __arena_get(sb + 3) }
 fn kw_if_n(sb: i32) -> i32   { __arena_get(sb + 4) }
 fn kw_else_s(sb: i32) -> i32 { __arena_get(sb + 5) }
 fn kw_else_n(sb: i32) -> i32 { __arena_get(sb + 6) }
+fn kw_while_s(sb: i32) -> i32 { __arena_get(sb + 7) }
+fn kw_while_n(sb: i32) -> i32 { __arena_get(sb + 8) }
 
 // --------------------------------------------------------------
 // AST builder.
@@ -197,10 +202,20 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
             let else_e = parse_expr(tok_base, sb);
             cur_advance(sb);     // '}'
             mk_node(7, cond, then_e, else_e)
+        } else { if byte_eq(id_start, id_len, kw_while_s(sb), kw_while_n(sb)) == 1 {
+            // while expr { body } — Phase-0 returns 0 (no useful
+            // result; body must produce side effects via assign,
+            // which lands in a future commit).
+            cur_advance(sb);
+            let cond = parse_expr(tok_base, sb);
+            cur_advance(sb);     // '{'
+            let body = parse_expr(tok_base, sb);
+            cur_advance(sb);     // '}'
+            mk_node(10, cond, body, 0)
         } else {
             cur_advance(sb);
             mk_node(1, id_start, id_len, 0)
-        }}
+        }}}
     } else { if t == 3 {
         cur_advance(sb);
         let inner = parse_expr(tok_base, sb);
@@ -235,6 +250,11 @@ fn install_keywords(sb: i32) -> i32 {
     let else_s = __arena_push(101); __arena_push(108); __arena_push(115); __arena_push(101);
     __arena_set(sb + 5, else_s);
     __arena_set(sb + 6, 4);
+    // "while" = 119 104 105 108 101
+    let while_s = __arena_push(119); __arena_push(104); __arena_push(105);
+    __arena_push(108); __arena_push(101);
+    __arena_set(sb + 7, while_s);
+    __arena_set(sb + 8, 5);
     0
 }
 
@@ -243,9 +263,10 @@ fn install_keywords(sb: i32) -> i32 {
 // Reserves 7 state slots, then dispatches into parse_expr.
 // --------------------------------------------------------------
 fn parse_top(tok_base: i32) -> i32 {
+    // 9 state slots: cursor + 4 keyword (start, len) pairs.
     let cur_slot = __arena_push(0);
-    __arena_push(0); __arena_push(0); __arena_push(0);
-    __arena_push(0); __arena_push(0); __arena_push(0);
+    __arena_push(0); __arena_push(0); __arena_push(0); __arena_push(0);
+    __arena_push(0); __arena_push(0); __arena_push(0); __arena_push(0);
     install_keywords(cur_slot);
     parse_expr(tok_base, cur_slot)
 }
