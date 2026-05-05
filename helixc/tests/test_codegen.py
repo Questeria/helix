@@ -950,6 +950,65 @@ def test_demo_helix_grad_descent():
     assert result in (43, 44), f"GD should converge to w~3 (exit 43 or 44), got {result}"
 
 
+def test_bootstrap_lexer_token_count():
+    """First step of the self-hosted compiler: a Helix-side lexer
+    that reads source bytes via read_file_to_arena and emits a
+    stream of (tag, payload, src_start, src_len) tuples to the
+    arena. Verify on `fn main() -> i32 { 42 + 17 }`: 13 tokens
+    expected — fn, main, (, ), -, >, i32, {, 42, +, 17, }, EOF."""
+    import os, subprocess
+    proj = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    subprocess.run(
+        ["wsl", "-e", "bash", "-c",
+         "printf %s 'fn main() -> i32 { 42 + 17 }' > /tmp/helix_lex_input.hx"],
+        check=True, timeout=10,
+    )
+    src = open(os.path.join(proj, "helixc", "bootstrap", "lexer.hx")).read()
+    assert compile_and_run(src) == 13
+
+
+def test_bootstrap_lexer_recognizes_each_token_class():
+    """End-to-end: each character class produces the expected first
+    token tag. INT=1, IDENT=2, LPAREN=3, LBRACE=5, PLUS=7. Whitespace
+    and `//` line comments are skipped. Tag table from
+    helixc/bootstrap/lexer.hx."""
+    import os, subprocess
+    proj = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    lexer_body = open(os.path.join(proj, "helixc", "bootstrap", "lexer.hx")).read()
+    # strip lexer's own main() — we substitute one that reads first tag
+    lexer_body = lexer_body.rsplit(
+        "// --------------------------------------------------------------\n// Demo:",
+        1,
+    )[0]
+
+    def first_tag(input_bytes: str) -> int:
+        subprocess.run(
+            ["wsl", "-e", "bash", "-c",
+             f"printf %s {repr(input_bytes)} > /tmp/helix_lex_input.hx"],
+            check=True, timeout=10,
+        )
+        src = lexer_body + """
+fn main() -> i32 {
+    let src_start = __arena_len();
+    let src_len = read_file_to_arena("/tmp/helix_lex_input.hx");
+    if src_len <= 0 { 0 - 1 }
+    else {
+        let tok_base = __arena_len();
+        lex(src_start, src_len);
+        __arena_get(tok_base)
+    }
+}
+"""
+        return compile_and_run(src)
+
+    assert first_tag("42") == 1, "INT"
+    assert first_tag("hello") == 2, "IDENT"
+    assert first_tag("(") == 3, "LPAREN"
+    assert first_tag("{ }") == 5, "LBRACE (after whitespace skip)"
+    assert first_tag("+") == 7, "PLUS"
+    assert first_tag("   3") == 1, "INT after whitespace"
+
+
 def test_demo_mandelbrot_renders_recognizable_shape():
     """Demo 8 (user-picked): full Mandelbrot fractal rendered to stdout
     via print_str + nested loops + complex-number iteration in f32.
