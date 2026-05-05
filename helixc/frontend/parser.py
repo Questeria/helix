@@ -794,6 +794,17 @@ class Parser:
                     name = self._eat(T.IDENT).value
                     expr = ast.Field(span=expr.span, obj=expr, name=name)
             elif self._at(T.LPAREN):
+                # Reject postfix-call on statement-position control-flow
+                # expressions. Without this, `while c { ... } (foo)`
+                # parses as `(while ...)(foo)` — the while result
+                # treated as a callable. That broke common patterns
+                # like `while loop_body { } (last * 10.0) as i32` by
+                # consuming the trailing parenthesized expression as
+                # call args. While/For/Loop never produce callable
+                # values; treat the LPAREN here as the start of a
+                # new statement/expression instead.
+                if isinstance(expr, (ast.While, ast.For, ast.Loop)):
+                    break
                 self.i += 1
                 args: list[ast.Expr] = []
                 if not self._at(T.RPAREN):

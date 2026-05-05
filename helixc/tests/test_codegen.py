@@ -904,6 +904,98 @@ def test_hash_i32_breaks_linearity():
     assert compile_and_run(src) == 0  # 0 = nonlinear (good)
 
 
+def test_demo_metacircular_evaluator():
+    """Demo 3 (user-picked): Helix interpreting Helix's own AST.
+    Builds `let x = 5 in if x < 10 then x * (x+3) else x - 99` as a
+    recursive enum graph in the arena, then evaluates it via a
+    Helix-side eval_at function. Expected: 5 * (5 + 3) = 40."""
+    import os
+    proj = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    src = open(os.path.join(proj, "helixc", "examples", "metacircular_eval.hx")).read()
+    assert compile_and_run(src) == 40
+
+
+def test_demo_symbolic_algebra_engine():
+    """Demo 2 (user-picked): differentiate x^3 + 2*x symbolically via
+    pattern-matched Expr enum, simplify via algebraic-identity rewrite,
+    evaluate at x=5. Expected derivative simplified is 3*x^2 + 2;
+    at x=5 that's 3*25 + 2 = 77."""
+    import os
+    proj = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    src = open(os.path.join(proj, "helixc", "examples", "symbolic_algebra.hx")).read()
+    assert compile_and_run(src) == 77
+
+
+def test_demo_dpll_sat_solver():
+    """Demo 4 (user-picked): DPLL Boolean satisfiability solver with
+    unit propagation + recursive backtracking. Solves a 4-variable
+    7-clause 3-SAT formula. Expected result: 1 (satisfiable)."""
+    import os
+    proj = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    src = open(os.path.join(proj, "helixc", "examples", "sat_solver.hx")).read()
+    assert compile_and_run(src) == 1
+
+
+def test_demo_helix_grad_descent():
+    """Demo 1 (user-picked): Helix differentiates Helix at compile
+    time and runs gradient descent on the result in the same binary.
+    `grad_rev(loss)(w)` lowers to a call into a freshly-generated
+    loss__rgrad function whose body is the symbolic derivative of
+    loss. Loop drives w from 0 to ~3 (target slope of `4w - 12`).
+    Final w * 100 mod 256 = 299..300 mod 256 = 43..44."""
+    import os
+    proj = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    src = open(os.path.join(proj, "helixc", "examples", "helix_grad_descent.hx")).read()
+    result = compile_and_run(src)
+    assert result in (43, 44), f"GD should converge to w~3 (exit 43 or 44), got {result}"
+
+
+def test_demo_mandelbrot_renders_recognizable_shape():
+    """Demo 8 (user-picked): full Mandelbrot fractal rendered to stdout
+    via print_str + nested loops + complex-number iteration in f32.
+    Verify the output has the right shape: starts with spaces, contains
+    @ characters from the in-set region, has multiple shading chars."""
+    import os, hashlib, subprocess
+    from helixc.frontend.parser import parse as _parse
+    from helixc.ir.lower_ast import lower as _lower
+    from helixc.ir.passes.const_fold import fold_module as _fold
+    from helixc.ir.passes.cse import cse_module as _cse
+    from helixc.ir.passes.dce import dce_module as _dce
+    from helixc.ir.passes.fdce import fdce_module as _fdce
+    from helixc.frontend.grad_pass import grad_pass as _gp
+    from helixc.backend.x86_64 import compile_module_to_elf as _compile
+
+    proj = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    src = open(os.path.join(proj, "helixc", "examples", "mandelbrot.hx")).read()
+    prog = _parse(src, include_stdlib=True)
+    _gp(prog)
+    mod = _lower(prog)
+    _fold(mod); _cse(mod); _dce(mod); _fdce(mod)
+    elf = _compile(mod)
+    out_dir = os.path.join(proj, "helixc", "tests", "_tmp")
+    os.makedirs(out_dir, exist_ok=True)
+    h = hashlib.sha256(elf).hexdigest()[:12]
+    out_path = os.path.join(out_dir, f"mandel_{h}.bin")
+    with open(out_path, "wb") as f:
+        f.write(elf)
+    os.chmod(out_path, 0o755)
+    rel = os.path.relpath(out_path, proj).replace("\\", "/")
+    wsl_path = f"/mnt/c/Projects/Kovostov-Native/{rel}"
+    result = subprocess.run(
+        ["wsl", "--", "bash", "-c", f"chmod +x {wsl_path} && {wsl_path}"],
+        capture_output=True, timeout=60,
+    )
+    out = result.stdout.decode("utf-8", "replace")
+    assert result.returncode == 0
+    # Must contain @ (in-set), space (escaped fast), and at least one
+    # transition character from the shading palette.
+    assert "@" in out, "expected in-set characters"
+    assert "  " in out, "expected escaped/whitespace regions"
+    assert any(c in out for c in ".:-=+*#%"), "expected gradient shading"
+    # At least 22 newlines (one per row).
+    assert out.count("\n") >= 22, f"too few rows in {out.count(chr(10))}"
+
+
 def test_int_to_float_round_trip():
     # int -> float -> int (no change for representable values)
     src = """
