@@ -38,6 +38,9 @@
 //                    idx (or 0 at end). Linked list of top-level fn
 //                    declarations. Built by parse_top when source
 //                    has multiple `fn ... { ... }` items.
+//  16  AST_CALL      p1 = name byte start, p2 = name byte length,
+//                    p3 = 0 (no args in this slice). Detected by
+//                    parse_primary when IDENT is followed by `(`.
 //  99  AST_ERR       p1 = unexpected token tag
 //
 // Grammar (recursive descent, classic precedence climbing):
@@ -284,20 +287,26 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
             cur_advance(sb);     // '}'
             mk_node(10, cond, body, 0)
         } else {
-            // Plain identifier. Could be a var ref OR an assignment
-            // (`name = expr`). Peek the NEXT token: if it's TK_EQ
-            // (15), this is an assign; otherwise a var ref.
+            // Plain identifier. Could be a var ref, an assignment
+            // (`name = expr`), or a fn call (`name()`). Peek the
+            // NEXT token to decide.
             cur_advance(sb);
             let next = cur_get(sb);
-            if tok_tag(tok_base, next) == 15 {
-                cur_advance(sb);     // consume '='
-                // assign value uses basic expression: the `;` after
-                // the value is a sequencer, not part of the value.
+            let nt = tok_tag(tok_base, next);
+            if nt == 15 {
+                // ASSIGN: name = value
+                cur_advance(sb);
                 let value = parse_expr_basic(tok_base, sb);
                 mk_node(11, id_start, id_len, value)
+            } else { if nt == 3 {
+                // CALL: name() — Phase 0 supports no-arg calls only.
+                cur_advance(sb);     // consume '('
+                cur_advance(sb);     // consume ')'
+                mk_node(16, id_start, id_len, 0)
             } else {
+                // Var ref
                 mk_node(1, id_start, id_len, 0)
-            }
+            }}
         }}}
     } else { if t == 3 {
         cur_advance(sb);

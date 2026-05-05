@@ -245,6 +245,18 @@ fn emit_jmp_rel32_placeholder() -> i32 {
     disp_slot
 }
 
+// call rel32 (placeholder) — 5 bytes (E8 + 4-byte disp). Returns
+// the arena slot index of the disp bytes for backpatching.
+fn emit_call_rel32_placeholder() -> i32 {
+    emit_byte(0xE8);
+    let disp_slot = __arena_len();
+    emit_byte(0); emit_byte(0); emit_byte(0); emit_byte(0);
+    disp_slot
+}
+
+// ret — 1 byte (C3).
+fn emit_ret() -> i32 { emit_byte(0xC3); 1 }
+
 // Patch a 4-byte disp32 placeholder. `disp_slot` is the arena index
 // where the disp bytes live; `target_slot` is the arena index of
 // the instruction we want to land at. The displacement is from the
@@ -391,6 +403,86 @@ fn bind_lookup(state: i32, name_start: i32, name_len: i32) -> i32 {
     offset
 }
 
+// Reset bind_state for a new function body. Sets next_offset back
+// to 8 (first stack slot) and top to 0 (no bindings yet).
+fn bind_reset(state: i32) -> i32 {
+    __arena_set(state, 8);
+    __arena_set(state + 1, 0);
+    0
+}
+
+// fn_table: maps fn names to arena slot indices where their code
+// starts. Entry layout: [name_start, name_len, code_offset]. Up to
+// 16 entries.
+fn fn_table_init() -> i32 {
+    let state = __arena_push(0);            // top = 0
+    __arena_push(state + 2);                // table_base = state + 2
+    let mut i: i32 = 0;
+    while i < 48 {                          // 16 entries * 3 slots
+        __arena_push(0);
+        i = i + 1;
+    }
+    state
+}
+
+fn fn_table_add(state: i32, name_start: i32, name_len: i32, code_offset: i32) -> i32 {
+    let top = __arena_get(state);
+    let table_base = __arena_get(state + 1);
+    let entry = table_base + top * 3;
+    __arena_set(entry, name_start);
+    __arena_set(entry + 1, name_len);
+    __arena_set(entry + 2, code_offset);
+    __arena_set(state, top + 1);
+    0
+}
+
+fn fn_table_lookup(state: i32, name_start: i32, name_len: i32) -> i32 {
+    let top = __arena_get(state);
+    let table_base = __arena_get(state + 1);
+    let mut i: i32 = 0;
+    let mut found: i32 = 0;
+    let mut offset: i32 = 0 - 1;            // -1 = not found
+    while i < top {
+        if found == 0 {
+            let entry = table_base + i * 3;
+            let ns = __arena_get(entry);
+            let nl = __arena_get(entry + 1);
+            if kovc_byte_eq(ns, nl, name_start, name_len) == 1 {
+                offset = __arena_get(entry + 2);
+                found = 1;
+            };
+            i = i + 1;
+        } else {
+            i = top;
+        };
+    }
+    offset
+}
+
+// patch_table: records pending CALL backpatches. Each entry:
+// [disp_slot, target_name_start, target_name_len]. Up to 64.
+fn patch_table_init() -> i32 {
+    let state = __arena_push(0);            // top = 0
+    __arena_push(state + 2);                // table_base = state + 2
+    let mut i: i32 = 0;
+    while i < 192 {                         // 64 entries * 3 slots
+        __arena_push(0);
+        i = i + 1;
+    }
+    state
+}
+
+fn patch_table_add(state: i32, disp_slot: i32, name_start: i32, name_len: i32) -> i32 {
+    let top = __arena_get(state);
+    let table_base = __arena_get(state + 1);
+    let entry = table_base + top * 3;
+    __arena_set(entry, disp_slot);
+    __arena_set(entry + 1, name_start);
+    __arena_set(entry + 2, name_len);
+    __arena_set(state, top + 1);
+    0
+}
+
 // Trailing exit-stub: take the top-of-eax value as the exit code
 // and call sys_exit. Always 7 bytes.
 //   89 C7      mov edi, eax
@@ -408,58 +500,59 @@ fn emit_exit_with_eax() -> i32 {
 // the number of bytes emitted. AST node layout matches stage-2
 // parser.hx: [tag, p1, p2, p3].
 //
-// Compile-time state:
-//   bind_state holds (next_offset_slot, bind_table_top_slot) — both
-//   arena slot indices that the recursive emit calls read/update.
-//   Slot[bind_state]   = next free stack offset (starts at 8)
-//   Slot[bind_state+1] = bind table top (= __arena_len() when empty)
+// Compile-time state passed via two arena-slot pointers:
+//   bind_state — variable bindings (next stack offset, table top, ...)
+//   patch_state — pending CALL backpatches (disp_slot, target name)
+//
+// SysV 6-int-param limit means we have room for both. (We could
+// fold them into one packed pointer if needed later.)
 // --------------------------------------------------------------
-fn emit_ast_code(idx: i32, bind_state: i32) -> i32 {
+fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32) -> i32 {
     let t = __arena_get(idx);
     let p1 = __arena_get(idx + 1);
     let p2 = __arena_get(idx + 2);
     if t == 0 {
         emit_ast_int(p1)
     } else { if t == 2 {
-        let n1 = emit_ast_code(p1, bind_state);
+        let n1 = emit_ast_code(p1, bind_state, patch_state);
         let np = emit_push_rax();
-        let n2 = emit_ast_code(p2, bind_state);
+        let n2 = emit_ast_code(p2, bind_state, patch_state);
         let nm = emit_mov_ecx_eax();
         let no = emit_pop_rax();
         let na = emit_add_eax_ecx();
         n1 + np + n2 + nm + no + na
     } else { if t == 3 {
-        let n1 = emit_ast_code(p1, bind_state);
+        let n1 = emit_ast_code(p1, bind_state, patch_state);
         let np = emit_push_rax();
-        let n2 = emit_ast_code(p2, bind_state);
+        let n2 = emit_ast_code(p2, bind_state, patch_state);
         let nm = emit_mov_ecx_eax();
         let no = emit_pop_rax();
         let na = emit_sub_eax_ecx();
         n1 + np + n2 + nm + no + na
     } else { if t == 4 {
-        let n1 = emit_ast_code(p1, bind_state);
+        let n1 = emit_ast_code(p1, bind_state, patch_state);
         let np = emit_push_rax();
-        let n2 = emit_ast_code(p2, bind_state);
+        let n2 = emit_ast_code(p2, bind_state, patch_state);
         let nm = emit_mov_ecx_eax();
         let no = emit_pop_rax();
         let na = emit_imul_eax_ecx();
         n1 + np + n2 + nm + no + na
     } else { if t == 5 {
-        let n1 = emit_ast_code(p1, bind_state);
+        let n1 = emit_ast_code(p1, bind_state, patch_state);
         let np = emit_push_rax();
-        let n2 = emit_ast_code(p2, bind_state);
+        let n2 = emit_ast_code(p2, bind_state, patch_state);
         let nm = emit_mov_ecx_eax();
         let no = emit_pop_rax();
         let na = emit_idiv_eax_ecx();
         n1 + np + n2 + nm + no + na
     } else { if t == 9 {
-        let ni = emit_ast_code(p1, bind_state);
+        let ni = emit_ast_code(p1, bind_state, patch_state);
         let nn = emit_ast_neg_suffix();
         ni + nn
     } else { if t == 6 {
-        let n1 = emit_ast_code(p1, bind_state);
+        let n1 = emit_ast_code(p1, bind_state, patch_state);
         let np = emit_push_rax();
-        let n2 = emit_ast_code(p2, bind_state);
+        let n2 = emit_ast_code(p2, bind_state, patch_state);
         let nm = emit_mov_ecx_eax();
         let no = emit_pop_rax();
         let na = emit_lt_eax_ecx();
@@ -467,13 +560,13 @@ fn emit_ast_code(idx: i32, bind_state: i32) -> i32 {
     } else { if t == 7 {
         // AST_IF(cond, then, else)
         let p3 = __arena_get(idx + 3);
-        let n_cond = emit_ast_code(p1, bind_state);
+        let n_cond = emit_ast_code(p1, bind_state, patch_state);
         let n_test = emit_test_eax_eax();
         let je_disp = emit_je_rel32_placeholder();
-        let n_then = emit_ast_code(p2, bind_state);
+        let n_then = emit_ast_code(p2, bind_state, patch_state);
         let jmp_disp = emit_jmp_rel32_placeholder();
         let else_label = __arena_len();
-        let n_else = emit_ast_code(p3, bind_state);
+        let n_else = emit_ast_code(p3, bind_state, patch_state);
         let merge_label = __arena_len();
         patch_rel32(je_disp, else_label);
         patch_rel32(jmp_disp, merge_label);
@@ -488,11 +581,11 @@ fn emit_ast_code(idx: i32, bind_state: i32) -> i32 {
         let p3 = __arena_get(idx + 3);
         let value_idx = p3 / 65536;
         let body_idx = p3 - value_idx * 65536;
-        let n_val = emit_ast_code(value_idx, bind_state);
+        let n_val = emit_ast_code(value_idx, bind_state, patch_state);
         let off = bind_alloc_offset(bind_state);
         let n_store = emit_mov_local_eax(off);
         bind_push(bind_state, p1, p2, off);
-        let n_body = emit_ast_code(body_idx, bind_state);
+        let n_body = emit_ast_code(body_idx, bind_state, patch_state);
         bind_pop(bind_state);
         n_val + n_store + n_body
     } else { if t == 12 {
@@ -502,11 +595,11 @@ fn emit_ast_code(idx: i32, bind_state: i32) -> i32 {
         let p3 = __arena_get(idx + 3);
         let value_idx = p3 / 65536;
         let body_idx = p3 - value_idx * 65536;
-        let n_val = emit_ast_code(value_idx, bind_state);
+        let n_val = emit_ast_code(value_idx, bind_state, patch_state);
         let off = bind_alloc_offset(bind_state);
         let n_store = emit_mov_local_eax(off);
         bind_push(bind_state, p1, p2, off);
-        let n_body = emit_ast_code(body_idx, bind_state);
+        let n_body = emit_ast_code(body_idx, bind_state, patch_state);
         bind_pop(bind_state);
         n_val + n_store + n_body
     } else { if t == 11 {
@@ -525,7 +618,7 @@ fn emit_ast_code(idx: i32, bind_state: i32) -> i32 {
         // still holds the assigned value so expressions like
         // `(x = 5) + 1` evaluate correctly.
         let p3 = __arena_get(idx + 3);
-        let n_val = emit_ast_code(p3, bind_state);
+        let n_val = emit_ast_code(p3, bind_state, patch_state);
         let off = bind_lookup(bind_state, p1, p2);
         if off == 0 {
             n_val
@@ -540,7 +633,7 @@ fn emit_ast_code(idx: i32, bind_state: i32) -> i32 {
         // programs use AST_FN_LIST (tag 15) which dispatches to a
         // walker that finds main.
         let p3 = __arena_get(idx + 3);
-        emit_ast_code(p3, bind_state)
+        emit_ast_code(p3, bind_state, patch_state)
     } else { if t == 15 {
         // AST_FN_LIST: by the time we get here, the top-level
         // wrapper should have already resolved the list to `main`'s
@@ -548,12 +641,21 @@ fn emit_ast_code(idx: i32, bind_state: i32) -> i32 {
         // FN_LIST tag, fall through to emit 0 — this guards against
         // accidental nested lists.
         emit_ast_int(0)
+    } else { if t == 16 {
+        // AST_CALL(name, _, _): emit `call rel32 placeholder` and
+        // record the disp_slot + target name in the patch_table.
+        // The actual disp gets resolved after all fns are emitted.
+        // The callee leaves its return value in eax (per our
+        // calling convention), so the call's result is also eax.
+        let disp_slot = emit_call_rel32_placeholder();
+        patch_table_add(patch_state, disp_slot, p1, p2);
+        5
     } else { if t == 13 {
         // AST_SEQ(first, second): emit first (discard eax), emit
         // second (its eax is the result). Helix's calling convention
         // here is "value left in eax", so we just chain.
-        let n1 = emit_ast_code(p1, bind_state);
-        let n2 = emit_ast_code(p2, bind_state);
+        let n1 = emit_ast_code(p1, bind_state, patch_state);
+        let n2 = emit_ast_code(p2, bind_state, patch_state);
         n1 + n2
     } else { if t == 10 {
         // AST_WHILE(cond, body):
@@ -567,10 +669,10 @@ fn emit_ast_code(idx: i32, bind_state: i32) -> i32 {
         //   end_label:
         //     mov eax, 0      Helix while-expr returns unit (0)
         let loop_top = __arena_len();
-        let n_cond = emit_ast_code(p1, bind_state);
+        let n_cond = emit_ast_code(p1, bind_state, patch_state);
         let n_test = emit_test_eax_eax();
         let je_disp = emit_je_rel32_placeholder();
-        let n_body = emit_ast_code(p2, bind_state);
+        let n_body = emit_ast_code(p2, bind_state, patch_state);
         let jmp_disp = emit_jmp_rel32_placeholder();
         let end_label = __arena_len();
         patch_rel32(je_disp, end_label);
@@ -579,7 +681,7 @@ fn emit_ast_code(idx: i32, bind_state: i32) -> i32 {
         n_cond + n_test + 6 + n_body + 5 + n_zero
     } else {
         emit_ast_int(0)
-    }}}}}}}}}}}}}}}}
+    }}}}}}}}}}}}}}}}}
 }
 
 // --------------------------------------------------------------
@@ -630,25 +732,86 @@ fn resolve_program_root(ast_root: i32) -> i32 {
 }
 
 fn emit_elf_for_ast_to_path(ast_root: i32) -> i32 {
-    // Resolve `main` (or single-expr root) BEFORE allocating
-    // bind_state, so any arena pushes from the lookup land before
-    // the code region.
-    let resolved_root = resolve_program_root(ast_root);
-    // Pre-allocate bind_state BEFORE the ELF region so it doesn't
-    // pollute the contiguous code byte stream. bind_init pushes
-    // 3 + 64*3 = 195 slots and writes them via __arena_set during
-    // codegen — never __arena_push, which would interleave with
-    // the code bytes.
+    // Pre-allocate compile-time state BEFORE the ELF region so
+    // their slots don't pollute the contiguous code byte stream.
     let bind_state = bind_init();
+    let fn_state = fn_table_init();
+    let patch_state = patch_table_init();
+    // Resolve main (single-expr legacy or AST_FN_LIST → main body).
+    let resolved_root = resolve_program_root(ast_root);
+    // Stash "main" bytes for the _start stub's call patch (the
+    // stub jumps to `main`).
+    let main_name_s = __arena_push(109);
+    __arena_push(97); __arena_push(105); __arena_push(110);
     let elf_start = __arena_len();
     emit_elf_header(0);
     emit_program_header(0);
     emit_padding_to_code();
     let code_start = __arena_len();
-    emit_prologue();
-    emit_ast_code(resolved_root, bind_state);
-    emit_epilogue();
-    emit_exit_with_eax();
+
+    // If the source had multi-fn (AST_FN_LIST), emit the multi-fn
+    // layout: _start stub + every fn's code + backpatched calls.
+    // Otherwise, legacy single-fn layout.
+    let root_tag = __arena_get(ast_root);
+    if root_tag == 15 {
+        // _start stub:
+        //   E8 ?? ?? ?? ??       call <main>            (5 bytes; backpatched)
+        //   89 C7                mov edi, eax           (2)
+        //   B8 3C 00 00 00       mov eax, 60 (sys_exit) (5)
+        //   0F 05                syscall                (2)
+        let main_call_disp = emit_call_rel32_placeholder();
+        patch_table_add(patch_state, main_call_disp, main_name_s, 4);
+        emit_byte(0x89); emit_byte(0xC7);
+        emit_byte(0xB8); emit_byte(0x3C); emit_byte(0); emit_byte(0); emit_byte(0);
+        emit_byte(0x0F); emit_byte(0x05);
+        // Walk fn list and emit each fn.
+        let mut cur_list: i32 = ast_root;
+        while cur_list != 0 {
+            let fn_idx = __arena_get(cur_list + 1);
+            let fn_name_s = __arena_get(fn_idx + 1);
+            let fn_name_l = __arena_get(fn_idx + 2);
+            let fn_body = __arena_get(fn_idx + 3);
+            // Record this fn's code-offset BEFORE emitting its body.
+            let fn_code_offset = __arena_len();
+            fn_table_add(fn_state, fn_name_s, fn_name_l, fn_code_offset);
+            // Reset bind_state for this fn (each fn has its own
+            // stack frame; bindings don't leak across fns).
+            bind_reset(bind_state);
+            emit_prologue();
+            emit_ast_code(fn_body, bind_state, patch_state);
+            emit_epilogue();
+            emit_ret();
+            cur_list = __arena_get(cur_list + 2);
+        }
+        // Backpatch all CALL placeholders.
+        let patch_top = __arena_get(patch_state);
+        let patch_table_base = __arena_get(patch_state + 1);
+        let mut pi: i32 = 0;
+        while pi < patch_top {
+            let entry = patch_table_base + pi * 3;
+            let disp_slot = __arena_get(entry);
+            let target_name_s = __arena_get(entry + 1);
+            let target_name_l = __arena_get(entry + 2);
+            let target_offset = fn_table_lookup(fn_state, target_name_s, target_name_l);
+            // disp = target_offset - (disp_slot + 4). For unresolved
+            // names (target_offset == -1), leave disp as 0 — the
+            // CALL falls through to whatever follows; the program
+            // will misbehave but won't smash the stack.
+            if target_offset >= 0 {
+                let disp = target_offset - (disp_slot + 4);
+                patch_u32_le(disp_slot, disp);
+            };
+            pi = pi + 1;
+        }
+    } else {
+        // Legacy / fn-decl: single fn whose body is the program.
+        // Same prologue+body+epilogue+exit_stub layout as before.
+        emit_prologue();
+        emit_ast_code(resolved_root, bind_state, patch_state);
+        emit_epilogue();
+        emit_exit_with_eax();
+    }
+
     let code_end = __arena_len();
     let total_filesz = 4096 + (code_end - code_start);
     patch_u64_le_split(elf_start + 64 + 32, total_filesz, 0);
@@ -665,10 +828,10 @@ fn main() -> i32 {
     let ast_root = __arena_push(0);
     __arena_push(42);
     __arena_push(0); __arena_push(0);
-    // emit_elf_for_ast_to_path allocates bind_state internally
-    // (195 slots) BEFORE the ELF, so the ELF byte range begins at
-    // ast_root + 4 + 195 = ast_root + 199.
     let total = emit_elf_for_ast_to_path(ast_root);
-    let elf_offset = ast_root + 4 + 195;
+    // The ELF byte stream is the LAST `total` slots of the arena
+    // — robust against any pre-ELF arena pushes (bind_state,
+    // fn_table, patch_table, "main" template).
+    let elf_offset = __arena_len() - total;
     write_file_to_arena("/tmp/kovc_ast_int.bin", elf_offset, total)
 }

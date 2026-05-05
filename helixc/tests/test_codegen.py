@@ -1149,6 +1149,20 @@ fn main() -> i32 {
     assert compile_and_exec(
         "fn a() -> i32 { 1 } fn main() -> i32 { 50 } fn c() -> i32 { 3 }"
     ) == 50, "main resolved regardless of source position"
+    # AST_CALL: real function calls with backpatched rel32 disp.
+    assert compile_and_exec(
+        "fn helper() -> i32 { 99 } fn main() -> i32 { helper() }"
+    ) == 99, "single fn call"
+    assert compile_and_exec(
+        "fn a() -> i32 { 6 } fn b() -> i32 { 7 } fn main() -> i32 { a() * b() }"
+    ) == 42, "two calls combined arithmetically"
+    assert compile_and_exec(
+        "fn inner() -> i32 { 5 } fn outer() -> i32 { inner() + 10 } "
+        "fn main() -> i32 { outer() * 2 }"
+    ) == 30, "nested calls (main -> outer -> inner)"
+    assert compile_and_exec(
+        "fn h() -> i32 { let x = 21 ; x + x } fn main() -> i32 { h() }"
+    ) == 42, "callee uses let-binding internally"
 
 
 def test_bootstrap_kovc_demo_emits_ast_int_42():
