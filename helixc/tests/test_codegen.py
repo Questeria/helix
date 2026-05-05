@@ -3406,6 +3406,71 @@ def test_tensor_relu_then_add():
     assert code == 10, f"expected 10 (1+2+7), got {code}"
 
 
+def test_tensor_ti2d_matmul():
+    """Phase 2 perfection: 2D matmul.
+    A = [[1,2],[3,4]] @ B = [[5,6],[7,8]] = [[19,22],[43,50]]."""
+    src = """
+    fn main() -> i32 {
+        let a = ti2d_new(2, 2);
+        ti2d_set(a, 2, 0, 0, 1); ti2d_set(a, 2, 0, 1, 2);
+        ti2d_set(a, 2, 1, 0, 3); ti2d_set(a, 2, 1, 1, 4);
+        let b = ti2d_new(2, 2);
+        ti2d_set(b, 2, 0, 0, 5); ti2d_set(b, 2, 0, 1, 6);
+        ti2d_set(b, 2, 1, 0, 7); ti2d_set(b, 2, 1, 1, 8);
+        let c = ti2d_new(2, 2);
+        ti2d_matmul(a, 2, 2, b, 2, c);
+        ti2d_get(c, 2, 0, 0) + ti2d_get(c, 2, 1, 1)
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 69, f"expected 69 (19 + 50), got {code}"
+
+
+def test_tensor_reductions_min_mean_argmax():
+    """Reductions: min, mean (floor), argmax."""
+    src = """
+    fn main() -> i32 {
+        let x = t1d_new(4);
+        ti1d_set(x, 0, 5); ti1d_set(x, 1, 9); ti1d_set(x, 2, 3); ti1d_set(x, 3, 7);
+        ti1d_min(x, 4) + ti1d_mean(x, 4) + ti1d_argmax(x, 4)
+    }
+    """
+    code = compile_and_run(src)
+    # min=3, mean=floor(24/4)=6, argmax=1; 3+6+1=10
+    assert code == 10, f"expected 10, got {code}"
+
+
+def test_tensor_ones_and_prod():
+    """ti1d_ones fills 1s; ti1d_prod multiplies."""
+    src = """
+    fn main() -> i32 {
+        let x = ti1d_ones(4);
+        ti1d_set(x, 0, 2); ti1d_set(x, 1, 3); ti1d_set(x, 2, 7);
+        // x = [2, 3, 7, 1]; prod = 42
+        ti1d_prod(x, 4)
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42 (2*3*7*1), got {code}"
+
+
+def test_tensor_broadcast_scalar_add_mul():
+    """Element-wise ops with a scalar broadcast."""
+    src = """
+    fn main() -> i32 {
+        let x = t1d_new(3);
+        ti1d_set(x, 0, 1); ti1d_set(x, 1, 2); ti1d_set(x, 2, 3);
+        let y1 = t1d_new(3);
+        ti1d_add_scalar(x, 10, y1, 3);  // [11, 12, 13]
+        let y2 = t1d_new(3);
+        ti1d_mul_scalar(y1, 2, y2, 3);  // [22, 24, 26]
+        ti1d_sum(y2, 3)
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 72, f"expected 72 (22+24+26), got {code}"
+
+
 def test_tensor_f32_sum():
     """Phase 2.2 step 2: f32 tensor via bit-reinterpret arena storage.
     [1.5, 2.5, 3.0] sums to 7.0; cast to i32 = 7."""
@@ -3471,6 +3536,125 @@ def test_tensor_f32_matvec():
     """
     code = compile_and_run(src)
     assert code == 8, f"expected 8, got {code}"
+
+
+def test_tensor_f32_elementwise_add():
+    """f32 element-wise add: [1.5, 2.5] + [0.5, 1.5] = [2.0, 4.0]; sum = 6.0."""
+    src = """
+    fn main() -> i32 {
+        let x = t1d_new(2);
+        tf1d_set(x, 0, 1.5_f32); tf1d_set(x, 1, 2.5_f32);
+        let y = t1d_new(2);
+        tf1d_set(y, 0, 0.5_f32); tf1d_set(y, 1, 1.5_f32);
+        let z = t1d_new(2);
+        tf1d_add(x, y, z, 2);
+        tf1d_sum(z, 2) as i32
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 6, f"expected 6, got {code}"
+
+
+def test_tensor_f32_elementwise_sub():
+    """f32 element-wise sub: [3.5, 4.0] - [1.5, 2.0] = [2.0, 2.0]; sum = 4.0."""
+    src = """
+    fn main() -> i32 {
+        let x = t1d_new(2);
+        tf1d_set(x, 0, 3.5_f32); tf1d_set(x, 1, 4.0_f32);
+        let y = t1d_new(2);
+        tf1d_set(y, 0, 1.5_f32); tf1d_set(y, 1, 2.0_f32);
+        let z = t1d_new(2);
+        tf1d_sub(x, y, z, 2);
+        tf1d_sum(z, 2) as i32
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 4, f"expected 4, got {code}"
+
+
+def test_tensor_f32_elementwise_mul():
+    """f32 element-wise mul: [1.5, 2.0] * [2.0, 3.0] = [3.0, 6.0]; sum = 9.0."""
+    src = """
+    fn main() -> i32 {
+        let x = t1d_new(2);
+        tf1d_set(x, 0, 1.5_f32); tf1d_set(x, 1, 2.0_f32);
+        let y = t1d_new(2);
+        tf1d_set(y, 0, 2.0_f32); tf1d_set(y, 1, 3.0_f32);
+        let z = t1d_new(2);
+        tf1d_mul(x, y, z, 2);
+        tf1d_sum(z, 2) as i32
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 9, f"expected 9, got {code}"
+
+
+def test_tensor_f32_add_scalar():
+    """f32 broadcasting add: [1.0, 2.0, 3.0] + 0.5 = [1.5, 2.5, 3.5]; sum = 7.5; *2 = 15."""
+    src = """
+    fn main() -> i32 {
+        let x = t1d_new(3);
+        tf1d_set(x, 0, 1.0_f32); tf1d_set(x, 1, 2.0_f32); tf1d_set(x, 2, 3.0_f32);
+        let y = t1d_new(3);
+        tf1d_add_scalar(x, 0.5_f32, y, 3);
+        (tf1d_sum(y, 3) * 2.0_f32) as i32
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 15, f"expected 15 (7.5*2), got {code}"
+
+
+def test_tensor_f32_mul_scalar():
+    """f32 broadcasting mul: [1.0, 2.0, 3.0] * 2.0 = [2.0, 4.0, 6.0]; sum = 12.0."""
+    src = """
+    fn main() -> i32 {
+        let x = t1d_new(3);
+        tf1d_set(x, 0, 1.0_f32); tf1d_set(x, 1, 2.0_f32); tf1d_set(x, 2, 3.0_f32);
+        let y = t1d_new(3);
+        tf1d_mul_scalar(x, 2.0_f32, y, 3);
+        tf1d_sum(y, 3) as i32
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 12, f"expected 12, got {code}"
+
+
+def test_tensor_f32_matmul():
+    """f32 2x2 matmul. A = [[1.0, 0.0], [0.0, 1.0]] (identity);
+    B = [[1.5, 2.5], [3.5, 0.5]]; C = A @ B = B; sum = 8.0."""
+    src = """
+    fn main() -> i32 {
+        let a = ti2d_new(2, 2);
+        tf2d_set(a, 2, 0, 0, 1.0_f32); tf2d_set(a, 2, 0, 1, 0.0_f32);
+        tf2d_set(a, 2, 1, 0, 0.0_f32); tf2d_set(a, 2, 1, 1, 1.0_f32);
+        let b = ti2d_new(2, 2);
+        tf2d_set(b, 2, 0, 0, 1.5_f32); tf2d_set(b, 2, 0, 1, 2.5_f32);
+        tf2d_set(b, 2, 1, 0, 3.5_f32); tf2d_set(b, 2, 1, 1, 0.5_f32);
+        let c = ti2d_new(2, 2);
+        tf2d_matmul(a, 2, 2, b, 2, c);
+        tf1d_sum(c, 4) as i32
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 8, f"expected 8 (1.5+2.5+3.5+0.5), got {code}"
+
+
+def test_tensor_f32_matmul_nontrivial():
+    """f32 matmul with non-identity. A = [[1.0, 2.0]] (1x2);
+    B = [[3.0], [4.0]] (2x1); C = A@B = [[11.0]] (1x1)."""
+    src = """
+    fn main() -> i32 {
+        let a = ti2d_new(1, 2);
+        tf2d_set(a, 2, 0, 0, 1.0_f32); tf2d_set(a, 2, 0, 1, 2.0_f32);
+        let b = ti2d_new(2, 1);
+        tf2d_set(b, 1, 0, 0, 3.0_f32); tf2d_set(b, 1, 1, 0, 4.0_f32);
+        let c = ti2d_new(1, 1);
+        tf2d_matmul(a, 1, 2, b, 1, c);
+        tf2d_get(c, 1, 0, 0) as i32
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 11, f"expected 11 (1*3 + 2*4), got {code}"
 
 
 def test_revad_grad_mul():

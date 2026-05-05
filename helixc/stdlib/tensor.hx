@@ -238,3 +238,249 @@ fn tf2d_matvec(w_start: i32, w_rows: i32, w_cols: i32,
     }
     0
 }
+
+// =========================================================================
+// Phase 2 perfection: reductions, more ops.
+// =========================================================================
+
+// Integer-tensor mean (returns floor(sum/n)).
+@pure fn ti1d_mean(start: i32, n: i32) -> i32 {
+    if n == 0 { 0 }
+    else { ti1d_sum(start, n) / n }
+}
+
+// Integer-tensor product.
+@pure fn ti1d_prod(start: i32, n: i32) -> i32 {
+    if n == 0 { 1 }
+    else {
+        let mut i: i32 = 0;
+        let mut p: i32 = 1;
+        while i < n { p = p * __arena_get(start + i); i = i + 1; }
+        p
+    }
+}
+
+// Integer-tensor min.
+@pure fn ti1d_min(start: i32, n: i32) -> i32 {
+    if n == 0 { 0 }
+    else {
+        let mut best = __arena_get(start);
+        let mut i: i32 = 1;
+        while i < n {
+            let v = __arena_get(start + i);
+            if v < best { best = v; }
+            i = i + 1;
+        }
+        best
+    }
+}
+
+// Integer-tensor argmax (returns index of largest element).
+@pure fn ti1d_argmax(start: i32, n: i32) -> i32 {
+    if n == 0 { 0 - 1 }
+    else {
+        let mut best_idx: i32 = 0;
+        let mut best_val = __arena_get(start);
+        let mut i: i32 = 1;
+        while i < n {
+            let v = __arena_get(start + i);
+            if v > best_val { best_val = v; best_idx = i; }
+            i = i + 1;
+        }
+        best_idx
+    }
+}
+
+// Tensor zeros: allocate n slots already initialized to 0.
+@pure fn ti1d_zeros(n: i32) -> i32 { t1d_new(n) }
+
+// Tensor ones: allocate n slots and fill with 1.
+fn ti1d_ones(n: i32) -> i32 {
+    let s = t1d_new(n);
+    let mut i: i32 = 0;
+    while i < n { __arena_set(s + i, 1); i = i + 1; }
+    s
+}
+
+// 2D row-major matmul: C = A @ B.
+//   A is (a_rows x a_cols), B is (a_cols x b_cols), C is (a_rows x b_cols).
+fn ti2d_matmul(a_start: i32, a_rows: i32, a_cols: i32,
+               b_start: i32, b_cols: i32, c_start: i32) -> i32 {
+    let mut r: i32 = 0;
+    while r < a_rows {
+        let mut c: i32 = 0;
+        while c < b_cols {
+            let mut k: i32 = 0;
+            let mut acc: i32 = 0;
+            while k < a_cols {
+                let av = __arena_get(a_start + r * a_cols + k);
+                let bv = __arena_get(b_start + k * b_cols + c);
+                acc = acc + av * bv;
+                k = k + 1;
+            }
+            __arena_set(c_start + r * b_cols + c, acc);
+            c = c + 1;
+        }
+        r = r + 1;
+    }
+    0
+}
+
+// Reshape: copy n elements from src to dst. (For row-major tensors a
+// reshape is a no-op as long as total element count matches; for safety
+// we expose copy as the explicit form.)
+fn ti1d_copy(src: i32, dst: i32, n: i32) -> i32 {
+    let mut i: i32 = 0;
+    while i < n {
+        __arena_set(dst + i, __arena_get(src + i));
+        i = i + 1;
+    }
+    0
+}
+
+// Broadcasting: y[i] = x[i] + scalar (element-wise add of scalar to vec).
+fn ti1d_add_scalar(x_start: i32, scalar: i32, y_start: i32, n: i32) -> i32 {
+    let mut i: i32 = 0;
+    while i < n {
+        __arena_set(y_start + i, __arena_get(x_start + i) + scalar);
+        i = i + 1;
+    }
+    0
+}
+
+fn ti1d_mul_scalar(x_start: i32, scalar: i32, y_start: i32, n: i32) -> i32 {
+    let mut i: i32 = 0;
+    while i < n {
+        __arena_set(y_start + i, __arena_get(x_start + i) * scalar);
+        i = i + 1;
+    }
+    0
+}
+
+// f32 reductions
+@pure fn tf1d_mean(start: i32, n: i32) -> f32 {
+    if n == 0 { 0.0_f32 }
+    else { tf1d_sum(start, n) / (n as f32) }
+}
+
+@pure fn tf1d_max(start: i32, n: i32) -> f32 {
+    if n == 0 { 0.0_f32 }
+    else {
+        let mut best = __f32_from_bits(__arena_get(start));
+        let mut i: i32 = 1;
+        while i < n {
+            let v = __f32_from_bits(__arena_get(start + i));
+            if v > best { best = v; }
+            i = i + 1;
+        }
+        best
+    }
+}
+
+@pure fn tf1d_min(start: i32, n: i32) -> f32 {
+    if n == 0 { 0.0_f32 }
+    else {
+        let mut best = __f32_from_bits(__arena_get(start));
+        let mut i: i32 = 1;
+        while i < n {
+            let v = __f32_from_bits(__arena_get(start + i));
+            if v < best { best = v; }
+            i = i + 1;
+        }
+        best
+    }
+}
+
+@pure fn tf1d_argmax(start: i32, n: i32) -> i32 {
+    if n == 0 { 0 - 1 }
+    else {
+        let mut best_idx: i32 = 0;
+        let mut best_val = __f32_from_bits(__arena_get(start));
+        let mut i: i32 = 1;
+        while i < n {
+            let v = __f32_from_bits(__arena_get(start + i));
+            if v > best_val { best_val = v; best_idx = i; }
+            i = i + 1;
+        }
+        best_idx
+    }
+}
+
+// f32 element-wise: z[i] = x[i] + y[i].
+fn tf1d_add(x_start: i32, y_start: i32, z_start: i32, n: i32) -> i32 {
+    let mut i: i32 = 0;
+    while i < n {
+        let xv = __f32_from_bits(__arena_get(x_start + i));
+        let yv = __f32_from_bits(__arena_get(y_start + i));
+        __arena_set(z_start + i, __bits_of_f32(xv + yv));
+        i = i + 1;
+    }
+    0
+}
+
+fn tf1d_sub(x_start: i32, y_start: i32, z_start: i32, n: i32) -> i32 {
+    let mut i: i32 = 0;
+    while i < n {
+        let xv = __f32_from_bits(__arena_get(x_start + i));
+        let yv = __f32_from_bits(__arena_get(y_start + i));
+        __arena_set(z_start + i, __bits_of_f32(xv - yv));
+        i = i + 1;
+    }
+    0
+}
+
+fn tf1d_mul(x_start: i32, y_start: i32, z_start: i32, n: i32) -> i32 {
+    let mut i: i32 = 0;
+    while i < n {
+        let xv = __f32_from_bits(__arena_get(x_start + i));
+        let yv = __f32_from_bits(__arena_get(y_start + i));
+        __arena_set(z_start + i, __bits_of_f32(xv * yv));
+        i = i + 1;
+    }
+    0
+}
+
+// f32 broadcasting: y[i] = x[i] + scalar.
+fn tf1d_add_scalar(x_start: i32, scalar: f32, y_start: i32, n: i32) -> i32 {
+    let mut i: i32 = 0;
+    while i < n {
+        let xv = __f32_from_bits(__arena_get(x_start + i));
+        __arena_set(y_start + i, __bits_of_f32(xv + scalar));
+        i = i + 1;
+    }
+    0
+}
+
+fn tf1d_mul_scalar(x_start: i32, scalar: f32, y_start: i32, n: i32) -> i32 {
+    let mut i: i32 = 0;
+    while i < n {
+        let xv = __f32_from_bits(__arena_get(x_start + i));
+        __arena_set(y_start + i, __bits_of_f32(xv * scalar));
+        i = i + 1;
+    }
+    0
+}
+
+// 2D row-major f32 matmul: C = A @ B.
+//   A is (a_rows x a_cols), B is (a_cols x b_cols), C is (a_rows x b_cols).
+fn tf2d_matmul(a_start: i32, a_rows: i32, a_cols: i32,
+               b_start: i32, b_cols: i32, c_start: i32) -> i32 {
+    let mut r: i32 = 0;
+    while r < a_rows {
+        let mut c: i32 = 0;
+        while c < b_cols {
+            let mut k: i32 = 0;
+            let mut acc: f32 = 0.0_f32;
+            while k < a_cols {
+                let av = __f32_from_bits(__arena_get(a_start + r * a_cols + k));
+                let bv = __f32_from_bits(__arena_get(b_start + k * b_cols + c));
+                acc = acc + av * bv;
+                k = k + 1;
+            }
+            __arena_set(c_start + r * b_cols + c, __bits_of_f32(acc));
+            c = c + 1;
+        }
+        r = r + 1;
+    }
+    0
+}
