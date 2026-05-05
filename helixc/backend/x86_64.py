@@ -1210,6 +1210,16 @@ class FnCompiler:
             l_slot = self._slot_of(op.operands[0])
             r_slot = self._slot_of(op.operands[1])
             res_slot = self._slot_of(op.results[0])
+            if self._is_i64_type(op.results[0].ty):
+                # i64 modulo: cqo + idiv rcx; remainder lands in rdx.
+                # Match the i64 DIV path: skip the INT_MIN/-1 guard
+                # (rare edge case); div-by-zero still SIGFPEs.
+                self.asm.mov_rax_mem_rbp(l_slot)
+                self.asm.mov_rcx_mem_rbp(r_slot)
+                self.asm.cqo()
+                self.asm.idiv_rcx()
+                self.asm.mov_mem_rbp_rdx(res_slot)
+                return
             self._emit_idiv_guarded(l_slot, r_slot, res_slot, want_quotient=False)
             return
         if op.kind == tir.OpKind.NEG:

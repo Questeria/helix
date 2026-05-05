@@ -817,6 +817,23 @@ def test_i64_to_f64_then_back():
     assert compile_and_run(src) == 10
 
 
+def test_i64_modulo_beyond_i32():
+    """Phase 1.4 (regression): i64 % i64 must use 64-bit cqo+idiv rcx, not
+    fall through to the 32-bit guarded path. With the 32-bit path, low bits
+    of 5_000_000_007 are 705_032_711, low bits of 1_000_000_000 are
+    1_000_000_000, so 5B+7 mod 1B incorrectly returns 705_032_711 instead
+    of 7."""
+    src = """
+    fn main() -> i32 {
+        let a: i64 = 5_000_000_007_i64;
+        let b: i64 = 1_000_000_000_i64;
+        let r: i64 = a % b;
+        r as i32
+    }
+    """
+    assert compile_and_run(src) == 7
+
+
 def test_f32_negation_sign_bit():
     """Phase 1.3 (regression-class): f32 negation must flip the sign bit,
     too. The OLD code used integer two's-complement which was incorrect
