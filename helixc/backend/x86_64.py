@@ -1784,12 +1784,13 @@ class FnCompiler:
                 return
 
             if kind == "read_file_to_arena":
-                # STUB: returns the total file size in bytes by attempting
-                # to read up to 8KB. Does NOT yet push bytes into the
-                # arena (the byte-push loop had codegen bugs). For now,
-                # use this primitive to *measure* file size; pair with
-                # __strbyte-on-literal for known-content lexing during
-                # bootstrap. Full byte-push implementation is deferred.
+                # FULL implementation: opens path (O_RDONLY), reads up to
+                # BUF_SIZE bytes into a stack buffer, pushes each byte into
+                # the arena (one i32 slot per byte; the low 8 bits hold the
+                # byte value). Returns the number of bytes successfully
+                # pushed (= bytes read, capped at the remaining arena
+                # capacity). The byte-push loop (audit-fixed) is now correct
+                # and exercised by the bootstrap pipeline test.
                 path_str = op.attrs["path"]
                 assert isinstance(path_str, str)
                 path_data = path_str.encode("utf-8") + b"\x00"

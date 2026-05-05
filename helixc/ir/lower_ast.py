@@ -995,12 +995,10 @@ class Lowerer:
                                           attrs={"_kind": "write_file",
                                                   "path": expr.args[0].value,
                                                   "content": expr.args[1].value})
-            # NOTE: read_file_to_arena is a builtin entry point but its
-            # backend implementation is currently a stub returning the
-            # file's byte count without pushing bytes into the arena.
-            # The stack-allocation + byte-loop codegen has a bug that
-            # caused the read syscall to silently fail. Tracked as a
-            # foundation TODO (deep-research bug #4 / lexer blocker).
+            # read_file_to_arena: opens path, reads up to 256KB, pushes
+            # each byte to the arena (one slot per byte). Returns count of
+            # bytes pushed. Implementation in x86_64 backend is full; the
+            # bootstrap pipeline test exercises it.
             if (isinstance(expr.callee, A.Name)
                     and expr.callee.name == "read_file_to_arena"
                     and len(expr.args) == 1
