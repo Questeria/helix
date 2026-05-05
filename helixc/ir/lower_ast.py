@@ -30,8 +30,13 @@ class Lowerer:
         # name -> Value (locals + params, immutable)
         self.scope: list[dict[str, tir.Value]] = []
         # Mutable variables: a separate set of names that are stored as cells
-        # (LOAD_VAR/STORE_VAR ops). Their type comes from initial binding.
-        self.mut_scope: list[dict[str, tir.TIRType]] = []
+        # (LOAD_VAR/STORE_VAR ops). Source name -> (IR name, type). The IR
+        # name is mangled (e.g. "x__1") when a shadowing inner `let mut`
+        # would otherwise collide with an outer binding's stack slot in
+        # the codegen var_slots table.
+        self.mut_scope: list[dict[str, tuple[str, tir.TIRType]]] = []
+        # Monotonic counter per source name for shadow-disambiguation.
+        self._mut_shadow_counter: dict[str, int] = {}
         # Arrays: name -> (elem_ty, length)
         self.array_scope: list[dict[str, tuple[tir.TIRType, int]]] = []
         # Structs: binding-name -> struct-decl-name (so we can resolve
@@ -176,8 +181,19 @@ class Lowerer:
         return None
     def _bind(self, name: str, v: tir.Value) -> None:
         self.scope[-1][name] = v
-    def _bind_mut(self, name: str, ty: tir.TIRType) -> None:
-        self.mut_scope[-1][name] = ty
+    def _bind_mut(self, name: str, ty: tir.TIRType) -> str:
+        """Bind `name` as mutable; return the unique IR-level name to use
+        in ALLOC_VAR/STORE_VAR/LOAD_VAR attrs. If any outer scope already
+        has a mut binding with this source name, mangle to a fresh name
+        so the codegen's name->slot table doesn't alias them."""
+        already_bound = any(name in sc for sc in self.mut_scope)
+        if already_bound:
+            self._mut_shadow_counter[name] = self._mut_shadow_counter.get(name, 0) + 1
+            ir_name = f"{name}__{self._mut_shadow_counter[name]}"
+        else:
+            ir_name = name
+        self.mut_scope[-1][name] = (ir_name, ty)
+        return ir_name
     def _bind_array(self, name: str, elem_ty: tir.TIRType, length: int) -> None:
         self.array_scope[-1][name] = (elem_ty, length)
     def _bind_struct(self, binding_name: str, struct_name: str) -> None:
@@ -268,9 +284,17 @@ class Lowerer:
                 return sc[name]
         return None
     def _lookup_mut(self, name: str) -> Optional[tir.TIRType]:
+        """Return the type of the closest enclosing mut binding, or None."""
         for sc in reversed(self.mut_scope):
             if name in sc:
-                return sc[name]
+                return sc[name][1]
+        return None
+
+    def _lookup_mut_ir_name(self, name: str) -> Optional[str]:
+        """Return the IR-level name for the closest enclosing mut binding."""
+        for sc in reversed(self.mut_scope):
+            if name in sc:
+                return sc[name][0]
         return None
     def _lookup_array(self, name: str):
         for sc in reversed(self.array_scope):
@@ -448,6 +472,21 @@ class Lowerer:
 
     def _lower_stmt(self, stmt: A.Stmt) -> None:
         if isinstance(stmt, A.Let):
+            # Phase 0: f64/f16/bf16 as a scalar `let` binding silently
+            # demote to f32 in the IR (FloatLit defaults to f32) and the
+            # x86_64 backend can't emit movsd/F16C. Reject here so users
+            # get a clear error rather than silent corruption. Tile
+            # dtypes (`tile<bf16, ...>`) are still allowed because the
+            # ptx backend handles them.
+            if (stmt.ty is not None
+                    and isinstance(stmt.ty, A.TyName)
+                    and stmt.ty.name in ("f16", "bf16", "f64")):
+                raise NotImplementedError(
+                    f"scalar float type '{stmt.ty.name}' is not supported "
+                    f"in Phase 0; only f32 is implemented in the x86_64 "
+                    f"backend. Either change to f32 or implement "
+                    f"movsd/F16C codegen."
+                )
             # Special case: payload-bearing enum constructor.
             #     let m = Maybe::Some(42)
             # Allocates a [tag, payload, ...] array. The tag is the
@@ -655,12 +694,14 @@ class Lowerer:
             if v is None:
                 v = self.builder.const_int(0)
             if stmt.is_mut:
-                # Allocate a mutable cell, store the initial value
+                # Bind first so we get the unique IR name (mangled if
+                # this shadows an outer mut binding), then allocate +
+                # store using that name.
+                ir_name = self._bind_mut(stmt.name, v.ty)
                 self.builder.emit(tir.OpKind.ALLOC_VAR,
-                                  attrs={"name": stmt.name, "dtype": v.ty})
+                                  attrs={"name": ir_name, "dtype": v.ty})
                 self.builder.emit(tir.OpKind.STORE_VAR, v,
-                                  attrs={"name": stmt.name})
-                self._bind_mut(stmt.name, v.ty)
+                                  attrs={"name": ir_name})
             else:
                 self._bind(stmt.name, v)
             return
@@ -687,12 +728,13 @@ class Lowerer:
             v = self._lookup(expr.name)
             if v is not None:
                 return v
-            # Mutable variable -> emit LOAD_VAR
+            # Mutable variable -> emit LOAD_VAR (use mangled IR name)
             mut_ty = self._lookup_mut(expr.name)
             if mut_ty is not None:
+                ir_name = self._lookup_mut_ir_name(expr.name) or expr.name
                 return self.builder.emit(tir.OpKind.LOAD_VAR,
                                          result_ty=mut_ty,
-                                         attrs={"name": expr.name})
+                                         attrs={"name": ir_name})
             # Maybe a function reference (v0.1: emit a call-able marker)
             if expr.name in self.functions:
                 return self.builder.const_int(0)
@@ -708,12 +750,27 @@ class Lowerer:
             # Path in expr position for a recursive enum produces just
             # the tag (not an arena index), which breaks downstream
             # match. Workaround: bind via a let first.
-            if len(expr.segments) == 2:
-                ename, vname = expr.segments
+            segs = list(expr.segments)
+            # `crate::EnumName::Variant` is a Phase-0 alias for
+            # `EnumName::Variant`. Strip a leading "crate" segment so
+            # the resolution below works without a real module system.
+            if len(segs) >= 3 and segs[0] == "crate":
+                segs = segs[1:]
+            if len(segs) == 2:
+                ename, vname = segs
                 variants = self._enum_variants.get(ename)
                 if variants is not None and vname in variants:
                     return self.builder.const_int(variants[vname])
-            # Other paths still treated as opaque.
+            # 3+-segment paths that aren't an enum variant: raise rather
+            # than silently lower to 0 (which used to make pattern arms
+            # collide and match the wrong variant). 2-segment paths that
+            # don't resolve to an enum still fall through to opaque(0).
+            if len(segs) >= 3:
+                raise NotImplementedError(
+                    f"3+-segment path {'::'.join(expr.segments)} is not "
+                    f"supported in Phase 0 (no module system). Use "
+                    f"`EnumName::Variant` or `crate::EnumName::Variant`."
+                )
             return self.builder.const_int(0)
         if isinstance(expr, A.Binary):
             l = self._lower_expr(expr.left)
@@ -1372,9 +1429,10 @@ class Lowerer:
             # If target is a mutable variable name, emit STORE_VAR.
             # Compound assignments (+=, etc.) need a load+op+store.
             if isinstance(expr.target, A.Name) and self._lookup_mut(expr.target.name):
+                ir_name = self._lookup_mut_ir_name(expr.target.name) or expr.target.name
                 if expr.op == "=":
                     self.builder.emit(tir.OpKind.STORE_VAR, v,
-                                      attrs={"name": expr.target.name})
+                                      attrs={"name": ir_name})
                 else:
                     # Compound: load, op, store
                     op_map = {
@@ -1384,11 +1442,11 @@ class Lowerer:
                     }
                     cur = self.builder.emit(tir.OpKind.LOAD_VAR,
                                             result_ty=v.ty,
-                                            attrs={"name": expr.target.name})
+                                            attrs={"name": ir_name})
                     new = self.builder.emit(op_map[expr.op], cur, v,
                                             result_ty=v.ty)
                     self.builder.emit(tir.OpKind.STORE_VAR, new,
-                                      attrs={"name": expr.target.name})
+                                      attrs={"name": ir_name})
             return None
         if isinstance(expr, A.TupleLit):
             for e in expr.elems:

@@ -438,6 +438,315 @@ def test_float_subtraction():
     assert compile_and_run(src) == 42
 
 
+def test_f64_let_annotation_rejected():
+    """Phase 0: scalar f64 must error explicitly so users don't get
+    silent corruption from the x86_64 backend's movss-only float ops."""
+    import pytest
+    src = """
+    fn main() -> i32 {
+        let x: f64 = 3.14;
+        x as i32
+    }
+    """
+    with pytest.raises(NotImplementedError, match="f64"):
+        compile_and_run(src)
+
+
+def test_f64_fn_signature_rejected():
+    """f64 in fn parameters reaches codegen (DCE keeps it because main calls it)."""
+    import pytest
+    src = """
+    fn add(a: f64, b: f64) -> f64 { a + b }
+    fn main() -> i32 { add(1.0, 2.0) as i32 }
+    """
+    with pytest.raises(NotImplementedError, match="f64"):
+        compile_and_run(src)
+
+
+def test_f64_cast_target_rejected():
+    """as f64 cast target produces an f64-typed IR result that codegen rejects."""
+    import pytest
+    src = """
+    fn main() -> i32 {
+        let x = 3.14 as f64;
+        (x + x) as i32
+    }
+    """
+    with pytest.raises(NotImplementedError, match="f64"):
+        compile_and_run(src)
+
+
+def test_bf16_let_annotation_rejected():
+    """bf16 in scalar position is rejected the same as f64."""
+    import pytest
+    src = """
+    fn main() -> i32 {
+        let x: bf16 = 3.14;
+        x as i32
+    }
+    """
+    with pytest.raises(NotImplementedError, match="bf16"):
+        compile_and_run(src)
+
+
+def test_let_mut_shadow_inner_does_not_leak():
+    """Inner `let mut x` must not share storage with outer `let mut x`.
+    Bug E from deep research — codegen's name->slot table aliased them
+    until the lowerer started mangling shadowed IR names."""
+    src = """
+    fn main() -> i32 {
+        let mut x = 10;
+        {
+            let mut x = 20;
+            x = 30;
+        };
+        x
+    }
+    """
+    assert compile_and_run(src) == 10
+
+
+def test_let_mut_inner_no_shadow_mutates_outer():
+    """When the inner block does NOT shadow, assignments target the
+    outer mut binding."""
+    src = """
+    fn main() -> i32 {
+        let mut x = 10;
+        {
+            x = x + 5;
+        };
+        x
+    }
+    """
+    assert compile_and_run(src) == 15
+
+
+def test_let_mut_triple_shadow():
+    """Three-deep shadow: each level has its own slot, only outermost
+    survives the unwind."""
+    src = """
+    fn main() -> i32 {
+        let mut x = 1;
+        {
+            let mut x = 10;
+            {
+                let mut x = 100;
+                x = x + 1;
+            };
+            x = x + 1;
+        };
+        x = x + 1;
+        x
+    }
+    """
+    assert compile_and_run(src) == 2
+
+
+def test_let_mut_shadow_compound_assign():
+    """Compound assignment in the shadowed scope must target the inner slot."""
+    src = """
+    fn main() -> i32 {
+        let mut x = 100;
+        {
+            let mut x = 5;
+            x += 3;
+        };
+        x
+    }
+    """
+    assert compile_and_run(src) == 100
+
+
+def test_int_overflow_wraps_two_complement():
+    """Spec: Phase 0 integer ops are two's-complement wraparound, no traps.
+    INT_MAX + 1 == INT_MIN; the exit code is INT_MIN & 0xFF == 0."""
+    src = """
+    fn main() -> i32 {
+        let x: i32 = 2147483647;
+        x + 1
+    }
+    """
+    assert compile_and_run(src) == 0  # INT_MIN low byte
+
+
+def test_int_mul_overflow_wraps():
+    """100000 * 100000 = 10^10 = 0x540BE400 (positive 32-bit wrap from 64-bit
+    truth value), low byte = 0x00."""
+    src = """
+    fn main() -> i32 {
+        let a: i32 = 100000;
+        let b: i32 = 100000;
+        a * b
+    }
+    """
+    assert compile_and_run(src) == 0  # 10^10 mod 2^32 = 1410065408 → low byte 0
+
+
+def test_int_underflow_wraps():
+    """INT_MIN - 2 wraps; we just check the codegen doesn't trap."""
+    src = """
+    fn main() -> i32 {
+        let x: i32 = -2147483647;
+        let y: i32 = x - 2;
+        if y > 0 { 1 } else { 0 }
+    }
+    """
+    # x = -2147483647, x-2 = -2147483649 wraps to 2147483647 (positive).
+    assert compile_and_run(src) == 1
+
+
+def test_arena_get_negative_index_returns_zero():
+    """Arena get with negative index must NOT read before the arena base.
+    Bug from deep research — used to read garbage memory."""
+    src = """
+    fn main() -> i32 {
+        __arena_push(42);
+        let v = __arena_get(0 - 1);
+        if v == 0 { 1 } else { 2 }
+    }
+    """
+    assert compile_and_run(src) == 1
+
+
+def test_arena_get_beyond_cap_returns_zero():
+    """Arena get past HELIX_ARENA_CAP must return 0, not garbage."""
+    src = """
+    fn main() -> i32 {
+        __arena_push(42);
+        let v = __arena_get(32768);
+        if v == 0 { 1 } else { 2 }
+    }
+    """
+    assert compile_and_run(src) == 1
+
+
+def test_arena_set_oob_no_corruption():
+    """Out-of-bounds set must not corrupt in-bounds slots."""
+    src = """
+    fn main() -> i32 {
+        let i = __arena_push(7);
+        __arena_set(99999, 42);
+        __arena_get(i)
+    }
+    """
+    assert compile_and_run(src) == 7
+
+
+def test_arena_fill_to_capacity_then_overflow():
+    """Pushing exactly HELIX_ARENA_CAP elements works; the next push is
+    silently dropped (cursor stays at CAP)."""
+    src = """
+    fn main() -> i32 {
+        let mut i: i32 = 0;
+        while i < 32768 {
+            __arena_push(i);
+            i = i + 1;
+        };
+        let len_after = __arena_len();
+        __arena_push(99);
+        let len_now = __arena_len();
+        if len_after == 32768 {
+            if len_now == 32768 { 1 } else { 2 }
+        } else { 3 }
+    }
+    """
+    assert compile_and_run(src) == 1
+
+
+def test_negative_range_pattern_lower_bound():
+    """Bug J: parser must accept negative literals in range patterns."""
+    src = """
+    fn classify(x: i32) -> i32 {
+        match x {
+            -10..=-1 => 1,
+            0..=9 => 2,
+            10..=99 => 3,
+            _ => 4
+        }
+    }
+    fn main() -> i32 { classify(0 - 5) }
+    """
+    assert compile_and_run(src) == 1
+
+
+def test_negative_range_pattern_misses_outside():
+    src = """
+    fn classify(x: i32) -> i32 {
+        match x {
+            -10..=-1 => 1,
+            0..=9 => 2,
+            _ => 4
+        }
+    }
+    fn main() -> i32 { classify(0 - 15) }
+    """
+    assert compile_and_run(src) == 4
+
+
+def test_negative_literal_pattern():
+    """Single-value negative literal must match correctly."""
+    src = """
+    fn main() -> i32 {
+        let x = 0 - 5;
+        match x {
+            -5 => 100,
+            _ => 200
+        }
+    }
+    """
+    assert compile_and_run(src) == 100
+
+
+def test_range_with_negative_high_bound():
+    """`-100..-1` (low and high both negative)."""
+    src = """
+    fn main() -> i32 {
+        let x = 0 - 50;
+        match x {
+            -100..=-1 => 1,
+            _ => 0
+        }
+    }
+    """
+    assert compile_and_run(src) == 1
+
+
+def test_crate_prefix_resolves_to_enum_variant():
+    """`crate::EnumName::Variant` is treated as a Phase 0 alias for
+    `EnumName::Variant`. Bug K — used to silently lower to 0 and
+    misroute the match dispatch."""
+    src = """
+    enum E { A, B, C }
+    fn main() -> i32 {
+        let x = E::B;
+        match x {
+            crate::E::A => 1,
+            crate::E::B => 2,
+            crate::E::C => 3,
+        }
+    }
+    """
+    assert compile_and_run(src) == 2
+
+
+def test_unknown_3segment_path_errors():
+    """A non-`crate` 3-segment path errors clearly rather than silently
+    lowering to const_int(0)."""
+    import pytest
+    src = """
+    enum E { A, B }
+    fn main() -> i32 {
+        let x = E::A;
+        match x {
+            foo::E::A => 1,
+            foo::E::B => 2,
+        }
+    }
+    """
+    with pytest.raises(NotImplementedError, match="3.+segment path"):
+        compile_and_run(src)
+
+
 def test_int_to_float_round_trip():
     # int -> float -> int (no change for representable values)
     src = """
@@ -1578,6 +1887,78 @@ def test_arena_set_overwrites():
     """
     code = compile_and_run(src)
     assert code == 42, f"expected 42 after set, got {code}"
+
+
+def test_read_file_to_arena_returns_size():
+    """read_file_to_arena returns the byte count of the file."""
+    import subprocess
+    # write fixture via WSL so the compiled Linux binary can find it
+    subprocess.run(
+        ["wsl", "-e", "bash", "-c", 'echo -n "hello" > /tmp/helix_rftest_size.txt'],
+        check=True, timeout=10,
+    )
+    src = """
+    fn main() -> i32 {
+        read_file_to_arena("/tmp/helix_rftest_size.txt")
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 5, f"expected size 5, got {code}"
+
+
+def test_read_file_to_arena_first_byte():
+    """First byte of file should land at the slot returned by __arena_len() before the call."""
+    import subprocess
+    subprocess.run(
+        ["wsl", "-e", "bash", "-c", 'echo -n "hello" > /tmp/helix_rftest_byte.txt'],
+        check=True, timeout=10,
+    )
+    src = """
+    fn main() -> i32 {
+        let start = __arena_len();
+        let n = read_file_to_arena("/tmp/helix_rftest_byte.txt");
+        if n > 0 { __arena_get(start) } else { 0 - 1 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 104, f"expected 104 ('h'), got {code}"  # ord('h') == 104
+
+
+def test_read_file_to_arena_byte_sum():
+    """All bytes should be pushed in order; sum across them is deterministic."""
+    import subprocess
+    subprocess.run(
+        ["wsl", "-e", "bash", "-c", 'echo -n "hello" > /tmp/helix_rftest_sum.txt'],
+        check=True, timeout=10,
+    )
+    src = """
+    fn main() -> i32 {
+        let start = __arena_len();
+        let n = read_file_to_arena("/tmp/helix_rftest_sum.txt");
+        let mut sum = 0;
+        let mut i = 0;
+        while i < n {
+            sum = sum + __arena_get(start + i);
+            i = i + 1;
+        };
+        sum
+    }
+    """
+    # h+e+l+l+o = 104+101+108+108+111 = 532; exit code = 532 mod 256 = 20
+    code = compile_and_run(src)
+    assert code == 20, f"expected 532 mod 256 = 20, got {code}"
+
+
+def test_read_file_to_arena_missing_file_returns_zero():
+    """read_file_to_arena returns 0 when the file cannot be opened."""
+    src = """
+    fn main() -> i32 {
+        let n = read_file_to_arena("/tmp/nonexistent_xyz_helix_definitely_not_there.txt");
+        if n == 0 { 42 } else { 99 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42 (file-not-found path), got {code}"
 
 
 def test_inline_enum_ctor_as_fn_arg():

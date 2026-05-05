@@ -84,6 +84,18 @@ size                    // size-type keyword for shape parameters
 | `mxfp4` `nvfp4` | 4-bit + scale | block-scaled per OCP MX or NVIDIA spec |
 | `ternary` | ~1.58 | `{-1, 0, +1}` packed |
 
+#### Integer arithmetic semantics
+Phase 0 backend implements **two's-complement wraparound** for all integer
+operations: `i32::MAX + 1 == i32::MIN`, `i32::MIN - 1 == i32::MAX`,
+multiplication and shift overflow truncate modulo `2^32`. This matches Rust
+release-mode and C unsigned semantics. Helix does NOT trap on overflow
+(no UBSan-equivalent runtime checks). Static checks (typecheck) flag
+literal-out-of-range errors at compile time but do not analyze dynamic
+overflow. `idiv` by zero is guarded in codegen to return 0 (matching the
+spec's "defined behavior on edge cases"); `INT_MIN / -1` returns `INT_MIN`
+(no `#DE` hardware trap). Float arithmetic follows IEEE-754: NaN compares
+unordered, inf propagates, no exception flags are observable.
+
 ### Aggregate types
 - Tuples: `(T1, T2, T3)`
 - Structs: `struct Foo { x: i32, y: f32 }`
@@ -329,18 +341,32 @@ These intentionally-deferred items shape the bootstrap path:
 1. **No struct-by-value RETURN.** Callees return one i32 (typically the first slot). `@pure fn build_pair() -> Pair { Pair { a: 1, b: 2 } }` only carries `a` back. Workaround: use output params (write into an arena slot, return the index) or return tuples-of-i32. Tracked as Tier F follow-up.
 2. **No mutable struct fields.** All struct fields are immutable after construction. Workaround: store field values in arena cells and reach them via `__arena_set` against a known index.
 3. **No `for x in slice`.** Only `for i in 0..n` (i.e. integer ranges). Iteration over arena segments uses while loops with manual index counters.
-4. **No runtime-loaded strings.** Today's `__strlen / __strbyte / __streq` operate on string literals known at compile time. Bootstrap lexer needs source bytes — which means `read_file` returning bytes-into-arena. Tracked.
+4. **`read_file_to_arena(path)` IS implemented** as of 2026-05-04 (bug fix: fixes disp8 sign-extension on the read buffer). Bootstrap lexer can now load source bytes.
 5. **No Vec<T>.** Arenas are monotonic — once pushed, never freed. The (start, count) carry-pair pattern fills the gap for compile-once workloads. Real malloc/free is a v0.2 concern.
 6. **No HashMap.** Linear-scan assoc-list works at hundreds-of-symbols scale (HBS bootstrap). Hash bucket added as a polish item.
-7. **No 3+-segment paths.** `Module::Sub::Variant` errors at typecheck. v0.1 covers `EnumName::Variant` only.
+7. **3+-segment paths.** `crate::EnumName::Variant` is supported as a Phase-0 alias for `EnumName::Variant`. Other 3+-segment paths (e.g. `module::sub::Variant`) raise `NotImplementedError` at lowering rather than silently lowering to const_int(0). v0.1 has no module system.
 8. **`@total` is conservative.** Recognizes `f(p - k)` and `f(p / k>=2)` but not Collatz-style or accumulator-based decrease. Use `@partial` for those.
 9. **Inline enum-with-payload return value DOES work** (audit-7 cycle), but enum returns from fns of recursive-enum type fall back to the index encoding — preserved across calls correctly via the multi-slot ABI.
+10. **Float types beyond f32.** `f64`, `f16`, `bf16` in scalar position raise `NotImplementedError` at lowering — the x86_64 backend uses movss (4 bytes) for all SSE float ops. Tile dtypes (`tile<bf16, ...>`) are still allowed because the GPU/PTX backend handles them.
+11. **Generic type params lower to i32-sized ABI.** `fn id[T](x: T) -> T { x }` works for i32 type args; calls with i64/f32/struct args silently truncate. Callers should specialize manually until v0.2 monomorphization ships.
+
+### Bugs fixed in 2026-05-04 deep-research cycle (8 fixes; 510 → 576 tests)
+
+- **read_file_to_arena disp8 sign-extension**: `sub rsp, 128` with disp8 sign-extends 0x80 to -128, so it added 128 to rsp instead of subtracting. Fixed via `BUF_SIZE = 0x40` (fits signed disp8 cleanly).
+- **Reverse-mode AD through match**: `autodiff_reverse` returned 0 for any function containing a Match. Now propagates per-arm contributions and wraps them as a Match with the same scrutinee.
+- **f64/f16/bf16 scalar use silently truncated**: scalar usage now raises `NotImplementedError` at lowering with a clear message.
+- **`let mut x` shadowing**: inner `let mut x` shared the outer's stack slot; codegen's name→slot table aliased them. Lowerer now mangles shadowed IR names (`x`, `x__1`, `x__2`).
+- **Const-fold integer wraparound**: `INT_MAX + 1` folded to 2147483648 in Python (no wrap), breaking comparisons. Fix wraps every fold result to the target type's signed range so optimized + unoptimized builds agree.
+- **`@effect(io)` parser**: parser dropped the `(io)` argument; typecheck couldn't tell which effects a function declared. Now records `effect:io`, `effect:rng` etc.
+- **Arena GET/SET bounds checks**: `__arena_get(-1)` read memory before the arena base; `__arena_set` past the cap silently wrote into adjacent state. Both now cmp/jb-guarded with unsigned compare against `HELIX_ARENA_CAP`.
+- **Negative-bound range patterns** (`-10..=-1`): parser rejected `MINUS` in a pattern atom. Now eats negative literals as `Unary("-", IntLit(...))` for both lo and hi range bounds.
+- **3+-segment paths**: silently lowered to `const_int(0)` and made all match arms collide. `crate::E::V` now works as 2-segment alias; other 3+-segment paths error explicitly.
 
 ### Test count + audit history
 
-As of commit `cd6667c` (2026-05-04T23:00Z): **529 tests** in `helixc/tests/` all green. Determinism verified after commit `cd6667c` fixed a WSL test-bin race that was producing flaky failures.
+As of 2026-05-04 deep-research cycle 2: **576 tests** in `helixc/tests/` all green. Determinism verified after commit `cd6667c` fixed a WSL test-bin race that was producing flaky failures.
 
-9 audit-pass cycles + 1 deep-research cycle have caught and fixed 24 real bugs. Audit candidates explicitly considered:
+10 audit-pass cycles + 2 deep-research cycles have caught and fixed 33 real bugs. Audit candidates explicitly considered:
 - ARENA bounds (off-by-one), buffer +1 slot, bumped to fix
 - STR_BYTE signed-vs-unsigned bounds (jl→jb)
 - IEEE-754 NaN PF flag in float compare

@@ -176,34 +176,53 @@ class Parser:
             self._eat(T.AT)
             # Either an ident or a keyword (kernel, pure, etc.)
             t = self._peek()
+            attr_name: str
             if t.kind == T.IDENT:
-                attrs.append(t.value)
+                attr_name = t.value
                 self.i += 1
             elif t.kind == T.KW_KERNEL:
-                attrs.append("kernel"); self.i += 1
+                attr_name = "kernel"; self.i += 1
             elif t.kind == T.KW_GRAD:
-                attrs.append("grad"); self.i += 1
+                attr_name = "grad"; self.i += 1
             else:
                 # accept any identifier-shaped keyword
                 if t.value.replace("_", "").isalnum():
-                    attrs.append(t.value); self.i += 1
+                    attr_name = t.value; self.i += 1
                 else:
                     raise ParseError("expected attribute name after @", t)
-            # optional (args) — not used in v0.1
+            # optional (args) — for @effect(io), @effect(io, rng) we
+            # capture each comma-separated ident as `effect:<name>`.
+            # For other attributes we record the bare name and the
+            # arg-bracketed payload as `<attr>:<arg>` for each arg too,
+            # so callers can introspect.
+            arg_idents: list[str] = []
             if self._at(T.LPAREN):
-                # skip balanced parens
-                depth = 0
-                while True:
+                self._eat(T.LPAREN)
+                depth = 1
+                while depth > 0:
                     t = self._peek()
                     if t.kind == T.EOF:
                         raise ParseError("unclosed attribute args", t)
-                    if t.kind == T.LPAREN: depth += 1
+                    if t.kind == T.LPAREN:
+                        depth += 1
+                        self.i += 1
                     elif t.kind == T.RPAREN:
                         depth -= 1
-                        if depth == 0:
-                            self.i += 1
-                            break
-                    self.i += 1
+                        self.i += 1
+                    elif t.kind == T.COMMA:
+                        self.i += 1
+                    elif t.kind == T.IDENT:
+                        if depth == 1:
+                            arg_idents.append(t.value)
+                        self.i += 1
+                    else:
+                        # Skip non-ident tokens inside the parens
+                        self.i += 1
+            if attr_name == "effect" and arg_idents:
+                for arg in arg_idents:
+                    attrs.append(f"effect:{arg}")
+            else:
+                attrs.append(attr_name)
         return attrs
 
     # ---- fn ----
@@ -1047,6 +1066,36 @@ class Parser:
 
     def _parse_pattern_atom(self) -> ast.Pattern:
         t = self._peek()
+        # Negative numeric literal in a pattern position (e.g. `-10`,
+        # `-10..=-1`, `-100..=100`). Eat the MINUS, parse the underlying
+        # primary, and wrap as Unary("-") so PatLit/PatRange downstream
+        # gets a numeric expression that the IR lowerer can fold.
+        if t.kind == T.MINUS:
+            minus_tok = t
+            self.i += 1
+            inner_tok = self._peek()
+            if inner_tok.kind not in (T.INT, T.FLOAT):
+                raise ParseError(
+                    f"expected numeric literal after '-' in pattern (got {inner_tok.kind} {inner_tok.value!r})",
+                    inner_tok,
+                )
+            inner = self._parse_primary()
+            lit_expr = ast.Unary(span=self._span_of(minus_tok), op="-",
+                                 operand=inner)
+            if self._at(T.DOTDOTEQ) or self._at(T.DOTDOT):
+                inclusive = self._at(T.DOTDOTEQ)
+                self.i += 1
+                # The high bound may also be negative.
+                if self._at(T.MINUS):
+                    self.i += 1
+                    hi_inner = self._parse_primary()
+                    hi = ast.Unary(span=hi_inner.span, op="-",
+                                   operand=hi_inner)
+                else:
+                    hi = self._parse_primary()
+                return ast.PatRange(span=self._span_of(minus_tok),
+                                    lo=lit_expr, hi=hi, inclusive=inclusive)
+            return ast.PatLit(span=self._span_of(minus_tok), value=lit_expr)
         if t.kind == T.IDENT and t.value == "_":
             self.i += 1
             return ast.PatWildcard(span=self._span_of(t))
@@ -1089,7 +1138,14 @@ class Parser:
             if self._at(T.DOTDOTEQ) or self._at(T.DOTDOT):
                 inclusive = self._at(T.DOTDOTEQ)
                 self.i += 1
-                hi = self._parse_primary()
+                # High bound may be negative (e.g. `0..-1` or `5..=-1`).
+                if self._at(T.MINUS):
+                    self.i += 1
+                    hi_inner = self._parse_primary()
+                    hi = ast.Unary(span=hi_inner.span, op="-",
+                                   operand=hi_inner)
+                else:
+                    hi = self._parse_primary()
                 return ast.PatRange(span=lit.span, lo=lit, hi=hi, inclusive=inclusive)
             return ast.PatLit(span=lit.span, value=lit)
         if t.kind == T.LPAREN:

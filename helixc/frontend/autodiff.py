@@ -632,10 +632,53 @@ def fmt(expr: A.Expr) -> str:
         return str(expr.value)
     if isinstance(expr, A.FloatLit):
         return f"{expr.value:g}"
+    if isinstance(expr, A.BoolLit):
+        return "true" if expr.value else "false"
     if isinstance(expr, A.Name):
         return expr.name
     if isinstance(expr, A.Binary):
         return f"({fmt(expr.left)} {expr.op} {fmt(expr.right)})"
     if isinstance(expr, A.Unary):
         return f"({expr.op}{fmt(expr.operand)})"
+    if isinstance(expr, A.Call):
+        callee = fmt(expr.callee) if not isinstance(expr.callee, A.Name) else expr.callee.name
+        return f"{callee}({', '.join(fmt(a) for a in expr.args)})"
+    if isinstance(expr, A.Block):
+        if expr.final_expr is not None and not expr.stmts:
+            return fmt(expr.final_expr)
+        return f"<Block>"
+    if isinstance(expr, A.If):
+        then_s = fmt(expr.then) if expr.then is not None else "()"
+        else_s = fmt(expr.else_) if expr.else_ is not None else "()"
+        return f"if {fmt(expr.cond)} {{ {then_s} }} else {{ {else_s} }}"
+    if isinstance(expr, A.Match):
+        arms = []
+        for arm in expr.arms:
+            arms.append(f"{_fmt_pattern(arm.pattern)} => {fmt(arm.body)}")
+        return f"match {fmt(expr.scrutinee)} {{ {', '.join(arms)} }}"
     return f"<{type(expr).__name__}>"
+
+
+def _fmt_pattern(pat: A.Pattern) -> str:
+    if isinstance(pat, A.PatWildcard):
+        return "_"
+    if isinstance(pat, A.PatLit):
+        return fmt(pat.value)
+    if isinstance(pat, A.PatBind):
+        prefix = "mut " if pat.is_mut else ""
+        return f"{prefix}{pat.name}"
+    if isinstance(pat, A.PatRange):
+        return f"{fmt(pat.lo)}..{fmt(pat.hi)}"
+    if isinstance(pat, A.PatOr):
+        return " | ".join(_fmt_pattern(a) for a in pat.alts)
+    if isinstance(pat, A.PatTuple):
+        return f"({', '.join(_fmt_pattern(e) for e in pat.elems)})"
+    if isinstance(pat, A.PatVariant):
+        segs = pat.path.segments if hasattr(pat.path, "segments") else (
+            pat.path if isinstance(pat.path, list) else [str(pat.path)]
+        )
+        path = "::".join(segs)
+        if pat.sub_patterns:
+            return f"{path}({', '.join(_fmt_pattern(s) for s in pat.sub_patterns)})"
+        return path
+    return f"<{type(pat).__name__}>"

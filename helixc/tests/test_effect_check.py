@@ -155,6 +155,81 @@ def test_recursive_pure_function_has_empty_closure():
     assert closure["fact"] == frozenset(), f"got {closure['fact']}"
 
 
+def test_effect_attribute_arg_captured_by_parser():
+    """Bug H: parser used to drop the (io) part of @effect(io), so the
+    typechecker couldn't tell which effects a function declared. Confirm
+    the parsed AST now records each effect as `effect:<name>`."""
+    from helixc.frontend.parser import parse
+    src = """
+    @effect(io)
+    fn print_thing() -> i32 { 42 }
+    @effect(io, rng)
+    fn both() -> i32 { 1 }
+    fn main() -> i32 { 0 }
+    """
+    p = parse(src)
+    by_name = {item.name: item.attrs for item in p.items
+               if hasattr(item, "attrs") and hasattr(item, "name")}
+    assert "effect:io" in by_name["print_thing"], by_name["print_thing"]
+    assert "effect:io" in by_name["both"], by_name["both"]
+    assert "effect:rng" in by_name["both"], by_name["both"]
+
+
+def test_pure_calling_effectful_fn_rejected_by_typecheck():
+    """End-to-end: @pure caller calls @effect(io) callee → typecheck error."""
+    from helixc.frontend.parser import parse
+    from helixc.frontend.typecheck import typecheck
+    src = """
+    @effect(io)
+    fn print_thing() -> i32 { 42 }
+    @pure
+    fn caller() -> i32 { print_thing() }
+    fn main() -> i32 { caller() }
+    """
+    p = parse(src)
+    errs = typecheck(p)
+    msgs = [str(e) for e in errs]
+    assert any("@pure" in m and "caller" in m and "print_thing" in m
+               for m in msgs), f"got {msgs}"
+
+
+def test_effectful_caller_missing_callee_effect_rejected():
+    """@effect(io) caller cannot call an @effect(rng) function unless it
+    also declares (rng) — effect inclusion must be verified."""
+    from helixc.frontend.parser import parse
+    from helixc.frontend.typecheck import typecheck
+    src = """
+    @effect(rng)
+    fn rand_thing() -> i32 { 7 }
+    @effect(io)
+    fn caller() -> i32 { rand_thing() }
+    fn main() -> i32 { 0 }
+    """
+    p = parse(src)
+    errs = typecheck(p)
+    msgs = [str(e) for e in errs]
+    assert any("rng" in m and "caller" in m for m in msgs), f"got {msgs}"
+
+
+def test_effect_inclusion_passes_when_caller_declares_superset():
+    """An @effect(io, rng) caller may invoke an @effect(io) function."""
+    from helixc.frontend.parser import parse
+    from helixc.frontend.typecheck import typecheck
+    src = """
+    @effect(io)
+    fn print_thing() -> i32 { 42 }
+    @effect(io, rng)
+    fn caller() -> i32 { print_thing() }
+    fn main() -> i32 { 0 }
+    """
+    p = parse(src)
+    errs = typecheck(p)
+    # Errors related to caller's call to print_thing should not fire.
+    msgs = [str(e) for e in errs]
+    assert not any("caller" in m and "print_thing" in m for m in msgs), \
+        f"unexpected: {msgs}"
+
+
 def main():
     tests = [(name, fn) for name, fn in globals().items()
              if name.startswith("test_") and callable(fn)]

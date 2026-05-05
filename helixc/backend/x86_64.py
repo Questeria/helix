@@ -596,12 +596,15 @@ class FnCompiler:
         # Pre-allocate slots for all SSA values across ALL blocks (not just entry)
         for blk in self.fn.blocks:
             for p in blk.params:
+                self._check_float_supported(p.ty)
                 self._alloc_slot(p)
             for op in blk.ops:
                 for r in op.results:
+                    self._check_float_supported(r.ty)
                     self._alloc_slot(r)
         # Pre-allocate slots for fn params (they share entry block params slot conceptually)
         for p in self.fn.params:
+            self._check_float_supported(p.ty)
             if p.id not in self.slots:
                 self._alloc_slot(p)
 
@@ -653,6 +656,17 @@ class FnCompiler:
 
     def _is_float_type(self, ty: tir.TIRType) -> bool:
         return isinstance(ty, tir.TIRScalar) and ty.name in ("f16", "bf16", "f32", "f64")
+
+    def _check_float_supported(self, ty: tir.TIRType) -> None:
+        """Phase 0 only supports f32 in the x86_64 backend. f16/bf16 are
+        narrower (and need the F16C/AVX-512 paths) and f64 needs movsd
+        (8-byte) ops we don't yet emit. Treating them as f32 silently
+        corrupts results, so we error explicitly."""
+        if isinstance(ty, tir.TIRScalar) and ty.name in ("f16", "bf16", "f64"):
+            raise NotImplementedError(
+                f"x86_64 backend supports only f32 in Phase 0; got '{ty.name}'. "
+                f"Either change to f32 or implement movsd/F16C codegen."
+            )
 
     def _emit_idiv_guarded(self, l_slot: int, r_slot: int, res_slot: int,
                            *, want_quotient: bool) -> None:
@@ -1135,27 +1149,48 @@ class FnCompiler:
             self.asm.mov_mem_rbp_eax(res_slot)
             return
         if op.kind == tir.OpKind.ARENA_GET:
-            # Return arena[idx + 1] (slot 0 is cursor).
+            # Return arena[idx + 1] (slot 0 is cursor). Out-of-bounds
+            # (negative when interpreted unsigned, or >= CAP) returns 0
+            # — defined behavior, no trap. Use jb (unsigned-below) so
+            # negative ecx fails the test.
             buf = self.asm.b
             idx_slot = self._slot_of(op.operands[0])
             res_slot = self._slot_of(op.results[0])
-            self.asm.mov_ecx_mem_rbp(idx_slot)   # ecx = index
-            self.asm.lea_rax_rip_rel("__helix_arena_base")
-            # eax = [rax + rcx*4 + 4]
-            buf.emit(0x8B, 0x44, 0x88, 0x04)     # mov eax, [rax + rcx*4 + 4]
+            self.asm.mov_ecx_mem_rbp(idx_slot)     # ecx = index
+            buf.emit(0x81, 0xF9)                   # cmp ecx, HELIX_ARENA_CAP
+            buf.emit_bytes(struct.pack("<I", HELIX_ARENA_CAP))
+            # Layout: jb in_bounds (+7) ; mov eax, 0 (5) ; jmp store (+11) ;
+            #         in_bounds: lea (7) ; mov eax, [rax+rcx*4+4] (4) ;
+            #         store: mov_mem_rbp_eax res_slot
+            buf.emit(0x72, 0x07)                   # jb in_bounds (skip 5+2 below)
+            self.asm.mov_eax_imm32(0)              # 5 bytes (out-of-bounds value)
+            buf.emit(0xEB, 0x0B)                   # jmp store (skip 7+4)
+            # in_bounds:
+            self.asm.lea_rax_rip_rel("__helix_arena_base")  # 7 bytes
+            buf.emit(0x8B, 0x44, 0x88, 0x04)       # mov eax, [rax+rcx*4+4]
+            # store:
             self.asm.mov_mem_rbp_eax(res_slot)
             return
         if op.kind == tir.OpKind.ARENA_SET:
+            # Out-of-bounds set silently no-ops (cursor untouched, no
+            # store). Layout uses pre-loaded value in edx so the
+            # bounds-check displacement only spans known-size ops.
             buf = self.asm.b
             idx_slot = self._slot_of(op.operands[0])
             val_slot = self._slot_of(op.operands[1])
-            self.asm.mov_eax_mem_rbp(val_slot)   # eax = value
-            buf.emit(0x89, 0xC2)                 # mov edx, eax
-            self.asm.mov_ecx_mem_rbp(idx_slot)   # ecx = index
-            self.asm.lea_rax_rip_rel("__helix_arena_base")
-            buf.emit(0x89, 0x54, 0x88, 0x04)     # mov [rax + rcx*4 + 4], edx
+            # Load value first (varies in size, but doesn't affect the
+            # post-cmp branch). Then ecx, then check.
+            self.asm.mov_eax_mem_rbp(val_slot)     # eax = value
+            buf.emit(0x89, 0xC2)                   # mov edx, eax (2 bytes)
+            self.asm.mov_ecx_mem_rbp(idx_slot)     # ecx = index
+            buf.emit(0x81, 0xF9)                   # cmp ecx, HELIX_ARENA_CAP (6 bytes)
+            buf.emit_bytes(struct.pack("<I", HELIX_ARENA_CAP))
+            # Layout: jae skip (+11) ; lea (7) ; mov [rax+rcx*4+4], edx (4) ; skip:
+            buf.emit(0x73, 0x0B)                   # jae skip (skip 7+4)
+            self.asm.lea_rax_rip_rel("__helix_arena_base")  # 7 bytes
+            buf.emit(0x89, 0x54, 0x88, 0x04)       # mov [rax+rcx*4+4], edx (4 bytes)
+            # skip:
             if op.results:
-                # Return value (for chaining); store 0 as placeholder.
                 res_slot = self._slot_of(op.results[0])
                 self.asm.mov_eax_imm32(0)
                 self.asm.mov_mem_rbp_eax(res_slot)
@@ -1285,8 +1320,12 @@ class FnCompiler:
                 path_sym = f"__helix_rftoa_path_{id(op):x}"
                 self._pending_strings.append((path_sym, path_data))
                 buf = self.asm.b
-                BUF_SIZE = 128  # disp8-friendly (max signed -128..127, but
-                                  # we use rsp+BUF_SIZE which fits disp8)
+                # IMPORTANT: BUF_SIZE must fit in signed 8-bit disp (max 127)
+                # if we use the disp8 sub-rsp form, OR use the imm32 form
+                # for larger sizes. Bug: previously BUF_SIZE=128 used disp8
+                # which sign-extended to -128 — adding 128 to rsp instead
+                # of subtracting (clobbering parent stack frame).
+                BUF_SIZE = 0x40   # 64 bytes — fits signed disp8 cleanly
 
                 # ---- sys_open(path, O_RDONLY=0) ----
                 buf.emit(0x48, 0x8D, 0x3D)            # lea rdi, [rip+disp]
@@ -1322,11 +1361,52 @@ class FnCompiler:
                 buf.emit(0x7D, 0x03)                    # jns +3 (skip xor)
                 buf.emit(0x4D, 0x31, 0xD2)              # xor r10, r10
 
+                # Now push each byte of the read buffer to the arena.
+                # rcx = byte counter, r10 = bytes_read (limit).
+                buf.emit(0x31, 0xC9)                    # xor ecx, ecx
+                # loop_start:
+                loop_start = buf.offset()
+                buf.emit(0x4C, 0x39, 0xD1)              # cmp rcx, r10
+                buf.emit(0x7D, 0x00)                    # jge end (placeholder)
+                jge_off = buf.offset() - 1
+                jge_after = buf.offset()
+                # movzx eax, byte [rsp + rcx]  (buffer[rcx])
+                buf.emit(0x0F, 0xB6, 0x04, 0x0C)
+                buf.emit(0x89, 0xC2)                    # mov edx, eax
+                # Inline arena_push.
+                self.asm.lea_rax_rip_rel("__helix_arena_base")
+                buf.emit(0x44, 0x8B, 0x18)              # mov r11d, [rax]
+                # cmp r11d, HELIX_ARENA_CAP
+                buf.emit(0x41, 0x81, 0xFB)
+                buf.emit_bytes(struct.pack("<I", HELIX_ARENA_CAP))
+                buf.emit(0x72, 0x02)                    # jb in_bounds (+2)
+                buf.emit(0xEB, 0x0B)                    # jmp loop_advance (+11)
+                # in_bounds:
+                buf.emit(0x42, 0x89, 0x54, 0x98, 0x04)  # mov [rax+r11*4+4], edx
+                buf.emit(0x41, 0xFF, 0xC3)              # inc r11d
+                buf.emit(0x44, 0x89, 0x18)              # mov [rax], r11d
+                # loop_advance:
+                buf.emit(0x48, 0xFF, 0xC1)              # inc rcx
+                # jmp loop_start (rel8 backward)
+                buf.emit(0xEB, 0x00)                    # placeholder
+                jmp_back_off = buf.offset() - 1
+                jmp_back_after = buf.offset()
+                back_disp = loop_start - jmp_back_after
+                if not (-128 <= back_disp <= 127):
+                    raise ValueError("read_file_to_arena loop disp out of rel8")
+                buf.bytes_[jmp_back_off] = back_disp & 0xFF
+                # end:
+                end_addr = buf.offset()
+                fwd_disp = end_addr - jge_after
+                if not (-128 <= fwd_disp <= 127):
+                    raise ValueError("read_file_to_arena jge disp out of rel8")
+                buf.bytes_[jge_off] = fwd_disp & 0xFF
+
                 # Restore stack.
                 buf.emit(0x48, 0x83, 0xC4, BUF_SIZE)    # add rsp, BUF_SIZE
                 buf.emit(0x48, 0x83, 0xC4, 0x08)        # add rsp, 8 (fd)
 
-                # Return r10.
+                # Return r10 (bytes pushed).
                 buf.emit(0x4C, 0x89, 0xD0)              # mov rax, r10
                 if op.results:
                     res_slot = self._slot_of(op.results[0])

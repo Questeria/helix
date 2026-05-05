@@ -116,6 +116,88 @@ def test_multi_use_of_param_sums():
     assert out == "3", f"got {out}"
 
 
+def test_match_bool_propagates_per_arm():
+    # ∂(match true { true => 2x, false => x+1 })/∂x = match { true => 2, false => 1 }
+    body = _body_of("""
+    fn f(x: f32) -> f32 {
+        match true {
+            true => x * 2.0,
+            false => x + 1.0
+        }
+    }
+    """)
+    grads = differentiate_reverse(body, ["x"])
+    out = fmt(grads["x"])
+    assert "match" in out, f"expected match in gradient, got {out}"
+    assert "2" in out and "1" in out, f"expected per-arm derivatives, got {out}"
+
+
+def test_match_int_with_wildcard():
+    body = _body_of("""
+    fn f(x: f32, k: i32) -> f32 {
+        match k {
+            0 => x * 3.0,
+            1 => x * 5.0,
+            _ => 0.0
+        }
+    }
+    """)
+    grads = differentiate_reverse(body, ["x"])
+    out = fmt(grads["x"])
+    assert "match" in out, f"expected match wrapper, got {out}"
+    assert "3" in out and "5" in out, f"expected per-arm derivatives 3 and 5, got {out}"
+
+
+def test_match_with_pattern_shadow_is_zero():
+    # PatBind 'x' shadows the parameter inside the arm; the body's 'x'
+    # refers to the bound name, not the param, so gradient is 0.
+    body = _body_of("""
+    fn f(x: f32) -> f32 {
+        match 1.0 {
+            x => x,
+            _ => 0.0
+        }
+    }
+    """)
+    grads = differentiate_reverse(body, ["x"])
+    out = fmt(grads["x"])
+    assert out == "0", f"shadowed param should give 0, got {out}"
+
+
+def test_match_no_param_use():
+    # Match where no arm references the param → gradient is 0.
+    body = _body_of("""
+    fn f(x: f32) -> f32 {
+        match true {
+            true => 5.0,
+            false => 7.0
+        }
+    }
+    """)
+    grads = differentiate_reverse(body, ["x"])
+    out = fmt(grads["x"])
+    assert out == "0", f"no param use should give 0, got {out}"
+
+
+def test_match_chain_rule():
+    # f = (match true { true => 2x, false => 3x })^2
+    # Per arm: d(let_body^2)/dx = 2*let_body * d(let_body)/dx
+    # arm 1: 2*(2x)*2 = 8x; arm 2: 2*(3x)*3 = 18x. We just check the
+    # gradient AST contains a match wrapper and references x.
+    body = _body_of("""
+    fn f(x: f32) -> f32 {
+        let y = match true {
+            true => x * 2.0,
+            false => x * 3.0
+        };
+        y * y
+    }
+    """)
+    grads = differentiate_reverse(body, ["x"])
+    out = fmt(grads["x"])
+    assert "match" in out and "x" in out, f"got {out}"
+
+
 def main():
     tests = [(name, fn) for name, fn in globals().items()
              if name.startswith("test_") and callable(fn)]

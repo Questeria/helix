@@ -28,6 +28,33 @@ import struct
 from .. import tir
 
 
+_INT_BITS = {
+    "i8": 8, "u8": 8,
+    "i16": 16, "u16": 16,
+    "i32": 32, "u32": 32, "isize": 32, "usize": 32,
+    "i64": 64, "u64": 64,
+    "bool": 32,  # bool comparisons reified to i32 in IR
+}
+
+
+def _wrap_int_to_type(value: int, ty: "tir.TIRType") -> int:
+    """Wrap a Python int to the signed range of the given TIR scalar type
+    (two's-complement, like x86 hardware). Phase 0 backend uses this same
+    wraparound at runtime, so const-folding must match — otherwise a
+    folded `INT_MAX + 1` evaluates to 2147483648 (Python int, no wrap)
+    and gets stored as 8 bytes, breaking comparisons that work fine when
+    folding is disabled."""
+    bits = 32  # default for unknown / generic scalar types
+    if isinstance(ty, tir.TIRScalar):
+        bits = _INT_BITS.get(ty.name, 32)
+    mask = (1 << bits) - 1
+    half = 1 << (bits - 1)
+    v = value & mask
+    if v >= half:
+        v -= (1 << bits)
+    return v
+
+
 def _try_algebraic_identity(op: tir.Op, defs: dict,
                              res: "tir.Value") -> "tir.Op | None":
     """Apply algebraic identities that simplify ops with one literal operand
@@ -284,6 +311,8 @@ def _try_fold_op(op: tir.Op, defs: dict) -> tir.Op | None:
                     return None
             except Exception:
                 return None
+            # Wrap to target type's bit width to match runtime semantics.
+            v = _wrap_int_to_type(v, res.ty)
             return tir.Op(kind=tir.OpKind.CONST_INT,
                          operands=[],
                          results=[res],
@@ -347,7 +376,7 @@ def _try_fold_op(op: tir.Op, defs: dict) -> tir.Op | None:
         if d is None:
             return None
         if d.kind == tir.OpKind.CONST_INT:
-            v = -int(d.attrs["value"])
+            v = _wrap_int_to_type(-int(d.attrs["value"]), res.ty)
             return tir.Op(kind=tir.OpKind.CONST_INT,
                          operands=[],
                          results=[res],

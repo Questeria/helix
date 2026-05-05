@@ -334,7 +334,71 @@ def _propagate(node: A.Expr, adj: A.Expr, acc: dict[str, list[A.Expr]]) -> None:
             )
             acc[p].append(wrapped)
         return
+    if isinstance(node, A.Match):
+        # Like If: the runtime selects exactly one arm, so the gradient is a
+        # Match over the same scrutinee/patterns whose bodies are the
+        # per-arm gradient contributions. Discrete choice → scrutinee has
+        # zero local derivative. Pattern-bound names (PatBind) are local
+        # to the arm; if they shadow a param, that param's contribution
+        # inside the arm is dropped (the shadow shadows). If a body's
+        # gradient depends on the scrutinee through a PatBind alias, that
+        # is NOT propagated back to the scrutinee — known limitation.
+        arm_accs: list[dict[str, list[A.Expr]]] = [
+            {p: [] for p in acc} for _ in node.arms
+        ]
+        for i, arm in enumerate(node.arms):
+            body = arm.body
+            adj_for_arm = adj if i == 0 else copy.deepcopy(adj)
+            shadowed = _pattern_shadowed_names(arm.pattern, set(acc.keys()))
+            visible_acc = {p: arm_accs[i][p] for p in acc if p not in shadowed}
+            if isinstance(body, A.Block):
+                if body.final_expr is not None:
+                    _propagate(body.final_expr, adj_for_arm, visible_acc)
+            else:
+                _propagate(body, adj_for_arm, visible_acc)
+        for p in acc:
+            any_contrib = any(arm_accs[i][p] for i in range(len(node.arms)))
+            if not any_contrib:
+                continue
+            zero = A.FloatLit(span=node.span, value=0.0)
+            new_arms: list[A.MatchArm] = []
+            for i, arm in enumerate(node.arms):
+                body_grad = (_sum_exprs(arm_accs[i][p], node.span)
+                             if arm_accs[i][p] else zero)
+                new_arms.append(A.MatchArm(
+                    span=arm.span,
+                    pattern=copy.deepcopy(arm.pattern),
+                    guard=copy.deepcopy(arm.guard) if arm.guard is not None else None,
+                    body=body_grad,
+                ))
+            scrut_copy = copy.deepcopy(node.scrutinee)
+            wrapped = A.Match(span=node.span, scrutinee=scrut_copy,
+                              arms=new_arms)
+            acc[p].append(wrapped)
+        return
     # Unsupported nodes: silently produce no contribution.
+
+
+def _pattern_shadowed_names(pat: A.Pattern, candidates: set[str]) -> set[str]:
+    """Return the subset of `candidates` shadowed by names bound in `pat`."""
+    if isinstance(pat, A.PatBind):
+        return {pat.name} & candidates
+    if isinstance(pat, A.PatOr):
+        out: set[str] = set()
+        for alt in pat.alts:
+            out |= _pattern_shadowed_names(alt, candidates)
+        return out
+    if isinstance(pat, A.PatTuple):
+        out = set()
+        for sub in pat.elems:
+            out |= _pattern_shadowed_names(sub, candidates)
+        return out
+    if isinstance(pat, A.PatVariant):
+        out = set()
+        for sub in (pat.sub_patterns or []):
+            out |= _pattern_shadowed_names(sub, candidates)
+        return out
+    return set()
 
 
 def _sum_exprs(exprs: list[A.Expr], span: A.Span) -> A.Expr:
