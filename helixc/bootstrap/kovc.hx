@@ -36,10 +36,23 @@ fn emit_u16_le(v: i32) -> i32 {
 }
 
 fn emit_u32_le(v: i32) -> i32 {
-    __arena_push(v % 256);
-    __arena_push((v / 256) % 256);
-    __arena_push((v / 65536) % 256);
-    __arena_push((v / 16777216) % 256);
+    // Phase-0 doesn't have bitwise ops, AND Helix's `/` is C-style
+    // truncated division — so `-8 / 256 = 0`, not -1. A naive
+    // decomposition writes `F8 00 00 00` for -8 instead of the
+    // correct `F8 FF FF FF`. Workaround: subtract each emitted
+    // byte before dividing, so the next round sees a value whose
+    // exact division by 256 yields -1 for negative inputs.
+    let b0 = (v % 256 + 256) % 256;
+    let v1 = (v - b0) / 256;
+    let b1 = (v1 % 256 + 256) % 256;
+    let v2 = (v1 - b1) / 256;
+    let b2 = (v2 % 256 + 256) % 256;
+    let v3 = (v2 - b2) / 256;
+    let b3 = (v3 % 256 + 256) % 256;
+    __arena_push(b0);
+    __arena_push(b1);
+    __arena_push(b2);
+    __arena_push(b3);
     0
 }
 
@@ -129,10 +142,19 @@ fn emit_padding_to_code() -> i32 {
 // code size is known.
 // --------------------------------------------------------------
 fn patch_u32_le(idx: i32, v: i32) -> i32 {
-    __arena_set(idx, v % 256);
-    __arena_set(idx + 1, (v / 256) % 256);
-    __arena_set(idx + 2, (v / 65536) % 256);
-    __arena_set(idx + 3, (v / 16777216) % 256);
+    // Same negative-value workaround as emit_u32_le: must
+    // produce `FF FF FF FF` for -1, not `FF 00 00 00`.
+    let b0 = (v % 256 + 256) % 256;
+    let v1 = (v - b0) / 256;
+    let b1 = (v1 % 256 + 256) % 256;
+    let v2 = (v1 - b1) / 256;
+    let b2 = (v2 % 256 + 256) % 256;
+    let v3 = (v2 - b2) / 256;
+    let b3 = (v3 % 256 + 256) % 256;
+    __arena_set(idx, b0);
+    __arena_set(idx + 1, b1);
+    __arena_set(idx + 2, b2);
+    __arena_set(idx + 3, b3);
     0
 }
 
