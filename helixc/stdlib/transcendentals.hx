@@ -109,6 +109,126 @@
     }
 }
 
+// =========================================================================
+// f64 transcendentals (Phase 1.5). Mirror the f32 versions above with f64
+// arithmetic so callers that pick f64 don't lose precision. Backed by the
+// wide-load codegen fix in SELECT/BR/LOAD_VAR/STORE_VAR.
+// =========================================================================
+
+@pure fn __exp_taylor_f64(r: f64) -> f64 {
+    let x2 = r * r;
+    let x3 = x2 * r;
+    let x4 = x2 * x2;
+    let x5 = x4 * r;
+    let x6 = x3 * x3;
+    let x7 = x6 * r;
+    1.0_f64 + r
+        + x2 * 0.5_f64
+        + x3 * 0.16666666666666666_f64
+        + x4 * 0.041666666666666664_f64
+        + x5 * 0.008333333333333333_f64
+        + x6 * 0.001388888888888889_f64
+        + x7 * 0.0001984126984126984_f64
+}
+
+@pure fn __exp_f64(x: f64) -> f64 {
+    let z = x * 1.4426950408889634_f64 + 0.5_f64;
+    let k_trunc = z as i32;
+    let k = if z >= 0.0_f64 { k_trunc }
+            else { if (k_trunc as f64) > z { k_trunc - 1 } else { k_trunc } };
+    let r = x - (k as f64) * 0.6931471805599453_f64;
+    let exp_r = __exp_taylor_f64(r);
+    let kc = if k > 1023 { 1023 }
+             else { if k < (0 - 1023) { 0 - 1023 } else { k } };
+    let mut scale: f64 = 1.0_f64;
+    if kc >= 0 {
+        let mut i: i32 = 0;
+        while i < kc { scale = scale * 2.0_f64; i = i + 1; }
+    } else {
+        let neg_kc = 0 - kc;
+        let mut i: i32 = 0;
+        while i < neg_kc { scale = scale * 0.5_f64; i = i + 1; }
+    }
+    scale * exp_r
+}
+
+@pure fn __sqrt_f64(x: f64) -> f64 {
+    if x <= 0.0_f64 {
+        0.0_f64
+    } else {
+        let y0 = x * 0.5_f64 + 0.5_f64;
+        let y1 = (y0 + x / y0) * 0.5_f64;
+        let y2 = (y1 + x / y1) * 0.5_f64;
+        let y3 = (y2 + x / y2) * 0.5_f64;
+        let y4 = (y3 + x / y3) * 0.5_f64;
+        let y5 = (y4 + x / y4) * 0.5_f64;
+        let y6 = (y5 + x / y5) * 0.5_f64;
+        y6
+    }
+}
+
+@pure fn __sigmoid_f64(x: f64) -> f64 {
+    if x > 30.0_f64 { 1.0_f64 }
+    else { if x < 0.0_f64 - 30.0_f64 { 0.0_f64 }
+           else { 1.0_f64 / (1.0_f64 + __exp_f64(0.0_f64 - x)) }
+    }
+}
+
+@pure fn __relu_f64(x: f64) -> f64 {
+    if x > 0.0_f64 { x } else { 0.0_f64 }
+}
+
+@pure fn __abs_f64(x: f64) -> f64 {
+    if x < 0.0_f64 { 0.0_f64 - x } else { x }
+}
+
+@pure fn __min_f64(a: f64, b: f64) -> f64 {
+    if a < b { a } else { b }
+}
+
+@pure fn __max_f64(a: f64, b: f64) -> f64 {
+    if a > b { a } else { b }
+}
+
+@pure fn __clamp_f64(x: f64, lo: f64, hi: f64) -> f64 {
+    if x < lo { lo } else { if x > hi { hi } else { x } }
+}
+
+@pure fn __sin_f64(x: f64) -> f64 {
+    let x2 = x * x;
+    let x3 = x2 * x;
+    let x5 = x3 * x2;
+    let x7 = x5 * x2;
+    x - x3 * 0.16666666666666666_f64
+      + x5 * 0.008333333333333333_f64
+      - x7 * 0.0001984126984126984_f64
+}
+
+@pure fn __cos_f64(x: f64) -> f64 {
+    let x2 = x * x;
+    let x4 = x2 * x2;
+    let x6 = x4 * x2;
+    1.0_f64 - x2 * 0.5_f64
+            + x4 * 0.041666666666666664_f64
+            - x6 * 0.001388888888888889_f64
+}
+
+@pure fn __log_f64(x: f64) -> f64 {
+    let y = x - 1.0_f64;
+    let y2 = y * y;
+    let y3 = y2 * y;
+    let y4 = y3 * y;
+    let y5 = y4 * y;
+    let y6 = y5 * y;
+    let y7 = y6 * y;
+    y - y2 * 0.5_f64
+      + y3 * 0.3333333333333333_f64
+      - y4 * 0.25_f64
+      + y5 * 0.2_f64
+      - y6 * 0.16666666666666666_f64
+      + y7 * 0.14285714285714285_f64
+}
+
 // Sigmoid: bounded activation in (0, 1). Now backed by range-reduced exp.
 // Asymptotic short-circuit only for very large |x|.
 @pure fn __sigmoid(x: f32) -> f32 {

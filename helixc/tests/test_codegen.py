@@ -2907,6 +2907,58 @@ def test_generic_nested_call():
     assert code == 42, f"expected 42, got {code}"
 
 
+def test_f64_transcendental_exp():
+    """Phase 1.5: __exp_f64. Verify exp(0) = 1 (cast back to i32 -> 1)."""
+    src = """
+    fn main() -> i32 { __exp_f64(0.0_f64) as i32 }
+    """
+    code = compile_and_run(src)
+    assert code == 1, f"expected 1, got {code}"
+
+
+def test_f64_transcendental_sqrt():
+    """__sqrt_f64(16.0) ≈ 4.0 (cast to i32 -> 4). Newton iteration converges."""
+    src = """
+    fn main() -> i32 { __sqrt_f64(16.0_f64) as i32 }
+    """
+    code = compile_and_run(src)
+    assert code == 4, f"expected 4, got {code}"
+
+
+def test_f64_transcendental_sigmoid():
+    """__sigmoid_f64(31.0): hits the `x > 30` early-exit guard so the
+    result is 1.0 exactly. (At x=30.0 the strict-greater guard misses
+    by a hair and the Taylor path returns ~0.999, which truncates to 0
+    when cast to i32 — that's the unbiased fast-path semantics.)"""
+    src = """
+    fn main() -> i32 { __sigmoid_f64(31.0_f64) as i32 }
+    """
+    code = compile_and_run(src)
+    assert code == 1, f"expected 1, got {code}"
+
+
+def test_f64_transcendental_sigmoid_zero():
+    """sigmoid(0) = 0.5. cast to i32 -> 0; * 100 -> 50."""
+    src = """
+    fn main() -> i32 { (__sigmoid_f64(0.0_f64) * 100.0_f64) as i32 }
+    """
+    code = compile_and_run(src)
+    assert code == 50, f"expected 50, got {code}"
+
+
+def test_f64_helpers_abs_clamp():
+    """__abs_f64(-5.5) = 5.5 (-> 5 as i32). __clamp_f64(20.0, 0.0, 10.0) = 10."""
+    src = """
+    fn main() -> i32 {
+        let a = __abs_f64(0.0_f64 - 5.5_f64) as i32;
+        let b = __clamp_f64(20.0_f64, 0.0_f64, 10.0_f64) as i32;
+        a + b
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 15, f"expected 15 (5+10), got {code}"
+
+
 def test_module_block_basic():
     """Phase 1.7: block module. `mod math { fn add(a, b) { a + b } }`
     flattens to `math__add`, called as `math::add(...)`."""

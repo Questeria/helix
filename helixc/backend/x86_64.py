@@ -1364,6 +1364,9 @@ class FnCompiler:
             a_slot = self._slot_of(op.operands[1])
             b_slot = self._slot_of(op.operands[2])
             res_slot = self._slot_of(op.results[0])
+            res_ty = op.results[0].ty
+            is_f64 = self._is_f64_type(res_ty)
+            is_i64 = self._is_i64_type(res_ty)
             buf = self.asm.b
             # mov eax, [cond]
             self.asm.mov_eax_mem_rbp(cond_slot)
@@ -1373,30 +1376,43 @@ class FnCompiler:
             buf.emit(0x74, 0x00)
             je_disp_off = buf.offset() - 1
             je_after = buf.offset()
-            # load a
-            self.asm.mov_eax_mem_rbp(a_slot)
+            # load a (use 64-bit mov / movsd for f64/i64 so all 8 bytes flow)
+            if is_f64:
+                self.asm._movsd_load_xmmN(0, a_slot)
+            elif is_i64:
+                self.asm.mov_rax_mem_rbp(a_slot)
+            else:
+                self.asm.mov_eax_mem_rbp(a_slot)
             # jmp rel8 — placeholder
             buf.emit(0xEB, 0x00)
             jmp_disp_off = buf.offset() - 1
             jmp_after = buf.offset()
             # SKIP_A: load b
             skip_a_addr = buf.offset()
-            self.asm.mov_eax_mem_rbp(b_slot)
+            if is_f64:
+                self.asm._movsd_load_xmmN(0, b_slot)
+            elif is_i64:
+                self.asm.mov_rax_mem_rbp(b_slot)
+            else:
+                self.asm.mov_eax_mem_rbp(b_slot)
             end_addr = buf.offset()
             # Patch je: skip past (load_a + jmp), targeting skip_a_addr
             je_disp = skip_a_addr - je_after
             jmp_disp = end_addr - jmp_after
             if not (-128 <= je_disp <= 127) or not (-128 <= jmp_disp <= 127):
-                # Should not happen for a single mov + jmp, but guard anyway —
-                # current load is at most 7 bytes (disp32 + REX), so disp <= 9.
                 raise ValueError(
                     f"SELECT branch displacement out of rel8 range: "
                     f"je={je_disp}, jmp={jmp_disp}"
                 )
             buf.bytes_[je_disp_off] = je_disp & 0xFF
             buf.bytes_[jmp_disp_off] = jmp_disp & 0xFF
-            # store result
-            self.asm.mov_mem_rbp_eax(res_slot)
+            # store result (64-bit for wide types)
+            if is_f64:
+                self.asm.movsd_mem_rbp_xmm0(res_slot)
+            elif is_i64:
+                self.asm.mov_mem_rbp_rax(res_slot)
+            else:
+                self.asm.mov_mem_rbp_eax(res_slot)
             return
         if op.kind == tir.OpKind.CALL:
             target = op.attrs.get("target", "?")
@@ -1487,8 +1503,16 @@ class FnCompiler:
             if op.operands and target_blk.params:
                 src_slot = self._slot_of(op.operands[0])
                 dst_slot = self._slot_of(target_blk.params[0])
-                self.asm.mov_eax_mem_rbp(src_slot)
-                self.asm.mov_mem_rbp_eax(dst_slot)
+                operand_ty = op.operands[0].ty
+                if self._is_f64_type(operand_ty):
+                    self.asm._movsd_load_xmmN(0, src_slot)
+                    self.asm.movsd_mem_rbp_xmm0(dst_slot)
+                elif self._is_i64_type(operand_ty):
+                    self.asm.mov_rax_mem_rbp(src_slot)
+                    self.asm.mov_mem_rbp_rax(dst_slot)
+                else:
+                    self.asm.mov_eax_mem_rbp(src_slot)
+                    self.asm.mov_mem_rbp_eax(dst_slot)
             self.asm.jmp_rel32(target_label)
             return
         if op.kind == tir.OpKind.COND_BR:
@@ -1513,12 +1537,18 @@ class FnCompiler:
             name = op.attrs["name"]
             var_slot = self.var_slots[name]
             res_slot = self._slot_of(op.results[0])
-            # Use 32-bit moves for both int and f32 since the bit pattern
-            # round-trips correctly. For f64 (not yet supported) we'd
-            # need a 64-bit path. Same for STORE_VAR below.
-            if self._is_float_type(op.results[0].ty):
+            # 32-bit movs for i32 / f32 (bit pattern round-trips). 64-bit
+            # movs for i64 / f64 so the upper 4 bytes survive the copy.
+            res_ty = op.results[0].ty
+            if self._is_f64_type(res_ty):
+                self.asm._movsd_load_xmmN(0, var_slot)
+                self.asm.movsd_mem_rbp_xmm0(res_slot)
+            elif self._is_float_type(res_ty):
                 self.asm.movss_xmm0_mem_rbp(var_slot)
                 self.asm.movss_mem_rbp_xmm0(res_slot)
+            elif self._is_i64_type(res_ty):
+                self.asm.mov_rax_mem_rbp(var_slot)
+                self.asm.mov_mem_rbp_rax(res_slot)
             else:
                 self.asm.mov_eax_mem_rbp(var_slot)
                 self.asm.mov_mem_rbp_eax(res_slot)
@@ -1527,9 +1557,16 @@ class FnCompiler:
             name = op.attrs["name"]
             var_slot = self.var_slots[name]
             src_slot = self._slot_of(op.operands[0])
-            if self._is_float_type(op.operands[0].ty):
+            src_ty = op.operands[0].ty
+            if self._is_f64_type(src_ty):
+                self.asm._movsd_load_xmmN(0, src_slot)
+                self.asm.movsd_mem_rbp_xmm0(var_slot)
+            elif self._is_float_type(src_ty):
                 self.asm.movss_xmm0_mem_rbp(src_slot)
                 self.asm.movss_mem_rbp_xmm0(var_slot)
+            elif self._is_i64_type(src_ty):
+                self.asm.mov_rax_mem_rbp(src_slot)
+                self.asm.mov_mem_rbp_rax(var_slot)
             else:
                 self.asm.mov_eax_mem_rbp(src_slot)
                 self.asm.mov_mem_rbp_eax(var_slot)
