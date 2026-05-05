@@ -2909,6 +2909,67 @@ def test_generic_nested_call():
     assert code == 42, f"expected 42, got {code}"
 
 
+def test_agi_tree_eq_shallow():
+    """Phase 4 step 4: tree-node structural equality."""
+    src = """
+    fn main() -> i32 {
+        let a = tree_node_new(1, 2, 3, 4);
+        let b = tree_node_new(1, 2, 3, 4);
+        let c = tree_node_new(1, 2, 9, 4);
+        tree_eq_shallow(a, b) * 10 + tree_eq_shallow(a, c)
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 10, f"expected 10 (1*10 + 0), got {code}"
+
+
+def test_agi_tree_hash_stable():
+    """Same node values yield same hash."""
+    src = """
+    fn main() -> i32 {
+        let a = tree_node_new(7, 8, 9, 10);
+        let b = tree_node_new(7, 8, 9, 10);
+        if tree_hash_shallow(a) == tree_hash_shallow(b) { 42 } else { 0 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_agi_bag_similarity():
+    """Bag intersection: [1,2,3,4] vs [3,4,5,6] = 2 shared."""
+    src = """
+    fn main() -> i32 {
+        let a = t1d_new(4);
+        ti1d_set(a, 0, 1); ti1d_set(a, 1, 2);
+        ti1d_set(a, 2, 3); ti1d_set(a, 3, 4);
+        let b = t1d_new(4);
+        ti1d_set(b, 0, 3); ti1d_set(b, 1, 4);
+        ti1d_set(b, 2, 5); ti1d_set(b, 3, 6);
+        bag_similarity(a, 4, b, 4)
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 2, f"expected 2 (shared 3 and 4), got {code}"
+
+
+def test_agi_sequence_match():
+    """Hamming-style positional match: [1,2,3,4] vs [1,9,3,9] = 2 hits."""
+    src = """
+    fn main() -> i32 {
+        let a = t1d_new(4);
+        ti1d_set(a, 0, 1); ti1d_set(a, 1, 2);
+        ti1d_set(a, 2, 3); ti1d_set(a, 3, 4);
+        let b = t1d_new(4);
+        ti1d_set(b, 0, 1); ti1d_set(b, 1, 9);
+        ti1d_set(b, 2, 3); ti1d_set(b, 3, 9);
+        sequence_match(a, b, 4)
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 2, f"expected 2 (positions 0 and 2 match), got {code}"
+
+
 def test_agi_bfs_queue_fifo():
     """Phase 4 step 3: BFS FIFO queue. enqueue 10,20,30; dequeue twice
     yields 10 then 20."""
