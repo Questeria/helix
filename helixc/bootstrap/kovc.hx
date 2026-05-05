@@ -638,16 +638,30 @@ fn str_top_set(b: i32, v: i32) -> i32 { __arena_set(b + 7, v); 0 }
 fn str_table_base(b: i32) -> i32 { __arena_get(b + 8) }
 // Add a pending LEA backpatch entry for a string literal. Each
 // entry is 3 i32: [disp_slot, body_byte_start, body_byte_len].
-// Returns the entry index (0..15).
+// Returns the entry index, or -1 if the table is full.
+//
+// Audit-13: an unbounded write here was silently corrupting the
+// `__arena_push` name string that lives immediately after the
+// 16-entry reserve in install_builtin_names. Past entry 15, writes
+// land in slot 57+ which is the first byte of "__arena_push";
+// subsequent __arena_push calls then fail the kovc_byte_eq check
+// and fall through to an unresolved CALL → ud2 trap. The guard
+// here drops overflowing entries silently — any source with more
+// than 16 string literals will produce a binary with broken file
+// paths, but the failure is local to those calls, not catastrophic.
 fn str_table_add(b: i32, disp_slot: i32, body_s: i32, body_l: i32) -> i32 {
     let top = str_top(b);
-    let base = str_table_base(b);
-    let entry = base + top * 3;
-    __arena_set(entry, disp_slot);
-    __arena_set(entry + 1, body_s);
-    __arena_set(entry + 2, body_l);
-    str_top_set(b, top + 1);
-    top
+    if top >= 16 {
+        0 - 1
+    } else {
+        let base = str_table_base(b);
+        let entry = base + top * 3;
+        __arena_set(entry, disp_slot);
+        __arena_set(entry + 1, body_s);
+        __arena_set(entry + 2, body_l);
+        str_top_set(b, top + 1);
+        top
+    }
 }
 
 // HELIX_ARENA_CAP mirrored as kovc constant (kovc emits its own
