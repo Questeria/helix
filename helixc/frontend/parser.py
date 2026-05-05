@@ -1307,7 +1307,7 @@ def parse(source: str, filename: str = "<input>",
         # Auto-include all .hx files in the stdlib directory. Phase 1.9
         # adds option.hx / result.hx / vec.hx alongside transcendentals.hx;
         # any future stdlib drop-in just lands in this folder.
-        stdlib_files = ["transcendentals.hx", "option.hx", "result.hx", "vec.hx", "autodiff.hx", "tensor.hx", "nn.hx", "agi_memory.hx"]
+        stdlib_files = ["transcendentals.hx", "option.hx", "result.hx", "vec.hx", "autodiff.hx", "tensor.hx", "nn.hx", "agi_memory.hx", "agi_search.hx"]
         user_names = {item.name for item in user_prog.items
                       if isinstance(item, ast.FnDecl)}
         user_enum_names = {item.name for item in user_prog.items

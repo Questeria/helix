@@ -2909,6 +2909,70 @@ def test_generic_nested_call():
     assert code == 42, f"expected 42, got {code}"
 
 
+def test_agi_bfs_queue_fifo():
+    """Phase 4 step 3: BFS FIFO queue. enqueue 10,20,30; dequeue twice
+    yields 10 then 20."""
+    src = """
+    fn main() -> i32 {
+        let q = bfs_queue_new();
+        bfs_enqueue(q, 10);
+        bfs_enqueue(q, 20);
+        bfs_enqueue(q, 30);
+        let a = bfs_dequeue(q);
+        let b = bfs_dequeue(q);
+        a + b
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 30, f"expected 30 (10+20), got {code}"
+
+
+def test_agi_visited_dedup():
+    """Visited set: marking the same state twice returns 1 first call,
+    0 second call."""
+    src = """
+    fn main() -> i32 {
+        let v = visited_new();
+        let first = visited_mark(v, 7);
+        let second = visited_mark(v, 7);
+        let third = visited_mark(v, 8);
+        // first=1, second=0, third=1 -> sum = 2
+        first + second + third
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 2, f"expected 2 (1+0+1), got {code}"
+
+
+def test_agi_hillclimb_picks_best():
+    """hillclimb_step picks the highest-scoring neighbor from a list."""
+    src = """
+    fn main() -> i32 {
+        // neighbors = [3, 7, 2]; scores indexed by state-id:
+        //   scores[2]=10, scores[3]=5, scores[7]=20
+        let neighbors = t1d_new(3);
+        ti1d_set(neighbors, 0, 3);
+        ti1d_set(neighbors, 1, 7);
+        ti1d_set(neighbors, 2, 2);
+        // Build score table 0..9
+        let scores = t1d_new(10);
+        ti1d_set(scores, 0, 0);
+        ti1d_set(scores, 1, 0);
+        ti1d_set(scores, 2, 10);
+        ti1d_set(scores, 3, 5);
+        ti1d_set(scores, 4, 0);
+        ti1d_set(scores, 5, 0);
+        ti1d_set(scores, 6, 0);
+        ti1d_set(scores, 7, 20);
+        ti1d_set(scores, 8, 0);
+        ti1d_set(scores, 9, 0);
+        hillclimb_step(neighbors, 3, scores)
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 7, f"expected 7 (highest score), got {code}"
+
+
 def test_agi_ep_record_and_count():
     """Phase 4 step 2: episodic memory. Record 3 events, check count."""
     src = """
