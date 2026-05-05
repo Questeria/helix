@@ -1300,21 +1300,34 @@ def parse(source: str, filename: str = "<input>",
     user_prog = Parser(lex(source, filename)).parse_program()
     if include_stdlib:
         import os as _os
-        stdlib_path = _os.path.join(
+        stdlib_dir = _os.path.join(
             _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))),
-            "stdlib", "transcendentals.hx"
+            "stdlib",
         )
-        if _os.path.isfile(stdlib_path):
+        # Auto-include all .hx files in the stdlib directory. Phase 1.9
+        # adds option.hx / result.hx / vec.hx alongside transcendentals.hx;
+        # any future stdlib drop-in just lands in this folder.
+        stdlib_files = ["transcendentals.hx", "option.hx", "result.hx", "vec.hx"]
+        user_names = {item.name for item in user_prog.items
+                      if isinstance(item, ast.FnDecl)}
+        user_enum_names = {item.name for item in user_prog.items
+                           if isinstance(item, ast.EnumDecl)}
+        for fname in stdlib_files:
+            stdlib_path = _os.path.join(stdlib_dir, fname)
+            if not _os.path.isfile(stdlib_path):
+                continue
             with open(stdlib_path, encoding="utf-8") as f:
                 stdlib_src = f.read()
             stdlib_prog = Parser(lex(stdlib_src, stdlib_path)).parse_program()
-            # Don't redefine functions the user already defined with the same
-            # name — user wins.
-            user_names = {item.name for item in user_prog.items
-                          if isinstance(item, ast.FnDecl)}
             for item in stdlib_prog.items:
-                if isinstance(item, ast.FnDecl) and item.name not in user_names:
-                    user_prog.items.append(item)
+                if isinstance(item, ast.FnDecl):
+                    if item.name not in user_names:
+                        user_prog.items.append(item)
+                        user_names.add(item.name)
+                elif isinstance(item, ast.EnumDecl):
+                    if item.name not in user_enum_names:
+                        user_prog.items.append(item)
+                        user_enum_names.add(item.name)
     return user_prog
 
 

@@ -2909,6 +2909,75 @@ def test_generic_nested_call():
     assert code == 42, f"expected 42, got {code}"
 
 
+def test_stdlib_option_some():
+    """Phase 1.9: Option<i32> stdlib. option_unwrap_or returns Some payload."""
+    src = """
+    fn main() -> i32 {
+        let v = Option::Some(42);
+        option_unwrap_or(v, 0)
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_option_none():
+    """option_unwrap_or returns default when None."""
+    src = """
+    fn main() -> i32 {
+        let v = Option::None;
+        option_unwrap_or(v, 42)
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_result_ok_err():
+    """Result::Ok / Result::Err round-trip through unwrap_or."""
+    src = """
+    fn main() -> i32 {
+        let a = result_unwrap_or(Result::Ok(20), 0);
+        let b = result_unwrap_or(Result::Err(-1), 22);
+        a + b
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_vec_push_get_sum():
+    """Vec carry-pair API. Push 5,7,30; sum should be 42."""
+    src = """
+    fn main() -> i32 {
+        let s = vec_new();
+        let c0 = vec_push(s, 0, 5);
+        let c1 = vec_push(s, c0, 7);
+        let c2 = vec_push(s, c1, 30);
+        vec_sum(s, c2)
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_vec_max_index_of():
+    """vec_max + vec_index_of."""
+    src = """
+    fn main() -> i32 {
+        let s = vec_new();
+        let c0 = vec_push(s, 0, 12);
+        let c1 = vec_push(s, c0, 30);
+        let c2 = vec_push(s, c1, 7);
+        let m = vec_max(s, c2);
+        let i = vec_index_of(s, c2, 30);
+        m + i
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 31, f"expected 31 (max=30, idx=1), got {code}"
+
+
 def test_impl_inherent_method_basic():
     """Phase 1.8: inherent impl block. `impl Type { fn method(self) }` lifts
     to `Type__method`. `obj.method(args)` rewrites to `Type__method(obj, args)`."""
