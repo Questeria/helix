@@ -2909,6 +2909,54 @@ def test_generic_nested_call():
     assert code == 42, f"expected 42, got {code}"
 
 
+def test_nn_sgd_step_scalar():
+    """SGD step: w_new = w - lr*grad. w=10, lr=1, grad=3 -> 7."""
+    src = """
+    fn main() -> i32 {
+        sgd_step_scalar(10, 3, 1)
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 7, f"expected 7, got {code}"
+
+
+def test_nn_lin_reg_gradient():
+    """Linear regression gradient. y=w*x+b, loss=(y-target)^2.
+    At w=0, b=0, x=3, target=6: pred=0, err=-6, d/dw = 2*-6*3 = -36."""
+    src = """
+    fn main() -> i32 {
+        // Add 36 to make exit code positive (negative exits become 256-N)
+        lin_reg_grad_w(0, 0, 3, 6) + 40
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 4, f"expected 4 (grad=-36, +40), got {code}"
+
+
+def test_nn_training_step_converges():
+    """Mini training loop. Fit w to target (w=10) via int-SGD.
+    Loss = (w*x - target)^2 with x=1, so loss = (w-10)^2.
+    With lr-stride that moves w by 1 each step (sign of grad), 10 steps
+    of stepping by sign(grad) converges. Demonstrates: training loop
+    structure works in Helix even with int-only math."""
+    src = """
+    fn main() -> i32 {
+        let mut w: i32 = 0;
+        let mut i: i32 = 0;
+        while i < 10 {
+            let g = lin_reg_grad_w(w, 0, 1, 10);
+            // Step by sign(grad): -1 if grad>0, +1 if grad<0, 0 if grad=0.
+            let step = if g > 0 { 1 } else { if g < 0 { 0 - 1 } else { 0 } };
+            w = w - step;
+            i = i + 1;
+        }
+        w
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 10, f"expected 10 (converged to target), got {code}"
+
+
 def test_nn_dense_layer():
     """Phase 3 step 1: dense layer z = W @ x + b. W=[[2,1],[1,2]], x=[3,1], b=[0,0].
     Expected z = [7, 5]; sum = 12."""

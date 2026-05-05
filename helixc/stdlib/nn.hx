@@ -75,3 +75,50 @@ fn mse_loss(y_start: i32, t_start: i32, n: i32) -> i32 {
 //
 // Once Phase 1.x lifts the arg limit (stack-spill for 7+ args), a
 // multi-layer wrapper can land here.
+
+// =========================================================================
+// Phase 3 step 2: training (SGD / one optimizer step).
+// =========================================================================
+
+// SGD update for a single int parameter: w_new = w - lr * grad.
+// Returns the new value. (Integer math; use lr=1 for "1 unit per
+// gradient step" semantics. Float training pending Phase 2.2 step 2.)
+@pure
+fn sgd_step_scalar(w: i32, g: i32, lr: i32) -> i32 {
+    w - lr * g
+}
+
+// SGD update for a 1D parameter array in-place.
+//   w[i] = w[i] - lr * grad[i] for i in [0, n)
+// Returns 0.
+fn sgd_step_array(w_start: i32, g_start: i32, lr: i32, n: i32) -> i32 {
+    let mut i: i32 = 0;
+    while i < n {
+        let w = __arena_get(w_start + i);
+        let gi = __arena_get(g_start + i);
+        __arena_set(w_start + i, w - lr * gi);
+        i = i + 1;
+    }
+    0
+}
+
+// Linear-regression gradient w.r.t. weight w in y_pred = w*x + b:
+//   loss = (w*x + b - target)^2
+//   d_loss/d_w = 2 * (w*x + b - target) * x
+// Useful for demo problems; real NN backprop computes per-layer
+// gradients via reverse-mode AD (Phase 2.1 step 2).
+@pure
+fn lin_reg_grad_w(w: i32, b: i32, x: i32, target: i32) -> i32 {
+    let pred = w * x + b;
+    let err = pred - target;
+    2 * err * x
+}
+
+// Linear-regression gradient w.r.t. bias b:
+//   d_loss/d_b = 2 * (w*x + b - target)
+@pure
+fn lin_reg_grad_b(w: i32, b: i32, x: i32, target: i32) -> i32 {
+    let pred = w * x + b;
+    let err = pred - target;
+    2 * err
+}
