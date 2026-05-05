@@ -279,8 +279,26 @@ class Lowerer:
         return None
 
     # ---- type lowering ----
+    # Built-in primitive type names — anything else under TyName is
+    # either a struct, enum, or a generic type parameter. Generics
+    # silently lower to TIRScalar("T") with i32-sized ABI today; this
+    # is correct for i32 type args and silently wrong for i64+.
+    # Documented as HBS limitation (audit-2-deep-research bug G).
+    _PRIMITIVE_TYPE_NAMES = frozenset({
+        "i8", "i16", "i32", "i64", "isize",
+        "u8", "u16", "u32", "u64", "usize",
+        "bool", "char",
+        "bf16", "f16", "f32", "f64",
+        "unit",
+    })
+
     def _lower_type(self, ty: A.TyNode) -> tir.TIRType:
         if isinstance(ty, A.TyName):
+            # Recognize struct / enum / primitive names. Anything else is
+            # likely a generic type parameter (e.g. T in `fn id[T](x: T)`).
+            # Generic type params lower to TIRScalar(name) which defaults
+            # to i32-sized ABI — works for i32 type args, silently wrong
+            # otherwise. Documented HBS limitation.
             return tir.TIRScalar(ty.name)
         if isinstance(ty, A.TyTuple):
             return tir.TIRTuple(tuple(self._lower_type(e) for e in ty.elems))
@@ -889,6 +907,21 @@ class Lowerer:
                                           attrs={"_kind": "write_file",
                                                   "path": expr.args[0].value,
                                                   "content": expr.args[1].value})
+            # NOTE: read_file_to_arena is a builtin entry point but its
+            # backend implementation is currently a stub returning the
+            # file's byte count without pushing bytes into the arena.
+            # The stack-allocation + byte-loop codegen has a bug that
+            # caused the read syscall to silently fail. Tracked as a
+            # foundation TODO (deep-research bug #4 / lexer blocker).
+            if (isinstance(expr.callee, A.Name)
+                    and expr.callee.name == "read_file_to_arena"
+                    and len(expr.args) == 1
+                    and isinstance(expr.args[0], A.StrLit)):
+                return self.builder.emit(
+                    tir.OpKind.PRINT,
+                    result_ty=tir.TIRScalar("i32"),
+                    attrs={"_kind": "read_file_to_arena",
+                           "path": expr.args[0].value})
             # Intercept read_file_int(path_literal) — opens the file,
             # reads the first 4 bytes interpreted as i32 little-endian,
             # closes the fd. Returns the i32 value on success or 0 on

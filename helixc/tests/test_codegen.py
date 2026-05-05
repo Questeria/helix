@@ -1258,6 +1258,51 @@ def test_hash_i32_distinguishes():
     assert code == 1, f"expected hash distinguishes, got {code}"
 
 
+def test_tuple_pattern_dispatch():
+    """Bug A fix: PatTuple now actually checks element values rather
+    than always-true wildcard. (1,2) match (1,2) → 42; mismatch → 0."""
+    src = """
+    fn main() -> i32 {
+        let t = (1, 2);
+        match t {
+            (1, 2) => 42,
+            _ => 0,
+        }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42 (matching tuple), got {code}"
+
+
+def test_tuple_pattern_dispatch_no_match():
+    """Mismatching tuple should fall through to wildcard."""
+    src = """
+    fn main() -> i32 {
+        let t = (5, 7);
+        match t {
+            (1, 2) => 0,
+            _ => 42,
+        }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42 (wildcard), got {code}"
+
+
+def test_div_by_zero_no_sigfpe():
+    """Bug C fix: integer division by zero must not SIGFPE.
+    Returns 0 (matching safe-divide convention)."""
+    src = """
+    fn safe_div(a: i32, b: i32) -> i32 { a / b }
+    fn main() -> i32 {
+        let r = safe_div(10, 0);
+        if r == 0 { 42 } else { 0 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42 (div-by-zero returned 0), got {code}"
+
+
 def test_generic_identity_function():
     """Generic fn type parameter `[T]` round-trips through parse +
     typecheck + codegen. Audit-10 found this had no test coverage."""

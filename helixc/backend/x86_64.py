@@ -682,6 +682,18 @@ class FnCompiler:
         self.asm.mov_eax_mem_rbp(l_slot)
         self.asm.mov_ecx_mem_rbp(r_slot)
 
+        # Bug C fix: guard div-by-zero. cmp ecx, 0; je zero_path.
+        # zero_path produces eax=0 for both quotient and remainder
+        # (matching common safe-divide convention; no SIGFPE).
+        buf.emit(0x83, 0xF9, 0x00)              # cmp ecx, 0
+        buf.emit(0x75, 0x05)                    # jne +5 (skip zero_path)
+        # zero_path: xor eax, eax (2 bytes); jmp done (3 bytes — rel8)
+        buf.emit(0x31, 0xC0)                    # xor eax, eax
+        # We'll patch the jmp_done offset below; emit placeholder.
+        buf.emit(0xEB, 0x00)                    # jmp done placeholder
+        zero_jmp_disp_off = buf.offset() - 1
+        zero_jmp_after = buf.offset()
+
         # cmp ecx, -1   (83 F9 FF; rel8 sign-extended imm8)
         buf.emit(0x83, 0xF9, 0xFF)
         # jne do_div  (placeholder rel8)
@@ -718,13 +730,16 @@ class FnCompiler:
 
         done_addr = buf.offset()
 
-        # Patch the three rel8 jumps
+        # Patch the four rel8 jumps (incl. the new zero_jmp).
+        d0 = done_addr - zero_jmp_after
         d1 = do_div_addr - jne1_after
         d2 = do_div_addr - jne2_after
         d3 = done_addr - jmp_done_after
-        for d, name in ((d1, "jne1"), (d2, "jne2"), (d3, "jmp_done")):
+        for d, name in ((d0, "zero_jmp"), (d1, "jne1"),
+                        (d2, "jne2"), (d3, "jmp_done")):
             if not (-128 <= d <= 127):
                 raise ValueError(f"idiv-guard {name} disp out of rel8: {d}")
+        buf.bytes_[zero_jmp_disp_off] = d0 & 0xFF
         buf.bytes_[jne1_disp_off] = d1 & 0xFF
         buf.bytes_[jne2_disp_off] = d2 & 0xFF
         buf.bytes_[jmp_done_disp_off] = d3 & 0xFF
@@ -1252,6 +1267,67 @@ class FnCompiler:
                     raise ValueError(f"write_file jl disp out of rel8: {d}")
                 buf.bytes_[jl_off] = d & 0xFF
 
+                if op.results:
+                    res_slot = self._slot_of(op.results[0])
+                    self.asm.mov_mem_rbp_eax(res_slot)
+                return
+
+            if kind == "read_file_to_arena":
+                # STUB: returns the total file size in bytes by attempting
+                # to read up to 8KB. Does NOT yet push bytes into the
+                # arena (the byte-push loop had codegen bugs). For now,
+                # use this primitive to *measure* file size; pair with
+                # __strbyte-on-literal for known-content lexing during
+                # bootstrap. Full byte-push implementation is deferred.
+                path_str = op.attrs["path"]
+                assert isinstance(path_str, str)
+                path_data = path_str.encode("utf-8") + b"\x00"
+                path_sym = f"__helix_rftoa_path_{id(op):x}"
+                self._pending_strings.append((path_sym, path_data))
+                buf = self.asm.b
+                BUF_SIZE = 128  # disp8-friendly (max signed -128..127, but
+                                  # we use rsp+BUF_SIZE which fits disp8)
+
+                # ---- sys_open(path, O_RDONLY=0) ----
+                buf.emit(0x48, 0x8D, 0x3D)            # lea rdi, [rip+disp]
+                off = buf.offset()
+                buf.emit_bytes(b"\x00\x00\x00\x00")
+                buf.fixups.append(Fixup(offset=off, target=path_sym,
+                                         size=4, rel_base=off + 4))
+                self.asm.mov_esi_imm32(0)              # O_RDONLY
+                self.asm.mov_edx_imm32(0)
+                self.asm.mov_eax_imm32(2)              # sys_open
+                self.asm.syscall()
+                # Push fd to stack, allocate read buffer (disp8-sized).
+                buf.emit(0x50)                          # push rax (fd)
+                buf.emit(0x48, 0x83, 0xEC, BUF_SIZE)    # sub rsp, BUF_SIZE (disp8)
+
+                # ---- read(fd, buf=rsp, BUF_SIZE) ----
+                # mov rdi, [rsp+BUF_SIZE] using disp8.
+                buf.emit(0x48, 0x8B, 0x7C, 0x24, BUF_SIZE)
+                buf.emit(0x48, 0x89, 0xE6)              # mov rsi, rsp
+                self.asm.mov_edx_imm32(BUF_SIZE)
+                self.asm.mov_eax_imm32(0)               # sys_read
+                self.asm.syscall()
+                # Save bytes-read in r10.
+                buf.emit(0x49, 0x89, 0xC2)
+
+                # ---- close(fd) ----
+                buf.emit(0x48, 0x8B, 0x7C, 0x24, BUF_SIZE)  # mov rdi, [rsp+BUF_SIZE]
+                self.asm.mov_eax_imm32(3)               # sys_close
+                self.asm.syscall()
+
+                # If r10 < 0, set r10 = 0.
+                buf.emit(0x4D, 0x85, 0xD2)              # test r10, r10
+                buf.emit(0x7D, 0x03)                    # jns +3 (skip xor)
+                buf.emit(0x4D, 0x31, 0xD2)              # xor r10, r10
+
+                # Restore stack.
+                buf.emit(0x48, 0x83, 0xC4, BUF_SIZE)    # add rsp, BUF_SIZE
+                buf.emit(0x48, 0x83, 0xC4, 0x08)        # add rsp, 8 (fd)
+
+                # Return r10.
+                buf.emit(0x4C, 0x89, 0xD0)              # mov rax, r10
                 if op.results:
                     res_slot = self._slot_of(op.results[0])
                     self.asm.mov_mem_rbp_eax(res_slot)

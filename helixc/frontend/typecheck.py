@@ -595,6 +595,7 @@ class TypeChecker:
         "grad", "grad_rev", "grad_rev_all",
         "quote", "splice", "splice_f", "modify", "modify_f",
         "print_str", "print_int", "write_file", "read_file_int",
+        "read_file_to_arena",
         "__arena_push", "__arena_get", "__arena_set", "__arena_len",
         "__strlen", "__strbyte", "__streq", "__strlit_to_arena",
         "__hash_i32",

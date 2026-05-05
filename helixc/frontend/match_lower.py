@@ -240,12 +240,39 @@ def _pattern_test(pat: A.Pattern, scrut: str, span: A.Span) -> A.Expr:
         tests = [_pattern_test(a, scrut, span) for a in pat.alts]
         return _or_chain(tests, span)
     if isinstance(pat, A.PatTuple):
-        # We only conjunct elementwise tests; binders are handled in
-        # _collect_binds.  The scrut is treated atomically here — proper
-        # tuple-element extraction requires Field/.0 access we don't yet
-        # codegen, so PatTuple for now matches as wildcard.  TODO when
-        # tuple element access lands.
-        return A.BoolLit(span=span, value=True)
+        # Tuple-element tests using the scrut's `.N` field access.
+        # The scrut is a tuple binding (array-backed), so scrut[i] reads
+        # the i-th slot. Each sub-pattern is recursively tested against
+        # its slot; PatBind / PatWildcard are trivially true (binders
+        # handled in _collect_binds).
+        sub_tests: list[A.Expr] = []
+        for i, sub in enumerate(pat.elems):
+            slot_load = A.Index(
+                span=span,
+                callee=A.Name(span=span, name=scrut),
+                indices=[A.IntLit(span=span, value=i)],
+            )
+            if isinstance(sub, A.PatLit):
+                sub_tests.append(A.Binary(span=span, op="==",
+                                          left=slot_load, right=sub.value))
+            elif isinstance(sub, A.PatRange):
+                op_hi = "<=" if sub.inclusive else "<"
+                sub_tests.append(A.Binary(
+                    span=span, op="&&",
+                    left=A.Binary(span=span, op=">=",
+                                  left=slot_load, right=sub.lo),
+                    right=A.Binary(span=span, op=op_hi,
+                                   left=slot_load, right=sub.hi),
+                ))
+            # PatBind / PatWildcard / nested PatTuple → trivially true
+            # (binders handled in _collect_binds; nested tuples currently
+            # restricted to wildcard-class subpats).
+        if not sub_tests:
+            return A.BoolLit(span=span, value=True)
+        full = sub_tests[0]
+        for t in sub_tests[1:]:
+            full = A.Binary(span=span, op="&&", left=full, right=t)
+        return full
     if isinstance(pat, A.PatVariant):
         # Test: __scrut[0] == tag_value AND each sub-pattern test against
         # __scrut[1], __scrut[2], ...  The scrut is expected to be a
@@ -322,8 +349,26 @@ def _collect_binds(pat: A.Pattern, scrut: str, span: A.Span) -> list[A.Let]:
                     value=slot_load,
                 ))
             elif isinstance(sub, (A.PatVariant, A.PatTuple)):
-                # Synthesize a temp let, then recurse into the sub-pat
-                # against that temp's name so nested binders are emitted.
+                tmp = _fresh_name(prefix="__sub")
+                binds.append(A.Let(
+                    span=span, name=tmp, is_mut=False, ty=None,
+                    value=slot_load,
+                ))
+                binds.extend(_collect_binds(sub, tmp, span))
+    elif isinstance(pat, A.PatTuple):
+        # Symmetric to PatVariant but slot indices start at 0 (no tag).
+        for i, sub in enumerate(pat.elems):
+            slot_load = A.Index(
+                span=span,
+                callee=A.Name(span=span, name=scrut),
+                indices=[A.IntLit(span=span, value=i)],
+            )
+            if isinstance(sub, A.PatBind):
+                binds.append(A.Let(
+                    span=span, name=sub.name, is_mut=False, ty=None,
+                    value=slot_load,
+                ))
+            elif isinstance(sub, (A.PatVariant, A.PatTuple)):
                 tmp = _fresh_name(prefix="__sub")
                 binds.append(A.Let(
                     span=span, name=tmp, is_mut=False, ty=None,
