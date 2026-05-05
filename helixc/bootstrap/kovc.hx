@@ -533,6 +533,14 @@ fn emit_ast_code(idx: i32, bind_state: i32) -> i32 {
             let n_store = emit_mov_local_eax(off);
             n_val + n_store
         }
+    } else { if t == 14 {
+        // AST_FN_DECL: Phase-0 supports a single `fn main() -> i32 {
+        // expr }` form as a syntactic alternative to a bare expr.
+        // The codegen treats the body as the program. Multi-fn
+        // programs (with calls and per-fn prologue/epilogue) are
+        // a future slice.
+        let p3 = __arena_get(idx + 3);
+        emit_ast_code(p3, bind_state)
     } else { if t == 13 {
         // AST_SEQ(first, second): emit first (discard eax), emit
         // second (its eax is the result). Helix's calling convention
@@ -564,7 +572,7 @@ fn emit_ast_code(idx: i32, bind_state: i32) -> i32 {
         n_cond + n_test + 6 + n_body + 5 + n_zero
     } else {
         emit_ast_int(0)
-    }}}}}}}}}}}}}}
+    }}}}}}}}}}}}}}}
 }
 
 // --------------------------------------------------------------

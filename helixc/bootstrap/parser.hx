@@ -29,6 +29,11 @@
 //  13  AST_SEQ       p1 = first_idx, p2 = second_idx. Evaluate
 //                    first (discard), then second (return its value).
 //                    Built by `;` chaining inside parse_expr.
+//  14  AST_FN_DECL   p1 = name byte start, p2 = name byte length,
+//                    p3 = body_idx. Phase-0: no params, return-type
+//                    annotation parsed but ignored, body is a single
+//                    expression. Codegen treats the body as the
+//                    main expression.
 //  99  AST_ERR       p1 = unexpected token tag
 //
 // Grammar (recursive descent, classic precedence climbing):
@@ -55,6 +60,8 @@
 //   state_base+8   kw_while_len
 //   state_base+9   kw_mut_start
 //   state_base+10  kw_mut_len
+//   state_base+11  kw_fn_start
+//   state_base+12  kw_fn_len
 //
 // License: Apache 2.0.
 
@@ -81,6 +88,8 @@ fn kw_while_s(sb: i32) -> i32 { __arena_get(sb + 7) }
 fn kw_while_n(sb: i32) -> i32 { __arena_get(sb + 8) }
 fn kw_mut_s(sb: i32) -> i32 { __arena_get(sb + 9) }
 fn kw_mut_n(sb: i32) -> i32 { __arena_get(sb + 10) }
+fn kw_fn_s(sb: i32) -> i32 { __arena_get(sb + 11) }
+fn kw_fn_n(sb: i32) -> i32 { __arena_get(sb + 12) }
 
 // --------------------------------------------------------------
 // AST builder.
@@ -329,6 +338,10 @@ fn install_keywords(sb: i32) -> i32 {
     let mut_s = __arena_push(109); __arena_push(117); __arena_push(116);
     __arena_set(sb + 9, mut_s);
     __arena_set(sb + 10, 3);
+    // "fn" = 102 110
+    let fn_s = __arena_push(102); __arena_push(110);
+    __arena_set(sb + 11, fn_s);
+    __arena_set(sb + 12, 2);
     0
 }
 
@@ -337,11 +350,45 @@ fn install_keywords(sb: i32) -> i32 {
 // Reserves 7 state slots, then dispatches into parse_expr.
 // --------------------------------------------------------------
 fn parse_top(tok_base: i32) -> i32 {
-    // 11 state slots: cursor + 5 keyword (start, len) pairs.
+    // 13 state slots: cursor + 6 keyword (start, len) pairs.
     let cur_slot = __arena_push(0);
     __arena_push(0); __arena_push(0); __arena_push(0); __arena_push(0);
     __arena_push(0); __arena_push(0); __arena_push(0); __arena_push(0);
-    __arena_push(0); __arena_push(0);
+    __arena_push(0); __arena_push(0); __arena_push(0); __arena_push(0);
     install_keywords(cur_slot);
-    parse_expr(tok_base, cur_slot)
+    // Peek the first token. If it's `fn`, parse a function decl.
+    // Otherwise treat the whole input as a single expression
+    // (legacy mode) for backward compat with all existing tests.
+    let k = cur_get(cur_slot);
+    if tok_tag(tok_base, k) == 2 {
+        let id_s = tok_p2(tok_base, k);
+        let id_l = tok_p3(tok_base, k);
+        if byte_eq(id_s, id_l, kw_fn_s(cur_slot), kw_fn_n(cur_slot)) == 1 {
+            parse_fn_decl(tok_base, cur_slot)
+        } else {
+            parse_expr(tok_base, cur_slot)
+        }
+    } else {
+        parse_expr(tok_base, cur_slot)
+    }
+}
+
+// Parse `fn name() -> i32 { body }`. Phase 0: no params, single
+// expression body, return type parsed but ignored. The result is
+// AST_FN_DECL with body_idx in p3.
+fn parse_fn_decl(tok_base: i32, sb: i32) -> i32 {
+    cur_advance(sb);     // consume 'fn'
+    let nk = cur_get(sb);
+    let name_start = tok_p2(tok_base, nk);
+    let name_len = tok_p3(tok_base, nk);
+    cur_advance(sb);     // name
+    cur_advance(sb);     // '('
+    cur_advance(sb);     // ')'
+    cur_advance(sb);     // '-' (part of '->')
+    cur_advance(sb);     // '>' (the second char of '->')
+    cur_advance(sb);     // return-type IDENT (ignored)
+    cur_advance(sb);     // '{'
+    let body = parse_expr(tok_base, sb);
+    cur_advance(sb);     // '}'
+    mk_node(14, name_start, name_len, body)
 }

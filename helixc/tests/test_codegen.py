@@ -1133,6 +1133,13 @@ fn main() -> i32 {
     assert compile_and_exec(
         "let mut i = 0 ; let mut s = 0 ; while i < 10 { s = s + i ; i = i + 1 } ; s"
     ) == 45, "0..10 sum compiled by Helix-self-hosted kovc"
+    # AST_FN_DECL: Phase-0 supports `fn main() -> i32 { expr }` as
+    # syntactic equivalent to bare `expr`. Multi-fn + calls TBD.
+    assert compile_and_exec("fn main() -> i32 { 42 }") == 42, "fn-decl wrapper"
+    assert compile_and_exec("fn main() -> i32 { 6 * 7 }") == 42, "fn-decl with arith"
+    assert compile_and_exec(
+        "fn main() -> i32 { let x = 5 ; x * x }"
+    ) == 25, "fn-decl with let-bound expr body"
 
 
 def test_bootstrap_kovc_demo_emits_ast_int_42():
