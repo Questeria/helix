@@ -1692,6 +1692,41 @@ fn main() -> i32 {{
         "fn main() -> i32 { let mut z: f32 = 2.0_f32 ; "
         "z = __fmul(z, z) ; __fadd(z, z) / 16777216 }"
     ) == 65, "mutable :f32 -> 2*2*2 = 8.0 top byte"
+    # Phase 1.10 step 5c: typecheck-driven SSE dispatch on natural
+    # binary operators when both operands are f32. AST_LET stamps the
+    # type of bindings (from float-literal init or __f* call), AST_ADD
+    # /SUB/MUL/DIV check operand types via is_f32_expr and emit
+    # addss/subss/mulss/divss instead of integer add/sub/imul/idiv.
+    #
+    #   let x: f32 = 1.5_f32 ; let y: f32 = 2.5_f32 ; x + y
+    #   = 4.0 -> 0x40800000, top byte 64
+    assert compile_and_exec(
+        "fn main() -> i32 { let x: f32 = 1.5_f32 ; let y: f32 = 2.5_f32 ; "
+        "(x + y) / 16777216 }"
+    ) == 64, "natural + dispatches to SSE addss for f32 bindings"
+    #   2.0 * 4.0 = 8.0 -> 0x41000000, top byte 65
+    assert compile_and_exec(
+        "fn main() -> i32 { let a: f32 = 2.0_f32 ; let b: f32 = 4.0_f32 ; "
+        "(a * b) / 16777216 }"
+    ) == 65, "natural * dispatches to SSE mulss"
+    #   8.0 / 4.0 = 2.0 -> 0x40000000, top byte 64
+    assert compile_and_exec(
+        "fn main() -> i32 { let a: f32 = 8.0_f32 ; let b: f32 = 4.0_f32 ; "
+        "(a / b) / 16777216 }"
+    ) == 64, "natural / dispatches to SSE divss"
+    #   5.0 - 1.0 = 4.0 -> top byte 64
+    assert compile_and_exec(
+        "fn main() -> i32 { let a: f32 = 5.0_f32 ; let b: f32 = 1.0_f32 ; "
+        "(a - b) / 16777216 }"
+    ) == 64, "natural - dispatches to SSE subss"
+    # Mixed-arity composition: literal + bound = f32 (both children f32-typed).
+    assert compile_and_exec(
+        "fn main() -> i32 { let a: f32 = 1.5_f32 ; (a + 2.5_f32) / 16777216 }"
+    ) == 64, "literal + bound f32 -> SSE"
+    # Integer arithmetic still works (no f32 in the tree -> integer codegen).
+    assert compile_and_exec(
+        "fn main() -> i32 { let n: i32 = 5 ; n + n + n }"
+    ) == 15, "integer + on i32 binding stays integer"
 
 
 def test_bootstrap_kovc_inline_write_file_to_arena():

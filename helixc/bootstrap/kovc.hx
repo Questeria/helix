@@ -231,6 +231,26 @@ fn emit_xor_eax_ecx() -> i32 { emit_byte(0x31); emit_byte(0xC8); 2 }
 // the standard binary-op shape (lhs in eax, rhs->ecx, op) works unchanged.
 fn emit_shl_eax_cl() -> i32 { emit_byte(0xD3); emit_byte(0xE0); 2 }
 fn emit_sar_eax_cl() -> i32 { emit_byte(0xD3); emit_byte(0xF8); 2 }
+
+// Phase 1.10 step 5c: SSE binary-op suffix. Used by AST_ADD/SUB/MUL/DIV
+// when both operands are f32. Mirrors the inline machine code emitted
+// by the __fadd / __fsub / __fmul / __fdiv builtins (see step 4).
+//   movd xmm0, eax           66 0F 6E C0      (4 bytes)
+//   movd xmm1, ecx           66 0F 6E C9      (4 bytes)
+//   [add|sub|mul|div]ss xmm0, xmm1
+//                            F3 0F (58|5C|59|5E) C1   (4 bytes)
+//   movd eax, xmm0           66 0F 7E C0      (4 bytes)
+fn emit_sse_binop(opcode: i32) -> i32 {
+    emit_byte(0x66); emit_byte(0x0F); emit_byte(0x6E); emit_byte(0xC0);   // movd xmm0,eax
+    emit_byte(0x66); emit_byte(0x0F); emit_byte(0x6E); emit_byte(0xC9);   // movd xmm1,ecx
+    emit_byte(0xF3); emit_byte(0x0F); emit_byte(opcode); emit_byte(0xC1); // [op]ss xmm0,xmm1
+    emit_byte(0x66); emit_byte(0x0F); emit_byte(0x7E); emit_byte(0xC0);   // movd eax,xmm0
+    16
+}
+fn emit_addss() -> i32 { emit_sse_binop(0x58) }
+fn emit_subss() -> i32 { emit_sse_binop(0x5C) }
+fn emit_mulss() -> i32 { emit_sse_binop(0x59) }
+fn emit_divss() -> i32 { emit_sse_binop(0x5E) }
 // idiv requires sign-extension into edx; we emit `cdq; idiv ecx`.
 //   99       cdq
 //   F7 F9    idiv ecx
@@ -413,17 +433,23 @@ fn kovc_byte_eq(src_a: i32, len_a: i32, src_b: i32, len_b: i32) -> i32 {
 //   slot 0: next free stack offset (init 8, grows by 8 per let)
 //   slot 1: number of entries currently in table (init 0)
 //   slot 2: arena slot index of entry 0 (= bind_state + 3)
-//   slot 3..3 + cap*3: pre-allocated entries [name_start, name_len, offset]
+//   slot 3..3 + cap*4: pre-allocated entries
+//                      [name_start, name_len, offset, type_tag]
+//                      type_tag: 0 = i32 (default), 1 = f32
 //
 // Capacity is fixed at compile-time (NUM_BINDINGS_CAP = 64). Table
 // uses __arena_set to write entries — never __arena_push, so the
 // code region can grow contiguously after bind_state.
+//
+// The type_tag was added in Phase 1.10 step 5c so the AST_ADD/SUB/MUL/
+// DIV codegen can dispatch to SSE when both operands' bindings are f32.
+// AST_LET stamps the type at push-time by inspecting the value AST.
 fn bind_init() -> i32 {
     let state = __arena_push(8);            // next_offset = 8
     __arena_push(0);                        // top = 0
     __arena_push(state + 3);                // table_base = state + 3
     let mut i: i32 = 0;
-    while i < 192 {                         // 64 entries * 3 slots
+    while i < 256 {                         // 64 entries * 4 slots
         __arena_push(0);
         i = i + 1;
     }
@@ -431,12 +457,19 @@ fn bind_init() -> i32 {
 }
 
 fn bind_push(state: i32, name_start: i32, name_len: i32, offset: i32) -> i32 {
+    bind_push_typed(state, name_start, name_len, offset, 0)
+}
+
+// Phase 1.10 step 5c: variant that records the binding's type.
+fn bind_push_typed(state: i32, name_start: i32, name_len: i32,
+                   offset: i32, ty: i32) -> i32 {
     let top = __arena_get(state + 1);
     let table_base = __arena_get(state + 2);
-    let entry = table_base + top * 3;
+    let entry = table_base + top * 4;
     __arena_set(entry, name_start);
     __arena_set(entry + 1, name_len);
     __arena_set(entry + 2, offset);
+    __arena_set(entry + 3, ty);
     __arena_set(state + 1, top + 1);
     0
 }
@@ -471,7 +504,7 @@ fn bind_lookup(state: i32, name_start: i32, name_len: i32) -> i32 {
     let mut offset: i32 = 0;
     while i >= 0 {
         if found == 0 {
-            let entry = table_base + i * 3;
+            let entry = table_base + i * 4;
             let ns = __arena_get(entry);
             let nl = __arena_get(entry + 1);
             if kovc_byte_eq(ns, nl, name_start, name_len) == 1 {
@@ -486,12 +519,92 @@ fn bind_lookup(state: i32, name_start: i32, name_len: i32) -> i32 {
     offset
 }
 
+// Phase 1.10 step 5c: look up a binding's type tag (0=i32, 1=f32).
+// Returns 0 (default i32) when name is unbound, matching bind_lookup's
+// "0 means unbound" sentinel — happens to be the same value as the
+// default i32 type, which is the safe fallback for the SSE-dispatch
+// caller (unbound + unknown -> integer codegen).
+fn bind_lookup_type(state: i32, name_start: i32, name_len: i32) -> i32 {
+    let top = __arena_get(state + 1);
+    let table_base = __arena_get(state + 2);
+    let mut i: i32 = top - 1;
+    let mut found: i32 = 0;
+    let mut ty: i32 = 0;
+    while i >= 0 {
+        if found == 0 {
+            let entry = table_base + i * 4;
+            let ns = __arena_get(entry);
+            let nl = __arena_get(entry + 1);
+            if kovc_byte_eq(ns, nl, name_start, name_len) == 1 {
+                ty = __arena_get(entry + 3);
+                found = 1;
+            };
+            i = i - 1;
+        } else {
+            i = 0 - 1;
+        };
+    }
+    ty
+}
+
 // Reset bind_state for a new function body. Sets next_offset back
 // to 8 (first stack slot) and top to 0 (no bindings yet).
 fn bind_reset(state: i32) -> i32 {
     __arena_set(state, 8);
     __arena_set(state + 1, 0);
     0
+}
+
+// Phase 1.10 step 5c: detect call names beginning with `__f` (the f32
+// SSE builtins __fadd/__fsub/__fmul/__fdiv/__fneg). Any such call's
+// result is f32 by convention. Cheaper than a full byte-string compare.
+@pure
+fn is_underscore_f_call(name_start: i32, name_len: i32) -> i32 {
+    if name_len < 4 { 0 }
+    else {
+        let b0 = __arena_get(name_start);
+        let b1 = __arena_get(name_start + 1);
+        let b2 = __arena_get(name_start + 2);
+        if b0 == 95 {
+            if b1 == 95 {
+                if b2 == 102 { 1 }   // 'f'
+                else { 0 }
+            } else { 0 }
+        } else { 0 }
+    }
+}
+
+// Phase 1.10 step 5c: type-inference on AST nodes. Returns 1 if the
+// expression's type is f32, else 0 (i32 default). Recursive descent;
+// the recursion stops at literals, variables, and calls. Used by the
+// AST_LET codegen (to stamp type into bind_state) and by the AST_ADD
+// /SUB/MUL/DIV codegen (to dispatch to SSE when both operands f32).
+fn is_f32_expr(idx: i32, bind_state: i32) -> i32 {
+    let t = __arena_get(idx);
+    let p1 = __arena_get(idx + 1);
+    let p2 = __arena_get(idx + 2);
+    if t == 27 { 1 }                            // AST_FLOATLIT
+    else { if t == 1 {                          // AST_VAR
+        bind_lookup_type(bind_state, p1, p2)
+    } else { if t == 16 {                       // AST_CALL
+        is_underscore_f_call(p1, p2)
+    } else { if t == 2 {                        // AST_ADD
+        let l = is_f32_expr(p1, bind_state);
+        let r = is_f32_expr(p2, bind_state);
+        if l == 1 { if r == 1 { 1 } else { 0 } } else { 0 }
+    } else { if t == 3 {                        // AST_SUB
+        let l = is_f32_expr(p1, bind_state);
+        let r = is_f32_expr(p2, bind_state);
+        if l == 1 { if r == 1 { 1 } else { 0 } } else { 0 }
+    } else { if t == 4 {                        // AST_MUL
+        let l = is_f32_expr(p1, bind_state);
+        let r = is_f32_expr(p2, bind_state);
+        if l == 1 { if r == 1 { 1 } else { 0 } } else { 0 }
+    } else { if t == 5 {                        // AST_DIV
+        let l = is_f32_expr(p1, bind_state);
+        let r = is_f32_expr(p2, bind_state);
+        if l == 1 { if r == 1 { 1 } else { 0 } } else { 0 }
+    } else { 0 }}}}}}}
 }
 
 // fn_table: maps fn names to arena slot indices where their code
@@ -1414,12 +1527,17 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         }
         emit_ast_int(bits)
     } else { if t == 2 {
+        // Step 5c: dispatch to SSE addss when both operands are f32.
         let n1 = emit_ast_code(p1, bind_state, patch_state, bn_state);
         let np = emit_push_rax();
         let n2 = emit_ast_code(p2, bind_state, patch_state, bn_state);
         let nm = emit_mov_ecx_eax();
         let no = emit_pop_rax();
-        let na = emit_add_eax_ecx();
+        let na = if is_f32_expr(idx, bind_state) == 1 {
+            emit_addss()
+        } else {
+            emit_add_eax_ecx()
+        };
         n1 + np + n2 + nm + no + na
     } else { if t == 3 {
         let n1 = emit_ast_code(p1, bind_state, patch_state, bn_state);
@@ -1427,7 +1545,11 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         let n2 = emit_ast_code(p2, bind_state, patch_state, bn_state);
         let nm = emit_mov_ecx_eax();
         let no = emit_pop_rax();
-        let na = emit_sub_eax_ecx();
+        let na = if is_f32_expr(idx, bind_state) == 1 {
+            emit_subss()
+        } else {
+            emit_sub_eax_ecx()
+        };
         n1 + np + n2 + nm + no + na
     } else { if t == 4 {
         let n1 = emit_ast_code(p1, bind_state, patch_state, bn_state);
@@ -1435,7 +1557,11 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         let n2 = emit_ast_code(p2, bind_state, patch_state, bn_state);
         let nm = emit_mov_ecx_eax();
         let no = emit_pop_rax();
-        let na = emit_imul_eax_ecx();
+        let na = if is_f32_expr(idx, bind_state) == 1 {
+            emit_mulss()
+        } else {
+            emit_imul_eax_ecx()
+        };
         n1 + np + n2 + nm + no + na
     } else { if t == 5 {
         let n1 = emit_ast_code(p1, bind_state, patch_state, bn_state);
@@ -1443,7 +1569,11 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         let n2 = emit_ast_code(p2, bind_state, patch_state, bn_state);
         let nm = emit_mov_ecx_eax();
         let no = emit_pop_rax();
-        let na = emit_idiv_eax_ecx();
+        let na = if is_f32_expr(idx, bind_state) == 1 {
+            emit_divss()
+        } else {
+            emit_idiv_eax_ecx()
+        };
         n1 + np + n2 + nm + no + na
     } else { if t == 24 {
         // AST_MOD: same setup as DIV, then emit_imod (cdq; idiv;
@@ -1584,12 +1714,15 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         // AST_LET: p1 = name_start, p2 = name_len, p3 = body_idx,
         // p4 = value_idx (audit-14: split out of the legacy packed
         // p3 to avoid 16-bit overflow on large sources).
+        // Step 5c: infer type from value AST and stamp into bind_state
+        // so subsequent uses of the binding can dispatch to SSE.
         let body_idx = __arena_get(idx + 3);
         let value_idx = __arena_get(idx + 4);
+        let val_ty = is_f32_expr(value_idx, bind_state);
         let n_val = emit_ast_code(value_idx, bind_state, patch_state, bn_state);
         let off = bind_alloc_offset(bind_state);
         let n_store = emit_mov_local_eax(off);
-        bind_push(bind_state, p1, p2, off);
+        bind_push_typed(bind_state, p1, p2, off, val_ty);
         let n_body = emit_ast_code(body_idx, bind_state, patch_state, bn_state);
         bind_pop(bind_state);
         n_val + n_store + n_body
@@ -1600,10 +1733,11 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         // Same 5-slot layout as AST_LET (audit-14).
         let body_idx = __arena_get(idx + 3);
         let value_idx = __arena_get(idx + 4);
+        let val_ty = is_f32_expr(value_idx, bind_state);
         let n_val = emit_ast_code(value_idx, bind_state, patch_state, bn_state);
         let off = bind_alloc_offset(bind_state);
         let n_store = emit_mov_local_eax(off);
-        bind_push(bind_state, p1, p2, off);
+        bind_push_typed(bind_state, p1, p2, off, val_ty);
         let n_body = emit_ast_code(body_idx, bind_state, patch_state, bn_state);
         bind_pop(bind_state);
         n_val + n_store + n_body
