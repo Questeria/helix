@@ -663,7 +663,13 @@ fn is_f32_expr(idx: i32, bind_state: i32, bn_state: i32) -> i32 {
     else { if t == 1 {                          // AST_VAR
         bind_lookup_type(bind_state, p1, p2)
     } else { if t == 16 {                       // AST_CALL
-        // First check the `__f*` builtin prefix (cheap), then fall
+        // Step 5i: __i32_to_f32 starts with `__i` so it doesn't match
+        // the cheap `__f*` prefix check below — explicit byte_eq
+        // against the installed name slot. Returns f32.
+        let conv_match = kovc_byte_eq(p1, p2, bn_i32_to_f32_s(bn_state), 12);
+        if conv_match == 1 { 1 }
+        else {
+        // Then check the `__f*` builtin prefix (cheap), then fall
         // back to the fn_type_table lookup for user-named fns.
         let prefix_match = is_underscore_f_call(p1, p2);
         if prefix_match == 1 { 1 }
@@ -671,6 +677,7 @@ fn is_f32_expr(idx: i32, bind_state: i32, bn_state: i32) -> i32 {
             let fts = bn_fn_type_state(bn_state);
             if fts == 0 { 0 }
             else { fn_type_table_lookup(fts, p1, p2) }
+        }
         }
     } else { if t == 2 {                        // AST_ADD
         let l = is_f32_expr(p1, bind_state, bn_state);
@@ -864,14 +871,15 @@ fn emit_exit_with_eax() -> i32 {
 fn install_builtin_names() -> i32 {
     let bn_state = __arena_push(0);          // slot 0 placeholder
     __arena_push(0); __arena_push(0); __arena_push(0); __arena_push(0);
-    // Reserve slots 5..64 (60 more slots: 2 file-name slots + 2
+    // Reserve slots 5..65 (61 more slots: 2 file-name slots + 2
     // str_state header slots + 48 entry slots + 5 f32 builtin slots
     // (__fadd, __fsub, __fmul, __fdiv at 57..60; __fneg at 61) + 1
     // fn_type_state pointer slot at 62 (Phase 1.10 step 5c follow-on)
     // + 1 __fsqrt slot at 63 (Phase 1.10 step 5g)
-    // + 1 __fabs slot at 64 (Phase 1.10 step 5h).
+    // + 1 __fabs slot at 64 (Phase 1.10 step 5h)
+    // + 1 __i32_to_f32 slot at 65 (Phase 1.10 step 5i).
     let mut i: i32 = 0;
-    while i < 60 {
+    while i < 61 {
         __arena_push(0);
         i = i + 1;
     }
@@ -978,6 +986,18 @@ fn install_builtin_names() -> i32 {
     __arena_push(97); __arena_push(98); __arena_push(115);
     __arena_set(bn_state + 64, s13);
 
+    // Phase 1.10 step 5i: "__i32_to_f32"
+    // (95 95 105 51 50 95 116 111 95 102 51 50) — 12 chars. Single-arg
+    // i32 -> f32 conversion via SSE2 cvtsi2ss. Result is the f32 bit
+    // pattern in eax. Distinct from __f* prefix (this is __i*) so
+    // is_f32_expr needs an explicit byte_eq against the installed name
+    // slot to type the call's result as f32.
+    let s14 = __arena_push(95); __arena_push(95); __arena_push(105);
+    __arena_push(51); __arena_push(50); __arena_push(95);
+    __arena_push(116); __arena_push(111); __arena_push(95);
+    __arena_push(102); __arena_push(51); __arena_push(50);
+    __arena_set(bn_state + 65, s14);
+
     bn_state
 }
 
@@ -1003,6 +1023,8 @@ fn bn_set_fn_type_state(b: i32, v: i32) -> i32 { __arena_set(b + 62, v); 0 }
 fn bn_fsqrt_s(b: i32) -> i32 { __arena_get(b + 63) }
 // Phase 1.10 step 5h: __fabs single-arg f32 absolute value (sign-bit AND mask).
 fn bn_fabs_s(b: i32) -> i32 { __arena_get(b + 64) }
+// Phase 1.10 step 5i: __i32_to_f32 single-arg int->float (cvtsi2ss).
+fn bn_i32_to_f32_s(b: i32) -> i32 { __arena_get(b + 65) }
 // str_state accessors. The state lives within the bn_state region.
 fn str_top(b: i32) -> i32 { __arena_get(b + 7) }
 fn str_top_set(b: i32, v: i32) -> i32 { __arena_set(b + 7, v); 0 }
@@ -1513,9 +1535,20 @@ fn try_emit_builtin_call(name_s: i32, name_l: i32, args_head: i32,
         emit_byte(0x25);
         emit_byte(0xFF); emit_byte(0xFF); emit_byte(0xFF); emit_byte(0x7F);
         n0 + 5
+    } else { if kovc_byte_eq(name_s, name_l, bn_i32_to_f32_s(bn_state), 12) == 1 {
+        // Phase 1.10 step 5i: __i32_to_f32(x) -> f32 bits. Single-arg
+        // signed-int-to-float conversion via SSE2 cvtsi2ss. eval x ->
+        // eax (i32); cvtsi2ss xmm0, eax; movd eax, xmm0. 8 bytes after
+        // the arg evaluation. Result is the f32 bit pattern; the call's
+        // type is f32 (see is_f32_expr's __i32_to_f32 byte-match case).
+        let a0 = __arena_get(args_head + 1);
+        let n0 = emit_ast_code(a0, bind_state, patch_state, bn_state);
+        emit_byte(0xF3); emit_byte(0x0F); emit_byte(0x2A); emit_byte(0xC0); // cvtsi2ss xmm0, eax
+        emit_byte(0x66); emit_byte(0x0F); emit_byte(0x7E); emit_byte(0xC0); // movd eax, xmm0
+        n0 + 8
     } else {
         0
-    }}}}}}}}}}}}}
+    }}}}}}}}}}}}}}
 }
 
 // Unreachable in this commit; reference impl preserved for next

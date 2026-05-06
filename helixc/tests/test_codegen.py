@@ -1693,6 +1693,22 @@ fn main() -> i32 {{
     assert compile_and_exec("__fabs(__fneg(2.0)) / 16777216") == 64, "fabs -2.0=2.0"
     assert compile_and_exec("__fabs(0.0)") == 0, "fabs 0.0=0.0"
     assert compile_and_exec("__fabs(__fneg(7.5)) / 16777216") == 64, "fabs -7.5=7.5"
+    # Phase 1.10 step 5i: __i32_to_f32(x) — single-arg signed-int-to-
+    # float conversion via SSE2 cvtsi2ss. eval x -> eax (i32);
+    # cvtsi2ss xmm0, eax; movd eax, xmm0. 8 bytes after arg eval.
+    # Result is the f32 bit pattern; is_f32_expr types the call as f32
+    # via byte_eq against the installed name slot (so nested f32 ops
+    # like __fadd(__i32_to_f32(2), __i32_to_f32(2)) flow correctly).
+    #   i32_to_f32(0) =  0.0 -> 0x00000000, all zero
+    #   i32_to_f32(1) =  1.0 -> 0x3F800000, top byte 63
+    #   i32_to_f32(2) =  2.0 -> 0x40000000, top byte 64
+    #   __fadd(i32_to_f32(2), i32_to_f32(2)) = 4.0 -> 0x40800000, top 64
+    assert compile_and_exec("__i32_to_f32(0)") == 0, "i32_to_f32 0=0.0"
+    assert compile_and_exec("__i32_to_f32(1) / 16777216") == 63, "i32_to_f32 1=1.0"
+    assert compile_and_exec("__i32_to_f32(2) / 16777216") == 64, "i32_to_f32 2=2.0"
+    assert compile_and_exec(
+        "__fadd(__i32_to_f32(2), __i32_to_f32(2)) / 16777216"
+    ) == 64, "f32-typed nested __i32_to_f32 through __fadd = 4.0"
     # Phase 1.10 step 5a: optional `_f32` / `_f64` / `_i32` / `_i64` suffix
     # on numeric literals. Pre-fix the suffix lexed as a separate IDENT
     # token, breaking parse. Now consumed as part of the literal token.
