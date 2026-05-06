@@ -203,49 +203,52 @@ fn nn_copy_weights(src: i32, dst: i32) -> i32 {
     0
 }
 
-// ---- Transfer learning: persist NN weights across runs ----
-// Save weights as 4 little-endian bytes per i32 to /tmp/nn_weights.bin.
-// Each weight slot in arena holds the i32 bit-pattern of an f32; we need
-// to extract bytes carefully to handle sign-bit-set (negative) f32 values.
+// ---- Transfer learning: persist NN weights AND Adam state across runs ----
+// Layout in /tmp/nn_weights.bin (as little-endian bytes per i32):
+//   weights[0..3363]  (3364 * 4 = 13456 bytes)
+//   adam_m [0..3363]  (3364 * 4 = 13456 bytes)
+//   adam_v [0..3363]  (3364 * 4 = 13456 bytes)
+//   adam_t            (4 bytes; i32 step counter)
+// Total: 40372 bytes.
 //
-// Trick: AND with the byte mask FIRST (zeros lower bits), then divide.
-// This makes the division exact (no rounding-toward-zero corruption that
-// would happen for negative-i32 / positive-divisor with non-zero remainder).
-@pure fn weights_bytes() -> i32 { 13456 }   // weights_total() * 4
+// Saving Adam state alongside weights stops multi-run regression: previous
+// version reset m/v/t to zero each load, so loaded weights got large
+// poorly-scaled Adam updates on the first step and destabilized.
+@pure fn weights_bytes() -> i32 { 13456 }
+@pure fn full_state_total() -> i32 { 10093 }     // weights(3364) + m(3364) + v(3364) + t(1)
+@pure fn full_state_bytes() -> i32 { 40372 }     // full_state_total * 4
 
-fn nn_save_weights(weights: i32) -> i32 {
+fn nn_save_full(weights: i32) -> i32 {
     let byte_start = __arena_len();
-    let neg_mask = 0 - 16777216;   // 0xFF000000 as signed i32
+    let neg_mask = 0 - 16777216;
     let mut i: i32 = 0;
-    while i < weights_total() {
+    // Walk the contiguous block weights..weights+10092 and emit each i32
+    // as 4 LE bytes. Includes weights, Adam m, Adam v, and the step
+    // counter — all the state needed for a faithful resume.
+    while i < full_state_total() {
         let w = __arena_get(weights + i);
-        // Now that helixc bitwise `&` works correctly (was being lowered
-        // as `||` before this commit's fix), extract bytes via mask + shift.
-        // For the high byte we mask with the signed sentinel 0xFF000000
-        // first so the divide is exact (no rounding-toward-zero on negatives).
         __arena_push(w & 255);
         __arena_push((w & 65280) / 256);
         __arena_push((w & 16711680) / 65536);
         __arena_push(((w & neg_mask) / 16777216) & 255);
         i = i + 1;
     }
-    write_file_to_arena("/tmp/nn_weights.bin", byte_start, weights_bytes())
+    write_file_to_arena("/tmp/nn_weights.bin", byte_start, full_state_bytes())
 }
 
-// Load weights from /tmp/nn_weights.bin. Returns 1 on success, 0 on
-// failure (file missing or wrong size — agent then keeps random init).
-fn nn_load_weights(weights: i32) -> i32 {
+// Load full state (weights + Adam m, v, t) from /tmp/nn_weights.bin.
+// Returns 1 on success, 0 on failure (file missing or wrong size — agent
+// keeps random-init weights and zero Adam state).
+fn nn_load_full(weights: i32) -> i32 {
     let byte_start = __arena_len();
     let bytes_read = read_file_to_arena("/tmp/nn_weights.bin");
-    if bytes_read == weights_bytes() {
+    if bytes_read == full_state_bytes() {
         let mut i: i32 = 0;
-        while i < weights_total() {
+        while i < full_state_total() {
             let b0 = __arena_get(byte_start + i * 4);
             let b1 = __arena_get(byte_start + i * 4 + 1);
             let b2 = __arena_get(byte_start + i * 4 + 2);
             let b3 = __arena_get(byte_start + i * 4 + 3);
-            // Reconstruct i32 with proper sign extension. b3 in [0, 255];
-            // if b3 >= 128 the original i32 was negative (high bit set).
             let w = if b3 >= 128 {
                 (b3 - 256) * 16777216 + b2 * 65536 + b1 * 256 + b0
             } else {
@@ -639,21 +642,19 @@ fn main() -> i32 {
     let na = n_actions();
     let seed_cell = __arena_push(map_seed() * 7919 + 31);
     let weights = nn_alloc_weights(seed_cell);
-    // Transfer learning: try to load weights from prior run. If file exists
-    // with the right size, load (overrides random init); else fall through
-    // with random weights. This is a NO-OP on the first ever run; on
-    // subsequent runs the agent picks up where it left off — useful when
-    // the user changes maze seed (transfer learning) or re-runs the same
-    // seed (cumulative training).
-    let loaded = nn_load_weights(weights);
+    // Adam state must be allocated BEFORE load so the contiguous
+    // weights..weights+10092 block exists in arena and load can write
+    // into it as a single sweep. nn_alloc_adam_after pushes 6729 zero
+    // i32s (m + v + t).
+    nn_alloc_adam_after(weights);
+    // Transfer learning: try to load weights+Adam state from prior run.
+    // If file size == 40372 (full state), load overrides random init for
+    // weights AND Adam moments — Adam continues smoothly. Else fall
+    // through with random weights and zero Adam state.
+    let loaded = nn_load_full(weights);
     print_str("{\"type\":\"transfer\",\"loaded\":");
     print_int(loaded);
     print_str("}\n");
-    // Adam optimizer state allocated immediately after weights so its m/v/t
-    // buffers are at fixed offsets from `weights` (see adam_*_off helpers).
-    // NB: Adam moments are ALWAYS zero-initialized (don't carry across runs);
-    // resuming with stale moments would cause large first-step updates.
-    nn_alloc_adam_after(weights);
     // Target network: zero-init then sync from main weights (which may
     // have been loaded above).
     let target_weights = nn_alloc_target();
@@ -714,15 +715,19 @@ fn main() -> i32 {
     let mut best_steps: i32 = 9999;
     let mut last_failed: i32 = 0;
     while ep < n_episodes() {
-        // When weights were loaded from a prior run, stay near the floor —
-        // pre-trained Q-values already know good actions; high epsilon
-        // would just thrash them. Otherwise ramp from 80% -> 20% over ep.
+        // When weights were loaded from a prior run, run with VERY low
+        // epsilon (5%) — pre-trained Q-values already know good actions
+        // and 25% randomness compounds across every step on a learned
+        // policy, hitting walls and never reaching the goal. Otherwise
+        // ramp from 80% -> 20% over ep.
         let raw = if loaded == 1 {
-            epsilon_floor()
+            5
         } else {
             80 - (ep * 60) / (n_episodes() - 1)
         };
-        let base_eps = if raw < epsilon_floor() { epsilon_floor() } else { raw };
+        let base_eps = if loaded == 1 {
+            raw   // bypass the eps_floor lift when loaded — we WANT low
+        } else { if raw < epsilon_floor() { epsilon_floor() } else { raw }};
         let epsilon_pct = if last_failed == 1 {
             let bumped = base_eps + 25;
             if bumped > 95 { 95 } else { bumped }
@@ -828,8 +833,13 @@ fn main() -> i32 {
     print_str(",\"best_steps\":");
     print_int(best_steps);
     print_str("}\n");
-    // Save trained weights for next run (transfer learning).
-    let saved = nn_save_weights(weights);
+    // Save trained weights + Adam state for next run (transfer learning).
+    // ONLY save if we actually reached the goal at least once. Without this
+    // guard, a run that fails to reach the goal (best_steps==9999) would
+    // overwrite the previously-saved good weights with garbage, breaking
+    // the multi-run convergence chain. With it, a good run's weights are
+    // sticky — subsequent failures don't trash them.
+    let saved = if best_steps < 9999 { nn_save_full(weights) } else { 0 };
     print_str("{\"type\":\"transfer\",\"saved\":");
     print_int(saved);
     print_str("}\n");
