@@ -203,6 +203,70 @@ fn nn_copy_weights(src: i32, dst: i32) -> i32 {
     0
 }
 
+// ---- Transfer learning: persist NN weights across runs ----
+// Save weights as 4 little-endian bytes per i32 to /tmp/nn_weights.bin.
+// Each weight slot in arena holds the i32 bit-pattern of an f32; we need
+// to extract bytes carefully to handle sign-bit-set (negative) f32 values.
+//
+// Trick: AND with the byte mask FIRST (zeros lower bits), then divide.
+// This makes the division exact (no rounding-toward-zero corruption that
+// would happen for negative-i32 / positive-divisor with non-zero remainder).
+@pure fn weights_bytes() -> i32 { 13456 }   // weights_total() * 4
+
+fn nn_save_weights(weights: i32) -> i32 {
+    let byte_start = __arena_len();
+    let mut i: i32 = 0;
+    while i < weights_total() {
+        let w = __arena_get(weights + i);
+        // Bitwise AND `&` is broken in helixc backend (returns 0 for all
+        // operands as of 2026-05; const-fold also folds to 0). Workaround:
+        // residue-and-subtract chain — `((v % 256) + 256) % 256` yields
+        // the unsigned low byte regardless of v's sign in C-truncate
+        // semantics, and `(v - byte) / 256` is then exact (no rounding).
+        let b0 = ((w % 256) + 256) % 256;
+        let v1 = (w - b0) / 256;
+        let b1 = ((v1 % 256) + 256) % 256;
+        let v2 = (v1 - b1) / 256;
+        let b2 = ((v2 % 256) + 256) % 256;
+        let v3 = (v2 - b2) / 256;
+        let b3 = ((v3 % 256) + 256) % 256;
+        __arena_push(b0);
+        __arena_push(b1);
+        __arena_push(b2);
+        __arena_push(b3);
+        i = i + 1;
+    }
+    write_file_to_arena("/tmp/nn_weights.bin", byte_start, weights_bytes())
+}
+
+// Load weights from /tmp/nn_weights.bin. Returns 1 on success, 0 on
+// failure (file missing or wrong size — agent then keeps random init).
+fn nn_load_weights(weights: i32) -> i32 {
+    let byte_start = __arena_len();
+    let bytes_read = read_file_to_arena("/tmp/nn_weights.bin");
+    if bytes_read == weights_bytes() {
+        let mut i: i32 = 0;
+        while i < weights_total() {
+            let b0 = __arena_get(byte_start + i * 4);
+            let b1 = __arena_get(byte_start + i * 4 + 1);
+            let b2 = __arena_get(byte_start + i * 4 + 2);
+            let b3 = __arena_get(byte_start + i * 4 + 3);
+            // Reconstruct i32 with proper sign extension. b3 in [0, 255];
+            // if b3 >= 128 the original i32 was negative (high bit set).
+            let w = if b3 >= 128 {
+                (b3 - 256) * 16777216 + b2 * 65536 + b1 * 256 + b0
+            } else {
+                b3 * 16777216 + b2 * 65536 + b1 * 256 + b0
+            };
+            __arena_set(weights + i, w);
+            i = i + 1;
+        }
+        1
+    } else {
+        0
+    }
+}
+
 // ---- Adam optimizer state ----
 // Per-weight first-moment (m) and second-moment (v) running averages, plus
 // global step counter t. Allocated as one contiguous block per main-net.
@@ -582,10 +646,23 @@ fn main() -> i32 {
     let na = n_actions();
     let seed_cell = __arena_push(map_seed() * 7919 + 31);
     let weights = nn_alloc_weights(seed_cell);
+    // Transfer learning: try to load weights from prior run. If file exists
+    // with the right size, load (overrides random init); else fall through
+    // with random weights. This is a NO-OP on the first ever run; on
+    // subsequent runs the agent picks up where it left off — useful when
+    // the user changes maze seed (transfer learning) or re-runs the same
+    // seed (cumulative training).
+    let loaded = nn_load_weights(weights);
+    print_str("{\"type\":\"transfer\",\"loaded\":");
+    print_int(loaded);
+    print_str("}\n");
     // Adam optimizer state allocated immediately after weights so its m/v/t
     // buffers are at fixed offsets from `weights` (see adam_*_off helpers).
+    // NB: Adam moments are ALWAYS zero-initialized (don't carry across runs);
+    // resuming with stale moments would cause large first-step updates.
     nn_alloc_adam_after(weights);
-    // Target network: zero-init then sync from main weights.
+    // Target network: zero-init then sync from main weights (which may
+    // have been loaded above).
     let target_weights = nn_alloc_target();
     nn_copy_weights(weights, target_weights);
     // Counter for periodic target<-main sync. Synced every 100 train steps.
@@ -594,9 +671,11 @@ fn main() -> i32 {
     // DISCOVERY: pure random walk to populate replay with goal-reaching
     // transitions. Without this the NN almost never learns the reward
     // signal because it never sees a goal in 40*150=6000 random steps.
+    // Skip when loading pre-trained weights — the agent already knows
+    // useful Q-values, no need to flood with random transitions.
     let mut disc_pos: i32 = 0;
     let mut disc_step: i32 = 0;
-    let mut disc_found: i32 = 0;
+    let mut disc_found: i32 = if loaded == 1 { 1 } else { 0 };
     let mut disc_since_restart: i32 = 0;
     while disc_found == 0 {
         if disc_step >= 200000 { disc_found = 1; }
@@ -642,7 +721,14 @@ fn main() -> i32 {
     let mut best_steps: i32 = 9999;
     let mut last_failed: i32 = 0;
     while ep < n_episodes() {
-        let raw = 80 - (ep * 60) / (n_episodes() - 1);
+        // When weights were loaded from a prior run, stay near the floor —
+        // pre-trained Q-values already know good actions; high epsilon
+        // would just thrash them. Otherwise ramp from 80% -> 20% over ep.
+        let raw = if loaded == 1 {
+            epsilon_floor()
+        } else {
+            80 - (ep * 60) / (n_episodes() - 1)
+        };
         let base_eps = if raw < epsilon_floor() { epsilon_floor() } else { raw };
         let epsilon_pct = if last_failed == 1 {
             let bumped = base_eps + 25;
@@ -748,6 +834,11 @@ fn main() -> i32 {
     print_int(n_episodes());
     print_str(",\"best_steps\":");
     print_int(best_steps);
+    print_str("}\n");
+    // Save trained weights for next run (transfer learning).
+    let saved = nn_save_weights(weights);
+    print_str("{\"type\":\"transfer\",\"saved\":");
+    print_int(saved);
     print_str("}\n");
     if best_steps < 9999 { 42 } else { 99 }
 }
