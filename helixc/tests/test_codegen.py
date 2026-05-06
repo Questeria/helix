@@ -1682,6 +1682,17 @@ fn main() -> i32 {{
     assert compile_and_exec("__fsqrt(0.0)") == 0, "fsqrt 0.0=0.0"
     assert compile_and_exec("__fsqrt(0.25) / 16777216") == 63, "fsqrt 0.25=0.5"
     assert compile_and_exec("__fsqrt(64.0) / 16777216") == 65, "fsqrt 64=8"
+    # Phase 1.10 step 5h: __fabs(x) — f32 absolute value via integer
+    # sign-bit AND mask (and eax, 0x7FFFFFFF). 5 bytes; mirrors __fneg
+    # (XOR with 0x80000000) — purely integer ops on the f32 bit pattern.
+    #   abs(2.0)        =  2.0 -> 0x40000000, top byte 64
+    #   abs(-2.0)       =  2.0 -> 0x40000000, top byte 64 (sign bit cleared)
+    #   abs(0.0)        =  0.0 -> 0x00000000, all zero
+    #   abs(__fneg(7.5)) = 7.5 -> 0x40F00000, top byte 64
+    assert compile_and_exec("__fabs(2.0) / 16777216") == 64, "fabs 2.0=2.0"
+    assert compile_and_exec("__fabs(__fneg(2.0)) / 16777216") == 64, "fabs -2.0=2.0"
+    assert compile_and_exec("__fabs(0.0)") == 0, "fabs 0.0=0.0"
+    assert compile_and_exec("__fabs(__fneg(7.5)) / 16777216") == 64, "fabs -7.5=7.5"
     # Phase 1.10 step 5a: optional `_f32` / `_f64` / `_i32` / `_i64` suffix
     # on numeric literals. Pre-fix the suffix lexed as a separate IDENT
     # token, breaking parse. Now consumed as part of the literal token.

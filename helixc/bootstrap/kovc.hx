@@ -864,13 +864,14 @@ fn emit_exit_with_eax() -> i32 {
 fn install_builtin_names() -> i32 {
     let bn_state = __arena_push(0);          // slot 0 placeholder
     __arena_push(0); __arena_push(0); __arena_push(0); __arena_push(0);
-    // Reserve slots 5..63 (59 more slots: 2 file-name slots + 2
+    // Reserve slots 5..64 (60 more slots: 2 file-name slots + 2
     // str_state header slots + 48 entry slots + 5 f32 builtin slots
     // (__fadd, __fsub, __fmul, __fdiv at 57..60; __fneg at 61) + 1
     // fn_type_state pointer slot at 62 (Phase 1.10 step 5c follow-on)
-    // + 1 __fsqrt slot at 63 (Phase 1.10 step 5g).
+    // + 1 __fsqrt slot at 63 (Phase 1.10 step 5g)
+    // + 1 __fabs slot at 64 (Phase 1.10 step 5h).
     let mut i: i32 = 0;
-    while i < 59 {
+    while i < 60 {
         __arena_push(0);
         i = i + 1;
     }
@@ -967,6 +968,16 @@ fn install_builtin_names() -> i32 {
     __arena_push(115); __arena_push(113); __arena_push(114); __arena_push(116);
     __arena_set(bn_state + 63, s12);
 
+    // Phase 1.10 step 5h: "__fabs" (95 95 102 97 98 115) — 6 chars.
+    // Single-arg f32 absolute value via integer mask: clears the sign
+    // bit of the f32 bit pattern in eax. Mirrors __fneg (which XORs
+    // with 0x80000000 to flip the sign bit); __fabs ANDs with
+    // 0x7FFFFFFF to clear it. NaN inputs propagate (sign bit cleared
+    // but mantissa preserved). No SSE registers touched.
+    let s13 = __arena_push(95); __arena_push(95); __arena_push(102);
+    __arena_push(97); __arena_push(98); __arena_push(115);
+    __arena_set(bn_state + 64, s13);
+
     bn_state
 }
 
@@ -990,6 +1001,8 @@ fn bn_fn_type_state(b: i32) -> i32 { __arena_get(b + 62) }
 fn bn_set_fn_type_state(b: i32, v: i32) -> i32 { __arena_set(b + 62, v); 0 }
 // Phase 1.10 step 5g: __fsqrt single-arg f32 sqrt (SSE2 sqrtss).
 fn bn_fsqrt_s(b: i32) -> i32 { __arena_get(b + 63) }
+// Phase 1.10 step 5h: __fabs single-arg f32 absolute value (sign-bit AND mask).
+fn bn_fabs_s(b: i32) -> i32 { __arena_get(b + 64) }
 // str_state accessors. The state lives within the bn_state region.
 fn str_top(b: i32) -> i32 { __arena_get(b + 7) }
 fn str_top_set(b: i32, v: i32) -> i32 { __arena_set(b + 7, v); 0 }
@@ -1488,9 +1501,21 @@ fn try_emit_builtin_call(name_s: i32, name_l: i32, args_head: i32,
         emit_byte(0xF3); emit_byte(0x0F); emit_byte(0x51); emit_byte(0xC0); // sqrtss xmm0, xmm0
         emit_byte(0x66); emit_byte(0x0F); emit_byte(0x7E); emit_byte(0xC0); // movd eax, xmm0
         n0 + 12
+    } else { if kovc_byte_eq(name_s, name_l, bn_fabs_s(bn_state), 6) == 1 {
+        // Phase 1.10 step 5h: __fabs(x) -> f32 bits. Single-arg sign
+        // bit clear via integer AND on the bit pattern: and eax,
+        // 0x7FFFFFFF. Mirrors __fneg (XOR with 0x80000000) — purely
+        // an integer op on the f32 bit pattern in eax. 5 bytes:
+        // 0x25 imm32. NaN inputs propagate (sign cleared, mantissa
+        // preserved).
+        let a0 = __arena_get(args_head + 1);
+        let n0 = emit_ast_code(a0, bind_state, patch_state, bn_state);
+        emit_byte(0x25);
+        emit_byte(0xFF); emit_byte(0xFF); emit_byte(0xFF); emit_byte(0x7F);
+        n0 + 5
     } else {
         0
-    }}}}}}}}}}}}
+    }}}}}}}}}}}}}
 }
 
 // Unreachable in this commit; reference impl preserved for next
