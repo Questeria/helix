@@ -825,6 +825,16 @@ class Lowerer:
                 return None
             if expr.op == "-":
                 return self.builder.emit(tir.OpKind.NEG, inner, result_ty=inner.ty)
+            # Bitwise NOT (~). Pre-fix: `~` fell through to `return inner`
+            # so `~5` returned 5 unchanged.
+            if expr.op == "~":
+                return self.builder.emit(tir.OpKind.BIT_NOT, inner, result_ty=inner.ty)
+            # Logical NOT (!). Pre-fix: `!` also fell through to `return inner`
+            # so `!1` returned 1 instead of 0. Lower as `inner == 0`.
+            if expr.op == "!":
+                zero = self.builder.const_int(0)
+                return self.builder.emit(tir.OpKind.CMP_EQ, inner, zero,
+                                         result_ty=tir.TIRScalar("bool"))
             return inner
         if isinstance(expr, A.Call):
             # Recursive enum constructor as a value expression (i.e. NOT

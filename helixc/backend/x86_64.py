@@ -758,6 +758,9 @@ class Asm:
     def sar_eax_cl(self) -> None:  self.b.emit(0xD3, 0xF8)
     def shl_rax_cl(self) -> None:  self.b.emit(0x48, 0xD3, 0xE0)
     def sar_rax_cl(self) -> None:  self.b.emit(0x48, 0xD3, 0xF8)
+    # Bitwise unary NOT (~): one's complement.
+    def not_eax(self) -> None:  self.b.emit(0xF7, 0xD0)
+    def not_rax(self) -> None:  self.b.emit(0x48, 0xF7, 0xD0)
 
     def movzx_eax_al(self) -> None:
         # 0F B6 C0   movzx eax, al
@@ -1333,6 +1336,18 @@ class FnCompiler:
                 self.asm.mov_eax_mem_rbp(l_slot)
                 self.asm.mov_ecx_mem_rbp(r_slot)
                 self.asm.sar_eax_cl()
+                self.asm.mov_mem_rbp_eax(res_slot)
+            return
+        if op.kind == tir.OpKind.BIT_NOT:
+            slot = self._slot_of(op.operands[0])
+            res_slot = self._slot_of(op.results[0])
+            if self._is_i64_type(op.results[0].ty):
+                self.asm.mov_rax_mem_rbp(slot)
+                self.asm.not_rax()
+                self.asm.mov_mem_rbp_rax(res_slot)
+            else:
+                self.asm.mov_eax_mem_rbp(slot)
+                self.asm.not_eax()
                 self.asm.mov_mem_rbp_eax(res_slot)
             return
         if op.kind == tir.OpKind.NEG:

@@ -155,6 +155,9 @@ class OpKind(Enum):
     # no unsigned int type yet, so logical right shift is unreachable.
     SHL = "elem.shl"
     SHR = "elem.shr"
+    # Bitwise unary NOT (~): one's complement, flips every bit. Distinct
+    # from logical NOT (`!`) which is lowered as CMP_EQ-against-0.
+    BIT_NOT = "elem.bit_not"
 
     # Elementwise (unary)
     NEG = "elem.neg"

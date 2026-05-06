@@ -120,6 +120,24 @@ def test_exit_shr_arithmetic():
     assert compile_and_run("fn main() -> i32 { (0 - 1) >> 25 }") == 255
 
 
+def test_exit_logical_not():
+    # Pre-fix: `!` fell through `_lower_expr` Unary case to `return inner`,
+    # so `!5` returned 5 unchanged. Now lowered as `inner == 0`.
+    assert compile_and_run("fn main() -> i32 { !0 }") == 1
+    assert compile_and_run("fn main() -> i32 { !5 }") == 0
+    # Combined with arithmetic: !(0) * 42 = 1 * 42 = 42.
+    assert compile_and_run("fn main() -> i32 { !0 * 42 }") == 42
+
+
+def test_exit_bitwise_not():
+    # ~ is one's-complement. `~0 == -1` -> exit 255 (0xFFFFFFFF mod 256).
+    assert compile_and_run("fn main() -> i32 { ~0 }") == 255
+    # Double-NOT is identity: ~~42 == 42.
+    assert compile_and_run("fn main() -> i32 { ~(~42) }") == 42
+    # ~(-1) == 0  (flipping all 1s gives all 0s).
+    assert compile_and_run("fn main() -> i32 { ~(0 - 1) }") == 0
+
+
 def test_let_binding_then_use():
     src = "fn main() -> i32 { let x = 40; let y = 2; x + y }"
     assert compile_and_run(src) == 42
