@@ -1177,12 +1177,32 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
     if t == 0 {
         emit_ast_int(p1)
     } else { if t == 27 {
-        // AST_FLOATLIT stub (Phase 1.10 step 3a). Float literal — codegen
-        // emits `mov eax, 0` (B8 00 00 00 00). Real f64 SSE2 emission +
-        // IEEE 754 byte packing is a multi-step follow-on (steps 3b/3c/3d).
-        // For now: programs that USE float literals via the bootstrap will
-        // get exit code 0 instead of the float value, but they won't crash.
-        emit_ast_int(0)
+        // AST_FLOATLIT (Phase 1.10 step 3b). p1 = byte_start of the literal
+        // text in the arena, p2 = byte_len. Parse the integer part (digits
+        // before '.') and emit `mov eax, integer_part`. Lossy: "1.5" emits
+        // 1, not 1.5. Steps 3c/3d will add real IEEE 754 + SSE2 emission.
+        // Digit check inlined (kovc.hx is self-contained — no is_digit dep
+        // on lexer.hx).
+        let mut i: i32 = 0;
+        let mut val: i32 = 0;
+        let mut keep_p: i32 = 1;
+        while keep_p == 1 {
+            if i >= p2 { keep_p = 0; }
+            else {
+                let b = __arena_get(p1 + i);
+                if b == 46 { keep_p = 0; }   // '.' stops integer-part scan
+                else {
+                    // is_digit inlined: '0'=48, '9'=57.
+                    if b < 48 { keep_p = 0; }
+                    else { if b > 57 { keep_p = 0; }
+                    else {
+                        val = val * 10 + (b - 48);
+                        i = i + 1;
+                    }};
+                };
+            };
+        }
+        emit_ast_int(val)
     } else { if t == 2 {
         let n1 = emit_ast_code(p1, bind_state, patch_state, bn_state);
         let np = emit_push_rax();

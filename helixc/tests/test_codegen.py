@@ -1489,6 +1489,11 @@ fn main() -> i32 {{
     assert compile_and_exec(
         "fn main() -> i32 { __arena_push(0) ; __arena_set(0, 99) ; __arena_get(0) }"
     ) == 99, "arena_set then arena_get"
+    # Phase 1.10 step 3b: bootstrap can now lex + parse + codegen float
+    # literals. Codegen is integer-part-only (lossy), so "1.5" emits 1
+    # and "42.99" emits 42. Steps 3c/3d will add real f64 SSE2.
+    assert compile_and_exec("42.5") == 42, "float literal emits integer part"
+    assert compile_and_exec("3.14") == 3, "another float literal"
 
 
 def test_bootstrap_kovc_inline_write_file_to_arena():
