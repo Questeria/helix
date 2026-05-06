@@ -3041,6 +3041,83 @@ def test_agi_substrate_demo_full():
     assert code == 42, f"expected 42 (all sections green), got {code}"
 
 
+def test_agi_astar_priority():
+    """Phase 4 perfection step 3: A* priority f(n) = g(n) + h(n).
+    State 3: g=7, h=6 -> f=13."""
+    src = """
+    fn main() -> i32 {
+        let g = t1d_new(5);
+        ti1d_set(g, 0, 0); ti1d_set(g, 1, 5); ti1d_set(g, 2, 10);
+        ti1d_set(g, 3, 7); ti1d_set(g, 4, 12);
+        let h = t1d_new(5);
+        ti1d_set(h, 0, 20); ti1d_set(h, 1, 15); ti1d_set(h, 2, 8);
+        ti1d_set(h, 3, 6); ti1d_set(h, 4, 0);
+        astar_priority(g, h, 3)
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 13, f"expected 13, got {code}"
+
+
+def test_agi_astar_path_set_get():
+    """came_from[child] = parent; round-trip."""
+    src = """
+    fn main() -> i32 {
+        let cf = t1d_new(10);
+        let mut i: i32 = 0;
+        while i < 10 { ti1d_set(cf, i, 0 - 1); i = i + 1; }
+        astar_path_set(cf, 5, 2);
+        astar_path_get(cf, 5)
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 2, f"expected 2, got {code}"
+
+
+def test_agi_attention_softmax_f32():
+    """Symmetric softmax-attention: q=[1,1] over balanced k/v -> output sums to 10."""
+    src = """
+    fn main() -> i32 {
+        let q = t1d_new(2);
+        tf1d_set(q, 0, 1.0_f32); tf1d_set(q, 1, 1.0_f32);
+        let keys = ti2d_new(2, 2);
+        tf2d_set(keys, 2, 0, 0, 1.0_f32); tf2d_set(keys, 2, 0, 1, 0.0_f32);
+        tf2d_set(keys, 2, 1, 0, 0.0_f32); tf2d_set(keys, 2, 1, 1, 1.0_f32);
+        let vals = ti2d_new(2, 2);
+        tf2d_set(vals, 2, 0, 0, 10.0_f32); tf2d_set(vals, 2, 0, 1, 0.0_f32);
+        tf2d_set(vals, 2, 1, 0, 0.0_f32); tf2d_set(vals, 2, 1, 1, 10.0_f32);
+        let out = t1d_new(2);
+        attention_softmax_f32(q, keys, vals, 2, 2, out);
+        tf1d_sum(out, 2) as i32
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 10, f"expected 10, got {code}"
+
+
+def test_agi_unify_deep_recursive():
+    """Deep tree unify: p1 is a sub-tree (child_mask=1), recursion picks
+    up an inner var binding through the inner sub-tree."""
+    src = """
+    fn main() -> i32 {
+        let b = bindings_new();
+        let inner_pat = tree_node_new(unify_var_tag(), 0, 0, 0);
+        let pat_inner = tree_node_new(2, inner_pat, 0, 0);
+        let pat = tree_node_new(1, pat_inner, 5, 0);
+        let leaf42 = tree_node_new(0, 42, 0, 0);
+        let term_inner = tree_node_new(2, leaf42, 0, 0);
+        let term = tree_node_new(1, term_inner, 5, 0);
+        let ok = unify_deep(pat, term, 1, b);
+        if ok == 1 {
+            let bound = bindings_get(b, 0);
+            if bound >= 0 { 42 } else { 0 }
+        } else { 0 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
 def test_agi_beam_search_top_k():
     """Phase 4 perfection: beam_top_k selects highest-scoring candidates.
     candidates [3, 1, 2, 4]; scores indexed by id: s[1]=8, s[2]=2, s[3]=4, s[4]=6.

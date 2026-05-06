@@ -285,6 +285,120 @@ fn beam_top_k(candidates_start: i32, n: i32, scoring_start: i32,
     }
 }
 
+// =========================================================================
+// A* search: PQ ordered by f(n) = g(n) + h(n).
+// =========================================================================
+//
+// Caller provides:
+//   - g_table[state]: cost so far (caller updates during expansion)
+//   - h_table[state]: heuristic estimate to goal
+//   - successors_of(state): generated externally; A* loop just inserts/pops.
+//
+// A* itself is the priority-queue management + closed-set + path
+// reconstruction. The actual graph traversal is the caller's loop.
+// API:
+//   astar_priority(g_start, h_start, state)    -> i32
+//        f(n) = g(n) + h(n); use as the PQ score.
+//   astar_path_set(came_from_start, child, parent) -> i32
+//        Record came_from[child] = parent for path reconstruction.
+//   astar_path_get(came_from_start, state)     -> i32
+//        Read came_from[state]; -1 if unset.
+
+@pure
+fn astar_priority(g_start: i32, h_start: i32, state: i32) -> i32 {
+    __arena_get(g_start + state) + __arena_get(h_start + state)
+}
+
+fn astar_path_set(came_from_start: i32, child: i32, parent: i32) -> i32 {
+    __arena_set(came_from_start + child, parent);
+    0
+}
+
+@pure
+fn astar_path_get(came_from_start: i32, state: i32) -> i32 {
+    __arena_get(came_from_start + state)
+}
+
+// Reconstruct path from start to goal by walking came_from backwards.
+// Writes path into out_start; returns path length.
+fn astar_reconstruct(came_from_start: i32, goal: i32, out_start: i32,
+                     max_len: i32) -> i32 {
+    let mut cur = goal;
+    let mut len: i32 = 0;
+    while len < max_len {
+        if cur < 0 {
+            len = max_len;
+        } else {
+            __arena_set(out_start + len, cur);
+            len = len + 1;
+            let prev = __arena_get(came_from_start + cur);
+            if prev == cur { len = max_len; }
+            else { cur = prev; }
+        }
+    }
+    // Walk back to count actually-set entries (-1 sentinel marks end).
+    let mut real: i32 = 0;
+    while real < max_len {
+        let v = __arena_get(out_start + real);
+        if v < 0 { real = max_len; }
+        else { real = real + 1; }
+    }
+    real
+}
+
+// =========================================================================
+// Attention with softmax on f32 (transformer-style scaled dot-product).
+// =========================================================================
+//
+// Single query, n keys/values, dim d. f32 throughout (uses tf2d_get and
+// __exp from transcendentals.hx). Output: 1 vector of dim d.
+//
+//   scores[k] = dot(q, keys[k]) / sqrt(d)         (for stability)
+//   probs = softmax(scores)
+//   out = sum_k probs[k] * values[k]
+
+fn attention_softmax_f32(q_start: i32, keys_start: i32, vals_start: i32,
+                          n: i32, d: i32, out_start: i32) -> i32 {
+    // Step 1: scores[k] = dot(q, keys[k]).
+    let scores = t1d_new(n);
+    let inv_sqrt_d = 1.0_f32 / __sqrt((d as f32));
+    let mut k: i32 = 0;
+    while k < n {
+        let mut dim: i32 = 0;
+        let mut dot: f32 = 0.0_f32;
+        while dim < d {
+            let qv = __f32_from_bits(__arena_get(q_start + dim));
+            let kv = __f32_from_bits(__arena_get(keys_start + k * d + dim));
+            dot = dot + qv * kv;
+            dim = dim + 1;
+        }
+        tf1d_set(scores, k, dot * inv_sqrt_d);
+        k = k + 1;
+    }
+    // Step 2: softmax(scores) into probs.
+    let probs = t1d_new(n);
+    softmax_layer(scores, probs, n);
+    // Step 3: out[d] = sum_k probs[k] * values[k][d].
+    let mut dim2: i32 = 0;
+    while dim2 < d {
+        __arena_set(out_start + dim2, __bits_of_f32(0.0_f32));
+        dim2 = dim2 + 1;
+    }
+    let mut k2: i32 = 0;
+    while k2 < n {
+        let p = __f32_from_bits(__arena_get(probs + k2));
+        let mut d2: i32 = 0;
+        while d2 < d {
+            let cur = __f32_from_bits(__arena_get(out_start + d2));
+            let v = __f32_from_bits(__arena_get(vals_start + k2 * d + d2));
+            __arena_set(out_start + d2, __bits_of_f32(cur + p * v));
+            d2 = d2 + 1;
+        }
+        k2 = k2 + 1;
+    }
+    0
+}
+
 // Attention: scaled dot-product attention single-head, integer-only
 // (proportional to actual softmax(QK^T/d)V).
 //   query_start : 1 query of dim d

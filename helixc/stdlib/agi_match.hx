@@ -177,6 +177,65 @@ fn unify_shallow(pat_off: i32, term_off: i32, b: i32) -> i32 {
     }
 }
 
+// Deep unify: tags must match; recursively unify each child slot
+// interpreted as an arena offset. Children-as-offsets convention:
+// p1, p2, p3 are EITHER scalar values (unrelated to the tree) OR
+// arena offsets to other tree nodes. The caller signals which by the
+// `child_mask`: bit i (1<<i) set means slot p_i is a sub-tree offset.
+//
+// Example: a binary-op node tagged 1 with operands on p1, p2 uses
+// child_mask = 3 (binary 011 — both slots are sub-trees).
+//
+// Returns 1 on success, 0 on failure.
+fn unify_deep(pat_off: i32, term_off: i32, child_mask: i32, b: i32) -> i32 {
+    let pat_tag = __arena_get(pat_off);
+    if pat_tag == unify_var_tag() {
+        let var_id = __arena_get(pat_off + 1);
+        let existing = bindings_get(b, var_id);
+        if existing < 0 {
+            bindings_set(b, var_id, term_off);
+            1
+        } else {
+            // Already-bound var: existing must structurally match term.
+            unify_deep(existing, term_off, child_mask, b)
+        }
+    } else {
+        // Concrete node: tags must match.
+        let term_tag = __arena_get(term_off);
+        if pat_tag == term_tag {
+            // Recurse into each child marked by mask.
+            let mut ok: i32 = 1;
+            // child slot 0 is p1, slot 1 is p2, slot 2 is p3.
+            if child_mask % 2 == 1 {
+                let pc = __arena_get(pat_off + 1);
+                let tc = __arena_get(term_off + 1);
+                if unify_deep(pc, tc, child_mask, b) == 0 { ok = 0; }
+            } else {
+                if __arena_get(pat_off + 1) != __arena_get(term_off + 1) { ok = 0; }
+            }
+            let m1 = (child_mask / 2) % 2;
+            if m1 == 1 {
+                let pc = __arena_get(pat_off + 2);
+                let tc = __arena_get(term_off + 2);
+                if unify_deep(pc, tc, child_mask, b) == 0 { ok = 0; }
+            } else {
+                if __arena_get(pat_off + 2) != __arena_get(term_off + 2) { ok = 0; }
+            }
+            let m2 = (child_mask / 4) % 2;
+            if m2 == 1 {
+                let pc = __arena_get(pat_off + 3);
+                let tc = __arena_get(term_off + 3);
+                if unify_deep(pc, tc, child_mask, b) == 0 { ok = 0; }
+            } else {
+                if __arena_get(pat_off + 3) != __arena_get(term_off + 3) { ok = 0; }
+            }
+            ok
+        } else {
+            0
+        }
+    }
+}
+
 // =========================================================================
 // Phase 4 perfection: hierarchical planning.
 // =========================================================================
