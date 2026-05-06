@@ -1740,6 +1740,67 @@ fn main() -> i32 {{
         "fn mul_f(a: f32, b: f32) -> f32 { a * b } "
         "fn main() -> i32 { mul_f(2.0_f32, 4.0_f32) / 16777216 }"
     ) == 65, "fn f32 multiplication dispatches to SSE mulss"
+    # Step 5c follow-on #2: fn return-type propagation through call sites.
+    # Without the fn_type_table pre-pass, a user-named f32 fn at the call
+    # site would be treated as i32 by is_f32_expr (only `__f*` prefix was
+    # matched). Now AST_CALL looks up the user fn's declared `-> f32`
+    # return type and AST_ADD on the call result dispatches to SSE.
+    #
+    #   fn double_f(x: f32) -> f32 { x + x }
+    #   fn main() -> i32 {
+    #       let y: f32 = double_f(2.0_f32) ;        // y is now bound f32
+    #       let z = y + 1.0_f32 ;                    // SSE addss (was integer)
+    #       z / 16777216
+    #   }
+    # Result: double_f(2.0)=4.0; 4.0+1.0=5.0 -> 0x40A00000 -> top byte 64.
+    assert compile_and_exec(
+        "fn double_f(x: f32) -> f32 { x + x } "
+        "fn main() -> i32 { "
+        "let y: f32 = double_f(2.0_f32) ; let z = y + 1.0_f32 ; z / 16777216 }"
+    ) == 64, "user-named f32 fn return type propagates to call-site bind type"
+    # Direct AST_ADD on user fn calls (no intermediate let).
+    #   add_f(1.5, 2.5) + add_f(0.5, 0.5)  =  4.0 + 1.0  =  5.0  ->  64
+    assert compile_and_exec(
+        "fn add_f(a: f32, b: f32) -> f32 { a + b } "
+        "fn main() -> i32 { "
+        "(add_f(1.5_f32, 2.5_f32) + add_f(0.5_f32, 0.5_f32)) / 16777216 }"
+    ) == 64, "AST_ADD of two user-named f32 fn calls dispatches to SSE"
+    # Phase 1.10 step 5d: AST_NEG must dispatch to a sign-bit XOR when
+    # the inner is f32 (mirrors __fneg, mirrors helixc-Python). The
+    # OLD bootstrap codegen always emitted integer `neg eax` (two's
+    # complement on the bit pattern), which is wrong for floats.
+    # is_f32_expr now also has a t==9 case so a NEG of an f32
+    # propagates through containing AST_ADD/SUB/MUL/DIV trees.
+    #   -x + x = 0.0 -> bits 0x00000000, top byte 0
+    assert compile_and_exec(
+        "fn main() -> i32 { let x: f32 = 2.0_f32 ; let y: f32 = -x ; "
+        "(x + y) / 16777216 }"
+    ) == 0, "f32 NEG: -x + x cancels to 0.0 (sign-bit flip via XOR)"
+    #   double NEG: --x = x. 2.5 -> 0x40200000, top byte 64.
+    assert compile_and_exec(
+        "fn main() -> i32 { let x: f32 = 2.5_f32 ; let y: f32 = -x ; "
+        "let z: f32 = -y ; z / 16777216 }"
+    ) == 64, "f32 NEG: --x recovers x (chained let-bindings, both f32)"
+    #   NEG inside SSE-dispatched ADD: 5 + (-3) = 2.0 -> top byte 64.
+    #   This exercises is_f32_expr's t==9 case so the parent ADD
+    #   dispatches to addss (vs falling back to integer add on the
+    #   raw bits).
+    assert compile_and_exec(
+        "fn main() -> i32 { let x: f32 = 5.0_f32 ; let y: f32 = 3.0_f32 ; "
+        "(x + (-y)) / 16777216 }"
+    ) == 64, "f32 NEG inside ADD: SSE-dispatched 5 + (-3) = 2.0"
+    #   fn returning f32 with NEG in body: neg_f(2.0) = -2.0; check by
+    #   adding back via SSE (cancels to 0.0).
+    assert compile_and_exec(
+        "fn neg_f(a: f32) -> f32 { -a } "
+        "fn main() -> i32 { let r: f32 = neg_f(2.0_f32) ; "
+        "(r + 2.0_f32) / 16777216 }"
+    ) == 0, "fn body `-a` (f32 param) flips sign; cancellation -> 0.0"
+    # Integer NEG sanity: still uses two's complement `neg eax`.
+    #   -5 + 7 = 2
+    assert compile_and_exec(
+        "fn main() -> i32 { let x: i32 = 5 ; -x + 7 }"
+    ) == 2, "i32 NEG path unchanged (integer two's complement)"
 
 
 def test_bootstrap_kovc_inline_write_file_to_arena():

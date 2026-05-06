@@ -773,14 +773,26 @@ fn parse_fn_decl(tok_base: i32, sb: i32) -> i32 {
     cur_advance(sb);     // ')'
     cur_advance(sb);     // '-' (part of '->')
     cur_advance(sb);     // '>' (the second char of '->')
-    cur_advance(sb);     // return-type IDENT (ignored)
+    // Capture the return-type IDENT bytes the same way AST_PARAM does.
+    // 'f' first byte (length 3) -> f32 / f64 -> ret_ty = 1.
+    let rt_tok = cur_get(sb);
+    let rt_s = tok_p2(tok_base, rt_tok);
+    let rt_l = tok_p3(tok_base, rt_tok);
+    cur_advance(sb);     // return-type IDENT
+    let ret_ty = if rt_l == 3 {
+        let b0 = __arena_get(rt_s);
+        if b0 == 102 { 1 } else { 0 }
+    } else { 0 };
     cur_advance(sb);     // '{'
     let body = parse_expr(tok_base, sb);
     cur_advance(sb);     // '}'
     // Audit-14: same overflow issue as AST_LET — packed encoding
     // breaks for arena indices > 65535. Extend to 5 slots: p3 =
-    // body_idx, p4 = params_head.
+    // body_idx, p4 = params_head. Step 5c follow-on: 6th slot p5 =
+    // ret_ty (0 = i32, 1 = f32). Codegen reads p5 to populate the
+    // fn_type_table for is_f32_expr's AST_CALL resolution.
     let node = mk_node(14, name_start, name_len, body);
     __arena_push(params_head);
+    __arena_push(ret_ty);
     node
 }

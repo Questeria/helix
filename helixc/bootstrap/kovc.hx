@@ -188,6 +188,18 @@ fn emit_ast_neg_suffix() -> i32 {
     2
 }
 
+// Phase 1.10 step 5d: f32 unary NEG via sign-bit XOR. Mirrors the
+// __fneg builtin's encoding (Phase 1.10 step 4) — the f32 bit pattern
+// in eax has bit 31 flipped via `xor eax, 0x80000000`. Used by AST_NEG
+// codegen when is_f32_expr(inner) == 1 so `-x` on an f32 binding
+// produces correct floating-point negation (not integer two's complement).
+//   35 00 00 00 80   xor eax, 0x80000000   (5 bytes)
+fn emit_ast_fneg_suffix() -> i32 {
+    emit_byte(0x35);
+    emit_byte(0x00); emit_byte(0x00); emit_byte(0x00); emit_byte(0x80);
+    5
+}
+
 // AST_BNOT(inner): emit inner code, then `not eax`.
 //   F7 D0   not eax
 // Mirrors helixc-Python OpKind.BIT_NOT (commit 4e6b4fa).
@@ -579,7 +591,11 @@ fn is_underscore_f_call(name_start: i32, name_len: i32) -> i32 {
 // the recursion stops at literals, variables, and calls. Used by the
 // AST_LET codegen (to stamp type into bind_state) and by the AST_ADD
 // /SUB/MUL/DIV codegen (to dispatch to SSE when both operands f32).
-fn is_f32_expr(idx: i32, bind_state: i32) -> i32 {
+//
+// bn_state is needed so AST_CALL can look up user-named fn return
+// types via the fn_type_table — without that we'd only catch the
+// `__f*` builtin prefix and miss user-defined f32 functions.
+fn is_f32_expr(idx: i32, bind_state: i32, bn_state: i32) -> i32 {
     let t = __arena_get(idx);
     let p1 = __arena_get(idx + 1);
     let p2 = __arena_get(idx + 2);
@@ -587,24 +603,87 @@ fn is_f32_expr(idx: i32, bind_state: i32) -> i32 {
     else { if t == 1 {                          // AST_VAR
         bind_lookup_type(bind_state, p1, p2)
     } else { if t == 16 {                       // AST_CALL
-        is_underscore_f_call(p1, p2)
+        // First check the `__f*` builtin prefix (cheap), then fall
+        // back to the fn_type_table lookup for user-named fns.
+        let prefix_match = is_underscore_f_call(p1, p2);
+        if prefix_match == 1 { 1 }
+        else {
+            let fts = bn_fn_type_state(bn_state);
+            if fts == 0 { 0 }
+            else { fn_type_table_lookup(fts, p1, p2) }
+        }
     } else { if t == 2 {                        // AST_ADD
-        let l = is_f32_expr(p1, bind_state);
-        let r = is_f32_expr(p2, bind_state);
+        let l = is_f32_expr(p1, bind_state, bn_state);
+        let r = is_f32_expr(p2, bind_state, bn_state);
         if l == 1 { if r == 1 { 1 } else { 0 } } else { 0 }
     } else { if t == 3 {                        // AST_SUB
-        let l = is_f32_expr(p1, bind_state);
-        let r = is_f32_expr(p2, bind_state);
+        let l = is_f32_expr(p1, bind_state, bn_state);
+        let r = is_f32_expr(p2, bind_state, bn_state);
         if l == 1 { if r == 1 { 1 } else { 0 } } else { 0 }
     } else { if t == 4 {                        // AST_MUL
-        let l = is_f32_expr(p1, bind_state);
-        let r = is_f32_expr(p2, bind_state);
+        let l = is_f32_expr(p1, bind_state, bn_state);
+        let r = is_f32_expr(p2, bind_state, bn_state);
         if l == 1 { if r == 1 { 1 } else { 0 } } else { 0 }
     } else { if t == 5 {                        // AST_DIV
-        let l = is_f32_expr(p1, bind_state);
-        let r = is_f32_expr(p2, bind_state);
+        let l = is_f32_expr(p1, bind_state, bn_state);
+        let r = is_f32_expr(p2, bind_state, bn_state);
         if l == 1 { if r == 1 { 1 } else { 0 } } else { 0 }
-    } else { 0 }}}}}}}
+    } else { if t == 9 {                        // AST_NEG: type follows inner
+        is_f32_expr(p1, bind_state, bn_state)
+    } else { 0 }}}}}}}}
+}
+
+// Phase 1.10 step 5c follow-on: fn_type_table maps fn names to their
+// declared return-type tag (0=i32, 1=f32). Populated PRE-PASS over the
+// AST_FN_LIST so is_f32_expr can resolve user-named f32 fns at call
+// sites — without this, `let x = my_f32_fn(...)` followed by `x + ...`
+// would fall back to integer codegen since AST_CALL only knows about
+// the `__f*` builtin prefix. Same shape as fn_table; separate to avoid
+// churning the existing fn_table_add semantics.
+fn fn_type_table_init() -> i32 {
+    let state = __arena_push(0);            // top = 0
+    __arena_push(state + 2);                // table_base = state + 2
+    let mut i: i32 = 0;
+    while i < 768 {                         // 256 entries * 3 slots
+        __arena_push(0);
+        i = i + 1;
+    }
+    state
+}
+
+fn fn_type_table_add(state: i32, name_start: i32, name_len: i32, ret_ty: i32) -> i32 {
+    let top = __arena_get(state);
+    let table_base = __arena_get(state + 1);
+    let entry = table_base + top * 3;
+    __arena_set(entry, name_start);
+    __arena_set(entry + 1, name_len);
+    __arena_set(entry + 2, ret_ty);
+    __arena_set(state, top + 1);
+    0
+}
+
+@pure
+fn fn_type_table_lookup(state: i32, name_start: i32, name_len: i32) -> i32 {
+    let top = __arena_get(state);
+    let table_base = __arena_get(state + 1);
+    let mut i: i32 = 0;
+    let mut found: i32 = 0;
+    let mut ty: i32 = 0;
+    while i < top {
+        if found == 0 {
+            let entry = table_base + i * 3;
+            let ns = __arena_get(entry);
+            let nl = __arena_get(entry + 1);
+            if kovc_byte_eq(ns, nl, name_start, name_len) == 1 {
+                ty = __arena_get(entry + 2);
+                found = 1;
+            };
+            i = i + 1;
+        } else {
+            i = top;
+        };
+    }
+    ty
 }
 
 // fn_table: maps fn names to arena slot indices where their code
@@ -725,11 +804,12 @@ fn emit_exit_with_eax() -> i32 {
 fn install_builtin_names() -> i32 {
     let bn_state = __arena_push(0);          // slot 0 placeholder
     __arena_push(0); __arena_push(0); __arena_push(0); __arena_push(0);
-    // Reserve slots 5..61 (57 more slots: 2 file-name slots + 2
-    // str_state header slots + 48 entry slots + 5 f32 builtin slots:
-    // __fadd, __fsub, __fmul, __fdiv at slots 57..60; __fneg at 61).
+    // Reserve slots 5..62 (58 more slots: 2 file-name slots + 2
+    // str_state header slots + 48 entry slots + 5 f32 builtin slots
+    // (__fadd, __fsub, __fmul, __fdiv at 57..60; __fneg at 61) + 1
+    // fn_type_state pointer slot at 62 (Phase 1.10 step 5c follow-on).
     let mut i: i32 = 0;
-    while i < 57 {
+    while i < 58 {
         __arena_push(0);
         i = i + 1;
     }
@@ -832,6 +912,11 @@ fn bn_fsub_s(b: i32) -> i32 { __arena_get(b + 58) }
 fn bn_fmul_s(b: i32) -> i32 { __arena_get(b + 59) }
 fn bn_fdiv_s(b: i32) -> i32 { __arena_get(b + 60) }
 fn bn_fneg_s(b: i32) -> i32 { __arena_get(b + 61) }
+// Phase 1.10 step 5c follow-on: fn_type_state arena offset (or 0 if
+// not yet installed). is_f32_expr reads this to resolve user-named
+// f32 fn return types at AST_CALL sites.
+fn bn_fn_type_state(b: i32) -> i32 { __arena_get(b + 62) }
+fn bn_set_fn_type_state(b: i32, v: i32) -> i32 { __arena_set(b + 62, v); 0 }
 // str_state accessors. The state lives within the bn_state region.
 fn str_top(b: i32) -> i32 { __arena_get(b + 7) }
 fn str_top_set(b: i32, v: i32) -> i32 { __arena_set(b + 7, v); 0 }
@@ -1533,7 +1618,7 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         let n2 = emit_ast_code(p2, bind_state, patch_state, bn_state);
         let nm = emit_mov_ecx_eax();
         let no = emit_pop_rax();
-        let na = if is_f32_expr(idx, bind_state) == 1 {
+        let na = if is_f32_expr(idx, bind_state, bn_state) == 1 {
             emit_addss()
         } else {
             emit_add_eax_ecx()
@@ -1545,7 +1630,7 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         let n2 = emit_ast_code(p2, bind_state, patch_state, bn_state);
         let nm = emit_mov_ecx_eax();
         let no = emit_pop_rax();
-        let na = if is_f32_expr(idx, bind_state) == 1 {
+        let na = if is_f32_expr(idx, bind_state, bn_state) == 1 {
             emit_subss()
         } else {
             emit_sub_eax_ecx()
@@ -1557,7 +1642,7 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         let n2 = emit_ast_code(p2, bind_state, patch_state, bn_state);
         let nm = emit_mov_ecx_eax();
         let no = emit_pop_rax();
-        let na = if is_f32_expr(idx, bind_state) == 1 {
+        let na = if is_f32_expr(idx, bind_state, bn_state) == 1 {
             emit_mulss()
         } else {
             emit_imul_eax_ecx()
@@ -1569,7 +1654,7 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         let n2 = emit_ast_code(p2, bind_state, patch_state, bn_state);
         let nm = emit_mov_ecx_eax();
         let no = emit_pop_rax();
-        let na = if is_f32_expr(idx, bind_state) == 1 {
+        let na = if is_f32_expr(idx, bind_state, bn_state) == 1 {
             emit_divss()
         } else {
             emit_idiv_eax_ecx()
@@ -1586,8 +1671,15 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         let na = emit_imod_eax_ecx();
         n1 + np + n2 + nm + no + na
     } else { if t == 9 {
+        // Phase 1.10 step 5d: dispatch unary NEG by inner type. f32
+        // negation is sign-bit XOR (mirrors __fneg); i32 stays at the
+        // existing two's-complement `neg eax`.
         let ni = emit_ast_code(p1, bind_state, patch_state, bn_state);
-        let nn = emit_ast_neg_suffix();
+        let nn = if is_f32_expr(p1, bind_state, bn_state) == 1 {
+            emit_ast_fneg_suffix()
+        } else {
+            emit_ast_neg_suffix()
+        };
         ni + nn
     } else { if t == 26 {
         // AST_BNOT: emit inner (leaves value in eax), then `not eax`.
@@ -1718,7 +1810,7 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         // so subsequent uses of the binding can dispatch to SSE.
         let body_idx = __arena_get(idx + 3);
         let value_idx = __arena_get(idx + 4);
-        let val_ty = is_f32_expr(value_idx, bind_state);
+        let val_ty = is_f32_expr(value_idx, bind_state, bn_state);
         let n_val = emit_ast_code(value_idx, bind_state, patch_state, bn_state);
         let off = bind_alloc_offset(bind_state);
         let n_store = emit_mov_local_eax(off);
@@ -1733,7 +1825,7 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         // Same 5-slot layout as AST_LET (audit-14).
         let body_idx = __arena_get(idx + 3);
         let value_idx = __arena_get(idx + 4);
-        let val_ty = is_f32_expr(value_idx, bind_state);
+        let val_ty = is_f32_expr(value_idx, bind_state, bn_state);
         let n_val = emit_ast_code(value_idx, bind_state, patch_state, bn_state);
         let off = bind_alloc_offset(bind_state);
         let n_store = emit_mov_local_eax(off);
@@ -1935,6 +2027,31 @@ fn emit_elf_for_ast_to_path(ast_root: i32) -> i32 {
     let fn_state = fn_table_init();
     let patch_state = patch_table_init();
     let bn_state = install_builtin_names();
+    // Phase 1.10 step 5c follow-on: fn_type_table tracks each user fn's
+    // declared return type so is_f32_expr can resolve user-named f32
+    // calls (not just `__f*` builtins). Populate via a pre-pass over
+    // the AST_FN_LIST below; until then, bn_state[62] = 0 (sentinel
+    // "not installed", which makes is_f32_expr fall through to the i32
+    // default at AST_CALL).
+    let fn_type_state = fn_type_table_init();
+    bn_set_fn_type_state(bn_state, fn_type_state);
+    // Pre-pass: walk fn_list, register each fn's name + ret_ty so the
+    // table is populated BEFORE any fn body codegen runs is_f32_expr.
+    if __arena_get(ast_root) == 15 {
+        let mut walk: i32 = ast_root;
+        let mut keep: i32 = 1;
+        while keep == 1 {
+            let fn_idx = __arena_get(walk + 1);
+            // AST_FN_DECL: p1 = name_start, p2 = name_len,
+            //              p4 (slot 4) = params_head, p5 (slot 5) = ret_ty.
+            let fn_name_s = __arena_get(fn_idx + 1);
+            let fn_name_l = __arena_get(fn_idx + 2);
+            let fn_ret_ty = __arena_get(fn_idx + 5);
+            fn_type_table_add(fn_type_state, fn_name_s, fn_name_l, fn_ret_ty);
+            let next_list = __arena_get(walk + 2);
+            if next_list == 0 { keep = 0; } else { walk = next_list; };
+        }
+    }
     // Resolve main (single-expr legacy or AST_FN_LIST → main body).
     let resolved_root = resolve_program_root(ast_root);
     // Stash "main" bytes for the _start stub's call patch (the
