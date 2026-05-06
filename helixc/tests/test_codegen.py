@@ -3041,6 +3041,31 @@ def test_agi_substrate_demo_full():
     assert code == 42, f"expected 42 (all sections green), got {code}"
 
 
+def test_agi_beam_search_top_k():
+    """Phase 4 perfection: beam_top_k selects highest-scoring candidates.
+    candidates [3, 1, 2, 4]; scores indexed by id: s[1]=8, s[2]=2, s[3]=4, s[4]=6.
+    Top-2 -> [1, 4] (scores 8, 6); sum of selected = 5."""
+    src = """
+    fn main() -> i32 {
+        let cand = t1d_new(4);
+        ti1d_set(cand, 0, 3); ti1d_set(cand, 1, 1);
+        ti1d_set(cand, 2, 2); ti1d_set(cand, 3, 4);
+        let scores = t1d_new(5);
+        ti1d_set(scores, 0, 0);
+        ti1d_set(scores, 1, 8);
+        ti1d_set(scores, 2, 2);
+        ti1d_set(scores, 3, 4);
+        ti1d_set(scores, 4, 6);
+        let result = t1d_new(2);
+        let n_kept = beam_top_k(cand, 4, scores, result, 2);
+        // result[0] = highest = state 1 (score 8); result[1] = second = state 4 (score 6).
+        ti1d_get(result, 0) + ti1d_get(result, 1)
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 5, f"expected 5 (1 + 4), got {code}"
+
+
 def test_agi_unify_variable_binding():
     """Phase 4 perfection: unification with variables. A pattern var (tag=-1)
     matches anything and binds it. Pattern X vs term node(1, 42) -> X = node."""
