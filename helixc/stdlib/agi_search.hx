@@ -320,30 +320,41 @@ fn astar_path_get(came_from_start: i32, state: i32) -> i32 {
 }
 
 // Reconstruct path from start to goal by walking came_from backwards.
-// Writes path into out_start; returns path length.
+// Writes path into out_start in REVERSE order (goal first, start last).
+// Stops on any of:
+//   - cur < 0          (no parent recorded — broken came_from chain)
+//   - prev == cur      (start node convention: came_from[start] = start)
+//   - len >= max_len   (output buffer full)
+// Writes a -1 terminator at out_start[len] if there's room for it, so
+// callers that scan for sentinels can do so safely. Returns the actual
+// number of path entries written (not counting the terminator).
+//
+// Pre-fix: this function had a subtle bug — on early exit it set
+// len = max_len, then a second pass walked the buffer counting non-
+// negative entries. Uninitialized buffer slots are arbitrary, so the
+// returned count was unreliable unless the caller pre-zeroed (or pre-
+// minused) the buffer. Now we just return the loop-tracked len.
 fn astar_reconstruct(came_from_start: i32, goal: i32, out_start: i32,
                      max_len: i32) -> i32 {
     let mut cur = goal;
     let mut len: i32 = 0;
-    while len < max_len {
-        if cur < 0 {
-            len = max_len;
-        } else {
+    let mut keep: i32 = 1;
+    while keep == 1 {
+        if cur < 0 { keep = 0; }
+        else { if len >= max_len { keep = 0; }
+        else {
             __arena_set(out_start + len, cur);
             len = len + 1;
             let prev = __arena_get(came_from_start + cur);
-            if prev == cur { len = max_len; }
+            if prev == cur { keep = 0; }
             else { cur = prev; }
-        }
+        }};
     }
-    // Walk back to count actually-set entries (-1 sentinel marks end).
-    let mut real: i32 = 0;
-    while real < max_len {
-        let v = __arena_get(out_start + real);
-        if v < 0 { real = max_len; }
-        else { real = real + 1; }
+    // Write -1 terminator if the buffer has room.
+    if len < max_len {
+        __arena_set(out_start + len, 0 - 1);
     }
-    real
+    len
 }
 
 // =========================================================================

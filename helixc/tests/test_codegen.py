@@ -1413,6 +1413,11 @@ fn main() -> i32 {{
     assert compile_and_exec("(1 + 2) * 3") == 9, "grouping"
     assert compile_and_exec("100 - 50 - 8") == 42, "left-assoc subtraction"
     assert compile_and_exec("-5") == 251, "unary negation (-5 mod 256)"
+    # AST_BNOT: bitwise NOT via `not eax` (Phase 1.10 ~ port from helixc-Python).
+    # Exit code is truncated to 8 bits, so ~0 = 0xFFFFFFFF -> 255, ~5 = -6 -> 250.
+    assert compile_and_exec("~0") == 255, "bitwise NOT of 0 = -1 mod 256"
+    assert compile_and_exec("~5") == 250, "bitwise NOT of 5 = -6 mod 256"
+    assert compile_and_exec("~~42") == 42, "double bitwise NOT is identity"
     # AST_LT + AST_IF (control flow added in this commit)
     assert compile_and_exec("1 < 2") == 1, "LT true"
     assert compile_and_exec("5 < 2") == 0, "LT false"
@@ -3272,6 +3277,69 @@ def test_agi_astar_path_set_get():
     """
     code = compile_and_run(src)
     assert code == 2, f"expected 2, got {code}"
+
+
+def test_agi_astar_reconstruct_path_length():
+    """Walk a recorded came_from chain back from goal=5: 5<-3<-1<-0(start).
+    Expected output buffer in reverse-traversal order: [5, 3, 1, 0, ...].
+    Returned length = 4. Path goes 5 -> 3 -> 1 -> 0; came_from[0]=0 marks
+    the start node convention (self-pointing terminates the walk)."""
+    src = """
+    fn main() -> i32 {
+        let cf = t1d_new(10);
+        let mut i: i32 = 0;
+        while i < 10 { ti1d_set(cf, i, 0 - 1); i = i + 1; }
+        astar_path_set(cf, 0, 0);   // start node points to itself
+        astar_path_set(cf, 1, 0);
+        astar_path_set(cf, 3, 1);
+        astar_path_set(cf, 5, 3);
+        let out = t1d_new(10);
+        astar_reconstruct(cf, 5, out, 10)
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 4, f"expected path length 4 (5->3->1->0), got {code}"
+
+
+def test_agi_astar_reconstruct_buffer_contents():
+    """Same chain as above; verify the buffer contents are in
+    reverse-traversal order (goal first)."""
+    src = """
+    fn main() -> i32 {
+        let cf = t1d_new(10);
+        let mut i: i32 = 0;
+        while i < 10 { ti1d_set(cf, i, 0 - 1); i = i + 1; }
+        astar_path_set(cf, 0, 0);
+        astar_path_set(cf, 1, 0);
+        astar_path_set(cf, 3, 1);
+        astar_path_set(cf, 5, 3);
+        let out = t1d_new(10);
+        astar_reconstruct(cf, 5, out, 10);
+        // Sum the first 4 entries: 5 + 3 + 1 + 0 = 9.
+        ti1d_get(out, 0) + ti1d_get(out, 1) + ti1d_get(out, 2) + ti1d_get(out, 3)
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 9, f"expected 5+3+1+0=9, got {code}"
+
+
+def test_agi_astar_reconstruct_truncates_at_max_len():
+    """When the path is longer than max_len, reconstruct stops at max_len
+    and returns max_len. No buffer overrun."""
+    src = """
+    fn main() -> i32 {
+        let cf = t1d_new(20);
+        let mut i: i32 = 0;
+        // Linear chain: 0 -> 1 -> 2 -> ... -> 14 (15 nodes long)
+        astar_path_set(cf, 0, 0);
+        let mut k: i32 = 1;
+        while k < 15 { astar_path_set(cf, k, k - 1); k = k + 1; }
+        let out = t1d_new(5);
+        astar_reconstruct(cf, 14, out, 5)
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 5, f"expected truncated length 5, got {code}"
 
 
 def test_agi_attention_softmax_f32():
