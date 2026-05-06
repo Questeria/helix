@@ -3028,6 +3028,26 @@ def test_agi_sequence_match():
     assert code == 2, f"expected 2 (positions 0 and 2 match), got {code}"
 
 
+def test_agi_tutorial_agent_grid_world():
+    """Tutorial AI demo: composed grid-world solver. Builds a 4x4 world
+    model, runs BFS to find a 6-step path from cell 0 to cell 15, then
+    runs a hill-climbing agent for 6 steps. The agent uses working
+    memory + episodic memory + world model + search primitives end-to-end.
+
+    NOT the full Kovostov AI — that's the user's STOP point. This is a
+    demonstration that the cognitive primitives compose meaningfully.
+
+    Exit 6 = BFS path length is correct AND the agent reached the goal
+    in 6 steps AND logged 6 actions episodically."""
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    sample_path = os.path.join(proj_root, "helixc", "examples",
+                               "tutorial_agent.hx")
+    with open(sample_path, "r", encoding="utf-8") as f:
+        src = f.read()
+    code = compile_and_run(src)
+    assert code == 6, f"expected 6 (path len, agent reached goal, 6 logs), got {code}"
+
+
 def test_agi_substrate_demo_full():
     """Full AGI substrate demo: 10 sections covering Phase 2/3/4 primitives.
     Each section returns 42 if its primitive works; main short-circuits on
