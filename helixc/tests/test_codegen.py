@@ -3033,6 +3033,58 @@ def test_agi_sequence_match():
     assert code == 2, f"expected 2 (positions 0 and 2 match), got {code}"
 
 
+def test_ieee754_pos_2_0():
+    """Phase 1.10 step 3c: IEEE 754 f32 conversion in Phase-0 Helix.
+    f32_bits_pos(2, 0, 0) should produce 0x40000000 = 1073741824.
+    Verify via top byte (0x40 = 64) since exit codes max at 255."""
+    src = """
+    fn main() -> i32 {
+        let bits = f32_bits_pos(2, 0, 0);
+        bits / 16777216
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 64, f"expected 64 (0x40), got {code}"
+
+
+def test_ieee754_pos_1_5():
+    """f32_bits_pos(1, 5, 1) -> 0x3FC00000.
+    Bytes: 3F C0 00 00. Verify second-from-top byte = 0xC0 = 192."""
+    src = """
+    fn main() -> i32 {
+        let bits = f32_bits_pos(1, 5, 1);
+        // Get second byte: (bits / 65536) mod 256
+        (bits / 65536) % 256
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 192, f"expected 192 (0xC0), got {code}"
+
+
+def test_ieee754_pos_zero():
+    """f32_bits_pos(0, 0, 0) = 0."""
+    src = """
+    fn main() -> i32 {
+        f32_bits_pos(0, 0, 0) + 42
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42 (0+42), got {code}"
+
+
+def test_ieee754_pos_3_14():
+    """f32_bits_pos(3, 14, 2) approximates 3.14.
+    Real f32 of 3.14 = 0x4048F5C3. Top byte = 0x40 = 64."""
+    src = """
+    fn main() -> i32 {
+        let bits = f32_bits_pos(3, 14, 2);
+        bits / 16777216
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 64, f"expected 64 (top byte of ~3.14 bits), got {code}"
+
+
 def test_agi_tutorial_agent_grid_world():
     """Tutorial AI demo: composed grid-world solver. Builds a 4x4 world
     model, runs BFS to find a 6-step path from cell 0 to cell 15, then
