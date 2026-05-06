@@ -200,14 +200,14 @@
       <button id="resetBtn" onclick="resetAll()">Reset</button>
     </div>
     <div class="controls">
-      <label>Iterations to play:</label>
-      <input type="range" id="iterRange" min="1" max="2000" value="500" oninput="document.getElementById('iterVal').textContent = this.value" />
-      <span id="iterVal">500</span>
+      <label>Max events to play:</label>
+      <input type="range" id="iterRange" min="100" max="20000" step="100" value="20000" oninput="document.getElementById('iterVal').textContent = this.value" />
+      <span id="iterVal">20000</span>
     </div>
     <div class="controls">
       <label>Speed:</label>
-      <input type="range" id="speedRange" min="50" max="1000" value="300" />
-      <span id="speedVal">300ms/step</span>
+      <input type="range" id="speedRange" min="1" max="500" value="80" />
+      <span id="speedVal">80ms/step</span>
     </div>
     <h2 style="margin-top:16px">Stats</h2>
     <div class="stats">
@@ -541,8 +541,10 @@ async function runAgent() {
   allEvents = text.trim().split('\n').filter(l => l.length > 0).map(l => {
     try { return JSON.parse(l); } catch (e) { return null; }
   }).filter(e => e !== null);
-  // Truncate to iter events (so user can play short snippets).
-  allEvents = allEvents.slice(0, Math.min(allEvents.length, iter + 2));
+  // Cap event count if user set a smaller value (default = full run).
+  if (iter > 0 && allEvents.length > iter) {
+    allEvents = allEvents.slice(0, iter);
+  }
   cursor = 0;
   document.getElementById('status').textContent = 'Playing back ' + allEvents.length + ' events';
   scheduleNext();
