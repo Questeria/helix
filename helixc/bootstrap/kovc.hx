@@ -1176,6 +1176,13 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
     let p2 = __arena_get(idx + 2);
     if t == 0 {
         emit_ast_int(p1)
+    } else { if t == 27 {
+        // AST_FLOATLIT stub (Phase 1.10 step 3a). Float literal — codegen
+        // emits `mov eax, 0` (B8 00 00 00 00). Real f64 SSE2 emission +
+        // IEEE 754 byte packing is a multi-step follow-on (steps 3b/3c/3d).
+        // For now: programs that USE float literals via the bootstrap will
+        // get exit code 0 instead of the float value, but they won't crash.
+        emit_ast_int(0)
     } else { if t == 2 {
         let n1 = emit_ast_code(p1, bind_state, patch_state, bn_state);
         let np = emit_push_rax();
@@ -1452,7 +1459,7 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         emit_ast_int(0)
     } else {
         emit_ast_int(0)
-    }}}}}}}}}}}}}}}}}}}}}}}}
+    }}}}}}}}}}}}}}}}}}}}}}}}}
 }
 
 // --------------------------------------------------------------
