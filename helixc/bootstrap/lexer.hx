@@ -26,6 +26,7 @@
 //  16  TK_LT        "<"
 //  17  TK_GT        ">"
 //  18  TK_BANG      "!"
+//  23  TK_TILDE     "~"
 //  25  TK_STRLIT    payload = body byte_start, src_len = body length
 //                  (BOTH exclude the surrounding quotes). Phase-0 has
 //                  no escape sequences — `\` inside a string is taken
@@ -229,6 +230,39 @@ fn lex_int(src_start: i32, src_len: i32, pos: i32) -> i32 {
             };
         };
     }
+    // Phase 1.10 step 5a: optional `_f32` / `_f64` / `_i32` / `_i64` type
+    // suffix on numeric literals. The lexer consumes them so they don't
+    // appear as a separate IDENT token; the AST_FLOATLIT and AST_INTLIT
+    // codegens already stop at the first non-digit byte so suffix bytes
+    // are silently ignored at codegen time. Without this consumption,
+    // source like `1.5_f32` lexed as TK_FLOATLIT(`1.5`) + TK_IDENT(`_f32`)
+    // and the IDENT downstream broke the parse.
+    if p + 3 < end {
+        let b0 = __arena_get(p);
+        if b0 == 95 {   // '_'
+            let b1 = __arena_get(p + 1);
+            let b2 = __arena_get(p + 2);
+            let b3 = __arena_get(p + 3);
+            // f32 / f64
+            if b1 == 102 {
+                if b2 == 51 {
+                    if b3 == 50 { p = p + 4; };   // _f32
+                };
+                if b2 == 54 {
+                    if b3 == 52 { p = p + 4; };   // _f64
+                };
+            };
+            // i32 / i64
+            if b1 == 105 {
+                if b2 == 51 {
+                    if b3 == 50 { p = p + 4; };   // _i32
+                };
+                if b2 == 54 {
+                    if b3 == 52 { p = p + 4; };   // _i64
+                };
+            };
+        };
+    }
     if is_float == 1 {
         let flen = p - pos;
         push_token(26, pos, pos, flen);
@@ -319,9 +353,10 @@ fn punct_kind(b: i32) -> i32 {
     else { if b == 60 { 16 }      // '<'
     else { if b == 62 { 17 }      // '>'
     else { if b == 33 { 18 }      // '!'
+    else { if b == 126 { 23 }     // '~' (bitwise NOT — see parse_unary)
     else { if b == 64 { 24 }      // '@' (used by @pure / @effect attrs;
                                   // parser skips them as no-ops)
-    else { 0 }}}}}}}}}}}}}}}}}
+    else { 0 }}}}}}}}}}}}}}}}}}
 }
 
 // --------------------------------------------------------------

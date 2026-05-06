@@ -1622,6 +1622,20 @@ fn main() -> i32 {{
     assert compile_and_exec("__fmul(0.5, 0.5) / 16777216") == 62, "fmul 0.5*0.5=.25"
     assert compile_and_exec("__fdiv(1.0, 4.0) / 16777216") == 62, "fdiv 1/4=.25"
     assert compile_and_exec("__fsub(2.0, 1.5) / 16777216") == 63, "fsub 2-1.5=.5"
+    # Phase 1.10 step 5a: optional `_f32` / `_f64` / `_i32` / `_i64` suffix
+    # on numeric literals. Pre-fix the suffix lexed as a separate IDENT
+    # token, breaking parse. Now consumed as part of the literal token.
+    # Codegen ignores the suffix bytes (parses until first non-digit), so
+    # the literal value is unaffected — these tests just verify the suffix
+    # doesn't break parse of an otherwise-correct program.
+    assert compile_and_exec("42_i32") == 42, "int with _i32 suffix"
+    assert compile_and_exec("100_i64 - 58") == 42, "int with _i64 suffix in expr"
+    # 1.5 = 0x3FC00000 -> top byte 0x3F = 63 (same as 1.0/2.0/3.0).
+    assert compile_and_exec("1.5_f32 / 16777216") == 63, "float with _f32 suffix"
+    assert compile_and_exec("__fadd(1.5_f32, 2.5_f32) / 16777216") == 64, \
+        "f32-suffixed literals flow through __fadd"
+    # 0.5 = 0x3F000000 -> top byte 63.
+    assert compile_and_exec("0.5_f64 / 16777216") == 63, "float with _f64 suffix"
 
 
 def test_bootstrap_kovc_inline_write_file_to_arena():

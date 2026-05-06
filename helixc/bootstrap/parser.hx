@@ -55,6 +55,8 @@
 //  22  AST_LE        p1 = lhs, p2 = rhs.  result = (lhs <= rhs ? 1 : 0)
 //  23  AST_GE        p1 = lhs, p2 = rhs.  result = (lhs >= rhs ? 1 : 0)
 //  25  AST_STR_LIT   p1 = body byte_start, p2 = body byte_len.
+//  26  AST_BNOT      p1 = inner. Bitwise NOT (`not eax`). Mirrors helixc-Python
+//                    OpKind.BIT_NOT (commit 4e6b4fa).
 //                    Phase-0: as a value, lowers to mov eax, 0.
 //                    Recognized as the first arg of read_file_to_arena
 //                    or write_file_to_arena, where the body bytes get
@@ -313,13 +315,18 @@ fn parse_mul(tok_base: i32, sb: i32) -> i32 {
 
 fn parse_unary(tok_base: i32, sb: i32) -> i32 {
     let k = cur_get(sb);
-    if tok_tag(tok_base, k) == 8 {     // unary minus
+    let tg = tok_tag(tok_base, k);
+    if tg == 8 {     // unary minus
         cur_advance(sb);
         let inner = parse_unary(tok_base, sb);
         mk_node(9, inner, 0, 0)
+    } else { if tg == 23 {     // '~' bitwise NOT
+        cur_advance(sb);
+        let inner = parse_unary(tok_base, sb);
+        mk_node(26, inner, 0, 0)
     } else {
         parse_primary(tok_base, sb)
-    }
+    }}
 }
 
 fn parse_primary(tok_base: i32, sb: i32) -> i32 {

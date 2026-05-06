@@ -188,6 +188,14 @@ fn emit_ast_neg_suffix() -> i32 {
     2
 }
 
+// AST_BNOT(inner): emit inner code, then `not eax`.
+//   F7 D0   not eax
+// Mirrors helixc-Python OpKind.BIT_NOT (commit 4e6b4fa).
+fn emit_ast_bnot_suffix() -> i32 {
+    emit_byte(0xF7); emit_byte(0xD0);
+    2
+}
+
 // AST_ADD-style binary op suffix. The protocol is:
 //   1. Emit lhs code (leaves lhs in eax)
 //   2. push rax                                  (50)
@@ -1429,6 +1437,11 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         let ni = emit_ast_code(p1, bind_state, patch_state, bn_state);
         let nn = emit_ast_neg_suffix();
         ni + nn
+    } else { if t == 26 {
+        // AST_BNOT: emit inner (leaves value in eax), then `not eax`.
+        let ni = emit_ast_code(p1, bind_state, patch_state, bn_state);
+        let nn = emit_ast_bnot_suffix();
+        ni + nn
     } else { if t == 6 {
         let n1 = emit_ast_code(p1, bind_state, patch_state, bn_state);
         let np = emit_push_rax();
@@ -1659,7 +1672,7 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         emit_ast_int(0)
     } else {
         emit_ast_int(0)
-    }}}}}}}}}}}}}}}}}}}}}}}}}
+    }}}}}}}}}}}}}}}}}}}}}}}}}}
 }
 
 // --------------------------------------------------------------
