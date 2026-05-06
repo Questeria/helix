@@ -35,6 +35,9 @@
 @pure fn max_steps_per_ep() -> i32 { 150 }
 @pure fn n_obstacles() -> i32 { 14 }
 @pure fn epsilon_floor() -> i32 { 20 }
+// Experience replay buffer: 256 transitions, 5 i32s each (s, a, r, s', done).
+@pure fn replay_capacity() -> i32 { 256 }
+@pure fn replay_minibatch() -> i32 { 8 }
 
 // SEED_PLACEHOLDER — replaced by server.
 @pure fn map_seed() -> i32 { 12345 }
@@ -290,6 +293,49 @@ fn nn_train_step(weights: i32, state: i32, action: i32, target: f32,
     0
 }
 
+// =====================================================================
+// Experience replay buffer
+// =====================================================================
+// Layout:
+//   slot 0: count (number of transitions stored, max replay_capacity)
+//   slot 1: head (next write index, circular)
+//   slot 2..: replay_capacity * 5 entries, each (s, a, reward_x100, s', done)
+fn replay_new() -> i32 {
+    let start = __arena_len();
+    __arena_push(0);   // count
+    __arena_push(0);   // head
+    let total = replay_capacity() * 5;
+    let mut i: i32 = 0;
+    while i < total { __arena_push(0); i = i + 1; }
+    start
+}
+
+fn replay_store(replay: i32, s: i32, a: i32, reward_x100: i32, s_next: i32, done: i32) -> i32 {
+    let cap = replay_capacity();
+    let head = __arena_get(replay + 1);
+    let off = replay + 2 + head * 5;
+    __arena_set(off, s);
+    __arena_set(off + 1, a);
+    __arena_set(off + 2, reward_x100);
+    __arena_set(off + 3, s_next);
+    __arena_set(off + 4, done);
+    let new_head = (head + 1) % cap;
+    __arena_set(replay + 1, new_head);
+    let cnt = __arena_get(replay);
+    if cnt < cap {
+        __arena_set(replay, cnt + 1);
+    }
+    0
+}
+
+@pure fn replay_count(replay: i32) -> i32 { __arena_get(replay) }
+
+@pure fn replay_get_s(replay: i32, idx: i32) -> i32 { __arena_get(replay + 2 + idx * 5) }
+@pure fn replay_get_a(replay: i32, idx: i32) -> i32 { __arena_get(replay + 2 + idx * 5 + 1) }
+@pure fn replay_get_r(replay: i32, idx: i32) -> i32 { __arena_get(replay + 2 + idx * 5 + 2) }
+@pure fn replay_get_sp(replay: i32, idx: i32) -> i32 { __arena_get(replay + 2 + idx * 5 + 3) }
+@pure fn replay_get_done(replay: i32, idx: i32) -> i32 { __arena_get(replay + 2 + idx * 5 + 4) }
+
 fn pick_action_eps(q_buf: i32, na: i32, epsilon_pct: i32, seed_cell: i32) -> i32 {
     let s = __arena_get(seed_cell);
     let s2 = lcg(s);
@@ -363,6 +409,43 @@ fn main() -> i32 {
     let na = n_actions();
     let seed_cell = __arena_push(map_seed() * 7919 + 31);
     let weights = nn_alloc_weights(seed_cell);
+    let replay = replay_new();
+    // DISCOVERY: pure random walk to populate replay with goal-reaching
+    // transitions. Without this the NN almost never learns the reward
+    // signal because it never sees a goal in 40*150=6000 random steps.
+    let mut disc_pos: i32 = 0;
+    let mut disc_step: i32 = 0;
+    let mut disc_found: i32 = 0;
+    let mut disc_since_restart: i32 = 0;
+    while disc_found == 0 {
+        if disc_step >= 200000 { disc_found = 1; }
+        else {
+            if disc_since_restart >= 500 {
+                disc_pos = 0;
+                disc_since_restart = 0;
+            }
+            let s = __arena_get(seed_cell);
+            let s2 = lcg(s);
+            __arena_set(seed_cell, s2);
+            let dact = ((s2 % na) + na) % na;
+            let dnxt = wmt_predict(wmt, disc_pos, dact);
+            let dbumped = if dnxt == disc_pos { 1 } else { 0 };
+            let dd_old = dist_to_goal(disc_pos);
+            let dd_new = dist_to_goal(dnxt);
+            let dshaped = (dd_old - dd_new) * 10 - 1;
+            let drew = if dnxt == goal { 1000 }
+                       else { if dbumped == 1 { 0 - 50 } else { dshaped } };
+            let ddone = if dnxt == goal { 1 } else { 0 };
+            replay_store(replay, disc_pos, dact, drew * 100, dnxt, ddone);
+            disc_pos = dnxt;
+            disc_step = disc_step + 1;
+            disc_since_restart = disc_since_restart + 1;
+            if dnxt == goal {
+                disc_found = 1;
+                disc_pos = 0;
+            }
+        }
+    }
     // Per-step scratch buffers.
     let hidden_pre = t1d_new(h);
     let hidden_buf = t1d_new(h);
@@ -370,6 +453,10 @@ fn main() -> i32 {
     let q_next_buf = t1d_new(na);
     let hidden_pre_next = t1d_new(h);
     let hidden_buf_next = t1d_new(h);
+    let q_replay_buf = t1d_new(na);
+    let q_replay_next = t1d_new(na);
+    let h_pre_r = t1d_new(h);
+    let h_buf_r = t1d_new(h);
     let mut ep: i32 = 0;
     let mut best_steps: i32 = 9999;
     let mut last_failed: i32 = 0;
@@ -411,9 +498,41 @@ fn main() -> i32 {
                     let max_next = max_q(q_next_buf, na);
                     r_f + 0.9_f32 * max_next
                 };
-                // Train: gradient step on (q[action] - target)^2.
+                // Train on the current transition.
                 nn_train_step(weights, pos, action, target,
                               hidden_pre, hidden_buf, q_buf, 0.05_f32);
+                // Store transition in replay buffer.
+                let done_flag = if next_pos == goal { 1 } else { 0 };
+                replay_store(replay, pos, action, reward * 100, next_pos, done_flag);
+                // Replay-train: sample minibatch from buffer, train each.
+                let cnt = replay_count(replay);
+                if cnt >= replay_minibatch() {
+                    let mb = replay_minibatch();
+                    let mut mb_i: i32 = 0;
+                    while mb_i < mb {
+                        // Sample random index from replay.
+                        let s_seed = __arena_get(seed_cell);
+                        let s_seed2 = lcg(s_seed);
+                        __arena_set(seed_cell, s_seed2);
+                        let r_idx = ((s_seed2 % cnt) + cnt) % cnt;
+                        let r_s = replay_get_s(replay, r_idx);
+                        let r_a = replay_get_a(replay, r_idx);
+                        let r_r = (replay_get_r(replay, r_idx) as f32) / 100.0_f32 / 100.0_f32;
+                        let r_sp = replay_get_sp(replay, r_idx);
+                        let r_done = replay_get_done(replay, r_idx);
+                        // Forward at r_s, get q_replay_buf.
+                        nn_forward(weights, r_s, h_pre_r, h_buf_r, q_replay_buf);
+                        let r_target = if r_done == 1 {
+                            r_r
+                        } else {
+                            nn_forward(weights, r_sp, hidden_pre_next, hidden_buf_next, q_replay_next);
+                            r_r + 0.9_f32 * max_q(q_replay_next, na)
+                        };
+                        nn_train_step(weights, r_s, r_a, r_target,
+                                      h_pre_r, h_buf_r, q_replay_buf, 0.03_f32);
+                        mb_i = mb_i + 1;
+                    }
+                }
                 total_reward = total_reward + reward;
                 pos = next_pos;
                 step = step + 1;

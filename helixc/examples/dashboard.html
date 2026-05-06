@@ -197,7 +197,7 @@
       <select id="agentKind" style="background:#2a2a2a;color:#e0e0e0;border:1px solid #555;padding:4px 8px;border-radius:4px">
         <option value="hillclimb">Hill-climbing (deterministic, no learning)</option>
         <option value="qlearn" selected>Q-learning (tabular, fast)</option>
-        <option value="nn">Neural network (32-hidden + ReLU + SGD, slower)</option>
+        <option value="nn">Neural network (32-hidden + ReLU + replay buffer; experimental, often slower than tabular Q)</option>
       </select>
     </div>
     <div class="controls">
