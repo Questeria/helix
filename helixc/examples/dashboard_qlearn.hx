@@ -50,6 +50,13 @@ fn lcg(seed: i32) -> i32 {
     m
 }
 
+// HIGH bits of LCG output for action / percent. Glibc-style LCG has
+// notoriously non-uniform LOW bits — `s % 4` cycles among ~2 values
+// regardless of seed. See fog_of_war.hx for the empirical demo. Using
+// bits 16+ gives the uniform distribution we want for exploration.
+@pure fn lcg_action(s: i32) -> i32 { ((s / 65536) % n_actions() + n_actions()) % n_actions() }
+@pure fn lcg_pct(s: i32) -> i32 { ((s / 65536) % 100 + 100) % 100 }
+
 // Manhattan distance from state to goal (10x10 grid, goal at 99).
 @pure
 fn dist_to_goal(s: i32) -> i32 {
@@ -259,11 +266,11 @@ fn pick_action_eps(q: i32, state: i32, epsilon_pct: i32, seed_cell: i32) -> i32 
     let s = __arena_get(seed_cell);
     let s2 = lcg(s);
     __arena_set(seed_cell, s2);
-    let r_pct = ((s2 % 100) + 100) % 100;
+    let r_pct = lcg_pct(s2);
     if r_pct < epsilon_pct {
         let s3 = lcg(s2);
         __arena_set(seed_cell, s3);
-        ((s3 % n_actions()) + n_actions()) % n_actions()
+        lcg_action(s3)
     } else {
         q_argmax(q, state, seed_cell)
     }
@@ -408,7 +415,7 @@ fn main() -> i32 {
             let s = __arena_get(seed_cell);
             let s2 = lcg(s);
             __arena_set(seed_cell, s2);
-            let action = ((s2 % n_actions()) + n_actions()) % n_actions();
+            let action = lcg_action(s2);
             let next_pos = wmt_predict(wmt, disc_pos, action);
             let bumped = if next_pos == disc_pos { 1 } else { 0 };
             let d_old = dist_to_goal(disc_pos);

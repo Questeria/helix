@@ -48,6 +48,12 @@
     m
 }
 
+// HIGH bits of LCG output for action / percent. Glibc-style LCG has
+// notoriously non-uniform LOW bits — `s % 4` cycles among ~2 values
+// regardless of seed. See fog_of_war.hx for the empirical demo.
+@pure fn lcg_action(s: i32) -> i32 { ((s / 65536) % n_actions() + n_actions()) % n_actions() }
+@pure fn lcg_pct(s: i32) -> i32 { ((s / 65536) % 100 + 100) % 100 }
+
 @pure
 fn dist_to_goal(s: i32) -> i32 {
     let row = s / 10;
@@ -607,11 +613,11 @@ fn pick_action_eps(q_buf: i32, na: i32, epsilon_pct: i32, seed_cell: i32) -> i32
     let s = __arena_get(seed_cell);
     let s2 = lcg(s);
     __arena_set(seed_cell, s2);
-    let r_pct = ((s2 % 100) + 100) % 100;
+    let r_pct = lcg_pct(s2);
     if r_pct < epsilon_pct {
         let s3 = lcg(s2);
         __arena_set(seed_cell, s3);
-        ((s3 % na) + na) % na
+        lcg_action(s3)
     } else {
         argmax_q(q_buf, na)
     }
@@ -726,7 +732,7 @@ fn main() -> i32 {
             let s = __arena_get(seed_cell);
             let s2 = lcg(s);
             __arena_set(seed_cell, s2);
-            let dact = ((s2 % na) + na) % na;
+            let dact = lcg_action(s2);
             let dnxt = wmt_predict(wmt, disc_pos, dact);
             let dbumped = if dnxt == disc_pos { 1 } else { 0 };
             let dd_old = dist_to_goal(disc_pos);
@@ -829,7 +835,9 @@ fn main() -> i32 {
                         let s_seed = __arena_get(seed_cell);
                         let s_seed2 = lcg(s_seed);
                         __arena_set(seed_cell, s_seed2);
-                        let r_idx = ((s_seed2 % cnt) + cnt) % cnt;
+                        // High-bit LCG sampling avoids the low-bit bias that
+                        // would make replay always pick a few stale indices.
+                        let r_idx = ((s_seed2 / 65536) % cnt + cnt) % cnt;
                         let r_s = replay_get_s(replay, r_idx);
                         let r_a = replay_get_a(replay, r_idx);
                         let r_r = (replay_get_r(replay, r_idx) as f32) / 100.0_f32 / 100.0_f32;
