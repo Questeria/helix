@@ -21,6 +21,10 @@ helixc/tests/_tmp/
 _demo.bin
 /_*.bin
 
+# Server-generated source files (seed-substituted Helix sources)
+helixc/examples/_qlearn_compiled.hx
+helixc/examples/_*_compiled.hx
+
 # Editor / IDE
 .vscode/
 .idea/

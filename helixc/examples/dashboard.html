@@ -78,6 +78,9 @@
   .cell.path-tail {
     background: rgba(255, 136, 0, 0.3);
   }
+  .cell.optimal {
+    box-shadow: inset 0 0 0 2px #66ddff;
+  }
   .controls {
     display: flex;
     gap: 8px;
@@ -169,6 +172,10 @@
       <span><span class="swatch" style="background:#44ff66"></span>Goal</span>
       <span><span class="swatch" style="background:#ff5544"></span>Obstacle</span>
       <span><span class="swatch" style="background:#2a2a3a"></span>Visited</span>
+      <span><span class="swatch" style="border:2px solid #66ddff;background:transparent;width:10px;height:10px"></span>BFS-optimal</span>
+    </div>
+    <div style="margin-top:6px">
+      <label style="font-size:12px"><input type="checkbox" id="showOptimal" checked onchange="updateOptimal()"/> Show BFS shortest-path overlay (cyan border)</label>
     </div>
   </div>
 
@@ -242,7 +249,13 @@ document.getElementById('speedRange').oninput = function() {
   document.getElementById('speedVal').textContent = this.value + 'ms/step';
 };
 
+let currentObstacles = [];
+let currentGoal = 99;
+let optimalPath = new Set();
+
 function buildGrid(obstacles, goal) {
+  currentObstacles = obstacles || [];
+  currentGoal = goal;
   const grid = document.getElementById('grid');
   grid.innerHTML = '';
   for (let i = 0; i < N * N; i++) {
@@ -257,6 +270,57 @@ function buildGrid(obstacles, goal) {
       cell.textContent = 'G';
     }
     grid.appendChild(cell);
+  }
+  // Compute BFS shortest path from cell 0 to goal.
+  optimalPath = bfsShortestPath(0, goal, obstacles || []);
+  updateOptimal();
+}
+
+function bfsShortestPath(start, goal, obstacles) {
+  const obs = new Set(obstacles);
+  const parent = {};
+  const visited = new Set([start]);
+  const queue = [start];
+  parent[start] = -1;
+  while (queue.length > 0) {
+    const cur = queue.shift();
+    if (cur === goal) break;
+    const r = Math.floor(cur / N), c = cur % N;
+    const candidates = [
+      r > 0     ? (r - 1) * N + c : -1,
+      r < N - 1 ? (r + 1) * N + c : -1,
+      c > 0     ? r * N + (c - 1) : -1,
+      c < N - 1 ? r * N + (c + 1) : -1,
+    ];
+    for (const nxt of candidates) {
+      if (nxt < 0) continue;
+      if (obs.has(nxt)) continue;
+      if (visited.has(nxt)) continue;
+      visited.add(nxt);
+      parent[nxt] = cur;
+      queue.push(nxt);
+    }
+  }
+  // Reconstruct path
+  const path = new Set();
+  if (!(goal in parent)) return path;
+  let cur = goal;
+  while (cur !== -1) {
+    path.add(cur);
+    cur = parent[cur];
+  }
+  return path;
+}
+
+function updateOptimal() {
+  const show = document.getElementById('showOptimal').checked;
+  document.querySelectorAll('.cell.optimal').forEach(c => c.classList.remove('optimal'));
+  if (show) {
+    optimalPath.forEach(p => {
+      if (p === 0 || p === currentGoal) return;
+      const c = document.getElementById('c' + p);
+      if (c) c.classList.add('optimal');
+    });
   }
 }
 
