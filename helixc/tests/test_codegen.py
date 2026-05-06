@@ -1672,6 +1672,16 @@ fn main() -> i32 {{
     assert compile_and_exec("__fmul(0.5, 0.5) / 16777216") == 62, "fmul 0.5*0.5=.25"
     assert compile_and_exec("__fdiv(1.0, 4.0) / 16777216") == 62, "fdiv 1/4=.25"
     assert compile_and_exec("__fsub(2.0, 1.5) / 16777216") == 63, "fsub 2-1.5=.5"
+    # Phase 1.10 step 5g: __fsqrt(x) — hardware-direct SSE2 sqrtss.
+    # Single SSE instruction; result f32 in eax bit pattern.
+    #   sqrt(4.0)   = 2.0   -> 0x40000000, top byte 64
+    #   sqrt(0.0)   = 0.0   -> 0x00000000, all zero
+    #   sqrt(0.25)  = 0.5   -> 0x3F000000, top byte 63
+    #   sqrt(64.0)  = 8.0   -> 0x41000000, top byte 65
+    assert compile_and_exec("__fsqrt(4.0) / 16777216") == 64, "fsqrt 4.0=2.0"
+    assert compile_and_exec("__fsqrt(0.0)") == 0, "fsqrt 0.0=0.0"
+    assert compile_and_exec("__fsqrt(0.25) / 16777216") == 63, "fsqrt 0.25=0.5"
+    assert compile_and_exec("__fsqrt(64.0) / 16777216") == 65, "fsqrt 64=8"
     # Phase 1.10 step 5a: optional `_f32` / `_f64` / `_i32` / `_i64` suffix
     # on numeric literals. Pre-fix the suffix lexed as a separate IDENT
     # token, breaking parse. Now consumed as part of the literal token.
