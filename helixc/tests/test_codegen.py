@@ -1872,6 +1872,22 @@ fn main() -> i32 {{
         " let x: f64 = 1.0_f64 / 3.0_f64;"
         " __bits_of_f32(__f64_to_f32(x)) / 16777216 }"
     ) == 62, "f64 let-binding preserves 64-bit value through store/load"
+    # Phase 1.10 step 7f: f64 unary NEG via 64-bit sign-bit XOR.
+    # -0.5_f64 round-tripped via __f64_to_f32 should be -0.5_f32 =
+    # 0xBF000000. __bits_of_f32 / 16777216 = 0xBF = 191 (signed:
+    # interpret as i32 → -1090519040; /16777216 = -64; +256 = 191).
+    # If f64 NEG fell through to i32 `neg eax`, only low 32 = 0
+    # would flip to 0; high 32 stays 0x3FE00000 → result has wrong
+    # sign for f64. Round-trip via __f64_to_f32 gives 0.5 (positive)
+    # → 0x3F = 63. So 191 vs 63 unambiguously discriminates correct
+    # f64 NEG from broken integer path.
+    assert compile_and_exec(
+        "fn main() -> i32 {"
+        " let x: f64 = -0.5_f64;"
+        " let bits = __bits_of_f32(__f64_to_f32(x));"
+        " let top = bits / 16777216;"
+        " if top < 0 { top + 256 } else { top } }"
+    ) == 191, "f64 unary NEG flips bit 63 (0x3F000000 -> 0xBF000000)"
     # Phase 1.10 step 5+: bootstrap binary bitwise & | ^. Mirrors the
     # helixc-Python fix in commit f676fca; before this, the bootstrap
     # had no parse rule for these operators so source code couldn't use

@@ -213,6 +213,20 @@ fn emit_ast_fneg_suffix() -> i32 {
     5
 }
 
+// Phase 1.10 step 7f: f64 unary NEG via 64-bit sign-bit XOR.
+// f64 sign bit is bit 63 (0x8000000000000000). x86-64 has no direct
+// `xor rax, imm64`, so we materialize the mask into rcx first.
+//   48 B9 00 00 00 00 00 00 00 80   movabs rcx, 0x8000000000000000  (10 bytes)
+//   48 31 C8                         xor rax, rcx                   (3 bytes)
+// Total: 13 bytes.
+fn emit_ast_dneg_suffix() -> i32 {
+    emit_byte(0x48); emit_byte(0xB9);                                     // movabs rcx, imm64
+    emit_byte(0x00); emit_byte(0x00); emit_byte(0x00); emit_byte(0x00);   // low 32 = 0
+    emit_byte(0x00); emit_byte(0x00); emit_byte(0x00); emit_byte(0x80);   // high 32 = 0x80000000
+    emit_byte(0x48); emit_byte(0x31); emit_byte(0xC8);                    // xor rax, rcx
+    13
+}
+
 // AST_BNOT(inner): emit inner code, then `not eax`.
 //   F7 D0   not eax
 // Mirrors helixc-Python OpKind.BIT_NOT (commit 4e6b4fa).
@@ -2405,12 +2419,18 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         // Phase 1.10 step 5d: dispatch unary NEG by inner type. f32
         // negation is sign-bit XOR (mirrors __fneg); i32 stays at the
         // existing two's-complement `neg eax`.
+        // Step 7f: f64 path — flip bit 63 via 64-bit sign-bit XOR.
+        // is_f64_expr is checked FIRST so f64 vars/literals don't fall
+        // into the f32 path and get their high half (bits 32..63)
+        // silently zeroed by the 32-bit `xor eax, ...` form.
         let ni = emit_ast_code(p1, bind_state, patch_state, bn_state);
-        let nn = if is_f32_expr(p1, bind_state, bn_state) == 1 {
+        let nn = if is_f64_expr(p1, bind_state, bn_state) == 1 {
+            emit_ast_dneg_suffix()
+        } else { if is_f32_expr(p1, bind_state, bn_state) == 1 {
             emit_ast_fneg_suffix()
         } else {
             emit_ast_neg_suffix()
-        };
+        }};
         ni + nn
     } else { if t == 26 {
         // AST_BNOT: emit inner (leaves value in eax), then `not eax`.
