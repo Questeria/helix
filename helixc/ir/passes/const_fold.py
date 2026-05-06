@@ -342,6 +342,48 @@ def _try_fold_op(op: tir.Op, defs: dict) -> tir.Op | None:
                          attrs={"value": v},
                          span=op.span)
 
+    # Bitwise + shift binary on two int consts. Mirrors the arith case
+    # above. Python's integer ops have the right semantics for signed
+    # i32 (in particular: `>>` is arithmetic, `~` flips all bits and
+    # gives the two's-complement negative). _wrap_int_to_type at the end
+    # handles overflow back to i32 / i64 width.
+    if op.kind in (tir.OpKind.BIT_AND, tir.OpKind.BIT_OR, tir.OpKind.BIT_XOR,
+                   tir.OpKind.SHL, tir.OpKind.SHR):
+        if len(op.operands) != 2:
+            return None
+        l_def = defs.get(op.operands[0].id)
+        r_def = defs.get(op.operands[1].id)
+        if l_def is None or r_def is None:
+            return None
+        if l_def.kind == tir.OpKind.CONST_INT and r_def.kind == tir.OpKind.CONST_INT:
+            l = int(l_def.attrs["value"])
+            r = int(r_def.attrs["value"])
+            try:
+                if op.kind == tir.OpKind.BIT_AND:
+                    v = l & r
+                elif op.kind == tir.OpKind.BIT_OR:
+                    v = l | r
+                elif op.kind == tir.OpKind.BIT_XOR:
+                    v = l ^ r
+                elif op.kind == tir.OpKind.SHL:
+                    if r < 0 or r >= 64:
+                        return None  # undefined behavior; leave as runtime op
+                    v = l << r
+                elif op.kind == tir.OpKind.SHR:
+                    if r < 0 or r >= 64:
+                        return None
+                    v = l >> r   # arithmetic in Python for signed ints
+                else:
+                    return None
+            except Exception:
+                return None
+            v = _wrap_int_to_type(v, res.ty)
+            return tir.Op(kind=tir.OpKind.CONST_INT,
+                         operands=[],
+                         results=[res],
+                         attrs={"value": v},
+                         span=op.span)
+
     # Comparisons on const operands
     if op.kind in (tir.OpKind.CMP_EQ, tir.OpKind.CMP_NE, tir.OpKind.CMP_LT,
                    tir.OpKind.CMP_LE, tir.OpKind.CMP_GT, tir.OpKind.CMP_GE):
@@ -385,6 +427,23 @@ def _try_fold_op(op: tir.Op, defs: dict) -> tir.Op | None:
         if d.kind == tir.OpKind.CONST_FLOAT:
             v = -float(d.attrs["value"])
             return tir.Op(kind=tir.OpKind.CONST_FLOAT,
+                         operands=[],
+                         results=[res],
+                         attrs={"value": v},
+                         span=op.span)
+
+    # Unary bitwise NOT on int const. Python's ~ flips all bits and gives
+    # a (potentially negative) Python int; _wrap_int_to_type then constrains
+    # to i32/i64 width — bit-identical to the runtime `not eax` instruction.
+    if op.kind == tir.OpKind.BIT_NOT:
+        if len(op.operands) != 1:
+            return None
+        d = defs.get(op.operands[0].id)
+        if d is None:
+            return None
+        if d.kind == tir.OpKind.CONST_INT:
+            v = _wrap_int_to_type(~int(d.attrs["value"]), res.ty)
+            return tir.Op(kind=tir.OpKind.CONST_INT,
                          operands=[],
                          results=[res],
                          attrs={"value": v},

@@ -92,6 +92,56 @@ def test_fold_does_not_break_running_program():
                for op in blk.ops)
 
 
+def test_fold_bitwise_and():
+    # 250 & 42 = 42 (folded at compile time)
+    mod = lower_and_fold("fn f() -> i32 { 250 & 42 }")
+    assert count_ops(mod, tir.OpKind.BIT_AND) == 0
+    consts = [op for fn in mod.functions.values() for blk in fn.blocks
+              for op in blk.ops if op.kind == tir.OpKind.CONST_INT]
+    values = [op.attrs["value"] for op in consts]
+    assert 42 in values
+
+
+def test_fold_bitwise_or():
+    # 32 | 10 = 42
+    mod = lower_and_fold("fn f() -> i32 { 32 | 10 }")
+    assert count_ops(mod, tir.OpKind.BIT_OR) == 0
+
+
+def test_fold_bitwise_xor():
+    # 52 ^ 30 = 42
+    mod = lower_and_fold("fn f() -> i32 { 52 ^ 30 }")
+    assert count_ops(mod, tir.OpKind.BIT_XOR) == 0
+
+
+def test_fold_shl():
+    # 21 << 1 = 42
+    mod = lower_and_fold("fn f() -> i32 { 21 << 1 }")
+    assert count_ops(mod, tir.OpKind.SHL) == 0
+
+
+def test_fold_shr_arithmetic():
+    # 84 >> 1 = 42 ; (-1) >> 25 = -1 (sign-preserving)
+    mod = lower_and_fold("fn f() -> i32 { 84 >> 1 }")
+    assert count_ops(mod, tir.OpKind.SHR) == 0
+    mod2 = lower_and_fold("fn f() -> i32 { (-1) >> 25 }")
+    consts2 = [op.attrs["value"] for fn in mod2.functions.values()
+               for blk in fn.blocks for op in blk.ops
+               if op.kind == tir.OpKind.CONST_INT]
+    # Python's `>>` on signed -1 stays -1 — matches x86 SAR semantics.
+    assert -1 in consts2
+
+
+def test_fold_bit_not():
+    # ~5 = -6
+    mod = lower_and_fold("fn f() -> i32 { ~5 }")
+    assert count_ops(mod, tir.OpKind.BIT_NOT) == 0
+    consts = [op.attrs["value"] for fn in mod.functions.values()
+              for blk in fn.blocks for op in blk.ops
+              if op.kind == tir.OpKind.CONST_INT]
+    assert -6 in consts
+
+
 def test_fold_div_negative_dividend():
     # C semantics: -7 / 2 = -3 (truncation toward zero), NOT -4 (Python //)
     mod = lower_and_fold("fn main() -> i32 { -7 / 2 }")
