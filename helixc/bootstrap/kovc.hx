@@ -1985,8 +1985,10 @@ fn emit_elf_for_ast_to_path(ast_root: i32) -> i32 {
                 if pidx < 6 {
                     let pname_s = __arena_get(pcur + 1);
                     let pname_l = __arena_get(pcur + 2);
+                    // Step 5c follow-on: AST_PARAM now has p4 = type tag.
+                    let p_ty = __arena_get(pcur + 4);
                     let off = bind_alloc_offset(bind_state);
-                    bind_push(bind_state, pname_s, pname_l, off);
+                    bind_push_typed(bind_state, pname_s, pname_l, off, p_ty);
                     if pidx == 0 {
                         // mov [rbp+disp32], edi  : 89 BD disp32
                         emit_byte(0x89); emit_byte(0xBD); emit_u32_le(0 - off);

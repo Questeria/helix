@@ -45,7 +45,11 @@
 //  17  AST_ARG       p1 = expr_idx (the arg's value expression),
 //                    p2 = next_arg_idx (or 0). Linked-list element
 //                    used by AST_CALL.
-//  18  AST_PARAM     p1 = name_start, p2 = name_len, p3 = next_param_idx.
+//  18  AST_PARAM     p1 = name_start, p2 = name_len, p3 = next_param_idx,
+//                    p4 = type_tag (Phase 1.10 step 5c follow-on:
+//                    0 = i32 default, 1 = f32 if annotation was `: f32`).
+//                    The codegen reads p4 to call bind_push_typed so
+//                    f32 params propagate through is_f32_expr to SSE.
 //                    Linked list of fn decl params. Stored at the
 //                    head index referenced by AST_FN_DECL.p3 (packed
 //                    with body_idx the same way AST_LET does).
@@ -741,8 +745,22 @@ fn parse_fn_decl(tok_base: i32, sb: i32) -> i32 {
             let pname_l = tok_p3(tok_base, pname_tok);
             cur_advance(sb);     // param name
             cur_advance(sb);     // ':'
-            cur_advance(sb);     // type IDENT (ignored)
+            // Capture the type IDENT bytes to determine if it's "f32"
+            // (or "f64", treated the same in bootstrap codegen). Step 5c
+            // follow-on: this lets fn(a: f32, b: f32) -> f32 { a + b }
+            // bind a and b with type=f32 so is_f32_expr resolves through
+            // them and AST_ADD dispatches to SSE.
+            let ty_tok = cur_get(sb);
+            let ty_s = tok_p2(tok_base, ty_tok);
+            let ty_l = tok_p3(tok_base, ty_tok);
+            cur_advance(sb);     // type IDENT
+            let p_ty = if ty_l == 3 {
+                let b0 = __arena_get(ty_s);
+                let b1 = __arena_get(ty_s + 1);
+                if b0 == 102 { 1 } else { 0 }   // 'f' -> f32 (or f64)
+            } else { 0 };
             let new_param = mk_node(18, pname_s, pname_l, 0);
+            __arena_push(p_ty);   // p4: type tag
             if params_head == 0 {
                 params_head = new_param;
                 prev_param = new_param;

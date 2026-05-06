@@ -1727,6 +1727,19 @@ fn main() -> i32 {{
     assert compile_and_exec(
         "fn main() -> i32 { let n: i32 = 5 ; n + n + n }"
     ) == 15, "integer + on i32 binding stays integer"
+    # Step 5c follow-on: fn parameters with `: f32` annotation propagate
+    # the type into bind_state, so arithmetic on params dispatches to
+    # SSE without the caller having to use __fadd / __fmul.
+    #   fn add_f(a: f32, b: f32) -> f32 { a + b }
+    #   add_f(1.5, 2.5) = 4.0 -> top byte 64
+    assert compile_and_exec(
+        "fn add_f(a: f32, b: f32) -> f32 { a + b } "
+        "fn main() -> i32 { add_f(1.5_f32, 2.5_f32) / 16777216 }"
+    ) == 64, "fn(a: f32, b: f32) -> f32 { a + b } dispatches to SSE addss"
+    assert compile_and_exec(
+        "fn mul_f(a: f32, b: f32) -> f32 { a * b } "
+        "fn main() -> i32 { mul_f(2.0_f32, 4.0_f32) / 16777216 }"
+    ) == 65, "fn f32 multiplication dispatches to SSE mulss"
 
 
 def test_bootstrap_kovc_inline_write_file_to_arena():
