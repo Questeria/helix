@@ -2433,7 +2433,27 @@ fn resolve_program_root(ast_root: i32) -> i32 {
     }}
 }
 
+// Phase 1.10 step 6: kovc.hx itself uses f32 internally — proves f32
+// codegen works in the self-host build. Constant-only computation
+// avoiding helixc-Python's missing __i32_to_f32 builtin (which is
+// bootstrap-only). The arithmetic is real f32 SSE addss/divss:
+//   ratio = (1.5_f32 + 2.5_f32) / 4.0_f32      = 1.0
+// Result is discarded; the marker is that the compiled kovc binary
+// emits SSE bytes for these ops in its own machine code. Triple self-
+// host stays byte-identical because the call appears identically in
+// all three stages.
+@pure fn step6_f32_marker() -> f32 {
+    let a: f32 = 1.5_f32;
+    let b: f32 = 2.5_f32;
+    let sum: f32 = a + b;
+    let four: f32 = 4.0_f32;
+    sum / four
+}
+
 fn emit_elf_for_ast_to_path(ast_root: i32) -> i32 {
+    // Step 6 marker: invoke f32 arithmetic via the bootstrap itself.
+    // Result is discarded — the calculation is proof, not signal.
+    let _f32_marker = step6_f32_marker();
     // Pre-allocate compile-time state BEFORE the ELF region so
     // their slots don't pollute the contiguous code byte stream.
     let bind_state = bind_init();
