@@ -31,13 +31,13 @@
 @pure fn goal_id() -> i32 { 99 }
 @pure fn n_actions() -> i32 { 4 }
 @pure fn hidden() -> i32 { 32 }
-@pure fn n_episodes() -> i32 { 40 }
-@pure fn max_steps_per_ep() -> i32 { 150 }
+@pure fn n_episodes() -> i32 { 80 }
+@pure fn max_steps_per_ep() -> i32 { 200 }
 @pure fn n_obstacles() -> i32 { 14 }
-@pure fn epsilon_floor() -> i32 { 20 }
-// Experience replay buffer: 256 transitions, 5 i32s each (s, a, r, s', done).
-@pure fn replay_capacity() -> i32 { 256 }
-@pure fn replay_minibatch() -> i32 { 8 }
+@pure fn epsilon_floor() -> i32 { 25 }
+// Experience replay buffer: 512 transitions, 5 i32s each (s, a, r, s', done).
+@pure fn replay_capacity() -> i32 { 512 }
+@pure fn replay_minibatch() -> i32 { 16 }
 
 // SEED_PLACEHOLDER — replaced by server.
 @pure fn map_seed() -> i32 { 12345 }
@@ -498,9 +498,9 @@ fn main() -> i32 {
                     let max_next = max_q(q_next_buf, na);
                     r_f + 0.9_f32 * max_next
                 };
-                // Train on the current transition.
+                // Train on the current transition (higher lr).
                 nn_train_step(weights, pos, action, target,
-                              hidden_pre, hidden_buf, q_buf, 0.05_f32);
+                              hidden_pre, hidden_buf, q_buf, 0.2_f32);
                 // Store transition in replay buffer.
                 let done_flag = if next_pos == goal { 1 } else { 0 };
                 replay_store(replay, pos, action, reward * 100, next_pos, done_flag);
@@ -529,7 +529,7 @@ fn main() -> i32 {
                             r_r + 0.9_f32 * max_q(q_replay_next, na)
                         };
                         nn_train_step(weights, r_s, r_a, r_target,
-                                      h_pre_r, h_buf_r, q_replay_buf, 0.03_f32);
+                                      h_pre_r, h_buf_r, q_replay_buf, 0.1_f32);
                         mb_i = mb_i + 1;
                     }
                 }

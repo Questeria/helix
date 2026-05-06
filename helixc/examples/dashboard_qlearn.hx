@@ -22,8 +22,10 @@
 @pure fn grid_total() -> i32 { grid_n() * grid_n() }
 @pure fn goal_id() -> i32 { grid_total() - 1 }
 @pure fn n_actions() -> i32 { 4 }
-@pure fn n_episodes() -> i32 { 50 }
-@pure fn max_steps_per_ep() -> i32 { 200 }
+// Scale budget with grid size: 10x10 -> 50 ep / 200 steps;
+// 15x15 -> 100 ep / 450 steps; 20x20 -> 150 ep / 800 steps.
+@pure fn n_episodes() -> i32 { grid_total() / 2 + 30 }
+@pure fn max_steps_per_ep() -> i32 { grid_total() * 2 }
 @pure fn n_obstacles() -> i32 { 14 }
 // Minimum epsilon — never drops below this so agent always keeps some
 // exploration. Prevents getting stuck in a suboptimal corner of policy.

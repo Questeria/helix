@@ -227,11 +227,12 @@
     </div>
     <div class="controls">
       <label>World size:</label>
-      <select id="gridSize" style="background:#2a2a2a;color:#e0e0e0;border:1px solid #555;padding:4px 8px;border-radius:4px">
+      <select id="gridSize" onchange="onSizeChange()" style="background:#2a2a2a;color:#e0e0e0;border:1px solid #555;padding:4px 8px;border-radius:4px">
         <option value="10" selected>10 × 10 (small)</option>
         <option value="15">15 × 15 (medium)</option>
         <option value="20">20 × 20 (large)</option>
       </select>
+      <span id="sizeNote" style="font-size:11px;color:#888"></span>
     </div>
     <h2 style="margin-top:16px">Stats</h2>
     <div class="stats">
@@ -641,7 +642,7 @@ async function runBenchmark() {
   const panel = document.getElementById('benchmarkPanel');
   const results = document.getElementById('benchmarkResults');
   panel.style.display = 'block';
-  results.innerHTML = '<div style="color:#aaa">Running 3 agents on seed=' + seed + ', size=' + size + ', maze=' + (maze==='1') + '...</div>';
+  results.innerHTML = '<div style="color:#aaa">Running 3 agents on seed=' + seed + ', size=' + size + ', maze=' + (maze==='1') + '... watch the grid replay each one</div>';
   const benchData = {};
   const agents = [
     { kind: 'hillclimb', label: 'Hill-climb', color: '#888' },
@@ -649,7 +650,7 @@ async function runBenchmark() {
     { kind: 'nn',        label: 'Neural net', color: '#66ddff' },
   ];
   for (const a of agents) {
-    results.innerHTML += '<div style="color:' + a.color + '">▶ ' + a.label + '...</div>';
+    results.innerHTML += '<div style="color:' + a.color + '">▶ ' + a.label + ' (compiling + running)...</div>';
     const t0 = performance.now();
     const resp = await fetch('/run?iter=99999&kind=' + a.kind + '&seed=' + seed + '&maze=' + maze + '&size=' + size);
     const text = await resp.text();
@@ -664,6 +665,27 @@ async function runBenchmark() {
       best: summary && summary.best_steps && summary.best_steps < 9999 ? summary.best_steps : null,
       runtime_ms: t1 - t0,
     };
+    // Replay this agent's run on the grid (sub-second overview).
+    results.innerHTML += '<div style="color:' + a.color + '">  ↳ playing on grid (best ' + (benchData[a.kind].best || '∞') + ' steps)...</div>';
+    allEvents = evs;
+    cursor = 0;
+    document.getElementById('speedInput').value = 30000;
+    syncSpeedFromInput();
+    visited = new Set();
+    chartHistory = [];
+    episodeStepHistory = [];
+    drawChart();
+    drawEpisodeChart();
+    await new Promise(r => {
+      const orig = scheduleNext;
+      const watchEnd = setInterval(() => {
+        if (cursor >= allEvents.length) {
+          clearInterval(watchEnd);
+          r();
+        }
+      }, 200);
+      scheduleNext();
+    });
   }
   results.innerHTML = '';
   let html = '<table style="width:100%;border-collapse:collapse"><tr style="color:#888;border-bottom:1px solid #444"><th style="text-align:left;padding:4px">Agent</th><th>Best path</th><th>Compile+run</th><th>Reached goal</th></tr>';
