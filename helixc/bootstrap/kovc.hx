@@ -391,6 +391,43 @@ fn emit_ssen_gt() -> i32 { emit_sse_compare(0x97, 0) }   // seta (no fixup)
 fn emit_ssen_ge() -> i32 { emit_sse_compare(0x93, 0) }   // setae (no fixup)
 fn emit_ssen_eq() -> i32 { emit_sse_compare(0x94, 1) }   // sete + AND !PF
 fn emit_ssen_ne() -> i32 { emit_sse_compare(0x95, 2) }   // setne + OR PF
+
+// Phase 1.10 step 7g: SSE2 double-precision comparison. Mirrors
+// emit_sse_compare but with movq instead of movd (REX.W + 66 prefix
+// on the move) and ucomisd instead of ucomiss (66 prefix on the op).
+//   movq xmm0, rax            66 48 0F 6E C0   (5 bytes)
+//   movq xmm1, rcx            66 48 0F 6E C9   (5 bytes)
+//   xor eax, eax              31 C0           (2 bytes; PRE-clear)
+//   ucomisd xmm0, xmm1        66 0F 2E C1     (4 bytes; sets flags)
+//   setcc al                  0F xx C0        (3 bytes; reads flags)
+//   [fixup]                                    (0 or 5 bytes)
+// Total: 19 bytes (no fixup) or 24 bytes (with fixup).
+// NaN handling identical to f32: PF=1 + CF=1 + ZF=1 in the unordered
+// case, so the same setp/setnp fixup pattern applies.
+fn emit_sse_dbl_compare(setcc_byte: i32, fixup: i32) -> i32 {
+    emit_byte(0x66); emit_byte(0x48); emit_byte(0x0F); emit_byte(0x6E); emit_byte(0xC0); // movq xmm0,rax
+    emit_byte(0x66); emit_byte(0x48); emit_byte(0x0F); emit_byte(0x6E); emit_byte(0xC9); // movq xmm1,rcx
+    emit_byte(0x31); emit_byte(0xC0);                                                     // xor eax,eax (PRE-clear)
+    emit_byte(0x66); emit_byte(0x0F); emit_byte(0x2E); emit_byte(0xC1);                   // ucomisd xmm0,xmm1
+    emit_byte(0x0F); emit_byte(setcc_byte); emit_byte(0xC0);                              // setcc al
+    if fixup == 1 {
+        emit_byte(0x0F); emit_byte(0x9B); emit_byte(0xC1);                // setnp cl
+        emit_byte(0x20); emit_byte(0xC8);                                  // and al, cl
+        24
+    } else { if fixup == 2 {
+        emit_byte(0x0F); emit_byte(0x9A); emit_byte(0xC1);                // setp cl
+        emit_byte(0x08); emit_byte(0xC8);                                  // or al, cl
+        24
+    } else {
+        19
+    } }
+}
+fn emit_ssen_lt_dbl() -> i32 { emit_sse_dbl_compare(0x92, 1) }
+fn emit_ssen_le_dbl() -> i32 { emit_sse_dbl_compare(0x96, 1) }
+fn emit_ssen_gt_dbl() -> i32 { emit_sse_dbl_compare(0x97, 0) }
+fn emit_ssen_ge_dbl() -> i32 { emit_sse_dbl_compare(0x93, 0) }
+fn emit_ssen_eq_dbl() -> i32 { emit_sse_dbl_compare(0x94, 1) }
+fn emit_ssen_ne_dbl() -> i32 { emit_sse_dbl_compare(0x95, 2) }
 // idiv requires sign-extension into edx; we emit `cdq; idiv ecx`.
 //   99       cdq
 //   F7 F9    idiv ecx
@@ -844,11 +881,17 @@ fn is_f64_expr(idx: i32, bind_state: i32, bn_state: i32) -> i32 {
         if ty == 2 { 1 } else { 0 }
     } else { if t == 16 {                       // AST_CALL
         // Step 7e: __f32_to_f64 returns f64. Explicit byte_eq against
-        // the installed name slot. All other AST_CALL → 0 (the parallel
-        // is_f32_expr handles f32 callers via __f* prefix and explicit
-        // byte_eq checks; f64 has only one converter that returns it).
+        // the installed name slot. Step 7h: __dsqrt also returns f64.
+        // All other AST_CALL → 0 (the parallel is_f32_expr handles f32
+        // callers via __f* prefix and explicit byte_eq checks; f64
+        // returners need explicit byte_eq here since they don't share
+        // a common prefix).
         let widen_match = kovc_byte_eq(p1, p2, bn_f32_to_f64_s(bn_state), 12);
-        if widen_match == 1 { 1 } else { 0 }
+        if widen_match == 1 { 1 }
+        else {
+            let dsqrt_match = kovc_byte_eq(p1, p2, bn_dsqrt_s(bn_state), 7);
+            if dsqrt_match == 1 { 1 } else { 0 }
+        }
     } else { if t == 2 {                        // AST_ADD
         let l = is_f64_expr(p1, bind_state, bn_state);
         let r = is_f64_expr(p2, bind_state, bn_state);
@@ -1041,7 +1084,7 @@ fn emit_exit_with_eax() -> i32 {
 fn install_builtin_names() -> i32 {
     let bn_state = __arena_push(0);          // slot 0 placeholder
     __arena_push(0); __arena_push(0); __arena_push(0); __arena_push(0);
-    // Reserve slots 5..74 (70 more slots: 2 file-name slots + 2
+    // Reserve slots 5..75 (71 more slots: 2 file-name slots + 2
     // str_state header slots + 48 entry slots + 5 f32 builtin slots
     // (__fadd, __fsub, __fmul, __fdiv at 57..60; __fneg at 61) + 1
     // fn_type_state pointer slot at 62 (Phase 1.10 step 5c follow-on)
@@ -1056,9 +1099,10 @@ fn install_builtin_names() -> i32 {
     // + 1 __hash_i32 slot at 71 (Phase 1.10 step 5n)
     // + 1 __strlen slot at 72 (Phase 1.10 step 5o)
     // + 1 __f32_to_f64 slot at 73 (Phase 1.10 step 7e)
-    // + 1 __f64_to_f32 slot at 74 (Phase 1.10 step 7e).
+    // + 1 __f64_to_f32 slot at 74 (Phase 1.10 step 7e)
+    // + 1 __dsqrt slot at 75 (Phase 1.10 step 7h).
     let mut i: i32 = 0;
-    while i < 70 {
+    while i < 71 {
         __arena_push(0);
         i = i + 1;
     }
@@ -1287,6 +1331,17 @@ fn install_builtin_names() -> i32 {
     __arena_push(102); __arena_push(51); __arena_push(50);
     __arena_set(bn_state + 74, s23);
 
+    // Phase 1.10 step 7h: "__dsqrt" (7 chars: 95 95 100 115 113 114 116).
+    // Single-arg f64 square root via SSE2 sqrtsd xmm0, xmm0. Mirrors
+    // __fsqrt (step 5g) but on 64-bit doubles: movq xmm0, rax; sqrtsd
+    // xmm0, xmm0; movq rax, xmm0. Result is the f64 bit pattern in rax.
+    // Starts with __d so doesn't match the __f* prefix; is_f64_expr
+    // adds an explicit byte_eq against this slot to type the call as
+    // f64. (is_f32_expr falls through to fn_type_table -> 0 by default.)
+    let s24 = __arena_push(95); __arena_push(95); __arena_push(100);
+    __arena_push(115); __arena_push(113); __arena_push(114); __arena_push(116);
+    __arena_set(bn_state + 75, s24);
+
     bn_state
 }
 
@@ -1331,6 +1386,7 @@ fn bn_strlen_s(b: i32) -> i32 { __arena_get(b + 72) }
 // Phase 1.10 step 7e: f32<->f64 conversion builtins.
 fn bn_f32_to_f64_s(b: i32) -> i32 { __arena_get(b + 73) }
 fn bn_f64_to_f32_s(b: i32) -> i32 { __arena_get(b + 74) }
+fn bn_dsqrt_s(b: i32) -> i32 { __arena_get(b + 75) }
 // str_state accessors. The state lives within the bn_state region.
 fn str_top(b: i32) -> i32 { __arena_get(b + 7) }
 fn str_top_set(b: i32, v: i32) -> i32 { __arena_set(b + 7, v); 0 }
@@ -1994,9 +2050,23 @@ fn try_emit_builtin_call(name_s: i32, name_l: i32, args_head: i32,
         emit_byte(0xF2); emit_byte(0x0F); emit_byte(0x5A); emit_byte(0xC0); // cvtsd2ss xmm0, xmm0
         emit_byte(0x66); emit_byte(0x0F); emit_byte(0x7E); emit_byte(0xC0); // movd eax, xmm0
         n0 + 13
+    } else { if kovc_byte_eq(name_s, name_l, bn_dsqrt_s(bn_state), 7) == 1 {
+        // Phase 1.10 step 7h: __dsqrt(x) -> f64 bits in rax. Single-arg
+        // hardware sqrt via SSE2 sqrtsd. eval x -> rax (f64 bit pattern);
+        // movq xmm0, rax; sqrtsd xmm0, xmm0; movq rax, xmm0. 14 bytes
+        // after the arg evaluation. Mirrors __fsqrt (step 5g) but on
+        // 64-bit doubles. NaN inputs propagate (sqrtsd preserves NaN);
+        // negatives produce a quiet NaN. Result types as f64 via
+        // is_f64_expr's explicit __dsqrt byte_eq.
+        let a0 = __arena_get(args_head + 1);
+        let n0 = emit_ast_code(a0, bind_state, patch_state, bn_state);
+        emit_byte(0x66); emit_byte(0x48); emit_byte(0x0F); emit_byte(0x6E); emit_byte(0xC0); // movq xmm0, rax
+        emit_byte(0xF2); emit_byte(0x0F); emit_byte(0x51); emit_byte(0xC0); // sqrtsd xmm0, xmm0
+        emit_byte(0x66); emit_byte(0x48); emit_byte(0x0F); emit_byte(0x7E); emit_byte(0xC0); // movq rax, xmm0
+        n0 + 14
     } else {
         0
-    }}}}}}}}}}}}}}}}}}}}}}}
+    }}}}}}}}}}}}}}}}}}}}}}}}
 }
 
 // Unreachable in this commit; reference impl preserved for next
@@ -2491,70 +2561,97 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         // Phase 1.10 step 5e: f32-aware comparison. If both operands
         // resolve to f32 via is_f32_expr, emit ucomiss + setcc; else
         // integer cmp + setcc. Result is 0/1 in eax either way.
+        // Step 7g: three-way dispatch — f64 path uses ucomisd via
+        // emit_ssen_*_dbl helpers; nm-move-to-rcx promotes to 64-bit
+        // for the f64 case (otherwise high half drops before ucomisd).
         let n1 = emit_ast_code(p1, bind_state, patch_state, bn_state);
         let np = emit_push_rax();
         let n2 = emit_ast_code(p2, bind_state, patch_state, bn_state);
-        let nm = emit_mov_ecx_eax();
+        let l_d = is_f64_expr(p1, bind_state, bn_state);
+        let r_d = is_f64_expr(p2, bind_state, bn_state);
+        let nm = if l_d == 1 { if r_d == 1 { emit_mov_rcx_rax_64() } else { emit_mov_ecx_eax() } } else { emit_mov_ecx_eax() };
         let no = emit_pop_rax();
         let l_f = is_f32_expr(p1, bind_state, bn_state);
         let r_f = is_f32_expr(p2, bind_state, bn_state);
         let both_f = if l_f == 1 { if r_f == 1 { 1 } else { 0 } } else { 0 };
-        let na = if both_f == 1 { emit_ssen_lt() } else { emit_lt_eax_ecx() };
+        let both_d = if l_d == 1 { if r_d == 1 { 1 } else { 0 } } else { 0 };
+        let na = if both_d == 1 { emit_ssen_lt_dbl() }
+                 else { if both_f == 1 { emit_ssen_lt() } else { emit_lt_eax_ecx() } };
         n1 + np + n2 + nm + no + na
     } else { if t == 19 {
         let n1 = emit_ast_code(p1, bind_state, patch_state, bn_state);
         let np = emit_push_rax();
         let n2 = emit_ast_code(p2, bind_state, patch_state, bn_state);
-        let nm = emit_mov_ecx_eax();
+        let l_d = is_f64_expr(p1, bind_state, bn_state);
+        let r_d = is_f64_expr(p2, bind_state, bn_state);
+        let nm = if l_d == 1 { if r_d == 1 { emit_mov_rcx_rax_64() } else { emit_mov_ecx_eax() } } else { emit_mov_ecx_eax() };
         let no = emit_pop_rax();
         let l_f = is_f32_expr(p1, bind_state, bn_state);
         let r_f = is_f32_expr(p2, bind_state, bn_state);
         let both_f = if l_f == 1 { if r_f == 1 { 1 } else { 0 } } else { 0 };
-        let na = if both_f == 1 { emit_ssen_gt() } else { emit_gt_eax_ecx() };
+        let both_d = if l_d == 1 { if r_d == 1 { 1 } else { 0 } } else { 0 };
+        let na = if both_d == 1 { emit_ssen_gt_dbl() }
+                 else { if both_f == 1 { emit_ssen_gt() } else { emit_gt_eax_ecx() } };
         n1 + np + n2 + nm + no + na
     } else { if t == 20 {
         let n1 = emit_ast_code(p1, bind_state, patch_state, bn_state);
         let np = emit_push_rax();
         let n2 = emit_ast_code(p2, bind_state, patch_state, bn_state);
-        let nm = emit_mov_ecx_eax();
+        let l_d = is_f64_expr(p1, bind_state, bn_state);
+        let r_d = is_f64_expr(p2, bind_state, bn_state);
+        let nm = if l_d == 1 { if r_d == 1 { emit_mov_rcx_rax_64() } else { emit_mov_ecx_eax() } } else { emit_mov_ecx_eax() };
         let no = emit_pop_rax();
         let l_f = is_f32_expr(p1, bind_state, bn_state);
         let r_f = is_f32_expr(p2, bind_state, bn_state);
         let both_f = if l_f == 1 { if r_f == 1 { 1 } else { 0 } } else { 0 };
-        let na = if both_f == 1 { emit_ssen_eq() } else { emit_eq_eax_ecx() };
+        let both_d = if l_d == 1 { if r_d == 1 { 1 } else { 0 } } else { 0 };
+        let na = if both_d == 1 { emit_ssen_eq_dbl() }
+                 else { if both_f == 1 { emit_ssen_eq() } else { emit_eq_eax_ecx() } };
         n1 + np + n2 + nm + no + na
     } else { if t == 21 {
         let n1 = emit_ast_code(p1, bind_state, patch_state, bn_state);
         let np = emit_push_rax();
         let n2 = emit_ast_code(p2, bind_state, patch_state, bn_state);
-        let nm = emit_mov_ecx_eax();
+        let l_d = is_f64_expr(p1, bind_state, bn_state);
+        let r_d = is_f64_expr(p2, bind_state, bn_state);
+        let nm = if l_d == 1 { if r_d == 1 { emit_mov_rcx_rax_64() } else { emit_mov_ecx_eax() } } else { emit_mov_ecx_eax() };
         let no = emit_pop_rax();
         let l_f = is_f32_expr(p1, bind_state, bn_state);
         let r_f = is_f32_expr(p2, bind_state, bn_state);
         let both_f = if l_f == 1 { if r_f == 1 { 1 } else { 0 } } else { 0 };
-        let na = if both_f == 1 { emit_ssen_ne() } else { emit_ne_eax_ecx() };
+        let both_d = if l_d == 1 { if r_d == 1 { 1 } else { 0 } } else { 0 };
+        let na = if both_d == 1 { emit_ssen_ne_dbl() }
+                 else { if both_f == 1 { emit_ssen_ne() } else { emit_ne_eax_ecx() } };
         n1 + np + n2 + nm + no + na
     } else { if t == 22 {
         let n1 = emit_ast_code(p1, bind_state, patch_state, bn_state);
         let np = emit_push_rax();
         let n2 = emit_ast_code(p2, bind_state, patch_state, bn_state);
-        let nm = emit_mov_ecx_eax();
+        let l_d = is_f64_expr(p1, bind_state, bn_state);
+        let r_d = is_f64_expr(p2, bind_state, bn_state);
+        let nm = if l_d == 1 { if r_d == 1 { emit_mov_rcx_rax_64() } else { emit_mov_ecx_eax() } } else { emit_mov_ecx_eax() };
         let no = emit_pop_rax();
         let l_f = is_f32_expr(p1, bind_state, bn_state);
         let r_f = is_f32_expr(p2, bind_state, bn_state);
         let both_f = if l_f == 1 { if r_f == 1 { 1 } else { 0 } } else { 0 };
-        let na = if both_f == 1 { emit_ssen_le() } else { emit_le_eax_ecx() };
+        let both_d = if l_d == 1 { if r_d == 1 { 1 } else { 0 } } else { 0 };
+        let na = if both_d == 1 { emit_ssen_le_dbl() }
+                 else { if both_f == 1 { emit_ssen_le() } else { emit_le_eax_ecx() } };
         n1 + np + n2 + nm + no + na
     } else { if t == 23 {
         let n1 = emit_ast_code(p1, bind_state, patch_state, bn_state);
         let np = emit_push_rax();
         let n2 = emit_ast_code(p2, bind_state, patch_state, bn_state);
-        let nm = emit_mov_ecx_eax();
+        let l_d = is_f64_expr(p1, bind_state, bn_state);
+        let r_d = is_f64_expr(p2, bind_state, bn_state);
+        let nm = if l_d == 1 { if r_d == 1 { emit_mov_rcx_rax_64() } else { emit_mov_ecx_eax() } } else { emit_mov_ecx_eax() };
         let no = emit_pop_rax();
         let l_f = is_f32_expr(p1, bind_state, bn_state);
         let r_f = is_f32_expr(p2, bind_state, bn_state);
         let both_f = if l_f == 1 { if r_f == 1 { 1 } else { 0 } } else { 0 };
-        let na = if both_f == 1 { emit_ssen_ge() } else { emit_ge_eax_ecx() };
+        let both_d = if l_d == 1 { if r_d == 1 { 1 } else { 0 } } else { 0 };
+        let na = if both_d == 1 { emit_ssen_ge_dbl() }
+                 else { if both_f == 1 { emit_ssen_ge() } else { emit_ge_eax_ecx() } };
         n1 + np + n2 + nm + no + na
     } else { if t == 7 {
         // AST_IF(cond, then, else)

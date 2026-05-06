@@ -1888,6 +1888,52 @@ fn main() -> i32 {{
         " let top = bits / 16777216;"
         " if top < 0 { top + 256 } else { top } }"
     ) == 191, "f64 unary NEG flips bit 63 (0x3F000000 -> 0xBF000000)"
+    # Phase 1.10 step 7g: f64 comparisons via SSE2 ucomisd (movq +
+    # ucomisd xmm0, xmm1 + setcc + NaN-fixup). Three discriminators:
+    # (a) 0.5_f64 < 1.0_f64 = TRUE; if broken (uses ucomiss on low32 = 0
+    #     vs 0), would say 0 < 0 = FALSE → wrong branch.
+    assert compile_and_exec("if 0.5_f64 < 1.0_f64 { 7 } else { 9 }") == 7, \
+        "f64 LT correct (ucomisd dispatch)"
+    # (b) Reverse order: 1.0_f64 < 0.5_f64 = FALSE.
+    assert compile_and_exec("if 1.0_f64 < 0.5_f64 { 7 } else { 9 }") == 9, \
+        "f64 LT correct (false case)"
+    # (c) Equality: 1.5_f64 == 1.5_f64 = TRUE; broken low32 path
+    #     (movd of 0 == 0) would also say TRUE coincidentally, but
+    #     here both operands have low32=0 so this case is weak. Use
+    #     1.0/3.0 — has nonzero low32 = 0x55555555 — to discriminate.
+    #     Both sides equal → true → branch to 7.
+    assert compile_and_exec(
+        "if (1.0_f64 / 3.0_f64) == (1.0_f64 / 3.0_f64) { 7 } else { 9 }"
+    ) == 7, "f64 EQ on non-trivial value"
+    # Phase 1.10 step 7h: __dsqrt(x_f64) -> f64 via SSE2 sqrtsd. Mirror
+    # of __fsqrt (step 5g) on doubles. Validates by round-tripping the
+    # result through __f64_to_f32 and inspecting the f32 top byte.
+    # __dsqrt(4.0_f64) = 2.0_f64 -> narrow -> 2.0_f32 = 0x40000000 -> 64.
+    assert compile_and_exec(
+        "__bits_of_f32(__f64_to_f32(__dsqrt(4.0_f64))) / 16777216"
+    ) == 64, "__dsqrt(4.0_f64) -> 2.0"
+    # __dsqrt(0.0_f64) = 0.0 -> all zero bits -> top byte 0.
+    assert compile_and_exec(
+        "__bits_of_f32(__f64_to_f32(__dsqrt(0.0_f64))) / 16777216"
+    ) == 0, "__dsqrt(0.0_f64) -> 0.0"
+    # __dsqrt(0.25_f64) = 0.5_f64 -> narrow -> 0.5_f32 = 0x3F000000 -> 63.
+    assert compile_and_exec(
+        "__bits_of_f32(__f64_to_f32(__dsqrt(0.25_f64))) / 16777216"
+    ) == 63, "__dsqrt(0.25_f64) -> 0.5"
+    # __dsqrt(64.0_f64) = 8.0_f64 -> narrow -> 8.0_f32 = 0x41000000 -> 65.
+    # If broken (e.g. fell through to __fsqrt-on-low32 path), the low 32
+    # of 64.0_f64 = 0x00000000 would give __fsqrt(0) = 0 -> top byte 0,
+    # not 65. So 65 is the unique signature of correct sqrtsd dispatch.
+    assert compile_and_exec(
+        "__bits_of_f32(__f64_to_f32(__dsqrt(64.0_f64))) / 16777216"
+    ) == 65, "__dsqrt(64.0_f64) -> 8.0"
+    # Composed: __dsqrt(__f32_to_f64(...)) chains widening + sqrt + narrow.
+    # __dsqrt(__f32_to_f64(4.0_f32)) = 2.0_f64 -> narrow to 2.0_f32 -> 64.
+    # Verifies is_f64_expr correctly types the chained call so f64 arith
+    # dispatches to SSE-double codegen all the way through.
+    assert compile_and_exec(
+        "__bits_of_f32(__f64_to_f32(__dsqrt(__f32_to_f64(4.0_f32)))) / 16777216"
+    ) == 64, "__dsqrt composes with __f32_to_f64"
     # Phase 1.10 step 5+: bootstrap binary bitwise & | ^. Mirrors the
     # helixc-Python fix in commit f676fca; before this, the bootstrap
     # had no parse rule for these operators so source code couldn't use
