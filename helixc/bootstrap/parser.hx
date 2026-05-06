@@ -406,6 +406,15 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
         let body_l = tok_p3(tok_base, k);
         cur_advance(sb);
         mk_node(27, body_s, body_l, 0)
+    } else { if t == 32 {
+        // Step 7a: TK_FLOATLIT_F64 (tag 32) — float literal with `_f64`
+        // suffix. For now produces the same AST_FLOATLIT (tag 27) as f32;
+        // step 7b will introduce a distinct AST_FLOATLIT_F64 tag and step
+        // 7c will wire 8-byte codegen. Behavior identical to f32 for now.
+        let body_s = tok_p2(tok_base, k);
+        let body_l = tok_p3(tok_base, k);
+        cur_advance(sb);
+        mk_node(27, body_s, body_l, 0)
     } else { if t == 25 {
         // String literal (TK_STRLIT). Token slots:
         //   payload   = body byte_start (in the source buffer)
@@ -608,7 +617,7 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
             };
         };
         mk_node(99, t, 0, 0)
-    }}}}}
+    }}}}}}
 }
 
 // --------------------------------------------------------------

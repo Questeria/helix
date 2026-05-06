@@ -235,11 +235,11 @@ fn lex_int(src_start: i32, src_len: i32, pos: i32) -> i32 {
     }
     // Phase 1.10 step 5a: optional `_f32` / `_f64` / `_i32` / `_i64` type
     // suffix on numeric literals. The lexer consumes them so they don't
-    // appear as a separate IDENT token; the AST_FLOATLIT and AST_INTLIT
-    // codegens already stop at the first non-digit byte so suffix bytes
-    // are silently ignored at codegen time. Without this consumption,
-    // source like `1.5_f32` lexed as TK_FLOATLIT(`1.5`) + TK_IDENT(`_f32`)
-    // and the IDENT downstream broke the parse.
+    // appear as a separate IDENT token. Step 7a: also TRACK whether the
+    // suffix was `_f64` so a distinct TK_FLOATLIT_F64 token (tag 32) can
+    // be emitted — the parser then knows the literal needs 8-byte f64
+    // codegen (step 7b+) instead of 4-byte f32.
+    let mut is_f64_suffix: i32 = 0;
     if p + 3 < end {
         let b0 = __arena_get(p);
         if b0 == 95 {   // '_'
@@ -252,7 +252,10 @@ fn lex_int(src_start: i32, src_len: i32, pos: i32) -> i32 {
                     if b3 == 50 { p = p + 4; };   // _f32
                 };
                 if b2 == 54 {
-                    if b3 == 52 { p = p + 4; };   // _f64
+                    if b3 == 52 {                   // _f64
+                        p = p + 4;
+                        is_f64_suffix = 1;
+                    };
                 };
             };
             // i32 / i64
@@ -268,7 +271,11 @@ fn lex_int(src_start: i32, src_len: i32, pos: i32) -> i32 {
     }
     if is_float == 1 {
         let flen = p - pos;
-        push_token(26, pos, pos, flen);
+        // Step 7a: distinguish f32 (tag 26) from f64 (tag 32) at lex time.
+        // Parser consumes both; for now codegen treats them identically
+        // (step 7b will add distinct AST tag, step 7c real 8-byte codegen).
+        let tk = if is_f64_suffix == 1 { 32 } else { 26 };
+        push_token(tk, pos, pos, flen);
     } else {
         let length = p - pos;
         push_token(1, value, pos, length);
