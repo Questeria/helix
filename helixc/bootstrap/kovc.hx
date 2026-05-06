@@ -527,6 +527,28 @@ fn emit_mov_eax_local(offset: i32) -> i32 {
     6
 }
 
+// Phase 1.10 step 7d-5: 64-bit local store. Stores rax (full 8 bytes,
+// preserving an f64 high half) into [rbp + disp32]. The 32-bit version
+// (emit_mov_local_eax) silently drops the high 32 — incorrect for f64.
+//   48 89 85 disp32     mov [rbp + disp32], rax
+fn emit_mov_local_rax_64(offset: i32) -> i32 {
+    emit_byte(0x48); emit_byte(0x89); emit_byte(0x85);
+    emit_u32_le(0 - offset);
+    7
+}
+
+// Phase 1.10 step 7d-5: 64-bit local load. Loads rax (full 8 bytes)
+// from [rbp + disp32]. Used by AST_VAR when the binding's type is
+// f64 (bind_lookup_type returns 2). Without this load width, the
+// 32-bit `mov eax, [rbp+disp32]` would zero-extend a truncated value
+// and the f64 high half would be permanently lost.
+//   48 8B 85 disp32     mov rax, [rbp + disp32]
+fn emit_mov_rax_local_64(offset: i32) -> i32 {
+    emit_byte(0x48); emit_byte(0x8B); emit_byte(0x85);
+    emit_u32_le(0 - offset);
+    7
+}
+
 // --------------------------------------------------------------
 // Compile-time binding table: a stack of (name_start, name_len,
 // stack_offset) triples in the arena. We pass `bind_base` (start
@@ -2530,20 +2552,32 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         n_cond + n_test + 6 + n_then + 5 + n_else
     } else { if t == 1 {
         // AST_VAR: p1 = name start, p2 = name len.
+        // Step 7d-5: f64 bindings (type tag 2) need 64-bit load to
+        // preserve the high half. i32 / f32 stay on 32-bit load.
         let off = bind_lookup(bind_state, p1, p2);
-        emit_mov_eax_local(off)
+        let ty = bind_lookup_type(bind_state, p1, p2);
+        if ty == 2 { emit_mov_rax_local_64(off) } else { emit_mov_eax_local(off) }
     } else { if t == 8 {
         // AST_LET: p1 = name_start, p2 = name_len, p3 = body_idx,
         // p4 = value_idx (audit-14: split out of the legacy packed
         // p3 to avoid 16-bit overflow on large sources).
         // Step 5c: infer type from value AST and stamp into bind_state
         // so subsequent uses of the binding can dispatch to SSE.
+        // Step 7d-5: 3-way val_ty (0=i32, 1=f32, 2=f64). f64 needs
+        // 64-bit store + load; otherwise the high half is silently
+        // dropped at let-binding time and arithmetic produces garbage.
         let body_idx = __arena_get(idx + 3);
         let value_idx = __arena_get(idx + 4);
-        let val_ty = is_f32_expr(value_idx, bind_state, bn_state);
+        let v_f32 = is_f32_expr(value_idx, bind_state, bn_state);
+        let v_f64 = is_f64_expr(value_idx, bind_state, bn_state);
+        let val_ty = if v_f64 == 1 { 2 } else { v_f32 };
         let n_val = emit_ast_code(value_idx, bind_state, patch_state, bn_state);
         let off = bind_alloc_offset(bind_state);
-        let n_store = emit_mov_local_eax(off);
+        let n_store = if val_ty == 2 {
+            emit_mov_local_rax_64(off)
+        } else {
+            emit_mov_local_eax(off)
+        };
         bind_push_typed(bind_state, p1, p2, off, val_ty);
         let n_body = emit_ast_code(body_idx, bind_state, patch_state, bn_state);
         bind_pop(bind_state);
@@ -2553,12 +2587,19 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         // a surface-language constraint; the runtime representation
         // is the same. (Reassignment via AST_ASSIGN works on either.)
         // Same 5-slot layout as AST_LET (audit-14).
+        // Step 7d-5: f64 path (val_ty=2) → 64-bit store.
         let body_idx = __arena_get(idx + 3);
         let value_idx = __arena_get(idx + 4);
-        let val_ty = is_f32_expr(value_idx, bind_state, bn_state);
+        let v_f32 = is_f32_expr(value_idx, bind_state, bn_state);
+        let v_f64 = is_f64_expr(value_idx, bind_state, bn_state);
+        let val_ty = if v_f64 == 1 { 2 } else { v_f32 };
         let n_val = emit_ast_code(value_idx, bind_state, patch_state, bn_state);
         let off = bind_alloc_offset(bind_state);
-        let n_store = emit_mov_local_eax(off);
+        let n_store = if val_ty == 2 {
+            emit_mov_local_rax_64(off)
+        } else {
+            emit_mov_local_eax(off)
+        };
         bind_push_typed(bind_state, p1, p2, off, val_ty);
         let n_body = emit_ast_code(body_idx, bind_state, patch_state, bn_state);
         bind_pop(bind_state);
@@ -2578,13 +2619,20 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         // op would crash. Skip the store on unbound writes; eax
         // still holds the assigned value so expressions like
         // `(x = 5) + 1` evaluate correctly.
+        // Step 7d-5: f64 bindings need 64-bit store; use the existing
+        // bound type tag to pick width.
         let p3 = __arena_get(idx + 3);
         let n_val = emit_ast_code(p3, bind_state, patch_state, bn_state);
         let off = bind_lookup(bind_state, p1, p2);
         if off == 0 {
             n_val
         } else {
-            let n_store = emit_mov_local_eax(off);
+            let bind_ty = bind_lookup_type(bind_state, p1, p2);
+            let n_store = if bind_ty == 2 {
+                emit_mov_local_rax_64(off)
+            } else {
+                emit_mov_local_eax(off)
+            };
             n_val + n_store
         }
     } else { if t == 14 {

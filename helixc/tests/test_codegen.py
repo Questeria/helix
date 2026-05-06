@@ -1860,6 +1860,18 @@ fn main() -> i32 {{
     assert compile_and_exec(
         "__bits_of_f32(__f64_to_f32(__f32_to_f64(0.5_f32))) / 16777216"
     ) == 63, "f32->f64->f32 round-trip for 0.5"
+    # Phase 1.10 step 7d-5: f64 let-binding uses 64-bit local store/load.
+    # x = 1.0_f64 / 3.0_f64 = 0x3FD5555555555555 (recurring 5 mantissa).
+    # Without 64-bit store the high half (0x3FD55555) drops, x becomes
+    # 0x55555555 (a tiny denormal as f64), and __f64_to_f32 narrows
+    # to 0.0_f32 → 0. With proper 64-bit store/load: __f64_to_f32(x)
+    # = 0x3EAAAAAB (1/3 in f32) → /16777216 = 62 (truncated). 62 is
+    # the unique signature of correct 64-bit local handling.
+    assert compile_and_exec(
+        "fn main() -> i32 {"
+        " let x: f64 = 1.0_f64 / 3.0_f64;"
+        " __bits_of_f32(__f64_to_f32(x)) / 16777216 }"
+    ) == 62, "f64 let-binding preserves 64-bit value through store/load"
     # Phase 1.10 step 5+: bootstrap binary bitwise & | ^. Mirrors the
     # helixc-Python fix in commit f676fca; before this, the bootstrap
     # had no parse rule for these operators so source code couldn't use
