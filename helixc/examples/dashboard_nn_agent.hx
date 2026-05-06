@@ -203,20 +203,51 @@ fn nn_copy_weights(src: i32, dst: i32) -> i32 {
     0
 }
 
-// ---- Transfer learning: persist NN weights AND Adam state across runs ----
+// Copy the full state block (weights + Adam m + v + t = 10093 i32s).
+// Used by the best-policy snapshot mechanism: when best_steps improves,
+// we snapshot the current weights AND Adam moments together so a later
+// regression can't trash the saved best policy. The Adam state is part
+// of the snapshot because saving best weights + END-of-training Adam
+// would mismatch (Adam moments would point at gradients computed from
+// weights that no longer exist).
+fn nn_copy_full(src: i32, dst: i32) -> i32 {
+    let mut i: i32 = 0;
+    while i < full_state_total() {
+        __arena_set(dst + i, __arena_get(src + i));
+        i = i + 1;
+    }
+    0
+}
+
+// Allocate a zero-initialized full-state buffer (10093 entries).
+fn nn_alloc_full_buf() -> i32 {
+    let start = __arena_len();
+    let mut i: i32 = 0;
+    while i < full_state_total() {
+        __arena_push(0);
+        i = i + 1;
+    }
+    start
+}
+
+// ---- Transfer learning: persist NN weights + Adam + best-steps marker ----
 // Layout in /tmp/nn_weights.bin (as little-endian bytes per i32):
 //   weights[0..3363]  (3364 * 4 = 13456 bytes)
 //   adam_m [0..3363]  (3364 * 4 = 13456 bytes)
 //   adam_v [0..3363]  (3364 * 4 = 13456 bytes)
 //   adam_t            (4 bytes; i32 step counter)
-// Total: 40372 bytes.
+//   best_marker       (4 bytes; i32 best_steps achieved by the run that
+//                      wrote this snapshot. Used by next run to gate
+//                      overwrite — only saves if THIS run beats it.)
+// Total: 40376 bytes.
 //
-// Saving Adam state alongside weights stops multi-run regression: previous
-// version reset m/v/t to zero each load, so loaded weights got large
-// poorly-scaled Adam updates on the first step and destabilized.
+// Saving best_marker closes the multi-run regression: previously each
+// reload would reset best_steps to 9999, so the first goal-reaching
+// episode (even if worse than the loaded policy) overwrote the snapshot.
+// Now we know the loaded best and only beat it.
 @pure fn weights_bytes() -> i32 { 13456 }
-@pure fn full_state_total() -> i32 { 10093 }     // weights(3364) + m(3364) + v(3364) + t(1)
-@pure fn full_state_bytes() -> i32 { 40372 }     // full_state_total * 4
+@pure fn full_state_total() -> i32 { 10094 }     // weights + m + v + t + best_marker
+@pure fn full_state_bytes() -> i32 { 40376 }     // full_state_total * 4
 
 fn nn_save_full(weights: i32) -> i32 {
     let byte_start = __arena_len();
@@ -288,9 +319,12 @@ fn nn_alloc_adam_after(weights: i32) -> i32 {
         __arena_push(__bits_of_f32(0.0_f32));   // v
         j = j + 1;
     }
-    __arena_push(0);   // t
+    __arena_push(0);     // t (step counter)
+    __arena_push(9999);  // best_marker (none-yet sentinel)
     weights
 }
+
+@pure fn best_marker_off(w: i32) -> i32 { w + 10093 }
 
 @pure fn adam_m_off(w: i32) -> i32 { w + 3364 }
 @pure fn adam_v_off(w: i32) -> i32 { w + 3364 + 3364 }
@@ -659,6 +693,17 @@ fn main() -> i32 {
     // have been loaded above).
     let target_weights = nn_alloc_target();
     nn_copy_weights(weights, target_weights);
+    // Best-policy snapshot. When an episode reaches the goal in fewer
+    // steps than the loaded best (read from best_marker_off), we copy
+    // the FULL state (weights + Adam + step counter + new best_marker)
+    // here. At end of run we save this snapshot, NOT the end-of-training
+    // state — keeps the saved file at the best policy ever seen across
+    // ALL runs, immune to late-run overshoot AND to current-run regression.
+    let best_state = nn_alloc_full_buf();
+    nn_copy_full(weights, best_state);   // initial = current loaded state
+    // Loaded best (or 9999 sentinel if cold start). best_steps for THIS
+    // run starts here so we only snapshot when we actually beat prior.
+    let mut best_steps: i32 = __arena_get(best_marker_off(weights));
     // Counter for periodic target<-main sync. Synced every 100 train steps.
     let target_sync_cell = __arena_push(0);
     let replay = replay_new();
@@ -712,7 +757,8 @@ fn main() -> i32 {
     let h_pre_r = t1d_new(h);
     let h_buf_r = t1d_new(h);
     let mut ep: i32 = 0;
-    let mut best_steps: i32 = 9999;
+    // best_steps already declared above near best_state init — initialized
+    // from best_marker_off(weights) so it carries across runs.
     let mut last_failed: i32 = 0;
     while ep < n_episodes() {
         // When weights were loaded from a prior run, run with VERY low
@@ -820,7 +866,16 @@ fn main() -> i32 {
             }};
         }
         if reached == 1 {
-            if step < best_steps { best_steps = step; }
+            if step < best_steps {
+                best_steps = step;
+                // Stamp the new best into the source's best_marker BEFORE
+                // copying so the snapshot includes it.
+                __arena_set(best_marker_off(weights), best_steps);
+                // Snapshot the FULL state (weights + Adam + best_marker)
+                // at the moment of new best — what we save and reload,
+                // immune to subsequent overshoot.
+                nn_copy_full(weights, best_state);
+            }
             last_failed = 0;
         } else {
             last_failed = 1;
@@ -833,13 +888,12 @@ fn main() -> i32 {
     print_str(",\"best_steps\":");
     print_int(best_steps);
     print_str("}\n");
-    // Save trained weights + Adam state for next run (transfer learning).
-    // ONLY save if we actually reached the goal at least once. Without this
-    // guard, a run that fails to reach the goal (best_steps==9999) would
-    // overwrite the previously-saved good weights with garbage, breaking
-    // the multi-run convergence chain. With it, a good run's weights are
-    // sticky — subsequent failures don't trash them.
-    let saved = if best_steps < 9999 { nn_save_full(weights) } else { 0 };
+    // Save the BEST POLICY snapshot (not end-of-training weights). This
+    // closes the multi-run regression: even if late-run training overshoots
+    // the optimum, the saved file always reflects the best state ever seen.
+    // ONLY save if best_steps < 9999 (the run reached the goal at least
+    // once); else preserve the previously-saved state.
+    let saved = if best_steps < 9999 { nn_save_full(best_state) } else { 0 };
     print_str("{\"type\":\"transfer\",\"saved\":");
     print_int(saved);
     print_str("}\n");
