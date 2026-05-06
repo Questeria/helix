@@ -90,14 +90,10 @@ def grad_pass(prog: A.Program) -> int:
 
     Also resolves let-aliases: 'let f = grad(loss); f(x)' is rewritten so
     the call to f becomes a direct call to loss__grad."""
-    # Pre-pass: rewrite `match` to nested `if/let` so autodiff (which only
-    # knows the smaller AST surface) never sees a Match node. Skip this
-    # entirely when the program has no grad/grad_rev/grad_rev_all calls —
-    # otherwise we'd desugar match in stdlib option/result helpers and
-    # surface fake "if/else branches differ" warnings during typecheck.
-    if _has_grad_call(prog):
-        from .match_lower import lower_matches
-        lower_matches(prog)
+    # NOTE: match -> if/let lowering happens in lower() (the IR builder),
+    # AFTER typecheck. _rewrite_in_expr now handles Match nodes natively
+    # (recurse into arm bodies). This keeps the AST as Match-form during
+    # typecheck so users get correct pattern-style diagnostics.
     # First: index existing functions by name
     fn_by_name: dict[str, A.FnDecl] = {}
     for item in prog.items:
@@ -281,6 +277,19 @@ def _rewrite_in_expr(expr: A.Expr, fn_by_name: dict[str, A.FnDecl],
         if expr.else_ is not None and isinstance(expr.else_, A.Block):
             c_else = _rewrite_in_block(expr.else_, fn_by_name, new_fns)
         return (expr, c_cond + c_then + c_else)
+    if isinstance(expr, A.Match):
+        # Recurse into the scrutinee + each arm body. This lets grad calls
+        # inside match arms be rewritten without first having to desugar
+        # the match. Pattern + guard expressions are not differentiable
+        # so we don't recurse there.
+        new_scrut, c_scrut = _rewrite_in_expr(expr.scrutinee, fn_by_name, new_fns)
+        expr.scrutinee = new_scrut
+        c_arms = 0
+        for arm in expr.arms:
+            new_body, ca = _rewrite_in_expr(arm.body, fn_by_name, new_fns)
+            arm.body = new_body
+            c_arms += ca
+        return (expr, c_scrut + c_arms)
     if isinstance(expr, A.Cast):
         new_inner, c = _rewrite_in_expr(expr.value, fn_by_name, new_fns)
         expr.value = new_inner
