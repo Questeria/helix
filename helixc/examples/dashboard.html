@@ -1,0 +1,407 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>Helix AGI Dashboard — live agent</title>
+<style>
+  body {
+    background: #1a1a1a;
+    color: #e0e0e0;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    margin: 0;
+    padding: 20px;
+  }
+  h1 {
+    color: #ff8800;
+    margin: 0 0 4px 0;
+    font-size: 22px;
+  }
+  .subtitle {
+    color: #888;
+    font-size: 13px;
+    margin-bottom: 16px;
+  }
+  .layout {
+    display: grid;
+    grid-template-columns: 460px 1fr;
+    gap: 24px;
+    align-items: start;
+  }
+  .panel {
+    background: #2a2a2a;
+    border: 1px solid #3a3a3a;
+    border-radius: 8px;
+    padding: 16px;
+  }
+  .panel h2 {
+    margin: 0 0 12px 0;
+    font-size: 15px;
+    color: #ff8800;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+  }
+  #grid {
+    display: grid;
+    grid-template-columns: repeat(10, 40px);
+    grid-template-rows: repeat(10, 40px);
+    gap: 2px;
+    background: #0d0d0d;
+    padding: 4px;
+    border-radius: 4px;
+  }
+  .cell {
+    background: #2f2f2f;
+    border-radius: 3px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 18px;
+    font-weight: bold;
+    transition: all 0.15s ease;
+  }
+  .cell.obstacle {
+    background: #4a2a2a;
+    color: #ff5544;
+  }
+  .cell.goal {
+    background: #2a4a2a;
+    color: #44ff66;
+  }
+  .cell.agent {
+    background: #ff8800;
+    color: #000;
+    box-shadow: 0 0 12px rgba(255, 136, 0, 0.7);
+  }
+  .cell.visited {
+    background: #2a2a3a;
+  }
+  .cell.path-tail {
+    background: rgba(255, 136, 0, 0.3);
+  }
+  .controls {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 12px;
+    align-items: center;
+    flex-wrap: wrap;
+  }
+  button {
+    background: #ff8800;
+    color: #000;
+    border: none;
+    padding: 6px 14px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-weight: bold;
+    font-family: inherit;
+  }
+  button:hover { background: #ffaa33; }
+  button:disabled { background: #555; color: #888; cursor: not-allowed; }
+  input[type=range] { flex: 1; max-width: 180px; }
+  label { font-size: 13px; color: #aaa; }
+  .stats {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+    font-size: 14px;
+  }
+  .stat {
+    background: #1f1f1f;
+    padding: 8px 10px;
+    border-radius: 4px;
+    border-left: 3px solid #ff8800;
+  }
+  .stat-label { color: #888; font-size: 11px; text-transform: uppercase; }
+  .stat-value { color: #fff; font-size: 18px; font-weight: bold; }
+  #log {
+    font-family: 'Consolas', 'Courier New', monospace;
+    font-size: 11px;
+    color: #99ccff;
+    background: #0d0d0d;
+    padding: 8px;
+    border-radius: 4px;
+    height: 220px;
+    overflow-y: auto;
+    margin-top: 12px;
+  }
+  #log .json { color: #88aaff; }
+  #log .step { color: #ff8800; font-weight: bold; }
+  .chart-canvas {
+    width: 100%;
+    height: 140px;
+    background: #0d0d0d;
+    border-radius: 4px;
+    margin-top: 8px;
+  }
+  .legend { display: flex; gap: 12px; margin-top: 8px; font-size: 12px; }
+  .legend span { display: inline-block; }
+  .swatch {
+    display: inline-block;
+    width: 12px; height: 12px;
+    border-radius: 2px;
+    margin-right: 4px;
+    vertical-align: middle;
+  }
+  .status {
+    padding: 6px 10px;
+    border-radius: 4px;
+    margin-bottom: 8px;
+    font-size: 13px;
+    text-align: center;
+  }
+  .status.running { background: #2a4a2a; color: #88ff88; }
+  .status.idle { background: #3a3a3a; color: #aaa; }
+  .status.done-ok { background: #2a4a2a; color: #88ff88; }
+  .status.done-fail { background: #4a2a2a; color: #ff8888; }
+</style>
+</head>
+<body>
+<h1>Helix AGI Dashboard — live agent</h1>
+<div class="subtitle">Browser visualisation of a Helix-compiled grid-world agent. The agent's logic, world model, search, working memory, episodic memory all run in a native ELF binary; this dashboard streams its JSON output and renders it.</div>
+
+<div class="layout">
+  <div class="panel">
+    <h2>World</h2>
+    <div id="status" class="status idle">Press Run to start</div>
+    <div id="grid"></div>
+    <div class="legend">
+      <span><span class="swatch" style="background:#ff8800"></span>Agent</span>
+      <span><span class="swatch" style="background:#44ff66"></span>Goal</span>
+      <span><span class="swatch" style="background:#ff5544"></span>Obstacle</span>
+      <span><span class="swatch" style="background:#2a2a3a"></span>Visited</span>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2>Controls</h2>
+    <div class="controls">
+      <button id="runBtn" onclick="runAgent()">Run</button>
+      <button id="pauseBtn" onclick="togglePause()" disabled>Pause</button>
+      <button id="stepBtn" onclick="stepOnce()" disabled>Step ▶</button>
+      <button id="resetBtn" onclick="resetAll()">Reset</button>
+    </div>
+    <div class="controls">
+      <label>Iterations to play:</label>
+      <input type="range" id="iterRange" min="1" max="50" value="50" oninput="document.getElementById('iterVal').textContent = this.value" />
+      <span id="iterVal">50</span>
+    </div>
+    <div class="controls">
+      <label>Speed:</label>
+      <input type="range" id="speedRange" min="50" max="1000" value="300" />
+      <span id="speedVal">300ms/step</span>
+    </div>
+    <h2 style="margin-top:16px">Stats</h2>
+    <div class="stats">
+      <div class="stat"><div class="stat-label">Step</div><div class="stat-value" id="stStep">0</div></div>
+      <div class="stat"><div class="stat-label">Position</div><div class="stat-value" id="stPos">0</div></div>
+      <div class="stat"><div class="stat-label">Action</div><div class="stat-value" id="stAct">—</div></div>
+      <div class="stat"><div class="stat-label">Score</div><div class="stat-value" id="stScore">—</div></div>
+      <div class="stat"><div class="stat-label">Visited</div><div class="stat-value" id="stVisited">0</div></div>
+      <div class="stat"><div class="stat-label">Status</div><div class="stat-value" id="stDone">idle</div></div>
+    </div>
+    <h2 style="margin-top:16px">Score over time</h2>
+    <canvas id="chart" class="chart-canvas"></canvas>
+    <h2 style="margin-top:16px">JSON stream (raw Helix output)</h2>
+    <div id="log"></div>
+  </div>
+</div>
+
+<script>
+const N = 10;
+const ACTION_NAMES = { 0: 'UP', 1: 'DOWN', 2: 'LEFT', 3: 'RIGHT', '-1': 'init' };
+let allEvents = [];
+let timer = null;
+let cursor = 0;
+let paused = false;
+let visited = new Set();
+
+document.getElementById('speedRange').oninput = function() {
+  document.getElementById('speedVal').textContent = this.value + 'ms/step';
+};
+
+function buildGrid(obstacles, goal) {
+  const grid = document.getElementById('grid');
+  grid.innerHTML = '';
+  for (let i = 0; i < N * N; i++) {
+    const cell = document.createElement('div');
+    cell.id = 'c' + i;
+    cell.className = 'cell';
+    if (obstacles && obstacles.indexOf(i) >= 0) {
+      cell.classList.add('obstacle');
+      cell.textContent = '#';
+    } else if (i === goal) {
+      cell.classList.add('goal');
+      cell.textContent = 'G';
+    }
+    grid.appendChild(cell);
+  }
+}
+
+function setAgent(pos) {
+  document.querySelectorAll('.cell.agent').forEach(c => c.classList.remove('agent'));
+  document.querySelectorAll('.cell.path-tail').forEach(c => c.classList.remove('path-tail'));
+  if (pos === undefined || pos < 0) return;
+  const cell = document.getElementById('c' + pos);
+  if (!cell) return;
+  cell.classList.add('agent');
+  cell.textContent = 'A';
+  visited.add(pos);
+  for (let p of visited) {
+    const c2 = document.getElementById('c' + p);
+    if (c2 && p !== pos && !c2.classList.contains('obstacle') && !c2.classList.contains('goal')) {
+      c2.classList.add('visited');
+    }
+  }
+}
+
+function logLine(text, cls) {
+  const log = document.getElementById('log');
+  const div = document.createElement('div');
+  if (cls) div.className = cls;
+  div.textContent = text;
+  log.appendChild(div);
+  log.scrollTop = log.scrollHeight;
+}
+
+let chartHistory = [];
+function drawChart() {
+  const canvas = document.getElementById('chart');
+  const ctx = canvas.getContext('2d');
+  const w = canvas.clientWidth;
+  const h = canvas.clientHeight;
+  canvas.width = w;
+  canvas.height = h;
+  ctx.fillStyle = '#0d0d0d';
+  ctx.fillRect(0, 0, w, h);
+  if (chartHistory.length < 2) return;
+  const minS = Math.min(...chartHistory);
+  const maxS = Math.max(...chartHistory);
+  const span = Math.max(1, maxS - minS);
+  ctx.strokeStyle = '#ff8800';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  for (let i = 0; i < chartHistory.length; i++) {
+    const x = (i / (chartHistory.length - 1 || 1)) * (w - 4) + 2;
+    const y = h - 4 - ((chartHistory[i] - minS) / span) * (h - 8);
+    if (i === 0) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
+  }
+  ctx.stroke();
+  ctx.fillStyle = '#888';
+  ctx.font = '10px monospace';
+  ctx.fillText('min ' + minS, 4, h - 4);
+  ctx.fillText('max ' + maxS, 4, 12);
+}
+
+function applyEvent(ev) {
+  if (ev.type === 'init') {
+    buildGrid(ev.obstacles, ev.goal);
+    return;
+  }
+  document.getElementById('stStep').textContent = ev.step;
+  document.getElementById('stPos').textContent = ev.pos;
+  document.getElementById('stAct').textContent = ACTION_NAMES[ev.action] || '—';
+  document.getElementById('stScore').textContent = ev.score !== undefined ? ev.score : '—';
+  setAgent(ev.pos);
+  document.getElementById('stVisited').textContent = visited.size;
+  if (ev.score !== undefined) {
+    chartHistory.push(ev.score);
+    drawChart();
+  }
+  if (ev.done) {
+    if (ev.reached_goal) {
+      document.getElementById('status').className = 'status done-ok';
+      document.getElementById('status').textContent = '✓ Goal reached at step ' + ev.step;
+      document.getElementById('stDone').textContent = '✓ done';
+    } else {
+      document.getElementById('status').className = 'status done-fail';
+      document.getElementById('status').textContent = '✗ Did not reach goal in ' + ev.step + ' steps';
+      document.getElementById('stDone').textContent = '✗ stuck';
+    }
+  }
+  logLine(JSON.stringify(ev), 'json');
+}
+
+async function runAgent() {
+  resetAll();
+  document.getElementById('runBtn').disabled = true;
+  document.getElementById('pauseBtn').disabled = false;
+  document.getElementById('status').className = 'status running';
+  document.getElementById('status').textContent = 'Compiling and running Helix...';
+  const iter = parseInt(document.getElementById('iterRange').value);
+  const resp = await fetch('/run?iter=' + iter);
+  const text = await resp.text();
+  allEvents = text.trim().split('\n').filter(l => l.length > 0).map(l => JSON.parse(l));
+  // Truncate to iter+2 (init + iter steps + final)
+  const limit = iter + 2;
+  allEvents = allEvents.slice(0, Math.min(allEvents.length, limit));
+  cursor = 0;
+  document.getElementById('status').textContent = 'Playing back ' + allEvents.length + ' events';
+  scheduleNext();
+}
+
+function scheduleNext() {
+  if (paused || cursor >= allEvents.length) {
+    if (cursor >= allEvents.length) {
+      document.getElementById('runBtn').disabled = false;
+      document.getElementById('pauseBtn').disabled = true;
+      document.getElementById('stepBtn').disabled = true;
+    }
+    return;
+  }
+  const speed = parseInt(document.getElementById('speedRange').value);
+  applyEvent(allEvents[cursor]);
+  cursor++;
+  timer = setTimeout(scheduleNext, speed);
+}
+
+function togglePause() {
+  paused = !paused;
+  if (paused) {
+    if (timer) clearTimeout(timer);
+    document.getElementById('pauseBtn').textContent = 'Resume';
+    document.getElementById('stepBtn').disabled = false;
+  } else {
+    document.getElementById('pauseBtn').textContent = 'Pause';
+    document.getElementById('stepBtn').disabled = true;
+    scheduleNext();
+  }
+}
+
+function stepOnce() {
+  if (cursor < allEvents.length) {
+    applyEvent(allEvents[cursor]);
+    cursor++;
+  }
+}
+
+function resetAll() {
+  if (timer) clearTimeout(timer);
+  timer = null;
+  paused = false;
+  cursor = 0;
+  visited = new Set();
+  chartHistory = [];
+  allEvents = [];
+  document.getElementById('runBtn').disabled = false;
+  document.getElementById('pauseBtn').disabled = true;
+  document.getElementById('pauseBtn').textContent = 'Pause';
+  document.getElementById('stepBtn').disabled = true;
+  document.getElementById('log').innerHTML = '';
+  document.getElementById('stStep').textContent = '0';
+  document.getElementById('stPos').textContent = '0';
+  document.getElementById('stAct').textContent = '—';
+  document.getElementById('stScore').textContent = '—';
+  document.getElementById('stVisited').textContent = '0';
+  document.getElementById('stDone').textContent = 'idle';
+  document.getElementById('status').className = 'status idle';
+  document.getElementById('status').textContent = 'Press Run to start';
+  drawChart();
+  // Initialize empty grid
+  buildGrid([12,13,14,25,35,45,47,48,56,67,78,88], 99);
+}
+
+resetAll();
+</script>
+</body>
+</html>
