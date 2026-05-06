@@ -1724,6 +1724,16 @@ fn main() -> i32 {{
     assert compile_and_exec(
         "__f32_to_i32(__fmul(__i32_to_f32(6), __i32_to_f32(7)))"
     ) == 42, "f32_to_i32(__fmul) = 42"
+    # Phase 1.10 step 5k: __fmin(a, b) — two-arg f32 minimum via SSE2
+    # minss xmm0, xmm1. Mirrors __fadd's binary shape exactly. minss is
+    # asymmetric on NaN (returns the second operand), but both args are
+    # ordinary f32 values here so commutativity holds.
+    assert compile_and_exec("__fmin(2.0, 3.0) / 16777216") == 64, "fmin 2.0,3.0=2.0"
+    assert compile_and_exec("__fmin(3.0, 2.0) / 16777216") == 64, "fmin 3.0,2.0=2.0 (sym)"
+    assert compile_and_exec("__fmin(0.0, 5.0)") == 0, "fmin 0.0,5.0=0.0 (all-zero bits)"
+    assert compile_and_exec(
+        "__fmin(__fadd(1.0, 1.0), __fadd(1.0, 2.0)) / 16777216"
+    ) == 64, "fmin nested __fadd args = 2.0"
     # Phase 1.10 step 5a: optional `_f32` / `_f64` / `_i32` / `_i64` suffix
     # on numeric literals. Pre-fix the suffix lexed as a separate IDENT
     # token, breaking parse. Now consumed as part of the literal token.
