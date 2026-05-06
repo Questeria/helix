@@ -23,6 +23,67 @@ from .autodiff import differentiate, _inline_lets
 from .autodiff_reverse import differentiate_reverse
 
 
+_GRAD_CALL_NAMES = frozenset({"grad", "grad_rev", "grad_rev_all"})
+
+
+def _has_grad_call(prog: A.Program) -> bool:
+    """Quick scan: does any function body contain a Call whose callee is
+    Name("grad"|"grad_rev"|"grad_rev_all")? Used to short-circuit the
+    expensive match_lower pre-pass when no AD work is needed."""
+    for item in prog.items:
+        if isinstance(item, A.FnDecl):
+            if _expr_has_grad(item.body):
+                return True
+    return False
+
+
+def _expr_has_grad(e) -> bool:
+    if e is None:
+        return False
+    if isinstance(e, A.Call):
+        if isinstance(e.callee, A.Name) and e.callee.name in _GRAD_CALL_NAMES:
+            return True
+        if _expr_has_grad(e.callee):
+            return True
+        return any(_expr_has_grad(a) for a in e.args)
+    if isinstance(e, A.Block):
+        for s in e.stmts:
+            if isinstance(s, A.Let) and _expr_has_grad(s.value):
+                return True
+            if isinstance(s, A.ExprStmt) and _expr_has_grad(s.expr):
+                return True
+            if isinstance(s, A.ConstStmt) and _expr_has_grad(s.value):
+                return True
+        if _expr_has_grad(e.final_expr):
+            return True
+        return False
+    if isinstance(e, A.If):
+        return (_expr_has_grad(e.cond) or _expr_has_grad(e.then)
+                or _expr_has_grad(e.else_))
+    if isinstance(e, A.Match):
+        if _expr_has_grad(e.scrutinee):
+            return True
+        return any(_expr_has_grad(a.body) or _expr_has_grad(a.guard)
+                   for a in e.arms)
+    if isinstance(e, A.Binary):
+        return _expr_has_grad(e.left) or _expr_has_grad(e.right)
+    if isinstance(e, A.Unary):
+        return _expr_has_grad(e.operand)
+    if isinstance(e, (A.For, A.While)):
+        return (_expr_has_grad(getattr(e, 'cond', None)) or
+                _expr_has_grad(getattr(e, 'iter_expr', None)) or
+                _expr_has_grad(e.body))
+    if isinstance(e, A.Loop):
+        return _expr_has_grad(e.body)
+    if isinstance(e, A.Cast):
+        return _expr_has_grad(e.value)
+    if isinstance(e, A.Return):
+        return _expr_has_grad(e.value)
+    if isinstance(e, A.Assign):
+        return _expr_has_grad(e.target) or _expr_has_grad(e.value)
+    return False
+
+
 def grad_pass(prog: A.Program) -> int:
     """Walk the program; rewrite all grad(f) calls into references to
     generated f__grad functions. Returns count of grad calls rewritten.
@@ -30,9 +91,13 @@ def grad_pass(prog: A.Program) -> int:
     Also resolves let-aliases: 'let f = grad(loss); f(x)' is rewritten so
     the call to f becomes a direct call to loss__grad."""
     # Pre-pass: rewrite `match` to nested `if/let` so autodiff (which only
-    # knows the smaller AST surface) never sees a Match node.
-    from .match_lower import lower_matches
-    lower_matches(prog)
+    # knows the smaller AST surface) never sees a Match node. Skip this
+    # entirely when the program has no grad/grad_rev/grad_rev_all calls —
+    # otherwise we'd desugar match in stdlib option/result helpers and
+    # surface fake "if/else branches differ" warnings during typecheck.
+    if _has_grad_call(prog):
+        from .match_lower import lower_matches
+        lower_matches(prog)
     # First: index existing functions by name
     fn_by_name: dict[str, A.FnDecl] = {}
     for item in prog.items:
