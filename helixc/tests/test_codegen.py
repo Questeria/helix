@@ -1734,6 +1734,19 @@ fn main() -> i32 {{
     assert compile_and_exec(
         "__fmin(__fadd(1.0, 1.0), __fadd(1.0, 2.0)) / 16777216"
     ) == 64, "fmin nested __fadd args = 2.0"
+    # Phase 1.10 step 5l: __fmax(a, b) — two-arg f32 maximum via SSE2
+    # maxss xmm0, xmm1 (F3 0F 5F C1; one byte differs from minss).
+    # 4.0 -> 0x40800000 -> top byte 64; 8.0 -> 0x41000000 -> top 65.
+    assert compile_and_exec("__fmax(2.0, 4.0) / 16777216") == 64, "fmax 2.0,4.0=4.0"
+    assert compile_and_exec("__fmax(4.0, 2.0) / 16777216") == 64, "fmax 4.0,2.0=4.0 (sym)"
+    assert compile_and_exec("__fmax(0.0, 0.0)") == 0, "fmax 0.0,0.0=0.0 (all-zero bits)"
+    assert compile_and_exec(
+        "__fmax(__fadd(1.0, 1.0), __fadd(2.0, 2.0)) / 16777216"
+    ) == 64, "fmax nested __fadd args = 4.0"
+    # __fmax composed with __fmin: max(2, min(5, 3)) = max(2, 3) = 3.0 -> 64.
+    assert compile_and_exec(
+        "__fmax(2.0, __fmin(5.0, 3.0)) / 16777216"
+    ) == 64, "fmax composed with fmin"
     # Phase 1.10 step 5a: optional `_f32` / `_f64` / `_i32` / `_i64` suffix
     # on numeric literals. Pre-fix the suffix lexed as a separate IDENT
     # token, breaking parse. Now consumed as part of the literal token.

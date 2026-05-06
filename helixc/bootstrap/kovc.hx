@@ -878,7 +878,7 @@ fn emit_exit_with_eax() -> i32 {
 fn install_builtin_names() -> i32 {
     let bn_state = __arena_push(0);          // slot 0 placeholder
     __arena_push(0); __arena_push(0); __arena_push(0); __arena_push(0);
-    // Reserve slots 5..67 (63 more slots: 2 file-name slots + 2
+    // Reserve slots 5..68 (64 more slots: 2 file-name slots + 2
     // str_state header slots + 48 entry slots + 5 f32 builtin slots
     // (__fadd, __fsub, __fmul, __fdiv at 57..60; __fneg at 61) + 1
     // fn_type_state pointer slot at 62 (Phase 1.10 step 5c follow-on)
@@ -886,9 +886,10 @@ fn install_builtin_names() -> i32 {
     // + 1 __fabs slot at 64 (Phase 1.10 step 5h)
     // + 1 __i32_to_f32 slot at 65 (Phase 1.10 step 5i)
     // + 1 __f32_to_i32 slot at 66 (Phase 1.10 step 5j)
-    // + 1 __fmin slot at 67 (Phase 1.10 step 5k).
+    // + 1 __fmin slot at 67 (Phase 1.10 step 5k)
+    // + 1 __fmax slot at 68 (Phase 1.10 step 5l).
     let mut i: i32 = 0;
-    while i < 63 {
+    while i < 64 {
         __arena_push(0);
         i = i + 1;
     }
@@ -1033,6 +1034,16 @@ fn install_builtin_names() -> i32 {
     __arena_push(109); __arena_push(105); __arena_push(110);
     __arena_set(bn_state + 67, s16);
 
+    // Phase 1.10 step 5l: "__fmax" (95 95 102 109 97 120) — 6 chars.
+    // Two-arg f32 maximum via SSE2 maxss xmm0, xmm1. Mirrors __fmin
+    // exactly, with opcode F3 0F 5F C1 (one byte differs: 5D->5F).
+    // maxss is asymmetric on NaN: if either operand is NaN, the second
+    // operand (xmm1 = b) is returned. is_underscore_f_call's __f*
+    // prefix matches so the result types as f32 through is_f32_expr.
+    let s17 = __arena_push(95); __arena_push(95); __arena_push(102);
+    __arena_push(109); __arena_push(97); __arena_push(120);
+    __arena_set(bn_state + 68, s17);
+
     bn_state
 }
 
@@ -1064,6 +1075,8 @@ fn bn_i32_to_f32_s(b: i32) -> i32 { __arena_get(b + 65) }
 fn bn_f32_to_i32_s(b: i32) -> i32 { __arena_get(b + 66) }
 // Phase 1.10 step 5k: __fmin two-arg f32 minimum (SSE2 minss).
 fn bn_fmin_s(b: i32) -> i32 { __arena_get(b + 67) }
+// Phase 1.10 step 5l: __fmax two-arg f32 maximum (SSE2 maxss).
+fn bn_fmax_s(b: i32) -> i32 { __arena_get(b + 68) }
 // str_state accessors. The state lives within the bn_state region.
 fn str_top(b: i32) -> i32 { __arena_get(b + 7) }
 fn str_top_set(b: i32, v: i32) -> i32 { __arena_set(b + 7, v); 0 }
@@ -1617,9 +1630,28 @@ fn try_emit_builtin_call(name_s: i32, name_l: i32, args_head: i32,
         emit_byte(0xF3); emit_byte(0x0F); emit_byte(0x5D); emit_byte(0xC1);   // minss xmm0, xmm1
         emit_byte(0x66); emit_byte(0x0F); emit_byte(0x7E); emit_byte(0xC0);   // movd eax, xmm0
         n0 + np + n1 + 2 + 1 + 4 + 4 + 4 + 4
+    } else { if kovc_byte_eq(name_s, name_l, bn_fmax_s(bn_state), 6) == 1 {
+        // Phase 1.10 step 5l: __fmax(a, b) -> f32 bits. Same shape as
+        // __fmin but maxss xmm0, xmm1 (F3 0F 5F C1; one byte differs:
+        // 5D -> 5F). For NaN inputs, maxss returns the second operand
+        // (xmm1 = b). is_underscore_f_call's __f* prefix matches so
+        // the call types as f32 through is_f32_expr.
+        let a0 = __arena_get(args_head + 1);
+        let next_arg = __arena_get(args_head + 2);
+        let a1 = __arena_get(next_arg + 1);
+        let n0 = emit_ast_code(a0, bind_state, patch_state, bn_state);
+        let np = emit_push_rax();
+        let n1 = emit_ast_code(a1, bind_state, patch_state, bn_state);
+        emit_byte(0x89); emit_byte(0xC1);                                    // mov ecx, eax
+        emit_byte(0x58);                                                      // pop rax
+        emit_byte(0x66); emit_byte(0x0F); emit_byte(0x6E); emit_byte(0xC0);   // movd xmm0, eax
+        emit_byte(0x66); emit_byte(0x0F); emit_byte(0x6E); emit_byte(0xC9);   // movd xmm1, ecx
+        emit_byte(0xF3); emit_byte(0x0F); emit_byte(0x5F); emit_byte(0xC1);   // maxss xmm0, xmm1
+        emit_byte(0x66); emit_byte(0x0F); emit_byte(0x7E); emit_byte(0xC0);   // movd eax, xmm0
+        n0 + np + n1 + 2 + 1 + 4 + 4 + 4 + 4
     } else {
         0
-    }}}}}}}}}}}}}}}}
+    }}}}}}}}}}}}}}}}}
 }
 
 // Unreachable in this commit; reference impl preserved for next
