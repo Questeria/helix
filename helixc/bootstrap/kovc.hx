@@ -226,6 +226,11 @@ fn emit_imul_eax_ecx() -> i32 { emit_byte(0x0F); emit_byte(0xAF); emit_byte(0xC1
 fn emit_and_eax_ecx() -> i32 { emit_byte(0x21); emit_byte(0xC8); 2 }
 fn emit_or_eax_ecx()  -> i32 { emit_byte(0x09); emit_byte(0xC8); 2 }
 fn emit_xor_eax_ecx() -> i32 { emit_byte(0x31); emit_byte(0xC8); 2 }
+// Shifts. x86 shift-by-CL: D3 E0 = shl eax, cl; D3 F8 = sar eax, cl.
+// emit_mov_ecx_eax already places rhs into ecx (CL is its low byte) so
+// the standard binary-op shape (lhs in eax, rhs->ecx, op) works unchanged.
+fn emit_shl_eax_cl() -> i32 { emit_byte(0xD3); emit_byte(0xE0); 2 }
+fn emit_sar_eax_cl() -> i32 { emit_byte(0xD3); emit_byte(0xF8); 2 }
 // idiv requires sign-extension into edx; we emit `cdq; idiv ecx`.
 //   99       cdq
 //   F7 F9    idiv ecx
@@ -1491,6 +1496,24 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         let no = emit_pop_rax();
         let na = emit_xor_eax_ecx();
         n1 + np + n2 + nm + no + na
+    } else { if t == 32 {
+        // AST_SHL: shl eax, cl (D3 E0). rhs (count) ends up in cl via mov_ecx_eax.
+        let n1 = emit_ast_code(p1, bind_state, patch_state, bn_state);
+        let np = emit_push_rax();
+        let n2 = emit_ast_code(p2, bind_state, patch_state, bn_state);
+        let nm = emit_mov_ecx_eax();
+        let no = emit_pop_rax();
+        let na = emit_shl_eax_cl();
+        n1 + np + n2 + nm + no + na
+    } else { if t == 33 {
+        // AST_SHR: sar eax, cl (D3 F8) — arithmetic shift, sign-preserving.
+        let n1 = emit_ast_code(p1, bind_state, patch_state, bn_state);
+        let np = emit_push_rax();
+        let n2 = emit_ast_code(p2, bind_state, patch_state, bn_state);
+        let nm = emit_mov_ecx_eax();
+        let no = emit_pop_rax();
+        let na = emit_sar_eax_cl();
+        n1 + np + n2 + nm + no + na
     } else { if t == 6 {
         let n1 = emit_ast_code(p1, bind_state, patch_state, bn_state);
         let np = emit_push_rax();
@@ -1721,7 +1744,7 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         emit_ast_int(0)
     } else {
         emit_ast_int(0)
-    }}}}}}}}}}}}}}}}}}}}}}}}}}}}}}
+    }}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}
 }
 
 // --------------------------------------------------------------

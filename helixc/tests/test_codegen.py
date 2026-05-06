@@ -1670,6 +1670,16 @@ fn main() -> i32 {{
     # Combined with arith: (5 + 7) ^ 3 = 12 ^ 3 = 15.
     assert compile_and_exec("(5 + 7) ^ 3") == 15, \
         "bitwise XOR after arithmetic"
+    # Phase 1.10 step 5+: bootstrap shifts `<<` and `>>` with lexer
+    # lookahead. SAR (arithmetic right shift) preserves sign. Mirrors
+    # helixc-Python OpKind.SHL/SHR (commit 1410f91).
+    assert compile_and_exec("21 << 1") == 42, "bootstrap SHL"
+    assert compile_and_exec("(1 << 5) + 10") == 42, "bootstrap SHL composed with add"
+    assert compile_and_exec("84 >> 1") == 42, "bootstrap SHR (arithmetic)"
+    # Verify SAR vs SHR semantics: -1 >> 25 = -1 (arith fills with sign).
+    # Exit code 255 in 8-bit. Logical shift would give 127 — distinguishes.
+    assert compile_and_exec("(0 - 1) >> 25") == 255, \
+        "bootstrap SHR arithmetic (sign-preserving)"
     # Phase 1.10 step 5b: combined `: f32` annotations + suffix-typed
     # literals + SSE arithmetic in a real-shaped program. Tests the
     # interaction of the parser's type-annotation-skip logic, lex_int's

@@ -66,6 +66,10 @@
 //                    helixc-Python OpKind.BIT_AND (commit f676fca).
 //  29  AST_BOR       p1 = lhs, p2 = rhs. `or eax, ecx` (0x09 0xC8).
 //  30  AST_BXOR      p1 = lhs, p2 = rhs. `xor eax, ecx` (0x31 0xC8).
+//  32  AST_SHL       p1 = lhs, p2 = rhs. `shl eax, cl` (0xD3 0xE0).
+//  33  AST_SHR       p1 = lhs, p2 = rhs. `sar eax, cl` (0xD3 0xF8) —
+//                    arithmetic shift right, preserves sign for signed i32.
+//                    Mirrors helixc-Python OpKind.SHL/SHR (commit 1410f91).
 //  31  AST_NOT       p1 = inner. Logical NOT. Codegen emits
 //                    `test eax, eax; mov eax, 0; sete al` so the
 //                    result is 1 when inner == 0, else 0. Mirrors
@@ -295,9 +299,17 @@ fn parse_bitwise(tok_base: i32, sb: i32) -> i32 {
             cur_advance(sb);
             let rhs = parse_add(tok_base, sb);
             lhs = mk_node(30, lhs, rhs, 0);
+        } else { if t == 30 {       // TK_LSHIFT -> AST_SHL
+            cur_advance(sb);
+            let rhs = parse_add(tok_base, sb);
+            lhs = mk_node(32, lhs, rhs, 0);
+        } else { if t == 31 {       // TK_RSHIFT -> AST_SHR
+            cur_advance(sb);
+            let rhs = parse_add(tok_base, sb);
+            lhs = mk_node(33, lhs, rhs, 0);
         } else {
             keep = 0;
-        }}};
+        }}}}};
     }
     lhs
 }
