@@ -1709,6 +1709,21 @@ fn main() -> i32 {{
     assert compile_and_exec(
         "__fadd(__i32_to_f32(2), __i32_to_f32(2)) / 16777216"
     ) == 64, "f32-typed nested __i32_to_f32 through __fadd = 4.0"
+    # Phase 1.10 step 5j: __f32_to_i32(x) — single-arg truncating
+    # float-to-int conversion via SSE2 cvttss2si. eval x -> eax (f32
+    # bit pattern); movd xmm0, eax; cvttss2si eax, xmm0. 8 bytes after
+    # the arg eval. Result is i32 (NOT f32); is_f32_expr explicitly
+    # types this call as i32 (overriding the __f* prefix match). The
+    # round-trip __f32_to_i32(__i32_to_f32(n)) is the identity for any
+    # n that fits exactly in f32 (|n| <= 16777216).
+    assert compile_and_exec("__f32_to_i32(__i32_to_f32(42))") == 42, "f32_to_i32 round-trip 42"
+    assert compile_and_exec("__f32_to_i32(__i32_to_f32(0))") == 0, "f32_to_i32 round-trip 0"
+    assert compile_and_exec(
+        "__f32_to_i32(__fadd(__i32_to_f32(20), __i32_to_f32(22)))"
+    ) == 42, "f32_to_i32(__fadd) = 42"
+    assert compile_and_exec(
+        "__f32_to_i32(__fmul(__i32_to_f32(6), __i32_to_f32(7)))"
+    ) == 42, "f32_to_i32(__fmul) = 42"
     # Phase 1.10 step 5a: optional `_f32` / `_f64` / `_i32` / `_i64` suffix
     # on numeric literals. Pre-fix the suffix lexed as a separate IDENT
     # token, breaking parse. Now consumed as part of the literal token.
