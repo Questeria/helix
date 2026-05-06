@@ -237,6 +237,95 @@ fn unify_deep(pat_off: i32, term_off: i32, child_mask: i32, b: i32) -> i32 {
 }
 
 // =========================================================================
+// Phase 4 perfection: per-tag child_mask via lookup table.
+// =========================================================================
+//
+// `unify_deep` above passes ONE child_mask down through every level of
+// recursion — all nodes in the tree must share the same shape. That's
+// fine for homogeneous trees (all binary, or all unary) but breaks for
+// mixed-shape trees: a binary at the root with leaves underneath needs
+// child_mask=3 at the root but child_mask=0 at the leaves.
+//
+// `unify_deep_table` looks up child_mask via tag from a caller-provided
+// arena array indexed by tag. Each node level uses its OWN mask, so
+// mixed-shape trees compose cleanly. Tags outside the table use mask 0
+// (treat all slots as scalars).
+//
+// Usage:
+//   let mask_table = __arena_len();
+//   __arena_push(0);     // mask[0] = 0 (leaf)
+//   __arena_push(1);     // mask[1] = 1 (unary: only p1 is sub-tree)
+//   __arena_push(3);     // mask[2] = 3 (binary: p1 + p2 are sub-trees)
+//   ...
+//   unify_deep_table(pat, term, mask_table, 3, b)
+//
+// Returns 1 on success, 0 on failure.
+fn unify_deep_table(pat_off: i32, term_off: i32, mask_table: i32,
+                    mask_table_len: i32, b: i32) -> i32 {
+    let pat_tag = __arena_get(pat_off);
+    if pat_tag == unify_var_tag() {
+        let var_id = __arena_get(pat_off + 1);
+        let existing = bindings_get(b, var_id);
+        if existing < 0 {
+            bindings_set(b, var_id, term_off);
+            1
+        } else {
+            // Already-bound var: existing must structurally match term
+            // (recurse with the same table — the existing tree may have
+            // its own per-tag masks).
+            unify_deep_table(existing, term_off, mask_table, mask_table_len, b)
+        }
+    } else {
+        let term_tag = __arena_get(term_off);
+        if pat_tag == term_tag {
+            // Look up THIS tag's child_mask from the table.
+            let mut my_mask: i32 = 0;
+            if pat_tag >= 0 {
+                if pat_tag < mask_table_len {
+                    my_mask = __arena_get(mask_table + pat_tag);
+                }
+            }
+            let mut ok: i32 = 1;
+            // Slot 0 (p1)
+            if my_mask % 2 == 1 {
+                let pc = __arena_get(pat_off + 1);
+                let tc = __arena_get(term_off + 1);
+                if unify_deep_table(pc, tc, mask_table, mask_table_len, b) == 0 {
+                    ok = 0;
+                }
+            } else {
+                if __arena_get(pat_off + 1) != __arena_get(term_off + 1) { ok = 0; }
+            }
+            // Slot 1 (p2)
+            let m1 = (my_mask / 2) % 2;
+            if m1 == 1 {
+                let pc = __arena_get(pat_off + 2);
+                let tc = __arena_get(term_off + 2);
+                if unify_deep_table(pc, tc, mask_table, mask_table_len, b) == 0 {
+                    ok = 0;
+                }
+            } else {
+                if __arena_get(pat_off + 2) != __arena_get(term_off + 2) { ok = 0; }
+            }
+            // Slot 2 (p3)
+            let m2 = (my_mask / 4) % 2;
+            if m2 == 1 {
+                let pc = __arena_get(pat_off + 3);
+                let tc = __arena_get(term_off + 3);
+                if unify_deep_table(pc, tc, mask_table, mask_table_len, b) == 0 {
+                    ok = 0;
+                }
+            } else {
+                if __arena_get(pat_off + 3) != __arena_get(term_off + 3) { ok = 0; }
+            }
+            ok
+        } else {
+            0
+        }
+    }
+}
+
+// =========================================================================
 // Phase 4 perfection: hierarchical planning.
 // =========================================================================
 //

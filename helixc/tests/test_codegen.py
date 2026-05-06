@@ -3863,6 +3863,49 @@ def test_agi_attention_softmax_f32():
     assert code == 10, f"expected 10, got {code}"
 
 
+def test_agi_unify_deep_table_mixed_shape():
+    """Phase 4 perfection: unify_deep_table looks up child_mask per-tag
+    from a caller-provided table, so mixed-shape trees compose cleanly.
+    Tag 1 = binary (mask=3, both p1+p2 are sub-trees).
+    Tag 2 = unary  (mask=1, only p1 is a sub-tree).
+    Tag 0 = leaf   (mask=0, all scalars).
+    Pattern: tag1(VAR, tag2(LEAF(42))) — VAR must bind to leaf-of-99,
+    while term has tag2(LEAF(42)) on the right (matching).
+    Expected exit: 99 (the value bound to VAR).
+    """
+    src = """
+    fn main() -> i32 {
+        // Mask table: mask[0]=0 leaf, mask[1]=3 binary, mask[2]=1 unary.
+        let mask_tbl = __arena_len();
+        __arena_push(0);
+        __arena_push(3);
+        __arena_push(1);
+
+        let b = bindings_new();
+        // Pattern: tag1(VAR, tag2(LEAF(42)))
+        let pat_var = tree_node_new(unify_var_tag(), 0, 0, 0);
+        let pat_inner_leaf = tree_node_new(0, 42, 0, 0);
+        let pat_inner = tree_node_new(2, pat_inner_leaf, 0, 0);
+        let pat = tree_node_new(1, pat_var, pat_inner, 0);
+        // Term: tag1(LEAF(99), tag2(LEAF(42)))
+        let term_left = tree_node_new(0, 99, 0, 0);
+        let term_inner_leaf = tree_node_new(0, 42, 0, 0);
+        let term_inner = tree_node_new(2, term_inner_leaf, 0, 0);
+        let term = tree_node_new(1, term_left, term_inner, 0);
+        let ok = unify_deep_table(pat, term, mask_tbl, 3, b);
+        if ok == 1 {
+            let bound = bindings_get(b, 0);
+            // bound is an arena offset; tag should be 0 (leaf), p1 = 99.
+            if __arena_get(bound) == 0 {
+                __arena_get(bound + 1)
+            } else { 0 }
+        } else { 0 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 99, f"expected 99 (var bound to leaf-99), got {code}"
+
+
 def test_agi_unify_deep_recursive():
     """Deep tree unify: p1 is a sub-tree (child_mask=1), recursion picks
     up an inner var binding through the inner sub-tree."""
