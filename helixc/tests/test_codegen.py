@@ -4172,6 +4172,105 @@ def test_stdlib_hashmap_collision_probing():
     assert code == 42, f"expected 42 (10+20+12), got {code}"
 
 
+def test_stdlib_string_push_get():
+    """String carry-pair API: push 'H' (72) and 'i' (105); read back."""
+    src = """
+    fn main() -> i32 {
+        let s = string_new();
+        let n0 = string_push(s, 0, 72);
+        let n1 = string_push(s, n0, 105);
+        string_get(s, 0) + string_get(s, 1)
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 72 + 105, f"expected 177, got {code}"
+
+
+def test_stdlib_string_eq():
+    """string_eq is 1 when both strings are 'ab', 0 when 'ab' vs 'ac'."""
+    src = """
+    fn main() -> i32 {
+        let a = string_new();
+        let na0 = string_push(a, 0, 97);
+        let na1 = string_push(a, na0, 98);
+        let b = string_new();
+        let nb0 = string_push(b, 0, 97);
+        let nb1 = string_push(b, nb0, 98);
+        let c = string_new();
+        let nc0 = string_push(c, 0, 97);
+        let nc1 = string_push(c, nc0, 99);
+        string_eq(a, na1, b, nb1) * 10 + string_eq(a, na1, c, nc1)
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 10, f"expected 10 (eq=1, neq=0), got {code}"
+
+
+def test_stdlib_string_index_of_and_starts_with():
+    """index_of returns first match (-1 if missing); starts_with checks prefix."""
+    src = """
+    fn main() -> i32 {
+        let s = string_new();
+        let n0 = string_push(s, 0, 97);
+        let n1 = string_push(s, n0, 98);
+        let n2 = string_push(s, n1, 99);
+        let n3 = string_push(s, n2, 98);
+        let p = string_new();
+        let np0 = string_push(p, 0, 97);
+        let np1 = string_push(p, np0, 98);
+        let q = string_new();
+        let nq0 = string_push(q, 0, 98);
+        let nq1 = string_push(q, nq0, 99);
+        // index_of(s, 'c') = 2; starts_with(s, 'ab') = 1; starts_with(s, 'bc') = 0.
+        let i = string_index_of(s, n3, 99);
+        let sw1 = string_starts_with(s, n3, p, np1);
+        let sw2 = string_starts_with(s, n3, q, nq1);
+        i * 100 + sw1 * 10 + sw2
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 210, f"expected 210 (idx=2, sw1=1, sw2=0), got {code}"
+
+
+def test_stdlib_string_from_int():
+    """string_from_int(42) appends '4' (52) and '2' (50); returns count 2.
+    Asserts via a guard expression that fits in the 8-bit Linux exit code."""
+    src = """
+    fn main() -> i32 {
+        let start = __arena_len();
+        let n = string_from_int(42);
+        let b0 = string_get(start, 0);
+        let b1 = string_get(start, 1);
+        if n == 2 {
+            if b0 == 52 {
+                if b1 == 50 { 42 } else { 1 }
+            } else { 2 }
+        } else { 3 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42 (all 3 checks pass), got {code}"
+
+
+def test_stdlib_string_from_int_negative():
+    """string_from_int(-7) appends '-' (45) and '7' (55); returns count 2."""
+    src = """
+    fn main() -> i32 {
+        let start = __arena_len();
+        let n = string_from_int(0 - 7);
+        let b0 = string_get(start, 0);
+        let b1 = string_get(start, 1);
+        if n == 2 {
+            if b0 == 45 {
+                if b1 == 55 { 42 } else { 1 }
+            } else { 2 }
+        } else { 3 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42 (all 3 checks pass), got {code}"
+
+
 def test_impl_inherent_method_basic():
     """Phase 1.8: inherent impl block. `impl Type { fn method(self) }` lifts
     to `Type__method`. `obj.method(args)` rewrites to `Type__method(obj, args)`."""
