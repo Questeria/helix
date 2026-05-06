@@ -878,7 +878,7 @@ fn emit_exit_with_eax() -> i32 {
 fn install_builtin_names() -> i32 {
     let bn_state = __arena_push(0);          // slot 0 placeholder
     __arena_push(0); __arena_push(0); __arena_push(0); __arena_push(0);
-    // Reserve slots 5..70 (66 more slots: 2 file-name slots + 2
+    // Reserve slots 5..71 (67 more slots: 2 file-name slots + 2
     // str_state header slots + 48 entry slots + 5 f32 builtin slots
     // (__fadd, __fsub, __fmul, __fdiv at 57..60; __fneg at 61) + 1
     // fn_type_state pointer slot at 62 (Phase 1.10 step 5c follow-on)
@@ -889,9 +889,10 @@ fn install_builtin_names() -> i32 {
     // + 1 __fmin slot at 67 (Phase 1.10 step 5k)
     // + 1 __fmax slot at 68 (Phase 1.10 step 5l)
     // + 1 __bits_of_f32 slot at 69 (Phase 1.10 step 5m)
-    // + 1 __f32_from_bits slot at 70 (Phase 1.10 step 5m).
+    // + 1 __f32_from_bits slot at 70 (Phase 1.10 step 5m)
+    // + 1 __hash_i32 slot at 71 (Phase 1.10 step 5n).
     let mut i: i32 = 0;
-    while i < 66 {
+    while i < 67 {
         __arena_push(0);
         i = i + 1;
     }
@@ -1071,6 +1072,19 @@ fn install_builtin_names() -> i32 {
     __arena_push(105); __arena_push(116); __arena_push(115);
     __arena_set(bn_state + 70, s19);
 
+    // Phase 1.10 step 5n: "__hash_i32" (10 chars: 95 95 104 97 115 104
+    // 95 105 51 50). Single-arg i32 -> i32 quadratic mixer hash that
+    // mirrors helixc-Python's lower_ast.py:939-963 (used for symbol
+    // bucketing). Result: h = x*x*c1 + x*c2 + c3 (mod 2^32 via signed
+    // wraparound). Pure inline arithmetic, no SSE registers, no IR op.
+    // Starts with __h so doesn't match the __f* prefix; is_f32_expr
+    // falls through to fn_type_table -> 0 (i32 result).
+    let s20 = __arena_push(95); __arena_push(95); __arena_push(104);
+    __arena_push(97); __arena_push(115); __arena_push(104);
+    __arena_push(95); __arena_push(105); __arena_push(51);
+    __arena_push(50);
+    __arena_set(bn_state + 71, s20);
+
     bn_state
 }
 
@@ -1107,6 +1121,8 @@ fn bn_fmax_s(b: i32) -> i32 { __arena_get(b + 68) }
 // Phase 1.10 step 5m: __bits_of_f32 / __f32_from_bits identity bitcasts.
 fn bn_bits_of_f32_s(b: i32) -> i32 { __arena_get(b + 69) }
 fn bn_f32_from_bits_s(b: i32) -> i32 { __arena_get(b + 70) }
+// Phase 1.10 step 5n: __hash_i32 single-arg quadratic mixer (FNV-style).
+fn bn_hash_i32_s(b: i32) -> i32 { __arena_get(b + 71) }
 // str_state accessors. The state lives within the bn_state region.
 fn str_top(b: i32) -> i32 { __arena_get(b + 7) }
 fn str_top_set(b: i32, v: i32) -> i32 { __arena_set(b + 7, v); 0 }
@@ -1698,9 +1714,37 @@ fn try_emit_builtin_call(name_s: i32, name_l: i32, args_head: i32,
         let a0 = __arena_get(args_head + 1);
         let n0 = emit_ast_code(a0, bind_state, patch_state, bn_state);
         n0
+    } else { if kovc_byte_eq(name_s, name_l, bn_hash_i32_s(bn_state), 10) == 1 {
+        // Phase 1.10 step 5n: __hash_i32(x) -> i32 quadratic mixer.
+        // Lowers to inline arithmetic (mirrors helixc-Python
+        // lower_ast.py:939-963):
+        //     h = x*x*c1 + x*c2 + c3
+        // where c1 = 0x05EBCA6B, c2 = 0x27D4EB2F, c3 = 0x165667B1.
+        // Codegen layout (24 bytes after arg eval):
+        //   eval x -> eax
+        //   push rax                              50           (1)
+        //   imul eax, eax (eax = x*x)             0F AF C0     (3)
+        //   imul eax, eax, c1 (eax = x*x*c1)      69 C0 imm32  (6)
+        //   pop rcx (rcx = x)                     59           (1)
+        //   imul ecx, ecx, c2 (ecx = x*c2)        69 C9 imm32  (6)
+        //   add eax, ecx                          01 C8        (2)
+        //   add eax, c3                           05 imm32     (5)
+        let a0 = __arena_get(args_head + 1);
+        let n0 = emit_ast_code(a0, bind_state, patch_state, bn_state);
+        emit_byte(0x50);                                         // push rax
+        emit_byte(0x0F); emit_byte(0xAF); emit_byte(0xC0);       // imul eax, eax
+        emit_byte(0x69); emit_byte(0xC0);                        // imul eax, eax, imm32
+        emit_byte(0x6B); emit_byte(0xCA); emit_byte(0xEB); emit_byte(0x05); // c1 LE
+        emit_byte(0x59);                                         // pop rcx
+        emit_byte(0x69); emit_byte(0xC9);                        // imul ecx, ecx, imm32
+        emit_byte(0x2F); emit_byte(0xEB); emit_byte(0xD4); emit_byte(0x27); // c2 LE
+        emit_byte(0x01); emit_byte(0xC8);                        // add eax, ecx
+        emit_byte(0x05);                                         // add eax, imm32
+        emit_byte(0xB1); emit_byte(0x67); emit_byte(0x56); emit_byte(0x16); // c3 LE
+        n0 + 1 + 3 + 6 + 1 + 6 + 2 + 5
     } else {
         0
-    }}}}}}}}}}}}}}}}}}}
+    }}}}}}}}}}}}}}}}}}}}
 }
 
 // Unreachable in this commit; reference impl preserved for next

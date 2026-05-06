@@ -1767,6 +1767,28 @@ fn main() -> i32 {{
     assert compile_and_exec(
         "__fadd(__f32_from_bits(1073741824), 2.0) / 16777216"
     ) == 64, "f32_from_bits result flows as f32 into __fadd"
+    # Phase 1.10 step 5n: __hash_i32 quadratic mixer hash.
+    # Mirrors helixc-Python lower_ast.py:939-963:
+    #     h = x*x*c1 + x*c2 + c3
+    # where c1 = 0x05EBCA6B, c2 = 0x27D4EB2F, c3 = 0x165667B1.
+    # 8-bit exit code = low byte of h(x).
+    #   h(0) = c3 = 0x165667B1 -> low byte 0xB1 = 177
+    #   h(1) = c1+c2+c3 = 0x44171D4B -> low byte 0x4B = 75
+    #   h(2) = 4*c1+2*c2+c3 = 0x7DAF67BB -> low byte 0xBB = 187
+    #   h(3) = 9*c1+3*c2+c3 = 0xC31F4701 -> low byte 0x01 = 1
+    assert compile_and_exec("__hash_i32(0)") == 177, "hash_i32(0) = c3 low byte"
+    assert compile_and_exec("__hash_i32(1)") == 75,  "hash_i32(1) low byte"
+    assert compile_and_exec("__hash_i32(2)") == 187, "hash_i32(2) low byte"
+    assert compile_and_exec("__hash_i32(3)") == 1,   "hash_i32(3) low byte"
+    # h(x) is sensitive to its input: adjacent integers produce different
+    # low bytes (the quadratic term breaks linearity). h(0) != h(1) etc.
+    assert compile_and_exec(
+        "if __hash_i32(0) == __hash_i32(1) { 99 } else { 42 }"
+    ) == 42, "hash distinguishes 0 vs 1"
+    # Hash composes with arithmetic and let-bindings.
+    assert compile_and_exec(
+        "let x = 2 ; __hash_i32(x)"
+    ) == 187, "hash through let-binding"
     # Phase 1.10 step 5a: optional `_f32` / `_f64` / `_i32` / `_i64` suffix
     # on numeric literals. Pre-fix the suffix lexed as a separate IDENT
     # token, breaking parse. Now consumed as part of the literal token.
