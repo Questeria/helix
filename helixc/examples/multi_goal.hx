@@ -44,6 +44,15 @@ fn lcg(seed: i32) -> i32 {
     m
 }
 
+// HIGH bits to avoid the glibc-style LCG's low-bit bias (low bits cycle
+// through only ~2-4 distinct values regardless of seed). See fog_of_war.hx
+// for the empirical demo of why this matters. Even though shaped-reward
+// demos like this one converge with the biased low-bit version, the
+// random walks are sub-optimal — using high bits gives proper uniform
+// distribution over [0, n) and exploration matches expectation.
+@pure fn lcg_action(s: i32) -> i32 { ((s / 65536) % n_actions() + n_actions()) % n_actions() }
+@pure fn lcg_pct(s: i32) -> i32 { ((s / 65536) % 100 + 100) % 100 }
+
 @pure
 fn manhattan(a: i32, b: i32) -> i32 {
     let n = grid_n();
@@ -134,11 +143,11 @@ fn pick_action_eps(q: i32, state: i32, eps_pct: i32, seed_cell: i32) -> i32 {
     let s = __arena_get(seed_cell);
     let s2 = lcg(s);
     __arena_set(seed_cell, s2);
-    let r_pct = ((s2 % 100) + 100) % 100;
+    let r_pct = lcg_pct(s2);
     if r_pct < eps_pct {
         let s3 = lcg(s2);
         __arena_set(seed_cell, s3);
-        ((s3 % n_actions()) + n_actions()) % n_actions()
+        lcg_action(s3)
     } else {
         argmax_q(q, state)
     }
@@ -196,7 +205,7 @@ fn main() -> i32 {
             let s = __arena_get(seed_cell);
             let s2 = lcg(s);
             __arena_set(seed_cell, s2);
-            let act = ((s2 % n_actions()) + n_actions()) % n_actions();
+            let act = lcg_action(s2);
             let nxt = step_pos(disc_pos, act);
             let bumped = if nxt == disc_pos { 1 } else { 0 };
             let g_idx = goal_index(nxt);

@@ -48,6 +48,11 @@
     m
 }
 
+// HIGH bits to avoid the glibc-style LCG's low-bit bias. See fog_of_war.hx
+// for the empirical demo of why this matters.
+@pure fn lcg_action(s: i32) -> i32 { ((s / 65536) % n_actions() + n_actions()) % n_actions() }
+@pure fn lcg_pct(s: i32) -> i32 { ((s / 65536) % 100 + 100) % 100 }
+
 @pure
 fn manhattan(a: i32, b: i32) -> i32 {
     let n = grid_n();
@@ -139,11 +144,11 @@ fn pick_action_eps(q: i32, state: i32, epsilon_pct: i32, seed_cell: i32) -> i32 
     let s = __arena_get(seed_cell);
     let s2 = lcg(s);
     __arena_set(seed_cell, s2);
-    let r_pct = ((s2 % 100) + 100) % 100;
+    let r_pct = lcg_pct(s2);
     if r_pct < epsilon_pct {
         let s3 = lcg(s2);
         __arena_set(seed_cell, s3);
-        ((s3 % n_actions()) + n_actions()) % n_actions()
+        lcg_action(s3)
     } else {
         argmax_q(q, state)
     }
@@ -220,7 +225,7 @@ fn main() -> i32 {
             let s = __arena_get(seed_cell);
             let s2 = lcg(s);
             __arena_set(seed_cell, s2);
-            let action = ((s2 % n_actions()) + n_actions()) % n_actions();
+            let action = lcg_action(s2);
             let next_pos = step_pos(disc_pos, action);
             let bumped = if next_pos == disc_pos { 1 } else { 0 };
             // Compute next has_item: pickup transition.
