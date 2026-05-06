@@ -53,9 +53,20 @@ fn dist_to_goal(s: i32) -> i32 {
 // SEED_PLACEHOLDER — replaced by the server before compile.
 @pure fn map_seed() -> i32 { 12345 }
 
-// Build obstacle list at runtime: 14 unique cells in [5..95] (avoid
-// start/goal). Returns an arena offset to a 14-slot array of cell IDs.
+// MAZE_PLACEHOLDER — set to 1 by server when "maze layout" toggle is on.
+// 0 = random-scatter obstacles (default), 1 = wall-line maze layout.
+@pure fn use_maze() -> i32 { 0 }
+
+// Build obstacle list. Two modes:
+//   use_maze() = 0 -> 14 random scattered cells (default, balanced)
+//   use_maze() = 1 -> 4 random "wall lines" (3-5 cells each, h or v),
+//                     forming corridors that force real planning.
 fn build_obstacles() -> i32 {
+    if use_maze() == 1 { build_maze_walls() }
+    else { build_scatter_obstacles() }
+}
+
+fn build_scatter_obstacles() -> i32 {
     let arr = t1d_new(n_obstacles());
     let mut placed: i32 = 0;
     let mut s: i32 = map_seed();
@@ -65,11 +76,9 @@ fn build_obstacles() -> i32 {
         else {
             s = lcg(s);
             let cand = (((s % 90) + 90) % 90) + 5;
-            // Skip cells too close to start (0..2) and goal (97..99).
             if cand < 3 { tries = tries + 1; }
             else { if cand > 96 { tries = tries + 1; }
             else {
-                // Check duplicate
                 let mut dup: i32 = 0;
                 let mut i: i32 = 0;
                 while i < placed {
@@ -83,6 +92,60 @@ fn build_obstacles() -> i32 {
                 tries = tries + 1;
             }};
         }
+    }
+    arr
+}
+
+// Maze layout: 4 wall lines, each 3-5 cells, horizontal or vertical.
+// Skips start (0) and goal (99). Pads remaining slots with -1 sentinel.
+fn build_maze_walls() -> i32 {
+    let arr = t1d_new(n_obstacles());
+    let mut placed: i32 = 0;
+    let mut s: i32 = map_seed();
+    let mut wall: i32 = 0;
+    while wall < 4 {
+        s = lcg(s);
+        let row = (((s % 8) + 8) % 8) + 1;
+        s = lcg(s);
+        let col = (((s % 8) + 8) % 8) + 1;
+        s = lcg(s);
+        let horiz = if s % 2 == 0 { 1 } else { 0 };
+        s = lcg(s);
+        let len = (((s % 3) + 3) % 3) + 3;
+        let mut k: i32 = 0;
+        while k < len {
+            if placed >= n_obstacles() { k = len; }
+            else {
+                let cell = if horiz == 1 {
+                    let c2 = col + k;
+                    if c2 > 9 { 0 - 1 } else { row * 10 + c2 }
+                } else {
+                    let r2 = row + k;
+                    if r2 > 9 { 0 - 1 } else { r2 * 10 + col }
+                };
+                if cell < 0 { k = len; }
+                else { if cell == 0 { k = k + 1; }
+                else { if cell == 99 { k = k + 1; }
+                else {
+                    let mut dup: i32 = 0;
+                    let mut i: i32 = 0;
+                    while i < placed {
+                        if ti1d_get(arr, i) == cell { dup = 1; }
+                        i = i + 1;
+                    }
+                    if dup == 0 {
+                        ti1d_set(arr, placed, cell);
+                        placed = placed + 1;
+                    }
+                    k = k + 1;
+                }}};
+            }
+        }
+        wall = wall + 1;
+    }
+    while placed < n_obstacles() {
+        ti1d_set(arr, placed, 0 - 1);
+        placed = placed + 1;
     }
     arr
 }

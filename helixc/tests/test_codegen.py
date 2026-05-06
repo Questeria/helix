@@ -4435,6 +4435,130 @@ def test_stdlib_string_from_int_negative():
     assert code == 42, f"expected 42 (all 3 checks pass), got {code}"
 
 
+def test_stdlib_range_min_max():
+    """range_to_vec(3, 8) -> [3,4,5,6,7]; min=3, max=7, sum=25.
+    Asserts via chained ifs that fit in the 8-bit Linux exit code."""
+    src = """
+    fn main() -> i32 {
+        let s = range_to_vec(3, 8);
+        let mn = vec_min(s, 5);
+        let mx = vec_max(s, 5);
+        let sm = vec_sum(s, 5);
+        if mn == 3 {
+            if mx == 7 {
+                if sm == 25 { 42 } else { 1 }
+            } else { 2 }
+        } else { 3 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42 (all 3 checks pass), got {code}"
+
+
+def test_stdlib_count_predicates():
+    """count_eq, count_lt, count_gt over [3,5,3,8,3,5]."""
+    src = """
+    fn main() -> i32 {
+        let s = vec_new();
+        let n0 = vec_push(s, 0, 3);
+        let n1 = vec_push(s, n0, 5);
+        let n2 = vec_push(s, n1, 3);
+        let n3 = vec_push(s, n2, 8);
+        let n4 = vec_push(s, n3, 3);
+        let n5 = vec_push(s, n4, 5);
+        // count_eq(_, 3) = 3; count_lt(_, 5) = 3; count_gt(_, 4) = 3.
+        let ce = vec_count_eq(s, n5, 3);
+        let cl = vec_count_lt(s, n5, 5);
+        let cg = vec_count_gt(s, n5, 4);
+        if ce == 3 {
+            if cl == 3 {
+                if cg == 3 { 42 } else { 1 }
+            } else { 2 }
+        } else { 3 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42 (all 3 checks pass), got {code}"
+
+
+def test_stdlib_vec_fold_op():
+    """fold add (sum) and fold mul (product) over [2,3,4]; max via fold."""
+    src = """
+    fn main() -> i32 {
+        let s = vec_new();
+        let n0 = vec_push(s, 0, 2);
+        let n1 = vec_push(s, n0, 3);
+        let n2 = vec_push(s, n1, 4);
+        // sum = 9, product = 24, max(init=0) = 4. encode 9*100 + 24 + 4 = 928.
+        vec_fold_op(s, n2, 0, 0) * 100 + vec_fold_op(s, n2, 1, 1) + vec_fold_op(s, n2, 0, 2) - 800
+    }
+    """
+    code = compile_and_run(src)
+    # 9*100 + 24 + 4 - 800 = 128
+    assert code == 128, f"expected 128, got {code}"
+
+
+def test_stdlib_vec_map_scalar():
+    """map_add_scalar([1,2,3], 10) sums to 36; map_mul_scalar([1,2,3], 5) sums to 30."""
+    src = """
+    fn main() -> i32 {
+        let s = vec_new();
+        let n0 = vec_push(s, 0, 1);
+        let n1 = vec_push(s, n0, 2);
+        let n2 = vec_push(s, n1, 3);
+        let m_add = vec_map_add_scalar(s, n2, 10);
+        let m_mul = vec_map_mul_scalar(s, n2, 5);
+        vec_sum(m_add, n2) + vec_sum(m_mul, n2)
+    }
+    """
+    code = compile_and_run(src)
+    # add: [11,12,13] sum=36; mul: [5,10,15] sum=30; total=66.
+    assert code == 66, f"expected 66, got {code}"
+
+
+def test_stdlib_vec_zip():
+    """zip_add and zip_mul of [1,2,3] and [4,5,6]."""
+    src = """
+    fn main() -> i32 {
+        let a = vec_new();
+        let an0 = vec_push(a, 0, 1);
+        let an1 = vec_push(a, an0, 2);
+        let an2 = vec_push(a, an1, 3);
+        let b = vec_new();
+        let bn0 = vec_push(b, 0, 4);
+        let bn1 = vec_push(b, bn0, 5);
+        let bn2 = vec_push(b, bn1, 6);
+        let z_add = vec_zip_add(a, b, an2);
+        let z_mul = vec_zip_mul(a, b, an2);
+        // add: [5,7,9] sum=21; mul: [4,10,18] sum=32. encode 21*10 + 32 = 242.
+        vec_sum(z_add, an2) * 10 + vec_sum(z_mul, an2) - 200
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_vec_filter_lt():
+    """filter [1,5,2,8,3,7] for <5 yields [1,2,3]; kept=3, sum=6."""
+    src = """
+    fn main() -> i32 {
+        let s = vec_new();
+        let n0 = vec_push(s, 0, 1);
+        let n1 = vec_push(s, n0, 5);
+        let n2 = vec_push(s, n1, 2);
+        let n3 = vec_push(s, n2, 8);
+        let n4 = vec_push(s, n3, 3);
+        let n5 = vec_push(s, n4, 7);
+        let dst = __arena_len();
+        let kept = vec_filter_lt(s, n5, 5);
+        // kept = 3; sum of kept slice = 1+2+3 = 6. encode kept*10 + sum = 36.
+        kept * 10 + vec_sum(dst, kept)
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 36, f"expected 36, got {code}"
+
+
 def test_impl_inherent_method_basic():
     """Phase 1.8: inherent impl block. `impl Type { fn method(self) }` lifts
     to `Type__method`. `obj.method(args)` rewrites to `Type__method(obj, args)`."""

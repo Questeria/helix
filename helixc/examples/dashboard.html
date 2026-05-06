@@ -206,6 +206,7 @@
       <label>Map seed:</label>
       <input type="number" id="seedInput" value="12345" style="width:90px;background:#2a2a2a;color:#e0e0e0;border:1px solid #555;padding:4px 6px;border-radius:4px"/>
       <button id="randBtn" onclick="randomSeed()" title="Generate a fresh map">🎲 Random</button>
+      <label style="margin-left:10px"><input type="checkbox" id="mazeMode"/> Maze (wall lines)</label>
     </div>
     <div class="controls">
       <button id="runBtn" onclick="runAgent()">Run</button>
@@ -221,8 +222,8 @@
     </div>
     <div class="controls">
       <label>Speed:</label>
-      <input type="range" id="speedRange" min="1" max="500" value="80" />
-      <span id="speedVal">80ms/step</span>
+      <input type="range" id="speedRange" min="1" max="100000" value="1000" oninput="updateSpeedLabel()" />
+      <span id="speedVal">1000 events/sec</span>
     </div>
     <h2 style="margin-top:16px">Stats</h2>
     <div class="stats">
@@ -260,9 +261,15 @@ let cursor = 0;
 let paused = false;
 let visited = new Set();
 
-document.getElementById('speedRange').oninput = function() {
-  document.getElementById('speedVal').textContent = this.value + 'ms/step';
-};
+function updateSpeedLabel() {
+  const eps = parseInt(document.getElementById('speedRange').value);
+  let label;
+  if (eps < 100) label = eps + ' events/sec';
+  else if (eps < 1000) label = eps + ' ev/s';
+  else label = (eps / 1000).toFixed(1) + 'k ev/s';
+  const ms = (1000 / eps).toFixed(2);
+  document.getElementById('speedVal').textContent = label + ' (' + ms + 'ms/step)';
+}
 
 let currentObstacles = [];
 let currentGoal = 99;
@@ -592,7 +599,8 @@ async function runAgent() {
   const iter = parseInt(document.getElementById('iterRange').value);
   const kind = document.getElementById('agentKind').value;
   const seed = parseInt(document.getElementById('seedInput').value) || 12345;
-  const resp = await fetch('/run?iter=' + iter + '&kind=' + kind + '&seed=' + seed);
+  const maze = document.getElementById('mazeMode').checked ? '1' : '0';
+  const resp = await fetch('/run?iter=' + iter + '&kind=' + kind + '&seed=' + seed + '&maze=' + maze);
   const text = await resp.text();
   allEvents = text.trim().split('\n').filter(l => l.length > 0).map(l => {
     try { return JSON.parse(l); } catch (e) { return null; }
@@ -616,10 +624,20 @@ function scheduleNext() {
     }
     return;
   }
-  const speed = parseInt(document.getElementById('speedRange').value);
-  applyEvent(allEvents[cursor]);
-  cursor++;
-  timer = setTimeout(scheduleNext, speed);
+  const eps = parseInt(document.getElementById('speedRange').value);
+  // Browser timers clamp to ~4ms minimum; for faster playback we BATCH
+  // events per frame. At 60Hz refresh, batch_size = ceil(eps / 60).
+  const FRAME_HZ = 60;
+  const batch = Math.max(1, Math.ceil(eps / FRAME_HZ));
+  // For slow playback (eps < FRAME_HZ), fire one event per N frames.
+  const delay = eps >= FRAME_HZ ? Math.floor(1000 / FRAME_HZ) : Math.floor(1000 / eps);
+  let processed = 0;
+  while (processed < batch && cursor < allEvents.length) {
+    applyEvent(allEvents[cursor]);
+    cursor++;
+    processed++;
+  }
+  timer = setTimeout(scheduleNext, delay);
 }
 
 function togglePause() {

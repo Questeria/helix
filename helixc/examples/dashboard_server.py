@@ -36,25 +36,31 @@ AGENTS = {
 }
 
 
-def compile_helix(kind, seed=None):
+def compile_helix(kind, seed=None, maze=False):
     """Compile the chosen agent .hx -> ELF binary.
 
-    If seed is given (int), substitute it into the qlearn agent's
-    map_seed() function so each run uses a different random map.
+    seed: int substituted into map_seed() for reproducible random maps.
+    maze: True flips use_maze() to 1, switching to wall-line layout.
     """
     if kind not in AGENTS:
         return None, f"unknown agent kind: {kind}"
     hx, bin_name = AGENTS[kind]
     src_path = os.path.join(EXAMPLES, hx)
     compile_path = src_path
-    if seed is not None and kind in ("qlearn", "nn"):
-        # Read the qlearn source, substitute the seed, write a tmp file.
+    if (seed is not None or maze) and kind in ("qlearn", "nn"):
         with open(src_path, "r", encoding="utf-8") as f:
             src = f.read()
-        new_src = src.replace(
-            "@pure fn map_seed() -> i32 { 12345 }",
-            f"@pure fn map_seed() -> i32 {{ {int(seed)} }}",
-        )
+        new_src = src
+        if seed is not None:
+            new_src = new_src.replace(
+                "@pure fn map_seed() -> i32 { 12345 }",
+                f"@pure fn map_seed() -> i32 {{ {int(seed)} }}",
+            )
+        if maze:
+            new_src = new_src.replace(
+                "@pure fn use_maze() -> i32 { 0 }",
+                "@pure fn use_maze() -> i32 { 1 }",
+            )
         compile_path = os.path.join(EXAMPLES, f"_{kind}_compiled.hx")
         with open(compile_path, "w", encoding="utf-8") as f:
             f.write(new_src)
@@ -107,8 +113,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 seed_i = int(seed) if seed else None
             except ValueError:
                 seed_i = None
-            sys.stderr.write(f"Compiling helix agent ({kind}, seed={seed_i})...\n")
-            bin_path, err = compile_helix(kind, seed=seed_i)
+            maze = qs.get("maze", ["0"])[0] == "1"
+            sys.stderr.write(f"Compiling helix agent ({kind}, seed={seed_i}, maze={maze})...\n")
+            bin_path, err = compile_helix(kind, seed=seed_i, maze=maze)
             if bin_path is None:
                 self.send_response(500)
                 self.send_header("Content-Type", "text/plain")
