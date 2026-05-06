@@ -882,6 +882,7 @@ fn is_f64_expr(idx: i32, bind_state: i32, bn_state: i32) -> i32 {
     } else { if t == 16 {                       // AST_CALL
         // Step 7e: __f32_to_f64 returns f64. Explicit byte_eq against
         // the installed name slot. Step 7h: __dsqrt also returns f64.
+        // Step 7i: __dabs also returns f64.
         // All other AST_CALL → 0 (the parallel is_f32_expr handles f32
         // callers via __f* prefix and explicit byte_eq checks; f64
         // returners need explicit byte_eq here since they don't share
@@ -890,7 +891,11 @@ fn is_f64_expr(idx: i32, bind_state: i32, bn_state: i32) -> i32 {
         if widen_match == 1 { 1 }
         else {
             let dsqrt_match = kovc_byte_eq(p1, p2, bn_dsqrt_s(bn_state), 7);
-            if dsqrt_match == 1 { 1 } else { 0 }
+            if dsqrt_match == 1 { 1 }
+            else {
+                let dabs_match = kovc_byte_eq(p1, p2, bn_dabs_s(bn_state), 6);
+                if dabs_match == 1 { 1 } else { 0 }
+            }
         }
     } else { if t == 2 {                        // AST_ADD
         let l = is_f64_expr(p1, bind_state, bn_state);
@@ -1100,9 +1105,10 @@ fn install_builtin_names() -> i32 {
     // + 1 __strlen slot at 72 (Phase 1.10 step 5o)
     // + 1 __f32_to_f64 slot at 73 (Phase 1.10 step 7e)
     // + 1 __f64_to_f32 slot at 74 (Phase 1.10 step 7e)
-    // + 1 __dsqrt slot at 75 (Phase 1.10 step 7h).
+    // + 1 __dsqrt slot at 75 (Phase 1.10 step 7h)
+    // + 1 __dabs slot at 76 (Phase 1.10 step 7i).
     let mut i: i32 = 0;
-    while i < 71 {
+    while i < 72 {
         __arena_push(0);
         i = i + 1;
     }
@@ -1342,6 +1348,20 @@ fn install_builtin_names() -> i32 {
     __arena_push(115); __arena_push(113); __arena_push(114); __arena_push(116);
     __arena_set(bn_state + 75, s24);
 
+    // Phase 1.10 step 7i: "__dabs" (6 chars: 95 95 100 97 98 115).
+    // Single-arg f64 absolute value: clears bit 63 (sign bit) of the
+    // f64 bit pattern in rax. Implementation uses shl/shr instead of
+    // and-with-imm64 since x86-64 has no AND-rax-imm64; the shift
+    // pair is 6 bytes (vs 13 for movabs+and).
+    //   48 D1 E0    shl rax, 1    (drops bit 63 into CF)
+    //   48 D1 E8    shr rax, 1    (refills bit 63 with 0)
+    // Net effect: bits 0..62 preserved, bit 63 cleared. Mirrors
+    // __fabs (step 5h) on 64-bit f64. Starts with __d so doesn't
+    // match the __f* prefix; is_f64_expr adds explicit byte_eq.
+    let s25 = __arena_push(95); __arena_push(95); __arena_push(100);
+    __arena_push(97); __arena_push(98); __arena_push(115);
+    __arena_set(bn_state + 76, s25);
+
     bn_state
 }
 
@@ -1387,6 +1407,7 @@ fn bn_strlen_s(b: i32) -> i32 { __arena_get(b + 72) }
 fn bn_f32_to_f64_s(b: i32) -> i32 { __arena_get(b + 73) }
 fn bn_f64_to_f32_s(b: i32) -> i32 { __arena_get(b + 74) }
 fn bn_dsqrt_s(b: i32) -> i32 { __arena_get(b + 75) }
+fn bn_dabs_s(b: i32) -> i32 { __arena_get(b + 76) }
 // str_state accessors. The state lives within the bn_state region.
 fn str_top(b: i32) -> i32 { __arena_get(b + 7) }
 fn str_top_set(b: i32, v: i32) -> i32 { __arena_set(b + 7, v); 0 }
@@ -2064,9 +2085,24 @@ fn try_emit_builtin_call(name_s: i32, name_l: i32, args_head: i32,
         emit_byte(0xF2); emit_byte(0x0F); emit_byte(0x51); emit_byte(0xC0); // sqrtsd xmm0, xmm0
         emit_byte(0x66); emit_byte(0x48); emit_byte(0x0F); emit_byte(0x7E); emit_byte(0xC0); // movq rax, xmm0
         n0 + 14
+    } else { if kovc_byte_eq(name_s, name_l, bn_dabs_s(bn_state), 6) == 1 {
+        // Phase 1.10 step 7i: __dabs(x) -> f64 bits in rax. Single-arg
+        // f64 absolute value: clears bit 63 (sign bit) of the f64 bit
+        // pattern in rax. Implementation uses shl/shr instead of
+        // and-rax-imm64 since x86-64 has no AND-rax-imm64; the shift
+        // pair is 6 bytes (vs 13 for movabs+and).
+        //   48 D1 E0    shl rax, 1    (sign bit drops into CF)
+        //   48 D1 E8    shr rax, 1    (refills bit 63 with 0)
+        // Mirrors __fabs (step 5h) on 64-bit doubles. Result types as
+        // f64 via is_f64_expr's explicit byte_eq case.
+        let a0 = __arena_get(args_head + 1);
+        let n0 = emit_ast_code(a0, bind_state, patch_state, bn_state);
+        emit_byte(0x48); emit_byte(0xD1); emit_byte(0xE0);   // shl rax, 1
+        emit_byte(0x48); emit_byte(0xD1); emit_byte(0xE8);   // shr rax, 1
+        n0 + 6
     } else {
         0
-    }}}}}}}}}}}}}}}}}}}}}}}}
+    }}}}}}}}}}}}}}}}}}}}}}}}}
 }
 
 // Unreachable in this commit; reference impl preserved for next

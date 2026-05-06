@@ -1934,6 +1934,20 @@ fn main() -> i32 {{
     assert compile_and_exec(
         "__bits_of_f32(__f64_to_f32(__dsqrt(__f32_to_f64(4.0_f32)))) / 16777216"
     ) == 64, "__dsqrt composes with __f32_to_f64"
+    # Phase 1.10 step 7i: __dabs(x_f64) -> f64 via shl/shr to clear bit 63.
+    # Mirror of __fabs (step 5h) on doubles.
+    # __dabs(-0.5_f64) -> 0.5_f64 -> narrow -> 0.5_f32 = 0x3F000000 -> 63.
+    # If __dabs were a no-op or used the f32 path, the result would be
+    # negative (-0.5_f32 = 0xBF000000 -> top byte 191) — 63 vs 191 cleanly
+    # discriminates correct shl/shr dispatch.
+    assert compile_and_exec(
+        "__bits_of_f32(__f64_to_f32(__dabs(-0.5_f64))) / 16777216"
+    ) == 63, "__dabs(-0.5_f64) -> 0.5"
+    # __dabs of positive value is identity. 1.0/3.0 = 0x3FD5555555555555.
+    # Low 32 of result = 0x55555555 -> 85.
+    assert compile_and_exec(
+        "__bits_of_f32(__dabs(1.0_f64 / 3.0_f64)) / 16777216"
+    ) == 85, "__dabs of positive f64 is identity"
     # Phase 1.10 step 5+: bootstrap binary bitwise & | ^. Mirrors the
     # helixc-Python fix in commit f676fca; before this, the bootstrap
     # had no parse rule for these operators so source code couldn't use
