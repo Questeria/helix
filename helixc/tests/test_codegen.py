@@ -1848,6 +1848,32 @@ fn main() -> i32 {{
         "fn main() -> i32 { let a: f32 = 1.5_f32 ; let b: f32 = 2.5_f32 ; "
         "if a >= b { 99 } else { 42 } }"
     ) == 42, "f32 >= dispatches to ucomiss+setae (1.5 >= 2.5 false)"
+    # Phase 1.10 step 5f: IEEE 754 NaN-aware comparisons. ucomiss with a
+    # NaN sets ZF=1, PF=1, CF=1; bare setcc would mis-fire for ==, !=,
+    # <, <=. The `setnp/setp + and/or al, cl` post-fixup corrects them.
+    # NaN is created via 0.0 / 0.0 (using SSE divss in the bootstrap).
+    assert compile_and_exec(
+        "fn main() -> i32 { let z: f32 = 0.0_f32 ; "
+        "let nan: f32 = z / z ; "
+        "if nan == nan { 99 } else { 42 } }"
+    ) == 42, "f32 nan == nan returns 0 (PF guard on sete)"
+    assert compile_and_exec(
+        "fn main() -> i32 { let z: f32 = 0.0_f32 ; "
+        "let nan: f32 = z / z ; "
+        "if nan != nan { 42 } else { 99 } }"
+    ) == 42, "f32 nan != nan returns 1 (PF guard on setne)"
+    assert compile_and_exec(
+        "fn main() -> i32 { let z: f32 = 0.0_f32 ; "
+        "let nan: f32 = z / z ; "
+        "let one: f32 = 1.0_f32 ; "
+        "if nan < one { 99 } else { 42 } }"
+    ) == 42, "f32 nan < x returns 0 (PF guard on setb)"
+    assert compile_and_exec(
+        "fn main() -> i32 { let z: f32 = 0.0_f32 ; "
+        "let nan: f32 = z / z ; "
+        "let one: f32 = 1.0_f32 ; "
+        "if nan <= one { 99 } else { 42 } }"
+    ) == 42, "f32 nan <= x returns 0 (PF guard on setbe)"
     # Integer comparison still works (no f32 -> integer codegen).
     assert compile_and_exec(
         "fn main() -> i32 { let a: i32 = 5 ; let b: i32 = 3 ; "

@@ -271,8 +271,23 @@ fn emit_divss() -> i32 { emit_sse_binop(0x5E) }
 //   0x96 setbe (lhs <= rhs)       — for <=
 //   0x97 seta  (lhs > rhs)        — for >
 //   0x93 setae (lhs >= rhs)       — for >=
-//   0x94 sete  (lhs == rhs)       — for ==  (NaN edge case ignored)
+//   0x94 sete  (lhs == rhs)       — for ==
 //   0x95 setne (lhs != rhs)       — for !=
+//
+// Phase 1.10 step 5f: IEEE 754 NaN handling via parity-flag guard.
+// `ucomiss` with a NaN operand sets ZF=1, PF=1, CF=1 (the "unordered"
+// combination). The base setters above mis-fire for several relations:
+//   sete  (CMP_EQ): says NaN==NaN true (wrong; should be 0)
+//   setne (CMP_NE): says NaN!=NaN false (wrong; should be 1)
+//   setb  (CMP_LT): says NaN<x true (wrong; should be 0)
+//   setbe (CMP_LE): says NaN<=x true (wrong; should be 0)
+// seta/setae already produce 0 in the NaN case (CF=1 fails them); no
+// fixup needed for >, >=. Mirrors helixc-Python backend's PF guard.
+//
+// `fixup` parameter selects the post-setcc patch:
+//   0 = no fixup (used by >, >=)
+//   1 = ordered AND: `setnp cl ; and al, cl`  (used by <, <=, ==)
+//   2 = unordered OR: `setp cl ; or al, cl`   (used by !=)
 //
 // Sequence — note xor MUST come BEFORE ucomiss (otherwise xor clobbers
 // the flag bits that ucomiss just set, and setcc reads stale flags):
@@ -282,21 +297,32 @@ fn emit_divss() -> i32 { emit_sse_binop(0x5E) }
 //                                            we already moved to xmm0)
 //   ucomiss xmm0, xmm1        0F 2E C1      (3 bytes; sets flags)
 //   setcc al                  0F xx C0      (3 bytes; reads flags)
-// Total: 16 bytes, leaves 0 or 1 in eax.
-fn emit_sse_compare(setcc_byte: i32) -> i32 {
+//   [fixup]                                  (0 or 5 bytes)
+// Total: 16 bytes (no fixup) or 21 bytes (with fixup).
+fn emit_sse_compare(setcc_byte: i32, fixup: i32) -> i32 {
     emit_byte(0x66); emit_byte(0x0F); emit_byte(0x6E); emit_byte(0xC0);   // movd xmm0,eax
     emit_byte(0x66); emit_byte(0x0F); emit_byte(0x6E); emit_byte(0xC9);   // movd xmm1,ecx
     emit_byte(0x31); emit_byte(0xC0);                                     // xor eax,eax (PRE-clear)
     emit_byte(0x0F); emit_byte(0x2E); emit_byte(0xC1);                    // ucomiss xmm0,xmm1
     emit_byte(0x0F); emit_byte(setcc_byte); emit_byte(0xC0);              // setcc al
-    16
+    if fixup == 1 {
+        emit_byte(0x0F); emit_byte(0x9B); emit_byte(0xC1);                // setnp cl
+        emit_byte(0x20); emit_byte(0xC8);                                  // and al, cl
+        21
+    } else { if fixup == 2 {
+        emit_byte(0x0F); emit_byte(0x9A); emit_byte(0xC1);                // setp cl
+        emit_byte(0x08); emit_byte(0xC8);                                  // or al, cl
+        21
+    } else {
+        16
+    } }
 }
-fn emit_ssen_lt() -> i32 { emit_sse_compare(0x92) }   // setb
-fn emit_ssen_le() -> i32 { emit_sse_compare(0x96) }   // setbe
-fn emit_ssen_gt() -> i32 { emit_sse_compare(0x97) }   // seta
-fn emit_ssen_ge() -> i32 { emit_sse_compare(0x93) }   // setae
-fn emit_ssen_eq() -> i32 { emit_sse_compare(0x94) }   // sete
-fn emit_ssen_ne() -> i32 { emit_sse_compare(0x95) }   // setne
+fn emit_ssen_lt() -> i32 { emit_sse_compare(0x92, 1) }   // setb + AND !PF
+fn emit_ssen_le() -> i32 { emit_sse_compare(0x96, 1) }   // setbe + AND !PF
+fn emit_ssen_gt() -> i32 { emit_sse_compare(0x97, 0) }   // seta (no fixup)
+fn emit_ssen_ge() -> i32 { emit_sse_compare(0x93, 0) }   // setae (no fixup)
+fn emit_ssen_eq() -> i32 { emit_sse_compare(0x94, 1) }   // sete + AND !PF
+fn emit_ssen_ne() -> i32 { emit_sse_compare(0x95, 2) }   // setne + OR PF
 // idiv requires sign-extension into edx; we emit `cdq; idiv ecx`.
 //   99       cdq
 //   F7 F9    idiv ecx
