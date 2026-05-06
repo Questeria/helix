@@ -28,32 +28,38 @@ import urllib.parse
 PORT = 8765
 PROJ = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 EXAMPLES = os.path.join(PROJ, "helixc", "examples")
-HX_FILE = os.path.join(EXAMPLES, "dashboard_agent.hx")
-BIN_FILE = os.path.join(PROJ, "_dashboard.bin")
+
+AGENTS = {
+    "hillclimb": ("dashboard_agent.hx", "_dashboard.bin"),
+    "qlearn":    ("dashboard_qlearn.hx", "_qlearn.bin"),
+}
 
 
-def compile_helix():
-    """Compile dashboard_agent.hx -> _dashboard.bin."""
+def compile_helix(kind):
+    """Compile the chosen agent .hx -> ELF binary."""
+    if kind not in AGENTS:
+        return None, f"unknown agent kind: {kind}"
+    hx, bin_name = AGENTS[kind]
     cmd = [
         sys.executable, "-m", "helixc.backend.x86_64",
-        "helixc/examples/dashboard_agent.hx",
-        "_dashboard.bin",
+        f"helixc/examples/{hx}",
+        bin_name,
     ]
     proc = subprocess.run(cmd, cwd=PROJ, capture_output=True, text=True)
     if proc.returncode != 0:
         return None, proc.stderr
-    return os.path.join(PROJ, "_dashboard.bin"), None
+    return os.path.join(PROJ, bin_name), None
 
 
-def run_helix():
+def run_helix(kind):
     """Run the compiled binary via WSL, capture stdout."""
-    # Convert Windows path to WSL path.
-    wsl_path = "/mnt/c/Projects/Kovostov-Native/_dashboard.bin"
+    _, bin_name = AGENTS[kind]
+    wsl_path = f"/mnt/c/Projects/Kovostov-Native/{bin_name}"
     cmd = [
         "wsl", "--", "bash", "-c",
         f"chmod +x {wsl_path} && {wsl_path}",
     ]
-    proc = subprocess.run(cmd, capture_output=True, timeout=30)
+    proc = subprocess.run(cmd, capture_output=True, timeout=60)
     return proc.stdout.decode("utf-8", errors="replace")
 
 
@@ -75,8 +81,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.wfile.write(body)
             return
         if path == "/run":
-            sys.stderr.write("Compiling helix agent...\n")
-            bin_path, err = compile_helix()
+            qs = urllib.parse.parse_qs(parsed.query)
+            kind = qs.get("kind", ["hillclimb"])[0]
+            sys.stderr.write(f"Compiling helix agent ({kind})...\n")
+            bin_path, err = compile_helix(kind)
             if bin_path is None:
                 self.send_response(500)
                 self.send_header("Content-Type", "text/plain")
@@ -85,7 +93,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 return
             sys.stderr.write("Running helix agent via WSL...\n")
             try:
-                out = run_helix()
+                out = run_helix(kind)
             except subprocess.TimeoutExpired:
                 self.send_response(504)
                 self.end_headers()

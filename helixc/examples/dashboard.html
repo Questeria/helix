@@ -175,6 +175,13 @@
   <div class="panel">
     <h2>Controls</h2>
     <div class="controls">
+      <label>Agent:</label>
+      <select id="agentKind" style="background:#2a2a2a;color:#e0e0e0;border:1px solid #555;padding:4px 8px;border-radius:4px">
+        <option value="hillclimb">Hill-climbing (deterministic, no learning)</option>
+        <option value="qlearn">Q-learning (improves across episodes)</option>
+      </select>
+    </div>
+    <div class="controls">
       <button id="runBtn" onclick="runAgent()">Run</button>
       <button id="pauseBtn" onclick="togglePause()" disabled>Pause</button>
       <button id="stepBtn" onclick="stepOnce()" disabled>Step ▶</button>
@@ -182,8 +189,8 @@
     </div>
     <div class="controls">
       <label>Iterations to play:</label>
-      <input type="range" id="iterRange" min="1" max="50" value="50" oninput="document.getElementById('iterVal').textContent = this.value" />
-      <span id="iterVal">50</span>
+      <input type="range" id="iterRange" min="1" max="2000" value="500" oninput="document.getElementById('iterVal').textContent = this.value" />
+      <span id="iterVal">500</span>
     </div>
     <div class="controls">
       <label>Speed:</label>
@@ -192,13 +199,17 @@
     </div>
     <h2 style="margin-top:16px">Stats</h2>
     <div class="stats">
+      <div class="stat"><div class="stat-label">Episode</div><div class="stat-value" id="stEp">0</div></div>
       <div class="stat"><div class="stat-label">Step</div><div class="stat-value" id="stStep">0</div></div>
       <div class="stat"><div class="stat-label">Position</div><div class="stat-value" id="stPos">0</div></div>
       <div class="stat"><div class="stat-label">Action</div><div class="stat-value" id="stAct">—</div></div>
-      <div class="stat"><div class="stat-label">Score</div><div class="stat-value" id="stScore">—</div></div>
+      <div class="stat"><div class="stat-label">Reward</div><div class="stat-value" id="stReward">—</div></div>
+      <div class="stat"><div class="stat-label">Epsilon%</div><div class="stat-value" id="stEpsilon">—</div></div>
       <div class="stat"><div class="stat-label">Visited</div><div class="stat-value" id="stVisited">0</div></div>
       <div class="stat"><div class="stat-label">Status</div><div class="stat-value" id="stDone">idle</div></div>
     </div>
+    <h2 style="margin-top:16px">Steps per episode (lower = better)</h2>
+    <canvas id="episodeChart" class="chart-canvas"></canvas>
     <h2 style="margin-top:16px">Score over time</h2>
     <canvas id="chart" class="chart-canvas"></canvas>
     <h2 style="margin-top:16px">JSON stream (raw Helix output)</h2>
@@ -293,19 +304,53 @@ function drawChart() {
   ctx.fillText('max ' + maxS, 4, 12);
 }
 
+let episodeStepHistory = [];
+
 function applyEvent(ev) {
   if (ev.type === 'init') {
     buildGrid(ev.obstacles, ev.goal);
     return;
   }
+  if (ev.type === 'episode') {
+    // Episode summary line (Q-learning).
+    episodeStepHistory.push({ ep: ev.ep, steps: ev.steps, reached: ev.reached, reward: ev.total_reward });
+    drawEpisodeChart();
+    document.getElementById('stEp').textContent = ev.ep;
+    document.getElementById('stEpsilon').textContent = ev.epsilon !== undefined ? ev.epsilon : '—';
+    if (ev.reached) {
+      document.getElementById('status').className = 'status done-ok';
+      document.getElementById('status').textContent = '✓ Episode ' + ev.ep + ' reached goal in ' + ev.steps + ' steps (ε=' + ev.epsilon + '%)';
+    } else {
+      document.getElementById('status').className = 'status running';
+      document.getElementById('status').textContent = '✗ Episode ' + ev.ep + ' did not reach goal (ε=' + ev.epsilon + '%)';
+    }
+    // Reset per-episode visited tracking on new episode.
+    visited = new Set();
+    document.querySelectorAll('.cell.visited').forEach(c => c.classList.remove('visited'));
+    logLine('--- ' + JSON.stringify(ev) + ' ---', 'step');
+    return;
+  }
+  if (ev.type === 'summary') {
+    document.getElementById('status').className = 'status done-ok';
+    document.getElementById('status').textContent = '✓ Training done. Best path: ' + ev.best_steps + ' steps over ' + ev.episodes + ' episodes';
+    logLine('=== ' + JSON.stringify(ev) + ' ===', 'step');
+    return;
+  }
+  // Step events ("type":"step" for qlearn, or no type for hillclimb).
+  if (ev.ep !== undefined) document.getElementById('stEp').textContent = ev.ep;
   document.getElementById('stStep').textContent = ev.step;
   document.getElementById('stPos').textContent = ev.pos;
   document.getElementById('stAct').textContent = ACTION_NAMES[ev.action] || '—';
-  document.getElementById('stScore').textContent = ev.score !== undefined ? ev.score : '—';
+  if (ev.reward !== undefined) {
+    document.getElementById('stReward').textContent = ev.reward;
+  } else if (ev.score !== undefined) {
+    document.getElementById('stReward').textContent = ev.score;
+  }
   setAgent(ev.pos);
   document.getElementById('stVisited').textContent = visited.size;
-  if (ev.score !== undefined) {
-    chartHistory.push(ev.score);
+  const chartVal = ev.qmax !== undefined ? ev.qmax : (ev.score !== undefined ? ev.score : null);
+  if (chartVal !== null) {
+    chartHistory.push(chartVal);
     drawChart();
   }
   if (ev.done) {
@@ -322,6 +367,38 @@ function applyEvent(ev) {
   logLine(JSON.stringify(ev), 'json');
 }
 
+function drawEpisodeChart() {
+  const canvas = document.getElementById('episodeChart');
+  const ctx = canvas.getContext('2d');
+  const w = canvas.clientWidth;
+  const h = canvas.clientHeight;
+  canvas.width = w;
+  canvas.height = h;
+  ctx.fillStyle = '#0d0d0d';
+  ctx.fillRect(0, 0, w, h);
+  if (episodeStepHistory.length === 0) return;
+  const steps = episodeStepHistory.map(e => e.steps);
+  const maxS = Math.max(...steps);
+  const minS = Math.min(...steps);
+  // Draw bars: green if reached, red if not.
+  const barW = (w - 8) / episodeStepHistory.length;
+  for (let i = 0; i < episodeStepHistory.length; i++) {
+    const e = episodeStepHistory[i];
+    const x = 4 + i * barW;
+    const barH = ((e.steps - 0) / (maxS || 1)) * (h - 24);
+    ctx.fillStyle = e.reached ? '#44ff66' : '#ff5544';
+    ctx.fillRect(x, h - 4 - barH, Math.max(2, barW - 2), barH);
+    // Episode number label
+    ctx.fillStyle = '#666';
+    ctx.font = '9px monospace';
+    ctx.fillText(e.ep, x, h - 8 - barH);
+  }
+  ctx.fillStyle = '#888';
+  ctx.font = '10px monospace';
+  ctx.fillText('best ' + minS, 4, 12);
+  ctx.fillText('worst ' + maxS, 4, 24);
+}
+
 async function runAgent() {
   resetAll();
   document.getElementById('runBtn').disabled = true;
@@ -329,12 +406,14 @@ async function runAgent() {
   document.getElementById('status').className = 'status running';
   document.getElementById('status').textContent = 'Compiling and running Helix...';
   const iter = parseInt(document.getElementById('iterRange').value);
-  const resp = await fetch('/run?iter=' + iter);
+  const kind = document.getElementById('agentKind').value;
+  const resp = await fetch('/run?iter=' + iter + '&kind=' + kind);
   const text = await resp.text();
-  allEvents = text.trim().split('\n').filter(l => l.length > 0).map(l => JSON.parse(l));
-  // Truncate to iter+2 (init + iter steps + final)
-  const limit = iter + 2;
-  allEvents = allEvents.slice(0, Math.min(allEvents.length, limit));
+  allEvents = text.trim().split('\n').filter(l => l.length > 0).map(l => {
+    try { return JSON.parse(l); } catch (e) { return null; }
+  }).filter(e => e !== null);
+  // Truncate to iter events (so user can play short snippets).
+  allEvents = allEvents.slice(0, Math.min(allEvents.length, iter + 2));
   cursor = 0;
   document.getElementById('status').textContent = 'Playing back ' + allEvents.length + ' events';
   scheduleNext();
@@ -382,6 +461,7 @@ function resetAll() {
   cursor = 0;
   visited = new Set();
   chartHistory = [];
+  episodeStepHistory = [];
   allEvents = [];
   document.getElementById('runBtn').disabled = false;
   document.getElementById('pauseBtn').disabled = true;
@@ -394,9 +474,13 @@ function resetAll() {
   document.getElementById('stScore').textContent = '—';
   document.getElementById('stVisited').textContent = '0';
   document.getElementById('stDone').textContent = 'idle';
+  document.getElementById('stEp').textContent = '0';
+  document.getElementById('stReward').textContent = '—';
+  document.getElementById('stEpsilon').textContent = '—';
   document.getElementById('status').className = 'status idle';
   document.getElementById('status').textContent = 'Press Run to start';
   drawChart();
+  drawEpisodeChart();
   // Initialize empty grid
   buildGrid([12,13,14,25,35,45,47,48,56,67,78,88], 99);
 }
