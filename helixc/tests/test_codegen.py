@@ -1611,11 +1611,20 @@ fn main() -> i32 {{
     #   42.5 -> 0x422A0000, top byte = 0x42 = 66
     #   3.14 -> 0x4048F5C3, top byte = 0x40 = 64
     #   0.0  -> 0x00000000, top byte = 0x00 = 0
-    assert compile_and_exec("1.0 / 16777216") == 63, "f32 bits of 1.0 top byte"
-    assert compile_and_exec("2.0 / 16777216") == 64, "f32 bits of 2.0 top byte"
-    assert compile_and_exec("42.5 / 16777216") == 66, "f32 bits of 42.5 top byte"
-    assert compile_and_exec("3.14 / 16777216") == 64, "f32 bits of 3.14 top byte"
-    assert compile_and_exec("0.0 + 7") == 7, "0.0 produces 0 bits"
+    assert compile_and_exec("__bits_of_f32(1.0) / 16777216") == 63, "f32 bits of 1.0 top byte"
+    assert compile_and_exec("__bits_of_f32(2.0) / 16777216") == 64, "f32 bits of 2.0 top byte"
+    assert compile_and_exec("__bits_of_f32(42.5) / 16777216") == 66, "f32 bits of 42.5 top byte"
+    assert compile_and_exec("__bits_of_f32(3.14) / 16777216") == 64, "f32 bits of 3.14 top byte"
+    assert compile_and_exec("__bits_of_f32(0.0) + 7") == 7, "0.0 produces 0 bits"
+    # Phase 1.10 step 5p: mixed-type arithmetic (one f32, one i32) now emits
+    # ud2 (illegal instruction) at codegen, raising SIGILL at runtime — exit
+    # code 132 (= 128 + 4 = SIGILL signal). Pre-fix: silent integer codegen
+    # would treat the f32 BIT PATTERN as i32, producing garbage. The test
+    # cases above use __bits_of_f32(<f32_expr>) to make the i32-context
+    # explicit. Direct mixing now traps:
+    assert compile_and_exec("1.0 + 7") == 132, "1.0 + 7 mixed-type traps with SIGILL"
+    assert compile_and_exec("__fadd(1.0, 2.0) - 5") == 132, \
+        "f32 fn result minus i32 traps"
     # Phase 1.10 step 4: __fadd / __fsub / __fmul / __fdiv builtins emit
     # x86-64 SSE encoding (movd xmm, reg / [add|sub|mul|div]ss / movd
     # eax, xmm0). Result is the f32 bit pattern of the operation; verify
@@ -1630,14 +1639,14 @@ fn main() -> i32 {{
     #   2.0 * 3.0 = 6.0   -> 0x40C00000, byte 2 = 192
     #   16.0 / 2.0 = 8.0  -> 0x41000000, top byte = 65
     #   12.0 / 2.0 = 6.0  -> 0x40C00000, byte 2 = 192
-    assert compile_and_exec("__fadd(1.5, 2.5) / 16777216") == 64, "fadd 1.5+2.5=4"
-    assert compile_and_exec("__fadd(3.0, 5.0) / 16777216") == 65, "fadd 3+5=8"
-    assert compile_and_exec("__fsub(9.0, 1.0) / 16777216") == 65, "fsub 9-1=8"
-    assert compile_and_exec("(__fsub(4.0, 1.0) / 65536) % 256") == 64, "fsub 4-1=3 b2"
-    assert compile_and_exec("__fmul(2.0, 4.0) / 16777216") == 65, "fmul 2*4=8"
-    assert compile_and_exec("(__fmul(2.0, 3.0) / 65536) % 256") == 192, "fmul 2*3=6 b2"
-    assert compile_and_exec("__fdiv(16.0, 2.0) / 16777216") == 65, "fdiv 16/2=8"
-    assert compile_and_exec("(__fdiv(12.0, 2.0) / 65536) % 256") == 192, "fdiv 12/2=6 b2"
+    assert compile_and_exec("__bits_of_f32(__fadd(1.5, 2.5)) / 16777216") == 64, "fadd 1.5+2.5=4"
+    assert compile_and_exec("__bits_of_f32(__fadd(3.0, 5.0)) / 16777216") == 65, "fadd 3+5=8"
+    assert compile_and_exec("__bits_of_f32(__fsub(9.0, 1.0)) / 16777216") == 65, "fsub 9-1=8"
+    assert compile_and_exec("(__bits_of_f32(__fsub(4.0, 1.0)) / 65536) % 256") == 64, "fsub 4-1=3 b2"
+    assert compile_and_exec("__bits_of_f32(__fmul(2.0, 4.0)) / 16777216") == 65, "fmul 2*4=8"
+    assert compile_and_exec("(__bits_of_f32(__fmul(2.0, 3.0)) / 65536) % 256") == 192, "fmul 2*3=6 b2"
+    assert compile_and_exec("__bits_of_f32(__fdiv(16.0, 2.0)) / 16777216") == 65, "fdiv 16/2=8"
+    assert compile_and_exec("(__bits_of_f32(__fdiv(12.0, 2.0)) / 65536) % 256") == 192, "fdiv 12/2=6 b2"
     # Phase 1.10 step 4 follow-on: __fneg single-arg f32 negate via integer
     # xor on the bit pattern (bit 31 = sign). No SSE registers touched.
     # Verify by composing with __fadd:
@@ -1645,9 +1654,9 @@ fn main() -> i32 {{
     #   __fadd(__fneg(2.0), 4.0)            =  2.0 -> 0x40000000, top byte 64
     #   __fadd(__fneg(__fneg(3.0)), 0.0)    =  3.0 -> 0x40400000, top byte 64
     #   __fadd(__fneg(2.0), 2.0)            =  0.0 -> 0x00000000, low byte  0
-    assert compile_and_exec("__fadd(__fneg(1.0), 2.0) / 16777216") == 63, "fneg 1.0"
-    assert compile_and_exec("__fadd(__fneg(2.0), 4.0) / 16777216") == 64, "fneg 2.0"
-    assert compile_and_exec("__fadd(__fneg(__fneg(3.0)), 0.0) / 16777216") == 64, "fneg dbl"
+    assert compile_and_exec("__bits_of_f32(__fadd(__fneg(1.0), 2.0)) / 16777216") == 63, "fneg 1.0"
+    assert compile_and_exec("__bits_of_f32(__fadd(__fneg(2.0), 4.0)) / 16777216") == 64, "fneg 2.0"
+    assert compile_and_exec("__bits_of_f32(__fadd(__fneg(__fneg(3.0)), 0.0)) / 16777216") == 64, "fneg dbl"
     assert compile_and_exec("__fadd(__fneg(2.0), 2.0)") == 0, "fneg cancels add"
     # Phase 1.10 step 3e: sub-1.0 literals (negative binary exponent).
     # The float-literal codegen now decrements k and halves threshold for
@@ -1656,32 +1665,32 @@ fn main() -> i32 {{
     #   0.25  = 0x3E800000  top byte 0x3E = 62, byte 2 = 0x80 = 128
     #   0.125 = 0x3E000000  top byte 0x3E = 62, byte 2 = 0x00 = 0
     #   0.75  = 0x3F400000  top byte 0x3F = 63, byte 2 = 0x40 = 64
-    assert compile_and_exec("0.5 / 16777216") == 63, "f32 bits of 0.5 top byte"
-    assert compile_and_exec("0.25 / 16777216") == 62, "f32 bits of 0.25 top byte"
-    assert compile_and_exec("(0.5 / 65536) % 256") == 0, "0.5 byte 2"
-    assert compile_and_exec("(0.25 / 65536) % 256") == 128, "0.25 byte 2"
-    assert compile_and_exec("(0.125 / 65536) % 256") == 0, "0.125 byte 2"
-    assert compile_and_exec("(0.75 / 65536) % 256") == 64, "0.75 byte 2"
+    assert compile_and_exec("__bits_of_f32(0.5) / 16777216") == 63, "f32 bits of 0.5 top byte"
+    assert compile_and_exec("__bits_of_f32(0.25) / 16777216") == 62, "f32 bits of 0.25 top byte"
+    assert compile_and_exec("(__bits_of_f32(0.5) / 65536) % 256") == 0, "0.5 byte 2"
+    assert compile_and_exec("(__bits_of_f32(0.25) / 65536) % 256") == 128, "0.25 byte 2"
+    assert compile_and_exec("(__bits_of_f32(0.125) / 65536) % 256") == 0, "0.125 byte 2"
+    assert compile_and_exec("(__bits_of_f32(0.75) / 65536) % 256") == 64, "0.75 byte 2"
     # Composability: step 3e plus step 4 SSE arithmetic finally lets sub-1.0
     # values flow through f32 ops in the bootstrap.
     #   0.5 + 0.5 = 1.0  -> 0x3F800000, top byte 63
     #   0.5 * 0.5 = 0.25 -> 0x3E800000, top byte 62
     #   1.0 / 4.0 = 0.25 -> 0x3E800000, top byte 62
     #   2.0 - 1.5 = 0.5  -> 0x3F000000, top byte 63
-    assert compile_and_exec("__fadd(0.5, 0.5) / 16777216") == 63, "fadd 0.5+0.5=1"
-    assert compile_and_exec("__fmul(0.5, 0.5) / 16777216") == 62, "fmul 0.5*0.5=.25"
-    assert compile_and_exec("__fdiv(1.0, 4.0) / 16777216") == 62, "fdiv 1/4=.25"
-    assert compile_and_exec("__fsub(2.0, 1.5) / 16777216") == 63, "fsub 2-1.5=.5"
+    assert compile_and_exec("__bits_of_f32(__fadd(0.5, 0.5)) / 16777216") == 63, "fadd 0.5+0.5=1"
+    assert compile_and_exec("__bits_of_f32(__fmul(0.5, 0.5)) / 16777216") == 62, "fmul 0.5*0.5=.25"
+    assert compile_and_exec("__bits_of_f32(__fdiv(1.0, 4.0)) / 16777216") == 62, "fdiv 1/4=.25"
+    assert compile_and_exec("__bits_of_f32(__fsub(2.0, 1.5)) / 16777216") == 63, "fsub 2-1.5=.5"
     # Phase 1.10 step 5g: __fsqrt(x) — hardware-direct SSE2 sqrtss.
     # Single SSE instruction; result f32 in eax bit pattern.
     #   sqrt(4.0)   = 2.0   -> 0x40000000, top byte 64
     #   sqrt(0.0)   = 0.0   -> 0x00000000, all zero
     #   sqrt(0.25)  = 0.5   -> 0x3F000000, top byte 63
     #   sqrt(64.0)  = 8.0   -> 0x41000000, top byte 65
-    assert compile_and_exec("__fsqrt(4.0) / 16777216") == 64, "fsqrt 4.0=2.0"
+    assert compile_and_exec("__bits_of_f32(__fsqrt(4.0)) / 16777216") == 64, "fsqrt 4.0=2.0"
     assert compile_and_exec("__fsqrt(0.0)") == 0, "fsqrt 0.0=0.0"
-    assert compile_and_exec("__fsqrt(0.25) / 16777216") == 63, "fsqrt 0.25=0.5"
-    assert compile_and_exec("__fsqrt(64.0) / 16777216") == 65, "fsqrt 64=8"
+    assert compile_and_exec("__bits_of_f32(__fsqrt(0.25)) / 16777216") == 63, "fsqrt 0.25=0.5"
+    assert compile_and_exec("__bits_of_f32(__fsqrt(64.0)) / 16777216") == 65, "fsqrt 64=8"
     # Phase 1.10 step 5h: __fabs(x) — f32 absolute value via integer
     # sign-bit AND mask (and eax, 0x7FFFFFFF). 5 bytes; mirrors __fneg
     # (XOR with 0x80000000) — purely integer ops on the f32 bit pattern.
@@ -1689,10 +1698,10 @@ fn main() -> i32 {{
     #   abs(-2.0)       =  2.0 -> 0x40000000, top byte 64 (sign bit cleared)
     #   abs(0.0)        =  0.0 -> 0x00000000, all zero
     #   abs(__fneg(7.5)) = 7.5 -> 0x40F00000, top byte 64
-    assert compile_and_exec("__fabs(2.0) / 16777216") == 64, "fabs 2.0=2.0"
-    assert compile_and_exec("__fabs(__fneg(2.0)) / 16777216") == 64, "fabs -2.0=2.0"
+    assert compile_and_exec("__bits_of_f32(__fabs(2.0)) / 16777216") == 64, "fabs 2.0=2.0"
+    assert compile_and_exec("__bits_of_f32(__fabs(__fneg(2.0))) / 16777216") == 64, "fabs -2.0=2.0"
     assert compile_and_exec("__fabs(0.0)") == 0, "fabs 0.0=0.0"
-    assert compile_and_exec("__fabs(__fneg(7.5)) / 16777216") == 64, "fabs -7.5=7.5"
+    assert compile_and_exec("__bits_of_f32(__fabs(__fneg(7.5))) / 16777216") == 64, "fabs -7.5=7.5"
     # Phase 1.10 step 5i: __i32_to_f32(x) — single-arg signed-int-to-
     # float conversion via SSE2 cvtsi2ss. eval x -> eax (i32);
     # cvtsi2ss xmm0, eax; movd eax, xmm0. 8 bytes after arg eval.
@@ -1704,10 +1713,10 @@ fn main() -> i32 {{
     #   i32_to_f32(2) =  2.0 -> 0x40000000, top byte 64
     #   __fadd(i32_to_f32(2), i32_to_f32(2)) = 4.0 -> 0x40800000, top 64
     assert compile_and_exec("__i32_to_f32(0)") == 0, "i32_to_f32 0=0.0"
-    assert compile_and_exec("__i32_to_f32(1) / 16777216") == 63, "i32_to_f32 1=1.0"
-    assert compile_and_exec("__i32_to_f32(2) / 16777216") == 64, "i32_to_f32 2=2.0"
+    assert compile_and_exec("__bits_of_f32(__i32_to_f32(1)) / 16777216") == 63, "i32_to_f32 1=1.0"
+    assert compile_and_exec("__bits_of_f32(__i32_to_f32(2)) / 16777216") == 64, "i32_to_f32 2=2.0"
     assert compile_and_exec(
-        "__fadd(__i32_to_f32(2), __i32_to_f32(2)) / 16777216"
+        "__bits_of_f32(__fadd(__i32_to_f32(2), __i32_to_f32(2))) / 16777216"
     ) == 64, "f32-typed nested __i32_to_f32 through __fadd = 4.0"
     # Phase 1.10 step 5j: __f32_to_i32(x) — single-arg truncating
     # float-to-int conversion via SSE2 cvttss2si. eval x -> eax (f32
@@ -1728,24 +1737,24 @@ fn main() -> i32 {{
     # minss xmm0, xmm1. Mirrors __fadd's binary shape exactly. minss is
     # asymmetric on NaN (returns the second operand), but both args are
     # ordinary f32 values here so commutativity holds.
-    assert compile_and_exec("__fmin(2.0, 3.0) / 16777216") == 64, "fmin 2.0,3.0=2.0"
-    assert compile_and_exec("__fmin(3.0, 2.0) / 16777216") == 64, "fmin 3.0,2.0=2.0 (sym)"
+    assert compile_and_exec("__bits_of_f32(__fmin(2.0, 3.0)) / 16777216") == 64, "fmin 2.0,3.0=2.0"
+    assert compile_and_exec("__bits_of_f32(__fmin(3.0, 2.0)) / 16777216") == 64, "fmin 3.0,2.0=2.0 (sym)"
     assert compile_and_exec("__fmin(0.0, 5.0)") == 0, "fmin 0.0,5.0=0.0 (all-zero bits)"
     assert compile_and_exec(
-        "__fmin(__fadd(1.0, 1.0), __fadd(1.0, 2.0)) / 16777216"
+        "__bits_of_f32(__fmin(__fadd(1.0, 1.0), __fadd(1.0, 2.0))) / 16777216"
     ) == 64, "fmin nested __fadd args = 2.0"
     # Phase 1.10 step 5l: __fmax(a, b) — two-arg f32 maximum via SSE2
     # maxss xmm0, xmm1 (F3 0F 5F C1; one byte differs from minss).
     # 4.0 -> 0x40800000 -> top byte 64; 8.0 -> 0x41000000 -> top 65.
-    assert compile_and_exec("__fmax(2.0, 4.0) / 16777216") == 64, "fmax 2.0,4.0=4.0"
-    assert compile_and_exec("__fmax(4.0, 2.0) / 16777216") == 64, "fmax 4.0,2.0=4.0 (sym)"
+    assert compile_and_exec("__bits_of_f32(__fmax(2.0, 4.0)) / 16777216") == 64, "fmax 2.0,4.0=4.0"
+    assert compile_and_exec("__bits_of_f32(__fmax(4.0, 2.0)) / 16777216") == 64, "fmax 4.0,2.0=4.0 (sym)"
     assert compile_and_exec("__fmax(0.0, 0.0)") == 0, "fmax 0.0,0.0=0.0 (all-zero bits)"
     assert compile_and_exec(
-        "__fmax(__fadd(1.0, 1.0), __fadd(2.0, 2.0)) / 16777216"
+        "__bits_of_f32(__fmax(__fadd(1.0, 1.0), __fadd(2.0, 2.0))) / 16777216"
     ) == 64, "fmax nested __fadd args = 4.0"
     # __fmax composed with __fmin: max(2, min(5, 3)) = max(2, 3) = 3.0 -> 64.
     assert compile_and_exec(
-        "__fmax(2.0, __fmin(5.0, 3.0)) / 16777216"
+        "__bits_of_f32(__fmax(2.0, __fmin(5.0, 3.0))) / 16777216"
     ) == 64, "fmax composed with fmin"
     # Phase 1.10 step 5m: __bits_of_f32 / __f32_from_bits — identity
     # bitcasts. f32 already lives in eax as its IEEE 754 bit pattern,
@@ -1756,16 +1765,16 @@ fn main() -> i32 {{
     assert compile_and_exec("__bits_of_f32(0.0)") == 0, "bits_of_f32(0.0)=0"
     # Round-trip: __f32_from_bits(__bits_of_f32(x)) == x.
     assert compile_and_exec(
-        "__f32_from_bits(__bits_of_f32(2.0)) / 16777216"
+        "__bits_of_f32(__f32_from_bits(__bits_of_f32(2.0))) / 16777216"
     ) == 64, "round-trip __f32_from_bits(__bits_of_f32(2.0))=2.0"
     # __f32_from_bits(0x40000000) = 2.0 -> top 64. 0x40000000 = 1073741824.
     assert compile_and_exec(
-        "__f32_from_bits(1073741824) / 16777216"
+        "__bits_of_f32(__f32_from_bits(1073741824)) / 16777216"
     ) == 64, "f32_from_bits(0x40000000)=2.0"
     # f32-typed flow: __f32_from_bits(...) feeds into __fadd.
     # bits(2.0)=0x40000000=1073741824 -> __fadd(__f32_from_bits, 2.0)=4.0 -> top 64.
     assert compile_and_exec(
-        "__fadd(__f32_from_bits(1073741824), 2.0) / 16777216"
+        "__bits_of_f32(__fadd(__f32_from_bits(1073741824), 2.0)) / 16777216"
     ) == 64, "f32_from_bits result flows as f32 into __fadd"
     # Phase 1.10 step 5n: __hash_i32 quadratic mixer hash.
     # Mirrors helixc-Python lower_ast.py:939-963:
@@ -1814,11 +1823,11 @@ fn main() -> i32 {{
     assert compile_and_exec("42_i32") == 42, "int with _i32 suffix"
     assert compile_and_exec("100_i64 - 58") == 42, "int with _i64 suffix in expr"
     # 1.5 = 0x3FC00000 -> top byte 0x3F = 63 (same as 1.0/2.0/3.0).
-    assert compile_and_exec("1.5_f32 / 16777216") == 63, "float with _f32 suffix"
-    assert compile_and_exec("__fadd(1.5_f32, 2.5_f32) / 16777216") == 64, \
+    assert compile_and_exec("__bits_of_f32(1.5_f32) / 16777216") == 63, "float with _f32 suffix"
+    assert compile_and_exec("__bits_of_f32(__fadd(1.5_f32, 2.5_f32)) / 16777216") == 64, \
         "f32-suffixed literals flow through __fadd"
     # 0.5 = 0x3F000000 -> top byte 63.
-    assert compile_and_exec("0.5_f64 / 16777216") == 63, "float with _f64 suffix"
+    assert compile_and_exec("__bits_of_f32(0.5_f64) / 16777216") == 63, "float with _f64 suffix"
     # Phase 1.10 step 5+: bootstrap binary bitwise & | ^. Mirrors the
     # helixc-Python fix in commit f676fca; before this, the bootstrap
     # had no parse rule for these operators so source code couldn't use
@@ -1849,11 +1858,11 @@ fn main() -> i32 {{
     # suffix consumption, and codegen's __fadd/__fmul builtins.
     assert compile_and_exec(
         "fn main() -> i32 { let x: f32 = 1.5_f32 ; "
-        "let y: f32 = 2.5_f32 ; __fadd(x, y) / 16777216 }"
+        "let y: f32 = 2.5_f32 ; __bits_of_f32(__fadd(x, y)) / 16777216 }"
     ) == 64, "let-bound :f32 with suffixed literals + __fadd = 4.0 top byte"
     assert compile_and_exec(
         "fn main() -> i32 { let mut z: f32 = 2.0_f32 ; "
-        "z = __fmul(z, z) ; __fadd(z, z) / 16777216 }"
+        "z = __fmul(z, z) ; __bits_of_f32(__fadd(z, z)) / 16777216 }"
     ) == 65, "mutable :f32 -> 2*2*2 = 8.0 top byte"
     # Phase 1.10 step 5c: typecheck-driven SSE dispatch on natural
     # binary operators when both operands are f32. AST_LET stamps the
@@ -1865,26 +1874,26 @@ fn main() -> i32 {{
     #   = 4.0 -> 0x40800000, top byte 64
     assert compile_and_exec(
         "fn main() -> i32 { let x: f32 = 1.5_f32 ; let y: f32 = 2.5_f32 ; "
-        "(x + y) / 16777216 }"
+        "__bits_of_f32((x + y)) / 16777216 }"
     ) == 64, "natural + dispatches to SSE addss for f32 bindings"
     #   2.0 * 4.0 = 8.0 -> 0x41000000, top byte 65
     assert compile_and_exec(
         "fn main() -> i32 { let a: f32 = 2.0_f32 ; let b: f32 = 4.0_f32 ; "
-        "(a * b) / 16777216 }"
+        "__bits_of_f32((a * b)) / 16777216 }"
     ) == 65, "natural * dispatches to SSE mulss"
     #   8.0 / 4.0 = 2.0 -> 0x40000000, top byte 64
     assert compile_and_exec(
         "fn main() -> i32 { let a: f32 = 8.0_f32 ; let b: f32 = 4.0_f32 ; "
-        "(a / b) / 16777216 }"
+        "__bits_of_f32((a / b)) / 16777216 }"
     ) == 64, "natural / dispatches to SSE divss"
     #   5.0 - 1.0 = 4.0 -> top byte 64
     assert compile_and_exec(
         "fn main() -> i32 { let a: f32 = 5.0_f32 ; let b: f32 = 1.0_f32 ; "
-        "(a - b) / 16777216 }"
+        "__bits_of_f32((a - b)) / 16777216 }"
     ) == 64, "natural - dispatches to SSE subss"
     # Mixed-arity composition: literal + bound = f32 (both children f32-typed).
     assert compile_and_exec(
-        "fn main() -> i32 { let a: f32 = 1.5_f32 ; (a + 2.5_f32) / 16777216 }"
+        "fn main() -> i32 { let a: f32 = 1.5_f32 ; __bits_of_f32((a + 2.5_f32)) / 16777216 }"
     ) == 64, "literal + bound f32 -> SSE"
     # Integer arithmetic still works (no f32 in the tree -> integer codegen).
     assert compile_and_exec(
@@ -1897,11 +1906,11 @@ fn main() -> i32 {{
     #   add_f(1.5, 2.5) = 4.0 -> top byte 64
     assert compile_and_exec(
         "fn add_f(a: f32, b: f32) -> f32 { a + b } "
-        "fn main() -> i32 { add_f(1.5_f32, 2.5_f32) / 16777216 }"
+        "fn main() -> i32 { __bits_of_f32(add_f(1.5_f32, 2.5_f32)) / 16777216 }"
     ) == 64, "fn(a: f32, b: f32) -> f32 { a + b } dispatches to SSE addss"
     assert compile_and_exec(
         "fn mul_f(a: f32, b: f32) -> f32 { a * b } "
-        "fn main() -> i32 { mul_f(2.0_f32, 4.0_f32) / 16777216 }"
+        "fn main() -> i32 { __bits_of_f32(mul_f(2.0_f32, 4.0_f32)) / 16777216 }"
     ) == 65, "fn f32 multiplication dispatches to SSE mulss"
     # Step 5c follow-on #2: fn return-type propagation through call sites.
     # Without the fn_type_table pre-pass, a user-named f32 fn at the call
@@ -1913,20 +1922,20 @@ fn main() -> i32 {{
     #   fn main() -> i32 {
     #       let y: f32 = double_f(2.0_f32) ;        // y is now bound f32
     #       let z = y + 1.0_f32 ;                    // SSE addss (was integer)
-    #       z / 16777216
+    #       __bits_of_f32(z) / 16777216
     #   }
     # Result: double_f(2.0)=4.0; 4.0+1.0=5.0 -> 0x40A00000 -> top byte 64.
     assert compile_and_exec(
         "fn double_f(x: f32) -> f32 { x + x } "
         "fn main() -> i32 { "
-        "let y: f32 = double_f(2.0_f32) ; let z = y + 1.0_f32 ; z / 16777216 }"
+        "let y: f32 = double_f(2.0_f32) ; let z = y + 1.0_f32 ; __bits_of_f32(z) / 16777216 }"
     ) == 64, "user-named f32 fn return type propagates to call-site bind type"
     # Direct AST_ADD on user fn calls (no intermediate let).
     #   add_f(1.5, 2.5) + add_f(0.5, 0.5)  =  4.0 + 1.0  =  5.0  ->  64
     assert compile_and_exec(
         "fn add_f(a: f32, b: f32) -> f32 { a + b } "
         "fn main() -> i32 { "
-        "(add_f(1.5_f32, 2.5_f32) + add_f(0.5_f32, 0.5_f32)) / 16777216 }"
+        "__bits_of_f32((add_f(1.5_f32, 2.5_f32) + add_f(0.5_f32, 0.5_f32))) / 16777216 }"
     ) == 64, "AST_ADD of two user-named f32 fn calls dispatches to SSE"
     # Phase 1.10 step 5d: AST_NEG must dispatch to a sign-bit XOR when
     # the inner is f32 (mirrors __fneg, mirrors helixc-Python). The
@@ -1937,12 +1946,12 @@ fn main() -> i32 {{
     #   -x + x = 0.0 -> bits 0x00000000, top byte 0
     assert compile_and_exec(
         "fn main() -> i32 { let x: f32 = 2.0_f32 ; let y: f32 = -x ; "
-        "(x + y) / 16777216 }"
+        "__bits_of_f32((x + y)) / 16777216 }"
     ) == 0, "f32 NEG: -x + x cancels to 0.0 (sign-bit flip via XOR)"
     #   double NEG: --x = x. 2.5 -> 0x40200000, top byte 64.
     assert compile_and_exec(
         "fn main() -> i32 { let x: f32 = 2.5_f32 ; let y: f32 = -x ; "
-        "let z: f32 = -y ; z / 16777216 }"
+        "let z: f32 = -y ; __bits_of_f32(z) / 16777216 }"
     ) == 64, "f32 NEG: --x recovers x (chained let-bindings, both f32)"
     #   NEG inside SSE-dispatched ADD: 5 + (-3) = 2.0 -> top byte 64.
     #   This exercises is_f32_expr's t==9 case so the parent ADD
@@ -1950,7 +1959,7 @@ fn main() -> i32 {{
     #   raw bits).
     assert compile_and_exec(
         "fn main() -> i32 { let x: f32 = 5.0_f32 ; let y: f32 = 3.0_f32 ; "
-        "(x + (-y)) / 16777216 }"
+        "__bits_of_f32((x + (-y))) / 16777216 }"
     ) == 64, "f32 NEG inside ADD: SSE-dispatched 5 + (-3) = 2.0"
     # Phase 1.10 step 5e: f32-aware comparison ops. Both operands f32 ->
     # ucomiss + setcc; integer cmp+setcc otherwise. Result is 0/1 in eax.
@@ -2029,7 +2038,7 @@ fn main() -> i32 {{
         "let dx: f32 = x2 - x1 ; let dy: f32 = y2 - y1 ; "
         "dx * dx + dy * dy } "
         "fn main() -> i32 { "
-        "dist_sq(0.0_f32, 0.0_f32, 3.0_f32, 4.0_f32) / 16777216 }"
+        "__bits_of_f32(dist_sq(0.0_f32, 0.0_f32, 3.0_f32, 4.0_f32)) / 16777216 }"
     ) == 65, "Pythagorean dist_sq end-to-end f32 integration"
     # And use the result in a comparison: dist_sq(0,0,3,4) > 20.0 ?
     #   25.0 > 20.0 -> true -> 42
@@ -2046,7 +2055,7 @@ fn main() -> i32 {{
     assert compile_and_exec(
         "fn neg_f(a: f32) -> f32 { -a } "
         "fn main() -> i32 { let r: f32 = neg_f(2.0_f32) ; "
-        "(r + 2.0_f32) / 16777216 }"
+        "__bits_of_f32((r + 2.0_f32)) / 16777216 }"
     ) == 0, "fn body `-a` (f32 param) flips sign; cancellation -> 0.0"
     # Integer NEG sanity: still uses two's complement `neg eax`.
     #   -5 + 7 = 2
@@ -3615,7 +3624,7 @@ def test_ieee754_pos_2_0():
     src = """
     fn main() -> i32 {
         let bits = f32_bits_pos(2, 0, 0);
-        bits / 16777216
+        __bits_of_f32(bits) / 16777216
     }
     """
     code = compile_and_run(src)
@@ -3628,8 +3637,8 @@ def test_ieee754_pos_1_5():
     src = """
     fn main() -> i32 {
         let bits = f32_bits_pos(1, 5, 1);
-        // Get second byte: (bits / 65536) mod 256
-        (bits / 65536) % 256
+        // Get second byte: (__bits_of_f32(bits) / 65536) mod 256
+        (__bits_of_f32(bits) / 65536) % 256
     }
     """
     code = compile_and_run(src)
@@ -3653,7 +3662,7 @@ def test_ieee754_pos_3_14():
     src = """
     fn main() -> i32 {
         let bits = f32_bits_pos(3, 14, 2);
-        bits / 16777216
+        __bits_of_f32(bits) / 16777216
     }
     """
     code = compile_and_run(src)

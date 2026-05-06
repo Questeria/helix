@@ -208,6 +208,16 @@ fn emit_ast_bnot_suffix() -> i32 {
     2
 }
 
+// Phase 1.10 step 5p: ud2 trap. Used by mixed-type arithmetic
+// detection (AST_ADD/SUB/MUL/DIV with one f32 + one i32 operand —
+// silent integer codegen would silently corrupt the f32 bit pattern,
+// so we emit a SIGILL trap instead).
+//   0F 0B   ud2  (illegal instruction; raises SIGILL on x86-64)
+fn emit_ud2_trap() -> i32 {
+    emit_byte(0x0F); emit_byte(0x0B);
+    2
+}
+
 // AST_NOT(inner): emit inner code, then logical NOT via:
 //   85 C0              test eax, eax
 //   B8 00 00 00 00     mov eax, 0    (zero the high bytes before sete)
@@ -1985,15 +1995,19 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         emit_ast_int(bits)
     } else { if t == 2 {
         // Step 5c: dispatch to SSE addss when both operands are f32.
+        // Step 5p: emit ud2 trap when types are MIXED (one f32, one i32) —
+        // silent integer codegen would corrupt the f32 bit pattern.
         let n1 = emit_ast_code(p1, bind_state, patch_state, bn_state);
         let np = emit_push_rax();
         let n2 = emit_ast_code(p2, bind_state, patch_state, bn_state);
         let nm = emit_mov_ecx_eax();
         let no = emit_pop_rax();
-        let na = if is_f32_expr(idx, bind_state, bn_state) == 1 {
-            emit_addss()
+        let l_f = is_f32_expr(p1, bind_state, bn_state);
+        let r_f = is_f32_expr(p2, bind_state, bn_state);
+        let na = if l_f == 1 {
+            if r_f == 1 { emit_addss() } else { emit_ud2_trap() }
         } else {
-            emit_add_eax_ecx()
+            if r_f == 1 { emit_ud2_trap() } else { emit_add_eax_ecx() }
         };
         n1 + np + n2 + nm + no + na
     } else { if t == 3 {
@@ -2002,10 +2016,12 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         let n2 = emit_ast_code(p2, bind_state, patch_state, bn_state);
         let nm = emit_mov_ecx_eax();
         let no = emit_pop_rax();
-        let na = if is_f32_expr(idx, bind_state, bn_state) == 1 {
-            emit_subss()
+        let l_f = is_f32_expr(p1, bind_state, bn_state);
+        let r_f = is_f32_expr(p2, bind_state, bn_state);
+        let na = if l_f == 1 {
+            if r_f == 1 { emit_subss() } else { emit_ud2_trap() }
         } else {
-            emit_sub_eax_ecx()
+            if r_f == 1 { emit_ud2_trap() } else { emit_sub_eax_ecx() }
         };
         n1 + np + n2 + nm + no + na
     } else { if t == 4 {
@@ -2014,10 +2030,12 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         let n2 = emit_ast_code(p2, bind_state, patch_state, bn_state);
         let nm = emit_mov_ecx_eax();
         let no = emit_pop_rax();
-        let na = if is_f32_expr(idx, bind_state, bn_state) == 1 {
-            emit_mulss()
+        let l_f = is_f32_expr(p1, bind_state, bn_state);
+        let r_f = is_f32_expr(p2, bind_state, bn_state);
+        let na = if l_f == 1 {
+            if r_f == 1 { emit_mulss() } else { emit_ud2_trap() }
         } else {
-            emit_imul_eax_ecx()
+            if r_f == 1 { emit_ud2_trap() } else { emit_imul_eax_ecx() }
         };
         n1 + np + n2 + nm + no + na
     } else { if t == 5 {
@@ -2026,10 +2044,12 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         let n2 = emit_ast_code(p2, bind_state, patch_state, bn_state);
         let nm = emit_mov_ecx_eax();
         let no = emit_pop_rax();
-        let na = if is_f32_expr(idx, bind_state, bn_state) == 1 {
-            emit_divss()
+        let l_f = is_f32_expr(p1, bind_state, bn_state);
+        let r_f = is_f32_expr(p2, bind_state, bn_state);
+        let na = if l_f == 1 {
+            if r_f == 1 { emit_divss() } else { emit_ud2_trap() }
         } else {
-            emit_idiv_eax_ecx()
+            if r_f == 1 { emit_ud2_trap() } else { emit_idiv_eax_ecx() }
         };
         n1 + np + n2 + nm + no + na
     } else { if t == 24 {
