@@ -1789,6 +1789,40 @@ fn main() -> i32 {{
         "fn main() -> i32 { let x: f32 = 5.0_f32 ; let y: f32 = 3.0_f32 ; "
         "(x + (-y)) / 16777216 }"
     ) == 64, "f32 NEG inside ADD: SSE-dispatched 5 + (-3) = 2.0"
+    # Phase 1.10 step 5e: f32-aware comparison ops. Both operands f32 ->
+    # ucomiss + setcc; integer cmp+setcc otherwise. Result is 0/1 in eax.
+    # Pre-fix: integer compare on f32 BIT PATTERNS would silently work
+    # for some positive-vs-positive cases by coincidence but fail for
+    # signed cases (negative f32 has bit 31 set, looks like negative i32).
+    assert compile_and_exec(
+        "fn main() -> i32 { let a: f32 = 1.5_f32 ; let b: f32 = 2.5_f32 ; "
+        "if a < b { 42 } else { 99 } }"
+    ) == 42, "f32 < dispatches to ucomiss+setb"
+    assert compile_and_exec(
+        "fn main() -> i32 { let a: f32 = 2.5_f32 ; let b: f32 = 1.5_f32 ; "
+        "if a > b { 42 } else { 99 } }"
+    ) == 42, "f32 > dispatches to ucomiss+seta"
+    # Sign-bit case: -2.5 < 1.5. Integer compare would treat -2.5's
+    # bits (0xC0200000 = 0xC020_0000 = -1071644672 signed) as LESS than
+    # 1.5's bits (0x3FC00000 = 1069547520) — happens to coincide here,
+    # but for `a > b` with mixed signs would diverge. Test both.
+    assert compile_and_exec(
+        "fn main() -> i32 { let a: f32 = __fneg(2.5_f32) ; let b: f32 = 1.5_f32 ; "
+        "if a < b { 42 } else { 99 } }"
+    ) == 42, "f32 < respects sign (negative < positive via ucomiss)"
+    assert compile_and_exec(
+        "fn main() -> i32 { let a: f32 = 1.5_f32 ; let b: f32 = 1.5_f32 ; "
+        "if a == b { 42 } else { 99 } }"
+    ) == 42, "f32 == dispatches to ucomiss+sete"
+    assert compile_and_exec(
+        "fn main() -> i32 { let a: f32 = 1.5_f32 ; let b: f32 = 2.5_f32 ; "
+        "if a >= b { 99 } else { 42 } }"
+    ) == 42, "f32 >= dispatches to ucomiss+setae (1.5 >= 2.5 false)"
+    # Integer comparison still works (no f32 -> integer codegen).
+    assert compile_and_exec(
+        "fn main() -> i32 { let a: i32 = 5 ; let b: i32 = 3 ; "
+        "if a > b { 42 } else { 99 } }"
+    ) == 42, "i32 > stays integer"
     #   fn returning f32 with NEG in body: neg_f(2.0) = -2.0; check by
     #   adding back via SSE (cancels to 0.0).
     assert compile_and_exec(

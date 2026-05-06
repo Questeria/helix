@@ -263,6 +263,40 @@ fn emit_addss() -> i32 { emit_sse_binop(0x58) }
 fn emit_subss() -> i32 { emit_sse_binop(0x5C) }
 fn emit_mulss() -> i32 { emit_sse_binop(0x59) }
 fn emit_divss() -> i32 { emit_sse_binop(0x5E) }
+
+// Phase 1.10 step 5e: SSE comparison suffix. Result is 0/1 in eax
+// depending on the predicate. Predicate selected by the setcc opcode
+// byte (second byte after 0F prefix):
+//   0x92 setb  (lhs < rhs)        — for <
+//   0x96 setbe (lhs <= rhs)       — for <=
+//   0x97 seta  (lhs > rhs)        — for >
+//   0x93 setae (lhs >= rhs)       — for >=
+//   0x94 sete  (lhs == rhs)       — for ==  (NaN edge case ignored)
+//   0x95 setne (lhs != rhs)       — for !=
+//
+// Sequence — note xor MUST come BEFORE ucomiss (otherwise xor clobbers
+// the flag bits that ucomiss just set, and setcc reads stale flags):
+//   movd xmm0, eax            66 0F 6E C0   (4 bytes)
+//   movd xmm1, ecx            66 0F 6E C9   (4 bytes)
+//   xor eax, eax              31 C0         (2 bytes; pre-clears eax;
+//                                            we already moved to xmm0)
+//   ucomiss xmm0, xmm1        0F 2E C1      (3 bytes; sets flags)
+//   setcc al                  0F xx C0      (3 bytes; reads flags)
+// Total: 16 bytes, leaves 0 or 1 in eax.
+fn emit_sse_compare(setcc_byte: i32) -> i32 {
+    emit_byte(0x66); emit_byte(0x0F); emit_byte(0x6E); emit_byte(0xC0);   // movd xmm0,eax
+    emit_byte(0x66); emit_byte(0x0F); emit_byte(0x6E); emit_byte(0xC9);   // movd xmm1,ecx
+    emit_byte(0x31); emit_byte(0xC0);                                     // xor eax,eax (PRE-clear)
+    emit_byte(0x0F); emit_byte(0x2E); emit_byte(0xC1);                    // ucomiss xmm0,xmm1
+    emit_byte(0x0F); emit_byte(setcc_byte); emit_byte(0xC0);              // setcc al
+    16
+}
+fn emit_ssen_lt() -> i32 { emit_sse_compare(0x92) }   // setb
+fn emit_ssen_le() -> i32 { emit_sse_compare(0x96) }   // setbe
+fn emit_ssen_gt() -> i32 { emit_sse_compare(0x97) }   // seta
+fn emit_ssen_ge() -> i32 { emit_sse_compare(0x93) }   // setae
+fn emit_ssen_eq() -> i32 { emit_sse_compare(0x94) }   // sete
+fn emit_ssen_ne() -> i32 { emit_sse_compare(0x95) }   // setne
 // idiv requires sign-extension into edx; we emit `cdq; idiv ecx`.
 //   99       cdq
 //   F7 F9    idiv ecx
@@ -1737,12 +1771,18 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         let na = emit_sar_eax_cl();
         n1 + np + n2 + nm + no + na
     } else { if t == 6 {
+        // Phase 1.10 step 5e: f32-aware comparison. If both operands
+        // resolve to f32 via is_f32_expr, emit ucomiss + setcc; else
+        // integer cmp + setcc. Result is 0/1 in eax either way.
         let n1 = emit_ast_code(p1, bind_state, patch_state, bn_state);
         let np = emit_push_rax();
         let n2 = emit_ast_code(p2, bind_state, patch_state, bn_state);
         let nm = emit_mov_ecx_eax();
         let no = emit_pop_rax();
-        let na = emit_lt_eax_ecx();
+        let l_f = is_f32_expr(p1, bind_state, bn_state);
+        let r_f = is_f32_expr(p2, bind_state, bn_state);
+        let both_f = if l_f == 1 { if r_f == 1 { 1 } else { 0 } } else { 0 };
+        let na = if both_f == 1 { emit_ssen_lt() } else { emit_lt_eax_ecx() };
         n1 + np + n2 + nm + no + na
     } else { if t == 19 {
         let n1 = emit_ast_code(p1, bind_state, patch_state, bn_state);
@@ -1750,7 +1790,10 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         let n2 = emit_ast_code(p2, bind_state, patch_state, bn_state);
         let nm = emit_mov_ecx_eax();
         let no = emit_pop_rax();
-        let na = emit_gt_eax_ecx();
+        let l_f = is_f32_expr(p1, bind_state, bn_state);
+        let r_f = is_f32_expr(p2, bind_state, bn_state);
+        let both_f = if l_f == 1 { if r_f == 1 { 1 } else { 0 } } else { 0 };
+        let na = if both_f == 1 { emit_ssen_gt() } else { emit_gt_eax_ecx() };
         n1 + np + n2 + nm + no + na
     } else { if t == 20 {
         let n1 = emit_ast_code(p1, bind_state, patch_state, bn_state);
@@ -1758,7 +1801,10 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         let n2 = emit_ast_code(p2, bind_state, patch_state, bn_state);
         let nm = emit_mov_ecx_eax();
         let no = emit_pop_rax();
-        let na = emit_eq_eax_ecx();
+        let l_f = is_f32_expr(p1, bind_state, bn_state);
+        let r_f = is_f32_expr(p2, bind_state, bn_state);
+        let both_f = if l_f == 1 { if r_f == 1 { 1 } else { 0 } } else { 0 };
+        let na = if both_f == 1 { emit_ssen_eq() } else { emit_eq_eax_ecx() };
         n1 + np + n2 + nm + no + na
     } else { if t == 21 {
         let n1 = emit_ast_code(p1, bind_state, patch_state, bn_state);
@@ -1766,7 +1812,10 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         let n2 = emit_ast_code(p2, bind_state, patch_state, bn_state);
         let nm = emit_mov_ecx_eax();
         let no = emit_pop_rax();
-        let na = emit_ne_eax_ecx();
+        let l_f = is_f32_expr(p1, bind_state, bn_state);
+        let r_f = is_f32_expr(p2, bind_state, bn_state);
+        let both_f = if l_f == 1 { if r_f == 1 { 1 } else { 0 } } else { 0 };
+        let na = if both_f == 1 { emit_ssen_ne() } else { emit_ne_eax_ecx() };
         n1 + np + n2 + nm + no + na
     } else { if t == 22 {
         let n1 = emit_ast_code(p1, bind_state, patch_state, bn_state);
@@ -1774,7 +1823,10 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         let n2 = emit_ast_code(p2, bind_state, patch_state, bn_state);
         let nm = emit_mov_ecx_eax();
         let no = emit_pop_rax();
-        let na = emit_le_eax_ecx();
+        let l_f = is_f32_expr(p1, bind_state, bn_state);
+        let r_f = is_f32_expr(p2, bind_state, bn_state);
+        let both_f = if l_f == 1 { if r_f == 1 { 1 } else { 0 } } else { 0 };
+        let na = if both_f == 1 { emit_ssen_le() } else { emit_le_eax_ecx() };
         n1 + np + n2 + nm + no + na
     } else { if t == 23 {
         let n1 = emit_ast_code(p1, bind_state, patch_state, bn_state);
@@ -1782,7 +1834,10 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         let n2 = emit_ast_code(p2, bind_state, patch_state, bn_state);
         let nm = emit_mov_ecx_eax();
         let no = emit_pop_rax();
-        let na = emit_ge_eax_ecx();
+        let l_f = is_f32_expr(p1, bind_state, bn_state);
+        let r_f = is_f32_expr(p2, bind_state, bn_state);
+        let both_f = if l_f == 1 { if r_f == 1 { 1 } else { 0 } } else { 0 };
+        let na = if both_f == 1 { emit_ssen_ge() } else { emit_ge_eax_ecx() };
         n1 + np + n2 + nm + no + na
     } else { if t == 7 {
         // AST_IF(cond, then, else)
