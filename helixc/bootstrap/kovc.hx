@@ -1177,32 +1177,89 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
     if t == 0 {
         emit_ast_int(p1)
     } else { if t == 27 {
-        // AST_FLOATLIT (Phase 1.10 step 3b). p1 = byte_start of the literal
-        // text in the arena, p2 = byte_len. Parse the integer part (digits
-        // before '.') and emit `mov eax, integer_part`. Lossy: "1.5" emits
-        // 1, not 1.5. Steps 3c/3d will add real IEEE 754 + SSE2 emission.
-        // Digit check inlined (kovc.hx is self-contained — no is_digit dep
-        // on lexer.hx).
+        // AST_FLOATLIT (Phase 1.10 step 3d). p1 = byte_start of the literal
+        // text in the arena, p2 = byte_len. Parse "I.F" -> int_part,
+        // frac_part, frac_digits; compute the IEEE 754 f32 bit pattern via
+        // integer-only arithmetic; emit `mov eax, BITS`.
+        // The downstream code can then store BITS as i32 or movd into xmm0
+        // for f32 arithmetic (Phase 1.10 step 4 / future).
         let mut i: i32 = 0;
-        let mut val: i32 = 0;
+        let mut int_part: i32 = 0;
+        let mut frac_part: i32 = 0;
+        let mut frac_digits: i32 = 0;
+        let mut phase: i32 = 0;
         let mut keep_p: i32 = 1;
         while keep_p == 1 {
             if i >= p2 { keep_p = 0; }
             else {
                 let b = __arena_get(p1 + i);
-                if b == 46 { keep_p = 0; }   // '.' stops integer-part scan
-                else {
+                if b == 46 {
+                    // '.' transitions integer -> fractional phase.
+                    phase = 1;
+                    i = i + 1;
+                } else {
                     // is_digit inlined: '0'=48, '9'=57.
                     if b < 48 { keep_p = 0; }
                     else { if b > 57 { keep_p = 0; }
                     else {
-                        val = val * 10 + (b - 48);
+                        if phase == 0 {
+                            int_part = int_part * 10 + (b - 48);
+                        } else {
+                            frac_part = frac_part * 10 + (b - 48);
+                            frac_digits = frac_digits + 1;
+                        };
                         i = i + 1;
                     }};
                 };
             };
         }
-        emit_ast_int(val)
+        // pow10 = 10^frac_digits.
+        let mut pow10: i32 = 1;
+        let mut dd: i32 = 0;
+        while dd < frac_digits { pow10 = pow10 * 10; dd = dd + 1; }
+        let v_scaled = int_part * pow10 + frac_part;
+        let mut bits: i32 = 0;
+        if v_scaled == 0 {
+            bits = 0;
+        } else {
+            // Find binary exponent k: largest k such that 2^k * pow10 <= v_scaled.
+            // Loop doubles threshold; halts before overflowing v_scaled.
+            let mut k: i32 = 0;
+            let mut threshold: i32 = pow10;
+            let mut keep_k: i32 = 1;
+            while keep_k == 1 {
+                if threshold > v_scaled / 2 { keep_k = 0; }
+                else {
+                    threshold = threshold * 2;
+                    k = k + 1;
+                }
+            }
+            // Extract 23 mantissa bits via residual-doubling. residual stays
+            // bounded by 2*threshold across iterations (no i32 overflow for
+            // common literals like 1.5, 3.14, 100.25).
+            let mut residual = v_scaled - threshold;
+            let mut mantissa: i32 = 0;
+            let mut bit: i32 = 22;
+            while bit >= 0 {
+                residual = residual * 2;
+                if residual >= threshold {
+                    // bit_val = 2^bit, computed inline.
+                    let mut bv: i32 = 1;
+                    let mut sh: i32 = 0;
+                    while sh < bit { bv = bv * 2; sh = sh + 1; }
+                    mantissa = mantissa + bv;
+                    residual = residual - threshold;
+                }
+                bit = bit - 1;
+            }
+            // Pack: (k + 127) << 23 | mantissa  (sign bit = 0).
+            let exp_field = k + 127;
+            let mut exp_shifted: i32 = exp_field;
+            let mut sh2: i32 = 0;
+            while sh2 < 23 { exp_shifted = exp_shifted * 2; sh2 = sh2 + 1; }
+            bits = exp_shifted + mantissa;
+        }
+        emit_ast_int(bits)
     } else { if t == 2 {
         let n1 = emit_ast_code(p1, bind_state, patch_state, bn_state);
         let np = emit_push_rax();

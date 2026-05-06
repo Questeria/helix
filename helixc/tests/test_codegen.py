@@ -1489,11 +1489,21 @@ fn main() -> i32 {{
     assert compile_and_exec(
         "fn main() -> i32 { __arena_push(0) ; __arena_set(0, 99) ; __arena_get(0) }"
     ) == 99, "arena_set then arena_get"
-    # Phase 1.10 step 3b: bootstrap can now lex + parse + codegen float
-    # literals. Codegen is integer-part-only (lossy), so "1.5" emits 1
-    # and "42.99" emits 42. Steps 3c/3d will add real f64 SSE2.
-    assert compile_and_exec("42.5") == 42, "float literal emits integer part"
-    assert compile_and_exec("3.14") == 3, "another float literal"
+    # Phase 1.10 step 3d: bootstrap codegen for AST_FLOATLIT now emits the
+    # actual IEEE 754 f32 bit pattern via inlined integer-only math (no
+    # stdlib calls — kovc.hx stays self-contained). Exit code is the low
+    # byte (`bits & 0xFF`); to verify the top byte (sign + exponent + top
+    # mantissa nibble) we divide by 2^24 = 16777216.
+    #   1.0  -> 0x3F800000, top byte = 0x3F = 63
+    #   2.0  -> 0x40000000, top byte = 0x40 = 64
+    #   42.5 -> 0x422A0000, top byte = 0x42 = 66
+    #   3.14 -> 0x4048F5C3, top byte = 0x40 = 64
+    #   0.0  -> 0x00000000, top byte = 0x00 = 0
+    assert compile_and_exec("1.0 / 16777216") == 63, "f32 bits of 1.0 top byte"
+    assert compile_and_exec("2.0 / 16777216") == 64, "f32 bits of 2.0 top byte"
+    assert compile_and_exec("42.5 / 16777216") == 66, "f32 bits of 42.5 top byte"
+    assert compile_and_exec("3.14 / 16777216") == 64, "f32 bits of 3.14 top byte"
+    assert compile_and_exec("0.0 + 7") == 7, "0.0 produces 0 bits"
 
 
 def test_bootstrap_kovc_inline_write_file_to_arena():
