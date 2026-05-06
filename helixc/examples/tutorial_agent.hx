@@ -125,6 +125,86 @@ fn agent_step(wm: i32, ep: i32, wmt: i32, mhd_table: i32, goal: i32) -> i32 {
     }
 }
 
+// A*-style path length using astar_priority + astar_path_set/get +
+// astar_reconstruct. Same optimal answer as BFS on this uniform-cost
+// world (every edge costs 1) but exercises a different primitive
+// chain. The Manhattan heuristic admits the goal so A* explores
+// fewer states than BFS would on a larger world.
+fn astar_path_length(wmt: i32, start: i32, goal: i32) -> i32 {
+    let g_table = t1d_new(16);   // g(state) = best-known cost from start
+    let h_table = t1d_new(16);   // h(state) = Manhattan to goal
+    let came_from = t1d_new(16);
+    let mut i: i32 = 0;
+    while i < 16 {
+        ti1d_set(g_table, i, 999);
+        let row = i / 4;
+        let col = i % 4;
+        let goal_row = goal / 4;
+        let goal_col = goal % 4;
+        let dr = if row > goal_row { row - goal_row } else { goal_row - row };
+        let dc = if col > goal_col { col - goal_col } else { goal_col - col };
+        ti1d_set(h_table, i, dr + dc);
+        ti1d_set(came_from, i, 0 - 1);
+        i = i + 1;
+    }
+    ti1d_set(g_table, start, 0);
+    ti1d_set(came_from, start, start);   // start points to itself
+    let pq = pq_new();
+    pq_insert(pq, start, astar_priority(g_table, h_table, start));
+    let v = visited_new();
+    while pq_size(pq) > 0 {
+        let cur = pq_pop_min(pq);
+        if visited_has(v, cur) == 0 {
+            visited_mark(v, cur);
+            if cur == goal {
+                // empty pq to break the loop
+                while pq_size(pq) > 0 { pq_pop_min(pq); }
+            } else {
+                let mut a: i32 = 0;
+                while a < 4 {
+                    let nxt = wmt_predict(wmt, cur, a);
+                    if nxt != cur {
+                        let new_g = ti1d_get(g_table, cur) + 1;
+                        if new_g < ti1d_get(g_table, nxt) {
+                            ti1d_set(g_table, nxt, new_g);
+                            astar_path_set(came_from, nxt, cur);
+                            pq_insert(pq, nxt, astar_priority(g_table, h_table, nxt));
+                        };
+                    };
+                    a = a + 1;
+                }
+            };
+        };
+    }
+    // Reconstruct path: walk came_from back from goal. astar_reconstruct
+    // returns NODE count (including start and goal); subtract 1 to match
+    // BFS's EDGE count (number of steps).
+    let path_buf = t1d_new(20);
+    astar_reconstruct(came_from, goal, path_buf, 20) - 1
+}
+
+// PATTERN-MATCH detection: scan recent episodic actions for an A-B-A-B
+// oscillation (which would mean the agent is stuck). Returns 1 if the
+// last 4 actions form an oscillation, 0 otherwise.
+//
+// Uses sequence_match-style logic on the episodic memory's action log.
+fn detect_oscillation(ep: i32) -> i32 {
+    let cnt = ep_count(ep);
+    if cnt < 4 { 0 }
+    else {
+        let a3 = ep_payload_at(ep, cnt - 1);
+        let a2 = ep_payload_at(ep, cnt - 2);
+        let a1 = ep_payload_at(ep, cnt - 3);
+        let a0 = ep_payload_at(ep, cnt - 4);
+        // Pattern A-B-A-B: a0 == a2 AND a1 == a3 AND a0 != a1.
+        if a0 == a2 {
+            if a1 == a3 {
+                if a0 == a1 { 0 } else { 1 }
+            } else { 0 }
+        } else { 0 }
+    }
+}
+
 // Build a Manhattan-distance score table from each state to goal.
 // scores[state] = 30 - manhattan_distance(state, goal). Higher = closer.
 fn build_mhd_score(goal: i32) -> i32 {
@@ -149,6 +229,9 @@ fn main() -> i32 {
     let goal: i32 = 15;
     // Verify BFS finds a path of length 6 from cell 0 to cell 15.
     let path_len = bfs_path_length(wmt, 0, goal);
+    // A* should find the same optimal path length on this uniform-cost
+    // world (Manhattan heuristic is admissible and consistent).
+    let astar_len = astar_path_length(wmt, 0, goal);
     // Now do an agent rollout for 6 steps. Initially WM has cur=0, ep is empty.
     let wm = wm_new();
     wm_store(wm, 0, 0);
@@ -162,9 +245,15 @@ fn main() -> i32 {
     // After 6 hill-climb steps the agent should be at the goal (cell 15).
     let final_state = wm_load(wm, 0);
     let actions_logged = ep_count(ep);
-    // Composite check: BFS-path-len + (final_state==goal ? 0 : 99) +
-    // (actions_logged==6 ? 0 : 99). Expected = 6.
+    // Pattern-match: a hill-climbing agent on an open grid shouldn't
+    // oscillate, so detect_oscillation should return 0.
+    let oscillating = detect_oscillation(ep);
+    // Composite check: BFS-path-len + (astar_len==BFS-len ? 0 : 99) +
+    // (final_state==goal ? 0 : 99) + (actions_logged==6 ? 0 : 99) +
+    // (oscillating ? 99 : 0). Expected = 6.
+    let astar_check = if astar_len == path_len { 0 } else { 99 };
     let final_check = if final_state == goal { 0 } else { 99 };
     let log_check = if actions_logged == 6 { 0 } else { 99 };
-    path_len + final_check + log_check
+    let osc_check = if oscillating == 0 { 0 } else { 99 };
+    path_len + astar_check + final_check + log_check + osc_check
 }
