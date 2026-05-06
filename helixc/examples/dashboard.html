@@ -210,6 +210,7 @@
     </div>
     <div class="controls">
       <button id="runBtn" onclick="runAgent()">Run</button>
+      <button id="benchBtn" onclick="runBenchmark()" title="Run all 3 agents on the same seed and compare">⚖ Benchmark all 3</button>
       <button id="pauseBtn" onclick="togglePause()" disabled>Pause</button>
       <button id="stepBtn" onclick="stepOnce()" disabled>Step ▶</button>
       <button id="resetBtn" onclick="resetAll()">Reset</button>
@@ -247,6 +248,16 @@
     </div>
     <h2 style="margin-top:16px">Steps per episode (lower = better)</h2>
     <canvas id="episodeChart" class="chart-canvas"></canvas>
+    <div id="benchmarkPanel" style="display:none;margin-top:12px;padding:10px;background:#1f1f1f;border-radius:6px;border-left:3px solid #66ddff">
+      <h2 style="margin:0 0 8px 0">Benchmark — agent comparison</h2>
+      <div id="benchmarkResults" style="font-family:monospace;font-size:12px"></div>
+      <canvas id="benchmarkChart" style="width:100%;height:160px;background:#0d0d0d;border-radius:4px;margin-top:8px"></canvas>
+      <div style="display:flex;gap:14px;font-size:11px;margin-top:6px">
+        <span><span style="display:inline-block;width:10px;height:10px;background:#888;border-radius:50%"></span> Hill-climb</span>
+        <span><span style="display:inline-block;width:10px;height:10px;background:#ff8800;border-radius:50%"></span> Q-learning</span>
+        <span><span style="display:inline-block;width:10px;height:10px;background:#66ddff;border-radius:50%"></span> Neural net</span>
+      </div>
+    </div>
     <h2 style="margin-top:16px">Q-value heatmap (after each episode)</h2>
     <div style="font-size:11px;color:#888;margin-bottom:6px">
       Brighter cells = higher learned value. Cells fill in as the agent
@@ -618,6 +629,95 @@ function drawEpisodeChart() {
 function randomSeed() {
   const s = Math.floor(Math.random() * 100000) + 1;
   document.getElementById('seedInput').value = s;
+}
+
+async function runBenchmark() {
+  const seed = parseInt(document.getElementById('seedInput').value) || 12345;
+  const maze = document.getElementById('mazeMode').checked ? '1' : '0';
+  const size = document.getElementById('gridSize').value;
+  const panel = document.getElementById('benchmarkPanel');
+  const results = document.getElementById('benchmarkResults');
+  panel.style.display = 'block';
+  results.innerHTML = '<div style="color:#aaa">Running 3 agents on seed=' + seed + ', size=' + size + ', maze=' + (maze==='1') + '...</div>';
+  const benchData = {};
+  const agents = [
+    { kind: 'hillclimb', label: 'Hill-climb', color: '#888' },
+    { kind: 'qlearn',    label: 'Q-learning', color: '#ff8800' },
+    { kind: 'nn',        label: 'Neural net', color: '#66ddff' },
+  ];
+  for (const a of agents) {
+    results.innerHTML += '<div style="color:' + a.color + '">▶ ' + a.label + '...</div>';
+    const t0 = performance.now();
+    const resp = await fetch('/run?iter=99999&kind=' + a.kind + '&seed=' + seed + '&maze=' + maze + '&size=' + size);
+    const text = await resp.text();
+    const t1 = performance.now();
+    const evs = text.trim().split('\n').filter(l => l).map(l => { try { return JSON.parse(l); } catch (e) { return null; } }).filter(e => e);
+    const summary = evs.find(e => e.type === 'summary');
+    const episodes = evs.filter(e => e.type === 'episode');
+    benchData[a.kind] = {
+      label: a.label,
+      color: a.color,
+      stepsByEpisode: episodes.map(e => ({ ep: e.ep, steps: e.steps, reached: e.reached })),
+      best: summary && summary.best_steps && summary.best_steps < 9999 ? summary.best_steps : null,
+      runtime_ms: t1 - t0,
+    };
+  }
+  results.innerHTML = '';
+  let html = '<table style="width:100%;border-collapse:collapse"><tr style="color:#888;border-bottom:1px solid #444"><th style="text-align:left;padding:4px">Agent</th><th>Best path</th><th>Compile+run</th><th>Reached goal</th></tr>';
+  for (const a of agents) {
+    const d = benchData[a.kind];
+    const reachedCount = d.stepsByEpisode.filter(e => e.reached).length;
+    html += '<tr style="color:' + a.color + ';border-bottom:1px solid #1a1a1a">';
+    html += '<td style="padding:4px"><b>' + d.label + '</b></td>';
+    html += '<td style="text-align:center">' + (d.best !== null ? d.best + ' steps' : '<span style="color:#ff5544">never</span>') + '</td>';
+    html += '<td style="text-align:center">' + (d.runtime_ms / 1000).toFixed(2) + 's</td>';
+    html += '<td style="text-align:center">' + reachedCount + ' / ' + d.stepsByEpisode.length + '</td>';
+    html += '</tr>';
+  }
+  html += '</table>';
+  results.innerHTML = html;
+  drawBenchmarkChart(benchData, agents);
+}
+
+function drawBenchmarkChart(benchData, agents) {
+  const canvas = document.getElementById('benchmarkChart');
+  const ctx = canvas.getContext('2d');
+  const w = canvas.clientWidth;
+  const h = canvas.clientHeight;
+  canvas.width = w;
+  canvas.height = h;
+  ctx.fillStyle = '#0d0d0d';
+  ctx.fillRect(0, 0, w, h);
+  // Find max episodes + max steps across all agents.
+  let maxEp = 0, maxSt = 1;
+  for (const a of agents) {
+    const d = benchData[a.kind];
+    if (!d || !d.stepsByEpisode) continue;
+    if (d.stepsByEpisode.length > maxEp) maxEp = d.stepsByEpisode.length;
+    for (const e of d.stepsByEpisode) if (e.steps > maxSt) maxSt = e.steps;
+  }
+  if (maxEp === 0) return;
+  // Plot each agent's steps-per-episode line.
+  for (const a of agents) {
+    const d = benchData[a.kind];
+    if (!d || d.stepsByEpisode.length < 2) continue;
+    ctx.strokeStyle = a.color;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    for (let i = 0; i < d.stepsByEpisode.length; i++) {
+      const x = 8 + (i / (maxEp - 1)) * (w - 16);
+      const y = h - 8 - (d.stepsByEpisode[i].steps / maxSt) * (h - 24);
+      if (i === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+  }
+  // Axis labels
+  ctx.fillStyle = '#666';
+  ctx.font = '10px monospace';
+  ctx.fillText('episodes →', 8, h - 1);
+  ctx.fillText('steps', 4, 12);
+  ctx.fillText(maxSt, 4, 22);
 }
 
 // Session storage (in-memory; cleared on browser close).
