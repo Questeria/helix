@@ -3028,6 +3028,19 @@ def test_agi_sequence_match():
     assert code == 2, f"expected 2 (positions 0 and 2 match), got {code}"
 
 
+def test_agi_substrate_demo_full():
+    """Full AGI substrate demo: 10 sections covering Phase 2/3/4 primitives.
+    Each section returns 42 if its primitive works; main short-circuits on
+    first failure and returns the section number. Final exit 42 = all green."""
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    sample_path = os.path.join(proj_root, "helixc", "examples",
+                               "agi_substrate_demo.hx")
+    with open(sample_path, "r", encoding="utf-8") as f:
+        src = f.read()
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42 (all sections green), got {code}"
+
+
 def test_agi_pq_min_pop():
     """Phase 4 perfection: priority queue. Insert 3 (state, score) pairs;
     pop_min returns the lowest-scoring state."""
