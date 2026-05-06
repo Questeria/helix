@@ -1636,6 +1636,18 @@ fn main() -> i32 {{
         "f32-suffixed literals flow through __fadd"
     # 0.5 = 0x3F000000 -> top byte 63.
     assert compile_and_exec("0.5_f64 / 16777216") == 63, "float with _f64 suffix"
+    # Phase 1.10 step 5b: combined `: f32` annotations + suffix-typed
+    # literals + SSE arithmetic in a real-shaped program. Tests the
+    # interaction of the parser's type-annotation-skip logic, lex_int's
+    # suffix consumption, and codegen's __fadd/__fmul builtins.
+    assert compile_and_exec(
+        "fn main() -> i32 { let x: f32 = 1.5_f32 ; "
+        "let y: f32 = 2.5_f32 ; __fadd(x, y) / 16777216 }"
+    ) == 64, "let-bound :f32 with suffixed literals + __fadd = 4.0 top byte"
+    assert compile_and_exec(
+        "fn main() -> i32 { let mut z: f32 = 2.0_f32 ; "
+        "z = __fmul(z, z) ; __fadd(z, z) / 16777216 }"
+    ) == 65, "mutable :f32 -> 2*2*2 = 8.0 top byte"
 
 
 def test_bootstrap_kovc_inline_write_file_to_arena():
