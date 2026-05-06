@@ -1264,14 +1264,20 @@ def test_bootstrap_lexer_token_count():
     stream of (tag, payload, src_start, src_len) tuples to the
     arena. Verify on `fn main() -> i32 { 42 + 17 }`: 13 tokens
     expected — fn, main, (, ), -, >, i32, {, 42, +, 17, }, EOF."""
-    import os, subprocess
+    import os, subprocess, uuid
     proj = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    # Per-call UUID path — lexer.hx ships with a hardcoded
+    # /tmp/helix_lex_input.hx in its demo main(), but we can replace
+    # that path string with our UUID-suffixed one before compiling.
+    tag = uuid.uuid4().hex[:10]
+    path = f"/tmp/helix_lex_input_{tag}.hx"
     subprocess.run(
         ["wsl", "-e", "bash", "-c",
-         "printf %s 'fn main() -> i32 { 42 + 17 }' > /tmp/helix_lex_input.hx"],
+         f"printf %s 'fn main() -> i32 {{ 42 + 17 }}' > {path}"],
         check=True, timeout=10,
     )
     src = open(os.path.join(proj, "helixc", "bootstrap", "lexer.hx")).read()
+    src = src.replace("/tmp/helix_lex_input.hx", path)
     assert compile_and_run(src) == 13
 
 
@@ -2182,21 +2188,28 @@ def test_bootstrap_parser_no_eof_runaway_on_malformed_input():
     )[0]
     parser_body = open(os.path.join(proj, "helixc", "bootstrap", "parser.hx")).read()
 
+    import uuid
     def root_tag(text: str) -> int:
+        # Per-call UUID so concurrent test runs (or even fast sequential
+        # ones whose binaries' file ops race under WSL/Windows file sync)
+        # don't share the input path. Pre-fix this was a fixed
+        # /tmp/helix_lex_input.hx that flaked under load.
+        tag = uuid.uuid4().hex[:10]
+        path = f"/tmp/helix_lex_input_{tag}.hx"
         subprocess.run(
             ["wsl", "-e", "bash", "-c",
-             f"printf %s {repr(text)} > /tmp/helix_lex_input.hx"],
+             f"printf %s {repr(text)} > {path}"],
             check=True, timeout=10,
         )
-        src = lexer_no_main + parser_body + """
-fn main() -> i32 {
+        src = lexer_no_main + parser_body + f"""
+fn main() -> i32 {{
     let src_start = __arena_len();
-    let src_len = read_file_to_arena("/tmp/helix_lex_input.hx");
+    let src_len = read_file_to_arena("{path}");
     let tok_base = __arena_len();
     lex(src_start, src_len);
     let root = parse_top(tok_base);
     __arena_get(root)
-}
+}}
 """
         return compile_and_run(src)
 
@@ -2225,18 +2238,21 @@ def test_bootstrap_pipeline_end_to_end():
     parser_body = open(os.path.join(proj, "helixc", "bootstrap", "parser.hx")).read()
     evaluator = open(os.path.join(proj, "helixc", "bootstrap", "evaluator.hx")).read()
 
+    import uuid
     def run(input_text: str) -> int:
+        tag = uuid.uuid4().hex[:10]
+        path = f"/tmp/helix_lex_input_{tag}.hx"
         subprocess.run(
             ["wsl", "-e", "bash", "-c",
-             f"printf %s {repr(input_text)} > /tmp/helix_lex_input.hx"],
+             f"printf %s {repr(input_text)} > {path}"],
             check=True, timeout=10,
         )
-        src = lexer_no_main + parser_body + evaluator + """
-fn main() -> i32 {
+        src = lexer_no_main + parser_body + evaluator + f"""
+fn main() -> i32 {{
     let src_start = __arena_len();
-    let src_len = read_file_to_arena("/tmp/helix_lex_input.hx");
-    if src_len <= 0 { 0 - 1 } else { run_source(src_start, src_len) }
-}
+    let src_len = read_file_to_arena("{path}");
+    if src_len <= 0 {{ 0 - 1 }} else {{ run_source(src_start, src_len) }}
+}}
 """
         return compile_and_run(src)
 
@@ -2266,21 +2282,24 @@ def test_bootstrap_parser_root_tag_matches_grammar():
     )[0]
     parser_body = open(os.path.join(proj, "helixc", "bootstrap", "parser.hx")).read()
 
+    import uuid
     def root_tag(input_text: str) -> int:
+        tag = uuid.uuid4().hex[:10]
+        path = f"/tmp/helix_lex_input_{tag}.hx"
         subprocess.run(
             ["wsl", "-e", "bash", "-c",
-             f"printf %s {repr(input_text)} > /tmp/helix_lex_input.hx"],
+             f"printf %s {repr(input_text)} > {path}"],
             check=True, timeout=10,
         )
-        src = lexer_no_main + parser_body + """
-fn main() -> i32 {
+        src = lexer_no_main + parser_body + f"""
+fn main() -> i32 {{
     let src_start = __arena_len();
-    let src_len = read_file_to_arena("/tmp/helix_lex_input.hx");
+    let src_len = read_file_to_arena("{path}");
     let tok_base = __arena_len();
     lex(src_start, src_len);
     let root = parse_top(tok_base);
     __arena_get(root)
-}
+}}
 """
         return compile_and_run(src)
 
@@ -2310,23 +2329,26 @@ def test_bootstrap_lexer_recognizes_each_token_class():
         1,
     )[0]
 
+    import uuid
     def first_tag(input_bytes: str) -> int:
+        tag = uuid.uuid4().hex[:10]
+        path = f"/tmp/helix_lex_input_{tag}.hx"
         subprocess.run(
             ["wsl", "-e", "bash", "-c",
-             f"printf %s {repr(input_bytes)} > /tmp/helix_lex_input.hx"],
+             f"printf %s {repr(input_bytes)} > {path}"],
             check=True, timeout=10,
         )
-        src = lexer_body + """
-fn main() -> i32 {
+        src = lexer_body + f"""
+fn main() -> i32 {{
     let src_start = __arena_len();
-    let src_len = read_file_to_arena("/tmp/helix_lex_input.hx");
-    if src_len <= 0 { 0 - 1 }
-    else {
+    let src_len = read_file_to_arena("{path}");
+    if src_len <= 0 {{ 0 - 1 }}
+    else {{
         let tok_base = __arena_len();
         lex(src_start, src_len);
         __arena_get(tok_base)
-    }
-}
+    }}
+}}
 """
         return compile_and_run(src)
 
