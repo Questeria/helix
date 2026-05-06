@@ -1972,6 +1972,31 @@ fn main() -> i32 {{
     assert compile_and_exec(
         "__bits_of_f32(__f64_to_f32(__dmax(2.0_f64, 0.5_f64))) / 16777216"
     ) == 64, "__dmax(2.0, 0.5) -> 2.0 (top byte 0x40)"
+    # Phase 1.10 step 7k: __i32_to_f64 / __f64_to_i32 conversions.
+    # __i32_to_f64(42) -> 42.0_f64. __f64_to_i32 truncates back to 42.
+    assert compile_and_exec("__f64_to_i32(__i32_to_f64(42))") == 42, \
+        "i32 -> f64 -> i32 round-trip preserves integer values"
+    # __f64_to_i32 truncates round numbers exactly.
+    assert compile_and_exec("__f64_to_i32(2.0_f64)") == 2, \
+        "__f64_to_i32(2.0_f64) -> 2"
+    assert compile_and_exec("__f64_to_i32(7.0_f64)") == 7, \
+        "__f64_to_i32(7.0_f64) -> 7"
+    # __i32_to_f64(1) widens to 1.0_f64. Narrowing to f32 gives 1.0_f32 =
+    # 0x3F800000 -> top byte 63. If broken (e.g. cvtsi2ss instead of
+    # cvtsi2sd), the f64 codegen would feed garbage to __f64_to_f32.
+    assert compile_and_exec(
+        "__bits_of_f32(__f64_to_f32(__i32_to_f64(1))) / 16777216"
+    ) == 63, "__i32_to_f64(1) widens to 1.0_f64, narrows to 1.0_f32"
+    # __i32_to_f64(8) -> 8.0_f64 -> narrow -> 8.0_f32 = 0x41000000 -> 65.
+    assert compile_and_exec(
+        "__bits_of_f32(__f64_to_f32(__i32_to_f64(8))) / 16777216"
+    ) == 65, "__i32_to_f64(8) is exact"
+    # __f64_to_i32 truncates: 1.5_f64 -> 1 (toward zero).
+    assert compile_and_exec("__f64_to_i32(1.5_f64)") == 1, \
+        "__f64_to_i32(1.5_f64) -> 1 (truncates toward zero)"
+    # 2.5_f64 -> 2 (truncates fractional, doesn't round to nearest).
+    assert compile_and_exec("__f64_to_i32(2.5_f64)") == 2, \
+        "__f64_to_i32(2.5_f64) -> 2 (truncates, not rounds)"
     # Phase 1.10 step 5+: bootstrap binary bitwise & | ^. Mirrors the
     # helixc-Python fix in commit f676fca; before this, the bootstrap
     # had no parse rule for these operators so source code couldn't use

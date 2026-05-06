@@ -827,6 +827,12 @@ fn is_f32_expr(idx: i32, bind_state: i32, bn_state: i32) -> i32 {
         let narrow_match = kovc_byte_eq(p1, p2, bn_f64_to_f32_s(bn_state), 12);
         if narrow_match == 1 { 1 }
         else {
+        // Step 7k: __f64_to_i32 starts with `__f`, length 12. Returns
+        // i32 (truncating cvttsd2si). Explicit byte_eq tags as 0
+        // (not-f32) BEFORE the __f* prefix match would wrongly return 1.
+        let narrow_i_match = kovc_byte_eq(p1, p2, bn_f64_to_i32_s(bn_state), 12);
+        if narrow_i_match == 1 { 0 }
+        else {
         // Then check the `__f*` builtin prefix (cheap), then fall
         // back to the fn_type_table lookup for user-named fns.
         let prefix_match = is_underscore_f_call(p1, p2);
@@ -835,6 +841,7 @@ fn is_f32_expr(idx: i32, bind_state: i32, bn_state: i32) -> i32 {
             let fts = bn_fn_type_state(bn_state);
             if fts == 0 { 0 }
             else { fn_type_table_lookup(fts, p1, p2) }
+        }
         }
         }
         }
@@ -884,6 +891,7 @@ fn is_f64_expr(idx: i32, bind_state: i32, bn_state: i32) -> i32 {
         // the installed name slot. Step 7h: __dsqrt also returns f64.
         // Step 7i: __dabs also returns f64.
         // Step 7j: __dmin / __dmax also return f64.
+        // Step 7k: __i32_to_f64 also returns f64.
         // All other AST_CALL → 0 (the parallel is_f32_expr handles f32
         // callers via __f* prefix and explicit byte_eq checks; f64
         // returners need explicit byte_eq here since they don't share
@@ -891,17 +899,21 @@ fn is_f64_expr(idx: i32, bind_state: i32, bn_state: i32) -> i32 {
         let widen_match = kovc_byte_eq(p1, p2, bn_f32_to_f64_s(bn_state), 12);
         if widen_match == 1 { 1 }
         else {
-            let dsqrt_match = kovc_byte_eq(p1, p2, bn_dsqrt_s(bn_state), 7);
-            if dsqrt_match == 1 { 1 }
+            let widen_i_match = kovc_byte_eq(p1, p2, bn_i32_to_f64_s(bn_state), 12);
+            if widen_i_match == 1 { 1 }
             else {
-                let dabs_match = kovc_byte_eq(p1, p2, bn_dabs_s(bn_state), 6);
-                if dabs_match == 1 { 1 }
+                let dsqrt_match = kovc_byte_eq(p1, p2, bn_dsqrt_s(bn_state), 7);
+                if dsqrt_match == 1 { 1 }
                 else {
-                    let dmin_match = kovc_byte_eq(p1, p2, bn_dmin_s(bn_state), 6);
-                    if dmin_match == 1 { 1 }
+                    let dabs_match = kovc_byte_eq(p1, p2, bn_dabs_s(bn_state), 6);
+                    if dabs_match == 1 { 1 }
                     else {
-                        let dmax_match = kovc_byte_eq(p1, p2, bn_dmax_s(bn_state), 6);
-                        if dmax_match == 1 { 1 } else { 0 }
+                        let dmin_match = kovc_byte_eq(p1, p2, bn_dmin_s(bn_state), 6);
+                        if dmin_match == 1 { 1 }
+                        else {
+                            let dmax_match = kovc_byte_eq(p1, p2, bn_dmax_s(bn_state), 6);
+                            if dmax_match == 1 { 1 } else { 0 }
+                        }
                     }
                 }
             }
@@ -1117,9 +1129,11 @@ fn install_builtin_names() -> i32 {
     // + 1 __dsqrt slot at 75 (Phase 1.10 step 7h)
     // + 1 __dabs slot at 76 (Phase 1.10 step 7i)
     // + 1 __dmin slot at 77 (Phase 1.10 step 7j)
-    // + 1 __dmax slot at 78 (Phase 1.10 step 7j).
+    // + 1 __dmax slot at 78 (Phase 1.10 step 7j)
+    // + 1 __i32_to_f64 slot at 79 (Phase 1.10 step 7k)
+    // + 1 __f64_to_i32 slot at 80 (Phase 1.10 step 7k).
     let mut i: i32 = 0;
-    while i < 74 {
+    while i < 76 {
         __arena_push(0);
         i = i + 1;
     }
@@ -1390,6 +1404,29 @@ fn install_builtin_names() -> i32 {
     __arena_push(109); __arena_push(97); __arena_push(120);
     __arena_set(bn_state + 78, s27);
 
+    // Phase 1.10 step 7k: "__i32_to_f64" (12 chars: 95 95 105 51 50
+    // 95 116 111 95 102 54 52). Single-arg widening i32 -> f64 via
+    // SSE2 cvtsi2sd. Mirrors __i32_to_f32 (step 5i) but on doubles.
+    // Starts with __i so doesn't match __f* prefix; is_f64_expr adds
+    // explicit byte_eq.
+    let s28 = __arena_push(95); __arena_push(95); __arena_push(105);
+    __arena_push(51); __arena_push(50); __arena_push(95);
+    __arena_push(116); __arena_push(111); __arena_push(95);
+    __arena_push(102); __arena_push(54); __arena_push(52);
+    __arena_set(bn_state + 79, s28);
+
+    // Phase 1.10 step 7k: "__f64_to_i32" (12 chars: 95 95 102 54 52
+    // 95 116 111 95 105 51 50). Single-arg truncating f64 -> i32 via
+    // SSE2 cvttsd2si. Mirrors __f32_to_i32 (step 5j) but on doubles.
+    // Starts with __f, length 12 — disambiguated by explicit byte_eq:
+    // returns 0 in is_f64_expr (it's i32, not f64) and is_f32_expr
+    // (returns 0 BEFORE the __f* prefix match). Result types as i32.
+    let s29 = __arena_push(95); __arena_push(95); __arena_push(102);
+    __arena_push(54); __arena_push(52); __arena_push(95);
+    __arena_push(116); __arena_push(111); __arena_push(95);
+    __arena_push(105); __arena_push(51); __arena_push(50);
+    __arena_set(bn_state + 80, s29);
+
     bn_state
 }
 
@@ -1438,6 +1475,8 @@ fn bn_dsqrt_s(b: i32) -> i32 { __arena_get(b + 75) }
 fn bn_dabs_s(b: i32) -> i32 { __arena_get(b + 76) }
 fn bn_dmin_s(b: i32) -> i32 { __arena_get(b + 77) }
 fn bn_dmax_s(b: i32) -> i32 { __arena_get(b + 78) }
+fn bn_i32_to_f64_s(b: i32) -> i32 { __arena_get(b + 79) }
+fn bn_f64_to_i32_s(b: i32) -> i32 { __arena_get(b + 80) }
 // str_state accessors. The state lives within the bn_state region.
 fn str_top(b: i32) -> i32 { __arena_get(b + 7) }
 fn str_top_set(b: i32, v: i32) -> i32 { __arena_set(b + 7, v); 0 }
@@ -2165,9 +2204,35 @@ fn try_emit_builtin_call(name_s: i32, name_l: i32, args_head: i32,
         emit_byte(0xF2); emit_byte(0x0F); emit_byte(0x5F); emit_byte(0xC1);                    // maxsd xmm0, xmm1
         emit_byte(0x66); emit_byte(0x48); emit_byte(0x0F); emit_byte(0x7E); emit_byte(0xC0);   // movq rax, xmm0
         n0 + np + n1 + 3 + 1 + 5 + 5 + 4 + 5
+    } else { if kovc_byte_eq(name_s, name_l, bn_i32_to_f64_s(bn_state), 12) == 1 {
+        // Phase 1.10 step 7k: __i32_to_f64(x) -> f64 bits in rax.
+        // Single-arg widening conversion via SSE2 cvtsi2sd. eval x ->
+        // eax (i32); cvtsi2sd xmm0, eax; movq rax, xmm0. 9 bytes after
+        // the arg evaluation. Result types as f64 via is_f64_expr's
+        // explicit __i32_to_f64 byte_eq case.
+        let a0 = __arena_get(args_head + 1);
+        let n0 = emit_ast_code(a0, bind_state, patch_state, bn_state);
+        emit_byte(0xF2); emit_byte(0x0F); emit_byte(0x2A); emit_byte(0xC0);                    // cvtsi2sd xmm0, eax
+        emit_byte(0x66); emit_byte(0x48); emit_byte(0x0F); emit_byte(0x7E); emit_byte(0xC0);   // movq rax, xmm0
+        n0 + 9
+    } else { if kovc_byte_eq(name_s, name_l, bn_f64_to_i32_s(bn_state), 12) == 1 {
+        // Phase 1.10 step 7k: __f64_to_i32(x) -> i32. Single-arg
+        // truncating conversion via SSE2 cvttsd2si. eval x -> rax
+        // (f64 bit pattern); movq xmm0, rax; cvttsd2si eax, xmm0.
+        // 9 bytes after the arg evaluation. Result is the truncated
+        // signed integer value (low 32 of rax). Note: cvttsd2si EAX,
+        // xmm uses no REX.W (32-bit dest); the high 32 of rax is
+        // implicitly zeroed by the 32-bit destination convention.
+        // Result types as i32 via is_f32_expr's explicit byte_eq
+        // (returns 0 BEFORE the __f* prefix match).
+        let a0 = __arena_get(args_head + 1);
+        let n0 = emit_ast_code(a0, bind_state, patch_state, bn_state);
+        emit_byte(0x66); emit_byte(0x48); emit_byte(0x0F); emit_byte(0x6E); emit_byte(0xC0);   // movq xmm0, rax
+        emit_byte(0xF2); emit_byte(0x0F); emit_byte(0x2C); emit_byte(0xC0);                    // cvttsd2si eax, xmm0
+        n0 + 9
     } else {
         0
-    }}}}}}}}}}}}}}}}}}}}}}}}}}}
+    }}}}}}}}}}}}}}}}}}}}}}}}}}}}}
 }
 
 // Unreachable in this commit; reference impl preserved for next
