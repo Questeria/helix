@@ -1447,6 +1447,30 @@ fn main() -> i32 {{
         "IF false branch with arithmetic"
     assert compile_and_exec("if 1 < 2 { 10 } else { 20 } + 5") == 15, \
         "IF expression value flows into surrounding ADD"
+    # Phase 1.10: `else if` chaining. Bootstrap parser used to require
+    # `else { if ... }` because it always ate a `{`/`}` pair after `else`.
+    # Now `else if` is recognised by peeking at the token after `else`
+    # and recursing into parse_expr_basic for the nested if-expr (which
+    # owns its own block boundaries).
+    assert compile_and_exec(
+        "if 5 < 2 { 1 } else if 3 < 4 { 2 } else { 3 }"
+    ) == 2, "else-if true branch"
+    assert compile_and_exec(
+        "if 5 < 2 { 1 } else if 7 < 4 { 2 } else { 3 }"
+    ) == 3, "else-if false, fall to terminal else"
+    assert compile_and_exec(
+        "if 1 < 2 { 1 } else if 3 < 4 { 2 } else { 3 }"
+    ) == 1, "first branch wins, else-if not visited"
+    assert compile_and_exec(
+        "let x = 7 ; if x < 0 { 10 } else if x < 5 { 20 } else if x < 10 { 30 } else { 40 }"
+    ) == 30, "three-way else-if chain"
+    # 8-bit-fitting composite to confirm chain correctness inside a fn:
+    # classify(0)=2, classify(5)=3, classify(99)=4 -> 2 + 3*5 + 4*8 = 49.
+    assert compile_and_exec(
+        "fn classify(n: i32) -> i32 { "
+        "if n < 0 { 1 } else if n == 0 { 2 } else if n < 10 { 3 } else { 4 } "
+        "} fn main() -> i32 { classify(0) + classify(5) * 5 + classify(99) * 8 }"
+    ) == 49, "else-if inside fn: 2 + 3*5 + 4*8"
     # AST_LET + AST_VAR (added in this commit)
     assert compile_and_exec("let x = 5 ; x") == 5, "let-bind + var ref"
     assert compile_and_exec("let x = 5 ; x * x") == 25, "var ref twice"

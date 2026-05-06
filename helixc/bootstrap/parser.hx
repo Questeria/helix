@@ -487,9 +487,30 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
                 let ats_l = tok_p3(tok_base, after_then_tok);
                 if byte_eq(ats_s, ats_l, kw_else_s(sb), kw_else_n(sb)) == 1 {
                     cur_advance(sb);     // 'else'
-                    cur_advance(sb);     // '{'
-                    else_e = parse_expr(tok_base, sb);
-                    cur_advance(sb);     // '}'
+                    // `else if` chaining: peek the next token. If it
+                    // is the keyword `if`, parse a nested if-expr as
+                    // the else branch directly — the recursive call
+                    // owns its own `{ ... }` boundaries, so we must
+                    // NOT eat a `{`/`}` pair here. Mirrors the
+                    // helixc-Python desugaring of `else if` to
+                    // `else { if ... }` without the surplus block.
+                    let elif_tok = cur_get(sb);
+                    let elif_tag = tok_tag(tok_base, elif_tok);
+                    let mut is_elif: i32 = 0;
+                    if elif_tag == 2 {
+                        let elif_s = tok_p2(tok_base, elif_tok);
+                        let elif_l = tok_p3(tok_base, elif_tok);
+                        if byte_eq(elif_s, elif_l, kw_if_s(sb), kw_if_n(sb)) == 1 {
+                            is_elif = 1;
+                        };
+                    };
+                    if is_elif == 1 {
+                        else_e = parse_expr_basic(tok_base, sb);
+                    } else {
+                        cur_advance(sb);     // '{'
+                        else_e = parse_expr(tok_base, sb);
+                        cur_advance(sb);     // '}'
+                    };
                 } else {
                     else_e = mk_node(0, 0, 0, 0);   // AST_INT(0)
                 };
