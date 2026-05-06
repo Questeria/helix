@@ -1848,6 +1848,18 @@ fn main() -> i32 {{
     # result (round number). Sanity check that mulsd path doesn't crash.
     assert compile_and_exec("__bits_of_f32(0.5_f64 * 1.5_f64) / 16777216") == 0, \
         "f64 multiplication of round numbers (low32 = 0)"
+    # Phase 1.10 step 7e: f32<->f64 conversion builtins (cvtss2sd /
+    # cvtsd2ss). Round-trip: 1.5_f32 -> f64 -> f32 must equal 1.5_f32
+    # bit-for-bit (1.5 is exactly representable in both widths).
+    # 1.5_f32 = 0x3FC00000 -> top byte 0x3F = 63.
+    assert compile_and_exec(
+        "__bits_of_f32(__f64_to_f32(__f32_to_f64(1.5_f32))) / 16777216"
+    ) == 63, "f32->f64->f32 round-trip preserves bit pattern"
+    # Truncating conversion: f64 0.5 widened from f32 0.5 (no precision
+    # loss). Then __f64_to_f32 narrows back. 0.5_f32 = 0x3F000000 -> 63.
+    assert compile_and_exec(
+        "__bits_of_f32(__f64_to_f32(__f32_to_f64(0.5_f32))) / 16777216"
+    ) == 63, "f32->f64->f32 round-trip for 0.5"
     # Phase 1.10 step 5+: bootstrap binary bitwise & | ^. Mirrors the
     # helixc-Python fix in commit f676fca; before this, the bootstrap
     # had no parse rule for these operators so source code couldn't use
