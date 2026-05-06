@@ -1834,6 +1834,20 @@ fn main() -> i32 {{
         "f64 low32 of 0.5 is zero (type-mismatch read; doc-only invariant)"
     # 0.5_f32 = 0x3F000000 -> top byte 63 (proper same-width call).
     assert compile_and_exec("__bits_of_f32(0.5_f32) / 16777216") == 63, "float with _f32 suffix"
+    # Phase 1.10 step 7d: SSE2 double-precision arithmetic dispatch.
+    # 1.0_f64 / 3.0_f64 = 0x3FD5555555555555 (recurring 0x5 mantissa).
+    # low 32 bits = 0x55555555 = 1431655765. /16777216 = 85 (truncated).
+    # If divsd dispatch broke and the divss (f32) path took over, low 32
+    # of the f64 operands are 0 → 0/0 = NaN; if i32 path took over, idiv
+    # on the rax bits would give an unrelated number. 85 is the unique
+    # signature of correct f64 dispatch.
+    assert compile_and_exec("__bits_of_f32(1.0_f64 / 3.0_f64) / 16777216") == 85, \
+        "f64 division (1/3) low32 = 0x55555555 → divsd dispatch correct"
+    # f64 multiplication: 0.5_f64 * 1.5_f64 = 0.75_f64 = 0x3FE8000000000000.
+    # low 32 = 0x00000000 → 0. Confirms multiplication produces 0-low-32
+    # result (round number). Sanity check that mulsd path doesn't crash.
+    assert compile_and_exec("__bits_of_f32(0.5_f64 * 1.5_f64) / 16777216") == 0, \
+        "f64 multiplication of round numbers (low32 = 0)"
     # Phase 1.10 step 5+: bootstrap binary bitwise & | ^. Mirrors the
     # helixc-Python fix in commit f676fca; before this, the bootstrap
     # had no parse rule for these operators so source code couldn't use
