@@ -794,6 +794,8 @@ class Lowerer:
                 "&": tir.OpKind.BIT_AND,
                 "|": tir.OpKind.BIT_OR,
                 "^": tir.OpKind.BIT_XOR,
+                "<<": tir.OpKind.SHL,
+                ">>": tir.OpKind.SHR,
             }
             if expr.op in arith:
                 return self.builder.emit(arith[expr.op], l, r, result_ty=l.ty)

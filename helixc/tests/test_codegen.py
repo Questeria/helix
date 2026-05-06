@@ -102,6 +102,24 @@ def test_exit_bitwise_xor():
     assert compile_and_run("fn main() -> i32 { 52 ^ 30 }") == 42
 
 
+def test_exit_shl():
+    # 21 << 1 = 42.
+    assert compile_and_run("fn main() -> i32 { 21 << 1 }") == 42
+    # 1 << 5 = 32; 32 + 10 = 42.
+    assert compile_and_run("fn main() -> i32 { (1 << 5) + 10 }") == 42
+
+
+def test_exit_shr_arithmetic():
+    # 84 >> 1 = 42.
+    assert compile_and_run("fn main() -> i32 { 84 >> 1 }") == 42
+    # SAR preserves the sign bit. To distinguish arith vs logical from
+    # the exit-code low byte we need k>=24 so the top-fill bit lands in
+    # bit 7 of the result. -1 >> 25:
+    #   arith:   0xFFFFFFFF (sign-fill keeps all ones) -> low byte 0xFF = 255
+    #   logical: 0x0000007F                            -> low byte 0x7F = 127
+    assert compile_and_run("fn main() -> i32 { (0 - 1) >> 25 }") == 255
+
+
 def test_let_binding_then_use():
     src = "fn main() -> i32 { let x = 40; let y = 2; x + y }"
     assert compile_and_run(src) == 42

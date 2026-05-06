@@ -150,6 +150,11 @@ class OpKind(Enum):
     BIT_AND = "elem.bit_and"
     BIT_OR = "elem.bit_or"
     BIT_XOR = "elem.bit_xor"
+    # Shifts. SHL is logical left shift; SHR is arithmetic right shift
+    # (preserves sign — matches Rust's `>>` on signed types). Helix has
+    # no unsigned int type yet, so logical right shift is unreachable.
+    SHL = "elem.shl"
+    SHR = "elem.shr"
 
     # Elementwise (unary)
     NEG = "elem.neg"

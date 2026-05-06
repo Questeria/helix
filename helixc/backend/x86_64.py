@@ -750,6 +750,14 @@ class Asm:
     def and_rax_rcx(self) -> None:  self.b.emit(0x48, 0x21, 0xC8)
     def or_rax_rcx(self) -> None:   self.b.emit(0x48, 0x09, 0xC8)
     def xor_rax_rcx(self) -> None:  self.b.emit(0x48, 0x31, 0xC8)
+    # Shifts. x86 shift instructions take the shift count in CL (low byte
+    # of ECX). Caller must mov_ecx_mem_rbp(r_slot) before invoking.
+    # SAR (arithmetic right shift) preserves the sign bit; SHR (logical)
+    # zero-fills. Helix's `>>` is signed -> SAR.
+    def shl_eax_cl(self) -> None:  self.b.emit(0xD3, 0xE0)
+    def sar_eax_cl(self) -> None:  self.b.emit(0xD3, 0xF8)
+    def shl_rax_cl(self) -> None:  self.b.emit(0x48, 0xD3, 0xE0)
+    def sar_rax_cl(self) -> None:  self.b.emit(0x48, 0xD3, 0xF8)
 
     def movzx_eax_al(self) -> None:
         # 0F B6 C0   movzx eax, al
@@ -1295,6 +1303,36 @@ class FnCompiler:
                 self.asm.mov_eax_mem_rbp(l_slot)
                 self.asm.mov_ecx_mem_rbp(r_slot)
                 self.asm.xor_eax_ecx()
+                self.asm.mov_mem_rbp_eax(res_slot)
+            return
+        if op.kind == tir.OpKind.SHL:
+            l_slot = self._slot_of(op.operands[0])
+            r_slot = self._slot_of(op.operands[1])
+            res_slot = self._slot_of(op.results[0])
+            if self._is_i64_type(op.results[0].ty):
+                self.asm.mov_rax_mem_rbp(l_slot)
+                self.asm.mov_rcx_mem_rbp(r_slot)
+                self.asm.shl_rax_cl()
+                self.asm.mov_mem_rbp_rax(res_slot)
+            else:
+                self.asm.mov_eax_mem_rbp(l_slot)
+                self.asm.mov_ecx_mem_rbp(r_slot)
+                self.asm.shl_eax_cl()
+                self.asm.mov_mem_rbp_eax(res_slot)
+            return
+        if op.kind == tir.OpKind.SHR:
+            l_slot = self._slot_of(op.operands[0])
+            r_slot = self._slot_of(op.operands[1])
+            res_slot = self._slot_of(op.results[0])
+            if self._is_i64_type(op.results[0].ty):
+                self.asm.mov_rax_mem_rbp(l_slot)
+                self.asm.mov_rcx_mem_rbp(r_slot)
+                self.asm.sar_rax_cl()
+                self.asm.mov_mem_rbp_rax(res_slot)
+            else:
+                self.asm.mov_eax_mem_rbp(l_slot)
+                self.asm.mov_ecx_mem_rbp(r_slot)
+                self.asm.sar_eax_cl()
                 self.asm.mov_mem_rbp_eax(res_slot)
             return
         if op.kind == tir.OpKind.NEG:
