@@ -23,11 +23,18 @@
 @pure fn goal_id() -> i32 { grid_total() - 1 }
 @pure fn n_actions() -> i32 { 4 }
 @pure fn n_episodes() -> i32 { 50 }
-@pure fn max_steps_per_ep() -> i32 { 150 }
+@pure fn max_steps_per_ep() -> i32 { 200 }
 @pure fn n_obstacles() -> i32 { 14 }
 // Minimum epsilon — never drops below this so agent always keeps some
 // exploration. Prevents getting stuck in a suboptimal corner of policy.
 @pure fn epsilon_floor() -> i32 { 15 }
+// Discovery-phase budget: max steps of pure random exploration before
+// regular training. Guarantees the agent SEES the goal at least once.
+// Sized for 20x20 grid worst-case: random walk hits goal in O(n^2) steps.
+@pure fn discovery_budget() -> i32 { 200000 }
+// Discovery restart interval: teleport agent back to start every N steps
+// to avoid wandering into corners.
+@pure fn discovery_restart_every() -> i32 { 500 }
 
 // Q-values are scaled by 100 throughout (so 1.0 -> 100, 0.5 -> 50).
 @pure fn alpha_pct() -> i32 { 30 }
@@ -372,6 +379,51 @@ fn main() -> i32 {
     let q = q_new();
     let goal = goal_id();
     let seed_cell = __arena_push(map_seed() * 7919 + 31);
+    // ============================================================
+    // DISCOVERY PHASE: pure random exploration until goal is reached.
+    // This GUARANTEES that the agent will see the goal at least once
+    // before regular training. Without this, on hard maps the Q-table
+    // has no signal at all and the agent never finds the goal.
+    // After hitting goal, we update the Q-table with the trajectory's
+    // discounted reward, seeding the value function nicely.
+    // ============================================================
+    let mut disc_step: i32 = 0;
+    let mut disc_pos: i32 = 0;
+    let mut disc_found: i32 = 0;
+    let mut steps_since_restart: i32 = 0;
+    while disc_found == 0 {
+        if disc_step >= discovery_budget() {
+            // Budget exhausted without reaching goal — surrender to
+            // training phase; main loop will keep trying with high ε.
+            disc_found = 1;
+        }
+        else {
+            // Periodic teleport back to start to escape corners.
+            if steps_since_restart >= discovery_restart_every() {
+                disc_pos = 0;
+                steps_since_restart = 0;
+            }
+            let s = __arena_get(seed_cell);
+            let s2 = lcg(s);
+            __arena_set(seed_cell, s2);
+            let action = ((s2 % n_actions()) + n_actions()) % n_actions();
+            let next_pos = wmt_predict(wmt, disc_pos, action);
+            let bumped = if next_pos == disc_pos { 1 } else { 0 };
+            let d_old = dist_to_goal(disc_pos);
+            let d_new = dist_to_goal(next_pos);
+            let shaped = (d_old - d_new) * 10 - 1;
+            let reward = if next_pos == goal { 1000 }
+                         else { if bumped == 1 { 0 - 50 } else { shaped } };
+            q_update(q, disc_pos, action, reward, next_pos);
+            disc_pos = next_pos;
+            disc_step = disc_step + 1;
+            steps_since_restart = steps_since_restart + 1;
+            if next_pos == goal {
+                disc_found = 1;
+                disc_pos = 0;
+            }
+        }
+    }
     let mut ep: i32 = 0;
     let mut best_steps: i32 = 9999;
     let mut last_failed: i32 = 0;

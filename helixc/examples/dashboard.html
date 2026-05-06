@@ -42,8 +42,6 @@
   }
   #grid {
     display: grid;
-    grid-template-columns: repeat(10, 40px);
-    grid-template-rows: repeat(10, 40px);
     gap: 2px;
     background: #0d0d0d;
     padding: 4px;
@@ -279,7 +277,7 @@
 </div>
 
 <script>
-const N = 10;
+let N = 10;  // dynamic — set from init JSON grid_n
 const ACTION_NAMES = { 0: 'UP', 1: 'DOWN', 2: 'LEFT', 3: 'RIGHT', '-1': 'init' };
 let allEvents = [];
 let timer = null;
@@ -311,10 +309,15 @@ let currentObstacles = [];
 let currentGoal = 99;
 let optimalPath = new Set();
 
-function buildGrid(obstacles, goal) {
+function buildGrid(obstacles, goal, gridN) {
+  if (gridN) N = gridN;
+  // Compute cell size: 400px / N gives 40px for 10x10, 26px for 15x15, 20px for 20x20.
+  const cellSize = Math.max(18, Math.min(40, Math.floor(400 / N)));
+  const grid = document.getElementById('grid');
+  grid.style.gridTemplateColumns = 'repeat(' + N + ', ' + cellSize + 'px)';
+  grid.style.gridTemplateRows = 'repeat(' + N + ', ' + cellSize + 'px)';
   currentObstacles = obstacles || [];
   currentGoal = goal;
-  const grid = document.getElementById('grid');
   grid.innerHTML = '';
   for (let i = 0; i < N * N; i++) {
     const cell = document.createElement('div');
@@ -518,10 +521,10 @@ function drawHeatmap(qmax) {
 
 function applyEvent(ev) {
   if (ev.type === 'init') {
-    buildGrid(ev.obstacles, ev.goal);
+    buildGrid(ev.obstacles, ev.goal, ev.grid_n);
     if (ev.seed !== undefined) {
       document.getElementById('status').className = 'status running';
-      document.getElementById('status').textContent = 'Map seed: ' + ev.seed + ' — running ' + (ev.n_episodes || '') + ' episodes';
+      document.getElementById('status').textContent = 'Map seed: ' + ev.seed + ' (' + (ev.grid_n||10) + 'x' + (ev.grid_n||10) + ') — running ' + (ev.n_episodes || '') + ' episodes';
     }
     return;
   }
@@ -886,8 +889,8 @@ function resetAll() {
   document.getElementById('status').textContent = 'Press Run to start';
   drawChart();
   drawEpisodeChart();
-  // Initialize empty grid
-  buildGrid([12,13,14,25,35,45,47,48,56,67,78,88], 99);
+  // Initialize empty grid (10x10 default, will be resized when init arrives)
+  buildGrid([12,13,14,25,35,45,47,48,56,67,78,88], 99, 10);
 }
 
 resetAll();
