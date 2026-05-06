@@ -175,6 +175,81 @@ fn nn_alloc_weights(seed_cell: i32) -> i32 {
 @pure fn b1_off(weights: i32) -> i32 { weights + 3200 }
 @pure fn w2_off(weights: i32) -> i32 { weights + 3232 }
 @pure fn b2_off(weights: i32) -> i32 { weights + 3360 }
+// Total weight slots: W1(3200) + b1(32) + W2(128) + b2(4) = 3364.
+@pure fn weights_total() -> i32 { 3364 }
+
+// ---- Target network (DQN stability) ----
+// Allocate a zero-initialized weight buffer with the same layout as the main
+// network. Used as Q_target for computing TD targets, periodically synced
+// from the main network. Decouples target from current policy -> stable
+// gradient signal even with bootstrapped targets.
+fn nn_alloc_target() -> i32 {
+    let start = __arena_len();
+    let mut i: i32 = 0;
+    while i < weights_total() {
+        __arena_push(__bits_of_f32(0.0_f32));
+        i = i + 1;
+    }
+    start
+}
+
+// Copy main network weights into target network.
+fn nn_copy_weights(src: i32, dst: i32) -> i32 {
+    let mut i: i32 = 0;
+    while i < weights_total() {
+        __arena_set(dst + i, __arena_get(src + i));
+        i = i + 1;
+    }
+    0
+}
+
+// ---- Adam optimizer state ----
+// Per-weight first-moment (m) and second-moment (v) running averages, plus
+// global step counter t. Allocated as one contiguous block per main-net.
+//
+// Layout immediately after weights:
+//   weights+0     .. +3363  : main weights
+//   weights+3364  .. +6727  : Adam m (zero-init)
+//   weights+6728  .. +10091 : Adam v (zero-init)
+//   weights+10092           : Adam t (i32 step counter, zero-init)
+//
+// We extend nn_alloc_weights externally by pushing 3364+3364+1 zeros after
+// it returns. This keeps the Adam state addressable as fixed offsets from
+// `weights`, so nn_adam_train_step doesn't need extra parameters (SysV's
+// 6-int-arg limit forced this design).
+fn nn_alloc_adam_after(weights: i32) -> i32 {
+    let mut i: i32 = 0;
+    while i < weights_total() {
+        __arena_push(__bits_of_f32(0.0_f32));   // m
+        i = i + 1;
+    }
+    let mut j: i32 = 0;
+    while j < weights_total() {
+        __arena_push(__bits_of_f32(0.0_f32));   // v
+        j = j + 1;
+    }
+    __arena_push(0);   // t
+    weights
+}
+
+@pure fn adam_m_off(w: i32) -> i32 { w + 3364 }
+@pure fn adam_v_off(w: i32) -> i32 { w + 3364 + 3364 }
+@pure fn adam_t_off(w: i32) -> i32 { w + 3364 + 3364 + 3364 }
+
+// Newton-Raphson f32 sqrt. 6 iterations from a coarse linear seed gives
+// ~7 bits of mantissa accuracy, plenty for Adam's epsilon-stabilized
+// denominator. Helix has no built-in sqrtss yet (Phase 2.2 backlog).
+fn sqrt_f32(x: f32) -> f32 {
+    if x <= 0.0_f32 { 0.0_f32 } else {
+        let mut g: f32 = x * 0.5_f32 + 0.5_f32;
+        let mut i: i32 = 0;
+        while i < 6 {
+            g = (g + x / g) * 0.5_f32;
+            i = i + 1;
+        }
+        g
+    }
+}
 
 // Forward: q[a] = (W2 @ ReLU(W1 @ x + b1) + b2)[a]
 // x is the one-hot state vector of length 100. Since x has only ONE nonzero
@@ -288,6 +363,104 @@ fn nn_train_step(weights: i32, state: i32, action: i32, target: f32,
         let b1_off_k = b1_off(weights) + k;
         let old_b1 = __f32_from_bits(__arena_get(b1_off_k));
         __arena_set(b1_off_k, __bits_of_f32(old_b1 - lr * dL_dpre));
+        k = k + 1;
+    }
+    0
+}
+
+// =====================================================================
+// Adam optimizer training step (drop-in replacement for nn_train_step)
+// =====================================================================
+// Same gradient derivation as nn_train_step (TD loss, ReLU MLP, 1-hot
+// state input -> only column `state` of W1 has nonzero gradient).
+// But instead of SGD `w -= lr * g`, applies Adam:
+//   m_t = b1*m + (1-b1)*g
+//   v_t = b2*v + (1-b2)*g^2
+//   m_hat = m_t / (1 - b1^t)
+//   v_hat = v_t / (1 - b2^t)
+//   w -= lr * m_hat / (sqrt(v_hat) + eps)
+//
+// Hyperparams: b1=0.9, b2=0.999, eps=1e-7, lr passed by caller.
+// SysV ABI: same 6 int + 2 f32 args as nn_train_step. m/v/t buffers
+// live at fixed offsets after `weights`, allocated by nn_alloc_adam_after.
+fn adam_update_one(w: i32, m_off: i32, v_off: i32, g: f32,
+                   b1_corr: f32, b2_corr: f32, lr: f32) -> i32 {
+    let b1 = 0.9_f32;
+    let b2 = 0.999_f32;
+    let eps = 0.0000001_f32;
+    let m_old = __f32_from_bits(__arena_get(m_off));
+    let v_old = __f32_from_bits(__arena_get(v_off));
+    let m_new = b1 * m_old + (1.0_f32 - b1) * g;
+    let v_new = b2 * v_old + (1.0_f32 - b2) * g * g;
+    __arena_set(m_off, __bits_of_f32(m_new));
+    __arena_set(v_off, __bits_of_f32(v_new));
+    let m_hat = m_new / b1_corr;
+    let v_hat = v_new / b2_corr;
+    let denom = sqrt_f32(v_hat) + eps;
+    let w_old = __f32_from_bits(__arena_get(w));
+    __arena_set(w, __bits_of_f32(w_old - lr * m_hat / denom));
+    0
+}
+
+fn nn_adam_train_step(weights: i32, state: i32, action: i32, target: f32,
+                      hidden_pre: i32, hidden_buf: i32, q_buf: i32, lr: f32) -> i32 {
+    let n = grid_n() * grid_n();
+    let h = hidden();
+    let q_a = __f32_from_bits(__arena_get(q_buf + action));
+    let dL_dqa = q_a - target;
+    // Step counter increments every call. Bias-correction factors computed
+    // incrementally to avoid per-call powi:
+    //   b1_corr_new = b1_corr_old * b1 + (1 - b1)  ==>  1 - b1^t
+    let b1 = 0.9_f32;
+    let b2 = 0.999_f32;
+    let t_old = __arena_get(adam_t_off(weights));
+    let t_new = t_old + 1;
+    __arena_set(adam_t_off(weights), t_new);
+    // Compute bias correction (1 - b1^t) and (1 - b2^t). After t>100 the
+    // exponentials saturate (~2.6e-5 and ~0.9, so corrections ~1.0 and
+    // ~0.1) — bound the loop to keep this O(1) in the inner training loop.
+    let cap_iter = if t_new > 100 { 100 } else { t_new };
+    let mut b1_pow_t: f32 = 1.0_f32;
+    let mut b2_pow_t: f32 = 1.0_f32;
+    let mut tt: i32 = 0;
+    while tt < cap_iter {
+        b1_pow_t = b1_pow_t * b1;
+        b2_pow_t = b2_pow_t * b2;
+        tt = tt + 1;
+    }
+    let b1_corr = 1.0_f32 - b1_pow_t;
+    let b2_corr = 1.0_f32 - b2_pow_t;
+    let m_base = adam_m_off(weights);
+    let v_base = adam_v_off(weights);
+    // Update W2[action, *] and b2[action].
+    let mut i: i32 = 0;
+    while i < h {
+        let h_i = __f32_from_bits(__arena_get(hidden_buf + i));
+        let grad_w2 = dL_dqa * h_i;
+        let off = w2_off(weights) + action * h + i;
+        // m and v live at the same relative offset within the adam block.
+        adam_update_one(off, m_base + (off - weights), v_base + (off - weights),
+                        grad_w2, b1_corr, b2_corr, lr);
+        i = i + 1;
+    }
+    let b2_off_a = b2_off(weights) + action;
+    adam_update_one(b2_off_a, m_base + (b2_off_a - weights), v_base + (b2_off_a - weights),
+                    dL_dqa, b1_corr, b2_corr, lr);
+    // W1 column `state` and b1.
+    let mut k: i32 = 0;
+    while k < h {
+        let pre = __f32_from_bits(__arena_get(hidden_pre + k));
+        let relu_grad = if pre > 0.0_f32 { 1.0_f32 } else { 0.0_f32 };
+        let w2_ak = __f32_from_bits(__arena_get(w2_off(weights) + action * h + k));
+        let dL_dpre = dL_dqa * w2_ak * relu_grad;
+        let w1_off_ks = w1_off(weights) + k * n + state;
+        adam_update_one(w1_off_ks,
+                        m_base + (w1_off_ks - weights), v_base + (w1_off_ks - weights),
+                        dL_dpre, b1_corr, b2_corr, lr);
+        let b1_off_k = b1_off(weights) + k;
+        adam_update_one(b1_off_k,
+                        m_base + (b1_off_k - weights), v_base + (b1_off_k - weights),
+                        dL_dpre, b1_corr, b2_corr, lr);
         k = k + 1;
     }
     0
@@ -409,6 +582,14 @@ fn main() -> i32 {
     let na = n_actions();
     let seed_cell = __arena_push(map_seed() * 7919 + 31);
     let weights = nn_alloc_weights(seed_cell);
+    // Adam optimizer state allocated immediately after weights so its m/v/t
+    // buffers are at fixed offsets from `weights` (see adam_*_off helpers).
+    nn_alloc_adam_after(weights);
+    // Target network: zero-init then sync from main weights.
+    let target_weights = nn_alloc_target();
+    nn_copy_weights(weights, target_weights);
+    // Counter for periodic target<-main sync. Synced every 100 train steps.
+    let target_sync_cell = __arena_push(0);
     let replay = replay_new();
     // DISCOVERY: pure random walk to populate replay with goal-reaching
     // transitions. Without this the NN almost never learns the reward
@@ -489,18 +670,22 @@ fn main() -> i32 {
                 let shaped = (d_old - d_new) * 10 - 1;
                 let reward = if next_pos == goal { 1000 }
                              else { if bumped == 1 { 0 - 50 } else { shaped } };
-                // Compute target = reward/100.0 + 0.9 * max_a' Q(s', a').
+                // Compute target = reward/100.0 + 0.9 * max_a' Q_target(s', a').
+                // Target network gives a stable bootstrap value (avoids
+                // chasing-own-tail divergence common in DQN with naive SGD).
                 let r_f = (reward as f32) / 100.0_f32;
                 let target = if next_pos == goal {
                     r_f
                 } else {
-                    nn_forward(weights, next_pos, hidden_pre_next, hidden_buf_next, q_next_buf);
+                    nn_forward(target_weights, next_pos, hidden_pre_next, hidden_buf_next, q_next_buf);
                     let max_next = max_q(q_next_buf, na);
                     r_f + 0.9_f32 * max_next
                 };
-                // Train on the current transition (higher lr).
-                nn_train_step(weights, pos, action, target,
-                              hidden_pre, hidden_buf, q_buf, 0.2_f32);
+                // Adam train step on current transition. Smaller lr than
+                // SGD's 0.2 because Adam's adaptive scaling already amplifies
+                // sparse-but-significant gradients.
+                nn_adam_train_step(weights, pos, action, target,
+                                   hidden_pre, hidden_buf, q_buf, 0.01_f32);
                 // Store transition in replay buffer.
                 let done_flag = if next_pos == goal { 1 } else { 0 };
                 replay_store(replay, pos, action, reward * 100, next_pos, done_flag);
@@ -520,18 +705,27 @@ fn main() -> i32 {
                         let r_r = (replay_get_r(replay, r_idx) as f32) / 100.0_f32 / 100.0_f32;
                         let r_sp = replay_get_sp(replay, r_idx);
                         let r_done = replay_get_done(replay, r_idx);
-                        // Forward at r_s, get q_replay_buf.
+                        // Forward at r_s using LIVE weights (we update these).
                         nn_forward(weights, r_s, h_pre_r, h_buf_r, q_replay_buf);
                         let r_target = if r_done == 1 {
                             r_r
                         } else {
-                            nn_forward(weights, r_sp, hidden_pre_next, hidden_buf_next, q_replay_next);
+                            // TD target uses TARGET network for stability.
+                            nn_forward(target_weights, r_sp, hidden_pre_next, hidden_buf_next, q_replay_next);
                             r_r + 0.9_f32 * max_q(q_replay_next, na)
                         };
-                        nn_train_step(weights, r_s, r_a, r_target,
-                                      h_pre_r, h_buf_r, q_replay_buf, 0.1_f32);
+                        nn_adam_train_step(weights, r_s, r_a, r_target,
+                                           h_pre_r, h_buf_r, q_replay_buf, 0.005_f32);
                         mb_i = mb_i + 1;
                     }
+                }
+                // Periodic target<-main sync (every 100 env steps).
+                let cur_sync = __arena_get(target_sync_cell);
+                if cur_sync >= 100 {
+                    nn_copy_weights(weights, target_weights);
+                    __arena_set(target_sync_cell, 0);
+                } else {
+                    __arena_set(target_sync_cell, cur_sync + 1);
                 }
                 total_reward = total_reward + reward;
                 pos = next_pos;
