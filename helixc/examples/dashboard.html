@@ -185,7 +185,8 @@
       <label>Agent:</label>
       <select id="agentKind" style="background:#2a2a2a;color:#e0e0e0;border:1px solid #555;padding:4px 8px;border-radius:4px">
         <option value="hillclimb">Hill-climbing (deterministic, no learning)</option>
-        <option value="qlearn" selected>Q-learning (improves across episodes)</option>
+        <option value="qlearn" selected>Q-learning (tabular, fast)</option>
+        <option value="nn">Neural network (32-hidden + ReLU + SGD, slower)</option>
       </select>
     </div>
     <div class="controls">
@@ -201,8 +202,9 @@
     </div>
     <div class="controls">
       <label>Max events to play:</label>
-      <input type="range" id="iterRange" min="100" max="20000" step="100" value="20000" oninput="document.getElementById('iterVal').textContent = this.value" />
+      <input type="range" id="iterRange" min="100" max="20000" step="100" value="20000" oninput="document.getElementById('iterVal').textContent = this.checked ? '∞' : this.value" />
       <span id="iterVal">20000</span>
+      <label style="margin-left:8px"><input type="checkbox" id="unlimitedEvents" checked onchange="document.getElementById('iterVal').textContent = this.checked ? '∞ (unlimited)' : document.getElementById('iterRange').value"/> ∞ unlimited</label>
     </div>
     <div class="controls">
       <label>Speed:</label>
@@ -541,8 +543,9 @@ async function runAgent() {
   allEvents = text.trim().split('\n').filter(l => l.length > 0).map(l => {
     try { return JSON.parse(l); } catch (e) { return null; }
   }).filter(e => e !== null);
-  // Cap event count if user set a smaller value (default = full run).
-  if (iter > 0 && allEvents.length > iter) {
+  // Cap event count unless ∞ unlimited is checked.
+  const unlimited = document.getElementById('unlimitedEvents').checked;
+  if (!unlimited && iter > 0 && allEvents.length > iter) {
     allEvents = allEvents.slice(0, iter);
   }
   cursor = 0;

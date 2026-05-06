@@ -32,6 +32,7 @@ EXAMPLES = os.path.join(PROJ, "helixc", "examples")
 AGENTS = {
     "hillclimb": ("dashboard_agent.hx", "_dashboard.bin"),
     "qlearn":    ("dashboard_qlearn.hx", "_qlearn.bin"),
+    "nn":        ("dashboard_nn_agent.hx", "_nn.bin"),
 }
 
 
@@ -46,7 +47,7 @@ def compile_helix(kind, seed=None):
     hx, bin_name = AGENTS[kind]
     src_path = os.path.join(EXAMPLES, hx)
     compile_path = src_path
-    if seed is not None and kind == "qlearn":
+    if seed is not None and kind in ("qlearn", "nn"):
         # Read the qlearn source, substitute the seed, write a tmp file.
         with open(src_path, "r", encoding="utf-8") as f:
             src = f.read()
@@ -54,7 +55,7 @@ def compile_helix(kind, seed=None):
             "@pure fn map_seed() -> i32 { 12345 }",
             f"@pure fn map_seed() -> i32 {{ {int(seed)} }}",
         )
-        compile_path = os.path.join(EXAMPLES, "_qlearn_compiled.hx")
+        compile_path = os.path.join(EXAMPLES, f"_{kind}_compiled.hx")
         with open(compile_path, "w", encoding="utf-8") as f:
             f.write(new_src)
     rel = os.path.relpath(compile_path, PROJ).replace("\\", "/")
