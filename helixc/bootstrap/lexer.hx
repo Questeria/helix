@@ -28,6 +28,9 @@
 //  18  TK_BANG      "!"
 //  23  TK_TILDE     "~"
 //  25  TK_STRLIT    payload = body byte_start, src_len = body length
+//  27  TK_AMP       "&"   (binary bitwise AND; bootstrap has no refs)
+//  28  TK_PIPE      "|"   (binary bitwise OR)
+//  29  TK_CARET     "^"   (binary bitwise XOR)
 //                  (BOTH exclude the surrounding quotes). Phase-0 has
 //                  no escape sequences — `\` inside a string is taken
 //                  literally. Multi-line strings allowed.
@@ -356,7 +359,10 @@ fn punct_kind(b: i32) -> i32 {
     else { if b == 126 { 23 }     // '~' (bitwise NOT — see parse_unary)
     else { if b == 64 { 24 }      // '@' (used by @pure / @effect attrs;
                                   // parser skips them as no-ops)
-    else { 0 }}}}}}}}}}}}}}}}}}
+    else { if b == 38 { 27 }      // '&' (TK_AMP — binary bitwise AND)
+    else { if b == 124 { 28 }     // '|' (TK_PIPE — binary bitwise OR)
+    else { if b == 94 { 29 }      // '^' (TK_CARET — binary bitwise XOR)
+    else { 0 }}}}}}}}}}}}}}}}}}}}}
 }
 
 // --------------------------------------------------------------

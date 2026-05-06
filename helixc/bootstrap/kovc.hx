@@ -196,6 +196,18 @@ fn emit_ast_bnot_suffix() -> i32 {
     2
 }
 
+// AST_NOT(inner): emit inner code, then logical NOT via:
+//   85 C0              test eax, eax
+//   B8 00 00 00 00     mov eax, 0    (zero the high bytes before sete)
+//   0F 94 C0           sete al        (al = 1 if ZF set, else 0)
+// 10 bytes total. Mirrors helixc-Python `!x` -> CMP_EQ(inner, 0).
+fn emit_ast_not_suffix() -> i32 {
+    emit_byte(0x85); emit_byte(0xC0);
+    emit_byte(0xB8); emit_byte(0); emit_byte(0); emit_byte(0); emit_byte(0);
+    emit_byte(0x0F); emit_byte(0x94); emit_byte(0xC0);
+    10
+}
+
 // AST_ADD-style binary op suffix. The protocol is:
 //   1. Emit lhs code (leaves lhs in eax)
 //   2. push rax                                  (50)
@@ -209,6 +221,11 @@ fn emit_mov_ecx_eax() -> i32 { emit_byte(0x89); emit_byte(0xC1); 2 }
 fn emit_add_eax_ecx() -> i32 { emit_byte(0x01); emit_byte(0xC8); 2 }
 fn emit_sub_eax_ecx() -> i32 { emit_byte(0x29); emit_byte(0xC8); 2 }
 fn emit_imul_eax_ecx() -> i32 { emit_byte(0x0F); emit_byte(0xAF); emit_byte(0xC1); 3 }
+// Phase 1.10 step 5+: binary bitwise ops mirroring helixc-Python
+// OpKind.BIT_AND/BIT_OR/BIT_XOR (commit f676fca).
+fn emit_and_eax_ecx() -> i32 { emit_byte(0x21); emit_byte(0xC8); 2 }
+fn emit_or_eax_ecx()  -> i32 { emit_byte(0x09); emit_byte(0xC8); 2 }
+fn emit_xor_eax_ecx() -> i32 { emit_byte(0x31); emit_byte(0xC8); 2 }
 // idiv requires sign-extension into edx; we emit `cdq; idiv ecx`.
 //   99       cdq
 //   F7 F9    idiv ecx
@@ -1442,6 +1459,38 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         let ni = emit_ast_code(p1, bind_state, patch_state, bn_state);
         let nn = emit_ast_bnot_suffix();
         ni + nn
+    } else { if t == 31 {
+        // AST_NOT: logical NOT via test+sete. Inner leaves value in eax.
+        let ni = emit_ast_code(p1, bind_state, patch_state, bn_state);
+        let nn = emit_ast_not_suffix();
+        ni + nn
+    } else { if t == 28 {
+        // AST_BAND: same shape as ADD but `and eax, ecx` (0x21 0xC8).
+        let n1 = emit_ast_code(p1, bind_state, patch_state, bn_state);
+        let np = emit_push_rax();
+        let n2 = emit_ast_code(p2, bind_state, patch_state, bn_state);
+        let nm = emit_mov_ecx_eax();
+        let no = emit_pop_rax();
+        let na = emit_and_eax_ecx();
+        n1 + np + n2 + nm + no + na
+    } else { if t == 29 {
+        // AST_BOR: `or eax, ecx` (0x09 0xC8).
+        let n1 = emit_ast_code(p1, bind_state, patch_state, bn_state);
+        let np = emit_push_rax();
+        let n2 = emit_ast_code(p2, bind_state, patch_state, bn_state);
+        let nm = emit_mov_ecx_eax();
+        let no = emit_pop_rax();
+        let na = emit_or_eax_ecx();
+        n1 + np + n2 + nm + no + na
+    } else { if t == 30 {
+        // AST_BXOR: `xor eax, ecx` (0x31 0xC8).
+        let n1 = emit_ast_code(p1, bind_state, patch_state, bn_state);
+        let np = emit_push_rax();
+        let n2 = emit_ast_code(p2, bind_state, patch_state, bn_state);
+        let nm = emit_mov_ecx_eax();
+        let no = emit_pop_rax();
+        let na = emit_xor_eax_ecx();
+        n1 + np + n2 + nm + no + na
     } else { if t == 6 {
         let n1 = emit_ast_code(p1, bind_state, patch_state, bn_state);
         let np = emit_push_rax();
@@ -1672,7 +1721,7 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         emit_ast_int(0)
     } else {
         emit_ast_int(0)
-    }}}}}}}}}}}}}}}}}}}}}}}}}}
+    }}}}}}}}}}}}}}}}}}}}}}}}}}}}}}
 }
 
 // --------------------------------------------------------------

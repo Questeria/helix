@@ -61,6 +61,15 @@
 //                    Recognized as the first arg of read_file_to_arena
 //                    or write_file_to_arena, where the body bytes get
 //                    embedded in the produced binary's .data section.
+//  28  AST_BAND      p1 = lhs, p2 = rhs. Binary bitwise AND. Codegen
+//                    emits `and eax, ecx` (0x21 0xC8). Mirrors
+//                    helixc-Python OpKind.BIT_AND (commit f676fca).
+//  29  AST_BOR       p1 = lhs, p2 = rhs. `or eax, ecx` (0x09 0xC8).
+//  30  AST_BXOR      p1 = lhs, p2 = rhs. `xor eax, ecx` (0x31 0xC8).
+//  31  AST_NOT       p1 = inner. Logical NOT. Codegen emits
+//                    `test eax, eax; mov eax, 0; sete al` so the
+//                    result is 1 when inner == 0, else 0. Mirrors
+//                    helixc-Python: `!x` lowers to CMP_EQ(inner, 0).
 //  99  AST_ERR       p1 = unexpected token tag
 //
 // Grammar (recursive descent, classic precedence climbing):
@@ -217,7 +226,7 @@ fn parse_expr(tok_base: i32, sb: i32) -> i32 {
 }
 
 fn parse_expr_basic(tok_base: i32, sb: i32) -> i32 {
-    let lhs = parse_add(tok_base, sb);
+    let lhs = parse_bitwise(tok_base, sb);
     let k = cur_get(sb);
     let t = tok_tag(tok_base, k);
     let t2 = tok_tag(tok_base, k + 1);
@@ -227,41 +236,70 @@ fn parse_expr_basic(tok_base: i32, sb: i32) -> i32 {
         if t2 == 15 {
             // `<=`
             cur_advance(sb); cur_advance(sb);
-            let rhs = parse_add(tok_base, sb);
+            let rhs = parse_bitwise(tok_base, sb);
             mk_node(22, lhs, rhs, 0)
         } else {
             // `<`
             cur_advance(sb);
-            let rhs = parse_add(tok_base, sb);
+            let rhs = parse_bitwise(tok_base, sb);
             mk_node(6, lhs, rhs, 0)
         }
     } else { if t == 17 {
         if t2 == 15 {
             // `>=`
             cur_advance(sb); cur_advance(sb);
-            let rhs = parse_add(tok_base, sb);
+            let rhs = parse_bitwise(tok_base, sb);
             mk_node(23, lhs, rhs, 0)
         } else {
             // `>`
             cur_advance(sb);
-            let rhs = parse_add(tok_base, sb);
+            let rhs = parse_bitwise(tok_base, sb);
             mk_node(19, lhs, rhs, 0)
         }
     } else { if t == 15 {
         if t2 == 15 {
             // `==`
             cur_advance(sb); cur_advance(sb);
-            let rhs = parse_add(tok_base, sb);
+            let rhs = parse_bitwise(tok_base, sb);
             mk_node(20, lhs, rhs, 0)
         } else { lhs }
     } else { if t == 18 {
         if t2 == 15 {
             // `!=`
             cur_advance(sb); cur_advance(sb);
-            let rhs = parse_add(tok_base, sb);
+            let rhs = parse_bitwise(tok_base, sb);
             mk_node(21, lhs, rhs, 0)
         } else { lhs }
     } else { lhs }}}}
+}
+
+// Phase 1.10 step 5+: binary bitwise AND/OR/XOR at one precedence level
+// between additive and comparison. Not strictly C-correct (C separates
+// & ^ | into three levels) but enough for AGI substrate work where most
+// callers use parens. Left-associative.
+fn parse_bitwise(tok_base: i32, sb: i32) -> i32 {
+    let mut lhs = parse_add(tok_base, sb);
+    let mut keep: i32 = 1;
+    while keep == 1 {
+        let k = cur_get(sb);
+        let t = tok_tag(tok_base, k);
+        if t == 27 {       // TK_AMP -> AST_BAND
+            cur_advance(sb);
+            let rhs = parse_add(tok_base, sb);
+            lhs = mk_node(28, lhs, rhs, 0);
+        } else { if t == 28 {       // TK_PIPE -> AST_BOR
+            cur_advance(sb);
+            let rhs = parse_add(tok_base, sb);
+            lhs = mk_node(29, lhs, rhs, 0);
+        } else { if t == 29 {       // TK_CARET -> AST_BXOR
+            cur_advance(sb);
+            let rhs = parse_add(tok_base, sb);
+            lhs = mk_node(30, lhs, rhs, 0);
+        } else {
+            keep = 0;
+        }}};
+    }
+    lhs
 }
 
 fn parse_add(tok_base: i32, sb: i32) -> i32 {
@@ -324,9 +362,14 @@ fn parse_unary(tok_base: i32, sb: i32) -> i32 {
         cur_advance(sb);
         let inner = parse_unary(tok_base, sb);
         mk_node(26, inner, 0, 0)
+    } else { if tg == 18 {     // '!' logical NOT — AST_NOT (tag 31).
+        // Mirrors helixc-Python: `!x` lowers to `(x == 0) ? 1 : 0`.
+        cur_advance(sb);
+        let inner = parse_unary(tok_base, sb);
+        mk_node(31, inner, 0, 0)
     } else {
         parse_primary(tok_base, sb)
-    }}
+    }}}
 }
 
 fn parse_primary(tok_base: i32, sb: i32) -> i32 {

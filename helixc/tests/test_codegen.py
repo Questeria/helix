@@ -1418,6 +1418,26 @@ fn main() -> i32 {{
     assert compile_and_exec("~0") == 255, "bitwise NOT of 0 = -1 mod 256"
     assert compile_and_exec("~5") == 250, "bitwise NOT of 5 = -6 mod 256"
     assert compile_and_exec("~~42") == 42, "double bitwise NOT is identity"
+    # AST_NOT: logical NOT via `test eax, eax; mov eax, 0; sete al`.
+    # Result is 1 when inner == 0, else 0. Mirrors helixc-Python `!x`
+    # which lowers to CMP_EQ(inner, 0).
+    assert compile_and_exec("!0") == 1, "logical NOT of 0 = 1"
+    assert compile_and_exec("!1") == 0, "logical NOT of 1 = 0"
+    assert compile_and_exec("!42") == 0, "logical NOT of nonzero = 0"
+    assert compile_and_exec("!!42") == 1, "double logical NOT of nonzero = 1"
+    assert compile_and_exec("!!0") == 0, "double logical NOT of 0 = 0"
+    # AST_BAND / AST_BOR / AST_BXOR: bitwise binary ops via and/or/xor
+    # eax,ecx (commit f48ade1 added the codegen but not the pipeline test).
+    assert compile_and_exec("12 & 10") == 8, "bitwise AND: 0b1100 & 0b1010 = 0b1000"
+    assert compile_and_exec("12 | 10") == 14, "bitwise OR:  0b1100 | 0b1010 = 0b1110"
+    assert compile_and_exec("12 ^ 10") == 6, "bitwise XOR: 0b1100 ^ 0b1010 = 0b0110"
+    assert compile_and_exec("(7 ^ 5) | 1") == 3, "compound: (7^5) | 1 = 2 | 1 = 3"
+    # `!` interacting with conditionals + let-bindings.
+    assert compile_and_exec("if !0 { 7 } else { 9 }") == 7, "!0 is truthy"
+    assert compile_and_exec("if !1 { 7 } else { 9 }") == 9, "!1 is falsy"
+    assert compile_and_exec(
+        "fn main() -> i32 { let x = 0 ; if !x { 100 } else { 200 } }"
+    ) == 100, "!x where x bound to 0"
     # AST_LT + AST_IF (control flow added in this commit)
     assert compile_and_exec("1 < 2") == 1, "LT true"
     assert compile_and_exec("5 < 2") == 0, "LT false"
@@ -1636,6 +1656,20 @@ fn main() -> i32 {{
         "f32-suffixed literals flow through __fadd"
     # 0.5 = 0x3F000000 -> top byte 63.
     assert compile_and_exec("0.5_f64 / 16777216") == 63, "float with _f64 suffix"
+    # Phase 1.10 step 5+: bootstrap binary bitwise & | ^. Mirrors the
+    # helixc-Python fix in commit f676fca; before this, the bootstrap
+    # had no parse rule for these operators so source code couldn't use
+    # them at all (they lexed as identifiers / unknown tokens).
+    assert compile_and_exec("250 & 42") == 42, "bootstrap bitwise AND"
+    assert compile_and_exec("32 | 10") == 42, "bootstrap bitwise OR"
+    assert compile_and_exec("52 ^ 30") == 42, "bootstrap bitwise XOR"
+    # Mixed in expressions: 0xFF & 0x2A = 42 (verifies precedence — bitwise
+    # binds tighter than comparison in our grammar).
+    assert compile_and_exec("if (255 & 42) == 42 { 1 } else { 0 }") == 1, \
+        "bitwise AND inside comparison"
+    # Combined with arith: (5 + 7) ^ 3 = 12 ^ 3 = 15.
+    assert compile_and_exec("(5 + 7) ^ 3") == 15, \
+        "bitwise XOR after arithmetic"
     # Phase 1.10 step 5b: combined `: f32` annotations + suffix-typed
     # literals + SSE arithmetic in a real-shaped program. Tests the
     # interaction of the parser's type-annotation-skip logic, lex_int's
