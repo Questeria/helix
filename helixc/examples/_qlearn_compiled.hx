@@ -48,7 +48,7 @@ fn dist_to_goal(s: i32) -> i32 {
 }
 
 // SEED_PLACEHOLDER — replaced by the server before compile.
-@pure fn map_seed() -> i32 { 12345 }
+@pure fn map_seed() -> i32 { 42 }
 
 // Build obstacle list at runtime: 14 unique cells in [5..95] (avoid
 // start/goal). Returns an arena offset to a 14-slot array of cell IDs.

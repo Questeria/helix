@@ -178,8 +178,13 @@
       <label>Agent:</label>
       <select id="agentKind" style="background:#2a2a2a;color:#e0e0e0;border:1px solid #555;padding:4px 8px;border-radius:4px">
         <option value="hillclimb">Hill-climbing (deterministic, no learning)</option>
-        <option value="qlearn">Q-learning (improves across episodes)</option>
+        <option value="qlearn" selected>Q-learning (improves across episodes)</option>
       </select>
+    </div>
+    <div class="controls">
+      <label>Map seed:</label>
+      <input type="number" id="seedInput" value="12345" style="width:90px;background:#2a2a2a;color:#e0e0e0;border:1px solid #555;padding:4px 6px;border-radius:4px"/>
+      <button id="randBtn" onclick="randomSeed()" title="Generate a fresh map">🎲 Random</button>
     </div>
     <div class="controls">
       <button id="runBtn" onclick="runAgent()">Run</button>
@@ -210,6 +215,13 @@
     </div>
     <h2 style="margin-top:16px">Steps per episode (lower = better)</h2>
     <canvas id="episodeChart" class="chart-canvas"></canvas>
+    <h2 style="margin-top:16px">Q-value heatmap (after each episode)</h2>
+    <div style="font-size:11px;color:#888;margin-bottom:6px">
+      Brighter cells = higher learned value. Cells fill in as the agent
+      backs up reward from the goal across training. Watch values radiate.
+    </div>
+    <canvas id="heatmap" style="width:100%;height:220px;background:#0d0d0d;border-radius:4px"></canvas>
+    <div style="font-size:11px;color:#666;margin-top:4px">Heatmap shows max-Q per cell from latest episode.</div>
     <h2 style="margin-top:16px">Score over time</h2>
     <canvas id="chart" class="chart-canvas"></canvas>
     <h2 style="margin-top:16px">JSON stream (raw Helix output)</h2>
@@ -306,9 +318,56 @@ function drawChart() {
 
 let episodeStepHistory = [];
 
+function drawHeatmap(qmax) {
+  const canvas = document.getElementById('heatmap');
+  const ctx = canvas.getContext('2d');
+  const w = canvas.clientWidth;
+  const h = canvas.clientHeight;
+  canvas.width = w;
+  canvas.height = h;
+  ctx.fillStyle = '#0d0d0d';
+  ctx.fillRect(0, 0, w, h);
+  if (!qmax || qmax.length === 0) return;
+  // Find min/max for color scaling.
+  let lo = Infinity, hi = -Infinity;
+  for (let v of qmax) { if (v < lo) lo = v; if (v > hi) hi = v; }
+  const span = Math.max(1, hi - lo);
+  const cellW = w / 10;
+  const cellH = h / 10;
+  for (let i = 0; i < 100; i++) {
+    const r = i % 10;  // col
+    const c = Math.floor(i / 10);  // row
+    const v = qmax[i];
+    const t = (v - lo) / span;  // 0..1
+    // Color: black -> blue -> orange -> yellow
+    let red, green, blue;
+    if (t < 0.5) {
+      const u = t * 2;
+      red = Math.round(20 * (1 - u));
+      green = Math.round(40 * (1 - u));
+      blue = Math.round(120 + 80 * u);
+    } else {
+      const u = (t - 0.5) * 2;
+      red = Math.round(120 + 135 * u);
+      green = Math.round(60 + 195 * u);
+      blue = Math.round(80 * (1 - u));
+    }
+    ctx.fillStyle = `rgb(${red},${green},${blue})`;
+    ctx.fillRect(r * cellW, c * cellH, cellW - 1, cellH - 1);
+  }
+}
+
 function applyEvent(ev) {
   if (ev.type === 'init') {
     buildGrid(ev.obstacles, ev.goal);
+    if (ev.seed !== undefined) {
+      document.getElementById('status').className = 'status running';
+      document.getElementById('status').textContent = 'Map seed: ' + ev.seed + ' — running ' + (ev.n_episodes || '') + ' episodes';
+    }
+    return;
+  }
+  if (ev.type === 'qmap') {
+    drawHeatmap(ev.qmax);
     return;
   }
   if (ev.type === 'episode') {
@@ -399,6 +458,11 @@ function drawEpisodeChart() {
   ctx.fillText('worst ' + maxS, 4, 24);
 }
 
+function randomSeed() {
+  const s = Math.floor(Math.random() * 100000) + 1;
+  document.getElementById('seedInput').value = s;
+}
+
 async function runAgent() {
   resetAll();
   document.getElementById('runBtn').disabled = true;
@@ -407,7 +471,8 @@ async function runAgent() {
   document.getElementById('status').textContent = 'Compiling and running Helix...';
   const iter = parseInt(document.getElementById('iterRange').value);
   const kind = document.getElementById('agentKind').value;
-  const resp = await fetch('/run?iter=' + iter + '&kind=' + kind);
+  const seed = parseInt(document.getElementById('seedInput').value) || 12345;
+  const resp = await fetch('/run?iter=' + iter + '&kind=' + kind + '&seed=' + seed);
   const text = await resp.text();
   allEvents = text.trim().split('\n').filter(l => l.length > 0).map(l => {
     try { return JSON.parse(l); } catch (e) { return null; }

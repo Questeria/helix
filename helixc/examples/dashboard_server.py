@@ -35,14 +35,32 @@ AGENTS = {
 }
 
 
-def compile_helix(kind):
-    """Compile the chosen agent .hx -> ELF binary."""
+def compile_helix(kind, seed=None):
+    """Compile the chosen agent .hx -> ELF binary.
+
+    If seed is given (int), substitute it into the qlearn agent's
+    map_seed() function so each run uses a different random map.
+    """
     if kind not in AGENTS:
         return None, f"unknown agent kind: {kind}"
     hx, bin_name = AGENTS[kind]
+    src_path = os.path.join(EXAMPLES, hx)
+    compile_path = src_path
+    if seed is not None and kind == "qlearn":
+        # Read the qlearn source, substitute the seed, write a tmp file.
+        with open(src_path, "r", encoding="utf-8") as f:
+            src = f.read()
+        new_src = src.replace(
+            "@pure fn map_seed() -> i32 { 12345 }",
+            f"@pure fn map_seed() -> i32 {{ {int(seed)} }}",
+        )
+        compile_path = os.path.join(EXAMPLES, "_qlearn_compiled.hx")
+        with open(compile_path, "w", encoding="utf-8") as f:
+            f.write(new_src)
+    rel = os.path.relpath(compile_path, PROJ).replace("\\", "/")
     cmd = [
         sys.executable, "-m", "helixc.backend.x86_64",
-        f"helixc/examples/{hx}",
+        rel,
         bin_name,
     ]
     proc = subprocess.run(cmd, cwd=PROJ, capture_output=True, text=True)
@@ -83,8 +101,13 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if path == "/run":
             qs = urllib.parse.parse_qs(parsed.query)
             kind = qs.get("kind", ["hillclimb"])[0]
-            sys.stderr.write(f"Compiling helix agent ({kind})...\n")
-            bin_path, err = compile_helix(kind)
+            seed = qs.get("seed", [None])[0]
+            try:
+                seed_i = int(seed) if seed else None
+            except ValueError:
+                seed_i = None
+            sys.stderr.write(f"Compiling helix agent ({kind}, seed={seed_i})...\n")
+            bin_path, err = compile_helix(kind, seed=seed_i)
             if bin_path is None:
                 self.send_response(500)
                 self.send_header("Content-Type", "text/plain")
