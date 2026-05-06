@@ -81,6 +81,16 @@
   .cell.optimal {
     box-shadow: inset 0 0 0 2px #66ddff;
   }
+  .cell .policy-arrow {
+    position: absolute;
+    bottom: 1px;
+    right: 2px;
+    font-size: 11px;
+    color: rgba(102, 221, 255, 0.85);
+    pointer-events: none;
+    font-weight: bold;
+  }
+  .cell { position: relative; }
   .controls {
     display: flex;
     gap: 8px;
@@ -176,6 +186,9 @@
     </div>
     <div style="margin-top:6px">
       <label style="font-size:12px"><input type="checkbox" id="showOptimal" checked onchange="updateOptimal()"/> Show BFS shortest-path overlay (cyan border)</label>
+    </div>
+    <div style="margin-top:6px">
+      <label style="font-size:12px"><input type="checkbox" id="showPolicy" checked onchange="updatePolicy()"/> Show learned policy arrows (per-cell argmax-Q action)</label>
     </div>
   </div>
 
@@ -327,13 +340,27 @@ function updateOptimal() {
 }
 
 function setAgent(pos) {
-  document.querySelectorAll('.cell.agent').forEach(c => c.classList.remove('agent'));
-  document.querySelectorAll('.cell.path-tail').forEach(c => c.classList.remove('path-tail'));
+  // Reset all main glyphs.
+  document.querySelectorAll('.cell').forEach(c => {
+    c.classList.remove('agent', 'path-tail');
+    // Set the main glyph (first text node).
+    let mainText = '';
+    if (c.classList.contains('obstacle')) mainText = '#';
+    else if (c.classList.contains('goal')) mainText = 'G';
+    // Find existing main text node or create one.
+    let textNode = null;
+    for (const n of c.childNodes) { if (n.nodeType === 3) { textNode = n; break; } }
+    if (textNode) textNode.nodeValue = mainText;
+    else if (mainText) c.insertBefore(document.createTextNode(mainText), c.firstChild);
+  });
   if (pos === undefined || pos < 0) return;
   const cell = document.getElementById('c' + pos);
   if (!cell) return;
   cell.classList.add('agent');
-  cell.textContent = 'A';
+  let textNode = null;
+  for (const n of cell.childNodes) { if (n.nodeType === 3) { textNode = n; break; } }
+  if (textNode) textNode.nodeValue = 'A';
+  else cell.insertBefore(document.createTextNode('A'), cell.firstChild);
   visited.add(pos);
   for (let p of visited) {
     const c2 = document.getElementById('c' + p);
@@ -383,6 +410,29 @@ function drawChart() {
 }
 
 let episodeStepHistory = [];
+
+let currentPolicy = null;
+
+function drawPolicy(actions) {
+  currentPolicy = actions;
+  updatePolicy();
+}
+
+function updatePolicy() {
+  const show = document.getElementById('showPolicy').checked;
+  document.querySelectorAll('.policy-arrow').forEach(a => a.remove());
+  if (!show || !currentPolicy) return;
+  const ARROWS = ['↑', '↓', '←', '→'];
+  for (let i = 0; i < currentPolicy.length; i++) {
+    if (i === currentGoal || currentObstacles.indexOf(i) >= 0) continue;
+    const cell = document.getElementById('c' + i);
+    if (!cell) continue;
+    const arrow = document.createElement('span');
+    arrow.className = 'policy-arrow';
+    arrow.textContent = ARROWS[currentPolicy[i]] || '';
+    cell.appendChild(arrow);
+  }
+}
 
 function drawHeatmap(qmax) {
   const canvas = document.getElementById('heatmap');
@@ -434,6 +484,10 @@ function applyEvent(ev) {
   }
   if (ev.type === 'qmap') {
     drawHeatmap(ev.qmax);
+    return;
+  }
+  if (ev.type === 'policy') {
+    drawPolicy(ev.actions);
     return;
   }
   if (ev.type === 'episode') {

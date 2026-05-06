@@ -21,9 +21,12 @@
 @pure fn grid_total() -> i32 { 100 }
 @pure fn goal_id() -> i32 { 99 }
 @pure fn n_actions() -> i32 { 4 }
-@pure fn n_episodes() -> i32 { 30 }
-@pure fn max_steps_per_ep() -> i32 { 100 }
+@pure fn n_episodes() -> i32 { 50 }
+@pure fn max_steps_per_ep() -> i32 { 150 }
 @pure fn n_obstacles() -> i32 { 14 }
+// Minimum epsilon — never drops below this so agent always keeps some
+// exploration. Prevents getting stuck in a suboptimal corner of policy.
+@pure fn epsilon_floor() -> i32 { 15 }
 
 // Q-values are scaled by 100 throughout (so 1.0 -> 100, 0.5 -> 50).
 @pure fn alpha_pct() -> i32 { 30 }
@@ -228,6 +231,33 @@ fn print_episode_end(ep: i32, steps: i32, total_reward: i32, reached: i32, epsil
     0
 }
 
+// Print policy: argmax-action per cell, all 100 in one line.
+// Note: q_argmax has random tiebreak via seed_cell; for the policy
+// snapshot we want a DETERMINISTIC argmax. So we just pick lowest-index
+// action at ties.
+fn print_policy_map(ep: i32, q: i32) -> i32 {
+    print_str("{\"type\":\"policy\",\"ep\":");
+    print_int(ep);
+    print_str(",\"actions\":[");
+    let mut i: i32 = 0;
+    while i < grid_total() {
+        if i > 0 { print_str(","); }
+        // Deterministic argmax (first action with max Q).
+        let mut best_a: i32 = 0;
+        let mut best_v: i32 = q_get(q, i, 0);
+        let mut a: i32 = 1;
+        while a < n_actions() {
+            let v = q_get(q, i, a);
+            if v > best_v { best_v = v; best_a = a; }
+            a = a + 1;
+        }
+        print_int(best_a);
+        i = i + 1;
+    }
+    print_str("]}\n");
+    0
+}
+
 // Print the Q-value heatmap snapshot: max-Q per cell, all 100 in one line.
 fn print_qmap(ep: i32, q: i32) -> i32 {
     print_str("{\"type\":\"qmap\",\"ep\":");
@@ -270,8 +300,16 @@ fn main() -> i32 {
     let seed_cell = __arena_push(map_seed() * 7919 + 31);
     let mut ep: i32 = 0;
     let mut best_steps: i32 = 9999;
+    let mut last_failed: i32 = 0;
     while ep < n_episodes() {
-        let epsilon_pct = 80 - (ep * 75) / (n_episodes() - 1);
+        // Decay 80% -> 15% across episodes; never drop below floor.
+        let raw = 80 - (ep * 65) / (n_episodes() - 1);
+        let base_eps = if raw < epsilon_floor() { epsilon_floor() } else { raw };
+        // Boost epsilon if last episode didn't reach goal (escape ruts).
+        let epsilon_pct = if last_failed == 1 {
+            let bumped = base_eps + 20;
+            if bumped > 90 { 90 } else { bumped }
+        } else { base_eps };
         let mut pos: i32 = 0;
         let mut step: i32 = 0;
         let mut total_reward: i32 = 0;
@@ -301,9 +339,14 @@ fn main() -> i32 {
         }
         if reached == 1 {
             if step < best_steps { best_steps = step; }
+            last_failed = 0;
+        } else {
+            last_failed = 1;
         }
         print_episode_end(ep, step, total_reward, reached, epsilon_pct);
         print_qmap(ep, q);
+        // Also print policy: argmax-action per cell.
+        print_policy_map(ep, q);
         ep = ep + 1;
     }
     print_str("{\"type\":\"summary\",\"episodes\":");
