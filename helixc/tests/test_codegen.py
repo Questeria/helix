@@ -1826,8 +1826,14 @@ fn main() -> i32 {{
     assert compile_and_exec("__bits_of_f32(1.5_f32) / 16777216") == 63, "float with _f32 suffix"
     assert compile_and_exec("__bits_of_f32(__fadd(1.5_f32, 2.5_f32)) / 16777216") == 64, \
         "f32-suffixed literals flow through __fadd"
-    # 0.5 = 0x3F000000 -> top byte 63.
-    assert compile_and_exec("__bits_of_f32(0.5_f64) / 16777216") == 63, "float with _f64 suffix"
+    # Phase 1.10 step 7c: _f64 is now distinct (AST_FLOATLIT_F64=34, 8-byte
+    # movabs rax, imm64). Calling __bits_of_f32 on an f64 literal is a
+    # type-mismatch and reads only the low 32 bits of the f64 pattern.
+    # 0.5_f64 = 0x3FE0000000000000 — low 32 are 0x00000000 → top byte 0.
+    assert compile_and_exec("__bits_of_f32(0.5_f64) / 16777216") == 0, \
+        "f64 low32 of 0.5 is zero (type-mismatch read; doc-only invariant)"
+    # 0.5_f32 = 0x3F000000 -> top byte 63 (proper same-width call).
+    assert compile_and_exec("__bits_of_f32(0.5_f32) / 16777216") == 63, "float with _f32 suffix"
     # Phase 1.10 step 5+: bootstrap binary bitwise & | ^. Mirrors the
     # helixc-Python fix in commit f676fca; before this, the bootstrap
     # had no parse rule for these operators so source code couldn't use

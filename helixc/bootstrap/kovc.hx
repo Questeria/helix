@@ -180,6 +180,19 @@ fn emit_ast_int(v: i32) -> i32 {
     5
 }
 
+// movabs rax, imm64   (10 bytes: 48 B8 imm64_le)
+// Used by Phase 1.10 step 7c (AST_FLOATLIT_F64) to materialize an
+// 8-byte IEEE 754 double-precision bit pattern in rax. low32 is the
+// low 32 bits of the imm64; high32 is the high 32 bits — laid out
+// little-endian on disk so the CPU sees a single 64-bit immediate.
+fn emit_movabs_rax_imm64(low32: i32, high32: i32) -> i32 {
+    emit_byte(0x48);                    // REX.W
+    emit_byte(0xB8);                    // B8+rd (rax)
+    emit_u32_le(low32);
+    emit_u32_le(high32);
+    10
+}
+
 // AST_NEG(inner): emit inner code, then `neg eax`.
 //   F7 D8   neg eax
 // (inner already left its value in eax.)
@@ -1901,12 +1914,7 @@ fn bn_global_slot_address() -> i32 {
 // than a function arg.
 // --------------------------------------------------------------
 fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> i32 {
-    let t_raw = __arena_get(idx);
-    // Phase 1.10 step 7b: AST_FLOATLIT_F64 (34) currently shares the
-    // f32 emission path with AST_FLOATLIT (27). Step 7c will diverge
-    // for true 8-byte codegen (movabs rax, imm64 + movq xmm0, rax).
-    // Alias 34->27 at dispatch entry so the existing f32 body runs.
-    let t = if t_raw == 34 { 27 } else { t_raw };
+    let t = __arena_get(idx);
     let p1 = __arena_get(idx + 1);
     let p2 = __arena_get(idx + 2);
     if t == 0 {
@@ -2010,6 +2018,108 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
             bits = exp_shifted + mantissa;
         }
         emit_ast_int(bits)
+    } else { if t == 34 {
+        // AST_FLOATLIT_F64 (Phase 1.10 step 7c, 8-byte f64 emission).
+        // p1 = byte_start of literal text in arena, p2 = byte_len.
+        // Same parse-and-classify shape as t==27 (f32) but produces a
+        // 64-bit IEEE 754 pattern split across two i32 halves
+        // (low32, high32). Then `movabs rax, imm64` materializes the
+        // full 8-byte value. Mantissa bias = 1023 (vs 127 for f32);
+        // exponent field is 11 bits (vs 8); mantissa is 52 bits (vs
+        // 23) split as 20 bits in high32 and 32 in low32. Step 7d
+        // will wire SSE2 addsd/subsd/mulsd/divsd dispatch.
+        let mut i: i32 = 0;
+        let mut int_part: i32 = 0;
+        let mut frac_part: i32 = 0;
+        let mut frac_digits: i32 = 0;
+        let mut phase: i32 = 0;
+        let mut keep_p: i32 = 1;
+        while keep_p == 1 {
+            if i >= p2 { keep_p = 0; }
+            else {
+                let b = __arena_get(p1 + i);
+                if b == 46 {
+                    phase = 1;
+                    i = i + 1;
+                } else {
+                    if b < 48 { keep_p = 0; }
+                    else { if b > 57 { keep_p = 0; }
+                    else {
+                        if phase == 0 {
+                            int_part = int_part * 10 + (b - 48);
+                        } else {
+                            frac_part = frac_part * 10 + (b - 48);
+                            frac_digits = frac_digits + 1;
+                        };
+                        i = i + 1;
+                    }};
+                };
+            };
+        }
+        let mut pow10: i32 = 1;
+        let mut dd: i32 = 0;
+        while dd < frac_digits { pow10 = pow10 * 10; dd = dd + 1; }
+        let v_scaled = int_part * pow10 + frac_part;
+        let mut high32: i32 = 0;
+        let mut low32: i32 = 0;
+        if v_scaled == 0 {
+            high32 = 0;
+            low32 = 0;
+        } else {
+            let mut k: i32 = 0;
+            let mut threshold: i32 = pow10;
+            let mut keep_neg: i32 = 1;
+            while keep_neg == 1 {
+                if threshold <= v_scaled { keep_neg = 0; }
+                else { if threshold == 1 { keep_neg = 0; }
+                else {
+                    threshold = threshold / 2;
+                    k = k - 1;
+                }};
+            }
+            let mut keep_k: i32 = 1;
+            while keep_k == 1 {
+                if threshold > v_scaled / 2 { keep_k = 0; }
+                else {
+                    threshold = threshold * 2;
+                    k = k + 1;
+                }
+            }
+            // Extract 52 mantissa bits via residual-doubling. mhi
+            // accumulates bits 51..32 (only low 20 bits of mhi used);
+            // mlo accumulates bits 31..0.
+            let mut residual = v_scaled - threshold;
+            let mut mhi: i32 = 0;
+            let mut mlo: i32 = 0;
+            let mut bit: i32 = 51;
+            while bit >= 0 {
+                residual = residual * 2;
+                if residual >= threshold {
+                    if bit >= 32 {
+                        let mut bv: i32 = 1;
+                        let mut sh: i32 = 0;
+                        let t_bit = bit - 32;
+                        while sh < t_bit { bv = bv * 2; sh = sh + 1; }
+                        mhi = mhi + bv;
+                    } else {
+                        let mut bv: i32 = 1;
+                        let mut sh: i32 = 0;
+                        while sh < bit { bv = bv * 2; sh = sh + 1; }
+                        mlo = mlo + bv;
+                    };
+                    residual = residual - threshold;
+                };
+                bit = bit - 1;
+            }
+            // Pack high32 = (k + 1023) << 20 | mhi   (sign bit = 0).
+            let exp_field = k + 1023;
+            let mut exp_shifted: i32 = exp_field;
+            let mut sh2: i32 = 0;
+            while sh2 < 20 { exp_shifted = exp_shifted * 2; sh2 = sh2 + 1; }
+            high32 = exp_shifted + mhi;
+            low32 = mlo;
+        }
+        emit_movabs_rax_imm64(low32, high32)
     } else { if t == 2 {
         // Step 5c: dispatch to SSE addss when both operands are f32.
         // Step 5p: emit ud2 trap when types are MIXED (one f32, one i32) —
@@ -2400,7 +2510,7 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         emit_ast_int(0)
     } else {
         emit_ast_int(0)
-    }}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}
+    }}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}
 }
 
 // --------------------------------------------------------------
