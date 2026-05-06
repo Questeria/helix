@@ -102,3 +102,138 @@ fn sequence_match(a_start: i32, b_start: i32, n: i32) -> i32 {
     }
     hits
 }
+
+// =========================================================================
+// Phase 4 perfection: unification with variables.
+// =========================================================================
+//
+// A pattern is a tree where some leaves are "variables" — placeholder slots
+// that match anything. Unification: try to make pattern = term by binding
+// each variable to a concrete sub-term. Used for symbolic AGI (rule
+// matching, equation solving, planning by analogy).
+//
+// Encoding:
+//   tree_node_new(VAR_TAG, var_id, 0, 0)    — a pattern variable
+//   tree_node_new(otherTag, p1, p2, p3)     — a concrete node
+//
+// Bindings: an array of (var_id -> arena_offset). Capacity bounded.
+
+@pure fn unify_var_tag() -> i32 { 0 - 1 }   // -1 = "this node is a variable"
+
+fn bindings_new() -> i32 {
+    let start = __arena_len();
+    __arena_push(0);   // count
+    let mut i: i32 = 0;
+    while i < 32 {
+        __arena_push(0 - 1);   // var_id
+        __arena_push(0);       // bound arena offset
+        i = i + 1;
+    }
+    start
+}
+
+@pure
+fn bindings_get(b: i32, var_id: i32) -> i32 {
+    let cnt = __arena_get(b);
+    let mut i: i32 = 0;
+    let mut found: i32 = 0 - 1;
+    while i < cnt {
+        if __arena_get(b + 1 + i * 2) == var_id {
+            if found < 0 { found = __arena_get(b + 1 + i * 2 + 1); }
+        }
+        i = i + 1;
+    }
+    found
+}
+
+fn bindings_set(b: i32, var_id: i32, term: i32) -> i32 {
+    let cnt = __arena_get(b);
+    if cnt >= 32 { 0 - 1 }
+    else {
+        __arena_set(b + 1 + cnt * 2, var_id);
+        __arena_set(b + 1 + cnt * 2 + 1, term);
+        __arena_set(b, cnt + 1);
+        0
+    }
+}
+
+// Single-level unify: if pat is a var, bind it; else compare tags + payload.
+// Returns 1 on success, 0 on failure. Sub-tree unification is the caller's
+// responsibility (recurse on p1, p2, p3 if they're tree refs).
+fn unify_shallow(pat_off: i32, term_off: i32, b: i32) -> i32 {
+    let pat_tag = __arena_get(pat_off);
+    if pat_tag == unify_var_tag() {
+        let var_id = __arena_get(pat_off + 1);
+        let existing = bindings_get(b, var_id);
+        if existing < 0 {
+            bindings_set(b, var_id, term_off);
+            1
+        } else {
+            // Already bound: must match the existing binding.
+            tree_eq_shallow(existing, term_off)
+        }
+    } else {
+        tree_eq_shallow(pat_off, term_off)
+    }
+}
+
+// =========================================================================
+// Phase 4 perfection: hierarchical planning.
+// =========================================================================
+//
+// Split a goal into sub-goals; track which sub-goals are achieved. Returns
+// the count of completed sub-goals. The actual sub-goal achievement check
+// is the caller's predicate (passed as a scoring table indexed by sub-goal id).
+
+@pure
+fn hier_count_achieved(subgoal_ids_start: i32, n: i32, achieved_table: i32) -> i32 {
+    let mut i: i32 = 0;
+    let mut done: i32 = 0;
+    while i < n {
+        let sg = __arena_get(subgoal_ids_start + i);
+        if __arena_get(achieved_table + sg) == 1 {
+            done = done + 1;
+        }
+        i = i + 1;
+    }
+    done
+}
+
+// =========================================================================
+// Phase 4 perfection: ensemble world model.
+// =========================================================================
+//
+// Average predictions from N models. Used to quantify uncertainty:
+// agreement => high confidence; disagreement => low confidence.
+
+@pure
+fn ensemble_mean(predictions_start: i32, n: i32) -> i32 {
+    if n == 0 { 0 }
+    else {
+        let mut i: i32 = 0;
+        let mut total: i32 = 0;
+        while i < n {
+            total = total + __arena_get(predictions_start + i);
+            i = i + 1;
+        }
+        total / n
+    }
+}
+
+// Range = max - min: simple uncertainty estimate.
+@pure
+fn ensemble_uncertainty(predictions_start: i32, n: i32) -> i32 {
+    if n == 0 { 0 }
+    else {
+        let mut i: i32 = 1;
+        let mut lo = __arena_get(predictions_start);
+        let mut hi = lo;
+        while i < n {
+            let v = __arena_get(predictions_start + i);
+            if v < lo { lo = v; }
+            if v > hi { hi = v; }
+            i = i + 1;
+        }
+        hi - lo
+    }
+}

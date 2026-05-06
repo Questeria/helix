@@ -3041,6 +3041,79 @@ def test_agi_substrate_demo_full():
     assert code == 42, f"expected 42 (all sections green), got {code}"
 
 
+def test_agi_unify_variable_binding():
+    """Phase 4 perfection: unification with variables. A pattern var (tag=-1)
+    matches anything and binds it. Pattern X vs term node(1, 42) -> X = node."""
+    src = """
+    fn main() -> i32 {
+        let b = bindings_new();
+        let pat = tree_node_new(unify_var_tag(), 0, 0, 0);
+        let term = tree_node_new(1, 42, 0, 0);
+        unify_shallow(pat, term, b);
+        let bound = bindings_get(b, 0);
+        __arena_get(bound + 1)
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_agi_unify_consistent_binding():
+    """Same variable bound twice with same value -> success.
+    Same variable bound twice with different values -> fail (return 0)."""
+    src = """
+    fn main() -> i32 {
+        let b = bindings_new();
+        let pat = tree_node_new(unify_var_tag(), 0, 0, 0);
+        let term1 = tree_node_new(1, 5, 0, 0);
+        let term2 = tree_node_new(1, 5, 0, 0);
+        let term3 = tree_node_new(1, 9, 0, 0);
+        let ok1 = unify_shallow(pat, term1, b);
+        // X bound to 5 already; trying to bind X to (1,5,0,0) again — same shape, ok.
+        let ok2 = unify_shallow(pat, term2, b);
+        // X bound; trying to bind to (1,9,0,0) — different shape, fail.
+        let ok3 = unify_shallow(pat, term3, b);
+        ok1 * 100 + ok2 * 10 + ok3
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 110, f"expected 110 (1, 1, 0), got {code}"
+
+
+def test_agi_hier_count_achieved():
+    """Hierarchical planning: count subgoals marked as achieved."""
+    src = """
+    fn main() -> i32 {
+        let goals = t1d_new(3);
+        ti1d_set(goals, 0, 0); ti1d_set(goals, 1, 1); ti1d_set(goals, 2, 2);
+        let table = t1d_new(3);
+        ti1d_set(table, 0, 1); ti1d_set(table, 1, 0); ti1d_set(table, 2, 1);
+        // Goals 0, 1, 2; achieved table marks 0 and 2 as done.
+        // Expected: 2 achieved.
+        hier_count_achieved(goals, 3, table)
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 2, f"expected 2, got {code}"
+
+
+def test_agi_ensemble_mean_and_uncertainty():
+    """Ensemble: mean and uncertainty (range)."""
+    src = """
+    fn main() -> i32 {
+        let preds = t1d_new(4);
+        ti1d_set(preds, 0, 10); ti1d_set(preds, 1, 14);
+        ti1d_set(preds, 2, 12); ti1d_set(preds, 3, 16);
+        let m = ensemble_mean(preds, 4);
+        let u = ensemble_uncertainty(preds, 4);
+        m + u
+    }
+    """
+    code = compile_and_run(src)
+    # mean = 52/4 = 13; uncertainty = 16 - 10 = 6; total = 19
+    assert code == 19, f"expected 19, got {code}"
+
+
 def test_agi_pq_min_pop():
     """Phase 4 perfection: priority queue. Insert 3 (state, score) pairs;
     pop_min returns the lowest-scoring state."""
