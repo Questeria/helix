@@ -741,6 +741,16 @@ class Asm:
     def and_al_cl(self) -> None:  self.b.emit(0x20, 0xC8)
     def or_al_cl(self) -> None:   self.b.emit(0x08, 0xC8)
 
+    # 32-bit bitwise ops: surface syntax `& | ^` lowered through TIR
+    # BIT_AND/BIT_OR/BIT_XOR. Each takes (eax, ecx) -> eax.
+    def and_eax_ecx(self) -> None:  self.b.emit(0x21, 0xC8)
+    def or_eax_ecx(self) -> None:   self.b.emit(0x09, 0xC8)
+    def xor_eax_ecx(self) -> None:  self.b.emit(0x31, 0xC8)
+    # 64-bit variants for i64 operands.
+    def and_rax_rcx(self) -> None:  self.b.emit(0x48, 0x21, 0xC8)
+    def or_rax_rcx(self) -> None:   self.b.emit(0x48, 0x09, 0xC8)
+    def xor_rax_rcx(self) -> None:  self.b.emit(0x48, 0x31, 0xC8)
+
     def movzx_eax_al(self) -> None:
         # 0F B6 C0   movzx eax, al
         self.b.emit(0x0F, 0xB6, 0xC0)
@@ -1237,6 +1247,55 @@ class FnCompiler:
                 self.asm.mov_mem_rbp_rdx(res_slot)
                 return
             self._emit_idiv_guarded(l_slot, r_slot, res_slot, want_quotient=False)
+            return
+        # Bitwise integer ops: 32-bit and-eax-ecx / or-eax-ecx / xor-eax-ecx,
+        # 64-bit AND/OR/XOR via REX.W variants. Float operands are nonsense
+        # for bitwise (caller's typecheck rejects them); we still default to
+        # 32-bit emission for safety.
+        if op.kind == tir.OpKind.BIT_AND:
+            l_slot = self._slot_of(op.operands[0])
+            r_slot = self._slot_of(op.operands[1])
+            res_slot = self._slot_of(op.results[0])
+            if self._is_i64_type(op.results[0].ty):
+                self.asm.mov_rax_mem_rbp(l_slot)
+                self.asm.mov_rcx_mem_rbp(r_slot)
+                self.asm.and_rax_rcx()
+                self.asm.mov_mem_rbp_rax(res_slot)
+            else:
+                self.asm.mov_eax_mem_rbp(l_slot)
+                self.asm.mov_ecx_mem_rbp(r_slot)
+                self.asm.and_eax_ecx()
+                self.asm.mov_mem_rbp_eax(res_slot)
+            return
+        if op.kind == tir.OpKind.BIT_OR:
+            l_slot = self._slot_of(op.operands[0])
+            r_slot = self._slot_of(op.operands[1])
+            res_slot = self._slot_of(op.results[0])
+            if self._is_i64_type(op.results[0].ty):
+                self.asm.mov_rax_mem_rbp(l_slot)
+                self.asm.mov_rcx_mem_rbp(r_slot)
+                self.asm.or_rax_rcx()
+                self.asm.mov_mem_rbp_rax(res_slot)
+            else:
+                self.asm.mov_eax_mem_rbp(l_slot)
+                self.asm.mov_ecx_mem_rbp(r_slot)
+                self.asm.or_eax_ecx()
+                self.asm.mov_mem_rbp_eax(res_slot)
+            return
+        if op.kind == tir.OpKind.BIT_XOR:
+            l_slot = self._slot_of(op.operands[0])
+            r_slot = self._slot_of(op.operands[1])
+            res_slot = self._slot_of(op.results[0])
+            if self._is_i64_type(op.results[0].ty):
+                self.asm.mov_rax_mem_rbp(l_slot)
+                self.asm.mov_rcx_mem_rbp(r_slot)
+                self.asm.xor_rax_rcx()
+                self.asm.mov_mem_rbp_rax(res_slot)
+            else:
+                self.asm.mov_eax_mem_rbp(l_slot)
+                self.asm.mov_ecx_mem_rbp(r_slot)
+                self.asm.xor_eax_ecx()
+                self.asm.mov_mem_rbp_eax(res_slot)
             return
         if op.kind == tir.OpKind.NEG:
             slot = self._slot_of(op.operands[0])

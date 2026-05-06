@@ -787,11 +787,21 @@ class Lowerer:
                 "<": tir.OpKind.CMP_LT, "<=": tir.OpKind.CMP_LE,
                 ">": tir.OpKind.CMP_GT, ">=": tir.OpKind.CMP_GE,
             }
+            # Bitwise integer ops. Pre-fix: & / | / ^ used to fall through to
+            # the `||` lowering (`(l + r) != 0`), so `5 & 3` returned 1
+            # because `5+3 != 0` — silently wrong for any non-zero operand.
+            bitwise = {
+                "&": tir.OpKind.BIT_AND,
+                "|": tir.OpKind.BIT_OR,
+                "^": tir.OpKind.BIT_XOR,
+            }
             if expr.op in arith:
                 return self.builder.emit(arith[expr.op], l, r, result_ty=l.ty)
             if expr.op in cmp_:
                 return self.builder.emit(cmp_[expr.op], l, r,
                                          result_ty=tir.TIRScalar("bool"))
+            if expr.op in bitwise:
+                return self.builder.emit(bitwise[expr.op], l, r, result_ty=l.ty)
             # Logical or/and — no short-circuit yet, but we DO normalize
             # the result to a strict bool (0 or 1) so downstream uses can
             # safely CMP_EQ against 1 / treat the value as a typed bool.

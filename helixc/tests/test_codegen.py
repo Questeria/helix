@@ -81,6 +81,27 @@ def test_exit_multiplication():
     assert compile_and_run("fn main() -> i32 { 6 * 7 }") == 42
 
 
+def test_exit_bitwise_and():
+    # Pre-fix: `&` fell through lower_ast.py to the `||` branch
+    # (`(l + r) != 0`) so `5 & 3` returned 1 because 5+3 != 0 — silently
+    # wrong for any non-zero pair. Now BIT_AND lowers to TIR OpKind.BIT_AND
+    # and emits `and eax, ecx` (0x21 0xC8).
+    # 0xFA & 0x2A = 0x2A = 42.
+    assert compile_and_run("fn main() -> i32 { 250 & 42 }") == 42
+    # 7 & 3 = 0b111 & 0b011 = 0b011 = 3.
+    assert compile_and_run("fn main() -> i32 { 7 & 3 }") == 3
+
+
+def test_exit_bitwise_or():
+    # 32 | 10 = 0b100000 | 0b001010 = 0b101010 = 42.
+    assert compile_and_run("fn main() -> i32 { 32 | 10 }") == 42
+
+
+def test_exit_bitwise_xor():
+    # 0b110100 ^ 0b011110 = 0b101010 = 42.
+    assert compile_and_run("fn main() -> i32 { 52 ^ 30 }") == 42
+
+
 def test_let_binding_then_use():
     src = "fn main() -> i32 { let x = 40; let y = 2; x + y }"
     assert compile_and_run(src) == 42

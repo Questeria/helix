@@ -146,6 +146,10 @@ class OpKind(Enum):
     MAXIMUM = "elem.maximum"
     MINIMUM = "elem.minimum"
     POW = "elem.pow"
+    # Bitwise integer ops (i32). Surface syntax: & | ^.
+    BIT_AND = "elem.bit_and"
+    BIT_OR = "elem.bit_or"
+    BIT_XOR = "elem.bit_xor"
 
     # Elementwise (unary)
     NEG = "elem.neg"

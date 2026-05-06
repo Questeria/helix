@@ -215,25 +215,18 @@ fn nn_copy_weights(src: i32, dst: i32) -> i32 {
 
 fn nn_save_weights(weights: i32) -> i32 {
     let byte_start = __arena_len();
+    let neg_mask = 0 - 16777216;   // 0xFF000000 as signed i32
     let mut i: i32 = 0;
     while i < weights_total() {
         let w = __arena_get(weights + i);
-        // Bitwise AND `&` is broken in helixc backend (returns 0 for all
-        // operands as of 2026-05; const-fold also folds to 0). Workaround:
-        // residue-and-subtract chain — `((v % 256) + 256) % 256` yields
-        // the unsigned low byte regardless of v's sign in C-truncate
-        // semantics, and `(v - byte) / 256` is then exact (no rounding).
-        let b0 = ((w % 256) + 256) % 256;
-        let v1 = (w - b0) / 256;
-        let b1 = ((v1 % 256) + 256) % 256;
-        let v2 = (v1 - b1) / 256;
-        let b2 = ((v2 % 256) + 256) % 256;
-        let v3 = (v2 - b2) / 256;
-        let b3 = ((v3 % 256) + 256) % 256;
-        __arena_push(b0);
-        __arena_push(b1);
-        __arena_push(b2);
-        __arena_push(b3);
+        // Now that helixc bitwise `&` works correctly (was being lowered
+        // as `||` before this commit's fix), extract bytes via mask + shift.
+        // For the high byte we mask with the signed sentinel 0xFF000000
+        // first so the divide is exact (no rounding-toward-zero on negatives).
+        __arena_push(w & 255);
+        __arena_push((w & 65280) / 256);
+        __arena_push((w & 16711680) / 65536);
+        __arena_push(((w & neg_mask) / 16777216) & 255);
         i = i + 1;
     }
     write_file_to_arena("/tmp/nn_weights.bin", byte_start, weights_bytes())
