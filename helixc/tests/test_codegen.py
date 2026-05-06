@@ -1823,6 +1823,35 @@ fn main() -> i32 {{
         "fn main() -> i32 { let a: i32 = 5 ; let b: i32 = 3 ; "
         "if a > b { 42 } else { 99 } }"
     ) == 42, "i32 > stays integer"
+    # Real-world f32 integration: a Pythagorean distance-squared
+    # function exercises EVERY f32 surface-syntax feature in a single
+    # program — fn params with `: f32`, fn return type `-> f32`, multi-
+    # ple let-bound f32 locals, f32 arithmetic chain (-, *, +), and a
+    # call-site whose result feeds another arithmetic expression.
+    #
+    #   fn dist_sq(x1: f32, y1: f32, x2: f32, y2: f32) -> f32 {
+    #       let dx: f32 = x2 - x1;
+    #       let dy: f32 = y2 - y1;
+    #       dx * dx + dy * dy
+    #   }
+    #   dist_sq(0, 0, 3, 4) = 9 + 16 = 25.0 -> 0x41C80000 -> top byte 65
+    assert compile_and_exec(
+        "fn dist_sq(x1: f32, y1: f32, x2: f32, y2: f32) -> f32 { "
+        "let dx: f32 = x2 - x1 ; let dy: f32 = y2 - y1 ; "
+        "dx * dx + dy * dy } "
+        "fn main() -> i32 { "
+        "dist_sq(0.0_f32, 0.0_f32, 3.0_f32, 4.0_f32) / 16777216 }"
+    ) == 65, "Pythagorean dist_sq end-to-end f32 integration"
+    # And use the result in a comparison: dist_sq(0,0,3,4) > 20.0 ?
+    #   25.0 > 20.0 -> true -> 42
+    assert compile_and_exec(
+        "fn dist_sq(x1: f32, y1: f32, x2: f32, y2: f32) -> f32 { "
+        "let dx: f32 = x2 - x1 ; let dy: f32 = y2 - y1 ; "
+        "dx * dx + dy * dy } "
+        "fn main() -> i32 { "
+        "if dist_sq(0.0_f32, 0.0_f32, 3.0_f32, 4.0_f32) > 20.0_f32 "
+        "{ 42 } else { 99 } }"
+    ) == 42, "f32 fn-call result vs f32 literal in comparison"
     #   fn returning f32 with NEG in body: neg_f(2.0) = -2.0; check by
     #   adding back via SSE (cancels to 0.0).
     assert compile_and_exec(
