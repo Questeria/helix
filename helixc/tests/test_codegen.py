@@ -4011,6 +4011,69 @@ def test_stdlib_vec_max_index_of():
     assert code == 31, f"expected 31 (max=30, idx=1), got {code}"
 
 
+def test_stdlib_hashmap_put_get_round_trip():
+    """HashMap put-then-get round-trip with three keys."""
+    src = """
+    fn main() -> i32 {
+        let m = hashmap_new(8);
+        hashmap_put(m, 8, 1, 100);
+        hashmap_put(m, 8, 2, 42);
+        hashmap_put(m, 8, 3, 7);
+        hashmap_get(m, 8, 2, 0)
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_hashmap_update_existing_key():
+    """hashmap_put on an existing key updates the value in place."""
+    src = """
+    fn main() -> i32 {
+        let m = hashmap_new(4);
+        hashmap_put(m, 4, 5, 10);
+        hashmap_put(m, 4, 5, 42);
+        hashmap_get(m, 4, 5, 0)
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_hashmap_has_size():
+    """hashmap_has returns 1/0; hashmap_size counts occupied buckets."""
+    src = """
+    fn main() -> i32 {
+        let m = hashmap_new(8);
+        hashmap_put(m, 8, 100, 1);
+        hashmap_put(m, 8, 200, 1);
+        hashmap_put(m, 8, 300, 1);
+        let h1 = hashmap_has(m, 8, 200);
+        let h2 = hashmap_has(m, 8, 999);
+        let s = hashmap_size(m, 8);
+        h1 * 30 + s * 4 + h2
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42 (h1=1*30 + s=3*4 + h2=0), got {code}"
+
+
+def test_stdlib_hashmap_collision_probing():
+    """Three keys (0, 4, 8) all hash to bucket 3 with cap=4 — linear probing
+    lets all three coexist and round-trip via independent get() lookups."""
+    src = """
+    fn main() -> i32 {
+        let m = hashmap_new(4);
+        hashmap_put(m, 4, 0, 10);
+        hashmap_put(m, 4, 4, 20);
+        hashmap_put(m, 4, 8, 12);
+        hashmap_get(m, 4, 0, 0) + hashmap_get(m, 4, 4, 0) + hashmap_get(m, 4, 8, 0)
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42 (10+20+12), got {code}"
+
+
 def test_impl_inherent_method_basic():
     """Phase 1.8: inherent impl block. `impl Type { fn method(self) }` lifts
     to `Type__method`. `obj.method(args)` rewrites to `Type__method(obj, args)`."""
