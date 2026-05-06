@@ -1537,6 +1537,29 @@ fn main() -> i32 {{
     assert compile_and_exec("__fadd(__fneg(2.0), 4.0) / 16777216") == 64, "fneg 2.0"
     assert compile_and_exec("__fadd(__fneg(__fneg(3.0)), 0.0) / 16777216") == 64, "fneg dbl"
     assert compile_and_exec("__fadd(__fneg(2.0), 2.0)") == 0, "fneg cancels add"
+    # Phase 1.10 step 3e: sub-1.0 literals (negative binary exponent).
+    # The float-literal codegen now decrements k and halves threshold for
+    # values < 1.0 before running the positive-k loop.
+    #   0.5   = 0x3F000000  top byte 0x3F = 63, byte 2 = 0x00 = 0
+    #   0.25  = 0x3E800000  top byte 0x3E = 62, byte 2 = 0x80 = 128
+    #   0.125 = 0x3E000000  top byte 0x3E = 62, byte 2 = 0x00 = 0
+    #   0.75  = 0x3F400000  top byte 0x3F = 63, byte 2 = 0x40 = 64
+    assert compile_and_exec("0.5 / 16777216") == 63, "f32 bits of 0.5 top byte"
+    assert compile_and_exec("0.25 / 16777216") == 62, "f32 bits of 0.25 top byte"
+    assert compile_and_exec("(0.5 / 65536) % 256") == 0, "0.5 byte 2"
+    assert compile_and_exec("(0.25 / 65536) % 256") == 128, "0.25 byte 2"
+    assert compile_and_exec("(0.125 / 65536) % 256") == 0, "0.125 byte 2"
+    assert compile_and_exec("(0.75 / 65536) % 256") == 64, "0.75 byte 2"
+    # Composability: step 3e plus step 4 SSE arithmetic finally lets sub-1.0
+    # values flow through f32 ops in the bootstrap.
+    #   0.5 + 0.5 = 1.0  -> 0x3F800000, top byte 63
+    #   0.5 * 0.5 = 0.25 -> 0x3E800000, top byte 62
+    #   1.0 / 4.0 = 0.25 -> 0x3E800000, top byte 62
+    #   2.0 - 1.5 = 0.5  -> 0x3F000000, top byte 63
+    assert compile_and_exec("__fadd(0.5, 0.5) / 16777216") == 63, "fadd 0.5+0.5=1"
+    assert compile_and_exec("__fmul(0.5, 0.5) / 16777216") == 62, "fmul 0.5*0.5=.25"
+    assert compile_and_exec("__fdiv(1.0, 4.0) / 16777216") == 62, "fdiv 1/4=.25"
+    assert compile_and_exec("__fsub(2.0, 1.5) / 16777216") == 63, "fsub 2-1.5=.5"
 
 
 def test_bootstrap_kovc_inline_write_file_to_arena():

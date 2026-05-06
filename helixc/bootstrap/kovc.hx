@@ -1334,9 +1334,21 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
             bits = 0;
         } else {
             // Find binary exponent k: largest k such that 2^k * pow10 <= v_scaled.
-            // Loop doubles threshold; halts before overflowing v_scaled.
+            // Step 3e: for v_scaled < pow10 (sub-1.0 literals like 0.5/0.25),
+            // first decrement k and halve threshold until threshold <= v_scaled.
+            // Step 3d: then do the existing positive-k loop. The two loops
+            // together cover values in (~10^-9, ~10^9) within i32 limits.
             let mut k: i32 = 0;
             let mut threshold: i32 = pow10;
+            let mut keep_neg: i32 = 1;
+            while keep_neg == 1 {
+                if threshold <= v_scaled { keep_neg = 0; }
+                else { if threshold == 1 { keep_neg = 0; }
+                else {
+                    threshold = threshold / 2;
+                    k = k - 1;
+                }};
+            }
             let mut keep_k: i32 = 1;
             while keep_k == 1 {
                 if threshold > v_scaled / 2 { keep_k = 0; }
