@@ -2600,7 +2600,15 @@ if __name__ == "__main__":
     grad_count = grad_pass(prog)
     if grad_count > 0:
         print(f"grad: {grad_count} grad(f) call(s) rewritten", file=sys.stderr)
-    # Type-check; print as warnings, abort if --strict
+    # Type-check; print as warnings, abort if --strict.
+    # NOTE: grad_pass internally invokes lower_matches(), which desugars
+    # match -> if/let chains. So typecheck sees the lowered form, which
+    # surfaces fake "enum variant has payload" / "if/else branches differ"
+    # warnings against patterns like Option::Some(x). These are typecheck
+    # imprecision against the lowered form — the original Match was valid.
+    # Suppressing those would require either teaching typecheck about the
+    # lowered form, or splitting grad_pass so lower_matches runs after
+    # typecheck. Tracked as a separate audit item.
     type_errors = typecheck(prog)
     if type_errors:
         for e in type_errors:
