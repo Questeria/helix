@@ -603,6 +603,9 @@ class TypeChecker:
         "__arena_push", "__arena_get", "__arena_set", "__arena_len",
         "__strlen", "__strbyte", "__streq", "__strlit_to_arena",
         "__hash_i32",
+        # Phase 2.2 step 2 — float-bit reinterpret intrinsics.
+        "__bits_of_f32", "__f32_from_bits",
+        "__bits_of_f64", "__f64_from_bits",
     })
 
     # Names of well-known stdlib functions that are surfaced as
