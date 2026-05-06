@@ -883,6 +883,7 @@ fn is_f64_expr(idx: i32, bind_state: i32, bn_state: i32) -> i32 {
         // Step 7e: __f32_to_f64 returns f64. Explicit byte_eq against
         // the installed name slot. Step 7h: __dsqrt also returns f64.
         // Step 7i: __dabs also returns f64.
+        // Step 7j: __dmin / __dmax also return f64.
         // All other AST_CALL → 0 (the parallel is_f32_expr handles f32
         // callers via __f* prefix and explicit byte_eq checks; f64
         // returners need explicit byte_eq here since they don't share
@@ -894,7 +895,15 @@ fn is_f64_expr(idx: i32, bind_state: i32, bn_state: i32) -> i32 {
             if dsqrt_match == 1 { 1 }
             else {
                 let dabs_match = kovc_byte_eq(p1, p2, bn_dabs_s(bn_state), 6);
-                if dabs_match == 1 { 1 } else { 0 }
+                if dabs_match == 1 { 1 }
+                else {
+                    let dmin_match = kovc_byte_eq(p1, p2, bn_dmin_s(bn_state), 6);
+                    if dmin_match == 1 { 1 }
+                    else {
+                        let dmax_match = kovc_byte_eq(p1, p2, bn_dmax_s(bn_state), 6);
+                        if dmax_match == 1 { 1 } else { 0 }
+                    }
+                }
             }
         }
     } else { if t == 2 {                        // AST_ADD
@@ -1106,9 +1115,11 @@ fn install_builtin_names() -> i32 {
     // + 1 __f32_to_f64 slot at 73 (Phase 1.10 step 7e)
     // + 1 __f64_to_f32 slot at 74 (Phase 1.10 step 7e)
     // + 1 __dsqrt slot at 75 (Phase 1.10 step 7h)
-    // + 1 __dabs slot at 76 (Phase 1.10 step 7i).
+    // + 1 __dabs slot at 76 (Phase 1.10 step 7i)
+    // + 1 __dmin slot at 77 (Phase 1.10 step 7j)
+    // + 1 __dmax slot at 78 (Phase 1.10 step 7j).
     let mut i: i32 = 0;
-    while i < 72 {
+    while i < 74 {
         __arena_push(0);
         i = i + 1;
     }
@@ -1362,6 +1373,23 @@ fn install_builtin_names() -> i32 {
     __arena_push(97); __arena_push(98); __arena_push(115);
     __arena_set(bn_state + 76, s25);
 
+    // Phase 1.10 step 7j: "__dmin" (6 chars: 95 95 100 109 105 110).
+    // Two-arg f64 minimum via SSE2 minsd xmm0, xmm1. Mirrors __fmin
+    // (step 5k) on doubles. NaN handling: minsd returns the second
+    // operand (xmm1, holding b) on any NaN — same asymmetric behavior
+    // as minss. is_f64_expr adds explicit byte_eq for the type tag.
+    let s26 = __arena_push(95); __arena_push(95); __arena_push(100);
+    __arena_push(109); __arena_push(105); __arena_push(110);
+    __arena_set(bn_state + 77, s26);
+
+    // Phase 1.10 step 7j: "__dmax" (6 chars: 95 95 100 109 97 120).
+    // Two-arg f64 maximum via SSE2 maxsd xmm0, xmm1. Mirrors __fmax
+    // (step 5l) on doubles. NaN handling: maxsd returns the second
+    // operand (xmm1, b). Same asymmetric NaN behavior as maxss.
+    let s27 = __arena_push(95); __arena_push(95); __arena_push(100);
+    __arena_push(109); __arena_push(97); __arena_push(120);
+    __arena_set(bn_state + 78, s27);
+
     bn_state
 }
 
@@ -1408,6 +1436,8 @@ fn bn_f32_to_f64_s(b: i32) -> i32 { __arena_get(b + 73) }
 fn bn_f64_to_f32_s(b: i32) -> i32 { __arena_get(b + 74) }
 fn bn_dsqrt_s(b: i32) -> i32 { __arena_get(b + 75) }
 fn bn_dabs_s(b: i32) -> i32 { __arena_get(b + 76) }
+fn bn_dmin_s(b: i32) -> i32 { __arena_get(b + 77) }
+fn bn_dmax_s(b: i32) -> i32 { __arena_get(b + 78) }
 // str_state accessors. The state lives within the bn_state region.
 fn str_top(b: i32) -> i32 { __arena_get(b + 7) }
 fn str_top_set(b: i32, v: i32) -> i32 { __arena_set(b + 7, v); 0 }
@@ -2100,9 +2130,44 @@ fn try_emit_builtin_call(name_s: i32, name_l: i32, args_head: i32,
         emit_byte(0x48); emit_byte(0xD1); emit_byte(0xE0);   // shl rax, 1
         emit_byte(0x48); emit_byte(0xD1); emit_byte(0xE8);   // shr rax, 1
         n0 + 6
+    } else { if kovc_byte_eq(name_s, name_l, bn_dmin_s(bn_state), 6) == 1 {
+        // Phase 1.10 step 7j: __dmin(a, b) -> f64 bits in rax. Mirrors
+        // __fmin (step 5k) but on doubles via SSE2 minsd. eval a -> push;
+        // eval b -> rax; mov rcx, rax (FULL 64); pop rax; movq xmm0/xmm1;
+        // minsd xmm0, xmm1; movq rax, xmm0. NaN: minsd returns xmm1 (b).
+        let a0 = __arena_get(args_head + 1);
+        let next_arg = __arena_get(args_head + 2);
+        let a1 = __arena_get(next_arg + 1);
+        let n0 = emit_ast_code(a0, bind_state, patch_state, bn_state);
+        let np = emit_push_rax();
+        let n1 = emit_ast_code(a1, bind_state, patch_state, bn_state);
+        emit_byte(0x48); emit_byte(0x89); emit_byte(0xC1);                                    // mov rcx, rax
+        emit_byte(0x58);                                                                       // pop rax
+        emit_byte(0x66); emit_byte(0x48); emit_byte(0x0F); emit_byte(0x6E); emit_byte(0xC0);   // movq xmm0, rax
+        emit_byte(0x66); emit_byte(0x48); emit_byte(0x0F); emit_byte(0x6E); emit_byte(0xC9);   // movq xmm1, rcx
+        emit_byte(0xF2); emit_byte(0x0F); emit_byte(0x5D); emit_byte(0xC1);                    // minsd xmm0, xmm1
+        emit_byte(0x66); emit_byte(0x48); emit_byte(0x0F); emit_byte(0x7E); emit_byte(0xC0);   // movq rax, xmm0
+        n0 + np + n1 + 3 + 1 + 5 + 5 + 4 + 5
+    } else { if kovc_byte_eq(name_s, name_l, bn_dmax_s(bn_state), 6) == 1 {
+        // Phase 1.10 step 7j: __dmax(a, b) -> f64 bits in rax. Mirrors
+        // __fmax (step 5l) but on doubles via SSE2 maxsd. Same shape as
+        // __dmin with opcode 5F (vs 5D). NaN: maxsd returns xmm1 (b).
+        let a0 = __arena_get(args_head + 1);
+        let next_arg = __arena_get(args_head + 2);
+        let a1 = __arena_get(next_arg + 1);
+        let n0 = emit_ast_code(a0, bind_state, patch_state, bn_state);
+        let np = emit_push_rax();
+        let n1 = emit_ast_code(a1, bind_state, patch_state, bn_state);
+        emit_byte(0x48); emit_byte(0x89); emit_byte(0xC1);                                    // mov rcx, rax
+        emit_byte(0x58);                                                                       // pop rax
+        emit_byte(0x66); emit_byte(0x48); emit_byte(0x0F); emit_byte(0x6E); emit_byte(0xC0);   // movq xmm0, rax
+        emit_byte(0x66); emit_byte(0x48); emit_byte(0x0F); emit_byte(0x6E); emit_byte(0xC9);   // movq xmm1, rcx
+        emit_byte(0xF2); emit_byte(0x0F); emit_byte(0x5F); emit_byte(0xC1);                    // maxsd xmm0, xmm1
+        emit_byte(0x66); emit_byte(0x48); emit_byte(0x0F); emit_byte(0x7E); emit_byte(0xC0);   // movq rax, xmm0
+        n0 + np + n1 + 3 + 1 + 5 + 5 + 4 + 5
     } else {
         0
-    }}}}}}}}}}}}}}}}}}}}}}}}}
+    }}}}}}}}}}}}}}}}}}}}}}}}}}}
 }
 
 // Unreachable in this commit; reference impl preserved for next

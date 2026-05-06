@@ -1948,6 +1948,30 @@ fn main() -> i32 {{
     assert compile_and_exec(
         "__bits_of_f32(__dabs(1.0_f64 / 3.0_f64)) / 16777216"
     ) == 85, "__dabs of positive f64 is identity"
+    # Phase 1.10 step 7j: __dmin / __dmax via SSE2 minsd/maxsd.
+    # __dmin(0.5_f64, 1.0_f64) = 0.5_f64 -> narrow -> 0.5_f32 -> 63.
+    assert compile_and_exec(
+        "__bits_of_f32(__f64_to_f32(__dmin(0.5_f64, 1.0_f64))) / 16777216"
+    ) == 63, "__dmin picks smaller (0.5)"
+    # __dmin(2.0_f64, 1.0_f64) = 1.0_f64 -> narrow -> 1.0_f32 = 0x3F800000 -> 63.
+    assert compile_and_exec(
+        "__bits_of_f32(__f64_to_f32(__dmin(2.0_f64, 1.0_f64))) / 16777216"
+    ) == 63, "__dmin picks smaller (1.0)"
+    # __dmax(0.5_f64, 1.0_f64) = 1.0_f64 -> narrow -> 1.0_f32 = 0x3F800000 -> 63.
+    assert compile_and_exec(
+        "__bits_of_f32(__f64_to_f32(__dmax(0.5_f64, 1.0_f64))) / 16777216"
+    ) == 63, "__dmax picks larger (1.0)"
+    # __dmax(64.0_f64, 32.0_f64) = 64.0_f64 -> narrow -> 8.0_f32-no-wait
+    # 64.0_f32 = 0x42800000 -> top byte 0x42 = 66. If broken (used minsd
+    # opcode 5D instead of 5F), would pick 32.0 = 0x42000000 -> 66 also.
+    # Bad signature. Use distinct values whose top bytes differ:
+    # __dmax(1.0_f64, 0.5_f64) = 1.0 -> 0x3F800000 -> 63;
+    # __dmin(1.0_f64, 0.5_f64) = 0.5 -> 0x3F000000 -> 63 (same!).
+    # Discriminate via low byte of mantissa: __dmax(2.0_f64, 0.5_f64) = 2.0_f64
+    # -> narrow -> 2.0_f32 = 0x40000000 -> 64.
+    assert compile_and_exec(
+        "__bits_of_f32(__f64_to_f32(__dmax(2.0_f64, 0.5_f64))) / 16777216"
+    ) == 64, "__dmax(2.0, 0.5) -> 2.0 (top byte 0x40)"
     # Phase 1.10 step 5+: bootstrap binary bitwise & | ^. Mirrors the
     # helixc-Python fix in commit f676fca; before this, the bootstrap
     # had no parse rule for these operators so source code couldn't use
