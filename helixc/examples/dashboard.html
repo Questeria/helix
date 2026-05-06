@@ -222,8 +222,17 @@
     </div>
     <div class="controls">
       <label>Speed:</label>
-      <input type="range" id="speedRange" min="1" max="100000" value="1000" oninput="updateSpeedLabel()" />
-      <span id="speedVal">1000 events/sec</span>
+      <input type="range" id="speedRange" min="1" max="100000" value="1000" oninput="syncSpeedFromSlider()" />
+      <input type="number" id="speedInput" min="1" max="500000" value="1000" style="width:90px;background:#2a2a2a;color:#e0e0e0;border:1px solid #555;padding:4px 6px;border-radius:4px" oninput="syncSpeedFromInput()" />
+      <span id="speedVal">1.0k ev/s</span>
+    </div>
+    <div class="controls">
+      <label>World size:</label>
+      <select id="gridSize" style="background:#2a2a2a;color:#e0e0e0;border:1px solid #555;padding:4px 8px;border-radius:4px">
+        <option value="10" selected>10 × 10 (small)</option>
+        <option value="15">15 × 15 (medium)</option>
+        <option value="20">20 × 20 (large)</option>
+      </select>
     </div>
     <h2 style="margin-top:16px">Stats</h2>
     <div class="stats">
@@ -247,6 +256,12 @@
     <div style="font-size:11px;color:#666;margin-top:4px">Heatmap shows max-Q per cell from latest episode.</div>
     <h2 style="margin-top:16px">Score over time</h2>
     <canvas id="chart" class="chart-canvas"></canvas>
+    <h2 style="margin-top:16px">Saved sessions <span style="font-size:11px;color:#888;font-weight:normal">(click any to replay; cleared on browser close)</span></h2>
+    <div id="sessions" style="background:#0d0d0d;border-radius:4px;padding:6px;max-height:140px;overflow-y:auto;font-family:monospace;font-size:11px"></div>
+    <div class="controls" style="margin-top:6px">
+      <button onclick="clearSessions()" style="background:#553333;color:#fff">Clear all</button>
+      <button onclick="exportSessions()" title="Download JSON of all saved runs">⬇ Export</button>
+    </div>
     <h2 style="margin-top:16px">JSON stream (raw Helix output)</h2>
     <div id="log"></div>
   </div>
@@ -262,13 +277,23 @@ let paused = false;
 let visited = new Set();
 
 function updateSpeedLabel() {
-  const eps = parseInt(document.getElementById('speedRange').value);
+  const eps = parseInt(document.getElementById('speedInput').value) || 1000;
   let label;
-  if (eps < 100) label = eps + ' events/sec';
+  if (eps < 100) label = eps + ' ev/s';
   else if (eps < 1000) label = eps + ' ev/s';
   else label = (eps / 1000).toFixed(1) + 'k ev/s';
   const ms = (1000 / eps).toFixed(2);
   document.getElementById('speedVal').textContent = label + ' (' + ms + 'ms/step)';
+}
+function syncSpeedFromSlider() {
+  document.getElementById('speedInput').value = document.getElementById('speedRange').value;
+  updateSpeedLabel();
+}
+function syncSpeedFromInput() {
+  const v = Math.max(1, Math.min(500000, parseInt(document.getElementById('speedInput').value) || 1000));
+  // Slider is capped at 100k so don't try to set above its max.
+  if (v <= 100000) document.getElementById('speedRange').value = v;
+  updateSpeedLabel();
 }
 
 let currentObstacles = [];
@@ -517,8 +542,13 @@ function applyEvent(ev) {
     return;
   }
   if (ev.type === 'summary') {
-    document.getElementById('status').className = 'status done-ok';
-    document.getElementById('status').textContent = '✓ Training done. Best path: ' + ev.best_steps + ' steps over ' + ev.episodes + ' episodes';
+    if (ev.best_steps && ev.best_steps < 9999) {
+      document.getElementById('status').className = 'status done-ok';
+      document.getElementById('status').textContent = '✓ Training done. Best path: ' + ev.best_steps + ' steps over ' + ev.episodes + ' episodes';
+    } else {
+      document.getElementById('status').className = 'status done-fail';
+      document.getElementById('status').textContent = '✗ Agent NEVER reached the goal in ' + ev.episodes + ' episodes — gave up. Try a different seed, smaller world, or another agent.';
+    }
     logLine('=== ' + JSON.stringify(ev) + ' ===', 'step');
     return;
   }
@@ -590,6 +620,67 @@ function randomSeed() {
   document.getElementById('seedInput').value = s;
 }
 
+// Session storage (in-memory; cleared on browser close).
+const SESSIONS = [];
+
+function saveSession(meta, events) {
+  SESSIONS.push({
+    id: Date.now(),
+    timestamp: new Date().toLocaleTimeString(),
+    meta: meta,
+    events: events,
+  });
+  if (SESSIONS.length > 30) SESSIONS.shift();
+  renderSessions();
+}
+
+function renderSessions() {
+  const list = document.getElementById('sessions');
+  if (SESSIONS.length === 0) {
+    list.innerHTML = '<div style="color:#666;padding:6px">No saved sessions yet. Click Run to save one.</div>';
+    return;
+  }
+  list.innerHTML = '';
+  for (let i = SESSIONS.length - 1; i >= 0; i--) {
+    const s = SESSIONS[i];
+    const row = document.createElement('div');
+    row.style.cssText = 'padding:4px 6px;border-bottom:1px solid #1a1a1a;cursor:pointer;color:#aaa';
+    row.onmouseover = () => row.style.background = '#2a2a2a';
+    row.onmouseout = () => row.style.background = '';
+    row.onclick = () => replaySession(s);
+    const m = s.meta;
+    const summary = `[${s.timestamp}] ${m.kind} seed=${m.seed} size=${m.size||10} ${m.maze?'maze':'scatter'} → best=${m.best||'?'} (${s.events.length} events)`;
+    row.textContent = summary;
+    list.appendChild(row);
+  }
+}
+
+function replaySession(s) {
+  resetAll();
+  document.getElementById('status').className = 'status running';
+  document.getElementById('status').textContent = '⟲ Replaying session from ' + s.timestamp;
+  allEvents = s.events.slice();
+  cursor = 0;
+  document.getElementById('runBtn').disabled = true;
+  document.getElementById('pauseBtn').disabled = false;
+  scheduleNext();
+}
+
+function clearSessions() {
+  SESSIONS.length = 0;
+  renderSessions();
+}
+
+function exportSessions() {
+  const blob = new Blob([JSON.stringify(SESSIONS, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'helix_dashboard_sessions.json';
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
 async function runAgent() {
   resetAll();
   document.getElementById('runBtn').disabled = true;
@@ -600,7 +691,8 @@ async function runAgent() {
   const kind = document.getElementById('agentKind').value;
   const seed = parseInt(document.getElementById('seedInput').value) || 12345;
   const maze = document.getElementById('mazeMode').checked ? '1' : '0';
-  const resp = await fetch('/run?iter=' + iter + '&kind=' + kind + '&seed=' + seed + '&maze=' + maze);
+  const size = document.getElementById('gridSize').value;
+  const resp = await fetch('/run?iter=' + iter + '&kind=' + kind + '&seed=' + seed + '&maze=' + maze + '&size=' + size);
   const text = await resp.text();
   allEvents = text.trim().split('\n').filter(l => l.length > 0).map(l => {
     try { return JSON.parse(l); } catch (e) { return null; }
@@ -610,6 +702,14 @@ async function runAgent() {
   if (!unlimited && iter > 0 && allEvents.length > iter) {
     allEvents = allEvents.slice(0, iter);
   }
+  // Save the session for replay.
+  const summaryEv = allEvents.find(e => e.type === 'summary');
+  saveSession({
+    kind: kind, seed: seed, size: size,
+    maze: maze === '1',
+    best: summaryEv && summaryEv.best_steps && summaryEv.best_steps < 9999 ? summaryEv.best_steps : null,
+    episodes: summaryEv ? summaryEv.episodes : null,
+  }, allEvents);
   cursor = 0;
   document.getElementById('status').textContent = 'Playing back ' + allEvents.length + ' events';
   scheduleNext();
@@ -624,7 +724,7 @@ function scheduleNext() {
     }
     return;
   }
-  const eps = parseInt(document.getElementById('speedRange').value);
+  const eps = parseInt(document.getElementById('speedInput').value) || parseInt(document.getElementById('speedRange').value);
   // Browser timers clamp to ~4ms minimum; for faster playback we BATCH
   // events per frame. At 60Hz refresh, batch_size = ceil(eps / 60).
   const FRAME_HZ = 60;
@@ -691,6 +791,8 @@ function resetAll() {
 }
 
 resetAll();
+renderSessions();
+updateSpeedLabel();
 </script>
 </body>
 </html>

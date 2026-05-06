@@ -31,9 +31,10 @@
 @pure fn goal_id() -> i32 { 99 }
 @pure fn n_actions() -> i32 { 4 }
 @pure fn hidden() -> i32 { 32 }
-@pure fn n_episodes() -> i32 { 25 }
-@pure fn max_steps_per_ep() -> i32 { 80 }
+@pure fn n_episodes() -> i32 { 40 }
+@pure fn max_steps_per_ep() -> i32 { 150 }
 @pure fn n_obstacles() -> i32 { 14 }
+@pure fn epsilon_floor() -> i32 { 20 }
 
 // SEED_PLACEHOLDER — replaced by server.
 @pure fn map_seed() -> i32 { 12345 }
@@ -371,8 +372,14 @@ fn main() -> i32 {
     let hidden_buf_next = t1d_new(h);
     let mut ep: i32 = 0;
     let mut best_steps: i32 = 9999;
+    let mut last_failed: i32 = 0;
     while ep < n_episodes() {
-        let epsilon_pct = 80 - (ep * 75) / (n_episodes() - 1);
+        let raw = 80 - (ep * 60) / (n_episodes() - 1);
+        let base_eps = if raw < epsilon_floor() { epsilon_floor() } else { raw };
+        let epsilon_pct = if last_failed == 1 {
+            let bumped = base_eps + 25;
+            if bumped > 95 { 95 } else { bumped }
+        } else { base_eps };
         let mut pos: i32 = 0;
         let mut step: i32 = 0;
         let mut total_reward: i32 = 0;
@@ -417,6 +424,9 @@ fn main() -> i32 {
         }
         if reached == 1 {
             if step < best_steps { best_steps = step; }
+            last_failed = 0;
+        } else {
+            last_failed = 1;
         }
         print_episode_end(ep, step, total_reward, reached, epsilon_pct);
         ep = ep + 1;

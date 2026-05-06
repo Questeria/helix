@@ -17,9 +17,10 @@
 //
 // License: Apache 2.0
 
+// GRID_N_PLACEHOLDER — replaced by server (10, 15, or 20).
 @pure fn grid_n() -> i32 { 10 }
-@pure fn grid_total() -> i32 { 100 }
-@pure fn goal_id() -> i32 { 99 }
+@pure fn grid_total() -> i32 { grid_n() * grid_n() }
+@pure fn goal_id() -> i32 { grid_total() - 1 }
 @pure fn n_actions() -> i32 { 4 }
 @pure fn n_episodes() -> i32 { 50 }
 @pure fn max_steps_per_ep() -> i32 { 150 }
@@ -43,10 +44,12 @@ fn lcg(seed: i32) -> i32 {
 // Manhattan distance from state to goal (10x10 grid, goal at 99).
 @pure
 fn dist_to_goal(s: i32) -> i32 {
-    let row = s / 10;
-    let col = s % 10;
-    let dr = if row < 9 { 9 - row } else { row - 9 };
-    let dc = if col < 9 { 9 - col } else { col - 9 };
+    let n = grid_n();
+    let last = n - 1;
+    let row = s / n;
+    let col = s % n;
+    let dr = if row < last { last - row } else { row - last };
+    let dc = if col < last { last - col } else { col - last };
     dr + dc
 }
 
@@ -75,9 +78,11 @@ fn build_scatter_obstacles() -> i32 {
         if tries > 1000 { placed = n_obstacles(); }
         else {
             s = lcg(s);
-            let cand = (((s % 90) + 90) % 90) + 5;
+            let total = grid_total();
+            let cand_range = total - 10;
+            let cand = (((s % cand_range) + cand_range) % cand_range) + 5;
             if cand < 3 { tries = tries + 1; }
-            else { if cand > 96 { tries = tries + 1; }
+            else { if cand > total - 4 { tries = tries + 1; }
             else {
                 let mut dup: i32 = 0;
                 let mut i: i32 = 0;
@@ -105,9 +110,11 @@ fn build_maze_walls() -> i32 {
     let mut wall: i32 = 0;
     while wall < 4 {
         s = lcg(s);
-        let row = (((s % 8) + 8) % 8) + 1;
+        let n = grid_n();
+        let inner = n - 2;
+        let row = (((s % inner) + inner) % inner) + 1;
         s = lcg(s);
-        let col = (((s % 8) + 8) % 8) + 1;
+        let col = (((s % inner) + inner) % inner) + 1;
         s = lcg(s);
         let horiz = if s % 2 == 0 { 1 } else { 0 };
         s = lcg(s);
@@ -118,14 +125,14 @@ fn build_maze_walls() -> i32 {
             else {
                 let cell = if horiz == 1 {
                     let c2 = col + k;
-                    if c2 > 9 { 0 - 1 } else { row * 10 + c2 }
+                    if c2 > grid_n() - 1 { 0 - 1 } else { row * grid_n() + c2 }
                 } else {
                     let r2 = row + k;
-                    if r2 > 9 { 0 - 1 } else { r2 * 10 + col }
+                    if r2 > grid_n() - 1 { 0 - 1 } else { r2 * grid_n() + col }
                 };
                 if cell < 0 { k = len; }
                 else { if cell == 0 { k = k + 1; }
-                else { if cell == 99 { k = k + 1; }
+                else { if cell == goal_id() { k = k + 1; }
                 else {
                     let mut dup: i32 = 0;
                     let mut i: i32 = 0;
@@ -337,7 +344,11 @@ fn print_qmap(ep: i32, q: i32) -> i32 {
 }
 
 fn print_init(obs_arr: i32) -> i32 {
-    print_str("{\"type\":\"init\",\"grid_n\":10,\"goal\":99,\"n_episodes\":");
+    print_str("{\"type\":\"init\",\"grid_n\":");
+    print_int(grid_n());
+    print_str(",\"goal\":");
+    print_int(goal_id());
+    print_str(",\"n_episodes\":");
     print_int(n_episodes());
     print_str(",\"max_steps\":");
     print_int(max_steps_per_ep());

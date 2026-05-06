@@ -36,7 +36,7 @@ AGENTS = {
 }
 
 
-def compile_helix(kind, seed=None, maze=False):
+def compile_helix(kind, seed=None, maze=False, grid_size=None):
     """Compile the chosen agent .hx -> ELF binary.
 
     seed: int substituted into map_seed() for reproducible random maps.
@@ -47,7 +47,7 @@ def compile_helix(kind, seed=None, maze=False):
     hx, bin_name = AGENTS[kind]
     src_path = os.path.join(EXAMPLES, hx)
     compile_path = src_path
-    if (seed is not None or maze) and kind in ("qlearn", "nn"):
+    if (seed is not None or maze or grid_size is not None) and kind in ("qlearn", "nn"):
         with open(src_path, "r", encoding="utf-8") as f:
             src = f.read()
         new_src = src
@@ -60,6 +60,11 @@ def compile_helix(kind, seed=None, maze=False):
             new_src = new_src.replace(
                 "@pure fn use_maze() -> i32 { 0 }",
                 "@pure fn use_maze() -> i32 { 1 }",
+            )
+        if grid_size is not None and kind == "qlearn":
+            new_src = new_src.replace(
+                "@pure fn grid_n() -> i32 { 10 }",
+                f"@pure fn grid_n() -> i32 {{ {int(grid_size)} }}",
             )
         compile_path = os.path.join(EXAMPLES, f"_{kind}_compiled.hx")
         with open(compile_path, "w", encoding="utf-8") as f:
@@ -114,8 +119,13 @@ class Handler(http.server.BaseHTTPRequestHandler):
             except ValueError:
                 seed_i = None
             maze = qs.get("maze", ["0"])[0] == "1"
-            sys.stderr.write(f"Compiling helix agent ({kind}, seed={seed_i}, maze={maze})...\n")
-            bin_path, err = compile_helix(kind, seed=seed_i, maze=maze)
+            try:
+                grid_n = int(qs.get("size", ["10"])[0])
+            except ValueError:
+                grid_n = 10
+            grid_n = max(5, min(20, grid_n))
+            sys.stderr.write(f"Compiling helix agent ({kind}, seed={seed_i}, maze={maze}, grid={grid_n})...\n")
+            bin_path, err = compile_helix(kind, seed=seed_i, maze=maze, grid_size=grid_n)
             if bin_path is None:
                 self.send_response(500)
                 self.send_header("Content-Type", "text/plain")
