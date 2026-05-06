@@ -1504,6 +1504,39 @@ fn main() -> i32 {{
     assert compile_and_exec("42.5 / 16777216") == 66, "f32 bits of 42.5 top byte"
     assert compile_and_exec("3.14 / 16777216") == 64, "f32 bits of 3.14 top byte"
     assert compile_and_exec("0.0 + 7") == 7, "0.0 produces 0 bits"
+    # Phase 1.10 step 4: __fadd / __fsub / __fmul / __fdiv builtins emit
+    # x86-64 SSE encoding (movd xmm, reg / [add|sub|mul|div]ss / movd
+    # eax, xmm0). Result is the f32 bit pattern of the operation; verify
+    # by dividing by 2^24 to extract the top byte (sign+exp+top-mantissa).
+    # NOTE: literals here stay >= 1.0 because step-3d's float-literal
+    # codegen doesn't yet handle negative exponents (TODO step 3e).
+    #   1.5 + 2.5 = 4.0   -> 0x40800000, top byte = 64
+    #   3.0 + 5.0 = 8.0   -> 0x41000000, top byte = 65
+    #   9.0 - 1.0 = 8.0   -> 0x41000000, top byte = 65
+    #   4.0 - 1.0 = 3.0   -> 0x40400000, byte 2 (mod 256 of /65536) = 64
+    #   2.0 * 4.0 = 8.0   -> 0x41000000, top byte = 65
+    #   2.0 * 3.0 = 6.0   -> 0x40C00000, byte 2 = 192
+    #   16.0 / 2.0 = 8.0  -> 0x41000000, top byte = 65
+    #   12.0 / 2.0 = 6.0  -> 0x40C00000, byte 2 = 192
+    assert compile_and_exec("__fadd(1.5, 2.5) / 16777216") == 64, "fadd 1.5+2.5=4"
+    assert compile_and_exec("__fadd(3.0, 5.0) / 16777216") == 65, "fadd 3+5=8"
+    assert compile_and_exec("__fsub(9.0, 1.0) / 16777216") == 65, "fsub 9-1=8"
+    assert compile_and_exec("(__fsub(4.0, 1.0) / 65536) % 256") == 64, "fsub 4-1=3 b2"
+    assert compile_and_exec("__fmul(2.0, 4.0) / 16777216") == 65, "fmul 2*4=8"
+    assert compile_and_exec("(__fmul(2.0, 3.0) / 65536) % 256") == 192, "fmul 2*3=6 b2"
+    assert compile_and_exec("__fdiv(16.0, 2.0) / 16777216") == 65, "fdiv 16/2=8"
+    assert compile_and_exec("(__fdiv(12.0, 2.0) / 65536) % 256") == 192, "fdiv 12/2=6 b2"
+    # Phase 1.10 step 4 follow-on: __fneg single-arg f32 negate via integer
+    # xor on the bit pattern (bit 31 = sign). No SSE registers touched.
+    # Verify by composing with __fadd:
+    #   __fadd(__fneg(1.0), 2.0)            =  1.0 -> 0x3F800000, top byte 63
+    #   __fadd(__fneg(2.0), 4.0)            =  2.0 -> 0x40000000, top byte 64
+    #   __fadd(__fneg(__fneg(3.0)), 0.0)    =  3.0 -> 0x40400000, top byte 64
+    #   __fadd(__fneg(2.0), 2.0)            =  0.0 -> 0x00000000, low byte  0
+    assert compile_and_exec("__fadd(__fneg(1.0), 2.0) / 16777216") == 63, "fneg 1.0"
+    assert compile_and_exec("__fadd(__fneg(2.0), 4.0) / 16777216") == 64, "fneg 2.0"
+    assert compile_and_exec("__fadd(__fneg(__fneg(3.0)), 0.0) / 16777216") == 64, "fneg dbl"
+    assert compile_and_exec("__fadd(__fneg(2.0), 2.0)") == 0, "fneg cancels add"
 
 
 def test_bootstrap_kovc_inline_write_file_to_arena():

@@ -582,10 +582,11 @@ fn emit_exit_with_eax() -> i32 {
 fn install_builtin_names() -> i32 {
     let bn_state = __arena_push(0);          // slot 0 placeholder
     __arena_push(0); __arena_push(0); __arena_push(0); __arena_push(0);
-    // Reserve slots 5..56 (52 more slots: 2 file-name slots + 2
-    // str_state header slots + 48 entry slots).
+    // Reserve slots 5..61 (57 more slots: 2 file-name slots + 2
+    // str_state header slots + 48 entry slots + 5 f32 builtin slots:
+    // __fadd, __fsub, __fmul, __fdiv at slots 57..60; __fneg at 61).
     let mut i: i32 = 0;
-    while i < 52 {
+    while i < 57 {
         __arena_push(0);
         i = i + 1;
     }
@@ -642,6 +643,36 @@ fn install_builtin_names() -> i32 {
     __arena_set(bn_state + 7, 0);
     __arena_set(bn_state + 8, bn_state + 9);
 
+    // Phase 1.10 step 4: f32 arithmetic builtins __fadd / __fsub /
+    // __fmul / __fdiv (each 6 chars). Result returned in eax as the
+    // f32 bit pattern, computed via x86-64 SSE: movd xmm0/xmm1, regs;
+    // [add|sub|mul|div]ss; movd eax, xmm0.
+
+    // "__fadd"  (95 95 102 97 100 100)
+    let s7 = __arena_push(95); __arena_push(95); __arena_push(102);
+    __arena_push(97); __arena_push(100); __arena_push(100);
+    __arena_set(bn_state + 57, s7);
+
+    // "__fsub"  (95 95 102 115 117 98)
+    let s8 = __arena_push(95); __arena_push(95); __arena_push(102);
+    __arena_push(115); __arena_push(117); __arena_push(98);
+    __arena_set(bn_state + 58, s8);
+
+    // "__fmul"  (95 95 102 109 117 108)
+    let s9 = __arena_push(95); __arena_push(95); __arena_push(102);
+    __arena_push(109); __arena_push(117); __arena_push(108);
+    __arena_set(bn_state + 59, s9);
+
+    // "__fdiv"  (95 95 102 100 105 118)
+    let s10 = __arena_push(95); __arena_push(95); __arena_push(102);
+    __arena_push(100); __arena_push(105); __arena_push(118);
+    __arena_set(bn_state + 60, s10);
+
+    // "__fneg"  (95 95 102 110 101 103) — single-arg f32 negate.
+    let s11 = __arena_push(95); __arena_push(95); __arena_push(102);
+    __arena_push(110); __arena_push(101); __arena_push(103);
+    __arena_set(bn_state + 61, s11);
+
     bn_state
 }
 
@@ -652,6 +683,12 @@ fn bn_arena_len_s(b: i32) -> i32  { __arena_get(b + 3) }
 fn bn_helix_arena_base_s(b: i32) -> i32 { __arena_get(b + 4) }
 fn bn_read_file_to_arena_s(b: i32) -> i32 { __arena_get(b + 5) }
 fn bn_write_file_to_arena_s(b: i32) -> i32 { __arena_get(b + 6) }
+// Phase 1.10 step 4: f32 SSE arithmetic builtins.
+fn bn_fadd_s(b: i32) -> i32 { __arena_get(b + 57) }
+fn bn_fsub_s(b: i32) -> i32 { __arena_get(b + 58) }
+fn bn_fmul_s(b: i32) -> i32 { __arena_get(b + 59) }
+fn bn_fdiv_s(b: i32) -> i32 { __arena_get(b + 60) }
+fn bn_fneg_s(b: i32) -> i32 { __arena_get(b + 61) }
 // str_state accessors. The state lives within the bn_state region.
 fn str_top(b: i32) -> i32 { __arena_get(b + 7) }
 fn str_top_set(b: i32, v: i32) -> i32 { __arena_set(b + 7, v); 0 }
@@ -1065,9 +1102,83 @@ fn try_emit_builtin_call(name_s: i32, name_l: i32, args_head: i32,
             let body_bytes = emit_write_file_to_arena_body(patch_state, arena_base_s);
             n3 + n3p + n2 + n2p + 7 + body_bytes
         }
+    } else { if kovc_byte_eq(name_s, name_l, bn_fadd_s(bn_state), 6) == 1 {
+        // __fadd(a, b) -> f32 bits in eax.
+        // eval a -> eax; push; eval b -> eax;
+        // mov ecx, eax (b); pop rax (a);
+        // movd xmm0, eax; movd xmm1, ecx; addss xmm0, xmm1;
+        // movd eax, xmm0
+        let a0 = __arena_get(args_head + 1);
+        let next_arg = __arena_get(args_head + 2);
+        let a1 = __arena_get(next_arg + 1);
+        let n0 = emit_ast_code(a0, bind_state, patch_state, bn_state);
+        let np = emit_push_rax();
+        let n1 = emit_ast_code(a1, bind_state, patch_state, bn_state);
+        emit_byte(0x89); emit_byte(0xC1);                  // mov ecx, eax
+        emit_byte(0x58);                                    // pop rax
+        emit_byte(0x66); emit_byte(0x0F); emit_byte(0x6E); emit_byte(0xC0); // movd xmm0, eax
+        emit_byte(0x66); emit_byte(0x0F); emit_byte(0x6E); emit_byte(0xC9); // movd xmm1, ecx
+        emit_byte(0xF3); emit_byte(0x0F); emit_byte(0x58); emit_byte(0xC1); // addss xmm0, xmm1
+        emit_byte(0x66); emit_byte(0x0F); emit_byte(0x7E); emit_byte(0xC0); // movd eax, xmm0
+        n0 + np + n1 + 2 + 1 + 4 + 4 + 4 + 4
+    } else { if kovc_byte_eq(name_s, name_l, bn_fsub_s(bn_state), 6) == 1 {
+        // __fsub(a, b) -> f32 bits in eax. Same as fadd but subss.
+        let a0 = __arena_get(args_head + 1);
+        let next_arg = __arena_get(args_head + 2);
+        let a1 = __arena_get(next_arg + 1);
+        let n0 = emit_ast_code(a0, bind_state, patch_state, bn_state);
+        let np = emit_push_rax();
+        let n1 = emit_ast_code(a1, bind_state, patch_state, bn_state);
+        emit_byte(0x89); emit_byte(0xC1);
+        emit_byte(0x58);
+        emit_byte(0x66); emit_byte(0x0F); emit_byte(0x6E); emit_byte(0xC0);
+        emit_byte(0x66); emit_byte(0x0F); emit_byte(0x6E); emit_byte(0xC9);
+        emit_byte(0xF3); emit_byte(0x0F); emit_byte(0x5C); emit_byte(0xC1); // subss xmm0, xmm1
+        emit_byte(0x66); emit_byte(0x0F); emit_byte(0x7E); emit_byte(0xC0);
+        n0 + np + n1 + 2 + 1 + 4 + 4 + 4 + 4
+    } else { if kovc_byte_eq(name_s, name_l, bn_fmul_s(bn_state), 6) == 1 {
+        // __fmul(a, b) -> f32 bits. mulss.
+        let a0 = __arena_get(args_head + 1);
+        let next_arg = __arena_get(args_head + 2);
+        let a1 = __arena_get(next_arg + 1);
+        let n0 = emit_ast_code(a0, bind_state, patch_state, bn_state);
+        let np = emit_push_rax();
+        let n1 = emit_ast_code(a1, bind_state, patch_state, bn_state);
+        emit_byte(0x89); emit_byte(0xC1);
+        emit_byte(0x58);
+        emit_byte(0x66); emit_byte(0x0F); emit_byte(0x6E); emit_byte(0xC0);
+        emit_byte(0x66); emit_byte(0x0F); emit_byte(0x6E); emit_byte(0xC9);
+        emit_byte(0xF3); emit_byte(0x0F); emit_byte(0x59); emit_byte(0xC1); // mulss xmm0, xmm1
+        emit_byte(0x66); emit_byte(0x0F); emit_byte(0x7E); emit_byte(0xC0);
+        n0 + np + n1 + 2 + 1 + 4 + 4 + 4 + 4
+    } else { if kovc_byte_eq(name_s, name_l, bn_fdiv_s(bn_state), 6) == 1 {
+        // __fdiv(a, b) -> f32 bits. divss.
+        let a0 = __arena_get(args_head + 1);
+        let next_arg = __arena_get(args_head + 2);
+        let a1 = __arena_get(next_arg + 1);
+        let n0 = emit_ast_code(a0, bind_state, patch_state, bn_state);
+        let np = emit_push_rax();
+        let n1 = emit_ast_code(a1, bind_state, patch_state, bn_state);
+        emit_byte(0x89); emit_byte(0xC1);
+        emit_byte(0x58);
+        emit_byte(0x66); emit_byte(0x0F); emit_byte(0x6E); emit_byte(0xC0);
+        emit_byte(0x66); emit_byte(0x0F); emit_byte(0x6E); emit_byte(0xC9);
+        emit_byte(0xF3); emit_byte(0x0F); emit_byte(0x5E); emit_byte(0xC1); // divss xmm0, xmm1
+        emit_byte(0x66); emit_byte(0x0F); emit_byte(0x7E); emit_byte(0xC0);
+        n0 + np + n1 + 2 + 1 + 4 + 4 + 4 + 4
+    } else { if kovc_byte_eq(name_s, name_l, bn_fneg_s(bn_state), 6) == 1 {
+        // __fneg(x) -> f32 bits. Single-arg sign flip via integer xor
+        // on the bit pattern: xor eax, 0x80000000. No SSE registers
+        // touched — purely an integer op on the f32 bit pattern in
+        // eax. 5 bytes: 0x35 imm32.
+        let a0 = __arena_get(args_head + 1);
+        let n0 = emit_ast_code(a0, bind_state, patch_state, bn_state);
+        emit_byte(0x35);
+        emit_byte(0x00); emit_byte(0x00); emit_byte(0x00); emit_byte(0x80);
+        n0 + 5
     } else {
         0
-    }}}}}}
+    }}}}}}}}}}}
 }
 
 // Unreachable in this commit; reference impl preserved for next
