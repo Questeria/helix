@@ -878,7 +878,7 @@ fn emit_exit_with_eax() -> i32 {
 fn install_builtin_names() -> i32 {
     let bn_state = __arena_push(0);          // slot 0 placeholder
     __arena_push(0); __arena_push(0); __arena_push(0); __arena_push(0);
-    // Reserve slots 5..68 (64 more slots: 2 file-name slots + 2
+    // Reserve slots 5..70 (66 more slots: 2 file-name slots + 2
     // str_state header slots + 48 entry slots + 5 f32 builtin slots
     // (__fadd, __fsub, __fmul, __fdiv at 57..60; __fneg at 61) + 1
     // fn_type_state pointer slot at 62 (Phase 1.10 step 5c follow-on)
@@ -887,9 +887,11 @@ fn install_builtin_names() -> i32 {
     // + 1 __i32_to_f32 slot at 65 (Phase 1.10 step 5i)
     // + 1 __f32_to_i32 slot at 66 (Phase 1.10 step 5j)
     // + 1 __fmin slot at 67 (Phase 1.10 step 5k)
-    // + 1 __fmax slot at 68 (Phase 1.10 step 5l).
+    // + 1 __fmax slot at 68 (Phase 1.10 step 5l)
+    // + 1 __bits_of_f32 slot at 69 (Phase 1.10 step 5m)
+    // + 1 __f32_from_bits slot at 70 (Phase 1.10 step 5m).
     let mut i: i32 = 0;
-    while i < 64 {
+    while i < 66 {
         __arena_push(0);
         i = i + 1;
     }
@@ -1044,6 +1046,31 @@ fn install_builtin_names() -> i32 {
     __arena_push(109); __arena_push(97); __arena_push(120);
     __arena_set(bn_state + 68, s17);
 
+    // Phase 1.10 step 5m: "__bits_of_f32" (13 chars: 95 95 98 105 116
+    // 115 95 111 102 95 102 51 50). Identity-codegen bit reinterpret —
+    // f32 already lives in eax as its IEEE 754 bit pattern, so no extra
+    // bytes are emitted. Distinct from __f32_to_i32 (which truncates).
+    // Starts with __b so doesn't match the __f* prefix; is_f32_expr
+    // falls through to fn_type_table and returns 0 (i32) by default.
+    let s18 = __arena_push(95); __arena_push(95); __arena_push(98);
+    __arena_push(105); __arena_push(116); __arena_push(115);
+    __arena_push(95); __arena_push(111); __arena_push(102);
+    __arena_push(95); __arena_push(102); __arena_push(51); __arena_push(50);
+    __arena_set(bn_state + 69, s18);
+
+    // Phase 1.10 step 5m: "__f32_from_bits" (15 chars: 95 95 102 51 50
+    // 95 102 114 111 109 95 98 105 116 115). Identity-codegen inverse
+    // of __bits_of_f32. Distinct from __i32_to_f32 (which converts the
+    // numeric value). Starts with __f so the __f* prefix correctly
+    // types the result as f32 through is_f32_expr (length 15 != 12 so
+    // it doesn't collide with __f32_to_i32's explicit byte_eq case).
+    let s19 = __arena_push(95); __arena_push(95); __arena_push(102);
+    __arena_push(51); __arena_push(50); __arena_push(95);
+    __arena_push(102); __arena_push(114); __arena_push(111);
+    __arena_push(109); __arena_push(95); __arena_push(98);
+    __arena_push(105); __arena_push(116); __arena_push(115);
+    __arena_set(bn_state + 70, s19);
+
     bn_state
 }
 
@@ -1077,6 +1104,9 @@ fn bn_f32_to_i32_s(b: i32) -> i32 { __arena_get(b + 66) }
 fn bn_fmin_s(b: i32) -> i32 { __arena_get(b + 67) }
 // Phase 1.10 step 5l: __fmax two-arg f32 maximum (SSE2 maxss).
 fn bn_fmax_s(b: i32) -> i32 { __arena_get(b + 68) }
+// Phase 1.10 step 5m: __bits_of_f32 / __f32_from_bits identity bitcasts.
+fn bn_bits_of_f32_s(b: i32) -> i32 { __arena_get(b + 69) }
+fn bn_f32_from_bits_s(b: i32) -> i32 { __arena_get(b + 70) }
 // str_state accessors. The state lives within the bn_state region.
 fn str_top(b: i32) -> i32 { __arena_get(b + 7) }
 fn str_top_set(b: i32, v: i32) -> i32 { __arena_set(b + 7, v); 0 }
@@ -1649,9 +1679,28 @@ fn try_emit_builtin_call(name_s: i32, name_l: i32, args_head: i32,
         emit_byte(0xF3); emit_byte(0x0F); emit_byte(0x5F); emit_byte(0xC1);   // maxss xmm0, xmm1
         emit_byte(0x66); emit_byte(0x0F); emit_byte(0x7E); emit_byte(0xC0);   // movd eax, xmm0
         n0 + np + n1 + 2 + 1 + 4 + 4 + 4 + 4
+    } else { if kovc_byte_eq(name_s, name_l, bn_bits_of_f32_s(bn_state), 13) == 1 {
+        // Phase 1.10 step 5m: __bits_of_f32(x) — identity bitcast,
+        // f32 -> i32. The f32 already lives in eax as its IEEE 754
+        // bit pattern, so no extra bytes are emitted; we just emit
+        // the inner expression and return its byte count. Typed as
+        // i32: starts with __b so doesn't match the __f* prefix;
+        // is_f32_expr falls through to fn_type_table -> 0.
+        let a0 = __arena_get(args_head + 1);
+        let n0 = emit_ast_code(a0, bind_state, patch_state, bn_state);
+        n0
+    } else { if kovc_byte_eq(name_s, name_l, bn_f32_from_bits_s(bn_state), 15) == 1 {
+        // Phase 1.10 step 5m: __f32_from_bits(b) — identity bitcast,
+        // i32 -> f32. Inverse of __bits_of_f32; same identity codegen
+        // (eax already holds the bit pattern). Typed as f32: starts
+        // with __f so the __f* prefix returns 1 in is_f32_expr (length
+        // 15 != 12 so no collision with __f32_to_i32's explicit case).
+        let a0 = __arena_get(args_head + 1);
+        let n0 = emit_ast_code(a0, bind_state, patch_state, bn_state);
+        n0
     } else {
         0
-    }}}}}}}}}}}}}}}}}
+    }}}}}}}}}}}}}}}}}}}
 }
 
 // Unreachable in this commit; reference impl preserved for next

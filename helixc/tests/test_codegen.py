@@ -1747,6 +1747,26 @@ fn main() -> i32 {{
     assert compile_and_exec(
         "__fmax(2.0, __fmin(5.0, 3.0)) / 16777216"
     ) == 64, "fmax composed with fmin"
+    # Phase 1.10 step 5m: __bits_of_f32 / __f32_from_bits — identity
+    # bitcasts. f32 already lives in eax as its IEEE 754 bit pattern,
+    # so codegen is a no-op (just emit the inner expression). Only the
+    # type changes: __bits_of_f32 -> i32, __f32_from_bits -> f32.
+    # 1.0 = 0x3F800000 = 1065353216. top byte 0x3F = 63.
+    assert compile_and_exec("__bits_of_f32(1.0) / 16777216") == 63, "bits_of_f32(1.0) top=0x3F"
+    assert compile_and_exec("__bits_of_f32(0.0)") == 0, "bits_of_f32(0.0)=0"
+    # Round-trip: __f32_from_bits(__bits_of_f32(x)) == x.
+    assert compile_and_exec(
+        "__f32_from_bits(__bits_of_f32(2.0)) / 16777216"
+    ) == 64, "round-trip __f32_from_bits(__bits_of_f32(2.0))=2.0"
+    # __f32_from_bits(0x40000000) = 2.0 -> top 64. 0x40000000 = 1073741824.
+    assert compile_and_exec(
+        "__f32_from_bits(1073741824) / 16777216"
+    ) == 64, "f32_from_bits(0x40000000)=2.0"
+    # f32-typed flow: __f32_from_bits(...) feeds into __fadd.
+    # bits(2.0)=0x40000000=1073741824 -> __fadd(__f32_from_bits, 2.0)=4.0 -> top 64.
+    assert compile_and_exec(
+        "__fadd(__f32_from_bits(1073741824), 2.0) / 16777216"
+    ) == 64, "f32_from_bits result flows as f32 into __fadd"
     # Phase 1.10 step 5a: optional `_f32` / `_f64` / `_i32` / `_i64` suffix
     # on numeric literals. Pre-fix the suffix lexed as a separate IDENT
     # token, breaking parse. Now consumed as part of the literal token.
