@@ -669,7 +669,16 @@ fn is_f32_expr(idx: i32, bind_state: i32, bn_state: i32) -> i32 {
     let t = __arena_get(idx);
     let p1 = __arena_get(idx + 1);
     let p2 = __arena_get(idx + 2);
-    if t == 27 { 1 }                            // AST_FLOATLIT
+    if t == 27 { 1 }                            // AST_FLOATLIT (f32)
+    else { if t == 34 { 1 }                     // AST_FLOATLIT_F64 — Phase 1.10
+                                                // step 7b. Distinct AST tag so
+                                                // future codegen can branch on
+                                                // element width; for now treat
+                                                // f64 literal as if-f32 so the
+                                                // arithmetic dispatch reaches
+                                                // addss/subss (semantically a
+                                                // step 7c gap, structurally
+                                                // sound).
     else { if t == 1 {                          // AST_VAR
         bind_lookup_type(bind_state, p1, p2)
     } else { if t == 16 {                       // AST_CALL
@@ -714,7 +723,7 @@ fn is_f32_expr(idx: i32, bind_state: i32, bn_state: i32) -> i32 {
         if l == 1 { if r == 1 { 1 } else { 0 } } else { 0 }
     } else { if t == 9 {                        // AST_NEG: type follows inner
         is_f32_expr(p1, bind_state, bn_state)
-    } else { 0 }}}}}}}}
+    } else { 0 }}}}}}}}}
 }
 
 // Phase 1.10 step 5c follow-on: fn_type_table maps fn names to their
@@ -1892,18 +1901,26 @@ fn bn_global_slot_address() -> i32 {
 // than a function arg.
 // --------------------------------------------------------------
 fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> i32 {
-    let t = __arena_get(idx);
+    let t_raw = __arena_get(idx);
+    // Phase 1.10 step 7b: AST_FLOATLIT_F64 (34) currently shares the
+    // f32 emission path with AST_FLOATLIT (27). Step 7c will diverge
+    // for true 8-byte codegen (movabs rax, imm64 + movq xmm0, rax).
+    // Alias 34->27 at dispatch entry so the existing f32 body runs.
+    let t = if t_raw == 34 { 27 } else { t_raw };
     let p1 = __arena_get(idx + 1);
     let p2 = __arena_get(idx + 2);
     if t == 0 {
         emit_ast_int(p1)
     } else { if t == 27 {
-        // AST_FLOATLIT (Phase 1.10 step 3d). p1 = byte_start of the literal
-        // text in the arena, p2 = byte_len. Parse "I.F" -> int_part,
-        // frac_part, frac_digits; compute the IEEE 754 f32 bit pattern via
-        // integer-only arithmetic; emit `mov eax, BITS`.
-        // The downstream code can then store BITS as i32 or movd into xmm0
-        // for f32 arithmetic (Phase 1.10 step 4 / future).
+        // AST_FLOATLIT (Phase 1.10 step 3d, f32). Phase 1.10 step 7b
+        // also reuses this branch for AST_FLOATLIT_F64 (tag 34) — the
+        // semantics are still f32-shaped (4-byte SSE single); step 7c
+        // will branch on tag 34 for true 8-byte codegen.
+        // p1 = byte_start of the literal text in the arena, p2 = byte_len.
+        // Parse "I.F" -> int_part, frac_part, frac_digits; compute the
+        // IEEE 754 f32 bit pattern via integer-only arithmetic; emit
+        // `mov eax, BITS`. The downstream code can then store BITS as
+        // i32 or movd into xmm0 for f32 arithmetic.
         let mut i: i32 = 0;
         let mut int_part: i32 = 0;
         let mut frac_part: i32 = 0;
