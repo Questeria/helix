@@ -1789,6 +1789,22 @@ fn main() -> i32 {{
     assert compile_and_exec(
         "let x = 2 ; __hash_i32(x)"
     ) == 187, "hash through let-binding"
+    # Phase 1.10 step 5o: __strlen(STRLIT) — compile-time string-literal
+    # length. Mirrors helixc-Python lower_ast.py:966-969 (folds to
+    # const_int(len) at compile time). Result is i32; codegen emits
+    # `mov eax, body_l` (5 bytes) directly from the AST_STR_LIT node's
+    # body_l slot. ud2 trap if first arg is not a string literal.
+    assert compile_and_exec('__strlen("hello")') == 5, "strlen('hello')=5"
+    assert compile_and_exec('__strlen("a")') == 1, "strlen('a')=1"
+    assert compile_and_exec('__strlen("hello world")') == 11, \
+        "strlen('hello world')=11"
+    # Composes with arithmetic.
+    assert compile_and_exec(
+        '__strlen("foo") + __strlen("bar")'
+    ) == 6, "strlen sum"
+    assert compile_and_exec(
+        'let n = __strlen("the") ; n * 2'
+    ) == 6, "strlen through let-binding"
     # Phase 1.10 step 5a: optional `_f32` / `_f64` / `_i32` / `_i64` suffix
     # on numeric literals. Pre-fix the suffix lexed as a separate IDENT
     # token, breaking parse. Now consumed as part of the literal token.

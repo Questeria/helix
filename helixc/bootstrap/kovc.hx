@@ -878,7 +878,7 @@ fn emit_exit_with_eax() -> i32 {
 fn install_builtin_names() -> i32 {
     let bn_state = __arena_push(0);          // slot 0 placeholder
     __arena_push(0); __arena_push(0); __arena_push(0); __arena_push(0);
-    // Reserve slots 5..71 (67 more slots: 2 file-name slots + 2
+    // Reserve slots 5..72 (68 more slots: 2 file-name slots + 2
     // str_state header slots + 48 entry slots + 5 f32 builtin slots
     // (__fadd, __fsub, __fmul, __fdiv at 57..60; __fneg at 61) + 1
     // fn_type_state pointer slot at 62 (Phase 1.10 step 5c follow-on)
@@ -890,9 +890,10 @@ fn install_builtin_names() -> i32 {
     // + 1 __fmax slot at 68 (Phase 1.10 step 5l)
     // + 1 __bits_of_f32 slot at 69 (Phase 1.10 step 5m)
     // + 1 __f32_from_bits slot at 70 (Phase 1.10 step 5m)
-    // + 1 __hash_i32 slot at 71 (Phase 1.10 step 5n).
+    // + 1 __hash_i32 slot at 71 (Phase 1.10 step 5n)
+    // + 1 __strlen slot at 72 (Phase 1.10 step 5o).
     let mut i: i32 = 0;
-    while i < 67 {
+    while i < 68 {
         __arena_push(0);
         i = i + 1;
     }
@@ -1085,6 +1086,18 @@ fn install_builtin_names() -> i32 {
     __arena_push(50);
     __arena_set(bn_state + 71, s20);
 
+    // Phase 1.10 step 5o: "__strlen" (8 chars: 95 95 115 116 114 108 101
+    // 110). Compile-time string-literal length. First arg MUST be
+    // AST_STR_LIT; codegen reads body_l (byte length) and folds to
+    // `mov eax, body_l` (5 bytes). Mirrors helixc-Python lower_ast.py:
+    // 966-969 const_int(len) folding. Starts with __s so doesn't match
+    // the __f* prefix; is_f32_expr falls through to fn_type_table -> 0
+    // (i32 result).
+    let s21 = __arena_push(95); __arena_push(95); __arena_push(115);
+    __arena_push(116); __arena_push(114); __arena_push(108);
+    __arena_push(101); __arena_push(110);
+    __arena_set(bn_state + 72, s21);
+
     bn_state
 }
 
@@ -1123,6 +1136,9 @@ fn bn_bits_of_f32_s(b: i32) -> i32 { __arena_get(b + 69) }
 fn bn_f32_from_bits_s(b: i32) -> i32 { __arena_get(b + 70) }
 // Phase 1.10 step 5n: __hash_i32 single-arg quadratic mixer (FNV-style).
 fn bn_hash_i32_s(b: i32) -> i32 { __arena_get(b + 71) }
+
+// Phase 1.10 step 5o: __strlen builtin name slot.
+fn bn_strlen_s(b: i32) -> i32 { __arena_get(b + 72) }
 // str_state accessors. The state lives within the bn_state region.
 fn str_top(b: i32) -> i32 { __arena_get(b + 7) }
 fn str_top_set(b: i32, v: i32) -> i32 { __arena_set(b + 7, v); 0 }
@@ -1742,9 +1758,27 @@ fn try_emit_builtin_call(name_s: i32, name_l: i32, args_head: i32,
         emit_byte(0x05);                                         // add eax, imm32
         emit_byte(0xB1); emit_byte(0x67); emit_byte(0x56); emit_byte(0x16); // c3 LE
         n0 + 1 + 3 + 6 + 1 + 6 + 2 + 5
+    } else { if kovc_byte_eq(name_s, name_l, bn_strlen_s(bn_state), 8) == 1 {
+        // Phase 1.10 step 5o: __strlen(s) -> i32 compile-time string-
+        // literal length. Mirrors helixc-Python lower_ast.py:966-969
+        // (`return self.builder.const_int(len(s.encode("utf-8")))`).
+        // First arg MUST be AST_STR_LIT (tag 25). We read body_l (=
+        // byte length stored at arg_idx + 2) and emit `mov eax,
+        // body_l` via emit_ast_int (5 bytes: B8 imm32). If the arg is
+        // not AST_STR_LIT, emit ud2 trap so misuse is loud (mirrors
+        // the file-builtin strict-pattern requirement).
+        let arg_idx = __arena_get(args_head + 1);
+        let arg_tag = __arena_get(arg_idx);
+        if arg_tag != 25 {
+            emit_byte(0x0F); emit_byte(0x0B);
+            2
+        } else {
+            let body_l = __arena_get(arg_idx + 2);
+            emit_ast_int(body_l)
+        }
     } else {
         0
-    }}}}}}}}}}}}}}}}}}}}
+    }}}}}}}}}}}}}}}}}}}}}
 }
 
 // Unreachable in this commit; reference impl preserved for next
