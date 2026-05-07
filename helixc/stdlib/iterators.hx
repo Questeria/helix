@@ -1032,3 +1032,83 @@ fn vec_index_of_pure(start: i32, count: i32, target: i32) -> i32 {
     }
     found
 }
+
+// vec_window_max(start, count, win): allocate a new vec of length
+// (count - win + 1) where r[i] = max(v[i..i+win]). O(count*win) naive
+// but fine for small win. Returns empty if win > count or win <= 0.
+fn vec_window_max(start: i32, count: i32, win: i32) -> i32 {
+    let s: i32 = __arena_len();
+    if win > count { s }
+    else { if win <= 0 { s }
+    else {
+        let last_start = count - win;
+        let mut i: i32 = 0;
+        while i <= last_start {
+            let mut best = __arena_get(start + i);
+            let mut k: i32 = 1;
+            while k < win {
+                let v = __arena_get(start + i + k);
+                if v > best { best = v; };
+                k = k + 1;
+            }
+            __arena_push(best);
+            i = i + 1;
+        }
+        s
+    }}
+}
+
+// vec_window_min(start, count, win): companion to vec_window_max.
+fn vec_window_min(start: i32, count: i32, win: i32) -> i32 {
+    let s: i32 = __arena_len();
+    if win > count { s }
+    else { if win <= 0 { s }
+    else {
+        let last_start = count - win;
+        let mut i: i32 = 0;
+        while i <= last_start {
+            let mut best = __arena_get(start + i);
+            let mut k: i32 = 1;
+            while k < win {
+                let v = __arena_get(start + i + k);
+                if v < best { best = v; };
+                k = k + 1;
+            }
+            __arena_push(best);
+            i = i + 1;
+        }
+        s
+    }}
+}
+
+// vec_count_in_range(start, count, lo, hi): @pure. Count of indices
+// where lo <= v[i] <= hi (inclusive). Empty input returns 0.
+@pure
+fn vec_count_in_range(start: i32, count: i32, lo: i32, hi: i32) -> i32 {
+    let mut i: i32 = 0;
+    let mut total: i32 = 0;
+    while i < count {
+        let v = __arena_get(start + i);
+        if v >= lo {
+            if v <= hi { total = total + 1; };
+        };
+        i = i + 1;
+    }
+    total
+}
+
+// vec_pairwise_diff(start, count): allocate a new vec of length
+// (count - 1) where r[i] = v[i+1] - v[i]. Discrete derivative.
+// Empty if count <= 1.
+fn vec_pairwise_diff(start: i32, count: i32) -> i32 {
+    let s: i32 = __arena_len();
+    if count <= 1 { s }
+    else {
+        let mut i: i32 = 1;
+        while i < count {
+            __arena_push(__arena_get(start + i) - __arena_get(start + i - 1));
+            i = i + 1;
+        }
+        s
+    }
+}

@@ -8175,6 +8175,75 @@ def test_stdlib_ti1d_l2_norm_sq():
     assert code == 42, f"expected 42, got {code}"
 
 
+def test_stdlib_vec_window_max():
+    """window_max([1,3,2,5,4], win=3) -> [3,5,5]; sum=13; *3+3=42."""
+    src = """
+    fn main() -> i32 {
+        let v = __arena_len();
+        __arena_push(1); __arena_push(3); __arena_push(2); __arena_push(5); __arena_push(4);
+        let r = vec_window_max(v, 5, 3);
+        let mut total: i32 = 0;
+        let mut i: i32 = 0;
+        while i < 3 {
+            total = total + __arena_get(r + i);
+            i = i + 1;
+        }
+        total * 3 + 3
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_vec_window_min():
+    """window_min([5,3,4,1,2], win=3) -> [3,1,1]; sum=5; *7+7=42."""
+    src = """
+    fn main() -> i32 {
+        let v = __arena_len();
+        __arena_push(5); __arena_push(3); __arena_push(4); __arena_push(1); __arena_push(2);
+        let r = vec_window_min(v, 5, 3);
+        let mut total: i32 = 0;
+        let mut i: i32 = 0;
+        while i < 3 {
+            total = total + __arena_get(r + i);
+            i = i + 1;
+        }
+        total * 7 + 7
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_vec_count_in_range():
+    """count [1,2,3,5,7,9] in [3,7] = 3 (3,5,7); *14=42."""
+    src = """
+    fn main() -> i32 {
+        let v = __arena_len();
+        __arena_push(1); __arena_push(2); __arena_push(3); __arena_push(5);
+        __arena_push(7); __arena_push(9);
+        vec_count_in_range(v, 6, 3, 7) * 14
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_vec_pairwise_diff():
+    """pairwise_diff([1,4,9,16]) -> [3,5,7]; sum=15; *2+12=42."""
+    src = """
+    fn main() -> i32 {
+        let v = __arena_len();
+        __arena_push(1); __arena_push(4); __arena_push(9); __arena_push(16);
+        let r = vec_pairwise_diff(v, 4);
+        let s = __arena_get(r) + __arena_get(r + 1) + __arena_get(r + 2);
+        s * 2 + 12
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
 def test_stdlib_tf2d_add():
     """[[1,2],[3,4]] + [[5,6],[7,8]] -> [[6,8],[10,12]]; sum=36; +6=42."""
     src = """
