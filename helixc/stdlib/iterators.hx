@@ -173,6 +173,38 @@ fn vec_map_mul_scalar(start: i32, count: i32, k: i32) -> i32 {
     s
 }
 
+fn vec_map_neg(start: i32, count: i32) -> i32 {
+    let s: i32 = __arena_len();
+    let mut i: i32 = 0;
+    while i < count {
+        __arena_push(0 - __arena_get(start + i));
+        i = i + 1;
+    }
+    s
+}
+
+fn vec_map_abs(start: i32, count: i32) -> i32 {
+    let s: i32 = __arena_len();
+    let mut i: i32 = 0;
+    while i < count {
+        let v = __arena_get(start + i);
+        if v < 0 { __arena_push(0 - v); } else { __arena_push(v); }
+        i = i + 1;
+    }
+    s
+}
+
+fn vec_map_relu(start: i32, count: i32) -> i32 {
+    let s: i32 = __arena_len();
+    let mut i: i32 = 0;
+    while i < count {
+        let v = __arena_get(start + i);
+        if v < 0 { __arena_push(0); } else { __arena_push(v); }
+        i = i + 1;
+    }
+    s
+}
+
 fn vec_zip_add(a: i32, b: i32, count: i32) -> i32 {
     let s: i32 = __arena_len();
     let mut i: i32 = 0;

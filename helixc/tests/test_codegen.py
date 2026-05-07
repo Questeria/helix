@@ -7310,6 +7310,64 @@ def test_stdlib_vec_filter_ne():
     assert code == 37, f"expected 37, got {code}"
 
 
+def test_stdlib_vec_map_neg():
+    """map_neg([3,-7,4,-1,-5]) -> new vec [-3,7,-4,1,5], sum=6. Original
+    untouched: vec_get(orig, 0)=3 still. Encoded: dst_sum*7=42."""
+    src = """
+    fn main() -> i32 {
+        let v = vec_new();
+        let n0 = vec_push(v, 0, 3);
+        let n1 = vec_push(v, n0, -7);
+        let n2 = vec_push(v, n1, 4);
+        let n3 = vec_push(v, n2, -1);
+        let n4 = vec_push(v, n3, -5);
+        let dst = vec_map_neg(v, n4);
+        let original_first = vec_get(v, 0);
+        if original_first == 3 { vec_sum(dst, n4) * 7 } else { 0 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_vec_map_abs():
+    """map_abs([5,-3,-8,1]) -> new vec [5,3,8,1], sum=17. Original first
+    elem still 5. Encoded: 17*2+8=42."""
+    src = """
+    fn main() -> i32 {
+        let v = vec_new();
+        let n0 = vec_push(v, 0, 5);
+        let n1 = vec_push(v, n0, -3);
+        let n2 = vec_push(v, n1, -8);
+        let n3 = vec_push(v, n2, 1);
+        let dst = vec_map_abs(v, n3);
+        let original_second = vec_get(v, 1);
+        if original_second == -3 { vec_sum(dst, n3) * 2 + 8 } else { 0 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_vec_map_relu():
+    """map_relu([5,-3,9,-1]) -> new vec [5,0,9,0], sum=14. Original
+    untouched. Encoded: 14*3=42."""
+    src = """
+    fn main() -> i32 {
+        let v = vec_new();
+        let n0 = vec_push(v, 0, 5);
+        let n1 = vec_push(v, n0, -3);
+        let n2 = vec_push(v, n1, 9);
+        let n3 = vec_push(v, n2, -1);
+        let dst = vec_map_relu(v, n3);
+        let original_neg = vec_get(v, 1);
+        if original_neg == -3 { vec_sum(dst, n3) * 3 } else { 0 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
 def main():
     tests = [(name, fn) for name, fn in globals().items()
              if name.startswith("test_") and callable(fn)]
