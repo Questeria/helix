@@ -3232,20 +3232,22 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         // p3 to avoid 16-bit overflow on large sources).
         // Step 5c: infer type from value AST and stamp into bind_state
         // so subsequent uses of the binding can dispatch to SSE.
-        // Step 7d-5: 3-way val_ty (0=i32, 1=f32, 2=f64). f64 needs
-        // 64-bit store + load; otherwise the high half is silently
-        // dropped at let-binding time and arithmetic produces garbage.
+        // Stage 1.6 + 2.1: val_ty = expr_type directly, so the FULL
+        // tag space (0=i32, 1=f32, 2=f64, 3=i64, 6=u32, …) propagates
+        // into bind_state instead of being demoted to whichever of
+        // the 3 sibling predicates fired. Without this, u32 values
+        // bound via let silently lose their type tag and downstream
+        // expr_type(AST_VAR) returns 0 (i32), defeating the whole
+        // point of distinguishing AST_INTLIT_U32 (tag 36).
         let body_idx = __arena_get(idx + 3);
         let value_idx = __arena_get(idx + 4);
-        let v_f32 = is_f32_expr(value_idx, bind_state, bn_state);
-        let v_f64 = is_f64_expr(value_idx, bind_state, bn_state);
-        let v_i64 = is_i64_expr(value_idx, bind_state, bn_state);
-        // 4-way val_ty: 3=i64 (Stage 1) > 2=f64 > 1=f32 > 0=i32.
-        let val_ty = if v_i64 == 1 { 3 }
-                     else { if v_f64 == 1 { 2 } else { v_f32 } };
+        let val_ty = expr_type(value_idx, bind_state, bn_state);
         let n_val = emit_ast_code(value_idx, bind_state, patch_state, bn_state);
         let off = bind_alloc_offset(bind_state);
-        // Stage 1: i64 (val_ty=3) also needs 64-bit store, same as f64.
+        // 64-bit store for f64 (tag 2) and i64 (tag 3). All other
+        // types (i32=0, f32=1, u32=6, future u8/u16/i8/i16) use the
+        // 32-bit store; their 8-byte slot has the high 32 cleared by
+        // x86's auto-zero-extension on 32-bit ops.
         let n_store = if val_ty == 2 {
             emit_mov_local_rax_64(off)
         } else { if val_ty == 3 {
@@ -3258,22 +3260,15 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         bind_pop(bind_state);
         n_val + n_store + n_body
     } else { if t == 12 {
-        // AST_LET_MUT: identical codegen to AST_LET. Mutability is
-        // a surface-language constraint; the runtime representation
-        // is the same. (Reassignment via AST_ASSIGN works on either.)
-        // Same 5-slot layout as AST_LET (audit-14).
-        // Step 7d-5: f64 path (val_ty=2) → 64-bit store.
+        // AST_LET_MUT: identical codegen to AST_LET. Mutability is a
+        // surface-language constraint; the runtime representation is
+        // the same. (Reassignment via AST_ASSIGN works on either.)
+        // Stage 1.6 + 2.1: val_ty via expr_type (full tag space).
         let body_idx = __arena_get(idx + 3);
         let value_idx = __arena_get(idx + 4);
-        let v_f32 = is_f32_expr(value_idx, bind_state, bn_state);
-        let v_f64 = is_f64_expr(value_idx, bind_state, bn_state);
-        let v_i64 = is_i64_expr(value_idx, bind_state, bn_state);
-        // 4-way val_ty: 3=i64 (Stage 1) > 2=f64 > 1=f32 > 0=i32.
-        let val_ty = if v_i64 == 1 { 3 }
-                     else { if v_f64 == 1 { 2 } else { v_f32 } };
+        let val_ty = expr_type(value_idx, bind_state, bn_state);
         let n_val = emit_ast_code(value_idx, bind_state, patch_state, bn_state);
         let off = bind_alloc_offset(bind_state);
-        // Stage 1: i64 (val_ty=3) also needs 64-bit store, same as f64.
         let n_store = if val_ty == 2 {
             emit_mov_local_rax_64(off)
         } else { if val_ty == 3 {
@@ -3741,9 +3736,11 @@ fn emit_elf_for_ast_to_path(ast_root: i32) -> i32 {
             // match declared return type. Specifically i64-return fns
             // whose body produces i32 (high 32 stale) and i32-return fns
             // whose body produces i64 (caller treats as 32 — high half
-            // dropped silently). Mirrors AST_ASSIGN ud2-on-mismatch from
-            // batch 3. f32/f64 mismatch detection is left for Stage 1.6
-            // when the type predicate refactor lands.
+            // dropped silently). f32/f64/u32 mismatch detection is left
+            // for a future stage — extending to full expr_type produced
+            // false positives in the existing bootstrap source (some
+            // body type-inference paths still return 0 for things that
+            // should be u32/etc. — investigating).
             let body_is_i64 = is_i64_expr(fn_body, bind_state, bn_state);
             let ret_wants_i64 = if fn_ret_ty == 3 { 1 } else { 0 };
             if body_is_i64 != ret_wants_i64 {
