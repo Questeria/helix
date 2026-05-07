@@ -243,6 +243,7 @@ fn lex_int(src_start: i32, src_len: i32, pos: i32) -> i32 {
     let mut is_i64_suffix: i32 = 0;
     let mut is_u32_suffix: i32 = 0;
     let mut is_u8_suffix: i32 = 0;
+    let mut is_u64_suffix: i32 = 0;
     if p + 3 < end {
         let b0 = __arena_get(p);
         if b0 == 95 {   // '_'
@@ -299,6 +300,12 @@ fn lex_int(src_start: i32, src_len: i32, pos: i32) -> i32 {
                     p = p + 3;
                     is_u8_suffix = 1;
                 };
+                if b2 == 54 {
+                    if b3 == 52 {                   // _u64
+                        p = p + 4;
+                        is_u64_suffix = 1;
+                    };
+                };
             };
         };
     }
@@ -314,10 +321,12 @@ fn lex_int(src_start: i32, src_len: i32, pos: i32) -> i32 {
         // Stage 1: TK_INTLIT_I64 (tag 33) for _i64-suffixed literals;
         // Stage 2.1: TK_INTLIT_U32 (tag 34) for _u32-suffixed literals;
         // Stage 2.3: TK_INTLIT_U8  (tag 35) for _u8-suffixed literals;
+        // Stage 2.4: TK_INTLIT_U64 (tag 36) for _u64-suffixed literals;
         // TK_INT (tag 1) for plain or _i32-suffixed.
         let tk = if is_i64_suffix == 1 { 33 }
                  else { if is_u32_suffix == 1 { 34 }
-                 else { if is_u8_suffix == 1 { 35 } else { 1 } } };
+                 else { if is_u8_suffix == 1 { 35 }
+                 else { if is_u64_suffix == 1 { 36 } else { 1 } } } };
         push_token(tk, value, pos, length);
     };
     p

@@ -2188,6 +2188,14 @@ fn main() -> i32 {{
     assert compile_and_exec("42_u8") == 42, "u8 literal exits 42"
     assert compile_and_exec("100_u8 - 58_u8") == 42, \
         "u8 - u8 via fall-through to i32 path (signedness-agnostic)"
+    # Approach A Stage 2.4: u64 minimal scaffold. u64 literals lex via
+    # `_u64` 4-byte suffix, parse to AST_INTLIT_U64 (tag 38), expr_type
+    # returns 9. Codegen emits `movabs rax, imm64` (8 bytes) so the full
+    # 64-bit value is preserved (same shape as i64). Storage uses 64-bit
+    # load/store (mov with REX.W). Stage 2.4 added u64 to the width
+    # dispatch in AST_VAR/LET/LET_MUT/ASSIGN/fn-param spill (tag 9
+    # alongside i64=3 and f64=2).
+    assert compile_and_exec("42_u64") == 42, "u64 literal exits 42"
     # Phase 1.10 step 7l: f64 bit-access primitives.
     # __bits_hi_f64(1.0_f64) -> high 32 of 0x3FF0000000000000 = 0x3FF00000.
     # /16777216 = 0x3F = 63.

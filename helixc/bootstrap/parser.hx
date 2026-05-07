@@ -451,6 +451,17 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
         let v = tok_p1(tok_base, k);
         cur_advance(sb);
         mk_node(37, v, 0, 0)
+    } else { if t == 36 {
+        // Approach A Stage 2.4: TK_INTLIT_U64 (tag 36) -> AST_INTLIT_U64
+        // (tag 38). Codegen emits 8-byte `movabs rax, imm64` (same as
+        // i64 literal). x86 64-bit ops work for both signed and
+        // unsigned operands; only DIV/MOD and comparisons differ —
+        // u64 dispatches to `48 31 D2; 48 F7 F1` (xor rdx,rdx; div rcx)
+        // for unsigned division, setb/seta/setbe/setae for unsigned
+        // comparisons. expr_type returns 9 (u64) for type tracking.
+        let v = tok_p1(tok_base, k);
+        cur_advance(sb);
+        mk_node(38, v, 0, 0)
     } else { if t == 25 {
         // String literal (TK_STRLIT). Token slots:
         //   payload   = body byte_start (in the source buffer)
@@ -653,7 +664,7 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
             };
         };
         mk_node(99, t, 0, 0)
-    }}}}}}}}}
+    }}}}}}}}}}
 }
 
 // --------------------------------------------------------------
@@ -834,8 +845,9 @@ fn parse_fn_decl(tok_base: i32, sb: i32) -> i32 {
                     else { if b1 == 51 { if b2 == 50 { 1 } else { 0 } } else { 0 } }
                 } else { if b0 == 105 {
                     if b1 == 54 { if b2 == 52 { 3 } else { 0 } } else { 0 }
-                } else { if b0 == 117 {                  // 'u' — Stage 2.1
-                    if b1 == 51 { if b2 == 50 { 6 } else { 0 } } else { 0 }
+                } else { if b0 == 117 {                  // 'u' — Stage 2.1 + 2.4
+                    if b1 == 51 { if b2 == 50 { 6 } else { 0 } }                // u32
+                    else { if b1 == 54 { if b2 == 52 { 9 } else { 0 } } else { 0 } }  // u64
                 } else { 0 } } }
             } else { if ty_l == 2 {
                 // Stage 2.3: 2-byte type idents — `u8` -> 7.
@@ -873,8 +885,9 @@ fn parse_fn_decl(tok_base: i32, sb: i32) -> i32 {
             else { if b1 == 51 { if b2 == 50 { 1 } else { 0 } } else { 0 } }
         } else { if b0 == 105 {
             if b1 == 54 { if b2 == 52 { 3 } else { 0 } } else { 0 }
-        } else { if b0 == 117 {                  // 'u' — Stage 2.1
-            if b1 == 51 { if b2 == 50 { 6 } else { 0 } } else { 0 }
+        } else { if b0 == 117 {                  // 'u' — Stage 2.1 + 2.4
+            if b1 == 51 { if b2 == 50 { 6 } else { 0 } }                // u32
+            else { if b1 == 54 { if b2 == 52 { 9 } else { 0 } } else { 0 } }  // u64
         } else { 0 } } }
     } else { if rt_l == 2 {
         // Stage 2.3: 2-byte type idents — `u8` -> 7.

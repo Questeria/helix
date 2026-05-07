@@ -563,6 +563,28 @@ fn emit_imod_eax_ecx_u() -> i32 {
     6
 }
 
+// Stage 2.4: unsigned 64-bit comparison helpers (REX.W variants).
+fn emit_lt_rax_rcx_64_u() -> i32 { emit_cmp_setX_64(0x92) }
+fn emit_gt_rax_rcx_64_u() -> i32 { emit_cmp_setX_64(0x97) }
+fn emit_le_rax_rcx_64_u() -> i32 { emit_cmp_setX_64(0x96) }
+fn emit_ge_rax_rcx_64_u() -> i32 { emit_cmp_setX_64(0x93) }
+
+// Stage 2.4: unsigned 64-bit division (REX.W).
+//   48 31 D2       xor rdx, rdx       (clear high half of dividend)
+//   48 F7 F1       div rcx            (rax = rdx:rax / rcx; rdx = rem)
+fn emit_div_rax_rcx_64_u() -> i32 {
+    emit_byte(0x48); emit_byte(0x31); emit_byte(0xD2);
+    emit_byte(0x48); emit_byte(0xF7); emit_byte(0xF1);
+    6
+}
+// Unsigned 64-bit mod: same setup, then mov rax, rdx (REX.W).
+fn emit_imod_rax_rcx_64_u() -> i32 {
+    emit_byte(0x48); emit_byte(0x31); emit_byte(0xD2);
+    emit_byte(0x48); emit_byte(0xF7); emit_byte(0xF1);
+    emit_byte(0x48); emit_byte(0x89); emit_byte(0xD0);
+    9
+}
+
 // test eax, eax — sets ZF if eax == 0.
 fn emit_test_eax_eax() -> i32 {
     emit_byte(0x85); emit_byte(0xC0);
@@ -926,6 +948,7 @@ fn expr_type(idx: i32, bind_state: i32, bn_state: i32) -> i32 {
     else { if t == 35 { 3 }                           // AST_INTLIT_I64
     else { if t == 36 { 6 }                           // AST_INTLIT_U32 (Stage 2.1)
     else { if t == 37 { 7 }                           // AST_INTLIT_U8  (Stage 2.3)
+    else { if t == 38 { 9 }                           // AST_INTLIT_U64 (Stage 2.4)
     else { if t == 0 { 0 }                            // AST_INTLIT (i32)
     else { if t == 1 {                                // AST_VAR
         bind_lookup_type(bind_state, p1, p2)
@@ -1050,7 +1073,7 @@ fn expr_type(idx: i32, bind_state: i32, bn_state: i32) -> i32 {
                 }
             }
         }
-    } else { 0 }}}}}}}}}}}}}}}}}}}}}}}}}
+    } else { 0 }}}}}}}}}}}}}}}}}}}}}}}}}}
 }
 
 // Phase 1.10 step 5c: type-inference on AST nodes. Returns 1 if the
@@ -1087,6 +1110,13 @@ fn is_u32_expr(idx: i32, bind_state: i32, bn_state: i32) -> i32 {
 // unsigned 32-bit-or-narrower integers.
 fn is_u8_expr(idx: i32, bind_state: i32, bn_state: i32) -> i32 {
     if expr_type(idx, bind_state, bn_state) == 7 { 1 } else { 0 }
+}
+
+// Stage 2.4: is_u64_expr — type predicate for u64 (tag 9).
+// u64 needs REX.W-prefixed unsigned helpers (different from u32's
+// 32-bit unsigned helpers) and 8-byte storage (like i64).
+fn is_u64_expr(idx: i32, bind_state: i32, bn_state: i32) -> i32 {
+    if expr_type(idx, bind_state, bn_state) == 9 { 1 } else { 0 }
 }
 
 // Phase 1.10 step 5c follow-on: fn_type_table maps fn names to their
@@ -2599,6 +2629,19 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         // 2.3b will add narrow movzx load + masked store for proper
         // u8 semantics; today's u8 is "u32 with type tag 7."
         emit_ast_int(p1)
+    } else { if t == 38 {
+        // Approach A Stage 2.4: AST_INTLIT_U64 (tag 38). Same emit as
+        // i64 (movabs rax, imm64). For positive values < 2^63 the bit
+        // pattern is identical for signed and unsigned; for values
+        // >= 2^63 (which AST_INTLIT_U64 can't yet hold via i32 p1
+        // anyway), unsigned interpretation matters at the comparison
+        // and DIV/MOD sites only — those dispatch via is_u64_expr.
+        // High32 = 0 for unsigned (no sign extension). For p1 < 0,
+        // high32 should remain 0 (u64 doesn't have negative values),
+        // but since p1 is i32-encoded, we sign-extend like i64 to
+        // preserve bit-equality with explicit i64 -> u64 conversions.
+        let hi32 = if p1 < 0 { 0 - 1 } else { 0 };
+        emit_movabs_rax_imm64(p1, hi32)
     } else { if t == 27 {
         // AST_FLOATLIT (Phase 1.10 step 3d, f32). Phase 1.10 step 7b
         // also reuses this branch for AST_FLOATLIT_F64 (tag 34) — the
@@ -3337,10 +3380,12 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         // preserve the high half. i32 / f32 stay on 32-bit load.
         let off = bind_lookup(bind_state, p1, p2);
         let ty = bind_lookup_type(bind_state, p1, p2);
-        // Stage 1: ty==3 (i64) also uses 64-bit load to preserve high half.
+        // 8-byte types (f64=2, i64=3, u64=9) use 64-bit load to preserve
+        // the high half. All others use 32-bit load (auto-zero-extends).
         if ty == 2 { emit_mov_rax_local_64(off) }
         else { if ty == 3 { emit_mov_rax_local_64(off) }
-        else { emit_mov_eax_local(off) }}
+        else { if ty == 9 { emit_mov_rax_local_64(off) }
+        else { emit_mov_eax_local(off) }}}
     } else { if t == 8 {
         // AST_LET: p1 = name_start, p2 = name_len, p3 = body_idx,
         // p4 = value_idx (audit-14: split out of the legacy packed
@@ -3359,17 +3404,19 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         let val_ty = expr_type(value_idx, bind_state, bn_state);
         let n_val = emit_ast_code(value_idx, bind_state, patch_state, bn_state);
         let off = bind_alloc_offset(bind_state);
-        // 64-bit store for f64 (tag 2) and i64 (tag 3). All other
-        // types (i32=0, f32=1, u32=6, future u8/u16/i8/i16) use the
-        // 32-bit store; their 8-byte slot has the high 32 cleared by
-        // x86's auto-zero-extension on 32-bit ops.
+        // 8-byte types (f64=2, i64=3, u64=9) use 64-bit store. All
+        // other types (i32=0, f32=1, u32=6, u8=7, future i8/i16/u16)
+        // use 32-bit store; their 8-byte slot has the high 32 cleared
+        // by x86's auto-zero-extension on 32-bit ops.
         let n_store = if val_ty == 2 {
             emit_mov_local_rax_64(off)
         } else { if val_ty == 3 {
             emit_mov_local_rax_64(off)
+        } else { if val_ty == 9 {
+            emit_mov_local_rax_64(off)
         } else {
             emit_mov_local_eax(off)
-        }};
+        }}};
         bind_push_typed(bind_state, p1, p2, off, val_ty);
         let n_body = emit_ast_code(body_idx, bind_state, patch_state, bn_state);
         bind_pop(bind_state);
@@ -3379,6 +3426,7 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         // surface-language constraint; the runtime representation is
         // the same. (Reassignment via AST_ASSIGN works on either.)
         // Stage 1.6 + 2.1: val_ty via expr_type (full tag space).
+        // Stage 2.4: u64 (tag 9) also uses 64-bit store.
         let body_idx = __arena_get(idx + 3);
         let value_idx = __arena_get(idx + 4);
         let val_ty = expr_type(value_idx, bind_state, bn_state);
@@ -3388,9 +3436,11 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
             emit_mov_local_rax_64(off)
         } else { if val_ty == 3 {
             emit_mov_local_rax_64(off)
+        } else { if val_ty == 9 {
+            emit_mov_local_rax_64(off)
         } else {
             emit_mov_local_eax(off)
-        }};
+        }}};
         bind_push_typed(bind_state, p1, p2, off, val_ty);
         let n_body = emit_ast_code(body_idx, bind_state, patch_state, bn_state);
         bind_pop(bind_state);
@@ -3419,14 +3469,17 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
             n_val
         } else {
             let bind_ty = bind_lookup_type(bind_state, p1, p2);
-            // Stage 1 audit fix: i64 (tag 3) also needs 64-bit store.
-            // Stage 1 audit batch 3 fix: trap on i64 value -> non-i64
-            // binding mismatch. Without this trap, the high 32 bits of
-            // the value silently drop. Mirrors the mixed-type ud2 used
-            // throughout 4-way arithmetic dispatch.
+            // Stage 1 audit fixes + Stage 2.4: type-mismatch trap.
+            // The 8-byte types (i64=3, u64=9) require width-matched
+            // value+binding; mixed widths trap with ud2 to avoid silent
+            // truncation or zero-extension bugs.
             let val_i64 = is_i64_expr(p3, bind_state, bn_state);
+            let val_u64 = is_u64_expr(p3, bind_state, bn_state);
             let n_store = if val_i64 == 1 {
                 if bind_ty == 3 { emit_mov_local_rax_64(off) }
+                else { emit_ud2_trap() }
+            } else { if val_u64 == 1 {
+                if bind_ty == 9 { emit_mov_local_rax_64(off) }
                 else { emit_ud2_trap() }
             } else { if bind_ty == 2 {
                 emit_mov_local_rax_64(off)
@@ -3435,12 +3488,15 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
                 // is NOT a safe widening — `mov eax, X` zero-extends to
                 // rax, so for negative i32 values the i64 slot ends up
                 // holding (val + 2^32) instead of val. Trap instead of
-                // silently producing wrong results. Mirror's batch 3's
+                // silently producing wrong results. Mirrors batch 3's
                 // i64-into-i32 trap.
+                emit_ud2_trap()
+            } else { if bind_ty == 9 {
+                // Stage 2.4 mirror: i32-into-u64 also traps.
                 emit_ud2_trap()
             } else {
                 emit_mov_local_eax(off)
-            }}};
+            }}}}};
             n_val + n_store
         }
     } else { if t == 14 {
@@ -3598,7 +3654,7 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         // returns 0. Lex/parse errors that produce AST_ERR cause the
         // resulting binary to SIGILL — clear signal vs. silent 0.
         emit_ud2_trap()
-    }}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}
+    }}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}
 }
 
 // --------------------------------------------------------------
@@ -3796,7 +3852,10 @@ fn emit_elf_for_ast_to_path(ast_root: i32) -> i32 {
                     // Stage 1: i64 params (p_ty == 3) ALSO need 64-bit
                     // stores — same shape as f64. Combine both in a
                     // single is-8-byte check.
-                    let needs_64 = if p_ty == 2 { 1 } else { if p_ty == 3 { 1 } else { 0 } };
+                    // Stage 2.4: u64 params (p_ty == 9) too.
+                    let needs_64 = if p_ty == 2 { 1 }
+                                   else { if p_ty == 3 { 1 }
+                                   else { if p_ty == 9 { 1 } else { 0 } } };
                     if needs_64 == 1 {
                         if pidx == 0 {
                             // mov [rbp+disp32], rdi  : 48 89 BD disp32
