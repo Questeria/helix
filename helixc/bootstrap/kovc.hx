@@ -663,17 +663,30 @@ fn bind_push(state: i32, name_start: i32, name_len: i32, offset: i32) -> i32 {
 }
 
 // Phase 1.10 step 5c: variant that records the binding's type.
+// Audit fix #10 (cycle 1): cap-check before writing. The 64-entry
+// cap (256 arena slots) is set in bind_init; without this guard,
+// the 65th+ binding silently corrupts adjacent arena data — fn_table
+// or str_table or worse. Now: silently SKIP the binding when full
+// (return -1). Subsequent AST_VAR resolves via offset 0 (= unbound
+// sentinel), which AST_VAR's audit-10 guard handles by emitting the
+// integer-zero placeholder. No arena corruption. Sources hitting
+// this cap are pathological; future Phase-1 should bump cap or
+// implement spill.
 fn bind_push_typed(state: i32, name_start: i32, name_len: i32,
                    offset: i32, ty: i32) -> i32 {
     let top = __arena_get(state + 1);
-    let table_base = __arena_get(state + 2);
-    let entry = table_base + top * 4;
-    __arena_set(entry, name_start);
-    __arena_set(entry + 1, name_len);
-    __arena_set(entry + 2, offset);
-    __arena_set(entry + 3, ty);
-    __arena_set(state + 1, top + 1);
-    0
+    if top >= 64 {
+        0 - 1
+    } else {
+        let table_base = __arena_get(state + 2);
+        let entry = table_base + top * 4;
+        __arena_set(entry, name_start);
+        __arena_set(entry + 1, name_len);
+        __arena_set(entry + 2, offset);
+        __arena_set(entry + 3, ty);
+        __arena_set(state + 1, top + 1);
+        0
+    }
 }
 
 fn bind_pop(state: i32) -> i32 {
@@ -1036,14 +1049,20 @@ fn fn_type_table_init() -> i32 {
 }
 
 fn fn_type_table_add(state: i32, name_start: i32, name_len: i32, ret_ty: i32) -> i32 {
+    // Audit fix #10: cap-check before writing. Cap = 256 entries
+    // (set in fn_type_table_init: 256 entries * 3 slots = 768).
     let top = __arena_get(state);
-    let table_base = __arena_get(state + 1);
-    let entry = table_base + top * 3;
-    __arena_set(entry, name_start);
-    __arena_set(entry + 1, name_len);
-    __arena_set(entry + 2, ret_ty);
-    __arena_set(state, top + 1);
-    0
+    if top >= 256 {
+        0 - 1
+    } else {
+        let table_base = __arena_get(state + 1);
+        let entry = table_base + top * 3;
+        __arena_set(entry, name_start);
+        __arena_set(entry + 1, name_len);
+        __arena_set(entry + 2, ret_ty);
+        __arena_set(state, top + 1);
+        0
+    }
 }
 
 @pure
@@ -1087,7 +1106,12 @@ fn fn_table_init() -> i32 {
 }
 
 fn fn_table_add(state: i32, name_start: i32, name_len: i32, code_offset: i32) -> i32 {
+    // Audit fix #10: cap-check before writing. Cap = 256 entries
+    // (set in fn_table_init: 256 * 3 slots = 768).
     let top = __arena_get(state);
+    if top >= 256 {
+        0 - 1
+    } else {
     let table_base = __arena_get(state + 1);
     let entry = table_base + top * 3;
     __arena_set(entry, name_start);
@@ -1095,6 +1119,7 @@ fn fn_table_add(state: i32, name_start: i32, name_len: i32, code_offset: i32) ->
     __arena_set(entry + 2, code_offset);
     __arena_set(state, top + 1);
     0
+    }
 }
 
 fn fn_table_lookup(state: i32, name_start: i32, name_len: i32) -> i32 {
