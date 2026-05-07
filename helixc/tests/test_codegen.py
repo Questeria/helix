@@ -8175,6 +8175,66 @@ def test_stdlib_ti1d_l2_norm_sq():
     assert code == 42, f"expected 42, got {code}"
 
 
+def test_stdlib_hashmap_count_above_threshold():
+    """Insert (1,5),(2,15),(3,25); count > 10 = 2; *21=42."""
+    src = """
+    fn main() -> i32 {
+        let m = hashmap_new(8);
+        hashmap_put(m, 8, 1, 5);
+        hashmap_put(m, 8, 2, 15);
+        hashmap_put(m, 8, 3, 25);
+        hashmap_count_above_threshold(m, 8, 10) * 21
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_hashmap_max_key():
+    """Insert (3,_),(7,_),(42,_); max_key=42."""
+    src = """
+    fn main() -> i32 {
+        let m = hashmap_new(8);
+        hashmap_put(m, 8, 3, 100);
+        hashmap_put(m, 8, 7, 100);
+        hashmap_put(m, 8, 42, 100);
+        hashmap_max_key(m, 8)
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_hashmap_min_key():
+    """Insert (10,_),(5,_),(8,_); min_key=5; *7+7=42."""
+    src = """
+    fn main() -> i32 {
+        let m = hashmap_new(8);
+        hashmap_put(m, 8, 10, 100);
+        hashmap_put(m, 8, 5, 100);
+        hashmap_put(m, 8, 8, 100);
+        hashmap_min_key(m, 8) * 7 + 7
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_hashmap_sum_keys():
+    """Insert (10,_),(15,_),(17,_); sum_keys=42."""
+    src = """
+    fn main() -> i32 {
+        let m = hashmap_new(8);
+        hashmap_put(m, 8, 10, 100);
+        hashmap_put(m, 8, 15, 100);
+        hashmap_put(m, 8, 17, 100);
+        hashmap_sum_keys(m, 8)
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
 def test_stdlib_tf2d_row_sum():
     """row_sum [[1,2],[3,4]] -> [3.0, 7.0]; sum=10.0_f32; bits 0x41200000;
     top byte 0x41=65; -23=42."""
