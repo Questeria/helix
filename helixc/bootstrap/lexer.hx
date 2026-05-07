@@ -336,7 +336,13 @@ fn lex_string(src_start: i32, src_len: i32, pos: i32) -> i32 {
         };
     }
     let body_len = p - body_start;
-    push_token(25, body_start, body_start, body_len);
+    // Audit fix #13b (cycle 1, polish): when the closing quote is
+    // missing (p >= end before seeing '"'), emit TK_ERR (tag 19)
+    // instead of TK_STRLIT (tag 25). The parser then treats the
+    // unterminated string as a parse error rather than silently
+    // consuming the rest of the file as a string body.
+    let tk = if p < end { 25 } else { 19 };
+    push_token(tk, body_start, body_start, body_len);
     if p < end { p + 1 } else { p }
 }
 
