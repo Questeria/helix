@@ -17,6 +17,9 @@
 //   vec_set(start, i, x)       -> i32           write; returns x
 //   vec_sum(start, count)      -> i32           sum all elements
 //   vec_max(start, count)      -> i32           largest element (0 if empty)
+//   vec_product(start, count)  -> i32           product of all elements (1 if empty — multiplicative identity)
+//   vec_first(start, count)    -> i32           v[0] (0 if empty)
+//   vec_last(start, count)     -> i32           v[count-1] (0 if empty)
 //   vec_index_of(start, count, target) -> i32   first matching index, -1 if none
 //   vec_contains(start, count, target) -> i32   1 if target present, else 0
 //   vec_eq(a_start, b_start, count) -> i32      1 if all elements equal, else 0
@@ -68,6 +71,29 @@ fn vec_max(start: i32, count: i32) -> i32 {
         }
         best
     }
+}
+
+@pure
+fn vec_product(start: i32, count: i32) -> i32 {
+    let mut i: i32 = 0;
+    let mut p: i32 = 1;
+    while i < count {
+        p = p * __arena_get(start + i);
+        i = i + 1;
+    }
+    p
+}
+
+@pure
+fn vec_first(start: i32, count: i32) -> i32 {
+    if count == 0 { 0 }
+    else { __arena_get(start) }
+}
+
+@pure
+fn vec_last(start: i32, count: i32) -> i32 {
+    if count == 0 { 0 }
+    else { __arena_get(start + count - 1) }
 }
 
 @pure
