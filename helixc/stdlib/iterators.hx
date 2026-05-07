@@ -12,6 +12,9 @@
 //   vec_count_eq(start, count, target)   -> i32   how many elements equal target
 //   vec_count_lt(start, count, t)        -> i32   how many elements are < t
 //   vec_count_gt(start, count, t)        -> i32   how many elements are > t
+//   vec_count_le(start, count, t)        -> i32   how many elements are <= t
+//   vec_count_ge(start, count, t)        -> i32   how many elements are >= t
+//   vec_count_ne(start, count, t)        -> i32   how many elements != t
 //   vec_fold_op(start, count, init, op)  -> i32   reduce with op 0:add 1:mul 2:max 3:min
 //   vec_map_add_scalar(start, count, k)  -> i32   appends [x+k for x in v]; returns new start
 //   vec_map_mul_scalar(start, count, k)  -> i32   appends [x*k for x in v]; returns new start
@@ -85,6 +88,39 @@ fn vec_count_gt(start: i32, count: i32, t: i32) -> i32 {
     let mut n: i32 = 0;
     while i < count {
         if __arena_get(start + i) > t { n = n + 1; }
+        i = i + 1;
+    }
+    n
+}
+
+@pure
+fn vec_count_le(start: i32, count: i32, t: i32) -> i32 {
+    let mut i: i32 = 0;
+    let mut n: i32 = 0;
+    while i < count {
+        if __arena_get(start + i) <= t { n = n + 1; }
+        i = i + 1;
+    }
+    n
+}
+
+@pure
+fn vec_count_ge(start: i32, count: i32, t: i32) -> i32 {
+    let mut i: i32 = 0;
+    let mut n: i32 = 0;
+    while i < count {
+        if __arena_get(start + i) >= t { n = n + 1; }
+        i = i + 1;
+    }
+    n
+}
+
+@pure
+fn vec_count_ne(start: i32, count: i32, t: i32) -> i32 {
+    let mut i: i32 = 0;
+    let mut n: i32 = 0;
+    while i < count {
+        if __arena_get(start + i) != t { n = n + 1; }
         i = i + 1;
     }
     n

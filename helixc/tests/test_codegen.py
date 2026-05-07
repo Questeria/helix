@@ -5569,6 +5569,33 @@ def test_stdlib_count_predicates():
     assert code == 42, f"expected 42 (all 3 checks pass), got {code}"
 
 
+def test_stdlib_count_predicates_le_ge_ne():
+    """count_le, count_ge, count_ne over [3,5,3,8,3,5]."""
+    src = """
+    fn main() -> i32 {
+        let s = vec_new();
+        let n0 = vec_push(s, 0, 3);
+        let n1 = vec_push(s, n0, 5);
+        let n2 = vec_push(s, n1, 3);
+        let n3 = vec_push(s, n2, 8);
+        let n4 = vec_push(s, n3, 3);
+        let n5 = vec_push(s, n4, 5);
+        // count_le(_, 3) = 3 (the three 3s); count_ge(_, 5) = 3 (two 5s + 8);
+        // count_ne(_, 3) = 3 (two 5s + 8).
+        let cle = vec_count_le(s, n5, 3);
+        let cge = vec_count_ge(s, n5, 5);
+        let cne = vec_count_ne(s, n5, 3);
+        if cle == 3 {
+            if cge == 3 {
+                if cne == 3 { 42 } else { 1 }
+            } else { 2 }
+        } else { 3 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42 (all 3 checks pass), got {code}"
+
+
 def test_stdlib_vec_fold_op():
     """fold add (sum) and fold mul (product) over [2,3,4]; max via fold."""
     src = """
