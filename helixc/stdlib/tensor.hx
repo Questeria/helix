@@ -557,3 +557,75 @@ fn tf1d_ones(n: i32) -> i32 {
     }
     s
 }
+
+// ti2d_transpose(src, rows, cols, dst): transpose an integer-tensor.
+// `src` is rows*cols (row-major); `dst` becomes cols*rows (also row-
+// major, where the new rows are the old columns). Caller pre-allocates
+// dst with t1d_new(rows*cols). Out-of-place; src untouched.
+fn ti2d_transpose(src: i32, rows: i32, cols: i32, dst: i32) -> i32 {
+    let mut r: i32 = 0;
+    while r < rows {
+        let mut c: i32 = 0;
+        while c < cols {
+            __arena_set(dst + c * rows + r, __arena_get(src + r * cols + c));
+            c = c + 1;
+        }
+        r = r + 1;
+    }
+    0
+}
+
+// ti1d_clamp(x, lo, hi, dst, n): elementwise clamp each x[i] into
+// [lo, hi]. Out-of-place; result written to dst (caller pre-allocates
+// dst with t1d_new(n) or shares with x for in-place).
+fn ti1d_clamp(x_start: i32, lo: i32, hi: i32, dst: i32, n: i32) -> i32 {
+    let mut i: i32 = 0;
+    while i < n {
+        let v = __arena_get(x_start + i);
+        let cv = if v < lo { lo } else { if v > hi { hi } else { v } };
+        __arena_set(dst + i, cv);
+        i = i + 1;
+    }
+    0
+}
+
+// ti1d_l1_norm(x, n): L1 norm = sum of |x[i]|. @pure (read-only).
+@pure fn ti1d_l1_norm(start: i32, n: i32) -> i32 {
+    let mut i: i32 = 0;
+    let mut total: i32 = 0;
+    while i < n {
+        let v = __arena_get(start + i);
+        let av = if v < 0 { 0 - v } else { v };
+        total = total + av;
+        i = i + 1;
+    }
+    total
+}
+
+// ti1d_l2_norm_sq(x, n): squared L2 norm = sum(x[i]^2). Mirrors
+// ti1d_dot(x, x, n). Distinct fn for clarity at call sites and
+// future overflow-safe variants. @pure.
+@pure fn ti1d_l2_norm_sq(start: i32, n: i32) -> i32 {
+    let mut i: i32 = 0;
+    let mut total: i32 = 0;
+    while i < n {
+        let v = __arena_get(start + i);
+        total = total + v * v;
+        i = i + 1;
+    }
+    total
+}
+
+// ti1d_eq_count(a, b, n): count of indices i where a[i] == b[i].
+// Returns an integer in [0, n]. Useful for accuracy/agreement metrics.
+@pure fn ti1d_eq_count(a_start: i32, b_start: i32, n: i32) -> i32 {
+    let mut i: i32 = 0;
+    let mut total: i32 = 0;
+    while i < n {
+        if __arena_get(a_start + i) == __arena_get(b_start + i) {
+            total = total + 1;
+        };
+        i = i + 1;
+    }
+    total
+}

@@ -8027,6 +8027,89 @@ def test_stdlib_string_to_lower():
     assert code == 42, f"expected 42, got {code}"
 
 
+def test_stdlib_ti2d_transpose():
+    """transpose 2x3 matrix [[1,2,3],[4,5,6]] -> 3x2 [[1,4],[2,5],[3,6]].
+    Sum diagonals: dst[0,0]+dst[1,1]+dst[2,0]+dst[1,0]+dst[2,1]+dst[0,1] = 1+5+3+2+6+4 = 21.
+    Doubled = 42."""
+    src = """
+    fn main() -> i32 {
+        let src = ti2d_new(2, 3);
+        ti2d_set(src, 3, 0, 0, 1); ti2d_set(src, 3, 0, 1, 2); ti2d_set(src, 3, 0, 2, 3);
+        ti2d_set(src, 3, 1, 0, 4); ti2d_set(src, 3, 1, 1, 5); ti2d_set(src, 3, 1, 2, 6);
+        let dst = ti2d_new(3, 2);
+        ti2d_transpose(src, 2, 3, dst);
+        // Sum all 6 dst elements (= 21), double to 42.
+        let s = ti2d_get(dst, 2, 0, 0) + ti2d_get(dst, 2, 0, 1) +
+                ti2d_get(dst, 2, 1, 0) + ti2d_get(dst, 2, 1, 1) +
+                ti2d_get(dst, 2, 2, 0) + ti2d_get(dst, 2, 2, 1);
+        s * 2
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_ti1d_clamp():
+    """ti1d_clamp([-5, 3, 100], 0, 50, dst, 3) -> [0, 3, 50].
+    Sum = 0+3+50 = 53. 53 - 11 = 42."""
+    src = """
+    fn main() -> i32 {
+        let x = t1d_new(3);
+        ti1d_set(x, 0, 0 - 5); ti1d_set(x, 1, 3); ti1d_set(x, 2, 100);
+        let dst = t1d_new(3);
+        ti1d_clamp(x, 0, 50, dst, 3);
+        ti1d_sum(dst, 3) - 11
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_ti1d_l1_norm():
+    """ti1d_l1_norm([3, -10, 5, -20, 4]) = 3+10+5+20+4 = 42."""
+    src = """
+    fn main() -> i32 {
+        let x = t1d_new(5);
+        ti1d_set(x, 0, 3); ti1d_set(x, 1, 0 - 10); ti1d_set(x, 2, 5);
+        ti1d_set(x, 3, 0 - 20); ti1d_set(x, 4, 4);
+        ti1d_l1_norm(x, 5)
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_ti1d_l2_norm_sq():
+    """ti1d_l2_norm_sq([3, 4, 1]) = 9+16+1 = 26. (2)^2 + sum = 4+26 = 30. Add 12 = 42."""
+    src = """
+    fn main() -> i32 {
+        let x = t1d_new(4);
+        ti1d_set(x, 0, 3); ti1d_set(x, 1, 4); ti1d_set(x, 2, 1); ti1d_set(x, 3, 2);
+        ti1d_l2_norm_sq(x, 4) + 12
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_ti1d_eq_count():
+    """ti1d_eq_count([1,2,3,4,5], [1,9,3,9,5], 5) = 3 matches at idx 0,2,4.
+    3 * 14 = 42."""
+    src = """
+    fn main() -> i32 {
+        let a = t1d_new(5);
+        ti1d_set(a, 0, 1); ti1d_set(a, 1, 2); ti1d_set(a, 2, 3);
+        ti1d_set(a, 3, 4); ti1d_set(a, 4, 5);
+        let b = t1d_new(5);
+        ti1d_set(b, 0, 1); ti1d_set(b, 1, 9); ti1d_set(b, 2, 3);
+        ti1d_set(b, 3, 9); ti1d_set(b, 4, 5);
+        ti1d_eq_count(a, b, 5) * 14
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
 def main():
     tests = [(name, fn) for name, fn in globals().items()
              if name.startswith("test_") and callable(fn)]
