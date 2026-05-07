@@ -230,3 +230,63 @@ fn ep_recent_kind(start: i32, kind: i32) -> i32 {
     }
     found
 }
+
+// =========================================================================
+// Accessors mirroring option_*/result_* style — pure (no LRU-tick mutation).
+// =========================================================================
+
+// 1 if key is present in WM, 0 otherwise. @pure (no recency refresh).
+@pure
+fn wm_has(start: i32, key: i32) -> i32 {
+    let off = wm_find(start, key);
+    if off < 0 { 0 } else { 1 }
+}
+
+// Read value for key without refreshing recency. Returns -1 if absent.
+// Sibling of wm_load (which mutates the LRU tick); use this when only
+// a read is needed and the read should not disturb eviction order.
+@pure
+fn wm_peek(start: i32, key: i32) -> i32 {
+    let off = wm_find(start, key);
+    if off < 0 { 0 - 1 } else { __arena_get(off + 1) }
+}
+
+// Sibling of ep_payload_at: read i'th event kind in chronological order
+// (0 = oldest still in buffer). Returns -1 if i >= count.
+@pure
+fn ep_kind_at(start: i32, i: i32) -> i32 {
+    let cap = ep_capacity();
+    let cnt = __arena_get(start + 1);
+    if i >= cnt { 0 - 1 }
+    else {
+        let head = __arena_get(start);
+        let pos = if cnt < cap {
+            i
+        } else {
+            (head + i) % cap
+        };
+        let off = start + 3 + pos * 3;
+        __arena_get(off + 1)
+    }
+}
+
+// Count events of a given kind in the buffer.
+@pure
+fn ep_count_kind(start: i32, kind: i32) -> i32 {
+    let cap = ep_capacity();
+    let cnt = __arena_get(start + 1);
+    let head = __arena_get(start);
+    let mut i: i32 = 0;
+    let mut count: i32 = 0;
+    while i < cnt {
+        let pos = if cnt < cap {
+            i
+        } else {
+            (head + i) % cap
+        };
+        let off = start + 3 + pos * 3;
+        if __arena_get(off + 1) == kind { count = count + 1; }
+        i = i + 1;
+    }
+    count
+}

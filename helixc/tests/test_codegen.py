@@ -4812,6 +4812,87 @@ def test_agi_wm_clear():
     assert code == 42, f"expected 42 (0 + 42), got {code}"
 
 
+def test_agi_wm_has_predicate():
+    """wm_has returns 1 if key present, 0 if absent — no LRU disturbance."""
+    src = """
+    fn main() -> i32 {
+        let wm = wm_new();
+        wm_store(wm, 100, 7);
+        wm_store(wm, 200, 11);
+        let h_present = wm_has(wm, 100);
+        let h_absent = wm_has(wm, 999);
+        h_present * 42 + h_absent
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42 (1*42 + 0), got {code}"
+
+
+def test_agi_wm_peek_no_recency():
+    """wm_peek reads without refreshing tick — confirms LRU eviction is
+    unaffected. Fill WM, peek key 0 (would normally refresh tick if wm_load
+    were used), then add one more key. Key 0 must still be evicted (LRU
+    position must remain untouched by peek)."""
+    src = """
+    fn main() -> i32 {
+        let wm = wm_new();
+        let mut k: i32 = 0;
+        while k < 16 {
+            wm_store(wm, k, k * 10);
+            k = k + 1;
+        }
+        let v0_peek = wm_peek(wm, 0);
+        wm_store(wm, 99, 999);
+        let v0_after = wm_peek(wm, 0);
+        let v_absent = wm_peek(wm, 12345);
+        v0_peek + v0_after + v_absent + 44
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42 (0 + (-1) + (-1) + 44), got {code}"
+
+
+def test_agi_ep_kind_at_chronological():
+    """ep_kind_at reads kind in chronological order (0 = oldest)."""
+    src = """
+    fn main() -> i32 {
+        let ep = ep_new();
+        ep_record(ep, 7, 100);
+        ep_record(ep, 14, 200);
+        ep_record(ep, 21, 300);
+        let k0 = ep_kind_at(ep, 0);
+        let k1 = ep_kind_at(ep, 1);
+        let k2 = ep_kind_at(ep, 2);
+        let k_oob = ep_kind_at(ep, 99);
+        k0 + k1 + k2 + k_oob + 1
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42 (7+14+21 + (-1) + 1), got {code}"
+
+
+def test_agi_ep_count_kind():
+    """ep_count_kind tallies events by kind. Three kind=1 events,
+    one kind=2, one kind=3, none of kind=99."""
+    src = """
+    fn main() -> i32 {
+        let ep = ep_new();
+        ep_record(ep, 1, 100);
+        ep_record(ep, 2, 200);
+        ep_record(ep, 1, 50);
+        ep_record(ep, 3, 75);
+        ep_record(ep, 1, 10);
+        let c1 = ep_count_kind(ep, 1);
+        let c2 = ep_count_kind(ep, 2);
+        let c3 = ep_count_kind(ep, 3);
+        let c_absent = ep_count_kind(ep, 99);
+        (c1 + c2 + c3) * 8 + c_absent + 2
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42 ((3+1+1)*8 + 0 + 2), got {code}"
+
+
 def test_nn_softmax_argmax():
     """Phase 3 perfection: softmax. [1, 2, 3] -> argmax = 2."""
     src = """
