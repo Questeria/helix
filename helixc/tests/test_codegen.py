@@ -8175,6 +8175,76 @@ def test_stdlib_ti1d_l2_norm_sq():
     assert code == 42, f"expected 42, got {code}"
 
 
+def test_stdlib_tf2d_add():
+    """[[1,2],[3,4]] + [[5,6],[7,8]] -> [[6,8],[10,12]]; sum=36; +6=42."""
+    src = """
+    fn main() -> i32 {
+        let a = ti2d_new(2, 2);
+        tf2d_set(a, 2, 0, 0, 1.0_f32); tf2d_set(a, 2, 0, 1, 2.0_f32);
+        tf2d_set(a, 2, 1, 0, 3.0_f32); tf2d_set(a, 2, 1, 1, 4.0_f32);
+        let b = ti2d_new(2, 2);
+        tf2d_set(b, 2, 0, 0, 5.0_f32); tf2d_set(b, 2, 0, 1, 6.0_f32);
+        tf2d_set(b, 2, 1, 0, 7.0_f32); tf2d_set(b, 2, 1, 1, 8.0_f32);
+        let c = ti2d_new(2, 2);
+        tf2d_add(a, b, c, 2, 2);
+        let s = tf2d_get(c, 2, 0, 0) + tf2d_get(c, 2, 0, 1) +
+                tf2d_get(c, 2, 1, 0) + tf2d_get(c, 2, 1, 1);
+        // 36.0_f32 = 0x42100000; top byte 0x42=66; -24=42.
+        __bits_of_f32(s) / 16777216 - 24
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_tf2d_scale_inplace():
+    """[[1,2]] * 2.0 -> [[2,4]]; sum=6; 6.0_f32=0x40C00000; top byte 0x40=64; -22=42."""
+    src = """
+    fn main() -> i32 {
+        let a = ti2d_new(1, 2);
+        tf2d_set(a, 2, 0, 0, 1.0_f32);
+        tf2d_set(a, 2, 0, 1, 2.0_f32);
+        tf2d_scale_inplace(a, 1, 2, 2.0_f32);
+        let s = tf2d_get(a, 2, 0, 0) + tf2d_get(a, 2, 0, 1);
+        __bits_of_f32(s) / 16777216 - 22
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_tf1d_max_abs():
+    """max_abs([3.0, -8.0, 2.0]) = 8.0; bits 0x41000000; top 65; -23=42."""
+    src = """
+    fn main() -> i32 {
+        let x = t1d_new(3);
+        tf1d_set(x, 0, 3.0_f32);
+        tf1d_set(x, 1, 0.0_f32 - 8.0_f32);
+        tf1d_set(x, 2, 2.0_f32);
+        __bits_of_f32(tf1d_max_abs(x, 3)) / 16777216 - 23
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_tf1d_axpby():
+    """x=[1.0]; y=[10.0]; axpby(2.0, 3.0): y=2*1+3*10=32; +10=42."""
+    src = """
+    fn main() -> i32 {
+        let x = t1d_new(1);
+        tf1d_set(x, 0, 1.0_f32);
+        let y = t1d_new(1);
+        tf1d_set(y, 0, 10.0_f32);
+        tf1d_axpby(x, y, 2.0_f32, 3.0_f32, 1);
+        // y[0] = 32.0_f32; bits 0x42000000; top 66; -24=42.
+        __bits_of_f32(tf1d_get(y, 0)) / 16777216 - 24
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
 def test_stdlib_string_split_first():
     """Push 'a=42'; split_first('=') = 1. *42=42."""
     src = """

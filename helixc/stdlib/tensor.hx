@@ -739,3 +739,58 @@ fn tf1d_scale_inplace(start: i32, n: i32, scalar: f32) -> i32 {
     }
     start
 }
+
+// tf2d_add(a, b, c, rows, cols): elementwise 2D add c = a + b. All
+// three matrices share row-major layout with `cols` columns.
+fn tf2d_add(a: i32, b: i32, c: i32, rows: i32, cols: i32) -> i32 {
+    let n = rows * cols;
+    let mut i: i32 = 0;
+    while i < n {
+        let av = __f32_from_bits(__arena_get(a + i));
+        let bv = __f32_from_bits(__arena_get(b + i));
+        __arena_set(c + i, __bits_of_f32(av + bv));
+        i = i + 1;
+    }
+    0
+}
+
+// tf2d_scale_inplace(start, rows, cols, scalar): multiply every element
+// of the 2D matrix in place by scalar.
+fn tf2d_scale_inplace(start: i32, rows: i32, cols: i32, scalar: f32) -> i32 {
+    let n = rows * cols;
+    let mut i: i32 = 0;
+    while i < n {
+        let v = __f32_from_bits(__arena_get(start + i));
+        __arena_set(start + i, __bits_of_f32(v * scalar));
+        i = i + 1;
+    }
+    0
+}
+
+// tf1d_max_abs(start, n): @pure. Max of |x[i]| (Linf norm). Returns
+// 0.0 for empty input.
+@pure
+fn tf1d_max_abs(start: i32, n: i32) -> f32 {
+    let mut i: i32 = 0;
+    let mut best: f32 = 0.0_f32;
+    while i < n {
+        let v = __f32_from_bits(__arena_get(start + i));
+        let av = if v < 0.0_f32 { 0.0_f32 - v } else { v };
+        if av > best { best = av; };
+        i = i + 1;
+    }
+    best
+}
+
+// tf1d_axpby(x, y, a, b, n): in-place compute y[i] = a*x[i] + b*y[i].
+// BLAS-style level-1 op. Caller mutates y in place.
+fn tf1d_axpby(x_start: i32, y_start: i32, a: f32, b: f32, n: i32) -> i32 {
+    let mut i: i32 = 0;
+    while i < n {
+        let xv = __f32_from_bits(__arena_get(x_start + i));
+        let yv = __f32_from_bits(__arena_get(y_start + i));
+        __arena_set(y_start + i, __bits_of_f32(a * xv + b * yv));
+        i = i + 1;
+    }
+    0
+}
