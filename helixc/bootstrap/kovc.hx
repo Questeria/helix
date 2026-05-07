@@ -949,6 +949,7 @@ fn expr_type(idx: i32, bind_state: i32, bn_state: i32) -> i32 {
     else { if t == 36 { 6 }                           // AST_INTLIT_U32 (Stage 2.1)
     else { if t == 37 { 7 }                           // AST_INTLIT_U8  (Stage 2.3)
     else { if t == 38 { 9 }                           // AST_INTLIT_U64 (Stage 2.4)
+    else { if t == 39 { 10 }                          // AST_INTLIT_I8  (Stage 2.5b)
     else { if t == 0 { 0 }                            // AST_INTLIT (i32)
     else { if t == 1 {                                // AST_VAR
         bind_lookup_type(bind_state, p1, p2)
@@ -1073,7 +1074,7 @@ fn expr_type(idx: i32, bind_state: i32, bn_state: i32) -> i32 {
                 }
             }
         }
-    } else { 0 }}}}}}}}}}}}}}}}}}}}}}}}}}
+    } else { 0 }}}}}}}}}}}}}}}}}}}}}}}}}}}
 }
 
 // Phase 1.10 step 5c: type-inference on AST nodes. Returns 1 if the
@@ -2651,6 +2652,16 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         // preserve bit-equality with explicit i64 -> u64 conversions.
         let hi32 = if p1 < 0 { 0 - 1 } else { 0 };
         emit_movabs_rax_imm64(p1, hi32)
+    } else { if t == 39 {
+        // Approach A Stage 2.5b: AST_INTLIT_I8 (tag 39). Same emit as
+        // i32 (mov eax, imm32). i8 range [-128, 127] fits in 32 bits
+        // signed; the high 24 bits are sign-extension. expr_type
+        // returns 10 (i8) so any future signed-vs-unsigned-narrow
+        // dispatch can trip on the type tag without changing the
+        // literal's bit-pattern. Narrow movsx load and masked store
+        // are deferred to Stage 2.5b stage 2 (parallel to u8's "Stage
+        // 2.3b" deferred work).
+        emit_ast_int(p1)
     } else { if t == 27 {
         // AST_FLOATLIT (Phase 1.10 step 3d, f32). Phase 1.10 step 7b
         // also reuses this branch for AST_FLOATLIT_F64 (tag 34) — the
@@ -3765,7 +3776,7 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         // returns 0. Lex/parse errors that produce AST_ERR cause the
         // resulting binary to SIGILL — clear signal vs. silent 0.
         emit_ud2_trap()
-    }}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}
+    }}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}
 }
 
 // --------------------------------------------------------------

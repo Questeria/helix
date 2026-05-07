@@ -2188,6 +2188,19 @@ fn main() -> i32 {{
     assert compile_and_exec("42_u8") == 42, "u8 literal exits 42"
     assert compile_and_exec("100_u8 - 58_u8") == 42, \
         "u8 - u8 via fall-through to i32 path (signedness-agnostic)"
+    # Approach A Stage 2.5b: i8 minimal scaffold. _i8 suffix landed in
+    # 2.5a; Stage 2.5b adds the parser arm (TK 37 -> AST_INTLIT_I8 tag 39),
+    # expr_type returns 10 (i8 type tag), and codegen emits via emit_ast_int
+    # (mov eax, imm32 — i8 fits in i32 with sign extension). Type ident
+    # `i8` (105 56) added to parser's param/ret type-ident maps. Narrow
+    # movsx load and masked store deferred to a later stage.
+    assert compile_and_exec("42_i8") == 42, "i8 literal exits 42"
+    assert compile_and_exec("100_i8 - 58_i8") == 42, \
+        "i8 - i8 via fall-through to i32 path (small-positive)"
+    assert compile_and_exec(
+        "fn main() -> i32 { let a: i8 = 50_i8 ; let b: i8 = 8_i8 ; "
+        "let c: i8 = a - b ; 42 }"
+    ) == 42, "i8 LET-bound annotation parses + codegen runs"
     # Approach A Stage 2.4: u64 minimal scaffold. u64 literals lex via
     # `_u64` 4-byte suffix, parse to AST_INTLIT_U64 (tag 38), expr_type
     # returns 9. Codegen emits `movabs rax, imm64` (8 bytes) so the full
