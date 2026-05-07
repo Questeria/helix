@@ -252,3 +252,86 @@ fn string_compare(a: i32, an: i32, b: i32, bn: i32) -> i32 {
         else { if an > bn { 1 } else { 0 } }
     }
 }
+
+// string_contains(s, sn, pat, pn): does string `s` contain substring
+// `pat`? Returns 1 if yes, 0 if no. O(sn * pn) naive search — fine
+// for small strings; replace with KMP for production. Empty pattern
+// matches anywhere (returns 1).
+@pure
+fn string_contains(s: i32, sn: i32, pat: i32, pn: i32) -> i32 {
+    if pn == 0 { 1 }
+    else { if pn > sn { 0 }
+    else {
+        let mut i: i32 = 0;
+        let mut found: i32 = 0;
+        let last_start = sn - pn;
+        while i <= last_start {
+            if found == 0 {
+                let mut j: i32 = 0;
+                let mut match_len: i32 = 0;
+                while j < pn {
+                    if __arena_get(s + i + j) == __arena_get(pat + j) {
+                        match_len = match_len + 1;
+                    };
+                    j = j + 1;
+                }
+                if match_len == pn { found = 1; };
+            };
+            i = i + 1;
+        }
+        found
+    } }
+}
+
+// string_replace_byte(start, len, from, to): allocate a new string
+// where every occurrence of byte `from` is replaced with byte `to`.
+// Original string untouched. Returns the new string's start; length
+// stays the same so caller already knows.
+fn string_replace_byte(start: i32, len: i32, from: i32, to: i32) -> i32 {
+    let s: i32 = __arena_len();
+    let mut i: i32 = 0;
+    while i < len {
+        let b = __arena_get(start + i);
+        if b == from { __arena_push(to); } else { __arena_push(b); }
+        i = i + 1;
+    }
+    s
+}
+
+// string_to_upper(start, len): allocate a new string with ASCII
+// lowercase letters (a-z = 97..122) converted to uppercase (A-Z =
+// 65..90). Non-letter bytes pass through unchanged. UTF-8 multi-byte
+// sequences are NOT handled — Phase-0 byte-level only.
+fn string_to_upper(start: i32, len: i32) -> i32 {
+    let s: i32 = __arena_len();
+    let mut i: i32 = 0;
+    while i < len {
+        let b = __arena_get(start + i);
+        if b >= 97 {
+            if b <= 122 { __arena_push(b - 32); }
+            else { __arena_push(b); }
+        } else {
+            __arena_push(b);
+        }
+        i = i + 1;
+    }
+    s
+}
+
+// string_to_lower(start, len): allocate a new string with ASCII
+// uppercase letters converted to lowercase. Inverse of string_to_upper.
+fn string_to_lower(start: i32, len: i32) -> i32 {
+    let s: i32 = __arena_len();
+    let mut i: i32 = 0;
+    while i < len {
+        let b = __arena_get(start + i);
+        if b >= 65 {
+            if b <= 90 { __arena_push(b + 32); }
+            else { __arena_push(b); }
+        } else {
+            __arena_push(b);
+        }
+        i = i + 1;
+    }
+    s
+}

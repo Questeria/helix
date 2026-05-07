@@ -7914,6 +7914,119 @@ def test_stdlib_string_compare():
     assert code == 42, f"expected 42 (lt=-1, eq=0, gt=1, pre_lt=-1, pre_gt=1), got {code}"
 
 
+def test_stdlib_string_contains():
+    """string_contains: 'hello world' contains 'world' (yes), 'hello'
+    (yes), '' (yes — empty pattern), 'xyz' (no). Empty pattern always
+    matches. Encoded: 1 + 1 + 1 + 0 = 3; 3*14 = 42."""
+    src = """
+    fn main() -> i32 {
+        let h = string_new();
+        let h1 = string_push(h, 0, 104);  // 'h'
+        let h2 = string_push(h, h1, 101);  // 'e'
+        let h3 = string_push(h, h2, 108);  // 'l'
+        let h4 = string_push(h, h3, 108);  // 'l'
+        let h5 = string_push(h, h4, 111);  // 'o'
+        let h6 = string_push(h, h5, 32);   // ' '
+        let h7 = string_push(h, h6, 119);  // 'w'
+        let h8 = string_push(h, h7, 111);  // 'o'
+        let h9 = string_push(h, h8, 114);  // 'r'
+        let hA = string_push(h, h9, 108);  // 'l'
+        let hB = string_push(h, hA, 100);  // 'd'
+        // pat1: "world" (5 bytes, w-o-r-l-d)
+        let p1 = __arena_len();
+        let p1_1 = string_push(p1, 0, 119);
+        let p1_2 = string_push(p1, p1_1, 111);
+        let p1_3 = string_push(p1, p1_2, 114);
+        let p1_4 = string_push(p1, p1_3, 108);
+        let p1_5 = string_push(p1, p1_4, 100);
+        // pat2: "hello" (5 bytes)
+        let p2 = __arena_len();
+        let p2_1 = string_push(p2, 0, 104);
+        let p2_2 = string_push(p2, p2_1, 101);
+        let p2_3 = string_push(p2, p2_2, 108);
+        let p2_4 = string_push(p2, p2_3, 108);
+        let p2_5 = string_push(p2, p2_4, 111);
+        // pat3: empty (0 bytes)
+        let p3 = __arena_len();
+        // pat4: "xyz" (3 bytes, x-y-z) — not in haystack
+        let p4 = __arena_len();
+        let p4_1 = string_push(p4, 0, 120);
+        let p4_2 = string_push(p4, p4_1, 121);
+        let p4_3 = string_push(p4, p4_2, 122);
+        let r1 = string_contains(h, hB, p1, p1_5);
+        let r2 = string_contains(h, hB, p2, p2_5);
+        let r3 = string_contains(h, hB, p3, 0);
+        let r4 = string_contains(h, hB, p4, p4_3);
+        (r1 + r2 + r3 + r4) * 14
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42 (3 hits × 14), got {code}"
+
+
+def test_stdlib_string_replace_byte():
+    """string_replace_byte: replace 'a' with 'A' in "banana" -> "bAnAnA".
+    Original untouched. Position 1 of new = 'A' (65). Encoded: 65-23 = 42."""
+    src = """
+    fn main() -> i32 {
+        let s = string_new();
+        let s1 = string_push(s, 0, 98);  // 'b'
+        let s2 = string_push(s, s1, 97); // 'a'
+        let s3 = string_push(s, s2, 110); // 'n'
+        let s4 = string_push(s, s3, 97); // 'a'
+        let s5 = string_push(s, s4, 110); // 'n'
+        let s6 = string_push(s, s5, 97); // 'a'
+        let new_s = string_replace_byte(s, s6, 97, 65); // a -> A
+        let pos1 = string_get(new_s, 1); // should be 'A' = 65
+        // Verify original untouched
+        let orig_pos1 = string_get(s, 1); // should still be 'a' = 97
+        if orig_pos1 == 97 { pos1 - 23 } else { 0 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_string_to_upper():
+    """string_to_upper("hello") -> "HELLO". First byte: 'h'(104) -> 'H'(72).
+    Encoded: 72 - 30 = 42."""
+    src = """
+    fn main() -> i32 {
+        let s = string_new();
+        let s1 = string_push(s, 0, 104);  // 'h'
+        let s2 = string_push(s, s1, 101); // 'e'
+        let s3 = string_push(s, s2, 108); // 'l'
+        let s4 = string_push(s, s3, 108); // 'l'
+        let s5 = string_push(s, s4, 111); // 'o'
+        let upper = string_to_upper(s, s5);
+        let first = string_get(upper, 0); // should be 'H' = 72
+        first - 30
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_string_to_lower():
+    """string_to_lower("HELLO") -> "hello". First byte: 'H'(72) -> 'h'(104).
+    Encoded: 104 - 62 = 42."""
+    src = """
+    fn main() -> i32 {
+        let s = string_new();
+        let s1 = string_push(s, 0, 72);  // 'H'
+        let s2 = string_push(s, s1, 69); // 'E'
+        let s3 = string_push(s, s2, 76); // 'L'
+        let s4 = string_push(s, s3, 76); // 'L'
+        let s5 = string_push(s, s4, 79); // 'O'
+        let lower = string_to_lower(s, s5);
+        let first = string_get(lower, 0); // should be 'h' = 104
+        first - 62
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
 def main():
     tests = [(name, fn) for name, fn in globals().items()
              if name.startswith("test_") and callable(fn)]
