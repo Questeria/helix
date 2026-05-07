@@ -18,6 +18,9 @@
 //   vec_sum(start, count)      -> i32           sum all elements
 //   vec_max(start, count)      -> i32           largest element (0 if empty)
 //   vec_index_of(start, count, target) -> i32   first matching index, -1 if none
+//   vec_contains(start, count, target) -> i32   1 if target present, else 0
+//   vec_eq(a_start, b_start, count) -> i32      1 if all elements equal, else 0
+//   vec_reverse_inplace(start, count) -> i32    reverses in place; returns start
 //
 // License: Apache 2.0
 
@@ -78,4 +81,39 @@ fn vec_index_of(start: i32, count: i32, target: i32) -> i32 {
         i = i + 1;
     }
     found
+}
+
+@pure
+fn vec_contains(start: i32, count: i32, target: i32) -> i32 {
+    let mut i: i32 = 0;
+    let mut hit: i32 = 0;
+    while i < count {
+        if __arena_get(start + i) == target { hit = 1; }
+        i = i + 1;
+    }
+    hit
+}
+
+@pure
+fn vec_eq(a_start: i32, b_start: i32, count: i32) -> i32 {
+    let mut i: i32 = 0;
+    let mut equal: i32 = 1;
+    while i < count {
+        if __arena_get(a_start + i) != __arena_get(b_start + i) { equal = 0; }
+        i = i + 1;
+    }
+    equal
+}
+
+fn vec_reverse_inplace(start: i32, count: i32) -> i32 {
+    let mut i: i32 = 0;
+    let half: i32 = count / 2;
+    while i < half {
+        let lo: i32 = __arena_get(start + i);
+        let hi: i32 = __arena_get(start + count - 1 - i);
+        __arena_set(start + i, hi);
+        __arena_set(start + count - 1 - i, lo);
+        i = i + 1;
+    }
+    start
 }

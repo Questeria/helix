@@ -5175,6 +5175,61 @@ def test_stdlib_vec_max_index_of():
     assert code == 31, f"expected 31 (max=30, idx=1), got {code}"
 
 
+def test_stdlib_vec_contains():
+    """vec_contains returns 1 for present, 0 for absent."""
+    src = """
+    fn main() -> i32 {
+        let s = vec_new();
+        let c0 = vec_push(s, 0, 11);
+        let c1 = vec_push(s, c0, 22);
+        let c2 = vec_push(s, c1, 33);
+        let hit = vec_contains(s, c2, 22);
+        let miss = vec_contains(s, c2, 99);
+        // 1 + 0 = 1 ; multiplied by 42 to land on a distinctive exit code
+        (hit - miss) * 42
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42 (hit=1, miss=0), got {code}"
+
+
+def test_stdlib_vec_eq():
+    """vec_eq returns 1 when all elements match, 0 on first divergence."""
+    src = """
+    fn main() -> i32 {
+        let a = vec_new();
+        vec_push(a, 0, 5); vec_push(a, 1, 7); vec_push(a, 2, 9);
+        let b = vec_new();
+        vec_push(b, 0, 5); vec_push(b, 1, 7); vec_push(b, 2, 9);
+        let c = vec_new();
+        vec_push(c, 0, 5); vec_push(c, 1, 8); vec_push(c, 2, 9);
+        let same = vec_eq(a, b, 3);
+        let diff = vec_eq(a, c, 3);
+        // same=1 diff=0 -> (1 - 0) * 42 = 42
+        (same - diff) * 42
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42 (same=1, diff=0), got {code}"
+
+
+def test_stdlib_vec_reverse_inplace():
+    """vec_reverse_inplace reverses elements; check via index lookup."""
+    src = """
+    fn main() -> i32 {
+        let s = vec_new();
+        vec_push(s, 0, 1); vec_push(s, 1, 2); vec_push(s, 2, 3);
+        vec_push(s, 3, 4); vec_push(s, 4, 5);
+        vec_reverse_inplace(s, 5);
+        // After reverse: [5,4,3,2,1] -> sum 15, head 5*7 = 35, sum+head = 50
+        // Make exit deterministic: vec_get(s, 0) * 8 + vec_get(s, 4) * 2 = 5*8 + 1*2 = 42
+        vec_get(s, 0) * 8 + vec_get(s, 4) * 2
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42 (head=5, tail=1), got {code}"
+
+
 def test_stdlib_hashmap_put_get_round_trip():
     """HashMap put-then-get round-trip with three keys."""
     src = """
