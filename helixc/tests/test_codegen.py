@@ -5359,6 +5359,73 @@ def test_autodiff_exp_derivative():
     assert code == 2, f"expected 2 (exp(1) ≈ 2.718), got {code}"
 
 
+def test_autodiff_log_derivative():
+    """d/dx ln(a) = a'/a. At a=1.0, a_dx=42.0 -> 42/1 = 42."""
+    src = """
+    fn main() -> i32 {
+        d_log_dx(1.0_f64, 42.0_f64) as i32
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42 (42/1), got {code}"
+
+
+def test_autodiff_recip_derivative():
+    """d/dx (1/a) = -a'/a^2. At a=1.0, a_dx=-42 -> -(-42)/1 = 42."""
+    src = """
+    fn main() -> i32 {
+        d_recip_dx(1.0_f64, 0.0_f64 - 42.0_f64) as i32
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42 (-(-42)/1), got {code}"
+
+
+def test_autodiff_sin_derivative_at_zero():
+    """d/dx sin(a) = cos(a)*a'. At a=0, cos(0)=1, a_dx=42 -> 42."""
+    src = """
+    fn main() -> i32 {
+        d_sin_dx(0.0_f64, 42.0_f64) as i32
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42 (cos(0)*42), got {code}"
+
+
+def test_autodiff_cos_derivative_at_zero():
+    """d/dx cos(a) = -sin(a)*a'. At a=0, sin(0)=0 -> 0."""
+    src = """
+    fn main() -> i32 {
+        d_cos_dx(0.0_f64, 42.0_f64) as i32
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 0, f"expected 0 (-sin(0)*42 = 0), got {code}"
+
+
+def test_autodiff_relu_derivative_positive():
+    """d/dx relu(a) = 1 for a>0, so d_relu_dx returns a_dx unchanged
+    when a is positive. At a=5.0, a_dx=42 -> 42."""
+    src = """
+    fn main() -> i32 {
+        d_relu_dx(5.0_f64, 42.0_f64) as i32
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42 (relu' at +ve = 1), got {code}"
+
+
+def test_autodiff_relu_derivative_negative():
+    """d/dx relu(a) = 0 for a<0. At a=-5.0, any a_dx -> 0."""
+    src = """
+    fn main() -> i32 {
+        d_relu_dx(0.0_f64 - 5.0_f64, 42.0_f64) as i32
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 0, f"expected 0 (relu' at -ve = 0), got {code}"
+
+
 def test_stdlib_option_some():
     """Phase 1.9: Option<i32> stdlib. option_unwrap_or returns Some payload."""
     src = """

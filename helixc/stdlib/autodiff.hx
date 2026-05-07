@@ -69,3 +69,29 @@
 // d/dx (a * scalar) = scalar * a'
 @pure fn d_scale_v(a_v: f64, a_dx: f64, c: f64) -> f64 { a_v * c }
 @pure fn d_scale_dx(a_v: f64, a_dx: f64, c: f64) -> f64 { a_dx * c }
+
+// d/dx ln(a) = a' / a  (defined for a > 0)
+@pure fn d_log_v(a_v: f64, a_dx: f64) -> f64 { __log_f64(a_v) }
+@pure fn d_log_dx(a_v: f64, a_dx: f64) -> f64 { a_dx / a_v }
+
+// d/dx (1/a) = -a' / a^2
+@pure fn d_recip_v(a_v: f64, a_dx: f64) -> f64 { 1.0_f64 / a_v }
+@pure fn d_recip_dx(a_v: f64, a_dx: f64) -> f64 {
+    (0.0_f64 - a_dx) / (a_v * a_v)
+}
+
+// d/dx sin(a) = cos(a) * a'
+@pure fn d_sin_v(a_v: f64, a_dx: f64) -> f64 { __sin_f64(a_v) }
+@pure fn d_sin_dx(a_v: f64, a_dx: f64) -> f64 { __cos_f64(a_v) * a_dx }
+
+// d/dx cos(a) = -sin(a) * a'
+@pure fn d_cos_v(a_v: f64, a_dx: f64) -> f64 { __cos_f64(a_v) }
+@pure fn d_cos_dx(a_v: f64, a_dx: f64) -> f64 {
+    (0.0_f64 - __sin_f64(a_v)) * a_dx
+}
+
+// d/dx relu(a) = 1 if a > 0, else 0  (subgradient at 0 = 0)
+@pure fn d_relu_v(a_v: f64, a_dx: f64) -> f64 { __relu_f64(a_v) }
+@pure fn d_relu_dx(a_v: f64, a_dx: f64) -> f64 {
+    if a_v > 0.0_f64 { a_dx } else { 0.0_f64 }
+}
