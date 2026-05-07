@@ -2949,23 +2949,44 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         // mov eax, edx) so the remainder lands in eax.
         // Stage 1 audit fix: i64 mod uses cqo + idiv rcx + mov rax, rdx.
         // Stage 2.2: u32 mod uses `xor edx, edx; div ecx; mov eax, edx`.
+        // Stage 2.3 audit fix: f64/f32 operands now trap with ud2.
+        // Pre-existing bug — AST_DIV had the float traps but AST_MOD did
+        // not, so `f64 % f64` silently emitted integer mod on bit
+        // patterns (garbage int returned to caller, no signal). x86 has
+        // no SSE remainder; emit_ud2_trap is the safe choice.
         let n1 = emit_ast_code(p1, bind_state, patch_state, bn_state);
         let np = emit_push_rax();
         let n2 = emit_ast_code(p2, bind_state, patch_state, bn_state);
+        let l_d = is_f64_expr(p1, bind_state, bn_state);
+        let r_d = is_f64_expr(p2, bind_state, bn_state);
         let l_i64 = is_i64_expr(p1, bind_state, bn_state);
         let r_i64 = is_i64_expr(p2, bind_state, bn_state);
         let l_u32 = is_u32_expr(p1, bind_state, bn_state);
         let r_u32 = is_u32_expr(p2, bind_state, bn_state);
-        let nm = if l_i64 == 1 {
+        let nm = if l_d == 1 {
+            if r_d == 1 { emit_mov_rcx_rax_64() } else { emit_mov_ecx_eax() }
+        } else { if l_i64 == 1 {
             if r_i64 == 1 { emit_mov_rcx_rax_64() } else { emit_mov_ecx_eax() }
-        } else { emit_mov_ecx_eax() };
+        } else { emit_mov_ecx_eax() }};
         let no = emit_pop_rax();
-        let na = if l_i64 == 1 {
-            if r_i64 == 1 { emit_imod_rax_rcx_64() } else { emit_ud2_trap() }
-        } else { if r_i64 == 1 { emit_ud2_trap() } else {
-            if l_u32 == 1 {
-                if r_u32 == 1 { emit_imod_eax_ecx_u() } else { emit_ud2_trap() }
-            } else { if r_u32 == 1 { emit_ud2_trap() } else { emit_imod_eax_ecx() } }
+        let l_f = is_f32_expr(p1, bind_state, bn_state);
+        let r_f = is_f32_expr(p2, bind_state, bn_state);
+        let na = if l_d == 1 {
+            // f64 % f64 → ud2 (no SSE remainder); mixed → ud2.
+            emit_ud2_trap()
+        } else { if r_d == 1 { emit_ud2_trap() } else {
+            if l_i64 == 1 {
+                if r_i64 == 1 { emit_imod_rax_rcx_64() } else { emit_ud2_trap() }
+            } else { if r_i64 == 1 { emit_ud2_trap() } else {
+                if l_f == 1 {
+                    // f32 % f32 → ud2; mixed → ud2.
+                    emit_ud2_trap()
+                } else { if r_f == 1 { emit_ud2_trap() } else {
+                    if l_u32 == 1 {
+                        if r_u32 == 1 { emit_imod_eax_ecx_u() } else { emit_ud2_trap() }
+                    } else { if r_u32 == 1 { emit_ud2_trap() } else { emit_imod_eax_ecx() } }
+                }}
+            }}
         }};
         n1 + np + n2 + nm + no + na
     } else { if t == 9 {
