@@ -7368,6 +7368,87 @@ def test_stdlib_vec_map_relu():
     assert code == 42, f"expected 42, got {code}"
 
 
+def test_stdlib_vec_map_square():
+    """map_square([1,2,3,-4]) -> new vec [1,4,9,16], sum=30. Original
+    untouched. Encoded: 30+12=42."""
+    src = """
+    fn main() -> i32 {
+        let v = vec_new();
+        let n0 = vec_push(v, 0, 1);
+        let n1 = vec_push(v, n0, 2);
+        let n2 = vec_push(v, n1, 3);
+        let n3 = vec_push(v, n2, -4);
+        let dst = vec_map_square(v, n3);
+        let original_third = vec_get(v, 3);
+        if original_third == -4 { vec_sum(dst, n3) + 12 } else { 0 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_vec_cumsum():
+    """cumsum([1,2,3,4,5]) -> new vec [1,3,6,10,15]. Last elem = 15.
+    Encoded: 15*2+12 = 42."""
+    src = """
+    fn main() -> i32 {
+        let v = vec_new();
+        let n0 = vec_push(v, 0, 1);
+        let n1 = vec_push(v, n0, 2);
+        let n2 = vec_push(v, n1, 3);
+        let n3 = vec_push(v, n2, 4);
+        let n4 = vec_push(v, n3, 5);
+        let dst = vec_cumsum(v, n4);
+        // dst[0]=1, dst[1]=3, dst[2]=6, dst[3]=10, dst[4]=15
+        let last = vec_get(dst, 4);
+        if last == 15 { last * 2 + 12 } else { 0 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_vec_diff():
+    """diff([10,15,20,25,30]) -> new vec [5,5,5,5] (length n-1=4).
+    Sum = 20. Encoded: 20*2+2 = 42."""
+    src = """
+    fn main() -> i32 {
+        let v = vec_new();
+        let n0 = vec_push(v, 0, 10);
+        let n1 = vec_push(v, n0, 15);
+        let n2 = vec_push(v, n1, 20);
+        let n3 = vec_push(v, n2, 25);
+        let n4 = vec_push(v, n3, 30);
+        let dst = vec_diff(v, n4);
+        // dst has 4 elements [5,5,5,5]
+        let s = vec_sum(dst, 4);
+        if s == 20 { s * 2 + 2 } else { 0 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_vec_map_clamp():
+    """map_clamp([2,8,15,4,12], 5, 10) -> new vec [5,8,10,5,10].
+    Sum=38. Encoded: 38+4=42."""
+    src = """
+    fn main() -> i32 {
+        let v = vec_new();
+        let n0 = vec_push(v, 0, 2);
+        let n1 = vec_push(v, n0, 8);
+        let n2 = vec_push(v, n1, 15);
+        let n3 = vec_push(v, n2, 4);
+        let n4 = vec_push(v, n3, 12);
+        let dst = vec_map_clamp(v, n4, 5, 10);
+        let original_first = vec_get(v, 0);
+        if original_first == 2 { vec_sum(dst, n4) + 4 } else { 0 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
 def main():
     tests = [(name, fn) for name, fn in globals().items()
              if name.startswith("test_") and callable(fn)]

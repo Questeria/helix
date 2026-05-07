@@ -512,3 +512,65 @@ fn vec_max_abs(start: i32, count: i32) -> i32 {
     }
     best
 }
+
+// vec_map_square(start, count): allocate a new arena slice with each
+// element squared. Allocating mirror of the implicit pattern in
+// vec_sum_squares; useful when the caller needs the squared values
+// retained (e.g. variance computation, L2 element-wise norms).
+fn vec_map_square(start: i32, count: i32) -> i32 {
+    let s: i32 = __arena_len();
+    let mut i: i32 = 0;
+    while i < count {
+        let v = __arena_get(start + i);
+        __arena_push(v * v);
+        i = i + 1;
+    }
+    s
+}
+
+// vec_cumsum(start, count): allocate a new arena slice where
+// out[i] = sum(in[0..=i]). Standard cumulative-sum / prefix-sum.
+// out[0] = in[0], out[1] = in[0]+in[1], ..., out[count-1] = total.
+fn vec_cumsum(start: i32, count: i32) -> i32 {
+    let s: i32 = __arena_len();
+    let mut i: i32 = 0;
+    let mut acc: i32 = 0;
+    while i < count {
+        acc = acc + __arena_get(start + i);
+        __arena_push(acc);
+        i = i + 1;
+    }
+    s
+}
+
+// vec_diff(start, count): allocate a new arena slice with the
+// first-order differences out[i] = in[i+1] - in[i]. Output length is
+// count - 1 (returns the start of the new slice). For count <= 1 the
+// output is empty (length 0). Useful for discrete derivatives.
+fn vec_diff(start: i32, count: i32) -> i32 {
+    let s: i32 = __arena_len();
+    if count > 1 {
+        let mut i: i32 = 0;
+        let n_minus_1 = count - 1;
+        while i < n_minus_1 {
+            __arena_push(__arena_get(start + i + 1) - __arena_get(start + i));
+            i = i + 1;
+        }
+    };
+    s
+}
+
+// vec_map_clamp(start, count, lo, hi): allocating mirror of
+// vec_clamp_inplace. Returns a new slice where each element is
+// clamped to [lo, hi].
+fn vec_map_clamp(start: i32, count: i32, lo: i32, hi: i32) -> i32 {
+    let s: i32 = __arena_len();
+    let mut i: i32 = 0;
+    while i < count {
+        let v = __arena_get(start + i);
+        let clamped = if v < lo { lo } else { if v > hi { hi } else { v } };
+        __arena_push(clamped);
+        i = i + 1;
+    }
+    s
+}
