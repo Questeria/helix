@@ -7524,6 +7524,71 @@ def test_stdlib_vec_take():
     assert code == 42, f"expected 42, got {code}"
 
 
+def test_stdlib_vec_drop():
+    """drop([5,10,15,20,25,30], 2) -> new vec [15,20,25,30]. Sum=90.
+    Encoded: 90-48 = 42."""
+    src = """
+    fn main() -> i32 {
+        let v = vec_new();
+        let n0 = vec_push(v, 0, 5);
+        let n1 = vec_push(v, n0, 10);
+        let n2 = vec_push(v, n1, 15);
+        let n3 = vec_push(v, n2, 20);
+        let n4 = vec_push(v, n3, 25);
+        let n5 = vec_push(v, n4, 30);
+        let dst = vec_drop(v, n5, 2);
+        vec_sum(dst, 4) - 48
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_vec_concat():
+    """concat([1,2,3], [4,5,6,7]) -> new vec [1,2,3,4,5,6,7]. Sum=28.
+    Encoded: 28+14 = 42."""
+    src = """
+    fn main() -> i32 {
+        let a = vec_new();
+        let a1 = vec_push(a, 0, 1);
+        let a2 = vec_push(a, a1, 2);
+        let a3 = vec_push(a, a2, 3);
+        let b = __arena_len();
+        let b1 = vec_push(b, 0, 4);
+        let b2 = vec_push(b, b1, 5);
+        let b3 = vec_push(b, b2, 6);
+        let b4 = vec_push(b, b3, 7);
+        let dst = vec_concat(a, a3, b, b4);
+        vec_sum(dst, 7) + 14
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_vec_zip_div():
+    """zip_div([100,84,60,42], [10,12,15,3]) -> [10,7,4,14]. Sum=35.
+    Encoded: 35+7 = 42."""
+    src = """
+    fn main() -> i32 {
+        let a = vec_new();
+        let a1 = vec_push(a, 0, 100);
+        let a2 = vec_push(a, a1, 84);
+        let a3 = vec_push(a, a2, 60);
+        let a4 = vec_push(a, a3, 42);
+        let b = __arena_len();
+        let b1 = vec_push(b, 0, 10);
+        let b2 = vec_push(b, b1, 12);
+        let b3 = vec_push(b, b2, 15);
+        let b4 = vec_push(b, b3, 3);
+        let dst = vec_zip_div(a, b, a4);
+        vec_sum(dst, a4) + 7
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
 def main():
     tests = [(name, fn) for name, fn in globals().items()
              if name.startswith("test_") and callable(fn)]

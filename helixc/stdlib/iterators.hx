@@ -632,3 +632,49 @@ fn vec_take(start: i32, count: i32, n: i32) -> i32 {
     }
     s
 }
+
+// vec_drop(start, count, n): return a new slice with the first `n`
+// elements DROPPED. Saturates: n >= count returns empty, n <= 0
+// returns full copy. Companion to vec_take.
+fn vec_drop(start: i32, count: i32, n: i32) -> i32 {
+    let s: i32 = __arena_len();
+    let drop = if n < 0 { 0 } else { if n > count { count } else { n } };
+    let remaining = count - drop;
+    let mut i: i32 = 0;
+    while i < remaining {
+        __arena_push(__arena_get(start + drop + i));
+        i = i + 1;
+    }
+    s
+}
+
+// vec_concat(a, na, b, nb): allocate a new slice that's `a[0..na]`
+// followed by `b[0..nb]`. Useful for stitching subresults; avoids
+// the temptation to mutate either input.
+fn vec_concat(a: i32, na: i32, b: i32, nb: i32) -> i32 {
+    let s: i32 = __arena_len();
+    let mut i: i32 = 0;
+    while i < na {
+        __arena_push(__arena_get(a + i));
+        i = i + 1;
+    }
+    let mut j: i32 = 0;
+    while j < nb {
+        __arena_push(__arena_get(b + j));
+        j = j + 1;
+    }
+    s
+}
+
+// vec_zip_div(a, b, count): element-wise division a[i] / b[i].
+// Returns a new slice. b[i] == 0 emits the standard integer-div
+// division-by-zero trap. Companion to vec_zip_mul / vec_zip_mod.
+fn vec_zip_div(a: i32, b: i32, count: i32) -> i32 {
+    let s: i32 = __arena_len();
+    let mut i: i32 = 0;
+    while i < count {
+        __arena_push(__arena_get(a + i) / __arena_get(b + i));
+        i = i + 1;
+    }
+    s
+}
