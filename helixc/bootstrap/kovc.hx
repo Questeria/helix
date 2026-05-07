@@ -2700,6 +2700,106 @@ fn bn_global_slot_address() -> i32 {
 // SysV 6-int-param limit forced bn_state into a global slot rather
 // than a function arg.
 // --------------------------------------------------------------
+
+// Stage 1.5 audit refactor: shared float-bits parser. Reads "I.F" or
+// "I" from `p1..p1+p2` (literal text in the arena) and returns the
+// IEEE 754 f32 bit pattern. Originally inlined in the t==27 arm
+// (AST_FLOATLIT, ~90 lines); the bf16 literal commit (05773bb) copied
+// that body into t==42, so the duplication doubled. This helper
+// collapses both arms back to a one-liner. bf16 just masks the result
+// (`bits & 0xFFFF0000` to truncate the low 16 mantissa bits).
+//
+// Precision range covered: ~10^-9 to ~10^9 within i32 limits. Beyond
+// that, the i32 accumulators overflow (mostly silently). Future audit
+// item: widen to lo32+hi32 splits or detect overflow.
+fn parse_float_bits(p1: i32, p2: i32) -> i32 {
+    let mut i: i32 = 0;
+    let mut int_part: i32 = 0;
+    let mut frac_part: i32 = 0;
+    let mut frac_digits: i32 = 0;
+    let mut phase: i32 = 0;
+    let mut keep_p: i32 = 1;
+    while keep_p == 1 {
+        if i >= p2 { keep_p = 0; }
+        else {
+            let b = __arena_get(p1 + i);
+            if b == 46 {
+                // '.' transitions integer -> fractional phase.
+                phase = 1;
+                i = i + 1;
+            } else {
+                // is_digit inlined: '0'=48, '9'=57.
+                if b < 48 { keep_p = 0; }
+                else { if b > 57 { keep_p = 0; }
+                else {
+                    if phase == 0 {
+                        int_part = int_part * 10 + (b - 48);
+                    } else {
+                        frac_part = frac_part * 10 + (b - 48);
+                        frac_digits = frac_digits + 1;
+                    };
+                    i = i + 1;
+                }};
+            };
+        };
+    }
+    // pow10 = 10^frac_digits.
+    let mut pow10: i32 = 1;
+    let mut dd: i32 = 0;
+    while dd < frac_digits { pow10 = pow10 * 10; dd = dd + 1; }
+    let v_scaled = int_part * pow10 + frac_part;
+    let mut bits: i32 = 0;
+    if v_scaled == 0 {
+        bits = 0;
+    } else {
+        // Find binary exponent k: largest k such that 2^k * pow10 <= v_scaled.
+        // For v_scaled < pow10 (sub-1.0 literals like 0.5/0.25), first decrement
+        // k and halve threshold until threshold <= v_scaled. Then do the
+        // positive-k loop. The two loops together cover (~10^-9, ~10^9).
+        let mut k: i32 = 0;
+        let mut threshold: i32 = pow10;
+        let mut keep_neg: i32 = 1;
+        while keep_neg == 1 {
+            if threshold <= v_scaled { keep_neg = 0; }
+            else { if threshold == 1 { keep_neg = 0; }
+            else {
+                threshold = threshold / 2;
+                k = k - 1;
+            }};
+        }
+        let mut keep_k: i32 = 1;
+        while keep_k == 1 {
+            if threshold > v_scaled / 2 { keep_k = 0; }
+            else {
+                threshold = threshold * 2;
+                k = k + 1;
+            }
+        }
+        // Extract 23 mantissa bits via residual-doubling.
+        let mut residual = v_scaled - threshold;
+        let mut mantissa: i32 = 0;
+        let mut bit: i32 = 22;
+        while bit >= 0 {
+            residual = residual * 2;
+            if residual >= threshold {
+                let mut bv: i32 = 1;
+                let mut sh: i32 = 0;
+                while sh < bit { bv = bv * 2; sh = sh + 1; }
+                mantissa = mantissa + bv;
+                residual = residual - threshold;
+            }
+            bit = bit - 1;
+        }
+        // Pack: (k + 127) << 23 | mantissa  (sign bit = 0).
+        let exp_field = k + 127;
+        let mut exp_shifted: i32 = exp_field;
+        let mut sh2: i32 = 0;
+        while sh2 < 23 { exp_shifted = exp_shifted * 2; sh2 = sh2 + 1; }
+        bits = exp_shifted + mantissa;
+    }
+    bits
+}
+
 fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> i32 {
     let t = __arena_get(idx);
     let p1 = __arena_get(idx + 1);
@@ -2781,88 +2881,14 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         // load and masked store deferred.
         emit_ast_int(p1)
     } else { if t == 42 {
-        // Stage 1.5: AST_FLOATLIT_BF16 (tag 42). Same float-bits
-        // parser as AST_FLOATLIT (t==27, f32) — bf16 is f32 with the
-        // low 16 mantissa bits truncated to zero. Computes the f32 IEEE
-        // 754 bit pattern, then masks `bits & 0xFFFF0000` to keep only
-        // the upper 16 bits (sign + 8-bit exp + 7-bit mantissa). Emits
-        // `mov eax, BITS_truncated`.
-        let mut i: i32 = 0;
-        let mut int_part: i32 = 0;
-        let mut frac_part: i32 = 0;
-        let mut frac_digits: i32 = 0;
-        let mut phase: i32 = 0;
-        let mut keep_p: i32 = 1;
-        while keep_p == 1 {
-            if i >= p2 { keep_p = 0; }
-            else {
-                let b = __arena_get(p1 + i);
-                if b == 46 {
-                    phase = 1;
-                    i = i + 1;
-                } else {
-                    if b < 48 { keep_p = 0; }
-                    else { if b > 57 { keep_p = 0; }
-                    else {
-                        if phase == 0 {
-                            int_part = int_part * 10 + (b - 48);
-                        } else {
-                            frac_part = frac_part * 10 + (b - 48);
-                            frac_digits = frac_digits + 1;
-                        };
-                        i = i + 1;
-                    }};
-                };
-            };
-        }
-        let mut pow10: i32 = 1;
-        let mut dd: i32 = 0;
-        while dd < frac_digits { pow10 = pow10 * 10; dd = dd + 1; }
-        let v_scaled = int_part * pow10 + frac_part;
-        let mut bits: i32 = 0;
-        if v_scaled == 0 {
-            bits = 0;
-        } else {
-            let mut k: i32 = 0;
-            let mut threshold: i32 = pow10;
-            let mut keep_neg: i32 = 1;
-            while keep_neg == 1 {
-                if threshold <= v_scaled { keep_neg = 0; }
-                else { if threshold == 1 { keep_neg = 0; }
-                else {
-                    threshold = threshold / 2;
-                    k = k - 1;
-                }};
-            }
-            let mut keep_k: i32 = 1;
-            while keep_k == 1 {
-                if threshold > v_scaled / 2 { keep_k = 0; }
-                else {
-                    threshold = threshold * 2;
-                    k = k + 1;
-                }
-            }
-            let mut residual = v_scaled - threshold;
-            let mut mantissa: i32 = 0;
-            let mut bit: i32 = 22;
-            while bit >= 0 {
-                residual = residual * 2;
-                if residual >= threshold {
-                    let mut bv: i32 = 1;
-                    let mut sh: i32 = 0;
-                    while sh < bit { bv = bv * 2; sh = sh + 1; }
-                    mantissa = mantissa + bv;
-                    residual = residual - threshold;
-                }
-                bit = bit - 1;
-            }
-            let exp_field = k + 127;
-            let mut exp_shifted: i32 = exp_field;
-            let mut sh2: i32 = 0;
-            while sh2 < 23 { exp_shifted = exp_shifted * 2; sh2 = sh2 + 1; }
-            bits = exp_shifted + mantissa;
-        }
-        // bf16 truncation: keep upper 16 bits, zero the low 16.
+        // Stage 1.5: AST_FLOATLIT_BF16 (tag 42). bf16 = f32 with the
+        // low 16 mantissa bits truncated to zero. Compute the f32 IEEE
+        // 754 bit pattern via parse_float_bits, then mask off the low
+        // 16 (`bits & 0xFFFF0000`, expressed as `bits & (0 - 65536)`
+        // since Helix bootstrap has no hex literals). The resulting
+        // value is i32-shaped storage of the bf16 pattern (top 16 bits
+        // = sign + 8-bit exp + 7-bit mantissa; low 16 bits = 0).
+        let bits = parse_float_bits(p1, p2);
         let bf16_bits = bits & 0 - 65536;
         emit_ast_int(bf16_bits)
     } else { if t == 27 {
@@ -2871,99 +2897,10 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         // semantics are still f32-shaped (4-byte SSE single); step 7c
         // will branch on tag 34 for true 8-byte codegen.
         // p1 = byte_start of the literal text in the arena, p2 = byte_len.
-        // Parse "I.F" -> int_part, frac_part, frac_digits; compute the
-        // IEEE 754 f32 bit pattern via integer-only arithmetic; emit
-        // `mov eax, BITS`. The downstream code can then store BITS as
-        // i32 or movd into xmm0 for f32 arithmetic.
-        let mut i: i32 = 0;
-        let mut int_part: i32 = 0;
-        let mut frac_part: i32 = 0;
-        let mut frac_digits: i32 = 0;
-        let mut phase: i32 = 0;
-        let mut keep_p: i32 = 1;
-        while keep_p == 1 {
-            if i >= p2 { keep_p = 0; }
-            else {
-                let b = __arena_get(p1 + i);
-                if b == 46 {
-                    // '.' transitions integer -> fractional phase.
-                    phase = 1;
-                    i = i + 1;
-                } else {
-                    // is_digit inlined: '0'=48, '9'=57.
-                    if b < 48 { keep_p = 0; }
-                    else { if b > 57 { keep_p = 0; }
-                    else {
-                        if phase == 0 {
-                            int_part = int_part * 10 + (b - 48);
-                        } else {
-                            frac_part = frac_part * 10 + (b - 48);
-                            frac_digits = frac_digits + 1;
-                        };
-                        i = i + 1;
-                    }};
-                };
-            };
-        }
-        // pow10 = 10^frac_digits.
-        let mut pow10: i32 = 1;
-        let mut dd: i32 = 0;
-        while dd < frac_digits { pow10 = pow10 * 10; dd = dd + 1; }
-        let v_scaled = int_part * pow10 + frac_part;
-        let mut bits: i32 = 0;
-        if v_scaled == 0 {
-            bits = 0;
-        } else {
-            // Find binary exponent k: largest k such that 2^k * pow10 <= v_scaled.
-            // Step 3e: for v_scaled < pow10 (sub-1.0 literals like 0.5/0.25),
-            // first decrement k and halve threshold until threshold <= v_scaled.
-            // Step 3d: then do the existing positive-k loop. The two loops
-            // together cover values in (~10^-9, ~10^9) within i32 limits.
-            let mut k: i32 = 0;
-            let mut threshold: i32 = pow10;
-            let mut keep_neg: i32 = 1;
-            while keep_neg == 1 {
-                if threshold <= v_scaled { keep_neg = 0; }
-                else { if threshold == 1 { keep_neg = 0; }
-                else {
-                    threshold = threshold / 2;
-                    k = k - 1;
-                }};
-            }
-            let mut keep_k: i32 = 1;
-            while keep_k == 1 {
-                if threshold > v_scaled / 2 { keep_k = 0; }
-                else {
-                    threshold = threshold * 2;
-                    k = k + 1;
-                }
-            }
-            // Extract 23 mantissa bits via residual-doubling. residual stays
-            // bounded by 2*threshold across iterations (no i32 overflow for
-            // common literals like 1.5, 3.14, 100.25).
-            let mut residual = v_scaled - threshold;
-            let mut mantissa: i32 = 0;
-            let mut bit: i32 = 22;
-            while bit >= 0 {
-                residual = residual * 2;
-                if residual >= threshold {
-                    // bit_val = 2^bit, computed inline.
-                    let mut bv: i32 = 1;
-                    let mut sh: i32 = 0;
-                    while sh < bit { bv = bv * 2; sh = sh + 1; }
-                    mantissa = mantissa + bv;
-                    residual = residual - threshold;
-                }
-                bit = bit - 1;
-            }
-            // Pack: (k + 127) << 23 | mantissa  (sign bit = 0).
-            let exp_field = k + 127;
-            let mut exp_shifted: i32 = exp_field;
-            let mut sh2: i32 = 0;
-            while sh2 < 23 { exp_shifted = exp_shifted * 2; sh2 = sh2 + 1; }
-            bits = exp_shifted + mantissa;
-        }
-        emit_ast_int(bits)
+        // Parse "I.F" -> IEEE 754 f32 bit pattern via parse_float_bits
+        // helper (Stage 1.5 audit refactor — was inlined here, now
+        // shared with t==42 bf16 literal arm).
+        emit_ast_int(parse_float_bits(p1, p2))
     } else { if t == 34 {
         // AST_FLOATLIT_F64 (Phase 1.10 step 7c, 8-byte f64 emission).
         // p1 = byte_start of literal text in arena, p2 = byte_len.
