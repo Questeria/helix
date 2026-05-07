@@ -175,3 +175,96 @@ fn hashmap_values(start: i32, cap: i32) -> i32 {
     }
     dst
 }
+
+// hashmap_increment(start, cap, k, delta): atomic get-then-put pattern
+// for accumulator maps (e.g. word counts). If key present, adds delta
+// to its value; if absent, inserts with value=delta. Returns the new
+// value at the key, or -1 if the map is full and the key wasn't there.
+fn hashmap_increment(start: i32, cap: i32, k: i32, delta: i32) -> i32 {
+    let mut idx = hashmap_hash(k, cap);
+    let mut probes: i32 = 0;
+    let mut result: i32 = 0 - 1;
+    while probes < cap {
+        let base = start + idx * 3;
+        let occ = __arena_get(base);
+        if occ == 0 {
+            __arena_set(base, 1);
+            __arena_set(base + 1, k);
+            __arena_set(base + 2, delta);
+            result = delta;
+            probes = cap;
+        } else {
+            if __arena_get(base + 1) == k {
+                let new_val = __arena_get(base + 2) + delta;
+                __arena_set(base + 2, new_val);
+                result = new_val;
+                probes = cap;
+            } else {
+                idx = idx + 1;
+                if idx >= cap { idx = 0; };
+                probes = probes + 1;
+            };
+        };
+    }
+    result
+}
+
+// hashmap_swap(start, cap, k, new_v): set value to new_v, return old
+// value. If key was absent, inserts and returns -1. If map full and
+// key not present, returns -1 (caller can't distinguish from a true
+// -1 old value — known limitation).
+fn hashmap_swap(start: i32, cap: i32, k: i32, new_v: i32) -> i32 {
+    let mut idx = hashmap_hash(k, cap);
+    let mut probes: i32 = 0;
+    let mut result: i32 = 0 - 1;
+    while probes < cap {
+        let base = start + idx * 3;
+        let occ = __arena_get(base);
+        if occ == 0 {
+            __arena_set(base, 1);
+            __arena_set(base + 1, k);
+            __arena_set(base + 2, new_v);
+            probes = cap;
+        } else {
+            if __arena_get(base + 1) == k {
+                result = __arena_get(base + 2);
+                __arena_set(base + 2, new_v);
+                probes = cap;
+            } else {
+                idx = idx + 1;
+                if idx >= cap { idx = 0; };
+                probes = probes + 1;
+            };
+        };
+    }
+    result
+}
+
+// hashmap_get_or(start, cap, k, default): @pure. Cleaner-name alias
+// for hashmap_get's existing default-fallback API. Convenience for
+// call sites where "or" reads more naturally.
+@pure
+fn hashmap_get_or(start: i32, cap: i32, k: i32, default: i32) -> i32 {
+    hashmap_get(start, cap, k, default)
+}
+
+// hashmap_max_value(start, cap): @pure. Walks all occupied buckets,
+// returns the maximum value. Returns 0 for an empty map (no occupied
+// buckets); caller should check hashmap_size beforehand if 0 is a
+// valid value to disambiguate.
+@pure
+fn hashmap_max_value(start: i32, cap: i32) -> i32 {
+    let mut i: i32 = 0;
+    let mut found: i32 = 0;
+    let mut best: i32 = 0;
+    while i < cap {
+        let base = start + i * 3;
+        if __arena_get(base) == 1 {
+            let v = __arena_get(base + 2);
+            if found == 0 { best = v; found = 1; }
+            else { if v > best { best = v; }; };
+        };
+        i = i + 1;
+    }
+    best
+}

@@ -8175,6 +8175,65 @@ def test_stdlib_ti1d_l2_norm_sq():
     assert code == 42, f"expected 42, got {code}"
 
 
+def test_stdlib_hashmap_increment():
+    """Increment key 7 by 10, then by 32. Final value = 42."""
+    src = """
+    fn main() -> i32 {
+        let m = hashmap_new(8);
+        hashmap_increment(m, 8, 7, 10);
+        hashmap_increment(m, 8, 7, 32)
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_hashmap_swap():
+    """Insert (5, 100); swap to 42; verify swap returned old=100, current=42."""
+    src = """
+    fn main() -> i32 {
+        let m = hashmap_new(8);
+        hashmap_put(m, 8, 5, 100);
+        let old = hashmap_swap(m, 8, 5, 42);
+        let cur = hashmap_get(m, 8, 5, 0 - 1);
+        // old=100, cur=42; check (old==100) and (cur==42).
+        if old == 100 {
+            if cur == 42 { 42 } else { 0 }
+        } else { 0 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_hashmap_get_or():
+    """hashmap_get_or for missing key returns default. Default 42."""
+    src = """
+    fn main() -> i32 {
+        let m = hashmap_new(8);
+        hashmap_put(m, 8, 1, 99);
+        hashmap_get_or(m, 8, 7, 42)
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_hashmap_max_value():
+    """Insert (1,5), (2,42), (3,30). max_value = 42."""
+    src = """
+    fn main() -> i32 {
+        let m = hashmap_new(8);
+        hashmap_put(m, 8, 1, 5);
+        hashmap_put(m, 8, 2, 42);
+        hashmap_put(m, 8, 3, 30);
+        hashmap_max_value(m, 8)
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
 def test_stdlib_vec_all_eq():
     """[3,3,3,3] all_eq(3)=1; [3,3,5,3] all_eq(3)=0. 1*42 + 0*5 = 42."""
     src = """
