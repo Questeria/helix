@@ -679,3 +679,63 @@ fn tf1d_clamp(x_start: i32, lo: f32, hi: f32, dst: i32, n: i32) -> i32 {
     }
     0
 }
+
+// tf1d_argmin(start, n): @pure. Index of the smallest f32 element.
+// Returns -1 if n == 0.
+@pure fn tf1d_argmin(start: i32, n: i32) -> i32 {
+    if n == 0 { 0 - 1 }
+    else {
+        let mut i: i32 = 1;
+        let mut best_idx: i32 = 0;
+        let mut best: f32 = __f32_from_bits(__arena_get(start));
+        while i < n {
+            let v = __f32_from_bits(__arena_get(start + i));
+            if v < best { best = v; best_idx = i; }
+            i = i + 1;
+        }
+        best_idx
+    }
+}
+
+// tf1d_running_sum(start, n): allocate a new vec where r[i] = sum
+// over x[0..=i]. Like vec_cumsum but for f32. r[0] = x[0]. Useful
+// for prefix-sum queries.
+fn tf1d_running_sum(start: i32, n: i32) -> i32 {
+    let s: i32 = __arena_len();
+    if n == 0 { s }
+    else {
+        let mut acc: f32 = 0.0_f32;
+        let mut i: i32 = 0;
+        while i < n {
+            acc = acc + __f32_from_bits(__arena_get(start + i));
+            __arena_push(__bits_of_f32(acc));
+            i = i + 1;
+        }
+        s
+    }
+}
+
+// tf1d_negate(start, dst, n): write -x[i] to dst[i] for all i. Out-of-
+// place; caller pre-allocates dst with t1d_new(n) (or shares with x for
+// in-place).
+fn tf1d_negate(x_start: i32, dst: i32, n: i32) -> i32 {
+    let mut i: i32 = 0;
+    while i < n {
+        let v = __f32_from_bits(__arena_get(x_start + i));
+        __arena_set(dst + i, __bits_of_f32(0.0_f32 - v));
+        i = i + 1;
+    }
+    0
+}
+
+// tf1d_scale_inplace(start, n, scalar): multiply every element by
+// scalar in place. Mirror of vec_offset_inplace for f32.
+fn tf1d_scale_inplace(start: i32, n: i32, scalar: f32) -> i32 {
+    let mut i: i32 = 0;
+    while i < n {
+        let v = __f32_from_bits(__arena_get(start + i));
+        __arena_set(start + i, __bits_of_f32(v * scalar));
+        i = i + 1;
+    }
+    start
+}

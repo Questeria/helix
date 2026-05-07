@@ -8175,6 +8175,69 @@ def test_stdlib_ti1d_l2_norm_sq():
     assert code == 42, f"expected 42, got {code}"
 
 
+def test_stdlib_tf1d_argmin():
+    """argmin([3.0, 1.0, 2.0, 4.0]) = 1. * 42 = 42."""
+    src = """
+    fn main() -> i32 {
+        let x = t1d_new(4);
+        tf1d_set(x, 0, 3.0_f32);
+        tf1d_set(x, 1, 1.0_f32);
+        tf1d_set(x, 2, 2.0_f32);
+        tf1d_set(x, 3, 4.0_f32);
+        tf1d_argmin(x, 4) * 42
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_tf1d_running_sum():
+    """running_sum([1,2,3]) -> [1,3,6]; last element is 6.0; bits 0x40C00000;
+    top byte 0x40=64; -22=42."""
+    src = """
+    fn main() -> i32 {
+        let x = t1d_new(3);
+        tf1d_set(x, 0, 1.0_f32);
+        tf1d_set(x, 1, 2.0_f32);
+        tf1d_set(x, 2, 3.0_f32);
+        let r = tf1d_running_sum(x, 3);
+        // Last element bit-pattern.
+        __arena_get(r + 2) / 16777216 - 22
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_tf1d_negate():
+    """negate([2.0]) -> [-2.0]; bits 0xC0000000; top byte 0xC0=192; -150=42."""
+    src = """
+    fn main() -> i32 {
+        let x = t1d_new(1);
+        tf1d_set(x, 0, 2.0_f32);
+        let dst = t1d_new(1);
+        tf1d_negate(x, dst, 1);
+        __arena_get(dst) / 16777216 - 150
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_tf1d_scale_inplace():
+    """scale_inplace([2.0], 4.0) -> [8.0]; bits 0x41000000; top byte 0x41=65; -23=42."""
+    src = """
+    fn main() -> i32 {
+        let x = t1d_new(1);
+        tf1d_set(x, 0, 2.0_f32);
+        tf1d_scale_inplace(x, 1, 4.0_f32);
+        __arena_get(x) / 16777216 - 23
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
 def test_stdlib_hashmap_increment():
     """Increment key 7 by 10, then by 32. Final value = 42."""
     src = """
