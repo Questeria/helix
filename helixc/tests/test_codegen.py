@@ -9955,6 +9955,62 @@ def test_stdlib_vec_last():
     assert code == 42, f"expected 42 (last=42, empty=0), got {code}"
 
 
+def test_stdlib_vec_max_in_range():
+    """max_in_range([1,5,2,42,3], 2, 5) = 42."""
+    src = """
+    fn main() -> i32 {
+        let v = __arena_len();
+        __arena_push(1); __arena_push(5); __arena_push(2);
+        __arena_push(42); __arena_push(3);
+        vec_max_in_range(v, 2, 5)
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_vec_min_in_range():
+    """min_in_range([10,5,42,99,100], 2, 5) = 42."""
+    src = """
+    fn main() -> i32 {
+        let v = __arena_len();
+        __arena_push(10); __arena_push(5); __arena_push(42);
+        __arena_push(99); __arena_push(100);
+        vec_min_in_range(v, 2, 5)
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_vec_count_eq_in_range():
+    """count_eq_in_range([5,1,1,1,5], 1, 4, 1) = 3; *14=42."""
+    src = """
+    fn main() -> i32 {
+        let v = __arena_len();
+        __arena_push(5); __arena_push(1); __arena_push(1);
+        __arena_push(1); __arena_push(5);
+        vec_count_eq_in_range(v, 1, 4, 1) * 14
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_vec_swap_range_alloc():
+    """swap_range_alloc([1,2,3,4,5], off=2, n=2) -> [3,4,1,2,5]; first elem 3; +39=42."""
+    src = """
+    fn main() -> i32 {
+        let v = __arena_len();
+        __arena_push(1); __arena_push(2); __arena_push(3); __arena_push(4); __arena_push(5);
+        let r = vec_swap_range_alloc(v, 5, 2, 2);
+        __arena_get(r) + 39
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
 def test_stdlib_ti1d_count_eq():
     """count_eq([1,5,1,5,1], 1) = 3; *14=42."""
     src = """

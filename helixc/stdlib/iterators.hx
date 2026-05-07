@@ -1553,3 +1553,70 @@ fn vec_count_pos(start: i32, count: i32) -> i32 {
 fn vec_count_neg(start: i32, count: i32) -> i32 {
     vec_count_lt(start, count, 0)
 }
+
+// vec_max_in_range(start, lo, hi): @pure. Largest in v[lo..hi). Returns 0 if hi <= lo.
+@pure
+fn vec_max_in_range(start: i32, lo: i32, hi: i32) -> i32 {
+    if hi <= lo { 0 }
+    else {
+        let mut i: i32 = lo + 1;
+        let mut best: i32 = __arena_get(start + lo);
+        while i < hi {
+            let v = __arena_get(start + i);
+            if v > best { best = v; }
+            i = i + 1;
+        }
+        best
+    }
+}
+
+// vec_min_in_range(start, lo, hi): @pure. Smallest in v[lo..hi). 0 if empty.
+@pure
+fn vec_min_in_range(start: i32, lo: i32, hi: i32) -> i32 {
+    if hi <= lo { 0 }
+    else {
+        let mut i: i32 = lo + 1;
+        let mut best: i32 = __arena_get(start + lo);
+        while i < hi {
+            let v = __arena_get(start + i);
+            if v < best { best = v; }
+            i = i + 1;
+        }
+        best
+    }
+}
+
+// vec_count_eq_in_range(start, lo, hi, target): @pure. Count of matches in slice.
+@pure
+fn vec_count_eq_in_range(start: i32, lo: i32, hi: i32, target: i32) -> i32 {
+    let mut i: i32 = lo;
+    let mut total: i32 = 0;
+    while i < hi {
+        if __arena_get(start + i) == target { total = total + 1; }
+        i = i + 1;
+    }
+    total
+}
+
+// vec_swap_range_alloc(start, count, off, n): allocate a new vec where
+// the slice [off, off+n) is moved to the front. Useful for "rotate
+// to anchor the substring of interest".
+fn vec_swap_range_alloc(start: i32, count: i32, off: i32, n: i32) -> i32 {
+    let s: i32 = __arena_len();
+    let mut i: i32 = 0;
+    while i < n {
+        __arena_push(__arena_get(start + off + i));
+        i = i + 1;
+    }
+    let mut j: i32 = 0;
+    while j < off {
+        __arena_push(__arena_get(start + j));
+        j = j + 1;
+    }
+    let mut k: i32 = off + n;
+    while k < count {
+        __arena_push(__arena_get(start + k));
+        k = k + 1;
+    }
+    s
+}
