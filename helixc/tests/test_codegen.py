@@ -8175,6 +8175,80 @@ def test_stdlib_ti1d_l2_norm_sq():
     assert code == 42, f"expected 42, got {code}"
 
 
+def test_stdlib_string_count_lines():
+    """'a\\nb\\nc\\n' has 3 newlines; *14=42."""
+    src = """
+    fn main() -> i32 {
+        let s = string_new();
+        let s1 = string_push(s, 0, 97);
+        let s2 = string_push(s, s1, 10);
+        let s3 = string_push(s, s2, 98);
+        let s4 = string_push(s, s3, 10);
+        let s5 = string_push(s, s4, 99);
+        let s6 = string_push(s, s5, 10);
+        string_count_lines(s, s6) * 14
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_string_eq_ignore_case_ascii():
+    """'AbC' vs 'aBc' eq_ignore_case = 1; *42=42."""
+    src = """
+    fn main() -> i32 {
+        let a = string_new();
+        let a1 = string_push(a, 0, 65);
+        let a2 = string_push(a, a1, 98);
+        let a3 = string_push(a, a2, 67);
+        let b = __arena_len();
+        let b1 = string_push(b, 0, 97);
+        let b2 = string_push(b, b1, 66);
+        let b3 = string_push(b, b2, 99);
+        string_eq_ignore_case_ascii(a, a3, b, b3) * 42
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_string_first_index_at_or_after():
+    """'a/b/c'; index of '/' at or after 2 = 3 (the second '/'); *14=42."""
+    src = """
+    fn main() -> i32 {
+        let s = string_new();
+        let s1 = string_push(s, 0, 97);
+        let s2 = string_push(s, s1, 47);
+        let s3 = string_push(s, s2, 98);
+        let s4 = string_push(s, s3, 47);
+        let s5 = string_push(s, s4, 99);
+        string_first_index_at_or_after(s, s5, 2, 47) * 14
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_string_strip_byte():
+    """'a b c d' strip ' ' (32) -> 'abcd' (4 bytes); first 'a'=97; -55=42."""
+    src = """
+    fn main() -> i32 {
+        let s = string_new();
+        let s1 = string_push(s, 0, 97);
+        let s2 = string_push(s, s1, 32);
+        let s3 = string_push(s, s2, 98);
+        let s4 = string_push(s, s3, 32);
+        let s5 = string_push(s, s4, 99);
+        let s6 = string_push(s, s5, 32);
+        let s7 = string_push(s, s6, 100);
+        let r = string_strip_byte(s, s7, 32);
+        string_get(r, 0) - 55
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
 def test_stdlib_vec_partition_at_idx():
     """[1,2,3,4,5] split at 2 -> left [1,2], right [3,4,5]; left[0]+right[2]=1+5=6;
     *7=42."""

@@ -621,3 +621,63 @@ fn string_index_of_n(start: i32, len: i32, byte: i32, n: i32) -> i32 {
     }
     found
 }
+
+// string_count_lines(start, len): @pure. Count of newlines (byte 10).
+// Useful as a precursor to splitting "lines" — caller can size a vec.
+@pure
+fn string_count_lines(start: i32, len: i32) -> i32 {
+    string_count_byte(start, len, 10)
+}
+
+// string_eq_ignore_case_ascii(a, an, b, bn): @pure. Equality ignoring
+// ASCII case. Bytes outside A-Z / a-z compare unchanged.
+@pure
+fn string_eq_ignore_case_ascii(a: i32, an: i32, b: i32, bn: i32) -> i32 {
+    if an != bn { 0 }
+    else {
+        let mut i: i32 = 0;
+        let mut eq: i32 = 1;
+        while i < an {
+            let av = __arena_get(a + i);
+            let bv = __arena_get(b + i);
+            // Normalize to lowercase for comparison.
+            let mut an_v = av;
+            if av >= 65 { if av <= 90 { an_v = av + 32; }; };
+            let mut bn_v = bv;
+            if bv >= 65 { if bv <= 90 { bn_v = bv + 32; }; };
+            if an_v != bn_v { eq = 0; };
+            i = i + 1;
+        }
+        eq
+    }
+}
+
+// string_first_index_at_or_after(start, len, off, byte): @pure.
+// Returns first index of byte at index >= off, or -1 if absent.
+// Useful for repeated split passes.
+@pure
+fn string_first_index_at_or_after(start: i32, len: i32, off: i32, byte: i32) -> i32 {
+    let mut i: i32 = if off < 0 { 0 } else { off };
+    let mut found: i32 = 0 - 1;
+    while i < len {
+        if found < 0 {
+            if __arena_get(start + i) == byte { found = i; };
+        };
+        i = i + 1;
+    }
+    found
+}
+
+// string_strip_byte(start, len, byte): allocate new string with all
+// occurrences of byte removed. Useful for "strip whitespace" or
+// "strip commas" patterns.
+fn string_strip_byte(start: i32, len: i32, byte: i32) -> i32 {
+    let s: i32 = __arena_len();
+    let mut i: i32 = 0;
+    while i < len {
+        let b = __arena_get(start + i);
+        if b != byte { __arena_push(b); };
+        i = i + 1;
+    }
+    s
+}
