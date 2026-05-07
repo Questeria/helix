@@ -345,13 +345,31 @@ fn lex_int(src_start: i32, src_len: i32, pos: i32) -> i32 {
         // Stage 2.3: TK_INTLIT_U8  (tag 35) for _u8-suffixed literals;
         // Stage 2.4: TK_INTLIT_U64 (tag 36) for _u64-suffixed literals;
         // TK_INT (tag 1) for plain or _i32-suffixed.
-        let tk = if is_i64_suffix == 1 { 33 }
+        // Stage 2.4b audit fix: loud-failure guard for u64 literal
+        // overflow. The lex_int decimal accumulator is i32; values
+        // >= 2^32 silently truncate. Cap: if the digit run is > 10
+        // chars AND `_u64` suffix, emit token tag 40 (no parser arm
+        // → falls through to AST_ERR → ud2 at codegen). 10 digits
+        // accept up to 9_999_999_999 (slightly over 2^32-1 =
+        // 4294967295); values in [2^32, 9_999_999_999] still wrap
+        // silently — proper fix is the queued lex-side accumulator
+        // widening. 11+ digits definitely overflow u64? No, u64 max
+        // is 18_446_744_073_709_551_615 (20 digits). So 11+ digits
+        // are NOT inherently invalid — they're just past what i32
+        // can hold. The cap intentionally errs toward LESS conservative
+        // here so legal valuese.g. 2147483648_u64 (= 2^31, 10 digits)
+        // still work via the hi32=0 partial fix from commit 09c8858.
+        let u64_oversize = if is_u64_suffix == 1 {
+            if (length - 4) > 10 { 1 } else { 0 }
+        } else { 0 };
+        let tk = if u64_oversize == 1 { 40 }
+                 else { if is_i64_suffix == 1 { 33 }
                  else { if is_u32_suffix == 1 { 34 }
                  else { if is_u8_suffix == 1 { 35 }
                  else { if is_u64_suffix == 1 { 36 }
                  else { if is_i8_suffix == 1 { 37 }
                  else { if is_i16_suffix == 1 { 38 }
-                 else { if is_u16_suffix == 1 { 39 } else { 1 } } } } } } };
+                 else { if is_u16_suffix == 1 { 39 } else { 1 } } } } } } } };
         push_token(tk, value, pos, length);
     };
     p
