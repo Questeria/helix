@@ -545,12 +545,19 @@ fn patch_rel32(disp_slot: i32, target_slot: i32) -> i32 {
 //
 //   55                push rbp
 //   48 89 E5          mov rbp, rsp
-//   48 81 EC 00 02 00 00   sub rsp, 512
+//   48 81 EC 00 04 00 00   sub rsp, 1024
+//
+// Audit fix (cycle 1, polish #14): bumped from 512 → 1024 to match the
+// bind_state cap (64 entries) with 2× margin. Previously 512 was
+// "just enough" for 64 × 8-byte slots — any future cap bump would
+// silently corrupt the saved rbp/return-address. 1024 gives 128
+// slots; future Phase-1 should derive this from bind_state cap
+// dynamically rather than hard-coding.
 fn emit_prologue() -> i32 {
     emit_byte(0x55);
     emit_byte(0x48); emit_byte(0x89); emit_byte(0xE5);
     emit_byte(0x48); emit_byte(0x81); emit_byte(0xEC);
-    emit_u32_le(512);
+    emit_u32_le(1024);
     11
 }
 
@@ -1162,14 +1169,21 @@ fn patch_table_init() -> i32 {
 }
 
 fn patch_table_add(state: i32, disp_slot: i32, name_start: i32, name_len: i32) -> i32 {
+    // Audit fix #10: cap-check before writing. patch_table_init
+    // allocates 4096 entries; without this guard, a source with > 4096
+    // CALL+LEA patches would silently corrupt adjacent arena memory.
     let top = __arena_get(state);
-    let table_base = __arena_get(state + 1);
-    let entry = table_base + top * 3;
-    __arena_set(entry, disp_slot);
-    __arena_set(entry + 1, name_start);
-    __arena_set(entry + 2, name_len);
-    __arena_set(state, top + 1);
-    0
+    if top >= 4096 {
+        0 - 1
+    } else {
+        let table_base = __arena_get(state + 1);
+        let entry = table_base + top * 3;
+        __arena_set(entry, disp_slot);
+        __arena_set(entry + 1, name_start);
+        __arena_set(entry + 2, name_len);
+        __arena_set(state, top + 1);
+        0
+    }
 }
 
 // Trailing exit-stub: take the top-of-eax value as the exit code
