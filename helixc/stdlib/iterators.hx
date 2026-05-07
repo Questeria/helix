@@ -1177,3 +1177,106 @@ fn vec_reverse_inplace(start: i32, count: i32) -> i32 {
     }
     start
 }
+
+// vec_unique_alloc(start, count): allocate a new vec containing each
+// distinct value from input. Order of first occurrence is preserved.
+// O(count^2) — fine for small inputs; use a hashmap for big sets.
+fn vec_unique_alloc(start: i32, count: i32) -> i32 {
+    let s: i32 = __arena_len();
+    let mut written: i32 = 0;
+    let mut i: i32 = 0;
+    while i < count {
+        let v = __arena_get(start + i);
+        // Linear scan over already-written portion.
+        let mut j: i32 = 0;
+        let mut seen: i32 = 0;
+        while j < written {
+            if __arena_get(s + j) == v { seen = 1; };
+            j = j + 1;
+        }
+        if seen == 0 {
+            __arena_push(v);
+            written = written + 1;
+        };
+        i = i + 1;
+    }
+    s
+}
+
+// vec_intersect(a, an, b, bn): allocate a new vec containing elements
+// that appear in BOTH a and b. Preserves a's order, dedupes implicitly
+// (won't add a duplicate if it's already been added). O(an * bn).
+fn vec_intersect(a: i32, an: i32, b: i32, bn: i32) -> i32 {
+    let s: i32 = __arena_len();
+    let mut written: i32 = 0;
+    let mut i: i32 = 0;
+    while i < an {
+        let v = __arena_get(a + i);
+        // In b?
+        let mut j: i32 = 0;
+        let mut in_b: i32 = 0;
+        while j < bn {
+            if __arena_get(b + j) == v { in_b = 1; };
+            j = j + 1;
+        }
+        if in_b == 1 {
+            // Already written?
+            let mut k: i32 = 0;
+            let mut seen: i32 = 0;
+            while k < written {
+                if __arena_get(s + k) == v { seen = 1; };
+                k = k + 1;
+            }
+            if seen == 0 {
+                __arena_push(v);
+                written = written + 1;
+            };
+        };
+        i = i + 1;
+    }
+    s
+}
+
+// vec_difference(a, an, b, bn): allocate a new vec with elements in a
+// but NOT in b. Preserves a's order. Dedupes. O(an * bn).
+fn vec_difference(a: i32, an: i32, b: i32, bn: i32) -> i32 {
+    let s: i32 = __arena_len();
+    let mut written: i32 = 0;
+    let mut i: i32 = 0;
+    while i < an {
+        let v = __arena_get(a + i);
+        let mut j: i32 = 0;
+        let mut in_b: i32 = 0;
+        while j < bn {
+            if __arena_get(b + j) == v { in_b = 1; };
+            j = j + 1;
+        }
+        if in_b == 0 {
+            let mut k: i32 = 0;
+            let mut seen: i32 = 0;
+            while k < written {
+                if __arena_get(s + k) == v { seen = 1; };
+                k = k + 1;
+            }
+            if seen == 0 {
+                __arena_push(v);
+                written = written + 1;
+            };
+        };
+        i = i + 1;
+    }
+    s
+}
+
+// vec_concat3(a, an, b, bn, c, cn): concat 3 vecs into one new alloc.
+// Common pattern when building messages or splice-then-reassemble.
+fn vec_concat3(a: i32, an: i32, b: i32, bn: i32, c: i32, cn: i32) -> i32 {
+    let s: i32 = __arena_len();
+    let mut i: i32 = 0;
+    while i < an { __arena_push(__arena_get(a + i)); i = i + 1; }
+    let mut j: i32 = 0;
+    while j < bn { __arena_push(__arena_get(b + j)); j = j + 1; }
+    let mut k: i32 = 0;
+    while k < cn { __arena_push(__arena_get(c + k)); k = k + 1; }
+    s
+}

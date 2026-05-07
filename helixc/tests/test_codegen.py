@@ -8175,6 +8175,76 @@ def test_stdlib_ti1d_l2_norm_sq():
     assert code == 42, f"expected 42, got {code}"
 
 
+def test_stdlib_vec_unique_alloc():
+    """unique_alloc([1,2,1,3,2,3]) -> [1,2,3]; sum=6; *7=42."""
+    src = """
+    fn main() -> i32 {
+        let v = __arena_len();
+        __arena_push(1); __arena_push(2); __arena_push(1);
+        __arena_push(3); __arena_push(2); __arena_push(3);
+        let r = vec_unique_alloc(v, 6);
+        let s = __arena_get(r) + __arena_get(r + 1) + __arena_get(r + 2);
+        s * 7
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_vec_intersect():
+    """intersect([1,2,3,4], [2,4,6]) -> [2,4]; sum=6; *7=42."""
+    src = """
+    fn main() -> i32 {
+        let a = __arena_len();
+        __arena_push(1); __arena_push(2); __arena_push(3); __arena_push(4);
+        let b = __arena_len();
+        __arena_push(2); __arena_push(4); __arena_push(6);
+        let r = vec_intersect(a, 4, b, 3);
+        let s = __arena_get(r) + __arena_get(r + 1);
+        s * 7
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_vec_difference():
+    """difference([1,2,3,4,5], [2,5]) -> [1,3,4]; sum=8; *5+2=42."""
+    src = """
+    fn main() -> i32 {
+        let a = __arena_len();
+        __arena_push(1); __arena_push(2); __arena_push(3); __arena_push(4); __arena_push(5);
+        let b = __arena_len();
+        __arena_push(2); __arena_push(5);
+        let r = vec_difference(a, 5, b, 2);
+        let s = __arena_get(r) + __arena_get(r + 1) + __arena_get(r + 2);
+        s * 5 + 2
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_vec_concat3():
+    """concat3([1,2],[3],[4,5]) -> [1,2,3,4,5]; sum=15; *2+12=42."""
+    src = """
+    fn main() -> i32 {
+        let a = __arena_len();
+        __arena_push(1); __arena_push(2);
+        let b = __arena_len();
+        __arena_push(3);
+        let c = __arena_len();
+        __arena_push(4); __arena_push(5);
+        let r = vec_concat3(a, 2, b, 1, c, 2);
+        let s = __arena_get(r) + __arena_get(r + 1) + __arena_get(r + 2) +
+                __arena_get(r + 3) + __arena_get(r + 4);
+        s * 2 + 12
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
 def test_stdlib_vec_argmax_in_range():
     """argmax_in_range([5,3,9,1], lo=1, hi=4) -> 2 (the 9 at idx 2). *21=42."""
     src = """
