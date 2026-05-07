@@ -533,6 +533,36 @@ fn emit_ne_eax_ecx() -> i32 { emit_cmp_setX(0x95) }
 fn emit_le_eax_ecx() -> i32 { emit_cmp_setX(0x9E) }
 fn emit_ge_eax_ecx() -> i32 { emit_cmp_setX(0x9D) }
 
+// Stage 2.2: unsigned comparison helpers. Same shape as emit_cmp_setX
+// but with unsigned setcc opcodes (b=below, a=above, etc.). Used for
+// u32 / u64 comparisons via expr_type tag dispatch.
+//   setb  = 0F 92 C0   (unsigned less:    CF=1)
+//   seta  = 0F 97 C0   (unsigned greater: CF=0 && ZF=0)
+//   setbe = 0F 96 C0   (unsigned less-or-equal)
+//   setae = 0F 93 C0   (unsigned greater-or-equal: CF=0)
+fn emit_lt_eax_ecx_u() -> i32 { emit_cmp_setX(0x92) }
+fn emit_gt_eax_ecx_u() -> i32 { emit_cmp_setX(0x97) }
+fn emit_le_eax_ecx_u() -> i32 { emit_cmp_setX(0x96) }
+fn emit_ge_eax_ecx_u() -> i32 { emit_cmp_setX(0x93) }
+// EQ / NE are signedness-agnostic (sete / setne are the same for
+// signed and unsigned), so we reuse emit_eq_eax_ecx / emit_ne_eax_ecx.
+
+// Stage 2.2: unsigned 32-bit division helpers.
+//   31 D2          xor edx, edx       (clear high half of dividend)
+//   F7 F1          div ecx            (eax = edx:eax / ecx; edx = rem)
+fn emit_div_eax_ecx_u() -> i32 {
+    emit_byte(0x31); emit_byte(0xD2);
+    emit_byte(0xF7); emit_byte(0xF1);
+    4
+}
+// Unsigned mod: same setup, then mov eax, edx (remainder).
+fn emit_imod_eax_ecx_u() -> i32 {
+    emit_byte(0x31); emit_byte(0xD2);
+    emit_byte(0xF7); emit_byte(0xF1);
+    emit_byte(0x89); emit_byte(0xD0);
+    6
+}
+
 // test eax, eax — sets ZF if eax == 0.
 fn emit_test_eax_eax() -> i32 {
     emit_byte(0x85); emit_byte(0xC0);
@@ -1043,6 +1073,12 @@ fn is_f64_expr(idx: i32, bind_state: i32, bn_state: i32) -> i32 {
 // Stage 1.6: thin wrapper around expr_type.
 fn is_i64_expr(idx: i32, bind_state: i32, bn_state: i32) -> i32 {
     if expr_type(idx, bind_state, bn_state) == 3 { 1 } else { 0 }
+}
+
+// Approach A Stage 2.1/2.2: is_u32_expr — type predicate for u32.
+// Used by Stage 2.2's unsigned DIV/MOD/comparison dispatch.
+fn is_u32_expr(idx: i32, bind_state: i32, bn_state: i32) -> i32 {
+    if expr_type(idx, bind_state, bn_state) == 6 { 1 } else { 0 }
 }
 
 // Phase 1.10 step 5c follow-on: fn_type_table maps fn names to their
@@ -2871,6 +2907,10 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         n1 + np + n2 + nm + no + na
     } else { if t == 5 {
         // Stage 1: AST_DIV 4-way dispatch.
+        // Stage 2.2: 5-way — u32 / u32 uses `xor edx, edx; div ecx`
+        // (unsigned). i32 / i32 keeps `cdq; idiv ecx` (signed). For
+        // values < 2^31 these produce identical results; for values
+        // ≥ 2^31 the signed path treats them as negative — wrong.
         let n1 = emit_ast_code(p1, bind_state, patch_state, bn_state);
         let np = emit_push_rax();
         let n2 = emit_ast_code(p2, bind_state, patch_state, bn_state);
@@ -2886,6 +2926,8 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         let no = emit_pop_rax();
         let l_f = is_f32_expr(p1, bind_state, bn_state);
         let r_f = is_f32_expr(p2, bind_state, bn_state);
+        let l_u32 = is_u32_expr(p1, bind_state, bn_state);
+        let r_u32 = is_u32_expr(p2, bind_state, bn_state);
         let na = if l_d == 1 {
             if r_d == 1 { emit_divsd() } else { emit_ud2_trap() }
         } else { if r_d == 1 { emit_ud2_trap() } else {
@@ -2894,9 +2936,11 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
             } else { if r_i64 == 1 { emit_ud2_trap() } else {
                 if l_f == 1 {
                     if r_f == 1 { emit_divss() } else { emit_ud2_trap() }
-                } else {
-                    if r_f == 1 { emit_ud2_trap() } else { emit_idiv_eax_ecx() }
-                }
+                } else { if r_f == 1 { emit_ud2_trap() } else {
+                    if l_u32 == 1 {
+                        if r_u32 == 1 { emit_div_eax_ecx_u() } else { emit_ud2_trap() }
+                    } else { if r_u32 == 1 { emit_ud2_trap() } else { emit_idiv_eax_ecx() } }
+                }}
             }}
         }};
         n1 + np + n2 + nm + no + na
@@ -2904,18 +2948,25 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         // AST_MOD: same setup as DIV, then emit_imod (cdq; idiv;
         // mov eax, edx) so the remainder lands in eax.
         // Stage 1 audit fix: i64 mod uses cqo + idiv rcx + mov rax, rdx.
+        // Stage 2.2: u32 mod uses `xor edx, edx; div ecx; mov eax, edx`.
         let n1 = emit_ast_code(p1, bind_state, patch_state, bn_state);
         let np = emit_push_rax();
         let n2 = emit_ast_code(p2, bind_state, patch_state, bn_state);
         let l_i64 = is_i64_expr(p1, bind_state, bn_state);
         let r_i64 = is_i64_expr(p2, bind_state, bn_state);
+        let l_u32 = is_u32_expr(p1, bind_state, bn_state);
+        let r_u32 = is_u32_expr(p2, bind_state, bn_state);
         let nm = if l_i64 == 1 {
             if r_i64 == 1 { emit_mov_rcx_rax_64() } else { emit_mov_ecx_eax() }
         } else { emit_mov_ecx_eax() };
         let no = emit_pop_rax();
         let na = if l_i64 == 1 {
             if r_i64 == 1 { emit_imod_rax_rcx_64() } else { emit_ud2_trap() }
-        } else { if r_i64 == 1 { emit_ud2_trap() } else { emit_imod_eax_ecx() } };
+        } else { if r_i64 == 1 { emit_ud2_trap() } else {
+            if l_u32 == 1 {
+                if r_u32 == 1 { emit_imod_eax_ecx_u() } else { emit_ud2_trap() }
+            } else { if r_u32 == 1 { emit_ud2_trap() } else { emit_imod_eax_ecx() } }
+        }};
         n1 + np + n2 + nm + no + na
     } else { if t == 9 {
         // Phase 1.10 step 5d: dispatch unary NEG by inner type. f32
@@ -3048,6 +3099,9 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         let no = emit_pop_rax();
         let l_f = is_f32_expr(p1, bind_state, bn_state);
         let r_f = is_f32_expr(p2, bind_state, bn_state);
+        let l_u32 = is_u32_expr(p1, bind_state, bn_state);
+        let r_u32 = is_u32_expr(p2, bind_state, bn_state);
+        // Stage 2.2: 5-way LT dispatch — u32 < u32 uses `setb` (unsigned).
         let na = if l_d == 1 {
             if r_d == 1 { emit_ssen_lt_dbl() } else { emit_ud2_trap() }
         } else { if r_d == 1 { emit_ud2_trap() } else {
@@ -3056,7 +3110,11 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
             } else { if r_i64 == 1 { emit_ud2_trap() } else {
                 if l_f == 1 {
                     if r_f == 1 { emit_ssen_lt() } else { emit_ud2_trap() }
-                } else { if r_f == 1 { emit_ud2_trap() } else { emit_lt_eax_ecx() } }
+                } else { if r_f == 1 { emit_ud2_trap() } else {
+                    if l_u32 == 1 {
+                        if r_u32 == 1 { emit_lt_eax_ecx_u() } else { emit_ud2_trap() }
+                    } else { if r_u32 == 1 { emit_ud2_trap() } else { emit_lt_eax_ecx() } }
+                }}
             }}
         }};
         n1 + np + n2 + nm + no + na
@@ -3075,6 +3133,9 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         let no = emit_pop_rax();
         let l_f = is_f32_expr(p1, bind_state, bn_state);
         let r_f = is_f32_expr(p2, bind_state, bn_state);
+        let l_u32 = is_u32_expr(p1, bind_state, bn_state);
+        let r_u32 = is_u32_expr(p2, bind_state, bn_state);
+        // Stage 2.2: 5-way GT dispatch — u32 > u32 uses `seta` (unsigned).
         let na = if l_d == 1 {
             if r_d == 1 { emit_ssen_gt_dbl() } else { emit_ud2_trap() }
         } else { if r_d == 1 { emit_ud2_trap() } else {
@@ -3083,7 +3144,11 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
             } else { if r_i64 == 1 { emit_ud2_trap() } else {
                 if l_f == 1 {
                     if r_f == 1 { emit_ssen_gt() } else { emit_ud2_trap() }
-                } else { if r_f == 1 { emit_ud2_trap() } else { emit_gt_eax_ecx() } }
+                } else { if r_f == 1 { emit_ud2_trap() } else {
+                    if l_u32 == 1 {
+                        if r_u32 == 1 { emit_gt_eax_ecx_u() } else { emit_ud2_trap() }
+                    } else { if r_u32 == 1 { emit_ud2_trap() } else { emit_gt_eax_ecx() } }
+                }}
             }}
         }};
         n1 + np + n2 + nm + no + na
@@ -3156,6 +3221,9 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         let no = emit_pop_rax();
         let l_f = is_f32_expr(p1, bind_state, bn_state);
         let r_f = is_f32_expr(p2, bind_state, bn_state);
+        let l_u32 = is_u32_expr(p1, bind_state, bn_state);
+        let r_u32 = is_u32_expr(p2, bind_state, bn_state);
+        // Stage 2.2: 5-way LE dispatch — u32 <= u32 uses `setbe` (unsigned).
         let na = if l_d == 1 {
             if r_d == 1 { emit_ssen_le_dbl() } else { emit_ud2_trap() }
         } else { if r_d == 1 { emit_ud2_trap() } else {
@@ -3164,7 +3232,11 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
             } else { if r_i64 == 1 { emit_ud2_trap() } else {
                 if l_f == 1 {
                     if r_f == 1 { emit_ssen_le() } else { emit_ud2_trap() }
-                } else { if r_f == 1 { emit_ud2_trap() } else { emit_le_eax_ecx() } }
+                } else { if r_f == 1 { emit_ud2_trap() } else {
+                    if l_u32 == 1 {
+                        if r_u32 == 1 { emit_le_eax_ecx_u() } else { emit_ud2_trap() }
+                    } else { if r_u32 == 1 { emit_ud2_trap() } else { emit_le_eax_ecx() } }
+                }}
             }}
         }};
         n1 + np + n2 + nm + no + na
@@ -3183,6 +3255,9 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         let no = emit_pop_rax();
         let l_f = is_f32_expr(p1, bind_state, bn_state);
         let r_f = is_f32_expr(p2, bind_state, bn_state);
+        let l_u32 = is_u32_expr(p1, bind_state, bn_state);
+        let r_u32 = is_u32_expr(p2, bind_state, bn_state);
+        // Stage 2.2: 5-way GE dispatch — u32 >= u32 uses `setae` (unsigned).
         let na = if l_d == 1 {
             if r_d == 1 { emit_ssen_ge_dbl() } else { emit_ud2_trap() }
         } else { if r_d == 1 { emit_ud2_trap() } else {
@@ -3191,7 +3266,11 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
             } else { if r_i64 == 1 { emit_ud2_trap() } else {
                 if l_f == 1 {
                     if r_f == 1 { emit_ssen_ge() } else { emit_ud2_trap() }
-                } else { if r_f == 1 { emit_ud2_trap() } else { emit_ge_eax_ecx() } }
+                } else { if r_f == 1 { emit_ud2_trap() } else {
+                    if l_u32 == 1 {
+                        if r_u32 == 1 { emit_ge_eax_ecx_u() } else { emit_ud2_trap() }
+                    } else { if r_u32 == 1 { emit_ud2_trap() } else { emit_ge_eax_ecx() } }
+                }}
             }}
         }};
         n1 + np + n2 + nm + no + na

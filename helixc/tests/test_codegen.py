@@ -2159,6 +2159,26 @@ fn main() -> i32 {{
     # for u32) so future Stage 2.2 can dispatch unsigned variants of
     # DIV/MOD/comparison. Functionally: 42_u32 still exits 42.
     assert compile_and_exec("42_u32") == 42, "u32 literal exits 42"
+    # Approach A Stage 2.2: u32 unsigned codegen for DIV/MOD/comparisons.
+    # u32 / u32: `xor edx, edx; div ecx` (unsigned division). For values
+    # < 2^31 result is identical to signed; the dispatch matters only
+    # for values >= 2^31 where signed idiv would treat them as negative.
+    assert compile_and_exec("84_u32 / 2_u32") == 42, \
+        "u32 / u32 via xor edx, edx; div ecx"
+    assert compile_and_exec("100_u32 - 58_u32") == 42, \
+        "u32 - u32 (sub eax, ecx — signedness-agnostic)"
+    assert compile_and_exec("6_u32 * 7_u32") == 42, \
+        "u32 * u32 (imul — signedness-agnostic)"
+    # u32 comparisons via setb/seta/setbe/setae (unsigned). Exercises
+    # the unsigned dispatch via expr_type tag 6.
+    assert compile_and_exec("if 5_u32 < 10_u32 { 42 } else { 0 }") == 42, \
+        "u32 < u32 via setb"
+    assert compile_and_exec("if 10_u32 > 5_u32 { 42 } else { 0 }") == 42, \
+        "u32 > u32 via seta"
+    assert compile_and_exec("if 5_u32 <= 5_u32 { 42 } else { 0 }") == 42, \
+        "u32 <= u32 via setbe"
+    assert compile_and_exec("if 10_u32 >= 5_u32 { 42 } else { 0 }") == 42, \
+        "u32 >= u32 via setae"
     # Phase 1.10 step 7l: f64 bit-access primitives.
     # __bits_hi_f64(1.0_f64) -> high 32 of 0x3FF0000000000000 = 0x3FF00000.
     # /16777216 = 0x3F = 63.
