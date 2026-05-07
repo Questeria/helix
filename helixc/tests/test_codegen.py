@@ -8175,6 +8175,78 @@ def test_stdlib_ti1d_l2_norm_sq():
     assert code == 42, f"expected 42, got {code}"
 
 
+def test_stdlib_tf2d_sub():
+    """[[5,7]] - [[1,2]] -> [[4,5]]; sum=9; 9.0_f32=0x41100000; top=65; -23=42."""
+    src = """
+    fn main() -> i32 {
+        let a = ti2d_new(1, 2);
+        tf2d_set(a, 2, 0, 0, 5.0_f32);
+        tf2d_set(a, 2, 0, 1, 7.0_f32);
+        let b = ti2d_new(1, 2);
+        tf2d_set(b, 2, 0, 0, 1.0_f32);
+        tf2d_set(b, 2, 0, 1, 2.0_f32);
+        let c = ti2d_new(1, 2);
+        tf2d_sub(a, b, c, 1, 2);
+        let s = tf2d_get(c, 2, 0, 0) + tf2d_get(c, 2, 0, 1);
+        __bits_of_f32(s) / 16777216 - 23
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_tf2d_mul():
+    """[[2,3]] * [[2,4]] -> [[4,12]]; sum=16; 16.0_f32=0x41800000; top=65; -23=42."""
+    src = """
+    fn main() -> i32 {
+        let a = ti2d_new(1, 2);
+        tf2d_set(a, 2, 0, 0, 2.0_f32);
+        tf2d_set(a, 2, 0, 1, 3.0_f32);
+        let b = ti2d_new(1, 2);
+        tf2d_set(b, 2, 0, 0, 2.0_f32);
+        tf2d_set(b, 2, 0, 1, 4.0_f32);
+        let c = ti2d_new(1, 2);
+        tf2d_mul(a, b, c, 1, 2);
+        let s = tf2d_get(c, 2, 0, 0) + tf2d_get(c, 2, 0, 1);
+        __bits_of_f32(s) / 16777216 - 23
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_tf1d_argmax_in_range():
+    """argmax_in_range([5,3,9,1], lo=1, hi=4) -> 2 (the 9.0 at idx 2). *21=42."""
+    src = """
+    fn main() -> i32 {
+        let x = t1d_new(4);
+        tf1d_set(x, 0, 5.0_f32);
+        tf1d_set(x, 1, 3.0_f32);
+        tf1d_set(x, 2, 9.0_f32);
+        tf1d_set(x, 3, 1.0_f32);
+        tf1d_argmax_in_range(x, 1, 4) * 21
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_tf1d_sum_in_range():
+    """sum_in_range([1,2,3,4], lo=1, hi=4) = 9.0; bits 0x41100000; top=65; -23=42."""
+    src = """
+    fn main() -> i32 {
+        let x = t1d_new(4);
+        tf1d_set(x, 0, 1.0_f32);
+        tf1d_set(x, 1, 2.0_f32);
+        tf1d_set(x, 2, 3.0_f32);
+        tf1d_set(x, 3, 4.0_f32);
+        __bits_of_f32(tf1d_sum_in_range(x, 1, 4)) / 16777216 - 23
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
 def test_stdlib_string_pad_left():
     """Push 'AB' (2 bytes), pad_left(' ', 5) -> '   AB'; sum bytes = 32*3+65+66 = 227.
     227 - 185 = 42."""

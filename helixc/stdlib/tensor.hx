@@ -794,3 +794,60 @@ fn tf1d_axpby(x_start: i32, y_start: i32, a: f32, b: f32, n: i32) -> i32 {
     }
     0
 }
+
+// tf2d_sub(a, b, c, rows, cols): elementwise 2D subtract c = a - b.
+fn tf2d_sub(a: i32, b: i32, c: i32, rows: i32, cols: i32) -> i32 {
+    let n = rows * cols;
+    let mut i: i32 = 0;
+    while i < n {
+        let av = __f32_from_bits(__arena_get(a + i));
+        let bv = __f32_from_bits(__arena_get(b + i));
+        __arena_set(c + i, __bits_of_f32(av - bv));
+        i = i + 1;
+    }
+    0
+}
+
+// tf2d_mul(a, b, c, rows, cols): elementwise 2D Hadamard (NOT matmul).
+fn tf2d_mul(a: i32, b: i32, c: i32, rows: i32, cols: i32) -> i32 {
+    let n = rows * cols;
+    let mut i: i32 = 0;
+    while i < n {
+        let av = __f32_from_bits(__arena_get(a + i));
+        let bv = __f32_from_bits(__arena_get(b + i));
+        __arena_set(c + i, __bits_of_f32(av * bv));
+        i = i + 1;
+    }
+    0
+}
+
+// tf1d_argmax_in_range(start, lo, hi): @pure. Index of largest f32
+// in x[lo..hi). Returns -1 if hi <= lo.
+@pure
+fn tf1d_argmax_in_range(start: i32, lo: i32, hi: i32) -> i32 {
+    if hi <= lo { 0 - 1 }
+    else {
+        let mut i: i32 = lo + 1;
+        let mut best_idx: i32 = lo;
+        let mut best: f32 = __f32_from_bits(__arena_get(start + lo));
+        while i < hi {
+            let v = __f32_from_bits(__arena_get(start + i));
+            if v > best { best = v; best_idx = i; }
+            i = i + 1;
+        }
+        best_idx
+    }
+}
+
+// tf1d_sum_in_range(start, lo, hi): @pure. Sum of x[lo..hi). 0.0 if
+// hi <= lo. Useful for partial accumulators.
+@pure
+fn tf1d_sum_in_range(start: i32, lo: i32, hi: i32) -> f32 {
+    let mut i: i32 = lo;
+    let mut total: f32 = 0.0_f32;
+    while i < hi {
+        total = total + __f32_from_bits(__arena_get(start + i));
+        i = i + 1;
+    }
+    total
+}
