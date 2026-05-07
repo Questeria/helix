@@ -8175,6 +8175,65 @@ def test_stdlib_ti1d_l2_norm_sq():
     assert code == 42, f"expected 42, got {code}"
 
 
+def test_stdlib_hashmap_count_below_threshold():
+    """Insert (1,5),(2,15),(3,1); count < 10 = 2; *21=42."""
+    src = """
+    fn main() -> i32 {
+        let m = hashmap_new(8);
+        hashmap_put(m, 8, 1, 5);
+        hashmap_put(m, 8, 2, 15);
+        hashmap_put(m, 8, 3, 1);
+        hashmap_count_below_threshold(m, 8, 10) * 21
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_hashmap_has_value():
+    """Insert (1,5),(2,42); has_value(42)=1; *42=42."""
+    src = """
+    fn main() -> i32 {
+        let m = hashmap_new(8);
+        hashmap_put(m, 8, 1, 5);
+        hashmap_put(m, 8, 2, 42);
+        hashmap_has_value(m, 8, 42) * 42
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_hashmap_argmax_key():
+    """Insert (1,10),(2,5),(42,100); argmax_key=42."""
+    src = """
+    fn main() -> i32 {
+        let m = hashmap_new(8);
+        hashmap_put(m, 8, 1, 10);
+        hashmap_put(m, 8, 2, 5);
+        hashmap_put(m, 8, 42, 100);
+        hashmap_argmax_key(m, 8)
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_hashmap_argmin_key():
+    """Insert (5,100),(42,1),(8,50); argmin_key=42."""
+    src = """
+    fn main() -> i32 {
+        let m = hashmap_new(8);
+        hashmap_put(m, 8, 5, 100);
+        hashmap_put(m, 8, 42, 1);
+        hashmap_put(m, 8, 8, 50);
+        hashmap_argmin_key(m, 8)
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
 def test_stdlib_string_count_lines():
     """'a\\nb\\nc\\n' has 3 newlines; *14=42."""
     src = """
