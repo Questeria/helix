@@ -304,6 +304,36 @@ fn emit_eq_rax_rcx_64() -> i32 { emit_cmp_setX_64(0x94) }
 fn emit_ne_rax_rcx_64() -> i32 { emit_cmp_setX_64(0x95) }
 fn emit_le_rax_rcx_64() -> i32 { emit_cmp_setX_64(0x9E) }
 fn emit_ge_rax_rcx_64() -> i32 { emit_cmp_setX_64(0x9D) }
+// Stage 1 audit batch 2: 64-bit unary + bitwise + shift + test for i64.
+// REX.W (0x48) prefix promotes the standard 32-bit op forms to 64-bit.
+fn emit_neg_rax_64()  -> i32 { emit_byte(0x48); emit_byte(0xF7); emit_byte(0xD8); 3 }
+fn emit_not_rax_64()  -> i32 { emit_byte(0x48); emit_byte(0xF7); emit_byte(0xD0); 3 }
+fn emit_and_rax_rcx_64() -> i32 { emit_byte(0x48); emit_byte(0x21); emit_byte(0xC8); 3 }
+fn emit_or_rax_rcx_64()  -> i32 { emit_byte(0x48); emit_byte(0x09); emit_byte(0xC8); 3 }
+fn emit_xor_rax_rcx_64() -> i32 { emit_byte(0x48); emit_byte(0x31); emit_byte(0xC8); 3 }
+fn emit_shl_rax_cl_64() -> i32 { emit_byte(0x48); emit_byte(0xD3); emit_byte(0xE0); 3 }
+fn emit_sar_rax_cl_64() -> i32 { emit_byte(0x48); emit_byte(0xD3); emit_byte(0xF8); 3 }
+fn emit_test_rax_rax_64() -> i32 { emit_byte(0x48); emit_byte(0x85); emit_byte(0xC0); 3 }
+// 64-bit modulo: cqo (sign-extend rax to rdx:rax) + idiv rcx + mov rax, rdx.
+//   48 99        cqo
+//   48 F7 F9     idiv rcx
+//   48 89 D0     mov rax, rdx  (move remainder into rax)
+fn emit_imod_rax_rcx_64() -> i32 {
+    emit_byte(0x48); emit_byte(0x99);
+    emit_byte(0x48); emit_byte(0xF7); emit_byte(0xF9);
+    emit_byte(0x48); emit_byte(0x89); emit_byte(0xD0);
+    8
+}
+// 64-bit logical-not suffix: test rax, rax (REX.W) + setcc al + zero-extend.
+//   48 85 C0     test rax, rax
+//   B8 00 00 00 00  mov eax, 0  (pre-clear al; setcc only writes al)
+//   0F 94 C0     sete al
+fn emit_ast_not_suffix_64() -> i32 {
+    emit_byte(0x48); emit_byte(0x85); emit_byte(0xC0);
+    emit_byte(0xB8); emit_byte(0); emit_byte(0); emit_byte(0); emit_byte(0);
+    emit_byte(0x0F); emit_byte(0x94); emit_byte(0xC0);
+    11
+}
 // Phase 1.10 step 5+: binary bitwise ops mirroring helixc-Python
 // OpKind.BIT_AND/BIT_OR/BIT_XOR (commit f676fca).
 fn emit_and_eax_ecx() -> i32 { emit_byte(0x21); emit_byte(0xC8); 2 }
@@ -2951,12 +2981,19 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
     } else { if t == 24 {
         // AST_MOD: same setup as DIV, then emit_imod (cdq; idiv;
         // mov eax, edx) so the remainder lands in eax.
+        // Stage 1 audit fix: i64 mod uses cqo + idiv rcx + mov rax, rdx.
         let n1 = emit_ast_code(p1, bind_state, patch_state, bn_state);
         let np = emit_push_rax();
         let n2 = emit_ast_code(p2, bind_state, patch_state, bn_state);
-        let nm = emit_mov_ecx_eax();
+        let l_i64 = is_i64_expr(p1, bind_state, bn_state);
+        let r_i64 = is_i64_expr(p2, bind_state, bn_state);
+        let nm = if l_i64 == 1 {
+            if r_i64 == 1 { emit_mov_rcx_rax_64() } else { emit_mov_ecx_eax() }
+        } else { emit_mov_ecx_eax() };
         let no = emit_pop_rax();
-        let na = emit_imod_eax_ecx();
+        let na = if l_i64 == 1 {
+            if r_i64 == 1 { emit_imod_rax_rcx_64() } else { emit_ud2_trap() }
+        } else { if r_i64 == 1 { emit_ud2_trap() } else { emit_imod_eax_ecx() } };
         n1 + np + n2 + nm + no + na
     } else { if t == 9 {
         // Phase 1.10 step 5d: dispatch unary NEG by inner type. f32
@@ -2967,68 +3004,104 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         // into the f32 path and get their high half (bits 32..63)
         // silently zeroed by the 32-bit `xor eax, ...` form.
         let ni = emit_ast_code(p1, bind_state, patch_state, bn_state);
+        // Stage 1 audit batch 2: 4-way AST_NEG dispatch including i64.
         let nn = if is_f64_expr(p1, bind_state, bn_state) == 1 {
             emit_ast_dneg_suffix()
+        } else { if is_i64_expr(p1, bind_state, bn_state) == 1 {
+            emit_neg_rax_64()
         } else { if is_f32_expr(p1, bind_state, bn_state) == 1 {
             emit_ast_fneg_suffix()
         } else {
             emit_ast_neg_suffix()
-        }};
+        }}};
         ni + nn
     } else { if t == 26 {
-        // AST_BNOT: emit inner (leaves value in eax), then `not eax`.
+        // AST_BNOT: emit inner (leaves value in eax/rax), then `not`.
+        // Stage 1 audit fix: i64 needs `not rax` (REX.W) to flip all 64 bits.
         let ni = emit_ast_code(p1, bind_state, patch_state, bn_state);
-        let nn = emit_ast_bnot_suffix();
+        let nn = if is_i64_expr(p1, bind_state, bn_state) == 1 {
+            emit_not_rax_64()
+        } else {
+            emit_ast_bnot_suffix()
+        };
         ni + nn
     } else { if t == 31 {
-        // AST_NOT: logical NOT via test+sete. Inner leaves value in eax.
+        // AST_NOT: logical NOT. For i64, must use `test rax, rax` (REX.W)
+        // to detect non-zero across the full 64 bits.
         let ni = emit_ast_code(p1, bind_state, patch_state, bn_state);
-        let nn = emit_ast_not_suffix();
+        let nn = if is_i64_expr(p1, bind_state, bn_state) == 1 {
+            emit_ast_not_suffix_64()
+        } else {
+            emit_ast_not_suffix()
+        };
         ni + nn
     } else { if t == 28 {
-        // AST_BAND: same shape as ADD but `and eax, ecx` (0x21 0xC8).
+        // Stage 1 audit fix: AST_BAND 4-way dispatch (i64 needs REX.W).
         let n1 = emit_ast_code(p1, bind_state, patch_state, bn_state);
         let np = emit_push_rax();
         let n2 = emit_ast_code(p2, bind_state, patch_state, bn_state);
-        let nm = emit_mov_ecx_eax();
+        let l_i64 = is_i64_expr(p1, bind_state, bn_state);
+        let r_i64 = is_i64_expr(p2, bind_state, bn_state);
+        let nm = if l_i64 == 1 {
+            if r_i64 == 1 { emit_mov_rcx_rax_64() } else { emit_mov_ecx_eax() }
+        } else { emit_mov_ecx_eax() };
         let no = emit_pop_rax();
-        let na = emit_and_eax_ecx();
+        let na = if l_i64 == 1 {
+            if r_i64 == 1 { emit_and_rax_rcx_64() } else { emit_ud2_trap() }
+        } else { if r_i64 == 1 { emit_ud2_trap() } else { emit_and_eax_ecx() } };
         n1 + np + n2 + nm + no + na
     } else { if t == 29 {
-        // AST_BOR: `or eax, ecx` (0x09 0xC8).
+        // Stage 1 audit fix: AST_BOR 4-way dispatch (i64 needs REX.W).
         let n1 = emit_ast_code(p1, bind_state, patch_state, bn_state);
         let np = emit_push_rax();
         let n2 = emit_ast_code(p2, bind_state, patch_state, bn_state);
-        let nm = emit_mov_ecx_eax();
+        let l_i64 = is_i64_expr(p1, bind_state, bn_state);
+        let r_i64 = is_i64_expr(p2, bind_state, bn_state);
+        let nm = if l_i64 == 1 {
+            if r_i64 == 1 { emit_mov_rcx_rax_64() } else { emit_mov_ecx_eax() }
+        } else { emit_mov_ecx_eax() };
         let no = emit_pop_rax();
-        let na = emit_or_eax_ecx();
+        let na = if l_i64 == 1 {
+            if r_i64 == 1 { emit_or_rax_rcx_64() } else { emit_ud2_trap() }
+        } else { if r_i64 == 1 { emit_ud2_trap() } else { emit_or_eax_ecx() } };
         n1 + np + n2 + nm + no + na
     } else { if t == 30 {
         // AST_BXOR: `xor eax, ecx` (0x31 0xC8).
+        // Stage 1 audit fix: AST_BXOR 4-way dispatch (i64 needs REX.W).
         let n1 = emit_ast_code(p1, bind_state, patch_state, bn_state);
         let np = emit_push_rax();
         let n2 = emit_ast_code(p2, bind_state, patch_state, bn_state);
-        let nm = emit_mov_ecx_eax();
+        let l_i64 = is_i64_expr(p1, bind_state, bn_state);
+        let r_i64 = is_i64_expr(p2, bind_state, bn_state);
+        let nm = if l_i64 == 1 {
+            if r_i64 == 1 { emit_mov_rcx_rax_64() } else { emit_mov_ecx_eax() }
+        } else { emit_mov_ecx_eax() };
         let no = emit_pop_rax();
-        let na = emit_xor_eax_ecx();
+        let na = if l_i64 == 1 {
+            if r_i64 == 1 { emit_xor_rax_rcx_64() } else { emit_ud2_trap() }
+        } else { if r_i64 == 1 { emit_ud2_trap() } else { emit_xor_eax_ecx() } };
         n1 + np + n2 + nm + no + na
     } else { if t == 32 {
-        // AST_SHL: shl eax, cl (D3 E0). rhs (count) ends up in cl via mov_ecx_eax.
+        // AST_SHL: shl eax, cl (D3 E0); shl rax, cl (REX.W: 48 D3 E0) for i64.
+        // Stage 1 audit fix: shift count is always treated as i32 (cl);
+        // value being shifted picks i64 vs i32.
         let n1 = emit_ast_code(p1, bind_state, patch_state, bn_state);
         let np = emit_push_rax();
         let n2 = emit_ast_code(p2, bind_state, patch_state, bn_state);
+        let l_i64 = is_i64_expr(p1, bind_state, bn_state);
         let nm = emit_mov_ecx_eax();
         let no = emit_pop_rax();
-        let na = emit_shl_eax_cl();
+        let na = if l_i64 == 1 { emit_shl_rax_cl_64() } else { emit_shl_eax_cl() };
         n1 + np + n2 + nm + no + na
     } else { if t == 33 {
-        // AST_SHR: sar eax, cl (D3 F8) — arithmetic shift, sign-preserving.
+        // AST_SHR: sar eax, cl (D3 F8) i32; sar rax, cl (48 D3 F8) i64.
         let n1 = emit_ast_code(p1, bind_state, patch_state, bn_state);
         let np = emit_push_rax();
         let n2 = emit_ast_code(p2, bind_state, patch_state, bn_state);
+        let l_i64 = is_i64_expr(p1, bind_state, bn_state);
         let nm = emit_mov_ecx_eax();
         let no = emit_pop_rax();
-        let na = emit_sar_eax_cl();
+        let na = if l_i64 == 1 { emit_sar_rax_cl_64() } else { emit_sar_eax_cl() };
         n1 + np + n2 + nm + no + na
     } else { if t == 6 {
         // Phase 1.10 step 5e: f32-aware comparison. If both operands
