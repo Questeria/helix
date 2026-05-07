@@ -1339,3 +1339,37 @@ fn vec_offset_alloc(start: i32, count: i32, k: i32) -> i32 {
     }
     s
 }
+
+// vec_first(start, count): @pure. Returns v[0], or 0 if empty.
+@pure
+fn vec_first(start: i32, count: i32) -> i32 {
+    if count == 0 { 0 } else { __arena_get(start) }
+}
+
+// vec_last(start, count): @pure. Returns v[count-1], or 0 if empty.
+@pure
+fn vec_last(start: i32, count: i32) -> i32 {
+    if count == 0 { 0 } else { __arena_get(start + count - 1) }
+}
+
+// vec_max_pure(start, count): @pure. Largest element. 0 if empty.
+@pure
+fn vec_max_pure(start: i32, count: i32) -> i32 {
+    if count == 0 { 0 }
+    else {
+        let mut i: i32 = 1;
+        let mut best: i32 = __arena_get(start);
+        while i < count {
+            let v = __arena_get(start + i);
+            if v > best { best = v; }
+            i = i + 1;
+        }
+        best
+    }
+}
+
+// vec_count_zero(start, count): @pure. Count of zero elements.
+@pure
+fn vec_count_zero(start: i32, count: i32) -> i32 {
+    vec_count_eq(start, count, 0)
+}

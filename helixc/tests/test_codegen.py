@@ -8175,6 +8175,59 @@ def test_stdlib_ti1d_l2_norm_sq():
     assert code == 42, f"expected 42, got {code}"
 
 
+def test_stdlib_vec_first():
+    """first([42,99]) = 42."""
+    src = """
+    fn main() -> i32 {
+        let v = __arena_len();
+        __arena_push(42); __arena_push(99);
+        vec_first(v, 2)
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_vec_last():
+    """last([99,42]) = 42."""
+    src = """
+    fn main() -> i32 {
+        let v = __arena_len();
+        __arena_push(99); __arena_push(42);
+        vec_last(v, 2)
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_vec_max_pure():
+    """max_pure([5,42,3]) = 42."""
+    src = """
+    fn main() -> i32 {
+        let v = __arena_len();
+        __arena_push(5); __arena_push(42); __arena_push(3);
+        vec_max_pure(v, 3)
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_vec_count_zero():
+    """count_zero([0,1,0,2,0]) = 3; *14=42."""
+    src = """
+    fn main() -> i32 {
+        let v = __arena_len();
+        __arena_push(0); __arena_push(1); __arena_push(0);
+        __arena_push(2); __arena_push(0);
+        vec_count_zero(v, 5) * 14
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
 def test_stdlib_hashmap_count_below_threshold():
     """Insert (1,5),(2,15),(3,1); count < 10 = 2; *21=42."""
     src = """
