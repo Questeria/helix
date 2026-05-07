@@ -8175,6 +8175,83 @@ def test_stdlib_ti1d_l2_norm_sq():
     assert code == 42, f"expected 42, got {code}"
 
 
+def test_stdlib_string_starts_with_byte():
+    """Push 'h','i'; starts_with_byte('h')=1. * 42 = 42."""
+    src = """
+    fn main() -> i32 {
+        let s = string_new();
+        let s1 = string_push(s, 0, 104);
+        let s2 = string_push(s, s1, 105);
+        string_starts_with_byte(s, s2, 104) * 42
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_string_ends_with_byte():
+    """Push 'h','i'; ends_with_byte('i')=1. * 42 = 42."""
+    src = """
+    fn main() -> i32 {
+        let s = string_new();
+        let s1 = string_push(s, 0, 104);
+        let s2 = string_push(s, s1, 105);
+        string_ends_with_byte(s, s2, 105) * 42
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_string_trim_left_byte():
+    """3 leading spaces; trim_left_byte(' ') = 3; *14=42."""
+    src = """
+    fn main() -> i32 {
+        let s = string_new();
+        let s1 = string_push(s, 0, 32);
+        let s2 = string_push(s, s1, 32);
+        let s3 = string_push(s, s2, 32);
+        let s4 = string_push(s, s3, 104);
+        let s5 = string_push(s, s4, 105);
+        string_trim_left_byte(s, s5, 32) * 14
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_string_trim_right_byte():
+    """'hi' + 3 spaces; trim_right_byte(' ') = 2; *21=42."""
+    src = """
+    fn main() -> i32 {
+        let s = string_new();
+        let s1 = string_push(s, 0, 104);
+        let s2 = string_push(s, s1, 105);
+        let s3 = string_push(s, s2, 32);
+        let s4 = string_push(s, s3, 32);
+        let s5 = string_push(s, s4, 32);
+        string_trim_right_byte(s, s5, 32) * 21
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_string_repeat():
+    """Repeat 'AB' 3 times -> 'ABABAB'; first byte 'A'(65); -23=42."""
+    src = """
+    fn main() -> i32 {
+        let s = string_new();
+        let s1 = string_push(s, 0, 65);
+        let s2 = string_push(s, s1, 66);
+        let r = string_repeat(s, s2, 3);
+        string_get(r, 0) - 23
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
 def test_stdlib_vec_take_while():
     """take_while([1,2,3,5,7,10], pivot=4) -> 3 (indices 0,1,2 are <4).
     3 * 14 = 42."""

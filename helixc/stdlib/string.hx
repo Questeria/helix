@@ -335,3 +335,77 @@ fn string_to_lower(start: i32, len: i32) -> i32 {
     }
     s
 }
+
+// string_starts_with_byte(start, len, b): @pure. Check if the string's
+// first byte equals b. Returns 1 if yes, 0 otherwise. Returns 0 for
+// empty strings.
+@pure
+fn string_starts_with_byte(start: i32, len: i32, b: i32) -> i32 {
+    if len == 0 { 0 }
+    else { if __arena_get(start) == b { 1 } else { 0 } }
+}
+
+// string_ends_with_byte(start, len, b): @pure. Symmetric.
+@pure
+fn string_ends_with_byte(start: i32, len: i32, b: i32) -> i32 {
+    if len == 0 { 0 }
+    else { if __arena_get(start + len - 1) == b { 1 } else { 0 } }
+}
+
+// string_trim_left_byte(start, len, b): @pure. Returns the count of
+// leading bytes equal to b (the "skip" count). Caller can compute
+// the trimmed slice as (start + skip, len - skip). For trimming
+// whitespace pass b=32 (ASCII space).
+@pure
+fn string_trim_left_byte(start: i32, len: i32, b: i32) -> i32 {
+    let mut i: i32 = 0;
+    let mut found: i32 = 0;
+    let mut result: i32 = len;
+    while i < len {
+        if found == 0 {
+            if __arena_get(start + i) != b {
+                result = i;
+                found = 1;
+            };
+        };
+        i = i + 1;
+    }
+    result
+}
+
+// string_trim_right_byte(start, len, b): @pure. Returns the trimmed
+// length (len minus trailing-b count). Walks from the right, returns
+// the first index from the right where the byte != b, plus 1.
+@pure
+fn string_trim_right_byte(start: i32, len: i32, b: i32) -> i32 {
+    let mut i: i32 = len;
+    let mut found: i32 = 0;
+    let mut result: i32 = 0;
+    while i > 0 {
+        if found == 0 {
+            if __arena_get(start + i - 1) != b {
+                result = i;
+                found = 1;
+            };
+        };
+        i = i - 1;
+    }
+    result
+}
+
+// string_repeat(start, len, n): allocate a new string with the input
+// repeated n times. n=0 returns an empty string at the current arena
+// position. Output length = len * n.
+fn string_repeat(start: i32, len: i32, n: i32) -> i32 {
+    let s: i32 = __arena_len();
+    let mut k: i32 = 0;
+    while k < n {
+        let mut i: i32 = 0;
+        while i < len {
+            __arena_push(__arena_get(start + i));
+            i = i + 1;
+        }
+        k = k + 1;
+    }
+    s
+}
