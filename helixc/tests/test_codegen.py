@@ -2292,6 +2292,17 @@ fn main() -> i32 {{
     assert compile_and_exec(
         "fn main() -> i32 { let x: bf16 = 1.5_bf16 ; let y: bf16 = ~x ; 42 }"
     ) == 132, "bf16 bitwise NOT traps with SIGILL"
+    # Stage 1.5 audit fix: bf16 logical NOT (!x) traps. Pre-fix:
+    # AST_NOT cascade only checked is_i64_expr / is_u64_expr (wide
+    # path) and otherwise emitted emit_ast_not_suffix (32-bit
+    # `test eax, eax; sete al; movzx eax, al`). For bf16 this checks
+    # the bit pattern against zero — wrong for IEEE sentinels:
+    # -0.0_bf16 (bits 0x80000000) is logically falsy but bit-pattern
+    # is non-zero, so the result was incorrectly truthy. Same issue
+    # for NaN bf16 values. Post-fix: ud2 trap.
+    assert compile_and_exec(
+        "fn main() -> i32 { let x: bf16 = 1.5_bf16 ; let r: i32 = !x ; r + 41 }"
+    ) == 132, "bf16 logical NOT traps with SIGILL"
     # Approach A Stage 2.4: u64 minimal scaffold. u64 literals lex via
     # `_u64` 4-byte suffix, parse to AST_INTLIT_U64 (tag 38), expr_type
     # returns 9. Codegen emits `movabs rax, imm64` (8 bytes) so the full

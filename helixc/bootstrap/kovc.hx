@@ -3337,15 +3337,25 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         // AST_NOT: logical NOT. For i64/u64, must use `test rax, rax`
         // (REX.W) to detect non-zero across the full 64 bits.
         // Stage 2.4b audit fix: u64 added (was i64-only).
+        // Stage 1.5 audit fix: bf16 traps with ud2. The 32-bit
+        // emit_ast_not_suffix path checks `bits == 0`, which mishandles
+        // bf16 sentinel values: -0.0_bf16 (bits 0x80000000) is falsy in
+        // IEEE but the bit-pattern check returns truthy. NaN bf16
+        // values (bits with all-1 exponent and non-zero mantissa) are
+        // also classified incorrectly. Trap until correct float-aware
+        // logical-NOT codegen lands.
         let ni = emit_ast_code(p1, bind_state, patch_state, bn_state);
         let inner_i64 = is_i64_expr(p1, bind_state, bn_state);
         let inner_u64 = is_u64_expr(p1, bind_state, bn_state);
+        let inner_bf = is_bf16_expr(p1, bind_state, bn_state);
         let inner_wide = if inner_i64 == 1 { 1 } else { if inner_u64 == 1 { 1 } else { 0 } };
-        let nn = if inner_wide == 1 {
+        let nn = if inner_bf == 1 {
+            emit_ud2_trap()
+        } else { if inner_wide == 1 {
             emit_ast_not_suffix_64()
         } else {
             emit_ast_not_suffix()
-        };
+        }};
         ni + nn
     } else { if t == 28 {
         // Stage 1 audit fix: AST_BAND 4-way dispatch (i64 needs REX.W).
