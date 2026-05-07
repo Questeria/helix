@@ -5929,6 +5929,58 @@ def test_stdlib_vec_clamp_inplace():
     assert code == 42, f"expected 42, got {code}"
 
 
+def test_stdlib_vec_relu_inplace():
+    """relu_inplace([5,-3,9,-1]) -> [5,0,9,0], sum=14. Encoded 14*3 = 42."""
+    src = """
+    fn main() -> i32 {
+        let v = vec_new();
+        let n0 = vec_push(v, 0, 5);
+        let n1 = vec_push(v, n0, -3);
+        let n2 = vec_push(v, n1, 9);
+        let n3 = vec_push(v, n2, -1);
+        vec_relu_inplace(v, n3);
+        vec_sum(v, n3) * 3
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_vec_negate_inplace():
+    """negate_inplace([3,-7,4,-1,-5]) -> [-3,7,-4,1,5], sum=6. Encoded 6*7 = 42."""
+    src = """
+    fn main() -> i32 {
+        let v = vec_new();
+        let n0 = vec_push(v, 0, 3);
+        let n1 = vec_push(v, n0, -7);
+        let n2 = vec_push(v, n1, 4);
+        let n3 = vec_push(v, n2, -1);
+        let n4 = vec_push(v, n3, -5);
+        vec_negate_inplace(v, n4);
+        vec_sum(v, n4) * 7
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_vec_scale_inplace():
+    """scale_inplace([2,3,1,1], 3) -> [6,9,3,3], sum=21. Encoded 21*2 = 42."""
+    src = """
+    fn main() -> i32 {
+        let v = vec_new();
+        let n0 = vec_push(v, 0, 2);
+        let n1 = vec_push(v, n0, 3);
+        let n2 = vec_push(v, n1, 1);
+        let n3 = vec_push(v, n2, 1);
+        vec_scale_inplace(v, n3, 3);
+        vec_sum(v, n3) * 2
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
 def test_impl_inherent_method_basic():
     """Phase 1.8: inherent impl block. `impl Type { fn method(self) }` lifts
     to `Type__method`. `obj.method(args)` rewrites to `Type__method(obj, args)`."""

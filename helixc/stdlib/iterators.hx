@@ -335,3 +335,33 @@ fn vec_clamp_inplace(start: i32, count: i32, lo: i32, hi: i32) -> i32 {
     }
     start
 }
+
+fn vec_relu_inplace(start: i32, count: i32) -> i32 {
+    let mut i: i32 = 0;
+    while i < count {
+        let v = __arena_get(start + i);
+        if v < 0 { __arena_set(start + i, 0); }
+        i = i + 1;
+    }
+    start
+}
+
+fn vec_negate_inplace(start: i32, count: i32) -> i32 {
+    let mut i: i32 = 0;
+    while i < count {
+        let v = __arena_get(start + i);
+        __arena_set(start + i, 0 - v);
+        i = i + 1;
+    }
+    start
+}
+
+fn vec_scale_inplace(start: i32, count: i32, k: i32) -> i32 {
+    let mut i: i32 = 0;
+    while i < count {
+        let v = __arena_get(start + i);
+        __arena_set(start + i, v * k);
+        i = i + 1;
+    }
+    start
+}
