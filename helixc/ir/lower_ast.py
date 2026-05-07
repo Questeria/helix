@@ -1017,7 +1017,7 @@ class Lowerer:
                                           attrs={"_kind": "write_file",
                                                   "path": expr.args[0].value,
                                                   "content": expr.args[1].value})
-            # read_file_to_arena: opens path, reads up to 256KB, pushes
+            # read_file_to_arena: opens path, reads up to 1 MB, pushes
             # each byte to the arena (one slot per byte). Returns count of
             # bytes pushed. Implementation in x86_64 backend is full; the
             # bootstrap pipeline test exercises it.

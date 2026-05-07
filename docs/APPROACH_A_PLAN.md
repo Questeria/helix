@@ -231,3 +231,15 @@ addition to expr_type) — passes now. Stage 2.4b MUL+ / 2.5b/c / 1.5 /
 3+ all unblocked. Headroom: ~4×.
 
 This document is the canonical plan. Each loop iteration reads it and resumes from the current stage.
+
+---
+
+## Telegram update format (STANDING REQUIREMENT)
+
+Every TG update about Helix progress MUST:
+
+1. **Beginner-friendly English.** No compiler jargon. Translate "AST cascade" → "the part of the compiler that handles X"; no raw ASM mnemonics or byte offsets unless essential.
+2. **Ordered "Next steps" list**, top = soonest, bottom = last to finish.
+3. **Estimated percent complete** of Helix being COMPLETELY FINALIZED. Anchor to the 30 stages + 7 amendments + tooling appendix + Stage 30 "5 consecutive clean audits" gate. NOT to commit count, test count, or stdlib coverage. As of 2026-05-07, true completion is ~22-25%.
+
+See `C:/Projects/Kovostov/runtime/memory/semantic/helix-tg-update-format.md` for full guidance.

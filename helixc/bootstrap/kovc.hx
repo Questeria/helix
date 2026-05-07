@@ -288,10 +288,10 @@ fn emit_idiv_rax_rcx_64() -> i32 {
     5
 }
 // 64-bit cmp + setcc. cmp rax, rcx = 48 39 C8 (3 bytes); setcc al
-// + xor eax pattern same as 32-bit. Produces 0/1 in eax.
-//   48 39 C8     cmp rax, rcx
-//   31 C0        xor eax, eax (pre-clear; setcc only writes al)
-//   0F xx C0     setcc al
+// + mov eax, 0 pre-clear (same idiom as 32-bit emit_cmp_setX). Produces 0/1 in eax.
+//   48 39 C8           cmp rax, rcx
+//   B8 00 00 00 00     mov eax, 0 (pre-clear; setcc only writes al)
+//   0F xx C0           setcc al
 fn emit_cmp_setX_64(op_byte: i32) -> i32 {
     emit_byte(0x48); emit_byte(0x39); emit_byte(0xC8);
     emit_byte(0xB8); emit_byte(0); emit_byte(0); emit_byte(0); emit_byte(0);
@@ -1881,7 +1881,7 @@ fn emit_read_file_to_arena_body(patch_state: i32, arena_base_s: i32) -> i32 {
     // mov rsi, rsp (buffer = rsp)
     emit_byte(0x48); emit_byte(0x89); emit_byte(0xE6);
     // mov edx, 0x100000 (count = 1M, LE bytes 00 00 10 00)
-    emit_byte(0xBA); emit_byte(0x00); emit_byte(0x00); emit_byte(0x10); emit_byte(0x00);
+    emit_byte(0xBA); emit_u32_le(1048576);
     // mov eax, 0 (sys_read); syscall
     emit_byte(0xB8); emit_byte(0); emit_byte(0); emit_byte(0); emit_byte(0);
     emit_byte(0x0F); emit_byte(0x05);
@@ -2648,10 +2648,23 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         // >= 2^63 (which AST_INTLIT_U64 can't yet hold via i32 p1
         // anyway), unsigned interpretation matters at the comparison
         // and DIV/MOD sites only — those dispatch via is_u64_expr.
-        // High32 = 0 for unsigned (no sign extension). For p1 < 0,
-        // high32 should remain 0 (u64 doesn't have negative values),
-        // but since p1 is i32-encoded, we sign-extend like i64 to
-        // preserve bit-equality with explicit i64 -> u64 conversions.
+        // High32: sign-extended from the i32-encoded `p1` (same shape as
+        // AST_INTLIT_I64). For p1 >= 0, hi32 = 0 (correct for u64). For
+        // p1 < 0, hi32 = 0xFFFFFFFF (all bits set), which preserves bit-
+        // equality when u64 values are round-tripped through i64
+        // conversions. Today the lexer encodes ALL literals as i32-signed
+        // p1, so u64 values >= 2^31 cannot yet be expressed at lex time:
+        // the high half is always 0 for any literal the parser actually
+        // produces today.
+        // TODO(main-thread / CRITICAL audit finding): lex-time literal-
+        // overflow gap. The parser stores u64 literals in a single i32
+        // p1 field, so values in [2^31, 2^64-1] silently truncate or mis-
+        // encode at parse time. e.g. `2147483648_u64` (= 2^31) wraps to
+        // i32 -2147483648 here, then hi32 = 0xFFFFFFFF, and the resulting
+        // movabs emits 0xFFFFFFFF80000000_u64 instead of 0x80000000.
+        // Fix requires widening the AST literal payload to two i32 fields
+        // (lo32 + hi32) before this codegen site can be corrected. Do NOT
+        // change the `let hi32` line below until the parser is fixed.
         let hi32 = if p1 < 0 { 0 - 1 } else { 0 };
         emit_movabs_rax_imm64(p1, hi32)
     } else { if t == 39 {
