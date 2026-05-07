@@ -973,7 +973,23 @@ fn is_f64_expr(idx: i32, bind_state: i32, bn_state: i32) -> i32 {
                             if dmin_match == 1 { 1 }
                             else {
                                 let dmax_match = kovc_byte_eq(p1, p2, bn_dmax_s(bn_state), 6);
-                                if dmax_match == 1 { 1 } else { 0 }
+                                if dmax_match == 1 { 1 }
+                                else {
+                                    // Audit fix #4 (cycle 1): fall through to
+                                    // fn_type_table for user-defined fns.
+                                    // is_f32_expr has the same fallback. Once
+                                    // the parser tags ret_ty=2 for f64 user
+                                    // fns (audit cycle 1 #5, deferred), this
+                                    // path will activate. For now it returns
+                                    // 0 unless fn_type_table_lookup happens
+                                    // to return 2.
+                                    let fts = bn_fn_type_state(bn_state);
+                                    if fts == 0 { 0 }
+                                    else {
+                                        let ty = fn_type_table_lookup(fts, p1, p2);
+                                        if ty == 2 { 1 } else { 0 }
+                                    }
+                                }
                             }
                         }
                     }
