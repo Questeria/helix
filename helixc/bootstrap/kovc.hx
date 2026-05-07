@@ -1146,7 +1146,15 @@ fn is_i64_expr(idx: i32, bind_state: i32, bn_state: i32) -> i32 {
         if l == 1 { if r == 1 { 1 } else { 0 } } else { 0 }
     } else { if t == 9 {                        // AST_NEG
         is_i64_expr(p1, bind_state, bn_state)
-    } else { 0 }}}}}}}}}}}}
+    } else { if t == 16 {                       // AST_CALL
+        // Audit fix: fn_type_table fallback for user-defined i64 fns.
+        // Mirrors is_f64_expr's parallel pattern. Without this, any
+        // call site of a `fn x() -> i64 { ... }` was tagged as i32 in
+        // the let-binding, silently truncating the high 32.
+        let fts = bn_fn_type_state(bn_state);
+        if fts == 0 { 0 }
+        else { if fn_type_table_lookup(fts, p1, p2) == 3 { 1 } else { 0 } }
+    } else { 0 }}}}}}}}}}}}}
 }
 
 // Phase 1.10 step 5c follow-on: fn_type_table maps fn names to their
@@ -3299,11 +3307,14 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
             n_val
         } else {
             let bind_ty = bind_lookup_type(bind_state, p1, p2);
+            // Stage 1 audit fix: i64 (tag 3) also needs 64-bit store.
             let n_store = if bind_ty == 2 {
+                emit_mov_local_rax_64(off)
+            } else { if bind_ty == 3 {
                 emit_mov_local_rax_64(off)
             } else {
                 emit_mov_local_eax(off)
-            };
+            }};
             n_val + n_store
         }
     } else { if t == 14 {

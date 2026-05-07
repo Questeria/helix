@@ -797,16 +797,20 @@ fn parse_fn_decl(tok_base: i32, sb: i32) -> i32 {
             let ty_s = tok_p2(tok_base, ty_tok);
             let ty_l = tok_p3(tok_base, ty_tok);
             cur_advance(sb);     // type IDENT
-            // Audit fix #5 (cycle 1) + Stage 1: distinguish type idents.
-            // 'f3' (51) → f32 (ty=1); 'f6' (54) → f64 (ty=2);
-            // 'i6' (105 + 54) → i64 (ty=3); else (incl 'i3') → i32 (ty=0).
+            // Audit fix (Stage 1 cycle): all 3 bytes must match exactly.
+            // Strict: 'f32' (102 51 50) → 1; 'f64' (102 54 52) → 2;
+            // 'i64' (105 54 52) → 3; 'i32' (105 51 50) → 0; else 0.
+            // Strict third-byte check prevents nonsense like 'i65'/'f33'
+            // from silently mis-tagging.
             let p_ty = if ty_l == 3 {
                 let b0 = __arena_get(ty_s);
                 let b1 = __arena_get(ty_s + 1);
+                let b2 = __arena_get(ty_s + 2);
                 if b0 == 102 {
-                    if b1 == 54 { 2 } else { 1 }
+                    if b1 == 54 { if b2 == 52 { 2 } else { 0 } }
+                    else { if b1 == 51 { if b2 == 50 { 1 } else { 0 } } else { 0 } }
                 } else { if b0 == 105 {
-                    if b1 == 54 { 3 } else { 0 }
+                    if b1 == 54 { if b2 == 52 { 3 } else { 0 } } else { 0 }
                 } else { 0 } }
             } else { 0 };
             let new_param = mk_node(18, pname_s, pname_l, 0);
@@ -829,15 +833,16 @@ fn parse_fn_decl(tok_base: i32, sb: i32) -> i32 {
     let rt_s = tok_p2(tok_base, rt_tok);
     let rt_l = tok_p3(tok_base, rt_tok);
     cur_advance(sb);     // return-type IDENT
-    // Audit fix #5 (cycle 1) + Stage 1: distinguish all 4 type tags.
-    // 'f3' → f32 (1); 'f6' → f64 (2); 'i6' → i64 (3); else → i32 (0).
+    // Audit fix (Stage 1 cycle): strict 3-byte type-ident check.
     let ret_ty = if rt_l == 3 {
         let b0 = __arena_get(rt_s);
         let b1 = __arena_get(rt_s + 1);
+        let b2 = __arena_get(rt_s + 2);
         if b0 == 102 {
-            if b1 == 54 { 2 } else { 1 }
+            if b1 == 54 { if b2 == 52 { 2 } else { 0 } }
+            else { if b1 == 51 { if b2 == 50 { 1 } else { 0 } } else { 0 } }
         } else { if b0 == 105 {
-            if b1 == 54 { 3 } else { 0 }
+            if b1 == 54 { if b2 == 52 { 3 } else { 0 } } else { 0 }
         } else { 0 } }
     } else { 0 };
     cur_advance(sb);     // '{'
