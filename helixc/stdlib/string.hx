@@ -26,6 +26,9 @@
 //   string_ends_with(s, sn, suf, sufn)      -> i32   1 if s ends with suf, 0 otherwise.
 //   string_count_byte(start, len, byte)     -> i32   number of occurrences of byte in slice.
 //   string_last_index_of(start, len, byte)  -> i32   last index of byte, -1 if missing.
+//   string_concat(a, an, b, bn)             -> i32   allocate new copy of a ++ b.
+//   string_substring(start, len, off, n)    -> i32   allocate new copy of [off, off+n).
+//   string_compare(a, an, b, bn)            -> i32   lex order: -1 / 0 / 1.
 //
 // License: Apache 2.0
 
@@ -181,5 +184,71 @@ fn string_to_int(start: i32, len: i32) -> i32 {
             i = i + 1;
         }
         if neg == 1 { 0 - acc } else { acc }
+    }
+}
+
+// string_concat(a, an, b, bn): allocate a new arena-backed string
+// that's a[0..an] followed by b[0..bn]. Returns the new start
+// index; new len is an + bn. Mirrors vec_concat. NOT @pure (arena
+// mutation). Useful for building messages / paths / labels without
+// in-place mutation of either input.
+fn string_concat(a: i32, an: i32, b: i32, bn: i32) -> i32 {
+    let s: i32 = __arena_len();
+    let mut i: i32 = 0;
+    while i < an {
+        __arena_push(__arena_get(a + i));
+        i = i + 1;
+    }
+    let mut j: i32 = 0;
+    while j < bn {
+        __arena_push(__arena_get(b + j));
+        j = j + 1;
+    }
+    s
+}
+
+// string_substring(start, len, off, n): allocate a new arena-backed
+// string copy of bytes [off, off+n). Saturates: off < 0 treated as
+// 0, off >= len returns empty, off + n > len truncated to len - off.
+// Returns the new start index; caller can reconstruct the saturated
+// length as min(n, len - max(off, 0)) when needed. NOT @pure.
+fn string_substring(start: i32, len: i32, off: i32, n: i32) -> i32 {
+    let s: i32 = __arena_len();
+    let off2 = if off < 0 { 0 } else { off };
+    let avail = len - off2;
+    let take = if avail < 0 { 0 }
+               else { if n < 0 { 0 }
+                      else { if n > avail { avail } else { n } } };
+    let mut i: i32 = 0;
+    while i < take {
+        __arena_push(__arena_get(start + off2 + i));
+        i = i + 1;
+    }
+    s
+}
+
+// string_compare(a, an, b, bn): lex order over byte values with
+// length tiebreaker. Returns -1 if a < b, 0 if a == b, 1 if a > b.
+// Mirrors libc memcmp/strcmp semantics. @pure.
+@pure
+fn string_compare(a: i32, an: i32, b: i32, bn: i32) -> i32 {
+    let mut min: i32 = an;
+    if bn < an { min = bn; }
+    let mut i: i32 = 0;
+    let mut diff: i32 = 0;
+    let mut decided: i32 = 0;
+    while i < min {
+        if decided == 0 {
+            let av = __arena_get(a + i);
+            let bv = __arena_get(b + i);
+            if av < bv { diff = 0 - 1; decided = 1; }
+            else { if av > bv { diff = 1; decided = 1; } }
+        }
+        i = i + 1;
+    }
+    if decided == 1 { diff }
+    else {
+        if an < bn { 0 - 1 }
+        else { if an > bn { 1 } else { 0 } }
     }
 }

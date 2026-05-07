@@ -7725,6 +7725,95 @@ def test_stdlib_vec_zip_ne():
     _zip_cmp_test("vec_zip_ne", [1, 0, 0, 1, 1], 14, 0)
 
 
+def test_stdlib_string_concat():
+    """string_concat([10,15], [8,9]) -> [10,15,8,9]. Per-byte sum=42."""
+    src = """
+    fn main() -> i32 {
+        let a = string_new();
+        let a1 = string_push(a, 0, 10);
+        let a2 = string_push(a, a1, 15);
+        let b = __arena_len();
+        let b1 = string_push(b, 0, 8);
+        let b2 = string_push(b, b1, 9);
+        let c = string_concat(a, a2, b, b2);
+        string_get(c, 0) + string_get(c, 1)
+            + string_get(c, 2) + string_get(c, 3)
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42 (10+15+8+9), got {code}"
+
+
+def test_stdlib_string_substring():
+    """string_substring([5,10,15,20,25], off=1, n=3) -> [10,15,20].
+    sum=45 → 45-3 = 42. Also probes saturation: substring with
+    off=4, n=10 -> [25] (1 byte; n truncated to len-off=1)."""
+    src = """
+    fn main() -> i32 {
+        let s = string_new();
+        let s1 = string_push(s, 0, 5);
+        let s2 = string_push(s, s1, 10);
+        let s3 = string_push(s, s2, 15);
+        let s4 = string_push(s, s3, 20);
+        let s5 = string_push(s, s4, 25);
+        let mid = string_substring(s, s5, 1, 3);
+        let mid_sum = string_get(mid, 0) + string_get(mid, 1)
+                      + string_get(mid, 2);
+        let tail = string_substring(s, s5, 4, 10);
+        let tail_first = string_get(tail, 0);
+        if mid_sum == 45 {
+            if tail_first == 25 { 42 } else { 1 }
+        } else { 2 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42 (mid_sum=45, tail_first=25), got {code}"
+
+
+def test_stdlib_string_compare():
+    """string_compare lex order with byte-value AND length-tiebreaker
+    discriminators. 'abc' < 'abd' (-1); 'abc' == 'abc' (0); 'abd' >
+    'abc' (1); 'abc' < 'abcd' (-1, shorter prefix); 'abcd' > 'abc'
+    (1, longer)."""
+    src = """
+    fn main() -> i32 {
+        let abc = string_new();
+        let abc1 = string_push(abc, 0, 97);
+        let abc2 = string_push(abc, abc1, 98);
+        let abc3 = string_push(abc, abc2, 99);
+        let abd = __arena_len();
+        let abd1 = string_push(abd, 0, 97);
+        let abd2 = string_push(abd, abd1, 98);
+        let abd3 = string_push(abd, abd2, 100);
+        let abc_v2 = __arena_len();
+        let abc_v2_1 = string_push(abc_v2, 0, 97);
+        let abc_v2_2 = string_push(abc_v2, abc_v2_1, 98);
+        let abc_v2_3 = string_push(abc_v2, abc_v2_2, 99);
+        let abcd = __arena_len();
+        let abcd1 = string_push(abcd, 0, 97);
+        let abcd2 = string_push(abcd, abcd1, 98);
+        let abcd3 = string_push(abcd, abcd2, 99);
+        let abcd4 = string_push(abcd, abcd3, 100);
+        let lt = string_compare(abc, abc3, abd, abd3);
+        let eq = string_compare(abc, abc3, abc_v2, abc_v2_3);
+        let gt = string_compare(abd, abd3, abc, abc3);
+        let pre_lt = string_compare(abc, abc3, abcd, abcd4);
+        let pre_gt = string_compare(abcd, abcd4, abc, abc3);
+        if lt == 0 - 1 {
+            if eq == 0 {
+                if gt == 1 {
+                    if pre_lt == 0 - 1 {
+                        if pre_gt == 1 { 42 } else { 1 }
+                    } else { 2 }
+                } else { 3 }
+            } else { 4 }
+        } else { 5 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42 (lt=-1, eq=0, gt=1, pre_lt=-1, pre_gt=1), got {code}"
+
+
 def main():
     tests = [(name, fn) for name, fn in globals().items()
              if name.startswith("test_") and callable(fn)]
