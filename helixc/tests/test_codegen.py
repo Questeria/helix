@@ -9894,6 +9894,64 @@ def test_stdlib_vec_last():
     assert code == 42, f"expected 42 (last=42, empty=0), got {code}"
 
 
+def test_stdlib_string_len_after_trim_left():
+    """'   X' trim ' '; remaining = 1; *42=42."""
+    src = """
+    fn main() -> i32 {
+        let s = string_new();
+        let s1 = string_push(s, 0, 32);
+        let s2 = string_push(s, s1, 32);
+        let s3 = string_push(s, s2, 32);
+        let s4 = string_push(s, s3, 88);
+        string_len_after_trim_left(s, s4, 32) * 42
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_string_is_empty():
+    """is_empty('') = 1; *42=42."""
+    src = """
+    fn main() -> i32 {
+        let s = string_new();
+        string_is_empty(s, 0) * 42
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_string_byte_count():
+    """3-byte string; byte_count=3; *14=42."""
+    src = """
+    fn main() -> i32 {
+        let s = string_new();
+        let s1 = string_push(s, 0, 65);
+        let s2 = string_push(s, s1, 66);
+        let s3 = string_push(s, s2, 67);
+        string_byte_count(s, s3) * 14
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_string_chars_eq_in_range():
+    """'abc' all in [97,99] = 1; *42=42."""
+    src = """
+    fn main() -> i32 {
+        let s = string_new();
+        let s1 = string_push(s, 0, 97);
+        let s2 = string_push(s, s1, 98);
+        let s3 = string_push(s, s2, 99);
+        string_chars_eq_in_range(s, s3, 97, 99) * 42
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
 def test_stdlib_hashmap_count_key_eq():
     """Insert (5,_); count_key_eq(5)=1; *42=42."""
     src = """

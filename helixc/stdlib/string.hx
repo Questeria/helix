@@ -725,3 +725,40 @@ fn string_first_byte(start: i32, len: i32) -> i32 {
 fn string_last_byte(start: i32, len: i32) -> i32 {
     if len == 0 { 0 } else { __arena_get(start + len - 1) }
 }
+
+// string_len_after_trim_left(start, len, byte): @pure. Length remaining
+// after trimming leading occurrences of byte. Pair with trim_left_byte
+// for offset+remaining-length pattern.
+@pure
+fn string_len_after_trim_left(start: i32, len: i32, byte: i32) -> i32 {
+    len - string_trim_left_byte(start, len, byte)
+}
+
+// string_is_empty(start, len): @pure. 1 if len == 0.
+@pure
+fn string_is_empty(start: i32, len: i32) -> i32 {
+    if len == 0 { 1 } else { 0 }
+}
+
+// string_byte_count(start, len): @pure. Same as len; alias for clarity
+// in API call sites that operate on multiple strings.
+@pure
+fn string_byte_count(start: i32, len: i32) -> i32 {
+    len
+}
+
+// string_chars_eq_in_range(start, len, lo, hi): @pure. 1 if all bytes
+// are in inclusive range [lo, hi], 0 otherwise. Empty string returns 1
+// (vacuously true).
+@pure
+fn string_chars_eq_in_range(start: i32, len: i32, lo: i32, hi: i32) -> i32 {
+    let mut i: i32 = 0;
+    let mut ok: i32 = 1;
+    while i < len {
+        let b = __arena_get(start + i);
+        if b < lo { ok = 0; }
+        if b > hi { ok = 0; }
+        i = i + 1;
+    }
+    ok
+}
