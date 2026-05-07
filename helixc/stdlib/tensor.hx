@@ -148,6 +148,30 @@ fn ti1d_add(x_start: i32, y_start: i32, z_start: i32, n: i32) -> i32 {
     0
 }
 
+// Integer element-wise subtraction: z[i] = x[i] - y[i].
+// Companion to ti1d_add. z must be pre-allocated.
+fn ti1d_sub(x_start: i32, y_start: i32, z_start: i32, n: i32) -> i32 {
+    let mut i: i32 = 0;
+    while i < n {
+        __arena_set(z_start + i,
+                    __arena_get(x_start + i) - __arena_get(y_start + i));
+        i = i + 1;
+    }
+    0
+}
+
+// Integer element-wise multiplication (Hadamard): z[i] = x[i] * y[i].
+// For inner product use ti1d_dot.
+fn ti1d_mul(x_start: i32, y_start: i32, z_start: i32, n: i32) -> i32 {
+    let mut i: i32 = 0;
+    while i < n {
+        __arena_set(z_start + i,
+                    __arena_get(x_start + i) * __arena_get(y_start + i));
+        i = i + 1;
+    }
+    0
+}
+
 // =========================================================================
 // Phase 2.2 step 2: f32 tensor primitives via __bits_of_f32 reinterpret.
 // =========================================================================
@@ -272,6 +296,38 @@ fn tf2d_matvec(w_start: i32, w_rows: i32, w_cols: i32,
             i = i + 1;
         }
         best
+    }
+}
+
+// Integer-tensor max (companion to ti1d_min).
+@pure fn ti1d_max(start: i32, n: i32) -> i32 {
+    if n == 0 { 0 }
+    else {
+        let mut best = __arena_get(start);
+        let mut i: i32 = 1;
+        while i < n {
+            let v = __arena_get(start + i);
+            if v > best { best = v; }
+            i = i + 1;
+        }
+        best
+    }
+}
+
+// Integer-tensor argmin (returns index of smallest element).
+// Companion to ti1d_argmax. n == 0 returns -1.
+@pure fn ti1d_argmin(start: i32, n: i32) -> i32 {
+    if n == 0 { 0 - 1 }
+    else {
+        let mut best = __arena_get(start);
+        let mut best_idx: i32 = 0;
+        let mut i: i32 = 1;
+        while i < n {
+            let v = __arena_get(start + i);
+            if v < best { best = v; best_idx = i; };
+            i = i + 1;
+        }
+        best_idx
     }
 }
 
@@ -483,4 +539,21 @@ fn tf2d_matmul(a_start: i32, a_rows: i32, a_cols: i32,
         r = r + 1;
     }
     0
+}
+
+
+// f32-tensor zeros: allocate n slots; arena push 0 leaves the bit
+// pattern as IEEE +0.0 which is exactly what we want.
+@pure fn tf1d_zeros(n: i32) -> i32 { t1d_new(n) }
+
+// f32-tensor ones: allocate n slots and fill with bits-of(1.0_f32).
+fn tf1d_ones(n: i32) -> i32 {
+    let s = t1d_new(n);
+    let one_bits = __bits_of_f32(1.0_f32);
+    let mut i: i32 = 0;
+    while i < n {
+        __arena_set(s + i, one_bits);
+        i = i + 1;
+    }
+    s
 }

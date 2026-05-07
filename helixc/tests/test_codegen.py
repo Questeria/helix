@@ -7725,6 +7725,106 @@ def test_stdlib_vec_zip_ne():
     _zip_cmp_test("vec_zip_ne", [1, 0, 0, 1, 1], 14, 0)
 
 
+def test_stdlib_ti1d_sub():
+    """ti1d_sub: z[i] = x[i] - y[i]. x=[10,20,30,40], y=[1,2,3,4]
+    -> z=[9,18,27,36]. Sum=90. Encoded: 90-48 = 42."""
+    src = """
+    fn main() -> i32 {
+        let x = t1d_new(4);
+        ti1d_set(x, 0, 10); ti1d_set(x, 1, 20);
+        ti1d_set(x, 2, 30); ti1d_set(x, 3, 40);
+        let y = t1d_new(4);
+        ti1d_set(y, 0, 1); ti1d_set(y, 1, 2);
+        ti1d_set(y, 2, 3); ti1d_set(y, 3, 4);
+        let z = t1d_new(4);
+        ti1d_sub(x, y, z, 4);
+        ti1d_sum(z, 4) - 48
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_ti1d_mul():
+    """ti1d_mul: z[i] = x[i] * y[i] (Hadamard). x=[2,3,5], y=[3,4,2]
+    -> z=[6,12,10]. Sum=28. Encoded: 28+14 = 42."""
+    src = """
+    fn main() -> i32 {
+        let x = t1d_new(3);
+        ti1d_set(x, 0, 2); ti1d_set(x, 1, 3); ti1d_set(x, 2, 5);
+        let y = t1d_new(3);
+        ti1d_set(y, 0, 3); ti1d_set(y, 1, 4); ti1d_set(y, 2, 2);
+        let z = t1d_new(3);
+        ti1d_mul(x, y, z, 3);
+        ti1d_sum(z, 3) + 14
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_ti1d_max():
+    """ti1d_max([3, 7, 1, 42, 5]) = 42."""
+    src = """
+    fn main() -> i32 {
+        let x = t1d_new(5);
+        ti1d_set(x, 0, 3); ti1d_set(x, 1, 7);
+        ti1d_set(x, 2, 1); ti1d_set(x, 3, 42);
+        ti1d_set(x, 4, 5);
+        ti1d_max(x, 5)
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_ti1d_argmin():
+    """ti1d_argmin([10, 20, 5, 30, 15]) = 2 (smallest at index 2).
+    Encoded: 2*20+2 = 42."""
+    src = """
+    fn main() -> i32 {
+        let x = t1d_new(5);
+        ti1d_set(x, 0, 10); ti1d_set(x, 1, 20);
+        ti1d_set(x, 2, 5);  ti1d_set(x, 3, 30);
+        ti1d_set(x, 4, 15);
+        ti1d_argmin(x, 5) * 20 + 2
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_tf1d_zeros():
+    """tf1d_zeros(5): allocate 5 slots; arena push 0 happens to be
+    bit-pattern of +0.0_f32. Sum should be 0.0. Encoded as the i32
+    bit pattern is 0; 0 + 42 = 42."""
+    src = """
+    fn main() -> i32 {
+        let z = tf1d_zeros(5);
+        // Read first slot's bits — should be 0 (= bits of +0.0_f32)
+        let bits = __arena_get(z);
+        if bits == 0 { 42 } else { 0 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_tf1d_ones():
+    """tf1d_ones(3): allocate 3 slots filled with bits of 1.0_f32.
+    1.0_f32 has bit pattern 0x3F800000. Just check first slot."""
+    src = """
+    fn main() -> i32 {
+        let o = tf1d_ones(3);
+        let expected = __bits_of_f32(1.0_f32);
+        let actual = __arena_get(o);
+        if actual == expected { 42 } else { 0 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
 def test_stdlib_string_concat():
     """string_concat([10,15], [8,9]) -> [10,15,8,9]. Per-byte sum=42."""
     src = """
