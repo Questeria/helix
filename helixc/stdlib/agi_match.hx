@@ -186,6 +186,13 @@ fn unify_shallow(pat_off: i32, term_off: i32, b: i32) -> i32 {
 // Example: a binary-op node tagged 1 with operands on p1, p2 uses
 // child_mask = 3 (binary 011 — both slots are sub-trees).
 //
+// LIMITATION (audit fix #2): this fn applies the SAME child_mask to
+// every recursive level. It is correct ONLY for HOMOGENEOUS trees
+// where every node has the same shape (all binary, or all unary, or
+// all leaves). For mixed-shape trees use `unify_deep_table` (Phase 4
+// perfection step 4) which looks up the child_mask per-tag from a
+// caller-provided table.
+//
 // Returns 1 on success, 0 on failure.
 fn unify_deep(pat_off: i32, term_off: i32, child_mask: i32, b: i32) -> i32 {
     let pat_tag = __arena_get(pat_off);

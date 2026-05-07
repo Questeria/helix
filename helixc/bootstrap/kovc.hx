@@ -634,7 +634,10 @@ fn kovc_byte_eq(src_a: i32, len_a: i32, src_b: i32, len_b: i32) -> i32 {
 //   slot 2: arena slot index of entry 0 (= bind_state + 3)
 //   slot 3..3 + cap*4: pre-allocated entries
 //                      [name_start, name_len, offset, type_tag]
-//                      type_tag: 0 = i32 (default), 1 = f32
+//                      type_tag: 0 = i32 (default), 1 = f32, 2 = f64
+//                      (Phase 1.10 step 7d-5 added 2; AST_VAR loads the
+//                      full 8 bytes when ty == 2 to preserve the high
+//                      half of an f64 binding.)
 //
 // Capacity is fixed at compile-time (NUM_BINDINGS_CAP = 64). Table
 // uses __arena_set to write entries — never __arena_push, so the
@@ -799,7 +802,25 @@ fn is_f32_expr(idx: i32, bind_state: i32, bn_state: i32) -> i32 {
                                                 // first so f64 doesn't reach
                                                 // the f32 path.
     else { if t == 1 {                          // AST_VAR
-        bind_lookup_type(bind_state, p1, p2)
+        // Audit fix #3: return strictly 0/1, mirroring is_f64_expr's
+        // shape. bind_lookup_type may return 2 (f64) — the previous
+        // `bind_lookup_type(...)` raw return leaked tag 2 to callers
+        // that compare `== 1`. The == 1 check restores the predicate's
+        // contract: "1 if f32, else 0".
+        let ty = bind_lookup_type(bind_state, p1, p2);
+        if ty == 1 { 1 } else { 0 }
+    } else { if t == 7 {                        // AST_IF
+        // Audit fix #11: propagate the type through both branches of
+        // an if-expression. AST_IF has p1=cond_idx, p2=then_idx, and
+        // body_idx at idx+3. If both branches are f32, the if-expr is
+        // f32. If they disagree, default to 0 (the codegen path will
+        // then take the integer branch — a future improvement could
+        // emit a typecheck warning).
+        let then_idx = p2;
+        let else_idx = __arena_get(idx + 3);
+        let lt = is_f32_expr(then_idx, bind_state, bn_state);
+        let rt = is_f32_expr(else_idx, bind_state, bn_state);
+        if lt == 1 { if rt == 1 { 1 } else { 0 } } else { 0 }
     } else { if t == 16 {                       // AST_CALL
         // Step 5i: __i32_to_f32 starts with `__i` so it doesn't match
         // the cheap `__f*` prefix check below — explicit byte_eq
@@ -872,7 +893,7 @@ fn is_f32_expr(idx: i32, bind_state: i32, bn_state: i32) -> i32 {
         if l == 1 { if r == 1 { 1 } else { 0 } } else { 0 }
     } else { if t == 9 {                        // AST_NEG: type follows inner
         is_f32_expr(p1, bind_state, bn_state)
-    } else { 0 }}}}}}}}
+    } else { 0 }}}}}}}}}
 }
 
 // Phase 1.10 step 7d: is_f64_expr — recursive type predicate for f64.
@@ -893,6 +914,13 @@ fn is_f64_expr(idx: i32, bind_state: i32, bn_state: i32) -> i32 {
     else { if t == 1 {                          // AST_VAR
         let ty = bind_lookup_type(bind_state, p1, p2);
         if ty == 2 { 1 } else { 0 }
+    } else { if t == 7 {                        // AST_IF
+        // Audit fix #11: f64 if-expression. p2=then_idx, idx+3=else_idx.
+        let then_idx = p2;
+        let else_idx = __arena_get(idx + 3);
+        let lt = is_f64_expr(then_idx, bind_state, bn_state);
+        let rt = is_f64_expr(else_idx, bind_state, bn_state);
+        if lt == 1 { if rt == 1 { 1 } else { 0 } } else { 0 }
     } else { if t == 16 {                       // AST_CALL
         // Step 7e: __f32_to_f64 returns f64. Explicit byte_eq against
         // the installed name slot. Step 7h: __dsqrt also returns f64.
@@ -948,7 +976,7 @@ fn is_f64_expr(idx: i32, bind_state: i32, bn_state: i32) -> i32 {
         if l == 1 { if r == 1 { 1 } else { 0 } } else { 0 }
     } else { if t == 9 {                        // AST_NEG: type follows inner
         is_f64_expr(p1, bind_state, bn_state)
-    } else { 0 }}}}}}}}
+    } else { 0 }}}}}}}}}
 }
 
 // Phase 1.10 step 5c follow-on: fn_type_table maps fn names to their
