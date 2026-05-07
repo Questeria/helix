@@ -7449,6 +7449,81 @@ def test_stdlib_vec_map_clamp():
     assert code == 42, f"expected 42, got {code}"
 
 
+def test_stdlib_vec_reverse_alloc():
+    """reverse_alloc([10,20,30,40]) -> new vec [40,30,20,10].
+    Original first elem still 10. Sum still 100. Encoded: dst[0]*1 + 2 = 42."""
+    src = """
+    fn main() -> i32 {
+        let v = vec_new();
+        let n0 = vec_push(v, 0, 10);
+        let n1 = vec_push(v, n0, 20);
+        let n2 = vec_push(v, n1, 30);
+        let n3 = vec_push(v, n2, 40);
+        let dst = vec_reverse_alloc(v, n3);
+        let original_first = vec_get(v, 0);
+        let dst_first = vec_get(dst, 0);
+        if original_first == 10 { dst_first + 2 } else { 0 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_vec_repeat():
+    """repeat(7, 6) -> new vec [7,7,7,7,7,7]. Sum=42."""
+    src = """
+    fn main() -> i32 {
+        let dst = vec_repeat(7, 6);
+        vec_sum(dst, 6)
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_vec_zip_mod():
+    """zip_mod([10,17,23,42], [3,5,7,11]) -> [1,2,2,9]. Sum=14.
+    Encoded: 14*3 = 42."""
+    src = """
+    fn main() -> i32 {
+        let a = vec_new();
+        let a1 = vec_push(a, 0, 10);
+        let a2 = vec_push(a, a1, 17);
+        let a3 = vec_push(a, a2, 23);
+        let a4 = vec_push(a, a3, 42);
+        let b = __arena_len();
+        let b1 = vec_push(b, 0, 3);
+        let b2 = vec_push(b, b1, 5);
+        let b3 = vec_push(b, b2, 7);
+        let b4 = vec_push(b, b3, 11);
+        let dst = vec_zip_mod(a, b, a4);
+        vec_sum(dst, a4) * 3
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_vec_take():
+    """take([5,10,15,20,25,30], 4) -> new vec [5,10,15,20]. Sum=50.
+    Encoded: 50-8 = 42."""
+    src = """
+    fn main() -> i32 {
+        let v = vec_new();
+        let n0 = vec_push(v, 0, 5);
+        let n1 = vec_push(v, n0, 10);
+        let n2 = vec_push(v, n1, 15);
+        let n3 = vec_push(v, n2, 20);
+        let n4 = vec_push(v, n3, 25);
+        let n5 = vec_push(v, n4, 30);
+        let dst = vec_take(v, n5, 4);
+        vec_sum(dst, 4) - 8
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
 def main():
     tests = [(name, fn) for name, fn in globals().items()
              if name.startswith("test_") and callable(fn)]

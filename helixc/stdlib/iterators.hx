@@ -574,3 +574,61 @@ fn vec_map_clamp(start: i32, count: i32, lo: i32, hi: i32) -> i32 {
     }
     s
 }
+
+// vec_reverse_alloc(start, count): allocating mirror of
+// vec_reverse_inplace. Returns a new slice containing the input
+// elements in reverse order. Original input untouched.
+fn vec_reverse_alloc(start: i32, count: i32) -> i32 {
+    let s: i32 = __arena_len();
+    let mut i: i32 = 0;
+    while i < count {
+        __arena_push(__arena_get(start + count - 1 - i));
+        i = i + 1;
+    }
+    s
+}
+
+// vec_repeat(value, count): allocate a new slice of length `count`
+// filled with `value`. Allocating mirror of vec_fill_inplace; useful
+// for initializing accumulators or padding arrays. count <= 0
+// returns an empty slice.
+fn vec_repeat(value: i32, count: i32) -> i32 {
+    let s: i32 = __arena_len();
+    if count > 0 {
+        let mut i: i32 = 0;
+        while i < count {
+            __arena_push(value);
+            i = i + 1;
+        }
+    };
+    s
+}
+
+// vec_zip_mod(a, b, count): element-wise modulo a[i] % b[i].
+// Returns a new slice. b[i] == 0 emits ud2 (handled by Helix's
+// integer-mod trap on division by zero — std behavior, not stdlib's
+// concern). Useful for hashing into buckets and modular arithmetic.
+fn vec_zip_mod(a: i32, b: i32, count: i32) -> i32 {
+    let s: i32 = __arena_len();
+    let mut i: i32 = 0;
+    while i < count {
+        __arena_push(__arena_get(a + i) % __arena_get(b + i));
+        i = i + 1;
+    }
+    s
+}
+
+// vec_take(start, count, n): return a new slice with the first `n`
+// elements of the input. If n >= count, copies all elements; if n
+// <= 0, returns empty. Useful for bounded prefix reads, top-N
+// inspection. Allocating; original input untouched.
+fn vec_take(start: i32, count: i32, n: i32) -> i32 {
+    let s: i32 = __arena_len();
+    let take = if n < 0 { 0 } else { if n > count { count } else { n } };
+    let mut i: i32 = 0;
+    while i < take {
+        __arena_push(__arena_get(start + i));
+        i = i + 1;
+    }
+    s
+}
