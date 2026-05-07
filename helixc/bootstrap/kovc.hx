@@ -4083,14 +4083,21 @@ fn emit_elf_for_ast_to_path(ast_root: i32) -> i32 {
             // match declared return type. Specifically i64-return fns
             // whose body produces i32 (high 32 stale) and i32-return fns
             // whose body produces i64 (caller treats as 32 — high half
-            // dropped silently). f32/f64/u32 mismatch detection is left
-            // for a future stage — extending to full expr_type produced
-            // false positives in the existing bootstrap source (some
-            // body type-inference paths still return 0 for things that
-            // should be u32/etc. — investigating).
+            // dropped silently). Full expr_type comparison still
+            // produces false positives in the existing bootstrap source,
+            // so the trap is gated on width: 8-byte-vs-narrower mismatch
+            // is the actual silent-data-loss class.
+            // Stage 2.4b audit fix: extended to cover u64. Prior version
+            // checked only `body_is_i64 vs ret_wants_i64`, so a fn
+            // declared `-> i32` whose body produced u64 silently
+            // narrowed at the call boundary (eax = low 32; high half
+            // discarded). Now the trap fires on any 8-byte-vs-narrower
+            // mismatch in either direction.
             let body_is_i64 = is_i64_expr(fn_body, bind_state, bn_state);
-            let ret_wants_i64 = if fn_ret_ty == 3 { 1 } else { 0 };
-            if body_is_i64 != ret_wants_i64 {
+            let body_is_u64 = is_u64_expr(fn_body, bind_state, bn_state);
+            let body_is_8b = if body_is_i64 == 1 { 1 } else { if body_is_u64 == 1 { 1 } else { 0 } };
+            let ret_wants_8b = if fn_ret_ty == 3 { 1 } else { if fn_ret_ty == 9 { 1 } else { 0 } };
+            if body_is_8b != ret_wants_8b {
                 emit_ud2_trap();
             };
             emit_epilogue();
