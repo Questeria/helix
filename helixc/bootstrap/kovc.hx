@@ -1887,6 +1887,16 @@ fn emit_read_file_to_arena_body(patch_state: i32, arena_base_s: i32) -> i32 {
     emit_byte(0x0F); emit_byte(0x05);
     // mov r10, rax (save bytes_read)
     emit_byte(0x49); emit_byte(0x89); emit_byte(0xC2);
+    // Audit fix: truncation sentinel. If sys_read returned exactly
+    // BUF_SIZE bytes, the file was at-or-beyond the buffer and we
+    // silently lost data — same failure mode as the original cascade-
+    // bug. Trap loudly here so the caller cannot accidentally produce
+    // a corrupt downstream binary. cmp r10, 0x100000 (49 81 FA imm32);
+    // jne +2 (75 02); ud2 (0F 0B).
+    emit_byte(0x49); emit_byte(0x81); emit_byte(0xFA);
+    emit_u32_le(1048576);
+    emit_byte(0x75); emit_byte(0x02);
+    emit_byte(0x0F); emit_byte(0x0B);
     // mov rdi, [rsp+0x100000]; mov eax, 3 (sys_close); syscall
     emit_byte(0x48); emit_byte(0x8B); emit_byte(0xBC); emit_byte(0x24);
     emit_u32_le(1048576);
@@ -3177,10 +3187,14 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         };
         ni + nn
     } else { if t == 31 {
-        // AST_NOT: logical NOT. For i64, must use `test rax, rax` (REX.W)
-        // to detect non-zero across the full 64 bits.
+        // AST_NOT: logical NOT. For i64/u64, must use `test rax, rax`
+        // (REX.W) to detect non-zero across the full 64 bits.
+        // Stage 2.4b audit fix: u64 added (was i64-only).
         let ni = emit_ast_code(p1, bind_state, patch_state, bn_state);
-        let nn = if is_i64_expr(p1, bind_state, bn_state) == 1 {
+        let inner_i64 = is_i64_expr(p1, bind_state, bn_state);
+        let inner_u64 = is_u64_expr(p1, bind_state, bn_state);
+        let inner_wide = if inner_i64 == 1 { 1 } else { if inner_u64 == 1 { 1 } else { 0 } };
+        let nn = if inner_wide == 1 {
             emit_ast_not_suffix_64()
         } else {
             emit_ast_not_suffix()
@@ -3512,8 +3526,14 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         // pre-cleared) are unaffected by widening the test.
         let p3 = __arena_get(idx + 3);
         let n_cond = emit_ast_code(p1, bind_state, patch_state, bn_state);
+        // Stage 2.4b audit fix: u64 cond also needs REX.W test. Without
+        // this, `if x_u64 { ... }` for a u64 with low-32-bits-zero (e.g.
+        // 0x1_0000_0000_u64, or anything 1_u64 << 32) would silently
+        // take the else branch.
         let cond_i64 = is_i64_expr(p1, bind_state, bn_state);
-        let n_test = if cond_i64 == 1 { emit_test_rax_rax_64() } else { emit_test_eax_eax() };
+        let cond_u64 = is_u64_expr(p1, bind_state, bn_state);
+        let cond_wide = if cond_i64 == 1 { 1 } else { if cond_u64 == 1 { 1 } else { 0 } };
+        let n_test = if cond_wide == 1 { emit_test_rax_rax_64() } else { emit_test_eax_eax() };
         let je_disp = emit_je_rel32_placeholder();
         let n_then = emit_ast_code(p2, bind_state, patch_state, bn_state);
         let jmp_disp = emit_jmp_rel32_placeholder();
@@ -3776,8 +3796,12 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         // AST_IF fix above).
         let loop_top = __arena_len();
         let n_cond = emit_ast_code(p1, bind_state, patch_state, bn_state);
+        // Stage 2.4b audit fix: u64 cond also needs REX.W test (same
+        // as AST_IF above).
         let cond_i64 = is_i64_expr(p1, bind_state, bn_state);
-        let n_test = if cond_i64 == 1 { emit_test_rax_rax_64() } else { emit_test_eax_eax() };
+        let cond_u64 = is_u64_expr(p1, bind_state, bn_state);
+        let cond_wide = if cond_i64 == 1 { 1 } else { if cond_u64 == 1 { 1 } else { 0 } };
+        let n_test = if cond_wide == 1 { emit_test_rax_rax_64() } else { emit_test_eax_eax() };
         let je_disp = emit_je_rel32_placeholder();
         let n_body = emit_ast_code(p2, bind_state, patch_state, bn_state);
         let jmp_disp = emit_jmp_rel32_placeholder();

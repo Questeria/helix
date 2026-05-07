@@ -1957,6 +1957,22 @@ class FnCompiler:
                 # Save bytes-read in r10.
                 buf.emit(0x49, 0x89, 0xC2)
 
+                # Audit fix: truncation sentinel. If sys_read returned
+                # exactly BUF_SIZE bytes, the file was at-or-beyond the
+                # buffer and we silently lost data. This is the EXACT
+                # failure mode that caused the original cascade-bug
+                # (file size crept up to within 1 KB of the 256 KB buffer
+                # → silent truncation → K2 missing tail-end fns → SIGILL
+                # at runtime far downstream). Trap loudly here instead
+                # of producing a corrupt output binary.
+                #   cmp r10, BUF_SIZE      (49 81 FA imm32)
+                #   jne +2                 (75 02)
+                #   ud2                    (0F 0B)
+                buf.emit(0x49, 0x81, 0xFA)
+                buf.emit_bytes(struct.pack("<I", BUF_SIZE))
+                buf.emit(0x75, 0x02)
+                buf.emit(0x0F, 0x0B)
+
                 # ---- close(fd) ----
                 buf.emit(0x48, 0x8B, 0xBC, 0x24)        # mov rdi, [rsp+BUF_SIZE] disp32
                 buf.emit_bytes(struct.pack("<I", BUF_SIZE))
