@@ -9894,6 +9894,61 @@ def test_stdlib_vec_last():
     assert code == 42, f"expected 42 (last=42, empty=0), got {code}"
 
 
+def test_stdlib_tf1d_first():
+    """first([42.0]) = 42.0_f32 (0x42280000); top byte 66; -24=42."""
+    src = """
+    fn main() -> i32 {
+        let x = t1d_new(1);
+        tf1d_set(x, 0, 42.0_f32);
+        __bits_of_f32(tf1d_first(x, 1)) / 16777216 - 24
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_tf1d_last():
+    """last([1.0, 42.0]) = 42.0_f32; top 66; -24=42."""
+    src = """
+    fn main() -> i32 {
+        let x = t1d_new(2);
+        tf1d_set(x, 0, 1.0_f32);
+        tf1d_set(x, 1, 42.0_f32);
+        __bits_of_f32(tf1d_last(x, 2)) / 16777216 - 24
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_ti1d_first():
+    """ti1d_first([42, 99]) = 42."""
+    src = """
+    fn main() -> i32 {
+        let x = t1d_new(2);
+        ti1d_set(x, 0, 42);
+        ti1d_set(x, 1, 99);
+        ti1d_first(x, 2)
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_ti1d_last():
+    """ti1d_last([99, 42]) = 42."""
+    src = """
+    fn main() -> i32 {
+        let x = t1d_new(2);
+        ti1d_set(x, 0, 99);
+        ti1d_set(x, 1, 42);
+        ti1d_last(x, 2)
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
 def test_stdlib_vec_min_pure():
     """min_pure([42,99,100]) = 42."""
     src = """

@@ -1096,3 +1096,27 @@ fn ti1d_max_abs(start: i32, n: i32) -> i32 {
 fn ti1d_is_empty(start: i32, n: i32) -> i32 {
     if n == 0 { 1 } else { 0 }
 }
+
+// tf1d_first(start, n): @pure. f32 v[0]. 0.0_f32 if empty.
+@pure
+fn tf1d_first(start: i32, n: i32) -> f32 {
+    if n == 0 { 0.0_f32 } else { __f32_from_bits(__arena_get(start)) }
+}
+
+// tf1d_last(start, n): @pure. f32 v[n-1]. 0.0_f32 if empty.
+@pure
+fn tf1d_last(start: i32, n: i32) -> f32 {
+    if n == 0 { 0.0_f32 } else { __f32_from_bits(__arena_get(start + n - 1)) }
+}
+
+// ti1d_first(start, n): @pure. v[0] or 0 if empty.
+@pure
+fn ti1d_first(start: i32, n: i32) -> i32 {
+    if n == 0 { 0 } else { __arena_get(start) }
+}
+
+// ti1d_last(start, n): @pure. v[n-1] or 0 if empty.
+@pure
+fn ti1d_last(start: i32, n: i32) -> i32 {
+    if n == 0 { 0 } else { __arena_get(start + n - 1) }
+}
