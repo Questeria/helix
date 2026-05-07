@@ -1176,6 +1176,35 @@ fn is_i64_expr(idx: i32, bind_state: i32, bn_state: i32) -> i32 {
         if l == 1 { if r == 1 { 1 } else { 0 } } else { 0 }
     } else { if t == 9 {                        // AST_NEG
         is_i64_expr(p1, bind_state, bn_state)
+    } else { if t == 26 {                       // AST_BNOT
+        is_i64_expr(p1, bind_state, bn_state)
+    } else { if t == 24 {                       // AST_MOD
+        // Stage 1 audit batch 3 fix: bitwise/shift/mod ops were silently
+        // demoted to i32 when nested under arithmetic. `let z = (a & b) + 1`
+        // with i64 a,b would compute (a & b) correctly via the 4-way
+        // dispatch, but the outer + would not see this as i64 and would
+        // fall through to `add eax, ecx`.
+        let l = is_i64_expr(p1, bind_state, bn_state);
+        let r = is_i64_expr(p2, bind_state, bn_state);
+        if l == 1 { if r == 1 { 1 } else { 0 } } else { 0 }
+    } else { if t == 28 {                       // AST_BAND
+        let l = is_i64_expr(p1, bind_state, bn_state);
+        let r = is_i64_expr(p2, bind_state, bn_state);
+        if l == 1 { if r == 1 { 1 } else { 0 } } else { 0 }
+    } else { if t == 29 {                       // AST_BOR
+        let l = is_i64_expr(p1, bind_state, bn_state);
+        let r = is_i64_expr(p2, bind_state, bn_state);
+        if l == 1 { if r == 1 { 1 } else { 0 } } else { 0 }
+    } else { if t == 30 {                       // AST_BXOR
+        let l = is_i64_expr(p1, bind_state, bn_state);
+        let r = is_i64_expr(p2, bind_state, bn_state);
+        if l == 1 { if r == 1 { 1 } else { 0 } } else { 0 }
+    } else { if t == 32 {                       // AST_SHL
+        // Shift result type follows lhs (the value being shifted),
+        // not the shift count.
+        is_i64_expr(p1, bind_state, bn_state)
+    } else { if t == 33 {                       // AST_SHR
+        is_i64_expr(p1, bind_state, bn_state)
     } else { if t == 16 {                       // AST_CALL
         // Audit fix: fn_type_table fallback for user-defined i64 fns.
         // Mirrors is_f64_expr's parallel pattern. Without this, any
@@ -1184,7 +1213,7 @@ fn is_i64_expr(idx: i32, bind_state: i32, bn_state: i32) -> i32 {
         let fts = bn_fn_type_state(bn_state);
         if fts == 0 { 0 }
         else { if fn_type_table_lookup(fts, p1, p2) == 3 { 1 } else { 0 } }
-    } else { 0 }}}}}}}}}}}}}
+    } else { 0 }}}}}}}}}}}}}}}}}}}}
 }
 
 // Phase 1.10 step 5c follow-on: fn_type_table maps fn names to their
@@ -3275,9 +3304,16 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         n1 + np + n2 + nm + no + na
     } else { if t == 7 {
         // AST_IF(cond, then, else)
+        // Stage 1 audit batch 3 fix: i64 cond must use `test rax, rax`
+        // (REX.W) — the 32-bit `test eax, eax` only checks the low 32
+        // bits, so an i64 with high-bit-set but low-32-zero (e.g.
+        // 0x1_0000_0000_i64) would falsely take the else branch.
+        // Comparisons (which always produce 0/1 in eax with high zero
+        // pre-cleared) are unaffected by widening the test.
         let p3 = __arena_get(idx + 3);
         let n_cond = emit_ast_code(p1, bind_state, patch_state, bn_state);
-        let n_test = emit_test_eax_eax();
+        let cond_i64 = is_i64_expr(p1, bind_state, bn_state);
+        let n_test = if cond_i64 == 1 { emit_test_rax_rax_64() } else { emit_test_eax_eax() };
         let je_disp = emit_je_rel32_placeholder();
         let n_then = emit_ast_code(p2, bind_state, patch_state, bn_state);
         let jmp_disp = emit_jmp_rel32_placeholder();
@@ -3381,13 +3417,23 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         } else {
             let bind_ty = bind_lookup_type(bind_state, p1, p2);
             // Stage 1 audit fix: i64 (tag 3) also needs 64-bit store.
-            let n_store = if bind_ty == 2 {
+            // Stage 1 audit batch 3 fix: trap on i64 value -> non-i64
+            // binding mismatch. Without this trap, the high 32 bits of
+            // the value silently drop. Mirrors the mixed-type ud2 used
+            // throughout 4-way arithmetic dispatch.
+            let val_i64 = is_i64_expr(p3, bind_state, bn_state);
+            let n_store = if val_i64 == 1 {
+                if bind_ty == 3 { emit_mov_local_rax_64(off) }
+                else { emit_ud2_trap() }
+            } else { if bind_ty == 2 {
                 emit_mov_local_rax_64(off)
             } else { if bind_ty == 3 {
+                // Storing i32 (zero-extended in rax) into i64 slot.
+                // 8-byte store correctly widens.
                 emit_mov_local_rax_64(off)
             } else {
                 emit_mov_local_eax(off)
-            }};
+            }}};
             n_val + n_store
         }
     } else { if t == 14 {
@@ -3487,17 +3533,20 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
     } else { if t == 10 {
         // AST_WHILE(cond, body):
         //   loop_top:
-        //     <cond>           leaves 0/1 in eax
-        //     test eax, eax
+        //     <cond>           leaves 0/1 in eax (or full rax for i64)
+        //     test eax, eax    (i32 cond) / test rax, rax (i64 cond)
         //     je end_label
         //     <body>
         //     jmp loop_top    (backward — exercises emit_u32_le on
         //                       negative disp, the audit-8 fix)
         //   end_label:
         //     mov eax, 0      Helix while-expr returns unit (0)
+        // Stage 1 audit batch 3 fix: i64 cond uses REX.W test (mirrors
+        // AST_IF fix above).
         let loop_top = __arena_len();
         let n_cond = emit_ast_code(p1, bind_state, patch_state, bn_state);
-        let n_test = emit_test_eax_eax();
+        let cond_i64 = is_i64_expr(p1, bind_state, bn_state);
+        let n_test = if cond_i64 == 1 { emit_test_rax_rax_64() } else { emit_test_eax_eax() };
         let je_disp = emit_je_rel32_placeholder();
         let n_body = emit_ast_code(p2, bind_state, patch_state, bn_state);
         let jmp_disp = emit_jmp_rel32_placeholder();
