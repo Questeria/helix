@@ -1280,3 +1280,62 @@ fn vec_concat3(a: i32, an: i32, b: i32, bn: i32, c: i32, cn: i32) -> i32 {
     while k < cn { __arena_push(__arena_get(c + k)); k = k + 1; }
     s
 }
+
+// vec_partition_at_idx(start, count, idx, dst_left, dst_right):
+// split input vec at index `idx`. dst_left receives v[0..idx];
+// dst_right receives v[idx..count]. Both pre-allocated by caller.
+fn vec_partition_at_idx(start: i32, count: i32, idx: i32,
+                         dst_left: i32, dst_right: i32) -> i32 {
+    let mut i: i32 = 0;
+    while i < idx {
+        __arena_set(dst_left + i, __arena_get(start + i));
+        i = i + 1;
+    }
+    let mut j: i32 = idx;
+    while j < count {
+        __arena_set(dst_right + j - idx, __arena_get(start + j));
+        j = j + 1;
+    }
+    0
+}
+
+// vec_split_at(start, count, idx): allocate TWO new vecs back-to-back
+// in the arena: first `idx` slots are v[0..idx], next `count-idx` slots
+// are v[idx..count]. Returns the start of the first vec; caller computes
+// second start as ret + idx.
+fn vec_split_at(start: i32, count: i32, idx: i32) -> i32 {
+    let s: i32 = __arena_len();
+    let mut i: i32 = 0;
+    while i < count {
+        __arena_push(__arena_get(start + i));
+        i = i + 1;
+    }
+    s
+}
+
+// vec_pairwise_sum(start, count): allocate a new vec of length
+// (count - 1) where r[i] = v[i] + v[i+1]. Mirror of vec_pairwise_diff.
+fn vec_pairwise_sum(start: i32, count: i32) -> i32 {
+    let s: i32 = __arena_len();
+    if count <= 1 { s }
+    else {
+        let mut i: i32 = 1;
+        while i < count {
+            __arena_push(__arena_get(start + i - 1) + __arena_get(start + i));
+            i = i + 1;
+        }
+        s
+    }
+}
+
+// vec_offset_alloc(start, count, k): allocate new vec with each element
+// offset by k. Allocating mirror of vec_offset_inplace.
+fn vec_offset_alloc(start: i32, count: i32, k: i32) -> i32 {
+    let s: i32 = __arena_len();
+    let mut i: i32 = 0;
+    while i < count {
+        __arena_push(__arena_get(start + i) + k);
+        i = i + 1;
+    }
+    s
+}

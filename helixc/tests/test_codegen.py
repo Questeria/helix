@@ -8175,6 +8175,68 @@ def test_stdlib_ti1d_l2_norm_sq():
     assert code == 42, f"expected 42, got {code}"
 
 
+def test_stdlib_vec_partition_at_idx():
+    """[1,2,3,4,5] split at 2 -> left [1,2], right [3,4,5]; left[0]+right[2]=1+5=6;
+    *7=42."""
+    src = """
+    fn main() -> i32 {
+        let v = __arena_len();
+        __arena_push(1); __arena_push(2); __arena_push(3); __arena_push(4); __arena_push(5);
+        let dl = __arena_len(); __arena_push(0); __arena_push(0);
+        let dr = __arena_len(); __arena_push(0); __arena_push(0); __arena_push(0);
+        vec_partition_at_idx(v, 5, 2, dl, dr);
+        (__arena_get(dl) + __arena_get(dr + 2)) * 7
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_vec_split_at():
+    """[1,2,3,4] split_at 2; first half [1,2], second half [3,4]; sums 3+7=10; *4+2=42."""
+    src = """
+    fn main() -> i32 {
+        let v = __arena_len();
+        __arena_push(1); __arena_push(2); __arena_push(3); __arena_push(4);
+        let r = vec_split_at(v, 4, 2);
+        let s = __arena_get(r) + __arena_get(r + 1) + __arena_get(r + 2) + __arena_get(r + 3);
+        s * 4 + 2
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_vec_pairwise_sum():
+    """pairwise_sum([1,2,3,4]) -> [3,5,7]; sum=15; *2+12=42."""
+    src = """
+    fn main() -> i32 {
+        let v = __arena_len();
+        __arena_push(1); __arena_push(2); __arena_push(3); __arena_push(4);
+        let r = vec_pairwise_sum(v, 4);
+        let s = __arena_get(r) + __arena_get(r + 1) + __arena_get(r + 2);
+        s * 2 + 12
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_vec_offset_alloc():
+    """offset_alloc([1,2,3], +10) -> [11,12,13]; sum=36; +6=42."""
+    src = """
+    fn main() -> i32 {
+        let v = __arena_len();
+        __arena_push(1); __arena_push(2); __arena_push(3);
+        let r = vec_offset_alloc(v, 3, 10);
+        let s = __arena_get(r) + __arena_get(r + 1) + __arena_get(r + 2);
+        s + 6
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
 def test_stdlib_tf2d_diag():
     """[[1,2],[3,4]] diag -> [1,4]; sum=5; *7+7=42."""
     src = """
