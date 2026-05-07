@@ -629,3 +629,53 @@ fn ti1d_clamp(x_start: i32, lo: i32, hi: i32, dst: i32, n: i32) -> i32 {
     }
     total
 }
+
+// tf1d_l2_norm_sq(x, n): squared L2 norm = sum(x[i]^2). f32 mirror of
+// ti1d_l2_norm_sq. Builds on tf1d_dot(x, x, n) — distinct fn for clarity.
+fn tf1d_l2_norm_sq(start: i32, n: i32) -> f32 {
+    tf1d_dot(start, start, n)
+}
+
+// tf1d_l1_norm(x, n): L1 norm = sum of |x[i]|. f32 mirror of ti1d_l1_norm.
+// Reads each f32, computes absolute value via SSE fabs (sign-bit clear),
+// accumulates. Loop is the bf32 form so float promotion is implicit.
+fn tf1d_l1_norm(start: i32, n: i32) -> f32 {
+    let mut i: i32 = 0;
+    let mut total: f32 = 0.0_f32;
+    while i < n {
+        let v = __f32_from_bits(__arena_get(start + i));
+        let av = if v < 0.0_f32 { 0.0_f32 - v } else { v };
+        total = total + av;
+        i = i + 1;
+    }
+    total
+}
+
+// tf2d_transpose(src, rows, cols, dst): out-of-place transpose for f32
+// tensors. f32 mirror of ti2d_transpose. Caller pre-allocates dst with
+// t1d_new(rows*cols).
+fn tf2d_transpose(src: i32, rows: i32, cols: i32, dst: i32) -> i32 {
+    let mut r: i32 = 0;
+    while r < rows {
+        let mut c: i32 = 0;
+        while c < cols {
+            __arena_set(dst + c * rows + r, __arena_get(src + r * cols + c));
+            c = c + 1;
+        }
+        r = r + 1;
+    }
+    0
+}
+
+// tf1d_clamp(x, lo, hi, dst, n): elementwise clamp each x[i] into [lo, hi].
+// f32 mirror of ti1d_clamp.
+fn tf1d_clamp(x_start: i32, lo: f32, hi: f32, dst: i32, n: i32) -> i32 {
+    let mut i: i32 = 0;
+    while i < n {
+        let v = __f32_from_bits(__arena_get(x_start + i));
+        let cv = if v < lo { lo } else { if v > hi { hi } else { v } };
+        __arena_set(dst + i, __bits_of_f32(cv));
+        i = i + 1;
+    }
+    0
+}

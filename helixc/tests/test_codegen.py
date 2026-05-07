@@ -8165,6 +8165,77 @@ def test_stdlib_ti1d_l2_norm_sq():
     assert code == 42, f"expected 42, got {code}"
 
 
+def test_stdlib_tf1d_l2_norm_sq():
+    """tf1d_l2_norm_sq([3.0, 4.0]) = 9 + 16 = 25.0; bits top byte = 65."""
+    src = """
+    fn main() -> i32 {
+        let x = t1d_new(2);
+        tf1d_set(x, 0, 3.0_f32);
+        tf1d_set(x, 1, 4.0_f32);
+        // 25.0_f32 = 0x41C80000 -> top byte 0x41 = 65; -23 = 42.
+        __bits_of_f32(tf1d_l2_norm_sq(x, 2)) / 16777216 - 23
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_tf1d_l1_norm():
+    """tf1d_l1_norm([3.0, -4.0, 1.0]) = 3+4+1 = 8.0; top byte 0x41=65; -23=42."""
+    src = """
+    fn main() -> i32 {
+        let x = t1d_new(3);
+        tf1d_set(x, 0, 3.0_f32);
+        tf1d_set(x, 1, 0.0_f32 - 4.0_f32);
+        tf1d_set(x, 2, 1.0_f32);
+        // 8.0_f32 = 0x41000000 -> top byte 0x41 = 65; -23 = 42.
+        __bits_of_f32(tf1d_l1_norm(x, 3)) / 16777216 - 23
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_tf2d_transpose():
+    """transpose 2x3 -> 3x2; sum is preserved (1+2+3+4+5+6 = 21.0).
+    Doubled = 42.0_f32 = 0x42280000; top byte 0x42 = 66; -24 = 42."""
+    src = """
+    fn main() -> i32 {
+        let src = ti2d_new(2, 3);
+        tf2d_set(src, 3, 0, 0, 1.0_f32); tf2d_set(src, 3, 0, 1, 2.0_f32); tf2d_set(src, 3, 0, 2, 3.0_f32);
+        tf2d_set(src, 3, 1, 0, 4.0_f32); tf2d_set(src, 3, 1, 1, 5.0_f32); tf2d_set(src, 3, 1, 2, 6.0_f32);
+        let dst = ti2d_new(3, 2);
+        tf2d_transpose(src, 2, 3, dst);
+        let s = tf2d_get(dst, 2, 0, 0) + tf2d_get(dst, 2, 0, 1) +
+                tf2d_get(dst, 2, 1, 0) + tf2d_get(dst, 2, 1, 1) +
+                tf2d_get(dst, 2, 2, 0) + tf2d_get(dst, 2, 2, 1);
+        let s2 = s + s;
+        __bits_of_f32(s2) / 16777216 - 24
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_tf1d_clamp():
+    """clamp([-2.0, 5.0, 100.0], 0.0, 50.0) -> [0, 5, 50]; sum = 55.0_f32.
+    bits 0x425C0000; top byte 0x42 = 66; -24 = 42."""
+    src = """
+    fn main() -> i32 {
+        let x = t1d_new(3);
+        tf1d_set(x, 0, 0.0_f32 - 2.0_f32);
+        tf1d_set(x, 1, 5.0_f32);
+        tf1d_set(x, 2, 100.0_f32);
+        let dst = t1d_new(3);
+        tf1d_clamp(x, 0.0_f32, 50.0_f32, dst, 3);
+        let s = tf1d_get(dst, 0) + tf1d_get(dst, 1) + tf1d_get(dst, 2);
+        __bits_of_f32(s) / 16777216 - 24
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
 def test_stdlib_ti1d_eq_count():
     """ti1d_eq_count([1,2,3,4,5], [1,9,3,9,5], 5) = 3 matches at idx 0,2,4.
     3 * 14 = 42."""
