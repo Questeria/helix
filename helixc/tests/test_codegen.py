@@ -9894,6 +9894,58 @@ def test_stdlib_vec_last():
     assert code == 42, f"expected 42 (last=42, empty=0), got {code}"
 
 
+def test_stdlib_vec_is_empty():
+    """is_empty(0) = 1; *42 = 42."""
+    src = """
+    fn main() -> i32 {
+        let v = __arena_len();
+        vec_is_empty(v, 0) * 42
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_vec_count():
+    """count(_, 5) = 5; *7+7=42."""
+    src = """
+    fn main() -> i32 {
+        let v = __arena_len();
+        vec_count(v, 5) * 7 + 7
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_vec_at_or():
+    """at_or out of range returns default 42."""
+    src = """
+    fn main() -> i32 {
+        let v = __arena_len();
+        __arena_push(99);
+        vec_at_or(v, 1, 99, 42)
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_vec_eq():
+    """eq([1,2,3], [1,2,3]) = 1; *42=42."""
+    src = """
+    fn main() -> i32 {
+        let a = __arena_len();
+        __arena_push(1); __arena_push(2); __arena_push(3);
+        let b = __arena_len();
+        __arena_push(1); __arena_push(2); __arena_push(3);
+        vec_eq(a, 3, b, 3) * 42
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
 def test_stdlib_string_len_after_trim_left():
     """'   X' trim ' '; remaining = 1; *42=42."""
     src = """

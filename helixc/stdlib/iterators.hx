@@ -1423,3 +1423,40 @@ fn vec_arange(lo: i32, hi: i32, step: i32) -> i32 {
         s
     }
 }
+
+// vec_is_empty(start, count): @pure. 1 if count == 0.
+@pure
+fn vec_is_empty(start: i32, count: i32) -> i32 {
+    if count == 0 { 1 } else { 0 }
+}
+
+// vec_count(start, count): @pure. Alias for `count` parameter to make
+// API symmetric with string_byte_count and hashmap_size.
+@pure
+fn vec_count(start: i32, count: i32) -> i32 {
+    count
+}
+
+// vec_at_or(start, count, idx, default): @pure. v[idx] if 0 <= idx <
+// count, else default. Saturating index access.
+@pure
+fn vec_at_or(start: i32, count: i32, idx: i32, default: i32) -> i32 {
+    if idx < 0 { default }
+    else { if idx >= count { default } else { __arena_get(start + idx) } }
+}
+
+// vec_eq(a, an, b, bn): @pure. 1 if both vecs have equal length and
+// every element equals. Mirrors string_eq.
+@pure
+fn vec_eq(a: i32, an: i32, b: i32, bn: i32) -> i32 {
+    if an != bn { 0 }
+    else {
+        let mut i: i32 = 0;
+        let mut eq: i32 = 1;
+        while i < an {
+            if __arena_get(a + i) != __arena_get(b + i) { eq = 0; }
+            i = i + 1;
+        }
+        eq
+    }
+}
