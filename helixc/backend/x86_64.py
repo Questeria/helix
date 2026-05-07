@@ -1914,12 +1914,20 @@ class FnCompiler:
                 # for larger sizes. Bug: previously BUF_SIZE=128 used disp8
                 # which sign-extended to -128 — adding 128 to rsp instead
                 # of subtracting (clobbering parent stack frame).
-                # 256 KB buffer — large enough to fit the entire
-                # lexer.hx + parser.hx + kovc.hx concatenation
-                # (~111 KB) in a single sys_read. Uses disp32 form
-                # everywhere so the audit-2 disp8 sign-extension
-                # trap can't recur.
-                BUF_SIZE = 0x40000
+                # Approach-A bump: 256K → 1M. The bootstrap source
+                # (lexer.hx + parser.hx + kovc.hx + driver_main) had
+                # crept up to ~261 KB, leaving < 1 KB of margin against
+                # 256 KB. ANY new fn or @pure helper added to kovc.hx
+                # tipped k1_input over the buffer; K1's read truncated;
+                # K1 produced a K2 missing tail-end fns; K2 SIGILLed.
+                # Mis-attributed for weeks as a "cascade-depth bug"
+                # (see docs/BOOTSTRAP_CASCADE_BUG.md, probe 10). Bump
+                # to 1 MB gives ~4× headroom and uses disp32 form.
+                # Keep this value in lock-step with the four BUF_SIZE
+                # constants in helixc/bootstrap/kovc.hx's
+                # emit_read_file_to_arena_body so K1 (Python-emitted)
+                # and K2 (kovc.hx-emitted) agree on the read buffer.
+                BUF_SIZE = 0x100000
 
                 # ---- sys_open(path, O_RDONLY=0) ----
                 buf.emit(0x48, 0x8D, 0x3D)            # lea rdi, [rip+disp]

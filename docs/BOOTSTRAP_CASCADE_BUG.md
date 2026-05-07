@@ -1,6 +1,26 @@
 # Bootstrap Cascade-Depth Self-Host Bug
 
-**Status:** Open. Blocks Stage 2.5b+ and Stage 2.4b MUL/DIV/MOD/comparisons.
+**Status:** **RESOLVED 2026-05-07.** Root cause: `read_file_to_arena`
+buffer (256 KB) was being silently overrun by the bootstrap source
+(~261 KB at the time of resolution, with < 1 KB margin). Each new fn
+or @pure helper added to kovc.hx pushed the concatenated source past
+the buffer; K1's read truncated; the truncated source was missing
+tail-end fns; K1 produced K2 whose call sites ud2-patched on missing
+symbols; K2 SIGILLed on first call. Mis-attributed for weeks as a
+"cascade-depth bug" because the symptom was correlated with adding
+arms to deep cascade fns (those happen to add the most bytes per
+edit). The fix: bump BUF_SIZE 256 KB -> 1 MB in both
+helixc/backend/x86_64.py (Python emit) and the four uses in
+helixc/bootstrap/kovc.hx's emit_read_file_to_arena_body. Kept in
+lock-step. Stage 2.4b MUL+ / 2.5b/c / 1.5 / 3+ all unblocked.
+
+The narrative below is preserved as the historical record of how the
+bug was characterized and eventually resolved.
+
+---
+
+## Original status (preserved)
+**Was:** Open. Blocks Stage 2.5b+ and Stage 2.4b MUL/DIV/MOD/comparisons.
 
 ## Symptom
 

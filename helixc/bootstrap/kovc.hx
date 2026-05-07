@@ -1854,30 +1854,39 @@ fn emit_read_file_to_arena_body(patch_state: i32, arena_base_s: i32) -> i32 {
     emit_byte(0x0F); emit_byte(0x05);                                           // syscall
     // push rax (fd on stack)
     emit_byte(0x50);
-    // Audit-18b: bumped read buffer 0x8000 (32K) -> 0x40000 (256K) so a
-    // single sys_read can swallow the whole bootstrap source (~116K).
-    // Without this, K2's read truncates at 32K, K2 only sees lexer +
-    // start of parser, never reaches `main`, fn_table lookup for "main"
-    // fails, and the entry-stub call gets ud2-patched -> SIGILL on K3.
-    // Matches BUF_SIZE in helixc/backend/x86_64.py (the host backend).
-    // sub rsp, 0x40000 (256K read buffer)
+    // Audit-18b: bumped read buffer 0x8000 (32K) -> 0x40000 (256K) for
+    // bootstrap source.
+    // Approach-A bump (2026-05-07): 0x40000 (256K) -> 0x100000 (1M).
+    // The k1_input concatenation (lexer_no_main + parser_body +
+    // kovc_lib + k2_main) had grown to ~261 KB, leaving < 1 KB margin
+    // against the 256 KB buffer. Each new fn or @pure helper added to
+    // kovc.hx (including never-called dead helpers) tipped k1_input
+    // over the buffer; K1's read truncated; the truncated source was
+    // missing tail-end fns; K1 produced a K2 whose call sites
+    // ud2-patched on missing symbols; K2 SIGILLed on first call. This
+    // had been mis-attributed for weeks as a "cascade-depth bug" — see
+    // docs/BOOTSTRAP_CASCADE_BUG.md probe 10. Bump to 1 MB gives ~4×
+    // headroom. Must stay in lock-step with BUF_SIZE in
+    // helixc/backend/x86_64.py so K1 (Python-emitted) and K2 (kovc.hx-
+    // emitted) agree on the buffer size.
+    // sub rsp, 0x100000 (1M read buffer)
     emit_byte(0x48); emit_byte(0x81); emit_byte(0xEC);
-    emit_u32_le(262144);
-    // mov rdi, [rsp+0x40000] (load fd back into rdi)
+    emit_u32_le(1048576);
+    // mov rdi, [rsp+0x100000] (load fd back into rdi)
     emit_byte(0x48); emit_byte(0x8B); emit_byte(0xBC); emit_byte(0x24);
-    emit_u32_le(262144);
+    emit_u32_le(1048576);
     // mov rsi, rsp (buffer = rsp)
     emit_byte(0x48); emit_byte(0x89); emit_byte(0xE6);
-    // mov edx, 0x40000 (count)
-    emit_byte(0xBA); emit_byte(0x00); emit_byte(0x00); emit_byte(0x04); emit_byte(0x00);
+    // mov edx, 0x100000 (count = 1M, LE bytes 00 00 10 00)
+    emit_byte(0xBA); emit_byte(0x00); emit_byte(0x00); emit_byte(0x10); emit_byte(0x00);
     // mov eax, 0 (sys_read); syscall
     emit_byte(0xB8); emit_byte(0); emit_byte(0); emit_byte(0); emit_byte(0);
     emit_byte(0x0F); emit_byte(0x05);
     // mov r10, rax (save bytes_read)
     emit_byte(0x49); emit_byte(0x89); emit_byte(0xC2);
-    // mov rdi, [rsp+0x40000]; mov eax, 3 (sys_close); syscall
+    // mov rdi, [rsp+0x100000]; mov eax, 3 (sys_close); syscall
     emit_byte(0x48); emit_byte(0x8B); emit_byte(0xBC); emit_byte(0x24);
-    emit_u32_le(262144);
+    emit_u32_le(1048576);
     emit_byte(0xB8); emit_byte(3); emit_byte(0); emit_byte(0); emit_byte(0);
     emit_byte(0x0F); emit_byte(0x05);
     // test r10, r10 ; jns +3 ; xor r10, r10 (clamp negative to 0)
@@ -1932,9 +1941,9 @@ fn emit_read_file_to_arena_body(patch_state: i32, arena_base_s: i32) -> i32 {
     let jge_disp = end_addr - jge_after;
     __arena_set(jge_disp_slot, jge_disp);
     // ---- postlude ----
-    // add rsp, 0x40000 (must match the sub above)
+    // add rsp, 0x100000 (must match the sub above)
     emit_byte(0x48); emit_byte(0x81); emit_byte(0xC4);
-    emit_u32_le(262144);
+    emit_u32_le(1048576);
     // add rsp, 8 (drop fd)
     emit_byte(0x48); emit_byte(0x83); emit_byte(0xC4); emit_byte(0x08);
     // mov rax, r10 (return bytes_read)
