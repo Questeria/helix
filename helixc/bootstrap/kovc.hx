@@ -923,6 +923,12 @@ fn expr_type(idx: i32, bind_state: i32, bn_state: i32) -> i32 {
     } else { if t == 33 {                             // AST_SHR
         expr_type(p1, bind_state, bn_state)
     } else { if t == 2 {                              // AST_ADD
+        // Mismatched binary-op operands fall back to 0 (i32). This is
+        // safe because the per-op codegen dispatch in emit_ast_code
+        // emits ud2 on every (i64 op i32), (f32 op i32), etc. mixed
+        // case — the expr_type return value is consumed by upstream
+        // consumers (val_ty stamping, AST_RET trap) which are
+        // unaffected since the wrapping context already trapped.
         let l = expr_type(p1, bind_state, bn_state);
         let r = expr_type(p2, bind_state, bn_state);
         if l == r { l } else { 0 }
@@ -3591,8 +3597,14 @@ fn emit_elf_for_ast_to_path(ast_root: i32) -> i32 {
                     }
                     pp_packed = pp_packed + place_val;
                     pp_shift = pp_shift + 4;
+                    // Audit-cycle-5 polish: cap pp_count at 6 too. Beyond 6
+                    // params the AST_CALL site emits ud2 unconditionally
+                    // (existing arg_count>6 trap), so the over-count was
+                    // benign — but capping keeps fn_type_table_lookup_params'
+                    // count return value (low 3 bits of (packed*8+count))
+                    // unambiguous.
+                    pp_count = pp_count + 1;
                 };
-                pp_count = pp_count + 1;
                 pp_cur = __arena_get(pp_cur + 3);
             }
             fn_type_table_add(fn_type_state, fn_name_s, fn_name_l, fn_ret_ty, pp_packed, pp_count);
