@@ -6062,6 +6062,59 @@ def test_stdlib_vec_scale_inplace():
     assert code == 42, f"expected 42, got {code}"
 
 
+def test_stdlib_vec_offset_inplace():
+    """offset_inplace([1,2,3,4], 10) -> [11,12,13,14], sum=50. Encoded 50-8 = 42."""
+    src = """
+    fn main() -> i32 {
+        let v = vec_new();
+        let n0 = vec_push(v, 0, 1);
+        let n1 = vec_push(v, n0, 2);
+        let n2 = vec_push(v, n1, 3);
+        let n3 = vec_push(v, n2, 4);
+        vec_offset_inplace(v, n3, 10);
+        vec_sum(v, n3) - 8
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_vec_fill_inplace():
+    """fill_inplace([99,99,99,99,99,99,99], 6) -> [6,6,6,6,6,6,6], sum=42."""
+    src = """
+    fn main() -> i32 {
+        let v = vec_new();
+        let n0 = vec_push(v, 0, 99);
+        let n1 = vec_push(v, n0, 99);
+        let n2 = vec_push(v, n1, 99);
+        let n3 = vec_push(v, n2, 99);
+        let n4 = vec_push(v, n3, 99);
+        let n5 = vec_push(v, n4, 99);
+        let n6 = vec_push(v, n5, 99);
+        vec_fill_inplace(v, n6, 6);
+        vec_sum(v, n6)
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_vec_swap_inplace():
+    """swap_inplace([7,1,42], 0, 2) -> [42,1,7]. vec_get(v, 0) = 42."""
+    src = """
+    fn main() -> i32 {
+        let v = vec_new();
+        let n0 = vec_push(v, 0, 7);
+        let n1 = vec_push(v, n0, 1);
+        let n2 = vec_push(v, n1, 42);
+        vec_swap_inplace(v, 0, 2);
+        vec_get(v, 0)
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
 def test_impl_inherent_method_basic():
     """Phase 1.8: inherent impl block. `impl Type { fn method(self) }` lifts
     to `Type__method`. `obj.method(args)` rewrites to `Type__method(obj, args)`."""

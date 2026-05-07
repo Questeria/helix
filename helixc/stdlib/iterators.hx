@@ -34,6 +34,12 @@
 //   vec_abs_sum(start, count)            -> i32   sum of |v[i]| (L1 norm).
 //   vec_sum_squares(start, count)        -> i32   sum of v[i]*v[i] (squared L2 norm).
 //   vec_clamp_inplace(s, c, lo, hi)      -> i32   clip elems to [lo, hi] in place; returns start.
+//   vec_offset_inplace(start, count, k)  -> i32   adds k to each elem in place; returns start.
+//                                                 In-place mirror of vec_map_add_scalar.
+//   vec_fill_inplace(start, count, x)    -> i32   sets every elem to x in place; returns start.
+//                                                 Useful for zero/constant init.
+//   vec_swap_inplace(start, i, j)        -> i32   swap elems at indices i and j; returns start.
+//                                                 Sort-step primitive.
 //
 // License: Apache 2.0
 
@@ -363,5 +369,32 @@ fn vec_scale_inplace(start: i32, count: i32, k: i32) -> i32 {
         __arena_set(start + i, v * k);
         i = i + 1;
     }
+    start
+}
+
+fn vec_offset_inplace(start: i32, count: i32, k: i32) -> i32 {
+    let mut i: i32 = 0;
+    while i < count {
+        let v = __arena_get(start + i);
+        __arena_set(start + i, v + k);
+        i = i + 1;
+    }
+    start
+}
+
+fn vec_fill_inplace(start: i32, count: i32, x: i32) -> i32 {
+    let mut i: i32 = 0;
+    while i < count {
+        __arena_set(start + i, x);
+        i = i + 1;
+    }
+    start
+}
+
+fn vec_swap_inplace(start: i32, i: i32, j: i32) -> i32 {
+    let a = __arena_get(start + i);
+    let b = __arena_get(start + j);
+    __arena_set(start + i, b);
+    __arena_set(start + j, a);
     start
 }
