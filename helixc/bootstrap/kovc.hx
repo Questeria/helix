@@ -245,6 +245,27 @@ fn emit_ud2_trap() -> i32 {
     2
 }
 
+// Speedup #4 debug tooling (2026-05-07, per user directive): trap with
+// a pre-loaded identifier so post-mortem (gdb / register dump) can tell
+// WHICH trap site fired. Encodes:
+//   B8 II II II II   mov eax, id    (5 bytes)
+//   0F 0B            ud2            (2 bytes)
+// 7 bytes total. After SIGILL, the kernel core file (or a debugger
+// attached to the dying process) shows eax = id, identifying the
+// trap site without source-line metadata.
+//
+// Recommended ID convention: AST_TAG * 1000 + sub_id, e.g. 9001 for
+// AST_NEG bf16 trap, 26001 for AST_BNOT bf16 trap. Sub-ids stay small.
+//
+// Not yet wired into existing trap call sites (those still use plain
+// emit_ud2_trap). New trap sites should prefer this helper.
+fn emit_trap_with_id(id: i32) -> i32 {
+    emit_byte(0xB8);                           // mov eax, imm32
+    emit_u32_le(id);                           // 4 bytes of imm32
+    emit_byte(0x0F); emit_byte(0x0B);          // ud2
+    7
+}
+
 // AST_NOT(inner): emit inner code, then logical NOT via:
 //   85 C0              test eax, eax
 //   B8 00 00 00 00     mov eax, 0    (zero the high bytes before sete)
