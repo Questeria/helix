@@ -5434,6 +5434,79 @@ def test_stdlib_string_from_to_int_roundtrip():
     assert code == 42, f"expected 42 (roundtrip 123), got {code}"
 
 
+def test_stdlib_string_ends_with():
+    """string_ends_with: 'abcde' ends with 'cde' (1) and not 'bcd' (0)."""
+    src = """
+    fn main() -> i32 {
+        let s = string_new();
+        let n0 = string_push(s, 0, 97);
+        let n1 = string_push(s, n0, 98);
+        let n2 = string_push(s, n1, 99);
+        let n3 = string_push(s, n2, 100);
+        let n4 = string_push(s, n3, 101);
+        let p = string_new();
+        let np0 = string_push(p, 0, 99);
+        let np1 = string_push(p, np0, 100);
+        let np2 = string_push(p, np1, 101);
+        let q = string_new();
+        let nq0 = string_push(q, 0, 98);
+        let nq1 = string_push(q, nq0, 99);
+        let nq2 = string_push(q, nq1, 100);
+        // ends_with(s, 'cde')=1; ends_with(s, 'bcd')=0; assert via 10*1 + 0 = 10.
+        let ew1 = string_ends_with(s, n4, p, np2);
+        let ew2 = string_ends_with(s, n4, q, nq2);
+        ew1 * 10 + ew2
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 10, f"expected 10 (ends_with=1, !ends_with=0), got {code}"
+
+
+def test_stdlib_string_count_byte():
+    """string_count_byte over 'banana' (98,97,110,97,110,97): count of 'a' (97) = 3."""
+    src = """
+    fn main() -> i32 {
+        let s = string_new();
+        let n0 = string_push(s, 0, 98);
+        let n1 = string_push(s, n0, 97);
+        let n2 = string_push(s, n1, 110);
+        let n3 = string_push(s, n2, 97);
+        let n4 = string_push(s, n3, 110);
+        let n5 = string_push(s, n4, 97);
+        // count of 'a' (97) = 3; of 'n' (110) = 2; of 'z' (122) = 0;
+        // assert via 3*100 + 2*10 + 0 = 320 → 320 % 256 = 64.
+        let ca = string_count_byte(s, n5, 97);
+        let cn = string_count_byte(s, n5, 110);
+        let cz = string_count_byte(s, n5, 122);
+        ca * 100 + cn * 10 + cz
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 320 % 256, f"expected {320 % 256} (320 mod 256, ca=3 cn=2 cz=0), got {code}"
+
+
+def test_stdlib_string_last_index_of():
+    """string_last_index_of: in 'abcba' (97,98,99,98,97), last 'b' (98) is at idx 3, missing -1."""
+    src = """
+    fn main() -> i32 {
+        let s = string_new();
+        let n0 = string_push(s, 0, 97);
+        let n1 = string_push(s, n0, 98);
+        let n2 = string_push(s, n1, 99);
+        let n3 = string_push(s, n2, 98);
+        let n4 = string_push(s, n3, 97);
+        let last_b = string_last_index_of(s, n4, 98);
+        let last_z = string_last_index_of(s, n4, 122);
+        // last_b = 3; last_z = -1; assert via if-chain to 42.
+        if last_b == 3 {
+            if last_z == 0 - 1 { 42 } else { 1 }
+        } else { 2 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42 (last_b=3, last_z=-1), got {code}"
+
+
 def test_stdlib_range_min_max():
     """range_to_vec(3, 8) -> [3,4,5,6,7]; min=3, max=7, sum=25.
     Asserts via chained ifs that fit in the 8-bit Linux exit code."""

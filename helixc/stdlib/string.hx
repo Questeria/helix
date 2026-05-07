@@ -23,6 +23,9 @@
 //   string_to_int(start, len)               -> i32   parses decimal int from slice;
 //                                                    accepts optional leading '-';
 //                                                    non-digit bytes are skipped silently.
+//   string_ends_with(s, sn, suf, sufn)      -> i32   1 if s ends with suf, 0 otherwise.
+//   string_count_byte(start, len, byte)     -> i32   number of occurrences of byte in slice.
+//   string_last_index_of(start, len, byte)  -> i32   last index of byte, -1 if missing.
 //
 // License: Apache 2.0
 
@@ -117,6 +120,43 @@ fn string_from_int(n: i32) -> i32 {
         }
         if neg == 1 { count + 1 } else { count }
     }
+}
+
+@pure
+fn string_ends_with(s: i32, sn: i32, suf: i32, sufn: i32) -> i32 {
+    if sn < sufn { 0 }
+    else {
+        let off: i32 = sn - sufn;
+        let mut i: i32 = 0;
+        let mut ok: i32 = 1;
+        while i < sufn {
+            if __arena_get(s + off + i) != __arena_get(suf + i) { ok = 0; }
+            i = i + 1;
+        }
+        ok
+    }
+}
+
+@pure
+fn string_count_byte(start: i32, len: i32, byte: i32) -> i32 {
+    let mut i: i32 = 0;
+    let mut n: i32 = 0;
+    while i < len {
+        if __arena_get(start + i) == byte { n = n + 1; }
+        i = i + 1;
+    }
+    n
+}
+
+@pure
+fn string_last_index_of(start: i32, len: i32, byte: i32) -> i32 {
+    let mut i: i32 = 0;
+    let mut found: i32 = 0 - 1;
+    while i < len {
+        if __arena_get(start + i) == byte { found = i; }
+        i = i + 1;
+    }
+    found
 }
 
 @pure
