@@ -428,6 +428,18 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
         let v = tok_p1(tok_base, k);
         cur_advance(sb);
         mk_node(35, v, 0, 0)
+    } else { if t == 34 {
+        // Approach A Stage 2.1: TK_INTLIT_U32 (tag 34) -> AST_INTLIT_U32
+        // (tag 36). Codegen emits identical bits to AST_INTLIT (i32) —
+        // x86 `mov eax, imm32` works for both signed and unsigned,
+        // overflow wraps mod 2^32 either way. The DISTINCT AST tag
+        // matters for type-tracking: expr_type returns 6 (u32) so
+        // u32 values don't accidentally match i32 in 4-way dispatch
+        // sites that care about signedness (DIV/MOD/comparison —
+        // Stage 2.2 wires the unsigned variants).
+        let v = tok_p1(tok_base, k);
+        cur_advance(sb);
+        mk_node(36, v, 0, 0)
     } else { if t == 25 {
         // String literal (TK_STRLIT). Token slots:
         //   payload   = body byte_start (in the source buffer)
@@ -630,7 +642,7 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
             };
         };
         mk_node(99, t, 0, 0)
-    }}}}}}}
+    }}}}}}}}
 }
 
 // --------------------------------------------------------------
@@ -811,7 +823,9 @@ fn parse_fn_decl(tok_base: i32, sb: i32) -> i32 {
                     else { if b1 == 51 { if b2 == 50 { 1 } else { 0 } } else { 0 } }
                 } else { if b0 == 105 {
                     if b1 == 54 { if b2 == 52 { 3 } else { 0 } } else { 0 }
-                } else { 0 } }
+                } else { if b0 == 117 {                  // 'u' — Stage 2.1
+                    if b1 == 51 { if b2 == 50 { 6 } else { 0 } } else { 0 }
+                } else { 0 } } }
             } else { 0 };
             let new_param = mk_node(18, pname_s, pname_l, 0);
             __arena_push(p_ty);   // p4: type tag
@@ -843,7 +857,9 @@ fn parse_fn_decl(tok_base: i32, sb: i32) -> i32 {
             else { if b1 == 51 { if b2 == 50 { 1 } else { 0 } } else { 0 } }
         } else { if b0 == 105 {
             if b1 == 54 { if b2 == 52 { 3 } else { 0 } } else { 0 }
-        } else { 0 } }
+        } else { if b0 == 117 {                  // 'u' — Stage 2.1
+            if b1 == 51 { if b2 == 50 { 6 } else { 0 } } else { 0 }
+        } else { 0 } } }
     } else { 0 };
     cur_advance(sb);     // '{'
     let body = parse_expr(tok_base, sb);

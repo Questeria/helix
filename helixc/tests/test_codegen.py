@@ -2152,6 +2152,13 @@ fn main() -> i32 {{
         "i64 == i64 via 64-bit cmp"
     assert compile_and_exec("if 5_i64 > 10_i64 { 0 } else { 42 }") == 42, \
         "i64 > i64 via 64-bit cmp (false branch)"
+    # Approach A Stage 2.1: u32 literal codegen. `42_u32` parses to
+    # AST_INTLIT_U32 (tag 36) and emits `mov eax, imm32` — the 32-bit
+    # mov auto-zero-extends rax, exactly matching u32 semantics. The
+    # distinct AST tag is for type tracking via expr_type (returns 6
+    # for u32) so future Stage 2.2 can dispatch unsigned variants of
+    # DIV/MOD/comparison. Functionally: 42_u32 still exits 42.
+    assert compile_and_exec("42_u32") == 42, "u32 literal exits 42"
     # Phase 1.10 step 7l: f64 bit-access primitives.
     # __bits_hi_f64(1.0_f64) -> high 32 of 0x3FF0000000000000 = 0x3FF00000.
     # /16777216 = 0x3F = 63.

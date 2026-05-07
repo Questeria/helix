@@ -894,6 +894,7 @@ fn expr_type(idx: i32, bind_state: i32, bn_state: i32) -> i32 {
     if t == 27 { 1 }                                  // AST_FLOATLIT (f32)
     else { if t == 34 { 2 }                           // AST_FLOATLIT_F64
     else { if t == 35 { 3 }                           // AST_INTLIT_I64
+    else { if t == 36 { 6 }                           // AST_INTLIT_U32 (Stage 2.1)
     else { if t == 0 { 0 }                            // AST_INTLIT (i32)
     else { if t == 1 {                                // AST_VAR
         bind_lookup_type(bind_state, p1, p2)
@@ -1018,7 +1019,7 @@ fn expr_type(idx: i32, bind_state: i32, bn_state: i32) -> i32 {
                 }
             }
         }
-    } else { 0 }}}}}}}}}}}}}}}}}}}}}}}
+    } else { 0 }}}}}}}}}}}}}}}}}}}}}}}}
 }
 
 // Phase 1.10 step 5c: type-inference on AST nodes. Returns 1 if the
@@ -2539,6 +2540,14 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         // arithmetic / comparisons / let-bindings see the full width.
         let hi32 = if p1 < 0 { 0 - 1 } else { 0 };
         emit_movabs_rax_imm64(p1, hi32)
+    } else { if t == 36 {
+        // Approach A Stage 2.1: AST_INTLIT_U32 (tag 36). p1 = i32-encoded
+        // bits of the u32 value. Codegen identical to AST_INTLIT (i32):
+        // `mov eax, imm32` (5 bytes). x86 32-bit ops zero-extend the
+        // upper 32 bits of rax, so the u32 lands in low 32 of rax with
+        // high half cleared — exactly what u32 wants. The DISTINCT AST
+        // tag is for type tracking via expr_type, not codegen.
+        emit_ast_int(p1)
     } else { if t == 27 {
         // AST_FLOATLIT (Phase 1.10 step 3d, f32). Phase 1.10 step 7b
         // also reuses this branch for AST_FLOATLIT_F64 (tag 34) — the
@@ -3479,7 +3488,7 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         // returns 0. Lex/parse errors that produce AST_ERR cause the
         // resulting binary to SIGILL — clear signal vs. silent 0.
         emit_ud2_trap()
-    }}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}
+    }}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}
 }
 
 // --------------------------------------------------------------

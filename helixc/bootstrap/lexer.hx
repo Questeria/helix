@@ -241,6 +241,7 @@ fn lex_int(src_start: i32, src_len: i32, pos: i32) -> i32 {
     // codegen (step 7b+) instead of 4-byte f32.
     let mut is_f64_suffix: i32 = 0;
     let mut is_i64_suffix: i32 = 0;
+    let mut is_u32_suffix: i32 = 0;
     if p + 3 < end {
         let b0 = __arena_get(p);
         if b0 == 95 {   // '_'
@@ -275,6 +276,20 @@ fn lex_int(src_start: i32, src_len: i32, pos: i32) -> i32 {
                     };
                 };
             };
+            // Stage 2.1 (Approach A): _u32 suffix produces TK_INTLIT_U32
+            // (tag 34). Codegen treats u32 literals identically to i32
+            // (`mov eax, imm32`) — overflow wraps mod 2^32 for both, and
+            // the SAME x86 add/sub/mul instructions work for signed and
+            // unsigned operands. Only DIV/MOD and comparison ops differ
+            // (idiv vs div, setl vs setb), which Stage 2.2 will dispatch.
+            if b1 == 117 {                          // 'u'
+                if b2 == 51 {
+                    if b3 == 50 {                   // _u32
+                        p = p + 4;
+                        is_u32_suffix = 1;
+                    };
+                };
+            };
         };
     }
     if is_float == 1 {
@@ -287,8 +302,10 @@ fn lex_int(src_start: i32, src_len: i32, pos: i32) -> i32 {
     } else {
         let length = p - pos;
         // Stage 1: TK_INTLIT_I64 (tag 33) for _i64-suffixed literals;
+        // Stage 2.1: TK_INTLIT_U32 (tag 34) for _u32-suffixed literals;
         // TK_INT (tag 1) for plain or _i32-suffixed.
-        let tk = if is_i64_suffix == 1 { 33 } else { 1 };
+        let tk = if is_i64_suffix == 1 { 33 }
+                 else { if is_u32_suffix == 1 { 34 } else { 1 } };
         push_token(tk, value, pos, length);
     };
     p
