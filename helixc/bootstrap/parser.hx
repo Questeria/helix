@@ -888,7 +888,22 @@ fn parse_fn_decl(tok_base: i32, sb: i32) -> i32 {
                 let b1 = __arena_get(ty_s + 1);
                 if b0 == 117 { if b1 == 56 { 7 } else { 0 } }
                 else { if b0 == 105 { if b1 == 56 { 10 } else { 0 } } else { 0 } }
-            } else { 0 } };
+            } else { if ty_l == 4 {
+                // Stage 1.5: 4-byte type idents — `bf16` (98 102 49 54) -> 4.
+                // bf16 is the brain-float-16 dtype: truncated f32 (drop low
+                // 16 bits of mantissa). Codegen treats bf16 bindings as
+                // i32-shaped storage with low 16 bits zeroed; literal
+                // truncation deferred to a follow-on (or to user code via
+                // bit-masked __bits_of_f32).
+                let b0 = __arena_get(ty_s);
+                let b1 = __arena_get(ty_s + 1);
+                let b2 = __arena_get(ty_s + 2);
+                let b3 = __arena_get(ty_s + 3);
+                if b0 == 98 {
+                    if b1 == 102 { if b2 == 49 { if b3 == 54 { 4 } else { 0 } } else { 0 } }
+                    else { 0 }
+                } else { 0 }
+            } else { 0 } } };
             let new_param = mk_node(18, pname_s, pname_l, 0);
             __arena_push(p_ty);   // p4: type tag
             if params_head == 0 {
@@ -932,7 +947,17 @@ fn parse_fn_decl(tok_base: i32, sb: i32) -> i32 {
         let b1 = __arena_get(rt_s + 1);
         if b0 == 117 { if b1 == 56 { 7 } else { 0 } }
         else { if b0 == 105 { if b1 == 56 { 10 } else { 0 } } else { 0 } }
-    } else { 0 } };
+    } else { if rt_l == 4 {
+        // Stage 1.5: 4-byte type idents — `bf16` -> 4.
+        let b0 = __arena_get(rt_s);
+        let b1 = __arena_get(rt_s + 1);
+        let b2 = __arena_get(rt_s + 2);
+        let b3 = __arena_get(rt_s + 3);
+        if b0 == 98 {
+            if b1 == 102 { if b2 == 49 { if b3 == 54 { 4 } else { 0 } } else { 0 } }
+            else { 0 }
+        } else { 0 }
+    } else { 0 } } };
     cur_advance(sb);     // '{'
     let body = parse_expr(tok_base, sb);
     cur_advance(sb);     // '}'

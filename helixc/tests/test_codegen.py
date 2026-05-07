@@ -2217,6 +2217,16 @@ fn main() -> i32 {{
     assert compile_and_exec(
         "fn main() -> i32 { let a: i16 = 100_i16 ; let b: u16 = 50_u16 ; 42 }"
     ) == 42, "i16 + u16 LET annotations parse"
+    # Approach A Stage 1.5 (minimal): bf16 type-ident scaffold. The
+    # 4-byte type ident `bf16` (98 102 49 54) is recognized in both
+    # param and ret positions, mapped to type tag 4 (bf16) per the
+    # namespace. No literal suffix yet (needs 5-byte _bf16 lex
+    # extension). Bound values come from f32 literals — the runtime
+    # value is f32-shaped until literal truncation lands. This test
+    # just confirms the type-ident PARSES and compiles.
+    assert compile_and_exec(
+        "fn main() -> i32 { let x: bf16 = 0.5_f32 ; 42 }"
+    ) == 42, "bf16 LET annotation parses + compiles via i32-shaped storage"
     # Approach A Stage 2.4: u64 minimal scaffold. u64 literals lex via
     # `_u64` 4-byte suffix, parse to AST_INTLIT_U64 (tag 38), expr_type
     # returns 9. Codegen emits `movabs rax, imm64` (8 bytes) so the full
