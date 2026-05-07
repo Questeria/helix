@@ -6122,6 +6122,62 @@ def test_stdlib_vec_swap_inplace():
     assert code == 42, f"expected 42, got {code}"
 
 
+def test_stdlib_vec_l1_distance():
+    """l1_distance([3,7,2],[1,4,8]) = |2|+|3|+|-6| = 11. Encoded 11*4-2 = 42."""
+    src = """
+    fn main() -> i32 {
+        let a = vec_new();
+        let a0 = vec_push(a, 0, 3);
+        let a1 = vec_push(a, a0, 7);
+        let a2 = vec_push(a, a1, 2);
+        let b = vec_new();
+        let b0 = vec_push(b, 0, 1);
+        let b1 = vec_push(b, b0, 4);
+        let b2 = vec_push(b, b1, 8);
+        vec_l1_distance(a, b, a2) * 4 - 2
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_vec_l2_squared_distance():
+    """l2_sq_distance([5,2],[1,5]) = 16 + 9 = 25. Encoded 25 + 17 = 42."""
+    src = """
+    fn main() -> i32 {
+        let a = vec_new();
+        let a0 = vec_push(a, 0, 5);
+        let a1 = vec_push(a, a0, 2);
+        let b = vec_new();
+        let b0 = vec_push(b, 0, 1);
+        let b1 = vec_push(b, b0, 5);
+        vec_l2_squared_distance(a, b, a1) + 17
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_vec_max_abs():
+    """max_abs([3,-7,5,-8,2]) = 8. Encoded 8*5+2 = 42. Empty -> 0."""
+    src = """
+    fn main() -> i32 {
+        let v = vec_new();
+        let n0 = vec_push(v, 0, 3);
+        let n1 = vec_push(v, n0, 0 - 7);
+        let n2 = vec_push(v, n1, 5);
+        let n3 = vec_push(v, n2, 0 - 8);
+        let n4 = vec_push(v, n3, 2);
+        let m = vec_max_abs(v, n4);
+        let empty_v = vec_new();
+        let mz = vec_max_abs(empty_v, 0);
+        m * 5 + 2 + mz
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
 def test_impl_inherent_method_basic():
     """Phase 1.8: inherent impl block. `impl Type { fn method(self) }` lifts
     to `Type__method`. `obj.method(args)` rewrites to `Type__method(obj, args)`."""

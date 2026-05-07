@@ -40,6 +40,9 @@
 //                                                 Useful for zero/constant init.
 //   vec_swap_inplace(start, i, j)        -> i32   swap elems at indices i and j; returns start.
 //                                                 Sort-step primitive.
+//   vec_l1_distance(a, b, count)         -> i32   sum of |a[i] - b[i]| (L1 distance / Manhattan).
+//   vec_l2_squared_distance(a, b, count) -> i32   sum of (a[i] - b[i])^2 (squared Euclidean).
+//   vec_max_abs(start, count)            -> i32   max of |v[i]| (Linf norm proxy; 0 if empty).
 //
 // License: Apache 2.0
 
@@ -397,4 +400,41 @@ fn vec_swap_inplace(start: i32, i: i32, j: i32) -> i32 {
     __arena_set(start + i, b);
     __arena_set(start + j, a);
     start
+}
+
+@pure
+fn vec_l1_distance(a: i32, b: i32, count: i32) -> i32 {
+    let mut i: i32 = 0;
+    let mut acc: i32 = 0;
+    while i < count {
+        let d = __arena_get(a + i) - __arena_get(b + i);
+        if d < 0 { acc = acc - d; } else { acc = acc + d; }
+        i = i + 1;
+    }
+    acc
+}
+
+@pure
+fn vec_l2_squared_distance(a: i32, b: i32, count: i32) -> i32 {
+    let mut i: i32 = 0;
+    let mut acc: i32 = 0;
+    while i < count {
+        let d = __arena_get(a + i) - __arena_get(b + i);
+        acc = acc + d * d;
+        i = i + 1;
+    }
+    acc
+}
+
+@pure
+fn vec_max_abs(start: i32, count: i32) -> i32 {
+    let mut i: i32 = 0;
+    let mut best: i32 = 0;
+    while i < count {
+        let v = __arena_get(start + i);
+        let av = if v < 0 { 0 - v } else { v };
+        if av > best { best = av; }
+        i = i + 1;
+    }
+    best
 }
