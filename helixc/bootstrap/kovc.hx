@@ -821,6 +821,22 @@ fn is_f32_expr(idx: i32, bind_state: i32, bn_state: i32) -> i32 {
         let lt = is_f32_expr(then_idx, bind_state, bn_state);
         let rt = is_f32_expr(else_idx, bind_state, bn_state);
         if lt == 1 { if rt == 1 { 1 } else { 0 } } else { 0 }
+    } else { if t == 8 {                        // AST_LET (audit cycle 2 fix #3)
+        // The let-expression's type is the type of its body (not the
+        // bound value's type). p3 = body_idx; recurse on it. Note: the
+        // bind_state at the time of this static type-inference call may
+        // not yet reflect the binding (it gets pushed during codegen),
+        // so an AST_VAR reference inside the body to the bound name
+        // will fall through to default 0 here. That's a known
+        // approximation; the AST_LET codegen path itself uses
+        // is_f32_expr on the value AST to set val_ty correctly, and
+        // post-codegen reads of the var get the right type via
+        // bind_lookup_type.
+        let body_idx = __arena_get(idx + 3);
+        is_f32_expr(body_idx, bind_state, bn_state)
+    } else { if t == 12 {                       // AST_LET_MUT
+        let body_idx = __arena_get(idx + 3);
+        is_f32_expr(body_idx, bind_state, bn_state)
     } else { if t == 16 {                       // AST_CALL
         // Step 5i: __i32_to_f32 starts with `__i` so it doesn't match
         // the cheap `__f*` prefix check below — explicit byte_eq
@@ -893,7 +909,7 @@ fn is_f32_expr(idx: i32, bind_state: i32, bn_state: i32) -> i32 {
         if l == 1 { if r == 1 { 1 } else { 0 } } else { 0 }
     } else { if t == 9 {                        // AST_NEG: type follows inner
         is_f32_expr(p1, bind_state, bn_state)
-    } else { 0 }}}}}}}}}
+    } else { 0 }}}}}}}}}}}
 }
 
 // Phase 1.10 step 7d: is_f64_expr — recursive type predicate for f64.
@@ -921,6 +937,12 @@ fn is_f64_expr(idx: i32, bind_state: i32, bn_state: i32) -> i32 {
         let lt = is_f64_expr(then_idx, bind_state, bn_state);
         let rt = is_f64_expr(else_idx, bind_state, bn_state);
         if lt == 1 { if rt == 1 { 1 } else { 0 } } else { 0 }
+    } else { if t == 8 {                        // AST_LET (audit cycle 2 fix #3)
+        let body_idx = __arena_get(idx + 3);
+        is_f64_expr(body_idx, bind_state, bn_state)
+    } else { if t == 12 {                       // AST_LET_MUT
+        let body_idx = __arena_get(idx + 3);
+        is_f64_expr(body_idx, bind_state, bn_state)
     } else { if t == 16 {                       // AST_CALL
         // Step 7e: __f32_to_f64 returns f64. Explicit byte_eq against
         // the installed name slot. Step 7h: __dsqrt also returns f64.
@@ -976,7 +998,7 @@ fn is_f64_expr(idx: i32, bind_state: i32, bn_state: i32) -> i32 {
         if l == 1 { if r == 1 { 1 } else { 0 } } else { 0 }
     } else { if t == 9 {                        // AST_NEG: type follows inner
         is_f64_expr(p1, bind_state, bn_state)
-    } else { 0 }}}}}}}}}
+    } else { 0 }}}}}}}}}}}
 }
 
 // Phase 1.10 step 5c follow-on: fn_type_table maps fn names to their
