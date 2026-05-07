@@ -860,6 +860,161 @@ fn is_underscore_f_call(name_start: i32, name_len: i32) -> i32 {
     }
 }
 
+// Stage 1.6: unified type-tag lookup. Returns the type tag of an AST
+// expression: 0=i32, 1=f32, 2=f64, 3=i64. Generalizes the three
+// sibling predicates (is_f32_expr, is_f64_expr, is_i64_expr) into one
+// recursive descent. Closed-world: any AST tag not explicitly handled
+// returns 0 (i32 default) — same fall-through behavior the predicates
+// had. The predicates below are now thin wrappers calling expr_type
+// and comparing the returned tag.
+//
+// Type-tag namespace (current and reserved):
+//   0  = i32   (default integer)
+//   1  = f32   (single-precision float)
+//   2  = f64   (double-precision float)
+//   3  = i64   (Stage 1)
+//   4  = bf16  (Stage 1.5, reserved)
+//   5  = f16   (Stage 1.5, reserved)
+//   6  = u8    (Stage 2, reserved)
+//   7  = u16   (Stage 2, reserved)
+//   8  = u32   (Stage 2, reserved)
+//   9  = u64   (Stage 2, reserved)
+//  10 = i8    (Stage 2, reserved)
+//  11 = i16   (Stage 2, reserved)
+//  12+ reserved for future use; do not reassign.
+//
+// Mismatched binary-op operands return 0 (i32 default). This is fine
+// because codegen's 4-way dispatch traps mismatches with ud2 anyway —
+// the tag returned here informs upstream (e.g., AST_LET's val_ty),
+// not the trap-on-mismatch logic at each binop site.
+fn expr_type(idx: i32, bind_state: i32, bn_state: i32) -> i32 {
+    let t = __arena_get(idx);
+    let p1 = __arena_get(idx + 1);
+    let p2 = __arena_get(idx + 2);
+    if t == 27 { 1 }                                  // AST_FLOATLIT (f32)
+    else { if t == 34 { 2 }                           // AST_FLOATLIT_F64
+    else { if t == 35 { 3 }                           // AST_INTLIT_I64
+    else { if t == 0 { 0 }                            // AST_INTLIT (i32)
+    else { if t == 1 {                                // AST_VAR
+        bind_lookup_type(bind_state, p1, p2)
+    } else { if t == 7 {                              // AST_IF
+        let then_idx = p2;
+        let else_idx = __arena_get(idx + 3);
+        let lt = expr_type(then_idx, bind_state, bn_state);
+        let rt = expr_type(else_idx, bind_state, bn_state);
+        if lt == rt { lt } else { 0 }
+    } else { if t == 8 {                              // AST_LET
+        let body_idx = __arena_get(idx + 3);
+        expr_type(body_idx, bind_state, bn_state)
+    } else { if t == 12 {                             // AST_LET_MUT
+        let body_idx = __arena_get(idx + 3);
+        expr_type(body_idx, bind_state, bn_state)
+    } else { if t == 13 {                             // AST_SEQ
+        expr_type(p2, bind_state, bn_state)
+    } else { if t == 11 {                             // AST_ASSIGN
+        let value_idx = __arena_get(idx + 3);
+        expr_type(value_idx, bind_state, bn_state)
+    } else { if t == 9 {                              // AST_NEG
+        expr_type(p1, bind_state, bn_state)
+    } else { if t == 26 {                             // AST_BNOT
+        expr_type(p1, bind_state, bn_state)
+    } else { if t == 32 {                             // AST_SHL
+        expr_type(p1, bind_state, bn_state)
+    } else { if t == 33 {                             // AST_SHR
+        expr_type(p1, bind_state, bn_state)
+    } else { if t == 2 {                              // AST_ADD
+        let l = expr_type(p1, bind_state, bn_state);
+        let r = expr_type(p2, bind_state, bn_state);
+        if l == r { l } else { 0 }
+    } else { if t == 3 {                              // AST_SUB
+        let l = expr_type(p1, bind_state, bn_state);
+        let r = expr_type(p2, bind_state, bn_state);
+        if l == r { l } else { 0 }
+    } else { if t == 4 {                              // AST_MUL
+        let l = expr_type(p1, bind_state, bn_state);
+        let r = expr_type(p2, bind_state, bn_state);
+        if l == r { l } else { 0 }
+    } else { if t == 5 {                              // AST_DIV
+        let l = expr_type(p1, bind_state, bn_state);
+        let r = expr_type(p2, bind_state, bn_state);
+        if l == r { l } else { 0 }
+    } else { if t == 24 {                             // AST_MOD
+        let l = expr_type(p1, bind_state, bn_state);
+        let r = expr_type(p2, bind_state, bn_state);
+        if l == r { l } else { 0 }
+    } else { if t == 28 {                             // AST_BAND
+        let l = expr_type(p1, bind_state, bn_state);
+        let r = expr_type(p2, bind_state, bn_state);
+        if l == r { l } else { 0 }
+    } else { if t == 29 {                             // AST_BOR
+        let l = expr_type(p1, bind_state, bn_state);
+        let r = expr_type(p2, bind_state, bn_state);
+        if l == r { l } else { 0 }
+    } else { if t == 30 {                             // AST_BXOR
+        let l = expr_type(p1, bind_state, bn_state);
+        let r = expr_type(p2, bind_state, bn_state);
+        if l == r { l } else { 0 }
+    } else { if t == 16 {                             // AST_CALL
+        // Builtin returning f64: explicit byte_eq matches first.
+        let widen_match = kovc_byte_eq(p1, p2, bn_f32_to_f64_s(bn_state), 12);
+        if widen_match == 1 { 2 }
+        else {
+            let widen_i_match = kovc_byte_eq(p1, p2, bn_i32_to_f64_s(bn_state), 12);
+            if widen_i_match == 1 { 2 }
+            else {
+                let pack_match = kovc_byte_eq(p1, p2, bn_f64_pack_s(bn_state), 10);
+                if pack_match == 1 { 2 }
+                else {
+                    let dsqrt_match = kovc_byte_eq(p1, p2, bn_dsqrt_s(bn_state), 7);
+                    if dsqrt_match == 1 { 2 }
+                    else {
+                        let dabs_match = kovc_byte_eq(p1, p2, bn_dabs_s(bn_state), 6);
+                        if dabs_match == 1 { 2 }
+                        else {
+                            let dmin_match = kovc_byte_eq(p1, p2, bn_dmin_s(bn_state), 6);
+                            if dmin_match == 1 { 2 }
+                            else {
+                                let dmax_match = kovc_byte_eq(p1, p2, bn_dmax_s(bn_state), 6);
+                                if dmax_match == 1 { 2 }
+                                else {
+                                    // Builtins returning i32 (conversion-out).
+                                    let f2i_match = kovc_byte_eq(p1, p2, bn_f32_to_i32_s(bn_state), 12);
+                                    if f2i_match == 1 { 0 }
+                                    else {
+                                        let f64_2i_match = kovc_byte_eq(p1, p2, bn_f64_to_i32_s(bn_state), 12);
+                                        if f64_2i_match == 1 { 0 }
+                                        else {
+                                            // Builtins returning f32 (conversion-in + narrow).
+                                            let i2f_match = kovc_byte_eq(p1, p2, bn_i32_to_f32_s(bn_state), 12);
+                                            if i2f_match == 1 { 1 }
+                                            else {
+                                                let nrw_match = kovc_byte_eq(p1, p2, bn_f64_to_f32_s(bn_state), 12);
+                                                if nrw_match == 1 { 1 }
+                                                else {
+                                                    // __f* prefix → f32 (catch-all
+                                                    // for transcendentals etc.).
+                                                    let prefix_match = is_underscore_f_call(p1, p2);
+                                                    if prefix_match == 1 { 1 }
+                                                    else {
+                                                        // User-defined fn: fn_type_table.
+                                                        let fts = bn_fn_type_state(bn_state);
+                                                        if fts == 0 { 0 }
+                                                        else { fn_type_table_lookup(fts, p1, p2) }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    } else { 0 }}}}}}}}}}}}}}}}}}}}}}}
+}
+
 // Phase 1.10 step 5c: type-inference on AST nodes. Returns 1 if the
 // expression's type is f32, else 0 (i32 default). Recursive descent;
 // the recursion stops at literals, variables, and calls. Used by the
@@ -869,6 +1024,9 @@ fn is_underscore_f_call(name_start: i32, name_len: i32) -> i32 {
 // bn_state is needed so AST_CALL can look up user-named fn return
 // types via the fn_type_table — without that we'd only catch the
 // `__f*` builtin prefix and miss user-defined f32 functions.
+//
+// Stage 1.6: this is now a thin wrapper around expr_type. Kept for
+// API compatibility at all dispatch sites.
 fn is_f32_expr(idx: i32, bind_state: i32, bn_state: i32) -> i32 {
     let t = __arena_get(idx);
     let p1 = __arena_get(idx + 1);
