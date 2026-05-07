@@ -127,3 +127,51 @@ fn hashmap_size(start: i32, cap: i32) -> i32 {
     }
     count
 }
+
+// hashmap_clear(start, cap) -> i32
+//   Empty every bucket in place by zeroing the occupancy flag. Key/value
+//   slots are not cleared (they're dead until the bucket is reused). Returns
+//   start so the caller can chain. NOT @pure (arena mutation).
+fn hashmap_clear(start: i32, cap: i32) -> i32 {
+    let mut i: i32 = 0;
+    while i < cap {
+        __arena_set(start + i * 3, 0);
+        i = i + 1;
+    }
+    start
+}
+
+// hashmap_keys(start, cap) -> i32
+//   Allocate a fresh arena slice and push the key of every occupied bucket
+//   into it (in bucket order, NOT insertion order). Returns the start index
+//   of the new slice; pair with hashmap_size(start, cap) for the count.
+//   NOT @pure (arena push).
+fn hashmap_keys(start: i32, cap: i32) -> i32 {
+    let dst = __arena_len();
+    let mut i: i32 = 0;
+    while i < cap {
+        let base = start + i * 3;
+        if __arena_get(base) == 1 {
+            __arena_push(__arena_get(base + 1));
+        }
+        i = i + 1;
+    }
+    dst
+}
+
+// hashmap_values(start, cap) -> i32
+//   Companion to hashmap_keys: pushes the value of every occupied bucket
+//   into a fresh arena slice. Bucket order matches hashmap_keys exactly,
+//   so the pair is index-aligned. NOT @pure (arena push).
+fn hashmap_values(start: i32, cap: i32) -> i32 {
+    let dst = __arena_len();
+    let mut i: i32 = 0;
+    while i < cap {
+        let base = start + i * 3;
+        if __arena_get(base) == 1 {
+            __arena_push(__arena_get(base + 2));
+        }
+        i = i + 1;
+    }
+    dst
+}

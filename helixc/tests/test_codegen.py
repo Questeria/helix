@@ -2216,6 +2216,30 @@ fn main() -> i32 {{
         "fn main() -> i32 { let a: u64 = 1000000_u64 ; let b: u64 = 1000_u64 ; "
         "let c: u64 = a * b ; 42 }"
     ) == 42, "u64 * u64 LET-bound large value compiles"
+    # Stage 2.4b u64 DIV / MOD dispatch. u64 / u64 uses
+    # `xor rdx, rdx; div rcx` (REX.W) via emit_div_rax_rcx_64_u.
+    # u64 % u64 reads the remainder from rdx.
+    assert compile_and_exec("84_u64 / 2_u64") == 42, \
+        "u64 / u64 via REX.W unsigned div"
+    assert compile_and_exec("142_u64 % 100_u64") == 42, \
+        "u64 % u64 via REX.W unsigned div + mov rax, rdx"
+    assert compile_and_exec("1000_u64 / 7_u64 * 0_u64 + 42_u64") == 42, \
+        "u64 / u64 inside larger expression"
+    # Stage 2.4b u64 comparisons. LT/GT/LE/GE use unsigned setb/seta/
+    # setbe/setae (REX.W cmp + setX). EQ/NE reuse i64 helpers (signedness-
+    # agnostic for 64-bit equality). All gated by ud2 on mismatch.
+    assert compile_and_exec("if 5_u64 < 10_u64 { 42 } else { 0 }") == 42, \
+        "u64 < u64 via REX.W cmp + setb"
+    assert compile_and_exec("if 10_u64 > 5_u64 { 42 } else { 0 }") == 42, \
+        "u64 > u64 via REX.W cmp + seta"
+    assert compile_and_exec("if 5_u64 <= 5_u64 { 42 } else { 0 }") == 42, \
+        "u64 <= u64 via REX.W cmp + setbe"
+    assert compile_and_exec("if 5_u64 >= 5_u64 { 42 } else { 0 }") == 42, \
+        "u64 >= u64 via REX.W cmp + setae"
+    assert compile_and_exec("if 42_u64 == 42_u64 { 42 } else { 0 }") == 42, \
+        "u64 == u64 via REX.W cmp + sete"
+    assert compile_and_exec("if 42_u64 != 0_u64 { 42 } else { 0 }") == 42, \
+        "u64 != u64 via REX.W cmp + setne"
     # Phase 1.10 step 7l: f64 bit-access primitives.
     # __bits_hi_f64(1.0_f64) -> high 32 of 0x3FF0000000000000 = 0x3FF00000.
     # /16777216 = 0x3F = 63.
@@ -8128,6 +8152,72 @@ def test_stdlib_ti1d_eq_count():
     """
     code = compile_and_run(src)
     assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_hashmap_clear():
+    """hashmap_clear empties every bucket so a fresh put-then-get round-trips."""
+    src = """
+    fn main() -> i32 {
+        let m = hashmap_new(8);
+        hashmap_put(m, 8, 1, 99);
+        hashmap_put(m, 8, 2, 99);
+        hashmap_put(m, 8, 3, 99);
+        hashmap_clear(m, 8);
+        let s_after = hashmap_size(m, 8);
+        let h_stale = hashmap_has(m, 8, 1);
+        hashmap_put(m, 8, 7, 42);
+        let v = hashmap_get(m, 8, 7, 0);
+        v + s_after * 100 + h_stale * 100
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42 (size_after=0, has_stale=0, get=42), got {code}"
+
+
+def test_stdlib_hashmap_keys():
+    """hashmap_keys allocates a fresh slice with all occupied keys; size pairs the count."""
+    src = """
+    fn main() -> i32 {
+        let m = hashmap_new(8);
+        hashmap_put(m, 8, 5, 100);
+        hashmap_put(m, 8, 11, 100);
+        hashmap_put(m, 8, 26, 100);
+        let n = hashmap_size(m, 8);
+        let ks = hashmap_keys(m, 8);
+        let mut sum: i32 = 0;
+        let mut i: i32 = 0;
+        while i < n {
+            sum = sum + __arena_get(ks + i);
+            i = i + 1;
+        }
+        sum
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42 (5+11+26), got {code}"
+
+
+def test_stdlib_hashmap_values():
+    """hashmap_values mirrors hashmap_keys: bucket-order, index-aligned."""
+    src = """
+    fn main() -> i32 {
+        let m = hashmap_new(8);
+        hashmap_put(m, 8, 1, 7);
+        hashmap_put(m, 8, 2, 14);
+        hashmap_put(m, 8, 3, 21);
+        let n = hashmap_size(m, 8);
+        let vs = hashmap_values(m, 8);
+        let mut sum: i32 = 0;
+        let mut i: i32 = 0;
+        while i < n {
+            sum = sum + __arena_get(vs + i);
+            i = i + 1;
+        }
+        sum
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42 (7+14+21), got {code}"
 
 
 def main():
