@@ -7666,6 +7666,65 @@ def test_stdlib_vec_argsort():
     assert code == 42, f"expected 42, got {code}"
 
 
+def _zip_cmp_test(fn_name: str, expected_mask: list, factor: int, addend: int):
+    """Helper: assert vec_zip_<cmp>([10,5,7,5,9], [5,5,7,9,5]) produces
+    the given expected 0/1 mask, where sum * factor + addend == 42."""
+    a_pushes = "\n        ".join(
+        f"let a{i+1} = vec_push(a, a{i}, {v});"
+        for i, v in enumerate([10, 5, 7, 5, 9])
+    ).replace("a0", "0", 1)
+    b_pushes = "\n        ".join(
+        f"let b{i+1} = vec_push(b, b{i}, {v});"
+        for i, v in enumerate([5, 5, 7, 9, 5])
+    ).replace("b0", "0", 1)
+    src = f"""
+    fn main() -> i32 {{
+        let a = vec_new();
+        {a_pushes}
+        let b = __arena_len();
+        {b_pushes}
+        let dst = {fn_name}(a, b, a5);
+        vec_sum(dst, a5) * {factor} + {addend}
+    }}
+    """
+    code = compile_and_run(src)
+    expected_sum = sum(expected_mask)
+    assert expected_sum * factor + addend == 42, (
+        f"test design error: sum={expected_sum} factor={factor} addend={addend}"
+    )
+    assert code == 42, f"{fn_name}: expected 42, got {code}"
+
+
+def test_stdlib_vec_zip_lt():
+    """zip_lt([10,5,7,5,9], [5,5,7,9,5]) -> [0,0,0,1,0]. Sum=1.
+    Encoded: 1*40+2 = 42."""
+    _zip_cmp_test("vec_zip_lt", [0, 0, 0, 1, 0], 40, 2)
+
+
+def test_stdlib_vec_zip_gt():
+    """zip_gt([10,5,7,5,9], [5,5,7,9,5]) -> [1,0,0,0,1]. Sum=2.
+    Encoded: 2*20+2 = 42."""
+    _zip_cmp_test("vec_zip_gt", [1, 0, 0, 0, 1], 20, 2)
+
+
+def test_stdlib_vec_zip_le():
+    """zip_le([10,5,7,5,9], [5,5,7,9,5]) -> [0,1,1,1,0]. Sum=3.
+    Encoded: 3*14+0 = 42."""
+    _zip_cmp_test("vec_zip_le", [0, 1, 1, 1, 0], 14, 0)
+
+
+def test_stdlib_vec_zip_ge():
+    """zip_ge([10,5,7,5,9], [5,5,7,9,5]) -> [1,1,1,0,1]. Sum=4.
+    Encoded: 4*10+2 = 42."""
+    _zip_cmp_test("vec_zip_ge", [1, 1, 1, 0, 1], 10, 2)
+
+
+def test_stdlib_vec_zip_ne():
+    """zip_ne([10,5,7,5,9], [5,5,7,9,5]) -> [1,0,0,1,1]. Sum=3.
+    Encoded: 3*14+0 = 42."""
+    _zip_cmp_test("vec_zip_ne", [1, 0, 0, 1, 1], 14, 0)
+
+
 def main():
     tests = [(name, fn) for name, fn in globals().items()
              if name.startswith("test_") and callable(fn)]

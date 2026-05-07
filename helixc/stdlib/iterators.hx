@@ -748,3 +748,63 @@ fn vec_argsort(start: i32, count: i32) -> i32 {
     }
     s
 }
+
+// vec_zip_lt/gt/le/ge/ne(a, b, count): element-wise comparisons
+// returning 0/1 bool vecs. Companion to vec_zip_eq. Sum of result
+// = number of positions matching the predicate. Useful for masking,
+// metric counting (e.g. how many elements of `actual` are below
+// `target`), set-like operations.
+fn vec_zip_lt(a: i32, b: i32, count: i32) -> i32 {
+    let s: i32 = __arena_len();
+    let mut i: i32 = 0;
+    while i < count {
+        if __arena_get(a + i) < __arena_get(b + i) { __arena_push(1); }
+        else { __arena_push(0); };
+        i = i + 1;
+    }
+    s
+}
+
+fn vec_zip_gt(a: i32, b: i32, count: i32) -> i32 {
+    let s: i32 = __arena_len();
+    let mut i: i32 = 0;
+    while i < count {
+        if __arena_get(a + i) > __arena_get(b + i) { __arena_push(1); }
+        else { __arena_push(0); };
+        i = i + 1;
+    }
+    s
+}
+
+fn vec_zip_le(a: i32, b: i32, count: i32) -> i32 {
+    let s: i32 = __arena_len();
+    let mut i: i32 = 0;
+    while i < count {
+        if __arena_get(a + i) <= __arena_get(b + i) { __arena_push(1); }
+        else { __arena_push(0); };
+        i = i + 1;
+    }
+    s
+}
+
+fn vec_zip_ge(a: i32, b: i32, count: i32) -> i32 {
+    let s: i32 = __arena_len();
+    let mut i: i32 = 0;
+    while i < count {
+        if __arena_get(a + i) >= __arena_get(b + i) { __arena_push(1); }
+        else { __arena_push(0); };
+        i = i + 1;
+    }
+    s
+}
+
+fn vec_zip_ne(a: i32, b: i32, count: i32) -> i32 {
+    let s: i32 = __arena_len();
+    let mut i: i32 = 0;
+    while i < count {
+        if __arena_get(a + i) != __arena_get(b + i) { __arena_push(1); }
+        else { __arena_push(0); };
+        i = i + 1;
+    }
+    s
+}
