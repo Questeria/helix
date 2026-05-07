@@ -1460,3 +1460,55 @@ fn vec_eq(a: i32, an: i32, b: i32, bn: i32) -> i32 {
         eq
     }
 }
+
+// vec_min_pure(start, count): @pure. Smallest element. 0 if empty.
+@pure
+fn vec_min_pure(start: i32, count: i32) -> i32 {
+    if count == 0 { 0 }
+    else {
+        let mut i: i32 = 1;
+        let mut best: i32 = __arena_get(start);
+        while i < count {
+            let v = __arena_get(start + i);
+            if v < best { best = v; }
+            i = i + 1;
+        }
+        best
+    }
+}
+
+// vec_sum_pure(start, count): @pure. Sum of all elements. 0 if empty.
+@pure
+fn vec_sum_pure(start: i32, count: i32) -> i32 {
+    let mut i: i32 = 0;
+    let mut total: i32 = 0;
+    while i < count {
+        total = total + __arena_get(start + i);
+        i = i + 1;
+    }
+    total
+}
+
+// vec_dot_pure(a, b, count): @pure. Inner product (sum of a[i]*b[i]).
+@pure
+fn vec_dot_pure(a: i32, b: i32, count: i32) -> i32 {
+    let mut i: i32 = 0;
+    let mut total: i32 = 0;
+    while i < count {
+        total = total + __arena_get(a + i) * __arena_get(b + i);
+        i = i + 1;
+    }
+    total
+}
+
+// vec_clone_alloc(start, count): allocate a new vec containing a copy
+// of the input. Useful before in-place ops that need the original.
+fn vec_clone_alloc(start: i32, count: i32) -> i32 {
+    let s: i32 = __arena_len();
+    let mut i: i32 = 0;
+    while i < count {
+        __arena_push(__arena_get(start + i));
+        i = i + 1;
+    }
+    s
+}

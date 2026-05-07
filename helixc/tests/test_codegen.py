@@ -9894,6 +9894,61 @@ def test_stdlib_vec_last():
     assert code == 42, f"expected 42 (last=42, empty=0), got {code}"
 
 
+def test_stdlib_vec_min_pure():
+    """min_pure([42,99,100]) = 42."""
+    src = """
+    fn main() -> i32 {
+        let v = __arena_len();
+        __arena_push(42); __arena_push(99); __arena_push(100);
+        vec_min_pure(v, 3)
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_vec_sum_pure():
+    """sum_pure([10,15,17]) = 42."""
+    src = """
+    fn main() -> i32 {
+        let v = __arena_len();
+        __arena_push(10); __arena_push(15); __arena_push(17);
+        vec_sum_pure(v, 3)
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_vec_dot_pure():
+    """dot([3,4],[5,6]) = 15+24 = 39; +3=42."""
+    src = """
+    fn main() -> i32 {
+        let a = __arena_len();
+        __arena_push(3); __arena_push(4);
+        let b = __arena_len();
+        __arena_push(5); __arena_push(6);
+        vec_dot_pure(a, b, 2) + 3
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_vec_clone_alloc():
+    """clone_alloc([42,99]); first elem = 42."""
+    src = """
+    fn main() -> i32 {
+        let v = __arena_len();
+        __arena_push(42); __arena_push(99);
+        let r = vec_clone_alloc(v, 2);
+        __arena_get(r)
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
 def test_stdlib_ti1d_count_above():
     """count_above([1,5,3,8], 4) = 2; *21=42."""
     src = """
