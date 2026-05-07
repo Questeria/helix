@@ -39,6 +39,13 @@ Confirmed via 9+ probe experiments:
 - Adding a new arm to `parse_primary`, `emit_ast_code`, or `expr_type`.
 - Even pure dead code (e.g., `} else { if t == 99 { ... }` where
   TK 99 is never produced) triggers the failure.
+- **NEW (probe 10, 2026-05-07):** Adding a NEW `@pure` top-level fn
+  before `expr_type` (with no callers, no side effects, just a small
+  cascade returning literal type tags) ALSO triggers SIGILL in K2.
+  This is stronger than previously believed: the bug can be tripped
+  WITHOUT modifying any cascade — simply growing the kovc.hx source
+  past a threshold breaks self-host. Disproves "must modify cascade"
+  as a necessary condition.
 
 ## Failure modes
 
@@ -68,7 +75,16 @@ Two distinct failure modes observed:
   hardcoded reference might assume original layout. Not yet ruled out.
 - **Source-size threshold in Python helixc**: maybe Python's backend
   has a buffer that overflows when kovc.hx grows past a specific size.
-  Worth investigating.
+  **Strongly elevated by probe 10**: adding a fn that doesn't touch
+  any cascade still breaks self-host, suggesting the issue is sensitive
+  to total source size / total emitted-code size, not just cascade-arm
+  count.
+- **rel32 placeholder slot pool exhaustion**: helixc-Python has a finite
+  pool of forward-jump rel32 placeholders. Adding any new fn that emits
+  conditional branches (each `if` lowers to ~2 placeholders) eats slots.
+  If the pool wraps without proper book-keeping, an old jump's
+  displacement could be overwritten by a newer jump. Worth checking
+  helixc/backend/elf.py and codegen.py for any such bounded pool.
 
 ## Workarounds
 
