@@ -8175,6 +8175,73 @@ def test_stdlib_ti1d_l2_norm_sq():
     assert code == 42, f"expected 42, got {code}"
 
 
+def test_stdlib_vec_take_while():
+    """take_while([1,2,3,5,7,10], pivot=4) -> 3 (indices 0,1,2 are <4).
+    3 * 14 = 42."""
+    src = """
+    fn main() -> i32 {
+        let v = __arena_len();
+        __arena_push(1); __arena_push(2); __arena_push(3);
+        __arena_push(5); __arena_push(7); __arena_push(10);
+        vec_take_while(v, 6, 4) * 14
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_vec_drop_while():
+    """Same input as take_while. drop_while returns same index = 3.
+    Doubled = 6, +36 = 42."""
+    src = """
+    fn main() -> i32 {
+        let v = __arena_len();
+        __arena_push(1); __arena_push(2); __arena_push(3);
+        __arena_push(5); __arena_push(7); __arena_push(10);
+        vec_drop_while(v, 6, 4) * 2 + 36
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_vec_dedup_consecutive():
+    """dedup_consecutive([1,1,2,3,3,3,4]) -> [1,2,3,4]. Sum = 10. Times 4 + 2 = 42."""
+    src = """
+    fn main() -> i32 {
+        let v = __arena_len();
+        __arena_push(1); __arena_push(1); __arena_push(2);
+        __arena_push(3); __arena_push(3); __arena_push(3); __arena_push(4);
+        let dedup_start = vec_dedup_consecutive(v, 7);
+        let n = vec_count_distinct_consecutive(v, 7);
+        // Sum dedup_start[0..n] (= 1+2+3+4 = 10).
+        let mut total: i32 = 0;
+        let mut i: i32 = 0;
+        while i < n {
+            total = total + __arena_get(dedup_start + i);
+            i = i + 1;
+        }
+        total * 4 + 2
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_vec_count_distinct_consecutive():
+    """count_distinct_consecutive([1,1,2,3,3,3,4]) = 4. Times 10 + 2 = 42."""
+    src = """
+    fn main() -> i32 {
+        let v = __arena_len();
+        __arena_push(1); __arena_push(1); __arena_push(2);
+        __arena_push(3); __arena_push(3); __arena_push(3); __arena_push(4);
+        vec_count_distinct_consecutive(v, 7) * 10 + 2
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
 def test_stdlib_tf1d_l2_norm_sq():
     """tf1d_l2_norm_sq([3.0, 4.0]) = 9 + 16 = 25.0; bits top byte = 65."""
     src = """
@@ -8328,6 +8395,57 @@ def test_stdlib_hashmap_values():
     """
     code = compile_and_run(src)
     assert code == 42, f"expected 42 (7+14+21), got {code}"
+
+
+def test_stdlib_vec_product():
+    """vec_product over [2,3,7] = 42; empty vec returns 1 (multiplicative identity)."""
+    src = """
+    fn main() -> i32 {
+        let s = vec_new();
+        let n0 = vec_push(s, 0, 2);
+        let n1 = vec_push(s, n0, 3);
+        let n2 = vec_push(s, n1, 7);
+        let p = vec_product(s, n2);
+        let empty_p = vec_product(s, 0);
+        if empty_p == 1 { p } else { 0 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42 (2*3*7=42, empty=1), got {code}"
+
+
+def test_stdlib_vec_first():
+    """vec_first returns v[0] (or 0 if empty)."""
+    src = """
+    fn main() -> i32 {
+        let s = vec_new();
+        let n0 = vec_push(s, 0, 42);
+        let n1 = vec_push(s, n0, 99);
+        let n2 = vec_push(s, n1, 7);
+        let f = vec_first(s, n2);
+        let empty_f = vec_first(s, 0);
+        if empty_f == 0 { f } else { 0 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42 (first=42, empty=0), got {code}"
+
+
+def test_stdlib_vec_last():
+    """vec_last returns v[count-1] (or 0 if empty)."""
+    src = """
+    fn main() -> i32 {
+        let s = vec_new();
+        let n0 = vec_push(s, 0, 7);
+        let n1 = vec_push(s, n0, 13);
+        let n2 = vec_push(s, n1, 42);
+        let l = vec_last(s, n2);
+        let empty_l = vec_last(s, 0);
+        if empty_l == 0 { l } else { 0 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42 (last=42, empty=0), got {code}"
 
 
 def main():

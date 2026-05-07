@@ -808,3 +808,73 @@ fn vec_zip_ne(a: i32, b: i32, count: i32) -> i32 {
     }
     s
 }
+
+// vec_take_while(start, count, pivot): take elements while x[i] < pivot.
+// Stops at the FIRST element >= pivot. Returns the count of taken elements
+// (0..count). The taken slice is exactly start[0..returned_count]; no
+// new allocation. Common use: parse a sorted vec up to a threshold.
+@pure
+fn vec_take_while(start: i32, count: i32, pivot: i32) -> i32 {
+    let mut i: i32 = 0;
+    let mut found: i32 = 0;
+    let mut result: i32 = count;
+    while i < count {
+        if found == 0 {
+            if __arena_get(start + i) >= pivot {
+                result = i;
+                found = 1;
+            };
+        };
+        i = i + 1;
+    }
+    result
+}
+
+// vec_drop_while(start, count, pivot): symmetric to vec_take_while.
+// Returns the index of the FIRST element >= pivot (the "drop count").
+// Caller can pass start+returned_count + (count-returned_count) as the
+// remaining slice. @pure.
+@pure
+fn vec_drop_while(start: i32, count: i32, pivot: i32) -> i32 {
+    vec_take_while(start, count, pivot)
+}
+
+// vec_dedup_consecutive(start, count): allocate a new vec containing
+// `start[0..count]` with adjacent duplicates collapsed. e.g.
+// [1,1,2,3,3,3,4] → [1,2,3,4]. Returns the new vec's start index;
+// caller can compute new length as the difference between the next
+// __arena_len() and the returned start, or use a separate fn.
+fn vec_dedup_consecutive(start: i32, count: i32) -> i32 {
+    let s: i32 = __arena_len();
+    if count == 0 { s }
+    else {
+        __arena_push(__arena_get(start));
+        let mut i: i32 = 1;
+        while i < count {
+            let prev = __arena_get(start + i - 1);
+            let cur = __arena_get(start + i);
+            if cur != prev { __arena_push(cur); };
+            i = i + 1;
+        }
+        s
+    }
+}
+
+// vec_count_distinct_consecutive(start, count): count of elements in
+// the deduped form of vec_dedup_consecutive — useful when caller wants
+// the size BEFORE calling dedup. Walks the input and counts boundaries.
+@pure
+fn vec_count_distinct_consecutive(start: i32, count: i32) -> i32 {
+    if count == 0 { 0 }
+    else {
+        let mut i: i32 = 1;
+        let mut total: i32 = 1;
+        while i < count {
+            let prev = __arena_get(start + i - 1);
+            let cur = __arena_get(start + i);
+            if cur != prev { total = total + 1; };
+            i = i + 1;
+        }
+        total
+    }
+}
