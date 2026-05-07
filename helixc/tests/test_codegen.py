@@ -2272,6 +2272,16 @@ fn main() -> i32 {{
         "fn main() -> i32 { let x: bf16 = 1.5_bf16 ; let y: bf16 = 0.5_bf16 ; "
         "let s: bf16 = x * y ; 42 }"
     ) == 132, "bf16 * bf16 traps with SIGILL"
+    # Stage 1.5 audit fix: bf16 unary NEG traps. Pre-fix: AST_NEG
+    # cascade had no is_bf16_expr check, so `-bf16_var` fell through
+    # to emit_ast_neg_suffix (integer two's-complement `neg eax`).
+    # That stored the wrong bit pattern (0xC0400000 instead of the
+    # correct sign-flipped 0xBFC00000) into the bf16 slot — silent.
+    # Post-fix: ud2 trap (sign-bit XOR would be correct codegen but
+    # we have no bf16 bit-introspection at test time to verify it).
+    assert compile_and_exec(
+        "fn main() -> i32 { let x: bf16 = 1.5_bf16 ; let y: bf16 = -x ; 42 }"
+    ) == 132, "bf16 unary NEG traps with SIGILL"
     # Approach A Stage 2.4: u64 minimal scaffold. u64 literals lex via
     # `_u64` 4-byte suffix, parse to AST_INTLIT_U64 (tag 38), expr_type
     # returns 9. Codegen emits `movabs rax, imm64` (8 bytes) so the full

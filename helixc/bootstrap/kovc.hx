@@ -3294,6 +3294,12 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         // is_f64_expr is checked FIRST so f64 vars/literals don't fall
         // into the f32 path and get their high half (bits 32..63)
         // silently zeroed by the 32-bit `xor eax, ...` form.
+        // Stage 1.5 audit fix: bf16 unary NEG traps with ud2. The
+        // sign-bit-XOR trick (xor eax, 0x80000000) WOULD work for bf16
+        // mathematically, but we have no bit-introspection on bf16
+        // values yet to verify the resulting bit pattern at test time.
+        // Trap loudly until a verifying test exists; pre-fix bf16 fell
+        // through to integer two's-complement neg — silent garbage.
         let ni = emit_ast_code(p1, bind_state, patch_state, bn_state);
         // Stage 1 audit batch 2: 4-way AST_NEG dispatch including i64.
         let nn = if is_f64_expr(p1, bind_state, bn_state) == 1 {
@@ -3302,9 +3308,11 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
             emit_neg_rax_64()
         } else { if is_f32_expr(p1, bind_state, bn_state) == 1 {
             emit_ast_fneg_suffix()
+        } else { if is_bf16_expr(p1, bind_state, bn_state) == 1 {
+            emit_ud2_trap()
         } else {
             emit_ast_neg_suffix()
-        }}};
+        }}}};
         ni + nn
     } else { if t == 26 {
         // AST_BNOT: emit inner (leaves value in eax/rax), then `not`.
