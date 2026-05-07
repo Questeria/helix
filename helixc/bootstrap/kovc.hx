@@ -925,6 +925,7 @@ fn expr_type(idx: i32, bind_state: i32, bn_state: i32) -> i32 {
     else { if t == 34 { 2 }                           // AST_FLOATLIT_F64
     else { if t == 35 { 3 }                           // AST_INTLIT_I64
     else { if t == 36 { 6 }                           // AST_INTLIT_U32 (Stage 2.1)
+    else { if t == 37 { 7 }                           // AST_INTLIT_U8  (Stage 2.3)
     else { if t == 0 { 0 }                            // AST_INTLIT (i32)
     else { if t == 1 {                                // AST_VAR
         bind_lookup_type(bind_state, p1, p2)
@@ -1049,7 +1050,7 @@ fn expr_type(idx: i32, bind_state: i32, bn_state: i32) -> i32 {
                 }
             }
         }
-    } else { 0 }}}}}}}}}}}}}}}}}}}}}}}}
+    } else { 0 }}}}}}}}}}}}}}}}}}}}}}}}}
 }
 
 // Phase 1.10 step 5c: type-inference on AST nodes. Returns 1 if the
@@ -1079,6 +1080,13 @@ fn is_i64_expr(idx: i32, bind_state: i32, bn_state: i32) -> i32 {
 // Used by Stage 2.2's unsigned DIV/MOD/comparison dispatch.
 fn is_u32_expr(idx: i32, bind_state: i32, bn_state: i32) -> i32 {
     if expr_type(idx, bind_state, bn_state) == 6 { 1 } else { 0 }
+}
+
+// Stage 2.3: is_u8_expr — type predicate for u8 (tag 7).
+// u8 shares Stage 2.2's unsigned dispatch helpers since both are
+// unsigned 32-bit-or-narrower integers.
+fn is_u8_expr(idx: i32, bind_state: i32, bn_state: i32) -> i32 {
+    if expr_type(idx, bind_state, bn_state) == 7 { 1 } else { 0 }
 }
 
 // Phase 1.10 step 5c follow-on: fn_type_table maps fn names to their
@@ -2584,6 +2592,13 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         // high half cleared — exactly what u32 wants. The DISTINCT AST
         // tag is for type tracking via expr_type, not codegen.
         emit_ast_int(p1)
+    } else { if t == 37 {
+        // Approach A Stage 2.3: AST_INTLIT_U8 (tag 37). Same emit as
+        // i32/u32 (mov eax, imm32). For Phase-0 / Stage 2.3 the value
+        // lives in low byte of eax with high bytes already zero. Stage
+        // 2.3b will add narrow movzx load + masked store for proper
+        // u8 semantics; today's u8 is "u32 with type tag 7."
+        emit_ast_int(p1)
     } else { if t == 27 {
         // AST_FLOATLIT (Phase 1.10 step 3d, f32). Phase 1.10 step 7b
         // also reuses this branch for AST_FLOATLIT_F64 (tag 34) — the
@@ -3583,7 +3598,7 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         // returns 0. Lex/parse errors that produce AST_ERR cause the
         // resulting binary to SIGILL — clear signal vs. silent 0.
         emit_ud2_trap()
-    }}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}
+    }}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}
 }
 
 // --------------------------------------------------------------

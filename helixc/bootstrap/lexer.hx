@@ -242,6 +242,7 @@ fn lex_int(src_start: i32, src_len: i32, pos: i32) -> i32 {
     let mut is_f64_suffix: i32 = 0;
     let mut is_i64_suffix: i32 = 0;
     let mut is_u32_suffix: i32 = 0;
+    let mut is_u8_suffix: i32 = 0;
     if p + 3 < end {
         let b0 = __arena_get(p);
         if b0 == 95 {   // '_'
@@ -282,12 +283,21 @@ fn lex_int(src_start: i32, src_len: i32, pos: i32) -> i32 {
             // the SAME x86 add/sub/mul instructions work for signed and
             // unsigned operands. Only DIV/MOD and comparison ops differ
             // (idiv vs div, setl vs setb), which Stage 2.2 will dispatch.
+            // Stage 2.3: _u8 suffix produces TK_INTLIT_U8 (tag 35).
+            // Same codegen as i32 for the literal (mov eax, imm32 with
+            // value masked to 0..255 by the parser); type tag 7 in
+            // expr_type tracks u8-ness for unsigned dispatch in
+            // DIV/MOD/comparisons.
             if b1 == 117 {                          // 'u'
                 if b2 == 51 {
                     if b3 == 50 {                   // _u32
                         p = p + 4;
                         is_u32_suffix = 1;
                     };
+                };
+                if b2 == 56 {                       // _u8 (only 3 bytes)
+                    p = p + 3;
+                    is_u8_suffix = 1;
                 };
             };
         };
@@ -303,9 +313,11 @@ fn lex_int(src_start: i32, src_len: i32, pos: i32) -> i32 {
         let length = p - pos;
         // Stage 1: TK_INTLIT_I64 (tag 33) for _i64-suffixed literals;
         // Stage 2.1: TK_INTLIT_U32 (tag 34) for _u32-suffixed literals;
+        // Stage 2.3: TK_INTLIT_U8  (tag 35) for _u8-suffixed literals;
         // TK_INT (tag 1) for plain or _i32-suffixed.
         let tk = if is_i64_suffix == 1 { 33 }
-                 else { if is_u32_suffix == 1 { 34 } else { 1 } };
+                 else { if is_u32_suffix == 1 { 34 }
+                 else { if is_u8_suffix == 1 { 35 } else { 1 } } };
         push_token(tk, value, pos, length);
     };
     p

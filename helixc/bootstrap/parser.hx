@@ -440,6 +440,17 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
         let v = tok_p1(tok_base, k);
         cur_advance(sb);
         mk_node(36, v, 0, 0)
+    } else { if t == 35 {
+        // Approach A Stage 2.3: TK_INTLIT_U8 (tag 35) -> AST_INTLIT_U8
+        // (tag 37). Same codegen as AST_INTLIT (mov eax, imm32) — the
+        // value is small enough that low byte holds it; high bytes
+        // are zero. expr_type returns 7 (u8) so DIV/MOD/comparisons
+        // dispatch to unsigned variants. Narrow load/store via movzx
+        // is deferred to Stage 2.3b (8-byte stack slots remain since
+        // alignment matters more than packing for Phase 0).
+        let v = tok_p1(tok_base, k);
+        cur_advance(sb);
+        mk_node(37, v, 0, 0)
     } else { if t == 25 {
         // String literal (TK_STRLIT). Token slots:
         //   payload   = body byte_start (in the source buffer)
@@ -642,7 +653,7 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
             };
         };
         mk_node(99, t, 0, 0)
-    }}}}}}}}
+    }}}}}}}}}
 }
 
 // --------------------------------------------------------------
@@ -826,7 +837,12 @@ fn parse_fn_decl(tok_base: i32, sb: i32) -> i32 {
                 } else { if b0 == 117 {                  // 'u' — Stage 2.1
                     if b1 == 51 { if b2 == 50 { 6 } else { 0 } } else { 0 }
                 } else { 0 } } }
-            } else { 0 };
+            } else { if ty_l == 2 {
+                // Stage 2.3: 2-byte type idents — `u8` -> 7.
+                let b0 = __arena_get(ty_s);
+                let b1 = __arena_get(ty_s + 1);
+                if b0 == 117 { if b1 == 56 { 7 } else { 0 } } else { 0 }
+            } else { 0 } };
             let new_param = mk_node(18, pname_s, pname_l, 0);
             __arena_push(p_ty);   // p4: type tag
             if params_head == 0 {
@@ -860,7 +876,12 @@ fn parse_fn_decl(tok_base: i32, sb: i32) -> i32 {
         } else { if b0 == 117 {                  // 'u' — Stage 2.1
             if b1 == 51 { if b2 == 50 { 6 } else { 0 } } else { 0 }
         } else { 0 } } }
-    } else { 0 };
+    } else { if rt_l == 2 {
+        // Stage 2.3: 2-byte type idents — `u8` -> 7.
+        let b0 = __arena_get(rt_s);
+        let b1 = __arena_get(rt_s + 1);
+        if b0 == 117 { if b1 == 56 { 7 } else { 0 } } else { 0 }
+    } else { 0 } };
     cur_advance(sb);     // '{'
     let body = parse_expr(tok_base, sb);
     cur_advance(sb);     // '}'

@@ -2179,6 +2179,15 @@ fn main() -> i32 {{
         "u32 <= u32 via setbe"
     assert compile_and_exec("if 10_u32 >= 5_u32 { 42 } else { 0 }") == 42, \
         "u32 >= u32 via setae"
+    # Approach A Stage 2.3: u8 minimal scaffold. u8 literals lex via
+    # `_u8` suffix, parse to AST_INTLIT_U8 (tag 37), expr_type returns
+    # 7 (u8 type tag). Codegen treats u8 as i32 (mov eax, imm32) since
+    # for values 0..255 (always < 2^31) signed and unsigned arithmetic
+    # produce identical results — narrow movzx load and masked store
+    # are deferred to Stage 2.3b.
+    assert compile_and_exec("42_u8") == 42, "u8 literal exits 42"
+    assert compile_and_exec("100_u8 - 58_u8") == 42, \
+        "u8 - u8 via fall-through to i32 path (signedness-agnostic)"
     # Phase 1.10 step 7l: f64 bit-access primitives.
     # __bits_hi_f64(1.0_f64) -> high 32 of 0x3FF0000000000000 = 0x3FF00000.
     # /16777216 = 0x3F = 63.
