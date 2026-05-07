@@ -45,3 +45,46 @@ fn option_is_none(o: Option) -> i32 {
         Option::None => 1,
     }
 }
+
+@pure
+fn option_or_zero(o: Option) -> i32 {
+    match o {
+        Option::Some(x) => x,
+        Option::None => 0,
+    }
+}
+
+@pure
+fn option_or_neg(o: Option) -> i32 {
+    match o {
+        Option::Some(x) => x,
+        Option::None => 0 - 1,
+    }
+}
+
+@pure
+fn option_eq_some(o: Option, target: i32) -> i32 {
+    match o {
+        Option::Some(x) => if x == target { 1 } else { 0 },
+        Option::None => 0,
+    }
+}
+
+// Pairwise max with None as additive identity:
+//   Some(x), Some(y) -> max(x, y)
+//   Some(x), None    -> x
+//   None, Some(y)    -> y
+//   None, None       -> 0   (caller should pre-filter if 0 is a valid datum)
+@pure
+fn option_max(a: Option, b: Option) -> i32 {
+    match a {
+        Option::Some(av) => match b {
+            Option::Some(bv) => if av > bv { av } else { bv },
+            Option::None => av,
+        },
+        Option::None => match b {
+            Option::Some(bv) => bv,
+            Option::None => 0,
+        },
+    }
+}

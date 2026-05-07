@@ -5450,6 +5450,67 @@ def test_stdlib_option_none():
     assert code == 42, f"expected 42, got {code}"
 
 
+def test_stdlib_option_or_zero():
+    """option_or_zero: Some(x) -> x; None -> 0."""
+    src = """
+    fn main() -> i32 {
+        let a = Option::Some(42);
+        let b = Option::None;
+        option_or_zero(a) + option_or_zero(b)
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42 (42 + 0), got {code}"
+
+
+def test_stdlib_option_or_neg():
+    """option_or_neg: Some(x) -> x; None -> -1."""
+    src = """
+    fn main() -> i32 {
+        let a = Option::Some(43);
+        let b = Option::None;
+        option_or_neg(a) + option_or_neg(b)
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42 (43 + -1), got {code}"
+
+
+def test_stdlib_option_eq_some():
+    """option_eq_some: 1 iff o is Some(x) with x==target.
+    Three cases in one program: matching Some, mismatching Some, None."""
+    src = """
+    fn main() -> i32 {
+        let a = Option::Some(42);
+        let b = Option::Some(99);
+        let c = Option::None;
+        let n_match = option_eq_some(a, 42);
+        let n_no = option_eq_some(b, 42);
+        let n_none = option_eq_some(c, 42);
+        n_match * 42 + n_no + n_none
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42 (1*42 + 0 + 0), got {code}"
+
+
+def test_stdlib_option_max():
+    """option_max: pairwise max with None as additive identity.
+    Two-Somes path picks max; Some+None path returns the Some payload."""
+    src = """
+    fn main() -> i32 {
+        let a = Option::Some(20);
+        let b = Option::Some(22);
+        let none = Option::None;
+        let m1 = option_max(a, b);
+        let m2 = option_max(a, none);
+        m1 + m2
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42 (max(20,22)=22 + max(20,None)=20), got {code}"
+
+
 def test_stdlib_result_ok_err():
     """Result::Ok / Result::Err round-trip through unwrap_or."""
     src = """
