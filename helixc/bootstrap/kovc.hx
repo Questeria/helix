@@ -693,6 +693,31 @@ fn emit_mov_local_eax(offset: i32) -> i32 {
     6
 }
 
+// Stage 2.5b/c stage 3: narrow STORES. Writes only the bytes the
+// declared type defines, leaving high bytes of the 4-byte slot
+// untouched. Combined with the matching narrow movzx/movsx loads
+// (Stage 2.5b/c stage 2), this gives proper truncation semantics
+// for u8/i8/u16/i16 bindings: a wider value flowing into a narrow
+// store loses its upper bits at the slot boundary.
+
+// Store low byte of eax (= al) into [rbp + disp32].
+//   88 85 disp32      mov [rbp + disp32], al
+fn emit_mov_local_al(offset: i32) -> i32 {
+    emit_byte(0x88); emit_byte(0x85);
+    emit_u32_le(0 - offset);
+    6
+}
+
+// Store low word of eax (= ax) into [rbp + disp32]. The 66 prefix
+// is the operand-size override that switches the 32-bit `mov [rm],
+// reg` to its 16-bit form.
+//   66 89 85 disp32   mov [rbp + disp32], ax
+fn emit_mov_local_ax(offset: i32) -> i32 {
+    emit_byte(0x66); emit_byte(0x89); emit_byte(0x85);
+    emit_u32_le(0 - offset);
+    7
+}
+
 // Load [rbp - offset] into eax.
 //   8B 85 disp32      mov eax, [rbp + disp32]
 fn emit_mov_eax_local(offset: i32) -> i32 {
@@ -3625,19 +3650,29 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         let val_ty = expr_type(value_idx, bind_state, bn_state);
         let n_val = emit_ast_code(value_idx, bind_state, patch_state, bn_state);
         let off = bind_alloc_offset(bind_state);
-        // 8-byte types (f64=2, i64=3, u64=9) use 64-bit store. All
-        // other types (i32=0, f32=1, u32=6, u8=7, future i8/i16/u16)
-        // use 32-bit store; their 8-byte slot has the high 32 cleared
-        // by x86's auto-zero-extension on 32-bit ops.
+        // 8-byte types (f64=2, i64=3, u64=9) use 64-bit store.
+        // Narrow types (u8=7, i8=10) use 1-byte store; (u16=8, i16=11)
+        // use 2-byte store. Stage 2.5b/c stage 3 — combined with stage
+        // 2's narrow loads, this gives proper truncation: bits past
+        // the declared width never enter the slot.
+        // i32 (0), f32 (1), u32 (6) use 32-bit store.
         let n_store = if val_ty == 2 {
             emit_mov_local_rax_64(off)
         } else { if val_ty == 3 {
             emit_mov_local_rax_64(off)
         } else { if val_ty == 9 {
             emit_mov_local_rax_64(off)
+        } else { if val_ty == 7 {
+            emit_mov_local_al(off)
+        } else { if val_ty == 10 {
+            emit_mov_local_al(off)
+        } else { if val_ty == 8 {
+            emit_mov_local_ax(off)
+        } else { if val_ty == 11 {
+            emit_mov_local_ax(off)
         } else {
             emit_mov_local_eax(off)
-        }}};
+        }}}}}}};
         bind_push_typed(bind_state, p1, p2, off, val_ty);
         let n_body = emit_ast_code(body_idx, bind_state, patch_state, bn_state);
         bind_pop(bind_state);
@@ -3648,6 +3683,7 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         // the same. (Reassignment via AST_ASSIGN works on either.)
         // Stage 1.6 + 2.1: val_ty via expr_type (full tag space).
         // Stage 2.4: u64 (tag 9) also uses 64-bit store.
+        // Stage 2.5b/c stage 3: u8/i8 → 1-byte, u16/i16 → 2-byte.
         let body_idx = __arena_get(idx + 3);
         let value_idx = __arena_get(idx + 4);
         let val_ty = expr_type(value_idx, bind_state, bn_state);
@@ -3659,9 +3695,17 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
             emit_mov_local_rax_64(off)
         } else { if val_ty == 9 {
             emit_mov_local_rax_64(off)
+        } else { if val_ty == 7 {
+            emit_mov_local_al(off)
+        } else { if val_ty == 10 {
+            emit_mov_local_al(off)
+        } else { if val_ty == 8 {
+            emit_mov_local_ax(off)
+        } else { if val_ty == 11 {
+            emit_mov_local_ax(off)
         } else {
             emit_mov_local_eax(off)
-        }}};
+        }}}}}}};
         bind_push_typed(bind_state, p1, p2, off, val_ty);
         let n_body = emit_ast_code(body_idx, bind_state, patch_state, bn_state);
         bind_pop(bind_state);
@@ -3715,9 +3759,21 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
             } else { if bind_ty == 9 {
                 // Stage 2.4 mirror: i32-into-u64 also traps.
                 emit_ud2_trap()
+            } else { if bind_ty == 7 {
+                // Stage 2.5b/c stage 3: u8 binding → 1-byte store.
+                emit_mov_local_al(off)
+            } else { if bind_ty == 10 {
+                // i8 binding → 1-byte store.
+                emit_mov_local_al(off)
+            } else { if bind_ty == 8 {
+                // u16 binding → 2-byte store.
+                emit_mov_local_ax(off)
+            } else { if bind_ty == 11 {
+                // i16 binding → 2-byte store.
+                emit_mov_local_ax(off)
             } else {
                 emit_mov_local_eax(off)
-            }}}}};
+            }}}}}}}}};
             n_val + n_store
         }
     } else { if t == 14 {
