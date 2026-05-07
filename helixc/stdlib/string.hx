@@ -803,3 +803,57 @@ fn string_eq_byte_at(start: i32, len: i32, idx: i32, byte: i32) -> i32 {
     else { if idx >= len { 0 }
     else { if __arena_get(start + idx) == byte { 1 } else { 0 } } }
 }
+
+// string_count_lt_byte(start, len, byte): @pure. Count of bytes < byte.
+@pure
+fn string_count_lt_byte(start: i32, len: i32, byte: i32) -> i32 {
+    let mut i: i32 = 0;
+    let mut total: i32 = 0;
+    while i < len {
+        if __arena_get(start + i) < byte { total = total + 1; }
+        i = i + 1;
+    }
+    total
+}
+
+// string_count_gt_byte(start, len, byte): @pure. Count of bytes > byte.
+@pure
+fn string_count_gt_byte(start: i32, len: i32, byte: i32) -> i32 {
+    let mut i: i32 = 0;
+    let mut total: i32 = 0;
+    while i < len {
+        if __arena_get(start + i) > byte { total = total + 1; }
+        i = i + 1;
+    }
+    total
+}
+
+// string_count_alpha(start, len): @pure. Count of ASCII letters
+// (a-z + A-Z). Useful for text classification.
+@pure
+fn string_count_alpha(start: i32, len: i32) -> i32 {
+    let mut i: i32 = 0;
+    let mut total: i32 = 0;
+    while i < len {
+        let b = __arena_get(start + i);
+        if b >= 65 {
+            if b <= 90 { total = total + 1; }
+            else { if b >= 97 { if b <= 122 { total = total + 1; }; }; };
+        };
+        i = i + 1;
+    }
+    total
+}
+
+// string_count_digit(start, len): @pure. Count of '0'..'9' (48..57).
+@pure
+fn string_count_digit(start: i32, len: i32) -> i32 {
+    let mut i: i32 = 0;
+    let mut total: i32 = 0;
+    while i < len {
+        let b = __arena_get(start + i);
+        if b >= 48 { if b <= 57 { total = total + 1; }; };
+        i = i + 1;
+    }
+    total
+}

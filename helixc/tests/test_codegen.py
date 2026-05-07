@@ -9955,6 +9955,74 @@ def test_stdlib_vec_last():
     assert code == 42, f"expected 42 (last=42, empty=0), got {code}"
 
 
+def test_stdlib_string_count_lt_byte():
+    """'ABCD' (65,66,67,68); count < 67 = 2; *21=42."""
+    src = """
+    fn main() -> i32 {
+        let s = string_new();
+        let s1 = string_push(s, 0, 65);
+        let s2 = string_push(s, s1, 66);
+        let s3 = string_push(s, s2, 67);
+        let s4 = string_push(s, s3, 68);
+        string_count_lt_byte(s, s4, 67) * 21
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_string_count_gt_byte():
+    """'ABCD' count > 66 = 2; *21=42."""
+    src = """
+    fn main() -> i32 {
+        let s = string_new();
+        let s1 = string_push(s, 0, 65);
+        let s2 = string_push(s, s1, 66);
+        let s3 = string_push(s, s2, 67);
+        let s4 = string_push(s, s3, 68);
+        string_count_gt_byte(s, s4, 66) * 21
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_string_count_alpha():
+    """'aB1c2D' alpha = 4 (a,B,c,D); +38=42."""
+    src = """
+    fn main() -> i32 {
+        let s = string_new();
+        let s1 = string_push(s, 0, 97);
+        let s2 = string_push(s, s1, 66);
+        let s3 = string_push(s, s2, 49);
+        let s4 = string_push(s, s3, 99);
+        let s5 = string_push(s, s4, 50);
+        let s6 = string_push(s, s5, 68);
+        string_count_alpha(s, s6) + 38
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_string_count_digit():
+    """'a1b2c3' digits = 3; *14=42."""
+    src = """
+    fn main() -> i32 {
+        let s = string_new();
+        let s1 = string_push(s, 0, 97);
+        let s2 = string_push(s, s1, 49);
+        let s3 = string_push(s, s2, 98);
+        let s4 = string_push(s, s3, 50);
+        let s5 = string_push(s, s4, 99);
+        let s6 = string_push(s, s5, 51);
+        string_count_digit(s, s6) * 14
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
 def test_stdlib_vec_index_of_lt():
     """index_of_lt([5,8,3,7], 4) = 2; *21=42."""
     src = """
