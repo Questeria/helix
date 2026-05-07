@@ -2958,7 +2958,12 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         }};
         n1 + np + n2 + nm + no + na
     } else { if t == 4 {
-        // Stage 1: AST_MUL 4-way dispatch.
+        // Stage 1+2.4b: AST_MUL 5-way dispatch (i32/i64/u64/f32/f64).
+        // Note: `imul rax, rcx` (REX.W) gives the low 64 bits of the
+        // product, which is identical for signed and unsigned 64-bit
+        // multiply. So u64 reuses emit_imul_rax_rcx_64. (Differences
+        // appear only in `imul`'s upper-64-bit / overflow flags, which
+        // we don't consume here.)
         let n1 = emit_ast_code(p1, bind_state, patch_state, bn_state);
         let np = emit_push_rax();
         let n2 = emit_ast_code(p2, bind_state, patch_state, bn_state);
@@ -2966,11 +2971,15 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         let r_d = is_f64_expr(p2, bind_state, bn_state);
         let l_i64 = is_i64_expr(p1, bind_state, bn_state);
         let r_i64 = is_i64_expr(p2, bind_state, bn_state);
+        let l_u64 = is_u64_expr(p1, bind_state, bn_state);
+        let r_u64 = is_u64_expr(p2, bind_state, bn_state);
         let nm = if l_d == 1 {
             if r_d == 1 { emit_mov_rcx_rax_64() } else { emit_mov_ecx_eax() }
         } else { if l_i64 == 1 {
             if r_i64 == 1 { emit_mov_rcx_rax_64() } else { emit_mov_ecx_eax() }
-        } else { emit_mov_ecx_eax() }};
+        } else { if l_u64 == 1 {
+            if r_u64 == 1 { emit_mov_rcx_rax_64() } else { emit_mov_ecx_eax() }
+        } else { emit_mov_ecx_eax() }}};
         let no = emit_pop_rax();
         let l_f = is_f32_expr(p1, bind_state, bn_state);
         let r_f = is_f32_expr(p2, bind_state, bn_state);
@@ -2980,11 +2989,15 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
             if l_i64 == 1 {
                 if r_i64 == 1 { emit_imul_rax_rcx_64() } else { emit_ud2_trap() }
             } else { if r_i64 == 1 { emit_ud2_trap() } else {
-                if l_f == 1 {
-                    if r_f == 1 { emit_mulss() } else { emit_ud2_trap() }
-                } else {
-                    if r_f == 1 { emit_ud2_trap() } else { emit_imul_eax_ecx() }
-                }
+                if l_u64 == 1 {
+                    if r_u64 == 1 { emit_imul_rax_rcx_64() } else { emit_ud2_trap() }
+                } else { if r_u64 == 1 { emit_ud2_trap() } else {
+                    if l_f == 1 {
+                        if r_f == 1 { emit_mulss() } else { emit_ud2_trap() }
+                    } else {
+                        if r_f == 1 { emit_ud2_trap() } else { emit_imul_eax_ecx() }
+                    }
+                }}
             }}
         }};
         n1 + np + n2 + nm + no + na

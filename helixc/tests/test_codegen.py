@@ -2196,6 +2196,26 @@ fn main() -> i32 {{
     # dispatch in AST_VAR/LET/LET_MUT/ASSIGN/fn-param spill (tag 9
     # alongside i64=3 and f64=2).
     assert compile_and_exec("42_u64") == 42, "u64 literal exits 42"
+    # Approach A Stage 2.4b: u64 arithmetic dispatch (ADD, SUB, MUL).
+    # ADD and SUB u64 landed in commits e7311b0/0089529. MUL u64 landed
+    # post-cascade-bug-fix (commit 29f552e). All three reuse the i64
+    # 64-bit emit helpers (add_rax_rcx_64 / sub_rax_rcx_64 /
+    # imul_rax_rcx_64) since signed and unsigned 64-bit arithmetic
+    # produce identical low-64-bit results for ADD/SUB/MUL. Tests
+    # exercise pure u64 paths plus mixed-type (u64 op i64) which must
+    # ud2-trap.
+    assert compile_and_exec("20_u64 + 22_u64") == 42, "u64 + u64 via REX.W add"
+    assert compile_and_exec("100_u64 - 58_u64") == 42, \
+        "u64 - u64 via REX.W sub"
+    assert compile_and_exec("6_u64 * 7_u64") == 42, "u64 * u64 via REX.W imul"
+    # Larger u64 multiply: 2^32-7 * 2^32-7 (low 64 bits truncated).
+    # Helix bootstrap doesn't expose i32 → u64 widening literals, so
+    # use products that fit in u32. 1000000_u64 * 1000_u64 = 10^9 (fits
+    # in 32 bits = 1,000,000,000). Take that mod 256 = 0. Add 42.
+    assert compile_and_exec(
+        "fn main() -> i32 { let a: u64 = 1000000_u64 ; let b: u64 = 1000_u64 ; "
+        "let c: u64 = a * b ; 42 }"
+    ) == 42, "u64 * u64 LET-bound large value compiles"
     # Phase 1.10 step 7l: f64 bit-access primitives.
     # __bits_hi_f64(1.0_f64) -> high 32 of 0x3FF0000000000000 = 0x3FF00000.
     # /16777216 = 0x3F = 63.
