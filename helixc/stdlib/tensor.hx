@@ -1052,3 +1052,47 @@ fn tf1d_count_eq_zero(start: i32, n: i32) -> i32 {
 fn tf1d_is_empty(start: i32, n: i32) -> i32 {
     if n == 0 { 1 } else { 0 }
 }
+
+// ti1d_count_above(start, n, threshold): @pure. Count int elements > threshold.
+@pure
+fn ti1d_count_above(start: i32, n: i32, threshold: i32) -> i32 {
+    let mut i: i32 = 0;
+    let mut total: i32 = 0;
+    while i < n {
+        if __arena_get(start + i) > threshold { total = total + 1; }
+        i = i + 1;
+    }
+    total
+}
+
+// ti1d_count_below(start, n, threshold): @pure. Companion.
+@pure
+fn ti1d_count_below(start: i32, n: i32, threshold: i32) -> i32 {
+    let mut i: i32 = 0;
+    let mut total: i32 = 0;
+    while i < n {
+        if __arena_get(start + i) < threshold { total = total + 1; }
+        i = i + 1;
+    }
+    total
+}
+
+// ti1d_max_abs(start, n): @pure. Max of |x[i]| for ints. 0 if empty.
+@pure
+fn ti1d_max_abs(start: i32, n: i32) -> i32 {
+    let mut i: i32 = 0;
+    let mut best: i32 = 0;
+    while i < n {
+        let v = __arena_get(start + i);
+        let av = if v < 0 { 0 - v } else { v };
+        if av > best { best = av; }
+        i = i + 1;
+    }
+    best
+}
+
+// ti1d_is_empty(start, n): @pure. 1 if n == 0.
+@pure
+fn ti1d_is_empty(start: i32, n: i32) -> i32 {
+    if n == 0 { 1 } else { 0 }
+}

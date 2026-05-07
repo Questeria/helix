@@ -9894,6 +9894,57 @@ def test_stdlib_vec_last():
     assert code == 42, f"expected 42 (last=42, empty=0), got {code}"
 
 
+def test_stdlib_ti1d_count_above():
+    """count_above([1,5,3,8], 4) = 2; *21=42."""
+    src = """
+    fn main() -> i32 {
+        let x = t1d_new(4);
+        ti1d_set(x, 0, 1); ti1d_set(x, 1, 5); ti1d_set(x, 2, 3); ti1d_set(x, 3, 8);
+        ti1d_count_above(x, 4, 4) * 21
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_ti1d_count_below():
+    """count_below([1,5,3,8], 4) = 2; *21=42."""
+    src = """
+    fn main() -> i32 {
+        let x = t1d_new(4);
+        ti1d_set(x, 0, 1); ti1d_set(x, 1, 5); ti1d_set(x, 2, 3); ti1d_set(x, 3, 8);
+        ti1d_count_below(x, 4, 4) * 21
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_ti1d_max_abs():
+    """max_abs([3,-42,5,-1]) = 42."""
+    src = """
+    fn main() -> i32 {
+        let x = t1d_new(4);
+        ti1d_set(x, 0, 3); ti1d_set(x, 1, 0 - 42); ti1d_set(x, 2, 5); ti1d_set(x, 3, 0 - 1);
+        ti1d_max_abs(x, 4)
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_ti1d_is_empty():
+    """is_empty(0) = 1; *42=42."""
+    src = """
+    fn main() -> i32 {
+        let x = t1d_new(0);
+        ti1d_is_empty(x, 0) * 42
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
 def test_stdlib_string_count_ge_byte():
     """'AbCDeF' (65,98,67,68,101,70); count >= 'D'(68) is 4 (98,68,101,70); *7+14=42.
     Wait: bytes are 65,98,67,68,101,70. >= 68: 98,68,101,70 = 4. 4*7 = 28. +14=42."""
