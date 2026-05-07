@@ -7589,6 +7589,83 @@ def test_stdlib_vec_zip_div():
     assert code == 42, f"expected 42, got {code}"
 
 
+def test_stdlib_vec_zip_eq():
+    """zip_eq([1,2,3,4,5], [1,9,3,9,5]) -> [1,0,1,0,1]. Sum=3 (matching count).
+    Encoded: 3*14 = 42."""
+    src = """
+    fn main() -> i32 {
+        let a = vec_new();
+        let a1 = vec_push(a, 0, 1);
+        let a2 = vec_push(a, a1, 2);
+        let a3 = vec_push(a, a2, 3);
+        let a4 = vec_push(a, a3, 4);
+        let a5 = vec_push(a, a4, 5);
+        let b = __arena_len();
+        let b1 = vec_push(b, 0, 1);
+        let b2 = vec_push(b, b1, 9);
+        let b3 = vec_push(b, b2, 3);
+        let b4 = vec_push(b, b3, 9);
+        let b5 = vec_push(b, b4, 5);
+        let dst = vec_zip_eq(a, b, a5);
+        vec_sum(dst, a5) * 14
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_vec_mean():
+    """mean([10,20,30,40,50,60,70]) = 280/7 = 40. Encoded: 40+2 = 42."""
+    src = """
+    fn main() -> i32 {
+        let v = vec_new();
+        let n0 = vec_push(v, 0, 10);
+        let n1 = vec_push(v, n0, 20);
+        let n2 = vec_push(v, n1, 30);
+        let n3 = vec_push(v, n2, 40);
+        let n4 = vec_push(v, n3, 50);
+        let n5 = vec_push(v, n4, 60);
+        let n6 = vec_push(v, n5, 70);
+        vec_mean(v, n6) + 2
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_vec_argsort():
+    """argsort([30,10,40,20]) -> [1,3,0,2] (smallest first).
+    Original untouched. Encoded: indices[0]=1, indices[1]=3, indices[2]=0, indices[3]=2.
+    Sum of indices = 6. Original first elem = 30. Encoded: 30 + 6 + 6 = 42."""
+    src = """
+    fn main() -> i32 {
+        let v = vec_new();
+        let n0 = vec_push(v, 0, 30);
+        let n1 = vec_push(v, n0, 10);
+        let n2 = vec_push(v, n1, 40);
+        let n3 = vec_push(v, n2, 20);
+        let perm = vec_argsort(v, n3);
+        let original_first = vec_get(v, 0);
+        // perm should be [1, 3, 0, 2]
+        let p0 = vec_get(perm, 0);
+        let p1 = vec_get(perm, 1);
+        let p2 = vec_get(perm, 2);
+        let p3 = vec_get(perm, 3);
+        if original_first == 30 {
+            if p0 == 1 {
+                if p1 == 3 {
+                    if p2 == 0 {
+                        if p3 == 2 { 42 } else { 0 }
+                    } else { 0 }
+                } else { 0 }
+            } else { 0 }
+        } else { 0 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
 def main():
     tests = [(name, fn) for name, fn in globals().items()
              if name.startswith("test_") and callable(fn)]

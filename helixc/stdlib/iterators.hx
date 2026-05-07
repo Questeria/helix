@@ -678,3 +678,73 @@ fn vec_zip_div(a: i32, b: i32, count: i32) -> i32 {
     }
     s
 }
+
+// vec_zip_eq(a, b, count): element-wise equality returning 0/1 bools.
+// Useful for masking and counting matches between two vecs of equal
+// length. Sum of the result = number of equal elements.
+fn vec_zip_eq(a: i32, b: i32, count: i32) -> i32 {
+    let s: i32 = __arena_len();
+    let mut i: i32 = 0;
+    while i < count {
+        let av = __arena_get(a + i);
+        let bv = __arena_get(b + i);
+        if av == bv { __arena_push(1); } else { __arena_push(0); };
+        i = i + 1;
+    }
+    s
+}
+
+// vec_mean(start, count): arithmetic mean via integer division
+// (sum / count). Useful for ML running averages, stats, sanity
+// checks. count <= 0 returns 0 (avoid div-by-zero trap).
+@pure
+fn vec_mean(start: i32, count: i32) -> i32 {
+    if count <= 0 { 0 }
+    else {
+        let mut i: i32 = 0;
+        let mut acc: i32 = 0;
+        while i < count {
+            acc = acc + __arena_get(start + i);
+            i = i + 1;
+        }
+        acc / count
+    }
+}
+
+// vec_argsort(start, count): selection sort returning a NEW slice of
+// indices i_0, i_1, ..., i_{count-1} such that
+// input[i_0] <= input[i_1] <= ... <= input[i_{count-1}].
+// Original input untouched. O(count^2) time — fine for small N
+// (~1000); useful for top-K selection, ranking. Selection sort
+// chosen for code simplicity over heap or merge sort.
+fn vec_argsort(start: i32, count: i32) -> i32 {
+    let s: i32 = __arena_len();
+    // Initialize indices [0, 1, 2, ..., count-1]
+    let mut i: i32 = 0;
+    while i < count {
+        __arena_push(i);
+        i = i + 1;
+    }
+    // Selection sort by input[indices[k]] ascending
+    let mut k: i32 = 0;
+    while k < count {
+        let mut min_pos: i32 = k;
+        let mut j: i32 = k + 1;
+        while j < count {
+            let idx_j = __arena_get(s + j);
+            let idx_min = __arena_get(s + min_pos);
+            if __arena_get(start + idx_j) < __arena_get(start + idx_min) {
+                min_pos = j;
+            };
+            j = j + 1;
+        }
+        // Swap s[k] <-> s[min_pos] if needed
+        if min_pos != k {
+            let tmp = __arena_get(s + k);
+            __arena_set(s + k, __arena_get(s + min_pos));
+            __arena_set(s + min_pos, tmp);
+        };
+        k = k + 1;
+    }
+    s
+}
