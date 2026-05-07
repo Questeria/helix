@@ -21,7 +21,13 @@
 //   wml_predict(wml, state, action) -> i32       w_s*state + w_a*action + b
 //
 // API for self-supervised learning:
-//   wm_prediction_error(predicted, actual) -> i32   |predicted - actual|
+//   wm_prediction_error(predicted, actual) -> i32      |predicted - actual|
+//   wm_prediction_error_sq(predicted, actual) -> i32   (predicted - actual)^2
+//
+// API extras (table-backed):
+//   wmt_predict_or(wmt, state, action, default_v) -> i32  predict or default_v if unset
+//   wmt_count_set(wmt) -> i32                             count of explicit transitions
+//   wmt_is_self_loop(wmt, state, action) -> i32           1 if predict==state, else 0
 //
 // License: Apache 2.0
 
@@ -76,6 +82,12 @@ fn wm_prediction_error(predicted: i32, actual: i32) -> i32 {
     if d < 0 { 0 - d } else { d }
 }
 
+@pure
+fn wm_prediction_error_sq(predicted: i32, actual: i32) -> i32 {
+    let d = predicted - actual;
+    d * d
+}
+
 // ---- Imagination rollout: simulate `steps` actions from a state ----
 
 @pure
@@ -91,4 +103,34 @@ fn wmt_rollout(wmt: i32, start_state: i32, action_seq_start: i32, steps: i32) ->
         i = i + 1;
     }
     s
+}
+
+// ---- Table-backed accessors mirroring the option_*/result_* style ----
+
+@pure
+fn wmt_predict_or(wmt: i32, state: i32, action: i32, default_v: i32) -> i32 {
+    let num_actions = __arena_get(wmt + 1);
+    let nxt = __arena_get(wmt + 2 + state * num_actions + action);
+    if nxt < 0 { default_v } else { nxt }
+}
+
+@pure
+fn wmt_count_set(wmt: i32) -> i32 {
+    let num_states = __arena_get(wmt);
+    let num_actions = __arena_get(wmt + 1);
+    let total = num_states * num_actions;
+    let mut i: i32 = 0;
+    let mut count: i32 = 0;
+    while i < total {
+        if __arena_get(wmt + 2 + i) >= 0 { count = count + 1; }
+        i = i + 1;
+    }
+    count
+}
+
+@pure
+fn wmt_is_self_loop(wmt: i32, state: i32, action: i32) -> i32 {
+    let num_actions = __arena_get(wmt + 1);
+    let nxt = __arena_get(wmt + 2 + state * num_actions + action);
+    if nxt == state { 1 } else { 0 }
 }

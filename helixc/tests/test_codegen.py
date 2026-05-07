@@ -4065,6 +4065,59 @@ def test_agi_wmt_rollout():
     assert code == 42, f"expected 42 (0 + 42), got {code}"
 
 
+def test_agi_wm_prediction_error_sq():
+    """Squared error: (predicted - actual)^2."""
+    src = """
+    fn main() -> i32 {
+        wm_prediction_error_sq(10, 7) + wm_prediction_error_sq(5, 8)
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 18, f"expected 18 (9 + 9), got {code}"
+
+
+def test_agi_wmt_predict_or():
+    """Defaulted lookup: -1 sentinel -> default_v; set -> stored value."""
+    src = """
+    fn main() -> i32 {
+        let wmt = wmt_new(2, 2);
+        wmt_set(wmt, 0, 0, 7);
+        wmt_predict_or(wmt, 0, 0, 99) + wmt_predict_or(wmt, 1, 1, 35)
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42 (7 + 35), got {code}"
+
+
+def test_agi_wmt_count_set():
+    """Count explicit transitions in the table."""
+    src = """
+    fn main() -> i32 {
+        let wmt = wmt_new(3, 2);
+        wmt_set(wmt, 0, 0, 1);
+        wmt_set(wmt, 0, 1, 2);
+        wmt_set(wmt, 1, 0, 0);
+        wmt_count_set(wmt) + 39
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42 (3 + 39), got {code}"
+
+
+def test_agi_wmt_is_self_loop():
+    """1 if predict(s,a) == s else 0."""
+    src = """
+    fn main() -> i32 {
+        let wmt = wmt_new(2, 2);
+        wmt_set(wmt, 0, 0, 0);
+        wmt_set(wmt, 0, 1, 1);
+        wmt_is_self_loop(wmt, 0, 0) * 42 + wmt_is_self_loop(wmt, 0, 1) * 100
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42 (1*42 + 0*100), got {code}"
+
+
 def test_agi_tree_eq_shallow():
     """Phase 4 step 4: tree-node structural equality."""
     src = """
