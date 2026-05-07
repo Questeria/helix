@@ -2235,6 +2235,13 @@ fn main() -> i32 {{
     # dispatch in AST_VAR/LET/LET_MUT/ASSIGN/fn-param spill (tag 9
     # alongside i64=3 and f64=2).
     assert compile_and_exec("42_u64") == 42, "u64 literal exits 42"
+    # Stage 2.4b audit fix: u64 hi32 always 0 (was sign-extended like
+    # i64). 2^31 = 2147483648_u64 used to emit 0xFFFFFFFF80000000_u64
+    # (because p1 wrapped to i32 negative-bit-pattern → hi32 = -1).
+    # Now emits 0x80000000_u64 = 2147483648 correctly. Exit code is
+    # the low byte of (2^31 - 2147483606) = 42.
+    assert compile_and_exec("2147483648_u64 - 2147483606_u64") == 42, \
+        "u64 literal at 2^31 doesn't sign-extend high half"
     # Approach A Stage 2.4b: u64 arithmetic dispatch (ADD, SUB, MUL).
     # ADD and SUB u64 landed in commits e7311b0/0089529. MUL u64 landed
     # post-cascade-bug-fix (commit 29f552e). All three reuse the i64

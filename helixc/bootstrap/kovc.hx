@@ -2658,24 +2658,26 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         // >= 2^63 (which AST_INTLIT_U64 can't yet hold via i32 p1
         // anyway), unsigned interpretation matters at the comparison
         // and DIV/MOD sites only — those dispatch via is_u64_expr.
-        // High32: sign-extended from the i32-encoded `p1` (same shape as
-        // AST_INTLIT_I64). For p1 >= 0, hi32 = 0 (correct for u64). For
-        // p1 < 0, hi32 = 0xFFFFFFFF (all bits set), which preserves bit-
-        // equality when u64 values are round-tripped through i64
-        // conversions. Today the lexer encodes ALL literals as i32-signed
-        // p1, so u64 values >= 2^31 cannot yet be expressed at lex time:
-        // the high half is always 0 for any literal the parser actually
-        // produces today.
-        // TODO(main-thread / CRITICAL audit finding): lex-time literal-
-        // overflow gap. The parser stores u64 literals in a single i32
-        // p1 field, so values in [2^31, 2^64-1] silently truncate or mis-
-        // encode at parse time. e.g. `2147483648_u64` (= 2^31) wraps to
-        // i32 -2147483648 here, then hi32 = 0xFFFFFFFF, and the resulting
-        // movabs emits 0xFFFFFFFF80000000_u64 instead of 0x80000000.
-        // Fix requires widening the AST literal payload to two i32 fields
-        // (lo32 + hi32) before this codegen site can be corrected. Do NOT
-        // change the `let hi32` line below until the parser is fixed.
-        let hi32 = if p1 < 0 { 0 - 1 } else { 0 };
+        // High32: ZERO for u64 literals. Stage 2.4b audit fix.
+        //
+        // Prior version sign-extended like i64: `if p1 < 0 { 0 - 1 }
+        // else { 0 }`. That was wrong for u64 — it produced
+        // 0xFFFFFFFF80000000 for `2147483648_u64` (= 2^31), where the
+        // lex-time accumulator wrapped p1 to i32 negative-bit-pattern.
+        //
+        // With hi32 = 0 always, values in [0, 2^32) round-trip
+        // correctly: p1 holds the low-32 bit pattern (interpreted as
+        // unsigned), hi32 supplies the upper 32 zero bits. movabs
+        // imm64 = 0x00000000_BIT_PATTERN.
+        //
+        // KNOWN GAP (still CRITICAL, separate fix): values >= 2^32
+        // overflow lex_int's i32 digit accumulator and produce
+        // garbage in p1. e.g. `4294967296_u64` (= 2^32) wraps to
+        // p1 = 0 → emits 0_u64. Fix requires widening AST literal
+        // payload to lo32 + hi32 fields, plus lex-side accumulator
+        // overflow detection. See docs/STAGE_24B_NOTES.md and the
+        // open audit queue.
+        let hi32 = 0;
         emit_movabs_rax_imm64(p1, hi32)
     } else { if t == 39 {
         // Approach A Stage 2.5b: AST_INTLIT_I8 (tag 39). Same emit as
