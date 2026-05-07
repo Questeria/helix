@@ -417,6 +417,17 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
         let body_l = tok_p3(tok_base, k);
         cur_advance(sb);
         mk_node(34, body_s, body_l, 0)
+    } else { if t == 33 {
+        // Approach A Stage 1: TK_INTLIT_I64 (tag 33) -> AST_INTLIT_I64
+        // (tag 35). Distinct AST tag so codegen emits 8-byte
+        // `movabs rax, imm64` (loads full 64-bit pattern, sign-extended
+        // for negative values that fit in i32) instead of 4-byte
+        // `mov eax, imm32`. The 64-bit width matters when the i64
+        // value flows into a let-binding, fn param, or arithmetic op
+        // typed as i64 — the high half must survive.
+        let v = tok_p1(tok_base, k);
+        cur_advance(sb);
+        mk_node(35, v, 0, 0)
     } else { if t == 25 {
         // String literal (TK_STRLIT). Token slots:
         //   payload   = body byte_start (in the source buffer)
@@ -619,7 +630,7 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
             };
         };
         mk_node(99, t, 0, 0)
-    }}}}}}
+    }}}}}}}
 }
 
 // --------------------------------------------------------------

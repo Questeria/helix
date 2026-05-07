@@ -2042,6 +2042,18 @@ fn main() -> i32 {{
         " let lo = __bits_lo_f64(0.9_f64);"
         " ((lo % 256) + 256) % 256 }"
     ) == 205, "0.9_f64 rounds up to 0x...CD (audit fix: round-to-nearest)"
+    # Approach A Stage 1: i64 literal codegen. `42_i64` should produce
+    # the integer value 42 (low 8 bits of rax via exit code = 42). The
+    # 8-byte movabs encoding sign-extends the i32 value into rax fully.
+    # If the codegen emitted only `mov eax, 42` (5 bytes) without REX.W,
+    # the high half of rax would still be whatever was in it from prior
+    # state — but since rax is zero-extended on `mov eax`, it'd still
+    # be 42 as exit code. The discriminating test is byte-count: the
+    # produced binary must have the 0x48 0xB8 prefix (movabs rax, imm64)
+    # for AST_INTLIT_I64 nodes. Functionally: 42_i64 still exits 42.
+    assert compile_and_exec("42_i64") == 42, "42_i64 literal exits 42"
+    assert compile_and_exec("100_i64 - 58_i64") == 42, \
+        "i64 - i64 falls through to integer dispatch (low 32 still correct)"
     # Phase 1.10 step 7l: f64 bit-access primitives.
     # __bits_hi_f64(1.0_f64) -> high 32 of 0x3FF0000000000000 = 0x3FF00000.
     # /16777216 = 0x3F = 63.

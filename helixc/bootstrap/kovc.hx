@@ -2490,6 +2490,15 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
     let p2 = __arena_get(idx + 2);
     if t == 0 {
         emit_ast_int(p1)
+    } else { if t == 35 {
+        // Approach A Stage 1: AST_INTLIT_I64 (tag 35). p1 = i32 value.
+        // For values that fit in i32 (positive < 2^31 OR negative
+        // > -2^31), the 64-bit encoding sign-extends: high32 = 0 if
+        // p1 >= 0, else high32 = -1 (all bits set, two's-complement).
+        // Emits `movabs rax, imm64` (10 bytes) so subsequent 64-bit
+        // arithmetic / comparisons / let-bindings see the full width.
+        let hi32 = if p1 < 0 { 0 - 1 } else { 0 };
+        emit_movabs_rax_imm64(p1, hi32)
     } else { if t == 27 {
         // AST_FLOATLIT (Phase 1.10 step 3d, f32). Phase 1.10 step 7b
         // also reuses this branch for AST_FLOATLIT_F64 (tag 34) — the
@@ -3250,7 +3259,7 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         // returns 0. Lex/parse errors that produce AST_ERR cause the
         // resulting binary to SIGILL — clear signal vs. silent 0.
         emit_ud2_trap()
-    }}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}
+    }}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}
 }
 
 // --------------------------------------------------------------

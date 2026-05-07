@@ -240,6 +240,7 @@ fn lex_int(src_start: i32, src_len: i32, pos: i32) -> i32 {
     // be emitted — the parser then knows the literal needs 8-byte f64
     // codegen (step 7b+) instead of 4-byte f32.
     let mut is_f64_suffix: i32 = 0;
+    let mut is_i64_suffix: i32 = 0;
     if p + 3 < end {
         let b0 = __arena_get(p);
         if b0 == 95 {   // '_'
@@ -258,13 +259,20 @@ fn lex_int(src_start: i32, src_len: i32, pos: i32) -> i32 {
                     };
                 };
             };
-            // i32 / i64
+            // i32 / i64 — Stage 1 (Approach A): track _i64 suffix so a
+            // distinct TK_INTLIT_I64 token (tag 33) can be emitted. Parser
+            // produces an AST_INTLIT_I64 node; codegen emits 8-byte movabs
+            // instead of 4-byte mov eax, imm32. Values that fit in i32
+            // are still fine; large values defer to a later stage.
             if b1 == 105 {
                 if b2 == 51 {
                     if b3 == 50 { p = p + 4; };   // _i32
                 };
                 if b2 == 54 {
-                    if b3 == 52 { p = p + 4; };   // _i64
+                    if b3 == 52 {                   // _i64
+                        p = p + 4;
+                        is_i64_suffix = 1;
+                    };
                 };
             };
         };
@@ -278,7 +286,10 @@ fn lex_int(src_start: i32, src_len: i32, pos: i32) -> i32 {
         push_token(tk, pos, pos, flen);
     } else {
         let length = p - pos;
-        push_token(1, value, pos, length);
+        // Stage 1: TK_INTLIT_I64 (tag 33) for _i64-suffixed literals;
+        // TK_INT (tag 1) for plain or _i32-suffixed.
+        let tk = if is_i64_suffix == 1 { 33 } else { 1 };
+        push_token(tk, value, pos, length);
     };
     p
 }
