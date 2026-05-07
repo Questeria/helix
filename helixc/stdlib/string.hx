@@ -20,6 +20,9 @@
 //                                                    returns count of bytes written.
 //                                                    Caller saves __arena_len() BEFORE
 //                                                    calling to recover the start index.
+//   string_to_int(start, len)               -> i32   parses decimal int from slice;
+//                                                    accepts optional leading '-';
+//                                                    non-digit bytes are skipped silently.
 //
 // License: Apache 2.0
 
@@ -113,5 +116,30 @@ fn string_from_int(n: i32) -> i32 {
             j = j + 1;
         }
         if neg == 1 { count + 1 } else { count }
+    }
+}
+
+@pure
+fn string_to_int(start: i32, len: i32) -> i32 {
+    if len == 0 { 0 }
+    else {
+        let mut i: i32 = 0;
+        let mut neg: i32 = 0;
+        let first: i32 = __arena_get(start);
+        if first == 45 {
+            neg = 1;
+            i = 1;
+        }
+        let mut acc: i32 = 0;
+        while i < len {
+            let b: i32 = __arena_get(start + i);
+            if b >= 48 {
+                if b <= 57 {
+                    acc = acc * 10 + (b - 48);
+                }
+            }
+            i = i + 1;
+        }
+        if neg == 1 { 0 - acc } else { acc }
     }
 }

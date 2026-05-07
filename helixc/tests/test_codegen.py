@@ -5392,6 +5392,48 @@ def test_stdlib_string_from_int_negative():
     assert code == 42, f"expected 42 (all 3 checks pass), got {code}"
 
 
+def test_stdlib_string_to_int_positive():
+    """string_to_int parses '42' (bytes 52, 50) -> 42."""
+    src = """
+    fn main() -> i32 {
+        let start = __arena_len();
+        __arena_push(52);
+        __arena_push(50);
+        string_to_int(start, 2)
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_string_to_int_negative():
+    """string_to_int parses '-7' (bytes 45, 55) -> -7; assert via 50 + n -> 43."""
+    src = """
+    fn main() -> i32 {
+        let start = __arena_len();
+        __arena_push(45);
+        __arena_push(55);
+        50 + string_to_int(start, 2)
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 43, f"expected 43 (50 + (-7)), got {code}"
+
+
+def test_stdlib_string_from_to_int_roundtrip():
+    """string_from_int(123) then string_to_int over the same slice -> 123."""
+    src = """
+    fn main() -> i32 {
+        let start = __arena_len();
+        let n = string_from_int(123);
+        let v = string_to_int(start, n);
+        if v == 123 { 42 } else { 1 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42 (roundtrip 123), got {code}"
+
+
 def test_stdlib_range_min_max():
     """range_to_vec(3, 8) -> [3,4,5,6,7]; min=3, max=7, sum=25.
     Asserts via chained ifs that fit in the 8-bit Linux exit code."""
