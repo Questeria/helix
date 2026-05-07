@@ -2282,6 +2282,16 @@ fn main() -> i32 {{
     assert compile_and_exec(
         "fn main() -> i32 { let x: bf16 = 1.5_bf16 ; let y: bf16 = -x ; 42 }"
     ) == 132, "bf16 unary NEG traps with SIGILL"
+    # Stage 1.5 audit fix: bf16 bitwise NOT (~x) traps. Pre-fix:
+    # AST_BNOT cascade had no is_bf16_expr check, so `~bf16_var` fell
+    # through to emit_ast_bnot_suffix (`not eax`) on the bf16 bit
+    # pattern. That flipped every bit including the low 16 zeros, the
+    # exponent, and the top mantissa bit — producing a malformed bf16
+    # pattern with random low-half garbage. Silent.
+    # Post-fix: ud2 trap until a real use case + verifying test land.
+    assert compile_and_exec(
+        "fn main() -> i32 { let x: bf16 = 1.5_bf16 ; let y: bf16 = ~x ; 42 }"
+    ) == 132, "bf16 bitwise NOT traps with SIGILL"
     # Approach A Stage 2.4: u64 minimal scaffold. u64 literals lex via
     # `_u64` 4-byte suffix, parse to AST_INTLIT_U64 (tag 38), expr_type
     # returns 9. Codegen emits `movabs rax, imm64` (8 bytes) so the full

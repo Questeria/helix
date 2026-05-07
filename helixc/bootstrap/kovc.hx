@@ -3317,12 +3317,21 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
     } else { if t == 26 {
         // AST_BNOT: emit inner (leaves value in eax/rax), then `not`.
         // Stage 1 audit fix: i64 needs `not rax` (REX.W) to flip all 64 bits.
+        // Stage 1.5 audit fix: bf16 traps with ud2. Bitwise NOT on a
+        // bf16 bit pattern flips the low 16 bits (which are always 0
+        // post-truncation) AND the sign+exponent+top-mantissa bits in
+        // the high half — producing a malformed bf16 pattern (no
+        // longer truncated to bf16 layout). Trap until a real use
+        // case + verifying test exists. Pre-fix bf16 fell through to
+        // emit_ast_bnot_suffix (`not eax`) — silent garbage.
         let ni = emit_ast_code(p1, bind_state, patch_state, bn_state);
         let nn = if is_i64_expr(p1, bind_state, bn_state) == 1 {
             emit_not_rax_64()
+        } else { if is_bf16_expr(p1, bind_state, bn_state) == 1 {
+            emit_ud2_trap()
         } else {
             emit_ast_bnot_suffix()
-        };
+        }};
         ni + nn
     } else { if t == 31 {
         // AST_NOT: logical NOT. For i64/u64, must use `test rax, rax`
