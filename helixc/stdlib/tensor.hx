@@ -1007,3 +1007,48 @@ fn tf2d_max_abs(start: i32, rows: i32, cols: i32) -> f32 {
     let n = rows * cols;
     tf1d_max_abs(start, n)
 }
+
+// tf1d_count_above(start, n, threshold): @pure. Count elements > threshold.
+@pure
+fn tf1d_count_above(start: i32, n: i32, threshold: f32) -> i32 {
+    let mut i: i32 = 0;
+    let mut total: i32 = 0;
+    while i < n {
+        let v = __f32_from_bits(__arena_get(start + i));
+        if v > threshold { total = total + 1; }
+        i = i + 1;
+    }
+    total
+}
+
+// tf1d_count_below(start, n, threshold): @pure. Companion.
+@pure
+fn tf1d_count_below(start: i32, n: i32, threshold: f32) -> i32 {
+    let mut i: i32 = 0;
+    let mut total: i32 = 0;
+    while i < n {
+        let v = __f32_from_bits(__arena_get(start + i));
+        if v < threshold { total = total + 1; }
+        i = i + 1;
+    }
+    total
+}
+
+// tf1d_count_eq_zero(start, n): @pure. Count elements equal to 0.0_f32.
+@pure
+fn tf1d_count_eq_zero(start: i32, n: i32) -> i32 {
+    let mut i: i32 = 0;
+    let mut total: i32 = 0;
+    let zero_bits = 0;
+    while i < n {
+        if __arena_get(start + i) == zero_bits { total = total + 1; }
+        i = i + 1;
+    }
+    total
+}
+
+// tf1d_is_empty(start, n): @pure. 1 if n == 0.
+@pure
+fn tf1d_is_empty(start: i32, n: i32) -> i32 {
+    if n == 0 { 1 } else { 0 }
+}

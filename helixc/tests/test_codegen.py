@@ -9894,6 +9894,66 @@ def test_stdlib_vec_last():
     assert code == 42, f"expected 42 (last=42, empty=0), got {code}"
 
 
+def test_stdlib_tf1d_count_above():
+    """count_above([1.0,5.0,3.0,8.0], 4.0) = 2; *21=42."""
+    src = """
+    fn main() -> i32 {
+        let x = t1d_new(4);
+        tf1d_set(x, 0, 1.0_f32);
+        tf1d_set(x, 1, 5.0_f32);
+        tf1d_set(x, 2, 3.0_f32);
+        tf1d_set(x, 3, 8.0_f32);
+        tf1d_count_above(x, 4, 4.0_f32) * 21
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_tf1d_count_below():
+    """count_below([1.0,5.0,3.0,8.0], 4.0) = 2; *21=42."""
+    src = """
+    fn main() -> i32 {
+        let x = t1d_new(4);
+        tf1d_set(x, 0, 1.0_f32);
+        tf1d_set(x, 1, 5.0_f32);
+        tf1d_set(x, 2, 3.0_f32);
+        tf1d_set(x, 3, 8.0_f32);
+        tf1d_count_below(x, 4, 4.0_f32) * 21
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_tf1d_count_eq_zero():
+    """count_eq_zero on [0.0, 5.0, 0.0, 0.0] = 3; *14=42."""
+    src = """
+    fn main() -> i32 {
+        let x = t1d_new(4);
+        tf1d_set(x, 0, 0.0_f32);
+        tf1d_set(x, 1, 5.0_f32);
+        tf1d_set(x, 2, 0.0_f32);
+        tf1d_set(x, 3, 0.0_f32);
+        tf1d_count_eq_zero(x, 4) * 14
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_tf1d_is_empty():
+    """tf1d_is_empty(_, 0) = 1; *42=42."""
+    src = """
+    fn main() -> i32 {
+        let x = t1d_new(0);
+        tf1d_is_empty(x, 0) * 42
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
 def test_stdlib_vec_is_empty():
     """is_empty(0) = 1; *42 = 42."""
     src = """
