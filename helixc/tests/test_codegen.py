@@ -9955,6 +9955,63 @@ def test_stdlib_vec_last():
     assert code == 42, f"expected 42 (last=42, empty=0), got {code}"
 
 
+def test_stdlib_ti1d_count_eq():
+    """count_eq([1,5,1,5,1], 1) = 3; *14=42."""
+    src = """
+    fn main() -> i32 {
+        let x = t1d_new(5);
+        ti1d_set(x, 0, 1); ti1d_set(x, 1, 5); ti1d_set(x, 2, 1);
+        ti1d_set(x, 3, 5); ti1d_set(x, 4, 1);
+        ti1d_count_eq(x, 5, 1) * 14
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_ti1d_count_pos():
+    """count_pos([0,-1,2,-3,4]) = 2; *21=42."""
+    src = """
+    fn main() -> i32 {
+        let x = t1d_new(5);
+        ti1d_set(x, 0, 0); ti1d_set(x, 1, 0 - 1); ti1d_set(x, 2, 2);
+        ti1d_set(x, 3, 0 - 3); ti1d_set(x, 4, 4);
+        ti1d_count_pos(x, 5) * 21
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_ti1d_count_neg():
+    """count_neg([0,-1,2,-3,4]) = 2; *21=42."""
+    src = """
+    fn main() -> i32 {
+        let x = t1d_new(5);
+        ti1d_set(x, 0, 0); ti1d_set(x, 1, 0 - 1); ti1d_set(x, 2, 2);
+        ti1d_set(x, 3, 0 - 3); ti1d_set(x, 4, 4);
+        ti1d_count_neg(x, 5) * 21
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_ti1d_clone_alloc():
+    """clone_alloc([42, 99]); first elem = 42."""
+    src = """
+    fn main() -> i32 {
+        let x = t1d_new(2);
+        ti1d_set(x, 0, 42);
+        ti1d_set(x, 1, 99);
+        let r = ti1d_clone_alloc(x, 2);
+        __arena_get(r)
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
 def test_stdlib_string_count_lt_byte():
     """'ABCD' (65,66,67,68); count < 67 = 2; *21=42."""
     src = """

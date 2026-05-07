@@ -1120,3 +1120,38 @@ fn ti1d_first(start: i32, n: i32) -> i32 {
 fn ti1d_last(start: i32, n: i32) -> i32 {
     if n == 0 { 0 } else { __arena_get(start + n - 1) }
 }
+
+// ti1d_count_eq(start, n, target): @pure. Count of v[i] == target.
+@pure
+fn ti1d_count_eq(start: i32, n: i32, target: i32) -> i32 {
+    let mut i: i32 = 0;
+    let mut total: i32 = 0;
+    while i < n {
+        if __arena_get(start + i) == target { total = total + 1; }
+        i = i + 1;
+    }
+    total
+}
+
+// ti1d_count_pos(start, n): @pure. Count of strictly positive elements.
+@pure
+fn ti1d_count_pos(start: i32, n: i32) -> i32 {
+    ti1d_count_above(start, n, 0)
+}
+
+// ti1d_count_neg(start, n): @pure. Count of strictly negative elements.
+@pure
+fn ti1d_count_neg(start: i32, n: i32) -> i32 {
+    ti1d_count_below(start, n, 0)
+}
+
+// ti1d_clone_alloc(start, n): allocate new vec copy. Mirror of vec_clone_alloc.
+fn ti1d_clone_alloc(start: i32, n: i32) -> i32 {
+    let s: i32 = __arena_len();
+    let mut i: i32 = 0;
+    while i < n {
+        __arena_push(__arena_get(start + i));
+        i = i + 1;
+    }
+    s
+}
