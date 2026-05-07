@@ -1373,3 +1373,53 @@ fn vec_max_pure(start: i32, count: i32) -> i32 {
 fn vec_count_zero(start: i32, count: i32) -> i32 {
     vec_count_eq(start, count, 0)
 }
+
+// vec_fill_alloc(n, x): allocate a new vec of length n with every
+// element set to x. Mirror of vec_fill_inplace.
+fn vec_fill_alloc(n: i32, x: i32) -> i32 {
+    let s: i32 = __arena_len();
+    let mut i: i32 = 0;
+    while i < n {
+        __arena_push(x);
+        i = i + 1;
+    }
+    s
+}
+
+// vec_zeros(n): @pure shorthand. Allocate n zeros.
+@pure
+fn vec_zeros(n: i32) -> i32 {
+    let s: i32 = __arena_len();
+    let mut i: i32 = 0;
+    while i < n {
+        __arena_push(0);
+        i = i + 1;
+    }
+    s
+}
+
+// vec_ones(n): allocate n ones.
+fn vec_ones(n: i32) -> i32 {
+    let s: i32 = __arena_len();
+    let mut i: i32 = 0;
+    while i < n {
+        __arena_push(1);
+        i = i + 1;
+    }
+    s
+}
+
+// vec_arange(lo, hi, step): allocate a vec [lo, lo+step, lo+2*step, ...]
+// up to but not including hi. Returns empty if step <= 0 or lo >= hi.
+fn vec_arange(lo: i32, hi: i32, step: i32) -> i32 {
+    let s: i32 = __arena_len();
+    if step <= 0 { s }
+    else {
+        let mut v: i32 = lo;
+        while v < hi {
+            __arena_push(v);
+            v = v + step;
+        }
+        s
+    }
+}

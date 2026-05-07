@@ -9827,6 +9827,78 @@ def test_stdlib_vec_last():
     assert code == 42, f"expected 42 (last=42, empty=0), got {code}"
 
 
+def test_stdlib_vec_fill_alloc():
+    """fill_alloc(7, 6) -> [6,6,6,6,6,6,6]; sum=42."""
+    src = """
+    fn main() -> i32 {
+        let r = vec_fill_alloc(7, 6);
+        let mut total: i32 = 0;
+        let mut i: i32 = 0;
+        while i < 7 {
+            total = total + __arena_get(r + i);
+            i = i + 1;
+        }
+        total
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_vec_zeros():
+    """zeros(5): all zero; sum=0; +42=42."""
+    src = """
+    fn main() -> i32 {
+        let r = vec_zeros(5);
+        let mut total: i32 = 0;
+        let mut i: i32 = 0;
+        while i < 5 {
+            total = total + __arena_get(r + i);
+            i = i + 1;
+        }
+        total + 42
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_vec_ones():
+    """ones(5): all 1; sum=5; *7+7=42."""
+    src = """
+    fn main() -> i32 {
+        let r = vec_ones(5);
+        let mut total: i32 = 0;
+        let mut i: i32 = 0;
+        while i < 5 {
+            total = total + __arena_get(r + i);
+            i = i + 1;
+        }
+        total * 7 + 7
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_vec_arange():
+    """arange(0, 10, 2) -> [0,2,4,6,8]; sum=20; *2+2=42."""
+    src = """
+    fn main() -> i32 {
+        let r = vec_arange(0, 10, 2);
+        let mut total: i32 = 0;
+        let mut i: i32 = 0;
+        while i < 5 {
+            total = total + __arena_get(r + i);
+            i = i + 1;
+        }
+        total * 2 + 2
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
 def test_stdlib_tf2d_norm_frobenius_sq():
     """[[3,4]] frobenius_sq = 9+16=25.0; bits 0x41C80000; top 65; -23=42."""
     src = """
