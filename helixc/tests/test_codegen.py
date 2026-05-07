@@ -7242,6 +7242,66 @@ fn g(y: f32) -> f32 { y + 1.0 }
             f"bad hash: {h!r}"
 
 
+def test_stdlib_vec_filter_le():
+    """filter [1,5,2,8,3,7] for <=3 yields [1,2,3]; kept=3, sum=6 -> 36."""
+    src = """
+    fn main() -> i32 {
+        let s = vec_new();
+        let n0 = vec_push(s, 0, 1);
+        let n1 = vec_push(s, n0, 5);
+        let n2 = vec_push(s, n1, 2);
+        let n3 = vec_push(s, n2, 8);
+        let n4 = vec_push(s, n3, 3);
+        let n5 = vec_push(s, n4, 7);
+        let dst = __arena_len();
+        let kept = vec_filter_le(s, n5, 3);
+        kept * 10 + vec_sum(dst, kept)
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 36, f"expected 36, got {code}"
+
+
+def test_stdlib_vec_filter_ge():
+    """filter [1,5,2,8,3,7] for >=5 yields [5,8,7]; kept=3, sum=20 -> 320 mod 256 = 64."""
+    src = """
+    fn main() -> i32 {
+        let s = vec_new();
+        let n0 = vec_push(s, 0, 1);
+        let n1 = vec_push(s, n0, 5);
+        let n2 = vec_push(s, n1, 2);
+        let n3 = vec_push(s, n2, 8);
+        let n4 = vec_push(s, n3, 3);
+        let n5 = vec_push(s, n4, 7);
+        let dst = __arena_len();
+        let kept = vec_filter_ge(s, n5, 5);
+        kept * 100 + vec_sum(dst, kept)
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 64, f"expected 64, got {code}"
+
+
+def test_stdlib_vec_filter_ne():
+    """filter [3,1,3,2,3,4] for !=3 yields [1,2,4]; kept=3, sum=7 -> 37."""
+    src = """
+    fn main() -> i32 {
+        let s = vec_new();
+        let n0 = vec_push(s, 0, 3);
+        let n1 = vec_push(s, n0, 1);
+        let n2 = vec_push(s, n1, 3);
+        let n3 = vec_push(s, n2, 2);
+        let n4 = vec_push(s, n3, 3);
+        let n5 = vec_push(s, n4, 4);
+        let dst = __arena_len();
+        let kept = vec_filter_ne(s, n5, 3);
+        kept * 10 + vec_sum(dst, kept)
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 37, f"expected 37, got {code}"
+
+
 def main():
     tests = [(name, fn) for name, fn in globals().items()
              if name.startswith("test_") and callable(fn)]

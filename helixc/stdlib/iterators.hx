@@ -235,6 +235,48 @@ fn vec_filter_eq(start: i32, count: i32, t: i32) -> i32 {
     kept
 }
 
+fn vec_filter_le(start: i32, count: i32, t: i32) -> i32 {
+    let mut i: i32 = 0;
+    let mut kept: i32 = 0;
+    while i < count {
+        let v = __arena_get(start + i);
+        if v <= t {
+            __arena_push(v);
+            kept = kept + 1;
+        }
+        i = i + 1;
+    }
+    kept
+}
+
+fn vec_filter_ge(start: i32, count: i32, t: i32) -> i32 {
+    let mut i: i32 = 0;
+    let mut kept: i32 = 0;
+    while i < count {
+        let v = __arena_get(start + i);
+        if v >= t {
+            __arena_push(v);
+            kept = kept + 1;
+        }
+        i = i + 1;
+    }
+    kept
+}
+
+fn vec_filter_ne(start: i32, count: i32, t: i32) -> i32 {
+    let mut i: i32 = 0;
+    let mut kept: i32 = 0;
+    while i < count {
+        let v = __arena_get(start + i);
+        if v != t {
+            __arena_push(v);
+            kept = kept + 1;
+        }
+        i = i + 1;
+    }
+    kept
+}
+
 fn vec_zip_sub(a: i32, b: i32, count: i32) -> i32 {
     let s: i32 = __arena_len();
     let mut i: i32 = 0;
