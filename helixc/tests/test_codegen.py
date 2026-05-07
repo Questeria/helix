@@ -2253,6 +2253,25 @@ fn main() -> i32 {{
     assert compile_and_exec(
         "fn main() -> i32 { let x: bf16 = 1.5_bf16 ; 42 }"
     ) == 42, "bf16 LITERAL parses + compiles"
+    # Stage 1.5 audit fix: bf16 binops trap with SIGILL (exit 132).
+    # Without is_bf16_expr in the AST_ADD/SUB/MUL/DIV/MOD cascades, a
+    # `bf16 + bf16` (or any other arith op on bf16) silently fell
+    # through to `emit_add_eax_ecx` (32-bit int ADD) on the float bit
+    # patterns — garbage. Now traps loudly. (Hardware bf16 add needs
+    # AVX-512 BF16, deferred; once codegen lands, replace ud2 with the
+    # cvtne2ps2bf16 + addss + masked-store pipeline.)
+    assert compile_and_exec(
+        "fn main() -> i32 { let x: bf16 = 1.5_bf16 ; let y: bf16 = 0.5_bf16 ; "
+        "let s: bf16 = x + y ; 42 }"
+    ) == 132, "bf16 + bf16 traps with SIGILL"
+    assert compile_and_exec(
+        "fn main() -> i32 { let x: bf16 = 1.5_bf16 ; let y: bf16 = 0.5_bf16 ; "
+        "let s: bf16 = x - y ; 42 }"
+    ) == 132, "bf16 - bf16 traps with SIGILL"
+    assert compile_and_exec(
+        "fn main() -> i32 { let x: bf16 = 1.5_bf16 ; let y: bf16 = 0.5_bf16 ; "
+        "let s: bf16 = x * y ; 42 }"
+    ) == 132, "bf16 * bf16 traps with SIGILL"
     # Approach A Stage 2.4: u64 minimal scaffold. u64 literals lex via
     # `_u64` 4-byte suffix, parse to AST_INTLIT_U64 (tag 38), expr_type
     # returns 9. Codegen emits `movabs rax, imm64` (8 bytes) so the full
