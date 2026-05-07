@@ -520,3 +520,56 @@ fn hashmap_avg_value_x100(start: i32, cap: i32) -> i32 {
 fn hashmap_is_empty(start: i32, cap: i32) -> i32 {
     if hashmap_size(start, cap) == 0 { 1 } else { 0 }
 }
+
+// hashmap_min_key_with_value(start, cap, target): @pure. Smallest key
+// among buckets whose value == target. Returns 0 for none.
+@pure
+fn hashmap_min_key_with_value(start: i32, cap: i32, target: i32) -> i32 {
+    let mut i: i32 = 0;
+    let mut found: i32 = 0;
+    let mut best: i32 = 0;
+    while i < cap {
+        let base = start + i * 3;
+        if __arena_get(base) == 1 {
+            if __arena_get(base + 2) == target {
+                let k = __arena_get(base + 1);
+                if found == 0 { best = k; found = 1; }
+                else { if k < best { best = k; }; };
+            };
+        };
+        i = i + 1;
+    }
+    best
+}
+
+// hashmap_count_value_in_range(start, cap, lo, hi): @pure. Count of
+// occupied buckets whose value is in [lo, hi] inclusive.
+@pure
+fn hashmap_count_value_in_range(start: i32, cap: i32, lo: i32, hi: i32) -> i32 {
+    let mut i: i32 = 0;
+    let mut total: i32 = 0;
+    while i < cap {
+        let base = start + i * 3;
+        if __arena_get(base) == 1 {
+            let v = __arena_get(base + 2);
+            if v >= lo {
+                if v <= hi { total = total + 1; };
+            };
+        };
+        i = i + 1;
+    }
+    total
+}
+
+// hashmap_capacity(start, cap): @pure. Returns cap (alias for clarity).
+@pure
+fn hashmap_capacity(start: i32, cap: i32) -> i32 {
+    cap
+}
+
+// hashmap_remaining_slots(start, cap): @pure. cap - size. How many
+// more inserts can fit before linear-probe failure.
+@pure
+fn hashmap_remaining_slots(start: i32, cap: i32) -> i32 {
+    cap - hashmap_size(start, cap)
+}

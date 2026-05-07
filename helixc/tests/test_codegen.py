@@ -9894,6 +9894,66 @@ def test_stdlib_vec_last():
     assert code == 42, f"expected 42 (last=42, empty=0), got {code}"
 
 
+def test_stdlib_hashmap_min_key_with_value():
+    """Insert (10,5),(42,5),(100,7); min_key with value=5 → 10; +32=42."""
+    src = """
+    fn main() -> i32 {
+        let m = hashmap_new(8);
+        hashmap_put(m, 8, 10, 5);
+        hashmap_put(m, 8, 42, 5);
+        hashmap_put(m, 8, 100, 7);
+        hashmap_min_key_with_value(m, 8, 5) + 32
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_hashmap_count_value_in_range():
+    """Insert (1,5),(2,15),(3,25),(4,42); count in [10,30]=2; *21=42."""
+    src = """
+    fn main() -> i32 {
+        let m = hashmap_new(8);
+        hashmap_put(m, 8, 1, 5);
+        hashmap_put(m, 8, 2, 15);
+        hashmap_put(m, 8, 3, 25);
+        hashmap_put(m, 8, 4, 42);
+        hashmap_count_value_in_range(m, 8, 10, 30) * 21
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_hashmap_capacity():
+    """capacity(_, 42) = 42."""
+    src = """
+    fn main() -> i32 {
+        let m = hashmap_new(42);
+        hashmap_capacity(m, 42)
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_hashmap_remaining_slots():
+    """cap=50, 8 inserted; remaining=42."""
+    src = """
+    fn main() -> i32 {
+        let m = hashmap_new(50);
+        let mut i: i32 = 0;
+        while i < 8 {
+            hashmap_put(m, 50, i, 100);
+            i = i + 1;
+        }
+        hashmap_remaining_slots(m, 50)
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
 def test_stdlib_tf1d_count_above():
     """count_above([1.0,5.0,3.0,8.0], 4.0) = 2; *21=42."""
     src = """
