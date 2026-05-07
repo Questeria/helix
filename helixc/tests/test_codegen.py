@@ -897,6 +897,87 @@ def test_i64_modulo_beyond_i32():
     assert compile_and_run(src) == 7
 
 
+def test_i64_band_beyond_i32():
+    """Stage 1 audit batch 2 (regression): i64 AND must use REX.W
+    `and rax, rcx`, not 32-bit `and eax, ecx`. Operands have nonzero high32
+    and zero low32; 32-bit AND would return 0, 64-bit AND returns the
+    expected high32 value."""
+    src = """
+    fn main() -> i32 {
+        let a: i64 = 12884901888_i64;
+        let b: i64 = 8589934592_i64;
+        let r: i64 = a & b;
+        let div: i64 = 200000000_i64;
+        (r / div) as i32
+    }
+    """
+    assert compile_and_run(src) == 42
+
+
+def test_i64_bor_beyond_i32():
+    """Stage 1 audit batch 2 (regression): i64 OR must use REX.W
+    `or rax, rcx`. With high32-only and low32-only operands, 64-bit OR
+    preserves both halves; 32-bit OR drops the high half."""
+    src = """
+    fn main() -> i32 {
+        let a: i64 = 8589934592_i64;
+        let b: i64 = 42_i64;
+        let r: i64 = a | b;
+        let div: i64 = 200000000_i64;
+        (r / div) as i32
+    }
+    """
+    assert compile_and_run(src) == 42
+
+
+def test_i64_bxor_beyond_i32():
+    """Stage 1 audit batch 2 (regression): i64 XOR must use REX.W
+    `xor rax, rcx`. Both operands have zero low32 and differing high32;
+    32-bit XOR returns 0, 64-bit XOR returns the high-half difference."""
+    src = """
+    fn main() -> i32 {
+        let a: i64 = 12884901888_i64;
+        let b: i64 = 4294967296_i64;
+        let r: i64 = a ^ b;
+        let div: i64 = 200000000_i64;
+        (r / div) as i32
+    }
+    """
+    assert compile_and_run(src) == 42
+
+
+def test_i64_shl_beyond_i32():
+    """Stage 1 audit batch 2 (regression): i64 SHL must use REX.W
+    `shl rax, cl`. Shift count >= 32 distinguishes 64-bit shifts (where
+    1 << 33 = 2^33) from 32-bit shifts (where shl eax, cl masks cl to 5
+    bits, so 1 << 33 = 1 << 1 = 2)."""
+    src = """
+    fn main() -> i32 {
+        let one: i64 = 1_i64;
+        let big: i64 = one << 33;
+        let div: i64 = 200000000_i64;
+        (big / div) as i32
+    }
+    """
+    assert compile_and_run(src) == 42
+
+
+def test_i64_sar_beyond_i32():
+    """Stage 1 audit batch 2 (regression): i64 SAR must use REX.W
+    `sar rax, cl`. Shifting a value with high32 set by 1 bit produces
+    a result still beyond i32 range; 32-bit SAR would only see the low32
+    portion (=42 here) and return 21, missing the high half entirely."""
+    src = """
+    fn main() -> i32 {
+        let big: i64 = 8589934634_i64;
+        let r: i64 = big >> 1;
+        let div: i64 = 100000000_i64;
+        (r / div) as i32
+    }
+    """
+    assert compile_and_run(src) == 42
+
+
 def test_f32_negation_sign_bit():
     """Phase 1.3 (regression-class): f32 negation must flip the sign bit,
     too. The OLD code used integer two's-complement which was incorrect
