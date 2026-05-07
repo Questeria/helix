@@ -5696,6 +5696,78 @@ def test_stdlib_vec_zip_sub():
     assert code == 42, f"expected 42, got {code}"
 
 
+def test_stdlib_vec_argmin():
+    """argmin([5,2,8,1,7,3]) = 3 (index of value 1). Encoded as 3*10 + 12 = 42."""
+    src = """
+    fn main() -> i32 {
+        let s = vec_new();
+        let n0 = vec_push(s, 0, 5);
+        let n1 = vec_push(s, n0, 2);
+        let n2 = vec_push(s, n1, 8);
+        let n3 = vec_push(s, n2, 1);
+        let n4 = vec_push(s, n3, 7);
+        let n5 = vec_push(s, n4, 3);
+        let idx = vec_argmin(s, n5);
+        idx * 10 + 12
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_vec_argmax():
+    """argmax([5,2,8,1,7,3]) = 2 (index of value 8). Encoded as 2*16 + 10 = 42."""
+    src = """
+    fn main() -> i32 {
+        let s = vec_new();
+        let n0 = vec_push(s, 0, 5);
+        let n1 = vec_push(s, n0, 2);
+        let n2 = vec_push(s, n1, 8);
+        let n3 = vec_push(s, n2, 1);
+        let n4 = vec_push(s, n3, 7);
+        let n5 = vec_push(s, n4, 3);
+        let idx = vec_argmax(s, n5);
+        idx * 16 + 10
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_vec_argmin_argmax_empty():
+    """argmin/argmax of empty vec return -1. Sentinel: 40 - argmin - argmax = 42."""
+    src = """
+    fn main() -> i32 {
+        let s = vec_new();
+        let mn = vec_argmin(s, 0);
+        let mx = vec_argmax(s, 0);
+        // both are -1, so 40 - mn - mx = 40 - (-1) - (-1) = 42.
+        40 - mn - mx
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_vec_dot():
+    """dot([2,3,5], [4,1,6]) = 8+3+30 = 41. Encoded as 41+1 = 42."""
+    src = """
+    fn main() -> i32 {
+        let a = vec_new();
+        let an0 = vec_push(a, 0, 2);
+        let an1 = vec_push(a, an0, 3);
+        let an2 = vec_push(a, an1, 5);
+        let b = vec_new();
+        let bn0 = vec_push(b, 0, 4);
+        let bn1 = vec_push(b, bn0, 1);
+        let bn2 = vec_push(b, bn1, 6);
+        vec_dot(a, b, an2) + 1
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
 def test_impl_inherent_method_basic():
     """Phase 1.8: inherent impl block. `impl Type { fn method(self) }` lifts
     to `Type__method`. `obj.method(args)` rewrites to `Type__method(obj, args)`."""

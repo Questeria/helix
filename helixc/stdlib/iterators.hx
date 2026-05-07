@@ -23,6 +23,9 @@
 //   vec_filter_gt(start, count, t)       -> i32   appends elems > t; returns kept count.
 //   vec_filter_eq(start, count, t)       -> i32   appends elems == t; returns kept count.
 //   vec_zip_sub(a, b, count)             -> i32   appends [a[i]-b[i]]; returns new start.
+//   vec_argmin(start, count)             -> i32   index of smallest element (-1 if empty).
+//   vec_argmax(start, count)             -> i32   index of largest element (-1 if empty).
+//   vec_dot(a, b, count)                 -> i32   dot product sum(a[i]*b[i]).
 //
 // License: Apache 2.0
 
@@ -190,4 +193,47 @@ fn vec_zip_sub(a: i32, b: i32, count: i32) -> i32 {
         i = i + 1;
     }
     s
+}
+
+@pure
+fn vec_argmin(start: i32, count: i32) -> i32 {
+    if count == 0 { 0 - 1 }
+    else {
+        let mut i: i32 = 1;
+        let mut best_i: i32 = 0;
+        let mut best: i32 = __arena_get(start);
+        while i < count {
+            let v = __arena_get(start + i);
+            if v < best { best = v; best_i = i; }
+            i = i + 1;
+        }
+        best_i
+    }
+}
+
+@pure
+fn vec_argmax(start: i32, count: i32) -> i32 {
+    if count == 0 { 0 - 1 }
+    else {
+        let mut i: i32 = 1;
+        let mut best_i: i32 = 0;
+        let mut best: i32 = __arena_get(start);
+        while i < count {
+            let v = __arena_get(start + i);
+            if v > best { best = v; best_i = i; }
+            i = i + 1;
+        }
+        best_i
+    }
+}
+
+@pure
+fn vec_dot(a: i32, b: i32, count: i32) -> i32 {
+    let mut i: i32 = 0;
+    let mut acc: i32 = 0;
+    while i < count {
+        acc = acc + __arena_get(a + i) * __arena_get(b + i);
+        i = i + 1;
+    }
+    acc
 }
