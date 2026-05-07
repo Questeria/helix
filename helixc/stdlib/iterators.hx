@@ -964,3 +964,71 @@ fn vec_window_sum(start: i32, count: i32, win: i32) -> i32 {
         s
     }}
 }
+
+// vec_all_eq(start, count, target): @pure. Returns 1 if every element
+// equals target, 0 otherwise. Empty vec returns 1 (vacuously true).
+@pure
+fn vec_all_eq(start: i32, count: i32, target: i32) -> i32 {
+    let mut i: i32 = 0;
+    let mut ok: i32 = 1;
+    while i < count {
+        if __arena_get(start + i) != target { ok = 0; }
+        i = i + 1;
+    }
+    ok
+}
+
+// vec_any_eq(start, count, target): @pure. Returns 1 if any element
+// equals target, 0 otherwise. Empty vec returns 0.
+@pure
+fn vec_any_eq(start: i32, count: i32, target: i32) -> i32 {
+    let mut i: i32 = 0;
+    let mut found: i32 = 0;
+    while i < count {
+        if __arena_get(start + i) == target { found = 1; }
+        i = i + 1;
+    }
+    found
+}
+
+// vec_is_sorted_asc(start, count): @pure. Returns 1 if elements are
+// in non-decreasing order, 0 otherwise. count <= 1 returns 1.
+@pure
+fn vec_is_sorted_asc(start: i32, count: i32) -> i32 {
+    let mut i: i32 = 1;
+    let mut ok: i32 = 1;
+    while i < count {
+        if __arena_get(start + i) < __arena_get(start + i - 1) { ok = 0; }
+        i = i + 1;
+    }
+    ok
+}
+
+// vec_is_sorted_desc(start, count): @pure. Returns 1 if elements are
+// in non-increasing order, 0 otherwise. count <= 1 returns 1.
+@pure
+fn vec_is_sorted_desc(start: i32, count: i32) -> i32 {
+    let mut i: i32 = 1;
+    let mut ok: i32 = 1;
+    while i < count {
+        if __arena_get(start + i) > __arena_get(start + i - 1) { ok = 0; }
+        i = i + 1;
+    }
+    ok
+}
+
+// vec_index_of_pure(start, count, target): @pure. Returns the first
+// index where v[i] == target, or -1 if not present. Renamed from
+// "find_eq" for the iterator-pattern naming convention.
+@pure
+fn vec_index_of_pure(start: i32, count: i32, target: i32) -> i32 {
+    let mut i: i32 = 0;
+    let mut found: i32 = 0 - 1;
+    while i < count {
+        if found < 0 {
+            if __arena_get(start + i) == target { found = i; };
+        };
+        i = i + 1;
+    }
+    found
+}

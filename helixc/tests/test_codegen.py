@@ -8175,6 +8175,79 @@ def test_stdlib_ti1d_l2_norm_sq():
     assert code == 42, f"expected 42, got {code}"
 
 
+def test_stdlib_vec_all_eq():
+    """[3,3,3,3] all_eq(3)=1; [3,3,5,3] all_eq(3)=0. 1*42 + 0*5 = 42."""
+    src = """
+    fn main() -> i32 {
+        let v1 = __arena_len();
+        __arena_push(3); __arena_push(3); __arena_push(3); __arena_push(3);
+        let r1 = vec_all_eq(v1, 4, 3);
+        let v2 = __arena_len();
+        __arena_push(3); __arena_push(3); __arena_push(5); __arena_push(3);
+        let r2 = vec_all_eq(v2, 4, 3);
+        r1 * 42 + r2 * 5
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_vec_any_eq():
+    """[1,2,3,4] any_eq(3)=1; any_eq(7)=0. 1*42 + 0 = 42."""
+    src = """
+    fn main() -> i32 {
+        let v = __arena_len();
+        __arena_push(1); __arena_push(2); __arena_push(3); __arena_push(4);
+        vec_any_eq(v, 4, 3) * 42 + vec_any_eq(v, 4, 7) * 9
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_vec_is_sorted_asc():
+    """[1,2,3,5] sorted_asc=1; [1,3,2,5] sorted_asc=0. 1*42 + 0 = 42."""
+    src = """
+    fn main() -> i32 {
+        let v1 = __arena_len();
+        __arena_push(1); __arena_push(2); __arena_push(3); __arena_push(5);
+        let r1 = vec_is_sorted_asc(v1, 4);
+        let v2 = __arena_len();
+        __arena_push(1); __arena_push(3); __arena_push(2); __arena_push(5);
+        let r2 = vec_is_sorted_asc(v2, 4);
+        r1 * 42 + r2 * 13
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_vec_is_sorted_desc():
+    """[5,3,2,1] sorted_desc=1. *42 = 42."""
+    src = """
+    fn main() -> i32 {
+        let v = __arena_len();
+        __arena_push(5); __arena_push(3); __arena_push(2); __arena_push(1);
+        vec_is_sorted_desc(v, 4) * 42
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_vec_index_of_pure():
+    """[10,20,30,40] index_of_pure(30)=2. *21 = 42."""
+    src = """
+    fn main() -> i32 {
+        let v = __arena_len();
+        __arena_push(10); __arena_push(20); __arena_push(30); __arena_push(40);
+        vec_index_of_pure(v, 4, 30) * 21
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
 def test_stdlib_vec_running_max():
     """running_max([1, 5, 3, 8, 2]) -> [1, 5, 5, 8, 8]; sum = 27. +15 = 42."""
     src = """
