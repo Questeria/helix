@@ -409,3 +409,62 @@ fn string_repeat(start: i32, len: i32, n: i32) -> i32 {
     }
     s
 }
+
+// string_split_first(start, len, delim): @pure. Returns the index
+// of the first byte equal to delim, or -1 if absent. Useful for
+// "split into key/value at first '=' " patterns.
+@pure
+fn string_split_first(start: i32, len: i32, delim: i32) -> i32 {
+    let mut i: i32 = 0;
+    let mut found: i32 = 0 - 1;
+    while i < len {
+        if found < 0 {
+            if __arena_get(start + i) == delim { found = i; };
+        };
+        i = i + 1;
+    }
+    found
+}
+
+// string_count_byte_n(start, len, byte): @pure. Alias for the existing
+// string_count_byte (kept for naming-symmetry with the count_eq family
+// in iterators.hx). Just calls through.
+@pure
+fn string_count_byte_n(start: i32, len: i32, byte: i32) -> i32 {
+    string_count_byte(start, len, byte)
+}
+
+// string_is_ascii(start, len): @pure. Returns 1 if every byte is in
+// the 7-bit ASCII range (0..127), 0 otherwise. Useful gate for
+// downstream code that assumes single-byte chars.
+@pure
+fn string_is_ascii(start: i32, len: i32) -> i32 {
+    let mut i: i32 = 0;
+    let mut ok: i32 = 1;
+    while i < len {
+        let b = __arena_get(start + i);
+        if b > 127 { ok = 0; };
+        if b < 0 { ok = 0; };
+        i = i + 1;
+    }
+    ok
+}
+
+// string_is_digit_only(start, len): @pure. Returns 1 if every byte is
+// '0'..'9' (48..57), 0 otherwise. Empty string returns 0 (no digits =
+// not a number). Useful gate before string_to_int.
+@pure
+fn string_is_digit_only(start: i32, len: i32) -> i32 {
+    if len == 0 { 0 }
+    else {
+        let mut i: i32 = 0;
+        let mut ok: i32 = 1;
+        while i < len {
+            let b = __arena_get(start + i);
+            if b < 48 { ok = 0; };
+            if b > 57 { ok = 0; };
+            i = i + 1;
+        }
+        ok
+    }
+}

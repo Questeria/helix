@@ -8175,6 +8175,69 @@ def test_stdlib_ti1d_l2_norm_sq():
     assert code == 42, f"expected 42, got {code}"
 
 
+def test_stdlib_string_split_first():
+    """Push 'a=42'; split_first('=') = 1. *42=42."""
+    src = """
+    fn main() -> i32 {
+        let s = string_new();
+        let s1 = string_push(s, 0, 97);
+        let s2 = string_push(s, s1, 61);
+        let s3 = string_push(s, s2, 52);
+        let s4 = string_push(s, s3, 50);
+        string_split_first(s, s4, 61) * 42
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_string_count_byte_n():
+    """'banana' count of 'a' = 3; *14=42."""
+    src = """
+    fn main() -> i32 {
+        let s = string_new();
+        let s1 = string_push(s, 0, 98);
+        let s2 = string_push(s, s1, 97);
+        let s3 = string_push(s, s2, 110);
+        let s4 = string_push(s, s3, 97);
+        let s5 = string_push(s, s4, 110);
+        let s6 = string_push(s, s5, 97);
+        string_count_byte_n(s, s6, 97) * 14
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_string_is_ascii():
+    """'hi' is_ascii=1; *42=42."""
+    src = """
+    fn main() -> i32 {
+        let s = string_new();
+        let s1 = string_push(s, 0, 104);
+        let s2 = string_push(s, s1, 105);
+        string_is_ascii(s, s2) * 42
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_string_is_digit_only():
+    """'123' is_digit_only=1; *42=42."""
+    src = """
+    fn main() -> i32 {
+        let s = string_new();
+        let s1 = string_push(s, 0, 49);
+        let s2 = string_push(s, s1, 50);
+        let s3 = string_push(s, s2, 51);
+        string_is_digit_only(s, s3) * 42
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
 def test_stdlib_tf1d_argmin():
     """argmin([3.0, 1.0, 2.0, 4.0]) = 1. * 42 = 42."""
     src = """
