@@ -8175,6 +8175,59 @@ def test_stdlib_ti1d_l2_norm_sq():
     assert code == 42, f"expected 42, got {code}"
 
 
+def test_stdlib_vec_argmax_in_range():
+    """argmax_in_range([5,3,9,1], lo=1, hi=4) -> 2 (the 9 at idx 2). *21=42."""
+    src = """
+    fn main() -> i32 {
+        let v = __arena_len();
+        __arena_push(5); __arena_push(3); __arena_push(9); __arena_push(1);
+        vec_argmax_in_range(v, 1, 4) * 21
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_vec_argmin_in_range():
+    """argmin_in_range([10, 5, 1, 7], lo=1, hi=4) -> 2 (the 1 at idx 2). *21=42."""
+    src = """
+    fn main() -> i32 {
+        let v = __arena_len();
+        __arena_push(10); __arena_push(5); __arena_push(1); __arena_push(7);
+        vec_argmin_in_range(v, 1, 4) * 21
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_vec_sum_in_range():
+    """sum_in_range([1,2,3,4,5], lo=2, hi=5) = 3+4+5=12; *3+6=42."""
+    src = """
+    fn main() -> i32 {
+        let v = __arena_len();
+        __arena_push(1); __arena_push(2); __arena_push(3); __arena_push(4); __arena_push(5);
+        vec_sum_in_range(v, 2, 5) * 3 + 6
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_vec_reverse_inplace():
+    """reverse_inplace([1,2,3,4,5]) -> [5,4,3,2,1]; first elem 5; *7+7=42."""
+    src = """
+    fn main() -> i32 {
+        let v = __arena_len();
+        __arena_push(1); __arena_push(2); __arena_push(3); __arena_push(4); __arena_push(5);
+        vec_reverse_inplace(v, 5);
+        __arena_get(v) * 7 + 7
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
 def test_stdlib_tf2d_sub():
     """[[5,7]] - [[1,2]] -> [[4,5]]; sum=9; 9.0_f32=0x41100000; top=65; -23=42."""
     src = """

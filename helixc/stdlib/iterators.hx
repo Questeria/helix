@@ -1112,3 +1112,68 @@ fn vec_pairwise_diff(start: i32, count: i32) -> i32 {
         s
     }
 }
+
+// vec_argmax_in_range(start, lo, hi): @pure. Index of largest element
+// in v[lo..hi). Returns -1 if hi <= lo. Symmetric to tf1d_argmax_in_range
+// but for integer vecs.
+@pure
+fn vec_argmax_in_range(start: i32, lo: i32, hi: i32) -> i32 {
+    if hi <= lo { 0 - 1 }
+    else {
+        let mut i: i32 = lo + 1;
+        let mut best_idx: i32 = lo;
+        let mut best: i32 = __arena_get(start + lo);
+        while i < hi {
+            let v = __arena_get(start + i);
+            if v > best { best = v; best_idx = i; }
+            i = i + 1;
+        }
+        best_idx
+    }
+}
+
+// vec_argmin_in_range(start, lo, hi): @pure. Companion. -1 if empty.
+@pure
+fn vec_argmin_in_range(start: i32, lo: i32, hi: i32) -> i32 {
+    if hi <= lo { 0 - 1 }
+    else {
+        let mut i: i32 = lo + 1;
+        let mut best_idx: i32 = lo;
+        let mut best: i32 = __arena_get(start + lo);
+        while i < hi {
+            let v = __arena_get(start + i);
+            if v < best { best = v; best_idx = i; }
+            i = i + 1;
+        }
+        best_idx
+    }
+}
+
+// vec_sum_in_range(start, lo, hi): @pure. Partial sum over v[lo..hi).
+@pure
+fn vec_sum_in_range(start: i32, lo: i32, hi: i32) -> i32 {
+    let mut i: i32 = lo;
+    let mut total: i32 = 0;
+    while i < hi {
+        total = total + __arena_get(start + i);
+        i = i + 1;
+    }
+    total
+}
+
+// vec_reverse_inplace(start, count): swap pairs (i, count-1-i) in place.
+// Returns start. Useful before sort-friendly operations or for visual
+// reversal.
+fn vec_reverse_inplace(start: i32, count: i32) -> i32 {
+    let mut i: i32 = 0;
+    let half = count / 2;
+    while i < half {
+        let j = count - 1 - i;
+        let a = __arena_get(start + i);
+        let b = __arena_get(start + j);
+        __arena_set(start + i, b);
+        __arena_set(start + j, a);
+        i = i + 1;
+    }
+    start
+}
