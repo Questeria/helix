@@ -2845,6 +2845,9 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         // Step 7g: three-way dispatch — f64 path uses ucomisd via
         // emit_ssen_*_dbl helpers; nm-move-to-rcx promotes to 64-bit
         // for the f64 case (otherwise high half drops before ucomisd).
+        // Audit fix #9: comparison ops now trap on mixed types (f32+i32,
+        // f64+i32, f32+f64, etc.) — previously the `both_f`/`both_d` =0
+        // fall-through silently emitted integer cmp on bit patterns.
         let n1 = emit_ast_code(p1, bind_state, patch_state, bn_state);
         let np = emit_push_rax();
         let n2 = emit_ast_code(p2, bind_state, patch_state, bn_state);
@@ -2854,12 +2857,16 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         let no = emit_pop_rax();
         let l_f = is_f32_expr(p1, bind_state, bn_state);
         let r_f = is_f32_expr(p2, bind_state, bn_state);
-        let both_f = if l_f == 1 { if r_f == 1 { 1 } else { 0 } } else { 0 };
-        let both_d = if l_d == 1 { if r_d == 1 { 1 } else { 0 } } else { 0 };
-        let na = if both_d == 1 { emit_ssen_lt_dbl() }
-                 else { if both_f == 1 { emit_ssen_lt() } else { emit_lt_eax_ecx() } };
+        let na = if l_d == 1 {
+            if r_d == 1 { emit_ssen_lt_dbl() } else { emit_ud2_trap() }
+        } else { if r_d == 1 { emit_ud2_trap() } else {
+            if l_f == 1 {
+                if r_f == 1 { emit_ssen_lt() } else { emit_ud2_trap() }
+            } else { if r_f == 1 { emit_ud2_trap() } else { emit_lt_eax_ecx() } }
+        }};
         n1 + np + n2 + nm + no + na
     } else { if t == 19 {
+        // Audit fix #9: AST_GT mixed-type ud2 trap.
         let n1 = emit_ast_code(p1, bind_state, patch_state, bn_state);
         let np = emit_push_rax();
         let n2 = emit_ast_code(p2, bind_state, patch_state, bn_state);
@@ -2869,12 +2876,16 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         let no = emit_pop_rax();
         let l_f = is_f32_expr(p1, bind_state, bn_state);
         let r_f = is_f32_expr(p2, bind_state, bn_state);
-        let both_f = if l_f == 1 { if r_f == 1 { 1 } else { 0 } } else { 0 };
-        let both_d = if l_d == 1 { if r_d == 1 { 1 } else { 0 } } else { 0 };
-        let na = if both_d == 1 { emit_ssen_gt_dbl() }
-                 else { if both_f == 1 { emit_ssen_gt() } else { emit_gt_eax_ecx() } };
+        let na = if l_d == 1 {
+            if r_d == 1 { emit_ssen_gt_dbl() } else { emit_ud2_trap() }
+        } else { if r_d == 1 { emit_ud2_trap() } else {
+            if l_f == 1 {
+                if r_f == 1 { emit_ssen_gt() } else { emit_ud2_trap() }
+            } else { if r_f == 1 { emit_ud2_trap() } else { emit_gt_eax_ecx() } }
+        }};
         n1 + np + n2 + nm + no + na
     } else { if t == 20 {
+        // Audit fix #9: AST_EQ mixed-type ud2 trap.
         let n1 = emit_ast_code(p1, bind_state, patch_state, bn_state);
         let np = emit_push_rax();
         let n2 = emit_ast_code(p2, bind_state, patch_state, bn_state);
@@ -2884,12 +2895,16 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         let no = emit_pop_rax();
         let l_f = is_f32_expr(p1, bind_state, bn_state);
         let r_f = is_f32_expr(p2, bind_state, bn_state);
-        let both_f = if l_f == 1 { if r_f == 1 { 1 } else { 0 } } else { 0 };
-        let both_d = if l_d == 1 { if r_d == 1 { 1 } else { 0 } } else { 0 };
-        let na = if both_d == 1 { emit_ssen_eq_dbl() }
-                 else { if both_f == 1 { emit_ssen_eq() } else { emit_eq_eax_ecx() } };
+        let na = if l_d == 1 {
+            if r_d == 1 { emit_ssen_eq_dbl() } else { emit_ud2_trap() }
+        } else { if r_d == 1 { emit_ud2_trap() } else {
+            if l_f == 1 {
+                if r_f == 1 { emit_ssen_eq() } else { emit_ud2_trap() }
+            } else { if r_f == 1 { emit_ud2_trap() } else { emit_eq_eax_ecx() } }
+        }};
         n1 + np + n2 + nm + no + na
     } else { if t == 21 {
+        // Audit fix #9: AST_NE mixed-type ud2 trap.
         let n1 = emit_ast_code(p1, bind_state, patch_state, bn_state);
         let np = emit_push_rax();
         let n2 = emit_ast_code(p2, bind_state, patch_state, bn_state);
@@ -2899,12 +2914,16 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         let no = emit_pop_rax();
         let l_f = is_f32_expr(p1, bind_state, bn_state);
         let r_f = is_f32_expr(p2, bind_state, bn_state);
-        let both_f = if l_f == 1 { if r_f == 1 { 1 } else { 0 } } else { 0 };
-        let both_d = if l_d == 1 { if r_d == 1 { 1 } else { 0 } } else { 0 };
-        let na = if both_d == 1 { emit_ssen_ne_dbl() }
-                 else { if both_f == 1 { emit_ssen_ne() } else { emit_ne_eax_ecx() } };
+        let na = if l_d == 1 {
+            if r_d == 1 { emit_ssen_ne_dbl() } else { emit_ud2_trap() }
+        } else { if r_d == 1 { emit_ud2_trap() } else {
+            if l_f == 1 {
+                if r_f == 1 { emit_ssen_ne() } else { emit_ud2_trap() }
+            } else { if r_f == 1 { emit_ud2_trap() } else { emit_ne_eax_ecx() } }
+        }};
         n1 + np + n2 + nm + no + na
     } else { if t == 22 {
+        // Audit fix #9: AST_LE mixed-type ud2 trap.
         let n1 = emit_ast_code(p1, bind_state, patch_state, bn_state);
         let np = emit_push_rax();
         let n2 = emit_ast_code(p2, bind_state, patch_state, bn_state);
@@ -2914,12 +2933,16 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         let no = emit_pop_rax();
         let l_f = is_f32_expr(p1, bind_state, bn_state);
         let r_f = is_f32_expr(p2, bind_state, bn_state);
-        let both_f = if l_f == 1 { if r_f == 1 { 1 } else { 0 } } else { 0 };
-        let both_d = if l_d == 1 { if r_d == 1 { 1 } else { 0 } } else { 0 };
-        let na = if both_d == 1 { emit_ssen_le_dbl() }
-                 else { if both_f == 1 { emit_ssen_le() } else { emit_le_eax_ecx() } };
+        let na = if l_d == 1 {
+            if r_d == 1 { emit_ssen_le_dbl() } else { emit_ud2_trap() }
+        } else { if r_d == 1 { emit_ud2_trap() } else {
+            if l_f == 1 {
+                if r_f == 1 { emit_ssen_le() } else { emit_ud2_trap() }
+            } else { if r_f == 1 { emit_ud2_trap() } else { emit_le_eax_ecx() } }
+        }};
         n1 + np + n2 + nm + no + na
     } else { if t == 23 {
+        // Audit fix #9: AST_GE mixed-type ud2 trap.
         let n1 = emit_ast_code(p1, bind_state, patch_state, bn_state);
         let np = emit_push_rax();
         let n2 = emit_ast_code(p2, bind_state, patch_state, bn_state);
@@ -2929,10 +2952,13 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         let no = emit_pop_rax();
         let l_f = is_f32_expr(p1, bind_state, bn_state);
         let r_f = is_f32_expr(p2, bind_state, bn_state);
-        let both_f = if l_f == 1 { if r_f == 1 { 1 } else { 0 } } else { 0 };
-        let both_d = if l_d == 1 { if r_d == 1 { 1 } else { 0 } } else { 0 };
-        let na = if both_d == 1 { emit_ssen_ge_dbl() }
-                 else { if both_f == 1 { emit_ssen_ge() } else { emit_ge_eax_ecx() } };
+        let na = if l_d == 1 {
+            if r_d == 1 { emit_ssen_ge_dbl() } else { emit_ud2_trap() }
+        } else { if r_d == 1 { emit_ud2_trap() } else {
+            if l_f == 1 {
+                if r_f == 1 { emit_ssen_ge() } else { emit_ud2_trap() }
+            } else { if r_f == 1 { emit_ud2_trap() } else { emit_ge_eax_ecx() } }
+        }};
         n1 + np + n2 + nm + no + na
     } else { if t == 7 {
         // AST_IF(cond, then, else)
