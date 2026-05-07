@@ -2711,8 +2711,32 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
                 };
                 bit = bit - 1;
             }
+            // Audit fix (cycle 1, IEEE 754 rounding): peek at bit 53
+            // (one beyond the 52-bit mantissa) for round-to-nearest.
+            // If `residual * 2 >= threshold`, the next bit would have
+            // been 1 — round mantissa up by 1 ULP. Without this, decimals
+            // like 0.1, 0.7, 0.9 produce truncated bits 1 ULP off from
+            // the IEEE 754-correct value (the helixc-Python reference).
+            // Carry chain: mlo + 1 may overflow to mhi; mhi may overflow
+            // past 2^20 (= 0x100000), in which case the mantissa rolls
+            // to 0 and the exponent increments by 1.
+            let mut k_eff: i32 = k;
+            residual = residual * 2;
+            if residual >= threshold {
+                mlo = mlo + 1;
+                if mlo == 0 {
+                    // mlo wrapped from 0xFFFFFFFF to 0 — carry into mhi.
+                    mhi = mhi + 1;
+                    if mhi == 1048576 {
+                        // mhi overflow past 2^20: mantissa is now 1.0 ×
+                        // 2^(k+1). Reset mantissa, bump exp.
+                        mhi = 0;
+                        k_eff = k_eff + 1;
+                    };
+                };
+            };
             // Pack high32 = (k + 1023) << 20 | mhi   (sign bit = 0).
-            let exp_field = k + 1023;
+            let exp_field = k_eff + 1023;
             let mut exp_shifted: i32 = exp_field;
             let mut sh2: i32 = 0;
             while sh2 < 20 { exp_shifted = exp_shifted * 2; sh2 = sh2 + 1; }

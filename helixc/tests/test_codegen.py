@@ -2026,6 +2026,22 @@ fn main() -> i32 {{
     # 2.5_f64 -> 2 (truncates fractional, doesn't round to nearest).
     assert compile_and_exec("__f64_to_i32(2.5_f64)") == 2, \
         "__f64_to_i32(2.5_f64) -> 2 (truncates, not rounds)"
+    # Audit fix (cycle 1, IEEE 754 rounding): bit-53 round-to-nearest.
+    # 0.9_f64 = 0x3FECCCCCCCCCCCCD (note: ends in CD, rounded up).
+    # Without rounding the 52-bit truncated mantissa would give CC at the
+    # last byte. low8 of low32 = 0xCD = 205 (correct) vs 0xCC = 204 (wrong).
+    # Helix exit code is rax low 8, so __bits_lo_f64(0.9_f64) returns
+    # 0xCCCCCCCD as i32 = -858993459, but the exit code (low 8) is 0xCD = 205.
+    # Use unsigned-style modular comparison via division remainder instead.
+    # Top byte of low32 / 16777216: 0xCC = 204 either way, doesn't discriminate.
+    # Use modulo: __bits_lo_f64(0.9_f64) % 256 gives 0xCD = 205 (correct) or
+    # 0xCC = 204 (wrong without rounding). Negative modulo in Helix returns
+    # negative; use ((x % 256) + 256) % 256 idiom to get unsigned byte.
+    assert compile_and_exec(
+        "fn main() -> i32 {"
+        " let lo = __bits_lo_f64(0.9_f64);"
+        " ((lo % 256) + 256) % 256 }"
+    ) == 205, "0.9_f64 rounds up to 0x...CD (audit fix: round-to-nearest)"
     # Phase 1.10 step 7l: f64 bit-access primitives.
     # __bits_hi_f64(1.0_f64) -> high 32 of 0x3FF0000000000000 = 0x3FF00000.
     # /16777216 = 0x3F = 63.
