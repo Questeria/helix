@@ -2201,6 +2201,22 @@ fn main() -> i32 {{
         "fn main() -> i32 { let a: i8 = 50_i8 ; let b: i8 = 8_i8 ; "
         "let c: i8 = a - b ; 42 }"
     ) == 42, "i8 LET-bound annotation parses + codegen runs"
+    # Approach A Stage 2.5c: i16 + u16 minimal scaffold. _i16 / _u16
+    # 4-byte suffixes added to lexer (token tags 38, 39). Parser produces
+    # AST_INTLIT_I16 (tag 40) / AST_INTLIT_U16 (tag 41). expr_type
+    # returns 11 (i16) / 8 (u16). Codegen emits via emit_ast_int —
+    # both fit in i32 cleanly so the i32-shaped storage is fine. Type
+    # idents `i16` / `u16` (3 bytes each) added to parser's param/ret
+    # type maps.
+    assert compile_and_exec("42_i16") == 42, "i16 literal exits 42"
+    assert compile_and_exec("42_u16") == 42, "u16 literal exits 42"
+    assert compile_and_exec("100_i16 - 58_i16") == 42, \
+        "i16 - i16 via i32 fall-through"
+    assert compile_and_exec("20000_u16 + 22000_u16 + 42_u16 - 42000_u16") == 42, \
+        "u16 + u16 with values near upper bound (stays under 65536)"
+    assert compile_and_exec(
+        "fn main() -> i32 { let a: i16 = 100_i16 ; let b: u16 = 50_u16 ; 42 }"
+    ) == 42, "i16 + u16 LET annotations parse"
     # Approach A Stage 2.4: u64 minimal scaffold. u64 literals lex via
     # `_u64` 4-byte suffix, parse to AST_INTLIT_U64 (tag 38), expr_type
     # returns 9. Codegen emits `movabs rax, imm64` (8 bytes) so the full

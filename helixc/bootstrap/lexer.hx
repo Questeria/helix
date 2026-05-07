@@ -245,6 +245,8 @@ fn lex_int(src_start: i32, src_len: i32, pos: i32) -> i32 {
     let mut is_u8_suffix: i32 = 0;
     let mut is_u64_suffix: i32 = 0;
     let mut is_i8_suffix: i32 = 0;
+    let mut is_i16_suffix: i32 = 0;
+    let mut is_u16_suffix: i32 = 0;
     if p + 3 < end {
         let b0 = __arena_get(p);
         if b0 == 95 {   // '_'
@@ -283,6 +285,13 @@ fn lex_int(src_start: i32, src_len: i32, pos: i32) -> i32 {
                     p = p + 3;
                     is_i8_suffix = 1;
                 };
+                // Stage 2.5c: _i16 (4 bytes: '_' 'i' '1' '6').
+                if b2 == 49 {
+                    if b3 == 54 {                   // _i16
+                        p = p + 4;
+                        is_i16_suffix = 1;
+                    };
+                };
             };
             // Stage 2.1 (Approach A): _u32 suffix produces TK_INTLIT_U32
             // (tag 34). Codegen treats u32 literals identically to i32
@@ -312,6 +321,13 @@ fn lex_int(src_start: i32, src_len: i32, pos: i32) -> i32 {
                         is_u64_suffix = 1;
                     };
                 };
+                // Stage 2.5c: _u16 (4 bytes: '_' 'u' '1' '6').
+                if b2 == 49 {
+                    if b3 == 54 {                   // _u16
+                        p = p + 4;
+                        is_u16_suffix = 1;
+                    };
+                };
             };
         };
     }
@@ -333,7 +349,9 @@ fn lex_int(src_start: i32, src_len: i32, pos: i32) -> i32 {
                  else { if is_u32_suffix == 1 { 34 }
                  else { if is_u8_suffix == 1 { 35 }
                  else { if is_u64_suffix == 1 { 36 }
-                 else { if is_i8_suffix == 1 { 37 } else { 1 } } } } };
+                 else { if is_i8_suffix == 1 { 37 }
+                 else { if is_i16_suffix == 1 { 38 }
+                 else { if is_u16_suffix == 1 { 39 } else { 1 } } } } } } };
         push_token(tk, value, pos, length);
     };
     p

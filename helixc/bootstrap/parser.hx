@@ -474,6 +474,24 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
         let v = tok_p1(tok_base, k);
         cur_advance(sb);
         mk_node(39, v, 0, 0)
+    } else { if t == 38 {
+        // Approach A Stage 2.5c: TK_INTLIT_I16 (tag 38) -> AST_INTLIT_I16
+        // (tag 40). Same minimal scaffold as i8 — `mov eax, imm32` keeps
+        // the value in i32-shaped storage. i16 range [-32768, 32767]
+        // fits in i32 with no surprises. expr_type returns 11 (i16 type
+        // tag). Narrow movsx load and masked store deferred.
+        let v = tok_p1(tok_base, k);
+        cur_advance(sb);
+        mk_node(40, v, 0, 0)
+    } else { if t == 39 {
+        // Approach A Stage 2.5c: TK_INTLIT_U16 (tag 39) -> AST_INTLIT_U16
+        // (tag 41). Mirror of i16 with type tag 8 (u16). Fits in i32 with
+        // high bytes zero. Stage 2.2 / 2.4 unsigned dispatch already
+        // works correctly for u32 / u64; u16 falls through to i32 path
+        // for arithmetic since x86 add/sub/mul are signedness-agnostic.
+        let v = tok_p1(tok_base, k);
+        cur_advance(sb);
+        mk_node(41, v, 0, 0)
     } else { if t == 25 {
         // String literal (TK_STRLIT). Token slots:
         //   payload   = body byte_start (in the source buffer)
@@ -676,7 +694,7 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
             };
         };
         mk_node(99, t, 0, 0)
-    }}}}}}}}}}}
+    }}}}}}}}}}}}}
 }
 
 // --------------------------------------------------------------
@@ -856,10 +874,12 @@ fn parse_fn_decl(tok_base: i32, sb: i32) -> i32 {
                     if b1 == 54 { if b2 == 52 { 2 } else { 0 } }
                     else { if b1 == 51 { if b2 == 50 { 1 } else { 0 } } else { 0 } }
                 } else { if b0 == 105 {
-                    if b1 == 54 { if b2 == 52 { 3 } else { 0 } } else { 0 }
-                } else { if b0 == 117 {                  // 'u' — Stage 2.1 + 2.4
+                    if b1 == 54 { if b2 == 52 { 3 } else { 0 } }                // i64
+                    else { if b1 == 49 { if b2 == 54 { 11 } else { 0 } } else { 0 } }  // i16 (Stage 2.5c)
+                } else { if b0 == 117 {                  // 'u' — Stage 2.1 + 2.4 + 2.5c
                     if b1 == 51 { if b2 == 50 { 6 } else { 0 } }                // u32
-                    else { if b1 == 54 { if b2 == 52 { 9 } else { 0 } } else { 0 } }  // u64
+                    else { if b1 == 54 { if b2 == 52 { 9 } else { 0 } }                // u64
+                    else { if b1 == 49 { if b2 == 54 { 8 } else { 0 } } else { 0 } } }  // u16
                 } else { 0 } } }
             } else { if ty_l == 2 {
                 // Stage 2.3: 2-byte type idents — `u8` -> 7.
@@ -898,10 +918,12 @@ fn parse_fn_decl(tok_base: i32, sb: i32) -> i32 {
             if b1 == 54 { if b2 == 52 { 2 } else { 0 } }
             else { if b1 == 51 { if b2 == 50 { 1 } else { 0 } } else { 0 } }
         } else { if b0 == 105 {
-            if b1 == 54 { if b2 == 52 { 3 } else { 0 } } else { 0 }
-        } else { if b0 == 117 {                  // 'u' — Stage 2.1 + 2.4
+            if b1 == 54 { if b2 == 52 { 3 } else { 0 } }                // i64
+            else { if b1 == 49 { if b2 == 54 { 11 } else { 0 } } else { 0 } }  // i16 (Stage 2.5c)
+        } else { if b0 == 117 {                  // 'u' — Stage 2.1 + 2.4 + 2.5c
             if b1 == 51 { if b2 == 50 { 6 } else { 0 } }                // u32
-            else { if b1 == 54 { if b2 == 52 { 9 } else { 0 } } else { 0 } }  // u64
+            else { if b1 == 54 { if b2 == 52 { 9 } else { 0 } }                // u64
+            else { if b1 == 49 { if b2 == 54 { 8 } else { 0 } } else { 0 } } }  // u16
         } else { 0 } } }
     } else { if rt_l == 2 {
         // Stage 2.3: 2-byte type idents — `u8` -> 7.

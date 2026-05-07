@@ -950,6 +950,8 @@ fn expr_type(idx: i32, bind_state: i32, bn_state: i32) -> i32 {
     else { if t == 37 { 7 }                           // AST_INTLIT_U8  (Stage 2.3)
     else { if t == 38 { 9 }                           // AST_INTLIT_U64 (Stage 2.4)
     else { if t == 39 { 10 }                          // AST_INTLIT_I8  (Stage 2.5b)
+    else { if t == 40 { 11 }                          // AST_INTLIT_I16 (Stage 2.5c)
+    else { if t == 41 { 8 }                           // AST_INTLIT_U16 (Stage 2.5c)
     else { if t == 0 { 0 }                            // AST_INTLIT (i32)
     else { if t == 1 {                                // AST_VAR
         bind_lookup_type(bind_state, p1, p2)
@@ -1074,7 +1076,7 @@ fn expr_type(idx: i32, bind_state: i32, bn_state: i32) -> i32 {
                 }
             }
         }
-    } else { 0 }}}}}}}}}}}}}}}}}}}}}}}}}}}
+    } else { 0 }}}}}}}}}}}}}}}}}}}}}}}}}}}}}
 }
 
 // Phase 1.10 step 5c: type-inference on AST nodes. Returns 1 if the
@@ -2662,6 +2664,18 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         // are deferred to Stage 2.5b stage 2 (parallel to u8's "Stage
         // 2.3b" deferred work).
         emit_ast_int(p1)
+    } else { if t == 40 {
+        // Approach A Stage 2.5c: AST_INTLIT_I16 (tag 40). Same emit as
+        // i8/u8/u32 (mov eax, imm32). i16 range [-32768, 32767] fits
+        // in i32. expr_type returns 11 (i16). Narrow movsx load and
+        // masked store deferred.
+        emit_ast_int(p1)
+    } else { if t == 41 {
+        // Approach A Stage 2.5c: AST_INTLIT_U16 (tag 41). Same emit as
+        // u8 (mov eax, imm32). u16 range [0, 65535] fits in i32 with
+        // high bytes zero. expr_type returns 8 (u16). Narrow movzx
+        // load and masked store deferred.
+        emit_ast_int(p1)
     } else { if t == 27 {
         // AST_FLOATLIT (Phase 1.10 step 3d, f32). Phase 1.10 step 7b
         // also reuses this branch for AST_FLOATLIT_F64 (tag 34) — the
@@ -3776,7 +3790,7 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         // returns 0. Lex/parse errors that produce AST_ERR cause the
         // resulting binary to SIGILL — clear signal vs. silent 0.
         emit_ud2_trap()
-    }}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}
+    }}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}
 }
 
 // --------------------------------------------------------------
