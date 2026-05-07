@@ -1997,6 +1997,30 @@ fn main() -> i32 {{
     # 2.5_f64 -> 2 (truncates fractional, doesn't round to nearest).
     assert compile_and_exec("__f64_to_i32(2.5_f64)") == 2, \
         "__f64_to_i32(2.5_f64) -> 2 (truncates, not rounds)"
+    # Phase 1.10 step 7l: f64 bit-access primitives.
+    # __bits_hi_f64(1.0_f64) -> high 32 of 0x3FF0000000000000 = 0x3FF00000.
+    # /16777216 = 0x3F = 63.
+    assert compile_and_exec("__bits_hi_f64(1.0_f64) / 16777216") == 63, \
+        "__bits_hi_f64(1.0_f64) -> 0x3FF00000"
+    # __bits_lo_f64(1.0_f64) -> low 32 of 0x3FF0000000000000 = 0.
+    assert compile_and_exec("__bits_lo_f64(1.0_f64)") == 0, \
+        "__bits_lo_f64(1.0_f64) -> 0 (low 32 of round f64)"
+    # __bits_lo_f64(1.0_f64 / 3.0_f64) -> 0x55555555 (recurring) = 1431655765.
+    # /16777216 = 85.
+    assert compile_and_exec(
+        "__bits_lo_f64(1.0_f64 / 3.0_f64) / 16777216"
+    ) == 85, "__bits_lo_f64(1/3) -> 0x55555555 -> top byte 85"
+    # __f64_pack(hi, lo) builds f64. __f64_pack(0x3FF00000, 0) = 1.0_f64.
+    # Narrowing to f32 and reading top byte: 1.0_f32 = 0x3F800000 -> 63.
+    assert compile_and_exec(
+        "__bits_of_f32(__f64_to_f32(__f64_pack(1072693248, 0))) / 16777216"
+    ) == 63, "__f64_pack builds 1.0_f64 from (0x3FF00000, 0)"
+    # Round-trip: bits-extract -> pack -> compare. Should preserve value.
+    # __f64_pack(__bits_hi_f64(x), __bits_lo_f64(x)) == x.
+    # For x = 1.5_f64, narrowing to f32 -> 0x3FC00000 -> 63.
+    assert compile_and_exec(
+        "__bits_of_f32(__f64_to_f32(__f64_pack(__bits_hi_f64(1.5_f64), __bits_lo_f64(1.5_f64)))) / 16777216"
+    ) == 63, "__f64_pack round-trip preserves f64 value"
     # Phase 1.10 step 5+: bootstrap binary bitwise & | ^. Mirrors the
     # helixc-Python fix in commit f676fca; before this, the bootstrap
     # had no parse rule for these operators so source code couldn't use
