@@ -8175,6 +8175,69 @@ def test_stdlib_ti1d_l2_norm_sq():
     assert code == 42, f"expected 42, got {code}"
 
 
+def test_stdlib_string_pad_left():
+    """Push 'AB' (2 bytes), pad_left(' ', 5) -> '   AB'; sum bytes = 32*3+65+66 = 227.
+    227 - 185 = 42."""
+    src = """
+    fn main() -> i32 {
+        let s = string_new();
+        let s1 = string_push(s, 0, 65);
+        let s2 = string_push(s, s1, 66);
+        let r = string_pad_left(s, s2, 32, 5);
+        // Sum first 5 bytes of r.
+        let total = string_get(r, 0) + string_get(r, 1) + string_get(r, 2) +
+                    string_get(r, 3) + string_get(r, 4);
+        total - 185
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_string_pad_right():
+    """Push 'AB' (2 bytes), pad_right(' ', 5) -> 'AB   '; first byte 'A'(65); -23=42."""
+    src = """
+    fn main() -> i32 {
+        let s = string_new();
+        let s1 = string_push(s, 0, 65);
+        let s2 = string_push(s, s1, 66);
+        let r = string_pad_right(s, s2, 32, 5);
+        string_get(r, 0) - 23
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_string_replace_first_byte():
+    """Push 'a=b=c' (5); replace first '=' with ':'. New byte at idx 1 = ':'(58); -16=42."""
+    src = """
+    fn main() -> i32 {
+        let s = string_new();
+        let s1 = string_push(s, 0, 97);
+        let s2 = string_push(s, s1, 61);
+        let s3 = string_push(s, s2, 98);
+        let s4 = string_push(s, s3, 61);
+        let s5 = string_push(s, s4, 99);
+        let r = string_replace_first_byte(s, s5, 61, 58);
+        string_get(r, 1) - 16
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_string_skip_n():
+    """skip_n(len=10, n=5) = 5; *7+7=42."""
+    src = """
+    fn main() -> i32 {
+        string_skip_n(0, 10, 5) * 7 + 7
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
 def test_stdlib_hashmap_count_value_eq():
     """Insert (1,5),(2,5),(3,7); count value=5 -> 2; *21=42."""
     src = """

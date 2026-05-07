@@ -468,3 +468,80 @@ fn string_is_digit_only(start: i32, len: i32) -> i32 {
         ok
     }
 }
+
+// string_pad_left(start, len, pad_byte, target_len): allocate a new
+// string left-padded with pad_byte to reach target_len. If len >=
+// target_len, returns a copy without padding. Common use: align text
+// in tabular output ("  42" with pad_byte=32).
+fn string_pad_left(start: i32, len: i32, pad_byte: i32, target_len: i32) -> i32 {
+    let s: i32 = __arena_len();
+    if len >= target_len {
+        // No padding; just copy.
+        let mut i: i32 = 0;
+        while i < len {
+            __arena_push(__arena_get(start + i));
+            i = i + 1;
+        }
+    } else {
+        let pad_count = target_len - len;
+        let mut i: i32 = 0;
+        while i < pad_count {
+            __arena_push(pad_byte);
+            i = i + 1;
+        }
+        let mut j: i32 = 0;
+        while j < len {
+            __arena_push(__arena_get(start + j));
+            j = j + 1;
+        }
+    }
+    s
+}
+
+// string_pad_right(start, len, pad_byte, target_len): symmetric to
+// pad_left — pads at the END.
+fn string_pad_right(start: i32, len: i32, pad_byte: i32, target_len: i32) -> i32 {
+    let s: i32 = __arena_len();
+    let mut i: i32 = 0;
+    while i < len {
+        __arena_push(__arena_get(start + i));
+        i = i + 1;
+    }
+    if len < target_len {
+        let pad_count = target_len - len;
+        let mut j: i32 = 0;
+        while j < pad_count {
+            __arena_push(pad_byte);
+            j = j + 1;
+        }
+    }
+    s
+}
+
+// string_replace_first_byte(start, len, from, to): allocate a new
+// string with the first occurrence of byte `from` replaced by `to`.
+// If `from` is absent, returns an exact copy. Useful for "change
+// first '=' to ' ' to split key/value differently" patterns.
+fn string_replace_first_byte(start: i32, len: i32, from: i32, to: i32) -> i32 {
+    let s: i32 = __arena_len();
+    let mut i: i32 = 0;
+    let mut replaced: i32 = 0;
+    while i < len {
+        let b = __arena_get(start + i);
+        if replaced == 0 {
+            if b == from { __arena_push(to); replaced = 1; }
+            else { __arena_push(b); };
+        } else { __arena_push(b); };
+        i = i + 1;
+    }
+    s
+}
+
+// string_skip_n(start, len, n): @pure. Returns the offset to skip n
+// bytes (or len if n > len). Caller computes (start + skip, len - skip)
+// for the remaining slice. Equivalent to bounded saturating clamp.
+@pure
+fn string_skip_n(start: i32, len: i32, n: i32) -> i32 {
+    if n < 0 { 0 }
+    else { if n > len { len } else { n } }
+}
