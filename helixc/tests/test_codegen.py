@@ -8175,6 +8175,71 @@ def test_stdlib_ti1d_l2_norm_sq():
     assert code == 42, f"expected 42, got {code}"
 
 
+def test_stdlib_tf2d_diag():
+    """[[1,2],[3,4]] diag -> [1,4]; sum=5; *7+7=42."""
+    src = """
+    fn main() -> i32 {
+        let m = ti2d_new(2, 2);
+        tf2d_set(m, 2, 0, 0, 1.0_f32); tf2d_set(m, 2, 0, 1, 2.0_f32);
+        tf2d_set(m, 2, 1, 0, 3.0_f32); tf2d_set(m, 2, 1, 1, 4.0_f32);
+        let dst = t1d_new(2);
+        tf2d_diag(m, 2, dst);
+        let s = tf1d_get(dst, 0) + tf1d_get(dst, 1);
+        // s = 5.0_f32; bits 0x40A00000; top byte 0x40=64; -22=42.
+        __bits_of_f32(s) / 16777216 - 22
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_tf2d_eye():
+    """eye(3): 3x3 identity; trace=3.0; bits 0x40400000; top=64; -22=42."""
+    src = """
+    fn main() -> i32 {
+        let m = tf2d_eye(3);
+        let s = tf2d_trace(m, 3);
+        // 3.0_f32 = 0x40400000; top byte 0x40=64; -22=42.
+        __bits_of_f32(s) / 16777216 - 22
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_tf2d_trace():
+    """trace [[2,0,0],[0,4,0],[0,0,2]] = 8.0; bits 0x41000000; top=65; -23=42."""
+    src = """
+    fn main() -> i32 {
+        let m = ti2d_new(3, 3);
+        tf2d_set(m, 3, 0, 0, 2.0_f32);
+        tf2d_set(m, 3, 1, 1, 4.0_f32);
+        tf2d_set(m, 3, 2, 2, 2.0_f32);
+        __bits_of_f32(tf2d_trace(m, 3)) / 16777216 - 23
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_tf1d_lerp():
+    """lerp([0,0], [4,4], t=0.5) -> [2,2]; sum=4; bits 0x40800000; top=64; -22=42."""
+    src = """
+    fn main() -> i32 {
+        let a = t1d_new(2);
+        tf1d_set(a, 0, 0.0_f32); tf1d_set(a, 1, 0.0_f32);
+        let b = t1d_new(2);
+        tf1d_set(b, 0, 4.0_f32); tf1d_set(b, 1, 4.0_f32);
+        let dst = t1d_new(2);
+        tf1d_lerp(a, b, 0.5_f32, dst, 2);
+        let s = tf1d_get(dst, 0) + tf1d_get(dst, 1);
+        __bits_of_f32(s) / 16777216 - 22
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
 def test_stdlib_string_pad_center():
     """Push 'AB' (2 bytes); pad_center(' ', 5) -> ' AB  ' (1 left, 2 right);
     first byte ' '(32) plus second 'A'(65) = 97; -55=42."""

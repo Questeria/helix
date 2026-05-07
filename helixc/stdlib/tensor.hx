@@ -915,3 +915,59 @@ fn tf1d_dot_with_offset(a: i32, a_off: i32, b: i32, b_off: i32, n: i32) -> f32 {
     }
     total
 }
+
+// tf2d_diag(m, rows_eq_cols, dst): for a square matrix M of side N,
+// extract the diagonal into dst (size N). Requires square (rows == cols).
+fn tf2d_diag(m: i32, n: i32, dst: i32) -> i32 {
+    let mut i: i32 = 0;
+    while i < n {
+        __arena_set(dst + i, __arena_get(m + i * n + i));
+        i = i + 1;
+    }
+    0
+}
+
+// tf2d_eye(n): allocate a new n*n identity matrix (1.0 on diagonal,
+// 0.0 elsewhere). Returns the new start index.
+fn tf2d_eye(n: i32) -> i32 {
+    let s: i32 = __arena_len();
+    let one_bits = __bits_of_f32(1.0_f32);
+    let mut r: i32 = 0;
+    while r < n {
+        let mut c: i32 = 0;
+        while c < n {
+            if r == c { __arena_push(one_bits); }
+            else { __arena_push(0); };
+            c = c + 1;
+        }
+        r = r + 1;
+    }
+    s
+}
+
+// tf2d_trace(m, n): @pure. Sum of diagonal elements of an n*n matrix.
+@pure
+fn tf2d_trace(m: i32, n: i32) -> f32 {
+    let mut i: i32 = 0;
+    let mut total: f32 = 0.0_f32;
+    while i < n {
+        total = total + __f32_from_bits(__arena_get(m + i * n + i));
+        i = i + 1;
+    }
+    total
+}
+
+// tf1d_lerp(a, b, t, dst, n): linear interpolation. dst[i] = a[i] +
+// t * (b[i] - a[i]). Useful for numerical interpolation between two
+// vectors. dst pre-allocated (n slots).
+fn tf1d_lerp(a: i32, b: i32, t: f32, dst: i32, n: i32) -> i32 {
+    let mut i: i32 = 0;
+    while i < n {
+        let av = __f32_from_bits(__arena_get(a + i));
+        let bv = __f32_from_bits(__arena_get(b + i));
+        let v = av + t * (bv - av);
+        __arena_set(dst + i, __bits_of_f32(v));
+        i = i + 1;
+    }
+    0
+}
