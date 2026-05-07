@@ -851,3 +851,67 @@ fn tf1d_sum_in_range(start: i32, lo: i32, hi: i32) -> f32 {
     }
     total
 }
+
+// tf2d_row_sum(start, rows, cols, dst): for each row r, write
+// sum(M[r, *]) to dst[r]. dst pre-allocated by caller (size = rows).
+fn tf2d_row_sum(start: i32, rows: i32, cols: i32, dst: i32) -> i32 {
+    let mut r: i32 = 0;
+    while r < rows {
+        let mut c: i32 = 0;
+        let mut acc: f32 = 0.0_f32;
+        while c < cols {
+            acc = acc + __f32_from_bits(__arena_get(start + r * cols + c));
+            c = c + 1;
+        }
+        __arena_set(dst + r, __bits_of_f32(acc));
+        r = r + 1;
+    }
+    0
+}
+
+// tf2d_col_sum(start, rows, cols, dst): for each col c, write
+// sum(M[*, c]) to dst[c]. dst pre-allocated by caller (size = cols).
+fn tf2d_col_sum(start: i32, rows: i32, cols: i32, dst: i32) -> i32 {
+    let mut c: i32 = 0;
+    while c < cols {
+        let mut r: i32 = 0;
+        let mut acc: f32 = 0.0_f32;
+        while r < rows {
+            acc = acc + __f32_from_bits(__arena_get(start + r * cols + c));
+            r = r + 1;
+        }
+        __arena_set(dst + c, __bits_of_f32(acc));
+        c = c + 1;
+    }
+    0
+}
+
+// tf1d_arange(start_val, n): allocate a new f32 vec of length n with
+// values [start_val, start_val + 1.0, ..., start_val + (n-1)]. Returns
+// the new vec start. Useful for index-vec pairs and test setup.
+fn tf1d_arange(start_val: f32, n: i32) -> i32 {
+    let s: i32 = __arena_len();
+    let mut i: i32 = 0;
+    let mut v: f32 = start_val;
+    while i < n {
+        __arena_push(__bits_of_f32(v));
+        v = v + 1.0_f32;
+        i = i + 1;
+    }
+    s
+}
+
+// tf1d_dot_with_offset(a, a_off, b, b_off, n): dot product over slices
+// a[a_off..a_off+n] and b[b_off..b_off+n]. @pure.
+@pure
+fn tf1d_dot_with_offset(a: i32, a_off: i32, b: i32, b_off: i32, n: i32) -> f32 {
+    let mut i: i32 = 0;
+    let mut total: f32 = 0.0_f32;
+    while i < n {
+        let av = __f32_from_bits(__arena_get(a + a_off + i));
+        let bv = __f32_from_bits(__arena_get(b + b_off + i));
+        total = total + av * bv;
+        i = i + 1;
+    }
+    total
+}

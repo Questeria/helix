@@ -8175,6 +8175,74 @@ def test_stdlib_ti1d_l2_norm_sq():
     assert code == 42, f"expected 42, got {code}"
 
 
+def test_stdlib_tf2d_row_sum():
+    """row_sum [[1,2],[3,4]] -> [3.0, 7.0]; sum=10.0_f32; bits 0x41200000;
+    top byte 0x41=65; -23=42."""
+    src = """
+    fn main() -> i32 {
+        let m = ti2d_new(2, 2);
+        tf2d_set(m, 2, 0, 0, 1.0_f32); tf2d_set(m, 2, 0, 1, 2.0_f32);
+        tf2d_set(m, 2, 1, 0, 3.0_f32); tf2d_set(m, 2, 1, 1, 4.0_f32);
+        let dst = t1d_new(2);
+        tf2d_row_sum(m, 2, 2, dst);
+        let s = tf1d_get(dst, 0) + tf1d_get(dst, 1);
+        __bits_of_f32(s) / 16777216 - 23
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_tf2d_col_sum():
+    """col_sum [[1,2],[3,4]] -> [4.0, 6.0]; sum=10.0; same bit; -23=42."""
+    src = """
+    fn main() -> i32 {
+        let m = ti2d_new(2, 2);
+        tf2d_set(m, 2, 0, 0, 1.0_f32); tf2d_set(m, 2, 0, 1, 2.0_f32);
+        tf2d_set(m, 2, 1, 0, 3.0_f32); tf2d_set(m, 2, 1, 1, 4.0_f32);
+        let dst = t1d_new(2);
+        tf2d_col_sum(m, 2, 2, dst);
+        let s = tf1d_get(dst, 0) + tf1d_get(dst, 1);
+        __bits_of_f32(s) / 16777216 - 23
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_tf1d_arange():
+    """arange(0.0, 4) -> [0,1,2,3]; sum=6.0_f32; bits 0x40C00000; top=64; -22=42."""
+    src = """
+    fn main() -> i32 {
+        let r = tf1d_arange(0.0_f32, 4);
+        let s = tf1d_get(r, 0) + tf1d_get(r, 1) + tf1d_get(r, 2) + tf1d_get(r, 3);
+        __bits_of_f32(s) / 16777216 - 22
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_tf1d_dot_with_offset():
+    """[1,2,3,4] dot at offset 1 with [0,5,6,0] at offset 1 over 2 elems
+    -> 2*5 + 3*6 = 28; +14=42."""
+    src = """
+    fn main() -> i32 {
+        let a = t1d_new(4);
+        tf1d_set(a, 0, 1.0_f32); tf1d_set(a, 1, 2.0_f32);
+        tf1d_set(a, 2, 3.0_f32); tf1d_set(a, 3, 4.0_f32);
+        let b = t1d_new(4);
+        tf1d_set(b, 0, 0.0_f32); tf1d_set(b, 1, 5.0_f32);
+        tf1d_set(b, 2, 6.0_f32); tf1d_set(b, 3, 0.0_f32);
+        // 28.0_f32 = 0x41E00000; top byte 0x41 = 65; -23 = 42.
+        // Use bit-pattern check: dot result bit divided by 16777216 - 23 = 42.
+        __bits_of_f32(tf1d_dot_with_offset(a, 1, b, 1, 2)) / 16777216 - 23
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
 def test_stdlib_vec_unique_alloc():
     """unique_alloc([1,2,1,3,2,3]) -> [1,2,3]; sum=6; *7=42."""
     src = """
