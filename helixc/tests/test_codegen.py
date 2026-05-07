@@ -2064,6 +2064,13 @@ fn main() -> i32 {{
     assert compile_and_exec("30_i64 + 12_i64") == 42, "i64 + i64 via add rax, rcx"
     # i64 div: 84_i64 / 2_i64 == 42 via cqo + idiv rcx.
     assert compile_and_exec("84_i64 / 2_i64") == 42, "i64 / i64 via cqo+idiv"
+    # Stage 1 i64 comparisons via 64-bit cmp + setcc.
+    assert compile_and_exec("if 5_i64 < 10_i64 { 42 } else { 0 }") == 42, \
+        "i64 < i64 via 64-bit cmp"
+    assert compile_and_exec("if 100_i64 == 100_i64 { 42 } else { 0 }") == 42, \
+        "i64 == i64 via 64-bit cmp"
+    assert compile_and_exec("if 5_i64 > 10_i64 { 0 } else { 42 }") == 42, \
+        "i64 > i64 via 64-bit cmp (false branch)"
     # Phase 1.10 step 7l: f64 bit-access primitives.
     # __bits_hi_f64(1.0_f64) -> high 32 of 0x3FF0000000000000 = 0x3FF00000.
     # /16777216 = 0x3F = 63.

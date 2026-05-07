@@ -3037,16 +3037,24 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         let n2 = emit_ast_code(p2, bind_state, patch_state, bn_state);
         let l_d = is_f64_expr(p1, bind_state, bn_state);
         let r_d = is_f64_expr(p2, bind_state, bn_state);
-        let nm = if l_d == 1 { if r_d == 1 { emit_mov_rcx_rax_64() } else { emit_mov_ecx_eax() } } else { emit_mov_ecx_eax() };
+        let l_i64 = is_i64_expr(p1, bind_state, bn_state);
+        let r_i64 = is_i64_expr(p2, bind_state, bn_state);
+        let nm = if l_d == 1 { if r_d == 1 { emit_mov_rcx_rax_64() } else { emit_mov_ecx_eax() }
+               } else { if l_i64 == 1 { if r_i64 == 1 { emit_mov_rcx_rax_64() } else { emit_mov_ecx_eax() }
+               } else { emit_mov_ecx_eax() }};
         let no = emit_pop_rax();
         let l_f = is_f32_expr(p1, bind_state, bn_state);
         let r_f = is_f32_expr(p2, bind_state, bn_state);
         let na = if l_d == 1 {
             if r_d == 1 { emit_ssen_lt_dbl() } else { emit_ud2_trap() }
         } else { if r_d == 1 { emit_ud2_trap() } else {
-            if l_f == 1 {
-                if r_f == 1 { emit_ssen_lt() } else { emit_ud2_trap() }
-            } else { if r_f == 1 { emit_ud2_trap() } else { emit_lt_eax_ecx() } }
+            if l_i64 == 1 {
+                if r_i64 == 1 { emit_lt_rax_rcx_64() } else { emit_ud2_trap() }
+            } else { if r_i64 == 1 { emit_ud2_trap() } else {
+                if l_f == 1 {
+                    if r_f == 1 { emit_ssen_lt() } else { emit_ud2_trap() }
+                } else { if r_f == 1 { emit_ud2_trap() } else { emit_lt_eax_ecx() } }
+            }}
         }};
         n1 + np + n2 + nm + no + na
     } else { if t == 19 {
@@ -3056,16 +3064,24 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         let n2 = emit_ast_code(p2, bind_state, patch_state, bn_state);
         let l_d = is_f64_expr(p1, bind_state, bn_state);
         let r_d = is_f64_expr(p2, bind_state, bn_state);
-        let nm = if l_d == 1 { if r_d == 1 { emit_mov_rcx_rax_64() } else { emit_mov_ecx_eax() } } else { emit_mov_ecx_eax() };
+        let l_i64 = is_i64_expr(p1, bind_state, bn_state);
+        let r_i64 = is_i64_expr(p2, bind_state, bn_state);
+        let nm = if l_d == 1 { if r_d == 1 { emit_mov_rcx_rax_64() } else { emit_mov_ecx_eax() }
+               } else { if l_i64 == 1 { if r_i64 == 1 { emit_mov_rcx_rax_64() } else { emit_mov_ecx_eax() }
+               } else { emit_mov_ecx_eax() }};
         let no = emit_pop_rax();
         let l_f = is_f32_expr(p1, bind_state, bn_state);
         let r_f = is_f32_expr(p2, bind_state, bn_state);
         let na = if l_d == 1 {
             if r_d == 1 { emit_ssen_gt_dbl() } else { emit_ud2_trap() }
         } else { if r_d == 1 { emit_ud2_trap() } else {
-            if l_f == 1 {
-                if r_f == 1 { emit_ssen_gt() } else { emit_ud2_trap() }
-            } else { if r_f == 1 { emit_ud2_trap() } else { emit_gt_eax_ecx() } }
+            if l_i64 == 1 {
+                if r_i64 == 1 { emit_gt_rax_rcx_64() } else { emit_ud2_trap() }
+            } else { if r_i64 == 1 { emit_ud2_trap() } else {
+                if l_f == 1 {
+                    if r_f == 1 { emit_ssen_gt() } else { emit_ud2_trap() }
+                } else { if r_f == 1 { emit_ud2_trap() } else { emit_gt_eax_ecx() } }
+            }}
         }};
         n1 + np + n2 + nm + no + na
     } else { if t == 20 {
@@ -3075,16 +3091,24 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         let n2 = emit_ast_code(p2, bind_state, patch_state, bn_state);
         let l_d = is_f64_expr(p1, bind_state, bn_state);
         let r_d = is_f64_expr(p2, bind_state, bn_state);
-        let nm = if l_d == 1 { if r_d == 1 { emit_mov_rcx_rax_64() } else { emit_mov_ecx_eax() } } else { emit_mov_ecx_eax() };
+        let l_i64 = is_i64_expr(p1, bind_state, bn_state);
+        let r_i64 = is_i64_expr(p2, bind_state, bn_state);
+        let nm = if l_d == 1 { if r_d == 1 { emit_mov_rcx_rax_64() } else { emit_mov_ecx_eax() }
+               } else { if l_i64 == 1 { if r_i64 == 1 { emit_mov_rcx_rax_64() } else { emit_mov_ecx_eax() }
+               } else { emit_mov_ecx_eax() }};
         let no = emit_pop_rax();
         let l_f = is_f32_expr(p1, bind_state, bn_state);
         let r_f = is_f32_expr(p2, bind_state, bn_state);
         let na = if l_d == 1 {
             if r_d == 1 { emit_ssen_eq_dbl() } else { emit_ud2_trap() }
         } else { if r_d == 1 { emit_ud2_trap() } else {
-            if l_f == 1 {
-                if r_f == 1 { emit_ssen_eq() } else { emit_ud2_trap() }
-            } else { if r_f == 1 { emit_ud2_trap() } else { emit_eq_eax_ecx() } }
+            if l_i64 == 1 {
+                if r_i64 == 1 { emit_eq_rax_rcx_64() } else { emit_ud2_trap() }
+            } else { if r_i64 == 1 { emit_ud2_trap() } else {
+                if l_f == 1 {
+                    if r_f == 1 { emit_ssen_eq() } else { emit_ud2_trap() }
+                } else { if r_f == 1 { emit_ud2_trap() } else { emit_eq_eax_ecx() } }
+            }}
         }};
         n1 + np + n2 + nm + no + na
     } else { if t == 21 {
@@ -3094,16 +3118,24 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         let n2 = emit_ast_code(p2, bind_state, patch_state, bn_state);
         let l_d = is_f64_expr(p1, bind_state, bn_state);
         let r_d = is_f64_expr(p2, bind_state, bn_state);
-        let nm = if l_d == 1 { if r_d == 1 { emit_mov_rcx_rax_64() } else { emit_mov_ecx_eax() } } else { emit_mov_ecx_eax() };
+        let l_i64 = is_i64_expr(p1, bind_state, bn_state);
+        let r_i64 = is_i64_expr(p2, bind_state, bn_state);
+        let nm = if l_d == 1 { if r_d == 1 { emit_mov_rcx_rax_64() } else { emit_mov_ecx_eax() }
+               } else { if l_i64 == 1 { if r_i64 == 1 { emit_mov_rcx_rax_64() } else { emit_mov_ecx_eax() }
+               } else { emit_mov_ecx_eax() }};
         let no = emit_pop_rax();
         let l_f = is_f32_expr(p1, bind_state, bn_state);
         let r_f = is_f32_expr(p2, bind_state, bn_state);
         let na = if l_d == 1 {
             if r_d == 1 { emit_ssen_ne_dbl() } else { emit_ud2_trap() }
         } else { if r_d == 1 { emit_ud2_trap() } else {
-            if l_f == 1 {
-                if r_f == 1 { emit_ssen_ne() } else { emit_ud2_trap() }
-            } else { if r_f == 1 { emit_ud2_trap() } else { emit_ne_eax_ecx() } }
+            if l_i64 == 1 {
+                if r_i64 == 1 { emit_ne_rax_rcx_64() } else { emit_ud2_trap() }
+            } else { if r_i64 == 1 { emit_ud2_trap() } else {
+                if l_f == 1 {
+                    if r_f == 1 { emit_ssen_ne() } else { emit_ud2_trap() }
+                } else { if r_f == 1 { emit_ud2_trap() } else { emit_ne_eax_ecx() } }
+            }}
         }};
         n1 + np + n2 + nm + no + na
     } else { if t == 22 {
@@ -3113,16 +3145,24 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         let n2 = emit_ast_code(p2, bind_state, patch_state, bn_state);
         let l_d = is_f64_expr(p1, bind_state, bn_state);
         let r_d = is_f64_expr(p2, bind_state, bn_state);
-        let nm = if l_d == 1 { if r_d == 1 { emit_mov_rcx_rax_64() } else { emit_mov_ecx_eax() } } else { emit_mov_ecx_eax() };
+        let l_i64 = is_i64_expr(p1, bind_state, bn_state);
+        let r_i64 = is_i64_expr(p2, bind_state, bn_state);
+        let nm = if l_d == 1 { if r_d == 1 { emit_mov_rcx_rax_64() } else { emit_mov_ecx_eax() }
+               } else { if l_i64 == 1 { if r_i64 == 1 { emit_mov_rcx_rax_64() } else { emit_mov_ecx_eax() }
+               } else { emit_mov_ecx_eax() }};
         let no = emit_pop_rax();
         let l_f = is_f32_expr(p1, bind_state, bn_state);
         let r_f = is_f32_expr(p2, bind_state, bn_state);
         let na = if l_d == 1 {
             if r_d == 1 { emit_ssen_le_dbl() } else { emit_ud2_trap() }
         } else { if r_d == 1 { emit_ud2_trap() } else {
-            if l_f == 1 {
-                if r_f == 1 { emit_ssen_le() } else { emit_ud2_trap() }
-            } else { if r_f == 1 { emit_ud2_trap() } else { emit_le_eax_ecx() } }
+            if l_i64 == 1 {
+                if r_i64 == 1 { emit_le_rax_rcx_64() } else { emit_ud2_trap() }
+            } else { if r_i64 == 1 { emit_ud2_trap() } else {
+                if l_f == 1 {
+                    if r_f == 1 { emit_ssen_le() } else { emit_ud2_trap() }
+                } else { if r_f == 1 { emit_ud2_trap() } else { emit_le_eax_ecx() } }
+            }}
         }};
         n1 + np + n2 + nm + no + na
     } else { if t == 23 {
@@ -3132,16 +3172,24 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         let n2 = emit_ast_code(p2, bind_state, patch_state, bn_state);
         let l_d = is_f64_expr(p1, bind_state, bn_state);
         let r_d = is_f64_expr(p2, bind_state, bn_state);
-        let nm = if l_d == 1 { if r_d == 1 { emit_mov_rcx_rax_64() } else { emit_mov_ecx_eax() } } else { emit_mov_ecx_eax() };
+        let l_i64 = is_i64_expr(p1, bind_state, bn_state);
+        let r_i64 = is_i64_expr(p2, bind_state, bn_state);
+        let nm = if l_d == 1 { if r_d == 1 { emit_mov_rcx_rax_64() } else { emit_mov_ecx_eax() }
+               } else { if l_i64 == 1 { if r_i64 == 1 { emit_mov_rcx_rax_64() } else { emit_mov_ecx_eax() }
+               } else { emit_mov_ecx_eax() }};
         let no = emit_pop_rax();
         let l_f = is_f32_expr(p1, bind_state, bn_state);
         let r_f = is_f32_expr(p2, bind_state, bn_state);
         let na = if l_d == 1 {
             if r_d == 1 { emit_ssen_ge_dbl() } else { emit_ud2_trap() }
         } else { if r_d == 1 { emit_ud2_trap() } else {
-            if l_f == 1 {
-                if r_f == 1 { emit_ssen_ge() } else { emit_ud2_trap() }
-            } else { if r_f == 1 { emit_ud2_trap() } else { emit_ge_eax_ecx() } }
+            if l_i64 == 1 {
+                if r_i64 == 1 { emit_ge_rax_rcx_64() } else { emit_ud2_trap() }
+            } else { if r_i64 == 1 { emit_ud2_trap() } else {
+                if l_f == 1 {
+                    if r_f == 1 { emit_ssen_ge() } else { emit_ud2_trap() }
+                } else { if r_f == 1 { emit_ud2_trap() } else { emit_ge_eax_ecx() } }
+            }}
         }};
         n1 + np + n2 + nm + no + na
     } else { if t == 7 {
@@ -3554,7 +3602,11 @@ fn emit_elf_for_ast_to_path(ast_root: i32) -> i32 {
                     // zero. REX.W prefix (0x48 for rdi/rsi/rdx/rcx;
                     // 0x4C carries W for r8/r9) promotes the store to
                     // 8-byte width.
-                    if p_ty == 2 {
+                    // Stage 1: i64 params (p_ty == 3) ALSO need 64-bit
+                    // stores — same shape as f64. Combine both in a
+                    // single is-8-byte check.
+                    let needs_64 = if p_ty == 2 { 1 } else { if p_ty == 3 { 1 } else { 0 } };
+                    if needs_64 == 1 {
                         if pidx == 0 {
                             // mov [rbp+disp32], rdi  : 48 89 BD disp32
                             emit_byte(0x48); emit_byte(0x89); emit_byte(0xBD); emit_u32_le(0 - off);
