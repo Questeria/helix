@@ -3709,6 +3709,7 @@ fn emit_elf_for_ast_to_path(ast_root: i32) -> i32 {
             let fn_name_l = __arena_get(fn_idx + 2);
             let fn_body = __arena_get(fn_idx + 3);
             let params_head = __arena_get(fn_idx + 4);
+            let fn_ret_ty = __arena_get(fn_idx + 5);
             let fn_code_offset = __arena_len();
             fn_table_add(fn_state, fn_name_s, fn_name_l, fn_code_offset);
             bind_reset(bind_state);
@@ -3789,6 +3790,18 @@ fn emit_elf_for_ast_to_path(ast_root: i32) -> i32 {
                 pcur = __arena_get(pcur + 3);
             }
             emit_ast_code(fn_body, bind_state, patch_state, bn_state);
+            // Stage 1 audit cycle 2 fix: trap when fn body type doesn't
+            // match declared return type. Specifically i64-return fns
+            // whose body produces i32 (high 32 stale) and i32-return fns
+            // whose body produces i64 (caller treats as 32 — high half
+            // dropped silently). Mirrors AST_ASSIGN ud2-on-mismatch from
+            // batch 3. f32/f64 mismatch detection is left for Stage 1.6
+            // when the type predicate refactor lands.
+            let body_is_i64 = is_i64_expr(fn_body, bind_state, bn_state);
+            let ret_wants_i64 = if fn_ret_ty == 3 { 1 } else { 0 };
+            if body_is_i64 != ret_wants_i64 {
+                emit_ud2_trap();
+            };
             emit_epilogue();
             emit_ret();
             cur_list = __arena_get(cur_list + 2);
