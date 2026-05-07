@@ -9955,6 +9955,60 @@ def test_stdlib_vec_last():
     assert code == 42, f"expected 42 (last=42, empty=0), got {code}"
 
 
+def test_stdlib_vec_index_of_lt():
+    """index_of_lt([5,8,3,7], 4) = 2; *21=42."""
+    src = """
+    fn main() -> i32 {
+        let v = __arena_len();
+        __arena_push(5); __arena_push(8); __arena_push(3); __arena_push(7);
+        vec_index_of_lt(v, 4, 4) * 21
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_vec_index_of_gt():
+    """index_of_gt([1,2,5,10], 4) = 2; *21=42."""
+    src = """
+    fn main() -> i32 {
+        let v = __arena_len();
+        __arena_push(1); __arena_push(2); __arena_push(5); __arena_push(10);
+        vec_index_of_gt(v, 4, 4) * 21
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_vec_count_pos():
+    """count_pos([0,1,-2,3,-4,5]) = 3; *14=42."""
+    src = """
+    fn main() -> i32 {
+        let v = __arena_len();
+        __arena_push(0); __arena_push(1); __arena_push(0 - 2);
+        __arena_push(3); __arena_push(0 - 4); __arena_push(5);
+        vec_count_pos(v, 6) * 14
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_vec_count_neg():
+    """count_neg([0,1,-2,3,-4,5]) = 2; *21=42."""
+    src = """
+    fn main() -> i32 {
+        let v = __arena_len();
+        __arena_push(0); __arena_push(1); __arena_push(0 - 2);
+        __arena_push(3); __arena_push(0 - 4); __arena_push(5);
+        vec_count_neg(v, 6) * 21
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
 def test_stdlib_hashmap_count_key_in_range():
     """Insert (1,_),(5,_),(10,_),(20,_); count_key in [3,15]=2; *21=42."""
     src = """

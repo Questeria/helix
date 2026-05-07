@@ -1512,3 +1512,44 @@ fn vec_clone_alloc(start: i32, count: i32) -> i32 {
     }
     s
 }
+
+// vec_index_of_lt(start, count, threshold): @pure. Index of first
+// element less than threshold, -1 if none.
+@pure
+fn vec_index_of_lt(start: i32, count: i32, threshold: i32) -> i32 {
+    let mut i: i32 = 0;
+    let mut found: i32 = 0 - 1;
+    while i < count {
+        if found < 0 {
+            if __arena_get(start + i) < threshold { found = i; };
+        };
+        i = i + 1;
+    }
+    found
+}
+
+// vec_index_of_gt(start, count, threshold): @pure. Companion.
+@pure
+fn vec_index_of_gt(start: i32, count: i32, threshold: i32) -> i32 {
+    let mut i: i32 = 0;
+    let mut found: i32 = 0 - 1;
+    while i < count {
+        if found < 0 {
+            if __arena_get(start + i) > threshold { found = i; };
+        };
+        i = i + 1;
+    }
+    found
+}
+
+// vec_count_pos(start, count): @pure. Count of strictly positive elements.
+@pure
+fn vec_count_pos(start: i32, count: i32) -> i32 {
+    vec_count_gt(start, count, 0)
+}
+
+// vec_count_neg(start, count): @pure. Count of strictly negative elements.
+@pure
+fn vec_count_neg(start: i32, count: i32) -> i32 {
+    vec_count_lt(start, count, 0)
+}
