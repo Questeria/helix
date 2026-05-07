@@ -2303,6 +2303,40 @@ fn main() -> i32 {{
     assert compile_and_exec(
         "fn main() -> i32 { let x: bf16 = 1.5_bf16 ; let r: i32 = !x ; r + 41 }"
     ) == 132, "bf16 logical NOT traps with SIGILL"
+    # Stage 1.5 audit fix: bf16 comparison ops trap. Pre-fix:
+    # AST_LT/GT/LE/GE/EQ/NE cascades had no is_bf16_expr check — bf16
+    # operands fell through to integer compare on bit patterns. This is
+    # correct for normal positive bf16 (IEEE monotone same-sign) but
+    # WRONG for: negative bf16 (compares reversed since two's-complement
+    # vs IEEE order differ for negatives), -0.0 vs +0.0 (compare
+    # unequal in int but should be equal in IEEE), NaN ordering (NaN ≠
+    # anything in IEEE; integer compare just treats them as numbers).
+    # Post-fix: ud2 trap until float-aware bf16 comparison codegen lands.
+    # One test per op (LT, GT, LE, GE, EQ, NE):
+    assert compile_and_exec(
+        "fn main() -> i32 { let x: bf16 = 1.5_bf16 ; let y: bf16 = 0.5_bf16 ; "
+        "if x < y { 1 } else { 7 } }"
+    ) == 132, "bf16 < bf16 traps with SIGILL"
+    assert compile_and_exec(
+        "fn main() -> i32 { let x: bf16 = 1.5_bf16 ; let y: bf16 = 0.5_bf16 ; "
+        "if x > y { 1 } else { 7 } }"
+    ) == 132, "bf16 > bf16 traps with SIGILL"
+    assert compile_and_exec(
+        "fn main() -> i32 { let x: bf16 = 1.5_bf16 ; let y: bf16 = 0.5_bf16 ; "
+        "if x == y { 1 } else { 7 } }"
+    ) == 132, "bf16 == bf16 traps with SIGILL"
+    assert compile_and_exec(
+        "fn main() -> i32 { let x: bf16 = 1.5_bf16 ; let y: bf16 = 0.5_bf16 ; "
+        "if x != y { 1 } else { 7 } }"
+    ) == 132, "bf16 != bf16 traps with SIGILL"
+    assert compile_and_exec(
+        "fn main() -> i32 { let x: bf16 = 1.5_bf16 ; let y: bf16 = 0.5_bf16 ; "
+        "if x <= y { 1 } else { 7 } }"
+    ) == 132, "bf16 <= bf16 traps with SIGILL"
+    assert compile_and_exec(
+        "fn main() -> i32 { let x: bf16 = 1.5_bf16 ; let y: bf16 = 0.5_bf16 ; "
+        "if x >= y { 1 } else { 7 } }"
+    ) == 132, "bf16 >= bf16 traps with SIGILL"
     # Approach A Stage 2.4: u64 minimal scaffold. u64 literals lex via
     # `_u64` 4-byte suffix, parse to AST_INTLIT_U64 (tag 38), expr_type
     # returns 9. Codegen emits `movabs rax, imm64` (8 bytes) so the full
