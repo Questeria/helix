@@ -912,9 +912,15 @@ fn is_f32_expr(idx: i32, bind_state: i32, bn_state: i32) -> i32 {
         let prefix_match = is_underscore_f_call(p1, p2);
         if prefix_match == 1 { 1 }
         else {
+            // Audit cycle 4 finding: was returning raw fn_type_table_lookup
+            // value (0/1/2). When ret_ty=2 (f64), the leaked 2 to callers
+            // doing boolean truth tests (`if l_f { ... }`) would treat f64
+            // user fns as f32. Currently latent because is_f64_expr fires
+            // first in arithmetic dispatch — but contract violation ("1 if
+            // f32, else 0"). Wrap with `== 1`.
             let fts = bn_fn_type_state(bn_state);
             if fts == 0 { 0 }
-            else { fn_type_table_lookup(fts, p1, p2) }
+            else { if fn_type_table_lookup(fts, p1, p2) == 1 { 1 } else { 0 } }
         }
         }
         }
