@@ -1017,6 +1017,7 @@ fn expr_type(idx: i32, bind_state: i32, bn_state: i32) -> i32 {
     else { if t == 39 { 10 }                          // AST_INTLIT_I8  (Stage 2.5b)
     else { if t == 40 { 11 }                          // AST_INTLIT_I16 (Stage 2.5c)
     else { if t == 41 { 8 }                           // AST_INTLIT_U16 (Stage 2.5c)
+    else { if t == 42 { 4 }                           // AST_FLOATLIT_BF16 (Stage 1.5)
     else { if t == 0 { 0 }                            // AST_INTLIT (i32)
     else { if t == 1 {                                // AST_VAR
         bind_lookup_type(bind_state, p1, p2)
@@ -1141,7 +1142,7 @@ fn expr_type(idx: i32, bind_state: i32, bn_state: i32) -> i32 {
                 }
             }
         }
-    } else { 0 }}}}}}}}}}}}}}}}}}}}}}}}}}}}}
+    } else { 0 }}}}}}}}}}}}}}}}}}}}}}}}}}}}}}
 }
 
 // Phase 1.10 step 5c: type-inference on AST nodes. Returns 1 if the
@@ -2766,6 +2767,91 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         // high bytes zero. expr_type returns 8 (u16). Narrow movzx
         // load and masked store deferred.
         emit_ast_int(p1)
+    } else { if t == 42 {
+        // Stage 1.5: AST_FLOATLIT_BF16 (tag 42). Same float-bits
+        // parser as AST_FLOATLIT (t==27, f32) — bf16 is f32 with the
+        // low 16 mantissa bits truncated to zero. Computes the f32 IEEE
+        // 754 bit pattern, then masks `bits & 0xFFFF0000` to keep only
+        // the upper 16 bits (sign + 8-bit exp + 7-bit mantissa). Emits
+        // `mov eax, BITS_truncated`.
+        let mut i: i32 = 0;
+        let mut int_part: i32 = 0;
+        let mut frac_part: i32 = 0;
+        let mut frac_digits: i32 = 0;
+        let mut phase: i32 = 0;
+        let mut keep_p: i32 = 1;
+        while keep_p == 1 {
+            if i >= p2 { keep_p = 0; }
+            else {
+                let b = __arena_get(p1 + i);
+                if b == 46 {
+                    phase = 1;
+                    i = i + 1;
+                } else {
+                    if b < 48 { keep_p = 0; }
+                    else { if b > 57 { keep_p = 0; }
+                    else {
+                        if phase == 0 {
+                            int_part = int_part * 10 + (b - 48);
+                        } else {
+                            frac_part = frac_part * 10 + (b - 48);
+                            frac_digits = frac_digits + 1;
+                        };
+                        i = i + 1;
+                    }};
+                };
+            };
+        }
+        let mut pow10: i32 = 1;
+        let mut dd: i32 = 0;
+        while dd < frac_digits { pow10 = pow10 * 10; dd = dd + 1; }
+        let v_scaled = int_part * pow10 + frac_part;
+        let mut bits: i32 = 0;
+        if v_scaled == 0 {
+            bits = 0;
+        } else {
+            let mut k: i32 = 0;
+            let mut threshold: i32 = pow10;
+            let mut keep_neg: i32 = 1;
+            while keep_neg == 1 {
+                if threshold <= v_scaled { keep_neg = 0; }
+                else { if threshold == 1 { keep_neg = 0; }
+                else {
+                    threshold = threshold / 2;
+                    k = k - 1;
+                }};
+            }
+            let mut keep_k: i32 = 1;
+            while keep_k == 1 {
+                if threshold > v_scaled / 2 { keep_k = 0; }
+                else {
+                    threshold = threshold * 2;
+                    k = k + 1;
+                }
+            }
+            let mut residual = v_scaled - threshold;
+            let mut mantissa: i32 = 0;
+            let mut bit: i32 = 22;
+            while bit >= 0 {
+                residual = residual * 2;
+                if residual >= threshold {
+                    let mut bv: i32 = 1;
+                    let mut sh: i32 = 0;
+                    while sh < bit { bv = bv * 2; sh = sh + 1; }
+                    mantissa = mantissa + bv;
+                    residual = residual - threshold;
+                }
+                bit = bit - 1;
+            }
+            let exp_field = k + 127;
+            let mut exp_shifted: i32 = exp_field;
+            let mut sh2: i32 = 0;
+            while sh2 < 23 { exp_shifted = exp_shifted * 2; sh2 = sh2 + 1; }
+            bits = exp_shifted + mantissa;
+        }
+        // bf16 truncation: keep upper 16 bits, zero the low 16.
+        let bf16_bits = bits & 0 - 65536;
+        emit_ast_int(bf16_bits)
     } else { if t == 27 {
         // AST_FLOATLIT (Phase 1.10 step 3d, f32). Phase 1.10 step 7b
         // also reuses this branch for AST_FLOATLIT_F64 (tag 34) — the
@@ -3935,7 +4021,7 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         // returns 0. Lex/parse errors that produce AST_ERR cause the
         // resulting binary to SIGILL — clear signal vs. silent 0.
         emit_ud2_trap()
-    }}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}
+    }}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}
 }
 
 // --------------------------------------------------------------

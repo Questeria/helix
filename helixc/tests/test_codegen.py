@@ -2245,6 +2245,14 @@ fn main() -> i32 {{
     assert compile_and_exec(
         "fn main() -> i32 { let x: bf16 = 0.5_f32 ; 42 }"
     ) == 42, "bf16 LET annotation parses + compiles via i32-shaped storage"
+    # Stage 1.5: bf16 LITERAL codegen. _bf16 5-byte suffix is lexed
+    # (token tag 41), parser routes to AST_FLOATLIT_BF16 (tag 42),
+    # codegen reuses the f32 float-bits parser then masks the low 16
+    # mantissa bits via `bits & 0xFFFF0000` (expressed as `bits & (0
+    # - 65536)` since Helix bootstrap doesn't have hex literals).
+    assert compile_and_exec(
+        "fn main() -> i32 { let x: bf16 = 1.5_bf16 ; 42 }"
+    ) == 42, "bf16 LITERAL parses + compiles"
     # Approach A Stage 2.4: u64 minimal scaffold. u64 literals lex via
     # `_u64` 4-byte suffix, parse to AST_INTLIT_U64 (tag 38), expr_type
     # returns 9. Codegen emits `movabs rax, imm64` (8 bytes) so the full

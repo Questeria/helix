@@ -406,6 +406,14 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
         let body_l = tok_p3(tok_base, k);
         cur_advance(sb);
         mk_node(27, body_s, body_l, 0)
+    } else { if t == 41 {
+        // Stage 1.5: TK_FLOATLIT_BF16 (tag 41) -> AST_FLOATLIT_BF16
+        // (tag 42). Codegen reuses the f32 float-bits parser then masks
+        // off the low 16 mantissa bits to produce the bf16 truncation.
+        let body_s = tok_p2(tok_base, k);
+        let body_l = tok_p3(tok_base, k);
+        cur_advance(sb);
+        mk_node(42, body_s, body_l, 0)
     } else { if t == 32 {
         // Step 7b: TK_FLOATLIT_F64 (tag 32) -> AST_FLOATLIT_F64 (tag 34).
         // Distinct from AST_FLOATLIT (tag 27, f32) so codegen can branch
@@ -694,7 +702,7 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
             };
         };
         mk_node(99, t, 0, 0)
-    }}}}}}}}}}}}}
+    }}}}}}}}}}}}}}
 }
 
 // --------------------------------------------------------------

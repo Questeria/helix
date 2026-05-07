@@ -247,6 +247,7 @@ fn lex_int(src_start: i32, src_len: i32, pos: i32) -> i32 {
     let mut is_i8_suffix: i32 = 0;
     let mut is_i16_suffix: i32 = 0;
     let mut is_u16_suffix: i32 = 0;
+    let mut is_bf16_suffix: i32 = 0;
     if p + 3 < end {
         let b0 = __arena_get(p);
         if b0 == 95 {   // '_'
@@ -331,13 +332,44 @@ fn lex_int(src_start: i32, src_len: i32, pos: i32) -> i32 {
             };
         };
     }
+    // Stage 1.5: _bf16 (5 bytes: '_' 'b' 'f' '1' '6'). Brain Float 16
+    // is f32 with the low 16 mantissa bits truncated. Codegen emits the
+    // f32 bit pattern AND-masked with 0xFFFF0000.
+    if p + 4 < end {
+        let b0 = __arena_get(p);
+        if b0 == 95 {                              // '_'
+            let b1 = __arena_get(p + 1);
+            if b1 == 98 {                          // 'b'
+                let b2 = __arena_get(p + 2);
+                if b2 == 102 {                     // 'f'
+                    let b3 = __arena_get(p + 3);
+                    if b3 == 49 {                  // '1'
+                        let b4 = __arena_get(p + 4);
+                        if b4 == 54 {              // '6'
+                            p = p + 5;
+                            is_bf16_suffix = 1;
+                        };
+                    };
+                };
+            };
+        };
+    }
     if is_float == 1 {
         let flen = p - pos;
         // Step 7a: distinguish f32 (tag 26) from f64 (tag 32) at lex time.
-        // Parser consumes both; for now codegen treats them identically
-        // (step 7b will add distinct AST tag, step 7c real 8-byte codegen).
-        let tk = if is_f64_suffix == 1 { 32 } else { 26 };
+        // Stage 1.5: _bf16 suffix → token tag 41 (TK_FLOATLIT_BF16).
+        // Parser routes to AST_FLOATLIT_BF16 (tag 42); codegen masks
+        // low 16 mantissa bits.
+        let tk = if is_bf16_suffix == 1 { 41 }
+                 else { if is_f64_suffix == 1 { 32 } else { 26 } };
         push_token(tk, pos, pos, flen);
+    } else { if is_bf16_suffix == 1 {
+        // bf16 suffix on a non-float number (e.g., `42_bf16`). Treat
+        // as a bf16 literal — emit the same token. Parser/codegen will
+        // parse it through the floatlit machinery (which handles
+        // missing decimal point gracefully — no fractional digits).
+        let flen = p - pos;
+        push_token(41, pos, pos, flen);
     } else {
         let length = p - pos;
         // Stage 1: TK_INTLIT_I64 (tag 33) for _i64-suffixed literals;
@@ -371,7 +403,7 @@ fn lex_int(src_start: i32, src_len: i32, pos: i32) -> i32 {
                  else { if is_i16_suffix == 1 { 38 }
                  else { if is_u16_suffix == 1 { 39 } else { 1 } } } } } } } };
         push_token(tk, value, pos, length);
-    };
+    } };
     p
 }
 
