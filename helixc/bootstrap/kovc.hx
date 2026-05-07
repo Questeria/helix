@@ -3140,6 +3140,18 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
             arg_count = arg_count + 1;
             arg_cur = __arena_get(arg_cur + 2);
         }
+        // Audit fix #7 (cycle 1): if arg_count > 6, emit ud2 trap.
+        // Phase 0 doesn't yet implement SysV stack args (args 6+ are
+        // supposed to be passed on the stack at [rsp+0], [rsp+8], ...
+        // with the caller adding `add rsp, N` after the call). Without
+        // that, the args 6+ remain on the stack and the call still
+        // happens — corrupting both the stack and any subsequent
+        // pop/cmp operations. Loud SIGILL is much better than silent
+        // corruption. Implement stack-args properly when needed.
+        if arg_count > 6 {
+            let n_trap = emit_ud2_trap();
+            bytes_emitted + n_trap
+        } else {
         // Pass 2: pop into SysV regs in reverse-of-push order.
         // pushed: arg0, arg1, ..., argN-1 (top is argN-1).
         // We want rdi=arg0, rsi=arg1, ..., r9=argN-1.
@@ -3170,6 +3182,7 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         let disp_slot = emit_call_rel32_placeholder();
         patch_table_add(patch_state, disp_slot, p1, p2);
         bytes_emitted + 5
+        }
         }
     } else { if t == 13 {
         // AST_SEQ(first, second): emit first (discard eax), emit
