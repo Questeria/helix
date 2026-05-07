@@ -5863,6 +5863,55 @@ def test_stdlib_vec_zip_max():
     assert code == 42, f"expected 42, got {code}"
 
 
+def test_stdlib_vec_abs_sum():
+    """abs_sum([5,-3,-8,1]) = 5+3+8+1 = 17. Encoded as 17*2 + 8 = 42."""
+    src = """
+    fn main() -> i32 {
+        let v = vec_new();
+        let n0 = vec_push(v, 0, 5);
+        let n1 = vec_push(v, n0, -3);
+        let n2 = vec_push(v, n1, -8);
+        let n3 = vec_push(v, n2, 1);
+        vec_abs_sum(v, n3) * 2 + 8
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_vec_sum_squares():
+    """sum_squares([1,2,3,4]) = 1+4+9+16 = 30. Encoded as 30 + 12 = 42."""
+    src = """
+    fn main() -> i32 {
+        let v = vec_new();
+        let n0 = vec_push(v, 0, 1);
+        let n1 = vec_push(v, n0, 2);
+        let n2 = vec_push(v, n1, 3);
+        let n3 = vec_push(v, n2, 4);
+        vec_sum_squares(v, n3) + 12
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_vec_clamp_inplace():
+    """clamp_inplace([5,-3,9,0], 0, 7) -> [5,0,7,0], sum=12. Encoded as 12*3 + 6 = 42."""
+    src = """
+    fn main() -> i32 {
+        let v = vec_new();
+        let n0 = vec_push(v, 0, 5);
+        let n1 = vec_push(v, n0, -3);
+        let n2 = vec_push(v, n1, 9);
+        let n3 = vec_push(v, n2, 0);
+        vec_clamp_inplace(v, n3, 0, 7);
+        vec_sum(v, n3) * 3 + 6
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
 def test_impl_inherent_method_basic():
     """Phase 1.8: inherent impl block. `impl Type { fn method(self) }` lifts
     to `Type__method`. `obj.method(args)` rewrites to `Type__method(obj, args)`."""

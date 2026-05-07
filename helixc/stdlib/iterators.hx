@@ -31,6 +31,9 @@
 //   vec_dot(a, b, count)                 -> i32   dot product sum(a[i]*b[i]).
 //   vec_zip_min(a, b, count)             -> i32   appends [min(a[i], b[i])]; returns new start.
 //   vec_zip_max(a, b, count)             -> i32   appends [max(a[i], b[i])]; returns new start.
+//   vec_abs_sum(start, count)            -> i32   sum of |v[i]| (L1 norm).
+//   vec_sum_squares(start, count)        -> i32   sum of v[i]*v[i] (squared L2 norm).
+//   vec_clamp_inplace(s, c, lo, hi)      -> i32   clip elems to [lo, hi] in place; returns start.
 //
 // License: Apache 2.0
 
@@ -298,4 +301,37 @@ fn vec_zip_max(a: i32, b: i32, count: i32) -> i32 {
         i = i + 1;
     }
     s
+}
+
+fn vec_abs_sum(start: i32, count: i32) -> i32 {
+    let mut i: i32 = 0;
+    let mut acc: i32 = 0;
+    while i < count {
+        let v = __arena_get(start + i);
+        if v < 0 { acc = acc - v; } else { acc = acc + v; }
+        i = i + 1;
+    }
+    acc
+}
+
+fn vec_sum_squares(start: i32, count: i32) -> i32 {
+    let mut i: i32 = 0;
+    let mut acc: i32 = 0;
+    while i < count {
+        let v = __arena_get(start + i);
+        acc = acc + v * v;
+        i = i + 1;
+    }
+    acc
+}
+
+fn vec_clamp_inplace(start: i32, count: i32, lo: i32, hi: i32) -> i32 {
+    let mut i: i32 = 0;
+    while i < count {
+        let v = __arena_get(start + i);
+        if v < lo { __arena_set(start + i, lo); }
+        else { if v > hi { __arena_set(start + i, hi); } }
+        i = i + 1;
+    }
+    start
 }
