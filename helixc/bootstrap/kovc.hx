@@ -3350,6 +3350,16 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         // emit `call rel32 placeholder` for backpatching.
         let p3 = __arena_get(idx + 3);
         let mut bytes_emitted: i32 = 0;
+        // Stage 1.7: look up callee's declared param types so we can
+        // trap each arg whose actual type doesn't match. Builtins
+        // (not in the fn_type_table) return pp_count=0 below, which
+        // skips the per-arg check — still safe because builtins are
+        // already type-checked at their named-byte_eq dispatch site.
+        let fts_for_args = bn_fn_type_state(bn_state);
+        let pp_lookup = if fts_for_args == 0 { 0 }
+                        else { fn_type_table_lookup_params(fts_for_args, p1, p2) };
+        let pp_count = pp_lookup % 8;
+        let pp_packed = pp_lookup / 8;
         // Pass 1: emit each arg, push rax. Track count.
         let mut arg_cur: i32 = p3;
         let mut arg_count: i32 = 0;
@@ -3358,6 +3368,15 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
             let n_arg = emit_ast_code(arg_expr, bind_state, patch_state, bn_state);
             let n_push = emit_push_rax();
             bytes_emitted = bytes_emitted + n_arg + n_push;
+            // Stage 1.7: trap on arg-type-vs-param-type mismatch.
+            if arg_count < pp_count {
+                let expected_ty = unpack_param_ty(pp_packed, arg_count);
+                let actual_ty = expr_type(arg_expr, bind_state, bn_state);
+                if expected_ty != actual_ty {
+                    let n_trap = emit_ud2_trap();
+                    bytes_emitted = bytes_emitted + n_trap;
+                };
+            };
             arg_count = arg_count + 1;
             arg_cur = __arena_get(arg_cur + 2);
         }
