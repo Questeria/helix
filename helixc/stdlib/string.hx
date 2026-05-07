@@ -762,3 +762,44 @@ fn string_chars_eq_in_range(start: i32, len: i32, lo: i32, hi: i32) -> i32 {
     }
     ok
 }
+
+// string_count_ge_byte(start, len, byte): @pure. Count of bytes >= byte.
+@pure
+fn string_count_ge_byte(start: i32, len: i32, byte: i32) -> i32 {
+    let mut i: i32 = 0;
+    let mut total: i32 = 0;
+    while i < len {
+        if __arena_get(start + i) >= byte { total = total + 1; }
+        i = i + 1;
+    }
+    total
+}
+
+// string_count_le_byte(start, len, byte): @pure. Count of bytes <= byte.
+@pure
+fn string_count_le_byte(start: i32, len: i32, byte: i32) -> i32 {
+    let mut i: i32 = 0;
+    let mut total: i32 = 0;
+    while i < len {
+        if __arena_get(start + i) <= byte { total = total + 1; }
+        i = i + 1;
+    }
+    total
+}
+
+// string_byte_at_or(start, len, idx, default): @pure. Bounded-access
+// version of string_get; returns default if idx is out of range.
+@pure
+fn string_byte_at_or(start: i32, len: i32, idx: i32, default: i32) -> i32 {
+    if idx < 0 { default }
+    else { if idx >= len { default } else { __arena_get(start + idx) } }
+}
+
+// string_eq_byte_at(start, len, idx, byte): @pure. 1 if v[idx] == byte
+// AND idx in range. 0 otherwise (out of range OR mismatched).
+@pure
+fn string_eq_byte_at(start: i32, len: i32, idx: i32, byte: i32) -> i32 {
+    if idx < 0 { 0 }
+    else { if idx >= len { 0 }
+    else { if __arena_get(start + idx) == byte { 1 } else { 0 } } }
+}

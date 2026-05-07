@@ -9894,6 +9894,69 @@ def test_stdlib_vec_last():
     assert code == 42, f"expected 42 (last=42, empty=0), got {code}"
 
 
+def test_stdlib_string_count_ge_byte():
+    """'AbCDeF' (65,98,67,68,101,70); count >= 'D'(68) is 4 (98,68,101,70); *7+14=42.
+    Wait: bytes are 65,98,67,68,101,70. >= 68: 98,68,101,70 = 4. 4*7 = 28. +14=42."""
+    src = """
+    fn main() -> i32 {
+        let s = string_new();
+        let s1 = string_push(s, 0, 65);
+        let s2 = string_push(s, s1, 98);
+        let s3 = string_push(s, s2, 67);
+        let s4 = string_push(s, s3, 68);
+        let s5 = string_push(s, s4, 101);
+        let s6 = string_push(s, s5, 70);
+        string_count_ge_byte(s, s6, 68) * 7 + 14
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_string_count_le_byte():
+    """Push 65,66,67,68; count <= 67: 3 (65,66,67); *14=42."""
+    src = """
+    fn main() -> i32 {
+        let s = string_new();
+        let s1 = string_push(s, 0, 65);
+        let s2 = string_push(s, s1, 66);
+        let s3 = string_push(s, s2, 67);
+        let s4 = string_push(s, s3, 68);
+        string_count_le_byte(s, s4, 67) * 14
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_string_byte_at_or():
+    """byte_at_or out of range returns default 42."""
+    src = """
+    fn main() -> i32 {
+        let s = string_new();
+        let s1 = string_push(s, 0, 99);
+        string_byte_at_or(s, s1, 99, 42)
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_string_eq_byte_at():
+    """'a*b'; eq_byte_at(idx=1, '*') = 1; *42=42."""
+    src = """
+    fn main() -> i32 {
+        let s = string_new();
+        let s1 = string_push(s, 0, 97);
+        let s2 = string_push(s, s1, 42);
+        let s3 = string_push(s, s2, 98);
+        string_eq_byte_at(s, s3, 1, 42) * 42
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
 def test_stdlib_hashmap_min_key_with_value():
     """Insert (10,5),(42,5),(100,7); min_key with value=5 → 10; +32=42."""
     src = """
