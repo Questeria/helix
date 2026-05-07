@@ -2242,6 +2242,15 @@ fn main() -> i32 {{
     # the low byte of (2^31 - 2147483606) = 42.
     assert compile_and_exec("2147483648_u64 - 2147483606_u64") == 42, \
         "u64 literal at 2^31 doesn't sign-extend high half"
+    # Boundary test: 2^32-1 = 4294967295_u64 is the LARGEST value the
+    # current fix handles correctly. The lex_int i32 accumulator wraps
+    # at 2^32 multiples (its low 32 bits are bit-equal to the unsigned
+    # accumulation since two's-complement * preserves low 32 bits). So
+    # 4294967295_u64 stores p1 = -1 (i32) = 0xFFFFFFFF, hi32 = 0,
+    # emits 0x00000000FFFFFFFF = 4294967295. Anything > 2^32-1 still
+    # silently wraps (separate fix).
+    assert compile_and_exec("4294967295_u64 - 4294967253_u64") == 42, \
+        "u64 literal at 2^32-1 boundary"
     # Approach A Stage 2.4b: u64 arithmetic dispatch (ADD, SUB, MUL).
     # ADD and SUB u64 landed in commits e7311b0/0089529. MUL u64 landed
     # post-cascade-bug-fix (commit 29f552e). All three reuse the i64
