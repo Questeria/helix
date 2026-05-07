@@ -3350,6 +3350,36 @@ fn emit_elf_for_ast_to_path(ast_root: i32) -> i32 {
                     let p_ty = __arena_get(pcur + 4);
                     let off = bind_alloc_offset(bind_state);
                     bind_push_typed(bind_state, pname_s, pname_l, off, p_ty);
+                    // Audit cycle 2 fix #1: f64 params (p_ty == 2) need
+                    // 64-bit register stores to preserve the high 32
+                    // bits. The 32-bit forms below silently truncate
+                    // every f64 argument's exponent + mantissa MSBs to
+                    // zero. REX.W prefix (0x48 for rdi/rsi/rdx/rcx;
+                    // 0x4C carries W for r8/r9) promotes the store to
+                    // 8-byte width.
+                    if p_ty == 2 {
+                        if pidx == 0 {
+                            // mov [rbp+disp32], rdi  : 48 89 BD disp32
+                            emit_byte(0x48); emit_byte(0x89); emit_byte(0xBD); emit_u32_le(0 - off);
+                        } else { if pidx == 1 {
+                            // mov [rbp+disp32], rsi  : 48 89 B5 disp32
+                            emit_byte(0x48); emit_byte(0x89); emit_byte(0xB5); emit_u32_le(0 - off);
+                        } else { if pidx == 2 {
+                            // mov [rbp+disp32], rdx  : 48 89 95 disp32
+                            emit_byte(0x48); emit_byte(0x89); emit_byte(0x95); emit_u32_le(0 - off);
+                        } else { if pidx == 3 {
+                            // mov [rbp+disp32], rcx  : 48 89 8D disp32
+                            emit_byte(0x48); emit_byte(0x89); emit_byte(0x8D); emit_u32_le(0 - off);
+                        } else { if pidx == 4 {
+                            // mov [rbp+disp32], r8   : 4C 89 85 disp32
+                            emit_byte(0x4C); emit_byte(0x89); emit_byte(0x85);
+                            emit_u32_le(0 - off);
+                        } else { if pidx == 5 {
+                            // mov [rbp+disp32], r9   : 4C 89 8D disp32
+                            emit_byte(0x4C); emit_byte(0x89); emit_byte(0x8D);
+                            emit_u32_le(0 - off);
+                        } else {} }}}}};
+                    } else {
                     if pidx == 0 {
                         // mov [rbp+disp32], edi  : 89 BD disp32
                         emit_byte(0x89); emit_byte(0xBD); emit_u32_le(0 - off);
@@ -3371,6 +3401,7 @@ fn emit_elf_for_ast_to_path(ast_root: i32) -> i32 {
                         emit_byte(0x44); emit_byte(0x89); emit_byte(0x8D);
                         emit_u32_le(0 - off);
                     } else {} }}}}};
+                    };
                 };
                 pidx = pidx + 1;
                 pcur = __arena_get(pcur + 3);
