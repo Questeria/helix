@@ -9827,6 +9827,60 @@ def test_stdlib_vec_last():
     assert code == 42, f"expected 42 (last=42, empty=0), got {code}"
 
 
+def test_stdlib_tf2d_norm_frobenius_sq():
+    """[[3,4]] frobenius_sq = 9+16=25.0; bits 0x41C80000; top 65; -23=42."""
+    src = """
+    fn main() -> i32 {
+        let m = ti2d_new(1, 2);
+        tf2d_set(m, 2, 0, 0, 3.0_f32);
+        tf2d_set(m, 2, 0, 1, 4.0_f32);
+        __bits_of_f32(tf2d_norm_frobenius_sq(m, 1, 2)) / 16777216 - 23
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_tf2d_zeros():
+    """zeros(2,2): 4 slots, all 0; bits 0; +42=42."""
+    src = """
+    fn main() -> i32 {
+        let m = tf2d_zeros(2, 2);
+        __arena_get(m) + 42
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_tf2d_ones():
+    """ones(2,2): trace = 2.0; bits 0x40000000; top 64; -22=42."""
+    src = """
+    fn main() -> i32 {
+        let m = tf2d_ones(2, 2);
+        __bits_of_f32(tf2d_trace(m, 2)) / 16777216 - 22
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_tf2d_max_abs():
+    """max_abs [[3,-8],[2,-1]] = 8.0; bits 0x41000000; top 65; -23=42."""
+    src = """
+    fn main() -> i32 {
+        let m = ti2d_new(2, 2);
+        tf2d_set(m, 2, 0, 0, 3.0_f32);
+        tf2d_set(m, 2, 0, 1, 0.0_f32 - 8.0_f32);
+        tf2d_set(m, 2, 1, 0, 2.0_f32);
+        tf2d_set(m, 2, 1, 1, 0.0_f32 - 1.0_f32);
+        __bits_of_f32(tf2d_max_abs(m, 2, 2)) / 16777216 - 23
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
 def test_stdlib_string_min_byte():
     """min_byte('XAB') = 'A' = 65; -23=42."""
     src = """

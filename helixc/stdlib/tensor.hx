@@ -971,3 +971,39 @@ fn tf1d_lerp(a: i32, b: i32, t: f32, dst: i32, n: i32) -> i32 {
     }
     0
 }
+
+// tf2d_norm_frobenius_sq(start, rows, cols): @pure. Squared Frobenius
+// norm — sum of squares of all elements. Mirror of tf1d_l2_norm_sq for
+// 2D matrices.
+@pure
+fn tf2d_norm_frobenius_sq(start: i32, rows: i32, cols: i32) -> f32 {
+    let n = rows * cols;
+    tf1d_l2_norm_sq(start, n)
+}
+
+// tf2d_zeros(rows, cols): allocate a new rows*cols matrix filled with 0.0_f32.
+@pure
+fn tf2d_zeros(rows: i32, cols: i32) -> i32 {
+    t1d_new(rows * cols)
+}
+
+// tf2d_ones(rows, cols): allocate a new rows*cols matrix filled with 1.0_f32.
+fn tf2d_ones(rows: i32, cols: i32) -> i32 {
+    let n = rows * cols;
+    let s = t1d_new(n);
+    let one_bits = __bits_of_f32(1.0_f32);
+    let mut i: i32 = 0;
+    while i < n {
+        __arena_set(s + i, one_bits);
+        i = i + 1;
+    }
+    s
+}
+
+// tf2d_max_abs(start, rows, cols): @pure. Largest absolute value across
+// all elements of a 2D matrix. 0.0 if rows*cols == 0.
+@pure
+fn tf2d_max_abs(start: i32, rows: i32, cols: i32) -> f32 {
+    let n = rows * cols;
+    tf1d_max_abs(start, n)
+}
