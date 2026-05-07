@@ -5631,6 +5631,71 @@ def test_stdlib_vec_filter_lt():
     assert code == 36, f"expected 36, got {code}"
 
 
+def test_stdlib_vec_filter_gt():
+    """filter [1,5,2,8,3,7] for >4 yields [5,8,7]; kept=3, sum=20."""
+    src = """
+    fn main() -> i32 {
+        let s = vec_new();
+        let n0 = vec_push(s, 0, 1);
+        let n1 = vec_push(s, n0, 5);
+        let n2 = vec_push(s, n1, 2);
+        let n3 = vec_push(s, n2, 8);
+        let n4 = vec_push(s, n3, 3);
+        let n5 = vec_push(s, n4, 7);
+        let dst = __arena_len();
+        let kept = vec_filter_gt(s, n5, 4);
+        // kept = 3; sum of kept slice = 5+8+7 = 20. encode kept*100 + sum = 320.
+        // 320 mod 256 = 64.
+        kept * 100 + vec_sum(dst, kept)
+    }
+    """
+    code = compile_and_run(src)
+    # Linux exit code is 8-bit, so 320 truncates to 64.
+    assert code == 64, f"expected 64, got {code}"
+
+
+def test_stdlib_vec_filter_eq():
+    """filter [3,1,3,2,3,4] for ==3 yields [3,3,3]; kept=3, sum=9."""
+    src = """
+    fn main() -> i32 {
+        let s = vec_new();
+        let n0 = vec_push(s, 0, 3);
+        let n1 = vec_push(s, n0, 1);
+        let n2 = vec_push(s, n1, 3);
+        let n3 = vec_push(s, n2, 2);
+        let n4 = vec_push(s, n3, 3);
+        let n5 = vec_push(s, n4, 4);
+        let dst = __arena_len();
+        let kept = vec_filter_eq(s, n5, 3);
+        // kept = 3; sum of kept slice = 9. encode kept*10 + sum = 39.
+        kept * 10 + vec_sum(dst, kept)
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 39, f"expected 39, got {code}"
+
+
+def test_stdlib_vec_zip_sub():
+    """zip_sub of [10,8,5] and [4,3,2] = [6,5,3]; sum=14."""
+    src = """
+    fn main() -> i32 {
+        let a = vec_new();
+        let an0 = vec_push(a, 0, 10);
+        let an1 = vec_push(a, an0, 8);
+        let an2 = vec_push(a, an1, 5);
+        let b = vec_new();
+        let bn0 = vec_push(b, 0, 4);
+        let bn1 = vec_push(b, bn0, 3);
+        let bn2 = vec_push(b, bn1, 2);
+        let z = vec_zip_sub(a, b, an2);
+        // [6,5,3] sum=14. encode 14*3 = 42.
+        vec_sum(z, an2) * 3
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
 def test_impl_inherent_method_basic():
     """Phase 1.8: inherent impl block. `impl Type { fn method(self) }` lifts
     to `Type__method`. `obj.method(args)` rewrites to `Type__method(obj, args)`."""

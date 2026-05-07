@@ -3209,7 +3209,14 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         // result is undefined behavior at this stage.
         emit_ast_int(0)
     } else {
-        emit_ast_int(0)
+        // Audit fix #8 (cycle 1): unhandled AST tag. Previously emitted
+        // `mov eax, 0` (5 bytes) which silently masked AST_ERR (tag 99)
+        // from lex/parse failures and any future tag added to parser
+        // without a codegen handler. Now emits ud2 (2 bytes) so the
+        // bug is loud at runtime instead of producing a binary that
+        // returns 0. Lex/parse errors that produce AST_ERR cause the
+        // resulting binary to SIGILL — clear signal vs. silent 0.
+        emit_ud2_trap()
     }}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}
 }
 

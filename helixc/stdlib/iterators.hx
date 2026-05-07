@@ -20,6 +20,9 @@
 //   vec_filter_lt(start, count, t)       -> i32   appends elems < t; returns kept count.
 //                                                 Caller saves __arena_len() BEFORE calling
 //                                                 to recover the new start index.
+//   vec_filter_gt(start, count, t)       -> i32   appends elems > t; returns kept count.
+//   vec_filter_eq(start, count, t)       -> i32   appends elems == t; returns kept count.
+//   vec_zip_sub(a, b, count)             -> i32   appends [a[i]-b[i]]; returns new start.
 //
 // License: Apache 2.0
 
@@ -149,4 +152,42 @@ fn vec_filter_lt(start: i32, count: i32, t: i32) -> i32 {
         i = i + 1;
     }
     kept
+}
+
+fn vec_filter_gt(start: i32, count: i32, t: i32) -> i32 {
+    let mut i: i32 = 0;
+    let mut kept: i32 = 0;
+    while i < count {
+        let v = __arena_get(start + i);
+        if v > t {
+            __arena_push(v);
+            kept = kept + 1;
+        }
+        i = i + 1;
+    }
+    kept
+}
+
+fn vec_filter_eq(start: i32, count: i32, t: i32) -> i32 {
+    let mut i: i32 = 0;
+    let mut kept: i32 = 0;
+    while i < count {
+        let v = __arena_get(start + i);
+        if v == t {
+            __arena_push(v);
+            kept = kept + 1;
+        }
+        i = i + 1;
+    }
+    kept
+}
+
+fn vec_zip_sub(a: i32, b: i32, count: i32) -> i32 {
+    let s: i32 = __arena_len();
+    let mut i: i32 = 0;
+    while i < count {
+        __arena_push(__arena_get(a + i) - __arena_get(b + i));
+        i = i + 1;
+    }
+    s
 }
