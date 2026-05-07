@@ -1821,7 +1821,11 @@ fn main() -> i32 {{
     # the literal value is unaffected — these tests just verify the suffix
     # doesn't break parse of an otherwise-correct program.
     assert compile_and_exec("42_i32") == 42, "int with _i32 suffix"
-    assert compile_and_exec("100_i64 - 58") == 42, "int with _i64 suffix in expr"
+    # Stage 1 (Approach A): mixed i64-vs-i32 now traps via ud2. The old
+    # `100_i64 - 58` silently dispatched to 32-bit integer arith and
+    # returned the right low-32 result — a silent miscompile relative to
+    # the production type system. Use matching types for correctness.
+    assert compile_and_exec("100_i64 - 58_i64") == 42, "i64 - i64 via 64-bit arith"
     # 1.5 = 0x3FC00000 -> top byte 0x3F = 63 (same as 1.0/2.0/3.0).
     assert compile_and_exec("__bits_of_f32(1.5_f32) / 16777216") == 63, "float with _f32 suffix"
     assert compile_and_exec("__bits_of_f32(__fadd(1.5_f32, 2.5_f32)) / 16777216") == 64, \
@@ -2053,7 +2057,13 @@ fn main() -> i32 {{
     # for AST_INTLIT_I64 nodes. Functionally: 42_i64 still exits 42.
     assert compile_and_exec("42_i64") == 42, "42_i64 literal exits 42"
     assert compile_and_exec("100_i64 - 58_i64") == 42, \
-        "i64 - i64 falls through to integer dispatch (low 32 still correct)"
+        "i64 - i64 via 64-bit arith helpers (REX.W sub rax, rcx)"
+    # Stage 1 i64 arith: 6_i64 * 7_i64 == 42 via 64-bit imul rax, rcx.
+    assert compile_and_exec("6_i64 * 7_i64") == 42, "i64 * i64 via imul rax, rcx"
+    # i64 add: 30_i64 + 12_i64 == 42 via add rax, rcx (REX.W).
+    assert compile_and_exec("30_i64 + 12_i64") == 42, "i64 + i64 via add rax, rcx"
+    # i64 div: 84_i64 / 2_i64 == 42 via cqo + idiv rcx.
+    assert compile_and_exec("84_i64 / 2_i64") == 42, "i64 / i64 via cqo+idiv"
     # Phase 1.10 step 7l: f64 bit-access primitives.
     # __bits_hi_f64(1.0_f64) -> high 32 of 0x3FF0000000000000 = 0x3FF00000.
     # /16777216 = 0x3F = 63.

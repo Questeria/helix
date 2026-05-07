@@ -270,6 +270,40 @@ fn emit_mov_ecx_eax() -> i32 { emit_byte(0x89); emit_byte(0xC1); 2 }
 fn emit_add_eax_ecx() -> i32 { emit_byte(0x01); emit_byte(0xC8); 2 }
 fn emit_sub_eax_ecx() -> i32 { emit_byte(0x29); emit_byte(0xC8); 2 }
 fn emit_imul_eax_ecx() -> i32 { emit_byte(0x0F); emit_byte(0xAF); emit_byte(0xC1); 3 }
+// Stage 1: 64-bit integer arithmetic. REX.W (0x48) prefix promotes
+// the operation to full 64-bit width. Used when both operands are
+// i64 in AST_ADD/SUB/MUL/DIV dispatch.
+//   48 01 C8     add rax, rcx
+//   48 29 C8     sub rax, rcx
+//   48 0F AF C1  imul rax, rcx
+fn emit_add_rax_rcx_64() -> i32 { emit_byte(0x48); emit_byte(0x01); emit_byte(0xC8); 3 }
+fn emit_sub_rax_rcx_64() -> i32 { emit_byte(0x48); emit_byte(0x29); emit_byte(0xC8); 3 }
+fn emit_imul_rax_rcx_64() -> i32 { emit_byte(0x48); emit_byte(0x0F); emit_byte(0xAF); emit_byte(0xC1); 4 }
+// 64-bit signed divide: cqo (sign-extend rax into rdx:rax) + idiv rcx.
+//   48 99        cqo
+//   48 F7 F9     idiv rcx
+fn emit_idiv_rax_rcx_64() -> i32 {
+    emit_byte(0x48); emit_byte(0x99);
+    emit_byte(0x48); emit_byte(0xF7); emit_byte(0xF9);
+    5
+}
+// 64-bit cmp + setcc. cmp rax, rcx = 48 39 C8 (3 bytes); setcc al
+// + xor eax pattern same as 32-bit. Produces 0/1 in eax.
+//   48 39 C8     cmp rax, rcx
+//   31 C0        xor eax, eax (pre-clear; setcc only writes al)
+//   0F xx C0     setcc al
+fn emit_cmp_setX_64(op_byte: i32) -> i32 {
+    emit_byte(0x48); emit_byte(0x39); emit_byte(0xC8);
+    emit_byte(0xB8); emit_byte(0); emit_byte(0); emit_byte(0); emit_byte(0);
+    emit_byte(0x0F); emit_byte(op_byte); emit_byte(0xC0);
+    11
+}
+fn emit_lt_rax_rcx_64() -> i32 { emit_cmp_setX_64(0x9C) }
+fn emit_gt_rax_rcx_64() -> i32 { emit_cmp_setX_64(0x9F) }
+fn emit_eq_rax_rcx_64() -> i32 { emit_cmp_setX_64(0x94) }
+fn emit_ne_rax_rcx_64() -> i32 { emit_cmp_setX_64(0x95) }
+fn emit_le_rax_rcx_64() -> i32 { emit_cmp_setX_64(0x9E) }
+fn emit_ge_rax_rcx_64() -> i32 { emit_cmp_setX_64(0x9D) }
 // Phase 1.10 step 5+: binary bitwise ops mirroring helixc-Python
 // OpKind.BIT_AND/BIT_OR/BIT_XOR (commit f676fca).
 fn emit_and_eax_ecx() -> i32 { emit_byte(0x21); emit_byte(0xC8); 2 }
@@ -2780,102 +2814,130 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         }
         emit_movabs_rax_imm64(low32, high32)
     } else { if t == 2 {
-        // Step 5c: dispatch to SSE addss when both operands are f32.
-        // Step 5p: emit ud2 trap when types are MIXED (one f32, one i32) —
-        // silent integer codegen would corrupt the f32 bit pattern.
-        // Step 7d: f64 path — both operands f64 → emit_addsd; mixed
-        // f64/non-f64 → ud2; existing f32/i32 dispatch nested below.
-        // Move-rcx: 64-bit (mov rcx, rax) when both f64 to preserve
-        // high half; otherwise 32-bit mov ecx, eax (existing).
+        // 4-way arith dispatch (Stage 1 extends Step 7d's three-way):
+        // both i64 -> add rax, rcx (REX.W); both f64 -> addsd;
+        // both f32 -> addss; both i32 -> add eax, ecx; else -> ud2.
         let n1 = emit_ast_code(p1, bind_state, patch_state, bn_state);
         let np = emit_push_rax();
         let n2 = emit_ast_code(p2, bind_state, patch_state, bn_state);
         let l_d = is_f64_expr(p1, bind_state, bn_state);
         let r_d = is_f64_expr(p2, bind_state, bn_state);
+        let l_i64 = is_i64_expr(p1, bind_state, bn_state);
+        let r_i64 = is_i64_expr(p2, bind_state, bn_state);
+        // Move-rcx: 64-bit when both operands are 8-byte (f64 or i64).
         let nm = if l_d == 1 {
             if r_d == 1 { emit_mov_rcx_rax_64() } else { emit_mov_ecx_eax() }
-        } else { emit_mov_ecx_eax() };
+        } else { if l_i64 == 1 {
+            if r_i64 == 1 { emit_mov_rcx_rax_64() } else { emit_mov_ecx_eax() }
+        } else { emit_mov_ecx_eax() }};
         let no = emit_pop_rax();
         let l_f = is_f32_expr(p1, bind_state, bn_state);
         let r_f = is_f32_expr(p2, bind_state, bn_state);
         let na = if l_d == 1 {
             if r_d == 1 { emit_addsd() } else { emit_ud2_trap() }
         } else { if r_d == 1 { emit_ud2_trap() } else {
-            if l_f == 1 {
-                if r_f == 1 { emit_addss() } else { emit_ud2_trap() }
-            } else {
-                if r_f == 1 { emit_ud2_trap() } else { emit_add_eax_ecx() }
-            }
+            if l_i64 == 1 {
+                if r_i64 == 1 { emit_add_rax_rcx_64() } else { emit_ud2_trap() }
+            } else { if r_i64 == 1 { emit_ud2_trap() } else {
+                if l_f == 1 {
+                    if r_f == 1 { emit_addss() } else { emit_ud2_trap() }
+                } else {
+                    if r_f == 1 { emit_ud2_trap() } else { emit_add_eax_ecx() }
+                }
+            }}
         }};
         n1 + np + n2 + nm + no + na
     } else { if t == 3 {
-        // Step 7d: AST_SUB with three-way f64/f32/i32 dispatch (see t==2
-        // for the full rationale).
+        // Stage 1: AST_SUB 4-way dispatch.
         let n1 = emit_ast_code(p1, bind_state, patch_state, bn_state);
         let np = emit_push_rax();
         let n2 = emit_ast_code(p2, bind_state, patch_state, bn_state);
         let l_d = is_f64_expr(p1, bind_state, bn_state);
         let r_d = is_f64_expr(p2, bind_state, bn_state);
+        let l_i64 = is_i64_expr(p1, bind_state, bn_state);
+        let r_i64 = is_i64_expr(p2, bind_state, bn_state);
         let nm = if l_d == 1 {
             if r_d == 1 { emit_mov_rcx_rax_64() } else { emit_mov_ecx_eax() }
-        } else { emit_mov_ecx_eax() };
+        } else { if l_i64 == 1 {
+            if r_i64 == 1 { emit_mov_rcx_rax_64() } else { emit_mov_ecx_eax() }
+        } else { emit_mov_ecx_eax() }};
         let no = emit_pop_rax();
         let l_f = is_f32_expr(p1, bind_state, bn_state);
         let r_f = is_f32_expr(p2, bind_state, bn_state);
         let na = if l_d == 1 {
             if r_d == 1 { emit_subsd() } else { emit_ud2_trap() }
         } else { if r_d == 1 { emit_ud2_trap() } else {
-            if l_f == 1 {
-                if r_f == 1 { emit_subss() } else { emit_ud2_trap() }
-            } else {
-                if r_f == 1 { emit_ud2_trap() } else { emit_sub_eax_ecx() }
-            }
+            if l_i64 == 1 {
+                if r_i64 == 1 { emit_sub_rax_rcx_64() } else { emit_ud2_trap() }
+            } else { if r_i64 == 1 { emit_ud2_trap() } else {
+                if l_f == 1 {
+                    if r_f == 1 { emit_subss() } else { emit_ud2_trap() }
+                } else {
+                    if r_f == 1 { emit_ud2_trap() } else { emit_sub_eax_ecx() }
+                }
+            }}
         }};
         n1 + np + n2 + nm + no + na
     } else { if t == 4 {
-        // Step 7d: AST_MUL with three-way f64/f32/i32 dispatch.
+        // Stage 1: AST_MUL 4-way dispatch.
         let n1 = emit_ast_code(p1, bind_state, patch_state, bn_state);
         let np = emit_push_rax();
         let n2 = emit_ast_code(p2, bind_state, patch_state, bn_state);
         let l_d = is_f64_expr(p1, bind_state, bn_state);
         let r_d = is_f64_expr(p2, bind_state, bn_state);
+        let l_i64 = is_i64_expr(p1, bind_state, bn_state);
+        let r_i64 = is_i64_expr(p2, bind_state, bn_state);
         let nm = if l_d == 1 {
             if r_d == 1 { emit_mov_rcx_rax_64() } else { emit_mov_ecx_eax() }
-        } else { emit_mov_ecx_eax() };
+        } else { if l_i64 == 1 {
+            if r_i64 == 1 { emit_mov_rcx_rax_64() } else { emit_mov_ecx_eax() }
+        } else { emit_mov_ecx_eax() }};
         let no = emit_pop_rax();
         let l_f = is_f32_expr(p1, bind_state, bn_state);
         let r_f = is_f32_expr(p2, bind_state, bn_state);
         let na = if l_d == 1 {
             if r_d == 1 { emit_mulsd() } else { emit_ud2_trap() }
         } else { if r_d == 1 { emit_ud2_trap() } else {
-            if l_f == 1 {
-                if r_f == 1 { emit_mulss() } else { emit_ud2_trap() }
-            } else {
-                if r_f == 1 { emit_ud2_trap() } else { emit_imul_eax_ecx() }
-            }
+            if l_i64 == 1 {
+                if r_i64 == 1 { emit_imul_rax_rcx_64() } else { emit_ud2_trap() }
+            } else { if r_i64 == 1 { emit_ud2_trap() } else {
+                if l_f == 1 {
+                    if r_f == 1 { emit_mulss() } else { emit_ud2_trap() }
+                } else {
+                    if r_f == 1 { emit_ud2_trap() } else { emit_imul_eax_ecx() }
+                }
+            }}
         }};
         n1 + np + n2 + nm + no + na
     } else { if t == 5 {
-        // Step 7d: AST_DIV with three-way f64/f32/i32 dispatch.
+        // Stage 1: AST_DIV 4-way dispatch.
         let n1 = emit_ast_code(p1, bind_state, patch_state, bn_state);
         let np = emit_push_rax();
         let n2 = emit_ast_code(p2, bind_state, patch_state, bn_state);
         let l_d = is_f64_expr(p1, bind_state, bn_state);
         let r_d = is_f64_expr(p2, bind_state, bn_state);
+        let l_i64 = is_i64_expr(p1, bind_state, bn_state);
+        let r_i64 = is_i64_expr(p2, bind_state, bn_state);
         let nm = if l_d == 1 {
             if r_d == 1 { emit_mov_rcx_rax_64() } else { emit_mov_ecx_eax() }
-        } else { emit_mov_ecx_eax() };
+        } else { if l_i64 == 1 {
+            if r_i64 == 1 { emit_mov_rcx_rax_64() } else { emit_mov_ecx_eax() }
+        } else { emit_mov_ecx_eax() }};
         let no = emit_pop_rax();
         let l_f = is_f32_expr(p1, bind_state, bn_state);
         let r_f = is_f32_expr(p2, bind_state, bn_state);
         let na = if l_d == 1 {
             if r_d == 1 { emit_divsd() } else { emit_ud2_trap() }
         } else { if r_d == 1 { emit_ud2_trap() } else {
-            if l_f == 1 {
-                if r_f == 1 { emit_divss() } else { emit_ud2_trap() }
-            } else {
-                if r_f == 1 { emit_ud2_trap() } else { emit_idiv_eax_ecx() }
-            }
+            if l_i64 == 1 {
+                if r_i64 == 1 { emit_idiv_rax_rcx_64() } else { emit_ud2_trap() }
+            } else { if r_i64 == 1 { emit_ud2_trap() } else {
+                if l_f == 1 {
+                    if r_f == 1 { emit_divss() } else { emit_ud2_trap() }
+                } else {
+                    if r_f == 1 { emit_ud2_trap() } else { emit_idiv_eax_ecx() }
+                }
+            }}
         }};
         n1 + np + n2 + nm + no + na
     } else { if t == 24 {
