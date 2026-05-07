@@ -545,3 +545,79 @@ fn string_skip_n(start: i32, len: i32, n: i32) -> i32 {
     if n < 0 { 0 }
     else { if n > len { len } else { n } }
 }
+
+// string_pad_center(start, len, pad_byte, target_len): allocate a new
+// string with pad_byte added to BOTH sides, balanced as evenly as
+// possible (extra byte goes RIGHT when total padding is odd). Returns
+// a copy when len >= target_len.
+fn string_pad_center(start: i32, len: i32, pad_byte: i32, target_len: i32) -> i32 {
+    let s: i32 = __arena_len();
+    if len >= target_len {
+        let mut i: i32 = 0;
+        while i < len {
+            __arena_push(__arena_get(start + i));
+            i = i + 1;
+        }
+    } else {
+        let total_pad = target_len - len;
+        let left_pad = total_pad / 2;
+        let right_pad = total_pad - left_pad;
+        let mut i: i32 = 0;
+        while i < left_pad { __arena_push(pad_byte); i = i + 1; }
+        let mut j: i32 = 0;
+        while j < len { __arena_push(__arena_get(start + j)); j = j + 1; }
+        let mut k: i32 = 0;
+        while k < right_pad { __arena_push(pad_byte); k = k + 1; }
+    }
+    s
+}
+
+// string_translate_byte(start, len, from, to): allocate a new string
+// where every occurrence of byte `from` becomes `to`. Same as
+// string_replace_byte; alternate name for clarity in linguistic-style
+// "translate one byte to another" call sites.
+fn string_translate_byte(start: i32, len: i32, from: i32, to: i32) -> i32 {
+    string_replace_byte(start, len, from, to)
+}
+
+// string_count_prefix(start, len, prefix_start, prefix_len): @pure.
+// Count of leading bytes that match prefix as a sequence. If the
+// string starts with the full prefix, returns prefix_len; otherwise
+// returns the length of the longest matching initial segment.
+@pure
+fn string_count_prefix(start: i32, len: i32, prefix_start: i32, prefix_len: i32) -> i32 {
+    let mut max_match = prefix_len;
+    if len < max_match { max_match = len; }
+    let mut i: i32 = 0;
+    let mut matched: i32 = 0;
+    while i < max_match {
+        if matched == i {
+            if __arena_get(start + i) == __arena_get(prefix_start + i) {
+                matched = matched + 1;
+            };
+        };
+        i = i + 1;
+    }
+    matched
+}
+
+// string_index_of_n(start, len, byte, n): @pure. Returns the index of
+// the n-th occurrence of byte in the string, or -1 if absent. n is
+// 0-indexed (n=0 is first match, n=1 is second, etc.). Useful for
+// "split at the third '/'" patterns.
+@pure
+fn string_index_of_n(start: i32, len: i32, byte: i32, n: i32) -> i32 {
+    let mut i: i32 = 0;
+    let mut found: i32 = 0 - 1;
+    let mut counted: i32 = 0;
+    while i < len {
+        if found < 0 {
+            if __arena_get(start + i) == byte {
+                if counted == n { found = i; }
+                else { counted = counted + 1; };
+            };
+        };
+        i = i + 1;
+    }
+    found
+}

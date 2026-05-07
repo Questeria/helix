@@ -8175,6 +8175,78 @@ def test_stdlib_ti1d_l2_norm_sq():
     assert code == 42, f"expected 42, got {code}"
 
 
+def test_stdlib_string_pad_center():
+    """Push 'AB' (2 bytes); pad_center(' ', 5) -> ' AB  ' (1 left, 2 right);
+    first byte ' '(32) plus second 'A'(65) = 97; -55=42."""
+    src = """
+    fn main() -> i32 {
+        let s = string_new();
+        let s1 = string_push(s, 0, 65);
+        let s2 = string_push(s, s1, 66);
+        let r = string_pad_center(s, s2, 32, 5);
+        string_get(r, 0) + string_get(r, 1) - 55
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_string_translate_byte():
+    """Push 'aaa'; translate 'a'->'B'; first byte 'B'(66); -24=42."""
+    src = """
+    fn main() -> i32 {
+        let s = string_new();
+        let s1 = string_push(s, 0, 97);
+        let s2 = string_push(s, s1, 97);
+        let s3 = string_push(s, s2, 97);
+        let r = string_translate_byte(s, s3, 97, 66);
+        string_get(r, 0) - 24
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_string_count_prefix():
+    """Push 'abcde' and prefix 'abx'. Count of matching prefix bytes = 2; *21=42."""
+    src = """
+    fn main() -> i32 {
+        let s = string_new();
+        let s1 = string_push(s, 0, 97);
+        let s2 = string_push(s, s1, 98);
+        let s3 = string_push(s, s2, 99);
+        let s4 = string_push(s, s3, 100);
+        let s5 = string_push(s, s4, 101);
+        let p = __arena_len();
+        let p1 = string_push(p, 0, 97);
+        let p2 = string_push(p, p1, 98);
+        let p3 = string_push(p, p2, 120);
+        string_count_prefix(s, s5, p, p3) * 21
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_string_index_of_n():
+    """Push 'a/b/c/d'; index_of_n('/', 1) = 3 (second '/'); *14=42."""
+    src = """
+    fn main() -> i32 {
+        let s = string_new();
+        let s1 = string_push(s, 0, 97);
+        let s2 = string_push(s, s1, 47);
+        let s3 = string_push(s, s2, 98);
+        let s4 = string_push(s, s3, 47);
+        let s5 = string_push(s, s4, 99);
+        let s6 = string_push(s, s5, 47);
+        let s7 = string_push(s, s6, 100);
+        string_index_of_n(s, s7, 47, 1) * 14
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
 def test_stdlib_hashmap_count_above_threshold():
     """Insert (1,5),(2,15),(3,25); count > 10 = 2; *21=42."""
     src = """
