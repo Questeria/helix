@@ -170,11 +170,41 @@ After Stage 29:
 
 ---
 
+## Plan v2 amendments (research-agent integrations)
+
+Research agent (2026-05-07) flagged production-grade gaps. Integrated:
+
+**Inserted earlier in the sequence:**
+- **Stage 1.5: bf16 / f16 scalar dtypes** — before tile codegen so numeric primitives don't need rewriting. SSE conversion intrinsics (`vcvtps2ph`/`vcvtph2ps`).
+- **Stage 8.5: Traits + typeclasses (minimal Rust-style)** — before generics monomorphization wraps up; without traits, `kovc.hx` self-host writes the same boilerplate dozens of times.
+- **Stage 14.5: `@checkpoint` / rematerialization for reverse-mode AD** — JAX-style memory-vs-compute knob; deep models OOM without it.
+- **Stage 16.5: FFI / `extern "C"` + `repr(C)`** — before tile codegen, so we can link cuBLAS/cuDNN instead of reimplementing matmul.
+
+**Added near end:**
+- **Stage 28.5: panic / abort policy** — pick `abort` default, reserve `@unwind`. Documented + plumbed through codegen.
+- **Stage 28.6: `unsafe` block for raw-ptr ops** — capability boundary for FFI + arena pointer arithmetic.
+- **Stage 28.7: `@deprecated` + `@since` version gating** — stdlib evolution path post-self-host.
+
+**Tooling appendix (after the language ships):**
+- LSP server (textDocument/publishDiagnostics first, then hover/completion)
+- Property-based testing harness (`@property fn`)
+- Coverage-guided fuzzing
+- `///` doc-comment generator
+- Source maps (DWARF for `gdb` integration)
+
+**Out of scope (research-agent disagreed with):**
+- Full borrow checker (uniqueness types are enough for AGI/ML)
+- Lean-4 proof-carrying terms (defer until external adoption)
+- JIT / REPL (AOT + autotune covers this)
+- Garbage collection (region/arena + affine buffers suffice)
+- Cargo-style package manager (path-based modules through v1.0)
+- Row-polymorphic effects (closed-set @effect is enough)
+
 ## Status
 
 - **Started:** 2026-05-07
 - **Current stage:** Stage 1 (i64 in bootstrap)
-- **Total stages:** 30
+- **Total stages:** 30 + 7 amendments + tooling appendix
 - **Estimated commits:** 200-400
 - **Estimated audit cycles:** 50-100
 - **Estimated wall time:** 6-12 months across many loop iterations

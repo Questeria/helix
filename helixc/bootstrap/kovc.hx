@@ -1060,6 +1060,61 @@ fn is_f64_expr(idx: i32, bind_state: i32, bn_state: i32) -> i32 {
     } else { 0 }}}}}}}}}}}}}
 }
 
+// Approach A Stage 1: is_i64_expr — recursive type predicate for i64.
+// Returns 1 if the expression's type is i64, else 0. Mirrors
+// is_f64_expr's structure but checks for i64:
+//   AST_INTLIT_I64 (tag 35)              -> 1
+//   AST_VAR with i64 binding (tag 3)     -> 1
+//   AST_IF, AST_LET, AST_LET_MUT, AST_SEQ, AST_ASSIGN -> recurse
+//   AST_ADD/SUB/MUL/DIV both i64         -> 1
+//   AST_NEG with i64 inner               -> follows inner
+// All other -> 0.
+fn is_i64_expr(idx: i32, bind_state: i32, bn_state: i32) -> i32 {
+    let t = __arena_get(idx);
+    let p1 = __arena_get(idx + 1);
+    let p2 = __arena_get(idx + 2);
+    if t == 35 { 1 }                            // AST_INTLIT_I64
+    else { if t == 1 {                          // AST_VAR
+        let ty = bind_lookup_type(bind_state, p1, p2);
+        if ty == 3 { 1 } else { 0 }
+    } else { if t == 7 {                        // AST_IF
+        let then_idx = p2;
+        let else_idx = __arena_get(idx + 3);
+        let lt = is_i64_expr(then_idx, bind_state, bn_state);
+        let rt = is_i64_expr(else_idx, bind_state, bn_state);
+        if lt == 1 { if rt == 1 { 1 } else { 0 } } else { 0 }
+    } else { if t == 8 {                        // AST_LET
+        let body_idx = __arena_get(idx + 3);
+        is_i64_expr(body_idx, bind_state, bn_state)
+    } else { if t == 12 {                       // AST_LET_MUT
+        let body_idx = __arena_get(idx + 3);
+        is_i64_expr(body_idx, bind_state, bn_state)
+    } else { if t == 13 {                       // AST_SEQ
+        is_i64_expr(p2, bind_state, bn_state)
+    } else { if t == 11 {                       // AST_ASSIGN
+        let value_idx = __arena_get(idx + 3);
+        is_i64_expr(value_idx, bind_state, bn_state)
+    } else { if t == 2 {                        // AST_ADD
+        let l = is_i64_expr(p1, bind_state, bn_state);
+        let r = is_i64_expr(p2, bind_state, bn_state);
+        if l == 1 { if r == 1 { 1 } else { 0 } } else { 0 }
+    } else { if t == 3 {                        // AST_SUB
+        let l = is_i64_expr(p1, bind_state, bn_state);
+        let r = is_i64_expr(p2, bind_state, bn_state);
+        if l == 1 { if r == 1 { 1 } else { 0 } } else { 0 }
+    } else { if t == 4 {                        // AST_MUL
+        let l = is_i64_expr(p1, bind_state, bn_state);
+        let r = is_i64_expr(p2, bind_state, bn_state);
+        if l == 1 { if r == 1 { 1 } else { 0 } } else { 0 }
+    } else { if t == 5 {                        // AST_DIV
+        let l = is_i64_expr(p1, bind_state, bn_state);
+        let r = is_i64_expr(p2, bind_state, bn_state);
+        if l == 1 { if r == 1 { 1 } else { 0 } } else { 0 }
+    } else { if t == 9 {                        // AST_NEG
+        is_i64_expr(p1, bind_state, bn_state)
+    } else { 0 }}}}}}}}}}}}
+}
+
 // Phase 1.10 step 5c follow-on: fn_type_table maps fn names to their
 // declared return-type tag (0=i32, 1=f32). Populated PRE-PASS over the
 // AST_FN_LIST so is_f32_expr can resolve user-named f32 fns at call
@@ -3047,7 +3102,10 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         // preserve the high half. i32 / f32 stay on 32-bit load.
         let off = bind_lookup(bind_state, p1, p2);
         let ty = bind_lookup_type(bind_state, p1, p2);
-        if ty == 2 { emit_mov_rax_local_64(off) } else { emit_mov_eax_local(off) }
+        // Stage 1: ty==3 (i64) also uses 64-bit load to preserve high half.
+        if ty == 2 { emit_mov_rax_local_64(off) }
+        else { if ty == 3 { emit_mov_rax_local_64(off) }
+        else { emit_mov_eax_local(off) }}
     } else { if t == 8 {
         // AST_LET: p1 = name_start, p2 = name_len, p3 = body_idx,
         // p4 = value_idx (audit-14: split out of the legacy packed
@@ -3061,14 +3119,20 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         let value_idx = __arena_get(idx + 4);
         let v_f32 = is_f32_expr(value_idx, bind_state, bn_state);
         let v_f64 = is_f64_expr(value_idx, bind_state, bn_state);
-        let val_ty = if v_f64 == 1 { 2 } else { v_f32 };
+        let v_i64 = is_i64_expr(value_idx, bind_state, bn_state);
+        // 4-way val_ty: 3=i64 (Stage 1) > 2=f64 > 1=f32 > 0=i32.
+        let val_ty = if v_i64 == 1 { 3 }
+                     else { if v_f64 == 1 { 2 } else { v_f32 } };
         let n_val = emit_ast_code(value_idx, bind_state, patch_state, bn_state);
         let off = bind_alloc_offset(bind_state);
+        // Stage 1: i64 (val_ty=3) also needs 64-bit store, same as f64.
         let n_store = if val_ty == 2 {
+            emit_mov_local_rax_64(off)
+        } else { if val_ty == 3 {
             emit_mov_local_rax_64(off)
         } else {
             emit_mov_local_eax(off)
-        };
+        }};
         bind_push_typed(bind_state, p1, p2, off, val_ty);
         let n_body = emit_ast_code(body_idx, bind_state, patch_state, bn_state);
         bind_pop(bind_state);
@@ -3083,14 +3147,20 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         let value_idx = __arena_get(idx + 4);
         let v_f32 = is_f32_expr(value_idx, bind_state, bn_state);
         let v_f64 = is_f64_expr(value_idx, bind_state, bn_state);
-        let val_ty = if v_f64 == 1 { 2 } else { v_f32 };
+        let v_i64 = is_i64_expr(value_idx, bind_state, bn_state);
+        // 4-way val_ty: 3=i64 (Stage 1) > 2=f64 > 1=f32 > 0=i32.
+        let val_ty = if v_i64 == 1 { 3 }
+                     else { if v_f64 == 1 { 2 } else { v_f32 } };
         let n_val = emit_ast_code(value_idx, bind_state, patch_state, bn_state);
         let off = bind_alloc_offset(bind_state);
+        // Stage 1: i64 (val_ty=3) also needs 64-bit store, same as f64.
         let n_store = if val_ty == 2 {
+            emit_mov_local_rax_64(off)
+        } else { if val_ty == 3 {
             emit_mov_local_rax_64(off)
         } else {
             emit_mov_local_eax(off)
-        };
+        }};
         bind_push_typed(bind_state, p1, p2, off, val_ty);
         let n_body = emit_ast_code(body_idx, bind_state, patch_state, bn_state);
         bind_pop(bind_state);
