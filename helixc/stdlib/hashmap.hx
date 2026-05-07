@@ -475,3 +475,48 @@ fn hashmap_argmin_key(start: i32, cap: i32) -> i32 {
     }
     best_k
 }
+
+// hashmap_count_key_eq(start, cap, key): @pure. Returns 1 if key
+// present in map, 0 otherwise. Functionally equivalent to hashmap_has
+// but named symmetrically with hashmap_count_value_eq.
+@pure
+fn hashmap_count_key_eq(start: i32, cap: i32, key: i32) -> i32 {
+    hashmap_has(start, cap, key)
+}
+
+// hashmap_max_key_with_value(start, cap, target): @pure. Largest key
+// among buckets whose value == target. Returns 0 for none.
+@pure
+fn hashmap_max_key_with_value(start: i32, cap: i32, target: i32) -> i32 {
+    let mut i: i32 = 0;
+    let mut found: i32 = 0;
+    let mut best: i32 = 0;
+    while i < cap {
+        let base = start + i * 3;
+        if __arena_get(base) == 1 {
+            if __arena_get(base + 2) == target {
+                let k = __arena_get(base + 1);
+                if found == 0 { best = k; found = 1; }
+                else { if k > best { best = k; }; };
+            };
+        };
+        i = i + 1;
+    }
+    best
+}
+
+// hashmap_avg_value_x100(start, cap): @pure. Sum / size as percent
+// (multiplied by 100 to avoid integer truncation). Useful for rough
+// averaging in count-based maps. Returns 0 for empty maps.
+@pure
+fn hashmap_avg_value_x100(start: i32, cap: i32) -> i32 {
+    let n = hashmap_size(start, cap);
+    if n == 0 { 0 }
+    else { hashmap_sum_values(start, cap) * 100 / n }
+}
+
+// hashmap_is_empty(start, cap): @pure. 1 if map has no entries.
+@pure
+fn hashmap_is_empty(start: i32, cap: i32) -> i32 {
+    if hashmap_size(start, cap) == 0 { 1 } else { 0 }
+}

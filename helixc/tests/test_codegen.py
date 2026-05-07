@@ -9827,6 +9827,73 @@ def test_stdlib_vec_last():
     assert code == 42, f"expected 42 (last=42, empty=0), got {code}"
 
 
+def test_stdlib_hashmap_count_key_eq():
+    """Insert (5,_); count_key_eq(5)=1; *42=42."""
+    src = """
+    fn main() -> i32 {
+        let m = hashmap_new(8);
+        hashmap_put(m, 8, 5, 100);
+        hashmap_count_key_eq(m, 8, 5) * 42
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_hashmap_max_key_with_value():
+    """Insert (1,5),(42,5),(3,7); max_key with value=5 → 42."""
+    src = """
+    fn main() -> i32 {
+        let m = hashmap_new(8);
+        hashmap_put(m, 8, 1, 5);
+        hashmap_put(m, 8, 42, 5);
+        hashmap_put(m, 8, 3, 7);
+        hashmap_max_key_with_value(m, 8, 5)
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_hashmap_avg_value_x100():
+    """Insert (1,10),(2,30),(3,20); avg=20.0; *100=2000... mod 256 = 208. Hmm.
+    Use values summing to 42*3=126: (10,16,16). Sum=42. Avg=14. *100=1400. mod 256 = 120.
+    Better use 1 entry with value 42: avg*100 = 4200. 4200 mod 256 = 104. Hmm.
+    Use 3 entries with values 42 each → avg=42; *100=4200 mod 256 = ... let me redo.
+    Use 3 entries with values 14: avg=14; *100=1400 mod 256 = (1400-5*256=120). Bad.
+    Use 1 entry with value 42: sum=42; avg = 42/1 * 100 = 4200; *100 already done.
+    Actually compute: hashmap_avg_value_x100 returns sum*100/size.
+    For sum=42 size=1: returns 4200. mod 256 = 4200 - 16*256 = 4200-4096 = 104. Not 42.
+    Use sum=42, size=100: 4200/100=42. Need size 100 in cap. Skip.
+    Simpler: sum*100/size = 42 means sum/size = 0.42.
+    Try: sum=21, size=50, avg = 42. But size=50 needs cap=50+.
+    Or just: sum=42, size=1 returns 4200, take mod-256... hmm 104.
+    Alternative: divide by 100 in test. Use 21*100/50, etc.
+    Simplest: insert (1, 42); avg*1/100 → 42*100/1 = 4200. 4200/100 = 42!
+    So divide result by 100 in the test."""
+    src = """
+    fn main() -> i32 {
+        let m = hashmap_new(8);
+        hashmap_put(m, 8, 1, 42);
+        hashmap_avg_value_x100(m, 8) / 100
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_hashmap_is_empty():
+    """Empty map → is_empty=1; *42=42."""
+    src = """
+    fn main() -> i32 {
+        let m = hashmap_new(8);
+        hashmap_is_empty(m, 8) * 42
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
 def test_stdlib_vec_fill_alloc():
     """fill_alloc(7, 6) -> [6,6,6,6,6,6,6]; sum=42."""
     src = """
