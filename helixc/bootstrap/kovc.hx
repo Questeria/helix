@@ -1227,7 +1227,7 @@ fn emit_exit_with_eax() -> i32 {
 fn install_builtin_names() -> i32 {
     let bn_state = __arena_push(0);          // slot 0 placeholder
     __arena_push(0); __arena_push(0); __arena_push(0); __arena_push(0);
-    // Reserve slots 5..75 (71 more slots: 2 file-name slots + 2
+    // Reserve slots 5..83 (79 more slots: 2 file-name slots + 2
     // str_state header slots + 48 entry slots + 5 f32 builtin slots
     // (__fadd, __fsub, __fmul, __fdiv at 57..60; __fneg at 61) + 1
     // fn_type_state pointer slot at 62 (Phase 1.10 step 5c follow-on)
@@ -2427,79 +2427,13 @@ fn try_emit_builtin_call(name_s: i32, name_l: i32, args_head: i32,
     }}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}
 }
 
-// Unreachable in this commit; reference impl preserved for next
-// session. Wires bn_state lookup and per-builtin asm emission.
-fn try_emit_builtin_call_impl(name_s: i32, name_l: i32, args_head: i32,
-                               bind_state: i32, patch_state: i32,
-                               bn_state: i32) -> i32 {
-    let arena_base_s = bn_helix_arena_base_s(bn_state);
-    // __arena_len() — no args. eax = [arena_base + 0] (cursor).
-    if kovc_byte_eq(name_s, name_l, bn_arena_len_s(bn_state), 11) == 1 {
-        let disp_slot = emit_lea_rax_rip_placeholder();
-        patch_table_add(patch_state, disp_slot, arena_base_s, 18);
-        emit_byte(0x8B); emit_byte(0x00);                  // mov eax, [rax]
-        7 + 2
-    } else { if kovc_byte_eq(name_s, name_l, bn_arena_get_s(bn_state), 11) == 1 {
-        // __arena_get(idx): eax = idx; mov ecx, eax;
-        // lea rax, arena; mov eax, [rax + rcx*4 + 4]
-        let arg_idx = __arena_get(args_head + 1);
-        let n_arg = emit_ast_code(arg_idx, bind_state, patch_state, bn_state);
-        emit_byte(0x89); emit_byte(0xC1);                  // mov ecx, eax
-        let disp_slot = emit_lea_rax_rip_placeholder();
-        patch_table_add(patch_state, disp_slot, arena_base_s, 18);
-        emit_byte(0x8B); emit_byte(0x44); emit_byte(0x88); emit_byte(0x04);
-        n_arg + 2 + 7 + 4
-    } else { if kovc_byte_eq(name_s, name_l, bn_arena_push_s(bn_state), 12) == 1 {
-        // __arena_push(val): eax = val; ecx = cursor; bounds check;
-        // write [arena+ecx*4+4] = val; eax = old cursor; cursor++
-        let arg_idx = __arena_get(args_head + 1);
-        let n_arg = emit_ast_code(arg_idx, bind_state, patch_state, bn_state);
-        emit_byte(0x89); emit_byte(0xC2);                  // mov edx, eax (val)
-        let disp_slot = emit_lea_rax_rip_placeholder();
-        patch_table_add(patch_state, disp_slot, arena_base_s, 18);
-        emit_byte(0x8B); emit_byte(0x08);                  // mov ecx, [rax] (cursor)
-        // cmp ecx, HELIX_ARENA_CAP
-        emit_byte(0x81); emit_byte(0xF9);
-        emit_u32_le(helix_arena_cap());
-        // jb in_bounds (+7)
-        emit_byte(0x72); emit_byte(0x07);
-        // mov eax, -1; jmp end (+3 over the in_bounds block)
-        emit_byte(0xB8); emit_byte(0xFF); emit_byte(0xFF); emit_byte(0xFF); emit_byte(0xFF);
-        emit_byte(0xEB); emit_byte(0x0B);                  // jmp end +11
-        // in_bounds: mov [rax+rcx*4+4], edx (4); inc ecx (2); mov [rax], ecx (2);
-        //            mov eax, ecx (2); dec eax (2)... nope actually:
-        // After write, eax = old cursor; cursor++
-        emit_byte(0x89); emit_byte(0x54); emit_byte(0x88); emit_byte(0x04); // mov [rax+rcx*4+4], edx
-        emit_byte(0x89); emit_byte(0xC8);                  // mov eax, ecx (eax = old cursor)
-        emit_byte(0xFF); emit_byte(0xC1);                  // inc ecx
-        emit_byte(0x89); emit_byte(0x08);                  // mov [rax... no wait rax is base]
-        // Bug: writing [rax] after eax=ecx clobbers rax... actually we want to write
-        // back the new cursor. Need to keep rax = base. Let me re-do.
-        // Reset: rax was base. After mov eax, ecx, eax has new cursor (in lower 32),
-        // BUT rax (full 64-bit) lost the upper bits. We need a different approach.
-        n_arg + 2 + 7 + 2 + 6 + 2 + 5 + 2 + 4 + 2 + 2 + 2
-    } else { if kovc_byte_eq(name_s, name_l, bn_arena_set_s(bn_state), 11) == 1 {
-        // __arena_set(idx, val): eval args -> idx in eax then push,
-        // val in eax then mov ecx; pop rax = idx; lea rdx, arena;
-        // mov [rdx+rax*4+4], ecx
-        let a0 = __arena_get(args_head + 1);
-        let next_arg_idx = __arena_get(args_head + 2);
-        let a1 = __arena_get(next_arg_idx + 1);
-        let n0 = emit_ast_code(a0, bind_state, patch_state, bn_state);
-        let np = emit_push_rax();
-        let n1 = emit_ast_code(a1, bind_state, patch_state, bn_state);
-        emit_byte(0x89); emit_byte(0xC1);                  // mov ecx, eax (val)
-        emit_byte(0x58);                                    // pop rax (idx)
-        emit_byte(0x89); emit_byte(0xC2);                  // mov edx, eax (idx)
-        let disp_slot = emit_lea_rax_rip_placeholder();
-        patch_table_add(patch_state, disp_slot, arena_base_s, 18);
-        emit_byte(0x89); emit_byte(0x4C); emit_byte(0x90); emit_byte(0x04); // mov [rax+rdx*4+4], ecx
-        emit_byte(0x31); emit_byte(0xC0);                  // xor eax, eax (return 0)
-        n0 + np + n1 + 2 + 1 + 2 + 7 + 4 + 2
-    } else {
-        0
-    }}}}
-}
+// Audit fix #6 (cycle 1, polish): try_emit_builtin_call_impl used to
+// live here as "Unreachable in this commit; reference impl preserved
+// for next session." The reference impl had self-noted bugs (rax
+// clobbered by `mov eax, ecx` then `mov [rax]`) and was never
+// reachable. Removed entirely. The actual builtin emission path is
+// in try_emit_builtin_call (above) which inlines per-builtin
+// machine code with correct rax management.
 
 fn bn_global_slot_address() -> i32 {
     // __helix_kovc_bn_state lives at a fixed slot we set up early.
