@@ -400,34 +400,45 @@ class Lexer:
 
     # ---- operators ----
     def _lex_op(self, line: int, col: int) -> Token:
-        # Multi-character operators first (longest match)
-        for s, kind in [
-            ("==", T.EQEQ), ("!=", T.NEQ), ("<=", T.LEQ), (">=", T.GEQ),
-            ("&&", T.LAND), ("||", T.LOR),
-            ("<<", T.SHL), (">>", T.SHR),
-            ("+=", T.PLUSEQ), ("-=", T.MINUSEQ), ("*=", T.STAREQ),
-            ("/=", T.SLASHEQ), ("%=", T.PERCENTEQ),
-            ("->", T.ARROW), ("=>", T.FATARROW),
-            ("::", T.COLONCOLON), ("..=", T.DOTDOTEQ), ("..", T.DOTDOT),
-        ]:
+        # Multi-character operators first (longest match). Speedup #5:
+        # _MULTI_CHAR_OPS and _SINGLE_CHAR_OPS hoisted to module level
+        # below — was previously rebuilt on every call (36k+ calls per
+        # bootstrap compile), wasting ~0.5 sec on tuple/dict alloc.
+        for s, kind in _MULTI_CHAR_OPS:
             if self._consume(s):
                 return Token(kind, s, line, col)
 
         # Single-character
         c = self._advance()
-        single = {
-            "+": T.PLUS, "-": T.MINUS, "*": T.STAR, "/": T.SLASH, "%": T.PERCENT,
-            "=": T.EQ, "<": T.LT, ">": T.GT,
-            "!": T.BANG, "&": T.AMP, "|": T.PIPE, "^": T.CARET, "~": T.TILDE,
-            ":": T.COLON, ";": T.SEMI, ",": T.COMMA, ".": T.DOT,
-            "(": T.LPAREN, ")": T.RPAREN,
-            "[": T.LBRACK, "]": T.RBRACK,
-            "{": T.LBRACE, "}": T.RBRACE,
-            "@": T.AT, "?": T.QUESTION,
-        }
-        if c in single:
-            return Token(single[c], c, line, col)
+        kind = _SINGLE_CHAR_OPS.get(c)
+        if kind is not None:
+            return Token(kind, c, line, col)
         raise LexError(f"unexpected character {c!r}", line, col)
+
+
+# Speedup #5: module-level operator tables (hot in _lex_op).
+# Tuple of (str, T) ordered by longest-match-first. Before this hoist,
+# both tables were rebuilt on every _lex_op call (36k+ allocs per
+# bootstrap build) — measurable in cProfile.
+_MULTI_CHAR_OPS = (
+    ("==", T.EQEQ), ("!=", T.NEQ), ("<=", T.LEQ), (">=", T.GEQ),
+    ("&&", T.LAND), ("||", T.LOR),
+    ("<<", T.SHL), (">>", T.SHR),
+    ("+=", T.PLUSEQ), ("-=", T.MINUSEQ), ("*=", T.STAREQ),
+    ("/=", T.SLASHEQ), ("%=", T.PERCENTEQ),
+    ("->", T.ARROW), ("=>", T.FATARROW),
+    ("::", T.COLONCOLON), ("..=", T.DOTDOTEQ), ("..", T.DOTDOT),
+)
+_SINGLE_CHAR_OPS = {
+    "+": T.PLUS, "-": T.MINUS, "*": T.STAR, "/": T.SLASH, "%": T.PERCENT,
+    "=": T.EQ, "<": T.LT, ">": T.GT,
+    "!": T.BANG, "&": T.AMP, "|": T.PIPE, "^": T.CARET, "~": T.TILDE,
+    ":": T.COLON, ";": T.SEMI, ",": T.COMMA, ".": T.DOT,
+    "(": T.LPAREN, ")": T.RPAREN,
+    "[": T.LBRACK, "]": T.RBRACK,
+    "{": T.LBRACE, "}": T.RBRACE,
+    "@": T.AT, "?": T.QUESTION,
+}
 
 
 def lex(source: str, filename: str = "<input>") -> list[Token]:
