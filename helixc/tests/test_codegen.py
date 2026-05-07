@@ -1441,7 +1441,7 @@ def test_bootstrap_kovc_full_pipeline_arithmetic():
     binary then compiles arbitrary `.hx` files. Until kovc supports
     enough of Helix to compile ITSELF (let, if, while, fn, ...),
     we still need Python for the bootstrap-bin step."""
-    import os, subprocess
+    import os, subprocess, hashlib
     proj = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     lexer = open(os.path.join(proj, "helixc", "bootstrap", "lexer.hx")).read()
     lexer_no_main = lexer.rsplit(
@@ -1455,44 +1455,80 @@ def test_bootstrap_kovc_full_pipeline_arithmetic():
         1,
     )[0]
 
-    import uuid
+    # Speedup #3: bootstrap binary caching. Build the bootstrap compiler
+    # ONCE per session (keyed by hash of lexer + parser + kovc), reuse for
+    # every compile_and_exec call. Each call writes source to a fixed
+    # path /tmp/helix_src_in.hx, runs the cached binary which compiles it
+    # and writes the output ELF to /tmp/helix_bin_out.bin, then runs that
+    # output binary and reads the exit code.
+    #
+    # Pre-cache: each compile_and_exec re-ran Python helixc on the full
+    # ~7000-line bootstrap+driver, ~1.7 sec/call. With ~285 calls in this
+    # test, that's 8 minutes. Post-cache: build is ONE call, then 285
+    # calls each pay only WSL FS overhead + compiled-binary execution.
+    # Expected speedup: ~3x heavy gate.
+    cache_dir = os.path.join(proj, "helixc", "tests", "_bootstrap_cache")
+    os.makedirs(cache_dir, exist_ok=True)
+    bootstrap_src_hash = hashlib.sha256(
+        (lexer_no_main + "\n||PARSER||\n" + parser_body + "\n||KOVC||\n" + kovc_lib).encode("utf-8")
+    ).hexdigest()[:16]
+    cached_bootstrap = os.path.join(cache_dir, f"bootstrap_{bootstrap_src_hash}.bin")
 
-    def compile_and_exec(source_text: str) -> int:
-        # Unique paths per call: avoids stale-binary flakes when the test
-        # suite leaves /tmp/kovc_pipeline.bin behind from earlier tests
-        # (or earlier calls within this same test) and the next chmod+run
-        # picks up the OLD binary before the driver flushes the new one.
-        tag = uuid.uuid4().hex[:10]
-        src_path = f"/tmp/helix_src_pipe_{tag}.hx"
-        bin_path = f"/tmp/kovc_pipeline_{tag}.bin"
-        subprocess.run(
-            ["wsl", "-e", "bash", "-c",
-             f"printf %s {repr(source_text)} > {src_path}"],
-            check=True, timeout=10,
-        )
-        # The ELF bytes always live in the LAST `total` slots of
-        # the arena; computing elf_start as __arena_len() - total
-        # is robust against changes in bind_state / resolve-pre-pass
-        # arena pushes.
-        driver = lexer_no_main + parser_body + kovc_lib + f"""
-fn main() -> i32 {{
+    if not os.path.exists(cached_bootstrap):
+        # Build the bootstrap compiler ONCE. The driver reads from a
+        # FIXED input path and writes to a FIXED output path, so the
+        # binary is identical regardless of which source is being
+        # compiled — only the I/O paths matter, and they're constants.
+        bootstrap_driver = lexer_no_main + parser_body + kovc_lib + """
+fn main() -> i32 {
     let src_start = __arena_len();
-    let src_len = read_file_to_arena("{src_path}");
+    let src_len = read_file_to_arena("/tmp/helix_src_in.hx");
     let tok_base = __arena_len();
     lex(src_start, src_len);
     let ast_root = parse_top(tok_base);
     let total = emit_elf_for_ast_to_path(ast_root);
     let elf_start = __arena_len() - total;
-    write_file_to_arena("{bin_path}", elf_start, total)
-}}
+    write_file_to_arena("/tmp/helix_bin_out.bin", elf_start, total)
+}
 """
-        compile_and_run(driver)
+        # Use compile_and_run's underlying logic, but write to cache.
+        prog = parse(bootstrap_driver, include_stdlib=True)
+        flatten_modules(prog)
+        flatten_impls(prog)
+        monomorphize(prog)
+        grad_pass(prog)
+        mod = lower(prog)
+        fold_module(mod)
+        cse_module(mod)
+        dce_module(mod)
+        fdce_module(mod)
+        elf = compile_module_to_elf(mod)
+        with open(cached_bootstrap, "wb") as f:
+            f.write(elf)
+        os.chmod(cached_bootstrap, 0o755)
+
+    # Convert cache path to WSL path once.
+    cached_rel = os.path.relpath(cached_bootstrap, proj).replace("\\", "/")
+    cached_wsl = f"/mnt/c/Projects/Kovostov-Native/{cached_rel}"
+
+    def compile_and_exec(source_text: str) -> int:
+        # Speedup #3 fast path: write source to fixed /tmp path, exec
+        # cached bootstrap binary (which compiles it and writes ELF to
+        # fixed /tmp output path), exec output, capture exit code, then
+        # clean up. The bootstrap binary is reused across all calls.
+        # Serial within a single pytest test — no concurrency concern.
+        # Note: the cached bootstrap binary's exit code is the byte
+        # count written (non-zero on success), so we use `;` not `&&`
+        # to separate it from the output-binary execution.
         run = subprocess.run(
             ["wsl", "-e", "bash", "-c",
-             f"sync && chmod +x {bin_path} && {bin_path}; echo $?; rm -f {src_path} {bin_path}"],
-            capture_output=True, timeout=10,
+             f"printf %s {repr(source_text)} > /tmp/helix_src_in.hx && "
+             f"sync && chmod +x {cached_wsl} && {cached_wsl} > /dev/null; "
+             f"sync && chmod +x /tmp/helix_bin_out.bin && /tmp/helix_bin_out.bin; "
+             f"echo $?; rm -f /tmp/helix_src_in.hx /tmp/helix_bin_out.bin"],
+            capture_output=True, timeout=30,
         )
-        return int(run.stdout.decode().strip().splitlines()[0])
+        return int(run.stdout.decode().strip().splitlines()[-1])
 
     assert compile_and_exec("42") == 42, "literal"
     assert compile_and_exec("1 + 2") == 3, "addition"
