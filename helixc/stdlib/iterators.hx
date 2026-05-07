@@ -878,3 +878,89 @@ fn vec_count_distinct_consecutive(start: i32, count: i32) -> i32 {
         total
     }
 }
+
+// vec_running_max(start, count): allocate a new vec where r[i] = max
+// over v[0..=i]. r[0] = v[0]; r[i] = max(r[i-1], v[i]). Useful for
+// online max queries.
+fn vec_running_max(start: i32, count: i32) -> i32 {
+    let s: i32 = __arena_len();
+    if count == 0 { s }
+    else {
+        let mut best: i32 = __arena_get(start);
+        __arena_push(best);
+        let mut i: i32 = 1;
+        while i < count {
+            let v = __arena_get(start + i);
+            if v > best { best = v; };
+            __arena_push(best);
+            i = i + 1;
+        }
+        s
+    }
+}
+
+// vec_running_min(start, count): companion to vec_running_max.
+fn vec_running_min(start: i32, count: i32) -> i32 {
+    let s: i32 = __arena_len();
+    if count == 0 { s }
+    else {
+        let mut best: i32 = __arena_get(start);
+        __arena_push(best);
+        let mut i: i32 = 1;
+        while i < count {
+            let v = __arena_get(start + i);
+            if v < best { best = v; };
+            __arena_push(best);
+            i = i + 1;
+        }
+        s
+    }
+}
+
+// vec_rotate_left_alloc(start, count, k): allocate a new vec with
+// elements rotated left by k positions. r[i] = v[(i + k) % count].
+// k can be larger than count or negative; we normalize to [0, count).
+fn vec_rotate_left_alloc(start: i32, count: i32, k: i32) -> i32 {
+    let s: i32 = __arena_len();
+    if count == 0 { s }
+    else {
+        // Normalize k to [0, count).
+        let mut kn: i32 = k % count;
+        if kn < 0 { kn = kn + count; };
+        let mut i: i32 = 0;
+        while i < count {
+            let src_idx = (i + kn) % count;
+            __arena_push(__arena_get(start + src_idx));
+            i = i + 1;
+        }
+        s
+    }
+}
+
+// vec_window_sum(start, count, win): allocate a new vec of length
+// (count - win + 1) where r[i] = sum(v[i..i+win]). Uses rolling sum
+// for O(count) total. If win > count, returns empty.
+fn vec_window_sum(start: i32, count: i32, win: i32) -> i32 {
+    let s: i32 = __arena_len();
+    if win > count { s }
+    else { if win <= 0 { s }
+    else {
+        // Initial window sum.
+        let mut acc: i32 = 0;
+        let mut i: i32 = 0;
+        while i < win {
+            acc = acc + __arena_get(start + i);
+            i = i + 1;
+        }
+        __arena_push(acc);
+        // Slide: subtract leaving element, add entering.
+        let mut j: i32 = win;
+        while j < count {
+            acc = acc - __arena_get(start + j - win);
+            acc = acc + __arena_get(start + j);
+            __arena_push(acc);
+            j = j + 1;
+        }
+        s
+    }}
+}

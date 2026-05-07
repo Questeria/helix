@@ -8175,6 +8175,80 @@ def test_stdlib_ti1d_l2_norm_sq():
     assert code == 42, f"expected 42, got {code}"
 
 
+def test_stdlib_vec_running_max():
+    """running_max([1, 5, 3, 8, 2]) -> [1, 5, 5, 8, 8]; sum = 27. +15 = 42."""
+    src = """
+    fn main() -> i32 {
+        let v = __arena_len();
+        __arena_push(1); __arena_push(5); __arena_push(3); __arena_push(8); __arena_push(2);
+        let r = vec_running_max(v, 5);
+        let mut total: i32 = 0;
+        let mut i: i32 = 0;
+        while i < 5 {
+            total = total + __arena_get(r + i);
+            i = i + 1;
+        }
+        total + 15
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_vec_running_min():
+    """running_min([5, 1, 3, 8, 2]) -> [5, 1, 1, 1, 1]; sum = 9. *4 + 6 = 42."""
+    src = """
+    fn main() -> i32 {
+        let v = __arena_len();
+        __arena_push(5); __arena_push(1); __arena_push(3); __arena_push(8); __arena_push(2);
+        let r = vec_running_min(v, 5);
+        let mut total: i32 = 0;
+        let mut i: i32 = 0;
+        while i < 5 {
+            total = total + __arena_get(r + i);
+            i = i + 1;
+        }
+        total * 4 + 6
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_vec_rotate_left_alloc():
+    """rotate_left([1,2,3,4,5], k=2) -> [3,4,5,1,2]. First two = 3+4 = 7. *6 = 42."""
+    src = """
+    fn main() -> i32 {
+        let v = __arena_len();
+        __arena_push(1); __arena_push(2); __arena_push(3); __arena_push(4); __arena_push(5);
+        let r = vec_rotate_left_alloc(v, 5, 2);
+        (__arena_get(r) + __arena_get(r + 1)) * 6
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_vec_window_sum():
+    """window_sum([1,2,3,4,5], win=3) -> [6,9,12]; sum = 27. +15 = 42."""
+    src = """
+    fn main() -> i32 {
+        let v = __arena_len();
+        __arena_push(1); __arena_push(2); __arena_push(3); __arena_push(4); __arena_push(5);
+        let r = vec_window_sum(v, 5, 3);
+        let mut total: i32 = 0;
+        let mut i: i32 = 0;
+        while i < 3 {
+            total = total + __arena_get(r + i);
+            i = i + 1;
+        }
+        total + 15
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
 def test_stdlib_string_starts_with_byte():
     """Push 'h','i'; starts_with_byte('h')=1. * 42 = 42."""
     src = """
