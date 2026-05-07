@@ -786,10 +786,17 @@ fn parse_fn_decl(tok_base: i32, sb: i32) -> i32 {
             let ty_s = tok_p2(tok_base, ty_tok);
             let ty_l = tok_p3(tok_base, ty_tok);
             cur_advance(sb);     // type IDENT
+            // Audit fix #5 (cycle 1): distinguish f32 from f64 via byte 1.
+            // 'f3' (0x33=51) → f32 (ty=1); 'f6' (0x36=54) → f64 (ty=2).
+            // Previously only byte 0 was checked — both floats got ty=1,
+            // and codegen's f64 param spill (now fixed in audit batch 4)
+            // could not distinguish.
             let p_ty = if ty_l == 3 {
                 let b0 = __arena_get(ty_s);
                 let b1 = __arena_get(ty_s + 1);
-                if b0 == 102 { 1 } else { 0 }   // 'f' -> f32 (or f64)
+                if b0 == 102 {
+                    if b1 == 54 { 2 } else { 1 }
+                } else { 0 }
             } else { 0 };
             let new_param = mk_node(18, pname_s, pname_l, 0);
             __arena_push(p_ty);   // p4: type tag
@@ -811,9 +818,17 @@ fn parse_fn_decl(tok_base: i32, sb: i32) -> i32 {
     let rt_s = tok_p2(tok_base, rt_tok);
     let rt_l = tok_p3(tok_base, rt_tok);
     cur_advance(sb);     // return-type IDENT
+    // Audit fix #5 (cycle 1): distinguish f32 from f64 by inspecting
+    // byte 1 of the type ident. Both are 3-byte names starting with
+    // 'f'; the second byte is '3' (0x33=51) for f32 and '6' (0x36=54)
+    // for f64. Previously only byte 0 was checked, conflating both
+    // floats as ret_ty=1. Now: 0=i32 (default), 1=f32, 2=f64.
     let ret_ty = if rt_l == 3 {
         let b0 = __arena_get(rt_s);
-        if b0 == 102 { 1 } else { 0 }
+        let b1 = __arena_get(rt_s + 1);
+        if b0 == 102 {
+            if b1 == 54 { 2 } else { 1 }       // 'f6' → f64; else f32
+        } else { 0 }
     } else { 0 };
     cur_advance(sb);     // '{'
     let body = parse_expr(tok_base, sb);
@@ -821,8 +836,9 @@ fn parse_fn_decl(tok_base: i32, sb: i32) -> i32 {
     // Audit-14: same overflow issue as AST_LET — packed encoding
     // breaks for arena indices > 65535. Extend to 5 slots: p3 =
     // body_idx, p4 = params_head. Step 5c follow-on: 6th slot p5 =
-    // ret_ty (0 = i32, 1 = f32). Codegen reads p5 to populate the
-    // fn_type_table for is_f32_expr's AST_CALL resolution.
+    // ret_ty (0 = i32, 1 = f32, 2 = f64). Codegen reads p5 to populate
+    // the fn_type_table; is_f32_expr / is_f64_expr's AST_CALL fallback
+    // resolves user-defined fn types via the table.
     let node = mk_node(14, name_start, name_len, body);
     __arena_push(params_head);
     __arena_push(ret_ty);
