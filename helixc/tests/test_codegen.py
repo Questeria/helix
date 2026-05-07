@@ -9827,6 +9827,64 @@ def test_stdlib_vec_last():
     assert code == 42, f"expected 42 (last=42, empty=0), got {code}"
 
 
+def test_stdlib_string_min_byte():
+    """min_byte('XAB') = 'A' = 65; -23=42."""
+    src = """
+    fn main() -> i32 {
+        let s = string_new();
+        let s1 = string_push(s, 0, 88);
+        let s2 = string_push(s, s1, 65);
+        let s3 = string_push(s, s2, 66);
+        string_min_byte(s, s3) - 23
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_string_max_byte():
+    """max_byte('AbC') = 'b' = 98; -56=42."""
+    src = """
+    fn main() -> i32 {
+        let s = string_new();
+        let s1 = string_push(s, 0, 65);
+        let s2 = string_push(s, s1, 98);
+        let s3 = string_push(s, s2, 67);
+        string_max_byte(s, s3) - 56
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_string_first_byte():
+    """first_byte('*') = 42."""
+    src = """
+    fn main() -> i32 {
+        let s = string_new();
+        let s1 = string_push(s, 0, 42);
+        string_first_byte(s, s1)
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_string_last_byte():
+    """last_byte('AB*') = 42."""
+    src = """
+    fn main() -> i32 {
+        let s = string_new();
+        let s1 = string_push(s, 0, 65);
+        let s2 = string_push(s, s1, 66);
+        let s3 = string_push(s, s2, 42);
+        string_last_byte(s, s3)
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
 def main():
     tests = [(name, fn) for name, fn in globals().items()
              if name.startswith("test_") and callable(fn)]

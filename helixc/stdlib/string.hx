@@ -681,3 +681,47 @@ fn string_strip_byte(start: i32, len: i32, byte: i32) -> i32 {
     }
     s
 }
+
+// string_min_byte(start, len): @pure. Smallest byte value. 0 if empty.
+@pure
+fn string_min_byte(start: i32, len: i32) -> i32 {
+    if len == 0 { 0 }
+    else {
+        let mut i: i32 = 1;
+        let mut best: i32 = __arena_get(start);
+        while i < len {
+            let v = __arena_get(start + i);
+            if v < best { best = v; }
+            i = i + 1;
+        }
+        best
+    }
+}
+
+// string_max_byte(start, len): @pure. Largest byte value. 0 if empty.
+@pure
+fn string_max_byte(start: i32, len: i32) -> i32 {
+    if len == 0 { 0 }
+    else {
+        let mut i: i32 = 1;
+        let mut best: i32 = __arena_get(start);
+        while i < len {
+            let v = __arena_get(start + i);
+            if v > best { best = v; }
+            i = i + 1;
+        }
+        best
+    }
+}
+
+// string_first_byte(start, len): @pure. v[0] or 0 if empty.
+@pure
+fn string_first_byte(start: i32, len: i32) -> i32 {
+    if len == 0 { 0 } else { __arena_get(start) }
+}
+
+// string_last_byte(start, len): @pure. v[len-1] or 0 if empty.
+@pure
+fn string_last_byte(start: i32, len: i32) -> i32 {
+    if len == 0 { 0 } else { __arena_get(start + len - 1) }
+}
