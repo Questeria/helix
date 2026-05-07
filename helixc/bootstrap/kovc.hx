@@ -2731,8 +2731,29 @@ fn bn_global_slot_address() -> i32 {
 // (`bits & 0xFFFF0000` to truncate the low 16 mantissa bits).
 //
 // Precision range covered: ~10^-9 to ~10^9 within i32 limits. Beyond
-// that, the i32 accumulators overflow (mostly silently). Future audit
-// item: widen to lo32+hi32 splits or detect overflow.
+// that, the i32 accumulators overflow. Callers should pre-check via
+// count_float_digits (see below) and emit ud2 trap if > 9 digits.
+
+// Stage 1.5 audit fix: overflow guard for parse_float_bits. Returns
+// the count of decimal digits in the literal text at p1..p1+p2,
+// excluding the '.' separator. parse_float_bits accumulates digits
+// into i32 int_part / frac_part / pow10 / v_scaled; v_scaled =
+// int_part * pow10 + frac_part wraps the i32 sign bit when total
+// digits > 9 (since 10^10 > 2^31). Pre-fix: silent garbage for big
+// literals like 1234567890.5_f32. Post-fix: caller checks > 9 and
+// emits ud2.
+fn count_float_digits(p1: i32, p2: i32) -> i32 {
+    let mut i: i32 = 0;
+    let mut digits: i32 = 0;
+    while i < p2 {
+        let b = __arena_get(p1 + i);
+        if b == 46 { } // '.', skip
+        else { if b >= 48 { if b <= 57 { digits = digits + 1; }; }; };
+        i = i + 1;
+    }
+    digits
+}
+
 fn parse_float_bits(p1: i32, p2: i32) -> i32 {
     let mut i: i32 = 0;
     let mut int_part: i32 = 0;
@@ -2909,9 +2930,14 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         // since Helix bootstrap has no hex literals). The resulting
         // value is i32-shaped storage of the bf16 pattern (top 16 bits
         // = sign + 8-bit exp + 7-bit mantissa; low 16 bits = 0).
-        let bits = parse_float_bits(p1, p2);
-        let bf16_bits = bits & 0 - 65536;
-        emit_ast_int(bf16_bits)
+        // Stage 1.5 audit fix: overflow guard. parse_float_bits uses
+        // i32 accumulators internally; > 9 digits silently wraps.
+        let digits = count_float_digits(p1, p2);
+        if digits > 9 { emit_ud2_trap() } else {
+            let bits = parse_float_bits(p1, p2);
+            let bf16_bits = bits & 0 - 65536;
+            emit_ast_int(bf16_bits)
+        }
     } else { if t == 27 {
         // AST_FLOATLIT (Phase 1.10 step 3d, f32). Phase 1.10 step 7b
         // also reuses this branch for AST_FLOATLIT_F64 (tag 34) — the
@@ -2921,7 +2947,12 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         // Parse "I.F" -> IEEE 754 f32 bit pattern via parse_float_bits
         // helper (Stage 1.5 audit refactor — was inlined here, now
         // shared with t==42 bf16 literal arm).
-        emit_ast_int(parse_float_bits(p1, p2))
+        // Stage 1.5 audit fix: overflow guard. parse_float_bits uses
+        // i32 accumulators; > 9 digits silently wraps to garbage bits.
+        let digits = count_float_digits(p1, p2);
+        if digits > 9 { emit_ud2_trap() } else {
+            emit_ast_int(parse_float_bits(p1, p2))
+        }
     } else { if t == 34 {
         // AST_FLOATLIT_F64 (Phase 1.10 step 7c, 8-byte f64 emission).
         // p1 = byte_start of literal text in arena, p2 = byte_len.
@@ -3345,14 +3376,24 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         // longer truncated to bf16 layout). Trap until a real use
         // case + verifying test exists. Pre-fix bf16 fell through to
         // emit_ast_bnot_suffix (`not eax`) — silent garbage.
+        // Stage 1.5 audit fix (post-bf16 sweep): u64 and f64 are also
+        // 8-byte storage. Pre-fix they fell through to emit_ast_bnot_suffix
+        // (`not eax`, 32-bit op) which silently left the high 32 bits
+        // unchanged — for u64, top 32 bits stay garbage; for f64, the
+        // bit pattern becomes malformed (low 32 flipped, exponent /
+        // mantissa-high preserved). Now both use REX.W not rax.
         let ni = emit_ast_code(p1, bind_state, patch_state, bn_state);
         let nn = if is_i64_expr(p1, bind_state, bn_state) == 1 {
+            emit_not_rax_64()
+        } else { if is_u64_expr(p1, bind_state, bn_state) == 1 {
+            emit_not_rax_64()
+        } else { if is_f64_expr(p1, bind_state, bn_state) == 1 {
             emit_not_rax_64()
         } else { if is_bf16_expr(p1, bind_state, bn_state) == 1 {
             emit_ud2_trap()
         } else {
             emit_ast_bnot_suffix()
-        }};
+        }}}};
         ni + nn
     } else { if t == 31 {
         // AST_NOT: logical NOT. For i64/u64, must use `test rax, rax`
@@ -3365,11 +3406,20 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         // values (bits with all-1 exponent and non-zero mantissa) are
         // also classified incorrectly. Trap until correct float-aware
         // logical-NOT codegen lands.
+        // Stage 1.5 audit fix (post-bf16 sweep): f64 added to wide
+        // check. Pre-fix: !2.0_f64 (bits 0x4000000000000000, low 32 = 0)
+        // returned 1 (TRUTHY) because the 32-bit `test eax, eax` only
+        // checked the low half — wrong. Now uses 64-bit test.
+        // Note: f64 still has -0.0 / NaN edge cases (same as bf16) but
+        // those are language-policy choices, not memory-safety bugs.
         let ni = emit_ast_code(p1, bind_state, patch_state, bn_state);
         let inner_i64 = is_i64_expr(p1, bind_state, bn_state);
         let inner_u64 = is_u64_expr(p1, bind_state, bn_state);
+        let inner_f64 = is_f64_expr(p1, bind_state, bn_state);
         let inner_bf = is_bf16_expr(p1, bind_state, bn_state);
-        let inner_wide = if inner_i64 == 1 { 1 } else { if inner_u64 == 1 { 1 } else { 0 } };
+        let inner_wide = if inner_i64 == 1 { 1 }
+                         else { if inner_u64 == 1 { 1 }
+                         else { if inner_f64 == 1 { 1 } else { 0 } } };
         let nn = if inner_bf == 1 {
             emit_ud2_trap()
         } else { if inner_wide == 1 {

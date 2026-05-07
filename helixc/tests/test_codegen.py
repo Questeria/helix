@@ -2373,6 +2373,50 @@ fn main() -> i32 {
         "fn main() -> i32 { let x: bf16 = 1.5_bf16 ; let y: bf16 = 0.5_bf16 ; "
         "if x >= y { 1 } else { 7 } }"
     ) == 132, "bf16 >= bf16 traps with SIGILL"
+    # Stage 1.5 audit fix (post-bf16-sweep): float literal overflow
+    # detection. parse_float_bits accumulates digits into i32 internals
+    # (int_part, frac_part, pow10, v_scaled = int_part * pow10 +
+    # frac_part). For literals with > 9 total digits, v_scaled wraps
+    # the i32 sign bit silently — pre-fix, "1234567890.5_f32" emitted
+    # garbage bits (and downstream fneg/fadd produced random values).
+    # Post-fix: count_float_digits + ud2 trap when > 9.
+    # Boundary: 9-digit literals work (like 12345.6789_f32, 9 digits).
+    assert compile_and_exec("fn main() -> i32 { let x: f32 = 1.5_f32 ; 42 }") == 42, \
+        "small f32 literal still works (no overflow)"
+    assert compile_and_exec(
+        "fn main() -> i32 { let x: f32 = 1234567890.5_f32 ; 42 }"
+    ) == 132, "f32 literal with > 9 digits traps with SIGILL"
+    assert compile_and_exec(
+        "fn main() -> i32 { let x: bf16 = 1234567890.5_bf16 ; 42 }"
+    ) == 132, "bf16 literal with > 9 digits traps with SIGILL"
+    # Stage 1.5 audit fix (post-bf16-sweep): u64 BNOT was using 32-bit
+    # `not eax`, which silently left the high 32 bits unchanged. For a
+    # u64 with high bits set (e.g., 2^32 = 4294967296), `~x` would
+    # corrupt only the low half. Now uses REX.W not rax.
+    # Test: ~0_u64 should be 0xFFFFFFFFFFFFFFFF = -1 in i64. Hard to
+    # verify directly without u64-introspection, so check via cascade:
+    # (~0_u64) + 1_u64 == 0_u64 (overflow wrap) — equivalent test:
+    # (~0_u64) - (~0_u64) == 0. Smoke check: must not trap, must run.
+    assert compile_and_exec(
+        "fn main() -> i32 { let x: u64 = 0_u64 ; let y: u64 = ~x ; 42 }"
+    ) == 42, "u64 BNOT compiles + runs (smoke; correctness via REX.W)"
+    # Stage 1.5 audit fix (post-bf16-sweep): f64 BNOT was using 32-bit
+    # `not eax`, silently corrupting the bit pattern (low half flipped,
+    # high half unchanged). Now uses REX.W not rax.
+    assert compile_and_exec(
+        "fn main() -> i32 { let x: f64 = 0.0_f64 ; let y: f64 = ~x ; 42 }"
+    ) == 42, "f64 BNOT compiles + runs (smoke; correctness via REX.W)"
+    # Stage 1.5 audit fix (post-bf16-sweep): f64 logical NOT was using
+    # 32-bit `test eax, eax`, which only checks the low half. For
+    # f64 = 2.0 (bits 0x4000000000000000, low 32 = 0), pre-fix
+    # !2.0_f64 returned 1 (truthy when it should be 0). Now uses
+    # `test rax, rax` (REX.W).
+    # Discriminating test: 2.0_f64 has low 32 = 0; !2.0_f64 should be
+    # 0 (since 2.0 is non-zero). Pre-fix: 1 (wrongly considered zero).
+    # Post-fix: 0.
+    assert compile_and_exec(
+        "fn main() -> i32 { let x: f64 = 2.0_f64 ; let r: i32 = !x ; r + 42 }"
+    ) == 42, "f64 NOT correctly handles 2.0 (low 32 = 0; was wrongly truthy pre-fix)"
     # Approach A Stage 2.4: u64 minimal scaffold. u64 literals lex via
     # `_u64` 4-byte suffix, parse to AST_INTLIT_U64 (tag 38), expr_type
     # returns 9. Codegen emits `movabs rax, imm64` (8 bytes) so the full
