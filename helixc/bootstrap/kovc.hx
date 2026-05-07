@@ -1039,35 +1039,45 @@ fn is_i64_expr(idx: i32, bind_state: i32, bn_state: i32) -> i32 {
 }
 
 // Phase 1.10 step 5c follow-on: fn_type_table maps fn names to their
-// declared return-type tag (0=i32, 1=f32). Populated PRE-PASS over the
-// AST_FN_LIST so is_f32_expr can resolve user-named f32 fns at call
-// sites — without this, `let x = my_f32_fn(...)` followed by `x + ...`
-// would fall back to integer codegen since AST_CALL only knows about
-// the `__f*` builtin prefix. Same shape as fn_table; separate to avoid
-// churning the existing fn_table_add semantics.
+// declared return-type tag (0=i32, 1=f32, 2=f64, 3=i64). Populated
+// PRE-PASS over the AST_FN_LIST so expr_type can resolve user-named
+// fn return types at call sites — without this, `let x = my_f32_fn(...)`
+// followed by `x + ...` would fall back to integer codegen since
+// AST_CALL only knows about the `__f*` builtin prefix.
+//
+// Stage 1.7 extension: each entry now also stores the function's
+// parameter types (packed: 4 bits per param, up to 6 params = 24 bits)
+// and the param count. Used at call sites to trap arg-type mismatches.
+//
+// Entry layout (5 slots per entry):
+//   slot 0: name_start
+//   slot 1: name_len
+//   slot 2: ret_ty            (0..3)
+//   slot 3: packed_param_tys  ((p0) | (p1<<4) | ... | (p5<<20))
+//   slot 4: param_count       (0..6)
 fn fn_type_table_init() -> i32 {
     let state = __arena_push(0);            // top = 0
     __arena_push(state + 2);                // table_base = state + 2
     let mut i: i32 = 0;
-    while i < 768 {                         // 256 entries * 3 slots
+    while i < 1280 {                        // 256 entries * 5 slots
         __arena_push(0);
         i = i + 1;
     }
     state
 }
 
-fn fn_type_table_add(state: i32, name_start: i32, name_len: i32, ret_ty: i32) -> i32 {
-    // Audit fix #10: cap-check before writing. Cap = 256 entries
-    // (set in fn_type_table_init: 256 entries * 3 slots = 768).
+fn fn_type_table_add(state: i32, name_start: i32, name_len: i32, ret_ty: i32, packed_param_tys: i32, param_count: i32) -> i32 {
     let top = __arena_get(state);
     if top >= 256 {
         0 - 1
     } else {
         let table_base = __arena_get(state + 1);
-        let entry = table_base + top * 3;
+        let entry = table_base + top * 5;
         __arena_set(entry, name_start);
         __arena_set(entry + 1, name_len);
         __arena_set(entry + 2, ret_ty);
+        __arena_set(entry + 3, packed_param_tys);
+        __arena_set(entry + 4, param_count);
         __arena_set(state, top + 1);
         0
     }
@@ -1082,7 +1092,7 @@ fn fn_type_table_lookup(state: i32, name_start: i32, name_len: i32) -> i32 {
     let mut ty: i32 = 0;
     while i < top {
         if found == 0 {
-            let entry = table_base + i * 3;
+            let entry = table_base + i * 5;
             let ns = __arena_get(entry);
             let nl = __arena_get(entry + 1);
             if kovc_byte_eq(ns, nl, name_start, name_len) == 1 {
@@ -1095,6 +1105,52 @@ fn fn_type_table_lookup(state: i32, name_start: i32, name_len: i32) -> i32 {
         };
     }
     ty
+}
+
+// Stage 1.7: lookup the packed_param_tys + param_count for a fn name.
+// Returns (packed_param_tys * 8) + param_count packed into a single i32
+// — caller unpacks via `count = ret & 7` and `packed = ret >> 3`.
+// Returns 0 if name not found (fallback safe: 0 params, all 0=i32).
+@pure
+fn fn_type_table_lookup_params(state: i32, name_start: i32, name_len: i32) -> i32 {
+    let top = __arena_get(state);
+    let table_base = __arena_get(state + 1);
+    let mut i: i32 = 0;
+    let mut found: i32 = 0;
+    let mut packed: i32 = 0;
+    let mut count: i32 = 0;
+    while i < top {
+        if found == 0 {
+            let entry = table_base + i * 5;
+            let ns = __arena_get(entry);
+            let nl = __arena_get(entry + 1);
+            if kovc_byte_eq(ns, nl, name_start, name_len) == 1 {
+                packed = __arena_get(entry + 3);
+                count = __arena_get(entry + 4);
+                found = 1;
+            };
+            i = i + 1;
+        } else {
+            i = top;
+        };
+    }
+    // Pack count into low 3 bits (max 6 fits in 3 bits), packed into upper.
+    (packed * 8) + count
+}
+
+// Stage 1.7: extract param[idx]'s type tag from a packed_param_tys.
+// `packed` is 6 tags of 4 bits each: bits [0..3]=p0, [4..7]=p1, ...,
+// [20..23]=p5. Returns the 4-bit tag at position idx.
+@pure
+fn unpack_param_ty(packed: i32, idx: i32) -> i32 {
+    let shift = idx * 4;
+    let mut shifted: i32 = packed;
+    let mut s: i32 = 0;
+    while s < shift {
+        shifted = shifted / 2;
+        s = s + 1;
+    }
+    shifted - ((shifted / 16) * 16)
 }
 
 // fn_table: maps fn names to arena slot indices where their code
@@ -3495,7 +3551,32 @@ fn emit_elf_for_ast_to_path(ast_root: i32) -> i32 {
             let fn_name_s = __arena_get(fn_idx + 1);
             let fn_name_l = __arena_get(fn_idx + 2);
             let fn_ret_ty = __arena_get(fn_idx + 5);
-            fn_type_table_add(fn_type_state, fn_name_s, fn_name_l, fn_ret_ty);
+            // Stage 1.7: walk params_head and pack param types into
+            // 4-bit slots. Up to 6 params (Phase-0 limit). Each AST_PARAM
+            // has p3=next, p4=type_tag.
+            let pp_head = __arena_get(fn_idx + 4);
+            let mut pp_cur: i32 = pp_head;
+            let mut pp_count: i32 = 0;
+            let mut pp_packed: i32 = 0;
+            let mut pp_shift: i32 = 0;
+            while pp_cur != 0 {
+                if pp_count < 6 {
+                    let pp_ty = __arena_get(pp_cur + 4);
+                    // Inline 1<<shift via repeated multiply (Helix
+                    // bootstrap doesn't have <<). pp_ty is 0..15 already.
+                    let mut place_val: i32 = pp_ty;
+                    let mut s: i32 = 0;
+                    while s < pp_shift {
+                        place_val = place_val * 2;
+                        s = s + 1;
+                    }
+                    pp_packed = pp_packed + place_val;
+                    pp_shift = pp_shift + 4;
+                };
+                pp_count = pp_count + 1;
+                pp_cur = __arena_get(pp_cur + 3);
+            }
+            fn_type_table_add(fn_type_state, fn_name_s, fn_name_l, fn_ret_ty, pp_packed, pp_count);
             let next_list = __arena_get(walk + 2);
             if next_list == 0 { keep = 0; } else { walk = next_list; };
         }
