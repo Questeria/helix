@@ -4637,6 +4637,73 @@ def test_agi_ensemble_mean_and_uncertainty():
     assert code == 19, f"expected 19, got {code}"
 
 
+def test_agi_bag_difference():
+    """Bag difference: positions of a NOT in b. [1,2,3,4] vs [3,4,5,6] = 2
+    (positions 0=1 and 1=2 don't appear in b)."""
+    src = """
+    fn main() -> i32 {
+        let a = t1d_new(4);
+        ti1d_set(a, 0, 1); ti1d_set(a, 1, 2);
+        ti1d_set(a, 2, 3); ti1d_set(a, 3, 4);
+        let b = t1d_new(4);
+        ti1d_set(b, 0, 3); ti1d_set(b, 1, 4);
+        ti1d_set(b, 2, 5); ti1d_set(b, 3, 6);
+        // diff = 2; sim = 2; invariant diff + sim == 4. Encode 21*diff = 42.
+        21 * bag_difference(a, 4, b, 4)
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42 (2 unique + 21x), got {code}"
+
+
+def test_agi_bag_count_unique():
+    """Distinct values in a multiset. [1,2,2,3,1] -> 3 distincts (1, 2, 3)."""
+    src = """
+    fn main() -> i32 {
+        let a = t1d_new(5);
+        ti1d_set(a, 0, 1); ti1d_set(a, 1, 2); ti1d_set(a, 2, 2);
+        ti1d_set(a, 3, 3); ti1d_set(a, 4, 1);
+        let empty = t1d_new(0);
+        // 3*14 + 0 = 42; second arg verifies empty -> 0.
+        14 * bag_count_unique(a, 5) + bag_count_unique(empty, 0)
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42 (3*14 + 0), got {code}"
+
+
+def test_agi_tree_node_is_var():
+    """tree_node_is_var: 1 for variable nodes (tag = unify_var_tag()), 0 otherwise."""
+    src = """
+    fn main() -> i32 {
+        let v = tree_node_new(unify_var_tag(), 7, 0, 0);
+        let c = tree_node_new(5, 7, 0, 0);
+        // v -> 1, c -> 0.  42*1 + 0*100 = 42.
+        42 * tree_node_is_var(v) + 100 * tree_node_is_var(c)
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42 (var=1, concrete=0), got {code}"
+
+
+def test_agi_ensemble_argmax():
+    """ensemble_argmax: index of strictly-largest prediction; -1 on empty."""
+    src = """
+    fn main() -> i32 {
+        let preds = t1d_new(4);
+        ti1d_set(preds, 0, 10); ti1d_set(preds, 1, 14);
+        ti1d_set(preds, 2, 12); ti1d_set(preds, 3, 16);
+        let empty = t1d_new(0);
+        // argmax([10,14,12,16]) = 3 (index of 16). 14*3 + (-1)*0 = 42; empty -> -1.
+        let i = ensemble_argmax(preds, 4);
+        let e = ensemble_argmax(empty, 0);
+        14 * i + e + 1
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42 (14*3 + -1 + 1), got {code}"
+
+
 def test_agi_pq_min_pop():
     """Phase 4 perfection: priority queue. Insert 3 (state, score) pairs;
     pop_min returns the lowest-scoring state."""

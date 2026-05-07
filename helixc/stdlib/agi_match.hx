@@ -87,6 +87,53 @@ fn bag_similarity(a_start: i32, a_n: i32, b_start: i32, b_n: i32) -> i32 {
     shared
 }
 
+// Asymmetric bag difference: count of a-positions whose value does NOT
+// appear in b. Mirror of bag_similarity (which counts a-positions IN b);
+// invariant: bag_similarity(a, b) + bag_difference(a, b) == a_n.
+@pure
+fn bag_difference(a_start: i32, a_n: i32, b_start: i32, b_n: i32) -> i32 {
+    let mut diff: i32 = 0;
+    let mut i: i32 = 0;
+    while i < a_n {
+        let ai = __arena_get(a_start + i);
+        let mut j: i32 = 0;
+        let mut hit: i32 = 0;
+        while j < b_n {
+            if __arena_get(b_start + j) == ai {
+                if hit == 0 { hit = 1; }
+            }
+            j = j + 1;
+        }
+        if hit == 0 { diff = diff + 1; }
+        i = i + 1;
+    }
+    diff
+}
+
+// Count of distinct values in a bag (multiset). [1,2,2,3,1] -> 3.
+// Quadratic dedup-by-scan: a value contributes 1 iff its earlier
+// occurrences are all distinct from it (i.e. it's the first time we see
+// it in the array). Empty array -> 0.
+@pure
+fn bag_count_unique(a_start: i32, a_n: i32) -> i32 {
+    let mut uniq: i32 = 0;
+    let mut i: i32 = 0;
+    while i < a_n {
+        let ai = __arena_get(a_start + i);
+        let mut j: i32 = 0;
+        let mut seen: i32 = 0;
+        while j < i {
+            if __arena_get(a_start + j) == ai {
+                if seen == 0 { seen = 1; }
+            }
+            j = j + 1;
+        }
+        if seen == 0 { uniq = uniq + 1; }
+        i = i + 1;
+    }
+    uniq
+}
+
 // Levenshtein-like sequence similarity for AGI string-of-tokens matching.
 // Returns the count of equal-position elements (Hamming distance complement).
 // Both sequences must be the same length n.
@@ -119,6 +166,16 @@ fn sequence_match(a_start: i32, b_start: i32, n: i32) -> i32 {
 // Bindings: an array of (var_id -> arena_offset). Capacity bounded.
 
 @pure fn unify_var_tag() -> i32 { 0 - 1 }   // -1 = "this node is a variable"
+
+// Predicate: 1 if the node at off is a unification variable (tag ==
+// unify_var_tag()), else 0. Saves callers from importing the var-tag
+// constant at the use site when they only want to ask "is this a
+// placeholder?". Pairs with bindings_get when walking partially-
+// instantiated patterns.
+@pure
+fn tree_node_is_var(off: i32) -> i32 {
+    if __arena_get(off) == unify_var_tag() { 1 } else { 0 }
+}
 
 fn bindings_new() -> i32 {
     let start = __arena_len();
@@ -390,5 +447,28 @@ fn ensemble_uncertainty(predictions_start: i32, n: i32) -> i32 {
             i = i + 1;
         }
         hi - lo
+    }
+}
+
+// Index of the strictly-largest prediction; returns -1 on empty.
+// Ties broken by lowest index (first occurrence wins).  Useful for
+// model-selection ("which ensemble member predicted the highest value")
+// or for argmax-over-action-values when the ensemble is per-action.
+@pure
+fn ensemble_argmax(predictions_start: i32, n: i32) -> i32 {
+    if n == 0 { 0 - 1 }
+    else {
+        let mut i: i32 = 1;
+        let mut best_v = __arena_get(predictions_start);
+        let mut best_i: i32 = 0;
+        while i < n {
+            let v = __arena_get(predictions_start + i);
+            if v > best_v {
+                best_v = v;
+                best_i = i;
+            }
+            i = i + 1;
+        }
+        best_i
     }
 }
