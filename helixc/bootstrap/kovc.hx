@@ -3428,9 +3428,13 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
             } else { if bind_ty == 2 {
                 emit_mov_local_rax_64(off)
             } else { if bind_ty == 3 {
-                // Storing i32 (zero-extended in rax) into i64 slot.
-                // 8-byte store correctly widens.
-                emit_mov_local_rax_64(off)
+                // Stage 1 audit batch 5 fix: i32 value into i64 binding
+                // is NOT a safe widening — `mov eax, X` zero-extends to
+                // rax, so for negative i32 values the i64 slot ends up
+                // holding (val + 2^32) instead of val. Trap instead of
+                // silently producing wrong results. Mirror's batch 3's
+                // i64-into-i32 trap.
+                emit_ud2_trap()
             } else {
                 emit_mov_local_eax(off)
             }}};
