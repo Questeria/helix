@@ -2868,9 +2868,9 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         }
         emit_movabs_rax_imm64(low32, high32)
     } else { if t == 2 {
-        // 4-way arith dispatch (Stage 1 extends Step 7d's three-way):
-        // both i64 -> add rax, rcx (REX.W); both f64 -> addsd;
-        // both f32 -> addss; both i32 -> add eax, ecx; else -> ud2.
+        // Stage 2.4b: 5-way arith dispatch — i64 OR u64 -> add rax, rcx
+        // (REX.W; signedness-agnostic for ADD); f64 -> addsd; f32 -> addss;
+        // i32 (and u32 falling through) -> add eax, ecx; mixed -> ud2.
         let n1 = emit_ast_code(p1, bind_state, patch_state, bn_state);
         let np = emit_push_rax();
         let n2 = emit_ast_code(p2, bind_state, patch_state, bn_state);
@@ -2878,12 +2878,16 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         let r_d = is_f64_expr(p2, bind_state, bn_state);
         let l_i64 = is_i64_expr(p1, bind_state, bn_state);
         let r_i64 = is_i64_expr(p2, bind_state, bn_state);
-        // Move-rcx: 64-bit when both operands are 8-byte (f64 or i64).
+        let l_u64 = is_u64_expr(p1, bind_state, bn_state);
+        let r_u64 = is_u64_expr(p2, bind_state, bn_state);
+        // Move-rcx: 64-bit when both operands are 8-byte (f64/i64/u64).
         let nm = if l_d == 1 {
             if r_d == 1 { emit_mov_rcx_rax_64() } else { emit_mov_ecx_eax() }
         } else { if l_i64 == 1 {
             if r_i64 == 1 { emit_mov_rcx_rax_64() } else { emit_mov_ecx_eax() }
-        } else { emit_mov_ecx_eax() }};
+        } else { if l_u64 == 1 {
+            if r_u64 == 1 { emit_mov_rcx_rax_64() } else { emit_mov_ecx_eax() }
+        } else { emit_mov_ecx_eax() }}};
         let no = emit_pop_rax();
         let l_f = is_f32_expr(p1, bind_state, bn_state);
         let r_f = is_f32_expr(p2, bind_state, bn_state);
@@ -2893,11 +2897,15 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
             if l_i64 == 1 {
                 if r_i64 == 1 { emit_add_rax_rcx_64() } else { emit_ud2_trap() }
             } else { if r_i64 == 1 { emit_ud2_trap() } else {
-                if l_f == 1 {
-                    if r_f == 1 { emit_addss() } else { emit_ud2_trap() }
-                } else {
-                    if r_f == 1 { emit_ud2_trap() } else { emit_add_eax_ecx() }
-                }
+                if l_u64 == 1 {
+                    if r_u64 == 1 { emit_add_rax_rcx_64() } else { emit_ud2_trap() }
+                } else { if r_u64 == 1 { emit_ud2_trap() } else {
+                    if l_f == 1 {
+                        if r_f == 1 { emit_addss() } else { emit_ud2_trap() }
+                    } else {
+                        if r_f == 1 { emit_ud2_trap() } else { emit_add_eax_ecx() }
+                    }
+                }}
             }}
         }};
         n1 + np + n2 + nm + no + na
