@@ -8175,6 +8175,66 @@ def test_stdlib_ti1d_l2_norm_sq():
     assert code == 42, f"expected 42, got {code}"
 
 
+def test_stdlib_hashmap_count_value_eq():
+    """Insert (1,5),(2,5),(3,7); count value=5 -> 2; *21=42."""
+    src = """
+    fn main() -> i32 {
+        let m = hashmap_new(8);
+        hashmap_put(m, 8, 1, 5);
+        hashmap_put(m, 8, 2, 5);
+        hashmap_put(m, 8, 3, 7);
+        hashmap_count_value_eq(m, 8, 5) * 21
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_hashmap_sum_values():
+    """Insert (1,10),(2,15),(3,17); sum_values=42."""
+    src = """
+    fn main() -> i32 {
+        let m = hashmap_new(8);
+        hashmap_put(m, 8, 1, 10);
+        hashmap_put(m, 8, 2, 15);
+        hashmap_put(m, 8, 3, 17);
+        hashmap_sum_values(m, 8)
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_hashmap_min_value():
+    """Insert (1,5),(2,42),(3,30); min_value=5; *7+7=42."""
+    src = """
+    fn main() -> i32 {
+        let m = hashmap_new(8);
+        hashmap_put(m, 8, 1, 5);
+        hashmap_put(m, 8, 2, 42);
+        hashmap_put(m, 8, 3, 30);
+        hashmap_min_value(m, 8) * 7 + 7
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_hashmap_load_factor_x100():
+    """cap=8, fill 3 entries; load = 3*100/8 = 37; +5=42."""
+    src = """
+    fn main() -> i32 {
+        let m = hashmap_new(8);
+        hashmap_put(m, 8, 1, 100);
+        hashmap_put(m, 8, 2, 200);
+        hashmap_put(m, 8, 3, 300);
+        hashmap_load_factor_x100(m, 8) + 5
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
 def test_stdlib_vec_window_max():
     """window_max([1,3,2,5,4], win=3) -> [3,5,5]; sum=13; *3+3=42."""
     src = """

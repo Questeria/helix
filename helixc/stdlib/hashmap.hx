@@ -268,3 +268,66 @@ fn hashmap_max_value(start: i32, cap: i32) -> i32 {
     }
     best
 }
+
+// hashmap_count_value_eq(start, cap, target): @pure. Count of occupied
+// buckets whose value equals target. Useful for "how many entries map
+// to N?" queries (e.g. histogram analysis).
+@pure
+fn hashmap_count_value_eq(start: i32, cap: i32, target: i32) -> i32 {
+    let mut i: i32 = 0;
+    let mut total: i32 = 0;
+    while i < cap {
+        let base = start + i * 3;
+        if __arena_get(base) == 1 {
+            if __arena_get(base + 2) == target { total = total + 1; };
+        };
+        i = i + 1;
+    }
+    total
+}
+
+// hashmap_sum_values(start, cap): @pure. Sum of values across all
+// occupied buckets. Useful for "total count" pattern (e.g. word count
+// totals from a histogram).
+@pure
+fn hashmap_sum_values(start: i32, cap: i32) -> i32 {
+    let mut i: i32 = 0;
+    let mut total: i32 = 0;
+    while i < cap {
+        let base = start + i * 3;
+        if __arena_get(base) == 1 {
+            total = total + __arena_get(base + 2);
+        };
+        i = i + 1;
+    }
+    total
+}
+
+// hashmap_min_value(start, cap): @pure. Walks all occupied buckets,
+// returns the minimum value. Returns 0 for an empty map. Caller should
+// check hashmap_size beforehand if 0 is a valid value.
+@pure
+fn hashmap_min_value(start: i32, cap: i32) -> i32 {
+    let mut i: i32 = 0;
+    let mut found: i32 = 0;
+    let mut best: i32 = 0;
+    while i < cap {
+        let base = start + i * 3;
+        if __arena_get(base) == 1 {
+            let v = __arena_get(base + 2);
+            if found == 0 { best = v; found = 1; }
+            else { if v < best { best = v; }; };
+        };
+        i = i + 1;
+    }
+    best
+}
+
+// hashmap_load_factor_x100(start, cap): @pure. Returns size * 100 / cap
+// — load factor as a percentage. Useful for resize-decision heuristics
+// (e.g. "rebuild if load > 75").
+@pure
+fn hashmap_load_factor_x100(start: i32, cap: i32) -> i32 {
+    if cap == 0 { 0 }
+    else { hashmap_size(start, cap) * 100 / cap }
+}
