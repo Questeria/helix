@@ -207,25 +207,27 @@ Research agent (2026-05-07) flagged production-grade gaps. Integrated:
 ## Status
 
 - **Started:** 2026-05-07
-- **Current stage:** Stage 2.5a (i8 lex support landed; further work BLOCKED)
+- **Current stage:** Stage 2.4b MUL+ unblocked; resuming sequence.
 - **Stages landed:** 1, 1.6, 1.7, 2.1, 2.2, 2.3, 2.4a, 2.4b-ADD, 2.4b-SUB, 2.5a
 - **Total stages:** 30 + 7 amendments + tooling appendix
 - **Estimated commits:** 200-400
 - **Estimated audit cycles:** 50-100
 - **Estimated wall time:** 6-12 months across many loop iterations
 
-### BLOCKER: Cascade-Depth Self-Host Bug
+### RESOLVED: "Cascade-Depth" Self-Host Bug (was a buffer overrun)
 
-See [docs/BOOTSTRAP_CASCADE_BUG.md](BOOTSTRAP_CASCADE_BUG.md) for full
-details. Adding any new arm to big cascade fns (parse_primary,
-emit_ast_code, expr_type) breaks K2 self-host idempotence even when
-the arm is dead code. Currently blocking Stage 2.4b MUL/DIV/MOD/
-comparisons and Stage 2.5b/c (parser+codegen for narrow types).
+See [docs/BOOTSTRAP_CASCADE_BUG.md](BOOTSTRAP_CASCADE_BUG.md). Root
+cause was a 256 KB read-buffer overrun in `read_file_to_arena`, NOT a
+problem with cascade depth. Bootstrap source had grown to ~261 KB
+with < 1 KB margin against the 256 KB buffer; any new fn tipped it
+over and silent truncation propagated into K2 as ud2-patched call
+sites that SIGILLed at runtime.
 
-Workarounds:
-1. Lexer-side changes are SAFE (how Stage 2.5a landed).
-2. Refactor cascade fns to table-driven dispatch (deferred).
-3. Byte-diff K1 outputs to pinpoint Python helixc's divergence
-   (next investigation).
+Fix landed 2026-05-07 (commit 29f552e): bumped BUF_SIZE 256 KB -> 1 MB
+in both `helixc/backend/x86_64.py` and the four uses in `kovc.hx`'s
+`emit_read_file_to_arena_body`. All 5 bootstrap_kovc tests pass.
+Verified by re-running the original failing pattern (dead-code arm
+addition to expr_type) — passes now. Stage 2.4b MUL+ / 2.5b/c / 1.5 /
+3+ all unblocked. Headroom: ~4×.
 
 This document is the canonical plan. Each loop iteration reads it and resumes from the current stage.
