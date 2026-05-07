@@ -5784,6 +5784,46 @@ def test_stdlib_vec_dot():
     assert code == 42, f"expected 42, got {code}"
 
 
+def test_stdlib_vec_zip_min():
+    """zip_min([3,1,5], [2,4,6]) = [2,1,5], sum=8. Encoded as 8*5 + 2 = 42."""
+    src = """
+    fn main() -> i32 {
+        let a = vec_new();
+        let an0 = vec_push(a, 0, 3);
+        let an1 = vec_push(a, an0, 1);
+        let an2 = vec_push(a, an1, 5);
+        let b = vec_new();
+        let bn0 = vec_push(b, 0, 2);
+        let bn1 = vec_push(b, bn0, 4);
+        let bn2 = vec_push(b, bn1, 6);
+        let z = vec_zip_min(a, b, an2);
+        vec_sum(z, an2) * 5 + 2
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_vec_zip_max():
+    """zip_max([3,1,5], [2,4,6]) = [3,4,6], sum=13. Encoded as 13*3 + 3 = 42."""
+    src = """
+    fn main() -> i32 {
+        let a = vec_new();
+        let an0 = vec_push(a, 0, 3);
+        let an1 = vec_push(a, an0, 1);
+        let an2 = vec_push(a, an1, 5);
+        let b = vec_new();
+        let bn0 = vec_push(b, 0, 2);
+        let bn1 = vec_push(b, bn0, 4);
+        let bn2 = vec_push(b, bn1, 6);
+        let z = vec_zip_max(a, b, an2);
+        vec_sum(z, an2) * 3 + 3
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
 def test_impl_inherent_method_basic():
     """Phase 1.8: inherent impl block. `impl Type { fn method(self) }` lifts
     to `Type__method`. `obj.method(args)` rewrites to `Type__method(obj, args)`."""

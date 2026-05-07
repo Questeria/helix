@@ -26,6 +26,8 @@
 //   vec_argmin(start, count)             -> i32   index of smallest element (-1 if empty).
 //   vec_argmax(start, count)             -> i32   index of largest element (-1 if empty).
 //   vec_dot(a, b, count)                 -> i32   dot product sum(a[i]*b[i]).
+//   vec_zip_min(a, b, count)             -> i32   appends [min(a[i], b[i])]; returns new start.
+//   vec_zip_max(a, b, count)             -> i32   appends [max(a[i], b[i])]; returns new start.
 //
 // License: Apache 2.0
 
@@ -236,4 +238,28 @@ fn vec_dot(a: i32, b: i32, count: i32) -> i32 {
         i = i + 1;
     }
     acc
+}
+
+fn vec_zip_min(a: i32, b: i32, count: i32) -> i32 {
+    let s: i32 = __arena_len();
+    let mut i: i32 = 0;
+    while i < count {
+        let x = __arena_get(a + i);
+        let y = __arena_get(b + i);
+        if x < y { __arena_push(x); } else { __arena_push(y); }
+        i = i + 1;
+    }
+    s
+}
+
+fn vec_zip_max(a: i32, b: i32, count: i32) -> i32 {
+    let s: i32 = __arena_len();
+    let mut i: i32 = 0;
+    while i < count {
+        let x = __arena_get(a + i);
+        let y = __arena_get(b + i);
+        if x > y { __arena_push(x); } else { __arena_push(y); }
+        i = i + 1;
+    }
+    s
 }
