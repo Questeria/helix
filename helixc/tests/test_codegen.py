@@ -2201,6 +2201,24 @@ fn main() -> i32 {{
         "fn main() -> i32 { let a: i8 = 50_i8 ; let b: i8 = 8_i8 ; "
         "let c: i8 = a - b ; 42 }"
     ) == 42, "i8 LET-bound annotation parses + codegen runs"
+    # Stage 2.5b/c stage 2: narrow loads. AST_VAR for a u8/i8/u16/i16
+    # binding now uses movzx/movsx so the read interprets only the
+    # declared width. Test path: bind a u8, read it back, exit code
+    # is the loaded byte. Previously the load was a 32-bit mov which
+    # would have returned the full slot; now a movzx-byte limits to
+    # bits 0..7.
+    assert compile_and_exec(
+        "fn main() -> i32 { let x: u8 = 42_u8 ; x }"
+    ) == 42, "u8 binding load via movzx-byte"
+    assert compile_and_exec(
+        "fn main() -> i32 { let x: i8 = 42_i8 ; x }"
+    ) == 42, "i8 binding load via movsx-byte"
+    assert compile_and_exec(
+        "fn main() -> i32 { let x: u16 = 42_u16 ; x }"
+    ) == 42, "u16 binding load via movzx-word"
+    assert compile_and_exec(
+        "fn main() -> i32 { let x: i16 = 42_i16 ; x }"
+    ) == 42, "i16 binding load via movsx-word"
     # Approach A Stage 2.5c: i16 + u16 minimal scaffold. _i16 / _u16
     # 4-byte suffixes added to lexer (token tags 38, 39). Parser produces
     # AST_INTLIT_I16 (tag 40) / AST_INTLIT_U16 (tag 41). expr_type

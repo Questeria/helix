@@ -723,6 +723,46 @@ fn emit_mov_rax_local_64(offset: i32) -> i32 {
     7
 }
 
+// Stage 2.5b/c stage 2: narrow loads. The arena slot is still 4 bytes
+// wide regardless of declared type; these helpers narrow the read so
+// that a u8/u16/i8/i16 binding's stored bit pattern is interpreted at
+// its declared width on every load. Truncation semantics flow from the
+// read side: even if a u8 binding had 0x12345678 stored in its 4-byte
+// slot (e.g. by a wider write), reading via movzx-byte gives only
+// 0x78. This is the cleanest minimum — masked stores are a follow-on.
+
+// Load byte at [rbp + disp32], zero-extend to eax. Used for u8.
+//   0F B6 85 disp32   movzx eax, byte [rbp + disp32]
+fn emit_movzx_eax_local_byte(offset: i32) -> i32 {
+    emit_byte(0x0F); emit_byte(0xB6); emit_byte(0x85);
+    emit_u32_le(0 - offset);
+    7
+}
+
+// Load byte at [rbp + disp32], sign-extend to eax. Used for i8.
+//   0F BE 85 disp32   movsx eax, byte [rbp + disp32]
+fn emit_movsx_eax_local_byte(offset: i32) -> i32 {
+    emit_byte(0x0F); emit_byte(0xBE); emit_byte(0x85);
+    emit_u32_le(0 - offset);
+    7
+}
+
+// Load word at [rbp + disp32], zero-extend to eax. Used for u16.
+//   0F B7 85 disp32   movzx eax, word [rbp + disp32]
+fn emit_movzx_eax_local_word(offset: i32) -> i32 {
+    emit_byte(0x0F); emit_byte(0xB7); emit_byte(0x85);
+    emit_u32_le(0 - offset);
+    7
+}
+
+// Load word at [rbp + disp32], sign-extend to eax. Used for i16.
+//   0F BF 85 disp32   movsx eax, word [rbp + disp32]
+fn emit_movsx_eax_local_word(offset: i32) -> i32 {
+    emit_byte(0x0F); emit_byte(0xBF); emit_byte(0x85);
+    emit_u32_le(0 - offset);
+    7
+}
+
 // --------------------------------------------------------------
 // Compile-time binding table: a stack of (name_start, name_len,
 // stack_offset) triples in the arena. We pass `bind_base` (start
@@ -3549,14 +3589,24 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         // AST_VAR: p1 = name start, p2 = name len.
         // Step 7d-5: f64 bindings (type tag 2) need 64-bit load to
         // preserve the high half. i32 / f32 stay on 32-bit load.
+        // Stage 2.5b/c stage 2: narrow loads for u8/u16/i8/i16 use
+        // movzx/movsx so the read interprets only the declared width.
+        // Bit pattern in the slot beyond that width is ignored —
+        // truncation semantics flow from the read side.
         let off = bind_lookup(bind_state, p1, p2);
         let ty = bind_lookup_type(bind_state, p1, p2);
         // 8-byte types (f64=2, i64=3, u64=9) use 64-bit load to preserve
-        // the high half. All others use 32-bit load (auto-zero-extends).
+        // the high half. Narrow types (u8=7, u16=8, i8=10, i16=11) use
+        // movzx/movsx. All others (i32=0, f32=1, u32=6) use 32-bit load
+        // (auto-zero-extends).
         if ty == 2 { emit_mov_rax_local_64(off) }
         else { if ty == 3 { emit_mov_rax_local_64(off) }
         else { if ty == 9 { emit_mov_rax_local_64(off) }
-        else { emit_mov_eax_local(off) }}}
+        else { if ty == 7 { emit_movzx_eax_local_byte(off) }
+        else { if ty == 10 { emit_movsx_eax_local_byte(off) }
+        else { if ty == 8 { emit_movzx_eax_local_word(off) }
+        else { if ty == 11 { emit_movsx_eax_local_word(off) }
+        else { emit_mov_eax_local(off) }}}}}}}
     } else { if t == 8 {
         // AST_LET: p1 = name_start, p2 = name_len, p3 = body_idx,
         // p4 = value_idx (audit-14: split out of the legacy packed
