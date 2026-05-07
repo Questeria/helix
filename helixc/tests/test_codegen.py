@@ -1905,6 +1905,35 @@ fn main() -> i32 {{
     assert compile_and_exec(
         "if (1.0_f64 / 3.0_f64) == (1.0_f64 / 3.0_f64) { 7 } else { 9 }"
     ) == 7, "f64 EQ on non-trivial value"
+    # Phase 1.10 step 7m: IEEE 754 NaN-aware f64 comparisons. Mirrors
+    # step 5f for f32 but on doubles — ucomisd with a NaN sets ZF=1,
+    # PF=1, CF=1 (the "unordered" flag-state), so bare setcc would
+    # mis-fire for ==, !=, <, <=. Validates emit_sse_dbl_compare's
+    # setnp/setp + and/or al, cl post-fixup. NaN constructed via
+    # 0.0_f64 / 0.0_f64 (using SSE divsd in the bootstrap, since
+    # f64-arith dispatch landed in step 7d).
+    assert compile_and_exec(
+        "fn main() -> i32 { let z: f64 = 0.0_f64 ; "
+        "let nan: f64 = z / z ; "
+        "if nan == nan { 99 } else { 42 } }"
+    ) == 42, "f64 nan == nan returns 0 (PF guard on sete via ucomisd)"
+    assert compile_and_exec(
+        "fn main() -> i32 { let z: f64 = 0.0_f64 ; "
+        "let nan: f64 = z / z ; "
+        "if nan != nan { 42 } else { 99 } }"
+    ) == 42, "f64 nan != nan returns 1 (PF guard on setne via ucomisd)"
+    assert compile_and_exec(
+        "fn main() -> i32 { let z: f64 = 0.0_f64 ; "
+        "let nan: f64 = z / z ; "
+        "let one: f64 = 1.0_f64 ; "
+        "if nan < one { 99 } else { 42 } }"
+    ) == 42, "f64 nan < x returns 0 (PF guard on setb via ucomisd)"
+    assert compile_and_exec(
+        "fn main() -> i32 { let z: f64 = 0.0_f64 ; "
+        "let nan: f64 = z / z ; "
+        "let one: f64 = 1.0_f64 ; "
+        "if nan <= one { 99 } else { 42 } }"
+    ) == 42, "f64 nan <= x returns 0 (PF guard on setbe via ucomisd)"
     # Phase 1.10 step 7h: __dsqrt(x_f64) -> f64 via SSE2 sqrtsd. Mirror
     # of __fsqrt (step 5g) on doubles. Validates by round-tripping the
     # result through __f64_to_f32 and inspecting the f32 top byte.
