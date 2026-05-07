@@ -5524,6 +5524,63 @@ def test_stdlib_result_ok_err():
     assert code == 42, f"expected 42, got {code}"
 
 
+def test_stdlib_result_or_zero():
+    """result_or_zero: Ok(x) -> x; Err(_) -> 0."""
+    src = """
+    fn main() -> i32 {
+        let a = Result::Ok(42);
+        let b = Result::Err(99);
+        result_or_zero(a) + result_or_zero(b)
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42 (42 + 0), got {code}"
+
+
+def test_stdlib_result_or_neg():
+    """result_or_neg: Ok(x) -> x; Err(_) -> -1."""
+    src = """
+    fn main() -> i32 {
+        let a = Result::Ok(43);
+        let b = Result::Err(99);
+        result_or_neg(a) + result_or_neg(b)
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42 (43 + -1), got {code}"
+
+
+def test_stdlib_result_eq_ok():
+    """result_eq_ok: 1 iff Ok(x) with x==target.
+    Three cases: matching Ok, mismatching Ok, Err."""
+    src = """
+    fn main() -> i32 {
+        let a = Result::Ok(42);
+        let b = Result::Ok(99);
+        let c = Result::Err(7);
+        let n_match = result_eq_ok(a, 42);
+        let n_no = result_eq_ok(b, 42);
+        let n_err = result_eq_ok(c, 42);
+        n_match * 42 + n_no + n_err
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42 (1*42 + 0 + 0), got {code}"
+
+
+def test_stdlib_result_err_code_or():
+    """result_err_code_or: extract error code; Ok -> default."""
+    src = """
+    fn main() -> i32 {
+        let a = Result::Err(40);
+        let b = Result::Ok(99);
+        result_err_code_or(a, 0) + result_err_code_or(b, 2)
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42 (40 + 2), got {code}"
+
+
 def test_stdlib_vec_push_get_sum():
     """Vec carry-pair API. Push 5,7,30; sum should be 42."""
     src = """

@@ -44,3 +44,35 @@ fn result_is_err(r: Result) -> i32 {
         Result::Err(_) => 1,
     }
 }
+
+@pure
+fn result_or_zero(r: Result) -> i32 {
+    match r {
+        Result::Ok(x) => x,
+        Result::Err(_) => 0,
+    }
+}
+
+@pure
+fn result_or_neg(r: Result) -> i32 {
+    match r {
+        Result::Ok(x) => x,
+        Result::Err(_) => 0 - 1,
+    }
+}
+
+@pure
+fn result_eq_ok(r: Result, target: i32) -> i32 {
+    match r {
+        Result::Ok(x) => if x == target { 1 } else { 0 },
+        Result::Err(_) => 0,
+    }
+}
+
+@pure
+fn result_err_code_or(r: Result, default_v: i32) -> i32 {
+    match r {
+        Result::Ok(_) => default_v,
+        Result::Err(c) => c,
+    }
+}
