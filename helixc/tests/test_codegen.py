@@ -9894,6 +9894,65 @@ def test_stdlib_vec_last():
     assert code == 42, f"expected 42 (last=42, empty=0), got {code}"
 
 
+def test_stdlib_hashmap_count_key_in_range():
+    """Insert (1,_),(5,_),(10,_),(20,_); count_key in [3,15]=2; *21=42."""
+    src = """
+    fn main() -> i32 {
+        let m = hashmap_new(8);
+        hashmap_put(m, 8, 1, 100);
+        hashmap_put(m, 8, 5, 100);
+        hashmap_put(m, 8, 10, 100);
+        hashmap_put(m, 8, 20, 100);
+        hashmap_count_key_in_range(m, 8, 3, 15) * 21
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_hashmap_count_key_above():
+    """Insert (1,_),(5,_),(10,_); count > 4 = 2; *21=42."""
+    src = """
+    fn main() -> i32 {
+        let m = hashmap_new(8);
+        hashmap_put(m, 8, 1, 100);
+        hashmap_put(m, 8, 5, 100);
+        hashmap_put(m, 8, 10, 100);
+        hashmap_count_key_above(m, 8, 4) * 21
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_hashmap_count_key_below():
+    """Insert (1,_),(5,_),(10,_); count < 8 = 2; *21=42."""
+    src = """
+    fn main() -> i32 {
+        let m = hashmap_new(8);
+        hashmap_put(m, 8, 1, 100);
+        hashmap_put(m, 8, 5, 100);
+        hashmap_put(m, 8, 10, 100);
+        hashmap_count_key_below(m, 8, 8) * 21
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stdlib_hashmap_max_value_with_key():
+    """Insert (5, 42); max_value_with_key(5) = 42."""
+    src = """
+    fn main() -> i32 {
+        let m = hashmap_new(8);
+        hashmap_put(m, 8, 5, 42);
+        hashmap_max_value_with_key(m, 8, 5)
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
 def test_stdlib_tf1d_first():
     """first([42.0]) = 42.0_f32 (0x42280000); top byte 66; -24=42."""
     src = """

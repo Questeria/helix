@@ -573,3 +573,61 @@ fn hashmap_capacity(start: i32, cap: i32) -> i32 {
 fn hashmap_remaining_slots(start: i32, cap: i32) -> i32 {
     cap - hashmap_size(start, cap)
 }
+
+// hashmap_count_key_in_range(start, cap, lo, hi): @pure. Count of
+// occupied buckets whose key is in [lo, hi] inclusive.
+@pure
+fn hashmap_count_key_in_range(start: i32, cap: i32, lo: i32, hi: i32) -> i32 {
+    let mut i: i32 = 0;
+    let mut total: i32 = 0;
+    while i < cap {
+        let base = start + i * 3;
+        if __arena_get(base) == 1 {
+            let k = __arena_get(base + 1);
+            if k >= lo {
+                if k <= hi { total = total + 1; };
+            };
+        };
+        i = i + 1;
+    }
+    total
+}
+
+// hashmap_count_key_above(start, cap, threshold): @pure. Count of keys
+// greater than threshold.
+@pure
+fn hashmap_count_key_above(start: i32, cap: i32, threshold: i32) -> i32 {
+    let mut i: i32 = 0;
+    let mut total: i32 = 0;
+    while i < cap {
+        let base = start + i * 3;
+        if __arena_get(base) == 1 {
+            if __arena_get(base + 1) > threshold { total = total + 1; };
+        };
+        i = i + 1;
+    }
+    total
+}
+
+// hashmap_count_key_below(start, cap, threshold): @pure. Companion.
+@pure
+fn hashmap_count_key_below(start: i32, cap: i32, threshold: i32) -> i32 {
+    let mut i: i32 = 0;
+    let mut total: i32 = 0;
+    while i < cap {
+        let base = start + i * 3;
+        if __arena_get(base) == 1 {
+            if __arena_get(base + 1) < threshold { total = total + 1; };
+        };
+        i = i + 1;
+    }
+    total
+}
+
+// hashmap_max_value_with_key(start, cap, key_target): @pure. Returns
+// the value at key_target, or 0 if absent. Alias-y but symmetric with
+// the *_with_value family.
+@pure
+fn hashmap_max_value_with_key(start: i32, cap: i32, key_target: i32) -> i32 {
+    hashmap_get(start, cap, key_target, 0)
+}
