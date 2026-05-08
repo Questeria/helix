@@ -138,9 +138,53 @@ fn kw_fn_n(sb: i32) -> i32 { __arena_get(sb + 12) }
 fn kw_struct_s(sb: i32) -> i32 { __arena_get(sb + 13) }
 fn kw_struct_n(sb: i32) -> i32 { __arena_get(sb + 14) }
 // Stage 5: struct_table state — sb+15 = arena base offset of the
-// 9-slot region (3 entries x 3 fields), sb+16 = registered count.
+// 12-slot region (3 entries x 4 fields), sb+16 = registered count.
 fn struct_tab_base(sb: i32) -> i32 { __arena_get(sb + 15) }
 fn struct_tab_count(sb: i32) -> i32 { __arena_get(sb + 16) }
+// Stage 5 Iter B: var-to-struct binding table — sb+17 = base offset,
+// sb+18 = count. Each entry is 3 slots (var_name_s, var_name_l,
+// struct_idx). Cap 4 vars in Iter B; expand later. Used so that when
+// parse_primary's postfix branch sees `varname.IDENT`, it can resolve
+// IDENT to a numeric field offset via struct_tab_field_lookup.
+fn var_struct_tab_base(sb: i32) -> i32 { __arena_get(sb + 17) }
+fn var_struct_tab_count(sb: i32) -> i32 { __arena_get(sb + 18) }
+// sb+19 = "last_struct_idx" scratch slot. parse_struct_lit writes this
+// when it produces a struct lit; the surrounding let parser reads then
+// clears it (-1 = none) to associate the bound name with a struct id.
+fn last_struct_idx(sb: i32) -> i32 { __arena_get(sb + 19) }
+fn set_last_struct_idx(sb: i32, v: i32) -> i32 { __arena_set(sb + 19, v); 0 }
+fn var_struct_tab_add(sb: i32, name_s: i32, name_l: i32, struct_idx: i32) -> i32 {
+    let count = var_struct_tab_count(sb);
+    if count >= 4 {
+        0 - 1
+    } else {
+        let base = var_struct_tab_base(sb);
+        let entry = base + count * 3;
+        __arena_set(entry, name_s);
+        __arena_set(entry + 1, name_l);
+        __arena_set(entry + 2, struct_idx);
+        __arena_set(sb + 18, count + 1);
+        count
+    }
+}
+fn var_struct_tab_lookup(sb: i32, name_s: i32, name_l: i32) -> i32 {
+    let base = var_struct_tab_base(sb);
+    let count = var_struct_tab_count(sb);
+    let mut i: i32 = 0;
+    let mut found: i32 = 0 - 1;
+    while i < count {
+        let entry = base + i * 3;
+        let ns = __arena_get(entry);
+        let nl = __arena_get(entry + 1);
+        if byte_eq(name_s, name_l, ns, nl) == 1 {
+            found = __arena_get(entry + 2);
+            i = count;
+        } else {
+            i = i + 1;
+        };
+    }
+    found
+}
 // Append an entry. Returns the new index (0..2) on success, -1 on
 // overflow. Iter A cap is 3 structs; expand later if needed.
 // Iter B: 4-slot stride (name_s, name_l, arity, fields_ptr).
@@ -963,6 +1007,18 @@ fn struct_tab_init(sb: i32) -> i32 {
     0
 }
 
+// Stage 5 Iter B: var_struct_table region — 12 slots = 4 entries x 3
+// fields (var_name_s, var_name_l, struct_idx). Cap 4 vars; expand later.
+fn var_struct_tab_init(sb: i32) -> i32 {
+    let vs_base = __arena_push(0);
+    __arena_push(0); __arena_push(0); __arena_push(0); __arena_push(0);
+    __arena_push(0); __arena_push(0); __arena_push(0); __arena_push(0);
+    __arena_push(0); __arena_push(0); __arena_push(0);
+    __arena_set(sb + 17, vs_base);
+    __arena_set(sb + 18, 0);
+    0
+}
+
 // --------------------------------------------------------------
 // install_keywords: stash "let", "if", "else" bytes in the arena
 // and write their (start, len) into state_base+1..state_base+6.
@@ -1004,16 +1060,21 @@ fn install_keywords(sb: i32) -> i32 {
 // Reserves 7 state slots, then dispatches into parse_expr.
 // --------------------------------------------------------------
 fn parse_top(tok_base: i32) -> i32 {
-    // 17 state slots: cursor + 7 keyword (start, len) pairs +
-    // struct_table (base + count). Stage 5: slots 13/14 = struct
-    // keyword bytes pointer + length; slots 15/16 = struct_table
-    // base offset + count of registered structs.
+    // 20 state slots: cursor + 7 keyword (start, len) pairs +
+    // struct_table (base + count) + var_struct_table (base + count) +
+    // last_struct_idx scratch. Stage 5 Iter B: slots 17/18 = var->
+    // struct binding table; slot 19 = scratch carrying the last
+    // struct_idx parsed (so let-parsing can record `let p = Pt {...}`
+    // as a struct-typed binding).
     let cur_slot = __arena_push(0);
     __arena_push(0); __arena_push(0); __arena_push(0); __arena_push(0);
     __arena_push(0); __arena_push(0); __arena_push(0); __arena_push(0);
     __arena_push(0); __arena_push(0); __arena_push(0); __arena_push(0);
     __arena_push(0); __arena_push(0); __arena_push(0); __arena_push(0);
+    __arena_push(0); __arena_push(0); __arena_push(0);
     install_keywords(cur_slot);
+    var_struct_tab_init(cur_slot);
+    __arena_set(cur_slot + 19, 0 - 1);
     // Peek the first token. If it's `fn`, parse a function decl.
     // Otherwise treat the whole input as a single expression
     // (legacy mode) for backward compat with all existing tests.
