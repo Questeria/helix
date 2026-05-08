@@ -182,6 +182,53 @@ fn struct_tab_lookup(sb: i32, name_s: i32, name_l: i32) -> i32 {
     }
     found_arity
 }
+// Iter B: same as struct_tab_lookup but returns the entry INDEX
+// (0..count-1) instead of arity. -1 on miss. Needed so callers can
+// then drill into fields_ptr / arity at entry+2,+3.
+fn struct_tab_lookup_idx(sb: i32, name_s: i32, name_l: i32) -> i32 {
+    let base = struct_tab_base(sb);
+    let count = struct_tab_count(sb);
+    let mut i: i32 = 0;
+    let mut found: i32 = 0 - 1;
+    while i < count {
+        let entry = base + i * 4;
+        let ns = __arena_get(entry);
+        let nl = __arena_get(entry + 1);
+        if byte_eq(name_s, name_l, ns, nl) == 1 {
+            found = i;
+            i = count;
+        } else {
+            i = i + 1;
+        };
+    }
+    found
+}
+// Iter B: given a struct's table index and a field name, return the
+// 0-based field index, or -1 on miss / no fields region.
+fn struct_tab_field_lookup(sb: i32, struct_idx: i32, field_s: i32, field_l: i32) -> i32 {
+    let base = struct_tab_base(sb);
+    let entry = base + struct_idx * 4;
+    let arity = __arena_get(entry + 2);
+    let fields_ptr = __arena_get(entry + 3);
+    if fields_ptr == 0 {
+        0 - 1
+    } else {
+        let mut i: i32 = 0;
+        let mut found: i32 = 0 - 1;
+        while i < arity {
+            let pair = fields_ptr + i * 2;
+            let ns = __arena_get(pair);
+            let nl = __arena_get(pair + 1);
+            if byte_eq(field_s, field_l, ns, nl) == 1 {
+                found = i;
+                i = arity;
+            } else {
+                i = i + 1;
+            };
+        }
+        found
+    }
+}
 
 // --------------------------------------------------------------
 // AST builder.
