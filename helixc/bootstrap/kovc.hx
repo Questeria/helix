@@ -1039,6 +1039,7 @@ fn expr_type(idx: i32, bind_state: i32, bn_state: i32) -> i32 {
     else { if t == 40 { 11 }                          // AST_INTLIT_I16 (Stage 2.5c)
     else { if t == 41 { 8 }                           // AST_INTLIT_U16 (Stage 2.5c)
     else { if t == 42 { 4 }                           // AST_FLOATLIT_BF16 (Stage 1.5)
+    else { if t == 50 { 0 }                            // AST_TUPLE_LIT (Stage 4) — addr-shaped (i32)
     else { if t == 0 { 0 }                            // AST_INTLIT (i32)
     else { if t == 1 {                                // AST_VAR
         bind_lookup_type(bind_state, p1, p2)
@@ -1163,7 +1164,7 @@ fn expr_type(idx: i32, bind_state: i32, bn_state: i32) -> i32 {
                 }
             }
         }
-    } else { 0 }}}}}}}}}}}}}}}}}}}}}}}}}}}}}}
+    } else { 0 }}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}
 }
 
 // Phase 1.10 step 5c: type-inference on AST nodes. Returns 1 if the
@@ -2922,6 +2923,40 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         // high bytes zero. expr_type returns 8 (u16). Narrow movzx
         // load and masked store deferred.
         emit_ast_int(p1)
+    } else { if t == 50 {
+        // Stage 4 iteration A: AST_TUPLE_LIT (tag 50).
+        //   p1 = arity (number of elements)
+        //   p2 = head AST_TUPLE_CONS node index
+        //   p3 = unused (0)
+        // Codegen:
+        //   sub rsp, 8*arity      (allocate N 8-byte stack slots)
+        //   for each element i:
+        //     evaluate child -> eax
+        //     mov [rsp+i*8], eax  (4-byte store; high 4 bytes of slot unused)
+        //   mov rax, rsp          (rax = address of slot 0)
+        // Limitation: arity must be ≤ 15 because slot offsets (i*8) need
+        // to fit in signed disp8. Tuples beyond that are deferred.
+        let arity = p1;
+        let alloc_bytes = arity * 8;
+        // sub rsp, imm32  (REX.W + 81 /5 imm32 = 7 bytes)
+        emit_byte(0x48); emit_byte(0x81); emit_byte(0xEC);
+        emit_u32_le(alloc_bytes);
+        let mut total: i32 = 7;
+        let mut cur: i32 = p2;
+        let mut idx: i32 = 0;
+        while cur != 0 {
+            let child = __arena_get(cur + 1);
+            let n_child = emit_ast_code(child, bind_state, patch_state, bn_state);
+            // mov [rsp + idx*8], eax  (89 44 24 disp8 = 4 bytes)
+            emit_byte(0x89); emit_byte(0x44); emit_byte(0x24);
+            emit_byte(idx * 8);
+            total = total + n_child + 4;
+            idx = idx + 1;
+            cur = __arena_get(cur + 2);
+        }
+        // mov rax, rsp  (48 89 E0 = 3 bytes; rax now holds slot-0 ptr)
+        emit_byte(0x48); emit_byte(0x89); emit_byte(0xE0);
+        total + 3
     } else { if t == 42 {
         // Stage 1.5: AST_FLOATLIT_BF16 (tag 42). bf16 = f32 with the
         // low 16 mantissa bits truncated to zero. Compute the f32 IEEE
@@ -4193,7 +4228,7 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         // resulting binary to SIGILL — clear signal vs. silent 0.
         // Speedup #4 wire-in: AST_ERR / unhandled-tag trap id 99001.
         emit_trap_with_id(99001)
-    }}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}
+    }}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}
 }
 
 // --------------------------------------------------------------

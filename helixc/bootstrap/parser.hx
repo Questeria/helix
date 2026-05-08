@@ -674,10 +674,49 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
             }}
         }}}
     } else { if t == 3 {
+        // Stage 4 iteration A: tuple literal vs parenthesized expr.
+        // After the inner expr, peek for TK_COMMA (13). If found, this
+        // is a tuple literal — build a TUPLE_CONS chain. Otherwise it's
+        // a normal parenthesized expr.
         cur_advance(sb);
         let inner = parse_expr(tok_base, sb);
-        cur_advance(sb);     // ')'
-        inner
+        let nk = cur_get(sb);
+        let nt = tok_tag(tok_base, nk);
+        if nt == 13 {
+            // Tuple literal: walk comma-separated children, build
+            // TUPLE_CONS chain (head -> [child0, next] -> [child1, next] -> ...).
+            // mk_node tag 51 = AST_TUPLE_CONS, p1 = child_idx, p2 = next_idx.
+            cur_advance(sb);   // skip first ','
+            let mut head_idx: i32 = mk_node(51, inner, 0, 0);
+            let mut tail_idx: i32 = head_idx;
+            let mut arity: i32 = 1;
+            let mut keep: i32 = 1;
+            while keep == 1 {
+                // Allow trailing comma: peek after comma for ')'.
+                let pk = cur_get(sb);
+                let pt = tok_tag(tok_base, pk);
+                if pt == 4 { keep = 0; }
+                else {
+                    let child = parse_expr(tok_base, sb);
+                    let new_node = mk_node(51, child, 0, 0);
+                    // Patch previous tail's p2 to point to new_node.
+                    let prev_tail = tail_idx;
+                    __arena_set(prev_tail + 2, new_node);
+                    tail_idx = new_node;
+                    arity = arity + 1;
+                    let ck = cur_get(sb);
+                    let ct = tok_tag(tok_base, ck);
+                    if ct == 13 { cur_advance(sb); }     // skip ',' continue
+                    else { keep = 0; }
+                };
+            }
+            cur_advance(sb);   // skip ')'
+            // mk_node tag 50 = AST_TUPLE_LIT, p1 = arity, p2 = head_idx.
+            mk_node(50, arity, head_idx, 0)
+        } else {
+            cur_advance(sb);     // ')'
+            inner
+        }
     } else {
         // Audit-7 fix: don't advance past TK_EOF (tag 0). Without
         // this guard, a malformed input like `1 + (` walks the

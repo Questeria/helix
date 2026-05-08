@@ -2339,6 +2339,18 @@ fn main() -> i32 {
     assert compile_and_exec(
         "fn main() -> i32 { let x: bf16 = 1.5_bf16 ; let r: i32 = !x ; r + 41 }"
     ) == 132, "bf16 logical NOT traps with SIGILL"
+    # Stage 4 iteration A: tuple literal parse + minimal codegen.
+    # Parser: `(a, b, c)` is now AST_TUPLE_LIT (tag 50) holding a chain
+    # of AST_TUPLE_CONS (tag 51). Codegen: sub rsp, 8*arity; per-element
+    # store; mov rax, rsp. Tuple value is a stack pointer (i32-shaped).
+    # Without field access (next iteration) we can't read elements
+    # back, but we can verify parse + codegen + execution don't crash.
+    assert compile_and_exec(
+        "fn main() -> i32 { let _ = (10, 20, 30) ; 42 }"
+    ) == 42, "tuple LIT parses + compiles + runs (no-op smoke)"
+    assert compile_and_exec(
+        "fn main() -> i32 { let _ = (1, 2) ; 42 }"
+    ) == 42, "2-tuple smoke"
     # Stage 1.5 audit fix: bf16 comparison ops trap. Pre-fix:
     # AST_LT/GT/LE/GE/EQ/NE cascades had no is_bf16_expr check — bf16
     # operands fell through to integer compare on bit patterns. This is
