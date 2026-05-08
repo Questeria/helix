@@ -809,6 +809,80 @@ fn emit_movsx_eax_local_word(offset: i32) -> i32 {
     7
 }
 
+// AST_ASSIGN store dispatch. Audit follow-up Finding #4: factored out
+// of the deeply nested if/else in the t==11 arm because the host
+// parser hit its recursion budget when the chain grew past ~13 arms.
+//
+// Three entry points:
+//   - assign_store_i64_path: val_i64 == 1. Width-correct on i64 bind,
+//     trap 8001 otherwise.
+//   - assign_store_u64_path: val_u64 == 1. Width-correct on u64 bind,
+//     trap 8002 otherwise.
+//   - assign_store_general:  neither i64 nor u64 value. For each
+//     bind_ty arm, require val_ty == bind_ty (or trap with the
+//     bind-ty-specific id from 8005..8016). i32-into-i64 (8003) and
+//     i32-into-u64 (8004) are preserved from the pre-existing matrix.
+//     Unknown bind_ty falls back to the 4-byte store (legacy).
+
+@pure
+fn assign_store_i64_path(off: i32, bind_ty: i32) -> i32 {
+    if bind_ty == 3 { emit_mov_local_rax_64(off) }
+    else { emit_trap_with_id(8001) }
+}
+
+@pure
+fn assign_store_u64_path(off: i32, bind_ty: i32) -> i32 {
+    if bind_ty == 9 { emit_mov_local_rax_64(off) }
+    else { emit_trap_with_id(8002) }
+}
+
+@pure
+fn assign_store_general(off: i32, bind_ty: i32, val_ty: i32) -> i32 {
+    if bind_ty == 2 {
+        if val_ty == 2 { emit_mov_local_rax_64(off) }
+        else { emit_trap_with_id(8007) }
+    } else { if bind_ty == 3 {
+        emit_trap_with_id(8003)
+    } else { if bind_ty == 9 {
+        emit_trap_with_id(8004)
+    } else { if bind_ty == 7 {
+        if val_ty == 7 { emit_mov_local_al(off) }
+        else { emit_trap_with_id(8010) }
+    } else { if bind_ty == 10 {
+        if val_ty == 10 { emit_mov_local_al(off) }
+        else { emit_trap_with_id(8014) }
+    } else { if bind_ty == 8 {
+        if val_ty == 8 { emit_mov_local_ax(off) }
+        else { emit_trap_with_id(8011) }
+    } else { if bind_ty == 11 {
+        if val_ty == 11 { emit_mov_local_ax(off) }
+        else { emit_trap_with_id(8015) }
+    } else {
+        assign_store_general_4b(off, bind_ty, val_ty)
+    }}}}}}}
+}
+
+@pure
+fn assign_store_general_4b(off: i32, bind_ty: i32, val_ty: i32) -> i32 {
+    if bind_ty == 1 {
+        if val_ty == 1 { emit_mov_local_eax(off) }
+        else { emit_trap_with_id(8006) }
+    } else { if bind_ty == 6 {
+        if val_ty == 6 { emit_mov_local_eax(off) }
+        else { emit_trap_with_id(8012) }
+    } else { if bind_ty == 4 {
+        if val_ty == 4 { emit_mov_local_eax(off) }
+        else { emit_trap_with_id(8016) }
+    } else { if bind_ty == 0 {
+        if val_ty == 0 { emit_mov_local_eax(off) }
+        else { emit_trap_with_id(8005) }
+    } else {
+        // Unknown bind_ty (e.g. user struct, not yet typed): fall
+        // back to legacy 4-byte store. Pre-Finding-#4 behaviour.
+        emit_mov_local_eax(off)
+    }}}}
+}
+
 // --------------------------------------------------------------
 // Compile-time binding table: a stack of (name_start, name_len,
 // stack_offset) triples in the arena. We pass `bind_base` (start
@@ -1223,6 +1297,32 @@ fn is_u64_expr(idx: i32, bind_state: i32, bn_state: i32) -> i32 {
 // cascade, producing 32-bit int ops on float bit patterns — garbage.
 fn is_bf16_expr(idx: i32, bind_state: i32, bn_state: i32) -> i32 {
     if expr_type(idx, bind_state, bn_state) == 4 { 1 } else { 0 }
+}
+
+// Audit follow-up Finding #1: width-class helper used by AST_FN_DECL's
+// body-vs-ret-ty trap (id 14002). Returns the storage width in bytes
+// (1, 2, 4, 8) for a given type tag. Falls back to 4 (i32 default).
+//   tag 0  i32  -> 4
+//   tag 1  f32  -> 4
+//   tag 2  f64  -> 8
+//   tag 3  i64  -> 8
+//   tag 4  bf16 -> 2
+//   tag 6  u32  -> 4
+//   tag 7  u8   -> 1
+//   tag 8  u16  -> 2
+//   tag 9  u64  -> 8
+//   tag 10 i8   -> 1
+//   tag 11 i16  -> 2
+fn type_width_class(ty: i32) -> i32 {
+    if ty == 2 { 8 }
+    else { if ty == 3 { 8 }
+    else { if ty == 9 { 8 }
+    else { if ty == 4 { 2 }
+    else { if ty == 8 { 2 }
+    else { if ty == 11 { 2 }
+    else { if ty == 7 { 1 }
+    else { if ty == 10 { 1 }
+    else { 4 } } } } } } } }
 }
 
 // Phase 1.10 step 5c follow-on: fn_type_table maps fn names to their
@@ -4106,48 +4206,32 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
             n_val
         } else {
             let bind_ty = bind_lookup_type(bind_state, p1, p2);
+            let val_ty = expr_type(p3, bind_state, bn_state);
             // Stage 1 audit fixes + Stage 2.4: type-mismatch trap.
             // The 8-byte types (i64=3, u64=9) require width-matched
             // value+binding; mixed widths trap with ud2 to avoid silent
             // truncation or zero-extension bugs.
             // Speedup #4 wire-in: AST_LET body-vs-bind-ty trap ids
             // 8001-8004 cover the value/binding-type mismatches.
+            // Audit follow-up Finding #4: extend trap matrix to ALL
+            // bind_ty arms. Pre-fix, only val_i64/bind_ty=3 and
+            // val_u64/bind_ty=9 arms checked val_ty; other arms silently
+            // truncated (e.g. f32 stored to u8 slot kept low byte of
+            // f32 bit pattern). Trap-ids 8005..8016 cover one per
+            // bind_ty arm so the failing slot is identifiable.
+            //
+            // Implementation: factored out into assign_store_*_path helpers
+            // to keep per-call if-else nesting under the host parser's
+            // recursion budget (~13 levels would exceed it).
             let val_i64 = is_i64_expr(p3, bind_state, bn_state);
             let val_u64 = is_u64_expr(p3, bind_state, bn_state);
             let n_store = if val_i64 == 1 {
-                if bind_ty == 3 { emit_mov_local_rax_64(off) }
-                else { emit_trap_with_id(8001) }   // i64 value, non-i64 binding
+                assign_store_i64_path(off, bind_ty)
             } else { if val_u64 == 1 {
-                if bind_ty == 9 { emit_mov_local_rax_64(off) }
-                else { emit_trap_with_id(8002) }   // u64 value, non-u64 binding
-            } else { if bind_ty == 2 {
-                emit_mov_local_rax_64(off)
-            } else { if bind_ty == 3 {
-                // Stage 1 audit batch 5 fix: i32 value into i64 binding
-                // is NOT a safe widening — `mov eax, X` zero-extends to
-                // rax, so for negative i32 values the i64 slot ends up
-                // holding (val + 2^32) instead of val. Trap instead of
-                // silently producing wrong results. Mirrors batch 3's
-                // i64-into-i32 trap.
-                emit_trap_with_id(8003)            // i32 value, i64 binding
-            } else { if bind_ty == 9 {
-                // Stage 2.4 mirror: i32-into-u64 also traps.
-                emit_trap_with_id(8004)            // i32 value, u64 binding
-            } else { if bind_ty == 7 {
-                // Stage 2.5b/c stage 3: u8 binding → 1-byte store.
-                emit_mov_local_al(off)
-            } else { if bind_ty == 10 {
-                // i8 binding → 1-byte store.
-                emit_mov_local_al(off)
-            } else { if bind_ty == 8 {
-                // u16 binding → 2-byte store.
-                emit_mov_local_ax(off)
-            } else { if bind_ty == 11 {
-                // i16 binding → 2-byte store.
-                emit_mov_local_ax(off)
+                assign_store_u64_path(off, bind_ty)
             } else {
-                emit_mov_local_eax(off)
-            }}}}}}}}};
+                assign_store_general(off, bind_ty, val_ty)
+            }};
             n_val + n_store
         }
     } else { if t == 14 {
@@ -4585,6 +4669,24 @@ fn emit_elf_for_ast_to_path(ast_root: i32) -> i32 {
             // Speedup #4 wire-in: body-vs-ret-ty 8-byte mismatch trap id 14001.
             if body_is_8b != ret_wants_8b {
                 emit_trap_with_id(14001);
+            };
+            // Audit follow-up Finding #1 (softer width-only variant).
+            // The 14001 trap above only covers 8b vs !8b. This adds
+            // a width-class check that catches narrow-vs-wider mismatches
+            // missed by the original (e.g. `fn f() -> u8 { i32 }`,
+            // `fn f() -> bf16 { i32 }`, `fn f() -> f64 { i32 }`).
+            // We compare width-class (1/2/4/8 bytes) of body vs ret_ty.
+            // Same width = no trap (so i32 vs u32 vs f32 same class
+            // is allowed — narrow re-truncation at use site keeps that
+            // benign for the bootstrap source). Different widths trap
+            // 14002. The full-equality variant produces false positives
+            // in the existing bootstrap source; this width variant is
+            // strictly stricter than 14001 (catches all 14001 cases plus
+            // narrow-class mismatches) without breaking self-host.
+            let body_width = type_width_class(expr_type(fn_body, bind_state, bn_state));
+            let ret_width = type_width_class(fn_ret_ty);
+            if body_width != ret_width {
+                emit_trap_with_id(14002);
             };
             emit_epilogue();
             emit_ret();
