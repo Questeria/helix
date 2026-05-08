@@ -157,6 +157,27 @@ fn struct_tab_add(sb: i32, name_s: i32, name_l: i32, arity: i32) -> i32 {
         count
     }
 }
+// Look up a struct by name. Returns the recorded arity (>= 0) on hit,
+// or -1 on miss. Used by parse_primary to detect `IDENT { ... }` as
+// a struct literal vs a regular IDENT/block.
+fn struct_tab_lookup(sb: i32, name_s: i32, name_l: i32) -> i32 {
+    let base = struct_tab_base(sb);
+    let count = struct_tab_count(sb);
+    let mut i: i32 = 0;
+    let mut found_arity: i32 = 0 - 1;
+    while i < count {
+        let entry = base + i * 3;
+        let ns = __arena_get(entry);
+        let nl = __arena_get(entry + 1);
+        if byte_eq(name_s, name_l, ns, nl) == 1 {
+            found_arity = __arena_get(entry + 2);
+            i = count;
+        } else {
+            i = i + 1;
+        };
+    }
+    found_arity
+}
 
 // --------------------------------------------------------------
 // AST builder.
