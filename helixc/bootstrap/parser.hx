@@ -143,16 +143,20 @@ fn struct_tab_base(sb: i32) -> i32 { __arena_get(sb + 15) }
 fn struct_tab_count(sb: i32) -> i32 { __arena_get(sb + 16) }
 // Append an entry. Returns the new index (0..2) on success, -1 on
 // overflow. Iter A cap is 3 structs; expand later if needed.
+// Iter B: 4-slot stride (name_s, name_l, arity, fields_ptr).
+// fields_ptr defaults to 0 here; parse_struct_decl will overwrite
+// once the field-names region is allocated.
 fn struct_tab_add(sb: i32, name_s: i32, name_l: i32, arity: i32) -> i32 {
     let count = struct_tab_count(sb);
     if count >= 3 {
         0 - 1
     } else {
         let base = struct_tab_base(sb);
-        let entry = base + count * 3;
+        let entry = base + count * 4;
         __arena_set(entry, name_s);
         __arena_set(entry + 1, name_l);
         __arena_set(entry + 2, arity);
+        __arena_set(entry + 3, 0);
         __arena_set(sb + 16, count + 1);
         count
     }
@@ -166,7 +170,7 @@ fn struct_tab_lookup(sb: i32, name_s: i32, name_l: i32) -> i32 {
     let mut i: i32 = 0;
     let mut found_arity: i32 = 0 - 1;
     while i < count {
-        let entry = base + i * 3;
+        let entry = base + i * 4;
         let ns = __arena_get(entry);
         let nl = __arena_get(entry + 1);
         if byte_eq(name_s, name_l, ns, nl) == 1 {
@@ -898,13 +902,15 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
     }}}}}}}}}}}}}}}
 }
 
-// Stage 5: struct_table region — 9 slots = 3 entries x 3 fields
-// (name_s, name_l, arity). Cap of 3 structs is enough for Iter A
-// testing; expand to 32 entries later if needed.
+// Stage 5 Iter B: struct_table region — 12 slots = 3 entries x 4 fields
+// (name_s, name_l, arity, fields_ptr). fields_ptr is 0 in Iter A; Iter B
+// fills it with an arena offset to a per-struct field-names region built
+// during parse_struct_decl, used to resolve `p.IDENT` -> field index.
 fn struct_tab_init(sb: i32) -> i32 {
     let st_base = __arena_push(0);
     __arena_push(0); __arena_push(0); __arena_push(0); __arena_push(0);
     __arena_push(0); __arena_push(0); __arena_push(0); __arena_push(0);
+    __arena_push(0); __arena_push(0); __arena_push(0);
     __arena_set(sb + 15, st_base);
     __arena_set(sb + 16, 0);
     0
