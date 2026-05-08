@@ -2932,8 +2932,9 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         // = sign + 8-bit exp + 7-bit mantissa; low 16 bits = 0).
         // Stage 1.5 audit fix: overflow guard. parse_float_bits uses
         // i32 accumulators internally; > 9 digits silently wraps.
+        // Speedup #4 wire-in: bf16 lit overflow trap id 42002.
         let digits = count_float_digits(p1, p2);
-        if digits > 9 { emit_ud2_trap() } else {
+        if digits > 9 { emit_trap_with_id(42002) } else {
             let bits = parse_float_bits(p1, p2);
             let bf16_bits = bits & 0 - 65536;
             emit_ast_int(bf16_bits)
@@ -2949,8 +2950,9 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         // shared with t==42 bf16 literal arm).
         // Stage 1.5 audit fix: overflow guard. parse_float_bits uses
         // i32 accumulators; > 9 digits silently wraps to garbage bits.
+        // Speedup #4 wire-in: f32 lit overflow trap id 27002.
         let digits = count_float_digits(p1, p2);
-        if digits > 9 { emit_ud2_trap() } else {
+        if digits > 9 { emit_trap_with_id(27002) } else {
             emit_ast_int(parse_float_bits(p1, p2))
         }
     } else { if t == 34 {
@@ -4442,8 +4444,9 @@ fn emit_elf_for_ast_to_path(ast_root: i32) -> i32 {
             let body_is_u64 = is_u64_expr(fn_body, bind_state, bn_state);
             let body_is_8b = if body_is_i64 == 1 { 1 } else { if body_is_u64 == 1 { 1 } else { 0 } };
             let ret_wants_8b = if fn_ret_ty == 3 { 1 } else { if fn_ret_ty == 9 { 1 } else { 0 } };
+            // Speedup #4 wire-in: body-vs-ret-ty 8-byte mismatch trap id 14001.
             if body_is_8b != ret_wants_8b {
-                emit_ud2_trap();
+                emit_trap_with_id(14001);
             };
             emit_epilogue();
             emit_ret();
