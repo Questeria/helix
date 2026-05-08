@@ -814,6 +814,18 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
     }}}}}}}}}}}}}}}
 }
 
+// Stage 5: struct_table region — 9 slots = 3 entries x 3 fields
+// (name_s, name_l, arity). Cap of 3 structs is enough for Iter A
+// testing; expand to 32 entries later if needed.
+fn struct_tab_init(sb: i32) -> i32 {
+    let st_base = __arena_push(0);
+    __arena_push(0); __arena_push(0); __arena_push(0); __arena_push(0);
+    __arena_push(0); __arena_push(0); __arena_push(0); __arena_push(0);
+    __arena_set(sb + 15, st_base);
+    __arena_set(sb + 16, 0);
+    0
+}
+
 // --------------------------------------------------------------
 // install_keywords: stash "let", "if", "else" bytes in the arena
 // and write their (start, len) into state_base+1..state_base+6.
@@ -846,6 +858,7 @@ fn install_keywords(sb: i32) -> i32 {
     __arena_push(117); __arena_push(99); __arena_push(116);
     __arena_set(sb + 13, struct_s);
     __arena_set(sb + 14, 6);
+    struct_tab_init(sb);
     0
 }
 
@@ -854,13 +867,15 @@ fn install_keywords(sb: i32) -> i32 {
 // Reserves 7 state slots, then dispatches into parse_expr.
 // --------------------------------------------------------------
 fn parse_top(tok_base: i32) -> i32 {
-    // 15 state slots: cursor + 7 keyword (start, len) pairs.
-    // Stage 5: added struct keyword (slots 13/14).
+    // 17 state slots: cursor + 7 keyword (start, len) pairs +
+    // struct_table (base + count). Stage 5: slots 13/14 = struct
+    // keyword bytes pointer + length; slots 15/16 = struct_table
+    // base offset + count of registered structs.
     let cur_slot = __arena_push(0);
     __arena_push(0); __arena_push(0); __arena_push(0); __arena_push(0);
     __arena_push(0); __arena_push(0); __arena_push(0); __arena_push(0);
     __arena_push(0); __arena_push(0); __arena_push(0); __arena_push(0);
-    __arena_push(0); __arena_push(0);
+    __arena_push(0); __arena_push(0); __arena_push(0); __arena_push(0);
     install_keywords(cur_slot);
     // Peek the first token. If it's `fn`, parse a function decl.
     // Otherwise treat the whole input as a single expression
