@@ -3145,6 +3145,9 @@ fn parse_top(tok_base: i32) -> i32 {
     // Stage 14: slots 70..71 = gr_rev_pending base/count. Region for
     // pending grad_rev_all-call list lives at the offset stored in slot 70.
     __arena_push(0); __arena_push(0);
+    // Stage 14: slots 72..73 = bucket head/count for adjoint propagation
+    // during grad_rev_pass (propagate_adj writes here, sum_bucket reads).
+    __arena_push(0); __arena_push(0);
     install_keywords(cur_slot);
     var_struct_tab_init(cur_slot);
     var_enum_tab_init(cur_slot);
@@ -3986,6 +3989,174 @@ fn differentiate(expr_idx: i32, var_s: i32, var_l: i32) -> i32 {
     } } } } } } } } } }
 }
 
+// Stage 14: reverse-mode propagator for ONE target param.
+//
+// Walks `expr_idx` top-down with a current adjoint expression `adj`.
+// At AST_VAR leaves matching (var_s, var_l), appends `adj` to the
+// bucket chain (head idx returned via out_head_slot). At binary ops,
+// splits the adjoint per local Jacobian and recurses into both
+// children with the per-side adjoint:
+//
+//   ADD(a, b), adj A:    propagate A to a, A to b (shared)
+//   SUB(a, b), adj A:    A to a, -A to b
+//   MUL(a, b), adj A:    A*b to a, A*a to b
+//   DIV(a, b), adj A:    A/b to a, -(A*a)/(b*b) to b
+//   NEG(a), adj A:       -A to a
+//
+// Bucket: a singly-linked list whose head index is stored in slot
+// `out_head_slot` (we use parser scratch slot sb+72 = bucket_head,
+// sb+73 = bucket_count). Each bucket node is `(expr_idx, next)` —
+// reuse AST_ARG (tag 17) for the cell shape: slot 1 = expr_idx,
+// slot 2 = next, slot 3 = unused. Capacity cap 32 bucket entries
+// per param (trap 89001 if exceeded).
+//
+// Compared with forward-mode `differentiate`, the result for any
+// single param is mathematically identical for scalar-output loss
+// — the ALGORITHMIC shape is what differs. Forward repeatedly walks
+// the body once per param; reverse walks once and deposits into all
+// params' buckets. This implementation walks once per target param
+// (so for grad_rev_all with N params, we walk N times); a future
+// optimization could simultaneously deposit into N buckets in one
+// walk. For now the structural correctness — top-down adjoint
+// propagation — is what matters.
+fn bucket_head_slot(sb: i32) -> i32  { __arena_get(sb + 72) }
+fn bucket_count_slot(sb: i32) -> i32 { __arena_get(sb + 73) }
+fn set_bucket_head(sb: i32, v: i32) -> i32  { __arena_set(sb + 72, v); 0 }
+fn set_bucket_count(sb: i32, v: i32) -> i32 { __arena_set(sb + 73, v); 0 }
+fn bucket_reset(sb: i32) -> i32 {
+    set_bucket_head(sb, 0);
+    set_bucket_count(sb, 0);
+    0
+}
+// Append (expr_idx) to the bucket. Returns the bucket node idx (or
+// 0 on overflow). Uses AST_ARG (tag 17) shape for the cell.
+fn bucket_append(sb: i32, expr_idx: i32) -> i32 {
+    let cnt = bucket_count_slot(sb);
+    if cnt >= 32 {
+        mk_node(99, 89001, 0, 0)
+    } else {
+        let cell = mk_node(17, expr_idx, 0, 0);
+        let head = bucket_head_slot(sb);
+        if head == 0 {
+            set_bucket_head(sb, cell);
+        } else {
+            // Walk to tail.
+            let mut walk: i32 = head;
+            let mut wkeep: i32 = 1;
+            while wkeep == 1 {
+                let nx = __arena_get(walk + 2);
+                if nx == 0 { wkeep = 0; } else { walk = nx; };
+            }
+            __arena_set(walk + 2, cell);
+        };
+        set_bucket_count(sb, cnt + 1);
+        cell
+    }
+}
+
+// Recursive adjoint propagator. Walks node, deposits contributions
+// into bucket. Returns 0; side-effect via bucket.
+fn propagate_adj(sb: i32, node: i32, adj: i32, var_s: i32, var_l: i32) -> i32 {
+    let t = __arena_get(node);
+    // Literals: no contribution.
+    if t == 0 { 0 }
+    else { if t == 27 { 0 }
+    else { if t == 34 { 0 }
+    else { if t == 35 { 0 }
+    else { if t == 1 {
+        // AST_VAR. If name matches target param, append adj.
+        let n_s = __arena_get(node + 1);
+        let n_l = __arena_get(node + 2);
+        if byte_eq(n_s, n_l, var_s, var_l) == 1 {
+            bucket_append(sb, adj);
+        };
+        0
+    } else { if t == 2 {
+        // AST_ADD: adj_l = adj, adj_r = adj.
+        let l = __arena_get(node + 1);
+        let r = __arena_get(node + 2);
+        propagate_adj(sb, l, adj, var_s, var_l);
+        propagate_adj(sb, r, adj, var_s, var_l);
+        0
+    } else { if t == 3 {
+        // AST_SUB: adj_l = adj, adj_r = -adj.
+        let l = __arena_get(node + 1);
+        let r = __arena_get(node + 2);
+        propagate_adj(sb, l, adj, var_s, var_l);
+        let neg_adj = mk_node(9, adj, 0, 0);
+        propagate_adj(sb, r, neg_adj, var_s, var_l);
+        0
+    } else { if t == 4 {
+        // AST_MUL: adj_l = adj * r, adj_r = adj * l.
+        // CRITICAL: build adj_l/adj_r BEFORE recursing so the AST node
+        // alloc lives at a stable index.
+        let l = __arena_get(node + 1);
+        let r = __arena_get(node + 2);
+        let adj_l = mk_node(4, adj, r, 0);
+        let adj_r = mk_node(4, adj, l, 0);
+        propagate_adj(sb, l, adj_l, var_s, var_l);
+        propagate_adj(sb, r, adj_r, var_s, var_l);
+        0
+    } else { if t == 5 {
+        // AST_DIV: adj_l = adj / r, adj_r = -(adj * l) / (r * r).
+        let l = __arena_get(node + 1);
+        let r = __arena_get(node + 2);
+        let adj_l = mk_node(5, adj, r, 0);
+        let r_sq = mk_node(4, r, r, 0);
+        let al = mk_node(4, adj, l, 0);
+        let div = mk_node(5, al, r_sq, 0);
+        let adj_r = mk_node(9, div, 0, 0);
+        propagate_adj(sb, l, adj_l, var_s, var_l);
+        propagate_adj(sb, r, adj_r, var_s, var_l);
+        0
+    } else { if t == 9 {
+        // AST_NEG: adj_inner = -adj.
+        let inner = __arena_get(node + 1);
+        let neg_adj = mk_node(9, adj, 0, 0);
+        propagate_adj(sb, inner, neg_adj, var_s, var_l);
+        0
+    } else {
+        // Unsupported (CALL, IF, WHILE, LET, ...): Phase-0 trap 88001.
+        // We don't have a way to surface this from inside the recursion,
+        // so we simply append a poison expr to the bucket; the caller's
+        // outer logic will let codegen surface it.
+        bucket_append(sb, mk_node(99, 88001, 0, 0));
+        0
+    } } } } } } } } } }
+}
+
+// Sum the bucket chain into a single expression (chain of binary +).
+// Empty bucket → fresh 0.0_f64 literal. Single entry → just that entry.
+fn sum_bucket(sb: i32) -> i32 {
+    let head = bucket_head_slot(sb);
+    if head == 0 {
+        mk_zero_f64()
+    } else {
+        let first_expr = __arena_get(head + 1);
+        let mut acc: i32 = first_expr;
+        let mut walk: i32 = __arena_get(head + 2);
+        let mut wkeep: i32 = 1;
+        while wkeep == 1 {
+            if walk == 0 { wkeep = 0; } else {
+                let cell_expr = __arena_get(walk + 1);
+                acc = mk_node(2, acc, cell_expr, 0);
+                walk = __arena_get(walk + 2);
+            };
+        }
+        acc
+    }
+}
+
+// Reverse-mode top-level: differentiate `expr_idx` w.r.t. (var_s, var_l)
+// by seeding adjoint = 1.0_f64, walking with propagate_adj, then summing
+// the bucket. Returns the (un-simplified) derivative AST idx.
+fn differentiate_reverse_one(sb: i32, expr_idx: i32, var_s: i32, var_l: i32) -> i32 {
+    bucket_reset(sb);
+    let seed = mk_one_f64();
+    propagate_adj(sb, expr_idx, seed, var_s, var_l);
+    sum_bucket(sb)
+}
+
 // Bottom-up algebraic simplifier for the differentiate output. Folds
 // 0+x=x, x+0=x, x-0=x, 0-x=-x, 0*x=0, 1*x=x, x*1=x, -(-x)=x, -0=0,
 // and constant-folds two literal-zero / literal-one operands into a
@@ -4230,9 +4401,14 @@ fn grad_rev_pass(sb: i32, head: i32) -> i32 {
                         mk_node(99, 88003, 0, 0)
                     }
                 } else { trap_idx };
+                // Stage 14c: real reverse-mode adjoint propagation.
+                // Walk body top-down with adjoint, accumulate into the
+                // bucket for `var_s/var_l`, then sum. Mathematically
+                // identical to forward-mode `differentiate` for scalar
+                // output, but the algorithmic shape is true reverse.
                 let deriv_raw = if have_param == 1 {
                     if valid_field == 1 {
-                        differentiate(body_to_diff, var_s, var_l)
+                        differentiate_reverse_one(sb, body_to_diff, var_s, var_l)
                     } else { body_to_diff }
                 } else { body_to_diff };
                 let deriv = if have_param == 1 {
