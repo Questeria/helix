@@ -547,25 +547,58 @@ type-system work.
 | 3 | RESOLVED | 7f9db80 — AST_VAR off==0 guard, trap 1001 |
 | 4 | RESOLVED | 6aaec01 — full val_ty/bind_ty trap matrix 8005..8016 |
 | 5 | RESOLVED | f8db565 — u64 SHL/SHR via emit_shl/sar_rax_cl_64; float traps 32001/32010/32040, 33001/33010/33040 |
-| 6 | DEFERRED | AST_CALL arity-mismatch trap 16003 fires on real self-host calls. Requires audit of bootstrap source for arity-deficient calls (or off-by-one in fn_type_table_lookup_params encoding). Investigation needed before fix can land. |
+| 6 | RESOLVED | 0ba85b4 + 8e8bb44 — trap 16003 with FLAT let-prefix pattern (Hypothesis #2 confirmed: deeply-nested if-stmt strained host parser; no real arity mismatches in self-host source) |
 | 7 | RESOLVED | be751cb — TUPLE_LIT/FIELD disp8 wrap traps 50001/52001, flat prefix-trap pattern |
-| 8 | DEFERRED | Comparison narrow-type mismatch trap 6052/19052/... fires on real self-host comparisons (likely u8/i8 vs i32 in helper functions). Same root cause as #6: bootstrap source has type-mismatched comparisons. Investigation needed. |
+| 8 | DEFERRED | Investigation 2026-05-08: trap 6052 at AST_LT does NOT trigger 16003-style miscompilation of simple unrelated programs (5 < 2, 100 - 50 - 8 work fine), and bootstrap pipeline test passes. **HOWEVER**, the self-host LOOP test (test_bootstrap_kovc_self_host_loop) crashes K2 with SIGSEGV (exit 139), meaning K2 = the compiler-of-compiler built from K1 produces broken binaries. Adding even ONE recursion-safe-looking trap at the deepest AST_LT else branch crosses the recursion budget when the WHOLE compiler is being processed. Root cause still parser recursion budget but at a different threshold than #6. Defer until host parser is reimplemented in Helix itself (Phase 1). |
 
-## Deferred findings — investigation plan
+## Deferred findings — investigation conclusion (2026-05-08)
 
-For Findings #6 and #8, the trap reveals real bootstrap-source bugs. To
-land them, do one of:
+Investigation revealed the "fires on real self-host calls/comparisons"
+claim from the original DEFERRED status was a **misdiagnosis**. The
+actual root cause for Finding #6 was the host parser (helixc-Python)
+recursion budget being strained by the deeply-nested if-stmt pattern
+the original fix used:
 
-1. **Bootstrap source audit:** grep self-host for arity-mismatched calls
-   and narrow-type comparisons; fix at the source. Slow but correct.
-2. **Soft-trap variant:** trap only when the mismatch is provably
-   dangerous (e.g., signed/unsigned mismatch, or width differs by ≥2x).
-   Skip cases that signed-32 cmp handles correctly. Less complete.
-3. **Type-table audit:** verify fn_type_table_lookup_params encoding is
-   correct (no off-by-one in pp_count). May explain #6 directly.
+```
+if pp_count > 0 {                       // BAD: nested if-stmt
+    if arg_count != pp_count {          // (no else branch)
+        emit_trap_with_id(16003);
+    };
+};
+```
 
-Until either is done, the documented gap remains a known silent-corruption
-window that doesn't fire in the existing self-host or test suite.
+This pattern miscompiled unrelated programs (5 < 2, 100 - 50 - 8, etc.)
+even though those programs have no calls — the trap was emitted at
+WRONG offsets in the bootstrap binary because the parser produced a
+malformed AST. The flat let-prefix pattern is recursion-safe:
+
+```
+let n_arity_trap = if pp_count > 0 {
+    if arg_count != pp_count {
+        emit_trap_with_id(16003)
+    } else { 0 }
+} else { 0 };
+bytes_emitted = bytes_emitted + n_arity_trap;
+```
+
+For Finding #8, the same flat pattern at AST_LT (let lt_ty =
+expr_type(...); let rt_ty = ...; if lt_ty != rt_ty { trap } else
+{ fallthrough }) PASSES the bootstrap_kovc_full_pipeline_arithmetic
+test, but FAILS test_bootstrap_kovc_self_host_loop (K2 = compiler
+compiled by K1 from kovc.hx source crashes with SIGSEGV). The
+recursion budget threshold is exceeded somewhere when K1 compiles
+the FULL kovc.hx (all 6 comparison ops + the rest of the file) —
+but a smaller test program with simpler comparisons compiles fine.
+This means simple `<` programs compiled via the modified bootstrap
+work, but the full bootstrap source itself can't be recompiled by
+its own modified self.
+
+Verified hypothesis for Finding #6: **#2 (parser recursion budget)**.
+For Finding #8, also #2 but at a different threshold. Hypothesis #1
+(bootstrap source bugs) and #3 (expr_type inconsistency or
+fn_type_table off-by-one) ruled out by direct grep + code review for
+both findings. No narrow-type literals (u8/u16/i8/i16/bf16) exist
+in self-host comparisons — the trap CANNOT fire on real source.
 
 Lesson learned: the host parser (helixc-Python) has a recursion budget
 that flat patterns navigate well but deep wrap-with-if-else patterns
