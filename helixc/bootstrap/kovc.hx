@@ -3108,7 +3108,8 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         let no = emit_pop_rax();
         let l_f = is_f32_expr(p1, bind_state, bn_state);
         let r_f = is_f32_expr(p2, bind_state, bn_state);
-        let na = if l_bf == 1 { emit_ud2_trap() } else { if r_bf == 1 { emit_ud2_trap() } else {
+        // Speedup #4 wire-in: bf16 trap with id = 2001 (AST_ADD * 1000 + 1).
+        let na = if l_bf == 1 { emit_trap_with_id(2001) } else { if r_bf == 1 { emit_trap_with_id(2001) } else {
             if l_d == 1 {
                 if r_d == 1 { emit_addsd() } else { emit_ud2_trap() }
             } else { if r_d == 1 { emit_ud2_trap() } else {
@@ -3152,7 +3153,8 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         let no = emit_pop_rax();
         let l_f = is_f32_expr(p1, bind_state, bn_state);
         let r_f = is_f32_expr(p2, bind_state, bn_state);
-        let na = if l_bf == 1 { emit_ud2_trap() } else { if r_bf == 1 { emit_ud2_trap() } else {
+        // Speedup #4 wire-in: bf16 trap id = 3001 (AST_SUB * 1000 + 1).
+        let na = if l_bf == 1 { emit_trap_with_id(3001) } else { if r_bf == 1 { emit_trap_with_id(3001) } else {
             if l_d == 1 {
                 if r_d == 1 { emit_subsd() } else { emit_ud2_trap() }
             } else { if r_d == 1 { emit_ud2_trap() } else {
@@ -3201,7 +3203,8 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         let no = emit_pop_rax();
         let l_f = is_f32_expr(p1, bind_state, bn_state);
         let r_f = is_f32_expr(p2, bind_state, bn_state);
-        let na = if l_bf == 1 { emit_ud2_trap() } else { if r_bf == 1 { emit_ud2_trap() } else {
+        // Speedup #4 wire-in: bf16 trap id = 4001 (AST_MUL * 1000 + 1).
+        let na = if l_bf == 1 { emit_trap_with_id(4001) } else { if r_bf == 1 { emit_trap_with_id(4001) } else {
             if l_d == 1 {
                 if r_d == 1 { emit_mulsd() } else { emit_ud2_trap() }
             } else { if r_d == 1 { emit_ud2_trap() } else {
@@ -3255,7 +3258,8 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         let r_f = is_f32_expr(p2, bind_state, bn_state);
         let l_u32 = is_u32_expr(p1, bind_state, bn_state);
         let r_u32 = is_u32_expr(p2, bind_state, bn_state);
-        let na = if l_bf == 1 { emit_ud2_trap() } else { if r_bf == 1 { emit_ud2_trap() } else {
+        // Speedup #4 wire-in: bf16 trap id = 5001 (AST_DIV * 1000 + 1).
+        let na = if l_bf == 1 { emit_trap_with_id(5001) } else { if r_bf == 1 { emit_trap_with_id(5001) } else {
             if l_d == 1 {
                 if r_d == 1 { emit_divsd() } else { emit_ud2_trap() }
             } else { if r_d == 1 { emit_ud2_trap() } else {
@@ -3314,7 +3318,8 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         let no = emit_pop_rax();
         let l_f = is_f32_expr(p1, bind_state, bn_state);
         let r_f = is_f32_expr(p2, bind_state, bn_state);
-        let na = if l_bf == 1 { emit_ud2_trap() } else { if r_bf == 1 { emit_ud2_trap() } else {
+        // Speedup #4 wire-in: bf16 trap id = 24001 (AST_MOD * 1000 + 1).
+        let na = if l_bf == 1 { emit_trap_with_id(24001) } else { if r_bf == 1 { emit_trap_with_id(24001) } else {
             if l_d == 1 {
                 // f64 % f64 → ud2 (no SSE remainder); mixed → ud2.
                 emit_ud2_trap()
@@ -3361,7 +3366,8 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         } else { if is_f32_expr(p1, bind_state, bn_state) == 1 {
             emit_ast_fneg_suffix()
         } else { if is_bf16_expr(p1, bind_state, bn_state) == 1 {
-            emit_ud2_trap()
+            // Speedup #4 wire-in: bf16 trap id = 9001 (AST_NEG * 1000 + 1).
+            emit_trap_with_id(9001)
         } else {
             emit_ast_neg_suffix()
         }}}};
@@ -3390,7 +3396,8 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         } else { if is_f64_expr(p1, bind_state, bn_state) == 1 {
             emit_not_rax_64()
         } else { if is_bf16_expr(p1, bind_state, bn_state) == 1 {
-            emit_ud2_trap()
+            // Speedup #4 wire-in: bf16 trap id = 26001 (AST_BNOT * 1000 + 1).
+            emit_trap_with_id(26001)
         } else {
             emit_ast_bnot_suffix()
         }}}};
@@ -3421,7 +3428,8 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
                          else { if inner_u64 == 1 { 1 }
                          else { if inner_f64 == 1 { 1 } else { 0 } } };
         let nn = if inner_bf == 1 {
-            emit_ud2_trap()
+            // Speedup #4 wire-in: bf16 trap id = 31001 (AST_NOT * 1000 + 1).
+            emit_trap_with_id(31001)
         } else { if inner_wide == 1 {
             emit_ast_not_suffix_64()
         } else {
@@ -3533,7 +3541,8 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         let r_u32 = is_u32_expr(p2, bind_state, bn_state);
         // Stage 2.2: 5-way LT dispatch — u32 < u32 uses `setb` (unsigned).
         // Stage 2.4b: 6-way — u64 < u64 uses REX.W cmp + setb.
-        let na = if l_bf == 1 { emit_ud2_trap() } else { if r_bf == 1 { emit_ud2_trap() } else {
+        // Speedup #4 wire-in: bf16 trap id = 6001 (AST_LT * 1000 + 1).
+        let na = if l_bf == 1 { emit_trap_with_id(6001) } else { if r_bf == 1 { emit_trap_with_id(6001) } else {
             if l_d == 1 {
                 if r_d == 1 { emit_ssen_lt_dbl() } else { emit_ud2_trap() }
             } else { if r_d == 1 { emit_ud2_trap() } else {
@@ -3580,7 +3589,8 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         let r_u32 = is_u32_expr(p2, bind_state, bn_state);
         // Stage 2.2: 5-way GT dispatch — u32 > u32 uses `seta` (unsigned).
         // Stage 2.4b: 6-way — u64 > u64 uses REX.W cmp + seta.
-        let na = if l_bf == 1 { emit_ud2_trap() } else { if r_bf == 1 { emit_ud2_trap() } else {
+        // Speedup #4 wire-in: bf16 trap id = 19001 (AST_GT * 1000 + 1).
+        let na = if l_bf == 1 { emit_trap_with_id(19001) } else { if r_bf == 1 { emit_trap_with_id(19001) } else {
             if l_d == 1 {
                 if r_d == 1 { emit_ssen_gt_dbl() } else { emit_ud2_trap() }
             } else { if r_d == 1 { emit_ud2_trap() } else {
@@ -3625,7 +3635,8 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         let no = emit_pop_rax();
         let l_f = is_f32_expr(p1, bind_state, bn_state);
         let r_f = is_f32_expr(p2, bind_state, bn_state);
-        let na = if l_bf == 1 { emit_ud2_trap() } else { if r_bf == 1 { emit_ud2_trap() } else {
+        // Speedup #4 wire-in: bf16 trap id = 20001 (AST_EQ * 1000 + 1).
+        let na = if l_bf == 1 { emit_trap_with_id(20001) } else { if r_bf == 1 { emit_trap_with_id(20001) } else {
             if l_d == 1 {
                 if r_d == 1 { emit_ssen_eq_dbl() } else { emit_ud2_trap() }
             } else { if r_d == 1 { emit_ud2_trap() } else {
@@ -3666,7 +3677,8 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         let no = emit_pop_rax();
         let l_f = is_f32_expr(p1, bind_state, bn_state);
         let r_f = is_f32_expr(p2, bind_state, bn_state);
-        let na = if l_bf == 1 { emit_ud2_trap() } else { if r_bf == 1 { emit_ud2_trap() } else {
+        // Speedup #4 wire-in: bf16 trap id = 21001 (AST_NE * 1000 + 1).
+        let na = if l_bf == 1 { emit_trap_with_id(21001) } else { if r_bf == 1 { emit_trap_with_id(21001) } else {
             if l_d == 1 {
                 if r_d == 1 { emit_ssen_ne_dbl() } else { emit_ud2_trap() }
             } else { if r_d == 1 { emit_ud2_trap() } else {
@@ -3709,7 +3721,8 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         let r_u32 = is_u32_expr(p2, bind_state, bn_state);
         // Stage 2.2: 5-way LE dispatch — u32 <= u32 uses `setbe` (unsigned).
         // Stage 2.4b: 6-way — u64 <= u64 uses REX.W cmp + setbe.
-        let na = if l_bf == 1 { emit_ud2_trap() } else { if r_bf == 1 { emit_ud2_trap() } else {
+        // Speedup #4 wire-in: bf16 trap id = 22001 (AST_LE * 1000 + 1).
+        let na = if l_bf == 1 { emit_trap_with_id(22001) } else { if r_bf == 1 { emit_trap_with_id(22001) } else {
             if l_d == 1 {
                 if r_d == 1 { emit_ssen_le_dbl() } else { emit_ud2_trap() }
             } else { if r_d == 1 { emit_ud2_trap() } else {
@@ -3756,7 +3769,8 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         let r_u32 = is_u32_expr(p2, bind_state, bn_state);
         // Stage 2.2: 5-way GE dispatch — u32 >= u32 uses `setae` (unsigned).
         // Stage 2.4b: 6-way — u64 >= u64 uses REX.W cmp + setae.
-        let na = if l_bf == 1 { emit_ud2_trap() } else { if r_bf == 1 { emit_ud2_trap() } else {
+        // Speedup #4 wire-in: bf16 trap id = 23001 (AST_GE * 1000 + 1).
+        let na = if l_bf == 1 { emit_trap_with_id(23001) } else { if r_bf == 1 { emit_trap_with_id(23001) } else {
             if l_d == 1 {
                 if r_d == 1 { emit_ssen_ge_dbl() } else { emit_ud2_trap() }
             } else { if r_d == 1 { emit_ud2_trap() } else {
