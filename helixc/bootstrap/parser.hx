@@ -1150,3 +1150,38 @@ fn parse_fn_decl(tok_base: i32, sb: i32) -> i32 {
     node
 }
 
+// Stage 5 Iter A: parse `struct IDENT { f1: T1, f2: T2, ... }`.
+// Caller has already verified the cursor sits on the `struct` IDENT.
+// Field types are parsed but ignored for Iter A (positional access
+// only). Registers the (name, arity) into struct_table so parse_primary
+// can detect `IDENT { ... }` as a struct lit later. Returns a tag-54
+// AST_STRUCT_DECL node which codegen treats as a no-op (emits 0 bytes).
+fn parse_struct_decl(tok_base: i32, sb: i32) -> i32 {
+    cur_advance(sb);                         // consume 'struct' IDENT
+    let nk = cur_get(sb);
+    let name_s = tok_p2(tok_base, nk);
+    let name_l = tok_p3(tok_base, nk);
+    cur_advance(sb);                         // consume name IDENT
+    cur_advance(sb);                         // consume '{' (LBRACE = 5)
+    let mut field_count: i32 = 0;
+    let mut keep: i32 = 1;
+    while keep == 1 {
+        let tt = tok_tag(tok_base, cur_get(sb));
+        if tt == 6 {                         // RBRACE
+            keep = 0;
+        } else { if tt == 0 {                // EOF safety
+            keep = 0;
+        } else {
+            cur_advance(sb);                 // field-name IDENT
+            cur_advance(sb);                 // ':' (COLON = 14)
+            cur_advance(sb);                 // type IDENT (Iter A: ignored)
+            field_count = field_count + 1;
+            if tok_tag(tok_base, cur_get(sb)) == 13 {  // optional COMMA
+                cur_advance(sb);
+            };
+        }};
+    }
+    cur_advance(sb);                         // consume '}' (RBRACE = 6)
+    struct_tab_add(sb, name_s, name_l, field_count);
+    mk_node(54, 0, 0, 0)
+}
