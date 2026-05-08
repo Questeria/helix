@@ -3214,6 +3214,34 @@ fn main() -> i32 {
         "fn cmp<T: Eq>(a: T, b: T) -> i32 { T::eq(a, b) } "
         "fn main() -> i32 { cmp::<i32>(5, 7) }"
     ) == 0, "Stage 8.5C: bounded generic cmp::<i32>(5,7) -> 0"
+    # Stage 9: closures via parse-time desugaring. `|params| body` lowers
+    # to a synthesized AST_FN_DECL named `__closure_<id>` with params
+    # (captured_vars..., closure_params...). Capture analysis runs during
+    # body parse: AST_VAR refs to names not in the closure-param table get
+    # auto-recorded (and deduped) as captures. `let c = |x| ...; c(args)`
+    # rewrites at the call site to `__closure_<id>(captured_var_refs...,
+    # args...)`. Phase-0 caps: 4 closures per program, 4 captures per
+    # closure, 4 closure params, all i32 (no float captures yet).
+    # 9A: simple closure capturing one outer let-binding.
+    assert compile_and_exec(
+        "fn main() -> i32 { let a = 10 ; let c = |x| x + a ; c(5) }"
+    ) == 15, "Stage 9A: |x| x + a captures `a`, c(5) -> 15"
+    # 9B: zero captures — closure body uses only its own params.
+    assert compile_and_exec(
+        "fn main() -> i32 { let dbl = |x| x * 2 ; dbl(21) }"
+    ) == 42, "Stage 9B: zero-capture closure |x| x*2, dbl(21) -> 42"
+    # 9C: two captures — body refs two distinct outer let-bindings.
+    assert compile_and_exec(
+        "fn main() -> i32 { let a = 10 ; let b = 7 ; let f = |x| x + a + b ; f(25) }"
+    ) == 42, "Stage 9C: two captures |x| x + a + b, f(25) -> 42"
+    # 9D: two closure params + one capture.
+    assert compile_and_exec(
+        "fn main() -> i32 { let a = 5 ; let f = |x, y| x + y + a ; f(10, 27) }"
+    ) == 42, "Stage 9D: |x, y| x + y + a, f(10, 27) -> 42"
+    # 9E: dedup — body refs the same captured var twice.
+    assert compile_and_exec(
+        "fn main() -> i32 { let a = 7 ; let c = |x| (x + a) * a ; c(5) }"
+    ) == 84, "Stage 9E: capture dedup |x| (x+a)*a, c(5) -> 84"
 
 
 def test_bootstrap_kovc_inline_write_file_to_arena():
