@@ -2420,7 +2420,19 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
                     // skips the discriminant slot at offset 0.
                     mk_node(52, a0, idx_val + 1, 0)
                 } else {
-                    mk_node(16, id_start, id_len, args_head)
+                    // Stage 10: check use_table first — if the call name
+                    // matches an alias registered via `use foo::bar;`,
+                    // replace it with the mangled module-path name.
+                    // use_tab_lookup returns (mang_s * 65536 + mang_l) on
+                    // hit, 0 on miss.
+                    let alias_pack = use_tab_lookup(sb, id_start, id_len);
+                    if alias_pack > 0 {
+                        let amang_s = alias_pack / 65536;
+                        let amang_l = alias_pack - amang_s * 65536;
+                        mk_node(16, amang_s, amang_l, args_head)
+                    } else {
+                        mk_node(16, id_start, id_len, args_head)
+                    }
                 }
                 }     // Stage 9: close `if cl_entry_idx >= 0 { ... } else { ... }`
             } else { if nt == 5 {
