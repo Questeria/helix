@@ -3232,6 +3232,12 @@ fn parse_program(tok_base: i32, sb: i32) -> i32 {
     // matches between template and clone). Append a new AST_FN_LIST
     // node pointing to the clone so codegen emits it.
     monomorphize_pass(sb, head);
+    // Stage 12: grad pass. Walk grad_pending; for each registered
+    // (loss_name, mang_name) entry, find the loss fn in the fn_list,
+    // differentiate its body w.r.t. its first param, simplify, and
+    // synthesize a new AST_FN_DECL with the mangled name. Appended to
+    // fn_list tail so codegen emits it normally.
+    grad_pass(sb, head);
     head
 }
 
@@ -3454,6 +3460,353 @@ fn monomorphize_pass(sb: i32, head: i32) -> i32 {
                 tail = new_list_node;
             };
             mi = mi + 1;
+        }
+        0
+    }
+}
+
+// --------------------------------------------------------------
+// Stage 12: forward-mode automatic differentiation. Given a user
+// fn `loss(x: f64) -> f64` and a `grad(loss)(arg)` call site, the
+// grad pass synthesizes a new fn `loss__grad(x: f64) -> f64` whose
+// body is the symbolic derivative of loss's body w.r.t. `x`. The
+// call site already references the mangled name (parser stage S12a),
+// so codegen needs no special handling — the synthesized fn is
+// emitted alongside user fns.
+//
+// Differentiation rules (literal, var, +, -, *, /, neg). Calls,
+// if, while, let, seq trap with id 85001 (Phase-0 limitation).
+// Simplifier folds 0+x=x, x+0=x, x-0=x, 0-x=-x, 0*x=0, 1*x=x,
+// x*1=x, -(-x)=x, -0=0, and constant-folds f64 literals.
+// --------------------------------------------------------------
+
+// Push a fresh "0.0" literal (3 bytes: '0','.','0') into the arena
+// and return its byte_start. Used by differentiate to materialize
+// f64 zero. Each call allocates fresh bytes — wastes a few slots
+// but keeps the implementation simple.
+fn push_zero_f64_bytes() -> i32 {
+    let s = __arena_push(48);    // '0'
+    __arena_push(46);             // '.'
+    __arena_push(48);             // '0'
+    s
+}
+
+// Push a fresh "1.0" literal into the arena.
+fn push_one_f64_bytes() -> i32 {
+    let s = __arena_push(49);    // '1'
+    __arena_push(46);             // '.'
+    __arena_push(48);             // '0'
+    s
+}
+
+// Build an AST_FLOATLIT_F64 node referencing freshly-pushed "0.0" bytes.
+fn mk_zero_f64() -> i32 {
+    let s = push_zero_f64_bytes();
+    mk_node(34, s, 3, 0)
+}
+
+// Build an AST_FLOATLIT_F64 node referencing freshly-pushed "1.0" bytes.
+fn mk_one_f64() -> i32 {
+    let s = push_one_f64_bytes();
+    mk_node(34, s, 3, 0)
+}
+
+// Test if a node is a literal whose decimal value equals 0.0 (f64 or
+// f32 zero, AST_INT zero). Returns 1 on match, 0 otherwise. Used by
+// the simplifier to detect 0+x=x, 0*x=0, etc.
+@pure
+fn ast_is_zero(idx: i32) -> i32 {
+    let t = __arena_get(idx);
+    if t == 0 {
+        // AST_INT (i32). p1 = literal value.
+        let v = __arena_get(idx + 1);
+        if v == 0 { 1 } else { 0 }
+    } else { if t == 34 {
+        // AST_FLOATLIT_F64. Compare body bytes to "0.0" or just "0".
+        // Body is stored as bytes at p1 (start) of length p2.
+        let s = __arena_get(idx + 1);
+        let l = __arena_get(idx + 2);
+        // Walk bytes; non-zero digit (1..9) → return 0. Allow "0", "0.0",
+        // "0.00", "00", etc. — any pattern that decimal-evaluates to 0.
+        let mut i: i32 = 0;
+        let mut all_zero: i32 = 1;
+        while i < l {
+            let b = __arena_get(s + i);
+            if b == 46 { 0 } else { if b == 48 { 0 } else { all_zero = 0; } };
+            i = i + 1;
+        }
+        all_zero
+    } else { if t == 27 {
+        // AST_FLOATLIT (f32). Same byte-walk as f64.
+        let s = __arena_get(idx + 1);
+        let l = __arena_get(idx + 2);
+        let mut i: i32 = 0;
+        let mut all_zero: i32 = 1;
+        while i < l {
+            let b = __arena_get(s + i);
+            if b == 46 { 0 } else { if b == 48 { 0 } else { all_zero = 0; } };
+            i = i + 1;
+        }
+        all_zero
+    } else { 0 } } }
+}
+
+// Test if a node is a literal whose decimal value equals 1.0. Used by
+// the simplifier to detect 1*x=x, x*1=x. Only matches f64 "1.0" pattern
+// to keep it simple.
+@pure
+fn ast_is_one(idx: i32) -> i32 {
+    let t = __arena_get(idx);
+    if t == 34 {
+        // AST_FLOATLIT_F64. Match "1.0" or "1" exactly.
+        let s = __arena_get(idx + 1);
+        let l = __arena_get(idx + 2);
+        if l == 3 {
+            let b0 = __arena_get(s);
+            let b1 = __arena_get(s + 1);
+            let b2 = __arena_get(s + 2);
+            if b0 == 49 { if b1 == 46 { if b2 == 48 { 1 } else { 0 } } else { 0 } } else { 0 }
+        } else { if l == 1 {
+            let b0 = __arena_get(s);
+            if b0 == 49 { 1 } else { 0 }
+        } else { 0 } }
+    } else { if t == 0 {
+        let v = __arena_get(idx + 1);
+        if v == 1 { 1 } else { 0 }
+    } else { 0 } }
+}
+
+// Differentiate an AST subtree w.r.t. variable `var_s`/`var_l` (the
+// param byte-range). Returns the index of a freshly-built derivative
+// node. Recursively walks the tree; for unsupported tags emits a
+// runtime trap (AST node tag 99 = AST_ERR with op-specific p1).
+//
+// Phase-0 supported tags: 0 (INT), 27 (FLOATLIT f32), 34 (FLOATLIT_F64),
+// 35 (INTLIT_I64), 1 (VAR), 2 (ADD), 3 (SUB), 4 (MUL), 5 (DIV), 9 (NEG).
+// Trap-id 85001 emitted via mk_node(99, ...) for unsupported tags.
+fn differentiate(expr_idx: i32, var_s: i32, var_l: i32) -> i32 {
+    let t = __arena_get(expr_idx);
+    if t == 0 {
+        // d(c) = 0 for integer literal — but the surrounding type is
+        // f64, so emit f64 zero.
+        mk_zero_f64()
+    } else { if t == 27 {
+        mk_zero_f64()
+    } else { if t == 34 {
+        mk_zero_f64()
+    } else { if t == 35 {
+        mk_zero_f64()
+    } else { if t == 1 {
+        // AST_VAR. p1 = name_s, p2 = name_l. d(x) = 1 if x == var_name,
+        // else 0.
+        let n_s = __arena_get(expr_idx + 1);
+        let n_l = __arena_get(expr_idx + 2);
+        if byte_eq(n_s, n_l, var_s, var_l) == 1 {
+            mk_one_f64()
+        } else {
+            mk_zero_f64()
+        }
+    } else { if t == 2 {
+        // AST_ADD. d(a + b) = d(a) + d(b).
+        let l = __arena_get(expr_idx + 1);
+        let r = __arena_get(expr_idx + 2);
+        let dl = differentiate(l, var_s, var_l);
+        let dr = differentiate(r, var_s, var_l);
+        mk_node(2, dl, dr, 0)
+    } else { if t == 3 {
+        // AST_SUB. d(a - b) = d(a) - d(b).
+        let l = __arena_get(expr_idx + 1);
+        let r = __arena_get(expr_idx + 2);
+        let dl = differentiate(l, var_s, var_l);
+        let dr = differentiate(r, var_s, var_l);
+        mk_node(3, dl, dr, 0)
+    } else { if t == 4 {
+        // AST_MUL. Product rule: d(a*b) = d(a)*b + a*d(b).
+        // IMPORTANT (arena positional ordering): build the children
+        // BEFORE allocating the parent so the parent's p1/p2 indices
+        // remain valid. Otherwise the parent allocation would land
+        // BETWEEN child allocations and read garbage.
+        let l = __arena_get(expr_idx + 1);
+        let r = __arena_get(expr_idx + 2);
+        let dl = differentiate(l, var_s, var_l);
+        let dr = differentiate(r, var_s, var_l);
+        let term1 = mk_node(4, dl, r, 0);
+        let term2 = mk_node(4, l, dr, 0);
+        mk_node(2, term1, term2, 0)
+    } else { if t == 5 {
+        // AST_DIV. Quotient rule: d(a/b) = (d(a)*b - a*d(b)) / (b*b).
+        let l = __arena_get(expr_idx + 1);
+        let r = __arena_get(expr_idx + 2);
+        let dl = differentiate(l, var_s, var_l);
+        let dr = differentiate(r, var_s, var_l);
+        let num1 = mk_node(4, dl, r, 0);
+        let num2 = mk_node(4, l, dr, 0);
+        let num = mk_node(3, num1, num2, 0);
+        let denom = mk_node(4, r, r, 0);
+        mk_node(5, num, denom, 0)
+    } else { if t == 9 {
+        // AST_NEG. d(-a) = -d(a).
+        let inner = __arena_get(expr_idx + 1);
+        let di = differentiate(inner, var_s, var_l);
+        mk_node(9, di, 0, 0)
+    } else {
+        // Unsupported tag (CALL, IF, WHILE, LET, SEQ, BLOCK, ...) —
+        // Phase-0 limitation. Trap with id 85001 by emitting an
+        // AST_ERR node; codegen lowers AST_ERR to ud2.
+        mk_node(99, 85001, 0, 0)
+    } } } } } } } } } }
+}
+
+// Bottom-up algebraic simplifier for the differentiate output. Folds
+// 0+x=x, x+0=x, x-0=x, 0-x=-x, 0*x=0, 1*x=x, x*1=x, -(-x)=x, -0=0,
+// and constant-folds two literal-zero / literal-one operands into a
+// new literal. Returns the (possibly new) node index.
+fn simplify(expr_idx: i32) -> i32 {
+    let t = __arena_get(expr_idx);
+    if t == 2 {
+        // AST_ADD: simplify children first, then fold.
+        let l = __arena_get(expr_idx + 1);
+        let r = __arena_get(expr_idx + 2);
+        let sl = simplify(l);
+        let sr = simplify(r);
+        if ast_is_zero(sl) == 1 {
+            sr
+        } else { if ast_is_zero(sr) == 1 {
+            sl
+        } else {
+            mk_node(2, sl, sr, 0)
+        } }
+    } else { if t == 3 {
+        // AST_SUB: x - 0 = x; 0 - x = -x.
+        let l = __arena_get(expr_idx + 1);
+        let r = __arena_get(expr_idx + 2);
+        let sl = simplify(l);
+        let sr = simplify(r);
+        if ast_is_zero(sr) == 1 {
+            sl
+        } else { if ast_is_zero(sl) == 1 {
+            mk_node(9, sr, 0, 0)
+        } else {
+            mk_node(3, sl, sr, 0)
+        } }
+    } else { if t == 4 {
+        // AST_MUL: 0*x=0, x*0=0, 1*x=x, x*1=x.
+        let l = __arena_get(expr_idx + 1);
+        let r = __arena_get(expr_idx + 2);
+        let sl = simplify(l);
+        let sr = simplify(r);
+        if ast_is_zero(sl) == 1 {
+            mk_zero_f64()
+        } else { if ast_is_zero(sr) == 1 {
+            mk_zero_f64()
+        } else { if ast_is_one(sl) == 1 {
+            sr
+        } else { if ast_is_one(sr) == 1 {
+            sl
+        } else {
+            mk_node(4, sl, sr, 0)
+        } } } }
+    } else { if t == 5 {
+        // AST_DIV: simplify children; no algebraic identity beyond that.
+        let l = __arena_get(expr_idx + 1);
+        let r = __arena_get(expr_idx + 2);
+        let sl = simplify(l);
+        let sr = simplify(r);
+        mk_node(5, sl, sr, 0)
+    } else { if t == 9 {
+        // AST_NEG: -(-x) = x; -0 = 0.
+        let inner = __arena_get(expr_idx + 1);
+        let si = simplify(inner);
+        let it = __arena_get(si);
+        if it == 9 {
+            // -(-x) → x
+            __arena_get(si + 1)
+        } else { if ast_is_zero(si) == 1 {
+            mk_zero_f64()
+        } else {
+            mk_node(9, si, 0, 0)
+        } }
+    } else {
+        // Leaf or unhandled tag (literal, var, etc.) — return as-is.
+        expr_idx
+    } } } } }
+}
+
+// Stage 12: grad pass. For each entry in grad_pending, find the
+// corresponding loss fn in fn_list (matching by name), differentiate
+// its body w.r.t. its first param's name, simplify, and synthesize
+// a new AST_FN_DECL with the mangled name "<loss>__grad" containing
+// the simplified derivative as its body. The new fn shares the loss
+// fn's params and ret_ty. Append to fn_list tail so codegen emits it.
+//
+// If the loss fn has zero params, the synthesized fn is still emitted
+// but the differentiate result is constant zero (no var to match).
+fn grad_pass(sb: i32, head: i32) -> i32 {
+    let count = grad_pending_count(sb);
+    if count == 0 {
+        0
+    } else {
+        // Find tail of fn_list (where next == 0) for appending.
+        let mut tail = head;
+        let mut tail_keep: i32 = 1;
+        while tail_keep == 1 {
+            let nx = __arena_get(tail + 2);
+            if nx == 0 { tail_keep = 0; } else { tail = nx; };
+        }
+        let base = grad_pending_base(sb);
+        let mut gi: i32 = 0;
+        while gi < count {
+            let entry = base + gi * 4;
+            let loss_s = __arena_get(entry);
+            let loss_l = __arena_get(entry + 1);
+            let mang_s = __arena_get(entry + 2);
+            let mang_l = __arena_get(entry + 3);
+            // Find loss fn in fn_list by name match.
+            let mut walk: i32 = head;
+            let mut loss_fn_idx: i32 = 0;
+            let mut find_keep: i32 = 1;
+            while find_keep == 1 {
+                let cand_idx = __arena_get(walk + 1);
+                let cand_ns = __arena_get(cand_idx + 1);
+                let cand_nl = __arena_get(cand_idx + 2);
+                if byte_eq(loss_s, loss_l, cand_ns, cand_nl) == 1 {
+                    loss_fn_idx = cand_idx;
+                    find_keep = 0;
+                };
+                if find_keep == 1 {
+                    let nx = __arena_get(walk + 2);
+                    if nx == 0 { find_keep = 0; } else { walk = nx; };
+                };
+            }
+            if loss_fn_idx > 0 {
+                // Read loss fn slots (Stage 8 layout):
+                //   slot 1: name_s, 2: name_l, 3: body_idx, 4: params_head,
+                //   5: ret_ty, 6: is_generic, 7: gp_names_head.
+                let loss_body = __arena_get(loss_fn_idx + 3);
+                let loss_params = __arena_get(loss_fn_idx + 4);
+                let loss_ret_ty = __arena_get(loss_fn_idx + 5);
+                // Extract first param's name (the variable to differentiate
+                // w.r.t.). AST_PARAM (tag 18) layout: slot 1 = name_s,
+                // 2 = name_l, 3 = next, 4 = type_tag.
+                let var_s = if loss_params == 0 { 0 } else { __arena_get(loss_params + 1) };
+                let var_l = if loss_params == 0 { 0 } else { __arena_get(loss_params + 2) };
+                // Differentiate then simplify.
+                let deriv_raw = differentiate(loss_body, var_s, var_l);
+                let deriv = simplify(deriv_raw);
+                // Synthesize the AST_FN_DECL clone. Same param chain (we
+                // share — derivative still takes the same input shape) and
+                // same ret_ty (f64 in the test cases). The clone has
+                // is_generic=0 and no gp_names.
+                let clone_fn = mk_node(14, mang_s, mang_l, deriv);
+                __arena_push(loss_params);   // slot 4: params_head
+                __arena_push(loss_ret_ty);   // slot 5: ret_ty
+                __arena_push(0);             // slot 6: is_generic = 0
+                __arena_push(0);             // slot 7: gp_names_head = 0
+                let new_list_node = mk_node(15, clone_fn, 0, 0);
+                __arena_set(tail + 2, new_list_node);
+                tail = new_list_node;
+            };
+            gi = gi + 1;
         }
         0
     }

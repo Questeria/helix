@@ -3335,6 +3335,36 @@ fn main() -> i32 {
     assert compile_and_exec(
         "fn main() -> i32 { let r = modify(100, 999, 1); r + 42 }"
     ) == 42, "Stage 11F: modify OOB rejects (handle >= 64); 0 + 42 = 42"
+    # Stage 12: forward-mode automatic differentiation.
+    # `grad(loss)(arg)` desugars at parse time into a synthesized fn
+    # `loss__grad` whose body is the symbolic derivative of loss's body
+    # w.r.t. its first param. The call site references the mangled name.
+    # 12A: d/dx (x * x + 3.0 * x) at x=2 = 2x + 3 = 7.
+    assert compile_and_exec(
+        "fn loss(x: f64) -> f64 { x * x + 3.0_f64 * x } "
+        "fn main() -> i32 { __f64_to_i32(grad(loss)(2.0_f64)) }"
+    ) == 7, "Stage 12A: grad of x*x + 3x at x=2 -> 2x+3 -> 7"
+    # 12B: d/dx (x*x) at x=5 = 2x = 10.
+    assert compile_and_exec(
+        "fn sq(x: f64) -> f64 { x * x } "
+        "fn main() -> i32 { __f64_to_i32(grad(sq)(5.0_f64)) }"
+    ) == 10, "Stage 12B: grad of x*x at x=5 -> 2x -> 10"
+    # 12C: d/dx (x) at x=42 = 1.
+    assert compile_and_exec(
+        "fn id(x: f64) -> f64 { x } "
+        "fn main() -> i32 { __f64_to_i32(grad(id)(42.0_f64)) }"
+    ) == 1, "Stage 12C: grad of x at x=42 -> 1"
+    # 12D: d/dx (5.0) at x=anything = 0.
+    assert compile_and_exec(
+        "fn k(x: f64) -> f64 { 5.0_f64 } "
+        "fn main() -> i32 { __f64_to_i32(grad(k)(7.0_f64)) }"
+    ) == 0, "Stage 12D: grad of constant -> 0"
+    # 12E: d/dx (x - 3*x) = 1 - 3 = -2 at any x. Verify negation.
+    # __f64_to_i32 truncates -2.0 to 0xFFFFFFFE; lower 8 bits = 254.
+    assert compile_and_exec(
+        "fn neg(x: f64) -> f64 { x - 3.0_f64 * x } "
+        "fn main() -> i32 { __f64_to_i32(grad(neg)(1.0_f64)) }"
+    ) == 254, "Stage 12E: grad of x - 3x = -2; 8-bit cast yields 254"
 
 
 def test_bootstrap_kovc_inline_write_file_to_arena():
