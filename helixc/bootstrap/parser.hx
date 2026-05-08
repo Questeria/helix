@@ -137,9 +137,26 @@ fn kw_fn_n(sb: i32) -> i32 { __arena_get(sb + 12) }
 // Stage 5: struct keyword installed at sb+13/sb+14.
 fn kw_struct_s(sb: i32) -> i32 { __arena_get(sb + 13) }
 fn kw_struct_n(sb: i32) -> i32 { __arena_get(sb + 14) }
-// Stage 5 Iter A bisect probe: 2 simple fns at start.
+// Stage 5: struct_table state — sb+15 = arena base offset of the
+// 9-slot region (3 entries x 3 fields), sb+16 = registered count.
 fn struct_tab_base(sb: i32) -> i32 { __arena_get(sb + 15) }
 fn struct_tab_count(sb: i32) -> i32 { __arena_get(sb + 16) }
+// Append an entry. Returns the new index (0..2) on success, -1 on
+// overflow. Iter A cap is 3 structs; expand later if needed.
+fn struct_tab_add(sb: i32, name_s: i32, name_l: i32, arity: i32) -> i32 {
+    let count = struct_tab_count(sb);
+    if count >= 3 {
+        0 - 1
+    } else {
+        let base = struct_tab_base(sb);
+        let entry = base + count * 3;
+        __arena_set(entry, name_s);
+        __arena_set(entry + 1, name_l);
+        __arena_set(entry + 2, arity);
+        __arena_set(sb + 16, count + 1);
+        count
+    }
+}
 
 // --------------------------------------------------------------
 // AST builder.
