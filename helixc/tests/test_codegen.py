@@ -2475,6 +2475,22 @@ fn main() -> i32 {
         "fn main() -> i32 { let arr = [double(5), double(10), double(6)] ; "
         "arr[0] + arr[1] + arr[2] }"
     ) == 42, "array with fn-call children (10+20+12=42)"
+    # Stage 5 Iter A: struct decl + lit + positional field access.
+    # `Pt { 10, 32 }` folds to AST_TUPLE_LIT during parse — codegen is
+    # tuple-identical. Field access uses .N syntax inherited from
+    # Stage 4 tuples. Iter B will add named field access (`p.x`) via
+    # bind_state struct-id tracking.
+    assert compile_and_exec(
+        "struct Pt { x: i32, y: i32 } fn main() -> i32 { let p = Pt { 10, 32 }; p.0 + p.1 }"
+    ) == 42, "Stage 5 Iter A: struct decl + positional field access"
+    assert compile_and_exec(
+        "struct Triple { a: i32, b: i32, c: i32 } "
+        "fn main() -> i32 { let t = Triple { 10, 20, 12 }; t.0 + t.1 + t.2 }"
+    ) == 42, "Stage 5 Iter A: 3-field struct"
+    assert compile_and_exec(
+        "struct Pair { x: i32, y: i32 } "
+        "fn main() -> i32 { Pair { 30, 12 }.0 + Pair { 30, 12 }.1 }"
+    ) == 42, "Stage 5 Iter A: inline struct lit + field access"
     # Stage 4 follow-up audit Finding #2: AST_NEG was missing u64
     # dispatch. Fell through to 32-bit `neg eax` which only flipped
     # the low half. Now uses REX.W neg rax (same as i64).
