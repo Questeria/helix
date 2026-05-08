@@ -426,6 +426,41 @@ fn grad_pending_add(sb: i32, loss_s: i32, loss_l: i32, mang_s: i32, mang_l: i32)
         count
     }
 }
+
+// Stage 14: grad-rev-pending table state.
+// sb+70 = gr_rev_pending_base (offset of 40-slot region, 8 entries x 5 fields).
+// sb+71 = gr_rev_pending_count (0..8).
+// Each entry layout (5 slots):
+//   slot 0: loss_name_s    (byte_start in arena)
+//   slot 1: loss_name_l    (byte_len)
+//   slot 2: field_name_s   (the IDENT after `.` — e.g. "dx")
+//   slot 3: field_name_l   (byte_len; expected 2 chars min; first must be 'd')
+//   slot 4: mang_s         (byte_start of synthesized "<loss>__grad_d<param>" name)
+// mang_l is computed as loss_l + 7 + (field_l - 1)  ("__grad_d" = 8, but we
+// store "<loss>__grad_<field>" — 6 chars "__grad_" + the full field bytes).
+// Built by parse_primary's grad_rev_all branch when it encounters the postfix
+// `.IDENT` form; consumed at end of parse_program by grad_rev_pass to
+// synthesize the per-param derivative fn decls (forward-mode based — single
+// param at a time, since the field selects which partial we want).
+fn gr_rev_pending_base(sb: i32) -> i32  { __arena_get(sb + 70) }
+fn gr_rev_pending_count(sb: i32) -> i32 { __arena_get(sb + 71) }
+fn gr_rev_pending_add(sb: i32, loss_s: i32, loss_l: i32,
+                       field_s: i32, field_l: i32, mang_s: i32) -> i32 {
+    let count = gr_rev_pending_count(sb);
+    if count >= 8 {
+        0 - 1
+    } else {
+        let base = gr_rev_pending_base(sb);
+        let entry = base + count * 5;
+        __arena_set(entry, loss_s);
+        __arena_set(entry + 1, loss_l);
+        __arena_set(entry + 2, field_s);
+        __arena_set(entry + 3, field_l);
+        __arena_set(entry + 4, mang_s);
+        __arena_set(sb + 71, count + 1);
+        count
+    }
+}
 // Append a use-table entry. Returns 0 on success, -1 on overflow (cap 8).
 fn use_tab_add(sb: i32, alias_s: i32, alias_l: i32, mang_s: i32, mang_l: i32) -> i32 {
     let count = use_tab_count(sb);
@@ -1784,6 +1819,121 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
     } else { if t == 2 {
         let id_start = tok_p2(tok_base, k);
         let id_len = tok_p3(tok_base, k);
+        // Stage 14: detect `grad_rev_all(IDENT)(args).IDENT` — the
+        // reverse-mode AD meta-call that returns a per-param gradient.
+        // IDENT "grad_rev_all" is 12 bytes (103,114,97,100,95,114,101,
+        // 118,95,97,108,108). Followed by TK_LPAREN (3), TK_IDENT (2),
+        // TK_RPAREN (4), TK_LPAREN (3). The trailing `.IDENT` selects
+        // which gradient (e.g. `.dx` -> ∂loss/∂x). We detect the prefix
+        // here and require the postfix `.IDENT` immediately after the
+        // closing `)` of args. The synthesized fn is named
+        // "<loss>__grad_<field>" and computed via Stage 12's
+        // forward-mode `differentiate` w.r.t. the param matching
+        // `field` (with leading 'd' stripped). FLAT prefix-trap pattern,
+        // single is_gr_rev_all flag scoped to one tight branch ahead
+        // of Stage 12's grad-detect.
+        let is_grad_rev_kw = if id_len == 12 {
+            let r0 = __arena_get(id_start);
+            let r1 = __arena_get(id_start + 1);
+            let r2 = __arena_get(id_start + 2);
+            let r3 = __arena_get(id_start + 3);
+            let r4 = __arena_get(id_start + 4);
+            let r5 = __arena_get(id_start + 5);
+            let r6 = __arena_get(id_start + 6);
+            let r7 = __arena_get(id_start + 7);
+            let r8 = __arena_get(id_start + 8);
+            let r9 = __arena_get(id_start + 9);
+            let r10 = __arena_get(id_start + 10);
+            let r11 = __arena_get(id_start + 11);
+            if r0 == 103 { if r1 == 114 { if r2 == 97 { if r3 == 100 {
+            if r4 == 95 { if r5 == 114 { if r6 == 101 { if r7 == 118 {
+            if r8 == 95 { if r9 == 97 { if r10 == 108 { if r11 == 108 {
+                1 } else { 0 } } else { 0 } } else { 0 } } else { 0 }
+            } else { 0 } } else { 0 } } else { 0 } } else { 0 }
+            } else { 0 } } else { 0 } } else { 0 } } else { 0 }
+        } else { 0 };
+        let gr_t1 = tok_tag(tok_base, k + 1);
+        let gr_t2 = tok_tag(tok_base, k + 2);
+        let gr_t3 = tok_tag(tok_base, k + 3);
+        let gr_t4 = tok_tag(tok_base, k + 4);
+        let is_grad_rev_call = if is_grad_rev_kw == 1 {
+            if gr_t1 == 3 { if gr_t2 == 2 { if gr_t3 == 4 { if gr_t4 == 3 {
+                1 } else { 0 } } else { 0 } } else { 0 } } else { 0 }
+        } else { 0 };
+        if is_grad_rev_call == 1 {
+            // Consume `grad_rev_all`, `(`, IDENT (loss_name), `)`, `(`.
+            cur_advance(sb);     // `grad_rev_all`
+            cur_advance(sb);     // `(`
+            let lossr_k = cur_get(sb);
+            let lossr_s = tok_p2(tok_base, lossr_k);
+            let lossr_l = tok_p3(tok_base, lossr_k);
+            cur_advance(sb);     // loss_name IDENT
+            cur_advance(sb);     // `)`
+            cur_advance(sb);     // `(`
+            // Parse args until `)`. Same pattern as Stage 12.
+            let mut grev_args_head: i32 = 0;
+            let mut grev_prev_arg: i32 = 0;
+            let mut gr_keep: i32 = 1;
+            while gr_keep == 1 {
+                let at = tok_tag(tok_base, cur_get(sb));
+                if at == 4 {
+                    gr_keep = 0;
+                } else { if at == 13 {
+                    cur_advance(sb);
+                } else {
+                    let arg_expr = parse_expr_basic(tok_base, sb);
+                    let new_arg = mk_node(17, arg_expr, 0, 0);
+                    if grev_args_head == 0 {
+                        grev_args_head = new_arg;
+                        grev_prev_arg = new_arg;
+                    } else {
+                        __arena_set(grev_prev_arg + 2, new_arg);
+                        grev_prev_arg = new_arg;
+                    };
+                }};
+            }
+            cur_advance(sb);     // consume `)`
+            // Require `.IDENT` next. Phase-0: trap 88001 if missing.
+            let dot_t = tok_tag(tok_base, cur_get(sb));
+            if dot_t != 22 {
+                mk_node(99, 88001, 0, 0)
+            } else {
+                cur_advance(sb);     // consume '.'
+                let fk = cur_get(sb);
+                let f_t = tok_tag(tok_base, fk);
+                if f_t != 2 {
+                    mk_node(99, 88001, 0, 0)
+                } else {
+                    let field_s = tok_p2(tok_base, fk);
+                    let field_l = tok_p3(tok_base, fk);
+                    cur_advance(sb);     // consume field IDENT
+                    // Build mangled name "<loss>__grad_<field>". Length
+                    // = lossr_l + 7 ("__grad_") + field_l. Bytes:
+                    //   '_' '_' 'g' 'r' 'a' 'd' '_' = 95,95,103,114,97,100,95
+                    let mang_s_r = __arena_len();
+                    let mut br: i32 = 0;
+                    while br < lossr_l {
+                        __arena_push(__arena_get(lossr_s + br));
+                        br = br + 1;
+                    }
+                    __arena_push(95); __arena_push(95);    // '__'
+                    __arena_push(103); __arena_push(114);  // 'gr'
+                    __arena_push(97); __arena_push(100);   // 'ad'
+                    __arena_push(95);                      // '_'
+                    let mut br2: i32 = 0;
+                    while br2 < field_l {
+                        __arena_push(__arena_get(field_s + br2));
+                        br2 = br2 + 1;
+                    }
+                    let mang_l_r = lossr_l + 7 + field_l;
+                    // Register in gr_rev_pending. Cap 8.
+                    gr_rev_pending_add(sb, lossr_s, lossr_l,
+                                       field_s, field_l, mang_s_r);
+                    // Emit AST_CALL with mangled name + args_head.
+                    mk_node(16, mang_s_r, mang_l_r, grev_args_head)
+                }
+            }
+        } else {
         // Stage 12: detect `grad(IDENT)(args)` — the meta-call that takes
         // a 1-arg user fn and returns its derivative. Match must be exact:
         // IDENT "grad" (4 bytes: 103,114,97,100) followed by TK_LPAREN (3),
@@ -2607,6 +2757,7 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
             }}}
             }}}}}     // Stage 8.5C + Stage 10: extra '}}' closes is_typed_call_active + is_path_call wrappers
         }}}}}     // Stage 12: extra '}' closes the is_grad_call else-branch wrapper
+        }     // Stage 14: extra '}' closes the is_grad_rev_call else-branch wrapper
     } else { if t == 3 {
         // Stage 4 iteration A: tuple literal vs parenthesized expr.
         // After the inner expr, peek for TK_COMMA (13). If found, this
@@ -2991,6 +3142,9 @@ fn parse_top(tok_base: i32) -> i32 {
     // pending grad-call list lives at the offset stored in slot 68 (filled
     // in below after the 32-slot region is pushed).
     __arena_push(0); __arena_push(0);
+    // Stage 14: slots 70..71 = gr_rev_pending base/count. Region for
+    // pending grad_rev_all-call list lives at the offset stored in slot 70.
+    __arena_push(0); __arena_push(0);
     install_keywords(cur_slot);
     var_struct_tab_init(cur_slot);
     var_enum_tab_init(cur_slot);
@@ -3027,6 +3181,15 @@ fn parse_top(tok_base: i32) -> i32 {
     }
     __arena_set(cur_slot + 68, grad_base);
     __arena_set(cur_slot + 69, 0);
+    // Stage 14: gr_rev_pending region (40 slots, 8 entries x 5 fields).
+    let grev_base = __arena_push(0);
+    let mut gvri: i32 = 1;
+    while gvri < 40 {
+        __arena_push(0);
+        gvri = gvri + 1;
+    }
+    __arena_set(cur_slot + 70, grev_base);
+    __arena_set(cur_slot + 71, 0);
     // Peek the first token. If it's `fn`, parse a function decl.
     // Otherwise treat the whole input as a single expression
     // (legacy mode) for backward compat with all existing tests.
@@ -3238,6 +3401,12 @@ fn parse_program(tok_base: i32, sb: i32) -> i32 {
     // synthesize a new AST_FN_DECL with the mangled name. Appended to
     // fn_list tail so codegen emits it normally.
     grad_pass(sb, head);
+    // Stage 14: grad_rev pass. Walk gr_rev_pending; for each registered
+    // (loss_name, field_name, mang_s) entry, find the loss fn, find the
+    // param matching `field` (with leading 'd' stripped), differentiate
+    // the loss body w.r.t. that param, simplify, and synthesize the
+    // <loss>__grad_<field> fn. Appends to fn_list tail so codegen emits it.
+    grad_rev_pass(sb, head);
     head
 }
 
@@ -3972,6 +4141,116 @@ fn grad_pass(sb: i32, head: i32) -> i32 {
                 tail = new_list_node;
             };
             gi = gi + 1;
+        }
+        0
+    }
+}
+
+// Stage 14: grad_rev pass. For each entry in gr_rev_pending, find the
+// loss fn, find the param matching the field name (with leading 'd'
+// stripped), differentiate the loss body w.r.t. that param, simplify,
+// and synthesize "<loss>__grad_<field>" — a fn with the same params
+// and ret_ty as loss whose body is the simplified partial derivative.
+// Appends to fn_list tail so codegen emits it.
+//
+// Field name convention: ".dx" -> param "x", ".dy" -> param "y", etc.
+// Phase-0 trap-id 88002 if field name lacks leading 'd' or is shorter
+// than 2 chars. Phase-0 trap-id 88003 if no matching param found.
+fn grad_rev_pass(sb: i32, head: i32) -> i32 {
+    let count = gr_rev_pending_count(sb);
+    if count == 0 {
+        0
+    } else {
+        // Find tail of fn_list for appending.
+        let mut tail = head;
+        let mut tail_keep: i32 = 1;
+        while tail_keep == 1 {
+            let nx = __arena_get(tail + 2);
+            if nx == 0 { tail_keep = 0; } else { tail = nx; };
+        }
+        let base = gr_rev_pending_base(sb);
+        let mut gri: i32 = 0;
+        while gri < count {
+            let entry = base + gri * 5;
+            let loss_s = __arena_get(entry);
+            let loss_l = __arena_get(entry + 1);
+            let field_s = __arena_get(entry + 2);
+            let field_l = __arena_get(entry + 3);
+            let mang_s = __arena_get(entry + 4);
+            let mang_l = loss_l + 7 + field_l;
+            // Find loss fn in fn_list.
+            let mut walk: i32 = head;
+            let mut loss_fn_idx: i32 = 0;
+            let mut find_keep: i32 = 1;
+            while find_keep == 1 {
+                let cand_idx = __arena_get(walk + 1);
+                let cand_ns = __arena_get(cand_idx + 1);
+                let cand_nl = __arena_get(cand_idx + 2);
+                if byte_eq(loss_s, loss_l, cand_ns, cand_nl) == 1 {
+                    loss_fn_idx = cand_idx;
+                    find_keep = 0;
+                };
+                if find_keep == 1 {
+                    let nx = __arena_get(walk + 2);
+                    if nx == 0 { find_keep = 0; } else { walk = nx; };
+                };
+            }
+            if loss_fn_idx > 0 {
+                let loss_body = __arena_get(loss_fn_idx + 3);
+                let loss_params = __arena_get(loss_fn_idx + 4);
+                let loss_ret_ty = __arena_get(loss_fn_idx + 5);
+                // Extract param name from field: skip leading 'd' (byte 100).
+                // For ".dx" the param name is "x" (offset field_s+1, length
+                // field_l-1).
+                let var_s = if field_l < 2 { 0 } else { field_s + 1 };
+                let var_l = if field_l < 2 { 0 } else { field_l - 1 };
+                let valid_field = if field_l < 2 { 0 } else {
+                    let f0 = __arena_get(field_s);
+                    if f0 == 100 { 1 } else { 0 }
+                };
+                let trap_idx = if valid_field == 0 {
+                    mk_node(99, 88002, 0, 0)
+                } else { 0 };
+                // Verify the param exists in loss_params chain.
+                let mut have_param: i32 = 0;
+                let mut pwalk: i32 = loss_params;
+                while pwalk != 0 {
+                    let pn_s = __arena_get(pwalk + 1);
+                    let pn_l = __arena_get(pwalk + 2);
+                    if byte_eq(pn_s, pn_l, var_s, var_l) == 1 {
+                        have_param = 1;
+                    };
+                    pwalk = __arena_get(pwalk + 3);
+                }
+                let body_to_diff = if valid_field == 1 {
+                    if have_param == 1 {
+                        // Stage 13 prep: inline user-fn calls.
+                        inline_user_calls(loss_body, head, 0)
+                    } else {
+                        mk_node(99, 88003, 0, 0)
+                    }
+                } else { trap_idx };
+                let deriv_raw = if have_param == 1 {
+                    if valid_field == 1 {
+                        differentiate(body_to_diff, var_s, var_l)
+                    } else { body_to_diff }
+                } else { body_to_diff };
+                let deriv = if have_param == 1 {
+                    if valid_field == 1 {
+                        simplify(deriv_raw)
+                    } else { deriv_raw }
+                } else { deriv_raw };
+                // Synthesize the AST_FN_DECL clone.
+                let clone_fn = mk_node(14, mang_s, mang_l, deriv);
+                __arena_push(loss_params);
+                __arena_push(loss_ret_ty);
+                __arena_push(0);
+                __arena_push(0);
+                let new_list_node = mk_node(15, clone_fn, 0, 0);
+                __arena_set(tail + 2, new_list_node);
+                tail = new_list_node;
+            };
+            gri = gri + 1;
         }
         0
     }
