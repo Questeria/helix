@@ -3603,26 +3603,54 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         } else { if r_i64 == 1 { emit_trap_with_id(30021) } else { emit_xor_eax_ecx() } };
         n1 + np + n2 + nm + no + na
     } else { if t == 32 {
-        // AST_SHL: shl eax, cl (D3 E0); shl rax, cl (REX.W: 48 D3 E0) for i64.
+        // AST_SHL: shl eax, cl (D3 E0); shl rax, cl (REX.W: 48 D3 E0) for i64/u64.
         // Stage 1 audit fix: shift count is always treated as i32 (cl);
         // value being shifted picks i64 vs i32.
+        // Audit follow-up Finding #5: add u64 dispatch (REX.W shl is
+        // bit-identical for signed and unsigned) and trap on float/bf16.
+        // Without u64 dispatch, `u64 << k` falls through to 32-bit shl
+        // and silently leaves the high 32 bits unmodified.
         let n1 = emit_ast_code(p1, bind_state, patch_state, bn_state);
         let np = emit_push_rax();
         let n2 = emit_ast_code(p2, bind_state, patch_state, bn_state);
         let l_i64 = is_i64_expr(p1, bind_state, bn_state);
+        let l_u64 = is_u64_expr(p1, bind_state, bn_state);
+        let l_f32 = is_f32_expr(p1, bind_state, bn_state);
+        let l_f64 = is_f64_expr(p1, bind_state, bn_state);
+        let l_bf  = is_bf16_expr(p1, bind_state, bn_state);
         let nm = emit_mov_ecx_eax();
         let no = emit_pop_rax();
-        let na = if l_i64 == 1 { emit_shl_rax_cl_64() } else { emit_shl_eax_cl() };
+        let na = if l_bf == 1 { emit_trap_with_id(32001) }
+                else { if l_f64 == 1 { emit_trap_with_id(32010) }
+                else { if l_f32 == 1 { emit_trap_with_id(32040) }
+                else { if l_i64 == 1 { emit_shl_rax_cl_64() }
+                else { if l_u64 == 1 { emit_shl_rax_cl_64() }
+                else { emit_shl_eax_cl() }}}}};
         n1 + np + n2 + nm + no + na
     } else { if t == 33 {
-        // AST_SHR: sar eax, cl (D3 F8) i32; sar rax, cl (48 D3 F8) i64.
+        // AST_SHR: sar eax, cl (D3 F8) i32; sar rax, cl (48 D3 F8) i64/u64.
+        // Audit follow-up Finding #5: add u64 dispatch and trap on
+        // float/bf16. Note: this still uses sar (arithmetic) for u64;
+        // the signedness sub-finding (sar vs shr for unsigned types) is
+        // tracked separately and not addressed here to keep the patch
+        // minimal. u64 sar produces wrong results for u64 values >=
+        // 0x8000_0000_0000_0000.
         let n1 = emit_ast_code(p1, bind_state, patch_state, bn_state);
         let np = emit_push_rax();
         let n2 = emit_ast_code(p2, bind_state, patch_state, bn_state);
         let l_i64 = is_i64_expr(p1, bind_state, bn_state);
+        let l_u64 = is_u64_expr(p1, bind_state, bn_state);
+        let l_f32 = is_f32_expr(p1, bind_state, bn_state);
+        let l_f64 = is_f64_expr(p1, bind_state, bn_state);
+        let l_bf  = is_bf16_expr(p1, bind_state, bn_state);
         let nm = emit_mov_ecx_eax();
         let no = emit_pop_rax();
-        let na = if l_i64 == 1 { emit_sar_rax_cl_64() } else { emit_sar_eax_cl() };
+        let na = if l_bf == 1 { emit_trap_with_id(33001) }
+                else { if l_f64 == 1 { emit_trap_with_id(33010) }
+                else { if l_f32 == 1 { emit_trap_with_id(33040) }
+                else { if l_i64 == 1 { emit_sar_rax_cl_64() }
+                else { if l_u64 == 1 { emit_sar_rax_cl_64() }
+                else { emit_sar_eax_cl() }}}}};
         n1 + np + n2 + nm + no + na
     } else { if t == 6 {
         // Phase 1.10 step 5e: f32-aware comparison. If both operands
