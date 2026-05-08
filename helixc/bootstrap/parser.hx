@@ -153,6 +153,26 @@ fn var_struct_tab_count(sb: i32) -> i32 { __arena_get(sb + 18) }
 // clears it (-1 = none) to associate the bound name with a struct id.
 fn last_struct_idx(sb: i32) -> i32 { __arena_get(sb + 19) }
 fn set_last_struct_idx(sb: i32, v: i32) -> i32 { __arena_set(sb + 19, v); 0 }
+// Stage 6: enum_table state — sb+20 = arena base offset of the enum
+// region, sb+21 = registered count. Each entry is 5 slots
+// (name_s, name_l, variant_count, variants_ptr, max_payload_arity).
+// Cap 4 enums for now; expand later.
+fn enum_tab_base(sb: i32) -> i32 { __arena_get(sb + 20) }
+fn enum_tab_count(sb: i32) -> i32 { __arena_get(sb + 21) }
+// Stage 6: var-to-enum binding table — sb+22 = base offset, sb+23 =
+// count. Each entry is 3 slots (var_name_s, var_name_l, enum_idx).
+// Cap 4 vars in 6A; expand later. Used so `let m = Maybe::Some(...)`
+// can later resolve `m`'s enum_idx for typed dispatch.
+fn var_enum_tab_base(sb: i32) -> i32 { __arena_get(sb + 22) }
+fn var_enum_tab_count(sb: i32) -> i32 { __arena_get(sb + 23) }
+// Stage 6: scratch slot — sb+24 = "last_enum_idx" written by
+// parse_primary's enum-construct branch when it produces a value;
+// surrounding let-parser reads then clears (-1 = none).
+fn last_enum_idx(sb: i32) -> i32 { __arena_get(sb + 24) }
+fn set_last_enum_idx(sb: i32, v: i32) -> i32 { __arena_set(sb + 24, v); 0 }
+// Stage 6: enum keyword installed at sb+25/sb+26.
+fn kw_enum_s(sb: i32) -> i32 { __arena_get(sb + 25) }
+fn kw_enum_n(sb: i32) -> i32 { __arena_get(sb + 26) }
 fn var_struct_tab_add(sb: i32, name_s: i32, name_l: i32, struct_idx: i32) -> i32 {
     let count = var_struct_tab_count(sb);
     if count >= 4 {
@@ -275,6 +295,144 @@ fn struct_tab_field_lookup(sb: i32, struct_idx: i32, field_s: i32, field_l: i32)
         }
         found
     }
+}
+
+// Stage 6: enum_table append. Returns the new index (0..3) on success,
+// -1 on overflow. Cap 4 enums. Stride 5 (name_s, name_l, variant_count,
+// variants_ptr, max_payload_arity).
+fn enum_tab_add(sb: i32, name_s: i32, name_l: i32, variant_count: i32, variants_ptr: i32, max_arity: i32) -> i32 {
+    let count = enum_tab_count(sb);
+    if count >= 4 {
+        0 - 1
+    } else {
+        let base = enum_tab_base(sb);
+        let entry = base + count * 5;
+        __arena_set(entry, name_s);
+        __arena_set(entry + 1, name_l);
+        __arena_set(entry + 2, variant_count);
+        __arena_set(entry + 3, variants_ptr);
+        __arena_set(entry + 4, max_arity);
+        __arena_set(sb + 21, count + 1);
+        count
+    }
+}
+
+// Stage 6: look up an enum by name. Returns the entry index on hit, -1
+// on miss. Used by parse_primary to detect `IDENT::` as an enum-variant
+// path. Both struct_tab and enum_tab share IDENT namespace; struct_tab
+// is checked first (via existing IDENT { ... } path) but `::` is unique
+// to enums in Phase 0 so no ambiguity.
+fn enum_tab_lookup_idx(sb: i32, name_s: i32, name_l: i32) -> i32 {
+    let base = enum_tab_base(sb);
+    let count = enum_tab_count(sb);
+    let mut i: i32 = 0;
+    let mut found: i32 = 0 - 1;
+    while i < count {
+        let entry = base + i * 5;
+        let ns = __arena_get(entry);
+        let nl = __arena_get(entry + 1);
+        if byte_eq(name_s, name_l, ns, nl) == 1 {
+            found = i;
+            i = count;
+        } else {
+            i = i + 1;
+        };
+    }
+    found
+}
+
+// Stage 6: variant table entries are 4 slots/variant
+// (name_s, name_l, arity, discriminant). Look up a variant by name on
+// a given enum_idx. Returns the variant's discriminant on hit, -1 on
+// miss. Reads variant_count from enum entry's slot+2.
+fn enum_tab_variant_lookup_disc(sb: i32, enum_idx: i32, vname_s: i32, vname_l: i32) -> i32 {
+    let base = enum_tab_base(sb);
+    let entry = base + enum_idx * 5;
+    let vcount = __arena_get(entry + 2);
+    let vptr = __arena_get(entry + 3);
+    if vptr == 0 {
+        0 - 1
+    } else {
+        let mut i: i32 = 0;
+        let mut found: i32 = 0 - 1;
+        while i < vcount {
+            let ent = vptr + i * 4;
+            let ns = __arena_get(ent);
+            let nl = __arena_get(ent + 1);
+            if byte_eq(vname_s, vname_l, ns, nl) == 1 {
+                found = __arena_get(ent + 3);
+                i = vcount;
+            } else {
+                i = i + 1;
+            };
+        }
+        found
+    }
+}
+
+// Stage 6: same lookup but returns the variant's arity (0 = unit, >=1
+// = payload variant). -1 on miss.
+fn enum_tab_variant_lookup_arity(sb: i32, enum_idx: i32, vname_s: i32, vname_l: i32) -> i32 {
+    let base = enum_tab_base(sb);
+    let entry = base + enum_idx * 5;
+    let vcount = __arena_get(entry + 2);
+    let vptr = __arena_get(entry + 3);
+    if vptr == 0 {
+        0 - 1
+    } else {
+        let mut i: i32 = 0;
+        let mut found: i32 = 0 - 1;
+        while i < vcount {
+            let ent = vptr + i * 4;
+            let ns = __arena_get(ent);
+            let nl = __arena_get(ent + 1);
+            if byte_eq(vname_s, vname_l, ns, nl) == 1 {
+                found = __arena_get(ent + 2);
+                i = vcount;
+            } else {
+                i = i + 1;
+            };
+        }
+        found
+    }
+}
+
+// Stage 6: register a var->enum_idx binding. Returns 0 on success,
+// -1 on overflow.
+fn var_enum_tab_add(sb: i32, name_s: i32, name_l: i32, enum_idx: i32) -> i32 {
+    let count = var_enum_tab_count(sb);
+    if count >= 4 {
+        0 - 1
+    } else {
+        let base = var_enum_tab_base(sb);
+        let entry = base + count * 3;
+        __arena_set(entry, name_s);
+        __arena_set(entry + 1, name_l);
+        __arena_set(entry + 2, enum_idx);
+        __arena_set(sb + 23, count + 1);
+        count
+    }
+}
+
+// Stage 6: look up a var name in var_enum_tab. Returns enum_idx on hit,
+// -1 on miss.
+fn var_enum_tab_lookup(sb: i32, name_s: i32, name_l: i32) -> i32 {
+    let base = var_enum_tab_base(sb);
+    let count = var_enum_tab_count(sb);
+    let mut i: i32 = 0;
+    let mut found: i32 = 0 - 1;
+    while i < count {
+        let entry = base + i * 3;
+        let ns = __arena_get(entry);
+        let nl = __arena_get(entry + 1);
+        if byte_eq(name_s, name_l, ns, nl) == 1 {
+            found = __arena_get(entry + 2);
+            i = count;
+        } else {
+            i = i + 1;
+        };
+    }
+    found
 }
 
 // Iter D: given a struct's table index and a field index, return the
@@ -1117,6 +1275,32 @@ fn var_struct_tab_init(sb: i32) -> i32 {
     0
 }
 
+// Stage 6: enum_table region — 20 slots = 4 entries x 5 fields
+// (name_s, name_l, variant_count, variants_ptr, max_payload_arity).
+fn enum_tab_init(sb: i32) -> i32 {
+    let et_base = __arena_push(0);
+    __arena_push(0); __arena_push(0); __arena_push(0); __arena_push(0);
+    __arena_push(0); __arena_push(0); __arena_push(0); __arena_push(0);
+    __arena_push(0); __arena_push(0); __arena_push(0); __arena_push(0);
+    __arena_push(0); __arena_push(0); __arena_push(0); __arena_push(0);
+    __arena_push(0); __arena_push(0); __arena_push(0);
+    __arena_set(sb + 20, et_base);
+    __arena_set(sb + 21, 0);
+    0
+}
+
+// Stage 6: var_enum_table region — 12 slots = 4 entries x 3 fields
+// (var_name_s, var_name_l, enum_idx). Cap 4 vars.
+fn var_enum_tab_init(sb: i32) -> i32 {
+    let ve_base = __arena_push(0);
+    __arena_push(0); __arena_push(0); __arena_push(0); __arena_push(0);
+    __arena_push(0); __arena_push(0); __arena_push(0); __arena_push(0);
+    __arena_push(0); __arena_push(0); __arena_push(0);
+    __arena_set(sb + 22, ve_base);
+    __arena_set(sb + 23, 0);
+    0
+}
+
 // --------------------------------------------------------------
 // install_keywords: stash "let", "if", "else" bytes in the arena
 // and write their (start, len) into state_base+1..state_base+6.
@@ -1150,6 +1334,11 @@ fn install_keywords(sb: i32) -> i32 {
     __arena_set(sb + 13, struct_s);
     __arena_set(sb + 14, 6);
     struct_tab_init(sb);
+    // Stage 6: "enum" = 101 110 117 109
+    let enum_s = __arena_push(101); __arena_push(110); __arena_push(117); __arena_push(109);
+    __arena_set(sb + 25, enum_s);
+    __arena_set(sb + 26, 4);
+    enum_tab_init(sb);
     0
 }
 
@@ -1158,21 +1347,26 @@ fn install_keywords(sb: i32) -> i32 {
 // Reserves 7 state slots, then dispatches into parse_expr.
 // --------------------------------------------------------------
 fn parse_top(tok_base: i32) -> i32 {
-    // 20 state slots: cursor + 7 keyword (start, len) pairs +
+    // 27 state slots: cursor + 7 keyword (start, len) pairs +
     // struct_table (base + count) + var_struct_table (base + count) +
-    // last_struct_idx scratch. Stage 5 Iter B: slots 17/18 = var->
-    // struct binding table; slot 19 = scratch carrying the last
-    // struct_idx parsed (so let-parsing can record `let p = Pt {...}`
-    // as a struct-typed binding).
+    // last_struct_idx scratch + enum_table (base + count) +
+    // var_enum_table (base + count) + last_enum_idx scratch +
+    // enum keyword (start + len). Stage 6 added slots 20..26.
     let cur_slot = __arena_push(0);
     __arena_push(0); __arena_push(0); __arena_push(0); __arena_push(0);
     __arena_push(0); __arena_push(0); __arena_push(0); __arena_push(0);
     __arena_push(0); __arena_push(0); __arena_push(0); __arena_push(0);
     __arena_push(0); __arena_push(0); __arena_push(0); __arena_push(0);
     __arena_push(0); __arena_push(0); __arena_push(0);
+    // Stage 6: slots 20..26 = enum_table base/count, var_enum_table
+    // base/count, last_enum_idx scratch, enum kw start/len.
+    __arena_push(0); __arena_push(0); __arena_push(0); __arena_push(0);
+    __arena_push(0); __arena_push(0); __arena_push(0);
     install_keywords(cur_slot);
     var_struct_tab_init(cur_slot);
+    var_enum_tab_init(cur_slot);
     __arena_set(cur_slot + 19, 0 - 1);
+    __arena_set(cur_slot + 24, 0 - 1);
     // Peek the first token. If it's `fn`, parse a function decl.
     // Otherwise treat the whole input as a single expression
     // (legacy mode) for backward compat with all existing tests.
@@ -1186,13 +1380,16 @@ fn parse_top(tok_base: i32) -> i32 {
         let id_l = tok_p3(tok_base, k);
         let is_fn = byte_eq(id_s, id_l, kw_fn_s(cur_slot), kw_fn_n(cur_slot));
         let is_struct = byte_eq(id_s, id_l, kw_struct_s(cur_slot), kw_struct_n(cur_slot));
+        let is_enum = byte_eq(id_s, id_l, kw_enum_s(cur_slot), kw_enum_n(cur_slot));
         if is_fn == 1 {
             parse_program(tok_base, cur_slot)
         } else { if is_struct == 1 {
             parse_program(tok_base, cur_slot)
+        } else { if is_enum == 1 {
+            parse_program(tok_base, cur_slot)
         } else {
             parse_expr(tok_base, cur_slot)
-        }}
+        }}}
     } else {
         parse_expr(tok_base, cur_slot)
     }
@@ -1235,11 +1432,12 @@ fn skip_attributes(tok_base: i32, sb: i32) -> i32 {
 // and emits its body; other fns are placed in the binary but only
 // callable once AST_CALL lands.
 fn parse_program(tok_base: i32, sb: i32) -> i32 {
-    // Stage 5 Iter A: skip any leading `struct ... { ... }` decls.
-    // Each registers in struct_table; AST_STRUCT_DECL nodes returned
-    // are discarded since codegen treats them as 0-byte no-ops anyway.
-    let mut keep_struct: i32 = 1;
-    while keep_struct == 1 {
+    // Stage 5 Iter A + Stage 6: skip leading `struct ... { ... }` and
+    // `enum ... { ... }` decls. Each registers in struct_table or
+    // enum_table; the returned AST_STRUCT_DECL nodes (tag 54) are
+    // discarded because codegen treats them as 0-byte no-ops.
+    let mut keep_decl: i32 = 1;
+    while keep_decl == 1 {
         let kk = cur_get(sb);
         let tt = tok_tag(tok_base, kk);
         if tt == 2 {
@@ -1247,11 +1445,13 @@ fn parse_program(tok_base: i32, sb: i32) -> i32 {
             let l = tok_p3(tok_base, kk);
             if byte_eq(s, l, kw_struct_s(sb), kw_struct_n(sb)) == 1 {
                 parse_struct_decl(tok_base, sb);
+            } else { if byte_eq(s, l, kw_enum_s(sb), kw_enum_n(sb)) == 1 {
+                parse_enum_decl(tok_base, sb);
             } else {
-                keep_struct = 0;
-            };
+                keep_decl = 0;
+            }};
         } else {
-            keep_struct = 0;
+            keep_decl = 0;
         };
     }
     let first_fn = parse_fn_decl(tok_base, sb);
@@ -1455,6 +1655,86 @@ fn parse_fn_decl(tok_base: i32, sb: i32) -> i32 {
 // Registers the (name, arity, fields_ptr) into struct_table so
 // parse_primary can detect `IDENT { ... }` as a struct lit later.
 // Returns a tag-54 AST_STRUCT_DECL node which codegen treats as a no-op.
+// Stage 6: parse `enum Name { Variant1, Variant2(T1, T2), ... }`. Each
+// variant gets a 0-based discriminant. Variants table layout: 4 slots
+// per entry (name_s, name_l, arity, discriminant). Codegen uses tag 54
+// (AST_STRUCT_DECL) — emits 0 bytes — so no new emit_ast_code arm.
+// The folding works because both struct decl and enum decl are pure
+// metadata at codegen time (the construction sites use existing tags
+// AST_INT for unit variants and AST_TUPLE_LIT for payload variants).
+fn parse_enum_decl(tok_base: i32, sb: i32) -> i32 {
+    cur_advance(sb);                         // consume 'enum'
+    let nk = cur_get(sb);
+    let name_s = tok_p2(tok_base, nk);
+    let name_l = tok_p3(tok_base, nk);
+    cur_advance(sb);                         // consume name IDENT
+    cur_advance(sb);                         // consume '{' (LBRACE = 5)
+    let mut variant_count: i32 = 0;
+    let mut variants_ptr: i32 = 0;
+    let mut max_arity: i32 = 0;
+    let mut keep: i32 = 1;
+    while keep == 1 {
+        let tt = tok_tag(tok_base, cur_get(sb));
+        if tt == 6 {                         // RBRACE
+            keep = 0;
+        } else { if tt == 0 {                // EOF safety
+            keep = 0;
+        } else {
+            // Variant name IDENT.
+            let vk = cur_get(sb);
+            let v_name_s = tok_p2(tok_base, vk);
+            let v_name_l = tok_p3(tok_base, vk);
+            cur_advance(sb);                 // consume variant-name IDENT
+            // Optional `(T1, T2, ...)` payload-types list. Phase-0:
+            // the type IDENTs are parsed and discarded; only the arity
+            // is recorded (and folded into max_arity).
+            let mut arity: i32 = 0;
+            let after_name_t = tok_tag(tok_base, cur_get(sb));
+            if after_name_t == 3 {           // '('
+                cur_advance(sb);             // consume '('
+                let mut keep_args: i32 = 1;
+                while keep_args == 1 {
+                    let at = tok_tag(tok_base, cur_get(sb));
+                    if at == 4 {             // ')'
+                        keep_args = 0;
+                    } else { if at == 13 {   // ','
+                        cur_advance(sb);
+                    } else { if at == 0 {    // EOF safety
+                        keep_args = 0;
+                    } else {
+                        // Type IDENT — just consume.
+                        cur_advance(sb);
+                        arity = arity + 1;
+                    }}};
+                }
+                cur_advance(sb);             // consume ')'
+            };
+            // Push variant entry: (name_s, name_l, arity, discriminant).
+            // Capture variants_ptr from the FIRST push so subsequent
+            // variants append after it.
+            let pushed = __arena_push(v_name_s);
+            if variant_count == 0 {
+                variants_ptr = pushed;
+            };
+            __arena_push(v_name_l);
+            __arena_push(arity);
+            __arena_push(variant_count);     // discriminant = 0-based index
+            if arity > max_arity { max_arity = arity; };
+            variant_count = variant_count + 1;
+            // Optional COMMA between variants.
+            if tok_tag(tok_base, cur_get(sb)) == 13 {
+                cur_advance(sb);
+            };
+        }};
+    }
+    cur_advance(sb);                         // consume '}' (RBRACE = 6)
+    enum_tab_add(sb, name_s, name_l, variant_count, variants_ptr, max_arity);
+    // Reuse AST_STRUCT_DECL tag (54) — codegen treats both as 0-byte
+    // metadata. Avoids adding a new emit_ast_code arm (Iter D Finding
+    // #7 — host-parser recursion budget is tight at 45 arms).
+    mk_node(54, 0, 0, 0)
+}
+
 fn parse_struct_decl(tok_base: i32, sb: i32) -> i32 {
     cur_advance(sb);                         // consume 'struct' IDENT
     let nk = cur_get(sb);

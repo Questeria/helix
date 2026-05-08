@@ -1448,14 +1448,14 @@ fn unpack_param_ty(packed: i32, idx: i32) -> i32 {
 
 // fn_table: maps fn names to arena slot indices where their code
 // starts. Entry layout: [name_start, name_len, code_offset]. Capacity
-// 256 — generous so the lexer + parser + kovc concatenation (60-100
-// fn declarations) fits comfortably with room for the
-// __helix_arena_base symbol entry.
+// 512 (Stage 6 bump) — the lexer + parser + kovc concatenation has
+// ~290 fns now (Stage 5 ~270, Stage 6A added ~17 enum-table helpers);
+// 512 leaves headroom for Stage 7 (match) + Stage 8 (generics).
 fn fn_table_init() -> i32 {
     let state = __arena_push(0);            // top = 0
     __arena_push(state + 2);                // table_base = state + 2
     let mut i: i32 = 0;
-    while i < 768 {                         // 256 entries * 3 slots
+    while i < 1536 {                        // 512 entries * 3 slots
         __arena_push(0);
         i = i + 1;
     }
@@ -1463,10 +1463,10 @@ fn fn_table_init() -> i32 {
 }
 
 fn fn_table_add(state: i32, name_start: i32, name_len: i32, code_offset: i32) -> i32 {
-    // Audit fix #10: cap-check before writing. Cap = 256 entries
-    // (set in fn_table_init: 256 * 3 slots = 768).
+    // Audit fix #10: cap-check before writing. Cap = 512 entries
+    // (Stage 6 bump from 256 to accommodate enum + future stages).
     let top = __arena_get(state);
-    if top >= 256 {
+    if top >= 512 {
         0 - 1
     } else {
     let table_base = __arena_get(state + 1);

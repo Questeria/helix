@@ -2565,6 +2565,18 @@ fn main() -> i32 {
         "let l = Line { Pt { 1, 2 }, Pt { 3, 39 } }; "
         "l.to.y }"
     ) == 39, "Stage 5 Iter D: nested struct second-field access (l.to.y)"
+    # Stage 6A: enum decl is parsed and registered, codegen treats it as
+    # a 0-byte no-op (folded into AST_STRUCT_DECL tag 54). The program
+    # below should compile and return 0 with no surprises.
+    assert compile_and_exec(
+        "enum Maybe { None } fn main() -> i32 { 0 }"
+    ) == 0, "Stage 6A: enum decl-only compiles to 0 returning main"
+    assert compile_and_exec(
+        "enum Color { R, G, B } fn main() -> i32 { 7 }"
+    ) == 7, "Stage 6A: multi-variant enum decl compiles"
+    assert compile_and_exec(
+        "enum Maybe { None, Some(i32) } fn main() -> i32 { 9 }"
+    ) == 9, "Stage 6A: enum with payload variant decl-only compiles"
     # Stage 4 follow-up audit Finding #2: AST_NEG was missing u64
     # dispatch. Fell through to 32-bit `neg eax` which only flipped
     # the low half. Now uses REX.W neg rax (same as i64).
