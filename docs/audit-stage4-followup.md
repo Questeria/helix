@@ -536,6 +536,56 @@ require slightly broader refactors but no new helpers. Findings 6, 7, 8
 are MEDIUM and can be deferred or addressed alongside related Stage 5
 type-system work.
 
+---
+
+## Resolution status (2026-05-08 cycle)
+
+| # | Status | Commit / note |
+|---|--------|---------------|
+| 1 | RESOLVED | 6aaec01 — width-class trap 14002 (softer variant; full-equality blocked by self-host false positives) |
+| 2 | RESOLVED | d1cdb6f — u64 NEG dispatch via emit_neg_rax_64 |
+| 3 | RESOLVED | 7f9db80 — AST_VAR off==0 guard, trap 1001 |
+| 4 | RESOLVED | 6aaec01 — full val_ty/bind_ty trap matrix 8005..8016 |
+| 5 | RESOLVED | f8db565 — u64 SHL/SHR via emit_shl/sar_rax_cl_64; float traps 32001/32010/32040, 33001/33010/33040 |
+| 6 | DEFERRED | AST_CALL arity-mismatch trap 16003 fires on real self-host calls. Requires audit of bootstrap source for arity-deficient calls (or off-by-one in fn_type_table_lookup_params encoding). Investigation needed before fix can land. |
+| 7 | RESOLVED | be751cb — TUPLE_LIT/FIELD disp8 wrap traps 50001/52001, flat prefix-trap pattern |
+| 8 | DEFERRED | Comparison narrow-type mismatch trap 6052/19052/... fires on real self-host comparisons (likely u8/i8 vs i32 in helper functions). Same root cause as #6: bootstrap source has type-mismatched comparisons. Investigation needed. |
+
+## Deferred findings — investigation plan
+
+For Findings #6 and #8, the trap reveals real bootstrap-source bugs. To
+land them, do one of:
+
+1. **Bootstrap source audit:** grep self-host for arity-mismatched calls
+   and narrow-type comparisons; fix at the source. Slow but correct.
+2. **Soft-trap variant:** trap only when the mismatch is provably
+   dangerous (e.g., signed/unsigned mismatch, or width differs by ≥2x).
+   Skip cases that signed-32 cmp handles correctly. Less complete.
+3. **Type-table audit:** verify fn_type_table_lookup_params encoding is
+   correct (no off-by-one in pp_count). May explain #6 directly.
+
+Until either is done, the documented gap remains a known silent-corruption
+window that doesn't fire in the existing self-host or test suite.
+
+Lesson learned: the host parser (helixc-Python) has a recursion budget
+that flat patterns navigate well but deep wrap-with-if-else patterns
+don't. When adding traps, prefer:
+
+```
+let n_pre_trap = if cond { emit_trap_with_id(N) } else { 0 };
+... existing body ...
+total + n_pre_trap
+```
+
+over
+
+```
+if cond { emit_trap_with_id(N) } else { ... existing body ... }
+```
+
+The flat pattern was the difference between Finding #7 landing cleanly
+vs miscompiling unrelated programs.
+
 The bf16 sweep + trap-id sweep correctly cover binop arithmetic and
 comparison wide-class dispatch. The remaining silent windows are in
 unary ops (NEG), shifts (SHL/SHR), assignment narrow-bind cases, function
