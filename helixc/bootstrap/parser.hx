@@ -383,21 +383,28 @@ fn parse_unary(tok_base: i32, sb: i32) -> i32 {
         let inner = parse_unary(tok_base, sb);
         mk_node(31, inner, 0, 0)
     } else {
-        // Stage 4 iter B: postfix tuple field access.
+        // Stage 4 iter B + E: postfix tuple field access AND array index.
+        //   .NUM         → AST_TUPLE_FIELD (tag 52, static idx).
+        //   [idx_expr]   → AST_INDEX (tag 53, dynamic idx).
         let mut prim = parse_primary(tok_base, sb);
         let mut keep_p: i32 = 1;
         while keep_p == 1 {
             let pk = cur_get(sb);
             let pt = tok_tag(tok_base, pk);
-            if pt == 22 {
+            if pt == 22 {                              // TK_DOT
                 let nt = tok_tag(tok_base, pk + 1);
-                if nt == 1 {
+                if nt == 1 {                           // TK_INT
                     cur_advance(sb);
                     let idx_val = tok_p1(tok_base, pk + 1);
                     cur_advance(sb);
                     prim = mk_node(52, prim, idx_val, 0);
                 } else { keep_p = 0; };
-            } else { keep_p = 0; };
+            } else { if pt == 20 {                     // TK_LBRACK
+                cur_advance(sb);                       // skip '['
+                let idx_expr = parse_expr(tok_base, sb);
+                cur_advance(sb);                       // skip ']'
+                prim = mk_node(53, prim, idx_expr, 0);
+            } else { keep_p = 0; }; };
         }
         prim
     }}}

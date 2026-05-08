@@ -2396,6 +2396,21 @@ fn main() -> i32 {
     assert compile_and_exec(
         "fn main() -> i32 { let arr = [1, 2, 3] ; arr.0 + arr.1 + arr.2 + 36 }"
     ) == 42, "array stored in let, multi-field read"
+    # Stage 4 iteration E: array indexing arr[i] with runtime index.
+    # Codegen: eval array (rax=ptr), push, eval idx (eax=idx), mov ecx eax,
+    # pop rax, imul ecx ecx 8, add rax rcx (REX.W), mov eax [rax].
+    assert compile_and_exec(
+        "fn main() -> i32 { [10, 20, 30][1] + 22 }"
+    ) == 42, "array index with literal idx (.1=20, +22=42)"
+    assert compile_and_exec(
+        "fn main() -> i32 { let arr = [10, 20, 30] ; arr[2] + 12 }"
+    ) == 42, "array let + index (.2=30, +12=42)"
+    assert compile_and_exec(
+        "fn main() -> i32 { let arr = [10, 20, 30] ; let i = 1 ; arr[i] + 22 }"
+    ) == 42, "array index with variable idx"
+    assert compile_and_exec(
+        "fn main() -> i32 { let arr = [10, 20, 30] ; arr[0] + arr[1] + arr[2] - 18 }"
+    ) == 42, "array indexed multiple times (10+20+30-18)"
     # Stage 1.5 audit fix: bf16 comparison ops trap. Pre-fix:
     # AST_LT/GT/LE/GE/EQ/NE cascades had no is_bf16_expr check — bf16
     # operands fell through to integer compare on bit patterns. This is

@@ -1041,6 +1041,7 @@ fn expr_type(idx: i32, bind_state: i32, bn_state: i32) -> i32 {
     else { if t == 42 { 4 }                           // AST_FLOATLIT_BF16 (Stage 1.5)
     else { if t == 50 { 3 }                            // AST_TUPLE_LIT (Stage 4) — 64-bit pointer (treat as i64 for storage)
     else { if t == 52 { 0 }                            // AST_TUPLE_FIELD (Stage 4 iter B) — 32-bit element
+    else { if t == 53 { 0 }                            // AST_INDEX (Stage 4 iter E) — 32-bit element
     else { if t == 0 { 0 }                            // AST_INTLIT (i32)
     else { if t == 1 {                                // AST_VAR
         bind_lookup_type(bind_state, p1, p2)
@@ -1165,7 +1166,7 @@ fn expr_type(idx: i32, bind_state: i32, bn_state: i32) -> i32 {
                 }
             }
         }
-    } else { 0 }}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}
+    } else { 0 }}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}
 }
 
 // Phase 1.10 step 5c: type-inference on AST nodes. Returns 1 if the
@@ -2930,6 +2931,31 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         let off = p2 * 8;
         emit_byte(0x8B); emit_byte(0x40); emit_byte(off);
         n_inner + 3
+    } else { if t == 53 {
+        // Stage 4 iter E: AST_INDEX (tag 53). p1=array_expr, p2=idx_expr.
+        // Codegen:
+        //   eval array_expr  → rax = base ptr
+        //   push rax
+        //   eval idx_expr    → eax = idx (high 32 zero from 32-bit op)
+        //   mov ecx, eax     (ecx = idx)
+        //   pop rax          (rax = base)
+        //   imul ecx, ecx, 8 (ecx = idx*8)
+        //   add rax, rcx     (REX.W; rax = base + idx*8)
+        //   mov eax, [rax]   (load 4-byte element)
+        let n_arr = emit_ast_code(p1, bind_state, patch_state, bn_state);
+        let np = emit_push_rax();
+        let n_idx = emit_ast_code(p2, bind_state, patch_state, bn_state);
+        // mov ecx, eax  (89 C1 = 2 bytes)
+        emit_byte(0x89); emit_byte(0xC1);
+        // pop rax  (58 = 1 byte)
+        emit_byte(0x58);
+        // imul ecx, ecx, 8  (6B C9 08 = 3 bytes)
+        emit_byte(0x6B); emit_byte(0xC9); emit_byte(0x08);
+        // add rax, rcx  (REX.W: 48 01 C8 = 3 bytes)
+        emit_byte(0x48); emit_byte(0x01); emit_byte(0xC8);
+        // mov eax, [rax]  (8B 00 = 2 bytes)
+        emit_byte(0x8B); emit_byte(0x00);
+        n_arr + np + n_idx + 11
     } else { if t == 50 {
         // Stage 4 iteration A: AST_TUPLE_LIT (tag 50).
         //   p1 = arity (number of elements)
@@ -4242,7 +4268,7 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         // resulting binary to SIGILL — clear signal vs. silent 0.
         // Speedup #4 wire-in: AST_ERR / unhandled-tag trap id 99001.
         emit_trap_with_id(99001)
-    }}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}
+    }}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}
 }
 
 // --------------------------------------------------------------
