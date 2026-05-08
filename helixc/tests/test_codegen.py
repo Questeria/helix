@@ -17,6 +17,22 @@ from helixc.ir.passes.fdce import fdce_module
 from helixc.backend.x86_64 import compile_module_to_elf
 
 
+def _win_to_wsl(win_path: str) -> str:
+    """Convert a Windows absolute path (e.g. C:\\Foo\\bar) to its WSL form
+    (e.g. /mnt/c/Foo/bar). Works for any drive letter and tolerates being
+    run from a worktree path. Falls back to a normalised path if the
+    input is already POSIX-style.
+    """
+    p = os.path.abspath(win_path).replace("\\", "/")
+    if len(p) >= 2 and p[1] == ":":
+        drive = p[0].lower()
+        rest = p[2:]
+        if not rest.startswith("/"):
+            rest = "/" + rest
+        return f"/mnt/{drive}{rest}"
+    return p
+
+
 def compile_and_run(src: str, optimize: bool = True) -> int:
     """Compile Helix source to ELF, run via WSL, return exit code.
 
@@ -48,8 +64,7 @@ def compile_and_run(src: str, optimize: bool = True) -> int:
         f.write(elf)
     os.chmod(out_path, 0o755)
     # Run via WSL
-    rel = os.path.relpath(out_path, proj_root).replace("\\", "/")
-    wsl_path = f"/mnt/c/Projects/Kovostov-Native/{rel}"
+    wsl_path = _win_to_wsl(out_path)
     result = subprocess.run(
         ["wsl", "--", "bash", "-c", f"chmod +x {wsl_path} && {wsl_path}"],
         capture_output=True,
@@ -1508,8 +1523,7 @@ fn main() -> i32 {
         os.chmod(cached_bootstrap, 0o755)
 
     # Convert cache path to WSL path once.
-    cached_rel = os.path.relpath(cached_bootstrap, proj).replace("\\", "/")
-    cached_wsl = f"/mnt/c/Projects/Kovostov-Native/{cached_rel}"
+    cached_wsl = _win_to_wsl(cached_bootstrap)
 
     def compile_and_exec(source_text: str) -> int:
         # Speedup #3 fast path: write source to fixed /tmp path, exec
@@ -3480,8 +3494,7 @@ def test_demo_mandelbrot_renders_recognizable_shape():
     with open(out_path, "wb") as f:
         f.write(elf)
     os.chmod(out_path, 0o755)
-    rel = os.path.relpath(out_path, proj).replace("\\", "/")
-    wsl_path = f"/mnt/c/Projects/Kovostov-Native/{rel}"
+    wsl_path = _win_to_wsl(out_path)
     result = subprocess.run(
         ["wsl", "--", "bash", "-c", f"chmod +x {wsl_path} && {wsl_path}"],
         capture_output=True, timeout=60,
