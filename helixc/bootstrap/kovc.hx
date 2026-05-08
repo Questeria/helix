@@ -4309,14 +4309,25 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
             arg_count = arg_count + 1;
             arg_cur = __arena_get(arg_cur + 2);
         }
-        // Finding #6 investigation: encode (pp_count, arg_count) as
-        // distinct trap ids to identify the FIRST mismatched call site
-        // when the trap fires. id = 70000 + pp_count * 10 + arg_count
-        // (so e.g. pp=3, arg=2 -> 70032). Skip when pp_count == 0
-        // (builtins) or arg_count == pp_count (match).
+        // Audit follow-up Finding #6: AST_CALL arity mismatch trap (16003).
+        // Pre-fix, when arg_count != pp_count (both <= 6), the pass-1 type
+        // check ran only while arg_count < pp_count, missing later mismatches;
+        // pass 2 pops arg_count values regardless of pp_count, so missing
+        // args silently read garbage from rdx/rcx/r8/r9 at the callee.
+        // Builtins (pp_count == 0) skip the check, since builtins aren't
+        // in fn_type_table and have their own dispatch arity.
+        //
+        // FLAT prefix-trap pattern (Finding #7 lesson): a deeply-nested
+        // if-else inserted as a STATEMENT inside the AST_CALL arm strains
+        // the host parser (helixc-Python) recursion budget and miscompiles
+        // unrelated programs. Wrapping the trap in `let n = if cond { ... }
+        // else { 0 }` and adding to bytes_emitted afterwards is recursion-
+        // safe — investigation 2026-05-08 confirmed this is the root cause
+        // (no real arity-mismatched calls in self-host source; the trap
+        // didn't fire at any real call once the pattern was made flat).
         let n_arity_trap = if pp_count > 0 {
             if arg_count != pp_count {
-                emit_trap_with_id(70000 + pp_count * 10 + arg_count)
+                emit_trap_with_id(16003)
             } else { 0 }
         } else { 0 };
         bytes_emitted = bytes_emitted + n_arity_trap;
