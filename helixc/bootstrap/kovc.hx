@@ -3088,11 +3088,21 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         // Codegen:
         //   sub rsp, 8*arity      (allocate N 8-byte stack slots)
         //   for each element i:
-        //     evaluate child -> eax
-        //     mov [rsp+i*8], eax  (4-byte store; high 4 bytes of slot unused)
+        //     evaluate child -> rax (full 64 bits)
+        //     mov [rsp+i*8], rax  (REX.W 8-byte store; covers both i32
+        //                          values — auto-zero-extended in eax —
+        //                          and 64-bit struct pointers from nested
+        //                          AST_TUPLE_LIT children).
         //   mov rax, rsp          (rax = address of slot 0)
+        // Stage 5 Iter D: switched to 8-byte stores so a struct lit can
+        // hold child struct pointers (Line { Pt {...}, Pt {...} } —
+        // each Pt evaluates to a pointer in rax; storing only eax would
+        // truncate the high 32 bits of the pointer to zero). For scalar
+        // (i32) children, x86 32-bit ops zero-extend rax, so the upper
+        // 32 bits stored are zero — subsequent 4-byte reads via tag 52
+        // (p3 == 0) recover the i32 unchanged.
         // Audit follow-up Finding #7: disp8 wrap when arity > 16.
-        // The store `mov [rsp+disp8], eax` uses signed disp8 (-128..127).
+        // The store `mov [rsp+disp8], rax` uses signed disp8 (-128..127).
         // arity = 16 → last off = 15*8 = 120 (still fits). arity = 17 →
         // last off = 16*8 = 128 wraps to -128. Disp32 emission is
         // deferred; emit ud2 prefix so runtime traps loudly before the
@@ -3116,10 +3126,10 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         while cur != 0 {
             let child = __arena_get(cur + 1);
             let n_child = emit_ast_code(child, bind_state, patch_state, bn_state);
-            // mov [rsp + off], eax  (89 44 24 disp8 = 4 bytes)
-            emit_byte(0x89); emit_byte(0x44); emit_byte(0x24);
-            emit_byte(off);
-            total = total + n_child + 4;
+            // mov [rsp + off], rax  (REX.W: 48 89 44 24 disp8 = 5 bytes)
+            emit_byte(0x48); emit_byte(0x89); emit_byte(0x44);
+            emit_byte(0x24); emit_byte(off);
+            total = total + n_child + 5;
             off = off + 8;
             cur = __arena_get(cur + 2);
         }
