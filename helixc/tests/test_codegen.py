@@ -8283,6 +8283,62 @@ def test_stdlib_int_min_max_clamp():
     assert code == 18, f"expected 18 (3+5+10), got {code}"
 
 
+def test_stdlib_abs_i32():
+    """__abs_i32 negative + positive + zero from stdlib end-to-end."""
+    src = """
+    fn main() -> i32 {
+        let a = __abs_i32(0 - 17);
+        let b = __abs_i32(25);
+        let c = __abs_i32(0);
+        a + b + c
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42 (17+25+0), got {code}"
+
+
+def test_stdlib_sign_i32():
+    """__sign_i32 returns -1 / 0 / +1 across the three regions."""
+    src = """
+    fn main() -> i32 {
+        let a = __sign_i32(7);
+        let b = __sign_i32(0 - 5);
+        let c = __sign_i32(0);
+        a * 40 - b * 2 + c
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42 (40+2+0), got {code}"
+
+
+def test_stdlib_sign_f64():
+    """__sign_f64 returns -1.0 / 0.0 / +1.0 across the three regions."""
+    src = """
+    fn main() -> i32 {
+        let a = __sign_f64(7.5_f64) as i32;
+        let b = __sign_f64(0.0_f64 - 5.5_f64) as i32;
+        let c = __sign_f64(0.0_f64) as i32;
+        a * 40 - b * 2 + c
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42 (40+2+0), got {code}"
+
+
+def test_stdlib_mse_f64():
+    """__mse_f64 per-example squared error: (p-t)^2 for three pairs."""
+    src = """
+    fn main() -> i32 {
+        let a = __mse_f64(7.0_f64, 3.0_f64) as i32;
+        let b = __mse_f64(5.0_f64, 0.0_f64) as i32;
+        let c = __mse_f64(2.0_f64, 1.0_f64) as i32;
+        a + b + c
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42 (16+25+1), got {code}"
+
+
 def test_hbs_sample_option_runs():
     """HBS sample: Maybe<i32>-style enum + payload pattern extraction.
     Extracts Some(40) + Some(2) = 42; also unpacks Pair::Cons(15, 25)."""

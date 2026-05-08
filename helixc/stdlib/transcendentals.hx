@@ -477,3 +477,30 @@ fn __always_accept(h: i32, v: f32) -> i32 {
 @pure fn __clamp_i32(x: i32, lo: i32, hi: i32) -> i32 {
     if x < lo { lo } else { if x > hi { hi } else { x } }
 }
+
+// Integer absolute value. Mirror of __abs (f32) on the i32 side. For
+// x = INT32_MIN (-2^31) this is undefined behaviour: -INT32_MIN can't be
+// represented as i32 and overflow wraps back to INT32_MIN; callers that
+// need a defined result there should clamp first.
+@pure fn __abs_i32(x: i32) -> i32 {
+    if x < 0 { 0 - x } else { x }
+}
+
+// Integer sign (-1 / 0 / +1). Mirror of __sign (f32) on the i32 side.
+@pure fn __sign_i32(x: i32) -> i32 {
+    if x > 0 { 1 } else { if x < 0 { 0 - 1 } else { 0 } }
+}
+
+// f64 sign (-1.0 / 0.0 / +1.0). Mirror of __sign (f32) at f64 precision.
+@pure fn __sign_f64(x: f64) -> f64 {
+    if x > 0.0_f64 { 1.0_f64 }
+    else { if x < 0.0_f64 { 0.0_f64 - 1.0_f64 } else { 0.0_f64 } }
+}
+
+// f64 mean-squared error per-example. Mirror of __mse (f32) at f64
+// precision; useful when callers stay in f64 to avoid the f32-precision
+// loss of (pred - target)^2 for large or near-equal values.
+@pure fn __mse_f64(pred: f64, target: f64) -> f64 {
+    let d = pred - target;
+    d * d
+}
