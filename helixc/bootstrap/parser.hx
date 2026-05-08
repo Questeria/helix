@@ -226,11 +226,14 @@ fn gp_tab_lookup(sb: i32, name_s: i32, name_l: i32) -> i32 {
 //   slot 1: orig_name_l
 //   slot 2: mangled_name_s (in arena)
 //   slot 3: mangled_name_l
-//   slot 4: type_args_packed (4 bits per arg, up to 6 args)
-//   slot 5: type_args_count (0..6)
+//   slot 4: pack_lo = type_args_packed * 8 + type_args_count
+//           (low 3 bits = count, upper = 4-bit-per-arg packed tags)
+//   slot 5: reserved (currently 0)
+// Combining packed+count into a single i32 avoids the 7-arg fn limit
+// (SysV bootstrap supports 6 int params).
 fn mr_tab_base(sb: i32) -> i32 { __arena_get(sb + 31) }
 fn mr_tab_count(sb: i32) -> i32 { __arena_get(sb + 32) }
-fn mr_tab_add(sb: i32, orig_s: i32, orig_l: i32, mang_s: i32, mang_l: i32, packed: i32, ta_count: i32) -> i32 {
+fn mr_tab_add(sb: i32, orig_s: i32, orig_l: i32, mang_s: i32, mang_l: i32, pack_lo: i32) -> i32 {
     let count = mr_tab_count(sb);
     if count >= 32 {
         0 - 1
@@ -241,15 +244,15 @@ fn mr_tab_add(sb: i32, orig_s: i32, orig_l: i32, mang_s: i32, mang_l: i32, packe
         __arena_set(entry + 1, orig_l);
         __arena_set(entry + 2, mang_s);
         __arena_set(entry + 3, mang_l);
-        __arena_set(entry + 4, packed);
-        __arena_set(entry + 5, ta_count);
+        __arena_set(entry + 4, pack_lo);
+        __arena_set(entry + 5, 0);
         __arena_set(sb + 32, count + 1);
         count
     }
 }
-// Lookup an instantiation by (orig_name, type_args_packed, ta_count).
-// Returns the entry idx on hit (so caller can re-use mangled name), -1 on miss.
-fn mr_tab_lookup(sb: i32, orig_s: i32, orig_l: i32, packed: i32, ta_count: i32) -> i32 {
+// Lookup an instantiation by (orig_name, pack_lo). pack_lo encodes both
+// packed type tags and count as a single i32. Returns entry idx on hit, -1 miss.
+fn mr_tab_lookup(sb: i32, orig_s: i32, orig_l: i32, pack_lo: i32) -> i32 {
     let base = mr_tab_base(sb);
     let count = mr_tab_count(sb);
     let mut i: i32 = 0;
@@ -259,13 +262,10 @@ fn mr_tab_lookup(sb: i32, orig_s: i32, orig_l: i32, packed: i32, ta_count: i32) 
         let ns = __arena_get(entry);
         let nl = __arena_get(entry + 1);
         let p = __arena_get(entry + 4);
-        let c = __arena_get(entry + 5);
         if byte_eq(orig_s, orig_l, ns, nl) == 1 {
-            if p == packed {
-                if c == ta_count {
-                    found = i;
-                    i = count;
-                } else { i = i + 1; }
+            if p == pack_lo {
+                found = i;
+                i = count;
             } else { i = i + 1; }
         } else {
             i = i + 1;
@@ -564,6 +564,95 @@ fn mk_node(tag: i32, p1: i32, p2: i32, p3: i32) -> i32 {
     __arena_push(p2);
     __arena_push(p3);
     i
+}
+
+// Stage 8: map a type IDENT's bytes to a 4-bit type tag.
+//   i32 -> 0, f32 -> 1, f64 -> 2, i64 -> 3, u32 -> 6, u64 -> 9.
+//   bf16 -> 4 (4-byte). Unknown -> 0 (i32 default; safe fallback for
+//   substitution sites where the body just bitcasts through the slot).
+// Mirrors the strict per-byte logic in parse_fn_decl param-type
+// resolution but flat-ladder safe (called from turbofish parsing and
+// mono-pass substitution).
+@pure
+fn ty_ident_to_tag(ty_s: i32, ty_l: i32) -> i32 {
+    if ty_l == 3 {
+        let b0 = __arena_get(ty_s);
+        let b1 = __arena_get(ty_s + 1);
+        let b2 = __arena_get(ty_s + 2);
+        if b0 == 102 {
+            if b1 == 54 { if b2 == 52 { 2 } else { 0 } }
+            else { if b1 == 51 { if b2 == 50 { 1 } else { 0 } } else { 0 } }
+        } else { if b0 == 105 {
+            if b1 == 54 { if b2 == 52 { 3 } else { 0 } }
+            else { if b1 == 51 { if b2 == 50 { 0 } else { 0 } } else { 0 } }
+        } else { if b0 == 117 {
+            if b1 == 51 { if b2 == 50 { 6 } else { 0 } }
+            else { if b1 == 54 { if b2 == 52 { 9 } else { 0 } } else { 0 } }
+        } else { 0 } } }
+    } else { 0 }
+}
+
+// Stage 8: append the digits of a small i32 (0..15 -- enough for type
+// tag) to the arena as ASCII bytes. Returns the byte_len of what was
+// pushed. Used by the mangle helper.
+fn push_tag_digits(tag: i32) -> i32 {
+    if tag < 10 {
+        __arena_push(48 + tag);
+        1
+    } else {
+        __arena_push(48 + tag / 10);
+        __arena_push(48 + (tag - (tag / 10) * 10));
+        2
+    }
+}
+
+// Stage 8: build a mangled name like `id__i32` or `pair__i32_f64`
+// directly into the arena. Inputs:
+//   orig_s/l   - bytes of the original fn name
+//   ty_s_arr   - parallel arrays held in arena: type-arg name_starts
+//   ty_l_arr   - and lengths, ta_count entries each.
+//   ta_arr     - already-arena-pushed list of starts/lens (ta_count*2
+//                slots starting at ta_arr_base).
+// Returns the start offset of the mangled bytes; the caller already
+// knows the length (= orig_l + 2 + sum(ty_l_i + 1) - 1).
+fn mangle_name_into_arena(orig_s: i32, orig_l: i32, ta_arr_base: i32, ta_count: i32) -> i32 {
+    let start = __arena_len();
+    // Copy orig name.
+    let mut i: i32 = 0;
+    while i < orig_l {
+        __arena_push(__arena_get(orig_s + i));
+        i = i + 1;
+    }
+    // Append "__".
+    __arena_push(95);
+    __arena_push(95);
+    // Append each type-arg ident, separated by '_'.
+    let mut j: i32 = 0;
+    while j < ta_count {
+        if j > 0 { __arena_push(95); };  // '_' separator
+        let ts = __arena_get(ta_arr_base + j * 2);
+        let tl = __arena_get(ta_arr_base + j * 2 + 1);
+        let mut bb: i32 = 0;
+        while bb < tl {
+            __arena_push(__arena_get(ts + bb));
+            bb = bb + 1;
+        }
+        j = j + 1;
+    }
+    start
+}
+
+// Stage 8: total mangled length given orig_l, ta_arr_base, ta_count.
+fn mangle_name_len(orig_l: i32, ta_arr_base: i32, ta_count: i32) -> i32 {
+    let mut total: i32 = orig_l + 2;     // orig + "__"
+    let mut j: i32 = 0;
+    while j < ta_count {
+        if j > 0 { total = total + 1; };  // '_' separator
+        let tl = __arena_get(ta_arr_base + j * 2 + 1);
+        total = total + tl;
+        j = j + 1;
+    }
+    total
 }
 
 // --------------------------------------------------------------
@@ -1151,7 +1240,106 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
             // has `(` at k+4. 6C handled below as a separate prefix.
             let is_enum_unit = if is_enum_path == 1 { if t4_pre == 3 { 0 } else { 1 } } else { 0 };
             let is_enum_payload = if is_enum_path == 1 { if t4_pre == 3 { 1 } else { 0 } } else { 0 };
-            if is_enum_unit == 1 {
+            // Stage 8: turbofish detection. `IDENT::<TY1, TY2, ...>(...)`
+            // is a generic-fn call. Identifying tokens at k+1..k+3 are
+            // COLON, COLON, LT (16). Mutually exclusive with is_enum_path
+            // since enum requires t3_pre == 2 (IDENT) and turbofish
+            // requires t3_pre == 16 (LT). FLAT prefix-trap pattern.
+            let is_turbofish = if t1_pre == 14 {
+                if t2_pre == 14 { if t3_pre == 16 { 1 } else { 0 } } else { 0 }
+            } else { 0 };
+            if is_turbofish == 1 {
+                // Consume IDENT, `:`, `:`, `<`.
+                cur_advance(sb);                       // IDENT
+                cur_advance(sb);                       // ':'
+                cur_advance(sb);                       // ':'
+                cur_advance(sb);                       // '<'
+                // Read up to 6 type-arg IDENTs separated by `,` until `>`.
+                // Cap 6 type args (Phase-0). We collect (start, len) pairs
+                // into a scratch arena region, then build the mangled name
+                // and pack tags into 4-bit slots.
+                let ta_arr_base = __arena_len();
+                __arena_push(0); __arena_push(0); __arena_push(0); __arena_push(0);
+                __arena_push(0); __arena_push(0); __arena_push(0); __arena_push(0);
+                __arena_push(0); __arena_push(0); __arena_push(0); __arena_push(0);
+                let mut ta_count: i32 = 0;
+                let mut keep_t: i32 = 1;
+                while keep_t == 1 {
+                    let tt = tok_tag(tok_base, cur_get(sb));
+                    if tt == 17 {                      // '>' end
+                        keep_t = 0;
+                    } else { if tt == 13 {             // ','
+                        cur_advance(sb);
+                    } else { if tt == 0 {              // EOF safety
+                        keep_t = 0;
+                    } else {
+                        // Type IDENT — capture bytes.
+                        let tk = cur_get(sb);
+                        let ts = tok_p2(tok_base, tk);
+                        let tl = tok_p3(tok_base, tk);
+                        cur_advance(sb);
+                        if ta_count < 6 {
+                            __arena_set(ta_arr_base + ta_count * 2, ts);
+                            __arena_set(ta_arr_base + ta_count * 2 + 1, tl);
+                            ta_count = ta_count + 1;
+                        };
+                    }}};
+                }
+                cur_advance(sb);                       // consume '>'
+                // Build mangled name like `id__i32` directly into arena.
+                let mang_s = mangle_name_into_arena(id_start, id_len, ta_arr_base, ta_count);
+                let mang_l = mangle_name_len(id_len, ta_arr_base, ta_count);
+                // Pack type-arg tags (4 bits each, up to 6 args = 24 bits).
+                let mut packed: i32 = 0;
+                let mut shift: i32 = 0;
+                let mut tj: i32 = 0;
+                while tj < ta_count {
+                    let ts = __arena_get(ta_arr_base + tj * 2);
+                    let tl = __arena_get(ta_arr_base + tj * 2 + 1);
+                    let tag_val = ty_ident_to_tag(ts, tl);
+                    let mut place: i32 = tag_val;
+                    let mut s: i32 = 0;
+                    while s < shift { place = place * 2; s = s + 1; }
+                    packed = packed + place;
+                    shift = shift + 4;
+                    tj = tj + 1;
+                }
+                // Register the mono request (dedup-aware). Combine packed
+                // tags + count into a single i32 (low 3 bits = count, rest
+                // = packed) to fit SysV's 6-int-param limit.
+                let pack_lo = packed * 8 + ta_count;
+                let existing = mr_tab_lookup(sb, id_start, id_len, pack_lo);
+                if existing < 0 {
+                    mr_tab_add(sb, id_start, id_len, mang_s, mang_l, pack_lo);
+                };
+                // Now parse the call args `( ... )`.
+                cur_advance(sb);                       // consume '('
+                let mut args_head: i32 = 0;
+                let mut prev_arg: i32 = 0;
+                let mut k_keep: i32 = 1;
+                while k_keep == 1 {
+                    let at = tok_tag(tok_base, cur_get(sb));
+                    if at == 4 {
+                        k_keep = 0;
+                    } else { if at == 13 {
+                        cur_advance(sb);
+                    } else {
+                        let arg_expr = parse_expr_basic(tok_base, sb);
+                        let new_arg = mk_node(17, arg_expr, 0, 0);
+                        if args_head == 0 {
+                            args_head = new_arg;
+                            prev_arg = new_arg;
+                        } else {
+                            __arena_set(prev_arg + 2, new_arg);
+                            prev_arg = new_arg;
+                        };
+                    }};
+                }
+                cur_advance(sb);                       // consume ')'
+                // Build AST_CALL with the MANGLED name (so codegen looks
+                // up the synthesized mono'd fn).
+                mk_node(16, mang_s, mang_l, args_head)
+            } else { if is_enum_unit == 1 {
                 // Consume IDENT, `:`, `:`, variant-IDENT.
                 cur_advance(sb);                       // outer IDENT (enum name)
                 cur_advance(sb);                       // first ':'
@@ -1391,7 +1579,7 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
                 // Var ref
                 mk_node(1, id_start, id_len, 0)
             }}}
-            }}
+            }}}
         }}}}
     } else { if t == 3 {
         // Stage 4 iteration A: tuple literal vs parenthesized expr.
