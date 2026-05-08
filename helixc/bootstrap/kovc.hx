@@ -3027,10 +3027,17 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         emit_ast_int(p1)
     } else { if t == 52 {
         // Stage 4 iter B: AST_TUPLE_FIELD (tag 52).
+        // Audit follow-up Finding #7: disp8 wrap when p2 > 15.
+        // mov eax, [rax + p2*8] uses signed disp8 (-128..127). For
+        // p2 >= 16, off = p2*8 >= 128 wraps to a NEGATIVE displacement
+        // and reads from BEFORE the tuple base — silent garbage.
+        // Disp32 emission is deferred; emit ud2 prefix so runtime
+        // traps loudly before the wrapping load executes.
+        let n_pre_trap = if p2 > 15 { emit_trap_with_id(52001) } else { 0 };
         let n_inner = emit_ast_code(p1, bind_state, patch_state, bn_state);
         let off = p2 * 8;
         emit_byte(0x8B); emit_byte(0x40); emit_byte(off);
-        n_inner + 3
+        n_inner + 3 + n_pre_trap
     } else { if t == 53 {
         // Stage 4 iter E: AST_INDEX (tag 53). p1=array_expr, p2=idx_expr.
         // Codegen:
@@ -3067,14 +3074,19 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         //     evaluate child -> eax
         //     mov [rsp+i*8], eax  (4-byte store; high 4 bytes of slot unused)
         //   mov rax, rsp          (rax = address of slot 0)
-        // Limitation: arity must be ≤ 15 because slot offsets (i*8) need
-        // to fit in signed disp8. Tuples beyond that are deferred.
+        // Audit follow-up Finding #7: disp8 wrap when arity > 16.
+        // The store `mov [rsp+disp8], eax` uses signed disp8 (-128..127).
+        // arity = 16 → last off = 15*8 = 120 (still fits). arity = 17 →
+        // last off = 16*8 = 128 wraps to -128. Disp32 emission is
+        // deferred; emit ud2 prefix so runtime traps loudly before the
+        // wrapping stores execute. (Body still emits, but ud2 fires first.)
         let arity = p1;
+        let n_pre_trap = if arity > 16 { emit_trap_with_id(50001) } else { 0 };
         let alloc_bytes = arity * 8;
         // sub rsp, imm32  (REX.W + 81 /5 imm32 = 7 bytes)
         emit_byte(0x48); emit_byte(0x81); emit_byte(0xEC);
         emit_u32_le(alloc_bytes);
-        let mut total: i32 = 7;
+        let mut total: i32 = 7 + n_pre_trap;
         let mut cur: i32 = p2;
         // Stage 4 BUG FIX (post-ELF-dump): use `off` (mutable, += 8 each
         // iter) instead of `idx * 8`. Python helixc apparently hoists
