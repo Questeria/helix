@@ -173,6 +173,9 @@ fn set_last_enum_idx(sb: i32, v: i32) -> i32 { __arena_set(sb + 24, v); 0 }
 // Stage 6: enum keyword installed at sb+25/sb+26.
 fn kw_enum_s(sb: i32) -> i32 { __arena_get(sb + 25) }
 fn kw_enum_n(sb: i32) -> i32 { __arena_get(sb + 26) }
+// Stage 7: match keyword installed at sb+27/sb+28.
+fn kw_match_s(sb: i32) -> i32 { __arena_get(sb + 27) }
+fn kw_match_n(sb: i32) -> i32 { __arena_get(sb + 28) }
 fn var_struct_tab_add(sb: i32, name_s: i32, name_l: i32, struct_idx: i32) -> i32 {
     let count = var_struct_tab_count(sb);
     if count >= 4 {
@@ -1019,6 +1022,11 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
             let body = parse_expr(tok_base, sb);
             cur_advance(sb);     // '}'
             mk_node(10, cond, body, 0)
+        } else { if byte_eq(id_start, id_len, kw_match_s(sb), kw_match_n(sb)) == 1 {
+            // Stage 7: match scrut { pat => body, pat => body, ... }
+            // Build AST_MATCH (tag 62) with p1 = scrut_idx, p2 = arms_head_idx.
+            // Each arm is AST_MATCH_ARM (tag 63) p1=pattern, p2=body, p3=next.
+            parse_match_expr(tok_base, sb)
         } else {
             // Plain identifier. Could be a var ref, an assignment
             // (`name = expr`), or a fn call (`name()`). Peek the
@@ -1276,7 +1284,7 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
                 mk_node(1, id_start, id_len, 0)
             }}}
             }}
-        }}}
+        }}}}
     } else { if t == 3 {
         // Stage 4 iteration A: tuple literal vs parenthesized expr.
         // After the inner expr, peek for TK_COMMA (13). If found, this
@@ -1480,6 +1488,11 @@ fn install_keywords(sb: i32) -> i32 {
     __arena_set(sb + 25, enum_s);
     __arena_set(sb + 26, 4);
     enum_tab_init(sb);
+    // Stage 7: "match" = 109 97 116 99 104
+    let match_s = __arena_push(109); __arena_push(97); __arena_push(116);
+    __arena_push(99); __arena_push(104);
+    __arena_set(sb + 27, match_s);
+    __arena_set(sb + 28, 5);
     0
 }
 
@@ -1488,11 +1501,12 @@ fn install_keywords(sb: i32) -> i32 {
 // Reserves 7 state slots, then dispatches into parse_expr.
 // --------------------------------------------------------------
 fn parse_top(tok_base: i32) -> i32 {
-    // 27 state slots: cursor + 7 keyword (start, len) pairs +
+    // 29 state slots: cursor + 7 keyword (start, len) pairs +
     // struct_table (base + count) + var_struct_table (base + count) +
     // last_struct_idx scratch + enum_table (base + count) +
     // var_enum_table (base + count) + last_enum_idx scratch +
-    // enum keyword (start + len). Stage 6 added slots 20..26.
+    // enum keyword (start + len) + match keyword (start + len).
+    // Stage 6 added slots 20..26; Stage 7 added 27..28.
     let cur_slot = __arena_push(0);
     __arena_push(0); __arena_push(0); __arena_push(0); __arena_push(0);
     __arena_push(0); __arena_push(0); __arena_push(0); __arena_push(0);
@@ -1503,6 +1517,8 @@ fn parse_top(tok_base: i32) -> i32 {
     // base/count, last_enum_idx scratch, enum kw start/len.
     __arena_push(0); __arena_push(0); __arena_push(0); __arena_push(0);
     __arena_push(0); __arena_push(0); __arena_push(0);
+    // Stage 7: slots 27..28 = match keyword (start + len).
+    __arena_push(0); __arena_push(0);
     install_keywords(cur_slot);
     var_struct_tab_init(cur_slot);
     var_enum_tab_init(cur_slot);
@@ -1924,4 +1940,190 @@ fn parse_struct_decl(tok_base: i32, sb: i32) -> i32 {
     cur_advance(sb);                         // consume '}' (RBRACE = 6)
     struct_tab_add(sb, name_s, name_l, field_count, fields_ptr);
     mk_node(54, 0, 0, 0)
+}
+
+// Stage 7: parse a single pattern. Dispatches on the current token:
+//   INT          -> PAT_LIT (tag 64) p1 = value
+//                   if followed by `..` and another INT: PAT_RANGE (tag 67)
+//                   p1 = lo, p2 = hi (exclusive). For Phase-0 only INT lo/hi
+//                   are supported; PatBind for ranges deferred.
+//   IDENT == "_" -> PAT_WILDCARD (tag 66)
+//   IDENT::IDENT -> PAT_VARIANT (tag 69) p1 = disc, p2 = sub_pats_head
+//                   p3 = enum_idx. Sub-pats reuse AST_TUPLE_CONS (tag 51).
+//   IDENT        -> PAT_BIND (tag 65) p1 = name_start, p2 = name_len
+//   LPAREN       -> PAT_TUPLE (tag 70) p1 = arity, p2 = sub_pats_head
+//
+// FLAT prefix-trap pattern: single ladder of let-rebinds, no nested
+// if-else statements. Returns the AST node index.
+fn parse_pattern(tok_base: i32, sb: i32) -> i32 {
+    let k = cur_get(sb);
+    let t = tok_tag(tok_base, k);
+    if t == 1 {
+        // INT literal pattern. Check for `..` to detect range.
+        let v = tok_p1(tok_base, k);
+        cur_advance(sb);                     // consume INT
+        let nk = cur_get(sb);
+        let nt = tok_tag(tok_base, nk);
+        if nt == 43 {                        // TK_DOTDOT
+            cur_advance(sb);                 // consume `..`
+            let hk = cur_get(sb);
+            let hi = tok_p1(tok_base, hk);
+            cur_advance(sb);                 // consume hi INT
+            mk_node(67, v, hi, 0)
+        } else {
+            mk_node(64, v, 0, 0)
+        }
+    } else { if t == 2 {
+        // IDENT — could be `_` (wildcard), `EnumName::Variant(...)` (variant
+        // pattern), or a plain bind name.
+        let id_s = tok_p2(tok_base, k);
+        let id_l = tok_p3(tok_base, k);
+        // Wildcard: single `_` (1 char, byte 95).
+        let is_wild = if id_l == 1 {
+            let b0 = __arena_get(id_s);
+            if b0 == 95 { 1 } else { 0 }
+        } else { 0 };
+        // Pre-check for `::` enum-variant path. Same FLAT pattern as
+        // parse_primary's enum dispatch: peek tok+1, tok+2, tok+3.
+        let e_idx_pre = enum_tab_lookup_idx(sb, id_s, id_l);
+        let t1_pre = tok_tag(tok_base, k + 1);
+        let t2_pre = tok_tag(tok_base, k + 2);
+        let t3_pre = tok_tag(tok_base, k + 3);
+        let is_enum_path = if e_idx_pre >= 0 {
+            if t1_pre == 14 { if t2_pre == 14 { if t3_pre == 2 { 1 } else { 0 } } else { 0 } } else { 0 }
+        } else { 0 };
+        if is_wild == 1 {
+            cur_advance(sb);                 // consume '_'
+            mk_node(66, 0, 0, 0)
+        } else { if is_enum_path == 1 {
+            // PAT_VARIANT: consume IDENT, '::', '::', variant-IDENT.
+            cur_advance(sb);                 // outer IDENT
+            cur_advance(sb);                 // first ':'
+            cur_advance(sb);                 // second ':'
+            let vk = cur_get(sb);
+            let v_name_s = tok_p2(tok_base, vk);
+            let v_name_l = tok_p3(tok_base, vk);
+            cur_advance(sb);                 // variant IDENT
+            let disc = enum_tab_variant_lookup_disc(sb, e_idx_pre, v_name_s, v_name_l);
+            let safe_disc = if disc < 0 { 0 } else { disc };
+            // Optional `(sub_pat1, sub_pat2, ...)` — payload sub-patterns.
+            let after_t = tok_tag(tok_base, cur_get(sb));
+            let mut sub_head: i32 = 0;
+            if after_t == 3 {                // '('
+                cur_advance(sb);             // consume '('
+                let first_pat = parse_pattern(tok_base, sb);
+                sub_head = mk_node(51, first_pat, 0, 0);
+                let mut tail_idx: i32 = sub_head;
+                let mut keep: i32 = 1;
+                while keep == 1 {
+                    let at = tok_tag(tok_base, cur_get(sb));
+                    if at == 4 {             // ')'
+                        keep = 0;
+                    } else { if at == 13 {   // ','
+                        cur_advance(sb);
+                        let next_pat = parse_pattern(tok_base, sb);
+                        let new_node = mk_node(51, next_pat, 0, 0);
+                        __arena_set(tail_idx + 2, new_node);
+                        tail_idx = new_node;
+                    } else { if at == 0 {    // EOF safety
+                        keep = 0;
+                    } else {
+                        // Defensive: shouldn't happen given the grammar.
+                        keep = 0;
+                    }}};
+                }
+                cur_advance(sb);             // consume ')'
+            };
+            mk_node(69, safe_disc, sub_head, e_idx_pre)
+        } else {
+            // Plain identifier binding pattern.
+            cur_advance(sb);                 // consume IDENT
+            mk_node(65, id_s, id_l, 0)
+        }}
+    } else { if t == 3 {
+        // LPAREN — tuple pattern (sub_pat1, sub_pat2, ...).
+        cur_advance(sb);                     // consume '('
+        let first_pat = parse_pattern(tok_base, sb);
+        let mut sub_head: i32 = mk_node(51, first_pat, 0, 0);
+        let mut tail_idx: i32 = sub_head;
+        let mut arity: i32 = 1;
+        let mut keep: i32 = 1;
+        while keep == 1 {
+            let at = tok_tag(tok_base, cur_get(sb));
+            if at == 4 {                     // ')'
+                keep = 0;
+            } else { if at == 13 {           // ','
+                cur_advance(sb);
+                let nt2 = tok_tag(tok_base, cur_get(sb));
+                if nt2 == 4 {                // trailing ',' before ')'
+                    keep = 0;
+                } else {
+                    let next_pat = parse_pattern(tok_base, sb);
+                    let new_node = mk_node(51, next_pat, 0, 0);
+                    __arena_set(tail_idx + 2, new_node);
+                    tail_idx = new_node;
+                    arity = arity + 1;
+                };
+            } else { if at == 0 {            // EOF safety
+                keep = 0;
+            } else {
+                keep = 0;
+            }}};
+        }
+        cur_advance(sb);                     // consume ')'
+        mk_node(70, arity, sub_head, 0)
+    } else {
+        // Unknown pattern token — produce wildcard as fallback.
+        cur_advance(sb);
+        mk_node(66, 0, 0, 0)
+    }}}
+}
+
+// Stage 7: parse `match scrut { pat => body, pat => body, ... }`.
+// Returns AST_MATCH (tag 62) node idx.
+//   p1 = scrut_idx
+//   p2 = arms_head_idx (linked list of AST_MATCH_ARM nodes)
+//   p3 = unused
+// Each arm AST_MATCH_ARM (tag 63):
+//   p1 = pattern_idx
+//   p2 = body_idx
+//   p3 = next_arm_idx (0 at end)
+// `match` keyword has already been peeked but NOT consumed by caller.
+fn parse_match_expr(tok_base: i32, sb: i32) -> i32 {
+    cur_advance(sb);                         // consume 'match' IDENT
+    let scrut_idx = parse_expr_basic(tok_base, sb);
+    cur_advance(sb);                         // consume '{'
+    // Parse first arm.
+    let first_pat = parse_pattern(tok_base, sb);
+    cur_advance(sb);                         // consume '=>' (TK_FATARROW = 42)
+    let first_body = parse_expr_basic(tok_base, sb);
+    let arms_head = mk_node(63, first_pat, first_body, 0);
+    let mut tail_idx: i32 = arms_head;
+    let mut keep: i32 = 1;
+    while keep == 1 {
+        let at = tok_tag(tok_base, cur_get(sb));
+        if at == 6 {                         // '}'
+            keep = 0;
+        } else { if at == 13 {               // ','
+            cur_advance(sb);                 // consume ','
+            // Allow trailing comma before '}'.
+            let nt = tok_tag(tok_base, cur_get(sb));
+            if nt == 6 {
+                keep = 0;
+            } else {
+                let next_pat = parse_pattern(tok_base, sb);
+                cur_advance(sb);             // consume '=>'
+                let next_body = parse_expr_basic(tok_base, sb);
+                let new_arm = mk_node(63, next_pat, next_body, 0);
+                __arena_set(tail_idx + 3, new_arm);
+                tail_idx = new_arm;
+            };
+        } else { if at == 0 {                // EOF safety
+            keep = 0;
+        } else {
+            keep = 0;
+        }}};
+    }
+    cur_advance(sb);                         // consume '}'
+    mk_node(62, scrut_idx, arms_head, 0)
 }
