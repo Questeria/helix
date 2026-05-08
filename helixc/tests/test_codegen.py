@@ -2456,6 +2456,25 @@ fn main() -> i32 {
     assert compile_and_exec(
         "fn main() -> i32 { let t = (10, 20, 30) ; let i = 1 ; t[i] + 22 }"
     ) == 42, "tuple indexed with runtime expr (.1=20, +22=42)"
+    # Stage 4 polish: complex expressions as tuple/array children.
+    # Verifies that children are properly evaluated (not just literals)
+    # and stored at their slots without interaction issues.
+    assert compile_and_exec(
+        "fn main() -> i32 { let t = (1 + 2, 3 * 4, 50 - 8) ; t.2 }"
+    ) == 42, "tuple with computed children, .2 = 50-8 = 42"
+    assert compile_and_exec(
+        "fn main() -> i32 { let arr = [10 - 8, 7 * 6, 100 / 4] ; arr[1] }"
+    ) == 42, "array with computed children, [1] = 7*6 = 42"
+    # Variables as children.
+    assert compile_and_exec(
+        "fn main() -> i32 { let x = 10 ; let y = 32 ; let t = (x, y) ; t.0 + t.1 }"
+    ) == 42, "tuple with variable children, sum = 42"
+    # Function-call result as child (tuple holds a result).
+    assert compile_and_exec(
+        "fn double(n: i32) -> i32 { n * 2 } "
+        "fn main() -> i32 { let arr = [double(5), double(10), double(6)] ; "
+        "arr[0] + arr[1] + arr[2] }"
+    ) == 42, "array with fn-call children (10+20+12=42)"
     # Stage 1.5 audit fix: bf16 comparison ops trap. Pre-fix:
     # AST_LT/GT/LE/GE/EQ/NE cascades had no is_bf16_expr check — bf16
     # operands fell through to integer compare on bit patterns. This is
