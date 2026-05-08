@@ -144,9 +144,9 @@ fn struct_tab_count(sb: i32) -> i32 { __arena_get(sb + 16) }
 // Append an entry. Returns the new index (0..2) on success, -1 on
 // overflow. Iter A cap is 3 structs; expand later if needed.
 // Iter B: 4-slot stride (name_s, name_l, arity, fields_ptr).
-// fields_ptr defaults to 0 here; parse_struct_decl will overwrite
-// once the field-names region is allocated.
-fn struct_tab_add(sb: i32, name_s: i32, name_l: i32, arity: i32) -> i32 {
+// fields_ptr is the arena offset of a (name_s, name_l) pair sequence
+// (2*arity slots). 0 means no fields region (e.g. empty struct).
+fn struct_tab_add(sb: i32, name_s: i32, name_l: i32, arity: i32, fields_ptr: i32) -> i32 {
     let count = struct_tab_count(sb);
     if count >= 3 {
         0 - 1
@@ -156,7 +156,7 @@ fn struct_tab_add(sb: i32, name_s: i32, name_l: i32, arity: i32) -> i32 {
         __arena_set(entry, name_s);
         __arena_set(entry + 1, name_l);
         __arena_set(entry + 2, arity);
-        __arena_set(entry + 3, 0);
+        __arena_set(entry + 3, fields_ptr);
         __arena_set(sb + 16, count + 1);
         count
     }
@@ -1239,6 +1239,7 @@ fn parse_struct_decl(tok_base: i32, sb: i32) -> i32 {
     cur_advance(sb);                         // consume name IDENT
     cur_advance(sb);                         // consume '{' (LBRACE = 5)
     let mut field_count: i32 = 0;
+    let mut fields_ptr: i32 = 0;             // 0 if no fields
     let mut keep: i32 = 1;
     while keep == 1 {
         let tt = tok_tag(tok_base, cur_get(sb));
@@ -1247,9 +1248,21 @@ fn parse_struct_decl(tok_base: i32, sb: i32) -> i32 {
         } else { if tt == 0 {                // EOF safety
             keep = 0;
         } else {
+            // Capture field-name token bytes BEFORE advancing.
+            let fk = cur_get(sb);
+            let f_name_s = tok_p2(tok_base, fk);
+            let f_name_l = tok_p3(tok_base, fk);
             cur_advance(sb);                 // field-name IDENT
             cur_advance(sb);                 // ':' (COLON = 14)
             cur_advance(sb);                 // type IDENT (Iter A: ignored)
+            // Push (name_s, name_l) pair into fields region. Capture
+            // fields_ptr from the FIRST push so subsequent fields
+            // append after it (arena grows linearly).
+            let pushed = __arena_push(f_name_s);
+            if field_count == 0 {
+                fields_ptr = pushed;
+            };
+            __arena_push(f_name_l);
             field_count = field_count + 1;
             if tok_tag(tok_base, cur_get(sb)) == 13 {  // optional COMMA
                 cur_advance(sb);
@@ -1257,6 +1270,6 @@ fn parse_struct_decl(tok_base: i32, sb: i32) -> i32 {
         }};
     }
     cur_advance(sb);                         // consume '}' (RBRACE = 6)
-    struct_tab_add(sb, name_s, name_l, field_count);
+    struct_tab_add(sb, name_s, name_l, field_count, fields_ptr);
     mk_node(54, 0, 0, 0)
 }
