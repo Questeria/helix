@@ -3450,9 +3450,16 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         // through to integer two's-complement neg — silent garbage.
         let ni = emit_ast_code(p1, bind_state, patch_state, bn_state);
         // Stage 1 audit batch 2: 4-way AST_NEG dispatch including i64.
+        // Stage 4 follow-up audit (Finding #2 from 6c41511): u64 was
+        // missing — fell through to 32-bit `neg eax` which two's-
+        // complemented only the low 32 bits, leaving high half stale.
+        // u64 NEG semantically = 2^64 - x; REX.W neg rax computes that.
+        // Same encoding as i64 (signedness-agnostic at machine level).
         let nn = if is_f64_expr(p1, bind_state, bn_state) == 1 {
             emit_ast_dneg_suffix()
         } else { if is_i64_expr(p1, bind_state, bn_state) == 1 {
+            emit_neg_rax_64()
+        } else { if is_u64_expr(p1, bind_state, bn_state) == 1 {
             emit_neg_rax_64()
         } else { if is_f32_expr(p1, bind_state, bn_state) == 1 {
             emit_ast_fneg_suffix()
@@ -3461,7 +3468,7 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
             emit_trap_with_id(9001)
         } else {
             emit_ast_neg_suffix()
-        }}}};
+        }}}}};
         ni + nn
     } else { if t == 26 {
         // AST_BNOT: emit inner (leaves value in eax/rax), then `not`.

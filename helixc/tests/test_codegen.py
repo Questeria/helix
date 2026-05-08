@@ -2475,6 +2475,17 @@ fn main() -> i32 {
         "fn main() -> i32 { let arr = [double(5), double(10), double(6)] ; "
         "arr[0] + arr[1] + arr[2] }"
     ) == 42, "array with fn-call children (10+20+12=42)"
+    # Stage 4 follow-up audit Finding #2: AST_NEG was missing u64
+    # dispatch. Fell through to 32-bit `neg eax` which only flipped
+    # the low half. Now uses REX.W neg rax (same as i64).
+    # Test: u64 double-negate via subtract — `0 - (0 - x) == x`.
+    # If REX.W neg works, both subtractions clear/restore the value
+    # consistently across all 64 bits.
+    assert compile_and_exec(
+        "fn main() -> i32 { let x: u64 = 5_u64 ; let y: u64 = 0_u64 - x ; "
+        "let z: u64 = 0_u64 - y ; "
+        "if z == x { 42 } else { 0 } }"
+    ) == 42, "u64 double-negate via subtract preserves value"
     # Stage 1.5 audit fix: bf16 comparison ops trap. Pre-fix:
     # AST_LT/GT/LE/GE/EQ/NE cascades had no is_bf16_expr check — bf16
     # operands fell through to integer compare on bit patterns. This is
