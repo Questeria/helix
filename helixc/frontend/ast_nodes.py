@@ -55,6 +55,14 @@ class TyRef(TyNode):
 
 
 @dataclass
+class TyPtr(TyNode):
+    """*const T or *mut T — raw pointer (Stage 16.5 FFI).
+    Lowered to u64 in IR for Phase-0; only used at FFI call sites for now."""
+    inner: "TyNode"
+    is_mut: bool
+
+
+@dataclass
 class TyFn(TyNode):
     """fn(T1, T2) -> R"""
     params: list["TyNode"]
@@ -431,6 +439,12 @@ class FnDecl(Item):
     body: "Block"
     attrs: list[str]            # @kernel, @pure, @inline, etc.
     is_pub: bool = False
+    # Stage 16.5: True for `extern "C" fn name(...) -> ret;` declarations.
+    # The `body` is an empty placeholder Block in this case (set by parser).
+    # Calls to extern fns are resolved by the dynamic linker at runtime via
+    # GOT/PLT relocations rather than emitted as user-fn calls.
+    is_extern: bool = False
+    extern_abi: Optional[str] = None  # currently always "C" when is_extern
 
 
 @dataclass

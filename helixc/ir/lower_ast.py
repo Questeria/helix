@@ -357,6 +357,10 @@ class Lowerer:
             return tir.TIRTuple(elems=(self._lower_type(ty.elem),))  # simplified
         if isinstance(ty, A.TyRef):
             return self._lower_type(ty.inner)  # references erased in IR for v0.1
+        if isinstance(ty, A.TyPtr):
+            # Stage 16.5: raw pointer lowers to u64 in IR. The pointee type
+            # is preserved on the AST for diagnostics but unused at IR level.
+            return tir.TIRScalar("u64")
         return tir.TIRScalar("?")
 
     def _lower_dim(self, expr: A.Expr) -> tir.Dim:
@@ -409,6 +413,12 @@ class Lowerer:
             attrs[a] = True
         if fn.is_pub:
             attrs["is_pub"] = True
+        # Stage 16.5 — record extern fns so the call lowering can route to
+        # FFI_CALL instead of CALL, and the backend can skip emitting a body
+        # symbol (resolved by the dynamic linker at runtime instead).
+        if fn.is_extern:
+            attrs["is_extern"] = True
+            attrs["extern_abi"] = fn.extern_abi or "C"
         ir_fn = self.builder.begin_function(fn.name, params, ret, attrs=attrs)
         self.functions[fn.name] = ir_fn
         # Don't lower body yet — that's pass 2
@@ -416,6 +426,11 @@ class Lowerer:
 
     # ---- function bodies ----
     def _lower_fn_body(self, fn: A.FnDecl) -> None:
+        # Stage 16.5: extern "C" fn declarations have no body to lower.
+        # The fn entry exists for type-check / call-site resolution only;
+        # the backend never emits a body symbol for it.
+        if fn.is_extern:
+            return
         ir_fn = self.functions.get(fn.name)
         if ir_fn is None:
             return
@@ -1003,6 +1018,18 @@ class Lowerer:
                                          result_ty=tir.TIRScalar("bool"))
             return inner
         if isinstance(expr, A.Call):
+            # Stage 16.5: "literal".as_ptr() — emit STR_PTR op that resolves
+            # to a `lea rax, [rip + sym]` of the literal's bytes. The result
+            # is a u64 raw pointer suitable for FFI calls.
+            if (isinstance(expr.callee, A.Field)
+                    and expr.callee.name == "as_ptr"
+                    and isinstance(expr.callee.obj, A.StrLit)
+                    and len(expr.args) == 0):
+                s = expr.callee.obj.value
+                return self.builder.emit(
+                    tir.OpKind.STR_PTR,
+                    result_ty=tir.TIRScalar("u64"),
+                    attrs={"text": s})
             # Stage 15: tile.get(row, col). Lowers to LOAD_ELEM at
             # row * cols + col. Requires the tile binding to be in scope
             # (registered via tile<>:: literal or tile_matmul).
@@ -1480,8 +1507,19 @@ class Lowerer:
                 target = "::".join(expr.callee.segments)
             # Emit as opaque CALL with return type from the registered fn
             ret_ty: tir.TIRType = tir.TIRScalar("?")
+            is_extern_target = False
             if isinstance(expr.callee, A.Name) and expr.callee.name in self.functions:
-                ret_ty = self.functions[expr.callee.name].return_ty
+                callee_ir = self.functions[expr.callee.name]
+                ret_ty = callee_ir.return_ty
+                if callee_ir.attrs.get("is_extern"):
+                    is_extern_target = True
+            # Stage 16.5: route extern "C" calls through FFI_CALL so the
+            # backend emits a GOT-indirect call resolved by the dynamic
+            # linker, not a relative call to a user-fn body.
+            if is_extern_target:
+                return self.builder.emit(tir.OpKind.FFI_CALL, *args,
+                                         result_ty=ret_ty,
+                                         attrs={"target": target})
             return self.builder.emit(tir.OpKind.CALL, *args,
                                      result_ty=ret_ty, attrs={"target": target})
         if isinstance(expr, A.If):

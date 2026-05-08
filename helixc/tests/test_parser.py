@@ -603,6 +603,53 @@ def test_or_pattern_parses():
 
 
 # ============================================================================
+# Stage 16.5 — FFI / extern "C"
+# ============================================================================
+def test_extern_c_fn_decl_parses():
+    """`extern "C" fn puts(s: *const u8) -> i32;` parses to FnDecl with
+    is_extern=True, no body, *const u8 param type."""
+    src = 'extern "C" fn puts(s: *const u8) -> i32;'
+    prog = parse(src)
+    assert len(prog.items) == 1
+    fn = prog.items[0]
+    assert isinstance(fn, ast.FnDecl)
+    assert fn.name == "puts"
+    assert fn.is_extern is True
+    assert fn.extern_abi == "C"
+    # body is an empty placeholder Block
+    assert isinstance(fn.body, ast.Block)
+    assert fn.body.stmts == []
+    assert fn.body.final_expr is None
+    # param type is *const u8 (TyPtr)
+    assert len(fn.params) == 1
+    assert isinstance(fn.params[0].ty, ast.TyPtr)
+    assert fn.params[0].ty.is_mut is False
+    inner = fn.params[0].ty.inner
+    assert isinstance(inner, ast.TyName) and inner.name == "u8"
+
+
+def test_extern_c_only_c_abi_supported():
+    """`extern "rust"` is rejected — only "C" is supported in Phase-0."""
+    src = 'extern "rust" fn foo() -> i32;'
+    try:
+        parse(src)
+        assert False, "expected ParseError"
+    except Exception as e:
+        assert "extern \"C\"" in str(e) or "supported" in str(e)
+
+
+def test_ptr_mut_type_parses():
+    """`fn write(buf: *mut u8) -> i32 { 0 }` parses with TyPtr(is_mut=True)."""
+    src = 'fn write(buf: *mut u8) -> i32 { 0 }'
+    prog = parse(src)
+    fn = prog.items[0]
+    assert isinstance(fn, ast.FnDecl)
+    pty = fn.params[0].ty
+    assert isinstance(pty, ast.TyPtr)
+    assert pty.is_mut is True
+
+
+# ============================================================================
 # Test runner
 # ============================================================================
 def main():

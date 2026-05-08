@@ -251,6 +251,16 @@ class OpKind(Enum):
     # buffers yet). attrs: text=str literal.
     STR_BYTE = "str.byte"        # operand: index → result: byte at literal[i]
 
+    # Stage 16.5 — FFI: a raw pointer (u64) to the bytes of a string literal.
+    # attrs: text=str literal. Backend emits `lea rax, [rip + <symbol>]` and
+    # stores the resulting i64 to the result slot.
+    STR_PTR = "str.ptr"
+
+    # Stage 16.5 — FFI: a call to an extern "C" function. attrs: target=name
+    # (libc symbol), arg_types/ret_type as TIR types. Backend emits an
+    # indirect call through the GOT entry resolved by the dynamic linker.
+    FFI_CALL = "ffi.call"
+
     # Effectful ops (kept distinct so transforms can avoid them)
     PRINT = "io.print"
 

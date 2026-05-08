@@ -85,6 +85,14 @@ class TyRef(Type):
 
 
 @dataclass(frozen=True)
+class TyPtr(Type):
+    """Stage 16.5: raw pointer *const T or *mut T (for FFI). Treated as a
+    u64 at the ABI level."""
+    inner: Type
+    is_mut: bool
+
+
+@dataclass(frozen=True)
 class TyFn(Type):
     params: tuple[Type, ...]
     ret: Type
@@ -347,6 +355,9 @@ class TypeChecker:
             return TyArray(elem, size)
         if isinstance(ty, A.TyRef):
             return TyRef(self._resolve_type(ty.inner, scope), ty.is_mut)
+        if isinstance(ty, A.TyPtr):
+            # Stage 16.5: pointer types resolve to TyPtr (u64 at ABI level).
+            return TyPtr(self._resolve_type(ty.inner, scope), ty.is_mut)
         if isinstance(ty, A.TyFn):
             return TyFn(
                 tuple(self._resolve_type(p, scope) for p in ty.params),
@@ -670,6 +681,9 @@ class TypeChecker:
 
     # ---- function body checking ----
     def _check_fn(self, fn: A.FnDecl) -> None:
+        # Stage 16.5: extern "C" declarations have no body to check.
+        if fn.is_extern:
+            return
         sig = self.functions.get(fn.name)
         if sig is None:
             return
@@ -834,6 +848,12 @@ class TypeChecker:
             # Arithmetic: take the left type (simplified)
             return l
         if isinstance(expr, A.Call):
+            # Stage 16.5: "literal".as_ptr() — type is *const u8 (TyPtr(u8, mut=False)).
+            if (isinstance(expr.callee, A.Field)
+                    and expr.callee.name == "as_ptr"
+                    and isinstance(expr.callee.obj, A.StrLit)
+                    and len(expr.args) == 0):
+                return TyPtr(inner=TyPrim("u8"), is_mut=False)
             # Payload-bearing enum constructor: `Maybe::Some(42)`.
             if (isinstance(expr.callee, A.Path)
                     and len(expr.callee.segments) == 2):
@@ -1387,6 +1407,8 @@ class TypeChecker:
             return f"[{self._fmt(t.elem)}; {self._fmt(t.size)}]"
         if isinstance(t, TyRef):
             return ("&mut " if t.is_mut else "&") + self._fmt(t.inner)
+        if isinstance(t, TyPtr):
+            return ("*mut " if t.is_mut else "*const ") + self._fmt(t.inner)
         if isinstance(t, TyFn):
             return f"fn({', '.join(self._fmt(p) for p in t.params)}) -> {self._fmt(t.ret)}"
         if isinstance(t, TyUnit): return "()"

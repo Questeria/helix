@@ -52,6 +52,8 @@ class T(Enum):
     KW_MODIFY = auto(); KW_VERIFIER = auto()
     KW_AGENT = auto(); KW_SOCIETY = auto()
     KW_PURE = auto(); KW_EFFECT = auto()
+    # Stage 16.5: FFI keyword
+    KW_EXTERN = auto()
 
     # Operators / punctuation
     PLUS = auto(); MINUS = auto(); STAR = auto(); SLASH = auto(); PERCENT = auto()
@@ -101,6 +103,8 @@ KEYWORDS = {
     "modify": T.KW_MODIFY, "verifier": T.KW_VERIFIER,
     "agent": T.KW_AGENT, "society": T.KW_SOCIETY,
     "pure": T.KW_PURE, "effect": T.KW_EFFECT,
+    # Stage 16.5: FFI
+    "extern": T.KW_EXTERN,
 }
 
 

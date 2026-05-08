@@ -156,6 +156,9 @@ class Parser:
         is_pub = bool(self._match(T.KW_PUB))
 
         t = self._peek()
+        if t.kind == T.KW_EXTERN:
+            # Stage 16.5: extern "C" fn name(args) -> ret;
+            return self._parse_extern_decl(is_pub, attrs)
         if t.kind == T.KW_FN:
             return self._parse_fn_decl(is_pub, attrs)
         if t.kind == T.KW_STRUCT:
@@ -307,6 +310,50 @@ class Parser:
             else:
                 attrs.append(attr_name)
         return attrs
+
+    # ---- extern fn (FFI declaration, Stage 16.5) ----
+    def _parse_extern_decl(self, is_pub: bool, attrs: list[str]) -> ast.FnDecl:
+        # extern "C" fn name(args) -> ret;
+        # No body — just a declaration. Calls go through PLT/GOT at runtime.
+        ekw = self._eat(T.KW_EXTERN)
+        # ABI string — required, must currently be "C".
+        abi_tok = self._eat(T.STRING)
+        abi = abi_tok.string_value or ""
+        if abi != "C":
+            raise ParseError(
+                f"only extern \"C\" is supported (got {abi!r})", abi_tok)
+        kw = self._eat(T.KW_FN)
+        name_tok = self._eat(T.IDENT)
+        # No generics on extern fns (Phase-0 simplification).
+        self._eat(T.LPAREN)
+        params: list[ast.FnParam] = []
+        if not self._at(T.RPAREN):
+            params.append(self._parse_fn_param())
+            while self._match(T.COMMA):
+                if self._at(T.RPAREN):
+                    break
+                params.append(self._parse_fn_param())
+        self._eat(T.RPAREN)
+        ret_ty: ast.TyNode | None = None
+        if self._match(T.ARROW):
+            ret_ty = self._parse_type()
+        # Body is just a `;` — emit an empty Block placeholder.
+        self._eat(T.SEMI)
+        empty_body = ast.Block(span=self._span_of(ekw), stmts=[],
+                               final_expr=None)
+        return ast.FnDecl(
+            span=self._span_of(ekw),
+            name=name_tok.value,
+            generics=[],
+            params=params,
+            return_ty=ret_ty,
+            where_clauses=[],
+            body=empty_body,
+            attrs=attrs,
+            is_pub=is_pub,
+            is_extern=True,
+            extern_abi=abi,
+        )
 
     # ---- fn ----
     def _parse_fn_decl(self, is_pub: bool, attrs: list[str]) -> ast.FnDecl:
@@ -508,11 +555,30 @@ class Parser:
         # reference type & or &mut
         if t.kind == T.AMP:
             return self._parse_ref_type()
+        # raw pointer *const T or *mut T (Stage 16.5 FFI)
+        if t.kind == T.STAR:
+            return self._parse_ptr_type()
         # function type fn(...) -> ...
         if t.kind == T.KW_FN:
             return self._parse_fn_type()
         # primitive or user type — IDENT or builtin type keyword
         return self._parse_named_type()
+
+    def _parse_ptr_type(self) -> ast.TyPtr:
+        # *const T  |  *mut T
+        star = self._eat(T.STAR)
+        is_mut = False
+        t = self._peek()
+        if t.kind == T.KW_CONST:
+            self.i += 1
+        elif t.kind == T.KW_MUT:
+            self.i += 1
+            is_mut = True
+        else:
+            raise ParseError(
+                "expected `const` or `mut` after `*` in pointer type", t)
+        inner = self._parse_type()
+        return ast.TyPtr(span=self._span_of(star), inner=inner, is_mut=is_mut)
 
     def _builtin_kind_to_name(self, kind: T) -> str | None:
         mapping = {
