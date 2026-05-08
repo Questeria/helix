@@ -362,6 +362,15 @@ fn kw_impl_s(sb: i32) -> i32 { __arena_get(sb + 39) }
 fn kw_impl_n(sb: i32) -> i32 { __arena_get(sb + 40) }
 fn kw_for_s(sb: i32) -> i32 { __arena_get(sb + 41) }
 fn kw_for_n(sb: i32) -> i32 { __arena_get(sb + 42) }
+// Stage 8.5: sb+43/44 = pending impl-method fn-list head/tail. parse_impl_block
+// builds a chain of AST_FN_LIST (tag 15) nodes wrapping the mangled method
+// AST_FN_DECLs; parse_program splices this chain in front of the user's fn
+// decls so codegen emits + wires them into fn_table normally. Reset to 0 by
+// parse_top.
+fn impl_pending_head(sb: i32) -> i32 { __arena_get(sb + 43) }
+fn impl_pending_tail(sb: i32) -> i32 { __arena_get(sb + 44) }
+fn set_impl_pending_head(sb: i32, v: i32) -> i32 { __arena_set(sb + 43, v); 0 }
+fn set_impl_pending_tail(sb: i32, v: i32) -> i32 { __arena_set(sb + 44, v); 0 }
 fn var_struct_tab_add(sb: i32, name_s: i32, name_l: i32, struct_idx: i32) -> i32 {
     let count = var_struct_tab_count(sb);
     if count >= 4 {
@@ -1951,9 +1960,11 @@ fn parse_top(tok_base: i32) -> i32 {
     __arena_push(0); __arena_push(0); __arena_push(0); __arena_push(0);
     // Stage 8.5: slots 33..42 = trait_table (base + count) + impl_table
     // (base + count) + trait/impl/for keyword (start + len) triples.
+    // Slots 43/44 = pending impl-method fn-list head/tail (built by
+    // parse_impl_block; spliced into fn_list by parse_program).
     __arena_push(0); __arena_push(0); __arena_push(0); __arena_push(0);
     __arena_push(0); __arena_push(0); __arena_push(0); __arena_push(0);
-    __arena_push(0); __arena_push(0);
+    __arena_push(0); __arena_push(0); __arena_push(0); __arena_push(0);
     install_keywords(cur_slot);
     var_struct_tab_init(cur_slot);
     var_enum_tab_init(cur_slot);
@@ -2081,8 +2092,21 @@ fn parse_program(tok_base: i32, sb: i32) -> i32 {
         };
     }
     let first_fn = parse_fn_decl(tok_base, sb);
-    let head = mk_node(15, first_fn, 0, 0);
-    let mut prev_list = head;
+    let user_first_node = mk_node(15, first_fn, 0, 0);
+    // Stage 8.5B: if any impl blocks pushed methods into impl_pending, the
+    // chain head/tail are non-zero. Splice the impl-pending chain BEFORE
+    // the user's first fn so the resulting fn_list = [impl_methods..., user_fns...].
+    // Order doesn't affect codegen correctness (fn_table is name-keyed) but
+    // emitting impl methods first lets later user fns call them.
+    let pending_head = impl_pending_head(sb);
+    let head = if pending_head == 0 {
+        user_first_node
+    } else {
+        let pending_tail = impl_pending_tail(sb);
+        __arena_set(pending_tail + 2, user_first_node);
+        pending_head
+    };
+    let mut prev_list = user_first_node;
     let mut keep: i32 = 1;
     while keep == 1 {
         // Skip any attributes before the next fn decl.
@@ -2526,32 +2550,195 @@ fn parse_enum_decl(tok_base: i32, sb: i32) -> i32 {
     mk_node(54, 0, 0, 0)
 }
 
-// Stage 8.5B forward declaration. Filled in by next sub-iteration.
-// Stub: skip everything from `impl` through the matching '}'. Returns
-// AST_STRUCT_DECL (tag 54) so codegen emits 0 bytes. The 8.5B step will
-// replace this body with real impl-method extraction.
+// Stage 8.5B helper: build a mangled method name `<TargetType>__<MethodName>`
+// directly in the arena. e.g. target = "i32" + method = "eq" -> "i32__eq".
+// Returns the byte start; length is target_l + 2 + method_l.
+fn mangle_impl_method(target_s: i32, target_l: i32, method_s: i32, method_l: i32) -> i32 {
+    let start = __arena_len();
+    let mut i: i32 = 0;
+    while i < target_l {
+        __arena_push(__arena_get(target_s + i));
+        i = i + 1;
+    }
+    __arena_push(95); __arena_push(95);      // '__'
+    let mut j: i32 = 0;
+    while j < method_l {
+        __arena_push(__arena_get(method_s + j));
+        j = j + 1;
+    }
+    start
+}
+
+// Stage 8.5B helper: parse one impl method body as an AST_FN_DECL with the
+// mangled name. The first parameter MUST be `self` (no type annotation) and
+// is bound with the impl target type. Subsequent params follow normal Helix
+// syntax. `Self` (capital S) IDENT in a param/return position resolves to
+// the target type's tag.
+//
+// target_s/l = bytes of the target type IDENT (e.g. "i32"); used for
+//   mangling and `Self` resolution.
+// target_tag = the resolved type tag (ty_ident_to_tag of target_s/l).
+//
+// Returns the AST_FN_DECL node index (tag 14). Body is freshly parsed
+// (calls parse_expr inside the {}).
+fn parse_impl_method(tok_base: i32, sb: i32, target_s: i32, target_l: i32, target_tag: i32) -> i32 {
+    cur_advance(sb);                         // consume 'fn' IDENT
+    let nk = cur_get(sb);
+    let method_name_s = tok_p2(tok_base, nk);
+    let method_name_l = tok_p3(tok_base, nk);
+    cur_advance(sb);                         // method-name IDENT
+    // Build mangled name in arena BEFORE consuming any more (so subsequent
+    // arena pushes don't interleave with the mangled bytes).
+    let mang_s = mangle_impl_method(target_s, target_l, method_name_s, method_name_l);
+    let mang_l = target_l + 2 + method_name_l;
+    cur_advance(sb);                         // '('
+    // Parse params. The FIRST identifier `self` (4 bytes 115 101 108 102) is
+    // a special form: no type annotation, type = target_tag. All subsequent
+    // params follow standard `name: T` syntax. `Self` (capital S, byte 83
+    // followed by 101 108 102) in a type position resolves to the target.
+    let mut params_head: i32 = 0;
+    let mut prev_param: i32 = 0;
+    let mut keep: i32 = 1;
+    while keep == 1 {
+        let pt = tok_tag(tok_base, cur_get(sb));
+        if pt == 4 {
+            keep = 0;                        // ')'
+        } else { if pt == 13 {
+            cur_advance(sb);                 // ','
+        } else {
+            let pname_tok = cur_get(sb);
+            let pname_s = tok_p2(tok_base, pname_tok);
+            let pname_l = tok_p3(tok_base, pname_tok);
+            // Detect `self` IDENT (bytes 115, 101, 108, 102). If it's `self`
+            // AND it's not followed by `:`, treat as untyped self-param of
+            // target_tag.
+            let is_self_kw = if pname_l == 4 {
+                let b0 = __arena_get(pname_s);
+                let b1 = __arena_get(pname_s + 1);
+                let b2 = __arena_get(pname_s + 2);
+                let b3 = __arena_get(pname_s + 3);
+                if b0 == 115 { if b1 == 101 { if b2 == 108 { if b3 == 102 { 1 } else { 0 } } else { 0 } } else { 0 } } else { 0 }
+            } else { 0 };
+            cur_advance(sb);                 // param-name IDENT
+            let next_tag = tok_tag(tok_base, cur_get(sb));
+            // If `self` AND next isn't ':', it's the bare-self form.
+            let is_bare_self = if is_self_kw == 1 { if next_tag == 14 { 0 } else { 1 } } else { 0 };
+            if is_bare_self == 1 {
+                // Bare `self`: type = target_tag.
+                let new_param = mk_node(18, pname_s, pname_l, 0);
+                __arena_push(target_tag);
+                if params_head == 0 {
+                    params_head = new_param;
+                    prev_param = new_param;
+                } else {
+                    __arena_set(prev_param + 3, new_param);
+                    prev_param = new_param;
+                };
+            } else {
+                // Standard `name: T` form. Consume ':' and the type IDENT.
+                cur_advance(sb);             // ':'
+                let ty_tok = cur_get(sb);
+                let ty_s_raw = tok_p2(tok_base, ty_tok);
+                let ty_l_raw = tok_p3(tok_base, ty_tok);
+                cur_advance(sb);             // type IDENT
+                // `Self` substitution: if the type IDENT is "Self" (4 bytes
+                // 83 101 108 102), use target_tag directly.
+                let is_self_ty = if ty_l_raw == 4 {
+                    let s0 = __arena_get(ty_s_raw);
+                    let s1 = __arena_get(ty_s_raw + 1);
+                    let s2 = __arena_get(ty_s_raw + 2);
+                    let s3 = __arena_get(ty_s_raw + 3);
+                    if s0 == 83 { if s1 == 101 { if s2 == 108 { if s3 == 102 { 1 } else { 0 } } else { 0 } } else { 0 } } else { 0 }
+                } else { 0 };
+                let p_ty_resolved = if is_self_ty == 1 { target_tag } else { ty_ident_to_tag(ty_s_raw, ty_l_raw) };
+                let new_param = mk_node(18, pname_s, pname_l, 0);
+                __arena_push(p_ty_resolved);
+                if params_head == 0 {
+                    params_head = new_param;
+                    prev_param = new_param;
+                } else {
+                    __arena_set(prev_param + 3, new_param);
+                    prev_param = new_param;
+                };
+            };
+        }};
+    }
+    cur_advance(sb);                         // ')'
+    cur_advance(sb);                         // '-' part of '->'
+    cur_advance(sb);                         // '>' part of '->'
+    let rt_tok = cur_get(sb);
+    let rt_s = tok_p2(tok_base, rt_tok);
+    let rt_l = tok_p3(tok_base, rt_tok);
+    cur_advance(sb);                         // return-type IDENT
+    let is_self_rt = if rt_l == 4 {
+        let s0 = __arena_get(rt_s);
+        let s1 = __arena_get(rt_s + 1);
+        let s2 = __arena_get(rt_s + 2);
+        let s3 = __arena_get(rt_s + 3);
+        if s0 == 83 { if s1 == 101 { if s2 == 108 { if s3 == 102 { 1 } else { 0 } } else { 0 } } else { 0 } } else { 0 }
+    } else { 0 };
+    let ret_ty_resolved = if is_self_rt == 1 { target_tag } else { ty_ident_to_tag(rt_s, rt_l) };
+    cur_advance(sb);                         // '{'
+    let body = parse_expr(tok_base, sb);
+    cur_advance(sb);                         // '}'
+    let node = mk_node(14, mang_s, mang_l, body);
+    __arena_push(params_head);
+    __arena_push(ret_ty_resolved);
+    __arena_push(0);                         // is_generic = 0 (concrete)
+    node
+}
+
+// Stage 8.5B: parse `impl IDENT for IDENT { fn ... { ... } ... }`. Each
+// method is rewritten as a regular AST_FN_DECL with a mangled name like
+// `i32__eq`, then appended to the impl-pending fn-list chain. parse_program
+// splices that chain into the user's fn_list before the mono pass runs.
+//
+// Returns AST_STRUCT_DECL (tag 54) — the impl block itself emits no code;
+// its rewritten methods are emitted via the standard fn-list path.
 fn parse_impl_block(tok_base: i32, sb: i32) -> i32 {
     cur_advance(sb);                         // consume 'impl' IDENT
-    // Brace-balance scan from before the first '{' all the way through
-    // the closing '}'. Walk forward skipping non-LBRACE tokens until we
-    // find the first '{', then bump depth and balance.
-    let mut found_open: i32 = 0;
-    while found_open == 0 {
+    // Trait name IDENT.
+    let trait_tok = cur_get(sb);
+    let trait_s = tok_p2(tok_base, trait_tok);
+    let trait_l = tok_p3(tok_base, trait_tok);
+    cur_advance(sb);                         // trait-name IDENT
+    cur_advance(sb);                         // 'for' IDENT
+    // Target type IDENT.
+    let target_tok = cur_get(sb);
+    let target_s = tok_p2(tok_base, target_tok);
+    let target_l = tok_p3(tok_base, target_tok);
+    cur_advance(sb);                         // target-type IDENT
+    let target_tag = ty_ident_to_tag(target_s, target_l);
+    cur_advance(sb);                         // '{'
+    // Parse zero-or-more method decls until '}'.
+    let mut method_count: i32 = 0;
+    let mut keep: i32 = 1;
+    while keep == 1 {
         let tt = tok_tag(tok_base, cur_get(sb));
-        if tt == 5 { found_open = 1; }       // LBRACE
-        else { if tt == 0 { found_open = 1; } else {} };
-        if found_open == 0 { cur_advance(sb); };
-    }
-    cur_advance(sb);                         // consume '{'
-    let mut depth: i32 = 1;
-    while depth > 0 {
-        let tt = tok_tag(tok_base, cur_get(sb));
-        if tt == 5 { depth = depth + 1; }
-        else { if tt == 6 { depth = depth - 1; }
-        else { if tt == 0 { depth = 0; } else {} } };
-        if depth > 0 { cur_advance(sb); };
+        if tt == 6 {                         // RBRACE
+            keep = 0;
+        } else { if tt == 0 {                // EOF safety
+            keep = 0;
+        } else {
+            // Expect `fn IDENT(...) -> RET { ... }`. parse_impl_method
+            // consumes the entire decl + body + closing '}'.
+            let fn_node = parse_impl_method(tok_base, sb, target_s, target_l, target_tag);
+            // Wrap in AST_FN_LIST (tag 15) and append to impl_pending chain.
+            let list_node = mk_node(15, fn_node, 0, 0);
+            let head = impl_pending_head(sb);
+            if head == 0 {
+                set_impl_pending_head(sb, list_node);
+                set_impl_pending_tail(sb, list_node);
+            } else {
+                let tail = impl_pending_tail(sb);
+                __arena_set(tail + 2, list_node);
+                set_impl_pending_tail(sb, list_node);
+            };
+            method_count = method_count + 1;
+        } };
     }
     cur_advance(sb);                         // consume final '}'
+    impl_tab_add(sb, trait_s, trait_l, target_tag, method_count);
     mk_node(54, 0, 0, 0)
 }
 
