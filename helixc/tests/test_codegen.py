@@ -4594,6 +4594,42 @@ def test_ieee754_pos_3_14():
     assert code == 64, f"expected 64 (top byte of ~3.14 bits), got {code}"
 
 
+def test_ieee754_zero_constant():
+    """f32_bits_zero() = 0x00000000 = +0.0."""
+    src = """
+    fn main() -> i32 {
+        f32_bits_zero() + 42
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42 (zero+42), got {code}"
+
+
+def test_ieee754_one_constant():
+    """f32_bits_one() = 0x3F800000 = 1.0. Top byte 0x3F = 63; 63 - 21 = 42."""
+    src = """
+    fn main() -> i32 {
+        f32_bits_one() / 16777216 - 21
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42 (top byte 63 - 21), got {code}"
+
+
+def test_ieee754_neg_2_0():
+    """f32_bits_neg(2, 0, 0) = 0xC0000000 = -2.0.
+    XOR with positive bit pattern recovers the sign bit (1 << 31)."""
+    src = """
+    fn main() -> i32 {
+        let pos = f32_bits_pos(2, 0, 0);
+        let neg = f32_bits_neg(2, 0, 0);
+        if (neg ^ pos) == (1 << 31) { 42 } else { 0 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42 (sign-bit XOR confirmed), got {code}"
+
+
 def test_agi_tutorial_agent_grid_world():
     """Tutorial AI demo: composed grid-world solver. Builds a 4x4 world
     model, runs BFS to find a 6-step path from cell 0 to cell 15, then

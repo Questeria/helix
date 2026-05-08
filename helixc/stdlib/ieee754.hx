@@ -88,3 +88,29 @@ fn f32_bits_pos(integer_part: i32, frac_value: i32, frac_digits: i32) -> i32 {
         exp_field * f32_bits_pow2(23) + mantissa
     }
 }
+
+// f32 +0.0 bit pattern. Pure constant for callers that need a typed
+// zero seed without paying for the f32_bits_pos(0,0,0) loop guard.
+@pure
+fn f32_bits_zero() -> i32 {
+    0
+}
+
+// f32 1.0 bit pattern (0x3F800000 = 1065353216). Matches the IEEE 754
+// canonical representation: sign=0, exp=127 (biased), mantissa=0.
+// Used as the multiplicative identity seed for autodiff / scaling work.
+@pure
+fn f32_bits_one() -> i32 {
+    1065353216
+}
+
+// Negative-valued IEEE 754 f32 bit pattern. Companion to f32_bits_pos:
+// computes the positive bit pattern, then XORs the sign bit (1 << 31).
+// For the (0, 0, 0) input this yields the IEEE 754 -0.0 bit pattern
+// (0x80000000), which is bit-distinct from +0.0 but compares equal
+// numerically — semantically the right answer for IEEE 754.
+@pure
+fn f32_bits_neg(integer_part: i32, frac_value: i32, frac_digits: i32) -> i32 {
+    let pos = f32_bits_pos(integer_part, frac_value, frac_digits);
+    pos ^ (1 << 31)
+}
