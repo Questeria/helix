@@ -4114,14 +4114,19 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
             // the high half. Narrow types (u8=7, u16=8, i8=10, i16=11) use
             // movzx/movsx. All others (i32=0, f32=1, u32=6) use 32-bit load
             // (auto-zero-extends).
+            // Stage 5 Iter C: struct-typed bindings (ty >= 100) carry an
+            // 8-byte pointer; load the full 8 bytes so subsequent .field
+            // postfixes (`mov eax, [rax+disp]`) read the correct base.
+            let ty_is_struct = if ty >= 100 { 1 } else { 0 };
             if ty == 2 { emit_mov_rax_local_64(off) }
             else { if ty == 3 { emit_mov_rax_local_64(off) }
             else { if ty == 9 { emit_mov_rax_local_64(off) }
+            else { if ty_is_struct == 1 { emit_mov_rax_local_64(off) }
             else { if ty == 7 { emit_movzx_eax_local_byte(off) }
             else { if ty == 10 { emit_movsx_eax_local_byte(off) }
             else { if ty == 8 { emit_movzx_eax_local_word(off) }
             else { if ty == 11 { emit_movsx_eax_local_word(off) }
-            else { emit_mov_eax_local(off) }}}}}}}
+            else { emit_mov_eax_local(off) }}}}}}}}
         }
     } else { if t == 8 {
         // AST_LET: p1 = name_start, p2 = name_len, p3 = body_idx,
@@ -4305,10 +4310,22 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
             bytes_emitted = bytes_emitted + n_arg + n_push;
             // Stage 1.7: trap on arg-type-vs-param-type mismatch.
             // Speedup #4 wire-in: AST_CALL arg-type-mismatch trap id 16001.
+            // Stage 5 Iter C: skip the trap when expected_ty == 15 — that's
+            // the struct sentinel (parser encoded p_ty=100+struct_idx,
+            // pre-pass clamped to 15 in the packed table). Caller passes
+            // the struct's pointer in the arg register; expr_type of the
+            // arg is i64 (for struct lit) or 100+struct_idx (for struct-
+            // bound var) — neither matches the sentinel, so the trap
+            // would fire spuriously. Iter D may add a stricter check
+            // that compares struct identity end-to-end.
             if arg_count < pp_count {
                 let expected_ty = unpack_param_ty(pp_packed, arg_count);
                 let actual_ty = expr_type(arg_expr, bind_state, bn_state);
-                if expected_ty != actual_ty {
+                let exp_is_struct = if expected_ty == 15 { 1 } else { 0 };
+                let mismatch = if exp_is_struct == 1 { 0 } else {
+                    if expected_ty != actual_ty { 1 } else { 0 }
+                };
+                if mismatch == 1 {
                     let n_trap = emit_trap_with_id(16001);
                     bytes_emitted = bytes_emitted + n_trap;
                 };
@@ -4544,7 +4561,15 @@ fn emit_elf_for_ast_to_path(ast_root: i32) -> i32 {
             let mut pp_shift: i32 = 0;
             while pp_cur != 0 {
                 if pp_count < 6 {
-                    let pp_ty = __arena_get(pp_cur + 4);
+                    let pp_ty_raw = __arena_get(pp_cur + 4);
+                    // Stage 5 Iter C: struct-typed params encode p_ty as
+                    // 100 + struct_idx in AST_PARAM (parser side). Since
+                    // the packed param-type table allocates only 4 bits
+                    // per param, clamp struct values to sentinel 15 so
+                    // they don't bleed into adjacent slots. AST_CALL uses
+                    // 15 as "this param is a struct" — skips the type
+                    // mismatch trap and treats arg as struct-by-pointer.
+                    let pp_ty = if pp_ty_raw >= 100 { 15 } else { pp_ty_raw };
                     // Inline 1<<shift via repeated multiply (Helix
                     // bootstrap doesn't have <<). pp_ty is 0..15 already.
                     let mut place_val: i32 = pp_ty;
@@ -4636,9 +4661,14 @@ fn emit_elf_for_ast_to_path(ast_root: i32) -> i32 {
                     // stores — same shape as f64. Combine both in a
                     // single is-8-byte check.
                     // Stage 2.4: u64 params (p_ty == 9) too.
+                    // Stage 5 Iter C: struct params (p_ty >= 100) ALSO
+                    // need 64-bit stores — rdi (etc.) carries the full
+                    // 8-byte pointer to the caller-allocated struct.
+                    let p_ty_is_struct = if p_ty >= 100 { 1 } else { 0 };
                     let needs_64 = if p_ty == 2 { 1 }
                                    else { if p_ty == 3 { 1 }
-                                   else { if p_ty == 9 { 1 } else { 0 } } };
+                                   else { if p_ty == 9 { 1 }
+                                   else { if p_ty_is_struct == 1 { 1 } else { 0 } } } };
                     if needs_64 == 1 {
                         if pidx == 0 {
                             // mov [rbp+disp32], rdi  : 48 89 BD disp32

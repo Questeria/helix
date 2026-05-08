@@ -2508,6 +2508,24 @@ fn main() -> i32 {
     assert compile_and_exec(
         "struct Pt { x: i32, y: i32 } fn main() -> i32 { let p = Pt { 10, 32 }; p.0 + p.y }"
     ) == 42, "Stage 5 Iter B: mixed .0 + .y"
+    # Stage 5 Iter C: pass struct by value into user-defined fn. Caller
+    # leaves a pointer to the struct in rdi; callee spills it to a local
+    # 8-byte slot, then `p.x` / `p.y` resolve via the var_struct_tab
+    # binding the parser registers when parse_fn_decl encounters a
+    # struct-typed param. The fn_type_table packed-param-ty pre-pass
+    # clamps p_ty=100+struct_idx to sentinel 15 (the "this is a struct"
+    # marker); AST_CALL skips its arg-type-mismatch trap when expected
+    # is 15 (Iter D may strengthen this).
+    assert compile_and_exec(
+        "struct Pt { x: i32, y: i32 } "
+        "fn area(p: Pt) -> i32 { p.x * p.y } "
+        "fn main() -> i32 { area(Pt { 6, 7 }) }"
+    ) == 42, "Stage 5 Iter C: area(Pt{6, 7}) inline struct lit arg"
+    assert compile_and_exec(
+        "struct Pt { x: i32, y: i32 } "
+        "fn area(p: Pt) -> i32 { p.x * p.y } "
+        "fn main() -> i32 { let p = Pt { 6, 7 }; area(p) }"
+    ) == 42, "Stage 5 Iter C: area(p) where p is a let-bound struct"
     # Stage 4 follow-up audit Finding #2: AST_NEG was missing u64
     # dispatch. Fell through to 32-bit `neg eax` which only flipped
     # the low half. Now uses REX.W neg rax (same as i64).
