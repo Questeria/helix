@@ -2540,6 +2540,31 @@ fn main() -> i32 {
         "fn area(p: Pt) -> i32 { p.x * p.y } "
         "fn main() -> i32 { let p = Pt { 6, 7 }; area(p) }"
     ) == 42, "Stage 5 Iter C: area(p) where p is a let-bound struct"
+    # Stage 5 Iter D: nested struct (struct field whose type is another
+    # registered struct). Layout is boxed — each struct value is a 64-bit
+    # pointer, nested fields hold child pointers (matches Iter C ABI).
+    # Parser threads the field's struct_idx through the postfix .IDENT
+    # chain so `l.from.x` resolves both .from (struct-typed field) and
+    # .x (scalar field of the inner Pt). Codegen emits an 8-byte (REX.W)
+    # read for struct-typed fields (tag 52 + p3 == 1) so the child
+    # pointer's high 32 bits aren't truncated, then a 4-byte read for
+    # the inner scalar. AST_TUPLE_LIT switched to 8-byte stores so the
+    # outer struct lit can hold the child pointers.
+    assert compile_and_exec(
+        "struct Pt { x: i32, y: i32 } "
+        "struct Line { from: Pt, to: Pt } "
+        "fn main() -> i32 { "
+        "let l = Line { Pt { 10, 0 }, Pt { 0, 32 } }; "
+        "l.from.x + l.to.y }"
+    ) == 42, "Stage 5 Iter D: nested struct field access (l.from.x + l.to.y)"
+    # Stage 5 Iter D: same nested struct but accessed in different order.
+    assert compile_and_exec(
+        "struct Pt { x: i32, y: i32 } "
+        "struct Line { from: Pt, to: Pt } "
+        "fn main() -> i32 { "
+        "let l = Line { Pt { 1, 2 }, Pt { 3, 39 } }; "
+        "l.to.y }"
+    ) == 39, "Stage 5 Iter D: nested struct second-field access (l.to.y)"
     # Stage 4 follow-up audit Finding #2: AST_NEG was missing u64
     # dispatch. Fell through to 32-bit `neg eax` which only flipped
     # the low half. Now uses REX.W neg rax (same as i64).

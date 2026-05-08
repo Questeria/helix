@@ -3085,57 +3085,63 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         //   p1 = arity (number of elements)
         //   p2 = head AST_TUPLE_CONS node index
         //   p3 = unused (0)
+        // Stage 5 Iter D: rbp-relative addressing for slots.
+        //   The previous codegen used `sub rsp, 8*arity` + [rsp+disp]
+        //   stores, which broke nested struct lits: each inner struct
+        //   lit also `sub rsp`-ed, shifting the outer's [rsp+disp]
+        //   target onto inner-allocated bytes (Line { Pt{...}, Pt{...} }
+        //   silently corrupted Pt's slots).
+        //   Now: reserve `arity` slots via bind_alloc_offset (which
+        //   carves out [rbp - off], unique per call). Slot 0 lives at
+        //   the largest offset (most negative from rbp); slot i at
+        //   slot0_off - i*8 so field reads via `[rax + i*8]` (positive
+        //   offset) recover the correct address. Inner struct lits get
+        //   their own non-overlapping slot range — no aliasing.
+        //   Tradeoff: bind_alloc_offset growth is permanent for the
+        //   function (no bind_pop here), so deep struct-lit-heavy code
+        //   exhausts the 1024-byte prologue more quickly. For Phase-0
+        //   the headroom (1024 - 64*8 = 512 bytes = 64 extra slots)
+        //   covers all current tests.
         // Codegen:
-        //   sub rsp, 8*arity      (allocate N 8-byte stack slots)
+        //   reserve N slots via bind_alloc_offset, capture slot0_off
         //   for each element i:
-        //     evaluate child -> rax (full 64 bits)
-        //     mov [rsp+i*8], rax  (REX.W 8-byte store; covers both i32
-        //                          values — auto-zero-extended in eax —
-        //                          and 64-bit struct pointers from nested
-        //                          AST_TUPLE_LIT children).
-        //   mov rax, rsp          (rax = address of slot 0)
-        // Stage 5 Iter D: switched to 8-byte stores so a struct lit can
-        // hold child struct pointers (Line { Pt {...}, Pt {...} } —
-        // each Pt evaluates to a pointer in rax; storing only eax would
-        // truncate the high 32 bits of the pointer to zero). For scalar
-        // (i32) children, x86 32-bit ops zero-extend rax, so the upper
-        // 32 bits stored are zero — subsequent 4-byte reads via tag 52
-        // (p3 == 0) recover the i32 unchanged.
-        // Audit follow-up Finding #7: disp8 wrap when arity > 16.
-        // The store `mov [rsp+disp8], rax` uses signed disp8 (-128..127).
-        // arity = 16 → last off = 15*8 = 120 (still fits). arity = 17 →
-        // last off = 16*8 = 128 wraps to -128. Disp32 emission is
-        // deferred; emit ud2 prefix so runtime traps loudly before the
-        // wrapping stores execute. (Body still emits, but ud2 fires first.)
+        //       evaluate child -> rax (full 64 bits)
+        //       mov [rbp - (slot0_off - i*8)], rax   (REX.W 8-byte)
+        //   lea rax, [rbp - slot0_off]   (rax = address of slot 0)
         let arity = p1;
-        let n_pre_trap = if arity > 16 { emit_trap_with_id(50001) } else { 0 };
-        let alloc_bytes = arity * 8;
-        // sub rsp, imm32  (REX.W + 81 /5 imm32 = 7 bytes)
-        emit_byte(0x48); emit_byte(0x81); emit_byte(0xEC);
-        emit_u32_le(alloc_bytes);
-        let mut total: i32 = 7 + n_pre_trap;
+        // Reserve arity slots. bind_alloc_offset returns the offset to
+        // use directly: slot is at [rbp - offset]. After arity calls the
+        // state has grown by arity*8. last_off (offset of LAST allocated
+        // slot, most negative from rbp) becomes slot 0 — so slot 0 is
+        // at the LOW end of the run, slot i at slot0_off - i*8 (which
+        // is a SMALLER positive offset = closer to rbp), and field
+        // reads via [rax + i*8] recover the right address.
+        let mut slot0_off: i32 = 0;
+        let mut i_alloc: i32 = 0;
+        while i_alloc < arity {
+            slot0_off = bind_alloc_offset(bind_state);
+            i_alloc = i_alloc + 1;
+        }
+        let mut total: i32 = 0;
         let mut cur: i32 = p2;
-        // Stage 4 BUG FIX (post-ELF-dump): use `off` (mutable, += 8 each
-        // iter) instead of `idx * 8`. Python helixc apparently hoists
-        // `idx * 8` to a single computation, emitting the same disp8
-        // byte (0x38 = 7*8 = total's initial value somehow propagating)
-        // for ALL iterations — every store wrote to [rsp+56], never to
-        // [rsp+0], [rsp+8], [rsp+16]. Sidestep by avoiding the
-        // multiplication; use `off` that mutates by += 8 like `cur`.
-        let mut off: i32 = 0;
+        let mut slot_idx: i32 = 0;
         while cur != 0 {
             let child = __arena_get(cur + 1);
             let n_child = emit_ast_code(child, bind_state, patch_state, bn_state);
-            // mov [rsp + off], rax  (REX.W: 48 89 44 24 disp8 = 5 bytes)
-            emit_byte(0x48); emit_byte(0x89); emit_byte(0x44);
-            emit_byte(0x24); emit_byte(off);
-            total = total + n_child + 5;
-            off = off + 8;
+            let cur_off = slot0_off - slot_idx * 8;
+            // mov [rbp + disp32], rax  (REX.W: 48 89 85 disp32 = 7 bytes)
+            // disp32 = -cur_off (cur_off is positive; address is
+            // [rbp - cur_off]).
+            emit_byte(0x48); emit_byte(0x89); emit_byte(0x85);
+            emit_u32_le(0 - cur_off);
+            total = total + n_child + 7;
+            slot_idx = slot_idx + 1;
             cur = __arena_get(cur + 2);
         }
-        // mov rax, rsp  (48 89 E0 = 3 bytes; rax now holds slot-0 ptr)
-        emit_byte(0x48); emit_byte(0x89); emit_byte(0xE0);
-        total + 3
+        // lea rax, [rbp + disp32]  (REX.W: 48 8D 85 disp32 = 7 bytes)
+        emit_byte(0x48); emit_byte(0x8D); emit_byte(0x85);
+        emit_u32_le(0 - slot0_off);
+        total + 7
     } else { if t == 54 {
         // Stage 5 Iter A: AST_STRUCT_DECL — metadata only, emits 0 bytes.
         // The struct decl is registered in the parser's struct_table at

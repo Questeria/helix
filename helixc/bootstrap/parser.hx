@@ -924,13 +924,17 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
                     __arena_get(entry + 2)
                 } else { 0 - 1 };
                 if arity >= 0 {
-                    set_last_struct_idx(sb, s_idx);
                     cur_advance(sb);     // consume '{'
                     // Empty struct `Foo {}` — arity 0.
                     let pk_first = cur_get(sb);
                     let pt_first = tok_tag(tok_base, pk_first);
                     if pt_first == 6 {
                         cur_advance(sb);   // consume '}'
+                        // Set last_struct_idx AFTER children (here:
+                        // arity 0, no children) so nested struct lits
+                        // can't overwrite the outer's idx — Iter D fix
+                        // for `let l = Outer { Inner {...} }`.
+                        set_last_struct_idx(sb, s_idx);
                         mk_node(50, 0, 0, 0)
                     } else {
                         let first = parse_expr(tok_base, sb);
@@ -957,6 +961,12 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
                             } else { keep = 0; };
                         }
                         cur_advance(sb);    // consume '}'
+                        // Iter D fix: set last_struct_idx AFTER parsing
+                        // children. Inner struct lits set it to their
+                        // own idx during their parse_primary; setting
+                        // here last writes the OUTER's idx, which is
+                        // what surrounding let-parsing needs.
+                        set_last_struct_idx(sb, s_idx);
                         mk_node(50, n, head_idx, 0)
                     }
                 } else {
