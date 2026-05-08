@@ -249,6 +249,9 @@ fn struct_tab_lookup_idx(sb: i32, name_s: i32, name_l: i32) -> i32 {
 }
 // Iter B: given a struct's table index and a field name, return the
 // 0-based field index, or -1 on miss / no fields region.
+// Iter D: stride extended from 2 to 3 (name_s, name_l, field_struct_idx).
+// field_struct_idx is the struct_idx of the field's type if it is a
+// registered struct, or -1 if the field is a scalar (i32/f32/etc.).
 fn struct_tab_field_lookup(sb: i32, struct_idx: i32, field_s: i32, field_l: i32) -> i32 {
     let base = struct_tab_base(sb);
     let entry = base + struct_idx * 4;
@@ -260,7 +263,7 @@ fn struct_tab_field_lookup(sb: i32, struct_idx: i32, field_s: i32, field_l: i32)
         let mut i: i32 = 0;
         let mut found: i32 = 0 - 1;
         while i < arity {
-            let pair = fields_ptr + i * 2;
+            let pair = fields_ptr + i * 3;
             let ns = __arena_get(pair);
             let nl = __arena_get(pair + 1);
             if byte_eq(field_s, field_l, ns, nl) == 1 {
@@ -272,6 +275,26 @@ fn struct_tab_field_lookup(sb: i32, struct_idx: i32, field_s: i32, field_l: i32)
         }
         found
     }
+}
+
+// Iter D: given a struct's table index and a field index, return the
+// field's struct_idx if its declared type is a registered struct, or
+// -1 if scalar / out of range / no fields region.
+fn struct_tab_field_struct_idx(sb: i32, struct_idx: i32, field_idx: i32) -> i32 {
+    let base = struct_tab_base(sb);
+    let entry = base + struct_idx * 4;
+    let arity = __arena_get(entry + 2);
+    let fields_ptr = __arena_get(entry + 3);
+    if fields_ptr == 0 {
+        0 - 1
+    } else { if field_idx < 0 {
+        0 - 1
+    } else { if field_idx >= arity {
+        0 - 1
+    } else {
+        let pair = fields_ptr + field_idx * 3;
+        __arena_get(pair + 2)
+    }}}
 }
 
 // --------------------------------------------------------------
@@ -1391,10 +1414,12 @@ fn parse_fn_decl(tok_base: i32, sb: i32) -> i32 {
 
 // Stage 5 Iter A: parse `struct IDENT { f1: T1, f2: T2, ... }`.
 // Caller has already verified the cursor sits on the `struct` IDENT.
-// Field types are parsed but ignored for Iter A (positional access
-// only). Registers the (name, arity) into struct_table so parse_primary
-// can detect `IDENT { ... }` as a struct lit later. Returns a tag-54
-// AST_STRUCT_DECL node which codegen treats as a no-op (emits 0 bytes).
+// Iter D: each field-region entry is 3 slots (name_s, name_l,
+// field_struct_idx). field_struct_idx is the struct_idx of the field's
+// type IDENT if it is a registered struct, or -1 if scalar (i32/f32/etc.).
+// Registers the (name, arity, fields_ptr) into struct_table so
+// parse_primary can detect `IDENT { ... }` as a struct lit later.
+// Returns a tag-54 AST_STRUCT_DECL node which codegen treats as a no-op.
 fn parse_struct_decl(tok_base: i32, sb: i32) -> i32 {
     cur_advance(sb);                         // consume 'struct' IDENT
     let nk = cur_get(sb);
@@ -1418,15 +1443,22 @@ fn parse_struct_decl(tok_base: i32, sb: i32) -> i32 {
             let f_name_l = tok_p3(tok_base, fk);
             cur_advance(sb);                 // field-name IDENT
             cur_advance(sb);                 // ':' (COLON = 14)
-            cur_advance(sb);                 // type IDENT (Iter A: ignored)
-            // Push (name_s, name_l) pair into fields region. Capture
-            // fields_ptr from the FIRST push so subsequent fields
-            // append after it (arena grows linearly).
+            // Iter D: capture type IDENT bytes BEFORE advancing so we
+            // can resolve nested struct types via struct_tab_lookup_idx.
+            let tk = cur_get(sb);
+            let t_s = tok_p2(tok_base, tk);
+            let t_l = tok_p3(tok_base, tk);
+            cur_advance(sb);                 // consume type IDENT
+            let f_struct_idx = struct_tab_lookup_idx(sb, t_s, t_l);
+            // Push (name_s, name_l, field_struct_idx) triple into
+            // fields region. Capture fields_ptr from the FIRST push so
+            // subsequent fields append after it (arena grows linearly).
             let pushed = __arena_push(f_name_s);
             if field_count == 0 {
                 fields_ptr = pushed;
             };
             __arena_push(f_name_l);
+            __arena_push(f_struct_idx);
             field_count = field_count + 1;
             if tok_tag(tok_base, cur_get(sb)) == 13 {  // optional COMMA
                 cur_advance(sb);
