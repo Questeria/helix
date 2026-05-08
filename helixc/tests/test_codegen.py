@@ -3172,6 +3172,48 @@ fn main() -> i32 {
     assert compile_and_exec(
         "fn id<T>(x: T) -> T { x } fn main() -> i32 { id(5) }"
     ) == 132, "Stage 8F: uninstantiated generic call traps via ud2"
+    # Stage 8.5: traits + typeclasses (minimal Rust-style).
+    # 8.5A: trait decl + 8.5B: impl block + method-call sugar a.eq(b).
+    # The trait body holds method signatures (no implementation); impl
+    # block re-emits the methods as regular fn decls with mangled name
+    # `<TargetType>__<MethodName>` (e.g. `i32__eq`). Method-call sugar
+    # `a.eq(b)` lowers to `i32__eq(a, b)` when `a`'s binding has type
+    # i32 (registered via `let a: i32 = ...`). Self/Self in impl method
+    # signatures resolve to the impl target type.
+    assert compile_and_exec(
+        "trait Eq { fn eq(self, other: Self) -> i32 ; } "
+        "impl Eq for i32 { fn eq(self, other: i32) -> i32 { if self == other { 1 } else { 0 } } } "
+        "fn main() -> i32 { let a: i32 = 5 ; let b: i32 = 5 ; a.eq(b) }"
+    ) == 1, "Stage 8.5A/B: trait+impl with method-call sugar a.eq(b) -> 1"
+    assert compile_and_exec(
+        "trait Eq { fn eq(self, other: Self) -> i32 ; } "
+        "impl Eq for i32 { fn eq(self, other: i32) -> i32 { if self == other { 1 } else { 0 } } } "
+        "fn main() -> i32 { let a: i32 = 5 ; let b: i32 = 7 ; a.eq(b) }"
+    ) == 0, "Stage 8.5A/B: method-call sugar a.eq(b) on mismatched -> 0"
+    # Direct typed-call form `i32::eq(a, b)` works without method sugar.
+    assert compile_and_exec(
+        "trait Eq { fn eq(self, other: Self) -> i32 ; } "
+        "impl Eq for i32 { fn eq(self, other: i32) -> i32 { if self == other { 1 } else { 0 } } } "
+        "fn main() -> i32 { i32::eq(5, 5) }"
+    ) == 1, "Stage 8.5B: i32::eq(5,5) direct typed-call -> 1"
+    # 8.5C: bounded generic `<T: Eq>` resolved at mono pass. The body
+    # `T::eq(a, b)` is parsed as AST_CALL with name "T__eq" (literal gp
+    # prefix). Mono pass deep-clones the body for `cmp::<i32>` and
+    # rewrites the call name to `i32__eq` (matching the impl's mangled
+    # method). The trait bound itself is parsed but Phase-0 ignores it
+    # semantically; resolution is purely name-based.
+    assert compile_and_exec(
+        "trait Eq { fn eq(self, other: Self) -> i32 ; } "
+        "impl Eq for i32 { fn eq(self, other: i32) -> i32 { if self == other { 1 } else { 0 } } } "
+        "fn cmp<T: Eq>(a: T, b: T) -> i32 { T::eq(a, b) } "
+        "fn main() -> i32 { cmp::<i32>(5, 5) }"
+    ) == 1, "Stage 8.5C: bounded generic cmp<T:Eq> with cmp::<i32>(5,5) -> 1"
+    assert compile_and_exec(
+        "trait Eq { fn eq(self, other: Self) -> i32 ; } "
+        "impl Eq for i32 { fn eq(self, other: i32) -> i32 { if self == other { 1 } else { 0 } } } "
+        "fn cmp<T: Eq>(a: T, b: T) -> i32 { T::eq(a, b) } "
+        "fn main() -> i32 { cmp::<i32>(5, 7) }"
+    ) == 0, "Stage 8.5C: bounded generic cmp::<i32>(5,7) -> 0"
 
 
 def test_bootstrap_kovc_inline_write_file_to_arena():
