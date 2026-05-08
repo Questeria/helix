@@ -623,6 +623,39 @@ fn lex(src_start: i32, src_len: i32) -> i32 {
                 push_token(17, 0, pos, 1);
                 pos = pos + 1;
             };
+        } else { if b == 61 {
+            // Stage 7: '=' — could be `=>` (TK_FATARROW=42) or single
+            // `=` (TK_EQ=15). `==` is still emitted as two TK_EQ tokens
+            // for the parser to combine into AST_EQ.
+            if pos + 1 < end {
+                let nxt = __arena_get(pos + 1);
+                if nxt == 62 {
+                    push_token(42, 0, pos, 2);
+                    pos = pos + 2;
+                } else {
+                    push_token(15, 0, pos, 1);
+                    pos = pos + 1;
+                };
+            } else {
+                push_token(15, 0, pos, 1);
+                pos = pos + 1;
+            };
+        } else { if b == 46 {
+            // Stage 7: '.' — could be `..` (TK_DOTDOT=43) or single
+            // `.` (TK_DOT=22, used by tuple field access since Stage 4).
+            if pos + 1 < end {
+                let nxt = __arena_get(pos + 1);
+                if nxt == 46 {
+                    push_token(43, 0, pos, 2);
+                    pos = pos + 2;
+                } else {
+                    push_token(22, 0, pos, 1);
+                    pos = pos + 1;
+                };
+            } else {
+                push_token(22, 0, pos, 1);
+                pos = pos + 1;
+            };
         } else {
             let pk = punct_kind(b);
             if pk == 0 {
@@ -634,7 +667,7 @@ fn lex(src_start: i32, src_len: i32) -> i32 {
                 push_token(pk, 0, pos, 1);
                 pos = pos + 1;
             };
-        }}}}}}};
+        }}}}}}}}};
     }
     push_token(0, 0, pos, 0);   // TK_EOF sentinel
     let after = __arena_len();
