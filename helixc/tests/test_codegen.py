@@ -2491,6 +2491,23 @@ fn main() -> i32 {
         "struct Pair { x: i32, y: i32 } "
         "fn main() -> i32 { Pair { 30, 12 }.0 + Pair { 30, 12 }.1 }"
     ) == 42, "Stage 5 Iter A: inline struct lit + field access"
+    # Stage 5 Iter B: NAMED field access. Parser tracks (var_name ->
+    # struct_idx) when `let p = Pt {...}` parses, then resolves
+    # `p.IDENT` by looking up the field name's position in the
+    # registered struct's field-names region.
+    assert compile_and_exec(
+        "struct Pt { x: i32, y: i32 } fn main() -> i32 { let p = Pt { 10, 32 }; p.x + p.y }"
+    ) == 42, "Stage 5 Iter B: named field access (p.x + p.y)"
+    assert compile_and_exec(
+        "struct Triple { a: i32, b: i32, c: i32 } "
+        "fn main() -> i32 { let t = Triple { 10, 20, 12 }; t.a + t.b + t.c }"
+    ) == 42, "Stage 5 Iter B: 3-field named access"
+    # Mixed positional + named on same struct should still work
+    # (parser's .NUM and .IDENT both resolve to AST_TUPLE_FIELD with
+    # the same numeric offset).
+    assert compile_and_exec(
+        "struct Pt { x: i32, y: i32 } fn main() -> i32 { let p = Pt { 10, 32 }; p.0 + p.y }"
+    ) == 42, "Stage 5 Iter B: mixed .0 + .y"
     # Stage 4 follow-up audit Finding #2: AST_NEG was missing u64
     # dispatch. Fell through to 32-bit `neg eax` which only flipped
     # the low half. Now uses REX.W neg rax (same as i64).

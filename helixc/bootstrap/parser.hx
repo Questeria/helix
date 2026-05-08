@@ -537,7 +537,31 @@ fn parse_unary(tok_base: i32, sb: i32) -> i32 {
                     let idx_val = tok_p1(tok_base, pk + 1);
                     cur_advance(sb);
                     prim = mk_node(52, prim, idx_val, 0);
-                } else { keep_p = 0; };
+                } else { if nt == 2 {
+                    // Stage 5 Iter B: `.IDENT` named field access.
+                    // Currently only supported when the LHS is an
+                    // AST_VAR (tag 1) — we walk back the var's
+                    // struct_idx via var_struct_tab_lookup. Other
+                    // prim shapes (e.g. inline struct lit `Pt{1,2}.x`)
+                    // not yet supported; bail to keep_p=0 in that case.
+                    let prim_tag = __arena_get(prim);
+                    if prim_tag == 1 {
+                        let var_s = __arena_get(prim + 1);
+                        let var_l = __arena_get(prim + 2);
+                        let s_idx_l = var_struct_tab_lookup(sb, var_s, var_l);
+                        if s_idx_l >= 0 {
+                            cur_advance(sb);                       // consume '.'
+                            let fk = cur_get(sb);
+                            let field_s = tok_p2(tok_base, fk);
+                            let field_l = tok_p3(tok_base, fk);
+                            cur_advance(sb);                       // consume IDENT
+                            let f_idx = struct_tab_field_lookup(sb, s_idx_l, field_s, field_l);
+                            if f_idx >= 0 {
+                                prim = mk_node(52, prim, f_idx, 0);
+                            } else { keep_p = 0; };
+                        } else { keep_p = 0; };
+                    } else { keep_p = 0; };
+                } else { keep_p = 0; }};
             } else { if pt == 20 {                     // TK_LBRACK
                 cur_advance(sb);                       // skip '['
                 let idx_expr = parse_expr(tok_base, sb);
@@ -709,6 +733,14 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
             // value uses parse_expr_basic so the `;` after the
             // value belongs to the let-terminator, not a sequencer.
             let value = parse_expr_basic(tok_base, sb);
+            // Iter B: if the value was a struct lit, last_struct_idx
+            // is now set; register the binding name -> struct_idx so
+            // postfix `.IDENT` on this var resolves to a field offset.
+            let s_idx_b = last_struct_idx(sb);
+            if s_idx_b >= 0 {
+                var_struct_tab_add(sb, name_start, name_len, s_idx_b);
+                set_last_struct_idx(sb, 0 - 1);
+            };
             cur_advance(sb);     // ';'
             let body = parse_expr(tok_base, sb);
             // Audit-14: AST_LET / AST_LET_MUT used to pack
@@ -835,8 +867,16 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
                 // struct_table; on hit (arity >= 0), parse positional
                 // values into an AST_TUPLE_LIT chain, reusing tuple
                 // codegen entirely. On miss, fall through to var-ref.
-                let arity = struct_tab_lookup(sb, id_start, id_len);
+                // Iter B: use struct_tab_lookup_idx so we can also
+                // record the struct_idx in the last_struct_idx scratch
+                // slot for the surrounding let-parser to pick up.
+                let s_idx = struct_tab_lookup_idx(sb, id_start, id_len);
+                let arity = if s_idx >= 0 {
+                    let entry = struct_tab_base(sb) + s_idx * 4;
+                    __arena_get(entry + 2)
+                } else { 0 - 1 };
                 if arity >= 0 {
+                    set_last_struct_idx(sb, s_idx);
                     cur_advance(sb);     // consume '{'
                     // Empty struct `Foo {}` — arity 0.
                     let pk_first = cur_get(sb);
