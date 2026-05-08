@@ -371,6 +371,76 @@ fn impl_pending_head(sb: i32) -> i32 { __arena_get(sb + 43) }
 fn impl_pending_tail(sb: i32) -> i32 { __arena_get(sb + 44) }
 fn set_impl_pending_head(sb: i32, v: i32) -> i32 { __arena_set(sb + 43, v); 0 }
 fn set_impl_pending_tail(sb: i32, v: i32) -> i32 { __arena_set(sb + 44, v); 0 }
+// Stage 8.5: sb+45/46 = var_type_table base/count. Each entry is 3 slots
+// (name_s, name_l, type_tag). Cap 8 typed vars per fn-body. Captured by
+// `let x: T = ...` parsing; consulted by parse_postfix when handling
+// method-call sugar `x.eq(b)` to mangle to `<TypeName>__eq(x, b)`.
+fn var_type_tab_base(sb: i32) -> i32 { __arena_get(sb + 45) }
+fn var_type_tab_count(sb: i32) -> i32 { __arena_get(sb + 46) }
+fn var_type_tab_add(sb: i32, name_s: i32, name_l: i32, ty_tag: i32) -> i32 {
+    let count = var_type_tab_count(sb);
+    if count >= 8 {
+        0 - 1
+    } else {
+        let base = var_type_tab_base(sb);
+        let entry = base + count * 3;
+        __arena_set(entry, name_s);
+        __arena_set(entry + 1, name_l);
+        __arena_set(entry + 2, ty_tag);
+        __arena_set(sb + 46, count + 1);
+        count
+    }
+}
+fn var_type_tab_lookup(sb: i32, name_s: i32, name_l: i32) -> i32 {
+    let base = var_type_tab_base(sb);
+    let count = var_type_tab_count(sb);
+    let mut i: i32 = 0;
+    let mut found: i32 = 0 - 1;
+    while i < count {
+        let entry = base + i * 3;
+        let ns = __arena_get(entry);
+        let nl = __arena_get(entry + 1);
+        if byte_eq(name_s, name_l, ns, nl) == 1 {
+            found = __arena_get(entry + 2);
+            i = count;
+        } else {
+            i = i + 1;
+        };
+    }
+    found
+}
+// Stage 8.5: tag-to-name helper. Given a 4-bit type tag (0=i32, 1=f32,
+// 2=f64, 3=i64, 6=u32, 9=u64), push the canonical type-name bytes into
+// the arena and return (start, len_packed) where len_packed = start * 8 + len.
+// Used by method-call sugar to build mangled names like "i32__eq". For
+// uncommon tags (anything not handled here) defaults to "i32".
+fn ty_tag_push_name(tag: i32) -> i32 {
+    let start = __arena_len();
+    let mut len: i32 = 0;
+    if tag == 0 {                            // i32
+        __arena_push(105); __arena_push(51); __arena_push(50);
+        len = 3;
+    } else { if tag == 1 {                   // f32
+        __arena_push(102); __arena_push(51); __arena_push(50);
+        len = 3;
+    } else { if tag == 2 {                   // f64
+        __arena_push(102); __arena_push(54); __arena_push(52);
+        len = 3;
+    } else { if tag == 3 {                   // i64
+        __arena_push(105); __arena_push(54); __arena_push(52);
+        len = 3;
+    } else { if tag == 6 {                   // u32
+        __arena_push(117); __arena_push(51); __arena_push(50);
+        len = 3;
+    } else { if tag == 9 {                   // u64
+        __arena_push(117); __arena_push(54); __arena_push(52);
+        len = 3;
+    } else {                                  // default i32
+        __arena_push(105); __arena_push(51); __arena_push(50);
+        len = 3;
+    } } } } } };
+    start * 8 + len
+}
 fn var_struct_tab_add(sb: i32, name_s: i32, name_l: i32, struct_idx: i32) -> i32 {
     let count = var_struct_tab_count(sb);
     if count >= 4 {
@@ -1016,6 +1086,68 @@ fn parse_unary(tok_base: i32, sb: i32) -> i32 {
                     prim = mk_node(52, prim, idx_val, 0);
                     cur_struct_idx = 0 - 1;
                 } else { if nt == 2 {
+                    // Stage 8.5 method-call sugar PRE-CHECK: `<expr>.IDENT(`
+                    // where the LHS is an AST_VAR with a known scalar type
+                    // tag (registered via `let x: T = ...`) and the IDENT
+                    // is followed by `(`. Mangle to `<TypeName>__<method>(LHS, args)`.
+                    // Token positions: pk = '.', pk+1 = method IDENT, pk+2 = '('.
+                    let prim_tag_pre = __arena_get(prim);
+                    let mut method_lhs_ty: i32 = 0 - 1;
+                    if prim_tag_pre == 1 {
+                        let pv_s = __arena_get(prim + 1);
+                        let pv_l = __arena_get(prim + 2);
+                        method_lhs_ty = var_type_tab_lookup(sb, pv_s, pv_l);
+                    };
+                    let lparen_tag = tok_tag(tok_base, pk + 2);
+                    let is_method_call = if method_lhs_ty >= 0 {
+                        if lparen_tag == 3 { 1 } else { 0 }
+                    } else { 0 };
+                    if is_method_call == 1 {
+                        // Capture method-name IDENT bytes (at pk+1).
+                        let m_s = tok_p2(tok_base, pk + 1);
+                        let m_l = tok_p3(tok_base, pk + 1);
+                        // Build mangled name `<TypeName>__<MethodName>` in arena.
+                        // ty_tag_push_name pushes the type-name bytes; then we
+                        // append "__" and the method-name bytes.
+                        let packed = ty_tag_push_name(method_lhs_ty);
+                        let ty_len = packed - (packed / 8) * 8;
+                        let ty_start = packed / 8;
+                        __arena_push(95); __arena_push(95);     // '__'
+                        let mut mi: i32 = 0;
+                        while mi < m_l {
+                            __arena_push(__arena_get(m_s + mi));
+                            mi = mi + 1;
+                        }
+                        let mang_s = ty_start;
+                        let mang_l = ty_len + 2 + m_l;
+                        // Consume `.`, method IDENT, `(`.
+                        cur_advance(sb);                       // '.'
+                        cur_advance(sb);                       // method IDENT
+                        cur_advance(sb);                       // '('
+                        // Build args list. First arg is the LHS prim. Then
+                        // parse comma-separated args until ')'.
+                        let first_arg = mk_node(17, prim, 0, 0);
+                        let mut args_head: i32 = first_arg;
+                        let mut prev_arg: i32 = first_arg;
+                        let mut a_keep: i32 = 1;
+                        while a_keep == 1 {
+                            let at = tok_tag(tok_base, cur_get(sb));
+                            if at == 4 {                        // ')'
+                                a_keep = 0;
+                            } else { if at == 13 {              // ','
+                                cur_advance(sb);
+                            } else {
+                                let arg_expr = parse_expr_basic(tok_base, sb);
+                                let new_arg = mk_node(17, arg_expr, 0, 0);
+                                __arena_set(prev_arg + 2, new_arg);
+                                prev_arg = new_arg;
+                            } };
+                        }
+                        cur_advance(sb);                       // ')'
+                        // Emit AST_CALL (tag 16) with mangled name + args_head.
+                        prim = mk_node(16, mang_s, mang_l, args_head);
+                        cur_struct_idx = 0 - 1;
+                    } else {
                     // Stage 5 Iter B: `.IDENT` named field access.
                     // Iter D: cur_struct_idx may already be set from a
                     // prior `.IDENT` step in the chain. If still -1
@@ -1053,6 +1185,7 @@ fn parse_unary(tok_base: i32, sb: i32) -> i32 {
                             };
                         } else { keep_p = 0; };
                     } else { keep_p = 0; };
+                    };       // end Stage 8.5 method-call-else (field-access)
                 } else { keep_p = 0; }};
             } else { if pt == 20 {                     // TK_LBRACK
                 cur_advance(sb);                       // skip '['
@@ -1217,10 +1350,24 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
             // ident. Without this, `let mut i: i32 = 0` would mis-
             // align the cursor and break self-host of the bootstrap
             // parser.
+            // Stage 8.5: capture the type IDENT bytes BEFORE skipping so
+            // we can register the binding in var_type_tab for method-call
+            // sugar (`x.eq(b)` -> `i32__eq(x, b)`).
             let after_name_tag = tok_tag(tok_base, cur_get(sb));
+            let mut let_ty_tag: i32 = 0 - 1;
             if after_name_tag == 14 {
                 cur_advance(sb);    // consume ':'
+                let lt_tok = cur_get(sb);
+                let lt_s = tok_p2(tok_base, lt_tok);
+                let lt_l = tok_p3(tok_base, lt_tok);
+                let_ty_tag = ty_ident_to_tag(lt_s, lt_l);
                 cur_advance(sb);    // consume type IDENT
+            };
+            // Register the typed binding (only when the annotation produced
+            // a recognized scalar tag; struct-typed lets continue to use
+            // var_struct_tab below).
+            if let_ty_tag >= 0 {
+                var_type_tab_add(sb, name_start, name_len, let_ty_tag);
             };
             cur_advance(sb);     // '='
             // value uses parse_expr_basic so the `;` after the
@@ -1869,6 +2016,20 @@ fn impl_tab_init(sb: i32) -> i32 {
     0
 }
 
+// Stage 8.5: var_type_table region — 24 slots = 8 entries x 3 fields
+// (var_name_s, var_name_l, type_tag). Cap 8 typed vars.
+fn var_type_tab_init(sb: i32) -> i32 {
+    let vt_base = __arena_push(0);
+    let mut vti: i32 = 1;
+    while vti < 24 {
+        __arena_push(0);
+        vti = vti + 1;
+    }
+    __arena_set(sb + 45, vt_base);
+    __arena_set(sb + 46, 0);
+    0
+}
+
 // --------------------------------------------------------------
 // install_keywords: stash "let", "if", "else" bytes in the arena
 // and write their (start, len) into state_base+1..state_base+6.
@@ -1928,6 +2089,7 @@ fn install_keywords(sb: i32) -> i32 {
     __arena_set(sb + 42, 3);
     trait_tab_init(sb);
     impl_tab_init(sb);
+    var_type_tab_init(sb);
     0
 }
 
@@ -1962,9 +2124,11 @@ fn parse_top(tok_base: i32) -> i32 {
     // (base + count) + trait/impl/for keyword (start + len) triples.
     // Slots 43/44 = pending impl-method fn-list head/tail (built by
     // parse_impl_block; spliced into fn_list by parse_program).
+    // Slots 45/46 = var_type_table base/count (typed-let bindings).
     __arena_push(0); __arena_push(0); __arena_push(0); __arena_push(0);
     __arena_push(0); __arena_push(0); __arena_push(0); __arena_push(0);
     __arena_push(0); __arena_push(0); __arena_push(0); __arena_push(0);
+    __arena_push(0); __arena_push(0);
     install_keywords(cur_slot);
     var_struct_tab_init(cur_slot);
     var_enum_tab_init(cur_slot);
