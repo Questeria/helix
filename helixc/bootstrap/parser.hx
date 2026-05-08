@@ -4366,6 +4366,174 @@ fn grad_pass(sb: i32, head: i32) -> i32 {
     }
 }
 
+// Stage 14.5: walk loss body, scan for AST_CALL to user fns marked
+// @checkpoint, and for each one verify that the callee body is pure.
+// Returns 1 iff every reachable @checkpoint callee is pure. Pure-but-
+// non-@checkpoint callees are NOT checked (they go through the normal
+// reverse-mode path, which already traps on unsupported ops).
+fn ckpt_callees_pure(expr_idx: i32, head: i32, depth: i32) -> i32 {
+    if depth >= 2000 {
+        0
+    } else {
+        let t = __arena_get(expr_idx);
+        if t == 16 {
+            // AST_CALL: find callee in fn_list, check if it's @checkpoint.
+            let call_ns = __arena_get(expr_idx + 1);
+            let call_nl = __arena_get(expr_idx + 2);
+            let mut walk: i32 = head;
+            let mut callee_idx: i32 = 0;
+            let mut fk: i32 = 1;
+            while fk == 1 {
+                let cand_idx = __arena_get(walk + 1);
+                let cand_ns = __arena_get(cand_idx + 1);
+                let cand_nl = __arena_get(cand_idx + 2);
+                if byte_eq(call_ns, call_nl, cand_ns, cand_nl) == 1 {
+                    callee_idx = cand_idx;
+                    fk = 0;
+                };
+                if fk == 1 {
+                    let nx = __arena_get(walk + 2);
+                    if nx == 0 { fk = 0; } else { walk = nx; };
+                };
+            }
+            let mut ok: i32 = 1;
+            if callee_idx > 0 {
+                let cal_is_ckpt = __arena_get(callee_idx + 8);
+                if cal_is_ckpt == 1 {
+                    let cal_body = __arena_get(callee_idx + 3);
+                    if ckpt_is_pure(cal_body, 0) == 0 {
+                        ok = 0;
+                    };
+                };
+            };
+            // Also walk the call's args for nested @checkpoint calls.
+            let args_head = __arena_get(expr_idx + 3);
+            let mut awalk: i32 = args_head;
+            while awalk != 0 {
+                if ok == 1 {
+                    let arg_expr = __arena_get(awalk + 1);
+                    if ckpt_callees_pure(arg_expr, head, depth + 1) == 0 {
+                        ok = 0;
+                    };
+                };
+                awalk = __arena_get(awalk + 2);
+            }
+            ok
+        } else { if t == 2 {
+            let l = __arena_get(expr_idx + 1);
+            let r = __arena_get(expr_idx + 2);
+            if ckpt_callees_pure(l, head, depth + 1) == 1 {
+                ckpt_callees_pure(r, head, depth + 1)
+            } else { 0 }
+        } else { if t == 3 {
+            let l = __arena_get(expr_idx + 1);
+            let r = __arena_get(expr_idx + 2);
+            if ckpt_callees_pure(l, head, depth + 1) == 1 {
+                ckpt_callees_pure(r, head, depth + 1)
+            } else { 0 }
+        } else { if t == 4 {
+            let l = __arena_get(expr_idx + 1);
+            let r = __arena_get(expr_idx + 2);
+            if ckpt_callees_pure(l, head, depth + 1) == 1 {
+                ckpt_callees_pure(r, head, depth + 1)
+            } else { 0 }
+        } else { if t == 5 {
+            let l = __arena_get(expr_idx + 1);
+            let r = __arena_get(expr_idx + 2);
+            if ckpt_callees_pure(l, head, depth + 1) == 1 {
+                ckpt_callees_pure(r, head, depth + 1)
+            } else { 0 }
+        } else { if t == 9 {
+            let inner = __arena_get(expr_idx + 1);
+            ckpt_callees_pure(inner, head, depth + 1)
+        } else {
+            // Leaf or other tag — no @checkpoint call to check here.
+            // (Stage 14 reverse-mode AD will trap on unsupported tags
+            // separately if they end up in the differentiation path.)
+            1
+        } } } } } }
+    }
+}
+
+// Stage 14.5: purity scan for @checkpoint fn bodies. Walks the AST
+// rooted at `expr_idx` and returns 1 iff every node is one of the
+// pure-arithmetic tags supported by reverse-mode AD:
+//   0  AST_INT
+//   1  AST_VAR
+//   2  AST_ADD     3  AST_SUB     4  AST_MUL     5  AST_DIV
+//   9  AST_NEG
+//  16  AST_CALL    (only callable to other fns; the inliner will
+//                   recursively expand them)
+//  17  AST_ARG     (linked-list cell for AST_CALL args)
+//  27  AST_FLOATLIT_F32
+//  34  AST_FLOATLIT_F64
+//  35  AST_INTLIT_I64
+// Anything else (IF, WHILE, LET, ASSIGN, SEQ, side-effecting builtins,
+// match, struct-field-access, ...) is considered impure for Phase-0
+// and triggers trap 90001 at the @checkpoint boundary.
+//
+// Depth budget 2000 (per Stage 14.5 plan note) — exceeded means we
+// give up and conservatively return 0 (impure).
+fn ckpt_is_pure(expr_idx: i32, depth: i32) -> i32 {
+    if depth >= 2000 {
+        0
+    } else {
+        let t = __arena_get(expr_idx);
+        if t == 0 { 1 }
+        else { if t == 1 { 1 }
+        else { if t == 27 { 1 }
+        else { if t == 34 { 1 }
+        else { if t == 35 { 1 }
+        else { if t == 2 {
+            let l = __arena_get(expr_idx + 1);
+            let r = __arena_get(expr_idx + 2);
+            if ckpt_is_pure(l, depth + 1) == 1 {
+                ckpt_is_pure(r, depth + 1)
+            } else { 0 }
+        } else { if t == 3 {
+            let l = __arena_get(expr_idx + 1);
+            let r = __arena_get(expr_idx + 2);
+            if ckpt_is_pure(l, depth + 1) == 1 {
+                ckpt_is_pure(r, depth + 1)
+            } else { 0 }
+        } else { if t == 4 {
+            let l = __arena_get(expr_idx + 1);
+            let r = __arena_get(expr_idx + 2);
+            if ckpt_is_pure(l, depth + 1) == 1 {
+                ckpt_is_pure(r, depth + 1)
+            } else { 0 }
+        } else { if t == 5 {
+            let l = __arena_get(expr_idx + 1);
+            let r = __arena_get(expr_idx + 2);
+            if ckpt_is_pure(l, depth + 1) == 1 {
+                ckpt_is_pure(r, depth + 1)
+            } else { 0 }
+        } else { if t == 9 {
+            let inner = __arena_get(expr_idx + 1);
+            ckpt_is_pure(inner, depth + 1)
+        } else { if t == 16 {
+            // AST_CALL: walk its arg chain (each AST_ARG points at an
+            // expr in slot 1 and the next AST_ARG in slot 2). The callee
+            // body is checked when grad_rev_pass walks ITS @checkpoint
+            // status — we don't recurse into the callee here to avoid
+            // false-positives from helper fns that aren't @checkpoint.
+            let args_head = __arena_get(expr_idx + 3);
+            let mut walk: i32 = args_head;
+            let mut ok: i32 = 1;
+            while walk != 0 {
+                if ok == 1 {
+                    let arg_expr = __arena_get(walk + 1);
+                    if ckpt_is_pure(arg_expr, depth + 1) == 0 {
+                        ok = 0;
+                    };
+                };
+                walk = __arena_get(walk + 2);
+            }
+            ok
+        } else { 0 } } } } } } } } } } }
+    }
+}
+
 // Stage 14: grad_rev pass. For each entry in gr_rev_pending, find the
 // loss fn, find the param matching the field name (with leading 'd'
 // stripped), differentiate the loss body w.r.t. that param, simplify,
@@ -4376,6 +4544,9 @@ fn grad_pass(sb: i32, head: i32) -> i32 {
 // Field name convention: ".dx" -> param "x", ".dy" -> param "y", etc.
 // Phase-0 trap-id 88002 if field name lacks leading 'd' or is shorter
 // than 2 chars. Phase-0 trap-id 88003 if no matching param found.
+//
+// Stage 14.5: when the loss body inlines through a @checkpoint fn whose
+// body is impure, emit trap 90001 instead of the differentiated body.
 fn grad_rev_pass(sb: i32, head: i32) -> i32 {
     let count = gr_rev_pending_count(sb);
     if count == 0 {
@@ -4442,10 +4613,24 @@ fn grad_rev_pass(sb: i32, head: i32) -> i32 {
                     };
                     pwalk = __arena_get(pwalk + 3);
                 }
+                // Stage 14.5: scan loss body for @checkpoint callees with
+                // impure bodies. If any is found, trap 90001 BEFORE any
+                // inlining/differentiation work — keeps the error message
+                // pinned to the @checkpoint contract violation rather than
+                // surfacing further-downstream as 88001/85001.
+                let ckpt_ok = if valid_field == 1 {
+                    if have_param == 1 {
+                        ckpt_callees_pure(loss_body, head, 0)
+                    } else { 1 }
+                } else { 1 };
                 let body_to_diff = if valid_field == 1 {
                     if have_param == 1 {
-                        // Stage 13 prep: inline user-fn calls.
-                        inline_user_calls(loss_body, head, 0)
+                        if ckpt_ok == 1 {
+                            // Stage 13 prep: inline user-fn calls.
+                            inline_user_calls(loss_body, head, 0)
+                        } else {
+                            mk_node(99, 90001, 0, 0)
+                        }
                     } else {
                         mk_node(99, 88003, 0, 0)
                     }
@@ -4455,14 +4640,27 @@ fn grad_rev_pass(sb: i32, head: i32) -> i32 {
                 // bucket for `var_s/var_l`, then sum. Mathematically
                 // identical to forward-mode `differentiate` for scalar
                 // output, but the algorithmic shape is true reverse.
+                //
+                // Stage 14.5: when ckpt_ok == 0, body_to_diff is already
+                // the trap-90001 marker — skip differentiation/simplify
+                // so the trap node propagates unchanged to the synthesized
+                // gradient fn body.
                 let deriv_raw = if have_param == 1 {
                     if valid_field == 1 {
-                        differentiate_reverse_one(sb, body_to_diff, var_s, var_l)
+                        if ckpt_ok == 1 {
+                            differentiate_reverse_one(sb, body_to_diff, var_s, var_l)
+                        } else {
+                            body_to_diff
+                        }
                     } else { body_to_diff }
                 } else { body_to_diff };
                 let deriv = if have_param == 1 {
                     if valid_field == 1 {
-                        simplify(deriv_raw)
+                        if ckpt_ok == 1 {
+                            simplify(deriv_raw)
+                        } else {
+                            deriv_raw
+                        }
                     } else { deriv_raw }
                 } else { deriv_raw };
                 // Synthesize the AST_FN_DECL clone.
