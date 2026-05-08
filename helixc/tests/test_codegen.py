@@ -3242,6 +3242,26 @@ fn main() -> i32 {
     assert compile_and_exec(
         "fn main() -> i32 { let a = 7 ; let c = |x| (x + a) * a ; c(5) }"
     ) == 84, "Stage 9E: capture dedup |x| (x+a)*a, c(5) -> 84"
+    # Stage 10: modules + use. parse-time desugaring lifts each fn inside
+    # `mod foo { ... }` to the top-level fn list with a mangled name
+    # `foo__bar`. Path-call `foo::bar(args)` rewrites to AST_CALL with the
+    # mangled name. Nested modules compose: `outer::inner::baz` mangles to
+    # `outer__inner__baz`. `use foo::bar;` registers the alias `bar` in
+    # use_table; later `bar(args)` calls get rewritten to `foo__bar(args)`.
+    # 10A: simple module + path-call.
+    assert compile_and_exec(
+        "mod foo { fn bar() -> i32 { 42 } } fn main() -> i32 { foo::bar() }"
+    ) == 42, "Stage 10A: mod foo { fn bar }; foo::bar() -> 42"
+    # 10B: nested modules — mangling composes.
+    assert compile_and_exec(
+        "mod outer { mod inner { fn baz() -> i32 { 100 } } } "
+        "fn main() -> i32 { outer::inner::baz() }"
+    ) == 100, "Stage 10B: nested mods; outer::inner::baz() -> 100"
+    # 10C: use decl brings the leaf into scope.
+    assert compile_and_exec(
+        "mod foo { fn bar() -> i32 { 7 } } use foo::bar; "
+        "fn main() -> i32 { bar() }"
+    ) == 7, "Stage 10C: use foo::bar; bar() -> 7"
 
 
 def test_bootstrap_kovc_inline_write_file_to_arena():
