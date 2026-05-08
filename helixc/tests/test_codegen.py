@@ -4,6 +4,14 @@ from __future__ import annotations
 import os, sys, subprocess, tempfile
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
+# Stage 7 (pattern matching) pushed kovc.hx + parser.hx parse-depth past
+# Python's default 1000-frame recursion limit when the bootstrap-driver
+# concat is parsed inside pytest (pytest adds ~33 framework frames). The
+# host parser is already laid out FLAT (Finding #7) — adding match codegen
+# was unavoidable. Bump headroom to 2000; safe since no actual unbounded
+# recursion exists in either bootstrap source.
+sys.setrecursionlimit(2000)
+
 from helixc.frontend.parser import parse
 from helixc.frontend.grad_pass import grad_pass
 from helixc.frontend.monomorphize import monomorphize
@@ -2628,6 +2636,16 @@ fn main() -> i32 {
         "fn main() -> i32 { let p = E::Pair(10, 32); "
         "__enum_payload(p, 0) + __enum_payload(p, 1) }"
     ) == 42, "Stage 6D: __enum_payload reads both payload slots"
+    # Stage 7B: simple lit match with wildcard.
+    assert compile_and_exec(
+        "fn main() -> i32 { let x = 5; match x { 0 => 100, 5 => 42, _ => 0 } }"
+    ) == 42, "Stage 7B: simple lit match returns 42"
+    assert compile_and_exec(
+        "fn main() -> i32 { let x = 0; match x { 0 => 100, 5 => 42, _ => 0 } }"
+    ) == 100, "Stage 7B: first arm matches"
+    assert compile_and_exec(
+        "fn main() -> i32 { let x = 99; match x { 0 => 100, 5 => 42, _ => 0 } }"
+    ) == 0, "Stage 7B: wildcard arm matches when no lit matches"
     # Stage 4 follow-up audit Finding #2: AST_NEG was missing u64
     # dispatch. Fell through to 32-bit `neg eax` which only flipped
     # the low half. Now uses REX.W neg rax (same as i64).

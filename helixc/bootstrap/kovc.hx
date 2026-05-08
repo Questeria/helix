@@ -630,6 +630,52 @@ fn emit_jmp_rel32_placeholder() -> i32 {
     disp_slot
 }
 
+// Stage 7: jcc rel32 placeholder family. Each is 6 bytes: 0F XX disp32.
+//   jne (0x85): jump if NOT equal (used by PAT_LIT mismatch -> next arm)
+//   jl  (0x8C): jump if signed less    (used by PAT_RANGE lo check)
+//   jge (0x8D): jump if signed >=      (used by PAT_RANGE hi check, exclusive)
+//   jle (0x8E): jump if signed <=
+//   jg  (0x8F): jump if signed >
+fn emit_jne_rel32_placeholder() -> i32 {
+    emit_byte(0x0F); emit_byte(0x85);
+    let disp_slot = __arena_len();
+    emit_byte(0); emit_byte(0); emit_byte(0); emit_byte(0);
+    disp_slot
+}
+fn emit_jl_rel32_placeholder() -> i32 {
+    emit_byte(0x0F); emit_byte(0x8C);
+    let disp_slot = __arena_len();
+    emit_byte(0); emit_byte(0); emit_byte(0); emit_byte(0);
+    disp_slot
+}
+fn emit_jge_rel32_placeholder() -> i32 {
+    emit_byte(0x0F); emit_byte(0x8D);
+    let disp_slot = __arena_len();
+    emit_byte(0); emit_byte(0); emit_byte(0); emit_byte(0);
+    disp_slot
+}
+fn emit_jle_rel32_placeholder() -> i32 {
+    emit_byte(0x0F); emit_byte(0x8E);
+    let disp_slot = __arena_len();
+    emit_byte(0); emit_byte(0); emit_byte(0); emit_byte(0);
+    disp_slot
+}
+fn emit_jg_rel32_placeholder() -> i32 {
+    emit_byte(0x0F); emit_byte(0x8F);
+    let disp_slot = __arena_len();
+    emit_byte(0); emit_byte(0); emit_byte(0); emit_byte(0);
+    disp_slot
+}
+
+// Stage 7: emit `cmp eax, imm32` — 5 bytes (3D imm32_le). Compares
+// 32-bit eax with sign-extended imm32. Used by PAT_LIT and PAT_RANGE
+// to test the scrutinee value against a constant.
+fn emit_cmp_eax_imm32(v: i32) -> i32 {
+    emit_byte(0x3D);
+    emit_u32_le(v);
+    5
+}
+
 // call rel32 (placeholder) — 5 bytes (E8 + 4-byte disp). Returns
 // the arena slot index of the disp bytes for backpatching.
 fn emit_call_rel32_placeholder() -> i32 {
@@ -1577,7 +1623,7 @@ fn emit_exit_with_eax() -> i32 {
 fn install_builtin_names() -> i32 {
     let bn_state = __arena_push(0);          // slot 0 placeholder
     __arena_push(0); __arena_push(0); __arena_push(0); __arena_push(0);
-    // Reserve slots 5..83 (79 more slots: 2 file-name slots + 2
+    // Reserve slots 5..117 (113 more slots: 2 file-name slots + 2
     // str_state header slots + 48 entry slots + 5 f32 builtin slots
     // (__fadd, __fsub, __fmul, __fdiv at 57..60; __fneg at 61) + 1
     // fn_type_state pointer slot at 62 (Phase 1.10 step 5c follow-on)
@@ -1601,9 +1647,15 @@ fn install_builtin_names() -> i32 {
     // + 1 __f64_to_i32 slot at 80 (Phase 1.10 step 7k)
     // + 1 __bits_lo_f64 slot at 81 (Phase 1.10 step 7l)
     // + 1 __bits_hi_f64 slot at 82 (Phase 1.10 step 7l)
-    // + 1 __f64_pack slot at 83 (Phase 1.10 step 7l).
+    // + 1 __f64_pack slot at 83 (Phase 1.10 step 7l)
+    // + 34 slots at 84..117 for the Stage-7 match_state region (fail_state
+    //   at 84..100 + end_table at 101..117). Pre-allocated to avoid
+    //   __arena_push during code emission, which would corrupt the code
+    //   stream. Cap: only one match-arm chain in flight at a time, but
+    //   nested matches re-init in place — fine for Phase-0 since each
+    //   match arm body is fully laid down before its parent's next arm.
     let mut i: i32 = 0;
-    while i < 79 {
+    while i < 113 {
         __arena_push(0);
         i = i + 1;
     }
@@ -2951,12 +3003,287 @@ fn parse_float_bits(p1: i32, p2: i32) -> i32 {
     bits
 }
 
+// Stage 7: match-pattern codegen support.
+//
+// fail_jmp_state layout (17-slot region):
+//   slot 0       = current count of recorded fail-jmp disp slots
+//   slots 1..16  = recorded fail-jmp disp slot indices (rel32 placeholders)
+//                  that need to be backpatched to a "next arm" label.
+// Cap is 16 fail jumps per arm — covers PAT_VARIANT(disc) + nested sub-
+// patterns. Phase-0 doesn't allow deeper nesting; trap 62004 reserved.
+//
+// IMPORTANT: fail_jmp_state regions live in the bn_state prelude (slots
+// 84..117), NOT __arena_pushed during code emission — pushing during
+// emission would corrupt the code byte stream. Caller passes the absolute
+// arena offset. Reset writes 0 to slot 0; no allocation needed.
+
+fn fail_jmp_state_reset(state: i32) -> i32 {
+    __arena_set(state, 0);
+    0
+}
+
+fn fail_jmp_state_add(state: i32, disp_slot: i32) -> i32 {
+    let count = __arena_get(state);
+    if count >= 16 {
+        0 - 1
+    } else {
+        __arena_set(state + 1 + count, disp_slot);
+        __arena_set(state, count + 1);
+        0
+    }
+}
+
+fn fail_jmp_state_patch_all(state: i32, target: i32) -> i32 {
+    let count = __arena_get(state);
+    let mut i: i32 = 0;
+    while i < count {
+        let disp_slot = __arena_get(state + 1 + i);
+        patch_rel32(disp_slot, target);
+        i = i + 1;
+    }
+    0
+}
+
+// Stage 7 PAT_VARIANT helper. Walks sub-patterns and emits load+recurse.
+// scrut_off is the slot holding the enum pointer. Each sub-pattern gets
+// a fresh slot; rax is re-loaded between sub-pats since prior tests
+// clobber it.
+fn emit_variant_subpats(sub_head: i32, scrut_off: i32, fail_state: i32,
+                        bind_state: i32) -> i32 {
+    let mut total: i32 = 0;
+    let mut cur: i32 = sub_head;
+    let mut idx_in_payload: i32 = 1;     // skip disc at slot 0
+    while cur != 0 {
+        let sub_pat = __arena_get(cur + 1);
+        let sub_off = bind_alloc_offset(bind_state);
+        // Re-load enum pointer.
+        let n_rl = emit_mov_rax_local_64(scrut_off);
+        let off_in_payload = idx_in_payload * 8;
+        // mov rax, [rax + disp8]  (48 8B 40 disp8 = 4 bytes)
+        emit_byte(0x48); emit_byte(0x8B); emit_byte(0x40); emit_byte(off_in_payload);
+        let n_st = emit_mov_local_rax_64(sub_off);
+        let n_sub = emit_pattern_test(sub_pat, sub_off, fail_state, bind_state);
+        total = total + n_rl + 4 + n_st + n_sub;
+        idx_in_payload = idx_in_payload + 1;
+        cur = __arena_get(cur + 2);
+    }
+    total
+}
+
+// Stage 7 PAT_TUPLE helper. Same as variant but starts at slot 0 (no disc).
+fn emit_tuple_subpats(sub_head: i32, scrut_off: i32, fail_state: i32,
+                      bind_state: i32) -> i32 {
+    let mut total: i32 = 0;
+    let mut cur: i32 = sub_head;
+    let mut idx_in_tuple: i32 = 0;
+    while cur != 0 {
+        let sub_pat = __arena_get(cur + 1);
+        let sub_off = bind_alloc_offset(bind_state);
+        let n_rl = emit_mov_rax_local_64(scrut_off);
+        let off_in_tuple = idx_in_tuple * 8;
+        emit_byte(0x48); emit_byte(0x8B); emit_byte(0x40); emit_byte(off_in_tuple);
+        let n_st = emit_mov_local_rax_64(sub_off);
+        let n_sub = emit_pattern_test(sub_pat, sub_off, fail_state, bind_state);
+        total = total + n_rl + 4 + n_st + n_sub;
+        idx_in_tuple = idx_in_tuple + 1;
+        cur = __arena_get(cur + 2);
+    }
+    total
+}
+
+// Stage 7 PAT_LIT helper.
+fn emit_pat_lit(scrut_off: i32, lit: i32, fail_state: i32) -> i32 {
+    let n_load = emit_mov_eax_local(scrut_off);
+    let n_cmp = emit_cmp_eax_imm32(lit);
+    let disp = emit_jne_rel32_placeholder();
+    fail_jmp_state_add(fail_state, disp);
+    n_load + n_cmp + 6
+}
+
+// Stage 7 PAT_RANGE helper (exclusive: lo <= x < hi).
+fn emit_pat_range(scrut_off: i32, lo: i32, hi: i32, fail_state: i32) -> i32 {
+    let n_load = emit_mov_eax_local(scrut_off);
+    let n_cmp_lo = emit_cmp_eax_imm32(lo);
+    let disp_lo = emit_jl_rel32_placeholder();
+    fail_jmp_state_add(fail_state, disp_lo);
+    let n_cmp_hi = emit_cmp_eax_imm32(hi);
+    let disp_hi = emit_jge_rel32_placeholder();
+    fail_jmp_state_add(fail_state, disp_hi);
+    n_load + n_cmp_lo + 6 + n_cmp_hi + 6
+}
+
+// Stage 7 PAT_VARIANT (sans sub-pats) helper.
+fn emit_pat_variant_disc(scrut_off: i32, disc: i32, fail_state: i32) -> i32 {
+    let n_load_ptr = emit_mov_rax_local_64(scrut_off);
+    emit_byte(0x8B); emit_byte(0x00);    // mov eax, [rax+0]
+    let n_cmp = emit_cmp_eax_imm32(disc);
+    let disp = emit_jne_rel32_placeholder();
+    fail_jmp_state_add(fail_state, disp);
+    n_load_ptr + 2 + n_cmp + 6
+}
+
+// Stage 7 pattern test for scalar patterns (LIT/WILDCARD/BIND/RANGE).
+// Returns 0 if pat is not scalar (caller dispatches to compound).
+fn emit_scalar_pattern_test(pat_idx: i32, scrut_off: i32, fail_state: i32,
+                            bind_state: i32) -> i32 {
+    let pt = __arena_get(pat_idx);
+    let pp1 = __arena_get(pat_idx + 1);
+    let pp2 = __arena_get(pat_idx + 2);
+    if pt == 64 { emit_pat_lit(scrut_off, pp1, fail_state) }
+    else { if pt == 66 { 0 }
+    else { if pt == 65 { bind_push_typed(bind_state, pp1, pp2, scrut_off, 0); 0 }
+    else { if pt == 67 { emit_pat_range(scrut_off, pp1, pp2, fail_state) }
+    else { 0 }}}}
+}
+
+// Stage 7 pattern test for compound patterns (VARIANT/TUPLE).
+fn emit_compound_pattern_test(pat_idx: i32, scrut_off: i32, fail_state: i32,
+                              bind_state: i32) -> i32 {
+    let pt = __arena_get(pat_idx);
+    let pp1 = __arena_get(pat_idx + 1);
+    let pp2 = __arena_get(pat_idx + 2);
+    if pt == 69 {
+        let n_disc = emit_pat_variant_disc(scrut_off, pp1, fail_state);
+        let n_subs = emit_variant_subpats(pp2, scrut_off, fail_state, bind_state);
+        n_disc + n_subs
+    } else { if pt == 70 {
+        emit_tuple_subpats(pp2, scrut_off, fail_state, bind_state)
+    } else { 0 }}
+}
+
+// Stage 7 pattern test entry point. Dispatches to scalar or compound.
+fn emit_pattern_test(pat_idx: i32, scrut_off: i32, fail_state: i32,
+                     bind_state: i32) -> i32 {
+    let pt = __arena_get(pat_idx);
+    if pt >= 69 {
+        emit_compound_pattern_test(pat_idx, scrut_off, fail_state, bind_state)
+    } else {
+        emit_scalar_pattern_test(pat_idx, scrut_off, fail_state, bind_state)
+    }
+}
+
+// Stage 7: count bind_push entries done by pattern. Mirror of
+// emit_pattern_test but only counting bind_pushes — used by AST_MATCH
+// to know how many bind_pops to emit after each arm body.
+fn count_pattern_binds(pat_idx: i32) -> i32 {
+    let pt = __arena_get(pat_idx);
+    let pp2 = __arena_get(pat_idx + 2);
+    if pt == 65 {
+        1
+    } else { if pt == 69 {
+        // Walk sub-patterns
+        let mut total: i32 = 0;
+        let mut cur: i32 = pp2;
+        while cur != 0 {
+            let sub_pat = __arena_get(cur + 1);
+            total = total + count_pattern_binds(sub_pat);
+            cur = __arena_get(cur + 2);
+        }
+        total
+    } else { if pt == 70 {
+        let mut total: i32 = 0;
+        let mut cur: i32 = pp2;
+        while cur != 0 {
+            let sub_pat = __arena_get(cur + 1);
+            total = total + count_pattern_binds(sub_pat);
+            cur = __arena_get(cur + 2);
+        }
+        total
+    } else {
+        0
+    }}}
+}
+
+// Stage 7: match_state region — packs fail_state + end_table into one
+// 34-slot arena region (17 slots each). Reduces AST_MATCH helper param
+// count below the SysV 6-int-arg cap. Layout:
+//   match_state + 0..16   : fail_state (count + 16 entries)
+//   match_state + 17..33  : end_table  (count + 16 entries)
+//
+// Region lives at bn_state + 84 (reserved by install_builtin_names).
+// Caller resets COUNT slots (0 and 17); no __arena_push during emission.
+//
+// Phase-0 limitation: nested match expressions clobber the parent's
+// match_state. Trap 62004 reserved for nested match in a future iter;
+// for now, Phase-0 patterns aren't deep enough to expose this.
+fn match_state_base(bn_state: i32) -> i32 {
+    bn_state + 84
+}
+
+fn match_state_init(bn_state: i32) -> i32 {
+    let base = match_state_base(bn_state);
+    fail_jmp_state_reset(base);          // fail_state count = 0
+    fail_jmp_state_reset(base + 17);     // end_table count = 0
+    base
+}
+
+// Stage 7: emit one match arm. Returns bytes emitted.
+// match_state holds both fail_state (offset 0) and end_table (offset 17).
+fn emit_one_match_arm(arm_idx: i32, scrut_off: i32, match_state: i32,
+                      bind_state: i32, patch_state: i32, bn_state: i32) -> i32 {
+    let pat_idx = __arena_get(arm_idx + 1);
+    let body_idx = __arena_get(arm_idx + 2);
+    let fail_state = match_state;
+    let end_table = match_state + 17;
+    fail_jmp_state_reset(fail_state);
+    let n_pat = emit_pattern_test(pat_idx, scrut_off, fail_state, bind_state);
+    let n_body = emit_ast_code(body_idx, bind_state, patch_state, bn_state);
+    let n_binds = count_pattern_binds(pat_idx);
+    let mut bp: i32 = 0;
+    while bp < n_binds {
+        bind_pop(bind_state);
+        bp = bp + 1;
+    }
+    let end_disp = emit_jmp_rel32_placeholder();
+    fail_jmp_state_add(end_table, end_disp);
+    let next_arm_label = __arena_len();
+    fail_jmp_state_patch_all(fail_state, next_arm_label);
+    n_pat + n_body + 5
+}
+
+// Stage 7: emit the entire match-arm chain.
+fn emit_match_arms(arms_head: i32, scrut_off: i32, match_state: i32,
+                   bind_state: i32, patch_state: i32, bn_state: i32) -> i32 {
+    let mut total: i32 = 0;
+    let mut arm_cur: i32 = arms_head;
+    while arm_cur != 0 {
+        let next_arm = __arena_get(arm_cur + 3);
+        let n_arm = emit_one_match_arm(arm_cur, scrut_off, match_state,
+                                       bind_state, patch_state, bn_state);
+        total = total + n_arm;
+        arm_cur = next_arm;
+    }
+    total
+}
+
+// Stage 7: top-level AST_MATCH lowering. Wrapped in a helper so the
+// emit_ast_code arm body stays a single function call (host parser
+// recursion budget).
+fn emit_match_dispatch(scrut_idx: i32, arms_head: i32,
+                       bind_state: i32, patch_state: i32, bn_state: i32) -> i32 {
+    let n_scrut = emit_ast_code(scrut_idx, bind_state, patch_state, bn_state);
+    let scrut_off = bind_alloc_offset(bind_state);
+    let n_store = emit_mov_local_rax_64(scrut_off);
+    let match_state = match_state_init(bn_state);
+    let n_arms = emit_match_arms(arms_head, scrut_off, match_state,
+                                 bind_state, patch_state, bn_state);
+    let n_trap = emit_trap_with_id(62001);
+    let merge_label = __arena_len();
+    fail_jmp_state_patch_all(match_state + 17, merge_label);
+    n_scrut + n_store + n_arms + n_trap
+}
+
 fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> i32 {
     let t = __arena_get(idx);
     let p1 = __arena_get(idx + 1);
     let p2 = __arena_get(idx + 2);
     if t == 0 {
         emit_ast_int(p1)
+    } else { if t == 62 {
+        // Stage 7: AST_MATCH (tag 62). p1 = scrut_idx, p2 = arms_head.
+        // Lowered into emit_match_dispatch helper to keep this arm body
+        // shallow (host parser depth budget).
+        emit_match_dispatch(p1, p2, bind_state, patch_state, bn_state)
     } else { if t == 35 {
         // Approach A Stage 1: AST_INTLIT_I64 (tag 35). p1 = i32 value.
         // For values that fit in i32 (positive < 2^31 OR negative
@@ -4487,7 +4814,7 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         // resulting binary to SIGILL — clear signal vs. silent 0.
         // Speedup #4 wire-in: AST_ERR / unhandled-tag trap id 99001.
         emit_trap_with_id(99001)
-    }}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}
+    }}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}
 }
 
 // --------------------------------------------------------------
