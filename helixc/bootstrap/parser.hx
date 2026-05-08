@@ -34,6 +34,12 @@
 //                    annotation parsed but ignored, body is a single
 //                    expression. Codegen treats the body as the
 //                    main expression.
+//                    Slot layout (extended through stages):
+//                      slot 4: params_head (AST_PARAM chain)
+//                      slot 5: ret_ty (type tag, 0=i32, 1=f32, ...)
+//                      slot 6: is_generic flag (Stage 8)
+//                      slot 7: gp_names_head (Stage 8.5)
+//                      slot 8: is_checkpoint flag (Stage 14.5)
 //  15  AST_FN_LIST   p1 = current fn_decl_idx, p2 = next list node
 //                    idx (or 0 at end). Linked list of top-level fn
 //                    declarations. Built by parse_top when source
@@ -1641,14 +1647,15 @@ fn parse_closure_lit(tok_base: i32, sb: i32) -> i32 {
             };
             pi = pi + 1;
         }
-        // Allocate AST_FN_DECL with 7 contiguous slots (Stage 8 layout).
+        // Allocate AST_FN_DECL with 8 contiguous slots (Stage 14.5 layout).
         // p1=name_s, p2=name_l, p3=body, p4=params_head, p5=ret_ty,
-        // p6=is_generic, p7=gp_names_head.
+        // p6=is_generic, p7=gp_names_head, p8=is_checkpoint.
         let fn_node = mk_node(14, name_start, name_len, body);
         __arena_push(params_head);
         __arena_push(0);                         // ret_ty = 0 (i32)
         __arena_push(0);                         // is_generic = 0
         __arena_push(0);                         // gp_names_head = 0
+        __arena_push(0);                         // is_checkpoint = 0 (Stage 14.5)
         // Wrap in AST_FN_LIST and append to cl_pending chain.
         let list_node = mk_node(15, fn_node, 0, 0);
         let head = cl_pending_head(sb);
@@ -3148,6 +3155,10 @@ fn parse_top(tok_base: i32) -> i32 {
     // Stage 14: slots 72..73 = bucket head/count for adjoint propagation
     // during grad_rev_pass (propagate_adj writes here, sum_bucket reads).
     __arena_push(0); __arena_push(0);
+    // Stage 14.5: slot 74 = next_fn_is_checkpoint flag. Set by
+    // skip_attributes when it consumes `@checkpoint`; read+cleared by
+    // parse_fn_decl when it allocates the AST_FN_DECL node (slot 8).
+    __arena_push(0);
     install_keywords(cur_slot);
     var_struct_tab_init(cur_slot);
     var_enum_tab_init(cur_slot);
@@ -3237,8 +3248,10 @@ fn parse_top(tok_base: i32) -> i32 {
 }
 
 // Consume zero or more `@<IDENT>` (or `@<IDENT>(<args>)`) attribute
-// markers. Currently we just skip them; future Phase-1 work could
-// store them on the surrounding fn decl.
+// markers. Most attributes (`@pure`, `@effect`, ...) are skipped as
+// no-ops in Phase 0. Stage 14.5: `@checkpoint` is special — when seen
+// it sets a sticky scratch flag at sb+74 so the next parse_fn_decl
+// can record it on the synthesized AST_FN_DECL node (slot 8).
 fn skip_attributes(tok_base: i32, sb: i32) -> i32 {
     let mut keep: i32 = 1;
     while keep == 1 {
@@ -3246,6 +3259,35 @@ fn skip_attributes(tok_base: i32, sb: i32) -> i32 {
             cur_advance(sb);     // consume '@'
             // Optional IDENT after the '@'.
             if tok_tag(tok_base, cur_get(sb)) == 2 {
+                // Stage 14.5: byte-compare attribute IDENT against
+                // "checkpoint" (10 bytes: 99 104 101 99 107 112 111 105
+                // 110 116). If match, raise the flag; otherwise leave
+                // alone (existing @pure/@effect/etc. continue to skip
+                // silently as before).
+                let attr_tok = cur_get(sb);
+                let attr_s = tok_p2(tok_base, attr_tok);
+                let attr_l = tok_p3(tok_base, attr_tok);
+                if attr_l == 10 {
+                    let b0 = __arena_get(attr_s);
+                    let b1 = __arena_get(attr_s + 1);
+                    let b2 = __arena_get(attr_s + 2);
+                    let b3 = __arena_get(attr_s + 3);
+                    let b4 = __arena_get(attr_s + 4);
+                    let b5 = __arena_get(attr_s + 5);
+                    let b6 = __arena_get(attr_s + 6);
+                    let b7 = __arena_get(attr_s + 7);
+                    let b8 = __arena_get(attr_s + 8);
+                    let b9 = __arena_get(attr_s + 9);
+                    let is_ckpt = if b0 == 99 { if b1 == 104 { if b2 == 101 {
+                        if b3 == 99 { if b4 == 107 { if b5 == 112 {
+                        if b6 == 111 { if b7 == 105 { if b8 == 110 {
+                        if b9 == 116 { 1 } else { 0 }
+                        } else { 0 } } else { 0 } } else { 0 } } else { 0 }
+                        } else { 0 } } else { 0 } } else { 0 } } else { 0 } } else { 0 };
+                    if is_ckpt == 1 {
+                        set_next_fn_is_ckpt(sb, 1);
+                    };
+                };
                 cur_advance(sb);
             };
             // Optional `(args)` — skip everything until matching ')'.
@@ -3626,6 +3668,7 @@ fn monomorphize_pass(sb: i32, head: i32) -> i32 {
                 __arena_push(new_ret_ty);
                 __arena_push(0);                 // is_generic = 0 (concrete)
                 __arena_push(0);                 // slot 7: gp_names_head (none)
+                __arena_push(0);                 // slot 8: is_checkpoint = 0 (Stage 14.5)
                 // Append to fn_list tail.
                 let new_list_node = mk_node(15, clone_idx, 0, 0);
                 __arena_set(tail + 2, new_list_node);
@@ -4023,6 +4066,11 @@ fn bucket_head_slot(sb: i32) -> i32  { __arena_get(sb + 72) }
 fn bucket_count_slot(sb: i32) -> i32 { __arena_get(sb + 73) }
 fn set_bucket_head(sb: i32, v: i32) -> i32  { __arena_set(sb + 72, v); 0 }
 fn set_bucket_count(sb: i32, v: i32) -> i32 { __arena_set(sb + 73, v); 0 }
+// Stage 14.5: @checkpoint attribute scratch slot. Set by skip_attributes
+// when it consumes a `@checkpoint` attribute, read+cleared by
+// parse_fn_decl when it allocates the AST_FN_DECL node.
+fn next_fn_is_ckpt(sb: i32) -> i32 { __arena_get(sb + 74) }
+fn set_next_fn_is_ckpt(sb: i32, v: i32) -> i32 { __arena_set(sb + 74, v); 0 }
 fn bucket_reset(sb: i32) -> i32 {
     set_bucket_head(sb, 0);
     set_bucket_count(sb, 0);
@@ -4307,6 +4355,7 @@ fn grad_pass(sb: i32, head: i32) -> i32 {
                 __arena_push(loss_ret_ty);   // slot 5: ret_ty
                 __arena_push(0);             // slot 6: is_generic = 0
                 __arena_push(0);             // slot 7: gp_names_head = 0
+                __arena_push(0);             // slot 8: is_checkpoint = 0 (Stage 14.5)
                 let new_list_node = mk_node(15, clone_fn, 0, 0);
                 __arena_set(tail + 2, new_list_node);
                 tail = new_list_node;
@@ -4422,6 +4471,7 @@ fn grad_rev_pass(sb: i32, head: i32) -> i32 {
                 __arena_push(loss_ret_ty);
                 __arena_push(0);
                 __arena_push(0);
+                __arena_push(0);             // slot 8: is_checkpoint = 0 (Stage 14.5)
                 let new_list_node = mk_node(15, clone_fn, 0, 0);
                 __arena_set(tail + 2, new_list_node);
                 tail = new_list_node;
@@ -4681,11 +4731,17 @@ fn parse_fn_decl(tok_base: i32, sb: i32) -> i32 {
         };
         gp_walk = gp_walk + 1;
     }
+    // Stage 14.5: read+clear the `next_fn_is_checkpoint` scratch flag
+    // BEFORE allocating the fn_decl node so that nested fn parses don't
+    // bleed checkpoint state across siblings. Pushed as slot 8.
+    let is_ckpt_now = next_fn_is_ckpt(sb);
+    set_next_fn_is_ckpt(sb, 0);
     let node = mk_node(14, name_start, name_len, body);
     __arena_push(params_head);
     __arena_push(ret_ty_final);
     __arena_push(is_generic_fn);
     __arena_push(gp_chain_head);             // slot 7: gp_names_head
+    __arena_push(is_ckpt_now);               // slot 8: is_checkpoint flag
     node
 }
 
@@ -4913,6 +4969,7 @@ fn parse_impl_method(tok_base: i32, sb: i32, target_s: i32, target_l: i32, targe
     __arena_push(ret_ty_resolved);
     __arena_push(0);                         // is_generic = 0 (concrete)
     __arena_push(0);                         // slot 7: gp_names_head (none)
+    __arena_push(0);                         // slot 8: is_checkpoint = 0 (Stage 14.5)
     node
 }
 
@@ -5044,11 +5101,11 @@ fn parse_mod_decl(tok_base: i32, sb: i32, prefix_s: i32, prefix_l: i32) -> i32 {
                 // parse_fn_decl reads and consumes everything: 'fn' IDENT
                 // (params) -> RET { body }. Returns AST_FN_DECL idx (tag 14)
                 // whose slots are: tag, name_s, name_l, body, params_head,
-                // ret_ty, is_generic, gp_names_head.
+                // ret_ty, is_generic, gp_names_head, is_checkpoint (Stage 14.5).
                 //
-                // Arena positional ordering: parse_fn_decl pushes slots 4..7
+                // Arena positional ordering: parse_fn_decl pushes slots 4..8
                 // immediately after the tag-14 mk_node call. After it returns,
-                // any further __arena_push goes BEYOND the fn_decl's slot 7,
+                // any further __arena_push goes BEYOND the fn_decl's slot 8,
                 // so we can safely append the mangled-name bytes here without
                 // corrupting the fn_decl layout. Then patch slot 1 (name_s)
                 // and slot 2 (name_l) to point at the new bytes.
