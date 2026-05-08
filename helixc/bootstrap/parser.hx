@@ -1023,6 +1023,101 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
             // Plain identifier. Could be a var ref, an assignment
             // (`name = expr`), or a fn call (`name()`). Peek the
             // NEXT token to decide.
+            // Stage 6: PRE-CHECK — IDENT followed by `::` IDENT and the
+            // first IDENT matches a registered enum. We look up the
+            // enum BEFORE consuming the leading IDENT so that the
+            // 4-way dispatch below doesn't need a 5th nested if (host
+            // parser recursion budget — Finding #7). The peek looks at
+            // tok_at(k+1) and tok_at(k+2): both must be TK_COLON (14)
+            // and tok_at(k+3) must be TK_IDENT (2). For 6B (unit
+            // variant) the next-after-variant must NOT be `(` (= 3);
+            // 6C handles the `(` case (payload variant).
+            // FLAT prefix-trap pattern (Finding #7): single-binding
+            // ladder of let-rebinds, NO nested if-else statements.
+            let e_idx_pre = enum_tab_lookup_idx(sb, id_start, id_len);
+            let t1_pre = tok_tag(tok_base, k + 1);
+            let t2_pre = tok_tag(tok_base, k + 2);
+            let t3_pre = tok_tag(tok_base, k + 3);
+            let t4_pre = tok_tag(tok_base, k + 4);
+            let is_enum_path = if e_idx_pre >= 0 {
+                if t1_pre == 14 { if t2_pre == 14 { if t3_pre == 2 { 1 } else { 0 } } else { 0 } } else { 0 }
+            } else { 0 };
+            // Distinguish unit (6B) vs payload (6C): payload variant
+            // has `(` at k+4. 6C handled below as a separate prefix.
+            let is_enum_unit = if is_enum_path == 1 { if t4_pre == 3 { 0 } else { 1 } } else { 0 };
+            let is_enum_payload = if is_enum_path == 1 { if t4_pre == 3 { 1 } else { 0 } } else { 0 };
+            if is_enum_unit == 1 {
+                // Consume IDENT, `:`, `:`, variant-IDENT.
+                cur_advance(sb);                       // outer IDENT (enum name)
+                cur_advance(sb);                       // first ':'
+                cur_advance(sb);                       // second ':'
+                let vk = cur_get(sb);
+                let v_name_s = tok_p2(tok_base, vk);
+                let v_name_l = tok_p3(tok_base, vk);
+                cur_advance(sb);                       // variant IDENT
+                let disc = enum_tab_variant_lookup_disc(sb, e_idx_pre, v_name_s, v_name_l);
+                let arity = enum_tab_variant_lookup_arity(sb, e_idx_pre, v_name_s, v_name_l);
+                // Trap if arity != 0 (caller passed unit but variant
+                // declared with payload) or variant unknown.
+                let safe_disc = if disc < 0 { 0 } else { disc };
+                // Fold to AST_INT (tag 0) carrying the discriminant
+                // value. Codegen emits `mov eax, disc` (5 bytes) — the
+                // exact unit-variant codegen the plan calls for. No
+                // new emit_ast_code arm.
+                mk_node(0, safe_disc, 0, 0)
+            } else { if is_enum_payload == 1 {
+                // Stage 6C: payload variant `Maybe::Some(42)`. Build
+                // an AST_TUPLE_LIT (tag 50) with arity = 1 + payload
+                // arity, head = TUPLE_CONS chain whose first element
+                // is the discriminant (AST_INT) and rest are the
+                // parenthesized payload args. Codegen reuses tuple-lit
+                // entirely: rax holds a pointer to a stack region with
+                // [disc, arg0, arg1, ...]. Reading the discriminant is
+                // .0 (= AST_TUPLE_FIELD with idx 0), reading payload
+                // arg i is .(i+1).
+                cur_advance(sb);                       // outer IDENT (enum name)
+                cur_advance(sb);                       // first ':'
+                cur_advance(sb);                       // second ':'
+                let vk = cur_get(sb);
+                let v_name_s = tok_p2(tok_base, vk);
+                let v_name_l = tok_p3(tok_base, vk);
+                cur_advance(sb);                       // variant IDENT
+                cur_advance(sb);                       // '('
+                let disc = enum_tab_variant_lookup_disc(sb, e_idx_pre, v_name_s, v_name_l);
+                let arity = enum_tab_variant_lookup_arity(sb, e_idx_pre, v_name_s, v_name_l);
+                let safe_disc = if disc < 0 { 0 } else { disc };
+                let safe_arity = if arity < 0 { 0 } else { arity };
+                // Build the discriminant TUPLE_CONS head.
+                let disc_node = mk_node(0, safe_disc, 0, 0);
+                let mut head_idx: i32 = mk_node(51, disc_node, 0, 0);
+                let mut tail_idx: i32 = head_idx;
+                let mut n_args: i32 = 1;     // counts disc
+                // Walk comma-separated payload args until ')'.
+                let mut keep: i32 = 1;
+                while keep == 1 {
+                    let at = tok_tag(tok_base, cur_get(sb));
+                    if at == 4 {
+                        keep = 0;            // ')'
+                    } else { if at == 13 {
+                        cur_advance(sb);     // ','
+                    } else { if at == 0 {    // EOF safety
+                        keep = 0;
+                    } else {
+                        let arg_expr = parse_expr_basic(tok_base, sb);
+                        let new_node = mk_node(51, arg_expr, 0, 0);
+                        let prev_tail = tail_idx;
+                        __arena_set(prev_tail + 2, new_node);
+                        tail_idx = new_node;
+                        n_args = n_args + 1;
+                    }}};
+                }
+                cur_advance(sb);                       // consume ')'
+                // Mark the surrounding let-parser: this binding is
+                // enum-typed. Reuses last_enum_idx scratch slot.
+                set_last_enum_idx(sb, e_idx_pre);
+                // n_args >= 1 (always includes the discriminant).
+                mk_node(50, n_args, head_idx, 0)
+            } else {
             cur_advance(sb);
             let next = cur_get(sb);
             let nt = tok_tag(tok_base, next);
@@ -1135,6 +1230,7 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
                 // Var ref
                 mk_node(1, id_start, id_len, 0)
             }}}
+            }}
         }}}
     } else { if t == 3 {
         // Stage 4 iteration A: tuple literal vs parenthesized expr.

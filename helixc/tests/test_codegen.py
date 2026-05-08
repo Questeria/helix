@@ -2577,6 +2577,44 @@ fn main() -> i32 {
     assert compile_and_exec(
         "enum Maybe { None, Some(i32) } fn main() -> i32 { 9 }"
     ) == 9, "Stage 6A: enum with payload variant decl-only compiles"
+    # Stage 6B: unit-variant construct `Color::G` returns the
+    # discriminant (0-based variant index). Folds to AST_INT in the
+    # parser — no codegen change. Heavy gate verifies the dispatch
+    # doesn't break struct/tuple/builtin paths.
+    assert compile_and_exec(
+        "enum Color { R, G, B } fn main() -> i32 { let c = Color::G; c }"
+    ) == 1, "Stage 6B: unit variant Color::G returns disc 1"
+    assert compile_and_exec(
+        "enum Color { R, G, B } fn main() -> i32 { Color::R }"
+    ) == 0, "Stage 6B: first variant returns disc 0"
+    assert compile_and_exec(
+        "enum Color { R, G, B } fn main() -> i32 { Color::B }"
+    ) == 2, "Stage 6B: third variant returns disc 2"
+    assert compile_and_exec(
+        "enum Maybe { None } fn main() -> i32 { Maybe::None }"
+    ) == 0, "Stage 6B: single-variant enum unit construct"
+    # Discriminant flows through arithmetic.
+    assert compile_and_exec(
+        "enum Color { R, G, B } fn main() -> i32 { Color::R + Color::G + Color::B + 39 }"
+    ) == 42, "Stage 6B: discriminants compose with i32 ops"
+    # Stage 6C: payload-variant construct `Maybe::Some(42)` builds a
+    # 2-slot region [disc, payload] and returns a pointer (rax) to it.
+    # Folds to AST_TUPLE_LIT — codegen reuses tuple-lit. Reading just
+    # the value `m` gives the *pointer*, so we verify with .0 (which
+    # is the discriminant via AST_TUPLE_FIELD).
+    assert compile_and_exec(
+        "enum Maybe { None, Some(i32) } "
+        "fn main() -> i32 { let m = Maybe::Some(42); m.0 }"
+    ) == 1, "Stage 6C: payload variant discriminant via .0 == 1"
+    assert compile_and_exec(
+        "enum Maybe { None, Some(i32) } "
+        "fn main() -> i32 { let m = Maybe::Some(42); m.1 }"
+    ) == 42, "Stage 6C: payload variant payload via .1 == 42"
+    # 2-payload variant: discriminant at .0, args at .1 and .2.
+    assert compile_and_exec(
+        "enum E { Z, Pair(i32, i32) } "
+        "fn main() -> i32 { let p = E::Pair(10, 32); p.1 + p.2 }"
+    ) == 42, "Stage 6C: 2-payload variant access via .1 + .2"
     # Stage 4 follow-up audit Finding #2: AST_NEG was missing u64
     # dispatch. Fell through to 32-bit `neg eax` which only flipped
     # the low half. Now uses REX.W neg rax (same as i64).
