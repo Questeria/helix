@@ -4923,6 +4923,82 @@ def test_agi_hillclimb_picks_best():
     assert code == 7, f"expected 7 (highest score), got {code}"
 
 
+def test_agi_bfs_is_empty():
+    """bfs_is_empty: 1 when fresh, 0 after enqueue, 1 again after dequeue.
+    Predicate companion to bfs_size."""
+    src = """
+    fn main() -> i32 {
+        let q = bfs_queue_new();
+        let e1 = bfs_is_empty(q);   // 1
+        bfs_enqueue(q, 5);
+        let e2 = bfs_is_empty(q);   // 0
+        bfs_dequeue(q);
+        let e3 = bfs_is_empty(q);   // 1
+        e1 * 21 + e2 + e3 * 21
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42 (21+0+21), got {code}"
+
+
+def test_agi_pq_is_empty():
+    """pq_is_empty: 1 when fresh, 0 after insert, 1 again after pop.
+    Predicate companion to pq_size."""
+    src = """
+    fn main() -> i32 {
+        let q = pq_new();
+        let e1 = pq_is_empty(q);   // 1
+        pq_insert(q, 10, 5);
+        let e2 = pq_is_empty(q);   // 0
+        pq_pop_min(q);
+        let e3 = pq_is_empty(q);   // 1
+        e1 * 21 + e2 + e3 * 21
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42 (21+0+21), got {code}"
+
+
+def test_agi_pq_peek_min():
+    """pq_peek_min reads lowest-scored state without mutating; returns -1 on empty.
+    Verifies size is unchanged after two consecutive peeks."""
+    src = """
+    fn main() -> i32 {
+        let q = pq_new();
+        pq_insert(q, 10, 5);
+        pq_insert(q, 20, 3);   // lowest score 3
+        pq_insert(q, 30, 7);
+        let p1 = pq_peek_min(q);              // 20
+        let p2 = pq_peek_min(q);              // 20 (peek didn't mutate)
+        let s = pq_size(q);                   // 3 (size unchanged)
+        let empty = pq_peek_min(pq_new());    // -1
+        p1 + p2 + s + empty
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42 (20+20+3+(-1)), got {code}"
+
+
+def test_agi_visited_count():
+    """visited_count: number of unique marked states. Mirror of bfs_size
+    on the visited-set side; mark same key twice still counts as 1."""
+    src = """
+    fn main() -> i32 {
+        let v = visited_new();
+        visited_mark(v, 7);
+        visited_mark(v, 7);   // dedup
+        visited_mark(v, 8);
+        visited_mark(v, 9);
+        let c = visited_count(v);             // 3
+        let empty_v = visited_new();
+        let c_empty = visited_count(empty_v); // 0
+        c * 14 + c_empty
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42 (3*14 + 0), got {code}"
+
+
 def test_agi_ep_record_and_count():
     """Phase 4 step 2: episodic memory. Record 3 events, check count."""
     src = """

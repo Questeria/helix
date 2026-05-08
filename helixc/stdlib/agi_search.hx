@@ -71,6 +71,10 @@ fn bfs_dequeue(q: i32) -> i32 {
     __arena_get(q + 2)
 }
 
+@pure fn bfs_is_empty(q: i32) -> i32 {
+    if __arena_get(q + 2) == 0 { 1 } else { 0 }
+}
+
 // Visited set: bounded-size linear-probe table of state ids.
 // Layout: slot 0 = count, slot 1..1+cap = entries (-1 means empty slot).
 @pure fn visited_capacity() -> i32 { 256 }
@@ -121,6 +125,10 @@ fn visited_has(v: i32, state: i32) -> i32 {
         i = i + 1;
     }
     found
+}
+
+@pure fn visited_count(v: i32) -> i32 {
+    __arena_get(v)
 }
 
 // Pick the highest-scoring neighbor from a list. neighbors_start points
@@ -177,6 +185,18 @@ fn pq_new() -> i32 {
 }
 
 @pure fn pq_size(q: i32) -> i32 { __arena_get(q) }
+
+@pure fn pq_is_empty(q: i32) -> i32 {
+    if __arena_get(q) == 0 { 1 } else { 0 }
+}
+
+// Peek lowest-scoring entry without removing it. Returns -1 if empty.
+// Pairs with pq_pop_min; the priority-queue layout keeps the lowest
+// score at index 0, so this is a constant-time read.
+@pure fn pq_peek_min(q: i32) -> i32 {
+    if __arena_get(q) == 0 { 0 - 1 }
+    else { __arena_get(q + 2) }
+}
 
 // Insert: linear scan to insert in sorted order (simple, O(n); good for
 // the small AGI problem sizes Phase 4 targets).
