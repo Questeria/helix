@@ -2411,6 +2411,25 @@ fn main() -> i32 {
     assert compile_and_exec(
         "fn main() -> i32 { let arr = [10, 20, 30] ; arr[0] + arr[1] + arr[2] - 18 }"
     ) == 42, "array indexed multiple times (10+20+30-18)"
+    # Stage 4 polish: edge-case array sizes.
+    # Empty array `[]` allocates 0 bytes (arity 0). Useless but valid.
+    assert compile_and_exec(
+        "fn main() -> i32 { let arr = [] ; 42 }"
+    ) == 42, "empty array literal compiles"
+    # Single-element array.
+    assert compile_and_exec(
+        "fn main() -> i32 { [42][0] }"
+    ) == 42, "single-element array, indexed"
+    assert compile_and_exec(
+        "fn main() -> i32 { let arr = [42] ; arr[0] }"
+    ) == 42, "single-element array via let + index"
+    # Trailing comma on tuple/array.
+    assert compile_and_exec(
+        "fn main() -> i32 { let t = (1, 2, 3,) ; t.0 + t.1 + t.2 + 36 }"
+    ) == 42, "tuple with trailing comma"
+    assert compile_and_exec(
+        "fn main() -> i32 { let arr = [1, 2, 3,] ; arr[0] + arr[1] + arr[2] + 36 }"
+    ) == 42, "array with trailing comma"
     # Stage 1.5 audit fix: bf16 comparison ops trap. Pre-fix:
     # AST_LT/GT/LE/GE/EQ/NE cascades had no is_bf16_expr check — bf16
     # operands fell through to integer compare on bit patterns. This is
