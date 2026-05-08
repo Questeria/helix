@@ -399,6 +399,33 @@ fn mod_pending_head(sb: i32) -> i32 { __arena_get(sb + 66) }
 fn mod_pending_tail(sb: i32) -> i32 { __arena_get(sb + 67) }
 fn set_mod_pending_head(sb: i32, v: i32) -> i32 { __arena_set(sb + 66, v); 0 }
 fn set_mod_pending_tail(sb: i32, v: i32) -> i32 { __arena_set(sb + 67, v); 0 }
+// Stage 12: grad-pending table state.
+// sb+68 = grad_pending_base (offset of 32-slot region, 8 entries x 4 fields).
+// sb+69 = grad_pending_count (0..8).
+// Each entry layout (4 slots):
+//   slot 0: loss_name_s (byte_start in arena)
+//   slot 1: loss_name_l (byte_len)
+//   slot 2: mang_s      (byte_start of synthesized "<loss>__grad" name)
+//   slot 3: mang_l      (byte_len of mangled name)
+// Built by parse_primary's grad-detection branch; consumed at end of
+// parse_program by grad_pass to synthesize the derivative fn decls.
+fn grad_pending_base(sb: i32) -> i32  { __arena_get(sb + 68) }
+fn grad_pending_count(sb: i32) -> i32 { __arena_get(sb + 69) }
+fn grad_pending_add(sb: i32, loss_s: i32, loss_l: i32, mang_s: i32, mang_l: i32) -> i32 {
+    let count = grad_pending_count(sb);
+    if count >= 8 {
+        0 - 1
+    } else {
+        let base = grad_pending_base(sb);
+        let entry = base + count * 4;
+        __arena_set(entry, loss_s);
+        __arena_set(entry + 1, loss_l);
+        __arena_set(entry + 2, mang_s);
+        __arena_set(entry + 3, mang_l);
+        __arena_set(sb + 69, count + 1);
+        count
+    }
+}
 // Append a use-table entry. Returns 0 on success, -1 on overflow (cap 8).
 fn use_tab_add(sb: i32, alias_s: i32, alias_l: i32, mang_s: i32, mang_l: i32) -> i32 {
     let count = use_tab_count(sb);
@@ -1757,6 +1784,81 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
     } else { if t == 2 {
         let id_start = tok_p2(tok_base, k);
         let id_len = tok_p3(tok_base, k);
+        // Stage 12: detect `grad(IDENT)(args)` — the meta-call that takes
+        // a 1-arg user fn and returns its derivative. Match must be exact:
+        // IDENT "grad" (4 bytes: 103,114,97,100) followed by TK_LPAREN (3),
+        // TK_IDENT (2), TK_RPAREN (4), TK_LPAREN (3). On match, register
+        // the (loss_name, mangled_name="<loss>__grad") pair in grad_pending
+        // so the post-parse grad_pass synthesizes the derivative fn, then
+        // emit AST_CALL with the mangled name + parsed args. FLAT prefix-
+        // trap pattern: a single is_grad flag controls one tightly-scoped
+        // branch ahead of all other IDENT-prefix dispatch.
+        let is_grad_kw = if id_len == 4 {
+            let g0 = __arena_get(id_start);
+            let g1 = __arena_get(id_start + 1);
+            let g2 = __arena_get(id_start + 2);
+            let g3 = __arena_get(id_start + 3);
+            if g0 == 103 { if g1 == 114 { if g2 == 97 { if g3 == 100 { 1 } else { 0 } } else { 0 } } else { 0 } } else { 0 }
+        } else { 0 };
+        let g_t1 = tok_tag(tok_base, k + 1);
+        let g_t2 = tok_tag(tok_base, k + 2);
+        let g_t3 = tok_tag(tok_base, k + 3);
+        let g_t4 = tok_tag(tok_base, k + 4);
+        let is_grad_call = if is_grad_kw == 1 {
+            if g_t1 == 3 { if g_t2 == 2 { if g_t3 == 4 { if g_t4 == 3 { 1 } else { 0 } } else { 0 } } else { 0 } } else { 0 }
+        } else { 0 };
+        if is_grad_call == 1 {
+            // Consume `grad`, `(`, IDENT (loss_name), `)`, `(`.
+            cur_advance(sb);     // `grad`
+            cur_advance(sb);     // `(`
+            let loss_k = cur_get(sb);
+            let loss_s = tok_p2(tok_base, loss_k);
+            let loss_l = tok_p3(tok_base, loss_k);
+            cur_advance(sb);     // loss_name IDENT
+            cur_advance(sb);     // `)`
+            cur_advance(sb);     // `(`
+            // Build mangled name "<loss>__grad" directly into the arena.
+            let mang_s = __arena_len();
+            let mut bi: i32 = 0;
+            while bi < loss_l {
+                __arena_push(__arena_get(loss_s + bi));
+                bi = bi + 1;
+            }
+            __arena_push(95);    // '_'
+            __arena_push(95);    // '_'
+            __arena_push(103);   // 'g'
+            __arena_push(114);   // 'r'
+            __arena_push(97);    // 'a'
+            __arena_push(100);   // 'd'
+            let mang_l = loss_l + 6;
+            // Register in grad_pending (idempotent on duplicate would still
+            // synthesize twice — Phase-0 caps at 8 calls, dedup deferred).
+            grad_pending_add(sb, loss_s, loss_l, mang_s, mang_l);
+            // Parse args until `)`. Same pattern as plain IDENT call below.
+            let mut args_head: i32 = 0;
+            let mut prev_arg: i32 = 0;
+            let mut g_keep: i32 = 1;
+            while g_keep == 1 {
+                let at = tok_tag(tok_base, cur_get(sb));
+                if at == 4 {
+                    g_keep = 0;
+                } else { if at == 13 {
+                    cur_advance(sb);
+                } else {
+                    let arg_expr = parse_expr_basic(tok_base, sb);
+                    let new_arg = mk_node(17, arg_expr, 0, 0);
+                    if args_head == 0 {
+                        args_head = new_arg;
+                        prev_arg = new_arg;
+                    } else {
+                        __arena_set(prev_arg + 2, new_arg);
+                        prev_arg = new_arg;
+                    };
+                }};
+            }
+            cur_advance(sb);     // consume `)`
+            mk_node(16, mang_s, mang_l, args_head)
+        } else {
         if byte_eq(id_start, id_len, kw_let_s(sb), kw_let_n(sb)) == 1 {
             cur_advance(sb);
             // Optional `mut` keyword.
@@ -2504,7 +2606,7 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
                 mk_var_with_capture(sb, id_start, id_len)
             }}}
             }}}}}     // Stage 8.5C + Stage 10: extra '}}' closes is_typed_call_active + is_path_call wrappers
-        }}}}
+        }}}}}     // Stage 12: extra '}' closes the is_grad_call else-branch wrapper
     } else { if t == 3 {
         // Stage 4 iteration A: tuple literal vs parenthesized expr.
         // After the inner expr, peek for TK_COMMA (13). If found, this
@@ -2885,6 +2987,10 @@ fn parse_top(tok_base: i32) -> i32 {
     //   66/67 = mod_pending head/tail (synthesized fn-list from `mod` blocks)
     __arena_push(0); __arena_push(0); __arena_push(0); __arena_push(0);
     __arena_push(0); __arena_push(0); __arena_push(0); __arena_push(0);
+    // Stage 12: slots 68..69 = grad_pending base/count. Region for the
+    // pending grad-call list lives at the offset stored in slot 68 (filled
+    // in below after the 32-slot region is pushed).
+    __arena_push(0); __arena_push(0);
     install_keywords(cur_slot);
     var_struct_tab_init(cur_slot);
     var_enum_tab_init(cur_slot);
@@ -2912,6 +3018,15 @@ fn parse_top(tok_base: i32) -> i32 {
     use_tab_init(cur_slot);
     set_mod_pending_head(cur_slot, 0);
     set_mod_pending_tail(cur_slot, 0);
+    // Stage 12: grad_pending region (32 slots, 8 entries x 4 fields).
+    let grad_base = __arena_push(0);
+    let mut gri: i32 = 1;
+    while gri < 32 {
+        __arena_push(0);
+        gri = gri + 1;
+    }
+    __arena_set(cur_slot + 68, grad_base);
+    __arena_set(cur_slot + 69, 0);
     // Peek the first token. If it's `fn`, parse a function decl.
     // Otherwise treat the whole input as a single expression
     // (legacy mode) for backward compat with all existing tests.
