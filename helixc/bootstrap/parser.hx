@@ -1952,7 +1952,123 @@ fn parse_program(tok_base: i32, sb: i32) -> i32 {
             keep = 0;
         }};
     }
+    // Stage 8: monomorphization pass. Walk mr_tab; for each registered
+    // (orig_name, mangled_name, pack_lo) entry, find the original
+    // AST_FN_DECL template in the fn_list (matching by name) and build
+    // a concrete clone with type substitution applied to params + ret.
+    // The clone shares the body idx (no deep copy needed: AST_VAR
+    // references resolve by name at codegen time, and the binding name
+    // matches between template and clone). Append a new AST_FN_LIST
+    // node pointing to the clone so codegen emits it.
+    monomorphize_pass(sb, head);
     head
+}
+
+// Stage 8: mono pass. For each mr_tab entry, find the matching generic
+// fn template in the fn_list and synthesize a concrete clone. The clone
+// reuses the body (same AST nodes) — substitution applies only to the
+// AST_PARAM type tags and the AST_FN_DECL's ret_ty slot. Appends new
+// AST_FN_LIST nodes to the END of head so the new fns are emitted.
+fn monomorphize_pass(sb: i32, head: i32) -> i32 {
+    let count = mr_tab_count(sb);
+    if count == 0 {
+        0
+    } else {
+        // Find tail of fn_list (where next == 0).
+        let mut tail = head;
+        let mut tail_keep: i32 = 1;
+        while tail_keep == 1 {
+            let nx = __arena_get(tail + 2);
+            if nx == 0 { tail_keep = 0; } else { tail = nx; };
+        }
+        // Iterate mr_tab entries.
+        let base = mr_tab_base(sb);
+        let mut mi: i32 = 0;
+        while mi < count {
+            let entry = base + mi * 6;
+            let orig_s = __arena_get(entry);
+            let orig_l = __arena_get(entry + 1);
+            let mang_s = __arena_get(entry + 2);
+            let mang_l = __arena_get(entry + 3);
+            let pack_lo = __arena_get(entry + 4);
+            let ta_count = pack_lo - (pack_lo / 8) * 8;
+            let packed = pack_lo / 8;
+            // Find matching generic template in fn_list (search by orig_name).
+            let mut walk: i32 = head;
+            let mut tpl_idx: i32 = 0;
+            let mut find_keep: i32 = 1;
+            while find_keep == 1 {
+                let cand_idx = __arena_get(walk + 1);
+                let cand_ns = __arena_get(cand_idx + 1);
+                let cand_nl = __arena_get(cand_idx + 2);
+                let cand_gen = __arena_get(cand_idx + 6);
+                if cand_gen == 1 {
+                    if byte_eq(orig_s, orig_l, cand_ns, cand_nl) == 1 {
+                        tpl_idx = cand_idx;
+                        find_keep = 0;
+                    };
+                };
+                if find_keep == 1 {
+                    let nx = __arena_get(walk + 2);
+                    if nx == 0 { find_keep = 0; } else { walk = nx; };
+                };
+            }
+            if tpl_idx > 0 {
+                // Clone the fn decl. Build a new param list with substituted
+                // type tags. Keep the same body idx.
+                let tpl_body = __arena_get(tpl_idx + 3);
+                let tpl_params_head = __arena_get(tpl_idx + 4);
+                let tpl_ret_ty = __arena_get(tpl_idx + 5);
+                // Walk template params, build a new chain with substituted types.
+                let mut t_p_cur: i32 = tpl_params_head;
+                let mut new_params_head: i32 = 0;
+                let mut new_prev_p: i32 = 0;
+                while t_p_cur != 0 {
+                    let p_ns = __arena_get(t_p_cur + 1);
+                    let p_nl = __arena_get(t_p_cur + 2);
+                    let p_ty_raw = __arena_get(t_p_cur + 4);
+                    // Substitute generic markers.
+                    let new_p_ty = if p_ty_raw >= 200 {
+                        let g_idx = p_ty_raw - 200;
+                        // Extract g_idx-th 4-bit slot from packed.
+                        let mut shifted: i32 = packed;
+                        let mut sk: i32 = 0;
+                        while sk < g_idx { shifted = shifted / 16; sk = sk + 1; }
+                        shifted - (shifted / 16) * 16
+                    } else { p_ty_raw };
+                    let new_p_node = mk_node(18, p_ns, p_nl, 0);
+                    __arena_push(new_p_ty);
+                    if new_params_head == 0 {
+                        new_params_head = new_p_node;
+                        new_prev_p = new_p_node;
+                    } else {
+                        __arena_set(new_prev_p + 3, new_p_node);
+                        new_prev_p = new_p_node;
+                    };
+                    t_p_cur = __arena_get(t_p_cur + 3);
+                }
+                // Substitute ret_ty.
+                let new_ret_ty = if tpl_ret_ty >= 200 {
+                    let g_idx = tpl_ret_ty - 200;
+                    let mut shifted: i32 = packed;
+                    let mut sk: i32 = 0;
+                    while sk < g_idx { shifted = shifted / 16; sk = sk + 1; }
+                    shifted - (shifted / 16) * 16
+                } else { tpl_ret_ty };
+                // Build the new AST_FN_DECL with mangled name + concrete types.
+                let clone_idx = mk_node(14, mang_s, mang_l, tpl_body);
+                __arena_push(new_params_head);
+                __arena_push(new_ret_ty);
+                __arena_push(0);                 // is_generic = 0 (concrete)
+                // Append to fn_list tail.
+                let new_list_node = mk_node(15, clone_idx, 0, 0);
+                __arena_set(tail + 2, new_list_node);
+                tail = new_list_node;
+            };
+            mi = mi + 1;
+        }
+        0
+    }
 }
 
 // Parse `fn name(arg1: T, arg2: T, ...) -> i32 { body }`. Each arg
