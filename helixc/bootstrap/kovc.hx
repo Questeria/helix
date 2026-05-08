@@ -3953,20 +3953,29 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         // movzx/movsx so the read interprets only the declared width.
         // Bit pattern in the slot beyond that width is ignored —
         // truncation semantics flow from the read side.
+        // Audit follow-up Finding #3: bind_lookup returns 0 (never a
+        // valid offset since bind_alloc starts at 8) for unbound names.
+        // Without a guard, emit_mov_eax_local(0) becomes `mov eax,
+        // [rbp+0]` = saved rbp slot — silent garbage. Trap with id 1001
+        // on unbound reads.
         let off = bind_lookup(bind_state, p1, p2);
-        let ty = bind_lookup_type(bind_state, p1, p2);
-        // 8-byte types (f64=2, i64=3, u64=9) use 64-bit load to preserve
-        // the high half. Narrow types (u8=7, u16=8, i8=10, i16=11) use
-        // movzx/movsx. All others (i32=0, f32=1, u32=6) use 32-bit load
-        // (auto-zero-extends).
-        if ty == 2 { emit_mov_rax_local_64(off) }
-        else { if ty == 3 { emit_mov_rax_local_64(off) }
-        else { if ty == 9 { emit_mov_rax_local_64(off) }
-        else { if ty == 7 { emit_movzx_eax_local_byte(off) }
-        else { if ty == 10 { emit_movsx_eax_local_byte(off) }
-        else { if ty == 8 { emit_movzx_eax_local_word(off) }
-        else { if ty == 11 { emit_movsx_eax_local_word(off) }
-        else { emit_mov_eax_local(off) }}}}}}}
+        if off == 0 {
+            emit_trap_with_id(1001)
+        } else {
+            let ty = bind_lookup_type(bind_state, p1, p2);
+            // 8-byte types (f64=2, i64=3, u64=9) use 64-bit load to preserve
+            // the high half. Narrow types (u8=7, u16=8, i8=10, i16=11) use
+            // movzx/movsx. All others (i32=0, f32=1, u32=6) use 32-bit load
+            // (auto-zero-extends).
+            if ty == 2 { emit_mov_rax_local_64(off) }
+            else { if ty == 3 { emit_mov_rax_local_64(off) }
+            else { if ty == 9 { emit_mov_rax_local_64(off) }
+            else { if ty == 7 { emit_movzx_eax_local_byte(off) }
+            else { if ty == 10 { emit_movsx_eax_local_byte(off) }
+            else { if ty == 8 { emit_movzx_eax_local_word(off) }
+            else { if ty == 11 { emit_movsx_eax_local_word(off) }
+            else { emit_mov_eax_local(off) }}}}}}}
+        }
     } else { if t == 8 {
         // AST_LET: p1 = name_start, p2 = name_len, p3 = body_idx,
         // p4 = value_idx (audit-14: split out of the legacy packed
