@@ -5813,6 +5813,78 @@ def test_revad_neg_propagates():
     assert code == 42, f"expected 42 (-1 + 43), got {code}"
 
 
+def test_revad_kind_at():
+    """rev_kind_at reads op_kind for each tape position. leaf+leaf+add+mul+sub+neg
+    kinds: 0+0+1+3+2+4 = 10. +32 = 42."""
+    src = """
+    fn main() -> i32 {
+        let tape = rev_tape_new(8);
+        let x = rev_leaf(tape, 5);
+        let y = rev_leaf(tape, 7);
+        let a = rev_add(tape, x, y);
+        let m = rev_mul(tape, x, y);
+        let s = rev_sub(tape, x, y);
+        let n = rev_neg(tape, x);
+        rev_kind_at(tape, x) + rev_kind_at(tape, y) + rev_kind_at(tape, a)
+            + rev_kind_at(tape, m) + rev_kind_at(tape, s) + rev_kind_at(tape, n) + 32
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42 (sum of kinds 0+0+1+3+2+4 + 32), got {code}"
+
+
+def test_revad_in1_in2_at():
+    """rev_in1_at / rev_in2_at: leaf returns -1 for both; add(x,y) at pos 2 has
+    in1=0,in2=1; neg(x) at pos 3 has in1=0,in2=-1. -1-1+0+1+0-1 = -2. +44 = 42."""
+    src = """
+    fn main() -> i32 {
+        let tape = rev_tape_new(5);
+        let x = rev_leaf(tape, 5);
+        let y = rev_leaf(tape, 7);
+        let a = rev_add(tape, x, y);
+        let n = rev_neg(tape, x);
+        rev_in1_at(tape, x) + rev_in2_at(tape, x)
+            + rev_in1_at(tape, a) + rev_in2_at(tape, a)
+            + rev_in1_at(tape, n) + rev_in2_at(tape, n) + 44
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42 (-1-1+0+1+0-1 + 44), got {code}"
+
+
+def test_revad_is_empty():
+    """rev_is_empty: 1 on fresh tape, 0 after first push. e0*42 + e1*100 = 42."""
+    src = """
+    fn main() -> i32 {
+        let tape = rev_tape_new(4);
+        let e0 = rev_is_empty(tape);
+        let _ = rev_leaf(tape, 5);
+        let e1 = rev_is_empty(tape);
+        e0 * 42 + e1 * 100
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42 (1*42 + 0*100), got {code}"
+
+
+def test_revad_remaining():
+    """rev_remaining: cap - count. cap=10 fresh -> 10; after 3 leaves -> 7.
+    r0 + r3*5 - 3 = 10 + 35 - 3 = 42."""
+    src = """
+    fn main() -> i32 {
+        let tape = rev_tape_new(10);
+        let r0 = rev_remaining(tape);
+        let _ = rev_leaf(tape, 1);
+        let _ = rev_leaf(tape, 2);
+        let _ = rev_leaf(tape, 3);
+        let r3 = rev_remaining(tape);
+        r0 + r3 * 5 - 3
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42 (10 + 7*5 - 3), got {code}"
+
+
 def test_autodiff_polynomial_derivative():
     """Phase 2.1: forward-mode AD via dual numbers in Helix.
     f(x) = x*x + 2x + 1; df/dx = 2x+2; at x=3 -> 8."""

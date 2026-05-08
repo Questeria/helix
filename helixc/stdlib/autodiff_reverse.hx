@@ -31,6 +31,11 @@
 //   rev_backward(tape, adj_start)   -> i32   walk tape in reverse,
 //                                            accumulating partials
 //   rev_grad(adj_start, idx)        -> i32   read d_output / d_input[idx]
+//   rev_kind_at(tape, idx)          -> i32   op_kind at tape position
+//   rev_in1_at(tape, idx)           -> i32   in1 operand index at tape position
+//   rev_in2_at(tape, idx)           -> i32   in2 operand index at tape position
+//   rev_is_empty(tape)              -> i32   1 if count == 0 else 0
+//   rev_remaining(tape)             -> i32   cap - count (slots available)
 //
 // License: Apache 2.0
 
@@ -55,6 +60,31 @@ fn rev_tape_new(cap: i32) -> i32 {
 
 @pure fn rev_count(tape: i32) -> i32 { __arena_get(tape) }
 @pure fn rev_cap(tape: i32) -> i32 { __arena_get(tape + 1) }
+
+@pure
+fn rev_kind_at(tape: i32, idx: i32) -> i32 {
+    __arena_get(tape + 3 + idx * 4)
+}
+
+@pure
+fn rev_in1_at(tape: i32, idx: i32) -> i32 {
+    __arena_get(tape + 3 + idx * 4 + 1)
+}
+
+@pure
+fn rev_in2_at(tape: i32, idx: i32) -> i32 {
+    __arena_get(tape + 3 + idx * 4 + 2)
+}
+
+@pure
+fn rev_is_empty(tape: i32) -> i32 {
+    if __arena_get(tape) == 0 { 1 } else { 0 }
+}
+
+@pure
+fn rev_remaining(tape: i32) -> i32 {
+    __arena_get(tape + 1) - __arena_get(tape)
+}
 
 fn rev_push(tape: i32, kind: i32, in1: i32, in2: i32, value: i32) -> i32 {
     let cnt = __arena_get(tape);
