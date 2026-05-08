@@ -320,6 +320,22 @@ class Cast(Expr):
     target_ty: "TyNode"
 
 
+@dataclass
+class TileLit(Expr):
+    """tile<dtype, [N, M], memspace>::zeros() / ::ones() — Stage 15.
+
+    A tile literal is a compile-time-shaped allocation with all elements
+    initialized to the same value (0.0 for zeros, 1.0 for ones). Phase-0
+    only supports REG memspace and f32 dtype, capping shape at 8x8.
+
+    Lowered to ALLOC_ARRAY of (N*M) elements in the backend.
+    """
+    dtype: "TyNode"          # the tile element type (e.g. TyName("f32"))
+    shape: list["Expr"]      # the shape dims (e.g. [IntLit(4), IntLit(4)])
+    memspace: "Expr"         # memspace marker (e.g. Name("REG"))
+    init: str                # "zeros" or "ones"
+
+
 # ============================================================================
 # AGI-specific expression nodes
 # ============================================================================

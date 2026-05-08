@@ -1072,6 +1072,15 @@ class Parser:
             if self._at(T.LBRACE) and self._peek_struct_lit_start():
                 return self._parse_struct_lit_after_name(t.value, t)
             return ast.Name(span=self._span_of(t), name=t.value)
+        # Stage 15: special-case `tile<dtype, [N, M], memspace>::method()` in
+        # expression position. Without this, `tile<f32, ...>` parses as a
+        # comparison `tile < f32`. We detect the pattern by looking ahead:
+        # `tile` (KW_TILE) immediately followed by `<` is unambiguous in
+        # expression position because comparisons against `tile` (a type
+        # keyword) are nonsense.
+        if t.kind == T.KW_TILE and self._peek_at(1, T.LT):
+            return self._parse_tile_lit_or_op()
+
         # Allow type-like keywords as expression names: tensor::zeros(), gpu(0),
         # cpu, smem, reg, hbm, tmem (device/memspace markers), grad/jvp/vjp/vmap (transforms)
         EXPR_NAME_KEYWORDS = (
@@ -1084,6 +1093,54 @@ class Parser:
             return ast.Name(span=self._span_of(t), name=t.value)
 
         raise ParseError("expected expression", t)
+
+    def _peek_at(self, offset: int, kind: "T") -> bool:
+        """Lookahead: is the token at index self.i + offset of kind `kind`?
+        Returns False if past EOF."""
+        idx = self.i + offset
+        if idx >= len(self.toks):
+            return False
+        return self.toks[idx].kind == kind
+
+    def _parse_tile_lit_or_op(self) -> ast.Expr:
+        """Stage 15 — parse `tile<dtype, [N, M], memspace>::method()` as a
+        primary expression. The caller has verified that the current token is
+        KW_TILE followed by `<`. We parse the tile type using the existing
+        `_parse_tile_type` helper (which leaves us positioned after the
+        closing `>`), then expect `::IDENT` followed by `(args)` and build a
+        TileLit AST node carrying the tile type info plus the init kind.
+
+        Phase-0 only supports `::zeros()` and `::ones()` with no args. Other
+        methods raise ParseError so misuse is loud.
+        """
+        kw = self._peek()
+        # _parse_tile_type consumes `tile<...>` including the closing `>`.
+        ty = self._parse_tile_type()
+        # Now expect `::IDENT(args)`.
+        self._eat(T.COLONCOLON)
+        method_tok = self._eat(T.IDENT)
+        method = method_tok.value
+        if method not in ("zeros", "ones"):
+            raise ParseError(
+                f"tile<>::{method}() — only ::zeros() and ::ones() are "
+                f"supported in Phase 0",
+                method_tok,
+            )
+        self._eat(T.LPAREN)
+        # Phase-0: zeros()/ones() take no args. Reject extras loudly.
+        if not self._at(T.RPAREN):
+            raise ParseError(
+                f"tile<>::{method}() takes no arguments in Phase 0",
+                self._peek(),
+            )
+        self._eat(T.RPAREN)
+        return ast.TileLit(
+            span=self._span_of(kw),
+            dtype=ty.dtype,
+            shape=ty.shape,
+            memspace=ty.memspace,
+            init=method,
+        )
 
     def _peek_struct_lit_start(self) -> bool:
         """Are we positioned at `{ IDENT :` (the start of a struct literal)?

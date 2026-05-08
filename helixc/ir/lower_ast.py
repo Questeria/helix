@@ -47,6 +47,11 @@ class Lowerer:
         # ARENA_GET(arena_index + k) — the dispatch primitive for
         # recursive-enum match.
         self.rec_enum_scope: list[dict[str, str]] = []
+        # Stage 15 — Tiles: binding-name -> (rows, cols). Stack-allocated as
+        # ALLOC_ARRAY of rows*cols f32 elements. tile_matmul produces a new
+        # tile binding with computed shape; .get(row, col) lowers to
+        # LOAD_ELEM at index row*cols + col.
+        self.tile_scope: list[dict[str, tuple[int, int]]] = []
         # struct-decl-name -> ordered list of field names (declaration order).
         # Built from prog.items at lower-time. Used for the flat (single-
         # level) struct case where every field is i32.
@@ -166,12 +171,21 @@ class Lowerer:
         self.array_scope.append({})
         self.struct_scope.append({})
         self.rec_enum_scope.append({})
+        self.tile_scope.append({})
     def _pop_scope(self) -> None:
         self.scope.pop()
         self.mut_scope.pop()
         self.array_scope.pop()
         self.struct_scope.pop()
         self.rec_enum_scope.pop()
+        self.tile_scope.pop()
+    def _bind_tile(self, name: str, rows: int, cols: int) -> None:
+        self.tile_scope[-1][name] = (rows, cols)
+    def _lookup_tile(self, name: str):
+        for sc in reversed(self.tile_scope):
+            if name in sc:
+                return sc[name]
+        return None
     def _bind_rec_enum(self, name: str, enum_name: str) -> None:
         self.rec_enum_scope[-1][name] = enum_name
     def _lookup_rec_enum(self, name: str) -> Optional[str]:
@@ -470,6 +484,141 @@ class Lowerer:
         finally:
             self._pop_scope()
 
+    # ---- Stage 15 Tile helpers ----
+    def _tile_shape_dims(self, lit: "A.TileLit") -> tuple[int, int]:
+        """Resolve a TileLit's shape to (rows, cols). Phase-0 requires both
+        dims to be IntLit (compile-time constants). Raises ValueError on
+        non-literal dims."""
+        if len(lit.shape) != 2:
+            raise NotImplementedError(
+                f"tile<>:: requires a 2D shape; got {len(lit.shape)}D"
+            )
+        dims = []
+        for d in lit.shape:
+            if isinstance(d, A.IntLit):
+                dims.append(d.value)
+            else:
+                raise NotImplementedError(
+                    "tile<> shape must be IntLit constants in Phase 0"
+                )
+        return (dims[0], dims[1])
+
+    def _tile_dtype_check(self, dtype: "A.TyNode") -> None:
+        """Phase-0: only f32 tile dtype supported."""
+        if not (isinstance(dtype, A.TyName) and dtype.name == "f32"):
+            raise NotImplementedError(
+                f"tile<> dtype must be f32 in Phase 0; got {dtype}"
+            )
+
+    def _tile_cap_check(self, rows: int, cols: int) -> None:
+        """Phase-0 cap shape at 8x8 (N*M <= 64). Trap-id 91001 at codegen."""
+        if rows * cols > 64:
+            raise NotImplementedError(
+                f"tile<> shape {rows}x{cols} exceeds Phase 0 cap of 64 elems"
+            )
+
+    def _lower_tile_lit_let(self, stmt: "A.Let") -> None:
+        """Stage 15: `let X = tile<f32, [N, M], REG>::zeros()/ones()`.
+
+        Allocates an N*M f32 array on the stack, stores the init value
+        (0.0 or 1.0) into every slot, and records the tile shape so
+        tile_matmul + .get can use it.
+        """
+        lit = stmt.value
+        assert isinstance(lit, A.TileLit)
+        self._tile_dtype_check(lit.dtype)
+        rows, cols = self._tile_shape_dims(lit)
+        self._tile_cap_check(rows, cols)
+        elem_ty = tir.TIRScalar("f32")
+        n = rows * cols
+        self.builder.emit(tir.OpKind.ALLOC_ARRAY,
+                          attrs={"name": stmt.name, "dtype": elem_ty,
+                                 "length": n})
+        # Build the init value once.
+        init_val = 0.0 if lit.init == "zeros" else 1.0
+        init_v = self.builder.emit(tir.OpKind.CONST_FLOAT,
+                                   result_ty=elem_ty,
+                                   attrs={"value": init_val,
+                                          "dtype": "f32"})
+        # Store into every slot. Loop unrolled because N*M <= 64 is small.
+        for i in range(n):
+            idx = self.builder.const_int(i)
+            self.builder.emit(tir.OpKind.STORE_ELEM, idx, init_v,
+                              attrs={"name": stmt.name})
+        self._bind_array(stmt.name, elem_ty, n)
+        self._bind_tile(stmt.name, rows, cols)
+
+    def _lower_tile_matmul_let(self, stmt: "A.Let") -> None:
+        """Stage 15: `let C = tile_matmul(A, B)`.
+
+        Naive triple-loop matmul on f32 tiles, fully unrolled at compile
+        time. Phase-0: A is N×K, B is K×M, C is N×M. Both A and B must be
+        existing tile bindings registered via tile_scope.
+
+        For each (i, k) with i in 0..N, k in 0..M:
+            acc = 0.0
+            for j in 0..K:
+                acc += A[i*K + j] * B[j*M + k]
+            C[i*M + k] = acc
+        """
+        call = stmt.value
+        assert isinstance(call, A.Call)
+        if len(call.args) != 2:
+            raise NotImplementedError(
+                "tile_matmul takes exactly 2 args (a, b)"
+            )
+        a_arg, b_arg = call.args
+        if not (isinstance(a_arg, A.Name) and isinstance(b_arg, A.Name)):
+            raise NotImplementedError(
+                "tile_matmul args must be tile bindings (Name) in Phase 0"
+            )
+        a_shape = self._lookup_tile(a_arg.name)
+        b_shape = self._lookup_tile(b_arg.name)
+        if a_shape is None or b_shape is None:
+            raise NotImplementedError(
+                "tile_matmul args must be tile bindings registered via "
+                "tile<>:: literals"
+            )
+        n, k_a = a_shape
+        k_b, m = b_shape
+        if k_a != k_b:
+            raise NotImplementedError(
+                f"tile_matmul shape mismatch: A is {n}x{k_a}, B is {k_b}x{m}"
+            )
+        k = k_a
+        out_n = n * m
+        self._tile_cap_check(n, m)
+        elem_ty = tir.TIRScalar("f32")
+        # Allocate the output tile.
+        self.builder.emit(tir.OpKind.ALLOC_ARRAY,
+                          attrs={"name": stmt.name, "dtype": elem_ty,
+                                 "length": out_n})
+        # Naive triple-loop, fully unrolled.
+        zero_v = self.builder.emit(tir.OpKind.CONST_FLOAT,
+                                   result_ty=elem_ty,
+                                   attrs={"value": 0.0, "dtype": "f32"})
+        for i in range(n):
+            for kk in range(m):
+                acc = zero_v
+                for j in range(k):
+                    a_idx = self.builder.const_int(i * k + j)
+                    a_v = self.builder.emit(tir.OpKind.LOAD_ELEM, a_idx,
+                                            result_ty=elem_ty,
+                                            attrs={"name": a_arg.name})
+                    b_idx = self.builder.const_int(j * m + kk)
+                    b_v = self.builder.emit(tir.OpKind.LOAD_ELEM, b_idx,
+                                            result_ty=elem_ty,
+                                            attrs={"name": b_arg.name})
+                    prod = self.builder.emit(tir.OpKind.MUL, a_v, b_v,
+                                             result_ty=elem_ty)
+                    acc = self.builder.emit(tir.OpKind.ADD, acc, prod,
+                                            result_ty=elem_ty)
+                out_idx = self.builder.const_int(i * m + kk)
+                self.builder.emit(tir.OpKind.STORE_ELEM, out_idx, acc,
+                                  attrs={"name": stmt.name})
+        self._bind_array(stmt.name, elem_ty, out_n)
+        self._bind_tile(stmt.name, n, m)
+
     def _lower_stmt(self, stmt: A.Stmt) -> None:
         if isinstance(stmt, A.Let):
             # Phase 0: f64/f16/bf16 as a scalar `let` binding silently
@@ -487,6 +636,23 @@ class Lowerer:
                     f"backend; f16/bf16 need the F16C / AVX-512 codegen "
                     f"path."
                 )
+            # Stage 15: tile literal (`tile<f32, [N, M], REG>::zeros()` /
+            # `::ones()`). Lowers to ALLOC_ARRAY of N*M f32 elements + a
+            # STORE_ELEM for each slot. The binding tracks the tile shape
+            # in self.tile_scope so tile_matmul / .get can resolve dims.
+            # Phase-0: f32 dtype + REG memspace + cap shape at 8x8 (N*M <= 64).
+            if stmt.value is not None and isinstance(stmt.value, A.TileLit):
+                self._lower_tile_lit_let(stmt)
+                return
+            # Stage 15: tile_matmul(a, b) result binding. Special-case here
+            # because the call-site lowering needs to know shape of the
+            # result tile up-front (so we can ALLOC_ARRAY at the binding).
+            if (stmt.value is not None
+                    and isinstance(stmt.value, A.Call)
+                    and isinstance(stmt.value.callee, A.Name)
+                    and stmt.value.callee.name == "tile_matmul"):
+                self._lower_tile_matmul_let(stmt)
+                return
             # Special case: payload-bearing enum constructor.
             #     let m = Maybe::Some(42)
             # Allocates a [tag, payload, ...] array. The tag is the
@@ -837,6 +1003,39 @@ class Lowerer:
                                          result_ty=tir.TIRScalar("bool"))
             return inner
         if isinstance(expr, A.Call):
+            # Stage 15: tile.get(row, col). Lowers to LOAD_ELEM at
+            # row * cols + col. Requires the tile binding to be in scope
+            # (registered via tile<>:: literal or tile_matmul).
+            if (isinstance(expr.callee, A.Field)
+                    and expr.callee.name == "get"
+                    and isinstance(expr.callee.obj, A.Name)):
+                tile_name = expr.callee.obj.name
+                shape = self._lookup_tile(tile_name)
+                if shape is not None:
+                    rows, cols = shape
+                    if len(expr.args) != 2:
+                        raise NotImplementedError(
+                            "tile.get() takes exactly 2 args (row, col)"
+                        )
+                    # Resolve the row*cols+col offset. Phase-0: prefer the
+                    # const-fold path when both args are IntLit.
+                    a0, a1 = expr.args
+                    if isinstance(a0, A.IntLit) and isinstance(a1, A.IntLit):
+                        idx_val = a0.value * cols + a1.value
+                        idx_v = self.builder.const_int(idx_val)
+                    else:
+                        row_v = self._lower_expr(a0) or self.builder.const_int(0)
+                        col_v = self._lower_expr(a1) or self.builder.const_int(0)
+                        cols_v = self.builder.const_int(cols)
+                        prod = self.builder.emit(tir.OpKind.MUL, row_v, cols_v,
+                                                 result_ty=tir.TIRScalar("i32"))
+                        idx_v = self.builder.emit(tir.OpKind.ADD, prod, col_v,
+                                                  result_ty=tir.TIRScalar("i32"))
+                    arr = self._lookup_array(tile_name)
+                    elem_ty = arr[0] if arr is not None else tir.TIRScalar("f32")
+                    return self.builder.emit(tir.OpKind.LOAD_ELEM, idx_v,
+                                             result_ty=elem_ty,
+                                             attrs={"name": tile_name})
             # Recursive enum constructor as a value expression (i.e. NOT
             # a fn arg, but appearing as the result of a match arm body
             # or a let value in expression position). Push slots into

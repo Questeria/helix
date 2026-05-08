@@ -3457,6 +3457,77 @@ fn main() -> i32 {
     ) == 12, "Stage 14.5C: @checkpoint outer composing pure helper = 4x at x=3 -> 12"
 
 
+def test_stage15_tile_zeros_and_get():
+    # Stage 15A: tile<>::zeros() materializes an N*M f32 array of zeros;
+    # .get(i, j) reads back the (i, j) cell.
+    # `c.get(2, 3) as i32` lowers to LOAD_ELEM at idx 2*4+3 = 11, then
+    # cvttss2si — both should yield 0 since every cell is 0.0_f32.
+    assert compile_and_run(
+        "fn main() -> i32 { "
+        "let a = tile<f32, [4, 4], REG>::zeros(); "
+        "a.get(2, 3) as i32 }"
+    ) == 0, "Stage 15A: tile<f32, [4,4], REG>::zeros().get(2, 3) as i32 -> 0"
+
+
+def test_stage15_tile_ones_and_get():
+    # Stage 15B: tile<>::ones() materializes an N*M f32 array of 1.0;
+    # .get returns 1.0_f32 from any cell.
+    assert compile_and_run(
+        "fn main() -> i32 { "
+        "let b = tile<f32, [4, 4], REG>::ones(); "
+        "b.get(0, 0) as i32 }"
+    ) == 1, "Stage 15B: tile<f32, [4,4], REG>::ones().get(0, 0) as i32 -> 1"
+
+
+def test_stage15_tile_matmul_zeros_times_ones():
+    # Stage 15C: canonical test from APPROACH_A_DETAILED_PLAN.md line 991+.
+    # zeros @ ones = zeros (every output cell is sum-of-(0*1) = 0).
+    # We cast f32 to i32 via the existing `as i32` postfix path so the
+    # exit-code semantic test works (main's f32 return goes to xmm0;
+    # exit status reads eax, which is undefined for f32 returns).
+    assert compile_and_run(
+        "fn main() -> i32 { "
+        "let a = tile<f32, [4, 4], REG>::zeros(); "
+        "let b = tile<f32, [4, 4], REG>::ones(); "
+        "let c = tile_matmul(a, b); "
+        "c.get(0, 0) as i32 }"
+    ) == 0, "Stage 15C: tile_matmul(zeros, ones).get(0, 0) -> 0.0_f32"
+
+
+def test_stage15_tile_matmul_ones_times_ones():
+    # Stage 15D: ones @ ones. Each output cell sums K terms of (1.0*1.0).
+    # For a 4x4 tile, each cell of the result = 4.0_f32.
+    assert compile_and_run(
+        "fn main() -> i32 { "
+        "let a = tile<f32, [4, 4], REG>::ones(); "
+        "let b = tile<f32, [4, 4], REG>::ones(); "
+        "let c = tile_matmul(a, b); "
+        "c.get(2, 3) as i32 }"
+    ) == 4, "Stage 15D: tile_matmul(ones, ones).get(2, 3) -> 4.0_f32"
+
+
+def test_stage15_tile_matmul_3x3():
+    # Stage 15E: ones @ ones for 3x3 — each cell = 3.0_f32 (sum of 3 ones).
+    assert compile_and_run(
+        "fn main() -> i32 { "
+        "let a = tile<f32, [3, 3], REG>::ones(); "
+        "let b = tile<f32, [3, 3], REG>::ones(); "
+        "let c = tile_matmul(a, b); "
+        "c.get(1, 1) as i32 }"
+    ) == 3, "Stage 15E: tile_matmul(ones3x3, ones3x3).get(1, 1) -> 3.0_f32"
+
+
+def test_stage15_tile_matmul_2x2():
+    # Stage 15F: small 2x2 case for the smallest possible tile.
+    assert compile_and_run(
+        "fn main() -> i32 { "
+        "let a = tile<f32, [2, 2], REG>::ones(); "
+        "let b = tile<f32, [2, 2], REG>::ones(); "
+        "let c = tile_matmul(a, b); "
+        "c.get(0, 1) as i32 }"
+    ) == 2, "Stage 15F: tile_matmul(ones2x2, ones2x2).get(0, 1) -> 2.0_f32"
+
+
 def test_bootstrap_kovc_inline_write_file_to_arena():
     """kovc.hx self-hosted file builtin: write_file_to_arena emits a
     file from arena bytes. Drive the bootstrap pipeline with a source
