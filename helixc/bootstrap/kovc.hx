@@ -4907,10 +4907,20 @@ fn emit_elf_for_ast_to_path(ast_root: i32) -> i32 {
         while keep == 1 {
             let fn_idx = __arena_get(walk + 1);
             // AST_FN_DECL: p1 = name_start, p2 = name_len,
-            //              p4 (slot 4) = params_head, p5 (slot 5) = ret_ty.
+            //              p4 (slot 4) = params_head, p5 (slot 5) = ret_ty,
+            //              p6 (slot 6) = is_generic flag (Stage 8).
             let fn_name_s = __arena_get(fn_idx + 1);
             let fn_name_l = __arena_get(fn_idx + 2);
             let fn_ret_ty = __arena_get(fn_idx + 5);
+            // Stage 8: skip generic-template fn decls — their concrete
+            // mono'd clones (synthesized in the mono-pass below) are the
+            // ones registered + emitted. Generic templates carry param
+            // type tags in the 200..203 range (gp_idx markers) which
+            // can't represent through 4-bit fn_type_table packing.
+            let fn_is_generic = __arena_get(fn_idx + 6);
+            if fn_is_generic == 1 {
+                // skip this fn entirely
+            } else {
             // Stage 1.7: walk params_head and pack param types into
             // 4-bit slots. Up to 6 params (Phase-0 limit). Each AST_PARAM
             // has p3=next, p4=type_tag.
@@ -4951,6 +4961,7 @@ fn emit_elf_for_ast_to_path(ast_root: i32) -> i32 {
                 pp_cur = __arena_get(pp_cur + 3);
             }
             fn_type_table_add(fn_type_state, fn_name_s, fn_name_l, fn_ret_ty, pp_packed, pp_count);
+            };
             let next_list = __arena_get(walk + 2);
             if next_list == 0 { keep = 0; } else { walk = next_list; };
         }
@@ -4983,9 +4994,16 @@ fn emit_elf_for_ast_to_path(ast_root: i32) -> i32 {
         emit_byte(0xB8); emit_byte(0x3C); emit_byte(0); emit_byte(0); emit_byte(0);
         emit_byte(0x0F); emit_byte(0x05);
         // Walk fn list and emit each fn.
+        // Stage 8: skip emission of generic-template fn decls (slot 6 == 1).
+        // Their concrete clones are appended to the same fn_list by the
+        // mono pass and will be emitted normally on a later iteration.
         let mut cur_list: i32 = ast_root;
         while cur_list != 0 {
             let fn_idx = __arena_get(cur_list + 1);
+            let fn_is_generic = __arena_get(fn_idx + 6);
+            if fn_is_generic == 1 {
+                // skip — emit nothing for the template
+            } else {
             let fn_name_s = __arena_get(fn_idx + 1);
             let fn_name_l = __arena_get(fn_idx + 2);
             let fn_body = __arena_get(fn_idx + 3);
@@ -5121,6 +5139,7 @@ fn emit_elf_for_ast_to_path(ast_root: i32) -> i32 {
             };
             emit_epilogue();
             emit_ret();
+            };       // end Stage 8 fn_is_generic skip-else
             cur_list = __arena_get(cur_list + 2);
         }
         // After all fns emitted, emit any string-literal bodies first

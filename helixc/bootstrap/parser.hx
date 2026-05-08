@@ -1965,6 +1965,38 @@ fn parse_fn_decl(tok_base: i32, sb: i32) -> i32 {
     let name_start = tok_p2(tok_base, nk);
     let name_len = tok_p3(tok_base, nk);
     cur_advance(sb);     // name
+    // Stage 8: optional `<T1, T2, ...>` generic-params list. Reset the
+    // gp_tab scratch for this fn, then if `<` (TK_LT = 16) is next, read
+    // up to 4 generic-param-name IDENTs separated by `,` until `>`. The
+    // names are stored in gp_tab (sb+29/30) so that param-type and
+    // return-type resolution below can recognize T as a generic marker
+    // (encoding p_ty = 200 + gp_idx).
+    gp_tab_reset(sb);
+    let gp_peek_t = tok_tag(tok_base, cur_get(sb));
+    let mut is_generic_fn: i32 = 0;
+    if gp_peek_t == 16 {
+        is_generic_fn = 1;
+        cur_advance(sb);                        // consume '<'
+        let mut keep_g: i32 = 1;
+        while keep_g == 1 {
+            let gtt = tok_tag(tok_base, cur_get(sb));
+            if gtt == 17 {                      // '>' end
+                keep_g = 0;
+            } else { if gtt == 13 {             // ','
+                cur_advance(sb);
+            } else { if gtt == 0 {              // EOF safety
+                keep_g = 0;
+            } else {
+                // IDENT — capture as generic-param name.
+                let gk = cur_get(sb);
+                let gp_s = tok_p2(tok_base, gk);
+                let gp_l = tok_p3(tok_base, gk);
+                cur_advance(sb);
+                gp_tab_add(sb, gp_s, gp_l);
+            }}};
+        }
+        cur_advance(sb);                        // consume '>'
+    };
     cur_advance(sb);     // '('
     // Param list: zero or more `name: T` separated by `,`.
     let mut params_head: i32 = 0;
@@ -2043,12 +2075,19 @@ fn parse_fn_decl(tok_base: i32, sb: i32) -> i32 {
             // FLAT prefix-trap pattern (Finding #7): use a single-binding
             // ladder of let-rebinds, NOT nested if-else statements, to
             // avoid host-parser recursion overflow.
+            // Stage 8: BEFORE struct lookup, check if this type IDENT is a
+            // generic-param name. If yes, encode as 200 + gp_idx so the
+            // mono-pass can substitute it later. Generic params take
+            // precedence over struct/scalar matches.
+            let gp_idx_p = gp_tab_lookup(sb, ty_s, ty_l);
+            let p_ty_generic = if gp_idx_p >= 0 { 200 + gp_idx_p } else { 0 };
             let s_idx_p = struct_tab_lookup_idx(sb, ty_s, ty_l);
             let p_ty_struct = if s_idx_p >= 0 { 100 + s_idx_p } else { 0 };
-            let p_ty_final = if p_ty == 0 { p_ty_struct } else { p_ty };
-            let n_register = if p_ty_final >= 100 {
+            let p_ty_pre = if p_ty == 0 { p_ty_struct } else { p_ty };
+            let p_ty_final = if p_ty_generic > 0 { p_ty_generic } else { p_ty_pre };
+            let n_register = if p_ty_final >= 100 { if p_ty_final < 200 {
                 var_struct_tab_add(sb, pname_s, pname_l, p_ty_final - 100)
-            } else { 0 };
+            } else { 0 } } else { 0 };
             let _drop_n = n_register;
             let new_param = mk_node(18, pname_s, pname_l, 0);
             __arena_push(p_ty_final);   // p4: type tag (100+ = struct)
@@ -2104,6 +2143,11 @@ fn parse_fn_decl(tok_base: i32, sb: i32) -> i32 {
             else { 0 }
         } else { 0 }
     } else { 0 } } };
+    // Stage 8: if the return-type IDENT is a generic-param name, override
+    // ret_ty with 200 + gp_idx. Generic-typed return propagates through
+    // mono substitution.
+    let rt_gp_idx = gp_tab_lookup(sb, rt_s, rt_l);
+    let ret_ty_final = if rt_gp_idx >= 0 { 200 + rt_gp_idx } else { ret_ty };
     cur_advance(sb);     // '{'
     let body = parse_expr(tok_base, sb);
     cur_advance(sb);     // '}'
@@ -2113,9 +2157,14 @@ fn parse_fn_decl(tok_base: i32, sb: i32) -> i32 {
     // ret_ty (0 = i32, 1 = f32, 2 = f64). Codegen reads p5 to populate
     // the fn_type_table; is_f32_expr / is_f64_expr's AST_CALL fallback
     // resolves user-defined fn types via the table.
+    // Stage 8: 7th slot p6 = is_generic flag (1 if fn has <T1, T2, ...>
+    // generic params). Codegen + fn_type_table_init pre-pass skip
+    // generic-fn templates so they aren't emitted (mono pass synthesizes
+    // concrete clones).
     let node = mk_node(14, name_start, name_len, body);
     __arena_push(params_head);
-    __arena_push(ret_ty);
+    __arena_push(ret_ty_final);
+    __arena_push(is_generic_fn);
     node
 }
 
