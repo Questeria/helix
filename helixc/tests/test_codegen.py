@@ -3139,6 +3139,30 @@ fn main() -> i32 {
     assert compile_and_exec(
         "fn main() -> i32 { let x: i32 = 5 ; -x + 7 }"
     ) == 2, "i32 NEG path unchanged (integer two's complement)"
+    # Stage 8: generic functions + monomorphization. Parser detects
+    # `fn name<T1, T2, ...>(...)` generic-param syntax and `IDENT::<T>(...)`
+    # turbofish call-site syntax. Mono pass at end of parse_program
+    # synthesizes concrete clones with the body shared but param/ret
+    # type tags substituted. Mangled names: `id__i32`, `pair__i32_f64`.
+    # Generic-template fn decls (slot 6 == 1) skipped at codegen.
+    # Test 8A/B: identity fn instantiated with i32, returns 42.
+    assert compile_and_exec(
+        "fn id<T>(x: T) -> T { x } fn main() -> i32 { id::<i32>(42) }"
+    ) == 42, "Stage 8A: id<T> instantiated as id__i32 returns 42"
+    # Test 8C: two instantiations of the same generic in one program.
+    # Only the i32 result is returned; the f64 instantiation must
+    # compile (mono pass dedup keeps them distinct) without breaking it.
+    assert compile_and_exec(
+        "fn id<T>(x: T) -> T { x } "
+        "fn main() -> i32 { let a = id::<i32>(10) ; let b = id::<f64>(3.14_f64) ; a }"
+    ) == 10, "Stage 8C: two instantiations id__i32 + id__f64 coexist"
+    # Test 8D: 2-param generic fn pair<A, B>(a: A, b: B) -> A returns
+    # first arg. Type args concatenate: pair__i32_f64. Mangled name
+    # uses '_' separator between type tags.
+    assert compile_and_exec(
+        "fn pair<A, B>(a: A, b: B) -> A { a } "
+        "fn main() -> i32 { pair::<i32, f64>(7, 1.0_f64) }"
+    ) == 7, "Stage 8D: 2-param generic pair<A,B> returns first arg"
 
 
 def test_bootstrap_kovc_inline_write_file_to_arena():
