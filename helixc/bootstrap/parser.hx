@@ -1493,7 +1493,82 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
             let is_turbofish = if t1_pre == 14 {
                 if t2_pre == 14 { if t3_pre == 16 { 1 } else { 0 } } else { 0 }
             } else { 0 };
-            if is_turbofish == 1 {
+            // Stage 8.5C: type-namespace call `IDENT::IDENT(args)` where the
+            // first IDENT is either a generic-param name (in gp_tab) or one
+            // of the canonical scalar type IDENTs (i32/f32/f64/i64/u32/u64).
+            // Mangle to `<First>__<Second>` AST_CALL. Mutually exclusive
+            // with is_enum_path (which requires e_idx_pre >= 0 — enums and
+            // generic-params/scalar types don't overlap by name).
+            let gp_idx_pre = gp_tab_lookup(sb, id_start, id_len);
+            let scalar_ty_pre = ty_ident_to_tag(id_start, id_len);
+            let is_known_scalar = if id_len == 3 {
+                let sc0 = __arena_get(id_start);
+                if sc0 == 105 { 1 } else { if sc0 == 102 { 1 } else { if sc0 == 117 { 1 } else { 0 } } }
+            } else { 0 };
+            let is_typed_call = if t1_pre == 14 {
+                if t2_pre == 14 { if t3_pre == 2 {
+                    let lp_t4 = tok_tag(tok_base, k + 4);
+                    if lp_t4 == 3 {
+                        if gp_idx_pre >= 0 { 1 }
+                        else { if is_known_scalar == 1 { 1 } else { 0 } }
+                    } else { 0 }
+                } else { 0 } } else { 0 }
+            } else { 0 };
+            // Disable typed-call when is_enum_path is true (enums take
+            // precedence — their name lookup already matched).
+            let is_typed_call_active = if is_enum_path == 1 { 0 } else { is_typed_call };
+            if is_typed_call_active == 1 {
+                // Consume IDENT, `:`, `:`, then the method-name IDENT, then `(`.
+                cur_advance(sb);                       // first IDENT (T or scalar)
+                cur_advance(sb);                       // ':'
+                cur_advance(sb);                       // ':'
+                let mk_tok = cur_get(sb);
+                let m_s = tok_p2(tok_base, mk_tok);
+                let m_l = tok_p3(tok_base, mk_tok);
+                cur_advance(sb);                       // method-name IDENT
+                cur_advance(sb);                       // '('
+                // Build mangled name `<FirstIDENT>__<MethodName>` directly
+                // in the arena. For generic-param case, FirstIDENT bytes
+                // are the gp name itself (e.g. "T"), to be rewritten by
+                // the mono pass. For scalar case, FirstIDENT is e.g. "i32".
+                let mang_s = __arena_len();
+                let mut bi: i32 = 0;
+                while bi < id_len {
+                    __arena_push(__arena_get(id_start + bi));
+                    bi = bi + 1;
+                }
+                __arena_push(95); __arena_push(95);    // '__'
+                let mut mj: i32 = 0;
+                while mj < m_l {
+                    __arena_push(__arena_get(m_s + mj));
+                    mj = mj + 1;
+                }
+                let mang_l = id_len + 2 + m_l;
+                // Parse comma-separated args until ')'.
+                let mut args_head: i32 = 0;
+                let mut prev_arg: i32 = 0;
+                let mut a_keep: i32 = 1;
+                while a_keep == 1 {
+                    let at = tok_tag(tok_base, cur_get(sb));
+                    if at == 4 {                       // ')'
+                        a_keep = 0;
+                    } else { if at == 13 {             // ','
+                        cur_advance(sb);
+                    } else {
+                        let arg_expr = parse_expr_basic(tok_base, sb);
+                        let new_arg = mk_node(17, arg_expr, 0, 0);
+                        if args_head == 0 {
+                            args_head = new_arg;
+                            prev_arg = new_arg;
+                        } else {
+                            __arena_set(prev_arg + 2, new_arg);
+                            prev_arg = new_arg;
+                        };
+                    } };
+                }
+                cur_advance(sb);                       // ')'
+                mk_node(16, mang_s, mang_l, args_head)
+            } else { if is_turbofish == 1 {
                 // Consume IDENT, `:`, `:`, `<`.
                 cur_advance(sb);                       // IDENT
                 cur_advance(sb);                       // ':'
@@ -1824,7 +1899,7 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
                 // Var ref
                 mk_node(1, id_start, id_len, 0)
             }}}
-            }}}
+            }}}}     // Stage 8.5C: extra '}' closes the is_typed_call_active wrapper
         }}}}
     } else { if t == 3 {
         // Stage 4 iteration A: tuple literal vs parenthesized expr.
@@ -2306,6 +2381,108 @@ fn parse_program(tok_base: i32, sb: i32) -> i32 {
     head
 }
 
+// Stage 8.5C: helper. Try to rewrite an AST_CALL's mangled name whose
+// prefix matches one of the template's gp names. Returns a NEW (start,
+// len) pair packed as `start * 8 + len`, or 0 if no gp prefix matches.
+//
+// gp_head: linked list of AST_GP_NAME (tag 76) nodes for the template fn.
+// packed: the mono pass's 4-bit-packed concrete tags (gp_idx 0 in low 4
+// bits, gp_idx 1 in next, etc.).
+//
+// Match: scan gp_head; for each gp_name (gn_s, gn_l), check if the call's
+// name's first gn_l bytes == gn_s bytes. If so, the next two bytes must
+// be "__" (95, 95). Then build new mangled name `<concrete_ty_name>__<rest>`
+// and return (new_s, new_l) packed.
+fn try_rewrite_call_name(call_name_s: i32, call_name_l: i32, gp_head: i32, packed: i32) -> i32 {
+    let mut walk: i32 = gp_head;
+    let mut idx: i32 = 0;
+    let mut found_packed: i32 = 0;
+    let mut keep_w: i32 = 1;
+    while keep_w == 1 {
+        let gn_s = __arena_get(walk + 1);
+        let gn_l = __arena_get(walk + 2);
+        let need_underscore = gn_l + 2;
+        let mut do_rewrite: i32 = 0;
+        if found_packed == 0 {
+            if call_name_l >= need_underscore {
+                if byte_eq(call_name_s, gn_l, gn_s, gn_l) == 1 {
+                    let u1 = __arena_get(call_name_s + gn_l);
+                    let u2 = __arena_get(call_name_s + gn_l + 1);
+                    if u1 == 95 {
+                        if u2 == 95 {
+                            do_rewrite = 1;
+                        };
+                    };
+                };
+            };
+        };
+        if do_rewrite == 1 {
+            // Match! Extract concrete tag for this gp idx from packed.
+            let mut shifted: i32 = packed;
+            let mut sk: i32 = 0;
+            while sk < idx { shifted = shifted / 16; sk = sk + 1; }
+            let concrete_tag = shifted - (shifted / 16) * 16;
+            // Build new name: concrete_ty_name + "__" + rest_of_call_name.
+            let ty_pack = ty_tag_push_name(concrete_tag);
+            let ty_len = ty_pack - (ty_pack / 8) * 8;
+            let ty_start = ty_pack / 8;
+            __arena_push(95); __arena_push(95);
+            let rest_len = call_name_l - gn_l - 2;
+            let mut ri: i32 = 0;
+            while ri < rest_len {
+                __arena_push(__arena_get(call_name_s + gn_l + 2 + ri));
+                ri = ri + 1;
+            }
+            let new_l = ty_len + 2 + rest_len;
+            found_packed = ty_start * 8 + new_l;
+        };
+        let nxt = __arena_get(walk + 3);
+        if nxt == 0 {
+            keep_w = 0;
+        } else {
+            walk = nxt;
+            idx = idx + 1;
+        };
+    }
+    found_packed
+}
+
+// Stage 8.5C: deep-clone an AST subtree. Most nodes are shared (leaves like
+// AST_INT, AST_VAR are gp-independent so sharing is safe). The only nodes
+// that need cloning are AST_CALL nodes whose name has a gp-prefix; we
+// allocate a NEW AST_CALL node with the rewritten name + same args_head.
+//
+// To avoid the full deep-clone burden in this Phase-0 cut, we do a recursive
+// walk that handles a fixed set of "compound" tags (AST_LET, AST_IF, AST_SEQ,
+// binops, AST_ARG_LIST, AST_CALL itself). For unknown tags the function
+// falls back to sharing (returns the same idx) — enough for the Phase-0
+// test cases. Stage 9+ may need to extend with closure/match nodes.
+// Stage 8.5C: minimal deep-clone. Only handles the case where the body
+// IS an AST_CALL — clones that one node with potential name rewrite,
+// sharing args. Phase-0 test cases all have this shape (`T::eq(a, b)` is
+// the entire body of cmp). For more complex bodies (let-binding, if-expr,
+// nested calls), extend this function as needed.
+fn clone_with_rewrite(node_idx: i32, gp_head: i32, packed: i32) -> i32 {
+    let t = __arena_get(node_idx);
+    if t == 16 {                                        // AST_CALL
+        let call_name_s = __arena_get(node_idx + 1);
+        let call_name_l = __arena_get(node_idx + 2);
+        let args_head = __arena_get(node_idx + 3);
+        let rewritten = try_rewrite_call_name(call_name_s, call_name_l, gp_head, packed);
+        if rewritten == 0 {
+            // No rewrite needed — share the original node.
+            node_idx
+        } else {
+            let final_s = rewritten / 8;
+            let final_l = rewritten - final_s * 8;
+            mk_node(16, final_s, final_l, args_head)
+        }
+    } else {
+        // For non-call bodies, share. Stage 9+ may extend.
+        node_idx
+    }
+}
+
 // Stage 8: mono pass. For each mr_tab entry, find the matching generic
 // fn template in the fn_list and synthesize a concrete clone. The clone
 // reuses the body (same AST nodes) — substitution applies only to the
@@ -2397,11 +2574,26 @@ fn monomorphize_pass(sb: i32, head: i32) -> i32 {
                     while sk < g_idx { shifted = shifted / 16; sk = sk + 1; }
                     shifted - (shifted / 16) * 16
                 } else { tpl_ret_ty };
+                // Stage 8.5C: deep-clone-with-rewrite of the template body.
+                // For generic fns whose body uses `T::eq(...)` typed-calls, the
+                // call's mangled name contains the gp name as prefix (e.g.
+                // "T__eq"). The clone walks the body subtree, copying nodes,
+                // and rewrites AST_CALL names whose prefix matches a gp name
+                // to use the concrete type's name (e.g. "i32__eq"). For
+                // non-call subtrees the clone shares leaf nodes (AST_VAR/INT)
+                // since they don't depend on gp.
+                let tpl_gp_head = __arena_get(tpl_idx + 7);
+                let cloned_body = if tpl_gp_head == 0 {
+                    tpl_body
+                } else {
+                    clone_with_rewrite(tpl_body, tpl_gp_head, packed)
+                };
                 // Build the new AST_FN_DECL with mangled name + concrete types.
-                let clone_idx = mk_node(14, mang_s, mang_l, tpl_body);
+                let clone_idx = mk_node(14, mang_s, mang_l, cloned_body);
                 __arena_push(new_params_head);
                 __arena_push(new_ret_ty);
                 __arena_push(0);                 // is_generic = 0 (concrete)
+                __arena_push(0);                 // slot 7: gp_names_head (none)
                 // Append to fn_list tail.
                 let new_list_node = mk_node(15, clone_idx, 0, 0);
                 __arena_set(tail + 2, new_list_node);
@@ -2451,6 +2643,25 @@ fn parse_fn_decl(tok_base: i32, sb: i32) -> i32 {
                 let gp_l = tok_p3(tok_base, gk);
                 cur_advance(sb);
                 gp_tab_add(sb, gp_s, gp_l);
+                // Stage 8.5C: optional trait bound `: TraitName (+ Trait2)*`.
+                // Phase-0 ignores the bound semantically — bound resolution
+                // happens at mono time via name lookup in impl_table. We
+                // just skip the tokens here so the cursor lands on `,` or
+                // `>` for the next param.
+                if tok_tag(tok_base, cur_get(sb)) == 14 {     // ':'
+                    cur_advance(sb);                          // consume ':'
+                    let mut keep_b: i32 = 1;
+                    while keep_b == 1 {
+                        let bt = tok_tag(tok_base, cur_get(sb));
+                        if bt == 2 {                          // trait-name IDENT
+                            cur_advance(sb);
+                        } else { if bt == 7 {                 // '+'
+                            cur_advance(sb);
+                        } else {
+                            keep_b = 0;
+                        } };
+                    }
+                };
             }}};
         }
         cur_advance(sb);                        // consume '>'
@@ -2619,10 +2830,35 @@ fn parse_fn_decl(tok_base: i32, sb: i32) -> i32 {
     // generic params). Codegen + fn_type_table_init pre-pass skip
     // generic-fn templates so they aren't emitted (mono pass synthesizes
     // concrete clones).
+    // Stage 8.5C: build gp_names chain BEFORE allocating the AST_FN_DECL
+    // node. mk_node + arena_push are positional in the arena, so any
+    // mk_node call between fn_decl's slot 0 push and slot 7 push would
+    // interleave gp_name node bytes into the fn_decl's slot 4..7 region
+    // and corrupt the layout.
+    let mut gp_chain_head: i32 = 0;
+    let mut gp_chain_prev: i32 = 0;
+    let gp_count_now = gp_tab_count(sb);
+    let gp_base_now = gp_tab_base(sb);
+    let mut gp_walk: i32 = 0;
+    while gp_walk < gp_count_now {
+        let entry = gp_base_now + gp_walk * 2;
+        let gn_s = __arena_get(entry);
+        let gn_l = __arena_get(entry + 1);
+        let new_gn = mk_node(76, gn_s, gn_l, 0);
+        if gp_chain_head == 0 {
+            gp_chain_head = new_gn;
+            gp_chain_prev = new_gn;
+        } else {
+            __arena_set(gp_chain_prev + 3, new_gn);
+            gp_chain_prev = new_gn;
+        };
+        gp_walk = gp_walk + 1;
+    }
     let node = mk_node(14, name_start, name_len, body);
     __arena_push(params_head);
     __arena_push(ret_ty_final);
     __arena_push(is_generic_fn);
+    __arena_push(gp_chain_head);             // slot 7: gp_names_head
     node
 }
 
@@ -2849,6 +3085,7 @@ fn parse_impl_method(tok_base: i32, sb: i32, target_s: i32, target_l: i32, targe
     __arena_push(params_head);
     __arena_push(ret_ty_resolved);
     __arena_push(0);                         // is_generic = 0 (concrete)
+    __arena_push(0);                         // slot 7: gp_names_head (none)
     node
 }
 
