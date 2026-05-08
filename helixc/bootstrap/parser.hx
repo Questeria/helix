@@ -926,11 +926,15 @@ fn parse_top(tok_base: i32) -> i32 {
     if tok_tag(tok_base, k) == 2 {
         let id_s = tok_p2(tok_base, k);
         let id_l = tok_p3(tok_base, k);
-        if byte_eq(id_s, id_l, kw_fn_s(cur_slot), kw_fn_n(cur_slot)) == 1 {
+        let is_fn = byte_eq(id_s, id_l, kw_fn_s(cur_slot), kw_fn_n(cur_slot));
+        let is_struct = byte_eq(id_s, id_l, kw_struct_s(cur_slot), kw_struct_n(cur_slot));
+        if is_fn == 1 {
+            parse_program(tok_base, cur_slot)
+        } else { if is_struct == 1 {
             parse_program(tok_base, cur_slot)
         } else {
             parse_expr(tok_base, cur_slot)
-        }
+        }}
     } else {
         parse_expr(tok_base, cur_slot)
     }
@@ -973,6 +977,25 @@ fn skip_attributes(tok_base: i32, sb: i32) -> i32 {
 // and emits its body; other fns are placed in the binary but only
 // callable once AST_CALL lands.
 fn parse_program(tok_base: i32, sb: i32) -> i32 {
+    // Stage 5 Iter A: skip any leading `struct ... { ... }` decls.
+    // Each registers in struct_table; AST_STRUCT_DECL nodes returned
+    // are discarded since codegen treats them as 0-byte no-ops anyway.
+    let mut keep_struct: i32 = 1;
+    while keep_struct == 1 {
+        let kk = cur_get(sb);
+        let tt = tok_tag(tok_base, kk);
+        if tt == 2 {
+            let s = tok_p2(tok_base, kk);
+            let l = tok_p3(tok_base, kk);
+            if byte_eq(s, l, kw_struct_s(sb), kw_struct_n(sb)) == 1 {
+                parse_struct_decl(tok_base, sb);
+            } else {
+                keep_struct = 0;
+            };
+        } else {
+            keep_struct = 0;
+        };
+    }
     let first_fn = parse_fn_decl(tok_base, sb);
     let head = mk_node(15, first_fn, 0, 0);
     let mut prev_list = head;
