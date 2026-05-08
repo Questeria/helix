@@ -1960,7 +1960,105 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
             // Disable typed-call when is_enum_path is true (enums take
             // precedence — their name lookup already matched).
             let is_typed_call_active = if is_enum_path == 1 { 0 } else { is_typed_call };
-            if is_typed_call_active == 1 {
+            // Stage 10: path-call detection — `foo::bar(...)` or
+            // `outer::inner::baz(...)` etc., where the first IDENT is NOT a
+            // known enum, scalar type, or generic-param. Lifted modules use
+            // the mangled name `seg1__seg2__...__last` so we just walk the
+            // `::IDENT` chain, build the mangled name, and emit AST_CALL.
+            // Mutually exclusive with enum_path / typed_call / turbofish.
+            let is_path_call_pre = if t1_pre == 14 {
+                if t2_pre == 14 { if t3_pre == 2 { 1 } else { 0 } } else { 0 }
+            } else { 0 };
+            let is_path_call = if is_path_call_pre == 1 {
+                if is_enum_path == 1 { 0 }
+                else { if is_typed_call == 1 { 0 }
+                else { if is_turbofish == 1 { 0 } else { 1 } } }
+            } else { 0 };
+            if is_path_call == 1 {
+                // Stage 10: walk `IDENT::IDENT::IDENT...(args)` building the
+                // mangled name `seg1__seg2__...__last` directly into the
+                // arena. After each IDENT, if the next two tokens are `::`
+                // and the one after is IDENT, append `__<seg>` and continue;
+                // otherwise stop and expect `(`.
+                let mang_s = __arena_len();
+                // First segment: the leading IDENT bytes.
+                let mut bi: i32 = 0;
+                while bi < id_len {
+                    __arena_push(__arena_get(id_start + bi));
+                    bi = bi + 1;
+                }
+                let mut total_l: i32 = id_len;
+                cur_advance(sb);                       // consume first IDENT
+                cur_advance(sb);                       // consume first ':'
+                cur_advance(sb);                       // consume second ':'
+                // Read the second segment IDENT.
+                let mut seg_keep: i32 = 1;
+                while seg_keep == 1 {
+                    let sk = cur_get(sb);
+                    let st = tok_tag(tok_base, sk);
+                    if st == 2 {
+                        let sg_s = tok_p2(tok_base, sk);
+                        let sg_l = tok_p3(tok_base, sk);
+                        cur_advance(sb);               // consume segment IDENT
+                        // Append `__<seg>`.
+                        __arena_push(95); __arena_push(95);
+                        let mut sj: i32 = 0;
+                        while sj < sg_l {
+                            __arena_push(__arena_get(sg_s + sj));
+                            sj = sj + 1;
+                        }
+                        total_l = total_l + 2 + sg_l;
+                        // Peek for another `::` (chained path).
+                        let nt0 = tok_tag(tok_base, cur_get(sb));
+                        let nt1 = tok_tag(tok_base, cur_get(sb) + 1);
+                        let nt2 = tok_tag(tok_base, cur_get(sb) + 2);
+                        if nt0 == 14 {
+                            if nt1 == 14 {
+                                if nt2 == 2 {
+                                    cur_advance(sb);   // ':'
+                                    cur_advance(sb);   // ':'
+                                    // Loop continues to read next segment.
+                                } else {
+                                    seg_keep = 0;
+                                };
+                            } else {
+                                seg_keep = 0;
+                            };
+                        } else {
+                            seg_keep = 0;
+                        };
+                    } else {
+                        seg_keep = 0;
+                    };
+                }
+                // Now expect '('.
+                cur_advance(sb);                       // consume '('
+                let mang_l = total_l;
+                // Parse comma-separated args until ')'.
+                let mut args_head: i32 = 0;
+                let mut prev_arg: i32 = 0;
+                let mut a_keep: i32 = 1;
+                while a_keep == 1 {
+                    let at = tok_tag(tok_base, cur_get(sb));
+                    if at == 4 {                       // ')'
+                        a_keep = 0;
+                    } else { if at == 13 {             // ','
+                        cur_advance(sb);
+                    } else {
+                        let arg_expr = parse_expr_basic(tok_base, sb);
+                        let new_arg = mk_node(17, arg_expr, 0, 0);
+                        if args_head == 0 {
+                            args_head = new_arg;
+                            prev_arg = new_arg;
+                        } else {
+                            __arena_set(prev_arg + 2, new_arg);
+                            prev_arg = new_arg;
+                        };
+                    } };
+                }
+                cur_advance(sb);                       // ')'
+                mk_node(16, mang_s, mang_l, args_head)
+            } else { if is_typed_call_active == 1 {
                 // Consume IDENT, `:`, `:`, then the method-name IDENT, then `(`.
                 cur_advance(sb);                       // first IDENT (T or scalar)
                 cur_advance(sb);                       // ':'
@@ -2393,7 +2491,7 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
                 // Var ref
                 mk_var_with_capture(sb, id_start, id_len)
             }}}
-            }}}}     // Stage 8.5C: extra '}' closes the is_typed_call_active wrapper
+            }}}}}     // Stage 8.5C + Stage 10: extra '}}' closes is_typed_call_active + is_path_call wrappers
         }}}}
     } else { if t == 3 {
         // Stage 4 iteration A: tuple literal vs parenthesized expr.
@@ -2900,6 +2998,9 @@ fn parse_program(tok_base: i32, sb: i32) -> i32 {
             let is_enum_kw = byte_eq(s, l, kw_enum_s(sb), kw_enum_n(sb));
             let is_trait_kw = byte_eq(s, l, kw_trait_s(sb), kw_trait_n(sb));
             let is_impl_kw = byte_eq(s, l, kw_impl_s(sb), kw_impl_n(sb));
+            // Stage 10: also skip `mod IDENT { ... }` and `use IDENT::...;`.
+            let is_mod_kw = byte_eq(s, l, kw_mod_s(sb), kw_mod_n(sb));
+            let is_use_kw = byte_eq(s, l, kw_use_s(sb), kw_use_n(sb));
             if is_struct_kw == 1 {
                 parse_struct_decl(tok_base, sb);
             } else { if is_enum_kw == 1 {
@@ -2908,9 +3009,13 @@ fn parse_program(tok_base: i32, sb: i32) -> i32 {
                 parse_trait_decl(tok_base, sb);
             } else { if is_impl_kw == 1 {
                 parse_impl_block(tok_base, sb);
+            } else { if is_mod_kw == 1 {
+                parse_mod_decl(tok_base, sb, 0, 0);
+            } else { if is_use_kw == 1 {
+                parse_use_decl(tok_base, sb);
             } else {
                 keep_decl = 0;
-            }}}};
+            }}}}}};
         } else {
             keep_decl = 0;
         };
@@ -2952,12 +3057,30 @@ fn parse_program(tok_base: i32, sb: i32) -> i32 {
     // walks each body. Splicing AFTER parse means we have all the closures.
     let impl_head = impl_pending_head(sb);
     let cl_head = cl_pending_head(sb);
-    // Build a unified front-chain: impl_methods, then closures.
-    let front_head = if impl_head == 0 { cl_head } else {
-        if cl_head == 0 { impl_head } else {
-            let impl_tail = impl_pending_tail(sb);
-            __arena_set(impl_tail + 2, cl_head);
-            impl_head
+    // Stage 10: also splice mod_pending (fns lifted from `mod foo { ... }`
+    // blocks). These are known at parse-time (skip-loop) so they prepend
+    // the impl_pending + cl_pending chains.
+    let mod_head = mod_pending_head(sb);
+    // Build a unified front-chain: mod_lifted, impl_methods, then closures.
+    // Concatenate non-empty heads in order. Capture tails to splice.
+    let front_head_a = if mod_head == 0 { impl_head } else {
+        if impl_head == 0 { mod_head } else {
+            let mod_tail = mod_pending_tail(sb);
+            __arena_set(mod_tail + 2, impl_head);
+            mod_head
+        }
+    };
+    let front_head = if front_head_a == 0 { cl_head } else {
+        if cl_head == 0 { front_head_a } else {
+            // Find tail of front_head_a chain to splice cl_head onto.
+            let mut ftt: i32 = front_head_a;
+            let mut ftt_keep: i32 = 1;
+            while ftt_keep == 1 {
+                let nx = __arena_get(ftt + 2);
+                if nx == 0 { ftt_keep = 0; } else { ftt = nx; };
+            }
+            __arena_set(ftt + 2, cl_head);
+            front_head_a
         }
     };
     let head = if front_head == 0 {
@@ -3744,6 +3867,194 @@ fn parse_impl_block(tok_base: i32, sb: i32) -> i32 {
     }
     cur_advance(sb);                         // consume final '}'
     impl_tab_add(sb, trait_s, trait_l, target_tag, method_count);
+    mk_node(54, 0, 0, 0)
+}
+
+// Stage 10: build a mangled name `<prefix>__<orig>` directly into the arena.
+// If prefix_l is 0, just push the orig bytes (no underscore separator). Used
+// by parse_mod_decl to rewrite each fn-decl's name as it lifts the fn from
+// the module block to the top-level fn list.
+//
+// Returns the byte start; total length is (prefix_l + 2 + orig_l) when
+// prefix_l > 0, or orig_l when prefix_l == 0.
+fn mangle_mod_name(prefix_s: i32, prefix_l: i32, orig_s: i32, orig_l: i32) -> i32 {
+    let start = __arena_len();
+    let mut i: i32 = 0;
+    while i < prefix_l {
+        __arena_push(__arena_get(prefix_s + i));
+        i = i + 1;
+    }
+    if prefix_l > 0 {
+        __arena_push(95); __arena_push(95);      // '__'
+    };
+    let mut j: i32 = 0;
+    while j < orig_l {
+        __arena_push(__arena_get(orig_s + j));
+        j = j + 1;
+    }
+    start
+}
+
+// Stage 10: parse `mod IDENT { ... }`. Walks the body lifting each fn to
+// the top-level mod_pending fn-list with a mangled name `<prefix>__<fn_name>`.
+// Nested `mod inner { ... }` recurses with extended prefix `<prefix>__inner`.
+// Phase-0: ignores struct/enum/trait/impl decls inside modules (they parse
+// but don't get name-mangled — Phase-0 test cases focus on fn lifting).
+//
+// Caller has already verified the cursor sits on the `mod` IDENT.
+//
+// `prefix_s, prefix_l` is the accumulated prefix path bytes (e.g. for
+// `mod outer { mod inner { fn baz } }`, when descending into inner the
+// prefix is "outer", for the fn baz we mangle to "outer__inner__baz").
+// At the top level prefix_l == 0; the mod's own name becomes the prefix.
+//
+// Returns AST_STRUCT_DECL (tag 54) so codegen treats the original `mod`
+// site as a 0-byte no-op.
+fn parse_mod_decl(tok_base: i32, sb: i32, prefix_s: i32, prefix_l: i32) -> i32 {
+    cur_advance(sb);                             // consume 'mod' IDENT
+    let nk = cur_get(sb);
+    let mname_s = tok_p2(tok_base, nk);
+    let mname_l = tok_p3(tok_base, nk);
+    cur_advance(sb);                             // consume mod-name IDENT
+    cur_advance(sb);                             // consume '{' (LBRACE = 5)
+    // Build the new prefix `<prefix>__<mname>` (or just `<mname>` if no
+    // prefix yet) once into the arena so we can pass (new_prefix_s, new_l)
+    // down the recursion AND use it to mangle fn names inside this scope.
+    let new_prefix_s = mangle_mod_name(prefix_s, prefix_l, mname_s, mname_l);
+    let new_prefix_l = if prefix_l == 0 { mname_l } else { prefix_l + 2 + mname_l };
+    // Walk inner items until '}'.
+    let mut keep: i32 = 1;
+    while keep == 1 {
+        let tt = tok_tag(tok_base, cur_get(sb));
+        if tt == 6 {                             // RBRACE
+            keep = 0;
+        } else { if tt == 0 {                    // EOF safety
+            keep = 0;
+        } else { if tt == 2 {                    // IDENT
+            let ik = cur_get(sb);
+            let ik_s = tok_p2(tok_base, ik);
+            let ik_l = tok_p3(tok_base, ik);
+            let is_inner_mod = byte_eq(ik_s, ik_l, kw_mod_s(sb), kw_mod_n(sb));
+            let is_inner_fn = byte_eq(ik_s, ik_l, kw_fn_s(sb), kw_fn_n(sb));
+            if is_inner_mod == 1 {
+                // Recurse with new_prefix as the prefix path.
+                parse_mod_decl(tok_base, sb, new_prefix_s, new_prefix_l);
+            } else { if is_inner_fn == 1 {
+                // Parse the fn decl, then patch its name to the mangled form.
+                // parse_fn_decl reads and consumes everything: 'fn' IDENT
+                // (params) -> RET { body }. Returns AST_FN_DECL idx (tag 14)
+                // whose slots are: tag, name_s, name_l, body, params_head,
+                // ret_ty, is_generic, gp_names_head.
+                //
+                // Arena positional ordering: parse_fn_decl pushes slots 4..7
+                // immediately after the tag-14 mk_node call. After it returns,
+                // any further __arena_push goes BEYOND the fn_decl's slot 7,
+                // so we can safely append the mangled-name bytes here without
+                // corrupting the fn_decl layout. Then patch slot 1 (name_s)
+                // and slot 2 (name_l) to point at the new bytes.
+                let fn_idx = parse_fn_decl(tok_base, sb);
+                let orig_name_s = __arena_get(fn_idx + 1);
+                let orig_name_l = __arena_get(fn_idx + 2);
+                let mang_s = mangle_mod_name(new_prefix_s, new_prefix_l, orig_name_s, orig_name_l);
+                let mang_l = new_prefix_l + 2 + orig_name_l;
+                __arena_set(fn_idx + 1, mang_s);
+                __arena_set(fn_idx + 2, mang_l);
+                // Wrap in AST_FN_LIST (tag 15) and append to mod_pending chain.
+                let list_node = mk_node(15, fn_idx, 0, 0);
+                let head = mod_pending_head(sb);
+                if head == 0 {
+                    set_mod_pending_head(sb, list_node);
+                    set_mod_pending_tail(sb, list_node);
+                } else {
+                    let tail = mod_pending_tail(sb);
+                    __arena_set(tail + 2, list_node);
+                    set_mod_pending_tail(sb, list_node);
+                };
+            } else {
+                // Unknown IDENT — Phase-0 doesn't support struct/enum/etc.
+                // inside modules. Skip the token to avoid infinite loop.
+                cur_advance(sb);
+            } };
+        } else {
+            // Non-IDENT token (whitespace? attribute?) — skip to avoid stall.
+            cur_advance(sb);
+        }}};
+    }
+    cur_advance(sb);                             // consume final '}'
+    mk_node(54, 0, 0, 0)
+}
+
+// Stage 10: parse `use IDENT::IDENT::IDENT::...;`. Builds a mangled name
+// `seg1__seg2__seg3` and registers (last_seg, mangled) in the use_table so
+// later `bar(args)` calls (where `bar` matches the alias) get rewritten to
+// `seg1__seg2__bar(args)` at the call site.
+//
+// Caller has already verified the cursor sits on the `use` IDENT.
+//
+// Returns AST_STRUCT_DECL (tag 54) — same metadata-only pattern as struct/
+// enum/mod decls.
+fn parse_use_decl(tok_base: i32, sb: i32) -> i32 {
+    cur_advance(sb);                             // consume 'use' IDENT
+    // First IDENT must be a module name.
+    let f_tok = cur_get(sb);
+    let first_s = tok_p2(tok_base, f_tok);
+    let first_l = tok_p3(tok_base, f_tok);
+    cur_advance(sb);                             // first IDENT
+    // Build the mangled name in the arena segment-by-segment as we walk
+    // `::IDENT` pairs. Track the last-segment bytes for the alias name.
+    let mang_s = __arena_len();
+    let mut i0: i32 = 0;
+    while i0 < first_l {
+        __arena_push(__arena_get(first_s + i0));
+        i0 = i0 + 1;
+    }
+    let mut total_l: i32 = first_l;
+    let mut last_seg_s: i32 = first_s;
+    let mut last_seg_l: i32 = first_l;
+    let mut keep: i32 = 1;
+    while keep == 1 {
+        let tt = tok_tag(tok_base, cur_get(sb));
+        // Path separator `::` is two consecutive TK_COLON (14) tokens.
+        if tt == 14 {
+            let nt = tok_tag(tok_base, cur_get(sb) + 1);
+            if nt == 14 {
+                cur_advance(sb);                 // first ':'
+                cur_advance(sb);                 // second ':'
+                // Next must be an IDENT (segment name).
+                let sk = cur_get(sb);
+                let st = tok_tag(tok_base, sk);
+                if st == 2 {
+                    let s_s = tok_p2(tok_base, sk);
+                    let s_l = tok_p3(tok_base, sk);
+                    cur_advance(sb);             // segment IDENT
+                    // Append `__<segment>` to mangled name.
+                    __arena_push(95); __arena_push(95);
+                    let mut j0: i32 = 0;
+                    while j0 < s_l {
+                        __arena_push(__arena_get(s_s + j0));
+                        j0 = j0 + 1;
+                    }
+                    total_l = total_l + 2 + s_l;
+                    last_seg_s = s_s;
+                    last_seg_l = s_l;
+                } else {
+                    keep = 0;
+                };
+            } else {
+                keep = 0;
+            };
+        } else {
+            keep = 0;
+        };
+    }
+    // Consume the terminating ';' (TK_SEMI = 12). Defensive: tolerate
+    // missing ';' to avoid stalling on malformed input.
+    let after_t = tok_tag(tok_base, cur_get(sb));
+    if after_t == 12 {                           // TK_SEMI
+        cur_advance(sb);
+    };
+    // Register the alias.
+    use_tab_add(sb, last_seg_s, last_seg_l, mang_s, total_l);
     mk_node(54, 0, 0, 0)
 }
 
