@@ -377,6 +377,164 @@ fn set_impl_pending_tail(sb: i32, v: i32) -> i32 { __arena_set(sb + 44, v); 0 }
 // method-call sugar `x.eq(b)` to mangle to `<TypeName>__eq(x, b)`.
 fn var_type_tab_base(sb: i32) -> i32 { __arena_get(sb + 45) }
 fn var_type_tab_count(sb: i32) -> i32 { __arena_get(sb + 46) }
+// Stage 9: closure state.
+// sb+47 = closure-active flag (1 if currently parsing closure body —
+//   AST_VAR creation hooks consult this to record captured names).
+// sb+48 = closure_param_tab base offset; sb+49 = count.
+//   Stride 2 (name_s, name_l). Cap 4 closure params (Phase-0).
+// sb+50 = closure_capture_tab base offset; sb+51 = count.
+//   Stride 2 (name_s, name_l). Cap 4 captured vars (Phase-0 trap 76002).
+// sb+52 = closure_pending fn-list head; sb+53 = tail.
+//   Built by parse_closure_lit; spliced in front of user fns by parse_program
+//   (same pattern as impl_pending).
+// sb+54 = closure_var_tab base offset; sb+55 = count.
+//   Stride 4 (var_name_s, var_name_l, captures_ptr, capture_count).
+//   Cap 4 closure-bindings per program. captures_ptr points to a
+//   region of (name_s, name_l) pairs — one per captured var — that the
+//   call-site lowering uses to inject the captured-var refs as positional
+//   args ahead of the user-supplied args.
+// sb+56 = closure id counter (next id; used for unique fn names).
+// sb+57 = last_closure_idx scratch (-1 = none); set after parse_closure_lit
+//   produces a closure value, read by parse_let to register the binding.
+fn cl_active(sb: i32) -> i32 { __arena_get(sb + 47) }
+fn set_cl_active(sb: i32, v: i32) -> i32 { __arena_set(sb + 47, v); 0 }
+fn cl_param_tab_base(sb: i32) -> i32 { __arena_get(sb + 48) }
+fn cl_param_tab_count(sb: i32) -> i32 { __arena_get(sb + 49) }
+fn cl_param_tab_reset(sb: i32) -> i32 { __arena_set(sb + 49, 0); 0 }
+fn cl_capture_tab_base(sb: i32) -> i32 { __arena_get(sb + 50) }
+fn cl_capture_tab_count(sb: i32) -> i32 { __arena_get(sb + 51) }
+fn cl_capture_tab_reset(sb: i32) -> i32 { __arena_set(sb + 51, 0); 0 }
+fn cl_pending_head(sb: i32) -> i32 { __arena_get(sb + 52) }
+fn cl_pending_tail(sb: i32) -> i32 { __arena_get(sb + 53) }
+fn set_cl_pending_head(sb: i32, v: i32) -> i32 { __arena_set(sb + 52, v); 0 }
+fn set_cl_pending_tail(sb: i32, v: i32) -> i32 { __arena_set(sb + 53, v); 0 }
+fn cl_var_tab_base(sb: i32) -> i32 { __arena_get(sb + 54) }
+fn cl_var_tab_count(sb: i32) -> i32 { __arena_get(sb + 55) }
+fn cl_id_next(sb: i32) -> i32 { __arena_get(sb + 56) }
+fn cl_id_bump(sb: i32) -> i32 { let v = __arena_get(sb + 56); __arena_set(sb + 56, v + 1); v }
+fn last_closure_idx(sb: i32) -> i32 { __arena_get(sb + 57) }
+fn set_last_closure_idx(sb: i32, v: i32) -> i32 { __arena_set(sb + 57, v); 0 }
+// Append a closure-param entry. Returns 0 on success, -1 on overflow.
+fn cl_param_tab_add(sb: i32, name_s: i32, name_l: i32) -> i32 {
+    let count = cl_param_tab_count(sb);
+    if count >= 4 {
+        0 - 1
+    } else {
+        let base = cl_param_tab_base(sb);
+        let entry = base + count * 2;
+        __arena_set(entry, name_s);
+        __arena_set(entry + 1, name_l);
+        __arena_set(sb + 49, count + 1);
+        0
+    }
+}
+// Lookup a name in the current closure-param table. Returns 1 on hit, 0 on miss.
+fn cl_param_tab_lookup(sb: i32, name_s: i32, name_l: i32) -> i32 {
+    let base = cl_param_tab_base(sb);
+    let count = cl_param_tab_count(sb);
+    let mut i: i32 = 0;
+    let mut hit: i32 = 0;
+    while i < count {
+        let entry = base + i * 2;
+        let ns = __arena_get(entry);
+        let nl = __arena_get(entry + 1);
+        if byte_eq(name_s, name_l, ns, nl) == 1 {
+            hit = 1;
+            i = count;
+        } else {
+            i = i + 1;
+        };
+    }
+    hit
+}
+// Append a closure-capture entry IF NOT already present (dedup). Returns 0
+// on success/dedup, -1 on overflow (cap 4 → trap 76002).
+fn cl_capture_tab_add_dedup(sb: i32, name_s: i32, name_l: i32) -> i32 {
+    let base = cl_capture_tab_base(sb);
+    let count = cl_capture_tab_count(sb);
+    let mut i: i32 = 0;
+    let mut found: i32 = 0;
+    while i < count {
+        let entry = base + i * 2;
+        let ns = __arena_get(entry);
+        let nl = __arena_get(entry + 1);
+        if byte_eq(name_s, name_l, ns, nl) == 1 {
+            found = 1;
+            i = count;
+        } else {
+            i = i + 1;
+        };
+    }
+    if found == 1 {
+        0
+    } else { if count >= 4 {
+        0 - 1
+    } else {
+        let entry = base + count * 2;
+        __arena_set(entry, name_s);
+        __arena_set(entry + 1, name_l);
+        __arena_set(sb + 51, count + 1);
+        0
+    }}
+}
+// Register a closure-bound variable. Returns the entry idx (0..3) on success,
+// -1 on overflow (cap 4 closures per program). Each entry is 5 slots:
+//   slot 0: var_name_s
+//   slot 1: var_name_l
+//   slot 2: captures_ptr (arena offset of a (name_s, name_l) pair sequence)
+//   slot 3: capture_count
+//   slot 4: closure_id (used to build the synthesized fn name `__closure_<id>`)
+fn cl_var_tab_add(sb: i32, name_s: i32, name_l: i32, captures_ptr: i32, capture_count: i32, closure_id: i32) -> i32 {
+    let count = cl_var_tab_count(sb);
+    if count >= 4 {
+        0 - 1
+    } else {
+        let base = cl_var_tab_base(sb);
+        let entry = base + count * 5;
+        __arena_set(entry, name_s);
+        __arena_set(entry + 1, name_l);
+        __arena_set(entry + 2, captures_ptr);
+        __arena_set(entry + 3, capture_count);
+        __arena_set(entry + 4, closure_id);
+        __arena_set(sb + 55, count + 1);
+        count
+    }
+}
+// Lookup a closure-bound variable by name. Returns the entry idx on hit,
+// -1 on miss. Used by parse_primary's call-site lowering to detect when
+// `c(args)` should rewrite to `__closure_<id>(captured_vars..., args...)`.
+fn cl_var_tab_lookup(sb: i32, name_s: i32, name_l: i32) -> i32 {
+    let base = cl_var_tab_base(sb);
+    let count = cl_var_tab_count(sb);
+    let mut i: i32 = 0;
+    let mut found: i32 = 0 - 1;
+    while i < count {
+        let entry = base + i * 5;
+        let ns = __arena_get(entry);
+        let nl = __arena_get(entry + 1);
+        if byte_eq(name_s, name_l, ns, nl) == 1 {
+            found = i;
+            i = count;
+        } else {
+            i = i + 1;
+        };
+    }
+    found
+}
+// Stage 9: build an AST_VAR node, hooking capture-recording when active.
+// Replaces the 3 `mk_node(1, id_start, id_len, 0)` sites in parse_primary
+// so any IDENT used inside a closure body that isn't a closure-param gets
+// auto-recorded as a capture.
+fn mk_var_with_capture(sb: i32, id_s: i32, id_l: i32) -> i32 {
+    let active = cl_active(sb);
+    if active == 1 {
+        let is_param = cl_param_tab_lookup(sb, id_s, id_l);
+        if is_param == 0 {
+            cl_capture_tab_add_dedup(sb, id_s, id_l);
+        };
+    };
+    mk_node(1, id_s, id_l, 0)
+}
 fn var_type_tab_add(sb: i32, name_s: i32, name_l: i32, ty_tag: i32) -> i32 {
     let count = var_type_tab_count(sb);
     if count >= 8 {
@@ -1199,10 +1357,218 @@ fn parse_unary(tok_base: i32, sb: i32) -> i32 {
     }}}
 }
 
+// Stage 9: parse `|param1, param2, ...| body_expr`. Caller has detected
+// TK_PIPE (28) at the start of a primary. Build a synthesized AST_FN_DECL
+// with a unique name `__closure_<id>` whose params are
+// (captured_var_0, captured_var_1, ..., closure_param_0, closure_param_1, ...).
+// The body's AST_VAR refs to captured names resolve naturally inside that
+// fn (the synthetic params have those exact names). Append the fn_decl to
+// cl_pending — parse_program splices the chain in front of user fns.
+//
+// CRITICAL: arena positional ordering. Build the captures-persist region,
+// the AST_PARAM chain, and the body BEFORE allocating the AST_FN_DECL
+// node. mk_node + arena_push between the fn_decl's slot 0 push and slot 7
+// push would interleave bytes into the fn_decl's slot 4..7 region and
+// corrupt the layout (Stage 8.5 lesson, parser.hx:2833 comment).
+fn parse_closure_lit(tok_base: i32, sb: i32) -> i32 {
+    cur_advance(sb);     // consume opening '|'
+    // Phase-0: trap on nested closures. Stage 9 plan trap-id 76001.
+    let was_active = cl_active(sb);
+    if was_active == 1 {
+        mk_node(99, 76001, 0, 0)
+    } else {
+        // Reset per-closure scratch tables.
+        cl_param_tab_reset(sb);
+        cl_capture_tab_reset(sb);
+        // Parse closure params. Comma-separated IDENTs, optional `: type`
+        // annotation that we skip (Phase-0: all closure params are i32).
+        let mut p_count: i32 = 0;
+        let mut keep_p: i32 = 1;
+        while keep_p == 1 {
+            let pt = tok_tag(tok_base, cur_get(sb));
+            if pt == 28 {                       // closing TK_PIPE
+                keep_p = 0;
+            } else { if pt == 13 {               // ','
+                cur_advance(sb);
+            } else { if pt == 0 {                // EOF safety
+                keep_p = 0;
+            } else {
+                // Expect IDENT for param name.
+                let pk = cur_get(sb);
+                let p_s = tok_p2(tok_base, pk);
+                let p_l = tok_p3(tok_base, pk);
+                cur_advance(sb);                 // consume IDENT
+                // Optional `: T` type annotation — Phase-0 ignores the type
+                // (all closure params default to i32).
+                if tok_tag(tok_base, cur_get(sb)) == 14 {     // ':'
+                    cur_advance(sb);             // consume ':'
+                    cur_advance(sb);             // consume type IDENT
+                };
+                cl_param_tab_add(sb, p_s, p_l);
+                p_count = p_count + 1;
+            }}};
+        }
+        cur_advance(sb);                         // consume closing '|'
+        // Optional `-> ret_ty` — Phase-0 ignores (always i32 return).
+        if tok_tag(tok_base, cur_get(sb)) == 8 {
+            // `-` start of `->`. The lexer emits `-` as TK_MINUS (8) and
+            // `>` as TK_GT (17); two separate tokens. Skip both.
+            let nt2 = tok_tag(tok_base, cur_get(sb) + 1);
+            if nt2 == 17 {
+                cur_advance(sb);                 // consume '-'
+                cur_advance(sb);                 // consume '>'
+                cur_advance(sb);                 // consume ret-type IDENT
+            };
+        };
+        // Activate capture-recording. mk_var_with_capture (called by
+        // parse_primary's IDENT-as-var-ref sites) reads cl_active and
+        // appends to cl_capture_tab if the var name isn't a closure param.
+        set_cl_active(sb, 1);
+        // Optional `{ block }` form. Surface `|x| { x + 1 }` is sugar for
+        // `|x| (x + 1)`. We accept both by peeking '{'; if found, consume
+        // the brace pair around the body.
+        let body_start_t = tok_tag(tok_base, cur_get(sb));
+        let mut body_brace: i32 = 0;
+        if body_start_t == 5 {                   // TK_LBRACE
+            cur_advance(sb);                     // consume '{'
+            body_brace = 1;
+        };
+        // For the unbraced form `|x| expr`, the body is a single
+        // expression — use parse_expr_basic so the `;` terminating the
+        // surrounding let-binding doesn't get absorbed into the closure
+        // body via parse_expr's sequencing chain.
+        // For the braced form `|x| { e1 ; e2 }`, parse_expr is used so
+        // multi-statement bodies with `;` chaining work — same convention
+        // as fn-decl bodies.
+        let body = if body_brace == 1 {
+            parse_expr(tok_base, sb)
+        } else {
+            parse_expr_basic(tok_base, sb)
+        };
+        if body_brace == 1 {
+            cur_advance(sb);                     // consume '}'
+        };
+        // Deactivate capture-recording.
+        set_cl_active(sb, 0);
+        // Snapshot capture table size + base BEFORE allocating any further
+        // arena nodes. This is the canonical "Stage 8.5 lesson" — the
+        // captures_persist region must be built before the AST_FN_DECL so
+        // the fn_decl's 7 contiguous slots aren't interleaved.
+        let cap_count = cl_capture_tab_count(sb);
+        let cap_base = cl_capture_tab_base(sb);
+        let p_base = cl_param_tab_base(sb);
+        // Persist captures into a fresh arena region (cl_capture_tab is
+        // reused by future closures so we cannot retain a pointer into it).
+        let captures_persist_ptr = if cap_count == 0 { 0 } else { __arena_len() };
+        let mut ci: i32 = 0;
+        while ci < cap_count {
+            let entry = cap_base + ci * 2;
+            __arena_push(__arena_get(entry));
+            __arena_push(__arena_get(entry + 1));
+            ci = ci + 1;
+        }
+        // Build the synthesized fn name `__closure_<id>` directly in the
+        // arena. Bytes: '_' '_' 'c' 'l' 'o' 's' 'u' 'r' 'e' '_' '<digits>'.
+        let closure_id = cl_id_bump(sb);
+        let name_start = __arena_len();
+        __arena_push(95); __arena_push(95);
+        __arena_push(99); __arena_push(108); __arena_push(111);
+        __arena_push(115); __arena_push(117); __arena_push(114);
+        __arena_push(101); __arena_push(95);
+        let n_digits = push_tag_digits(closure_id);
+        let name_len = 10 + n_digits;
+        // Build the AST_PARAM chain: (captures..., closure_params...).
+        // Each AST_PARAM is 5 slots (tag, name_s, name_l, next, type_tag).
+        // mk_node + arena_push for each one is fine — they're standalone
+        // contiguous records. Linking is done via __arena_set on prev.p3.
+        let mut params_head: i32 = 0;
+        let mut prev_p: i32 = 0;
+        let mut ki: i32 = 0;
+        while ki < cap_count {
+            let pair = captures_persist_ptr + ki * 2;
+            let ns = __arena_get(pair);
+            let nl = __arena_get(pair + 1);
+            let new_p = mk_node(18, ns, nl, 0);
+            __arena_push(0);                     // type tag = 0 (i32)
+            if params_head == 0 {
+                params_head = new_p;
+                prev_p = new_p;
+            } else {
+                __arena_set(prev_p + 3, new_p);
+                prev_p = new_p;
+            };
+            ki = ki + 1;
+        }
+        let mut pi: i32 = 0;
+        while pi < p_count {
+            let pp = p_base + pi * 2;
+            let ns = __arena_get(pp);
+            let nl = __arena_get(pp + 1);
+            let new_p = mk_node(18, ns, nl, 0);
+            __arena_push(0);                     // type tag = 0 (i32)
+            if params_head == 0 {
+                params_head = new_p;
+                prev_p = new_p;
+            } else {
+                __arena_set(prev_p + 3, new_p);
+                prev_p = new_p;
+            };
+            pi = pi + 1;
+        }
+        // Allocate AST_FN_DECL with 7 contiguous slots (Stage 8 layout).
+        // p1=name_s, p2=name_l, p3=body, p4=params_head, p5=ret_ty,
+        // p6=is_generic, p7=gp_names_head.
+        let fn_node = mk_node(14, name_start, name_len, body);
+        __arena_push(params_head);
+        __arena_push(0);                         // ret_ty = 0 (i32)
+        __arena_push(0);                         // is_generic = 0
+        __arena_push(0);                         // gp_names_head = 0
+        // Wrap in AST_FN_LIST and append to cl_pending chain.
+        let list_node = mk_node(15, fn_node, 0, 0);
+        let head = cl_pending_head(sb);
+        if head == 0 {
+            set_cl_pending_head(sb, list_node);
+            set_cl_pending_tail(sb, list_node);
+        } else {
+            let tail = cl_pending_tail(sb);
+            __arena_set(tail + 2, list_node);
+            set_cl_pending_tail(sb, list_node);
+        };
+        // Stash closure id + capture info in scratch slots so parse_let
+        // can register the binding (cl_var_tab) AFTER the value parse.
+        // Slots: 57 = closure_id, 58 = captures_persist_ptr, 59 = cap_count.
+        set_last_closure_idx(sb, closure_id);
+        __arena_set(sb + 58, captures_persist_ptr);
+        __arena_set(sb + 59, cap_count);
+        // Return a placeholder AST_INT(0). The closure's runtime value is
+        // unused — only the binding name matters at the call site.
+        mk_node(0, 0, 0, 0)
+    }
+}
+
 fn parse_primary(tok_base: i32, sb: i32) -> i32 {
     let k = cur_get(sb);
     let t = tok_tag(tok_base, k);
-    if t == 1 {
+    if t == 28 {
+        // Stage 9: closure literal `|params| body`. TK_PIPE (28) at the
+        // start of a primary is unambiguous — bitwise OR is parsed at the
+        // bitwise level (parse_bitwise) and never reaches primary as a
+        // prefix. Dispatch to parse_closure_lit which:
+        //   1. parses params,
+        //   2. parses body (capture-recording active so any AST_VAR ref
+        //      whose name isn't a closure-param is auto-recorded),
+        //   3. synthesizes an AST_FN_DECL named `__closure_<id>` with
+        //      params = (captures..., closure_params...) and the parsed
+        //      body verbatim,
+        //   4. wraps the fn_decl in AST_FN_LIST and appends to
+        //      cl_pending — parse_program splices that chain in front of
+        //      the user's fn list,
+        //   5. registers (captures_ptr, cap_count) in scratch slots 57..59
+        //      so parse_let can record the binding in cl_var_tab.
+        // Returns AST_INT(0) as the closure value; the runtime value is
+        // unused — only the binding name matters at the call site.
+        parse_closure_lit(tok_base, sb)
+    } else { if t == 1 {
         let v = tok_p1(tok_base, k);
         cur_advance(sb);
         mk_node(0, v, 0, 0)
@@ -1380,6 +1746,19 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
             if s_idx_b >= 0 {
                 var_struct_tab_add(sb, name_start, name_len, s_idx_b);
                 set_last_struct_idx(sb, 0 - 1);
+            };
+            // Stage 9: if the value was a closure literal, register the
+            // binding (name -> closure_id, captures_ptr, capture_count) in
+            // cl_var_tab so call-site lowering can rewrite `name(args)` to
+            // `__closure_<id>(captured_vars..., args...)`.
+            let cl_idx_b = last_closure_idx(sb);
+            if cl_idx_b >= 0 {
+                let caps_ptr = __arena_get(sb + 58);
+                let caps_count = __arena_get(sb + 59);
+                cl_var_tab_add(sb, name_start, name_len, caps_ptr, caps_count, cl_idx_b);
+                set_last_closure_idx(sb, 0 - 1);
+                __arena_set(sb + 58, 0);
+                __arena_set(sb + 59, 0);
             };
             cur_advance(sb);     // ';'
             let body = parse_expr(tok_base, sb);
@@ -1752,7 +2131,7 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
                 // them for parse_expr_basic to handle as a comparison.
                 let nt2 = tok_tag(tok_base, cur_get(sb) + 1);
                 if nt2 == 15 {
-                    mk_node(1, id_start, id_len, 0)
+                    mk_var_with_capture(sb, id_start, id_len)
                 } else {
                     cur_advance(sb);
                     let value = parse_expr_basic(tok_base, sb);
@@ -1762,6 +2141,34 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
                 // CALL: name(arg1, arg2, ...). Args become AST_ARG
                 // linked list; head index goes in CALL.p3 (or 0 if
                 // no args).
+                // Stage 9: detect closure-call BEFORE parsing args so the
+                // synthesized fn name `__closure_<id>` can be built into
+                // the arena ahead of any AST_ARG mk_node calls (Stage 8.5
+                // arena-positional-ordering lesson).
+                let cl_entry_idx = cl_var_tab_lookup(sb, id_start, id_len);
+                let cl_var_count_pre = cl_var_tab_count(sb);
+                let cl_base_pre = cl_var_tab_base(sb);
+                // Pre-build the synthesized fn name when this is a closure
+                // call. Bytes: '__closure_<id>'. Read closure_id from the
+                // matching cl_var_tab entry's slot 4.
+                let mut cl_mang_s: i32 = 0;
+                let mut cl_mang_l: i32 = 0;
+                let mut cl_caps_ptr: i32 = 0;
+                let mut cl_caps_count: i32 = 0;
+                if cl_entry_idx >= 0 {
+                    let entry = cl_base_pre + cl_entry_idx * 5;
+                    cl_caps_ptr = __arena_get(entry + 2);
+                    cl_caps_count = __arena_get(entry + 3);
+                    let cl_id = __arena_get(entry + 4);
+                    cl_mang_s = __arena_len();
+                    __arena_push(95); __arena_push(95);
+                    __arena_push(99); __arena_push(108); __arena_push(111);
+                    __arena_push(115); __arena_push(117); __arena_push(114);
+                    __arena_push(101); __arena_push(95);
+                    let n_d = push_tag_digits(cl_id);
+                    cl_mang_l = 10 + n_d;
+                };
+                let _drop_pre = cl_var_count_pre;
                 cur_advance(sb);     // consume '('
                 let mut args_head: i32 = 0;
                 let mut prev_arg: i32 = 0;
@@ -1785,6 +2192,28 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
                     }};
                 }
                 cur_advance(sb);     // consume ')'
+                // Stage 9: prepend captured-var AST_ARG nodes to args_head
+                // when this is a closure call. The captured vars are passed
+                // as positional args BEFORE the user's args, matching the
+                // synthesized fn's param order (captures..., closure_params...).
+                if cl_entry_idx >= 0 {
+                    // Build the captured-arg chain: cap_ARG -> cap_ARG -> ... ->
+                    // (existing args_head). Iterate captures in reverse so the
+                    // chain comes out in forward order with ARG[0] being the
+                    // first captured var.
+                    let mut cap_args_head: i32 = args_head;
+                    let mut ri: i32 = cl_caps_count;
+                    while ri > 0 {
+                        ri = ri - 1;
+                        let pair = cl_caps_ptr + ri * 2;
+                        let cap_ns = __arena_get(pair);
+                        let cap_nl = __arena_get(pair + 1);
+                        let cap_var = mk_node(1, cap_ns, cap_nl, 0);
+                        let new_arg = mk_node(17, cap_var, cap_args_head, 0);
+                        cap_args_head = new_arg;
+                    }
+                    mk_node(16, cl_mang_s, cl_mang_l, cap_args_head)
+                } else {
                 // Stage 6D: detect __enum_payload(value_expr, idx_intlit)
                 // and rewrite to AST_TUPLE_FIELD(value_expr, idx + 1).
                 // The value lives at slot idx+1 in the tuple-lit-shaped
@@ -1831,6 +2260,7 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
                 } else {
                     mk_node(16, id_start, id_len, args_head)
                 }
+                }     // Stage 9: close `if cl_entry_idx >= 0 { ... } else { ... }`
             } else { if nt == 5 {
                 // Stage 5 Iter A: IDENT followed by '{' might be a struct
                 // literal `Pt { 10, 32 }`. Look up the IDENT in
@@ -1893,11 +2323,11 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
                     }
                 } else {
                     // Not a registered struct — treat as var ref.
-                    mk_node(1, id_start, id_len, 0)
+                    mk_var_with_capture(sb, id_start, id_len)
                 }
             } else {
                 // Var ref
-                mk_node(1, id_start, id_len, 0)
+                mk_var_with_capture(sb, id_start, id_len)
             }}}
             }}}}     // Stage 8.5C: extra '}' closes the is_typed_call_active wrapper
         }}}}
@@ -2011,7 +2441,7 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
             };
         };
         mk_node(99, t, 0, 0)
-    }}}}}}}}}}}}}}}
+    }}}}}}}}}}}}}}}}     // Stage 9: extra '}' closes the leading t == 28 closure wrapper
 }
 
 // Stage 5 Iter B: struct_table region — 12 slots = 3 entries x 4 fields
@@ -2102,6 +2532,41 @@ fn var_type_tab_init(sb: i32) -> i32 {
     }
     __arena_set(sb + 45, vt_base);
     __arena_set(sb + 46, 0);
+    0
+}
+
+// Stage 9: closure tables init.
+//   cl_param_tab: cap 4 closure params, stride 2 (name_s, name_l) = 8 slots.
+//   cl_capture_tab: cap 4 captures, stride 2 = 8 slots.
+//   cl_var_tab: cap 4 closure-bound vars, stride 5 = 20 slots.
+fn cl_tabs_init(sb: i32) -> i32 {
+    // cl_param_tab @ sb+48
+    let cp_base = __arena_push(0);
+    let mut cpi: i32 = 1;
+    while cpi < 8 { __arena_push(0); cpi = cpi + 1; }
+    __arena_set(sb + 48, cp_base);
+    __arena_set(sb + 49, 0);
+    // cl_capture_tab @ sb+50
+    let cc_base = __arena_push(0);
+    let mut cci: i32 = 1;
+    while cci < 8 { __arena_push(0); cci = cci + 1; }
+    __arena_set(sb + 50, cc_base);
+    __arena_set(sb + 51, 0);
+    // cl_var_tab @ sb+54
+    let cv_base = __arena_push(0);
+    let mut cvi: i32 = 1;
+    while cvi < 20 { __arena_push(0); cvi = cvi + 1; }
+    __arena_set(sb + 54, cv_base);
+    __arena_set(sb + 55, 0);
+    // Init: closure-active=0, id_counter=0, last_closure_idx=-1,
+    // caps_ptr scratch=0, cap_count scratch=0, pending_head=0, pending_tail=0.
+    __arena_set(sb + 47, 0);
+    __arena_set(sb + 52, 0);
+    __arena_set(sb + 53, 0);
+    __arena_set(sb + 56, 0);
+    __arena_set(sb + 57, 0 - 1);
+    __arena_set(sb + 58, 0);
+    __arena_set(sb + 59, 0);
     0
 }
 
@@ -2204,6 +2669,20 @@ fn parse_top(tok_base: i32) -> i32 {
     __arena_push(0); __arena_push(0); __arena_push(0); __arena_push(0);
     __arena_push(0); __arena_push(0); __arena_push(0); __arena_push(0);
     __arena_push(0); __arena_push(0);
+    // Stage 9: slots 47..59 (13 slots) for closure state.
+    //   47 = cl_active flag
+    //   48/49 = cl_param_tab base/count
+    //   50/51 = cl_capture_tab base/count
+    //   52/53 = cl_pending head/tail
+    //   54/55 = cl_var_tab base/count
+    //   56 = closure id counter
+    //   57 = last_closure_idx scratch (-1 = none)
+    //   58 = scratch caps_persist_ptr (read by parse_let)
+    //   59 = scratch caps_count (read by parse_let)
+    __arena_push(0); __arena_push(0); __arena_push(0); __arena_push(0);
+    __arena_push(0); __arena_push(0); __arena_push(0); __arena_push(0);
+    __arena_push(0); __arena_push(0); __arena_push(0); __arena_push(0);
+    __arena_push(0);
     install_keywords(cur_slot);
     var_struct_tab_init(cur_slot);
     var_enum_tab_init(cur_slot);
@@ -2224,6 +2703,9 @@ fn parse_top(tok_base: i32) -> i32 {
     }
     __arena_set(cur_slot + 31, mr_base);
     __arena_set(cur_slot + 32, 0);
+    // Stage 9: closure tables (cl_param_tab, cl_capture_tab, cl_var_tab,
+    // pending fn-list head/tail, id counter, scratch slots).
+    cl_tabs_init(cur_slot);
     // Peek the first token. If it's `fn`, parse a function decl.
     // Otherwise treat the whole input as a single expression
     // (legacy mode) for backward compat with all existing tests.
@@ -2332,19 +2814,6 @@ fn parse_program(tok_base: i32, sb: i32) -> i32 {
     }
     let first_fn = parse_fn_decl(tok_base, sb);
     let user_first_node = mk_node(15, first_fn, 0, 0);
-    // Stage 8.5B: if any impl blocks pushed methods into impl_pending, the
-    // chain head/tail are non-zero. Splice the impl-pending chain BEFORE
-    // the user's first fn so the resulting fn_list = [impl_methods..., user_fns...].
-    // Order doesn't affect codegen correctness (fn_table is name-keyed) but
-    // emitting impl methods first lets later user fns call them.
-    let pending_head = impl_pending_head(sb);
-    let head = if pending_head == 0 {
-        user_first_node
-    } else {
-        let pending_tail = impl_pending_tail(sb);
-        __arena_set(pending_tail + 2, user_first_node);
-        pending_head
-    };
     let mut prev_list = user_first_node;
     let mut keep: i32 = 1;
     while keep == 1 {
@@ -2369,6 +2838,38 @@ fn parse_program(tok_base: i32, sb: i32) -> i32 {
             keep = 0;
         }};
     }
+    // Stage 8.5B: if any impl blocks pushed methods into impl_pending, the
+    // chain head/tail are non-zero. Splice the impl-pending chain BEFORE
+    // the user's first fn so the resulting fn_list = [impl_methods..., user_fns...].
+    // Order doesn't affect codegen correctness (fn_table is name-keyed) but
+    // emitting impl methods first lets later user fns call them.
+    // Stage 9: also splice cl_pending (synthesized closure-body fns). This
+    // happens AFTER user fns are parsed because closure literals appear
+    // INSIDE user fn bodies — cl_pending only fills up after parse_fn_decl
+    // walks each body. Splicing AFTER parse means we have all the closures.
+    let impl_head = impl_pending_head(sb);
+    let cl_head = cl_pending_head(sb);
+    // Build a unified front-chain: impl_methods, then closures.
+    let front_head = if impl_head == 0 { cl_head } else {
+        if cl_head == 0 { impl_head } else {
+            let impl_tail = impl_pending_tail(sb);
+            __arena_set(impl_tail + 2, cl_head);
+            impl_head
+        }
+    };
+    let head = if front_head == 0 {
+        user_first_node
+    } else {
+        // Find tail of front_head chain.
+        let mut ft: i32 = front_head;
+        let mut ft_keep: i32 = 1;
+        while ft_keep == 1 {
+            let nx = __arena_get(ft + 2);
+            if nx == 0 { ft_keep = 0; } else { ft = nx; };
+        }
+        __arena_set(ft + 2, user_first_node);
+        front_head
+    };
     // Stage 8: monomorphization pass. Walk mr_tab; for each registered
     // (orig_name, mangled_name, pack_lo) entry, find the original
     // AST_FN_DECL template in the fn_list (matching by name) and build
