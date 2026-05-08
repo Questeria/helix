@@ -1988,15 +1988,23 @@ fn parse_top(tok_base: i32) -> i32 {
         let is_fn = byte_eq(id_s, id_l, kw_fn_s(cur_slot), kw_fn_n(cur_slot));
         let is_struct = byte_eq(id_s, id_l, kw_struct_s(cur_slot), kw_struct_n(cur_slot));
         let is_enum = byte_eq(id_s, id_l, kw_enum_s(cur_slot), kw_enum_n(cur_slot));
+        // Stage 8.5: trait/impl are also program-mode prefixes — they
+        // route to parse_program just like struct/enum.
+        let is_trait = byte_eq(id_s, id_l, kw_trait_s(cur_slot), kw_trait_n(cur_slot));
+        let is_impl = byte_eq(id_s, id_l, kw_impl_s(cur_slot), kw_impl_n(cur_slot));
         if is_fn == 1 {
             parse_program(tok_base, cur_slot)
         } else { if is_struct == 1 {
             parse_program(tok_base, cur_slot)
         } else { if is_enum == 1 {
             parse_program(tok_base, cur_slot)
+        } else { if is_trait == 1 {
+            parse_program(tok_base, cur_slot)
+        } else { if is_impl == 1 {
+            parse_program(tok_base, cur_slot)
         } else {
             parse_expr(tok_base, cur_slot)
-        }}}
+        }}}}}
     } else {
         parse_expr(tok_base, cur_slot)
     }
@@ -2050,13 +2058,24 @@ fn parse_program(tok_base: i32, sb: i32) -> i32 {
         if tt == 2 {
             let s = tok_p2(tok_base, kk);
             let l = tok_p3(tok_base, kk);
-            if byte_eq(s, l, kw_struct_s(sb), kw_struct_n(sb)) == 1 {
+            // FLAT prefix-trap ladder: single-binding chain, no nested
+            // if-else statements. Stage 8.5 adds two new prefixes (trait,
+            // impl) — handled before falling through to the fn-decl path.
+            let is_struct_kw = byte_eq(s, l, kw_struct_s(sb), kw_struct_n(sb));
+            let is_enum_kw = byte_eq(s, l, kw_enum_s(sb), kw_enum_n(sb));
+            let is_trait_kw = byte_eq(s, l, kw_trait_s(sb), kw_trait_n(sb));
+            let is_impl_kw = byte_eq(s, l, kw_impl_s(sb), kw_impl_n(sb));
+            if is_struct_kw == 1 {
                 parse_struct_decl(tok_base, sb);
-            } else { if byte_eq(s, l, kw_enum_s(sb), kw_enum_n(sb)) == 1 {
+            } else { if is_enum_kw == 1 {
                 parse_enum_decl(tok_base, sb);
+            } else { if is_trait_kw == 1 {
+                parse_trait_decl(tok_base, sb);
+            } else { if is_impl_kw == 1 {
+                parse_impl_block(tok_base, sb);
             } else {
                 keep_decl = 0;
-            }};
+            }}}};
         } else {
             keep_decl = 0;
         };
@@ -2504,6 +2523,70 @@ fn parse_enum_decl(tok_base: i32, sb: i32) -> i32 {
     // Reuse AST_STRUCT_DECL tag (54) — codegen treats both as 0-byte
     // metadata. Avoids adding a new emit_ast_code arm (Iter D Finding
     // #7 — host-parser recursion budget is tight at 45 arms).
+    mk_node(54, 0, 0, 0)
+}
+
+// Stage 8.5B forward declaration. Filled in by next sub-iteration.
+// Stub: skip everything from `impl` through the matching '}'. Returns
+// AST_STRUCT_DECL (tag 54) so codegen emits 0 bytes. The 8.5B step will
+// replace this body with real impl-method extraction.
+fn parse_impl_block(tok_base: i32, sb: i32) -> i32 {
+    cur_advance(sb);                         // consume 'impl' IDENT
+    // Brace-balance scan from before the first '{' all the way through
+    // the closing '}'. Walk forward skipping non-LBRACE tokens until we
+    // find the first '{', then bump depth and balance.
+    let mut found_open: i32 = 0;
+    while found_open == 0 {
+        let tt = tok_tag(tok_base, cur_get(sb));
+        if tt == 5 { found_open = 1; }       // LBRACE
+        else { if tt == 0 { found_open = 1; } else {} };
+        if found_open == 0 { cur_advance(sb); };
+    }
+    cur_advance(sb);                         // consume '{'
+    let mut depth: i32 = 1;
+    while depth > 0 {
+        let tt = tok_tag(tok_base, cur_get(sb));
+        if tt == 5 { depth = depth + 1; }
+        else { if tt == 6 { depth = depth - 1; }
+        else { if tt == 0 { depth = 0; } else {} } };
+        if depth > 0 { cur_advance(sb); };
+    }
+    cur_advance(sb);                         // consume final '}'
+    mk_node(54, 0, 0, 0)
+}
+
+// Stage 8.5: parse `trait IDENT { fn IDENT(...) -> RET ; ... }`.
+// Methods are signature-only (terminated with ';'); Phase-0 does not
+// validate them against impls. We just register the trait name and
+// consume tokens until the closing '}'. Returns AST_STRUCT_DECL (tag 54)
+// — same metadata-only pattern as struct/enum decls — so codegen emits
+// 0 bytes and there is no new emit_ast_code arm.
+fn parse_trait_decl(tok_base: i32, sb: i32) -> i32 {
+    cur_advance(sb);                         // consume 'trait' IDENT
+    let nk = cur_get(sb);
+    let name_s = tok_p2(tok_base, nk);
+    let name_l = tok_p3(tok_base, nk);
+    cur_advance(sb);                         // consume trait name IDENT
+    cur_advance(sb);                         // consume '{' (LBRACE = 5)
+    // Brace-balance scan: consume tokens until the matching '}'. Most
+    // trait bodies in Phase-0 are flat (no nested {} since methods are
+    // signature-only), but the loop tolerates nesting for safety.
+    let mut depth: i32 = 1;
+    while depth > 0 {
+        let tt = tok_tag(tok_base, cur_get(sb));
+        if tt == 5 {                         // LBRACE
+            depth = depth + 1;
+        } else { if tt == 6 {                // RBRACE
+            depth = depth - 1;
+        } else { if tt == 0 {                // EOF safety
+            depth = 0;
+        } else {} } };
+        if depth > 0 {
+            cur_advance(sb);
+        };
+    }
+    cur_advance(sb);                         // consume final '}'
+    trait_tab_add(sb, name_s, name_l);
     mk_node(54, 0, 0, 0)
 }
 
