@@ -1623,7 +1623,7 @@ fn emit_exit_with_eax() -> i32 {
 fn install_builtin_names() -> i32 {
     let bn_state = __arena_push(0);          // slot 0 placeholder
     __arena_push(0); __arena_push(0); __arena_push(0); __arena_push(0);
-    // Reserve slots 5..117 (113 more slots: 2 file-name slots + 2
+    // Reserve slots 5..121 (117 more slots: 2 file-name slots + 2
     // str_state header slots + 48 entry slots + 5 f32 builtin slots
     // (__fadd, __fsub, __fmul, __fdiv at 57..60; __fneg at 61) + 1
     // fn_type_state pointer slot at 62 (Phase 1.10 step 5c follow-on)
@@ -1654,8 +1654,14 @@ fn install_builtin_names() -> i32 {
     //   stream. Cap: only one match-arm chain in flight at a time, but
     //   nested matches re-init in place — fine for Phase-0 since each
     //   match arm body is fully laid down before its parent's next arm.
+    // + Stage 11: slots 118..121 reserved for reflection-runtime state.
+    //   118 = "Quote" name bytes, 119 = "Splice" name bytes,
+    //   120 = "modify" name bytes, 121 = quote handle counter (next free
+    //   cell index, 0..63). Cells live at the LAST 64 slots of the produced
+    //   binary's arena: cell[i] is at __helix_arena_base + 4 + (CAP-64+i)*4.
+    //   The arena is BSS-zero-filled at load time so each cell starts as 0.
     let mut i: i32 = 0;
-    while i < 113 {
+    while i < 117 {
         __arena_push(0);
         i = i + 1;
     }
@@ -1979,6 +1985,30 @@ fn install_builtin_names() -> i32 {
     __arena_push(112); __arena_push(97); __arena_push(99); __arena_push(107);
     __arena_set(bn_state + 83, s32);
 
+    // Stage 11: reflection-runtime builtin names. These are user-facing
+    // surface (not __-prefixed) since the plan's Quote / Splice / modify
+    // come straight from the Helix surface syntax — different from the
+    // internal __-prefixed builtins above.
+    //   "Quote"  = 81 117 111 116 101  (5 chars)
+    //   "Splice" = 83 112 108 105 99 101  (6 chars)
+    //   "modify" = 109 111 100 105 102 121  (6 chars)
+    let s33 = __arena_push(81); __arena_push(117); __arena_push(111);
+    __arena_push(116); __arena_push(101);
+    __arena_set(bn_state + 118, s33);
+
+    let s34 = __arena_push(83); __arena_push(112); __arena_push(108);
+    __arena_push(105); __arena_push(99); __arena_push(101);
+    __arena_set(bn_state + 119, s34);
+
+    let s35 = __arena_push(109); __arena_push(111); __arena_push(100);
+    __arena_push(105); __arena_push(102); __arena_push(121);
+    __arena_set(bn_state + 120, s35);
+
+    // Slot 121: quote handle counter (compile-time). Each Quote(...) call
+    // allocates the current value as its handle and bumps the counter.
+    // Cap 64 cells — exceeding traps 81002 (cell-table overflow).
+    __arena_set(bn_state + 121, 0);
+
     bn_state
 }
 
@@ -2032,6 +2062,19 @@ fn bn_f64_to_i32_s(b: i32) -> i32 { __arena_get(b + 80) }
 fn bn_bits_lo_f64_s(b: i32) -> i32 { __arena_get(b + 81) }
 fn bn_bits_hi_f64_s(b: i32) -> i32 { __arena_get(b + 82) }
 fn bn_f64_pack_s(b: i32) -> i32 { __arena_get(b + 83) }
+// Stage 11: reflection-runtime name slots and handle counter.
+fn bn_quote_s(b: i32) -> i32 { __arena_get(b + 118) }
+fn bn_splice_s(b: i32) -> i32 { __arena_get(b + 119) }
+fn bn_modify_s(b: i32) -> i32 { __arena_get(b + 120) }
+fn bn_quote_next_handle(b: i32) -> i32 { __arena_get(b + 121) }
+fn bn_quote_bump_handle(b: i32) -> i32 {
+    // Returns the OLD handle (assigned to the current Quote call), then
+    // bumps the counter. Cap 64; values >= 64 still bump but the caller
+    // is expected to emit_trap_with_id(81002) before using them.
+    let v = __arena_get(b + 121);
+    __arena_set(b + 121, v + 1);
+    v
+}
 // str_state accessors. The state lives within the bn_state region.
 fn str_top(b: i32) -> i32 { __arena_get(b + 7) }
 fn str_top_set(b: i32, v: i32) -> i32 { __arena_set(b + 7, v); 0 }
@@ -2843,9 +2886,209 @@ fn try_emit_builtin_call(name_s: i32, name_l: i32, args_head: i32,
         emit_byte(0x48); emit_byte(0xC1); emit_byte(0xE0); emit_byte(0x20); // shl rax, 32
         emit_byte(0x48); emit_byte(0x09); emit_byte(0xC8);            // or rax, rcx
         n0 + np + n1 + 2 + 1 + 4 + 3
+    } else { if kovc_byte_eq(name_s, name_l, bn_quote_s(bn_state), 5) == 1 {
+        // Stage 11: Quote(expr) -> i32 (cell handle).
+        //   handle = compile-time-allocated index in [0..63]
+        //   Phase-0 cell store: the LAST 64 slots of the produced binary's
+        //   arena are the cell table. cell[i] lives at arena_base + 4 +
+        //   (HELIX_ARENA_CAP - 64 + i) * 4. The arena is BSS-zero-filled
+        //   at load time, so each cell starts at 0.
+        // Codegen sequence:
+        //   1. eval expr -> eax (the value to bind)
+        //   2. mov ecx, eax       (save expr value in ecx)
+        //   3. lea rax, [arena_base]   (RIP-relative; patched after fns)
+        //   4. mov [rax + DISP], ecx   (write value into cell[handle])
+        //   5. mov eax, handle    (return handle as the call's value)
+        // Where DISP = 4 + (CAP - 64 + handle) * 4.
+        // Trap 81002 if handle >= 64 (more than 64 Quote sites in source).
+        let handle = bn_quote_bump_handle(bn_state);
+        if handle >= 64 {
+            emit_trap_with_id(81002)
+        } else {
+            let arena_base_s = bn_helix_arena_base_s(bn_state);
+            let arg_idx = __arena_get(args_head + 1);
+            let n_arg = emit_ast_code(arg_idx, bind_state, patch_state, bn_state);
+            // mov ecx, eax           (89 C1) — 2 bytes
+            emit_byte(0x89); emit_byte(0xC1);
+            // lea rax, [rip + disp32]  — 7 bytes (placeholder + patch)
+            let disp_slot = emit_lea_rax_rip_placeholder();
+            patch_table_add(patch_state, disp_slot, arena_base_s, 18);
+            // Compute cell-table displacement from arena_base.
+            // CAP = 2097152, so cell[0] at offset = 4 + (2097088)*4 = 8388356.
+            // cell[handle] at offset = 8388356 + handle * 4.
+            let disp = 8388356 + handle * 4;
+            // mov [rax + disp32], ecx  (89 88 disp32) — 6 bytes
+            emit_byte(0x89); emit_byte(0x88);
+            emit_u32_le(disp);
+            // mov eax, handle  (B8 imm32) — 5 bytes
+            emit_byte(0xB8);
+            emit_u32_le(handle);
+            n_arg + 2 + 7 + 6 + 5
+        }
+    } else { if kovc_byte_eq(name_s, name_l, bn_splice_s(bn_state), 6) == 1 {
+        // Stage 11: Splice(handle) -> i32 (the value stored in cell[handle]).
+        //   eval handle -> eax (runtime expression — could be a let-bound
+        //                       i32, an integer literal, or any i32 expr)
+        //   bounds-check: if (eax & ~63) != 0 (i.e. handle >= 64 or < 0),
+        //                  return 0 instead of doing a wild memory read.
+        //                  Test test_splice_oob_handle_returns_zero_not_crash
+        //                  in helixc/tests/test_reflection.py codifies this
+        //                  expectation (OOB safe path).
+        //   else load:
+        //     mov ecx, eax            (rcx = handle)
+        //     lea rax, [arena_base]
+        //     mov eax, [rax + ecx*4 + DISP_BASE]
+        //         where DISP_BASE = 4 + (CAP - 64) * 4 = 8388356.
+        // Bounds-check sequence (Phase-0 minimal):
+        //   cmp eax, 0           — sign check
+        //   jl  .oob              (if negative, jump to OOB path)
+        //   cmp eax, 64           — upper bound
+        //   jge .oob
+        //   <load path>           — eax := cell[eax]
+        //   jmp .end
+        // .oob: xor eax, eax     — return 0
+        // .end:
+        // For a flat short-jump implementation, we use 8-bit relative
+        // offsets (Jcc with imm8). Layout:
+        //   [3] cmp eax, 0
+        //   [2] jl .oob       → rel8 = 23 (skip cmp+jge+load+jmp)
+        //   [3] cmp eax, 64
+        //   [2] jge .oob      → rel8 = 18 (skip load+jmp)
+        //   [2] mov ecx, eax
+        //   [7] lea rax, [rip+disp32]
+        //   [7] mov eax, [rax+rcx*4+disp32]    (89 84 88 disp32 — 7 bytes)
+        //   [2] jmp .end (EB rel8)             rel8 = 2 (skip xor)
+        //   [2] xor eax, eax                   .oob
+        //   [-] .end:
+        // Total post-arg overhead: 3+2+3+2+2+7+7+2+2 = 30 bytes.
+        let arena_base_s = bn_helix_arena_base_s(bn_state);
+        let arg_idx = __arena_get(args_head + 1);
+        let n_arg = emit_ast_code(arg_idx, bind_state, patch_state, bn_state);
+        emit_byte(0x83); emit_byte(0xF8); emit_byte(0x00);   // cmp eax, 0
+        emit_byte(0x7C); emit_byte(23);                      // jl .oob (rel8=23)
+        emit_byte(0x83); emit_byte(0xF8); emit_byte(0x40);   // cmp eax, 64
+        emit_byte(0x7D); emit_byte(18);                      // jge .oob (rel8=18)
+        emit_byte(0x89); emit_byte(0xC1);                    // mov ecx, eax (handle)
+        let disp_slot = emit_lea_rax_rip_placeholder();      // 7 bytes
+        patch_table_add(patch_state, disp_slot, arena_base_s, 18);
+        // mov eax, [rax + ecx*4 + disp32]
+        // ModRM=84 (mod=10 disp32, reg=000 eax, r/m=100 SIB)
+        // SIB=88 (scale=10 *4, index=001 rcx, base=000 rax)
+        // Encoding: 8B 84 88 disp32 = 7 bytes total.
+        emit_byte(0x8B); emit_byte(0x84); emit_byte(0x88);
+        let disp_base = 8388356;
+        emit_u32_le(disp_base);                              // 4 bytes (3+4 = 7 byte instr)
+        emit_byte(0xEB); emit_byte(2);                       // jmp .end (rel8=2)
+        emit_byte(0x31); emit_byte(0xC0);                    // xor eax, eax (.oob)
+        // .end:
+        n_arg + 3 + 2 + 3 + 2 + 2 + 7 + 7 + 2 + 2
+    } else { if kovc_byte_eq(name_s, name_l, bn_modify_s(bn_state), 6) == 1 {
+        // Stage 11: modify(handle, new_value, verifier_fn) -> i32.
+        // Phase-0 minimal contract (mirrors test_reflection.py):
+        //   1. eval handle -> push (rsp+16)
+        //   2. eval new_value -> push (rsp+8)
+        //   3. eval verifier_fn(handle, new_value) -> eax
+        //      (Phase-0: verifier is a known fn name; the parser's
+        //       AST_CALL with that ident resolves through fn_table.
+        //       Here we treat the third arg as an ARBITRARY expression
+        //       — it could be an AST_CALL to the verifier OR any other
+        //       i32 producer. The simplest legal Helix surface is to
+        //       pass `verifier_fn(handle, new_value)` directly as the
+        //       third arg, which Phase-0 already lowers via emit_ast_code.
+        //       So we do NOT synthesize the call here — we just evaluate
+        //       arg3, expecting that the caller passed the result of the
+        //       verifier predicate or `verifier_fn(...)` literally.
+        //   4. cmp eax, 0; je .reject; (verifier returned 0 → no write)
+        //   5. (verifier passed) write new_value to cell[handle].
+        //      Bounds-check handle in [0, 64).
+        //   6. .reject: eax = 0 if no write, else 1.
+        //
+        // BUT the test in test_reflection.py uses 3-arg form:
+        //   modify(h, 42, always_yes)
+        // where `always_yes` is the FN NAME (an unevaluated reference).
+        // Phase-0 parser does NOT have first-class fn pointers, so a
+        // bare `always_yes` token would parse as AST_VAR (unresolved).
+        // To keep the contract simple we DO synthesize the call here:
+        //   verifier_call: emit code for `<arg3_name>(handle_val,
+        //                                              new_value_val)`.
+        // arg3 must be an AST_VAR whose p1/p2 point at the verifier's
+        // identifier bytes. The parser already records the name; we
+        // emit a CALL to it with handle and new_value as args.
+        //
+        // For Phase-0 simplicity in the bootstrap, we go with the
+        // third-arg-as-expression approach (steps 1-6 above). The
+        // higher-level test in test_reflection.py uses Python-helixc
+        // and is independent of this bootstrap path. The bootstrap
+        // exposes `modify(h, v, predicate_expr)` where the user
+        // explicitly passes the predicate result as an arg.
+        //
+        // For the Stage 11 bootstrap heavy-gate test we use:
+        //   modify(h, 42, always_true(0))
+        // i.e. evaluate `always_true(0)` to get the predicate value,
+        // pass that as the third arg.
+        let arena_base_s = bn_helix_arena_base_s(bn_state);
+        let a0 = __arena_get(args_head + 1);                // handle expr
+        let next1 = __arena_get(args_head + 2);             // AST_ARG #2
+        let a1 = __arena_get(next1 + 1);                    // new_value expr
+        let next2 = __arena_get(next1 + 2);                 // AST_ARG #3
+        let a2 = __arena_get(next2 + 1);                    // predicate expr
+        // Eval handle, push.
+        let nh = emit_ast_code(a0, bind_state, patch_state, bn_state);
+        let nph = emit_push_rax();                          // push handle (rsp+16)
+        // Eval new_value, push.
+        let nv = emit_ast_code(a1, bind_state, patch_state, bn_state);
+        let npv = emit_push_rax();                          // push new_value (rsp+8)
+        // Eval predicate -> eax.
+        let np = emit_ast_code(a2, bind_state, patch_state, bn_state);
+        // cmp eax, 0      (83 F8 00) — 3 bytes
+        emit_byte(0x83); emit_byte(0xF8); emit_byte(0x00);
+        // pop rcx (new_value into rcx)   — 1 byte (59)
+        emit_byte(0x59);
+        // pop rdx (handle into rdx)      — 1 byte (5A)
+        emit_byte(0x5A);
+        // je .reject  (74 rel8)  — skip the write path on verifier=0.
+        // Write path emits:
+        //   - bounds check on handle in rdx
+        //     cmp edx, 0           — 3 bytes (83 FA 00)
+        //     jl  .reject_keep_zero — 2 bytes; reject if negative
+        //     cmp edx, 64           — 3 bytes (83 FA 40)
+        //     jge .reject_keep_zero — 2 bytes
+        //   - lea rax, [arena_base] — 7 bytes (placeholder)
+        //   - mov [rax + rdx*4 + DISP_BASE], ecx — 8 bytes
+        //   - mov eax, 1            — 5 bytes (return 1 = applied)
+        //   - jmp .end              — 2 bytes
+        //   .reject: xor eax, eax  — 2 bytes (return 0)
+        //   .end:
+        // Total write path = 3+2+3+2+7+7+5+2 = 31 bytes (mov [rax+rdx*4+d],
+        // ecx is 7 bytes, not 8 — 89 8C 90 disp32 = 7 bytes total).
+        // The reject path skips 31 bytes (rel8=31 fits in i8 since 31 < 127).
+        emit_byte(0x74); emit_byte(31);                      // je .reject (rel8=31)
+        // Bounds check on handle in edx:
+        emit_byte(0x83); emit_byte(0xFA); emit_byte(0x00);   // cmp edx, 0
+        emit_byte(0x7C); emit_byte(26);                      // jl .reject (rel8=26)
+        emit_byte(0x83); emit_byte(0xFA); emit_byte(0x40);   // cmp edx, 64
+        emit_byte(0x7D); emit_byte(21);                      // jge .reject (rel8=21)
+        // lea rax, [arena_base]
+        let disp_slot2 = emit_lea_rax_rip_placeholder();     // 7 bytes
+        patch_table_add(patch_state, disp_slot2, arena_base_s, 18);
+        // mov [rax + rdx*4 + disp32], ecx
+        // ModRM=8C (mod=10 disp32, reg=001 ecx, r/m=100 SIB)
+        // SIB=90 (scale=10 *4, index=010 rdx, base=000 rax)
+        // Encoding: 89 8C 90 disp32 = 7 bytes total.
+        emit_byte(0x89); emit_byte(0x8C); emit_byte(0x90);
+        let disp_base2 = 8388356;
+        emit_u32_le(disp_base2);                             // 4 bytes (3+4 = 7 byte instr)
+        // mov eax, 1   (B8 01 00 00 00)
+        emit_byte(0xB8); emit_byte(0x01); emit_byte(0x00); emit_byte(0x00); emit_byte(0x00);
+        // jmp .end  (EB rel8=2)
+        emit_byte(0xEB); emit_byte(2);
+        // .reject: xor eax, eax
+        emit_byte(0x31); emit_byte(0xC0);
+        // .end:
+        nh + nph + nv + npv + np + 3 + 1 + 1 + 2 + 3 + 2 + 3 + 2 + 7 + 7 + 5 + 2 + 2
     } else {
         0
-    }}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}
+    }}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}
 }
 
 // Audit fix #6 (cycle 1, polish): try_emit_builtin_call_impl used to

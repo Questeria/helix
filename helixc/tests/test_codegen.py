@@ -3262,6 +3262,79 @@ fn main() -> i32 {
         "mod foo { fn bar() -> i32 { 7 } } use foo::bar; "
         "fn main() -> i32 { bar() }"
     ) == 7, "Stage 10C: use foo::bar; bar() -> 7"
+    # Stage 11: reflection runtime — Quote/Splice/modify with a Phase-0
+    # cell store backed by the LAST 64 slots of the produced binary's
+    # arena (a single shared region, BSS-zero-filled at load time).
+    #
+    # Quote(expr) at compile time: allocates the next handle (0..63),
+    # emits code that evaluates expr and writes it to cell[handle], then
+    # returns the handle. Each Quote site gets a unique handle (counter
+    # threaded through bn_state).
+    #
+    # Splice(handle): runtime read cell[handle] with bounds-check —
+    # OOB handles return 0 instead of doing a wild memory read.
+    # modify(handle, new_value, predicate_expr): conditionally writes
+    # cell[handle] = new_value if predicate_expr is non-zero. Returns 1
+    # on apply, 0 on reject. Bounds check on handle (skipped only after
+    # predicate passed); OOB modify silently rejects.
+    # 11A: basic Quote(1+2); Splice(h) → 3.
+    assert compile_and_exec(
+        "fn main() -> i32 { let h = Quote(1 + 2); Splice(h) }"
+    ) == 3, "Stage 11A: Quote(1+2); Splice(h) -> 3"
+    # 11A2: Quote(42); Splice(h) → 42 (different handle, different value).
+    assert compile_and_exec(
+        "fn main() -> i32 { let h = Quote(42); Splice(h) }"
+    ) == 42, "Stage 11A2: Quote(42); Splice(h) -> 42"
+    # 11A3: two cells with separate handles, independent values.
+    assert compile_and_exec(
+        "fn main() -> i32 { let h0 = Quote(10); let h1 = Quote(32); "
+        "Splice(h0) + Splice(h1) }"
+    ) == 42, "Stage 11A3: independent cells; 10 + 32 = 42"
+    # 11B: modify with always-true predicate → write applied → Splice
+    # reads new value (42).
+    assert compile_and_exec(
+        "fn always_true(x: i32) -> i32 { 1 } "
+        "fn main() -> i32 { let h = Quote(0); "
+        "modify(h, 42, always_true(0)); Splice(h) }"
+    ) == 42, "Stage 11B: modify accept (verifier=1); cell becomes 42"
+    # 11B2: modify with always-false predicate → no write → Splice
+    # reads original value (7).
+    assert compile_and_exec(
+        "fn always_false(x: i32) -> i32 { 0 } "
+        "fn main() -> i32 { let h = Quote(7); "
+        "modify(h, 99, always_false(0)); Splice(h) }"
+    ) == 7, "Stage 11B2: modify reject (verifier=0); cell unchanged at 7"
+    # 11B3: modify return values — 1 on apply, 0 on reject.
+    assert compile_and_exec(
+        "fn always_true(x: i32) -> i32 { 1 } "
+        "fn always_false(x: i32) -> i32 { 0 } "
+        "fn main() -> i32 { let h = Quote(0); "
+        "let r1 = modify(h, 42, always_true(0)); "
+        "let r2 = modify(h, 99, always_false(0)); "
+        "r1 + r2 }"
+    ) == 1, "Stage 11B3: modify retvals; 1 (apply) + 0 (reject) = 1"
+    # 11C: independent cells don't interfere across modify calls.
+    assert compile_and_exec(
+        "fn ok(x: i32) -> i32 { 1 } "
+        "fn main() -> i32 { let h0 = Quote(0); let h1 = Quote(1); "
+        "modify(h0, 10, ok(0)); modify(h1, 32, ok(0)); "
+        "Splice(h0) + Splice(h1) }"
+    ) == 42, "Stage 11C: independent cells; modify each separately"
+    # 11D: multiple modifications compose; last one wins.
+    assert compile_and_exec(
+        "fn ok(x: i32) -> i32 { 1 } "
+        "fn main() -> i32 { let h = Quote(2); "
+        "modify(h, 10, ok(0)); modify(h, 20, ok(0)); modify(h, 42, ok(0)); "
+        "Splice(h) }"
+    ) == 42, "Stage 11D: modify compose; last write wins"
+    # 11E: OOB Splice returns 0 (safe path, no SIGSEGV).
+    assert compile_and_exec(
+        "fn main() -> i32 { let bad = 0 - 1; let v = Splice(bad); v + 42 }"
+    ) == 42, "Stage 11E: Splice OOB returns 0 cleanly; 0 + 42 = 42"
+    # 11F: OOB modify silently rejects (returns 0 without writing).
+    assert compile_and_exec(
+        "fn main() -> i32 { let r = modify(100, 999, 1); r + 42 }"
+    ) == 42, "Stage 11F: modify OOB rejects (handle >= 64); 0 + 42 = 42"
 
 
 def test_bootstrap_kovc_inline_write_file_to_arena():
