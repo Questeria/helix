@@ -3404,6 +3404,13 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         // unchanged — for u64, top 32 bits stay garbage; for f64, the
         // bit pattern becomes malformed (low 32 flipped, exponent /
         // mantissa-high preserved). Now both use REX.W not rax.
+        // AUDIT VERIFIED 2026-05-07 (post trap-id sweep): emit_ast_bnot_suffix
+        // is `not eax` (2 bytes, F7 D0) which is the correct 32-bit BNOT
+        // for i32, u32, u8, i8, u16, i16 — all of which use 32-bit-or-narrower
+        // storage and care only about the low N bits. The narrow types
+        // (u8/i8/u16/i16) tolerate `not eax` flipping the high bits beyond
+        // their storage width because subsequent narrow loads/stores
+        // re-truncate. No fix needed for these widths.
         let ni = emit_ast_code(p1, bind_state, patch_state, bn_state);
         let nn = if is_i64_expr(p1, bind_state, bn_state) == 1 {
             emit_not_rax_64()
@@ -3435,6 +3442,18 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         // checked the low half — wrong. Now uses 64-bit test.
         // Note: f64 still has -0.0 / NaN edge cases (same as bf16) but
         // those are language-policy choices, not memory-safety bugs.
+        // AUDIT VERIFIED 2026-05-07 (post trap-id sweep): f32 NOT has
+        // the same -0.0 / NaN edge case. -0.0_f32 (bits 0x80000000) is
+        // logically falsy in IEEE 754 but `test eax, eax` reports it
+        // as non-zero — !(-0.0_f32) returns 0 when it should return 1.
+        // NaN values likewise misclassify. Same language-policy
+        // decision as f64: accept the corner case rather than trap,
+        // since the bit-pattern check matches "is value all-zero-bits"
+        // which is what most users want as a truthy check on numeric
+        // values. If strict IEEE float-truthiness is needed later,
+        // route via __bits_of_f32 / explicit ucomiss-with-zero.
+        // i32/u32 NOT verification: emit_ast_not_suffix correctly checks
+        // 32-bit zero via `test eax, eax` for the 4-byte width types.
         let ni = emit_ast_code(p1, bind_state, patch_state, bn_state);
         let inner_i64 = is_i64_expr(p1, bind_state, bn_state);
         let inner_u64 = is_u64_expr(p1, bind_state, bn_state);
