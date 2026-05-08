@@ -176,6 +176,103 @@ fn kw_enum_n(sb: i32) -> i32 { __arena_get(sb + 26) }
 // Stage 7: match keyword installed at sb+27/sb+28.
 fn kw_match_s(sb: i32) -> i32 { __arena_get(sb + 27) }
 fn kw_match_n(sb: i32) -> i32 { __arena_get(sb + 28) }
+// Stage 8: generic-params scratch table for the CURRENT fn being parsed.
+// sb+29 = base (offset of 8-slot region: 4 entries x 2 fields name_s,name_l).
+// sb+30 = count (0..4). Reset to 0 by parse_fn_decl when entering, set
+// while parsing `<T1, T2, ...>`, used during AST_PARAM type resolution
+// to mark generic-typed params with type_tag = 200 + idx.
+fn gp_tab_base(sb: i32) -> i32 { __arena_get(sb + 29) }
+fn gp_tab_count(sb: i32) -> i32 { __arena_get(sb + 30) }
+fn gp_tab_reset(sb: i32) -> i32 { __arena_set(sb + 30, 0); 0 }
+fn gp_tab_add(sb: i32, name_s: i32, name_l: i32) -> i32 {
+    let count = gp_tab_count(sb);
+    if count >= 4 {
+        0 - 1
+    } else {
+        let base = gp_tab_base(sb);
+        let entry = base + count * 2;
+        __arena_set(entry, name_s);
+        __arena_set(entry + 1, name_l);
+        __arena_set(sb + 30, count + 1);
+        count
+    }
+}
+// Lookup by IDENT bytes; return 0..3 (the param idx) on hit, -1 on miss.
+fn gp_tab_lookup(sb: i32, name_s: i32, name_l: i32) -> i32 {
+    let base = gp_tab_base(sb);
+    let count = gp_tab_count(sb);
+    let mut i: i32 = 0;
+    let mut found: i32 = 0 - 1;
+    while i < count {
+        let entry = base + i * 2;
+        let ns = __arena_get(entry);
+        let nl = __arena_get(entry + 1);
+        if byte_eq(name_s, name_l, ns, nl) == 1 {
+            found = i;
+            i = count;
+        } else {
+            i = i + 1;
+        };
+    }
+    found
+}
+// Stage 8: mono-instantiation request table. Entries pushed by turbofish-
+// at-call-site code in parse_primary; consumed at end of parse_program
+// to synthesize cloned AST_FN_DECL nodes with concrete-type substitution.
+// sb+31 = base (offset of 192-slot region: 32 entries x 6 fields).
+// sb+32 = count (0..32).
+// Entry layout (6 slots):
+//   slot 0: orig_name_s
+//   slot 1: orig_name_l
+//   slot 2: mangled_name_s (in arena)
+//   slot 3: mangled_name_l
+//   slot 4: type_args_packed (4 bits per arg, up to 6 args)
+//   slot 5: type_args_count (0..6)
+fn mr_tab_base(sb: i32) -> i32 { __arena_get(sb + 31) }
+fn mr_tab_count(sb: i32) -> i32 { __arena_get(sb + 32) }
+fn mr_tab_add(sb: i32, orig_s: i32, orig_l: i32, mang_s: i32, mang_l: i32, packed: i32, ta_count: i32) -> i32 {
+    let count = mr_tab_count(sb);
+    if count >= 32 {
+        0 - 1
+    } else {
+        let base = mr_tab_base(sb);
+        let entry = base + count * 6;
+        __arena_set(entry, orig_s);
+        __arena_set(entry + 1, orig_l);
+        __arena_set(entry + 2, mang_s);
+        __arena_set(entry + 3, mang_l);
+        __arena_set(entry + 4, packed);
+        __arena_set(entry + 5, ta_count);
+        __arena_set(sb + 32, count + 1);
+        count
+    }
+}
+// Lookup an instantiation by (orig_name, type_args_packed, ta_count).
+// Returns the entry idx on hit (so caller can re-use mangled name), -1 on miss.
+fn mr_tab_lookup(sb: i32, orig_s: i32, orig_l: i32, packed: i32, ta_count: i32) -> i32 {
+    let base = mr_tab_base(sb);
+    let count = mr_tab_count(sb);
+    let mut i: i32 = 0;
+    let mut found: i32 = 0 - 1;
+    while i < count {
+        let entry = base + i * 6;
+        let ns = __arena_get(entry);
+        let nl = __arena_get(entry + 1);
+        let p = __arena_get(entry + 4);
+        let c = __arena_get(entry + 5);
+        if byte_eq(orig_s, orig_l, ns, nl) == 1 {
+            if p == packed {
+                if c == ta_count {
+                    found = i;
+                    i = count;
+                } else { i = i + 1; }
+            } else { i = i + 1; }
+        } else {
+            i = i + 1;
+        };
+    }
+    found
+}
 fn var_struct_tab_add(sb: i32, name_s: i32, name_l: i32, struct_idx: i32) -> i32 {
     let count = var_struct_tab_count(sb);
     if count >= 4 {
@@ -1512,12 +1609,13 @@ fn install_keywords(sb: i32) -> i32 {
 // Reserves 7 state slots, then dispatches into parse_expr.
 // --------------------------------------------------------------
 fn parse_top(tok_base: i32) -> i32 {
-    // 29 state slots: cursor + 7 keyword (start, len) pairs +
+    // 33 state slots: cursor + 7 keyword (start, len) pairs +
     // struct_table (base + count) + var_struct_table (base + count) +
     // last_struct_idx scratch + enum_table (base + count) +
     // var_enum_table (base + count) + last_enum_idx scratch +
-    // enum keyword (start + len) + match keyword (start + len).
-    // Stage 6 added slots 20..26; Stage 7 added 27..28.
+    // enum keyword (start + len) + match keyword (start + len) +
+    // generic_params (base + count) + mono_request (base + count).
+    // Stage 6 added slots 20..26; Stage 7 added 27..28; Stage 8 added 29..32.
     let cur_slot = __arena_push(0);
     __arena_push(0); __arena_push(0); __arena_push(0); __arena_push(0);
     __arena_push(0); __arena_push(0); __arena_push(0); __arena_push(0);
@@ -1530,11 +1628,29 @@ fn parse_top(tok_base: i32) -> i32 {
     __arena_push(0); __arena_push(0); __arena_push(0);
     // Stage 7: slots 27..28 = match keyword (start + len).
     __arena_push(0); __arena_push(0);
+    // Stage 8: slots 29..32 = generic_params (base + count) + mono_request
+    // (base + count). gp scratch reset per fn; mono_request accumulates.
+    __arena_push(0); __arena_push(0); __arena_push(0); __arena_push(0);
     install_keywords(cur_slot);
     var_struct_tab_init(cur_slot);
     var_enum_tab_init(cur_slot);
     __arena_set(cur_slot + 19, 0 - 1);
     __arena_set(cur_slot + 24, 0 - 1);
+    // Stage 8: gp_tab region (8 slots, 4 entries x 2 fields).
+    let gp_base = __arena_push(0);
+    __arena_push(0); __arena_push(0); __arena_push(0); __arena_push(0);
+    __arena_push(0); __arena_push(0); __arena_push(0);
+    __arena_set(cur_slot + 29, gp_base);
+    __arena_set(cur_slot + 30, 0);
+    // Stage 8: mr_tab region (192 slots, 32 entries x 6 fields).
+    let mr_base = __arena_push(0);
+    let mut mri: i32 = 1;
+    while mri < 192 {
+        __arena_push(0);
+        mri = mri + 1;
+    }
+    __arena_set(cur_slot + 31, mr_base);
+    __arena_set(cur_slot + 32, 0);
     // Peek the first token. If it's `fn`, parse a function decl.
     // Otherwise treat the whole input as a single expression
     // (legacy mode) for backward compat with all existing tests.
