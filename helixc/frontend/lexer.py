@@ -148,11 +148,16 @@ class Lexer:
         self.pos = 0
         self.line = 1
         self.col = 1
+        # Speedup #6: cache len(self.src). The source string is immutable
+        # after construction, so its length never changes. _peek and _at_eof
+        # were each calling len(self.src) on every invocation (1.5M+ calls
+        # per bootstrap build → ~1.3 sec spent in the len() built-in).
+        self._n = len(source)
 
     # ---- char helpers ----
     def _peek(self, ahead: int = 0) -> str:
         p = self.pos + ahead
-        return self.src[p] if p < len(self.src) else ""
+        return self.src[p] if p < self._n else ""
 
     def _advance(self) -> str:
         c = self.src[self.pos]
@@ -175,7 +180,7 @@ class Lexer:
         return False
 
     def _at_eof(self) -> bool:
-        return self.pos >= len(self.src)
+        return self.pos >= self._n
 
     # ---- main loop ----
     def tokens(self) -> list[Token]:
