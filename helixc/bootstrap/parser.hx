@@ -548,7 +548,15 @@ fn parse_unary(tok_base: i32, sb: i32) -> i32 {
         // Stage 4 iter B + E: postfix tuple field access AND array index.
         //   .NUM         → AST_TUPLE_FIELD (tag 52, static idx).
         //   [idx_expr]   → AST_INDEX (tag 53, dynamic idx).
+        // Stage 5 Iter D: chained `.IDENT.IDENT` for nested structs.
+        //   Track cur_struct_idx through the chain: starts at the LHS
+        //   var's struct_idx; after each `.IDENT` whose field is a
+        //   struct, update to that field's struct_idx (and emit tag 56
+        //   AST_TUPLE_FIELD_64 — 8-byte read of the child pointer);
+        //   else emit tag 52 (4-byte read) and reset cur_struct_idx to
+        //   -1, which makes any further `.IDENT` bail.
         let mut prim = parse_primary(tok_base, sb);
+        let mut cur_struct_idx: i32 = 0 - 1;
         let mut keep_p: i32 = 1;
         while keep_p == 1 {
             let pk = cur_get(sb);
@@ -560,28 +568,41 @@ fn parse_unary(tok_base: i32, sb: i32) -> i32 {
                     let idx_val = tok_p1(tok_base, pk + 1);
                     cur_advance(sb);
                     prim = mk_node(52, prim, idx_val, 0);
+                    cur_struct_idx = 0 - 1;
                 } else { if nt == 2 {
                     // Stage 5 Iter B: `.IDENT` named field access.
-                    // Currently only supported when the LHS is an
-                    // AST_VAR (tag 1) — we walk back the var's
-                    // struct_idx via var_struct_tab_lookup. Other
-                    // prim shapes (e.g. inline struct lit `Pt{1,2}.x`)
-                    // not yet supported; bail to keep_p=0 in that case.
-                    let prim_tag = __arena_get(prim);
-                    if prim_tag == 1 {
-                        let var_s = __arena_get(prim + 1);
-                        let var_l = __arena_get(prim + 2);
-                        let s_idx_l = var_struct_tab_lookup(sb, var_s, var_l);
-                        if s_idx_l >= 0 {
-                            cur_advance(sb);                       // consume '.'
-                            let fk = cur_get(sb);
-                            let field_s = tok_p2(tok_base, fk);
-                            let field_l = tok_p3(tok_base, fk);
-                            cur_advance(sb);                       // consume IDENT
-                            let f_idx = struct_tab_field_lookup(sb, s_idx_l, field_s, field_l);
-                            if f_idx >= 0 {
+                    // Iter D: cur_struct_idx may already be set from a
+                    // prior `.IDENT` step in the chain. If still -1
+                    // (first iteration), look up the LHS var.
+                    let mut lhs_struct_idx: i32 = cur_struct_idx;
+                    if lhs_struct_idx < 0 {
+                        let prim_tag = __arena_get(prim);
+                        if prim_tag == 1 {
+                            let var_s = __arena_get(prim + 1);
+                            let var_l = __arena_get(prim + 2);
+                            lhs_struct_idx = var_struct_tab_lookup(sb, var_s, var_l);
+                        };
+                    };
+                    if lhs_struct_idx >= 0 {
+                        cur_advance(sb);                       // consume '.'
+                        let fk = cur_get(sb);
+                        let field_s = tok_p2(tok_base, fk);
+                        let field_l = tok_p3(tok_base, fk);
+                        cur_advance(sb);                       // consume IDENT
+                        let f_idx = struct_tab_field_lookup(sb, lhs_struct_idx, field_s, field_l);
+                        if f_idx >= 0 {
+                            // Iter D: is this field struct-typed?
+                            let f_struct_idx = struct_tab_field_struct_idx(sb, lhs_struct_idx, f_idx);
+                            if f_struct_idx >= 0 {
+                                // Nested struct field: emit 8-byte read
+                                // (tag 56) and propagate struct_idx
+                                // forward for the next chained access.
+                                prim = mk_node(56, prim, f_idx, 0);
+                                cur_struct_idx = f_struct_idx;
+                            } else {
                                 prim = mk_node(52, prim, f_idx, 0);
-                            } else { keep_p = 0; };
+                                cur_struct_idx = 0 - 1;
+                            };
                         } else { keep_p = 0; };
                     } else { keep_p = 0; };
                 } else { keep_p = 0; }};
@@ -590,6 +611,7 @@ fn parse_unary(tok_base: i32, sb: i32) -> i32 {
                 let idx_expr = parse_expr(tok_base, sb);
                 cur_advance(sb);                       // skip ']'
                 prim = mk_node(53, prim, idx_expr, 0);
+                cur_struct_idx = 0 - 1;
             } else { keep_p = 0; }; };
         }
         prim
