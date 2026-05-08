@@ -3373,6 +3373,52 @@ fn main() -> i32 {
         "fn loss2(x: f64) -> f64 { helper(x) + x } "
         "fn main() -> i32 { __f64_to_i32(grad(loss2)(3.0_f64)) }"
     ) == 7, "Stage 12F: grad with helper-fn inlining; 2x+1 at x=3 -> 7"
+    # Stage 14: reverse-mode automatic differentiation.
+    # `grad_rev_all(loss)(args).dx` desugars at parse time into a
+    # synthesized fn `<loss>__grad_dx(args)` whose body is the
+    # symbolic partial derivative of loss w.r.t. the matching param.
+    # Algorithm: top-down adjoint propagation (true reverse-mode);
+    # each binop splits the adjoint per local Jacobian, AST_VAR
+    # leaves matching the target param accumulate into a bucket,
+    # bucket is summed into the synthesized fn body.
+    # 14A: d/dx (xy + x^2) at (2,3) = y + 2x = 7.
+    assert compile_and_exec(
+        "fn loss(x: f64, y: f64) -> f64 { x * y + x * x } "
+        "fn main() -> i32 { __f64_to_i32(grad_rev_all(loss)(2.0_f64, 3.0_f64).dx) }"
+    ) == 7, "Stage 14A: grad_rev_all(xy+x^2)(2,3).dx = y+2x = 7"
+    # 14B: d/dy (xy + x^2) at (2,3) = x = 2.
+    assert compile_and_exec(
+        "fn loss(x: f64, y: f64) -> f64 { x * y + x * x } "
+        "fn main() -> i32 { __f64_to_i32(grad_rev_all(loss)(2.0_f64, 3.0_f64).dy) }"
+    ) == 2, "Stage 14B: grad_rev_all(xy+x^2)(2,3).dy = x = 2"
+    # 14C: linear loss, two params. d/dx (3x + 5y) = 3 (any args).
+    assert compile_and_exec(
+        "fn linear(x: f64, y: f64) -> f64 { 3.0_f64 * x + 5.0_f64 * y } "
+        "fn main() -> i32 { __f64_to_i32(grad_rev_all(linear)(7.0_f64, 11.0_f64).dx) }"
+    ) == 3, "Stage 14C: grad_rev_all(3x+5y).dx = 3"
+    # 14D: linear loss, .dy.
+    assert compile_and_exec(
+        "fn linear(x: f64, y: f64) -> f64 { 3.0_f64 * x + 5.0_f64 * y } "
+        "fn main() -> i32 { __f64_to_i32(grad_rev_all(linear)(7.0_f64, 11.0_f64).dy) }"
+    ) == 5, "Stage 14D: grad_rev_all(3x+5y).dy = 5"
+    # 14E: three params. d/dz (xy + yz + zx) at (2,3,5) = y + x = 5.
+    assert compile_and_exec(
+        "fn three(x: f64, y: f64, z: f64) -> f64 { x * y + y * z + z * x } "
+        "fn main() -> i32 { __f64_to_i32(grad_rev_all(three)(2.0_f64, 3.0_f64, 5.0_f64).dz) }"
+    ) == 5, "Stage 14E: grad_rev_all(xy+yz+zx)(2,3,5).dz = y+x = 5"
+    # 14F: subtraction. d/dx (x - 3*x) = 1 - 3 = -2; 8-bit cast = 254.
+    assert compile_and_exec(
+        "fn neg(x: f64) -> f64 { x - 3.0_f64 * x } "
+        "fn main() -> i32 { __f64_to_i32(grad_rev_all(neg)(1.0_f64).dx) }"
+    ) == 254, "Stage 14F: grad_rev_all(x-3x).dx = -2; cast yields 254"
+    # 14G: helper-fn inlining (Stage 13 + Stage 14 compose). Verifies
+    # that inline_user_calls runs before reverse-mode propagation.
+    # d/dx (h(x) + x) = d/dx (x*x + x) = 2x + 1 = 7 at x=3.
+    assert compile_and_exec(
+        "fn h(x: f64) -> f64 { x * x } "
+        "fn loss2(x: f64) -> f64 { h(x) + x } "
+        "fn main() -> i32 { __f64_to_i32(grad_rev_all(loss2)(3.0_f64).dx) }"
+    ) == 7, "Stage 14G: grad_rev_all with helper inlining = 7"
 
 
 def test_bootstrap_kovc_inline_write_file_to_arena():
