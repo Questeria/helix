@@ -3110,19 +3110,25 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         let r_f = is_f32_expr(p2, bind_state, bn_state);
         // Speedup #4 wire-in: bf16 trap with id = 2001 (AST_ADD * 1000 + 1).
         let na = if l_bf == 1 { emit_trap_with_id(2001) } else { if r_bf == 1 { emit_trap_with_id(2001) } else {
+            // Speedup #4 wire-in: AST_ADD mixed-type trap ids 2010-2041.
+            //   2010: l_d=1, r_d=0  (f64 + non-f64)
+            //   2011: r_d=1, l_d=0  (non-f64 + f64)
+            //   2020/2021: i64 mismatch
+            //   2030/2031: u64 mismatch
+            //   2040/2041: f32 mismatch
             if l_d == 1 {
-                if r_d == 1 { emit_addsd() } else { emit_ud2_trap() }
-            } else { if r_d == 1 { emit_ud2_trap() } else {
+                if r_d == 1 { emit_addsd() } else { emit_trap_with_id(2010) }
+            } else { if r_d == 1 { emit_trap_with_id(2011) } else {
                 if l_i64 == 1 {
-                    if r_i64 == 1 { emit_add_rax_rcx_64() } else { emit_ud2_trap() }
-                } else { if r_i64 == 1 { emit_ud2_trap() } else {
+                    if r_i64 == 1 { emit_add_rax_rcx_64() } else { emit_trap_with_id(2020) }
+                } else { if r_i64 == 1 { emit_trap_with_id(2021) } else {
                     if l_u64 == 1 {
-                        if r_u64 == 1 { emit_add_rax_rcx_64() } else { emit_ud2_trap() }
-                    } else { if r_u64 == 1 { emit_ud2_trap() } else {
+                        if r_u64 == 1 { emit_add_rax_rcx_64() } else { emit_trap_with_id(2030) }
+                    } else { if r_u64 == 1 { emit_trap_with_id(2031) } else {
                         if l_f == 1 {
-                            if r_f == 1 { emit_addss() } else { emit_ud2_trap() }
+                            if r_f == 1 { emit_addss() } else { emit_trap_with_id(2040) }
                         } else {
-                            if r_f == 1 { emit_ud2_trap() } else { emit_add_eax_ecx() }
+                            if r_f == 1 { emit_trap_with_id(2041) } else { emit_add_eax_ecx() }
                         }
                     }}
                 }}
@@ -3155,19 +3161,20 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         let r_f = is_f32_expr(p2, bind_state, bn_state);
         // Speedup #4 wire-in: bf16 trap id = 3001 (AST_SUB * 1000 + 1).
         let na = if l_bf == 1 { emit_trap_with_id(3001) } else { if r_bf == 1 { emit_trap_with_id(3001) } else {
+            // Speedup #4 wire-in: AST_SUB mixed-type trap ids 3010-3041.
             if l_d == 1 {
-                if r_d == 1 { emit_subsd() } else { emit_ud2_trap() }
-            } else { if r_d == 1 { emit_ud2_trap() } else {
+                if r_d == 1 { emit_subsd() } else { emit_trap_with_id(3010) }
+            } else { if r_d == 1 { emit_trap_with_id(3011) } else {
                 if l_i64 == 1 {
-                    if r_i64 == 1 { emit_sub_rax_rcx_64() } else { emit_ud2_trap() }
-                } else { if r_i64 == 1 { emit_ud2_trap() } else {
+                    if r_i64 == 1 { emit_sub_rax_rcx_64() } else { emit_trap_with_id(3020) }
+                } else { if r_i64 == 1 { emit_trap_with_id(3021) } else {
                     if l_u64 == 1 {
-                        if r_u64 == 1 { emit_sub_rax_rcx_64() } else { emit_ud2_trap() }
-                    } else { if r_u64 == 1 { emit_ud2_trap() } else {
+                        if r_u64 == 1 { emit_sub_rax_rcx_64() } else { emit_trap_with_id(3030) }
+                    } else { if r_u64 == 1 { emit_trap_with_id(3031) } else {
                         if l_f == 1 {
-                            if r_f == 1 { emit_subss() } else { emit_ud2_trap() }
+                            if r_f == 1 { emit_subss() } else { emit_trap_with_id(3040) }
                         } else {
-                            if r_f == 1 { emit_ud2_trap() } else { emit_sub_eax_ecx() }
+                            if r_f == 1 { emit_trap_with_id(3041) } else { emit_sub_eax_ecx() }
                         }
                     }}
                 }}
@@ -3205,19 +3212,20 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         let r_f = is_f32_expr(p2, bind_state, bn_state);
         // Speedup #4 wire-in: bf16 trap id = 4001 (AST_MUL * 1000 + 1).
         let na = if l_bf == 1 { emit_trap_with_id(4001) } else { if r_bf == 1 { emit_trap_with_id(4001) } else {
+            // Speedup #4 wire-in: AST_MUL mixed-type trap ids 4010-4041.
             if l_d == 1 {
-                if r_d == 1 { emit_mulsd() } else { emit_ud2_trap() }
-            } else { if r_d == 1 { emit_ud2_trap() } else {
+                if r_d == 1 { emit_mulsd() } else { emit_trap_with_id(4010) }
+            } else { if r_d == 1 { emit_trap_with_id(4011) } else {
                 if l_i64 == 1 {
-                    if r_i64 == 1 { emit_imul_rax_rcx_64() } else { emit_ud2_trap() }
-                } else { if r_i64 == 1 { emit_ud2_trap() } else {
+                    if r_i64 == 1 { emit_imul_rax_rcx_64() } else { emit_trap_with_id(4020) }
+                } else { if r_i64 == 1 { emit_trap_with_id(4021) } else {
                     if l_u64 == 1 {
-                        if r_u64 == 1 { emit_imul_rax_rcx_64() } else { emit_ud2_trap() }
-                    } else { if r_u64 == 1 { emit_ud2_trap() } else {
+                        if r_u64 == 1 { emit_imul_rax_rcx_64() } else { emit_trap_with_id(4030) }
+                    } else { if r_u64 == 1 { emit_trap_with_id(4031) } else {
                         if l_f == 1 {
-                            if r_f == 1 { emit_mulss() } else { emit_ud2_trap() }
+                            if r_f == 1 { emit_mulss() } else { emit_trap_with_id(4040) }
                         } else {
-                            if r_f == 1 { emit_ud2_trap() } else { emit_imul_eax_ecx() }
+                            if r_f == 1 { emit_trap_with_id(4041) } else { emit_imul_eax_ecx() }
                         }
                     }}
                 }}
@@ -3260,21 +3268,23 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         let r_u32 = is_u32_expr(p2, bind_state, bn_state);
         // Speedup #4 wire-in: bf16 trap id = 5001 (AST_DIV * 1000 + 1).
         let na = if l_bf == 1 { emit_trap_with_id(5001) } else { if r_bf == 1 { emit_trap_with_id(5001) } else {
+            // Speedup #4 wire-in: AST_DIV mixed-type trap ids 5010-5051.
+            // Adds u32 mismatch (5050/5051) on top of the binary-arith pattern.
             if l_d == 1 {
-                if r_d == 1 { emit_divsd() } else { emit_ud2_trap() }
-            } else { if r_d == 1 { emit_ud2_trap() } else {
+                if r_d == 1 { emit_divsd() } else { emit_trap_with_id(5010) }
+            } else { if r_d == 1 { emit_trap_with_id(5011) } else {
                 if l_i64 == 1 {
-                    if r_i64 == 1 { emit_idiv_rax_rcx_64() } else { emit_ud2_trap() }
-                } else { if r_i64 == 1 { emit_ud2_trap() } else {
+                    if r_i64 == 1 { emit_idiv_rax_rcx_64() } else { emit_trap_with_id(5020) }
+                } else { if r_i64 == 1 { emit_trap_with_id(5021) } else {
                     if l_u64 == 1 {
-                        if r_u64 == 1 { emit_div_rax_rcx_64_u() } else { emit_ud2_trap() }
-                    } else { if r_u64 == 1 { emit_ud2_trap() } else {
+                        if r_u64 == 1 { emit_div_rax_rcx_64_u() } else { emit_trap_with_id(5030) }
+                    } else { if r_u64 == 1 { emit_trap_with_id(5031) } else {
                         if l_f == 1 {
-                            if r_f == 1 { emit_divss() } else { emit_ud2_trap() }
-                        } else { if r_f == 1 { emit_ud2_trap() } else {
+                            if r_f == 1 { emit_divss() } else { emit_trap_with_id(5040) }
+                        } else { if r_f == 1 { emit_trap_with_id(5041) } else {
                             if l_u32 == 1 {
-                                if r_u32 == 1 { emit_div_eax_ecx_u() } else { emit_ud2_trap() }
-                            } else { if r_u32 == 1 { emit_ud2_trap() } else { emit_idiv_eax_ecx() } }
+                                if r_u32 == 1 { emit_div_eax_ecx_u() } else { emit_trap_with_id(5050) }
+                            } else { if r_u32 == 1 { emit_trap_with_id(5051) } else { emit_idiv_eax_ecx() } }
                         }}
                     }}
                 }}
@@ -3320,23 +3330,27 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         let r_f = is_f32_expr(p2, bind_state, bn_state);
         // Speedup #4 wire-in: bf16 trap id = 24001 (AST_MOD * 1000 + 1).
         let na = if l_bf == 1 { emit_trap_with_id(24001) } else { if r_bf == 1 { emit_trap_with_id(24001) } else {
+            // Speedup #4 wire-in: AST_MOD mixed-type + float-mod trap ids.
+            // 24010: any-d (no SSE remainder; this also covers l_d=1+r_d=1).
+            // 24040: any-f (no SSE remainder).
+            // 24050/24051: u32 mismatch.
             if l_d == 1 {
                 // f64 % f64 → ud2 (no SSE remainder); mixed → ud2.
-                emit_ud2_trap()
-            } else { if r_d == 1 { emit_ud2_trap() } else {
+                emit_trap_with_id(24010)
+            } else { if r_d == 1 { emit_trap_with_id(24011) } else {
                 if l_i64 == 1 {
-                    if r_i64 == 1 { emit_imod_rax_rcx_64() } else { emit_ud2_trap() }
-                } else { if r_i64 == 1 { emit_ud2_trap() } else {
+                    if r_i64 == 1 { emit_imod_rax_rcx_64() } else { emit_trap_with_id(24020) }
+                } else { if r_i64 == 1 { emit_trap_with_id(24021) } else {
                     if l_u64 == 1 {
-                        if r_u64 == 1 { emit_imod_rax_rcx_64_u() } else { emit_ud2_trap() }
-                    } else { if r_u64 == 1 { emit_ud2_trap() } else {
+                        if r_u64 == 1 { emit_imod_rax_rcx_64_u() } else { emit_trap_with_id(24030) }
+                    } else { if r_u64 == 1 { emit_trap_with_id(24031) } else {
                         if l_f == 1 {
                             // f32 % f32 → ud2; mixed → ud2.
-                            emit_ud2_trap()
-                        } else { if r_f == 1 { emit_ud2_trap() } else {
+                            emit_trap_with_id(24040)
+                        } else { if r_f == 1 { emit_trap_with_id(24041) } else {
                             if l_u32 == 1 {
-                                if r_u32 == 1 { emit_imod_eax_ecx_u() } else { emit_ud2_trap() }
-                            } else { if r_u32 == 1 { emit_ud2_trap() } else { emit_imod_eax_ecx() } }
+                                if r_u32 == 1 { emit_imod_eax_ecx_u() } else { emit_trap_with_id(24050) }
+                            } else { if r_u32 == 1 { emit_trap_with_id(24051) } else { emit_imod_eax_ecx() } }
                         }}
                     }}
                 }}
