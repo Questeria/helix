@@ -732,6 +732,48 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
             cur_advance(sb);     // ')'
             inner
         }
+    } else { if t == 20 {
+        // Stage 4 iteration D: static array literal [a, b, c].
+        // Same shape as tuples (tag 50/51) but uses TK_LBRACK / TK_RBRACK
+        // delimiters. Reuses AST_TUPLE_CONS (tag 51) for the chain and
+        // AST_TUPLE_LIT (tag 50) for the head — codegen-identical
+        // (homogeneous arrays vs heterogeneous tuples differ only in
+        // static type-checking, which Phase 0 doesn't enforce strictly).
+        cur_advance(sb);     // skip '['
+        let pk = cur_get(sb);
+        let pt = tok_tag(tok_base, pk);
+        if pt == 21 {
+            // Empty array `[]` — arity 0. Just allocate a 0-byte region.
+            cur_advance(sb);    // skip ']'
+            mk_node(50, 0, 0, 0)
+        } else {
+            let first = parse_expr(tok_base, sb);
+            let mut head_idx: i32 = mk_node(51, first, 0, 0);
+            let mut tail_idx: i32 = head_idx;
+            let mut arity: i32 = 1;
+            let mut keep: i32 = 1;
+            while keep == 1 {
+                let ck = cur_get(sb);
+                let ct = tok_tag(tok_base, ck);
+                if ct == 13 {
+                    cur_advance(sb);    // skip ','
+                    // Allow trailing comma.
+                    let pk2 = cur_get(sb);
+                    let pt2 = tok_tag(tok_base, pk2);
+                    if pt2 == 21 { keep = 0; }
+                    else {
+                        let child = parse_expr(tok_base, sb);
+                        let new_node = mk_node(51, child, 0, 0);
+                        let prev_tail = tail_idx;
+                        __arena_set(prev_tail + 2, new_node);
+                        tail_idx = new_node;
+                        arity = arity + 1;
+                    };
+                } else { keep = 0; };
+            }
+            cur_advance(sb);    // skip ']'
+            mk_node(50, arity, head_idx, 0)
+        }
     } else {
         // Audit-7 fix: don't advance past TK_EOF (tag 0). Without
         // this guard, a malformed input like `1 + (` walks the
@@ -756,7 +798,7 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
             };
         };
         mk_node(99, t, 0, 0)
-    }}}}}}}}}}}}}}
+    }}}}}}}}}}}}}}}
 }
 
 // --------------------------------------------------------------

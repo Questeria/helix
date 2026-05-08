@@ -2381,6 +2381,21 @@ fn main() -> i32 {
     assert compile_and_exec(
         "fn main() -> i32 { let t = (1, 2, 3) ; t.0 + t.1 + t.2 + 36 }"
     ) == 42, "multiple field accesses in arithmetic (1+2+3+36)"
+    # Stage 4 iteration D: static array literal `[a, b, c]`.
+    # Reuses AST_TUPLE_LIT (tag 50) + AST_TUPLE_CONS (tag 51) — same
+    # codegen as tuples since at the machine level both are
+    # heterogeneous-i32-slot stack regions with i64-shaped pointer.
+    # Field access via .0/.1/.2 works the same way (Phase 0 doesn't
+    # enforce homogeneity).
+    assert compile_and_exec(
+        "fn main() -> i32 { let arr = [10, 20, 30] ; 42 }"
+    ) == 42, "array literal smoke (no read-back)"
+    assert compile_and_exec(
+        "fn main() -> i32 { [10, 20, 30].1 + 22 }"
+    ) == 42, "array literal field access"
+    assert compile_and_exec(
+        "fn main() -> i32 { let arr = [1, 2, 3] ; arr.0 + arr.1 + arr.2 + 36 }"
+    ) == 42, "array stored in let, multi-field read"
     # Stage 1.5 audit fix: bf16 comparison ops trap. Pre-fix:
     # AST_LT/GT/LE/GE/EQ/NE cascades had no is_bf16_expr check — bf16
     # operands fell through to integer compare on bit patterns. This is
