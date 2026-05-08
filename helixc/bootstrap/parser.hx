@@ -377,6 +377,70 @@ fn set_impl_pending_tail(sb: i32, v: i32) -> i32 { __arena_set(sb + 44, v); 0 }
 // method-call sugar `x.eq(b)` to mangle to `<TypeName>__eq(x, b)`.
 fn var_type_tab_base(sb: i32) -> i32 { __arena_get(sb + 45) }
 fn var_type_tab_count(sb: i32) -> i32 { __arena_get(sb + 46) }
+// Stage 10: module + use state.
+// sb+60/61 = kw_mod (start, len). "mod" = 109 111 100.
+// sb+62/63 = kw_use (start, len). "use" = 117 115 101.
+// sb+64/65 = use_table base/count. Stride 4: (alias_s, alias_l, mang_s, mang_l).
+//   Cap 8 use entries. Built by parse_use_decl; consulted by parse_primary's
+//   plain-IDENT call path to replace `bar(args)` with `foo__bar(args)` when
+//   `bar` was brought into scope via `use foo::bar;`.
+// sb+66/67 = mod_pending head/tail. parse_mod_decl walks each fn inside a
+//   `mod foo { ... }` block, mangles its name to `foo__bar`, and appends it
+//   to this chain (wrapped in AST_FN_LIST tag-15 nodes). parse_program splices
+//   the chain in front of the user's fns (alongside impl_pending and
+//   cl_pending). Reset to 0 by parse_top.
+fn kw_mod_s(sb: i32) -> i32 { __arena_get(sb + 60) }
+fn kw_mod_n(sb: i32) -> i32 { __arena_get(sb + 61) }
+fn kw_use_s(sb: i32) -> i32 { __arena_get(sb + 62) }
+fn kw_use_n(sb: i32) -> i32 { __arena_get(sb + 63) }
+fn use_tab_base(sb: i32) -> i32 { __arena_get(sb + 64) }
+fn use_tab_count(sb: i32) -> i32 { __arena_get(sb + 65) }
+fn mod_pending_head(sb: i32) -> i32 { __arena_get(sb + 66) }
+fn mod_pending_tail(sb: i32) -> i32 { __arena_get(sb + 67) }
+fn set_mod_pending_head(sb: i32, v: i32) -> i32 { __arena_set(sb + 66, v); 0 }
+fn set_mod_pending_tail(sb: i32, v: i32) -> i32 { __arena_set(sb + 67, v); 0 }
+// Append a use-table entry. Returns 0 on success, -1 on overflow (cap 8).
+fn use_tab_add(sb: i32, alias_s: i32, alias_l: i32, mang_s: i32, mang_l: i32) -> i32 {
+    let count = use_tab_count(sb);
+    if count >= 8 {
+        0 - 1
+    } else {
+        let base = use_tab_base(sb);
+        let entry = base + count * 4;
+        __arena_set(entry, alias_s);
+        __arena_set(entry + 1, alias_l);
+        __arena_set(entry + 2, mang_s);
+        __arena_set(entry + 3, mang_l);
+        __arena_set(sb + 65, count + 1);
+        0
+    }
+}
+// Look up an alias by name. Returns (mang_s * 65536 + mang_l) packed on hit,
+// 0 on miss. Caller decodes by `>> 16` and `& 0xFFFF`. Phase-0 mang_l fits
+// in 16 bits (typical mangled names are <100 bytes, well under 65535).
+// Returns 0 on miss; mang_s itself is never 0 in practice since names are
+// always pushed AFTER initial arena setup.
+fn use_tab_lookup(sb: i32, name_s: i32, name_l: i32) -> i32 {
+    let base = use_tab_base(sb);
+    let count = use_tab_count(sb);
+    let mut i: i32 = 0;
+    let mut found: i32 = 0;
+    while i < count {
+        let entry = base + i * 4;
+        let ans = __arena_get(entry);
+        let anl = __arena_get(entry + 1);
+        if byte_eq(name_s, name_l, ans, anl) == 1 {
+            let ms = __arena_get(entry + 2);
+            let ml = __arena_get(entry + 3);
+            found = ms * 65536 + ml;
+            i = count;
+        } else {
+            i = i + 1;
+        };
+    }
+    found
+}
+
 // Stage 9: closure state.
 // sb+47 = closure-active flag (1 if currently parsing closure body —
 //   AST_VAR creation hooks consult this to record captured names).
@@ -2535,6 +2599,20 @@ fn var_type_tab_init(sb: i32) -> i32 {
     0
 }
 
+// Stage 10: use_table region — 32 slots = 8 entries x 4 fields
+// (alias_s, alias_l, mang_s, mang_l). Cap 8 use entries.
+fn use_tab_init(sb: i32) -> i32 {
+    let ut_base = __arena_push(0);
+    let mut uti: i32 = 1;
+    while uti < 32 {
+        __arena_push(0);
+        uti = uti + 1;
+    }
+    __arena_set(sb + 64, ut_base);
+    __arena_set(sb + 65, 0);
+    0
+}
+
 // Stage 9: closure tables init.
 //   cl_param_tab: cap 4 closure params, stride 2 (name_s, name_l) = 8 slots.
 //   cl_capture_tab: cap 4 captures, stride 2 = 8 slots.
@@ -2630,6 +2708,13 @@ fn install_keywords(sb: i32) -> i32 {
     trait_tab_init(sb);
     impl_tab_init(sb);
     var_type_tab_init(sb);
+    // Stage 10: "mod" = 109 111 100, "use" = 117 115 101.
+    let mod_s = __arena_push(109); __arena_push(111); __arena_push(100);
+    __arena_set(sb + 60, mod_s);
+    __arena_set(sb + 61, 3);
+    let use_s = __arena_push(117); __arena_push(115); __arena_push(101);
+    __arena_set(sb + 62, use_s);
+    __arena_set(sb + 63, 3);
     0
 }
 
@@ -2683,6 +2768,13 @@ fn parse_top(tok_base: i32) -> i32 {
     __arena_push(0); __arena_push(0); __arena_push(0); __arena_push(0);
     __arena_push(0); __arena_push(0); __arena_push(0); __arena_push(0);
     __arena_push(0);
+    // Stage 10: slots 60..67 (8 slots) for module/use state.
+    //   60/61 = kw_mod (start, len)
+    //   62/63 = kw_use (start, len)
+    //   64/65 = use_table base/count
+    //   66/67 = mod_pending head/tail (synthesized fn-list from `mod` blocks)
+    __arena_push(0); __arena_push(0); __arena_push(0); __arena_push(0);
+    __arena_push(0); __arena_push(0); __arena_push(0); __arena_push(0);
     install_keywords(cur_slot);
     var_struct_tab_init(cur_slot);
     var_enum_tab_init(cur_slot);
@@ -2706,6 +2798,10 @@ fn parse_top(tok_base: i32) -> i32 {
     // Stage 9: closure tables (cl_param_tab, cl_capture_tab, cl_var_tab,
     // pending fn-list head/tail, id counter, scratch slots).
     cl_tabs_init(cur_slot);
+    // Stage 10: use_table init + reset mod_pending head/tail.
+    use_tab_init(cur_slot);
+    set_mod_pending_head(cur_slot, 0);
+    set_mod_pending_tail(cur_slot, 0);
     // Peek the first token. If it's `fn`, parse a function decl.
     // Otherwise treat the whole input as a single expression
     // (legacy mode) for backward compat with all existing tests.
@@ -2724,6 +2820,9 @@ fn parse_top(tok_base: i32) -> i32 {
         // route to parse_program just like struct/enum.
         let is_trait = byte_eq(id_s, id_l, kw_trait_s(cur_slot), kw_trait_n(cur_slot));
         let is_impl = byte_eq(id_s, id_l, kw_impl_s(cur_slot), kw_impl_n(cur_slot));
+        // Stage 10: mod/use are also program-mode prefixes.
+        let is_mod = byte_eq(id_s, id_l, kw_mod_s(cur_slot), kw_mod_n(cur_slot));
+        let is_use = byte_eq(id_s, id_l, kw_use_s(cur_slot), kw_use_n(cur_slot));
         if is_fn == 1 {
             parse_program(tok_base, cur_slot)
         } else { if is_struct == 1 {
@@ -2734,9 +2833,13 @@ fn parse_top(tok_base: i32) -> i32 {
             parse_program(tok_base, cur_slot)
         } else { if is_impl == 1 {
             parse_program(tok_base, cur_slot)
+        } else { if is_mod == 1 {
+            parse_program(tok_base, cur_slot)
+        } else { if is_use == 1 {
+            parse_program(tok_base, cur_slot)
         } else {
             parse_expr(tok_base, cur_slot)
-        }}}}}
+        }}}}}}}
     } else {
         parse_expr(tok_base, cur_slot)
     }
