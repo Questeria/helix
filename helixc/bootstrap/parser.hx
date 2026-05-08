@@ -1304,8 +1304,24 @@ fn parse_fn_decl(tok_base: i32, sb: i32) -> i32 {
                     else { 0 }
                 } else { 0 }
             } else { 0 } } };
+            // Stage 5 Iter C: detect struct-typed param. If p_ty is 0
+            // (unknown primitive) AND the type IDENT matches a registered
+            // struct in struct_table, encode p_ty as 100 + struct_idx so
+            // codegen can recognize struct params for by-value pass.
+            // Also register (param_name -> struct_idx) in var_struct_tab
+            // so the body's `p.IDENT` resolves to a field offset.
+            // FLAT prefix-trap pattern (Finding #7): use a single-binding
+            // ladder of let-rebinds, NOT nested if-else statements, to
+            // avoid host-parser recursion overflow.
+            let s_idx_p = struct_tab_lookup_idx(sb, ty_s, ty_l);
+            let p_ty_struct = if s_idx_p >= 0 { 100 + s_idx_p } else { 0 };
+            let p_ty_final = if p_ty == 0 { p_ty_struct } else { p_ty };
+            let n_register = if p_ty_final >= 100 {
+                var_struct_tab_add(sb, pname_s, pname_l, p_ty_final - 100)
+            } else { 0 };
+            let _drop_n = n_register;
             let new_param = mk_node(18, pname_s, pname_l, 0);
-            __arena_push(p_ty);   // p4: type tag
+            __arena_push(p_ty_final);   // p4: type tag (100+ = struct)
             if params_head == 0 {
                 params_head = new_param;
                 prev_param = new_param;
