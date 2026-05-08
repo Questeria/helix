@@ -273,6 +273,95 @@ fn mr_tab_lookup(sb: i32, orig_s: i32, orig_l: i32, pack_lo: i32) -> i32 {
     }
     found
 }
+// Stage 8.5: trait_table at sb+33/34. Each entry is 2 slots (name_s, name_l).
+// Cap 4 traits in Phase-0. Phase-0 does not validate trait method signatures
+// against impl method signatures; the table just records that "this name is
+// a trait" for parse-time disambiguation.
+fn trait_tab_base(sb: i32) -> i32 { __arena_get(sb + 33) }
+fn trait_tab_count(sb: i32) -> i32 { __arena_get(sb + 34) }
+fn trait_tab_add(sb: i32, name_s: i32, name_l: i32) -> i32 {
+    let count = trait_tab_count(sb);
+    if count >= 4 {
+        0 - 1
+    } else {
+        let base = trait_tab_base(sb);
+        let entry = base + count * 2;
+        __arena_set(entry, name_s);
+        __arena_set(entry + 1, name_l);
+        __arena_set(sb + 34, count + 1);
+        count
+    }
+}
+fn trait_tab_lookup(sb: i32, name_s: i32, name_l: i32) -> i32 {
+    let base = trait_tab_base(sb);
+    let count = trait_tab_count(sb);
+    let mut i: i32 = 0;
+    let mut found: i32 = 0 - 1;
+    while i < count {
+        let entry = base + i * 2;
+        let ns = __arena_get(entry);
+        let nl = __arena_get(entry + 1);
+        if byte_eq(name_s, name_l, ns, nl) == 1 {
+            found = i;
+            i = count;
+        } else {
+            i = i + 1;
+        };
+    }
+    found
+}
+// Stage 8.5: impl_table at sb+35/36. Each entry is 4 slots
+// (trait_name_s, trait_name_l, target_ty_tag, methods_count).
+// Cap 8 impls in Phase-0. target_ty_tag uses ty_ident_to_tag (0 = i32, 1
+// = f32, 2 = f64, 3 = i64, etc.). Phase-0 does not enforce uniqueness yet
+// (8.5D is optional); duplicate impls would be parsed but the second's
+// mangled fn names collide at codegen, producing a silent re-bind.
+fn impl_tab_base(sb: i32) -> i32 { __arena_get(sb + 35) }
+fn impl_tab_count(sb: i32) -> i32 { __arena_get(sb + 36) }
+fn impl_tab_add(sb: i32, trait_s: i32, trait_l: i32, target_tag: i32, methods_count: i32) -> i32 {
+    let count = impl_tab_count(sb);
+    if count >= 8 {
+        0 - 1
+    } else {
+        let base = impl_tab_base(sb);
+        let entry = base + count * 4;
+        __arena_set(entry, trait_s);
+        __arena_set(entry + 1, trait_l);
+        __arena_set(entry + 2, target_tag);
+        __arena_set(entry + 3, methods_count);
+        __arena_set(sb + 36, count + 1);
+        count
+    }
+}
+// Lookup impl by (trait_name, target_ty_tag). Returns entry idx on hit, -1 miss.
+fn impl_tab_lookup(sb: i32, trait_s: i32, trait_l: i32, target_tag: i32) -> i32 {
+    let base = impl_tab_base(sb);
+    let count = impl_tab_count(sb);
+    let mut i: i32 = 0;
+    let mut found: i32 = 0 - 1;
+    while i < count {
+        let entry = base + i * 4;
+        let ts = __arena_get(entry);
+        let tl = __arena_get(entry + 1);
+        let tt = __arena_get(entry + 2);
+        if byte_eq(trait_s, trait_l, ts, tl) == 1 {
+            if tt == target_tag {
+                found = i;
+                i = count;
+            } else { i = i + 1; }
+        } else {
+            i = i + 1;
+        };
+    }
+    found
+}
+// Stage 8.5: trait/impl/for keyword bytes installed at sb+37..42.
+fn kw_trait_s(sb: i32) -> i32 { __arena_get(sb + 37) }
+fn kw_trait_n(sb: i32) -> i32 { __arena_get(sb + 38) }
+fn kw_impl_s(sb: i32) -> i32 { __arena_get(sb + 39) }
+fn kw_impl_n(sb: i32) -> i32 { __arena_get(sb + 40) }
+fn kw_for_s(sb: i32) -> i32 { __arena_get(sb + 41) }
+fn kw_for_n(sb: i32) -> i32 { __arena_get(sb + 42) }
 fn var_struct_tab_add(sb: i32, name_s: i32, name_l: i32, struct_idx: i32) -> i32 {
     let count = var_struct_tab_count(sb);
     if count >= 4 {
@@ -1746,6 +1835,31 @@ fn var_enum_tab_init(sb: i32) -> i32 {
     0
 }
 
+// Stage 8.5: trait_table region — 8 slots = 4 entries x 2 fields
+// (name_s, name_l). Cap 4 traits in Phase-0.
+fn trait_tab_init(sb: i32) -> i32 {
+    let tr_base = __arena_push(0);
+    __arena_push(0); __arena_push(0); __arena_push(0); __arena_push(0);
+    __arena_push(0); __arena_push(0); __arena_push(0);
+    __arena_set(sb + 33, tr_base);
+    __arena_set(sb + 34, 0);
+    0
+}
+
+// Stage 8.5: impl_table region — 32 slots = 8 entries x 4 fields
+// (trait_name_s, trait_name_l, target_ty_tag, methods_count). Cap 8 impls.
+fn impl_tab_init(sb: i32) -> i32 {
+    let ip_base = __arena_push(0);
+    let mut ipi: i32 = 1;
+    while ipi < 32 {
+        __arena_push(0);
+        ipi = ipi + 1;
+    }
+    __arena_set(sb + 35, ip_base);
+    __arena_set(sb + 36, 0);
+    0
+}
+
 // --------------------------------------------------------------
 // install_keywords: stash "let", "if", "else" bytes in the arena
 // and write their (start, len) into state_base+1..state_base+6.
@@ -1789,6 +1903,22 @@ fn install_keywords(sb: i32) -> i32 {
     __arena_push(99); __arena_push(104);
     __arena_set(sb + 27, match_s);
     __arena_set(sb + 28, 5);
+    // Stage 8.5: "trait" = 116 114 97 105 116
+    let trait_s = __arena_push(116); __arena_push(114); __arena_push(97);
+    __arena_push(105); __arena_push(116);
+    __arena_set(sb + 37, trait_s);
+    __arena_set(sb + 38, 5);
+    // Stage 8.5: "impl" = 105 109 112 108
+    let impl_s = __arena_push(105); __arena_push(109); __arena_push(112);
+    __arena_push(108);
+    __arena_set(sb + 39, impl_s);
+    __arena_set(sb + 40, 4);
+    // Stage 8.5: "for" = 102 111 114
+    let for_s = __arena_push(102); __arena_push(111); __arena_push(114);
+    __arena_set(sb + 41, for_s);
+    __arena_set(sb + 42, 3);
+    trait_tab_init(sb);
+    impl_tab_init(sb);
     0
 }
 
@@ -1819,6 +1949,11 @@ fn parse_top(tok_base: i32) -> i32 {
     // Stage 8: slots 29..32 = generic_params (base + count) + mono_request
     // (base + count). gp scratch reset per fn; mono_request accumulates.
     __arena_push(0); __arena_push(0); __arena_push(0); __arena_push(0);
+    // Stage 8.5: slots 33..42 = trait_table (base + count) + impl_table
+    // (base + count) + trait/impl/for keyword (start + len) triples.
+    __arena_push(0); __arena_push(0); __arena_push(0); __arena_push(0);
+    __arena_push(0); __arena_push(0); __arena_push(0); __arena_push(0);
+    __arena_push(0); __arena_push(0);
     install_keywords(cur_slot);
     var_struct_tab_init(cur_slot);
     var_enum_tab_init(cur_slot);
