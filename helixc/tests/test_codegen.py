@@ -2441,6 +2441,24 @@ fn main() -> i32 {
     # silently wraps (separate fix).
     assert compile_and_exec("4294967295_u64 - 4294967253_u64") == 42, \
         "u64 literal at 2^32-1 boundary"
+    # Stage 1.5 audit fix (post-bf16-sweep): u64 lex 10-digit overflow
+    # guard. The partial fix in 471b27f caught > 10 digits via the
+    # tk=40 sentinel. But 10-digit values in [4294967296, 9999999999]
+    # also wrap multiply in the i32 accumulator (the bit-trick only
+    # works for ONE wrap; multi-wrap loses bits). Now caught via
+    # digit-by-digit lex compare against "4294967295".
+    # Boundary case: 4294967295 is the max valid → still works.
+    assert compile_and_exec("4294967295_u64 + 0_u64") == 255, \
+        "u64 boundary 4294967295 still valid (255 = 4294967295 mod 256)"
+    # Just-over-boundary: 4294967296 = 2^32 → traps with SIGILL (132).
+    assert compile_and_exec("fn main() -> i32 { 4294967296_u64 + 0_u64 }") == 132, \
+        "u64 4294967296 (= 2^32, 10 digits, was multi-wrapping) traps"
+    # Far-over-boundary in 10-digit space: 9999999999 → traps.
+    assert compile_and_exec("fn main() -> i32 { 9999999999_u64 + 0_u64 }") == 132, \
+        "u64 9999999999 (10-digit max, was multi-wrapping) traps"
+    # 11-digit literal: separately caught by the > 10 digit branch.
+    assert compile_and_exec("fn main() -> i32 { 10000000000_u64 + 0_u64 }") == 132, \
+        "u64 10000000000 (11 digits) traps via existing > 10 guard"
     # Approach A Stage 2.4b: u64 arithmetic dispatch (ADD, SUB, MUL).
     # ADD and SUB u64 landed in commits e7311b0/0089529. MUL u64 landed
     # post-cascade-bug-fix (commit 29f552e). All three reuse the i64

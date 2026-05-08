@@ -127,6 +127,45 @@ fn skip_line_comment(src_start: i32, src_len: i32, pos: i32) -> i32 {
     p
 }
 
+// Stage 1.5 audit fix helpers: u64 lex overflow detection for 10-digit
+// values. Returns the i'th byte of "4294967295" (2^32-1, the max valid
+// 10-digit u64 literal via the two's-complement bit-trick).
+fn ref_byte_4294967295(i: i32) -> i32 {
+    if i == 0 { 52 }       // '4'
+    else { if i == 1 { 50 }  // '2'
+    else { if i == 2 { 57 }  // '9'
+    else { if i == 3 { 52 }  // '4'
+    else { if i == 4 { 57 }  // '9'
+    else { if i == 5 { 54 }  // '6'
+    else { if i == 6 { 55 }  // '7'
+    else { if i == 7 { 50 }  // '2'
+    else { if i == 8 { 57 }  // '9'
+    else { if i == 9 { 53 }  // '5'
+    else { 0 } } } } } } } } } }
+}
+
+// Returns 1 if the 10-digit literal at p1..p1+10 represents a u64
+// value > 4294967295 (= 2^32-1). Used by the u64 oversize guard to
+// catch the [4294967296, 9999999999] range that the partial fix in
+// 471b27f missed (those values are 10-digit but multi-wrap the i32
+// accumulator). Caller must verify literal is exactly 10 digits.
+fn check_u64_10digit_overflow(p1: i32) -> i32 {
+    let mut i: i32 = 0;
+    let mut keep: i32 = 1;
+    let mut result: i32 = 0;
+    while keep == 1 {
+        if i >= 10 { keep = 0; }
+        else {
+            let lit_b = __arena_get(p1 + i);
+            let ref_b = ref_byte_4294967295(i);
+            if lit_b > ref_b { result = 1; keep = 0; }
+            else { if lit_b < ref_b { keep = 0; }
+            else { i = i + 1; } };
+        };
+    }
+    result
+}
+
 // --------------------------------------------------------------
 // Lex an integer literal starting at byte index `pos`. Recognises a
 // `0x` / `0X` prefix for hex literals (digits 0-9, a-f, A-F); falls
@@ -391,8 +430,21 @@ fn lex_int(src_start: i32, src_len: i32, pos: i32) -> i32 {
         // can hold. The cap intentionally errs toward LESS conservative
         // here so legal valuese.g. 2147483648_u64 (= 2^31, 10 digits)
         // still work via the hi32=0 partial fix from commit 09c8858.
+        // Stage 1.5 audit fix (post-bf16 sweep): u64 lex overflow guard.
+        // The partial fix in 471b27f caught > 10 digits via tk=40. But
+        // 10-digit values in the range [4294967296, 9999999999] also
+        // wrap silently in the i32 accumulator (multi-wrap, bit-trick
+        // doesn't preserve high half). Catch via digit-by-digit lex
+        // compare against "4294967295" (= 2^32-1, max valid 10-digit
+        // value via the two's-complement bit-trick + hi32=0 fix from
+        // 09c8858). If 10-digit literal lex-greater than "4294967295",
+        // set u64_oversize.
+        let digit_count = length - 4;
         let u64_oversize = if is_u64_suffix == 1 {
-            if (length - 4) > 10 { 1 } else { 0 }
+            if digit_count > 10 { 1 }
+            else { if digit_count == 10 {
+                check_u64_10digit_overflow(pos)
+            } else { 0 } }
         } else { 0 };
         let tk = if u64_oversize == 1 { 40 }
                  else { if is_i64_suffix == 1 { 33 }
