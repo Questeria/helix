@@ -1065,14 +1065,25 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
                 cur_advance(sb);                       // variant IDENT
                 let disc = enum_tab_variant_lookup_disc(sb, e_idx_pre, v_name_s, v_name_l);
                 let arity = enum_tab_variant_lookup_arity(sb, e_idx_pre, v_name_s, v_name_l);
-                // Trap if arity != 0 (caller passed unit but variant
-                // declared with payload) or variant unknown.
                 let safe_disc = if disc < 0 { 0 } else { disc };
-                // Fold to AST_INT (tag 0) carrying the discriminant
-                // value. Codegen emits `mov eax, disc` (5 bytes) — the
-                // exact unit-variant codegen the plan calls for. No
-                // new emit_ast_code arm.
-                mk_node(0, safe_disc, 0, 0)
+                // Stage 7F fix: if the enum has ANY payload variants
+                // (max_payload_arity > 0), unit variants must use the
+                // pointer-shaped rep too — otherwise Stage 7's PAT_VARIANT
+                // codegen segfaults trying to deref the disc-as-pointer.
+                // For all-unit enums (e.g. Color { R, G, B }), keep the
+                // AST_INT fold for backward compat with Stage 6B tests.
+                let enum_entry = enum_tab_base(sb) + e_idx_pre * 5;
+                let max_arity = __arena_get(enum_entry + 4);
+                if max_arity > 0 {
+                    // Build 1-slot AST_TUPLE_LIT with disc only.
+                    let disc_node = mk_node(0, safe_disc, 0, 0);
+                    let head_idx = mk_node(51, disc_node, 0, 0);
+                    set_last_enum_idx(sb, e_idx_pre);
+                    mk_node(50, 1, head_idx, 0)
+                } else {
+                    // All-unit enum — fold to plain AST_INT (Stage 6B).
+                    mk_node(0, safe_disc, 0, 0)
+                }
             } else { if is_enum_payload == 1 {
                 // Stage 6C: payload variant `Maybe::Some(42)`. Build
                 // an AST_TUPLE_LIT (tag 50) with arity = 1 + payload

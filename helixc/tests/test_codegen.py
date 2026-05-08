@@ -2646,6 +2646,40 @@ fn main() -> i32 {
     assert compile_and_exec(
         "fn main() -> i32 { let x = 99; match x { 0 => 100, 5 => 42, _ => 0 } }"
     ) == 0, "Stage 7B: wildcard arm matches when no lit matches"
+    # Stage 7D: range patterns. PAT_RANGE exclusive (0..10 means 0 <= x < 10).
+    assert compile_and_exec(
+        "fn main() -> i32 { let x = 12; match x { 0..10 => 1, 10..20 => 2, _ => 0 } }"
+    ) == 2, "Stage 7D: range match 12 in 10..20 returns 2"
+    assert compile_and_exec(
+        "fn main() -> i32 { let x = 5; match x { 0..10 => 1, 10..20 => 2, _ => 0 } }"
+    ) == 1, "Stage 7D: range match 5 in 0..10 returns 1"
+    assert compile_and_exec(
+        "fn main() -> i32 { let x = 25; match x { 0..10 => 1, 10..20 => 2, _ => 0 } }"
+    ) == 0, "Stage 7D: range match 25 falls to wildcard"
+    # Stage 7F: enum variant patterns. PAT_VARIANT loads disc + payload.
+    assert compile_and_exec(
+        "enum Maybe { None, Some(i32) } "
+        "fn main() -> i32 { "
+        "let m = Maybe::Some(42); "
+        "match m { Maybe::None => 0, Maybe::Some(v) => v } }"
+    ) == 42, "Stage 7F: Maybe::Some(v) destructures and returns v"
+    assert compile_and_exec(
+        "enum Maybe { None, Some(i32) } "
+        "fn main() -> i32 { "
+        "let m = Maybe::None; "
+        "match m { Maybe::None => 0, Maybe::Some(v) => v } }"
+    ) == 0, "Stage 7F: Maybe::None first arm matches"
+    # Stage 7G: tuple patterns. PAT_TUPLE destructures.
+    assert compile_and_exec(
+        "fn main() -> i32 { "
+        "let p = (1, 2); "
+        "match p { (0, _) => 100, (1, y) => y, _ => 0 } }"
+    ) == 2, "Stage 7G: tuple pattern (1, y) binds y to 2"
+    assert compile_and_exec(
+        "fn main() -> i32 { "
+        "let p = (0, 99); "
+        "match p { (0, _) => 100, (1, y) => y, _ => 0 } }"
+    ) == 100, "Stage 7G: first tuple arm with wildcard matches"
     # Stage 4 follow-up audit Finding #2: AST_NEG was missing u64
     # dispatch. Fell through to 32-bit `neg eax` which only flipped
     # the low half. Now uses REX.W neg rax (same as i64).
