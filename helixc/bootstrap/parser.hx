@@ -134,6 +134,9 @@ fn kw_mut_s(sb: i32) -> i32 { __arena_get(sb + 9) }
 fn kw_mut_n(sb: i32) -> i32 { __arena_get(sb + 10) }
 fn kw_fn_s(sb: i32) -> i32 { __arena_get(sb + 11) }
 fn kw_fn_n(sb: i32) -> i32 { __arena_get(sb + 12) }
+// Stage 5: struct keyword installed at sb+13/sb+14.
+fn kw_struct_s(sb: i32) -> i32 { __arena_get(sb + 13) }
+fn kw_struct_n(sb: i32) -> i32 { __arena_get(sb + 14) }
 
 // --------------------------------------------------------------
 // AST builder.
@@ -835,6 +838,11 @@ fn install_keywords(sb: i32) -> i32 {
     let fn_s = __arena_push(102); __arena_push(110);
     __arena_set(sb + 11, fn_s);
     __arena_set(sb + 12, 2);
+    // Stage 5: "struct" = 115 116 114 117 99 116
+    let struct_s = __arena_push(115); __arena_push(116); __arena_push(114);
+    __arena_push(117); __arena_push(99); __arena_push(116);
+    __arena_set(sb + 13, struct_s);
+    __arena_set(sb + 14, 6);
     0
 }
 
@@ -843,11 +851,13 @@ fn install_keywords(sb: i32) -> i32 {
 // Reserves 7 state slots, then dispatches into parse_expr.
 // --------------------------------------------------------------
 fn parse_top(tok_base: i32) -> i32 {
-    // 13 state slots: cursor + 6 keyword (start, len) pairs.
+    // 15 state slots: cursor + 7 keyword (start, len) pairs.
+    // Stage 5: added struct keyword (slots 13/14).
     let cur_slot = __arena_push(0);
     __arena_push(0); __arena_push(0); __arena_push(0); __arena_push(0);
     __arena_push(0); __arena_push(0); __arena_push(0); __arena_push(0);
     __arena_push(0); __arena_push(0); __arena_push(0); __arena_push(0);
+    __arena_push(0); __arena_push(0);
     install_keywords(cur_slot);
     // Peek the first token. If it's `fn`, parse a function decl.
     // Otherwise treat the whole input as a single expression
