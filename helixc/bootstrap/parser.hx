@@ -734,10 +734,56 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
                 }
                 cur_advance(sb);     // consume ')'
                 mk_node(16, id_start, id_len, args_head)
+            } else { if nt == 5 {
+                // Stage 5 Iter A: IDENT followed by '{' might be a struct
+                // literal `Pt { 10, 32 }`. Look up the IDENT in
+                // struct_table; on hit (arity >= 0), parse positional
+                // values into an AST_TUPLE_LIT chain, reusing tuple
+                // codegen entirely. On miss, fall through to var-ref.
+                let arity = struct_tab_lookup(sb, id_start, id_len);
+                if arity >= 0 {
+                    cur_advance(sb);     // consume '{'
+                    // Empty struct `Foo {}` — arity 0.
+                    let pk_first = cur_get(sb);
+                    let pt_first = tok_tag(tok_base, pk_first);
+                    if pt_first == 6 {
+                        cur_advance(sb);   // consume '}'
+                        mk_node(50, 0, 0, 0)
+                    } else {
+                        let first = parse_expr(tok_base, sb);
+                        let mut head_idx: i32 = mk_node(51, first, 0, 0);
+                        let mut tail_idx: i32 = head_idx;
+                        let mut n: i32 = 1;
+                        let mut keep: i32 = 1;
+                        while keep == 1 {
+                            let ck = cur_get(sb);
+                            let ct = tok_tag(tok_base, ck);
+                            if ct == 13 {
+                                cur_advance(sb);    // ','
+                                let pk2 = cur_get(sb);
+                                let pt2 = tok_tag(tok_base, pk2);
+                                if pt2 == 6 { keep = 0; }     // trailing ','
+                                else {
+                                    let child = parse_expr(tok_base, sb);
+                                    let new_node = mk_node(51, child, 0, 0);
+                                    let prev_tail = tail_idx;
+                                    __arena_set(prev_tail + 2, new_node);
+                                    tail_idx = new_node;
+                                    n = n + 1;
+                                };
+                            } else { keep = 0; };
+                        }
+                        cur_advance(sb);    // consume '}'
+                        mk_node(50, n, head_idx, 0)
+                    }
+                } else {
+                    // Not a registered struct — treat as var ref.
+                    mk_node(1, id_start, id_len, 0)
+                }
             } else {
                 // Var ref
                 mk_node(1, id_start, id_len, 0)
-            }}
+            }}}
         }}}
     } else { if t == 3 {
         // Stage 4 iteration A: tuple literal vs parenthesized expr.
