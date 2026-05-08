@@ -33,6 +33,7 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 from ..ir import tir
+from . import elf_dyn
 
 
 # ============================================================================
@@ -75,10 +76,31 @@ class Fixup:
 
 
 @dataclass
+class FFIFixup:
+    """Stage 16.5: pending FFI call site (`FF 15 <rel32>`).
+
+    The 4 zero-bytes at `offset..offset+4` need to be patched once the
+    .got.plt vaddr is known. The displacement is:
+        got_vaddr_for(symbol) - (code_vaddr + offset + 4)
+    `code_vaddr` is the absolute load vaddr of the code segment's start
+    (NOT the code_offset within the file). The codegen records the
+    file-relative offset; the patcher converts using the layout planner.
+    """
+    offset: int       # byte offset within code buffer
+    symbol: str       # FFI symbol name (e.g. "puts")
+
+
+@dataclass
 class CodeBuf:
     bytes_: bytearray = field(default_factory=bytearray)
     symbols: dict[str, int] = field(default_factory=dict)   # function name -> offset
     fixups: list[Fixup] = field(default_factory=list)
+    # Stage 16.5: pending FFI call sites.
+    ffi_fixups: list[FFIFixup] = field(default_factory=list)
+    # Stage 16.5: collected DynLinkInfo (lives on the buf so codegen
+    # ops in any function can record imports and the driver can pick
+    # them up at finalize time).
+    dyn: "elf_dyn.DynLinkInfo" = field(default_factory=lambda: elf_dyn.DynLinkInfo())
 
     def emit(self, *bs: int) -> None:
         self.bytes_.extend(bs)
@@ -448,6 +470,22 @@ class Asm:
             rel_base=offset + 4,
         ))
 
+    def call_qword_ptr_rip_rel_ffi(self, symbol: str) -> None:
+        """Stage 16.5: indirect call through GOT entry (BIND_NOW).
+
+        Emits `FF 15 <rel32>` — call qword ptr [rip + disp32]. The disp32
+        is patched after layout planning to point at the symbol's slot
+        in .got.plt. The dynamic linker pre-fills that slot with the
+        resolved function address (BIND_NOW), so this becomes an
+        indirect call to the actual library routine.
+        """
+        self.b.emit(0xFF, 0x15)
+        offset = self.b.offset()
+        self.b.emit_bytes(b"\x00\x00\x00\x00")
+        self.b.ffi_fixups.append(FFIFixup(offset=offset, symbol=symbol))
+        # Register the import so the ELF emitter knows to allocate a GOT slot.
+        self.b.dyn.add_import(symbol)
+
     def jmp_rel32(self, target: str) -> None:
         # E9 <rel32>
         self.b.emit(0xE9)
@@ -712,6 +750,14 @@ class Asm:
         self.b.fixups.append(Fixup(offset=offset, target=target,
                                    size=4, rel_base=offset + 4))
 
+    def lea_rdi_rip_rel(self, target: str) -> None:
+        """lea rdi, [rip + disp32]   48 8D 3D <disp32> (Stage 16.5: FFI)"""
+        self.b.emit(0x48, 0x8D, 0x3D)
+        offset = self.b.offset()
+        self.b.emit_bytes(b"\x00\x00\x00\x00")
+        self.b.fixups.append(Fixup(offset=offset, target=target,
+                                   size=4, rel_base=offset + 4))
+
     # ---- comparisons ----
     def cmp_eax_ecx(self) -> None:
         # 39 C8  cmp eax, ecx
@@ -918,6 +964,10 @@ class FnCompiler:
 
     def _is_i64_type(self, ty: tir.TIRType) -> bool:
         return isinstance(ty, tir.TIRScalar) and ty.name == "i64"
+
+    def _is_u64_type(self, ty: tir.TIRType) -> bool:
+        # Stage 16.5: u64 is the IR type for raw pointers and FFI-arg widening.
+        return isinstance(ty, tir.TIRScalar) and ty.name == "u64"
 
     def _check_float_supported(self, ty: tir.TIRType) -> None:
         """Phase 1 supports f32 and f64. f16/bf16 still need the F16C
@@ -1598,6 +1648,65 @@ class FnCompiler:
                     self.asm.mov_mem_rbp_rax(res_slot)
                 else:
                     self.asm.mov_mem_rbp_eax(res_slot)
+            return
+        # ====================================================================
+        # Stage 16.5 — FFI ops
+        # ====================================================================
+        if op.kind == tir.OpKind.FFI_CALL:
+            # Indirect call through GOT entry resolved by the dynamic linker.
+            # Arg shuffle is identical to CALL: int args -> rdi/rsi/rdx/rcx/r8/r9
+            # (or 64-bit forms when the IR type is i64/u64/pointer-shaped).
+            target = str(op.attrs.get("target", "?"))
+            INT_REGS = [
+                self.asm.mov_edi_mem_rbp,
+                self.asm.mov_esi_mem_rbp,
+                self.asm.mov_edx_mem_rbp,
+                self.asm.mov_ecx_mem_rbp,
+                self.asm.mov_r8d_mem_rbp,
+                self.asm.mov_r9d_mem_rbp,
+            ]
+            INT_REGS_64 = [
+                self.asm.mov_rdi_mem_rbp,
+                self.asm.mov_rsi_mem_rbp,
+                self.asm.mov_rdx_mem_rbp,
+                self.asm.mov_rcx_arg_mem_rbp,
+                self.asm.mov_r8_mem_rbp,
+                self.asm.mov_r9_mem_rbp,
+            ]
+            int_idx = 0
+            for arg in op.operands:
+                arg_slot = self._slot_of(arg)
+                if int_idx >= len(INT_REGS):
+                    raise NotImplementedError(
+                        "FFI_CALL supports up to 6 int/pointer args (Phase-0)")
+                # Pointer-shaped IR types are u64 — use the 64-bit move.
+                if self._is_i64_type(arg.ty) or self._is_u64_type(arg.ty):
+                    INT_REGS_64[int_idx](arg_slot)
+                else:
+                    INT_REGS[int_idx](arg_slot)
+                int_idx += 1
+            # Indirect call through GOT entry.
+            self.asm.call_qword_ptr_rip_rel_ffi(target)
+            if op.results:
+                res_slot = self._slot_of(op.results[0])
+                # libc fns return int (eax) or pointer (rax). Stage 16.5
+                # only wires int returns; other shapes deferred.
+                if self._is_i64_type(op.results[0].ty) or self._is_u64_type(op.results[0].ty):
+                    self.asm.mov_mem_rbp_rax(res_slot)
+                else:
+                    self.asm.mov_mem_rbp_eax(res_slot)
+            return
+        if op.kind == tir.OpKind.STR_PTR:
+            # Address of a string literal — emit `lea rax, [rip + sym]`
+            # then store as 64-bit pointer to result slot.
+            text = op.attrs.get("text", "")
+            assert isinstance(text, str)
+            data = text.encode("utf-8")
+            sym = f"__helix_strptr_{id(op):x}"
+            self._pending_strings.append((sym, data))
+            self.asm.lea_rax_rip_rel(sym)
+            res_slot = self._slot_of(op.results[0])
+            self.asm.mov_mem_rbp_rax(res_slot)
             return
         if op.kind == tir.OpKind.RETURN:
             if op.operands:
@@ -2653,18 +2762,43 @@ def compile_module_to_elf(module: tir.Module, entry_fn: str = "main") -> bytes:
     buf = CodeBuf()
     asm = Asm(buf)
 
-    # Entry stub: call entry_fn, then exit with eax as status
+    # Pre-scan: do any user fns contain FFI_CALL ops? If yes, the binary
+    # needs libc, so the entry stub uses libc's `exit` (which flushes
+    # stdout/stderr) instead of a raw sys_exit syscall — otherwise output
+    # from puts/printf via stdout is lost when stdout is a pipe and the
+    # program exits before glibc's atexit handlers run.
+    uses_ffi = any(
+        op.kind == tir.OpKind.FFI_CALL
+        for fn in module.functions.values()
+        if not fn.attrs.get("is_extern")
+        for blk in fn.blocks
+        for op in blk.ops
+    )
+
+    # Entry stub: call entry_fn, then exit with eax as status.
     buf.define_symbol("_start")
     asm.call_rel32(entry_fn)
     # rdi = rax (status from main)
     asm.mov_edi_eax()
-    # rax = 60 (sys_exit)
-    asm.mov_eax_imm32(60)
-    asm.syscall()
+    if uses_ffi:
+        # Indirect `call qword ptr [rip + got@exit]`. After the call,
+        # if it ever returns (it shouldn't), `ud2` traps loudly so we
+        # don't silently fall through into the next function.
+        asm.call_qword_ptr_rip_rel_ffi("exit")
+        buf.emit(0x0F, 0x0B)  # ud2
+    else:
+        # Libc-free: raw sys_exit syscall.
+        asm.mov_eax_imm32(60)
+        asm.syscall()
 
     # Compile each function and harvest any pending PRINT-string bytes.
+    # Stage 16.5: extern "C" fns have no body to compile — they're just
+    # signatures. Calls to them are routed to FFI_CALL ops in lower_ast,
+    # which the FnCompiler emits as `call qword ptr [rip + got_slot]`.
     pending_strings: list[tuple[str, bytes]] = []
     for fn in module.functions.values():
+        if fn.attrs.get("is_extern"):
+            continue
         fc = FnCompiler(fn, asm)
         fc.compile()
         pending_strings.extend(fc._pending_strings)
@@ -2693,6 +2827,35 @@ def compile_module_to_elf(module: tir.Module, entry_fn: str = "main") -> bytes:
     arena_extra = (HELIX_ARENA_CAP + 1) * 4
 
     buf.patch()
+
+    # Stage 16.5: if any FFI imports were recorded during codegen, emit a
+    # dynamic-link ELF with the appropriate phdrs + .dynamic / .dynsym /
+    # .dynstr / .rela.plt / .got.plt sections. Otherwise fall back to the
+    # libc-free single-PT_LOAD path.
+    if buf.dyn.has_imports():
+        layout = elf_dyn.plan_layout(bytes(buf.bytes_), buf.dyn, arena_extra)
+        # Patch each FFI fixup to reference the correct GOT slot's vaddr,
+        # rip-relative to the call instruction.
+        for fx in buf.ffi_fixups:
+            slot_idx = buf.dyn._imports_set[fx.symbol]
+            target_addr = layout.got_addr(slot_idx)
+            # call_qword_ptr [rip+disp32] is FF 15 <disp32>; the rip used
+            # by the CPU at decode is the address of the instruction
+            # immediately after the disp32 (= call_site_vaddr + 6).
+            # `fx.offset` is the file/buf offset of the disp32 bytes,
+            # which equals call_site_offset + 2. The instruction-after-
+            # disp32 in vaddr space is code_vaddr + fx.offset + 4.
+            rip_after = layout.code_vaddr + fx.offset + 4
+            disp = target_addr - rip_after
+            if not (-(1 << 31) <= disp < (1 << 31)):
+                raise OverflowError(
+                    f"FFI call disp32 out of range for {fx.symbol}: {disp}")
+            struct.pack_into("<i", buf.bytes_, fx.offset, disp)
+        # Entry symbol "_start" is at the very beginning of the code buf.
+        entry_off = buf.symbols.get("_start", 0)
+        return elf_dyn.emit_elf_dyn(bytes(buf.bytes_), buf.dyn,
+                                    entry_offset=entry_off,
+                                    arena_extra=arena_extra)
     return emit_elf(bytes(buf.bytes_), extra_memsz=arena_extra)
 
 
