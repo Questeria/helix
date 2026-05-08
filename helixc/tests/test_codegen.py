@@ -2367,6 +2367,20 @@ fn main() -> i32 {
     assert compile_and_exec(
         "fn main() -> i32 { (10, 20, 30).1 + 22 }"
     ) == 42, "tuple field access in arithmetic context"
+    # Stage 4 iteration C: tuple-typed let bindings + var lookups.
+    # Tuple values are i32-shaped pointers (rax = stack region addr),
+    # so existing AST_LET/AST_VAR should handle them: let stores eax,
+    # var loads eax. Field access on the loaded var works the same.
+    # Verify end-to-end.
+    assert compile_and_exec(
+        "fn main() -> i32 { let t = (10, 20, 30) ; t.1 + 22 }"
+    ) == 42, "tuple stored in let, field access via var"
+    assert compile_and_exec(
+        "fn main() -> i32 { let t = (100, 200, 300) ; t.0 - 58 }"
+    ) == 42, "tuple .0 via let-bound var (100 - 58)"
+    assert compile_and_exec(
+        "fn main() -> i32 { let t = (1, 2, 3) ; t.0 + t.1 + t.2 + 36 }"
+    ) == 42, "multiple field accesses in arithmetic (1+2+3+36)"
     # Stage 1.5 audit fix: bf16 comparison ops trap. Pre-fix:
     # AST_LT/GT/LE/GE/EQ/NE cascades had no is_bf16_expr check — bf16
     # operands fell through to integer compare on bit patterns. This is

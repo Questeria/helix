@@ -1039,8 +1039,8 @@ fn expr_type(idx: i32, bind_state: i32, bn_state: i32) -> i32 {
     else { if t == 40 { 11 }                          // AST_INTLIT_I16 (Stage 2.5c)
     else { if t == 41 { 8 }                           // AST_INTLIT_U16 (Stage 2.5c)
     else { if t == 42 { 4 }                           // AST_FLOATLIT_BF16 (Stage 1.5)
-    else { if t == 50 { 0 }                            // AST_TUPLE_LIT (Stage 4) — addr-shaped (i32)
-    else { if t == 52 { 0 }                            // AST_TUPLE_FIELD (Stage 4 iter B)
+    else { if t == 50 { 3 }                            // AST_TUPLE_LIT (Stage 4) — 64-bit pointer (treat as i64 for storage)
+    else { if t == 52 { 0 }                            // AST_TUPLE_FIELD (Stage 4 iter B) — 32-bit element
     else { if t == 0 { 0 }                            // AST_INTLIT (i32)
     else { if t == 1 {                                // AST_VAR
         bind_lookup_type(bind_state, p1, p2)
