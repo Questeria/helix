@@ -3365,6 +3365,14 @@ fn main() -> i32 {
         "fn neg(x: f64) -> f64 { x - 3.0_f64 * x } "
         "fn main() -> i32 { __f64_to_i32(grad(neg)(1.0_f64)) }"
     ) == 254, "Stage 12E: grad of x - 3x = -2; 8-bit cast yields 254"
+    # 12F: helper-fn inlining (Stage 13 prep). The grad pass inlines user
+    # fn calls inside loss before differentiating. d/dx (helper(x) + x) =
+    # d/dx (x*x + x) = 2x + 1 = 7 at x=3.
+    assert compile_and_exec(
+        "fn helper(x: f64) -> f64 { x * x } "
+        "fn loss2(x: f64) -> f64 { helper(x) + x } "
+        "fn main() -> i32 { __f64_to_i32(grad(loss2)(3.0_f64)) }"
+    ) == 7, "Stage 12F: grad with helper-fn inlining; 2x+1 at x=3 -> 7"
 
 
 def test_bootstrap_kovc_inline_write_file_to_arena():

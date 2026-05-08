@@ -3576,6 +3576,166 @@ fn ast_is_one(idx: i32) -> i32 {
     } else { 0 } }
 }
 
+// Walk an AST subtree, replacing any AST_VAR whose name matches
+// (param_s, param_l) with arg_idx (shared, not deep-cloned — the AST
+// is read-only after parsing). Returns the (possibly new) idx. Used
+// by inline_user_call to substitute the callee's body's param refs
+// with the call's arg expressions.
+fn clone_subst_var(expr_idx: i32, param_s: i32, param_l: i32, arg_idx: i32) -> i32 {
+    let t = __arena_get(expr_idx);
+    if t == 1 {
+        // AST_VAR. Compare name bytes; if match, return arg_idx.
+        let n_s = __arena_get(expr_idx + 1);
+        let n_l = __arena_get(expr_idx + 2);
+        if byte_eq(n_s, n_l, param_s, param_l) == 1 {
+            arg_idx
+        } else {
+            expr_idx
+        }
+    } else { if t == 2 {
+        let l = __arena_get(expr_idx + 1);
+        let r = __arena_get(expr_idx + 2);
+        let nl = clone_subst_var(l, param_s, param_l, arg_idx);
+        let nr = clone_subst_var(r, param_s, param_l, arg_idx);
+        if nl == l { if nr == r { expr_idx } else { mk_node(2, nl, nr, 0) } }
+        else { mk_node(2, nl, nr, 0) }
+    } else { if t == 3 {
+        let l = __arena_get(expr_idx + 1);
+        let r = __arena_get(expr_idx + 2);
+        let nl = clone_subst_var(l, param_s, param_l, arg_idx);
+        let nr = clone_subst_var(r, param_s, param_l, arg_idx);
+        if nl == l { if nr == r { expr_idx } else { mk_node(3, nl, nr, 0) } }
+        else { mk_node(3, nl, nr, 0) }
+    } else { if t == 4 {
+        let l = __arena_get(expr_idx + 1);
+        let r = __arena_get(expr_idx + 2);
+        let nl = clone_subst_var(l, param_s, param_l, arg_idx);
+        let nr = clone_subst_var(r, param_s, param_l, arg_idx);
+        if nl == l { if nr == r { expr_idx } else { mk_node(4, nl, nr, 0) } }
+        else { mk_node(4, nl, nr, 0) }
+    } else { if t == 5 {
+        let l = __arena_get(expr_idx + 1);
+        let r = __arena_get(expr_idx + 2);
+        let nl = clone_subst_var(l, param_s, param_l, arg_idx);
+        let nr = clone_subst_var(r, param_s, param_l, arg_idx);
+        if nl == l { if nr == r { expr_idx } else { mk_node(5, nl, nr, 0) } }
+        else { mk_node(5, nl, nr, 0) }
+    } else { if t == 9 {
+        let inner = __arena_get(expr_idx + 1);
+        let ni = clone_subst_var(inner, param_s, param_l, arg_idx);
+        if ni == inner { expr_idx } else { mk_node(9, ni, 0, 0) }
+    } else {
+        // Leaves (literals) and unhandled tags: return as-is.
+        expr_idx
+    } } } } } }
+}
+
+// Pre-differentiate pass: walk expr_idx; for each AST_CALL whose name
+// matches a fn in fn_list, substitute the call with a clone of the
+// callee's body where each param's name is replaced by the matching
+// arg expression. Recurses into the substituted body to inline nested
+// calls. Depth-limited at 6 (Phase-0 guard).
+//
+// Returns the (possibly new) idx with all eligible calls inlined.
+// Calls whose callee is not in fn_list (e.g. transcendentals like
+// __exp, __sin, or builtins) are left as-is — differentiate will
+// trap on them with id 85001.
+fn inline_user_calls(expr_idx: i32, head: i32, depth: i32) -> i32 {
+    if depth >= 6 {
+        expr_idx
+    } else {
+        let t = __arena_get(expr_idx);
+        if t == 16 {
+            // AST_CALL. p1 = name_s, p2 = name_l, p3 = args_head.
+            let call_ns = __arena_get(expr_idx + 1);
+            let call_nl = __arena_get(expr_idx + 2);
+            let args_head = __arena_get(expr_idx + 3);
+            // Find callee in fn_list.
+            let mut walk: i32 = head;
+            let mut callee_idx: i32 = 0;
+            let mut fk: i32 = 1;
+            while fk == 1 {
+                let cand_idx = __arena_get(walk + 1);
+                let cand_ns = __arena_get(cand_idx + 1);
+                let cand_nl = __arena_get(cand_idx + 2);
+                if byte_eq(call_ns, call_nl, cand_ns, cand_nl) == 1 {
+                    callee_idx = cand_idx;
+                    fk = 0;
+                };
+                if fk == 1 {
+                    let nx = __arena_get(walk + 2);
+                    if nx == 0 { fk = 0; } else { walk = nx; };
+                };
+            }
+            if callee_idx == 0 {
+                // Not found — leave as-is. differentiate will trap.
+                expr_idx
+            } else {
+                // Get callee body + params.
+                let cal_body = __arena_get(callee_idx + 3);
+                let cal_params = __arena_get(callee_idx + 4);
+                // Substitute each param with its arg. Walk in lockstep:
+                // params chain (AST_PARAM via slot 3 = next) and args
+                // chain (AST_ARG via slot 2 = next).
+                let mut p_walk: i32 = cal_params;
+                let mut a_walk: i32 = args_head;
+                let mut cur_body: i32 = cal_body;
+                while p_walk != 0 {
+                    if a_walk == 0 {
+                        // Arity mismatch — abort inlining; return original
+                        // call so differentiate can trap.
+                        p_walk = 0;
+                        cur_body = expr_idx;
+                    } else {
+                        let p_ns = __arena_get(p_walk + 1);
+                        let p_nl = __arena_get(p_walk + 2);
+                        let arg_expr = __arena_get(a_walk + 1);
+                        cur_body = clone_subst_var(cur_body, p_ns, p_nl, arg_expr);
+                        p_walk = __arena_get(p_walk + 3);
+                        a_walk = __arena_get(a_walk + 2);
+                    };
+                }
+                // Recursively inline nested calls in the substituted body.
+                inline_user_calls(cur_body, head, depth + 1)
+            }
+        } else { if t == 2 {
+            let l = __arena_get(expr_idx + 1);
+            let r = __arena_get(expr_idx + 2);
+            let nl = inline_user_calls(l, head, depth);
+            let nr = inline_user_calls(r, head, depth);
+            if nl == l { if nr == r { expr_idx } else { mk_node(2, nl, nr, 0) } }
+            else { mk_node(2, nl, nr, 0) }
+        } else { if t == 3 {
+            let l = __arena_get(expr_idx + 1);
+            let r = __arena_get(expr_idx + 2);
+            let nl = inline_user_calls(l, head, depth);
+            let nr = inline_user_calls(r, head, depth);
+            if nl == l { if nr == r { expr_idx } else { mk_node(3, nl, nr, 0) } }
+            else { mk_node(3, nl, nr, 0) }
+        } else { if t == 4 {
+            let l = __arena_get(expr_idx + 1);
+            let r = __arena_get(expr_idx + 2);
+            let nl = inline_user_calls(l, head, depth);
+            let nr = inline_user_calls(r, head, depth);
+            if nl == l { if nr == r { expr_idx } else { mk_node(4, nl, nr, 0) } }
+            else { mk_node(4, nl, nr, 0) }
+        } else { if t == 5 {
+            let l = __arena_get(expr_idx + 1);
+            let r = __arena_get(expr_idx + 2);
+            let nl = inline_user_calls(l, head, depth);
+            let nr = inline_user_calls(r, head, depth);
+            if nl == l { if nr == r { expr_idx } else { mk_node(5, nl, nr, 0) } }
+            else { mk_node(5, nl, nr, 0) }
+        } else { if t == 9 {
+            let inner = __arena_get(expr_idx + 1);
+            let ni = inline_user_calls(inner, head, depth);
+            if ni == inner { expr_idx } else { mk_node(9, ni, 0, 0) }
+        } else {
+            expr_idx
+        } } } } } }
+    }
+}
+
 // Differentiate an AST subtree w.r.t. variable `var_s`/`var_l` (the
 // param byte-range). Returns the index of a freshly-built derivative
 // node. Recursively walks the tree; for unsupported tags emits a
@@ -3790,8 +3950,13 @@ fn grad_pass(sb: i32, head: i32) -> i32 {
                 // 2 = name_l, 3 = next, 4 = type_tag.
                 let var_s = if loss_params == 0 { 0 } else { __arena_get(loss_params + 1) };
                 let var_l = if loss_params == 0 { 0 } else { __arena_get(loss_params + 2) };
+                // Stage 13 prep: inline user-fn calls inside loss before
+                // differentiating. depth=0; recursion cap=6 inside the
+                // pass. Calls to unknown fns (transcendentals, builtins)
+                // are left as-is — differentiate will trap on them.
+                let inlined = inline_user_calls(loss_body, head, 0);
                 // Differentiate then simplify.
-                let deriv_raw = differentiate(loss_body, var_s, var_l);
+                let deriv_raw = differentiate(inlined, var_s, var_l);
                 let deriv = simplify(deriv_raw);
                 // Synthesize the AST_FN_DECL clone. Same param chain (we
                 // share — derivative still takes the same input shape) and
