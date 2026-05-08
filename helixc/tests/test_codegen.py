@@ -2442,6 +2442,20 @@ fn main() -> i32 {
         "fn main() -> i32 { let arr = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16] ; "
         "arr[15] + 26 }"
     ) == 42, "16-element array max arity, last element (16+26=42)"
+    # Stage 4 Iter E polish: computed index expressions.
+    # Verifies the runtime-index codegen (push, eval idx, mov ecx eax,
+    # pop, imul ecx 8, add rax rcx, mov eax [rax]) handles arithmetic
+    # on the index — not just literals.
+    assert compile_and_exec(
+        "fn main() -> i32 { let arr = [10, 20, 30, 40] ; let i = 1 ; arr[i + 1] + 12 }"
+    ) == 42, "computed index expr (i+1=2 → arr[2]=30, +12=42)"
+    assert compile_and_exec(
+        "fn main() -> i32 { let arr = [1, 2, 3, 4, 5, 6, 7] ; arr[3 * 2 - 1] + 36 }"
+    ) == 42, "complex idx expr (3*2-1=5 → arr[5]=6, +36=42)"
+    # Index a tuple too (codegen identical at machine level).
+    assert compile_and_exec(
+        "fn main() -> i32 { let t = (10, 20, 30) ; let i = 1 ; t[i] + 22 }"
+    ) == 42, "tuple indexed with runtime expr (.1=20, +22=42)"
     # Stage 1.5 audit fix: bf16 comparison ops trap. Pre-fix:
     # AST_LT/GT/LE/GE/EQ/NE cascades had no is_bf16_expr check — bf16
     # operands fell through to integer compare on bit patterns. This is
