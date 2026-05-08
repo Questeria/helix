@@ -2486,6 +2486,32 @@ fn main() -> i32 {
         "let z: u64 = 0_u64 - y ; "
         "if z == x { 42 } else { 0 } }"
     ) == 42, "u64 double-negate via subtract preserves value"
+    # Stage 4 follow-up audit Finding #1: AST_FN_DECL body-vs-ret-ty
+    # trap was 8b/!=8b only. Pre-fix, narrow-vs-wider mismatches
+    # (e.g. `fn f() -> u8 { 257 }` where body i32 has 4 bytes and
+    # ret u8 has 1 byte) escaped the 14001 trap. Now 14002 fires
+    # when body and ret_ty have different storage-width classes.
+    # The fix uses width classes (1/2/4/8) rather than full type
+    # equality because the existing bootstrap source has same-width
+    # mismatches (e.g. some fns return i32 from u32-shaped bodies)
+    # that are benign at the call boundary; a strict equality trap
+    # produces false positives during self-host.
+    # Test: u8-returning fn with i32 body — width mismatch (4 vs 1).
+    assert compile_and_exec(
+        "fn f() -> u8 { 257 } fn main() -> i32 { f() ; 42 }"
+    ) == 132, "fn -> u8 with i32 body traps (width mismatch 14002)"
+    # Test: bf16-returning fn with i32 body — width mismatch (4 vs 2).
+    assert compile_and_exec(
+        "fn f() -> bf16 { 7 } fn main() -> i32 { f() ; 42 }"
+    ) == 132, "fn -> bf16 with i32 body traps (width mismatch 14002)"
+    # Test: u16-returning fn with i32 body — width mismatch (4 vs 2).
+    assert compile_and_exec(
+        "fn f() -> u16 { 7 } fn main() -> i32 { f() ; 42 }"
+    ) == 132, "fn -> u16 with i32 body traps (width mismatch 14002)"
+    # Negative test: same-width pair (i32 ret + i32 body) does NOT trap.
+    assert compile_and_exec(
+        "fn f() -> i32 { 42 } fn main() -> i32 { f() }"
+    ) == 42, "fn -> i32 with i32 body does not trap (same width)"
     # Stage 1.5 audit fix: bf16 comparison ops trap. Pre-fix:
     # AST_LT/GT/LE/GE/EQ/NE cascades had no is_bf16_expr check — bf16
     # operands fell through to integer compare on bit patterns. This is
@@ -6205,6 +6231,57 @@ def test_autodiff_relu_derivative_negative():
     """
     code = compile_and_run(src)
     assert code == 0, f"expected 0 (relu' at -ve = 0), got {code}"
+
+
+def test_autodiff_d_abs_derivative():
+    """d/dx |a| = sign(a)*a'. Three-way: a>0 -> a_dx; a<0 -> -a_dx; a==0 -> 0.
+    22 + (-(-20)) + 0 = 42."""
+    src = """
+    fn main() -> i32 {
+        d_abs_dx(5.0_f64, 22.0_f64) as i32
+            + d_abs_dx(0.0_f64 - 5.0_f64, 0.0_f64 - 20.0_f64) as i32
+            + d_abs_dx(0.0_f64, 100.0_f64) as i32
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42 (22+20+0), got {code}"
+
+
+def test_autodiff_d_max_const_derivative():
+    """d/dx max(a, c) = a' if a > c else 0.
+    a=5,c=3 -> 42; a=1,c=3 -> 0; sum=42."""
+    src = """
+    fn main() -> i32 {
+        d_max_const_dx(5.0_f64, 42.0_f64, 3.0_f64) as i32
+            + d_max_const_dx(1.0_f64, 100.0_f64, 3.0_f64) as i32
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42 (42+0), got {code}"
+
+
+def test_autodiff_d_min_const_derivative():
+    """d/dx min(a, c) = a' if a < c else 0.
+    a=1,c=3 -> 42; a=5,c=3 -> 0; sum=42."""
+    src = """
+    fn main() -> i32 {
+        d_min_const_dx(1.0_f64, 42.0_f64, 3.0_f64) as i32
+            + d_min_const_dx(5.0_f64, 100.0_f64, 3.0_f64) as i32
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42 (42+0), got {code}"
+
+
+def test_autodiff_d_sub_const_derivative():
+    """d/dx (a - c) = a'. a_dx unchanged. a_dx=42 -> 42."""
+    src = """
+    fn main() -> i32 {
+        d_sub_const_dx(100.0_f64, 42.0_f64, 50.0_f64) as i32
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42 (a_dx unchanged), got {code}"
 
 
 def test_stdlib_option_some():

@@ -95,3 +95,26 @@
 @pure fn d_relu_dx(a_v: f64, a_dx: f64) -> f64 {
     if a_v > 0.0_f64 { a_dx } else { 0.0_f64 }
 }
+
+// d/dx |a| = sign(a) * a'  (subgradient at a=0 chosen as 0)
+@pure fn d_abs_v(a_v: f64, a_dx: f64) -> f64 { __abs_f64(a_v) }
+@pure fn d_abs_dx(a_v: f64, a_dx: f64) -> f64 {
+    if a_v > 0.0_f64 { a_dx }
+    else { if a_v < 0.0_f64 { 0.0_f64 - a_dx } else { 0.0_f64 } }
+}
+
+// d/dx max(a, c) = a' if a > c else 0  (subgradient at a==c chosen as 0)
+@pure fn d_max_const_v(a_v: f64, a_dx: f64, c: f64) -> f64 { __max_f64(a_v, c) }
+@pure fn d_max_const_dx(a_v: f64, a_dx: f64, c: f64) -> f64 {
+    if a_v > c { a_dx } else { 0.0_f64 }
+}
+
+// d/dx min(a, c) = a' if a < c else 0  (subgradient at a==c chosen as 0)
+@pure fn d_min_const_v(a_v: f64, a_dx: f64, c: f64) -> f64 { __min_f64(a_v, c) }
+@pure fn d_min_const_dx(a_v: f64, a_dx: f64, c: f64) -> f64 {
+    if a_v < c { a_dx } else { 0.0_f64 }
+}
+
+// d/dx (a - c) = a'  (symmetric companion to d_add_const)
+@pure fn d_sub_const_v(a_v: f64, a_dx: f64, c: f64) -> f64 { a_v - c }
+@pure fn d_sub_const_dx(a_v: f64, a_dx: f64, c: f64) -> f64 { a_dx }
