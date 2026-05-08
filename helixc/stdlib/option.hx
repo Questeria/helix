@@ -88,3 +88,69 @@ fn option_max(a: Option, b: Option) -> i32 {
         },
     }
 }
+
+// Pairwise min with None as additive identity (matches option_max):
+//   Some(x), Some(y) -> min(x, y)
+//   Some(x), None    -> x        (None is identity, not +inf)
+//   None, Some(y)    -> y
+//   None, None       -> 0        (caller should pre-filter if 0 is a valid datum)
+@pure
+fn option_min(a: Option, b: Option) -> i32 {
+    match a {
+        Option::Some(av) => match b {
+            Option::Some(bv) => if av < bv { av } else { bv },
+            Option::None => av,
+        },
+        Option::None => match b {
+            Option::Some(bv) => bv,
+            Option::None => 0,
+        },
+    }
+}
+
+// Sum two options with None as additive 0:
+//   Some(x), Some(y) -> x + y
+//   Some(x), None    -> x
+//   None, Some(y)    -> y
+//   None, None       -> 0
+@pure
+fn option_sum(a: Option, b: Option) -> i32 {
+    match a {
+        Option::Some(av) => match b {
+            Option::Some(bv) => av + bv,
+            Option::None => av,
+        },
+        Option::None => match b {
+            Option::Some(bv) => bv,
+            Option::None => 0,
+        },
+    }
+}
+
+// Structural equality of two Options:
+//   Some(x), Some(y) -> 1 iff x == y
+//   None, None       -> 1
+//   otherwise        -> 0
+@pure
+fn option_eq(a: Option, b: Option) -> i32 {
+    match a {
+        Option::Some(av) => match b {
+            Option::Some(bv) => if av == bv { 1 } else { 0 },
+            Option::None => 0,
+        },
+        Option::None => match b {
+            Option::Some(_) => 0,
+            Option::None => 1,
+        },
+    }
+}
+
+// Companion to option_or_zero: returns 1 (multiplicative identity) on None,
+// useful for fold-product chains where None should not absorb the running product.
+@pure
+fn option_or_one(o: Option) -> i32 {
+    match o {
+        Option::Some(x) => x,
+        Option::None => 1,
+    }
+}

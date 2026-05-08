@@ -6405,6 +6405,73 @@ def test_stdlib_option_max():
     assert code == 42, f"expected 42 (max(20,22)=22 + max(20,None)=20), got {code}"
 
 
+def test_stdlib_option_min():
+    """option_min: pairwise min with None as additive identity.
+    Two-Somes path picks min; Some+None path returns the Some payload."""
+    src = """
+    fn main() -> i32 {
+        let a = Option::Some(22);
+        let b = Option::Some(20);
+        let none = Option::None;
+        let m1 = option_min(a, b);
+        let m2 = option_min(a, none);
+        m1 + m2
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42 (min(22,20)=20 + min(22,None)=22), got {code}"
+
+
+def test_stdlib_option_sum():
+    """option_sum: add two options, None as 0. Three regions: Some+Some, Some+None, None+None."""
+    src = """
+    fn main() -> i32 {
+        let a = Option::Some(20);
+        let b = Option::Some(22);
+        let none = Option::None;
+        let s1 = option_sum(a, b);
+        let s2 = option_sum(a, none);
+        let s3 = option_sum(none, none);
+        s1 + s2 - 20 + s3
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42 (42 + 20 - 20 + 0), got {code}"
+
+
+def test_stdlib_option_eq():
+    """option_eq: structural equality of two Options.
+    Tests Some==Some (eq), Some==Some (neq), None==None, Some==None."""
+    src = """
+    fn main() -> i32 {
+        let a = Option::Some(20);
+        let b = Option::Some(20);
+        let c = Option::Some(99);
+        let none = Option::None;
+        let eq_ss = option_eq(a, b);
+        let eq_ssn = option_eq(a, c);
+        let eq_nn = option_eq(none, none);
+        let eq_sn = option_eq(a, none);
+        eq_ss * 22 + eq_ssn * 100 + eq_nn * 20 + eq_sn * 99
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42 (1*22 + 0 + 1*20 + 0), got {code}"
+
+
+def test_stdlib_option_or_one():
+    """option_or_one: Some(x) -> x; None -> 1 (multiplicative identity)."""
+    src = """
+    fn main() -> i32 {
+        let a = Option::Some(41);
+        let b = Option::None;
+        option_or_one(a) + option_or_one(b)
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42 (41 + 1), got {code}"
+
+
 def test_stdlib_result_ok_err():
     """Result::Ok / Result::Err round-trip through unwrap_or."""
     src = """
