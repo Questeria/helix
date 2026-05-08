@@ -551,10 +551,11 @@ fn parse_unary(tok_base: i32, sb: i32) -> i32 {
         // Stage 5 Iter D: chained `.IDENT.IDENT` for nested structs.
         //   Track cur_struct_idx through the chain: starts at the LHS
         //   var's struct_idx; after each `.IDENT` whose field is a
-        //   struct, update to that field's struct_idx (and emit tag 56
-        //   AST_TUPLE_FIELD_64 — 8-byte read of the child pointer);
-        //   else emit tag 52 (4-byte read) and reset cur_struct_idx to
-        //   -1, which makes any further `.IDENT` bail.
+        //   struct, update to that field's struct_idx (and emit
+        //   AST_TUPLE_FIELD with p3 == 1 — codegen reads the slot as
+        //   an 8-byte child pointer instead of a 4-byte i32); else
+        //   emit p3 == 0 (4-byte read) and reset cur_struct_idx to -1,
+        //   which makes any further `.IDENT` bail.
         let mut prim = parse_primary(tok_base, sb);
         let mut cur_struct_idx: i32 = 0 - 1;
         let mut keep_p: i32 = 1;
@@ -594,10 +595,12 @@ fn parse_unary(tok_base: i32, sb: i32) -> i32 {
                             // Iter D: is this field struct-typed?
                             let f_struct_idx = struct_tab_field_struct_idx(sb, lhs_struct_idx, f_idx);
                             if f_struct_idx >= 0 {
-                                // Nested struct field: emit 8-byte read
-                                // (tag 56) and propagate struct_idx
-                                // forward for the next chained access.
-                                prim = mk_node(56, prim, f_idx, 0);
+                                // Nested struct field: emit AST_TUPLE_FIELD
+                                // with p3 == 1 to mark an 8-byte (REX.W)
+                                // read of the child pointer, and propagate
+                                // struct_idx forward for the next chained
+                                // access.
+                                prim = mk_node(52, prim, f_idx, 1);
                                 cur_struct_idx = f_struct_idx;
                             } else {
                                 prim = mk_node(52, prim, f_idx, 0);

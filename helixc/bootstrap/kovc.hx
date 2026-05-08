@@ -1114,8 +1114,14 @@ fn expr_type(idx: i32, bind_state: i32, bn_state: i32) -> i32 {
     else { if t == 41 { 8 }                           // AST_INTLIT_U16 (Stage 2.5c)
     else { if t == 42 { 4 }                           // AST_FLOATLIT_BF16 (Stage 1.5)
     else { if t == 50 { 3 }                            // AST_TUPLE_LIT (Stage 4) — 64-bit pointer (treat as i64 for storage)
-    else { if t == 52 { 0 }                            // AST_TUPLE_FIELD (Stage 4 iter B) — 32-bit element
-    else { if t == 53 { 0 }                            // AST_INDEX (Stage 4 iter E) — 32-bit element
+    else { if t == 52 {
+        // AST_TUPLE_FIELD (Stage 4 iter B). Stage 5 Iter D: p3 == 1 marks
+        // the field as struct-typed (slot holds an 8-byte pointer); the
+        // codegen path emits a 64-bit load and the type tag is 3 (i64-
+        // shaped, same convention as AST_TUPLE_LIT).
+        let p3 = __arena_get(idx + 3);
+        if p3 == 1 { 3 } else { 0 }
+    } else { if t == 53 { 0 }                            // AST_INDEX (Stage 4 iter E) — 32-bit element
     else { if t == 0 { 0 }                            // AST_INTLIT (i32)
     else { if t == 1 {                                // AST_VAR
         bind_lookup_type(bind_state, p1, p2)
@@ -3026,18 +3032,29 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         // load and masked store deferred.
         emit_ast_int(p1)
     } else { if t == 52 {
-        // Stage 4 iter B: AST_TUPLE_FIELD (tag 52).
-        // Audit follow-up Finding #7: disp8 wrap when p2 > 15.
-        // mov eax, [rax + p2*8] uses signed disp8 (-128..127). For
-        // p2 >= 16, off = p2*8 >= 128 wraps to a NEGATIVE displacement
-        // and reads from BEFORE the tuple base — silent garbage.
-        // Disp32 emission is deferred; emit ud2 prefix so runtime
-        // traps loudly before the wrapping load executes.
+        // Stage 4 iter B: AST_TUPLE_FIELD (tag 52). p1 = inner expr,
+        // p2 = field-index (0..15). Reads slot at [rax + p2*8].
+        // Stage 5 Iter D: p3 == 1 selects an 8-byte (REX.W) read for
+        // struct-typed fields whose slot holds a child pointer; p3 == 0
+        // (default) keeps the original 4-byte read for scalars. Width
+        // dispatch is folded into this arm rather than a new tag so the
+        // emit_ast_code if-else chain stays at the same depth (the host
+        // Python parser's recursion budget is tight — Finding #7).
+        // Finding #7 disp8 wrap: p2 > 15 traps before the wrapping load.
+        let p3 = __arena_get(idx + 3);
         let n_pre_trap = if p2 > 15 { emit_trap_with_id(52001) } else { 0 };
         let n_inner = emit_ast_code(p1, bind_state, patch_state, bn_state);
         let off = p2 * 8;
-        emit_byte(0x8B); emit_byte(0x40); emit_byte(off);
-        n_inner + 3 + n_pre_trap
+        let n_load = if p3 == 1 {
+            // mov rax, [rax + disp8]  (REX.W: 48 8B 40 disp8 = 4 bytes)
+            emit_byte(0x48); emit_byte(0x8B); emit_byte(0x40); emit_byte(off);
+            4
+        } else {
+            // mov eax, [rax + disp8]  (8B 40 disp8 = 3 bytes)
+            emit_byte(0x8B); emit_byte(0x40); emit_byte(off);
+            3
+        };
+        n_inner + n_load + n_pre_trap
     } else { if t == 53 {
         // Stage 4 iter E: AST_INDEX (tag 53). p1=array_expr, p2=idx_expr.
         // Codegen:
