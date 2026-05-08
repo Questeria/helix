@@ -3419,6 +3419,42 @@ fn main() -> i32 {
         "fn loss2(x: f64) -> f64 { h(x) + x } "
         "fn main() -> i32 { __f64_to_i32(grad_rev_all(loss2)(3.0_f64).dx) }"
     ) == 7, "Stage 14G: grad_rev_all with helper inlining = 7"
+    # Stage 14.5: @checkpoint attribute on fn decl. Phase-0: parser
+    # stores `is_checkpoint` flag on AST_FN_DECL slot 8; grad_rev_pass
+    # runs ckpt_callees_pure on the loss body BEFORE inlining; if any
+    # @checkpoint callee has an impure body the synthesized gradient
+    # body becomes an AST_ERR(99, 90001) trap.
+    # 14.5A: deep-block (5-level multiply) wrapped in @checkpoint.
+    #   d/dx (deep_block(x) + x) = d/dx (x^5 + x) = 5x^4 + 1
+    #   = 5 * 16 + 1 = 81 at x=2.
+    assert compile_and_exec(
+        "@checkpoint "
+        "fn deep_block(x: f64) -> f64 { x * x * x * x * x } "
+        "fn loss(x: f64) -> f64 { deep_block(x) + x } "
+        "fn main() -> i32 { __f64_to_i32(grad_rev_all(loss)(2.0_f64).dx) }"
+    ) == 81, "Stage 14.5A: @checkpoint deep_block(x)+x = 5x^4+1 at x=2 -> 81"
+    # 14.5B: @checkpoint on a simple quadratic. Verifies the attribute
+    #   doesn't BREAK the existing reverse-mode AD pipeline.
+    #   d/dx (q(x) + x) = d/dx (x*x + x) = 2x + 1 = 7 at x=3.
+    assert compile_and_exec(
+        "@checkpoint "
+        "fn q(x: f64) -> f64 { x * x } "
+        "fn loss(x: f64) -> f64 { q(x) + x } "
+        "fn main() -> i32 { __f64_to_i32(grad_rev_all(loss)(3.0_f64).dx) }"
+    ) == 7, "Stage 14.5B: @checkpoint q(x)+x = 2x+1 at x=3 -> 7"
+    # 14.5C: @checkpoint composes with non-checkpoint helper.
+    #   helper(x) = x*x; @checkpoint outer(x) = helper(x) + helper(x);
+    #   loss(x) = outer(x); d/dx (2x^2) = 4x = 12 at x=3.
+    # Verifies the purity scan correctly does NOT flag non-@checkpoint
+    # helpers as needing the pure-only restriction; only @checkpoint
+    # callees are constrained.
+    assert compile_and_exec(
+        "fn helper(x: f64) -> f64 { x * x } "
+        "@checkpoint "
+        "fn outer(x: f64) -> f64 { helper(x) + helper(x) } "
+        "fn loss(x: f64) -> f64 { outer(x) } "
+        "fn main() -> i32 { __f64_to_i32(grad_rev_all(loss)(3.0_f64).dx) }"
+    ) == 12, "Stage 14.5C: @checkpoint outer composing pure helper = 4x at x=3 -> 12"
 
 
 def test_bootstrap_kovc_inline_write_file_to_arena():
