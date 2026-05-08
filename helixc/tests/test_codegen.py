@@ -2430,6 +2430,18 @@ fn main() -> i32 {
     assert compile_and_exec(
         "fn main() -> i32 { let arr = [1, 2, 3,] ; arr[0] + arr[1] + arr[2] + 36 }"
     ) == 42, "array with trailing comma"
+    # Stage 4 stress: larger arity. Each slot is 8 bytes; the disp8
+    # limit (signed, -128..127) means max offset = 120 → arity ≤ 16.
+    # Test arity 10 with all elements summed.
+    assert compile_and_exec(
+        "fn main() -> i32 { let arr = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10] ; "
+        "arr[0] + arr[1] + arr[2] + arr[3] + arr[4] + arr[5] + arr[6] + arr[7] + arr[8] + arr[9] - 13 }"
+    ) == 42, "10-element array, all indexed (sum 55 - 13 = 42)"
+    # 16-element array (max arity that fits disp8).
+    assert compile_and_exec(
+        "fn main() -> i32 { let arr = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16] ; "
+        "arr[15] + 26 }"
+    ) == 42, "16-element array max arity, last element (16+26=42)"
     # Stage 1.5 audit fix: bf16 comparison ops trap. Pre-fix:
     # AST_LT/GT/LE/GE/EQ/NE cascades had no is_bf16_expr check — bf16
     # operands fell through to integer compare on bit patterns. This is
