@@ -3109,6 +3109,13 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         // mov rax, rsp  (48 89 E0 = 3 bytes; rax now holds slot-0 ptr)
         emit_byte(0x48); emit_byte(0x89); emit_byte(0xE0);
         total + 3
+    } else { if t == 54 {
+        // Stage 5 Iter A: AST_STRUCT_DECL — metadata only, emits 0 bytes.
+        // The struct decl is registered in the parser's struct_table at
+        // parse time; codegen sees it as a no-op since struct lits get
+        // folded into AST_TUPLE_LIT (tag 50) at parse time, reusing the
+        // existing tuple-lit codegen above.
+        0
     } else { if t == 42 {
         // Stage 1.5: AST_FLOATLIT_BF16 (tag 42). bf16 = f32 with the
         // low 16 mantissa bits truncated to zero. Compute the f32 IEEE
@@ -4430,7 +4437,7 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         // resulting binary to SIGILL — clear signal vs. silent 0.
         // Speedup #4 wire-in: AST_ERR / unhandled-tag trap id 99001.
         emit_trap_with_id(99001)
-    }}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}
+    }}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}
 }
 
 // --------------------------------------------------------------
