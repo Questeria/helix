@@ -3163,6 +3163,15 @@ fn main() -> i32 {
         "fn pair<A, B>(a: A, b: B) -> A { a } "
         "fn main() -> i32 { pair::<i32, f64>(7, 1.0_f64) }"
     ) == 7, "Stage 8D: 2-param generic pair<A,B> returns first arg"
+    # Test 8F: uninstantiated generic call (no turbofish) traps. The
+    # generic-template fn decl is NOT registered in fn_table, so its
+    # name resolution at backpatch time hits the unresolved-CALL ud2
+    # path (SIGILL = exit 132). No specific 71002 trap-id but the
+    # behaviour is equivalent: clear failure rather than silent
+    # miscompile.
+    assert compile_and_exec(
+        "fn id<T>(x: T) -> T { x } fn main() -> i32 { id(5) }"
+    ) == 132, "Stage 8F: uninstantiated generic call traps via ud2"
 
 
 def test_bootstrap_kovc_inline_write_file_to_arena():
