@@ -2615,6 +2615,19 @@ fn main() -> i32 {
         "enum E { Z, Pair(i32, i32) } "
         "fn main() -> i32 { let p = E::Pair(10, 32); p.1 + p.2 }"
     ) == 42, "Stage 6C: 2-payload variant access via .1 + .2"
+    # Stage 6D: explicit `__enum_payload(m, 0)` reader. Desugars to
+    # AST_TUPLE_FIELD(m, idx + 1) at parse time, reusing tuple-field
+    # codegen. The +1 offset skips the discriminant slot.
+    assert compile_and_exec(
+        "enum Maybe { None, Some(i32) } "
+        "fn main() -> i32 { let m = Maybe::Some(42); __enum_payload(m, 0) }"
+    ) == 42, "Stage 6D: __enum_payload(m, 0) returns first payload"
+    # 2-payload variant with explicit reader.
+    assert compile_and_exec(
+        "enum E { Z, Pair(i32, i32) } "
+        "fn main() -> i32 { let p = E::Pair(10, 32); "
+        "__enum_payload(p, 0) + __enum_payload(p, 1) }"
+    ) == 42, "Stage 6D: __enum_payload reads both payload slots"
     # Stage 4 follow-up audit Finding #2: AST_NEG was missing u64
     # dispatch. Fell through to 32-bit `neg eax` which only flipped
     # the low half. Now uses REX.W neg rax (same as i64).

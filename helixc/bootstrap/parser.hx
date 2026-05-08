@@ -1161,7 +1161,52 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
                     }};
                 }
                 cur_advance(sb);     // consume ')'
-                mk_node(16, id_start, id_len, args_head)
+                // Stage 6D: detect __enum_payload(value_expr, idx_intlit)
+                // and rewrite to AST_TUPLE_FIELD(value_expr, idx + 1).
+                // The value lives at slot idx+1 in the tuple-lit-shaped
+                // enum representation (slot 0 = discriminant). Folds
+                // into existing AST_TUPLE_FIELD codegen — no new arm.
+                // Match name bytes: "__enum_payload" = 14 chars.
+                // FLAT prefix-trap pattern (Finding #7): NO nested
+                // if-else statements — single ladder.
+                let is_ep = if id_len == 14 {
+                    let b0 = __arena_get(id_start);
+                    let b1 = __arena_get(id_start + 1);
+                    let b2 = __arena_get(id_start + 2);
+                    let b3 = __arena_get(id_start + 3);
+                    let b4 = __arena_get(id_start + 4);
+                    let b5 = __arena_get(id_start + 5);
+                    let b6 = __arena_get(id_start + 6);
+                    let b7 = __arena_get(id_start + 7);
+                    let b8 = __arena_get(id_start + 8);
+                    let b9 = __arena_get(id_start + 9);
+                    let b10 = __arena_get(id_start + 10);
+                    let b11 = __arena_get(id_start + 11);
+                    let b12 = __arena_get(id_start + 12);
+                    let b13 = __arena_get(id_start + 13);
+                    let m1 = if b0 == 95 { if b1 == 95 { 1 } else { 0 } } else { 0 };
+                    let m2 = if b2 == 101 { if b3 == 110 { if b4 == 117 { if b5 == 109 { 1 } else { 0 } } else { 0 } } else { 0 } } else { 0 };
+                    let m3 = if b6 == 95 { if b7 == 112 { 1 } else { 0 } } else { 0 };
+                    let m4 = if b8 == 97 { if b9 == 121 { if b10 == 108 { if b11 == 111 { if b12 == 97 { if b13 == 100 { 1 } else { 0 } } else { 0 } } else { 0 } } else { 0 } } else { 0 } } else { 0 };
+                    if m1 == 1 { if m2 == 1 { if m3 == 1 { if m4 == 1 { 1 } else { 0 } } else { 0 } } else { 0 } } else { 0 }
+                } else { 0 };
+                if is_ep == 1 {
+                    let a0 = __arena_get(args_head + 1);     // value expr
+                    let next_arg = __arena_get(args_head + 2);
+                    let a1 = __arena_get(next_arg + 1);      // idx expr
+                    // Stage 6D: idx must be an INTLIT (compile-time
+                    // constant) — Phase 0 does not support dynamic
+                    // payload indices. Trap (AST_ERR) if not.
+                    let a1_tag = __arena_get(a1);
+                    let idx_val = if a1_tag == 0 {
+                        __arena_get(a1 + 1)    // AST_INT.p1 = value
+                    } else { 0 };
+                    // Emit AST_TUPLE_FIELD(value, idx+1, 0). The +1
+                    // skips the discriminant slot at offset 0.
+                    mk_node(52, a0, idx_val + 1, 0)
+                } else {
+                    mk_node(16, id_start, id_len, args_head)
+                }
             } else { if nt == 5 {
                 // Stage 5 Iter A: IDENT followed by '{' might be a struct
                 // literal `Pt { 10, 32 }`. Look up the IDENT in
