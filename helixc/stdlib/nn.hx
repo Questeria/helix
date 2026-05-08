@@ -261,3 +261,72 @@ fn ce_loss(p_start: i32, target_idx: i32) -> f32 {
     let pc = __max(p, eps);
     0.0_f32 - __log(pc)
 }
+
+// argmin: index of smallest element. Companion to argmax.
+// Returns -1 on empty.
+@pure
+fn argmin(x_start: i32, n: i32) -> i32 {
+    if n == 0 { 0 - 1 }
+    else {
+        let mut best_idx: i32 = 0;
+        let mut best_val: i32 = __arena_get(x_start);
+        let mut i: i32 = 1;
+        while i < n {
+            let v = __arena_get(x_start + i);
+            if v < best_val {
+                best_val = v;
+                best_idx = i;
+            }
+            i = i + 1;
+        }
+        best_idx
+    }
+}
+
+// MAE (sum of absolute differences) on integer tensors.
+// Sibling of mse_loss; cheaper since no multiplication and no overflow risk.
+@pure
+fn mae_loss(y_start: i32, t_start: i32, n: i32) -> i32 {
+    let mut i: i32 = 0;
+    let mut total: i32 = 0;
+    while i < n {
+        let d = __arena_get(y_start + i) - __arena_get(t_start + i);
+        let ad = if d < 0 { 0 - d } else { d };
+        total = total + ad;
+        i = i + 1;
+    }
+    total
+}
+
+// MAE on f32 tensors (mean absolute error, returns 0.0 on empty).
+@pure
+fn mae_loss_f32(y_start: i32, t_start: i32, n: i32) -> f32 {
+    if n == 0 { 0.0_f32 }
+    else {
+        let mut i: i32 = 0;
+        let mut total: f32 = 0.0_f32;
+        while i < n {
+            let yv = __f32_from_bits(__arena_get(y_start + i));
+            let tv = __f32_from_bits(__arena_get(t_start + i));
+            total = total + __abs(yv - tv);
+            i = i + 1;
+        }
+        total / (n as f32)
+    }
+}
+
+// Count of positions where prediction matches target. Useful for batch
+// classification accuracy: pred[i] is typically argmax of model output,
+// target[i] is the integer class label.
+@pure
+fn count_correct(pred_start: i32, target_start: i32, n: i32) -> i32 {
+    let mut i: i32 = 0;
+    let mut hits: i32 = 0;
+    while i < n {
+        let p = __arena_get(pred_start + i);
+        let t = __arena_get(target_start + i);
+        if p == t { hits = hits + 1; }
+        i = i + 1;
+    }
+    hits
+}

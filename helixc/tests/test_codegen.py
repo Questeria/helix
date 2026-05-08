@@ -5539,6 +5539,67 @@ def test_nn_mse_loss():
     assert code == 1, f"expected 1, got {code}"
 
 
+def test_nn_argmin():
+    """argmin of [3, 7, 2, 5] = index 2 (smallest is 2)."""
+    src = """
+    fn main() -> i32 {
+        let x = t1d_new(4);
+        ti1d_set(x, 0, 3); ti1d_set(x, 1, 7);
+        ti1d_set(x, 2, 2); ti1d_set(x, 3, 5);
+        argmin(x, 4)
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 2, f"expected 2, got {code}"
+
+
+def test_nn_mae_loss():
+    """MAE: y = [3, 5, 9], target = [4, 7, 5]. |3-4| + |5-7| + |9-5| = 1+2+4 = 7."""
+    src = """
+    fn main() -> i32 {
+        let y = t1d_new(3);
+        ti1d_set(y, 0, 3); ti1d_set(y, 1, 5); ti1d_set(y, 2, 9);
+        let t = t1d_new(3);
+        ti1d_set(t, 0, 4); ti1d_set(t, 1, 7); ti1d_set(t, 2, 5);
+        mae_loss(y, t, 3)
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 7, f"expected 7, got {code}"
+
+
+def test_nn_mae_loss_f32():
+    """MAE f32: y=[3.0, 5.0, 9.0], target=[4.0, 7.0, 5.0]. mean(|d|)=(1+2+4)/3 ~= 2.33; *3=7."""
+    src = """
+    fn main() -> i32 {
+        let y = t1d_new(3);
+        tf1d_set(y, 0, 3.0_f32); tf1d_set(y, 1, 5.0_f32); tf1d_set(y, 2, 9.0_f32);
+        let t = t1d_new(3);
+        tf1d_set(t, 0, 4.0_f32); tf1d_set(t, 1, 7.0_f32); tf1d_set(t, 2, 5.0_f32);
+        (mae_loss_f32(y, t, 3) * 3.0_f32) as i32
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 7, f"expected 7 (mean*3 = (1+2+4)), got {code}"
+
+
+def test_nn_count_correct():
+    """count_correct: pred=[1,2,3,4,5], target=[1,9,3,4,9]. matches at idx 0,2,3 = 3."""
+    src = """
+    fn main() -> i32 {
+        let p = t1d_new(5);
+        ti1d_set(p, 0, 1); ti1d_set(p, 1, 2);
+        ti1d_set(p, 2, 3); ti1d_set(p, 3, 4); ti1d_set(p, 4, 5);
+        let t = t1d_new(5);
+        ti1d_set(t, 0, 1); ti1d_set(t, 1, 9);
+        ti1d_set(t, 2, 3); ti1d_set(t, 3, 4); ti1d_set(t, 4, 9);
+        count_correct(p, t, 5)
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 3, f"expected 3, got {code}"
+
+
 def test_tensor_1d_dot():
     """Phase 2.2: 1D integer-tensor dot product. [1,2,3] . [10,20,30] = 140."""
     src = """
