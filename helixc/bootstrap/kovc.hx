@@ -3461,9 +3461,10 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
             if r_i64 == 1 { emit_mov_rcx_rax_64() } else { emit_mov_ecx_eax() }
         } else { emit_mov_ecx_eax() };
         let no = emit_pop_rax();
+        // Speedup #4 wire-in: AST_BAND mixed i64-trap ids 28020/28021.
         let na = if l_i64 == 1 {
-            if r_i64 == 1 { emit_and_rax_rcx_64() } else { emit_ud2_trap() }
-        } else { if r_i64 == 1 { emit_ud2_trap() } else { emit_and_eax_ecx() } };
+            if r_i64 == 1 { emit_and_rax_rcx_64() } else { emit_trap_with_id(28020) }
+        } else { if r_i64 == 1 { emit_trap_with_id(28021) } else { emit_and_eax_ecx() } };
         n1 + np + n2 + nm + no + na
     } else { if t == 29 {
         // Stage 1 audit fix: AST_BOR 4-way dispatch (i64 needs REX.W).
@@ -3476,9 +3477,10 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
             if r_i64 == 1 { emit_mov_rcx_rax_64() } else { emit_mov_ecx_eax() }
         } else { emit_mov_ecx_eax() };
         let no = emit_pop_rax();
+        // Speedup #4 wire-in: AST_BOR mixed i64-trap ids 29020/29021.
         let na = if l_i64 == 1 {
-            if r_i64 == 1 { emit_or_rax_rcx_64() } else { emit_ud2_trap() }
-        } else { if r_i64 == 1 { emit_ud2_trap() } else { emit_or_eax_ecx() } };
+            if r_i64 == 1 { emit_or_rax_rcx_64() } else { emit_trap_with_id(29020) }
+        } else { if r_i64 == 1 { emit_trap_with_id(29021) } else { emit_or_eax_ecx() } };
         n1 + np + n2 + nm + no + na
     } else { if t == 30 {
         // AST_BXOR: `xor eax, ecx` (0x31 0xC8).
@@ -3492,9 +3494,10 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
             if r_i64 == 1 { emit_mov_rcx_rax_64() } else { emit_mov_ecx_eax() }
         } else { emit_mov_ecx_eax() };
         let no = emit_pop_rax();
+        // Speedup #4 wire-in: AST_BXOR mixed i64-trap ids 30020/30021.
         let na = if l_i64 == 1 {
-            if r_i64 == 1 { emit_xor_rax_rcx_64() } else { emit_ud2_trap() }
-        } else { if r_i64 == 1 { emit_ud2_trap() } else { emit_xor_eax_ecx() } };
+            if r_i64 == 1 { emit_xor_rax_rcx_64() } else { emit_trap_with_id(30020) }
+        } else { if r_i64 == 1 { emit_trap_with_id(30021) } else { emit_xor_eax_ecx() } };
         n1 + np + n2 + nm + no + na
     } else { if t == 32 {
         // AST_SHL: shl eax, cl (D3 E0); shl rax, cl (REX.W: 48 D3 E0) for i64.
@@ -3967,14 +3970,16 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
             // The 8-byte types (i64=3, u64=9) require width-matched
             // value+binding; mixed widths trap with ud2 to avoid silent
             // truncation or zero-extension bugs.
+            // Speedup #4 wire-in: AST_LET body-vs-bind-ty trap ids
+            // 8001-8004 cover the value/binding-type mismatches.
             let val_i64 = is_i64_expr(p3, bind_state, bn_state);
             let val_u64 = is_u64_expr(p3, bind_state, bn_state);
             let n_store = if val_i64 == 1 {
                 if bind_ty == 3 { emit_mov_local_rax_64(off) }
-                else { emit_ud2_trap() }
+                else { emit_trap_with_id(8001) }   // i64 value, non-i64 binding
             } else { if val_u64 == 1 {
                 if bind_ty == 9 { emit_mov_local_rax_64(off) }
-                else { emit_ud2_trap() }
+                else { emit_trap_with_id(8002) }   // u64 value, non-u64 binding
             } else { if bind_ty == 2 {
                 emit_mov_local_rax_64(off)
             } else { if bind_ty == 3 {
@@ -3984,10 +3989,10 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
                 // holding (val + 2^32) instead of val. Trap instead of
                 // silently producing wrong results. Mirrors batch 3's
                 // i64-into-i32 trap.
-                emit_ud2_trap()
+                emit_trap_with_id(8003)            // i32 value, i64 binding
             } else { if bind_ty == 9 {
                 // Stage 2.4 mirror: i32-into-u64 also traps.
-                emit_ud2_trap()
+                emit_trap_with_id(8004)            // i32 value, u64 binding
             } else { if bind_ty == 7 {
                 // Stage 2.5b/c stage 3: u8 binding → 1-byte store.
                 emit_mov_local_al(off)
@@ -4056,11 +4061,12 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
             let n_push = emit_push_rax();
             bytes_emitted = bytes_emitted + n_arg + n_push;
             // Stage 1.7: trap on arg-type-vs-param-type mismatch.
+            // Speedup #4 wire-in: AST_CALL arg-type-mismatch trap id 16001.
             if arg_count < pp_count {
                 let expected_ty = unpack_param_ty(pp_packed, arg_count);
                 let actual_ty = expr_type(arg_expr, bind_state, bn_state);
                 if expected_ty != actual_ty {
-                    let n_trap = emit_ud2_trap();
+                    let n_trap = emit_trap_with_id(16001);
                     bytes_emitted = bytes_emitted + n_trap;
                 };
             };
@@ -4075,8 +4081,9 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         // happens — corrupting both the stack and any subsequent
         // pop/cmp operations. Loud SIGILL is much better than silent
         // corruption. Implement stack-args properly when needed.
+        // Speedup #4 wire-in: AST_CALL arity-overflow trap id 16002.
         if arg_count > 6 {
-            let n_trap = emit_ud2_trap();
+            let n_trap = emit_trap_with_id(16002);
             bytes_emitted + n_trap
         } else {
         // Pass 2: pop into SysV regs in reverse-of-push order.
@@ -4163,7 +4170,8 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         // bug is loud at runtime instead of producing a binary that
         // returns 0. Lex/parse errors that produce AST_ERR cause the
         // resulting binary to SIGILL — clear signal vs. silent 0.
-        emit_ud2_trap()
+        // Speedup #4 wire-in: AST_ERR / unhandled-tag trap id 99001.
+        emit_trap_with_id(99001)
     }}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}
 }
 
