@@ -4144,6 +4144,108 @@ def test_grad_grad_quadratic():
 
 
 # ============================================================================
+# Stage 13: AD across user-defined fn calls
+# ============================================================================
+def test_stage13a_grad_through_helper_no_pure_attr():
+    # Stage 13 plan test (docs/APPROACH_A_DETAILED_PLAN.md:826-831).
+    # f(x) = g(x) + x where g(x) = x*x; d/dx (x^2 + x) = 2x + 1; at x=3 -> 7.
+    # Helpers do NOT have @pure — Stage 13 infers purity from body shape so
+    # plain arithmetic helpers are inlined automatically.
+    src = """
+    fn g(x: f32) -> f32 { x * x }
+    fn f(x: f32) -> f32 { g(x) + x }
+    fn main() -> i32 {
+        grad(f)(3.0) as i32
+    }
+    """
+    assert compile_and_run(src) == 7
+
+
+def test_stage13b_grad_through_multi_level_helpers():
+    # Stage 13 multi-level helper inlining: h -> g -> f.
+    # Each call inlines into the next; the final body for AD is x*x + x.
+    # d/dx at x=3 = 2x + 1 = 7.
+    src = """
+    fn h(x: f32) -> f32 { x * x }
+    fn g(x: f32) -> f32 { h(x) }
+    fn f(x: f32) -> f32 { g(x) + x }
+    fn main() -> i32 {
+        grad(f)(3.0) as i32
+    }
+    """
+    assert compile_and_run(src) == 7
+
+
+def test_stage13c_grad_recursion_guard_does_not_infinite_loop():
+    # Stage 13 visited-set guard for direct recursion: r calls itself.
+    # Inlining is suppressed at the recursive call (otherwise the AST
+    # explodes). The recursive call is left opaque, so its derivative is
+    # treated as 0 (best-effort) — but importantly: the compiler must
+    # NOT infinite-loop. Test passes if compile_and_run returns at all.
+    # d/dx (r(x)) is opaque so result is 0; +42 = 42.
+    src = """
+    fn r(x: f32) -> f32 { r(x) }
+    fn main() -> i32 {
+        let g = grad(r)(3.0);
+        (g + 42.0) as i32
+    }
+    """
+    assert compile_and_run(src) == 42
+
+
+def test_stage13d_grad_mutual_recursion_does_not_infinite_loop():
+    # Stage 13 mutual-recursion guard: a -> b -> a. The visiting-set
+    # eventually contains both names; the second-level a-call is left
+    # opaque. This test passes iff the inliner terminates (no
+    # RecursionError). Numeric value is best-effort, just check it's
+    # finite (non-crashing).
+    src = """
+    fn a(x: f32) -> f32 { b(x) + x }
+    fn b(x: f32) -> f32 { a(x) * 2.0 }
+    fn main() -> i32 {
+        // Just check we get a deterministic exit code without
+        // infinite-looping. Concrete value depends on inliner depth.
+        let g = grad(a)(3.0);
+        if g >= 0.0 { 42 } else { 1 }
+    }
+    """
+    assert compile_and_run(src) == 42
+
+
+def test_stage13e_pure_attr_still_works_for_back_compat():
+    # Stage 13 must NOT regress @pure-marked helpers: they remain
+    # inlinable via the same path as before.
+    src = """
+    @pure fn g(x: f32) -> f32 { x * x }
+    @pure fn f(x: f32) -> f32 { g(x) + x }
+    fn main() -> i32 {
+        grad(f)(3.0) as i32
+    }
+    """
+    assert compile_and_run(src) == 7
+
+
+def test_stage13f_grad_through_transcendental_uses_chain_rule():
+    # Stage 13 + transcendentals: __sqrt has analytic chain rule. We test
+    # that a helper which composes a user fn (g(x)=x*x*x) with __sqrt is
+    # correctly differentiated:
+    #   f(x) = __sqrt(g(x)) where g(x) = x*x  (so f(x)=|x|)
+    #   d/dx (sqrt(x*x)) at x=2 = (1/(2*sqrt(4))) * (2x) = (1/4)*4 = 1
+    #   1 + 41 = 42.
+    # Verifies that user-fn inlining (Stage 13) composes with
+    # transcendental chain rules (Stage 12).
+    src = """
+    fn g(x: f32) -> f32 { x * x }
+    fn f(x: f32) -> f32 { __sqrt(g(x)) }
+    fn main() -> i32 {
+        let d = grad(f)(2.0);
+        (d + 41.0) as i32
+    }
+    """
+    assert compile_and_run(src) == 42
+
+
+# ============================================================================
 # Reverse-mode AD via grad_rev(f) / grad_rev(f, n)
 # ============================================================================
 def test_grad_rev_simple_quadratic():

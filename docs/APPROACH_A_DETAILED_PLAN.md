@@ -795,11 +795,17 @@ fn main() -> f64 {
 
 ---
 
-## Stage 13: AD across user-defined fn calls
+## Stage 13: AD across user-defined fn calls — COMPLETE (2026-05-08)
 
 **Difficulty:** 7/10
-**Estimated commits:** 8-12
+**Estimated commits:** 8-12 (landed in 1 commit thanks to Stage 12c reuse)
 **Dependencies:** Stage 12 (forward AD established)
+**Status:** Landed via single commit on branch `stage13-ad-user-fns`. Six
+new regression tests in `test_codegen.py` cover (a) basic helper inlining,
+(b) multi-level helper inlining, (c) direct-recursion guard, (d) mutual-
+recursion guard, (e) `@pure`-marked helpers (back-compat), and (f)
+composition with transcendental chain rule. All six pass; heavy gate
+(`test_bootstrap_kovc_full_pipeline_arithmetic`) green; no regressions.
 
 ### What to add
 

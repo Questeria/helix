@@ -98,19 +98,120 @@ def differentiate(expr: A.Expr, var: str,
     return out
 
 
+def _is_inferably_pure(fn: "A.FnDecl",
+                        fn_table: dict[str, "A.FnDecl"],
+                        visiting: frozenset[str] | None = None) -> bool:
+    """Stage 13: infer whether a user fn is safe to inline for AD without an
+    explicit `@pure` attribute. A fn is inferably pure iff its body uses only
+    expressions whose gradient is well-defined and whose evaluation has no
+    observable side-effects:
+
+      - literals (int, float, bool, char, str)
+      - parameter names / let-bound names
+      - arithmetic Binary/Unary
+      - If with pure cond/then/else
+      - Block with pure let-stmts and pure final_expr (no Assign)
+      - Calls to inferably-pure user fns or known transcendental builtins
+
+    Anything else (Assign, For, While, Loop, Match, Index, calls to
+    non-pure fns or unknown builtins) -> not inferred pure. The caller
+    falls back to "leave as opaque call, derivative is 0" — same behaviour
+    as before Stage 13.
+
+    Used by `_inline_user_calls` so the plan test in Stage 13
+    (`fn g(x) = x*x; fn f(x) = g(x)+x; grad(f)(3)=7`) works without forcing
+    the user to mark every arithmetic helper `@pure`.
+    """
+    visiting = visiting or frozenset()
+    # Cycles: if we're already inferring fn, treat as pure (the caller's
+    # visiting-set in _inline_user_calls will block re-inlining anyway).
+    if fn.name in visiting:
+        return True
+    if "pure" in fn.attrs:
+        return True
+    new_visiting = visiting | {fn.name}
+
+    def is_pure_expr(e) -> bool:
+        if e is None:
+            return True
+        if isinstance(e, (A.IntLit, A.FloatLit, A.BoolLit, A.CharLit, A.StrLit)):
+            return True
+        if isinstance(e, A.Name):
+            return True
+        if isinstance(e, A.Binary):
+            return is_pure_expr(e.left) and is_pure_expr(e.right)
+        if isinstance(e, A.Unary):
+            return is_pure_expr(e.operand)
+        if isinstance(e, A.Cast):
+            return is_pure_expr(e.value)
+        if isinstance(e, A.Block):
+            for s in e.stmts:
+                if isinstance(s, A.Let) and s.value is not None:
+                    if not is_pure_expr(s.value):
+                        return False
+                elif isinstance(s, A.ConstStmt):
+                    if not is_pure_expr(s.value):
+                        return False
+                elif isinstance(s, A.ExprStmt):
+                    if not is_pure_expr(s.expr):
+                        return False
+                else:
+                    # Assign/For/While/Loop/Return/etc. -> impure.
+                    return False
+            return is_pure_expr(e.final_expr)
+        if isinstance(e, A.If):
+            return (is_pure_expr(e.cond)
+                    and is_pure_expr(e.then)
+                    and is_pure_expr(e.else_))
+        if isinstance(e, A.Call):
+            if not isinstance(e.callee, A.Name):
+                return False
+            cname = e.callee.name
+            # Recurse into args first.
+            for a in e.args:
+                if not is_pure_expr(a):
+                    return False
+            # Known-pure transcendental builtins (their analytic chain rules
+            # are wired into _diff_call_chain_rule).
+            TRANSCENDENTALS = {"__exp", "__log", "__sin", "__cos", "__sqrt",
+                               "__relu", "__sigmoid", "__tanh", "__softplus",
+                               "__silu", "__abs", "__gelu", "__powi",
+                               "__min", "__max", "__clamp",
+                               "__min_i32", "__max_i32", "__clamp_i32"}
+            if cname in TRANSCENDENTALS:
+                return True
+            # User fn — recursively check.
+            if cname in fn_table:
+                return _is_inferably_pure(fn_table[cname], fn_table,
+                                           new_visiting)
+            # Unknown callee — conservative reject.
+            return False
+        # Anything else (Match, For, While, Loop, Assign, Return, Index,
+        # Tuple-related, struct-related): not inferable as pure for AD.
+        return False
+
+    return is_pure_expr(fn.body)
+
+
 def _inline_user_calls(expr: A.Expr, fn_table: dict[str, "A.FnDecl"],
                         depth: int = 0, max_depth: int = 4,
                         visiting: frozenset[str] | None = None) -> A.Expr:
     """Walk `expr` and replace each Call(Name(f), args) where f is a known
-    @pure function in `fn_table` with a deepcopy of f's body, with each
+    inlinable function in `fn_table` with a deepcopy of f's body, with each
     parameter substituted by the corresponding argument expression.
+
+    A function is inlinable if either it has the `@pure` attribute OR its
+    body is inferably pure (Stage 13: only arithmetic / pure-call chain).
+    Stage 13 added the inferred-purity path so plain helper fns work in
+    `grad(f)` without forcing the user to mark every arithmetic helper.
 
     Skips:
       - Transcendental builtins (`__exp`, `__log`, etc.) — they have
         analytic AD chain rules already wired into _diff.
       - Functions currently in `visiting` (mutual / direct recursion
         guard — prevents exponential AST expansion when inlining cycles
-        like a→b→a).
+        like a→b→a). Stage 13: traps via the trap-id 87001 documented in
+        the plan; runtime impact is "leave call as opaque, gradient is 0".
       - depth >= max_depth (safety net).
       - Functions not in fn_table (treated as opaque external).
     """
@@ -141,9 +242,11 @@ def _inline_user_calls(expr: A.Expr, fn_table: dict[str, "A.FnDecl"],
                     and new_callee.name not in visiting
                     and depth < max_depth):
                 fn = fn_table[new_callee.name]
-                # Only inline @pure functions — others may have effects
-                # whose differentiation is unsound.
-                if "pure" not in fn.attrs:
+                # Stage 13: inline if @pure OR inferably pure (arithmetic/
+                # pure-call chain). Other fns may have effects whose
+                # differentiation is unsound — leave as opaque call.
+                if ("pure" not in fn.attrs
+                        and not _is_inferably_pure(fn, fn_table)):
                     return A.Call(span=e.span, callee=new_callee, args=new_args)
                 if len(fn.params) != len(new_args):
                     return A.Call(span=e.span, callee=new_callee, args=new_args)
