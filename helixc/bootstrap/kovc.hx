@@ -4309,6 +4309,17 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
             arg_count = arg_count + 1;
             arg_cur = __arena_get(arg_cur + 2);
         }
+        // Finding #6 investigation: encode (pp_count, arg_count) as
+        // distinct trap ids to identify the FIRST mismatched call site
+        // when the trap fires. id = 70000 + pp_count * 10 + arg_count
+        // (so e.g. pp=3, arg=2 -> 70032). Skip when pp_count == 0
+        // (builtins) or arg_count == pp_count (match).
+        let n_arity_trap = if pp_count > 0 {
+            if arg_count != pp_count {
+                emit_trap_with_id(70000 + pp_count * 10 + arg_count)
+            } else { 0 }
+        } else { 0 };
+        bytes_emitted = bytes_emitted + n_arity_trap;
         // Audit fix #7 (cycle 1): if arg_count > 6, emit ud2 trap.
         // Phase 0 doesn't yet implement SysV stack args (args 6+ are
         // supposed to be passed on the stack at [rsp+0], [rsp+8], ...
