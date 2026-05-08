@@ -379,12 +379,27 @@ fn parse_unary(tok_base: i32, sb: i32) -> i32 {
         let inner = parse_unary(tok_base, sb);
         mk_node(26, inner, 0, 0)
     } else { if tg == 18 {     // '!' logical NOT — AST_NOT (tag 31).
-        // Mirrors helixc-Python: `!x` lowers to `(x == 0) ? 1 : 0`.
         cur_advance(sb);
         let inner = parse_unary(tok_base, sb);
         mk_node(31, inner, 0, 0)
     } else {
-        parse_primary(tok_base, sb)
+        // Stage 4 iter B: postfix tuple field access.
+        let mut prim = parse_primary(tok_base, sb);
+        let mut keep_p: i32 = 1;
+        while keep_p == 1 {
+            let pk = cur_get(sb);
+            let pt = tok_tag(tok_base, pk);
+            if pt == 22 {
+                let nt = tok_tag(tok_base, pk + 1);
+                if nt == 1 {
+                    cur_advance(sb);
+                    let idx_val = tok_p1(tok_base, pk + 1);
+                    cur_advance(sb);
+                    prim = mk_node(52, prim, idx_val, 0);
+                } else { keep_p = 0; };
+            } else { keep_p = 0; };
+        }
+        prim
     }}}
 }
 

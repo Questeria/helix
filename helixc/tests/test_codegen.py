@@ -2351,6 +2351,22 @@ fn main() -> i32 {
     assert compile_and_exec(
         "fn main() -> i32 { let _ = (1, 2) ; 42 }"
     ) == 42, "2-tuple smoke"
+    # Stage 4 iteration B: tuple field access via .0/.1/.2 postfix.
+    # Bug found via ELF byte dump: Python helixc was hoisting `idx * 8`
+    # in the tuple LIT codegen loop — emitted same disp8 (0x38=56) for
+    # ALL stores. Fixed by mutable `off` += 8 directly.
+    assert compile_and_exec(
+        "fn main() -> i32 { (10, 20, 30).0 }"
+    ) == 10, "tuple .0 reads first element"
+    assert compile_and_exec(
+        "fn main() -> i32 { (10, 20, 30).1 }"
+    ) == 20, "tuple .1 reads middle element"
+    assert compile_and_exec(
+        "fn main() -> i32 { (10, 20, 30).2 }"
+    ) == 30, "tuple .2 reads last element"
+    assert compile_and_exec(
+        "fn main() -> i32 { (10, 20, 30).1 + 22 }"
+    ) == 42, "tuple field access in arithmetic context"
     # Stage 1.5 audit fix: bf16 comparison ops trap. Pre-fix:
     # AST_LT/GT/LE/GE/EQ/NE cascades had no is_bf16_expr check — bf16
     # operands fell through to integer compare on bit patterns. This is

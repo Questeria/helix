@@ -551,7 +551,8 @@ fn punct_kind(b: i32) -> i32 {
     else { if b == 38 { 27 }      // '&' (TK_AMP — binary bitwise AND)
     else { if b == 124 { 28 }     // '|' (TK_PIPE — binary bitwise OR)
     else { if b == 94 { 29 }      // '^' (TK_CARET — binary bitwise XOR)
-    else { 0 }}}}}}}}}}}}}}}}}}}}}
+    else { if b == 46 { 22 }      // '.' (TK_DOT — Stage 4 tuple field access)
+    else { 0 }}}}}}}}}}}}}}}}}}}}}}
 }
 
 // --------------------------------------------------------------

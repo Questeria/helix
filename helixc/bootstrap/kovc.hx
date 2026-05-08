@@ -1040,6 +1040,7 @@ fn expr_type(idx: i32, bind_state: i32, bn_state: i32) -> i32 {
     else { if t == 41 { 8 }                           // AST_INTLIT_U16 (Stage 2.5c)
     else { if t == 42 { 4 }                           // AST_FLOATLIT_BF16 (Stage 1.5)
     else { if t == 50 { 0 }                            // AST_TUPLE_LIT (Stage 4) — addr-shaped (i32)
+    else { if t == 52 { 0 }                            // AST_TUPLE_FIELD (Stage 4 iter B)
     else { if t == 0 { 0 }                            // AST_INTLIT (i32)
     else { if t == 1 {                                // AST_VAR
         bind_lookup_type(bind_state, p1, p2)
@@ -1164,7 +1165,7 @@ fn expr_type(idx: i32, bind_state: i32, bn_state: i32) -> i32 {
                 }
             }
         }
-    } else { 0 }}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}
+    } else { 0 }}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}
 }
 
 // Phase 1.10 step 5c: type-inference on AST nodes. Returns 1 if the
@@ -2923,6 +2924,12 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         // high bytes zero. expr_type returns 8 (u16). Narrow movzx
         // load and masked store deferred.
         emit_ast_int(p1)
+    } else { if t == 52 {
+        // Stage 4 iter B: AST_TUPLE_FIELD (tag 52).
+        let n_inner = emit_ast_code(p1, bind_state, patch_state, bn_state);
+        let off = p2 * 8;
+        emit_byte(0x8B); emit_byte(0x40); emit_byte(off);
+        n_inner + 3
     } else { if t == 50 {
         // Stage 4 iteration A: AST_TUPLE_LIT (tag 50).
         //   p1 = arity (number of elements)
@@ -2943,15 +2950,22 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         emit_u32_le(alloc_bytes);
         let mut total: i32 = 7;
         let mut cur: i32 = p2;
-        let mut idx: i32 = 0;
+        // Stage 4 BUG FIX (post-ELF-dump): use `off` (mutable, += 8 each
+        // iter) instead of `idx * 8`. Python helixc apparently hoists
+        // `idx * 8` to a single computation, emitting the same disp8
+        // byte (0x38 = 7*8 = total's initial value somehow propagating)
+        // for ALL iterations — every store wrote to [rsp+56], never to
+        // [rsp+0], [rsp+8], [rsp+16]. Sidestep by avoiding the
+        // multiplication; use `off` that mutates by += 8 like `cur`.
+        let mut off: i32 = 0;
         while cur != 0 {
             let child = __arena_get(cur + 1);
             let n_child = emit_ast_code(child, bind_state, patch_state, bn_state);
-            // mov [rsp + idx*8], eax  (89 44 24 disp8 = 4 bytes)
+            // mov [rsp + off], eax  (89 44 24 disp8 = 4 bytes)
             emit_byte(0x89); emit_byte(0x44); emit_byte(0x24);
-            emit_byte(idx * 8);
+            emit_byte(off);
             total = total + n_child + 4;
-            idx = idx + 1;
+            off = off + 8;
             cur = __arena_get(cur + 2);
         }
         // mov rax, rsp  (48 89 E0 = 3 bytes; rax now holds slot-0 ptr)
@@ -4228,7 +4242,7 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         // resulting binary to SIGILL — clear signal vs. silent 0.
         // Speedup #4 wire-in: AST_ERR / unhandled-tag trap id 99001.
         emit_trap_with_id(99001)
-    }}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}
+    }}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}
 }
 
 // --------------------------------------------------------------
