@@ -137,6 +137,9 @@ fn kw_fn_n(sb: i32) -> i32 { __arena_get(sb + 12) }
 // Stage 5: struct keyword installed at sb+13/sb+14.
 fn kw_struct_s(sb: i32) -> i32 { __arena_get(sb + 13) }
 fn kw_struct_n(sb: i32) -> i32 { __arena_get(sb + 14) }
+// Stage 5 Iter A bisect probe: 2 simple fns at start.
+fn struct_tab_base(sb: i32) -> i32 { __arena_get(sb + 15) }
+fn struct_tab_count(sb: i32) -> i32 { __arena_get(sb + 16) }
 
 // --------------------------------------------------------------
 // AST builder.
@@ -1093,3 +1096,4 @@ fn parse_fn_decl(tok_base: i32, sb: i32) -> i32 {
     __arena_push(ret_ty);
     node
 }
+
