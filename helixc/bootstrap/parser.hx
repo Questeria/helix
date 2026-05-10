@@ -3484,8 +3484,14 @@ fn parse_program(tok_base: i32, sb: i32) -> i32 {
     let user_first_node = mk_node(15, first_fn, 0, 0);
     let mut prev_list = user_first_node;
     let mut keep: i32 = 1;
+    // Audit A2-F1 fix: post-fn loop now accepts struct/enum/trait/impl/
+    // mod/use too, mirroring the prefix loop above. Pre-fix, any non-fn
+    // decl after the first fn was silently dropped, and subsequent fns
+    // after the dropped decl were also invisible (loop exited on first
+    // unrecognized token). This caused the natural Rust ordering
+    // (fn / type / fn / type) to silently truncate.
     while keep == 1 {
-        // Skip any attributes before the next fn decl.
+        // Skip any attributes before the next decl.
         skip_attributes(tok_base, sb);
         let k2 = cur_get(sb);
         let t2 = tok_tag(tok_base, k2);
@@ -3494,14 +3500,33 @@ fn parse_program(tok_base: i32, sb: i32) -> i32 {
         } else { if t2 == 2 {
             let s = tok_p2(tok_base, k2);
             let l = tok_p3(tok_base, k2);
-            if byte_eq(s, l, kw_fn_s(sb), kw_fn_n(sb)) == 1 {
+            let is_fn_kw2 = byte_eq(s, l, kw_fn_s(sb), kw_fn_n(sb));
+            let is_struct_kw2 = byte_eq(s, l, kw_struct_s(sb), kw_struct_n(sb));
+            let is_enum_kw2 = byte_eq(s, l, kw_enum_s(sb), kw_enum_n(sb));
+            let is_trait_kw2 = byte_eq(s, l, kw_trait_s(sb), kw_trait_n(sb));
+            let is_impl_kw2 = byte_eq(s, l, kw_impl_s(sb), kw_impl_n(sb));
+            let is_mod_kw2 = byte_eq(s, l, kw_mod_s(sb), kw_mod_n(sb));
+            let is_use_kw2 = byte_eq(s, l, kw_use_s(sb), kw_use_n(sb));
+            if is_fn_kw2 == 1 {
                 let next_fn = parse_fn_decl(tok_base, sb);
                 let new_node = mk_node(15, next_fn, 0, 0);
                 __arena_set(prev_list + 2, new_node);
                 prev_list = new_node;
+            } else { if is_struct_kw2 == 1 {
+                parse_struct_decl(tok_base, sb);
+            } else { if is_enum_kw2 == 1 {
+                parse_enum_decl(tok_base, sb);
+            } else { if is_trait_kw2 == 1 {
+                parse_trait_decl(tok_base, sb);
+            } else { if is_impl_kw2 == 1 {
+                parse_impl_block(tok_base, sb);
+            } else { if is_mod_kw2 == 1 {
+                parse_mod_decl(tok_base, sb, 0, 0);
+            } else { if is_use_kw2 == 1 {
+                parse_use_decl(tok_base, sb);
             } else {
                 keep = 0;
-            };
+            }}}}}}};
         } else {
             keep = 0;
         }};

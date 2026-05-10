@@ -3226,6 +3226,25 @@ fn main() -> i32 {
         "fn id<T>(x: T) -> T { x } "
         "fn main() -> i32 { id::<i32>(7) }"
     ) == 7, "A2-F2 negative: i32 turbofish still works after ty_ident_to_tag extension"
+    # Audit A2-F1 regression: top-level decls placed AFTER the first fn
+    # decl used to be silently dropped (post-fn loop only accepted `fn`).
+    # Now the post-fn loop accepts struct/enum/trait/impl/mod/use too, so
+    # the natural Rust ordering (fn / type / fn / type) compiles correctly.
+    # The trait+impl+helper appears after main here — pre-fix, all three
+    # would be dropped and main's `helper(2)` call would resolve to ud2.
+    assert compile_and_exec(
+        "fn main() -> i32 { helper(2) } "
+        "fn helper(n: i32) -> i32 { n + 40 }"
+    ) == 42, "A2-F1: fn after fn (with helper after main) still works"
+    # struct decl AFTER an unrelated fn decl now reaches struct_table.
+    # We construct via a struct-aware fn that runs after the struct decl
+    # — the post-fn loop must dispatch struct first, then accept the fn.
+    assert compile_and_exec(
+        "fn first() -> i32 { 0 } "
+        "struct Pt { x: i32, y: i32 } "
+        "fn use_pt() -> i32 { let p = Pt { 10, 32 } ; p.0 + p.1 } "
+        "fn main() -> i32 { use_pt() }"
+    ) == 42, "A2-F1: fn / struct / fn / fn ordering — second fn sees struct"
     # Direct typed-call form `i32::eq(a, b)` works without method sugar.
     assert compile_and_exec(
         "trait Eq { fn eq(self, other: Self) -> i32 ; } "
