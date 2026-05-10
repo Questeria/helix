@@ -1035,7 +1035,17 @@ fn bind_pop(state: i32) -> i32 {
 }
 
 fn bind_alloc_offset(state: i32) -> i32 {
+    // Audit-stage5-6 Finding #11 fix: trap when the requested slot would
+    // write past the 1024-byte prologue allocation (emit_prologue at
+    // kovc.hx ~743). Without this, sequential let/struct-lit allocations
+    // wrap silently into the parent frame's saved rbp / return-address /
+    // red zone. The trap fires at codegen time — we still bump the
+    // offset so any downstream emitter that derives a layout from the
+    // returned value doesn't see a stale slot. Trap id 10030.
     let off = __arena_get(state);
+    if off >= 1024 {
+        emit_trap_with_id(10030);
+    };
     __arena_set(state, off + 8);
     off
 }

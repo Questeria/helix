@@ -3290,6 +3290,23 @@ fn main() -> i32 {
         "fn use_pt(p: Pt) -> i32 { p.0 + p.1 } "
         "fn main() -> i32 { let p = Pt { 10, 32 } ; use_pt(p) }"
     ) == 42, "A1-F5 smoke: struct param-by-value still works after ret-ty extension"
+    # Audit stage5-6 Finding #11 regression: bind_alloc_offset over-budget.
+    # Pre-fix, 129+ sequential lets each consumed 8 stack-frame bytes with
+    # no cap check, so the 129th write (offset 1024) landed past the
+    # 1024-byte prologue allocation and silently corrupted the saved rbp
+    # / return address / red zone. Now bind_alloc_offset traps 10030 once
+    # the requested offset would exceed the prologue budget.
+    many_lets = "fn main() -> i32 { " \
+        + "".join(f"let a{i:03d} = {i};" for i in range(140)) \
+        + " a139 }"
+    assert compile_and_exec(many_lets) == 132, \
+        "F11: 140 chained lets exhausts 128-slot prologue, traps 10030 (SIGILL=132)"
+    # Inversely, 64 lets fit comfortably (well below the 128-slot budget).
+    fewer_lets = "fn main() -> i32 { " \
+        + "".join(f"let b{i:02d} = {i};" for i in range(64)) \
+        + " b42 }"
+    assert compile_and_exec(fewer_lets) == 42, \
+        "F11: 64 chained lets stays within budget — last binding readable"
     # Audit A1-F6 regression: 4th struct decl used to be silently dropped
     # (cap was 3). Subsequent uses of the dropped struct silently parsed
     # as plain IDENT references → silent corruption. Now the cap is 8 so
