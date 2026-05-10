@@ -184,6 +184,54 @@ class PtxEmitter:
             if op.results:
                 self.reg_map[op.results[0].id] = r
             return
+        if op.kind == ti.TileOpKind.SCALAR_SUB:
+            a_reg = self.reg_map.get(op.operands[0].id, "%r0")
+            b_reg = self.reg_map.get(op.operands[1].id, "%r1")
+            if a_reg.startswith("%f") or b_reg.startswith("%f"):
+                r = self._new_reg("f")
+                self._line(f"    sub.f32 {r}, {a_reg}, {b_reg};")
+            else:
+                r = self._new_reg("r")
+                self._line(f"    sub.s32 {r}, {a_reg}, {b_reg};")
+            if op.results:
+                self.reg_map[op.results[0].id] = r
+            return
+        if op.kind == ti.TileOpKind.SCALAR_NEG:
+            a_reg = self.reg_map.get(op.operands[0].id, "%r0")
+            if a_reg.startswith("%f"):
+                r = self._new_reg("f")
+                self._line(f"    neg.f32 {r}, {a_reg};")
+            else:
+                r = self._new_reg("r")
+                self._line(f"    neg.s32 {r}, {a_reg};")
+            if op.results:
+                self.reg_map[op.results[0].id] = r
+            return
+        if op.kind == ti.TileOpKind.SCALAR_CONST_FLOAT:
+            # f32 constant. Emit via mov.f32 with the hex bit pattern so
+            # ptxas accepts the exact bits unambiguously.
+            import struct
+            v = float(op.attrs.get("value", 0.0))
+            bits = struct.unpack("<I", struct.pack("<f", v))[0]
+            r = self._new_reg("f")
+            self._line(f"    mov.f32 {r}, 0f{bits:08X};")
+            if op.results:
+                self.reg_map[op.results[0].id] = r
+            return
+        if op.kind == ti.TileOpKind.SCALAR_CMP:
+            cmp_op = op.attrs.get("cmp", "cmp.eq")
+            cmp_map = {"cmp.eq": "eq", "cmp.ne": "ne", "cmp.lt": "lt",
+                        "cmp.le": "le", "cmp.gt": "gt", "cmp.ge": "ge"}
+            cmp_suffix = cmp_map.get(cmp_op, "eq")
+            a_reg = self.reg_map.get(op.operands[0].id, "%r0")
+            b_reg = self.reg_map.get(op.operands[1].id, "%r1")
+            # Result lives in a %p predicate register. Phase-0 emits the
+            # signed-int form; float compares would need setp.<cmp>.f32.
+            r = self._new_reg("p")
+            self._line(f"    setp.{cmp_suffix}.s32 {r}, {a_reg}, {b_reg};")
+            if op.results:
+                self.reg_map[op.results[0].id] = r
+            return
         if op.kind == ti.TileOpKind.RETURN:
             return
         # Stage 16 — GPU primitives.

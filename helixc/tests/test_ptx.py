@@ -184,6 +184,34 @@ def test_block_idx_and_block_dim():
     assert "%ntid.z" in out
 
 
+def test_scalar_sub():
+    out = emit("@kernel fn k() { let z = 10 - 3; }")
+    assert "sub.s32" in out
+
+
+def test_scalar_neg():
+    out = emit("@kernel fn k() { let x = 5; let y = -x; }")
+    assert "neg.s32" in out
+
+
+def test_scalar_const_float():
+    out = emit("@kernel fn k() { let x = 3.14; }")
+    # Hex bit pattern of 3.14f rounded.
+    assert "mov.f32" in out
+    assert "0f" in out  # PTX hex-float prefix
+
+
+def test_hbm_subtract_uses_sub_f32():
+    src = """
+    @kernel fn k(a: tile<f32, [16], HBM>, b: tile<f32, [16], HBM>) {
+        let i = thread_idx();
+        b[i] = a[i] - a[i];
+    }
+    """
+    out = emit(src)
+    assert "sub.f32" in out
+
+
 def main():
     tests = [(name, fn) for name, fn in globals().items()
              if name.startswith("test_") and callable(fn)]
