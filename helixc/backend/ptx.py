@@ -55,11 +55,27 @@ class PtxEmitter:
         # and would collide.)
         self.next_reg_by_prefix: dict[str, int] = {}
 
+    # Audit A3-MEDIUM-1: per-prefix register pool caps. The .reg
+    # declarations in emit_kernel reserved %p<8>, %r<32>, %rd<8>, %f<32>
+    # — beyond those, the emitted PTX referenced registers (e.g. %r32,
+    # %r33, ...) that weren't declared. The CUDA driver's PTX assembler
+    # rejects undeclared registers but the bootstrap pipeline didn't
+    # surface that until ptxas. We bumped the declared pool sizes to
+    # 256 and added an explicit overflow check so an over-cap kernel
+    # raises a Python-level error pinned to the codegen site.
+    _REG_POOL_CAP = 256
+
     def _new_reg(self, prefix: str = "r") -> str:
         # Use per-prefix counter so int / fp / 64-bit pools stay separate
         # and the PTX reads cleanly. Maintains legacy `next_reg` for the
         # tiny chance an old caller relies on the global counter.
         c = self.next_reg_by_prefix.get(prefix, 0)
+        if c >= self._REG_POOL_CAP:
+            raise RuntimeError(
+                f"PTX register pool overflow: prefix '%{prefix}' exceeded "
+                f"{self._REG_POOL_CAP} registers. Bump _REG_POOL_CAP and the "
+                f"matching .reg declaration in emit_kernel, or split the kernel."
+            )
         n = f"%{prefix}{c}"
         self.next_reg_by_prefix[prefix] = c + 1
         self.next_reg += 1
@@ -104,11 +120,15 @@ class PtxEmitter:
                     and p.ty.memspace.lower() == "hbm":
                 if p.name_hint:
                     self.hbm_param_map[p.name_hint] = (i, p.ty.dtype.name)
-        # Reserve a small register pool.
-        self._line("    .reg .pred  %p<8>;")
-        self._line("    .reg .b32   %r<32>;")
-        self._line("    .reg .b64   %rd<8>;")
-        self._line("    .reg .f32   %f<32>;")
+        # Reserve a register pool. Audit A3-MEDIUM-1: bumped from
+        # %p<8>/%r<32>/%rd<8>/%f<32> to %p<256>/%r<256>/%rd<256>/%f<256>
+        # so kernels with many SSA values in flight don't silently emit
+        # references to undeclared registers. Per-prefix overflow is
+        # checked at codegen time in _new_reg (raises RuntimeError).
+        self._line(f"    .reg .pred  %p<{self._REG_POOL_CAP}>;")
+        self._line(f"    .reg .b32   %r<{self._REG_POOL_CAP}>;")
+        self._line(f"    .reg .b64   %rd<{self._REG_POOL_CAP}>;")
+        self._line(f"    .reg .f32   %f<{self._REG_POOL_CAP}>;")
         self._line()
         for blk in fn.blocks:
             self._line(f"BB{blk.id}:")

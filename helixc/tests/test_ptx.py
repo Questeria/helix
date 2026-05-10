@@ -201,6 +201,28 @@ def test_scalar_const_float():
     assert "0f" in out  # PTX hex-float prefix
 
 
+def test_ptx_register_pool_overflow_raises():
+    # Audit A3-MEDIUM-1 regression: per-prefix register pool overflow
+    # used to silently emit references to undeclared registers (e.g.
+    # %r33 when only %r<32> was declared). Now _new_reg raises
+    # RuntimeError when the per-prefix counter exceeds _REG_POOL_CAP.
+    from helixc.backend.ptx import PtxEmitter
+    em = PtxEmitter()
+    em.next_reg_by_prefix["r"] = PtxEmitter._REG_POOL_CAP
+    import pytest as _pytest
+    with _pytest.raises(RuntimeError, match="register pool overflow"):
+        em._new_reg("r")
+
+
+def test_ptx_register_pool_cap_in_kernel_decl():
+    # Audit A3-MEDIUM-1: bumped pool from 32 to 256 in declarations.
+    out = emit("@kernel fn k() {}")
+    assert ".reg .b32   %r<256>;" in out
+    assert ".reg .f32   %f<256>;" in out
+    assert ".reg .pred  %p<256>;" in out
+    assert ".reg .b64   %rd<256>;" in out
+
+
 def test_hbm_subtract_uses_sub_f32():
     src = """
     @kernel fn k(a: tile<f32, [16], HBM>, b: tile<f32, [16], HBM>) {
