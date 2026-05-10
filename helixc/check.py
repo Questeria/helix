@@ -291,19 +291,18 @@ def main(argv: list[str] | None = None) -> int:
     else:
         print(f"   totality:  OK")
 
-    # Stage 28.7: --doc & deprecated warning check is integrated with
-    # typecheck/lower hooks. The `-Wdeprecated=error` flag promotion is
-    # honored by the typecheck warning sink (when wired).
+    # Stage 28.7: @deprecated pass. Runs the Python-side walker and
+    # collects warnings; the -Wdeprecated=error flag promotes them.
+    from .frontend.deprecated_pass import emit_warnings
     deprecate_policy = a.warnings.get("deprecated", "warn")
-    if hasattr(prog, "_deprecation_warnings"):
-        warnings = getattr(prog, "_deprecation_warnings", [])
-        if warnings:
-            label = "ERROR" if deprecate_policy == "error" else "warning"
-            print(f"   deprecated: {len(warnings)} {label}(s)")
-            for w in warnings:
-                print(f"     {w}")
-            if deprecate_policy == "error":
-                return 1
+    warnings = emit_warnings(prog)
+    if warnings:
+        label = "ERROR" if deprecate_policy == "error" else "warning"
+        print(f"   deprecated: {len(warnings)} {label}(s)")
+        for w in warnings:
+            print(f"     {w}")
+        if deprecate_policy == "error":
+            return 1
 
     # 4. Optional hash dump
     if "--hash" in a.flags:
