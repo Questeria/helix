@@ -1037,7 +1037,7 @@ batch.
 | 8 | FIXED  | Enum payload variant arity + variant-name: trap 60020 / 60002. Commit 2756afd. |
 | 9 | OPEN   | emit_variant_subpats / emit_tuple_subpats disp8 wrap at idx > 15 — deferred (MEDIUM). |
 | 10 | OPEN  | `__enum_payload` non-INTLIT idx — deferred (MEDIUM). |
-| 11 | OPEN  | bind_alloc_offset cap-check — deferred (MEDIUM). |
+| 11 | FIXED | bind_alloc_offset cap-check now emits trap id 10030 when the requested offset would exceed the 1024-byte prologue allocation. Regression tests (`many_lets`/`fewer_lets`) added in test_codegen.py. |
 | 12 | OPEN  | Struct fn-call arg identity — deferred (MEDIUM, needs 8-bit param packing). |
 | 13 | OPEN  | last_enum_idx dead-code — deferred (LOW, not user-visible). |
 
