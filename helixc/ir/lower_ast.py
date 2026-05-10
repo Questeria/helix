@@ -1171,17 +1171,51 @@ class Lowerer:
             # Stage 16 — GPU kernel builtins. Only legal inside @kernel fns.
             # `thread_idx()` returns the thread's x-dim index (i32). Lowers to
             # a THREAD_IDX TIR op which PTX backend maps to `mov.u32 %r, %tid.x`.
+            # `thread_idx_y()` / `thread_idx_z()` are the y/z analogues.
             if (isinstance(expr.callee, A.Name)
-                    and expr.callee.name == "thread_idx"
+                    and expr.callee.name in ("thread_idx", "thread_idx_x",
+                                              "thread_idx_y", "thread_idx_z")
                     and len(expr.args) == 0):
                 if not self._in_kernel:
                     # Trap-id 96001: thread_idx() outside @kernel.
                     raise SyntaxError(
-                        "trap 96001: thread_idx() only valid inside @kernel fn")
+                        f"trap 96001: {expr.callee.name}() only valid inside "
+                        "@kernel fn")
+                dim = "x" if expr.callee.name in ("thread_idx", "thread_idx_x") \
+                      else ("y" if expr.callee.name == "thread_idx_y" else "z")
                 return self.builder.emit(
                     tir.OpKind.THREAD_IDX,
                     result_ty=tir.TIRScalar("i32"),
-                    attrs={"dim": "x"})
+                    attrs={"dim": dim})
+            # Stage 16 — `block_idx()` / `block_dim()` companions to thread_idx.
+            # These return %ctaid.x and %ntid.x respectively. Same x/y/z variants
+            # available.
+            if (isinstance(expr.callee, A.Name)
+                    and expr.callee.name in ("block_idx", "block_idx_x",
+                                              "block_idx_y", "block_idx_z",
+                                              "block_dim", "block_dim_x",
+                                              "block_dim_y", "block_dim_z")
+                    and len(expr.args) == 0):
+                if not self._in_kernel:
+                    raise SyntaxError(
+                        f"trap 96001: {expr.callee.name}() only valid inside "
+                        "@kernel fn")
+                # Pick PTX special-reg by builtin name.
+                name = expr.callee.name
+                if name.startswith("block_idx"):
+                    sreg = "ctaid"
+                else:
+                    sreg = "ntid"
+                if name.endswith("_y"):
+                    dim = "y"
+                elif name.endswith("_z"):
+                    dim = "z"
+                else:
+                    dim = "x"
+                return self.builder.emit(
+                    tir.OpKind.THREAD_IDX,
+                    result_ty=tir.TIRScalar("i32"),
+                    attrs={"dim": dim, "sreg": sreg})
             # Arena allocator builtins — bump-alloc i32 region in the
             # binary's data section. Foundation for self-hosted compiler
             # storage of AST/IR/symbol-table.

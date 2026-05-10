@@ -188,12 +188,14 @@ class PtxEmitter:
             return
         # Stage 16 — GPU primitives.
         if op.kind == ti.TileOpKind.THREAD_IDX:
-            # `thread_idx()` returns a 32-bit i32 in PTX `.u32` (we treat
-            # signed/unsigned uniformly via .b32 register). Phase-0 always
-            # uses the x dimension; attrs={'dim': 'x'} is a hint.
+            # `thread_idx()` returns the i32 special-reg value. attrs={dim,sreg}
+            # where dim is "x"/"y"/"z" and sreg is "tid" (default), "ctaid"
+            # (block index), or "ntid" (block dim). Maps to PTX `mov.u32
+            # %r, %<sreg>.<dim>`.
             dim = op.attrs.get("dim", "x")
+            sreg = op.attrs.get("sreg", "tid")
             r = self._new_reg("r")
-            self._line(f"    mov.u32 {r}, %tid.{dim};")
+            self._line(f"    mov.u32 {r}, %{sreg}.{dim};")
             if op.results:
                 self.reg_map[op.results[0].id] = r
             return

@@ -156,6 +156,34 @@ def test_per_prefix_register_counters():
     assert "%f0" in out
 
 
+def test_thread_idx_y_and_z():
+    src = """
+    @kernel fn k() {
+        let x = thread_idx();
+        let y = thread_idx_y();
+        let z = thread_idx_z();
+    }
+    """
+    out = emit(src)
+    assert "%tid.x" in out
+    assert "%tid.y" in out
+    assert "%tid.z" in out
+
+
+def test_block_idx_and_block_dim():
+    src = """
+    @kernel fn k() {
+        let bx = block_idx();
+        let by = block_idx_y();
+        let bdz = block_dim_z();
+    }
+    """
+    out = emit(src)
+    assert "%ctaid.x" in out
+    assert "%ctaid.y" in out
+    assert "%ntid.z" in out
+
+
 def main():
     tests = [(name, fn) for name, fn in globals().items()
              if name.startswith("test_") and callable(fn)]
