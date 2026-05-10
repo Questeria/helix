@@ -4526,12 +4526,48 @@ fn ckpt_callees_pure(expr_idx: i32, head: i32, depth: i32) -> i32 {
         } else { if t == 9 {
             let inner = __arena_get(expr_idx + 1);
             ckpt_callees_pure(inner, head, depth + 1)
+        } else { if t == 7 {
+            // AST_IF(cond, then, else): recurse into all three branches.
+            // Audit A3-CRITICAL-4 fix: previous default-arm returned 1
+            // here, blinding the scanner to @checkpoint calls inside
+            // if/else arms. cond may itself contain a checkpoint call.
+            let c = __arena_get(expr_idx + 1);
+            let th = __arena_get(expr_idx + 2);
+            let el = __arena_get(expr_idx + 3);
+            if ckpt_callees_pure(c, head, depth + 1) == 1 {
+                if ckpt_callees_pure(th, head, depth + 1) == 1 {
+                    ckpt_callees_pure(el, head, depth + 1)
+                } else { 0 }
+            } else { 0 }
+        } else { if t == 8 {
+            // AST_LET(name_s, name_l, body, value): recurse into the
+            // bound value AND the body. value can contain a checkpoint
+            // call; body uses the binding so callee scan flows.
+            let body_idx = __arena_get(expr_idx + 3);
+            let value_idx = __arena_get(expr_idx + 4);
+            if ckpt_callees_pure(value_idx, head, depth + 1) == 1 {
+                ckpt_callees_pure(body_idx, head, depth + 1)
+            } else { 0 }
+        } else { if t == 10 {
+            // AST_WHILE(cond, body): recurse into both.
+            let c = __arena_get(expr_idx + 1);
+            let b = __arena_get(expr_idx + 2);
+            if ckpt_callees_pure(c, head, depth + 1) == 1 {
+                ckpt_callees_pure(b, head, depth + 1)
+            } else { 0 }
+        } else { if t == 13 {
+            // AST_SEQ(first, second): recurse into both.
+            let l = __arena_get(expr_idx + 1);
+            let r = __arena_get(expr_idx + 2);
+            if ckpt_callees_pure(l, head, depth + 1) == 1 {
+                ckpt_callees_pure(r, head, depth + 1)
+            } else { 0 }
         } else {
             // Leaf or other tag — no @checkpoint call to check here.
             // (Stage 14 reverse-mode AD will trap on unsupported tags
             // separately if they end up in the differentiation path.)
             1
-        } } } } } }
+        } } } } } } } } } }
     }
 }
 
