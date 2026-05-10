@@ -1156,6 +1156,22 @@ class Lowerer:
                 return self.builder.emit(tir.OpKind.PRINT,
                                           result_ty=tir.TIRScalar("i32"),
                                           attrs={"text": s})
+            # Stage 28.5 — `panic("msg")` lowers to a TRAP op (kind
+            # ctrl.trap) carrying the message string and trap id 28501.
+            # Backend writes the message to stderr and exits non-zero.
+            # The op produces an i32 result for SSA bookkeeping, but the
+            # value is never observed — execution aborts before any
+            # subsequent op runs.
+            if (isinstance(expr.callee, A.Name)
+                    and expr.callee.name == "panic"
+                    and len(expr.args) == 1
+                    and isinstance(expr.args[0], A.StrLit)):
+                from ..frontend.panic_pass import TRAP_PANIC_INVOKED
+                s = expr.args[0].value
+                return self.builder.emit(
+                    tir.OpKind.TRAP,
+                    result_ty=tir.TIRScalar("i32"),
+                    attrs={"text": s, "trap_id": TRAP_PANIC_INVOKED})
             # Intercept print_int(i32) — formats the value as decimal on
             # stdout. Carries the value as an SSA operand so a runtime
             # int can be printed (unlike print_str which is literal-only).

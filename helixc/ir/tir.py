@@ -277,6 +277,12 @@ class OpKind(Enum):
     # Effectful ops (kept distinct so transforms can avoid them)
     PRINT = "io.print"
 
+    # Stage 28.5 — panic / abort. `panic("msg")` lowers to a TRAP op
+    # carrying the message string in `attrs["text"]` and the trap id
+    # in `attrs["trap_id"]` (default 28501). Backend writes the message
+    # to stderr and then exits with a non-zero status (does NOT return).
+    TRAP = "ctrl.trap"
+
 
 @dataclass
 class Op:

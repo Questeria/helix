@@ -62,6 +62,9 @@ SIDE_EFFECT_KINDS = {
     # dropping void-return extern calls because their results were
     # never live. Adding here so liveness preserves them unconditionally.
     tir.OpKind.FFI_CALL,
+    # Stage 28.5 — TRAP terminates the process. Even if the result slot
+    # is unused, the trap MUST execute (it's the entire point of panic).
+    tir.OpKind.TRAP,
 }
 
 

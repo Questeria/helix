@@ -228,6 +228,123 @@ fn die_for(n: i32) -> i32 {
     assert msg == "loop"
 
 
+# ----------------------------------------------------------------------
+# Audit 28.8 A1 — `panic("msg")` now actually lowers to a TRAP TIR op
+# and emits a backend `sys_write + sys_exit` sequence. validate_panic_args
+# / validate_unwind are now wired into helixc/check.py.
+# ----------------------------------------------------------------------
+def test_panic_lowers_to_trap_op():
+    """A1: `panic("oh no")` produces a TRAP op (kind ctrl.trap) carrying
+    the message and trap_id=28501 in its attrs."""
+    from helixc.ir.lower_ast import lower
+    from helixc.ir import tir
+    src = 'fn die() -> i32 { panic("oh no"); 0 }'
+    prog = parse(src)
+    mod = lower(prog)
+    fn = mod.functions["die"]
+    trap_ops = [op for blk in fn.blocks for op in blk.ops
+                if op.kind == tir.OpKind.TRAP]
+    assert len(trap_ops) == 1
+    op = trap_ops[0]
+    assert op.attrs.get("text") == "oh no"
+    assert op.attrs.get("trap_id") == TRAP_PANIC_INVOKED == 28501
+
+
+def test_panic_in_if_lowers_to_trap_op():
+    """A1: panic() inside an if-arm also lowers (since the lowerer walks
+    the same path the walker now visits)."""
+    from helixc.ir.lower_ast import lower
+    from helixc.ir import tir
+    src = '''
+fn die(flag: i32) -> i32 {
+    if flag > 0 { panic("bad"); 0 } else { 1 }
+}
+'''
+    prog = parse(src)
+    mod = lower(prog)
+    fn = mod.functions["die"]
+    trap_ops = [op for blk in fn.blocks for op in blk.ops
+                if op.kind == tir.OpKind.TRAP]
+    assert len(trap_ops) == 1
+    assert trap_ops[0].attrs.get("text") == "bad"
+
+
+def test_panic_emits_elf_bytes():
+    """A1: TRAP op survives codegen — `compile_module_to_elf` returns a
+    non-empty ELF blob with the panic message in the rodata-equivalent
+    string region."""
+    from helixc.ir.lower_ast import lower
+    from helixc.backend.x86_64 import compile_module_to_elf
+    src = '''
+fn main() -> i32 { panic("test-msg-uniq-7777"); 0 }
+'''
+    prog = parse(src)
+    mod = lower(prog)
+    elf = compile_module_to_elf(mod)
+    assert isinstance(elf, (bytes, bytearray))
+    # The panic message text should appear somewhere in the emitted bytes
+    # (in the pending-strings region the backend appends).
+    assert b"test-msg-uniq-7777" in elf
+    # The "panic[28501]:" header should also be present.
+    assert b"panic[28501]:" in elf
+
+
+def test_cli_validate_panic_args_wired(capsys, tmp_path):
+    """A1: check.py invokes validate_panic_args and surfaces diagnostics,
+    failing the build with exit code 1."""
+    from helixc.check import main
+    src = '''
+fn die() -> i32 {
+    panic(42);
+    0
+}
+'''
+    p = str(tmp_path / "in.hx")
+    with open(p, "w") as f:
+        f.write(src)
+    rc = main([p, "--check-only"])
+    out = capsys.readouterr().out
+    assert rc == 1, f"expected build to fail; rc={rc}; out={out!r}"
+    assert "panic:" in out
+    assert "string literal" in out
+
+
+def test_cli_validate_unwind_wired(capsys, tmp_path):
+    """A1: check.py invokes validate_unwind and surfaces diagnostics
+    for @unwind, failing the build."""
+    from helixc.check import main
+    src = '''
+@unwind
+fn risky() -> i32 { 42 }
+fn main() -> i32 { risky() }
+'''
+    p = str(tmp_path / "in.hx")
+    with open(p, "w") as f:
+        f.write(src)
+    rc = main([p, "--check-only"])
+    out = capsys.readouterr().out
+    assert rc == 1, f"expected build to fail; rc={rc}; out={out!r}"
+    assert "unwind:" in out
+    assert "28502" in out
+
+
+def test_cli_clean_panic_passes(capsys, tmp_path):
+    """A1: well-formed panic with a string-literal arg is accepted."""
+    from helixc.check import main
+    src = '''
+fn die() -> i32 { panic("clean message"); 0 }
+fn main() -> i32 { die() }
+'''
+    p = str(tmp_path / "in.hx")
+    with open(p, "w") as f:
+        f.write(src)
+    rc = main([p, "--check-only"])
+    out = capsys.readouterr().out
+    # Well-formed panic shouldn't surface a "panic:" diag block.
+    assert rc == 0, f"expected clean exit; rc={rc}; out={out!r}"
+    assert "panic:" not in out
+
+
 def test_walker_does_not_callback_on_stmts():
     """C1-L1: walker invokes callback only on `A.Expr` subclasses, not
     on `A.Stmt` subclasses (Let, ExprStmt, ConstStmt). Note that `A.Block`

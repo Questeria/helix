@@ -304,6 +304,28 @@ def main(argv: list[str] | None = None) -> int:
         if deprecate_policy == "error":
             return 1
 
+    # Stage 28.5: panic / unwind validation passes (Audit 28.8 A1).
+    # `validate_panic_args` enforces single-string-literal arg shape;
+    # `validate_unwind` rejects @unwind (trap 28502 reserved).
+    # Non-empty diagnostics fail the build (returning 1) because they
+    # represent real malformed source — codegen would either emit
+    # garbage or raise at lowering time.
+    from .frontend.panic_pass import (
+        validate_panic_args, validate_unwind,
+    )
+    panic_diags = validate_panic_args(prog)
+    unwind_diags = validate_unwind(prog)
+    if panic_diags:
+        print(f"   panic:     {len(panic_diags)} ERROR(s)")
+        for d in panic_diags:
+            print(f"     {d}")
+    if unwind_diags:
+        print(f"   unwind:    {len(unwind_diags)} ERROR(s)")
+        for d in unwind_diags:
+            print(f"     {d}")
+    if panic_diags or unwind_diags:
+        return 1
+
     # 4. Optional hash dump
     if "--hash" in a.flags:
         print("   hashes:")

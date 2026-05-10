@@ -2467,6 +2467,44 @@ class FnCompiler:
                 res_slot = self._slot_of(op.results[0])
                 self.asm.mov_mem_rbp_eax(res_slot)
             return
+        if op.kind == tir.OpKind.TRAP:
+            # Stage 28.5 — panic("msg"). Emit the message to stderr (fd=2)
+            # via sys_write, then sys_exit with the trap-id as the status
+            # (truncated to a byte by the kernel). Execution does NOT
+            # return from a TRAP op; we still fill the result slot for
+            # SSA bookkeeping but no subsequent op observes it.
+            text = op.attrs.get("text", "")
+            trap_id = int(op.attrs.get("trap_id", 28501))
+            assert isinstance(text, str)
+            # Render a small header so the user sees BOTH the trap id and
+            # the message at runtime, e.g. "panic[28501]: oh no\n".
+            full = f"panic[{trap_id}]: {text}\n"
+            data = full.encode("utf-8")
+            sym = f"__helix_panic_{id(op):x}"
+            self._pending_strings.append((sym, data))
+            # sys_write(2, ptr, len)
+            self.asm.mov_edi_imm32(2)  # fd = stderr
+            self.asm.lea_rsi_rip_rel(sym)
+            self.asm.mov_edx_imm32(len(data))
+            self.asm.mov_eax_imm32(1)  # sys_write
+            self.asm.syscall()
+            # sys_exit(trap_id & 0xFF) — Linux truncates the status to a
+            # byte; we pass the low 8 bits of the trap_id so users see a
+            # distinctive non-zero exit code (e.g. 28501 & 0xFF = 0x55).
+            self.asm.mov_edi_imm32(trap_id & 0xFF)
+            self.asm.mov_eax_imm32(60)  # sys_exit
+            self.asm.syscall()
+            # ud2 belt-and-braces: if the exit syscall somehow returns
+            # (shouldn't), trap loudly rather than fall through.
+            self.asm.b.emit(0x0F, 0x0B)
+            # Fill the result slot with the trap-id so SSA bookkeeping
+            # (and any IR-level dead-code analysis) sees a defined value.
+            # This code is unreachable at runtime — sys_exit never returns.
+            if op.results:
+                res_slot = self._slot_of(op.results[0])
+                self.asm.mov_eax_imm32(trap_id)
+                self.asm.mov_mem_rbp_eax(res_slot)
+            return
         if op.kind == tir.OpKind.QUOTE:
             # QUOTE returns a stable cell handle in [0, HELIX_NUM_CELLS). The
             # handle is derived at compile time from the AST hash; runtime

@@ -42,6 +42,10 @@ OP_EFFECTS: dict[tir.OpKind, frozenset[str]] = {
     tir.OpKind.MODIFY: frozenset({"modify_self"}),
     tir.OpKind.SPLICE: frozenset({"modify_self"}),
     # QUOTE is read-only (returns an AST handle); no effect.
+    # Stage 28.5 — TRAP terminates the process (sys_exit). Treated as an
+    # io effect because the panic message is written to stderr before
+    # exit. @pure fns cannot panic.
+    tir.OpKind.TRAP: frozenset({"io"}),
 }
 
 
