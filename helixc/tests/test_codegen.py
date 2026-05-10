@@ -2669,6 +2669,31 @@ fn main() -> i32 {
         "let m = Maybe::None; "
         "match m { Maybe::None => 0, Maybe::Some(v) => v } }"
     ) == 0, "Stage 7F: Maybe::None first arm matches"
+    # Audit A1-F1 regression: matching against an all-unit enum used to
+    # SIGSEGV. The unit-variant fold goes through AST_INT (i32-shaped)
+    # but PAT_VARIANT codegen dereferenced the i32 disc as a pointer
+    # (`mov rax, [scrut]; mov eax, [rax+0]`) → reads from address 0x1
+    # or 0x2 which is unmapped. Fix: emit_pat_variant_disc consults the
+    # scrut's expr_type (stashed in bn_state slot 122 by emit_match_dispatch)
+    # and uses direct disc-cmp for i32-shaped scrut.
+    assert compile_and_exec(
+        "enum Color { R, G, B } "
+        "fn main() -> i32 { "
+        "let c = Color::G; "
+        "match c { Color::R => 0, Color::G => 1, Color::B => 2 } }"
+    ) == 1, "A1-F1: match on all-unit enum returns G's disc=1 (no SIGSEGV)"
+    assert compile_and_exec(
+        "enum Color { R, G, B } "
+        "fn main() -> i32 { "
+        "let c = Color::B; "
+        "match c { Color::R => 0, Color::G => 1, Color::B => 2 } }"
+    ) == 2, "A1-F1: match on all-unit enum third variant"
+    assert compile_and_exec(
+        "enum Color { R, G, B } "
+        "fn main() -> i32 { "
+        "let c = Color::R; "
+        "match c { Color::R => 7, Color::G => 1, Color::B => 2 } }"
+    ) == 7, "A1-F1: match on all-unit enum first variant"
     # Stage 7G: tuple patterns. PAT_TUPLE destructures.
     assert compile_and_exec(
         "fn main() -> i32 { "

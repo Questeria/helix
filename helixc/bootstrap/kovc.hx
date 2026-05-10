@@ -1660,8 +1660,11 @@ fn install_builtin_names() -> i32 {
     //   cell index, 0..63). Cells live at the LAST 64 slots of the produced
     //   binary's arena: cell[i] is at __helix_arena_base + 4 + (CAP-64+i)*4.
     //   The arena is BSS-zero-filled at load time so each cell starts as 0.
+    // Audit A1-F1: bumped 117 → 118 to reserve slot 122 for the
+    // match-dispatch scrut_ty stash (set by emit_match_dispatch, read
+    // by emit_pat_variant_disc). See `match_scrut_ty_set/get` below.
     let mut i: i32 = 0;
-    while i < 117 {
+    while i < 118 {
         __arena_push(0);
         i = i + 1;
     }
@@ -2009,7 +2012,24 @@ fn install_builtin_names() -> i32 {
     // Cap 64 cells — exceeding traps 81002 (cell-table overflow).
     __arena_set(bn_state + 121, 0);
 
+    // Slot 122 (Audit A1-F1 fix): match-dispatch scrut_ty stash. Set by
+    // emit_match_dispatch from expr_type(scrut_idx, ...); read by
+    // emit_pat_variant_disc to choose between i32-direct cmp (scrut_ty
+    // == 0) and pointer-deref cmp (scrut_ty != 0). Cleared/reused per
+    // match dispatch — nested matches see their own enclosing scope's
+    // value because emit_match_dispatch sets it before the arm chain.
+    __arena_set(bn_state + 122, 0);
+
     bn_state
+}
+
+// Audit A1-F1: match scrut_ty stash accessors.
+fn match_scrut_ty_set(bn_state: i32, ty: i32) -> i32 {
+    __arena_set(bn_state + 122, ty);
+    0
+}
+fn match_scrut_ty_get(bn_state: i32) -> i32 {
+    __arena_get(bn_state + 122)
 }
 
 fn bn_arena_push_s(b: i32) -> i32 { __arena_get(b) }
@@ -3356,13 +3376,37 @@ fn emit_pat_range(scrut_off: i32, lo: i32, hi: i32, fail_state: i32) -> i32 {
 }
 
 // Stage 7 PAT_VARIANT (sans sub-pats) helper.
-fn emit_pat_variant_disc(scrut_off: i32, disc: i32, fail_state: i32) -> i32 {
-    let n_load_ptr = emit_mov_rax_local_64(scrut_off);
-    emit_byte(0x8B); emit_byte(0x00);    // mov eax, [rax+0]
-    let n_cmp = emit_cmp_eax_imm32(disc);
-    let disp = emit_jne_rel32_placeholder();
-    fail_jmp_state_add(fail_state, disp);
-    n_load_ptr + 2 + n_cmp + 6
+//
+// Audit A1-F1 fix: when the scrutinee is i32-shaped (expr_type == 0),
+// the all-unit-enum fold stored the disc as a small integer (via
+// AST_INT). The pointer-rep load `mov rax, [scrut_off]; mov eax, [rax]`
+// dereferences that small integer as a pointer → SIGSEGV at the disc
+// value (e.g. 0x1, 0x2). For i32-shaped scrut, skip the deref and
+// compare the loaded i32 directly against the pattern's disc. The
+// scrut_ty is read from match_scrut_ty_get(bn_state) — stashed once at
+// emit_match_dispatch time so we don't need to thread an extra param
+// through the 6-param-cap helper chain.
+fn emit_pat_variant_disc(scrut_off: i32, disc: i32, fail_state: i32, bn_state: i32) -> i32 {
+    let scrut_ty = match_scrut_ty_get(bn_state);
+    if scrut_ty == 0 {
+        // i32-shaped scrut: disc is stored directly. mov eax, [rbp+off];
+        // cmp eax, disc; jne fail.
+        let n_load_disc = emit_mov_eax_local(scrut_off);
+        let n_cmp = emit_cmp_eax_imm32(disc);
+        let disp = emit_jne_rel32_placeholder();
+        fail_jmp_state_add(fail_state, disp);
+        n_load_disc + n_cmp + 6
+    } else {
+        // Pointer-rep scrut: scrut_off holds an 8-byte pointer to the
+        // variant's disc slot. mov rax, [rbp+off]; mov eax, [rax];
+        // cmp eax, disc; jne fail.
+        let n_load_ptr = emit_mov_rax_local_64(scrut_off);
+        emit_byte(0x8B); emit_byte(0x00);    // mov eax, [rax+0]
+        let n_cmp = emit_cmp_eax_imm32(disc);
+        let disp = emit_jne_rel32_placeholder();
+        fail_jmp_state_add(fail_state, disp);
+        n_load_ptr + 2 + n_cmp + 6
+    }
 }
 
 // Stage 7 pattern test for scalar patterns (LIT/WILDCARD/BIND/RANGE).
@@ -3381,12 +3425,12 @@ fn emit_scalar_pattern_test(pat_idx: i32, scrut_off: i32, fail_state: i32,
 
 // Stage 7 pattern test for compound patterns (VARIANT/TUPLE).
 fn emit_compound_pattern_test(pat_idx: i32, scrut_off: i32, fail_state: i32,
-                              bind_state: i32) -> i32 {
+                              bind_state: i32, bn_state: i32) -> i32 {
     let pt = __arena_get(pat_idx);
     let pp1 = __arena_get(pat_idx + 1);
     let pp2 = __arena_get(pat_idx + 2);
     if pt == 69 {
-        let n_disc = emit_pat_variant_disc(scrut_off, pp1, fail_state);
+        let n_disc = emit_pat_variant_disc(scrut_off, pp1, fail_state, bn_state);
         let n_subs = emit_variant_subpats(pp2, scrut_off, fail_state, bind_state);
         n_disc + n_subs
     } else { if pt == 70 {
@@ -3396,10 +3440,10 @@ fn emit_compound_pattern_test(pat_idx: i32, scrut_off: i32, fail_state: i32,
 
 // Stage 7 pattern test entry point. Dispatches to scalar or compound.
 fn emit_pattern_test(pat_idx: i32, scrut_off: i32, fail_state: i32,
-                     bind_state: i32) -> i32 {
+                     bind_state: i32, bn_state: i32) -> i32 {
     let pt = __arena_get(pat_idx);
     if pt >= 69 {
-        emit_compound_pattern_test(pat_idx, scrut_off, fail_state, bind_state)
+        emit_compound_pattern_test(pat_idx, scrut_off, fail_state, bind_state, bn_state)
     } else {
         emit_scalar_pattern_test(pat_idx, scrut_off, fail_state, bind_state)
     }
@@ -3469,7 +3513,7 @@ fn emit_one_match_arm(arm_idx: i32, scrut_off: i32, match_state: i32,
     let fail_state = match_state;
     let end_table = match_state + 17;
     fail_jmp_state_reset(fail_state);
-    let n_pat = emit_pattern_test(pat_idx, scrut_off, fail_state, bind_state);
+    let n_pat = emit_pattern_test(pat_idx, scrut_off, fail_state, bind_state, bn_state);
     let n_body = emit_ast_code(body_idx, bind_state, patch_state, bn_state);
     let n_binds = count_pattern_binds(pat_idx);
     let mut bp: i32 = 0;
@@ -3502,8 +3546,18 @@ fn emit_match_arms(arms_head: i32, scrut_off: i32, match_state: i32,
 // Stage 7: top-level AST_MATCH lowering. Wrapped in a helper so the
 // emit_ast_code arm body stays a single function call (host parser
 // recursion budget).
+//
+// Audit A1-F1 fix: capture the scrut's expr_type once at dispatch and
+// stash it in bn_state via match_scrut_ty_set. emit_pat_variant_disc
+// reads it back via match_scrut_ty_get. When scrut_ty == 0 (i32-shaped,
+// including all-unit-enum AST_INT folds), the variant-disc helper skips
+// the pointer dereference and compares the raw i32 value. (Stash via
+// bn_state instead of an extra param avoids exceeding the 6-int-param
+// cap on the helper chain.)
 fn emit_match_dispatch(scrut_idx: i32, arms_head: i32,
                        bind_state: i32, patch_state: i32, bn_state: i32) -> i32 {
+    let scrut_ty = expr_type(scrut_idx, bind_state, bn_state);
+    match_scrut_ty_set(bn_state, scrut_ty);
     let n_scrut = emit_ast_code(scrut_idx, bind_state, patch_state, bn_state);
     let scrut_off = bind_alloc_offset(bind_state);
     let n_store = emit_mov_local_rax_64(scrut_off);
