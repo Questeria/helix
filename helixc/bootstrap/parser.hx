@@ -1024,22 +1024,32 @@ fn mk_node(tag: i32, p1: i32, p2: i32, p3: i32) -> i32 {
     i
 }
 
-// Stage 17a (const-fold pass, parser-time variant): when an arithmetic
-// binop is being constructed and both operands are AST_INT (tag 0)
-// literals, produce a single AST_INT carrying the folded i32 value
-// instead of allocating the binop. The bottom-up parser ensures inner
-// nodes fold first, so `2 + 3 * 4` walks 2 + AST_INT(12) → AST_INT(14).
+// Stage 17a/b (const-fold pass, parser-time variant): when a binop is
+// being constructed and both operands are AST_INT (tag 0) literals,
+// produce a single AST_INT carrying the folded i32 value instead of
+// allocating the binop. The bottom-up parser ensures inner nodes fold
+// first, so `2 + 3 * 4` walks 2 + AST_INT(12) → AST_INT(14).
 //
 // Phase-0 scope:
-//   - tag 2 AST_ADD, 3 AST_SUB, 4 AST_MUL only.
-//   - Wider intlits (i64/u32/u64/i8/i16/u8/u16) are NOT folded here:
-//     their per-type wrap rules differ from i32 and the bootstrap's
-//     own arithmetic is i32-only at this layer.
-//   - DIV/MOD deferred (Phase-0 has no compile-time div/0 trap; the
-//     runtime SIGFPE from idiv must not be silently elided by a fold).
+//   17a:  arithmetic — tag 2 AST_ADD, 3 AST_SUB, 4 AST_MUL
+//   17b:  comparison — tag 6 AST_LT, 19 AST_GT, 20 AST_EQ, 21 AST_NE,
+//                      22 AST_LE, 23 AST_GE  (result is 0 or 1, i32)
+//         bitwise    — tag 28 AST_BAND, 29 AST_BOR, 30 AST_BXOR
+//
+// Not folded:
+//   - Wider intlits (i64/u32/u64/i8/i16/u8/u16). Their per-type wrap
+//     rules differ from i32 and the bootstrap's own host arithmetic is
+//     i32-only at this layer; folding them risks silent bit loss.
+//   - Tag 5 AST_DIV / 24 AST_MOD. Phase-0 has no compile-time div/0
+//     or INT_MIN/-1 trap, and the runtime SIGFPE from idiv must not
+//     be silently elided. Reserved for a follow-up step.
+//   - Tag 32 AST_SHL / 33 AST_SHR. Helix `/` is truncated (toward 0)
+//     while AST_SHR is arithmetic-right (toward -inf for negative);
+//     compile-time emulation can't match codegen exactly without
+//     special-casing signs. Reserved.
 //
 // Wrapping semantics: the host compile-time i32 +/-/* wraps two's-
-// complement, matching x86-64 add/sub/imul i32 in the produced binary.
+// complement, matching x86-64 add/sub/imul i32 in produced binaries.
 fn mk_arith_fold(tag: i32, lhs: i32, rhs: i32) -> i32 {
     let lt = __arena_get(lhs);
     let rt = __arena_get(rhs);
@@ -1052,9 +1062,27 @@ fn mk_arith_fold(tag: i32, lhs: i32, rhs: i32) -> i32 {
             mk_node(0, lv - rv, 0, 0)
         } else { if tag == 4 {
             mk_node(0, lv * rv, 0, 0)
+        } else { if tag == 28 {
+            mk_node(0, lv & rv, 0, 0)
+        } else { if tag == 29 {
+            mk_node(0, lv | rv, 0, 0)
+        } else { if tag == 30 {
+            mk_node(0, lv ^ rv, 0, 0)
+        } else { if tag == 6 {
+            if lv < rv { mk_node(0, 1, 0, 0) } else { mk_node(0, 0, 0, 0) }
+        } else { if tag == 19 {
+            if lv > rv { mk_node(0, 1, 0, 0) } else { mk_node(0, 0, 0, 0) }
+        } else { if tag == 20 {
+            if lv == rv { mk_node(0, 1, 0, 0) } else { mk_node(0, 0, 0, 0) }
+        } else { if tag == 21 {
+            if lv != rv { mk_node(0, 1, 0, 0) } else { mk_node(0, 0, 0, 0) }
+        } else { if tag == 22 {
+            if lv <= rv { mk_node(0, 1, 0, 0) } else { mk_node(0, 0, 0, 0) }
+        } else { if tag == 23 {
+            if lv >= rv { mk_node(0, 1, 0, 0) } else { mk_node(0, 0, 0, 0) }
         } else {
             mk_node(tag, lhs, rhs, 0)
-        }}}
+        }}}}}}}}}}}}
     } else {
         mk_node(tag, lhs, rhs, 0)
     }} else {
@@ -1250,38 +1278,38 @@ fn parse_expr_basic(tok_base: i32, sb: i32) -> i32 {
             // `<=`
             cur_advance(sb); cur_advance(sb);
             let rhs = parse_bitwise(tok_base, sb);
-            mk_node(22, lhs, rhs, 0)
+            mk_arith_fold(22, lhs, rhs)
         } else {
             // `<`
             cur_advance(sb);
             let rhs = parse_bitwise(tok_base, sb);
-            mk_node(6, lhs, rhs, 0)
+            mk_arith_fold(6, lhs, rhs)
         }
     } else { if t == 17 {
         if t2 == 15 {
             // `>=`
             cur_advance(sb); cur_advance(sb);
             let rhs = parse_bitwise(tok_base, sb);
-            mk_node(23, lhs, rhs, 0)
+            mk_arith_fold(23, lhs, rhs)
         } else {
             // `>`
             cur_advance(sb);
             let rhs = parse_bitwise(tok_base, sb);
-            mk_node(19, lhs, rhs, 0)
+            mk_arith_fold(19, lhs, rhs)
         }
     } else { if t == 15 {
         if t2 == 15 {
             // `==`
             cur_advance(sb); cur_advance(sb);
             let rhs = parse_bitwise(tok_base, sb);
-            mk_node(20, lhs, rhs, 0)
+            mk_arith_fold(20, lhs, rhs)
         } else { lhs }
     } else { if t == 18 {
         if t2 == 15 {
             // `!=`
             cur_advance(sb); cur_advance(sb);
             let rhs = parse_bitwise(tok_base, sb);
-            mk_node(21, lhs, rhs, 0)
+            mk_arith_fold(21, lhs, rhs)
         } else { lhs }
     } else { lhs }}}}
 }
@@ -1299,15 +1327,15 @@ fn parse_bitwise(tok_base: i32, sb: i32) -> i32 {
         if t == 27 {       // TK_AMP -> AST_BAND
             cur_advance(sb);
             let rhs = parse_add(tok_base, sb);
-            lhs = mk_node(28, lhs, rhs, 0);
+            lhs = mk_arith_fold(28, lhs, rhs);
         } else { if t == 28 {       // TK_PIPE -> AST_BOR
             cur_advance(sb);
             let rhs = parse_add(tok_base, sb);
-            lhs = mk_node(29, lhs, rhs, 0);
+            lhs = mk_arith_fold(29, lhs, rhs);
         } else { if t == 29 {       // TK_CARET -> AST_BXOR
             cur_advance(sb);
             let rhs = parse_add(tok_base, sb);
-            lhs = mk_node(30, lhs, rhs, 0);
+            lhs = mk_arith_fold(30, lhs, rhs);
         } else { if t == 30 {       // TK_LSHIFT -> AST_SHL
             cur_advance(sb);
             let rhs = parse_add(tok_base, sb);
