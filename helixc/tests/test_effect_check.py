@@ -230,6 +230,95 @@ def test_effect_inclusion_passes_when_caller_declares_superset():
         f"unexpected: {msgs}"
 
 
+# --- Stage 19 regression tests ---
+
+def test_stage19_trap_19001_pure_calls_effectful_via_ir():
+    """Stage 19 trap-id 19001: an under-declared function whose body has
+    a side-effecting op is flagged at the IR level. Reports the trap-id
+    in the error string so a downstream gate can grep for it."""
+    # Use a direct PRINT op (avoids the typecheck path that already
+    # blocks @pure-calls-effectful at the AST level).
+    src = """
+    @pure
+    fn lies() -> i32 {
+        print_int(7);
+        7
+    }
+    fn main() -> i32 { lies() }
+    """
+    mod = lower_only(src)
+    errs = check_module(mod)
+    assert any("19001" in e and "lies" in e for e in errs), (
+        f"expected trap 19001 in errors, got {errs}"
+    )
+
+
+def test_stage19_trap_19002_declared_but_unused_effect():
+    """Stage 19 trap-id 19002: an @effect(...) declaration that the
+    body's closure never actually exercises is flagged.
+
+    `unused_decl` declares @effect(io) but never invokes a PRINT-style
+    or known-io callee — the 19002 trap should surface."""
+    src = """
+    @effect(io)
+    fn unused_decl() -> i32 { 42 }
+    fn main() -> i32 { unused_decl() }
+    """
+    mod = lower_only(src)
+    errs = check_module(mod)
+    assert any("19002" in e and "unused_decl" in e for e in errs), (
+        f"expected trap 19002 (unused declared effect), got {errs}"
+    )
+
+
+def test_stage19_trap_19002_does_not_fire_when_effect_is_used():
+    """The 19002 trap MUST NOT fire when the declared effect is exercised
+    via the body's closure (here `printer` actually prints)."""
+    src = """
+    @effect(io)
+    fn printer() -> i32 { print_int(7); 7 }
+    fn main() -> i32 { printer() }
+    """
+    mod = lower_only(src)
+    errs = check_module(mod)
+    # 19002 must NOT appear for `printer` (it really does have io).
+    msgs_for_printer = [e for e in errs if "printer" in e]
+    assert not any("19002" in e for e in msgs_for_printer), (
+        f"19002 falsely fired for printer: {msgs_for_printer}"
+    )
+
+
+def test_stage19_19001_not_emitted_when_pure_is_actually_pure():
+    """No trap when @pure does what it says."""
+    src = """
+    @pure
+    fn truly_pure(x: i32) -> i32 { x + 1 }
+    fn main() -> i32 { truly_pure(41) }
+    """
+    mod = lower_only(src)
+    errs = check_module(mod)
+    msgs_for_truly_pure = [e for e in errs if "truly_pure" in e]
+    assert msgs_for_truly_pure == [], (
+        f"unexpected error for clean @pure fn: {msgs_for_truly_pure}"
+    )
+
+
+def test_stage19_effect_check_runs_in_x86_64_driver_pipeline():
+    """The x86_64 driver's __main__ wires effect_check_module after the
+    optimization passes. Smoke check: the import works and the call
+    site is present in the source. (Actually invoking subprocess on the
+    driver is expensive; we keep this lightweight.)"""
+    from helixc.backend import x86_64
+    import inspect
+    src = inspect.getsource(x86_64)
+    assert "effect_check_module" in src, (
+        "x86_64.py driver no longer imports effect_check — Stage 19 wiring lost"
+    )
+    assert "trap 19001" in src, (
+        "x86_64.py driver no longer surfaces 19001 — Stage 19 wiring lost"
+    )
+
+
 def main():
     tests = [(name, fn) for name, fn in globals().items()
              if name.startswith("test_") and callable(fn)]
