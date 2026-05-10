@@ -100,9 +100,25 @@ def test_extern_c_uses_dynlink():
 
 
 if __name__ == "__main__":
-    test_extern_c_puts_hello()
-    print("PASS test_extern_c_puts_hello")
-    test_extern_c_no_op_no_dynlink()
-    print("PASS test_extern_c_no_op_no_dynlink")
-    test_extern_c_uses_dynlink()
-    print("PASS test_extern_c_uses_dynlink")
+    tests = [
+        ("test_extern_c_puts_hello", test_extern_c_puts_hello),
+        ("test_extern_c_no_op_no_dynlink", test_extern_c_no_op_no_dynlink),
+        ("test_extern_c_uses_dynlink", test_extern_c_uses_dynlink),
+    ]
+    passed = 0
+    failed = 0
+    for name, fn in tests:
+        try:
+            fn()
+            print(f"PASS {name}")
+            passed += 1
+        except AssertionError as e:
+            print(f"FAIL {name}: {e}")
+            failed += 1
+        except Exception as e:
+            import traceback
+            print(f"ERROR {name}: {type(e).__name__}: {e}")
+            traceback.print_exc()
+            failed += 1
+    print(f"\n{passed} passed, {failed} failed")
+    sys.exit(0 if failed == 0 else 1)
