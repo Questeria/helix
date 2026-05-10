@@ -159,32 +159,24 @@ class TypeError_(Exception):
         self.hint = hint
 
     def render(self, source: Optional[str] = None,
-               filename: str = "<input>") -> str:
-        """Format with source-line context like:
-
-          error: <msg>
-            --> file:line:col
-             | <source line>
-             | ^
-
-        If `source` is None, falls back to the bare 'line:col: msg' form.
-        """
+               filename: str = "<input>",
+               color: Optional[bool] = None) -> str:
+        """Format with source-line context via the shared diagnostics
+        module (Stage 22). Includes hint as a `= hint:` line when set.
+        If `source` is None, falls back to the bare 'line:col: msg' form."""
         if source is None:
             return str(self)
-        lines = source.splitlines()
-        if 1 <= self.span.line <= len(lines):
-            src_line = lines[self.span.line - 1]
-            ln_str = str(self.span.line)
-            pad = " " * len(ln_str)
-            caret_pad = " " * max(0, self.span.col - 1)
-            return (
-                f"error: {self.msg}\n"
-                f"{pad} --> {filename}:{self.span.line}:{self.span.col}\n"
-                f"{pad}  |\n"
-                f"{ln_str} | {src_line}\n"
-                f"{pad}  | {caret_pad}^"
-            )
-        return str(self)
+        from .diagnostics import render_caret
+        return render_caret(
+            filename=filename,
+            line=self.span.line,
+            col=self.span.col,
+            msg=self.msg,
+            source=source,
+            hint=self.hint,
+            level="error",
+            color=color,
+        )
 
 
 # ============================================================================

@@ -28,6 +28,7 @@ from typing import Optional
 
 from .lexer import Token, T, lex
 from . import ast_nodes as ast
+from .diagnostics import render_caret
 
 
 class ParseError(Exception):
@@ -37,28 +38,22 @@ class ParseError(Exception):
         self.msg = msg
 
     def render(self, source: "str | None" = None,
-               filename: str = "<input>") -> str:
-        """Format with source-line + caret display (mirrors
-        TypeError_.render). Falls back to bare str(self) if source is
-        None or the line is out of range."""
+               filename: str = "<input>",
+               color: "bool | None" = None) -> str:
+        """Format with source-line + caret display via the shared
+        diagnostics module (Stage 22). Falls back to bare str(self) if
+        source is None or the line is out of range."""
         if source is None:
             return str(self)
-        lines = source.splitlines()
-        line = self.token.line
-        col = self.token.col
-        if 1 <= line <= len(lines):
-            src_line = lines[line - 1]
-            ln_str = str(line)
-            pad = " " * len(ln_str)
-            caret_pad = " " * max(0, col - 1)
-            return (
-                f"parse error: {self.msg}\n"
-                f"{pad} --> {filename}:{line}:{col}\n"
-                f"{pad}  |\n"
-                f"{ln_str} | {src_line}\n"
-                f"{pad}  | {caret_pad}^"
-            )
-        return str(self)
+        return render_caret(
+            filename=filename,
+            line=self.token.line,
+            col=self.token.col,
+            msg=self.msg,
+            source=source,
+            level="error",
+            color=color,
+        )
 
 
 class Parser:
