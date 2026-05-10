@@ -56,45 +56,8 @@ def test_collect_panics_none():
     assert collect_panics(prog) == []
 
 
-def test_collect_panics_inside_if_then():
-    """Audit 28.8 C1-H1 regression: _walk_exprs used "then_branch" / "else_branch"
-    attribute names which don't exist on A.If (the actual fields are "then" /
-    "else_"). panic() inside if-arm went undetected — collect_panics returned
-    []. With the fix, the panic call is reachable through the walker."""
-    src = '''
-fn maybe(cond: i32) -> i32 {
-    if cond == 0 {
-        panic("zero is bad");
-        0
-    } else {
-        1
-    }
-}
-'''
-    prog = parse(src)
-    out = collect_panics(prog)
-    assert len(out) == 1, f"expected 1 panic site, got {len(out)}: {out}"
-    fn_name, _span, msg = out[0]
-    assert fn_name == "maybe"
-    assert msg == "zero is bad"
-
-
-def test_collect_panics_inside_if_else():
-    """Same C1-H1 regression, panic in the else-arm specifically."""
-    src = '''
-fn maybe(cond: i32) -> i32 {
-    if cond > 0 {
-        1
-    } else {
-        panic("non-positive");
-        0
-    }
-}
-'''
-    prog = parse(src)
-    out = collect_panics(prog)
-    assert len(out) == 1
-    assert out[0][2] == "non-positive"
+# C1-H1 / A6 regression tests for if-arm / for-iter walker coverage are
+# defined further down in this module (after the validation-arg group).
 
 
 def test_validate_panic_args_clean():
@@ -266,8 +229,10 @@ fn die_for(n: i32) -> i32 {
 
 
 def test_walker_does_not_callback_on_stmts():
-    """C1-L1: walker invokes callback only on A.Expr, not on
-    A.Block or A.Stmt subclasses."""
+    """C1-L1: walker invokes callback only on `A.Expr` subclasses, not
+    on `A.Stmt` subclasses (Let, ExprStmt, ConstStmt). Note that `A.Block`
+    is itself an `A.Expr` subclass in this AST schema, so the walker DOES
+    fire on Blocks — what the fix prevents is firing on Stmt-tagged nodes."""
     src = '''
 fn body() -> i32 {
     let x: i32 = 0;
@@ -275,21 +240,23 @@ fn body() -> i32 {
 }
 '''
     prog = parse(src)
-    seen_kinds: list[str] = []
+    seen: list = []
 
     def cb(e):
-        seen_kinds.append(type(e).__name__)
+        seen.append(e)
 
     from helixc.frontend.panic_pass import _walk_exprs
     fn = next(it for it in prog.items if isinstance(it, A.FnDecl))
     _walk_exprs(fn.body, cb)
-    # No Stmt / ExprStmt / Block names should appear in the callback list.
-    assert "Block" not in seen_kinds
-    assert "ExprStmt" not in seen_kinds
-    assert "Let" not in seen_kinds
-    # But at least one A.Expr subclass should — the `x` Name in the final
-    # expr or the `0` IntLit in the let value.
-    assert seen_kinds, "callback should have fired on at least one Expr"
+    # None of the seen nodes should be an A.Stmt subclass.
+    for n in seen:
+        assert isinstance(n, A.Expr), (
+            f"_walk_exprs callback fired on {type(n).__name__!r}, which "
+            f"is not an A.Expr subclass; only Exprs are expected"
+        )
+    # At least one Expr should have fired (the Block, the `0` IntLit, the
+    # `x` Name, etc.).
+    assert seen, "callback should have fired on at least one Expr"
 
 
 if __name__ == "__main__":
