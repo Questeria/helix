@@ -326,6 +326,17 @@ def main(argv: list[str] | None = None) -> int:
     if panic_diags or unwind_diags:
         return 1
 
+    # Stage 28.6: unsafe capability gate (Audit 28.8 A2).
+    # `check_unsafe_ops` flags raw-pointer ops (Unary deref) outside
+    # any enclosing UnsafeBlock with trap 28601. Empty list = clean.
+    from .frontend.unsafe_pass import check_unsafe_ops
+    unsafe_diags = check_unsafe_ops(prog)
+    if unsafe_diags:
+        print(f"   unsafe:    {len(unsafe_diags)} ERROR(s)")
+        for d in unsafe_diags:
+            print(f"     {d}")
+        return 1
+
     # 4. Optional hash dump
     if "--hash" in a.flags:
         print("   hashes:")

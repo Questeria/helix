@@ -1684,6 +1684,17 @@ class Lowerer:
             self.builder.switch_to(merge_blk)
             result = self.builder.new_block_param(t_val.ty, hint="if_result")
             return result
+        if isinstance(expr, A.UnsafeBlock):
+            # Stage 28.6 — `unsafe { ... }` is a capability boundary at
+            # the source level. At lowering time we treat it as a normal
+            # Block: the body is lowered identically to a non-unsafe
+            # block; raw-pointer ops inside are permitted, raw-pointer
+            # ops OUTSIDE any UnsafeBlock are diagnosed by
+            # `helixc.frontend.unsafe_pass.check_unsafe_ops` (wired into
+            # helixc/check.py). The lowering pass intentionally does
+            # NOT replicate the syntactic gate — there's nothing to
+            # add to the IR for a permitted op.
+            return self._lower_block(expr.body)
         if isinstance(expr, A.Block):
             return self._lower_block(expr)
         if isinstance(expr, A.For):
