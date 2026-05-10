@@ -3290,6 +3290,17 @@ fn main() -> i32 {
         "fn use_pt(p: Pt) -> i32 { p.0 + p.1 } "
         "fn main() -> i32 { let p = Pt { 10, 32 } ; use_pt(p) }"
     ) == 42, "A1-F5 smoke: struct param-by-value still works after ret-ty extension"
+    # Audit A1-F6 regression: 4th struct decl used to be silently dropped
+    # (cap was 3). Subsequent uses of the dropped struct silently parsed
+    # as plain IDENT references → silent corruption. Now the cap is 8 so
+    # 4 struct decls fit cleanly.
+    assert compile_and_exec(
+        "struct A { x: i32 } "
+        "struct B { x: i32 } "
+        "struct C { x: i32 } "
+        "struct D { x: i32 } "
+        "fn main() -> i32 { let d = D { 42 } ; d.0 }"
+    ) == 42, "A1-F6: 4th struct decl now reaches struct_table (cap bump 3->8)"
     # Direct typed-call form `i32::eq(a, b)` works without method sugar.
     assert compile_and_exec(
         "trait Eq { fn eq(self, other: Self) -> i32 ; } "

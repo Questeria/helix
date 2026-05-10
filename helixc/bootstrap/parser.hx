@@ -766,7 +766,7 @@ fn ty_tag_push_name(tag: i32) -> i32 {
 }
 fn var_struct_tab_add(sb: i32, name_s: i32, name_l: i32, struct_idx: i32) -> i32 {
     let count = var_struct_tab_count(sb);
-    if count >= 4 {
+    if count >= 8 {
         0 - 1
     } else {
         let base = var_struct_tab_base(sb);
@@ -803,7 +803,7 @@ fn var_struct_tab_lookup(sb: i32, name_s: i32, name_l: i32) -> i32 {
 // (2*arity slots). 0 means no fields region (e.g. empty struct).
 fn struct_tab_add(sb: i32, name_s: i32, name_l: i32, arity: i32, fields_ptr: i32) -> i32 {
     let count = struct_tab_count(sb);
-    if count >= 3 {
+    if count >= 8 {
         0 - 1
     } else {
         let base = struct_tab_base(sb);
@@ -892,8 +892,9 @@ fn struct_tab_field_lookup(sb: i32, struct_idx: i32, field_s: i32, field_l: i32)
 // -1 on overflow. Cap 4 enums. Stride 5 (name_s, name_l, variant_count,
 // variants_ptr, max_payload_arity).
 fn enum_tab_add(sb: i32, name_s: i32, name_l: i32, variant_count: i32, variants_ptr: i32, max_arity: i32) -> i32 {
+    // Audit A1-F6 cap check (was 4, now 8). See enum_tab_init.
     let count = enum_tab_count(sb);
-    if count >= 4 {
+    if count >= 8 {
         0 - 1
     } else {
         let base = enum_tab_base(sb);
@@ -3008,10 +3009,18 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
 // fills it with an arena offset to a per-struct field-names region built
 // during parse_struct_decl, used to resolve `p.IDENT` -> field index.
 fn struct_tab_init(sb: i32) -> i32 {
+    // Audit A1-F6: bumped cap from 3 to 8 entries (32 slots = 8*4).
+    // Pre-bump, the 4th `struct X {...}` decl was silently dropped from
+    // the table (returned -1, ignored by callers). Bumping to 8 is cheap
+    // (32 arena slots vs 12) and covers all current bootstrap and demo
+    // programs. The tighter cap-check (8) still surfaces the issue if
+    // the program is unusually struct-heavy.
     let st_base = __arena_push(0);
-    __arena_push(0); __arena_push(0); __arena_push(0); __arena_push(0);
-    __arena_push(0); __arena_push(0); __arena_push(0); __arena_push(0);
-    __arena_push(0); __arena_push(0); __arena_push(0);
+    let mut i: i32 = 1;
+    while i < 32 {
+        __arena_push(0);
+        i = i + 1;
+    }
     __arena_set(sb + 15, st_base);
     __arena_set(sb + 16, 0);
     0
@@ -3020,24 +3029,31 @@ fn struct_tab_init(sb: i32) -> i32 {
 // Stage 5 Iter B: var_struct_table region — 12 slots = 4 entries x 3
 // fields (var_name_s, var_name_l, struct_idx). Cap 4 vars; expand later.
 fn var_struct_tab_init(sb: i32) -> i32 {
+    // Audit A1-F6: bumped cap from 4 to 8 entries (24 slots = 8*3).
+    // Pre-bump, the 5th struct-typed let-binding in any function was
+    // silently dropped, breaking subsequent `.field` resolution.
     let vs_base = __arena_push(0);
-    __arena_push(0); __arena_push(0); __arena_push(0); __arena_push(0);
-    __arena_push(0); __arena_push(0); __arena_push(0); __arena_push(0);
-    __arena_push(0); __arena_push(0); __arena_push(0);
+    let mut i: i32 = 1;
+    while i < 24 {
+        __arena_push(0);
+        i = i + 1;
+    }
     __arena_set(sb + 17, vs_base);
     __arena_set(sb + 18, 0);
     0
 }
 
-// Stage 6: enum_table region — 20 slots = 4 entries x 5 fields
+// Stage 6: enum_table region — bumped cap from 4 to 8 entries (40 slots
+// = 8*5). Audit A1-F6: pre-bump the 5th `enum X {...}` decl was silently
+// dropped from the table.
 // (name_s, name_l, variant_count, variants_ptr, max_payload_arity).
 fn enum_tab_init(sb: i32) -> i32 {
     let et_base = __arena_push(0);
-    __arena_push(0); __arena_push(0); __arena_push(0); __arena_push(0);
-    __arena_push(0); __arena_push(0); __arena_push(0); __arena_push(0);
-    __arena_push(0); __arena_push(0); __arena_push(0); __arena_push(0);
-    __arena_push(0); __arena_push(0); __arena_push(0); __arena_push(0);
-    __arena_push(0); __arena_push(0); __arena_push(0);
+    let mut i: i32 = 1;
+    while i < 40 {
+        __arena_push(0);
+        i = i + 1;
+    }
     __arena_set(sb + 20, et_base);
     __arena_set(sb + 21, 0);
     0
