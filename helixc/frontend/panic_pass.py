@@ -39,11 +39,26 @@ TRAP_UNWIND_NOT_SUPPORTED = 28502
 def _walk_exprs(node, callback) -> None:
     """Recursive walk over a Block / Expr / Stmt, calling
     `callback(expr)` for each expression node encountered. Phase-0
-    conservative — handles the common forms used in panic detection."""
+    conservative — handles the common forms used in panic detection.
+
+    Audit 28.8 fixes:
+      * **C1-H1 / A6** (HIGH): scalar-attr list now matches the canonical
+        AST schema in `ast_nodes.py`. `A.If` has `then` / `else_` (not
+        `then_branch` / `else_branch` — those names don't exist on any
+        node), and `A.For` has `iter_expr`. Without these, `panic()` calls
+        inside `if` / `else` / `for` were silently invisible to
+        `collect_panics` / `validate_panic_args`.
+      * **C1-L1** (LOW): callback only fires on actual expression nodes
+        (`isinstance(node, A.Expr)`). Previously `hasattr(node, "span")`
+        also caught `A.Block` and `A.ExprStmt` — no false-positives today
+        (because `_is_panic_call` rejects non-Calls), but fragile against
+        future callback changes.
+    """
     if node is None:
         return
-    # Always invoke for any node with a span (Block, Stmt, Expr).
-    if hasattr(node, "span"):
+    # Invoke callback ONLY on real expression nodes — not statement
+    # wrappers or block containers. (C1-L1.)
+    if isinstance(node, A.Expr):
         callback(node)
     # Block has stmts + final_expr
     if isinstance(node, A.Block):
@@ -56,14 +71,18 @@ def _walk_exprs(node, callback) -> None:
     expr_attr = getattr(node, "expr", None)
     if expr_attr is not None and hasattr(expr_attr, "span"):
         _walk_exprs(expr_attr, callback)
-    # Recurse into common sub-expression containers.
-    for attr in ("left", "right", "operand", "cond", "then_branch",
-                 "else_branch", "value", "scrutinee", "callee", "init",
-                 "rhs", "body"):
+    # Recurse into common sub-expression containers. Attr names match
+    # `ast_nodes.py`: If has `then`/`else_`; For has `iter_expr`.
+    for attr in ("left", "right", "operand", "cond", "then", "else_",
+                 "value", "scrutinee", "callee", "init",
+                 "rhs", "body", "iter_expr", "obj", "target",
+                 "start", "end", "guard", "inner", "transformation",
+                 "verifier"):
         sub = getattr(node, attr, None)
         if sub is not None and hasattr(sub, "span"):
             _walk_exprs(sub, callback)
-    for attr in ("args", "stmts", "fields", "elems", "arms"):
+    for attr in ("args", "stmts", "fields", "elems", "arms",
+                 "indices"):
         seq = getattr(node, attr, None)
         if seq is None:
             continue
@@ -76,7 +95,10 @@ def _walk_exprs(node, callback) -> None:
                 elif hasattr(it, "span"):
                     _walk_exprs(it, callback)
         except TypeError:
-            pass
+            # Re-raise rather than silently swallow: a TypeError on
+            # iteration means the AST shape changed in a way we didn't
+            # anticipate; hiding it would mask real walker bugs.
+            raise
     # Final expression of a block (when not handled above)
     final = getattr(node, "final_expr", None)
     if final is not None and hasattr(final, "span") and not isinstance(node, A.Block):

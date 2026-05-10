@@ -56,6 +56,47 @@ def test_collect_panics_none():
     assert collect_panics(prog) == []
 
 
+def test_collect_panics_inside_if_then():
+    """Audit 28.8 C1-H1 regression: _walk_exprs used "then_branch" / "else_branch"
+    attribute names which don't exist on A.If (the actual fields are "then" /
+    "else_"). panic() inside if-arm went undetected — collect_panics returned
+    []. With the fix, the panic call is reachable through the walker."""
+    src = '''
+fn maybe(cond: i32) -> i32 {
+    if cond == 0 {
+        panic("zero is bad");
+        0
+    } else {
+        1
+    }
+}
+'''
+    prog = parse(src)
+    out = collect_panics(prog)
+    assert len(out) == 1, f"expected 1 panic site, got {len(out)}: {out}"
+    fn_name, _span, msg = out[0]
+    assert fn_name == "maybe"
+    assert msg == "zero is bad"
+
+
+def test_collect_panics_inside_if_else():
+    """Same C1-H1 regression, panic in the else-arm specifically."""
+    src = '''
+fn maybe(cond: i32) -> i32 {
+    if cond > 0 {
+        1
+    } else {
+        panic("non-positive");
+        0
+    }
+}
+'''
+    prog = parse(src)
+    out = collect_panics(prog)
+    assert len(out) == 1
+    assert out[0][2] == "non-positive"
+
+
 def test_validate_panic_args_clean():
     src = 'fn die() -> i32 { panic("ok"); 0 }'
     prog = parse(src)
@@ -135,6 +176,120 @@ def test_validate_unwind_clean():
 def test_trap_ids():
     assert TRAP_PANIC_INVOKED == 28501
     assert TRAP_UNWIND_NOT_SUPPORTED == 28502
+
+
+# ----------------------------------------------------------------------
+# Audit-28.8 C1-H1 / A6 regressions: walker must descend into if-branches
+# and for-loop iterables. Pre-fix the walker used "then_branch" /
+# "else_branch" attr names that don't exist on A.If — every panic inside
+# an if-arm was silently invisible. Same gap for For.iter_expr.
+# ----------------------------------------------------------------------
+def test_collect_panics_inside_if_then():
+    """C1-H1: panic() inside if.then must be reported."""
+    src = '''
+fn die_if(flag: i32) -> i32 {
+    if flag > 0 {
+        panic("zero is bad");
+        0
+    } else {
+        1
+    }
+}
+'''
+    prog = parse(src)
+    out = collect_panics(prog)
+    assert len(out) == 1
+    fn_name, _span, msg = out[0]
+    assert fn_name == "die_if"
+    assert msg == "zero is bad"
+
+
+def test_collect_panics_inside_if_else():
+    """C1-H1: panic() inside if.else_ must be reported."""
+    src = '''
+fn die_else(flag: i32) -> i32 {
+    if flag > 0 {
+        0
+    } else {
+        panic("else path");
+        1
+    }
+}
+'''
+    prog = parse(src)
+    out = collect_panics(prog)
+    assert len(out) == 1
+    fn_name, _span, msg = out[0]
+    assert fn_name == "die_else"
+    assert msg == "else path"
+
+
+def test_validate_panic_args_inside_if_branch():
+    """C1-H1: validate_panic_args must surface non-string args
+    inside if-arms (pre-fix it returned []; post-fix it emits a diag)."""
+    src = '''
+fn check_if(flag: i32) -> i32 {
+    if flag > 0 {
+        panic(42);
+        0
+    } else {
+        1
+    }
+}
+'''
+    prog = parse(src)
+    diags = validate_panic_args(prog)
+    assert diags, "expected at least one diagnostic for panic(42) in if.then"
+    assert "string literal" in diags[0]
+
+
+def test_collect_panics_inside_for_body():
+    """A6: panic() inside a For.body must be reported via the body recursion
+    (For has `body` which the walker already handled — but the regression
+    here is that the prior walker had no `iter_expr` attribute so panics
+    in range bounds were missed; the body case verifies the loop still
+    works end-to-end after the walker rewrite)."""
+    src = '''
+fn die_for(n: i32) -> i32 {
+    for i in 0..n {
+        panic("loop");
+    }
+    0
+}
+'''
+    prog = parse(src)
+    out = collect_panics(prog)
+    assert len(out) == 1
+    fn_name, _span, msg = out[0]
+    assert fn_name == "die_for"
+    assert msg == "loop"
+
+
+def test_walker_does_not_callback_on_stmts():
+    """C1-L1: walker invokes callback only on A.Expr, not on
+    A.Block or A.Stmt subclasses."""
+    src = '''
+fn body() -> i32 {
+    let x: i32 = 0;
+    x
+}
+'''
+    prog = parse(src)
+    seen_kinds: list[str] = []
+
+    def cb(e):
+        seen_kinds.append(type(e).__name__)
+
+    from helixc.frontend.panic_pass import _walk_exprs
+    fn = next(it for it in prog.items if isinstance(it, A.FnDecl))
+    _walk_exprs(fn.body, cb)
+    # No Stmt / ExprStmt / Block names should appear in the callback list.
+    assert "Block" not in seen_kinds
+    assert "ExprStmt" not in seen_kinds
+    assert "Let" not in seen_kinds
+    # But at least one A.Expr subclass should — the `x` Name in the final
+    # expr or the `0` IntLit in the let value.
+    assert seen_kinds, "callback should have fired on at least one Expr"
 
 
 if __name__ == "__main__":
