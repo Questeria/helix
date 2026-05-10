@@ -76,12 +76,26 @@ def find_deprecated_decls(prog: A.Program) -> dict[str, str]:
 
 
 def _walk_call_sites(node, callback) -> None:
-    """Recursive walk yielding every Call node found in node."""
+    """Recursive walk yielding every Call node found in node.
+
+    Audit 28.8 Finding A5 (HIGH) fix: the prior attr list missed `obj`,
+    `target`, `iter_expr`, `start`, `end`, `guard`, `inner`, etc., so
+    deprecated calls inside `arr[old_fn()]`, `for i in 0..old_fn()`,
+    `match x { y if old_fn(y) => ... }`, etc. were silently invisible
+    to `find_deprecation_call_sites`. Also missed `indices` in the
+    sequence list (so `arr[old_fn()]` was a double-miss). The
+    `except TypeError: pass` block silently swallowed any iteration
+    errors — replaced with `raise` so future AST-shape regressions
+    surface loudly.
+
+    The (legacy, never-matched) names `then_branch` / `else_branch`
+    are removed — those attrs don't exist on any AST node.
+    """
     if node is None:
         return
     if isinstance(node, A.Call):
         callback(node)
-    # Iterate over containers + sub-attrs (same as panic_pass walker)
+    # Iterate over containers + sub-attrs.
     if isinstance(node, A.Block):
         for s in node.stmts:
             _walk_call_sites(s, callback)
@@ -90,11 +104,14 @@ def _walk_call_sites(node, callback) -> None:
         return
     for attr in ("expr", "left", "right", "operand", "cond", "then",
                  "else_", "value", "scrutinee", "callee", "init",
-                 "rhs", "body", "then_branch", "else_branch"):
+                 "rhs", "body", "iter_expr", "obj", "target",
+                 "start", "end", "guard", "inner", "transformation",
+                 "verifier"):
         sub = getattr(node, attr, None)
         if sub is not None and hasattr(sub, "span"):
             _walk_call_sites(sub, callback)
-    for attr in ("args", "stmts", "fields", "elems", "arms"):
+    for attr in ("args", "stmts", "fields", "elems", "arms",
+                 "indices"):
         seq = getattr(node, attr, None)
         if seq is None:
             continue
@@ -107,7 +124,9 @@ def _walk_call_sites(node, callback) -> None:
                 elif hasattr(it, "span"):
                     _walk_call_sites(it, callback)
         except TypeError:
-            pass
+            # Re-raise rather than swallow: silently skipping iteration
+            # errors would mask AST-shape regressions in future stages.
+            raise
 
 
 def find_deprecation_call_sites(prog: A.Program) -> list[tuple[str, A.Span, str]]:

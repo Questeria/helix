@@ -152,5 +152,47 @@ def test_cli_clean_no_deprecation(capsys, tmp_path):
     assert "deprecated:" not in out
 
 
+# ----------------------------------------------------------------------
+# Audit-28.8 A5 regressions: the deprecated-call walker must recurse
+# into `Index.indices`, `For.iter_expr`, `Range.start/end`, etc. Without
+# these arms, deprecation warnings were silently lost when the offending
+# call appeared in those positions.
+# ----------------------------------------------------------------------
+def test_find_call_sites_inside_index():
+    """A5: `arr[deprecated_fn(2)]` — deprecated call inside Index.indices."""
+    src = """
+@deprecated("use new_fn") fn old_fn(x: i32) -> i32 { x }
+fn main() -> i32 {
+    let arr: [i32; 4] = [0, 0, 0, 0];
+    arr[old_fn(2)]
+}
+"""
+    prog = parse(src)
+    sites = find_deprecation_call_sites(prog)
+    names = {n for (n, _, _) in sites}
+    assert "old_fn" in names, (
+        f"old_fn(2) inside arr[..] should be detected; got names={names}"
+    )
+
+
+def test_find_call_sites_inside_range_end():
+    """A5: `for i in 0..old_fn(10) { ... }` — deprecated call in Range.end."""
+    src = """
+@deprecated("use new_fn") fn old_fn(x: i32) -> i32 { x }
+fn main() -> i32 {
+    for i in 0..old_fn(10) {
+        let unused: i32 = i;
+    }
+    0
+}
+"""
+    prog = parse(src)
+    sites = find_deprecation_call_sites(prog)
+    names = {n for (n, _, _) in sites}
+    assert "old_fn" in names, (
+        f"old_fn(10) in Range.end should be detected; got names={names}"
+    )
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-v"]))
