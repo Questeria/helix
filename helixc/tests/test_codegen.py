@@ -4125,6 +4125,18 @@ fn main() -> i32 {{
     assert root_tag("4 - 1") == 0,                     "fold SUB literals -> AST_INT"
     assert root_tag("3 * 5") == 0,                     "fold MUL literals -> AST_INT"
     assert root_tag("2 + 3 * 4") == 0,                 "fold nested arith -> AST_INT"
+    # Stage 17b: comparisons (LT/GT/EQ/NE/LE/GE) and bitwise (BAND/BOR/
+    # BXOR) on AST_INT pairs also fold to a single AST_INT (the 0/1
+    # comparison result, or the bitwise i32 result).
+    assert root_tag("1 < 2") == 0,                     "fold LT literals -> AST_INT"
+    assert root_tag("5 > 2") == 0,                     "fold GT literals -> AST_INT"
+    assert root_tag("3 == 3") == 0,                    "fold EQ literals -> AST_INT"
+    assert root_tag("3 != 4") == 0,                    "fold NE literals -> AST_INT"
+    assert root_tag("4 <= 4") == 0,                    "fold LE literals -> AST_INT"
+    assert root_tag("5 >= 4") == 0,                    "fold GE literals -> AST_INT"
+    assert root_tag("12 & 10") == 0,                   "fold BAND literals -> AST_INT"
+    assert root_tag("12 | 10") == 0,                   "fold BOR literals -> AST_INT"
+    assert root_tag("12 ^ 10") == 0,                   "fold BXOR literals -> AST_INT"
 
 
 def test_bootstrap_lexer_recognizes_each_token_class():
