@@ -3301,6 +3301,18 @@ fn main() -> i32 {
         "struct D { x: i32 } "
         "fn main() -> i32 { let d = D { 42 } ; d.0 }"
     ) == 42, "A1-F6: 4th struct decl now reaches struct_table (cap bump 3->8)"
+    # Audit A1-F7 regression: struct lit field count vs declared arity.
+    # Pre-fix `Pt { 10 }` for arity-2 Pt silently emitted a 1-slot tuple
+    # lit; subsequent `.y` reads went OOB into adjacent stack. Now we
+    # trap 50040 on mismatch.
+    assert compile_and_exec(
+        "struct Pt { x: i32, y: i32 } "
+        "fn main() -> i32 { let p = Pt { 10 } ; p.0 }"
+    ) == 132, "A1-F7: struct lit too few fields traps (50040)"
+    assert compile_and_exec(
+        "struct Pt { x: i32, y: i32 } "
+        "fn main() -> i32 { let p = Pt { 10, 20, 30 } ; p.0 }"
+    ) == 132, "A1-F7: struct lit too many fields traps (50040)"
     # Direct typed-call form `i32::eq(a, b)` works without method sugar.
     assert compile_and_exec(
         "trait Eq { fn eq(self, other: Self) -> i32 ; } "

@@ -2878,7 +2878,16 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
                         // here last writes the OUTER's idx, which is
                         // what surrounding let-parsing needs.
                         set_last_struct_idx(sb, s_idx);
-                        mk_node(50, n, head_idx, 0)
+                        // Audit A1-F7 fix: validate field count against
+                        // declared arity. Pre-fix, `Pt { 10 }` for arity-2
+                        // Pt silently emitted a 1-slot tuple lit; later
+                        // `.y` accesses read OOB into adjacent stack.
+                        // Now we trap 50040 on mismatch.
+                        if n != arity {
+                            mk_node(99, 50040, 0, 0)
+                        } else {
+                            mk_node(50, n, head_idx, 0)
+                        }
                     }
                 } else {
                     // Not a registered struct — treat as var ref.
