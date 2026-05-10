@@ -54,6 +54,8 @@ class T(Enum):
     KW_PURE = auto(); KW_EFFECT = auto()
     # Stage 16.5: FFI keyword
     KW_EXTERN = auto()
+    # Stage 28.6: unsafe block keyword
+    KW_UNSAFE = auto()
 
     # Operators / punctuation
     PLUS = auto(); MINUS = auto(); STAR = auto(); SLASH = auto(); PERCENT = auto()
@@ -105,6 +107,8 @@ KEYWORDS = {
     "pure": T.KW_PURE, "effect": T.KW_EFFECT,
     # Stage 16.5: FFI
     "extern": T.KW_EXTERN,
+    # Stage 28.6: unsafe block
+    "unsafe": T.KW_UNSAFE,
 }
 
 

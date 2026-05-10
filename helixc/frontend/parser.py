@@ -826,8 +826,10 @@ class Parser:
                 elif self._at(T.RBRACE):
                     final_expr = e
                 else:
-                    # Block-y expressions (if, match, block) don't require semicolons
-                    if isinstance(e, (ast.If, ast.Match, ast.Block)):
+                    # Block-y expressions (if, match, block, unsafe-block)
+                    # don't require semicolons
+                    if isinstance(e, (ast.If, ast.Match, ast.Block,
+                                       ast.UnsafeBlock)):
                         stmts.append(ast.ExprStmt(span=e.span, expr=e))
                     else:
                         raise ParseError("expected ';' or '}' after expression", self._peek())
@@ -1106,6 +1108,11 @@ class Parser:
         # Block, if, match, for, while, loop
         if t.kind == T.LBRACE:
             return self._parse_block()
+        # Stage 28.6: unsafe { ... }
+        if t.kind == T.KW_UNSAFE:
+            self.i += 1
+            body = self._parse_block()
+            return ast.UnsafeBlock(span=self._span_of(t), body=body)
         if t.kind == T.KW_IF:
             return self._parse_if_expr()
         if t.kind == T.KW_MATCH:
