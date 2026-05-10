@@ -42,11 +42,13 @@ def test_render_caret_hint():
 
 
 def test_render_caret_with_code():
+    # 24100 — Stage 24 provenance violation. (Audit 28.8 A4: was 24001
+    # but kovc.hx already reserves 24001 for AST_MOD bf16.)
     out = render_caret(
         filename="x.hx", line=1, col=1, msg="provenance violation",
-        source=SRC, code=24001, color=False,
+        source=SRC, code=24100, color=False,
     )
-    assert "error[E24001]:" in out
+    assert "error[E24100]:" in out
 
 
 def test_render_caret_warning_level():

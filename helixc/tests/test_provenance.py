@@ -2,7 +2,8 @@
 
 D<Logic<T>> — differentiable relational/logical wrapper. Phase-0
 scope: parse + type-level representation. Real fuzzy/AD semantics are
-deferred to v0.2. Trap 24001 reserved.
+deferred to v0.2. Trap 24100 reserved (Audit 28.8 A4 reassigned from
+24001, which kovc.hx already uses for AST_MOD bf16).
 """
 
 from __future__ import annotations
@@ -125,7 +126,7 @@ def test_fmt_logic_with_provenance():
 
 def test_logic_passthrough_arity_phase0():
     """Phase-0: passing i32 where Logic<i32> expected is currently a
-    soft type (typechecker treats wrappers leniently). Trap 24001
+    soft type (typechecker treats wrappers leniently). Trap 24100
     will fire when downstream passes enforce provenance. This test
     documents the Phase-0 behavior so the regression is visible if
     we tighten enforcement later."""
@@ -144,15 +145,33 @@ fn user_main() -> i32 {
     assert isinstance(errs, list)
 
 
-def test_trap_24001_reserved():
-    """Document trap 24001 (provenance violation) is reserved.
+def test_trap_24100_reserved():
+    """Document trap 24100 (provenance violation) is reserved.
 
-    Phase-0 doesn't emit it from the Python typechecker — semantics are
-    deferred. The trap-id is reserved here so the kovc.hx bootstrap
-    knows the namespace is taken when Stage 24 lands there.
+    Audit 28.8 A4: the original reservation was 24001, but the bootstrap
+    compiler kovc.hx:4220-4221 already emits 24001 for `bf16 % bf16`
+    (per the bootstrap's `AST_tag * 1000 + sub_id` convention, where
+    AST_MOD has tag 24 → trap id 24001). Two distinct conditions
+    claiming the same id is a debugging black hole, so Stage 24's
+    provenance reservation is moved to 24100. The bootstrap's 24001 for
+    bf16 MOD remains as-is (it ships routinely).
+
+    Phase-0 doesn't emit 24100 from the Python typechecker — semantics
+    are deferred. The reservation is documented here so future stages
+    (and any future audit cycle) can find the namespace claim.
     """
-    RESERVED = 24001
-    assert RESERVED == 24001
+    RESERVED = 24100
+    assert RESERVED == 24100
+
+
+def test_trap_24001_belongs_to_ast_mod():
+    """Audit 28.8 A4 follow-on: 24001 is the bootstrap-side bf16 MOD
+    trap (kovc.hx:4220-4221). Documented here so a future cycle that
+    re-checks the Stage-24 reservation doesn't accidentally double-
+    claim 24001 again."""
+    AST_MOD_TAG = 24
+    AST_MOD_SUB_ID = 1
+    assert AST_MOD_TAG * 1000 + AST_MOD_SUB_ID == 24001
 
 
 if __name__ == "__main__":

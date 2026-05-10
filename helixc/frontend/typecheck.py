@@ -142,9 +142,16 @@ class TyLogic(Type):
         differentiable via straight-through or sigmoid relaxations)
       - Provenance lattice tracking which input atoms contributed to
         each derived value
-      - Trap 24001 emitted if a non-Logic value is passed where a
+      - Trap 24100 emitted if a non-Logic value is passed where a
         Logic-typed parameter is required, or vice versa, in a
-        provenance-sensitive context (e.g. AD over a logic op)."""
+        provenance-sensitive context (e.g. AD over a logic op).
+
+      Trap-id history: the original reservation was 24001, but Audit
+      28.8 A4 / Finding 4 found that kovc.hx:4220-4221 already emits
+      24001 for `bf16 % bf16` (per the bootstrap's `AST_tag * 1000 +
+      sub_id` convention, AST_MOD = 24 → 24001). Stage-level provenance
+      reservations now use the 241xx prefix to keep the namespaces
+      disjoint."""
     inner: Type
     # provenance: optional compile-time provenance tag. None means
     # "unconstrained"; a string like "infer_rule:parent" carries the

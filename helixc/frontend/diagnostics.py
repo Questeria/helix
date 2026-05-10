@@ -139,7 +139,7 @@ def render_caret(
       source: full source buffer (used to slice the offending line).
       hint: optional secondary line, rendered as `= hint:`.
       level: "error" | "warning" | "note".
-      code: optional integer error code, e.g. 24001 (provenance).
+      code: optional integer error code, e.g. 24100 (provenance).
       color: tri-state. True/False forces, None uses `use_color()`.
       span_len: number of carets to draw (default 1).
     """
@@ -198,7 +198,7 @@ class Diagnostic:
     col: int
     msg: str
     level: str = "error"        # "error" | "warning" | "note"
-    code: Optional[int] = None  # e.g. 24001 for provenance traps
+    code: Optional[int] = None  # e.g. 24100 for provenance traps
     hint: Optional[str] = None
     span_len: int = 1
 
