@@ -2918,6 +2918,7 @@ if __name__ == "__main__":
     from ..ir.passes.fdce import fdce_module
     from ..ir.passes.effect_check import check_module as effect_check_module
     from ..frontend.totality import check_totality
+    from ..frontend.hash_cons import hash_cons
 
     if len(sys.argv) < 3:
         print("usage: python -m helixc.backend.x86_64 <input.hx> <output.bin> "
@@ -2965,6 +2966,18 @@ if __name__ == "__main__":
         else:
             print(f"\n({len(type_errors)} type warning(s); compiling anyway. "
                   f"Use --strict to fail on warnings.)", file=sys.stderr)
+    # Stage 20 — AST hash-cons. Identical sub-expressions across the
+    # program now share a single Python object. Lowering treats shared
+    # nodes idempotently (same value-id reuse), so the IR module is
+    # smaller — fewer SSA values, fewer ops for the downstream passes
+    # to walk. Trap 20001 raises if the SHA-256 hasher reports two
+    # structurally distinct subtrees colliding (it shouldn't, but the
+    # guard exists so a future hash-fn swap surfaces silently-wrong
+    # sharing).
+    n_shared = hash_cons(prog)
+    if n_shared > 0:
+        print(f"hash-cons: {n_shared} AST node(s) deduped", file=sys.stderr)
+
     # Stage 21 — totality check on the AST (structural-recursion).
     # Runs before lowering so the diagnostic points at the original source.
     # Non-@partial recursive functions without a strictly-decreasing
