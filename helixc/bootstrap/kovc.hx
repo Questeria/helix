@@ -5047,6 +5047,14 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         // eax, 0` so codegen completes cleanly. Trying to use the
         // result is undefined behavior at this stage.
         emit_ast_int(0)
+    } else { if t == 99 {
+        // AST_ERR with custom trap-id. Audit follow-up: callers that
+        // synthesize mk_node(99, trap_id, 0, 0) want the trap-id in eax,
+        // not the generic 99001 fallback. Extract p1 and emit
+        // `mov eax, trap_id; ud2`. This lets parser-side discoveries
+        // (cap-overflow, unknown name, arity mismatch) propagate a
+        // distinct id to runtime.
+        emit_trap_with_id(p1)
     } else {
         // Audit fix #8 (cycle 1): unhandled AST tag. Previously emitted
         // `mov eax, 0` (5 bytes) which silently masked AST_ERR (tag 99)
@@ -5057,7 +5065,7 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         // resulting binary to SIGILL — clear signal vs. silent 0.
         // Speedup #4 wire-in: AST_ERR / unhandled-tag trap id 99001.
         emit_trap_with_id(99001)
-    }}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}
+    }}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}
 }
 
 // --------------------------------------------------------------

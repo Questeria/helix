@@ -657,15 +657,29 @@ fn cl_var_tab_lookup(sb: i32, name_s: i32, name_l: i32) -> i32 {
 // Replaces the 3 `mk_node(1, id_start, id_len, 0)` sites in parse_primary
 // so any IDENT used inside a closure body that isn't a closure-param gets
 // auto-recorded as a capture.
+//
+// Audit A3-CRITICAL-2 fix: cl_capture_tab_add_dedup returns -1 when the
+// closure-capture cap (4) is exceeded. Previously the caller discarded
+// the return value, silently dropping the 5th capture. Now we surface
+// the overflow as AST_ERR(76002) so codegen emits a hard trap for the
+// VAR site that didn't get registered.
 fn mk_var_with_capture(sb: i32, id_s: i32, id_l: i32) -> i32 {
     let active = cl_active(sb);
+    let mut cap_overflow: i32 = 0;
     if active == 1 {
         let is_param = cl_param_tab_lookup(sb, id_s, id_l);
         if is_param == 0 {
-            cl_capture_tab_add_dedup(sb, id_s, id_l);
+            let r = cl_capture_tab_add_dedup(sb, id_s, id_l);
+            if r < 0 {
+                cap_overflow = 1;
+            };
         };
     };
-    mk_node(1, id_s, id_l, 0)
+    if cap_overflow == 1 {
+        mk_node(99, 76002, 0, 0)
+    } else {
+        mk_node(1, id_s, id_l, 0)
+    }
 }
 fn var_type_tab_add(sb: i32, name_s: i32, name_l: i32, ty_tag: i32) -> i32 {
     let count = var_type_tab_count(sb);

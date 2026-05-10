@@ -3242,6 +3242,17 @@ fn main() -> i32 {
     assert compile_and_exec(
         "fn main() -> i32 { let a = 7 ; let c = |x| (x + a) * a ; c(5) }"
     ) == 84, "Stage 9E: capture dedup |x| (x+a)*a, c(5) -> 84"
+    # Audit A3-CRITICAL-2 regression: 5th capture (cap is 4) used to be
+    # silently dropped because mk_var_with_capture discarded the -1 return
+    # from cl_capture_tab_add_dedup. Now AST_ERR(76002) is synthesized so
+    # the binary SIGILLs at runtime. (Pre-fix: closure body's 5th capture
+    # silently degraded; runtime behavior depended on what trash followed
+    # in the AST_FN_DECL params slot.)
+    assert compile_and_exec(
+        "fn main() -> i32 { "
+        "let a = 1 ; let b = 2 ; let c = 3 ; let d = 4 ; let e = 5 ; "
+        "let cl = |x| x + a + b + c + d + e ; cl(0) }"
+    ) == 132, "A3-CRITICAL-2: 5th closure capture overflow now traps (76002)"
     # Stage 10: modules + use. parse-time desugaring lifts each fn inside
     # `mod foo { ... }` to the top-level fn list with a mangled name
     # `foo__bar`. Path-call `foo::bar(args)` rewrites to AST_CALL with the
