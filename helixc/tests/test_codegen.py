@@ -12732,6 +12732,104 @@ class _SkipTest(Exception):
     pass
 
 
+# ============================================================================
+# Stage 16 — GPU kernel codegen (PTX in .rodata)
+# ============================================================================
+def _compile_to_elf_bytes(src: str, optimize: bool = True) -> bytes:
+    """Compile src to ELF bytes WITHOUT running it (kernels can't be CPU-run).
+    Same pipeline as compile_and_run but skips the WSL execution step.
+    optimize=True runs const-fold + CSE + DCE + fdce so the optimizer's
+    handling of kernel ops gets tested too."""
+    from helixc.frontend.parser import parse as _parse
+    from helixc.frontend.flatten_modules import flatten_modules as _fmods
+    from helixc.frontend.flatten_impls import flatten_impls as _fimpls
+    from helixc.frontend.monomorphize import monomorphize as _mono
+    from helixc.frontend.grad_pass import grad_pass as _grad
+    from helixc.ir.lower_ast import lower as _lower
+    from helixc.ir.passes.const_fold import fold_module as _fold
+    from helixc.ir.passes.cse import cse_module as _cse
+    from helixc.ir.passes.dce import dce_module as _dce
+    from helixc.ir.passes.fdce import fdce_module as _fdce
+    from helixc.backend.x86_64 import compile_module_to_elf as _emit
+    prog = _parse(src, include_stdlib=True)
+    _fmods(prog); _fimpls(prog); _mono(prog); _grad(prog)
+    mod = _lower(prog)
+    if optimize:
+        _fold(mod); _cse(mod); _dce(mod); _fdce(mod)
+    return _emit(mod)
+
+
+def test_stage16_vec_add_kernel_ptx_in_binary():
+    """Stage 16 capstone: compile a vec_add @kernel + main() to ELF and
+    verify the PTX text is embedded in the binary's rodata blob."""
+    src = """
+    @kernel
+    fn vec_add(a: tile<f32, [256], HBM>, b: tile<f32, [256], HBM>, c: tile<f32, [256], HBM>) {
+        let i = thread_idx();
+        c[i] = a[i] + b[i];
+    }
+
+    fn main() -> i32 {
+        0
+    }
+    """
+    elf = _compile_to_elf_bytes(src)
+    # PTX module header must appear once.
+    assert elf.count(b".version 8.3") == 1, \
+        "PTX module header (.version 8.3) missing from binary"
+    # The kernel directive must be there.
+    assert b".visible .entry vec_add" in elf, \
+        ".visible .entry vec_add missing from PTX in binary"
+    # Thread-idx + global load/store must be there.
+    assert b"%tid.x" in elf, "%tid.x missing from PTX in binary"
+    assert b"ld.global.f32" in elf, "ld.global.f32 missing from PTX in binary"
+    assert b"st.global.f32" in elf, "st.global.f32 missing from PTX in binary"
+    assert b"add.f32" in elf, "add.f32 missing from PTX in binary"
+
+
+def test_stage16_kernel_does_not_emit_x86():
+    """Stage 16: @kernel fns must NOT have an x86 symbol — they're PTX-only.
+    Today this manifests as the host binary not having a `call vec_add`
+    instruction (since no host caller exists), which also implies the
+    binary still runs `main` to exit 0 without a CPU jump into PTX text.
+    """
+    src = """
+    @kernel
+    fn vec_add(a: tile<f32, [256], HBM>, b: tile<f32, [256], HBM>, c: tile<f32, [256], HBM>) {
+        let i = thread_idx();
+        c[i] = a[i] + b[i];
+    }
+    fn main() -> i32 { 0 }
+    """
+    # Run the binary — should exit 0, not crash inside PTX bytes.
+    rc = compile_and_run(src)
+    assert rc == 0, f"main() should return 0; got rc={rc}"
+
+
+def test_stage16_two_kernels_share_one_ptx_module():
+    """Two @kernel fns in the same source should produce ONE PTX module
+    header but TWO .visible .entry directives, all embedded in the
+    binary."""
+    src = """
+    @kernel
+    fn k_add(a: tile<f32, [16], HBM>, b: tile<f32, [16], HBM>) {
+        let i = thread_idx();
+        b[i] = a[i];
+    }
+    @kernel
+    fn k_copy(a: tile<f32, [16], HBM>, b: tile<f32, [16], HBM>) {
+        let i = thread_idx();
+        b[i] = a[i];
+    }
+    fn main() -> i32 { 0 }
+    """
+    elf = _compile_to_elf_bytes(src)
+    assert elf.count(b".version 8.3") == 1, \
+        "expected exactly one PTX module header"
+    assert b".visible .entry k_add" in elf
+    assert b".visible .entry k_copy" in elf
+
+
 def main():
     tests = [(name, fn) for name, fn in globals().items()
              if name.startswith("test_") and callable(fn)]

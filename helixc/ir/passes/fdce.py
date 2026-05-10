@@ -62,10 +62,14 @@ def fdce_module(module: tir.Module, entry_fn: str = "main") -> int:
         callees[name] = called
 
     # Roots: entry_fn + any pub-prefixed function (cheap interop hook)
+    # + Stage 16 @kernel fns (called from GPU launch, not from host code;
+    #   keeping them visible to the backend so PTX text gets emitted).
     live: set[str] = set()
     worklist: list[str] = [entry_fn]
     for name, fn in module.functions.items():
         if fn.attrs.get("is_pub"):
+            worklist.append(name)
+        elif fn.attrs.get("kernel"):
             worklist.append(name)
 
     while worklist:

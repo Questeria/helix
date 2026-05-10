@@ -261,6 +261,19 @@ class OpKind(Enum):
     # indirect call through the GOT entry resolved by the dynamic linker.
     FFI_CALL = "ffi.call"
 
+    # Stage 16 — GPU kernel ops. Only emitted inside fns with @kernel attr.
+    # THREAD_IDX: no operand, result is i32. attrs: dim="x"|"y"|"z" (default "x").
+    # Lowers to `mov.u32 %r, %tid.<dim>` in PTX.
+    THREAD_IDX = "gpu.thread_idx"
+    # TILE_INDEX_LOAD: operands [idx], result is dtype scalar. attrs:
+    # name=param-name (which kernel param this tile refers to),
+    # dtype=str (e.g. "f32"), memspace=str ("hbm"). PTX backend
+    # lowers to `ld.global.<dtype>` via the kernel's param pointer.
+    TILE_INDEX_LOAD = "tile.index_load"
+    # TILE_INDEX_STORE: operands [idx, value], no result. attrs as above.
+    # PTX backend lowers to `st.global.<dtype>`.
+    TILE_INDEX_STORE = "tile.index_store"
+
     # Effectful ops (kept distinct so transforms can avoid them)
     PRINT = "io.print"
 

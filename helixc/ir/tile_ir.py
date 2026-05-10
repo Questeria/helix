@@ -91,6 +91,13 @@ class TileOpKind(Enum):
     CALL = "call"
     RETURN = "return"
 
+    # Stage 16 — GPU primitives carried through from Tensor IR. PTX backend
+    # consumes these directly; x86 backend ignores them (kernel bodies emit
+    # PTX text, not host code).
+    THREAD_IDX = "gpu.thread_idx"                  # attrs: dim ("x"/"y"/"z")
+    TILE_INDEX_LOAD_HBM = "tile.index_load_hbm"    # attrs: name, dtype, memspace
+    TILE_INDEX_STORE_HBM = "tile.index_store_hbm"  # attrs: name, dtype, memspace
+
 
 @dataclass
 class TileValue:
@@ -163,6 +170,10 @@ class TirToTileLowerer:
         tir.OpKind.SELECT: TileOpKind.SCALAR_SELECT,
         tir.OpKind.CALL: TileOpKind.CALL,
         tir.OpKind.RETURN: TileOpKind.RETURN,
+        # Stage 16 — GPU ops pass through to PTX backend untouched.
+        tir.OpKind.THREAD_IDX: TileOpKind.THREAD_IDX,
+        tir.OpKind.TILE_INDEX_LOAD: TileOpKind.TILE_INDEX_LOAD_HBM,
+        tir.OpKind.TILE_INDEX_STORE: TileOpKind.TILE_INDEX_STORE_HBM,
     }
 
     def __init__(self, tir_module: tir.Module):
