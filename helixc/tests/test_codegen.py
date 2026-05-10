@@ -3833,7 +3833,11 @@ def test_bootstrap_kovc_self_host_loop():
     # APPROACH_A_PLAN ("Drop helixc-Python — verify kovc.hx compiles every
     # test case helixc-Python compiles, byte-identical"). Until then K2
     # produces an empty K3, so the 42-roundtrip can't hold.
-    raise _SkipTest("Stage 29 work item: self-host loop closure")
+    # 2026-05-10 audit cycle 1 follow-up: pytest.skip ensures heavy gate
+    # treats this as SKIPPED, not FAIL. _SkipTest was only ever caught by
+    # this file's manual __main__ runner, never by pytest.
+    import pytest as _pytest
+    _pytest.skip("Stage 29 work item: self-host loop closure")
     """Full self-host: P0 (kovc-by-Python) compiles the entire
     bootstrap source (lexer.hx + parser.hx + kovc.hx + driver_main)
     into binary K1. K1 reads the SAME bootstrap source from disk
