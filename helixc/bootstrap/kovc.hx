@@ -2098,7 +2098,17 @@ fn bn_quote_bump_handle(b: i32) -> i32 {
     // Returns the OLD handle (assigned to the current Quote call), then
     // bumps the counter. Cap 64; values >= 64 still bump but the caller
     // is expected to emit_trap_with_id(81002) before using them.
+    //
+    // Audit A3-MEDIUM-4: defense-in-depth — emit trap 81002 INTERNALLY
+    // too, so any future call site that forgets the >= 64 guard still
+    // surfaces the overflow. The caller's existing if-check still fires
+    // first; this internal trap is a backstop. Note we emit the trap
+    // bytes inline; v is still returned so the caller's emit-then-trap
+    // shape isn't disturbed.
     let v = __arena_get(b + 121);
+    if v >= 64 {
+        emit_trap_with_id(81002);
+    };
     __arena_set(b + 121, v + 1);
     v
 }
