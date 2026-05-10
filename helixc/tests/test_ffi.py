@@ -21,11 +21,20 @@ _PROJ_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__f
 
 
 def _wsl_root() -> str:
-    """Return the /mnt/c/... mount of the project root that the test was
-    invoked from. Works in both the main checkout and any worktree under
-    C:\\Projects\\Kovostov-Native*\\."""
-    rel = _PROJ_ROOT.replace("C:\\", "/mnt/c/").replace("\\", "/")
-    return rel
+    """Return the /mnt/<drive>/... mount of the project root that the test
+    was invoked from. Works in both the main checkout and any worktree
+    regardless of which drive the repo lives on. Audit 28.8 C1-M3 fix:
+    previously hard-coded `C:\\` → `/mnt/c/`; now we derive the drive
+    letter from the path so D-drive checkouts (or any other) also work."""
+    import pathlib
+    p = pathlib.Path(_PROJ_ROOT)
+    drive = p.drive  # e.g. "C:" — empty on POSIX
+    if drive and len(drive) >= 2 and drive[1] == ":":
+        # Windows-style absolute path: build /mnt/<letter>/... form.
+        rest = _PROJ_ROOT[len(drive):].replace("\\", "/").lstrip("/")
+        return f"/mnt/{drive[0].lower()}/{rest}"
+    # POSIX path (e.g. native Linux): use as-is.
+    return _PROJ_ROOT.replace("\\", "/")
 
 
 def _build_and_run(src: str, name: str = "ffi.bin") -> tuple[int, str, str]:
