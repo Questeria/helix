@@ -23,9 +23,21 @@ License: Apache 2.0
 
 from __future__ import annotations
 
+import math
 import struct
 
 from .. import tir
+
+
+# Stage 17 trap-id: NaN-result encountered during compile-time float folding.
+# Phase-0 policy is to refuse to bake a NaN literal into the binary because
+# the backend's struct.pack('<f', ...) lossily rejects it (the runtime would
+# still be free to produce a NaN via division-by-zero etc., but folding
+# arithmetic on user-written constants down to a NaN payload is the
+# compiler's choice — and Phase-0 chooses to surface it).
+class FoldError(Exception):
+    """Raised by fold_module when a float fold produces NaN (trap 17001)."""
+    trap_id = 17001
 
 
 _INT_BITS = {
@@ -336,6 +348,17 @@ def _try_fold_op(op: tir.Op, defs: dict) -> tir.Op | None:
                     return None
             except Exception:
                 return None
+            # Stage 17 trap-id 17001: NaN-result encountered. Phase-0 refuses
+            # to embed a NaN payload in a CONST_FLOAT. Note: +inf/-inf are
+            # currently allowed through (the backend's f32 packing will
+            # produce an OverflowError on its own); only the explicit NaN
+            # case is caught here so the diagnostic is unambiguous.
+            if isinstance(v, float) and math.isnan(v):
+                raise FoldError(
+                    f"[trap 17001] const-fold produced NaN folding "
+                    f"{op.kind.name}({l!r}, {r!r}) at "
+                    f"{op.span!r}; Phase-0 refuses to bake NaN into a literal"
+                )
             return tir.Op(kind=tir.OpKind.CONST_FLOAT,
                          operands=[],
                          results=[res],
@@ -426,6 +449,13 @@ def _try_fold_op(op: tir.Op, defs: dict) -> tir.Op | None:
                          span=op.span)
         if d.kind == tir.OpKind.CONST_FLOAT:
             v = -float(d.attrs["value"])
+            # Stage 17 trap-id 17001: NaN-result from unary NEG. -NaN is
+            # still NaN; refuse for the same reason as binary float folds.
+            if isinstance(v, float) and math.isnan(v):
+                raise FoldError(
+                    f"[trap 17001] const-fold produced NaN folding "
+                    f"NEG({float(d.attrs['value'])!r}) at {op.span!r}"
+                )
             return tir.Op(kind=tir.OpKind.CONST_FLOAT,
                          operands=[],
                          results=[res],

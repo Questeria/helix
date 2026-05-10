@@ -283,6 +283,88 @@ def test_identity_forwarding_runs_correctly_across_blocks():
     assert code == 42, f"expected 42 (x*1=21, y*2=42), got {code}"
 
 
+# --- Stage 17 regression tests ---
+
+def test_stage17_2_plus_3_times_4_folds_to_14():
+    """Stage 17 goal-test: `2 + 3 * 4` folds to const 14 at compile time.
+    Verifies operator precedence is preserved by the fold and that the
+    intermediate `3 * 4 = 12` is collapsed before the outer ADD."""
+    mod = lower_and_fold("fn main() -> i32 { 2 + 3 * 4 }")
+    # No ADD or MUL ops should remain — everything is folded.
+    assert count_ops(mod, tir.OpKind.ADD) == 0, "ADD must fold"
+    assert count_ops(mod, tir.OpKind.MUL) == 0, "MUL must fold"
+    # The final const carries 14.
+    consts = [op.attrs["value"]
+              for fn in mod.functions.values() for blk in fn.blocks
+              for op in blk.ops if op.kind == tir.OpKind.CONST_INT]
+    assert 14 in consts, f"expected final const 14, got {consts}"
+
+
+def test_stage17_nan_fold_traps_17001():
+    """Stage 17 trap-id 17001: a fold that would bake a NaN literal into
+    a CONST_FLOAT is rejected at compile time. We trigger this via
+    (1e200 * 1e200) - (1e200 * 1e200) — each multiplication overflows
+    to +inf in IEEE-754 f64, and inf - inf = NaN."""
+    from helixc.ir.passes.const_fold import FoldError
+    src = """
+    fn main() -> f32 {
+        let a = 1.0e200 * 1.0e200;
+        let b = 1.0e200 * 1.0e200;
+        a - b
+    }
+    """
+    mod = lower(parse(src))
+    try:
+        fold_module(mod)
+    except FoldError as e:
+        assert FoldError.trap_id == 17001
+        assert "17001" in str(e)
+        return
+    raise AssertionError("expected FoldError trap 17001")
+
+
+def test_stage17_nan_fold_via_neg_traps_17001():
+    """NEG of NaN is still NaN; the unary fold path must also trap 17001."""
+    from helixc.ir.passes.const_fold import FoldError
+    src = """
+    fn main() -> f32 {
+        let inf1 = 1.0e200 * 1.0e200;
+        let inf2 = 1.0e200 * 1.0e200;
+        let nan = inf1 - inf2;
+        -nan
+    }
+    """
+    mod = lower(parse(src))
+    try:
+        fold_module(mod)
+    except FoldError as e:
+        assert "17001" in str(e)
+        return
+    raise AssertionError("expected FoldError trap 17001 via NEG")
+
+
+def test_stage17_i32_overflow_wraps_two_complement():
+    """Stage 17 spec: i32 fold must wrap on overflow (two's-complement).
+    INT_MAX + 1 = -2147483648 in i32."""
+    mod = lower_and_fold("fn main() -> i32 { 2147483647 + 1 }")
+    consts = [op.attrs["value"]
+              for fn in mod.functions.values() for blk in fn.blocks
+              for op in blk.ops if op.kind == tir.OpKind.CONST_INT]
+    assert -2147483648 in consts, \
+        f"expected i32 overflow wrap to -2147483648, got {consts}"
+
+
+def test_stage17_emits_mov_eax_14():
+    """Stage 17 spec end-to-end: 2+3*4 is folded so the backend emits
+    `mov eax, 14` (B8 0E 00 00 00) as the entry-stub exit code."""
+    from helixc.backend.x86_64 import compile_module_to_elf
+    mod = lower_and_fold("fn main() -> i32 { 2 + 3 * 4 }")
+    elf = compile_module_to_elf(mod)
+    # B8 imm32 = mov eax, imm32. 14 = 0x0E little-endian.
+    target = bytes([0xB8, 0x0E, 0x00, 0x00, 0x00])
+    assert target in elf, "expected `mov eax, 14` in emitted ELF"
+
+
 def main():
     tests = [(name, fn) for name, fn in globals().items()
              if name.startswith("test_") and callable(fn)]

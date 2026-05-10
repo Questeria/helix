@@ -2916,6 +2916,9 @@ if __name__ == "__main__":
     from ..ir.passes.dce import dce_module
     from ..ir.passes.cse import cse_module
     from ..ir.passes.fdce import fdce_module
+    from ..ir.passes.effect_check import check_module as effect_check_module
+    from ..frontend.totality import check_totality
+    from ..frontend.hash_cons import hash_cons
 
     if len(sys.argv) < 3:
         print("usage: python -m helixc.backend.x86_64 <input.hx> <output.bin> "
@@ -2963,6 +2966,32 @@ if __name__ == "__main__":
         else:
             print(f"\n({len(type_errors)} type warning(s); compiling anyway. "
                   f"Use --strict to fail on warnings.)", file=sys.stderr)
+    # Stage 20 — AST hash-cons. Identical sub-expressions across the
+    # program now share a single Python object. Lowering treats shared
+    # nodes idempotently (same value-id reuse), so the IR module is
+    # smaller — fewer SSA values, fewer ops for the downstream passes
+    # to walk. Trap 20001 raises if the SHA-256 hasher reports two
+    # structurally distinct subtrees colliding (it shouldn't, but the
+    # guard exists so a future hash-fn swap surfaces silently-wrong
+    # sharing).
+    n_shared = hash_cons(prog)
+    if n_shared > 0:
+        print(f"hash-cons: {n_shared} AST node(s) deduped", file=sys.stderr)
+
+    # Stage 21 — totality check on the AST (structural-recursion).
+    # Runs before lowering so the diagnostic points at the original source.
+    # Non-@partial recursive functions without a strictly-decreasing
+    # parameter are flagged. --strict turns the warning into an abort.
+    tot_fails = check_totality(prog)
+    if tot_fails:
+        for name, reason in tot_fails:
+            print(f"warning: [trap 21001] totality: {name}: {reason}",
+                  file=sys.stderr)
+        if strict:
+            print(f"\n{len(tot_fails)} totality failure(s); --strict aborts.",
+                  file=sys.stderr)
+            sys.exit(1)
+
     mod = lower(prog)
     # Optimization passes (run twice — fold can expose new CSE opportunities, etc.)
     if not no_opt:
@@ -2978,6 +3007,21 @@ if __name__ == "__main__":
         f_removed = fdce_module(mod)
         if f_removed > 0:
             print(f"fdce: {f_removed} unused fn(s) removed", file=sys.stderr)
+
+    # Stage 19 — IR-level effect check. Runs AFTER all optimization passes
+    # because fdce/dce can prune call edges (removing transitive effects)
+    # and we want the post-opt closure to be authoritative. Reports each
+    # @pure fn whose closure is non-empty (trap 19001) and each fn whose
+    # declared effect set differs from its actual closure.
+    eff_errs = effect_check_module(mod)
+    if eff_errs:
+        for e in eff_errs:
+            print(f"warning: [trap 19001] effect-check: {e}", file=sys.stderr)
+        if strict:
+            print(f"\n{len(eff_errs)} effect-check failure(s); --strict aborts.",
+                  file=sys.stderr)
+            sys.exit(1)
+
     elf = compile_module_to_elf(mod)
     with open(sys.argv[2], "wb") as f:
         f.write(elf)

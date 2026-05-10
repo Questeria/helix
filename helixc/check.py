@@ -27,6 +27,7 @@ from .frontend.parser import parse, ParseError
 from .frontend.typecheck import typecheck
 from .frontend.totality import check_totality
 from .frontend.ast_hash import structural_hash, short_hash
+from .frontend.hash_cons import hash_cons
 from .frontend import ast_nodes as A
 
 
@@ -95,6 +96,13 @@ def main(argv: list[str] | None = None) -> int:
         for it in prog.items:
             if isinstance(it, A.FnDecl):
                 print(f"     {it.name:<40} {short_hash(structural_hash(it))}")
+
+    # 4.5 Optional hash-cons (Stage 20). When enabled, dedupes the AST in
+    # place; reports the count of sharing rewrites. Combined with --hash
+    # this is a useful spot-check that hash-cons is converging.
+    if "--hash-cons" in flags:
+        n_shared = hash_cons(prog)
+        print(f"   hash-cons: {n_shared} AST node(s) deduped")
 
     # 5. Optional IR dump for parity / debugging.
     if "--emit-ir" in flags:

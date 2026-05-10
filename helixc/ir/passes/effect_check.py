@@ -47,20 +47,59 @@ OP_EFFECTS: dict[tir.OpKind, frozenset[str]] = {
 
 # Attribute keys that are NOT effect labels. Anything else in fn.attrs is
 # treated as a declared effect.
-META_ATTRS = frozenset({"is_pub", "is_pure", "pure", "kernel"})
+META_ATTRS = frozenset({
+    "is_pub", "is_pure", "pure", "kernel",
+    # Stage 16.5 FFI markers — set by lower_ast for extern fns, not
+    # effect labels.
+    "is_extern", "extern_abi",
+    # Stage 16 GPU launch marker; @kernel maps to attr "kernel" already
+    # covered above; aliasing left here for forward-compat.
+    "device",
+    # @partial / @total are AST-level totality directives, not effects.
+    "partial", "total",
+    # Audit / debug markers introduced by post-AD passes (kept META so
+    # they don't masquerade as declared effects).
+    "checkpoint", "verifier",
+})
 
 
 class EffectError(Exception):
     """Raised when a function's IR effects exceed its declared effects."""
-    pass
+    # Stage 19 trap-ids surfaced by the IR-level effect check:
+    #   19001 — @pure (or under-declared) function actually has effects
+    #   19002 — declared effect was never exercised by the body's IR
+    trap_id_pure_violation = 19001
+    trap_id_unused_effect = 19002
 
 
 def declared_effects(fn: tir.FnIR) -> frozenset[str]:
-    """Effects this function explicitly declares it may have. @pure means {}."""
+    """Effects this function explicitly declares it may have. @pure means {}.
+
+    The parser stores @effect(io) as the attribute key "effect:io" (kept
+    namespaced so the bare token "io" cannot accidentally collide with a
+    future "io" function attribute). Here we strip that prefix so the
+    declared set uses the same labels as OP_EFFECTS / the per-op effect
+    labels (e.g. PRINT contributes "io", not "effect:io"). Without the
+    strip, a function declaring @effect(io) and actually calling PRINT
+    would falsely report missing: {io} AND unused: {effect:io}, which is
+    exactly the Stage 19 regression test_stage19_trap_19002_does_not_fire
+    used to catch.
+    """
     if fn.attrs.get("is_pure") or fn.attrs.get("pure"):
         return frozenset()
-    return frozenset(k for k in fn.attrs.keys() if k not in META_ATTRS
-                     and fn.attrs[k] is True)
+    declared: set[str] = set()
+    for k, v in fn.attrs.items():
+        if v is not True:
+            continue
+        if k in META_ATTRS:
+            continue
+        if k.startswith("effect:"):
+            declared.add(k[len("effect:"):])
+        else:
+            # A bare attribute name (e.g. "io" directly) — kept for
+            # backward compat with hand-built tir modules in tests.
+            declared.add(k)
+    return frozenset(declared)
 
 
 def is_pure_decl(fn: tir.FnIR) -> bool:
@@ -126,7 +165,22 @@ def compute_closure(module: tir.Module) -> dict[str, frozenset[str]]:
 
 
 def check_module(module: tir.Module) -> list[str]:
-    """Return list of human-readable error messages. Empty list = pass."""
+    """Return list of human-readable error messages. Empty list = pass.
+
+    Reports the two Stage-19 trap classes:
+      19001 — @pure / under-declared function actually has effects.
+      19002 — declared effect was never exercised by the body's closure.
+
+    19001 is a hard violation: the program lies about its own purity.
+    19002 is a soft warning: dead annotations. We emit it through the
+    same list so the backend can decide whether to fail-strict on it
+    (currently it does not — declared-unused effects are a code smell,
+    not a correctness violation).
+
+    "unknown" callees are never required to be re-declared (a function
+    may reasonably declare nothing and still call an externally-defined
+    intrinsic), so 19002 only fires on named effect labels.
+    """
     closure = compute_closure(module)
     errors: list[str] = []
     for name, fn in module.functions.items():
@@ -135,7 +189,8 @@ def check_module(module: tir.Module) -> list[str]:
             if clos:
                 errors.append(
                     f"@pure function {name!r} has actual effects "
-                    f"{{{', '.join(sorted(clos))}}} (must be empty)"
+                    f"{{{', '.join(sorted(clos))}}} (must be empty) "
+                    f"[trap {EffectError.trap_id_pure_violation}]"
                 )
         else:
             decl = declared_effects(fn)
@@ -145,7 +200,19 @@ def check_module(module: tir.Module) -> list[str]:
                     f"function {name!r} declares effects "
                     f"{{{', '.join(sorted(decl)) or '(none)'}}} but actually "
                     f"has {{{', '.join(sorted(clos))}}}; missing: "
-                    f"{{{', '.join(sorted(extra))}}}"
+                    f"{{{', '.join(sorted(extra))}}} "
+                    f"[trap {EffectError.trap_id_pure_violation}]"
+                )
+            # Stage 19 trap 19002: declared effect that the closure does
+            # not actually need. Skip "unknown" (it always names the
+            # opaque-callee bucket, not a real label). The 19002 check is
+            # informational; check_module returns it in the same list.
+            unused = decl - clos - frozenset({"unknown"})
+            if unused:
+                errors.append(
+                    f"function {name!r} declares unused effect(s) "
+                    f"{{{', '.join(sorted(unused))}}} "
+                    f"[trap {EffectError.trap_id_unused_effect}]"
                 )
     return errors
 
