@@ -884,25 +884,30 @@ land before any user-facing release of Stage 8.5.
 
 ---
 
-## Resolution status (audit only, no fixes applied)
+## Resolution status
 
 | #  | Status   | Notes |
 |----|----------|-------|
-| 1  | OPEN     | Top-level decl ordering — needs parse_program post-fn loop refactor |
-| 2  | OPEN     | ty_ident_to_tag — single-function fix; mirrors parse_fn_decl line 4790-4811 |
-| 3  | OPEN     | ty_tag_push_name + var_type_tab — depends on Finding 2 |
-| 4  | OPEN     | mr_tab cap-32 — straightforward trap-emit fix |
-| 5  | OPEN     | pack_lo collision — fix via mangled-name dedup |
-| 6  | OPEN     | parse_pattern fallback — replace with trap |
-| 7  | OPEN     | PAT_LIT 32-bit cmp — needs width-aware pattern testers |
-| 8  | OPEN     | Pattern arity check — add at parse_pattern post-loop |
-| 9  | OPEN     | clone_with_rewrite — extend recursion or emit trap-AST |
-| 10 | OPEN     | Mono clone is_checkpoint — 1-line propagation |
-| 11 | OPEN     | self.method() in impl bodies — register self in var_type_tab |
-| 12 | OPEN     | PAT_VARIANT/TUPLE sub-pat idx > 15 disp8 wrap — mirror Stage 4 #7 fix |
+| 1  | FIXED    | parse_program post-fn loop accepts struct/enum/trait/impl/mod/use. Commit ea3040c. |
+| 2  | FIXED    | ty_ident_to_tag handles u8/u16/i8/i16/bf16 + u16. Commit d9ac5c2. |
+| 3  | FIXED    | ty_tag_push_name split into ty_tag_push_name + ty_tag_push_name_3byte with arms for all new tags. Commit d9ac5c2. |
+| 4  | OPEN     | mr_tab cap-32 — deferred (low-priority MEDIUM). |
+| 5  | FIXED    | pack_lo collision — resolved by Finding 2 fix; distinct tags now produce distinct pack_lo. Commit d9ac5c2. |
+| 6  | FIXED    | parse_pattern fallback emits AST_ERR(62002). emit_pattern_test dispatches tag-99 → emit_trap_with_id. Commit 8574fa8. |
+| 7  | OPEN     | PAT_LIT 32-bit cmp on wide scrut — deferred (MEDIUM, needs width-aware emitters). |
+| 8  | FIXED    | Pattern arity check at parse_pattern: unknown variant traps 62006, arity mismatch traps 62005. Commit 0ff2bc4. |
+| 9  | OPEN     | clone_with_rewrite — deferred (MEDIUM, needs deep-clone recursion). |
+| 10 | OPEN     | Mono clone is_checkpoint — deferred (MEDIUM, 1-line propagation but didn't fit time budget). |
+| 11 | OPEN     | self.method() in impl bodies — deferred (MEDIUM, feature work). |
+| 12 | OPEN     | PAT_VARIANT/TUPLE sub-pat idx > 15 disp8 wrap — deferred (MEDIUM, mirror Stage 4 #7 fix). |
 
-All findings are READ-ONLY observations at commit 3421b21. No source
-modifications have been applied. The Stage 4 audit's "FLAT prefix-trap"
-discipline applies to most of the recommended trap insertions:
-prefer `let n_trap = if cond { emit_trap_with_id(N) } else { 0 };`
-over `if cond { emit_trap_with_id(N) } else { ... }`.
+All FIXED entries verified by:
+- Heavy gate (`pytest helixc/tests/test_codegen.py::test_bootstrap_kovc_full_pipeline_arithmetic`) — clean.
+- Regression tests added inline in test_codegen.py demonstrating the
+  pre-fix silent behaviour now traps loudly (exit 132 / SIGILL) or
+  produces the correct value.
+
+The FLAT prefix-trap discipline + flat boolean accumulator pattern was
+used throughout to avoid straining the host parser. AST_ERR(99) with a
+trap-id in p1 is now the canonical parser-side trap shape; kovc.hx's
+emit_ast_code default case dispatches tag 99 → emit_trap_with_id(p1).

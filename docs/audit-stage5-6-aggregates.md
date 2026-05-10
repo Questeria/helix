@@ -1022,3 +1022,32 @@ chains, non-INTLIT enum-payload indices) or on programs that already
 have type errors elsewhere (struct argument identity check). The
 fixes are well-scoped and can land per-finding rather than as a
 batch.
+
+## Resolution status
+
+| # | Status | Notes |
+|---|--------|-------|
+| 1 | FIXED  | match on all-unit enum: emit_pat_variant_disc dispatches on scrut_ty (stashed in bn_state slot 122 by emit_match_dispatch). Commit f9492cd. |
+| 2 | OPEN   | PAT_VARIANT cross-enum match — deferred (HIGH but rare; need an extra enum-tag slot in tuple-lit). |
+| 3 | PARTIAL | Unknown variant names: payload-variant traps 60002 (commit 2756afd), PAT_VARIANT traps 62006 (commit 0ff2bc4). Unit-variant + struct-field traps still open. |
+| 4 | OPEN   | Unknown struct field name eats `.` and IDENT — deferred (HIGH but tightly scoped to parse_unary postfix). |
+| 5 | FIXED  | Struct-typed fn return now encoded as 100+struct_idx; fn_type_table propagates struct identity. Type_width_class_struct + ret_wants_8b for struct rets. Phase-0 limitation: struct return-by-value still SEGVs at runtime (caller-alloc'd slot via rdi not implemented). Commit ed7adf8. |
+| 6 | FIXED  | Cap-overflow on parser-state tables: caps bumped from 3/4/4 to 8/8/8 for struct_tab / var_struct_tab / enum_tab. Commit 4521641. (Surfacing as hard trap still deferred — the bump avoids the practical issue.) |
+| 7 | FIXED  | Struct lit field count vs declared arity: trap 50040 on mismatch. Commit 70b89fc. |
+| 8 | FIXED  | Enum payload variant arity + variant-name: trap 60020 / 60002. Commit 2756afd. |
+| 9 | OPEN   | emit_variant_subpats / emit_tuple_subpats disp8 wrap at idx > 15 — deferred (MEDIUM). |
+| 10 | OPEN  | `__enum_payload` non-INTLIT idx — deferred (MEDIUM). |
+| 11 | OPEN  | bind_alloc_offset cap-check — deferred (MEDIUM). |
+| 12 | OPEN  | Struct fn-call arg identity — deferred (MEDIUM, needs 8-bit param packing). |
+| 13 | OPEN  | last_enum_idx dead-code — deferred (LOW, not user-visible). |
+
+Verification: each FIXED entry has at least one regression test in
+helixc/tests/test_codegen.py demonstrating the pre-fix silent behaviour
+now traps loudly (exit 132 / SIGILL) or produces the correct value.
+Heavy gate (test_bootstrap_kovc_full_pipeline_arithmetic) clean at the
+end of the audit-fixes-stages5-16 branch.
+
+The FLAT prefix-trap pattern + flat boolean accumulator pattern was
+used throughout to avoid straining the host parser. AST_ERR(99) with a
+trap-id in p1 is the canonical parser-side trap shape; kovc.hx's
+emit_ast_code dispatches tag 99 → emit_trap_with_id(p1) (commit eca0ee2).
