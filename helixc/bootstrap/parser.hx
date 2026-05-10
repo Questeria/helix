@@ -5815,9 +5815,18 @@ fn parse_pattern(tok_base: i32, sb: i32) -> i32 {
         cur_advance(sb);                     // consume ')'
         mk_node(70, arity, sub_head, 0)
     } else {
-        // Unknown pattern token — produce wildcard as fallback.
+        // Audit A2-F6 fix: unknown pattern token used to silently emit
+        // PAT_WILDCARD (tag 66), which always matches. The leading token
+        // was consumed but not interpreted — patterns like negative
+        // literals (`-5`), float literals (`0.5_f64`), wide-int literals
+        // (`42_i64`), or bool patterns (`true`) silently became wildcards
+        // and the match arm always fired. Fix: emit AST_ERR with trap-id
+        // 62002 so codegen surfaces a hard SIGILL with the trap-id in
+        // eax. We still consume the leading token so the surrounding
+        // arm-parser doesn't infinite-loop; it'll then reach `=>` or `,`
+        // and continue cleanly until codegen fires the trap.
         cur_advance(sb);
-        mk_node(66, 0, 0, 0)
+        mk_node(99, 62002, 0, 0)
     }}}
 }
 

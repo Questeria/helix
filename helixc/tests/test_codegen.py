@@ -3245,6 +3245,16 @@ fn main() -> i32 {
         "fn use_pt() -> i32 { let p = Pt { 10, 32 } ; p.0 + p.1 } "
         "fn main() -> i32 { use_pt() }"
     ) == 42, "A2-F1: fn / struct / fn / fn ordering — second fn sees struct"
+    # Audit A2-F6 regression: a float-literal pattern used to silently
+    # become PAT_WILDCARD (always matches), so `match x { 0.5_f64 => 1, ... }`
+    # always returned 1 from the first arm. Now parse_pattern emits
+    # AST_ERR(62002) which codegen lowers via emit_trap_with_id(62002),
+    # so the program exits 132 (SIGILL) with eax=62002 instead of
+    # silently mis-matching.
+    assert compile_and_exec(
+        "fn main() -> i32 { let x: i32 = 5 ; "
+        "match x { 0.5_f64 => 7, 5 => 11, _ => 0 } }"
+    ) == 132, "A2-F6: float-literal pattern in i32 match traps (62002)"
     # Direct typed-call form `i32::eq(a, b)` works without method sugar.
     assert compile_and_exec(
         "trait Eq { fn eq(self, other: Self) -> i32 ; } "

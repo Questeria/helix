@@ -3439,14 +3439,23 @@ fn emit_compound_pattern_test(pat_idx: i32, scrut_off: i32, fail_state: i32,
 }
 
 // Stage 7 pattern test entry point. Dispatches to scalar or compound.
+//
+// Audit A2-F6 fix: parse_pattern emits AST_ERR (tag 99) with trap-id in
+// p1 when it sees an unknown pattern token. We dispatch that here to
+// emit_trap_with_id so the binary SIGILLs with the trap-id (62002) loud
+// at runtime. Pre-fix, parse_pattern silently emitted PAT_WILDCARD
+// instead — the unknown pattern always matched and the arm body ran.
 fn emit_pattern_test(pat_idx: i32, scrut_off: i32, fail_state: i32,
                      bind_state: i32, bn_state: i32) -> i32 {
     let pt = __arena_get(pat_idx);
-    if pt >= 69 {
+    if pt == 99 {
+        let pp1 = __arena_get(pat_idx + 1);
+        emit_trap_with_id(pp1)
+    } else { if pt >= 69 {
         emit_compound_pattern_test(pat_idx, scrut_off, fail_state, bind_state, bn_state)
     } else {
         emit_scalar_pattern_test(pat_idx, scrut_off, fail_state, bind_state)
-    }
+    }}
 }
 
 // Stage 7: count bind_push entries done by pattern. Mirror of
