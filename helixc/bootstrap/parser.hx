@@ -2665,8 +2665,22 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
                 // Mark the surrounding let-parser: this binding is
                 // enum-typed. Reuses last_enum_idx scratch slot.
                 set_last_enum_idx(sb, e_idx_pre);
-                // n_args >= 1 (always includes the discriminant).
-                mk_node(50, n_args, head_idx, 0)
+                // Audit A1-F8 fix: validate payload arity. Pre-fix
+                // `Maybe::Some()` (declared 1, supplied 0) and
+                // `Maybe::Some(1, 2, 3)` (declared 1, supplied 3) both
+                // silently parsed. n_args includes the disc, so
+                // payload_supplied = n_args - 1. Combine the unknown-
+                // variant + arity-mismatch checks into a single trap_id
+                // selector: -1 = no trap, otherwise the trap-id.
+                let payload_supplied = n_args - 1;
+                let unknown_variant = if disc < 0 { 1 } else { if arity < 0 { 1 } else { 0 } };
+                let bad_arity = if unknown_variant == 0 { if payload_supplied != arity { 1 } else { 0 } } else { 0 };
+                let trap_id = if unknown_variant == 1 { 60002 } else { if bad_arity == 1 { 60020 } else { 0 } };
+                if trap_id > 0 {
+                    mk_node(99, trap_id, 0, 0)
+                } else {
+                    mk_node(50, n_args, head_idx, 0)
+                }
             } else {
             cur_advance(sb);
             let next = cur_get(sb);

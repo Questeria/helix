@@ -3313,6 +3313,19 @@ fn main() -> i32 {
         "struct Pt { x: i32, y: i32 } "
         "fn main() -> i32 { let p = Pt { 10, 20, 30 } ; p.0 }"
     ) == 132, "A1-F7: struct lit too many fields traps (50040)"
+    # Audit A1-F8 regression: enum payload variant arity not validated.
+    # Pre-fix Maybe::Some(1, 2, 3) (declared 1) silently parsed,
+    # PAT_VARIANT(Some, x) read garbage from adjacent stack. Now the
+    # construct site traps 60020 on mismatch.
+    assert compile_and_exec(
+        "enum Maybe { None, Some(i32) } "
+        "fn main() -> i32 { let m = Maybe::Some(1, 2, 3) ; m.0 }"
+    ) == 132, "A1-F8: payload variant too many args traps (60020)"
+    # Unknown variant in payload position traps 60002.
+    assert compile_and_exec(
+        "enum Maybe { None, Some(i32) } "
+        "fn main() -> i32 { let m = Maybe::Bogus(42) ; m.0 }"
+    ) == 132, "A1-F8: unknown payload variant name traps (60002)"
     # Direct typed-call form `i32::eq(a, b)` works without method sugar.
     assert compile_and_exec(
         "trait Eq { fn eq(self, other: Self) -> i32 ; } "
