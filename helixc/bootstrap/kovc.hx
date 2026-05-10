@@ -1365,6 +1365,13 @@ fn is_bf16_expr(idx: i32, bind_state: i32, bn_state: i32) -> i32 {
 //   tag 9  u64  -> 8
 //   tag 10 i8   -> 1
 //   tag 11 i16  -> 2
+// Audit A1-F5: struct-typed encodings (>= 100) carry an 8-byte
+// pointer. We classify them as 8-byte width so the body-vs-ret-ty
+// trap doesn't fire on a struct-returning fn whose body is an
+// AST_TUPLE_LIT (also 8-byte pointer rep).
+fn type_width_class_struct(ty: i32) -> i32 {
+    if ty >= 100 { 8 } else { 4 }
+}
 fn type_width_class(ty: i32) -> i32 {
     if ty == 2 { 8 }
     else { if ty == 3 { 8 }
@@ -1374,7 +1381,7 @@ fn type_width_class(ty: i32) -> i32 {
     else { if ty == 11 { 2 }
     else { if ty == 7 { 1 }
     else { if ty == 10 { 1 }
-    else { 4 } } } } } } } }
+    else { type_width_class_struct(ty) } } } } } } } }
 }
 
 // Phase 1.10 step 5c follow-on: fn_type_table maps fn names to their
@@ -5428,7 +5435,11 @@ fn emit_elf_for_ast_to_path(ast_root: i32) -> i32 {
             let body_is_i64 = is_i64_expr(fn_body, bind_state, bn_state);
             let body_is_u64 = is_u64_expr(fn_body, bind_state, bn_state);
             let body_is_8b = if body_is_i64 == 1 { 1 } else { if body_is_u64 == 1 { 1 } else { 0 } };
-            let ret_wants_8b = if fn_ret_ty == 3 { 1 } else { if fn_ret_ty == 9 { 1 } else { 0 } };
+            // Audit A1-F5: ret_ty=100+struct_idx also wants 8 bytes (struct
+            // pointer rep). Without this, struct-returning fns whose body
+            // is an AST_TUPLE_LIT (also 8-byte ptr) tripped 14001.
+            let ret_is_struct = if fn_ret_ty >= 100 { 1 } else { 0 };
+            let ret_wants_8b = if fn_ret_ty == 3 { 1 } else { if fn_ret_ty == 9 { 1 } else { ret_is_struct } };
             // Speedup #4 wire-in: body-vs-ret-ty 8-byte mismatch trap id 14001.
             if body_is_8b != ret_wants_8b {
                 emit_trap_with_id(14001);

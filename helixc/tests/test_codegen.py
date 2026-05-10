@@ -3272,6 +3272,24 @@ fn main() -> i32 {
         "let c = Color::G; "
         "match c { Color::Mango => 99, _ => 7 } }"
     ) == 132, "A2-F8: unknown variant name traps (62006)"
+    # Audit A1-F5 regression: struct-typed fn return used to silently
+    # degrade ret_ty to 0 (i32). Pre-fix: 14001 (8b vs !8b body/ret) or
+    # 14002 (width-class mismatch) DID NOT fire because both body
+    # (TUPLE_LIT, expr_type=3) and ret (i32 default, width=4) sides
+    # were degraded inconsistently. Post-fix: ret_ty is 100+struct_idx,
+    # body is_8b matches ret_wants_8b (both 1), so the false-positive
+    # trap is gone. A struct returned by value still SEGVs at runtime
+    # because Phase-0 lacks proper struct-return ABI (caller-alloc'd
+    # slot via rdi); that's a separate Stage 5+ work item — but the
+    # silent-truncation bug in fn_type_table is fixed: the caller's
+    # let-binding now correctly stamps p as struct-typed (ty>=100) so
+    # AST_VAR(p) routes to 8-byte load via emit_mov_rax_local_64.
+    # Smoke test: a struct fn that doesn't return-by-value still works.
+    assert compile_and_exec(
+        "struct Pt { x: i32, y: i32 } "
+        "fn use_pt(p: Pt) -> i32 { p.0 + p.1 } "
+        "fn main() -> i32 { let p = Pt { 10, 32 } ; use_pt(p) }"
+    ) == 42, "A1-F5 smoke: struct param-by-value still works after ret-ty extension"
     # Direct typed-call form `i32::eq(a, b)` works without method sugar.
     assert compile_and_exec(
         "trait Eq { fn eq(self, other: Self) -> i32 ; } "

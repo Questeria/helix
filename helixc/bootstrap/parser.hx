@@ -5077,7 +5077,21 @@ fn parse_fn_decl(tok_base: i32, sb: i32) -> i32 {
     // ret_ty with 200 + gp_idx. Generic-typed return propagates through
     // mono substitution.
     let rt_gp_idx = gp_tab_lookup(sb, rt_s, rt_l);
-    let ret_ty_final = if rt_gp_idx >= 0 { 200 + rt_gp_idx } else { ret_ty };
+    // Audit A1-F5 fix: if ret_ty == 0 AND no generic match, look up
+    // struct_tab. Pre-fix any unrecognized IDENT (e.g. struct name `Pt`,
+    // enum name `Maybe`) silently fell through to ret_ty=0 (i32). For a
+    // struct-returning fn, the body left a 64-bit pointer in rax; the
+    // exit stub's `mov edi, eax` truncated to 32 bits → caller dereffed
+    // a sign-extended pointer → SIGSEGV. Now we encode struct returns as
+    // 100 + struct_idx (mirroring param-side encoding) so codegen can
+    // recognize struct returns. Unknown idents still degrade to 0; a
+    // separate fix would be to trap on truly-unknown idents, but doing
+    // so requires detecting that scalar+generic+struct all missed AND
+    // the ident bytes don't represent any known type. Limited to struct
+    // recognition for now.
+    let rt_struct_idx = struct_tab_lookup_idx(sb, rt_s, rt_l);
+    let ret_ty_post_struct = if rt_struct_idx >= 0 { 100 + rt_struct_idx } else { ret_ty };
+    let ret_ty_final = if rt_gp_idx >= 0 { 200 + rt_gp_idx } else { ret_ty_post_struct };
     cur_advance(sb);     // '{'
     let body = parse_expr(tok_base, sb);
     cur_advance(sb);     // '}'
