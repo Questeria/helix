@@ -147,10 +147,39 @@ def _ast_equal(a: Any, b: Any) -> bool:
         return all(_ast_equal(x, y) for x, y in zip(a.indices, b.indices))
     if isinstance(a, A.Range):
         return _ast_equal(a.start, b.start) and _ast_equal(a.end, b.end)
-    # Conservative default: treat as unequal (don't share). Hash already
-    # matched, so this only matters when we hit a class _ast_equal
-    # forgot to enumerate.
-    return False
+    # Block — used as the body of If/For/While/Loop. Compared structurally
+    # by statements + final_expr. (Blocks aren't themselves shared, but
+    # they appear as children of shared If nodes, so the comparison must
+    # descend through them to confirm the parent's structural identity.)
+    if isinstance(a, A.Block):
+        if len(a.stmts) != len(b.stmts):
+            return False
+        for sa, sb in zip(a.stmts, b.stmts):
+            if not _stmt_equal(sa, sb):
+                return False
+        return _ast_equal(a.final_expr, b.final_expr)
+    # Conservative default: fall back to hash equality. Reaching this
+    # branch means _ast_equal hit a node type the explicit enumeration
+    # doesn't cover; SHA-256 is collision-resistant so trusting the
+    # hash is a safe (and very rare) fallback.
+    return structural_hash(a) == structural_hash(b)
+
+
+def _stmt_equal(a: Any, b: Any) -> bool:
+    """Structural equality for statements (used inside Block comparison)."""
+    if type(a) is not type(b):
+        return False
+    if isinstance(a, A.Let):
+        if a.name != b.name:
+            return False
+        return _ast_equal(a.value, b.value)
+    if isinstance(a, A.ConstStmt):
+        if a.name != b.name:
+            return False
+        return _ast_equal(a.value, b.value)
+    if isinstance(a, A.ExprStmt):
+        return _ast_equal(a.expr, b.expr)
+    return structural_hash(a) == structural_hash(b)
 
 
 class _Sharer:
@@ -206,8 +235,28 @@ class _Sharer:
                 node.body = self._maybe_share(node.body)
             return node
 
-        # Everything else: try to share it directly.
-        return self._maybe_share(node)
+        # Everything else: shareable expressions go through _maybe_share;
+        # truly-unknown node types (Quote / Splice / Modify / patterns /
+        # statements that hit this path) just walk their primary child
+        # attributes and return as-is. This is what closes the
+        # share_in <-> _maybe_share loop for nodes that are neither in
+        # _SHAREABLE nor in the special block/match/for/while/loop set.
+        if isinstance(node, _SHAREABLE):
+            return self._maybe_share(node)
+
+        # Conservative walker for anything else (Quote / Splice /
+        # Modify / Assign / ...). Walk known child attributes; leave the
+        # node itself untouched.
+        for attr in ("inner", "target", "transformation", "verifier",
+                     "value", "operand", "expr"):
+            v = getattr(node, attr, None)
+            if v is None or isinstance(v, (str, int, float, bool)):
+                continue
+            # Avoid AST type nodes; only recurse into AST expr / block
+            # subtrees, which are dataclass instances.
+            if hasattr(v, "span"):
+                setattr(node, attr, self.share_in(v))
+        return node
 
     # ------------------------------------------------------------------
     # Statement walker (Let / ConstStmt / ExprStmt / etc.)

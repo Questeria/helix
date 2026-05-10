@@ -103,6 +103,97 @@ def test_constant_arg_recursion_rejected():
     assert "forever" in names, f"expected forever rejected, got {fails}"
 
 
+# --- Stage 21 regression tests ---
+
+def test_stage21_factorial_passes_spec_example():
+    """Stage 21 spec example: factorial(n) calls factorial(n-1) — strict
+    decrease, total. No @partial annotation needed."""
+    src = """
+    fn factorial(n: i32) -> i32 {
+        if n <= 1 { 1 } else { n * factorial(n - 1) }
+    }
+    """
+    fails = check_totality(parse(src))
+    assert fails == [], f"factorial must be accepted, got {fails}"
+
+
+def test_stage21_collatz_with_partial_passes_spec_example():
+    """Stage 21 spec example: Collatz with @partial annotation passes;
+    without @partial it traps 21001."""
+    src_with_partial = """
+    @partial
+    fn collatz(n: i32) -> i32 {
+        if n == 1 { 1 }
+        else { if n % 2 == 0 { collatz(n / 2) } else { collatz(n * 3 + 1) } }
+    }
+    """
+    fails = check_totality(parse(src_with_partial))
+    assert fails == [], f"@partial collatz must pass, got {fails}"
+
+
+def test_stage21_trap_21001_collatz_without_partial():
+    """Stage 21 trap-id 21001: a non-`@partial` recursive function that
+    does not strictly decrease on every recursive call is rejected.
+    Verifies the trap surfaces in the totality failure report."""
+    src = """
+    fn collatz_no_partial(n: i32) -> i32 {
+        if n == 1 { 1 }
+        else { if n % 2 == 0 { collatz_no_partial(n / 2) }
+               else { collatz_no_partial(n * 3 + 1) } }
+    }
+    """
+    fails = check_totality(parse(src))
+    names = [name for name, _ in fails]
+    assert "collatz_no_partial" in names, (
+        f"expected trap 21001 for collatz_no_partial, got {fails}"
+    )
+
+
+def test_stage21_totality_runs_in_x86_64_driver_pipeline():
+    """The x86_64 driver's __main__ now runs check_totality before
+    lowering. Smoke check: imports + call-site present."""
+    from helixc.backend import x86_64
+    import inspect
+    src = inspect.getsource(x86_64)
+    assert "check_totality" in src, (
+        "x86_64.py driver no longer runs check_totality — Stage 21 wiring lost"
+    )
+    assert "trap 21001" in src, (
+        "x86_64.py driver no longer surfaces trap 21001 — wiring incomplete"
+    )
+
+
+def test_stage21_strict_mode_aborts_on_totality_failure():
+    """In --strict mode, a totality failure makes the driver exit
+    nonzero. We test this via subprocess to confirm the wiring is
+    end-to-end (not just the warning-printing path)."""
+    import os, subprocess, tempfile
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    src_dir = os.path.join(proj_root, "helixc", "tests", "_tmp")
+    os.makedirs(src_dir, exist_ok=True)
+    src_path = os.path.join(src_dir, "_stage21_strict.hx")
+    out_path = os.path.join(src_dir, "_stage21_strict.bin")
+    with open(src_path, "w", encoding="utf-8") as f:
+        f.write("""
+fn forever(n: i32) -> i32 {
+    forever(n)
+}
+fn main() -> i32 { 0 }
+""")
+    cmd = [sys.executable, "-m", "helixc.backend.x86_64",
+           src_path, out_path, "--strict"]
+    r = subprocess.run(cmd, capture_output=True, cwd=proj_root, text=True,
+                       timeout=60)
+    # --strict + totality failure => nonzero exit.
+    assert r.returncode != 0, (
+        f"expected nonzero exit on --strict totality failure; "
+        f"got rc={r.returncode}, stderr={r.stderr!r}"
+    )
+    assert "21001" in r.stderr or "totality" in r.stderr, (
+        f"expected trap 21001 / 'totality' in stderr, got: {r.stderr}"
+    )
+
+
 def main():
     tests = [(name, fn) for name, fn in globals().items()
              if name.startswith("test_") and callable(fn)]
