@@ -1024,6 +1024,44 @@ fn mk_node(tag: i32, p1: i32, p2: i32, p3: i32) -> i32 {
     i
 }
 
+// Stage 17a (const-fold pass, parser-time variant): when an arithmetic
+// binop is being constructed and both operands are AST_INT (tag 0)
+// literals, produce a single AST_INT carrying the folded i32 value
+// instead of allocating the binop. The bottom-up parser ensures inner
+// nodes fold first, so `2 + 3 * 4` walks 2 + AST_INT(12) → AST_INT(14).
+//
+// Phase-0 scope:
+//   - tag 2 AST_ADD, 3 AST_SUB, 4 AST_MUL only.
+//   - Wider intlits (i64/u32/u64/i8/i16/u8/u16) are NOT folded here:
+//     their per-type wrap rules differ from i32 and the bootstrap's
+//     own arithmetic is i32-only at this layer.
+//   - DIV/MOD deferred (Phase-0 has no compile-time div/0 trap; the
+//     runtime SIGFPE from idiv must not be silently elided by a fold).
+//
+// Wrapping semantics: the host compile-time i32 +/-/* wraps two's-
+// complement, matching x86-64 add/sub/imul i32 in the produced binary.
+fn mk_arith_fold(tag: i32, lhs: i32, rhs: i32) -> i32 {
+    let lt = __arena_get(lhs);
+    let rt = __arena_get(rhs);
+    if lt == 0 { if rt == 0 {
+        let lv = __arena_get(lhs + 1);
+        let rv = __arena_get(rhs + 1);
+        if tag == 2 {
+            mk_node(0, lv + rv, 0, 0)
+        } else { if tag == 3 {
+            mk_node(0, lv - rv, 0, 0)
+        } else { if tag == 4 {
+            mk_node(0, lv * rv, 0, 0)
+        } else {
+            mk_node(tag, lhs, rhs, 0)
+        }}}
+    } else {
+        mk_node(tag, lhs, rhs, 0)
+    }} else {
+        mk_node(tag, lhs, rhs, 0)
+    }
+}
+
 // Stage 8: map a type IDENT's bytes to a 4-bit type tag.
 //   i32 -> 0, f32 -> 1, f64 -> 2, i64 -> 3, u32 -> 6, u64 -> 9.
 //   bf16 -> 4 (4-byte). Unknown -> 0 (i32 default; safe fallback for
@@ -1294,11 +1332,11 @@ fn parse_add(tok_base: i32, sb: i32) -> i32 {
         if t == 7 {
             cur_advance(sb);
             let rhs = parse_mul(tok_base, sb);
-            lhs = mk_node(2, lhs, rhs, 0);
+            lhs = mk_arith_fold(2, lhs, rhs);
         } else { if t == 8 {
             cur_advance(sb);
             let rhs = parse_mul(tok_base, sb);
-            lhs = mk_node(3, lhs, rhs, 0);
+            lhs = mk_arith_fold(3, lhs, rhs);
         } else {
             keep = 0;
         }};
@@ -1315,7 +1353,7 @@ fn parse_mul(tok_base: i32, sb: i32) -> i32 {
         if t == 9 {
             cur_advance(sb);
             let rhs = parse_unary(tok_base, sb);
-            lhs = mk_node(4, lhs, rhs, 0);
+            lhs = mk_arith_fold(4, lhs, rhs);
         } else { if t == 10 {
             cur_advance(sb);
             let rhs = parse_unary(tok_base, sb);

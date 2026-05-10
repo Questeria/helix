@@ -3943,15 +3943,24 @@ fn main() -> i32 {{
         return compile_and_run(src)
 
     assert root_tag("42") == 0,                       "AST_INT"
-    assert root_tag("1 + 2") == 2,                    "AST_ADD"
-    assert root_tag("1 + 2 * 3") == 2,                "ADD over MUL (precedence)"
-    assert root_tag("2 * 3 + 1") == 2,                "ADD over MUL (left)"
-    assert root_tag("(1 + 2) * 3") == 4,              "AST_MUL with grouped lhs"
-    assert root_tag("-5") == 9,                       "AST_NEG"
+    # Stage 17a: parse_add/parse_mul fold AST_INT-only operands at parse
+    # time, so e.g. `1 + 2` produces AST_INT(3), not AST_ADD. Use a
+    # variable on one side (AST_VAR is unfoldable) to verify shape.
+    assert root_tag("x + 2") == 2,                    "AST_ADD"
+    assert root_tag("x + 2 * 3") == 2,                "ADD over MUL (precedence)"
+    assert root_tag("x * 3 + 1") == 2,                "ADD over MUL (left)"
+    assert root_tag("(x + 2) * 3") == 4,              "AST_MUL with grouped lhs"
+    assert root_tag("-x") == 9,                       "AST_NEG"
     assert root_tag("x") == 1,                        "AST_VAR"
     assert root_tag("a < b") == 6,                    "AST_LT"
     assert root_tag("let x = 1 ; x") == 8,            "AST_LET"
     assert root_tag("if 1 < 2 { 3 } else { 4 }") == 7, "AST_IF"
+    # Stage 17a: confirm parser-time const-fold actually fires — both
+    # AST_INT operands collapse to a single AST_INT root (tag 0).
+    assert root_tag("1 + 2") == 0,                     "fold ADD literals -> AST_INT"
+    assert root_tag("4 - 1") == 0,                     "fold SUB literals -> AST_INT"
+    assert root_tag("3 * 5") == 0,                     "fold MUL literals -> AST_INT"
+    assert root_tag("2 + 3 * 4") == 0,                 "fold nested arith -> AST_INT"
 
 
 def test_bootstrap_lexer_recognizes_each_token_class():
