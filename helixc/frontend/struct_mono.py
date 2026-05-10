@@ -63,9 +63,22 @@ def collect_concrete_uses(prog: A.Program,
     expressions) and return a deduplicated list of (struct_name,
     type_args) for each use of a generic struct with concrete args.
 
-    Phase-0 collection is conservative: it inspects function-signature
-    types only (params + return + field tys of non-generic structs).
-    Body-walking can be added incrementally without breaking the API.
+    Audit 28.8 Finding 3 / B1 / C1-M2 fix: in addition to signature
+    types, this now walks fn bodies looking for:
+      * `Let` stmt type annotations: `let p: Pt<i32> = ...`
+      * `Cast` target types: `x as Pt<i32>`
+      * Method-call generic args: `Foo::<i32>::new(...)` (callee
+        Name carrying generics)
+      * StructLit names that match a generic struct's name (without
+        explicit args we can't instantiate, so this is best-effort:
+        a `Pt { x: 1, y: 2 }` with no explicit `Pt::<...>` is
+        treated as a use *only* if elsewhere a Pt<T> instantiation
+        with concrete T was already collected; that handling stays
+        in the typechecker side).
+
+    Phase-0 conservative: TyGeneric inside Tensor/Tile shape exprs is
+    NOT walked because shape-arg substitution is a separate stage; same
+    for Quote/Splice/Modify bodies which carry meta-AST.
     """
     seen: set[tuple] = set()
     out: list[tuple[str, list[A.TyNode]]] = []
@@ -107,15 +120,160 @@ def collect_concrete_uses(prog: A.Program,
             visit_ty(t.dtype)
             return
 
+    def visit_expr(e) -> None:
+        """Body walker — recurses through expressions to find embedded
+        TyGeneric uses (Cast.target_ty, Let.ty, callee generics on
+        Name)."""
+        if e is None:
+            return
+        # Cast carries a target type that may name a generic struct.
+        if isinstance(e, A.Cast):
+            visit_ty(e.target_ty)
+            visit_expr(e.value)
+            return
+        # Block: walk stmts + final_expr
+        if isinstance(e, A.Block):
+            for s in e.stmts:
+                visit_stmt(s)
+            if e.final_expr is not None:
+                visit_expr(e.final_expr)
+            return
+        if isinstance(e, A.UnsafeBlock):
+            visit_expr(e.body)
+            return
+        if isinstance(e, A.If):
+            visit_expr(e.cond)
+            visit_expr(e.then)
+            if e.else_ is not None:
+                visit_expr(e.else_)
+            return
+        if isinstance(e, A.Match):
+            visit_expr(e.scrutinee)
+            for arm in e.arms:
+                if arm.guard is not None:
+                    visit_expr(arm.guard)
+                visit_expr(arm.body)
+            return
+        if isinstance(e, A.For):
+            visit_expr(e.iter_expr)
+            visit_expr(e.body)
+            return
+        if isinstance(e, (A.While,)):
+            visit_expr(e.cond)
+            visit_expr(e.body)
+            return
+        if isinstance(e, A.Loop):
+            visit_expr(e.body)
+            return
+        if isinstance(e, A.Binary):
+            visit_expr(e.left)
+            visit_expr(e.right)
+            return
+        if isinstance(e, A.Unary):
+            visit_expr(e.operand)
+            return
+        if isinstance(e, A.Call):
+            visit_expr(e.callee)
+            for a in e.args:
+                visit_expr(a)
+            return
+        if isinstance(e, A.Index):
+            visit_expr(e.callee)
+            for idx in e.indices:
+                visit_expr(idx)
+            return
+        if isinstance(e, A.Field):
+            visit_expr(e.obj)
+            return
+        if isinstance(e, A.TupleLit):
+            for elem in e.elems:
+                visit_expr(elem)
+            return
+        if isinstance(e, A.ArrayLit):
+            for elem in e.elems:
+                visit_expr(elem)
+            return
+        if isinstance(e, A.StructLit):
+            # StructLit doesn't carry an explicit type-arg list in the
+            # current AST, but its base name may match a generic struct
+            # — we *don't* instantiate here (no concrete args available);
+            # the Let-stmt type annotation is the reliable path. This
+            # branch still walks each field expression for nested uses.
+            for (_n, fexpr) in e.fields:
+                visit_expr(fexpr)
+            return
+        if isinstance(e, A.Assign):
+            visit_expr(e.target)
+            visit_expr(e.value)
+            return
+        if isinstance(e, A.Return):
+            if e.value is not None:
+                visit_expr(e.value)
+            return
+        if isinstance(e, A.Break):
+            if e.value is not None:
+                visit_expr(e.value)
+            return
+        if isinstance(e, A.Range):
+            if e.start is not None:
+                visit_expr(e.start)
+            if e.end is not None:
+                visit_expr(e.end)
+            return
+        if isinstance(e, A.Name):
+            # Generic args attached to a name reference (e.g.
+            # `Foo::<i32>::new`) — walk them so Pt::<i32>::new collects
+            # the Pt<i32> use.
+            for g in getattr(e, "generics", []) or []:
+                visit_ty(g)
+            return
+        # Reflection nodes — Quote/Splice/Modify embed inner exprs.
+        if isinstance(e, A.Quote):
+            visit_expr(e.inner)
+            return
+        if isinstance(e, A.Splice):
+            visit_expr(e.inner)
+            return
+        if isinstance(e, A.Modify):
+            visit_expr(e.target)
+            visit_expr(e.transformation)
+            visit_expr(e.verifier)
+            return
+        # Literals + leaf nodes — no-op.
+        return
+
+    def visit_stmt(s) -> None:
+        if s is None:
+            return
+        if isinstance(s, A.Let):
+            if s.ty is not None:
+                visit_ty(s.ty)
+            if s.value is not None:
+                visit_expr(s.value)
+            return
+        if isinstance(s, A.ExprStmt):
+            visit_expr(s.expr)
+            return
+        if isinstance(s, A.ConstStmt):
+            visit_ty(s.ty)
+            visit_expr(s.value)
+            return
+
     for it in prog.items:
         if isinstance(it, A.FnDecl):
             for p in it.params:
                 visit_ty(p.ty)
             if it.return_ty is not None:
                 visit_ty(it.return_ty)
+            # Audit 28.8 C1-M2 fix: walk the fn body for body-level uses.
+            if not it.is_extern:
+                visit_expr(it.body)
         elif isinstance(it, A.StructDecl) and not it.generics:
             for f in it.fields:
                 visit_ty(f.ty)
+        elif isinstance(it, A.ConstDecl):
+            visit_ty(it.ty)
+            visit_expr(it.value)
 
     return out
 

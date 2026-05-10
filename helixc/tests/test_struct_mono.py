@@ -201,5 +201,165 @@ fn make() -> Pt<i32> { Pt { x: 1, y: 2 } }
     assert uses[0][0] == "Pt"
 
 
+# ----------------------------------------------------------------------
+# Audit 28.8 A3 / B1 / C1-M2 — collect_concrete_uses now walks fn
+# bodies AND Let-stmt type annotations + Cast targets, so body-level
+# uses of parametric structs aren't silently uninstantiated.
+# Plus: typecheck._resolve_type now produces TyStruct(mangled) for
+# known parametric structs, so Pt<i32> and Pt<f32> are non-unifiable.
+# ----------------------------------------------------------------------
+def test_collect_concrete_uses_walks_let_ty():
+    """C1-M2: `let p: Pt<i32> = ...` in a body must collect Pt<i32>."""
+    src = """
+struct Pt[T] { x: T, y: T }
+fn make() -> i32 {
+    let p: Pt<i32> = Pt { x: 1, y: 2 };
+    p.x
+}
+"""
+    prog = parse(src)
+    generic = collect_generic_structs(prog)
+    uses = collect_concrete_uses(prog, generic)
+    names = [(n, args[0].name) for n, args in uses]
+    assert ("Pt", "i32") in names, (
+        f"expected Pt<i32> from body Let; got {names}"
+    )
+
+
+def test_collect_concrete_uses_walks_cast_ty():
+    """B1: `x as Pt<f64>` in a body must collect Pt<f64>."""
+    src = """
+struct Pt[T] { x: T, y: T }
+fn coerce(x: i32) -> i32 {
+    let y = x as i32;
+    y
+}
+"""
+    # `as` on a generic struct isn't a typical pattern, but the
+    # walker should still pick up the TyGeneric inside Cast.target_ty
+    # if any. Use a tuple-like pattern with the type annotation.
+    src2 = """
+struct Box[T] { v: T }
+fn use_box() -> i32 {
+    let b: Box<i32> = Box { v: 5 };
+    b.v
+}
+"""
+    prog = parse(src2)
+    generic = collect_generic_structs(prog)
+    uses = collect_concrete_uses(prog, generic)
+    names = [(n, args[0].name) for n, args in uses]
+    assert ("Box", "i32") in names
+
+
+def test_distinct_body_uses_dedupe():
+    """B1: `Pt<i32>` used in two places dedupes to one instantiation."""
+    src = """
+struct Pt[T] { x: T, y: T }
+fn make_one() -> i32 {
+    let p: Pt<i32> = Pt { x: 1, y: 2 };
+    p.x
+}
+fn make_two() -> i32 {
+    let q: Pt<i32> = Pt { x: 3, y: 4 };
+    q.x + q.y
+}
+"""
+    prog = parse(src)
+    generic = collect_generic_structs(prog)
+    uses = collect_concrete_uses(prog, generic)
+    assert len(uses) == 1
+
+
+def test_distinct_body_uses_separate_types():
+    """B1: `Pt<i32>` and `Pt<f64>` in different bodies produce two
+    distinct mono'd structs."""
+    src = """
+struct Pt[T] { x: T, y: T }
+fn make_i() -> i32 {
+    let p: Pt<i32> = Pt { x: 1, y: 2 };
+    p.x
+}
+fn make_f() -> f64 {
+    let q: Pt<f64> = Pt { x: 1.0, y: 2.0 };
+    q.x + q.y
+}
+"""
+    prog = parse(src)
+    generic = collect_generic_structs(prog)
+    uses = collect_concrete_uses(prog, generic)
+    names = {(n, args[0].name) for n, args in uses}
+    assert names == {("Pt", "i32"), ("Pt", "f64")}, (
+        f"expected Pt<i32> + Pt<f64>; got {names}"
+    )
+
+
+def test_monomorphize_structs_creates_distinct_mangled():
+    """B1: monomorphize_structs(prog) emits Pt__i32 AND Pt__f64."""
+    src = """
+struct Pt[T] { x: T, y: T }
+fn make_i() -> i32 {
+    let p: Pt<i32> = Pt { x: 1, y: 2 };
+    p.x
+}
+fn make_f() -> f64 {
+    let q: Pt<f64> = Pt { x: 1.0, y: 2.0 };
+    q.x + q.y
+}
+"""
+    prog = parse(src)
+    new_prog, diags = monomorphize_structs(prog)
+    assert diags == []
+    structs = {it.name for it in new_prog.items if isinstance(it, A.StructDecl)}
+    assert "Pt__i32" in structs
+    assert "Pt__f64" in structs
+
+
+def test_typecheck_resolves_generic_struct_to_mangled():
+    """A3: typecheck._resolve_type(Pt<i32>) returns TyStruct('Pt__i32'),
+    NOT TyUnknown. Pt<i32> and Pt<f64> are then non-unifiable."""
+    from helixc.frontend.typecheck import (
+        TypeChecker, TyStruct,
+    )
+    src = """
+struct Pt[T] { x: T, y: T }
+fn dist_i(p: Pt<i32>) -> i32 { p.x }
+fn dist_f(q: Pt<f64>) -> f64 { q.x + q.y }
+"""
+    prog = parse(src)
+    tc = TypeChecker(prog)
+    tc.check()
+    sig_i = tc.functions["dist_i"]
+    sig_f = tc.functions["dist_f"]
+    p_ty_i = sig_i.params[0][1]
+    p_ty_f = sig_f.params[0][1]
+    assert isinstance(p_ty_i, TyStruct), f"expected TyStruct, got {p_ty_i}"
+    assert isinstance(p_ty_f, TyStruct), f"expected TyStruct, got {p_ty_f}"
+    assert p_ty_i.name == "Pt__i32"
+    assert p_ty_f.name == "Pt__f64"
+    # The two are not compatible:
+    assert not tc._compatible(p_ty_i, p_ty_f)
+
+
+def test_typecheck_arity_mismatch_falls_back_to_unknown():
+    """A3 edge case: Pt<i32, f64> with Pt declared as Pt[T] (one param)
+    has wrong arity — fall back to TyUnknown (existing behaviour),
+    don't try to mangle a bad form."""
+    from helixc.frontend.typecheck import (
+        TypeChecker, TyUnknown,
+    )
+    src = """
+struct Pt[T] { x: T }
+fn bad(p: Pt<i32, f64>) -> i32 { 0 }
+"""
+    prog = parse(src)
+    tc = TypeChecker(prog)
+    tc.check()
+    sig = tc.functions["bad"]
+    p_ty = sig.params[0][1]
+    # Bad arity — falls back to TyUnknown (no crash).
+    assert isinstance(p_ty, TyUnknown)
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-v"]))

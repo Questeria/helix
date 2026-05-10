@@ -280,6 +280,20 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     print(f"   typecheck: OK")
 
+    # 2.5 Stage 28 — parametric-struct monomorphization (Audit 28.8
+    # A3/B1/C1-M2). Surfaces arity-mismatch diagnostics + appends the
+    # mono'd StructDecls so downstream passes (lowering, codegen) can
+    # find them by mangled name. Doesn't replace typecheck's lookup
+    # (which goes through `_resolve_type` -> `mangle_struct` and
+    # produces `TyStruct(mangled)` directly).
+    from .frontend.struct_mono import monomorphize_structs
+    prog, sm_diags = monomorphize_structs(prog)
+    if sm_diags:
+        print(f"   struct-mono: {len(sm_diags)} ERROR(s)")
+        for d in sm_diags:
+            print(f"     {d}")
+        return 1
+
     # 3. Totality
     fails = check_totality(prog)
     if fails:

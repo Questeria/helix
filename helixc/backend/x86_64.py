@@ -2947,6 +2947,7 @@ if __name__ == "__main__":
     from ..frontend.typecheck import typecheck
     from ..frontend.grad_pass import grad_pass
     from ..frontend.monomorphize import monomorphize
+    from ..frontend.struct_mono import monomorphize_structs
     from ..frontend.flatten_modules import flatten_modules
     from ..frontend.flatten_impls import flatten_impls
     from ..ir.lower_ast import lower
@@ -2978,6 +2979,12 @@ if __name__ == "__main__":
     impl_count = flatten_impls(prog)
     if impl_count > 0:
         print(f"impl: {impl_count} method(s) lifted from impl blocks", file=sys.stderr)
+    # Audit 28.8 A3/B1 — parametric-struct mono must run BEFORE fn mono
+    # so the fn-mono pass picks up the mangled struct names.
+    prog, sm_diags = monomorphize_structs(prog)
+    if sm_diags:
+        for d in sm_diags:
+            print(f"warning: struct-mono: {d}", file=sys.stderr)
     mono_count = monomorphize(prog)
     if mono_count > 0:
         print(f"mono: {mono_count} generic instantiation(s)", file=sys.stderr)

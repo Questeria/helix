@@ -421,7 +421,22 @@ class TypeChecker:
             if ty.base in tier_map and len(ty.args) == 1:
                 return TyMemTier(tier=tier_map[ty.base],
                                  inner=self._resolve_type(ty.args[0], scope))
-            # User type with generic args — v0.1 unknown
+            # Stage 28 — user-defined parametric struct (Audit 28.8 A3/B1).
+            # If `ty.base` is a known generic struct AND the arity matches,
+            # resolve `Pt<i32>` -> `TyStruct("Pt__i32")` so distinct
+            # instantiations are non-unifiable at typecheck time. The
+            # mangled name is shared with `struct_mono.mangle_struct`, so
+            # the post-mono StructDecl for `Pt__i32` (added by
+            # `monomorphize_structs`) resolves field-lookup via the same
+            # `self._struct_decls` table.
+            user_struct = getattr(self, "_struct_decls", {}).get(ty.base)
+            if (user_struct is not None
+                    and len(ty.args) == len(user_struct.generics)):
+                from .struct_mono import mangle_struct
+                return TyStruct(name=mangle_struct(ty.base, ty.args))
+            # User type with generic args, arity mismatch or unknown — v0.1
+            # falls back to TyUnknown (existing behaviour preserved so
+            # non-struct generic types don't regress).
             return TyUnknown(hint=f"generic {ty.base}")
         return TyUnknown(hint=f"unknown ty node {type(ty).__name__}")
 
