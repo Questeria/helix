@@ -3255,6 +3255,23 @@ fn main() -> i32 {
         "fn main() -> i32 { let x: i32 = 5 ; "
         "match x { 0.5_f64 => 7, 5 => 11, _ => 0 } }"
     ) == 132, "A2-F6: float-literal pattern in i32 match traps (62002)"
+    # Audit A2-F8 regression: variant arity mismatch. Pre-fix,
+    # `Maybe::Some(a, b, c)` for a 1-arity Some variant silently parsed
+    # and at runtime read past the variant's payload region into adjacent
+    # stack slots. Now parse_pattern emits AST_ERR(62005) which traps.
+    assert compile_and_exec(
+        "enum Maybe { None, Some(i32) } "
+        "fn main() -> i32 { "
+        "let m = Maybe::Some(42); "
+        "match m { Maybe::Some(a, b, c) => a + b + c, _ => 0 } }"
+    ) == 132, "A2-F8: pattern arity > declared traps (62005)"
+    # Unknown variant name traps (62006) instead of silent disc=0.
+    assert compile_and_exec(
+        "enum Color { R, G, B } "
+        "fn main() -> i32 { "
+        "let c = Color::G; "
+        "match c { Color::Mango => 99, _ => 7 } }"
+    ) == 132, "A2-F8: unknown variant name traps (62006)"
     # Direct typed-call form `i32::eq(a, b)` works without method sugar.
     assert compile_and_exec(
         "trait Eq { fn eq(self, other: Self) -> i32 ; } "

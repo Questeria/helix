@@ -5747,14 +5747,17 @@ fn parse_pattern(tok_base: i32, sb: i32) -> i32 {
             let v_name_l = tok_p3(tok_base, vk);
             cur_advance(sb);                 // variant IDENT
             let disc = enum_tab_variant_lookup_disc(sb, e_idx_pre, v_name_s, v_name_l);
+            let want_arity = enum_tab_variant_lookup_arity(sb, e_idx_pre, v_name_s, v_name_l);
             let safe_disc = if disc < 0 { 0 } else { disc };
             // Optional `(sub_pat1, sub_pat2, ...)` — payload sub-patterns.
             let after_t = tok_tag(tok_base, cur_get(sb));
             let mut sub_head: i32 = 0;
+            let mut sub_arity: i32 = 0;
             if after_t == 3 {                // '('
                 cur_advance(sb);             // consume '('
                 let first_pat = parse_pattern(tok_base, sb);
                 sub_head = mk_node(51, first_pat, 0, 0);
+                sub_arity = 1;
                 let mut tail_idx: i32 = sub_head;
                 let mut keep: i32 = 1;
                 while keep == 1 {
@@ -5767,6 +5770,7 @@ fn parse_pattern(tok_base: i32, sb: i32) -> i32 {
                         let new_node = mk_node(51, next_pat, 0, 0);
                         __arena_set(tail_idx + 2, new_node);
                         tail_idx = new_node;
+                        sub_arity = sub_arity + 1;
                     } else { if at == 0 {    // EOF safety
                         keep = 0;
                     } else {
@@ -5776,7 +5780,19 @@ fn parse_pattern(tok_base: i32, sb: i32) -> i32 {
                 }
                 cur_advance(sb);             // consume ')'
             };
-            mk_node(69, safe_disc, sub_head, e_idx_pre)
+            // Audit A2-F8 fix: if the variant name is unknown to the
+            // enum (disc < 0), emit AST_ERR(62006) instead of silently
+            // substituting safe_disc=0. If the user's sub-pat arity
+            // disagrees with the declared variant arity, emit
+            // AST_ERR(62005). want_arity == -1 also fires the unknown-
+            // variant trap (lookup miss).
+            if disc < 0 {
+                mk_node(99, 62006, 0, 0)
+            } else { if want_arity != sub_arity {
+                mk_node(99, 62005, 0, 0)
+            } else {
+                mk_node(69, safe_disc, sub_head, e_idx_pre)
+            }}
         } else {
             // Plain identifier binding pattern.
             cur_advance(sb);                 // consume IDENT
