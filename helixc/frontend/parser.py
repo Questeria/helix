@@ -271,6 +271,26 @@ class Parser:
                     attr_name = t.value; self.i += 1
                 else:
                     raise ParseError("expected attribute name after @", t)
+
+            # Stage 27: special-case @autotune(KEY: [v1, v2], KEY2: [v])
+            # before falling through to the generic ident-capture path.
+            if attr_name == "autotune" and self._at(T.LPAREN):
+                pairs = self._parse_autotune_args()
+                attrs.append("autotune")
+                for k, vs in pairs:
+                    vs_str = ",".join(str(v) for v in vs)
+                    attrs.append(f"autotune:{k}={vs_str}")
+                continue
+
+            # Stage 28.7: @deprecated("msg"), @since("v0.3") capture a
+            # single string arg.
+            if attr_name in ("deprecated", "since") and self._at(T.LPAREN):
+                msg = self._parse_string_attr_arg()
+                attrs.append(attr_name)
+                if msg is not None:
+                    attrs.append(f"{attr_name}:{msg}")
+                continue
+
             # optional (args) — for @effect(io), @effect(io, rng) we
             # capture each comma-separated ident as `effect:<name>`.
             # For other attributes we record the bare name and the
@@ -305,6 +325,71 @@ class Parser:
             else:
                 attrs.append(attr_name)
         return attrs
+
+    def _parse_autotune_args(self) -> list[tuple[str, list[int]]]:
+        """Parse `(KEY: [v1, v2, ...], KEY2: [v3])` form. Stage 27."""
+        self._eat(T.LPAREN)
+        pairs: list[tuple[str, list[int]]] = []
+        if not self._at(T.RPAREN):
+            pairs.append(self._parse_autotune_pair())
+            while self._match(T.COMMA):
+                if self._at(T.RPAREN):
+                    break
+                pairs.append(self._parse_autotune_pair())
+        self._eat(T.RPAREN)
+        return pairs
+
+    def _parse_autotune_pair(self) -> tuple[str, list[int]]:
+        kt = self._peek()
+        if kt.kind != T.IDENT:
+            raise ParseError("expected autotune key (ident)", kt)
+        key = kt.value
+        self.i += 1
+        self._eat(T.COLON)
+        self._eat(T.LBRACK)
+        vals: list[int] = []
+        if not self._at(T.RBRACK):
+            vals.append(self._parse_autotune_int())
+            while self._match(T.COMMA):
+                if self._at(T.RBRACK):
+                    break
+                vals.append(self._parse_autotune_int())
+        self._eat(T.RBRACK)
+        return (key, vals)
+
+    def _parse_autotune_int(self) -> int:
+        t = self._peek()
+        if t.kind != T.INT:
+            raise ParseError("expected integer in autotune list", t)
+        self.i += 1
+        # Token's value is a string; strip type-suffix (e.g. "16_i32")
+        s = t.value.split("_")[0]
+        try:
+            if s.startswith("0x"):
+                return int(s, 16)
+            if s.startswith("0o"):
+                return int(s, 8)
+            if s.startswith("0b"):
+                return int(s, 2)
+            return int(s)
+        except ValueError:
+            raise ParseError(f"bad integer literal {t.value!r}", t)
+
+    def _parse_string_attr_arg(self) -> "str | None":
+        """Parse a single string literal in `(msg)` form for
+        @deprecated and @since. Returns None if no string was found
+        (caller's job to handle)."""
+        self._eat(T.LPAREN)
+        msg: "str | None" = None
+        if self._at(T.STRING):
+            t = self._peek()
+            msg = t.string_value or ""
+            self.i += 1
+        # Skip any other tokens to RPAREN (lenient)
+        while not self._at(T.RPAREN) and self._peek().kind != T.EOF:
+            self.i += 1
+        self._eat(T.RPAREN)
+        return msg
 
     # ---- extern fn (FFI declaration, Stage 16.5) ----
     def _parse_extern_decl(self, is_pub: bool, attrs: list[str]) -> ast.FnDecl:
