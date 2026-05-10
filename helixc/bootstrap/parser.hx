@@ -1058,17 +1058,33 @@ fn mk_node(tag: i32, p1: i32, p2: i32, p3: i32) -> i32 {
     i
 }
 
-// Stage 17a/b (const-fold pass, parser-time variant): when a binop is
+// Stage 17a/b/c (const-fold pass, parser-time variant): when a binop is
 // being constructed and both operands are AST_INT (tag 0) literals,
 // produce a single AST_INT carrying the folded i32 value instead of
 // allocating the binop. The bottom-up parser ensures inner nodes fold
-// first, so `2 + 3 * 4` walks 2 + AST_INT(12) → AST_INT(14).
+// first, so `2 + 3 * 4` walks 2 + AST_INT(12) → AST_INT(14). Stage 17c
+// also recognises identity-element identities (x + 0, x * 1, x | 0,
+// x ^ 0, x - 0, and the commuted forms) and short-circuits to the
+// non-literal operand subtree.
 //
 // Phase-0 scope:
 //   17a:  arithmetic — tag 2 AST_ADD, 3 AST_SUB, 4 AST_MUL
 //   17b:  comparison — tag 6 AST_LT, 19 AST_GT, 20 AST_EQ, 21 AST_NE,
 //                      22 AST_LE, 23 AST_GE  (result is 0 or 1, i32)
 //         bitwise    — tag 28 AST_BAND, 29 AST_BOR, 30 AST_BXOR
+//   17c:  algebraic identities (only the always-safe forms — those
+//         that don't elide a potentially side-effecting operand):
+//           x + 0 = x,  0 + x = x
+//           x - 0 = x
+//           x * 1 = x,  1 * x = x
+//           x | 0 = x,  0 | x = x
+//           x ^ 0 = x,  0 ^ x = x
+//         Annihilation rules (x * 0 = 0, x & 0 = 0) are NOT applied
+//         here because the non-literal side might contain a call or
+//         other side-effecting expression that must still execute.
+//         x - x = 0 also deferred — needs SSA-style equality between
+//         non-literal operand subtrees, not just textual var-name
+//         equality.
 //
 // Not folded:
 //   - Wider intlits (i64/u32/u64/i8/i16/u8/u16). Their per-type wrap
@@ -1118,10 +1134,39 @@ fn mk_arith_fold(tag: i32, lhs: i32, rhs: i32) -> i32 {
             mk_node(tag, lhs, rhs, 0)
         }}}}}}}}}}}}
     } else {
+        // Stage 17c: lhs is AST_INT, rhs is not. Identity-element
+        // rules that forward to rhs (commutative tags only).
+        let lv = __arena_get(lhs + 1);
+        if lv == 0 {
+            if tag == 2 { rhs }            // 0 + x = x
+            else { if tag == 29 { rhs }    // 0 | x = x
+            else { if tag == 30 { rhs }    // 0 ^ x = x
+            else { mk_node(tag, lhs, rhs, 0) } } }
+        } else { if lv == 1 {
+            if tag == 4 { rhs }            // 1 * x = x
+            else { mk_node(tag, lhs, rhs, 0) }
+        } else {
+            mk_node(tag, lhs, rhs, 0)
+        }}
+    }} else { if rt == 0 {
+        // Stage 17c: rhs is AST_INT, lhs is not. Identity-element rules
+        // that forward to lhs.
+        let rv = __arena_get(rhs + 1);
+        if rv == 0 {
+            if tag == 2 { lhs }            // x + 0 = x
+            else { if tag == 3 { lhs }     // x - 0 = x
+            else { if tag == 29 { lhs }    // x | 0 = x
+            else { if tag == 30 { lhs }    // x ^ 0 = x
+            else { mk_node(tag, lhs, rhs, 0) } } } }
+        } else { if rv == 1 {
+            if tag == 4 { lhs }            // x * 1 = x
+            else { mk_node(tag, lhs, rhs, 0) }
+        } else {
+            mk_node(tag, lhs, rhs, 0)
+        }}
+    } else {
         mk_node(tag, lhs, rhs, 0)
-    }} else {
-        mk_node(tag, lhs, rhs, 0)
-    }
+    }}
 }
 
 // Stage 8: map a type IDENT's bytes to a 4-bit type tag.

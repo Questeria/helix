@@ -4137,6 +4137,24 @@ fn main() -> i32 {{
     assert root_tag("12 & 10") == 0,                   "fold BAND literals -> AST_INT"
     assert root_tag("12 | 10") == 0,                   "fold BOR literals -> AST_INT"
     assert root_tag("12 ^ 10") == 0,                   "fold BXOR literals -> AST_INT"
+    # Stage 17c: algebraic identities — one operand is a literal, the
+    # other is unfoldable (here AST_VAR). The fold forwards to the
+    # non-literal operand subtree, so the root tag becomes AST_VAR (1).
+    # Annihilation rules (x*0=0, x&0=0) are intentionally NOT applied —
+    # the non-literal side might have side effects we must preserve, so
+    # the corresponding inputs stay as their original binop tag.
+    assert root_tag("x + 0") == 1,                     "x + 0 -> x (AST_VAR)"
+    assert root_tag("0 + x") == 1,                     "0 + x -> x"
+    assert root_tag("x - 0") == 1,                     "x - 0 -> x"
+    assert root_tag("x * 1") == 1,                     "x * 1 -> x"
+    assert root_tag("1 * x") == 1,                     "1 * x -> x"
+    assert root_tag("x | 0") == 1,                     "x | 0 -> x"
+    assert root_tag("0 | x") == 1,                     "0 | x -> x"
+    assert root_tag("x ^ 0") == 1,                     "x ^ 0 -> x"
+    assert root_tag("0 ^ x") == 1,                     "0 ^ x -> x"
+    # Annihilation NOT folded — confirm op tag preserved.
+    assert root_tag("x * 0") == 4,                     "x * 0 left as AST_MUL (purity)"
+    assert root_tag("x & 0") == 28,                    "x & 0 left as AST_BAND (purity)"
 
 
 def test_bootstrap_lexer_recognizes_each_token_class():
