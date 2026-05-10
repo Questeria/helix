@@ -713,37 +713,56 @@ fn var_type_tab_lookup(sb: i32, name_s: i32, name_l: i32) -> i32 {
     }
     found
 }
-// Stage 8.5: tag-to-name helper. Given a 4-bit type tag (0=i32, 1=f32,
-// 2=f64, 3=i64, 6=u32, 9=u64), push the canonical type-name bytes into
-// the arena and return (start, len_packed) where len_packed = start * 8 + len.
-// Used by method-call sugar to build mangled names like "i32__eq". For
-// uncommon tags (anything not handled here) defaults to "i32".
-fn ty_tag_push_name(tag: i32) -> i32 {
+// Stage 8.5: tag-to-name helper. Given a type tag (0=i32, 1=f32, 2=f64,
+// 3=i64, 4=bf16, 6=u32, 7=u8, 8=u16, 9=u64, 10=i8, 11=i16), push the
+// canonical type-name bytes into the arena and return (start, len_packed)
+// where len_packed = start * 8 + len. Used by method-call sugar to build
+// mangled names like "i32__eq". For uncommon tags (anything not handled
+// here) defaults to "i32".
+//
+// Audit A2-F3 fix: pre-fix the helper conflated tags 4 (bf16), 7 (u8),
+// 8 (u16), 10 (i8), 11 (i16) with i32, so impl Eq for u8 / u16 / i8 /
+// i16 / bf16 silently routed method-call sugar through "i32__eq". Now
+// each tag has its own arm with the correct ASCII bytes.
+//
+// Implementation note: a single 11-arm if-else chain strains the host
+// parser. We split into two flat halves (3-byte-wide tags first, then
+// the others) to keep nesting shallow.
+fn ty_tag_push_name_3byte(tag: i32) -> i32 {
     let start = __arena_len();
-    let mut len: i32 = 0;
-    if tag == 0 {                            // i32
+    if tag == 0 { __arena_push(105); __arena_push(51); __arena_push(50); }
+    else { if tag == 1 { __arena_push(102); __arena_push(51); __arena_push(50); }
+    else { if tag == 2 { __arena_push(102); __arena_push(54); __arena_push(52); }
+    else { if tag == 3 { __arena_push(105); __arena_push(54); __arena_push(52); }
+    else { if tag == 6 { __arena_push(117); __arena_push(51); __arena_push(50); }
+    else { if tag == 8 { __arena_push(117); __arena_push(49); __arena_push(54); }
+    else { if tag == 9 { __arena_push(117); __arena_push(54); __arena_push(52); }
+    else { if tag == 11 { __arena_push(105); __arena_push(49); __arena_push(54); }
+    else {  // default i32
         __arena_push(105); __arena_push(51); __arena_push(50);
-        len = 3;
-    } else { if tag == 1 {                   // f32
-        __arena_push(102); __arena_push(51); __arena_push(50);
-        len = 3;
-    } else { if tag == 2 {                   // f64
-        __arena_push(102); __arena_push(54); __arena_push(52);
-        len = 3;
-    } else { if tag == 3 {                   // i64
-        __arena_push(105); __arena_push(54); __arena_push(52);
-        len = 3;
-    } else { if tag == 6 {                   // u32
-        __arena_push(117); __arena_push(51); __arena_push(50);
-        len = 3;
-    } else { if tag == 9 {                   // u64
-        __arena_push(117); __arena_push(54); __arena_push(52);
-        len = 3;
-    } else {                                  // default i32
-        __arena_push(105); __arena_push(51); __arena_push(50);
-        len = 3;
-    } } } } } };
-    start * 8 + len
+    } } } } } } } } ;
+    start * 8 + 3
+}
+fn ty_tag_push_name(tag: i32) -> i32 {
+    if tag == 4 {
+        // bf16 — 4 bytes
+        let start = __arena_len();
+        __arena_push(98); __arena_push(102); __arena_push(49); __arena_push(54);
+        start * 8 + 4
+    } else { if tag == 7 {
+        // u8 — 2 bytes
+        let start = __arena_len();
+        __arena_push(117); __arena_push(56);
+        start * 8 + 2
+    } else { if tag == 10 {
+        // i8 — 2 bytes
+        let start = __arena_len();
+        __arena_push(105); __arena_push(56);
+        start * 8 + 2
+    } else {
+        // 3-byte (and default-i32) tags
+        ty_tag_push_name_3byte(tag)
+    } } }
 }
 fn var_struct_tab_add(sb: i32, name_s: i32, name_l: i32, struct_idx: i32) -> i32 {
     let count = var_struct_tab_count(sb);
@@ -1111,6 +1130,14 @@ fn mk_arith_fold(tag: i32, lhs: i32, rhs: i32) -> i32 {
 // Mirrors the strict per-byte logic in parse_fn_decl param-type
 // resolution but flat-ladder safe (called from turbofish parsing and
 // mono-pass substitution).
+// Audit A2-F2/F3/F5 fix: extend ty_ident_to_tag with the missing scalar
+// tags. Pre-fix u8/u16/i8/i16/bf16 all silently mapped to 0 (i32),
+// causing var_type_tab + method-call sugar + turbofish dedup to conflate
+// types: `let x: u8` registered (x, 0) → method call routed to i32__eq;
+// `id::<u8>(...)` and `id::<i32>(...)` produced the same pack_lo so the
+// mr_tab dedup created a wrong-fn synthesis. Now u8 → 7, u16 → 8, i8 → 10,
+// i16 → 11, bf16 → 4 explicitly; these match parse_fn_decl's strict
+// per-byte logic and ty_tag_push_name's reverse mapping.
 @pure
 fn ty_ident_to_tag(ty_s: i32, ty_l: i32) -> i32 {
     if ty_l == 3 {
@@ -1121,13 +1148,31 @@ fn ty_ident_to_tag(ty_s: i32, ty_l: i32) -> i32 {
             if b1 == 54 { if b2 == 52 { 2 } else { 0 } }
             else { if b1 == 51 { if b2 == 50 { 1 } else { 0 } } else { 0 } }
         } else { if b0 == 105 {
-            if b1 == 54 { if b2 == 52 { 3 } else { 0 } }
-            else { if b1 == 51 { if b2 == 50 { 0 } else { 0 } } else { 0 } }
+            if b1 == 54 { if b2 == 52 { 3 } else { 0 } }                              // i64
+            else { if b1 == 51 { if b2 == 50 { 0 } else { 0 } }                       // i32
+            else { if b1 == 49 { if b2 == 54 { 11 } else { 0 } } else { 0 } } }       // i16
         } else { if b0 == 117 {
-            if b1 == 51 { if b2 == 50 { 6 } else { 0 } }
-            else { if b1 == 54 { if b2 == 52 { 9 } else { 0 } } else { 0 } }
+            if b1 == 51 { if b2 == 50 { 6 } else { 0 } }                              // u32
+            else { if b1 == 54 { if b2 == 52 { 9 } else { 0 } }                       // u64
+            else { if b1 == 49 { if b2 == 54 { 8 } else { 0 } } else { 0 } } }        // u16
         } else { 0 } } }
-    } else { 0 }
+    } else { if ty_l == 2 {
+        // Stage 2.3 / 2.5b: 2-byte idents — u8 → 7, i8 → 10.
+        let b0 = __arena_get(ty_s);
+        let b1 = __arena_get(ty_s + 1);
+        if b0 == 117 { if b1 == 56 { 7 } else { 0 } }
+        else { if b0 == 105 { if b1 == 56 { 10 } else { 0 } } else { 0 } }
+    } else { if ty_l == 4 {
+        // Stage 1.5: 4-byte ident — bf16 → 4.
+        let b0 = __arena_get(ty_s);
+        let b1 = __arena_get(ty_s + 1);
+        let b2 = __arena_get(ty_s + 2);
+        let b3 = __arena_get(ty_s + 3);
+        if b0 == 98 {
+            if b1 == 102 { if b2 == 49 { if b3 == 54 { 4 } else { 0 } } else { 0 } }
+            else { 0 }
+        } else { 0 }
+    } else { 0 } } }
 }
 
 // Stage 8: append the digits of a small i32 (0..15 -- enough for type

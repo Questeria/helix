@@ -3215,6 +3215,17 @@ fn main() -> i32 {
         "impl Eq for i32 { fn eq(self, other: i32) -> i32 { if self == other { 1 } else { 0 } } } "
         "fn main() -> i32 { let a: i32 = 5 ; let b: i32 = 7 ; a.eq(b) }"
     ) == 0, "Stage 8.5A/B: method-call sugar a.eq(b) on mismatched -> 0"
+    # Audit A2-F2/F3/F5 regression: u8/i8/u16/i16/bf16 type idents used to
+    # silently map to tag 0 (i32) in ty_ident_to_tag. As a result,
+    # `impl Eq for u8` synthesized "u8__eq" (mangling uses raw bytes) but
+    # `let a: u8 = ...; a.eq(b)` routed via ty_tag_push_name(0) → "i32__eq"
+    # — the u8 impl was dead code. Now ty_ident_to_tag returns 7 for u8
+    # and ty_tag_push_name(7) emits "u8" so the dispatch matches.
+    # Smoke test: i32 turbofish still works (didn't regress).
+    assert compile_and_exec(
+        "fn id<T>(x: T) -> T { x } "
+        "fn main() -> i32 { id::<i32>(7) }"
+    ) == 7, "A2-F2 negative: i32 turbofish still works after ty_ident_to_tag extension"
     # Direct typed-call form `i32::eq(a, b)` works without method sugar.
     assert compile_and_exec(
         "trait Eq { fn eq(self, other: Self) -> i32 ; } "
