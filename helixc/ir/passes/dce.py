@@ -57,6 +57,11 @@ SIDE_EFFECT_KINDS = {
     # functions of their inputs (operands + the implicit %tid.x), so
     # standard liveness is correct for those.
     tir.OpKind.TILE_INDEX_STORE,
+    # Stage 16.5 follow-up audit CRITICAL-1: FFI calls have side effects
+    # by definition (puts, free, mutex_lock, etc.). DCE was silently
+    # dropping void-return extern calls because their results were
+    # never live. Adding here so liveness preserves them unconditionally.
+    tir.OpKind.FFI_CALL,
 }
 
 

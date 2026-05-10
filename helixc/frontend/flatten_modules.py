@@ -29,6 +29,13 @@ from typing import Optional
 from . import ast_nodes as A
 
 
+class FlattenError(Exception):
+    """Raised when module flattening detects an unresolvable condition
+    (mangled-name collision per audit-stage9-16-codegen CRITICAL-3, or
+    use-decl pointing at unknown target per MEDIUM-3)."""
+    pass
+
+
 def flatten_modules(prog: A.Program) -> int:
     """Lift block modules to top level, mangling names. Returns count of
     items lifted out of modules."""
@@ -48,6 +55,28 @@ def flatten_modules(prog: A.Program) -> int:
             new_items.append(item)
         else:
             new_items.append(item)
+    # Audit follow-up CRITICAL-3 (Stages 9-16 audit): detect mangled-name
+    # collisions BEFORE handing the AST to the lowerer (which would
+    # silently overwrite the first definition with the second). Trap 78001.
+    seen_names: dict[str, A.Item] = {}
+    for it in new_items:
+        nm = getattr(it, "name", None)
+        if nm is None:
+            continue
+        if nm in seen_names:
+            raise FlattenError(
+                f"name collision after module flattening: '{nm}' is defined "
+                f"more than once (trap 78001). One source is at "
+                f"{getattr(seen_names[nm], 'span', None)}; the other at "
+                f"{getattr(it, 'span', None)}.")
+        seen_names[nm] = it
+    # Audit follow-up MEDIUM-3: verify each `use` alias resolves to an
+    # actual top-level item. Trap 79001.
+    for alias_src, alias_tgt in aliases.items():
+        if alias_tgt not in seen_names:
+            raise FlattenError(
+                f"use-decl '{alias_src}' resolves to unknown name '{alias_tgt}' "
+                f"(path '{alias_tgt.replace('__', '::')}'; trap 79001)")
     prog.items = new_items
     if flattened or aliases:
         _rewrite_calls(prog, aliases)
