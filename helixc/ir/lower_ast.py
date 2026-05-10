@@ -52,6 +52,15 @@ class Lowerer:
         # tile binding with computed shape; .get(row, col) lowers to
         # LOAD_ELEM at index row*cols + col.
         self.tile_scope: list[dict[str, tuple[int, int]]] = []
+        # Stage 16 — HBM tile kernel params: binding-name -> (dtype-name, length,
+        # param_idx). These are kernel fn parameters typed `tile<f32, [N], HBM>`.
+        # `a[i]` and `a[i] = v` on them lower to TILE_INDEX_LOAD/STORE TIR ops,
+        # which the PTX backend turns into `ld.global.f32` / `st.global.f32`.
+        # x86 backend never sees these (kernel bodies are PTX-only).
+        self.hbm_tile_scope: list[dict[str, tuple[str, int, int]]] = []
+        # Stage 16 — inside-kernel flag. Set in _lower_fn_body for fns with
+        # @kernel attribute, so the thread_idx() builtin only resolves there.
+        self._in_kernel: bool = False
         # struct-decl-name -> ordered list of field names (declaration order).
         # Built from prog.items at lower-time. Used for the flat (single-
         # level) struct case where every field is i32.
@@ -172,6 +181,7 @@ class Lowerer:
         self.struct_scope.append({})
         self.rec_enum_scope.append({})
         self.tile_scope.append({})
+        self.hbm_tile_scope.append({})
     def _pop_scope(self) -> None:
         self.scope.pop()
         self.mut_scope.pop()
@@ -179,6 +189,14 @@ class Lowerer:
         self.struct_scope.pop()
         self.rec_enum_scope.pop()
         self.tile_scope.pop()
+        self.hbm_tile_scope.pop()
+    def _bind_hbm_tile(self, name: str, dtype: str, length: int, param_idx: int) -> None:
+        self.hbm_tile_scope[-1][name] = (dtype, length, param_idx)
+    def _lookup_hbm_tile(self, name: str):
+        for sc in reversed(self.hbm_tile_scope):
+            if name in sc:
+                return sc[name]
+        return None
     def _bind_tile(self, name: str, rows: int, cols: int) -> None:
         self.tile_scope[-1][name] = (rows, cols)
     def _lookup_tile(self, name: str):
@@ -437,12 +455,49 @@ class Lowerer:
         self.builder.current_fn = ir_fn
         self.builder.current_block = ir_fn.entry
         self._push_scope()
+        # Stage 16 — track kernel context. thread_idx() and indexed-tile ops
+        # are only valid inside @kernel fns.
+        prev_in_kernel = self._in_kernel
+        self._in_kernel = "kernel" in fn.attrs
         # Bind params to their SSA values. AGGREGATE-typed params were
         # expanded to N consecutive IR params in _register_fn — reassemble
         # them into an array binding here so the body can use field/index
         # access transparently.
         ir_param_idx = 0
+        # Stage 16 — track kernel HBM tile params positionally; needed by
+        # the PTX backend to know which `.param .u64 param_N` slot to load.
+        kernel_hbm_param_pos = 0
         for p in fn.params:
+            # Stage 16 — kernel param typed `tile<dtype, [N], HBM>`. Register
+            # for indexed-load/store lowering. Skip the multi-slot expansion
+            # below (kernel tile params are opaque pointers at this level).
+            if (self._in_kernel
+                    and isinstance(p.ty, A.TyTile)
+                    and self._stringify_marker(p.ty.memspace) in ("HBM", "hbm")):
+                # Validate dtype + shape constraints. Phase-0: 1D, dtype known.
+                dtype_node = p.ty.dtype
+                if not (isinstance(dtype_node, A.TyName)
+                        and dtype_node.name in ("f32", "i32", "f16", "bf16")):
+                    raise NotImplementedError(
+                        "Stage 16 HBM tile param dtype must be f32/i32/f16/bf16; "
+                        f"got {dtype_node}")
+                if len(p.ty.shape) != 1:
+                    raise NotImplementedError(
+                        "Stage 16 HBM tile param shape must be 1D; "
+                        f"got {len(p.ty.shape)}D")
+                length_expr = p.ty.shape[0]
+                length = (length_expr.value
+                          if isinstance(length_expr, A.IntLit) else 0)
+                # Skip IR param consumption — kernel param ptrs are not bound
+                # as SSA values (they're addressed in PTX via param_N slots,
+                # not the host calling convention).
+                v = ir_fn.params[ir_param_idx]
+                ir_param_idx += 1
+                self._bind(p.name, v)
+                self._bind_hbm_tile(p.name, dtype_node.name, length,
+                                    kernel_hbm_param_pos)
+                kernel_hbm_param_pos += 1
+                continue
             # Recursive-enum-typed param: scalar i32 arena index. Bind as
             # scalar + register in rec_enum scope so Index access emits
             # ARENA_GET against it.
@@ -486,6 +541,10 @@ class Lowerer:
         else:
             self.builder.ret(None)
         self._pop_scope()
+        # Stage 16 — restore the in-kernel flag (lower_fn_body is called per
+        # top-level fn so this is technically always False after, but the
+        # explicit restore matches the scope-pop discipline).
+        self._in_kernel = prev_in_kernel
         self.builder.end_function()
 
     def _lower_block(self, block: A.Block) -> Optional[tir.Value]:
@@ -1109,6 +1168,20 @@ class Lowerer:
                 return self.builder.emit(tir.OpKind.PRINT, v,
                                           result_ty=tir.TIRScalar("i32"),
                                           attrs={"_kind": "print_int"})
+            # Stage 16 — GPU kernel builtins. Only legal inside @kernel fns.
+            # `thread_idx()` returns the thread's x-dim index (i32). Lowers to
+            # a THREAD_IDX TIR op which PTX backend maps to `mov.u32 %r, %tid.x`.
+            if (isinstance(expr.callee, A.Name)
+                    and expr.callee.name == "thread_idx"
+                    and len(expr.args) == 0):
+                if not self._in_kernel:
+                    # Trap-id 96001: thread_idx() outside @kernel.
+                    raise SyntaxError(
+                        "trap 96001: thread_idx() only valid inside @kernel fn")
+                return self.builder.emit(
+                    tir.OpKind.THREAD_IDX,
+                    result_ty=tir.TIRScalar("i32"),
+                    attrs={"dim": "x"})
             # Arena allocator builtins — bump-alloc i32 region in the
             # binary's data section. Foundation for self-hosted compiler
             # storage of AST/IR/symbol-table.
@@ -1708,6 +1781,28 @@ class Lowerer:
             v = self._lower_expr(expr.value)
             if v is None:
                 v = self.builder.const_int(0)
+            # Stage 16 — HBM tile param indexed store: `name[i] = expr` where
+            # `name` is a kernel tile<dtype, [N], HBM> param. Lowers to
+            # TILE_INDEX_STORE which PTX backend turns into `st.global.<dtype>`.
+            if (isinstance(expr.target, A.Index)
+                    and isinstance(expr.target.callee, A.Name)
+                    and len(expr.target.indices) == 1):
+                hbm = self._lookup_hbm_tile(expr.target.callee.name)
+                if hbm is not None:
+                    dtype_name, _length, _param_pos = hbm
+                    idx_v = self._lower_expr(expr.target.indices[0]) \
+                            or self.builder.const_int(0)
+                    if expr.op != "=":
+                        # Phase-0: only plain assign on HBM tiles.
+                        raise NotImplementedError(
+                            "Stage 16 HBM tile compound assign (e.g. +=) not "
+                            "supported; use load + arith + store")
+                    self.builder.emit(
+                        tir.OpKind.TILE_INDEX_STORE, idx_v, v,
+                        attrs={"name": expr.target.callee.name,
+                               "dtype": dtype_name,
+                               "memspace": "hbm"})
+                    return None
             # Array element assignment: arr[i] = e (or compound)
             if isinstance(expr.target, A.Index) and isinstance(expr.target.callee, A.Name):
                 arr_name = expr.target.callee.name
@@ -1765,6 +1860,22 @@ class Lowerer:
                 self._lower_expr(e)
             return None
         if isinstance(expr, A.Index):
+            # Stage 16 — HBM tile param indexed load: `name[i]` where `name`
+            # is a kernel tile<dtype, [N], HBM> param. Lowers to
+            # TILE_INDEX_LOAD which PTX backend turns into `ld.global.<dtype>`.
+            if (isinstance(expr.callee, A.Name)
+                    and len(expr.indices) == 1):
+                hbm = self._lookup_hbm_tile(expr.callee.name)
+                if hbm is not None:
+                    dtype_name, _length, _param_pos = hbm
+                    idx_v = self._lower_expr(expr.indices[0]) \
+                            or self.builder.const_int(0)
+                    return self.builder.emit(
+                        tir.OpKind.TILE_INDEX_LOAD, idx_v,
+                        result_ty=tir.TIRScalar(dtype_name),
+                        attrs={"name": expr.callee.name,
+                               "dtype": dtype_name,
+                               "memspace": "hbm"})
             # If callee is a Name pointing to an array, emit LOAD_ELEM.
             if isinstance(expr.callee, A.Name):
                 # Recursive-enum binding: scalar value is the arena

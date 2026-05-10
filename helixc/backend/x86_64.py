@@ -2795,9 +2795,15 @@ def compile_module_to_elf(module: tir.Module, entry_fn: str = "main") -> bytes:
     # Stage 16.5: extern "C" fns have no body to compile — they're just
     # signatures. Calls to them are routed to FFI_CALL ops in lower_ast,
     # which the FnCompiler emits as `call qword ptr [rip + got_slot]`.
+    # Stage 16: @kernel fns also have no host body — they're PTX text
+    # embedded after the code (below). Skip them in the x86 compile loop.
     pending_strings: list[tuple[str, bytes]] = []
+    kernel_fns: list[tir.FnIR] = []
     for fn in module.functions.values():
         if fn.attrs.get("is_extern"):
+            continue
+        if fn.attrs.get("kernel"):
+            kernel_fns.append(fn)
             continue
         fc = FnCompiler(fn, asm)
         fc.compile()
@@ -2808,6 +2814,44 @@ def compile_module_to_elf(module: tir.Module, entry_fn: str = "main") -> bytes:
     for sym, data in pending_strings:
         buf.define_symbol(sym)
         buf.emit_bytes(data)
+
+    # Stage 16 — embed PTX text for each @kernel fn into the binary's
+    # read-only data region (currently appended to the code segment, which
+    # is mapped R-X — close enough for inspection-via-readelf in Phase-0;
+    # at runtime an actual cuModuleLoadData would copy it out). The host
+    # never executes these bytes; they're addressed only by reading from
+    # the file or doing a RIP-relative LEA at kernel-launch time (Phase-1).
+    if kernel_fns:
+        from ..ir.tile_ir import lower_to_tile
+        from .ptx import PtxEmitter, DEFAULT_TARGET
+        # We emit a single PTX module containing every @kernel fn (since
+        # PTX modules are text-only this is cheap). The lowering step is
+        # idempotent — re-running lower_to_tile on the same Module just
+        # produces a fresh TileModule.
+        tile_mod = lower_to_tile(module)
+        ptx_emitter = PtxEmitter(DEFAULT_TARGET)
+        ptx_emitter.emit_module_header()
+        for kf in kernel_fns:
+            tile_fn = tile_mod.functions.get(kf.name)
+            if tile_fn is not None:
+                ptx_emitter.emit_kernel(tile_fn)
+        # Also emit non-kernel device fns referenced from kernels — Phase-0
+        # we just skip them (the vec_add capstone test doesn't use any).
+        ptx_text = ptx_emitter.buf.getvalue()
+        # Null-terminate so a runtime cuModuleLoadData call (Phase-1) sees
+        # a proper C string. Phase-0 only needs the bytes to be addressable.
+        ptx_bytes = ptx_text.encode("utf-8") + b"\x00"
+        # One symbol per kernel (RIP-relative LEA targets), plus a single
+        # module-wide symbol for the full text — all defined BEFORE the
+        # bytes so they all point at the start of the PTX blob. (Phase-0
+        # uses one shared PTX module per binary; isolation can land later.)
+        buf.define_symbol("__helix_ptx_module")
+        for kf in kernel_fns:
+            buf.define_symbol(f"__helix_ptx_{kf.name}")
+        buf.emit_bytes(ptx_bytes)
+        # End-of-PTX marker so a runtime stub can compute the byte length
+        # from `__helix_ptx_module_end - __helix_ptx_module`.
+        buf.define_symbol("__helix_ptx_module_end")
 
     # Reflection cells: append HELIX_NUM_CELLS * 8 bytes of zero-init storage
     # immediately after the code. The base symbol is __helix_state_base.

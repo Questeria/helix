@@ -52,6 +52,11 @@ SIDE_EFFECT_KINDS = {
     # is unused, the push/set must still execute for downstream reads.
     tir.OpKind.ARENA_PUSH,
     tir.OpKind.ARENA_SET,
+    # Stage 16 — HBM tile stores are observable side effects (the write
+    # is what kernel launchers care about). Loads + thread_idx are pure
+    # functions of their inputs (operands + the implicit %tid.x), so
+    # standard liveness is correct for those.
+    tir.OpKind.TILE_INDEX_STORE,
 }
 
 

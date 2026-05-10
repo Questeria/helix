@@ -69,6 +69,93 @@ def test_non_kernel_emits_func():
     assert ".visible .entry k" in out
 
 
+# ============================================================================
+# Stage 16 — GPU primitives end-to-end
+# ============================================================================
+def test_thread_idx_emits_tid_x():
+    src = "@kernel fn k() { let i = thread_idx(); }"
+    out = emit(src)
+    assert "mov.u32" in out
+    assert "%tid.x" in out
+
+
+def test_thread_idx_outside_kernel_traps():
+    # Trap-id 96001: thread_idx() outside @kernel.
+    src = "fn main() -> i32 { let i = thread_idx(); 0 }"
+    try:
+        emit(src)
+    except (SyntaxError, NotImplementedError) as e:
+        assert "96001" in str(e) or "thread_idx" in str(e)
+        return
+    raise AssertionError("expected trap 96001 for thread_idx() outside kernel")
+
+
+def test_hbm_tile_param_indexed_load_emits_ld_global_f32():
+    src = """
+    @kernel fn k(a: tile<f32, [256], HBM>) {
+        let x = a[0];
+    }
+    """
+    out = emit(src)
+    assert "ld.param.u64" in out
+    assert "cvta.to.global.u64" in out
+    assert "ld.global.f32" in out
+
+
+def test_hbm_tile_param_indexed_store_emits_st_global_f32():
+    src = """
+    @kernel fn k(a: tile<f32, [256], HBM>, b: tile<f32, [256], HBM>) {
+        b[0] = a[0];
+    }
+    """
+    out = emit(src)
+    assert "ld.global.f32" in out
+    assert "st.global.f32" in out
+
+
+def test_vec_add_kernel_full_ptx():
+    # The Stage 16 capstone: vec_add must produce a PTX kernel that:
+    # - declares 3 .param .b64 entries
+    # - reads %tid.x
+    # - emits three ld.global.f32 sequences (a[i] + b[i] + result load for store)
+    # - emits one add.f32
+    # - emits one st.global.f32 to c
+    src = """
+    @kernel
+    fn vec_add(a: tile<f32, [256], HBM>, b: tile<f32, [256], HBM>, c: tile<f32, [256], HBM>) {
+        let i = thread_idx();
+        c[i] = a[i] + b[i];
+    }
+    """
+    out = emit(src)
+    assert ".visible .entry vec_add" in out
+    assert ".param .b64 param_0" in out
+    assert ".param .b64 param_1" in out
+    assert ".param .b64 param_2" in out
+    assert "%tid.x" in out
+    # Two HBM loads (a[i], b[i]) plus one HBM store (c[i] = ...).
+    assert out.count("ld.global.f32") == 2
+    assert out.count("st.global.f32") == 1
+    assert "add.f32" in out
+    # And the trapping `// TODO:` strings must not appear: every op was handled.
+    assert "// TODO:" not in out
+
+
+def test_per_prefix_register_counters():
+    # %r and %f pools must be independent. Earlier shared `next_reg` would
+    # produce stale labels like %r3 == %f3.
+    src = """
+    @kernel fn k(a: tile<f32, [16], HBM>) {
+        let i = thread_idx();
+        let x = a[i];
+    }
+    """
+    out = emit(src)
+    # %r0 reads tid; %f0 receives the ld.global.f32 result.
+    assert "%r0" in out
+    assert "%f0" in out
+
+
 def main():
     tests = [(name, fn) for name, fn in globals().items()
              if name.startswith("test_") and callable(fn)]
