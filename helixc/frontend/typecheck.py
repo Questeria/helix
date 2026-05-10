@@ -126,6 +126,35 @@ class TyDiff(Type):
 
 
 @dataclass(frozen=True)
+class TyLogic(Type):
+    """Logic<T> — a relational / logical wrapper over T (Stage 24, Tier-3
+    moat).
+
+    Semantically, a `Logic<T>` value represents an atom of relational
+    structure: a `Logic<Person>` is a relational entity, a
+    `Logic<bool>` is a fuzzy truth value, a `Logic<Edge>` is a graph
+    edge atom. Composing `D<Logic<T>>` then represents a *differen-
+    tiable* relational/symbolic value — the core of provenance-typed
+    neuro-symbolic computation.
+
+    Phase-0: parse + type-level representation. Downstream:
+      - Fuzzy semantics for logic ops (AND -> min, OR -> max,
+        differentiable via straight-through or sigmoid relaxations)
+      - Provenance lattice tracking which input atoms contributed to
+        each derived value
+      - Trap 24001 emitted if a non-Logic value is passed where a
+        Logic-typed parameter is required, or vice versa, in a
+        provenance-sensitive context (e.g. AD over a logic op)."""
+    inner: Type
+    # provenance: optional compile-time provenance tag. None means
+    # "unconstrained"; a string like "infer_rule:parent" carries the
+    # rule that produced this value. Phase-0 keeps it None; the field
+    # exists so later passes can populate it without further schema
+    # churn.
+    provenance: Optional[str] = None
+
+
+@dataclass(frozen=True)
 class TyMemTier(Type):
     """A value tagged with a memory tier: Working / Episodic / Semantic /
     Procedural. Each tier has different consolidation, decay, and retrieval
@@ -159,32 +188,24 @@ class TypeError_(Exception):
         self.hint = hint
 
     def render(self, source: Optional[str] = None,
-               filename: str = "<input>") -> str:
-        """Format with source-line context like:
-
-          error: <msg>
-            --> file:line:col
-             | <source line>
-             | ^
-
-        If `source` is None, falls back to the bare 'line:col: msg' form.
-        """
+               filename: str = "<input>",
+               color: Optional[bool] = None) -> str:
+        """Format with source-line context via the shared diagnostics
+        module (Stage 22). Includes hint as a `= hint:` line when set.
+        If `source` is None, falls back to the bare 'line:col: msg' form."""
         if source is None:
             return str(self)
-        lines = source.splitlines()
-        if 1 <= self.span.line <= len(lines):
-            src_line = lines[self.span.line - 1]
-            ln_str = str(self.span.line)
-            pad = " " * len(ln_str)
-            caret_pad = " " * max(0, self.span.col - 1)
-            return (
-                f"error: {self.msg}\n"
-                f"{pad} --> {filename}:{self.span.line}:{self.span.col}\n"
-                f"{pad}  |\n"
-                f"{ln_str} | {src_line}\n"
-                f"{pad}  | {caret_pad}^"
-            )
-        return str(self)
+        from .diagnostics import render_caret
+        return render_caret(
+            filename=filename,
+            line=self.span.line,
+            col=self.span.col,
+            msg=self.msg,
+            source=source,
+            hint=self.hint,
+            level="error",
+            color=color,
+        )
 
 
 # ============================================================================
@@ -247,16 +268,10 @@ class TypeChecker:
 
     # ---- entry point ----
     def check(self) -> list[TypeError_]:
-        # Pass 1: register function signatures (don't check bodies yet)
-        for item in self.prog.items:
-            if isinstance(item, A.FnDecl):
-                try:
-                    self._register_fn(item)
-                except TypeError_ as e:
-                    self.errors.append(e)
-
-        # Pass 1.5: index struct + enum decls so StructLit / Path can
-        # type-check against them.
+        # Pass 0: index struct + enum decls *first* so that function
+        # signatures referring to a nominal struct/enum resolve to
+        # TyStruct/TyEnum (was: pass 1.5, which left struct-typed
+        # params as TyUnknown until body-check).
         self._struct_decls: dict[str, A.StructDecl] = {}
         self._enum_decls: dict[str, A.EnumDecl] = {}
         for item in self.prog.items:
@@ -264,6 +279,14 @@ class TypeChecker:
                 self._struct_decls[item.name] = item
             elif isinstance(item, A.EnumDecl):
                 self._enum_decls[item.name] = item
+
+        # Pass 1: register function signatures (don't check bodies yet)
+        for item in self.prog.items:
+            if isinstance(item, A.FnDecl):
+                try:
+                    self._register_fn(item)
+                except TypeError_ as e:
+                    self.errors.append(e)
 
         # Pass 2: check function bodies
         for item in self.prog.items:
@@ -378,6 +401,9 @@ class TypeChecker:
             # Differentiable wrapper: D<T>
             if ty.base == "D" and len(ty.args) == 1:
                 return TyDiff(inner=self._resolve_type(ty.args[0], scope))
+            # Stage 24: relational/logical wrapper: Logic<T>
+            if ty.base == "Logic" and len(ty.args) == 1:
+                return TyLogic(inner=self._resolve_type(ty.args[0], scope))
             # Memory-tier wrappers: WorkingMem<T>, EpisodicMem<T>, etc.
             tier_map = {
                 "WorkingMem": "working",
@@ -617,6 +643,9 @@ class TypeChecker:
         # Phase 2.2 step 2 — float-bit reinterpret intrinsics.
         "__bits_of_f32", "__f32_from_bits",
         "__bits_of_f64", "__f64_from_bits",
+        # Stage 28.5 — panic/abort policy. `panic` is a builtin that
+        # takes a single string-literal arg and emits a trap (id 28501).
+        "panic",
     })
 
     # Names of well-known stdlib functions that are surfaced as
@@ -1413,6 +1442,11 @@ class TypeChecker:
             return f"fn({', '.join(self._fmt(p) for p in t.params)}) -> {self._fmt(t.ret)}"
         if isinstance(t, TyUnit): return "()"
         if isinstance(t, TyDiff): return f"D<{self._fmt(t.inner)}>"
+        if isinstance(t, TyLogic):
+            base = f"Logic<{self._fmt(t.inner)}>"
+            if t.provenance:
+                return f"{base}@{t.provenance}"
+            return base
         if isinstance(t, TyMemTier):
             cap = {"working": "WorkingMem", "episodic": "EpisodicMem",
                    "semantic": "SemanticMem", "procedural": "ProceduralMem"}

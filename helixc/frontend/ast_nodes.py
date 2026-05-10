@@ -202,6 +202,18 @@ class Block(Expr):
 
 
 @dataclass
+class UnsafeBlock(Expr):
+    """unsafe { ... } (Stage 28.6).
+
+    The inner Block is parsed normally; codegen / effect-check treats
+    expressions inside the block as having the 'unsafe' capability.
+    Raw-pointer deref / arithmetic outside any UnsafeBlock context
+    traps 28601 (no surface alternative).
+    """
+    body: "Block"
+
+
+@dataclass
 class If(Expr):
     cond: "Expr"
     then: "Block"

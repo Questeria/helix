@@ -28,6 +28,7 @@ from typing import Optional
 
 from .lexer import Token, T, lex
 from . import ast_nodes as ast
+from .diagnostics import render_caret
 
 
 class ParseError(Exception):
@@ -37,28 +38,22 @@ class ParseError(Exception):
         self.msg = msg
 
     def render(self, source: "str | None" = None,
-               filename: str = "<input>") -> str:
-        """Format with source-line + caret display (mirrors
-        TypeError_.render). Falls back to bare str(self) if source is
-        None or the line is out of range."""
+               filename: str = "<input>",
+               color: "bool | None" = None) -> str:
+        """Format with source-line + caret display via the shared
+        diagnostics module (Stage 22). Falls back to bare str(self) if
+        source is None or the line is out of range."""
         if source is None:
             return str(self)
-        lines = source.splitlines()
-        line = self.token.line
-        col = self.token.col
-        if 1 <= line <= len(lines):
-            src_line = lines[line - 1]
-            ln_str = str(line)
-            pad = " " * len(ln_str)
-            caret_pad = " " * max(0, col - 1)
-            return (
-                f"parse error: {self.msg}\n"
-                f"{pad} --> {filename}:{line}:{col}\n"
-                f"{pad}  |\n"
-                f"{ln_str} | {src_line}\n"
-                f"{pad}  | {caret_pad}^"
-            )
-        return str(self)
+        return render_caret(
+            filename=filename,
+            line=self.token.line,
+            col=self.token.col,
+            msg=self.msg,
+            source=source,
+            level="error",
+            color=color,
+        )
 
 
 class Parser:
@@ -276,6 +271,26 @@ class Parser:
                     attr_name = t.value; self.i += 1
                 else:
                     raise ParseError("expected attribute name after @", t)
+
+            # Stage 27: special-case @autotune(KEY: [v1, v2], KEY2: [v])
+            # before falling through to the generic ident-capture path.
+            if attr_name == "autotune" and self._at(T.LPAREN):
+                pairs = self._parse_autotune_args()
+                attrs.append("autotune")
+                for k, vs in pairs:
+                    vs_str = ",".join(str(v) for v in vs)
+                    attrs.append(f"autotune:{k}={vs_str}")
+                continue
+
+            # Stage 28.7: @deprecated("msg"), @since("v0.3") capture a
+            # single string arg.
+            if attr_name in ("deprecated", "since") and self._at(T.LPAREN):
+                msg = self._parse_string_attr_arg()
+                attrs.append(attr_name)
+                if msg is not None:
+                    attrs.append(f"{attr_name}:{msg}")
+                continue
+
             # optional (args) — for @effect(io), @effect(io, rng) we
             # capture each comma-separated ident as `effect:<name>`.
             # For other attributes we record the bare name and the
@@ -310,6 +325,71 @@ class Parser:
             else:
                 attrs.append(attr_name)
         return attrs
+
+    def _parse_autotune_args(self) -> list[tuple[str, list[int]]]:
+        """Parse `(KEY: [v1, v2, ...], KEY2: [v3])` form. Stage 27."""
+        self._eat(T.LPAREN)
+        pairs: list[tuple[str, list[int]]] = []
+        if not self._at(T.RPAREN):
+            pairs.append(self._parse_autotune_pair())
+            while self._match(T.COMMA):
+                if self._at(T.RPAREN):
+                    break
+                pairs.append(self._parse_autotune_pair())
+        self._eat(T.RPAREN)
+        return pairs
+
+    def _parse_autotune_pair(self) -> tuple[str, list[int]]:
+        kt = self._peek()
+        if kt.kind != T.IDENT:
+            raise ParseError("expected autotune key (ident)", kt)
+        key = kt.value
+        self.i += 1
+        self._eat(T.COLON)
+        self._eat(T.LBRACK)
+        vals: list[int] = []
+        if not self._at(T.RBRACK):
+            vals.append(self._parse_autotune_int())
+            while self._match(T.COMMA):
+                if self._at(T.RBRACK):
+                    break
+                vals.append(self._parse_autotune_int())
+        self._eat(T.RBRACK)
+        return (key, vals)
+
+    def _parse_autotune_int(self) -> int:
+        t = self._peek()
+        if t.kind != T.INT:
+            raise ParseError("expected integer in autotune list", t)
+        self.i += 1
+        # Token's value is a string; strip type-suffix (e.g. "16_i32")
+        s = t.value.split("_")[0]
+        try:
+            if s.startswith("0x"):
+                return int(s, 16)
+            if s.startswith("0o"):
+                return int(s, 8)
+            if s.startswith("0b"):
+                return int(s, 2)
+            return int(s)
+        except ValueError:
+            raise ParseError(f"bad integer literal {t.value!r}", t)
+
+    def _parse_string_attr_arg(self) -> "str | None":
+        """Parse a single string literal in `(msg)` form for
+        @deprecated and @since. Returns None if no string was found
+        (caller's job to handle)."""
+        self._eat(T.LPAREN)
+        msg: "str | None" = None
+        if self._at(T.STRING):
+            t = self._peek()
+            msg = t.string_value or ""
+            self.i += 1
+        # Skip any other tokens to RPAREN (lenient)
+        while not self._at(T.RPAREN) and self._peek().kind != T.EOF:
+            self.i += 1
+        self._eat(T.RPAREN)
+        return msg
 
     # ---- extern fn (FFI declaration, Stage 16.5) ----
     def _parse_extern_decl(self, is_pub: bool, attrs: list[str]) -> ast.FnDecl:
@@ -746,8 +826,10 @@ class Parser:
                 elif self._at(T.RBRACE):
                     final_expr = e
                 else:
-                    # Block-y expressions (if, match, block) don't require semicolons
-                    if isinstance(e, (ast.If, ast.Match, ast.Block)):
+                    # Block-y expressions (if, match, block, unsafe-block)
+                    # don't require semicolons
+                    if isinstance(e, (ast.If, ast.Match, ast.Block,
+                                       ast.UnsafeBlock)):
                         stmts.append(ast.ExprStmt(span=e.span, expr=e))
                     else:
                         raise ParseError("expected ';' or '}' after expression", self._peek())
@@ -1026,6 +1108,11 @@ class Parser:
         # Block, if, match, for, while, loop
         if t.kind == T.LBRACE:
             return self._parse_block()
+        # Stage 28.6: unsafe { ... }
+        if t.kind == T.KW_UNSAFE:
+            self.i += 1
+            body = self._parse_block()
+            return ast.UnsafeBlock(span=self._span_of(t), body=body)
         if t.kind == T.KW_IF:
             return self._parse_if_expr()
         if t.kind == T.KW_MATCH:
