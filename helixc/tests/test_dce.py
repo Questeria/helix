@@ -109,6 +109,41 @@ def test_dce_preserves_array_stores():
     assert loads >= 1
 
 
+def test_c13_1_dce_preserves_trace_exit_operand():
+    # Audit 28.8 cycle 13 C13-1 (HIGH): a @trace fn returning Unit
+    # has a synthesized `const_int(0)` consumed only by TRACE_EXIT.
+    # Pre-fix, DCE dropped the const but left TRACE_EXIT referencing
+    # its dangling value-id; -O2 codegen then KeyError'd in the
+    # x86_64 backend at slot lookup. After fix, TRACE_EXIT is in
+    # SIDE_EFFECT_KINDS so its operands are seeded as live.
+    src = "@trace\nfn foo() {\n    let x: i32 = 5;\n}\n"
+    mod = lower_fold_dce(src)
+    foo_fn = mod.functions["foo"]
+    exits = [op for blk in foo_fn.blocks for op in blk.ops
+             if op.kind == tir.OpKind.TRACE_EXIT]
+    assert len(exits) == 1, f"expected 1 TRACE_EXIT, got {len(exits)}"
+    alive_ids = {r.id for blk in foo_fn.blocks for op in blk.ops
+                 for r in op.results} | {p.id for p in foo_fn.params}
+    for op in exits:
+        for operand in op.operands:
+            assert operand.id in alive_ids, (
+                f"TRACE_EXIT operand id={operand.id} was DCE'd "
+                f"(producer dropped); backend will KeyError at -O2")
+
+
+def test_c13_1_dce_preserves_trace_entry_in_kept_set():
+    # Belt-and-suspenders sibling: TRACE_ENTRY should also survive
+    # DCE even though it has no result (it never had operands, so
+    # this is mostly future-proofing if a runtime helper-handle is
+    # added to its operand list later).
+    src = "@trace\nfn foo() {\n    let x: i32 = 5;\n}\n"
+    mod = lower_fold_dce(src)
+    foo_fn = mod.functions["foo"]
+    entries = [op for blk in foo_fn.blocks for op in blk.ops
+               if op.kind == tir.OpKind.TRACE_ENTRY]
+    assert len(entries) == 1, f"expected 1 TRACE_ENTRY, got {len(entries)}"
+
+
 def main():
     tests = [(name, fn) for name, fn in globals().items()
              if name.startswith("test_") and callable(fn)]

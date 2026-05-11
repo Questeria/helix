@@ -65,6 +65,19 @@ SIDE_EFFECT_KINDS = {
     # Stage 28.5 — TRAP terminates the process. Even if the result slot
     # is unused, the trap MUST execute (it's the entire point of panic).
     tir.OpKind.TRAP,
+    # Audit 28.8 cycle 13 C13-1 (HIGH): TRACE_ENTRY / TRACE_EXIT are
+    # @trace prologue/epilogue ops with side effects (the runtime
+    # records entry/exit events). TRACE_EXIT consumes the return value
+    # as an operand so the runtime can log it; for unit-returning
+    # traced fns, lower_ast.py synthesizes a `const_int(0)` whose sole
+    # consumer is TRACE_EXIT. Without this entry, DCE's seed phase
+    # never marks the const_int(0) live (TRACE_EXIT has no results, so
+    # the spread phase has no live result to propagate from either),
+    # the producer is dropped, and the backend (x86_64.py:2498)
+    # KeyErrors when it tries to look up the slot of the now-deleted
+    # operand on `-O2`.
+    tir.OpKind.TRACE_ENTRY,
+    tir.OpKind.TRACE_EXIT,
 }
 
 
