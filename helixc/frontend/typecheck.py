@@ -194,18 +194,45 @@ class TyQuote(Type):
 # Audit 28.8 B13: numeric-type widening rank for TyDiff inner-type
 # mixing. Higher rank dominates: f64 > f32 > bf16 > f16 > i64 > i32 ...
 # Used by `_widen_diff_inner` to pick the result of D<T1> + D<T2>.
+#
+# Audit 28.8 cycle 2 B:C1: add fp8 / mxfp4 / nvfp4 / char so they
+# don't fall through to rank -1 (which made an int "dominate" a
+# quantized float — a float-to-int silent collapse). Quantized floats
+# are ranked just below f16 — they're floats so they should beat any
+# integer, but they have less precision than f16/bf16/f32/f64.
+#
+# Audit 28.8 cycle 2 B:C4: signed-vs-unsigned at the same width gets
+# slightly different ranks so a tie doesn't silently left-win and
+# drop the sign domain. Unsigned wins by +1 (matching C's promotion
+# rule: in mixed signed/unsigned at the same width, the unsigned
+# operand is the "wider" type for the operation). This means
+# `u32 + i32` widens to u32 with a warning, and `i32 + u32` ALSO
+# widens to u32 with a warning — symmetric.
 _WIDEN_RANK: dict[str, int] = {
-    "i8": 10, "u8": 10, "bool": 10,
-    "i16": 20, "u16": 20,
-    "i32": 30, "u32": 30,
-    "i64": 40, "u64": 40, "isize": 40, "usize": 40,
-    "f16": 50, "bf16": 50,
-    "f32": 60,
-    "f64": 70,
+    "bool": 1,
+    "char": 5,
+    "i8": 10, "u8": 11,
+    "i16": 20, "u16": 21,
+    "i32": 30, "u32": 31,
+    "i64": 40, "u64": 41, "isize": 40, "usize": 41,
+    # Quantized floats live ABOVE every integer (so `D<fp8> + D<i64>`
+    # picks fp8, not i64 — a float-to-int collapse pre-fix). They sit
+    # below f16/bf16 because they have less precision; mxfp4/nvfp4
+    # are 4-bit and lower-precision than fp8 (8-bit), so they sit
+    # just below fp8 but above all integers. With this ordering,
+    # any float-vs-int pair widens to the float (correct AD semantics
+    # — gradient over an int tape is undefined).
+    "mxfp4": 43, "nvfp4": 43,                   # quantized 4-bit floats
+    "fp8":   45,                                # quantized 8-bit float
+    "f16":   50, "bf16": 51,
+    "f32":   60,
+    "f64":   70,
 }
 
 
-def _widen_diff_inner(a: "Type", b: "Type") -> "Type":
+def _widen_diff_inner(a: "Type", b: "Type",
+                       _warn_cb=None,
+                       _span=None) -> "Type":
     """Audit 28.8 B13: pick the wider of two D<>-inner types.
 
     Used when a TyDiff binop receives D<T1> + D<T2> with T1 != T2.
@@ -213,11 +240,27 @@ def _widen_diff_inner(a: "Type", b: "Type") -> "Type":
     + emits a warning (AD002 / trap 24200) so the user can fix the
     mix at source.
 
-    For TyPrim pairs, rank lookup picks the larger. For pairs where
-    one side isn't a TyPrim, the non-TyUnknown side wins."""
+    Audit 28.8 cycle 2 B:C4: if the optional `_warn_cb` is provided
+    AND the two types tie on rank (e.g. `u32` vs `i32` both at rank
+    30/31 — they were at 30/30 pre-fix), emit a callback so the
+    caller can issue AD002 with a "signedness flip" hint. With the
+    new asymmetric ranks (B:C1+B:C4), exact ties now only occur
+    when both sides are absent from the table (rank -1 fallback)
+    or are mxfp4/nvfp4 same-name pairs.
+
+    For TyPrim pairs, rank lookup picks the larger (or in same-rank
+    case, picks `a` for backward compatibility but fires the warn
+    callback). For pairs where one side isn't a TyPrim, the
+    non-TyUnknown side wins.
+    """
     if isinstance(a, TyPrim) and isinstance(b, TyPrim):
         ra = _WIDEN_RANK.get(a.name, -1)
         rb = _WIDEN_RANK.get(b.name, -1)
+        # Same-rank-and-different-name tie (B:C4): callback if the
+        # caller passed one. With the asymmetric ranks (B:C1+B:C4)
+        # this should be rare in practice but the safety net stays.
+        if ra == rb and a.name != b.name and _warn_cb is not None:
+            _warn_cb(a, b, _span)
         return a if ra >= rb else b
     if isinstance(a, TyUnknown):
         return b
@@ -460,6 +503,15 @@ class TypeChecker:
             # Stage 24: relational/logical wrapper: Logic<T>
             if ty.base == "Logic" and len(ty.args) == 1:
                 return TyLogic(inner=self._resolve_type(ty.args[0], scope))
+            # Audit 28.8 cycle 2 B:C3: reflection wrapper Quote<T>.
+            # Pre-fix, `fn unbox(q: Quote<i32>)` resolved to TyUnknown
+            # (no arm here), which accepted any value through the
+            # parameter typecheck. The TyQuote variant existed but
+            # only on the expression-typing side (Quote handler at
+            # line ~1492). Now `Quote<T>` resolves to TyQuote(inner=T)
+            # and is enforced by `_compatible`.
+            if ty.base == "Quote" and len(ty.args) == 1:
+                return TyQuote(inner=self._resolve_type(ty.args[0], scope))
             # Memory-tier wrappers: WorkingMem<T>, EpisodicMem<T>, etc.
             tier_map = {
                 "WorkingMem": "working",
@@ -1073,15 +1125,43 @@ class TypeChecker:
                 # contract: result inner is the wider of the two
                 # (float dominates int, larger width dominates),
                 # emit a warning so the silent loss path is visible.
+                #
+                # Audit 28.8 cycle 2 B:C4: same-rank ties (e.g.
+                # u32 vs i32) also emit AD002, with a hint about the
+                # sign-domain transition.
+                #
+                # Audit 28.8 cycle 2 B:C6: asymmetric D<T> + bareT
+                # also warns. Pre-fix the gate was `l_is_diff AND
+                # r_is_diff`, so `D<f64> + i32` (one D-wrapped, one
+                # raw) silently promoted i32 to f64. Now the gate is
+                # `(l_is_diff OR r_is_diff) AND inner mismatch`.
                 l_inner = _unwrap(l)
                 r_inner = _unwrap(r)
-                if (l_is_diff and r_is_diff
-                        and l_inner != r_inner
-                        and not isinstance(l_inner, TyUnknown)
-                        and not isinstance(r_inner, TyUnknown)):
-                    inner = _widen_diff_inner(l_inner, r_inner)
+
+                def _tie_cb(a, b, span):
                     self._ad_warn_mixed_inner(
-                        expr.span, l_inner, r_inner, inner,
+                        span or expr.span, a, b, a,
+                        extra=" (same-rank tie; sign or quant domain "
+                              "silently dropped without this warning)",
+                    )
+
+                inner_mismatch = (
+                    l_inner != r_inner
+                    and not isinstance(l_inner, TyUnknown)
+                    and not isinstance(r_inner, TyUnknown)
+                )
+                if (l_is_diff or r_is_diff) and inner_mismatch:
+                    inner = _widen_diff_inner(
+                        l_inner, r_inner,
+                        _warn_cb=_tie_cb, _span=expr.span,
+                    )
+                    extra = ""
+                    if not (l_is_diff and r_is_diff):
+                        # B:C6: name the asymmetric (D-wrap + raw) case
+                        # so the user can tell it apart from D-D mixing.
+                        extra = " (one side D-wrapped, other bare)"
+                    self._ad_warn_mixed_inner(
+                        expr.span, l_inner, r_inner, inner, extra=extra,
                     )
                 else:
                     inner = l_inner if not isinstance(l_inner, TyUnknown) \
@@ -1766,12 +1846,36 @@ class TypeChecker:
         # Numeric-scalar <-> numeric-scalar in either direction.
         if self._is_numeric_scalar(src) and self._is_numeric_scalar(tgt):
             return
-        # Ref <-> Ref of compatible inner is OK at the type level (a
-        # change in is_mut is a separate concern handled by borrow-check).
+        # Ref <-> Ref ONLY when inner types are compatible.
+        #
+        # Audit 28.8 cycle 2 C2-6 / B:C5: pre-fix this arm was an
+        # unconditional `return` — `&Foo as &Bar` silently typechecked
+        # for any pair of unrelated refs. The matrix purported to be
+        # a closed system but had this open window. Codegen would then
+        # produce undefined behavior reading the bar layout out of a
+        # foo-pointed buffer. Now we recurse into the inner pair: a
+        # numeric inner pair is allowed (per the scalar arm above);
+        # unrelated structs/tuples/arrays fall through to trap 28604.
         if isinstance(src, TyRef) and isinstance(tgt, TyRef):
-            return
+            # Same inner: identity-cast on the ref, OK.
+            if src.inner == tgt.inner:
+                return
+            # Recurse: check the inner pair through the same matrix.
+            # Note that this re-uses ALL the matrix rules including
+            # the scalar / cascade-safe ones, so `&i32 as &i64` is
+            # still allowed (int->int) while `&Foo as &Bar` (struct
+            # to unrelated struct) falls through to the error below.
+            inner_errs_before = len(self.errors)
+            self._check_cast_compat(src.inner, tgt.inner, span)
+            if len(self.errors) == inner_errs_before:
+                # Inner pair accepted by the matrix — accept the ref pair.
+                return
+            # Inner check appended an error. Drop it; we'll re-emit
+            # a more contextualized one below covering the wrapping &.
+            self.errors = self.errors[:inner_errs_before]
         # All other source/target pairs are invalid scalar casts.
-        # Common slipups: tuple-as-i32, struct-as-f64, unit-as-Pt.
+        # Common slipups: tuple-as-i32, struct-as-f64, unit-as-Pt,
+        # and (post B:C5 fix) &Foo as &Bar.
         self.errors.append(TypeError_(
             f"invalid cast: source {self._fmt(src)} cannot convert "
             f"to {self._fmt(tgt)} (trap 28604)",
@@ -1782,16 +1886,24 @@ class TypeChecker:
         ))
 
     def _ad_warn_mixed_inner(self, span: A.Span, l: Type, r: Type,
-                              chosen: Type) -> None:
+                              chosen: Type, extra: str = "") -> None:
         """Audit 28.8 B13 (trap AD002 / 24200): record a warning that
         a TyDiff binop received mixed inner types and we widened to
         the dominant one. Funneled into the autodiff warning channel
-        so check.py's existing -Wad=error policy applies."""
+        so check.py's existing -Wad=error policy applies.
+
+        Audit 28.8 cycle 2 B:C4 / B:C6: an optional `extra` suffix
+        names the sub-case (same-rank tie / asymmetric D-wrap) so
+        the user can tell apart the now-three classes of widening:
+          * D<T1> + D<T2> with T1, T2 of different rank
+          * D<T> + bareT  (one D-wrapped, one raw)
+          * same-rank tie (sign or quantization-domain transition)
+        """
         from . import autodiff as _ad
         _ad._DIFF_WARNINGS.append(
             f"{span.line}:{span.col}: AD: D-binop with mixed inner "
             f"types {self._fmt(l)} vs {self._fmt(r)} — widened to "
-            f"{self._fmt(chosen)} (trap 24200/AD002)"
+            f"{self._fmt(chosen)} (trap 24200/AD002)" + extra
         )
 
     def _compatible(self, a: Type, b: Type) -> bool:
@@ -1802,6 +1914,13 @@ class TypeChecker:
         if isinstance(a, TyMemTier) and isinstance(b, TyMemTier):
             return a.tier == b.tier and self._compatible(a.inner, b.inner)
         if isinstance(a, TyMemTier) or isinstance(b, TyMemTier):
+            return False
+        # Audit 28.8 cycle 2 B:C3: Quote<T> ~ Quote<U> iff T ~ U.
+        # Reject Quote<T> ~ T (raw value passed where Quote expected)
+        # — that was the silent acceptance path pre-fix.
+        if isinstance(a, TyQuote) and isinstance(b, TyQuote):
+            return self._compatible(a.inner, b.inner)
+        if isinstance(a, TyQuote) or isinstance(b, TyQuote):
             return False
         return a == b
 

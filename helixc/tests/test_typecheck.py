@@ -906,6 +906,91 @@ def test_diff_same_inner_no_warning():
 
 
 # ----------------------------------------------------------------------
+# Audit 28.8 cycle 2 B:C1 — _WIDEN_RANK covers fp8/mxfp4/nvfp4/char
+# ----------------------------------------------------------------------
+def test_c2_b_c1_widen_diff_fp8_vs_i64():
+    """B:C1: pre-fix `D<fp8> + D<i64>` widened to i64 (rank -1 vs 40),
+    a float-to-int silent collapse. Now fp8 has rank 25 — still loses
+    to f16/f32/f64 but BEATS any integer."""
+    from helixc.frontend.typecheck import _widen_diff_inner, TyPrim
+    out = _widen_diff_inner(TyPrim("fp8"), TyPrim("i64"))
+    assert out.name == "fp8", (
+        f"expected fp8 to dominate i64 after B:C1 fix; got {out.name}"
+    )
+
+
+def test_c2_b_c1_widen_diff_mxfp4_vs_i32():
+    """B:C1: mxfp4 (rank 35) beats i32 (rank 30)."""
+    from helixc.frontend.typecheck import _widen_diff_inner, TyPrim
+    out = _widen_diff_inner(TyPrim("mxfp4"), TyPrim("i32"))
+    assert out.name == "mxfp4"
+
+
+def test_c2_b_c1_widen_diff_nvfp4_vs_f32():
+    """B:C1: nvfp4 (rank 35) loses to f32 (rank 60). Float-domain
+    widening from quantized to standard precision is correct."""
+    from helixc.frontend.typecheck import _widen_diff_inner, TyPrim
+    out = _widen_diff_inner(TyPrim("nvfp4"), TyPrim("f32"))
+    assert out.name == "f32"
+
+
+def test_c2_b_c1_widen_diff_char_vs_i32():
+    """B:C1: char (rank 5) loses to i32 (rank 30). Codepoint
+    silently treated as integer was the pre-fix complaint; with
+    char having rank 5 we widen up to i32 explicitly."""
+    from helixc.frontend.typecheck import _widen_diff_inner, TyPrim
+    out = _widen_diff_inner(TyPrim("char"), TyPrim("i32"))
+    assert out.name == "i32"
+
+
+def test_c2_b_c4_widen_diff_signed_unsigned_same_width():
+    """B:C4: pre-fix, u32 (rank 30) vs i32 (rank 30) tied and
+    left-wins picked u32 silently. With the asymmetric rank fix
+    (u32=31, i32=30), unsigned now wins explicitly — and the
+    user-visible test is just that the result deterministically
+    picks the unsigned form."""
+    from helixc.frontend.typecheck import _widen_diff_inner, TyPrim
+    a = _widen_diff_inner(TyPrim("u32"), TyPrim("i32"))
+    b = _widen_diff_inner(TyPrim("i32"), TyPrim("u32"))
+    assert a.name == "u32"
+    assert b.name == "u32", (
+        f"signedness widening must be order-independent; got {b.name}"
+    )
+
+
+def test_c2_b_c4_widen_diff_i64_u64_unsigned_wins():
+    """B:C4: u64 (rank 41) beats i64 (rank 40). Same width but
+    sign-domain transition no longer depends on operand order."""
+    from helixc.frontend.typecheck import _widen_diff_inner, TyPrim
+    assert _widen_diff_inner(TyPrim("i64"), TyPrim("u64")).name == "u64"
+    assert _widen_diff_inner(TyPrim("u64"), TyPrim("i64")).name == "u64"
+
+
+def test_c2_b_c6_diff_plus_bare_warns():
+    """B:C6: pre-fix `D<f64> + i32` (one D-wrapped, one raw) did NOT
+    emit AD002 because the gate required BOTH sides D-wrapped. The
+    same precision-loss hazard exists in the asymmetric case — i32
+    silently promoted to f64. Now the asymmetric case also warns
+    (with a hint about which side is D-wrapped)."""
+    from helixc.frontend import autodiff
+    autodiff.take_diff_warnings()
+    src = """
+    fn loss(x: D<f64>, y: i32) -> D<f64> {
+        x + y
+    }
+    """
+    errs = check(src)
+    assert errs == [], f"unexpected errors: {errs}"
+    warnings = autodiff.take_diff_warnings()
+    assert any("24200" in w and "AD002" in w for w in warnings), (
+        f"expected B:C6 asymmetric warning, got: {warnings}"
+    )
+    assert any("D-wrapped" in w or "bare" in w for w in warnings), (
+        f"expected hint about D-wrap asymmetry, got: {warnings}"
+    )
+
+
+# ----------------------------------------------------------------------
 # Audit 28.8 B14 — Cast allowed-cast matrix (trap 28604)
 # ----------------------------------------------------------------------
 def test_cast_int_to_int_allowed():
