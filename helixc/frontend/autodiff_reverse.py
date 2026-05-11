@@ -86,6 +86,17 @@ def _propagate(node: A.Expr, adj: A.Expr, acc: dict[str, list[A.Expr]]) -> None:
         if node.op == "-":
             neg = A.Unary(span=node.span, op="-", operand=adj)
             _propagate(node.operand, neg, acc)
+        else:
+            # Audit 28.8 cycle 2 C2-3: pre-fix, ANY Unary op other than
+            # `-` (i.e. `!`, `~`, `&`, `*`-deref) silently returned with
+            # no contribution to the gradient. Forward-mode (autodiff._diff)
+            # already warns via its catch-all branch; reverse-mode was
+            # asymmetric — silent. Now both modes diagnose loudly.
+            _ad_warn(
+                node,
+                f"unary op {node.op!r} has no defined local derivative "
+                f"(reverse-mode)",
+            )
         return
     if isinstance(node, A.Binary):
         # Deepcopy `adj` whenever it appears in more than one place so
@@ -121,7 +132,16 @@ def _propagate(node: A.Expr, adj: A.Expr, acc: dict[str, list[A.Expr]]) -> None:
             adj_r = A.Unary(span=node.span, op="-", operand=mag)
             _propagate(l, adj_l, acc)
             _propagate(r, adj_r, acc)
-        # Other ops (comparisons, etc) have zero local derivative for our cases.
+        else:
+            # Audit 28.8 cycle 2 C2-3: pre-fix, Binary ops outside
+            # `{+, -, *, /}` (e.g. `%`, comparisons, bitwise) silently
+            # returned a zero contribution. Symmetrize with forward-mode
+            # which DOES warn via its catch-all branch (autodiff.py:591).
+            _ad_warn(
+                node,
+                f"binary op {op!r} has no defined local derivative "
+                f"(reverse-mode)",
+            )
         return
     if isinstance(node, A.Block):
         if node.final_expr is not None:

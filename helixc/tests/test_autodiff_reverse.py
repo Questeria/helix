@@ -231,6 +231,62 @@ def test_two_param_if_zero_literals_distinct_objects():
     assert not shared, f"x and y grads share zero literal objects: {shared}"
 
 
+# ----------------------------------------------------------------------
+# Audit 28.8 cycle 2 C2-3 — reverse-mode emits warnings for unhandled
+# Unary / Binary ops (pre-fix it silently zeroed gradient contribution).
+# ----------------------------------------------------------------------
+def test_c2_3_reverse_binary_modulo_warns():
+    """C2-3: `x % 2` in a reverse-mode AD'd expression must emit an
+    85001 warning. Pre-fix the Binary arm fell through to a silent
+    return for any op outside `{+, -, *, /}`."""
+    from helixc.frontend import autodiff
+    autodiff.take_diff_warnings()  # drain
+    body = _body_of("fn f(x: i32) -> i32 { x % 2 }")
+    differentiate_reverse(body, ["x"])
+    warnings = autodiff.take_diff_warnings()
+    assert any("85001" in w and "'%'" in w for w in warnings), (
+        f"expected AD warning for binary `%`, got: {warnings}"
+    )
+
+
+def test_c2_3_reverse_binary_bitwise_warns():
+    """C2-3: `x & 1` (bitwise) inside reverse-mode AD must warn —
+    bitwise ops have no defined local derivative."""
+    from helixc.frontend import autodiff
+    autodiff.take_diff_warnings()
+    body = _body_of("fn f(x: i32) -> i32 { x & 1 }")
+    differentiate_reverse(body, ["x"])
+    warnings = autodiff.take_diff_warnings()
+    assert any("85001" in w for w in warnings), (
+        f"expected AD warning for bitwise `&`, got: {warnings}"
+    )
+
+
+def test_c2_3_reverse_unary_not_warns():
+    """C2-3: `!flag` (boolean NOT) inside reverse-mode AD must warn."""
+    from helixc.frontend import autodiff
+    autodiff.take_diff_warnings()
+    body = _body_of("fn f(b: bool) -> bool { !b }")
+    differentiate_reverse(body, ["b"])
+    warnings = autodiff.take_diff_warnings()
+    assert any("85001" in w and "'!'" in w for w in warnings), (
+        f"expected AD warning for unary `!`, got: {warnings}"
+    )
+
+
+def test_c2_3_reverse_arithmetic_no_warn():
+    """C2-3 inverse: `+ - * /` and unary `-` must NOT spuriously warn —
+    they have correct derivatives."""
+    from helixc.frontend import autodiff
+    autodiff.take_diff_warnings()
+    body = _body_of("fn f(x: f32) -> f32 { -((x + 1.0) * x) / 2.0 }")
+    differentiate_reverse(body, ["x"])
+    warnings = autodiff.take_diff_warnings()
+    assert not any("85001" in w for w in warnings), (
+        f"unexpected AD warning on arithmetic ops: {warnings}"
+    )
+
+
 def main():
     tests = [(name, fn) for name, fn in globals().items()
              if name.startswith("test_") and callable(fn)]
