@@ -60,6 +60,18 @@ def _mangle_ty(t: A.TyNode) -> str:
     return "X"
 
 
+class ShapeFoldError(ValueError):
+    """Audit 28.8 cycle 3 C3-6: raised when shape-time constant fold
+    hits a hard error (currently division/modulo by zero). Trap 28801.
+    Caught by the typechecker / driver and surfaced as a user-facing
+    diagnostic — silent-fallthrough → length 0 is no longer allowed."""
+
+    def __init__(self, msg: str, span: A.Span):
+        super().__init__(msg)
+        self.span = span
+        self.msg = msg
+
+
 def _fold_intlit_arith(expr: A.Expr) -> A.Expr:
     """Audit 28.8 cycle 2 B:C11: one-level constant-fold for shape
     expressions of the form Binary(IntLit, op, IntLit). Pre-fix,
@@ -71,7 +83,11 @@ def _fold_intlit_arith(expr: A.Expr) -> A.Expr:
 
     Applies only to commutative arithmetic with two IntLit operands.
     Non-foldable shapes (e.g. one side still has a Name leaf) flow
-    through unchanged."""
+    through unchanged.
+
+    Audit 28.8 cycle 3 C3-6: `/ 0` and `% 0` now raise ShapeFoldError
+    (trap 28801) instead of silently leaving the Binary unfolded and
+    letting lower_ast default the length to 0."""
     if not isinstance(expr, A.Binary):
         return expr
     if not (isinstance(expr.left, A.IntLit) and isinstance(expr.right, A.IntLit)):
@@ -85,10 +101,41 @@ def _fold_intlit_arith(expr: A.Expr) -> A.Expr:
         return A.IntLit(span=expr.span, value=lv - rv, type_suffix=None)
     if op == "*":
         return A.IntLit(span=expr.span, value=lv * rv, type_suffix=None)
-    if op == "/" and rv != 0:
+    if op == "/":
+        if rv == 0:
+            raise ShapeFoldError(
+                f"{expr.span.line}:{expr.span.col}: division by zero "
+                f"in shape expression (trap 28801)",
+                expr.span,
+            )
         return A.IntLit(span=expr.span, value=lv // rv, type_suffix=None)
-    if op == "%" and rv != 0:
+    if op == "%":
+        if rv == 0:
+            raise ShapeFoldError(
+                f"{expr.span.line}:{expr.span.col}: modulo by zero "
+                f"in shape expression (trap 28801)",
+                expr.span,
+            )
         return A.IntLit(span=expr.span, value=lv % rv, type_suffix=None)
+    return expr
+
+
+def _fold_intlit_unary(expr: A.Expr) -> A.Expr:
+    """Audit 28.8 cycle 3 D5: symmetric one-level fold for
+    `Unary(-, IntLit)` and `Unary(+, IntLit)`. Pre-fix, `[T; -N]` after
+    substitution stayed `Unary(-, IntLit(N))` and `_resolve_size_expr`
+    fell through to TyUnknown (`size expr Unary`) — silent
+    miscount."""
+    if not isinstance(expr, A.Unary):
+        return expr
+    if not isinstance(expr.operand, A.IntLit):
+        return expr
+    if expr.op == "-":
+        return A.IntLit(span=expr.span,
+                        value=-expr.operand.value,
+                        type_suffix=None)
+    if expr.op == "+":
+        return expr.operand
     return expr
 
 
@@ -139,8 +186,11 @@ def _subst_shape_expr(expr: A.Expr, subst: dict[str, A.TyNode]) -> A.Expr:
         # Audit 28.8 cycle 2 B:C11: fold if both children are IntLits.
         return _fold_intlit_arith(folded)
     if isinstance(expr, A.Unary):
-        return A.Unary(span=expr.span, op=expr.op,
-                       operand=_subst_shape_expr(expr.operand, subst))
+        folded = A.Unary(span=expr.span, op=expr.op,
+                         operand=_subst_shape_expr(expr.operand, subst))
+        # Audit 28.8 cycle 3 D5: post-fold the Unary so `-N` with N=5
+        # becomes `IntLit(-5)` rather than `Unary(-, IntLit(5))`.
+        return _fold_intlit_unary(folded)
     return expr
 
 
@@ -259,8 +309,24 @@ def _walk_subst_expr(e: A.Expr, subst: dict[str, A.TyNode]) -> A.Expr:
     if isinstance(e, A.Unary):
         return A.Unary(span=e.span, op=e.op, operand=_walk_subst_expr(e.operand, subst))
     if isinstance(e, A.Call):
+        # Audit 28.8 cycle 3 D9: also substitute the callee's
+        # turbofish generics list. Pre-fix, `caller[T]` calling
+        # `id::<T>(x)` cloned to `caller__i32` with the body still
+        # holding `Call(Name('id', generics=[T]))` — leaving an
+        # unresolved type-var that downstream codegen interpreted as
+        # the literal type name 'T'. Now T is substituted to i32 so
+        # the mono iteration discovers `id::<i32>` and produces
+        # `id__i32`.
+        new_callee = e.callee
+        if isinstance(new_callee, A.Name) and new_callee.generics:
+            new_callee = A.Name(
+                span=new_callee.span,
+                name=new_callee.name,
+                generics=[substitute_ty(g, subst)
+                          for g in new_callee.generics],
+            )
         return A.Call(span=e.span,
-                      callee=_walk_subst_expr(e.callee, subst),
+                      callee=_walk_subst_expr(new_callee, subst),
                       args=[_walk_subst_expr(a, subst) for a in e.args])
     if isinstance(e, A.Index):
         return A.Index(span=e.span,
