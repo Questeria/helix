@@ -319,6 +319,75 @@ def test_stage19_effect_check_runs_in_x86_64_driver_pipeline():
     )
 
 
+def test_c22_1_ffi_call_is_a_side_effect():
+    """Audit 28.8 cycle 23 C22-1 (HIGH): FFI_CALL must be in
+    `OP_EFFECTS` so a `@pure` fn that calls an extern "C" function is
+    rejected by the IR effect check. Pre-fix the DCE pass had FFI_CALL
+    in SIDE_EFFECT_KINDS but the parallel effect_check pass omitted it
+    — silent @pure violation for the entire FFI surface."""
+    from helixc.ir import tir
+    from helixc.ir.passes.effect_check import OP_EFFECTS
+    assert tir.OpKind.FFI_CALL in OP_EFFECTS, (
+        "FFI_CALL must be in OP_EFFECTS (C22-1)"
+    )
+    assert "ffi" in OP_EFFECTS[tir.OpKind.FFI_CALL]
+
+
+def test_c22_3_arena_ops_are_side_effects():
+    """Audit 28.8 cycle 23 C22-3 (HIGH): ARENA_PUSH / ARENA_SET mutate
+    global state — must be in OP_EFFECTS. Pre-fix `@pure` could call
+    `__arena_push` silently."""
+    from helixc.ir import tir
+    from helixc.ir.passes.effect_check import OP_EFFECTS
+    assert tir.OpKind.ARENA_PUSH in OP_EFFECTS
+    assert tir.OpKind.ARENA_SET in OP_EFFECTS
+    assert "arena" in OP_EFFECTS[tir.OpKind.ARENA_PUSH]
+    assert "arena" in OP_EFFECTS[tir.OpKind.ARENA_SET]
+
+
+def test_c22_defense_in_depth_op_effects_complete():
+    """Audit 28.8 cycle 23 C22-2/4/5 (LOW, defense in depth): gated-
+    unreachable side-effect ops (QUOTE, REFLECT_HASH, TILE_INDEX_STORE,
+    TRACE_ENTRY, TRACE_EXIT) must still be in OP_EFFECTS so any future
+    gate-regression surfaces here, not at a downstream miscompile."""
+    from helixc.ir import tir
+    from helixc.ir.passes.effect_check import OP_EFFECTS
+    expected_present = {
+        tir.OpKind.QUOTE,
+        tir.OpKind.REFLECT_HASH,
+        tir.OpKind.TILE_INDEX_STORE,
+        tir.OpKind.TRACE_ENTRY,
+        tir.OpKind.TRACE_EXIT,
+    }
+    for kind in expected_present:
+        assert kind in OP_EFFECTS, (
+            f"{kind!r} must be in OP_EFFECTS as defense-in-depth (C22-*)"
+        )
+
+
+def test_c22_1_ffi_callee_appears_in_callees_set():
+    """Audit 28.8 cycle 23 C22-1: `callees(fn)` must include FFI_CALL
+    targets so the call-graph closure propagates the `ffi` effect to
+    transitive callers. Pre-fix `callees()` only looked at CALL +
+    MODIFY/SPLICE verifier targets."""
+    from helixc.ir import tir
+    from helixc.ir.passes.effect_check import callees
+    span = (0, 0)
+    blk = tir.Block(id=0, ops=[
+        tir.Op(kind=tir.OpKind.FFI_CALL, operands=[], results=[],
+               attrs={"target": "extern_puts"}, span=span),
+        tir.Op(kind=tir.OpKind.RETURN, operands=[], results=[],
+               attrs={}, span=span),
+    ])
+    fn = tir.FnIR(name="caller", params=[],
+                  return_ty=tir.TIRScalar(name="i32"),
+                  blocks=[blk], attrs={})
+    out = callees(fn)
+    assert "extern_puts" in out, (
+        f"FFI_CALL target must appear in callees(); got {out}"
+    )
+
+
 def main():
     tests = [(name, fn) for name, fn in globals().items()
              if name.startswith("test_") and callable(fn)]

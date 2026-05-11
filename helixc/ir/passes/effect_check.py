@@ -46,6 +46,31 @@ OP_EFFECTS: dict[tir.OpKind, frozenset[str]] = {
     # io effect because the panic message is written to stderr before
     # exit. @pure fns cannot panic.
     tir.OpKind.TRAP: frozenset({"io"}),
+    # Audit 28.8 cycle 22 C22-1 (HIGH): FFI_CALL (extern "C" calls)
+    # is a side effect — calling puts/free/sock_*/etc. is observably
+    # impure. The DCE pass added FFI_CALL to its SIDE_EFFECT_KINDS in
+    # Stage 16.5 but the parallel effect_check pass never propagated
+    # the same hardening, so `@pure fn p() { extern_puts(...) }`
+    # silently passed both AST and IR effect checks.
+    tir.OpKind.FFI_CALL: frozenset({"ffi"}),
+    # Audit 28.8 cycle 22 C22-3 (HIGH): ARENA_PUSH / ARENA_SET mutate
+    # a global region — same pattern as MODIFY/SPLICE. Reachable from
+    # @pure via the __arena_push / __arena_set builtins.
+    tir.OpKind.ARENA_PUSH: frozenset({"arena"}),
+    tir.OpKind.ARENA_SET: frozenset({"arena"}),
+    # Audit 28.8 cycle 22 C22-2/C22-4/C22-5 (LOW, defense in depth):
+    # gated-unreachable from @pure today but a stale gate could open
+    # them. Add the explicit effect labels so any future regression
+    # surfaces immediately.
+    #
+    # QUOTE / REFLECT_HASH reserve a runtime reflection-cell handle.
+    tir.OpKind.QUOTE: frozenset({"reflect"}),
+    tir.OpKind.REFLECT_HASH: frozenset({"reflect"}),
+    # TILE_INDEX_STORE writes HBM (the kernel-launch observable).
+    tir.OpKind.TILE_INDEX_STORE: frozenset({"tile_io"}),
+    # TRACE_ENTRY / TRACE_EXIT log runtime trace events.
+    tir.OpKind.TRACE_ENTRY: frozenset({"trace"}),
+    tir.OpKind.TRACE_EXIT: frozenset({"trace"}),
 }
 
 
@@ -130,6 +155,15 @@ def callees(fn: tir.FnIR) -> set[str]:
                     out.add(target)
                 else:
                     out.add("<indirect>")
+            elif op.kind == tir.OpKind.FFI_CALL:
+                # Audit 28.8 cycle 22 C22-1 (HIGH): FFI_CALL must also
+                # populate the callee set so the call-graph closure
+                # propagates "ffi" effect to transitive callers.
+                target = op.attrs.get("target")
+                if isinstance(target, str):
+                    out.add(target)
+                else:
+                    out.add("<indirect-ffi>")
             elif op.kind == tir.OpKind.MODIFY:
                 # Verifier functions called via MODIFY's verifier_fn attr
                 # contribute to this function's effect closure.
