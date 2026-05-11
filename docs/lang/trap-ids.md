@@ -62,7 +62,7 @@ Used by the Python frontend (`helixc/frontend/*.py`) and audit-introduced trap I
 | 74002 | `TRAP_DUPLICATE_METHOD_NAME` | `helixc/frontend/flatten_impls.py:32` | 28 | duplicate method name across structs (Phase-0 ambiguity-free fallback) |
 | 76001 | (bootstrap closure) | `helixc/bootstrap/parser.hx` | 9 | nested-closure error sentinel |
 | 76002 | (bootstrap closure) | `helixc/bootstrap/parser.hx` | 9 | closure capture-table overflow (5th+ free var) |
-| 76003 | (bootstrap closure) | `helixc/bootstrap/parser.hx` | 9 | closure capture of non-i32 local (Phase-0 loud failure) |
+| 76003 | (bootstrap closure) | `helixc/bootstrap/parser.hx` | 9 | closure capture of non-i32 local OR a local whose type can't be confirmed as i32 (untyped `let x = 3.14;` etc.) — Phase-0 loud failure. Triggers in BOTH typed-non-i32 case (e.g. `let pi: f64 = 3.14`) AND untyped-uninferrable case (`let pi = 3.14_f64` whose type wasn't tracked into var_type_tab). |
 | 85001 | `TRAP_AD_ASSUMED_ZERO` | `helixc/frontend/autodiff.py:57` | 12-14 | AD pass assumed 0 derivative for unhandled node type |
 | 91001 | (bootstrap tile) | `helixc/ir/lower_ast.py` | 15 | tile shape cap (Phase-0: HBM 1D only) |
 | 99001 | (bootstrap AST_ERR) | `helixc/bootstrap/kovc.hx` | n/a | generic error sentinel (catch-all in codegen fallback) |
