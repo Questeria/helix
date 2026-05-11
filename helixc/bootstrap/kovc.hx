@@ -2049,6 +2049,110 @@ fn match_scrut_ty_get(bn_state: i32) -> i32 {
     __arena_get(bn_state + 122)
 }
 
+// --------------------------------------------------------------
+// Stage 28.9: diag_arena — collected diagnostics from validation
+// passes (panic_pass, unsafe_pass, deprecated_pass, trace_pass).
+// Mirrors the Python `_deprecation_warnings` channel but as a
+// structured side-table, not monkey-patched on the AST.
+//
+// Layout: a contiguous region whose first slot is the count, second
+// is a capacity, then `cap` 4-slot entries. Each entry stores:
+//   slot 0: trap-id code (e.g. 28501 panic, 28601 unsafe, 28701
+//           deprecated, 28502 unwind). 0 sentinel = empty slot.
+//   slot 1: severity (1 = warning, 2 = error)
+//   slot 2: src_byte_start (the source-byte offset, for
+//           line/col reconstruction — Phase-0 just prints the byte
+//           offset; full line/col reconstruction is deferred to a
+//           future stage that has source-byte access at dump time)
+//   slot 3: aux i32 — pass-specific data (e.g. for deprecated_pass:
+//           callee_name_start; for panic_pass: arg_count)
+//
+// Capacity: 64 entries by default. Overflow triggers trap 28999
+// (DIAG_ARENA_OVERFLOW). Phase-0 chooses 64 because the heaviest
+// known fixture (test_bootstrap_kovc_full_pipeline_arithmetic) has
+// ~10 panic call sites at most; 64 is 6x headroom.
+//
+// Severity policy:
+//   - validation passes that match Python -Werror behavior emit
+//     severity=2 (error); the driver dumps and exits non-zero.
+//   - deprecated_pass (default Python policy is -Wdeprecated=warn)
+//     emits severity=1; the driver dumps but does not exit non-zero.
+// --------------------------------------------------------------
+
+fn diag_arena_init() -> i32 {
+    // count slot (slot 0)
+    let base = __arena_push(0);
+    // cap slot (slot 1)
+    __arena_push(64);
+    // 64 * 4 entry slots (256 slots), all zero-initialized.
+    let mut i: i32 = 0;
+    while i < 256 {
+        __arena_push(0);
+        i = i + 1;
+    }
+    base
+}
+
+@pure fn diag_arena_count(diag_state: i32) -> i32 {
+    __arena_get(diag_state)
+}
+
+@pure fn diag_arena_cap(diag_state: i32) -> i32 {
+    __arena_get(diag_state + 1)
+}
+
+// Emit a diagnostic. Returns 0 on success; emits trap 28999 if the
+// arena is already full (defensive — the heavy gate has ~10 diag
+// emit sites and the cap is 64).
+fn diag_emit(diag_state: i32, code: i32, severity: i32,
+             src_byte_start: i32, aux: i32) -> i32 {
+    let count = __arena_get(diag_state);
+    let cap = __arena_get(diag_state + 1);
+    if count >= cap {
+        emit_trap_with_id(28999);
+        0
+    } else {
+        // Entry base: diag_state + 2 + count * 4. The +2 skips
+        // count + cap header slots.
+        let entry = diag_state + 2 + count * 4;
+        __arena_set(entry, code);
+        __arena_set(entry + 1, severity);
+        __arena_set(entry + 2, src_byte_start);
+        __arena_set(entry + 3, aux);
+        __arena_set(diag_state, count + 1);
+        0
+    }
+}
+
+// Read accessors for one diag entry (idx 0..count-1).
+@pure fn diag_get_code(diag_state: i32, idx: i32) -> i32 {
+    __arena_get(diag_state + 2 + idx * 4)
+}
+@pure fn diag_get_severity(diag_state: i32, idx: i32) -> i32 {
+    __arena_get(diag_state + 2 + idx * 4 + 1)
+}
+@pure fn diag_get_src_offset(diag_state: i32, idx: i32) -> i32 {
+    __arena_get(diag_state + 2 + idx * 4 + 2)
+}
+@pure fn diag_get_aux(diag_state: i32, idx: i32) -> i32 {
+    __arena_get(diag_state + 2 + idx * 4 + 3)
+}
+
+// Count diags with severity == 2 (errors). The driver-main exits
+// non-zero iff this is > 0. Warning-severity diags do not gate the
+// build (matches Python's default -Wdeprecated=warn policy).
+@pure fn diag_arena_error_count(diag_state: i32) -> i32 {
+    let n = __arena_get(diag_state);
+    let mut i: i32 = 0;
+    let mut errs: i32 = 0;
+    while i < n {
+        let sev = __arena_get(diag_state + 2 + i * 4 + 1);
+        if sev == 2 { errs = errs + 1; };
+        i = i + 1;
+    }
+    errs
+}
+
 fn bn_arena_push_s(b: i32) -> i32 { __arena_get(b) }
 fn bn_arena_get_s(b: i32) -> i32  { __arena_get(b + 1) }
 fn bn_arena_set_s(b: i32) -> i32  { __arena_get(b + 2) }
