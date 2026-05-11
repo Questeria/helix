@@ -300,22 +300,37 @@ def _fresh_slot_load(callee_expr: A.Expr, idx: int, span: A.Span) -> A.Expr:
     )
 
 
-def _dup_expr(expr: A.Expr, span: A.Span) -> A.Expr:
+def _dup_expr(expr: A.Expr, span: A.Span = None) -> A.Expr:
     """Stage 28.9 cycle 13 C13-2 helper: build a fresh AST node for
     common Expr shapes. Used to avoid sharing Index/Name children
-    across multiple parent nodes (which would violate tree linearity)."""
+    across multiple parent nodes (which would violate tree linearity).
+
+    Cycle 14 C14-1 fix (audit-A conf 84): preserve the SOURCE span
+    from `expr.span` rather than the caller's span. Pre-fix the
+    explicit Name/IntLit/Index branches overwrote spans with caller
+    context while the deepcopy fallback preserved them — silent
+    inconsistency that pointed diagnostics at the wrong source line.
+    The `span` parameter is now an unused legacy default kept for
+    backwards-compat; preserved `expr.span` is the source of truth.
+
+    Cycle 14 C14-A (codereview C14-1, audit-A C14-2): A.Path branch
+    added so PatVariant.path tag tests do not silently alias across
+    arms' Binary subtrees."""
     if isinstance(expr, A.Name):
-        return A.Name(span=span, name=expr.name, generics=list(expr.generics))
+        return A.Name(span=expr.span, name=expr.name,
+                      generics=list(expr.generics))
     if isinstance(expr, A.IntLit):
-        return A.IntLit(span=span, value=expr.value,
+        return A.IntLit(span=expr.span, value=expr.value,
                         type_suffix=expr.type_suffix)
     if isinstance(expr, A.Index):
         return A.Index(
-            span=span,
-            callee=_dup_expr(expr.callee, span),
-            indices=[_dup_expr(i, span) for i in expr.indices],
+            span=expr.span,
+            callee=_dup_expr(expr.callee),
+            indices=[_dup_expr(i) for i in expr.indices],
         )
-    # For Path / Field / and anything else, fall back to deepcopy.
+    if isinstance(expr, A.Path):
+        return A.Path(span=expr.span, segments=list(expr.segments))
+    # For Field / and anything else, fall back to deepcopy (preserves spans).
     import copy
     return copy.deepcopy(expr)
 
@@ -339,19 +354,25 @@ def _pattern_test_expr(pat: A.Pattern, scrut_expr: A.Expr,
     if isinstance(pat, (A.PatWildcard, A.PatBind)):
         return A.BoolLit(span=span, value=True)
     if isinstance(pat, A.PatLit):
-        # PatLit against a scalar/tag: scrut == lit.value. For tuple-
-        # backed scruts the caller passes scrut_expr = Index(... , 0)
-        # explicitly — this fn doesn't need to wrap.
+        # PatLit against a scalar/tag: scrut == lit.value.
+        # Cycle 14 C14-2 (conf 82): dup BOTH operands — pat.value is
+        # an AST node that would otherwise be shared if the same lit
+        # appears in multiple arms (e.g. two literal-equality tests of
+        # the same numeric constant).
         return A.Binary(span=span, op="==",
-                        left=_dup_expr(scrut_expr, span), right=pat.value)
+                        left=_dup_expr(scrut_expr),
+                        right=_dup_expr(pat.value))
     if isinstance(pat, A.PatRange):
+        # Cycle 14 C14-2: dup pat.lo and pat.hi as well as scrut_expr.
         op_hi = "<=" if pat.inclusive else "<"
         return A.Binary(
             span=span, op="&&",
             left=A.Binary(span=span, op=">=",
-                          left=_dup_expr(scrut_expr, span), right=pat.lo),
+                          left=_dup_expr(scrut_expr),
+                          right=_dup_expr(pat.lo)),
             right=A.Binary(span=span, op=op_hi,
-                           left=_dup_expr(scrut_expr, span), right=pat.hi),
+                           left=_dup_expr(scrut_expr),
+                           right=_dup_expr(pat.hi)),
         )
     if isinstance(pat, A.PatOr):
         tests = [_pattern_test_expr(a, scrut_expr, span) for a in pat.alts]
@@ -374,9 +395,13 @@ def _pattern_test_expr(pat: A.Pattern, scrut_expr: A.Expr,
     if isinstance(pat, A.PatVariant):
         # Variant: scrut[0] == path AND each sub-pattern test against
         # scrut[i+1] (sub_patterns indexed from 1; slot 0 is the tag).
+        # Cycle 14 C14-2 (audit-A) + C14-1 (audit-C, both conf 82+82):
+        # dup pat.path so two arms with identical PatVariant don't
+        # alias the same Path node into both arms' Binary subtrees.
         tag_load = _fresh_slot_load(scrut_expr, 0, span)
         tag_test = A.Binary(span=span, op="==",
-                            left=tag_load, right=pat.path)
+                            left=tag_load,
+                            right=_dup_expr(pat.path))
         sub_tests: list[A.Expr] = []
         for i, sub in enumerate(pat.sub_patterns):
             slot_load = _fresh_slot_load(scrut_expr, i + 1, span)
@@ -390,7 +415,16 @@ def _pattern_test_expr(pat: A.Pattern, scrut_expr: A.Expr,
         for t in sub_tests:
             full = A.Binary(span=span, op="&&", left=full, right=t)
         return full
-    return A.BoolLit(span=span, value=True)
+    # Cycle 14 C14-3 (conf 78): the prior `return A.BoolLit(True)`
+    # catchall silently accepted any future Pattern subclass — exactly
+    # the silent-accept anti-pattern the cycle-13 refactor was supposed
+    # to eliminate. Now raise loudly so a new Pattern type forces an
+    # explicit dispatch decision.
+    raise NotImplementedError(
+        f"_pattern_test_expr: unhandled Pattern subclass "
+        f"{type(pat).__name__}; add an explicit arm in match_lower.py "
+        f"to declare its match semantics."
+    )
 
 
 def _pattern_test(pat: A.Pattern, scrut: str, span: A.Span) -> A.Expr:
