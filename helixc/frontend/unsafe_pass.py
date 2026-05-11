@@ -62,14 +62,23 @@ def _walk(node, callback, context: Optional[dict] = None) -> None:
             _walk(node.final_expr, callback, context)
         return
 
+    # Audit 28.8: attr list aligned with panic_pass / deprecated_pass
+    # so the three walkers no longer drift. `then_branch`/`else_branch`
+    # are NOT AST attrs — they were a legacy mismatch (same family of
+    # bugs as panic_pass's pre-fix list). Removed. Added `iter_expr`,
+    # `obj`, `target`, `start`, `end`, `guard`, `inner`, `transformation`,
+    # `verifier` so Cast/For/Range/MatchArm.guard subexprs are visited.
     for attr in ("expr", "left", "right", "operand", "cond", "then",
                  "else_", "value", "scrutinee", "callee", "init",
-                 "rhs", "body", "then_branch", "else_branch"):
+                 "rhs", "body", "iter_expr", "obj", "target",
+                 "start", "end", "guard", "inner", "transformation",
+                 "verifier"):
         sub = getattr(node, attr, None)
         if sub is not None and hasattr(sub, "span"):
             _walk(sub, callback, context)
 
-    for attr in ("args", "stmts", "fields", "elems", "arms"):
+    # `indices` added so `arr[expr]` is visited.
+    for attr in ("args", "stmts", "fields", "elems", "arms", "indices"):
         seq = getattr(node, attr, None)
         if seq is None:
             continue
@@ -82,7 +91,9 @@ def _walk(node, callback, context: Optional[dict] = None) -> None:
                 elif hasattr(it, "span"):
                     _walk(it, callback, context)
         except TypeError:
-            pass
+            # Re-raise rather than swallow: silently skipping iteration
+            # errors masks AST-shape regressions in later stages.
+            raise
 
 
 def find_unsafe_blocks(prog: A.Program) -> list[A.UnsafeBlock]:
@@ -100,11 +111,20 @@ def find_unsafe_blocks(prog: A.Program) -> list[A.UnsafeBlock]:
 def _is_raw_ptr_op(node) -> bool:
     """A syntactic predicate for raw-ptr ops. Phase-0:
       * Unary('*', operand) — deref
+      * Cast with target_ty = TyPtr — raw-pointer cast (`x as *mut T`)
+        (Audit 28.8 B3: previously only Unary was matched, so casts
+        flowed past every unsafe gate; the typecheck-level gate now
+        emits trap 28603 directly, but we ALSO surface here so
+        existing pipelines that depend on check_unsafe_ops continue
+        to see ptr-casts as ops requiring `unsafe`.)
       * Binary on a TyPtr-typed operand — arithmetic (we don't have
         type info here; this would need integration with typecheck).
-    Phase-0 returns True only for syntactic `*ptr` (Unary deref).
+    Phase-0 returns True for syntactic `*ptr` (Unary deref) OR
+    `x as *T` (Cast with TyPtr target).
     """
     if isinstance(node, A.Unary) and node.op == "*":
+        return True
+    if isinstance(node, A.Cast) and isinstance(node.target_ty, A.TyPtr):
         return True
     return False
 

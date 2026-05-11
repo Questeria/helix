@@ -272,6 +272,11 @@ class TypeChecker:
         # here so re-running check() on the same instance doesn't carry
         # stale entries that would silence real new errors.
         self._seen_unbound: set[str] = set()
+        # Audit 28.8 B3: unsafe-context depth counter. Incremented when
+        # descending into an A.UnsafeBlock; consulted by the Cast
+        # handler so raw-pointer casts (TyPtr targets from non-TyPtr
+        # sources) outside any unsafe block emit trap 28603.
+        self._in_unsafe_depth: int = 0
 
     # ---- entry point ----
     def check(self) -> list[TypeError_]:
@@ -1238,9 +1243,56 @@ class TypeChecker:
             return TyStruct(name=expr.name)
         if isinstance(expr, (A.Break, A.Continue, A.Return)):
             return TyUnit()
+        if isinstance(expr, A.UnsafeBlock):
+            # Audit 28.8 B3: track unsafe-context depth so Cast checks
+            # below know whether they're inside an unsafe region.
+            # Stage 28.6's outer pass (unsafe_pass.check_unsafe_ops)
+            # handles `*ptr` deref outside unsafe; the type-level
+            # gate (Cast int→ptr) lives here so the checks compose.
+            self._in_unsafe_depth += 1
+            try:
+                body_ty = self._check_block(expr.body, scope) \
+                    if isinstance(expr.body, A.Block) \
+                    else self._check_expr(expr.body, scope)
+            finally:
+                self._in_unsafe_depth -= 1
+            return body_ty
         if isinstance(expr, A.Cast):
-            self._check_expr(expr.value, scope)
-            return self._resolve_type(expr.target_ty, scope)
+            src_ty = self._check_expr(expr.value, scope)
+            tgt_ty = self._resolve_type(expr.target_ty, scope)
+            # Audit 28.8 B3 (trap 28603): raw-pointer casts must be in
+            # an unsafe block. `int as *mut T` outside unsafe is a
+            # forged pointer; `float as *T` is dubious even inside
+            # unsafe (no defined coercion). The pre-fix Cast handler
+            # accepted both silently and the unsafe-pass walker only
+            # matched syntactic Unary deref — so a cast-formed pointer
+            # could escape every gate.
+            if isinstance(tgt_ty, TyPtr):
+                src_is_ptr_like = isinstance(src_ty, (TyPtr, TyRef))
+                src_is_float = (isinstance(src_ty, TyPrim)
+                                and src_ty.name in ("bf16", "f16", "f32",
+                                                    "f64", "fp8"))
+                if src_is_float:
+                    # Float→ptr blocked even inside unsafe.
+                    self.errors.append(TypeError_(
+                        f"cast from {self._fmt(src_ty)} to "
+                        f"{self._fmt(tgt_ty)}: float→pointer is not a "
+                        f"valid coercion (trap 28603)",
+                        expr.span,
+                        hint="use a bitcast through a u64 intermediate "
+                             "if you really mean to read the bit pattern",
+                    ))
+                elif (not src_is_ptr_like
+                      and self._in_unsafe_depth == 0):
+                    self.errors.append(TypeError_(
+                        f"raw-pointer cast from {self._fmt(src_ty)} to "
+                        f"{self._fmt(tgt_ty)} outside unsafe block "
+                        f"(trap 28603)",
+                        expr.span,
+                        hint="wrap this cast in `unsafe { ... }` to "
+                             "acknowledge the capability requirement",
+                    ))
+            return tgt_ty
         return TyUnknown(hint=f"unhandled {type(expr).__name__}")
 
     # ---- bounds checking ----

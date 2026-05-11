@@ -58,11 +58,17 @@ def test_unsafe_keyword_recognized():
 
 
 def test_raw_ptr_op_inside_unsafe_ok():
-    """`*p` inside unsafe should NOT trigger 28601."""
+    """`*p` inside unsafe should NOT trigger 28601.
+
+    Audit 28.8 B3: the setup `let p: *const i32 = 0 as *const i32;`
+    is itself a raw-pointer cast now, so the let-binding is wrapped
+    in an unsafe block to keep the test focused on the deref check."""
     src = """
 fn main() -> i32 {
-    let p: *const i32 = 0 as *const i32;
-    unsafe { *p }
+    unsafe {
+        let p: *const i32 = 0 as *const i32;
+        *p
+    }
 }
 """
     prog = parse(src)
@@ -71,7 +77,12 @@ fn main() -> i32 {
 
 
 def test_raw_ptr_op_outside_unsafe_diag():
-    """`*p` outside any unsafe block should trigger 28601 diag."""
+    """`*p` outside any unsafe block should trigger 28601 diag.
+
+    Audit 28.8 B3: the cast is also now a raw-pointer op, but
+    check_unsafe_ops returns 28601 for ALL ops outside unsafe — the
+    cast contributes its own diagnostic now too. We just assert that
+    at least one 28601 fires (the deref or the cast)."""
     src = """
 fn main() -> i32 {
     let p: *const i32 = 0 as *const i32;
@@ -81,7 +92,7 @@ fn main() -> i32 {
     prog = parse(src)
     diags = check_unsafe_ops(prog)
     assert diags
-    assert "28601" in diags[0]
+    assert any("28601" in d for d in diags)
 
 
 def test_multiple_unsafe_blocks():
@@ -98,6 +109,10 @@ fn main() -> i32 {
 
 
 def test_find_raw_ptr_ops_records_context():
+    """Audit 28.8 B3: Cast targeting *T counts as a raw-pointer op
+    too, so we now also see the cast in the ops list. The original
+    intent — "context tracking works: inside-unsafe vs outside" — is
+    preserved; we just have one extra op in the count."""
     src = """
 fn main() -> i32 {
     let p: *const i32 = 0 as *const i32;
@@ -108,8 +123,8 @@ fn main() -> i32 {
 """
     prog = parse(src)
     ops = find_raw_ptr_ops(prog)
-    assert len(ops) == 2
-    # First should be inside unsafe, second not.
+    # 3 raw-ptr ops total: 1 cast outside + 1 deref inside + 1 deref outside.
+    assert len(ops) == 3
     contexts = sorted({c for (_, _, c) in ops})
     assert contexts == [False, True]
 
@@ -173,15 +188,18 @@ fn main() -> i32 {
 
 
 def test_cli_check_unsafe_ops_wired(capsys, tmp_path):
-    """A2: helixc/check.py invokes check_unsafe_ops directly (we drive
-    the pass via the same import wiring the CLI uses, since a full
-    --check-only run may surface typecheck errors first for the same
-    program shape)."""
+    """A2: helixc/check.py invokes check_unsafe_ops directly.
+
+    Audit 28.8 B3: the typecheck now also blocks `0 as *const i32`
+    outside unsafe with trap 28603 — so we wrap the cast in an
+    unsafe block to keep this test focused on the unsafe_pass wiring
+    (28601 on raw deref outside unsafe)."""
     from helixc.check import main
-    # Use `;` to discard the *p value so typecheck is happy.
+    # Wrap the cast in unsafe so typecheck passes; the bare `*p;` is
+    # what we want check_unsafe_ops to flag with 28601.
     src = """
 fn helper() -> i32 {
-    let p: *const i32 = 0 as *const i32;
+    let p: *const i32 = unsafe { 0 as *const i32 };
     *p;
     0
 }
@@ -198,11 +216,13 @@ fn main() -> i32 { helper() }
 
 
 def test_cli_unsafe_block_passes(capsys, tmp_path):
-    """A2: `unsafe { *p; 0 }` (inside unsafe) passes check-only cleanly."""
+    """A2: `unsafe { *p; 0 }` (inside unsafe) passes check-only cleanly.
+
+    Audit 28.8 B3: also wrap the cast so typecheck doesn't fire 28603."""
     from helixc.check import main
     src = """
 fn helper() -> i32 {
-    let p: *const i32 = 0 as *const i32;
+    let p: *const i32 = unsafe { 0 as *const i32 };
     unsafe { *p; 0 }
 }
 fn main() -> i32 { helper() }
@@ -214,6 +234,95 @@ fn main() -> i32 { helper() }
     out = capsys.readouterr().out
     assert rc == 0, f"expected clean exit; rc={rc}; out={out!r}"
     assert "unsafe:" not in out
+
+
+# ----------------------------------------------------------------------
+# Audit 28.8 B3 — Cast (int as *T / float as *T) gate
+# ----------------------------------------------------------------------
+def test_b3_cast_int_to_ptr_outside_unsafe_blocks():
+    """Audit 28.8 B3: `x as *mut T` outside `unsafe { ... }` is a
+    forged pointer; typecheck must emit trap 28603."""
+    from helixc.frontend.typecheck import typecheck
+    src = """
+fn main() -> i32 {
+    let p: *mut i32 = 0 as *mut i32;
+    0
+}
+"""
+    prog = parse(src)
+    errs = typecheck(prog)
+    assert any("28603" in str(e) for e in errs), \
+        f"expected trap 28603 for int→ptr cast outside unsafe, " \
+        f"got: {[str(e) for e in errs]}"
+
+
+def test_b3_cast_int_to_ptr_inside_unsafe_ok():
+    """Audit 28.8 B3: same cast wrapped in unsafe is accepted."""
+    from helixc.frontend.typecheck import typecheck
+    src = """
+fn main() -> i32 {
+    let p: *mut i32 = unsafe { 0 as *mut i32 };
+    0
+}
+"""
+    prog = parse(src)
+    errs = typecheck(prog)
+    assert not any("28603" in str(e) for e in errs), \
+        f"unexpected 28603 inside unsafe: {[str(e) for e in errs]}"
+
+
+def test_b3_cast_float_to_ptr_blocked_even_in_unsafe():
+    """Audit 28.8 B3: float→ptr is rejected unconditionally — there's
+    no well-defined coercion. Even inside unsafe."""
+    from helixc.frontend.typecheck import typecheck
+    src = """
+fn main() -> i32 {
+    let pi: f64 = 3.14_f64;
+    let p: *mut i32 = unsafe { pi as *mut i32 };
+    0
+}
+"""
+    prog = parse(src)
+    errs = typecheck(prog)
+    assert any("28603" in str(e) for e in errs), \
+        f"expected 28603 for float→ptr even inside unsafe, " \
+        f"got: {[str(e) for e in errs]}"
+
+
+def test_b3_ptr_to_ptr_cast_ok_outside_unsafe():
+    """Audit 28.8 B3: pointer-to-pointer cast (`*const T` → `*mut U`)
+    is NOT a forged-pointer scenario — source already has pointer
+    semantics. Accepted outside unsafe."""
+    from helixc.frontend.typecheck import typecheck
+    src = """
+fn main() -> i32 {
+    let p: *const i32 = unsafe { 0 as *const i32 };
+    let q: *mut i32 = p as *mut i32;
+    0
+}
+"""
+    prog = parse(src)
+    errs = typecheck(prog)
+    assert not any("28603" in str(e) for e in errs), \
+        f"unexpected 28603 for ptr→ptr cast: {[str(e) for e in errs]}"
+
+
+def test_b3_unsafe_pass_walker_sees_cast():
+    """Audit 28.8 B3: unsafe_pass._is_raw_ptr_op now also matches Cast
+    nodes targeting TyPtr — previously only Unary deref was matched,
+    so out-of-unsafe ptr-casts escaped check_unsafe_ops entirely."""
+    from helixc.frontend.unsafe_pass import find_raw_ptr_ops
+    src = """
+fn main() -> i32 {
+    let p: *const i32 = 0 as *const i32;
+    0
+}
+"""
+    prog = parse(src)
+    ops = find_raw_ptr_ops(prog)
+    # The Cast is the only raw-ptr op in this program (no deref).
+    assert any(span.line == 3 for (_, span, _) in ops), \
+        f"expected Cast to register as raw-ptr op, got: {ops}"
 
 
 if __name__ == "__main__":
