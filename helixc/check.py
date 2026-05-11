@@ -28,8 +28,9 @@ Flags:
   --emit-ptx            Print PTX kernels and exit
   --doc                 Extract /// doc comments to markdown and exit
   -O0 / -O1 / -O2 / -O3
-                        Optimization level (0=none, 1=fold, 2=+cse+dce,
-                        3=+aggressive). Default -O1.
+                        Optimization level (0=none, 1=fdce+fold,
+                        2=+cse+dce, 3=alias of -O2 until an aggressive
+                        layer lands). Default -O1.
   -o <path>             Write ELF output to <path> instead of default
   -l <libname>          Mark <libname> as external (FFI prerequisite)
   -W<flag>              Warning policy (e.g. -Wdeprecated, -Wdeprecated=error)
@@ -386,6 +387,9 @@ def main(argv: list[str] | None = None) -> int:
             or a.output is not None:
         from .ir.lower_ast import lower
         from .ir.passes.fdce import fdce_module
+        from .ir.passes.const_fold import fold_module
+        from .ir.passes.cse import cse_module
+        from .ir.passes.dce import dce_module
         # Audit 28.8 B5: invoke grad_pass before lowering so any
         # `grad(loss)` calls are rewritten to symbolic gradients (and
         # the AD passes' diagnostics accumulate in _DIFF_WARNINGS).
@@ -394,16 +398,29 @@ def main(argv: list[str] | None = None) -> int:
         from .frontend.grad_pass import grad_pass
         grad_pass(prog)
         mod = lower(prog)
+        # Optimization pipeline (Audit 28.8 A10):
+        #   -O0          — no opts
+        #   -O1 (default)— fdce + const_fold
+        #   -O2          — -O1 + cse + dce
+        #   -O3          — -O2 (no aggressive layer yet; surface here so
+        #                  future passes have a hook). Documented identical
+        #                  to -O2 until a Phase-0+ aggressive layer exists.
+        #
+        # The pre-fix code ran ONLY fdce at -O1+ and stubbed -O2 with an
+        # empty try/import-pass placeholder — so users invoking `-O2`
+        # got the SAME IR as `-O1`, despite the help text promising
+        # +cse+dce. The fix wires the real passes; the placeholder is
+        # removed.
         if a.opt_level >= 1:
             fdce_module(mod)
-        # Stage 23: opt levels 2-3 would add CSE/DCE; gated behind a
-        # check for the passes' presence (some are bootstrap-side).
+            fold_module(mod)
         if a.opt_level >= 2:
-            try:
-                from .ir.passes import dce as _dce_mod  # noqa: F401
-                # Pass is invoked elsewhere; placeholder here for shape.
-            except ImportError:
-                pass
+            cse_module(mod)
+            dce_module(mod)
+        if a.opt_level >= 3:
+            # No aggressive layer yet — kept distinct from -O2 so a
+            # future pass can wire in without re-shaping the dispatch.
+            pass
 
         # Audit 28.8 B5: drain accumulated AD warnings — set by
         # autodiff/_diff and autodiff_reverse/_propagate whenever an

@@ -312,6 +312,130 @@ def test_main_o_handles_oserror_on_write(monkeypatch, capsys, tmp_path):
     assert "synthetic permission denied" in cap.err
 
 
+def _count_op_kinds(mod):
+    """Helper: total number of ops per kind across all functions."""
+    from collections import Counter
+    c = Counter()
+    for fn in mod.functions.values():
+        for blk in fn.blocks:
+            for op in blk.ops:
+                c[op.kind.name] += 1
+    return c
+
+
+def test_o1_invokes_fold_module(monkeypatch, capsys, tmp_path):
+    """Audit 28.8 A10: -O1 must invoke fold_module (constant folding) in
+    addition to fdce_module. Pre-fix, only fdce ran. We monkeypatch
+    fold_module to count invocations from check.py.main()."""
+    from helixc.ir.passes import const_fold
+    call_count = [0]
+    real_fold = const_fold.fold_module
+
+    def counted(mod):
+        call_count[0] += 1
+        return real_fold(mod)
+
+    monkeypatch.setattr(const_fold, "fold_module", counted)
+    # check.py imports fold_module by attribute access at call site, but
+    # since we monkey at module-level we need to patch the binding the
+    # check module uses too — the import happens at runtime inside main().
+    src_path = str(tmp_path / "fold.hx")
+    with open(src_path, "w") as f:
+        f.write("fn main() -> i32 { 1 + 2 }\n")
+    rc = main([src_path, "--emit-ir", "-O1"])
+    assert rc == 0, "compile must succeed"
+    assert call_count[0] == 1, "fold_module must be invoked at -O1"
+
+
+def test_o0_skips_optimization(monkeypatch, capsys, tmp_path):
+    """Audit 28.8 A10: -O0 disables all opt passes (fdce, fold, cse,
+    dce). Pre-fix would still skip them; verify the discipline holds."""
+    from helixc.ir.passes import const_fold, cse, dce, fdce
+    fdce_called = [0]
+    fold_called = [0]
+    cse_called = [0]
+    dce_called = [0]
+
+    monkeypatch.setattr(
+        fdce, "fdce_module",
+        lambda m, **kw: fdce_called.__setitem__(0, fdce_called[0] + 1) or 0
+    )
+    monkeypatch.setattr(
+        const_fold, "fold_module",
+        lambda m: fold_called.__setitem__(0, fold_called[0] + 1) or 0
+    )
+    monkeypatch.setattr(
+        cse, "cse_module",
+        lambda m: cse_called.__setitem__(0, cse_called[0] + 1) or 0
+    )
+    monkeypatch.setattr(
+        dce, "dce_module",
+        lambda m: dce_called.__setitem__(0, dce_called[0] + 1) or 0
+    )
+    src_path = str(tmp_path / "noopt.hx")
+    with open(src_path, "w") as f:
+        f.write("fn main() -> i32 { 0 }\n")
+    rc = main([src_path, "--emit-ir", "-O0"])
+    assert rc == 0
+    assert fdce_called[0] == 0, "fdce must NOT run at -O0"
+    assert fold_called[0] == 0, "fold must NOT run at -O0"
+    assert cse_called[0] == 0, "cse must NOT run at -O0"
+    assert dce_called[0] == 0, "dce must NOT run at -O0"
+
+
+def test_o2_invokes_cse_and_dce(monkeypatch, capsys, tmp_path):
+    """Audit 28.8 A10: -O2 must invoke cse_module + dce_module (on top
+    of -O1's fdce + fold). Pre-fix had a no-op try/import-pass
+    placeholder; this guards the regression."""
+    from helixc.ir.passes import cse, dce
+    cse_calls = [0]
+    dce_calls = [0]
+    real_cse = cse.cse_module
+    real_dce = dce.dce_module
+
+    def cse_counted(mod):
+        cse_calls[0] += 1
+        return real_cse(mod)
+
+    def dce_counted(mod):
+        dce_calls[0] += 1
+        return real_dce(mod)
+
+    monkeypatch.setattr(cse, "cse_module", cse_counted)
+    monkeypatch.setattr(dce, "dce_module", dce_counted)
+    src_path = str(tmp_path / "o2.hx")
+    with open(src_path, "w") as f:
+        f.write("fn main() -> i32 { 1 + 2 + 3 }\n")
+    rc = main([src_path, "--emit-ir", "-O2"])
+    assert rc == 0
+    assert cse_calls[0] == 1, "cse must run at -O2"
+    assert dce_calls[0] == 1, "dce must run at -O2"
+
+
+def test_o3_runs_at_least_o2_passes(monkeypatch, capsys, tmp_path):
+    """Audit 28.8 A10: -O3 is currently alias-of-O2 (no aggressive
+    layer yet). Verify cse + dce still run."""
+    from helixc.ir.passes import cse, dce
+    cse_calls = [0]
+    dce_calls = [0]
+    real_cse = cse.cse_module
+    real_dce = dce.dce_module
+
+    monkeypatch.setattr(cse, "cse_module",
+                        lambda m: (cse_calls.__setitem__(0, cse_calls[0] + 1)
+                                   or real_cse(m)))
+    monkeypatch.setattr(dce, "dce_module",
+                        lambda m: (dce_calls.__setitem__(0, dce_calls[0] + 1)
+                                   or real_dce(m)))
+    src_path = str(tmp_path / "o3.hx")
+    with open(src_path, "w") as f:
+        f.write("fn main() -> i32 { 1 }\n")
+    rc = main([src_path, "--emit-ir", "-O3"])
+    assert rc == 0
+    assert cse_calls[0] == 1
+    assert dce_calls[0] == 1
+
+
 if __name__ == "__main__":
     import pytest
     raise SystemExit(pytest.main([__file__, "-v"]))
