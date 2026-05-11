@@ -542,6 +542,13 @@ class TypeChecker:
                             f"{pty.name}, got {aty.name}",
                             call.span,
                         ))
+            # Audit 28.8 B2: provenance boundary check (trap 24100).
+            # If the parameter is Logic-typed and the actual is NOT,
+            # the provenance wrapper is being silently injected (or
+            # vice-versa stripped). Emit a diagnostic so the
+            # Tier-3 boundary is observable.
+            self._check_logic_provenance_boundary(sig.name, pname, pty, aty,
+                                                  call.span)
 
     # ------------------------------------------------------------------
     # Compile-time shape checking for function calls
@@ -615,6 +622,56 @@ class TypeChecker:
             self.errors.append(TypeError_(
                 f"call to {sig.name!r}: shape constraint violated — {details}",
                 call.span,
+            ))
+
+    def _check_logic_provenance_boundary(self, fn_name: str, param_name: str,
+                                          param_ty: Type, actual_ty: Type,
+                                          span: A.Span) -> None:
+        """Audit 28.8 B2 (trap 24100): the provenance / Logic-wrapper
+        type must agree at function-call boundaries.
+
+        Phase-0 rules:
+          * If the formal param is `Logic<T>` (possibly under TyDiff),
+            and the actual is NOT Logic-wrapped, emit a diagnostic.
+            Coercion is NOT silent — users must explicitly call a
+            constructor (e.g., `logic_atom(x)`) to wrap a plain value
+            into a Logic atom.
+          * If the formal is plain T but actual is `Logic<T>`, also
+            emit — passing a logic atom where a raw value is expected
+            silently strips provenance.
+
+        The check skips when either side is TyUnknown (inference still
+        in progress) so it doesn't cascade off unrelated errors.
+        """
+        if isinstance(param_ty, TyUnknown) or isinstance(actual_ty, TyUnknown):
+            return
+
+        def _is_logic(t: Type) -> bool:
+            if isinstance(t, TyLogic):
+                return True
+            if isinstance(t, TyDiff) and isinstance(t.inner, TyLogic):
+                return True
+            return False
+
+        p_logic = _is_logic(param_ty)
+        a_logic = _is_logic(actual_ty)
+        if p_logic and not a_logic:
+            self.errors.append(TypeError_(
+                f"call to {fn_name!r}: arg {param_name!r} expects "
+                f"Logic-wrapped value (provenance-typed); got "
+                f"{self._fmt(actual_ty)} (trap 24100)",
+                span,
+                hint="wrap the value via a logic constructor to "
+                     "preserve provenance",
+            ))
+        elif a_logic and not p_logic:
+            self.errors.append(TypeError_(
+                f"call to {fn_name!r}: arg {param_name!r} expects "
+                f"{self._fmt(param_ty)}; got Logic-wrapped value — "
+                f"would silently strip provenance (trap 24100)",
+                span,
+                hint="detach the Logic wrapper explicitly if you "
+                     "really want a raw value",
             ))
 
     def _check_call_effects(self, call: A.Call, sig: FunctionSig) -> None:
@@ -888,14 +945,52 @@ class TypeChecker:
             r = self._check_expr(expr.right, scope)
             if expr.op in ("==", "!=", "<", "<=", ">", ">=", "&&", "||"):
                 return TyPrim("bool")
-            # Differentiability propagation: if either operand is D<T>,
-            # the result is D<T>. Mixing D<T1> with D<T2>: result is D<T1>
-            # (simplified; real compiler would unify innerness).
+            # Differentiability + Logic provenance propagation.
+            #
+            # Audit 28.8 B2: the binop handler previously had an arm for
+            # TyDiff but NOT for TyLogic — so `Logic<T> + T`, `T + Logic<T>`,
+            # and `D<Logic<T>> + Logic<T>` silently stripped the Logic
+            # wrapper. The docstring at line 132-148 documents
+            # `D<Logic<T>>` as a *differentiable relational value* — the
+            # Tier-3 moat for neuro-symbolic AGI — but without
+            # propagation through arithmetic, every Logic value lost
+            # its wrapper at first arithmetic touch.
+            #
+            # Compositional rule: D wraps Logic (per TyLogic docstring).
+            # So if either operand is TyLogic AND the operand pair is
+            # also TyDiff-bearing, the result is TyDiff(TyLogic(inner)).
+            # If only one side is Logic-wrapped, propagate Logic.
             l_is_diff = isinstance(l, TyDiff)
             r_is_diff = isinstance(r, TyDiff)
-            if l_is_diff or r_is_diff:
-                inner = l.inner if l_is_diff else r.inner if r_is_diff else l
-                return TyDiff(inner=inner)
+
+            # Extract the innermost type beneath any TyDiff/TyLogic
+            # wrappers, treating TyDiff(TyLogic(T)) and TyLogic(T) and
+            # T uniformly.
+            def _unwrap(t: Type) -> Type:
+                if isinstance(t, TyDiff):
+                    return _unwrap(t.inner)
+                if isinstance(t, TyLogic):
+                    return _unwrap(t.inner)
+                return t
+
+            l_is_logic = isinstance(l, TyLogic) or (
+                isinstance(l, TyDiff) and isinstance(l.inner, TyLogic)
+            )
+            r_is_logic = isinstance(r, TyLogic) or (
+                isinstance(r, TyDiff) and isinstance(r.inner, TyLogic)
+            )
+
+            if l_is_logic or r_is_logic or l_is_diff or r_is_diff:
+                inner = _unwrap(l) if not isinstance(_unwrap(l), TyUnknown) \
+                    else _unwrap(r)
+                # Build the wrapping: Logic first (if any side carries
+                # Logic), then D on the outside (if any side carries D).
+                wrapped: Type = inner
+                if l_is_logic or r_is_logic:
+                    wrapped = TyLogic(inner=wrapped)
+                if l_is_diff or r_is_diff:
+                    wrapped = TyDiff(inner=wrapped)
+                return wrapped
             # Arithmetic: take the left type (simplified)
             return l
         if isinstance(expr, A.Call):
