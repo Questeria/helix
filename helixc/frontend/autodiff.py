@@ -526,6 +526,11 @@ def _inline_lets(expr: A.Expr | None, env: dict[str, A.Expr]) -> A.Expr | None:
         # Inline both branches and re-wrap in an If — the inliner only flattens
         # let-bindings, branch selection stays a runtime decision. Differentiate
         # both branches; the derivative is then the same conditional.
+        # Audit 28.8 cycle 4 C4-3: also inline `expr.cond`. Pre-fix the
+        # cond was passed through unmodified, so `let g = grad(loss);
+        # if g(x) > 0.0 { ... }` left `g` unsubstituted in the cond.
+        # Symmetric with While/For/Match coverage in cycle 3.
+        new_cond = _inline_lets(expr.cond, env)
         new_then = _inline_lets(expr.then, env) if isinstance(expr.then, A.Block) else expr.then
         new_else = None
         if expr.else_ is not None:
@@ -543,7 +548,7 @@ def _inline_lets(expr: A.Expr | None, env: dict[str, A.Expr]) -> A.Expr | None:
             return A.Block(span=e.span, stmts=[], final_expr=e)
         wrapped_then = _wrap(new_then)
         wrapped_else = _wrap(new_else)
-        return A.If(span=expr.span, cond=expr.cond,
+        return A.If(span=expr.span, cond=new_cond,
                     then=wrapped_then, else_=wrapped_else)
     # Audit 28.8 cycle 3 C3-5: extend _inline_lets to recurse through every
     # Expr subtype that can contain Name leaves. Pre-fix the function fell
@@ -691,13 +696,31 @@ def _inline_lets(expr: A.Expr | None, env: dict[str, A.Expr]) -> A.Expr | None:
             transformation=_inline_lets(expr.transformation, env),
             verifier=_inline_lets(expr.verifier, env),
         )
+    # Audit 28.8 cycle 4 C4-1: leaf-like exprs that hold no let-bindable
+    # children — Path (qualified name like `Maybe::None`), Continue
+    # (statement-expr with no children), TileLit (compile-time shape +
+    # init marker). Pre-fix the catch-all fired spurious 85001 warnings
+    # for any enum-variant reference in a differentiated fn body —
+    # `-Wad=error` then failed to compile legitimate AD code.
+    if isinstance(expr, A.Path):
+        return expr
+    if isinstance(expr, A.Continue):
+        return expr
+    if isinstance(expr, A.TileLit):
+        return expr
     # Catch-all fallthrough: warn loud so future AST extensions surface
-    # immediately rather than silently dropping let-bindings.
+    # immediately rather than silently dropping let-bindings. Only fires
+    # when an Expr subtype is genuinely unhandled (not just a no-op
+    # leaf — those are explicit arms above).
+    #
+    # Cycle 4 C4-3: do NOT pre-embed the trap id in the reason — _ad_warn
+    # appends `(trap {TRAP_AD_ASSUMED_ZERO})` to every message. Pre-fix,
+    # the rendered warning contained `(trap 85001)` twice.
     _ad_warn(
         expr,
         f"_inline_lets fell through on Expr subtype "
-        f"'{type(expr).__name__}' — let-bindings beyond this point "
-        f"may not be substituted (trap 85001)",
+        f"'{type(expr).__name__}' — let-bindings beyond this point may "
+        f"not be substituted",
     )
     return expr
 

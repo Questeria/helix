@@ -2979,7 +2979,7 @@ if __name__ == "__main__":
     from ..frontend.parser import parse
     from ..frontend.typecheck import typecheck
     from ..frontend.grad_pass import grad_pass
-    from ..frontend.monomorphize import monomorphize
+    from ..frontend.monomorphize import monomorphize_safe
     from ..frontend.struct_mono import monomorphize_structs
     from ..frontend.flatten_modules import flatten_modules
     from ..frontend.flatten_impls import flatten_impls
@@ -3018,7 +3018,13 @@ if __name__ == "__main__":
     if sm_diags:
         for d in sm_diags:
             print(f"warning: struct-mono: {d}", file=sys.stderr)
-    mono_count = monomorphize(prog)
+    # Audit 28.8 cycle 4 C4-5 / E3: catch ShapeFoldError from fn-mono
+    # so the trap-28801 diagnostic comes through cleanly instead of
+    # being mislabeled as a compiler-internal-error by the outer
+    # check.py wrapper.
+    mono_count, mono_diags = monomorphize_safe(prog)
+    for d in mono_diags:
+        print(f"warning: fn-mono: {d}", file=sys.stderr)
     if mono_count > 0:
         print(f"mono: {mono_count} generic instantiation(s)", file=sys.stderr)
     grad_count = grad_pass(prog)

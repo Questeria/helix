@@ -2195,9 +2195,13 @@ class TypeChecker:
         if isinstance(a, TyTuple) or isinstance(b, TyTuple):
             return False
         if isinstance(a, TyArray) and isinstance(b, TyArray):
-            # Sizes are TyPrim('size_N'); compare nominally.
+            # Audit 28.8 cycle 4 E1: size compare uses `_compatible` so
+            # TyUnknown/TySize sizes (e.g. generic-array call boundary
+            # `fn f[N](a:[i32;N])` called from `fn g[M](a:[i32;M])`)
+            # don't false-positive on raw `==`.
             return (self._compatible(a.elem, b.elem)
-                    and a.size == b.size)
+                    and (a.size == b.size
+                         or self._compatible(a.size, b.size)))
         if isinstance(a, TyArray) or isinstance(b, TyArray):
             return False
         if isinstance(a, TyRef) and isinstance(b, TyRef):
@@ -2217,6 +2221,30 @@ class TypeChecker:
                         for x, y in zip(a.params, b.params))
                     and self._compatible(a.ret, b.ret))
         if isinstance(a, TyFn) or isinstance(b, TyFn):
+            return False
+        # Audit 28.8 cycle 4 C4-4: TyTile/TyTensor arms. D1's commit
+        # message named these as silent-acceptance holes to close but
+        # the patch omitted them. Tensor/tile pairs are equal iff dtype
+        # and shape (positionally) agree; device/layout/memspace are
+        # markers compared nominally.
+        if isinstance(a, TyTensor) and isinstance(b, TyTensor):
+            if len(a.shape) != len(b.shape):
+                return False
+            return (self._compatible(a.dtype, b.dtype)
+                    and all(self._compatible(x, y)
+                            for x, y in zip(a.shape, b.shape))
+                    and a.device == b.device
+                    and a.layout == b.layout)
+        if isinstance(a, TyTensor) or isinstance(b, TyTensor):
+            return False
+        if isinstance(a, TyTile) and isinstance(b, TyTile):
+            if len(a.shape) != len(b.shape):
+                return False
+            return (self._compatible(a.dtype, b.dtype)
+                    and all(self._compatible(x, y)
+                            for x, y in zip(a.shape, b.shape))
+                    and a.memspace == b.memspace)
+        if isinstance(a, TyTile) or isinstance(b, TyTile):
             return False
         return a == b
 

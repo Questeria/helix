@@ -60,11 +60,20 @@ def _mangle_ty(t: A.TyNode) -> str:
     return "X"
 
 
+# Audit 28.8 cycle 4 C4-1: trap-id constant promoted from a literal
+# embedded in the diagnostic message to a module-level identifier so
+# the registry in docs/lang/trap-ids.md cross-references a real symbol.
+TRAP_SHAPE_FOLD_ZERO_DIV = 28801
+
+
 class ShapeFoldError(ValueError):
     """Audit 28.8 cycle 3 C3-6: raised when shape-time constant fold
-    hits a hard error (currently division/modulo by zero). Trap 28801.
+    hits a hard error (currently division/modulo by zero). Trap 28801
+    (= TRAP_SHAPE_FOLD_ZERO_DIV).
     Caught by the typechecker / driver and surfaced as a user-facing
     diagnostic — silent-fallthrough → length 0 is no longer allowed."""
+
+    trap_id: int = TRAP_SHAPE_FOLD_ZERO_DIV
 
     def __init__(self, msg: str, span: A.Span):
         super().__init__(msg)
@@ -677,3 +686,21 @@ class Monomorphizer:
 def monomorphize(prog: A.Program) -> int:
     """Run monomorphization on a program. Returns count of fns added."""
     return Monomorphizer(prog).run()
+
+
+def monomorphize_safe(prog: A.Program) -> tuple[int, list[str]]:
+    """Audit 28.8 cycle 4 C4-5 / E3: ShapeFoldError-safe entry point
+    around `monomorphize`. Pre-fix the fn-mono path's uncaught raise
+    was misattributed by the C3-3 outer wrapper as `internal error /
+    compiler bug` — the user-facing diagnostic lost the trap-28801
+    structured form that `monomorphize_structs` already produces.
+
+    Returns (count, diags). On a clean run, diags is empty. On a
+    ShapeFoldError, the caller should treat the diag as a typecheck
+    error and abort the pipeline (callers that don't care can ignore
+    diags; the count is 0 in that case).
+    """
+    try:
+        return monomorphize(prog), []
+    except ShapeFoldError as e:
+        return 0, [str(e)]
