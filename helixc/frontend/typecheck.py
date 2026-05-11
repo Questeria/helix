@@ -208,6 +208,22 @@ class TyQuote(Type):
 # operand is the "wider" type for the operation). This means
 # `u32 + i32` widens to u32 with a warning, and `i32 + u32` ALSO
 # widens to u32 with a warning — symmetric.
+# Audit 28.8 cycle 3 C3-2: pointer-width aliases on 64-bit targets.
+# `isize` and `i64` (likewise `usize` and `u64`) sit at the same rank
+# because they ARE the same machine width — there's no signedness or
+# precision domain to drop when widening one to the other. The widen
+# helper canonicalizes these before deciding whether a tie callback
+# should fire, so `D<i64> + D<isize>` is silent.
+_WIDEN_NAME_ALIASES: dict[str, str] = {
+    "isize": "i64",
+    "usize": "u64",
+}
+
+
+def _widen_canon_name(name: str) -> str:
+    return _WIDEN_NAME_ALIASES.get(name, name)
+
+
 _WIDEN_RANK: dict[str, int] = {
     "bool": 1,
     "char": 5,
@@ -259,7 +275,11 @@ def _widen_diff_inner(a: "Type", b: "Type",
         # Same-rank-and-different-name tie (B:C4): callback if the
         # caller passed one. With the asymmetric ranks (B:C1+B:C4)
         # this should be rare in practice but the safety net stays.
-        if ra == rb and a.name != b.name and _warn_cb is not None:
+        # Cycle 3 C3-2: pointer-width aliases (isize/i64, usize/u64)
+        # canonicalize to the same name, so they're NOT a tie.
+        ca = _widen_canon_name(a.name)
+        cb = _widen_canon_name(b.name)
+        if ra == rb and ca != cb and _warn_cb is not None:
             _warn_cb(a, b, _span)
         return a if ra >= rb else b
     if isinstance(a, TyUnknown):
@@ -544,9 +564,48 @@ class TypeChecker:
     def _resolve_size_expr(self, expr: A.Expr, scope: Scope) -> Type:
         """A size-expression is either a literal int, a name (size param), or
         an arithmetic expression. v0.1 represents complex exprs as TyUnknown
-        with the source preserved by reference (not copied here)."""
+        with the source preserved by reference (not copied here).
+
+        Audit 28.8 cycle 3 D3: literal size of 0 or negative now emits
+        a typecheck error (trap 28802). Pre-fix `[T; -6]` or `[T; 0]`
+        from a Binary fold flowed through as `TyPrim('size_-6')` /
+        `TyPrim('size_0')`, and lower-ast.py silently used 0 as the
+        length — a confusing zero-byte buffer.
+
+        Audit 28.8 cycle 3 D5: `Unary(-, IntLit)` resolved as a single
+        signed size literal so the validation above catches it. Plus a
+        catch for source-level `[T; -5]` (parser may accept it).
+        """
         if isinstance(expr, A.IntLit):
+            if expr.value < 0:
+                self.errors.append(TypeError_(
+                    f"array size must be >= 0, got {expr.value} "
+                    f"(trap 28802)",
+                    expr.span,
+                ))
+            elif expr.value == 0:
+                self.errors.append(TypeError_(
+                    f"array size must be > 0 in Phase-0, got 0 "
+                    f"(trap 28802)",
+                    expr.span,
+                ))
             return TyPrim(f"size_{expr.value}")
+        if isinstance(expr, A.Unary) and expr.op == "-" \
+                and isinstance(expr.operand, A.IntLit):
+            # Source-level `[T; -N]` parses as Unary(-, IntLit(N)).
+            v = -expr.operand.value
+            if v < 0:
+                self.errors.append(TypeError_(
+                    f"array size must be >= 0, got {v} (trap 28802)",
+                    expr.span,
+                ))
+            elif v == 0:
+                self.errors.append(TypeError_(
+                    f"array size must be > 0 in Phase-0, got 0 "
+                    f"(trap 28802)",
+                    expr.span,
+                ))
+            return TyPrim(f"size_{v}")
         if isinstance(expr, A.Name):
             looked = scope.lookup(expr.name)
             if looked is not None:
@@ -653,6 +712,33 @@ class TypeChecker:
                             f"{pty.name}, got {aty.name}",
                             call.span,
                         ))
+            # Audit 28.8 cycle 3 D1: extend the call boundary check to
+            # non-TyPrim parameter types. Pre-fix, only TyPrim-vs-TyPrim
+            # was compared, so `fn use_q(q: Quote<i32>); use_q(42)` (i32
+            # passed where Quote<i32> expected) silently typechecked
+            # clean. Every other non-prim parameter type (TyDiff,
+            # TyLogic, TyQuote, TyStruct, TyArray, TyRef, TyTile,
+            # TyTensor, TyMemTier, TyFn, TyTuple, TyPtr) had the same
+            # silent-acceptance hole. Now we fall through to
+            # `_compatible` for any pair where neither side is TyVar /
+            # TySize / TyUnknown (those defer to mono / cascade-safe).
+            # The Logic-provenance path below still handles the
+            # specialized TyLogic <-> non-Logic transition for the
+            # better diagnostic; we skip the general check when that
+            # specialized path will fire so the user sees one (not two)
+            # messages.
+            elif (not isinstance(pty, (TyVar, TySize, TyUnknown))
+                  and not isinstance(aty, TyUnknown)
+                  and not (isinstance(pty, TyPrim)
+                           and isinstance(aty, TyPrim))
+                  and self._logic_provenance_violation_kind(pty, aty)
+                      is None
+                  and not self._compatible(pty, aty)):
+                self.errors.append(TypeError_(
+                    f"call to {sig.name!r}: arg {pname!r} expects "
+                    f"{self._fmt(pty)}, got {self._fmt(aty)}",
+                    call.span,
+                ))
             # Audit 28.8 B2: provenance boundary check (trap 24100).
             # Collect (don't emit yet) so B:C10 batching can apply.
             kind = self._logic_provenance_violation_kind(pty, aty)
@@ -1227,31 +1313,65 @@ class TypeChecker:
                 l_inner = _unwrap(l)
                 r_inner = _unwrap(r)
 
+                # Cycle 3 C3-2: dedup AD002 emission. The tie callback
+                # fires the same-rank-tie message; the outer call would
+                # otherwise fire a second, less-specific mismatch warn
+                # for the same span. Track and skip the outer when the
+                # callback already spoke.
+                tie_fired = [False]
+
                 def _tie_cb(a, b, span):
+                    tie_fired[0] = True
                     self._ad_warn_mixed_inner(
                         span or expr.span, a, b, a,
                         extra=" (same-rank tie; sign or quant domain "
                               "silently dropped without this warning)",
                     )
 
+                # Cycle 3 C3-2: treat pointer-width aliases as same inner.
                 inner_mismatch = (
                     l_inner != r_inner
                     and not isinstance(l_inner, TyUnknown)
                     and not isinstance(r_inner, TyUnknown)
+                    and not (
+                        isinstance(l_inner, TyPrim)
+                        and isinstance(r_inner, TyPrim)
+                        and _widen_canon_name(l_inner.name)
+                            == _widen_canon_name(r_inner.name)
+                    )
                 )
                 if (l_is_diff or r_is_diff) and inner_mismatch:
                     inner = _widen_diff_inner(
                         l_inner, r_inner,
                         _warn_cb=_tie_cb, _span=expr.span,
                     )
-                    extra = ""
-                    if not (l_is_diff and r_is_diff):
-                        # B:C6: name the asymmetric (D-wrap + raw) case
-                        # so the user can tell it apart from D-D mixing.
-                        extra = " (one side D-wrapped, other bare)"
-                    self._ad_warn_mixed_inner(
-                        expr.span, l_inner, r_inner, inner, extra=extra,
+                    if not tie_fired[0]:
+                        extra = ""
+                        if not (l_is_diff and r_is_diff):
+                            # B:C6: name the asymmetric (D-wrap + raw) case
+                            # so the user can tell it apart from D-D mixing.
+                            extra = " (one side D-wrapped, other bare)"
+                        self._ad_warn_mixed_inner(
+                            expr.span, l_inner, r_inner, inner, extra=extra,
+                        )
+                elif (l_is_logic or r_is_logic) and inner_mismatch:
+                    # Audit 28.8 cycle 3 D4: pure Logic<T1> + Logic<T2>
+                    # (neither side TyDiff) — previously silent
+                    # left-wins. The TyLogic docstring explicitly says
+                    # Logic carries provenance; silently dropping the
+                    # right-side domain defeats that contract.
+                    inner = _widen_diff_inner(
+                        l_inner, r_inner,
+                        _warn_cb=_tie_cb, _span=expr.span,
                     )
+                    if not tie_fired[0]:
+                        extra = ""
+                        if not (l_is_logic and r_is_logic):
+                            extra = " (one side Logic-wrapped, other bare)"
+                        self._ad_warn_mixed_inner(
+                            expr.span, l_inner, r_inner, inner,
+                            extra=" [Logic-domain]" + extra,
+                        )
                 else:
                     inner = l_inner if not isinstance(l_inner, TyUnknown) \
                         else r_inner
@@ -1914,7 +2034,8 @@ class TypeChecker:
                 or t.name in self._NUMERIC_FLOAT_PRIMS
                 or t.name in self._NUMERIC_BOOL_PRIMS)
 
-    def _check_cast_compat(self, src: Type, tgt: Type, span: A.Span) -> None:
+    def _check_cast_compat(self, src: Type, tgt: Type, span: A.Span,
+                            _depth: int = 0) -> None:
         """Audit 28.8 B14 (trap 28604): reject scalar casts whose
         source/target pair isn't in the allowed matrix.
 
@@ -1924,7 +2045,15 @@ class TypeChecker:
           - struct <-> same struct (identity cast)
           - generic / unknown TyVar (defer to mono)
           - tuple/array/struct/unit -> identical type (no-op cast)
-        Otherwise: error 28604."""
+        Otherwise: error 28604.
+
+        Audit 28.8 cycle 3 D7: peel matching ref-pair wrappers
+        iteratively before recursing so deeply-nested ref casts can't
+        blow the Python recursion stack. Trap 28803 fires if the
+        cast-matrix is invoked at a nesting depth beyond the guard
+        (8) — a defense in depth against malicious / autogenerated
+        sources, since real Phase-0 syntax has no way to write more
+        than a few nested refs."""
         # Cascade-safe: unknown / generic types skip the check.
         if isinstance(src, (TyUnknown, TyVar, TySize)) \
                 or isinstance(tgt, (TyUnknown, TyVar, TySize)):
@@ -1935,33 +2064,47 @@ class TypeChecker:
         # Numeric-scalar <-> numeric-scalar in either direction.
         if self._is_numeric_scalar(src) and self._is_numeric_scalar(tgt):
             return
-        # Ref <-> Ref ONLY when inner types are compatible.
-        #
-        # Audit 28.8 cycle 2 C2-6 / B:C5: pre-fix this arm was an
-        # unconditional `return` — `&Foo as &Bar` silently typechecked
-        # for any pair of unrelated refs. The matrix purported to be
-        # a closed system but had this open window. Codegen would then
-        # produce undefined behavior reading the bar layout out of a
-        # foo-pointed buffer. Now we recurse into the inner pair: a
-        # numeric inner pair is allowed (per the scalar arm above);
-        # unrelated structs/tuples/arrays fall through to trap 28604.
-        if isinstance(src, TyRef) and isinstance(tgt, TyRef):
-            # Same inner: identity-cast on the ref, OK.
+        # Audit 28.8 cycle 3 D7: peel matching TyRef wrappers
+        # iteratively (in lockstep on both sides) so we don't burn
+        # recursion budget on each layer. After the loop, fall through
+        # to the rest of the matrix on the unwrapped inner pair.
+        peeled = 0
+        while isinstance(src, TyRef) and isinstance(tgt, TyRef):
             if src.inner == tgt.inner:
                 return
-            # Recurse: check the inner pair through the same matrix.
-            # Note that this re-uses ALL the matrix rules including
-            # the scalar / cascade-safe ones, so `&i32 as &i64` is
-            # still allowed (int->int) while `&Foo as &Bar` (struct
-            # to unrelated struct) falls through to the error below.
-            inner_errs_before = len(self.errors)
-            self._check_cast_compat(src.inner, tgt.inner, span)
-            if len(self.errors) == inner_errs_before:
-                # Inner pair accepted by the matrix — accept the ref pair.
+            src = src.inner
+            tgt = tgt.inner
+            peeled += 1
+            if peeled > 8:
+                # Hard limit on ref-peel depth — emit a structured
+                # error rather than risk RecursionError on the rest
+                # of the matrix (trap 28803).
+                self.errors.append(TypeError_(
+                    f"invalid cast: ref-nesting depth exceeds "
+                    f"8 levels (trap 28803)",
+                    span,
+                    hint="Phase-0 caps recursive cast-matrix depth "
+                         "to keep the typechecker stack-bounded",
+                ))
                 return
-            # Inner check appended an error. Drop it; we'll re-emit
-            # a more contextualized one below covering the wrapping &.
-            self.errors = self.errors[:inner_errs_before]
+        # After peeling, src/tgt may be a scalar (and the numeric
+        # arm above runs again via the recursive call). Use a depth
+        # guard regardless so any future non-Ref recursive arm is
+        # also bounded.
+        if _depth > 8:
+            self.errors.append(TypeError_(
+                f"invalid cast: cast-matrix recursion exceeds "
+                f"8 levels (trap 28803)",
+                span,
+                hint="Phase-0 caps recursive cast-matrix depth "
+                     "to keep the typechecker stack-bounded",
+            ))
+            return
+        # Re-check the unwrapped pair through the (now scalar-or-
+        # nominal) matrix at one bumped depth level.
+        if peeled > 0:
+            self._check_cast_compat(src, tgt, span, _depth=_depth + 1)
+            return
         # All other source/target pairs are invalid scalar casts.
         # Common slipups: tuple-as-i32, struct-as-f64, unit-as-Pt,
         # and (post B:C5 fix) &Foo as &Bar.
@@ -2011,10 +2154,62 @@ class TypeChecker:
             return self._compatible(a.inner, b.inner)
         if isinstance(a, TyQuote) or isinstance(b, TyQuote):
             return False
+        # Audit 28.8 cycle 3 D1: wrapper types must agree by kind AND
+        # by inner. TyDiff(T) ~ TyDiff(U) iff T ~ U; TyDiff(T) ~ U is
+        # rejected (raw passed where D expected) — symmetric to the
+        # Quote arm above. Same for TyLogic. This closes the call
+        # boundary silent-acceptance hole exposed by D1.
+        if isinstance(a, TyDiff) and isinstance(b, TyDiff):
+            return self._compatible(a.inner, b.inner)
+        if isinstance(a, TyDiff) or isinstance(b, TyDiff):
+            return False
+        if isinstance(a, TyLogic) and isinstance(b, TyLogic):
+            return self._compatible(a.inner, b.inner)
+        if isinstance(a, TyLogic) or isinstance(b, TyLogic):
+            return False
+        # Structural arms for the remaining composite types so D1's
+        # `_compatible` fall-through at the call boundary recognizes
+        # both TyTuple, TyArray, TyRef, TyPtr, TyFn pairs by their
+        # inner structure rather than identity-comparison only.
+        if isinstance(a, TyTuple) and isinstance(b, TyTuple):
+            if len(a.elems) != len(b.elems):
+                return False
+            return all(self._compatible(x, y)
+                       for x, y in zip(a.elems, b.elems))
+        if isinstance(a, TyTuple) or isinstance(b, TyTuple):
+            return False
+        if isinstance(a, TyArray) and isinstance(b, TyArray):
+            # Sizes are TyPrim('size_N'); compare nominally.
+            return (self._compatible(a.elem, b.elem)
+                    and a.size == b.size)
+        if isinstance(a, TyArray) or isinstance(b, TyArray):
+            return False
+        if isinstance(a, TyRef) and isinstance(b, TyRef):
+            return (a.is_mut == b.is_mut
+                    and self._compatible(a.inner, b.inner))
+        if isinstance(a, TyRef) or isinstance(b, TyRef):
+            return False
+        if isinstance(a, TyPtr) and isinstance(b, TyPtr):
+            return (a.is_mut == b.is_mut
+                    and self._compatible(a.inner, b.inner))
+        if isinstance(a, TyPtr) or isinstance(b, TyPtr):
+            return False
+        if isinstance(a, TyFn) and isinstance(b, TyFn):
+            if len(a.params) != len(b.params):
+                return False
+            return (all(self._compatible(x, y)
+                        for x, y in zip(a.params, b.params))
+                    and self._compatible(a.ret, b.ret))
+        if isinstance(a, TyFn) or isinstance(b, TyFn):
+            return False
         return a == b
 
     def _fmt(self, t: Type) -> str:
         if isinstance(t, TyPrim): return t.name
+        # Audit 28.8 cycle 3 D8: print TyStruct as its declared name
+        # (e.g. `Foo`) instead of falling through to repr (which gave
+        # `TyStruct(name='Foo')` in user-facing diagnostics).
+        if isinstance(t, TyStruct): return t.name
         if isinstance(t, TyVar): return t.name
         if isinstance(t, TySize): return f"size:{t.name}"
         if isinstance(t, TyTensor):
