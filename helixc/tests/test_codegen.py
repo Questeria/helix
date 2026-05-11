@@ -3406,6 +3406,20 @@ fn main() -> i32 {
         "let a = 1 ; let b = 2 ; let c = 3 ; let d = 4 ; let e = 5 ; "
         "let cl = |x| x + a + b + c + d + e ; cl(0) }"
     ) == 132, "A3-CRITICAL-2: 5th closure capture overflow now traps (76002)"
+    # Audit 28.8 B4: closure capture of a non-i32 typed local is now a
+    # loud failure (AST_ERR 76003) instead of silent low-32-bit
+    # truncation. Pre-fix `let pi: i64 = 42_i64; let c = |x| x + 1; c(0)`
+    # silently captured low 32 bits of pi as i32; the closure body's
+    # arithmetic was bit-pattern garbage. Now the parser emits
+    # AST_ERR(76003) so codegen turns the closure into a hard trap.
+    # The Phase-0 capture stride doesn't track per-capture type tags
+    # (full stride-3 fix deferred); making the silent window LOUD is
+    # the minimum-correct response.
+    # We just verify the case where pi IS i32-typed still works
+    # cleanly — the gate only fires on EXPLICIT non-i32 annotations.
+    assert compile_and_exec(
+        "fn main() -> i32 { let pi: i32 = 7 ; let c = |x| x + pi ; c(3) }"
+    ) == 10, "B4-baseline: explicit i32 capture annotation still works"
     # Stage 10: modules + use. parse-time desugaring lifts each fn inside
     # `mod foo { ... }` to the top-level fn list with a mangled name
     # `foo__bar`. Path-call `foo::bar(args)` rewrites to AST_CALL with the
@@ -13055,6 +13069,21 @@ def test_stage16_two_kernels_share_one_ptx_module():
 
 
 def main():
+    # Recognise both the legacy `_SkipTest` exception and pytest's
+    # `Skipped` outcome class so tests can use either to signal a skip
+    # without crashing the manual runner. `Skipped` derives from
+    # `BaseException`, not `Exception`, so the generic-Exception handler
+    # below doesn't catch it; without this explicit tuple, any
+    # `pytest.skip()` call (added by audit cycle 1 for the self-host
+    # loop test) ends the run with an unhandled traceback and the
+    # harness regex can't read the summary line.
+    skip_types: tuple = (_SkipTest,)
+    try:
+        from _pytest.outcomes import Skipped as _PytestSkipped
+        skip_types = skip_types + (_PytestSkipped,)
+    except Exception:
+        pass
+
     tests = [(name, fn) for name, fn in globals().items()
              if name.startswith("test_") and callable(fn)]
     passed = 0
@@ -13065,7 +13094,7 @@ def main():
             fn()
             print(f"PASS {name}")
             passed += 1
-        except _SkipTest as e:
+        except skip_types as e:
             print(f"SKIP {name}: {e}")
             skipped += 1
         except AssertionError as e:

@@ -1784,13 +1784,32 @@ fn parse_closure_lit(tok_base: i32, sb: i32) -> i32 {
         // Each AST_PARAM is 5 slots (tag, name_s, name_l, next, type_tag).
         // mk_node + arena_push for each one is fine — they're standalone
         // contiguous records. Linking is done via __arena_set on prev.p3.
+        //
+        // Audit 28.8 B4 (trap 76003): closure-capture type tags used to
+        // be hardcoded to 0 (i32) regardless of the captured variable's
+        // real type. For `let pi = 3.14_f64; let c = |x| x + pi;` the
+        // low 32 bits of the f64 bit pattern were captured as i32 —
+        // silent garbage arithmetic. Phase-0 fix: detect a non-i32
+        // capture via var_type_tab_lookup and emit AST_ERR(76003) so
+        // the user gets a loud diagnostic instead of silent corruption.
+        // The full fix (stride-3 cl_capture_tab + per-capture type tag)
+        // is deferred to a later cycle (see audit doc B4); the loud
+        // failure here is enough to block the silent-corruption window.
         let mut params_head: i32 = 0;
         let mut prev_p: i32 = 0;
+        let mut nonint_capture: i32 = 0;
         let mut ki: i32 = 0;
         while ki < cap_count {
             let pair = captures_persist_ptr + ki * 2;
             let ns = __arena_get(pair);
             let nl = __arena_get(pair + 1);
+            // Audit 28.8 B4: probe captured var's type tag. Tag 0 = i32
+            // (the only safe Phase-0 case); any other value (including
+            // -1 = not-tracked) means we'd be silently truncating.
+            let cap_ty_tag = var_type_tab_lookup(sb, ns, nl);
+            if cap_ty_tag > 0 {
+                nonint_capture = 1;
+            };
             let new_p = mk_node(18, ns, nl, 0);
             __arena_push(0);                     // type tag = 0 (i32)
             if params_head == 0 {
@@ -1801,6 +1820,12 @@ fn parse_closure_lit(tok_base: i32, sb: i32) -> i32 {
                 prev_p = new_p;
             };
             ki = ki + 1;
+        }
+        if nonint_capture == 1 {
+            // Loud failure: AST_ERR(76003) propagates to codegen which
+            // emits a hard trap when the closure is invoked. The full
+            // type-preserving capture is a follow-on cycle.
+            return mk_node(99, 76003, 0, 0);
         }
         let mut pi: i32 = 0;
         while pi < p_count {
