@@ -46,7 +46,7 @@ Used by the Python frontend (`helixc/frontend/*.py`) and audit-introduced trap I
 | 24200 / AD002 | (typecheck) | `helixc/frontend/typecheck.py:1068, 1786` | 24 | TyDiff binop with mixed inner types; auto-widened with warning |
 | 25001 | `TRAP_TRACE_OVERFLOW` | `helixc/frontend/trace_pass.py:37` | 25 | `@trace` buffer overflow at runtime |
 | 25002 | `TRAP_TRACE_EQUIV_SHAPE_MISMATCH` | `helixc/frontend/trace_pass.py:38` | 25 | `trace_equiv` predicate shape mismatch |
-| 26001 | `TRAP_PYTREE_DEPTH` | `helixc/frontend/pytree.py:49` | 26 | pytree flatten depth cap exceeded (Phase-0 cap = 4) |
+| 26001 | `TRAP_PYTREE_DEPTH` | `helixc/frontend/pytree.py:49` | 26 | pytree flatten/unflatten depth cap exceeded (Phase-0 cap = 4); _unflatten guard added cycle 2 (deferred observation #17) |
 | 26002 | `TRAP_PYTREE_NON_DIFF_LEAF` | `helixc/frontend/pytree.py:50` | 26 | pytree flatten saw a non-leaf-non-struct field type |
 | 26003 | `TRAP_PYTREE_CYCLE` | `helixc/frontend/pytree.py:51` | 26 | cyclic struct reference detected during pytree walk |
 | 27001 | `TRAP_AUTOTUNE_OVERSIZED` | `helixc/frontend/autotune.py:42` | 27 | `@autotune` variant Cartesian product exceeds 16 |
