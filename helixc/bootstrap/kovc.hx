@@ -2427,8 +2427,12 @@ fn trace_pass(ast_root: i32, diag_state: i32) -> i32 {
                 // Severity 1 (warning): @trace is recognised but
                 // not yet wired through codegen. aux slot stores
                 // fn name byte_start for future message rendering.
+                // Use 25003 (NOT 25001 which is TRACE_OVERFLOW
+                // runtime, NOT 25002 which is TRACE_EQUIV_SHAPE
+                // mismatch). 25003 = "trace attribute recognised
+                // but codegen instrumentation pending".
                 let fn_name_s = __arena_get(fn_idx + 1);
-                diag_emit(diag_state, 25001, 1, fn_idx, fn_name_s);
+                diag_emit(diag_state, 25003, 1, fn_idx, fn_name_s);
             };
             walk = __arena_get(walk + 2);
         }
