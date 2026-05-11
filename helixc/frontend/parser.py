@@ -1509,36 +1509,102 @@ def parse(source: str, filename: str = "<input>",
     """
     user_prog = Parser(lex(source, filename)).parse_program()
     if include_stdlib:
-        import os as _os
-        stdlib_dir = _os.path.join(
-            _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))),
-            "stdlib",
-        )
-        # Auto-include all .hx files in the stdlib directory. Phase 1.9
-        # adds option.hx / result.hx / vec.hx alongside transcendentals.hx;
-        # any future stdlib drop-in just lands in this folder.
-        stdlib_files = ["transcendentals.hx", "option.hx", "result.hx", "vec.hx", "hashmap.hx", "string.hx", "iterators.hx", "autodiff.hx", "autodiff_reverse.hx", "tensor.hx", "nn.hx", "agi_memory.hx", "agi_search.hx", "agi_match.hx", "agi_world.hx", "ieee754.hx"]
-        user_names = {item.name for item in user_prog.items
-                      if isinstance(item, ast.FnDecl)}
-        user_enum_names = {item.name for item in user_prog.items
-                           if isinstance(item, ast.EnumDecl)}
-        for fname in stdlib_files:
-            stdlib_path = _os.path.join(stdlib_dir, fname)
-            if not _os.path.isfile(stdlib_path):
-                continue
-            with open(stdlib_path, encoding="utf-8") as f:
-                stdlib_src = f.read()
-            stdlib_prog = Parser(lex(stdlib_src, stdlib_path)).parse_program()
-            for item in stdlib_prog.items:
-                if isinstance(item, ast.FnDecl):
-                    if item.name not in user_names:
-                        user_prog.items.append(item)
-                        user_names.add(item.name)
-                elif isinstance(item, ast.EnumDecl):
-                    if item.name not in user_enum_names:
-                        user_prog.items.append(item)
-                        user_enum_names.add(item.name)
+        _merge_stdlib(user_prog)
     return user_prog
+
+
+# Public list of stdlib files merged when `include_stdlib=True`. Held
+# at module scope so tests can monkey-patch / override the auto-include
+# set (Audit 28.8 A8 regression test does this).
+STDLIB_FILES: list[str] = [
+    "transcendentals.hx", "option.hx", "result.hx", "vec.hx",
+    "hashmap.hx", "string.hx", "iterators.hx", "autodiff.hx",
+    "autodiff_reverse.hx", "tensor.hx", "nn.hx", "agi_memory.hx",
+    "agi_search.hx", "agi_match.hx", "agi_world.hx", "ieee754.hx",
+]
+
+
+# Audit 28.8 A8: if a stdlib file in STDLIB_FILES is missing on disk
+# AND this env var is set to "1" / "true", the merge raises
+# FileNotFoundError instead of silently skipping. Default (env unset)
+# is the lenient behaviour for backward compatibility — but a warning
+# is always emitted to stderr.
+STDLIB_STRICT_ENV = "HELIXC_STDLIB_STRICT"
+
+
+def _merge_stdlib(user_prog: "ast.Program") -> None:
+    """Merge stdlib items into `user_prog.items`.
+
+    Audit 28.8 A8: the prior implementation only merged `FnDecl` and
+    `EnumDecl` items; every other item kind (`StructDecl`, `ImplBlock`,
+    `ConstDecl`, `TypeAlias`, `ModuleDecl`/`ModBlock`/`UseDecl`) was
+    silently dropped. A user program importing a stdlib `struct Vec<T>`
+    silently saw `TyUnknown` propagation and miscompiled. This pass now
+    merges ALL named-item kinds with proper conflict handling.
+
+    Conflict policy: user code takes precedence. If `user_prog` already
+    declares an item with the same `name` as a stdlib item OF THE SAME
+    KIND (fn vs fn, struct vs struct, etc.), the stdlib item is
+    skipped. Cross-kind name overlap (a user fn and a stdlib struct
+    with the same name) is left to downstream typecheck — we don't
+    silently merge those.
+
+    Missing-stdlib-file handling: by default the file is silently
+    skipped (legacy behaviour). With `HELIXC_STDLIB_STRICT=1`, missing
+    files raise `FileNotFoundError`. Either way, a warning is emitted
+    to stderr so users see partial-install symptoms.
+    """
+    import os as _os
+    import sys as _sys
+    stdlib_dir = _os.path.join(
+        _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))),
+        "stdlib",
+    )
+    strict = _os.environ.get(STDLIB_STRICT_ENV, "").lower() in ("1", "true", "yes")
+
+    # Index existing user items by (kind_tag, name) for fast conflict checks.
+    # Each item-kind goes in its own namespace because the parser allows
+    # e.g. fn `foo` and struct `foo` to coexist (downstream typecheck
+    # may flag, but the parser doesn't).
+    def _kind_tag(item) -> str:
+        # ImplBlock has no `name`; key by (target_name, optional_trait_name,
+        # method-name-list-hash). We don't dedup ImplBlocks across
+        # user/stdlib for v0.1 — only collapse exact-duplicate decls
+        # within the stdlib itself if encountered.
+        return type(item).__name__
+
+    user_keys: set[tuple[str, str]] = set()
+    for it in user_prog.items:
+        name = getattr(it, "name", None)
+        if name is not None:
+            user_keys.add((_kind_tag(it), name))
+
+    for fname in STDLIB_FILES:
+        stdlib_path = _os.path.join(stdlib_dir, fname)
+        if not _os.path.isfile(stdlib_path):
+            msg = f"helixc: stdlib file missing: {stdlib_path}"
+            if strict:
+                raise FileNotFoundError(msg)
+            print(msg, file=_sys.stderr)
+            continue
+        with open(stdlib_path, encoding="utf-8") as f:
+            stdlib_src = f.read()
+        stdlib_prog = Parser(lex(stdlib_src, stdlib_path)).parse_program()
+        for item in stdlib_prog.items:
+            name = getattr(item, "name", None)
+            if name is not None:
+                key = (_kind_tag(item), name)
+                if key in user_keys:
+                    # User declared something of the same kind+name —
+                    # user takes precedence; skip the stdlib version.
+                    continue
+                user_keys.add(key)
+            # Audit 28.8 A8: merge ALL named-item kinds, not just
+            # FnDecl/EnumDecl. StructDecl, TraitDecl-via-ImplBlock,
+            # ImplBlock, ConstDecl, TypeAlias, ModuleDecl, ModBlock,
+            # UseDecl — anything the parser produced gets propagated
+            # so downstream passes see the full stdlib surface.
+            user_prog.items.append(item)
 
 
 # ============================================================================

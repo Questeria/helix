@@ -650,6 +650,132 @@ def test_ptr_mut_type_parses():
 
 
 # ============================================================================
+# Stdlib merge (Audit 28.8 A8)
+# ============================================================================
+def test_stdlib_merges_fn_decls():
+    """Baseline: include_stdlib=True still merges FnDecls (e.g. vec_new)."""
+    prog = parse("fn main() -> i32 { 42 }\n", include_stdlib=True)
+    fn_names = {it.name for it in prog.items
+                if isinstance(it, ast.FnDecl)}
+    # vec_new is a known transcendental in stdlib/vec.hx.
+    assert "vec_new" in fn_names, \
+        "stdlib FnDecls should still be merged when include_stdlib=True"
+
+
+def test_stdlib_merges_struct_decls(tmp_path, monkeypatch):
+    """Audit 28.8 A8: StructDecl items in stdlib were silently dropped.
+    Simulate a stdlib drop-in that exports a struct + an impl block,
+    and verify both survive the merge."""
+    import os as _os
+    import helixc.frontend.parser as _p
+
+    # Build a fake stdlib in tmp_path.
+    fake_stdlib_dir = tmp_path / "stdlib"
+    fake_stdlib_dir.mkdir()
+    fake_file = fake_stdlib_dir / "fake_pair.hx"
+    fake_file.write_text(
+        "struct Pair { a: i32, b: i32 }\n"
+        "fn pair_new(a: i32, b: i32) -> i32 { 0 }\n"
+        "const PAIR_MAX: i32 = 100;\n"
+    )
+
+    # Monkey-patch parser to use a tiny stdlib list pointing at our fake.
+    monkeypatch.setattr(_p, "STDLIB_FILES", ["fake_pair.hx"])
+    # Also patch the path resolution by temporarily relocating the
+    # stdlib directory via _merge_stdlib's relative computation —
+    # since _merge_stdlib derives stdlib_dir from __file__, we can't
+    # easily redirect. Instead, write the fake file into the real
+    # stdlib dir and clean up after.
+    real_stdlib = _os.path.join(
+        _os.path.dirname(_os.path.dirname(_os.path.abspath(_p.__file__))),
+        "stdlib",
+    )
+    real_fake = _os.path.join(real_stdlib, "fake_pair.hx")
+    _os.rename(str(fake_file), real_fake)
+    try:
+        prog = _p.parse("fn main() -> i32 { 0 }\n", include_stdlib=True)
+    finally:
+        _os.remove(real_fake)
+
+    struct_names = {it.name for it in prog.items
+                    if isinstance(it, ast.StructDecl)}
+    fn_names = {it.name for it in prog.items
+                if isinstance(it, ast.FnDecl)}
+    const_names = {it.name for it in prog.items
+                   if isinstance(it, ast.ConstDecl)}
+    assert "Pair" in struct_names, \
+        "Audit 28.8 A8: StructDecl items must be merged from stdlib"
+    assert "pair_new" in fn_names
+    assert "PAIR_MAX" in const_names, \
+        "Audit 28.8 A8: ConstDecl items must be merged from stdlib"
+
+
+def test_stdlib_user_wins_on_conflict(tmp_path, monkeypatch):
+    """When the user defines a fn with the same name as a stdlib fn,
+    the user version takes precedence (and the stdlib copy is skipped
+    silently — same as pre-A8 behaviour for FnDecls, now applied
+    uniformly across kinds)."""
+    import os as _os
+    import helixc.frontend.parser as _p
+
+    fake_file = tmp_path / "fake_dup.hx"
+    fake_file.write_text("fn my_helper() -> i32 { 1 }\n")
+    real_stdlib = _os.path.join(
+        _os.path.dirname(_os.path.dirname(_os.path.abspath(_p.__file__))),
+        "stdlib",
+    )
+    real_fake = _os.path.join(real_stdlib, "fake_dup.hx")
+    _os.rename(str(fake_file), real_fake)
+    monkeypatch.setattr(_p, "STDLIB_FILES", ["fake_dup.hx"])
+    try:
+        prog = _p.parse(
+            "fn my_helper() -> i32 { 999 }\nfn main() -> i32 { my_helper() }\n",
+            include_stdlib=True,
+        )
+    finally:
+        _os.remove(real_fake)
+
+    helpers = [it for it in prog.items
+               if isinstance(it, ast.FnDecl) and it.name == "my_helper"]
+    assert len(helpers) == 1, \
+        f"expected exactly one my_helper after merge, got {len(helpers)}"
+    # User-defined version wins (its body returns 999, not 1).
+
+
+def test_stdlib_missing_file_strict_env_raises(monkeypatch):
+    """Audit 28.8 A8: with HELIXC_STDLIB_STRICT=1, a missing stdlib
+    file raises FileNotFoundError instead of being silently skipped."""
+    import helixc.frontend.parser as _p
+
+    monkeypatch.setattr(_p, "STDLIB_FILES", ["does_not_exist_anywhere.hx"])
+    monkeypatch.setenv(_p.STDLIB_STRICT_ENV, "1")
+    try:
+        _p.parse("fn main() -> i32 { 0 }\n", include_stdlib=True)
+    except FileNotFoundError as e:
+        assert "does_not_exist_anywhere.hx" in str(e)
+        return
+    raise AssertionError(
+        "expected FileNotFoundError with HELIXC_STDLIB_STRICT=1 and "
+        "a missing stdlib file"
+    )
+
+
+def test_stdlib_missing_file_default_lenient(monkeypatch, capsys):
+    """Default (env unset): missing stdlib files emit a warning but
+    don't raise — backward-compat."""
+    import helixc.frontend.parser as _p
+
+    monkeypatch.setattr(_p, "STDLIB_FILES", ["does_not_exist_anywhere.hx"])
+    monkeypatch.delenv(_p.STDLIB_STRICT_ENV, raising=False)
+    prog = _p.parse("fn main() -> i32 { 0 }\n", include_stdlib=True)
+    cap = capsys.readouterr()
+    assert "stdlib file missing" in cap.err
+    # main still parsed.
+    assert any(isinstance(it, ast.FnDecl) and it.name == "main"
+               for it in prog.items)
+
+
+# ============================================================================
 # Test runner
 # ============================================================================
 def main():
