@@ -434,6 +434,46 @@ def test_array_literal_and_index():
     assert compile_and_run(src) == 42
 
 
+def test_c16_1_wide_array_elem_traps_at_codegen():
+    """Audit 28.8 cycle 16 C16-1 (HIGH): wide-element arrays (f64, i64,
+    u64) must trap loudly at codegen rather than silently 32-bit-
+    truncating loads/stores. Phase-0 backend only supports 32-bit
+    LOAD_ELEM / STORE_ELEM; the 8-byte path lands as a separate Stage
+    deliverable.
+
+    Pre-fix the program below typechecked + lowered + emitted a
+    silently-broken 4830-byte ELF. Post-fix the backend raises
+    NotImplementedError with a clear migration hint."""
+    from helixc.frontend.parser import parse as parse_src
+    from helixc.frontend.typecheck import typecheck as type_check
+    from helixc.ir.lower_ast import lower
+    from helixc.backend.x86_64 import compile_module_to_elf
+    src = """
+    fn main() -> i32 {
+        let xs = [1.0_f64, 2.5_f64];
+        let y = xs[0];
+        0
+    }
+    """
+    prog = parse_src(src)
+    # Typecheck is permissive (no diagnostic on f64 array).
+    errs = type_check(prog)
+    # Filter to actual hard errors only — accept any -W warnings.
+    hard = [e for e in errs if not (hasattr(e, "is_warning") and e.is_warning)]
+    # The lowering + codegen path is where the trap fires.
+    mod = lower(prog)
+    try:
+        compile_module_to_elf(mod)
+        assert False, (
+            "expected NotImplementedError on f64 array LOAD_ELEM; "
+            "backend silently miscompiled instead"
+        )
+    except NotImplementedError as e:
+        assert "C16-1" in str(e) or "32 bits" in str(e), (
+            f"expected C16-1 trap message, got: {e}"
+        )
+
+
 def test_array_assign():
     src = """
     fn main() -> i32 {

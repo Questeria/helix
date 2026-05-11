@@ -980,6 +980,28 @@ class FnCompiler:
                 f"the F16C / AVX-512 codegen path."
             )
 
+    def _check_array_elem_size_supported(self, ty: tir.TIRType) -> None:
+        """Audit 28.8 cycle 16 C16-1 (HIGH): LOAD_ELEM/STORE_ELEM
+        currently emit unconditional 32-bit `mov eax, [...]` / `mov
+        [...], eax`. A let-binding like `let xs = [1.0_f64, 2.5_f64];`
+        propagates `f64` into the IR ops but the backend silently
+        truncated each store to 32 bits and each load to the low 32
+        bits — miscompile with no diagnostic.
+        Phase-0 fix: fail loudly at codegen when an array-element type
+        is wider than 32 bits. Full 8-byte LOAD_ELEM / STORE_ELEM
+        lowering can land as a separate Stage-29 deliverable. This
+        matches the cycle-3-style 'narrow + loud' pattern (cf.
+        `_check_float_supported` above)."""
+        wide_widths = {"i64", "u64", "f64", "isize", "usize"}
+        if isinstance(ty, tir.TIRScalar) and ty.name in wide_widths:
+            raise NotImplementedError(
+                f"x86_64 backend LOAD_ELEM/STORE_ELEM does not yet "
+                f"support {ty.name} array elements (would silently "
+                f"truncate to 32 bits — see audit-stage28-8 cycle 16 "
+                f"C16-1). Use i32/u32/f32-typed elements until the "
+                f"8-byte load/store path lands."
+            )
+
     def _emit_idiv_guarded(self, l_slot: int, r_slot: int, res_slot: int,
                            *, want_quotient: bool) -> None:
         """Emit signed 32-bit integer division with the INT_MIN/-1 trap-avoidance
@@ -2716,6 +2738,9 @@ class FnCompiler:
         if op.kind == tir.OpKind.LOAD_ELEM:
             name = op.attrs["name"]
             base, length, esize = self.array_info[name]
+            # Audit 28.8 cycle 16 C16-1: trap on wide-element loads
+            # before silently 32-bit-truncating them.
+            self._check_array_elem_size_supported(op.results[0].ty)
             # Index is the operand
             idx_slot = self._slot_of(op.operands[0])
             res_slot = self._slot_of(op.results[0])
@@ -2734,6 +2759,9 @@ class FnCompiler:
         if op.kind == tir.OpKind.STORE_ELEM:
             name = op.attrs["name"]
             base, length, esize = self.array_info[name]
+            # Audit 28.8 cycle 16 C16-1: trap on wide-element stores
+            # before silently 32-bit-truncating them.
+            self._check_array_elem_size_supported(op.operands[1].ty)
             idx_slot = self._slot_of(op.operands[0])
             val_slot = self._slot_of(op.operands[1])
             # rcx = idx (sign-extended)
