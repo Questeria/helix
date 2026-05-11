@@ -47,6 +47,29 @@ PURE_KINDS = {
     tir.OpKind.CMP_GT,
     tir.OpKind.CMP_GE,
     tir.OpKind.CAST,
+    # Stage 28.9 cycle 21 audit-T C20-T4 fix (conf 78): mirror const_fold's
+    # foldable set — these ops are deterministic and side-effect-free, so
+    # duplicates within a block can be safely deduplicated. Drift between
+    # const_fold (which folds them) and CSE (which previously didn't dedupe
+    # them) was the same category as cycle-22 C22-1 (FFI_CALL drift); the
+    # miss here is conservative (no miscompile, just forfeited optimization)
+    # but the audit-trail risk is the larger concern.
+    tir.OpKind.BIT_AND,
+    tir.OpKind.BIT_OR,
+    tir.OpKind.BIT_XOR,
+    tir.OpKind.SHL,
+    tir.OpKind.SHR,
+    tir.OpKind.BIT_NOT,
+    # Min/Max/Pow are also pure (deterministic, no side effect).
+    tir.OpKind.MAXIMUM,
+    tir.OpKind.MINIMUM,
+    tir.OpKind.POW,
+    # BITCAST reinterprets bits — no I/O, no allocation, deterministic.
+    tir.OpKind.BITCAST,
+    # NOTE: ABS/EXP/LOG/SQRT/RECIP intentionally NOT added — LOG/SQRT
+    # of negative is implementation-defined and the @safe semantics
+    # are not yet nailed down (audit recommendation). Re-evaluate in
+    # a future cycle once @safe is defined.
 }
 
 

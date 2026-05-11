@@ -399,16 +399,32 @@ def _dup_expr(expr: A.Expr) -> A.Expr:
 
 
 def _pattern_test_expr(pat: A.Pattern, scrut_expr: A.Expr,
-                        span: A.Span) -> A.Expr:
+                        span: A.Span, *, at_top_level: bool = False) -> A.Expr:
     """Stage 28.9 cycle 13 audit-A C13-1 + C13-2 structural fix
     (closes the cycle-10..cycle-12 family of nested-pattern bugs at the
     root). Canonical pattern-test implementation that takes an Expr
     scrut (not a str name). Used by:
 
       - `_pattern_test(pat, scrut: str, span)`: top-level wrapper that
-        calls this with `Name(scrut)`.
+        calls this with `Name(scrut)` and `at_top_level=True`.
       - sub-position dispatch in PatTuple/PatVariant arms: calls this
-        directly with the freshly-built `slot_load` expr.
+        directly with the freshly-built `slot_load` expr and
+        `at_top_level=False`.
+
+    Stage 28.9 cycle 21 audit-T C20-R2/T3 fix (conf 82): the prior
+    cycle-19 v2 fix gated PatLit/PatRange indexing on
+    `isinstance(scrut_expr, A.Name)` — a structural proxy for "is this
+    a top-level call". The current call graph guarantees scrut_expr is
+    A.Name iff the call came from `_pattern_test`, but a future caller
+    passing A.Path/A.Field/A.Call as a top-level scrutinee would
+    silently skip the [0] index that array-backed enums need. Encoding
+    the invariant as an explicit `at_top_level` keyword-only parameter
+    makes the contract audit-able and survives refactors that pass
+    different Expr shapes.
+
+    `at_top_level` defaults to False so any forgotten kwarg at a call
+    site fails closed (no [0] indexing) — the symptom is a loud
+    "didn't match" rather than a silent miscompile, easier to debug.
 
     Closes the cycle-12 C12-1 asymmetric-fix gap because nested
     PatTuple, PatVariant, PatOr (etc.) at any depth now route through
@@ -417,15 +433,17 @@ def _pattern_test_expr(pat: A.Pattern, scrut_expr: A.Expr,
     if isinstance(pat, (A.PatWildcard, A.PatBind)):
         return A.BoolLit(span=span, value=True)
     if isinstance(pat, A.PatLit):
-        # Stage 28.9 cycle 19 fix v2 (context-aware):
-        # - Top-level: scrut_expr is a Name (the bound __scrut_N).
+        # Stage 28.9 cycle 21 audit-T C20-R2/T3 fix (conf 82): replace
+        # the cycle-19 isinstance(scrut_expr, A.Name) proxy with the
+        # explicit at_top_level flag.
+        # - Top-level: scrut_expr is the bound __scrut_N variable.
         #   Index [0] to read the tag/scalar (works for both array-
         #   backed enum variants AND scalar scrutinees via lowerer's
         #   "Index of scalar returns scalar" fallback).
-        # - Sub-position: scrut_expr is an Index (the slot_load built
-        #   by a parent PatTuple/PatVariant arm). It already names the
-        #   element value — direct compare, no double-indexing.
-        if isinstance(scrut_expr, A.Name):
+        # - Sub-position: scrut_expr is the slot_load built by a parent
+        #   PatTuple/PatVariant arm — already names the element value.
+        #   Direct compare, no double-indexing.
+        if at_top_level:
             cmp_left = _fresh_slot_load(scrut_expr, 0, span)
         else:
             cmp_left = _dup_expr(scrut_expr)
@@ -433,10 +451,10 @@ def _pattern_test_expr(pat: A.Pattern, scrut_expr: A.Expr,
                         left=cmp_left,
                         right=_dup_expr(pat.value))
     if isinstance(pat, A.PatRange):
-        # Same context-aware indexing as PatLit.
+        # Same at_top_level dispatch as PatLit.
         op_hi = "<=" if pat.inclusive else "<"
         def _r_left() -> A.Expr:
-            if isinstance(scrut_expr, A.Name):
+            if at_top_level:
                 return _fresh_slot_load(scrut_expr, 0, span)
             return _dup_expr(scrut_expr)
         return A.Binary(
@@ -449,13 +467,20 @@ def _pattern_test_expr(pat: A.Pattern, scrut_expr: A.Expr,
                            right=_dup_expr(pat.hi)),
         )
     if isinstance(pat, A.PatOr):
-        tests = [_pattern_test_expr(a, scrut_expr, span) for a in pat.alts]
+        # PatOr alts test against the SAME scrutinee — preserve
+        # at_top_level so each alt's PatLit/PatRange uses the correct
+        # indexing.
+        tests = [_pattern_test_expr(a, scrut_expr, span,
+                                     at_top_level=at_top_level)
+                 for a in pat.alts]
         return _or_chain(tests, span)
     if isinstance(pat, A.PatTuple):
+        # PatTuple builds an Index per element → recurse with
+        # at_top_level=False (sub-position).
         sub_tests: list[A.Expr] = []
         for i, sub in enumerate(pat.elems):
             slot_load = _fresh_slot_load(scrut_expr, i, span)
-            t = _pattern_test_expr(sub, slot_load, span)
+            t = _pattern_test_expr(sub, slot_load, span, at_top_level=False)
             # Drop trivially-true sub-tests so they don't bloat the AST.
             if isinstance(t, A.BoolLit) and t.value is True:
                 continue
@@ -472,6 +497,9 @@ def _pattern_test_expr(pat: A.Pattern, scrut_expr: A.Expr,
         # Cycle 14 C14-2 (audit-A) + C14-1 (audit-C, both conf 82+82):
         # dup pat.path so two arms with identical PatVariant don't
         # alias the same Path node into both arms' Binary subtrees.
+        # PatVariant builds Index per element → sub-position dispatch
+        # for sub_patterns, regardless of at_top_level of the variant
+        # itself.
         tag_load = _fresh_slot_load(scrut_expr, 0, span)
         tag_test = A.Binary(span=span, op="==",
                             left=tag_load,
@@ -479,7 +507,7 @@ def _pattern_test_expr(pat: A.Pattern, scrut_expr: A.Expr,
         sub_tests: list[A.Expr] = []
         for i, sub in enumerate(pat.sub_patterns):
             slot_load = _fresh_slot_load(scrut_expr, i + 1, span)
-            t = _pattern_test_expr(sub, slot_load, span)
+            t = _pattern_test_expr(sub, slot_load, span, at_top_level=False)
             if isinstance(t, A.BoolLit) and t.value is True:
                 continue
             sub_tests.append(t)
@@ -509,9 +537,11 @@ def _pattern_test_expr(pat: A.Pattern, scrut_expr: A.Expr,
 
 def _pattern_test(pat: A.Pattern, scrut: str, span: A.Span) -> A.Expr:
     """Build a boolean expression that's true iff `pat` matches scrut.
-    Stage 28.9 cycle 13: thin wrapper over `_pattern_test_expr`."""
+    Stage 28.9 cycle 13: thin wrapper over `_pattern_test_expr`.
+    Stage 28.9 cycle 21 C20-R2/T3: passes at_top_level=True since the
+    scrut here IS the bound match variable, not a sub-element."""
     scrut_expr = A.Name(span=span, name=scrut, generics=[])
-    return _pattern_test_expr(pat, scrut_expr, span)
+    return _pattern_test_expr(pat, scrut_expr, span, at_top_level=True)
 
 
 # Stage 28.9 cycle 13: legacy _pattern_test body removed. The canonical

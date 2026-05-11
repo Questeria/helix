@@ -350,6 +350,14 @@ def _try_fold_op(op: tir.Op, defs: dict) -> tir.Op | None:
                     v = sign * (abs(l) % abs(r))
                 else:
                     return None
+            except FoldError:
+                # Stage 28.9 cycle 21 audit-R C20-R1 fix (conf 97):
+                # FoldError / ShiftFoldError must propagate as compile
+                # errors; the generic `except Exception` below would
+                # silently swallow them and the trap contract (17001/
+                # 17002) would never surface to the user. Re-raise
+                # before the catch-all sees them.
+                raise
             except Exception:
                 return None
             # Wrap to target type's bit width to match runtime semantics.
@@ -375,6 +383,13 @@ def _try_fold_op(op: tir.Op, defs: dict) -> tir.Op | None:
                     v = l / r
                 else:
                     return None
+            except FoldError:
+                # Stage 28.9 cycle 21 audit-R C20-R1 (conf 97): defense in
+                # depth — currently no FoldError raises inside this try
+                # block (the NaN check at line ~385 is below `except`),
+                # but a future edit might move it inside. Re-raise so
+                # the trap contract is never silently swallowed.
+                raise
             except Exception:
                 return None
             # Stage 17 trap-id 17001: NaN-result encountered. Phase-0 refuses
@@ -439,6 +454,14 @@ def _try_fold_op(op: tir.Op, defs: dict) -> tir.Op | None:
                     v = l >> r   # arithmetic in Python for signed ints
                 else:
                     return None
+            except FoldError:
+                # Stage 28.9 cycle 21 audit-R C20-R1 fix (conf 97): the
+                # ShiftFoldError raises at the SHL/SHR range checks (lines
+                # 428, 435) are INSIDE this try block. Without this
+                # re-raise, the generic `except Exception` below would
+                # silently swallow them — defeating the trap-17002
+                # contract documented in cycle 19 audit-A C19-1.
+                raise
             except Exception:
                 return None
             v = _wrap_int_to_type(v, res.ty)

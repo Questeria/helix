@@ -706,6 +706,170 @@ def test_c7_1_match_inside_tile_lit_shape_lowered():
     walk(prog)
 
 
+# --- Stage 28.9 cycle 21 audit-R C20-R3 regression tests ---
+
+
+def test_c20_r3_patlit_top_level_emits_slot_load():
+    """C20-R3 regression for the cycle-19 v2 / cycle-21 explicit-flag
+    fix: a top-level PatLit (e.g. matching `42`) must compare
+    Index(scrut, 0), NOT bare Name(scrut). Without the [0] indexing,
+    enum-tag matching silently falls through for nullary variants
+    backed by array storage. Pre-cycle-19 v2 fix this case worked;
+    cycle-13 structural refactor regressed it; cycle-19 v2 fix
+    restored it; cycle-21 audit C20-R3 calls out the missing test."""
+    from helixc.frontend.parser import parse as parse_src
+    from helixc.frontend.match_lower import lower_matches
+    from helixc.frontend import ast_nodes as A
+    src = """
+    fn f(x: i32) -> i32 {
+        match x {
+            42 => 1,
+            _ => 0,
+        }
+    }
+    """
+    prog = parse_src(src)
+    lower_matches(prog)
+    # Find the comparison: Binary("==", left=Index(Name("__scrut_N"), 0),
+    #                              right=IntLit(42)).
+    found_correct = [0]
+    def walk(node):
+        if node is None:
+            return
+        if (isinstance(node, A.Binary) and node.op == "=="
+                and isinstance(node.right, A.IntLit)
+                and node.right.value == 42):
+            if isinstance(node.left, A.Index):
+                idx = node.left
+                # Index of Name with IntLit(0) as sole index.
+                if (isinstance(idx.callee, A.Name)
+                        and len(idx.indices) == 1
+                        and isinstance(idx.indices[0], A.IntLit)
+                        and idx.indices[0].value == 0):
+                    found_correct[0] += 1
+        if isinstance(node, list):
+            for x in node:
+                walk(x)
+            return
+        if hasattr(node, "__dict__"):
+            for v in vars(node).values():
+                walk(v)
+    walk(prog)
+    assert found_correct[0] >= 1, (
+        "top-level PatLit(IntLit(42)) must lower to "
+        "Binary('==', Index(Name(__scrut_N), 0), IntLit(42)); "
+        "if cycle-19 v2 fix regresses, this catches it"
+    )
+
+
+def test_c20_r3_patlit_sub_position_no_double_index():
+    """C20-R3 regression: a PatLit inside a PatTuple is in sub-position,
+    so it must compare Index(scrut, i) directly (no extra [0] index).
+    The cycle-21 explicit-flag fix replaced the cycle-19 isinstance
+    proxy; this test guards against re-introducing double-indexing for
+    tuple-element literal matches.
+
+    Verify by walking the lowered AST: we expect a Binary('==') whose
+    left is Index(scrut, i) for some i — NOT Index(Index(scrut, i), 0).
+    """
+    from helixc.frontend.parser import parse as parse_src
+    from helixc.frontend.match_lower import lower_matches
+    from helixc.frontend import ast_nodes as A
+    src = """
+    fn f(t: i32) -> i32 {
+        match (t, 7) {
+            (1, 2) => 10,
+            _ => 0,
+        }
+    }
+    """
+    prog = parse_src(src)
+    lower_matches(prog)
+    # Find every Binary('==', Index(...), IntLit(...)) and assert the
+    # Index target is a Name (not another Index). Pre-fix the sub-
+    # position case would have produced Index(Index(scrut, i), 0).
+    nested_index_found = [0]
+    direct_index_found = [0]
+    def walk(node):
+        if node is None:
+            return
+        if (isinstance(node, A.Binary) and node.op == "=="
+                and isinstance(node.right, A.IntLit)
+                and node.right.value in (1, 2)
+                and isinstance(node.left, A.Index)):
+            callee = node.left.callee
+            if isinstance(callee, A.Index):
+                nested_index_found[0] += 1
+            elif isinstance(callee, A.Name):
+                direct_index_found[0] += 1
+        if isinstance(node, list):
+            for x in node:
+                walk(x)
+            return
+        if hasattr(node, "__dict__"):
+            for v in vars(node).values():
+                walk(v)
+    walk(prog)
+    assert nested_index_found[0] == 0, (
+        f"sub-position PatLit must NOT double-index: found "
+        f"{nested_index_found[0]} Binary(==, Index(Index(...), 0), ...) "
+        "patterns. Cycle-19 regression check."
+    )
+    assert direct_index_found[0] >= 2, (
+        f"expected at least 2 direct Index comparisons (for the "
+        f"literal 1 and literal 2 in the tuple pattern); got "
+        f"{direct_index_found[0]}"
+    )
+
+
+def test_c20_r3_pat_or_preserves_at_top_level():
+    """C20-R3 / C20-R2 invariant: a PatOr's alts share the same scrut,
+    so the at_top_level flag must propagate through PatOr to its
+    children. Otherwise nested PatLit inside a top-level PatOr would
+    skip the [0] index."""
+    from helixc.frontend.parser import parse as parse_src
+    from helixc.frontend.match_lower import lower_matches
+    from helixc.frontend import ast_nodes as A
+    src = """
+    fn f(x: i32) -> i32 {
+        match x {
+            1 | 2 | 3 => 1,
+            _ => 0,
+        }
+    }
+    """
+    prog = parse_src(src)
+    lower_matches(prog)
+    # The OR-chain should produce 3 Binary(==, Index(scrut, 0), IntLit)
+    # comparisons (one per alt). Verify each PatLit alt indexes [0].
+    indexed_count = [0]
+    def walk(node):
+        if node is None:
+            return
+        if (isinstance(node, A.Binary) and node.op == "=="
+                and isinstance(node.right, A.IntLit)
+                and node.right.value in (1, 2, 3)
+                and isinstance(node.left, A.Index)
+                and isinstance(node.left.callee, A.Name)
+                and len(node.left.indices) == 1
+                and isinstance(node.left.indices[0], A.IntLit)
+                and node.left.indices[0].value == 0):
+            indexed_count[0] += 1
+        if isinstance(node, list):
+            for x in node:
+                walk(x)
+            return
+        if hasattr(node, "__dict__"):
+            for v in vars(node).values():
+                walk(v)
+    walk(prog)
+    assert indexed_count[0] >= 3, (
+        f"PatOr at top-level must propagate at_top_level=True so each "
+        f"alt's PatLit emits Index(scrut, 0); got {indexed_count[0]} "
+        f"indexed comparisons (expected >= 3 for 1|2|3)"
+    )
+
+
 def main():
     tests = [(name, fn) for name, fn in globals().items()
              if name.startswith("test_") and callable(fn)]

@@ -388,6 +388,120 @@ def test_c22_1_ffi_callee_appears_in_callees_set():
     )
 
 
+# --- Stage 28.9 cycle 21 regression tests ---
+
+def test_c20_t1_trace_pure_allowed():
+    """C20-T1 regression: @trace on @pure fn is allowed per
+    trace_pass.py:110-112 documented policy. Before the cycle-21 fix,
+    TRACE_ENTRY/TRACE_EXIT ops contributed 'trace' to the closure and
+    the @pure violation check (19001) fired."""
+    src = "@trace @pure fn f(x: i32) -> i32 { x + 1 }"
+    mod = lower_only(src)
+    errs = check_module(mod)
+    assert errs == [], (
+        f"@trace @pure must be allowed (cycle 21 C20-T1); got {errs}"
+    )
+
+
+def test_c20_t1_quote_in_pure_allowed():
+    """C20-T1 regression: quote { ... } in @pure fn is allowed —
+    reflection returns an AST handle, not a value-effect. The cycle-22
+    hardening that added QUOTE/REFLECT_HASH to OP_EFFECTS labeled them
+    'reflect'; PURITY_OBSERVER_EFFECTS now exempts them."""
+    src = "@pure fn f() -> i64 { quote { 1 + 2 } }"
+    mod = lower_only(src)
+    errs = check_module(mod)
+    assert errs == [], (
+        f"quote in @pure must be allowed (cycle 21 C20-T1); got {errs}"
+    )
+
+
+def test_c20_t1_print_in_pure_still_fails():
+    """C20-T1 regression-the-other-way: a real @pure violation (PRINT
+    via print_int / io call) must still flag 19001 after the fix.
+    Otherwise the exemption logic over-corrected."""
+    src = """
+    @pure fn bad() -> i32 {
+        print_int(42);
+        0
+    }
+    """
+    mod = lower_only(src)
+    errs = check_module(mod)
+    assert any("@pure" in e and "bad" in e for e in errs), (
+        f"PRINT in @pure must still flag; got {errs}"
+    )
+
+
+def test_c20_t2_deprecated_attr_no_spurious_19002():
+    """C20-T2 regression: @deprecated(\"msg\") emits 'deprecated' AND
+    'deprecated:msg' attribute keys (parser.py:287-291). Before the fix
+    these fell through declared_effects' bare-name fallback and tripped
+    trap 19002 (declared unused effect)."""
+    src = '@deprecated("old-fn") fn d(x: i32) -> i32 { x + 1 }'
+    mod = lower_only(src)
+    errs = check_module(mod)
+    assert errs == [], (
+        f"@deprecated must not be treated as a declared effect; got {errs}"
+    )
+
+
+def test_c20_t2_autotune_attr_no_spurious_19002():
+    """C20-T2 regression: @autotune(KEY: [v1, v2]) emits 'autotune' AND
+    'autotune:KEY=v1,v2' (parser.py:277-282). Both must be treated as
+    META, not as declared effects."""
+    src = "@autotune(TILE: [16, 32]) fn a(x: i32) -> i32 { x * 2 }"
+    mod = lower_only(src)
+    errs = check_module(mod)
+    assert errs == [], (
+        f"@autotune must not be treated as a declared effect; got {errs}"
+    )
+
+
+def test_c20_t2_since_attr_no_spurious_19002():
+    """C20-T2 regression: @since(\"v0.3\") emits 'since' AND 'since:v0.3'."""
+    src = '@since("v0.3") fn s(x: i32) -> i32 { x - 1 }'
+    mod = lower_only(src)
+    errs = check_module(mod)
+    assert errs == [], (
+        f"@since must not be treated as a declared effect; got {errs}"
+    )
+
+
+def test_c20_t2_trace_attr_alone_no_spurious_violation():
+    """C20-T2 regression: @trace alone (without @pure) must not trip
+    19001 from missing 'trace' declaration. Trace is observability,
+    not effect — same PURITY_OBSERVER_EFFECTS exemption applies."""
+    src = "@trace fn t(x: i32) -> i32 { x + 1 }"
+    mod = lower_only(src)
+    errs = check_module(mod)
+    assert errs == [], (
+        f"@trace alone must not trip 19001 missing-trace; got {errs}"
+    )
+
+
+def test_c20_t2_combo_attrs_no_spurious_19002():
+    """C20-T2 regression: stacking @deprecated + @since + @autotune on
+    the same fn (a plausible production scenario) must remain clean."""
+    src = '@deprecated("d") @since("v1") @autotune(K: [4]) fn combo(x: i32) -> i32 { x }'
+    mod = lower_only(src)
+    errs = check_module(mod)
+    assert errs == [], (
+        f"@deprecated/@since/@autotune combo must remain clean; got {errs}"
+    )
+
+
+def test_c20_t2_real_unused_effect_still_flags_19002():
+    """C20-T2 regression-the-other-way: a genuinely-unused @effect(io)
+    must still flag 19002. Otherwise the exemption logic over-corrected."""
+    src = "@effect(io) fn doesnt_io(x: i32) -> i32 { x + 1 }"
+    mod = lower_only(src)
+    errs = check_module(mod)
+    assert any("19002" in e and "doesnt_io" in e for e in errs), (
+        f"genuinely unused @effect(io) must still flag 19002; got {errs}"
+    )
+
+
 def main():
     tests = [(name, fn) for name, fn in globals().items()
              if name.startswith("test_") and callable(fn)]

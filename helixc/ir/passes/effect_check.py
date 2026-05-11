@@ -41,7 +41,13 @@ OP_EFFECTS: dict[tir.OpKind, frozenset[str]] = {
     tir.OpKind.PRINT: frozenset({"io"}),
     tir.OpKind.MODIFY: frozenset({"modify_self"}),
     tir.OpKind.SPLICE: frozenset({"modify_self"}),
-    # QUOTE is read-only (returns an AST handle); no effect.
+    # Stage 28.9 cycle 21 audit-T C20-T5 fix (conf 92): the stale
+    # "QUOTE is read-only; no effect" line that lived here was
+    # contradicted by the cycle-22 C22-2 entry below mapping QUOTE to
+    # frozenset({"reflect"}). The actual policy (see
+    # PURITY_OBSERVER_EFFECTS) is: QUOTE carries the "reflect" label
+    # but @pure is permitted to use it because reflection is an
+    # observer of program structure, not a semantic effect.
     # Stage 28.5 — TRAP terminates the process (sys_exit). Treated as an
     # io effect because the panic message is written to stderr before
     # exit. @pure fns cannot panic.
@@ -59,19 +65,35 @@ OP_EFFECTS: dict[tir.OpKind, frozenset[str]] = {
     tir.OpKind.ARENA_PUSH: frozenset({"arena"}),
     tir.OpKind.ARENA_SET: frozenset({"arena"}),
     # Audit 28.8 cycle 22 C22-2/C22-4/C22-5 (LOW, defense in depth):
-    # gated-unreachable from @pure today but a stale gate could open
-    # them. Add the explicit effect labels so any future regression
-    # surfaces immediately.
+    # explicit effect labels for ops that are gated-unreachable from
+    # @pure today, so any future regression surfaces immediately.
     #
-    # QUOTE / REFLECT_HASH reserve a runtime reflection-cell handle.
+    # QUOTE / REFLECT_HASH reserve a runtime reflection-cell handle —
+    # they're observers of program structure, not effects on program
+    # semantics. (See PURITY_OBSERVER_EFFECTS below.)
     tir.OpKind.QUOTE: frozenset({"reflect"}),
     tir.OpKind.REFLECT_HASH: frozenset({"reflect"}),
     # TILE_INDEX_STORE writes HBM (the kernel-launch observable).
     tir.OpKind.TILE_INDEX_STORE: frozenset({"tile_io"}),
-    # TRACE_ENTRY / TRACE_EXIT log runtime trace events.
+    # TRACE_ENTRY / TRACE_EXIT log runtime trace events to a separate
+    # buffer; per trace_pass.py:110-112 documented policy, @trace on
+    # @pure is allowed (trace is observability, not effect).
     tir.OpKind.TRACE_ENTRY: frozenset({"trace"}),
     tir.OpKind.TRACE_EXIT: frozenset({"trace"}),
 }
+
+
+# Stage 28.9 cycle 21 audit-T C20-T1 fix (conf 95): the language policy
+# (trace_pass.py:110-112) and reflective-quoting semantics (quote returns
+# an AST handle; the value is a reflection-cell pointer) both define
+# "trace" and "reflect" as RUNTIME OBSERVERS, not semantic effects.
+# A @pure function is permitted to contain TRACE_ENTRY/TRACE_EXIT and
+# QUOTE/REFLECT_HASH ops — these observe program structure / execution
+# without participating in the value semantics that purity reasons
+# about. The labels remain in OP_EFFECTS so non-pure callees declaring
+# @effect(trace) / @effect(reflect) still get the unused-effect check
+# (19002); only the @pure violation check (19001) exempts them.
+PURITY_OBSERVER_EFFECTS: frozenset[str] = frozenset({"trace", "reflect"})
 
 
 # Attribute keys that are NOT effect labels. Anything else in fn.attrs is
@@ -89,7 +111,47 @@ META_ATTRS = frozenset({
     # Audit / debug markers introduced by post-AD passes (kept META so
     # they don't masquerade as declared effects).
     "checkpoint", "verifier",
+    # Stage 28.9 cycle 21 audit-T C20-T2 fix (conf 95): the parser emits
+    # these attribute keys (parser.py:275-292) for first-class language
+    # features that are NOT effects. Without these, a fn declared with
+    # @trace / @deprecated("x") / @autotune(K: [v]) / @since("vN") was
+    # silently mis-flagged with trap 19002 (declared unused effect) by
+    # IR effect_check, because the bare name fell through declared_effects'
+    # "anything not in META_ATTRS is a declared effect" rule.
+    # `trace` is special: it IS an effect label in OP_EFFECTS, but the
+    # @trace attribute marks instrumentation, not effect declaration.
+    # @effect(trace) (using effect:trace prefix) is the explicit declaration.
+    "trace",
+    "autotune",
+    "deprecated",
+    "since",
+    # @grad markers from autodiff pipeline (forward/reverse mode tags).
+    "grad",
 })
+
+
+# Stage 28.9 cycle 21 audit-T C20-T2 fix (conf 95): attribute keys with
+# value payloads (e.g. "deprecated:msg-text", "autotune:TILE=16,32",
+# "since:v0.3") are emitted by the parser alongside the bare key. They
+# must also be filtered out of declared_effects' bare-name fallback.
+# An attribute key is META if its colon-prefix matches any of these.
+META_ATTR_PREFIXES: tuple[str, ...] = (
+    "autotune:",
+    "deprecated:",
+    "since:",
+)
+
+
+def _is_meta_attr(key: str) -> bool:
+    """Stage 28.9 cycle 21 C20-T2: True if `key` is a non-effect
+    attribute (either a bare META_ATTRS member or a value-carrying
+    META_ATTR_PREFIXES form)."""
+    if key in META_ATTRS:
+        return True
+    for prefix in META_ATTR_PREFIXES:
+        if key.startswith(prefix):
+            return True
+    return False
 
 
 class EffectError(Exception):
@@ -120,7 +182,10 @@ def declared_effects(fn: tir.FnIR) -> frozenset[str]:
     for k, v in fn.attrs.items():
         if v is not True:
             continue
-        if k in META_ATTRS:
+        # Stage 28.9 cycle 21 C20-T2: META check uses _is_meta_attr to
+        # cover both bare keys (e.g. "trace") and value-carrying forms
+        # (e.g. "autotune:TILE=16,32", "deprecated:old-fn-msg").
+        if _is_meta_attr(k):
             continue
         if k.startswith("effect:"):
             declared.add(k[len("effect:"):])
@@ -239,15 +304,33 @@ def check_module(module: tir.Module) -> list[str]:
     for name, fn in module.functions.items():
         clos = closure[name]
         if is_pure_decl(fn):
-            if clos:
+            # Stage 28.9 cycle 21 audit-T C20-T1 fix (conf 95): exempt
+            # PURITY_OBSERVER_EFFECTS (trace, reflect) from the @pure
+            # violation check. Per documented language policy:
+            #   - @trace @pure fn is allowed (trace_pass.py:110-112)
+            #   - quote { ... } in @pure fn is allowed (reflection is
+            #     observability, not effect)
+            # Without this exemption, the cycle-22 hardening that added
+            # TRACE_ENTRY/TRACE_EXIT and QUOTE/REFLECT_HASH to OP_EFFECTS
+            # silently became a stricter-than-documented policy.
+            effective_clos = clos - PURITY_OBSERVER_EFFECTS
+            if effective_clos:
                 errors.append(
                     f"@pure function {name!r} has actual effects "
-                    f"{{{', '.join(sorted(clos))}}} (must be empty) "
+                    f"{{{', '.join(sorted(effective_clos))}}} (must be empty) "
                     f"[trap {EffectError.trap_id_pure_violation}]"
                 )
         else:
             decl = declared_effects(fn)
-            extra = clos - decl
+            # Stage 28.9 cycle 21 audit-T C20-T1 (conf 95): subtract
+            # PURITY_OBSERVER_EFFECTS from the actual closure before
+            # computing missing-declarations. Trace/reflect are
+            # universally allowed (observers, not effects) — no
+            # function ever needs to declare them, regardless of
+            # @pure status. Without this, a non-pure fn body that
+            # uses TRACE_ENTRY/TRACE_EXIT (via @trace) but doesn't
+            # declare @effect(trace) trips 19001.
+            extra = (clos - PURITY_OBSERVER_EFFECTS) - decl
             if extra:
                 errors.append(
                     f"function {name!r} declares effects "

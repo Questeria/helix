@@ -331,6 +331,81 @@ def test_stage17_nan_fold_via_neg_traps_17001():
     raise AssertionError("expected FoldError trap 17001 via NEG")
 
 
+def test_stage19_shift_out_of_range_traps_17002():
+    """Stage 28.9 cycle 21 audit-R C20-R1 regression test (HIGH).
+    Cycle 19 added `ShiftFoldError` for out-of-range const shifts as
+    'loud failure / trap 17002', but the raise sits inside a
+    `try/except Exception: return None` block — so the trap was
+    silently swallowed. The cycle 21 fix adds `except FoldError: raise`
+    above the catch-all. This test exercises that the trap actually
+    propagates."""
+    from helixc.ir.passes.const_fold import ShiftFoldError, FoldError
+    # Build the SHL directly in IR — `1 << 64` written in surface
+    # Helix may get rejected upstream by the typecheck or otherwise
+    # not survive into the fold pass intact.
+    mod = tir.Module()
+    i32 = tir.TIRScalar("i32")
+    blk = tir.Block(id=0)
+    v_l = tir.Value(id=0, ty=i32)
+    v_r = tir.Value(id=1, ty=i32)
+    v_s = tir.Value(id=2, ty=i32)
+    blk.ops = [
+        tir.Op(kind=tir.OpKind.CONST_INT, operands=[], results=[v_l],
+               attrs={"value": 1}),
+        tir.Op(kind=tir.OpKind.CONST_INT, operands=[], results=[v_r],
+               attrs={"value": 64}),  # out of range [0, 63]
+        tir.Op(kind=tir.OpKind.SHL, operands=[v_l, v_r], results=[v_s]),
+        tir.Op(kind=tir.OpKind.RETURN, operands=[v_s], results=[]),
+    ]
+    fn = tir.FnIR(name="main", params=[], return_ty=i32, blocks=[blk])
+    mod.functions["main"] = fn
+    mod.next_value_id = 3
+    mod.next_block_id = 1
+    try:
+        fold_module(mod)
+    except ShiftFoldError as e:
+        assert ShiftFoldError.trap_id == 17002
+        assert "17002" in str(e)
+        # Confirm it's also a FoldError subclass (the documented contract).
+        assert isinstance(e, FoldError)
+        return
+    raise AssertionError(
+        "expected ShiftFoldError trap 17002 for SHL with shift>=64 "
+        "(cycle 21 C20-R1: was being silently swallowed by "
+        "`except Exception` in _try_fold_op's bitwise/shift block)"
+    )
+
+
+def test_stage19_shr_out_of_range_traps_17002():
+    """Same regression as test_stage19_shift_out_of_range_traps_17002
+    but exercising SHR (line 435) instead of SHL (line 428)."""
+    from helixc.ir.passes.const_fold import ShiftFoldError
+    mod = tir.Module()
+    i32 = tir.TIRScalar("i32")
+    blk = tir.Block(id=0)
+    v_l = tir.Value(id=0, ty=i32)
+    v_r = tir.Value(id=1, ty=i32)
+    v_s = tir.Value(id=2, ty=i32)
+    blk.ops = [
+        tir.Op(kind=tir.OpKind.CONST_INT, operands=[], results=[v_l],
+               attrs={"value": 256}),
+        tir.Op(kind=tir.OpKind.CONST_INT, operands=[], results=[v_r],
+               attrs={"value": -1}),  # negative shift, out of range
+        tir.Op(kind=tir.OpKind.SHR, operands=[v_l, v_r], results=[v_s]),
+        tir.Op(kind=tir.OpKind.RETURN, operands=[v_s], results=[]),
+    ]
+    fn = tir.FnIR(name="main", params=[], return_ty=i32, blocks=[blk])
+    mod.functions["main"] = fn
+    mod.next_value_id = 3
+    mod.next_block_id = 1
+    try:
+        fold_module(mod)
+    except ShiftFoldError as e:
+        assert "17002" in str(e)
+        return
+    raise AssertionError("expected ShiftFoldError trap 17002 for SHR shift<0")
+
+
 def test_stage17_i32_overflow_wraps_two_complement():
     """Stage 17 spec: i32 fold must wrap on overflow (two's-complement).
     INT_MAX + 1 = -2147483648 in i32."""
