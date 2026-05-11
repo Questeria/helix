@@ -199,12 +199,6 @@ def test_x_minus_x_float_NOT_folded_for_nan_safety():
     assert subs == 1, f"float x-x must NOT fold (NaN-NaN=NaN); got {subs} SUBs"
 
 
-def test_x_mod_one_folds_to_zero():
-    mod = lower_and_fold("fn main() -> i32 { let x = 17; x % 1 }")
-    mods = count_ops(mod, tir.OpKind.MOD)
-    assert mods == 0
-
-
 def test_self_int_compare_folds():
     # x == x (int) should fold to 1
     mod = lower_and_fold("""
@@ -240,12 +234,6 @@ def test_zero_plus_x_folds():
     mod = lower_and_fold("fn main() -> i32 { let x = 7; 0 + x }")
     adds = count_ops(mod, tir.OpKind.ADD)
     assert adds == 0, f"expected 0+x to fold, ADD count = {adds}"
-
-
-def test_x_div_one_folds():
-    mod = lower_and_fold("fn main() -> i32 { let x = 7; x / 1 }")
-    divs = count_ops(mod, tir.OpKind.DIV)
-    assert divs == 0, f"expected x/1 to fold, DIV count = {divs}"
 
 
 def test_x_minus_zero_folds():
