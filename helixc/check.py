@@ -271,7 +271,33 @@ def main(argv: list[str] | None = None) -> int:
     # at the bottom is never reached).
     try:
         rc = _main_inner(argv, a_holder)
+    # Audit 28.8 cycle 5 C4-6 / MEDIUM: distinguish user-environment
+    # errors (file I/O, encoding, missing modules) from genuine
+    # compiler bugs. Pre-fix the broad `except Exception` printed
+    # "this is a compiler bug — please file an issue" for FileNotFound,
+    # UnicodeDecodeError, ImportError, etc. — which are NOT compiler
+    # bugs. Now: env errors get a clean `helixc:` message with rc=2
+    # (config / invocation error); only genuine pipeline-internal
+    # exceptions get the "compiler bug" tagline.
+    except (FileNotFoundError, PermissionError, IsADirectoryError,
+            NotADirectoryError) as e:
+        print(f"helixc: {e}", file=sys.stderr)
+        rc = 2
+    except UnicodeDecodeError as e:
+        print(
+            f"helixc: encoding error reading source: {e}",
+            file=sys.stderr,
+        )
+        rc = 2
+    except ImportError as e:
+        # An import failure is an environment problem (missing module
+        # or broken install), not a user-source compile bug.
+        print(f"helixc: import error: {e}", file=sys.stderr)
+        rc = 2
     except Exception as e:
+        # Everything else (AttributeError, KeyError, IndexError,
+        # AssertionError, TypeError, RuntimeError, ValueError, etc.)
+        # is a genuine internal-error candidate.
         print(
             f"helixc: internal error: {type(e).__name__}: {e}",
             file=sys.stderr,
@@ -282,13 +308,24 @@ def main(argv: list[str] | None = None) -> int:
         )
         rc = 1
     finally:
-        if a_holder:
-            drain_rc = _drain_ad_warnings(a_holder[0])
-            if drain_rc != 0 and rc == 0:
-                rc = drain_rc
-        else:
-            # No CliArgs yet — drain quietly to keep state hygienic.
-            _drain_ad_init()
+        # Audit 28.8 cycle 5 C4-6: wrap the drain itself so a drain
+        # failure doesn't mask the primary failure. Pre-fix, if
+        # `_drain_ad_warnings` raised in the finally, the new exception
+        # propagated up as a raw traceback masking the original.
+        try:
+            if a_holder:
+                drain_rc = _drain_ad_warnings(a_holder[0])
+                if drain_rc != 0 and rc == 0:
+                    rc = drain_rc
+            else:
+                # No CliArgs yet — drain quietly to keep state hygienic.
+                _drain_ad_init()
+        except Exception as drain_e:
+            print(
+                f"helixc: warning: AD-warning drain failed: "
+                f"{type(drain_e).__name__}: {drain_e}",
+                file=sys.stderr,
+            )
     return rc
 
 

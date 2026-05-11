@@ -2205,20 +2205,19 @@ class TypeChecker:
         # Memory-tier types are incompatible across tiers (must explicitly
         # consolidate / recall to convert).
         #
-        # Audit 28.8 cycle 7 G2 carve-out: TyVar / TySize on either side
-        # is NOT considered cross-tier — generic substitution may later
-        # bind T to a TyMemTier, but a bare TyVar at this position
-        # defers compatibility to mono (same cascade-safe rule as
-        # TyUnknown). The cycle-6 F1 cascade is now narrowed to
-        # `_size_compatible` for shape positions; here we accept the
-        # TyVar/TySize pair only when it's the explicit generic-defer
-        # case (one side TyMemTier, other TyVar/TySize).
+        # Audit 28.8 cycle 8 C7-1: dropped cycle-7 G2's TyMemTier × (TyVar
+        # | TySize) carve-out. The carve-out was placed at top-level
+        # `_compatible` and leaked silent-acceptance to body / let / if-
+        # else / match-arm value-position callsites — the same over-broad
+        # cascade pattern that cycle-7 narrowed for F1 via
+        # `_size_compatible`. TyMemTier × TySize is a genuine kind
+        # mismatch (a size can't be a memory-tier); TyMemTier × TyVar at
+        # value position is rare enough that a hard error is preferable
+        # to silent acceptance. If a generic-over-MemTier pattern emerges
+        # later, re-introduce the carve-out only at the call boundary
+        # (`_check_call_basic`) rather than in the structural matcher.
         if isinstance(a, TyMemTier) and isinstance(b, TyMemTier):
             return a.tier == b.tier and self._compatible(a.inner, b.inner)
-        if isinstance(a, TyMemTier) and isinstance(b, (TyVar, TySize)):
-            return True
-        if isinstance(b, TyMemTier) and isinstance(a, (TyVar, TySize)):
-            return True
         if isinstance(a, TyMemTier) or isinstance(b, TyMemTier):
             return False
         # Audit 28.8 cycle 2 B:C3: Quote<T> ~ Quote<U> iff T ~ U.
