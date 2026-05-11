@@ -368,34 +368,52 @@ fn main() -> i32 { die() }
 
 
 def test_walker_does_not_callback_on_stmts():
-    """C1-L1: walker invokes callback only on `A.Expr` subclasses, not
-    on `A.Stmt` subclasses (Let, ExprStmt, ConstStmt). Note that `A.Block`
-    is itself an `A.Expr` subclass in this AST schema, so the walker DOES
-    fire on Blocks — what the fix prevents is firing on Stmt-tagged nodes."""
+    """C1-L1: panic-collector visit_Call dispatch must only fire on
+    A.Call nodes — never on Stmt subclasses.
+
+    Stage 28.8.2: panic_pass migrated from the hand-rolled
+    `_walk_exprs(fn.body, callback)` helper to a
+    `_PanicCollector(ASTVisitor)` subclass. The base-class
+    `generic_visit` now traverses Stmt subclasses (Let, ExprStmt,
+    ConstStmt) along with Expr subclasses, but `visit_Call` only
+    receives Call nodes by dispatch.
+
+    This test pins the new contract: the visitor's dispatched
+    callback (visit_Call) sees only Call nodes — not Let / ExprStmt /
+    ConstStmt / etc. Previously the test pinned the
+    `_walk_exprs`-callback contract (only Expr), but that was an
+    implementation detail of the pre-fix walker; the user-facing
+    contract is `_is_panic_call(node)` only sees Calls.
+    """
     src = '''
 fn body() -> i32 {
     let x: i32 = 0;
-    x
+    x + panic_arg()
 }
+fn panic_arg() -> i32 { 0 }
 '''
     prog = parse(src)
     seen: list = []
 
-    def cb(e):
-        seen.append(e)
+    from helixc.frontend.panic_pass import _PanicCollector
 
-    from helixc.frontend.panic_pass import _walk_exprs
-    fn = next(it for it in prog.items if isinstance(it, A.FnDecl))
-    _walk_exprs(fn.body, cb)
-    # None of the seen nodes should be an A.Stmt subclass.
+    class _Recorder(_PanicCollector):
+        def visit_Call(self, node):
+            seen.append(node)
+            super().visit_Call(node)
+
+    fn = next(it for it in prog.items
+              if isinstance(it, A.FnDecl) and it.name == "body")
+    _Recorder("body", []).visit(fn.body)
+    # All seen nodes must be A.Call — visit_Call is dispatched only for
+    # Call nodes, never for Let / ExprStmt / ConstStmt / Block / etc.
     for n in seen:
-        assert isinstance(n, A.Expr), (
-            f"_walk_exprs callback fired on {type(n).__name__!r}, which "
-            f"is not an A.Expr subclass; only Exprs are expected"
+        assert isinstance(n, A.Call), (
+            f"visit_Call fired on {type(n).__name__!r}, which is not "
+            f"an A.Call; only Calls should be dispatched here"
         )
-    # At least one Expr should have fired (the Block, the `0` IntLit, the
-    # `x` Name, etc.).
-    assert seen, "callback should have fired on at least one Expr"
+    # At least one Call should have fired (panic_arg() in the body).
+    assert seen, "visit_Call should have fired on at least one Call"
 
 
 if __name__ == "__main__":

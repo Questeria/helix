@@ -30,79 +30,18 @@ from __future__ import annotations
 from typing import Optional
 
 from . import ast_nodes as A
+from .ast_walker import ASTVisitor
 
 
 TRAP_PANIC_INVOKED = 28501
 TRAP_UNWIND_NOT_SUPPORTED = 28502
 
 
-def _walk_exprs(node, callback) -> None:
-    """Recursive walk over a Block / Expr / Stmt, calling
-    `callback(expr)` for each expression node encountered. Phase-0
-    conservative — handles the common forms used in panic detection.
-
-    Audit 28.8 fixes:
-      * **C1-H1 / A6** (HIGH): scalar-attr list now matches the canonical
-        AST schema in `ast_nodes.py`. `A.If` has `then` / `else_` (not
-        `then_branch` / `else_branch` — those names don't exist on any
-        node), and `A.For` has `iter_expr`. Without these, `panic()` calls
-        inside `if` / `else` / `for` were silently invisible to
-        `collect_panics` / `validate_panic_args`.
-      * **C1-L1** (LOW): callback only fires on actual expression nodes
-        (`isinstance(node, A.Expr)`). Previously `hasattr(node, "span")`
-        also caught `A.Block` and `A.ExprStmt` — no false-positives today
-        (because `_is_panic_call` rejects non-Calls), but fragile against
-        future callback changes.
-    """
-    if node is None:
-        return
-    # Invoke callback ONLY on real expression nodes — not statement
-    # wrappers or block containers. (C1-L1.)
-    if isinstance(node, A.Expr):
-        callback(node)
-    # Block has stmts + final_expr
-    if isinstance(node, A.Block):
-        for s in node.stmts:
-            _walk_exprs(s, callback)
-        if node.final_expr is not None:
-            _walk_exprs(node.final_expr, callback)
-        return
-    # ExprStmt wraps an expr
-    expr_attr = getattr(node, "expr", None)
-    if expr_attr is not None and hasattr(expr_attr, "span"):
-        _walk_exprs(expr_attr, callback)
-    # Recurse into common sub-expression containers. Attr names match
-    # `ast_nodes.py`: If has `then`/`else_`; For has `iter_expr`.
-    for attr in ("left", "right", "operand", "cond", "then", "else_",
-                 "value", "scrutinee", "callee", "init",
-                 "rhs", "body", "iter_expr", "obj", "target",
-                 "start", "end", "guard", "inner", "transformation",
-                 "verifier"):
-        sub = getattr(node, attr, None)
-        if sub is not None and hasattr(sub, "span"):
-            _walk_exprs(sub, callback)
-    for attr in ("args", "stmts", "fields", "elems", "arms",
-                 "indices"):
-        seq = getattr(node, attr, None)
-        if seq is None:
-            continue
-        try:
-            for it in seq:
-                if isinstance(it, tuple):
-                    for sub in it:
-                        if hasattr(sub, "span"):
-                            _walk_exprs(sub, callback)
-                elif hasattr(it, "span"):
-                    _walk_exprs(it, callback)
-        except TypeError:
-            # Re-raise rather than silently swallow: a TypeError on
-            # iteration means the AST shape changed in a way we didn't
-            # anticipate; hiding it would mask real walker bugs.
-            raise
-    # Final expression of a block (when not handled above)
-    final = getattr(node, "final_expr", None)
-    if final is not None and hasattr(final, "span") and not isinstance(node, A.Block):
-        _walk_exprs(final, callback)
+# Stage 28.8.2: panic_pass walker migrated to ASTVisitor base class.
+# Pre-fix this module hand-rolled `_walk_exprs` with a literal list of
+# attribute names that audit cycles 1-3 caught drifting (C1-H1 / A6 / A5).
+# The shared library introspects dataclass fields, so adding new Expr
+# subtypes or fields no longer silently drops walker coverage.
 
 
 def _is_panic_call(expr) -> bool:
@@ -112,49 +51,81 @@ def _is_panic_call(expr) -> bool:
     return isinstance(callee, A.Name) and callee.name == "panic"
 
 
+class _PanicCollector(ASTVisitor):
+    """Stage 28.8.2: collect every `panic("...")` call site as
+    (fn_name, span, msg_or_None) tuples. Drop-in replacement for the
+    pre-fix `_walk_exprs` + bespoke callback closure.
+    """
+
+    def __init__(self, fn_name: str,
+                 out: list[tuple[str, A.Span, Optional[str]]]):
+        self.fn_name = fn_name
+        self.out = out
+
+    def visit_Call(self, node: A.Call) -> None:
+        # Record panic("..."); generic_visit handles recursing into the
+        # callee + args after this returns.
+        if _is_panic_call(node):
+            msg: Optional[str] = None
+            if node.args and isinstance(node.args[0], A.StrLit):
+                msg = node.args[0].value
+            self.out.append((self.fn_name, node.span, msg))
+
+
 def collect_panics(prog: A.Program) -> list[tuple[str, A.Span, Optional[str]]]:
     """For each `panic("...")` call in any fn body, return
-    (fn_name, span, msg_or_None)."""
+    (fn_name, span, msg_or_None).
+
+    Stage 28.8.2: uses ``_PanicCollector(ASTVisitor)`` rather than the
+    pre-fix `_walk_exprs` helper — the shared library is drift-proof
+    against future AST field additions.
+    """
     out: list[tuple[str, A.Span, Optional[str]]] = []
     for it in prog.items:
         if not isinstance(it, A.FnDecl) or it.is_extern:
             continue
-
-        def cb(e, fn_name=it.name):
-            if _is_panic_call(e):
-                msg: Optional[str] = None
-                if e.args and isinstance(e.args[0], A.StrLit):
-                    msg = e.args[0].value
-                out.append((fn_name, e.span, msg))
-
-        _walk_exprs(it.body, cb)
+        _PanicCollector(it.name, out).visit(it.body)
     return out
+
+
+class _PanicArgsValidator(ASTVisitor):
+    """Stage 28.8.2: emit a diagnostic for every panic(...) call whose
+    args don't match the contract (exactly one StrLit). Replaces the
+    pre-fix `_walk_exprs` + closure callback pattern.
+    """
+
+    def __init__(self, fn_name: str, diags: list[str]):
+        self.fn_name = fn_name
+        self.diags = diags
+
+    def visit_Call(self, node: A.Call) -> None:
+        if not _is_panic_call(node):
+            return
+        if len(node.args) != 1:
+            self.diags.append(
+                f"{node.span.line}:{node.span.col}: panic in {self.fn_name!r}: "
+                f"expected 1 arg, got {len(node.args)}"
+            )
+            return
+        arg = node.args[0]
+        if not isinstance(arg, A.StrLit):
+            self.diags.append(
+                f"{node.span.line}:{node.span.col}: panic in {self.fn_name!r}: "
+                f"arg must be a string literal"
+            )
 
 
 def validate_panic_args(prog: A.Program) -> list[str]:
     """For every `panic(...)` call, enforce single-string-literal arg.
-    Returns diagnostic strings."""
+    Returns diagnostic strings.
+
+    Stage 28.8.2: uses ``_PanicArgsValidator(ASTVisitor)``.
+    """
     diags: list[str] = []
     for it in prog.items:
         if not isinstance(it, A.FnDecl) or it.is_extern:
             continue
-
-        def cb(e, fn_name=it.name, diags=diags):
-            if not _is_panic_call(e):
-                return
-            if len(e.args) != 1:
-                diags.append(
-                    f"{e.span.line}:{e.span.col}: panic in {fn_name!r}: "
-                    f"expected 1 arg, got {len(e.args)}"
-                )
-                return
-            arg = e.args[0]
-            if not isinstance(arg, A.StrLit):
-                diags.append(
-                    f"{e.span.line}:{e.span.col}: panic in {fn_name!r}: "
-                    f"arg must be a string literal"
-                )
-        _walk_exprs(it.body, cb)
+        _PanicArgsValidator(it.name, diags).visit(it.body)
     return diags
 
 
