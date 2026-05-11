@@ -1562,11 +1562,30 @@ def test_d7_deep_ref_cast_bounded():
 
 
 def main():
+    # Tests requiring pytest fixtures (tmp_path / monkeypatch / capsys /
+    # etc.) are skipped here — the manual runner can't synthesize
+    # fixtures. Same pattern as test_parser.py's runner. They're still
+    # discovered by `pytest helixc/tests/test_typecheck.py` which DOES
+    # wire fixtures, so coverage is preserved.
+    import inspect
     tests = [(name, fn) for name, fn in globals().items()
              if name.startswith("test_") and callable(fn)]
     passed = 0
     failed = 0
+    skipped = 0
     for name, fn in tests:
+        try:
+            sig = inspect.signature(fn)
+            required = [p for p in sig.parameters.values()
+                        if p.default is inspect.Parameter.empty
+                        and p.kind in (inspect.Parameter.POSITIONAL_ONLY,
+                                       inspect.Parameter.POSITIONAL_OR_KEYWORD)]
+        except (TypeError, ValueError):
+            required = []
+        if required:
+            print(f"SKIP {name}: needs pytest fixtures {[p.name for p in required]}")
+            skipped += 1
+            continue
         try:
             fn()
             print(f"PASS {name}")
@@ -1577,7 +1596,10 @@ def main():
         except Exception as e:
             print(f"ERROR {name}: {type(e).__name__}: {e}")
             failed += 1
-    print(f"\n{passed} passed, {failed} failed")
+    summary = f"{passed} passed, {failed} failed"
+    if skipped:
+        summary += f", {skipped} skipped"
+    print(f"\n{summary}")
     sys.exit(0 if failed == 0 else 1)
 
 
