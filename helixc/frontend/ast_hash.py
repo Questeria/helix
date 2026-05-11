@@ -235,10 +235,70 @@ def _hash_into(h: "hashlib._Hash", node: Any,
             _emit(h, "Param", repr(p.ty))   # type only, not name
         _hash_into(h, node.body, local)
         return
-    # Fallback for anything we haven't enumerated: hash the type name.
-    # This is conservative: it prevents collisions but two different
-    # instances of the same class share a hash.
-    _emit(h, "Unknown", type(node).__name__)
+    # Stage 28.9 cycle 35 audit-T C34-1 fix (conf 95): add explicit
+    # arms for AST subclasses previously falling into the catch-all
+    # `_emit(h, "Unknown", type(node).__name__)`. Pre-fix, that
+    # fallback emitted ONLY the class name with NO recursion into
+    # children, so any two instances of the same uncovered class
+    # hashed identically. lower_ast.py uses structural_hash() as the
+    # QUOTE handle key — `quote { return 1 }` and `quote { return 99 }`
+    # therefore collapsed to the same ast_handle (verified by direct
+    # repro), causing silent QUOTE-cell aliasing at runtime.
+    # Same defect class as cycle 14 C14-3 / cycle 15 C15-1 silent-
+    # accept fallback in match_lower walkers — applied symmetrically
+    # here. The catch-all is now a loud NotImplementedError so any
+    # future AST subclass forces an explicit hash-arm decision.
+    if isinstance(node, A.Path):
+        _emit(h, "Path", tuple(node.segments))
+        return
+    if isinstance(node, A.StructLit):
+        _emit(h, "StructLit", node.name, len(node.fields))
+        for fname, fval in node.fields:
+            _emit(h, "StructField", fname)
+            _hash_into(h, fval, binders)
+        return
+    if isinstance(node, A.Return):
+        _emit(h, "Return")
+        if node.value is not None:
+            _hash_into(h, node.value, binders)
+        else:
+            _emit(h, "ReturnNoValue")
+        return
+    if isinstance(node, A.Break):
+        _emit(h, "Break")
+        if getattr(node, "value", None) is not None:
+            _hash_into(h, node.value, binders)
+        else:
+            _emit(h, "BreakNoValue")
+        return
+    if isinstance(node, A.Continue):
+        _emit(h, "Continue")
+        return
+    if isinstance(node, A.UnsafeBlock):
+        _emit(h, "UnsafeBlock")
+        _hash_into(h, node.body, binders)
+        return
+    if isinstance(node, A.TileLit):
+        _emit(h, "TileLit", repr(node.dtype), node.init)
+        for s in node.shape:
+            _hash_into(h, s, binders)
+        _hash_into(h, node.memspace, binders)
+        return
+    # Loud-fail catchall — matches the cycle-14/15 NotImplementedError
+    # discipline in match_lower._collect_binds and _pattern_test_expr.
+    # Any future AST subclass that lands without an explicit hash arm
+    # surfaces here loudly, preventing the silent-collision regression
+    # that cycle-34 C34-1 caught.
+    span_str = (
+        f"{node.span.line}:{node.span.col}"
+        if getattr(node, "span", None) is not None else "?"
+    )
+    raise NotImplementedError(
+        f"ast_hash._hash_into at {span_str}: unhandled AST subclass "
+        f"{type(node).__name__}; add an explicit arm in ast_hash.py "
+        f"to declare its structural hash. (helixc internal bug — "
+        f"please file an issue.)"
+    )
 
 
 def _pattern_binders(pat: A.Pattern) -> list[str]:

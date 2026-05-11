@@ -161,6 +161,13 @@ META_ATTRS = frozenset({
     "since",
     # @grad markers from autodiff pipeline (forward/reverse mode tags).
     "grad",
+    # Stage 28.9 cycle 35 audit-T C34-2 fix (conf 92): @inline is a
+    # compiler hint (documented at ast_nodes.py:452), not an effect.
+    # Pre-fix, `@inline fn f() -> i32 { 42 }` (without @pure) tripped
+    # trap 19002 "declares unused effect(s) {inline}". Same defect
+    # class as cycle 21 C20-T2 which added trace/autotune/deprecated/
+    # since to META_ATTRS.
+    "inline",
 })
 
 

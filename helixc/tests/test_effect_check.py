@@ -491,6 +491,22 @@ def test_c20_t2_combo_attrs_no_spurious_19002():
     )
 
 
+def test_c34_2_inline_attr_no_spurious_19002():
+    """Stage 28.9 cycle 35 audit-T C34-2 regression (MED conf 92):
+    @inline alone (without @pure) must not trip trap 19002 'declares
+    unused effect'. Pre-fix, META_ATTRS was missing 'inline' so the
+    bare-name fell through declared_effects' "anything not META is
+    declared effect" rule. ast_nodes.py:452 documents @inline as a
+    compiler hint, not an effect — same as @trace/@autotune/@deprecated
+    fixed in cycle 21 C20-T2."""
+    src = "@inline fn f(x: i32) -> i32 { x + 1 }"
+    mod = lower_only(src)
+    errs = check_module(mod)
+    assert errs == [], (
+        f"@inline alone must not trip 19002; got {errs}"
+    )
+
+
 def test_c25_cr2_extern_fn_does_not_declare_ffi():
     """C25 audit-R cr2 / C23-4 invariant regression (conf 88): an
     extern fn's OWN FnIR has is_extern=True / extern_abi=... as

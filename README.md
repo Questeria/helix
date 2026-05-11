@@ -20,9 +20,9 @@ This is the from-scratch implementation of Kovostov: a local AI system where eve
 - **Runtime**: `helixrt`
 - **Bootstrap chain**: stage0 (hand-encoded hex) → hex1 → M0 (assembler) → M1 → M2 (C-subset compiler) → helixc-bootstrap (in C-subset) → helixc (self-hosted in Helix)
 
-## Status (2026-05-04 evening)
+## Status (2026-05-11)
 
-**376 tests passing**, ~80 commits across the pipeline.
+**1,490 tests passing** (1 skipped), Stage 28.9 active (bootstrap kovc.hx self-hosting effort), 34+ audit-driven cycles refining the Python frontend.
 
 Major direction shift this session: Helix is now being optimized **for AI to USE and EXTEND, not for human developers**. Where ergonomics conflicts with structural regularity, structural regularity wins.
 

@@ -248,6 +248,70 @@ fn main() -> i32 {
         f"expected non-zero dedupe count: {r.stdout}"
 
 
+# --- Stage 28.9 cycle 35 audit-T C34-1 regression tests ---
+
+
+def test_c34_1_return_value_affects_hash():
+    """C34-1 regression (HIGH conf 95): pre-fix, ast_hash._hash_into
+    had a catch-all fallback `_emit(h, "Unknown", type(node).__name__)`
+    that emitted ONLY the class name with NO recursion into children.
+    Two A.Return nodes with different values hashed identically,
+    causing silent QUOTE-cell aliasing — `quote { return 1 }` and
+    `quote { return 99 }` would map to the same ast_handle."""
+    src1 = "fn main() -> i32 { quote { return 1 }; 0 }"
+    src2 = "fn main() -> i32 { quote { return 99 }; 0 }"
+
+    def find_quote_inner(p):
+        for it in p.items:
+            if isinstance(it, A.FnDecl):
+                for stmt in it.body.stmts:
+                    if isinstance(stmt, A.ExprStmt) and \
+                            isinstance(stmt.expr, A.Quote):
+                        return stmt.expr.inner
+        return None
+
+    p1, p2 = parse(src1), parse(src2)
+    q1, q2 = find_quote_inner(p1), find_quote_inner(p2)
+    assert q1 is not None and q2 is not None
+    h1 = structural_hash(q1)
+    h2 = structural_hash(q2)
+    assert h1 != h2, (
+        f"quote{{return 1}} and quote{{return 99}} must hash "
+        f"differently (else silent QUOTE-cell aliasing); got h1=h2"
+    )
+
+
+def test_c34_1_structlit_fields_affect_hash():
+    """C34-1: two StructLit nodes with different fields must hash
+    differently. Pre-fix, both `Point{x:1}` and `Point{x:99}`
+    hashed identically because the StructLit branch was missing."""
+    sl1 = A.StructLit(
+        span=A.Span(line=1, col=1),
+        name="Point",
+        fields=[("x", A.IntLit(span=A.Span(line=1, col=1), value=1,
+                               type_suffix=None))],
+    )
+    sl2 = A.StructLit(
+        span=A.Span(line=1, col=1),
+        name="Point",
+        fields=[("x", A.IntLit(span=A.Span(line=1, col=1), value=99,
+                               type_suffix=None))],
+    )
+    assert structural_hash(sl1) != structural_hash(sl2), (
+        "StructLit with different field values must hash differently"
+    )
+
+
+def test_c34_1_path_segments_affect_hash():
+    """C34-1: Path with different segments must hash differently.
+    Pre-fix, `Foo::A` and `Bar::B` hashed identically."""
+    p1 = A.Path(span=A.Span(line=1, col=1), segments=["Foo", "A"])
+    p2 = A.Path(span=A.Span(line=1, col=1), segments=["Bar", "B"])
+    assert structural_hash(p1) != structural_hash(p2), (
+        "Path with different segments must hash differently"
+    )
+
+
 def main():
     tests = [(name, fn) for name, fn in globals().items()
              if name.startswith("test_") and callable(fn)]

@@ -337,14 +337,21 @@ class PtxEmitter:
     # typecheck.py / x86_64 backend / const_fold. Pre-fix the `.get`
     # default at line 343 silently fell back to 4 bytes, producing
     # wrong stride for tensor<isize, ...> HBM tile elements.
+    # Stage 28.9 cycle 35 audit-R (conf 82): include "bool" as a
+    # 1-byte / u8 entry. `_ptx_type_str` already maps bool→.pred
+    # (line 170) but these addressing tables omitted bool, so a
+    # hypothetical tile<bool, ...> HBM op would silently fall back
+    # to 4 bytes / u32 — same defect class as the isize/usize gap.
+    # Phase-0 doesn't exercise tile<bool> today; this is a latent-
+    # silent-narrowing hardening matching the cycle 21 C20-1 fix.
     _DTYPE_SIZE = {"i8": 1, "u8": 1, "i16": 2, "u16": 2, "f16": 2, "bf16": 2,
                     "i32": 4, "u32": 4, "f32": 4, "i64": 8, "u64": 8, "f64": 8,
-                    "isize": 8, "usize": 8}
+                    "isize": 8, "usize": 8, "bool": 1}
     _DTYPE_PTX_LOAD = {"i8": "s8", "u8": "u8", "i16": "s16", "u16": "u16",
                         "f16": "f16", "bf16": "bf16",
                         "i32": "s32", "u32": "u32", "f32": "f32",
                         "i64": "s64", "u64": "u64", "f64": "f64",
-                        "isize": "s64", "usize": "u64"}
+                        "isize": "s64", "usize": "u64", "bool": "u8"}
 
     def _dtype_size(self, dtype: str) -> int:
         return self._DTYPE_SIZE.get(dtype, 4)
