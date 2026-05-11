@@ -3340,6 +3340,13 @@ fn fail_jmp_state_patch_all(state: i32, target: i32) -> i32 {
 // clobber it.
 fn emit_variant_subpats(sub_head: i32, scrut_off: i32, fail_state: i32,
                         bind_state: i32) -> i32 {
+    // Audit-stage5-6 Finding #9 fix: the inner load uses disp8 (signed,
+    // -128..127). At idx_in_payload >= 16, off_in_payload >= 128 wraps
+    // to a negative disp and the load silently reads BELOW the variant
+    // payload — a classic OOB-read. Emit trap 60030 before the wrapping
+    // load so the compiled binary crashes with the documented trap id
+    // instead of returning garbage. Same shape as Stage 4 Finding #7's
+    // existing trap 52001 for AST_TUPLE_FIELD.
     let mut total: i32 = 0;
     let mut cur: i32 = sub_head;
     let mut idx_in_payload: i32 = 1;     // skip disc at slot 0
@@ -3348,12 +3355,15 @@ fn emit_variant_subpats(sub_head: i32, scrut_off: i32, fail_state: i32,
         let sub_off = bind_alloc_offset(bind_state);
         // Re-load enum pointer.
         let n_rl = emit_mov_rax_local_64(scrut_off);
+        let n_trap = if idx_in_payload > 15 {
+            emit_trap_with_id(60030)
+        } else { 0 };
         let off_in_payload = idx_in_payload * 8;
         // mov rax, [rax + disp8]  (48 8B 40 disp8 = 4 bytes)
         emit_byte(0x48); emit_byte(0x8B); emit_byte(0x40); emit_byte(off_in_payload);
         let n_st = emit_mov_local_rax_64(sub_off);
         let n_sub = emit_pattern_test(sub_pat, sub_off, fail_state, bind_state);
-        total = total + n_rl + 4 + n_st + n_sub;
+        total = total + n_rl + n_trap + 4 + n_st + n_sub;
         idx_in_payload = idx_in_payload + 1;
         cur = __arena_get(cur + 2);
     }
@@ -3363,6 +3373,9 @@ fn emit_variant_subpats(sub_head: i32, scrut_off: i32, fail_state: i32,
 // Stage 7 PAT_TUPLE helper. Same as variant but starts at slot 0 (no disc).
 fn emit_tuple_subpats(sub_head: i32, scrut_off: i32, fail_state: i32,
                       bind_state: i32) -> i32 {
+    // Audit-stage5-6 Finding #9 fix (tuple variant): mirror the
+    // emit_variant_subpats cap-trap. idx_in_tuple >= 16 → off >= 128
+    // wraps signed disp8.
     let mut total: i32 = 0;
     let mut cur: i32 = sub_head;
     let mut idx_in_tuple: i32 = 0;
@@ -3370,11 +3383,14 @@ fn emit_tuple_subpats(sub_head: i32, scrut_off: i32, fail_state: i32,
         let sub_pat = __arena_get(cur + 1);
         let sub_off = bind_alloc_offset(bind_state);
         let n_rl = emit_mov_rax_local_64(scrut_off);
+        let n_trap = if idx_in_tuple > 15 {
+            emit_trap_with_id(60030)
+        } else { 0 };
         let off_in_tuple = idx_in_tuple * 8;
         emit_byte(0x48); emit_byte(0x8B); emit_byte(0x40); emit_byte(off_in_tuple);
         let n_st = emit_mov_local_rax_64(sub_off);
         let n_sub = emit_pattern_test(sub_pat, sub_off, fail_state, bind_state);
-        total = total + n_rl + 4 + n_st + n_sub;
+        total = total + n_rl + n_trap + 4 + n_st + n_sub;
         idx_in_tuple = idx_in_tuple + 1;
         cur = __arena_get(cur + 2);
     }

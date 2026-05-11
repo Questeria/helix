@@ -3307,6 +3307,33 @@ fn main() -> i32 {
         + " b42 }"
     assert compile_and_exec(fewer_lets) == 42, \
         "F11: 64 chained lets stays within budget — last binding readable"
+    # Audit stage5-6 Finding #9 regression: emit_variant_subpats /
+    # emit_tuple_subpats encode the sub-slot load with disp8 (signed
+    # -128..127). At sub_pat idx >= 16, off >= 128 wraps to a negative
+    # disp and the load reads BELOW the variant payload. Pre-fix this
+    # silently returned garbage; the F9 trap (60030) now fires before
+    # the wrapping load.
+    #
+    # Build an enum payload variant with 17 fields and match-bind all
+    # of them — the 17th sub-pattern (idx_in_payload == 17, past the
+    # 15-cap) triggers the trap. Exit code 132 (SIGILL) with eax=60030
+    # at trap site.
+    big_variant_src = (
+        "enum E { Big(i32, i32, i32, i32, i32, i32, i32, i32, i32, "
+        "             i32, i32, i32, i32, i32, i32, i32, i32) } "
+        "fn main() -> i32 { "
+        "    let e = E::Big(1, 2, 3, 4, 5, 6, 7, 8, 9, "
+        "                   10, 11, 12, 13, 14, 15, 16, 17); "
+        "    match e { "
+        "        E::Big(a, b, c, d, e_, f, g, h, i, "
+        "               j, k, l, m, n, o, p, q) => q, "
+        "        _ => 0, "
+        "    } "
+        "}"
+    )
+    code = compile_and_exec(big_variant_src)
+    assert code == 132, \
+        f"F9: variant subpat idx >15 should trap 60030 (SIGILL=132), got {code}"
     # Audit stage7-8 Finding #4 regression: mr_tab caps at 32 unique generic
     # instantiations. Pre-fix `mr_tab_add` returned -1 silently on overflow
     # and the call kept the mangled-but-unregistered name; the mono pass

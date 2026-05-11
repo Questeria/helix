@@ -61,6 +61,7 @@ Used by the Python frontend (`helixc/frontend/*.py`) and audit-introduced trap I
 | 28801 | `SHAPE_FOLD_ZERO_DIV` | `helixc/frontend/monomorphize.py:_fold_intlit_arith` | 28.8 cycle 3 | division-by-zero or modulo-by-zero in a shape expression (e.g. `[T; N / 0]`). Hard error — silent fallthrough to length 0 is no longer allowed. |
 | 28802 | `ARRAY_SIZE_NEGATIVE_OR_ZERO` | `helixc/frontend/typecheck.py:_resolve_size_expr` | 28.8 cycle 3 | array size resolves to a negative or zero IntLit (source `[T; -5]` or mono-substituted `[T; N-N]`). Phase-0 requires size > 0. |
 | 28803 | `CAST_MATRIX_RECURSION_DEPTH` | `helixc/frontend/typecheck.py:_check_cast_compat` | 28.8 cycle 3 | ref-nesting in cast exceeds 8 levels (`&&&...&i32 as &&&...&i64`). Defense in depth against Python recursion limit. |
+| 60030 | (bootstrap pattern subpat) | `helixc/bootstrap/kovc.hx:emit_variant_subpats / emit_tuple_subpats` | 5-6 F9 | sub-pattern index > 15 in PAT_VARIANT or PAT_TUPLE — the disp8 form of the `mov rax, [rax+disp8]` load wraps signed at offset >= 128. Trap fires before the wrapping load. |
 | 71001 | (bootstrap turbofish) | `helixc/bootstrap/parser.hx:~2626` | 7-8 F4 | `mr_tab_add` overflow at 33rd unique generic instantiation |
 | 74002 | `TRAP_DUPLICATE_METHOD_NAME` | `helixc/frontend/flatten_impls.py:32` | 28 | duplicate method name across structs (Phase-0 ambiguity-free fallback) |
 | 76001 | (bootstrap closure) | `helixc/bootstrap/parser.hx` | 9 | nested-closure error sentinel |
