@@ -183,10 +183,10 @@ def collect_concrete_uses(prog: A.Program,
         """
         _body_visitor.visit(e)
 
-    def visit_stmt(s) -> None:
-        """Thin shim retained for symmetry with ``visit_expr``.
-        Stage 28.8.2: delegates to the ASTVisitor body visitor."""
-        _body_visitor.visit(s)
+    # Audit 28.8 cycle 22 C0 (codereview, conf 80): the prior `visit_stmt`
+    # shim had no callers — deleted per strict-zero criterion. If a
+    # statement-walk surface is needed later, just call
+    # `_body_visitor.visit(stmt)` directly.
 
     for it in prog.items:
         if isinstance(it, A.FnDecl):
