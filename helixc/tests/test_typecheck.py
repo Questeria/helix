@@ -1346,6 +1346,221 @@ def test_c2_b_c9_autodiff_cast_to_fp8_no_spurious_warn():
         )
 
 
+def test_c3_2_pointer_width_alias_silent():
+    """Audit 28.8 cycle 3 C3-2: `D<i64> + D<isize>` and
+    `D<u64> + D<usize>` must NOT emit AD002 (they're pointer-width
+    aliases on 64-bit targets — same machine width). Pre-fix, the
+    tie callback fired AND the outer mismatch fired, producing TWO
+    confusing warnings per binop."""
+    from helixc.frontend import autodiff
+    from helixc.frontend.parser import parse as parse_src
+    for left, right in [("i64", "isize"), ("u64", "usize")]:
+        autodiff.take_diff_warnings()
+        src = (
+            f"@pure fn use_d(a: D<{left}>, b: D<{right}>) -> D<{left}> "
+            f"{{ a + b }}\n"
+            f"fn main() -> i32 {{ 0 }}\n"
+        )
+        prog = parse_src(src)
+        errs = typecheck(prog)
+        assert len(errs) == 0, (
+            f"unexpected typecheck errors for D<{left}> + D<{right}>: "
+            f"{errs}"
+        )
+        warnings = autodiff.take_diff_warnings()
+        ad002_warns = [w for w in warnings if "24200" in w or "AD002" in w]
+        assert len(ad002_warns) == 0, (
+            f"expected zero AD002 warns for D<{left}> + D<{right}>, "
+            f"got: {ad002_warns}"
+        )
+
+
+def test_d1_call_boundary_non_prim_mismatch_rejected():
+    """Audit 28.8 cycle 3 D1: a struct or wrapper-typed parameter must
+    reject a mismatched argument at the call boundary. Pre-fix, only
+    TyPrim-vs-TyPrim was compared — every other pair silently passed.
+    """
+    from helixc.frontend.parser import parse as parse_src
+    src = (
+        "struct A { x: i32 }\n"
+        "struct B { y: i32 }\n"
+        "fn use_a(a: A) -> i32 { 0 }\n"
+        "fn main() -> i32 {\n"
+        "    let b = B { y: 5 };\n"
+        "    use_a(b)\n"
+        "}\n"
+    )
+    prog = parse_src(src)
+    errs = typecheck(prog)
+    assert any("use_a" in str(e) for e in errs), (
+        f"expected use_a-arg-mismatch error, got: {errs}"
+    )
+
+
+def test_d3_array_size_zero_rejected():
+    """Audit 28.8 cycle 3 D3: literal array size of 0 must emit
+    trap 28802. Pre-fix, `[T; 0]` silently produced `TyPrim('size_0')`
+    and downstream lower_ast used 0 as the length. Drive the check
+    directly through `_resolve_size_expr` since source-level array
+    types are parsed via TyArray nodes."""
+    from helixc.frontend import ast_nodes as A
+    from helixc.frontend.typecheck import TypeChecker
+    span = A.Span(0, 0)
+    tc = TypeChecker(A.Program(module=None, items=[]))
+    zero = A.IntLit(span=span, value=0, type_suffix=None)
+    tc._resolve_size_expr(zero, scope=None)
+    assert any("28802" in str(e) for e in tc.errors), (
+        f"expected trap 28802 on size=0, got: {tc.errors}"
+    )
+    tc2 = TypeChecker(A.Program(module=None, items=[]))
+    neg = A.IntLit(span=span, value=-5, type_suffix=None)
+    tc2._resolve_size_expr(neg, scope=None)
+    assert any("28802" in str(e) for e in tc2.errors), (
+        f"expected trap 28802 on size=-5, got: {tc2.errors}"
+    )
+
+
+def test_d8_fmt_tystruct_uses_name():
+    """Audit 28.8 cycle 3 D8: `_fmt` must print TyStruct as its
+    declared name (e.g. `Foo`), not `TyStruct(name='Foo')`."""
+    from helixc.frontend import ast_nodes as A
+    from helixc.frontend.typecheck import TypeChecker, TyStruct
+    span = A.Span(0, 0)
+    tc = TypeChecker(A.Program(module=None, items=[]))
+    rendered = tc._fmt(TyStruct(name="Foo"))
+    assert rendered == "Foo", (
+        f"expected 'Foo', got {rendered!r}"
+    )
+
+
+def test_c3_3_main_clean_on_exception(monkeypatch, capsys, tmp_path):
+    """Audit 28.8 cycle 3 C3-3: when _main_inner raises, main() must
+    NOT leak a raw Python traceback to stderr, must return rc=1, and
+    must leave _DIFF_WARNINGS drained. Pre-fix the wrapper had no
+    try/finally so the drain was bypassed on exception exits."""
+    from helixc import check as check_mod
+    from helixc.frontend import autodiff
+    autodiff._DIFF_WARNINGS.append("stale-warn-test-c3-3")
+    def boom(*_args, **_kw):
+        raise RuntimeError("simulated typecheck crash for C3-3")
+    monkeypatch.setattr(check_mod, "typecheck", boom)
+    src_file = tmp_path / "boom.hx"
+    src_file.write_text("fn main() -> i32 { 0 }")
+    rc = check_mod.main([str(src_file)])
+    captured = capsys.readouterr()
+    assert rc == 1
+    assert "internal error" in captured.err
+    assert "compiler bug" in captured.err
+    assert autodiff._DIFF_WARNINGS == [], (
+        f"_DIFF_WARNINGS leaked: {autodiff._DIFF_WARNINGS}"
+    )
+
+
+def test_c3_4_monomorphize_structs_idempotent():
+    """Audit 28.8 cycle 3 C3-4: invoking monomorphize_structs twice on
+    the same Program must NOT append duplicate StructDecls."""
+    from helixc.frontend import ast_nodes as A
+    from helixc.frontend.parser import parse as parse_src
+    from helixc.frontend.struct_mono import monomorphize_structs
+    src = (
+        "struct Pt[T] { x: T, y: T }\n"
+        "fn use_it(p: Pt<i32>) -> i32 { p.x + p.y }\n"
+        "fn main() -> i32 { use_it(Pt { x: 3, y: 4 }) }\n"
+    )
+    prog = parse_src(src)
+    prog, _ = monomorphize_structs(prog)
+    prog, _ = monomorphize_structs(prog)
+    pt_decls = [it for it in prog.items
+                if isinstance(it, A.StructDecl)
+                and it.name.startswith("Pt__")]
+    assert len(pt_decls) == 1, (
+        f"expected exactly one Pt__ mono'd decl, got "
+        f"{[d.name for d in pt_decls]}"
+    )
+
+
+def test_c3_6_shape_fold_div_by_zero_traps_28801():
+    """Audit 28.8 cycle 3 C3-6: shape-time `/0` and `%0` must raise
+    ShapeFoldError (trap 28801)."""
+    from helixc.frontend import ast_nodes as A
+    from helixc.frontend.monomorphize import (
+        _fold_intlit_arith, ShapeFoldError)
+    span = A.Span(0, 0)
+    for op in ("/", "%"):
+        expr = A.Binary(
+            span=span,
+            op=op,
+            left=A.IntLit(span=span, value=10, type_suffix=None),
+            right=A.IntLit(span=span, value=0, type_suffix=None),
+        )
+        try:
+            _fold_intlit_arith(expr)
+        except ShapeFoldError as e:
+            assert "28801" in str(e)
+        else:
+            assert False, f"expected ShapeFoldError on {op}-by-zero"
+
+
+def test_d4_logic_logic_mixed_inner_warns():
+    """Audit 28.8 cycle 3 D4: `Logic<f64> + Logic<i32>` (neither side
+    TyDiff) must emit an AD002 warn with `[Logic-domain]` tag."""
+    from helixc.frontend import autodiff
+    from helixc.frontend.parser import parse as parse_src
+    autodiff.take_diff_warnings()
+    src = (
+        "fn use_logic(a: Logic<f64>, b: Logic<i32>) -> Logic<f64> "
+        "{ a + b }\n"
+        "fn main() -> i32 { 0 }\n"
+    )
+    prog = parse_src(src)
+    _errs = typecheck(prog)
+    warnings = autodiff.take_diff_warnings()
+    assert any("24200" in w and "Logic-domain" in w for w in warnings), (
+        f"expected Logic-domain AD002 warn for "
+        f"Logic<f64>+Logic<i32>, got: {warnings}"
+    )
+
+
+def test_d5_unary_fold_negative_size():
+    """Audit 28.8 cycle 3 D5: `substitute_ty` with `Unary(-, IntLit(N))`
+    inside a TyArray size must fold to `IntLit(-N)`."""
+    from helixc.frontend import ast_nodes as A
+    from helixc.frontend.monomorphize import (
+        _subst_shape_expr, _SizeLitMarker)
+    span = A.Span(0, 0)
+    expr = A.Unary(
+        span=span,
+        op="-",
+        operand=A.Name(span=span, name="N"),
+    )
+    result = _subst_shape_expr(expr, {"N": _SizeLitMarker(5)})
+    assert isinstance(result, A.IntLit), (
+        f"expected IntLit after fold, got {type(result).__name__}"
+    )
+    assert result.value == -5
+
+
+def test_d7_deep_ref_cast_bounded():
+    """Audit 28.8 cycle 3 D7: 500-layer ref-cast must NOT hit Python's
+    recursion limit. The peeling loop appends trap 28803 before that
+    depth."""
+    from helixc.frontend import ast_nodes as A
+    from helixc.frontend.typecheck import TypeChecker, TyPrim, TyRef
+    span = A.Span(0, 0)
+    tc = TypeChecker(A.Program(module=None, items=[]))
+    src = TyPrim("i32")
+    tgt = TyPrim("i64")
+    for _ in range(500):
+        src = TyRef(inner=src, is_mut=False)
+        tgt = TyRef(inner=tgt, is_mut=False)
+    tc._check_cast_compat(src, tgt, span)
+    has_28803 = any("28803" in str(e) for e in tc.errors)
+    assert has_28803, (
+        f"expected trap 28803 for 500-layer ref-cast, got: "
+        f"{[str(e) for e in tc.errors]}"
+    )
+
+
 def main():
     tests = [(name, fn) for name, fn in globals().items()
              if name.startswith("test_") and callable(fn)]

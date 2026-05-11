@@ -3460,6 +3460,21 @@ fn main() -> i32 {
     assert compile_and_exec(
         "fn main() -> i32 { let x = 7 ; let c = |y| y + x ; c(35) }"
     ) == 42, "B:C2-baseline: untyped i32 literal capture still works"
+    # Audit 28.8 cycle 3 D2: extend trap 76003 to fire on call-RHS
+    # untyped lets (`let pi = get_pi(); ...`). Pre-fix the inference
+    # arm only knew about literal RHS (FloatLit/IntLit/etc.), so a
+    # call-RHS let registered as untracked (-1) and the capture guard
+    # `> 0` silently let it through. Now we register Call-RHS as
+    # type-tag 12 (untracked-call sentinel) so the capture probe
+    # detects it and traps loudly at the closure-build site.
+    # SIGILL = exit code 132 in our shell wrap.
+    assert compile_and_exec(
+        "fn get_pi() -> i32 { 3 } "
+        "fn main() -> i32 { let pi = get_pi() ; let c = |y| y + pi ; c(0) }"
+    ) == 132, (
+        "D2: call-RHS untyped capture now traps 76003 "
+        "(SIGILL on closure invocation)"
+    )
     # Stage 10: modules + use. parse-time desugaring lifts each fn inside
     # `mod foo { ... }` to the top-level fn list with a mangled name
     # `foo__bar`. Path-call `foo::bar(args)` rewrites to AST_CALL with the

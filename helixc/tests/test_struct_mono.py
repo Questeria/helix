@@ -673,5 +673,137 @@ def test_walk_subst_expr_descends_into_unsafe_block():
     assert let_stmt.ty.name == "f64"
 
 
+def test_c3_4_monomorphize_structs_idempotent():
+    """Audit 28.8 cycle 3 C3-4: monomorphize_structs must not append
+    duplicate mangled StructDecls on a second invocation. Pre-fix,
+    `Pt<i32>` used twice across check.py + x86_64 driver appended
+    Pt__i32 twice to prog.items."""
+    from helixc.frontend.struct_mono import monomorphize_structs
+    src = """
+struct Pt[T] { x: T, y: T }
+fn use_pt() -> i32 {
+    let p: Pt<i32> = Pt { x: 1, y: 2 };
+    0
+}
+"""
+    prog = parse(src)
+    monomorphize_structs(prog)
+    after_first = sum(
+        1 for it in prog.items
+        if isinstance(it, A.StructDecl) and it.name == "Pt__i32"
+    )
+    assert after_first == 1, (
+        f"first mono should produce exactly one Pt__i32, got {after_first}"
+    )
+    monomorphize_structs(prog)
+    after_second = sum(
+        1 for it in prog.items
+        if isinstance(it, A.StructDecl) and it.name == "Pt__i32"
+    )
+    assert after_second == 1, (
+        f"second mono should be idempotent, got {after_second} Pt__i32"
+    )
+
+
+def test_c3_6_shape_fold_div_by_zero_traps():
+    """Audit 28.8 cycle 3 C3-6: `_fold_intlit_arith` must raise
+    ShapeFoldError (trap 28801) on `/0` and `%0`. Pre-fix, the unfolded
+    Binary silently fell through to length 0 in lower_ast."""
+    from helixc.frontend.monomorphize import (
+        _fold_intlit_arith, ShapeFoldError,
+    )
+    span = A.Span(0, 0)
+    div_zero = A.Binary(
+        span=span, op="/",
+        left=A.IntLit(span=span, value=10, type_suffix=None),
+        right=A.IntLit(span=span, value=0, type_suffix=None),
+    )
+    try:
+        _fold_intlit_arith(div_zero)
+        assert False, "expected ShapeFoldError on / by 0"
+    except ShapeFoldError as e:
+        assert "28801" in str(e)
+    mod_zero = A.Binary(
+        span=span, op="%",
+        left=A.IntLit(span=span, value=10, type_suffix=None),
+        right=A.IntLit(span=span, value=0, type_suffix=None),
+    )
+    try:
+        _fold_intlit_arith(mod_zero)
+        assert False, "expected ShapeFoldError on % by 0"
+    except ShapeFoldError as e:
+        assert "28801" in str(e)
+
+
+def test_d5_unary_fold_neg_intlit():
+    """Audit 28.8 cycle 3 D5: `_fold_intlit_unary` must fold
+    `Unary(-, IntLit(5))` to `IntLit(-5)`. Pre-fix the substituted
+    Unary stayed as Unary and `_resolve_size_expr` fell through to
+    TyUnknown."""
+    from helixc.frontend.monomorphize import _fold_intlit_unary
+    span = A.Span(0, 0)
+    neg = A.Unary(
+        span=span, op="-",
+        operand=A.IntLit(span=span, value=5, type_suffix=None),
+    )
+    folded = _fold_intlit_unary(neg)
+    assert isinstance(folded, A.IntLit), (
+        f"expected IntLit after fold, got {type(folded).__name__}"
+    )
+    assert folded.value == -5
+    # `+5` should fold to `5`.
+    pos = A.Unary(
+        span=span, op="+",
+        operand=A.IntLit(span=span, value=7, type_suffix=None),
+    )
+    folded_pos = _fold_intlit_unary(pos)
+    assert isinstance(folded_pos, A.IntLit)
+    assert folded_pos.value == 7
+
+
+def test_d6_ty_key_raises_on_non_astnode():
+    """Audit 28.8 cycle 3 D6: `_ty_key` must reject non-AST TyNode
+    inputs loudly (not silently dedup via name-only key)."""
+    from helixc.frontend.struct_mono import _ty_key
+
+    class FakeNonAstType:
+        pass
+
+    try:
+        _ty_key(FakeNonAstType())
+        assert False, "expected TypeError on non-TyNode input"
+    except TypeError as e:
+        assert "AST TyNode" in str(e)
+
+
+def test_d9_turbofish_inside_generic_body_substituted():
+    """Audit 28.8 cycle 3 D9: when a generic fn calls another generic
+    fn via turbofish (`id::<T>(x)`), the inner turbofish's `T` must
+    be substituted when the outer fn is monomorphized. Pre-fix, the
+    inner Call kept literal `T` and produced `id__T` instead of
+    `id__i32`."""
+    from helixc.frontend.monomorphize import _walk_subst_expr
+    span = A.Span(0, 0)
+    # Synth `id::<T>(x)`
+    callee = A.Name(span=span, name="id",
+                    generics=[A.TyName(span=span, name="T")])
+    call = A.Call(
+        span=span,
+        callee=callee,
+        args=[A.Name(span=span, name="x", generics=[])],
+    )
+    subst = {"T": A.TyName(span=span, name="i32")}
+    result = _walk_subst_expr(call, subst)
+    assert isinstance(result, A.Call)
+    assert isinstance(result.callee, A.Name)
+    assert result.callee.name == "id"
+    assert len(result.callee.generics) == 1
+    assert isinstance(result.callee.generics[0], A.TyName)
+    assert result.callee.generics[0].name == "i32", (
+        f"expected T->i32 in turbofish generics, got "
+        f"{result.callee.generics[0].name}"
+    )
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-v"]))

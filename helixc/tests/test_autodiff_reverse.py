@@ -287,6 +287,34 @@ def test_c2_3_reverse_arithmetic_no_warn():
     )
 
 
+def test_c3_5_inline_lets_recurses_through_cast():
+    """Audit 28.8 cycle 3 C3-5: `_inline_lets` must recurse through
+    A.Cast (and Call/Field/Index/Match/...) so let-bound names under
+    those positions get substituted. Pre-fix the cycle-2 C2-3 `%` warn
+    fired only when `%` was at top level; the dominant idiom
+
+        let r = (x as i64) % 2_i64;
+        r as f64
+
+    silently skipped the warn because `_inline_lets` didn't recurse
+    into the outer Cast around Name('r'). Now the Name resolves to
+    the Binary, the Binary is visited, and the `%` warn fires."""
+    from helixc.frontend import autodiff
+    autodiff.take_diff_warnings()
+    body = _body_of(
+        "fn f(x: f32) -> f32 { "
+        "    let r = (x as i64) % 2_i64; "
+        "    r as f32 "
+        "}"
+    )
+    differentiate_reverse(body, ["x"])
+    warnings = autodiff.take_diff_warnings()
+    assert any("85001" in w and "'%'" in w for w in warnings), (
+        f"expected `%` warn to fire after Cast-around-Name "
+        f"substitution; got warnings: {warnings}"
+    )
+
+
 def main():
     tests = [(name, fn) for name, fn in globals().items()
              if name.startswith("test_") and callable(fn)]
