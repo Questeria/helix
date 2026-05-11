@@ -2258,6 +2258,71 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
             // value uses parse_expr_basic so the `;` after the
             // value belongs to the let-terminator, not a sequencer.
             let value = parse_expr_basic(tok_base, sb);
+            // Audit 28.8 cycle 2 B:C2: when no type annotation was
+            // present (let_ty_tag still < 0), infer from the value's
+            // root AST tag whether the binding is trivially-i32 or
+            // a known non-i32 literal. Without this, the closure
+            // capture trap 76003 was silent for the dominant idiom
+            // `let pi = 3.14_f64;` (no annotation) because
+            // `var_type_tab_lookup` returned -1 (untracked) and the
+            // capture guard `> 0` failed. We register inferred tags
+            // so the capture probe sees the truth.
+            //
+            // AST tag conventions (from header comment of this file):
+            //    0 AST_INT -> trivially-i32, type tag 0
+            //   27 AST_FLOATLIT_F32 -> type tag 1 (f32)
+            //   31 AST_FLOATLIT_BF16 -> type tag 4 (bf16)
+            //   34 AST_FLOATLIT_F64 -> type tag 2 (f64)
+            //   35 AST_INTLIT_I64 -> type tag 3 (i64)
+            //   36 AST_INTLIT_U32 -> type tag 6 (u32)
+            //   37 AST_INTLIT_U8  -> type tag 7 (u8)
+            //   38 AST_INTLIT_U64 -> type tag 9 (u64)
+            //   39 AST_INTLIT_I8  -> type tag 10 (i8)
+            //   40 AST_INTLIT_I16 -> type tag 11 (i16)
+            //   41 AST_INTLIT_U16 -> type tag 8 (u16)
+            //
+            // Any other root tag (Binary / Call / Name / Block / If /
+            // ...) stays untracked (-1) and the capture probe will see
+            // an opaque value — which today silently passes the > 0
+            // guard, BUT we want the closure-capture loop to treat
+            // untracked as "potentially non-i32 unless RHS proves i32"
+            // (see capture-site update below).
+            let mut inferred_ty_tag: i32 = 0 - 1;
+            if let_ty_tag < 0 {
+                let val_tag = __arena_get(value);
+                if val_tag == 0 {
+                    inferred_ty_tag = 0;             // trivially i32
+                } else { if val_tag == 27 {
+                    inferred_ty_tag = 1;             // f32
+                } else { if val_tag == 31 {
+                    inferred_ty_tag = 4;             // bf16
+                } else { if val_tag == 34 {
+                    inferred_ty_tag = 2;             // f64
+                } else { if val_tag == 35 {
+                    inferred_ty_tag = 3;             // i64
+                } else { if val_tag == 36 {
+                    inferred_ty_tag = 6;             // u32
+                } else { if val_tag == 37 {
+                    inferred_ty_tag = 7;             // u8
+                } else { if val_tag == 38 {
+                    inferred_ty_tag = 9;             // u64
+                } else { if val_tag == 39 {
+                    inferred_ty_tag = 10;            // i8
+                } else { if val_tag == 40 {
+                    inferred_ty_tag = 11;            // i16
+                } else { if val_tag == 41 {
+                    inferred_ty_tag = 8;             // u16
+                };};};};};};};};};};
+                // Register the inferred tag so var_type_tab_lookup at
+                // closure-capture sites can detect the non-i32 case
+                // (trap 76003). We DO NOT shadow let_ty_tag because the
+                // existing register-before-value block at line 2254
+                // already ran (for annotated lets); we add a second
+                // register here for the inferred case.
+                if inferred_ty_tag >= 0 {
+                    var_type_tab_add(sb, name_start, name_len, inferred_ty_tag);
+                };
+            };
             // Iter B: if the value was a struct lit, last_struct_idx
             // is now set; register the binding name -> struct_idx so
             // postfix `.IDENT` on this var resolves to a field offset.
@@ -3939,12 +4004,20 @@ fn monomorphize_pass(sb: i32, head: i32) -> i32 {
                     clone_with_rewrite(tpl_body, tpl_gp_head, packed)
                 };
                 // Build the new AST_FN_DECL with mangled name + concrete types.
+                // Audit-stage7-8 Finding #10 fix: propagate the template's
+                // is_checkpoint flag (slot 8) onto the synthesized clone.
+                // Without this, `@checkpoint fn step<T>(...)` lost its
+                // re-materialization marker when monomorphized, so the
+                // reverse-mode AD pass treated the clone as a regular
+                // (non-checkpointed) fn and memory grew linearly instead
+                // of sqrt(N) per the @checkpoint contract.
+                let tpl_is_ckpt = __arena_get(tpl_idx + 8);
                 let clone_idx = mk_node(14, mang_s, mang_l, cloned_body);
                 __arena_push(new_params_head);
                 __arena_push(new_ret_ty);
                 __arena_push(0);                 // is_generic = 0 (concrete)
                 __arena_push(0);                 // slot 7: gp_names_head (none)
-                __arena_push(0);                 // slot 8: is_checkpoint = 0 (Stage 14.5)
+                __arena_push(tpl_is_ckpt);       // slot 8: propagated from template (F10)
                 // Append to fn_list tail.
                 let new_list_node = mk_node(15, clone_idx, 0, 0);
                 __arena_set(tail + 2, new_list_node);
@@ -4605,10 +4678,11 @@ fn grad_pass(sb: i32, head: i32) -> i32 {
             if loss_fn_idx > 0 {
                 // Read loss fn slots (Stage 8 layout):
                 //   slot 1: name_s, 2: name_l, 3: body_idx, 4: params_head,
-                //   5: ret_ty, 6: is_generic, 7: gp_names_head.
+                //   5: ret_ty, 6: is_generic, 7: gp_names_head, 8: is_checkpoint.
                 let loss_body = __arena_get(loss_fn_idx + 3);
                 let loss_params = __arena_get(loss_fn_idx + 4);
                 let loss_ret_ty = __arena_get(loss_fn_idx + 5);
+                let loss_is_ckpt = __arena_get(loss_fn_idx + 8);
                 // Extract first param's name (the variable to differentiate
                 // w.r.t.). AST_PARAM (tag 18) layout: slot 1 = name_s,
                 // 2 = name_l, 3 = next, 4 = type_tag.
@@ -4631,7 +4705,11 @@ fn grad_pass(sb: i32, head: i32) -> i32 {
                 __arena_push(loss_ret_ty);   // slot 5: ret_ty
                 __arena_push(0);             // slot 6: is_generic = 0
                 __arena_push(0);             // slot 7: gp_names_head = 0
-                __arena_push(0);             // slot 8: is_checkpoint = 0 (Stage 14.5)
+                // F10 fix companion: if the loss fn carried @checkpoint, the
+                // synthesized gradient should inherit it too — otherwise
+                // AD memory grows linearly through the cloned derivative
+                // even when the user explicitly opted into re-mat.
+                __arena_push(loss_is_ckpt);  // slot 8: propagated from loss
                 let new_list_node = mk_node(15, clone_fn, 0, 0);
                 __arena_set(tail + 2, new_list_node);
                 tail = new_list_node;
@@ -4902,6 +4980,7 @@ fn grad_rev_pass(sb: i32, head: i32) -> i32 {
                 let loss_body = __arena_get(loss_fn_idx + 3);
                 let loss_params = __arena_get(loss_fn_idx + 4);
                 let loss_ret_ty = __arena_get(loss_fn_idx + 5);
+                let loss_is_ckpt = __arena_get(loss_fn_idx + 8);
                 // Extract param name from field: skip leading 'd' (byte 100).
                 // For ".dx" the param name is "x" (offset field_s+1, length
                 // field_l-1).
@@ -4981,7 +5060,9 @@ fn grad_rev_pass(sb: i32, head: i32) -> i32 {
                 __arena_push(loss_ret_ty);
                 __arena_push(0);
                 __arena_push(0);
-                __arena_push(0);             // slot 8: is_checkpoint = 0 (Stage 14.5)
+                // F10 companion: propagate the loss fn's @checkpoint marker
+                // to the synthesized reverse-mode gradient clone.
+                __arena_push(loss_is_ckpt);  // slot 8: propagated from loss
                 let new_list_node = mk_node(15, clone_fn, 0, 0);
                 __arena_set(tail + 2, new_list_node);
                 tail = new_list_node;

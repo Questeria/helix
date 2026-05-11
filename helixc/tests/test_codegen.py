@@ -3447,6 +3447,19 @@ fn main() -> i32 {
     assert compile_and_exec(
         "fn main() -> i32 { let pi: i32 = 7 ; let c = |x| x + pi ; c(3) }"
     ) == 10, "B4-baseline: explicit i32 capture annotation still works"
+    # Audit 28.8 cycle 2 B:C2: the dominant idiom `let pi = 3.14_f64;`
+    # (untyped, literal float RHS) silently bypassed trap 76003
+    # pre-fix because var_type_tab_lookup returned -1 (untracked) and
+    # the capture guard `> 0` was false. We now infer the type from
+    # the let's RHS literal kind. With the inference, capturing an
+    # untyped float-literal-binding traps 76003.
+    # Verify the *positive* baseline still works: `let x = 7;` (no
+    # annotation, AST_INT root) is correctly inferred as i32 and
+    # captures don't trap. SIGILL (rc 132 in our shell-style wrap)
+    # means the trap fired; clean execution means inference works.
+    assert compile_and_exec(
+        "fn main() -> i32 { let x = 7 ; let c = |y| y + x ; c(35) }"
+    ) == 42, "B:C2-baseline: untyped i32 literal capture still works"
     # Stage 10: modules + use. parse-time desugaring lifts each fn inside
     # `mod foo { ... }` to the top-level fn list with a mangled name
     # `foo__bar`. Path-call `foo::bar(args)` rewrites to AST_CALL with the
