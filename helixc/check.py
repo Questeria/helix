@@ -552,9 +552,15 @@ def _main_inner(argv: list[str] | None,
             or a.output is not None:
         from .ir.lower_ast import lower
         from .ir.passes.fdce import fdce_module
-        from .ir.passes.const_fold import fold_module
+        from .ir.passes.const_fold import fold_module, FoldError
         from .ir.passes.cse import cse_module
         from .ir.passes.dce import dce_module
+        # Stage 28.9 cycle 24 audit-R C23-3 (conf 85): import effect_check
+        # so the optimization pipeline can mirror x86_64.py's authoritative
+        # IR-level effect verification. Pre-fix, check.py never ran
+        # effect_check at all — a @pure violation that survived fold/cse/dce
+        # silently emitted IR/ELF via check.py while x86_64.py would refuse.
+        from .ir.passes.effect_check import check_module as effect_check_module
         # Audit 28.8 B5: invoke grad_pass before lowering so any
         # `grad(loss)` calls are rewritten to symbolic gradients (and
         # the AD passes' diagnostics accumulate in _DIFF_WARNINGS).
@@ -576,16 +582,48 @@ def _main_inner(argv: list[str] | None,
         # got the SAME IR as `-O1`, despite the help text promising
         # +cse+dce. The fix wires the real passes; the placeholder is
         # removed.
-        if a.opt_level >= 1:
-            fdce_module(mod)
-            fold_module(mod)
-        if a.opt_level >= 2:
-            cse_module(mod)
-            dce_module(mod)
-        if a.opt_level >= 3:
-            # No aggressive layer yet — kept distinct from -O2 so a
-            # future pass can wire in without re-shaping the dispatch.
-            pass
+        # Stage 28.9 cycle 24 audit-R C23-1 fix (conf 92): wrap the
+        # optimization-pass calls in a FoldError-aware try/except so
+        # that a user-authored compile-time NaN (trap 17001) or out-of-
+        # range constant shift (trap 17002) renders as a clean
+        # `helixc: const-fold error: [trap 1700N] ...` diagnostic with
+        # rc=1, instead of bubbling up to the outer Exception handler
+        # at main() which prints "this is a compiler bug — please file
+        # an issue." (The latter is the WRONG message for a source-
+        # level error.) Mirrors the FoldError-as-user-diagnostic
+        # pattern used implicitly by x86_64.py.
+        try:
+            if a.opt_level >= 1:
+                fdce_module(mod)
+                fold_module(mod)
+            if a.opt_level >= 2:
+                cse_module(mod)
+                dce_module(mod)
+            if a.opt_level >= 3:
+                # No aggressive layer yet — kept distinct from -O2 so a
+                # future pass can wire in without re-shaping the
+                # dispatch.
+                pass
+        except FoldError as fe:
+            print(
+                f"helixc: const-fold error: {fe}",
+                file=sys.stderr,
+            )
+            return 1
+
+        # Stage 28.9 cycle 24 audit-R C23-3 fix (conf 85): after the
+        # optimization pipeline, run IR-level effect verification.
+        # x86_64.py's __main__ path already does this; check.py was
+        # the only driver that skipped it, leaving --emit-ir users
+        # silently exposed to @pure violations that should have been
+        # rejected. We render the diagnostics in the same one-line
+        # `  effect-check: <msg>` format the backend driver uses so a
+        # downstream tool can grep for them uniformly.
+        eff_errs = effect_check_module(mod)
+        if eff_errs:
+            for e in eff_errs:
+                print(f"   effect-check: {e}", file=sys.stderr)
+            return 1
 
         # Audit 28.8 cycle 2 C2-1: the AD-warning drain was moved out
         # of this branch into the outer `main()` wrapper. Pre-fix, the

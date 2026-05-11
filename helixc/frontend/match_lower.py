@@ -429,6 +429,32 @@ def _pattern_test_expr(pat: A.Pattern, scrut_expr: A.Expr,
     Closes the cycle-12 C12-1 asymmetric-fix gap because nested
     PatTuple, PatVariant, PatOr (etc.) at any depth now route through
     this unified dispatch — no inline approximations.
+
+    --- Stage 28.10 porting note (cycle 24 C23-2, conf 88) ---
+    The Stage 28.10 deliverable ports `match_lower.py` into the
+    bootstrap `helixc/bootstrap/kovc.hx`. Helix has NO keyword-only
+    parameter syntax (the `*,` separator is Python-specific). The
+    bootstrap port must:
+      1. Convert `at_top_level: bool` to a POSITIONAL i32 parameter
+         (0=false, 1=true) — the trailing position of the signature.
+      2. The DEFAULT must be 0 (false) — fail-closed semantics are
+         load-bearing. Helix may not support default-valued positional
+         parameters; if so, every call site must pass an explicit
+         0 or 1 argument.
+      3. AUDIT every call site at conversion time:
+           - `_pattern_test` (top-level wrapper) → pass 1 (TRUE).
+           - PatOr recursive call → pass through current at_top_level
+             value (forward the caller's flag).
+           - PatTuple sub-element recursive call → pass 0 (FALSE).
+           - PatVariant sub_patterns recursive call → pass 0 (FALSE).
+      4. A misclassified TRUE at a sub-position call site causes
+         double-indexing (the slot_load result is indexed again at
+         slot 0), producing a load-of-load miscompile. A misclassified
+         FALSE at a top-level call site compares the bound scrutinee
+         variable directly to a literal/path discriminant — usually
+         False, which silently breaks enum matching (this is the
+         exact cycle-19 regression).
+    --- End Stage 28.10 porting note ---
     """
     if isinstance(pat, (A.PatWildcard, A.PatBind)):
         return A.BoolLit(span=span, value=True)

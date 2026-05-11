@@ -100,8 +100,15 @@ PURITY_OBSERVER_EFFECTS: frozenset[str] = frozenset({"trace", "reflect"})
 # treated as a declared effect.
 META_ATTRS = frozenset({
     "is_pub", "is_pure", "pure", "kernel",
-    # Stage 16.5 FFI markers — set by lower_ast for extern fns, not
-    # effect labels.
+    # Stage 16.5 FFI markers — set by lower_ast for the extern fn's
+    # OWN FnIR, not effect labels.
+    # Stage 28.9 cycle 24 audit-R C23-4 (conf 82): the "ffi" effect
+    # added by cycle-22 C22-1 to OP_EFFECTS is attributed to CALLERS
+    # (via FFI_CALL ops) — not to the extern declaration itself.
+    # Keeping is_extern / extern_abi in META_ATTRS is correct and
+    # intentional: an extern fn declaration does NOT contribute "ffi"
+    # to its own declared_effects set. The 19002 unused-effect check
+    # treats extern fn declarations cleanly (no false-positive).
     "is_extern", "extern_abi",
     # Stage 16 GPU launch marker; @kernel maps to attr "kernel" already
     # covered above; aliasing left here for forward-compat.

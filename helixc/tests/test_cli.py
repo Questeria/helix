@@ -545,6 +545,88 @@ def test_ad_drain_subprocess_default(tmp_path):
     )
 
 
+# --- Stage 28.9 cycle 24 audit-R regression tests ---
+
+
+def test_c23_1_fold_error_via_check_py_clean_diagnostic(capsys, tmp_path):
+    """C23-1 regression (Critical, conf 92): a compile-time NaN fold
+    (trap 17001) via check.py must render as a clean
+    `helixc: const-fold error: [trap 17001] ...` diagnostic with
+    rc=1 — NOT as 'helixc: internal error: FoldError: ...' followed by
+    'this is a compiler bug — please file an issue.' Pre-cycle-24 fix,
+    check.py invoked fold_module bare; FoldError bubbled to the outer
+    main() Exception handler and got mis-labelled as a compiler bug."""
+    src_path = str(tmp_path / "nan_fold.hx")
+    with open(src_path, "w") as f:
+        f.write(
+            "fn main() -> f32 { "
+            "let a = 1.0e200 * 1.0e200; "
+            "let b = 1.0e200 * 1.0e200; "
+            "a - b }\n"
+        )
+    rc = main([src_path, "--emit-ir", "-O1"])
+    captured = capsys.readouterr()
+    assert rc == 1, f"expected rc=1 for NaN fold, got {rc}"
+    assert "const-fold error" in captured.err, (
+        f"expected 'const-fold error' diagnostic; got stderr={captured.err!r}"
+    )
+    assert "17001" in captured.err, (
+        f"expected trap 17001 reference; got stderr={captured.err!r}"
+    )
+    assert "compiler bug" not in captured.err, (
+        "FoldError must NOT be mis-labelled as 'compiler bug' — that's "
+        "the wrong message for a user-authored source error. "
+        f"got stderr={captured.err!r}"
+    )
+    assert "internal error" not in captured.err, (
+        "FoldError must NOT route through the 'internal error' handler; "
+        f"got stderr={captured.err!r}"
+    )
+
+
+def test_c23_3_effect_check_via_check_py_flags_pure_violation(capsys, tmp_path):
+    """C23-3 regression (Important, conf 85): check.py's optimization
+    pipeline must invoke effect_check after fold/cse/dce. Pre-cycle-24
+    fix, x86_64.py ran effect_check but check.py did not — a @pure
+    violation silently emitted IR via `python -m helixc.check --emit-ir`
+    while the same module would be rejected by the backend driver.
+
+    This test compiles a @pure fn with a PRINT op and asserts check.py
+    reports the violation at rc=1 with a clean 'effect-check' prefix."""
+    src_path = str(tmp_path / "pure_io.hx")
+    with open(src_path, "w") as f:
+        f.write(
+            "@pure fn bad(x: i32) -> i32 { print_int(x); x }\n"
+            "fn main() -> i32 { bad(42) }\n"
+        )
+    rc = main([src_path, "--emit-ir", "-O1"])
+    captured = capsys.readouterr()
+    assert rc == 1, f"expected rc=1 for @pure violation, got {rc}"
+    assert "effect-check" in captured.err, (
+        f"expected 'effect-check' diagnostic; got stderr={captured.err!r}"
+    )
+    assert "19001" in captured.err, (
+        f"expected trap 19001 reference; got stderr={captured.err!r}"
+    )
+    assert "bad" in captured.err, (
+        f"expected mention of violating fn 'bad'; got stderr={captured.err!r}"
+    )
+
+
+def test_c23_3_effect_check_via_check_py_clean_when_correct(capsys, tmp_path):
+    """C23-3 regression-the-other-way: a program with correct effect
+    declarations must STILL compile clean via check.py. Otherwise the
+    cycle-24 fix over-corrected."""
+    src_path = str(tmp_path / "pure_clean.hx")
+    with open(src_path, "w") as f:
+        f.write(
+            "@pure fn double(x: i32) -> i32 { x + x }\n"
+            "fn main() -> i32 { double(21) }\n"
+        )
+    rc = main([src_path, "--emit-ir", "-O1"])
+    assert rc == 0, f"clean @pure program must compile rc=0, got {rc}"
+
+
 if __name__ == "__main__":
     import pytest
     raise SystemExit(pytest.main([__file__, "-v"]))
