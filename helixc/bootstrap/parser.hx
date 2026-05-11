@@ -2312,7 +2312,7 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
                     inferred_ty_tag = 11;            // i16
                 } else { if val_tag == 41 {
                     inferred_ty_tag = 8;             // u16
-                };};};};};};};};};};
+                };};};};};};};};};};};
                 // Register the inferred tag so var_type_tab_lookup at
                 // closure-capture sites can detect the non-i32 case
                 // (trap 76003). We DO NOT shadow let_ty_tag because the
