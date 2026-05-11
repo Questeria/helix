@@ -1334,14 +1334,30 @@ class TypeChecker:
                 # otherwise fire a second, less-specific mismatch warn
                 # for the same span. Track and skip the outer when the
                 # callback already spoke.
+                #
+                # Audit 28.8 cycle 5 C4-8 / LOW: the tie-callback fires
+                # the warn without knowing whether the binop is happening
+                # in D-domain or Logic-domain. Pre-fix the Logic-domain
+                # tie case dropped the `[Logic-domain]` suffix because
+                # the callback emits and then sets tie_fired=True,
+                # suppressing the outer Logic-tagged emit. We now pass
+                # a mutable flag `logic_domain_active` that the Logic
+                # branch sets to True so the callback can append the
+                # `[Logic-domain]` suffix when the tie fires inside that
+                # branch.
                 tie_fired = [False]
+                logic_domain_active = [False]
 
                 def _tie_cb(a, b, span):
                     tie_fired[0] = True
+                    suffix = ""
+                    if logic_domain_active[0]:
+                        suffix = " [Logic-domain]"
                     self._ad_warn_mixed_inner(
                         span or expr.span, a, b, a,
                         extra=" (same-rank tie; sign or quant domain "
-                              "silently dropped without this warning)",
+                              "silently dropped without this warning)"
+                              + suffix,
                     )
 
                 # Cycle 3 C3-2: treat pointer-width aliases as same inner.
@@ -1405,10 +1421,18 @@ class TypeChecker:
                     # inner_mismatch. Now we also fire when l_is_logic
                     # != r_is_logic regardless of inner — symmetric
                     # with the cycle-2 B:C6 D-vs-bare fix.
+                    #
+                    # Audit 28.8 cycle 5 C4-8 / LOW: thread the
+                    # Logic-domain marker through the tie-callback so
+                    # the tie-warn (when it fires) also carries the
+                    # `[Logic-domain]` suffix. Pre-fix this suffix was
+                    # dropped because the callback fired first.
+                    logic_domain_active[0] = True
                     inner = _widen_diff_inner(
                         l_inner, r_inner,
                         _warn_cb=_tie_cb, _span=expr.span,
                     )
+                    logic_domain_active[0] = False
                     if not tie_fired[0]:
                         extra = ""
                         if not (l_is_logic and r_is_logic):
@@ -2352,6 +2376,20 @@ class TypeChecker:
             return False
         return a == b
 
+    def _fmt_size(self, t: Type) -> str:
+        """Audit 28.8 cycle 5 F7 / F8 / LOW: render a size-typed value
+        cleanly in user diagnostics. Pre-fix `_fmt(TyPrim('size_3'))`
+        printed `size_3` (with `size_` prefix); `_fmt(TySize('N'))`
+        printed `size:N`. Diagnostics like `expected tensor<f32, [N]>,
+        got tensor<f32, [3]>` were ambiguous. Now: concrete sizes
+        print as their integer value (3); symbolic sizes print as
+        their generic-param name (N) without the `size:` prefix."""
+        if isinstance(t, TyPrim) and t.name.startswith("size_"):
+            return t.name[len("size_"):]
+        if isinstance(t, TySize):
+            return t.name
+        return self._fmt(t)
+
     def _fmt(self, t: Type) -> str:
         if isinstance(t, TyPrim): return t.name
         # Audit 28.8 cycle 3 D8: print TyStruct as its declared name
@@ -2361,15 +2399,24 @@ class TypeChecker:
         if isinstance(t, TyVar): return t.name
         if isinstance(t, TySize): return f"size:{t.name}"
         if isinstance(t, TyTensor):
-            shp = ",".join(self._fmt(s) for s in t.shape)
+            # Audit 28.8 cycle 5 F7: use _fmt_size for shape elements
+            # so `tensor<f32, [3]>` prints as `tensor<f32, [3]>` (not
+            # `tensor<f32, [size_3]>`). Symbolic sizes still print
+            # their generic-param name (N) without `size:` prefix.
+            shp = ",".join(self._fmt_size(s) for s in t.shape)
             return f"tensor<{self._fmt(t.dtype)}, [{shp}]" + (f", {t.device}" if t.device else "") + ">"
         if isinstance(t, TyTile):
-            shp = ",".join(self._fmt(s) for s in t.shape)
+            # Audit 28.8 cycle 5 F7: ditto for tile shape elements.
+            shp = ",".join(self._fmt_size(s) for s in t.shape)
             return f"tile<{self._fmt(t.dtype)}, [{shp}], {t.memspace}>"
         if isinstance(t, TyTuple):
             return "(" + ", ".join(self._fmt(e) for e in t.elems) + ")"
         if isinstance(t, TyArray):
-            return f"[{self._fmt(t.elem)}; {self._fmt(t.size)}]"
+            # Audit 28.8 cycle 5 F9: TyArray's `_fmt` already includes
+            # the size via the existing call. Cycle 5 F7: render size
+            # via `_fmt_size` so `[i32; 4]` prints clean (not `[i32;
+            # size_4]`).
+            return f"[{self._fmt(t.elem)}; {self._fmt_size(t.size)}]"
         if isinstance(t, TyRef):
             return ("&mut " if t.is_mut else "&") + self._fmt(t.inner)
         if isinstance(t, TyPtr):

@@ -7,16 +7,37 @@ Input: A.Program with FnDecls that have generic params (e.g., fn id[T](x: T) -> 
        and call sites with turbofish (e.g., id::<i32>(x))
 Output: A.Program with concrete instantiations replacing generic calls.
 
-Algorithm:
+Algorithm (cycle 5 C4-4 / HIGH revision):
   1. Collect all FnDecls with non-empty generics into a generics-table.
-  2. Walk the program, find Calls whose callee is Name with non-empty generics.
+  2. Walk ONLY the non-generic items (do not mutate generic-fn bodies
+     in place). Find Calls whose callee is Name with non-empty generics.
   3. For each unique (fn_name, type_args) pair:
      - Generate mangled name (id__i32, pair__i32_f64).
      - Clone the FnDecl, substituting type variables in params/return_ty/body.
-     - Add to prog.items (only once per unique pair).
-     - Replace the callee with Name(mangled_name, generics=[]).
-  4. Repeat until no more generic calls remain (cloned fns may call other generics).
-  5. Drop original generic FnDecls from prog.items at the end.
+       The clone's body has turbofish args fully substituted via
+       `_walk_subst_expr`'s Call arm (cycle 3 D9: substitutes
+       `callee.generics`).
+     - Add the clone to a promoted set so it gets walked in the next
+       iteration (NOT promoted directly to prog.items mid-iteration).
+     - Replace the callee in the OUTER (non-generic) caller with
+       Name(mangled_name, generics=[]).
+  4. Repeat the iteration over (non-generic items + promoted clones)
+     until no more changes. Each clone may call other generics; those
+     get walked next iteration.
+  5. Append all clones to prog.items at the end. Original generic
+     FnDecls remain in prog.items so legacy un-turbofished call sites
+     still resolve (the cycle-3 backward-compat behavior).
+
+Cycle 5 C4-4 / HIGH note: cycle-3 D9 (`_walk_subst_expr` Call arm)
+WAS necessary — turbofish substitution inside cloned bodies. But
+the iteration order was wrong: in the original cycle-3 algorithm,
+generic-fn bodies were rewritten in-place during iteration 1
+(replacing `id::<U>(v)` with `id__U(v)` mangled-no-turbofish),
+BEFORE iteration 2 cloned `caller__i32` with subst `{U: i32}` —
+the clone's `_walk_subst_expr` then had nothing to substitute.
+Cycle 5 fixes this by not walking generic-fn bodies at top level;
+clones inherit the original generic body (turbofish intact) and
+get walked via `_walk_subst_expr` per clone.
 
 License: Apache 2.0
 """
