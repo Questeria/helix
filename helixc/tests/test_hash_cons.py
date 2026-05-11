@@ -544,6 +544,146 @@ def test_c46_1_assign_target_affects_hash():
     )
 
 
+def test_c49_let_is_mut_affects_hash():
+    """Stage 28.9 cycle 51 audit-R C50-R1 + cycle-49 C47-A2 regression:
+    Let.is_mut must affect the hash of the enclosing Block.
+    Pre-cycle-49, `let mut x = 0` and `let x = 0` hashed identically
+    despite driving different IR (ALLOC_VAR vs plain bind)."""
+    s = A.Span(line=1, col=1)
+    def mk_block(is_mut):
+        return A.Block(
+            span=s,
+            stmts=[A.Let(span=s, name="x", is_mut=is_mut, ty=None,
+                         value=A.IntLit(span=s, value=0, type_suffix=None))],
+            final_expr=A.Name(span=s, name="x", generics=[]),
+        )
+    assert structural_hash(mk_block(False)) != structural_hash(mk_block(True))
+
+
+def test_c49_let_ty_affects_hash():
+    """C47-A3: Let.ty (declared annotation) must affect hash."""
+    s = A.Span(line=1, col=1)
+    def mk_block(ty):
+        return A.Block(
+            span=s,
+            stmts=[A.Let(span=s, name="x", is_mut=False, ty=ty,
+                         value=A.IntLit(span=s, value=0, type_suffix=None))],
+            final_expr=A.Name(span=s, name="x", generics=[]),
+        )
+    b_none = mk_block(None)
+    b_i32 = mk_block(A.TyName(span=s, name="i32"))
+    b_i64 = mk_block(A.TyName(span=s, name="i64"))
+    assert structural_hash(b_none) != structural_hash(b_i32)
+    assert structural_hash(b_i32) != structural_hash(b_i64)
+
+
+def test_c49_let_name_de_bruijn_elided():
+    """C47-A1: Let.name is intentionally elided in hash per de-Bruijn
+    alpha-equivalence. `let a = 5; a` and `let b = 5; b` must hash
+    equally (anti-over-correction for the C47-A1 _stmt_equal fix)."""
+    s = A.Span(line=1, col=1)
+    def mk_block(name):
+        return A.Block(
+            span=s,
+            stmts=[A.Let(span=s, name=name, is_mut=False, ty=None,
+                         value=A.IntLit(span=s, value=5, type_suffix=None))],
+            final_expr=A.Name(span=s, name=name, generics=[]),
+        )
+    assert structural_hash(mk_block("a")) == structural_hash(mk_block("b")), (
+        "Let.name must be elided (de-Bruijn alpha-equivalence)"
+    )
+
+
+def test_c49_let_no_value_distinguishes_ty():
+    """Stage 28.9 cycle 51 audit-R C49-A2 regression: pre-fix, a Let
+    with value=None fell through to a generic `_emit("Stmt", "Let")`
+    arm that lost is_mut, ty, and the value-presence distinction.
+    `let x: i32;` and `let y: u64;` (both uninitialized) collided."""
+    s = A.Span(line=1, col=1)
+    def mk_block(ty_name):
+        return A.Block(
+            span=s,
+            stmts=[A.Let(span=s, name="x", is_mut=False,
+                         ty=A.TyName(span=s, name=ty_name),
+                         value=None)],
+            final_expr=A.Name(span=s, name="x", generics=[]),
+        )
+    assert structural_hash(mk_block("i32")) != structural_hash(mk_block("u64"))
+
+
+def test_c49_fndecl_return_ty_affects_hash():
+    """C48-1 regression: FnDecl.return_ty must affect hash. Pre-fix,
+    `fn f() -> i32 { 0 }` and `fn f() -> i64 { 0 }` collided."""
+    s = A.Span(line=1, col=1)
+    def mk_fn(rty):
+        return A.FnDecl(
+            span=s, name="f",
+            generics=[], params=[],
+            return_ty=A.TyName(span=s, name=rty),
+            where_clauses=[],
+            body=A.Block(span=s, stmts=[],
+                         final_expr=A.IntLit(span=s, value=0, type_suffix=None)),
+            attrs=[], is_pub=False, is_extern=False, extern_abi=None,
+        )
+    assert structural_hash(mk_fn("i32")) != structural_hash(mk_fn("i64"))
+
+
+def test_c49_fndecl_attrs_order_independent():
+    """C48-1: FnDecl.attrs are now sorted before hashing, so
+    `@pure @kernel fn f() {}` and `@kernel @pure fn f() {}` hash
+    equally — attr order shouldn't affect identity."""
+    s = A.Span(line=1, col=1)
+    body = A.Block(span=s, stmts=[], final_expr=A.IntLit(span=s, value=0, type_suffix=None))
+    f_ab = A.FnDecl(
+        span=s, name="f", generics=[], params=[],
+        return_ty=A.TyName(span=s, name="i32"),
+        where_clauses=[], body=body,
+        attrs=["pure", "kernel"],
+        is_pub=False, is_extern=False, extern_abi=None,
+    )
+    f_ba = A.FnDecl(
+        span=s, name="f", generics=[], params=[],
+        return_ty=A.TyName(span=s, name="i32"),
+        where_clauses=[], body=body,
+        attrs=["kernel", "pure"],
+        is_pub=False, is_extern=False, extern_abi=None,
+    )
+    assert structural_hash(f_ab) == structural_hash(f_ba)
+
+
+def test_c49_3_monomorphize_array_size_distinguishes_instantiations():
+    """Stage 28.9 cycle 51 audit-T C49-3 regression (HIGH conf 85):
+    monomorphize._mangle_ty was missing the array size, so
+    `f::<[i32; 3]>` and `f::<[i32; 5]>` collapsed to the same
+    fn instantiation. The struct_mono pass already had this fix
+    (audit 28.8 C2-5); the fn-mono parallel was missing."""
+    from helixc.frontend.monomorphize import _mangle_ty
+    s = A.Span(line=1, col=1)
+    arr3 = A.TyArray(
+        span=s, elem=A.TyName(span=s, name="i32"),
+        size=A.IntLit(span=s, value=3, type_suffix=None),
+    )
+    arr5 = A.TyArray(
+        span=s, elem=A.TyName(span=s, name="i32"),
+        size=A.IntLit(span=s, value=5, type_suffix=None),
+    )
+    m3 = _mangle_ty(arr3)
+    m5 = _mangle_ty(arr5)
+    assert m3 != m5, (
+        f"_mangle_ty([i32; 3]) and ([i32; 5]) must produce distinct "
+        f"names; got {m3!r} vs {m5!r}"
+    )
+    # And same-size still equals
+    arr3b = A.TyArray(
+        span=s, elem=A.TyName(span=s, name="i32"),
+        size=A.IntLit(span=s, value=3, type_suffix=None),
+    )
+    assert _mangle_ty(arr3) == _mangle_ty(arr3b), (
+        "Same array sizes must produce same mangled name "
+        "(anti-over-correction)"
+    )
+
+
 def test_c46_2_patbind_is_mut_affects_hash():
     """Stage 28.9 cycle 47 audit-T C46-2 regression (HIGH conf 88):
     PatBind.is_mut distinguishes `Some(x) =>` from `Some(mut x) =>`

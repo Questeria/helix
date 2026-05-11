@@ -221,7 +221,7 @@ def _hash_into(h: "hashlib._Hash", node: Any,
         local = dict(binders)
         depth = max(local.values(), default=-1) + 1
         for stmt in node.stmts:
-            if isinstance(stmt, A.Let) and stmt.value is not None:
+            if isinstance(stmt, A.Let):
                 # Stage 28.9 cycle 49 audit-R C47-A2 + C47-A3 fix:
                 # emit `is_mut` (drives ALLOC_VAR + STORE_VAR vs plain
                 # bind in lower_ast.py:1014-1024) and `ty` (the
@@ -231,10 +231,22 @@ def _hash_into(h: "hashlib._Hash", node: Any,
                 # `_stmt_equal` Let requires name match while hash
                 # elides; aligning the equality side too in
                 # hash_cons.py.
+                # Stage 28.9 cycle 51 audit-R C49-A2 fix: handle
+                # Let.value=None case (uninitialized `let x: i32;`).
+                # Pre-fix that fell through to the generic
+                # `_emit(h, "Stmt", type(stmt).__name__)` arm,
+                # losing is_mut, ty, and the value-presence
+                # distinction. Now the header is emitted always
+                # and the value is folded in only when present
+                # (with a sentinel emit otherwise).
                 _emit(h, "Let", stmt.is_mut)
                 _emit(h, "LetTy", _ty_repr(stmt.ty)
                       if stmt.ty is not None else ("None",))
-                _hash_into(h, stmt.value, local)
+                if stmt.value is not None:
+                    _emit(h, "LetHasValue")
+                    _hash_into(h, stmt.value, local)
+                else:
+                    _emit(h, "LetNoValue")
                 # Bind after evaluating the rhs (not letrec).
                 local[stmt.name] = depth
                 depth += 1
@@ -388,15 +400,34 @@ def _hash_into(h: "hashlib._Hash", node: Any,
               tuple(sorted(node.attrs)),
               node.is_pub, node.is_extern, node.extern_abi or "")
         # Param types via span-stripped canonicalizer.
+        # Stage 28.9 cycle 51 audit-R C49-A3 fix (LOW): emit
+        # FnParam.is_mut alongside the type. Currently not
+        # load-bearing in lower_ast but is in monomorphize for
+        # the `fn f(mut x: i32)` form — symmetric with Let.is_mut
+        # fix and prevents a future regression when codegen
+        # starts distinguishing mut-bound params.
         local: dict[str, int] = {}
         for i, p in enumerate(node.params):
             local[p.name] = i
-            _emit(h, "Param", _ty_repr(p.ty))
+            _emit(h, "Param", _ty_repr(p.ty),
+                  getattr(p, "is_mut", False))
         # return_ty (Optional[TyNode]) via _ty_repr (handles None).
         _emit(h, "ReturnTy", _ty_repr(node.return_ty))
-        # generics and where_clauses — bounded surface for Phase-0.
-        _emit(h, "FnGenerics", repr(node.generics))
-        _emit(h, "FnWhereClauses", repr(node.where_clauses))
+        # Stage 28.9 cycle 51 audit-R C49-A1 + audit-T C49-1 fix
+        # (conf 92): generics/where_clauses now use span-stripped
+        # canonicalization instead of bare `repr(...)` which embedded
+        # GenericParam.span and WhereClause.span (+ recursive Expr
+        # spans inside constraint). Same defect class the cycle-36
+        # _ty_repr fix closed for TyNode but on a deferred field.
+        _emit(h, "FnGenericsCount", len(node.generics))
+        for g in node.generics:
+            # GenericParam has fields (name, kind); span elided.
+            _emit(h, "FnGeneric", g.name, g.kind)
+        _emit(h, "FnWhereClausesCount", len(node.where_clauses))
+        for w in node.where_clauses:
+            # WhereClause has a constraint Expr; recurse via
+            # _expr_canon (the cycle-39 span-strip helper).
+            _emit(h, "FnWhereClause", _expr_canon(w.constraint))
         _hash_into(h, node.body, local)
         return
     # Stage 28.9 cycle 35 audit-T C34-1 fix (conf 95): add explicit

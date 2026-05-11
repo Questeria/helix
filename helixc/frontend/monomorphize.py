@@ -61,21 +61,78 @@ def mangle(name: str, ty_args: list[A.TyNode]) -> str:
     return f"{name}__" + "_".join(parts)
 
 
+def _mangle_shape_expr(e) -> str:
+    """Stage 28.9 cycle 51 audit-T C49-3 fix (conf 85): a span-free
+    string digest of a shape-typed Expr (TyArray.size, TyTensor.shape
+    element, TyTile.shape element, etc.). Mirrors struct_mono._shape_key
+    but produces a string suitable for embedding into mangled fn names.
+
+    Pre-fix, `_mangle_ty(TyArray(...))` returned just `arr_<elem>`
+    regardless of the size — so `f::<[i32; 3]>` and `f::<[i32; 5]>`
+    collapsed to the same instantiation. The parallel struct_mono fix
+    (audit 28.8 cycle 2 C2-5) used `_shape_key(t.size)` for the struct
+    side; this is the fn-mono complement.
+    """
+    if e is None:
+        return "none"
+    if isinstance(e, A.IntLit):
+        return f"i{e.value}"
+    if isinstance(e, A.Name):
+        return f"n_{e.name}"
+    if isinstance(e, A.Path):
+        return "p_" + "_".join(e.segments)
+    if isinstance(e, A.Binary):
+        # Stable string-form for compound shape expressions
+        # (e.g. `[T; N+1]`); avoids embedding the operator's span.
+        return (f"b_{e.op}_"
+                + _mangle_shape_expr(e.left) + "_"
+                + _mangle_shape_expr(e.right))
+    if isinstance(e, A.Unary):
+        return f"u_{e.op}_" + _mangle_shape_expr(e.operand)
+    # Conservative default: use repr without span attempts. Better
+    # than dropping the field entirely; for the common case the
+    # arms above cover all encountered shapes.
+    return f"x_{type(e).__name__}"
+
+
 def _mangle_ty(t: A.TyNode) -> str:
     if isinstance(t, A.TyName):
         return t.name
     if isinstance(t, A.TyTuple):
         return "tup_" + "_".join(_mangle_ty(e) for e in t.elems)
     if isinstance(t, A.TyArray):
-        return "arr_" + _mangle_ty(t.elem)
+        # Stage 28.9 cycle 51 audit-T C49-3 fix (conf 85): include
+        # the size in the mangled name. Pre-fix, two generic fn
+        # instantiations at different array sizes (`f::<[i32; 3]>`
+        # and `f::<[i32; 5]>`) produced identical mangled names
+        # `arr_i32`, so the second call site silently used the
+        # first instantiation's body — wrong array length at codegen.
+        # Mirrors struct_mono._ty_key C2-5 fix.
+        return ("arr_" + _mangle_ty(t.elem)
+                + "__" + _mangle_shape_expr(t.size))
     if isinstance(t, A.TyRef):
         return ("refmut_" if t.is_mut else "ref_") + _mangle_ty(t.inner)
+    if isinstance(t, A.TyPtr):
+        # Cycle 51 C49-3 follow-on: TyPtr was missing from the
+        # original switch; the catch-all "X" was returned instead.
+        return ("ptrmut_" if t.is_mut else "ptr_") + _mangle_ty(t.inner)
     if isinstance(t, A.TyFn):
         return "fn_" + "_".join(_mangle_ty(p) for p in t.params) + "_to_" + _mangle_ty(t.ret)
     if isinstance(t, A.TyTensor):
-        return "tensor_" + _mangle_ty(t.dtype)
+        # Cycle 51 C49-3: include shape + device + layout per
+        # struct_mono._ty_key. Pre-fix, two TyTensor at different
+        # shapes collapsed to `tensor_<dtype>`.
+        shape_part = "_".join(_mangle_shape_expr(s) for s in t.shape)
+        return ("tensor_" + _mangle_ty(t.dtype)
+                + "__shape_" + shape_part
+                + "__dev_" + _mangle_shape_expr(t.device)
+                + "__layout_" + _mangle_shape_expr(t.layout))
     if isinstance(t, A.TyTile):
-        return "tile_" + _mangle_ty(t.dtype)
+        # Cycle 51 C49-3: include shape + memspace.
+        shape_part = "_".join(_mangle_shape_expr(s) for s in t.shape)
+        return ("tile_" + _mangle_ty(t.dtype)
+                + "__shape_" + shape_part
+                + "__mem_" + _mangle_shape_expr(t.memspace))
     if isinstance(t, A.TyGeneric):
         return t.base + "_" + "_".join(_mangle_ty(a) for a in t.args)
     return "X"
