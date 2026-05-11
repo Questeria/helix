@@ -819,9 +819,25 @@ class Asm:
 class FnCompiler:
     """Compiles a single Tensor IR function to x86-64 machine code."""
 
-    def __init__(self, fn: tir.FnIR, asm: Asm):
+    def __init__(self, fn: tir.FnIR, asm: Asm, fn_index: int = 0):
         self.fn = fn
         self.asm = asm
+        # Stage 28.8.1: per-module fn index for stable symbol generation.
+        # Combined with op_index (computed below) produces deterministic
+        # suffixes for emitted symbols (e.g. __helix_strptr_0_7) that do
+        # NOT vary across Python process invocations. See _op_suffix.
+        self.fn_index = fn_index
+        # Stage 28.8.1: pre-walk the fn IR to build a stable id(op) ->
+        # op_index map. We use id(op) as the dict key purely for O(1)
+        # identity lookup; the EMITTED suffix is the integer index, not
+        # the address. This kills process-address leakage into ELF bytes.
+        # See docs/helix-pre-phase-A-finalization-research.md § A3 / C1.
+        self._op_index: dict[int, int] = {}
+        _idx = 0
+        for _blk in fn.blocks:
+            for _op in _blk.ops:
+                self._op_index[id(_op)] = _idx
+                _idx += 1
         # Map SSA value id -> stack frame offset (relative to rbp). Negative = below rbp.
         self.slots: dict[int, int] = {}
         self.next_slot: int = 0   # will decrement as we allocate
@@ -834,6 +850,30 @@ class FnCompiler:
         # Pending strings (sym, bytes) emitted by PRINT ops in this function;
         # collected by the module driver and appended to the binary.
         self._pending_strings: list[tuple[str, bytes]] = []
+
+    def _op_suffix(self, op: tir.Op) -> str:
+        """Return a deterministic, hex-safe suffix identifying `op` within
+        the enclosing module. Format: ``{fn_index}_{op_index}``.
+
+        Stage 28.8.1 replacement for the pre-existing ``f"{id(op):x}"``
+        pattern at 9 call sites — id(op) leaks the Python object's memory
+        address into emitted symbol names, which makes the ELF byte stream
+        differ across consecutive runs of the same source. The new suffix
+        is byte-identical across processes given identical IR.
+
+        Falls back to ``{fn_index}_unk{id(op):x}`` only if the op isn't in
+        the index map (which should never happen — every op in this fn is
+        registered at __init__ time). The fallback exists as a defensive
+        guard; if it ever fires, a later codegen pass added an op AFTER
+        FnCompiler.__init__ and that pass should also register it.
+        """
+        idx = self._op_index.get(id(op))
+        if idx is None:
+            # Defensive guard — op was created post-init. Log via the
+            # symbol name itself so the byte-identical regression test
+            # surfaces the breach with a localized diff.
+            return f"{self.fn_index}_unk{id(op):x}"
+        return f"{self.fn_index}_{idx}"
 
     def _alloc_var(self, name: str) -> int:
         if name in self.var_slots:
@@ -1724,7 +1764,8 @@ class FnCompiler:
             text = op.attrs.get("text", "")
             assert isinstance(text, str)
             data = text.encode("utf-8")
-            sym = f"__helix_strptr_{id(op):x}"
+            # Stage 28.8.1: deterministic suffix (was id(op):x).
+            sym = f"__helix_strptr_{self._op_suffix(op)}"
             self._pending_strings.append((sym, data))
             self.asm.lea_rax_rip_rel(sym)
             res_slot = self._slot_of(op.results[0])
@@ -1919,7 +1960,8 @@ class FnCompiler:
             text = op.attrs.get("text", "")
             assert isinstance(text, str)
             data = text.encode("utf-8")
-            sym = f"__helix_strbyte_{id(op):x}"
+            # Stage 28.8.1: deterministic suffix (was id(op):x).
+            sym = f"__helix_strbyte_{self._op_suffix(op)}"
             self._pending_strings.append((sym, data))
             buf = self.asm.b
             idx_slot = self._slot_of(op.operands[0])
@@ -1959,8 +2001,10 @@ class FnCompiler:
                 # Path needs a NUL terminator since open() expects C-string
                 path_data = path_str.encode("utf-8") + b"\x00"
                 content_data = content.encode("utf-8")
-                path_sym = f"__helix_path_{id(op):x}"
-                content_sym = f"__helix_content_{id(op):x}"
+                # Stage 28.8.1: deterministic suffix (was id(op):x).
+                _sfx = self._op_suffix(op)
+                path_sym = f"__helix_path_{_sfx}"
+                content_sym = f"__helix_content_{_sfx}"
                 self._pending_strings.append((path_sym, path_data))
                 self._pending_strings.append((content_sym, content_data))
 
@@ -2037,7 +2081,8 @@ class FnCompiler:
                 path_str = op.attrs["path"]
                 assert isinstance(path_str, str)
                 path_data = path_str.encode("utf-8") + b"\x00"
-                path_sym = f"__helix_rftoa_path_{id(op):x}"
+                # Stage 28.8.1: deterministic suffix (was id(op):x).
+                path_sym = f"__helix_rftoa_path_{self._op_suffix(op)}"
                 self._pending_strings.append((path_sym, path_data))
                 buf = self.asm.b
                 # IMPORTANT: BUF_SIZE must fit in signed 8-bit disp (max 127)
@@ -2177,7 +2222,8 @@ class FnCompiler:
                 path_str = op.attrs["path"]
                 assert isinstance(path_str, str)
                 path_data = path_str.encode("utf-8") + b"\x00"
-                path_sym = f"__helix_wftoa_path_{id(op):x}"
+                # Stage 28.8.1: deterministic suffix (was id(op):x).
+                path_sym = f"__helix_wftoa_path_{self._op_suffix(op)}"
                 self._pending_strings.append((path_sym, path_data))
                 buf = self.asm.b
 
@@ -2329,7 +2375,8 @@ class FnCompiler:
                 path_str = op.attrs["path"]
                 assert isinstance(path_str, str)
                 path_data = path_str.encode("utf-8") + b"\x00"
-                path_sym = f"__helix_path_{id(op):x}"
+                # Stage 28.8.1: deterministic suffix (was id(op):x).
+                path_sym = f"__helix_path_{self._op_suffix(op)}"
                 self._pending_strings.append((path_sym, path_data))
                 buf = self.asm.b
 
@@ -2475,8 +2522,9 @@ class FnCompiler:
             text = op.attrs.get("text", "")
             assert isinstance(text, str)
             data = text.encode("utf-8")
-            # Emit a unique symbol per call site
-            sym = f"__helix_str_{id(op):x}"
+            # Stage 28.8.1: deterministic suffix (was id(op):x) — unique per
+            # PRINT op via the per-fn op_index table.
+            sym = f"__helix_str_{self._op_suffix(op)}"
             # Stash the bytes for later emission with their symbol
             self._pending_strings.append((sym, data))
             self.asm.mov_edi_imm32(1)
@@ -2535,7 +2583,8 @@ class FnCompiler:
             # the message at runtime, e.g. "panic[28501]: oh no\n".
             full = f"panic[{trap_id}]: {text}\n"
             data = full.encode("utf-8")
-            sym = f"__helix_panic_{id(op):x}"
+            # Stage 28.8.1: deterministic suffix (was id(op):x).
+            sym = f"__helix_panic_{self._op_suffix(op)}"
             self._pending_strings.append((sym, data))
             # sys_write(2, ptr, len)
             self.asm.mov_edi_imm32(2)  # fd = stderr
@@ -2898,13 +2947,17 @@ def compile_module_to_elf(module: tir.Module, entry_fn: str = "main") -> bytes:
     # embedded after the code (below). Skip them in the x86 compile loop.
     pending_strings: list[tuple[str, bytes]] = []
     kernel_fns: list[tir.FnIR] = []
-    for fn in module.functions.values():
+    # Stage 28.8.1: enumerate functions to give each one a stable per-module
+    # index. Combined with FnCompiler's op-index table this kills the
+    # id(op)-into-symbol-name determinism leak documented in
+    # docs/helix-pre-phase-A-finalization-research.md § A3 / C1.
+    for fn_index, fn in enumerate(module.functions.values()):
         if fn.attrs.get("is_extern"):
             continue
         if fn.attrs.get("kernel"):
             kernel_fns.append(fn)
             continue
-        fc = FnCompiler(fn, asm)
+        fc = FnCompiler(fn, asm, fn_index=fn_index)
         fc.compile()
         pending_strings.extend(fc._pending_strings)
 
