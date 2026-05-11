@@ -38,6 +38,16 @@ def _has_grad_call(prog: A.Program) -> bool:
 
 
 def _expr_has_grad(e) -> bool:
+    """Audit 28.8 cycle 2 C2-4: dispatch covers every A.Expr subtype.
+
+    Pre-fix this walker missed Field / Index / StructLit / TupleLit /
+    ArrayLit / UnsafeBlock / Range / Break / Quote / Splice / Modify.
+    Those misses were "merely" short-circuit false-positives (we'd
+    walk anyway) but the same pattern in `_rewrite_in_expr` is a real
+    silent bug — `grad(f)` nested in those positions never got
+    rewritten. Unify the dispatch so all three walkers cover the same
+    set of nodes.
+    """
     if e is None:
         return False
     if isinstance(e, A.Call):
@@ -57,6 +67,8 @@ def _expr_has_grad(e) -> bool:
         if _expr_has_grad(e.final_expr):
             return True
         return False
+    if isinstance(e, A.UnsafeBlock):
+        return _expr_has_grad(e.body)
     if isinstance(e, A.If):
         return (_expr_has_grad(e.cond) or _expr_has_grad(e.then)
                 or _expr_has_grad(e.else_))
@@ -79,8 +91,32 @@ def _expr_has_grad(e) -> bool:
         return _expr_has_grad(e.value)
     if isinstance(e, A.Return):
         return _expr_has_grad(e.value)
+    if isinstance(e, A.Break):
+        return _expr_has_grad(e.value)
     if isinstance(e, A.Assign):
         return _expr_has_grad(e.target) or _expr_has_grad(e.value)
+    if isinstance(e, A.Index):
+        return (_expr_has_grad(e.callee)
+                or any(_expr_has_grad(i) for i in e.indices))
+    if isinstance(e, A.Field):
+        return _expr_has_grad(e.obj)
+    if isinstance(e, A.TupleLit):
+        return any(_expr_has_grad(x) for x in e.elems)
+    if isinstance(e, A.ArrayLit):
+        return any(_expr_has_grad(x) for x in e.elems)
+    if isinstance(e, A.StructLit):
+        return any(_expr_has_grad(v) for _, v in e.fields)
+    if isinstance(e, A.Range):
+        return (_expr_has_grad(getattr(e, "start", None))
+                or _expr_has_grad(getattr(e, "end", None)))
+    if isinstance(e, (A.Quote, A.Splice)):
+        return _expr_has_grad(e.inner)
+    if isinstance(e, A.Modify):
+        # Modify has (target, transformation, verifier) — recurse all.
+        for attr in ("target", "transformation", "verifier"):
+            if hasattr(e, attr) and _expr_has_grad(getattr(e, attr)):
+                return True
+        return False
     return False
 
 
@@ -148,6 +184,13 @@ def _resolve_let_aliases(block: A.Block, fn_by_name: dict[str, A.FnDecl],
 
 def _resolve_in_expr(expr: A.Expr, fn_by_name: dict[str, A.FnDecl],
                      alias_env: dict[str, str]) -> None:
+    """Audit 28.8 cycle 2 C2-4: dispatch covers every Expr subtype that
+    can contain Expr sub-trees. Pre-fix the dispatch missed Match / Loop /
+    Field / Return / Break / Assign / Range / StructLit / TupleLit /
+    ArrayLit / UnsafeBlock / Quote / Splice / Modify — so let-aliases
+    nested inside any of those positions never got resolved (and the
+    call to grad inside an aliased-fn slot through any of those
+    positions silently never got rewritten)."""
     if isinstance(expr, A.Call):
         # Resolve callee aliases
         if isinstance(expr.callee, A.Name) and expr.callee.name in alias_env:
@@ -165,21 +208,64 @@ def _resolve_in_expr(expr: A.Expr, fn_by_name: dict[str, A.FnDecl],
         _resolve_in_expr(expr.value, fn_by_name, alias_env)
     elif isinstance(expr, A.Block):
         _resolve_let_aliases(expr, fn_by_name, alias_env)
+    elif isinstance(expr, A.UnsafeBlock):
+        _resolve_let_aliases(expr.body, fn_by_name, alias_env)
     elif isinstance(expr, A.If):
         _resolve_in_expr(expr.cond, fn_by_name, alias_env)
         _resolve_let_aliases(expr.then, fn_by_name, alias_env)
         if expr.else_ is not None and isinstance(expr.else_, A.Block):
             _resolve_let_aliases(expr.else_, fn_by_name, alias_env)
+        elif expr.else_ is not None and isinstance(expr.else_, A.If):
+            _resolve_in_expr(expr.else_, fn_by_name, alias_env)
+    elif isinstance(expr, A.Match):
+        _resolve_in_expr(expr.scrutinee, fn_by_name, alias_env)
+        for arm in expr.arms:
+            if arm.guard is not None:
+                _resolve_in_expr(arm.guard, fn_by_name, alias_env)
+            _resolve_in_expr(arm.body, fn_by_name, alias_env)
+    elif isinstance(expr, A.Loop):
+        _resolve_let_aliases(expr.body, fn_by_name, alias_env)
     elif isinstance(expr, A.Index):
         _resolve_in_expr(expr.callee, fn_by_name, alias_env)
         for i in expr.indices:
             _resolve_in_expr(i, fn_by_name, alias_env)
+    elif isinstance(expr, A.Field):
+        _resolve_in_expr(expr.obj, fn_by_name, alias_env)
     elif isinstance(expr, A.While):
         _resolve_in_expr(expr.cond, fn_by_name, alias_env)
         _resolve_let_aliases(expr.body, fn_by_name, alias_env)
     elif isinstance(expr, A.For):
         _resolve_in_expr(expr.iter_expr, fn_by_name, alias_env)
         _resolve_let_aliases(expr.body, fn_by_name, alias_env)
+    elif isinstance(expr, A.Return):
+        if expr.value is not None:
+            _resolve_in_expr(expr.value, fn_by_name, alias_env)
+    elif isinstance(expr, A.Break):
+        if expr.value is not None:
+            _resolve_in_expr(expr.value, fn_by_name, alias_env)
+    elif isinstance(expr, A.Assign):
+        _resolve_in_expr(expr.target, fn_by_name, alias_env)
+        _resolve_in_expr(expr.value, fn_by_name, alias_env)
+    elif isinstance(expr, A.Range):
+        if getattr(expr, "start", None) is not None:
+            _resolve_in_expr(expr.start, fn_by_name, alias_env)
+        if getattr(expr, "end", None) is not None:
+            _resolve_in_expr(expr.end, fn_by_name, alias_env)
+    elif isinstance(expr, A.TupleLit):
+        for x in expr.elems:
+            _resolve_in_expr(x, fn_by_name, alias_env)
+    elif isinstance(expr, A.ArrayLit):
+        for x in expr.elems:
+            _resolve_in_expr(x, fn_by_name, alias_env)
+    elif isinstance(expr, A.StructLit):
+        for _, v in expr.fields:
+            _resolve_in_expr(v, fn_by_name, alias_env)
+    elif isinstance(expr, (A.Quote, A.Splice)):
+        _resolve_in_expr(expr.inner, fn_by_name, alias_env)
+    elif isinstance(expr, A.Modify):
+        for attr in ("target", "transformation", "verifier"):
+            if hasattr(expr, attr):
+                _resolve_in_expr(getattr(expr, attr), fn_by_name, alias_env)
 
 
 def _rewrite_in_block(block: A.Block, fn_by_name: dict[str, A.FnDecl],
@@ -317,6 +403,81 @@ def _rewrite_in_expr(expr: A.Expr, fn_by_name: dict[str, A.FnDecl],
         expr.iter_expr = new_iter
         c2 = _rewrite_in_block(expr.body, fn_by_name, new_fns)
         return (expr, c1 + c2)
+    # Audit 28.8 cycle 2 C2-4: cover the remaining Expr subtypes so
+    # `grad(loss)` nested in any of these positions actually gets
+    # rewritten. Pre-fix, the walker silently fell through to the
+    # final `return (expr, count)` for Field / Index / StructLit /
+    # TupleLit / ArrayLit / UnsafeBlock / Loop / Range / Return /
+    # Break / Quote / Splice / Modify — so a user writing `[grad(f),
+    # grad(g)]` (an ArrayLit) saw the `grad` symbol surface as an
+    # unbound name at lowering time.
+    if isinstance(expr, A.Loop):
+        c = _rewrite_in_block(expr.body, fn_by_name, new_fns)
+        return (expr, c)
+    if isinstance(expr, A.UnsafeBlock):
+        c = _rewrite_in_block(expr.body, fn_by_name, new_fns)
+        return (expr, c)
+    if isinstance(expr, A.Field):
+        new_obj, c = _rewrite_in_expr(expr.obj, fn_by_name, new_fns)
+        expr.obj = new_obj
+        return (expr, c)
+    if isinstance(expr, A.Return):
+        if expr.value is not None:
+            new_v, c = _rewrite_in_expr(expr.value, fn_by_name, new_fns)
+            expr.value = new_v
+            return (expr, c)
+        return (expr, 0)
+    if isinstance(expr, A.Break):
+        if expr.value is not None:
+            new_v, c = _rewrite_in_expr(expr.value, fn_by_name, new_fns)
+            expr.value = new_v
+            return (expr, c)
+        return (expr, 0)
+    if isinstance(expr, A.Range):
+        c_total = 0
+        if getattr(expr, "start", None) is not None:
+            new_s, cs = _rewrite_in_expr(expr.start, fn_by_name, new_fns)
+            expr.start = new_s
+            c_total += cs
+        if getattr(expr, "end", None) is not None:
+            new_e, ce = _rewrite_in_expr(expr.end, fn_by_name, new_fns)
+            expr.end = new_e
+            c_total += ce
+        return (expr, c_total)
+    if isinstance(expr, A.TupleLit):
+        c_total = 0
+        for i, x in enumerate(expr.elems):
+            new_x, cx = _rewrite_in_expr(x, fn_by_name, new_fns)
+            expr.elems[i] = new_x
+            c_total += cx
+        return (expr, c_total)
+    if isinstance(expr, A.ArrayLit):
+        c_total = 0
+        for i, x in enumerate(expr.elems):
+            new_x, cx = _rewrite_in_expr(x, fn_by_name, new_fns)
+            expr.elems[i] = new_x
+            c_total += cx
+        return (expr, c_total)
+    if isinstance(expr, A.StructLit):
+        c_total = 0
+        for i, (name, v) in enumerate(expr.fields):
+            new_v, cv = _rewrite_in_expr(v, fn_by_name, new_fns)
+            expr.fields[i] = (name, new_v)
+            c_total += cv
+        return (expr, c_total)
+    if isinstance(expr, (A.Quote, A.Splice)):
+        new_inner, c = _rewrite_in_expr(expr.inner, fn_by_name, new_fns)
+        expr.inner = new_inner
+        return (expr, c)
+    if isinstance(expr, A.Modify):
+        c_total = 0
+        for attr in ("target", "transformation", "verifier"):
+            if hasattr(expr, attr):
+                new_x, cx = _rewrite_in_expr(getattr(expr, attr),
+                                              fn_by_name, new_fns)
+                setattr(expr, attr, new_x)
+                c_total += cx
+        return (expr, c_total)
     return (expr, count)
 
 

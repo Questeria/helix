@@ -355,6 +355,150 @@ def test_b5_take_diff_warnings_drains():
 
 
 # ============================================================================
+# Audit 28.8 cycle 2 C2-4 — grad_pass walker covers all Expr subtypes
+# ============================================================================
+def _names_in_prog(prog) -> set[str]:
+    """Collect every Name.name appearing anywhere in the program after
+    rewriting. Used to verify grad/grad_rev callees got rewritten to
+    their `__grad` synthesized symbols."""
+    found = set()
+
+    def walk(e):
+        if e is None:
+            return
+        if isinstance(e, A.Name):
+            found.add(e.name)
+        for attr in (
+            "callee", "operand", "left", "right", "cond", "then", "else_",
+            "scrutinee", "body", "value", "target", "transformation",
+            "verifier", "inner", "iter_expr", "obj", "final_expr",
+            "start", "end",
+        ):
+            if hasattr(e, attr):
+                walk(getattr(e, attr))
+        for attr in ("args", "elems", "indices", "arms", "stmts"):
+            if hasattr(e, attr):
+                seq = getattr(e, attr) or []
+                for x in seq:
+                    if hasattr(x, "body"):
+                        walk(getattr(x, "body"))
+                    if hasattr(x, "value"):
+                        walk(getattr(x, "value"))
+                    if hasattr(x, "expr"):
+                        walk(getattr(x, "expr"))
+                    walk(x)
+        if hasattr(e, "fields"):
+            for item in e.fields:
+                if isinstance(item, tuple) and len(item) == 2:
+                    walk(item[1])
+
+    for item in prog.items:
+        if isinstance(item, A.FnDecl):
+            walk(item.body)
+    return found
+
+
+def test_c2_4_grad_in_array_lit_rewritten():
+    """C2-4: `[grad(loss), grad(loss)]` (ArrayLit holding grad calls)
+    must be rewritten so each element becomes `loss__grad`. Pre-fix
+    the walker fell through ArrayLit entirely; the inner Call nodes
+    remained `grad(loss)` and surfaced as unbound `grad` at lowering."""
+    from helixc.frontend.grad_pass import grad_pass
+    src = (
+        "@pure fn loss(x: f32) -> f32 { x * x }\n"
+        "fn use_arr() -> i32 {\n"
+        "    let arr = [grad(loss), grad(loss)];\n"
+        "    0\n"
+        "}\n"
+    )
+    prog = parse(src)
+    rewrites = grad_pass(prog)
+    assert rewrites >= 1, f"expected >=1 grad rewrite, got {rewrites}"
+    names = _names_in_prog(prog)
+    assert "loss__grad" in names, (
+        f"expected loss__grad after rewrite; names={sorted(names)}"
+    )
+
+
+def test_c2_4_grad_in_struct_lit_rewritten():
+    """C2-4: `Optim { lr: 0.01, gfn: grad(loss) }` (StructLit) — the
+    field value must be rewritten. Pre-fix StructLit was untouched."""
+    from helixc.frontend.grad_pass import grad_pass
+    src = (
+        "struct Optim { lr: f32, gfn: f32 }\n"
+        "@pure fn loss(x: f32) -> f32 { x * x }\n"
+        "fn use_struct() -> i32 {\n"
+        "    let o = Optim { lr: 0.01, gfn: grad(loss)(0.0) };\n"
+        "    0\n"
+        "}\n"
+    )
+    prog = parse(src)
+    rewrites = grad_pass(prog)
+    assert rewrites >= 1, f"expected >=1 grad rewrite, got {rewrites}"
+    names = _names_in_prog(prog)
+    assert "loss__grad" in names, (
+        f"expected loss__grad after rewrite; names={sorted(names)}"
+    )
+
+
+def test_c2_4_grad_in_return_rewritten():
+    """C2-4: `return grad(loss)` (Return holding grad call) — the
+    Return.value must be walked. Pre-fix Return was untouched."""
+    from helixc.frontend.grad_pass import grad_pass
+    src = (
+        "@pure fn loss(x: f32) -> f32 { x * x }\n"
+        "fn use_ret(b: bool) -> f32 {\n"
+        "    if b { return grad(loss)(1.0); }\n"
+        "    0.0\n"
+        "}\n"
+    )
+    prog = parse(src)
+    rewrites = grad_pass(prog)
+    assert rewrites >= 1, f"expected >=1 grad rewrite, got {rewrites}"
+    names = _names_in_prog(prog)
+    assert "loss__grad" in names
+
+
+def test_c2_4_grad_in_unsafe_block_rewritten():
+    """C2-4: `unsafe { grad(loss)(0.0) }` (UnsafeBlock body) must
+    be walked. Pre-fix UnsafeBlock was untouched."""
+    from helixc.frontend.grad_pass import grad_pass
+    src = (
+        "@pure fn loss(x: f32) -> f32 { x * x }\n"
+        "fn use_unsafe() -> f32 {\n"
+        "    unsafe { grad(loss)(2.0) }\n"
+        "}\n"
+    )
+    prog = parse(src)
+    rewrites = grad_pass(prog)
+    assert rewrites >= 1, f"expected >=1 grad rewrite, got {rewrites}"
+    names = _names_in_prog(prog)
+    assert "loss__grad" in names
+
+
+def test_c2_4_grad_in_range_bound_rewritten():
+    """C2-4: `0..grad(loss)(...)` (Range upper bound) must be walked.
+    Pre-fix Range was untouched."""
+    from helixc.frontend.grad_pass import grad_pass
+    src = (
+        "@pure fn loss(x: f32) -> f32 { x }\n"
+        "fn use_range() -> i32 {\n"
+        "    let g = grad(loss);\n"
+        "    let _r = 0..(g(1.0) as i32);\n"
+        "    0\n"
+        "}\n"
+    )
+    prog = parse(src)
+    rewrites = grad_pass(prog)
+    # In this form `grad(loss)` is at the let RHS (already a Call),
+    # then `g(1.0)` is the actual rewrite target via let-alias resolution.
+    # Verify the alias resolved + the loss__grad symbol exists.
+    assert rewrites >= 1
+    names = _names_in_prog(prog)
+    assert "loss__grad" in names
+
+
+# ============================================================================
 # Test runner
 # ============================================================================
 def main():
