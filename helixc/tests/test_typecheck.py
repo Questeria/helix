@@ -1228,6 +1228,34 @@ def test_c2_6_ref_to_unrelated_ref_traps_28604():
     )
 
 
+def test_c4_7_cast_diagnostic_preserves_ref_prefix():
+    """Audit 28.8 cycle 5 C4-7 / F6: the trap-28604 diagnostic on
+    `&Foo as &Bar` must render `&Foo` and `&Bar` (with the `&`
+    prefix preserved) — NOT the peeled inner `Foo` and `Bar`. Pre-fix,
+    the D7 iterative ref-peeler stripped the `&` before the diagnostic
+    formatter saw the types, so users saw the confusing
+    `source Foo cannot convert to Bar` (no `&`) instead of
+    `source &Foo cannot convert to &Bar`."""
+    src = """
+    struct Foo { x: i32 }
+    struct Bar { y: i32 }
+    fn cast_ref(f: &Foo) -> &Bar {
+        f as &Bar
+    }
+    fn main() -> i32 { 0 }
+    """
+    errs = check(src)
+    # Must surface trap 28604 (existing behavior — kept the same).
+    assert any("28604" in str(e) for e in errs), (
+        f"expected trap 28604 on &Foo as &Bar; got: {errs}"
+    )
+    # NEW assertion: the diagnostic now preserves `&` prefix.
+    assert any("&Foo" in str(e) and "&Bar" in str(e) for e in errs), (
+        f"expected `&Foo` and `&Bar` (with ref prefix) in diagnostic; "
+        f"got: {[str(e) for e in errs]}"
+    )
+
+
 # ----------------------------------------------------------------------
 # Audit 28.8 cycle 2 B:C7 — flatten_impls wired into check.py
 # ----------------------------------------------------------------------
