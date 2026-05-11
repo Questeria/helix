@@ -1527,6 +1527,48 @@ def test_c3_3_main_clean_on_exception(monkeypatch, capsys, tmp_path):
     )
 
 
+def test_c4_6_filenotfound_not_attributed_as_compiler_bug(
+        monkeypatch, capsys, tmp_path):
+    """Audit 28.8 cycle 5 C4-6 / MEDIUM: a FileNotFoundError raised
+    inside `_main_inner` must NOT be mis-attributed as a compiler bug.
+    Pre-fix the broad `except Exception` printed "this is a compiler bug
+    — please file an issue" for env errors like missing files or
+    encoding mismatches, confusing users."""
+    from helixc import check as check_mod
+    def boom(*_args, **_kw):
+        raise FileNotFoundError(2, "No such file or directory",
+                                 "missing.something")
+    monkeypatch.setattr(check_mod, "typecheck", boom)
+    src_file = tmp_path / "boom.hx"
+    src_file.write_text("fn main() -> i32 { 0 }")
+    rc = check_mod.main([str(src_file)])
+    captured = capsys.readouterr()
+    # rc=2 (env error), not rc=1 (compiler bug).
+    assert rc == 2, f"expected rc=2 for FileNotFoundError, got rc={rc}"
+    assert "helixc:" in captured.err
+    # Must NOT carry the "compiler bug" tagline.
+    assert "compiler bug" not in captured.err, (
+        f"FileNotFoundError mis-attributed as compiler bug: {captured.err!r}"
+    )
+
+
+def test_c4_6_unicode_decode_error_clean_message(
+        monkeypatch, capsys, tmp_path):
+    """Audit 28.8 cycle 5 C4-6 / MEDIUM: a UnicodeDecodeError raised
+    inside `_main_inner` must NOT be mis-attributed as a compiler bug."""
+    from helixc import check as check_mod
+    def boom(*_args, **_kw):
+        raise UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid start byte")
+    monkeypatch.setattr(check_mod, "typecheck", boom)
+    src_file = tmp_path / "boom.hx"
+    src_file.write_text("fn main() -> i32 { 0 }")
+    rc = check_mod.main([str(src_file)])
+    captured = capsys.readouterr()
+    assert rc == 2, f"expected rc=2 for UnicodeDecodeError, got rc={rc}"
+    assert "encoding error" in captured.err
+    assert "compiler bug" not in captured.err
+
+
 def test_c3_4_monomorphize_structs_idempotent():
     """Audit 28.8 cycle 3 C3-4: invoking monomorphize_structs twice on
     the same Program must NOT append duplicate StructDecls."""
