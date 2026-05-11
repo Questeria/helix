@@ -243,6 +243,18 @@ def _drain_ad_warnings(a: "CliArgs") -> int:
     return 0
 
 
+def _emit_env_error(msg: str) -> None:
+    """Audit 28.8 cycle 9 C8-2: print a user-environment error with a
+    single `helixc:` prefix. Strips an already-present `helixc:` prefix
+    from `msg` so callees that raise with the prefix already formatted
+    (e.g. parser.py:1587's strict-stdlib FileNotFoundError) don't
+    double-print as `helixc: helixc: ...`."""
+    text = msg
+    if text.lstrip().startswith("helixc:"):
+        text = text.lstrip()[len("helixc:"):].lstrip()
+    print(f"helixc: {text}", file=sys.stderr)
+
+
 # ----------------------------------------------------------------------
 # Main dispatch
 # ----------------------------------------------------------------------
@@ -272,27 +284,24 @@ def main(argv: list[str] | None = None) -> int:
     try:
         rc = _main_inner(argv, a_holder)
     # Audit 28.8 cycle 5 C4-6 / MEDIUM: distinguish user-environment
-    # errors (file I/O, encoding, missing modules) from genuine
-    # compiler bugs. Pre-fix the broad `except Exception` printed
-    # "this is a compiler bug — please file an issue" for FileNotFound,
-    # UnicodeDecodeError, ImportError, etc. — which are NOT compiler
-    # bugs. Now: env errors get a clean `helixc:` message with rc=2
-    # (config / invocation error); only genuine pipeline-internal
-    # exceptions get the "compiler bug" tagline.
+    # errors (file I/O, encoding) from genuine compiler bugs. Pre-fix
+    # the broad `except Exception` printed "this is a compiler bug —
+    # please file an issue" for FileNotFound, UnicodeDecodeError, etc.
+    # — which are NOT compiler bugs. Now: env errors get a clean
+    # `helixc:` message with rc=2 (config / invocation error); only
+    # genuine pipeline-internal exceptions get the "compiler bug"
+    # tagline.
+    #
+    # Audit 28.8 cycle 9 C8-2: outer-arm message strips an already-
+    # present `helixc:` prefix to avoid double-printing when a callee
+    # raised the error with the prefix already formatted in its
+    # message.
     except (FileNotFoundError, PermissionError, IsADirectoryError,
             NotADirectoryError) as e:
-        print(f"helixc: {e}", file=sys.stderr)
+        _emit_env_error(str(e))
         rc = 2
     except UnicodeDecodeError as e:
-        print(
-            f"helixc: encoding error reading source: {e}",
-            file=sys.stderr,
-        )
-        rc = 2
-    except ImportError as e:
-        # An import failure is an environment problem (missing module
-        # or broken install), not a user-source compile bug.
-        print(f"helixc: import error: {e}", file=sys.stderr)
+        _emit_env_error(f"encoding error reading source: {e}")
         rc = 2
     except Exception as e:
         # Everything else (AttributeError, KeyError, IndexError,
