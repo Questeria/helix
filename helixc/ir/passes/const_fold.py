@@ -40,8 +40,25 @@ class FoldError(Exception):
 
     Cycle 19 audit-A C19-1: subclass ShiftFoldError carries trap 17002
     for out-of-range shifts on compile-time constants. Same base
-    class so a single `except FoldError` catches both."""
+    class so a single `except FoldError` catches both.
+
+    Stage 28.9 cycle 28 audit-T C27-2 fix (conf 82): the message
+    prefix `[trap NNNNN]` is now derived from `type(self).trap_id`
+    in __init__ rather than hardcoded at each raise site. Single
+    source of truth — a future renumbering touches one class attr
+    and the prefix follows automatically.
+    """
     trap_id = 17001
+
+    def __init__(self, body: str):
+        # Tolerate an already-prefixed body (back-compat with the
+        # cycle-19/26 raise sites that still pass `[trap NNNNN] ...`).
+        # If the body already starts with `[trap `, use it verbatim;
+        # otherwise prepend the class trap-id.
+        if body.startswith("[trap "):
+            super().__init__(body)
+        else:
+            super().__init__(f"[trap {type(self).trap_id}] {body}")
 
 
 class ShiftFoldError(FoldError):

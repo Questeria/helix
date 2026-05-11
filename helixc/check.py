@@ -446,12 +446,29 @@ def _main_inner(argv: list[str] | None,
         return 1
 
     # 3. Totality
+    # Stage 28.9 cycle 28 audit-R C27-6 fix (conf 70): pre-fix the
+    # diagnostic format diverged from effect-check (and from
+    # typecheck's `warning:` convention). Pre-fix output went to
+    # STDOUT without a `warning:` prefix; effect-check went to STDERR
+    # with `warning:`. A CI runner capturing only stderr missed
+    # totality entirely. Now totality follows the same shape as
+    # effect-check: per-fail `warning: totality: <fn>: <reason>` to
+    # stderr; summary header to stderr; --strict still aborts.
+    # The legacy `   totality:  OK` line stays on stdout as a
+    # progress indicator for clean compiles (matches `   parse: OK`).
     fails = check_totality(prog)
     if fails:
         print(f"   totality:  {len(fails)} fn(s) NOT proven total")
         for name, reason in fails:
-            print(f"     {name}: {reason}")
+            print(
+                f"warning: [trap 21001] totality: {name}: {reason}",
+                file=sys.stderr,
+            )
         if "--strict" in a.flags:
+            print(
+                f"\n{len(fails)} totality warning(s); --strict aborts.",
+                file=sys.stderr,
+            )
             return 1
     else:
         print(f"   totality:  OK")
@@ -625,38 +642,47 @@ def _main_inner(argv: list[str] | None,
             )
             return 1
 
-        # Stage 28.9 cycle 24 → cycle 26 evolution: the cycle-24 wiring
-        # of effect_check was structurally correct but applied the WRONG
-        # policy — it hard-failed rc=1 on any violation. Per the
-        # effect_check.py docstring lines 296-303 (the canonical policy
-        # source), the actual semantics are:
+        # Stage 28.9 cycle 24 → cycle 26 → cycle 28 evolution: effect-
+        # check classification was previously done by inline substring
+        # matching duplicated across this driver and x86_64.py. Cycle 28
+        # audit-R C27-2/C27-3 refactored it: the canonical classifier
+        # lives in effect_check.classify_effect_error, so the message
+        # format is owned by one module and the trap-id discrimination
+        # is identical in both drivers.
         #
-        #   - 19001 (@pure or under-declared) — WARNING by default,
-        #     hard error ONLY under --strict. Mirrors x86_64.py:
-        #     3198-3204 verbatim. Cycle 26 audit-T C24-1 (conf 95):
-        #     pre-fix this rejected helixc/examples/hello_world.hx
-        #     whose `main` has io effect without `@effect(io)` —
-        #     a known soft-warning shape, not a hard error.
-        #   - 19002 (declared unused effect) — ALWAYS informational,
-        #     NEVER causes failure. Per the docstring: "a code smell,
-        #     not a correctness violation." Cycle 26 audit-R C25-3
-        #     (conf 88): pre-fix this counted toward rc=1, stricter
-        #     than documented.
-        #
-        # Format: `warning: effect-check: <msg>` for 19001 (matching
-        # x86_64.py:3200 minus the redundant `[trap 19001]` prefix
-        # — the message body already carries the trap-id). 19002 uses
-        # `   effect-check: <msg>` (3-space indent matching other
-        # informational stage outputs like `   typecheck: OK`).
+        # Severity classes (per effect_check.py docstring lines 296-303):
+        #   - "hard"    → trap 19001 @pure or under-declared violation.
+        #     Warning by default; --strict aborts. Cycle 26 audit-T
+        #     C24-1 (conf 95): pre-fix this rejected
+        #     helixc/examples/hello_world.hx via check.py while
+        #     x86_64.py compiled it cleanly — wrong asymmetry.
+        #   - "info"    → trap 19002 declared-unused effect. Never
+        #     causes failure ("a code smell, not a correctness
+        #     violation" per docstring).
+        #   - "unknown" → fail-closed. A new trap-id added in a future
+        #     stage falls into this bucket and is treated as hard so
+        #     a fresh hardening is never silently downgraded. Cycle 28
+        #     audit-R C27-3 (conf 78).
+        from .ir.passes.effect_check import classify_effect_error
         eff_errs = effect_check_module(mod)
         hard_count = 0
         for e in eff_errs:
-            if "[trap 19001]" in e:
+            sev = classify_effect_error(e)
+            if sev == "hard":
                 print(f"warning: effect-check: {e}", file=sys.stderr)
                 hard_count += 1
-            else:
-                # 19002 and any future informational trap codes
+            elif sev == "info":
                 print(f"   effect-check: {e}", file=sys.stderr)
+            else:
+                # Unknown trap-id — fail-closed. Print BOTH the meta
+                # warning AND the original message so the user sees the
+                # full diagnostic plus the "I don't recognize this id"
+                # signal that prompts a compiler-update or audit.
+                print(
+                    f"helixc: warning: unknown effect-check trap-id; "
+                    f"classifying as hard: {e}", file=sys.stderr,
+                )
+                hard_count += 1
         if hard_count > 0 and "--strict" in a.flags:
             print(
                 f"\n{hard_count} effect-check warning(s); --strict aborts.",

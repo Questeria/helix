@@ -365,3 +365,35 @@ def verify_module(module: tir.Module) -> None:
     errs = check_module(module)
     if errs:
         raise EffectError("\n".join(errs))
+
+
+# Stage 28.9 cycle 28 audit-R C27-2/C27-3 fix (conf 82+78): shared
+# trap-id classifier so check.py and x86_64.py don't duplicate
+# substring matching against the check_module() output format. The
+# message format is owned by check_module() in this file — these sets
+# stay in sync with the f-strings above.
+HARD_EFFECT_TRAP_IDS: frozenset[int] = frozenset({EffectError.trap_id_pure_violation})
+INFO_EFFECT_TRAP_IDS: frozenset[int] = frozenset({EffectError.trap_id_unused_effect})
+
+
+def classify_effect_error(message: str) -> str:
+    """Classify a single message from check_module() into one of:
+        "hard"    — trap 19001 @pure or under-declared violation; the
+                    caller should treat it as a strict-mode hard error.
+        "info"    — trap 19002 declared-unused effect; informational
+                    only, never causes failure.
+        "unknown" — message doesn't match a recognized trap-id. Caller
+                    should fail-closed (treat as hard + emit a meta
+                    warning about the unknown id).
+
+    The substring discriminator uses the full bracketed `[trap NNNNN]`
+    token, anchored by the brackets, so future trap-ids of the form
+    `19001N` cannot accidentally match `19001` as a prefix substring.
+    """
+    for tid in HARD_EFFECT_TRAP_IDS:
+        if f"[trap {tid}]" in message:
+            return "hard"
+    for tid in INFO_EFFECT_TRAP_IDS:
+        if f"[trap {tid}]" in message:
+            return "info"
+    return "unknown"

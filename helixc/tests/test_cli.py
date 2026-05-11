@@ -642,19 +642,23 @@ def test_c23_3_effect_check_via_check_py_clean_when_correct(capsys, tmp_path):
 
 
 def test_c25_3_19002_unused_effect_never_aborts(capsys, tmp_path):
-    """C25-3 regression (HIGH conf 88): trap 19002 (declared unused
-    effect) is documented as informational-only ("a code smell, not a
-    correctness violation" — effect_check.py docstring 296-303). Even
-    under --strict it must NOT cause rc=1. Pre-cycle-26 fix grouped
-    19001 and 19002 together as hard failures.
+    """C25-3 regression (HIGH conf 88) + C27-1 strengthening (MED 88):
+    trap 19002 (declared unused effect) is documented as informational-
+    only ("a code smell, not a correctness violation" — effect_check.py
+    docstring 296-303). Even under --strict it must NOT cause rc=1.
+    Pre-cycle-26 fix grouped 19001 and 19002 together as hard failures.
 
-    We build the 19002 case directly in IR (via tir.FnIR with
-    effect:io attr but a body that does no I/O) and assert effect_check
-    classifies it correctly. This avoids the frontend typecheck which
-    catches surface-level effect mismatches before IR.
+    Two assertions:
+    (1) Unit-level: build the 19002 case directly in IR and verify
+        check_module produces 19002 (not 19001).
+    (2) Integration-level (cycle 28 C27-1 fix): invoke check.py main()
+        with --strict on a program that produces ONLY 19002 (no 19001),
+        and assert rc=0. Pre-fix, the C25-3 test claimed to verify
+        --strict but never actually invoked check.py with the flag.
     """
     from helixc.ir import tir
     from helixc.ir.passes.effect_check import check_module
+    # --- Part 1: unit-level classification ---
     mod = tir.Module()
     i32 = tir.TIRScalar("i32")
     blk = tir.Block(id=0)
@@ -670,12 +674,43 @@ def test_c25_3_19002_unused_effect_never_aborts(capsys, tmp_path):
                   attrs={"effect:io": True})
     mod.functions["declares_io_but_uses_none"] = fn
     errs = check_module(mod)
-    # Must produce trap 19002, NOT 19001.
     has_19002 = any("19002" in e for e in errs)
     has_19001 = any("19001" in e for e in errs)
     assert has_19002 and not has_19001, (
         f"expected exactly trap 19002 (declared unused effect); "
         f"got errs={errs}"
+    )
+
+    # --- Part 2: cycle 28 C27-1 — integration with check.py --strict ---
+    # We need a surface program that produces ONLY 19002, NOT 19001.
+    # That means: a fn with @effect(io) declared but with a body that
+    # doesn't actually use io, AND that's not transitively called by
+    # a non-declaring fn (which would trigger 19001).
+    # The typecheck path catches surface-level effect mismatches at
+    # the AST. To exercise the IR-only 19002 path, the fn must be
+    # reachable so fdce doesn't drop it. Use a non-pure caller that
+    # also declares the effect, so the caller doesn't trip 19001.
+    src_path = str(tmp_path / "unused_eff_only.hx")
+    with open(src_path, "w") as f:
+        f.write(
+            "@effect(io) fn unused_io_decl(x: i32) -> i32 { x + 1 }\n"
+            "@effect(io) fn main() -> i32 { unused_io_decl(42) }\n"
+        )
+    # Even under --strict, 19002-only must NOT cause failure.
+    rc = main([src_path, "--emit-ir", "-O1", "--strict"])
+    captured = capsys.readouterr()
+    assert rc == 0, (
+        f"trap-19002-only program under --strict must rc=0 "
+        f"(C27-1: 19002 is informational only). got rc={rc}. "
+        f"stderr={captured.err!r}"
+    )
+    # 19002 may or may not appear depending on fdce removal — what
+    # matters is no `warning: effect-check:` 19001 line appears AND
+    # rc=0. If 19002 does appear, it should be on the informational
+    # `   effect-check:` line.
+    assert "warning: effect-check:" not in captured.err, (
+        f"19002-only must not produce a hard `warning: effect-check:` "
+        f"line; got stderr={captured.err!r}"
     )
 
 

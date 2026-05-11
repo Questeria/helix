@@ -3207,26 +3207,28 @@ if __name__ == "__main__":
     # @pure fn whose closure is non-empty (trap 19001) and each fn whose
     # declared effect set differs from its actual closure.
     eff_errs = effect_check_module(mod)
-    # Stage 28.9 cycle 26 audit-R C25-6 fix (conf 72): pre-fix the
-    # prefix was `warning: [trap 19001] effect-check: <msg>` but <msg>
-    # already carries the actual trap-id suffix (`... [trap NNNNN]`),
-    # producing contradictory output like `warning: [trap 19001] ...
-    # declares unused effect(s) ... [trap 19002]`. A grep for
-    # "trap 19002" matched a 19001-prefixed line.
-    # Stage 28.9 cycle 26 audit-R C25-3 fix (conf 88): partition 19001
-    # (warning, --strict-fail) from 19002 (informational, never fail)
-    # per the documented policy in effect_check.py docstring lines
-    # 296-303.
+    # Stage 28.9 cycle 28 audit-R C27-2/C27-3/C27-4 fix (conf 78-82):
+    # use the shared classifier from effect_check so this driver and
+    # check.py partition consistently. Fail-closed for unknown trap-
+    # ids (new hardenings never silently downgraded). The
+    # "warning(s)" wording matches check.py per C27-4.
+    from ..ir.passes.effect_check import classify_effect_error
     hard_count = 0
     for e in eff_errs:
-        if "[trap 19001]" in e:
+        sev = classify_effect_error(e)
+        if sev == "hard":
             print(f"warning: effect-check: {e}", file=sys.stderr)
             hard_count += 1
-        else:
-            # 19002 and any future informational trap codes
+        elif sev == "info":
             print(f"   effect-check: {e}", file=sys.stderr)
+        else:
+            print(
+                f"helixc: warning: unknown effect-check trap-id; "
+                f"classifying as hard: {e}", file=sys.stderr,
+            )
+            hard_count += 1
     if hard_count > 0 and strict:
-        print(f"\n{hard_count} effect-check failure(s); --strict aborts.",
+        print(f"\n{hard_count} effect-check warning(s); --strict aborts.",
               file=sys.stderr)
         sys.exit(1)
 

@@ -882,34 +882,49 @@ def test_c25_7_pattern_test_expr_call_count_matches_docstring_porting_note():
     match_lower.py and asserts the count matches the docstring's
     enumeration. If it drifts, the test fails LOUDLY and forces an
     update to either the code or the docstring."""
-    import re
+    import ast
     from pathlib import Path
     src_path = Path(__file__).parent.parent / "frontend" / "match_lower.py"
     src = src_path.read_text(encoding="utf-8")
-    # Total occurrences of `_pattern_test_expr(` anywhere in the file,
-    # including comments and docstring mentions. The test fails loudly
-    # if this number changes from the baseline — that's the entire
-    # signal needed: if a maintainer added/removed/restructured a call
-    # site, they'll update the docstring AND this count together.
-    n_total = len(re.findall(r"_pattern_test_expr\(", src))
-    # Baseline as of cycle 26 (HEAD will-be-committed):
-    #   1 def
-    # + 1 wrapper call in _pattern_test (at_top_level=True)
-    # + 1 PatOr recursion (forwards at_top_level)
-    # + 1 PatTuple recursion (at_top_level=False)
-    # + 1 PatVariant recursion (at_top_level=False)
-    # + 1 stale-removal comment mention (line ~574, kept for history)
-    # = 6 total occurrences. If this number shifts, the Stage 28.10
-    # porting note in the docstring may also need updating.
-    EXPECTED = 6
-    assert n_total == EXPECTED, (
+    # Stage 28.9 cycle 28 audit-R C27-5 fix (conf 72): AST-based
+    # counting is robust to comments / docstrings / strings that
+    # mention `_pattern_test_expr(` — only real Call nodes count.
+    # Pre-fix the test used `re.findall` and EXPECTED=6 included a
+    # stale comment mention plus the def line, so any unrelated
+    # documentation edit flipped the assertion.
+    tree = ast.parse(src)
+    # Count `ast.Call` nodes whose function name is `_pattern_test_expr`
+    n_calls = sum(
+        1 for n in ast.walk(tree)
+        if isinstance(n, ast.Call)
+        and isinstance(n.func, ast.Name)
+        and n.func.id == "_pattern_test_expr"
+    )
+    # Count `ast.FunctionDef` named `_pattern_test_expr`
+    n_defs = sum(
+        1 for n in ast.walk(tree)
+        if isinstance(n, ast.FunctionDef)
+        and n.name == "_pattern_test_expr"
+    )
+    # Baseline: exactly 1 def, exactly 4 callsites:
+    #   * _pattern_test wrapper (at_top_level=True)
+    #   * PatOr recursion (forwards at_top_level)
+    #   * PatTuple sub-elem recursion (at_top_level=False)
+    #   * PatVariant sub_patterns recursion (at_top_level=False)
+    EXPECTED_DEFS = 1
+    EXPECTED_CALLS = 4
+    assert n_defs == EXPECTED_DEFS, (
+        f"Expected exactly {EXPECTED_DEFS} `def _pattern_test_expr` "
+        f"in match_lower.py; got {n_defs}. The Stage 28.10 porting "
+        f"note assumes a single canonical dispatch function."
+    )
+    assert n_calls == EXPECTED_CALLS, (
         f"Stage 28.10 porting note in _pattern_test_expr docstring "
-        f"enumerates 4 call sites; including the definition and a "
-        f"single comment mention, baseline grep count is {EXPECTED}. "
-        f"grep found {n_total}. Update the docstring's porting note "
-        f"to reflect the new call graph, OR fix the unintended call-"
-        f"site change, then bump EXPECTED in this test to match. See "
-        f"match_lower.py docstring `Stage 28.10 porting note`."
+        f"enumerates {EXPECTED_CALLS} call sites; AST parse found "
+        f"{n_calls} actual Call nodes. Update the docstring's "
+        f"porting note to match the new call graph, OR fix the "
+        f"unintended call-site change. See match_lower.py docstring "
+        f"`Stage 28.10 porting note`."
     )
 
 
