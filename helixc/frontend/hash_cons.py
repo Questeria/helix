@@ -127,8 +127,17 @@ def _ast_equal(a: Any, b: Any) -> bool:
                 and _ast_equal(a.then, b.then)
                 and _ast_equal(a.else_, b.else_))
     if isinstance(a, A.Cast):
+        # Stage 28.9 cycle 37 audit-R C36-1 fix follow-on: must use
+        # the span-stripped `_ty_repr` canonicalizer to match the
+        # symmetric change in `structural_hash`. Pre-fix this used
+        # `repr(target_ty)` which embedded the TyNode span, so two
+        # Casts with the same content at different source lines were
+        # deemed "structurally distinct" by _ast_equal while
+        # structural_hash (after cycle 37) said they were equal,
+        # falsely tripping the hash-collision trap 20001.
+        from .ast_hash import _ty_repr
         return (_ast_equal(a.value, b.value)
-                and repr(a.target_ty) == repr(b.target_ty))
+                and _ty_repr(a.target_ty) == _ty_repr(b.target_ty))
     if isinstance(a, A.TupleLit):
         if len(a.elems) != len(b.elems):
             return False

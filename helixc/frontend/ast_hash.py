@@ -47,6 +47,61 @@ def structural_hash(node: A.Expr | A.Block | A.Stmt | A.FnDecl | None,
     return h.hexdigest()
 
 
+def _ty_repr(ty: A.TyNode) -> tuple:
+    """Stage 28.9 cycle 36 audit-R C36-1 fix (conf 90): canonical
+    span-stripped representation of a TyNode for hashing.
+
+    Pre-fix, `repr(node.dtype)` was used in the TileLit arm (cycle 35)
+    and the Cast arm (pre-existing) — but dataclass-generated repr
+    embeds every field including `span`, so structurally identical
+    types at different source lines produced different hashes. This
+    violated the docstring contract that the hash is INTENTIONALLY
+    independent of source spans (lines 16-19 of this module).
+
+    Output is a nested tuple of (type_class_name, *field_values)
+    with spans replaced by None. Recurses into TyNode-containing
+    fields. Tolerates Expr-typed fields (e.g. TyArray.size,
+    TyTile.shape elems) via `repr(...)` of the Expr — this is a
+    LIMITED bug: an Expr inside a type with a span dependency still
+    leaks span. Phase-0 mitigates this by parser convention (sizes
+    are usually IntLit constants whose repr is span-only-suffixed),
+    but a full fix would recurse into the Expr's structural hash.
+    For cycle 36 we accept this scope: a TyName-only TileLit (the
+    most common case) is now correctly span-free.
+    """
+    if ty is None:
+        return ("None",)
+    cls = type(ty).__name__
+    if isinstance(ty, A.TyName):
+        return (cls, ty.name)
+    if isinstance(ty, A.TyTuple):
+        return (cls, tuple(_ty_repr(e) for e in ty.elems))
+    if isinstance(ty, A.TyArray):
+        return (cls, _ty_repr(ty.elem), repr(ty.size))
+    if isinstance(ty, A.TyRef):
+        return (cls, _ty_repr(ty.inner), ty.is_mut)
+    if isinstance(ty, A.TyPtr):
+        return (cls, _ty_repr(ty.inner), ty.is_mut)
+    if isinstance(ty, A.TyFn):
+        return (cls, tuple(_ty_repr(p) for p in ty.params), _ty_repr(ty.ret))
+    if isinstance(ty, A.TyTensor):
+        return (cls, _ty_repr(ty.dtype),
+                tuple(repr(e) for e in ty.shape),
+                repr(ty.device), repr(ty.layout))
+    if isinstance(ty, A.TyTile):
+        return (cls, _ty_repr(ty.dtype),
+                tuple(repr(e) for e in ty.shape),
+                repr(ty.memspace))
+    if isinstance(ty, A.TyGeneric):
+        return (cls, ty.base, tuple(_ty_repr(a) for a in ty.args))
+    # Unknown TyNode subclass — fail loudly per cycle 14/15 catchall
+    # discipline.
+    raise NotImplementedError(
+        f"_ty_repr: unhandled TyNode subclass {cls}; "
+        f"add an explicit arm in ast_hash.py"
+    )
+
+
 def _emit(h: "hashlib._Hash", tag: str, *parts: object) -> None:
     """Write a labelled, length-prefixed record into the hash. Each part
     is converted to bytes via repr for primitives, or a recursive call
@@ -161,8 +216,13 @@ def _hash_into(h: "hashlib._Hash", node: Any,
     if isinstance(node, A.Cast):
         _emit(h, "Cast")
         _hash_into(h, node.value, binders)
-        # Type name — the parser constructs TyName; we hash by string repr.
-        _emit(h, "Ty", repr(node.target_ty))
+        # Stage 28.9 cycle 36 audit-R C36-1 fix (conf 90): use the
+        # span-stripped `_ty_repr` canonicalizer instead of the bare
+        # `repr(target_ty)`. Pre-fix, dataclass-generated repr on
+        # TyNode embedded the `span` field, causing identical
+        # `42 as i32` casts at different source lines to hash
+        # differently — violating the docstring contract.
+        _emit(h, "Ty", _ty_repr(node.target_ty))
         return
     if isinstance(node, A.Assign):
         _emit(h, "Assign", node.target.name if isinstance(node.target, A.Name) else "?")
@@ -279,7 +339,12 @@ def _hash_into(h: "hashlib._Hash", node: Any,
         _hash_into(h, node.body, binders)
         return
     if isinstance(node, A.TileLit):
-        _emit(h, "TileLit", repr(node.dtype), node.init)
+        # Stage 28.9 cycle 36 audit-R C36-1 fix (conf 90): use
+        # `_ty_repr` to span-strip the dtype. Pre-fix the bare
+        # `repr(node.dtype)` embedded the dtype's TyNode span,
+        # fragmenting QUOTE handles for structurally identical
+        # TileLits at different source lines.
+        _emit(h, "TileLit", _ty_repr(node.dtype), node.init)
         for s in node.shape:
             _hash_into(h, s, binders)
         _hash_into(h, node.memspace, binders)

@@ -312,6 +312,76 @@ def test_c34_1_path_segments_affect_hash():
     )
 
 
+# --- Stage 28.9 cycle 37 audit-R C36-1 regression tests ---
+
+
+def test_c36_1_tilelit_hash_independent_of_span():
+    """C36-1 regression (HIGH conf 90): the cycle-35 TileLit hash arm
+    used `repr(node.dtype)` which embeds the dtype's TyNode span (a
+    dataclass field). Pre-fix, structurally-identical TileLits at
+    different source lines hashed differently — fragmenting QUOTE
+    handles instead of sharing them. The docstring contract at lines
+    16-19 of ast_hash.py says the hash is INTENTIONALLY span-
+    independent."""
+    def build_tilelit(line: int):
+        s = A.Span(line=line, col=1)
+        return A.TileLit(
+            span=s,
+            dtype=A.TyName(span=s, name="f32"),
+            shape=[A.IntLit(span=s, value=4, type_suffix=None)],
+            memspace=A.Name(span=s, name="REG", generics=[]),
+            init="zeros",
+        )
+    h1 = structural_hash(build_tilelit(1))
+    h2 = structural_hash(build_tilelit(50))
+    assert h1 == h2, (
+        f"TileLit hash must be span-independent (cycle 36 C36-1); "
+        f"got h1={h1[:16]}... vs h2={h2[:16]}..."
+    )
+
+
+def test_c36_1_cast_hash_independent_of_span():
+    """C36-1 same-defect-class regression: the pre-existing Cast arm
+    also used `repr(target_ty)` which embedded the TyNode span. The
+    cycle 36 _ty_repr fix applies symmetrically."""
+    def build_cast(line: int):
+        s = A.Span(line=line, col=1)
+        return A.Cast(
+            span=s,
+            value=A.IntLit(span=s, value=42, type_suffix=None),
+            target_ty=A.TyName(span=s, name="i32"),
+        )
+    h1 = structural_hash(build_cast(1))
+    h2 = structural_hash(build_cast(99))
+    assert h1 == h2, (
+        f"Cast hash must be span-independent (cycle 36 C36-1 "
+        f"symmetric); got h1={h1[:16]}... vs h2={h2[:16]}..."
+    )
+
+
+def test_c36_1_different_dtypes_still_hash_differently():
+    """C36-1 fix must not over-correct: TileLits with DIFFERENT
+    dtypes must still hash differently."""
+    s = A.Span(line=1, col=1)
+    t_f32 = A.TileLit(
+        span=s,
+        dtype=A.TyName(span=s, name="f32"),
+        shape=[A.IntLit(span=s, value=4, type_suffix=None)],
+        memspace=A.Name(span=s, name="REG", generics=[]),
+        init="zeros",
+    )
+    t_i32 = A.TileLit(
+        span=s,
+        dtype=A.TyName(span=s, name="i32"),
+        shape=[A.IntLit(span=s, value=4, type_suffix=None)],
+        memspace=A.Name(span=s, name="REG", generics=[]),
+        init="zeros",
+    )
+    assert structural_hash(t_f32) != structural_hash(t_i32), (
+        "TileLits with different dtypes must hash differently"
+    )
+
+
 def main():
     tests = [(name, fn) for name, fn in globals().items()
              if name.startswith("test_") and callable(fn)]
