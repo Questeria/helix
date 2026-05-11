@@ -891,7 +891,24 @@ class Lowerer:
                 for e in elems:
                     v = self._lower_expr(e)
                     if v is None:
-                        v = self.builder.const_int(0)
+                        # Audit 28.8 cycle 19 C18-1/audit-C (B18-1 from
+                        # cycle-18 codereview): pre-fix the silent
+                        # `const_int(0)` fallback decayed nested
+                        # aggregates (`(a, b, [c, d])` etc.) to zero
+                        # at runtime — typecheck didn't catch it; lower
+                        # silently inserted 0; STORE_ELEM emitted i32
+                        # zero. Now we trap loudly with the audit
+                        # stamp so the user sees a clear migration
+                        # hint instead of a wrong-answer.
+                        raise NotImplementedError(
+                            f"x86_64 backend does not yet support tuple "
+                            f"element kind '{type(e).__name__}' (would "
+                            f"silently lower to 0 — see audit-stage28-8 "
+                            f"cycle 19 C18-1/B18-1). Phase-0 supports "
+                            f"scalar tuple elements only; nested "
+                            f"aggregate literals (ArrayLit, StructLit, "
+                            f"TupleLit) are not yet lowered."
+                        )
                     elem_vals.append(v)
                 elem_ty = elem_vals[0].ty
                 n = len(elem_vals)
@@ -915,7 +932,24 @@ class Lowerer:
                 for e in elems:
                     v = self._lower_expr(e)
                     if v is None:
-                        v = self.builder.const_int(0)
+                        # Audit 28.8 cycle 19 C18-1 (cycle-18 codereview
+                        # audit): pre-fix the silent `const_int(0)`
+                        # fallback decayed nested aggregate elements
+                        # (`[[10, 20], [30, 40]]`, `[Pt{x:1,y:2},
+                        # Pt{x:3,y:4}]`, etc.) to zero at runtime —
+                        # surface code returned `xs[0]` = 0 instead
+                        # of the inner aggregate. Now we trap loudly
+                        # so the user sees a clear migration hint
+                        # instead of a wrong-answer.
+                        raise NotImplementedError(
+                            f"x86_64 backend does not yet support array "
+                            f"element kind '{type(e).__name__}' (would "
+                            f"silently lower to 0 — see audit-stage28-8 "
+                            f"cycle 19 C18-1). Phase-0 supports scalar "
+                            f"array elements only; nested aggregate "
+                            f"literals (ArrayLit, StructLit, TupleLit) "
+                            f"are not yet lowered."
+                        )
                     elem_vals.append(v)
                 elem_ty = elem_vals[0].ty
                 n = len(elem_vals)

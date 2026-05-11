@@ -28,84 +28,20 @@ from __future__ import annotations
 from typing import Optional
 
 from . import ast_nodes as A
+from .ast_walker import ASTVisitor
 
 
 TRAP_UNSAFE_OP_OUTSIDE = 28601
 TRAP_EXTERN_CALL_OUTSIDE_UNSAFE = 28602
 
 
-def _walk(node, callback, context: Optional[dict] = None) -> None:
-    """Recursive walk, threading a context dict so children can know
-    whether they are inside an UnsafeBlock. The context's 'in_unsafe'
-    key is True iff we're currently descending under an UnsafeBlock."""
-    if node is None:
-        return
-    if context is None:
-        context = {"in_unsafe": False}
-
-    # Push unsafe-frame if this is an UnsafeBlock
-    if isinstance(node, A.UnsafeBlock):
-        prev = context["in_unsafe"]
-        context["in_unsafe"] = True
-        callback(node, context)
-        _walk(node.body, callback, context)
-        context["in_unsafe"] = prev
-        return
-
-    callback(node, context)
-
-    # Generic descent
-    if isinstance(node, A.Block):
-        for s in node.stmts:
-            _walk(s, callback, context)
-        if node.final_expr is not None:
-            _walk(node.final_expr, callback, context)
-        return
-
-    # Audit 28.8: attr list aligned with panic_pass / deprecated_pass
-    # so the three walkers no longer drift. `then_branch`/`else_branch`
-    # are NOT AST attrs — they were a legacy mismatch (same family of
-    # bugs as panic_pass's pre-fix list). Removed. Added `iter_expr`,
-    # `obj`, `target`, `start`, `end`, `guard`, `inner`, `transformation`,
-    # `verifier` so Cast/For/Range/MatchArm.guard subexprs are visited.
-    for attr in ("expr", "left", "right", "operand", "cond", "then",
-                 "else_", "value", "scrutinee", "callee", "init",
-                 "rhs", "body", "iter_expr", "obj", "target",
-                 "start", "end", "guard", "inner", "transformation",
-                 "verifier"):
-        sub = getattr(node, attr, None)
-        if sub is not None and hasattr(sub, "span"):
-            _walk(sub, callback, context)
-
-    # `indices` added so `arr[expr]` is visited.
-    for attr in ("args", "stmts", "fields", "elems", "arms", "indices"):
-        seq = getattr(node, attr, None)
-        if seq is None:
-            continue
-        try:
-            for it in seq:
-                if isinstance(it, tuple):
-                    for sub in it:
-                        if hasattr(sub, "span"):
-                            _walk(sub, callback, context)
-                elif hasattr(it, "span"):
-                    _walk(it, callback, context)
-        except TypeError:
-            # Re-raise rather than swallow: silently skipping iteration
-            # errors masks AST-shape regressions in later stages.
-            raise
-
-
-def find_unsafe_blocks(prog: A.Program) -> list[A.UnsafeBlock]:
-    """Return all UnsafeBlock nodes in the program (in fn bodies)."""
-    out: list[A.UnsafeBlock] = []
-    for it in prog.items:
-        if isinstance(it, A.FnDecl) and not it.is_extern:
-            def cb(n, ctx, out=out):
-                if isinstance(n, A.UnsafeBlock):
-                    out.append(n)
-            _walk(it.body, cb)
-    return out
+# Stage 28.8.2: unsafe_pass walker migrated to ASTVisitor base class.
+# Pre-fix this module hand-rolled `_walk(node, callback, context)` with
+# the same attribute-list drift problem as panic_pass (cycles 1-2 C1-H1
+# / A6 / A5 fix-sweeps had to manually synchronize the three lists).
+# The shared library traverses dataclass fields by introspection; the
+# in_unsafe context is now a Python-instance attribute (push/pop in
+# visit_UnsafeBlock via the skip-marker / explicit-descent pattern).
 
 
 def _is_raw_ptr_op(node) -> bool:
@@ -129,16 +65,89 @@ def _is_raw_ptr_op(node) -> bool:
     return False
 
 
+class _UnsafeBlockCollector(ASTVisitor):
+    """Stage 28.8.2: collect every UnsafeBlock node into a list."""
+
+    def __init__(self, out: list[A.UnsafeBlock]):
+        self.out = out
+
+    def visit_UnsafeBlock(self, node: A.UnsafeBlock) -> None:
+        self.out.append(node)
+        # generic_visit recurses into node.body after this returns.
+
+
+def find_unsafe_blocks(prog: A.Program) -> list[A.UnsafeBlock]:
+    """Return all UnsafeBlock nodes in the program (in fn bodies).
+
+    Stage 28.8.2: uses ``_UnsafeBlockCollector(ASTVisitor)``.
+    """
+    out: list[A.UnsafeBlock] = []
+    for it in prog.items:
+        if isinstance(it, A.FnDecl) and not it.is_extern:
+            _UnsafeBlockCollector(out).visit(it.body)
+    return out
+
+
+class _RawPtrOpVisitor(ASTVisitor):
+    """Stage 28.8.2: walk a fn body recording every raw-ptr op
+    (Unary deref or pointer Cast) along with whether the call site
+    is inside an enclosing UnsafeBlock.
+
+    The ``in_unsafe`` flag is tracked via a per-instance counter
+    pushed/popped around ``visit_UnsafeBlock`` recursion. Because
+    UnsafeBlocks can nest (cycle-2 audit verified this is parser-
+    legal), we use a counter rather than a boolean — every entry
+    increments, every exit decrements, the predicate is `counter > 0`.
+
+    Uses the skip-marker pattern (``return False`` + explicit
+    ``self.generic_visit(node)``) so the override owns descent and
+    the unsafe-frame stays balanced.
+    """
+
+    def __init__(self, fn_name: str,
+                 out: list[tuple[str, A.Span, bool]]):
+        self.fn_name = fn_name
+        self.out = out
+        # Unsafe-frame depth. > 0 means we're inside one or more
+        # nested UnsafeBlocks; raw-ptr ops at this depth are legal.
+        self._unsafe_depth = 0
+
+    @property
+    def _in_unsafe(self) -> bool:
+        return self._unsafe_depth > 0
+
+    def visit_UnsafeBlock(self, node: A.UnsafeBlock):
+        self._unsafe_depth += 1
+        try:
+            # Manually descend into the body so the frame stays in
+            # scope. Return False to suppress the post-visit
+            # generic_visit (which would otherwise double-descend).
+            self.generic_visit(node)
+        finally:
+            self._unsafe_depth -= 1
+        return False
+
+    def visit_Unary(self, node: A.Unary) -> None:
+        if _is_raw_ptr_op(node):
+            self.out.append((self.fn_name, node.span, self._in_unsafe))
+
+    def visit_Cast(self, node: A.Cast) -> None:
+        if _is_raw_ptr_op(node):
+            self.out.append((self.fn_name, node.span, self._in_unsafe))
+
+
 def find_raw_ptr_ops(prog: A.Program) -> list[tuple[str, A.Span, bool]]:
-    """List every syntactic raw-ptr op (Phase-0: Unary deref) in fn
-    bodies, with (fn_name, span, in_unsafe)."""
+    """List every syntactic raw-ptr op (Phase-0: Unary deref or
+    pointer Cast) in fn bodies, with (fn_name, span, in_unsafe).
+
+    Stage 28.8.2: uses ``_RawPtrOpVisitor(ASTVisitor)`` — the
+    ``in_unsafe`` flag is tracked via a push/pop counter around
+    UnsafeBlock recursion.
+    """
     out: list[tuple[str, A.Span, bool]] = []
     for it in prog.items:
         if isinstance(it, A.FnDecl) and not it.is_extern:
-            def cb(n, ctx, out=out, fname=it.name):
-                if _is_raw_ptr_op(n):
-                    out.append((fname, n.span, ctx["in_unsafe"]))
-            _walk(it.body, cb)
+            _RawPtrOpVisitor(it.name, out).visit(it.body)
     return out
 
 
