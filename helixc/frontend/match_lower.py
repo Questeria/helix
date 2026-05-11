@@ -455,6 +455,25 @@ def _collect_binds(pat: A.Pattern, scrut: str, span: A.Span) -> list[A.Let]:
                     value=slot_load,
                 ))
                 binds.extend(_collect_binds(sub, tmp, span))
+    elif isinstance(pat, A.PatOr):
+        # Stage 28.9 cycle 10 audit-C C10-1 fix (conf 82): typecheck
+        # legitimately permits or-patterns whose alternatives bind the
+        # SAME name (intersection of alt binder sets — see
+        # typecheck.py:1877-1896). _collect_binds previously returned
+        # [] for any PatOr regardless, so the body's Name lookup
+        # found nothing in scope.
+        #
+        # Emit binders for names present in EVERY alternative — same
+        # intersection typecheck computed. Use the first alt's
+        # binding source (every alt has the same scrut at this depth,
+        # so any alt's slot-load is correct).
+        if pat.alts:
+            first_binds = _collect_binds(pat.alts[0], scrut, span)
+            first_names = {b.name for b in first_binds}
+            for alt in pat.alts[1:]:
+                alt_names = {b.name for b in _collect_binds(alt, scrut, span)}
+                first_names &= alt_names
+            binds.extend(b for b in first_binds if b.name in first_names)
     # PatTuple element-binds are deferred (see _pattern_test note).
     return binds
 

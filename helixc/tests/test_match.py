@@ -534,6 +534,57 @@ def test_c4_1_match_inside_assign_target_lowered():
     walk(prog)
 
 
+def test_c10_1_pat_or_uniform_binders_lowered():
+    """Stage 28.9 cycle 10 C10-1: `_collect_binds` previously had no
+    PatOr arm, so an or-pattern with uniform binders (e.g. `a | a => a + 1`)
+    typechecked clean but lowered to a body that referenced an unbound
+    `a`. The cycle-10 fix emits binders for the intersection of alt
+    binder sets (mirroring typecheck's intersection logic).
+
+    End-to-end smoke: parse a fn that uses or-pattern uniform binders,
+    run lower_matches, walk the lowered AST and assert (a) no A.Match
+    remains and (b) the bound name `a` shows up in a Let binding in
+    the desugared chain. We don't run the binary (heavyweight) but we
+    do assert the structural contract: lowering MUST emit the Let.
+    """
+    from helixc.frontend.parser import parse as parse_src
+    from helixc.frontend.match_lower import lower_matches
+    from helixc.frontend import ast_nodes as A
+    src = """
+    fn f(x: i32) -> i32 {
+        match x {
+            a | a => a,
+            _ => 0,
+        }
+    }
+    """
+    prog = parse_src(src)
+    lower_matches(prog)
+    # Walk the AST: assert (1) no Match remains; (2) at least one Let
+    # named "a" exists somewhere in the lowered body.
+    matches_remaining = [0]
+    lets_named_a = [0]
+    def walk(node):
+        if node is None:
+            return
+        if isinstance(node, A.Match):
+            matches_remaining[0] += 1
+        if isinstance(node, A.Let) and node.name == "a":
+            lets_named_a[0] += 1
+        if isinstance(node, list):
+            for x in node:
+                walk(x)
+            return
+        if hasattr(node, "__dict__"):
+            for v in vars(node).values():
+                walk(v)
+    walk(prog)
+    assert matches_remaining[0] == 0, \
+        f"lower_matches must remove all Match nodes; {matches_remaining[0]} remain"
+    assert lets_named_a[0] >= 1, \
+        "_collect_binds must emit a Let for the uniform binder `a` in PatOr"
+
+
 def test_c7_1_match_inside_tile_lit_shape_lowered():
     """Stage 28.9 cycle 7 C7-1: `match` inside `TileLit.shape` must
     be desugared by lower_matches. Pre-fix the walker had no TileLit
