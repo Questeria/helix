@@ -3076,7 +3076,14 @@ if __name__ == "__main__":
     from ..ir.passes.dce import dce_module
     from ..ir.passes.cse import cse_module
     from ..ir.passes.fdce import fdce_module
-    from ..ir.passes.effect_check import check_module as effect_check_module
+    # Stage 28.9 cycle 30 audit-R C29-R2/C29-5 (conf 88/68): co-locate
+    # report_diagnostics with check_module — both drivers now use
+    # the shared per-line dispatch in effect_check.report_diagnostics
+    # rather than each maintaining a duplicate loop.
+    from ..ir.passes.effect_check import (
+        check_module as effect_check_module,
+        report_diagnostics as report_effect_diagnostics,
+    )
     from ..frontend.totality import check_totality
     from ..frontend.hash_cons import hash_cons
 
@@ -3212,21 +3219,9 @@ if __name__ == "__main__":
     # check.py partition consistently. Fail-closed for unknown trap-
     # ids (new hardenings never silently downgraded). The
     # "warning(s)" wording matches check.py per C27-4.
-    from ..ir.passes.effect_check import classify_effect_error
-    hard_count = 0
-    for e in eff_errs:
-        sev = classify_effect_error(e)
-        if sev == "hard":
-            print(f"warning: effect-check: {e}", file=sys.stderr)
-            hard_count += 1
-        elif sev == "info":
-            print(f"   effect-check: {e}", file=sys.stderr)
-        else:
-            print(
-                f"helixc: warning: unknown effect-check trap-id; "
-                f"classifying as hard: {e}", file=sys.stderr,
-            )
-            hard_count += 1
+    # Stage 28.9 cycle 30 audit-R C29-5 (conf 68): per-line dispatch
+    # is now `effect_check.report_diagnostics`.
+    hard_count = report_effect_diagnostics(eff_errs, stderr=sys.stderr)
     if hard_count > 0 and strict:
         print(f"\n{hard_count} effect-check warning(s); --strict aborts.",
               file=sys.stderr)

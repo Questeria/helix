@@ -734,6 +734,29 @@ def test_c24_1_hello_world_compiles_under_check_py(capsys, tmp_path):
     )
 
 
+def test_c29_r3_real_hello_world_example_compiles(capsys):
+    """C29-R3 regression (MEDIUM conf 85): the cycle-26 hello-world
+    test uses a synthetic 1-liner. The REAL helixc/examples/hello_world.hx
+    has 4 print_str calls + write_file + conditional branches — a
+    structurally different program. A regression in the example file
+    itself (syntax change, added @effect annotation, etc.) would not
+    be caught by the synthetic test. This integration test invokes
+    check.py on the actual file."""
+    from pathlib import Path
+    real_path = (
+        Path(__file__).parent.parent / "examples" / "hello_world.hx"
+    )
+    assert real_path.is_file(), (
+        f"expected helixc/examples/hello_world.hx to exist at {real_path}"
+    )
+    rc = main([str(real_path), "--emit-ir", "-O1"])
+    captured = capsys.readouterr()
+    assert rc == 0, (
+        f"real hello_world.hx must compile clean via check.py; "
+        f"got rc={rc}. stderr={captured.err!r}"
+    )
+
+
 if __name__ == "__main__":
     import pytest
     raise SystemExit(pytest.main([__file__, "-v"]))

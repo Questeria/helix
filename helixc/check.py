@@ -458,7 +458,15 @@ def _main_inner(argv: list[str] | None,
     # progress indicator for clean compiles (matches `   parse: OK`).
     fails = check_totality(prog)
     if fails:
-        print(f"   totality:  {len(fails)} fn(s) NOT proven total")
+        # Stage 28.9 cycle 30 audit-R C29-R4 fix (conf 82): the
+        # cycle-28 C27-6 migration moved per-fail lines to stderr but
+        # left the count summary on stdout — partial migration. Now
+        # the count also goes to stderr with `warning:` prefix so a
+        # CI runner capturing stderr sees the full picture.
+        print(
+            f"warning: totality: {len(fails)} fn(s) NOT proven total",
+            file=sys.stderr,
+        )
         for name, reason in fails:
             print(
                 f"warning: [trap 21001] totality: {name}: {reason}",
@@ -591,7 +599,15 @@ def _main_inner(argv: list[str] | None,
         # IR-level effect verification. Pre-fix, check.py never ran
         # effect_check at all — a @pure violation that survived fold/cse/dce
         # silently emitted IR/ELF via check.py while x86_64.py would refuse.
-        from .ir.passes.effect_check import check_module as effect_check_module
+        # Stage 28.9 cycle 30 audit-R C29-R2 (conf 88): co-locate
+        # `classify_effect_error` with `check_module` so the lazy-import
+        # cluster is consistent — cycle-28 left it as a second inline
+        # import deeper in the function body, an asymmetry that could
+        # confuse import-cycle audits.
+        from .ir.passes.effect_check import (
+            check_module as effect_check_module,
+            report_diagnostics as report_effect_diagnostics,
+        )
         # Audit 28.8 B5: invoke grad_pass before lowering so any
         # `grad(loss)` calls are rewritten to symbolic gradients (and
         # the AD passes' diagnostics accumulate in _DIFF_WARNINGS).
@@ -663,26 +679,11 @@ def _main_inner(argv: list[str] | None,
         #     stage falls into this bucket and is treated as hard so
         #     a fresh hardening is never silently downgraded. Cycle 28
         #     audit-R C27-3 (conf 78).
-        from .ir.passes.effect_check import classify_effect_error
+        # Stage 28.9 cycle 30 audit-R C29-5 (conf 68): the per-line
+        # dispatch loop is now in `effect_check.report_diagnostics`
+        # so check.py and x86_64.py share one printing implementation.
         eff_errs = effect_check_module(mod)
-        hard_count = 0
-        for e in eff_errs:
-            sev = classify_effect_error(e)
-            if sev == "hard":
-                print(f"warning: effect-check: {e}", file=sys.stderr)
-                hard_count += 1
-            elif sev == "info":
-                print(f"   effect-check: {e}", file=sys.stderr)
-            else:
-                # Unknown trap-id — fail-closed. Print BOTH the meta
-                # warning AND the original message so the user sees the
-                # full diagnostic plus the "I don't recognize this id"
-                # signal that prompts a compiler-update or audit.
-                print(
-                    f"helixc: warning: unknown effect-check trap-id; "
-                    f"classifying as hard: {e}", file=sys.stderr,
-                )
-                hard_count += 1
+        hard_count = report_effect_diagnostics(eff_errs, stderr=sys.stderr)
         if hard_count > 0 and "--strict" in a.flags:
             print(
                 f"\n{hard_count} effect-check warning(s); --strict aborts.",

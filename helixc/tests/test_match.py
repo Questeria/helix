@@ -893,13 +893,22 @@ def test_c25_7_pattern_test_expr_call_count_matches_docstring_porting_note():
     # stale comment mention plus the def line, so any unrelated
     # documentation edit flipped the assertion.
     tree = ast.parse(src)
-    # Count `ast.Call` nodes whose function name is `_pattern_test_expr`
-    n_calls = sum(
-        1 for n in ast.walk(tree)
-        if isinstance(n, ast.Call)
-        and isinstance(n.func, ast.Name)
-        and n.func.id == "_pattern_test_expr"
-    )
+    # Count `ast.Call` nodes whose function name is `_pattern_test_expr`.
+    # Stage 28.9 cycle 30 audit-R C29-3 fix (conf 85): match BOTH
+    # `ast.Name` (free function call) AND `ast.Attribute` (method
+    # call like `self._pattern_test_expr`). A future refactor making
+    # the function a method of some class would silently bypass the
+    # Name-only filter, leaving the dispatch invisible to the detector.
+    def _is_target(node):
+        if not isinstance(node, ast.Call):
+            return False
+        if isinstance(node.func, ast.Name) and node.func.id == "_pattern_test_expr":
+            return True
+        if (isinstance(node.func, ast.Attribute)
+                and node.func.attr == "_pattern_test_expr"):
+            return True
+        return False
+    n_calls = sum(1 for n in ast.walk(tree) if _is_target(n))
     # Count `ast.FunctionDef` named `_pattern_test_expr`
     n_defs = sum(
         1 for n in ast.walk(tree)

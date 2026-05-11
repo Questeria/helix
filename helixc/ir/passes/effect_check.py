@@ -372,11 +372,36 @@ def verify_module(module: tir.Module) -> None:
 # substring matching against the check_module() output format. The
 # message format is owned by check_module() in this file — these sets
 # stay in sync with the f-strings above.
-HARD_EFFECT_TRAP_IDS: frozenset[int] = frozenset({EffectError.trap_id_pure_violation})
-INFO_EFFECT_TRAP_IDS: frozenset[int] = frozenset({EffectError.trap_id_unused_effect})
+#
+# Stage 28.9 cycle 30 audit-T C28-TD3 (conf 70): underscore-prefixed
+# to mark them as module-private. External callers should go through
+# `classify_effect_error()`, never index these sets directly.
+_HARD_EFFECT_TRAP_IDS: frozenset[int] = frozenset({EffectError.trap_id_pure_violation})
+_INFO_EFFECT_TRAP_IDS: frozenset[int] = frozenset({EffectError.trap_id_unused_effect})
+
+# Stage 28.9 cycle 30 audit-R C29-4 (conf 72): assert disjoint at
+# module load. A future commit that accidentally adds an INFO id
+# (e.g. 19002) to BOTH sets — a plausible copy-paste pattern —
+# would silently classify it as "hard" because of HARD-first ordering
+# in `classify_effect_error`. The assertion catches this at import
+# time so the maintainer cannot ignore it.
+assert _HARD_EFFECT_TRAP_IDS.isdisjoint(_INFO_EFFECT_TRAP_IDS), (
+    f"effect-check trap-id sets must be disjoint; overlap="
+    f"{_HARD_EFFECT_TRAP_IDS & _INFO_EFFECT_TRAP_IDS}"
+)
 
 
-def classify_effect_error(message: str) -> str:
+from typing import Literal  # noqa: E402 — kept local for the Literal type below
+
+# Stage 28.9 cycle 30 audit-T C28-TD1 (conf 72): explicit Literal
+# type for the severity return. A typo at the call site (e.g. `sev
+# == "hrd"`) is now caught by static type checkers; bare-string
+# return invited silent escalation through the `else` fail-closed
+# branch.
+Severity = Literal["hard", "info", "unknown"]
+
+
+def classify_effect_error(message: str) -> Severity:
     """Classify a single message from check_module() into one of:
         "hard"    — trap 19001 @pure or under-declared violation; the
                     caller should treat it as a strict-mode hard error.
@@ -390,10 +415,47 @@ def classify_effect_error(message: str) -> str:
     token, anchored by the brackets, so future trap-ids of the form
     `19001N` cannot accidentally match `19001` as a prefix substring.
     """
-    for tid in HARD_EFFECT_TRAP_IDS:
+    for tid in _HARD_EFFECT_TRAP_IDS:
         if f"[trap {tid}]" in message:
             return "hard"
-    for tid in INFO_EFFECT_TRAP_IDS:
+    for tid in _INFO_EFFECT_TRAP_IDS:
         if f"[trap {tid}]" in message:
             return "info"
     return "unknown"
+
+
+def report_diagnostics(eff_errs: list[str], *, stderr) -> int:
+    """Stage 28.9 cycle 30 audit-R C29-5 (conf 68): extract the
+    duplicated dispatch shell from check.py and x86_64.py into a
+    shared helper. Returns the hard-error count so the caller can
+    decide --strict abort semantics (rc=1 vs sys.exit).
+
+    `stderr` is parameterized so the caller's file handle / pytest
+    capsys-redirected sys.stderr is honored.
+
+    Stage 28.9 cycle 30 audit-R C29-6 (conf 62): info diagnostics
+    now use `note:` prefix (gcc/clang convention for informational
+    follow-up). Pre-fix used `   effect-check: ...` (leading 3
+    spaces, stdout-style indent) on stderr — an asymmetric format-
+    vs-channel split. Now both severity levels use stderr-appropriate
+    prefixes: `warning:` for hard, `note:` for info.
+    """
+    import sys
+    if stderr is None:
+        stderr = sys.stderr
+    hard_count = 0
+    for e in eff_errs:
+        sev = classify_effect_error(e)
+        if sev == "hard":
+            print(f"warning: effect-check: {e}", file=stderr)
+            hard_count += 1
+        elif sev == "info":
+            print(f"note: effect-check: {e}", file=stderr)
+        else:
+            # Unknown trap-id — fail-closed.
+            print(
+                f"helixc: warning: unknown effect-check trap-id; "
+                f"classifying as hard: {e}", file=stderr,
+            )
+            hard_count += 1
+    return hard_count

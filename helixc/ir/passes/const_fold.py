@@ -43,22 +43,40 @@ class FoldError(Exception):
     class so a single `except FoldError` catches both.
 
     Stage 28.9 cycle 28 audit-T C27-2 fix (conf 82): the message
-    prefix `[trap NNNNN]` is now derived from `type(self).trap_id`
-    in __init__ rather than hardcoded at each raise site. Single
-    source of truth — a future renumbering touches one class attr
-    and the prefix follows automatically.
+    prefix `[trap NNNNN]` is derived from `type(self).trap_id` in
+    __init__ rather than hardcoded at each raise site. Single source
+    of truth — a future renumbering touches one class attr and the
+    prefix follows automatically.
+
+    Stage 28.9 cycle 30 audit-R C29-R1 + C29-1 + C29-2 fix:
+      * `body` is now strictly the explanatory text, NEVER pre-
+        prefixed. Cycle-19/26 raise sites have been migrated.
+      * Pre-prefixed input is rejected with an explicit assertion
+        — eliminates the dead-branch / drift hazard cycle 28 left
+        open (C28-TD2 / C29-2).
+      * None body is rejected (C29-1 silent-failure fix) — a stray
+        `raise FoldError(some_optional)` now fails loudly at the
+        raise site rather than as an opaque AttributeError far
+        from the call.
     """
     trap_id = 17001
 
     def __init__(self, body: str):
-        # Tolerate an already-prefixed body (back-compat with the
-        # cycle-19/26 raise sites that still pass `[trap NNNNN] ...`).
-        # If the body already starts with `[trap `, use it verbatim;
-        # otherwise prepend the class trap-id.
-        if body.startswith("[trap "):
-            super().__init__(body)
-        else:
-            super().__init__(f"[trap {type(self).trap_id}] {body}")
+        # C29-1 fix (conf 92): reject None / non-str loudly.
+        assert isinstance(body, str), (
+            f"FoldError body must be str; got {type(body).__name__} "
+            f"({body!r}). Pass the explanatory text only; the "
+            f"[trap NNNNN] prefix is prepended automatically."
+        )
+        # C29-2 fix (conf 88) + C29-R1 (conf 92): reject pre-
+        # prefixed bodies. The class attr `trap_id` is the sole
+        # source of truth for the prefix.
+        assert not body.startswith("[trap "), (
+            f"FoldError body must NOT be pre-prefixed with [trap NNNNN]; "
+            f"got {body!r}. The prefix is derived from "
+            f"type(self).trap_id = {type(self).trap_id}."
+        )
+        super().__init__(f"[trap {type(self).trap_id}] {body}")
 
 
 class ShiftFoldError(FoldError):
@@ -416,7 +434,7 @@ def _try_fold_op(op: tir.Op, defs: dict) -> tir.Op | None:
             # case is caught here so the diagnostic is unambiguous.
             if isinstance(v, float) and math.isnan(v):
                 raise FoldError(
-                    f"[trap 17001] const-fold produced NaN folding "
+                    f"const-fold produced NaN folding "
                     f"{op.kind.name}({l!r}, {r!r}) at "
                     f"{op.span!r}; Phase-0 refuses to bake NaN into a literal"
                 )
@@ -463,14 +481,14 @@ def _try_fold_op(op: tir.Op, defs: dict) -> tir.Op | None:
                     # uniformly across all FoldError subclasses.
                     if r < 0 or r >= 64:
                         raise ShiftFoldError(
-                            f"[trap 17002] shift amount {r} out of range "
+                            f"shift amount {r} out of range "
                             f"[0, 63] in const SHL fold"
                         )
                     v = l << r
                 elif op.kind == tir.OpKind.SHR:
                     if r < 0 or r >= 64:
                         raise ShiftFoldError(
-                            f"[trap 17002] shift amount {r} out of range "
+                            f"shift amount {r} out of range "
                             f"[0, 63] in const SHR fold"
                         )
                     v = l >> r   # arithmetic in Python for signed ints
@@ -539,7 +557,7 @@ def _try_fold_op(op: tir.Op, defs: dict) -> tir.Op | None:
             # still NaN; refuse for the same reason as binary float folds.
             if isinstance(v, float) and math.isnan(v):
                 raise FoldError(
-                    f"[trap 17001] const-fold produced NaN folding "
+                    f"const-fold produced NaN folding "
                     f"NEG({float(d.attrs['value'])!r}) at {op.span!r}"
                 )
             return tir.Op(kind=tir.OpKind.CONST_FLOAT,
