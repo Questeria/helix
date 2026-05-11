@@ -1433,25 +1433,46 @@ def test_d8_fmt_tystruct_uses_name():
     )
 
 
-def test_c5_2_compatible_tysize_cascade():
-    """Audit 28.8 cycle 6 C5-2 / F1: `_compatible(TySize, TySize)` must
-    return True (cascade-safe). Pre-fix, cycle-4 E1 fix routed TyArray
-    size through `_compatible` but `_compatible` had no TyVar/TySize
-    arm so `TySize('N') vs TySize('M')` fell through to `a == b` and
-    returned False, false-positive at the call boundary."""
+def test_c5_2_size_compatible_tysize_cascade():
+    """Audit 28.8 cycle 7 C6-1: shape-position cascade-safe arm is now
+    in `_size_compatible` (narrowed from cycle-6 F1's over-broad
+    top-level `_compatible` cascade). Verify TyArray composite still
+    cascades through size position, and TySize vs TySize at the size
+    position is accepted."""
     from helixc.frontend import ast_nodes as A
     from helixc.frontend.typecheck import (
         TypeChecker, TySize, TyArray, TyPrim,
     )
     span = A.Span(0, 0)
     tc = TypeChecker(A.Program(module=None, items=[]))
-    assert tc._compatible(TySize("N"), TySize("M")), (
-        "TySize vs TySize should cascade-pass"
+    # Direct probe of the helper.
+    assert tc._size_compatible(TySize("N"), TySize("M")), (
+        "_size_compatible(TySize, TySize) should cascade-pass"
     )
+    # Composite via TyArray: routed through _size_compatible internally.
     a1 = TyArray(elem=TyPrim("i32"), size=TySize("N"))
     a2 = TyArray(elem=TyPrim("i32"), size=TyPrim("size_3"))
     assert tc._compatible(a1, a2), (
-        "TyArray<i32; N> vs TyArray<i32; 3> should cascade-pass"
+        "TyArray<i32; N> vs TyArray<i32; 3> should cascade at size"
+    )
+
+
+def test_c6_1_compatible_tyvar_not_top_cascade():
+    """Audit 28.8 cycle 7 C6-1: top-level `_compatible(TyVar, TyPrim)`
+    must NOT silently pass. The cycle-6 F1 fix had introduced a top-
+    level cascade for TyVar/TySize that broke `fn g[T]() -> T { 42 }`
+    (body i32 vs return T silently typechecked). The narrowed fix
+    restricts the cascade to `_size_compatible` (shape positions)."""
+    from helixc.frontend import ast_nodes as A
+    from helixc.frontend.typecheck import (
+        TypeChecker, TyVar, TyPrim,
+    )
+    span = A.Span(0, 0)
+    tc = TypeChecker(A.Program(module=None, items=[]))
+    # TyVar('T') vs TyPrim('i32') at value position must not cascade.
+    # (Mono substitution would either bind T or report the mismatch.)
+    assert not tc._compatible(TyVar("T"), TyPrim("i32")), (
+        "TyVar vs TyPrim should NOT cascade at value position"
     )
 
 

@@ -1365,7 +1365,17 @@ class TypeChecker:
                         if not (l_is_diff and r_is_diff):
                             # B:C6: name the asymmetric (D-wrap + raw) case
                             # so the user can tell it apart from D-D mixing.
-                            extra = " (one side D-wrapped, other bare)"
+                            # Cycle 7 G1: if the other side is Logic-wrapped,
+                            # say "Logic-wrapped" not "bare" so the
+                            # diagnostic doesn't mis-identify the pair.
+                            other_is_logic = (
+                                (l_is_diff and r_is_logic)
+                                or (r_is_diff and l_is_logic)
+                            )
+                            if other_is_logic:
+                                extra = " (one side D-wrapped, other Logic-wrapped)"
+                            else:
+                                extra = " (one side D-wrapped, other bare)"
                         self._ad_warn_mixed_inner(
                             expr.span, l_inner, r_inner, inner, extra=extra,
                         )
@@ -2163,24 +2173,42 @@ class TypeChecker:
             f"{self._fmt(chosen)} (trap 24200/AD002)" + extra
         )
 
+    def _size_compatible(self, a: Type, b: Type) -> bool:
+        """Audit 28.8 cycle 7 C6-1: shape-position-only cascade for
+        TyVar / TySize. Used inside TyArray / TyTensor / TyTile size
+        compares — the cycle-5 audit's option (b). The body-of-function-
+        position uses the full `_compatible` (no auto-cascade for
+        TyVar at the top), so `fn g[T]() -> T { 42 }` correctly emits
+        the "body type i32 does not match return type T" error that
+        the cycle-6 top-level F1 cascade had silently swallowed."""
+        if isinstance(a, (TyVar, TySize)) or isinstance(b, (TyVar, TySize)):
+            return True
+        if isinstance(a, TyUnknown) or isinstance(b, TyUnknown):
+            return True
+        if a == b:
+            return True
+        return self._compatible(a, b)
+
     def _compatible(self, a: Type, b: Type) -> bool:
         if isinstance(a, TyUnknown) or isinstance(b, TyUnknown):
             return True
-        # Audit 28.8 cycle 6 C5-2 / F1: cascade-safe arm for TyVar /
-        # TySize. Pre-fix, `_compatible(TySize('N'), TySize('M'))` fell
-        # through to `a == b` which returned False even when both sides
-        # were generic size params from the same scope. This false-
-        # positive surfaced at the call boundary for
-        # `fn f[N](a:[i32;N])` called from `fn g[M](a:[i32;M])` because
-        # the TyArray size compare (cycle-4 E1) now routes through
-        # `_compatible`. Defer to mono substitution for these — same
-        # cascade-safe rule as TyUnknown.
-        if isinstance(a, (TyVar, TySize)) or isinstance(b, (TyVar, TySize)):
-            return True
         # Memory-tier types are incompatible across tiers (must explicitly
-        # consolidate / recall to convert)
+        # consolidate / recall to convert).
+        #
+        # Audit 28.8 cycle 7 G2 carve-out: TyVar / TySize on either side
+        # is NOT considered cross-tier — generic substitution may later
+        # bind T to a TyMemTier, but a bare TyVar at this position
+        # defers compatibility to mono (same cascade-safe rule as
+        # TyUnknown). The cycle-6 F1 cascade is now narrowed to
+        # `_size_compatible` for shape positions; here we accept the
+        # TyVar/TySize pair only when it's the explicit generic-defer
+        # case (one side TyMemTier, other TyVar/TySize).
         if isinstance(a, TyMemTier) and isinstance(b, TyMemTier):
             return a.tier == b.tier and self._compatible(a.inner, b.inner)
+        if isinstance(a, TyMemTier) and isinstance(b, (TyVar, TySize)):
+            return True
+        if isinstance(b, TyMemTier) and isinstance(a, (TyVar, TySize)):
+            return True
         if isinstance(a, TyMemTier) or isinstance(b, TyMemTier):
             return False
         # Audit 28.8 cycle 2 B:C3: Quote<T> ~ Quote<U> iff T ~ U.
@@ -2215,13 +2243,12 @@ class TypeChecker:
         if isinstance(a, TyTuple) or isinstance(b, TyTuple):
             return False
         if isinstance(a, TyArray) and isinstance(b, TyArray):
-            # Audit 28.8 cycle 4 E1: size compare uses `_compatible` so
-            # TyUnknown/TySize sizes (e.g. generic-array call boundary
-            # `fn f[N](a:[i32;N])` called from `fn g[M](a:[i32;M])`)
-            # don't false-positive on raw `==`.
+            # Audit 28.8 cycle 4 E1: size compare uses `_size_compatible`
+            # (cycle 7 narrowing of cycle 6 F1) — TyVar/TySize defer
+            # only at shape positions, not at value-type positions.
             return (self._compatible(a.elem, b.elem)
                     and (a.size == b.size
-                         or self._compatible(a.size, b.size)))
+                         or self._size_compatible(a.size, b.size)))
         if isinstance(a, TyArray) or isinstance(b, TyArray):
             return False
         if isinstance(a, TyRef) and isinstance(b, TyRef):
@@ -2250,8 +2277,10 @@ class TypeChecker:
         if isinstance(a, TyTensor) and isinstance(b, TyTensor):
             if len(a.shape) != len(b.shape):
                 return False
+            # Cycle 7 C6-1: shape elements use _size_compatible (narrow
+            # cascade), dtype uses _compatible (full).
             return (self._compatible(a.dtype, b.dtype)
-                    and all(self._compatible(x, y)
+                    and all(self._size_compatible(x, y)
                             for x, y in zip(a.shape, b.shape))
                     and a.device == b.device
                     and a.layout == b.layout)
@@ -2261,7 +2290,7 @@ class TypeChecker:
             if len(a.shape) != len(b.shape):
                 return False
             return (self._compatible(a.dtype, b.dtype)
-                    and all(self._compatible(x, y)
+                    and all(self._size_compatible(x, y)
                             for x, y in zip(a.shape, b.shape))
                     and a.memspace == b.memspace)
         if isinstance(a, TyTile) or isinstance(b, TyTile):
