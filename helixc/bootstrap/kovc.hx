@@ -2153,6 +2153,211 @@ fn diag_emit(diag_state: i32, code: i32, severity: i32,
     errs
 }
 
+// --------------------------------------------------------------
+// Stage 28.9: panic_pass — port of helixc/frontend/panic_pass.py.
+//
+// Walks each AST_FN_DECL body looking for AST_CALL nodes whose
+// callee name is "panic". For each match, validates:
+//   * exactly 1 argument
+//   * the argument is an AST_STR_LIT (tag 25)
+//
+// Violations emit diag code 28501 with severity=2 (error). The aux
+// slot of the diag encodes the violation kind:
+//   * 1 = wrong arg count
+//   * 2 = non-string-literal arg
+//
+// Mirrors panic_pass.validate_panic_args. Phase-0 does not emit the
+// "panic was invoked" runtime trap here — that's the codegen
+// concern when AST_CALL with name "panic" lowers (deferred; the
+// Python pass also only validates, never lowers panic).
+//
+// Walker note: the bootstrap has no shared ast_walker library
+// (cycle 28.8.2 added one in Python only). We implement a focused
+// tag-dispatch recursion that descends into expression-bearing
+// slots for the common control-flow + binop tags. This mirrors the
+// approach taken by clone_with_rewrite (parser.hx:3914) and the
+// Python pass's ASTVisitor but stays inside the bootstrap's
+// recursion budget.
+// --------------------------------------------------------------
+
+// Byte-equal predicate against the literal name "panic" (5 bytes:
+// 112 97 110 105 99). Returns 1 on match, 0 otherwise.
+@pure fn is_panic_name(name_s: i32, name_l: i32) -> i32 {
+    if name_l == 5 {
+        let b0 = __arena_get(name_s);
+        let b1 = __arena_get(name_s + 1);
+        let b2 = __arena_get(name_s + 2);
+        let b3 = __arena_get(name_s + 3);
+        let b4 = __arena_get(name_s + 4);
+        if b0 == 112 { if b1 == 97 { if b2 == 110 {
+            if b3 == 105 { if b4 == 99 { 1 }
+            else { 0 } } else { 0 } } else { 0 } } else { 0 }
+        } else { 0 }
+    } else { 0 }
+}
+
+// Count AST_ARG entries in a linked-list chain. AST_ARG (tag 17)
+// has p1=expr, p2=next. 0 sentinel ends the chain.
+fn count_args(args_head: i32) -> i32 {
+    let mut cur: i32 = args_head;
+    let mut n: i32 = 0;
+    while cur != 0 {
+        n = n + 1;
+        cur = __arena_get(cur + 2);
+    }
+    n
+}
+
+// Walk an expression subtree looking for AST_CALL(panic). When
+// found, validate args and emit diag if malformed. Recurses into
+// every expression-bearing slot of every tag the bootstrap parser
+// can produce in a fn body.
+//
+// Tag dispatch table (slots that hold expression indices):
+//   2..6, 19..23, 24, 28..30, 32, 33  binop: p1, p2
+//   7 IF       : p1 (cond), p2 (then), p3 (else)
+//   8 LET      : p3 (body), p4 (value)
+//   9 NEG, 26 BNOT, 31 NOT: p1 (inner)
+//   10 WHILE   : p1 (cond), p2 (body)
+//   11 ASSIGN  : p3 (value)
+//   12 LET_MUT : p3 (body), p4 (value)
+//   13 SEQ     : p1 (first), p2 (second)
+//   16 CALL    : p3 (args_head) — handled separately below
+//   17 ARG     : p1 (expr); next via chain walk
+//
+// Tags that DO NOT recurse:
+//   0, 27, 34..42 lits; 1 VAR; 25 STR_LIT; 18 PARAM (only inside
+//   fn-decl, not body); 99 ERR.
+//
+// Stage 28.9 walker uses a single recursive fn, not the ASTVisitor
+// class pattern (Python). Helix bootstrap has no virtual dispatch,
+// so direct tag-switch is the idiomatic equivalent.
+fn walk_for_panic(idx: i32, diag_state: i32) -> i32 {
+    if idx == 0 { 0 } else {
+        let t = __arena_get(idx);
+        let p1 = __arena_get(idx + 1);
+        let p2 = __arena_get(idx + 2);
+        let p3 = __arena_get(idx + 3);
+        // Tag 16 AST_CALL: check for panic, then recurse into args.
+        if t == 16 {
+            if is_panic_name(p1, p2) == 1 {
+                let n_args = count_args(p3);
+                if n_args != 1 {
+                    // Trap-id 28501 with aux=1 = arg-count violation.
+                    diag_emit(diag_state, 28501, 2, idx, 1);
+                } else {
+                    // Single arg: check it's an AST_STR_LIT (tag 25).
+                    let arg_node = __arena_get(p3 + 1);   // AST_ARG.p1 = expr
+                    let arg_tag = __arena_get(arg_node);
+                    if arg_tag != 25 {
+                        // 28501 aux=2 = non-string-literal arg.
+                        diag_emit(diag_state, 28501, 2, idx, 2);
+                    };
+                };
+            };
+            // Always recurse into args (panic("...") might be nested
+            // inside another call's args, etc.).
+            let mut cur_arg: i32 = p3;
+            while cur_arg != 0 {
+                let arg_expr = __arena_get(cur_arg + 1);
+                walk_for_panic(arg_expr, diag_state);
+                cur_arg = __arena_get(cur_arg + 2);
+            }
+            0
+        } else { if t == 7 {
+            // AST_IF: cond + then + else
+            walk_for_panic(p1, diag_state);
+            walk_for_panic(p2, diag_state);
+            walk_for_panic(p3, diag_state);
+            0
+        } else { if t == 8 {
+            // AST_LET: p3=body, p4=value
+            let value = __arena_get(idx + 4);
+            walk_for_panic(p3, diag_state);
+            walk_for_panic(value, diag_state);
+            0
+        } else { if t == 12 {
+            // AST_LET_MUT: same shape as AST_LET
+            let value = __arena_get(idx + 4);
+            walk_for_panic(p3, diag_state);
+            walk_for_panic(value, diag_state);
+            0
+        } else { if t == 10 {
+            // AST_WHILE: p1=cond, p2=body
+            walk_for_panic(p1, diag_state);
+            walk_for_panic(p2, diag_state);
+            0
+        } else { if t == 11 {
+            // AST_ASSIGN: p3=value
+            walk_for_panic(p3, diag_state);
+            0
+        } else { if t == 13 {
+            // AST_SEQ: p1=first, p2=second
+            walk_for_panic(p1, diag_state);
+            walk_for_panic(p2, diag_state);
+            0
+        } else { if t == 9 {
+            // AST_NEG: p1=inner
+            walk_for_panic(p1, diag_state);
+            0
+        } else { if t == 26 {
+            // AST_BNOT: p1=inner
+            walk_for_panic(p1, diag_state);
+            0
+        } else { if t == 31 {
+            // AST_NOT: p1=inner
+            walk_for_panic(p1, diag_state);
+            0
+        } else {
+            // Binops with p1=lhs, p2=rhs: tags 2..6, 19..23, 24,
+            // 28..30, 32, 33. Use a coarse range check + a few
+            // exclusions for non-binop tags in the same range.
+            let is_arith = if t >= 2 { if t <= 6 { 1 } else { 0 } } else { 0 };
+            let is_cmp   = if t >= 19 { if t <= 23 { 1 } else { 0 } } else { 0 };
+            let is_bit   = if t >= 28 { if t <= 30 { 1 } else { 0 } } else { 0 };
+            let is_mod   = if t == 24 { 1 } else { 0 };
+            let is_shift = if t == 32 { 1 } else { if t == 33 { 1 } else { 0 } };
+            let is_binop = if is_arith == 1 { 1 }
+                           else { if is_cmp == 1 { 1 }
+                           else { if is_bit == 1 { 1 }
+                           else { if is_mod == 1 { 1 }
+                           else { if is_shift == 1 { 1 } else { 0 } } } } };
+            if is_binop == 1 {
+                walk_for_panic(p1, diag_state);
+                walk_for_panic(p2, diag_state);
+            };
+            0
+        }}}}}}}}}}
+    }
+}
+
+// Top-level panic_pass entry. Walks every AST_FN_DECL body in the
+// fn_list. Skips entries flagged as generic templates (slot 6 == 1)
+// because their concrete mono clones will be walked separately.
+//
+// Returns 0 unconditionally; the caller inspects diag_arena_count
+// + diag_arena_error_count to decide exit policy.
+fn panic_pass(ast_root: i32, diag_state: i32) -> i32 {
+    let root_tag = __arena_get(ast_root);
+    if root_tag != 15 {
+        // Single-expr program (legacy). Walk the root directly.
+        walk_for_panic(ast_root, diag_state);
+        0
+    } else {
+        let mut walk: i32 = ast_root;
+        while walk != 0 {
+            let fn_idx = __arena_get(walk + 1);
+            let is_generic = __arena_get(fn_idx + 6);
+            if is_generic == 0 {
+                let body = __arena_get(fn_idx + 3);
+                walk_for_panic(body, diag_state);
+            };
+            walk = __arena_get(walk + 2);
+        }
+        0
+    }
+}
+
 fn bn_arena_push_s(b: i32) -> i32 { __arena_get(b) }
 fn bn_arena_get_s(b: i32) -> i32  { __arena_get(b + 1) }
 fn bn_arena_set_s(b: i32) -> i32  { __arena_get(b + 2) }
@@ -5352,6 +5557,21 @@ fn emit_elf_for_ast_to_path(ast_root: i32) -> i32 {
     let fn_state = fn_table_init();
     let patch_state = patch_table_init();
     let bn_state = install_builtin_names();
+    // Stage 28.9: diag_arena for validation passes (panic_pass,
+    // unsafe_pass, deprecated_pass, trace_pass). Allocated BEFORE
+    // the ELF region so its slots don't pollute the contiguous code
+    // byte stream.
+    let diag_state = diag_arena_init();
+    // Stage 28.9: panic_pass — finds malformed panic(...) call sites.
+    // Runs BEFORE codegen so the diag_arena is populated. Codegen
+    // happens regardless (matches the existing 14001/14002 pattern
+    // where type-mismatch traps are EMBEDDED in the binary rather
+    // than aborting the compile). After codegen, if any diag has
+    // severity=2 (error), the binary's prologue is patched to start
+    // with a ud2 trap carrying code 28501 (via the diag-emit-traps
+    // pass below) so the produced binary cannot run silently with
+    // malformed source.
+    panic_pass(ast_root, diag_state);
     // Phase 1.10 step 5c follow-on: fn_type_table tracks each user fn's
     // declared return type so is_f32_expr can resolve user-named f32
     // calls (not just `__f*` builtins). Populate via a pre-pass over
@@ -5474,6 +5694,35 @@ fn emit_elf_for_ast_to_path(ast_root: i32) -> i32 {
             fn_table_add(fn_state, fn_name_s, fn_name_l, fn_code_offset);
             bind_reset(bind_state);
             emit_prologue();
+            // Stage 28.9: if `main` AND validation-pass diag_arena has
+            // any severity=2 (error) entries, emit a ud2 trap with
+            // the FIRST error's code right after the prologue. Result:
+            // any produced binary whose source had malformed panic /
+            // misused @deprecated / etc. aborts immediately on entry
+            // rather than running silently with malformed source.
+            // Only main is patched — other fns aren't entry points
+            // so trapping inside them is moot (we already trap in
+            // main before any fn is called). Byte-equal "main" check:
+            // 4 bytes (109 97 105 110).
+            let is_main_fn = if fn_name_l == 4 {
+                let mb0 = __arena_get(fn_name_s);
+                let mb1 = __arena_get(fn_name_s + 1);
+                let mb2 = __arena_get(fn_name_s + 2);
+                let mb3 = __arena_get(fn_name_s + 3);
+                if mb0 == 109 { if mb1 == 97 { if mb2 == 105 {
+                    if mb3 == 110 { 1 } else { 0 } } else { 0 } } else { 0 }
+                } else { 0 }
+            } else { 0 };
+            if is_main_fn == 1 {
+                let n_errors = diag_arena_error_count(diag_state);
+                if n_errors > 0 {
+                    // Use first error's code (codegen-determinism: pick
+                    // the FIRST diag in arena order, not the first
+                    // error — same trap-id for fixed input).
+                    let first_code = diag_get_code(diag_state, 0);
+                    emit_trap_with_id(first_code);
+                };
+            };
             // Copy each param's SysV arg register into a fresh stack
             // slot and register the binding so the body can reference
             // params by name. Phase 0: up to 6 params (rdi/rsi/rdx/
