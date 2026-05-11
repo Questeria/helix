@@ -448,6 +448,75 @@ def test_c38_1_different_array_sizes_still_hash_differently():
     )
 
 
+def test_c44_1_int_lit_type_suffix_affects_hash():
+    """Stage 28.9 cycle 45 audit-T C44-1 regression (HIGH conf 92):
+    `1_i32` and `1_i64` are semantically distinct (different
+    TIRScalar result types in lower_ast) — they MUST hash
+    differently and `_ast_equal` must return False.
+
+    Pre-fix, structural_hash emitted only `node.value`, ignoring
+    `node.type_suffix`. hash_cons would collapse `let a:i32 = 1_i32`
+    with `let b:i64 = 1_i64`, producing an i64 binding with TIRScalar(i32)
+    result — silent miscompile under --hash-cons."""
+    from helixc.frontend.hash_cons import _ast_equal
+    s = A.Span(line=1, col=1)
+    i32 = A.IntLit(span=s, value=1, type_suffix="i32")
+    i64 = A.IntLit(span=s, value=1, type_suffix="i64")
+    no_suffix = A.IntLit(span=s, value=1, type_suffix=None)
+    assert structural_hash(i32) != structural_hash(i64), (
+        "1_i32 and 1_i64 must hash differently"
+    )
+    assert structural_hash(i32) != structural_hash(no_suffix), (
+        "1_i32 and bare 1 must hash differently"
+    )
+    assert not _ast_equal(i32, i64), (
+        "_ast_equal must return False for 1_i32 vs 1_i64"
+    )
+    assert not _ast_equal(i32, no_suffix), (
+        "_ast_equal must return False for 1_i32 vs bare 1"
+    )
+    # Anti-over-correction: same suffix must equal
+    i32b = A.IntLit(span=s, value=1, type_suffix="i32")
+    assert structural_hash(i32) == structural_hash(i32b), (
+        "1_i32 vs 1_i32 must hash equally"
+    )
+    assert _ast_equal(i32, i32b), (
+        "_ast_equal must return True for 1_i32 vs 1_i32"
+    )
+
+
+def test_c44_1_float_lit_type_suffix_affects_hash():
+    """C44-1: same defect class for FloatLit.type_suffix."""
+    from helixc.frontend.hash_cons import _ast_equal
+    s = A.Span(line=1, col=1)
+    f32 = A.FloatLit(span=s, value=1.0, type_suffix="f32")
+    f64 = A.FloatLit(span=s, value=1.0, type_suffix="f64")
+    assert structural_hash(f32) != structural_hash(f64)
+    assert not _ast_equal(f32, f64)
+
+
+def test_c44_1_name_generics_affect_hash():
+    """C44-1: Name.generics (turbofish, e.g. `foo::<i32>`) must
+    affect structural identity. Currently latent because
+    monomorphize_safe strips generics before hash_cons, but the
+    invariant must hold regardless of caller order."""
+    from helixc.frontend.hash_cons import _ast_equal
+    s = A.Span(line=1, col=1)
+    n_i32 = A.Name(span=s, name="foo",
+                   generics=[A.TyName(span=s, name="i32")])
+    n_i64 = A.Name(span=s, name="foo",
+                   generics=[A.TyName(span=s, name="i64")])
+    n_plain = A.Name(span=s, name="foo", generics=[])
+    assert structural_hash(n_i32) != structural_hash(n_i64), (
+        "foo::<i32> vs foo::<i64> must hash differently"
+    )
+    assert structural_hash(n_i32) != structural_hash(n_plain), (
+        "foo::<i32> vs bare foo must hash differently"
+    )
+    assert not _ast_equal(n_i32, n_i64)
+    assert not _ast_equal(n_i32, n_plain)
+
+
 def test_c41_ty_equal_cast_with_array_target():
     """Stage 28.9 cycle 43 audit-R C42-R3 regression (conf 88):
     _ty_equal must treat two Cast nodes with TyArray targets that

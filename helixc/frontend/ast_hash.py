@@ -147,10 +147,22 @@ def _hash_into(h: "hashlib._Hash", node: Any,
         _emit(h, "None")
         return
     if isinstance(node, A.IntLit):
-        _emit(h, "IntLit", node.value)
+        # Stage 28.9 cycle 45 audit-T C44-1 fix (conf 92):
+        # type_suffix is semantically load-bearing (`1_i32` vs `1_i64`
+        # become different TIRScalar result types in lower_ast).
+        # Pre-fix, the hash emitted only `node.value`, so
+        # `1_i32` and `1_i64` shared a hash key and hash_cons
+        # collapsed them — producing an i64 ADD with TIRScalar(i32)
+        # result type. Same defect class as C34-1 (silent class-
+        # only fallback): a semantic field invisible to the
+        # structural-identity layer.
+        _emit(h, "IntLit", node.value, node.type_suffix or "<no_suffix>")
         return
     if isinstance(node, A.FloatLit):
-        _emit(h, "FloatLit", node.value)
+        # Stage 28.9 cycle 45 audit-T C44-1 fix (conf 92): same
+        # rationale as IntLit — `1.0_f32` vs `1.0_f64` are
+        # semantically distinct.
+        _emit(h, "FloatLit", node.value, node.type_suffix or "<no_suffix>")
         return
     if isinstance(node, A.BoolLit):
         _emit(h, "BoolLit", node.value)
@@ -164,11 +176,22 @@ def _hash_into(h: "hashlib._Hash", node: Any,
     if isinstance(node, A.Name):
         # Bound name → use the de-Bruijn-style depth index.
         # Free name → use the literal name.
+        # Stage 28.9 cycle 45 audit-T C44-1 fix (conf 92): also
+        # hash `generics` (turbofish args, e.g. `foo::<i32>`). In
+        # the current pipeline monomorphize_safe strips generics
+        # before hash_cons so this is currently latent, but the
+        # hash function should be semantics-preserving regardless
+        # of caller order. Generics are TyNodes — emit via
+        # span-stripped `_ty_repr`.
         idx = binders.get(node.name)
         if idx is not None:
             _emit(h, "BoundVar", idx)
         else:
             _emit(h, "FreeName", node.name)
+        if node.generics:
+            _emit(h, "NameGenericsCount", len(node.generics))
+            for g in node.generics:
+                _emit(h, "NameGeneric", _ty_repr(g))
         return
     if isinstance(node, A.Unary):
         _emit(h, "Unary", node.op)

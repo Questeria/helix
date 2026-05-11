@@ -170,9 +170,13 @@ def _ast_equal(a: Any, b: Any) -> bool:
     if type(a) is not type(b):
         return False
     if isinstance(a, A.IntLit):
-        return a.value == b.value
+        # Stage 28.9 cycle 45 audit-T C44-1 fix (conf 92): mirror
+        # the structural_hash arm — `1_i32` and `1_i64` are
+        # semantically distinct.
+        return a.value == b.value and a.type_suffix == b.type_suffix
     if isinstance(a, A.FloatLit):
-        return a.value == b.value
+        # Same rationale as IntLit.
+        return a.value == b.value and a.type_suffix == b.type_suffix
     if isinstance(a, A.BoolLit):
         return a.value == b.value
     if isinstance(a, A.StrLit):
@@ -180,7 +184,18 @@ def _ast_equal(a: Any, b: Any) -> bool:
     if isinstance(a, A.CharLit):
         return a.value == b.value
     if isinstance(a, A.Name):
-        return a.name == b.name
+        # Stage 28.9 cycle 45 audit-T C44-1 fix (conf 92): also
+        # compare `generics`. In the current pipeline
+        # monomorphize_safe strips generics before hash_cons so
+        # this is latent, but the equality function must be
+        # semantics-preserving regardless of caller order.
+        # Generics are TyNodes — use `_ty_equal`.
+        if a.name != b.name:
+            return False
+        if len(a.generics) != len(b.generics):
+            return False
+        return all(_ty_equal(g1, g2)
+                   for g1, g2 in zip(a.generics, b.generics))
     if isinstance(a, A.Unary):
         return a.op == b.op and _ast_equal(a.operand, b.operand)
     if isinstance(a, A.Binary):
