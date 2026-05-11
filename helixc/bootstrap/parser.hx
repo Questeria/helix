@@ -2623,10 +2623,22 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
                 // Register the mono request (dedup-aware). Combine packed
                 // tags + count into a single i32 (low 3 bits = count, rest
                 // = packed) to fit SysV's 6-int-param limit.
+                //
+                // Audit-stage7-8 Finding #4 fix: mr_tab caps at 32 entries
+                // and mr_tab_add returns -1 silently on overflow. Pre-fix
+                // the 33rd+ unique instantiation went unregistered; the
+                // mono pass never synthesized a clone and codegen lost the
+                // call to an unresolved name (silent SIGILL with the
+                // 99001 fallback id). Now we capture the add result and
+                // fold the whole call to AST_ERR(71001) if it overflows,
+                // so the binary traps with the cap-overflow id documented
+                // in APPROACH_A_DETAILED_PLAN.md.
                 let pack_lo = packed * 8 + ta_count;
                 let existing = mr_tab_lookup(sb, id_start, id_len, pack_lo);
+                let mut mr_overflow: i32 = 0;
                 if existing < 0 {
-                    mr_tab_add(sb, id_start, id_len, mang_s, mang_l, pack_lo);
+                    let r = mr_tab_add(sb, id_start, id_len, mang_s, mang_l, pack_lo);
+                    if r < 0 { mr_overflow = 1; };
                 };
                 // Now parse the call args `( ... )`.
                 cur_advance(sb);                       // consume '('
@@ -2653,8 +2665,13 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
                 }
                 cur_advance(sb);                       // consume ')'
                 // Build AST_CALL with the MANGLED name (so codegen looks
-                // up the synthesized mono'd fn).
-                mk_node(16, mang_s, mang_l, args_head)
+                // up the synthesized mono'd fn) — or AST_ERR(71001) when
+                // mr_tab overflowed (audit-stage7-8 F4).
+                if mr_overflow == 1 {
+                    mk_node(99, 71001, 0, 0)
+                } else {
+                    mk_node(16, mang_s, mang_l, args_head)
+                }
             } else { if is_enum_unit == 1 {
                 // Consume IDENT, `:`, `:`, variant-IDENT.
                 cur_advance(sb);                       // outer IDENT (enum name)

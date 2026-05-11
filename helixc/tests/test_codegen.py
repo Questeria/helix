@@ -3307,6 +3307,33 @@ fn main() -> i32 {
         + " b42 }"
     assert compile_and_exec(fewer_lets) == 42, \
         "F11: 64 chained lets stays within budget — last binding readable"
+    # Audit stage7-8 Finding #4 regression: mr_tab caps at 32 unique generic
+    # instantiations. Pre-fix `mr_tab_add` returned -1 silently on overflow
+    # and the call kept the mangled-but-unregistered name; the mono pass
+    # never synthesized a clone and runtime SIGILL fell into the 99001
+    # generic AST_ERR fallback. Post-fix, the turbofish call folds to
+    # AST_ERR(71001) at parse time so the trap-id matches the doc.
+    # Build a generic-instantiation chain wide enough to overflow the
+    # 32-entry mr_tab. `id<T>` with 33 instantiations forces a unique
+    # pack_lo per call (because T's mangled name differs per instance).
+    # 33 distinct ty_ident_to_tag values aren't available (only ~7 known
+    # scalar tags), so we hand-thread a multi-arg generic to multiply
+    # the tag-tuple space. Easier route: use pair<A,B> with 6 scalar
+    # tags → 6*6 = 36 unique pairs, just over the cap.
+    pair_decl = "fn pair<A, B>(a: A, b: B) -> i32 { 0 }"
+    tys = ["i32", "u32", "i64", "u64", "f32", "f64"]
+    cap_overflow_src = pair_decl + " fn main() -> i32 { "
+    n = 0
+    for a in tys:
+        for b in tys:
+            cap_overflow_src += f"pair::<{a}, {b}>(0 as {a}, 0 as {b}); "
+            n += 1
+    cap_overflow_src += "0 }"
+    # 6*6 = 36 instantiations > 32-entry cap. Expect SIGILL with trap-id
+    # 71001 visible to runtime (exit 132 — eax holds 71001 at trap site).
+    code = compile_and_exec(cap_overflow_src)
+    assert code == 132, \
+        f"F4: mr_tab cap overflow (36 generic instantiations) should trap, got {code}"
     # Audit A1-F6 regression: 4th struct decl used to be silently dropped
     # (cap was 3). Subsequent uses of the dropped struct silently parsed
     # as plain IDENT references → silent corruption. Now the cap is 8 so
