@@ -493,6 +493,47 @@ def test_c22_c_match_inside_range_lowered():
     walk(prog)
 
 
+def test_c4_1_match_inside_assign_target_lowered():
+    """Stage 28.9 cycle 4 C4-1: `match` inside `Assign.target` must
+    be desugared. Pre-fix `arr[match x { ... }] = v` survived past
+    lower_matches and tripped lower_ast's assertion. The fix
+    descends into `expr.target` before `expr.value`.
+
+    Same regression-test pattern as test_c22_c_match_inside_range_
+    lowered: walk the post-lower AST and assert no A.Match remains.
+    """
+    from helixc.frontend.parser import parse as parse_src
+    from helixc.frontend.match_lower import lower_matches
+    from helixc.frontend import ast_nodes as A
+    src = """
+    fn main() -> i32 {
+        let mut arr: [i32; 3] = [0, 0, 0];
+        let x = 1;
+        arr[match x { 0 => 0, _ => 1 }] = 99;
+        arr[1]
+    }
+    """
+    prog = parse_src(src)
+    lower_matches(prog)
+
+    def walk(node):
+        if node is None:
+            return
+        if isinstance(node, A.Match):
+            raise AssertionError(
+                "lower_matches must remove all Match nodes; one "
+                "remains inside Assign.target (C4-1)"
+            )
+        if isinstance(node, list):
+            for x in node:
+                walk(x)
+            return
+        if hasattr(node, "__dict__"):
+            for v in vars(node).values():
+                walk(v)
+    walk(prog)
+
+
 def main():
     tests = [(name, fn) for name, fn in globals().items()
              if name.startswith("test_") and callable(fn)]
