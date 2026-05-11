@@ -545,6 +545,145 @@ def _inline_lets(expr: A.Expr | None, env: dict[str, A.Expr]) -> A.Expr | None:
         wrapped_else = _wrap(new_else)
         return A.If(span=expr.span, cond=expr.cond,
                     then=wrapped_then, else_=wrapped_else)
+    # Audit 28.8 cycle 3 C3-5: extend _inline_lets to recurse through every
+    # Expr subtype that can contain Name leaves. Pre-fix the function fell
+    # through to `return expr` for Cast / Call / Field / Index / Match /
+    # ArrayLit / TupleLit / StructLit / Range / Return / Break / Assign /
+    # UnsafeBlock / Loop / For / While / Quote / Splice / Modify — so
+    # any let-bound name appearing under those positions was never
+    # substituted, defeating the reverse-mode `_ad_warn` reach (C2-3).
+    if isinstance(expr, A.Cast):
+        return A.Cast(span=expr.span,
+                      value=_inline_lets(expr.value, env),
+                      target_ty=expr.target_ty)
+    if isinstance(expr, A.Call):
+        new_args = [_inline_lets(a, env) for a in expr.args]
+        # Callee is generally a Name or Path — Name lookups in env would
+        # turn it into a different expression entirely, which breaks
+        # ordinary calls. Only substitute when the resolved value is
+        # itself a Name/Path (alias-of-callee).
+        new_callee = expr.callee
+        if isinstance(expr.callee, A.Name) and expr.callee.name in env:
+            cand = env[expr.callee.name]
+            if isinstance(cand, (A.Name, A.Path)):
+                new_callee = cand
+        return A.Call(span=expr.span, callee=new_callee, args=new_args)
+    if isinstance(expr, A.Field):
+        return A.Field(span=expr.span,
+                       obj=_inline_lets(expr.obj, env),
+                       name=expr.name)
+    if isinstance(expr, A.Index):
+        return A.Index(
+            span=expr.span,
+            callee=_inline_lets(expr.callee, env),
+            indices=[_inline_lets(i, env) for i in expr.indices],
+        )
+    if isinstance(expr, A.ArrayLit):
+        return A.ArrayLit(
+            span=expr.span,
+            elems=[_inline_lets(e, env) for e in expr.elems],
+        )
+    if isinstance(expr, A.TupleLit):
+        return A.TupleLit(
+            span=expr.span,
+            elems=[_inline_lets(e, env) for e in expr.elems],
+        )
+    if isinstance(expr, A.StructLit):
+        return A.StructLit(
+            span=expr.span,
+            name=expr.name,
+            fields=[(n, _inline_lets(v, env)) for (n, v) in expr.fields],
+        )
+    if isinstance(expr, A.Range):
+        return A.Range(
+            span=expr.span,
+            start=_inline_lets(expr.start, env),
+            end=_inline_lets(expr.end, env),
+        )
+    if isinstance(expr, A.Return):
+        return A.Return(
+            span=expr.span,
+            value=_inline_lets(expr.value, env),
+        )
+    if isinstance(expr, A.Break):
+        return A.Break(
+            span=expr.span,
+            value=_inline_lets(expr.value, env),
+        )
+    if isinstance(expr, A.Assign):
+        return A.Assign(
+            span=expr.span,
+            target=_inline_lets(expr.target, env),
+            op=expr.op,
+            value=_inline_lets(expr.value, env),
+        )
+    if isinstance(expr, A.UnsafeBlock):
+        body = expr.body
+        new_body = _inline_lets(body, env) if isinstance(body, A.Block) else body
+        if not isinstance(new_body, A.Block):
+            new_body = A.Block(span=body.span, stmts=[], final_expr=new_body)
+        return A.UnsafeBlock(span=expr.span, body=new_body)
+    if isinstance(expr, A.Match):
+        new_arms = []
+        for arm in expr.arms:
+            new_arms.append(A.MatchArm(
+                span=arm.span,
+                pattern=arm.pattern,
+                guard=(_inline_lets(arm.guard, env)
+                       if arm.guard is not None else None),
+                body=_inline_lets(arm.body, env),
+            ))
+        return A.Match(
+            span=expr.span,
+            scrutinee=_inline_lets(expr.scrutinee, env),
+            arms=new_arms,
+        )
+    if isinstance(expr, A.Loop):
+        body = expr.body
+        new_body = _inline_lets(body, env) if isinstance(body, A.Block) else body
+        if not isinstance(new_body, A.Block):
+            new_body = A.Block(span=body.span, stmts=[], final_expr=new_body)
+        return A.Loop(span=expr.span, body=new_body)
+    if isinstance(expr, A.For):
+        body = expr.body
+        new_body = _inline_lets(body, env) if isinstance(body, A.Block) else body
+        if not isinstance(new_body, A.Block):
+            new_body = A.Block(span=body.span, stmts=[], final_expr=new_body)
+        return A.For(
+            span=expr.span,
+            var_name=expr.var_name,
+            iter_expr=_inline_lets(expr.iter_expr, env),
+            body=new_body,
+        )
+    if isinstance(expr, A.While):
+        body = expr.body
+        new_body = _inline_lets(body, env) if isinstance(body, A.Block) else body
+        if not isinstance(new_body, A.Block):
+            new_body = A.Block(span=body.span, stmts=[], final_expr=new_body)
+        return A.While(
+            span=expr.span,
+            cond=_inline_lets(expr.cond, env),
+            body=new_body,
+        )
+    if isinstance(expr, A.Quote):
+        return A.Quote(span=expr.span, inner=_inline_lets(expr.inner, env))
+    if isinstance(expr, A.Splice):
+        return A.Splice(span=expr.span, inner=_inline_lets(expr.inner, env))
+    if isinstance(expr, A.Modify):
+        return A.Modify(
+            span=expr.span,
+            target=_inline_lets(expr.target, env),
+            transformation=_inline_lets(expr.transformation, env),
+            verifier=_inline_lets(expr.verifier, env),
+        )
+    # Catch-all fallthrough: warn loud so future AST extensions surface
+    # immediately rather than silently dropping let-bindings.
+    _ad_warn(
+        expr,
+        f"_inline_lets fell through on Expr subtype "
+        f"'{type(expr).__name__}' — let-bindings beyond this point "
+        f"may not be substituted (trap 85001)",
+    )
     return expr
 
 
