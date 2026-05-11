@@ -2308,6 +2308,31 @@ fn walk_for_panic(idx: i32, diag_state: i32) -> i32 {
             // AST_NOT: p1=inner
             walk_for_panic(p1, diag_state);
             0
+        } else { if t == 62 {
+            // AST_MATCH: p1=scrut, p2=arms_head (linked list of
+            // AST_MATCH_ARM via p3 chain). Walk scrut + each arm's
+            // body. Audit follow-up: walker drift on AST_MATCH was
+            // a Cycle 22 C22-C finding in the Python ast_walker
+            // refactor; mirror the fix here.
+            walk_for_panic(p1, diag_state);
+            let mut arm: i32 = p2;
+            while arm != 0 {
+                // AST_MATCH_ARM: p1=pattern (not an expr), p2=body, p3=next.
+                let arm_body = __arena_get(arm + 2);
+                walk_for_panic(arm_body, diag_state);
+                arm = __arena_get(arm + 3);
+            }
+            0
+        } else { if t == 52 {
+            // AST_TUPLE_FIELD: p1=value (expr), p2=field_idx (not
+            // expr), p3=is_struct (not expr). Walk only p1.
+            walk_for_panic(p1, diag_state);
+            0
+        } else { if t == 53 {
+            // AST_INDEX: p1=value (expr), p2=idx (expr).
+            walk_for_panic(p1, diag_state);
+            walk_for_panic(p2, diag_state);
+            0
         } else {
             // Binops with p1=lhs, p2=rhs: tags 2..6, 19..23, 24,
             // 28..30, 32, 33. Use a coarse range check + a few
@@ -2327,7 +2352,7 @@ fn walk_for_panic(idx: i32, diag_state: i32) -> i32 {
                 walk_for_panic(p2, diag_state);
             };
             0
-        }}}}}}}}}}
+        }}}}}}}}}}}}}
     }
 }
 
@@ -2581,6 +2606,26 @@ fn walk_for_deprecated(idx: i32, dep_tab: i32, diag_state: i32) -> i32 {
         } else { if t == 31 {
             walk_for_deprecated(p1, dep_tab, diag_state);
             0
+        } else { if t == 62 {
+            // AST_MATCH: descend into scrut + each arm body. Mirror
+            // of walk_for_panic's match handling.
+            walk_for_deprecated(p1, dep_tab, diag_state);
+            let mut arm: i32 = p2;
+            while arm != 0 {
+                let arm_body = __arena_get(arm + 2);
+                walk_for_deprecated(arm_body, dep_tab, diag_state);
+                arm = __arena_get(arm + 3);
+            }
+            0
+        } else { if t == 52 {
+            // AST_TUPLE_FIELD: only p1 is an expr.
+            walk_for_deprecated(p1, dep_tab, diag_state);
+            0
+        } else { if t == 53 {
+            // AST_INDEX: p1=value, p2=idx, both exprs.
+            walk_for_deprecated(p1, dep_tab, diag_state);
+            walk_for_deprecated(p2, dep_tab, diag_state);
+            0
         } else {
             // Binops: same coarse range check as walk_for_panic.
             let is_arith = if t >= 2 { if t <= 6 { 1 } else { 0 } } else { 0 };
@@ -2598,7 +2643,7 @@ fn walk_for_deprecated(idx: i32, dep_tab: i32, diag_state: i32) -> i32 {
                 walk_for_deprecated(p2, dep_tab, diag_state);
             };
             0
-        }}}}}}}}}}
+        }}}}}}}}}}}}}
     }
 }
 
