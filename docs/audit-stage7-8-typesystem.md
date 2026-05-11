@@ -899,7 +899,7 @@ land before any user-facing release of Stage 8.5.
 | 9  | OPEN     | clone_with_rewrite — deferred (MEDIUM, needs deep-clone recursion). |
 | 10 | FIXED    | monomorphize_pass + grad_pass + grad_rev_all_pass now propagate the template / loss fn's slot-8 `is_checkpoint` to the synthesized clone instead of hardcoding 0. The @checkpoint marker survives mono and reverse-mode AD synthesis. Commits a086353 + 7682b14. |
 | 11 | OPEN     | self.method() in impl bodies — deferred (MEDIUM, feature work). |
-| 12 | OPEN     | PAT_VARIANT/TUPLE sub-pat idx > 15 disp8 wrap — deferred (MEDIUM, mirror Stage 4 #7 fix). |
+| 12 | FIXED    | emit_variant_subpats / emit_tuple_subpats now trap 60030 before the disp8-form load wraps signed. Same fix as audit-stage5-6 F9 (the two findings describe the same issue from different audits). Commit db4055b. |
 
 All FIXED entries verified by:
 - Heavy gate (`pytest helixc/tests/test_codegen.py::test_bootstrap_kovc_full_pipeline_arithmetic`) — clean.

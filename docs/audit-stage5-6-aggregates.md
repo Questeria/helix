@@ -1035,7 +1035,7 @@ batch.
 | 6 | FIXED  | Cap-overflow on parser-state tables: caps bumped from 3/4/4 to 8/8/8 for struct_tab / var_struct_tab / enum_tab. Commit 4521641. (Surfacing as hard trap still deferred — the bump avoids the practical issue.) |
 | 7 | FIXED  | Struct lit field count vs declared arity: trap 50040 on mismatch. Commit 70b89fc. |
 | 8 | FIXED  | Enum payload variant arity + variant-name: trap 60020 / 60002. Commit 2756afd. |
-| 9 | OPEN   | emit_variant_subpats / emit_tuple_subpats disp8 wrap at idx > 15 — deferred (MEDIUM). |
+| 9 | FIXED  | emit_variant_subpats / emit_tuple_subpats now emit trap 60030 before the disp8-form load when the sub-pat index would yield off ≥ 128 (signed-disp8 wrap). Regression test (`big_variant_src` with 17 sub-patterns) added to test_codegen.py. Commit db4055b. |
 | 10 | OPEN  | `__enum_payload` non-INTLIT idx — deferred (MEDIUM). |
 | 11 | FIXED | bind_alloc_offset cap-check now emits trap id 10030 when the requested offset would exceed the 1024-byte prologue allocation. Regression tests (`many_lets`/`fewer_lets`) added in test_codegen.py. |
 | 12 | OPEN  | Struct fn-call arg identity — deferred (MEDIUM, needs 8-bit param packing). |
