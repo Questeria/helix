@@ -262,14 +262,33 @@ def main(argv: list[str] | None = None) -> int:
     from .frontend.autodiff import take_diff_warnings as _drain_ad_init
     _drain_ad_init()
     a_holder: list["CliArgs"] = []
-    rc = _main_inner(argv, a_holder)
-    if a_holder:
-        drain_rc = _drain_ad_warnings(a_holder[0])
-        if drain_rc != 0 and rc == 0:
-            rc = drain_rc
-    else:
-        # No CliArgs yet — drain quietly to keep state hygienic.
-        _drain_ad_init()
+    rc = 1
+    # Audit 28.8 cycle 3 C3-3: wrap _main_inner in try/finally so
+    # exception exits ALSO trigger the AD-warning drain and present a
+    # clean error message instead of a raw Python traceback. Without
+    # this, a typecheck/struct_mono/lower/codegen bug leaks both the
+    # traceback AND the accumulated `_DIFF_WARNINGS` (since the drain
+    # at the bottom is never reached).
+    try:
+        rc = _main_inner(argv, a_holder)
+    except Exception as e:
+        print(
+            f"helixc: internal error: {type(e).__name__}: {e}",
+            file=sys.stderr,
+        )
+        print(
+            "helixc: this is a compiler bug — please file an issue.",
+            file=sys.stderr,
+        )
+        rc = 1
+    finally:
+        if a_holder:
+            drain_rc = _drain_ad_warnings(a_holder[0])
+            if drain_rc != 0 and rc == 0:
+                rc = drain_rc
+        else:
+            # No CliArgs yet — drain quietly to keep state hygienic.
+            _drain_ad_init()
     return rc
 
 
