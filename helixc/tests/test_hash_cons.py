@@ -495,6 +495,89 @@ def test_c44_1_float_lit_type_suffix_affects_hash():
     assert not _ast_equal(f32, f64)
 
 
+def test_c46_1_assign_op_affects_hash():
+    """Stage 28.9 cycle 47 audit-T C46-1 regression (HIGH conf 90):
+    Assign.op is semantically load-bearing — `x = 1`, `x += 1`,
+    `x -= 1`, `x *= 1`, `x /= 1`, `x %= 1` are all distinct
+    operations with different codegen. Pre-fix, _hash_into Assign
+    arm emitted only `target.name`, NOT `node.op`, so all variants
+    collided. Same defect class as C44-1 (semantic field invisible
+    to structural identity)."""
+    s = A.Span(line=1, col=1)
+    def mk_assign(op):
+        return A.Assign(
+            span=s, op=op,
+            target=A.Name(span=s, name="x", generics=[]),
+            value=A.IntLit(span=s, value=1, type_suffix=None),
+        )
+    hashes = {op: structural_hash(mk_assign(op))
+              for op in ("=", "+=", "-=", "*=", "/=", "%=")}
+    # All 6 must be distinct.
+    assert len(set(hashes.values())) == 6, (
+        f"All 6 Assign op variants must hash differently; got "
+        f"{hashes}"
+    )
+
+
+def test_c46_1_assign_target_affects_hash():
+    """C46-1: Assign target full expr (Field/Index, not just Name)
+    must affect hash. Pre-fix, the target was reduced to
+    `target.name if Name else '?'` — `a.x = 1` and `a.y = 1`
+    both hashed as `target='?'`."""
+    s = A.Span(line=1, col=1)
+    a_x = A.Assign(
+        span=s, op="=",
+        target=A.Field(
+            span=s, obj=A.Name(span=s, name="a", generics=[]), name="x",
+        ),
+        value=A.IntLit(span=s, value=1, type_suffix=None),
+    )
+    a_y = A.Assign(
+        span=s, op="=",
+        target=A.Field(
+            span=s, obj=A.Name(span=s, name="a", generics=[]), name="y",
+        ),
+        value=A.IntLit(span=s, value=1, type_suffix=None),
+    )
+    assert structural_hash(a_x) != structural_hash(a_y), (
+        "a.x = 1 vs a.y = 1 must hash differently"
+    )
+
+
+def test_c46_2_patbind_is_mut_affects_hash():
+    """Stage 28.9 cycle 47 audit-T C46-2 regression (HIGH conf 88):
+    PatBind.is_mut distinguishes `Some(x) =>` from `Some(mut x) =>`
+    for mutability-checking. Pre-fix, _hash_pattern PatBind arm
+    emitted only the tag without is_mut, so the two variants
+    hashed identically.
+
+    `name` is intentionally still elided (de-Bruijn alpha-
+    equivalence — `Some(x) => x + 1` and `Some(y) => y + 1` hash
+    equally), but `is_mut` is semantic."""
+    from helixc.frontend.ast_hash import _hash_pattern
+    import hashlib
+
+    def pat_hash(p):
+        h = hashlib.sha256()
+        _hash_pattern(h, p, {})
+        return h.hexdigest()
+
+    s = A.Span(line=1, col=1)
+    pb_imm = A.PatBind(span=s, name="x", is_mut=False)
+    pb_mut = A.PatBind(span=s, name="x", is_mut=True)
+    assert pat_hash(pb_imm) != pat_hash(pb_mut), (
+        "PatBind(is_mut=False) vs PatBind(is_mut=True) must "
+        "hash differently"
+    )
+    # Anti-over-correction: same is_mut + different name must
+    # still hash equally (de-Bruijn).
+    pb_imm_y = A.PatBind(span=s, name="y", is_mut=False)
+    assert pat_hash(pb_imm) == pat_hash(pb_imm_y), (
+        "PatBind(x, False) vs PatBind(y, False) must hash equally "
+        "(name elided per de-Bruijn alpha-equivalence)"
+    )
+
+
 def test_c44_1_name_generics_affect_hash():
     """C44-1: Name.generics (turbofish, e.g. `foo::<i32>`) must
     affect structural identity. Currently latent because

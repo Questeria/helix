@@ -274,7 +274,17 @@ def _hash_into(h: "hashlib._Hash", node: Any,
         _emit(h, "Ty", _ty_repr(node.target_ty))
         return
     if isinstance(node, A.Assign):
-        _emit(h, "Assign", node.target.name if isinstance(node.target, A.Name) else "?")
+        # Stage 28.9 cycle 47 audit-T C46-1 fix (conf 90): emit
+        # `op` (the assignment operator: `=`, `+=`, `-=`, `*=`,
+        # `/=`, `%=`) which is semantically load-bearing — parser
+        # and codegen distinguish them.
+        # Also recurse into the FULL `target` Expr instead of
+        # emitting only the name-as-string. Pre-fix, two assigns
+        # to different fields/indices (`a.x = 1` vs `a.y = 1`,
+        # `arr[0] = v` vs `arr[1] = v`) both hashed as `target="?"`.
+        # Same defect class as C44-1 / C34-1.
+        _emit(h, "Assign", node.op)
+        _hash_into(h, node.target, binders)
         _hash_into(h, node.value, binders)
         return
     if isinstance(node, A.Index):
@@ -445,7 +455,12 @@ def _hash_pattern(h: "hashlib._Hash", pat: A.Pattern,
         _emit(h, "PatWildcard")
         return
     if isinstance(pat, A.PatBind):
-        _emit(h, "PatBind")
+        # Stage 28.9 cycle 47 audit-T C46-2 fix (conf 88): emit
+        # `is_mut` which distinguishes `Some(x) =>` from
+        # `Some(mut x) =>` for mutability-checking. The `name`
+        # field is intentionally elided (de-Bruijn alpha-
+        # equivalence), but `is_mut` is semantically load-bearing.
+        _emit(h, "PatBind", pat.is_mut)
         return
     if isinstance(pat, A.PatLit):
         _emit(h, "PatLit")
