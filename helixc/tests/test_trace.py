@@ -228,5 +228,82 @@ def test_a7_backend_emits_trace_ops_as_stubs():
     assert isinstance(elf, (bytes, bytearray)) and len(elf) > 0
 
 
+# ----------------------------------------------------------------------
+# Audit 28.8 cycle 2 C2-2 — early `return X` in a @trace'd fn must
+# also emit TRACE_EXIT (otherwise the trace stream has ENTRY pairs
+# without matching EXITs on the early-return path).
+# ----------------------------------------------------------------------
+def test_c2_2_early_return_emits_trace_exit():
+    """C2-2: a @trace'd fn with an explicit `return X` inside an `if`
+    body must emit TRACE_EXIT before the early `ret` op AND before the
+    fall-through `ret` — so paired trace events stay balanced regardless
+    of which return path executes at runtime."""
+    from helixc.ir.lower_ast import lower
+    from helixc.ir.tir import OpKind
+    # The fall-through path falls off the end of the if/else expression,
+    # which Helix treats as the block's value. Explicit early-return
+    # is the path we're checking.
+    src = (
+        "@trace fn f(x: i32) -> i32 { if x > 0 { return 1; }; 2 }\n"
+        "fn main() -> i32 { f(5) }\n"
+    )
+    prog = parse(src)
+    mod = lower(prog)
+    f_fn = mod.functions["f"]
+    all_ops = [op for blk in f_fn.blocks for op in blk.ops]
+    entries = [op for op in all_ops if op.kind == OpKind.TRACE_ENTRY]
+    exits = [op for op in all_ops if op.kind == OpKind.TRACE_EXIT]
+    assert len(entries) == 1, (
+        f"expected 1 TRACE_ENTRY, got {len(entries)}: "
+        f"{[op.kind.name for op in all_ops]}"
+    )
+    # MUST be 2 — one before the early `return 1` ret, one before the
+    # fall-through ret-of-2.
+    assert len(exits) == 2, (
+        f"expected 2 TRACE_EXIT ops (one per return path), got {len(exits)}: "
+        f"{[op.kind.name for op in all_ops]}"
+    )
+    # Both should attribute to the same fn name.
+    assert all(op.attrs.get("fn_name") == "f" for op in exits), (
+        f"TRACE_EXIT attrs mismatch: {[op.attrs for op in exits]}"
+    )
+
+
+def test_c2_2_non_traced_fn_with_early_return_no_trace_exit():
+    """C2-2 inverse: a plain (non-@trace) fn with `return X` must NOT
+    emit any TRACE_* ops — guard against spurious wiring."""
+    from helixc.ir.lower_ast import lower
+    from helixc.ir.tir import OpKind
+    src = (
+        "fn g(x: i32) -> i32 { if x > 0 { return 1; }; 2 }\n"
+        "fn main() -> i32 { g(5) }\n"
+    )
+    prog = parse(src)
+    mod = lower(prog)
+    g_fn = mod.functions["g"]
+    all_ops = [op for blk in g_fn.blocks for op in blk.ops]
+    assert not any(
+        op.kind in (OpKind.TRACE_ENTRY, OpKind.TRACE_EXIT)
+        for op in all_ops
+    )
+
+
+def test_c2_2_early_return_void():
+    """C2-2: traced fn with bare `return;` (no value) — TRACE_EXIT
+    must still emit, with a synthesized 0 operand."""
+    from helixc.ir.lower_ast import lower
+    from helixc.ir.tir import OpKind
+    src = (
+        "@trace fn h(x: i32) -> i32 { if x > 0 { return 0; }; 1 }\n"
+        "fn main() -> i32 { h(5) }\n"
+    )
+    prog = parse(src)
+    mod = lower(prog)
+    h_fn = mod.functions["h"]
+    all_ops = [op for blk in h_fn.blocks for op in blk.ops]
+    exits = [op for op in all_ops if op.kind == OpKind.TRACE_EXIT]
+    assert len(exits) == 2
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-v"]))

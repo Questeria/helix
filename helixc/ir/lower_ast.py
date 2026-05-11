@@ -61,6 +61,19 @@ class Lowerer:
         # Stage 16 — inside-kernel flag. Set in _lower_fn_body for fns with
         # @kernel attribute, so the thread_idx() builtin only resolves there.
         self._in_kernel: bool = False
+        # Audit 28.8 cycle 2 C2-2 — inside-traced-fn flag. Set in
+        # _lower_fn_body for fns with @trace attribute. Read by the
+        # A.Return arm of _lower_expr so an explicit early `return X`
+        # emits TRACE_EXIT before the IR `ret` op, mirroring the
+        # fall-through-return path. Without this, traced fns with
+        # explicit returns produced TRACE_ENTRY-without-EXIT pairs
+        # on the early-return path — invisible at Phase-0 because the
+        # backend stubs the ops as nops, but the moment a runtime exists
+        # the trace stream would be permanently corrupted.
+        self._is_fn_traced: bool = False
+        # Name of the currently-being-lowered fn (used as TRACE_EXIT
+        # attr). None when not inside a fn body.
+        self._current_fn_name: str | None = None
         # struct-decl-name -> ordered list of field names (declaration order).
         # Built from prog.items at lower-time. Used for the flat (single-
         # level) struct case where every field is i32.
@@ -465,6 +478,14 @@ class Lowerer:
         if is_fn_traced:
             self.builder.emit(tir.OpKind.TRACE_ENTRY,
                               attrs={"fn_name": fn.name})
+        # Audit 28.8 cycle 2 C2-2 — track @trace context on the lowerer
+        # so A.Return's lowering arm can emit TRACE_EXIT before the
+        # `ret` op on early-return paths (mirroring the fall-through
+        # epilogue at the end of this function).
+        prev_is_fn_traced = self._is_fn_traced
+        prev_current_fn_name = self._current_fn_name
+        self._is_fn_traced = is_fn_traced
+        self._current_fn_name = fn.name
         # Stage 16 — track kernel context. thread_idx() and indexed-tile ops
         # are only valid inside @kernel fns.
         prev_in_kernel = self._in_kernel
@@ -565,6 +586,9 @@ class Lowerer:
         # top-level fn so this is technically always False after, but the
         # explicit restore matches the scope-pop discipline).
         self._in_kernel = prev_in_kernel
+        # Audit 28.8 cycle 2 C2-2 — restore traced-fn state.
+        self._is_fn_traced = prev_is_fn_traced
+        self._current_fn_name = prev_current_fn_name
         self.builder.end_function()
 
     def _lower_block(self, block: A.Block) -> Optional[tir.Value]:
@@ -1854,6 +1878,22 @@ class Lowerer:
                 "AST item type that holds expressions, extend lower_matches.")
         if isinstance(expr, A.Return):
             v = self._lower_expr(expr.value) if expr.value is not None else None
+            # Audit 28.8 cycle 2 C2-2 — emit TRACE_EXIT before the
+            # `ret` op when the enclosing fn is @trace'd. Pre-fix, only
+            # the fall-through return at the end of _lower_fn_body
+            # emitted TRACE_EXIT, so an explicit early `return X` in a
+            # traced fn produced an unbalanced ENTRY-without-EXIT pair
+            # in the trace stream (invisible at Phase-0 because the
+            # backend stubs both ops; would corrupt the buffer the
+            # moment Stage 30 runtime exists).
+            if self._is_fn_traced:
+                ret_operand = v
+                if ret_operand is None:
+                    ret_operand = self.builder.const_int(0)
+                self.builder.emit(
+                    tir.OpKind.TRACE_EXIT, ret_operand,
+                    attrs={"fn_name": self._current_fn_name or "<unknown>"},
+                )
             self.builder.ret(v)
             return None
         if isinstance(expr, A.Range):
