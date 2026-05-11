@@ -891,7 +891,7 @@ land before any user-facing release of Stage 8.5.
 | 1  | FIXED    | parse_program post-fn loop accepts struct/enum/trait/impl/mod/use. Commit ea3040c. |
 | 2  | FIXED    | ty_ident_to_tag handles u8/u16/i8/i16/bf16 + u16. Commit d9ac5c2. |
 | 3  | FIXED    | ty_tag_push_name split into ty_tag_push_name + ty_tag_push_name_3byte with arms for all new tags. Commit d9ac5c2. |
-| 4  | OPEN     | mr_tab cap-32 — deferred (low-priority MEDIUM). |
+| 4  | FIXED    | mr_tab_add overflow now folds the turbofish call to AST_ERR(71001) at parse time; runtime SIGILL carries the doc-reserved trap id instead of the 99001 fallback. Regression test in test_codegen.py exercises a 6×6 = 36 instantiation chain (>32 cap). Commit 505b4de. |
 | 5  | FIXED    | pack_lo collision — resolved by Finding 2 fix; distinct tags now produce distinct pack_lo. Commit d9ac5c2. |
 | 6  | FIXED    | parse_pattern fallback emits AST_ERR(62002). emit_pattern_test dispatches tag-99 → emit_trap_with_id. Commit 8574fa8. |
 | 7  | OPEN     | PAT_LIT 32-bit cmp on wide scrut — deferred (MEDIUM, needs width-aware emitters). |
