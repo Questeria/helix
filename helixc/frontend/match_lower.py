@@ -51,9 +51,60 @@ def lower_matches(prog: A.Program) -> A.Program:
     # generate identical fresh names.
     _FRESH_COUNTER[0] = 0
     for item in prog.items:
-        if isinstance(item, A.FnDecl):
-            _rewrite_block(item.body)
+        _rewrite_item(item)
     return prog
+
+
+def _rewrite_item(item: A.Item) -> None:
+    """Stage 28.9 cycle 16 audit-A C16-1 fix (conf 86): outer-walker
+    exhaustive dispatch over all Item subclasses that can contain
+    Match-bearing expressions.
+
+    Pre-fix: only FnDecl.body was walked. ConstDecl.value, ImplBlock.
+    methods[].body, ModBlock.items, AgentDecl.methods[].body all
+    silently slipped through — a `const X = match flag { ... };`
+    survived past lower_matches and tripped lower_ast's assertion at
+    line 1908. The downstream-fixed gap is now mirrored at the source.
+
+    Same defect class as C4-1 (Assign.target), C7-1 (TileLit), C22-C
+    (UnsafeBlock/Range/Modify), but on the OUTER item-walker rather
+    than the inner expression walker. Same fix discipline: explicit
+    arms for every Item subclass + a loud NotImplementedError catchall."""
+    if isinstance(item, A.FnDecl):
+        if not item.is_extern:
+            _rewrite_block(item.body)
+    elif isinstance(item, A.ConstDecl):
+        # ConstDecl.value is an Expr — may contain Match.
+        item.value = _rewrite_expr(item.value)
+    elif isinstance(item, A.ImplBlock):
+        # ImplBlock.methods are FnDecls; recurse.
+        for m in item.methods:
+            _rewrite_item(m)
+    elif isinstance(item, A.ModBlock):
+        # ModBlock.items is a nested list of Items; recurse.
+        for sub in item.items:
+            _rewrite_item(sub)
+    elif isinstance(item, A.AgentDecl):
+        # AgentDecl.methods are FnDecls; recurse.
+        for m in item.methods:
+            _rewrite_item(m)
+    elif isinstance(item, (A.StructDecl, A.EnumDecl, A.ModuleDecl, A.UseDecl)):
+        # Leaf decls with no Expr-bearing children at Phase-0.
+        # StructDecl.fields are TyNodes; EnumDecl.variants are payload
+        # tag/type metadata; ModuleDecl/UseDecl are metadata-only.
+        pass
+    else:
+        # Loud failure for unknown Item subclass — symmetric to
+        # _pattern_test_expr's NotImplementedError catchall, so future
+        # Item types force an explicit dispatch decision.
+        span_str = (f"{item.span.line}:{item.span.col}"
+                    if getattr(item, "span", None) else "?")
+        raise NotImplementedError(
+            f"_rewrite_item at {span_str}: unhandled Item subclass "
+            f"{type(item).__name__}; add an explicit arm in match_lower.py "
+            f"to declare whether it carries Match-bearing exprs. "
+            f"(helixc internal bug — please file an issue.)"
+        )
 
 
 # Walker: replaces Match expressions with desugared If chains.
