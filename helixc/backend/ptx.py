@@ -156,9 +156,17 @@ class PtxEmitter:
 
     def _ptx_type_str(self, ty: tir.TIRType) -> str:
         if isinstance(ty, tir.TIRScalar):
+            # Audit 28.8 cycle 21 C20-1 (HIGH): pointer-width aliases
+            # isize/usize must be 64-bit (matching typecheck.py canon
+            # + the cycle-19 backend classifier fix + cycle-20 const_fold
+            # fix). Pre-fix the `.get(..., ".b32")` silently fell back
+            # to 32-bit for isize/usize. Same defect class as C13-1/
+            # C16-1/C18-1/C19-1 — silent narrowing where one backend's
+            # width contract disagreed with the canon.
             mapping = {
                 "i8": ".b8", "i16": ".b16", "i32": ".b32", "i64": ".b64",
                 "u8": ".b8", "u16": ".b16", "u32": ".b32", "u64": ".b64",
+                "isize": ".b64", "usize": ".b64",
                 "bool": ".pred",
                 "f16": ".f16", "bf16": ".bf16", "f32": ".f32", "f64": ".f64",
             }
@@ -324,12 +332,19 @@ class PtxEmitter:
         self._line(f"    // TODO: {op.kind.value}")
 
     # Stage 16 — helpers for HBM addressing.
+    # Audit 28.8 cycle 21 C20-1 (HIGH): include isize/usize as 8-byte
+    # entries to match the canonical 64-bit treatment established by
+    # typecheck.py / x86_64 backend / const_fold. Pre-fix the `.get`
+    # default at line 343 silently fell back to 4 bytes, producing
+    # wrong stride for tensor<isize, ...> HBM tile elements.
     _DTYPE_SIZE = {"i8": 1, "u8": 1, "i16": 2, "u16": 2, "f16": 2, "bf16": 2,
-                    "i32": 4, "u32": 4, "f32": 4, "i64": 8, "u64": 8, "f64": 8}
+                    "i32": 4, "u32": 4, "f32": 4, "i64": 8, "u64": 8, "f64": 8,
+                    "isize": 8, "usize": 8}
     _DTYPE_PTX_LOAD = {"i8": "s8", "u8": "u8", "i16": "s16", "u16": "u16",
                         "f16": "f16", "bf16": "bf16",
                         "i32": "s32", "u32": "u32", "f32": "f32",
-                        "i64": "s64", "u64": "u64", "f64": "f64"}
+                        "i64": "s64", "u64": "u64", "f64": "f64",
+                        "isize": "s64", "usize": "u64"}
 
     def _dtype_size(self, dtype: str) -> int:
         return self._DTYPE_SIZE.get(dtype, 4)
@@ -339,9 +354,11 @@ class PtxEmitter:
 
     def _ld_reg_prefix(self, dtype: str) -> str:
         # Pick a sensible register pool by dtype family.
+        # Audit 28.8 cycle 21 C20-1: include isize/usize in the
+        # 64-bit register pool ('rd') alongside i64/u64.
         if dtype in ("f16", "bf16", "f32", "f64"):
             return "f"
-        if dtype in ("i64", "u64"):
+        if dtype in ("i64", "u64", "isize", "usize"):
             return "rd"
         return "r"
 

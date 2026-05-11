@@ -234,6 +234,34 @@ def test_hbm_subtract_uses_sub_f32():
     assert "sub.f32" in out
 
 
+def test_c20_1_isize_usize_treated_as_64_bit_in_ptx():
+    """Audit 28.8 cycle 21 C20-1 (HIGH): PTX backend width-keyed tables
+    must treat isize/usize as 64-bit, matching typecheck.py canon.
+
+    Pre-fix `_DTYPE_SIZE.get("isize", 4)` returned 4, `_ptx_type_str`
+    returned `.b32`, and `_ld_reg_prefix("isize")` returned `"r"` (32-bit
+    pool) — silently 32-bit-narrowing isize values in PTX output."""
+    from helixc.backend.ptx import PtxEmitter
+    from helixc.ir import tir
+    # Probe class-level tables directly.
+    assert PtxEmitter._DTYPE_SIZE["isize"] == 8
+    assert PtxEmitter._DTYPE_SIZE["usize"] == 8
+    assert PtxEmitter._DTYPE_SIZE["i64"] == 8
+    assert PtxEmitter._DTYPE_PTX_LOAD["isize"] == "s64"
+    assert PtxEmitter._DTYPE_PTX_LOAD["usize"] == "u64"
+    # _ptx_type_str via instance.
+    em = PtxEmitter.__new__(PtxEmitter)  # bare instance (no __init__ side-effects)
+    isize_ty = tir.TIRScalar(name="isize")
+    usize_ty = tir.TIRScalar(name="usize")
+    assert em._ptx_type_str(isize_ty) == ".b64"
+    assert em._ptx_type_str(usize_ty) == ".b64"
+    # _ld_reg_prefix — isize/usize should pick the 64-bit `rd` pool.
+    assert em._ld_reg_prefix("isize") == "rd"
+    assert em._ld_reg_prefix("usize") == "rd"
+    assert em._ld_reg_prefix("i64") == "rd"
+    assert em._ld_reg_prefix("i32") == "r"
+
+
 def main():
     tests = [(name, fn) for name, fn in globals().items()
              if name.startswith("test_") and callable(fn)]
