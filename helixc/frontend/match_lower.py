@@ -144,6 +144,13 @@ def _rewrite_expr(expr: A.Expr) -> A.Expr:
         expr.value = _rewrite_expr(expr.value)
         return expr
     if isinstance(expr, A.Assign):
+        # Stage 28.9 cycle 4 C4-1 fix (conf 88): Assign.target is also
+        # an Expr (e.g. `arr[match x { ... }] = v`). The prior arm
+        # traversed only `value`, so a Match nested in the lvalue
+        # escaped desugaring and tripped lower_ast's "Match should not
+        # reach _lower_expr" assertion. Same defect class as C22-C
+        # (UnsafeBlock/Range/Modify gap).
+        expr.target = _rewrite_expr(expr.target)
         expr.value = _rewrite_expr(expr.value)
         return expr
     if isinstance(expr, A.TupleLit):
