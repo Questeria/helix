@@ -32,7 +32,7 @@ from copy import deepcopy
 from typing import Optional
 
 from . import ast_nodes as A
-from .monomorphize import _mangle_ty, substitute_ty
+from .monomorphize import _mangle_ty, substitute_ty, ShapeFoldError
 
 
 TRAP_PARAM_STRUCT_UNINSTANTIATED = 28001
@@ -370,6 +370,19 @@ def _ty_key(t: A.TyNode):
                 _ty_key(t.dtype),
                 tuple(_shape_key(s) for s in t.shape),
                 _marker_key(t.memspace))
+    # Audit 28.8 cycle 3 D6: callers must always pass AST TyNode
+    # instances (not resolved typecheck.Type instances like TyDiff,
+    # TyLogic, TyQuote, TyMemTier). The AST forms appear here as
+    # TyGeneric(base='D'/'Logic'/'Quote'/...) and dedupe correctly
+    # via the TyGeneric arm above. If a resolved Type is passed, the
+    # fall-through to a name-only key would collapse `D<i32>` and
+    # `D<f64>` to the same key. Raise loud rather than silently dedup.
+    if not isinstance(t, A.TyNode):
+        raise TypeError(
+            f"_ty_key requires an AST TyNode, got "
+            f"{type(t).__name__!r} — pass AST form (TyGeneric, etc.) "
+            f"not resolved typecheck.Type"
+        )
     return ("?", type(t).__name__)
 
 
@@ -421,16 +434,31 @@ def monomorphize_structs(prog: A.Program) -> tuple[A.Program, list[str]]:
     mono_decls: list[A.StructDecl] = []
     rewrite_map: dict[tuple, str] = {}  # (struct_name, key-tuple) -> mangled
 
+    # Audit 28.8 cycle 3 C3-4: dedup mangled names against existing
+    # StructDecls so a second invocation on the same Program (e.g.
+    # check.py followed by x86_64 CLI driver) doesn't append duplicate
+    # `Pt__i32` decls into prog.items.
+    existing = {
+        it.name for it in prog.items if isinstance(it, A.StructDecl)
+    }
+
     for (sname, ty_args) in uses:
         try:
             inst = instantiate(generic_structs[sname], ty_args)
+        except ShapeFoldError as e:
+            # Audit 28.8 cycle 3 C3-6: shape-time / by 0 or % by 0 now
+            # surfaces a hard diagnostic instead of silently leaving the
+            # Binary unfolded (downstream defaults length to 0).
+            diags.append(str(e))
+            continue
         except ValueError as e:
             diags.append(str(e))
             continue
         key = (sname, tuple(_ty_key(a) for a in ty_args))
-        if key not in rewrite_map:
+        if key not in rewrite_map and inst.name not in existing:
             rewrite_map[key] = inst.name
             mono_decls.append(inst)
+            existing.add(inst.name)
 
     # Append mono'd structs to the program. Uses are *not* rewritten
     # in this Phase-0 pass — the typechecker can lookup mangled names
