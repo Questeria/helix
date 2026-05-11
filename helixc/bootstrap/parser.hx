@@ -1806,6 +1806,16 @@ fn parse_closure_lit(tok_base: i32, sb: i32) -> i32 {
             // Audit 28.8 B4: probe captured var's type tag. Tag 0 = i32
             // (the only safe Phase-0 case); any other value (including
             // -1 = not-tracked) means we'd be silently truncating.
+            //
+            // Audit 28.8 cycle 3 D2: extend the let-inference to also
+            // tag Call-RHS / non-literal-RHS lets with a "potentially
+            // non-i32" sentinel (tag 12) so trap 76003 fires for the
+            // common idiom `let pi = get_pi(); let c = |x| x + pi;`.
+            // The capture-site guard stays `> 0`; the change is at the
+            // let-inference site below — Call RHS now registers tag 12
+            // unless the user wrote an explicit annotation. Function
+            // params remain untracked (-1) and still pass cleanly so
+            // we don't over-trap legitimate i32 param captures.
             let cap_ty_tag = var_type_tab_lookup(sb, ns, nl);
             if cap_ty_tag > 0 {
                 nonint_capture = 1;
@@ -2312,7 +2322,16 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
                     inferred_ty_tag = 11;            // i16
                 } else { if val_tag == 41 {
                     inferred_ty_tag = 8;             // u16
-                };};};};};};};};};};};
+                } else { if val_tag == 16 {
+                    // Audit 28.8 cycle 3 D2: Call RHS — we don't know
+                    // the return type without a typechecker, but it's
+                    // NOT a trivially-i32 literal, so we register a
+                    // sentinel tag (12) that means "untracked-call,
+                    // assume non-i32 for closure-capture trap purposes."
+                    // This makes `let pi = get_pi(); let c = |x| x + pi;`
+                    // trap 76003 instead of silently capturing pi as i32.
+                    inferred_ty_tag = 12;            // untracked-call sentinel
+                };};};};};};};};};};};};
                 // Register the inferred tag so var_type_tab_lookup at
                 // closure-capture sites can detect the non-i32 case
                 // (trap 76003). We DO NOT shadow let_ty_tag because the
