@@ -360,8 +360,15 @@ def _rewrite_in_expr(expr: A.Expr, fn_by_name: dict[str, A.FnDecl],
         expr.cond = new_cond
         c_then = _rewrite_in_block(expr.then, fn_by_name, new_fns)
         c_else = 0
-        if expr.else_ is not None and isinstance(expr.else_, A.Block):
-            c_else = _rewrite_in_block(expr.else_, fn_by_name, new_fns)
+        # Audit 28.8 cycle 3 C3-1: handle chained `else if` (else_ is A.If),
+        # not just `else { ... }` (else_ is A.Block). Mirror _resolve_in_expr.
+        if expr.else_ is not None:
+            if isinstance(expr.else_, A.Block):
+                c_else = _rewrite_in_block(expr.else_, fn_by_name, new_fns)
+            elif isinstance(expr.else_, A.If):
+                new_else, c_else = _rewrite_in_expr(
+                    expr.else_, fn_by_name, new_fns)
+                expr.else_ = new_else
         return (expr, c_cond + c_then + c_else)
     if isinstance(expr, A.Match):
         # Recurse into the scrutinee + each arm body. This lets grad calls

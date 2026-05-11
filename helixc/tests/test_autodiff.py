@@ -523,6 +523,29 @@ def test_c2_4_grad_in_range_bound_rewritten():
     assert "loss__grad" in names
 
 
+def test_c3_1_grad_in_chained_else_if_rewritten():
+    """C3-1: `if a {...} else if b { grad(loss)(...) } else {...}` —
+    the chained `else if` body must be walked. Pre-fix _rewrite_in_expr's
+    A.If arm only handled else_ = Block, silently skipping else_ = If."""
+    from helixc.frontend.grad_pass import grad_pass
+    src = (
+        "@pure fn loss(x: f32) -> f32 { x * x }\n"
+        "fn use_chained(a: bool, b: bool) -> f32 {\n"
+        "    if a { 0.0 } else if b { grad(loss)(3.14) } else { 1.0 }\n"
+        "}\n"
+    )
+    prog = parse(src)
+    rewrites = grad_pass(prog)
+    assert rewrites >= 1, (
+        f"expected >=1 grad rewrite in chained else-if, got {rewrites}"
+    )
+    names = _names_in_prog(prog)
+    assert "loss__grad" in names, (
+        f"expected loss__grad after chained-else-if rewrite; "
+        f"names={sorted(names)}"
+    )
+
+
 # ============================================================================
 # Test runner
 # ============================================================================
