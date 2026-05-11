@@ -8,7 +8,8 @@ documentation marker (no compile-time effect; surface for --doc).
 CLI integration:
   * `-Wdeprecated`        => warn (default)
   * `-Wdeprecated=error`  => promote warnings to errors (handled in
-                              helixc/check.py via prog._deprecation_warnings)
+                              helixc/check.py — the caller stores the
+                              returned list locally)
 
 Trap-id reservations: none — warnings only.
 
@@ -18,7 +19,12 @@ Phase-0:
   * deprecation_msg(fn) -> Optional[str] reads the message back.
   * find_deprecated_decls(prog) -> {name: msg}.
   * find_deprecation_call_sites(prog) -> [(callee_name, span, msg)].
-  * emit_warnings(prog) attaches a list to prog._deprecation_warnings.
+  * emit_warnings(prog) returns a list of warning strings. The CLI
+    driver (`helixc/check.py`) stores the result locally; we no longer
+    monkey-patch an undeclared `_deprecation_warnings` attribute onto
+    A.Program (Audit 28.8 C1-M1 — coupling AST data model to pass
+    output meant a second `emit_warnings` call silently overwrote
+    the first).
 
 License: Apache 2.0
 """
@@ -149,10 +155,19 @@ def find_deprecation_call_sites(prog: A.Program) -> list[tuple[str, A.Span, str]
 
 
 def emit_warnings(prog: A.Program) -> list[str]:
-    """Run the @deprecated pass; attach a list of warning strings to
-    `prog._deprecation_warnings` (also returns it). The CLI / driver
-    reads this attribute to decide whether to log warnings, escalate
-    to errors via `-Wdeprecated=error`, etc."""
+    """Run the @deprecated pass; return a list of warning strings.
+
+    The CLI / driver decides whether to log warnings, escalate to
+    errors via `-Wdeprecated=error`, etc.
+
+    Audit 28.8 C1-M1: prior versions monkey-patched
+    `prog._deprecation_warnings = out` — an undeclared attribute on the
+    Program dataclass that caused a second `emit_warnings(prog)` call
+    to silently overwrite the first. The pass now ONLY returns the
+    list; callers must store it locally. This decouples the AST data
+    model from analysis-pass output, and makes multiple invocations
+    on the same program well-defined.
+    """
     sites = find_deprecation_call_sites(prog)
     out: list[str] = []
     for name, span, msg in sites:
@@ -164,6 +179,4 @@ def emit_warnings(prog: A.Program) -> list[str]:
             out.append(
                 f"{span.line}:{span.col}: call to deprecated {name!r}"
             )
-    # Stash on prog so helixc/check.py can pick up.
-    prog._deprecation_warnings = out
     return out

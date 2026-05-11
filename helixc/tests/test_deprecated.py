@@ -101,15 +101,24 @@ fn safe() -> i32 { 42 }
     assert out == []
 
 
-def test_emit_warnings_attached_to_prog():
+def test_emit_warnings_returns_list():
+    """Audit 28.8 C1-M1: emit_warnings should return its list, NOT
+    monkey-patch `_deprecation_warnings` onto A.Program. Verify the
+    return is the source of truth and multiple calls are idempotent."""
     src = """
 @deprecated fn d() -> i32 { 0 }
 fn u() -> i32 { d() }
 """
     prog = parse(src)
-    emit_warnings(prog)
-    assert hasattr(prog, "_deprecation_warnings")
-    assert len(prog._deprecation_warnings) == 1
+    first = emit_warnings(prog)
+    assert isinstance(first, list)
+    assert len(first) == 1
+    # Re-invocation: same result. The pass no longer mutates prog.
+    second = emit_warnings(prog)
+    assert second == first
+    # The monkey-patched attribute should NOT exist (caller-store model).
+    assert not hasattr(prog, "_deprecation_warnings"), \
+        "emit_warnings must not couple AST to pass output (Audit 28.8 C1-M1)"
 
 
 def test_cli_deprecated_warning_logged(capsys, tmp_path):
