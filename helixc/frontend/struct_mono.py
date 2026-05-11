@@ -32,7 +32,17 @@ from copy import deepcopy
 from typing import Optional
 
 from . import ast_nodes as A
+from .ast_walker import ASTVisitor
 from .monomorphize import _mangle_ty, substitute_ty, ShapeFoldError
+
+
+# Stage 28.8.2: struct_mono's body walker (formerly `visit_expr` — a
+# 130-LoC isinstance cascade nested inside `collect_concrete_uses`)
+# migrated to ASTVisitor. The remaining bespoke handling is for
+# **type fields** (Cast.target_ty, Name.generics, TileLit.dtype) and
+# the dedicated `visit_ty` recursion — those keep the existing
+# implementation because they're orthogonal to the read-only walker
+# contract.
 
 
 TRAP_PARAM_STRUCT_UNINSTANTIATED = 28001
@@ -120,155 +130,63 @@ def collect_concrete_uses(prog: A.Program,
             visit_ty(t.dtype)
             return
 
-    def visit_expr(e) -> None:
-        """Body walker — recurses through expressions to find embedded
-        TyGeneric uses (Cast.target_ty, Let.ty, callee generics on
-        Name)."""
-        if e is None:
-            return
-        # Cast carries a target type that may name a generic struct.
-        if isinstance(e, A.Cast):
-            visit_ty(e.target_ty)
-            visit_expr(e.value)
-            return
-        # Block: walk stmts + final_expr
-        if isinstance(e, A.Block):
-            for s in e.stmts:
-                visit_stmt(s)
-            if e.final_expr is not None:
-                visit_expr(e.final_expr)
-            return
-        if isinstance(e, A.UnsafeBlock):
-            visit_expr(e.body)
-            return
-        if isinstance(e, A.If):
-            visit_expr(e.cond)
-            visit_expr(e.then)
-            if e.else_ is not None:
-                visit_expr(e.else_)
-            return
-        if isinstance(e, A.Match):
-            visit_expr(e.scrutinee)
-            for arm in e.arms:
-                if arm.guard is not None:
-                    visit_expr(arm.guard)
-                visit_expr(arm.body)
-            return
-        if isinstance(e, A.For):
-            visit_expr(e.iter_expr)
-            visit_expr(e.body)
-            return
-        if isinstance(e, (A.While,)):
-            visit_expr(e.cond)
-            visit_expr(e.body)
-            return
-        if isinstance(e, A.Loop):
-            visit_expr(e.body)
-            return
-        if isinstance(e, A.Binary):
-            visit_expr(e.left)
-            visit_expr(e.right)
-            return
-        if isinstance(e, A.Unary):
-            visit_expr(e.operand)
-            return
-        if isinstance(e, A.Call):
-            visit_expr(e.callee)
-            for a in e.args:
-                visit_expr(a)
-            return
-        if isinstance(e, A.Index):
-            visit_expr(e.callee)
-            for idx in e.indices:
-                visit_expr(idx)
-            return
-        if isinstance(e, A.Field):
-            visit_expr(e.obj)
-            return
-        if isinstance(e, A.TupleLit):
-            for elem in e.elems:
-                visit_expr(elem)
-            return
-        if isinstance(e, A.ArrayLit):
-            for elem in e.elems:
-                visit_expr(elem)
-            return
-        if isinstance(e, A.StructLit):
-            # StructLit doesn't carry an explicit type-arg list in the
-            # current AST, but its base name may match a generic struct
-            # — we *don't* instantiate here (no concrete args available);
-            # the Let-stmt type annotation is the reliable path. This
-            # branch still walks each field expression for nested uses.
-            for (_n, fexpr) in e.fields:
-                visit_expr(fexpr)
-            return
-        if isinstance(e, A.Assign):
-            visit_expr(e.target)
-            visit_expr(e.value)
-            return
-        if isinstance(e, A.Return):
-            if e.value is not None:
-                visit_expr(e.value)
-            return
-        if isinstance(e, A.Break):
-            if e.value is not None:
-                visit_expr(e.value)
-            return
-        if isinstance(e, A.Range):
-            if e.start is not None:
-                visit_expr(e.start)
-            if e.end is not None:
-                visit_expr(e.end)
-            return
-        if isinstance(e, A.Name):
-            # Generic args attached to a name reference (e.g.
-            # `Foo::<i32>::new`) — walk them so Pt::<i32>::new collects
-            # the Pt<i32> use.
-            for g in getattr(e, "generics", []) or []:
+    class _BodyVisitor(ASTVisitor):
+        """Stage 28.8.2: body walker for generic struct use collection.
+
+        Drop-in replacement for the pre-fix 130-LoC isinstance cascade.
+        The base class's generic_visit handles every Expr/Stmt child
+        via dataclass-field introspection; the overrides below add
+        the **type-field** hooks that the read-only walker contract
+        skips by default (Cast.target_ty, Name.generics, TileLit.dtype,
+        Let.ty, ConstStmt.ty).
+        """
+
+        def visit_Cast(self, node: A.Cast) -> None:
+            # Cast.target_ty may name a generic struct: `x as Pt<i32>`.
+            visit_ty(node.target_ty)
+            # generic_visit recurses into node.value after this returns.
+
+        def visit_Name(self, node: A.Name) -> None:
+            # Stage 28.8.2: explicit generics-arg walking
+            # (`Foo::<i32>::new` — node.generics may carry TyNodes that
+            # name generic structs).
+            for g in getattr(node, "generics", []) or []:
                 visit_ty(g)
-            return
-        # Reflection nodes — Quote/Splice/Modify embed inner exprs.
-        if isinstance(e, A.Quote):
-            visit_expr(e.inner)
-            return
-        if isinstance(e, A.Splice):
-            visit_expr(e.inner)
-            return
-        if isinstance(e, A.Modify):
-            visit_expr(e.target)
-            visit_expr(e.transformation)
-            visit_expr(e.verifier)
-            return
-        # Audit 28.8 cycle 2 (deferred observation #23): TileLit
-        # `tile<Pt<i32>, [4, 4], REG>::zeros()` embeds a TyNode
-        # dtype that may be a generic struct use. Pre-fix this was
-        # silently skipped — Pt<i32> never got monomorphized through
-        # the TileLit path.
-        if isinstance(e, A.TileLit):
-            visit_ty(e.dtype)
-            for s in e.shape:
-                visit_expr(s)
-            visit_expr(e.memspace)
-            return
-        # Literals + leaf nodes — no-op.
-        return
+
+        def visit_TileLit(self, node: A.TileLit) -> None:
+            # Audit 28.8 cycle 2 deferred-23: TileLit
+            # `tile<Pt<i32>, [4, 4], REG>::zeros()` embeds a TyNode
+            # dtype that may be a generic struct use.
+            visit_ty(node.dtype)
+            # generic_visit recurses into shape + memspace + init.
+
+        def visit_Let(self, node: A.Let) -> None:
+            # Let.ty is a TyNode (skipped by default ASTVisitor); we
+            # need to walk it for generic-struct uses.
+            if node.ty is not None:
+                visit_ty(node.ty)
+            # generic_visit recurses into node.value.
+
+        def visit_ConstStmt(self, node: A.ConstStmt) -> None:
+            # Same as Let — ConstStmt.ty is a TyNode.
+            visit_ty(node.ty)
+            # generic_visit recurses into node.value.
+
+    _body_visitor = _BodyVisitor()
+
+    def visit_expr(e) -> None:
+        """Thin shim retained for callers that still spell
+        ``visit_expr(...)``. Stage 28.8.2: implementation is now
+        ``_BodyVisitor(ASTVisitor)`` — see the class above. The shim
+        is kept so the file's two remaining call sites
+        (FnDecl body walk, ConstDecl init walk below) read naturally.
+        """
+        _body_visitor.visit(e)
 
     def visit_stmt(s) -> None:
-        if s is None:
-            return
-        if isinstance(s, A.Let):
-            if s.ty is not None:
-                visit_ty(s.ty)
-            if s.value is not None:
-                visit_expr(s.value)
-            return
-        if isinstance(s, A.ExprStmt):
-            visit_expr(s.expr)
-            return
-        if isinstance(s, A.ConstStmt):
-            visit_ty(s.ty)
-            visit_expr(s.value)
-            return
+        """Thin shim retained for symmetry with ``visit_expr``.
+        Stage 28.8.2: delegates to the ASTVisitor body visitor."""
+        _body_visitor.visit(s)
 
     for it in prog.items:
         if isinstance(it, A.FnDecl):
