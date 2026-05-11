@@ -361,5 +361,317 @@ fn bad(p: Pt<i32, f64>) -> i32 { 0 }
     assert isinstance(p_ty, TyUnknown)
 
 
+# ----------------------------------------------------------------------
+# Audit 28.8 A13 — _ty_key proper arms (no collapse to "?")
+# ----------------------------------------------------------------------
+def test_ty_key_distinguishes_tyfn_params():
+    """Audit 28.8 A13: pre-fix, every TyFn collapsed to ('?', 'TyFn').
+    `Pt<fn(i32)->i32>` and `Pt<fn(f32)->f32>` should produce different
+    keys so the mono pass dedupes correctly."""
+    from helixc.frontend.struct_mono import _ty_key
+    span = A.Span(0, 0)
+    fn_i32 = A.TyFn(
+        span=span,
+        params=[A.TyName(span=span, name="i32")],
+        ret=A.TyName(span=span, name="i32"),
+    )
+    fn_f32 = A.TyFn(
+        span=span,
+        params=[A.TyName(span=span, name="f32")],
+        ret=A.TyName(span=span, name="f32"),
+    )
+    k1 = _ty_key(fn_i32)
+    k2 = _ty_key(fn_f32)
+    assert k1 != k2
+    # Both must be hashable.
+    assert hash(k1) != hash(k2)
+
+
+def test_ty_key_distinguishes_tytensor_shape():
+    """TyTensor with different shapes must produce different keys."""
+    from helixc.frontend.struct_mono import _ty_key
+    span = A.Span(0, 0)
+    t16 = A.TyTensor(
+        span=span,
+        dtype=A.TyName(span=span, name="f32"),
+        shape=[A.IntLit(span=span, value=16, type_suffix=None)],
+    )
+    t32 = A.TyTensor(
+        span=span,
+        dtype=A.TyName(span=span, name="f32"),
+        shape=[A.IntLit(span=span, value=32, type_suffix=None)],
+    )
+    assert _ty_key(t16) != _ty_key(t32)
+
+
+def test_ty_key_distinguishes_tytile_memspace():
+    """TyTile with different memspaces must produce different keys
+    (per A13: shape AND memspace participate in the key)."""
+    from helixc.frontend.struct_mono import _ty_key
+    span = A.Span(0, 0)
+    t_smem = A.TyTile(
+        span=span,
+        dtype=A.TyName(span=span, name="f32"),
+        shape=[A.IntLit(span=span, value=16, type_suffix=None)],
+        memspace=A.Name(span=span, name="smem", generics=[]),
+    )
+    t_hbm = A.TyTile(
+        span=span,
+        dtype=A.TyName(span=span, name="f32"),
+        shape=[A.IntLit(span=span, value=16, type_suffix=None)],
+        memspace=A.Name(span=span, name="hbm", generics=[]),
+    )
+    assert _ty_key(t_smem) != _ty_key(t_hbm)
+
+
+def test_ty_key_ptr_distinct_inner():
+    """Audit 28.8 B6 / A13: TyPtr keys differ by inner type AND by
+    mutability so generics over raw ptrs dedupe correctly."""
+    from helixc.frontend.struct_mono import _ty_key
+    span = A.Span(0, 0)
+    p_i32_const = A.TyPtr(
+        span=span,
+        inner=A.TyName(span=span, name="i32"),
+        is_mut=False,
+    )
+    p_i32_mut = A.TyPtr(
+        span=span,
+        inner=A.TyName(span=span, name="i32"),
+        is_mut=True,
+    )
+    p_f64_const = A.TyPtr(
+        span=span,
+        inner=A.TyName(span=span, name="f64"),
+        is_mut=False,
+    )
+    # const vs mut must differ; same const but different inner must differ.
+    assert _ty_key(p_i32_const) != _ty_key(p_i32_mut)
+    assert _ty_key(p_i32_const) != _ty_key(p_f64_const)
+
+
+# ----------------------------------------------------------------------
+# Audit 28.8 B6 — substitute_ty TyPtr arm
+# ----------------------------------------------------------------------
+def test_substitute_ty_ptr_substitutes_inner():
+    """Audit 28.8 B6: substitute_ty must walk into TyPtr.inner so
+    `*const T` mono'd against T=f64 becomes `*const f64`, not stays
+    `*const T` (which downstream lower-ast would silently default
+    to *const i32)."""
+    from helixc.frontend.monomorphize import substitute_ty
+    span = A.Span(0, 0)
+    ptr_T = A.TyPtr(
+        span=span,
+        inner=A.TyName(span=span, name="T"),
+        is_mut=False,
+    )
+    subst = {"T": A.TyName(span=span, name="f64")}
+    result = substitute_ty(ptr_T, subst)
+    assert isinstance(result, A.TyPtr)
+    assert result.is_mut is False
+    assert isinstance(result.inner, A.TyName)
+    assert result.inner.name == "f64"
+
+
+def test_substitute_ty_ptr_preserves_mut():
+    """*mut T mono'd preserves is_mut."""
+    from helixc.frontend.monomorphize import substitute_ty
+    span = A.Span(0, 0)
+    ptr_mut_T = A.TyPtr(
+        span=span,
+        inner=A.TyName(span=span, name="T"),
+        is_mut=True,
+    )
+    result = substitute_ty(ptr_mut_T, {"T": A.TyName(span=span, name="i32")})
+    assert isinstance(result, A.TyPtr)
+    assert result.is_mut is True
+    assert result.inner.name == "i32"
+
+
+# ----------------------------------------------------------------------
+# Audit 28.8 B7 — instantiate preserves where_clauses and is_extern
+# ----------------------------------------------------------------------
+def test_instantiate_preserves_extern():
+    """Audit 28.8 B7: cloned generic fn keeps is_extern + extern_abi
+    so `extern "C" fn malloc<T>(...) -> *mut T` mono'd to
+    `malloc__i32` is still recognized as extern by codegen."""
+    from helixc.frontend.monomorphize import Monomorphizer
+    span = A.Span(0, 0)
+    extern_fn = A.FnDecl(
+        span=span, name="alloc",
+        generics=[A.GenericParam(span=span, name="T", kind="type")],
+        params=[A.FnParam(span=span, name="n",
+                          ty=A.TyName(span=span, name="usize"),
+                          is_mut=False)],
+        return_ty=A.TyPtr(
+            span=span,
+            inner=A.TyName(span=span, name="T"),
+            is_mut=True,
+        ),
+        where_clauses=[],
+        body=A.Block(span=span, stmts=[], final_expr=None),
+        attrs=[],
+        is_pub=False,
+        is_extern=True,
+        extern_abi="C",
+    )
+    # Synthesize a caller that triggers monomorphization.
+    main_fn = A.FnDecl(
+        span=span, name="main", generics=[], params=[],
+        return_ty=A.TyName(span=span, name="i32"),
+        where_clauses=[],
+        body=A.Block(
+            span=span,
+            stmts=[A.ExprStmt(
+                span=span,
+                expr=A.Call(
+                    span=span,
+                    callee=A.Name(span=span, name="alloc",
+                                  generics=[A.TyName(span=span, name="i32")]),
+                    args=[A.IntLit(span=span, value=8,
+                                   type_suffix=None)],
+                ),
+            )],
+            final_expr=A.IntLit(span=span, value=0, type_suffix=None),
+        ),
+        attrs=[], is_pub=False,
+    )
+    prog = A.Program(module=None, items=[extern_fn, main_fn])
+    Monomorphizer(prog).run()
+    cloned = [it for it in prog.items
+              if isinstance(it, A.FnDecl) and it.name == "alloc__i32"]
+    assert len(cloned) == 1
+    clone = cloned[0]
+    assert clone.is_extern is True
+    assert clone.extern_abi == "C"
+
+
+def test_instantiate_deep_copies_where_clauses():
+    """Audit 28.8 B7: cloned fn's where_clauses must be a new list
+    distinct from the template's, so downstream passes that walk the
+    clone's clauses don't see template-shape (with TyVars still
+    present)."""
+    from helixc.frontend.monomorphize import Monomorphizer
+    span = A.Span(0, 0)
+    template = A.FnDecl(
+        span=span, name="f",
+        generics=[A.GenericParam(span=span, name="T", kind="type")],
+        params=[A.FnParam(span=span, name="x",
+                          ty=A.TyName(span=span, name="T"),
+                          is_mut=False)],
+        return_ty=A.TyName(span=span, name="T"),
+        where_clauses=[A.WhereClause(
+            span=span,
+            constraint=A.IntLit(span=span, value=0, type_suffix=None),
+        )],
+        body=A.Block(
+            span=span, stmts=[],
+            final_expr=A.Name(span=span, name="x", generics=[]),
+        ),
+        attrs=[], is_pub=False,
+    )
+    main_fn = A.FnDecl(
+        span=span, name="main", generics=[], params=[],
+        return_ty=A.TyName(span=span, name="i32"),
+        where_clauses=[],
+        body=A.Block(
+            span=span,
+            stmts=[],
+            final_expr=A.Call(
+                span=span,
+                callee=A.Name(span=span, name="f",
+                              generics=[A.TyName(span=span, name="i32")]),
+                args=[A.IntLit(span=span, value=42, type_suffix=None)],
+            ),
+        ),
+        attrs=[], is_pub=False,
+    )
+    prog = A.Program(module=None, items=[template, main_fn])
+    Monomorphizer(prog).run()
+    cloned = [it for it in prog.items
+              if isinstance(it, A.FnDecl) and it.name == "f__i32"]
+    assert len(cloned) == 1
+    # The clone's where_clauses must be a NEW list (not aliased to
+    # the template's list).
+    assert cloned[0].where_clauses is not template.where_clauses
+    # And same length (no clauses dropped).
+    assert len(cloned[0].where_clauses) == len(template.where_clauses)
+
+
+# ----------------------------------------------------------------------
+# Audit 28.8 B8 — TyTile shape size-param substitution
+# ----------------------------------------------------------------------
+def test_substitute_ty_tile_shape_subs_name_to_int():
+    """Audit 28.8 B8: TyTile<f32, [N], hbm> mono'd against N=128 must
+    produce a clone with shape=[IntLit(128)], not shape=[Name('N')]
+    (which lower-ast then defaults to length 0)."""
+    from helixc.frontend.monomorphize import substitute_ty, _SizeLitMarker
+    span = A.Span(0, 0)
+    tile_ty = A.TyTile(
+        span=span,
+        dtype=A.TyName(span=span, name="f32"),
+        shape=[A.Name(span=span, name="N", generics=[])],
+        memspace=A.Name(span=span, name="hbm", generics=[]),
+    )
+    subst = {"N": _SizeLitMarker(128)}
+    result = substitute_ty(tile_ty, subst)
+    assert isinstance(result, A.TyTile)
+    assert len(result.shape) == 1
+    # After sub, Name('N') in shape becomes IntLit(128).
+    assert isinstance(result.shape[0], A.IntLit)
+    assert result.shape[0].value == 128
+
+
+def test_substitute_ty_tensor_shape_size_param():
+    """Same B8 fix applies to TyTensor.shape."""
+    from helixc.frontend.monomorphize import substitute_ty, _SizeLitMarker
+    span = A.Span(0, 0)
+    tensor_ty = A.TyTensor(
+        span=span,
+        dtype=A.TyName(span=span, name="f64"),
+        shape=[A.Name(span=span, name="M", generics=[]),
+               A.Name(span=span, name="K", generics=[])],
+    )
+    subst = {"M": _SizeLitMarker(64), "K": _SizeLitMarker(32)}
+    result = substitute_ty(tensor_ty, subst)
+    assert isinstance(result, A.TyTensor)
+    assert isinstance(result.shape[0], A.IntLit)
+    assert result.shape[0].value == 64
+    assert isinstance(result.shape[1], A.IntLit)
+    assert result.shape[1].value == 32
+
+
+# ----------------------------------------------------------------------
+# Audit 28.8 B12 — UnsafeBlock walker arm
+# ----------------------------------------------------------------------
+def test_walk_subst_expr_descends_into_unsafe_block():
+    """Audit 28.8 B12: _walk_subst_expr must walk into UnsafeBlock
+    body. Pre-fix, generic fns whose body wrapped a region in `unsafe
+    { ... }` got the body left unsubstituted."""
+    from helixc.frontend.monomorphize import _walk_subst_expr
+    span = A.Span(0, 0)
+    # Synth `unsafe { let x: T = 0; x }`
+    inner_block = A.Block(
+        span=span,
+        stmts=[A.Let(
+            span=span, name="x", is_mut=False,
+            ty=A.TyName(span=span, name="T"),
+            value=A.IntLit(span=span, value=0, type_suffix=None),
+        )],
+        final_expr=A.Name(span=span, name="x", generics=[]),
+    )
+    unsafe = A.UnsafeBlock(span=span, body=inner_block)
+    subst = {"T": A.TyName(span=span, name="f64")}
+    result = _walk_subst_expr(unsafe, subst)
+    # Result must remain an UnsafeBlock (not collapsed to anything else).
+    assert isinstance(result, A.UnsafeBlock)
+    # Inner Block's Let must have T substituted to f64.
+    inner = result.body
+    assert isinstance(inner, A.Block)
+    let_stmt = inner.stmts[0]
+    assert isinstance(let_stmt, A.Let)
+    assert isinstance(let_stmt.ty, A.TyName)
+    assert let_stmt.ty.name == "f64"
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-v"]))

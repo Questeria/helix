@@ -180,6 +180,17 @@ class TySkill(Type):
     task: str = ""        # task identifier (compile-time-known)
 
 
+@dataclass(frozen=True)
+class TyQuote(Type):
+    """Audit 28.8 B10: type of `quote(...)` — a reified AST fragment.
+
+    Phase-0 representation: the inner Type captures the type of the
+    quoted body *as if* it were evaluated in the surrounding scope.
+    Pattern matches Stage-11 reflection — `splice(q)` validates that
+    `q` is `TyQuote`-typed before unwrapping back to the inner type."""
+    inner: Type
+
+
 # ============================================================================
 # Type errors
 # ============================================================================
@@ -596,6 +607,41 @@ class TypeChecker:
                     constraint_labels.append(
                         f"arg {pname!r} dim {axis}: expected {p_lin.pretty()}, "
                         f"got {a_lin.pretty()}"
+                    )
+            elif isinstance(pty, TyTile) and isinstance(aty, TyTile):
+                # Audit 28.8 B8 (trap 16003): tile call-site shape +
+                # memspace must agree. Pre-fix this branch was missing,
+                # so `fn k(t: Tile<f32, [16,16], smem>)` called with
+                # `Tile<f32, [32,32], smem>` (or `[16,16], hbm`) was
+                # silently accepted — the kernel could overrun a 16x16
+                # buffer or read from the wrong memory tier.
+                if pty.memspace != aty.memspace:
+                    self.errors.append(TypeError_(
+                        f"call to {sig.name!r}: arg {pname!r} memspace "
+                        f"mismatch — expected {pty.memspace!r}, got "
+                        f"{aty.memspace!r} (trap 16003)",
+                        call.span,
+                    ))
+                if len(pty.shape) != len(aty.shape):
+                    self.errors.append(TypeError_(
+                        f"call to {sig.name!r}: arg {pname!r} tile rank "
+                        f"{len(aty.shape)}, expected {len(pty.shape)} "
+                        f"(trap 16003)",
+                        call.span,
+                    ))
+                    continue
+                for axis, (pdim, adim) in enumerate(zip(pty.shape, aty.shape)):
+                    p_lin = self._size_type_to_lin(pdim)
+                    a_lin = self._size_type_to_lin(adim)
+                    if p_lin is None or a_lin is None:
+                        continue
+                    diff = p_lin - a_lin
+                    if diff.is_zero():
+                        continue
+                    solver.add_eq_pair(p_lin, a_lin)
+                    constraint_labels.append(
+                        f"arg {pname!r} tile-dim {axis}: expected "
+                        f"{p_lin.pretty()}, got {a_lin.pretty()} (trap 16003)"
                     )
 
         # Add where-clause constraints (translate AST -> LinExpr).
@@ -1293,6 +1339,41 @@ class TypeChecker:
                              "acknowledge the capability requirement",
                     ))
             return tgt_ty
+        # Audit 28.8 B10: typecheck Quote/Splice/Modify arms. Pre-fix
+        # they fell through to `TyUnknown(hint='unhandled Quote/...')`,
+        # which compatible-with-everything per `_compatible` — silent
+        # type-pun at every let-binding site. Now:
+        #   Quote(inner) -> TyQuote(typeof(inner))
+        #   Splice(inner) -> typeof(inner) when inner is TyQuote;
+        #                    diagnostic 11001 otherwise
+        #   Modify(target, transformation, verifier) -> typeof(target)
+        if isinstance(expr, A.Quote):
+            inner_ty = self._check_expr(expr.inner, scope)
+            return TyQuote(inner=inner_ty)
+        if isinstance(expr, A.Splice):
+            inner_ty = self._check_expr(expr.inner, scope)
+            if isinstance(inner_ty, TyQuote):
+                return inner_ty.inner
+            if isinstance(inner_ty, TyUnknown):
+                # Cascade-safe: don't fire a second diagnostic if the
+                # inner was already unbound or had an upstream error.
+                return inner_ty
+            self.errors.append(TypeError_(
+                f"splice() requires a Quote value; got {self._fmt(inner_ty)} "
+                f"(trap 11001)",
+                expr.span,
+                hint="wrap the argument in `quote(...)` first",
+            ))
+            return TyUnknown(hint="splice of non-Quote")
+        if isinstance(expr, A.Modify):
+            # Audit 28.8 B10: typecheck Modify's three sub-exprs (so any
+            # internal errors surface), then return i32 — the runtime
+            # semantics (verifier-gated cell write) yields 1 on apply,
+            # 0 on reject. Pre-fix this fell through to TyUnknown.
+            self._check_expr(expr.target, scope)
+            self._check_expr(expr.transformation, scope)
+            self._check_expr(expr.verifier, scope)
+            return TyPrim("i32")
         return TyUnknown(hint=f"unhandled {type(expr).__name__}")
 
     # ---- bounds checking ----
@@ -1623,6 +1704,8 @@ class TypeChecker:
         if isinstance(t, TySkill):
             tag = f' "{t.task}"' if t.task else ""
             return f"Skill<{self._fmt(t.inner)}{tag}>"
+        if isinstance(t, TyQuote):
+            return f"Quote<{self._fmt(t.inner)}>"
         if isinstance(t, TyUnknown): return f"?{{{t.hint}}}"
         return repr(t)
 

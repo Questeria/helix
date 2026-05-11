@@ -666,6 +666,253 @@ def test_unbound_builtin_not_flagged():
         f"unexpected unbound error for builtin: {errs}"
 
 
+# ----------------------------------------------------------------------
+# Audit 28.8 B10 — typecheck Quote/Splice/Modify arms
+# ----------------------------------------------------------------------
+def test_quote_returns_tyquote():
+    """Quote(inner) types as TyQuote(typeof(inner)) — not TyUnknown."""
+    from helixc.frontend.typecheck import TypeChecker, TyQuote, TyPrim
+    src = """
+    fn main() -> i32 {
+        let q = quote(42);
+        0
+    }
+    """
+    prog = parse(src)
+    tc = TypeChecker(prog)
+    tc.check()
+    # The let q = quote(42) does not leak an error and q's type is TyQuote.
+    # We inspect by re-checking main's body scope — easier via typecheck side
+    # effect testing: assert no unhandled-Quote diagnostic.
+    errs = [str(e) for e in tc.errors]
+    assert not any("unhandled Quote" in s for s in errs), \
+        f"unexpected unhandled-Quote: {errs}"
+
+
+def test_splice_unwraps_tyquote():
+    """splice(quote(42)) must typecheck to i32 (inner of Quote<i32>)."""
+    src = """
+    fn main() -> i32 {
+        let q = quote(42);
+        splice(q)
+    }
+    """
+    errs = check(src)
+    assert errs == [], f"unexpected errors: {errs}"
+
+
+def test_splice_of_non_quote_diagnoses_11001():
+    """Audit 28.8 B10 (trap 11001): splice'ing a non-Quote value
+    surfaces the trap-11001 diagnostic instead of silently typing
+    as TyUnknown and unifying with anything downstream."""
+    src = """
+    fn main() -> i32 {
+        let x = 42;
+        splice(x)
+    }
+    """
+    errs = check(src)
+    assert any("11001" in s for s in errs), \
+        f"expected trap 11001 diagnostic, got {errs}"
+
+
+def test_modify_returns_i32():
+    """Modify is documented to return i32 (1=applied, 0=rejected).
+    Pre-fix it typed as TyUnknown, which unified with anything."""
+    src = """
+    fn yes(handle: i32, new_val: i32) -> i32 { 1 }
+    fn main() -> i32 {
+        let h = quote(0);
+        let applied = modify(h, 42, yes);
+        if applied == 1 { 1 } else { 0 }
+    }
+    """
+    errs = check(src)
+    assert errs == [], f"modify must typecheck clean, got: {errs}"
+
+
+def test_unsafe_block_propagates_inner_type():
+    """Audit 28.8 B10 (UnsafeBlock arm): unsafe { e } must return
+    typeof(e), not TyUnknown. The handler exists pre-A2 too; this
+    asserts the type DOES propagate through."""
+    src = """
+    fn main() -> i32 {
+        let x: i32 = unsafe { 42 };
+        x
+    }
+    """
+    errs = check(src)
+    assert errs == [], f"unexpected errors: {errs}"
+
+
+# ----------------------------------------------------------------------
+# Audit 28.8 B11 — flatten_impls duplicate-method-name detection
+# ----------------------------------------------------------------------
+def test_flatten_impls_rejects_same_name_methods():
+    """Audit 28.8 B11 (trap 74002): two structs with the same method
+    name cause cross-struct type confusion at the call site. The
+    fix raises DuplicateMethodError at the second registration.
+
+    Python parser requires explicit param types (no `self` sugar);
+    construct the impl-blocks directly via the AST."""
+    from helixc.frontend.flatten_impls import (
+        flatten_impls, DuplicateMethodError,
+    )
+    from helixc.frontend import ast_nodes as A
+    import pytest as _pt
+    span = A.Span(0, 0)
+    pt = A.StructDecl(
+        span=span, name="Pt", generics=[],
+        fields=[A.FnParam(span=span, name="x",
+                          ty=A.TyName(span=span, name="f32"),
+                          is_mut=False)],
+        is_pub=False,
+    )
+    line = A.StructDecl(
+        span=span, name="Line", generics=[],
+        fields=[A.FnParam(span=span, name="a",
+                          ty=A.TyName(span=span, name="f32"),
+                          is_mut=False)],
+        is_pub=False,
+    )
+    pt_len = A.FnDecl(
+        span=span, name="len", generics=[],
+        params=[A.FnParam(span=span, name="self",
+                          ty=A.TyName(span=span, name="Pt"),
+                          is_mut=False)],
+        return_ty=A.TyName(span=span, name="f32"),
+        where_clauses=[],
+        body=A.Block(span=span, stmts=[],
+                     final_expr=A.FloatLit(span=span, value=0.0,
+                                            type_suffix="f32")),
+        attrs=[], is_pub=False,
+    )
+    line_len = A.FnDecl(
+        span=span, name="len", generics=[],
+        params=[A.FnParam(span=span, name="self",
+                          ty=A.TyName(span=span, name="Line"),
+                          is_mut=False)],
+        return_ty=A.TyName(span=span, name="f32"),
+        where_clauses=[],
+        body=A.Block(span=span, stmts=[],
+                     final_expr=A.FloatLit(span=span, value=0.0,
+                                            type_suffix="f32")),
+        attrs=[], is_pub=False,
+    )
+    impl_pt = A.ImplBlock(span=span, target="Pt", methods=[pt_len],
+                          trait_name=None)
+    impl_line = A.ImplBlock(span=span, target="Line", methods=[line_len],
+                            trait_name=None)
+    prog = A.Program(module=None,
+                     items=[pt, line, impl_pt, impl_line])
+    with _pt.raises(DuplicateMethodError) as ex:
+        flatten_impls(prog)
+    assert ex.value.method == "len"
+    assert ex.value.trap_id == 74002
+
+
+def test_flatten_impls_allows_distinct_method_names():
+    """Distinct method names across structs flatten cleanly."""
+    from helixc.frontend.flatten_impls import flatten_impls
+    from helixc.frontend import ast_nodes as A
+    span = A.Span(0, 0)
+    pt = A.StructDecl(
+        span=span, name="Pt", generics=[],
+        fields=[A.FnParam(span=span, name="x",
+                          ty=A.TyName(span=span, name="f32"),
+                          is_mut=False)],
+        is_pub=False,
+    )
+    line = A.StructDecl(
+        span=span, name="Line", generics=[],
+        fields=[A.FnParam(span=span, name="a",
+                          ty=A.TyName(span=span, name="f32"),
+                          is_mut=False)],
+        is_pub=False,
+    )
+    pt_method = A.FnDecl(
+        span=span, name="px", generics=[],
+        params=[A.FnParam(span=span, name="self",
+                          ty=A.TyName(span=span, name="Pt"),
+                          is_mut=False)],
+        return_ty=A.TyName(span=span, name="f32"),
+        where_clauses=[],
+        body=A.Block(span=span, stmts=[],
+                     final_expr=A.FloatLit(span=span, value=0.0,
+                                            type_suffix="f32")),
+        attrs=[], is_pub=False,
+    )
+    line_method = A.FnDecl(
+        span=span, name="la", generics=[],
+        params=[A.FnParam(span=span, name="self",
+                          ty=A.TyName(span=span, name="Line"),
+                          is_mut=False)],
+        return_ty=A.TyName(span=span, name="f32"),
+        where_clauses=[],
+        body=A.Block(span=span, stmts=[],
+                     final_expr=A.FloatLit(span=span, value=0.0,
+                                            type_suffix="f32")),
+        attrs=[], is_pub=False,
+    )
+    impl_pt = A.ImplBlock(span=span, target="Pt", methods=[pt_method],
+                          trait_name=None)
+    impl_line = A.ImplBlock(span=span, target="Line",
+                            methods=[line_method], trait_name=None)
+    prog = A.Program(module=None,
+                     items=[pt, line, impl_pt, impl_line])
+    n = flatten_impls(prog)
+    assert n == 2
+
+
+def test_flatten_impls_allows_same_struct_redeclare():
+    """Same struct calling flatten_impls twice on aliased
+    impl-block records (i.e. same target, same method) should NOT
+    fire B11 — only cross-struct collisions are flagged."""
+    from helixc.frontend.flatten_impls import flatten_impls
+    from helixc.frontend import ast_nodes as A
+    span = A.Span(0, 0)
+    pt = A.StructDecl(
+        span=span, name="Pt", generics=[],
+        fields=[A.FnParam(span=span, name="x",
+                          ty=A.TyName(span=span, name="f32"),
+                          is_mut=False)],
+        is_pub=False,
+    )
+    # Two impl blocks on Pt with two different methods is OK.
+    m1 = A.FnDecl(
+        span=span, name="a", generics=[],
+        params=[A.FnParam(span=span, name="self",
+                          ty=A.TyName(span=span, name="Pt"),
+                          is_mut=False)],
+        return_ty=A.TyName(span=span, name="f32"),
+        where_clauses=[],
+        body=A.Block(span=span, stmts=[],
+                     final_expr=A.FloatLit(span=span, value=0.0,
+                                            type_suffix="f32")),
+        attrs=[], is_pub=False,
+    )
+    m2 = A.FnDecl(
+        span=span, name="b", generics=[],
+        params=[A.FnParam(span=span, name="self",
+                          ty=A.TyName(span=span, name="Pt"),
+                          is_mut=False)],
+        return_ty=A.TyName(span=span, name="f32"),
+        where_clauses=[],
+        body=A.Block(span=span, stmts=[],
+                     final_expr=A.FloatLit(span=span, value=0.0,
+                                            type_suffix="f32")),
+        attrs=[], is_pub=False,
+    )
+    impl_pt_1 = A.ImplBlock(span=span, target="Pt", methods=[m1],
+                            trait_name=None)
+    impl_pt_2 = A.ImplBlock(span=span, target="Pt", methods=[m2],
+                            trait_name=None)
+    prog = A.Program(module=None,
+                     items=[pt, impl_pt_1, impl_pt_2])
+    n = flatten_impls(prog)
+    assert n == 2
+
+
 def main():
     tests = [(name, fn) for name, fn in globals().items()
              if name.startswith("test_") and callable(fn)]

@@ -29,9 +29,43 @@ from typing import Optional
 from . import ast_nodes as A
 
 
+TRAP_DUPLICATE_METHOD_NAME = 74002
+
+
+class DuplicateMethodError(Exception):
+    """Audit 28.8 B11 (trap 74002): two distinct structs declare a
+    method with the same name. Phase-0 fallback (until static dispatch
+    by self-type ships in v0.2) is to reject — the first registration
+    wins and the second silently aliased to the same call site,
+    producing cross-struct type confusion (`Pt.area` and `Line.area`
+    both rewriting `_.area()` to `Pt__area`)."""
+    trap_id = TRAP_DUPLICATE_METHOD_NAME
+
+    def __init__(self, method: str, first_target: str, second_target: str,
+                 span: A.Span):
+        super().__init__(
+            f"{span.line}:{span.col}: duplicate method name {method!r} — "
+            f"declared on both {first_target!r} and {second_target!r} "
+            f"(trap 74002)"
+        )
+        self.method = method
+        self.first_target = first_target
+        self.second_target = second_target
+        self.span = span
+
+
 def flatten_impls(prog: A.Program) -> int:
     """Lift impl-block methods to top level. Rewrite x.method(args) calls.
-    Returns count of methods lifted."""
+    Returns count of methods lifted.
+
+    Audit 28.8 B11 (trap 74002): Phase-0 same-name-method dispatch is
+    ambiguous because the rewrite uses a flat name->target map. Until
+    static dispatch by self-type ships in v0.2, we REJECT the second
+    registration with a DuplicateMethodError. Pre-fix the dispatch
+    picked the first-registered target silently — calling `line_var
+    .area()` (where Line and Pt both have an `area` method) would
+    rewrite to `Pt__area(line_var)`, passing a Line value into a
+    Pt-typed receiver. SEGV or silent wrong data."""
     methods_lifted = 0
     new_items: list[A.Item] = []
     method_to_target: dict[str, str] = {}  # method_name -> target type
@@ -47,7 +81,19 @@ def flatten_impls(prog: A.Program) -> int:
                 )
                 new_items.append(lifted)
                 methods_lifted += 1
-                method_to_target.setdefault(m.name, item.target)
+                prior_target = method_to_target.get(m.name)
+                if prior_target is None:
+                    method_to_target[m.name] = item.target
+                elif prior_target != item.target:
+                    raise DuplicateMethodError(
+                        method=m.name,
+                        first_target=prior_target,
+                        second_target=item.target,
+                        span=m.span,
+                    )
+                # Same-target re-declaration (impl X { fn f() } twice)
+                # is a separate concern handled by typecheck's duplicate
+                # fn-name check; here we just don't overwrite.
         else:
             new_items.append(item)
     prog.items = new_items

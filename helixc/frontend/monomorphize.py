@@ -60,11 +60,85 @@ def _mangle_ty(t: A.TyNode) -> str:
     return "X"
 
 
+def _subst_shape_expr(expr: A.Expr, subst: dict[str, A.TyNode]) -> A.Expr:
+    """Audit 28.8 B8: substitute size-kind generic params inside a tile
+    or tensor shape expression.
+
+    `subst` maps generic-param names to either TyNode (for type-kind)
+    or — by convention used at the call site — a sentinel pseudo-type
+    that wraps an IntLit (for size-kind, treated below). The shape AST
+    uses Expr (typically Name or IntLit), so we walk and rewrite
+    `Name(generic)` → `IntLit(value)` when the substituted value is a
+    size literal.
+
+    Pre-fix, substitute_ty for TyTile only handled `dtype` and shared
+    `shape` + `memspace` directly — so `Tile<f32, [N], HBM>` mono'd
+    against `N=128` produced a clone with `shape=[Name("N")]` (NOT
+    `[IntLit(128)]`), and the lower-ast.py path defaulted shape[0] to
+    0 when the leading element wasn't an IntLit. Trap 16003 is now
+    reserved for that path."""
+    if expr is None:
+        return expr
+    if isinstance(expr, A.Name):
+        # If the generic-param substitution provides a size literal,
+        # replace with IntLit. Otherwise leave as-is.
+        repl = subst.get(expr.name)
+        if isinstance(repl, A.TyName) and repl.name.startswith("size_"):
+            try:
+                return A.IntLit(span=expr.span,
+                                value=int(repl.name[len("size_"):]),
+                                type_suffix=None)
+            except ValueError:
+                return expr
+        # Audit 28.8 B8: callers may pass a raw IntLit through subst
+        # by wrapping it as a TyArray-of-sorts, but the canonical
+        # path is via _SizeLit (private sentinel below).
+        if isinstance(repl, _SizeLitMarker):
+            return A.IntLit(span=expr.span, value=repl.value,
+                            type_suffix=None)
+        return expr
+    if isinstance(expr, A.Binary):
+        return A.Binary(span=expr.span, op=expr.op,
+                        left=_subst_shape_expr(expr.left, subst),
+                        right=_subst_shape_expr(expr.right, subst))
+    if isinstance(expr, A.Unary):
+        return A.Unary(span=expr.span, op=expr.op,
+                       operand=_subst_shape_expr(expr.operand, subst))
+    return expr
+
+
+class _SizeLitMarker:
+    """Internal sentinel for size-kind generic substitutions. Callers
+    of substitute_ty pass `subst[N] = _SizeLitMarker(128)` to indicate
+    a size-kind binding rather than a type binding. Code that walks
+    `subst` and only handles TyNode treats this as opaque (it skips
+    over it). Audit 28.8 B8."""
+    __slots__ = ("value",)
+    def __init__(self, value: int):
+        self.value = value
+
+
 def substitute_ty(t: A.TyNode, subst: dict[str, A.TyNode]) -> A.TyNode:
-    """Substitute generic type variables with concrete types throughout t."""
+    """Substitute generic type variables with concrete types throughout t.
+
+    Audit 28.8 B6: added TyPtr arm. Pre-fix, `fn deref<T>(p: *const T)
+    -> T { unsafe { *p } }` mono'd with T=f64 silently left the param
+    as `*const T` (TyName('T') inside), and the lowering path defaulted
+    the inner element width to i32 — silent type-pun.
+
+    Audit 28.8 B8: TyTile.shape and TyTensor.shape now have their
+    Name(N) entries substituted when N is a size-kind generic. The
+    `subst` dict carries `_SizeLitMarker(int)` sentinels for size
+    bindings."""
     if isinstance(t, A.TyName):
         if t.name in subst:
-            return deepcopy(subst[t.name])
+            repl = subst[t.name]
+            if isinstance(repl, _SizeLitMarker):
+                # Size-kind generic used as TyName — convert to a
+                # placeholder TyName encoding the value. Callers that
+                # then walk types interpret `size_N` as a literal.
+                return A.TyName(span=t.span, name=f"size_{repl.value}")
+            return deepcopy(repl)
         return t
     if isinstance(t, A.TyTuple):
         return A.TyTuple(span=t.span, elems=[substitute_ty(e, subst) for e in t.elems])
@@ -72,16 +146,25 @@ def substitute_ty(t: A.TyNode, subst: dict[str, A.TyNode]) -> A.TyNode:
         return A.TyArray(span=t.span, elem=substitute_ty(t.elem, subst), size=t.size)
     if isinstance(t, A.TyRef):
         return A.TyRef(span=t.span, inner=substitute_ty(t.inner, subst), is_mut=t.is_mut)
+    if isinstance(t, A.TyPtr):
+        # Audit 28.8 B6 (trap reservation: handled at lower-ast level).
+        return A.TyPtr(span=t.span,
+                       inner=substitute_ty(t.inner, subst),
+                       is_mut=t.is_mut)
     if isinstance(t, A.TyFn):
         return A.TyFn(span=t.span,
                       params=[substitute_ty(p, subst) for p in t.params],
                       ret=substitute_ty(t.ret, subst))
     if isinstance(t, A.TyTensor):
+        # Audit 28.8 B8: substitute size-kind generics in shape exprs.
+        new_shape = [_subst_shape_expr(s, subst) for s in t.shape]
         return A.TyTensor(span=t.span, dtype=substitute_ty(t.dtype, subst),
-                          shape=t.shape, device=t.device, layout=t.layout)
+                          shape=new_shape, device=t.device, layout=t.layout)
     if isinstance(t, A.TyTile):
+        # Audit 28.8 B8: same for TyTile.
+        new_shape = [_subst_shape_expr(s, subst) for s in t.shape]
         return A.TyTile(span=t.span, dtype=substitute_ty(t.dtype, subst),
-                        shape=t.shape, memspace=t.memspace)
+                        shape=new_shape, memspace=t.memspace)
     if isinstance(t, A.TyGeneric):
         return A.TyGeneric(span=t.span, base=t.base,
                            args=[substitute_ty(a, subst) for a in t.args])
@@ -171,6 +254,14 @@ def _walk_subst_expr(e: A.Expr, subst: dict[str, A.TyNode]) -> A.Expr:
                         target=_walk_subst_expr(e.target, subst),
                         transformation=_walk_subst_expr(e.transformation, subst),
                         verifier=_walk_subst_expr(e.verifier, subst))
+    # Audit 28.8 B12: UnsafeBlock — generics through unsafe regions
+    # need substitution. Pre-fix, `fn read<T>(p: *const T) -> T {
+    # unsafe { let x: T = *p; x } }` mono'd against T=f64 left the
+    # inner `let x: T` unsubstituted; downstream lower-ast resolved
+    # T as TyUnknown and silently defaulted the read to i32.
+    if isinstance(e, A.UnsafeBlock):
+        return A.UnsafeBlock(span=e.span,
+                             body=_walk_subst_expr(e.body, subst))
     return e
 
 
@@ -427,7 +518,22 @@ class Monomorphizer:
         return e
 
     def _instantiate(self, fn: A.FnDecl, mangled: str, subst: dict[str, A.TyNode]) -> A.FnDecl:
-        """Clone fn, substitute T-vars with concrete types, drop generics."""
+        """Clone fn, substitute T-vars with concrete types, drop generics.
+
+        Audit 28.8 B7: deep-copies where_clauses with substitution
+        applied per clause's constraint expression. Pre-fix the clone
+        shared the template's `where_clauses` list directly — so
+        downstream passes that consumed the clone saw the template's
+        unsubstituted clauses (e.g. `where T: Eq` with TyName('T')
+        still present).
+
+        Also propagates `is_extern` and `extern_abi`. Pre-fix the
+        clone was implicitly non-extern, which meant
+        `extern "C" fn malloc<T>(n: usize) -> *mut T` mono'd to
+        `malloc__i32` would have been emitted as a normal user-fn
+        with empty body → ud2 trap at runtime. Phase-0 still treats
+        generic-over-extern as a parse-time refusal upstream, but
+        the propagation is correct here for completeness."""
         new_params = [
             A.FnParam(span=p.span, name=p.name,
                       ty=substitute_ty(p.ty, subst), is_mut=p.is_mut)
@@ -437,16 +543,25 @@ class Monomorphizer:
         new_body_block = _walk_subst_expr(fn.body, subst)
         if not isinstance(new_body_block, A.Block):
             new_body_block = fn.body
+        new_where = [
+            A.WhereClause(
+                span=w.span,
+                constraint=_walk_subst_expr(w.constraint, subst),
+            )
+            for w in fn.where_clauses
+        ]
         return A.FnDecl(
             span=fn.span,
             name=mangled,
             generics=[],
             params=new_params,
             return_ty=new_ret,
-            where_clauses=fn.where_clauses,
+            where_clauses=new_where,
             body=new_body_block,
             attrs=list(fn.attrs),
             is_pub=fn.is_pub,
+            is_extern=fn.is_extern,
+            extern_abi=fn.extern_abi,
         )
 
 

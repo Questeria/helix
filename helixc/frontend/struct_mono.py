@@ -278,8 +278,49 @@ def collect_concrete_uses(prog: A.Program,
     return out
 
 
+def _shape_key(expr) -> tuple:
+    """Audit 28.8 A13 helper: convert a shape expression (IntLit or
+    Name or simple Binary) to a hashable key so TyTensor / TyTile
+    shapes don't collapse to one entry.
+
+    Conservative: unknown expr kinds collapse to their type name +
+    span — which preserves identity for the common case of distinct
+    AST nodes while not promising exact-structure equality."""
+    if expr is None:
+        return ("none",)
+    if isinstance(expr, A.IntLit):
+        return ("int", expr.value)
+    if isinstance(expr, A.Name):
+        return ("var", expr.name)
+    if isinstance(expr, A.Binary):
+        return ("bin", expr.op,
+                _shape_key(expr.left), _shape_key(expr.right))
+    if isinstance(expr, A.Unary):
+        return ("un", expr.op, _shape_key(expr.operand))
+    return ("?", type(expr).__name__)
+
+
+def _marker_key(expr) -> tuple:
+    """Conservative key for device / memspace / layout markers (which
+    are Expr-shaped in the AST). Same convention as _shape_key."""
+    if expr is None:
+        return ("none",)
+    if isinstance(expr, A.Name):
+        return ("name", expr.name)
+    if isinstance(expr, A.Call) and isinstance(expr.callee, A.Name):
+        return ("call", expr.callee.name, tuple(_shape_key(a) for a in expr.args))
+    return ("?", type(expr).__name__)
+
+
 def _ty_key(t: A.TyNode):
-    """Convert a TyNode to a hashable key for deduplication."""
+    """Convert a TyNode to a hashable key for deduplication.
+
+    Audit 28.8 A13: proper arms for TyFn / TyTensor / TyTile /
+    TyMemTier. Pre-fix, all four fell through to
+    `("?", type(t).__name__)`, so any two TyFn instances (regardless
+    of param/ret types) had the same key — causing Stage 28 struct
+    monomorphization to silently dedup `Pt<fn(i32)->i32>` and
+    `Pt<fn(f32)->f32>` to a single mono'd struct."""
     if isinstance(t, A.TyName):
         return ("name", t.name)
     if isinstance(t, A.TyGeneric):
@@ -292,6 +333,26 @@ def _ty_key(t: A.TyNode):
         return ("ref", t.is_mut, _ty_key(t.inner))
     if isinstance(t, A.TyPtr):
         return ("ptr", t.is_mut, _ty_key(t.inner))
+    # Audit 28.8 A13 — proper arms below. The keys are designed so two
+    # types are equal-by-key iff they're semantically equivalent (same
+    # dtype, same shape values, same memspace). Spans are intentionally
+    # excluded so syntactically identical types at different source
+    # positions still dedup.
+    if isinstance(t, A.TyFn):
+        return ("fn",
+                tuple(_ty_key(p) for p in t.params),
+                _ty_key(t.ret))
+    if isinstance(t, A.TyTensor):
+        return ("tensor",
+                _ty_key(t.dtype),
+                tuple(_shape_key(s) for s in t.shape),
+                _marker_key(t.device),
+                _marker_key(t.layout))
+    if isinstance(t, A.TyTile):
+        return ("tile",
+                _ty_key(t.dtype),
+                tuple(_shape_key(s) for s in t.shape),
+                _marker_key(t.memspace))
     return ("?", type(t).__name__)
 
 
