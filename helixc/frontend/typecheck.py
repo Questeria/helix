@@ -733,8 +733,18 @@ class TypeChecker:
             # better diagnostic; we skip the general check when that
             # specialized path will fire so the user sees one (not two)
             # messages.
+            # Audit 28.8 cycle 5 C4-3: symmetric TyVar/TySize/TyUnknown
+            # exclusion on aty side. Pre-fix, only pty was filtered for
+            # TyVar/TySize, so the canonical generic-adapter pattern
+            # `fn use_x[T](v: T) -> i32 { check_x(v) }` (T-typed arg
+            # passed to i32-typed param) emitted a false-positive
+            # "expects i32, got T" — but mono will bind T to a concrete
+            # type at the call site of `use_x`, so the body-typecheck
+            # should DEFER on TyVar at this call boundary. The same
+            # cascade-safe rule already applies on the pty side; the
+            # aty omission was asymmetric.
             elif (not isinstance(pty, (TyVar, TySize, TyUnknown))
-                  and not isinstance(aty, TyUnknown)
+                  and not isinstance(aty, (TyVar, TySize, TyUnknown))
                   and not (isinstance(pty, TyPrim)
                            and isinstance(aty, TyPrim))
                   and self._logic_provenance_violation_kind(pty, aty)

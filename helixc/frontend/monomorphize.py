@@ -422,14 +422,47 @@ class Monomorphizer:
             return 0
         # Iteratively rewrite calls. Each pass may add new fns whose bodies
         # contain further generic calls. Fixed point when no new instantiations.
+        #
+        # Audit 28.8 cycle 5 C4-4 / HIGH: D9's cycle-3 fix was paper-only.
+        # The unit test against `_walk_subst_expr` passes, but the end-to-
+        # end pipeline still produced broken clones. Two key fixes:
+        #
+        # 1. Generic fns are NOT walked at top level. Their bodies are
+        #    walked ONLY through `_instantiate`'s `_walk_subst_expr` (per
+        #    clone, with the binding subst). If we rewrite generic fn
+        #    bodies in-place during iteration, the rewrite replaces
+        #    `id::<U>(v)` with `id__U(v)` (mangled, no turbofish) BEFORE
+        #    `caller__i32`'s clone is made — the clone's `_walk_subst_expr`
+        #    then has nothing to substitute (literal name `id__U`).
+        #
+        # 2. Clones must be re-walked in subsequent iterations so their
+        #    own nested turbofish (post-subst) get followed. We promote
+        #    new clones into the walk set each pass.
+        promoted: list[A.FnDecl] = []
         changed = True
         while changed:
             changed = False
+            # Walk only non-generic items + promoted clones (which are also
+            # non-generic; they're concrete instantiations).
             for item in list(self.prog.items):
-                if isinstance(item, A.FnDecl):
+                if isinstance(item, A.FnDecl) and not item.generics:
                     new_body = self._rewrite_calls_in_block(item.body, item)
                     if new_body is not item.body:
                         item.body = new_body
+                        changed = True
+            for fn in list(promoted):
+                # Promoted clones are non-generic by construction.
+                new_body = self._rewrite_calls_in_block(fn.body, fn)
+                if new_body is not fn.body:
+                    fn.body = new_body
+                    changed = True
+            # Promote any newly-instantiated clones into the walk set so
+            # the next iteration re-processes their bodies for further
+            # nested-turbofish substitution.
+            if self.instantiated:
+                for key, fn in list(self.instantiated.items()):
+                    if fn not in promoted:
+                        promoted.append(fn)
                         changed = True
         # Append instantiated clones; keep original generic fns intact so
         # legacy un-turbofished call sites keep resolving.

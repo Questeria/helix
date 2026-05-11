@@ -562,6 +562,49 @@ def test_c4_1_path_no_false_positive():
     )
 
 
+def test_c4_5_continue_no_false_positive_ad_warn():
+    """Audit 28.8 cycle 5 C4-5: `A.Continue` in an AD'd fn body's loop
+    must NOT trigger the `_inline_lets` catch-all 85001 warning. Pre-fix
+    every `continue;` in a differentiated loop emitted a spurious
+    AD-assumed-zero warning; `-Wad=error` then failed the compile."""
+    from helixc.frontend import autodiff
+    autodiff.take_diff_warnings()
+    span = A.Span(0, 0)
+    cont = A.Continue(span=span)
+    result = autodiff._inline_lets(cont, {})
+    assert result is cont, "Continue should be returned identically"
+    warnings = autodiff.take_diff_warnings()
+    assert not any("85001" in w for w in warnings), (
+        f"unexpected 85001 warn on Continue: {warnings}"
+    )
+
+
+def test_c4_5_tilelit_no_false_positive_ad_warn():
+    """Audit 28.8 cycle 5 C4-5: TileLit must NOT trigger the
+    `_inline_lets` catch-all 85001 warning. (TileLit has its own arm
+    that walks shape/memspace children, so substitution still applies
+    but no spurious AD-zero warning fires.)"""
+    from helixc.frontend import autodiff
+    autodiff.take_diff_warnings()
+    span = A.Span(0, 0)
+    tile = A.TileLit(
+        span=span,
+        dtype=A.TyName(span=span, name="f32"),
+        shape=[A.IntLit(span=span, value=4, type_suffix=None)],
+        memspace=A.Name(span=span, name="REG", generics=[]),
+        init="zeros",
+    )
+    result = autodiff._inline_lets(tile, {})
+    # Result must be a TileLit (either same or rewritten).
+    assert isinstance(result, A.TileLit), (
+        f"TileLit should remain TileLit, got {type(result).__name__}"
+    )
+    warnings = autodiff.take_diff_warnings()
+    assert not any("85001" in w for w in warnings), (
+        f"unexpected 85001 warn on TileLit: {warnings}"
+    )
+
+
 def test_c4_3_inline_lets_if_cond_substituted():
     """Audit 28.8 cycle 4 C4-3: `_inline_lets` must substitute let-bound
     names appearing in `if cond { ... }`. Pre-fix the cond was passed
@@ -596,13 +639,23 @@ def test_c4_3_inline_lets_if_cond_substituted():
 
 
 def test_c6_revert_c4_2_literal_binary_no_false_trap():
-    """Audit 28.8 cycle 6 C5-1: the cycle-4 over-broadening of
-    parser.hx tag-12 sentinel produced false-positive trap 76003 on
-    trivially-i32 expressions like `let a = 10 + 5; let c = |x| x + a;`.
-    Cycle 6 reverts to Call-only D2 behavior. Verify by checking that
-    parser.hx's val_tag dispatch no longer assigns a non-zero inferred
-    tag for Binary RHS — proxy: read parser.hx and assert the C4-2
-    broadening block is gone."""
+    """Audit 28.8 cycle 5/6 — D2 polarity fully reverted.
+
+    History:
+      - cycle 3 D2: added `val_tag == 16` (AST_CALL) sentinel-12 →
+        broke i32-returning-fn capture pattern (CRITICAL C4-1 / F1).
+      - cycle 4 C4-2: BROADENED D2 to Binary/Unary/etc. — additional
+        false-positives on `let a = 10 + 5; ...`.
+      - cycle 6 C5-1: REVERTED only the broadening; kept Call-only
+        sentinel-12.
+      - cycle 5 (this) C4-1 / F1 final REVERT: removed Call-only
+        sentinel-12 too. Parser can't infer fn return types, so the
+        trap-76003 inference must move to a typecheck pass.
+
+    Verify parser.hx no longer contains the cycle-4 broadening
+    (val_tag == 6 AST_LT arm) AND no longer contains the cycle-3
+    Call-only arm (val_tag == 16). Both are gone — only the literal-
+    RHS type-tag arms remain (val_tag 0/27/31/34/35/36/37/38/39/40/41)."""
     import os
     here = os.path.dirname(os.path.abspath(__file__))
     parser_path = os.path.join(here, "..", "bootstrap", "parser.hx")
@@ -614,9 +667,12 @@ def test_c6_revert_c4_2_literal_binary_no_false_trap():
         "cycle-4 C4-2 broadening still present in parser.hx — "
         "C5-1 revert did not land"
     )
-    # The original D2 Call-only arm (val_tag == 16) MUST remain.
-    assert "if val_tag == 16 {" in src, (
-        "D2 Call-only arm missing — revert went too far"
+    # cycle-5 final REVERT: the cycle-3 D2 Call-only arm (val_tag == 16)
+    # is gone too. The parser cannot infer fn return types, so this trap
+    # must come from a typecheck pass when one exists.
+    assert "if val_tag == 16 {" not in src, (
+        "cycle-3 D2 Call-only sentinel-12 arm still present in parser.hx "
+        "— cycle-5 C4-1 / F1 revert did not land"
     )
 
 

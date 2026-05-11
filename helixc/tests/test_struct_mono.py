@@ -805,5 +805,56 @@ def test_d9_turbofish_inside_generic_body_substituted():
     )
 
 
+def test_c4_4_nested_turbofish_end_to_end_no_unresolved_generic_param():
+    """Audit 28.8 cycle 5 C4-4 / HIGH: D9's cycle-3 fix was paper-only.
+    The unit test (test_d9_turbofish_inside_generic_body_substituted)
+    directly invokes `_walk_subst_expr` and passes. But the end-to-end
+    `Monomorphizer.run()` iteration order processed generic-fn bodies
+    BEFORE clones were re-walked, so clones referencing nested-turbofish
+    still ended up calling `id__U` (unresolved generic-param name)
+    instead of `id__i32`. The cycle-5 fix promotes new clones into the
+    walk set so the next iteration follows their nested-turbofish."""
+    from helixc.frontend.parser import parse
+    from helixc.frontend.monomorphize import monomorphize
+    src = """
+        fn id[T](x: T) -> T { x }
+        fn caller[U](v: U) -> U { id::<U>(v) }
+        fn main() -> i32 { caller::<i32>(7) }
+    """
+    prog = parse(src)
+    monomorphize(prog)
+    # Collect all callee names in the final program.
+    callee_names = []
+    def _walk(e):
+        if isinstance(e, A.Call):
+            if isinstance(e.callee, A.Name):
+                callee_names.append(e.callee.name)
+            _walk(e.callee)
+            for arg in e.args:
+                _walk(arg)
+        elif isinstance(e, A.Block):
+            for s in e.stmts:
+                if isinstance(s, A.Let) and s.value is not None:
+                    _walk(s.value)
+                elif isinstance(s, A.ExprStmt):
+                    _walk(s.expr)
+            if e.final_expr is not None:
+                _walk(e.final_expr)
+    for item in prog.items:
+        if isinstance(item, A.FnDecl):
+            _walk(item.body)
+    # No clone should still reference id__U (the unresolved generic-param
+    # mangled form). Pre-fix, `caller__i32`'s body called `id__U`.
+    assert "id__U" not in callee_names, (
+        f"D9 end-to-end: clone references unresolved generic-param name "
+        f"id__U (instead of id__i32). callees={callee_names}"
+    )
+    # Positive assertion: id__i32 should be present.
+    assert "id__i32" in callee_names, (
+        f"D9 end-to-end: expected clone to call id__i32. "
+        f"callees={callee_names}"
+    )
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-v"]))
