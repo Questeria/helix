@@ -269,11 +269,24 @@ def _stmt_equal(a: Any, b: Any) -> bool:
     if type(a) is not type(b):
         return False
     if isinstance(a, A.Let):
-        if a.name != b.name:
+        # Stage 28.9 cycle 49 audit-R C47-A1 fix (HIGH): drop the
+        # `a.name == b.name` check — _hash_into elides Let.name per
+        # de-Bruijn alpha-equivalence, so requiring name match here
+        # falsely tripped trap 20001 ("structurally distinct AST
+        # nodes share hash") for alpha-equivalent let-blocks.
+        # Cycle 49 audit-R C47-A2 fix (HIGH): include is_mut in
+        # comparison — `let mut x = e` and `let x = e` are
+        # semantically distinct (drives ALLOC_VAR vs plain bind).
+        # Cycle 49 audit-R C47-A3 fix (MED): include declared ty.
+        if a.is_mut != b.is_mut:
+            return False
+        if not _ty_equal(a.ty, b.ty):
             return False
         return _ast_equal(a.value, b.value)
     if isinstance(a, A.ConstStmt):
-        if a.name != b.name:
+        # Stage 28.9 cycle 49: align with Let — name elided per
+        # de-Bruijn, ty must match.
+        if not _ty_equal(a.ty, b.ty):
             return False
         return _ast_equal(a.value, b.value)
     if isinstance(a, A.ExprStmt):

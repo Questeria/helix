@@ -222,13 +222,28 @@ def _hash_into(h: "hashlib._Hash", node: Any,
         depth = max(local.values(), default=-1) + 1
         for stmt in node.stmts:
             if isinstance(stmt, A.Let) and stmt.value is not None:
-                _emit(h, "Let")
+                # Stage 28.9 cycle 49 audit-R C47-A2 + C47-A3 fix:
+                # emit `is_mut` (drives ALLOC_VAR + STORE_VAR vs plain
+                # bind in lower_ast.py:1014-1024) and `ty` (the
+                # declared type annotation, used by typecheck). Name
+                # remains elided per de-Bruijn alpha-equivalence —
+                # the cycle-47 C47-A1 finding noted that
+                # `_stmt_equal` Let requires name match while hash
+                # elides; aligning the equality side too in
+                # hash_cons.py.
+                _emit(h, "Let", stmt.is_mut)
+                _emit(h, "LetTy", _ty_repr(stmt.ty)
+                      if stmt.ty is not None else ("None",))
                 _hash_into(h, stmt.value, local)
                 # Bind after evaluating the rhs (not letrec).
                 local[stmt.name] = depth
                 depth += 1
             elif isinstance(stmt, A.ConstStmt):
+                # Cycle 49 audit-R C47-A3: emit `ty` for ConstStmt
+                # (similar to Let — declared type is semantic).
                 _emit(h, "Const")
+                _emit(h, "ConstTy", _ty_repr(stmt.ty)
+                      if stmt.ty is not None else ("None",))
                 _hash_into(h, stmt.value, local)
                 local[stmt.name] = depth
                 depth += 1
@@ -344,14 +359,44 @@ def _hash_into(h: "hashlib._Hash", node: Any,
             _hash_into(h, arm.body, local)
         return
     if isinstance(node, A.FnDecl):
-        # Hash a top-level fn by: name, attrs, param COUNT + TYPES (not
-        # names — alpha-equivalence), body. Param names get de-Bruijn
-        # indices in the body's binder env.
-        _emit(h, "FnDecl", node.name, tuple(node.attrs))
+        # Stage 28.9 cycle 49 audit-T C48-1 fix (conf 88): the
+        # cycle-35 fix to ast_hash addressed Expr/Pattern subclasses
+        # but the FnDecl arm (Item-level) still used the deprecated
+        # `repr(p.ty)` pattern AND elided many semantic fields.
+        # Multiple gaps fixed in this single pass:
+        #   - Param.ty: `repr(p.ty)` → `_ty_repr(p.ty)` (span strip,
+        #     same as C36-1 / C38-1 for Cast/TileLit).
+        #   - return_ty: was completely absent → now emitted via
+        #     _ty_repr (fn f()->i32 vs fn f()->i64 with same body
+        #     would have collided pre-fix).
+        #   - is_pub, is_extern, extern_abi: ABI/visibility distinctions
+        #     are semantically load-bearing (lower_ast emits FFI_CALL
+        #     vs internal call paths differently).
+        #   - attrs: was hashed via tuple — preserved but explicitly
+        #     sorted now since the parser MAY emit attrs in any order
+        #     (e.g. `@pure @kernel` vs `@kernel @pure` should hash
+        #     identically).
+        #   - generics + where_clauses: hashed via repr-stripping for
+        #     now (TODO follow-on cycle to recurse into GenericParam
+        #     and WhereClause shapes; deferred because their hash
+        #     surface is comparatively small).
+        # Name is hashed (FnDecl.name IS semantically load-bearing —
+        # it's the call-target identifier, NOT a bound variable).
+        # Param names get de-Bruijn indices in the body's binder env,
+        # so alpha-equivalence of body still holds (cycle-20 invariant).
+        _emit(h, "FnDecl", node.name,
+              tuple(sorted(node.attrs)),
+              node.is_pub, node.is_extern, node.extern_abi or "")
+        # Param types via span-stripped canonicalizer.
         local: dict[str, int] = {}
         for i, p in enumerate(node.params):
             local[p.name] = i
-            _emit(h, "Param", repr(p.ty))   # type only, not name
+            _emit(h, "Param", _ty_repr(p.ty))
+        # return_ty (Optional[TyNode]) via _ty_repr (handles None).
+        _emit(h, "ReturnTy", _ty_repr(node.return_ty))
+        # generics and where_clauses — bounded surface for Phase-0.
+        _emit(h, "FnGenerics", repr(node.generics))
+        _emit(h, "FnWhereClauses", repr(node.where_clauses))
         _hash_into(h, node.body, local)
         return
     # Stage 28.9 cycle 35 audit-T C34-1 fix (conf 95): add explicit
