@@ -1569,6 +1569,71 @@ def test_c4_6_unicode_decode_error_clean_message(
     assert "compiler bug" not in captured.err
 
 
+def test_c8_1_import_error_attributed_as_compiler_bug(
+        monkeypatch, capsys, tmp_path):
+    """Audit 28.8 cycle 9 (regression for cycle-8 C8-1 close): an
+    ImportError raised from inside _main_inner must surface as a
+    compiler bug (rc=1, "please file an issue") — not as a user-
+    environment error (rc=2). Pre-fix the cycle-5 exception
+    classifier had a separate `except ImportError` arm that
+    miscategorized internal-rename failures as env issues."""
+    from helixc import check as check_mod
+    def boom(*_args, **_kw):
+        raise ImportError("cannot import name 'monomorphize_structs'")
+    monkeypatch.setattr(check_mod, "typecheck", boom)
+    src_file = tmp_path / "boom.hx"
+    src_file.write_text("fn main() -> i32 { 0 }")
+    rc = check_mod.main([str(src_file)])
+    captured = capsys.readouterr()
+    assert rc == 1, f"expected rc=1 for ImportError, got rc={rc}"
+    assert "compiler bug" in captured.err, (
+        f"expected 'compiler bug' tag in stderr, got: {captured.err}"
+    )
+    assert "internal error" in captured.err
+
+
+def test_c8_2_env_error_no_double_helixc_prefix(
+        monkeypatch, capsys, tmp_path):
+    """Audit 28.8 cycle 9 (regression for cycle-8 C8-2 close): when a
+    callee raises FileNotFoundError with a message that already starts
+    with `helixc:`, the outer arm must NOT double-prefix the output."""
+    from helixc import check as check_mod
+    def boom(*_args, **_kw):
+        raise FileNotFoundError("helixc: stdlib file missing: foo.hx")
+    monkeypatch.setattr(check_mod, "typecheck", boom)
+    src_file = tmp_path / "boom.hx"
+    src_file.write_text("fn main() -> i32 { 0 }")
+    rc = check_mod.main([str(src_file)])
+    captured = capsys.readouterr()
+    assert rc == 2, f"expected rc=2 for FileNotFoundError, got rc={rc}"
+    # No "helixc: helixc:" anywhere in stderr.
+    assert "helixc: helixc:" not in captured.err, (
+        f"double prefix in stderr: {captured.err!r}"
+    )
+    # Single prefix preserved.
+    assert "stdlib file missing" in captured.err
+
+
+def test_c8_2_env_error_no_prefix_still_prefixed(
+        monkeypatch, capsys, tmp_path):
+    """Audit 28.8 cycle 9 (regression for cycle-8 C8-2 close): the
+    `_emit_env_error` helper must still prepend `helixc:` when the
+    callee's exception message has NO prefix."""
+    from helixc import check as check_mod
+    def boom(*_args, **_kw):
+        raise FileNotFoundError("plain message, no prefix")
+    monkeypatch.setattr(check_mod, "typecheck", boom)
+    src_file = tmp_path / "boom.hx"
+    src_file.write_text("fn main() -> i32 { 0 }")
+    rc = check_mod.main([str(src_file)])
+    captured = capsys.readouterr()
+    assert rc == 2
+    # Should have exactly one `helixc:` prefix.
+    assert captured.err.count("helixc:") == 1, (
+        f"expected single 'helixc:' prefix, got: {captured.err!r}"
+    )
+
+
 def test_c3_4_monomorphize_structs_idempotent():
     """Audit 28.8 cycle 3 C3-4: invoking monomorphize_structs twice on
     the same Program must NOT append duplicate StructDecls."""
