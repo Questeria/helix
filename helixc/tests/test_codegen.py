@@ -1539,18 +1539,46 @@ fn main() -> i32 {
         # fixed /tmp output path), exec output, capture exit code, then
         # clean up. The bootstrap binary is reused across all calls.
         # Serial within a single pytest test — no concurrency concern.
-        # Note: the cached bootstrap binary's exit code is the byte
-        # count written (non-zero on success), so we use `;` not `&&`
-        # to separate it from the output-binary execution.
+        #
+        # Cycle 11 audit A (A1) root-caused the historical flake to the
+        # `;`-vs-`&&` sequencing: under `;` semantics, a missing
+        # /tmp/helix_bin_out.bin causes `chmod +x` to fail and `echo $?`
+        # then mis-reports chmod's exit code as if it were the output
+        # binary's. The audit's recommended fix (use `&&` strictly)
+        # doesn't work because the bootstrap binary INTENTIONALLY exits
+        # with the byte-count it wrote (non-zero on success), so `&&`
+        # would short-circuit AFTER bootstrap and never run the output
+        # binary.
+        #
+        # Proper fix: assert /tmp/helix_bin_out.bin actually exists after
+        # the bootstrap runs (via `test -f`); only then chmod+exec it.
+        # On any failure in the chain, raise a clear AssertionError
+        # rather than returning a misleading exit code from a chmod or
+        # the bootstrap's byte-count.
+        cmd = (
+            f"printf %s {repr(source_text)} > /tmp/helix_src_in.hx && "
+            f"sync && chmod +x {cached_wsl} && "
+            f"{cached_wsl} > /dev/null; "
+            f"sync && test -f /tmp/helix_bin_out.bin && "
+            f"chmod +x /tmp/helix_bin_out.bin && /tmp/helix_bin_out.bin; "
+            f"out_rc=$?; "
+            f"if [ ! -f /tmp/helix_bin_out.bin ]; then "
+            f"  echo '__HARNESS_FAIL_BOOTSTRAP_DID_NOT_WRITE_OUTPUT__'; "
+            f"else "
+            f"  echo $out_rc; "
+            f"fi; "
+            f"rm -f /tmp/helix_src_in.hx /tmp/helix_bin_out.bin"
+        )
         run = subprocess.run(
-            ["wsl", "-e", "bash", "-c",
-             f"printf %s {repr(source_text)} > /tmp/helix_src_in.hx && "
-             f"sync && chmod +x {cached_wsl} && {cached_wsl} > /dev/null; "
-             f"sync && chmod +x /tmp/helix_bin_out.bin && /tmp/helix_bin_out.bin; "
-             f"echo $?; rm -f /tmp/helix_src_in.hx /tmp/helix_bin_out.bin"],
+            ["wsl", "-e", "bash", "-c", cmd],
             capture_output=True, timeout=30,
         )
-        return int(run.stdout.decode().strip().splitlines()[-1])
+        last = run.stdout.decode().strip().splitlines()[-1] if run.stdout else ""
+        assert last != "__HARNESS_FAIL_BOOTSTRAP_DID_NOT_WRITE_OUTPUT__", (
+            f"bootstrap did not produce /tmp/helix_bin_out.bin for source "
+            f"{source_text!r}; stderr: {run.stderr.decode()[:500]}"
+        )
+        return int(last)
 
     assert compile_and_exec("42") == 42, "literal"
     assert compile_and_exec("1 + 2") == 3, "addition"
