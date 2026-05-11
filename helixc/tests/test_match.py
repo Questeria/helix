@@ -534,6 +534,74 @@ def test_c4_1_match_inside_assign_target_lowered():
     walk(prog)
 
 
+def test_c7_1_match_inside_tile_lit_shape_lowered():
+    """Stage 28.9 cycle 7 C7-1: `match` inside `TileLit.shape` must
+    be desugared by lower_matches. Pre-fix the walker had no TileLit
+    arm so the Match survived past lower_matches and tripped
+    lower_ast's "Match should not reach _lower_expr" assertion.
+
+    Phase-0 lower_ast gates tile shapes to IntLit only via
+    _tile_shape_dims, but defensively the walker should still descend
+    so the loud diagnostic comes from the gate, not the deeper
+    assertion. Same regression pattern as the C22-C / C4-1 tests.
+
+    We directly construct the TileLit AST since the parser's
+    tile-shape grammar may not yet accept a Match in shape position;
+    the lower_matches contract is "no Match nodes anywhere in the
+    AST" regardless of how the Match got there.
+    """
+    from helixc.frontend.match_lower import lower_matches
+    from helixc.frontend import ast_nodes as A
+    span = A.Span(line=1, col=1)
+    arm = A.MatchArm(
+        span=span,
+        pattern=A.PatWildcard(span=span),
+        guard=None,
+        body=A.IntLit(span=span, value=4, type_suffix=None),
+    )
+    inner_match = A.Match(
+        span=span,
+        scrutinee=A.Name(span=span, name="n", generics=[]),
+        arms=[arm],
+    )
+    tile = A.TileLit(
+        span=span,
+        dtype=A.TyName(span=span, name="f32"),
+        shape=[inner_match],
+        memspace=A.Name(span=span, name="REG", generics=[]),
+        init="zeros",
+    )
+    fn = A.FnDecl(
+        span=span,
+        name="main",
+        generics=[],
+        params=[A.FnParam(span=span, name="n", ty=A.TyName(span=span, name="i32"))],
+        return_ty=A.TyName(span=span, name="i32"),
+        where_clauses=[],
+        body=A.Block(span=span, stmts=[], final_expr=tile),
+        attrs=[],
+    )
+    prog = A.Program(module=None, items=[fn])
+    lower_matches(prog)
+
+    def walk(node):
+        if node is None:
+            return
+        if isinstance(node, A.Match):
+            raise AssertionError(
+                "lower_matches must remove all Match nodes; one "
+                "remains inside TileLit.shape (C7-1)"
+            )
+        if isinstance(node, list):
+            for x in node:
+                walk(x)
+            return
+        if hasattr(node, "__dict__"):
+            for v in vars(node).values():
+                walk(v)
+    walk(prog)
+
+
 def main():
     tests = [(name, fn) for name, fn in globals().items()
              if name.startswith("test_") and callable(fn)]

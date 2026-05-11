@@ -207,6 +207,19 @@ def _rewrite_expr(expr: A.Expr) -> A.Expr:
     if isinstance(expr, A.Splice):
         expr.inner = _rewrite_expr(expr.inner)
         return expr
+    if isinstance(expr, A.TileLit):
+        # Stage 28.9 cycle 7 C7-1 (conf 82): TileLit holds shape (list
+        # of Expr) and memspace (Expr). A Match nested in tile shape or
+        # memspace position would survive past lower_matches and trip
+        # lower_ast's Match-assertion. Same defect class as C22-C
+        # (UnsafeBlock/Range/Modify) and Stage-28.8 cycle-6 F4
+        # (autodiff._inline_lets). Phase-0 lower_ast._tile_shape_dims
+        # gates shape elements to IntLit only, but defensively descend
+        # here so the loud diagnostic comes from the gate, not the
+        # assertion deeper in the pipeline.
+        expr.shape = [_rewrite_expr(s) for s in expr.shape]
+        expr.memspace = _rewrite_expr(expr.memspace)
+        return expr
     return expr
 
 
