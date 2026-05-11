@@ -436,6 +436,115 @@ def test_o3_runs_at_least_o2_passes(monkeypatch, capsys, tmp_path):
     assert dce_calls[0] == 1
 
 
+# ----------------------------------------------------------------------
+# Audit 28.8 cycle 2 C2-1 — AD-warning drain must run on EVERY exit path
+# ----------------------------------------------------------------------
+def test_ad_drain_runs_on_default_no_emit(capsys, tmp_path):
+    """C2-1: B13 mixed-inner widening warnings emit during typecheck.
+    Pre-fix, the drain only ran inside the `--emit-*` / `-o` branch, so
+    `python -m helixc.check loss.hx` (no flags) silently swallowed them.
+    Verify the warning now appears on stderr for default invocation."""
+    src_path = str(tmp_path / "loss.hx")
+    with open(src_path, "w") as f:
+        f.write(
+            "fn loss(x: D<f64>, y: D<i32>) -> D<f64> { x + y }\n"
+            "fn main() -> i32 { 0 }\n"
+        )
+    rc = main([src_path])
+    cap = capsys.readouterr()
+    # Compile must still succeed (B13 is a warning, not an error).
+    assert rc == 0, f"unexpected rc={rc}; stderr={cap.err!r}"
+    # The drain emits an `ad: N warning(s)` line on stdout AND the
+    # actual warning lines on stderr.
+    assert "ad:" in cap.out, (
+        f"missing ad-warning header on stdout; stdout={cap.out!r}"
+    )
+    assert "24200" in cap.err or "AD002" in cap.err, (
+        f"missing B13 widening warning on stderr; stderr={cap.err!r}"
+    )
+
+
+def test_ad_drain_runs_on_check_only(capsys, tmp_path):
+    """C2-1: `--check-only` short-circuits before lowering. The drain
+    must still run so CI lint sweeps see B13 warnings."""
+    src_path = str(tmp_path / "loss.hx")
+    with open(src_path, "w") as f:
+        f.write(
+            "fn loss(x: D<f64>, y: D<i32>) -> D<f64> { x + y }\n"
+            "fn main() -> i32 { 0 }\n"
+        )
+    rc = main([src_path, "--check-only"])
+    cap = capsys.readouterr()
+    assert rc == 0
+    assert "ad:" in cap.out
+    assert "24200" in cap.err or "AD002" in cap.err, (
+        f"missing B13 widening warning on stderr; stderr={cap.err!r}"
+    )
+
+
+def test_ad_drain_clears_state_between_compiles(capsys, tmp_path):
+    """C2-1: stale `_DIFF_WARNINGS` from a prior compile must not
+    leak into the next file's diagnostics. The outer `main` wrapper
+    clears the channel at entry."""
+    from helixc.frontend import autodiff
+    # Seed the module-level list with a stale warning.
+    autodiff._DIFF_WARNINGS.append("stale-from-prior-compile (trap 24200)")
+    # Now compile a clean file (no D<...> at all).
+    src_path = str(tmp_path / "clean.hx")
+    with open(src_path, "w") as f:
+        f.write("fn main() -> i32 { 1 + 2 }\n")
+    rc = main([src_path])
+    cap = capsys.readouterr()
+    assert rc == 0
+    # The stale warning must NOT surface against the clean file.
+    assert "stale-from-prior-compile" not in cap.err, (
+        f"stale warning leaked across compiles; stderr={cap.err!r}"
+    )
+
+
+def test_ad_drain_wad_error_promotes(capsys, tmp_path):
+    """C2-1 + B5: `-Wad=error` promotes drained warnings to errors,
+    flipping the exit code to 1 even on default invocation."""
+    src_path = str(tmp_path / "loss.hx")
+    with open(src_path, "w") as f:
+        f.write(
+            "fn loss(x: D<f64>, y: D<i32>) -> D<f64> { x + y }\n"
+            "fn main() -> i32 { 0 }\n"
+        )
+    rc = main([src_path, "-Wad=error"])
+    cap = capsys.readouterr()
+    assert rc == 1, (
+        f"-Wad=error must flip rc to 1 when warnings drain; "
+        f"rc={rc} stdout={cap.out!r} stderr={cap.err!r}"
+    )
+    assert "ERROR" in cap.out or "ERROR" in cap.err
+
+
+def test_ad_drain_subprocess_default(tmp_path):
+    """C2-1: end-to-end subprocess test — the dominant user invocation
+    `python -m helixc.check loss.hx` surfaces B13 warnings on stderr."""
+    src_path = str(tmp_path / "loss.hx")
+    with open(src_path, "w") as f:
+        f.write(
+            "fn loss(x: D<f64>, y: D<i32>) -> D<f64> { x + y }\n"
+            "fn main() -> i32 { 0 }\n"
+        )
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.check", src_path],
+        capture_output=True, text=True, check=False,
+        cwd=os.path.dirname(os.path.dirname(
+            os.path.dirname(os.path.abspath(__file__)))),
+    )
+    assert proc.returncode == 0, (
+        f"compile failed: rc={proc.returncode} "
+        f"stdout={proc.stdout!r} stderr={proc.stderr!r}"
+    )
+    assert "24200" in proc.stderr or "AD002" in proc.stderr, (
+        f"B13 warning missing from subprocess stderr; "
+        f"stderr={proc.stderr!r}"
+    )
+
+
 if __name__ == "__main__":
     import pytest
     raise SystemExit(pytest.main([__file__, "-v"]))

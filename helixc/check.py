@@ -214,9 +214,73 @@ def extract_doc_comments(src: str) -> str:
 
 
 # ----------------------------------------------------------------------
+# AD warning drain (Audit 28.8 cycle 2 C2-1)
+# ----------------------------------------------------------------------
+def _drain_ad_warnings(a: "CliArgs") -> int:
+    """Drain the AD-warning channel and emit diagnostics to stderr.
+
+    Returns 1 if `-Wad=error` was set AND any warnings were drained,
+    else 0. Must be called on every code path that exits successfully
+    from `main()` so that B13 widening warnings emitted during typecheck
+    are surfaced even when the user runs with no `--emit-*` / `-o` /
+    or `--check-only`.
+
+    The drain itself ALWAYS clears `_DIFF_WARNINGS` (via `take_diff_
+    warnings`) — even when the policy is "warn" rather than "error",
+    so a subsequent compile in the same process starts clean.
+    """
+    from .frontend.autodiff import take_diff_warnings
+    ad_warnings = take_diff_warnings()
+    if not ad_warnings:
+        return 0
+    ad_policy = a.warnings.get("ad", "warn")
+    label = "ERROR" if ad_policy == "error" else "warning"
+    print(f"   ad:        {len(ad_warnings)} {label}(s)")
+    for w in ad_warnings:
+        print(f"     helixc: {w}", file=sys.stderr)
+    if ad_policy == "error":
+        return 1
+    return 0
+
+
+# ----------------------------------------------------------------------
 # Main dispatch
 # ----------------------------------------------------------------------
 def main(argv: list[str] | None = None) -> int:
+    """Outer dispatch.
+
+    Audit 28.8 cycle 2 C2-1: wraps `_main_inner` so the AD warning drain
+    runs on EVERY exit (success or error, after the entry banner is
+    printed). Pre-fix the drain lived inside the lowering branch and was
+    bypassed on default-no-emit, `--check-only`, and error returns —
+    silently dropping B13 widening warnings emitted during typecheck.
+    """
+    # Clear any stale AD warnings from a prior compilation in the same
+    # process before we start. Without this, the module-level
+    # `_DIFF_WARNINGS` list accumulates across compiles, mis-attributing
+    # diagnostics to the wrong file when check.main() is invoked twice.
+    from .frontend.autodiff import take_diff_warnings as _drain_ad_init
+    _drain_ad_init()
+    a_holder: list["CliArgs"] = []
+    rc = _main_inner(argv, a_holder)
+    if a_holder:
+        drain_rc = _drain_ad_warnings(a_holder[0])
+        if drain_rc != 0 and rc == 0:
+            rc = drain_rc
+    else:
+        # No CliArgs yet — drain quietly to keep state hygienic.
+        _drain_ad_init()
+    return rc
+
+
+def _main_inner(argv: list[str] | None,
+                a_holder: list["CliArgs"]) -> int:
+    """Inner pipeline. Pushes the parsed CliArgs into `a_holder` (a
+    single-element list passed by the caller) as soon as parsing
+    succeeds, so the outer wrapper can run the AD-warning drain even
+    when this function returns early. Pre-banner short-circuits (`--help`,
+    `--doc`, bad invocation) don't push anything — those exits have no
+    `_DIFF_WARNINGS` to drain because typecheck never ran."""
     argv = list(argv if argv is not None else sys.argv[1:])
     a, errs = parse_args(argv)
     if "--help" in a.flags:
@@ -243,6 +307,9 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     print(f"-- helixc-check: {path}")
+    # Audit 28.8 cycle 2 C2-1: register CliArgs so the outer wrapper
+    # can drain AD warnings on ANY return below (including error paths).
+    a_holder.append(a)
 
     # 1. Parse
     try:
@@ -437,22 +504,12 @@ def main(argv: list[str] | None = None) -> int:
             # future pass can wire in without re-shaping the dispatch.
             pass
 
-        # Audit 28.8 B5: drain accumulated AD warnings — set by
-        # autodiff/_diff and autodiff_reverse/_propagate whenever an
-        # unhandled node kind silently zeroed a gradient (Quote /
-        # Splice / Modify / non-numeric Cast / opaque call). Default
-        # policy: warn to stderr. `-Wad=error` promotes to error and
-        # fails the build.
-        from .frontend.autodiff import take_diff_warnings
-        ad_warnings = take_diff_warnings()
-        if ad_warnings:
-            ad_policy = a.warnings.get("ad", "warn")
-            label = "ERROR" if ad_policy == "error" else "warning"
-            print(f"   ad:        {len(ad_warnings)} {label}(s)")
-            for w in ad_warnings:
-                print(f"     helixc: {w}", file=sys.stderr)
-            if ad_policy == "error":
-                return 1
+        # Audit 28.8 cycle 2 C2-1: the AD-warning drain was moved out
+        # of this branch into the outer `main()` wrapper. Pre-fix, the
+        # drain only ran when an `--emit-*` flag or `-o` was set, so
+        # default-no-emit and `--check-only` silently lost the B13
+        # widening warnings emitted during typecheck. Drain is now
+        # universal — see `_drain_ad_warnings` and the `main` wrapper.
 
     if "--emit-ir" in a.flags:
         print("   ir:")
