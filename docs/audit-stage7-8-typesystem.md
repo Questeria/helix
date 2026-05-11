@@ -897,7 +897,7 @@ land before any user-facing release of Stage 8.5.
 | 7  | OPEN     | PAT_LIT 32-bit cmp on wide scrut — deferred (MEDIUM, needs width-aware emitters). |
 | 8  | FIXED    | Pattern arity check at parse_pattern: unknown variant traps 62006, arity mismatch traps 62005. Commit 0ff2bc4. |
 | 9  | OPEN     | clone_with_rewrite — deferred (MEDIUM, needs deep-clone recursion). |
-| 10 | OPEN     | Mono clone is_checkpoint — deferred (MEDIUM, 1-line propagation but didn't fit time budget). |
+| 10 | FIXED    | monomorphize_pass + grad_pass + grad_rev_all_pass now propagate the template / loss fn's slot-8 `is_checkpoint` to the synthesized clone instead of hardcoding 0. The @checkpoint marker survives mono and reverse-mode AD synthesis. Commits a086353 + 7682b14. |
 | 11 | OPEN     | self.method() in impl bodies — deferred (MEDIUM, feature work). |
 | 12 | OPEN     | PAT_VARIANT/TUPLE sub-pat idx > 15 disp8 wrap — deferred (MEDIUM, mirror Stage 4 #7 fix). |
 
