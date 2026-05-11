@@ -295,23 +295,25 @@ def _fresh_slot_load(callee_expr: A.Expr, idx: int, span: A.Span) -> A.Expr:
     linearity that pytree.py and validation-pass walkers assume."""
     return A.Index(
         span=span,
-        callee=_dup_expr(callee_expr, span),
+        callee=_dup_expr(callee_expr),
         indices=[A.IntLit(span=span, value=idx)],
     )
 
 
-def _dup_expr(expr: A.Expr, span: A.Span = None) -> A.Expr:
+def _dup_expr(expr: A.Expr) -> A.Expr:
     """Stage 28.9 cycle 13 C13-2 helper: build a fresh AST node for
     common Expr shapes. Used to avoid sharing Index/Name children
     across multiple parent nodes (which would violate tree linearity).
 
     Cycle 14 C14-1 fix (audit-A conf 84): preserve the SOURCE span
-    from `expr.span` rather than the caller's span. Pre-fix the
+    from `expr.span` rather than caller context. Pre-fix the
     explicit Name/IntLit/Index branches overwrote spans with caller
     context while the deepcopy fallback preserved them — silent
     inconsistency that pointed diagnostics at the wrong source line.
-    The `span` parameter is now an unused legacy default kept for
-    backwards-compat; preserved `expr.span` is the source of truth.
+
+    Cycle 15 C15-2 fix (conf 78): the legacy `span` parameter is
+    removed entirely (was silently ignored after C14-1). Callers
+    updated to no longer pass it.
 
     Cycle 14 C14-A (codereview C14-1, audit-A C14-2): A.Path branch
     added so PatVariant.path tag tests do not silently alias across
@@ -420,10 +422,16 @@ def _pattern_test_expr(pat: A.Pattern, scrut_expr: A.Expr,
     # the silent-accept anti-pattern the cycle-13 refactor was supposed
     # to eliminate. Now raise loudly so a new Pattern type forces an
     # explicit dispatch decision.
+    # Cycle 15 C15-3 (conf 76) follow-on: include the offending span
+    # in the error message so a downstream catch (e.g. check.py's
+    # internal-error handler) can render a clean diagnostic with
+    # location instead of a bare Python traceback.
+    span_str = f"{pat.span.line}:{pat.span.col}" if getattr(pat, "span", None) else "?"
     raise NotImplementedError(
-        f"_pattern_test_expr: unhandled Pattern subclass "
+        f"_pattern_test_expr at {span_str}: unhandled Pattern subclass "
         f"{type(pat).__name__}; add an explicit arm in match_lower.py "
-        f"to declare its match semantics."
+        f"to declare its match semantics. (helixc internal bug — please "
+        f"file an issue.)"
     )
 
 
@@ -526,7 +534,25 @@ def _collect_binds(pat: A.Pattern, scrut: str, span: A.Span) -> list[A.Let]:
                 alt_names = {b.name for b in _collect_binds(alt, scrut, span)}
                 first_names &= alt_names
             binds.extend(b for b in first_binds if b.name in first_names)
-    # PatTuple element-binds are deferred (see _pattern_test note).
+    elif isinstance(pat, (A.PatWildcard, A.PatLit, A.PatRange)):
+        # Leaf patterns that introduce no binders. Explicit branches
+        # for clarity + to make the dispatch exhaustive — cycle 15
+        # C15-1 (conf 80) flagged the silent `[]` fall-through as a
+        # symmetric defect to C14-3's _pattern_test_expr catchall.
+        pass
+    else:
+        # Cycle 15 C15-1 (conf 80): loud failure for unknown Pattern
+        # subclass. Symmetric to _pattern_test_expr's NotImplementedError
+        # so future Pattern types must declare their binder semantics
+        # explicitly. Pre-fix this branch silently returned [] — same
+        # silent-accept class the cycle-10..14 family targets.
+        span_str = f"{pat.span.line}:{pat.span.col}" if getattr(pat, "span", None) else "?"
+        raise NotImplementedError(
+            f"_collect_binds at {span_str}: unhandled Pattern subclass "
+            f"{type(pat).__name__}; add an explicit arm in match_lower.py "
+            f"to declare its binder semantics. (helixc internal bug — "
+            f"please file an issue.)"
+        )
     return binds
 
 
