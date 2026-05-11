@@ -1853,15 +1853,19 @@ fn parse_closure_lit(tok_base: i32, sb: i32) -> i32 {
             };
             pi = pi + 1;
         }
-        // Allocate AST_FN_DECL with 8 contiguous slots (Stage 14.5 layout).
+        // Allocate AST_FN_DECL with 12 contiguous slots (Stage 28.9 layout).
         // p1=name_s, p2=name_l, p3=body, p4=params_head, p5=ret_ty,
-        // p6=is_generic, p7=gp_names_head, p8=is_checkpoint.
+        // p6=is_generic, p7=gp_names_head, p8=is_checkpoint,
+        // p9=is_deprecated, p10=is_trace, p11=is_unwind.
         let fn_node = mk_node(14, name_start, name_len, body);
         __arena_push(params_head);
         __arena_push(0);                         // ret_ty = 0 (i32)
         __arena_push(0);                         // is_generic = 0
         __arena_push(0);                         // gp_names_head = 0
         __arena_push(0);                         // is_checkpoint = 0 (Stage 14.5)
+        __arena_push(0);                         // is_deprecated = 0 (Stage 28.9)
+        __arena_push(0);                         // is_trace = 0 (Stage 28.9)
+        __arena_push(0);                         // is_unwind = 0 (Stage 28.9)
         // Wrap in AST_FN_LIST and append to cl_pending chain.
         let list_node = mk_node(15, fn_node, 0, 0);
         let head = cl_pending_head(sb);
@@ -3509,6 +3513,18 @@ fn parse_top(tok_base: i32) -> i32 {
     // skip_attributes when it consumes `@checkpoint`; read+cleared by
     // parse_fn_decl when it allocates the AST_FN_DECL node (slot 8).
     __arena_push(0);
+    // Stage 28.9 (validation passes): slots 75..77 = sticky scratch
+    // flags for fn-level attribute capture. Same pattern as slot 74
+    // (next_fn_is_checkpoint). Each is set by skip_attributes when
+    // it consumes the matching `@<ident>` token, read+cleared by
+    // parse_fn_decl, and written into a new AST_FN_DECL slot so the
+    // bootstrap-side validation passes can observe it.
+    //   slot 75 = next_fn_is_deprecated  (for deprecated_pass)
+    //   slot 76 = next_fn_is_trace       (for trace_pass)
+    //   slot 77 = next_fn_is_unwind      (for panic_pass diag 28502)
+    __arena_push(0);
+    __arena_push(0);
+    __arena_push(0);
     install_keywords(cur_slot);
     var_struct_tab_init(cur_slot);
     var_enum_tab_init(cur_slot);
@@ -3602,6 +3618,9 @@ fn parse_top(tok_base: i32) -> i32 {
 // no-ops in Phase 0. Stage 14.5: `@checkpoint` is special — when seen
 // it sets a sticky scratch flag at sb+74 so the next parse_fn_decl
 // can record it on the synthesized AST_FN_DECL node (slot 8).
+// Stage 28.9: similarly recognizes `@deprecated` (slot 75),
+// `@trace` (slot 76), `@unwind` (slot 77) so the bootstrap-side
+// validation passes can observe them on AST_FN_DECL slots 9/10/11.
 fn skip_attributes(tok_base: i32, sb: i32) -> i32 {
     let mut keep: i32 = 1;
     while keep == 1 {
@@ -3609,14 +3628,15 @@ fn skip_attributes(tok_base: i32, sb: i32) -> i32 {
             cur_advance(sb);     // consume '@'
             // Optional IDENT after the '@'.
             if tok_tag(tok_base, cur_get(sb)) == 2 {
-                // Stage 14.5: byte-compare attribute IDENT against
-                // "checkpoint" (10 bytes: 99 104 101 99 107 112 111 105
-                // 110 116). If match, raise the flag; otherwise leave
-                // alone (existing @pure/@effect/etc. continue to skip
-                // silently as before).
                 let attr_tok = cur_get(sb);
                 let attr_s = tok_p2(tok_base, attr_tok);
                 let attr_l = tok_p3(tok_base, attr_tok);
+                // Stage 14.5: byte-compare attribute IDENT against
+                // "checkpoint" (10 bytes: 99 104 101 99 107 112 111 105
+                // 110 116). Also recognize `deprecated` (10 bytes:
+                // 100 101 112 114 101 99 97 116 101 100). Both are
+                // 10-char so they fan out from the same length-10
+                // branch — but with different first-byte 99 vs 100.
                 if attr_l == 10 {
                     let b0 = __arena_get(attr_s);
                     let b1 = __arena_get(attr_s + 1);
@@ -3636,6 +3656,47 @@ fn skip_attributes(tok_base: i32, sb: i32) -> i32 {
                         } else { 0 } } else { 0 } } else { 0 } } else { 0 } } else { 0 };
                     if is_ckpt == 1 {
                         set_next_fn_is_ckpt(sb, 1);
+                    };
+                    // Stage 28.9: @deprecated (100 101 112 114 101 99
+                    // 97 116 101 100).
+                    let is_dep = if b0 == 100 { if b1 == 101 { if b2 == 112 {
+                        if b3 == 114 { if b4 == 101 { if b5 == 99 {
+                        if b6 == 97 { if b7 == 116 { if b8 == 101 {
+                        if b9 == 100 { 1 } else { 0 }
+                        } else { 0 } } else { 0 } } else { 0 } } else { 0 }
+                        } else { 0 } } else { 0 } } else { 0 } } else { 0 } } else { 0 };
+                    if is_dep == 1 {
+                        set_next_fn_is_deprecated(sb, 1);
+                    };
+                };
+                // Stage 28.9: `trace` (5 bytes: 116 114 97 99 101).
+                if attr_l == 5 {
+                    let tb0 = __arena_get(attr_s);
+                    let tb1 = __arena_get(attr_s + 1);
+                    let tb2 = __arena_get(attr_s + 2);
+                    let tb3 = __arena_get(attr_s + 3);
+                    let tb4 = __arena_get(attr_s + 4);
+                    let is_trace = if tb0 == 116 { if tb1 == 114 {
+                        if tb2 == 97 { if tb3 == 99 { if tb4 == 101 { 1 }
+                        else { 0 } } else { 0 } } else { 0 } } else { 0 } } else { 0 };
+                    if is_trace == 1 {
+                        set_next_fn_is_trace(sb, 1);
+                    };
+                };
+                // Stage 28.9: `unwind` (6 bytes: 117 110 119 105 110 100).
+                if attr_l == 6 {
+                    let ub0 = __arena_get(attr_s);
+                    let ub1 = __arena_get(attr_s + 1);
+                    let ub2 = __arena_get(attr_s + 2);
+                    let ub3 = __arena_get(attr_s + 3);
+                    let ub4 = __arena_get(attr_s + 4);
+                    let ub5 = __arena_get(attr_s + 5);
+                    let is_unwind = if ub0 == 117 { if ub1 == 110 {
+                        if ub2 == 119 { if ub3 == 105 { if ub4 == 110 {
+                        if ub5 == 100 { 1 } else { 0 } } else { 0 }
+                        } else { 0 } } else { 0 } } else { 0 } } else { 0 };
+                    if is_unwind == 1 {
+                        set_next_fn_is_unwind(sb, 1);
                     };
                 };
                 cur_advance(sb);
@@ -4046,12 +4107,21 @@ fn monomorphize_pass(sb: i32, head: i32) -> i32 {
                 // (non-checkpointed) fn and memory grew linearly instead
                 // of sqrt(N) per the @checkpoint contract.
                 let tpl_is_ckpt = __arena_get(tpl_idx + 8);
+                // Stage 28.9: also propagate validation attrs into mono
+                // clones so deprecated_pass/trace_pass observe them on
+                // the concrete clone as well as the template.
+                let tpl_is_deprecated = __arena_get(tpl_idx + 9);
+                let tpl_is_trace = __arena_get(tpl_idx + 10);
+                let tpl_is_unwind = __arena_get(tpl_idx + 11);
                 let clone_idx = mk_node(14, mang_s, mang_l, cloned_body);
                 __arena_push(new_params_head);
                 __arena_push(new_ret_ty);
                 __arena_push(0);                 // is_generic = 0 (concrete)
                 __arena_push(0);                 // slot 7: gp_names_head (none)
                 __arena_push(tpl_is_ckpt);       // slot 8: propagated from template (F10)
+                __arena_push(tpl_is_deprecated); // slot 9 (Stage 28.9)
+                __arena_push(tpl_is_trace);      // slot 10 (Stage 28.9)
+                __arena_push(tpl_is_unwind);     // slot 11 (Stage 28.9)
                 // Append to fn_list tail.
                 let new_list_node = mk_node(15, clone_idx, 0, 0);
                 __arena_set(tail + 2, new_list_node);
@@ -4454,6 +4524,17 @@ fn set_bucket_count(sb: i32, v: i32) -> i32 { __arena_set(sb + 73, v); 0 }
 // parse_fn_decl when it allocates the AST_FN_DECL node.
 fn next_fn_is_ckpt(sb: i32) -> i32 { __arena_get(sb + 74) }
 fn set_next_fn_is_ckpt(sb: i32, v: i32) -> i32 { __arena_set(sb + 74, v); 0 }
+// Stage 28.9 (validation passes): attribute scratch slots. Each is
+// set by skip_attributes on matching `@<ident>` consumption,
+// read+cleared by parse_fn_decl on AST_FN_DECL allocation. The
+// bootstrap-side validation passes (deprecated_pass, trace_pass,
+// panic_pass.@unwind) inspect the corresponding AST_FN_DECL slot.
+fn next_fn_is_deprecated(sb: i32) -> i32 { __arena_get(sb + 75) }
+fn set_next_fn_is_deprecated(sb: i32, v: i32) -> i32 { __arena_set(sb + 75, v); 0 }
+fn next_fn_is_trace(sb: i32) -> i32 { __arena_get(sb + 76) }
+fn set_next_fn_is_trace(sb: i32, v: i32) -> i32 { __arena_set(sb + 76, v); 0 }
+fn next_fn_is_unwind(sb: i32) -> i32 { __arena_get(sb + 77) }
+fn set_next_fn_is_unwind(sb: i32, v: i32) -> i32 { __arena_set(sb + 77, v); 0 }
 fn bucket_reset(sb: i32) -> i32 {
     set_bucket_head(sb, 0);
     set_bucket_count(sb, 0);
@@ -4744,6 +4825,12 @@ fn grad_pass(sb: i32, head: i32) -> i32 {
                 // AD memory grows linearly through the cloned derivative
                 // even when the user explicitly opted into re-mat.
                 __arena_push(loss_is_ckpt);  // slot 8: propagated from loss
+                // Stage 28.9: validation attrs default to 0 on synthesized
+                // grad clones — the gradient is a NEW fn, not the user's
+                // original loss. @deprecated/@trace/@unwind don't propagate.
+                __arena_push(0);             // slot 9: is_deprecated = 0
+                __arena_push(0);             // slot 10: is_trace = 0
+                __arena_push(0);             // slot 11: is_unwind = 0
                 let new_list_node = mk_node(15, clone_fn, 0, 0);
                 __arena_set(tail + 2, new_list_node);
                 tail = new_list_node;
@@ -5097,6 +5184,11 @@ fn grad_rev_pass(sb: i32, head: i32) -> i32 {
                 // F10 companion: propagate the loss fn's @checkpoint marker
                 // to the synthesized reverse-mode gradient clone.
                 __arena_push(loss_is_ckpt);  // slot 8: propagated from loss
+                // Stage 28.9: validation attrs default to 0 on synthesized
+                // grad-rev clones (consistent with forward-mode grad).
+                __arena_push(0);             // slot 9: is_deprecated = 0
+                __arena_push(0);             // slot 10: is_trace = 0
+                __arena_push(0);             // slot 11: is_unwind = 0
                 let new_list_node = mk_node(15, clone_fn, 0, 0);
                 __arena_set(tail + 2, new_list_node);
                 tail = new_list_node;
@@ -5375,12 +5467,26 @@ fn parse_fn_decl(tok_base: i32, sb: i32) -> i32 {
     // bleed checkpoint state across siblings. Pushed as slot 8.
     let is_ckpt_now = next_fn_is_ckpt(sb);
     set_next_fn_is_ckpt(sb, 0);
+    // Stage 28.9: capture+clear validation attribute flags BEFORE
+    // node alloc so nested fn parses don't leak. Pushed as slots
+    // 9/10/11 of AST_FN_DECL so the bootstrap validation passes
+    // (deprecated_pass, trace_pass, panic_pass.@unwind) can observe
+    // attribute info that the parser otherwise discards.
+    let is_deprecated_now = next_fn_is_deprecated(sb);
+    set_next_fn_is_deprecated(sb, 0);
+    let is_trace_now = next_fn_is_trace(sb);
+    set_next_fn_is_trace(sb, 0);
+    let is_unwind_now = next_fn_is_unwind(sb);
+    set_next_fn_is_unwind(sb, 0);
     let node = mk_node(14, name_start, name_len, body);
     __arena_push(params_head);
     __arena_push(ret_ty_final);
     __arena_push(is_generic_fn);
     __arena_push(gp_chain_head);             // slot 7: gp_names_head
     __arena_push(is_ckpt_now);               // slot 8: is_checkpoint flag
+    __arena_push(is_deprecated_now);         // slot 9: is_deprecated flag (Stage 28.9)
+    __arena_push(is_trace_now);              // slot 10: is_trace flag (Stage 28.9)
+    __arena_push(is_unwind_now);             // slot 11: is_unwind flag (Stage 28.9)
     node
 }
 
@@ -5609,6 +5715,9 @@ fn parse_impl_method(tok_base: i32, sb: i32, target_s: i32, target_l: i32, targe
     __arena_push(0);                         // is_generic = 0 (concrete)
     __arena_push(0);                         // slot 7: gp_names_head (none)
     __arena_push(0);                         // slot 8: is_checkpoint = 0 (Stage 14.5)
+    __arena_push(0);                         // slot 9: is_deprecated = 0 (Stage 28.9)
+    __arena_push(0);                         // slot 10: is_trace = 0 (Stage 28.9)
+    __arena_push(0);                         // slot 11: is_unwind = 0 (Stage 28.9)
     node
 }
 
