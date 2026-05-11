@@ -13,12 +13,14 @@ from helixc.frontend import ast_nodes as A
 from helixc.frontend.pytree import (
     PytreeLeaf,
     is_pytree_leaf,
+    is_diff_leaf,
     flatten_pytree,
     unflatten_pytree,
     pytree_depth,
     validate_pytree,
     TRAP_PYTREE_DEPTH,
     TRAP_PYTREE_NON_DIFF_LEAF,
+    TRAP_PYTREE_CYCLE,
     MAX_DEPTH,
     DIFF_LEAF_PRIMS,
 )
@@ -155,14 +157,29 @@ struct Net { l1: Layer, l2: Layer }
     assert out["l2"]["b"] == 4.0
 
 
-def test_unflatten_missing_path_defaults_zero():
-    """Paths not in the grads dict default to 0.0."""
+def test_unflatten_missing_path_raises():
+    """Audit 28.8 A11: by default, a leaf path missing from
+    `grads_by_path` raises ValueError. Pre-fix, missing paths silently
+    defaulted to 0.0 — so a buggy AD pass with off-by-one paths would
+    produce zero gradients with no signal."""
     src = """
 struct Model { w1: f64, w2: f64 }
 """
     decls = _decls(src)
     grads = {"w1": 7.5}  # w2 missing
-    out = unflatten_pytree(decls["Model"], decls, grads)
+    with pytest.raises(ValueError, match="missing from gradients"):
+        unflatten_pytree(decls["Model"], decls, grads)
+
+
+def test_unflatten_missing_path_default_opt_in():
+    """The pre-fix behaviour (missing path -> 0.0) is still reachable
+    via `default=0.0`. This preserves the explicit-permissive API."""
+    src = """
+struct Model { w1: f64, w2: f64 }
+"""
+    decls = _decls(src)
+    grads = {"w1": 7.5}
+    out = unflatten_pytree(decls["Model"], decls, grads, default=0.0)
     assert out["w1"] == 7.5
     assert out["w2"] == 0.0
 
@@ -184,8 +201,99 @@ def test_validate_dirty():
 def test_constants():
     assert TRAP_PYTREE_DEPTH == 26001
     assert TRAP_PYTREE_NON_DIFF_LEAF == 26002
+    assert TRAP_PYTREE_CYCLE == 26003
     assert MAX_DEPTH == 4
     assert DIFF_LEAF_PRIMS == frozenset({"f64", "f32", "bf16", "f16"})
+
+
+# ----------------------------------------------------------------------
+# Audit 28.8 B9 — pytree flatten/unflatten symmetry + cycle guard
+# ----------------------------------------------------------------------
+def test_is_diff_leaf_strict():
+    """Audit 28.8 B9 (3): `is_diff_leaf` returns True ONLY for
+    D-wrapped scalars. Bare `f64` returns False (use is_pytree_leaf if
+    you want both)."""
+    f64 = A.TyName(span=A.Span(0, 0), name="f64")
+    d_f64 = A.TyGeneric(span=A.Span(0, 0), base="D", args=[f64])
+    assert is_pytree_leaf(f64)  # bare float is a pytree leaf
+    assert not is_diff_leaf(f64)  # but not a diff leaf
+    assert is_pytree_leaf(d_f64)
+    assert is_diff_leaf(d_f64)
+
+
+def test_is_diff_leaf_rejects_int():
+    """is_diff_leaf rejects integers / non-float types even if
+    D-wrapped (D<i32> isn't a valid leaf type)."""
+    i32 = A.TyName(span=A.Span(0, 0), name="i32")
+    d_i32 = A.TyGeneric(span=A.Span(0, 0), base="D", args=[i32])
+    assert not is_diff_leaf(i32)
+    assert not is_diff_leaf(d_i32)
+
+
+def test_pytree_depth_handles_cycle():
+    """Audit 28.8 B9 (1): cyclic struct refs must NOT blow the Python
+    recursion stack. pytree_depth returns a bound rather than
+    raising — see flatten_pytree for the trap 26003 raise."""
+    # Construct cycle manually since the parser won't tolerate forward
+    # refs in struct fields the same way.
+    span = A.Span(0, 0)
+    a_decl = A.StructDecl(
+        span=span, name="A", generics=[],
+        fields=[A.FnParam(span=span, name="b",
+                          ty=A.TyName(span=span, name="B"), is_mut=False),
+                A.FnParam(span=span, name="w",
+                          ty=A.TyName(span=span, name="f64"), is_mut=False)],
+        is_pub=False,
+    )
+    b_decl = A.StructDecl(
+        span=span, name="B", generics=[],
+        fields=[A.FnParam(span=span, name="a",
+                          ty=A.TyName(span=span, name="A"), is_mut=False),
+                A.FnParam(span=span, name="b",
+                          ty=A.TyName(span=span, name="f64"), is_mut=False)],
+        is_pub=False,
+    )
+    decls = {"A": a_decl, "B": b_decl}
+    # Must complete without RecursionError.
+    d = pytree_depth(a_decl, decls)
+    assert isinstance(d, int)
+    assert d >= 0
+
+
+def test_flatten_pytree_raises_on_cycle():
+    """Audit 28.8 B9 (1): flatten_pytree raises trap 26003 when a
+    cycle is detected (rather than letting Python's RecursionError
+    surface)."""
+    span = A.Span(0, 0)
+    a_decl = A.StructDecl(
+        span=span, name="Cyc", generics=[],
+        fields=[A.FnParam(span=span, name="self_ref",
+                          ty=A.TyName(span=span, name="Cyc"), is_mut=False)],
+        is_pub=False,
+    )
+    decls = {"Cyc": a_decl}
+    with pytest.raises(ValueError, match="26003"):
+        flatten_pytree(a_decl, decls)
+
+
+def test_unflatten_pytree_raises_on_non_diff_field():
+    """Audit 28.8 B9 (2): unflatten_pytree no longer silently emits
+    `None` for non-diff-non-struct fields. It raises (mirroring
+    flatten's behavior) so `unflatten(flatten(x))` is well-defined."""
+    span = A.Span(0, 0)
+    bad_decl = A.StructDecl(
+        span=span, name="Bad", generics=[],
+        fields=[A.FnParam(span=span, name="w",
+                          ty=A.TyName(span=span, name="f64"), is_mut=False),
+                # Non-pytree field: i32 (an integer is not differentiable)
+                A.FnParam(span=span, name="bookkeeping",
+                          ty=A.TyName(span=span, name="i32"),
+                          is_mut=False)],
+        is_pub=False,
+    )
+    decls = {"Bad": bad_decl}
+    with pytest.raises(ValueError, match="26002"):
+        unflatten_pytree(bad_decl, decls, {"w": 1.0})
 
 
 if __name__ == "__main__":
