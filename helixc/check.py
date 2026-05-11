@@ -364,6 +364,21 @@ def main(argv: list[str] | None = None) -> int:
             print(f"     {d}")
         return 1
 
+    # Stage 27: @autotune validation (Audit 28.8 A12).
+    # `validate_autotune_prog` runs `validate_autotune` over every
+    # autotuned fn and surfaces diagnostics for malformed attrs
+    # (non-int values, missing `=`), oversized cross-product, missing
+    # @kernel pairing. Pre-fix this pass existed but was never invoked
+    # by check.py — so a user @autotune(BS: [16, "fast", 32]) saw
+    # neither the typo NOR the empty-params secondary diagnostic.
+    from .frontend.autotune import validate_autotune_prog
+    autotune_diags = validate_autotune_prog(prog)
+    if autotune_diags:
+        print(f"   autotune:  {len(autotune_diags)} ERROR(s)")
+        for d in autotune_diags:
+            print(f"     {d}")
+        return 1
+
 
     # 4. Optional hash dump
     if "--hash" in a.flags:
