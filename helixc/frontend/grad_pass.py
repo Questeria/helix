@@ -19,6 +19,7 @@ License: Apache 2.0
 from __future__ import annotations
 
 from . import ast_nodes as A
+from .ast_walker import ASTVisitor
 from .autodiff import differentiate, _inline_lets
 from .autodiff_reverse import differentiate_reverse
 
@@ -26,10 +27,57 @@ from .autodiff_reverse import differentiate_reverse
 _GRAD_CALL_NAMES = frozenset({"grad", "grad_rev", "grad_rev_all"})
 
 
+# Stage 28.8.2: grad_pass's `_expr_has_grad` predicate migrated to
+# ASTVisitor. The pre-fix walker hand-rolled a 50-LoC isinstance
+# cascade that audit cycle 2 C2-4 caught missing Field / Index /
+# StructLit / TupleLit / ArrayLit / UnsafeBlock / Range / Break /
+# Quote / Splice / Modify dispatch arms. The shared library
+# introspects dataclass fields — adding a new Expr subtype no
+# longer silently drops walker coverage.
+#
+# NOTE: only the read-only PREDICATE migrates here. The rewriter
+# (`_rewrite_in_expr`) and the let-alias resolver (`_resolve_in_expr`)
+# both return new nodes / mutate trees, which is a different shape
+# from the ASTVisitor read-only walk contract. They keep their
+# bespoke per-node dispatch because each node's rewrite semantics
+# differ (some return new nodes, some mutate in place); a generic
+# walker can't express that without giving up the dataclass-field
+# introspection that makes ASTVisitor drift-proof. See
+# docs/helix-pre-phase-A-finalization-research.md note in commit body.
+
+
+class _GradCallFinder(ASTVisitor):
+    """Stage 28.8.2: short-circuit visitor that flips `found` to True
+    on the first encounter of a grad/grad_rev/grad_rev_all Call.
+
+    Uses the skip-marker pattern: once `found` is set, every
+    subsequent visit returns False to suppress further descent —
+    saving work on large fn bodies.
+    """
+
+    def __init__(self) -> None:
+        self.found = False
+
+    def visit(self, node):
+        if self.found:
+            return False  # short-circuit; no more descent
+        return super().visit(node)
+
+    def visit_Call(self, node: A.Call):
+        if isinstance(node.callee, A.Name) and node.callee.name in _GRAD_CALL_NAMES:
+            self.found = True
+            return False  # no need to descend further
+        # Otherwise fall through to generic_visit (which the base
+        # class's visit() will call automatically).
+
+
 def _has_grad_call(prog: A.Program) -> bool:
     """Quick scan: does any function body contain a Call whose callee is
     Name("grad"|"grad_rev"|"grad_rev_all")? Used to short-circuit the
-    expensive match_lower pre-pass when no AD work is needed."""
+    expensive match_lower pre-pass when no AD work is needed.
+
+    Stage 28.8.2: uses ``_GradCallFinder(ASTVisitor)``.
+    """
     for item in prog.items:
         if isinstance(item, A.FnDecl):
             if _expr_has_grad(item.body):
@@ -38,86 +86,15 @@ def _has_grad_call(prog: A.Program) -> bool:
 
 
 def _expr_has_grad(e) -> bool:
-    """Audit 28.8 cycle 2 C2-4: dispatch covers every A.Expr subtype.
-
-    Pre-fix this walker missed Field / Index / StructLit / TupleLit /
-    ArrayLit / UnsafeBlock / Range / Break / Quote / Splice / Modify.
-    Those misses were "merely" short-circuit false-positives (we'd
-    walk anyway) but the same pattern in `_rewrite_in_expr` is a real
-    silent bug — `grad(f)` nested in those positions never got
-    rewritten. Unify the dispatch so all three walkers cover the same
-    set of nodes.
+    """Stage 28.8.2: predicate ``does this expression contain a
+    grad/grad_rev/grad_rev_all call anywhere?``. Drop-in replacement
+    for the pre-fix 100-LoC isinstance cascade (audit cycle 2 C2-4).
     """
     if e is None:
         return False
-    if isinstance(e, A.Call):
-        if isinstance(e.callee, A.Name) and e.callee.name in _GRAD_CALL_NAMES:
-            return True
-        if _expr_has_grad(e.callee):
-            return True
-        return any(_expr_has_grad(a) for a in e.args)
-    if isinstance(e, A.Block):
-        for s in e.stmts:
-            if isinstance(s, A.Let) and _expr_has_grad(s.value):
-                return True
-            if isinstance(s, A.ExprStmt) and _expr_has_grad(s.expr):
-                return True
-            if isinstance(s, A.ConstStmt) and _expr_has_grad(s.value):
-                return True
-        if _expr_has_grad(e.final_expr):
-            return True
-        return False
-    if isinstance(e, A.UnsafeBlock):
-        return _expr_has_grad(e.body)
-    if isinstance(e, A.If):
-        return (_expr_has_grad(e.cond) or _expr_has_grad(e.then)
-                or _expr_has_grad(e.else_))
-    if isinstance(e, A.Match):
-        if _expr_has_grad(e.scrutinee):
-            return True
-        return any(_expr_has_grad(a.body) or _expr_has_grad(a.guard)
-                   for a in e.arms)
-    if isinstance(e, A.Binary):
-        return _expr_has_grad(e.left) or _expr_has_grad(e.right)
-    if isinstance(e, A.Unary):
-        return _expr_has_grad(e.operand)
-    if isinstance(e, (A.For, A.While)):
-        return (_expr_has_grad(getattr(e, 'cond', None)) or
-                _expr_has_grad(getattr(e, 'iter_expr', None)) or
-                _expr_has_grad(e.body))
-    if isinstance(e, A.Loop):
-        return _expr_has_grad(e.body)
-    if isinstance(e, A.Cast):
-        return _expr_has_grad(e.value)
-    if isinstance(e, A.Return):
-        return _expr_has_grad(e.value)
-    if isinstance(e, A.Break):
-        return _expr_has_grad(e.value)
-    if isinstance(e, A.Assign):
-        return _expr_has_grad(e.target) or _expr_has_grad(e.value)
-    if isinstance(e, A.Index):
-        return (_expr_has_grad(e.callee)
-                or any(_expr_has_grad(i) for i in e.indices))
-    if isinstance(e, A.Field):
-        return _expr_has_grad(e.obj)
-    if isinstance(e, A.TupleLit):
-        return any(_expr_has_grad(x) for x in e.elems)
-    if isinstance(e, A.ArrayLit):
-        return any(_expr_has_grad(x) for x in e.elems)
-    if isinstance(e, A.StructLit):
-        return any(_expr_has_grad(v) for _, v in e.fields)
-    if isinstance(e, A.Range):
-        return (_expr_has_grad(getattr(e, "start", None))
-                or _expr_has_grad(getattr(e, "end", None)))
-    if isinstance(e, (A.Quote, A.Splice)):
-        return _expr_has_grad(e.inner)
-    if isinstance(e, A.Modify):
-        # Modify has (target, transformation, verifier) — recurse all.
-        for attr in ("target", "transformation", "verifier"):
-            if hasattr(e, attr) and _expr_has_grad(getattr(e, attr)):
-                return True
-        return False
-    return False
+    finder = _GradCallFinder()
+    finder.visit(e)
+    return finder.found
 
 
 def grad_pass(prog: A.Program) -> int:
