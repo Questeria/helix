@@ -353,6 +353,37 @@ def test_stage17_emits_mov_eax_14():
     assert target in elf, "expected `mov eax, 14` in emitted ELF"
 
 
+def test_c19_1_isize_usize_are_64_bit_in_wrap():
+    """Audit 28.8 cycle 20 C19-1 (HIGH): isize/usize must be treated as
+    64-bit in `_wrap_int_to_type`, matching the cycle-19 backend
+    classifier fix (which canonicalizes isize→i64, usize→u64).
+
+    Pre-fix `_INT_BITS["isize"] = 32` caused `_wrap_int_to_type(6e9,
+    isize)` to mask to 32 bits → 1_705_032_704. Post-fix preserves
+    full 64-bit precision so the folded path matches the un-folded
+    path (optimization-stable)."""
+    from helixc.ir.passes.const_fold import _wrap_int_to_type
+    isize = tir.TIRScalar(name="isize")
+    usize = tir.TIRScalar(name="usize")
+    i64 = tir.TIRScalar(name="i64")
+    u64 = tir.TIRScalar(name="u64")
+    # 6_000_000_000 fits in signed 64-bit, should round-trip.
+    assert _wrap_int_to_type(6_000_000_000, isize) == 6_000_000_000
+    assert _wrap_int_to_type(6_000_000_000, i64) == 6_000_000_000
+    # The isize and i64 wraps must agree (cycle-3 alias-canon).
+    for v in [0, 1, -1, 2**31 - 1, 2**31, -(2**31), 6_000_000_000,
+              -(6_000_000_000), 2**62, -(2**62)]:
+        assert _wrap_int_to_type(v, isize) == _wrap_int_to_type(v, i64), (
+            f"isize/i64 wrap disagreement at v={v}: "
+            f"{_wrap_int_to_type(v, isize)} vs {_wrap_int_to_type(v, i64)}"
+        )
+    # Same for usize/u64.
+    for v in [0, 1, 2**32, 2**32 - 1, 2**63, 2**63 + 1]:
+        assert _wrap_int_to_type(v, usize) == _wrap_int_to_type(v, u64), (
+            f"usize/u64 wrap disagreement at v={v}"
+        )
+
+
 def main():
     tests = [(name, fn) for name, fn in globals().items()
              if name.startswith("test_") and callable(fn)]

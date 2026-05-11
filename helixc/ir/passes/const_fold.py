@@ -43,7 +43,14 @@ class FoldError(Exception):
 _INT_BITS = {
     "i8": 8, "u8": 8,
     "i16": 16, "u16": 16,
-    "i32": 32, "u32": 32, "isize": 32, "usize": 32,
+    "i32": 32, "u32": 32,
+    # Audit 28.8 cycle 20 C19-1 (HIGH): pointer-width aliases must be
+    # 64-bit, matching typecheck.py:225-228's `_widen_canon_name`
+    # aliasing (isize->i64, usize->u64) and the cycle-19 backend
+    # classifier fix at x86_64.py:1005-1017. Pre-fix the 32-bit
+    # entry made `_wrap_int_to_type(6_000_000_000, isize) =
+    # 1_705_032_704` — silent miscompile reachable at default -O1.
+    "isize": 64, "usize": 64,
     "i64": 64, "u64": 64,
     "bool": 32,  # bool comparisons reified to i32 in IR
 }
