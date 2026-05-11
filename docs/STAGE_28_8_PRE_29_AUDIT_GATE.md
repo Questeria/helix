@@ -43,7 +43,7 @@ Each audit cycle scopes to:
 
 ## Success criteria
 
-5 consecutive cycles with zero new HIGH or CRITICAL findings. MEDIUM/LOW may persist with explicit "deferred to v0.2" markers.
+5 consecutive cycles with **zero new findings of any severity** — CRITICAL, HIGH, MEDIUM, and LOW all count. **Per user directive 2026-05-10**: "For the gates to be clear there cannot be even medium or low issues, there has to be no issues at all." The earlier "MEDIUM/LOW may persist with deferred-to-v0.2 markers" relaxation is explicitly REVOKED. Every finding must be addressed in-cycle.
 
 ## Time budget
 

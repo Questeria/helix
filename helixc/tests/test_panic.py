@@ -228,6 +228,28 @@ fn die_for(n: i32) -> i32 {
     assert msg == "loop"
 
 
+def test_collect_panics_inside_for_iter_expr():
+    """Cycle-2 audit C C2-L1 regression: panic() inside the For.iter_expr
+    (the Range bounds) must be reported. The cycle-1 walker fix added
+    `iter_expr` to the scalar-attr list specifically to catch this; a
+    future refactor that removed it would not have been caught by the
+    For.body test alone. This guards the iter_expr attr name explicitly."""
+    src = '''
+fn die_for_iter(n: i32) -> i32 {
+    for i in 0..panic("bound") {
+        0
+    }
+    0
+}
+'''
+    prog = parse(src)
+    out = collect_panics(prog)
+    assert len(out) == 1, f"expected 1 panic site in iter_expr, got {len(out)}"
+    fn_name, _span, msg = out[0]
+    assert fn_name == "die_for_iter"
+    assert msg == "bound"
+
+
 # ----------------------------------------------------------------------
 # Audit 28.8 A1 — `panic("msg")` now actually lowers to a TRAP TIR op
 # and emits a backend `sys_write + sys_exit` sequence. validate_panic_args
