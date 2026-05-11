@@ -362,6 +362,24 @@ def _main_inner(argv: list[str] | None,
             print(f"     {d}")
         return 1
 
+    # 2.6 Audit 28.8 cycle 2 B:C7 — flatten impls so trap 74002
+    # (duplicate method name across distinct structs) is reachable
+    # from the surface tool. Pre-fix `flatten_impls` was only invoked
+    # inside the backend, so users iterating with `helixc check
+    # foo.hx` never saw the diagnostic until they tried to emit a
+    # binary. Catch the structured DuplicateMethodError and turn it
+    # into a clean per-line message; any other exception bubbles
+    # (it's an internal compiler issue).
+    from .frontend.flatten_impls import (
+        flatten_impls, DuplicateMethodError,
+    )
+    try:
+        flatten_impls(prog)
+    except DuplicateMethodError as e:
+        print(f"   impl-flatten: ERROR")
+        print(f"     {e}")
+        return 1
+
     # 3. Totality
     fails = check_totality(prog)
     if fails:

@@ -60,6 +60,38 @@ def _mangle_ty(t: A.TyNode) -> str:
     return "X"
 
 
+def _fold_intlit_arith(expr: A.Expr) -> A.Expr:
+    """Audit 28.8 cycle 2 B:C11: one-level constant-fold for shape
+    expressions of the form Binary(IntLit, op, IntLit). Pre-fix,
+    `_subst_shape_expr` substituted `Name("N")` → `IntLit(64)` but
+    left the surrounding Binary unfolded, so `[N*2; 16]` mono'd
+    against N=64 stayed as `Binary(*, IntLit(64), IntLit(2))` instead
+    of `IntLit(128)`. Downstream lower-ast.py defaulted non-IntLit
+    shapes to 0 — silent miscount.
+
+    Applies only to commutative arithmetic with two IntLit operands.
+    Non-foldable shapes (e.g. one side still has a Name leaf) flow
+    through unchanged."""
+    if not isinstance(expr, A.Binary):
+        return expr
+    if not (isinstance(expr.left, A.IntLit) and isinstance(expr.right, A.IntLit)):
+        return expr
+    lv = expr.left.value
+    rv = expr.right.value
+    op = expr.op
+    if op == "+":
+        return A.IntLit(span=expr.span, value=lv + rv, type_suffix=None)
+    if op == "-":
+        return A.IntLit(span=expr.span, value=lv - rv, type_suffix=None)
+    if op == "*":
+        return A.IntLit(span=expr.span, value=lv * rv, type_suffix=None)
+    if op == "/" and rv != 0:
+        return A.IntLit(span=expr.span, value=lv // rv, type_suffix=None)
+    if op == "%" and rv != 0:
+        return A.IntLit(span=expr.span, value=lv % rv, type_suffix=None)
+    return expr
+
+
 def _subst_shape_expr(expr: A.Expr, subst: dict[str, A.TyNode]) -> A.Expr:
     """Audit 28.8 B8: substitute size-kind generic params inside a tile
     or tensor shape expression.
@@ -76,7 +108,10 @@ def _subst_shape_expr(expr: A.Expr, subst: dict[str, A.TyNode]) -> A.Expr:
     against `N=128` produced a clone with `shape=[Name("N")]` (NOT
     `[IntLit(128)]`), and the lower-ast.py path defaulted shape[0] to
     0 when the leading element wasn't an IntLit. Trap 16003 is now
-    reserved for that path."""
+    reserved for that path.
+
+    Audit 28.8 cycle 2 B:C11: after substitution, fold Binary(IntLit,
+    op, IntLit) → IntLit so `[N*2; 16]` with N=64 becomes `[128; 16]`."""
     if expr is None:
         return expr
     if isinstance(expr, A.Name):
@@ -98,9 +133,11 @@ def _subst_shape_expr(expr: A.Expr, subst: dict[str, A.TyNode]) -> A.Expr:
                             type_suffix=None)
         return expr
     if isinstance(expr, A.Binary):
-        return A.Binary(span=expr.span, op=expr.op,
-                        left=_subst_shape_expr(expr.left, subst),
-                        right=_subst_shape_expr(expr.right, subst))
+        folded = A.Binary(span=expr.span, op=expr.op,
+                          left=_subst_shape_expr(expr.left, subst),
+                          right=_subst_shape_expr(expr.right, subst))
+        # Audit 28.8 cycle 2 B:C11: fold if both children are IntLits.
+        return _fold_intlit_arith(folded)
     if isinstance(expr, A.Unary):
         return A.Unary(span=expr.span, op=expr.op,
                        operand=_subst_shape_expr(expr.operand, subst))
@@ -143,7 +180,13 @@ def substitute_ty(t: A.TyNode, subst: dict[str, A.TyNode]) -> A.TyNode:
     if isinstance(t, A.TyTuple):
         return A.TyTuple(span=t.span, elems=[substitute_ty(e, subst) for e in t.elems])
     if isinstance(t, A.TyArray):
-        return A.TyArray(span=t.span, elem=substitute_ty(t.elem, subst), size=t.size)
+        # Audit 28.8 cycle 2 B:C8: substitute the size expression too,
+        # mirroring TyTile/TyTensor shape sub. Pre-fix `[T; N]` mono'd
+        # against {T=f64, N=8} produced `[f64; N]` (Name unchanged),
+        # and downstream codegen took 0 as the silent default length.
+        return A.TyArray(span=t.span,
+                         elem=substitute_ty(t.elem, subst),
+                         size=_subst_shape_expr(t.size, subst))
     if isinstance(t, A.TyRef):
         return A.TyRef(span=t.span, inner=substitute_ty(t.inner, subst), is_mut=t.is_mut)
     if isinstance(t, A.TyPtr):

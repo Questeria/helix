@@ -1117,6 +1117,145 @@ def test_flatten_impls_allows_same_struct_redeclare():
     assert n == 2
 
 
+# ----------------------------------------------------------------------
+# Audit 28.8 cycle 2 C2-5 / B:C8 — TyArray size distinguished in
+# _ty_key and substituted by substitute_ty
+# ----------------------------------------------------------------------
+def test_c2_5_ty_key_distinguishes_array_size():
+    """C2-5: pre-fix `_ty_key(TyArray)` excluded the size, so
+    `[i32; 4]` and `[i32; 8]` shared one key. struct_mono.dedup
+    collapsed `Pt<[i32; 4]>` and `Pt<[i32; 8]>` into one mono."""
+    from helixc.frontend.struct_mono import _ty_key
+    from helixc.frontend import ast_nodes as A
+    span = A.Span(0, 0)
+    t4 = A.TyArray(span=span,
+                   elem=A.TyName(span=span, name="i32"),
+                   size=A.IntLit(span=span, value=4))
+    t8 = A.TyArray(span=span,
+                   elem=A.TyName(span=span, name="i32"),
+                   size=A.IntLit(span=span, value=8))
+    assert _ty_key(t4) != _ty_key(t8), (
+        f"distinct array sizes must produce distinct keys; "
+        f"got t4={_ty_key(t4)} t8={_ty_key(t8)}"
+    )
+
+
+def test_c2_b_c8_substitute_ty_walks_array_size():
+    """B:C8: pre-fix `substitute_ty` on TyArray copied `size`
+    unchanged, so `[T; N]` with N=8 stayed as `[f64; Name(N)]`.
+    Downstream lowering defaulted non-IntLit shapes to 0 — silent
+    miscount. Fix: substitute_ty now routes size through
+    _subst_shape_expr."""
+    from helixc.frontend.monomorphize import (
+        substitute_ty, _SizeLitMarker,
+    )
+    from helixc.frontend import ast_nodes as A
+    span = A.Span(0, 0)
+    t = A.TyArray(span=span,
+                  elem=A.TyName(span=span, name="T"),
+                  size=A.Name(span=span, name="N"))
+    subst = {"T": A.TyName(span=span, name="f64"),
+             "N": _SizeLitMarker(8)}
+    out = substitute_ty(t, subst)
+    assert isinstance(out, A.TyArray)
+    assert out.elem.name == "f64"
+    # The size must have been folded to an IntLit(8) by _subst_shape_expr.
+    assert isinstance(out.size, A.IntLit) and out.size.value == 8, (
+        f"expected IntLit(8) after substitution; got {out.size}"
+    )
+
+
+def test_c2_b_c11_binary_shape_folds_to_intlit():
+    """B:C11: pre-fix `_subst_shape_expr` substituted Name leaves
+    in a Binary shape but left the Binary unfolded — `[N*2; 16]`
+    with N=64 stayed as `Binary(*, IntLit(64), IntLit(2))` instead
+    of `IntLit(128)`. Downstream lower-ast defaulted non-IntLit
+    shapes to 0. Fix: fold Binary(IntLit, op, IntLit) → IntLit."""
+    from helixc.frontend.monomorphize import (
+        _subst_shape_expr, _SizeLitMarker,
+    )
+    from helixc.frontend import ast_nodes as A
+    span = A.Span(0, 0)
+    expr = A.Binary(span=span, op="*",
+                    left=A.Name(span=span, name="N"),
+                    right=A.IntLit(span=span, value=2))
+    subst = {"N": _SizeLitMarker(64)}
+    out = _subst_shape_expr(expr, subst)
+    assert isinstance(out, A.IntLit) and out.value == 128, (
+        f"expected IntLit(128), got {out}"
+    )
+
+
+# ----------------------------------------------------------------------
+# Audit 28.8 cycle 2 C2-6 / B:C5 — ref-to-ref cast inner compat
+# ----------------------------------------------------------------------
+def test_c2_6_ref_to_ref_numeric_inner_ok():
+    """C2-6 / B:C5: `&i32 as &i64` should still typecheck (inner
+    pair is allowed by the numeric matrix)."""
+    src = """
+    fn main() -> i32 {
+        let x: i32 = 7;
+        let r: &i32 = &x;
+        let r2: &i64 = r as &i64;
+        0
+    }
+    """
+    # Just verify check doesn't reject the numeric inner ref-cast.
+    errs = check(src)
+    # We don't require errs == [] because Phase-0 borrow-check may
+    # surface separate diagnostics; just verify trap 28604 isn't
+    # emitted for the ref-cast itself.
+    assert not any("28604" in str(e) for e in errs), (
+        f"unexpected 28604 on numeric ref-cast: {errs}"
+    )
+
+
+def test_c2_6_ref_to_unrelated_ref_traps_28604():
+    """C2-6 / B:C5: `&Foo as &Bar` (unrelated structs) must now
+    trap 28604. Pre-fix this silently typechecked because the
+    TyRef-TyRef arm of `_check_cast_compat` returned unconditionally."""
+    src = """
+    struct Foo { x: i32 }
+    struct Bar { y: i32 }
+    fn cast_ref(f: &Foo) -> &Bar {
+        f as &Bar
+    }
+    fn main() -> i32 { 0 }
+    """
+    errs = check(src)
+    assert any("28604" in str(e) for e in errs), (
+        f"expected trap 28604 on &Foo as &Bar; got: {errs}"
+    )
+
+
+# ----------------------------------------------------------------------
+# Audit 28.8 cycle 2 B:C7 — flatten_impls wired into check.py
+# ----------------------------------------------------------------------
+def test_c2_b_c7_flatten_impls_wired_in_check_py(tmp_path, capsys):
+    """B:C7: pre-fix `check.py` only ran struct_mono, not flatten_impls.
+    So trap 74002 (duplicate method name on distinct structs) was
+    unreachable via `python -m helixc.check foo.hx`. Now it surfaces."""
+    from helixc.check import main
+    src_path = str(tmp_path / "dup.hx")
+    with open(src_path, "w") as f:
+        f.write(
+            "struct Foo { x: i32 }\n"
+            "struct Bar { y: i32 }\n"
+            "impl Foo { fn area(self: Foo) -> i32 { self.x } }\n"
+            "impl Bar { fn area(self: Bar) -> i32 { self.y } }\n"
+            "fn main() -> i32 { 0 }\n"
+        )
+    rc = main([src_path, "--check-only"])
+    cap = capsys.readouterr()
+    assert rc == 1, (
+        f"expected rc=1 on duplicate method; got rc={rc} "
+        f"stdout={cap.out!r}"
+    )
+    assert "74002" in cap.out or "duplicate method" in cap.out, (
+        f"expected 74002 diagnostic; got stdout={cap.out!r}"
+    )
+
+
 def main():
     tests = [(name, fn) for name, fn in globals().items()
              if name.startswith("test_") and callable(fn)]

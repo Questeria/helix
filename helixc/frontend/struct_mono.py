@@ -239,6 +239,17 @@ def collect_concrete_uses(prog: A.Program,
             visit_expr(e.transformation)
             visit_expr(e.verifier)
             return
+        # Audit 28.8 cycle 2 (deferred observation #23): TileLit
+        # `tile<Pt<i32>, [4, 4], REG>::zeros()` embeds a TyNode
+        # dtype that may be a generic struct use. Pre-fix this was
+        # silently skipped — Pt<i32> never got monomorphized through
+        # the TileLit path.
+        if isinstance(e, A.TileLit):
+            visit_ty(e.dtype)
+            for s in e.shape:
+                visit_expr(s)
+            visit_expr(e.memspace)
+            return
         # Literals + leaf nodes — no-op.
         return
 
@@ -328,7 +339,13 @@ def _ty_key(t: A.TyNode):
     if isinstance(t, A.TyTuple):
         return ("tup", tuple(_ty_key(e) for e in t.elems))
     if isinstance(t, A.TyArray):
-        return ("arr", _ty_key(t.elem))
+        # Audit 28.8 cycle 2 C2-5 / B:C8: pre-fix `[i32; 4]` and
+        # `[i32; 8]` produced identical keys because the size was
+        # excluded — so `Pt<[i32; 4]>` and `Pt<[i32; 8]>` collapsed
+        # to one mono'd struct (whichever's layout won was applied
+        # to both, with garbage data for the loser at codegen).
+        # Include the size key, paralleling TyTensor.shape.
+        return ("arr", _ty_key(t.elem), _shape_key(t.size))
     if isinstance(t, A.TyRef):
         return ("ref", t.is_mut, _ty_key(t.inner))
     if isinstance(t, A.TyPtr):
