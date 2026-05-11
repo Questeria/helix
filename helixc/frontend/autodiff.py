@@ -707,7 +707,18 @@ def _inline_lets(expr: A.Expr | None, env: dict[str, A.Expr]) -> A.Expr | None:
     if isinstance(expr, A.Continue):
         return expr
     if isinstance(expr, A.TileLit):
-        return expr
+        # Audit 28.8 cycle 6 C5-3 / F4: TileLit has Expr children
+        # (shape: list[Expr], memspace: Expr). The cycle-4 identity arm
+        # dropped let-bound names appearing in those positions. Walk
+        # children so `let N = 4; tile<f32, [N], REG>::zeros()` (the
+        # legitimate user idiom) substitutes correctly.
+        return A.TileLit(
+            span=expr.span,
+            dtype=expr.dtype,
+            shape=[_inline_lets(s, env) for s in expr.shape],
+            memspace=_inline_lets(expr.memspace, env),
+            init=expr.init,
+        )
     # Catch-all fallthrough: warn loud so future AST extensions surface
     # immediately rather than silently dropping let-bindings. Only fires
     # when an Expr subtype is genuinely unhandled (not just a no-op

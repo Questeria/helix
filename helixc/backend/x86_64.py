@@ -3022,9 +3022,18 @@ if __name__ == "__main__":
     # so the trap-28801 diagnostic comes through cleanly instead of
     # being mislabeled as a compiler-internal-error by the outer
     # check.py wrapper.
+    #
+    # Audit 28.8 cycle 6 C5-4 / F3: abort the pipeline on shape-fold
+    # error rather than emitting a `warning:` and continuing with a
+    # half-mutated program. The cycle-5 silent-failures audit caught
+    # this — `monomorphize_safe` is structured-error not warning;
+    # continuing into grad_pass/typecheck/codegen with partial-mono
+    # state is a miscompile window.
     mono_count, mono_diags = monomorphize_safe(prog)
-    for d in mono_diags:
-        print(f"warning: fn-mono: {d}", file=sys.stderr)
+    if mono_diags:
+        for d in mono_diags:
+            print(f"error: fn-mono: {d}", file=sys.stderr)
+        sys.exit(1)
     if mono_count > 0:
         print(f"mono: {mono_count} generic instantiation(s)", file=sys.stderr)
     grad_count = grad_pass(prog)

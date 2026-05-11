@@ -1433,6 +1433,28 @@ def test_d8_fmt_tystruct_uses_name():
     )
 
 
+def test_c5_2_compatible_tysize_cascade():
+    """Audit 28.8 cycle 6 C5-2 / F1: `_compatible(TySize, TySize)` must
+    return True (cascade-safe). Pre-fix, cycle-4 E1 fix routed TyArray
+    size through `_compatible` but `_compatible` had no TyVar/TySize
+    arm so `TySize('N') vs TySize('M')` fell through to `a == b` and
+    returned False, false-positive at the call boundary."""
+    from helixc.frontend import ast_nodes as A
+    from helixc.frontend.typecheck import (
+        TypeChecker, TySize, TyArray, TyPrim,
+    )
+    span = A.Span(0, 0)
+    tc = TypeChecker(A.Program(module=None, items=[]))
+    assert tc._compatible(TySize("N"), TySize("M")), (
+        "TySize vs TySize should cascade-pass"
+    )
+    a1 = TyArray(elem=TyPrim("i32"), size=TySize("N"))
+    a2 = TyArray(elem=TyPrim("i32"), size=TyPrim("size_3"))
+    assert tc._compatible(a1, a2), (
+        "TyArray<i32; N> vs TyArray<i32; 3> should cascade-pass"
+    )
+
+
 def test_c3_3_main_clean_on_exception(monkeypatch, capsys, tmp_path):
     """Audit 28.8 cycle 3 C3-3: when _main_inner raises, main() must
     NOT leak a raw Python traceback to stderr, must return rc=1, and

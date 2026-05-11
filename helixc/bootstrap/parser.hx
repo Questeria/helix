@@ -2330,48 +2330,20 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
                     // assume non-i32 for closure-capture trap purposes."
                     // This makes `let pi = get_pi(); let c = |x| x + pi;`
                     // trap 76003 instead of silently capturing pi as i32.
-                    inferred_ty_tag = 12;            // untracked-call sentinel
-                } else {
-                    // Audit 28.8 cycle 4 C4-2: extend the D2 sentinel
-                    // to every complex (non-trivially-i32-literal) RHS.
-                    // Pre-fix, D2 covered ONLY val_tag == 16 (Call);
-                    // Binary (AST_ADD=2, AST_SUB=3, AST_MUL=4, AST_DIV=5,
-                    // AST_BAND=28, AST_BOR=29, AST_BXOR=30, AST_SHL=32,
-                    // AST_SHR=33), Unary (AST_NEG=9, AST_BNOT=26, AST_NOT
-                    // — see header line 82), Index, Field, If (AST_IF=7),
-                    // Match, Block, UnsafeBlock RHS all silently left
-                    // inferred_ty_tag = -1 and the capture guard `> 0`
-                    // silently truncated non-i32 captures.
                     //
-                    // The conservative line: any val_tag not in the
-                    // proven-i32 set (tag 0 = AST_INT literal, or
-                    // proven-by-suffix typed literal handled above) AND
-                    // not in the proven-non-i32 literal set (handled
-                    // above) gets the untracked sentinel. We exclude
-                    // AST_VAR (val_tag == 1) — re-resolving through
-                    // var_type_tab is the existing path and shouldn't
-                    // be over-warned at this layer. AST_LT (6), AST_GT
-                    // (19), AST_EQ-AST_GE (20-23) return reified 0/1 i32
-                    // booleans — safe to mark as tag 0. Everything else
-                    // (Binary arithmetic, Unary, Index, Field, If,
-                    // Match, Block, UnsafeBlock) gets sentinel 12.
-                    if val_tag == 1 {
-                        // AST_VAR — defer to var_type_tab resolution.
-                    } else { if val_tag == 6 {
-                        inferred_ty_tag = 0;          // AST_LT bool
-                    } else { if val_tag == 19 {
-                        inferred_ty_tag = 0;          // AST_GT bool
-                    } else { if val_tag == 20 {
-                        inferred_ty_tag = 0;          // AST_EQ bool
-                    } else { if val_tag == 21 {
-                        inferred_ty_tag = 0;          // AST_NE bool
-                    } else { if val_tag == 22 {
-                        inferred_ty_tag = 0;          // AST_LE bool
-                    } else { if val_tag == 23 {
-                        inferred_ty_tag = 0;          // AST_GE bool
-                    } else {
-                        inferred_ty_tag = 12;         // sentinel: untracked-complex
-                    };};};};};};};
+                    // Audit 28.8 cycle 6 C5-1 / F5 / F6 REVERT of C4-2:
+                    // the cycle-4 broadening to Binary/Unary/Index/Field/
+                    // If/Match/Block/UnsafeBlock RHS produced false
+                    // positives on trivially-i32 expressions like
+                    // `let a = 10 + 5;` (Binary of two AST_INT literals,
+                    // provably i32). Phase-0 closure-capture inference
+                    // can't distinguish these without a typechecker;
+                    // staying narrow (Call-only sentinel) is safer than
+                    // broad (which traps legitimate code). Re-broadening
+                    // is deferred to a later cycle once we have either
+                    // (a) shallow constant-folding at parse time or
+                    // (b) a real type pass before closure capture.
+                    inferred_ty_tag = 12;            // untracked-call sentinel
                 };};};};};};};};};};};};
                 // Register the inferred tag so var_type_tab_lookup at
                 // closure-capture sites can detect the non-i32 case

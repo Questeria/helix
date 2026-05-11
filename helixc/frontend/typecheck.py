@@ -588,12 +588,12 @@ class TypeChecker:
             if expr.value < 0:
                 self.errors.append(TypeError_(
                     f"array size must be > 0, got {expr.value} "
-                    f"(trap 28802)",
+                    f"(trap {TRAP_ARRAY_SIZE_NEGATIVE_OR_ZERO})",
                     expr.span,
                 ))
             elif expr.value == 0:
                 self.errors.append(TypeError_(
-                    f"array size must be > 0, got 0 (trap 28802)",
+                    f"array size must be > 0, got 0 (trap {TRAP_ARRAY_SIZE_NEGATIVE_OR_ZERO})",
                     expr.span,
                 ))
             return TyPrim(f"size_{expr.value}")
@@ -603,12 +603,12 @@ class TypeChecker:
             v = -expr.operand.value
             if v < 0:
                 self.errors.append(TypeError_(
-                    f"array size must be > 0, got {v} (trap 28802)",
+                    f"array size must be > 0, got {v} (trap {TRAP_ARRAY_SIZE_NEGATIVE_OR_ZERO})",
                     expr.span,
                 ))
             elif v == 0:
                 self.errors.append(TypeError_(
-                    f"array size must be > 0, got 0 (trap 28802)",
+                    f"array size must be > 0, got 0 (trap {TRAP_ARRAY_SIZE_NEGATIVE_OR_ZERO})",
                     expr.span,
                 ))
             return TyPrim(f"size_{v}")
@@ -1346,7 +1346,16 @@ class TypeChecker:
                             == _widen_canon_name(r_inner.name)
                     )
                 )
-                if (l_is_diff or r_is_diff) and inner_mismatch:
+                if (l_is_diff or r_is_diff) and (
+                        inner_mismatch
+                        or (l_is_diff != r_is_diff)
+                ):
+                    # Audit 28.8 cycle 6 F2: D<T> + T same-inner asymmetric
+                    # wrap also warns. Pre-fix the cycle-2 B:C6 D-vs-bare
+                    # gate required `inner_mismatch`; same-inner pair
+                    # `D<f64> + f64` silently produced `D<f64>` with no
+                    # diagnostic. Now fires whenever exactly one side
+                    # carries D — symmetric with cycle-4 E2 for Logic.
                     inner = _widen_diff_inner(
                         l_inner, r_inner,
                         _warn_cb=_tie_cb, _span=expr.span,
@@ -2097,7 +2106,7 @@ class TypeChecker:
                 # of the matrix (trap 28803).
                 self.errors.append(TypeError_(
                     f"invalid cast: ref-nesting depth exceeds "
-                    f"8 levels (trap 28803)",
+                    f"8 levels (trap {TRAP_CAST_MATRIX_RECURSION_DEPTH})",
                     span,
                     hint="Phase-0 caps recursive cast-matrix depth "
                          "to keep the typechecker stack-bounded",
@@ -2110,7 +2119,7 @@ class TypeChecker:
         if _depth > 8:
             self.errors.append(TypeError_(
                 f"invalid cast: cast-matrix recursion exceeds "
-                f"8 levels (trap 28803)",
+                f"8 levels (trap {TRAP_CAST_MATRIX_RECURSION_DEPTH})",
                 span,
                 hint="Phase-0 caps recursive cast-matrix depth "
                      "to keep the typechecker stack-bounded",
@@ -2156,6 +2165,17 @@ class TypeChecker:
 
     def _compatible(self, a: Type, b: Type) -> bool:
         if isinstance(a, TyUnknown) or isinstance(b, TyUnknown):
+            return True
+        # Audit 28.8 cycle 6 C5-2 / F1: cascade-safe arm for TyVar /
+        # TySize. Pre-fix, `_compatible(TySize('N'), TySize('M'))` fell
+        # through to `a == b` which returned False even when both sides
+        # were generic size params from the same scope. This false-
+        # positive surfaced at the call boundary for
+        # `fn f[N](a:[i32;N])` called from `fn g[M](a:[i32;M])` because
+        # the TyArray size compare (cycle-4 E1) now routes through
+        # `_compatible`. Defer to mono substitution for these — same
+        # cascade-safe rule as TyUnknown.
+        if isinstance(a, (TyVar, TySize)) or isinstance(b, (TyVar, TySize)):
             return True
         # Memory-tier types are incompatible across tiers (must explicitly
         # consolidate / recall to convert)

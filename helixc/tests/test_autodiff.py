@@ -546,6 +546,80 @@ def test_c3_1_grad_in_chained_else_if_rewritten():
     )
 
 
+def test_c4_1_path_no_false_positive():
+    """Audit 28.8 cycle 4 C4-1: `Maybe::None` (A.Path) in an AD'd fn
+    body must NOT trigger the _inline_lets catch-all 85001 warning."""
+    from helixc.frontend import autodiff
+    autodiff.take_diff_warnings()
+    # Synthesize Path expression and run through _inline_lets directly.
+    span = A.Span(0, 0)
+    path = A.Path(span=span, segments=["Maybe", "None"])
+    result = autodiff._inline_lets(path, {})
+    assert result is path, "Path should be returned identically"
+    warnings = autodiff.take_diff_warnings()
+    assert not any("85001" in w for w in warnings), (
+        f"unexpected 85001 warn on Path: {warnings}"
+    )
+
+
+def test_c4_3_inline_lets_if_cond_substituted():
+    """Audit 28.8 cycle 4 C4-3: `_inline_lets` must substitute let-bound
+    names appearing in `if cond { ... }`. Pre-fix the cond was passed
+    through unmodified."""
+    from helixc.frontend import autodiff
+    span = A.Span(0, 0)
+    # Build `if g > 0 { 1 } else { 2 }` where g should resolve to `x*2`.
+    cond = A.Binary(
+        span=span, op=">",
+        left=A.Name(span=span, name="g", generics=[]),
+        right=A.IntLit(span=span, value=0, type_suffix=None),
+    )
+    then_blk = A.Block(span=span, stmts=[],
+                       final_expr=A.IntLit(span=span, value=1, type_suffix=None))
+    else_blk = A.Block(span=span, stmts=[],
+                       final_expr=A.IntLit(span=span, value=2, type_suffix=None))
+    if_expr = A.If(span=span, cond=cond, then=then_blk, else_=else_blk)
+    env = {"g": A.Binary(
+        span=span, op="*",
+        left=A.Name(span=span, name="x", generics=[]),
+        right=A.IntLit(span=span, value=2, type_suffix=None),
+    )}
+    result = autodiff._inline_lets(if_expr, env)
+    # The cond should now reference `x` instead of `g`.
+    assert isinstance(result, A.If)
+    assert isinstance(result.cond, A.Binary)
+    left = result.cond.left
+    # left was Name('g'); after inlining it should be the env value.
+    assert not (isinstance(left, A.Name) and left.name == "g"), (
+        f"if.cond was not substituted; left={left}"
+    )
+
+
+def test_c6_revert_c4_2_literal_binary_no_false_trap():
+    """Audit 28.8 cycle 6 C5-1: the cycle-4 over-broadening of
+    parser.hx tag-12 sentinel produced false-positive trap 76003 on
+    trivially-i32 expressions like `let a = 10 + 5; let c = |x| x + a;`.
+    Cycle 6 reverts to Call-only D2 behavior. Verify by checking that
+    parser.hx's val_tag dispatch no longer assigns a non-zero inferred
+    tag for Binary RHS — proxy: read parser.hx and assert the C4-2
+    broadening block is gone."""
+    import os
+    here = os.path.dirname(os.path.abspath(__file__))
+    parser_path = os.path.join(here, "..", "bootstrap", "parser.hx")
+    with open(parser_path, "r", encoding="utf-8") as f:
+        src = f.read()
+    # The cycle-4 broadening introduced an `if val_tag == 6 {` arm for
+    # AST_LT. After cycle-6 revert, that arm should be gone.
+    assert "if val_tag == 6 {" not in src, (
+        "cycle-4 C4-2 broadening still present in parser.hx — "
+        "C5-1 revert did not land"
+    )
+    # The original D2 Call-only arm (val_tag == 16) MUST remain.
+    assert "if val_tag == 16 {" in src, (
+        "D2 Call-only arm missing — revert went too far"
+    )
+
+
 # ============================================================================
 # Test runner
 # ============================================================================

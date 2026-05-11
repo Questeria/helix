@@ -114,7 +114,7 @@ def _fold_intlit_arith(expr: A.Expr) -> A.Expr:
         if rv == 0:
             raise ShapeFoldError(
                 f"{expr.span.line}:{expr.span.col}: division by zero "
-                f"in shape expression (trap 28801)",
+                f"in shape expression (trap {TRAP_SHAPE_FOLD_ZERO_DIV})",
                 expr.span,
             )
         return A.IntLit(span=expr.span, value=lv // rv, type_suffix=None)
@@ -122,7 +122,7 @@ def _fold_intlit_arith(expr: A.Expr) -> A.Expr:
         if rv == 0:
             raise ShapeFoldError(
                 f"{expr.span.line}:{expr.span.col}: modulo by zero "
-                f"in shape expression (trap 28801)",
+                f"in shape expression (trap {TRAP_SHAPE_FOLD_ZERO_DIV})",
                 expr.span,
             )
         return A.IntLit(span=expr.span, value=lv % rv, type_suffix=None)
