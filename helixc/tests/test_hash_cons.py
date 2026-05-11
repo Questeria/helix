@@ -448,6 +448,59 @@ def test_c38_1_different_array_sizes_still_hash_differently():
     )
 
 
+def test_c41_ty_equal_cast_with_array_target():
+    """Stage 28.9 cycle 43 audit-R C42-R3 regression (conf 88):
+    _ty_equal must treat two Cast nodes with TyArray targets that
+    differ only in span as structurally equal, so _ast_equal
+    correctly identifies them as the same node — restoring the
+    cycle-41 trap-20001 invariant for the Cast collision-bucket
+    disambiguation path.
+
+    Without this test, the cycle-41 _ty_equal helper change is only
+    exercised indirectly via the cycle-38 hash_cons sharing test
+    (which goes through _ty_repr in ast_hash.py, not _ty_equal in
+    hash_cons.py). This test directly invokes _ast_equal on two
+    structurally-equal-but-span-different Casts and asserts True."""
+    from helixc.frontend.hash_cons import _ast_equal
+    s1 = A.Span(line=1, col=1)
+    s2 = A.Span(line=99, col=5)
+    c1 = A.Cast(
+        span=s1,
+        value=A.Name(span=s1, name="arr", generics=[]),
+        target_ty=A.TyArray(
+            span=s1, elem=A.TyName(span=s1, name="i32"),
+            size=A.IntLit(span=s1, value=3, type_suffix=None),
+        ),
+    )
+    c2 = A.Cast(
+        span=s2,
+        value=A.Name(span=s2, name="arr", generics=[]),
+        target_ty=A.TyArray(
+            span=s2, elem=A.TyName(span=s2, name="i32"),
+            size=A.IntLit(span=s2, value=3, type_suffix=None),
+        ),
+    )
+    assert _ast_equal(c1, c2), (
+        "_ast_equal must return True for span-only-different Casts "
+        "with array target types (cycle 41 C39-A1 invariant)"
+    )
+
+    # And the negative direction: different array sizes must remain
+    # unequal — the cycle-41 fix must not over-correct.
+    c3 = A.Cast(
+        span=s1,
+        value=A.Name(span=s1, name="arr", generics=[]),
+        target_ty=A.TyArray(
+            span=s1, elem=A.TyName(span=s1, name="i32"),
+            size=A.IntLit(span=s1, value=4, type_suffix=None),
+        ),
+    )
+    assert not _ast_equal(c1, c3), (
+        "_ast_equal must return False for Casts to [i32; 3] vs "
+        "[i32; 4] (anti-over-correction)"
+    )
+
+
 def test_c36_1_different_dtypes_still_hash_differently():
     """C36-1 fix must not over-correct: TileLits with DIFFERENT
     dtypes must still hash differently."""
