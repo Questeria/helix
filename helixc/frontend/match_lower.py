@@ -84,19 +84,24 @@ def _rewrite_item(item: A.Item) -> None:
         # ModBlock.items is a nested list of Items; recurse.
         for sub in item.items:
             _rewrite_item(sub)
-    elif isinstance(item, A.AgentDecl):
-        # AgentDecl.methods are FnDecls; recurse.
-        for m in item.methods:
-            _rewrite_item(m)
     elif isinstance(item, (A.StructDecl, A.EnumDecl, A.ModuleDecl,
-                            A.UseDecl, A.TypeAlias)):
+                            A.UseDecl, A.TypeAlias, A.AgentDecl)):
         # Leaf decls with no Expr-bearing children at Phase-0.
         # StructDecl.fields are TyNodes; EnumDecl.variants are payload
         # tag/type metadata; ModuleDecl/UseDecl are metadata-only.
         # TypeAlias.target is a TyNode (cycle-17 audit-B C17-T1 fix,
         # conf 85: pre-fix any `type Foo = Bar;` would trip the loud
         # NotImplementedError catchall even with no match in the
-        # program). TraitDecl methods are interface-only (no bodies).
+        # program).
+        #
+        # AgentDecl (cycle-17 audit-A C17-1 fix, conf 92): the C16-1
+        # fix originally recursed into `AgentDecl.methods[].body`,
+        # but AgentMethod is NOT an Item subclass and has no `body`
+        # (parser.py:610-613 eats `;` after the signature without
+        # parsing a block). Recursion fell to the catchall and would
+        # crash any program with an agent declaration. Treat as a
+        # leaf: agent method signatures are interface-only at
+        # Phase-0; no Expr-bearing body to traverse.
         pass
     else:
         # Loud failure for unknown Item subclass — symmetric to

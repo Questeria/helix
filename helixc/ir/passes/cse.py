@@ -114,7 +114,14 @@ def cse_function(fn: tir.FnIR) -> int:
                     rewrites[new_r.id] = old_r
                 found += 1
             else:
-                seen[key] = op.results
+                # Stage 28.9 cycle 18 audit-C C18-C1 fix (conf 82):
+                # store a shallow COPY of op.results rather than the
+                # live reference. If any downstream pass (or a future
+                # CSE iteration) mutates `op.results` in-place, the
+                # `seen` entry would silently alias the mutated list.
+                # Matches the defensive list-copy pattern in
+                # const_fold._propagate_identities.
+                seen[key] = list(op.results)
 
     return found
 

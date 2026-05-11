@@ -104,9 +104,13 @@ def test_stage18_cse_merges_let_5_times_5_pair():
     from helixc.ir.passes.dce import dce_module as _dce
     cse_count = _cse(mod)
     _dce(mod)
-    assert cse_count >= 4, (
-        f"expected CSE to merge >= 4 duplicate ops (3 const(5) + 1 MUL); "
-        f"got {cse_count}"
+    # Stage 28.9 cycle 18 audit-C C18-C2 fix (conf 80): the `>= 4`
+    # lower bound is fragile against lowering-order variations. The
+    # `muls == 1` post-condition is the canonical correctness check;
+    # `cse_count >= 1` confirms CSE did SOMETHING rather than the
+    # specific implementation-detail "3 consts + 1 MUL = 4 merges".
+    assert cse_count >= 1, (
+        f"expected CSE to merge at least 1 duplicate op; got {cse_count}"
     )
     # Net result: one MUL remains, one ADD, one const, one return.
     muls = count_ops(mod, tir.OpKind.MUL)
