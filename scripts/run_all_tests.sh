@@ -12,6 +12,7 @@ for test in helixc/tests/test_*.py; do
     output=$(python "$test" 2>&1)
     last_line=$(echo "$output" | tail -1)
     if [[ "$last_line" =~ ^([0-9]+)\ passed,\ ([0-9]+)\ failed(,\ ([0-9]+)\ skipped)?$ ]]; then
+        # Legacy runner format: "N passed, N failed[, N skipped]"
         pass="${BASH_REMATCH[1]}"
         fail="${BASH_REMATCH[2]}"
         skip="${BASH_REMATCH[4]:-0}"
@@ -27,6 +28,36 @@ for test in helixc/tests/test_*.py; do
         else
             echo "  ok    $name: $pass passed$suffix"
         fi
+    elif [[ "$last_line" =~ ^=+\ ([0-9]+)\ passed(,\ ([0-9]+)\ skipped)?(,\ ([0-9]+)\ failed)?\ in\ [0-9.]+s\ =+$ ]]; then
+        # pytest summary: "= N passed[, N skipped][, N failed] in X.XXs ="
+        pass="${BASH_REMATCH[1]}"
+        skip="${BASH_REMATCH[3]:-0}"
+        fail="${BASH_REMATCH[5]:-0}"
+        TOTAL_PASS=$((TOTAL_PASS + pass))
+        TOTAL_FAIL=$((TOTAL_FAIL + fail))
+        TOTAL_SKIP=$((TOTAL_SKIP + skip))
+        suffix=""
+        if [[ "$skip" -gt 0 ]]; then
+            suffix=", $skip skipped"
+        fi
+        if [[ "$fail" -gt 0 ]]; then
+            echo "  FAIL  $name: $pass passed, $fail failed$suffix"
+        else
+            echo "  ok    $name: $pass passed$suffix"
+        fi
+    elif [[ "$last_line" =~ ^=+\ ([0-9]+)\ failed,\ ([0-9]+)\ passed(,\ ([0-9]+)\ skipped)?\ in\ [0-9.]+s\ =+$ ]]; then
+        # pytest summary with failures listed first.
+        fail="${BASH_REMATCH[1]}"
+        pass="${BASH_REMATCH[2]}"
+        skip="${BASH_REMATCH[4]:-0}"
+        TOTAL_PASS=$((TOTAL_PASS + pass))
+        TOTAL_FAIL=$((TOTAL_FAIL + fail))
+        TOTAL_SKIP=$((TOTAL_SKIP + skip))
+        suffix=""
+        if [[ "$skip" -gt 0 ]]; then
+            suffix=", $skip skipped"
+        fi
+        echo "  FAIL  $name: $pass passed, $fail failed$suffix"
     else
         echo "  ?     $name: unrecognized output: $last_line"
         TOTAL_FAIL=$((TOTAL_FAIL + 1))
