@@ -288,6 +288,66 @@ def _is_total_pattern(pat: A.Pattern) -> bool:
     return False
 
 
+def _sub_pat_or_test(
+    pat: "A.PatOr", scrut_load: A.Expr, span: A.Span,
+) -> "A.Expr | None":
+    """Stage 28.9 cycle 12 audit-A C12-1: generate an OR-test for a
+    PatOr that appears as a sub-pattern inside PatVariant.sub_patterns
+    or PatTuple.elems.
+
+    Each alt is tested against `scrut_load` (the IR expression that
+    loads the parent's slot value) locally — we don't recurse through
+    the str-scrut variant of `_pattern_test` because that requires a
+    named binding. Common alt shapes covered:
+      - PatLit:     scrut_load == alt.value
+      - PatRange:   scrut_load >= lo && scrut_load OP hi
+      - PatBind/PatWildcard: trivially true (binders handled in
+        _collect_binds via the C11-1 fix)
+      - PatVariant: scrut_load[0] == variant_tag (matches the
+        approximation already used for nested variants without OR)
+
+    Returns the combined boolean expression, or None if pat.alts is
+    empty (an impossible-but-defensive case)."""
+    if not pat.alts:
+        return None
+    alt_tests: list[A.Expr] = []
+    for alt in pat.alts:
+        if isinstance(alt, A.PatLit):
+            alt_tests.append(A.Binary(span=span, op="==",
+                                       left=scrut_load, right=alt.value))
+        elif isinstance(alt, A.PatRange):
+            op_hi = "<=" if alt.inclusive else "<"
+            alt_tests.append(A.Binary(
+                span=span, op="&&",
+                left=A.Binary(span=span, op=">=",
+                              left=scrut_load, right=alt.lo),
+                right=A.Binary(span=span, op=op_hi,
+                               left=scrut_load, right=alt.hi),
+            ))
+        elif isinstance(alt, A.PatVariant):
+            # Nested variant alt: scrut_load is the payload value;
+            # PatVariant.path is the discriminant. Same approximation
+            # as the line ~393 nested-variant test.
+            tag_load = A.Index(
+                span=span, callee=scrut_load,
+                indices=[A.IntLit(span=span, value=0)],
+            )
+            alt_tests.append(A.Binary(span=span, op="==",
+                                       left=tag_load, right=alt.path))
+        else:
+            # PatBind, PatWildcard, nested PatTuple, nested PatOr:
+            # trivially true contribution; the OR shape requires SOME
+            # alt branch to be true so a True alt makes the OR True.
+            # PatTuple/nested-PatOr cases not commonly used at this
+            # depth in Phase-0; flagged in audit-doc as a deeper-recurse
+            # follow-up.
+            alt_tests.append(A.BoolLit(span=span, value=True))
+    or_test = alt_tests[0]
+    for t in alt_tests[1:]:
+        or_test = A.Binary(span=span, op="||", left=or_test, right=t)
+    return or_test
+
+
 def _pattern_test(pat: A.Pattern, scrut: str, span: A.Span) -> A.Expr:
     """Build a boolean expression that's true iff `pat` matches scrut."""
     if isinstance(pat, (A.PatWildcard, A.PatBind)):
@@ -344,6 +404,18 @@ def _pattern_test(pat: A.Pattern, scrut: str, span: A.Span) -> A.Expr:
                     right=A.Binary(span=span, op=op_hi,
                                    left=slot_load, right=sub.hi),
                 ))
+            elif isinstance(sub, A.PatOr):
+                # Stage 28.9 cycle 12 audit-A C12-1 fix (conf 88): the
+                # C11-1 cycle-11 fix added PatOr to _collect_binds's
+                # recurse tuple, but the matching test arm here still
+                # silently fell through to "trivially true". Result:
+                # `(A | B(x))` as a tuple element matched ANY value,
+                # silently producing garbage in body. Now generate the
+                # OR-test inline against `slot_load`: each alt's test
+                # is computed locally for the common cases.
+                or_test = _sub_pat_or_test(sub, slot_load, span)
+                if or_test is not None:
+                    sub_tests.append(or_test)
             # PatBind / PatWildcard / nested PatTuple → trivially true
             # (binders handled in _collect_binds; nested tuples currently
             # restricted to wildcard-class subpats).
@@ -392,6 +464,14 @@ def _pattern_test(pat: A.Pattern, scrut: str, span: A.Span) -> A.Expr:
                 # by _collect_binds.
                 sub_tests.append(A.Binary(span=span, op="==",
                                           left=slot_load, right=sub.path))
+            elif isinstance(sub, A.PatOr):
+                # Stage 28.9 cycle 12 audit-A C12-1 fix (conf 88):
+                # nested PatOr inside PatVariant.sub_patterns previously
+                # fell through to trivially-true. Now generate the
+                # OR-test inline against slot_load.
+                or_test = _sub_pat_or_test(sub, slot_load, span)
+                if or_test is not None:
+                    sub_tests.append(or_test)
             # PatBind / PatWildcard / nested PatTuple: trivially true;
             # binder handled in _collect_binds.
         if sub_tests:

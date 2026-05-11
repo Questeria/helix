@@ -534,6 +534,59 @@ def test_c4_1_match_inside_assign_target_lowered():
     walk(prog)
 
 
+def test_c12_1_nested_pat_or_in_tuple_sub_test_emitted():
+    """Stage 28.9 cycle 12 C12-1 (HIGH, conf 88): a nested PatOr inside
+    PatTuple.elems or PatVariant.sub_patterns previously fell through
+    to "trivially true" in _pattern_test. The C11-1 cycle-11 fix added
+    binder-emission for nested PatOr but the matching test was still
+    silent-pass — so `(0 | 1, _)` matched ANY tuple. The C12-1 fix
+    adds an inline OR-test via _sub_pat_or_test against slot_load.
+
+    Verify via AST walk: after lower_matches, the if-chain should
+    contain a Binary node with op == "||" testing the slot.
+    """
+    from helixc.frontend.parser import parse as parse_src
+    from helixc.frontend.match_lower import lower_matches
+    from helixc.frontend import ast_nodes as A
+    src = """
+    fn f(t: i32) -> i32 {
+        match (t, 0) {
+            (0 | 1, _) => 10,
+            _ => 20,
+        }
+    }
+    """
+    prog = parse_src(src)
+    lower_matches(prog)
+
+    # Walk the AST: must find at least one Binary("||", ...) — the
+    # generated OR-test for the nested PatOr. Pre-C12-1 the lowering
+    # produced no `||` at all (the test was BoolLit(True)).
+    found_or = [0]
+    matches_remaining = [0]
+    def walk(node):
+        if node is None:
+            return
+        if isinstance(node, A.Match):
+            matches_remaining[0] += 1
+        if isinstance(node, A.Binary) and node.op == "||":
+            found_or[0] += 1
+        if isinstance(node, list):
+            for x in node:
+                walk(x)
+            return
+        if hasattr(node, "__dict__"):
+            for v in vars(node).values():
+                walk(v)
+    walk(prog)
+    assert matches_remaining[0] == 0, \
+        f"lower_matches must remove all Match nodes; {matches_remaining[0]} remain"
+    assert found_or[0] >= 1, (
+        "_pattern_test sub-dispatch must emit an OR-test (Binary op='||') "
+        "for nested PatOr; pre-C12-1 it was silently BoolLit(True)"
+    )
+
+
 def test_c10_1_pat_or_uniform_binders_lowered():
     """Stage 28.9 cycle 10 C10-1: `_collect_binds` previously had no
     PatOr arm, so an or-pattern with uniform binders (e.g. `a | a => a + 1`)
