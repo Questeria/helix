@@ -2521,19 +2521,29 @@ fn dep_tab_init() -> i32 {
     base
 }
 
+// Returns 1 on success, 0 on drop (cap reached). Caller checks the
+// return value and emits a 28702 cap warning diag when needed —
+// we keep dep_tab_add itself loose of diag_state so the helper can
+// be called from any context (incl. tests that don't construct one).
+//
+// Stage-28.9 audit-cycle-1 Finding 3 fix: previously this dropped
+// the 17th+ name silently with no diagnostic, so a program with 17
+// `@deprecated` fns would compile cleanly with zero warning that
+// some of the call-site detection was lost. The 0-return signals
+// the drop and the caller emits a 28702 (DIAG_DEP_TAB_CAPACITY)
+// severity-1 warning per drop.
 fn dep_tab_add(dep_tab: i32, name_s: i32, name_l: i32) -> i32 {
     let count = __arena_get(dep_tab);
     if count >= 16 {
-        // Cap reached; silently drop the extra name. Phase-0 keeps
-        // this lenient — overflow doesn't trap because deprecation
-        // is a warning-only pass anyway.
+        // Cap reached; signal drop to caller. Deprecation is a
+        // warning-only pass so we still don't HARD-error here.
         0
     } else {
         let entry = dep_tab + 1 + count * 2;
         __arena_set(entry, name_s);
         __arena_set(entry + 1, name_l);
         __arena_set(dep_tab, count + 1);
-        0
+        1
     }
 }
 
@@ -2668,6 +2678,10 @@ fn deprecated_pass(ast_root: i32, diag_state: i32) -> i32 {
         0
     } else {
         // First pass: build the dep_tab from @deprecated fn decls.
+        // Stage-28.9 audit-cycle-1 Finding 3 fix: when dep_tab_add
+        // returns 0 (cap reached at 16 names), emit a 28702 severity-1
+        // warning so the 17th+ @deprecated fn is observable. Without
+        // this, dropped names cause silent loss of call-site detection.
         let dep_tab = dep_tab_init();
         let mut walk: i32 = ast_root;
         while walk != 0 {
@@ -2676,7 +2690,13 @@ fn deprecated_pass(ast_root: i32, diag_state: i32) -> i32 {
             if is_deprecated == 1 {
                 let name_s = __arena_get(fn_idx + 1);
                 let name_l = __arena_get(fn_idx + 2);
-                dep_tab_add(dep_tab, name_s, name_l);
+                let added = dep_tab_add(dep_tab, name_s, name_l);
+                if added == 0 {
+                    // aux = fn_idx's name_s (callee name byte_start) so
+                    // a future driver can identify which @deprecated fn
+                    // got dropped.
+                    diag_emit(diag_state, 28702, 1, fn_idx, name_s);
+                };
             };
             walk = __arena_get(walk + 2);
         }

@@ -4286,6 +4286,83 @@ fn main() -> i32 {{
     )
 
 
+def test_bootstrap_kovc_dep_tab_overflow_emits_28702():
+    """Stage 28.9 audit-cycle-1 Finding 3 regression: bootstrap-side
+    deprecated_pass MUST emit a severity-1 28702 warning diag for the
+    17th+ `@deprecated` fn (dep_tab cap is 16). Before the fix, the
+    17th name was dropped silently and call sites against it were
+    never warned about.
+
+    Probe approach: a custom Helix driver that parses a 17-deprecated-fn
+    source, runs deprecated_pass into a fresh diag_arena, then counts
+    the number of entries whose code == 28702. The driver returns this
+    count as the exit code. Post-fix: 1. Pre-fix: 0.
+    """
+    import os, subprocess
+    proj = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    lexer = open(os.path.join(proj, "helixc", "bootstrap", "lexer.hx")).read()
+    lexer_no_main = lexer.rsplit(
+        "// --------------------------------------------------------------\n// Demo:",
+        1,
+    )[0]
+    parser_body = open(os.path.join(proj, "helixc", "bootstrap", "parser.hx")).read()
+    kovc = open(os.path.join(proj, "helixc", "bootstrap", "kovc.hx")).read()
+    kovc_lib = kovc.rsplit(
+        "// --------------------------------------------------------------\n// Demo:",
+        1,
+    )[0]
+    import uuid
+    tag = uuid.uuid4().hex[:10]
+    src_path = f"/tmp/helix_dep17_src_{tag}.hx"
+    # 17 @deprecated fns named d01..d17, plus a main that returns 0.
+    # The 17th (d17) overflows the cap=16 dep_tab.
+    parts = []
+    for i in range(1, 18):
+        parts.append(f"@deprecated fn d{i:02d}() -> i32 {{ {i} }}")
+    parts.append("fn main() -> i32 { 0 }")
+    src_text = " ".join(parts)
+    subprocess.run(
+        ["wsl", "-e", "bash", "-c",
+         f"printf %s {repr(src_text)} > {src_path}"],
+        check=True, timeout=10,
+    )
+    # Probe driver: parse + init diag_arena + run deprecated_pass, then
+    # count entries with code 28702. The bootstrap exposes diag_arena_count
+    # and diag_get_code, so we iterate. The driver returns the count as
+    # the exit code.
+    driver = lexer_no_main + parser_body + kovc_lib + f"""
+fn main() -> i32 {{
+    let src_start = __arena_len();
+    let src_len = read_file_to_arena("{src_path}");
+    let tok_base = __arena_len();
+    lex(src_start, src_len);
+    let ast_root = parse_top(tok_base);
+    let diag_state = diag_arena_init();
+    deprecated_pass(ast_root, diag_state);
+    let n = diag_arena_count(diag_state);
+    let mut i: i32 = 0;
+    let mut hits: i32 = 0;
+    while i < n {{
+        let code = diag_get_code(diag_state, i);
+        if code == 28702 {{ hits = hits + 1; }};
+        i = i + 1;
+    }}
+    hits
+}}
+"""
+    # Use compile_and_run's return value (which is the exit code).
+    rc = compile_and_run(driver)
+    # Cleanup
+    subprocess.run(
+        ["wsl", "-e", "bash", "-c", f"rm -f {src_path}"],
+        capture_output=True, timeout=10,
+    )
+    assert rc == 1, (
+        f"dep_tab cap-overflow should emit exactly 1 28702 diag for "
+        f"the 17th deprecated fn; got rc={rc}"
+    )
+
+
 def test_bootstrap_kovc_inline_read_file_to_arena():
     """kovc.hx self-hosted file builtin: read_file_to_arena loads a
     file's bytes into the arena and returns count. Pre-stage the file

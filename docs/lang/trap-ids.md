@@ -1,6 +1,6 @@
 # Helix Trap ID Registry
 
-**Last updated**: 2026-05-11 (Stage 28.8 cycle 4 audit C C4-1..C4-4 fixes — promoted SHAPE_FOLD_ZERO_DIV / ARRAY_SIZE_NEGATIVE_OR_ZERO / CAST_MATRIX_RECURSION_DEPTH to real module-level `TRAP_*` constants; extended row 76003 to cover the cycle-3 D2 Call-RHS-let trigger)
+**Last updated**: 2026-05-11 (Stage 28.9 cycle 1 audit A Finding 3 fix — added 28702 DIAG_DEP_TAB_CAPACITY for `dep_tab` cap-overflow when >16 `@deprecated` fns exist in one program)
 **Convention**: Each runtime trap has a numeric ID. The ID is encoded into `eax` immediately before a `ud2` instruction (SIGILL on x86_64), or surfaced as a structured `HelixCompileError` at compile time. Tools and tests cross-reference traps by ID.
 
 ## Two ID namespaces
@@ -60,6 +60,7 @@ Used by the Python frontend (`helixc/frontend/*.py`) and audit-introduced trap I
 | 28603 | (typecheck) | `helixc/frontend/typecheck.py:1361, 1378, 1388` | 28.6 | raw-pointer Cast outside unsafe context |
 | 28604 | (typecheck) | `helixc/frontend/typecheck.py:1394, 1408, 1777` | 28.6 | invalid scalar cast (not in allowed-cast matrix) |
 | 28701 | (bootstrap deprecated_pass) | `helixc/bootstrap/kovc.hx` | 28.9 | call site of `@deprecated` fn (severity=1 warning by default; matches Python -Wdeprecated=warn policy) |
+| 28702 | (bootstrap deprecated_pass) | `helixc/bootstrap/kovc.hx` | 28.9 cycle 1 | dep_tab cap reached (17th+ `@deprecated` fn in one program). Severity-1 warning emitted once per dropped name; Phase-0 cap is 16. Prevents silent loss of call-site detection. |
 | 28999 | (bootstrap diag_arena) | `helixc/bootstrap/kovc.hx` | 28.9 | diag_arena overflow (>64 collected validation-pass diagnostics in a single program) |
 | 28801 | `TRAP_SHAPE_FOLD_ZERO_DIV` | `helixc/frontend/monomorphize.py` (raised via `ShapeFoldError`) | 28.8 cycle 3 | division-by-zero or modulo-by-zero in a shape expression (e.g. `[T; N / 0]`). Hard error — silent fallthrough to length 0 is no longer allowed. |
 | 28802 | `TRAP_ARRAY_SIZE_NEGATIVE_OR_ZERO` | `helixc/frontend/typecheck.py` | 28.8 cycle 3 | array size resolves to a negative or zero IntLit (source `[T; -5]` or mono-substituted `[T; N-N]`). Phase-0 requires size > 0. |
