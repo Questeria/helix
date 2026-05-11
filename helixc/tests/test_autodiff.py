@@ -355,6 +355,31 @@ def test_b5_take_diff_warnings_drains():
 
 
 # ============================================================================
+# Audit 28.8 cycle 2 (deferred observation #18) — empty block warns
+# ============================================================================
+def test_c2_def_18_empty_block_warns():
+    """Deferred observation #18: pre-fix, `_inline_lets` on a Block
+    with stmts but no `final_expr` returned `FloatLit(0.0)` silently.
+    Now it emits an AD warning so the user can spot the missing tail."""
+    from helixc.frontend import autodiff
+    autodiff.take_diff_warnings()
+    # Build a Block with a Let but no final_expr.
+    span = A.Span(0, 0)
+    blk = A.Block(
+        span=span,
+        stmts=[A.Let(span=span, name="t", is_mut=False, ty=None,
+                     value=A.FloatLit(span=span, value=1.0,
+                                       type_suffix=None))],
+        final_expr=None,
+    )
+    autodiff._inline_lets(blk, {})
+    warnings = autodiff.take_diff_warnings()
+    assert any("empty block" in w.lower() for w in warnings), (
+        f"expected empty-block warn, got: {warnings}"
+    )
+
+
+# ============================================================================
 # Audit 28.8 cycle 2 C2-4 — grad_pass walker covers all Expr subtypes
 # ============================================================================
 def _names_in_prog(prog) -> set[str]:

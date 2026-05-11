@@ -142,10 +142,24 @@ def differentiate(expr: A.Expr, var: str,
     If `expr` is a Block, the block's let-bindings are inlined first so
     that subsequent uses of the bound names refer to their definitions.
     """
+    # Audit 28.8 cycle 2 (deferred observation #20): pre-fix this
+    # `except Exception: key = None` silently disabled the cache on
+    # any hash failure with NO diagnostic. Future AST extensions
+    # could quietly skip caching forever (perf regression, no signal).
+    # Narrowed to the actually-expected hashing exceptions; on a
+    # genuine hash failure we still bypass the cache but emit a
+    # warning via the AD channel so the user can spot the recurring
+    # miss.
     try:
         key = (structural_hash(expr), var, _fn_table_sig(fn_table))
-    except Exception:
+    except (TypeError, ValueError, AttributeError) as e:
         key = None  # hash failure → bypass cache
+        _ad_warn(
+            expr,
+            f"differentiate cache bypassed: hashing failed "
+            f"({type(e).__name__}: {e}) — perf regression but "
+            f"correctness preserved",
+        )
     if key is not None and key in _DIFF_CACHE:
         _DIFF_CACHE_HITS[0] += 1
         return _copy.deepcopy(_DIFF_CACHE[key])
@@ -496,6 +510,17 @@ def _inline_lets(expr: A.Expr | None, env: dict[str, A.Expr]) -> A.Expr | None:
                 local_env[stmt.name] = _inline_lets(stmt.value, local_env)
         if expr.final_expr is not None:
             return _inline_lets(expr.final_expr, local_env)
+        # Audit 28.8 cycle 2 (deferred observation #18): pre-fix this
+        # returned FloatLit(0.0) silently when a Block had stmts but no
+        # final expression. The let-stmts were inlined into env (so any
+        # later use of bound names would resolve) but the Block's value
+        # defaulted to 0 with no diagnostic. Now we WARN so the user
+        # can spot the missing tail expression in an AD context.
+        _ad_warn(
+            expr,
+            "empty block in AD context: no final expression — "
+            "assumed 0",
+        )
         return A.FloatLit(span=expr.span, value=0.0)
     if isinstance(expr, A.If):
         # Inline both branches and re-wrap in an If — the inliner only flattens
@@ -781,6 +806,12 @@ def _simplify(expr: A.Expr) -> A.Expr:
         l_val = _const_value(l)
         r_val = _const_value(r)
         if l_val is not None and r_val is not None:
+            # Audit 28.8 cycle 2 (deferred observation #19): pre-fix
+            # this `except Exception: pass` swallowed every error in
+            # constant folding, falling through to the unsimplified
+            # expression with no diagnostic. Narrowed to the actually
+            # expected arithmetic exceptions (overflow, zero-divide,
+            # value, type). Anything else surfaces as a real bug.
             try:
                 if expr.op == "+":
                     return _make_const(l_val + r_val, expr.span)
@@ -790,7 +821,8 @@ def _simplify(expr: A.Expr) -> A.Expr:
                     return _make_const(l_val * r_val, expr.span)
                 if expr.op == "/" and r_val != 0:
                     return _make_const(l_val / r_val, expr.span)
-            except Exception:
+            except (OverflowError, ZeroDivisionError, ValueError, TypeError):
+                # Genuine arithmetic limits — fall through unsimplified.
                 pass
         # 0 + x = x
         if expr.op == "+":

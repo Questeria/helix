@@ -296,5 +296,34 @@ def test_unflatten_pytree_raises_on_non_diff_field():
         unflatten_pytree(bad_decl, decls, {"w": 1.0})
 
 
+# ----------------------------------------------------------------------
+# Audit 28.8 cycle 2 (deferred observation #17) — _unflatten depth guard
+# ----------------------------------------------------------------------
+def test_unflatten_pytree_too_deep_traps_26001():
+    """Deferred observation #17: pre-fix `_unflatten` had a cycle
+    guard (`_visited`) but no MAX_DEPTH check. A straight-line nested
+    chain that exceeded MAX_DEPTH would RecursionError instead of a
+    clean trap. Now mirrors `flatten_pytree`'s 26001 path."""
+    span = A.Span(0, 0)
+    # Build a chain: D1 -> D2 -> D3 -> D4 -> D5 -> D6 (depth 5,
+    # MAX_DEPTH=4). Each non-leaf holds an inner struct reference.
+    decls: dict[str, A.StructDecl] = {}
+    for i in range(6, 0, -1):
+        if i == 6:
+            fields = [A.FnParam(span=span, name="x",
+                                ty=A.TyName(span=span, name="f64"),
+                                is_mut=False)]
+        else:
+            fields = [A.FnParam(span=span, name="inner",
+                                ty=A.TyName(span=span, name=f"D{i+1}"),
+                                is_mut=False)]
+        decls[f"D{i}"] = A.StructDecl(
+            span=span, name=f"D{i}", generics=[],
+            fields=fields, is_pub=False,
+        )
+    with pytest.raises(ValueError, match="26001"):
+        unflatten_pytree(decls["D1"], decls, {}, default=0.0)
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-v"]))

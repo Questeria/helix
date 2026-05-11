@@ -231,12 +231,23 @@ def unflatten_pytree(decl, struct_decls: dict,
     if not isinstance(decl, A.StructDecl):
         raise ValueError("expected StructDecl")
     return _unflatten(decl, struct_decls, grads_by_path, prefix="",
-                      default=default, _visited=set())
+                      default=default, _visited=set(), depth=0)
 
 
 def _unflatten(decl: A.StructDecl, struct_decls: dict,
                grads: dict, prefix: str, default,
-               _visited: set) -> dict:
+               _visited: set, depth: int = 0) -> dict:
+    # Audit 28.8 cycle 2 (deferred observation #17): mirror flatten's
+    # depth-bound guard. Pre-fix `_unflatten` only had the cycle check
+    # via `_visited`. A >MAX_DEPTH-deep struct WITHOUT a cycle (e.g. a
+    # straight-line A -> B -> C -> D -> E -> F nesting) would
+    # RecursionError instead of cleanly trapping. With this guard the
+    # behavior is symmetric with `flatten_pytree`'s 26001 path.
+    if depth > MAX_DEPTH:
+        raise ValueError(
+            f"pytree depth > {MAX_DEPTH} at prefix {prefix!r} "
+            f"(struct {decl.name!r}) (trap 26001)"
+        )
     if decl.name in _visited:
         raise ValueError(
             f"pytree: cyclic struct reference at prefix {prefix!r} "
@@ -260,7 +271,7 @@ def _unflatten(decl: A.StructDecl, struct_decls: dict,
         elif _is_struct_ref(f.ty, struct_decls):
             inner = struct_decls[f.ty.name]
             out[f.name] = _unflatten(inner, struct_decls, grads, path,
-                                     default, _visited)
+                                     default, _visited, depth + 1)
         else:
             # Non-leaf, non-struct: mirror flatten's behavior — raise
             # rather than silently emitting None (Audit 28.8 B9 (2)).
