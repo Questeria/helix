@@ -134,14 +134,42 @@
 **Stage 28: Mojo-style parametric structs**
 - Shape/dtype parametrization.
 
+### Pre-29 hardening
+
+**Stage 28.8: Pre-29 audit gate** (in progress as of 2026-05-10)
+- 5 consecutive clean multi-agent audit cycles against the Python reference.
+- Bugs found here get fixed against the Python reference while it still exists.
+- See `docs/STAGE_28_8_PRE_29_AUDIT_GATE.md`.
+
+**Stage 28.9–28.13: Phase A — port Python-only frontend passes into kovc.hx** (planned 2026-05-10)
+Per `docs/helix-pre-self-host-research.md` research: 8 frontend passes exist only in
+`helixc/frontend/*.py` with no bootstrap counterpart. Dropping Python at Stage 29
+without porting them means the self-hosted compiler silently regresses on every
+program that uses those features. Phase A also adds the ergonomic primitives the
+bootstrap itself will benefit from. See `docs/STAGE_28_9_PHASE_A_PRE_29.md` for
+detail.
+
+- **Stage 28.9**: Port `match_lower.py` (Match→If/Let chains) into kovc.hx.
+- **Stage 28.10**: Port `struct_mono.py` (parametric struct walker + use-site rewrite).
+- **Stage 28.11**: Port validation passes — `panic_pass`, `unsafe_pass`,
+  `deprecated_pass`, `trace_pass` (collect + diagnose into bootstrap-side arenas).
+- **Stage 28.12**: Port `pytree.py` (flatten/unflatten for AD over user structs).
+- **Stage 28.13**: Ergonomics cluster — `?` operator, `let-else`, named struct-lit
+  fields, `f"..."` string interpolation, bootstrap-side render_caret.
+
+(Optional, Phase B — deferred to v0.2 default per research recommendation:
+Stages 28.14–28.20 wire Tier-3 strategic moat: D<Logic<T>> fuzzy AND/OR/NOT
+codegen + TyMemTier cost annotations. Not blocked behind external benchmark.)
+
 ### Final gate
 
-**Stage 29: Drop helixc-Python**
+**Stage 29: Drop helixc-Python** (GATED on user approval)
 - Verify kovc.hx compiles every test case helixc-Python compiles, byte-identical.
 - Mark helixc-Python as deprecated reference.
 
 **Stage 30: 5 consecutive clean audits**
-- Run multi-agent audit cycles until 5 in a row find zero new findings.
+- Run multi-agent audit cycles until 5 in a row find zero new findings, now
+  against the self-hosted compiler alone (no Python oracle).
 
 ---
 
