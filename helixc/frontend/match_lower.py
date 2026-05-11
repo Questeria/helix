@@ -36,7 +36,20 @@ from . import ast_nodes as A
 
 def lower_matches(prog: A.Program) -> A.Program:
     """Rewrite all `Match` nodes in the program in place; return the same
-    Program (with mutated bodies)."""
+    Program (with mutated bodies).
+
+    Stage 28.8.1: resets ``_FRESH_COUNTER`` at entry so successive calls
+    on the same source produce identical synthetic names (``__scrut_1``,
+    ``__scrut_2``, ...). Without the reset, generated names propagated
+    test-suite-order pollution into IR + register hints, which the
+    cycle-11 silent-failures audit traced as a contributing source of
+    codegen non-determinism (see
+    docs/helix-pre-phase-A-finalization-research.md § A3 / C1 source 2).
+    """
+    # Stage 28.8.1: per-call reset of module-level mutable state. Per-program
+    # determinism: two calls to lower_matches() on the same prog must
+    # generate identical fresh names.
+    _FRESH_COUNTER[0] = 0
     for item in prog.items:
         if isinstance(item, A.FnDecl):
             _rewrite_block(item.body)
@@ -44,7 +57,13 @@ def lower_matches(prog: A.Program) -> A.Program:
 
 
 # Walker: replaces Match expressions with desugared If chains.
-
+#
+# Stage 28.8.1: ``_FRESH_COUNTER`` is module-level mutable state. It is
+# reset at the top of ``lower_matches(prog)`` so name generation is
+# deterministic for a given program. We keep it module-level (rather
+# than threading through every helper) because every fresh-name site
+# is reachable only via ``lower_matches``; the reset entry point is
+# the single externally-visible function.
 _FRESH_COUNTER = [0]
 
 
