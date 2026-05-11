@@ -191,6 +191,39 @@ class TyQuote(Type):
     inner: Type
 
 
+# Audit 28.8 B13: numeric-type widening rank for TyDiff inner-type
+# mixing. Higher rank dominates: f64 > f32 > bf16 > f16 > i64 > i32 ...
+# Used by `_widen_diff_inner` to pick the result of D<T1> + D<T2>.
+_WIDEN_RANK: dict[str, int] = {
+    "i8": 10, "u8": 10, "bool": 10,
+    "i16": 20, "u16": 20,
+    "i32": 30, "u32": 30,
+    "i64": 40, "u64": 40, "isize": 40, "usize": 40,
+    "f16": 50, "bf16": 50,
+    "f32": 60,
+    "f64": 70,
+}
+
+
+def _widen_diff_inner(a: "Type", b: "Type") -> "Type":
+    """Audit 28.8 B13: pick the wider of two D<>-inner types.
+
+    Used when a TyDiff binop receives D<T1> + D<T2> with T1 != T2.
+    Pre-fix this silently coerced T2 to T1; the new behavior widens
+    + emits a warning (AD002 / trap 24200) so the user can fix the
+    mix at source.
+
+    For TyPrim pairs, rank lookup picks the larger. For pairs where
+    one side isn't a TyPrim, the non-TyUnknown side wins."""
+    if isinstance(a, TyPrim) and isinstance(b, TyPrim):
+        ra = _WIDEN_RANK.get(a.name, -1)
+        rb = _WIDEN_RANK.get(b.name, -1)
+        return a if ra >= rb else b
+    if isinstance(a, TyUnknown):
+        return b
+    return a
+
+
 # ============================================================================
 # Type errors
 # ============================================================================
@@ -1032,8 +1065,27 @@ class TypeChecker:
             )
 
             if l_is_logic or r_is_logic or l_is_diff or r_is_diff:
-                inner = _unwrap(l) if not isinstance(_unwrap(l), TyUnknown) \
-                    else _unwrap(r)
+                # Audit 28.8 B13 (trap AD002 / 24200): TyDiff binop
+                # with mixed inner types previously silently coerced
+                # the right operand to the left's inner type. The
+                # docstring acknowledged "real compiler would unify
+                # innerness" but no warning surfaced. Widen-then-warn
+                # contract: result inner is the wider of the two
+                # (float dominates int, larger width dominates),
+                # emit a warning so the silent loss path is visible.
+                l_inner = _unwrap(l)
+                r_inner = _unwrap(r)
+                if (l_is_diff and r_is_diff
+                        and l_inner != r_inner
+                        and not isinstance(l_inner, TyUnknown)
+                        and not isinstance(r_inner, TyUnknown)):
+                    inner = _widen_diff_inner(l_inner, r_inner)
+                    self._ad_warn_mixed_inner(
+                        expr.span, l_inner, r_inner, inner,
+                    )
+                else:
+                    inner = l_inner if not isinstance(l_inner, TyUnknown) \
+                        else r_inner
                 # Build the wrapping: Logic first (if any side carries
                 # Logic), then D on the outside (if any side carries D).
                 wrapped: Type = inner
@@ -1338,6 +1390,23 @@ class TypeChecker:
                         hint="wrap this cast in `unsafe { ... }` to "
                              "acknowledge the capability requirement",
                     ))
+            else:
+                # Audit 28.8 B14 (trap 28604): allowed-cast matrix.
+                # B3 covers ptr-targeted casts above; this branch
+                # covers non-ptr targets — int/float/etc. Pre-fix the
+                # Cast handler accepted *anything*: tuple-as-i32,
+                # struct-as-f64, unit-as-pointer all silently went
+                # through and codegen produced garbage. The matrix
+                # enforces:
+                #   int <-> int   (any widths)
+                #   int <-> float (any widths)
+                #   float <-> float (any widths)
+                #   bool -> int   (1/0)
+                #   int -> bool   (truthiness)
+                #   char <-> int  (codepoint)
+                #   *T -> integer (usize/u64) [inside unsafe; handled by B3]
+                # Anything else: trap 28604.
+                self._check_cast_compat(src_ty, tgt_ty, expr.span)
             return tgt_ty
         # Audit 28.8 B10: typecheck Quote/Splice/Modify arms. Pre-fix
         # they fell through to `TyUnknown(hint='unhandled Quote/...')`,
@@ -1659,6 +1728,72 @@ class TypeChecker:
         ))
 
     # ---- compatibility (simplified) ----
+    # ----- Allowed-cast matrix helpers (Audit 28.8 B14) -----
+    _NUMERIC_INT_PRIMS = frozenset({
+        "i8", "i16", "i32", "i64", "isize",
+        "u8", "u16", "u32", "u64", "usize",
+    })
+    _NUMERIC_FLOAT_PRIMS = frozenset({
+        "f16", "bf16", "f32", "f64", "fp8", "mxfp4", "nvfp4",
+    })
+    _NUMERIC_BOOL_PRIMS = frozenset({"bool", "char"})
+
+    def _is_numeric_scalar(self, t: Type) -> bool:
+        if not isinstance(t, TyPrim):
+            return False
+        return (t.name in self._NUMERIC_INT_PRIMS
+                or t.name in self._NUMERIC_FLOAT_PRIMS
+                or t.name in self._NUMERIC_BOOL_PRIMS)
+
+    def _check_cast_compat(self, src: Type, tgt: Type, span: A.Span) -> None:
+        """Audit 28.8 B14 (trap 28604): reject scalar casts whose
+        source/target pair isn't in the allowed matrix.
+
+        Allowed:
+          - numeric scalar <-> numeric scalar (int, float, bool, char)
+          - TyUnknown on either side (cascade-safe)
+          - struct <-> same struct (identity cast)
+          - generic / unknown TyVar (defer to mono)
+          - tuple/array/struct/unit -> identical type (no-op cast)
+        Otherwise: error 28604."""
+        # Cascade-safe: unknown / generic types skip the check.
+        if isinstance(src, (TyUnknown, TyVar, TySize)) \
+                or isinstance(tgt, (TyUnknown, TyVar, TySize)):
+            return
+        # Identity / no-op cast is always OK.
+        if src == tgt:
+            return
+        # Numeric-scalar <-> numeric-scalar in either direction.
+        if self._is_numeric_scalar(src) and self._is_numeric_scalar(tgt):
+            return
+        # Ref <-> Ref of compatible inner is OK at the type level (a
+        # change in is_mut is a separate concern handled by borrow-check).
+        if isinstance(src, TyRef) and isinstance(tgt, TyRef):
+            return
+        # All other source/target pairs are invalid scalar casts.
+        # Common slipups: tuple-as-i32, struct-as-f64, unit-as-Pt.
+        self.errors.append(TypeError_(
+            f"invalid cast: source {self._fmt(src)} cannot convert "
+            f"to {self._fmt(tgt)} (trap 28604)",
+            span,
+            hint="numeric scalar casts (int<->int, int<->float, "
+                 "float<->float, bool/char<->int) are allowed; other "
+                 "shapes need explicit construction",
+        ))
+
+    def _ad_warn_mixed_inner(self, span: A.Span, l: Type, r: Type,
+                              chosen: Type) -> None:
+        """Audit 28.8 B13 (trap AD002 / 24200): record a warning that
+        a TyDiff binop received mixed inner types and we widened to
+        the dominant one. Funneled into the autodiff warning channel
+        so check.py's existing -Wad=error policy applies."""
+        from . import autodiff as _ad
+        _ad._DIFF_WARNINGS.append(
+            f"{span.line}:{span.col}: AD: D-binop with mixed inner "
+            f"types {self._fmt(l)} vs {self._fmt(r)} — widened to "
+            f"{self._fmt(chosen)} (trap 24200/AD002)"
+        )
+
     def _compatible(self, a: Type, b: Type) -> bool:
         if isinstance(a, TyUnknown) or isinstance(b, TyUnknown):
             return True

@@ -5086,15 +5086,20 @@ def test_check_cli_error_has_caret_display():
 
 
 def test_check_cli_emit_ir_flag():
-    """helixc.check --emit-ir dumps IR ops to stdout."""
+    """helixc.check --emit-ir dumps IR ops to stdout.
+
+    Audit 28.8 A10: -O1 (the default) now also runs const-fold, so
+    `1 + 2` gets folded to a CONST_INT 3 with no ADD. Use -O0 to keep
+    the ADD op visible for the IR dump."""
     proj_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     src_dir = os.path.join(proj_root, "helixc", "tests", "_tmp")
     os.makedirs(src_dir, exist_ok=True)
     src_path = os.path.join(src_dir, "_check_emit_ir.hx")
     with open(src_path, "w", encoding="utf-8") as f:
         f.write("fn main() -> i32 { 1 + 2 }\n")
-    r = subprocess.run([sys.executable, "-m", "helixc.check", "--emit-ir",
-                        src_path], capture_output=True, cwd=proj_root)
+    r = subprocess.run([sys.executable, "-m", "helixc.check", "-O0",
+                        "--emit-ir", src_path],
+                       capture_output=True, cwd=proj_root)
     assert r.returncode == 0, f"got {r.returncode}, stderr={r.stderr!r}"
     out = r.stdout.decode("utf-8")
     assert "ADD" in out, f"expected ADD op, got {out!r}"

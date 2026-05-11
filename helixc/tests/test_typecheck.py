@@ -864,6 +864,125 @@ def test_flatten_impls_allows_distinct_method_names():
     assert n == 2
 
 
+# ----------------------------------------------------------------------
+# Audit 28.8 B13 — TyDiff mixed inner widen-then-warn (trap 24200/AD002)
+# ----------------------------------------------------------------------
+def test_diff_mixed_inner_widens_with_warning():
+    """Audit 28.8 B13: D<f64> + D<i32> previously silently coerced
+    the i32 to f64 with no diagnostic. The fix widens to the
+    dominant inner type AND emits a warning via the AD-warning
+    channel (trap 24200 / AD002)."""
+    from helixc.frontend import autodiff
+    # Clear any pre-existing warnings.
+    autodiff.take_diff_warnings()
+    src = """
+    fn loss(x: D<f64>, y: D<i32>) -> D<f64> {
+        x + y
+    }
+    """
+    errs = check(src)
+    # Typecheck itself should pass (we widen, not reject).
+    assert errs == [], f"unexpected typecheck errors: {errs}"
+    # And a warning was emitted in the AD channel.
+    warnings = autodiff.take_diff_warnings()
+    assert any("24200" in w and "AD002" in w for w in warnings), \
+        f"expected AD002 / trap 24200 warning, got: {warnings}"
+
+
+def test_diff_same_inner_no_warning():
+    """D<f64> + D<f64> is clean — no AD002 warning."""
+    from helixc.frontend import autodiff
+    autodiff.take_diff_warnings()
+    src = """
+    fn loss(x: D<f64>, y: D<f64>) -> D<f64> {
+        x + y
+    }
+    """
+    errs = check(src)
+    assert errs == []
+    warnings = autodiff.take_diff_warnings()
+    assert not any("24200" in w for w in warnings), \
+        f"unexpected mixed-inner warning: {warnings}"
+
+
+# ----------------------------------------------------------------------
+# Audit 28.8 B14 — Cast allowed-cast matrix (trap 28604)
+# ----------------------------------------------------------------------
+def test_cast_int_to_int_allowed():
+    """int -> int (any widths) is allowed."""
+    src = """
+    fn main() -> i64 {
+        let x: i32 = 42;
+        x as i64
+    }
+    """
+    errs = check(src)
+    assert errs == [], f"unexpected errors: {errs}"
+
+
+def test_cast_int_to_float_allowed():
+    """int -> float (any widths) is allowed."""
+    src = """
+    fn main() -> f64 {
+        let x: i32 = 42;
+        x as f64
+    }
+    """
+    errs = check(src)
+    assert errs == [], f"unexpected errors: {errs}"
+
+
+def test_cast_float_to_int_allowed():
+    """float -> int (any widths) is allowed."""
+    src = """
+    fn main() -> i32 {
+        let x: f64 = 3.14_f64;
+        x as i32
+    }
+    """
+    errs = check(src)
+    assert errs == [], f"unexpected errors: {errs}"
+
+
+def test_cast_bool_to_int_allowed():
+    """bool -> int is allowed (1/0)."""
+    src = """
+    fn main() -> i32 {
+        let b: bool = true;
+        b as i32
+    }
+    """
+    errs = check(src)
+    assert errs == [], f"unexpected errors: {errs}"
+
+
+def test_cast_tuple_to_int_rejected():
+    """Audit 28.8 B14 (trap 28604): tuple-as-i32 is invalid."""
+    src = """
+    fn main() -> i32 {
+        let t: (i32, i32) = (1, 2);
+        t as i32
+    }
+    """
+    errs = check(src)
+    assert any("28604" in s for s in errs), \
+        f"expected trap 28604 for tuple-as-i32, got: {errs}"
+
+
+def test_cast_struct_to_float_rejected():
+    """Audit 28.8 B14: struct-as-float is invalid."""
+    src = """
+    struct Pt { x: f32, y: f32 }
+    fn main() -> f32 {
+        let p = Pt { x: 1.0_f32, y: 2.0_f32 };
+        p as f32
+    }
+    """
+    errs = check(src)
+    assert any("28604" in s for s in errs), \
+        f"expected trap 28604 for struct-as-float, got: {errs}"
+
+
 def test_flatten_impls_allows_same_struct_redeclare():
     """Same struct calling flatten_impls twice on aliased
     impl-block records (i.e. same target, same method) should NOT
