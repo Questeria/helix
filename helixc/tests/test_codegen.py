@@ -4286,6 +4286,80 @@ fn main() -> i32 {{
     )
 
 
+def test_bootstrap_kovc_diag_arena_overflow_emits_28999_trap():
+    """Stage 28.9 audit-cycle-1 Finding 1 regression: when the
+    diag_arena overflows (>64 diags emitted), the produced binary
+    MUST abort with SIGILL via a 28999 trap. Before the fix, the
+    overflow trap was emitted inside diag_emit via emit_trap_with_id
+    — but the validation passes run BEFORE elf_start is captured,
+    so the 7 trap bytes landed in dead pre-ELF arena. Count then
+    pinned at cap=64 so every subsequent emit re-tripped silently.
+    Runtime trap was never the overflow code; it was just whatever
+    diag landed first (or no trap at all if all dropped diags were
+    severity-1 warnings).
+
+    Probe approach: a source with one @deprecated fn called 65 times
+    from main. Each call emits one severity-1 (warning) diag —
+    individually warnings don't trap. But the 65th call overflows
+    cap=64 and the sticky flag forces a 28999 trap into main's
+    prologue. The produced binary should exit with a signal-encoded
+    code (>= 128). Pre-fix: rc == 0 (the 65 warning-only diags
+    never trapped, and the orphan 28999 bytes were in dead arena).
+    """
+    import os, subprocess
+    proj = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    lexer = open(os.path.join(proj, "helixc", "bootstrap", "lexer.hx")).read()
+    lexer_no_main = lexer.rsplit(
+        "// --------------------------------------------------------------\n// Demo:",
+        1,
+    )[0]
+    parser_body = open(os.path.join(proj, "helixc", "bootstrap", "parser.hx")).read()
+    kovc = open(os.path.join(proj, "helixc", "bootstrap", "kovc.hx")).read()
+    kovc_lib = kovc.rsplit(
+        "// --------------------------------------------------------------\n// Demo:",
+        1,
+    )[0]
+    import uuid
+    tag = uuid.uuid4().hex[:10]
+    src_path = f"/tmp/helix_diagovf_src_{tag}.hx"
+    bin_path = f"/tmp/kovc_diagovf_bin_{tag}.bin"
+    # One @deprecated fn `d`, called 65 times via SEQ. Deprecated_pass
+    # emits one severity-1 warning per call site. The 65th hits the
+    # cap=64 overflow.
+    calls = "; ".join(["d()"] * 65)
+    src_text = f"@deprecated fn d() -> i32 {{ 1 }} fn main() -> i32 {{ {calls}; 0 }}"
+    subprocess.run(
+        ["wsl", "-e", "bash", "-c",
+         f"printf %s {repr(src_text)} > {src_path}"],
+        check=True, timeout=10,
+    )
+    driver = lexer_no_main + parser_body + kovc_lib + f"""
+fn main() -> i32 {{
+    let src_start = __arena_len();
+    let src_len = read_file_to_arena("{src_path}");
+    let tok_base = __arena_len();
+    lex(src_start, src_len);
+    let ast_root = parse_top(tok_base);
+    let total = emit_elf_for_ast_to_path(ast_root);
+    let elf_start = __arena_len() - total;
+    write_file_to_arena("{bin_path}", elf_start, total)
+}}
+"""
+    compile_and_run(driver)
+    run = subprocess.run(
+        ["wsl", "-e", "bash", "-c",
+         f"sync && chmod +x {bin_path} && {bin_path}; "
+         f"rc=$?; echo $rc; rm -f {src_path} {bin_path}"],
+        capture_output=True, timeout=10,
+    )
+    last_line = run.stdout.decode().strip().splitlines()[-1] if run.stdout else ""
+    rc = int(last_line) if last_line.isdigit() else -1
+    assert rc >= 128, (
+        f"diag_arena overflow should have trapped via ud2 (28999); "
+        f"got rc={rc}, stdout={run.stdout!r}, stderr={run.stderr!r}"
+    )
+
+
 def test_bootstrap_kovc_walker_descends_into_tuple_lit():
     """Stage 28.9 audit-cycle-1 Finding 2 regression: walk_for_panic
     and walk_for_deprecated MUST descend into AST_TUPLE_LIT (tag 50)

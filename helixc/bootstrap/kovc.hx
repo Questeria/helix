@@ -2056,7 +2056,8 @@ fn match_scrut_ty_get(bn_state: i32) -> i32 {
 // structured side-table, not monkey-patched on the AST.
 //
 // Layout: a contiguous region whose first slot is the count, second
-// is a capacity, then `cap` 4-slot entries. Each entry stores:
+// is a capacity, then `cap` 4-slot entries, then a sticky
+// "overflowed" flag slot. Each entry stores:
 //   slot 0: trap-id code (e.g. 28501 panic, 28601 unsafe, 28701
 //           deprecated, 28502 unwind). 0 sentinel = empty slot.
 //   slot 1: severity (1 = warning, 2 = error)
@@ -2074,10 +2075,29 @@ fn match_scrut_ty_get(bn_state: i32) -> i32 {
 //   slot 3: aux i32 — pass-specific data (e.g. for deprecated_pass:
 //           callee_name_start; for panic_pass: arg_count)
 //
-// Capacity: 64 entries by default. Overflow triggers trap 28999
-// (DIAG_ARENA_OVERFLOW). Phase-0 chooses 64 because the heaviest
-// known fixture (test_bootstrap_kovc_full_pipeline_arithmetic) has
-// ~10 panic call sites at most; 64 is 6x headroom.
+// Header slots:
+//   slot 0 (base+0):     count
+//   slot 1 (base+1):     cap (64)
+//   slots 2..2+cap*4-1:  cap entries of 4 slots each
+//   slot base+2+cap*4:   sticky `overflowed` flag (0 normally, set
+//                        to 1 on first diag_emit that hits cap)
+//
+// Capacity: 64 entries by default. Overflow sets the sticky flag
+// and causes emit_elf_for_ast_to_path to patch main's prologue
+// with `emit_trap_with_id(28999)` AFTER validation passes complete
+// (so the produced binary aborts even though no entry slot was
+// available for the 65th diag). Phase-0 chooses 64 because the
+// heaviest known fixture (test_bootstrap_kovc_full_pipeline_arithmetic)
+// has ~10 panic call sites at most; 64 is 6x headroom.
+//
+// Stage-28.9 audit-cycle-1 Finding 1 fix: the previous design
+// called `emit_trap_with_id(28999)` directly inside diag_emit, but
+// the validation passes run BEFORE `elf_start = __arena_len()` is
+// captured. The 7 trap bytes landed in dead pre-ELF arena, then
+// the count stayed pinned at cap so every further emit retripped
+// silently. The sticky flag observes the overflow, and the codegen
+// emit at `is_main_fn` patches a fresh trap into main's prologue
+// where it actually executes.
 //
 // Severity policy:
 //   - validation passes that match Python -Werror behavior emit
@@ -2097,6 +2117,9 @@ fn diag_arena_init() -> i32 {
         __arena_push(0);
         i = i + 1;
     }
+    // Sticky `overflowed` flag — one extra slot past the entries.
+    // diag_emit sets it to 1 when count >= cap on a fresh push.
+    __arena_push(0);
     base
 }
 
@@ -2108,18 +2131,29 @@ fn diag_arena_init() -> i32 {
     __arena_get(diag_state + 1)
 }
 
-// Emit a diagnostic. Returns 0 on success; emits trap 28999 if the
-// arena is already full (defensive — the heavy gate has ~10 diag
-// emit sites and the cap is 64).
+// Emit a diagnostic. Returns 0 always (no fallible interface — the
+// caller has no useful recovery path anyway; the validation passes
+// just keep walking).
+//
 // Stage-28.9 audit-cycle-1 D1: the slot-2 parameter is documented
 // (and emit-site-used) as the AST node's arena index, NOT a source
-// byte offset. Renamed for accuracy.
+// byte offset.
+//
+// Stage-28.9 audit-cycle-1 Finding 1: on overflow, set the sticky
+// `overflowed` flag at slot (cap*4 + 2) instead of calling
+// emit_trap_with_id. The previous direct trap-emit was unobservable
+// because validation passes run before elf_start is captured —
+// the 7 trap bytes landed in dead pre-ELF arena. The codegen path
+// in emit_elf_for_ast_to_path queries the flag after validation
+// completes and patches main's prologue with a fresh 28999 trap.
 fn diag_emit(diag_state: i32, code: i32, severity: i32,
              ast_node_idx: i32, aux: i32) -> i32 {
     let count = __arena_get(diag_state);
     let cap = __arena_get(diag_state + 1);
     if count >= cap {
-        emit_trap_with_id(28999);
+        // Set the sticky flag (idempotent). One slot past the
+        // entry region: diag_state + 2 + cap * 4.
+        __arena_set(diag_state + 2 + cap * 4, 1);
         0
     } else {
         // Entry base: diag_state + 2 + count * 4. The +2 skips
@@ -2132,6 +2166,16 @@ fn diag_emit(diag_state: i32, code: i32, severity: i32,
         __arena_set(diag_state, count + 1);
         0
     }
+}
+
+// Stage-28.9 audit-cycle-1 Finding 1: accessor for the sticky
+// overflow flag. Returns 1 if any diag_emit call hit the cap
+// (meaning the arena dropped at least one diag), 0 otherwise. The
+// codegen wiring in emit_elf_for_ast_to_path uses this to patch
+// main's prologue with a 28999 trap.
+@pure fn diag_arena_overflowed(diag_state: i32) -> i32 {
+    let cap = __arena_get(diag_state + 1);
+    __arena_get(diag_state + 2 + cap * 4)
 }
 
 // Read accessors for one diag entry (idx 0..count-1).
@@ -6169,13 +6213,28 @@ fn emit_elf_for_ast_to_path(ast_root: i32) -> i32 {
                 } else { 0 }
             } else { 0 };
             if is_main_fn == 1 {
-                let n_errors = diag_arena_error_count(diag_state);
-                if n_errors > 0 {
-                    // Use first error's code (codegen-determinism: pick
-                    // the FIRST diag in arena order, not the first
-                    // error — same trap-id for fixed input).
-                    let first_code = diag_get_code(diag_state, 0);
-                    emit_trap_with_id(first_code);
+                // Stage-28.9 audit-cycle-1 Finding 1: the overflow
+                // flag trumps normal errors. If the diag_arena
+                // dropped one or more diags (cap=64), we MUST report
+                // 28999 — otherwise the lost diag could have been
+                // the only severity-2 error and the binary would
+                // exit cleanly despite a malformed program. The
+                // previous code called emit_trap_with_id(28999)
+                // directly inside diag_emit, but validation runs
+                // before elf_start is captured, so those bytes
+                // never reached the produced ELF.
+                let overflowed = diag_arena_overflowed(diag_state);
+                if overflowed == 1 {
+                    emit_trap_with_id(28999);
+                } else {
+                    let n_errors = diag_arena_error_count(diag_state);
+                    if n_errors > 0 {
+                        // Use first error's code (codegen-determinism:
+                        // pick the FIRST diag in arena order, not the
+                        // first error — same trap-id for fixed input).
+                        let first_code = diag_get_code(diag_state, 0);
+                        emit_trap_with_id(first_code);
+                    };
                 };
             };
             // Copy each param's SysV arg register into a fresh stack
