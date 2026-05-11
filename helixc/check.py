@@ -351,6 +351,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"     {d}")
         return 1
 
+
     # 4. Optional hash dump
     if "--hash" in a.flags:
         print("   hashes:")
@@ -373,6 +374,13 @@ def main(argv: list[str] | None = None) -> int:
             or a.output is not None:
         from .ir.lower_ast import lower
         from .ir.passes.fdce import fdce_module
+        # Audit 28.8 B5: invoke grad_pass before lowering so any
+        # `grad(loss)` calls are rewritten to symbolic gradients (and
+        # the AD passes' diagnostics accumulate in _DIFF_WARNINGS).
+        # We import lazily so check.py's start-up cost stays low for
+        # programs that don't use grad().
+        from .frontend.grad_pass import grad_pass
+        grad_pass(prog)
         mod = lower(prog)
         if a.opt_level >= 1:
             fdce_module(mod)
@@ -384,6 +392,23 @@ def main(argv: list[str] | None = None) -> int:
                 # Pass is invoked elsewhere; placeholder here for shape.
             except ImportError:
                 pass
+
+        # Audit 28.8 B5: drain accumulated AD warnings — set by
+        # autodiff/_diff and autodiff_reverse/_propagate whenever an
+        # unhandled node kind silently zeroed a gradient (Quote /
+        # Splice / Modify / non-numeric Cast / opaque call). Default
+        # policy: warn to stderr. `-Wad=error` promotes to error and
+        # fails the build.
+        from .frontend.autodiff import take_diff_warnings
+        ad_warnings = take_diff_warnings()
+        if ad_warnings:
+            ad_policy = a.warnings.get("ad", "warn")
+            label = "ERROR" if ad_policy == "error" else "warning"
+            print(f"   ad:        {len(ad_warnings)} {label}(s)")
+            for w in ad_warnings:
+                print(f"     helixc: {w}", file=sys.stderr)
+            if ad_policy == "error":
+                return 1
 
     if "--emit-ir" in a.flags:
         print("   ir:")

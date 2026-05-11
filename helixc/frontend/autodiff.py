@@ -41,6 +41,48 @@ _DIFF_CACHE_HITS = [0]
 _DIFF_CACHE_MISSES = [0]
 
 
+# Audit 28.8 B5: trap 85001 — AD assumed 0 derivative for an unhandled
+# expression kind. Both forward (_diff) and reverse (_propagate) used
+# to fall through to "return 0" / "no contribution" for any unmatched
+# node — Quote, Splice, Modify, UnsafeBlock, Cast on a non-arithmetic
+# target. The user got `grad(f)(x) = 0` with no diagnostic.
+#
+# Fix: each unhandled-node site now appends a diagnostic to this
+# module-level list. The CLI (helixc/check.py) flushes the list at
+# the end of compilation and prints warnings to stderr; `-Wad=error`
+# promotes them to errors. Tests can drain via `take_diff_warnings`.
+_DIFF_WARNINGS: list[str] = []
+
+# Trap-id reservation for "AD assumed 0 derivative" diagnostic.
+TRAP_AD_ASSUMED_ZERO = 85001
+
+
+def take_diff_warnings() -> list[str]:
+    """Atomically read-and-clear the module-level AD warning list.
+
+    Callers (helixc/check.py and tests) should drain this list at a
+    well-defined point so warnings from a previous compilation unit
+    don't leak into the next. Multiple drains across one compile
+    aggregate (the list is reset only on take())."""
+    global _DIFF_WARNINGS
+    out = _DIFF_WARNINGS
+    _DIFF_WARNINGS = []
+    return out
+
+
+def _ad_warn(node, reason: str) -> None:
+    """Record an AD diagnostic for an unhandled expression. Includes
+    source span when available + trap-id 85001 for grep-ability."""
+    span = getattr(node, "span", None)
+    kind = type(node).__name__
+    line_col = (f"{span.line}:{span.col}: " if span is not None
+                else "")
+    _DIFF_WARNINGS.append(
+        f"{line_col}AD: assumed 0 derivative for {kind} ({reason}) "
+        f"(trap {TRAP_AD_ASSUMED_ZERO})"
+    )
+
+
 def clear_diff_cache() -> None:
     """Reset the differentiate-memo cache (for tests)."""
     _DIFF_CACHE.clear()
@@ -517,7 +559,37 @@ def _diff(expr: A.Expr, var: str) -> A.Expr:
         deriv = _diff_call_chain_rule(expr, var, span)
         if deriv is not None:
             return deriv
-    # Unsupported: emit zero (placeholder)
+        # Audit 28.8 B5: unknown call site — emit warning + 0.
+        _ad_warn(expr, f"unrecognized call to "
+                       f"{getattr(expr.callee, 'name', '<?>')!r}")
+        return A.FloatLit(span=expr.span, value=0.0)
+    # Audit 28.8 B5: Cast arm. Numeric `x as f64` propagates the
+    # derivative through (chain-rule factor is 1 for numeric widening).
+    # Non-numeric Cast (e.g., `x as *T`) returns 0 with a warning.
+    if isinstance(expr, A.Cast):
+        tgt = expr.target_ty
+        if isinstance(tgt, A.TyName) and tgt.name in (
+            "i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64",
+            "isize", "usize", "f16", "bf16", "f32", "f64",
+        ):
+            # Inner derivative carries through.
+            return _diff(expr.value, var)
+        _ad_warn(expr, f"cast to non-numeric target "
+                       f"{type(tgt).__name__}")
+        return A.FloatLit(span=span, value=0.0)
+    # Audit 28.8 B5: Quote/Splice/Modify/UnsafeBlock fall here and were
+    # previously silently zeroed. Now we WARN. UnsafeBlock specifically
+    # should propagate AD through its body — handle that case.
+    if isinstance(expr, A.UnsafeBlock):
+        body = expr.body
+        if isinstance(body, A.Block):
+            return _diff_block_or_expr(body, var, span)
+        return _diff(body, var)
+    if isinstance(expr, (A.Quote, A.Splice, A.Modify)):
+        _ad_warn(expr, f"{type(expr).__name__} is not differentiable")
+        return A.FloatLit(span=span, value=0.0)
+    # Genuinely-unknown — warn loudly.
+    _ad_warn(expr, "unhandled expression kind")
     return A.FloatLit(span=expr.span, value=0.0)
 
 

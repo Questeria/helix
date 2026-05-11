@@ -45,7 +45,7 @@ import copy
 from typing import Optional
 
 from . import ast_nodes as A
-from .autodiff import _inline_lets, _simplify, _inline_user_calls
+from .autodiff import _inline_lets, _simplify, _inline_user_calls, _ad_warn
 
 
 def differentiate_reverse(expr: A.Expr, param_names: list[str],
@@ -286,7 +286,11 @@ def _propagate(node: A.Expr, adj: A.Expr, acc: dict[str, list[A.Expr]]) -> None:
                 new_adj = A.Binary(span=node.span, op="*", left=adj, right=gated)
                 _propagate(u, new_adj, acc)
                 return
-        # Other calls: opaque, contributes 0 to gradient.
+        # Audit 28.8 B5: opaque user call — was silently a zero
+        # contribution. Now emits a diagnostic; users grepping for
+        # "AD: assumed 0" can find the gap and add a chain rule.
+        _ad_warn(node, f"unrecognized call to "
+                       f"{getattr(node.callee, 'name', '<?>')!r}")
         return
     if isinstance(node, A.If):
         # The runtime `if` picks one branch, so the gradient through it is also
@@ -377,7 +381,34 @@ def _propagate(node: A.Expr, adj: A.Expr, acc: dict[str, list[A.Expr]]) -> None:
                               arms=new_arms)
             acc[p].append(wrapped)
         return
-    # Unsupported nodes: silently produce no contribution.
+    # Audit 28.8 B5: Cast — propagate through numeric casts.
+    if isinstance(node, A.Cast):
+        tgt = node.target_ty
+        if isinstance(tgt, A.TyName) and tgt.name in (
+            "i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64",
+            "isize", "usize", "f16", "bf16", "f32", "f64",
+        ):
+            _propagate(node.value, adj, acc)
+            return
+        _ad_warn(node, f"cast to non-numeric target "
+                       f"{type(tgt).__name__}")
+        return
+    # Audit 28.8 B5: UnsafeBlock — propagate adjoint through body.
+    if isinstance(node, A.UnsafeBlock):
+        body = node.body
+        if isinstance(body, A.Block):
+            if body.final_expr is not None:
+                _propagate(body.final_expr, adj, acc)
+        else:
+            _propagate(body, adj, acc)
+        return
+    # Audit 28.8 B5: Quote/Splice/Modify — non-differentiable, warn.
+    if isinstance(node, (A.Quote, A.Splice, A.Modify)):
+        _ad_warn(node, f"{type(node).__name__} is not differentiable")
+        return
+    # Audit 28.8 B5: Any other unhandled node — warn loudly. Pre-fix
+    # this returned silently and the gradient was 0 with no diagnostic.
+    _ad_warn(node, "unhandled expression kind in reverse-mode AD")
 
 
 def _pattern_shadowed_names(pat: A.Pattern, candidates: set[str]) -> set[str]:

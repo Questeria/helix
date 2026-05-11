@@ -273,6 +273,88 @@ def test_grad_through_match():
 
 
 # ============================================================================
+# Audit 28.8 B5: warnings for unhandled AD nodes (trap 85001)
+# ============================================================================
+def test_b5_ad_warns_on_opaque_call():
+    """B5: an opaque user fn call (not in the chain-rule table) was
+    silently a zero derivative. Now emits a warning to _DIFF_WARNINGS."""
+    from helixc.frontend.autodiff import (
+        differentiate, take_diff_warnings, clear_diff_cache,
+    )
+    clear_diff_cache()  # don't get a cached zero (no warning)
+    take_diff_warnings()  # drain residual
+    # Parse a fn calling an unknown helper.
+    src = "fn _f(x: f32) -> f32 { strange_helper(x) }"
+    prog = parse(src)
+    fn = prog.items[0]
+    body = fn.body.final_expr
+    # Note: no fn_table is passed, so the call site falls through to
+    # the unmatched-call branch and produces the warning.
+    deriv = differentiate(body, "x")
+    warnings = take_diff_warnings()
+    assert any("85001" in w for w in warnings), \
+        f"expected 85001 warning for opaque call, got: {warnings}"
+
+
+def test_b5_ad_warns_on_unsafe_block_with_unknown_inner():
+    """B5: derivative through an UnsafeBlock propagates to the inner
+    expr — `unsafe { x * 2.0 }` derives to 2.0. But if the inner is
+    an unhandled kind, the warning fires."""
+    from helixc.frontend.autodiff import (
+        differentiate, take_diff_warnings, clear_diff_cache,
+    )
+    clear_diff_cache()  # don't get a cached zero (no warning)
+    take_diff_warnings()  # drain residual
+    src = "fn _f(x: f32) -> f32 { unsafe { x * 2.0 } }"
+    prog = parse(src)
+    fn = prog.items[0]
+    body = fn.body.final_expr
+    deriv = differentiate(body, "x")
+    # No warnings expected — UnsafeBlock body is differentiable.
+    warnings = take_diff_warnings()
+    assert not warnings, \
+        f"unexpected warnings for differentiable unsafe body: {warnings}"
+    # Verify the derivative IS nonzero.
+    assert fmt(deriv) != "0", f"expected nonzero derivative, got {fmt(deriv)}"
+
+
+def test_b5_ad_cast_propagates_numeric():
+    """B5: `(x as f64)` derivative is `dx` — the Cast arm in _diff now
+    propagates through numeric casts (previously fell to fallthrough)."""
+    from helixc.frontend.autodiff import differentiate, take_diff_warnings
+    take_diff_warnings()
+    src = "fn _f(x: f32) -> f64 { x as f64 }"
+    prog = parse(src)
+    fn = prog.items[0]
+    body = fn.body.final_expr
+    deriv = differentiate(body, "x")
+    warnings = take_diff_warnings()
+    assert not warnings, \
+        f"no warnings expected for numeric cast, got: {warnings}"
+    assert fmt(deriv) == "1", f"expected '1', got {fmt(deriv)}"
+
+
+def test_b5_take_diff_warnings_drains():
+    """B5: take_diff_warnings is idempotent — a second call returns []
+    so warnings from one compile don't leak into the next."""
+    from helixc.frontend.autodiff import (
+        differentiate, take_diff_warnings, clear_diff_cache,
+    )
+    clear_diff_cache()  # avoid cached zero-derivs skipping the warn site
+    take_diff_warnings()
+    # Use a different fn name than other B5 tests so the memoization
+    # by structural hash doesn't return a cached deriv from earlier.
+    src = "fn _f(y: f32) -> f32 { totally_unknown_fn_xyz(y) }"
+    prog = parse(src)
+    body = prog.items[0].body.final_expr
+    differentiate(body, "y")
+    first = take_diff_warnings()
+    assert first, "expected at least one warning on first take"
+    second = take_diff_warnings()
+    assert second == [], f"second take should be empty, got: {second}"
+
+
+# ============================================================================
 # Test runner
 # ============================================================================
 def main():
