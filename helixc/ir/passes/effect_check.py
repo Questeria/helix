@@ -192,6 +192,21 @@ def compute_closure(module: tir.Module) -> dict[str, frozenset[str]]:
             for c in callee_map[n]:
                 if c == "<indirect>":
                     closure[n].add("unknown")
+                elif c == "<indirect-ffi>":
+                    # Stage 28.9 cycle 16 audit-C C1 fix (conf 85): the
+                    # `<indirect-ffi>` sentinel emitted by `callees()` for
+                    # FFI_CALL ops with non-string target was previously
+                    # falling through to the generic `unknown` branch,
+                    # losing the more specific "ffi" effect label. A fn
+                    # declaring @effect(ffi) with an indirect FFI call
+                    # would see "unknown" (not "ffi") in its closure, so
+                    # `declared_effects` match check would falsely fire
+                    # 19002 ("declared unused effect"). Add "ffi" too so
+                    # the caller's declaration is honored; also add
+                    # "unknown" so any other effects of the indirect
+                    # target are conservatively assumed.
+                    closure[n].add("ffi")
+                    closure[n].add("unknown")
                 elif c in module.functions:
                     closure[n] |= closure[c]
                 else:

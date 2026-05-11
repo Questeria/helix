@@ -194,15 +194,26 @@ def fold_function(fn: tir.FnIR) -> int:
         # Identity forwarding: x*1, 1*x, x+0, 0+x, x/1, x-0 → forward x.
         # Builds a substitution {result_id: forwarded_value}, applies it
         # to all subsequent operands, and drops the identity ops as dead.
-        if _propagate_identities(fn, defs):
+        #
+        # Cycle 16 audit-C C2 fix (conf 80): accumulate the actual
+        # substitution count returned by _propagate_identities, not a
+        # constant 1. Pre-fix a single pass that forwarded N identities
+        # only incremented `folded` by 1, understating the work done
+        # and risking incorrect short-circuit decisions by callers
+        # that compare fold-count to 0.
+        prop_count = _propagate_identities(fn, defs)
+        if prop_count:
             changed = True
-            folded += 1
+            folded += prop_count
     return folded
 
 
-def _propagate_identities(fn: tir.FnIR, defs: dict) -> bool:
+def _propagate_identities(fn: tir.FnIR, defs: dict) -> int:
     """One pass of SSA-style value forwarding for algebraic identities.
-    Returns True if any substitution was made."""
+
+    Cycle 16 audit-C C2 fix: return the count of substitutions made
+    (was bool). 0 means no fold; positive value is the number of ops
+    forwarded + dropped this pass."""
     subst: dict[int, "tir.Value"] = {}
     for blk in fn.blocks:
         for op in blk.ops:
@@ -210,7 +221,7 @@ def _propagate_identities(fn: tir.FnIR, defs: dict) -> bool:
             if ident is not None:
                 subst[op.results[0].id] = ident
     if not subst:
-        return False
+        return 0
     # Apply transitively — if a -> b and b -> c, then a -> c.
     changed = True
     while changed:
@@ -228,7 +239,7 @@ def _propagate_identities(fn: tir.FnIR, defs: dict) -> bool:
             op.operands = [subst.get(o.id, o) for o in op.operands]
             new_ops.append(op)
         blk.ops = new_ops
-    return True
+    return len(subst)
 
 
 def _algebraic_forward(op: tir.Op, defs: dict) -> "tir.Value | None":
