@@ -428,7 +428,14 @@ def _collect_binds(pat: A.Pattern, scrut: str, span: A.Span) -> list[A.Let]:
                     span=span, name=sub.name, is_mut=False, ty=None,
                     value=slot_load,
                 ))
-            elif isinstance(sub, (A.PatVariant, A.PatTuple)):
+            elif isinstance(sub, (A.PatVariant, A.PatTuple, A.PatOr)):
+                # Stage 28.9 cycle 11 audit-C C11-1 (conf 87): PatOr
+                # added to the recurse tuple. A nested PatOr inside a
+                # PatVariant/PatTuple sub-position (e.g.
+                # `Cons((A | B(x)), tail)`) was previously silently
+                # dropped — the cycle-10 PatOr top-level fix only
+                # covered direct PatOr, not nested. Routing through the
+                # same temp-bind + recurse path closes the gap.
                 tmp = _fresh_name(prefix="__sub")
                 binds.append(A.Let(
                     span=span, name=tmp, is_mut=False, ty=None,
@@ -448,7 +455,14 @@ def _collect_binds(pat: A.Pattern, scrut: str, span: A.Span) -> list[A.Let]:
                     span=span, name=sub.name, is_mut=False, ty=None,
                     value=slot_load,
                 ))
-            elif isinstance(sub, (A.PatVariant, A.PatTuple)):
+            elif isinstance(sub, (A.PatVariant, A.PatTuple, A.PatOr)):
+                # Stage 28.9 cycle 11 audit-C C11-1 (conf 87): PatOr
+                # added to the recurse tuple. A nested PatOr inside a
+                # PatVariant/PatTuple sub-position (e.g.
+                # `Cons((A | B(x)), tail)`) was previously silently
+                # dropped — the cycle-10 PatOr top-level fix only
+                # covered direct PatOr, not nested. Routing through the
+                # same temp-bind + recurse path closes the gap.
                 tmp = _fresh_name(prefix="__sub")
                 binds.append(A.Let(
                     span=span, name=tmp, is_mut=False, ty=None,
