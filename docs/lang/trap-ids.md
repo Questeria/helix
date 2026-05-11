@@ -1,6 +1,6 @@
 # Helix Trap ID Registry
 
-**Last updated**: 2026-05-10 (Stage 28.8 cycle 2 audit C C2-L2 fix)
+**Last updated**: 2026-05-11 (Stage 28.8 cycle 4 audit C C4-1..C4-4 fixes — promoted SHAPE_FOLD_ZERO_DIV / ARRAY_SIZE_NEGATIVE_OR_ZERO / CAST_MATRIX_RECURSION_DEPTH to real module-level `TRAP_*` constants; extended row 76003 to cover the cycle-3 D2 Call-RHS-let trigger)
 **Convention**: Each runtime trap has a numeric ID. The ID is encoded into `eax` immediately before a `ud2` instruction (SIGILL on x86_64), or surfaced as a structured `HelixCompileError` at compile time. Tools and tests cross-reference traps by ID.
 
 ## Two ID namespaces
@@ -58,15 +58,15 @@ Used by the Python frontend (`helixc/frontend/*.py`) and audit-introduced trap I
 | 28602 | `TRAP_EXTERN_CALL_OUTSIDE_UNSAFE` | `helixc/frontend/unsafe_pass.py:34` | 28.6 | `extern "C"` call outside `unsafe {}` block |
 | 28603 | (typecheck) | `helixc/frontend/typecheck.py:1361, 1378, 1388` | 28.6 | raw-pointer Cast outside unsafe context |
 | 28604 | (typecheck) | `helixc/frontend/typecheck.py:1394, 1408, 1777` | 28.6 | invalid scalar cast (not in allowed-cast matrix) |
-| 28801 | `SHAPE_FOLD_ZERO_DIV` | `helixc/frontend/monomorphize.py:_fold_intlit_arith` | 28.8 cycle 3 | division-by-zero or modulo-by-zero in a shape expression (e.g. `[T; N / 0]`). Hard error — silent fallthrough to length 0 is no longer allowed. |
-| 28802 | `ARRAY_SIZE_NEGATIVE_OR_ZERO` | `helixc/frontend/typecheck.py:_resolve_size_expr` | 28.8 cycle 3 | array size resolves to a negative or zero IntLit (source `[T; -5]` or mono-substituted `[T; N-N]`). Phase-0 requires size > 0. |
-| 28803 | `CAST_MATRIX_RECURSION_DEPTH` | `helixc/frontend/typecheck.py:_check_cast_compat` | 28.8 cycle 3 | ref-nesting in cast exceeds 8 levels (`&&&...&i32 as &&&...&i64`). Defense in depth against Python recursion limit. |
+| 28801 | `TRAP_SHAPE_FOLD_ZERO_DIV` | `helixc/frontend/monomorphize.py` (raised via `ShapeFoldError`) | 28.8 cycle 3 | division-by-zero or modulo-by-zero in a shape expression (e.g. `[T; N / 0]`). Hard error — silent fallthrough to length 0 is no longer allowed. |
+| 28802 | `TRAP_ARRAY_SIZE_NEGATIVE_OR_ZERO` | `helixc/frontend/typecheck.py` | 28.8 cycle 3 | array size resolves to a negative or zero IntLit (source `[T; -5]` or mono-substituted `[T; N-N]`). Phase-0 requires size > 0. |
+| 28803 | `TRAP_CAST_MATRIX_RECURSION_DEPTH` | `helixc/frontend/typecheck.py` | 28.8 cycle 3 | ref-nesting in cast exceeds 8 levels (`&&&...&i32 as &&&...&i64`). Defense in depth against Python recursion limit. |
 | 60030 | (bootstrap pattern subpat) | `helixc/bootstrap/kovc.hx:emit_variant_subpats / emit_tuple_subpats` | 5-6 F9 | sub-pattern index > 15 in PAT_VARIANT or PAT_TUPLE — the disp8 form of the `mov rax, [rax+disp8]` load wraps signed at offset >= 128. Trap fires before the wrapping load. |
 | 71001 | (bootstrap turbofish) | `helixc/bootstrap/parser.hx:~2626` | 7-8 F4 | `mr_tab_add` overflow at 33rd unique generic instantiation |
 | 74002 | `TRAP_DUPLICATE_METHOD_NAME` | `helixc/frontend/flatten_impls.py:32` | 28 | duplicate method name across structs (Phase-0 ambiguity-free fallback) |
 | 76001 | (bootstrap closure) | `helixc/bootstrap/parser.hx` | 9 | nested-closure error sentinel |
 | 76002 | (bootstrap closure) | `helixc/bootstrap/parser.hx` | 9 | closure capture-table overflow (5th+ free var) |
-| 76003 | (bootstrap closure) | `helixc/bootstrap/parser.hx` | 9 | closure capture of non-i32 local OR a local whose type can't be confirmed as i32 (untyped `let x = 3.14;` etc.) — Phase-0 loud failure. Triggers in BOTH typed-non-i32 case (e.g. `let pi: f64 = 3.14`) AND untyped-uninferrable case (`let pi = 3.14_f64` whose type wasn't tracked into var_type_tab). |
+| 76003 | (bootstrap closure) | `helixc/bootstrap/parser.hx` | 9 | closure capture of non-i32 local OR a local whose type can't be confirmed as i32. Phase-0 loud failure. Triggers in (a) typed-non-i32 case (`let pi: f64 = 3.14`), (b) untyped-uninferrable literal case (`let pi = 3.14_f64` whose type wasn't tracked into var_type_tab), and (c) untyped Call-RHS lets (`let pi = get_pi();`) — the parser registers tag 12 "untracked-call sentinel" that the capture probe treats as non-i32 per cycle-3 D2 (commit 3b321e6). |
 | 85001 | `TRAP_AD_ASSUMED_ZERO` | `helixc/frontend/autodiff.py:57` | 12-14 | AD pass assumed 0 derivative for unhandled node type |
 | 91001 | (bootstrap tile) | `helixc/ir/lower_ast.py` | 15 | tile shape cap (Phase-0: HBM 1D only) |
 | 99001 | (bootstrap AST_ERR) | `helixc/bootstrap/kovc.hx` | n/a | generic error sentinel (catch-all in codegen fallback) |

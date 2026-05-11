@@ -565,8 +565,23 @@ def _inline_lets(expr: A.Expr | None, env: dict[str, A.Expr]) -> A.Expr | None:
         new_callee = expr.callee
         if isinstance(expr.callee, A.Name) and expr.callee.name in env:
             cand = env[expr.callee.name]
-            if isinstance(cand, (A.Name, A.Path)):
+            # Audit 28.8 cycle 4 E6: preserve the original callee's
+            # generics list (turbofish) when aliasing. Pre-fix, `let g
+            # = mk_grad; g::<f64>(x)` aliased to `mk_grad(x)` and
+            # dropped the `::<f64>` annotation, defeating monomorphization.
+            if isinstance(cand, A.Name):
+                new_callee = A.Name(
+                    span=cand.span, name=cand.name,
+                    generics=(list(expr.callee.generics)
+                              if expr.callee.generics
+                              else list(cand.generics)),
+                )
+            elif isinstance(cand, A.Path):
                 new_callee = cand
+        # Audit 28.8 cycle 4 E8: walk Field-typed callees so
+        # `obj.method()` with `obj` let-bound substitutes properly.
+        elif isinstance(expr.callee, A.Field):
+            new_callee = _inline_lets(expr.callee, env)
         return A.Call(span=expr.span, callee=new_callee, args=new_args)
     if isinstance(expr, A.Field):
         return A.Field(span=expr.span,

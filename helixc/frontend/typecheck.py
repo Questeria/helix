@@ -214,6 +214,14 @@ class TyQuote(Type):
 # precision domain to drop when widening one to the other. The widen
 # helper canonicalizes these before deciding whether a tie callback
 # should fire, so `D<i64> + D<isize>` is silent.
+# Audit 28.8 cycle 4 C4-1: trap-id constants promoted from literals
+# embedded in diagnostic messages to real module-level identifiers so
+# the registry in docs/lang/trap-ids.md cross-references actual symbols
+# (per the "How to add a new trap ID" protocol).
+TRAP_ARRAY_SIZE_NEGATIVE_OR_ZERO = 28802  # _resolve_size_expr
+TRAP_CAST_MATRIX_RECURSION_DEPTH = 28803  # _check_cast_compat
+
+
 _WIDEN_NAME_ALIASES: dict[str, str] = {
     "isize": "i64",
     "usize": "u64",
@@ -579,14 +587,13 @@ class TypeChecker:
         if isinstance(expr, A.IntLit):
             if expr.value < 0:
                 self.errors.append(TypeError_(
-                    f"array size must be >= 0, got {expr.value} "
+                    f"array size must be > 0, got {expr.value} "
                     f"(trap 28802)",
                     expr.span,
                 ))
             elif expr.value == 0:
                 self.errors.append(TypeError_(
-                    f"array size must be > 0 in Phase-0, got 0 "
-                    f"(trap 28802)",
+                    f"array size must be > 0, got 0 (trap 28802)",
                     expr.span,
                 ))
             return TyPrim(f"size_{expr.value}")
@@ -596,13 +603,12 @@ class TypeChecker:
             v = -expr.operand.value
             if v < 0:
                 self.errors.append(TypeError_(
-                    f"array size must be >= 0, got {v} (trap 28802)",
+                    f"array size must be > 0, got {v} (trap 28802)",
                     expr.span,
                 ))
             elif v == 0:
                 self.errors.append(TypeError_(
-                    f"array size must be > 0 in Phase-0, got 0 "
-                    f"(trap 28802)",
+                    f"array size must be > 0, got 0 (trap 28802)",
                     expr.span,
                 ))
             return TyPrim(f"size_{v}")
@@ -1354,12 +1360,22 @@ class TypeChecker:
                         self._ad_warn_mixed_inner(
                             expr.span, l_inner, r_inner, inner, extra=extra,
                         )
-                elif (l_is_logic or r_is_logic) and inner_mismatch:
+                elif (l_is_logic or r_is_logic) and (
+                        inner_mismatch
+                        or (l_is_logic != r_is_logic)
+                ):
                     # Audit 28.8 cycle 3 D4: pure Logic<T1> + Logic<T2>
                     # (neither side TyDiff) — previously silent
                     # left-wins. The TyLogic docstring explicitly says
                     # Logic carries provenance; silently dropping the
                     # right-side domain defeats that contract.
+                    #
+                    # Audit 28.8 cycle 4 E2: the wrap-asymmetric case
+                    # `Logic<T> + T` (one side Logic, other bare, SAME
+                    # inner) was missed by D4 because the gate required
+                    # inner_mismatch. Now we also fire when l_is_logic
+                    # != r_is_logic regardless of inner — symmetric
+                    # with the cycle-2 B:C6 D-vs-bare fix.
                     inner = _widen_diff_inner(
                         l_inner, r_inner,
                         _warn_cb=_tie_cb, _span=expr.span,
