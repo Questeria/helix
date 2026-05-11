@@ -2060,10 +2060,17 @@ fn match_scrut_ty_get(bn_state: i32) -> i32 {
 //   slot 0: trap-id code (e.g. 28501 panic, 28601 unsafe, 28701
 //           deprecated, 28502 unwind). 0 sentinel = empty slot.
 //   slot 1: severity (1 = warning, 2 = error)
-//   slot 2: src_byte_start (the source-byte offset, for
-//           line/col reconstruction — Phase-0 just prints the byte
-//           offset; full line/col reconstruction is deferred to a
-//           future stage that has source-byte access at dump time)
+//   slot 2: ast_node_idx (the arena index of the AST node where the
+//           diagnostic fires — e.g. the AST_CALL node for panic_pass,
+//           the AST_FN_DECL for trace/unwind/deprecated). Phase-0 has
+//           no source-byte span on AST nodes; full line/col
+//           reconstruction is deferred to a future stage that wires
+//           a side-table from AST node idx → source byte range.
+//
+//           Stage-28.9 audit-cycle-1 D1 fix: renamed from
+//           `src_byte_start` (misleading — the value passed is an AST
+//           arena index, not a byte offset). All 5 emit sites already
+//           pass AST indices; this rename clarifies the contract.
 //   slot 3: aux i32 — pass-specific data (e.g. for deprecated_pass:
 //           callee_name_start; for panic_pass: arg_count)
 //
@@ -2104,8 +2111,11 @@ fn diag_arena_init() -> i32 {
 // Emit a diagnostic. Returns 0 on success; emits trap 28999 if the
 // arena is already full (defensive — the heavy gate has ~10 diag
 // emit sites and the cap is 64).
+// Stage-28.9 audit-cycle-1 D1: the slot-2 parameter is documented
+// (and emit-site-used) as the AST node's arena index, NOT a source
+// byte offset. Renamed for accuracy.
 fn diag_emit(diag_state: i32, code: i32, severity: i32,
-             src_byte_start: i32, aux: i32) -> i32 {
+             ast_node_idx: i32, aux: i32) -> i32 {
     let count = __arena_get(diag_state);
     let cap = __arena_get(diag_state + 1);
     if count >= cap {
@@ -2117,7 +2127,7 @@ fn diag_emit(diag_state: i32, code: i32, severity: i32,
         let entry = diag_state + 2 + count * 4;
         __arena_set(entry, code);
         __arena_set(entry + 1, severity);
-        __arena_set(entry + 2, src_byte_start);
+        __arena_set(entry + 2, ast_node_idx);
         __arena_set(entry + 3, aux);
         __arena_set(diag_state, count + 1);
         0
@@ -2131,7 +2141,12 @@ fn diag_emit(diag_state: i32, code: i32, severity: i32,
 @pure fn diag_get_severity(diag_state: i32, idx: i32) -> i32 {
     __arena_get(diag_state + 2 + idx * 4 + 1)
 }
-@pure fn diag_get_src_offset(diag_state: i32, idx: i32) -> i32 {
+// Stage-28.9 audit-cycle-1 D1: renamed from diag_get_src_offset to
+// match the actual semantics (slot 2 holds an AST node arena index,
+// not a source byte offset). A future stage will add a side-table
+// from ast_node_idx → source byte range and re-expose a true
+// `diag_get_src_offset` on top of this.
+@pure fn diag_get_ast_node_idx(diag_state: i32, idx: i32) -> i32 {
     __arena_get(diag_state + 2 + idx * 4 + 2)
 }
 @pure fn diag_get_aux(diag_state: i32, idx: i32) -> i32 {
