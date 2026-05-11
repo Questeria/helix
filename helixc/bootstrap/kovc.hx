@@ -2358,6 +2358,338 @@ fn panic_pass(ast_root: i32, diag_state: i32) -> i32 {
     }
 }
 
+// --------------------------------------------------------------
+// Stage 28.9: unwind_pass — port of panic_pass.validate_unwind.
+//
+// Phase-0 rejects `@unwind` on any fn (trap-id 28502 reserved).
+// The parser captures @unwind via the sticky flag set by
+// skip_attributes (sb+77) and writes it into AST_FN_DECL slot 11.
+// This pass scans the fn_list and emits one diag per fn with the
+// flag set.
+//
+// Severity=2 (error). The Python pass treats @unwind as a hard
+// error too (the attribute is reserved but not yet implemented;
+// silently accepting it would be misleading).
+// --------------------------------------------------------------
+
+fn unwind_pass(ast_root: i32, diag_state: i32) -> i32 {
+    let root_tag = __arena_get(ast_root);
+    if root_tag != 15 {
+        0
+    } else {
+        let mut walk: i32 = ast_root;
+        while walk != 0 {
+            let fn_idx = __arena_get(walk + 1);
+            let is_unwind = __arena_get(fn_idx + 11);
+            if is_unwind == 1 {
+                // aux slot stores the fn's name byte_start so a
+                // future driver can reconstruct the fn name in the
+                // diagnostic message.
+                let fn_name_s = __arena_get(fn_idx + 1);
+                diag_emit(diag_state, 28502, 2, fn_idx, fn_name_s);
+            };
+            walk = __arena_get(walk + 2);
+        }
+        0
+    }
+}
+
+// --------------------------------------------------------------
+// Stage 28.9: trace_pass — port of trace_pass.validate_trace_attrs.
+//
+// Phase-0 rejects `@trace` on extern fns (the extern-fn path is
+// not present in the bootstrap parser today — externs are part of
+// the Python frontend only). For Phase-0 bootstrap, every @trace
+// fn passes validation unless it carries the (parser-discarded)
+// extern flag. We surface a soft check: every `@trace` fn IS the
+// fn (no extern path can reach the bootstrap), so the pass is
+// effectively a no-op trip wire that the bootstrap recognises the
+// `@trace` attribute exists.
+//
+// To keep parity with the Python pass and to validate that the
+// attribute capture wired through correctly, the pass emits a
+// SEVERITY=1 (warning, not error) diag for every traced fn. The
+// warning fires once per @trace and does NOT gate the build.
+// Codegen-time @trace instrumentation (TRACE_ENTRY / TRACE_EXIT
+// prologue/epilogue ops) is deferred to a follow-up.
+// --------------------------------------------------------------
+
+fn trace_pass(ast_root: i32, diag_state: i32) -> i32 {
+    let root_tag = __arena_get(ast_root);
+    if root_tag != 15 {
+        0
+    } else {
+        let mut walk: i32 = ast_root;
+        while walk != 0 {
+            let fn_idx = __arena_get(walk + 1);
+            let is_trace = __arena_get(fn_idx + 10);
+            if is_trace == 1 {
+                // Severity 1 (warning): @trace is recognised but
+                // not yet wired through codegen. aux slot stores
+                // fn name byte_start for future message rendering.
+                let fn_name_s = __arena_get(fn_idx + 1);
+                diag_emit(diag_state, 25001, 1, fn_idx, fn_name_s);
+            };
+            walk = __arena_get(walk + 2);
+        }
+        0
+    }
+}
+
+// --------------------------------------------------------------
+// Stage 28.9: deprecated_pass — port of
+// deprecated_pass.emit_warnings.
+//
+// Walks the fn_list to collect all fns marked `@deprecated` (slot
+// 9 == 1), then walks every NON-deprecated fn's body looking for
+// AST_CALL nodes whose callee name byte-matches a deprecated fn
+// name. Emits severity=1 (warning) diag with code 28701 per call
+// site. The Python pass also defaults to warning; -Wdeprecated=error
+// promotes them to errors at the CLI driver level (not implemented
+// in bootstrap Phase-0).
+//
+// Phase-0 limitation: this pass does NOT track the @deprecated
+// MESSAGE string. The Python pass extracts the message from the
+// `deprecated:<msg>` attrs entry; the bootstrap parser doesn't
+// preserve attribute args (skip_attributes consumes them blindly).
+// All bootstrap warnings render as "call to deprecated <name>"
+// without message. To wire messages in, a follow-up would extend
+// the parser to capture attr args.
+// --------------------------------------------------------------
+
+// Auxiliary: collect every deprecated fn name's (name_s, name_l)
+// into a small fixed-cap table at the diag_state arena's tail.
+// We side-channel this table because the diag_arena slots only hold
+// 4 i32s per entry and we need (name_s, name_l) pairs at lookup
+// time. Phase-0 cap = 16 deprecated fns (matches Python tests
+// which never use more than a handful).
+//
+// Layout: a 33-slot region: 1 count + 16 * 2 (name_s, name_l) pairs.
+// Caller passes the base offset. Init = zero count + zero entries.
+
+fn dep_tab_init() -> i32 {
+    let base = __arena_push(0);
+    let mut i: i32 = 0;
+    while i < 32 {
+        __arena_push(0);
+        i = i + 1;
+    }
+    base
+}
+
+fn dep_tab_add(dep_tab: i32, name_s: i32, name_l: i32) -> i32 {
+    let count = __arena_get(dep_tab);
+    if count >= 16 {
+        // Cap reached; silently drop the extra name. Phase-0 keeps
+        // this lenient — overflow doesn't trap because deprecation
+        // is a warning-only pass anyway.
+        0
+    } else {
+        let entry = dep_tab + 1 + count * 2;
+        __arena_set(entry, name_s);
+        __arena_set(entry + 1, name_l);
+        __arena_set(dep_tab, count + 1);
+        0
+    }
+}
+
+@pure fn dep_tab_count(dep_tab: i32) -> i32 { __arena_get(dep_tab) }
+@pure fn dep_tab_name_s(dep_tab: i32, idx: i32) -> i32 {
+    __arena_get(dep_tab + 1 + idx * 2)
+}
+@pure fn dep_tab_name_l(dep_tab: i32, idx: i32) -> i32 {
+    __arena_get(dep_tab + 1 + idx * 2 + 1)
+}
+
+// Check whether a (name_s, name_l) byte-matches any deprecated fn
+// in the table. Returns 1 on match, 0 otherwise.
+fn dep_tab_contains(dep_tab: i32, name_s: i32, name_l: i32) -> i32 {
+    let count = __arena_get(dep_tab);
+    let mut i: i32 = 0;
+    let mut hit: i32 = 0;
+    while i < count {
+        let ds = __arena_get(dep_tab + 1 + i * 2);
+        let dl = __arena_get(dep_tab + 1 + i * 2 + 1);
+        if kovc_byte_eq(name_s, name_l, ds, dl) == 1 {
+            hit = 1;
+        };
+        i = i + 1;
+    }
+    hit
+}
+
+// Walker: scan for AST_CALL whose callee name appears in dep_tab.
+// Same descent rules as walk_for_panic (mirror of the Python
+// _DeprecationCallSiteCollector visitor pattern).
+fn walk_for_deprecated(idx: i32, dep_tab: i32, diag_state: i32) -> i32 {
+    if idx == 0 { 0 } else {
+        let t = __arena_get(idx);
+        let p1 = __arena_get(idx + 1);
+        let p2 = __arena_get(idx + 2);
+        let p3 = __arena_get(idx + 3);
+        if t == 16 {
+            // AST_CALL: check the callee against dep_tab.
+            if dep_tab_contains(dep_tab, p1, p2) == 1 {
+                // aux = p1 (callee name byte_start), severity=1
+                // (warning) — matches Python -Wdeprecated default.
+                diag_emit(diag_state, 28701, 1, idx, p1);
+            };
+            // Always recurse into args.
+            let mut cur_arg: i32 = p3;
+            while cur_arg != 0 {
+                let arg_expr = __arena_get(cur_arg + 1);
+                walk_for_deprecated(arg_expr, dep_tab, diag_state);
+                cur_arg = __arena_get(cur_arg + 2);
+            }
+            0
+        } else { if t == 7 {
+            walk_for_deprecated(p1, dep_tab, diag_state);
+            walk_for_deprecated(p2, dep_tab, diag_state);
+            walk_for_deprecated(p3, dep_tab, diag_state);
+            0
+        } else { if t == 8 {
+            let value = __arena_get(idx + 4);
+            walk_for_deprecated(p3, dep_tab, diag_state);
+            walk_for_deprecated(value, dep_tab, diag_state);
+            0
+        } else { if t == 12 {
+            let value = __arena_get(idx + 4);
+            walk_for_deprecated(p3, dep_tab, diag_state);
+            walk_for_deprecated(value, dep_tab, diag_state);
+            0
+        } else { if t == 10 {
+            walk_for_deprecated(p1, dep_tab, diag_state);
+            walk_for_deprecated(p2, dep_tab, diag_state);
+            0
+        } else { if t == 11 {
+            walk_for_deprecated(p3, dep_tab, diag_state);
+            0
+        } else { if t == 13 {
+            walk_for_deprecated(p1, dep_tab, diag_state);
+            walk_for_deprecated(p2, dep_tab, diag_state);
+            0
+        } else { if t == 9 {
+            walk_for_deprecated(p1, dep_tab, diag_state);
+            0
+        } else { if t == 26 {
+            walk_for_deprecated(p1, dep_tab, diag_state);
+            0
+        } else { if t == 31 {
+            walk_for_deprecated(p1, dep_tab, diag_state);
+            0
+        } else {
+            // Binops: same coarse range check as walk_for_panic.
+            let is_arith = if t >= 2 { if t <= 6 { 1 } else { 0 } } else { 0 };
+            let is_cmp   = if t >= 19 { if t <= 23 { 1 } else { 0 } } else { 0 };
+            let is_bit   = if t >= 28 { if t <= 30 { 1 } else { 0 } } else { 0 };
+            let is_mod   = if t == 24 { 1 } else { 0 };
+            let is_shift = if t == 32 { 1 } else { if t == 33 { 1 } else { 0 } };
+            let is_binop = if is_arith == 1 { 1 }
+                           else { if is_cmp == 1 { 1 }
+                           else { if is_bit == 1 { 1 }
+                           else { if is_mod == 1 { 1 }
+                           else { if is_shift == 1 { 1 } else { 0 } } } } };
+            if is_binop == 1 {
+                walk_for_deprecated(p1, dep_tab, diag_state);
+                walk_for_deprecated(p2, dep_tab, diag_state);
+            };
+            0
+        }}}}}}}}}}
+    }
+}
+
+fn deprecated_pass(ast_root: i32, diag_state: i32) -> i32 {
+    let root_tag = __arena_get(ast_root);
+    if root_tag != 15 {
+        0
+    } else {
+        // First pass: build the dep_tab from @deprecated fn decls.
+        let dep_tab = dep_tab_init();
+        let mut walk: i32 = ast_root;
+        while walk != 0 {
+            let fn_idx = __arena_get(walk + 1);
+            let is_deprecated = __arena_get(fn_idx + 9);
+            if is_deprecated == 1 {
+                let name_s = __arena_get(fn_idx + 1);
+                let name_l = __arena_get(fn_idx + 2);
+                dep_tab_add(dep_tab, name_s, name_l);
+            };
+            walk = __arena_get(walk + 2);
+        }
+        // If no deprecated fns, short-circuit.
+        if dep_tab_count(dep_tab) == 0 {
+            0
+        } else {
+            // Second pass: walk every fn body looking for calls.
+            let mut walk2: i32 = ast_root;
+            while walk2 != 0 {
+                let fn_idx = __arena_get(walk2 + 1);
+                let is_generic = __arena_get(fn_idx + 6);
+                if is_generic == 0 {
+                    let body = __arena_get(fn_idx + 3);
+                    walk_for_deprecated(body, dep_tab, diag_state);
+                };
+                walk2 = __arena_get(walk2 + 2);
+            }
+            0
+        }
+    }
+}
+
+// --------------------------------------------------------------
+// Stage 28.9: unsafe_pass — port of unsafe_pass.check_unsafe_ops.
+//
+// Phase-0 bootstrap status: the bootstrap parser does NOT recognize
+// `unsafe { ... }` blocks (no AST tag for unsafe). Raw-pointer ops
+// (`*p` deref, `as *T` cast) are also unrepresented in the
+// bootstrap AST. Consequently the bootstrap-side unsafe_pass is a
+// no-op trip wire: it walks the fn_list but finds no unsafe-
+// requiring constructs to validate.
+//
+// Once the bootstrap parser gains AST_UNSAFE_BLOCK + raw-pointer
+// expression nodes (deferred — needs lexer/parser extensions for
+// `unsafe`, `*`, `&mut`, `as *T`), this pass should be extended to:
+//   1. thread an `in_unsafe` counter through descent (push on
+//      AST_UNSAFE_BLOCK entry, pop on exit; nested blocks legal)
+//   2. on encountering a raw-ptr op (deref unary `*` or cast to
+//      pointer type), check in_unsafe > 0; if not, emit
+//      diag(28601, severity=2)
+//
+// The Python pass implements both. Bootstrap parity tracked as
+// Phase-A follow-up.
+// --------------------------------------------------------------
+
+fn unsafe_pass(ast_root: i32, diag_state: i32) -> i32 {
+    // No bootstrap AST tags for unsafe/raw-ptr exist yet. Walk for
+    // structural symmetry with the other passes — this is the
+    // documented hook so adding the AST nodes in a follow-up only
+    // requires extending the body walker, not adding a new
+    // driver-main call site.
+    let root_tag = __arena_get(ast_root);
+    if root_tag != 15 {
+        0
+    } else {
+        // Walk fn bodies but emit no diags. Future tags to handle:
+        //   - AST_UNSAFE_BLOCK (proposed tag 80)
+        //   - AST_PTR_DEREF (proposed Unary subtag)
+        //   - AST_PTR_CAST  (proposed Cast subtag)
+        let mut walk: i32 = ast_root;
+        while walk != 0 {
+            let fn_idx = __arena_get(walk + 1);
+            let is_generic = __arena_get(fn_idx + 6);
+            // is_generic guard kept for future use (mono clones'
+            // unsafe blocks would otherwise double-visit).
+            if is_generic == 0 {
+                // Body walk is intentionally a no-op for now.
+                let _body = __arena_get(fn_idx + 3);
+                let _drop = _body;
+            };
+            walk = __arena_get(walk + 2);
+        }
+        0
+    }
+}
+
 fn bn_arena_push_s(b: i32) -> i32 { __arena_get(b) }
 fn bn_arena_get_s(b: i32) -> i32  { __arena_get(b + 1) }
 fn bn_arena_set_s(b: i32) -> i32  { __arena_get(b + 2) }
@@ -5562,16 +5894,24 @@ fn emit_elf_for_ast_to_path(ast_root: i32) -> i32 {
     // the ELF region so its slots don't pollute the contiguous code
     // byte stream.
     let diag_state = diag_arena_init();
-    // Stage 28.9: panic_pass — finds malformed panic(...) call sites.
-    // Runs BEFORE codegen so the diag_arena is populated. Codegen
-    // happens regardless (matches the existing 14001/14002 pattern
-    // where type-mismatch traps are EMBEDDED in the binary rather
-    // than aborting the compile). After codegen, if any diag has
-    // severity=2 (error), the binary's prologue is patched to start
-    // with a ud2 trap carrying code 28501 (via the diag-emit-traps
-    // pass below) so the produced binary cannot run silently with
-    // malformed source.
+    // Stage 28.9: validation passes — run AFTER parse, BEFORE
+    // codegen so the diag_arena is populated. The codegen patches
+    // `main`'s prologue with a ud2 trap if any error-severity diag
+    // fires.
+    //   * panic_pass:      malformed panic(...) calls (28501)
+    //   * unwind_pass:     @unwind not yet supported    (28502)
+    //   * trace_pass:      @trace recognised (warning)  (25001 sev 1)
+    //   * deprecated_pass: call to @deprecated fn       (28701 sev 1)
+    //   * unsafe_pass:     stub (no AST_UNSAFE in bootstrap yet)
+    //
+    // Order matters only for the FIRST-error-wins trap-id picked
+    // by the codegen guard. We run panic first (most-common test
+    // case) then unwind then trace then deprecated.
     panic_pass(ast_root, diag_state);
+    unwind_pass(ast_root, diag_state);
+    trace_pass(ast_root, diag_state);
+    deprecated_pass(ast_root, diag_state);
+    unsafe_pass(ast_root, diag_state);
     // Phase 1.10 step 5c follow-on: fn_type_table tracks each user fn's
     // declared return type so is_f32_expr can resolve user-named f32
     // calls (not just `__f*` builtins). Populate via a pre-pass over

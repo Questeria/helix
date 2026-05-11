@@ -4036,6 +4036,129 @@ fn main() -> i32 {{
     )
 
 
+def test_bootstrap_kovc_unwind_pass_traps_on_attr():
+    """Stage 28.9 regression: bootstrap-side unwind_pass detects
+    `@unwind fn ...` and emits a ud2 trap (id 28502) at the start
+    of main's body. The Python pass rejects @unwind as Phase-0
+    unimplemented; the bootstrap port must reach the same conclusion
+    through the new parser scratch flag + AST_FN_DECL slot 11.
+
+    Source: `@unwind fn foo() -> i32 { 1 } fn main() -> i32 { 7 }`
+    Expected: produced binary aborts (rc >= 128).
+    """
+    import os, subprocess
+    proj = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    lexer = open(os.path.join(proj, "helixc", "bootstrap", "lexer.hx")).read()
+    lexer_no_main = lexer.rsplit(
+        "// --------------------------------------------------------------\n// Demo:",
+        1,
+    )[0]
+    parser_body = open(os.path.join(proj, "helixc", "bootstrap", "parser.hx")).read()
+    kovc = open(os.path.join(proj, "helixc", "bootstrap", "kovc.hx")).read()
+    kovc_lib = kovc.rsplit(
+        "// --------------------------------------------------------------\n// Demo:",
+        1,
+    )[0]
+    import uuid
+    tag = uuid.uuid4().hex[:10]
+    src_path = f"/tmp/helix_unwind_src_{tag}.hx"
+    bin_path = f"/tmp/kovc_unwind_bin_{tag}.bin"
+    src_text = "@unwind fn foo() -> i32 { 1 } fn main() -> i32 { 7 }"
+    subprocess.run(
+        ["wsl", "-e", "bash", "-c",
+         f"printf %s {repr(src_text)} > {src_path}"],
+        check=True, timeout=10,
+    )
+    driver = lexer_no_main + parser_body + kovc_lib + f"""
+fn main() -> i32 {{
+    let src_start = __arena_len();
+    let src_len = read_file_to_arena("{src_path}");
+    let tok_base = __arena_len();
+    lex(src_start, src_len);
+    let ast_root = parse_top(tok_base);
+    let total = emit_elf_for_ast_to_path(ast_root);
+    let elf_start = __arena_len() - total;
+    write_file_to_arena("{bin_path}", elf_start, total)
+}}
+"""
+    compile_and_run(driver)
+    run = subprocess.run(
+        ["wsl", "-e", "bash", "-c",
+         f"sync && chmod +x {bin_path} && {bin_path}; "
+         f"rc=$?; echo $rc; rm -f {src_path} {bin_path}"],
+        capture_output=True, timeout=10,
+    )
+    last_line = run.stdout.decode().strip().splitlines()[-1] if run.stdout else ""
+    rc = int(last_line) if last_line.isdigit() else -1
+    assert rc >= 128, (
+        f"@unwind should have trapped via ud2; got rc={rc}, "
+        f"stdout={run.stdout!r}, stderr={run.stderr!r}"
+    )
+
+
+def test_bootstrap_kovc_deprecated_pass_warning_does_not_trap():
+    """Stage 28.9 regression: bootstrap-side deprecated_pass emits a
+    severity-1 (warning) diag when a `@deprecated` fn is called. The
+    codegen trap is gated on diag_arena_error_count (= severity-2
+    only), so a warning-only diag MUST NOT trap the produced binary.
+
+    Source has both a deprecated fn AND a call site. Expected exit
+    code: the value of the deprecated call (since main returns it).
+    """
+    import os, subprocess
+    proj = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    lexer = open(os.path.join(proj, "helixc", "bootstrap", "lexer.hx")).read()
+    lexer_no_main = lexer.rsplit(
+        "// --------------------------------------------------------------\n// Demo:",
+        1,
+    )[0]
+    parser_body = open(os.path.join(proj, "helixc", "bootstrap", "parser.hx")).read()
+    kovc = open(os.path.join(proj, "helixc", "bootstrap", "kovc.hx")).read()
+    kovc_lib = kovc.rsplit(
+        "// --------------------------------------------------------------\n// Demo:",
+        1,
+    )[0]
+    import uuid
+    tag = uuid.uuid4().hex[:10]
+    src_path = f"/tmp/helix_dep_src_{tag}.hx"
+    bin_path = f"/tmp/kovc_dep_bin_{tag}.bin"
+    # @deprecated fn `old_api` is called from main. deprecated_pass
+    # should observe the call site and emit a severity-1 (warning).
+    # Since warnings don't gate codegen, main should return 99.
+    src_text = "@deprecated fn old_api() -> i32 { 99 } fn main() -> i32 { old_api() }"
+    subprocess.run(
+        ["wsl", "-e", "bash", "-c",
+         f"printf %s {repr(src_text)} > {src_path}"],
+        check=True, timeout=10,
+    )
+    driver = lexer_no_main + parser_body + kovc_lib + f"""
+fn main() -> i32 {{
+    let src_start = __arena_len();
+    let src_len = read_file_to_arena("{src_path}");
+    let tok_base = __arena_len();
+    lex(src_start, src_len);
+    let ast_root = parse_top(tok_base);
+    let total = emit_elf_for_ast_to_path(ast_root);
+    let elf_start = __arena_len() - total;
+    write_file_to_arena("{bin_path}", elf_start, total)
+}}
+"""
+    compile_and_run(driver)
+    run = subprocess.run(
+        ["wsl", "-e", "bash", "-c",
+         f"sync && chmod +x {bin_path} && {bin_path}; "
+         f"rc=$?; echo $rc; rm -f {src_path} {bin_path}"],
+        capture_output=True, timeout=10,
+    )
+    last_line = run.stdout.decode().strip().splitlines()[-1] if run.stdout else ""
+    rc = int(last_line) if last_line.isdigit() else -1
+    assert rc == 99, (
+        f"deprecated_pass warning must not trap; expected rc=99 (the "
+        f"deprecated call's return value), got rc={rc}, "
+        f"stdout={run.stdout!r}, stderr={run.stderr!r}"
+    )
+
+
 def test_bootstrap_kovc_panic_pass_clean_panic_compiles():
     """Stage 28.9 regression: bootstrap-side panic_pass MUST NOT trap
     when a `panic("msg")` call is well-formed (single string-literal
