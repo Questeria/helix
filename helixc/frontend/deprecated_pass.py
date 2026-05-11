@@ -34,6 +34,15 @@ from __future__ import annotations
 from typing import Optional
 
 from . import ast_nodes as A
+from .ast_walker import ASTVisitor
+
+
+# Stage 28.8.2: deprecated_pass walker migrated to ASTVisitor base class.
+# Pre-fix this module hand-rolled `_walk_call_sites` with the same
+# attribute-list drift problem as panic_pass / unsafe_pass (audit A5
+# HIGH fix-sweep had to manually synchronize the list — `obj`, `target`,
+# `iter_expr`, `start`, `end`, `guard`, `inner` etc.). The shared
+# library traverses dataclass fields by introspection.
 
 
 def _attr_msg(attrs: list[str], name: str) -> Optional[str]:
@@ -81,63 +90,32 @@ def find_deprecated_decls(prog: A.Program) -> dict[str, str]:
     return out
 
 
-def _walk_call_sites(node, callback) -> None:
-    """Recursive walk yielding every Call node found in node.
+class _DeprecationCallSiteCollector(ASTVisitor):
+    """Stage 28.8.2: record every Call to a deprecated symbol as a
+    (callee_name, span, msg) tuple. Drop-in replacement for the
+    pre-fix `_walk_call_sites` + closure callback pattern.
 
-    Audit 28.8 Finding A5 (HIGH) fix: the prior attr list missed `obj`,
-    `target`, `iter_expr`, `start`, `end`, `guard`, `inner`, etc., so
-    deprecated calls inside `arr[old_fn()]`, `for i in 0..old_fn()`,
-    `match x { y if old_fn(y) => ... }`, etc. were silently invisible
-    to `find_deprecation_call_sites`. Also missed `indices` in the
-    sequence list (so `arr[old_fn()]` was a double-miss). The
-    `except TypeError: pass` block silently swallowed any iteration
-    errors — replaced with `raise` so future AST-shape regressions
-    surface loudly.
-
-    The (legacy, never-matched) names `then_branch` / `else_branch`
-    are removed — those attrs don't exist on any AST node.
+    The `deps` dict maps name -> msg; visit_Call checks
+    `isinstance(node.callee, A.Name)` and looks up the name in deps.
     """
-    if node is None:
-        return
-    if isinstance(node, A.Call):
-        callback(node)
-    # Iterate over containers + sub-attrs.
-    if isinstance(node, A.Block):
-        for s in node.stmts:
-            _walk_call_sites(s, callback)
-        if node.final_expr is not None:
-            _walk_call_sites(node.final_expr, callback)
-        return
-    for attr in ("expr", "left", "right", "operand", "cond", "then",
-                 "else_", "value", "scrutinee", "callee", "init",
-                 "rhs", "body", "iter_expr", "obj", "target",
-                 "start", "end", "guard", "inner", "transformation",
-                 "verifier"):
-        sub = getattr(node, attr, None)
-        if sub is not None and hasattr(sub, "span"):
-            _walk_call_sites(sub, callback)
-    for attr in ("args", "stmts", "fields", "elems", "arms",
-                 "indices"):
-        seq = getattr(node, attr, None)
-        if seq is None:
-            continue
-        try:
-            for it in seq:
-                if isinstance(it, tuple):
-                    for sub in it:
-                        if hasattr(sub, "span"):
-                            _walk_call_sites(sub, callback)
-                elif hasattr(it, "span"):
-                    _walk_call_sites(it, callback)
-        except TypeError:
-            # Re-raise rather than swallow: silently skipping iteration
-            # errors would mask AST-shape regressions in future stages.
-            raise
+
+    def __init__(self, deps: dict[str, str],
+                 out: list[tuple[str, A.Span, str]]):
+        self.deps = deps
+        self.out = out
+
+    def visit_Call(self, node: A.Call) -> None:
+        callee = node.callee
+        if isinstance(callee, A.Name) and callee.name in self.deps:
+            self.out.append((callee.name, node.span, self.deps[callee.name]))
 
 
 def find_deprecation_call_sites(prog: A.Program) -> list[tuple[str, A.Span, str]]:
     """For every call to a deprecated fn, return (callee_name, span,
-    deprecation_msg)."""
+    deprecation_msg).
+
+    Stage 28.8.2: uses ``_DeprecationCallSiteCollector(ASTVisitor)``.
+    """
     deps = find_deprecated_decls(prog)
     if not deps:
         return []
@@ -145,12 +123,7 @@ def find_deprecation_call_sites(prog: A.Program) -> list[tuple[str, A.Span, str]
     for it in prog.items:
         if not isinstance(it, A.FnDecl) or it.is_extern:
             continue
-
-        def cb(call, deps=deps, out=out):
-            callee = call.callee
-            if isinstance(callee, A.Name) and callee.name in deps:
-                out.append((callee.name, call.span, deps[callee.name]))
-        _walk_call_sites(it.body, cb)
+        _DeprecationCallSiteCollector(deps, out).visit(it.body)
     return out
 
 
