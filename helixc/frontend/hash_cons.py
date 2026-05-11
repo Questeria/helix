@@ -89,6 +89,77 @@ def hash_cons(prog: A.Program) -> int:
     return sharer.merged
 
 
+def _ty_equal(a: Any, b: Any) -> bool:
+    """Stage 28.9 cycle 41 audit-T C39-A1 fix (conf 55): true
+    structural equality on TyNode subclasses without folding
+    Expr-typed sub-fields through SHA-256.
+
+    Mirrors `ast_hash._ty_repr` shape (1-1 mapping of subclasses to
+    field checks) but recurses Expr-typed fields via `_ast_equal`
+    instead of digest comparison. This preserves the cycle-37
+    invariant that `_ast_equal` is exact structural equality used
+    to disambiguate SHA-256 hash buckets — the disambiguator must
+    NOT itself rely on the same hash.
+
+    Span fields are intentionally NOT compared (per the docstring
+    contract of `ast_hash`: hashing and structural identity are
+    span-independent).
+    """
+    if a is None and b is None:
+        return True
+    if a is None or b is None:
+        return False
+    if type(a) is not type(b):
+        return False
+    if isinstance(a, A.TyName):
+        return a.name == b.name
+    if isinstance(a, A.TyTuple):
+        if len(a.elems) != len(b.elems):
+            return False
+        return all(_ty_equal(x, y) for x, y in zip(a.elems, b.elems))
+    if isinstance(a, A.TyArray):
+        return _ty_equal(a.elem, b.elem) and _ast_equal(a.size, b.size)
+    if isinstance(a, A.TyRef):
+        return _ty_equal(a.inner, b.inner) and a.is_mut == b.is_mut
+    if isinstance(a, A.TyPtr):
+        return _ty_equal(a.inner, b.inner) and a.is_mut == b.is_mut
+    if isinstance(a, A.TyFn):
+        if len(a.params) != len(b.params):
+            return False
+        if not all(_ty_equal(p1, p2) for p1, p2 in zip(a.params, b.params)):
+            return False
+        return _ty_equal(a.ret, b.ret)
+    if isinstance(a, A.TyTensor):
+        if not _ty_equal(a.dtype, b.dtype):
+            return False
+        if len(a.shape) != len(b.shape):
+            return False
+        if not all(_ast_equal(s1, s2) for s1, s2 in zip(a.shape, b.shape)):
+            return False
+        return (_ast_equal(a.device, b.device)
+                and _ast_equal(a.layout, b.layout))
+    if isinstance(a, A.TyTile):
+        if not _ty_equal(a.dtype, b.dtype):
+            return False
+        if len(a.shape) != len(b.shape):
+            return False
+        if not all(_ast_equal(s1, s2) for s1, s2 in zip(a.shape, b.shape)):
+            return False
+        return _ast_equal(a.memspace, b.memspace)
+    if isinstance(a, A.TyGeneric):
+        if a.base != b.base:
+            return False
+        if len(a.args) != len(b.args):
+            return False
+        return all(_ty_equal(x, y) for x, y in zip(a.args, b.args))
+    # Unknown TyNode subclass — fail loudly (matches the cycle 14/15
+    # walker-fallback discipline).
+    raise NotImplementedError(
+        f"_ty_equal: unhandled TyNode subclass {type(a).__name__}; "
+        f"add an explicit arm in hash_cons.py"
+    )
+
+
 def _ast_equal(a: Any, b: Any) -> bool:
     """Structural equality on shareable AST nodes. Used as the
     second-stage check after hash-equality to defend against the (very
@@ -127,17 +198,21 @@ def _ast_equal(a: Any, b: Any) -> bool:
                 and _ast_equal(a.then, b.then)
                 and _ast_equal(a.else_, b.else_))
     if isinstance(a, A.Cast):
-        # Stage 28.9 cycle 37 audit-R C36-1 fix follow-on: must use
-        # the span-stripped `_ty_repr` canonicalizer to match the
-        # symmetric change in `structural_hash`. Pre-fix this used
-        # `repr(target_ty)` which embedded the TyNode span, so two
-        # Casts with the same content at different source lines were
-        # deemed "structurally distinct" by _ast_equal while
-        # structural_hash (after cycle 37) said they were equal,
-        # falsely tripping the hash-collision trap 20001.
-        from .ast_hash import _ty_repr
+        # Stage 28.9 cycle 37 audit-R C36-1 fix follow-on: use the
+        # span-stripped TyNode comparison so structural_hash and
+        # _ast_equal stay in lockstep.
+        # Stage 28.9 cycle 41 audit-T C39-A1 fix (conf 55): the
+        # cycle-37/39 implementation compared `_ty_repr(a.target_ty)
+        # == _ty_repr(b.target_ty)`, which folded Expr-typed TyNode
+        # fields (TyArray.size, TyTensor.shape, etc.) through
+        # SHA-256 digests via _expr_canon. That weakened the
+        # collision-resistance guarantee `_ast_equal` exists to
+        # provide post-hash-bucket. Now use `_ty_equal` which
+        # recurses Expr-typed fields via `_ast_equal` itself — true
+        # exact structural equality, no SHA-256 dependency at the
+        # collision-disambiguation layer.
         return (_ast_equal(a.value, b.value)
-                and _ty_repr(a.target_ty) == _ty_repr(b.target_ty))
+                and _ty_equal(a.target_ty, b.target_ty))
     if isinstance(a, A.TupleLit):
         if len(a.elems) != len(b.elems):
             return False

@@ -58,8 +58,12 @@ def _expr_canon(e: Optional[A.Expr]) -> str:
     independent) rather than `repr(e)` (which embeds the dataclass
     span field).
 
-    `None` → fixed sentinel string (matches `_ty_repr`'s None
-    convention).
+    `None` → sentinel string `"<none>"`. (Note: this is distinct
+    from `_ty_repr`'s tuple sentinel `("None",)` — the two helpers
+    use different None markers but neither contract crosses the
+    other's usage site, so the asymmetry is benign. Cycle 40
+    code-review C40-R1 conf 82 fix: docstring previously claimed
+    they matched, which was inaccurate.)
     """
     if e is None:
         return "<none>"
