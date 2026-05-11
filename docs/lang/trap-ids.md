@@ -58,6 +58,8 @@ Used by the Python frontend (`helixc/frontend/*.py`) and audit-introduced trap I
 | 28602 | `TRAP_EXTERN_CALL_OUTSIDE_UNSAFE` | `helixc/frontend/unsafe_pass.py:34` | 28.6 | `extern "C"` call outside `unsafe {}` block |
 | 28603 | (typecheck) | `helixc/frontend/typecheck.py:1361, 1378, 1388` | 28.6 | raw-pointer Cast outside unsafe context |
 | 28604 | (typecheck) | `helixc/frontend/typecheck.py:1394, 1408, 1777` | 28.6 | invalid scalar cast (not in allowed-cast matrix) |
+| 28701 | (bootstrap deprecated_pass) | `helixc/bootstrap/kovc.hx` | 28.9 | call site of `@deprecated` fn (severity=1 warning by default; matches Python -Wdeprecated=warn policy) |
+| 28999 | (bootstrap diag_arena) | `helixc/bootstrap/kovc.hx` | 28.9 | diag_arena overflow (>64 collected validation-pass diagnostics in a single program) |
 | 28801 | `TRAP_SHAPE_FOLD_ZERO_DIV` | `helixc/frontend/monomorphize.py` (raised via `ShapeFoldError`) | 28.8 cycle 3 | division-by-zero or modulo-by-zero in a shape expression (e.g. `[T; N / 0]`). Hard error — silent fallthrough to length 0 is no longer allowed. |
 | 28802 | `TRAP_ARRAY_SIZE_NEGATIVE_OR_ZERO` | `helixc/frontend/typecheck.py` | 28.8 cycle 3 | array size resolves to a negative or zero IntLit (source `[T; -5]` or mono-substituted `[T; N-N]`). Phase-0 requires size > 0. |
 | 28803 | `TRAP_CAST_MATRIX_RECURSION_DEPTH` | `helixc/frontend/typecheck.py` | 28.8 cycle 3 | ref-nesting in cast exceeds 8 levels (`&&&...&i32 as &&&...&i64`). Defense in depth against Python recursion limit. |
