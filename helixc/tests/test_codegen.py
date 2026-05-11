@@ -474,6 +474,33 @@ def test_c16_1_wide_array_elem_traps_at_codegen():
         )
 
 
+def test_c18_1_isize_usize_recognized_as_64bit():
+    """Audit 28.8 cycle 19 C18-1 (HIGH): backend type classifiers must
+    treat `isize`/`usize` as pointer-width aliases of `i64`/`u64` so
+    `let x: isize = 5_000_000_000;` doesn't silently truncate to 32 bits.
+
+    Pre-fix `_is_i64_type(TIRScalar("isize"))` returned False, and
+    CONST_INT's emit branched to the 32-bit `mov_eax_imm32(value &
+    0xFFFFFFFF)` path — truncating literals > 2**31 - 1."""
+    from helixc.backend.x86_64 import FnCompiler
+    from helixc.ir import tir
+    # Probe the classifiers directly — no full pipeline needed.
+    i64 = tir.TIRScalar(name="i64")
+    isize = tir.TIRScalar(name="isize")
+    u64 = tir.TIRScalar(name="u64")
+    usize = tir.TIRScalar(name="usize")
+    # The classifiers are unbound methods accepting `self` + ty;
+    # use a sentinel `None` since the methods don't read self state.
+    assert FnCompiler._is_i64_type(None, i64) is True
+    assert FnCompiler._is_i64_type(None, isize) is True, (
+        "isize should be recognized as i64-width (C18-1)"
+    )
+    assert FnCompiler._is_u64_type(None, u64) is True
+    assert FnCompiler._is_u64_type(None, usize) is True, (
+        "usize should be recognized as u64-width (C18-1)"
+    )
+
+
 def test_array_assign():
     src = """
     fn main() -> i32 {

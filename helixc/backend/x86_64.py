@@ -1003,11 +1003,18 @@ class FnCompiler:
         return isinstance(ty, tir.TIRScalar) and ty.name == "f64"
 
     def _is_i64_type(self, ty: tir.TIRType) -> bool:
-        return isinstance(ty, tir.TIRScalar) and ty.name == "i64"
+        # Audit 28.8 cycle 19 C18-1 (HIGH): `isize` is a pointer-width
+        # alias of `i64` on 64-bit targets — typecheck.py:241 ranks them
+        # at the same widening rank, but the backend classifier was
+        # name-equal only, so `let x: isize = 5_000_000_000;` silently
+        # truncated to 32 bits via the else branch in CONST_INT/spill.
+        return isinstance(ty, tir.TIRScalar) and ty.name in ("i64", "isize")
 
     def _is_u64_type(self, ty: tir.TIRType) -> bool:
         # Stage 16.5: u64 is the IR type for raw pointers and FFI-arg widening.
-        return isinstance(ty, tir.TIRScalar) and ty.name == "u64"
+        # Audit 28.8 cycle 19 C18-1: `usize` is a pointer-width alias of
+        # `u64` on 64-bit targets. Same silent-trunc class as isize.
+        return isinstance(ty, tir.TIRScalar) and ty.name in ("u64", "usize")
 
     def _check_float_supported(self, ty: tir.TIRType) -> None:
         """Phase 1 supports f32 and f64. f16/bf16 still need the F16C
