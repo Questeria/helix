@@ -36,8 +36,19 @@ from .. import tir
 # arithmetic on user-written constants down to a NaN payload is the
 # compiler's choice — and Phase-0 chooses to surface it).
 class FoldError(Exception):
-    """Raised by fold_module when a float fold produces NaN (trap 17001)."""
+    """Raised by fold_module when a float fold produces NaN (trap 17001).
+
+    Cycle 19 audit-A C19-1: subclass ShiftFoldError carries trap 17002
+    for out-of-range shifts on compile-time constants. Same base
+    class so a single `except FoldError` catches both."""
     trap_id = 17001
+
+
+class ShiftFoldError(FoldError):
+    """Cycle 19 C19-1 (conf 78): out-of-range shift amount in const fold.
+    Symmetric with FoldError for NaN — both are "fold would produce
+    undefined behavior, refuse silently-wrong codegen"."""
+    trap_id = 17002
 
 
 _INT_BITS = {
@@ -407,12 +418,24 @@ def _try_fold_op(op: tir.Op, defs: dict) -> tir.Op | None:
                 elif op.kind == tir.OpKind.BIT_XOR:
                     v = l ^ r
                 elif op.kind == tir.OpKind.SHL:
+                    # Stage 28.9 cycle 19 audit-A C19-1 fix (conf 78):
+                    # symmetric with FoldError NaN diagnostic at
+                    # lines 374-379 — out-of-range shift on
+                    # compile-time constants is undefined behavior in
+                    # C semantics and a silent surprise to users.
+                    # Raise FoldError (trap 17002) for loud failure.
                     if r < 0 or r >= 64:
-                        return None  # undefined behavior; leave as runtime op
+                        raise ShiftFoldError(
+                            f"shift amount {r} out of range [0, 63] in "
+                            f"const SHL fold; trap 17002"
+                        )
                     v = l << r
                 elif op.kind == tir.OpKind.SHR:
                     if r < 0 or r >= 64:
-                        return None
+                        raise ShiftFoldError(
+                            f"shift amount {r} out of range [0, 63] in "
+                            f"const SHR fold; trap 17002"
+                        )
                     v = l >> r   # arithmetic in Python for signed ints
                 else:
                     return None

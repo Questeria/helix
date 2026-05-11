@@ -417,24 +417,34 @@ def _pattern_test_expr(pat: A.Pattern, scrut_expr: A.Expr,
     if isinstance(pat, (A.PatWildcard, A.PatBind)):
         return A.BoolLit(span=span, value=True)
     if isinstance(pat, A.PatLit):
-        # PatLit against a scalar/tag: scrut == lit.value.
-        # Cycle 14 C14-2 (conf 82): dup BOTH operands — pat.value is
-        # an AST node that would otherwise be shared if the same lit
-        # appears in multiple arms (e.g. two literal-equality tests of
-        # the same numeric constant).
+        # Stage 28.9 cycle 19 regression fix: pre-refactor _pattern_test
+        # always indexed scrut[0] for PatLit/PatRange tests, relying on
+        # the lowerer's "Index of scalar returns scalar" fallback so
+        # the same code works for both array-backed enum tags (e.g.
+        # `Color::None` parsed as PatLit(Path)) AND scalar scrutinees
+        # (e.g. `match 5 { 5 => ... }`). My cycle-13 refactor dropped
+        # the [0] index at top-level, breaking nullary-variant enum
+        # patterns that parse as PatLit (option_eq's
+        # `Option::None => ...` arm produced `scrut == Path` instead
+        # of `scrut[0] == Path`, comparing the whole array to the path
+        # discriminant — always 0/false at runtime).
+        # Restore the indexed form via _fresh_slot_load.
+        # Cycle 14 C14-2: dup pat.value (right operand).
+        tag_load = _fresh_slot_load(scrut_expr, 0, span)
         return A.Binary(span=span, op="==",
-                        left=_dup_expr(scrut_expr),
+                        left=tag_load,
                         right=_dup_expr(pat.value))
     if isinstance(pat, A.PatRange):
-        # Cycle 14 C14-2: dup pat.lo and pat.hi as well as scrut_expr.
+        # Same logic as PatLit: index [0] for the tag/scalar.
+        # Cycle 14 C14-2: dup pat.lo and pat.hi.
         op_hi = "<=" if pat.inclusive else "<"
         return A.Binary(
             span=span, op="&&",
             left=A.Binary(span=span, op=">=",
-                          left=_dup_expr(scrut_expr),
+                          left=_fresh_slot_load(scrut_expr, 0, span),
                           right=_dup_expr(pat.lo)),
             right=A.Binary(span=span, op=op_hi,
-                           left=_dup_expr(scrut_expr),
+                           left=_fresh_slot_load(scrut_expr, 0, span),
                            right=_dup_expr(pat.hi)),
         )
     if isinstance(pat, A.PatOr):
