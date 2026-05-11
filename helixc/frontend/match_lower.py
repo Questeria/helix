@@ -166,6 +166,40 @@ def _rewrite_expr(expr: A.Expr) -> A.Expr:
     if isinstance(expr, A.Field):
         expr.obj = _rewrite_expr(expr.obj)
         return expr
+    # Audit 28.8 cycle 23 C22-C (HIGH): same defect class as cycle-2
+    # C2-4 — hand-rolled walker missing dispatch arms for AST subtypes
+    # that hold Expr children. Pre-fix, `unsafe { match x { ... } }`,
+    # `for i in 0..match n { ... }` (Range.end), and
+    # `modify(x, match x { ... }, ok)` all let the inner Match persist
+    # past lower_matches and crashed lower_ast's "Match should not
+    # reach _lower_expr" assertion.
+    if isinstance(expr, A.UnsafeBlock):
+        _rewrite_block(expr.body)
+        return expr
+    if isinstance(expr, A.Range):
+        if expr.start is not None:
+            expr.start = _rewrite_expr(expr.start)
+        if expr.end is not None:
+            expr.end = _rewrite_expr(expr.end)
+        return expr
+    if isinstance(expr, A.Modify):
+        expr.target = _rewrite_expr(expr.target)
+        expr.transformation = _rewrite_expr(expr.transformation)
+        expr.verifier = _rewrite_expr(expr.verifier)
+        return expr
+    # Defense-in-depth: Break.value, Quote.inner, Splice.inner are
+    # latent — flagged by cycle 23 audit C as same-class. Cover here
+    # to prevent regression.
+    if isinstance(expr, A.Break):
+        if expr.value is not None:
+            expr.value = _rewrite_expr(expr.value)
+        return expr
+    if isinstance(expr, A.Quote):
+        expr.inner = _rewrite_expr(expr.inner)
+        return expr
+    if isinstance(expr, A.Splice):
+        expr.inner = _rewrite_expr(expr.inner)
+        return expr
     return expr
 
 

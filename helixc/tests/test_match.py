@@ -417,6 +417,82 @@ def test_match_nested_match():
     assert code == 42, f"expected 42 (inner arm 2), got {code}"
 
 
+def test_c22_c_match_inside_unsafe_block_lowered():
+    """Audit 28.8 cycle 23 C22-C (HIGH): `match` inside `unsafe { ... }`
+    must be desugared by lower_matches. Pre-fix, `match_lower._rewrite_expr`
+    had no UnsafeBlock arm — the Match persisted past lower_matches
+    and crashed lower_ast's `Match should not reach _lower_expr`
+    assertion."""
+    from helixc.frontend.parser import parse as parse_src
+    from helixc.frontend.match_lower import lower_matches
+    from helixc.frontend import ast_nodes as A
+    src = """
+    fn main() -> i32 {
+        unsafe {
+            match 1 {
+                1 => 42,
+                _ => 0,
+            }
+        }
+    }
+    """
+    prog = parse_src(src)
+    lower_matches(prog)
+    # Walk the program: no A.Match should remain anywhere.
+    def walk(node):
+        if node is None:
+            return
+        if isinstance(node, A.Match):
+            raise AssertionError(
+                "lower_matches must remove all Match nodes; one "
+                "remains inside UnsafeBlock (C22-C)"
+            )
+        if isinstance(node, list):
+            for x in node:
+                walk(x)
+            return
+        if hasattr(node, "__dict__"):
+            for v in vars(node).values():
+                walk(v)
+    walk(prog)
+
+
+def test_c22_c_match_inside_range_lowered():
+    """Audit 28.8 cycle 23 C22-C: `match` inside Range.start/end must
+    be desugared. Pre-fix `for i in 0..match n { ... }` crashed."""
+    from helixc.frontend.parser import parse as parse_src
+    from helixc.frontend.match_lower import lower_matches
+    from helixc.frontend import ast_nodes as A
+    src = """
+    fn main() -> i32 {
+        let n = 5;
+        let mut total = 0;
+        for i in 0 .. (match n { 0 => 0, _ => 3 }) {
+            total = total + 1;
+        }
+        total
+    }
+    """
+    prog = parse_src(src)
+    lower_matches(prog)
+    def walk(node):
+        if node is None:
+            return
+        if isinstance(node, A.Match):
+            raise AssertionError(
+                "lower_matches must remove all Match nodes; one "
+                "remains inside Range (C22-C)"
+            )
+        if isinstance(node, list):
+            for x in node:
+                walk(x)
+            return
+        if hasattr(node, "__dict__"):
+            for v in vars(node).values():
+                walk(v)
+    walk(prog)
+
+
 def main():
     tests = [(name, fn) for name, fn in globals().items()
              if name.startswith("test_") and callable(fn)]
