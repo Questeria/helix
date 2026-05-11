@@ -288,137 +288,83 @@ def _is_total_pattern(pat: A.Pattern) -> bool:
     return False
 
 
-def _sub_pat_or_test(
-    pat: "A.PatOr", scrut_load: A.Expr, span: A.Span,
-) -> "A.Expr | None":
-    """Stage 28.9 cycle 12 audit-A C12-1: generate an OR-test for a
-    PatOr that appears as a sub-pattern inside PatVariant.sub_patterns
-    or PatTuple.elems.
-
-    Each alt is tested against `scrut_load` (the IR expression that
-    loads the parent's slot value) locally — we don't recurse through
-    the str-scrut variant of `_pattern_test` because that requires a
-    named binding. Common alt shapes covered:
-      - PatLit:     scrut_load == alt.value
-      - PatRange:   scrut_load >= lo && scrut_load OP hi
-      - PatBind/PatWildcard: trivially true (binders handled in
-        _collect_binds via the C11-1 fix)
-      - PatVariant: scrut_load[0] == variant_tag (matches the
-        approximation already used for nested variants without OR)
-
-    Returns the combined boolean expression, or None if pat.alts is
-    empty (an impossible-but-defensive case)."""
-    if not pat.alts:
-        return None
-    alt_tests: list[A.Expr] = []
-    for alt in pat.alts:
-        if isinstance(alt, A.PatLit):
-            alt_tests.append(A.Binary(span=span, op="==",
-                                       left=scrut_load, right=alt.value))
-        elif isinstance(alt, A.PatRange):
-            op_hi = "<=" if alt.inclusive else "<"
-            alt_tests.append(A.Binary(
-                span=span, op="&&",
-                left=A.Binary(span=span, op=">=",
-                              left=scrut_load, right=alt.lo),
-                right=A.Binary(span=span, op=op_hi,
-                               left=scrut_load, right=alt.hi),
-            ))
-        elif isinstance(alt, A.PatVariant):
-            # Nested variant alt: scrut_load is the payload value;
-            # PatVariant.path is the discriminant. Same approximation
-            # as the line ~393 nested-variant test.
-            tag_load = A.Index(
-                span=span, callee=scrut_load,
-                indices=[A.IntLit(span=span, value=0)],
-            )
-            alt_tests.append(A.Binary(span=span, op="==",
-                                       left=tag_load, right=alt.path))
-        else:
-            # PatBind, PatWildcard, nested PatTuple, nested PatOr:
-            # trivially true contribution; the OR shape requires SOME
-            # alt branch to be true so a True alt makes the OR True.
-            # PatTuple/nested-PatOr cases not commonly used at this
-            # depth in Phase-0; flagged in audit-doc as a deeper-recurse
-            # follow-up.
-            alt_tests.append(A.BoolLit(span=span, value=True))
-    or_test = alt_tests[0]
-    for t in alt_tests[1:]:
-        or_test = A.Binary(span=span, op="||", left=or_test, right=t)
-    return or_test
+def _fresh_slot_load(callee_expr: A.Expr, idx: int, span: A.Span) -> A.Expr:
+    """Stage 28.9 cycle 13 audit-A C13-2 fix (conf 80): build a FRESH
+    `Index(callee, [IntLit(idx)])` per call site. Pre-fix multiple
+    sub-tests shared the same `slot_load` instance, violating tree
+    linearity that pytree.py and validation-pass walkers assume."""
+    return A.Index(
+        span=span,
+        callee=_dup_expr(callee_expr, span),
+        indices=[A.IntLit(span=span, value=idx)],
+    )
 
 
-def _pattern_test(pat: A.Pattern, scrut: str, span: A.Span) -> A.Expr:
-    """Build a boolean expression that's true iff `pat` matches scrut."""
-    if isinstance(pat, (A.PatWildcard, A.PatBind)):
-        return A.BoolLit(span=span, value=True)
-    # For both PatLit and PatRange, the test reads "the tag" of __scrut.
-    # We always go through Index(__scrut, 0) so the same code works for
-    # both array-backed (enum/struct) and scalar scrutinees — the
-    # lowerer's Index handler falls back to returning the scalar value
-    # directly when the binding is scalar.
-    def _scrut_tag() -> A.Expr:
+def _dup_expr(expr: A.Expr, span: A.Span) -> A.Expr:
+    """Stage 28.9 cycle 13 C13-2 helper: build a fresh AST node for
+    common Expr shapes. Used to avoid sharing Index/Name children
+    across multiple parent nodes (which would violate tree linearity)."""
+    if isinstance(expr, A.Name):
+        return A.Name(span=span, name=expr.name, generics=list(expr.generics))
+    if isinstance(expr, A.IntLit):
+        return A.IntLit(span=span, value=expr.value,
+                        type_suffix=expr.type_suffix)
+    if isinstance(expr, A.Index):
         return A.Index(
             span=span,
-            callee=A.Name(span=span, name=scrut),
-            indices=[A.IntLit(span=span, value=0)],
+            callee=_dup_expr(expr.callee, span),
+            indices=[_dup_expr(i, span) for i in expr.indices],
         )
+    # For Path / Field / and anything else, fall back to deepcopy.
+    import copy
+    return copy.deepcopy(expr)
+
+
+def _pattern_test_expr(pat: A.Pattern, scrut_expr: A.Expr,
+                        span: A.Span) -> A.Expr:
+    """Stage 28.9 cycle 13 audit-A C13-1 + C13-2 structural fix
+    (closes the cycle-10..cycle-12 family of nested-pattern bugs at the
+    root). Canonical pattern-test implementation that takes an Expr
+    scrut (not a str name). Used by:
+
+      - `_pattern_test(pat, scrut: str, span)`: top-level wrapper that
+        calls this with `Name(scrut)`.
+      - sub-position dispatch in PatTuple/PatVariant arms: calls this
+        directly with the freshly-built `slot_load` expr.
+
+    Closes the cycle-12 C12-1 asymmetric-fix gap because nested
+    PatTuple, PatVariant, PatOr (etc.) at any depth now route through
+    this unified dispatch — no inline approximations.
+    """
+    if isinstance(pat, (A.PatWildcard, A.PatBind)):
+        return A.BoolLit(span=span, value=True)
     if isinstance(pat, A.PatLit):
+        # PatLit against a scalar/tag: scrut == lit.value. For tuple-
+        # backed scruts the caller passes scrut_expr = Index(... , 0)
+        # explicitly — this fn doesn't need to wrap.
         return A.Binary(span=span, op="==",
-                        left=_scrut_tag(), right=pat.value)
+                        left=_dup_expr(scrut_expr, span), right=pat.value)
     if isinstance(pat, A.PatRange):
         op_hi = "<=" if pat.inclusive else "<"
         return A.Binary(
             span=span, op="&&",
             left=A.Binary(span=span, op=">=",
-                          left=_scrut_tag(), right=pat.lo),
+                          left=_dup_expr(scrut_expr, span), right=pat.lo),
             right=A.Binary(span=span, op=op_hi,
-                           left=_scrut_tag(), right=pat.hi),
+                           left=_dup_expr(scrut_expr, span), right=pat.hi),
         )
     if isinstance(pat, A.PatOr):
-        # alts || alts || ...
-        tests = [_pattern_test(a, scrut, span) for a in pat.alts]
+        tests = [_pattern_test_expr(a, scrut_expr, span) for a in pat.alts]
         return _or_chain(tests, span)
     if isinstance(pat, A.PatTuple):
-        # Tuple-element tests using the scrut's `.N` field access.
-        # The scrut is a tuple binding (array-backed), so scrut[i] reads
-        # the i-th slot. Each sub-pattern is recursively tested against
-        # its slot; PatBind / PatWildcard are trivially true (binders
-        # handled in _collect_binds).
         sub_tests: list[A.Expr] = []
         for i, sub in enumerate(pat.elems):
-            slot_load = A.Index(
-                span=span,
-                callee=A.Name(span=span, name=scrut),
-                indices=[A.IntLit(span=span, value=i)],
-            )
-            if isinstance(sub, A.PatLit):
-                sub_tests.append(A.Binary(span=span, op="==",
-                                          left=slot_load, right=sub.value))
-            elif isinstance(sub, A.PatRange):
-                op_hi = "<=" if sub.inclusive else "<"
-                sub_tests.append(A.Binary(
-                    span=span, op="&&",
-                    left=A.Binary(span=span, op=">=",
-                                  left=slot_load, right=sub.lo),
-                    right=A.Binary(span=span, op=op_hi,
-                                   left=slot_load, right=sub.hi),
-                ))
-            elif isinstance(sub, A.PatOr):
-                # Stage 28.9 cycle 12 audit-A C12-1 fix (conf 88): the
-                # C11-1 cycle-11 fix added PatOr to _collect_binds's
-                # recurse tuple, but the matching test arm here still
-                # silently fell through to "trivially true". Result:
-                # `(A | B(x))` as a tuple element matched ANY value,
-                # silently producing garbage in body. Now generate the
-                # OR-test inline against `slot_load`: each alt's test
-                # is computed locally for the common cases.
-                or_test = _sub_pat_or_test(sub, slot_load, span)
-                if or_test is not None:
-                    sub_tests.append(or_test)
-            # PatBind / PatWildcard / nested PatTuple → trivially true
-            # (binders handled in _collect_binds; nested tuples currently
-            # restricted to wildcard-class subpats).
+            slot_load = _fresh_slot_load(scrut_expr, i, span)
+            t = _pattern_test_expr(sub, slot_load, span)
+            # Drop trivially-true sub-tests so they don't bloat the AST.
+            if isinstance(t, A.BoolLit) and t.value is True:
+                continue
+            sub_tests.append(t)
         if not sub_tests:
             return A.BoolLit(span=span, value=True)
         full = sub_tests[0]
@@ -426,61 +372,39 @@ def _pattern_test(pat: A.Pattern, scrut: str, span: A.Span) -> A.Expr:
             full = A.Binary(span=span, op="&&", left=full, right=t)
         return full
     if isinstance(pat, A.PatVariant):
-        # Test: __scrut[0] == tag_value AND each sub-pattern test against
-        # __scrut[1], __scrut[2], ...  The scrut is expected to be a
-        # tagged-value array: [tag, payload0, payload1, ...].
-        scrut_name = A.Name(span=span, name=scrut)
-        tag_load = A.Index(span=span, callee=scrut_name,
-                           indices=[A.IntLit(span=span, value=0)])
+        # Variant: scrut[0] == path AND each sub-pattern test against
+        # scrut[i+1] (sub_patterns indexed from 1; slot 0 is the tag).
+        tag_load = _fresh_slot_load(scrut_expr, 0, span)
         tag_test = A.Binary(span=span, op="==",
                             left=tag_load, right=pat.path)
         sub_tests: list[A.Expr] = []
         for i, sub in enumerate(pat.sub_patterns):
-            slot_idx = i + 1
-            slot_load = A.Index(
-                span=span,
-                callee=A.Name(span=span, name=scrut),
-                indices=[A.IntLit(span=span, value=slot_idx)],
-            )
-            if isinstance(sub, A.PatLit):
-                sub_tests.append(A.Binary(span=span, op="==",
-                                          left=slot_load, right=sub.value))
-            elif isinstance(sub, A.PatRange):
-                op_hi = "<=" if sub.inclusive else "<"
-                sub_tests.append(A.Binary(
-                    span=span, op="&&",
-                    left=A.Binary(span=span, op=">=",
-                                  left=slot_load, right=sub.lo),
-                    right=A.Binary(span=span, op=op_hi,
-                                   left=slot_load, right=sub.hi),
-                ))
-            elif isinstance(sub, A.PatVariant):
-                # Nested variant: the sub-slot is itself a tagged value
-                # (typically arena index of a recursive enum). Compare
-                # the sub-slot against its variant's tag — an
-                # approximation that covers the common AST-walking case
-                # but not full recursive sub-pattern dispatch. Deeper
-                # binders inside the nested variant are still extracted
-                # by _collect_binds.
-                sub_tests.append(A.Binary(span=span, op="==",
-                                          left=slot_load, right=sub.path))
-            elif isinstance(sub, A.PatOr):
-                # Stage 28.9 cycle 12 audit-A C12-1 fix (conf 88):
-                # nested PatOr inside PatVariant.sub_patterns previously
-                # fell through to trivially-true. Now generate the
-                # OR-test inline against slot_load.
-                or_test = _sub_pat_or_test(sub, slot_load, span)
-                if or_test is not None:
-                    sub_tests.append(or_test)
-            # PatBind / PatWildcard / nested PatTuple: trivially true;
-            # binder handled in _collect_binds.
-        if sub_tests:
-            full = tag_test
-            for t in sub_tests:
-                full = A.Binary(span=span, op="&&", left=full, right=t)
-            return full
-        return tag_test
+            slot_load = _fresh_slot_load(scrut_expr, i + 1, span)
+            t = _pattern_test_expr(sub, slot_load, span)
+            if isinstance(t, A.BoolLit) and t.value is True:
+                continue
+            sub_tests.append(t)
+        if not sub_tests:
+            return tag_test
+        full = tag_test
+        for t in sub_tests:
+            full = A.Binary(span=span, op="&&", left=full, right=t)
+        return full
     return A.BoolLit(span=span, value=True)
+
+
+def _pattern_test(pat: A.Pattern, scrut: str, span: A.Span) -> A.Expr:
+    """Build a boolean expression that's true iff `pat` matches scrut.
+    Stage 28.9 cycle 13: thin wrapper over `_pattern_test_expr`."""
+    scrut_expr = A.Name(span=span, name=scrut, generics=[])
+    return _pattern_test_expr(pat, scrut_expr, span)
+
+
+# Stage 28.9 cycle 13: legacy _pattern_test body removed. The canonical
+# implementation is now `_pattern_test_expr(pat, scrut_expr, span)` above,
+# with `_pattern_test(pat, scrut: str, span)` as a thin wrapper. This
+# structural change closes the cycle-10..cycle-12 family of nested-pattern
+# bugs by routing all sub-patterns through one unified recursive dispatch.
 
 
 def _collect_binds(pat: A.Pattern, scrut: str, span: A.Span) -> list[A.Let]:
