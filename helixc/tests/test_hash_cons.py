@@ -359,6 +359,95 @@ def test_c36_1_cast_hash_independent_of_span():
     )
 
 
+def test_c38_1_cast_to_array_hash_independent_of_span():
+    """C38-1 regression (HIGH conf 92): cycle-37's `_ty_repr` fix
+    was incomplete — it stripped spans from TyNode but still used
+    `repr(...)` on Expr-typed fields (TyArray.size, TyTensor.shape,
+    etc.). Cast to `[i32; 3]` at different source lines still
+    hashed differently because IntLit(3) inside TyArray.size
+    embedded its own span via repr.
+
+    Cycle 39 added `_expr_canon` which recurses via structural_hash,
+    fully span-stripping at every layer."""
+    def build_cast_to_array(line: int):
+        s = A.Span(line=line, col=1)
+        return A.Cast(
+            span=s,
+            value=A.Name(span=s, name="arr", generics=[]),
+            target_ty=A.TyArray(
+                span=s,
+                elem=A.TyName(span=s, name="i32"),
+                size=A.IntLit(span=s, value=3, type_suffix=None),
+            ),
+        )
+    h1 = structural_hash(build_cast_to_array(1))
+    h2 = structural_hash(build_cast_to_array(99))
+    assert h1 == h2, (
+        f"Cast to [i32; 3] at different lines must hash equally "
+        f"(cycle 39 C38-1); got {h1[:16]} vs {h2[:16]}"
+    )
+
+
+def test_c38_1_cast_to_array_hash_cons_shares():
+    """C38-1 end-to-end: two structurally-identical array-typed
+    casts must be shared by hash_cons. Pre-fix, merged=1 (only
+    the inner Name); post-fix, merged=2 (both Casts share too)."""
+    src = (
+        "fn main() -> i32 {\n"
+        "    let arr = [1, 2, 3];\n"
+        "    let a = arr as [i32; 3];\n"
+        "    let b = arr as [i32; 3];\n"
+        "    0\n"
+        "}\n"
+    )
+    prog = parse(src)
+    hash_cons(prog)
+    casts: list = []
+    def walk(node):
+        if node is None:
+            return
+        if isinstance(node, A.Cast):
+            casts.append(node)
+        if isinstance(node, list):
+            for x in node:
+                walk(x)
+            return
+        if hasattr(node, "__dict__"):
+            for v in vars(node).values():
+                walk(v)
+    walk(prog)
+    assert len(casts) == 2, f"expected 2 Casts, got {len(casts)}"
+    assert casts[0] is casts[1], (
+        "hash_cons must share two structurally-identical Casts "
+        "with array target types (cycle 39 C38-1)"
+    )
+
+
+def test_c38_1_different_array_sizes_still_hash_differently():
+    """C38-1 fix must not over-correct: Casts to arrays with
+    DIFFERENT sizes must still hash differently."""
+    s = A.Span(line=1, col=1)
+    c3 = A.Cast(
+        span=s,
+        value=A.Name(span=s, name="arr", generics=[]),
+        target_ty=A.TyArray(
+            span=s, elem=A.TyName(span=s, name="i32"),
+            size=A.IntLit(span=s, value=3, type_suffix=None),
+        ),
+    )
+    c4 = A.Cast(
+        span=s,
+        value=A.Name(span=s, name="arr", generics=[]),
+        target_ty=A.TyArray(
+            span=s, elem=A.TyName(span=s, name="i32"),
+            size=A.IntLit(span=s, value=4, type_suffix=None),
+        ),
+    )
+    assert structural_hash(c3) != structural_hash(c4), (
+        "Casts to [i32; 3] vs [i32; 4] must hash differently"
+    )
+
+
 def test_c36_1_different_dtypes_still_hash_differently():
     """C36-1 fix must not over-correct: TileLits with DIFFERENT
     dtypes must still hash differently."""

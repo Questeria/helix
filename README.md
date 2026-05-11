@@ -22,7 +22,7 @@ This is the from-scratch implementation of Kovostov: a local AI system where eve
 
 ## Status (2026-05-11)
 
-**1,494 tests passing** (1 skipped), Stage 28.9 active (bootstrap kovc.hx self-hosting effort), 35+ audit-driven cycles refining the Python frontend.
+**Test suite: ~1,500 tests** (1 skipped), Stage 28.9 active (bootstrap kovc.hx self-hosting effort), 38+ audit-driven cycles refining the Python frontend. (Exact count drifts with each audit cycle adding regression tests; see `git log` for current.)
 
 Major direction shift this session: Helix is now being optimized **for AI to USE and EXTEND, not for human developers**. Where ergonomics conflicts with structural regularity, structural regularity wins.
 

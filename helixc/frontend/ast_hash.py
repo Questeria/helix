@@ -47,27 +47,49 @@ def structural_hash(node: A.Expr | A.Block | A.Stmt | A.FnDecl | None,
     return h.hexdigest()
 
 
-def _ty_repr(ty: A.TyNode) -> tuple:
-    """Stage 28.9 cycle 36 audit-R C36-1 fix (conf 90): canonical
-    span-stripped representation of a TyNode for hashing.
+def _expr_canon(e: Optional[A.Expr]) -> str:
+    """Stage 28.9 cycle 39 audit-R C38-1 fix (conf 92): canonical
+    span-stripped digest of an Expr (or None). Used by `_ty_repr`
+    for the Expr-typed fields of TyArray.size, TyTensor.shape /
+    .device / .layout, TyTile.shape / .memspace.
 
-    Pre-fix, `repr(node.dtype)` was used in the TileLit arm (cycle 35)
-    and the Cast arm (pre-existing) — but dataclass-generated repr
-    embeds every field including `span`, so structurally identical
-    types at different source lines produced different hashes. This
-    violated the docstring contract that the hash is INTENTIONALLY
-    independent of source spans (lines 16-19 of this module).
+    Returns the same digest the parent hasher would emit for `e`
+    — recursing via `structural_hash` (which is itself span-
+    independent) rather than `repr(e)` (which embeds the dataclass
+    span field).
 
-    Output is a nested tuple of (type_class_name, *field_values)
-    with spans replaced by None. Recurses into TyNode-containing
-    fields. Tolerates Expr-typed fields (e.g. TyArray.size,
-    TyTile.shape elems) via `repr(...)` of the Expr — this is a
-    LIMITED bug: an Expr inside a type with a span dependency still
-    leaks span. Phase-0 mitigates this by parser convention (sizes
-    are usually IntLit constants whose repr is span-only-suffixed),
-    but a full fix would recurse into the Expr's structural hash.
-    For cycle 36 we accept this scope: a TyName-only TileLit (the
-    most common case) is now correctly span-free.
+    `None` → fixed sentinel string (matches `_ty_repr`'s None
+    convention).
+    """
+    if e is None:
+        return "<none>"
+    return structural_hash(e)
+
+
+def _ty_repr(ty: Optional[A.TyNode]) -> tuple:
+    """Stage 28.9 cycle 36 audit-R C36-1 fix (conf 90) + cycle 39
+    audit-R C38-1 fix (conf 92): canonical span-stripped
+    representation of a TyNode for hashing.
+
+    Pre-cycle-36 `repr(node.dtype)` was used at the TileLit / Cast
+    arms — but dataclass-generated repr embeds every field
+    including `span`, so structurally identical types at different
+    source lines produced different hashes. This violated the
+    docstring contract (lines 16-19) that the hash is INTENTIONALLY
+    independent of source spans.
+
+    Cycle 36 introduced `_ty_repr` covering the TyNode subclasses,
+    but used `repr(...)` on Expr-typed fields (sizes, shapes,
+    device/layout/memspace) — a one-level fix that left a deeper
+    span leak: a Cast to `[i32; 3]` at different source lines still
+    hashed differently because the IntLit(3) inside TyArray.size
+    embedded its own span via repr.
+
+    Cycle 39 introduces `_expr_canon` which recurses via
+    `structural_hash` so the Expr's span is properly stripped at
+    every layer. Output is a nested tuple of (type_class_name,
+    *field_values) — fully span-independent for every supported
+    TyNode shape.
     """
     if ty is None:
         return ("None",)
@@ -77,7 +99,7 @@ def _ty_repr(ty: A.TyNode) -> tuple:
     if isinstance(ty, A.TyTuple):
         return (cls, tuple(_ty_repr(e) for e in ty.elems))
     if isinstance(ty, A.TyArray):
-        return (cls, _ty_repr(ty.elem), repr(ty.size))
+        return (cls, _ty_repr(ty.elem), _expr_canon(ty.size))
     if isinstance(ty, A.TyRef):
         return (cls, _ty_repr(ty.inner), ty.is_mut)
     if isinstance(ty, A.TyPtr):
@@ -86,12 +108,12 @@ def _ty_repr(ty: A.TyNode) -> tuple:
         return (cls, tuple(_ty_repr(p) for p in ty.params), _ty_repr(ty.ret))
     if isinstance(ty, A.TyTensor):
         return (cls, _ty_repr(ty.dtype),
-                tuple(repr(e) for e in ty.shape),
-                repr(ty.device), repr(ty.layout))
+                tuple(_expr_canon(e) for e in ty.shape),
+                _expr_canon(ty.device), _expr_canon(ty.layout))
     if isinstance(ty, A.TyTile):
         return (cls, _ty_repr(ty.dtype),
-                tuple(repr(e) for e in ty.shape),
-                repr(ty.memspace))
+                tuple(_expr_canon(e) for e in ty.shape),
+                _expr_canon(ty.memspace))
     if isinstance(ty, A.TyGeneric):
         return (cls, ty.base, tuple(_ty_repr(a) for a in ty.args))
     # Unknown TyNode subclass — fail loudly per cycle 14/15 catchall
