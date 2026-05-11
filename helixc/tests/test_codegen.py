@@ -4159,6 +4159,70 @@ fn main() -> i32 {{
     )
 
 
+def test_bootstrap_kovc_trace_pass_warning_does_not_trap():
+    """Stage 28.9 audit-1 codereview gap-closure: bootstrap-side
+    trace_pass emits a severity-1 (warning) diag with code 25003 when
+    a `@trace` fn is parsed. The codegen trap is gated on
+    diag_arena_error_count (= severity-2 only), so a warning-only diag
+    MUST NOT trap the produced binary.
+
+    Mirrors the deprecated_pass regression test pattern. Source has a
+    @trace fn that returns 77; main calls it. Expected exit code: 77.
+    """
+    import os, subprocess
+    proj = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    lexer = open(os.path.join(proj, "helixc", "bootstrap", "lexer.hx")).read()
+    lexer_no_main = lexer.rsplit(
+        "// --------------------------------------------------------------\n// Demo:",
+        1,
+    )[0]
+    parser_body = open(os.path.join(proj, "helixc", "bootstrap", "parser.hx")).read()
+    kovc = open(os.path.join(proj, "helixc", "bootstrap", "kovc.hx")).read()
+    kovc_lib = kovc.rsplit(
+        "// --------------------------------------------------------------\n// Demo:",
+        1,
+    )[0]
+    import uuid
+    tag = uuid.uuid4().hex[:10]
+    src_path = f"/tmp/helix_trace_src_{tag}.hx"
+    bin_path = f"/tmp/kovc_trace_bin_{tag}.bin"
+    # @trace fn `traced_api` is called from main. trace_pass should
+    # recognise the @trace attribute and emit a severity-1 warning
+    # (diag 25003). Since warnings don't gate codegen, main returns 77.
+    src_text = "@trace fn traced_api() -> i32 { 77 } fn main() -> i32 { traced_api() }"
+    subprocess.run(
+        ["wsl", "-e", "bash", "-c",
+         f"printf %s {repr(src_text)} > {src_path}"],
+        check=True, timeout=10,
+    )
+    driver = lexer_no_main + parser_body + kovc_lib + f"""
+fn main() -> i32 {{
+    let src_start = __arena_len();
+    let src_len = read_file_to_arena("{src_path}");
+    let tok_base = __arena_len();
+    lex(src_start, src_len);
+    let ast_root = parse_top(tok_base);
+    let total = emit_elf_for_ast_to_path(ast_root);
+    let elf_start = __arena_len() - total;
+    write_file_to_arena("{bin_path}", elf_start, total)
+}}
+"""
+    compile_and_run(driver)
+    run = subprocess.run(
+        ["wsl", "-e", "bash", "-c",
+         f"sync && chmod +x {bin_path} && {bin_path}; "
+         f"rc=$?; echo $rc; rm -f {src_path} {bin_path}"],
+        capture_output=True, timeout=10,
+    )
+    last_line = run.stdout.decode().strip().splitlines()[-1] if run.stdout else ""
+    rc = int(last_line) if last_line.isdigit() else -1
+    assert rc == 77, (
+        f"trace_pass warning must not trap; expected rc=77 (the "
+        f"@trace fn's return value), got rc={rc}, "
+        f"stdout={run.stdout!r}, stderr={run.stderr!r}"
+    )
+
+
 def test_bootstrap_kovc_panic_pass_clean_panic_compiles():
     """Stage 28.9 regression: bootstrap-side panic_pass MUST NOT trap
     when a `panic("msg")` call is well-formed (single string-literal

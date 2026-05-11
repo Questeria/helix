@@ -5949,7 +5949,7 @@ fn emit_elf_for_ast_to_path(ast_root: i32) -> i32 {
     // fires.
     //   * panic_pass:      malformed panic(...) calls (28501)
     //   * unwind_pass:     @unwind not yet supported    (28502)
-    //   * trace_pass:      @trace recognised (warning)  (25001 sev 1)
+    //   * trace_pass:      @trace recognised (warning)  (25003 sev 1)
     //   * deprecated_pass: call to @deprecated fn       (28701 sev 1)
     //   * unsafe_pass:     stub (no AST_UNSAFE in bootstrap yet)
     //
