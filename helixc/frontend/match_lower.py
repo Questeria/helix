@@ -88,10 +88,15 @@ def _rewrite_item(item: A.Item) -> None:
         # AgentDecl.methods are FnDecls; recurse.
         for m in item.methods:
             _rewrite_item(m)
-    elif isinstance(item, (A.StructDecl, A.EnumDecl, A.ModuleDecl, A.UseDecl)):
+    elif isinstance(item, (A.StructDecl, A.EnumDecl, A.ModuleDecl,
+                            A.UseDecl, A.TypeAlias)):
         # Leaf decls with no Expr-bearing children at Phase-0.
         # StructDecl.fields are TyNodes; EnumDecl.variants are payload
         # tag/type metadata; ModuleDecl/UseDecl are metadata-only.
+        # TypeAlias.target is a TyNode (cycle-17 audit-B C17-T1 fix,
+        # conf 85: pre-fix any `type Foo = Bar;` would trip the loud
+        # NotImplementedError catchall even with no match in the
+        # program). TraitDecl methods are interface-only (no bodies).
         pass
     else:
         # Loud failure for unknown Item subclass — symmetric to
