@@ -417,34 +417,35 @@ def _pattern_test_expr(pat: A.Pattern, scrut_expr: A.Expr,
     if isinstance(pat, (A.PatWildcard, A.PatBind)):
         return A.BoolLit(span=span, value=True)
     if isinstance(pat, A.PatLit):
-        # Stage 28.9 cycle 19 regression fix: pre-refactor _pattern_test
-        # always indexed scrut[0] for PatLit/PatRange tests, relying on
-        # the lowerer's "Index of scalar returns scalar" fallback so
-        # the same code works for both array-backed enum tags (e.g.
-        # `Color::None` parsed as PatLit(Path)) AND scalar scrutinees
-        # (e.g. `match 5 { 5 => ... }`). My cycle-13 refactor dropped
-        # the [0] index at top-level, breaking nullary-variant enum
-        # patterns that parse as PatLit (option_eq's
-        # `Option::None => ...` arm produced `scrut == Path` instead
-        # of `scrut[0] == Path`, comparing the whole array to the path
-        # discriminant — always 0/false at runtime).
-        # Restore the indexed form via _fresh_slot_load.
-        # Cycle 14 C14-2: dup pat.value (right operand).
-        tag_load = _fresh_slot_load(scrut_expr, 0, span)
+        # Stage 28.9 cycle 19 fix v2 (context-aware):
+        # - Top-level: scrut_expr is a Name (the bound __scrut_N).
+        #   Index [0] to read the tag/scalar (works for both array-
+        #   backed enum variants AND scalar scrutinees via lowerer's
+        #   "Index of scalar returns scalar" fallback).
+        # - Sub-position: scrut_expr is an Index (the slot_load built
+        #   by a parent PatTuple/PatVariant arm). It already names the
+        #   element value — direct compare, no double-indexing.
+        if isinstance(scrut_expr, A.Name):
+            cmp_left = _fresh_slot_load(scrut_expr, 0, span)
+        else:
+            cmp_left = _dup_expr(scrut_expr)
         return A.Binary(span=span, op="==",
-                        left=tag_load,
+                        left=cmp_left,
                         right=_dup_expr(pat.value))
     if isinstance(pat, A.PatRange):
-        # Same logic as PatLit: index [0] for the tag/scalar.
-        # Cycle 14 C14-2: dup pat.lo and pat.hi.
+        # Same context-aware indexing as PatLit.
         op_hi = "<=" if pat.inclusive else "<"
+        def _r_left() -> A.Expr:
+            if isinstance(scrut_expr, A.Name):
+                return _fresh_slot_load(scrut_expr, 0, span)
+            return _dup_expr(scrut_expr)
         return A.Binary(
             span=span, op="&&",
             left=A.Binary(span=span, op=">=",
-                          left=_fresh_slot_load(scrut_expr, 0, span),
+                          left=_r_left(),
                           right=_dup_expr(pat.lo)),
             right=A.Binary(span=span, op=op_hi,
-                           left=_fresh_slot_load(scrut_expr, 0, span),
+                           left=_r_left(),
                            right=_dup_expr(pat.hi)),
         )
     if isinstance(pat, A.PatOr):
