@@ -400,7 +400,22 @@ def main(argv: list[str] | None = None) -> int:
 
     if "--emit-asm" in a.flags:
         from .backend.x86_64 import compile_module_to_elf
-        elf = compile_module_to_elf(mod)
+        # Audit 28.8 A9: wrap backend call in try/except so internal
+        # compiler errors render as `helixc: internal error: ...`
+        # instead of leaking Python tracebacks. Mirrors the existing
+        # --emit-ptx error-path pattern (line 422-427).
+        try:
+            elf = compile_module_to_elf(mod)
+        except Exception as e:
+            print(
+                f"helixc: internal error: {type(e).__name__}: {e}",
+                file=sys.stderr,
+            )
+            print(
+                "helixc: this is a compiler bug — please file an issue.",
+                file=sys.stderr,
+            )
+            return 1
         # Phase-0: ELF hex dump. A real disassembler would use objdump.
         print(f"   asm: {len(elf)} bytes of ELF (use `objdump -d` for asm)")
         for i in range(0, len(elf), 16):
@@ -430,9 +445,31 @@ def main(argv: list[str] | None = None) -> int:
     # 6. Codegen to ELF (when -o)
     if a.output is not None:
         from .backend.x86_64 import compile_module_to_elf
-        elf = compile_module_to_elf(mod)
-        with open(a.output, "wb") as f:
-            f.write(elf)
+        # Audit 28.8 A9: wrap backend call so internal codegen errors
+        # render cleanly. Also catch OSError on the file write so
+        # permission / disk-full failures surface as a real diagnostic,
+        # not a partial-file + traceback.
+        try:
+            elf = compile_module_to_elf(mod)
+        except Exception as e:
+            print(
+                f"helixc: internal error: {type(e).__name__}: {e}",
+                file=sys.stderr,
+            )
+            print(
+                "helixc: this is a compiler bug — please file an issue.",
+                file=sys.stderr,
+            )
+            return 1
+        try:
+            with open(a.output, "wb") as f:
+                f.write(elf)
+        except OSError as e:
+            print(
+                f"helixc: cannot write output {a.output!r}: {e}",
+                file=sys.stderr,
+            )
+            return 1
         print(f"   codegen:   OK  -> {a.output} ({len(elf)} bytes)")
         if a.libs:
             # Phase-0: libs are recorded but actual linking is stage-15.5

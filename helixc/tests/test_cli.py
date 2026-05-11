@@ -235,6 +235,83 @@ def test_main_o_writes_file(tmp_path):
     assert os.path.getsize(out_path) > 0
 
 
+def test_main_emit_asm_traps_backend_error(monkeypatch, capsys, tmp_path):
+    """Audit 28.8 A9: --emit-asm wraps the backend call in try/except.
+    Internal compiler bugs (raising any Exception from
+    compile_module_to_elf) should NOT leak a Python traceback — instead
+    helixc should print `helixc: internal error: <type>: <msg>` and
+    exit 1."""
+    from helixc.backend import x86_64 as _be
+
+    def _boom(_mod):
+        raise RuntimeError("synthetic backend explosion")
+
+    monkeypatch.setattr(_be, "compile_module_to_elf", _boom)
+
+    src_path = str(tmp_path / "in.hx")
+    with open(src_path, "w") as f:
+        f.write("fn main() -> i32 { 1 }\n")
+
+    rc = main([src_path, "--emit-asm"])
+    cap = capsys.readouterr()
+    assert rc == 1, "must exit 1 on backend internal error"
+    assert "internal error" in cap.err
+    assert "RuntimeError" in cap.err
+    assert "synthetic backend explosion" in cap.err
+    # No raw Python traceback should leak.
+    assert "Traceback (most recent call last)" not in cap.err
+
+
+def test_main_o_traps_backend_error(monkeypatch, capsys, tmp_path):
+    """Audit 28.8 A9: -o path wraps the backend call in try/except so
+    internal compiler bugs surface as clean diagnostics."""
+    from helixc.backend import x86_64 as _be
+
+    def _boom(_mod):
+        raise ValueError("synthetic codegen failure")
+
+    monkeypatch.setattr(_be, "compile_module_to_elf", _boom)
+
+    src_path = str(tmp_path / "in.hx")
+    out_path = str(tmp_path / "out.bin")
+    with open(src_path, "w") as f:
+        f.write("fn main() -> i32 { 1 }\n")
+
+    rc = main([src_path, "-o", out_path])
+    cap = capsys.readouterr()
+    assert rc == 1
+    assert "internal error" in cap.err
+    assert "ValueError" in cap.err
+    # The output file should NOT have been created.
+    assert not os.path.exists(out_path)
+
+
+def test_main_o_handles_oserror_on_write(monkeypatch, capsys, tmp_path):
+    """Audit 28.8 A9: -o catches OSError on the file write so
+    permission / disk-full failures get a clean diagnostic too."""
+    import builtins as _bi
+    real_open = _bi.open
+
+    src_path = str(tmp_path / "in.hx")
+    with open(src_path, "w") as f:
+        f.write("fn main() -> i32 { 1 }\n")
+    out_path = str(tmp_path / "noway" / "deep" / "out.bin")
+
+    def _open_blocking(path, *args, **kwargs):
+        # Only block the wb open for the output file.
+        if str(path) == out_path and "b" in (args[0] if args else
+                                              kwargs.get("mode", "")):
+            raise PermissionError("synthetic permission denied")
+        return real_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(_bi, "open", _open_blocking)
+    rc = main([src_path, "-o", out_path])
+    cap = capsys.readouterr()
+    assert rc == 1
+    assert "cannot write output" in cap.err
+    assert "synthetic permission denied" in cap.err
+
+
 if __name__ == "__main__":
     import pytest
     raise SystemExit(pytest.main([__file__, "-v"]))
