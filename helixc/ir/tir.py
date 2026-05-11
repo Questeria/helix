@@ -283,6 +283,24 @@ class OpKind(Enum):
     # to stderr and then exits with a non-zero status (does NOT return).
     TRAP = "ctrl.trap"
 
+    # Stage 25 / Audit 28.8 A7 — @trace fn prologue/epilogue events.
+    # TRACE_ENTRY: emitted at the start of a `@trace`-attributed fn's
+    # body. `attrs["fn_name"]` holds the name string the backend will
+    # pass to the runtime (`__helix_trace_entry(name_ptr)`).
+    # TRACE_EXIT: emitted at fn return. `attrs["fn_name"]` same as
+    # entry; operand[0] is the return value (so the backend can pass
+    # it to `__helix_trace_exit(name_ptr, ret_val)` for recording).
+    #
+    # Phase-0 wiring: the IR ops are emitted by `lower_ast.lower_fn`
+    # when `is_traced(fn)` is True. Backend lowering to actual
+    # `call` instructions is deferred until the runtime helpers
+    # `__helix_trace_entry` / `__helix_trace_exit` are linked — at
+    # which point the x86_64 emitter can resolve relocations against
+    # them. Until the runtime exists, the backend emits these as
+    # no-op stubs so the IR stays observable + tested.
+    TRACE_ENTRY = "trace.entry"
+    TRACE_EXIT = "trace.exit"
+
 
 @dataclass
 class Op:

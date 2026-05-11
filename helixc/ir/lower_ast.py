@@ -455,6 +455,16 @@ class Lowerer:
         self.builder.current_fn = ir_fn
         self.builder.current_block = ir_fn.entry
         self._push_scope()
+        # Audit 28.8 A7 — Stage 25 @trace prologue. Emit a TRACE_ENTRY
+        # op carrying the fn name so the backend (when the runtime is
+        # linked) can call __helix_trace_entry(name_ptr). Phase-0:
+        # backend emits this as a no-op stub until the runtime exists.
+        # The IR-level op is observable for tests + IR dumps so the
+        # wiring is validated regardless.
+        is_fn_traced = "trace" in fn.attrs
+        if is_fn_traced:
+            self.builder.emit(tir.OpKind.TRACE_ENTRY,
+                              attrs={"fn_name": fn.name})
         # Stage 16 — track kernel context. thread_idx() and indexed-tile ops
         # are only valid inside @kernel fns.
         prev_in_kernel = self._in_kernel
@@ -533,6 +543,16 @@ class Lowerer:
                 self._bind(p.name, v)
         # Lower body block
         body_val = self._lower_block(fn.body)
+        # Audit 28.8 A7 — Stage 25 @trace epilogue. Emit TRACE_EXIT
+        # with the return value (so the runtime can record it) before
+        # the actual return instruction. If the fn returns Unit, pass
+        # a synthesized 0 sentinel.
+        if is_fn_traced:
+            ret_operand = body_val
+            if isinstance(ir_fn.return_ty, tir.TIRUnit) or ret_operand is None:
+                ret_operand = self.builder.const_int(0)
+            self.builder.emit(tir.OpKind.TRACE_EXIT, ret_operand,
+                              attrs={"fn_name": fn.name})
         # Emit return
         if isinstance(ir_fn.return_ty, tir.TIRUnit):
             self.builder.ret(None)

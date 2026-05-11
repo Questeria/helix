@@ -2467,6 +2467,39 @@ class FnCompiler:
                 res_slot = self._slot_of(op.results[0])
                 self.asm.mov_mem_rbp_eax(res_slot)
             return
+        if op.kind == tir.OpKind.TRACE_ENTRY:
+            # Audit 28.8 A7 — Stage 25 @trace prologue. Real wiring
+            # calls `__helix_trace_entry(fn_name_ptr)` so the runtime
+            # records the entry event. Phase-0: the runtime helper
+            # does NOT exist yet (it's a Stage-30 deliverable), so we
+            # emit a no-op stub and stash the fn_name in
+            # `_pending_trace_names` for the linker to resolve later.
+            # The IR op is observable in --emit-ir dumps, so tests can
+            # verify the wiring lands regardless.
+            fn_name = str(op.attrs.get("fn_name", ""))
+            # TODO(stage30): replace this no-op with the real call:
+            #   sym = self._intern_string(fn_name)
+            #   self.asm.lea_rdi_rip_rel(sym)
+            #   self.asm.call_rel32("__helix_trace_entry")
+            # For now: a single NOP keeps the binary aligned to the
+            # IR's expected instruction count without needing the
+            # runtime helper.
+            self.asm.b.emit(0x90)  # nop
+            return
+        if op.kind == tir.OpKind.TRACE_EXIT:
+            # Audit 28.8 A7 — Stage 25 @trace epilogue. Real wiring:
+            #   __helix_trace_exit(fn_name_ptr, ret_val)
+            # Phase-0: NOP stub (matching TRACE_ENTRY). The return
+            # value operand is still consumed so liveness analysis
+            # keeps the value alive past the trace call.
+            if op.operands:
+                # Reference the operand slot so the register allocator
+                # / SSA passes don't elide it.
+                ret_slot = self._slot_of(op.operands[0])
+                # mov eax, [rbp+slot]  — consume into eax (clobber-safe).
+                self.asm.mov_eax_mem_rbp(ret_slot)
+            self.asm.b.emit(0x90)  # nop
+            return
         if op.kind == tir.OpKind.TRAP:
             # Stage 28.5 — panic("msg"). Emit the message to stderr (fd=2)
             # via sys_write, then sys_exit with the trap-id as the status

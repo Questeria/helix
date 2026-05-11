@@ -155,5 +155,78 @@ def test_validate_trace_clean():
     assert diags == []
 
 
+# ----------------------------------------------------------------------
+# Audit 28.8 A7 — @trace lowering + CLI wiring
+# ----------------------------------------------------------------------
+def test_a7_trace_lowers_to_ir_entry_exit():
+    """A7: `@trace fn f` emits TRACE_ENTRY before the body and
+    TRACE_EXIT after. Previously the attribute was parsed and validated
+    but NO IR op was emitted — the runtime never saw the events."""
+    from helixc.ir.lower_ast import lower
+    from helixc.ir.tir import OpKind
+    src = "@trace fn ping(x: i32) -> i32 { x + 1 }\nfn main() -> i32 { ping(1) }"
+    prog = parse(src)
+    mod = lower(prog)
+    ping_fn = mod.functions["ping"]
+    all_ops = [op for blk in ping_fn.blocks for op in blk.ops]
+    entries = [op for op in all_ops if op.kind == OpKind.TRACE_ENTRY]
+    exits = [op for op in all_ops if op.kind == OpKind.TRACE_EXIT]
+    assert len(entries) == 1, \
+        f"expected one TRACE_ENTRY op, got: {[op.kind.name for op in all_ops]}"
+    assert len(exits) == 1, \
+        f"expected one TRACE_EXIT op, got: {[op.kind.name for op in all_ops]}"
+    assert entries[0].attrs["fn_name"] == "ping"
+    assert exits[0].attrs["fn_name"] == "ping"
+
+
+def test_a7_non_traced_fn_has_no_trace_ops():
+    """A7: plain fn (no @trace) should NOT emit TRACE_ENTRY/EXIT."""
+    from helixc.ir.lower_ast import lower
+    from helixc.ir.tir import OpKind
+    src = "fn plain(x: i32) -> i32 { x + 1 }"
+    prog = parse(src)
+    mod = lower(prog)
+    plain_fn = mod.functions["plain"]
+    all_ops = [op for blk in plain_fn.blocks for op in blk.ops]
+    assert not any(op.kind in (OpKind.TRACE_ENTRY, OpKind.TRACE_EXIT)
+                   for op in all_ops), \
+        f"plain fn should have no trace ops; got: {[op.kind.name for op in all_ops]}"
+
+
+def test_a7_trace_validation_wired_into_check_py(capsys, tmp_path):
+    """A7: helixc/check.py now invokes validate_trace_attrs after
+    typecheck. @trace on an extern "C" fn surfaces as a build error."""
+    from helixc.check import main
+    src = '''
+@trace
+extern "C" fn external_fn(x: i32) -> i32;
+fn user_main() -> i32 { external_fn(1) }
+'''
+    p = str(tmp_path / "in.hx")
+    with open(p, "w") as f:
+        f.write(src)
+    rc = main([p, "--check-only"])
+    cap = capsys.readouterr()
+    assert rc == 1, f"expected build failure for @trace extern; out={cap.out!r}"
+    assert "trace:" in cap.out
+    assert "extern" in cap.out
+
+
+def test_a7_backend_emits_trace_ops_as_stubs():
+    """A7: x86_64 backend emits TRACE_ENTRY/EXIT as no-op stubs in
+    Phase-0 (the runtime helpers don't exist yet). Verify the codegen
+    path doesn't raise + the binary still compiles."""
+    from helixc.frontend.parser import parse
+    from helixc.frontend.typecheck import typecheck
+    from helixc.ir.lower_ast import lower
+    from helixc.backend.x86_64 import compile_module_to_elf
+    src = "@trace fn pong(x: i32) -> i32 { x }\nfn main() -> i32 { pong(7) }"
+    prog = parse(src)
+    typecheck(prog)
+    mod = lower(prog)
+    elf = compile_module_to_elf(mod)
+    assert isinstance(elf, (bytes, bytearray)) and len(elf) > 0
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-v"]))

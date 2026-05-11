@@ -318,6 +318,18 @@ def main(argv: list[str] | None = None) -> int:
         if deprecate_policy == "error":
             return 1
 
+    # Stage 25: @trace validation pass (Audit 28.8 A7).
+    # `validate_trace_attrs` rejects @trace on extern "C" fns (no body
+    # to instrument). Codegen-side wiring (IR ops TRACE_ENTRY /
+    # TRACE_EXIT) is handled in ir/lower_ast.py + backend/x86_64.py.
+    from .frontend.trace_pass import validate_trace_attrs
+    trace_diags = validate_trace_attrs(prog)
+    if trace_diags:
+        print(f"   trace:     {len(trace_diags)} ERROR(s)")
+        for d in trace_diags:
+            print(f"     {d}")
+        return 1
+
     # Stage 28.5: panic / unwind validation passes (Audit 28.8 A1).
     # `validate_panic_args` enforces single-string-literal arg shape;
     # `validate_unwind` rejects @unwind (trap 28502 reserved).
