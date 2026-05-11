@@ -3072,7 +3072,7 @@ if __name__ == "__main__":
     from ..frontend.flatten_modules import flatten_modules
     from ..frontend.flatten_impls import flatten_impls
     from ..ir.lower_ast import lower
-    from ..ir.passes.const_fold import fold_module
+    from ..ir.passes.const_fold import fold_module, FoldError
     from ..ir.passes.dce import dce_module
     from ..ir.passes.cse import cse_module
     from ..ir.passes.fdce import fdce_module
@@ -3175,19 +3175,31 @@ if __name__ == "__main__":
 
     mod = lower(prog)
     # Optimization passes (run twice — fold can expose new CSE opportunities, etc.)
+    # Stage 28.9 cycle 26 audit-R C25-4 fix (conf 85): symmetric fix to
+    # check.py's cycle-24 C23-1 FoldError wrapper. Pre-fix, x86_64.py
+    # invoked fold_module bare — a user-authored compile-time NaN
+    # (trap 17001) or out-of-range shift (trap 17002) leaked a Python
+    # traceback to stderr ending in "helixc.ir.passes.const_fold.
+    # FoldError: [trap 17001] const-fold produced NaN ...". That's
+    # the same "compiler bug" UX the check.py wrapper was added to
+    # eliminate; x86_64.py needed the symmetric fix.
     if not no_opt:
-        folded = fold_module(mod)
-        if folded > 0:
-            print(f"const-fold: {folded} ops folded", file=sys.stderr)
-        cse_count = cse_module(mod)
-        if cse_count > 0:
-            print(f"cse: {cse_count} duplicate ops merged", file=sys.stderr)
-        removed = dce_module(mod)
-        if removed > 0:
-            print(f"dce: {removed} ops removed", file=sys.stderr)
-        f_removed = fdce_module(mod)
-        if f_removed > 0:
-            print(f"fdce: {f_removed} unused fn(s) removed", file=sys.stderr)
+        try:
+            folded = fold_module(mod)
+            if folded > 0:
+                print(f"const-fold: {folded} ops folded", file=sys.stderr)
+            cse_count = cse_module(mod)
+            if cse_count > 0:
+                print(f"cse: {cse_count} duplicate ops merged", file=sys.stderr)
+            removed = dce_module(mod)
+            if removed > 0:
+                print(f"dce: {removed} ops removed", file=sys.stderr)
+            f_removed = fdce_module(mod)
+            if f_removed > 0:
+                print(f"fdce: {f_removed} unused fn(s) removed", file=sys.stderr)
+        except FoldError as fe:
+            print(f"helixc: const-fold error: {fe}", file=sys.stderr)
+            sys.exit(1)
 
     # Stage 19 — IR-level effect check. Runs AFTER all optimization passes
     # because fdce/dce can prune call edges (removing transitive effects)
@@ -3195,13 +3207,28 @@ if __name__ == "__main__":
     # @pure fn whose closure is non-empty (trap 19001) and each fn whose
     # declared effect set differs from its actual closure.
     eff_errs = effect_check_module(mod)
-    if eff_errs:
-        for e in eff_errs:
-            print(f"warning: [trap 19001] effect-check: {e}", file=sys.stderr)
-        if strict:
-            print(f"\n{len(eff_errs)} effect-check failure(s); --strict aborts.",
-                  file=sys.stderr)
-            sys.exit(1)
+    # Stage 28.9 cycle 26 audit-R C25-6 fix (conf 72): pre-fix the
+    # prefix was `warning: [trap 19001] effect-check: <msg>` but <msg>
+    # already carries the actual trap-id suffix (`... [trap NNNNN]`),
+    # producing contradictory output like `warning: [trap 19001] ...
+    # declares unused effect(s) ... [trap 19002]`. A grep for
+    # "trap 19002" matched a 19001-prefixed line.
+    # Stage 28.9 cycle 26 audit-R C25-3 fix (conf 88): partition 19001
+    # (warning, --strict-fail) from 19002 (informational, never fail)
+    # per the documented policy in effect_check.py docstring lines
+    # 296-303.
+    hard_count = 0
+    for e in eff_errs:
+        if "[trap 19001]" in e:
+            print(f"warning: effect-check: {e}", file=sys.stderr)
+            hard_count += 1
+        else:
+            # 19002 and any future informational trap codes
+            print(f"   effect-check: {e}", file=sys.stderr)
+    if hard_count > 0 and strict:
+        print(f"\n{hard_count} effect-check failure(s); --strict aborts.",
+              file=sys.stderr)
+        sys.exit(1)
 
     elf = compile_module_to_elf(mod)
     with open(sys.argv[2], "wb") as f:

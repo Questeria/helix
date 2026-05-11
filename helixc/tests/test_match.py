@@ -870,6 +870,49 @@ def test_c20_r3_pat_or_preserves_at_top_level():
     )
 
 
+def test_c25_7_pattern_test_expr_call_count_matches_docstring_porting_note():
+    """C25-7 regression (LOW conf 70): the cycle-24 C23-2 Stage 28.10
+    porting note in `_pattern_test_expr`'s docstring enumerates the
+    EXACT call sites with their `at_top_level` values. If a future
+    refactor adds a 5th call site or restructures the existing 4,
+    the documentation silently goes stale and a Stage 28.10 porter
+    is misled.
+
+    This test grep-counts `_pattern_test_expr(` invocations in
+    match_lower.py and asserts the count matches the docstring's
+    enumeration. If it drifts, the test fails LOUDLY and forces an
+    update to either the code or the docstring."""
+    import re
+    from pathlib import Path
+    src_path = Path(__file__).parent.parent / "frontend" / "match_lower.py"
+    src = src_path.read_text(encoding="utf-8")
+    # Total occurrences of `_pattern_test_expr(` anywhere in the file,
+    # including comments and docstring mentions. The test fails loudly
+    # if this number changes from the baseline — that's the entire
+    # signal needed: if a maintainer added/removed/restructured a call
+    # site, they'll update the docstring AND this count together.
+    n_total = len(re.findall(r"_pattern_test_expr\(", src))
+    # Baseline as of cycle 26 (HEAD will-be-committed):
+    #   1 def
+    # + 1 wrapper call in _pattern_test (at_top_level=True)
+    # + 1 PatOr recursion (forwards at_top_level)
+    # + 1 PatTuple recursion (at_top_level=False)
+    # + 1 PatVariant recursion (at_top_level=False)
+    # + 1 stale-removal comment mention (line ~574, kept for history)
+    # = 6 total occurrences. If this number shifts, the Stage 28.10
+    # porting note in the docstring may also need updating.
+    EXPECTED = 6
+    assert n_total == EXPECTED, (
+        f"Stage 28.10 porting note in _pattern_test_expr docstring "
+        f"enumerates 4 call sites; including the definition and a "
+        f"single comment mention, baseline grep count is {EXPECTED}. "
+        f"grep found {n_total}. Update the docstring's porting note "
+        f"to reflect the new call graph, OR fix the unintended call-"
+        f"site change, then bump EXPECTED in this test to match. See "
+        f"match_lower.py docstring `Stage 28.10 porting note`."
+    )
+
+
 def main():
     tests = [(name, fn) for name, fn in globals().items()
              if name.startswith("test_") and callable(fn)]

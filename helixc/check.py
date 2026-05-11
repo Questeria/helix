@@ -543,6 +543,20 @@ def _main_inner(argv: list[str] | None,
         print(f"   hash-cons: {n_shared} AST node(s) deduped")
 
     # --check-only short-circuit: stop here.
+    # Stage 28.9 cycle 26 audit-R C25-1 NOTE (conf 92): the audit
+    # flagged that effect_check (added in cycle 24) is gated on the
+    # emit-* / -o block below, so `--check-only` and default-no-flag
+    # invocations bypass IR-level effect verification. This gating
+    # is INTENTIONAL — `--check-only` is documented as "fast lexical
+    # / type / totality validation" (see existing test
+    # test_ad_drain_runs_on_check_only); running lower+fold+effect_check
+    # in this path would 2x-10x the cost depending on program size.
+    # Users who want full effect verification should use `--emit-ir`
+    # (lowers + folds + effect-checks without writing an ELF).
+    # The IR-level effect_check is reachable from any emit path
+    # (--emit-ir / --emit-asm / --emit-ptx / -o) AND from x86_64.py's
+    # backend driver — so any compile that produces a binary goes
+    # through it. Cycle 26 documents the trade-off explicitly.
     if "--check-only" in a.flags:
         print("-- clean (check-only)")
         return 0
@@ -611,18 +625,43 @@ def _main_inner(argv: list[str] | None,
             )
             return 1
 
-        # Stage 28.9 cycle 24 audit-R C23-3 fix (conf 85): after the
-        # optimization pipeline, run IR-level effect verification.
-        # x86_64.py's __main__ path already does this; check.py was
-        # the only driver that skipped it, leaving --emit-ir users
-        # silently exposed to @pure violations that should have been
-        # rejected. We render the diagnostics in the same one-line
-        # `  effect-check: <msg>` format the backend driver uses so a
-        # downstream tool can grep for them uniformly.
+        # Stage 28.9 cycle 24 → cycle 26 evolution: the cycle-24 wiring
+        # of effect_check was structurally correct but applied the WRONG
+        # policy — it hard-failed rc=1 on any violation. Per the
+        # effect_check.py docstring lines 296-303 (the canonical policy
+        # source), the actual semantics are:
+        #
+        #   - 19001 (@pure or under-declared) — WARNING by default,
+        #     hard error ONLY under --strict. Mirrors x86_64.py:
+        #     3198-3204 verbatim. Cycle 26 audit-T C24-1 (conf 95):
+        #     pre-fix this rejected helixc/examples/hello_world.hx
+        #     whose `main` has io effect without `@effect(io)` —
+        #     a known soft-warning shape, not a hard error.
+        #   - 19002 (declared unused effect) — ALWAYS informational,
+        #     NEVER causes failure. Per the docstring: "a code smell,
+        #     not a correctness violation." Cycle 26 audit-R C25-3
+        #     (conf 88): pre-fix this counted toward rc=1, stricter
+        #     than documented.
+        #
+        # Format: `warning: effect-check: <msg>` for 19001 (matching
+        # x86_64.py:3200 minus the redundant `[trap 19001]` prefix
+        # — the message body already carries the trap-id). 19002 uses
+        # `   effect-check: <msg>` (3-space indent matching other
+        # informational stage outputs like `   typecheck: OK`).
         eff_errs = effect_check_module(mod)
-        if eff_errs:
-            for e in eff_errs:
+        hard_count = 0
+        for e in eff_errs:
+            if "[trap 19001]" in e:
+                print(f"warning: effect-check: {e}", file=sys.stderr)
+                hard_count += 1
+            else:
+                # 19002 and any future informational trap codes
                 print(f"   effect-check: {e}", file=sys.stderr)
+        if hard_count > 0 and "--strict" in a.flags:
+            print(
+                f"\n{hard_count} effect-check warning(s); --strict aborts.",
+                file=sys.stderr,
+            )
             return 1
 
         # Audit 28.8 cycle 2 C2-1: the AD-warning drain was moved out

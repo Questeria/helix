@@ -585,25 +585,29 @@ def test_c23_1_fold_error_via_check_py_clean_diagnostic(capsys, tmp_path):
 
 
 def test_c23_3_effect_check_via_check_py_flags_pure_violation(capsys, tmp_path):
-    """C23-3 regression (Important, conf 85): check.py's optimization
-    pipeline must invoke effect_check after fold/cse/dce. Pre-cycle-24
-    fix, x86_64.py ran effect_check but check.py did not — a @pure
-    violation silently emitted IR via `python -m helixc.check --emit-ir`
-    while the same module would be rejected by the backend driver.
-
-    This test compiles a @pure fn with a PRINT op and asserts check.py
-    reports the violation at rc=1 with a clean 'effect-check' prefix."""
+    """C23-3 + C24-1 + C25-3 regression (Important, conf 88+):
+    check.py's optimization pipeline runs effect_check after fold/cse/dce.
+    Per the documented policy (effect_check.py docstring lines 296-303),
+    a @pure violation (trap 19001) prints as `warning: effect-check: ...`
+    by default and ONLY returns rc=1 under `--strict`. Cycle 24 wrongly
+    treated all violations as hard errors, breaking
+    helixc/examples/hello_world.hx; cycle 26 restored the documented
+    warn-by-default policy and mirrored x86_64.py."""
     src_path = str(tmp_path / "pure_io.hx")
     with open(src_path, "w") as f:
         f.write(
             "@pure fn bad(x: i32) -> i32 { print_int(x); x }\n"
             "fn main() -> i32 { bad(42) }\n"
         )
+    # Default: warn but emit IR, rc=0
     rc = main([src_path, "--emit-ir", "-O1"])
     captured = capsys.readouterr()
-    assert rc == 1, f"expected rc=1 for @pure violation, got {rc}"
-    assert "effect-check" in captured.err, (
-        f"expected 'effect-check' diagnostic; got stderr={captured.err!r}"
+    assert rc == 0, (
+        f"@pure violation must be a WARNING (rc=0) by default; "
+        f"got rc={rc}. stderr={captured.err!r}"
+    )
+    assert "warning: effect-check:" in captured.err, (
+        f"expected `warning: effect-check:` prefix; got stderr={captured.err!r}"
     )
     assert "19001" in captured.err, (
         f"expected trap 19001 reference; got stderr={captured.err!r}"
@@ -612,11 +616,21 @@ def test_c23_3_effect_check_via_check_py_flags_pure_violation(capsys, tmp_path):
         f"expected mention of violating fn 'bad'; got stderr={captured.err!r}"
     )
 
+    # --strict: turn the warning into a hard failure
+    rc_strict = main([src_path, "--emit-ir", "-O1", "--strict"])
+    captured_strict = capsys.readouterr()
+    assert rc_strict == 1, (
+        f"@pure violation under --strict must rc=1; got {rc_strict}. "
+        f"stderr={captured_strict.err!r}"
+    )
+    assert "--strict aborts" in captured_strict.err, (
+        f"expected --strict abort message; got stderr={captured_strict.err!r}"
+    )
+
 
 def test_c23_3_effect_check_via_check_py_clean_when_correct(capsys, tmp_path):
     """C23-3 regression-the-other-way: a program with correct effect
-    declarations must STILL compile clean via check.py. Otherwise the
-    cycle-24 fix over-corrected."""
+    declarations must STILL compile clean via check.py."""
     src_path = str(tmp_path / "pure_clean.hx")
     with open(src_path, "w") as f:
         f.write(
@@ -625,6 +639,64 @@ def test_c23_3_effect_check_via_check_py_clean_when_correct(capsys, tmp_path):
         )
     rc = main([src_path, "--emit-ir", "-O1"])
     assert rc == 0, f"clean @pure program must compile rc=0, got {rc}"
+
+
+def test_c25_3_19002_unused_effect_never_aborts(capsys, tmp_path):
+    """C25-3 regression (HIGH conf 88): trap 19002 (declared unused
+    effect) is documented as informational-only ("a code smell, not a
+    correctness violation" — effect_check.py docstring 296-303). Even
+    under --strict it must NOT cause rc=1. Pre-cycle-26 fix grouped
+    19001 and 19002 together as hard failures.
+
+    We build the 19002 case directly in IR (via tir.FnIR with
+    effect:io attr but a body that does no I/O) and assert effect_check
+    classifies it correctly. This avoids the frontend typecheck which
+    catches surface-level effect mismatches before IR.
+    """
+    from helixc.ir import tir
+    from helixc.ir.passes.effect_check import check_module
+    mod = tir.Module()
+    i32 = tir.TIRScalar("i32")
+    blk = tir.Block(id=0)
+    v_p = tir.Value(id=0, ty=i32)  # param
+    v_r = tir.Value(id=1, ty=i32)
+    blk.ops = [
+        tir.Op(kind=tir.OpKind.ADD, operands=[v_p, v_p], results=[v_r]),
+        tir.Op(kind=tir.OpKind.RETURN, operands=[v_r], results=[]),
+    ]
+    # @effect(io) declared but body has no PRINT/FFI — produces 19002.
+    fn = tir.FnIR(name="declares_io_but_uses_none",
+                  params=[v_p], return_ty=i32, blocks=[blk],
+                  attrs={"effect:io": True})
+    mod.functions["declares_io_but_uses_none"] = fn
+    errs = check_module(mod)
+    # Must produce trap 19002, NOT 19001.
+    has_19002 = any("19002" in e for e in errs)
+    has_19001 = any("19001" in e for e in errs)
+    assert has_19002 and not has_19001, (
+        f"expected exactly trap 19002 (declared unused effect); "
+        f"got errs={errs}"
+    )
+
+
+def test_c24_1_hello_world_compiles_under_check_py(capsys, tmp_path):
+    """C24-1 regression (Critical conf 95): the canonical example
+    helixc/examples/hello_world.hx must compile clean via check.py
+    despite main calling print_str (io effect) without explicit
+    @effect(io). Pre-cycle-26, cycle-24's strict effect_check wiring
+    rejected hello_world with `trap 19001`, breaking the canonical
+    example through the developer CLI."""
+    src_path = str(tmp_path / "hello.hx")
+    with open(src_path, "w") as f:
+        f.write(
+            'fn main() -> i32 { print_str("Hello\\n"); 0 }\n'
+        )
+    rc = main([src_path, "--emit-ir", "-O1"])
+    captured = capsys.readouterr()
+    assert rc == 0, (
+        f"hello-world shape (main with io, no @effect(io)) must rc=0 "
+        f"by default; got rc={rc}. stderr={captured.err!r}"
+    )
 
 
 if __name__ == "__main__":

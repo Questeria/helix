@@ -491,6 +491,50 @@ def test_c20_t2_combo_attrs_no_spurious_19002():
     )
 
 
+def test_c25_cr2_extern_fn_does_not_declare_ffi():
+    """C25 audit-R cr2 / C23-4 invariant regression (conf 88): an
+    extern fn's OWN FnIR has is_extern=True / extern_abi=... as
+    structural tags, NOT as a declared 'ffi' effect. The "ffi" effect
+    label (cycle 22 C22-1) is attributed to CALLERS via FFI_CALL
+    ops, not to the extern declaration itself. META_ATTRS includes
+    is_extern/extern_abi precisely so the 19002 (unused-effect) check
+    does not produce a false positive on extern fn declarations.
+
+    Without this regression test, a refactor of META_ATTRS or
+    declared_effects that accidentally drops is_extern would silently
+    reintroduce the false-positive 19002 on every extern fn — caught
+    only at the test level. Cycle 26 closes this coverage gap."""
+    # Construct a minimal extern fn FnIR directly. (Going through the
+    # parser path would require a stdlib extern "C" decl; building IR
+    # is cleaner for the unit-level invariant.)
+    i32 = tir.TIRScalar("i32")
+    fn = tir.FnIR(
+        name="extern_puts",
+        params=[],
+        return_ty=i32,
+        blocks=[],
+        attrs={"is_extern": True, "extern_abi": "C"},
+    )
+    declared = declared_effects(fn)
+    assert "ffi" not in declared, (
+        f"extern fn declaration must NOT contribute 'ffi' to its own "
+        f"declared_effects (the 'ffi' label is for CALLERS via FFI_CALL "
+        f"ops, per cycle-22 C22-1 / cycle-24 C23-4). Got "
+        f"declared_effects={declared}"
+    )
+    # Same fn declared as @pure must not pass either (would also be
+    # an empty declared set, but the structural invariant is what
+    # matters here).
+    assert "is_extern" not in declared, (
+        f"is_extern is META, must not appear as a declared effect; "
+        f"got {declared}"
+    )
+    assert "extern_abi" not in declared, (
+        f"extern_abi is META, must not appear as a declared effect; "
+        f"got {declared}"
+    )
+
+
 def test_c20_t2_real_unused_effect_still_flags_19002():
     """C20-T2 regression-the-other-way: a genuinely-unused @effect(io)
     must still flag 19002. Otherwise the exemption logic over-corrected."""

@@ -439,17 +439,22 @@ def _try_fold_op(op: tir.Op, defs: dict) -> tir.Op | None:
                     # compile-time constants is undefined behavior in
                     # C semantics and a silent surprise to users.
                     # Raise FoldError (trap 17002) for loud failure.
+                    # Stage 28.9 cycle 26 audit-T C24-2 fix (conf 92):
+                    # canonicalize message format to `[trap NNNNN] body`
+                    # (matching the NaN FoldError prefix) so downstream
+                    # grep for `^helixc: const-fold error: \[trap ` works
+                    # uniformly across all FoldError subclasses.
                     if r < 0 or r >= 64:
                         raise ShiftFoldError(
-                            f"shift amount {r} out of range [0, 63] in "
-                            f"const SHL fold; trap 17002"
+                            f"[trap 17002] shift amount {r} out of range "
+                            f"[0, 63] in const SHL fold"
                         )
                     v = l << r
                 elif op.kind == tir.OpKind.SHR:
                     if r < 0 or r >= 64:
                         raise ShiftFoldError(
-                            f"shift amount {r} out of range [0, 63] in "
-                            f"const SHR fold; trap 17002"
+                            f"[trap 17002] shift amount {r} out of range "
+                            f"[0, 63] in const SHR fold"
                         )
                     v = l >> r   # arithmetic in Python for signed ints
                 else:
