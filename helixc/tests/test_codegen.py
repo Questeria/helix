@@ -3487,20 +3487,25 @@ fn main() -> i32 {
     assert compile_and_exec(
         "fn main() -> i32 { let x = 7 ; let c = |y| y + x ; c(35) }"
     ) == 42, "B:C2-baseline: untyped i32 literal capture still works"
-    # Audit 28.8 cycle 3 D2: extend trap 76003 to fire on call-RHS
-    # untyped lets (`let pi = get_pi(); ...`). Pre-fix the inference
-    # arm only knew about literal RHS (FloatLit/IntLit/etc.), so a
-    # call-RHS let registered as untracked (-1) and the capture guard
-    # `> 0` silently let it through. Now we register Call-RHS as
-    # type-tag 12 (untracked-call sentinel) so the capture probe
-    # detects it and traps loudly at the closure-build site.
-    # SIGILL = exit code 132 in our shell wrap.
+    # Audit 28.8 cycle 5 C4-1 / F1: REVERT cycle-3 D2's call-RHS
+    # sentinel trap. The cycle-3 fix tagged ALL Call-RHS untyped lets
+    # as "non-i32" so trap 76003 fired even for i32-returning fns —
+    # SIGILL on the dominant pattern `let n = i32_returning_fn();
+    # let c = |y| y + n; c(0)`. The parser has no return-type info,
+    # so this trap MUST move to typecheck (post-typecheck pass). For
+    # now, untyped Call-RHS lets stay untracked (tag -1, pre-D2
+    # behavior) — the explicit-annotation case `let pi: f64 = ...`
+    # still traps via the typed-RHS path. The legitimate
+    # `let pi = get_pi(); let c = |y| y + pi; c(0)` case now SUCCEEDS
+    # (no trap, returns the closure result) because get_pi returns i32.
     assert compile_and_exec(
         "fn get_pi() -> i32 { 3 } "
         "fn main() -> i32 { let pi = get_pi() ; let c = |y| y + pi ; c(0) }"
-    ) == 132, (
-        "D2: call-RHS untyped capture now traps 76003 "
-        "(SIGILL on closure invocation)"
+    ) == 3, (
+        "D2 REVERT (cycle 5 C4-1 / F1): i32-returning Call-RHS "
+        "captured into closure now succeeds — D2's parser-side "
+        "sentinel was unsound (couldn't distinguish i32 vs non-i32 "
+        "returns without typecheck)"
     )
     # Stage 10: modules + use. parse-time desugaring lifts each fn inside
     # `mod foo { ... }` to the top-level fn list with a mangled name

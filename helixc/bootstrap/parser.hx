@@ -2322,29 +2322,31 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
                     inferred_ty_tag = 11;            // i16
                 } else { if val_tag == 41 {
                     inferred_ty_tag = 8;             // u16
-                } else { if val_tag == 16 {
-                    // Audit 28.8 cycle 3 D2: Call RHS — we don't know
-                    // the return type without a typechecker, but it's
-                    // NOT a trivially-i32 literal, so we register a
-                    // sentinel tag (12) that means "untracked-call,
-                    // assume non-i32 for closure-capture trap purposes."
-                    // This makes `let pi = get_pi(); let c = |x| x + pi;`
-                    // trap 76003 instead of silently capturing pi as i32.
-                    //
-                    // Audit 28.8 cycle 6 C5-1 / F5 / F6 REVERT of C4-2:
-                    // the cycle-4 broadening to Binary/Unary/Index/Field/
-                    // If/Match/Block/UnsafeBlock RHS produced false
-                    // positives on trivially-i32 expressions like
-                    // `let a = 10 + 5;` (Binary of two AST_INT literals,
-                    // provably i32). Phase-0 closure-capture inference
-                    // can't distinguish these without a typechecker;
-                    // staying narrow (Call-only sentinel) is safer than
-                    // broad (which traps legitimate code). Re-broadening
-                    // is deferred to a later cycle once we have either
-                    // (a) shallow constant-folding at parse time or
-                    // (b) a real type pass before closure capture.
-                    inferred_ty_tag = 12;            // untracked-call sentinel
-                };};};};};};};};};};};};
+                // Audit 28.8 cycle 5 C4-1 / F1 (final REVERT of D2):
+                // the cycle-3 D2 sentinel-12 fix for Call-RHS was
+                // FUNDAMENTALLY UNSOUND. The parser has no access to fn
+                // return-type information — tagging ALL Call-RHS lets as
+                // "non-i32" produced a CRITICAL functional regression
+                // for the dominant pattern `let n = i32_returning_fn();
+                // let c = |y| y + n;` (SIGILL trap 76003 at runtime).
+                // The tag-12 sentinel also collides with
+                // var_type_tab_lookup's other consumers (method-call
+                // dispatch via method_lhs_ty, etc.), causing
+                // unrelated downstream regressions (Stage 11A3
+                // Quote/Splice with Call-RHS `let h0 = Quote(10);`).
+                // REVERT: untyped Call-RHS lets register inferred_ty_tag
+                // = -1 (untracked) just like every other non-literal RHS
+                // — same behavior as pre-D2 (cycle-2 state). The
+                // closure-capture trap 76003 still fires correctly on
+                // explicitly-annotated `let pi: f64 = ...;` (via the
+                // typed-RHS arm at line 2264) and on direct non-i32
+                // literal RHS (`let pi = 3.14_f64;` via val_tag 27/31/
+                // 34 arms above). The "untyped Call-RHS captured into a
+                // closure" case is a typecheck-time concern requiring fn
+                // return-type info; it cannot be soundly inferred at
+                // parse time. Re-introducing the check is deferred to a
+                // post-typecheck pass when one exists.
+                };};};};};};};};};};};
                 // Register the inferred tag so var_type_tab_lookup at
                 // closure-capture sites can detect the non-i32 case
                 // (trap 76003). We DO NOT shadow let_ty_tag because the
