@@ -4286,6 +4286,75 @@ fn main() -> i32 {{
     )
 
 
+def test_bootstrap_kovc_walker_descends_into_tuple_lit():
+    """Stage 28.9 audit-cycle-1 Finding 2 regression: walk_for_panic
+    and walk_for_deprecated MUST descend into AST_TUPLE_LIT (tag 50)
+    so a malformed panic / deprecated call nested in a tuple literal,
+    struct literal, or enum-constructor payload is observed.
+
+    Probe approach: a custom Helix driver parses a source containing a
+    tuple literal with a malformed `panic()` inside, runs panic_pass,
+    and counts entries with code 28501. The driver returns the count
+    as the exit code. Post-fix: 1 (the nested malformed panic is
+    detected). Pre-fix: 0 (walker stopped at the tuple-lit boundary).
+    """
+    import os, subprocess
+    proj = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    lexer = open(os.path.join(proj, "helixc", "bootstrap", "lexer.hx")).read()
+    lexer_no_main = lexer.rsplit(
+        "// --------------------------------------------------------------\n// Demo:",
+        1,
+    )[0]
+    parser_body = open(os.path.join(proj, "helixc", "bootstrap", "parser.hx")).read()
+    kovc = open(os.path.join(proj, "helixc", "bootstrap", "kovc.hx")).read()
+    kovc_lib = kovc.rsplit(
+        "// --------------------------------------------------------------\n// Demo:",
+        1,
+    )[0]
+    import uuid
+    tag = uuid.uuid4().hex[:10]
+    src_path = f"/tmp/helix_tuplit_src_{tag}.hx"
+    # Tuple lit `(panic(), 1)` — the `panic()` (0 args) is malformed.
+    # Bootstrap parser emits AST_TUPLE_LIT (tag 50) wrapping an
+    # AST_TUPLE_CONS (tag 51) chain. Pre-fix the walker stopped at
+    # the tuple-lit and never saw the panic call.
+    src_text = "fn main() -> i32 { let t = (panic(), 1); 0 }"
+    subprocess.run(
+        ["wsl", "-e", "bash", "-c",
+         f"printf %s {repr(src_text)} > {src_path}"],
+        check=True, timeout=10,
+    )
+    driver = lexer_no_main + parser_body + kovc_lib + f"""
+fn main() -> i32 {{
+    let src_start = __arena_len();
+    let src_len = read_file_to_arena("{src_path}");
+    let tok_base = __arena_len();
+    lex(src_start, src_len);
+    let ast_root = parse_top(tok_base);
+    let diag_state = diag_arena_init();
+    panic_pass(ast_root, diag_state);
+    let n = diag_arena_count(diag_state);
+    let mut i: i32 = 0;
+    let mut hits: i32 = 0;
+    while i < n {{
+        let code = diag_get_code(diag_state, i);
+        if code == 28501 {{ hits = hits + 1; }};
+        i = i + 1;
+    }}
+    hits
+}}
+"""
+    rc = compile_and_run(driver)
+    subprocess.run(
+        ["wsl", "-e", "bash", "-c", f"rm -f {src_path}"],
+        capture_output=True, timeout=10,
+    )
+    assert rc == 1, (
+        f"walker should detect malformed panic nested in tuple lit; "
+        f"expected 1 28501 diag, got rc={rc}"
+    )
+
+
 def test_bootstrap_kovc_dep_tab_overflow_emits_28702():
     """Stage 28.9 audit-cycle-1 Finding 3 regression: bootstrap-side
     deprecated_pass MUST emit a severity-1 28702 warning diag for the

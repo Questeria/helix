@@ -2348,6 +2348,22 @@ fn walk_for_panic(idx: i32, diag_state: i32) -> i32 {
             walk_for_panic(p1, diag_state);
             walk_for_panic(p2, diag_state);
             0
+        } else { if t == 50 {
+            // AST_TUPLE_LIT: p1=arity (NOT an expr), p2=head_idx
+            // (chain of AST_TUPLE_CONS / tag 51). Walk each element
+            // expr in the chain. Covers tuple literals, struct
+            // literals (lowered to tuple-lit), and enum-constructor
+            // payloads — Stage-28.9 audit-1 Finding 2 fix. Without
+            // this arm, panic(...) calls nested in
+            // `Pt { x: panic("bad") }` or `(panic("a"), 1)` or
+            // `Just(panic("x"))` were silently skipped.
+            let mut cur: i32 = p2;
+            while cur != 0 {
+                let elem_expr = __arena_get(cur + 1);
+                walk_for_panic(elem_expr, diag_state);
+                cur = __arena_get(cur + 2);
+            }
+            0
         } else {
             // Binops with p1=lhs, p2=rhs: tags 2..6, 19..23, 24,
             // 28..30, 32, 33. Use a coarse range check + a few
@@ -2367,7 +2383,7 @@ fn walk_for_panic(idx: i32, diag_state: i32) -> i32 {
                 walk_for_panic(p2, diag_state);
             };
             0
-        }}}}}}}}}}}}}
+        }}}}}}}}}}}}}}
     }
 }
 
@@ -2651,6 +2667,21 @@ fn walk_for_deprecated(idx: i32, dep_tab: i32, diag_state: i32) -> i32 {
             walk_for_deprecated(p1, dep_tab, diag_state);
             walk_for_deprecated(p2, dep_tab, diag_state);
             0
+        } else { if t == 50 {
+            // AST_TUPLE_LIT: p1=arity (NOT an expr), p2=head_idx
+            // (chain of AST_TUPLE_CONS / tag 51). Walk each element
+            // expr in the chain. Mirrors walk_for_panic's arm —
+            // Stage-28.9 audit-1 Finding 2 fix. Without this,
+            // @deprecated calls nested in struct/tuple/enum payloads
+            // (`Pt { x: old_api() }`, `(old_api(), 1)`,
+            // `Just(old_api())`) were silently skipped.
+            let mut cur: i32 = p2;
+            while cur != 0 {
+                let elem_expr = __arena_get(cur + 1);
+                walk_for_deprecated(elem_expr, dep_tab, diag_state);
+                cur = __arena_get(cur + 2);
+            }
+            0
         } else {
             // Binops: same coarse range check as walk_for_panic.
             let is_arith = if t >= 2 { if t <= 6 { 1 } else { 0 } } else { 0 };
@@ -2668,7 +2699,7 @@ fn walk_for_deprecated(idx: i32, dep_tab: i32, diag_state: i32) -> i32 {
                 walk_for_deprecated(p2, dep_tab, diag_state);
             };
             0
-        }}}}}}}}}}}}}
+        }}}}}}}}}}}}}}
     }
 }
 
