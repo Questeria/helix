@@ -45,7 +45,10 @@ import copy
 from typing import Optional
 
 from . import ast_nodes as A
-from .autodiff import _inline_lets, _simplify, _inline_user_calls, _ad_warn
+from .autodiff import (
+    _inline_lets, _simplify, _inline_user_calls, _ad_warn,
+    NUMERIC_FOR_AD,
+)
 
 
 def differentiate_reverse(expr: A.Expr, param_names: list[str],
@@ -402,12 +405,12 @@ def _propagate(node: A.Expr, adj: A.Expr, acc: dict[str, list[A.Expr]]) -> None:
             acc[p].append(wrapped)
         return
     # Audit 28.8 B5: Cast — propagate through numeric casts.
+    # Audit 28.8 cycle 2 B:C9: shared NUMERIC_FOR_AD set covers
+    # bool/char/fp8/mxfp4/nvfp4 too (typecheck accepts them as
+    # numeric scalars; AD-pass shouldn't false-warn).
     if isinstance(node, A.Cast):
         tgt = node.target_ty
-        if isinstance(tgt, A.TyName) and tgt.name in (
-            "i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64",
-            "isize", "usize", "f16", "bf16", "f32", "f64",
-        ):
+        if isinstance(tgt, A.TyName) and tgt.name in NUMERIC_FOR_AD:
             _propagate(node.value, adj, acc)
             return
         _ad_warn(node, f"cast to non-numeric target "

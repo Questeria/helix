@@ -57,6 +57,28 @@ _DIFF_WARNINGS: list[str] = []
 TRAP_AD_ASSUMED_ZERO = 85001
 
 
+# Audit 28.8 cycle 2 B:C9: shared numeric-type set for AD Cast arms.
+# Pre-fix the Cast arms in both autodiff._diff and
+# autodiff_reverse._propagate hardcoded a 14-element list that
+# omitted `bool`, `char`, `fp8`, `mxfp4`, `nvfp4` — all five of
+# which are accepted by typecheck's `_is_numeric_scalar`. So `x as
+# bool` (valid per the matrix) inside a grad-rewritten fn emitted
+# a spurious 85001 warning. Unify via a frozenset that mirrors
+# typecheck's numeric domain.
+#
+# Note: bool/char casts are technically discontinuous, so a future
+# enhancement could flag them with a separate diagnostic ("AD
+# through discontinuous cast"). Phase-0: accept as numeric, do not
+# spuriously warn.
+NUMERIC_FOR_AD: frozenset[str] = frozenset({
+    "i8", "i16", "i32", "i64", "isize",
+    "u8", "u16", "u32", "u64", "usize",
+    "f16", "bf16", "f32", "f64",
+    "fp8", "mxfp4", "nvfp4",
+    "bool", "char",
+})
+
+
 def take_diff_warnings() -> list[str]:
     """Atomically read-and-clear the module-level AD warning list.
 
@@ -568,10 +590,9 @@ def _diff(expr: A.Expr, var: str) -> A.Expr:
     # Non-numeric Cast (e.g., `x as *T`) returns 0 with a warning.
     if isinstance(expr, A.Cast):
         tgt = expr.target_ty
-        if isinstance(tgt, A.TyName) and tgt.name in (
-            "i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64",
-            "isize", "usize", "f16", "bf16", "f32", "f64",
-        ):
+        # Audit 28.8 cycle 2 B:C9: shared NUMERIC_FOR_AD set covers
+        # bool/char/fp8/mxfp4/nvfp4 too.
+        if isinstance(tgt, A.TyName) and tgt.name in NUMERIC_FOR_AD:
             # Inner derivative carries through.
             return _diff(expr.value, var)
         _ad_warn(expr, f"cast to non-numeric target "

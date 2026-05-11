@@ -1256,6 +1256,96 @@ def test_c2_b_c7_flatten_impls_wired_in_check_py(tmp_path, capsys):
     )
 
 
+# ----------------------------------------------------------------------
+# Audit 28.8 cycle 2 B:C10 — Logic-provenance 24100 dedup
+# ----------------------------------------------------------------------
+def test_c2_b_c10_logic_provenance_grouped_diagnostic():
+    """B:C10: pre-fix, `f(1, 2)` where both params are `Logic<bool>`
+    emitted TWO separate trap-24100 errors at the same call.span.
+    Users saw two near-identical messages. Fix: batch them into a
+    single grouped diagnostic naming both param names."""
+    src = """
+    fn lift(a: Logic<bool>, b: Logic<bool>) -> Logic<bool> { a }
+    fn main() -> i32 {
+        lift(1, 2);
+        0
+    }
+    """
+    errs = check(src)
+    # Filter for 24100 diagnostics.
+    prov_errs = [e for e in errs if "24100" in e]
+    # B:C10 contract: ONE grouped diagnostic, not two.
+    assert len(prov_errs) == 1, (
+        f"expected 1 grouped trap-24100 diagnostic; got {len(prov_errs)}: "
+        f"{prov_errs}"
+    )
+    # The grouped message must name both params.
+    assert "'a'" in prov_errs[0] and "'b'" in prov_errs[0], (
+        f"grouped diagnostic must name both params; got: {prov_errs[0]}"
+    )
+
+
+def test_c2_b_c10_single_logic_violation_unchanged():
+    """B:C10 inverse: a single-param violation must STILL produce
+    a single (non-grouped) diagnostic — no behavior change for the
+    common case."""
+    src = """
+    fn lift(a: Logic<bool>, b: i32) -> Logic<bool> { a }
+    fn main() -> i32 {
+        lift(1, 2);
+        0
+    }
+    """
+    errs = check(src)
+    prov_errs = [e for e in errs if "24100" in e]
+    assert len(prov_errs) == 1
+    # Single-violation message names just 'a'.
+    assert "'a'" in prov_errs[0]
+    # Either the old per-param phrasing OR the grouped (with 1
+    # name) — both are acceptable. Test mainly that we DON'T
+    # spuriously grow.
+
+
+# ----------------------------------------------------------------------
+# Audit 28.8 cycle 2 B:C9 — AD Cast arms accept bool/char/fp8/mxfp4/nvfp4
+# ----------------------------------------------------------------------
+def test_c2_b_c9_autodiff_cast_to_bool_no_spurious_warn():
+    """B:C9: pre-fix `x as bool` inside grad-rewritten fn emitted
+    a spurious 85001 warning because bool wasn't in the numeric list.
+    Fix: NUMERIC_FOR_AD shared set covers bool/char/fp8/mxfp4/nvfp4."""
+    from helixc.frontend import autodiff
+    from helixc.frontend.parser import parse as parse_src
+    autodiff.take_diff_warnings()
+    src = "fn f(x: f32) -> bool { x as bool }"
+    prog = parse_src(src)
+    fn = prog.items[0]
+    body_expr = fn.body.final_expr
+    autodiff.differentiate(body_expr, "x")
+    warnings = autodiff.take_diff_warnings()
+    # Pre-fix this would emit 85001 "cast to non-numeric target TyName"
+    # for the bool cast.
+    assert not any("85001" in w and "non-numeric" in w for w in warnings), (
+        f"unexpected 85001 non-numeric warn on Cast to bool: {warnings}"
+    )
+
+
+def test_c2_b_c9_autodiff_cast_to_fp8_no_spurious_warn():
+    """B:C9: same for fp8 / mxfp4 / nvfp4."""
+    from helixc.frontend import autodiff
+    from helixc.frontend.parser import parse as parse_src
+    for ty in ("fp8", "mxfp4", "nvfp4", "char"):
+        autodiff.take_diff_warnings()
+        src = f"fn f(x: f32) -> {ty} {{ x as {ty} }}"
+        prog = parse_src(src)
+        fn = prog.items[0]
+        body_expr = fn.body.final_expr
+        autodiff.differentiate(body_expr, "x")
+        warnings = autodiff.take_diff_warnings()
+        assert not any("85001" in w and "non-numeric" in w for w in warnings), (
+            f"unexpected 85001 warn on Cast to {ty}: {warnings}"
+        )
+
+
 def main():
     tests = [(name, fn) for name, fn in globals().items()
              if name.startswith("test_") and callable(fn)]

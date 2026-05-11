@@ -622,7 +622,15 @@ class TypeChecker:
     def _check_call_basic(self, call: A.Call, sig: FunctionSig,
                           arg_tys: list[Type]) -> None:
         """Check argument count and primitive type compatibility.
-        Tensor-shape checking is in _check_call_shapes."""
+        Tensor-shape checking is in _check_call_shapes.
+
+        Audit 28.8 cycle 2 B:C10: Logic-provenance diagnostics
+        (trap 24100) are now batched. Pre-fix, each violating param
+        produced an independent TypeError at the same `call.span` —
+        so `f(a, b, c, d)` where all four Logic params got raw args
+        produced four near-identical messages. Now we accumulate per
+        call and emit a single grouped diagnostic when 2+ params
+        violate, with the param-name list inline."""
         if len(arg_tys) != len(sig.params):
             self.errors.append(TypeError_(
                 f"call to {sig.name!r}: expected {len(sig.params)} args, "
@@ -630,6 +638,8 @@ class TypeChecker:
                 call.span,
             ))
             return
+        # Collect provenance violations across params for B:C10 batching.
+        prov_violations: list[tuple[str, Type, Type, str]] = []
         for (pname, pty), aty in zip(sig.params, arg_tys):
             # For primitives, require an exact name match (i32 vs f32 etc.)
             if isinstance(pty, TyPrim) and isinstance(aty, TyPrim):
@@ -644,12 +654,21 @@ class TypeChecker:
                             call.span,
                         ))
             # Audit 28.8 B2: provenance boundary check (trap 24100).
-            # If the parameter is Logic-typed and the actual is NOT,
-            # the provenance wrapper is being silently injected (or
-            # vice-versa stripped). Emit a diagnostic so the
-            # Tier-3 boundary is observable.
-            self._check_logic_provenance_boundary(sig.name, pname, pty, aty,
-                                                  call.span)
+            # Collect (don't emit yet) so B:C10 batching can apply.
+            kind = self._logic_provenance_violation_kind(pty, aty)
+            if kind is not None:
+                prov_violations.append((pname, pty, aty, kind))
+        # B:C10 — emit one grouped diagnostic if 2+ violations; else
+        # the existing per-param path.
+        if len(prov_violations) == 1:
+            pname, pty, aty, kind = prov_violations[0]
+            self._emit_logic_provenance_diagnostic(
+                sig.name, pname, pty, aty, kind, call.span,
+            )
+        elif len(prov_violations) >= 2:
+            self._emit_logic_provenance_grouped(
+                sig.name, prov_violations, call.span,
+            )
 
     # ------------------------------------------------------------------
     # Compile-time shape checking for function calls
@@ -760,6 +779,96 @@ class TypeChecker:
                 call.span,
             ))
 
+    def _logic_provenance_violation_kind(self, param_ty: Type,
+                                          actual_ty: Type) -> Optional[str]:
+        """Audit 28.8 cycle 2 B:C10: classify provenance mismatch
+        without emitting. Returns "inject" if the actual lacks a
+        Logic-wrap that the param requires, "strip" if the actual
+        has a Logic-wrap that the param doesn't, or None if no
+        violation."""
+        if isinstance(param_ty, TyUnknown) or isinstance(actual_ty, TyUnknown):
+            return None
+
+        def _is_logic(t: Type) -> bool:
+            if isinstance(t, TyLogic):
+                return True
+            if isinstance(t, TyDiff) and isinstance(t.inner, TyLogic):
+                return True
+            return False
+
+        p_logic = _is_logic(param_ty)
+        a_logic = _is_logic(actual_ty)
+        if p_logic and not a_logic:
+            return "inject"
+        if a_logic and not p_logic:
+            return "strip"
+        return None
+
+    def _emit_logic_provenance_diagnostic(self, fn_name: str, param_name: str,
+                                          param_ty: Type, actual_ty: Type,
+                                          kind: str, span: A.Span) -> None:
+        """Single-param trap-24100 diagnostic — extracted from the
+        old `_check_logic_provenance_boundary` for use by the new
+        batching path in `_check_call_basic` (B:C10)."""
+        if kind == "inject":
+            self.errors.append(TypeError_(
+                f"call to {fn_name!r}: arg {param_name!r} expects "
+                f"Logic-wrapped value (provenance-typed); got "
+                f"{self._fmt(actual_ty)} (trap 24100)",
+                span,
+                hint="wrap the value via a logic constructor to "
+                     "preserve provenance",
+            ))
+        elif kind == "strip":
+            self.errors.append(TypeError_(
+                f"call to {fn_name!r}: arg {param_name!r} expects "
+                f"{self._fmt(param_ty)}; got Logic-wrapped value — "
+                f"would silently strip provenance (trap 24100)",
+                span,
+                hint="detach the Logic wrapper explicitly if you "
+                     "really want a raw value",
+            ))
+
+    def _emit_logic_provenance_grouped(self, fn_name: str,
+                                        violations: list,
+                                        span: A.Span) -> None:
+        """Audit 28.8 cycle 2 B:C10: emit a single grouped diagnostic
+        when 2+ params violate the Logic-provenance boundary at the
+        same call. Pre-fix, the per-param emission produced N copies
+        of the same trap-24100 message; users saw a wall of
+        near-identical text. Now we emit one diagnostic naming each
+        violating param."""
+        # Dedup by (param_name, kind) — defensive against any caller
+        # that might double-feed the same param.
+        seen: set[tuple[str, str]] = set()
+        groups: dict[str, list[str]] = {"inject": [], "strip": []}
+        for pname, pty, aty, kind in violations:
+            key = (pname, kind)
+            if key in seen:
+                continue
+            seen.add(key)
+            groups[kind].append(pname)
+        parts: list[str] = []
+        if groups["inject"]:
+            names = ", ".join(repr(n) for n in groups["inject"])
+            parts.append(
+                f"params {names} expect Logic-wrapped values "
+                f"(provenance-typed); got raw values"
+            )
+        if groups["strip"]:
+            names = ", ".join(repr(n) for n in groups["strip"])
+            parts.append(
+                f"params {names} expect raw values; got Logic-wrapped "
+                f"(would silently strip provenance)"
+            )
+        msg = (f"call to {fn_name!r}: " + "; ".join(parts)
+               + " (trap 24100)")
+        self.errors.append(TypeError_(
+            msg, span,
+            hint="check each named param — wrap with logic_atom() to "
+                 "inject, or detach the Logic wrapper to strip",
+        ))
+
     def _check_logic_provenance_boundary(self, fn_name: str, param_name: str,
                                           param_ty: Type, actual_ty: Type,
                                           span: A.Span) -> None:
@@ -778,37 +887,17 @@ class TypeChecker:
 
         The check skips when either side is TyUnknown (inference still
         in progress) so it doesn't cascade off unrelated errors.
+
+        Audit 28.8 cycle 2 B:C10: kept for backward compatibility with
+        any callers outside `_check_call_basic`. Internally delegates
+        to `_logic_provenance_violation_kind` +
+        `_emit_logic_provenance_diagnostic` so behavior matches.
         """
-        if isinstance(param_ty, TyUnknown) or isinstance(actual_ty, TyUnknown):
-            return
-
-        def _is_logic(t: Type) -> bool:
-            if isinstance(t, TyLogic):
-                return True
-            if isinstance(t, TyDiff) and isinstance(t.inner, TyLogic):
-                return True
-            return False
-
-        p_logic = _is_logic(param_ty)
-        a_logic = _is_logic(actual_ty)
-        if p_logic and not a_logic:
-            self.errors.append(TypeError_(
-                f"call to {fn_name!r}: arg {param_name!r} expects "
-                f"Logic-wrapped value (provenance-typed); got "
-                f"{self._fmt(actual_ty)} (trap 24100)",
-                span,
-                hint="wrap the value via a logic constructor to "
-                     "preserve provenance",
-            ))
-        elif a_logic and not p_logic:
-            self.errors.append(TypeError_(
-                f"call to {fn_name!r}: arg {param_name!r} expects "
-                f"{self._fmt(param_ty)}; got Logic-wrapped value — "
-                f"would silently strip provenance (trap 24100)",
-                span,
-                hint="detach the Logic wrapper explicitly if you "
-                     "really want a raw value",
-            ))
+        kind = self._logic_provenance_violation_kind(param_ty, actual_ty)
+        if kind is not None:
+            self._emit_logic_provenance_diagnostic(
+                fn_name, param_name, param_ty, actual_ty, kind, span,
+            )
 
     def _check_call_effects(self, call: A.Call, sig: FunctionSig) -> None:
         """Verify that calling a function with effects is permitted in the
