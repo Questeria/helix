@@ -62,20 +62,29 @@ class FoldError(Exception):
     trap_id = 17001
 
     def __init__(self, body: str):
-        # C29-1 fix (conf 92): reject None / non-str loudly.
-        assert isinstance(body, str), (
-            f"FoldError body must be str; got {type(body).__name__} "
-            f"({body!r}). Pass the explanatory text only; the "
-            f"[trap NNNNN] prefix is prepended automatically."
-        )
-        # C29-2 fix (conf 88) + C29-R1 (conf 92): reject pre-
-        # prefixed bodies. The class attr `trap_id` is the sole
-        # source of truth for the prefix.
-        assert not body.startswith("[trap "), (
-            f"FoldError body must NOT be pre-prefixed with [trap NNNNN]; "
-            f"got {body!r}. The prefix is derived from "
-            f"type(self).trap_id = {type(self).trap_id}."
-        )
+        # Stage 28.9 cycle 32 audit-R C31-3 fix (conf 95): use
+        # explicit `raise` instead of `assert` so the guard survives
+        # `python -O` / PEP-488 .opt-1.pyc / `PYTHONOPTIMIZE=1`. The
+        # cycle-29 C29-1 guards were stripped in optimized mode and
+        # `FoldError(None)` silently produced `[trap 17001] None` —
+        # the very useless-message UX the guards were added to
+        # prevent.
+        if not isinstance(body, str):
+            raise TypeError(
+                f"FoldError body must be str; got "
+                f"{type(body).__name__} ({body!r}). Pass the "
+                f"explanatory text only; the [trap NNNNN] prefix is "
+                f"prepended automatically."
+            )
+        # Stage 28.9 cycle 32 audit-R C31-3 + cycle-29 C29-2 / C29-R1
+        # (conf 95+88+92): reject pre-prefixed bodies. The class
+        # attr `trap_id` is the sole source of truth for the prefix.
+        if body.startswith("[trap "):
+            raise ValueError(
+                f"FoldError body must NOT be pre-prefixed with "
+                f"[trap NNNNN]; got {body!r}. The prefix is derived "
+                f"from type(self).trap_id = {type(self).trap_id}."
+            )
         super().__init__(f"[trap {type(self).trap_id}] {body}")
 
 

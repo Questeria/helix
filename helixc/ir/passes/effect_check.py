@@ -32,7 +32,34 @@ License: Apache 2.0
 
 from __future__ import annotations
 
+import sys
+from typing import IO, Literal
+
 from .. import tir
+
+
+# Stage 28.9 cycle 32 audit-T C30-5 fix (conf 65): explicit public
+# API surface so `from helixc.ir.passes.effect_check import *` and
+# external auditors have a stable reference. Private helpers
+# (_is_meta_attr, _HARD_EFFECT_TRAP_IDS, _INFO_EFFECT_TRAP_IDS) are
+# omitted as the underscore prefix signals.
+__all__ = [
+    "OP_EFFECTS",
+    "PURITY_OBSERVER_EFFECTS",
+    "META_ATTRS",
+    "META_ATTR_PREFIXES",
+    "EffectError",
+    "EffectSeverity",
+    "declared_effects",
+    "is_pure_decl",
+    "own_op_effects",
+    "callees",
+    "compute_closure",
+    "check_module",
+    "verify_module",
+    "classify_effect_error",
+    "report_diagnostics",
+]
 
 
 # Ops that produce side-effects in the runtime model. The set names match the
@@ -379,29 +406,34 @@ def verify_module(module: tir.Module) -> None:
 _HARD_EFFECT_TRAP_IDS: frozenset[int] = frozenset({EffectError.trap_id_pure_violation})
 _INFO_EFFECT_TRAP_IDS: frozenset[int] = frozenset({EffectError.trap_id_unused_effect})
 
-# Stage 28.9 cycle 30 audit-R C29-4 (conf 72): assert disjoint at
-# module load. A future commit that accidentally adds an INFO id
-# (e.g. 19002) to BOTH sets — a plausible copy-paste pattern —
-# would silently classify it as "hard" because of HARD-first ordering
-# in `classify_effect_error`. The assertion catches this at import
-# time so the maintainer cannot ignore it.
-assert _HARD_EFFECT_TRAP_IDS.isdisjoint(_INFO_EFFECT_TRAP_IDS), (
-    f"effect-check trap-id sets must be disjoint; overlap="
-    f"{_HARD_EFFECT_TRAP_IDS & _INFO_EFFECT_TRAP_IDS}"
-)
+# Stage 28.9 cycle 30 audit-R C29-4 (conf 72) + cycle 32 audit-R
+# C31-4 fix (conf 92): runtime disjoint check at module load. A
+# future commit that accidentally adds an INFO id (e.g. 19002) to
+# BOTH sets — a plausible copy-paste pattern — would silently
+# classify it as "hard" because of HARD-first ordering in
+# `classify_effect_error`. Pre-cycle-32 this used `assert` which
+# Python strips under `-O`; now an explicit `raise RuntimeError`
+# survives optimized mode.
+_disjoint_overlap = _HARD_EFFECT_TRAP_IDS & _INFO_EFFECT_TRAP_IDS
+if _disjoint_overlap:
+    raise RuntimeError(
+        f"effect-check trap-id sets must be disjoint; overlap="
+        f"{_disjoint_overlap}"
+    )
 
-
-from typing import Literal  # noqa: E402 — kept local for the Literal type below
 
 # Stage 28.9 cycle 30 audit-T C28-TD1 (conf 72): explicit Literal
 # type for the severity return. A typo at the call site (e.g. `sev
 # == "hrd"`) is now caught by static type checkers; bare-string
 # return invited silent escalation through the `else` fail-closed
 # branch.
-Severity = Literal["hard", "info", "unknown"]
+# Stage 28.9 cycle 32 audit-T C30-5 (conf 65): renamed Severity →
+# EffectSeverity (namespaced; the bare "Severity" name collides
+# conceptually with typecheck/deprecation severity vocabularies).
+EffectSeverity = Literal["hard", "info", "unknown"]
 
 
-def classify_effect_error(message: str) -> Severity:
+def classify_effect_error(message: str) -> EffectSeverity:
     """Classify a single message from check_module() into one of:
         "hard"    — trap 19001 @pure or under-declared violation; the
                     caller should treat it as a strict-mode hard error.
@@ -424,25 +456,46 @@ def classify_effect_error(message: str) -> Severity:
     return "unknown"
 
 
-def report_diagnostics(eff_errs: list[str], *, stderr) -> int:
+def report_diagnostics(
+    eff_errs: list[str] | None,
+    *,
+    stderr: IO[str] | None = None,
+) -> int:
     """Stage 28.9 cycle 30 audit-R C29-5 (conf 68): extract the
     duplicated dispatch shell from check.py and x86_64.py into a
     shared helper. Returns the hard-error count so the caller can
     decide --strict abort semantics (rc=1 vs sys.exit).
 
-    `stderr` is parameterized so the caller's file handle / pytest
-    capsys-redirected sys.stderr is honored.
+    Stage 28.9 cycle 32 audit-R C31-R2 / C31-1 / C30-1 fix (conf
+    88+90+92): `stderr` has a real default (None → sys.stderr) so
+    the None-sentinel body branch is actually reachable. Pre-fix
+    the keyword-only param had no default — every call site had to
+    pass `stderr=` explicitly and the `if stderr is None` guard was
+    dead code.
 
-    Stage 28.9 cycle 30 audit-R C29-6 (conf 62): info diagnostics
-    now use `note:` prefix (gcc/clang convention for informational
-    follow-up). Pre-fix used `   effect-check: ...` (leading 3
-    spaces, stdout-style indent) on stderr — an asymmetric format-
-    vs-channel split. Now both severity levels use stderr-appropriate
-    prefixes: `warning:` for hard, `note:` for info.
+    Stage 28.9 cycle 32 audit-R C31-2 fix (conf 90): `eff_errs` is
+    `list[str] | None` with a defensive None→0 early return,
+    mirroring the cycle-29 C29-1 None-rejection discipline in
+    `const_fold.FoldError`. A caller that forgets to capture
+    `check_module`'s return value (or refactors it to Optional)
+    now gets a clean 0 instead of an opaque TypeError-on-iteration.
+
+    Stage 28.9 cycle 30 audit-R C29-6 (conf 62) + cycle 32 audit-T
+    C30-7 fix (conf 55): info diagnostics use `info:` prefix
+    instead of gcc/clang's `note:`. Standalone `note:` is unusual
+    outside an attached-context pattern; `info:` is unambiguous and
+    grep-uniform with `warning:`.
+
+    Stage 28.9 cycle 32 audit-R C31-5 fix (conf 72): unknown-trap-id
+    line uses `warning: effect-check: <msg>` prefix matching the
+    hard-severity format. The cycle-30 `helixc: warning: ...`
+    prefix was the only inconsistent shape across the three branches.
     """
-    import sys
     if stderr is None:
         stderr = sys.stderr
+    if eff_errs is None:
+        # Treat None as "no diagnostics produced".
+        return 0
     hard_count = 0
     for e in eff_errs:
         sev = classify_effect_error(e)
@@ -450,11 +503,14 @@ def report_diagnostics(eff_errs: list[str], *, stderr) -> int:
             print(f"warning: effect-check: {e}", file=stderr)
             hard_count += 1
         elif sev == "info":
-            print(f"note: effect-check: {e}", file=stderr)
+            print(f"info: effect-check: {e}", file=stderr)
         else:
-            # Unknown trap-id — fail-closed.
+            # Unknown trap-id — fail-closed. Format matches the
+            # hard branch (grep-uniform) but includes a descriptive
+            # "unknown trap-id" sub-message so the maintainer
+            # notices the new id.
             print(
-                f"helixc: warning: unknown effect-check trap-id; "
+                f"warning: effect-check: unknown trap-id; "
                 f"classifying as hard: {e}", file=stderr,
             )
             hard_count += 1

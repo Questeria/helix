@@ -755,6 +755,25 @@ def test_c29_r3_real_hello_world_example_compiles(capsys):
         f"real hello_world.hx must compile clean via check.py; "
         f"got rc={rc}. stderr={captured.err!r}"
     )
+    # Stage 28.9 cycle 32 audit-R C31-R3 fix (conf 85): the canonical
+    # example DOES emit a `warning: effect-check:` line because main
+    # has io effects without explicit @effect(io) — that's the
+    # documented warn-by-default behavior (cycle 26 C24-1). The
+    # regression guard here is NARROWER: assert the unknown-trap-id
+    # fail-closed branch never fires for the canonical example. If
+    # a future change makes effect_check emit an unrecognized trap-id
+    # on this file, the test fails loudly. Regular warnings are
+    # expected.
+    assert "unknown trap-id" not in captured.err, (
+        f"real hello_world.hx must not produce 'unknown trap-id' "
+        f"diagnostics; got stderr={captured.err!r}"
+    )
+    # Also assert the example does NOT raise `helixc: const-fold error:`
+    # or `helixc: internal error:` — both indicate compiler bugs vs
+    # source-level diagnostics.
+    assert "helixc: const-fold error:" not in captured.err
+    assert "helixc: internal error:" not in captured.err
+    assert "compiler bug" not in captured.err
 
 
 if __name__ == "__main__":
