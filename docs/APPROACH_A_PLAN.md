@@ -141,23 +141,46 @@
 - Bugs found here get fixed against the Python reference while it still exists.
 - See `docs/STAGE_28_8_PRE_29_AUDIT_GATE.md`.
 
-**Stage 28.9–28.13: Phase A — port Python-only frontend passes into kovc.hx** (planned 2026-05-10)
-Per `docs/helix-pre-self-host-research.md` research: 8 frontend passes exist only in
-`helixc/frontend/*.py` with no bootstrap counterpart. Dropping Python at Stage 29
-without porting them means the self-hosted compiler silently regresses on every
-program that uses those features. Phase A also adds the ergonomic primitives the
-bootstrap itself will benefit from. See `docs/STAGE_28_9_PHASE_A_PRE_29.md` for
-detail.
+**Stage 28.8.1–28.13: Phase A — port Python-only frontend passes into kovc.hx**
+(planned 2026-05-10, refined 2026-05-11 after 11 audit cycles)
 
-- **Stage 28.9**: Port `match_lower.py` (Match→If/Let chains) into kovc.hx.
-- **Stage 28.10**: Port `struct_mono.py` (parametric struct walker + use-site rewrite).
-- **Stage 28.11**: Port validation passes — `panic_pass`, `unsafe_pass`,
-  `deprecated_pass`, `trace_pass` (collect + diagnose into bootstrap-side arenas).
-- **Stage 28.12**: Port `pytree.py` (flatten/unflatten for AD over user structs).
-- **Stage 28.13**: Ergonomics cluster — `?` operator, `let-else`, named struct-lit
-  fields, `f"..."` string interpolation, bootstrap-side render_caret.
+Per `docs/helix-pre-self-host-research.md` (original) and
+`docs/helix-pre-phase-A-finalization-research.md` (refined after 11 cycles):
+8 frontend passes exist only in `helixc/frontend/*.py` with no bootstrap
+counterpart. Plus two cross-cutting infrastructure items the audit cycles
+surfaced as Stage-29 blockers: codegen non-determinism (9 `id(op):x` symbol-
+name sites in x86_64.py + `match_lower._FRESH_COUNTER` module state) and
+walker drift (3 separate AST walkers that repeatedly desynchronized across
+cycles 1-11). See `docs/STAGE_28_9_PHASE_A_PRE_29.md` for design detail.
 
-(Optional, Phase B — deferred to v0.2 default per research recommendation:
+- **Stage 28.8.1**: Codegen determinism harden (Stage-29 byte-identical
+  gate blocker). Replace `id(op):x` in `helixc/backend/x86_64.py` (9 call
+  sites: lines 1705, 1900, 1940, 1941, 2018, 2158, 2310, 2457, 2516) with
+  `(fn_index, op_index)` tuples; reset `match_lower._FRESH_COUNTER` per
+  program; audit `autodiff._DIFF_WARNINGS` for cross-program leakage.
+  Effort: 0.5 stage; risk: LOW. **MUST land before Stage 29.**
+- **Stage 28.8.2**: Shared AST walker library (`frontend/ast_walker.py`).
+  Extract attribute-list dispatch from panic_pass/unsafe_pass/
+  deprecated_pass/grad_pass/struct_mono into a single `ASTVisitor` base
+  class using `dataclasses.fields()` reflection. Closes ~20 audit
+  findings + prevents Phase A from adding 3 more drift-prone walkers.
+  Effort: 1 stage; risk: MEDIUM; net code delta NEGATIVE (~120 LoC less).
+- **Stage 28.9**: Port validation passes — `panic_pass`, `unsafe_pass`,
+  `deprecated_pass`, `trace_pass` (collect + diagnose into bootstrap-side
+  arenas). Validates the shared walker library against the simplest port.
+- **Stage 28.10**: Port `match_lower.py` (Match→If/Let chains) into kovc.hx.
+- **Stage 28.11**: Port `struct_mono.py` (parametric struct walker +
+  use-site rewrite).
+- **Stage 28.11.5**: Port `monomorphize.py` (fn monomorphization — distinct
+  from struct mono).
+- **Stage 28.12**: Port `pytree.py` (flatten/unflatten for AD over user
+  structs).
+- **Stage 28.13**: Ergonomics cluster — `?` operator, `let-else`, named
+  struct-lit fields, bootstrap-side render_caret. (`f"..."` interpolation
+  DEFERRED to v0.2 per the finalization research — too invasive in the
+  lexer for v0.1 budget.)
+
+(Optional, Phase B — deferred to v0.2 default per BOTH research docs:
 Stages 28.14–28.20 wire Tier-3 strategic moat: D<Logic<T>> fuzzy AND/OR/NOT
 codegen + TyMemTier cost annotations. Not blocked behind external benchmark.)
 
