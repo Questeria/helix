@@ -3213,6 +3213,14 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
                     let ta_arr_base = __arena_len();
                     let mut ta_count: i32 = 0;
                     let mut keep_ta: i32 = 1;
+                    // Stage 28.11 INC-3b cycle-3 silent-failure F6
+                    // fix (MED conf 82): track if loop exited on bad
+                    // token vs clean TK_GT. Pre-fix the bad-token else
+                    // branch silently exited and the post-loop trap
+                    // 62030 misleadingly attributed the error to
+                    // "missing `{`" instead of "unexpected token in
+                    // type-args list". Trap 62033 = bad token in args.
+                    let mut ta_bad_token: i32 = 0;
                     while keep_ta == 1 {
                         let tt = tok_tag(tok_base, cur_get(sb));
                         if tt == 17 {                      // TK_GT end
@@ -3228,11 +3236,40 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
                             ta_count = ta_count + 1;
                             cur_advance(sb);
                         } else {
-                            // Bad token — exit (downstream will error).
+                            // Bad token (operator, literal, nested `<`,
+                            // EOF, etc.) — mark and exit WITHOUT
+                            // consuming so the post-loop guard knows
+                            // we exited on a non-GT terminator.
+                            ta_bad_token = 1;
                             keep_ta = 0;
                         }}};
                     }
-                    cur_advance(sb);                       // consume `>`
+                    // Stage 28.11 INC-3b cycle-3 silent-failure F3
+                    // fix (HIGH conf 85): the post-loop `cur_advance(
+                    // sb)` was unconditional, so EOF-mid-list or
+                    // bad-token-exit caused cursor to walk past EOF,
+                    // reading garbage from the token-region tail.
+                    // Mirror INC-1 cycle-2 SF-2 fix pattern: only
+                    // advance past `>` if cursor actually points at
+                    // one. Also fold in F1/F2 fix (count mismatch):
+                    // generic struct decl requires exactly gp_count_pre
+                    // type-args; under-supply (Pt<>) silently coerced
+                    // T-typed fields to scalar; over-supply (Pt<i32, i32>)
+                    // silently created divergent mangled identities.
+                    // Trap 62032 = type-args arity mismatch.
+                    let post_loop_t = tok_tag(tok_base, cur_get(sb));
+                    if post_loop_t == 17 {
+                        cur_advance(sb);                   // consume `>`
+                    };
+                    if ta_bad_token == 1 {
+                        return mk_node(99, 62033, 0, 0);
+                    };
+                    if post_loop_t != 17 {
+                        return mk_node(99, 62033, 0, 0);   // bad terminator
+                    };
+                    if ta_count != gp_count_pre {
+                        return mk_node(99, 62032, 0, 0);   // arity mismatch
+                    };
                     // Build mangled name `OrigName__TY1_TY2` in arena.
                     let mang_s = mangle_name_into_arena(id_start, id_len, ta_arr_base, ta_count);
                     let mang_l = mangle_name_len(id_len, ta_arr_base, ta_count);
@@ -3309,9 +3346,26 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
                         let pk_first = cur_get(sb);
                         let pt_first = tok_tag(tok_base, pk_first);
                         if pt_first == 6 {
+                            // Stage 28.11 INC-3b cycle-3 silent-failure
+                            // F4 fix (MED conf 82): empty struct lit
+                            // `Pt<i32>{}` was pre-fix returning a
+                            // 0-arity tuple-lit even when arity_m > 0,
+                            // matching the same defect class as the
+                            // non-generic struct-lit at line ~3363
+                            // (Audit A1-F7). Subsequent `p.x` would
+                            // read OOB from adjacent stack. Trap 50040
+                            // (same trap id as Audit A1-F7 fix for
+                            // non-generic) since the symptom — supplied
+                            // value count != declared arity — is the
+                            // same defect class regardless of generic
+                            // origin.
                             cur_advance(sb);               // consume `}`
                             set_last_struct_idx(sb, mono_s_idx);
-                            mk_node(50, 0, 0, 0)
+                            if arity_m != 0 {
+                                mk_node(99, 50040, 0, 0)
+                            } else {
+                                mk_node(50, 0, 0, 0)
+                            }
                         } else {
                             let first = parse_expr(tok_base, sb);
                             let mut head_idx: i32 = mk_node(51, first, 0, 0);
