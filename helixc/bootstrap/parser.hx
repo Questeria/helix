@@ -6124,16 +6124,19 @@ fn parse_pattern(tok_base: i32, sb: i32) -> i32 {
                 } else { keep = 0; };
             }
             // Decide final node based on collected violations + count.
-            // Cycle 79 CN-3 off-by-one: fail_jmp_state cap is 16, and
-            // each non-last alt adds 1 success-jmp disp (count - 1
-            // total for N alts). N = 17 is the first failing case
-            // (16 success-jmp disps overflow on the 17th add). So
-            // the correct rejection bound is `count > 16`, not 15.
+            // Cycle 80 CN-A off-by-one fix (LOW conf 70): fail_jmp_state
+            // cap is 16 successful adds (count progresses 0 → 16). In
+            // emit_pat_or, only NON-LAST alts add to success_state, so
+            // N alts produce N-1 adds. Threshold for first dropped add:
+            // N-1 = 17 ⟹ N = 18. So `count > 17` is the precise bound.
+            // Cycle-78 said `count > 15` (over-strict by 2); cycle-79
+            // said `count > 16` (over-strict by 1); cycle-80 lands the
+            // exact bound. 17-alt OR programs now parse correctly.
             if bind_violation == 1 {
                 mk_node(99, 62008, 0, 0)                // PAT_BIND in OR
             } else { if nested_violation == 1 {
                 mk_node(99, 62010, 0, 0)                // nested OR
-            } else { if count > 16 {
+            } else { if count > 17 {
                 mk_node(99, 62009, 0, 0)                // alt-cap overflow
             } else {
                 mk_node(68, head, count, 0)             // valid PAT_OR
