@@ -2763,31 +2763,29 @@ fn main() -> i32 {
     ) == 42, ("Stage 28.11 INCREMENT 1 cycle-3 polish: immediate "
               "non-IDENT after `<` (LBRACE) takes the early-exit "
               "branch WITHOUT consuming any token in the angle list")
-    # INC-1 cycle-3 polish (cycle-2 silent-failure RE-5, LOW conf 82):
-    # nested `<` (`struct X<T<U>>`) is the LOUD-failure path. The
-    # cycle-2 fix exits the loop on the inner `<` (non-IDENT/COMMA/GT),
-    # the guarded post-advance skips, the outer `cur_advance` consumes
-    # the inner `<` as if it were `{`, and the field-loop misparses
-    # downstream. RE-5 flagged a residue concern: if a phantom struct
-    # entry registers in struct_tab before the loud failure, a sibling
-    # well-formed decl could read corrupted data. Probe: register a
-    # sibling well-formed struct Y AFTER the malformed X, and verify
-    # Y's field-access still resolves to the right offset. If the
-    # malformed X corrupted struct_tab, Y would mis-resolve.
-    #
-    # NOTE: the malformed X program is allowed to crash, return any
-    # exit code, or compile-fail. The PROBE is: does the well-formed
-    # Y at the end still work IN ISOLATION (separate compilation)?
-    # Tested via two separate compile_and_exec calls — verifies the
-    # nested-`<` failure mode doesn't propagate to other programs.
-    # (Single-program probe omitted since the malformed program may
-    # crash before reaching Y; the isolation property is what matters.)
+    # INC-1 cycle-4 polish (cycle-3 code-review F-1, conf 85 + cycle-2
+    # silent-failure RE-5, conf 82): probe MUST exercise the actual
+    # path it claims. Cycle-3 version was a tautology (single
+    # well-formed Y program in isolation — `compile_and_exec` already
+    # provides isolation via fresh subprocess). Cycle-4 fixes this:
+    # a SINGLE source string containing both the malformed nested-`<`
+    # X decl AND the well-formed sibling Y decl. If the cycle-2
+    # nested-`<` loud-failure path corrupted struct_tab for sibling
+    # decls, Y's field offset would mis-resolve and we'd see a
+    # non-42 exit (or crash). If the test passes, the loud-failure
+    # path doesn't propagate corruption to siblings in the same
+    # compilation unit. Note: the malformed X may downstream-error
+    # (e.g. field-parse fails) — we tolerate any X-related compile
+    # behavior as long as Y survives. If the bootstrap chokes
+    # entirely on X, this assertion will fail with a non-42 exit
+    # code and we'll know to revisit the cycle-2 fix.
     assert compile_and_exec(
+        "struct X<T<U>> { x: i32 } "
         "struct Y { z: i32 } "
         "fn main() -> i32 { let y = Y { 42 }; y.z }"
-    ) == 42, ("Stage 28.11 INCREMENT 1 cycle-3 polish RE-5: clean "
-              "well-formed sibling decl compiles cleanly in isolation "
-              "(struct_tab residue isolation from nested-< loud failure)")
+    ) == 42, ("Stage 28.11 INCREMENT 1 cycle-4 RE-5: nested-`<` "
+              "loud-failure mode does NOT corrupt sibling Y "
+              "struct_tab entry within the same compilation unit")
     # Stage 6A: enum decl is parsed and registered, codegen treats it as
     # a 0-byte no-op (folded into AST_STRUCT_DECL tag 54). The program
     # below should compile and return 0 with no surprises.
