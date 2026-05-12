@@ -194,6 +194,47 @@ fn main() -> i32 { 0 }
     )
 
 
+def test_c57_1_recursion_inside_mod_block_detected():
+    """Stage 28.9 cycle 58 audit-R C57-1 regression (HIGH conf 88):
+    a non-@partial recursive fn inside `mod m { ... }` must be flagged
+    by `check_totality`. Pre-fix the outer walker only inspected
+    `prog.items` filtered for `A.FnDecl`, so a ModBlock-nested fn
+    silently reported `totality: OK` from `helixc check` even though
+    the backend driver's flatten_modules-first pipeline did catch it."""
+    src = """
+    mod inner {
+        fn forever(n: i32) -> i32 {
+            forever(n)
+        }
+    }
+    """
+    fails = check_totality(parse(src))
+    names = [name for name, _ in fails]
+    assert "forever" in names, (
+        f"expected mod-nested forever flagged, got fails={fails}"
+    )
+
+
+def test_c57_1_recursion_inside_impl_method_detected():
+    """C57-1 regression (HIGH): a non-@partial recursive associated
+    fn inside `impl X { ... }` must be flagged by `check_totality`.
+    Same item-walker gap as the ModBlock case. Uses an associated fn
+    (no `self` receiver) to keep the test minimal and parser-stable."""
+    src = """
+    struct S { x: i32 }
+    impl S {
+        fn forever(n: i32) -> i32 {
+            forever(n)
+        }
+    }
+    """
+    fails = check_totality(parse(src))
+    names = [name for name, _ in fails]
+    assert "forever" in names, (
+        f"expected impl-method forever flagged, got fails={fails}"
+    )
+
+
 def main():
     tests = [(name, fn) for name, fn in globals().items()
              if name.startswith("test_") and callable(fn)]

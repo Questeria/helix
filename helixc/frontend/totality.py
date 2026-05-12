@@ -37,11 +37,35 @@ def check_totality(prog: A.Program) -> list[tuple[str, str]]:
     self-call. Returns [(fn_name, reason)] for failures.
 
     Mutual recursion is detected and pessimistically reported (each
-    cycle participant flagged unless one is @partial)."""
+    cycle participant flagged unless one is @partial).
+
+    Stage 28.9 cycle 58 audit-R C57-1 fix (HIGH conf 88): pre-fix the
+    walker iterated only `prog.items` filtered for `A.FnDecl`. Methods
+    inside `A.ImplBlock.methods` and functions inside `A.ModBlock.items`
+    were silently skipped — a recursive fn defined inside `mod m { ... }`
+    or `impl X { ... }` produced `totality: OK` from `helixc check`
+    despite the backend driver correctly catching it (because the
+    backend runs `flatten_modules` before totality). Same item-walker
+    gap as deprecated_pass C57-5 already closed via `scan_items`. Now
+    recurse through ImplBlock and ModBlock containers too.
+    """
     fns: dict[str, A.FnDecl] = {}
-    for item in prog.items:
-        if isinstance(item, A.FnDecl):
-            fns[item.name] = item
+
+    def collect_items(items: list) -> None:
+        for it in items:
+            if isinstance(it, A.FnDecl):
+                fns[it.name] = it
+            elif isinstance(it, A.ImplBlock):
+                for m in it.methods:
+                    if isinstance(m, A.FnDecl):
+                        fns[m.name] = m
+            elif isinstance(it, A.ModBlock):
+                collect_items(it.items)
+            # Other Item subclasses (StructDecl, EnumDecl, UseDecl,
+            # ModuleDecl, TypeAlias, ConstDecl, AgentDecl) don't carry
+            # FnDecl-bearing bodies and are skipped.
+
+    collect_items(prog.items)
 
     failures: list[tuple[str, str]] = []
     for name, fn in fns.items():

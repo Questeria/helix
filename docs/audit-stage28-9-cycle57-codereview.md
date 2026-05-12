@@ -1,0 +1,38 @@
+# Audit Stage 28.9 cycle 57 — Code review
+
+**Scope.** Read-only HEAD `2f3dcbc` (audit-doc-only delta on top of cycle-55 fix-sweep `5d58d3d`; no source change). Adversarial 2nd-pass rotation: cycle 57 leaves cycle-56's autodiff focus and targets areas NOT covered there — `helixc/check.py` (CLI argument parsing + sub-command dispatch + doc extraction), `helixc/stdlib/*.hx`, `helixc/bootstrap/*.hx`, and the under-trodden tests (`test_match.py`, `test_typecheck.py`, `test_cli.py`). Prior C1–C56 findings not re-flagged.
+**Criterion.** 0 findings at conf >=75%.
+
+## Result: PASS (0 findings)
+
+| Severity | Count |
+|---|---|
+| CRITICAL (>=90) | 0 |
+| HIGH (80-89)    | 0 |
+| MEDIUM (75-79)  | 0 |
+| **Total >=75**  | **0** |
+
+Cycle-57 is structurally a clean re-pass. The audit-doc-only HEAD `2f3dcbc` introduces no executable delta from `5d58d3d`, so all surface-area below is shared with the cycle-56 baseline. Adversarial probes against deliberately-uncovered modules surfaced no >=75 issues.
+
+## Verification highlights
+
+1. **`check.parse_args` token dispatch** — 11 branches (help / `--no-color` / `--color` / known-long-flag / `-O<n>` / `-o` separate / `-l` separate / `-l` attached / `-W` prefix / unknown / positional). `_KNOWN_LONG_FLAGS` includes `-h`/`--help` defensively even though they're handled earlier (line 99). `-O<n>` parser correctly accepts only `-O[0-3]` with explicit `len(tok) == 3 and tok[2].isdigit()` plus an `errors.append` for out-of-range; pre-existing fall-through to `startswith("-")` catches `-O` (no digit). Positional-args overflow (line 151) reports `unexpected extra arg(s)` rather than silently discarding. No double-handling, no missing branch.
+2. **`check.main` outer dispatch** — `try`/`except (FileNotFoundError, PermissionError, IsADirectoryError, NotADirectoryError)` → rc=2 with `_emit_env_error`; `UnicodeDecodeError` → rc=2 with explicit context; broad `Exception` → rc=1 with "this is a compiler bug" tagline. `finally`-clause AD-drain is wrapped in its own try/except so a drain failure cannot mask the primary error. The `a_holder` single-element-list pattern correctly threads the parsed `CliArgs` from `_main_inner` into the `finally` clause without capturing it before parsing succeeds. Cycle-3 C3-3 + cycle-5 C4-6 + cycle-9 C8-2 prior fixes verified internally consistent.
+3. **`extract_doc_comments` (lines 163-213)** — block-collection loop is well-formed: outer `while i < n`; `///`-runs collected in inner `while i < n and lines[i].strip().startswith("///")`; blank-line skip after; decl-line attach (`fn`/`struct`/`enum`/`trait`/`impl`/`mod`). Unattached blocks emit `## ? <unattached>` rather than silently dropping. No off-by-one in `i` (every branch either advances or exits the outer loop). Symbol-extraction terminator-set (`isalnum() or "_"`) matches the lexer's identifier production exactly.
+4. **`_drain_ad_warnings` rc-promotion** — promotes drain rc only when `rc == 0` (line 327), so a compile-failure rc=1 path never silently downgrades to drain-rc=0. The "always print warnings to stderr" path executes regardless of policy, preserving observability when `-Wad` is unset or set to `"warn"`.
+5. **stdlib/bootstrap drift scan** — `Phase N` and `Stage N` comments throughout `helixc/stdlib/*.hx` and `helixc/bootstrap/*.hx` correctly annotate the implementation tier (e.g. `nn.hx` flagging "f32/f64 NN is Phase 3 step 2"; `string.hx:304` "Phase-0 byte-level only"; `option.hx:13` "i32-specialised because generics over enum variants require type-tagged-payload codegen (Phase 2 item)"). These are intentional contract notes, not stale references to deleted features. The `placeholder` occurrences in `kovc.hx` (`emit_je_rel32_placeholder`, etc.) are legitimate assembly back-patch sites — the disp32 field is patched after the target offset is known — not abandoned stubs.
+6. **TODO/FIXME/XXX/HACK census** — `grep -nE "TODO|FIXME|XXX|HACK"` on `helixc/` returns 8 hits. Each is either (a) a Phase-N work item with a documented blocker (e.g. `backend/x86_64.py:2557` "TODO(stage30): replace this no-op with the real call"), (b) a self-asserting test (`test_ptx.py:140-141` asserts `// TODO:` does NOT appear in PTX output), (c) a frontend audit-tied note (`ast_hash.py:392` "TODO follow-on cycle to recurse into GenericParam"). None is pre-2026-04 with no tracking trail.
+7. **`test_match.py` silent-skip pattern** — every `try: from helixc.tests.test_codegen import compile_and_run / except Exception: return` wraps **only** the import. The actual `compile_and_run(src)` invocations live OUTSIDE the try, so a real codegen failure raises and pytest reports it. The skip-on-import-failure is structurally a fallback for exotic environments where `test_codegen.py`'s subprocess/WSL setup is non-importable; it is not a silent-fail mask. Confidence of regression-hiding effect: <30.
+8. **`test_codegen.py` `test_bootstrap_kovc_self_host_loop` skip** — `pytest.skip("Stage 29 work item: self-host loop closure")` (line 4580) is intentional, documented (Stage 29 of APPROACH_A_PLAN), and added by 2026-05-10 audit cycle 1 to ensure heavy-gate counts it SKIPPED rather than FAIL. Not a hidden failure.
+9. **`test_typecheck.py` assertion shape** — substring-in-error-message assertions (lines 1208, 1226, 1249, 1440, 1446, 1677) are anchored on trap-ID strings (`28604`, `28801`, `28802`) which are stable contract identifiers, not on prose. Brittleness risk: low.
+10. **`test_cli.py` coverage** — all `parse_args` branches reachable; `-O[0-3]` levels each exercised against monkeypatched fold/cse/dce modules to verify opt-level dispatch (lines 326-441); AD-drain coverage on all four return-path classes (default-no-emit, `--check-only`, subprocess, error-promotion).
+
+## Notes (<75)
+
+- **B57-1 (conf 60)**: `parse_args` `-l` attached-form (line 132 `tok.startswith("-l") and len(tok) > 2`) would consume an unintended flag like `-list` or `-link` as `libs.append("ist")` / `libs.append("ink")`. No such collisions exist today (no other `-l*` flag is defined) but if a future `--lint` short-form is added without renaming, a clash is possible. Trivial guard: require `tok` to be exactly `-l<one-or-more-non-hyphen-chars>` or check against a deny-set. Pre-existing pattern.
+- **B57-2 (conf 50)**: `_emit_env_error` strips a single `helixc:` prefix from a callee-raised message. A doubly-prefixed message `helixc: helixc: foo` (hypothetical re-raise) would still emit `helixc: helixc: foo`. No call site currently produces that, but if `flatten_impls` or another mid-pipeline raiser starts wrapping `helixc:`-prefixed exceptions, double-print returns. Worth documenting as a contract.
+- **B57-3 (conf 45)**: `parse_args` `-W` empty body (e.g. user runs `-W=error` or bare `-W`) stores `a.warnings[""] = "warn"` / `a.warnings[""] = "error"`. Never read by any consumer (`a.warnings.get("ad" | "deprecated", ...)`), so silently ignored. A diagnostic ("empty -W flag name") would be friendlier.
+- **B57-4 (conf 40)**: `test_match.py` import-fallback skips emit no pytest skip-marker, so the test passes as "0 assertions failed" rather than appearing as SKIPPED in the report. Cosmetic; in-tree imports never fail.
+- **B57-5 (conf 35)**: `_drain_ad_warnings` always prints `   ad: N {label}(s)` to stdout (line 238) — but the per-warning lines go to stderr. A stdout-only consumer sees the count without the detail. Mirror of effect-check's prior asymmetry which cycle-30 C29-R4 already split for totality + effect-check; cosmetic at this site since the count alone is informational.
+
+**Cycle 57 code-review: PASS.** 0 findings at conf >=75. Counter advances toward 5-clean if sibling audits (silent-failures, type-design) also pass at this cycle.
