@@ -1044,6 +1044,603 @@ def test_c112_u64_shr_high_bit_compare_optimized_runtime():
     assert compile_and_run(src) == 42
 
 
+def test_c115_u64_div_mod_high_runtime_parity():
+    """Cycle-115: u64 DIV/MOD use unsigned 64-bit runtime semantics."""
+    div_src = """
+    fn main() -> i32 {
+        let x: u64 = (1_u64 << 32_u64) + 84_u64;
+        let y: u64 = x / 2_u64;
+        if y > (1_u64 << 31_u64) { 42 } else { 0 }
+    }
+    """
+    assert compile_and_run(div_src, optimize=False) == 42
+    assert compile_and_run(div_src) == 42
+
+    mod_src = """
+    fn main() -> i32 {
+        let x: u64 = (1_u64 << 32_u64) + 42_u64;
+        let y: u64 = x % (1_u64 << 32_u64);
+        y as i32
+    }
+    """
+    assert compile_and_run(mod_src, optimize=False) == 42
+    assert compile_and_run(mod_src) == 42
+
+
+def test_c115_unsigned_div_mod_zero_store_zero():
+    """Cycle-115: unsigned div/mod zero guard must write 0 to the result slot."""
+    u64_src = """
+    fn main() -> i32 {
+        let d: u64 = 0_u64;
+        let q: u64 = 123_u64 / d;
+        let r: u64 = 123_u64 % d;
+        (q + r + 42_u64) as i32
+    }
+    """
+    assert compile_and_run(u64_src, optimize=False) == 42
+    assert compile_and_run(u64_src) == 42
+
+    u32_src = """
+    fn main() -> i32 {
+        let d: u32 = 0_u32;
+        let q: u32 = 123_u32 / d;
+        let r: u32 = 123_u32 % d;
+        (q + r + 42_u32) as i32
+    }
+    """
+    assert compile_and_run(u32_src, optimize=False) == 42
+    assert compile_and_run(u32_src) == 42
+
+
+def test_c115_mixed_width_unsigned_div_mod_zero_extends_rhs():
+    """Cycle-115: u64/usize DIV/MOD must not 64-bit-load u32 RHS slots."""
+    div_src = """
+    fn div_mixed(a: u64, b: u32) -> u64 { a / b }
+    fn main() -> i32 {
+        let x: u64 = (1_u64 << 32_u64) + 84_u64;
+        let y: u32 = 2_u32;
+        let q: u64 = div_mixed(x, y);
+        if q > (1_u64 << 31_u64) { 42 } else { 0 }
+    }
+    """
+    assert compile_and_run(div_src, optimize=False) == 42
+    assert compile_and_run(div_src) == 42
+
+    mod_src = """
+    fn mod_mixed(a: u64, b: u32) -> u64 { a % b }
+    fn main() -> i32 {
+        let x: u64 = (1_u64 << 32_u64) + 42_u64;
+        let y: u32 = 256_u32;
+        mod_mixed(x, y) as i32
+    }
+    """
+    assert compile_and_run(mod_src, optimize=False) == 42
+    assert compile_and_run(mod_src) == 42
+
+    zero_src = """
+    fn div_zero(a: u64, b: u32) -> u64 { a / b }
+    fn mod_zero(a: u64, b: u32) -> u64 { a % b }
+    fn main() -> i32 {
+        let z: u32 = 0_u32;
+        let q: u64 = div_zero(123_u64, z);
+        let r: u64 = mod_zero(123_u64, z);
+        (q + r + 42_u64) as i32
+    }
+    """
+    assert compile_and_run(zero_src, optimize=False) == 42
+    assert compile_and_run(zero_src) == 42
+
+
+def test_c115_narrow_result_div_mod_uses_wide_rhs():
+    """Cycle-115: narrow DIV/MOD results still use wide operand values."""
+    unsigned_src = """
+    fn main() -> i32 {
+        let big: u64 = (1_u64 << 32_u64) + 2_u64;
+        let q: u32 = 84_u32 / big;
+        let r: u32 = 84_u32 % big;
+        if q == 0_u32 { if r == 84_u32 { 42 } else { 0 } } else { 0 }
+    }
+    """
+    assert compile_and_run(unsigned_src, optimize=False) == 42
+    assert compile_and_run(unsigned_src) == 42
+
+    signed_src = """
+    fn main() -> i32 {
+        let big: i64 = (1_i64 << 32_i64) + 2_i64;
+        let q: i32 = 84_i32 / big;
+        let r: i32 = 84_i32 % big;
+        if q == 0 { if r == 84 { 42 } else { 0 } } else { 0 }
+    }
+    """
+    assert compile_and_run(signed_src, optimize=False) == 42
+    assert compile_and_run(signed_src) == 42
+
+
+def test_c115_mixed_signed_unsigned_div_mod_runtime_parity():
+    """Cycle-115: signed-result DIV/MOD with unsigned operand uses unsigned domain."""
+    src = """
+    fn main() -> i32 {
+        let d: u64 = 18446744073709551615_u64;
+        let q: i64 = 10_i64 / d;
+        let r: i64 = 10_i64 % d;
+        if q == 0_i64 { if r == 10_i64 { 42 } else { 0 } } else { 0 }
+    }
+    """
+    assert compile_and_run(src, optimize=False) == 42
+    assert compile_and_run(src) == 42
+
+
+def test_c115_usize_div_mod_high_runtime_parity():
+    """Cycle-115: usize DIV/MOD follows the u64 unsigned path."""
+    div_src = """
+    fn main() -> i32 {
+        let x: usize = ((1_u64 << 32_u64) + 84_u64) as usize;
+        let y: usize = x / 2_usize;
+        if y > ((1_u64 << 31_u64) as usize) { 42 } else { 0 }
+    }
+    """
+    assert compile_and_run(div_src, optimize=False) == 42
+    assert compile_and_run(div_src) == 42
+
+    mod_src = """
+    fn main() -> i32 {
+        let x: usize = ((1_u64 << 32_u64) + 42_u64) as usize;
+        let y: usize = x % ((1_u64 << 32_u64) as usize);
+        y as i32
+    }
+    """
+    assert compile_and_run(mod_src, optimize=False) == 42
+    assert compile_and_run(mod_src) == 42
+
+
+def test_c115_float_to_64bit_int_runtime():
+    """Cycle-115: float -> 64-bit int casts must not truncate through eax."""
+    f64_i64 = """
+    fn main() -> i32 {
+        let x: i64 = 4_294_967_338.0_f64 as i64;
+        let y: i64 = 1_i64 << 32_i64;
+        if x > y { 42 } else { 0 }
+    }
+    """
+    assert compile_and_run(f64_i64, optimize=False) == 42
+
+    f32_i64 = """
+    fn main() -> i32 {
+        let x: i64 = 4_294_967_296.0_f32 as i64;
+        let y: i64 = 1_i64 << 31_i64;
+        if x > y { 42 } else { 0 }
+    }
+    """
+    assert compile_and_run(f32_i64, optimize=False) == 42
+
+    f64_u64 = """
+    fn main() -> i32 {
+        let x: u64 = 4_294_967_338.0_f64 as u64;
+        let y: u64 = 1_u64 << 32_u64;
+        if x > y { 42 } else { 0 }
+    }
+    """
+    assert compile_and_run(f64_u64, optimize=False) == 42
+
+
+def test_c115_float_to_u64_high_half_runtime():
+    """Cycle-115: f32/f64 -> u64/usize above i64::MAX needs unsigned path."""
+    f64_u64 = """
+    fn main() -> i32 {
+        let high: u64 = 1_u64 << 63_u64;
+        let x: u64 = 9_223_372_036_854_779_904.0_f64 as u64;
+        if x > high { 42 } else { 0 }
+    }
+    """
+    assert compile_and_run(f64_u64, optimize=False) == 42
+
+    f64_usize = """
+    fn main() -> i32 {
+        let high: usize = (1_u64 << 63_u64) as usize;
+        let x: usize = 9_223_372_036_854_779_904.0_f64 as usize;
+        if x > high { 42 } else { 0 }
+    }
+    """
+    assert compile_and_run(f64_usize, optimize=False) == 42
+
+    f32_u64 = """
+    fn main() -> i32 {
+        let high: u64 = 1_u64 << 63_u64;
+        let x: u64 = 9_223_373_136_366_403_584.0_f32 as u64;
+        if x > high { 42 } else { 0 }
+    }
+    """
+    assert compile_and_run(f32_u64, optimize=False) == 42
+
+
+def test_c115_direct_high_u64_usize_literals_runtime():
+    """Cycle-115: high unsigned 64-bit immediates pack as raw bits."""
+    u64_src = """
+    fn main() -> i32 {
+        let x: u64 = 9223372036854775808_u64;
+        if x > 0_u64 { 42 } else { 0 }
+    }
+    """
+    assert compile_and_run(u64_src, optimize=False) == 42
+    assert compile_and_run(u64_src) == 42
+
+    usize_src = """
+    fn main() -> i32 {
+        let x: usize = 9223372036854775808_usize;
+        if x > 0_usize { 42 } else { 0 }
+    }
+    """
+    assert compile_and_run(usize_src, optimize=False) == 42
+    assert compile_and_run(usize_src) == 42
+
+
+def test_c115_i64_div_mod_edge_guards_runtime():
+    """Cycle-115: signed 64-bit div/mod follow the spec's guarded edges."""
+    zero_src = """
+    fn main() -> i32 {
+        let z: i64 = 0_i64;
+        let q: i64 = 123_i64 / z;
+        let r: i64 = 123_i64 % z;
+        (q + r + 42_i64) as i32
+    }
+    """
+    assert compile_and_run(zero_src, optimize=False) == 42
+    assert compile_and_run(zero_src) == 42
+
+    overflow_src = """
+    fn main() -> i32 {
+        let min: i64 = (0_i64 - 9223372036854775807_i64) - 1_i64;
+        let neg_one: i64 = 0_i64 - 1_i64;
+        let q: i64 = min / neg_one;
+        let r: i64 = min % neg_one;
+        if q == min { if r == 0_i64 { 42 } else { 0 } } else { 0 }
+    }
+    """
+    assert compile_and_run(overflow_src, optimize=False) == 42
+    assert compile_and_run(overflow_src) == 42
+
+
+def test_c115_mixed_width_u64_arithmetic_runtime():
+    """Cycle-115: u64 +/-/* u32 zero-extends the narrow RHS at runtime."""
+    src = """
+    fn add_mixed(a: u64, b: u32) -> u64 { a + b }
+    fn sub_mixed(a: u64, b: u32) -> u64 { a - b }
+    fn mul_mixed(a: u64, b: u32) -> u64 { a * b }
+    fn main() -> i32 {
+        let base: u64 = 1_u64 << 32_u64;
+        let a: u64 = add_mixed(base, 42_u32);
+        let s: u64 = sub_mixed(base + 42_u64, 42_u32);
+        let m: u64 = mul_mixed(base + 1_u64, 2_u32);
+        if a == (base + 42_u64) {
+            if s == base {
+                if m == ((1_u64 << 33_u64) + 2_u64) { 42 } else { 0 }
+            } else { 0 }
+        } else { 0 }
+    }
+    """
+    assert compile_and_run(src, optimize=False) == 42
+    assert compile_and_run(src) == 42
+
+
+def test_c115_mixed_width_u64_bitwise_runtime():
+    """Cycle-115: u64 &/|/^ u32 zero-extends the narrow RHS at runtime."""
+    src = """
+    fn and_mixed(a: u64, b: u32) -> u64 { a & b }
+    fn or_mixed(a: u64, b: u32) -> u64 { a | b }
+    fn xor_mixed(a: u64, b: u32) -> u64 { a ^ b }
+    fn main() -> i32 {
+        let base: u64 = 1_u64 << 32_u64;
+        let high: u64 = 1_u64 << 63_u64;
+        let a: u64 = and_mixed(high + 255_u64, 42_u32);
+        let o: u64 = or_mixed(base, 42_u32);
+        let x: u64 = xor_mixed(base + 99_u64, 42_u32);
+        if a == 42_u64 {
+            if o == (base + 42_u64) {
+                if x == (base + (99_u64 ^ 42_u64)) { 42 } else { 0 }
+            } else { 0 }
+        } else { 0 }
+    }
+    """
+    assert compile_and_run(src, optimize=False) == 42
+    assert compile_and_run(src) == 42
+
+
+def test_c115_mixed_signed_unsigned_const_fold_runtime_parity():
+    """Cycle-115: optimizer mirrors runtime zero-extension for unsigned operands."""
+    add_src = """
+    fn main() -> i32 {
+        let x: u32 = (1_u32 << 31_u32) >> 0_u32;
+        let y: i64 = 1_i64 + x;
+        if y > 0_i64 { 42 } else { 0 }
+    }
+    """
+    assert compile_and_run(add_src, optimize=False) == 42
+    assert compile_and_run(add_src) == 42
+
+    bit_src = """
+    fn main() -> i32 {
+        let x: u32 = (1_u32 << 31_u32) >> 0_u32;
+        let y: i64 = 1_i64 | x;
+        if y > 0_i64 { 42 } else { 0 }
+    }
+    """
+    assert compile_and_run(bit_src, optimize=False) == 42
+    assert compile_and_run(bit_src) == 42
+
+
+def test_c115_unsigned_domain_runtime_sign_extends_signed_operands():
+    """Cycle-115: mixed unsigned ops sign-extend signed source operands first."""
+    arith_bit_src = """
+    fn add_mixed(x: i32) -> u64 { 0_u64 + x }
+    fn or_mixed(x: i32) -> u64 { 0_u64 | x }
+    fn main() -> i32 {
+        let x: i32 = 0_i32 - 1_i32;
+        let casted: u64 = x as u64;
+        let a: u64 = add_mixed(x);
+        let o: u64 = or_mixed(x);
+        if a == casted { if o == casted { 42 } else { 0 } } else { 0 }
+    }
+    """
+    assert compile_and_run(arith_bit_src, optimize=False) == 42
+    assert compile_and_run(arith_bit_src) == 42
+
+    cmp_src = """
+    fn cmp_mixed(x: i32) -> i32 {
+        if x > 0_u64 { 42 } else { 0 }
+    }
+    fn main() -> i32 {
+        let x: i32 = 0_i32 - 1_i32;
+        cmp_mixed(x)
+    }
+    """
+    assert compile_and_run(cmp_src, optimize=False) == 42
+    assert compile_and_run(cmp_src) == 42
+
+    div_src = """
+    fn div_mixed(a: u64, b: i32) -> u64 { a / b }
+    fn mod_mixed(a: u64, b: i32) -> u64 { a % b }
+    fn main() -> i32 {
+        let b: i32 = 0_i32 - 1_i32;
+        let q: u64 = div_mixed(10_u64, b);
+        let r: u64 = mod_mixed(10_u64, b);
+        if q == 0_u64 { if r == 10_u64 { 42 } else { 0 } } else { 0 }
+    }
+    """
+    assert compile_and_run(div_src, optimize=False) == 42
+    assert compile_and_run(div_src) == 42
+
+
+def test_c115_identity_fold_keeps_widened_result_type_runtime():
+    """Cycle-115: 0_i64 + x_i32 must still return a sign-extended i64."""
+    src = """
+    fn widen_identity(x: i32) -> i64 {
+        0_i64 + x
+    }
+    fn main() -> i32 {
+        let y: i64 = widen_identity(0_i32 - 1_i32);
+        if y < 0_i64 { 42 } else { 0 }
+    }
+    """
+    assert compile_and_run(src, optimize=False) == 42
+    assert compile_and_run(src) == 42
+
+
+def test_c115_mixed_width_unsigned_const_compare_runtime_parity():
+    """Cycle-115: optimized mixed-width unsigned compare zero-extends u32."""
+    src = """
+    fn main() -> i32 {
+        let x: u32 = (1_u32 << 31_u32) >> 0_u32;
+        if x > 3_000_000_000_u64 { 42 } else { 7 }
+    }
+    """
+    assert compile_and_run(src, optimize=False) == 7
+    assert compile_and_run(src) == 7
+
+
+def test_c115_mixed_width_unsigned_runtime_compare_zero_extends_u32():
+    """Cycle-115: unoptimized u32-vs-u64 compare must ignore stale high bytes."""
+    src = """
+    fn poison() -> u64 {
+        let p: u64 = (1_u64 << 63_u64) + 99_u64;
+        p
+    }
+    fn check() -> i32 {
+        let x: u32 = (1_u32 << 31_u32) >> 0_u32;
+        if x > 3_000_000_000_u64 { 7 } else { 42 }
+    }
+    fn main() -> i32 {
+        poison();
+        check()
+    }
+    """
+    assert compile_and_run(src, optimize=False) == 42
+    assert compile_and_run(src) == 42
+
+
+def test_c115_sub32_unsigned_runtime_compare_masks_declared_width():
+    """Cycle-115: u8/u16 compares mask raw 32-bit arithmetic results."""
+    u8_src = """
+    fn main() -> i32 {
+        let x: u8 = 0_u8 - 1_u8;
+        if x > 300_u32 { 7 } else { 42 }
+    }
+    """
+    assert compile_and_run(u8_src, optimize=False) == 42
+    assert compile_and_run(u8_src) == 42
+
+    u16_src = """
+    fn main() -> i32 {
+        let x: u16 = 0_u16 - 1_u16;
+        if x > 70000_u32 { 7 } else { 42 }
+    }
+    """
+    assert compile_and_run(u16_src, optimize=False) == 42
+    assert compile_and_run(u16_src) == 42
+
+
+def test_c115_narrow_mixed_unsigned_domain_runtime_parity():
+    """Cycle-115: narrow mixed unsigned compare/div use 32-bit runtime width."""
+    cmp_eq_src = """
+    fn main() -> i32 {
+        let x: i8 = 0_i8 - 1_i8;
+        if x == 65535_u16 { 7 } else { 42 }
+    }
+    """
+    assert compile_and_run(cmp_eq_src, optimize=False) == 42
+    assert compile_and_run(cmp_eq_src) == 42
+
+    cmp_gt_src = """
+    fn main() -> i32 {
+        let x: i8 = 0_i8 - 1_i8;
+        if x > 65535_u16 { 42 } else { 7 }
+    }
+    """
+    assert compile_and_run(cmp_gt_src, optimize=False) == 42
+    assert compile_and_run(cmp_gt_src) == 42
+
+    div_src = """
+    fn main() -> i32 {
+        let d: i8 = 0_i8 - 1_i8;
+        let q: u16 = 65535_u16 / d;
+        if q == 0_u16 { 42 } else { 7 }
+    }
+    """
+    assert compile_and_run(div_src, optimize=False) == 42
+    assert compile_and_run(div_src) == 42
+
+
+def test_c115_narrow_casts_respect_source_width_runtime():
+    """Cycle-115: casts from wrapped u8/u16/i16 values use declared width."""
+    u8_src = """
+    fn main() -> i32 {
+        let x: u8 = 0_u8 - 1_u8;
+        let y: i32 = x as i32;
+        if y == 255 { 42 } else { 7 }
+    }
+    """
+    assert compile_and_run(u8_src, optimize=False) == 42
+    assert compile_and_run(u8_src) == 42
+
+    u16_src = """
+    fn main() -> i32 {
+        let x: u16 = 0_u16 - 1_u16;
+        let y: i32 = x as i32;
+        if y == 65535 { 42 } else { 7 }
+    }
+    """
+    assert compile_and_run(u16_src, optimize=False) == 42
+    assert compile_and_run(u16_src) == 42
+
+    i16_src = """
+    fn main() -> i32 {
+        let x: i16 = 32767_i16 + 1_i16;
+        let y: i32 = x as i32;
+        if y < 0 { 42 } else { 7 }
+    }
+    """
+    assert compile_and_run(i16_src, optimize=False) == 42
+    assert compile_and_run(i16_src) == 42
+
+
+def test_c115_narrow_int_to_float_casts_respect_source_width_runtime():
+    """Cycle-115: int->float casts also mask/sign-extend narrow sources."""
+    u8_src = """
+    fn main() -> i32 {
+        let x: u8 = 0_u8 - 1_u8;
+        let y: f64 = x as f64;
+        if y > 254.0_f64 { 42 } else { 7 }
+    }
+    """
+    assert compile_and_run(u8_src, optimize=False) == 42
+    assert compile_and_run(u8_src) == 42
+
+    i16_src = """
+    fn main() -> i32 {
+        let x: i16 = 32767_i16 + 1_i16;
+        let y: f64 = x as f64;
+        if y < 0.0_f64 { 42 } else { 7 }
+    }
+    """
+    assert compile_and_run(i16_src, optimize=False) == 42
+    assert compile_and_run(i16_src) == 42
+
+
+def test_c115_signed_narrow_div_mod_source_widens_runtime():
+    """Cycle-115: signed i8/i16 DIV/MOD reload wrapped slots by source type."""
+    i8_div_src = """
+    fn div_i8(x: i8, d: i8) -> i8 { x / d }
+    fn main() -> i32 {
+        let x: i8 = 127_i8 + 1_i8;
+        let q: i8 = div_i8(x, 2_i8);
+        let y: i32 = q as i32;
+        if y == (0_i32 - 64_i32) { 42 } else { 7 }
+    }
+    """
+    assert compile_and_run(i8_div_src, optimize=False) == 42
+    assert compile_and_run(i8_div_src) == 42
+
+    i8_mod_src = """
+    fn mod_i8(x: i8, d: i8) -> i8 { x % d }
+    fn main() -> i32 {
+        let x: i8 = 127_i8 + 1_i8;
+        let r: i8 = mod_i8(x, 3_i8);
+        let y: i32 = r as i32;
+        if y == (0_i32 - 2_i32) { 42 } else { 7 }
+    }
+    """
+    assert compile_and_run(i8_mod_src, optimize=False) == 42
+    assert compile_and_run(i8_mod_src) == 42
+
+    i16_div_src = """
+    fn div_i16(x: i16, d: i16) -> i16 { x / d }
+    fn main() -> i32 {
+        let x: i16 = 32767_i16 + 1_i16;
+        let q: i16 = div_i16(x, 2_i16);
+        let y: i32 = q as i32;
+        if y == (0_i32 - 16384_i32) { 42 } else { 7 }
+    }
+    """
+    assert compile_and_run(i16_div_src, optimize=False) == 42
+    assert compile_and_run(i16_div_src) == 42
+
+    i16_mod_src = """
+    fn mod_i16(x: i16, d: i16) -> i16 { x % d }
+    fn main() -> i32 {
+        let x: i16 = 32767_i16 + 1_i16;
+        let r: i16 = mod_i16(x, 5_i16);
+        let y: i32 = r as i32;
+        if y == (0_i32 - 3_i32) { 42 } else { 7 }
+    }
+    """
+    assert compile_and_run(i16_mod_src, optimize=False) == 42
+    assert compile_and_run(i16_mod_src) == 42
+
+
+def test_c115_i32_min_div_mod_non_overflow_runtime():
+    """Cycle-115: i32 MIN divided/modded by normal divisors stays on idiv path."""
+    div_src = """
+    fn div_i32(x: i32, d: i32) -> i32 { x / d }
+    fn main() -> i32 {
+        let min: i32 = (0_i32 - 2147483647_i32) - 1_i32;
+        let q: i32 = div_i32(min, 2_i32);
+        if q == (0_i32 - 1073741824_i32) { 42 } else { 7 }
+    }
+    """
+    assert compile_and_run(div_src, optimize=False) == 42
+    assert compile_and_run(div_src) == 42
+
+    mod_src = """
+    fn mod_i32(x: i32, d: i32) -> i32 { x % d }
+    fn main() -> i32 {
+        let min: i32 = (0_i32 - 2147483647_i32) - 1_i32;
+        let r: i32 = mod_i32(min, 3_i32);
+        if r == (0_i32 - 2_i32) { 42 } else { 7 }
+    }
+    """
+    assert compile_and_run(mod_src, optimize=False) == 42
+    assert compile_and_run(mod_src) == 42
+
+
 def test_i64_modulo_beyond_i32():
     """Phase 1.4 (regression): i64 % i64 must use 64-bit cqo+idiv rcx, not
     fall through to the 32-bit guarded path. With the 32-bit path, low bits
@@ -1691,12 +2288,14 @@ fn main() -> i32 {
         # would short-circuit AFTER bootstrap and never run the output
         # binary.
         #
-        # Proper fix: assert /tmp/helix_bin_out.bin actually exists after
-        # the bootstrap runs (via `test -f`); only then chmod+exec it.
-        # On any failure in the chain, raise a clear AssertionError
-        # rather than returning a misleading exit code from a chmod or
-        # the bootstrap's byte-count.
+        # Proper fix: clear any stale output first, then assert
+        # /tmp/helix_bin_out.bin actually exists after the bootstrap runs
+        # (via `test -f`); only then chmod+exec it. On any failure in the
+        # chain, raise a clear AssertionError rather than returning a
+        # misleading exit code from a chmod, stale binary, or the
+        # bootstrap's byte-count.
         cmd = (
+            f"rm -f /tmp/helix_src_in.hx /tmp/helix_bin_out.bin && "
             f"printf %s {repr(source_text)} > /tmp/helix_src_in.hx && "
             f"sync && chmod +x {cached_wsl} && "
             f"{cached_wsl} > /dev/null; "

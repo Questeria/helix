@@ -196,6 +196,32 @@ class Asm:
             self.b.emit(0x8B, 0x8D)
             self.b.emit_bytes(struct.pack("<i", disp8))
 
+    def movsxd_rax_eax(self) -> None:
+        self.b.emit(0x48, 0x63, 0xC0)          # movsxd rax, eax
+
+    def movsxd_rcx_ecx(self) -> None:
+        self.b.emit(0x48, 0x63, 0xC9)          # movsxd rcx, ecx
+
+    def and_eax_imm32(self, imm: int) -> None:
+        self.b.emit(0x25)
+        self.b.emit_bytes(struct.pack("<I", imm & 0xFFFFFFFF))
+
+    def and_ecx_imm32(self, imm: int) -> None:
+        self.b.emit(0x81, 0xE1)
+        self.b.emit_bytes(struct.pack("<I", imm & 0xFFFFFFFF))
+
+    def shl_eax_imm8(self, imm: int) -> None:
+        self.b.emit(0xC1, 0xE0, imm & 0xFF)
+
+    def shl_ecx_imm8(self, imm: int) -> None:
+        self.b.emit(0xC1, 0xE1, imm & 0xFF)
+
+    def sar_eax_imm8(self, imm: int) -> None:
+        self.b.emit(0xC1, 0xF8, imm & 0xFF)
+
+    def sar_ecx_imm8(self, imm: int) -> None:
+        self.b.emit(0xC1, 0xF9, imm & 0xFF)
+
     def add_eax_ecx(self) -> None:
         self.b.emit(0x01, 0xC8)                # add eax, ecx
 
@@ -212,7 +238,15 @@ class Asm:
     def mov_rax_imm64(self, imm: int) -> None:
         # 48 B8 imm64
         self.b.emit(0x48, 0xB8)
-        self.b.emit_bytes(struct.pack("<q", imm))
+        self.b.emit_bytes(struct.pack("<Q", imm & 0xFFFFFFFFFFFFFFFF))
+
+    def mov_rcx_imm64_bits(self, imm: int) -> None:
+        self.b.emit(0x48, 0xB9)
+        self.b.emit_bytes(struct.pack("<Q", imm & 0xFFFFFFFFFFFFFFFF))
+
+    def mov_rdx_imm64_bits(self, imm: int) -> None:
+        self.b.emit(0x48, 0xBA)
+        self.b.emit_bytes(struct.pack("<Q", imm & 0xFFFFFFFFFFFFFFFF))
 
     def mov_rax_mem_rbp(self, disp: int) -> None:
         # 48 8B 45 disp8 / 48 8B 85 disp32
@@ -250,12 +284,24 @@ class Asm:
         # 48 99   sign-extend rax into rdx:rax (the 64-bit sibling of cdq)
         self.b.emit(0x48, 0x99)
 
+    def xor_edx_edx(self) -> None:
+        self.b.emit(0x31, 0xD2)                # xor edx, edx
+
+    def xor_rdx_rdx(self) -> None:
+        self.b.emit(0x48, 0x31, 0xD2)          # xor rdx, rdx
+
+    def div_rcx(self) -> None:
+        self.b.emit(0x48, 0xF7, 0xF1)          # div rcx
+
     def idiv_rcx(self) -> None:
         # 48 F7 F9
         self.b.emit(0x48, 0xF7, 0xF9)
 
     def cmp_rax_rcx(self) -> None:
         self.b.emit(0x48, 0x39, 0xC8)          # cmp rax, rcx
+
+    def cmp_rax_rdx(self) -> None:
+        self.b.emit(0x48, 0x39, 0xD0)          # cmp rax, rdx
 
     def test_rax_rax(self) -> None:
         self.b.emit(0x48, 0x85, 0xC0)          # test rax, rax
@@ -278,6 +324,9 @@ class Asm:
     def idiv_ecx(self) -> None:
         # F7 F9   idiv ecx (signed); edx:eax / ecx -> eax=quotient, edx=remainder
         self.b.emit(0xF7, 0xF9)
+
+    def div_ecx(self) -> None:
+        self.b.emit(0xF7, 0xF1)                # div ecx
 
     def mov_eax_edx(self) -> None:
         # 89 D0   mov eax, edx
@@ -653,6 +702,10 @@ class Asm:
         # F3 0F 2C C0   (truncating float -> signed int32)
         self.b.emit(0xF3, 0x0F, 0x2C, 0xC0)
 
+    def cvttss2si_rax_xmm0(self) -> None:
+        # F3 48 0F 2C C0   (truncating float -> signed int64)
+        self.b.emit(0xF3, 0x48, 0x0F, 0x2C, 0xC0)
+
     def cvtsi2ss_xmm0_eax(self) -> None:
         # F3 0F 2A C0
         self.b.emit(0xF3, 0x0F, 0x2A, 0xC0)
@@ -722,6 +775,10 @@ class Asm:
     def cvttsd2si_eax_xmm0(self) -> None:
         # F2 0F 2C C0   (truncating f64 -> signed int32)
         self.b.emit(0xF2, 0x0F, 0x2C, 0xC0)
+
+    def cvttsd2si_rax_xmm0(self) -> None:
+        # F2 48 0F 2C C0   (truncating f64 -> signed int64)
+        self.b.emit(0xF2, 0x48, 0x0F, 0x2C, 0xC0)
 
     def cvtsi2sd_xmm0_eax(self) -> None:
         # F2 0F 2A C0
@@ -1087,6 +1144,50 @@ class FnCompiler:
             "u8", "u16", "u32", "u64", "usize",
         )
 
+    def _int_bits_for_type(self, ty: tir.TIRType) -> int:
+        if isinstance(ty, tir.TIRScalar):
+            return {
+                "i8": 8, "u8": 8,
+                "i16": 16, "u16": 16,
+                "i64": 64, "u64": 64,
+                "isize": 64, "usize": 64,
+            }.get(ty.name, 32)
+        return 32
+
+    def _load_cmp_operand_rax(self, slot: int, ty: tir.TIRType,
+                              *, unsigned_compare: bool = False) -> None:
+        bits = self._int_bits_for_type(ty)
+        if bits == 64:
+            self.asm.mov_rax_mem_rbp(slot)
+            return
+        self.asm.mov_eax_mem_rbp(slot)
+        if self._is_unsigned_int_type(ty):
+            if bits < 32:
+                self.asm.and_eax_imm32((1 << bits) - 1)
+            return
+        if bits < 32:
+            shift = 32 - bits
+            self.asm.shl_eax_imm8(shift)
+            self.asm.sar_eax_imm8(shift)
+        self.asm.movsxd_rax_eax()
+
+    def _load_cmp_operand_rcx(self, slot: int, ty: tir.TIRType,
+                              *, unsigned_compare: bool = False) -> None:
+        bits = self._int_bits_for_type(ty)
+        if bits == 64:
+            self.asm.mov_rcx_mem_rbp(slot)
+            return
+        self.asm.mov_ecx_mem_rbp(slot)
+        if self._is_unsigned_int_type(ty):
+            if bits < 32:
+                self.asm.and_ecx_imm32((1 << bits) - 1)
+            return
+        if bits < 32:
+            shift = 32 - bits
+            self.asm.shl_ecx_imm8(shift)
+            self.asm.sar_ecx_imm8(shift)
+        self.asm.movsxd_rcx_ecx()
+
     def _check_float_supported(self, ty: tir.TIRType) -> None:
         """Phase 1 supports f32 and f64. f16/bf16 still need the F16C
         / AVX-512 paths — error on those. Treating them as f32 silently
@@ -1158,6 +1259,67 @@ class FnCompiler:
             raise ValueError(f"u64-to-float done disp out of rel8: {d}")
         buf.bytes_[jmp_done_disp_off] = d & 0xFF
 
+    def _emit_float_to_u64(self, src_slot: int, res_slot: int,
+                           *, from_is_f64: bool) -> None:
+        """Emit f32/f64 -> unsigned u64/usize conversion.
+
+        SSE has truncating float-to-signed-i64 conversion but no unsigned
+        u64 form. Values below 2^63 can use the signed conversion directly.
+        For the high half, subtract 2^63 in float space, convert the
+        remaining signed range, then add the 2^63 bit back.
+        """
+        buf = self.asm.b
+        if from_is_f64:
+            bits = struct.unpack("<Q", struct.pack("<d", float(1 << 63)))[0]
+            self.asm.mov_rax_imm64(bits)
+            self.asm.mov_mem_rbp_rax(res_slot)
+            self.asm.movsd_xmm0_mem_rbp(src_slot)
+            self.asm.movsd_xmm1_mem_rbp(res_slot)
+            self.asm.ucomisd_xmm0_xmm1()
+        else:
+            bits = struct.unpack("<I", struct.pack("<f", float(1 << 63)))[0]
+            self.asm.mov_eax_imm32(bits)
+            self.asm.mov_mem_rbp_eax(res_slot)
+            self.asm.movss_xmm0_mem_rbp(src_slot)
+            self.asm.movss_xmm1_mem_rbp(res_slot)
+            self.asm.ucomiss_xmm0_xmm1()
+
+        buf.emit(0x72, 0x00)  # jb low_path
+        jb_low_disp_off = buf.offset() - 1
+        jb_low_after = buf.offset()
+
+        if from_is_f64:
+            self.asm.subsd_xmm0_xmm1()
+            self.asm.cvttsd2si_rax_xmm0()
+        else:
+            self.asm.subss_xmm0_xmm1()
+            self.asm.cvttss2si_rax_xmm0()
+        self.asm.mov_rcx_imm64_bits(1 << 63)
+        self.asm.add_rax_rcx()
+        self.asm.mov_mem_rbp_rax(res_slot)
+        buf.emit(0xEB, 0x00)  # jmp done
+        jmp_done_disp_off = buf.offset() - 1
+        jmp_done_after = buf.offset()
+
+        low_addr = buf.offset()
+        d = low_addr - jb_low_after
+        if not -128 <= d <= 127:
+            raise ValueError(f"float-to-u64 low disp out of rel8: {d}")
+        buf.bytes_[jb_low_disp_off] = d & 0xFF
+        if from_is_f64:
+            self.asm.movsd_xmm0_mem_rbp(src_slot)
+            self.asm.cvttsd2si_rax_xmm0()
+        else:
+            self.asm.movss_xmm0_mem_rbp(src_slot)
+            self.asm.cvttss2si_rax_xmm0()
+        self.asm.mov_mem_rbp_rax(res_slot)
+
+        done_addr = buf.offset()
+        d = done_addr - jmp_done_after
+        if not -128 <= d <= 127:
+            raise ValueError(f"float-to-u64 done disp out of rel8: {d}")
+        buf.bytes_[jmp_done_disp_off] = d & 0xFF
+
     def _check_array_elem_size_supported(self, ty: tir.TIRType) -> None:
         """Audit 28.8 cycle 16 C16-1 (HIGH): LOAD_ELEM/STORE_ELEM
         currently emit unconditional 32-bit `mov eax, [...]` / `mov
@@ -1181,7 +1343,8 @@ class FnCompiler:
             )
 
     def _emit_idiv_guarded(self, l_slot: int, r_slot: int, res_slot: int,
-                           *, want_quotient: bool) -> None:
+                           *, want_quotient: bool,
+                           l_ty: tir.TIRType, r_ty: tir.TIRType) -> None:
         """Emit signed 32-bit integer division with the INT_MIN/-1 trap-avoidance
         guard. On x86, `idiv ecx` raises #DE when eax = INT_MIN and ecx = -1
         (the quotient INT_MIN/-1 = INT_MIN+1 doesn't fit signed 32, but at the
@@ -1205,14 +1368,14 @@ class FnCompiler:
           mov  [res], eax
         """
         buf = self.asm.b
-        self.asm.mov_eax_mem_rbp(l_slot)
-        self.asm.mov_ecx_mem_rbp(r_slot)
+        self._load_cmp_operand_rax(l_slot, l_ty, unsigned_compare=False)
+        self._load_cmp_operand_rcx(r_slot, r_ty, unsigned_compare=False)
 
         # Bug C fix: guard div-by-zero. cmp ecx, 0; je zero_path.
         # zero_path produces eax=0 for both quotient and remainder
         # (matching common safe-divide convention; no SIGFPE).
         buf.emit(0x83, 0xF9, 0x00)              # cmp ecx, 0
-        buf.emit(0x75, 0x05)                    # jne +5 (skip zero_path)
+        buf.emit(0x75, 0x04)                    # jne +4 (skip zero_path)
         # zero_path: xor eax, eax (2 bytes); jmp done (3 bytes — rel8)
         buf.emit(0x31, 0xC0)                    # xor eax, eax
         # We'll patch the jmp_done offset below; emit placeholder.
@@ -1271,6 +1434,142 @@ class FnCompiler:
         buf.bytes_[jmp_done_disp_off] = d3 & 0xFF
 
         self.asm.mov_mem_rbp_eax(res_slot)
+
+    def _emit_idiv64_guarded(self, l_slot: int, r_slot: int, res_slot: int,
+                             *, want_quotient: bool,
+                             l_ty: tir.TIRType, r_ty: tir.TIRType,
+                             res_is_64: bool) -> None:
+        """Emit signed 64-bit division/modulo with spec-defined edge cases."""
+        buf = self.asm.b
+        self._load_cmp_operand_rax(l_slot, l_ty, unsigned_compare=False)
+        self._load_cmp_operand_rcx(r_slot, r_ty, unsigned_compare=False)
+
+        buf.emit(0x48, 0x83, 0xF9, 0x00)        # cmp rcx, 0
+        buf.emit(0x75, 0x00)                    # jne check_overflow
+        jne_zero_disp_off = buf.offset() - 1
+        jne_zero_after = buf.offset()
+
+        buf.emit(0x31, 0xC0)                    # xor eax, eax
+        if res_is_64:
+            self.asm.mov_mem_rbp_rax(res_slot)
+        else:
+            self.asm.mov_mem_rbp_eax(res_slot)
+        buf.emit(0xEB, 0x00)                    # jmp done
+        zero_jmp_disp_off = buf.offset() - 1
+        zero_jmp_after = buf.offset()
+
+        check_overflow_addr = buf.offset()
+        buf.emit(0x48, 0x83, 0xF9, 0xFF)        # cmp rcx, -1
+        buf.emit(0x75, 0x00)                    # jne do_div
+        jne1_disp_off = buf.offset() - 1
+        jne1_after = buf.offset()
+
+        self.asm.mov_rdx_imm64_bits(1 << 63)
+        self.asm.cmp_rax_rdx()
+        buf.emit(0x75, 0x00)                    # jne do_div
+        jne2_disp_off = buf.offset() - 1
+        jne2_after = buf.offset()
+
+        if want_quotient:
+            self.asm.mov_rax_imm64(1 << 63)
+            if res_is_64:
+                self.asm.mov_mem_rbp_rax(res_slot)
+            else:
+                self.asm.mov_mem_rbp_eax(res_slot)
+        else:
+            buf.emit(0x31, 0xC0)                # xor eax, eax
+            if res_is_64:
+                self.asm.mov_mem_rbp_rax(res_slot)
+            else:
+                self.asm.mov_mem_rbp_eax(res_slot)
+        buf.emit(0xEB, 0x00)                    # jmp done
+        overflow_jmp_disp_off = buf.offset() - 1
+        overflow_jmp_after = buf.offset()
+
+        do_div_addr = buf.offset()
+        self.asm.cqo()
+        self.asm.idiv_rcx()
+        if want_quotient:
+            if res_is_64:
+                self.asm.mov_mem_rbp_rax(res_slot)
+            else:
+                self.asm.mov_mem_rbp_eax(res_slot)
+        else:
+            if res_is_64:
+                self.asm.mov_mem_rbp_rdx(res_slot)
+            else:
+                self.asm.mov_mem_rbp_edx(res_slot)
+
+        done_addr = buf.offset()
+        jumps = (
+            (check_overflow_addr - jne_zero_after, jne_zero_disp_off, "zero_jne"),
+            (done_addr - zero_jmp_after, zero_jmp_disp_off, "zero_jmp"),
+            (do_div_addr - jne1_after, jne1_disp_off, "minus_one_jne"),
+            (do_div_addr - jne2_after, jne2_disp_off, "int_min_jne"),
+            (done_addr - overflow_jmp_after, overflow_jmp_disp_off, "overflow_jmp"),
+        )
+        for d, off, name in jumps:
+            if not -128 <= d <= 127:
+                raise ValueError(f"idiv64-guard {name} disp out of rel8: {d}")
+            buf.bytes_[off] = d & 0xFF
+
+    def _emit_udiv_guarded(self, l_slot: int, r_slot: int, res_slot: int,
+                           *, want_quotient: bool, is_64: bool,
+                           l_ty: tir.TIRType, r_ty: tir.TIRType,
+                           res_is_64: bool) -> None:
+        """Emit unsigned integer division/modulo with div-by-zero -> 0."""
+        buf = self.asm.b
+        if is_64:
+            self._load_cmp_operand_rax(l_slot, l_ty, unsigned_compare=True)
+            self._load_cmp_operand_rcx(r_slot, r_ty, unsigned_compare=True)
+            buf.emit(0x48, 0x83, 0xF9, 0x00)  # cmp rcx, 0
+        else:
+            self._load_cmp_operand_rax(l_slot, l_ty, unsigned_compare=True)
+            self._load_cmp_operand_rcx(r_slot, r_ty, unsigned_compare=True)
+            buf.emit(0x83, 0xF9, 0x00)        # cmp ecx, 0
+        buf.emit(0x75, 0x00)                  # jne do_div
+        jne_disp_off = buf.offset() - 1
+        jne_after = buf.offset()
+
+        buf.emit(0x31, 0xC0)                  # xor eax, eax
+        if res_is_64:
+            self.asm.mov_mem_rbp_rax(res_slot)
+        else:
+            self.asm.mov_mem_rbp_eax(res_slot)
+        buf.emit(0xEB, 0x00)                  # jmp done
+        zero_jmp_disp_off = buf.offset() - 1
+        zero_jmp_after = buf.offset()
+
+        do_div_addr = buf.offset()
+        if is_64:
+            self.asm.xor_rdx_rdx()
+            self.asm.div_rcx()
+            if want_quotient:
+                if res_is_64:
+                    self.asm.mov_mem_rbp_rax(res_slot)
+                else:
+                    self.asm.mov_mem_rbp_eax(res_slot)
+            else:
+                if res_is_64:
+                    self.asm.mov_mem_rbp_rdx(res_slot)
+                else:
+                    self.asm.mov_mem_rbp_edx(res_slot)
+        else:
+            self.asm.xor_edx_edx()
+            self.asm.div_ecx()
+            if want_quotient:
+                self.asm.mov_mem_rbp_eax(res_slot)
+            else:
+                self.asm.mov_mem_rbp_edx(res_slot)
+
+        done_addr = buf.offset()
+        d0 = do_div_addr - jne_after
+        d1 = done_addr - zero_jmp_after
+        for d, name in ((d0, "jne"), (d1, "zero_jmp")):
+            if not -128 <= d <= 127:
+                raise ValueError(f"udiv-guard {name} disp out of rel8: {d}")
+        buf.bytes_[jne_disp_off] = d0 & 0xFF
+        buf.bytes_[zero_jmp_disp_off] = d1 & 0xFF
 
     def _emit_op(self, op: tir.Op, frame_size: int) -> None:
         if op.kind == tir.OpKind.CONST_INT:
@@ -1352,30 +1651,17 @@ class FnCompiler:
             # plus an unsigned-widening arm below closes all four.
             from_is_i64 = self._is_64bit_int_type(from_ty)
             to_is_i64 = self._is_64bit_int_type(to_ty)
-            # i64 -> i32: just take low 32 bits via 32-bit mov.
-            if from_is_i64 and not to_is_float and not to_is_i64:
-                self.asm.mov_eax_mem_rbp(src_slot)
-                self.asm.mov_mem_rbp_eax(res_slot)
-                return
-            # Stage 28.9 cycle 108 audit-S C107-F7 unsigned-widening arm
-            # (HIGH conf 85): u32/u16/u8 -> u64/i64 must ZERO-extend, not
-            # sign-extend. `mov eax, [src]` implicitly zero-extends the
-            # destination 32-bit reg's upper half to rax on x86-64; we
-            # then store the full 8-byte rax to the dest slot. Must fire
-            # BEFORE the i32->i64 movsxd arm below; otherwise a u32 source
-            # with the high bit set sign-extends to 0xFFFFFFFF_xxxxxxxx
-            # when it should zero-extend to 0x00000000_xxxxxxxx.
-            if (not from_is_float and not from_is_i64 and to_is_i64
-                    and self._is_unsigned_int_type(from_ty)):
-                self.asm.mov_eax_mem_rbp(src_slot)
-                self.asm.mov_mem_rbp_rax(res_slot)
-                return
-            # i32 -> i64: load 32-bit, sign-extend via movsxd rax, eax.
-            if not from_is_float and not from_is_i64 and to_is_i64:
-                self.asm.mov_eax_mem_rbp(src_slot)
-                # movsxd rax, eax = 48 63 C0 (sign-extend 32->64)
-                self.asm.b.emit(0x48, 0x63, 0xC0)
-                self.asm.mov_mem_rbp_rax(res_slot)
+            # Cycle 115: all integer-to-integer casts must respect the
+            # declared source width before choosing the destination store
+            # width. Raw 32-bit copies miscast wrapped u8/u16 values such
+            # as `0_u8 - 1_u8` as -1 instead of 255, and raw i16 copies
+            # miscast overflowed signed narrow values as positive.
+            if not from_is_float and not to_is_float:
+                self._load_cmp_operand_rax(src_slot, from_ty)
+                if to_is_i64:
+                    self.asm.mov_mem_rbp_rax(res_slot)
+                else:
+                    self.asm.mov_mem_rbp_eax(res_slot)
                 return
             # Unsigned u64/usize -> float needs the high-bit-safe sequence
             # because x86-64 SSE exposes only signed 64-bit cvtsi2s* forms.
@@ -1399,11 +1685,6 @@ class FnCompiler:
                 self.asm.b.emit(0xF3, 0x48, 0x0F, 0x2A, 0xC0)
                 self.asm.movss_mem_rbp_xmm0(res_slot)
                 return
-            # i64 -> i64: copy 8 bytes
-            if from_is_i64 and to_is_i64:
-                self.asm.mov_rax_mem_rbp(src_slot)
-                self.asm.mov_mem_rbp_rax(res_slot)
-                return
             # Stage 28.9 cycle 110 audit-S F3 fix (HIGH conf 88): when
             # the source is an unsigned int (u8/u16/u32), the
             # `cvtsi2sd`/`cvtsi2ss` instructions interpret the source as
@@ -1419,7 +1700,7 @@ class FnCompiler:
                     and self._is_unsigned_int_type(from_ty)
                     and not from_is_i64
                     and to_is_f64):
-                self.asm.mov_eax_mem_rbp(src_slot)
+                self._load_cmp_operand_rax(src_slot, from_ty)
                 # F2 48 0F 2A C0 = cvtsi2sd xmm0, rax
                 self.asm.b.emit(0xF2, 0x48, 0x0F, 0x2A, 0xC0)
                 self.asm.movsd_mem_rbp_xmm0(res_slot)
@@ -1428,22 +1709,46 @@ class FnCompiler:
                     and self._is_unsigned_int_type(from_ty)
                     and not from_is_i64
                     and to_is_float):
-                self.asm.mov_eax_mem_rbp(src_slot)
+                self._load_cmp_operand_rax(src_slot, from_ty)
                 # F3 48 0F 2A C0 = cvtsi2ss xmm0, rax
                 self.asm.b.emit(0xF3, 0x48, 0x0F, 0x2A, 0xC0)
                 self.asm.movss_mem_rbp_xmm0(res_slot)
                 return
             # i32 -> f64
             if not from_is_float and to_is_f64:
-                self.asm.mov_eax_mem_rbp(src_slot)
-                self.asm.cvtsi2sd_xmm0_eax()
+                self._load_cmp_operand_rax(src_slot, from_ty)
+                # F2 48 0F 2A C0 = cvtsi2sd xmm0, rax
+                self.asm.b.emit(0xF2, 0x48, 0x0F, 0x2A, 0xC0)
                 self.asm.movsd_mem_rbp_xmm0(res_slot)
                 return
             # i32 -> f32
             if not from_is_float and to_is_float:
-                self.asm.mov_eax_mem_rbp(src_slot)
-                self.asm.cvtsi2ss_xmm0_eax()
+                self._load_cmp_operand_rax(src_slot, from_ty)
+                # F3 48 0F 2A C0 = cvtsi2ss xmm0, rax
+                self.asm.b.emit(0xF3, 0x48, 0x0F, 0x2A, 0xC0)
                 self.asm.movss_mem_rbp_xmm0(res_slot)
+                return
+            # float -> u64/usize needs an unsigned high-half sequence; the
+            # signed cvtt*2si forms below return the indefinite value for
+            # inputs above i64::MAX.
+            if from_is_f64 and self._is_u64_type(to_ty):
+                self._emit_float_to_u64(src_slot, res_slot, from_is_f64=True)
+                return
+            if from_is_float and self._is_u64_type(to_ty):
+                self._emit_float_to_u64(src_slot, res_slot, from_is_f64=False)
+                return
+            # float -> signed 64-bit integer: use the REX.W cvtt*2si form
+            # and store the full rax result. The broad 32-bit arms below
+            # would silently truncate i64/isize destinations.
+            if from_is_f64 and to_is_i64:
+                self.asm.movsd_xmm0_mem_rbp(src_slot)
+                self.asm.cvttsd2si_rax_xmm0()
+                self.asm.mov_mem_rbp_rax(res_slot)
+                return
+            if from_is_float and to_is_i64:
+                self.asm.movss_xmm0_mem_rbp(src_slot)
+                self.asm.cvttss2si_rax_xmm0()
+                self.asm.mov_mem_rbp_rax(res_slot)
                 return
             # f64 -> i32
             if from_is_f64 and not to_is_float:
@@ -1505,8 +1810,15 @@ class FnCompiler:
                 # so u64/usize also take the 64-bit path. `add` is
                 # sign-agnostic at the machine level — same opcode for
                 # signed and unsigned addition; only width matters.
-                self.asm.mov_rax_mem_rbp(l_slot)
-                self.asm.mov_rcx_mem_rbp(r_slot)
+                force_unsigned = self._is_unsigned_int_type(op.results[0].ty)
+                self._load_cmp_operand_rax(
+                    l_slot, op.operands[0].ty,
+                    unsigned_compare=force_unsigned,
+                )
+                self._load_cmp_operand_rcx(
+                    r_slot, op.operands[1].ty,
+                    unsigned_compare=force_unsigned,
+                )
                 self.asm.add_rax_rcx()
                 self.asm.mov_mem_rbp_rax(res_slot)
             else:
@@ -1533,8 +1845,15 @@ class FnCompiler:
                 # Stage 28.9 cycle 102 audit-R C101-F2: extended to
                 # include u64/usize (see ADD note above). `sub` is
                 # sign-agnostic at the machine level.
-                self.asm.mov_rax_mem_rbp(l_slot)
-                self.asm.mov_rcx_mem_rbp(r_slot)
+                force_unsigned = self._is_unsigned_int_type(op.results[0].ty)
+                self._load_cmp_operand_rax(
+                    l_slot, op.operands[0].ty,
+                    unsigned_compare=force_unsigned,
+                )
+                self._load_cmp_operand_rcx(
+                    r_slot, op.operands[1].ty,
+                    unsigned_compare=force_unsigned,
+                )
                 self.asm.sub_rax_rcx()
                 self.asm.mov_mem_rbp_rax(res_slot)
             else:
@@ -1564,8 +1883,15 @@ class FnCompiler:
                 # via mul vs imul differs, which we don't capture in
                 # single-result use), so the same opcode is correct
                 # for both.
-                self.asm.mov_rax_mem_rbp(l_slot)
-                self.asm.mov_rcx_mem_rbp(r_slot)
+                force_unsigned = self._is_unsigned_int_type(op.results[0].ty)
+                self._load_cmp_operand_rax(
+                    l_slot, op.operands[0].ty,
+                    unsigned_compare=force_unsigned,
+                )
+                self._load_cmp_operand_rcx(
+                    r_slot, op.operands[1].ty,
+                    unsigned_compare=force_unsigned,
+                )
                 self.asm.imul_rax_rcx()
                 self.asm.mov_mem_rbp_rax(res_slot)
             else:
@@ -1578,6 +1904,17 @@ class FnCompiler:
             l_slot = self._slot_of(op.operands[0])
             r_slot = self._slot_of(op.operands[1])
             res_slot = self._slot_of(op.results[0])
+            res_ty = op.results[0].ty
+            res_is_64 = self._is_64bit_int_type(res_ty)
+            op_is_64 = (
+                res_is_64
+                or self._is_64bit_int_type(op.operands[0].ty)
+                or self._is_64bit_int_type(op.operands[1].ty)
+            )
+            any_unsigned = (
+                self._is_unsigned_int_type(op.operands[0].ty)
+                or self._is_unsigned_int_type(op.operands[1].ty)
+            )
             if self._is_f64_type(op.results[0].ty):
                 self.asm.movsd_xmm0_mem_rbp(l_slot)
                 self.asm.movsd_xmm1_mem_rbp(r_slot)
@@ -1588,32 +1925,65 @@ class FnCompiler:
                 self.asm.movss_xmm1_mem_rbp(r_slot)
                 self.asm.divss_xmm0_xmm1()
                 self.asm.movss_mem_rbp_xmm0(res_slot)
-            elif self._is_i64_type(op.results[0].ty):
-                # i64 division: cqo + idiv rcx. Skip the INT_MIN/-1 guard
-                # for now (rare edge case); div-by-zero still SIGFPEs.
-                self.asm.mov_rax_mem_rbp(l_slot)
-                self.asm.mov_rcx_mem_rbp(r_slot)
-                self.asm.cqo()
-                self.asm.idiv_rcx()
-                self.asm.mov_mem_rbp_rax(res_slot)
+            elif any_unsigned:
+                self._emit_udiv_guarded(l_slot, r_slot, res_slot,
+                                        want_quotient=True, is_64=op_is_64,
+                                        l_ty=op.operands[0].ty,
+                                        r_ty=op.operands[1].ty,
+                                        res_is_64=res_is_64)
+            elif op_is_64:
+                self._emit_idiv64_guarded(
+                    l_slot, r_slot, res_slot,
+                    want_quotient=True,
+                    l_ty=op.operands[0].ty,
+                    r_ty=op.operands[1].ty,
+                    res_is_64=res_is_64,
+                )
             else:
-                self._emit_idiv_guarded(l_slot, r_slot, res_slot, want_quotient=True)
+                self._emit_idiv_guarded(
+                    l_slot, r_slot, res_slot,
+                    want_quotient=True,
+                    l_ty=op.operands[0].ty,
+                    r_ty=op.operands[1].ty,
+                )
             return
         if op.kind == tir.OpKind.MOD:
             l_slot = self._slot_of(op.operands[0])
             r_slot = self._slot_of(op.operands[1])
             res_slot = self._slot_of(op.results[0])
-            if self._is_i64_type(op.results[0].ty):
-                # i64 modulo: cqo + idiv rcx; remainder lands in rdx.
-                # Match the i64 DIV path: skip the INT_MIN/-1 guard
-                # (rare edge case); div-by-zero still SIGFPEs.
-                self.asm.mov_rax_mem_rbp(l_slot)
-                self.asm.mov_rcx_mem_rbp(r_slot)
-                self.asm.cqo()
-                self.asm.idiv_rcx()
-                self.asm.mov_mem_rbp_rdx(res_slot)
+            res_ty = op.results[0].ty
+            res_is_64 = self._is_64bit_int_type(res_ty)
+            op_is_64 = (
+                res_is_64
+                or self._is_64bit_int_type(op.operands[0].ty)
+                or self._is_64bit_int_type(op.operands[1].ty)
+            )
+            any_unsigned = (
+                self._is_unsigned_int_type(op.operands[0].ty)
+                or self._is_unsigned_int_type(op.operands[1].ty)
+            )
+            if any_unsigned:
+                self._emit_udiv_guarded(l_slot, r_slot, res_slot,
+                                        want_quotient=False, is_64=op_is_64,
+                                        l_ty=op.operands[0].ty,
+                                        r_ty=op.operands[1].ty,
+                                        res_is_64=res_is_64)
                 return
-            self._emit_idiv_guarded(l_slot, r_slot, res_slot, want_quotient=False)
+            if op_is_64:
+                self._emit_idiv64_guarded(
+                    l_slot, r_slot, res_slot,
+                    want_quotient=False,
+                    l_ty=op.operands[0].ty,
+                    r_ty=op.operands[1].ty,
+                    res_is_64=res_is_64,
+                )
+                return
+            self._emit_idiv_guarded(
+                l_slot, r_slot, res_slot,
+                want_quotient=False,
+                l_ty=op.operands[0].ty,
+                r_ty=op.operands[1].ty,
+            )
             return
         # Bitwise integer ops: 32-bit and-eax-ecx / or-eax-ecx / xor-eax-ecx,
         # 64-bit AND/OR/XOR via REX.W variants. Float operands are nonsense
@@ -1630,8 +2000,15 @@ class FnCompiler:
             r_slot = self._slot_of(op.operands[1])
             res_slot = self._slot_of(op.results[0])
             if self._is_64bit_int_type(op.results[0].ty):
-                self.asm.mov_rax_mem_rbp(l_slot)
-                self.asm.mov_rcx_mem_rbp(r_slot)
+                force_unsigned = self._is_unsigned_int_type(op.results[0].ty)
+                self._load_cmp_operand_rax(
+                    l_slot, op.operands[0].ty,
+                    unsigned_compare=force_unsigned,
+                )
+                self._load_cmp_operand_rcx(
+                    r_slot, op.operands[1].ty,
+                    unsigned_compare=force_unsigned,
+                )
                 self.asm.and_rax_rcx()
                 self.asm.mov_mem_rbp_rax(res_slot)
             else:
@@ -1645,8 +2022,15 @@ class FnCompiler:
             r_slot = self._slot_of(op.operands[1])
             res_slot = self._slot_of(op.results[0])
             if self._is_64bit_int_type(op.results[0].ty):
-                self.asm.mov_rax_mem_rbp(l_slot)
-                self.asm.mov_rcx_mem_rbp(r_slot)
+                force_unsigned = self._is_unsigned_int_type(op.results[0].ty)
+                self._load_cmp_operand_rax(
+                    l_slot, op.operands[0].ty,
+                    unsigned_compare=force_unsigned,
+                )
+                self._load_cmp_operand_rcx(
+                    r_slot, op.operands[1].ty,
+                    unsigned_compare=force_unsigned,
+                )
                 self.asm.or_rax_rcx()
                 self.asm.mov_mem_rbp_rax(res_slot)
             else:
@@ -1660,8 +2044,15 @@ class FnCompiler:
             r_slot = self._slot_of(op.operands[1])
             res_slot = self._slot_of(op.results[0])
             if self._is_64bit_int_type(op.results[0].ty):
-                self.asm.mov_rax_mem_rbp(l_slot)
-                self.asm.mov_rcx_mem_rbp(r_slot)
+                force_unsigned = self._is_unsigned_int_type(op.results[0].ty)
+                self._load_cmp_operand_rax(
+                    l_slot, op.operands[0].ty,
+                    unsigned_compare=force_unsigned,
+                )
+                self._load_cmp_operand_rcx(
+                    r_slot, op.operands[1].ty,
+                    unsigned_compare=force_unsigned,
+                )
                 self.asm.xor_rax_rcx()
                 self.asm.mov_mem_rbp_rax(res_slot)
             else:
@@ -1867,12 +2258,34 @@ class FnCompiler:
                 )
                 setters = unsigned_int_cmp_setters if use_unsigned else int_cmp_setters
                 if use_64:
-                    self.asm.mov_rax_mem_rbp(l_slot)
-                    self.asm.mov_rcx_mem_rbp(r_slot)
+                    # Cycle 115 audit: compare width is chosen by the
+                    # widest operand, but each operand still needs to be
+                    # widened according to its own source type. Loading a
+                    # u32 slot with a 64-bit mov reads stale high bytes.
+                    self._load_cmp_operand_rax(
+                        l_slot, op.operands[0].ty,
+                        unsigned_compare=use_unsigned,
+                    )
+                    self._load_cmp_operand_rcx(
+                        r_slot, op.operands[1].ty,
+                        unsigned_compare=use_unsigned,
+                    )
                     self.asm.cmp_rax_rcx()
                 else:
-                    self.asm.mov_eax_mem_rbp(l_slot)
-                    self.asm.mov_ecx_mem_rbp(r_slot)
+                    # Cycle 115 sibling: sub-32-bit values are stored in
+                    # 32-bit slots, so earlier arithmetic may leave high
+                    # bits outside the declared u8/u16/i8/i16 width. The
+                    # compare must reload by source type, just like the
+                    # 64-bit mixed-width path, before picking signed vs
+                    # unsigned setcc.
+                    self._load_cmp_operand_rax(
+                        l_slot, op.operands[0].ty,
+                        unsigned_compare=use_unsigned,
+                    )
+                    self._load_cmp_operand_rcx(
+                        r_slot, op.operands[1].ty,
+                        unsigned_compare=use_unsigned,
+                    )
                     self.asm.cmp_eax_ecx()
                 setters[op.kind]()
             self.asm.movzx_eax_al()

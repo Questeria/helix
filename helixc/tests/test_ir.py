@@ -802,6 +802,68 @@ def test_c112_cast_i64_to_f32_uses_64bit_signed_path():
     )
 
 
+def test_c115_cast_f64_to_i64_uses_64bit_result_path():
+    """Cycle-115: f64->i64 must emit REX.W cvttsd2si into rax."""
+    from helixc.backend.x86_64 import compile_module_to_elf
+    src = """
+    fn f64_to_i64(x: f64) -> i64 {
+        x as i64
+    }
+    fn main() -> i32 { 0 }
+    """
+    elf = compile_module_to_elf(lower_src(src))
+    assert b"\xf2\x48\x0f\x2c\xc0" in elf, (
+        "expected REX.W cvttsd2si rax, xmm0 (F2 48 0F 2C C0) for f64->i64"
+    )
+
+
+def test_c115_cast_f32_to_i64_uses_64bit_result_path():
+    """Cycle-115: f32->i64 must emit REX.W cvttss2si into rax."""
+    from helixc.backend.x86_64 import compile_module_to_elf
+    src = """
+    fn f32_to_i64(x: f32) -> i64 {
+        x as i64
+    }
+    fn main() -> i32 { 0 }
+    """
+    elf = compile_module_to_elf(lower_src(src))
+    assert b"\xf3\x48\x0f\x2c\xc0" in elf, (
+        "expected REX.W cvttss2si rax, xmm0 (F3 48 0F 2C C0) for f32->i64"
+    )
+
+
+def test_c115_div_u64_emits_unsigned_64bit_form():
+    """Cycle-115: u64 division must use unsigned 64-bit div rcx."""
+    from helixc.backend.x86_64 import compile_module_to_elf
+    src = """
+    fn div_u64(a: u64, b: u64) -> u64 { a / b }
+    fn main() -> i32 { 0 }
+    """
+    elf = compile_module_to_elf(lower_src(src))
+    assert b"\x48\x31\xd2" in elf, (
+        "expected xor rdx, rdx before unsigned u64 division"
+    )
+    assert b"\x48\xf7\xf1" in elf, (
+        "expected REX.W `div rcx` (48 F7 F1) for u64 DIV"
+    )
+    assert b"\x48\xf7\xf9" not in elf, (
+        "u64 DIV must not use signed `idiv rcx`"
+    )
+
+
+def test_c115_mod_u64_emits_unsigned_64bit_form():
+    """Cycle-115: u64 modulo must use unsigned 64-bit div and rdx."""
+    from helixc.backend.x86_64 import compile_module_to_elf
+    src = """
+    fn mod_u64(a: u64, b: u64) -> u64 { a % b }
+    fn main() -> i32 { 0 }
+    """
+    elf = compile_module_to_elf(lower_src(src))
+    assert b"\x48\xf7\xf1" in elf, (
+        "expected REX.W `div rcx` (48 F7 F1) for u64 MOD"
+    )
+
+
 def test_c110_bit_and_u64_emits_64bit_form():
     """C109-SF-F4 regression (HIGH conf 92): BIT_AND on u64 must emit
     `and rax, rcx` (48 21 C8). Pre-fix the predicate `_is_i64_type`
@@ -905,6 +967,125 @@ def test_c111_shr_u32_emits_logical_32bit_form():
     assert b"\xd3\xf8" not in elf, (
         "u32 SHR must not use arithmetic `sar eax, cl`"
     )
+
+
+def test_c115_mixed_width_unsigned_compare_zero_extends_narrow_operand():
+    """Cycle-115: u32-vs-u64 compare must not 64-bit-load the u32 slot."""
+    import re
+    from helixc.backend.x86_64 import compile_module_to_elf
+    src = """
+    fn cmp_u32_u64(a: u32, b: u64) -> i32 { if a > b { 1 } else { 0 } }
+    fn main() -> i32 { 0 }
+    """
+    elf = compile_module_to_elf(lower_src(src))
+    assert re.search(rb"\x8b\x45.\x48\x8b\x4d.\x48\x39\xc8", elf, re.S), (
+        "expected mixed-width compare to load u32 with `mov eax, [rbp+disp]` "
+        "then u64 with `mov rcx, [rbp+disp]` before `cmp rax, rcx`"
+    )
+    assert b"\x48\x8b\x45" not in elf[elf.find(b"\x8b\x45") - 8:elf.find(b"\x48\x39\xc8")], (
+        "u32 side of a mixed-width compare must not use a 64-bit load"
+    )
+
+
+def test_c115_u8_unsigned_compare_masks_declared_width():
+    """Cycle-115: u8 compare masks the 32-bit slot before setcc."""
+    from helixc.backend.x86_64 import compile_module_to_elf
+    src = """
+    fn cmp_u8_u32(a: u8, b: u32) -> i32 { if a > b { 1 } else { 0 } }
+    fn main() -> i32 { 0 }
+    """
+    elf = compile_module_to_elf(lower_src(src))
+    assert b"\x25\xff\x00\x00\x00" in elf, (
+        "expected `and eax, 0xff` before comparing a u8 value from a 32-bit slot"
+    )
+
+
+def test_c115_u8_cast_to_i32_masks_declared_width():
+    """Cycle-115: u8->i32 cast must not raw-copy hidden slot bits."""
+    from helixc.backend.x86_64 import compile_module_to_elf
+    src = """
+    fn cast_u8_i32(a: u8) -> i32 { a as i32 }
+    fn main() -> i32 { 0 }
+    """
+    elf = compile_module_to_elf(lower_src(src))
+    assert b"\x25\xff\x00\x00\x00" in elf, (
+        "expected `and eax, 0xff` before storing a u8->i32 cast result"
+    )
+
+
+def test_c115_f64_to_u64_uses_unsigned_high_half_sequence():
+    """Cycle-115: f64 -> u64 needs subtract-2^63 unsigned conversion path."""
+    from helixc.backend.x86_64 import compile_module_to_elf
+    src = """
+    fn cast_hi(x: f64) -> u64 { x as u64 }
+    fn main() -> i32 { 0 }
+    """
+    elf = compile_module_to_elf(lower_src(src))
+    assert b"\xf2\x0f\x5c\xc1" in elf, (
+        "expected `subsd xmm0, xmm1` in f64 -> u64 high-half conversion"
+    )
+    assert b"\x48\xb9\x00\x00\x00\x00\x00\x00\x00\x80" in elf, (
+        "expected `mov rcx, 0x8000000000000000` before adding high bit back"
+    )
+
+
+def test_c115_u64_div_u32_zero_extends_rhs_before_64bit_div():
+    """Cycle-115: mixed-width unsigned div must widen operands individually."""
+    import re
+    from helixc.backend.x86_64 import compile_module_to_elf
+    src = """
+    fn div_u64_u32(a: u64, b: u32) -> u64 { a / b }
+    fn main() -> i32 { 0 }
+    """
+    elf = compile_module_to_elf(lower_src(src))
+    assert re.search(rb"\x48\x8b\x45.\x8b\x4d.\x48\x83\xf9\x00", elf, re.S), (
+        "expected u64/u32 div to load lhs with `mov rax, [...]`, load rhs "
+        "with `mov ecx, [...]` (zero-extending rcx), then guard `cmp rcx, 0`"
+    )
+
+
+def test_c115_u64_arithmetic_u32_zero_extends_rhs_before_64bit_op():
+    """Cycle-115: mixed-width 64-bit arithmetic widens operands by own type."""
+    import re
+    from helixc.backend.x86_64 import compile_module_to_elf
+    cases = [
+        ("+", b"\x48\x01\xc8", "add"),
+        ("-", b"\x48\x29\xc8", "sub"),
+        ("*", b"\x48\x0f\xaf\xc1", "imul"),
+    ]
+    for op, opcode, name in cases:
+        src = f"""
+        fn arith_u64_u32(a: u64, b: u32) -> u64 {{ a {op} b }}
+        fn main() -> i32 {{ 0 }}
+        """
+        elf = compile_module_to_elf(lower_src(src))
+        pattern = rb"\x48\x8b\x45.\x8b\x4d." + re.escape(opcode)
+        assert re.search(pattern, elf, re.S), (
+            f"expected u64/u32 {name} to load lhs with `mov rax, [...]`, "
+            f"load rhs with `mov ecx, [...]`, then emit the 64-bit {name}"
+        )
+
+
+def test_c115_u64_bitwise_u32_zero_extends_rhs_before_64bit_op():
+    """Cycle-115: mixed-width 64-bit bitwise ops widen operands by own type."""
+    import re
+    from helixc.backend.x86_64 import compile_module_to_elf
+    cases = [
+        ("&", b"\x48\x21\xc8", "and"),
+        ("|", b"\x48\x09\xc8", "or"),
+        ("^", b"\x48\x31\xc8", "xor"),
+    ]
+    for op, opcode, name in cases:
+        src = f"""
+        fn bit_u64_u32(a: u64, b: u32) -> u64 {{ a {op} b }}
+        fn main() -> i32 {{ 0 }}
+        """
+        elf = compile_module_to_elf(lower_src(src))
+        pattern = rb"\x48\x8b\x45.\x8b\x4d." + re.escape(opcode)
+        assert re.search(pattern, elf, re.S), (
+            f"expected u64/u32 bitwise {name} to load lhs with `mov rax, [...]`, "
+            f"load rhs with `mov ecx, [...]`, then emit the 64-bit {name}"
+        )
 
 
 def test_c110_bit_not_u64_emits_64bit_form():

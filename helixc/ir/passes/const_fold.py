@@ -123,6 +123,34 @@ def _int_bits_for_type(ty: "tir.TIRType") -> int:
     return 32
 
 
+def _unsigned_magnitude(value: int, ty: "tir.TIRType") -> int:
+    bits = _int_bits_for_type(ty)
+    return value & ((1 << bits) - 1)
+
+
+def _source_widen_int(value: int, ty: "tir.TIRType") -> int:
+    """Match runtime operand loading before the operation chooses signedness."""
+    if _is_unsigned_int_type(ty):
+        return _unsigned_magnitude(value, ty)
+    return _wrap_int_to_type(value, ty)
+
+
+def _unsigned_domain(value: int, bits: int) -> int:
+    return value & ((1 << bits) - 1)
+
+
+def _binary_int_bits(left: "tir.TIRType", right: "tir.TIRType",
+                     res: "tir.TIRType") -> int:
+    max_bits = max(_int_bits_for_type(left),
+                   _int_bits_for_type(right),
+                   _int_bits_for_type(res))
+    return 64 if max_bits == 64 else 32
+
+
+def _compare_int_bits(left: "tir.TIRType", right: "tir.TIRType") -> int:
+    return 64 if max(_int_bits_for_type(left), _int_bits_for_type(right)) == 64 else 32
+
+
 def _wrap_int_to_type(value: int, ty: "tir.TIRType") -> int:
     """Wrap a Python int to the signed range of the given TIR scalar type
     (two's-complement, like x86 hardware). Phase 0 backend uses this same
@@ -336,23 +364,28 @@ def _algebraic_forward(op: tir.Op, defs: dict) -> "tir.Value | None":
                 return False
         return False
 
+    def same_result_type(v: tir.Value) -> bool:
+        return v.ty == op.results[0].ty
+
     # x * 1, 1 * x  → x
     if op.kind == tir.OpKind.MUL:
-        if is_const(r_def, 1):
+        if is_const(r_def, 1) and same_result_type(op.operands[0]):
             return op.operands[0]
-        if is_const(l_def, 1):
+        if is_const(l_def, 1) and same_result_type(op.operands[1]):
             return op.operands[1]
     # x + 0, 0 + x  → x
     if op.kind == tir.OpKind.ADD:
-        if is_const(r_def, 0):
+        if is_const(r_def, 0) and same_result_type(op.operands[0]):
             return op.operands[0]
-        if is_const(l_def, 0):
+        if is_const(l_def, 0) and same_result_type(op.operands[1]):
             return op.operands[1]
     # x - 0  → x  (note: 0 - x is NEG; we don't forward that here)
-    if op.kind == tir.OpKind.SUB and is_const(r_def, 0):
+    if (op.kind == tir.OpKind.SUB and is_const(r_def, 0)
+            and same_result_type(op.operands[0])):
         return op.operands[0]
     # x / 1  → x  (int + float)
-    if op.kind == tir.OpKind.DIV and is_const(r_def, 1):
+    if (op.kind == tir.OpKind.DIV and is_const(r_def, 1)
+            and same_result_type(op.operands[0])):
         return op.operands[0]
     return None
 
@@ -381,9 +414,17 @@ def _try_fold_op(op: tir.Op, defs: dict) -> tir.Op | None:
         if l_def is None or r_def is None:
             return None
         if l_def.kind == tir.OpKind.CONST_INT and r_def.kind == tir.OpKind.CONST_INT:
-            l = int(l_def.attrs["value"])
-            r = int(r_def.attrs["value"])
+            l = _source_widen_int(int(l_def.attrs["value"]), op.operands[0].ty)
+            r = _source_widen_int(int(r_def.attrs["value"]), op.operands[1].ty)
             try:
+                any_unsigned_operand = (
+                    _is_unsigned_int_type(op.operands[0].ty)
+                    or _is_unsigned_int_type(op.operands[1].ty)
+                )
+                is_unsigned_div_mod = (
+                    op.kind in (tir.OpKind.DIV, tir.OpKind.MOD)
+                    and any_unsigned_operand
+                )
                 if op.kind == tir.OpKind.ADD:
                     v = l + r
                 elif op.kind == tir.OpKind.SUB:
@@ -393,17 +434,37 @@ def _try_fold_op(op: tir.Op, defs: dict) -> tir.Op | None:
                 elif op.kind == tir.OpKind.DIV:
                     if r == 0:
                         return None
-                    # C / x86 idiv semantics: truncate toward zero.
-                    # Python's // truncates toward -inf, so we must compute
-                    # |l| // |r| and apply the sign.
-                    sign = -1 if (l < 0) != (r < 0) else 1
-                    v = sign * (abs(l) // abs(r))
+                    if is_unsigned_div_mod:
+                        bits = _binary_int_bits(op.operands[0].ty,
+                                                op.operands[1].ty,
+                                                res.ty)
+                        lu = _unsigned_domain(l, bits)
+                        ru = _unsigned_domain(r, bits)
+                        if ru == 0:
+                            return None
+                        v = lu // ru
+                    else:
+                        # C / x86 idiv semantics: truncate toward zero.
+                        # Python's // truncates toward -inf, so we compute
+                        # |l| // |r| and apply the sign.
+                        sign = -1 if (l < 0) != (r < 0) else 1
+                        v = sign * (abs(l) // abs(r))
                 elif op.kind == tir.OpKind.MOD:
                     if r == 0:
                         return None
-                    # C/idiv semantics: result has the sign of the dividend.
-                    sign = -1 if l < 0 else 1
-                    v = sign * (abs(l) % abs(r))
+                    if is_unsigned_div_mod:
+                        bits = _binary_int_bits(op.operands[0].ty,
+                                                op.operands[1].ty,
+                                                res.ty)
+                        lu = _unsigned_domain(l, bits)
+                        ru = _unsigned_domain(r, bits)
+                        if ru == 0:
+                            return None
+                        v = lu % ru
+                    else:
+                        # C/idiv semantics: result has the sign of the dividend.
+                        sign = -1 if l < 0 else 1
+                        v = sign * (abs(l) % abs(r))
                 else:
                     return None
             except FoldError:
@@ -479,9 +540,10 @@ def _try_fold_op(op: tir.Op, defs: dict) -> tir.Op | None:
         if l_def is None or r_def is None:
             return None
         if l_def.kind == tir.OpKind.CONST_INT and r_def.kind == tir.OpKind.CONST_INT:
-            l = int(l_def.attrs["value"])
-            r = int(r_def.attrs["value"])
+            l = _source_widen_int(int(l_def.attrs["value"]), op.operands[0].ty)
+            r = _source_widen_int(int(r_def.attrs["value"]), op.operands[1].ty)
             try:
+                res_ty = op.results[0].ty if op.results else None
                 if op.kind == tir.OpKind.BIT_AND:
                     v = l & r
                 elif op.kind == tir.OpKind.BIT_OR:
@@ -565,16 +627,12 @@ def _try_fold_op(op: tir.Op, defs: dict) -> tir.Op | None:
         if l_def is None or r_def is None:
             return None
         if l_def.kind == tir.OpKind.CONST_INT and r_def.kind == tir.OpKind.CONST_INT:
-            l = int(l_def.attrs["value"])
-            r = int(r_def.attrs["value"])
+            l = _source_widen_int(int(l_def.attrs["value"]), op.operands[0].ty)
+            r = _source_widen_int(int(r_def.attrs["value"]), op.operands[1].ty)
             if _is_unsigned_int_type(op.operands[0].ty) or _is_unsigned_int_type(op.operands[1].ty):
-                bits = max(
-                    _int_bits_for_type(op.operands[0].ty),
-                    _int_bits_for_type(op.operands[1].ty),
-                )
-                mask = (1 << bits) - 1
-                l = l & mask
-                r = r & mask
+                bits = _compare_int_bits(op.operands[0].ty, op.operands[1].ty)
+                l = _unsigned_domain(l, bits)
+                r = _unsigned_domain(r, bits)
             cmp_map = {
                 tir.OpKind.CMP_EQ: l == r,
                 tir.OpKind.CMP_NE: l != r,

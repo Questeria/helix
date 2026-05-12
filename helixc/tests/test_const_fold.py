@@ -156,6 +156,284 @@ def test_c112_fold_u64_high_bit_compare_is_unsigned():
     assert 1 in consts, f"expected unsigned u64 compare to fold true, got {consts}"
 
 
+def test_c115_fold_mixed_width_unsigned_compare_zero_extends_narrow_operand():
+    """Cycle-115: high-bit u32 compared with u64 must zero-extend u32."""
+    mod = lower_and_fold("""
+    fn f() -> bool {
+        let x: u32 = (1_u32 << 31_u32) >> 0_u32;
+        x > 3_000_000_000_u64
+    }
+    """)
+    assert count_ops(mod, tir.OpKind.CMP_GT) == 0
+    consts = [op.attrs["value"] for fn in mod.functions.values()
+              for blk in fn.blocks for op in blk.ops
+              if op.kind == tir.OpKind.CONST_INT]
+    assert 0 in consts, f"expected mixed-width unsigned compare false, got {consts}"
+
+
+def test_c115_fold_u64_div_mod_are_unsigned():
+    """Cycle-115: high-bit u64 DIV/MOD folds with unsigned semantics."""
+    mod = lower_and_fold("""
+    fn f() -> bool {
+        ((1_u64 << 63_u64) / 2_u64) > 0_u64
+    }
+    """)
+    assert count_ops(mod, tir.OpKind.DIV) == 0
+    assert count_ops(mod, tir.OpKind.CMP_GT) == 0
+    consts = [op.attrs["value"] for fn in mod.functions.values()
+              for blk in fn.blocks for op in blk.ops
+              if op.kind == tir.OpKind.CONST_INT]
+    assert 1 in consts, f"expected folded unsigned u64 DIV compare true, got {consts}"
+
+    mod2 = lower_and_fold("""
+    fn f() -> u64 {
+        ((1_u64 << 63_u64) + 42_u64) % (1_u64 << 63_u64)
+    }
+    """)
+    assert count_ops(mod2, tir.OpKind.MOD) == 0
+    consts2 = [op.attrs["value"] for fn in mod2.functions.values()
+               for blk in fn.blocks for op in blk.ops
+               if op.kind == tir.OpKind.CONST_INT]
+    assert 42 in consts2, f"expected folded unsigned u64 MOD to produce 42, got {consts2}"
+
+
+def test_c115_fold_div_mod_with_any_unsigned_operand_are_unsigned():
+    """Cycle-115: mixed signed/unsigned DIV/MOD folds in the unsigned domain."""
+    mod = lower_and_fold("""
+    fn f() -> i64 {
+        10_i64 / 18446744073709551615_u64
+    }
+    """)
+    assert count_ops(mod, tir.OpKind.DIV) == 0
+    consts = [op.attrs["value"] for fn in mod.functions.values()
+              for blk in fn.blocks for op in blk.ops
+              if op.kind == tir.OpKind.CONST_INT]
+    assert 0 in consts, f"expected mixed signed/unsigned DIV to fold to 0, got {consts}"
+
+    mod2 = lower_and_fold("""
+    fn f() -> i64 {
+        10_i64 % 18446744073709551615_u64
+    }
+    """)
+    assert count_ops(mod2, tir.OpKind.MOD) == 0
+    consts2 = [op.attrs["value"] for fn in mod2.functions.values()
+               for blk in fn.blocks for op in blk.ops
+               if op.kind == tir.OpKind.CONST_INT]
+    assert 10 in consts2, f"expected mixed signed/unsigned MOD to fold to 10, got {consts2}"
+
+
+def test_c115_fold_mixed_signed_unsigned_ops_zero_extend_unsigned_operand():
+    """Cycle-115: const-fold mirrors runtime zero-extension of unsigned operands."""
+    mod = lower_and_fold("""
+    fn f() -> i64 {
+        1_i64 + ((1_u32 << 31_u32) >> 0_u32)
+    }
+    """)
+    assert count_ops(mod, tir.OpKind.ADD) == 0
+    consts = [op.attrs["value"] for fn in mod.functions.values()
+              for blk in fn.blocks for op in blk.ops
+              if op.kind == tir.OpKind.CONST_INT]
+    assert 2147483649 in consts, (
+        f"expected mixed signed/unsigned ADD to fold with u32 zero-extension, got {consts}"
+    )
+
+    mod2 = lower_and_fold("""
+    fn f() -> i64 {
+        1_i64 | ((1_u32 << 31_u32) >> 0_u32)
+    }
+    """)
+    assert count_ops(mod2, tir.OpKind.BIT_OR) == 0
+    consts2 = [op.attrs["value"] for fn in mod2.functions.values()
+               for blk in fn.blocks for op in blk.ops
+               if op.kind == tir.OpKind.CONST_INT]
+    assert 2147483649 in consts2, (
+        f"expected mixed signed/unsigned BIT_OR to fold with u32 zero-extension, got {consts2}"
+    )
+
+
+def test_c115_fold_unsigned_domain_sign_extends_signed_operands():
+    """Cycle-115: unsigned-domain folds still widen signed sources as signed."""
+    add_mod = lower_and_fold("""
+    fn f() -> u64 {
+        0_u64 + (0_i32 - 1_i32)
+    }
+    """)
+    assert count_ops(add_mod, tir.OpKind.ADD) == 0
+    add_consts = [op.attrs["value"] for fn in add_mod.functions.values()
+                  for blk in fn.blocks for op in blk.ops
+                  if op.kind == tir.OpKind.CONST_INT]
+    assert -1 in add_consts, (
+        f"expected signed i32 -1 to sign-extend before u64 ADD, got {add_consts}"
+    )
+
+    bit_mod = lower_and_fold("""
+    fn f() -> u64 {
+        0_u64 | (0_i32 - 1_i32)
+    }
+    """)
+    assert count_ops(bit_mod, tir.OpKind.BIT_OR) == 0
+    bit_consts = [op.attrs["value"] for fn in bit_mod.functions.values()
+                  for blk in fn.blocks for op in blk.ops
+                  if op.kind == tir.OpKind.CONST_INT]
+    assert -1 in bit_consts, (
+        f"expected signed i32 -1 to sign-extend before u64 BIT_OR, got {bit_consts}"
+    )
+
+    cmp_mod = lower_and_fold("""
+    fn f() -> bool {
+        (0_i32 - 1_i32) > 0_u64
+    }
+    """)
+    assert count_ops(cmp_mod, tir.OpKind.CMP_GT) == 0
+    cmp_consts = [op.attrs["value"] for fn in cmp_mod.functions.values()
+                  for blk in fn.blocks for op in blk.ops
+                  if op.kind == tir.OpKind.CONST_INT]
+    assert 1 in cmp_consts, (
+        f"expected sign-extended -1 to compare above 0 in unsigned domain, got {cmp_consts}"
+    )
+
+    div_mod = lower_and_fold("""
+    fn f() -> u64 {
+        10_u64 / (0_i32 - 1_i32)
+    }
+    """)
+    assert count_ops(div_mod, tir.OpKind.DIV) == 0
+    div_consts = [op.attrs["value"] for fn in div_mod.functions.values()
+                  for blk in fn.blocks for op in blk.ops
+                  if op.kind == tir.OpKind.CONST_INT]
+    assert 0 in div_consts, (
+        f"expected 10 / sign-extended -1 to fold to 0 unsigned, got {div_consts}"
+    )
+
+
+def test_c115_fold_sub32_unsigned_compare_masks_declared_width():
+    """Cycle-115: u8/u16 compares use declared width, not raw 32-bit slots."""
+    u8_mod = lower_and_fold("""
+    fn f() -> bool {
+        let x: u8 = 0_u8 - 1_u8;
+        x > 300_u32
+    }
+    """)
+    assert count_ops(u8_mod, tir.OpKind.CMP_GT) == 0
+    u8_consts = [op.attrs["value"] for fn in u8_mod.functions.values()
+                 for blk in fn.blocks for op in blk.ops
+                 if op.kind == tir.OpKind.CONST_INT]
+    assert 0 in u8_consts, (
+        f"expected 255_u8 > 300_u32 to fold false, got {u8_consts}"
+    )
+
+    u16_mod = lower_and_fold("""
+    fn f() -> bool {
+        let x: u16 = 0_u16 - 1_u16;
+        x > 70000_u32
+    }
+    """)
+    assert count_ops(u16_mod, tir.OpKind.CMP_GT) == 0
+    u16_consts = [op.attrs["value"] for fn in u16_mod.functions.values()
+                  for blk in fn.blocks for op in blk.ops
+                  if op.kind == tir.OpKind.CONST_INT]
+    assert 0 in u16_consts, (
+        f"expected 65535_u16 > 70000_u32 to fold false, got {u16_consts}"
+    )
+
+
+def test_c115_fold_narrow_mixed_unsigned_domain_uses_runtime_32bit_width():
+    """Cycle-115: narrow mixed unsigned compares/divides fold at 32-bit width."""
+    eq_mod = lower_and_fold("""
+    fn f() -> bool {
+        (0_i8 - 1_i8) == 65535_u16
+    }
+    """)
+    assert count_ops(eq_mod, tir.OpKind.CMP_EQ) == 0
+    eq_consts = [op.attrs["value"] for fn in eq_mod.functions.values()
+                 for blk in fn.blocks for op in blk.ops
+                 if op.kind == tir.OpKind.CONST_INT]
+    assert 0 in eq_consts, (
+        f"expected i8 -1 to compare as 0xffffffff, not 0xffff, got {eq_consts}"
+    )
+
+    gt_mod = lower_and_fold("""
+    fn f() -> bool {
+        (0_i8 - 1_i8) > 65535_u16
+    }
+    """)
+    assert count_ops(gt_mod, tir.OpKind.CMP_GT) == 0
+    gt_consts = [op.attrs["value"] for fn in gt_mod.functions.values()
+                 for blk in fn.blocks for op in blk.ops
+                 if op.kind == tir.OpKind.CONST_INT]
+    assert 1 in gt_consts, (
+        f"expected 0xffffffff > 0xffff in unsigned 32-bit compare, got {gt_consts}"
+    )
+
+    div_mod = lower_and_fold("""
+    fn f() -> bool {
+        (65535_u16 / (0_i8 - 1_i8)) == 0_u16
+    }
+    """)
+    assert count_ops(div_mod, tir.OpKind.DIV) == 0
+    div_consts = [op.attrs["value"] for fn in div_mod.functions.values()
+                  for blk in fn.blocks for op in blk.ops
+                  if op.kind == tir.OpKind.CONST_INT]
+    assert 1 in div_consts, (
+        f"expected narrow unsigned DIV to fold at 32-bit runtime width, got {div_consts}"
+    )
+
+
+def test_c115_fold_signed_narrow_div_mod_source_widens_operands():
+    """Cycle-115: signed i8/i16 DIV/MOD folds from declared source width."""
+    div_mod = lower_and_fold("""
+    fn f() -> i8 {
+        (127_i8 + 1_i8) / 2_i8
+    }
+    """)
+    assert count_ops(div_mod, tir.OpKind.DIV) == 0
+    div_consts = [op.attrs["value"] for fn in div_mod.functions.values()
+                  for blk in fn.blocks for op in blk.ops
+                  if op.kind == tir.OpKind.CONST_INT]
+    assert -64 in div_consts, (
+        f"expected wrapped i8 -128 / 2 to fold to -64, got {div_consts}"
+    )
+
+    mod_mod = lower_and_fold("""
+    fn f() -> i8 {
+        (127_i8 + 1_i8) % 3_i8
+    }
+    """)
+    assert count_ops(mod_mod, tir.OpKind.MOD) == 0
+    mod_consts = [op.attrs["value"] for fn in mod_mod.functions.values()
+                  for blk in fn.blocks for op in blk.ops
+                  if op.kind == tir.OpKind.CONST_INT]
+    assert -2 in mod_consts, (
+        f"expected wrapped i8 -128 % 3 to fold to -2, got {mod_consts}"
+    )
+
+    i16_mod = lower_and_fold("""
+    fn f() -> i16 {
+        (32767_i16 + 1_i16) % 5_i16
+    }
+    """)
+    assert count_ops(i16_mod, tir.OpKind.MOD) == 0
+    i16_mod_consts = [op.attrs["value"] for fn in i16_mod.functions.values()
+                      for blk in fn.blocks for op in blk.ops
+                      if op.kind == tir.OpKind.CONST_INT]
+    assert -3 in i16_mod_consts, (
+        f"expected wrapped i16 -32768 % 5 to fold to -3, got {i16_mod_consts}"
+    )
+
+
+def test_c115_identity_forward_preserves_result_type():
+    """Cycle-115: identity folding must not erase widening result types."""
+    mod = lower_and_fold("""
+    fn f(x: i32) -> i64 {
+        0_i64 + x
+    }
+    """)
+    assert count_ops(mod, tir.OpKind.ADD) == 1, (
+        "0_i64 + x_i32 must not forward x directly because that loses "
+        "the i64 result type"
+    )
+
+
 def test_fold_bit_not():
     # ~5 = -6
     mod = lower_and_fold("fn f() -> i32 { ~5 }")
