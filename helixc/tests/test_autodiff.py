@@ -721,6 +721,74 @@ def test_c52_ad1_fn_table_sig_includes_body_hash():
     )
 
 
+def test_c54_ad1_fn_table_sig_includes_attrs():
+    """Stage 28.9 cycle 55 audit-T C54-AD1 regression (HIGH):
+    `_fn_table_sig` must include `fn.attrs`. Pre-fix, two fn_tables
+    with identical bodies but different @pure markers produced
+    identical cache keys; `_inline_user_calls` reads `"pure" in
+    fn.attrs` and decides whether to inline. Cache returned wrong
+    derivative for the case the attribute changed between compiles."""
+    from helixc.frontend.autodiff import _fn_table_sig
+    prog_pure = parse("@pure fn g(x: f64) -> f64 { x * x }")
+    prog_impure = parse("fn g(x: f64) -> f64 { x * x }")
+    g_pure = next(it for it in prog_pure.items
+                  if isinstance(it, A.FnDecl))
+    g_impure = next(it for it in prog_impure.items
+                    if isinstance(it, A.FnDecl))
+    sig_pure = _fn_table_sig({"g": g_pure})
+    sig_impure = _fn_table_sig({"g": g_impure})
+    assert sig_pure != sig_impure, (
+        f"signatures must differ for @pure vs non-@pure with "
+        f"same body; got identical {sig_pure!r}"
+    )
+
+
+def test_c54_ad2_fn_table_sig_includes_arity():
+    """C54-AD2 regression (MED): `_fn_table_sig` must include
+    `len(fn.params)`. Body hashing uses de-Bruijn so `fn g(x,y) = x`
+    and `fn g(x) = x` produce IDENTICAL body hashes (both bodies
+    reference param at de-Bruijn depth 0), but they differ in
+    inlining-gate behavior at call sites (`len(fn.params) ==
+    len(args)`). Cache hit corrupts gradient for the mismatched
+    arity case."""
+    from helixc.frontend.autodiff import _fn_table_sig
+    prog_2arg = parse("fn g(x: f64, _y: f64) -> f64 { x }")
+    prog_1arg = parse("fn g(x: f64) -> f64 { x }")
+    g2 = next(it for it in prog_2arg.items if isinstance(it, A.FnDecl))
+    g1 = next(it for it in prog_1arg.items if isinstance(it, A.FnDecl))
+    sig_2arg = _fn_table_sig({"g": g2})
+    sig_1arg = _fn_table_sig({"g": g1})
+    assert sig_2arg != sig_1arg, (
+        f"signatures must differ for 2-arg vs 1-arg fn with same "
+        f"body; got identical {sig_2arg!r}"
+    )
+
+
+def test_c54_ad3_cache_layer_catches_not_implemented_error():
+    """C54-AD3 regression (MED): the autodiff cache call site must
+    catch `NotImplementedError` (cycle-35 loud-fail discipline in
+    structural_hash for unknown AST subclasses) so the cache
+    gracefully bypasses instead of crashing the caller."""
+    from helixc.frontend.autodiff import _fn_table_sig
+    # Construct a synthetic AST node not handled by structural_hash.
+    class SyntheticUnknown:
+        def __init__(self):
+            self.span = A.Span(line=1, col=1)
+    # Build a fake FnDecl with the synthetic body.
+    fake_fn = A.FnDecl(
+        span=A.Span(1, 1), name="x", generics=[], params=[],
+        return_ty=None, where_clauses=[],
+        body=SyntheticUnknown(),  # type: ignore — testing failure path
+        attrs=[], is_pub=False, is_extern=False, extern_abi=None,
+    )
+    # Must NOT raise NotImplementedError — must return a sentinel.
+    sig = _fn_table_sig({"x": fake_fn})
+    assert "unhashable" in sig, (
+        f"unknown AST body must produce <unhashable:...> sentinel; "
+        f"got {sig!r}"
+    )
+
+
 # ============================================================================
 # Test runner
 # ============================================================================

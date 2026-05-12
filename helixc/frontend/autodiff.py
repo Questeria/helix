@@ -118,18 +118,24 @@ def diff_cache_stats() -> tuple[int, int]:
 
 
 def _fn_table_sig(fn_table: dict[str, "A.FnDecl"] | None) -> str:
-    # Stage 28.9 cycle 53 audit-R C52-AD1 fix (HIGH conf): pre-fix the
-    # signature emitted ONLY the sorted names, NOT the bodies. Two
-    # compiles with `{g: x*x}` and `{g: x*x*x}` produced identical
-    # cache keys → silent gradient corruption (verified: returned
-    # gradient `4` at x=2 when correct value with new body is `12`).
-    # Same defect class as C44-1 / C34-1 / C46-1 (semantic field
-    # invisible to identity layer), but in the autodiff memoization
-    # cache rather than the structural-hash universe.
-    # Fix: include `structural_hash(fn.body)` per entry so any body
-    # change invalidates the cache. Wrapped in the same defensive
-    # guard as the call site at line 154 — fail to "no cache" rather
-    # than crash.
+    # Stage 28.9 cycle 53 audit-R C52-AD1 fix (HIGH): include body
+    # hash so any body change invalidates the cache.
+    # Stage 28.9 cycle 55 audit-T C54-AD1 + C54-AD2 + C54-AD3 follow-on
+    # fixes (HIGH/MED/MED):
+    #   - C54-AD1: include `tuple(sorted(fn.attrs))`. `_inline_user_calls`
+    #     at line ~365 reads `"pure" in fn.attrs` to decide whether
+    #     to inline; two fn_tables with same body but different @pure
+    #     marker produce different inlining → different derivatives.
+    #   - C54-AD2: include `len(fn.params)` (arity). With de-Bruijn
+    #     body hashing, `fn g(x,y) = x` and `fn g(x) = x` produce
+    #     the SAME body hash but differ in inlining gating
+    #     (`len(fn.params) == len(args)` check at call sites).
+    #   - C54-AD3: catch NotImplementedError too. structural_hash
+    #     raises NIE on unknown AST subclasses (cycle-35 loud-fail
+    #     discipline); the autodiff cache's INTENT is to bypass-cache
+    #     on hash failure (sentinel path below), but NIE wasn't
+    #     caught so it would propagate up and crash the caller
+    #     instead of degrading gracefully.
     if not fn_table:
         return ""
     parts: list[str] = []
@@ -137,12 +143,15 @@ def _fn_table_sig(fn_table: dict[str, "A.FnDecl"] | None) -> str:
         fn = fn_table[name]
         try:
             body_hash = structural_hash(fn.body)
-        except (TypeError, ValueError, AttributeError):
+        except (TypeError, ValueError, AttributeError, NotImplementedError):
             # Hash failure → use a sentinel that differs from any
             # legitimate hash. Bypass-cache effect; preserves
             # correctness.
             body_hash = f"<unhashable:{id(fn.body)}>"
-        parts.append(f"{name}:{body_hash}")
+        # Include arity + attrs alongside body hash so all three
+        # dimensions `_inline_user_calls` actually uses are captured.
+        attrs_part = ",".join(sorted(fn.attrs))
+        parts.append(f"{name}/{len(fn.params)}/{attrs_part}/{body_hash}")
     return "|".join(parts)
 
 
@@ -172,7 +181,13 @@ def differentiate(expr: A.Expr, var: str,
     # miss.
     try:
         key = (structural_hash(expr), var, _fn_table_sig(fn_table))
-    except (TypeError, ValueError, AttributeError) as e:
+    except (TypeError, ValueError, AttributeError, NotImplementedError) as e:
+        # Stage 28.9 cycle 55 audit-R C54-AD3 fix (MED): catch
+        # NotImplementedError too — structural_hash raises NIE for
+        # unknown AST subclasses (cycle-35 loud-fail discipline).
+        # Without this catch, a novel AST node in `expr` would
+        # propagate NIE through the cache layer and crash the caller
+        # instead of gracefully bypassing the cache.
         key = None  # hash failure → bypass cache
         _ad_warn(
             expr,
