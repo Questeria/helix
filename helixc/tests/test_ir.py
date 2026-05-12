@@ -193,6 +193,42 @@ def test_c76_f1_for_range_i64_increment_dtype_matches_iterator():
     )
 
 
+def test_c96_loop_blocks_appended_to_fn_blocks():
+    """Stage 28.9 cycle 97 audit-T C96-1 regression (HIGH conf 90):
+    `loop { body }` lowering must `append_block` (not `new_block`)
+    its header + body blocks. Pre-fix `new_block` created Block
+    instances detached from `current_fn.blocks`, so the orphaned
+    blocks were invisible to slot pre-allocation, label emission,
+    and BR target lookup — backend aborted at "BR to unknown
+    block <id>" for any loop expression."""
+    src = """
+    fn main() -> i32 {
+        let mut x = 0;
+        loop { x = x + 1; }
+    }
+    """
+    mod = lower_src(src)
+    fn = mod.functions["main"]
+    # Pre-fix: only the entry block exists in fn.blocks (loop's blocks
+    # were orphaned). Post-fix: entry + header + body = 3 blocks min.
+    assert len(fn.blocks) >= 3, (
+        f"expected >=3 blocks (entry + loop header + body); got "
+        f"{len(fn.blocks)} — A.Loop blocks may be orphaned"
+    )
+    # Verify any BR target in the function points at a block that
+    # actually exists in fn.blocks.
+    block_ids = {b.id for b in fn.blocks}
+    for blk in fn.blocks:
+        for op in blk.ops:
+            if op.kind == tir.OpKind.BR:
+                target_id = op.attrs.get("target_block")
+                if target_id is not None:
+                    assert target_id in block_ids, (
+                        f"BR target {target_id} not in fn.blocks "
+                        f"{sorted(block_ids)}"
+                    )
+
+
 def main():
     tests = [(name, fn) for name, fn in globals().items()
              if name.startswith("test_") and callable(fn)]

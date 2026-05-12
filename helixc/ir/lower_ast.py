@@ -1898,8 +1898,16 @@ class Lowerer:
             # support, so this becomes effectively infinite). Without a
             # header→body→header back-edge, the body would just fall
             # through into whatever follows, which was the prior bug.
-            header_blk = self.builder.new_block()
-            body_blk = self.builder.new_block()
+            # Stage 28.9 cycle 97 audit-T C96-1 fix (HIGH conf 90):
+            # pre-fix used `new_block()` which creates the Block but
+            # does NOT append it to `current_fn.blocks` — orphaned
+            # blocks were unreachable from the function-level slot/
+            # label/BR enumeration, so the x86_64 backend aborted at
+            # "BR to unknown block <id>" for any `loop { body }`.
+            # Same idiom as For/While arms at lines 1813/1873 which
+            # correctly use `append_block`.
+            header_blk = self.builder.append_block()
+            body_blk = self.builder.append_block()
             self.builder.emit(tir.OpKind.BR, attrs={"target_block": header_blk.id})
             self.builder.switch_to(header_blk)
             self.builder.emit(tir.OpKind.BR, attrs={"target_block": body_blk.id})

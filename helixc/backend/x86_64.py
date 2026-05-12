@@ -997,7 +997,21 @@ class FnCompiler:
                 self._emit_op(op, frame_size)
 
     def _is_float_type(self, ty: tir.TIRType) -> bool:
-        return isinstance(ty, tir.TIRScalar) and ty.name in ("f16", "bf16", "f32", "f64")
+        # Stage 28.9 cycle 97 audit-R C96-1 fix (HIGH conf 90): include
+        # the quantized-float suffixes the lexer accepts (fp8, mxfp4,
+        # nvfp4, ternary). Cycle-95 added them to typecheck's
+        # _FLOAT_PRIM_NAMES but the backend classifier remained name-
+        # equal to {f16,bf16,f32,f64} — any fp8/mxfp4/nvfp4/ternary
+        # value silently fell through to the integer ABI path in arg
+        # spill, RETURN, CONST_FLOAT, and float arithmetic. Same
+        # defect class as cycle-19 C18-1 (isize/usize alias miss).
+        # The `_check_float_supported` arm below now also rejects
+        # these as "not yet supported in x86_64 codegen" so they
+        # surface loudly rather than miscompiling.
+        return isinstance(ty, tir.TIRScalar) and ty.name in (
+            "f16", "bf16", "f32", "f64",
+            "fp8", "mxfp4", "nvfp4", "ternary",
+        )
 
     def _is_f64_type(self, ty: tir.TIRType) -> bool:
         return isinstance(ty, tir.TIRScalar) and ty.name == "f64"
@@ -1019,12 +1033,23 @@ class FnCompiler:
     def _check_float_supported(self, ty: tir.TIRType) -> None:
         """Phase 1 supports f32 and f64. f16/bf16 still need the F16C
         / AVX-512 paths — error on those. Treating them as f32 silently
-        corrupts results, so we error explicitly."""
-        if isinstance(ty, tir.TIRScalar) and ty.name in ("f16", "bf16"):
+        corrupts results, so we error explicitly.
+
+        Stage 28.9 cycle 97 audit-R C96-1: also reject the quantized
+        suffixes fp8/mxfp4/nvfp4/ternary. Pre-fix `_is_float_type`
+        excluded these so they fell through to the integer ABI path
+        silently. Now `_is_float_type` includes them and this method
+        raises, surfacing the unsupported case loudly at the same
+        point f16/bf16 surface."""
+        if isinstance(ty, tir.TIRScalar) and ty.name in (
+            "f16", "bf16", "fp8", "mxfp4", "nvfp4", "ternary",
+        ):
             raise NotImplementedError(
                 f"x86_64 backend supports only f32 and f64 currently; "
-                f"got '{ty.name}'. Either change to f32/f64 or implement "
-                f"the F16C / AVX-512 codegen path."
+                f"got '{ty.name}'. The quantized-float suffixes "
+                f"(fp8/mxfp4/nvfp4/ternary) are parser/typecheck-only "
+                f"in Phase-0 — change to f32/f64 or implement the "
+                f"F16C / AVX-512 / quantized codegen path."
             )
 
     def _check_array_elem_size_supported(self, ty: tir.TIRType) -> None:
