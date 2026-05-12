@@ -1842,7 +1842,15 @@ class Lowerer:
             # Increment i
             cur_i = self.builder.emit(tir.OpKind.LOAD_VAR, result_ty=start_v.ty,
                                       attrs={"name": iter_var})
-            one = self.builder.const_int(1)
+            # Stage 28.9 cycle 77 audit-T F1 fix (HIGH conf 78): emit the
+            # constant `1` in the same dtype as the iterator. Pre-fix
+            # const_int(1) defaulted to i32 even when start_v.ty was i64,
+            # producing ADD(i64, i32, result_ty=i64) — the x86_64 backend
+            # dispatches ADD by result type only and issued an 8-byte read
+            # of the i32 slot, leaking 4 bytes of uninitialized stack into
+            # every `for i in 0i64..N` loop increment.
+            inc_dtype = start_v.ty.name if isinstance(start_v.ty, tir.TIRScalar) else "i32"
+            one = self.builder.const_int(1, dtype=inc_dtype)
             new_i = self.builder.emit(tir.OpKind.ADD, cur_i, one, result_ty=start_v.ty)
             self.builder.emit(tir.OpKind.STORE_VAR, new_i,
                               attrs={"name": iter_var})

@@ -1742,18 +1742,38 @@ class FnCompiler:
                 self.asm.mov_r8_mem_rbp,
                 self.asm.mov_r9_mem_rbp,
             ]
+            # Stage 28.9 cycle 77 audit-R C76-1 fix (HIGH conf 80): pre-fix
+            # FFI_CALL routed every operand through INT_REGS, including
+            # f32/f64 args — the SysV ABI splits by class: float -> xmm0..7,
+            # int/pointer -> rdi/rsi/rdx/rcx/r8/r9. The regular CALL arm at
+            # lines 1684-1707 already gets this right; FFI_CALL was the
+            # asymmetric sibling. Reachability probe: `extern "C" fn sinf(
+            # x: f32) -> f32` typecheck-clean and compile-clean but the
+            # callee received garbage from edi instead of xmm0. Now split
+            # by class identically to CALL.
             int_idx = 0
+            xmm_idx = 0
             for arg in op.operands:
                 arg_slot = self._slot_of(arg)
-                if int_idx >= len(INT_REGS):
-                    raise NotImplementedError(
-                        "FFI_CALL supports up to 6 int/pointer args (Phase-0)")
-                # Pointer-shaped IR types are u64 — use the 64-bit move.
-                if self._is_i64_type(arg.ty) or self._is_u64_type(arg.ty):
-                    INT_REGS_64[int_idx](arg_slot)
+                if self._is_float_type(arg.ty):
+                    if xmm_idx >= 8:
+                        raise NotImplementedError(
+                            "FFI_CALL supports up to 8 float args via xmm0..xmm7 (Phase-0)")
+                    if self._is_f64_type(arg.ty):
+                        self.asm._movsd_load_xmmN(xmm_idx, arg_slot)
+                    else:
+                        self.asm._movss_load_xmmN(xmm_idx, arg_slot)
+                    xmm_idx += 1
                 else:
-                    INT_REGS[int_idx](arg_slot)
-                int_idx += 1
+                    if int_idx >= len(INT_REGS):
+                        raise NotImplementedError(
+                            "FFI_CALL supports up to 6 int/pointer args (Phase-0)")
+                    # Pointer-shaped IR types are u64 — use the 64-bit move.
+                    if self._is_i64_type(arg.ty) or self._is_u64_type(arg.ty):
+                        INT_REGS_64[int_idx](arg_slot)
+                    else:
+                        INT_REGS[int_idx](arg_slot)
+                    int_idx += 1
             # Indirect call through GOT entry.
             self.asm.call_qword_ptr_rip_rel_ffi(target)
             if op.results:
