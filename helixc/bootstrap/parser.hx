@@ -6090,11 +6090,19 @@ fn parse_pattern(tok_base: i32, sb: i32) -> i32 {
         // `Some(1 | 2) | None` case where OR hides inside a variant/
         // tuple sub-pattern. The static-slot collision in emit_pat_or
         // would otherwise miscompile.
+        //
+        // Cycle 82 CN-1 fix (HIGH conf 85): when `first` violates the
+        // bind/nested-OR rule, drain ALL trailing alts before
+        // returning the AST_ERR trap node. Pre-fix the parser only
+        // consumed ONE `|` and left subsequent alts in the token
+        // stream, causing the match-arm parser to misalign and parse
+        // the next alt as the arm body. Symmetric with the in-loop
+        // drain pattern below (which correctly consumes every alt).
         if pattern_contains_bind(first) == 1 {
-            cur_advance(sb);                           // consume `|`
+            drain_or_alts(tok_base, sb);
             mk_node(99, 62008, 0, 0)
         } else { if pattern_contains_or(first) == 1 {
-            cur_advance(sb);                           // consume `|`
+            drain_or_alts(tok_base, sb);
             mk_node(99, 62010, 0, 0)
         } else {
             let head = mk_node(51, first, 0, 0);
@@ -6143,6 +6151,28 @@ fn parse_pattern(tok_base: i32, sb: i32) -> i32 {
             }}}
         }}
     }
+}
+
+// Stage 28.10 cycle-82 CN-1 helper: drain remaining `| pat_atom`
+// alternatives from the token stream after a first-position violation.
+// Used by parse_pattern when `first` triggers a bind/nested-OR rule
+// — we must consume the trailing alts so parse_match_expr's
+// subsequent `=>` lookup aligns correctly. Pre-fix only one `|` was
+// consumed, leaving e.g. `Some(b) => ...` as subsequent tokens that
+// got mis-parsed.
+fn drain_or_alts(tok_base: i32, sb: i32) -> i32 {
+    let mut keep: i32 = 1;
+    while keep == 1 {
+        let nk = cur_get(sb);
+        if tok_tag(tok_base, nk) == 28 {
+            cur_advance(sb);                            // consume `|`
+            // Parse + discard the alt's atom. We don't care about
+            // the resulting node — it'll be unreachable behind
+            // the trap.
+            parse_pattern_atom(tok_base, sb);
+        } else { keep = 0; };
+    }
+    0
 }
 
 // Stage 28.10 cycle-78 CN-2 helper: does the pattern (or any of its
