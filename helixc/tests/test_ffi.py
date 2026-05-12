@@ -108,6 +108,42 @@ def test_extern_c_uses_dynlink():
     assert e_phnum == 4, f"FFI binary should have 4 phdrs, got {e_phnum}"
 
 
+def test_c76_1_ffi_call_routes_f32_args_to_xmm0():
+    """Stage 28.9 cycle 77 C76-1 + cycle 79 C78-1 regression (HIGH conf
+    80+85): extern "C" fn with a f32 arg must route through xmm0
+    (SysV float-class), not edi. Pre-cycle-77 FFI_CALL routed every
+    operand through INT_REGS, so the f32 was silently re-bit-cast as
+    i32 in edi — callee read garbage. Cycle-77 fixed the arg side;
+    cycle-79 fixed the return side (movss xmm0 -> slot instead of
+    mov eax -> slot). This test inspects emitted bytes for the
+    expected `movss` mnemonics — a future regression to the all-INT
+    path would lose them."""
+    src = """
+    extern "C" fn sinf(x: f32) -> f32;
+    fn entry(x: f32) -> f32 {
+        sinf(x)
+    }
+    fn main() -> i32 { 0 }
+    """
+    prog = parse(src, include_stdlib=False)
+    mod = lower(prog)
+    elf = compile_module_to_elf(mod)
+    # movss xmm0, [rbp-N] — opcode `F3 0F 10` per SysV f32 load
+    # convention; the cycle-77 arg-side emits exactly this for the
+    # first float arg before `call`. Bare assertion: the binary
+    # actually contains the f32-load opcode somewhere.
+    assert b"\xf3\x0f\x10" in elf, (
+        "FFI f32 arg load to xmm0 (movss xmm0, [rbp-N]) missing — "
+        "C76-1 regression: f32 args still routed through INT_REGS"
+    )
+    # And the cycle-79 return-side stores via movss xmm0 -> slot:
+    # `F3 0F 11` opcode for `movss [rbp-N], xmm0`.
+    assert b"\xf3\x0f\x11" in elf, (
+        "FFI f32 return store from xmm0 (movss [rbp-N], xmm0) missing — "
+        "C78-1 regression: f32 return still read from eax"
+    )
+
+
 if __name__ == "__main__":
     tests = [
         ("test_extern_c_puts_hello", test_extern_c_puts_hello),

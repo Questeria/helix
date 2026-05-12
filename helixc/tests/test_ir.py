@@ -156,6 +156,43 @@ def test_unique_value_ids():
     assert len(all_ids) == len(set(all_ids)), "all SSA value ids must be unique"
 
 
+def test_c76_f1_for_range_i64_increment_dtype_matches_iterator():
+    """Stage 28.9 cycle 77 audit-T F1 regression (HIGH conf 78):
+    when the for-range iterator is i64, the `+= 1` increment must
+    construct the constant `1` with dtype i64, NOT default i32. Pre-fix
+    the increment emitted `CONST_INT(1, ty=i32)` then `ADD(i64-cur,
+    i32-one, result_ty=i64)`, which the x86_64 backend dispatched
+    by result type — it issued an 8-byte read of the i32 slot,
+    leaking 4 bytes of uninitialized stack into every loop step."""
+    src = """
+    fn loop_i64() -> i32 {
+        let mut total: i64 = 0_i64;
+        for _i in 0_i64 .. 5_i64 {
+            total += 1_i64;
+        }
+        total as i32
+    }
+    """
+    mod = lower_src(src)
+    fn = mod.functions["loop_i64"]
+    # Find the CONST_INT(1) inside the for-range body's increment block.
+    # There may be multiple CONST_INT ops; the increment-step one is the
+    # one whose result_ty matches the iterator (i64) and value=1.
+    increment_ones = []
+    for blk in fn.blocks:
+        for op in blk.ops:
+            if (op.kind == tir.OpKind.CONST_INT
+                    and op.attrs.get("value") == 1
+                    and isinstance(op.results[0].ty, tir.TIRScalar)
+                    and op.results[0].ty.name == "i64"):
+                increment_ones.append(op)
+    assert increment_ones, (
+        "expected at least one CONST_INT(value=1, ty=i64) for the "
+        "for-range increment in an i64-typed iterator; pre-fix dtype "
+        "defaulted to i32 and mismatched the ADD result_ty"
+    )
+
+
 def main():
     tests = [(name, fn) for name, fn in globals().items()
              if name.startswith("test_") and callable(fn)]

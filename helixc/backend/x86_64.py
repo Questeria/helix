@@ -1778,9 +1778,17 @@ class FnCompiler:
             self.asm.call_qword_ptr_rip_rel_ffi(target)
             if op.results:
                 res_slot = self._slot_of(op.results[0])
-                # libc fns return int (eax) or pointer (rax). Stage 16.5
-                # only wires int returns; other shapes deferred.
-                if self._is_i64_type(op.results[0].ty) or self._is_u64_type(op.results[0].ty):
+                # Stage 28.9 cycle 79 audit-R C78-1 fix (HIGH conf 85): pre-fix
+                # the return path read eax for non-i64 types — silently
+                # garbling f32/f64 returns from libc fns like sinf/cosf/sqrt.
+                # SysV ABI: float returns -> xmm0, int returns -> eax/rax.
+                # The cycle-77 fix mirrored the arg-side; this is the return-
+                # side counterpart. Same defect class as C76-1.
+                if self._is_f64_type(op.results[0].ty):
+                    self.asm.movsd_mem_rbp_xmm0(res_slot)
+                elif self._is_float_type(op.results[0].ty):
+                    self.asm.movss_mem_rbp_xmm0(res_slot)
+                elif self._is_i64_type(op.results[0].ty) or self._is_u64_type(op.results[0].ty):
                     self.asm.mov_mem_rbp_rax(res_slot)
                 else:
                     self.asm.mov_mem_rbp_eax(res_slot)
