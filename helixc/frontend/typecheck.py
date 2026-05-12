@@ -1331,7 +1331,22 @@ class TypeChecker:
         if isinstance(expr, A.Binary):
             l = self._check_expr(expr.left, scope)
             r = self._check_expr(expr.right, scope)
-            if expr.op in ("==", "!=", "<", "<=", ">", ">=", "&&", "||"):
+            if expr.op in ("&&", "||"):
+                if not (isinstance(l, TyPrim) and l.name == "bool"):
+                    self.errors.append(TypeError_(
+                        f"operator {expr.op!r} expects bool left operand, "
+                        f"got {self._fmt(l)}",
+                        expr.span,
+                    ))
+                if not (isinstance(r, TyPrim) and r.name == "bool"):
+                    self.errors.append(TypeError_(
+                        f"operator {expr.op!r} expects bool right operand, "
+                        f"got {self._fmt(r)}",
+                        expr.span,
+                    ))
+                return TyPrim("bool")
+            if expr.op in ("==", "!=", "<", "<=", ">", ">="):
+                self._check_plain_binary_scalar_compat(l, r, expr.op, expr.span)
                 return TyPrim("bool")
             # Differentiability + Logic provenance propagation.
             #
@@ -1514,6 +1529,7 @@ class TypeChecker:
                     wrapped = TyDiff(inner=wrapped)
                 return wrapped
             # Arithmetic: take the left type (simplified)
+            self._check_plain_binary_scalar_compat(l, r, expr.op, expr.span)
             return l
         if isinstance(expr, A.Call):
             # Stage 16.5: "literal".as_ptr() — type is *const u8 (TyPtr(u8, mut=False)).
@@ -1711,7 +1727,14 @@ class TypeChecker:
             return TyUnknown(hint="range")
         if isinstance(expr, A.Assign):
             r = self._check_expr(expr.value, scope)
-            self._check_expr(expr.target, scope)
+            target_ty = self._check_expr(expr.target, scope)
+            if not self._compatible(r, target_ty):
+                self.errors.append(TypeError_(
+                    f"assignment target type {self._fmt(target_ty)} "
+                    f"incompatible with value type {self._fmt(r)}",
+                    expr.span,
+                    hint="use an explicit cast on the assigned value",
+                ))
             return TyUnit()
         if isinstance(expr, A.TupleLit):
             return TyTuple(tuple(self._check_expr(e, scope) for e in expr.elems))
@@ -2164,6 +2187,32 @@ class TypeChecker:
                 or t.name in self._NUMERIC_FLOAT_PRIMS
                 or t.name in self._NUMERIC_BOOL_PRIMS)
 
+    def _is_int_scalar(self, t: Type) -> bool:
+        return isinstance(t, TyPrim) and t.name in self._NUMERIC_INT_PRIMS
+
+    def _is_float_scalar(self, t: Type) -> bool:
+        return isinstance(t, TyPrim) and t.name in self._NUMERIC_FLOAT_PRIMS
+
+    def _check_plain_binary_scalar_compat(self, left: Type, right: Type,
+                                          op: str, span: A.Span) -> None:
+        if isinstance(left, (TyUnknown, TyVar, TySize)) \
+                or isinstance(right, (TyUnknown, TyVar, TySize)):
+            return
+        if not (isinstance(left, TyPrim) and isinstance(right, TyPrim)):
+            return
+        if left.name == right.name:
+            return
+        if self._is_int_scalar(left) and self._is_int_scalar(right):
+            return
+        if self._is_numeric_scalar(left) or self._is_numeric_scalar(right):
+            self.errors.append(TypeError_(
+                f"operator {op!r} has incompatible operand types "
+                f"{self._fmt(left)} and {self._fmt(right)}",
+                span,
+                hint="use an explicit cast so lowering and codegen agree "
+                     "on the operand representation",
+            ))
+
     def _check_cast_compat(self, src: Type, tgt: Type, span: A.Span,
                             _depth: int = 0,
                             _outer_src: Type | None = None,
@@ -2203,20 +2252,13 @@ class TypeChecker:
         if isinstance(src, (TyUnknown, TyVar, TySize)) \
                 or isinstance(tgt, (TyUnknown, TyVar, TySize)):
             return
-        # Identity / no-op cast is always OK.
-        if src == tgt:
-            return
-        # Numeric-scalar <-> numeric-scalar in either direction.
-        if self._is_numeric_scalar(src) and self._is_numeric_scalar(tgt):
-            return
         # Audit 28.8 cycle 3 D7: peel matching TyRef wrappers
         # iteratively (in lockstep on both sides) so we don't burn
         # recursion budget on each layer. After the loop, fall through
         # to the rest of the matrix on the unwrapped inner pair.
         peeled = 0
-        while isinstance(src, TyRef) and isinstance(tgt, TyRef):
-            if src.inner == tgt.inner:
-                return
+        while isinstance(src, TyRef) and isinstance(tgt, TyRef) \
+                and src.is_mut == tgt.is_mut:
             src = src.inner
             tgt = tgt.inner
             peeled += 1
@@ -2232,6 +2274,16 @@ class TypeChecker:
                          "to keep the typechecker stack-bounded",
                 ))
                 return
+        if not (peeled == 0 and (
+                isinstance(src, TyRef) or isinstance(tgt, TyRef))):
+            # Identity / no-op cast is always OK. Keep this after the
+            # TyRef peel so dataclass equality cannot recurse through a
+            # user-authored tower of references before the depth cap fires.
+            if src == tgt:
+                return
+        # Numeric-scalar <-> numeric-scalar in either direction.
+        if self._is_numeric_scalar(src) and self._is_numeric_scalar(tgt):
+            return
         # After peeling, src/tgt may be a scalar (and the numeric
         # arm above runs again via the recursive call). Use a depth
         # guard regardless so any future non-Ref recursive arm is

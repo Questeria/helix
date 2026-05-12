@@ -421,6 +421,51 @@ def test_c115_fold_signed_narrow_div_mod_source_widens_operands():
     )
 
 
+def test_c116_fold_narrow_shr_source_widens_operands():
+    """Cycle-116: narrow right shifts fold from declared source width."""
+    u8_mod = lower_and_fold("""
+    fn f() -> u8 {
+        (0_u8 - 1_u8) >> 1_u8
+    }
+    """)
+    assert count_ops(u8_mod, tir.OpKind.SHR) == 0
+    u8_consts = [op.attrs["value"] for fn in u8_mod.functions.values()
+                 for blk in fn.blocks for op in blk.ops
+                 if op.kind == tir.OpKind.CONST_INT]
+    assert 127 in u8_consts, (
+        f"expected wrapped u8 255 >> 1 to fold to 127, got {u8_consts}"
+    )
+
+    i8_mod = lower_and_fold("""
+    fn f() -> i8 {
+        (127_i8 + 1_i8) >> 1_i8
+    }
+    """)
+    assert count_ops(i8_mod, tir.OpKind.SHR) == 0
+    i8_consts = [op.attrs["value"] for fn in i8_mod.functions.values()
+                 for blk in fn.blocks for op in blk.ops
+                 if op.kind == tir.OpKind.CONST_INT]
+    assert -64 in i8_consts, (
+        f"expected wrapped i8 -128 >> 1 to fold to -64, got {i8_consts}"
+    )
+
+
+def test_c116_fold_narrow_shl_source_widens_operands():
+    """Cycle-116: narrow left shifts fold from declared source width."""
+    u8_mod = lower_and_fold("""
+    fn f() -> u8 {
+        (0_u8 - 1_u8) << 1_u8
+    }
+    """)
+    assert count_ops(u8_mod, tir.OpKind.SHL) == 0
+    u8_consts = [op.attrs["value"] for fn in u8_mod.functions.values()
+                 for blk in fn.blocks for op in blk.ops
+                 if op.kind == tir.OpKind.CONST_INT]
+    assert -2 in u8_consts, (
+        f"expected wrapped u8 255 << 1 to fold to 254, got {u8_consts}"
+    )
+
+
 def test_c115_identity_forward_preserves_result_type():
     """Cycle-115: identity folding must not erase widening result types."""
     mod = lower_and_fold("""

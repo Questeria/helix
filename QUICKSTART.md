@@ -57,7 +57,7 @@ echo $?     # prints: 34   (Fibonacci(9))
 ```
 
 CLI flags:
-- `--strict` — make any type-checker warning a hard error
+- `--strict` — make totality/effect warnings hard errors
 - `--no-opt` — disable constant folding + DCE
 
 ## Type-check only (no codegen)

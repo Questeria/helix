@@ -1641,6 +1641,99 @@ def test_c115_i32_min_div_mod_non_overflow_runtime():
     assert compile_and_run(mod_src) == 42
 
 
+def test_c116_narrow_shr_source_widens_runtime():
+    """Cycle-116: narrow SHR reloads wrapped operands by declared source width."""
+    u8_src = """
+    fn shr_u8(x: u8, n: u8) -> u8 { x >> n }
+    fn main() -> i32 {
+        let x: u8 = 0_u8 - 1_u8;
+        let y: u8 = shr_u8(x, 1_u8);
+        let z: i32 = y as i32;
+        if z == 127 { 42 } else { 7 }
+    }
+    """
+    assert compile_and_run(u8_src, optimize=False) == 42
+    assert compile_and_run(u8_src) == 42
+
+    i8_src = """
+    fn shr_i8(x: i8, n: i8) -> i8 { x >> n }
+    fn main() -> i32 {
+        let x: i8 = 127_i8 + 1_i8;
+        let y: i8 = shr_i8(x, 1_i8);
+        let z: i32 = y as i32;
+        if z == (0_i32 - 64_i32) { 42 } else { 7 }
+    }
+    """
+    assert compile_and_run(i8_src, optimize=False) == 42
+    assert compile_and_run(i8_src) == 42
+
+
+def test_c116_narrow_shl_source_widens_runtime():
+    """Cycle-116: narrow SHL reloads wrapped operands by declared source width."""
+    src = """
+    fn shl_u8(x: u8, n: u8) -> u8 { x << n }
+    fn main() -> i32 {
+        let x: u8 = 0_u8 - 1_u8;
+        let y: u8 = shl_u8(x, 1_u8);
+        let z: i32 = y as i32;
+        if z == 254 { 42 } else { 7 }
+    }
+    """
+    assert compile_and_run(src, optimize=False) == 42
+    assert compile_and_run(src) == 42
+
+
+def test_c116_backend_cli_aborts_on_type_errors_by_default(tmp_path):
+    """Cycle-116: backend CLI must not emit binaries after type errors."""
+    src_path = tmp_path / "mixed_type_error.hx"
+    out_path = tmp_path / "mixed_type_error.bin"
+    src_path.write_text(
+        "fn main() -> i32 { let mut x: i64 = 1_i64; x = 2_i32; 0 }\n",
+        encoding="utf-8",
+    )
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    cmd = [sys.executable, "-m", "helixc.backend.x86_64",
+           str(src_path), str(out_path)]
+    result = subprocess.run(cmd, capture_output=True, cwd=proj_root, text=True,
+                            timeout=60)
+    assert result.returncode != 0, (
+        f"expected backend CLI to fail on type error, got rc={result.returncode}; "
+        f"stderr={result.stderr!r}"
+    )
+    assert "type error(s); aborting before codegen" in result.stderr
+    assert not out_path.exists(), "backend emitted a binary after a type error"
+
+
+def test_c116_non64_mixed_int_ops_reload_narrow_sources():
+    """Cycle-116: non-64 mixed integer ops consume narrow source widths."""
+    src = """
+    fn add_u32_u8(a: u32, b: u8) -> u32 { a + b }
+    fn sub_u32_u8(a: u32, b: u8) -> u32 { a - b }
+    fn mul_u32_u8(a: u32, b: u8) -> u32 { a * b }
+    fn or_u32_u8(a: u32, b: u8) -> u32 { a | b }
+    fn and_u32_u8(a: u32, b: u8) -> u32 { a & b }
+    fn xor_u32_u8(a: u32, b: u8) -> u32 { a ^ b }
+    fn main() -> i32 {
+        let x: u8 = 0_u8 - 1_u8;
+        if add_u32_u8(1_u32, x) == 256_u32 {
+            if sub_u32_u8(300_u32, x) == 45_u32 {
+                if mul_u32_u8(3_u32, x) == 765_u32 {
+                    if or_u32_u8(0_u32, x) == 255_u32 {
+                        if and_u32_u8(256_u32, x) == 0_u32 {
+                            if xor_u32_u8(256_u32, x) == 511_u32 {
+                                42
+                            } else { 7 }
+                        } else { 7 }
+                    } else { 7 }
+                } else { 7 }
+            } else { 7 }
+        } else { 7 }
+    }
+    """
+    assert compile_and_run(src, optimize=False) == 42
+    assert compile_and_run(src) == 42
+
+
 def test_i64_modulo_beyond_i32():
     """Phase 1.4 (regression): i64 % i64 must use 64-bit cqo+idiv rcx, not
     fall through to the 32-bit guarded path. With the 32-bit path, low bits

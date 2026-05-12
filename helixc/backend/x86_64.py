@@ -1822,8 +1822,8 @@ class FnCompiler:
                 self.asm.add_rax_rcx()
                 self.asm.mov_mem_rbp_rax(res_slot)
             else:
-                self.asm.mov_eax_mem_rbp(l_slot)
-                self.asm.mov_ecx_mem_rbp(r_slot)
+                self._load_cmp_operand_rax(l_slot, op.operands[0].ty)
+                self._load_cmp_operand_rcx(r_slot, op.operands[1].ty)
                 self.asm.add_eax_ecx()
                 self.asm.mov_mem_rbp_eax(res_slot)
             return
@@ -1857,8 +1857,8 @@ class FnCompiler:
                 self.asm.sub_rax_rcx()
                 self.asm.mov_mem_rbp_rax(res_slot)
             else:
-                self.asm.mov_eax_mem_rbp(l_slot)
-                self.asm.mov_ecx_mem_rbp(r_slot)
+                self._load_cmp_operand_rax(l_slot, op.operands[0].ty)
+                self._load_cmp_operand_rcx(r_slot, op.operands[1].ty)
                 self.asm.sub_eax_ecx()
                 self.asm.mov_mem_rbp_eax(res_slot)
             return
@@ -1895,8 +1895,8 @@ class FnCompiler:
                 self.asm.imul_rax_rcx()
                 self.asm.mov_mem_rbp_rax(res_slot)
             else:
-                self.asm.mov_eax_mem_rbp(l_slot)
-                self.asm.mov_ecx_mem_rbp(r_slot)
+                self._load_cmp_operand_rax(l_slot, op.operands[0].ty)
+                self._load_cmp_operand_rcx(r_slot, op.operands[1].ty)
                 self.asm.imul_eax_ecx()
                 self.asm.mov_mem_rbp_eax(res_slot)
             return
@@ -2012,8 +2012,8 @@ class FnCompiler:
                 self.asm.and_rax_rcx()
                 self.asm.mov_mem_rbp_rax(res_slot)
             else:
-                self.asm.mov_eax_mem_rbp(l_slot)
-                self.asm.mov_ecx_mem_rbp(r_slot)
+                self._load_cmp_operand_rax(l_slot, op.operands[0].ty)
+                self._load_cmp_operand_rcx(r_slot, op.operands[1].ty)
                 self.asm.and_eax_ecx()
                 self.asm.mov_mem_rbp_eax(res_slot)
             return
@@ -2034,8 +2034,8 @@ class FnCompiler:
                 self.asm.or_rax_rcx()
                 self.asm.mov_mem_rbp_rax(res_slot)
             else:
-                self.asm.mov_eax_mem_rbp(l_slot)
-                self.asm.mov_ecx_mem_rbp(r_slot)
+                self._load_cmp_operand_rax(l_slot, op.operands[0].ty)
+                self._load_cmp_operand_rcx(r_slot, op.operands[1].ty)
                 self.asm.or_eax_ecx()
                 self.asm.mov_mem_rbp_eax(res_slot)
             return
@@ -2056,8 +2056,8 @@ class FnCompiler:
                 self.asm.xor_rax_rcx()
                 self.asm.mov_mem_rbp_rax(res_slot)
             else:
-                self.asm.mov_eax_mem_rbp(l_slot)
-                self.asm.mov_ecx_mem_rbp(r_slot)
+                self._load_cmp_operand_rax(l_slot, op.operands[0].ty)
+                self._load_cmp_operand_rcx(r_slot, op.operands[1].ty)
                 self.asm.xor_eax_ecx()
                 self.asm.mov_mem_rbp_eax(res_slot)
             return
@@ -2066,13 +2066,13 @@ class FnCompiler:
             r_slot = self._slot_of(op.operands[1])
             res_slot = self._slot_of(op.results[0])
             if self._is_64bit_int_type(op.results[0].ty):
-                self.asm.mov_rax_mem_rbp(l_slot)
-                self.asm.mov_rcx_mem_rbp(r_slot)
+                self._load_cmp_operand_rax(l_slot, op.operands[0].ty)
+                self._load_cmp_operand_rcx(r_slot, op.operands[1].ty)
                 self.asm.shl_rax_cl()
                 self.asm.mov_mem_rbp_rax(res_slot)
             else:
-                self.asm.mov_eax_mem_rbp(l_slot)
-                self.asm.mov_ecx_mem_rbp(r_slot)
+                self._load_cmp_operand_rax(l_slot, op.operands[0].ty)
+                self._load_cmp_operand_rcx(r_slot, op.operands[1].ty)
                 self.asm.shl_eax_cl()
                 self.asm.mov_mem_rbp_eax(res_slot)
             return
@@ -2082,16 +2082,16 @@ class FnCompiler:
             res_slot = self._slot_of(op.results[0])
             ty = op.results[0].ty
             if self._is_64bit_int_type(ty):
-                self.asm.mov_rax_mem_rbp(l_slot)
-                self.asm.mov_rcx_mem_rbp(r_slot)
+                self._load_cmp_operand_rax(l_slot, op.operands[0].ty)
+                self._load_cmp_operand_rcx(r_slot, op.operands[1].ty)
                 if self._is_unsigned_int_type(ty):
                     self.asm.shr_rax_cl()
                 else:
                     self.asm.sar_rax_cl()
                 self.asm.mov_mem_rbp_rax(res_slot)
             else:
-                self.asm.mov_eax_mem_rbp(l_slot)
-                self.asm.mov_ecx_mem_rbp(r_slot)
+                self._load_cmp_operand_rax(l_slot, op.operands[0].ty)
+                self._load_cmp_operand_rcx(r_slot, op.operands[1].ty)
                 if self._is_unsigned_int_type(ty):
                     self.asm.shr_eax_cl()
                 else:
@@ -3897,29 +3897,19 @@ if __name__ == "__main__":
         sys.exit(1)
     if mono_count > 0:
         print(f"mono: {mono_count} generic instantiation(s)", file=sys.stderr)
-    grad_count = grad_pass(prog)
-    if grad_count > 0:
-        print(f"grad: {grad_count} grad(f) call(s) rewritten", file=sys.stderr)
-    # Type-check; print as warnings, abort if --strict.
-    # NOTE: grad_pass internally invokes lower_matches(), which desugars
-    # match -> if/let chains. So typecheck sees the lowered form, which
-    # surfaces fake "enum variant has payload" / "if/else branches differ"
-    # warnings against patterns like Option::Some(x). These are typecheck
-    # imprecision against the lowered form — the original Match was valid.
-    # Suppressing those would require either teaching typecheck about the
-    # lowered form, or splitting grad_pass so lower_matches runs after
-    # typecheck. Tracked as a separate audit item.
+    # Type-check before grad_pass, because grad_pass also lowers match
+    # expressions. User-authored type errors must fail closed before
+    # lowering/codegen; `--strict` still promotes advisory warnings below.
     type_errors = typecheck(prog)
     if type_errors:
         for e in type_errors:
-            print(f"warning: {e}", file=sys.stderr)
-        if strict:
-            print(f"\n{len(type_errors)} type error(s); --strict aborts.",
-                  file=sys.stderr)
-            sys.exit(1)
-        else:
-            print(f"\n({len(type_errors)} type warning(s); compiling anyway. "
-                  f"Use --strict to fail on warnings.)", file=sys.stderr)
+            print(f"error: {e}", file=sys.stderr)
+        print(f"\n{len(type_errors)} type error(s); aborting before codegen.",
+              file=sys.stderr)
+        sys.exit(1)
+    grad_count = grad_pass(prog)
+    if grad_count > 0:
+        print(f"grad: {grad_count} grad(f) call(s) rewritten", file=sys.stderr)
     # Stage 20 — AST hash-cons. Identical sub-expressions across the
     # program now share a single Python object. Lowering treats shared
     # nodes idempotently (same value-id reuse), so the IR module is

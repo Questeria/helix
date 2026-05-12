@@ -95,6 +95,32 @@ def test_duplicate_function():
     assert any("duplicate function" in e for e in errs), errs
 
 
+def test_c116_mixed_float_scalar_ops_require_explicit_cast():
+    errs = check("fn f(a: f64, b: i32) -> f64 { a + b }")
+    assert any("incompatible operand types f64 and i32" in e for e in errs), errs
+
+    errs2 = check("fn f(a: f64, b: f32) -> f64 { a + b }")
+    assert any("incompatible operand types f64 and f32" in e for e in errs2), errs2
+
+    errs3 = check("fn f(a: f64, b: i32) -> bool { a > b }")
+    assert any("incompatible operand types f64 and i32" in e for e in errs3), errs3
+
+
+def test_c116_mixed_integer_ops_remain_allowed():
+    assert check("fn f(a: u64, b: i32) -> bool { a > b }") == []
+    assert check("fn f(a: u64, b: u32) -> u64 { a + b }") == []
+
+
+def test_c116_assignment_type_mismatch_errors():
+    errs = check("fn f() { let mut x: i64 = 1_i64; x = 2_i32; }")
+    assert any("assignment target type i64 incompatible with value type i32" in e
+               for e in errs), errs
+
+    errs2 = check("fn f() { let mut x: i64 = 1_i64; x += 2_i32; }")
+    assert any("assignment target type i64 incompatible with value type i32" in e
+               for e in errs2), errs2
+
+
 # ============================================================================
 # Compile-time shape checking via Presburger solver (Phase 3-iv)
 # ============================================================================
@@ -1719,7 +1745,7 @@ def test_d5_unary_fold_negative_size():
 
 
 def test_d7_deep_ref_cast_bounded():
-    """Audit 28.8 cycle 3 D7: 500-layer ref-cast must NOT hit Python's
+    """Audit 28.8 cycle 3 D7: 1500-layer ref-cast must NOT hit Python's
     recursion limit. The peeling loop appends trap 28803 before that
     depth."""
     from helixc.frontend import ast_nodes as A
@@ -1728,13 +1754,13 @@ def test_d7_deep_ref_cast_bounded():
     tc = TypeChecker(A.Program(module=None, items=[]))
     src = TyPrim("i32")
     tgt = TyPrim("i64")
-    for _ in range(500):
+    for _ in range(1500):
         src = TyRef(inner=src, is_mut=False)
         tgt = TyRef(inner=tgt, is_mut=False)
     tc._check_cast_compat(src, tgt, span)
     has_28803 = any("28803" in str(e) for e in tc.errors)
     assert has_28803, (
-        f"expected trap 28803 for 500-layer ref-cast, got: "
+        f"expected trap 28803 for 1500-layer ref-cast, got: "
         f"{[str(e) for e in tc.errors]}"
     )
 
