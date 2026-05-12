@@ -281,7 +281,29 @@ def _rewrite_expr(expr: A.Expr) -> A.Expr:
         expr.shape = [_rewrite_expr(s) for s in expr.shape]
         expr.memspace = _rewrite_expr(expr.memspace)
         return expr
-    return expr
+    # Stage 28.9 cycle 57 C57-4 (MED, conf 80): explicitly dispatch the
+    # leaf expressions (no Expr children) so they pass through cleanly
+    # but the dispatch is intentional rather than implicit. Continue is
+    # a pure marker like Break-without-value; the lit and reference
+    # types are obvious leaves.
+    if isinstance(expr, (A.IntLit, A.FloatLit, A.StrLit, A.CharLit,
+                          A.BoolLit, A.Name, A.Path, A.Continue)):
+        return expr
+    # Stage 28.9 cycle 57 C57-4: bare-return catchall was the last
+    # implicit-passthrough in this file. Earlier walker-drift cycles
+    # (14/15/16, 22-C, 7-1) all surfaced bugs where new A.Expr
+    # subclasses leaked through silent passthroughs. The discipline
+    # finalized in C14-3 / C16-1 is: every walker enumerates ALL
+    # Expr-bearing AST_NODES explicitly + raises NotImplementedError
+    # for the rest so a new subclass forces explicit dispatch decisions
+    # rather than silent drift. Promote the bare passthrough to a loud
+    # diagnostic.
+    raise NotImplementedError(
+        f"match_lower._rewrite_expr: unhandled expression kind "
+        f"{type(expr).__name__} at {getattr(expr, 'span', '?')!r}. "
+        f"Add an explicit arm — implicit passthrough hid C4-1, C7-1, "
+        f"C22-C, and C57-4 in earlier cycles."
+    )
 
 
 def _desugar_match(m: A.Match) -> A.Expr:

@@ -110,20 +110,41 @@ class _DeprecationCallSiteCollector(ASTVisitor):
             self.out.append((callee.name, node.span, self.deps[callee.name]))
 
 
+def _walk_items_for_fns(items: list, deps: dict[str, str],
+                        out: list[tuple[str, A.Span, str]]) -> None:
+    """Stage 28.9 cycle 57 C57-5 (MED, conf 78): recursively descend
+    into ImplBlock.methods and ModBlock.items so calls to deprecated
+    fns from inside impl methods or nested modules are caught. Pre-fix
+    `find_deprecation_call_sites` iterated only top-level FnDecl, so a
+    call site at `impl Foo { fn bar() { deprecated_fn() } }` produced
+    no warning. Same item-walker gap match_lower C16-1 closed for the
+    structural-recursion pass.
+    """
+    for it in items:
+        if isinstance(it, A.FnDecl):
+            if not it.is_extern:
+                _DeprecationCallSiteCollector(deps, out).visit(it.body)
+        elif isinstance(it, A.ImplBlock):
+            for m in it.methods:
+                if not m.is_extern:
+                    _DeprecationCallSiteCollector(deps, out).visit(m.body)
+        elif isinstance(it, A.ModBlock):
+            _walk_items_for_fns(it.items, deps, out)
+
+
 def find_deprecation_call_sites(prog: A.Program) -> list[tuple[str, A.Span, str]]:
     """For every call to a deprecated fn, return (callee_name, span,
     deprecation_msg).
 
     Stage 28.8.2: uses ``_DeprecationCallSiteCollector(ASTVisitor)``.
+    Stage 28.9 cycle 57 C57-5: extends the item-level walk to descend
+    into ImplBlock.methods and ModBlock.items via _walk_items_for_fns.
     """
     deps = find_deprecated_decls(prog)
     if not deps:
         return []
     out: list[tuple[str, A.Span, str]] = []
-    for it in prog.items:
-        if not isinstance(it, A.FnDecl) or it.is_extern:
-            continue
-        _DeprecationCallSiteCollector(deps, out).visit(it.body)
+    _walk_items_for_fns(list(prog.items), deps, out)
     return out
 
 

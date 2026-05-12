@@ -212,6 +212,24 @@ def _rewrite_expr(e: A.Expr, aliases: dict[str, str]) -> A.Expr:
         return A.Modify(span=e.span, target=_rewrite_expr(e.target, aliases),
                         transformation=_rewrite_expr(e.transformation, aliases),
                         verifier=_rewrite_expr(e.verifier, aliases))
+    # Stage 28.9 cycle 57 C57-2 (HIGH, conf 86): pre-fix this walker
+    # was missing UnsafeBlock + TileLit arms. `use foo::bar; fn main()
+    # { unsafe { bar() } }` left the `bar` callee un-aliased; the
+    # subsequent name-resolution pass failed with a misleading
+    # "unknown function 'bar'" instead of routing to foo__bar. Same
+    # defect class as match_lower C22-C and flatten_impls C57-1.
+    if isinstance(e, A.UnsafeBlock):
+        new_body = _rewrite_expr(e.body, aliases)
+        assert isinstance(new_body, A.Block), \
+            "flatten_modules: UnsafeBlock.body rewrite must return Block"
+        return A.UnsafeBlock(span=e.span, body=new_body)
+    if isinstance(e, A.TileLit):
+        return A.TileLit(
+            span=e.span, dtype=e.dtype,
+            shape=[_rewrite_expr(s, aliases) for s in e.shape],
+            memspace=_rewrite_expr(e.memspace, aliases),
+            init=e.init,
+        )
     if isinstance(e, A.Name):
         # `use foo::bar` brings foo__bar into scope as bar; only rewrite bare
         # callee positions, not arbitrary names — but to be safe, handle it
@@ -219,7 +237,16 @@ def _rewrite_expr(e: A.Expr, aliases: dict[str, str]) -> A.Expr:
         # (e.g., a global constant reference) are not rewritten here because
         # we cannot distinguish constants from un-aliased names safely.
         return e
-    return e
+    # Cycle 57 C57-2 catchall — leaf expression types pass through
+    # explicitly; anything else is an unmapped Expr subclass.
+    if isinstance(e, (A.IntLit, A.FloatLit, A.StrLit, A.CharLit,
+                       A.BoolLit, A.Path, A.Continue)):
+        return e
+    raise NotImplementedError(
+        f"flatten_modules._rewrite_expr: unhandled expression kind "
+        f"{type(e).__name__} at {getattr(e, 'span', '?')!r}. "
+        f"Mirror cycle-57 C57-2 discipline: add an explicit arm."
+    )
 
 
 def _rewrite_callee(c: A.Expr, aliases: dict[str, str]) -> A.Expr:

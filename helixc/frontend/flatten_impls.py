@@ -191,7 +191,36 @@ def _rewrite_expr(e: A.Expr, m2t: dict[str, str]) -> A.Expr:
         return A.Modify(span=e.span, target=_rewrite_expr(e.target, m2t),
                         transformation=_rewrite_expr(e.transformation, m2t),
                         verifier=_rewrite_expr(e.verifier, m2t))
-    return e
+    # Stage 28.9 cycle 57 C57-1 (HIGH, conf 88): pre-fix this walker
+    # was missing UnsafeBlock + TileLit arms. A method call inside
+    # `unsafe { p.area() }` left p.area unrewritten and typecheck
+    # failed with a misleading "struct has no field 'area'" error.
+    # Same defect class as match_lower cycle-23 C22-C / cycle-7 C7-1.
+    if isinstance(e, A.UnsafeBlock):
+        # UnsafeBlock.body is typed Block; the Block arm above returns
+        # A.Block, so a single recursive call preserves the field type.
+        new_body = _rewrite_expr(e.body, m2t)
+        assert isinstance(new_body, A.Block), \
+            "flatten_impls: UnsafeBlock.body rewrite must return Block"
+        return A.UnsafeBlock(span=e.span, body=new_body)
+    if isinstance(e, A.TileLit):
+        return A.TileLit(
+            span=e.span, dtype=e.dtype,
+            shape=[_rewrite_expr(s, m2t) for s in e.shape],
+            memspace=_rewrite_expr(e.memspace, m2t),
+            init=e.init,
+        )
+    # Cycle 57 C57-1 catchall — leaf expression types pass through
+    # explicitly (lit, ref); anything else is an unmapped Expr
+    # subclass and must be wired in.
+    if isinstance(e, (A.IntLit, A.FloatLit, A.StrLit, A.CharLit,
+                       A.BoolLit, A.Name, A.Path, A.Continue)):
+        return e
+    raise NotImplementedError(
+        f"flatten_impls._rewrite_expr: unhandled expression kind "
+        f"{type(e).__name__} at {getattr(e, 'span', '?')!r}. "
+        f"Mirror cycle-57 C57-1 discipline: add an explicit arm."
+    )
 
 
 def _rewrite_stmt(s: A.Stmt, m2t: dict[str, str]) -> A.Stmt:

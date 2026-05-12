@@ -111,9 +111,41 @@ def _ty_to_prim_name(ty: A.TyNode) -> str:
 
 
 def _is_struct_ref(ty: A.TyNode, struct_decls: dict) -> bool:
+    """True if `ty` resolves to a known StructDecl.
+
+    Cycle-57 C57-3 fix: accept both `TyName(Pt)` and `TyGeneric(Pt,
+    [i32])` shapes. Pre-fix only TyName was recognized, so any nested
+    struct field whose type was a TyGeneric (e.g. `inner: Pt<i32>`
+    before struct_mono rewrites it) tripped trap 26002 with a
+    misleading "non-differentiable type" message. The real cause was
+    walker drift — _is_struct_ref dropping a case that mirror passes
+    (struct_mono.collect_concrete_uses) handle correctly. We resolve
+    the TyGeneric via the same mangling scheme struct_mono uses, so
+    pytree sees the monomorphized StructDecl regardless of pass
+    ordering.
+    """
     if isinstance(ty, A.TyName) and ty.name in struct_decls:
         return True
+    if isinstance(ty, A.TyGeneric):
+        # Local import to avoid a hard cycle: struct_mono imports from
+        # monomorphize, monomorphize does not import pytree, but pytree
+        # importing struct_mono at module load would create a future
+        # circular-import hazard if struct_mono ever needs pytree
+        # (it currently doesn't, but the local import is cheap insurance).
+        from .struct_mono import mangle_struct
+        return mangle_struct(ty.base, list(ty.args)) in struct_decls
     return False
+
+
+def _resolve_struct_name(ty: A.TyNode) -> str:
+    """Given a type known to satisfy _is_struct_ref, return the
+    struct_decls key. Mirror of _is_struct_ref's resolution logic."""
+    if isinstance(ty, A.TyName):
+        return ty.name
+    if isinstance(ty, A.TyGeneric):
+        from .struct_mono import mangle_struct
+        return mangle_struct(ty.base, list(ty.args))
+    raise ValueError(f"pytree: _resolve_struct_name on non-struct {ty!r}")
 
 
 def flatten_pytree(decl, struct_decls: dict,
@@ -160,7 +192,7 @@ def flatten_pytree(decl, struct_decls: dict,
                 is_diff=_is_diff_wrapper(f.ty),
             ))
         elif _is_struct_ref(f.ty, struct_decls):
-            inner_decl = struct_decls[f.ty.name]
+            inner_decl = struct_decls[_resolve_struct_name(f.ty)]
             leaves.extend(
                 flatten_pytree(inner_decl, struct_decls,
                                path=fpath, depth=depth + 1,
@@ -202,7 +234,7 @@ def pytree_depth(decl, struct_decls: dict, depth: int = 0,
     max_d = depth
     for f in decl.fields:
         if _is_struct_ref(f.ty, struct_decls):
-            inner = struct_decls[f.ty.name]
+            inner = struct_decls[_resolve_struct_name(f.ty)]
             d = pytree_depth(inner, struct_decls, depth + 1, _visited)
             if d > max_d:
                 max_d = d
@@ -269,7 +301,7 @@ def _unflatten(decl: A.StructDecl, struct_decls: dict,
             else:
                 out[f.name] = default
         elif _is_struct_ref(f.ty, struct_decls):
-            inner = struct_decls[f.ty.name]
+            inner = struct_decls[_resolve_struct_name(f.ty)]
             out[f.name] = _unflatten(inner, struct_decls, grads, path,
                                      default, _visited, depth + 1)
         else:
