@@ -6587,7 +6587,7 @@ fn parse_trait_decl(tok_base: i32, sb: i32) -> i32 {
             depth = depth - 1;
         } else { if tt == 0 {                // EOF safety
             depth = 0;
-        } else {} } };
+        } else { 0 } } };   // Stage 29.2 fix: `{}` → `{ 0 }` to avoid AST_ERR(6) runtime trap
         if depth > 0 {
             cur_advance(sb);
         };

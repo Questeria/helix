@@ -721,26 +721,31 @@ fn patch_rel32(disp_slot: i32, target_slot: i32) -> i32 {
 
 // --------------------------------------------------------------
 // Function prologue and epilogue. The emitted binary's entry stub
-// reserves 64 slots (= 512 bytes) of stack space for let-bindings.
-// Slot offsets [rbp-8, rbp-16, ..., rbp-512] are addressable via
-// disp8 ModRM (since 8..512 fits in signed-disp8 only for offsets
-// up to 128; we use disp32 for safety on every access).
+// reserves 4096 bytes (= 512 slots × 8 bytes) of stack space for
+// let-bindings. Slot offsets [rbp-8, rbp-16, ..., rbp-4096] are
+// addressable via disp32 ModRM (the disp8 form is not used since
+// most offsets exceed -128 anyway).
 //
 //   55                push rbp
 //   48 89 E5          mov rbp, rsp
-//   48 81 EC 00 04 00 00   sub rsp, 1024
+//   48 81 EC 00 10 00 00   sub rsp, 4096
 //
-// Audit fix (cycle 1, polish #14): bumped from 512 → 1024 to match the
-// bind_state cap (64 entries) with 2× margin. Previously 512 was
-// "just enough" for 64 × 8-byte slots — any future cap bump would
-// silently corrupt the saved rbp/return-address. 1024 gives 128
-// slots; future Phase-1 should derive this from bind_state cap
-// dynamically rather than hard-coding.
+// Cycle 110 fix C109-SF-F1 / C109-TD-F109-1 (CRITICAL conf 90 +
+// HIGH conf 80): bumped from 1024 → 4096 to match the Stage 29.1
+// bind_state cap (512 entries × 8 bytes/slot). Pre-fix, the
+// bind_state cap was 512 but emit_prologue only reserved 1024
+// bytes = 128 simultaneously-live slots; bind_alloc_offset
+// trapped at off >= 1024. K3=42 worked only because bootstrap
+// functions use LIFO bind_pop to reuse offsets. The asymmetry
+// was an audit-flagged silent-corruption-risk; now the three
+// invariants (bind_state cap, emit_prologue size,
+// bind_alloc_offset threshold) all coincide at 4096 bytes /
+// 512 slots.
 fn emit_prologue() -> i32 {
     emit_byte(0x55);
     emit_byte(0x48); emit_byte(0x89); emit_byte(0xE5);
     emit_byte(0x48); emit_byte(0x81); emit_byte(0xEC);
-    emit_u32_le(1024);
+    emit_u32_le(4096);
     11
 }
 
@@ -1010,7 +1015,14 @@ fn bind_push_typed(state: i32, name_start: i32, name_len: i32,
                    offset: i32, ty: i32) -> i32 {
     let top = __arena_get(state + 1);
     // Stage 29.1 fix (2026-05-12): bumped cap from 64 to 512.
+    // Cycle 110 fix C109-CR-F3 (HIGH conf 82): loud-fail via trap
+    // when the cap is exceeded. Pre-fix returned `0 - 1` silently;
+    // callers discarded the return value; the binding name became
+    // unresolvable and AST_VAR audit-10 substituted `mov eax, 0`,
+    // silently making the variable read as 0 thereafter. Trap id
+    // 10032.
     if top >= 512 {
+        emit_trap_with_id(10032);
         0 - 1
     } else {
         let table_base = __arena_get(state + 2);
@@ -1042,14 +1054,18 @@ fn bind_pop(state: i32) -> i32 {
 
 fn bind_alloc_offset(state: i32) -> i32 {
     // Audit-stage5-6 Finding #11 fix: trap when the requested slot would
-    // write past the 1024-byte prologue allocation (emit_prologue at
-    // kovc.hx ~743). Without this, sequential let/struct-lit allocations
-    // wrap silently into the parent frame's saved rbp / return-address /
+    // write past the prologue allocation (emit_prologue at kovc.hx
+    // ~739). Without this, sequential let/struct-lit allocations wrap
+    // silently into the parent frame's saved rbp / return-address /
     // red zone. The trap fires at codegen time — we still bump the
     // offset so any downstream emitter that derives a layout from the
     // returned value doesn't see a stale slot. Trap id 10030.
+    //
+    // Cycle 110 fix C109-SF-F1 / C109-TD-F109-1: threshold bumped
+    // from 1024 → 4096 to match the new emit_prologue 4096-byte
+    // allocation and bind_state cap of 512 entries.
     let off = __arena_get(state);
-    if off >= 1024 {
+    if off >= 4096 {
         emit_trap_with_id(10030);
     };
     __arena_set(state, off + 8);
@@ -1534,8 +1550,14 @@ fn fn_table_init() -> i32 {
 fn fn_table_add(state: i32, name_start: i32, name_len: i32, code_offset: i32) -> i32 {
     // Audit fix #10: cap-check before writing. Cap = 512 entries
     // (Stage 6 bump from 256 to accommodate enum + future stages).
+    // Cycle 110 fix C109-CR-F3 (HIGH conf 82): loud-fail via trap
+    // when the cap is exceeded. Pre-fix returned `0 - 1` silently;
+    // callers discarded the return value; the 513th fn declaration
+    // became unresolvable via fn_table_lookup, and subsequent CALL
+    // patches for it failed to resolve. Trap id 10033.
     let top = __arena_get(state);
     if top >= 512 {
+        emit_trap_with_id(10033);
         0 - 1
     } else {
     let table_base = __arena_get(state + 1);
@@ -1594,8 +1616,15 @@ fn patch_table_add(state: i32, disp_slot: i32, name_start: i32, name_len: i32) -
     // Audit fix #10: cap-check before writing. patch_table_init
     // allocates 16384 entries; without this guard, a source with > 16384
     // CALL+LEA patches would silently corrupt adjacent arena memory.
+    // Cycle 110 fix C109-CR-F3 (HIGH conf 82): loud-fail via trap
+    // when the cap is exceeded. Pre-fix returned `0 - 1` silently
+    // and all ~11 callers discarded the return value, leaving the
+    // dropped patch invisible to the resolver loop — same defect
+    // class as the Stage 29.1 patch_table overflow that corrupted
+    // K3 prior to the cap bump. Trap id 10031.
     let top = __arena_get(state);
     if top >= 16384 {
+        emit_trap_with_id(10031);
         0 - 1
     } else {
         let table_base = __arena_get(state + 1);
@@ -4021,7 +4050,7 @@ fn count_float_digits(p1: i32, p2: i32) -> i32 {
     let mut digits: i32 = 0;
     while i < p2 {
         let b = __arena_get(p1 + i);
-        if b == 46 { } // '.', skip
+        if b == 46 { 0 } // '.', skip (Stage 29.2 fix: empty body emits AST_ERR(6) which becomes a runtime trap in K2; `0` is a no-op)
         else { if b >= 48 { if b <= 57 { digits = digits + 1; }; }; };
         i = i + 1;
     }
@@ -6035,7 +6064,7 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
             } else { if pi == 5 {
                 emit_byte(0x41); emit_byte(0x59);
                 bytes_emitted = bytes_emitted + 2;                        // pop r9
-            } else {} }}}}};
+            } else { 0 } }}}}};   // Stage 29.2 fix: `{}` → `{ 0 }`
             pi = pi - 1;
         }
         let disp_slot = emit_call_rel32_placeholder();
@@ -6426,7 +6455,7 @@ fn emit_elf_for_ast_to_path(ast_root: i32) -> i32 {
                             // mov [rbp+disp32], r9   : 4C 89 8D disp32
                             emit_byte(0x4C); emit_byte(0x89); emit_byte(0x8D);
                             emit_u32_le(0 - off);
-                        } else {} }}}}};
+                        } else { 0 } }}}}};   // Stage 29.2 fix: `{}` → `{ 0 }` to avoid AST_ERR(6) runtime trap
                     } else {
                     if pidx == 0 {
                         // mov [rbp+disp32], edi  : 89 BD disp32
@@ -6448,7 +6477,7 @@ fn emit_elf_for_ast_to_path(ast_root: i32) -> i32 {
                         // mov [rbp+disp32], r9d  : 44 89 8D disp32
                         emit_byte(0x44); emit_byte(0x89); emit_byte(0x8D);
                         emit_u32_le(0 - off);
-                    } else {} }}}}};
+                    } else { 0 } }}}}};   // Stage 29.2 fix: `{}` → `{ 0 }`
                     };
                 };
                 pidx = pidx + 1;
