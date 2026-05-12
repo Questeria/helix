@@ -2619,6 +2619,29 @@ fn main() -> i32 {
         "struct Triple { a: i32, b: i32, c: i32 } "
         "fn main() -> i32 { let t = Triple { 10, 20, 12 }; t.a + t.b + t.c }"
     ) == 42, "Stage 5 Iter B: 3-field named access"
+    # Stage 28.13.1: NAMED struct-lit syntax `Pt { x: 10, y: 32 }`
+    # (vs the original positional `Pt { 10, 32 }`). Parser peeks 2
+    # tokens ahead after `{` — if pattern is IDENT COLON, named mode.
+    # Each `field_name: value` pair looked up via
+    # struct_tab_field_lookup; values placed at the field's positional
+    # slot. The tuple-lit is built in positional order so codegen is
+    # unchanged.
+    assert compile_and_exec(
+        "struct Pt { x: i32, y: i32 } "
+        "fn main() -> i32 { let p = Pt { x: 10, y: 32 }; p.x + p.y }"
+    ) == 42, "Stage 28.13.1: named struct-lit `Pt { x: 10, y: 32 }`"
+    # Reverse-order named: y first, then x. Tuple-lit must still
+    # build positional [x_val, y_val] = [10, 32] so p.x == 10.
+    assert compile_and_exec(
+        "struct Pt { x: i32, y: i32 } "
+        "fn main() -> i32 { let p = Pt { y: 32, x: 10 }; p.x + p.y }"
+    ) == 42, ("Stage 28.13.1: named struct-lit field-order-independent "
+              "(`Pt { y: 32, x: 10 }` still constructs x=10, y=32)")
+    # 3-field named.
+    assert compile_and_exec(
+        "struct Triple { a: i32, b: i32, c: i32 } "
+        "fn main() -> i32 { let t = Triple { c: 12, a: 10, b: 20 }; t.a + t.b + t.c }"
+    ) == 42, "Stage 28.13.1: named 3-field reverse-order"
     # Mixed positional + named on same struct should still work
     # (parser's .NUM and .IDENT both resolve to AST_TUPLE_FIELD with
     # the same numeric offset).

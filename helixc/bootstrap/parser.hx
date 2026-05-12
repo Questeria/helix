@@ -223,6 +223,27 @@ fn gp_tab_lookup(sb: i32, name_s: i32, name_l: i32) -> i32 {
     found
 }
 
+// Stage 28.13.1: peek 2 tokens ahead to detect named struct-lit syntax
+// `Pt { x: 10, y: 32 }`. Returns 1 if the current token is IDENT and
+// the next token is COLON; 0 otherwise. Used by parse_primary's
+// struct-lit body parser to dispatch between positional and named
+// modes. Mirrors the Python frontend's parser.py:1296
+// `_peek_struct_lit_start` shape.
+//
+// `cur_get(sb) + 1` gives the next token index — tokens are indexed
+// sequentially in the lex output; cur_get returns the current
+// token's index. Reads via tok_tag are pure (no cursor advance).
+fn peek_named_struct_lit(tok_base: i32, sb: i32) -> i32 {
+    let c = cur_get(sb);
+    let t1 = tok_tag(tok_base, c);
+    if t1 != 2 {
+        0
+    } else {
+        let t2 = tok_tag(tok_base, c + 1);
+        if t2 == 14 { 1 } else { 0 }
+    }
+}
+
 // Stage 28.11 INC-3a cycle-5 polish (cycle-4 type-design F1+F2+F3, MED
 // conf 80-85): centralized helpers for the generic-param marker
 // encoding `200 + gp_idx`. Pre-cycle-5 the literal `200` was open-coded
@@ -3432,6 +3453,87 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
                         // for `let l = Outer { Inner {...} }`.
                         set_last_struct_idx(sb, s_idx);
                         mk_node(50, 0, 0, 0)
+                    } else { if peek_named_struct_lit(tok_base, sb) == 1 {
+                        // Stage 28.13.1: named struct-lit syntax
+                        // `Pt { x: 10, y: 32 }`. Parse `field_name: value`
+                        // pairs in any order; look up each field's
+                        // positional index via struct_tab_field_lookup;
+                        // build a positional tuple-lit. Mirrors the
+                        // Python frontend's parser.py:1321
+                        // `_parse_struct_lit_after_name` shape.
+                        //
+                        // Implementation: allocate a temp[arity] array
+                        // in the arena (sentinel -1 = unfilled), parse
+                        // each pair, store value at temp[lookup(name)].
+                        // After loop, walk temp[0..arity] to build the
+                        // TUPLE_CONS chain in positional order.
+                        let temp_base = __arena_len();
+                        let mut ti: i32 = 0;
+                        while ti < arity {
+                            __arena_push(0 - 1);
+                            ti = ti + 1;
+                        }
+                        let mut keep_n: i32 = 1;
+                        let mut nf: i32 = 0;
+                        let mut named_err: i32 = 0;
+                        while keep_n == 1 {
+                            let fk = cur_get(sb);
+                            let fname_s = tok_p2(tok_base, fk);
+                            let fname_l = tok_p3(tok_base, fk);
+                            cur_advance(sb);     // consume field-name
+                            cur_advance(sb);     // consume ':'
+                            let fval = parse_expr(tok_base, sb);
+                            let f_idx = struct_tab_field_lookup(sb, s_idx, fname_s, fname_l);
+                            if f_idx < 0 {
+                                named_err = 50041;     // unknown field
+                                keep_n = 0;
+                            } else { if f_idx >= arity {
+                                named_err = 50041;
+                                keep_n = 0;
+                            } else { if __arena_get(temp_base + f_idx) != 0 - 1 {
+                                named_err = 50042;     // duplicate field
+                                keep_n = 0;
+                            } else {
+                                __arena_set(temp_base + f_idx, fval);
+                                nf = nf + 1;
+                                let ct = tok_tag(tok_base, cur_get(sb));
+                                if ct == 13 {
+                                    cur_advance(sb);
+                                    let nt2 = tok_tag(tok_base, cur_get(sb));
+                                    if nt2 == 6 { keep_n = 0; };
+                                } else { keep_n = 0; };
+                            }}};
+                        }
+                        if named_err != 0 {
+                            mk_node(99, named_err, 0, 0)
+                        } else {
+                            cur_advance(sb);            // consume `}`
+                            // Validate all slots filled.
+                            let mut vi: i32 = 0;
+                            let mut missing: i32 = 0;
+                            while vi < arity {
+                                if __arena_get(temp_base + vi) == 0 - 1 {
+                                    missing = 1;
+                                    vi = arity;
+                                } else { vi = vi + 1; };
+                            }
+                            if missing == 1 {
+                                mk_node(99, 50040, 0, 0)
+                            } else {
+                                // Build TUPLE_CONS chain from temp.
+                                let head_n = mk_node(51, __arena_get(temp_base), 0, 0);
+                                let mut tail_n: i32 = head_n;
+                                let mut bi: i32 = 1;
+                                while bi < arity {
+                                    let new_node = mk_node(51, __arena_get(temp_base + bi), 0, 0);
+                                    __arena_set(tail_n + 2, new_node);
+                                    tail_n = new_node;
+                                    bi = bi + 1;
+                                }
+                                set_last_struct_idx(sb, s_idx);
+                                mk_node(50, arity, head_n, 0)
+                            }
+                        }
                     } else {
                         let first = parse_expr(tok_base, sb);
                         let mut head_idx: i32 = mk_node(51, first, 0, 0);
@@ -3473,7 +3575,7 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
                         } else {
                             mk_node(50, n, head_idx, 0)
                         }
-                    }
+                    }}
                 } else {
                     // Not a registered struct — treat as var ref.
                     mk_var_with_capture(sb, id_start, id_len)
