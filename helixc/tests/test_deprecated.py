@@ -548,5 +548,62 @@ fn main() -> i32 { 0 }
     )
 
 
+def test_c71_struct_lit_name_mangled_in_mod():
+    """Cycle 71 code-review CN-3 (HIGH conf 88): pre-fix
+    `flatten_modules._rewrite_expr`'s StructLit arm did NOT remap
+    `e.name` through the aliases dict. `mod m { struct Foo {x:i32};
+    fn make() { Foo { x: 1 } } }` post-flatten left the
+    `StructLit(name="Foo")` inside m__make's body even though the
+    StructDecl became `m__Foo`. Backend (which runs flatten before
+    typecheck) compiled a stale name; `helixc check` (which runs
+    typecheck before flatten) was shielded by pipeline accident.
+
+    Cycle-71 fix: `new_name = aliases.get(e.name, e.name)` in the
+    StructLit arm — same alias mapping the call-site walker uses.
+    """
+    from helixc.frontend.flatten_modules import flatten_modules
+    src = """
+mod m {
+    struct Foo { x: i32 }
+    fn make() -> Foo { Foo { x: 42 } }
+}
+"""
+    prog = parse(src)
+    flatten_modules(prog)
+    make_fn = next(it for it in prog.items
+                   if isinstance(it, A.FnDecl) and it.name == "m__make")
+    struct_lit = make_fn.body.final_expr
+    assert isinstance(struct_lit, A.StructLit), (
+        f"expected StructLit, got {type(struct_lit).__name__}"
+    )
+    assert struct_lit.name == "m__Foo", (
+        f"mod-nested StructLit.name must be remapped to the lifted "
+        f"struct's mangled name; got {struct_lit.name!r}"
+    )
+
+
+def test_c71_struct_lit_top_level_unchanged():
+    """Cycle 71 code-review CN-3 follow-on: verify top-level StructLits
+    (not inside a mod) are NOT incorrectly rewritten. The aliases dict
+    only contains mod-nested decl mappings, so top-level struct names
+    pass through unchanged via the `aliases.get(name, name)` fallback.
+    """
+    from helixc.frontend.flatten_modules import flatten_modules
+    src = """
+struct Bar { y: i32 }
+fn build() -> Bar { Bar { y: 7 } }
+"""
+    prog = parse(src)
+    flatten_modules(prog)
+    build_fn = next(it for it in prog.items
+                    if isinstance(it, A.FnDecl) and it.name == "build")
+    struct_lit = build_fn.body.final_expr
+    assert isinstance(struct_lit, A.StructLit)
+    assert struct_lit.name == "Bar", (
+        f"top-level StructLit.name must NOT be rewritten; got "
+        f"{struct_lit.name!r}"
+    )
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-v"]))
