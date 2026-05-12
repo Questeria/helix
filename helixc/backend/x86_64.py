@@ -1030,6 +1030,20 @@ class FnCompiler:
         # `u64` on 64-bit targets. Same silent-trunc class as isize.
         return isinstance(ty, tir.TIRScalar) and ty.name in ("u64", "usize")
 
+    def _is_unsigned_int_type(self, ty: tir.TIRType) -> bool:
+        # Stage 28.9 cycle 100 audit-R F1/F2 fix (HIGH conf 88-92):
+        # the cmp emit path used signed setl/setle/setg/setge for every
+        # integer type. For unsigned operands with the high bit set,
+        # signed setcc miscompiles the result (e.g. u32 `0xFFFFFFFF <
+        # 1` returns true under signed cmp but should be false). Plus
+        # the i64-path predicate only matched i64/isize, so u64/usize
+        # silently fell through to the 32-bit path with truncation.
+        # This predicate centralises the unsigned int membership test
+        # so the cmp dispatch can route to setb/setbe/seta/setae.
+        return isinstance(ty, tir.TIRScalar) and ty.name in (
+            "u8", "u16", "u32", "u64", "usize",
+        )
+
     def _check_float_supported(self, ty: tir.TIRType) -> None:
         """Phase 1 supports f32 and f64. f16/bf16 still need the F16C
         / AVX-512 paths — error on those. Treating them as f32 silently
@@ -1553,6 +1567,24 @@ class FnCompiler:
             tir.OpKind.CMP_GT: self.asm.setg_al,
             tir.OpKind.CMP_GE: self.asm.setge_al,
         }
+        # Stage 28.9 cycle 100 audit-R F2 fix (HIGH conf 88): unsigned
+        # integer comparisons need the unsigned setcc variants
+        # (setb/setbe/seta/setae) — using the signed setl/setle/setg/
+        # setge on u8/u16/u32/u64/usize miscompiles high-bit-set
+        # values (e.g. `0xFFFFFFFF_u32 < 1_u32` evaluates true under
+        # signed cmp because the high bit makes the value look like
+        # -1 in signed two's-complement). Float compares already use
+        # this set because ucomiss puts results in the unsigned flag
+        # sense; the cmp dispatch below now selects this set when the
+        # operand type is unsigned-int.
+        unsigned_int_cmp_setters = {
+            tir.OpKind.CMP_EQ: self.asm.sete_al,
+            tir.OpKind.CMP_NE: self.asm.setne_al,
+            tir.OpKind.CMP_LT: self.asm.setb_al,
+            tir.OpKind.CMP_LE: self.asm.setbe_al,
+            tir.OpKind.CMP_GT: self.asm.seta_al,
+            tir.OpKind.CMP_GE: self.asm.setae_al,
+        }
         float_cmp_setters = {
             tir.OpKind.CMP_EQ: self.asm.sete_al,
             tir.OpKind.CMP_NE: self.asm.setne_al,
@@ -1604,16 +1636,34 @@ class FnCompiler:
                     # ordered AND (less / less-or-equal): al &= !PF
                     self.asm.setnp_cl()
                     self.asm.and_al_cl()
-            elif self._is_i64_type(op.operands[0].ty) or self._is_i64_type(op.operands[1].ty):
-                self.asm.mov_rax_mem_rbp(l_slot)
-                self.asm.mov_rcx_mem_rbp(r_slot)
-                self.asm.cmp_rax_rcx()
-                int_cmp_setters[op.kind]()
             else:
-                self.asm.mov_eax_mem_rbp(l_slot)
-                self.asm.mov_ecx_mem_rbp(r_slot)
-                self.asm.cmp_eax_ecx()
-                int_cmp_setters[op.kind]()
+                # Stage 28.9 cycle 100 audit-R F1/F2 fix (HIGH conf 88-
+                # 92): pre-fix the 64-bit path only matched i64/isize
+                # (`_is_i64_type`), so u64/usize silently fell through
+                # to the 32-bit path — truncating the value. Now also
+                # take the 64-bit path for u64/usize. Plus pick the
+                # signed/unsigned setcc table by operand type so unsig-
+                # ned compares with the high bit set behave correctly.
+                use_64 = (
+                    self._is_i64_type(op.operands[0].ty)
+                    or self._is_i64_type(op.operands[1].ty)
+                    or self._is_u64_type(op.operands[0].ty)
+                    or self._is_u64_type(op.operands[1].ty)
+                )
+                use_unsigned = (
+                    self._is_unsigned_int_type(op.operands[0].ty)
+                    or self._is_unsigned_int_type(op.operands[1].ty)
+                )
+                setters = unsigned_int_cmp_setters if use_unsigned else int_cmp_setters
+                if use_64:
+                    self.asm.mov_rax_mem_rbp(l_slot)
+                    self.asm.mov_rcx_mem_rbp(r_slot)
+                    self.asm.cmp_rax_rcx()
+                else:
+                    self.asm.mov_eax_mem_rbp(l_slot)
+                    self.asm.mov_ecx_mem_rbp(r_slot)
+                    self.asm.cmp_eax_ecx()
+                setters[op.kind]()
             self.asm.movzx_eax_al()
             self.asm.mov_mem_rbp_eax(res_slot)
             return
