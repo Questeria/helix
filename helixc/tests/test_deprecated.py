@@ -451,12 +451,24 @@ def test_c67_cn1_nested_mod_name_not_aliased():
     Cycle-68 fix: only FnDecl/StructDecl/EnumDecl/ConstDecl/TypeAlias
     enter intra_mod_aliases; ModBlock, ImplBlock, UseDecl, AgentDecl,
     catch-all-else items are skipped.
+
+    Cycle 69 code-review CN-1 (LOW conf 70): test strengthened to
+    actually exercise the rule — `caller`'s body references `inner`
+    (as if it were a callable). Pre-fix the rewriter would turn
+    `Name("inner")` into `Name("outer__inner")` because `inner`
+    (the mod's name) was wrongly registered as an alias. Post-fix
+    `inner` stays unrewritten (and downstream typecheck rejects it
+    as an unknown symbol — which is the correct diagnostic).
     """
     from helixc.frontend.flatten_modules import flatten_modules
+    # Use a callable that aliases inner's name to test the rewrite.
+    # The body references `inner` as if it were a function. Pre-fix
+    # this got silently rewritten to `outer__inner`; post-fix it
+    # stays as `inner` for a downstream typecheck diagnostic.
     src = """
 mod outer {
     mod inner { fn helper() -> i32 { 0 } }
-    fn caller() -> i32 { 0 }
+    fn caller() -> i32 { inner() }
 }
 """
     prog = parse(src)
@@ -464,9 +476,17 @@ mod outer {
     fn_names = {it.name for it in prog.items if isinstance(it, A.FnDecl)}
     assert "outer__inner__helper" in fn_names
     assert "outer__caller" in fn_names
-    # The lifted fns should reference each other via their mangled
-    # names; `inner` (the mod-name) is NOT a sibling fn and should
-    # never appear as a callee target.
+    # CRITICAL: the body's `inner()` callee must NOT be rewritten to
+    # `outer__inner` (a non-existent symbol). It should remain `inner`
+    # so typecheck surfaces a clean "unknown function" diagnostic.
+    caller = next(it for it in prog.items
+                  if isinstance(it, A.FnDecl) and it.name == "outer__caller")
+    callee = caller.body.final_expr.callee
+    assert isinstance(callee, A.Name), f"expected Name callee, got {type(callee).__name__}"
+    assert callee.name == "inner", (
+        f"nested-mod name should NOT be rewritten by intra_mod_aliases; "
+        f"got {callee.name!r} (pre-fix value: 'outer__inner')"
+    )
 
 
 def test_c67_cn2_impl_block_target_mangled():
