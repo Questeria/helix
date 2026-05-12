@@ -6079,11 +6079,13 @@ fn parse_pattern(tok_base: i32, sb: i32) -> i32 {
         // without a matching `bind_pop`, leaking the bind-state
         // stack and resolving the bound name in later arms to
         // garbage. Mirror Python `_collect_binds` PatOr semantics.
-        // Also: cap alts at 15 (CN-3 fix) since fail_jmp_state cap
-        // is 16; 16 alts would emit 15 success-jmp disps (fine) +
-        // the last alt's fail-disps (also fine), but 17+ alts
-        // overflow silently. Emit AST_ERR with trap-id 62009 if
-        // alt count exceeds 15.
+        // Also: cap alts at 17 (cycle-80 CN-A precise bound; cycle-78
+        // initially used 15, cycle-79 16, cycle-80 17). fail_jmp_state
+        // cap is 16 successful adds; only N-1 non-last alts add to
+        // success_state; so N=18 is the first failing case. Emit
+        // AST_ERR with trap-id 62021 (renumbered from 62009 in
+        // cycle-85 to avoid Stage 7 audit reservation collision)
+        // if alt count exceeds 17.
         // Cycle 79 CN-1 deep-fix: check `first` AND each alt via the
         // recursive `pattern_contains_or` walker — cycle-78's shallow
         // tag check only caught top-level PAT_OR, missing the

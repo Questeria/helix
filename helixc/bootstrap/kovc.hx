@@ -4242,9 +4242,12 @@ fn emit_pat_lit(scrut_off: i32, lit: i32, fail_state: i32) -> i32 {
 // body`. Nested OR (e.g. `Some(1 | 2)`) is parsed correctly but the
 // inner OR's bind-state is constrained to no-binders.
 //
-// Slot 123 + 140 are read past the bn_state init-loop cap of 118 but
-// within the binary's arena buffer (statically sized at 32K i32
-// slots). The BSS-zero-fill ensures fresh state on first access.
+// Slots 123..156 are reserved by `install_builtin_names`' init loop
+// (`while i < 152`) which was bumped from 118 in cycle-85 (CN-1 fix)
+// precisely so OR scratch lives inside the init-zeroed region, NOT
+// past it. Pre-cycle-85 the slots were past the cap and overwrote
+// the builtin name table — Audit-13 defect class. Do NOT shrink the
+// init bound below 152 without revisiting these allocations.
 fn emit_pat_or(pat_idx: i32, scrut_off: i32, fail_state: i32,
                bind_state: i32, bn_state: i32) -> i32 {
     let head = __arena_get(pat_idx + 1);
@@ -4418,8 +4421,10 @@ fn count_pattern_binds(pat_idx: i32) -> i32 {
         total
     } else { if pt == 68 {
         // Stage 28.10 cycle-78 CN-2 follow-up: PAT_OR alts may not
-        // contain PAT_BIND (parser enforces via trap 62008 at
-        // parse_pattern). Defensive return 0 — if a future cycle
+        // contain PAT_BIND (parser enforces via trap 62020 at
+        // parse_pattern; renumbered from 62008 in cycle-85 to avoid
+        // Stage 7 reservation collision). Defensive return 0 — if
+        // a future cycle
         // lifts the parse-time restriction (e.g. by implementing
         // Python's `_collect_binds` intersection), this branch
         // must compute the intersection-count, not just 0.
