@@ -2898,6 +2898,18 @@ fn main() -> i32 {
     ) == 132, ("Stage 30 cycle-2 H1 regression test: `Pt<i32, i64>` "
                "(extra type-args for arity-1 struct) triggers trap "
                "62032 via the wired-up sentinel return path")
+    # Stage 30 cycle-3 MEDIUM (conf 78) follow-up: missing coverage
+    # of trap 62033 (bad-token-in-args). The same sentinel mechanism
+    # dispatches both 62032 (arity-mismatch) and 62033 (bad-token).
+    # `Pt<+>` has `+` (TK_PLUS) at the type-arg position which is
+    # neither IDENT (2) nor COMMA (13) nor GT (17), so the loop's
+    # else-arm sets ta_bad_token = 1.
+    assert compile_and_exec(
+        "struct Pt<T> { x: T, y: T } "
+        "fn main() -> i32 { let p = Pt<+>{ 10, 32 }; p.x }"
+    ) == 132, ("Stage 30 cycle-3 H1 regression test: `Pt<+>` "
+               "(bad token in type-args) triggers trap 62033 via the "
+               "wired-up sentinel return path")
     # Stage 6A: enum decl is parsed and registered, codegen treats it as
     # a 0-byte no-op (folded into AST_STRUCT_DECL tag 54). The program
     # below should compile and return 0 with no surprises.
