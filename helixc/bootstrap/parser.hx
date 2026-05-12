@@ -6100,10 +6100,10 @@ fn parse_pattern(tok_base: i32, sb: i32) -> i32 {
         // drain pattern below (which correctly consumes every alt).
         if pattern_contains_bind(first) == 1 {
             drain_or_alts(tok_base, sb);
-            mk_node(99, 62008, 0, 0)
+            mk_node(99, 62020, 0, 0)
         } else { if pattern_contains_or(first) == 1 {
             drain_or_alts(tok_base, sb);
-            mk_node(99, 62010, 0, 0)
+            mk_node(99, 62022, 0, 0)
         } else {
             let head = mk_node(51, first, 0, 0);
             let mut tail: i32 = head;
@@ -6141,11 +6141,11 @@ fn parse_pattern(tok_base: i32, sb: i32) -> i32 {
             // said `count > 16` (over-strict by 1); cycle-80 lands the
             // exact bound. 17-alt OR programs now parse correctly.
             if bind_violation == 1 {
-                mk_node(99, 62008, 0, 0)                // PAT_BIND in OR
+                mk_node(99, 62020, 0, 0)                // PAT_BIND in OR
             } else { if nested_violation == 1 {
-                mk_node(99, 62010, 0, 0)                // nested OR
+                mk_node(99, 62022, 0, 0)                // nested OR
             } else { if count > 17 {
-                mk_node(99, 62009, 0, 0)                // alt-cap overflow
+                mk_node(99, 62021, 0, 0)                // alt-cap overflow
             } else {
                 mk_node(68, head, count, 0)             // valid PAT_OR
             }}}

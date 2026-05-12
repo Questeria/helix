@@ -1680,8 +1680,22 @@ fn install_builtin_names() -> i32 {
     // Audit A1-F1: bumped 117 → 118 to reserve slot 122 for the
     // match-dispatch scrut_ty stash (set by emit_match_dispatch, read
     // by emit_pat_variant_disc). See `match_scrut_ty_set/get` below.
+    //
+    // Stage 28.10 cycle-84 CN-1 fix (HIGH conf 95): bumped 118 → 152
+    // to reserve slots 123..156 for emit_pat_or's success_state
+    // (bn_state + 123, 17 slots: 123..139) and alt_fail_state
+    // (bn_state + 140, 17 slots: 140..156). Pre-fix the OR scratch
+    // OVERWROTE the builtin name table bytes (e.g. "__arena_push"
+    // landed at slot 123 of the host compiler's arena because that
+    // was the very next __arena_push after this init loop). Same
+    // defect class as Audit-13 — unbounded write corrupting the
+    // builtin name strings such that subsequent kovc_byte_eq checks
+    // silently failed, falling through to unresolved CALL → SIGILL.
+    // Bumping the init now reserves the OR scratch region BEFORE
+    // the string-push sequence below, so first byte of
+    // "__arena_push" lands at slot 157 — clean of OR scratch.
     let mut i: i32 = 0;
-    while i < 118 {
+    while i < 152 {
         __arena_push(0);
         i = i + 1;
     }
