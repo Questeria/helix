@@ -651,6 +651,54 @@ def test_c49_fndecl_attrs_order_independent():
     assert structural_hash(f_ab) == structural_hash(f_ba)
 
 
+def test_c52_ms1_mangle_shape_expr_distinguishes_call_args():
+    """Stage 28.9 cycle 53 audit-T C52-MS1 regression (HIGH conf 90):
+    cycle-51's `_mangle_shape_expr` had no `A.Call` arm and fell into
+    the silent catch-all `x_Call`, so `tensor<f32, [8], cuda(0)>` and
+    `tensor<f32, [8], cuda(1)>` collapsed to the same mangled fn name.
+    The cycle-53 fix delegates to `structural_hash` which handles all
+    Expr subclasses uniformly (cycle-35 loud-fail discipline)."""
+    from helixc.frontend.monomorphize import _mangle_shape_expr
+    s = A.Span(line=1, col=1)
+    cuda0 = A.Call(
+        span=s, callee=A.Name(span=s, name="cuda", generics=[]),
+        args=[A.IntLit(span=s, value=0, type_suffix=None)],
+    )
+    cuda1 = A.Call(
+        span=s, callee=A.Name(span=s, name="cuda", generics=[]),
+        args=[A.IntLit(span=s, value=1, type_suffix=None)],
+    )
+    m0 = _mangle_shape_expr(cuda0)
+    m1 = _mangle_shape_expr(cuda1)
+    assert m0 != m1, (
+        f"cuda(0) and cuda(1) must produce distinct mangled names; "
+        f"got {m0!r} vs {m1!r}"
+    )
+    # And cycle-53's structural-hash delegation works for Field too
+    # (which the prior enumeration also missed):
+    field_a = A.Field(
+        span=s, obj=A.Name(span=s, name="ns", generics=[]), name="a",
+    )
+    field_b = A.Field(
+        span=s, obj=A.Name(span=s, name="ns", generics=[]), name="b",
+    )
+    assert _mangle_shape_expr(field_a) != _mangle_shape_expr(field_b)
+
+
+def test_c52_ms1_mangle_shape_expr_span_independent():
+    """C52-MS1 follow-on: confirm span-independence is preserved by
+    the structural_hash delegation."""
+    from helixc.frontend.monomorphize import _mangle_shape_expr
+    s1 = A.Span(line=1, col=1)
+    s2 = A.Span(line=99, col=42)
+    i_at_s1 = A.IntLit(span=s1, value=5, type_suffix=None)
+    i_at_s2 = A.IntLit(span=s2, value=5, type_suffix=None)
+    assert _mangle_shape_expr(i_at_s1) == _mangle_shape_expr(i_at_s2), (
+        "_mangle_shape_expr must be span-independent (delegates to "
+        "structural_hash which strips spans)"
+    )
+
+
 def test_c49_3_monomorphize_array_size_distinguishes_instantiations():
     """Stage 28.9 cycle 51 audit-T C49-3 regression (HIGH conf 85):
     monomorphize._mangle_ty was missing the array size, so

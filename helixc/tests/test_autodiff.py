@@ -677,6 +677,51 @@ def test_c6_revert_c4_2_literal_binary_no_false_trap():
 
 
 # ============================================================================
+def test_c52_ad1_fn_table_sig_includes_body_hash():
+    """Stage 28.9 cycle 53 audit-R C52-AD1 regression (HIGH):
+    pre-fix `_fn_table_sig` returned ONLY the sorted set of fn
+    names, so two calls to `differentiate()` with the same expr,
+    same var, same fn_table KEYS but DIFFERENT fn BODIES returned
+    the stale cached derivative — silent gradient corruption.
+    Reproduced numerically: g(x) = x*x has derivative 2*x (= 4 at x=2);
+    after changing g to x*x*x (derivative 3*x*x = 12 at x=2), the
+    cache returned 4 instead of 12.
+
+    The cycle-53 fix extends `_fn_table_sig` to include
+    `structural_hash(fn.body)` per entry, so any body change
+    invalidates the cache."""
+    from helixc.frontend.autodiff import (
+        differentiate, clear_diff_cache, diff_cache_stats,
+    )
+    prog1 = parse("fn g(x: f64) -> f64 { x * x }")
+    prog2 = parse("fn g(x: f64) -> f64 { x * x * x }")
+    g1 = next(it for it in prog1.items
+              if isinstance(it, A.FnDecl) and it.name == "g")
+    g2 = next(it for it in prog2.items
+              if isinstance(it, A.FnDecl) and it.name == "g")
+    s = A.Span(line=1, col=1)
+    def call_expr():
+        return A.Call(
+            span=s, callee=A.Name(span=s, name="g", generics=[]),
+            args=[A.Name(span=s, name="y", generics=[])],
+        )
+    clear_diff_cache()
+    d1 = differentiate(call_expr(), "y", {"g": g1})
+    d2 = differentiate(call_expr(), "y", {"g": g2})
+    hits, misses = diff_cache_stats()
+    # Two distinct fn bodies → cache must MISS twice, not HIT.
+    assert misses == 2, (
+        f"cache must miss for both compiles when bodies differ; "
+        f"got hits={hits}, misses={misses}"
+    )
+    # And the derivatives must structurally differ.
+    assert repr(d1) != repr(d2), (
+        f"derivatives must differ when bodies differ "
+        f"(x*x vs x*x*x); got identical {d1!r}"
+    )
+
+
+# ============================================================================
 # Test runner
 # ============================================================================
 def main():

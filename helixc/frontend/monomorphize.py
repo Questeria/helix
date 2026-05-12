@@ -47,6 +47,7 @@ from copy import deepcopy
 from typing import Optional
 
 from . import ast_nodes as A
+from .ast_hash import structural_hash
 
 
 def mangle(name: str, ty_args: list[A.TyNode]) -> str:
@@ -62,37 +63,48 @@ def mangle(name: str, ty_args: list[A.TyNode]) -> str:
 
 
 def _mangle_shape_expr(e) -> str:
-    """Stage 28.9 cycle 51 audit-T C49-3 fix (conf 85): a span-free
-    string digest of a shape-typed Expr (TyArray.size, TyTensor.shape
-    element, TyTile.shape element, etc.). Mirrors struct_mono._shape_key
-    but produces a string suitable for embedding into mangled fn names.
+    """Stage 28.9 cycle 51 audit-T C49-3 fix (conf 85) +
+    cycle 53 audit-T C52-MS1/C52-MS2/C52-CR1/C52-MS3 fix
+    (HIGH conf 90): a span-free string digest of a shape-typed Expr
+    (TyArray.size, TyTensor.shape element / device / layout,
+    TyTile.shape element / memspace).
 
-    Pre-fix, `_mangle_ty(TyArray(...))` returned just `arr_<elem>`
-    regardless of the size — so `f::<[i32; 3]>` and `f::<[i32; 5]>`
-    collapsed to the same instantiation. The parallel struct_mono fix
-    (audit 28.8 cycle 2 C2-5) used `_shape_key(t.size)` for the struct
-    side; this is the fn-mono complement.
+    Strategy change in cycle 53: instead of enumerating every Expr
+    subclass — which created the same drift hazard that produced
+    cycle-34/36/38/44 (semantic field invisible to identity layer)
+    — delegate to `structural_hash` (the canonical span-stripped
+    AST canonicalizer from ast_hash.py). This:
+
+      1. Closes C52-MS1 (no Call arm → `cuda(0)` vs `cuda(1)`
+         collapsed). structural_hash handles ALL Expr subclasses.
+      2. Closes C52-MS2 (silent catchall `x_<class>` collapsed
+         distinct exprs). structural_hash raises NotImplementedError
+         on unknown subclasses (cycle-35 discipline).
+      3. Closes C52-CR1 (theoretical `_` separator non-injectivity
+         in the prior enum-form). SHA-256 hex digests are
+         unambiguous.
+      4. Closes C52-MS3 drift with struct_mono._shape_key — though
+         struct_mono's own canonicalizer remains distinct, neither
+         can silently drift further than structural_hash itself.
+
+    The output is `"h<12-hex-prefix>"` — short enough for mangled
+    fn-name embedding, with SHA-256 collision resistance making the
+    truncation safe in practice.
     """
     if e is None:
         return "none"
-    if isinstance(e, A.IntLit):
-        return f"i{e.value}"
-    if isinstance(e, A.Name):
-        return f"n_{e.name}"
-    if isinstance(e, A.Path):
-        return "p_" + "_".join(e.segments)
-    if isinstance(e, A.Binary):
-        # Stable string-form for compound shape expressions
-        # (e.g. `[T; N+1]`); avoids embedding the operator's span.
-        return (f"b_{e.op}_"
-                + _mangle_shape_expr(e.left) + "_"
-                + _mangle_shape_expr(e.right))
-    if isinstance(e, A.Unary):
-        return f"u_{e.op}_" + _mangle_shape_expr(e.operand)
-    # Conservative default: use repr without span attempts. Better
-    # than dropping the field entirely; for the common case the
-    # arms above cover all encountered shapes.
-    return f"x_{type(e).__name__}"
+    # Delegate to the canonical structural_hash. Wrap in a defensive
+    # guard so a hash-pass-internal NotImplementedError surfaces as
+    # a build-time error here rather than as an opaque crash deep in
+    # the codegen pipeline.
+    try:
+        h = structural_hash(e)
+    except (TypeError, AttributeError, NotImplementedError):
+        # Re-raise with caller context — the structural_hash
+        # catch-all message is informative on its own; we add the
+        # mangle-site as breadcrumb.
+        raise
+    return "h" + h[:12]
 
 
 def _mangle_ty(t: A.TyNode) -> str:

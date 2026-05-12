@@ -118,12 +118,32 @@ def diff_cache_stats() -> tuple[int, int]:
 
 
 def _fn_table_sig(fn_table: dict[str, "A.FnDecl"] | None) -> str:
+    # Stage 28.9 cycle 53 audit-R C52-AD1 fix (HIGH conf): pre-fix the
+    # signature emitted ONLY the sorted names, NOT the bodies. Two
+    # compiles with `{g: x*x}` and `{g: x*x*x}` produced identical
+    # cache keys → silent gradient corruption (verified: returned
+    # gradient `4` at x=2 when correct value with new body is `12`).
+    # Same defect class as C44-1 / C34-1 / C46-1 (semantic field
+    # invisible to identity layer), but in the autodiff memoization
+    # cache rather than the structural-hash universe.
+    # Fix: include `structural_hash(fn.body)` per entry so any body
+    # change invalidates the cache. Wrapped in the same defensive
+    # guard as the call site at line 154 — fail to "no cache" rather
+    # than crash.
     if not fn_table:
         return ""
-    # The set of *names* available is the relevant key — body changes
-    # invalidate the expr hash already, but adding a new fn could change
-    # inlining behavior.
-    return "|".join(sorted(fn_table.keys()))
+    parts: list[str] = []
+    for name in sorted(fn_table.keys()):
+        fn = fn_table[name]
+        try:
+            body_hash = structural_hash(fn.body)
+        except (TypeError, ValueError, AttributeError):
+            # Hash failure → use a sentinel that differs from any
+            # legitimate hash. Bypass-cache effect; preserves
+            # correctness.
+            body_hash = f"<unhashable:{id(fn.body)}>"
+        parts.append(f"{name}:{body_hash}")
+    return "|".join(parts)
 
 
 def differentiate(expr: A.Expr, var: str,
