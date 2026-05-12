@@ -147,7 +147,23 @@ def _mangle_ty(t: A.TyNode) -> str:
                 + "__mem_" + _mangle_shape_expr(t.memspace))
     if isinstance(t, A.TyGeneric):
         return t.base + "_" + "_".join(_mangle_ty(a) for a in t.args)
-    return "X"
+    # Stage 28.9 cycle 71 type-design CN-2 fix (HIGH conf 78):
+    # pre-fix `return "X"` silently collapsed any future unrecognized
+    # TyNode subclass to the same mangled key. Sister modules already
+    # use the loud-fail discipline (struct_mono._ty_key raises
+    # TypeError; hash_cons._ty_equal raises NotImplementedError;
+    # flatten_impls/_modules._rewrite_expr raise NotImplementedError).
+    # Layer-0/1 expansion (refinement types, confidence types, tiered
+    # memory, etc.) will add new TyNode subclasses — silent collapse
+    # would cause silent codegen mis-link. Promote to loud-fail so
+    # future additions force explicit dispatch here.
+    raise NotImplementedError(
+        f"_mangle_ty: unhandled TyNode subclass {type(t).__name__} "
+        f"at {getattr(t, 'span', '?')!r}. Add an explicit arm "
+        f"to monomorphize._mangle_ty (and sibling switches in "
+        f"struct_mono._ty_key, hash_cons._ty_equal, ast_hash._ty_repr "
+        f"for cross-cutting consistency)."
+    )
 
 
 # Audit 28.8 cycle 4 C4-1: trap-id constant promoted from a literal

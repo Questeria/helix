@@ -257,6 +257,17 @@ def _ast_equal(a: Any, b: Any) -> bool:
             if not _stmt_equal(sa, sb):
                 return False
         return _ast_equal(a.final_expr, b.final_expr)
+    # Stage 28.9 cycle 71 type-design CN-3 deferred (sub-75 conf 70):
+    # the audit flagged this fallback as architecturally compromising
+    # the trap-20001 collision-defense contract (uses SHA-256 to
+    # defend against SHA-256 collisions). A loud-fail conversion was
+    # attempted but exposed multiple missing explicit arms (Assign,
+    # Return, Break, Continue, Quote, Splice, Modify, UnsafeBlock,
+    # TileLit, StructLit, For, While, Loop, Match, Path) that
+    # legitimate compile paths reach. Deferred to a dedicated cycle
+    # that adds all the missing arms incrementally with tests for
+    # each. For now the conservative-fallback comment is preserved
+    # (cycle-70 CN-3 at conf 70 was below the 75% gate).
     # Conservative default: fall back to hash equality. Reaching this
     # branch means _ast_equal hit a node type the explicit enumeration
     # doesn't cover; SHA-256 is collision-resistant so trusting the

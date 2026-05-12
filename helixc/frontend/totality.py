@@ -29,6 +29,44 @@ from __future__ import annotations
 from typing import Iterator
 
 from . import ast_nodes as A
+from .ast_walker import ASTVisitor, iter_fn_decls
+
+
+# Stage 28.9 cycle 71 type-design CN-1 fix (HIGH conf 80): migrate
+# totality to ASTVisitor + iter_fn_decls discipline. Pre-fix the
+# item walker (`collect_items`) and the expr walker (`_children`)
+# were hand-rolled — `_children` used a literal attribute-name list
+# that would silently drop coverage for any future Expr subclass
+# field (e.g. an `await_expr`, `let_else`, etc.). The cycle-58 walker
+# discipline migrated panic_pass, unsafe_pass, trace_pass, and
+# deprecated_pass.find_deprecation_call_sites to ASTVisitor;
+# totality was the last hand-rolled holdout.
+#
+# `iter_fn_decls` (from ast_walker) gives drift-proof FnDecl
+# enumeration through ImplBlock.methods and ModBlock.items
+# (replaces the in-line collect_items recursion); `_SelfCallCollector`
+# is an ASTVisitor subclass that uses generic_visit to traverse all
+# Expr children via dataclass-field introspection (replaces _children
+# hard-coded attribute list).
+
+
+class _SelfCallCollector(ASTVisitor):
+    """Collect every Call(callee=Name(fn_name), ...) inside the node
+    being visited. Cycle-71 replacement for hand-rolled `_children` +
+    `_collect_self_calls` recursion. ASTVisitor's generic_visit walks
+    every dataclass-field on every AST node — same defect-class fix
+    cycles 60/64/68 applied to other passes."""
+
+    def __init__(self, fn_name: str):
+        self.fn_name = fn_name
+        self.calls: list[A.Call] = []
+
+    def visit_Call(self, node: A.Call) -> None:
+        callee = node.callee
+        if isinstance(callee, A.Name) and callee.name == self.fn_name:
+            self.calls.append(node)
+        # Continue into the call's args + callee for nested self-calls.
+        self.generic_visit(node)
 
 
 def check_totality(prog: A.Program) -> list[tuple[str, str]]:
@@ -39,40 +77,23 @@ def check_totality(prog: A.Program) -> list[tuple[str, str]]:
     Mutual recursion is detected and pessimistically reported (each
     cycle participant flagged unless one is @partial).
 
-    Stage 28.9 cycle 58 audit-R C57-1 fix (HIGH conf 88): pre-fix the
-    walker iterated only `prog.items` filtered for `A.FnDecl`. Methods
-    inside `A.ImplBlock.methods` and functions inside `A.ModBlock.items`
-    were silently skipped — a recursive fn defined inside `mod m { ... }`
-    or `impl X { ... }` produced `totality: OK` from `helixc check`
-    despite the backend driver correctly catching it (because the
-    backend runs `flatten_modules` before totality). Same item-walker
-    gap as deprecated_pass C57-5 already closed via `scan_items`. Now
-    recurse through ImplBlock and ModBlock containers too.
-    """
+    Stage 28.9 cycle 58 audit-R C57-1: pre-fix the walker iterated
+    only `prog.items` filtered for `A.FnDecl` and missed ImplBlock /
+    ModBlock nested fns. Cycle 58 added in-line recursion via
+    `collect_items`; cycle 71 (type-design CN-1) migrated to the
+    shared `iter_fn_decls` helper for drift-proof enumeration."""
     fns: dict[str, A.FnDecl] = {}
-
-    def collect_items(items: list) -> None:
-        for it in items:
-            if isinstance(it, A.FnDecl):
-                fns[it.name] = it
-            elif isinstance(it, A.ImplBlock):
-                for m in it.methods:
-                    if isinstance(m, A.FnDecl):
-                        fns[m.name] = m
-            elif isinstance(it, A.ModBlock):
-                collect_items(it.items)
-            # Other Item subclasses (StructDecl, EnumDecl, UseDecl,
-            # ModuleDecl, TypeAlias, ConstDecl, AgentDecl) don't carry
-            # FnDecl-bearing bodies and are skipped.
-
-    collect_items(prog.items)
+    for fn in iter_fn_decls(prog):
+        fns[fn.name] = fn
 
     failures: list[tuple[str, str]] = []
     for name, fn in fns.items():
         if "partial" in fn.attrs:
             continue
         # Find direct recursive calls in fn's body.
-        recursive_calls = list(_collect_self_calls(fn.body, name))
+        collector = _SelfCallCollector(name)
+        collector.visit(fn.body)
+        recursive_calls = collector.calls
         if not recursive_calls:
             continue  # not recursive, trivially total (or just non-recursive)
         # Need at least one parameter that strictly decreases on every
@@ -94,42 +115,6 @@ def check_totality(prog: A.Program) -> list[tuple[str, str]]:
                 f"@partial to acknowledge potential non-termination.",
             ))
     return failures
-
-
-def _collect_self_calls(node, fn_name: str) -> Iterator[A.Call]:
-    """Yield every Call to `fn_name` inside `node`."""
-    if node is None:
-        return
-    if isinstance(node, A.Call) and isinstance(node.callee, A.Name) \
-            and node.callee.name == fn_name:
-        yield node
-    for child in _children(node):
-        yield from _collect_self_calls(child, fn_name)
-
-
-def _children(node) -> Iterator:
-    if node is None:
-        return
-    for attr in ("left", "right", "cond", "then", "else_", "operand",
-                 "value", "expr", "final_expr", "callee", "scrutinee",
-                 "iter_expr", "body", "transformation", "verifier",
-                 "target", "obj", "inner", "guard", "pattern"):
-        if hasattr(node, attr):
-            v = getattr(node, attr)
-            if v is not None:
-                yield v
-    if hasattr(node, "stmts"):
-        for s in node.stmts:
-            yield s
-    if hasattr(node, "args"):
-        for a in node.args:
-            yield a
-    if hasattr(node, "arms"):
-        for arm in node.arms:
-            yield arm
-    if hasattr(node, "elems"):
-        for e in node.elems:
-            yield e
 
 
 def _arg_strictly_decreases(call: A.Call, params: list[A.FnParam],
