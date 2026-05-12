@@ -4252,11 +4252,19 @@ fn emit_pat_lit(scrut_off: i32, lit: i32, fail_state: i32) -> i32 {
 //                                 alt's fail jne disp slots; patched to
 //                                 next-alt label between alts.
 //
-// Phase-0 limitation: PAT_OR alts may not bind variables (no PAT_BIND
-// inside OR alts), because each alt's bind_state would be different.
+// Phase-0 limitations enforced at PARSE time (parser.hx::parse_pattern):
+//   - PAT_OR alts may not bind variables (trap 62020) — each alt's
+//     bind_state would differ; mirrors match_lower.py _collect_binds
+//     intersection logic which is deferred.
+//   - Nested OR (e.g. `Some(1 | 2)` or `1 | 2 | (3 | 4)`) is REJECTED
+//     (trap 62022) — was previously documented as "parsed but
+//     constrained" pre-cycle-79; cycle-79's deep walker now rejects
+//     nested ORs to avoid the static-slot collision in emit_pat_or.
+//   - Alt count > 17 (trap 62021) — fail_jmp_state cap is 16
+//     successful adds; with N-1 non-last alt adds, N=18 is first
+//     failing case.
 // Common Phase-0 use: scalar literal alternation like `1 | 2 | 3 =>
-// body`. Nested OR (e.g. `Some(1 | 2)`) is parsed correctly but the
-// inner OR's bind-state is constrained to no-binders.
+// body`.
 //
 // Slots 123..156 are reserved by `install_builtin_names`' init loop
 // (`while i < 152`) which was bumped from 118 in cycle-85 (CN-1 fix)
