@@ -225,12 +225,10 @@ fn gp_tab_lookup(sb: i32, name_s: i32, name_l: i32) -> i32 {
 
 // Stage 28.11 INC-3a cycle-5 polish (cycle-4 type-design F1+F2+F3, MED
 // conf 80-85): centralized helpers for the generic-param marker
-// encoding `200 + gp_idx`. Pre-fix the literal `200` was open-coded at
-// 4+ sites (writer parse_struct_decl ~6204, reader parse_primary ~1650,
-// fn-param sibling encoding at parser.hx:5380/5385). With INC-3b about
-// to add a third reader at parse_primary's struct-lit detection, the
-// magic-number proliferation would have reached 5-6 sites — making
-// future cap bumps fragile.
+// encoding `200 + gp_idx`. Pre-cycle-5 the literal `200` was open-coded
+// at multiple sites; cycle-5 extracted these helpers and migrated the
+// 2 INC-3a-active sites (writer parse_struct_decl ~6238, reader
+// parse_primary ~1681) to use them.
 //
 // Invariant: struct_tab cap (currently 8) MUST remain below
 // `gp_marker_base()` (= 200). The 192-slot gap between struct_tab's
@@ -239,14 +237,58 @@ fn gp_tab_lookup(sb: i32, name_s: i32, name_l: i32) -> i32 {
 // (INC-3b will add monomorphized clones), confirm `struct_tab_count
 // < gp_marker_base()` is preserved. Future hardening: trap when
 // struct_tab_add would assign idx >= gp_marker_base().
+//
+// === Cycle-7 polish (cycle-6 type-design C2 MED conf 85): KNOWN
+// non-migrated raw-200 sites ===
+//
+// The following 7 sites still use literal 200 / `200 + X` arithmetic.
+// They are intentionally NOT migrated in cycles 5-7 per the workspace
+// cycle-71 narrow-scope discipline (Stage-8 surfaces are not under
+// active iteration in INC-3a):
+//
+//   parser.hx:4114 — Stage-8 monomorphize_pass param-ty decode
+//                    (`if p_ty_raw >= 200 { ... }`)
+//   parser.hx:4115 — Stage-8 monomorphize_pass param gp_idx extract
+//                    (`let g_idx = p_ty_raw - 200`)
+//   parser.hx:4134 — Stage-8 monomorphize_pass return-ty decode
+//   parser.hx:4135 — Stage-8 monomorphize_pass return gp_idx extract
+//   parser.hx:5411 — parse_fn_decl param-ty generic encode
+//                    (`p_ty_generic = if gp_idx_p >= 0 { 200 + gp_idx_p }`)
+//   parser.hx:5416 — parse_fn_decl param post-encode `< 200` guard
+//   parser.hx:5492 — parse_fn_decl ret-ty generic encode
+//
+// When INC-3b adds the use-site reader at parse_primary, it should
+// compose against `gp_marker_is` / `gp_marker_decode` from this block.
+// A separate hardening pass should migrate the 7 sites above to also
+// use these helpers; cycle-71 narrow-scope keeps that broader migration
+// outside INC-3a's surface.
 fn gp_marker_base() -> i32 { 200 }
 fn gp_marker_encode(gp_idx: i32) -> i32 { gp_marker_base() + gp_idx }
 fn gp_marker_is(v: i32) -> i32 {
     if v >= gp_marker_base() { 1 } else { 0 }
 }
-// gp_marker_decode is reserved for INC-3b's monomorphization pass
-// (parse_primary use-site reading the encoded gp_idx).
-fn gp_marker_decode(v: i32) -> i32 { v - gp_marker_base() }
+// Stage 28.11 INC-3a cycle-7 fix (cycle-6 type-design C1 MED conf 90):
+// gp_marker_decode is INTENTIONALLY NOT provided as a helper. A pure-
+// arithmetic decode `v - gp_marker_base()` would be a partial function
+// (defined only for v >= gp_marker_base()), and the bootstrap has no
+// runtime trap primitive available in pure-helper context — neither
+// `__trap()` nor a panic-on-i32-return mechanism exists. A misuse
+// (decode called on a non-marker value) would silently return a
+// negative integer that off-by-200 indexes into gp_tab arrays, exactly
+// the silent-miscompile defect class cycle-2 (SF-1/SF-2/SF-3) caught.
+//
+// Instead, INC-3b callers MUST compose `gp_marker_is` with inline
+// arithmetic at the call site:
+//
+//   if gp_marker_is(v) == 1 {
+//       let gp_idx = v - gp_marker_base();   // safe — v >= 200
+//       // ... use gp_idx ...
+//   }
+//
+// This mirrors the bootstrap's existing pattern (cf. parser.hx:4114-4115
+// where Stage-8 monomorphize_pass guards `if p_ty_raw >= 200 { let
+// g_idx = p_ty_raw - 200; ... }` before decoding). Putting the guard
+// at the call site keeps the precondition visible to reviewers.
 
 // Stage 8: mono-instantiation request table. Entries pushed by turbofish-
 // at-call-site code in parse_primary; consumed at end of parse_program
