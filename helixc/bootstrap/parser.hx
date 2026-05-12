@@ -3285,6 +3285,23 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
                     if lbrace_t != 5 {
                         // Missing `{` after `Pt<i32>` — emit trap 62030.
                         mk_node(99, 62030, 0, 0)
+                    } else { if mono_s_idx < 0 {
+                        // Stage 28.11 INC-3b cycle-1 type-design F-1
+                        // fix (MED conf 92): struct_tab_add at line
+                        // ~3277 returns -1 when struct_tab cap (8) is
+                        // exceeded. Pre-fix the use-site computed
+                        // `entry_m = struct_tab_base + (-1)*4`, reading
+                        // off the start of the table — garbage arity,
+                        // either wrong trap (50040 arity-mismatch
+                        // obscures cap-overflow root cause) or silent
+                        // miscompile when garbage happened to match
+                        // field count. Mirror parse_struct_decl's guard
+                        // at line ~6580 which checks `struct_idx_added
+                        // >= 0` before struct_gp_tab_add. Reserve trap
+                        // 62031 = "struct_tab cap overflow at generic
+                        // mono use site"; user-actionable diagnostic
+                        // distinct from the 50040 arity-mismatch class.
+                        mk_node(99, 62031, 0, 0)
                     } else {
                         cur_advance(sb);                   // consume `{`
                         let entry_m = struct_tab_base(sb) + mono_s_idx * 4;
@@ -3327,7 +3344,7 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
                                 mk_node(50, n, head_idx, 0)
                             }
                         }
-                    }
+                    }}
                 } else {
                     // Not a generic struct use — fall through to var
                     // ref (the surrounding parser handles `<` as a
