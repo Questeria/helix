@@ -257,6 +257,18 @@ class Asm:
     def cmp_rax_rcx(self) -> None:
         self.b.emit(0x48, 0x39, 0xC8)          # cmp rax, rcx
 
+    def test_rax_rax(self) -> None:
+        self.b.emit(0x48, 0x85, 0xC0)          # test rax, rax
+
+    def mov_rcx_rax(self) -> None:
+        self.b.emit(0x48, 0x89, 0xC1)          # mov rcx, rax
+
+    def shr_rax_1(self) -> None:
+        self.b.emit(0x48, 0xD1, 0xE8)          # shr rax, 1
+
+    def and_ecx_imm8(self, imm: int) -> None:
+        self.b.emit(0x83, 0xE1, imm & 0xFF)    # and ecx, imm8
+
     def neg_rax(self) -> None:
         self.b.emit(0x48, 0xF7, 0xD8)          # neg rax
 
@@ -809,11 +821,13 @@ class Asm:
     # Shifts. x86 shift instructions take the shift count in CL (low byte
     # of ECX). Caller must mov_ecx_mem_rbp(r_slot) before invoking.
     # SAR (arithmetic right shift) preserves the sign bit; SHR (logical)
-    # zero-fills. Helix's `>>` is signed -> SAR.
+    # zero-fills. Signed integer `>>` uses SAR; unsigned integer `>>` uses SHR.
     def shl_eax_cl(self) -> None:  self.b.emit(0xD3, 0xE0)
     def sar_eax_cl(self) -> None:  self.b.emit(0xD3, 0xF8)
+    def shr_eax_cl(self) -> None:  self.b.emit(0xD3, 0xE8)
     def shl_rax_cl(self) -> None:  self.b.emit(0x48, 0xD3, 0xE0)
     def sar_rax_cl(self) -> None:  self.b.emit(0x48, 0xD3, 0xF8)
+    def shr_rax_cl(self) -> None:  self.b.emit(0x48, 0xD3, 0xE8)
     # Bitwise unary NOT (~): one's complement.
     def not_eax(self) -> None:  self.b.emit(0xF7, 0xD0)
     def not_rax(self) -> None:  self.b.emit(0x48, 0xF7, 0xD0)
@@ -1095,6 +1109,55 @@ class FnCompiler:
                 f"F16C / AVX-512 / quantized codegen path."
             )
 
+    def _emit_u64_to_float(self, src_slot: int, res_slot: int,
+                           *, to_is_f64: bool) -> None:
+        """Emit unsigned u64/usize -> f32/f64 conversion.
+
+        x86-64 SSE2 has signed 64-bit integer-to-float conversion, but no
+        unsigned 64-bit form. For high-bit-set values, convert
+        ((x >> 1) | (x & 1)) as signed, then double the float result.
+        """
+        buf = self.asm.b
+        self.asm.mov_rax_mem_rbp(src_slot)
+        self.asm.test_rax_rax()
+        buf.emit(0x79, 0x00)  # jns fast_path
+        jns_disp_off = buf.offset() - 1
+        jns_after = buf.offset()
+
+        self.asm.mov_rcx_rax()
+        self.asm.shr_rax_1()
+        self.asm.and_ecx_imm8(1)
+        self.asm.or_rax_rcx()
+        if to_is_f64:
+            buf.emit(0xF2, 0x48, 0x0F, 0x2A, 0xC0)  # cvtsi2sd xmm0, rax
+            buf.emit(0xF2, 0x0F, 0x58, 0xC0)        # addsd xmm0, xmm0
+            self.asm.movsd_mem_rbp_xmm0(res_slot)
+        else:
+            buf.emit(0xF3, 0x48, 0x0F, 0x2A, 0xC0)  # cvtsi2ss xmm0, rax
+            buf.emit(0xF3, 0x0F, 0x58, 0xC0)        # addss xmm0, xmm0
+            self.asm.movss_mem_rbp_xmm0(res_slot)
+        buf.emit(0xEB, 0x00)  # jmp done
+        jmp_done_disp_off = buf.offset() - 1
+        jmp_done_after = buf.offset()
+
+        fast_addr = buf.offset()
+        d = fast_addr - jns_after
+        if not -128 <= d <= 127:
+            raise ValueError(f"u64-to-float jns disp out of rel8: {d}")
+        buf.bytes_[jns_disp_off] = d & 0xFF
+        if to_is_f64:
+            buf.emit(0xF2, 0x48, 0x0F, 0x2A, 0xC0)  # cvtsi2sd xmm0, rax
+            self.asm.movsd_mem_rbp_xmm0(res_slot)
+        else:
+            buf.emit(0xF3, 0x48, 0x0F, 0x2A, 0xC0)  # cvtsi2ss xmm0, rax
+            self.asm.movss_mem_rbp_xmm0(res_slot)
+
+        done_addr = buf.offset()
+        d = done_addr - jmp_done_after
+        if not -128 <= d <= 127:
+            raise ValueError(f"u64-to-float done disp out of rel8: {d}")
+        buf.bytes_[jmp_done_disp_off] = d & 0xFF
+
     def _check_array_elem_size_supported(self, ty: tir.TIRType) -> None:
         """Audit 28.8 cycle 16 C16-1 (HIGH): LOAD_ELEM/STORE_ELEM
         currently emit unconditional 32-bit `mov eax, [...]` / `mov
@@ -1314,12 +1377,27 @@ class FnCompiler:
                 self.asm.b.emit(0x48, 0x63, 0xC0)
                 self.asm.mov_mem_rbp_rax(res_slot)
                 return
+            # Unsigned u64/usize -> float needs the high-bit-safe sequence
+            # because x86-64 SSE exposes only signed 64-bit cvtsi2s* forms.
+            if self._is_u64_type(from_ty) and to_is_f64:
+                self._emit_u64_to_float(src_slot, res_slot, to_is_f64=True)
+                return
+            if self._is_u64_type(from_ty) and to_is_float:
+                self._emit_u64_to_float(src_slot, res_slot, to_is_f64=False)
+                return
             # i64 -> f64: cvtsi2sd with REX.W.
             if from_is_i64 and to_is_f64:
                 self.asm.mov_rax_mem_rbp(src_slot)
                 # F2 48 0F 2A C0 = cvtsi2sd xmm0, rax
                 self.asm.b.emit(0xF2, 0x48, 0x0F, 0x2A, 0xC0)
                 self.asm.movsd_mem_rbp_xmm0(res_slot)
+                return
+            # i64 -> f32: cvtsi2ss with REX.W.
+            if self._is_i64_type(from_ty) and to_is_float:
+                self.asm.mov_rax_mem_rbp(src_slot)
+                # F3 48 0F 2A C0 = cvtsi2ss xmm0, rax
+                self.asm.b.emit(0xF3, 0x48, 0x0F, 0x2A, 0xC0)
+                self.asm.movss_mem_rbp_xmm0(res_slot)
                 return
             # i64 -> i64: copy 8 bytes
             if from_is_i64 and to_is_i64:
@@ -1611,15 +1689,22 @@ class FnCompiler:
             l_slot = self._slot_of(op.operands[0])
             r_slot = self._slot_of(op.operands[1])
             res_slot = self._slot_of(op.results[0])
-            if self._is_i64_type(op.results[0].ty):
+            ty = op.results[0].ty
+            if self._is_64bit_int_type(ty):
                 self.asm.mov_rax_mem_rbp(l_slot)
                 self.asm.mov_rcx_mem_rbp(r_slot)
-                self.asm.sar_rax_cl()
+                if self._is_unsigned_int_type(ty):
+                    self.asm.shr_rax_cl()
+                else:
+                    self.asm.sar_rax_cl()
                 self.asm.mov_mem_rbp_rax(res_slot)
             else:
                 self.asm.mov_eax_mem_rbp(l_slot)
                 self.asm.mov_ecx_mem_rbp(r_slot)
-                self.asm.sar_eax_cl()
+                if self._is_unsigned_int_type(ty):
+                    self.asm.shr_eax_cl()
+                else:
+                    self.asm.sar_eax_cl()
                 self.asm.mov_mem_rbp_eax(res_slot)
             return
         if op.kind == tir.OpKind.BIT_NOT:

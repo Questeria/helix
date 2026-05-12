@@ -110,6 +110,18 @@ _INT_BITS = {
     "bool": 32,  # bool comparisons reified to i32 in IR
 }
 
+_UNSIGNED_INT_NAMES = {"u8", "u16", "u32", "u64", "usize"}
+
+
+def _is_unsigned_int_type(ty: "tir.TIRType") -> bool:
+    return isinstance(ty, tir.TIRScalar) and ty.name in _UNSIGNED_INT_NAMES
+
+
+def _int_bits_for_type(ty: "tir.TIRType") -> int:
+    if isinstance(ty, tir.TIRScalar):
+        return _INT_BITS.get(ty.name, 32)
+    return 32
+
 
 def _wrap_int_to_type(value: int, ty: "tir.TIRType") -> int:
     """Wrap a Python int to the signed range of the given TIR scalar type
@@ -519,7 +531,11 @@ def _try_fold_op(op: tir.Op, defs: dict) -> tir.Op | None:
                             f"shift amount {r} out of range "
                             f"[0, {_bits}) for {_bits}-bit SHR fold"
                         )
-                    v = l >> r   # arithmetic in Python for signed ints
+                    if (isinstance(_res_ty, tir.TIRScalar)
+                            and _res_ty.name in _UNSIGNED_INT_NAMES):
+                        v = (l & ((1 << _bits) - 1)) >> r
+                    else:
+                        v = l >> r   # arithmetic in Python for signed ints
                 else:
                     return None
             except FoldError:
@@ -551,6 +567,14 @@ def _try_fold_op(op: tir.Op, defs: dict) -> tir.Op | None:
         if l_def.kind == tir.OpKind.CONST_INT and r_def.kind == tir.OpKind.CONST_INT:
             l = int(l_def.attrs["value"])
             r = int(r_def.attrs["value"])
+            if _is_unsigned_int_type(op.operands[0].ty) or _is_unsigned_int_type(op.operands[1].ty):
+                bits = max(
+                    _int_bits_for_type(op.operands[0].ty),
+                    _int_bits_for_type(op.operands[1].ty),
+                )
+                mask = (1 << bits) - 1
+                l = l & mask
+                r = r & mask
             cmp_map = {
                 tir.OpKind.CMP_EQ: l == r,
                 tir.OpKind.CMP_NE: l != r,

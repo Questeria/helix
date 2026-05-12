@@ -737,6 +737,71 @@ def test_c110_cast_u32_to_f32_uses_zero_extend_path():
     )
 
 
+def test_c111_cast_u64_to_f64_uses_unsigned_high_bit_path():
+    """Cycle-111 F1: u64->f64 must not route through signed i64 only.
+    High-bit-set u64 values need the unsigned split/convert/double sequence."""
+    from helixc.backend.x86_64 import compile_module_to_elf
+    src = """
+    fn u64_to_f64(x: u64) -> f64 {
+        x as f64
+    }
+    fn main() -> i32 { 0 }
+    """
+    elf = compile_module_to_elf(lower_src(src))
+    assert (
+        b"\x48\x89\xc1"          # mov rcx, rax
+        b"\x48\xd1\xe8"          # shr rax, 1
+        b"\x83\xe1\x01"          # and ecx, 1
+        b"\x48\x09\xc8"          # or rax, rcx
+        b"\xf2\x48\x0f\x2a\xc0"  # cvtsi2sd xmm0, rax
+        b"\xf2\x0f\x58\xc0"      # addsd xmm0, xmm0
+    ) in elf, (
+        "expected unsigned u64->f64 high-bit path; signed-only cvtsi2sd "
+        "misconverts values >= 2^63"
+    )
+
+
+def test_c111_cast_u64_to_f32_uses_unsigned_high_bit_path():
+    """Cycle-111 F1 sibling: u64->f32 needs the same unsigned sequence."""
+    from helixc.backend.x86_64 import compile_module_to_elf
+    src = """
+    fn u64_to_f32(x: u64) -> f32 {
+        x as f32
+    }
+    fn main() -> i32 { 0 }
+    """
+    elf = compile_module_to_elf(lower_src(src))
+    assert (
+        b"\x48\x89\xc1"          # mov rcx, rax
+        b"\x48\xd1\xe8"          # shr rax, 1
+        b"\x83\xe1\x01"          # and ecx, 1
+        b"\x48\x09\xc8"          # or rax, rcx
+        b"\xf3\x48\x0f\x2a\xc0"  # cvtsi2ss xmm0, rax
+        b"\xf3\x0f\x58\xc0"      # addss xmm0, xmm0
+    ) in elf, (
+        "expected unsigned u64->f32 high-bit path; old fallback read only "
+        "the low 32 bits"
+    )
+
+
+def test_c112_cast_i64_to_f32_uses_64bit_signed_path():
+    """Cycle-112: i64->f32 must emit REX.W cvtsi2ss, not low-32 fallback."""
+    from helixc.backend.x86_64 import compile_module_to_elf
+    src = """
+    fn i64_to_f32(x: i64) -> f32 {
+        x as f32
+    }
+    fn main() -> i32 { 0 }
+    """
+    elf = compile_module_to_elf(lower_src(src))
+    assert b"\xf3\x48\x0f\x2a\xc0" in elf, (
+        "expected REX.W cvtsi2ss xmm0, rax (F3 48 0F 2A C0) for i64->f32"
+    )
+    assert b"\xf3\x0f\x2a\xc0" not in elf, (
+        "i64->f32 must not use 32-bit cvtsi2ss xmm0, eax"
+    )
+
+
 def test_c110_bit_and_u64_emits_64bit_form():
     """C109-SF-F4 regression (HIGH conf 92): BIT_AND on u64 must emit
     `and rax, rcx` (48 21 C8). Pre-fix the predicate `_is_i64_type`
@@ -797,6 +862,51 @@ def test_c110_shl_u64_emits_64bit_form():
     )
 
 
+def test_c111_shr_u64_emits_logical_64bit_form():
+    """Cycle-111 F2: u64 right shift must be 64-bit logical shr."""
+    from helixc.backend.x86_64 import compile_module_to_elf
+    src = """
+    fn shr_u64(a: u64, b: u64) -> u64 { a >> b }
+    fn main() -> i32 { 0 }
+    """
+    elf = compile_module_to_elf(lower_src(src))
+    assert b"\x48\xd3\xe8" in elf, (
+        "expected REX.W-prefixed `shr rax, cl` (48 D3 E8) for u64 SHR"
+    )
+    assert b"\x48\xd3\xf8" not in elf, (
+        "u64 SHR must not use arithmetic `sar rax, cl`"
+    )
+
+
+def test_c111_shr_usize_emits_logical_64bit_form():
+    """Cycle-111 F2 alias: usize right shift follows the u64 SHR path."""
+    from helixc.backend.x86_64 import compile_module_to_elf
+    src = """
+    fn shr_usize(a: usize, b: usize) -> usize { a >> b }
+    fn main() -> i32 { 0 }
+    """
+    elf = compile_module_to_elf(lower_src(src))
+    assert b"\x48\xd3\xe8" in elf, (
+        "expected REX.W-prefixed `shr rax, cl` (48 D3 E8) for usize SHR"
+    )
+
+
+def test_c111_shr_u32_emits_logical_32bit_form():
+    """Cycle-111 F2 sibling: unsigned 32-bit right shift uses shr, not sar."""
+    from helixc.backend.x86_64 import compile_module_to_elf
+    src = """
+    fn shr_u32(a: u32, b: u32) -> u32 { a >> b }
+    fn main() -> i32 { 0 }
+    """
+    elf = compile_module_to_elf(lower_src(src))
+    assert b"\xd3\xe8" in elf, (
+        "expected `shr eax, cl` (D3 E8) for u32 SHR"
+    )
+    assert b"\xd3\xf8" not in elf, (
+        "u32 SHR must not use arithmetic `sar eax, cl`"
+    )
+
+
 def test_c110_bit_not_u64_emits_64bit_form():
     """C109-SF-F4 BIT_NOT sibling: `not rax` = 48 F7 D0."""
     from helixc.backend.x86_64 import compile_module_to_elf
@@ -811,22 +921,17 @@ def test_c110_bit_not_u64_emits_64bit_form():
     )
 
 
-def test_c110_neg_u64_via_sub_emits_64bit_form():
-    """C109-SF-F4 NEG sibling: u64 negation via `0_u64 - a` must use
-    the 64-bit SUB path (48 29 C8 sub rax, rcx). The unary `-` on
-    unsigned types is rare in source code (lowering uses SUB for
-    unsigned-domain "negation"); this still exercises the u64 wide
-    path that F4 promoted."""
+def test_c110_neg_u64_emits_64bit_form():
+    """C109-SF-F4 NEG sibling: unary `-a` where a: u64 must emit
+    REX.W-prefixed `neg rax` (48 F7 D8), not the 32-bit `neg eax` form."""
     from helixc.backend.x86_64 import compile_module_to_elf
     src = """
-    fn neg_u64(a: u64) -> u64 { 0_u64 - a }
+    fn neg_u64(a: u64) -> u64 { -a }
     fn main() -> i32 { 0 }
     """
     elf = compile_module_to_elf(lower_src(src))
-    assert b"\x48\x29\xc8" in elf, (
-        "expected REX.W-prefixed `sub rax, rcx` (48 29 C8) for u64 "
-        "subtraction — exercises the u64 wide path (C109-SF-F4 SUB "
-        "sibling — cycle-102 ADD/SUB closure remained intact)"
+    assert b"\x48\xf7\xd8" in elf, (
+        "expected REX.W-prefixed `neg rax` (48 F7 D8) for u64 NEG"
     )
 
 

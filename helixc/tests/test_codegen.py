@@ -970,6 +970,80 @@ def test_i64_to_f64_then_back():
     assert compile_and_run(src) == 10
 
 
+def test_c111_u64_to_f64_high_bit_runtime():
+    """Cycle-111: u64->f64 must handle values above i64::MAX."""
+    src = """
+    fn main() -> i32 {
+        let a: u64 = 4_294_967_295_u64;
+        let x: u64 = a * a;
+        let f: f64 = x as f64;
+        if f > 1_000_000_000_000_000_000.0_f64 { 42 } else { 7 }
+    }
+    """
+    assert compile_and_run(src, optimize=False) == 42
+
+
+def test_c111_usize_to_f64_high_bit_runtime():
+    """Cycle-111: usize alias uses the same unsigned float-conversion path."""
+    src = """
+    fn main() -> i32 {
+        let a: u64 = 4_294_967_295_u64;
+        let x: usize = (a * a) as usize;
+        let f: f64 = x as f64;
+        if f > 1_000_000_000_000_000_000.0_f64 { 42 } else { 7 }
+    }
+    """
+    assert compile_and_run(src, optimize=False) == 42
+
+
+def test_c111_u64_to_f32_high_bit_runtime():
+    """Cycle-111: u64->f32 must not fall back to the low-32-bit path."""
+    src = """
+    fn main() -> i32 {
+        let a: u64 = 4_294_967_295_u64;
+        let x: u64 = a * a;
+        let f: f32 = x as f32;
+        if f > 1_000_000_000.0_f32 { 42 } else { 7 }
+    }
+    """
+    assert compile_and_run(src, optimize=False) == 42
+
+
+def test_c111_usize_to_f32_high_bit_runtime():
+    """Cycle-111: usize->f32 also avoids the low-32-bit fallback."""
+    src = """
+    fn main() -> i32 {
+        let a: u64 = 4_294_967_295_u64;
+        let x: usize = (a * a) as usize;
+        let f: f32 = x as f32;
+        if f > 1_000_000_000.0_f32 { 42 } else { 7 }
+    }
+    """
+    assert compile_and_run(src, optimize=False) == 42
+
+
+def test_c111_u64_shr_high_bit_runtime():
+    """Cycle-111: u64 >> must be logical, not signed arithmetic or 32-bit."""
+    src = """
+    fn shr_u64(x: u64) -> u64 { x >> 63_u64 }
+    fn main() -> i32 {
+        let x: u64 = 1_u64 << 63_u64;
+        shr_u64(x) as i32
+    }
+    """
+    assert compile_and_run(src, optimize=False) == 1
+
+
+def test_c112_u64_shr_high_bit_compare_optimized_runtime():
+    """Cycle-112: optimized const-fold path must match unsigned runtime cmp."""
+    src = """
+    fn main() -> i32 {
+        if ((1_u64 << 63_u64) >> 0_u64) > 0_u64 { 42 } else { 7 }
+    }
+    """
+    assert compile_and_run(src) == 42
+
+
 def test_i64_modulo_beyond_i32():
     """Phase 1.4 (regression): i64 % i64 must use 64-bit cqo+idiv rcx, not
     fall through to the 32-bit guarded path. With the 32-bit path, low bits

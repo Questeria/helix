@@ -132,6 +132,30 @@ def test_fold_shr_arithmetic():
     assert -1 in consts2
 
 
+def test_c111_fold_u64_shr_is_logical():
+    """Cycle-111: unsigned constant SHR must match runtime logical SHR."""
+    mod = lower_and_fold("fn f() -> u64 { (1_u64 << 63_u64) >> 63_u64 }")
+    assert count_ops(mod, tir.OpKind.SHR) == 0
+    consts = [op.attrs["value"] for fn in mod.functions.values()
+              for blk in fn.blocks for op in blk.ops
+              if op.kind == tir.OpKind.CONST_INT]
+    assert 1 in consts, f"expected logical u64 SHR fold to produce 1, got {consts}"
+
+
+def test_c112_fold_u64_high_bit_compare_is_unsigned():
+    """Cycle-112: high-bit u64 const compares must mirror runtime seta/setb."""
+    mod = lower_and_fold("""
+    fn f() -> bool {
+        ((1_u64 << 63_u64) >> 0_u64) > 0_u64
+    }
+    """)
+    assert count_ops(mod, tir.OpKind.CMP_GT) == 0
+    consts = [op.attrs["value"] for fn in mod.functions.values()
+              for blk in fn.blocks for op in blk.ops
+              if op.kind == tir.OpKind.CONST_INT]
+    assert 1 in consts, f"expected unsigned u64 compare to fold true, got {consts}"
+
+
 def test_fold_bit_not():
     # ~5 = -6
     mod = lower_and_fold("fn f() -> i32 { ~5 }")
