@@ -246,19 +246,25 @@ fn gp_tab_lookup(sb: i32, name_s: i32, name_l: i32) -> i32 {
 // cycle-71 narrow-scope discipline (Stage-8 surfaces are not under
 // active iteration in INC-3a):
 //
-//   parser.hx:4114 — Stage-8 monomorphize_pass param-ty decode
+//   parser.hx:4156 — Stage-8 monomorphize_pass param-ty decode
 //                    (`if p_ty_raw >= 200 { ... }`)
-//   parser.hx:4115 — Stage-8 monomorphize_pass param gp_idx extract
+//   parser.hx:4157 — Stage-8 monomorphize_pass param gp_idx extract
 //                    (`let g_idx = p_ty_raw - 200`)
-//   parser.hx:4134 — Stage-8 monomorphize_pass return-ty decode
-//   parser.hx:4135 — Stage-8 monomorphize_pass return gp_idx extract
-//   parser.hx:5411 — parse_fn_decl param-ty generic encode
+//   parser.hx:4176 — Stage-8 monomorphize_pass return-ty decode
+//   parser.hx:4177 — Stage-8 monomorphize_pass return gp_idx extract
+//   parser.hx:5453 — parse_fn_decl param-ty generic encode
 //                    (`p_ty_generic = if gp_idx_p >= 0 { 200 + gp_idx_p }`)
-//   parser.hx:5416 — parse_fn_decl param post-encode `< 200` guard
-//   parser.hx:5492 — parse_fn_decl ret-ty generic encode
+//   parser.hx:5458 — parse_fn_decl param post-encode `< 200` guard
+//   parser.hx:5534 — parse_fn_decl ret-ty generic encode
+//
+// (Stage 28.11 INC-3a cycle-9 polish: line numbers updated post
+// cycle-5/7 doc-block insertions. Cycles 5/7 grew this block by ~42
+// lines; cycle-9 re-grepped the file for `\b200\b` to recompute the
+// actual deferred-site positions.)
 //
 // When INC-3b adds the use-site reader at parse_primary, it should
-// compose against `gp_marker_is` / `gp_marker_decode` from this block.
+// compose against `gp_marker_is` plus inline arithmetic at the call
+// site (see the post-decode-pattern block below, lines 280-291).
 // A separate hardening pass should migrate the 7 sites above to also
 // use these helpers; cycle-71 narrow-scope keeps that broader migration
 // outside INC-3a's surface.
@@ -285,7 +291,7 @@ fn gp_marker_is(v: i32) -> i32 {
 //       // ... use gp_idx ...
 //   }
 //
-// This mirrors the bootstrap's existing pattern (cf. parser.hx:4114-4115
+// This mirrors the bootstrap's existing pattern (cf. parser.hx:4156-4157
 // where Stage-8 monomorphize_pass guards `if p_ty_raw >= 200 { let
 // g_idx = p_ty_raw - 200; ... }` before decoding). Putting the guard
 // at the call site keeps the precondition visible to reviewers.
