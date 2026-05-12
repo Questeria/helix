@@ -359,5 +359,75 @@ mod m {
     )
 
 
+def test_c65_cn1_intra_mod_calls_rewritten():
+    """Cycle 65 silent-failure CN-1 (HIGH conf 95): pre-fix
+    flatten_modules renamed `mod m { fn foo }` to top-level
+    `m__foo` but did NOT rewrite unqualified intra-mod calls. So
+    `mod m { fn foo() { foo() } }` post-flatten produced top-level
+    `m__foo` whose body still called `Name("foo")` — name-based
+    downstream passes (totality self-call detection, deprecated
+    call-site walker, etc.) failed to match.
+
+    Cycle 66 fix: flatten_modules._flatten_one now builds an
+    intra-mod-aliases dict and rewrites call sites in the items it
+    lifted from each mod. Verify by parsing + flattening and
+    inspecting the rewritten AST."""
+    from helixc.frontend.flatten_modules import flatten_modules
+    src = """
+mod inner {
+    fn helper(n: i32) -> i32 { helper(n + 1) }
+    fn caller() -> i32 { helper(0) }
+}
+fn main() -> i32 { 0 }
+"""
+    prog = parse(src)
+    flatten_modules(prog)
+    # Find inner__helper and inner__caller; assert their bodies
+    # reference the mangled names.
+    fns = {it.name: it for it in prog.items if isinstance(it, A.FnDecl)}
+    assert "inner__helper" in fns, f"inner::helper should be lifted; got {list(fns.keys())}"
+    assert "inner__caller" in fns, f"inner::caller should be lifted; got {list(fns.keys())}"
+
+    # inner__helper's body should call inner__helper (self-recursion mangled).
+    helper_body = fns["inner__helper"].body
+    helper_call = helper_body.final_expr
+    assert isinstance(helper_call, A.Call), f"expected Call, got {type(helper_call).__name__}"
+    assert isinstance(helper_call.callee, A.Name), f"expected Name callee, got {type(helper_call.callee).__name__}"
+    assert helper_call.callee.name == "inner__helper", (
+        f"self-call inside lifted mod fn should be mangled; got {helper_call.callee.name!r}"
+    )
+
+    # inner__caller's body should call inner__helper (sibling-call mangled).
+    caller_body = fns["inner__caller"].body
+    caller_call = caller_body.final_expr
+    assert isinstance(caller_call, A.Call), f"expected Call, got {type(caller_call).__name__}"
+    assert caller_call.callee.name == "inner__helper", (
+        f"sibling-call inside lifted mod fn should be mangled; got {caller_call.callee.name!r}"
+    )
+
+
+def test_c65_cn1_totality_catches_mod_nested_recursion():
+    """Cycle 65 silent-failure CN-1 follow-on: totality post-cycle-66
+    catches non-terminating mod-nested recursion. Pre-fix the intra-
+    mod self-call wasn't rewritten so totality's name-matching
+    failed silently."""
+    from helixc.frontend.flatten_modules import flatten_modules
+    from helixc.frontend.totality import check_totality
+    src = """
+mod m {
+    fn foo(n: i32) -> i32 { foo(n + 1) }
+}
+fn main() -> i32 { 0 }
+"""
+    prog = parse(src)
+    flatten_modules(prog)
+    fails = check_totality(prog)
+    fail_names = {n for (n, _) in fails}
+    assert "m__foo" in fail_names, (
+        f"non-terminating mod-nested fn should be caught by totality; "
+        f"got fails={fails}"
+    )
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-v"]))

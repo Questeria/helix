@@ -85,6 +85,24 @@ def flatten_modules(prog: A.Program) -> int:
 
 def _flatten_one(mb: A.ModBlock, prefix: str, new_items: list[A.Item]) -> int:
     base = (prefix + "__" if prefix else "") + mb.name
+    # Stage 28.9 cycle 66 silent-failure CN-1 fix (HIGH conf 95):
+    # build intra-mod sibling aliases so that unqualified call sites
+    # WITHIN this mod's body get rewritten to the mangled top-level
+    # name. Without this, `mod m { fn foo() {} fn bar() { foo() } }`
+    # post-flatten produces top-level `m__foo` and `m__bar` but the
+    # `foo()` call inside m__bar's body still says `Name("foo")` —
+    # name-based passes (totality self-call detection, deprecated
+    # call-site walker, etc.) fail to match and silently miss the
+    # call.
+    intra_mod_aliases: dict[str, str] = {}
+    for sub in mb.items:
+        sub_name = getattr(sub, "name", None)
+        if sub_name is not None:
+            intra_mod_aliases[sub_name] = base + "__" + sub_name
+    # Track the slice of new_items added by THIS call's direct lifts
+    # (nested ModBlock recursion adds to new_items too but for a
+    # different intra-mod scope — we don't rewrite those here).
+    direct_lifts_start = len(new_items)
     n = 0
     for sub in mb.items:
         if isinstance(sub, A.ModBlock):
@@ -135,6 +153,22 @@ def _flatten_one(mb: A.ModBlock, prefix: str, new_items: list[A.Item]) -> int:
             new_items.append(sub)
         else:
             new_items.append(sub)
+    # Stage 28.9 cycle 66 silent-failure CN-1 fix: rewrite intra-mod
+    # call sites in the items lifted by THIS call. Sibling FnDecls
+    # call each other by their original unqualified name (e.g.
+    # `foo()` inside `m::bar`'s body); after lifting both to
+    # `m__foo` and `m__bar`, the call site must also rewrite to
+    # `m__foo()` so name-based downstream passes (totality self-call
+    # detection, deprecated call-site walker, etc.) can match.
+    # _rewrite_expr already handles `Name(N) -> Name(aliases[N])` via
+    # _rewrite_callee, so we reuse it with `intra_mod_aliases` here.
+    if intra_mod_aliases:
+        for i in range(direct_lifts_start, len(new_items)):
+            it = new_items[i]
+            if isinstance(it, A.FnDecl) and not it.is_extern:
+                it.body = _rewrite_expr(it.body, intra_mod_aliases)
+            elif isinstance(it, A.ConstDecl):
+                it.value = _rewrite_expr(it.value, intra_mod_aliases)
     return n
 
 

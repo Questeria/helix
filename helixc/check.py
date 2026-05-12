@@ -427,6 +427,31 @@ def _main_inner(argv: list[str] | None,
             print(f"     {d}")
         return 1
 
+    # 2.55 Stage 28.9 cycle 66 fix-sweep — flatten modules BEFORE
+    # flatten_impls, matching `helixc/backend/x86_64.py` order
+    # (lines 3104+3107). Cycle-63 audit found the surface tool
+    # skipped flatten_modules entirely so mod-nested @deprecated
+    # calls were silently invisible (CN-1 conf 92). Cycle-64
+    # added flatten_modules AFTER flatten_impls — wrong order:
+    # flatten_impls iterates only top-level items, so it skipped
+    # ImplBlocks nested inside ModBlocks; the cycle-65 type-design
+    # audit caught this at conf 88. Cycle-66 final fix: align with
+    # backend (modules first, then impls).
+    #
+    # The cycle-66 flatten_modules upgrade rewrites intra-mod calls
+    # (e.g. `mod m { fn foo() { foo() } }` becomes `m__foo()
+    # { m__foo() }`) so name-based downstream passes (totality
+    # self-call detection, deprecated call-site walker) see the
+    # mangled names. Pre-upgrade the intra-mod self-call survived
+    # un-renamed and totality/deprecated silently missed it.
+    from .frontend.flatten_modules import flatten_modules, FlattenError
+    try:
+        flatten_modules(prog)
+    except FlattenError as e:
+        print(f"   mod-flatten: ERROR", file=sys.stderr)
+        print(f"     {e}", file=sys.stderr)
+        return 1
+
     # 2.6 Audit 28.8 cycle 2 B:C7 — flatten impls so trap 74002
     # (duplicate method name across distinct structs) is reachable
     # from the surface tool. Pre-fix `flatten_impls` was only invoked
@@ -442,30 +467,6 @@ def _main_inner(argv: list[str] | None,
         flatten_impls(prog)
     except DuplicateMethodError as e:
         print(f"   impl-flatten: ERROR")
-        print(f"     {e}")
-        return 1
-
-    # Stage 28.9 cycle 63 CN-A fix (HIGH conf 95): also run
-    # `flatten_modules` here so the `helixc check` surface tool sees
-    # the same item shape that the codegen driver does. Pre-cycle-63
-    # the check tool skipped flatten_modules, which meant:
-    # (a) mod-nested @deprecated fns were invisible to emit_warnings
-    #     because find_deprecated_decls only iterates top-level items
-    #     (cycle-62 reverted the unsafe mod-recursion);
-    # (b) the cycle-62 docstring claim "production drivers run
-    #     flatten_modules before emit_warnings" was false — check.py
-    #     didn't.
-    # The two production drivers (check.py + backend/x86_64.py) now
-    # share the same prefix-pass order: flatten_impls → flatten_modules
-    # → (analysis passes). The codegen driver runs flatten_modules at
-    # line 3104 separately for its own monomorphize ordering; both
-    # converge on the canonical post-flatten AST shape before any
-    # @deprecated / totality / trace / panic / unsafe pass runs.
-    from .frontend.flatten_modules import flatten_modules, FlattenError
-    try:
-        flatten_modules(prog)
-    except FlattenError as e:
-        print(f"   mod-flatten: ERROR")
         print(f"     {e}")
         return 1
 
