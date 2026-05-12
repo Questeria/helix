@@ -222,22 +222,31 @@ def iter_fn_decls(prog) -> "Iterable":
 
     **Pre-/post-flatten contract** (cycle-61 CN-2 follow-up — adds the
     docstring text that the cycle-60 commit message claimed but never
-    actually inserted):
+    actually inserted, then cycle-63 CN-2 corrected the pipeline
+    claim after silent-failure audit empirically verified the gap):
 
     Safe to call EITHER pre-flatten OR post-flatten — both work.
     - Pre-flatten: recurses through ImplBlock.methods + ModBlock.items
-      to expose nested fns to scanners that run on the `helixc check`
-      surface tool path (no flatten passes upstream).
+      to expose nested fns to scanners. Load-bearing — do NOT remove
+      the recursion arms thinking they're dead code.
     - Post-flatten (after `flatten_impls` + `flatten_modules`): the
       impl/mod branches are no-ops because the prior passes have
       already lifted those items to top-level FnDecls. The recursion
-      adds zero work in the canonical pipeline; only top-level items
-      remain at that point.
+      adds zero work in this case; only top-level items remain.
 
-    Both production drivers (`helixc/check.py` and `helixc/backend/
-    x86_64.py`) call this helper post-flatten; the `helixc check`
-    surface tool benefits from the pre-flatten case for diagnostics
-    on programs containing nested mods/impls.
+    Driver call ordering (cycle-63 CN-2 correction):
+    - `helixc/check.py` runs `flatten_impls` + `flatten_modules`
+      (cycle-63 added the second) BEFORE invoking panic/unsafe/trace/
+      deprecated/totality passes. So by cycle-63 it consumes the
+      post-flatten case.
+    - `helixc/backend/x86_64.py` also runs both flatten passes before
+      monomorphize/codegen. Same post-flatten case.
+    Pre-cycle-63 `helixc check` did NOT run flatten_modules, so the
+    ModBlock recursion was load-bearing there; the cycle-63 fix
+    aligned both drivers on the same post-flatten invariant. The
+    pre-flatten case remains supported for direct-API callers
+    (tests, REPL, ad-hoc tools) that bypass the canonical driver
+    sequence.
 
     Pre-cycle-58 every pass iterated `prog.items` filtered for
     `isinstance(it, A.FnDecl)` and missed mod-/impl-nested fns in the

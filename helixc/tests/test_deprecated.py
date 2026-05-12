@@ -260,6 +260,39 @@ fn caller() -> i32 { inner::helper() }
     )
 
 
+def test_c63_cn1_helixc_check_runs_flatten_modules(tmp_path, capsys):
+    """Cycle 63 CN-1 (HIGH conf 92/95, silent-failure + code-review):
+    pre-fix the `helixc check` surface tool did NOT run
+    `flatten_modules`, which meant the cycle-62 `find_deprecated_decls`
+    post-flatten contract was vacuous — mod-nested `@deprecated` decls
+    were silently invisible. End-to-end repro: a `mod m { @deprecated
+    fn old_api() ... } fn main() { m::old_api() }` source compiled
+    cleanly with zero diagnostics.
+
+    Cycle 64 fix: `helixc/check.py` now calls flatten_modules between
+    flatten_impls and the analysis passes (matching the codegen
+    driver's pass order). This test asserts the warning fires through
+    the canonical CLI driver path, not just direct-API."""
+    src_path = tmp_path / "mod_deprecated.hx"
+    src_path.write_text(
+        'mod legacy {\n'
+        '    @deprecated("use new_helper") fn old_api() -> i32 { 0 }\n'
+        '}\n'
+        'fn main() -> i32 { legacy::old_api() }\n'
+    )
+    rc = main([str(src_path)])
+    captured = capsys.readouterr()
+    output = captured.out + captured.err
+    assert "deprecated" in output.lower(), (
+        f"helixc check should report @deprecated call from mod-nested fn; "
+        f"got rc={rc}, output={output!r}"
+    )
+    assert "old_api" in output or "use new_helper" in output, (
+        f"deprecation warning should name the symbol or its message; "
+        f"got output={output!r}"
+    )
+
+
 def test_c59_1_panic_in_mod_nested_fn_detected():
     """Cycle 59 C59-1 (HIGH conf 88): pre-fix the panic_pass walker
     iterated only top-level FnDecl. A `panic("...")` call inside

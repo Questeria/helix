@@ -445,6 +445,30 @@ def _main_inner(argv: list[str] | None,
         print(f"     {e}")
         return 1
 
+    # Stage 28.9 cycle 63 CN-A fix (HIGH conf 95): also run
+    # `flatten_modules` here so the `helixc check` surface tool sees
+    # the same item shape that the codegen driver does. Pre-cycle-63
+    # the check tool skipped flatten_modules, which meant:
+    # (a) mod-nested @deprecated fns were invisible to emit_warnings
+    #     because find_deprecated_decls only iterates top-level items
+    #     (cycle-62 reverted the unsafe mod-recursion);
+    # (b) the cycle-62 docstring claim "production drivers run
+    #     flatten_modules before emit_warnings" was false — check.py
+    #     didn't.
+    # The two production drivers (check.py + backend/x86_64.py) now
+    # share the same prefix-pass order: flatten_impls → flatten_modules
+    # → (analysis passes). The codegen driver runs flatten_modules at
+    # line 3104 separately for its own monomorphize ordering; both
+    # converge on the canonical post-flatten AST shape before any
+    # @deprecated / totality / trace / panic / unsafe pass runs.
+    from .frontend.flatten_modules import flatten_modules, FlattenError
+    try:
+        flatten_modules(prog)
+    except FlattenError as e:
+        print(f"   mod-flatten: ERROR")
+        print(f"     {e}")
+        return 1
+
     # 3. Totality
     # Stage 28.9 cycle 28 audit-R C27-6 fix (conf 70): pre-fix the
     # diagnostic format diverged from effect-check (and from

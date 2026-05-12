@@ -80,13 +80,13 @@ def find_deprecated_decls(prog: A.Program) -> dict[str, str]:
     """Return {name: msg} for every deprecated top-level fn (or any decl
     with attrs) in `prog`. Empty string msg = bare @deprecated.
 
-    **Pipeline contract**: this helper is post-flatten only. Both
-    production drivers (`helixc/check.py` and `helixc/backend/x86_64.py`)
-    run `flatten_impls` + `flatten_modules` before `emit_warnings`, so
-    a `mod m { @deprecated fn foo() {} }` arrives here already mangled
-    to top-level `m__foo` and a sibling-mod call `foo()` arrives as
-    `Name("m__foo")`. The flat unqualified-name dict is collision-free
-    under those conditions.
+    **Pipeline contract**: this helper is post-flatten only. As of
+    cycle-63 both production drivers (`helixc/check.py` and
+    `helixc/backend/x86_64.py`) run `flatten_impls` + `flatten_modules`
+    before `emit_warnings`, so a `mod m { @deprecated fn foo() {} }`
+    arrives here already mangled to top-level `m__foo` and a
+    sibling-mod call `foo()` arrives as `Name("m__foo")`. The flat
+    unqualified-name dict is collision-free under those conditions.
 
     Stage 28.9 cycle 61 CN-1 (HIGH conf 88): the cycle-60 C59-3
     fix recursed through `ModBlock.items`, populating the dict with
@@ -95,9 +95,16 @@ def find_deprecated_decls(prog: A.Program) -> dict[str, str]:
     deprecated whenever ANY mod-nested `@deprecated fn foo()` existed,
     because `_DeprecationCallSiteCollector` matches `A.Name(name)`
     syntactically against the flat dict (it has no lexical-scope
-    tracking). Reverting the recursion restores correctness; the
-    pre-flatten `helixc check` case was already covered by
-    `flatten_modules` running upstream, so no information is lost.
+    tracking). Reverting the recursion restored correctness.
+
+    Stage 28.9 cycle 63 CN-A (HIGH conf 95): the cycle-62 docstring
+    asserted that BOTH production drivers run flatten_modules before
+    emit_warnings, but that was false for `helixc/check.py` — it
+    only ran flatten_impls. After cycle-62's revert, mod-nested
+    @deprecated decls became invisible in the `helixc check`
+    surface tool (silent miss replacing the cycle-60 false-positive).
+    Cycle 63 fix: add `flatten_modules(prog)` to check.py at the
+    same point as flatten_impls so the docstring contract is true.
     Pre-flatten direct callers that bypass the canonical pipeline
     must call `flatten_modules(prog)` first to surface mod-nested
     decls."""
