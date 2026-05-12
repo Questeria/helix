@@ -637,8 +637,10 @@ fn rec(n: i32) -> i32 { rec(rec(n - 1)) }
     # The outer Call AND the inner Call should each be counted once.
     assert len(collector.calls) == 2, (
         f"expected exactly 2 self-calls (outer + inner), got "
-        f"{len(collector.calls)} (pre-fix would have been 4+ from "
-        f"double-descent)"
+        f"{len(collector.calls)} (pre-fix produced exactly 3 — "
+        f"one outer + two duplicate inner records from double-descent; "
+        f"cycle-75 code-review empirically verified the 3-vs-2 "
+        f"discriminator)"
     )
 
 
