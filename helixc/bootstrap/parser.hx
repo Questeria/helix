@@ -3791,6 +3791,22 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
         // SIGILL at runtime if reached. Empty blocks are valid Helix
         // semantics (unit value); they should compile to a no-op `0`
         // rather than a hard trap.
+        //
+        // KNOWN TRADE-OFF (Stage 30 cycles 1-4 M2, conf 82): this
+        // catch-all is over-broad — it ALSO converts truncated sources
+        // like `let x = }` into `let x = 0`, masking parse errors. The
+        // strict fix would require differentiating empty-block-context
+        // (parse_expr called immediately after `{`) from required-expr-
+        // context. Two options:
+        //   A) New entry point `parse_expr_or_empty` used by block-body
+        //      callers; parse_primary reverts to AST_ERR(6).
+        //   B) Scratch slot context flag in sb set by block-body callers.
+        // Option A is preferable (compile-time visible) but requires
+        // updating many block-body call sites. Deferred to Phase 1
+        // ergonomics pass when render_caret diagnostics also land.
+        // For Phase 0 self-host the trade-off is acceptable: the
+        // bootstrap source itself doesn't have truncated `let x = }`
+        // patterns, so the silent acceptance doesn't manifest.
         if t == 6 {
             mk_node(0, 0, 0, 0)
         } else {
