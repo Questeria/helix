@@ -2642,6 +2642,22 @@ fn main() -> i32 {
         "struct Triple { a: i32, b: i32, c: i32 } "
         "fn main() -> i32 { let t = Triple { c: 12, a: 10, b: 20 }; t.a + t.b + t.c }"
     ) == 42, "Stage 28.13.1: named 3-field reverse-order"
+    # Stage 28.13.1 cycle-2 fix (cycle-1 code-review conf 80): the
+    # previous reverse-order probes used `p.x + p.y` which is
+    # order-invariant — an insertion-order bug (parser ignoring
+    # struct_tab_field_lookup) would silently pass. ASYMMETRIC probes
+    # below truly distinguish correct lookup-by-name from
+    # insertion-order: `p.x` alone yields 10 if correct, 32 if buggy.
+    assert compile_and_exec(
+        "struct Pt { x: i32, y: i32 } "
+        "fn main() -> i32 { let p = Pt { y: 32, x: 10 }; p.x }"
+    ) == 10, ("Stage 28.13.1 cycle-2: asymmetric probe — `Pt { y: 32, "
+              "x: 10 }.x` must equal 10 (NOT 32 if insertion-order bug)")
+    assert compile_and_exec(
+        "struct Pt { x: i32, y: i32 } "
+        "fn main() -> i32 { let p = Pt { y: 7, x: 11 }; p.x * 4 + p.y * 2 }"
+    ) == 58, ("Stage 28.13.1 cycle-2: 11*4 + 7*2 == 58 (insertion-order "
+              "bug would yield 7*4 + 11*2 == 50)")
     # Mixed positional + named on same struct should still work
     # (parser's .NUM and .IDENT both resolve to AST_TUPLE_FIELD with
     # the same numeric offset).
