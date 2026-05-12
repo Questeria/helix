@@ -273,6 +273,73 @@ fn gp_marker_encode(gp_idx: i32) -> i32 { gp_marker_base() + gp_idx }
 fn gp_marker_is(v: i32) -> i32 {
     if v >= gp_marker_base() { 1 } else { 0 }
 }
+// Stage 28.11 INC-3b: struct_gp_tab helpers. Parallel to struct_tab,
+// keyed by struct_idx. Each entry stores (struct_idx, gp_count,
+// gp_names_head) where gp_names_head is the arena address of a chain
+// of mk_node(76, name_s, name_l, next) nodes — same shape as
+// parse_fn_decl's per-fn gp_chain_head at line ~5475.
+//
+// Used by use-site monomorphization at parse_primary: when `Pt<i32>`
+// is parsed, struct_gp_tab_lookup(orig_struct_idx) returns gp_count
+// and struct_gp_tab_names_head(orig_struct_idx) yields the chain for
+// substitution. Region at sb+78/79; stride 3; cap 8 (matches struct_tab).
+fn struct_gp_tab_base(sb: i32) -> i32 { __arena_get(sb + 78) }
+fn struct_gp_tab_count(sb: i32) -> i32 { __arena_get(sb + 79) }
+
+fn struct_gp_tab_add(sb: i32, struct_idx: i32, gp_count: i32, gp_names_head: i32) -> i32 {
+    let count = struct_gp_tab_count(sb);
+    if count >= 8 {
+        0 - 1
+    } else {
+        let base = struct_gp_tab_base(sb);
+        let entry = base + count * 3;
+        __arena_set(entry, struct_idx);
+        __arena_set(entry + 1, gp_count);
+        __arena_set(entry + 2, gp_names_head);
+        __arena_set(sb + 79, count + 1);
+        count
+    }
+}
+
+// Returns gp_count on hit, 0 on miss (so callers can treat 0 as
+// "non-generic struct"). Distinct from struct_tab_lookup_idx's -1
+// miss sentinel because here 0 is a meaningful "0 generic params"
+// value that has the same effect as miss.
+fn struct_gp_tab_lookup(sb: i32, struct_idx: i32) -> i32 {
+    let base = struct_gp_tab_base(sb);
+    let count = struct_gp_tab_count(sb);
+    let mut i: i32 = 0;
+    let mut found_count: i32 = 0;
+    while i < count {
+        let entry = base + i * 3;
+        if __arena_get(entry) == struct_idx {
+            found_count = __arena_get(entry + 1);
+            i = count;
+        } else {
+            i = i + 1;
+        };
+    }
+    found_count
+}
+
+// Returns gp_names_head (mk_node 76 chain head) on hit, 0 on miss.
+fn struct_gp_tab_names_head(sb: i32, struct_idx: i32) -> i32 {
+    let base = struct_gp_tab_base(sb);
+    let count = struct_gp_tab_count(sb);
+    let mut i: i32 = 0;
+    let mut found: i32 = 0;
+    while i < count {
+        let entry = base + i * 3;
+        if __arena_get(entry) == struct_idx {
+            found = __arena_get(entry + 2);
+            i = count;
+        } else {
+            i = i + 1;
+        };
+    }
+    found
+}
+
 // Stage 28.11 INC-3a cycle-7 fix (cycle-6 type-design C1 MED conf 90):
 // gp_marker_decode is INTENTIONALLY NOT provided as a helper. A pure-
 // arithmetic decode `v - gp_marker_base()` would be a partial function
@@ -3627,6 +3694,13 @@ fn parse_top(tok_base: i32) -> i32 {
     __arena_push(0);
     __arena_push(0);
     __arena_push(0);
+    // Stage 28.11 INC-3b: slots 78/79 = struct_gp_tab base/count.
+    // Parallel to struct_tab; holds (struct_idx, gp_count, gp_names_head)
+    // triples for generic structs. Populated by parse_struct_decl right
+    // before struct_tab_add; consumed by use-site monomorphization at
+    // parse_primary when `Pt<i32>` is seen.
+    __arena_push(0);
+    __arena_push(0);
     install_keywords(cur_slot);
     var_struct_tab_init(cur_slot);
     var_enum_tab_init(cur_slot);
@@ -3672,6 +3746,19 @@ fn parse_top(tok_base: i32) -> i32 {
     }
     __arena_set(cur_slot + 70, grev_base);
     __arena_set(cur_slot + 71, 0);
+    // Stage 28.11 INC-3b: struct_gp_tab region (24 slots, 8 entries x 3
+    // fields). Parallel to struct_tab, keyed by struct_idx. Stores
+    // (struct_idx, gp_count, gp_names_head) per entry. INC-3b's use-site
+    // monomorphization reads this table to map `Pt<T>` → gp_count + the
+    // mk_node(76, ...) name chain for type-var substitution.
+    let sgp_base = __arena_push(0);
+    let mut sgpi: i32 = 1;
+    while sgpi < 24 {
+        __arena_push(0);
+        sgpi = sgpi + 1;
+    }
+    __arena_set(cur_slot + 78, sgp_base);
+    __arena_set(cur_slot + 79, 0);
     // Peek the first token. If it's `fn`, parse a function decl.
     // Otherwise treat the whole input as a single expression
     // (legacy mode) for backward compat with all existing tests.
@@ -6303,7 +6390,48 @@ fn parse_struct_decl(tok_base: i32, sb: i32) -> i32 {
         }};
     }
     cur_advance(sb);                         // consume '}' (RBRACE = 6)
-    struct_tab_add(sb, name_s, name_l, field_count, fields_ptr);
+    // Stage 28.11 INC-3b: BEFORE struct_tab_add and BEFORE the exit-
+    // reset of gp_tab below, capture the gp_count and build a
+    // mk_node(76, name_s, name_l, next) chain of gp_names. Mirrors
+    // parse_fn_decl's gp_chain_head pattern at line ~5475. The chain
+    // and count are then stored in struct_gp_tab keyed by the
+    // struct_idx returned by struct_tab_add.
+    //
+    // Building the chain BEFORE struct_tab_add (which doesn't
+    // allocate AST nodes — just writes to fixed slots) is safe.
+    // We do it BEFORE the gp_tab_reset at the end so gp_tab is
+    // still populated when we walk it.
+    let gp_count_now = gp_tab_count(sb);
+    let gp_base_now = gp_tab_base(sb);
+    let mut gp_chain_head: i32 = 0;
+    let mut gp_chain_prev: i32 = 0;
+    let mut gp_walk: i32 = 0;
+    while gp_walk < gp_count_now {
+        let gp_entry = gp_base_now + gp_walk * 2;
+        let gn_s = __arena_get(gp_entry);
+        let gn_l = __arena_get(gp_entry + 1);
+        let new_gn = mk_node(76, gn_s, gn_l, 0);
+        if gp_chain_head == 0 {
+            gp_chain_head = new_gn;
+            gp_chain_prev = new_gn;
+        } else {
+            __arena_set(gp_chain_prev + 3, new_gn);
+            gp_chain_prev = new_gn;
+        };
+        gp_walk = gp_walk + 1;
+    }
+    let struct_idx_added = struct_tab_add(sb, name_s, name_l, field_count, fields_ptr);
+    // Stage 28.11 INC-3b: register struct's generic-param metadata
+    // for use-site monomorphization. Only when gp_count > 0 (i.e.
+    // a generic struct decl `struct Pt<T>`). For non-generic structs
+    // (no `<...>` clause), struct_gp_tab_lookup returns 0 (its miss
+    // default), which the use-site can treat as "no monomorphization
+    // needed".
+    if gp_count_now > 0 {
+        if struct_idx_added >= 0 {
+            struct_gp_tab_add(sb, struct_idx_added, gp_count_now, gp_chain_head);
+        };
+    };
     // Stage 28.11 INCREMENT 2: reset gp_tab AFTER struct_tab_add so
     // subsequent decls (struct OR fn) start with a clean generic-
     // param table. parse_fn_decl resets at its entry point (~5218);
