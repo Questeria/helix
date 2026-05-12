@@ -3583,23 +3583,34 @@ fn main() -> i32 {
         "fn use_pt(p: Pt) -> i32 { p.0 + p.1 } "
         "fn main() -> i32 { let p = Pt { 10, 32 } ; use_pt(p) }"
     ) == 42, "A1-F5 smoke: struct param-by-value still works after ret-ty extension"
-    # Audit stage5-6 Finding #11 regression: bind_alloc_offset over-budget.
-    # Pre-fix, 129+ sequential lets each consumed 8 stack-frame bytes with
-    # no cap check, so the 129th write (offset 1024) landed past the
-    # 1024-byte prologue allocation and silently corrupted the saved rbp
-    # / return address / red zone. Now bind_alloc_offset traps 10030 once
-    # the requested offset would exceed the prologue budget.
-    many_lets = "fn main() -> i32 { " \
-        + "".join(f"let a{i:03d} = {i};" for i in range(140)) \
-        + " a139 }"
-    assert compile_and_exec(many_lets) == 132, \
-        "F11: 140 chained lets exhausts 128-slot prologue, traps 10030 (SIGILL=132)"
-    # Inversely, 64 lets fit comfortably (well below the 128-slot budget).
+    # Audit stage5-6 Finding #11 regression: bind_alloc_offset
+    # over-budget. Pre-fix, sequential lets each consumed 8 stack-frame
+    # bytes with no cap check, so writes past the prologue allocation
+    # landed in the saved rbp / return address / red zone. Now
+    # bind_alloc_offset traps 10030 once the requested offset would
+    # exceed the prologue budget.
+    #
+    # Cycle 110 fix C109-SF-F1 / C109-TD-F109-1: cap raised in lockstep
+    # with the Stage 29.1 bind_state cap bump (64 → 512 entries) and
+    # the emit_prologue allocation (1024 → 4096 bytes). The OUTPUT
+    # binary's prologue is now 4096 bytes (was 1024), and
+    # bind_alloc_offset's trap threshold is now 4096 (was 1024).
+    #
+    # NB: directly testing the new boundary (525+ lets) currently runs
+    # into a pre-existing bootstrap output-emission issue at very large
+    # source sizes (bisected: crash above ~362 lets, unrelated to
+    # cycle-110). The 256-let "fits comfortably" test below STILL
+    # exercises the new prologue size — it would have trapped under
+    # the pre-cycle-110 budget (256*8 = 2048 > 1024) but fits under
+    # the new 4096-byte budget. That asymmetry across the boundary
+    # is what F11 actually pins; the +SIGILL direction is deferred
+    # to a Stage 30 cycle once the upstream bootstrap-large-source
+    # issue is fixed.
     fewer_lets = "fn main() -> i32 { " \
-        + "".join(f"let b{i:02d} = {i};" for i in range(64)) \
-        + " b42 }"
+        + "".join(f"let b{i:03d} = {i};" for i in range(256)) \
+        + " b042 }"
     assert compile_and_exec(fewer_lets) == 42, \
-        "F11: 64 chained lets stays within budget — last binding readable"
+        "F11: 256 chained lets stays within 512-slot budget — last binding readable"
     # Audit stage5-6 Finding #9 regression: emit_variant_subpats /
     # emit_tuple_subpats encode the sub-slot load with disp8 (signed
     # -128..127). At sub_pat idx >= 16, off >= 128 wraps to a negative
@@ -4898,16 +4909,12 @@ fn main() -> i32 {
     # writes /tmp/sh_k2_out.bin (= K3). K2's exit code is bytes_written
     # mod 256 — not 0. We just check that K2 ran without crashing
     # (no signal-128+) and produced a non-empty K3.
-    # Stage 29.1 (2026-05-12): K2 SIGILLs at process exit AFTER writing
-    # a valid K3. Stage 29.2 follow-up will fix the tail SIGILL; for now
-    # accept that K2 may not exit cleanly as long as K3 is produced and
-    # is correct.
     run_k2 = subprocess.run(
         ["wsl", "-e", "bash", "-c",
          "chmod +x /tmp/sh_k1_out.bin && /tmp/sh_k1_out.bin"],
         capture_output=True, timeout=30,
     )
-    # Stage 29 (2026-05-12): K2 now exits cleanly. K2's exit code is
+    # Stage 29 (2026-05-12): K2 exits cleanly. K2's exit code is
     # bytes-written mod 256 (non-zero is expected from write_file_to_arena
     # returning the byte count); SIGILL would set rc >= 128.
     assert run_k2.returncode < 128, (

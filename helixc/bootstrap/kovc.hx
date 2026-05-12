@@ -721,26 +721,38 @@ fn patch_rel32(disp_slot: i32, target_slot: i32) -> i32 {
 
 // --------------------------------------------------------------
 // Function prologue and epilogue. The emitted binary's entry stub
-// reserves 64 slots (= 512 bytes) of stack space for let-bindings.
-// Slot offsets [rbp-8, rbp-16, ..., rbp-512] are addressable via
-// disp8 ModRM (since 8..512 fits in signed-disp8 only for offsets
-// up to 128; we use disp32 for safety on every access).
+// reserves 4096 bytes (= 512 slots × 8 bytes) of stack space for
+// let-bindings. Slot offsets [rbp-8, rbp-16, ..., rbp-4096] are
+// addressable via disp32 ModRM (the disp8 form is not used since
+// most offsets exceed -128 anyway).
 //
 //   55                push rbp
 //   48 89 E5          mov rbp, rsp
-//   48 81 EC 00 04 00 00   sub rsp, 1024
+//   48 81 EC 00 10 00 00   sub rsp, 4096
 //
-// Audit fix (cycle 1, polish #14): bumped from 512 → 1024 to match the
-// bind_state cap (64 entries) with 2× margin. Previously 512 was
-// "just enough" for 64 × 8-byte slots — any future cap bump would
-// silently corrupt the saved rbp/return-address. 1024 gives 128
-// slots; future Phase-1 should derive this from bind_state cap
+// Audit fix (cycle 1, polish #14): bumped from 512 → 1024 to match
+// the bind_state cap (64 entries) with 2× margin. Previously 512
+// was "just enough" for 64 × 8-byte slots — any future cap bump
+// would silently corrupt the saved rbp/return-address. 1024 gave
+// 128 slots; future Phase-1 should derive this from bind_state cap
 // dynamically rather than hard-coding.
+//
+// Cycle 110 fix C109-SF-F1 / C109-TD-F109-1 (CRITICAL conf 90 +
+// HIGH conf 80): Stage 29.1 bumped bind_state cap 64→512 but left
+// this 1024-byte prologue and bind_alloc_offset's 1024 trap
+// threshold unchanged. 512 simultaneously-live bindings × 8 bytes
+// = 4096 bytes peak. Any fn with > 128 simultaneously-live
+// let-bindings reached past the prologue's stack allocation,
+// corrupting parent frame's saved rbp / return-address / red
+// zone. Bumped to 4096 to match (and updated bind_alloc_offset
+// trap threshold to 4096 to match). The architectural note about
+// deriving from bind_state cap dynamically still applies — that's
+// a Phase-1 follow-up.
 fn emit_prologue() -> i32 {
     emit_byte(0x55);
     emit_byte(0x48); emit_byte(0x89); emit_byte(0xE5);
     emit_byte(0x48); emit_byte(0x81); emit_byte(0xEC);
-    emit_u32_le(1024);
+    emit_u32_le(4096);
     11
 }
 
@@ -968,9 +980,10 @@ fn kovc_byte_eq(src_a: i32, len_a: i32, src_b: i32, len_b: i32) -> i32 {
 //                      full 8 bytes when ty == 2 to preserve the high
 //                      half of an f64 binding.)
 //
-// Capacity is fixed at compile-time (NUM_BINDINGS_CAP = 64). Table
-// uses __arena_set to write entries — never __arena_push, so the
-// code region can grow contiguously after bind_state.
+// Capacity is fixed at compile-time (NUM_BINDINGS_CAP = 512 per the
+// Stage 29.1 bump; was 64). Table uses __arena_set to write entries
+// — never __arena_push, so the code region can grow contiguously
+// after bind_state.
 //
 // The type_tag was added in Phase 1.10 step 5c so the AST_ADD/SUB/MUL/
 // DIV codegen can dispatch to SSE when both operands' bindings are f32.
@@ -997,20 +1010,28 @@ fn bind_push(state: i32, name_start: i32, name_len: i32, offset: i32) -> i32 {
 }
 
 // Phase 1.10 step 5c: variant that records the binding's type.
-// Audit fix #10 (cycle 1): cap-check before writing. The 64-entry
-// cap (256 arena slots) is set in bind_init; without this guard,
-// the 65th+ binding silently corrupts adjacent arena data — fn_table
-// or str_table or worse. Now: silently SKIP the binding when full
-// (return -1). Subsequent AST_VAR resolves via offset 0 (= unbound
-// sentinel), which AST_VAR's audit-10 guard handles by emitting the
-// integer-zero placeholder. No arena corruption. Sources hitting
-// this cap are pathological; future Phase-1 should bump cap or
-// implement spill.
+// Audit fix #10 (cycle 1): cap-check before writing. The 512-entry
+// cap (2048 arena slots) is set in bind_init (Stage 29.1 bump from
+// 64). Without this guard, the 513th+ binding silently corrupts
+// adjacent arena data — fn_table or str_table or worse. Now: SKIP
+// the binding when full (return -1). Subsequent AST_VAR resolves
+// via offset 0 (= unbound sentinel), which AST_VAR's audit-10 guard
+// handles by emitting the integer-zero placeholder. No arena
+// corruption. Stage 28.9 cycle-110 (C109-CR-F3) replaced the silent
+// skip with `emit_trap_with_id(10032)` so overflow is loud — but
+// the in-bound path is still cap-checked at the top of the fn.
 fn bind_push_typed(state: i32, name_start: i32, name_len: i32,
                    offset: i32, ty: i32) -> i32 {
     let top = __arena_get(state + 1);
     // Stage 29.1 fix (2026-05-12): bumped cap from 64 to 512.
+    // Cycle 110 fix C109-CR-F3 (HIGH conf 82): emit a loud-fail trap
+    // when the cap is exceeded. Pre-fix returned `0 - 1` silently;
+    // callers discarded the return value; the binding name became
+    // unresolvable and AST_VAR's audit-10 guard substituted `mov
+    // eax, 0`, silently making the variable read as 0 thereafter.
+    // Trap id 10032.
     if top >= 512 {
+        emit_trap_with_id(10032);
         0 - 1
     } else {
         let table_base = __arena_get(state + 2);
@@ -1041,15 +1062,20 @@ fn bind_pop(state: i32) -> i32 {
 }
 
 fn bind_alloc_offset(state: i32) -> i32 {
-    // Audit-stage5-6 Finding #11 fix: trap when the requested slot would
-    // write past the 1024-byte prologue allocation (emit_prologue at
-    // kovc.hx ~743). Without this, sequential let/struct-lit allocations
-    // wrap silently into the parent frame's saved rbp / return-address /
-    // red zone. The trap fires at codegen time — we still bump the
-    // offset so any downstream emitter that derives a layout from the
-    // returned value doesn't see a stale slot. Trap id 10030.
+    // Audit-stage5-6 Finding #11 fix: trap when the requested slot
+    // would write past the prologue allocation (emit_prologue at
+    // kovc.hx ~739). Without this, sequential let/struct-lit
+    // allocations wrap silently into the parent frame's saved rbp /
+    // return-address / red zone. The trap fires at codegen time —
+    // we still bump the offset so any downstream emitter that
+    // derives a layout from the returned value doesn't see a stale
+    // slot. Trap id 10030.
+    //
+    // Cycle 110 fix C109-SF-F1 / C109-TD-F109-1: threshold bumped
+    // from 1024 → 4096 to match the new emit_prologue 4096-byte
+    // allocation and the Stage 29.1 bind_state cap of 512 entries.
     let off = __arena_get(state);
-    if off >= 1024 {
+    if off >= 4096 {
         emit_trap_with_id(10030);
     };
     __arena_set(state, off + 8);
@@ -1534,8 +1560,14 @@ fn fn_table_init() -> i32 {
 fn fn_table_add(state: i32, name_start: i32, name_len: i32, code_offset: i32) -> i32 {
     // Audit fix #10: cap-check before writing. Cap = 512 entries
     // (Stage 6 bump from 256 to accommodate enum + future stages).
+    // Cycle 110 fix C109-CR-F3 (HIGH conf 82): emit a loud-fail trap
+    // when the cap is exceeded. Pre-fix returned `0 - 1` silently;
+    // callers discarded the return value; the 513th fn declaration
+    // became unresolvable via fn_table_lookup, and subsequent CALL
+    // patches for it failed to resolve. Trap id 10033.
     let top = __arena_get(state);
     if top >= 512 {
+        emit_trap_with_id(10033);
         0 - 1
     } else {
     let table_base = __arena_get(state + 1);
@@ -1594,8 +1626,15 @@ fn patch_table_add(state: i32, disp_slot: i32, name_start: i32, name_len: i32) -
     // Audit fix #10: cap-check before writing. patch_table_init
     // allocates 16384 entries; without this guard, a source with > 16384
     // CALL+LEA patches would silently corrupt adjacent arena memory.
+    // Cycle 110 fix C109-CR-F3 (HIGH conf 82): emit a loud-fail trap
+    // when the cap is exceeded. Pre-fix returned `0 - 1` silently
+    // and ~11 call sites all discarded the return value, leaving the
+    // dropped patch invisible to the resolver loop — same silent-
+    // failure pattern as the Stage 29.1 patch_table overflow that
+    // corrupted K3 prior to the cap bump. Trap id 10031.
     let top = __arena_get(state);
     if top >= 16384 {
+        emit_trap_with_id(10031);
         0 - 1
     } else {
         let table_base = __arena_get(state + 1);
