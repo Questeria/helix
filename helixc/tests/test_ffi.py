@@ -179,11 +179,17 @@ def test_c76_1_ffi_call_routes_f32_args_to_xmm0():
 
 
 if __name__ == "__main__":
-    tests = [
-        ("test_extern_c_puts_hello", test_extern_c_puts_hello),
-        ("test_extern_c_no_op_no_dynlink", test_extern_c_no_op_no_dynlink),
-        ("test_extern_c_uses_dynlink", test_extern_c_uses_dynlink),
-    ]
+    # Stage 28.9 cycle 84 audit-CR CR-1 fix (HIGH conf 90): pre-fix
+    # this list was hard-coded with the 3 Stage-16.5 tests and the
+    # cycle-77/79/81 regression test
+    # `test_c76_1_ffi_call_routes_f32_args_to_xmm0` was silently
+    # omitted — so `scripts/run_all_tests.sh` invoking `python
+    # helixc/tests/test_ffi.py` never executed it, leaving the FFI
+    # float-class routing fix undefended in the heavy gate. Switch
+    # to globals() discovery (matches test_ir.py / test_totality.py
+    # pattern) so any future `def test_*` is auto-picked-up.
+    tests = [(name, fn) for name, fn in globals().items()
+             if name.startswith("test_") and callable(fn)]
     passed = 0
     failed = 0
     for name, fn in tests:
