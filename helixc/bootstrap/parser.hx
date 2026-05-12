@@ -3193,6 +3193,147 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
                     }
                 }
                 }     // Stage 9: close `if cl_entry_idx >= 0 { ... } else { ... }`
+            } else { if nt == 16 {
+                // Stage 28.11 INC-3b.2: IDENT followed by `<` may be
+                // either (a) a generic struct use `Pt<i32> { 10, 32 }`
+                // requiring inline monomorphization, or (b) a less-than
+                // comparison `var < other` to be handled by the outer
+                // binary-expr parser. Disambiguate by struct_tab lookup
+                // + struct_gp_tab_lookup; if both indicate generic, do
+                // mono and parse the struct-lit body. Otherwise fall
+                // through to var-ref so the surrounding parser sees
+                // the `<` as a comparison operator.
+                let s_idx_pre = struct_tab_lookup_idx(sb, id_start, id_len);
+                let gp_count_pre = if s_idx_pre >= 0 {
+                    struct_gp_tab_lookup(sb, s_idx_pre)
+                } else { 0 };
+                if gp_count_pre > 0 {
+                    // === Generic struct use: parse `<TY1, TY2, ...>` ===
+                    cur_advance(sb);                       // consume `<`
+                    let ta_arr_base = __arena_len();
+                    let mut ta_count: i32 = 0;
+                    let mut keep_ta: i32 = 1;
+                    while keep_ta == 1 {
+                        let tt = tok_tag(tok_base, cur_get(sb));
+                        if tt == 17 {                      // TK_GT end
+                            keep_ta = 0;
+                        } else { if tt == 13 {             // COMMA
+                            cur_advance(sb);
+                        } else { if tt == 2 {              // TK_IDENT type-arg
+                            let tk = cur_get(sb);
+                            let ta_s = tok_p2(tok_base, tk);
+                            let ta_l = tok_p3(tok_base, tk);
+                            __arena_push(ta_s);
+                            __arena_push(ta_l);
+                            ta_count = ta_count + 1;
+                            cur_advance(sb);
+                        } else {
+                            // Bad token — exit (downstream will error).
+                            keep_ta = 0;
+                        }}};
+                    }
+                    cur_advance(sb);                       // consume `>`
+                    // Build mangled name `OrigName__TY1_TY2` in arena.
+                    let mang_s = mangle_name_into_arena(id_start, id_len, ta_arr_base, ta_count);
+                    let mang_l = mangle_name_len(id_len, ta_arr_base, ta_count);
+                    // Look up or synthesize the mono'd struct entry.
+                    let existing_idx = struct_tab_lookup_idx(sb, mang_s, mang_l);
+                    let mono_s_idx = if existing_idx >= 0 {
+                        existing_idx
+                    } else {
+                        // Clone orig struct's fields with type-var
+                        // substitution. For each field, if its stored
+                        // f_struct_idx is a gp_marker, substitute with
+                        // the matched ta_arr entry's struct_idx (or -1
+                        // for scalar like i32). Otherwise copy as-is.
+                        let orig_entry = struct_tab_base(sb) + s_idx_pre * 4;
+                        let orig_arity = __arena_get(orig_entry + 2);
+                        let orig_fields_ptr = __arena_get(orig_entry + 3);
+                        let new_fields_ptr = __arena_len();
+                        let mut fi: i32 = 0;
+                        while fi < orig_arity {
+                            let f_pair = orig_fields_ptr + fi * 3;
+                            let f_name_s = __arena_get(f_pair);
+                            let f_name_l = __arena_get(f_pair + 1);
+                            let f_struct_idx = __arena_get(f_pair + 2);
+                            __arena_push(f_name_s);
+                            __arena_push(f_name_l);
+                            if gp_marker_is(f_struct_idx) == 1 {
+                                let gp_idx_sub = f_struct_idx - gp_marker_base();
+                                if gp_idx_sub < ta_count {
+                                    let ta_entry = ta_arr_base + gp_idx_sub * 2;
+                                    let sub_ty_s = __arena_get(ta_entry);
+                                    let sub_ty_l = __arena_get(ta_entry + 1);
+                                    let sub_struct_idx = struct_tab_lookup_idx(sb, sub_ty_s, sub_ty_l);
+                                    __arena_push(sub_struct_idx);
+                                } else {
+                                    __arena_push(0 - 1);
+                                };
+                            } else {
+                                __arena_push(f_struct_idx);
+                            };
+                            fi = fi + 1;
+                        }
+                        struct_tab_add(sb, mang_s, mang_l, orig_arity, new_fields_ptr)
+                    };
+                    // Expect `{` next; parse struct-lit body with
+                    // mono_s_idx. (Duplicates the `nt == 5` body
+                    // below — INCREMENT 3 atomicity requires the mono
+                    // setup AND the body in one place; sharing would
+                    // require restructuring the dispatch.)
+                    let lbrace_t = tok_tag(tok_base, cur_get(sb));
+                    if lbrace_t != 5 {
+                        // Missing `{` after `Pt<i32>` — emit trap 62030.
+                        mk_node(99, 62030, 0, 0)
+                    } else {
+                        cur_advance(sb);                   // consume `{`
+                        let entry_m = struct_tab_base(sb) + mono_s_idx * 4;
+                        let arity_m = __arena_get(entry_m + 2);
+                        let pk_first = cur_get(sb);
+                        let pt_first = tok_tag(tok_base, pk_first);
+                        if pt_first == 6 {
+                            cur_advance(sb);               // consume `}`
+                            set_last_struct_idx(sb, mono_s_idx);
+                            mk_node(50, 0, 0, 0)
+                        } else {
+                            let first = parse_expr(tok_base, sb);
+                            let mut head_idx: i32 = mk_node(51, first, 0, 0);
+                            let mut tail_idx: i32 = head_idx;
+                            let mut n: i32 = 1;
+                            let mut keep: i32 = 1;
+                            while keep == 1 {
+                                let ck = cur_get(sb);
+                                let ct = tok_tag(tok_base, ck);
+                                if ct == 13 {
+                                    cur_advance(sb);
+                                    let pk2 = cur_get(sb);
+                                    let pt2 = tok_tag(tok_base, pk2);
+                                    if pt2 == 6 { keep = 0; }
+                                    else {
+                                        let child = parse_expr(tok_base, sb);
+                                        let new_node = mk_node(51, child, 0, 0);
+                                        let prev_tail = tail_idx;
+                                        __arena_set(prev_tail + 2, new_node);
+                                        tail_idx = new_node;
+                                        n = n + 1;
+                                    };
+                                } else { keep = 0; };
+                            }
+                            cur_advance(sb);               // consume `}`
+                            set_last_struct_idx(sb, mono_s_idx);
+                            if n != arity_m {
+                                mk_node(99, 50040, 0, 0)
+                            } else {
+                                mk_node(50, n, head_idx, 0)
+                            }
+                        }
+                    }
+                } else {
+                    // Not a generic struct use — fall through to var
+                    // ref (the surrounding parser handles `<` as a
+                    // comparison op).
+                    mk_var_with_capture(sb, id_start, id_len)
+                }
             } else { if nt == 5 {
                 // Stage 5 Iter A: IDENT followed by '{' might be a struct
                 // literal `Pt { 10, 32 }`. Look up the IDENT in
@@ -3269,7 +3410,7 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
             } else {
                 // Var ref
                 mk_var_with_capture(sb, id_start, id_len)
-            }}}
+            }}}}     // Stage 28.11 INC-3b.2: extra `}` closes the new nt==16 branch
             }}}}}     // Stage 8.5C + Stage 10: extra '}}' closes is_typed_call_active + is_path_call wrappers
         }}}}}     // Stage 12: extra '}' closes the is_grad_call else-branch wrapper
         }     // Stage 14: extra '}' closes the is_grad_rev_call else-branch wrapper

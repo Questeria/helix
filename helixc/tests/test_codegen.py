@@ -2763,6 +2763,28 @@ fn main() -> i32 {
     ) == 42, ("Stage 28.11 INCREMENT 1 cycle-3 polish: immediate "
               "non-IDENT after `<` (LBRACE) takes the early-exit "
               "branch WITHOUT consuming any token in the angle list")
+    # Stage 28.11 INCREMENT 3b: end-to-end test of generic struct
+    # monomorphization at use sites. INC-3b ties together:
+    #   * INC-1: parser accepts `struct Pt<T>` syntax.
+    #   * INC-2: gp_tab populated in parse_struct_decl.
+    #   * INC-3a: T-typed fields encoded as `200 + gp_idx`.
+    #   * INC-3b.1: struct_gp_tab parallel table holds gp_count +
+    #     gp_names_head per struct.
+    #   * INC-3b.2: use-site `Pt<i32>` parsing in parse_primary
+    #     synthesizes a monomorphized struct_tab entry `Pt__i32`
+    #     with i32-substituted fields.
+    #
+    # Test: `struct Pt<T> { x: T, y: T }` declared with T-typed fields.
+    # At use site `Pt<i32> { 10, 32 }`, INC-3b.2 parses the type-args,
+    # builds the mangled name "Pt__i32", clones the struct with
+    # f_struct_idx substituted: gp_marker(0) for T → struct_tab_lookup(
+    # "i32") → -1 (scalar). The cloned struct has 2 i32 fields. The
+    # struct lit constructs a 2-slot tuple, p.x + p.y == 10+32 == 42.
+    assert compile_and_exec(
+        "struct Pt<T> { x: T, y: T } "
+        "fn main() -> i32 { let p = Pt<i32> { 10, 32 }; p.x + p.y }"
+    ) == 42, ("Stage 28.11 INCREMENT 3b: generic struct instantiation "
+              "Pt<i32> { 10, 32 } monomorphizes to concrete i32 fields")
     # INC-1 cycle-4 polish (cycle-3 code-review F-1, conf 85 + cycle-2
     # silent-failure RE-5, conf 82): probe MUST exercise the actual
     # path it claims. Cycle-3 version was a tautology (single
