@@ -6015,6 +6015,19 @@ fn parse_struct_decl(tok_base: i32, sb: i32) -> i32 {
     let name_s = tok_p2(tok_base, nk);
     let name_l = tok_p3(tok_base, nk);
     cur_advance(sb);                         // consume name IDENT
+    // Stage 28.11 INCREMENT 2: reset gp_tab BEFORE parsing the
+    // optional `<T1, T2, ...>` clause so that:
+    //   (a) the gp_tab_add calls in the IDENT branch below start
+    //       fresh — no cross-decl leak from a prior parse_fn_decl
+    //       or parse_struct_decl.
+    //   (b) the field-type loop below sees only THIS struct's
+    //       generic params via gp_tab_lookup; T-typed fields encode
+    //       as 200+gp_idx, scalar fields encode as -1.
+    // Mirrors parse_fn_decl's `gp_tab_reset(sb)` at parser.hx:5218.
+    // Per cycle-1 OBS-1 (type-design conf 90, INC-2 forward-compat),
+    // explicit reset prevents the "two consecutive generic structs
+    // leak T into Foo's gp_tab" hazard.
+    gp_tab_reset(sb);
     // Stage 28.11 INCREMENT 1: accept optional `<T1, T2, ...>`
     // generic-params clause between the struct name and `{`. The
     // syntax is parsed-and-discarded in this increment so existing
@@ -6078,9 +6091,16 @@ fn parse_struct_decl(tok_base: i32, sb: i32) -> i32 {
                 keep_g = 0;
             } else { if gtt == 13 {          // COMMA
                 cur_advance(sb);
-            } else { if gtt == 2 {           // TK_IDENT — discard
-                // INCREMENT 2 will capture (name_s, name_l) into
-                // gp_tab here. Phase-0 just discards.
+            } else { if gtt == 2 {           // TK_IDENT — capture
+                // Stage 28.11 INCREMENT 2: capture (name_s, name_l)
+                // into gp_tab BEFORE advancing so the field-type
+                // loop below can resolve T → 200+gp_idx encoding.
+                // Mirrors parse_fn_decl's `gp_tab_add(sb, gp_s, gp_l)`
+                // at parser.hx:5239.
+                let gk = cur_get(sb);
+                let gp_s = tok_p2(tok_base, gk);
+                let gp_l = tok_p3(tok_base, gk);
+                gp_tab_add(sb, gp_s, gp_l);
                 cur_advance(sb);
             } else {
                 // Stage 28.11 INC-1 cycle-2 SF-1/SF-3 fix: any token
@@ -6135,6 +6155,33 @@ fn parse_struct_decl(tok_base: i32, sb: i32) -> i32 {
             let t_s = tok_p2(tok_base, tk);
             let t_l = tok_p3(tok_base, tk);
             cur_advance(sb);                 // consume type IDENT
+            // Stage 28.11 INCREMENT 2 scope decision: gp_tab is now
+            // populated above, so a field typed `T` (matching a
+            // generic-param name) COULD encode as `200 + gp_idx`
+            // (mirroring parse_fn_decl's fn-param encoding at
+            // parser.hx:5346). However, the downstream reader at
+            // parser.hx:1635 — `struct_tab_field_struct_idx >= 0`
+            // — would interpret a 200+ value as a nested-struct
+            // field, emit an 8-byte (REX.W) read of a 4-byte slot,
+            // and propagate cur_struct_idx = 200+gp_idx into
+            // subsequent field accesses where struct_tab indexing
+            // would read off the end of the table.
+            //
+            // INCREMENT 2 keeps the field encoding unchanged
+            // (scalar-fallback via struct_tab_lookup_idx → -1 for
+            // generic-typed fields). INCREMENT 3 will land BOTH
+            // (a) the 200+gp_idx field encoding AND (b) the
+            // downstream reader-side check (`< 200`) AND (c) the
+            // monomorphization pass that rewrites generic structs
+            // into concrete clones — atomically as a coherent unit.
+            // This avoids an intermediate-state regression where
+            // INC-2 alone would break the existing
+            // `struct Pt<T> { x: T, y: T }` probe by mis-reading
+            // T-typed fields as 8-byte struct pointers.
+            //
+            // gp_tab is still populated above so INCREMENT 3 has
+            // the data it needs; only the field-type-tag write
+            // is deferred.
             let f_struct_idx = struct_tab_lookup_idx(sb, t_s, t_l);
             // Push (name_s, name_l, field_struct_idx) triple into
             // fields region. Capture fields_ptr from the FIRST push so
@@ -6153,6 +6200,15 @@ fn parse_struct_decl(tok_base: i32, sb: i32) -> i32 {
     }
     cur_advance(sb);                         // consume '}' (RBRACE = 6)
     struct_tab_add(sb, name_s, name_l, field_count, fields_ptr);
+    // Stage 28.11 INCREMENT 2: reset gp_tab AFTER struct_tab_add so
+    // subsequent decls (struct OR fn) start with a clean generic-
+    // param table. parse_fn_decl resets at its entry point (~5218);
+    // this exit-side reset adds belt-and-braces protection for the
+    // window between this struct and any non-fn / non-struct decl
+    // that might be parsed before the next reset. Cycle-1 OBS-1
+    // (type-design conf 90) called this out as the INC-2 forward-
+    // compat requirement.
+    gp_tab_reset(sb);
     mk_node(54, 0, 0, 0)
 }
 
