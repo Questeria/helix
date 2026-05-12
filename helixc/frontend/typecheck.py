@@ -339,7 +339,15 @@ PRIMITIVES = {
     "bool", "char",
     "bf16", "f16", "f32", "f64",
     "fp8", "mxfp4", "nvfp4", "ternary",
-    "()",
+    # Stage 28.9 cycle-105 F105-1 fix (type-design HIGH, conf 90): "()" is
+    # the unit type — it has its own canonical class TyUnit, not TyPrim.
+    # Pre-fix the set contained "()", so TyName("()") resolved to
+    # TyPrim("()") in source-typed positions (e.g. `fn foo() -> () {}`)
+    # while implicit-unit paths produced TyUnit(); the dataclass __eq__
+    # cascade rejected the cross-class pair and emitted a spurious
+    # "type error: () does not match ()". _resolve_type now maps the
+    # textual "()" name to TyUnit() directly, eliminating the duplicate
+    # representation.
 }
 
 
@@ -505,6 +513,11 @@ class TypeChecker:
     # ---- type resolution ----
     def _resolve_type(self, ty: A.TyNode, scope: Scope) -> Type:
         if isinstance(ty, A.TyName):
+            # Stage 28.9 cycle-105 F105-1 fix: normalize textual "()" to
+            # TyUnit() so source-typed unit and implicit-unit converge to
+            # a single representation. See PRIMITIVES comment for rationale.
+            if ty.name == "()":
+                return TyUnit()
             if ty.name in PRIMITIVES:
                 return TyPrim(ty.name)
             looked = scope.lookup(ty.name)

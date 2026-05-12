@@ -279,6 +279,126 @@ def test_c102_u64_add_emits_64bit_path():
     )
 
 
+def test_c105_f64_to_f32_cast_emits_cvtsd2ss():
+    """Stage 28.9 cycle 106 audit-T C105-F1 regression (HIGH conf 90):
+    `f64 as f32` must emit `cvtsd2ss` (F2 0F 5A C0) — pre-fix this
+    fell through to a 4-byte mov-copy, silently emitting the wrong
+    bit-pattern for the narrowing cross-precision cast."""
+    from helixc.backend.x86_64 import compile_module_to_elf
+    src = """
+    fn narrow(x: f64) -> f32 {
+        x as f32
+    }
+    fn main() -> i32 { 0 }
+    """
+    elf = compile_module_to_elf(lower_src(src))
+    assert b"\xf2\x0f\x5a\xc0" in elf, (
+        "expected cvtsd2ss opcode (F2 0F 5A C0) for f64 -> f32 cast — "
+        "C105-F1 regression: 4-byte mov-copy still silently emitted"
+    )
+
+
+def test_c105_f32_to_f64_cast_emits_cvtss2sd():
+    """C105-F1 regression: symmetric widening cast must emit
+    `cvtss2sd` (F3 0F 5A C0)."""
+    from helixc.backend.x86_64 import compile_module_to_elf
+    src = """
+    fn widen(x: f32) -> f64 {
+        x as f64
+    }
+    fn main() -> i32 { 0 }
+    """
+    elf = compile_module_to_elf(lower_src(src))
+    assert b"\xf3\x0f\x5a\xc0" in elf, (
+        "expected cvtss2sd opcode (F3 0F 5A C0) for f32 -> f64 cast"
+    )
+
+
+def test_c105_u64_const_emits_64bit_path():
+    """Stage 28.9 cycle 106 audit-R C105-F1 regression (HIGH conf 92):
+    a u64 CONST_INT must emit 8-byte mov_rax_imm64 + mov_mem_rbp_rax.
+    Pre-fix `_is_i64_type` matched only i64/isize, so u64 CONST_INT
+    emitted 32-bit `mov eax, imm32` into an 8-byte slot — leaving
+    high 4 bytes stale."""
+    from helixc.backend.x86_64 import compile_module_to_elf
+    src = """
+    fn make_u64() -> u64 {
+        12345_u64
+    }
+    fn main() -> i32 { 0 }
+    """
+    elf = compile_module_to_elf(lower_src(src))
+    # `mov rax, imm64` = 48 B8 ... — rex.W + opcode B8 + 8 imm bytes.
+    # Look for the prefix `48 B8` which is the discriminative marker.
+    assert b"\x48\xb8" in elf, (
+        "expected `mov rax, imm64` opcode (48 B8) for u64 CONST_INT — "
+        "C105-F1 regression: u64 still falls through to 32-bit imm"
+    )
+
+
+def test_c105_break_in_loop_raises_loud():
+    """Stage 28.9 cycle-105 silent-failure F1 regression (CRITICAL conf 95):
+    pre-fix `loop { ...; if c { break; } }` typechecked + lowered to an
+    infinite loop because A.Break fell through the _lower_expr catch-all
+    `return None`. Fix raises NotImplementedError at the lowering site so
+    a silent miscompile becomes a loud build failure until real break/
+    continue CFG support lands."""
+    src = """
+    fn f() -> i32 {
+        let mut sum: i32 = 0;
+        loop { sum = sum + 1; if sum >= 5 { break; } }
+        sum
+    }
+    """
+    try:
+        lower_src(src)
+    except NotImplementedError as e:
+        assert "break" in str(e).lower(), (
+            f"NotImplementedError must mention 'break', got: {e}"
+        )
+        return
+    raise AssertionError(
+        "A.Break must raise NotImplementedError until CFG support exists; "
+        "pre-fix this silently emitted an infinite loop"
+    )
+
+
+def test_c105_continue_in_loop_raises_loud():
+    """Stage 28.9 cycle-105 silent-failure F1 regression (CRITICAL conf 95):
+    companion to A.Break test — A.Continue must also raise loudly."""
+    src = """
+    fn f() -> i32 {
+        let mut sum: i32 = 0;
+        let mut i: i32 = 0;
+        while i < 10 { i = i + 1; if i == 3 { continue; } sum = sum + 1; }
+        sum
+    }
+    """
+    try:
+        lower_src(src)
+    except NotImplementedError as e:
+        assert "continue" in str(e).lower(), (
+            f"NotImplementedError must mention 'continue', got: {e}"
+        )
+        return
+    raise AssertionError(
+        "A.Continue must raise NotImplementedError until CFG support exists"
+    )
+
+
+def test_c105_unit_return_type_compatible():
+    """Stage 28.9 cycle-105 type-design F105-1 regression (HIGH conf 90):
+    pre-fix `fn foo() -> () {}` raised a spurious 'type error: ()
+    does not match ()' because source-typed `()` resolved to
+    TyPrim('()') while implicit-unit body produced TyUnit(), and the
+    cross-class pair failed `_compatible`. Fix normalizes TyName('()')
+    to TyUnit() in _resolve_type."""
+    from helixc.frontend.typecheck import typecheck
+    from helixc.frontend.parser import parse as _parse
+    src = "fn foo() -> () { }\nfn main() -> i32 { 0 }\n"
+    typecheck(_parse(src))
+
+
 def main():
     tests = [(name, fn) for name, fn in globals().items()
              if name.startswith("test_") and callable(fn)]

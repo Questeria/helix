@@ -1785,10 +1785,16 @@ class Lowerer:
             #   }
             # We generate unique var names by prefixing with __for_<linenum>_
             if not isinstance(expr.iter_expr, A.Range) or expr.iter_expr.start is None or expr.iter_expr.end is None:
-                # Non-range for: not supported in v0.1
-                self._lower_expr(expr.iter_expr)
-                self._lower_block(expr.body)
-                return None
+                # Stage 28.9 cycle-105 F2 fix (silent-failure HIGH, conf 80):
+                # pre-fix silently lowered body ONCE with the iter-var
+                # unbound, so `for x in xs { ... }` (non-Range iter) returned
+                # 0 / garbage instead of iterating. Same defect class as
+                # cycle-101 F1 (StrLit silent fallthrough): typecheck admits
+                # what lower cannot handle. Loud trap beats silent miscompile.
+                raise NotImplementedError(
+                    f"for-loop with non-Range iter not yet supported "
+                    f"at {expr.span.line}:{expr.span.col} "
+                    f"(iter expr: {type(expr.iter_expr).__name__})")
 
             tag = f"__for_{expr.span.line}_{expr.span.col}_"
             iter_var = tag + expr.var_name
@@ -1892,6 +1898,24 @@ class Lowerer:
             # Exit
             self.builder.switch_to(exit_blk)
             return None
+        if isinstance(expr, A.Break):
+            # Stage 28.9 cycle-105 F1 fix (silent-failure CRITICAL, conf 95):
+            # pre-fix the catch-all `return None` at the bottom of
+            # _lower_expr silently dropped A.Break/A.Continue. The parser
+            # accepts `break;` / `continue;` inside loops and typecheck
+            # passes them without scope validation; with no lower arm,
+            # `loop { ...; if c { break; } }` silently emitted an infinite
+            # loop. Loud trap beats silent miscompile. Real CFG support
+            # requires a loop-break-block stack threaded through the
+            # While/Loop/For arms — deferred until used by bootstrap.
+            raise NotImplementedError(
+                f"break not yet supported at "
+                f"{expr.span.line}:{expr.span.col}")
+        if isinstance(expr, A.Continue):
+            # Stage 28.9 cycle-105 F1 fix (companion to A.Break).
+            raise NotImplementedError(
+                f"continue not yet supported at "
+                f"{expr.span.line}:{expr.span.col}")
         if isinstance(expr, A.Loop):
             # `loop { body }` — same skeleton as While but with no exit
             # condition (caller expected to break, which we don't yet

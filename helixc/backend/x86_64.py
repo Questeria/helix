@@ -715,6 +715,16 @@ class Asm:
         # F2 0F 2A C0
         self.b.emit(0xF2, 0x0F, 0x2A, 0xC0)
 
+    def cvtsd2ss_xmm0_xmm0(self) -> None:
+        # F2 0F 5A C0 — convert scalar double to scalar single
+        # (f64 -> f32 narrowing). Stage 28.9 cycle 106 audit-T C105-F1.
+        self.b.emit(0xF2, 0x0F, 0x5A, 0xC0)
+
+    def cvtss2sd_xmm0_xmm0(self) -> None:
+        # F3 0F 5A C0 — convert scalar single to scalar double
+        # (f32 -> f64 widening). Stage 28.9 cycle 106 audit-T C105-F1.
+        self.b.emit(0xF3, 0x0F, 0x5A, 0xC0)
+
     def ucomisd_xmm0_xmm1(self) -> None:
         # 66 0F 2E C1
         self.b.emit(0x66, 0x0F, 0x2E, 0xC1)
@@ -983,7 +993,15 @@ class FnCompiler:
                     raise NotImplementedError(
                         f"v0.1 supports up to {len(INT_SPILLS)} int params"
                     )
-                if self._is_i64_type(p.ty):
+                # Stage 28.9 cycle 106 audit-R C105-F2 fix (HIGH conf 92):
+                # extended from `_is_i64_type` to `_is_64bit_int_type`
+                # so u64/usize parameters spill via the 64-bit
+                # INT_SPILLS_64 path. Pre-fix u64/usize params spilled
+                # via 32-bit dword stores and discarded the high 4
+                # bytes the SysV ABI delivers in rdi/rsi/etc. Same
+                # defect class as cycle-100/102 (i64-only predicates
+                # silently truncating u64/usize).
+                if self._is_64bit_int_type(p.ty):
                     INT_SPILLS_64[int_idx](slot)
                 else:
                     INT_SPILLS[int_idx](slot)
@@ -1195,7 +1213,13 @@ class FnCompiler:
         if op.kind == tir.OpKind.CONST_INT:
             slot = self._slot_of(op.results[0])
             value = int(op.attrs["value"])
-            if self._is_i64_type(op.results[0].ty):
+            # Stage 28.9 cycle 106 audit-R C105-F1 fix (HIGH conf 92):
+            # extended from `_is_i64_type` to `_is_64bit_int_type` so
+            # u64/usize CONST_INT emits 8-byte mov_rax_imm64. Pre-fix
+            # u64 constants emitted 32-bit `mov eax, imm32` into an
+            # 8-byte slot, leaving the high 4 bytes stale. Same defect
+            # class as cycle-100/102.
+            if self._is_64bit_int_type(op.results[0].ty):
                 self.asm.mov_rax_imm64(value)
                 self.asm.mov_mem_rbp_rax(slot)
             else:
@@ -1228,12 +1252,17 @@ class FnCompiler:
         if op.kind == tir.OpKind.BITCAST:
             # Bit-level reinterpret: same bytes, different type label.
             # f32 <-> i32: 4-byte mov; f64 <-> i64: 8-byte mov.
+            # Stage 28.9 cycle 106 audit-R C105-F3 fix (HIGH conf 80):
+            # the `wide` classifier extended from `_is_i64_type` to
+            # `_is_64bit_int_type` so `bitcast<u64>(f64)` etc. take
+            # the 8-byte path. Pre-fix any u64/usize involvement
+            # silently routed to 4-byte mov, truncating.
             src_slot = self._slot_of(op.operands[0])
             res_slot = self._slot_of(op.results[0])
             res_ty = op.results[0].ty
-            wide = self._is_f64_type(res_ty) or self._is_i64_type(res_ty) \
+            wide = self._is_f64_type(res_ty) or self._is_64bit_int_type(res_ty) \
                    or self._is_f64_type(op.operands[0].ty) \
-                   or self._is_i64_type(op.operands[0].ty)
+                   or self._is_64bit_int_type(op.operands[0].ty)
             if wide:
                 self.asm.mov_rax_mem_rbp(src_slot)
                 self.asm.mov_mem_rbp_rax(res_slot)
@@ -1299,6 +1328,22 @@ class FnCompiler:
                 self.asm.movss_xmm0_mem_rbp(src_slot)
                 self.asm.cvttss2si_eax_xmm0()
                 self.asm.mov_mem_rbp_eax(res_slot)
+                return
+            # Stage 28.9 cycle 106 audit-T C105-F1 fix (HIGH conf 90):
+            # f64 -> f32 narrowing must use `cvtsd2ss`; f32 -> f64
+            # widening must use `cvtss2sd`. Pre-fix both fell through
+            # to the `from_is_float == to_is_float` 4-byte mov-copy
+            # branch below — silently emitting the wrong bit-pattern
+            # for cross-precision float casts.
+            if from_is_f64 and to_is_float and not to_is_f64:
+                self.asm.movsd_xmm0_mem_rbp(src_slot)
+                self.asm.cvtsd2ss_xmm0_xmm0()
+                self.asm.movss_mem_rbp_xmm0(res_slot)
+                return
+            if from_is_float and not from_is_f64 and to_is_f64:
+                self.asm.movss_xmm0_mem_rbp(src_slot)
+                self.asm.cvtss2sd_xmm0_xmm0()
+                self.asm.movsd_mem_rbp_xmm0(res_slot)
                 return
             # Same float-or-not: memory copy. For f64-to-f64, copy 8 bytes.
             if from_is_f64 and to_is_f64:
