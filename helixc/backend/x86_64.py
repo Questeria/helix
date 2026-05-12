@@ -1030,6 +1030,17 @@ class FnCompiler:
         # `u64` on 64-bit targets. Same silent-trunc class as isize.
         return isinstance(ty, tir.TIRScalar) and ty.name in ("u64", "usize")
 
+    def _is_64bit_int_type(self, ty: tir.TIRType) -> bool:
+        # Stage 28.9 cycle 102 audit-R C101-F2 helper (HIGH conf 92):
+        # i64/isize AND u64/usize all need the 64-bit codegen path
+        # (rax/rcx + rex-prefixed instructions). Pre-cycle-100 the
+        # arithmetic emit sites only checked `_is_i64_type`, so
+        # u64/usize silently fell through to the 32-bit path and
+        # truncated. Cycle-100 fixed the cmp dispatch with an inline
+        # OR; cycle-102 promotes the predicate so ADD/SUB/MUL can
+        # share the same width gate.
+        return self._is_i64_type(ty) or self._is_u64_type(ty)
+
     def _is_unsigned_int_type(self, ty: tir.TIRType) -> bool:
         # Stage 28.9 cycle 100 audit-R F1/F2 fix (HIGH conf 88-92):
         # the cmp emit path used signed setl/setle/setg/setge for every
@@ -1315,7 +1326,12 @@ class FnCompiler:
                 self.asm.movss_xmm1_mem_rbp(r_slot)
                 self.asm.addss_xmm0_xmm1()
                 self.asm.movss_mem_rbp_xmm0(res_slot)
-            elif self._is_i64_type(op.results[0].ty):
+            elif self._is_64bit_int_type(op.results[0].ty):
+                # Stage 28.9 cycle 102 audit-R C101-F2 fix (HIGH conf 92):
+                # extended from `_is_i64_type` to `_is_64bit_int_type`
+                # so u64/usize also take the 64-bit path. `add` is
+                # sign-agnostic at the machine level — same opcode for
+                # signed and unsigned addition; only width matters.
                 self.asm.mov_rax_mem_rbp(l_slot)
                 self.asm.mov_rcx_mem_rbp(r_slot)
                 self.asm.add_rax_rcx()
@@ -1340,7 +1356,10 @@ class FnCompiler:
                 self.asm.movss_xmm1_mem_rbp(r_slot)
                 self.asm.subss_xmm0_xmm1()
                 self.asm.movss_mem_rbp_xmm0(res_slot)
-            elif self._is_i64_type(op.results[0].ty):
+            elif self._is_64bit_int_type(op.results[0].ty):
+                # Stage 28.9 cycle 102 audit-R C101-F2: extended to
+                # include u64/usize (see ADD note above). `sub` is
+                # sign-agnostic at the machine level.
                 self.asm.mov_rax_mem_rbp(l_slot)
                 self.asm.mov_rcx_mem_rbp(r_slot)
                 self.asm.sub_rax_rcx()
@@ -1365,7 +1384,13 @@ class FnCompiler:
                 self.asm.movss_xmm1_mem_rbp(r_slot)
                 self.asm.mulss_xmm0_xmm1()
                 self.asm.movss_mem_rbp_xmm0(res_slot)
-            elif self._is_i64_type(op.results[0].ty):
+            elif self._is_64bit_int_type(op.results[0].ty):
+                # Stage 28.9 cycle 102 audit-R C101-F2: extended to
+                # include u64/usize. `imul` lower-half is identical
+                # for signed and unsigned operands (only upper-half
+                # via mul vs imul differs, which we don't capture in
+                # single-result use), so the same opcode is correct
+                # for both.
                 self.asm.mov_rax_mem_rbp(l_slot)
                 self.asm.mov_rcx_mem_rbp(r_slot)
                 self.asm.imul_rax_rcx()

@@ -229,6 +229,56 @@ def test_c96_loop_blocks_appended_to_fn_blocks():
                     )
 
 
+def test_c100_unsigned_cmp_emits_setb_not_setl():
+    """Stage 28.9 cycle 100 regression (HIGH conf 92): unsigned int
+    compares must emit `setb` (0F 92) not `setl` (0F 9C). Cycle-99
+    F2 caught the bug: signed setcc on high-bit-set u32 values
+    miscompiles (`0xFFFFFFFF_u32 < 1_u32` returns true under signed
+    cmp). Cycle-100 added `unsigned_int_cmp_setters` with setb/setbe/
+    seta/setae. This test inspects the emitted ELF for the unsigned
+    opcodes when the operand type is u32."""
+    from helixc.backend.x86_64 import compile_module_to_elf
+    src = """
+    fn cmp_u32(a: u32, b: u32) -> i32 {
+        if a < b { 1 } else { 0 }
+    }
+    fn main() -> i32 { cmp_u32(0_u32, 1_u32) }
+    """
+    elf = compile_module_to_elf(lower_src(src))
+    # setb al = 0F 92 C0; setl al = 0F 9C C0. Either appears in
+    # int cmp fn bodies — assert the unsigned setb is present.
+    assert b"\x0f\x92\xc0" in elf, (
+        "expected unsigned setb opcode (0F 92 C0) for u32 cmp — "
+        "cycle-100 regression: signed setl still emitted"
+    )
+
+
+def test_c102_u64_add_emits_64bit_path():
+    """Stage 28.9 cycle 102 regression (HIGH conf 92): u64/usize
+    arithmetic must take the 64-bit codegen path (rex.W + rax/rcx).
+    Cycle-101 F2 caught the bug: ADD/SUB/MUL only checked
+    `_is_i64_type`, so u64/usize silently fell through to the
+    32-bit path and truncated. Cycle-102 introduced
+    `_is_64bit_int_type` and routed all three to it.
+
+    This test asserts the emitted ELF for a `u64 + u64` body
+    contains the rex.W ADD opcode (48 01 C8 = `add rax, rcx`)."""
+    from helixc.backend.x86_64 import compile_module_to_elf
+    src = """
+    fn add_u64(a: u64, b: u64) -> u64 {
+        a + b
+    }
+    fn main() -> i32 { 0 }
+    """
+    elf = compile_module_to_elf(lower_src(src))
+    # `add rax, rcx` = 48 01 C8. The 64-bit ADD path emits this;
+    # the 32-bit path emits `add eax, ecx` = 01 C8 (no rex.W).
+    assert b"\x48\x01\xc8" in elf, (
+        "expected rex.W ADD opcode (48 01 C8) for u64 add — "
+        "cycle-102 regression: u64 still falls through to 32-bit path"
+    )
+
+
 def main():
     tests = [(name, fn) for name, fn in globals().items()
              if name.startswith("test_") and callable(fn)]
