@@ -428,6 +428,59 @@ def test_stage17_emits_mov_eax_14():
     assert target in elf, "expected `mov eax, 14` in emitted ELF"
 
 
+def test_c85_1_shift_bound_uses_result_type_bitwidth():
+    """Stage 28.9 cycle 86 audit-R C85-1 regression (HIGH conf 90):
+    pre-fix the SHL/SHR const-fold bound was hard-coded `[0, 63]`
+    regardless of result type. `1_i32 << 32_i32` const-folded to 0
+    but x86 SHL masks cl to log2(bitwidth) — 5 bits for i32 — so the
+    runtime computes `1_i32 << 0` = 1. Fold/runtime divergence is a
+    silent miscompile across `-O0` vs default `-O1`. Now the bound
+    is the result-type bitwidth: i32 → [0, 32), i64 → [0, 64)."""
+    from helixc.ir.passes.const_fold import ShiftFoldError
+    # Build SHL with i32 operands and shift=32 (in [32, 64) gap).
+    mod = tir.Module()
+    i32 = tir.TIRScalar("i32")
+    blk = tir.Block(id=0)
+    v_l = tir.Value(id=0, ty=i32)
+    v_r = tir.Value(id=1, ty=i32)
+    v_s = tir.Value(id=2, ty=i32)
+    blk.ops = [
+        tir.Op(kind=tir.OpKind.CONST_INT, operands=[], results=[v_l],
+               attrs={"value": 1}),
+        tir.Op(kind=tir.OpKind.CONST_INT, operands=[], results=[v_r],
+               attrs={"value": 32}),  # in [32, 64): pre-fix silently folded
+        tir.Op(kind=tir.OpKind.SHL, operands=[v_l, v_r], results=[v_s]),
+        tir.Op(kind=tir.OpKind.RETURN, operands=[v_s], results=[]),
+    ]
+    fn = tir.FnIR(name="main", params=[], return_ty=i32, blocks=[blk])
+    mod.functions["main"] = fn
+    mod.next_value_id = 3
+    mod.next_block_id = 1
+    try:
+        fold_module(mod)
+    except ShiftFoldError as e:
+        assert "32" in str(e)
+        return
+    raise AssertionError(
+        "expected ShiftFoldError for i32 SHL shift=32 — pre-fix this "
+        "was silently folded to 0 while x86 hardware computes 1"
+    )
+
+
+def test_c85_1_shift_i64_still_allows_up_to_63():
+    """C85-1 regression: i64 shift bound remains [0, 64) — large
+    shifts that pre-fix worked must still work."""
+    mod = lower_and_fold("fn main() -> i64 { 1_i64 << 63_i64 }")
+    consts = [op.attrs["value"]
+              for fn in mod.functions.values() for blk in fn.blocks
+              for op in blk.ops if op.kind == tir.OpKind.CONST_INT]
+    # Expect the shifted constant to be present (with two's-complement wrap).
+    # 1 << 63 = 0x8000000000000000 which wraps to -2^63 in signed i64.
+    assert -(2**63) in consts or (2**63) in consts, (
+        f"expected i64 1<<63 to fold; got consts={consts}"
+    )
+
+
 def test_c19_1_isize_usize_are_64_bit_in_wrap():
     """Audit 28.8 cycle 20 C19-1 (HIGH): isize/usize must be treated as
     64-bit in `_wrap_int_to_type`, matching the cycle-19 backend

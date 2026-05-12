@@ -488,17 +488,36 @@ def _try_fold_op(op: tir.Op, defs: dict) -> tir.Op | None:
                     # (matching the NaN FoldError prefix) so downstream
                     # grep for `^helixc: const-fold error: \[trap ` works
                     # uniformly across all FoldError subclasses.
-                    if r < 0 or r >= 64:
+                    # Stage 28.9 cycle 86 audit-R C85-1 fix (HIGH conf 90):
+                    # pre-fix bound was hardcoded `[0, 63]` regardless of
+                    # result type. `1_i32 << 32_i32` const-folded to 0 but
+                    # x86 SHL masks cl to log2(bitwidth) — 5 bits for i32 —
+                    # so the runtime evaluates `1_i32 << 0` = 1. Fold/
+                    # runtime divergence is a silent miscompile. Use the
+                    # result-type bitwidth as the upper bound.
+                    _res_ty = op.results[0].ty if op.results else None
+                    _bits = _INT_BITS.get(
+                        _res_ty.name if isinstance(_res_ty, tir.TIRScalar) else "",
+                        64,
+                    )
+                    if r < 0 or r >= _bits:
                         raise ShiftFoldError(
                             f"shift amount {r} out of range "
-                            f"[0, 63] in const SHL fold"
+                            f"[0, {_bits}) for {_bits}-bit SHL fold"
                         )
                     v = l << r
                 elif op.kind == tir.OpKind.SHR:
-                    if r < 0 or r >= 64:
+                    # Stage 28.9 cycle 86 audit-R C85-1 fix (HIGH conf 90):
+                    # see SHL note above.
+                    _res_ty = op.results[0].ty if op.results else None
+                    _bits = _INT_BITS.get(
+                        _res_ty.name if isinstance(_res_ty, tir.TIRScalar) else "",
+                        64,
+                    )
+                    if r < 0 or r >= _bits:
                         raise ShiftFoldError(
                             f"shift amount {r} out of range "
-                            f"[0, 63] in const SHR fold"
+                            f"[0, {_bits}) for {_bits}-bit SHR fold"
                         )
                     v = l >> r   # arithmetic in Python for signed ints
                 else:
