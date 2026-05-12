@@ -2824,6 +2824,25 @@ fn main() -> i32 {
         "fn main() -> i32 { let p = Pt<i32> { 10, 32 }; p.x + p.y }"
     ) == 42, ("Stage 28.11 INCREMENT 3b: generic struct instantiation "
               "Pt<i32> { 10, 32 } monomorphizes to concrete i32 fields")
+    # Stage 28.13.2: named struct-lit syntax for generic struct uses
+    # (Pt<i32> { x: 10, y: 32 }). Extends Stage 28.13.1's named-mode
+    # to the generic-mono branch (nt==16 in parse_primary). Algorithm
+    # mirrors the non-generic named-mode but keyed by mono_s_idx +
+    # arity_m. struct_tab_field_lookup on a mono'd struct (Pt__i32)
+    # works identically because INC-3b.2 clones fields region with
+    # the same stride-3 layout.
+    assert compile_and_exec(
+        "struct Pt<T> { x: T, y: T } "
+        "fn main() -> i32 { let p = Pt<i32> { x: 10, y: 32 }; p.x + p.y }"
+    ) == 42, ("Stage 28.13.2: named struct-lit for generic struct "
+              "`Pt<i32> { x: 10, y: 32 }` works end-to-end")
+    # Asymmetric probe: distinguishes correct named-lookup from
+    # insertion-order for generic structs too.
+    assert compile_and_exec(
+        "struct Pt<T> { x: T, y: T } "
+        "fn main() -> i32 { let p = Pt<i32> { y: 32, x: 10 }; p.x }"
+    ) == 10, ("Stage 28.13.2: generic named struct-lit field-order-"
+              "independent — `Pt<i32> { y: 32, x: 10 }.x == 10`")
     # INC-1 cycle-4 polish (cycle-3 code-review F-1, conf 85 + cycle-2
     # silent-failure RE-5, conf 82): probe MUST exercise the actual
     # path it claims. Cycle-3 version was a tautology (single

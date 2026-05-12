@@ -3387,6 +3387,82 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
                             } else {
                                 mk_node(50, 0, 0, 0)
                             }
+                        } else { if peek_named_struct_lit(tok_base, sb) == 1 {
+                            // Stage 28.13.2: named struct-lit syntax for
+                            // generic mono use sites: `Pt<i32> { x: 10,
+                            // y: 32 }`. Same algorithm as the
+                            // non-generic named-mode branch above
+                            // (~line 3460) but keyed by `mono_s_idx`
+                            // and `arity_m` (the mono'd struct's
+                            // fields region). field lookup goes through
+                            // struct_tab_field_lookup which works on
+                            // mono'd struct_tab entries identically to
+                            // non-generic ones (INC-3b.2 clones the
+                            // fields region with the same stride-3
+                            // layout).
+                            let temp_base = __arena_len();
+                            let mut ti: i32 = 0;
+                            while ti < arity_m {
+                                __arena_push(0 - 1);
+                                ti = ti + 1;
+                            }
+                            let mut keep_n: i32 = 1;
+                            let mut named_err: i32 = 0;
+                            while keep_n == 1 {
+                                let fk = cur_get(sb);
+                                let fname_s = tok_p2(tok_base, fk);
+                                let fname_l = tok_p3(tok_base, fk);
+                                cur_advance(sb);         // consume field-name
+                                cur_advance(sb);         // consume ':'
+                                let fval = parse_expr(tok_base, sb);
+                                let f_idx = struct_tab_field_lookup(sb, mono_s_idx, fname_s, fname_l);
+                                if f_idx < 0 {
+                                    named_err = 50041;
+                                    keep_n = 0;
+                                } else { if f_idx >= arity_m {
+                                    named_err = 50041;
+                                    keep_n = 0;
+                                } else { if __arena_get(temp_base + f_idx) != 0 - 1 {
+                                    named_err = 50042;
+                                    keep_n = 0;
+                                } else {
+                                    __arena_set(temp_base + f_idx, fval);
+                                    let ct = tok_tag(tok_base, cur_get(sb));
+                                    if ct == 13 {
+                                        cur_advance(sb);
+                                        let nt2 = tok_tag(tok_base, cur_get(sb));
+                                        if nt2 == 6 { keep_n = 0; };
+                                    } else { keep_n = 0; };
+                                }}};
+                            }
+                            if named_err != 0 {
+                                mk_node(99, named_err, 0, 0)
+                            } else {
+                                cur_advance(sb);         // consume `}`
+                                let mut vi: i32 = 0;
+                                let mut missing: i32 = 0;
+                                while vi < arity_m {
+                                    if __arena_get(temp_base + vi) == 0 - 1 {
+                                        missing = 1;
+                                        vi = arity_m;
+                                    } else { vi = vi + 1; };
+                                }
+                                if missing == 1 {
+                                    mk_node(99, 50040, 0, 0)
+                                } else {
+                                    let head_n = mk_node(51, __arena_get(temp_base), 0, 0);
+                                    let mut tail_n: i32 = head_n;
+                                    let mut bi: i32 = 1;
+                                    while bi < arity_m {
+                                        let new_node = mk_node(51, __arena_get(temp_base + bi), 0, 0);
+                                        __arena_set(tail_n + 2, new_node);
+                                        tail_n = new_node;
+                                        bi = bi + 1;
+                                    }
+                                    set_last_struct_idx(sb, mono_s_idx);
+                                    mk_node(50, arity_m, head_n, 0)
+                                }
+                            }
                         } else {
                             let first = parse_expr(tok_base, sb);
                             let mut head_idx: i32 = mk_node(51, first, 0, 0);
@@ -3418,7 +3494,7 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
                             } else {
                                 mk_node(50, n, head_idx, 0)
                             }
-                        }
+                        }}
                     }}
                 } else {
                     // Not a generic struct use — fall through to var
