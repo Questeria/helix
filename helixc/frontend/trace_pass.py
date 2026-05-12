@@ -95,9 +95,13 @@ def trace_equiv(a: TraceBuffer, b: TraceBuffer) -> bool:
 
 
 def traced_fn_names(prog: A.Program) -> list[str]:
-    """List of top-level fn names that carry `@trace`."""
-    return [it.name for it in prog.items
-            if isinstance(it, A.FnDecl) and is_traced(it)]
+    """List of fn names that carry `@trace` anywhere in the program.
+
+    Stage 28.9 cycle 60 audit-R C59-1: iter_fn_decls recurses through
+    ImplBlock.methods and ModBlock.items so mod-nested @trace fns
+    are listed."""
+    from .ast_walker import iter_fn_decls
+    return [fn.name for fn in iter_fn_decls(prog) if is_traced(fn)]
 
 
 def validate_trace_attrs(prog: A.Program) -> list[str]:
@@ -112,14 +116,13 @@ def validate_trace_attrs(prog: A.Program) -> list[str]:
         program semantics that purity reasons about).
     """
     diags: list[str] = []
-    for it in prog.items:
-        if not isinstance(it, A.FnDecl):
+    from .ast_walker import iter_fn_decls
+    for fn in iter_fn_decls(prog):
+        if not is_traced(fn):
             continue
-        if not is_traced(it):
-            continue
-        if it.is_extern:
+        if fn.is_extern:
             diags.append(
-                f"@trace on extern \"C\" fn {it.name!r}: not supported "
+                f"@trace on extern \"C\" fn {fn.name!r}: not supported "
                 f"(extern fns have no body to instrument)"
             )
     return diags

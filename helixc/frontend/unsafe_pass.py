@@ -80,11 +80,14 @@ def find_unsafe_blocks(prog: A.Program) -> list[A.UnsafeBlock]:
     """Return all UnsafeBlock nodes in the program (in fn bodies).
 
     Stage 28.8.2: uses ``_UnsafeBlockCollector(ASTVisitor)``.
+    Stage 28.9 cycle 60 audit-R C59-1: iter_fn_decls recursion through
+    ImplBlock/ModBlock so mod-nested fns are scanned.
     """
     out: list[A.UnsafeBlock] = []
-    for it in prog.items:
-        if isinstance(it, A.FnDecl) and not it.is_extern:
-            _UnsafeBlockCollector(out).visit(it.body)
+    from .ast_walker import iter_fn_decls
+    for fn in iter_fn_decls(prog):
+        if not fn.is_extern:
+            _UnsafeBlockCollector(out).visit(fn.body)
     return out
 
 
@@ -143,11 +146,14 @@ def find_raw_ptr_ops(prog: A.Program) -> list[tuple[str, A.Span, bool]]:
     Stage 28.8.2: uses ``_RawPtrOpVisitor(ASTVisitor)`` — the
     ``in_unsafe`` flag is tracked via a push/pop counter around
     UnsafeBlock recursion.
+
+    Stage 28.9 cycle 60 audit-R C59-1: iter_fn_decls recursion.
     """
     out: list[tuple[str, A.Span, bool]] = []
-    for it in prog.items:
-        if isinstance(it, A.FnDecl) and not it.is_extern:
-            _RawPtrOpVisitor(it.name, out).visit(it.body)
+    from .ast_walker import iter_fn_decls
+    for fn in iter_fn_decls(prog):
+        if not fn.is_extern:
+            _RawPtrOpVisitor(fn.name, out).visit(fn.body)
     return out
 
 

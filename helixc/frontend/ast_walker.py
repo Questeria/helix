@@ -211,4 +211,35 @@ class ASTVisitor:
             self.visit(child)
 
 
-__all__ = ["ASTVisitor"]
+def iter_fn_decls(prog) -> "Iterator":
+    """Stage 28.9 cycle 60 audit-R C59-1 helper: yield every `A.FnDecl`
+    reachable from `prog`, recursing through `A.ImplBlock.methods` and
+    `A.ModBlock.items`. Centralises the walker-drift discipline so
+    Item-level passes (deprecated, totality, panic, unsafe, trace) all
+    share the same item-walk surface and a future Item subclass that
+    holds FnDecls forces an explicit dispatch decision in ONE place
+    instead of N.
+
+    Pre-cycle-58 every pass iterated `prog.items` filtered for
+    `isinstance(it, A.FnDecl)` and missed mod-/impl-nested fns in the
+    `helixc check` surface tool (which doesn't run flatten_modules
+    before these passes). cycle-58 fixed deprecated_pass + totality
+    in-place; cycle-60 routes everything through this helper.
+    """
+    from . import ast_nodes as A
+
+    def _walk(items):
+        for it in items:
+            if isinstance(it, A.FnDecl):
+                yield it
+            elif isinstance(it, A.ImplBlock):
+                for m in it.methods:
+                    if isinstance(m, A.FnDecl):
+                        yield m
+            elif isinstance(it, A.ModBlock):
+                yield from _walk(it.items)
+
+    yield from _walk(prog.items)
+
+
+__all__ = ["ASTVisitor", "iter_fn_decls"]

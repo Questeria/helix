@@ -77,16 +77,34 @@ def since_marker(decl) -> Optional[str]:
 
 
 def find_deprecated_decls(prog: A.Program) -> dict[str, str]:
-    """Return {name: msg} for every deprecated top-level fn/struct/enum.
-    Empty string msg = bare @deprecated."""
+    """Return {name: msg} for every deprecated fn/struct/enum reachable
+    from the program. Empty string msg = bare @deprecated.
+
+    Stage 28.9 cycle 60 audit-R C59-3 fix (MED conf 78): pre-fix the
+    walker iterated only `prog.items` and missed decls nested inside
+    `mod m { ... }` or `impl S { ... }`. The C57-5 call-site walker
+    was patched but its decl-side sibling was not, so a `@deprecated
+    fn foo(...) { }` declared inside a module was invisible: every
+    call site in `find_deprecation_call_sites` checked the deps dict,
+    which didn't contain `foo`, so no warning. Now recurses through
+    ImplBlock.methods and ModBlock.items, mirroring iter_fn_decls
+    but covering all decl kinds (StructDecl, EnumDecl, FnDecl).
+    """
     out: dict[str, str] = {}
-    for it in prog.items:
-        name = getattr(it, "name", None)
-        if name is None:
-            continue
-        msg = deprecation_msg(it)
-        if msg is not None:
-            out[name] = msg or ""
+
+    def collect(items):
+        for it in items:
+            name = getattr(it, "name", None)
+            if name is not None:
+                msg = deprecation_msg(it)
+                if msg is not None:
+                    out[name] = msg or ""
+            if isinstance(it, A.ImplBlock):
+                collect(it.methods)
+            elif isinstance(it, A.ModBlock):
+                collect(it.items)
+
+    collect(prog.items)
     return out
 
 

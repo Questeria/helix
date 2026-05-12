@@ -81,10 +81,17 @@ def collect_panics(prog: A.Program) -> list[tuple[str, A.Span, Optional[str]]]:
     against future AST field additions.
     """
     out: list[tuple[str, A.Span, Optional[str]]] = []
-    for it in prog.items:
-        if not isinstance(it, A.FnDecl) or it.is_extern:
+    # Stage 28.9 cycle 60 audit-R C59-1 fix (HIGH conf 88): iter_fn_decls
+    # recurses through ImplBlock.methods and ModBlock.items so panic call
+    # sites inside `mod m { fn x() { panic("...") } }` are caught even
+    # in the `helixc check` surface tool (which does not run
+    # flatten_modules before this pass). Same walker-drift defect class
+    # as C57-1..C57-5.
+    from .ast_walker import iter_fn_decls
+    for fn in iter_fn_decls(prog):
+        if fn.is_extern:
             continue
-        _PanicCollector(it.name, out).visit(it.body)
+        _PanicCollector(fn.name, out).visit(fn.body)
     return out
 
 
@@ -120,22 +127,28 @@ def validate_panic_args(prog: A.Program) -> list[str]:
     Returns diagnostic strings.
 
     Stage 28.8.2: uses ``_PanicArgsValidator(ASTVisitor)``.
+
+    Stage 28.9 cycle 60 audit-R C59-1: iter_fn_decls recursion.
     """
     diags: list[str] = []
-    for it in prog.items:
-        if not isinstance(it, A.FnDecl) or it.is_extern:
+    from .ast_walker import iter_fn_decls
+    for fn in iter_fn_decls(prog):
+        if fn.is_extern:
             continue
-        _PanicArgsValidator(it.name, diags).visit(it.body)
+        _PanicArgsValidator(fn.name, diags).visit(fn.body)
     return diags
 
 
 def find_unwind_attrs(prog: A.Program) -> list[A.FnDecl]:
     """Return all fns carrying @unwind. Phase-0 emits diagnostics for
-    these (the attribute is reserved but not yet implemented)."""
+    these (the attribute is reserved but not yet implemented).
+
+    Stage 28.9 cycle 60 audit-R C59-1: iter_fn_decls recursion."""
     out: list[A.FnDecl] = []
-    for it in prog.items:
-        if isinstance(it, A.FnDecl) and "unwind" in it.attrs:
-            out.append(it)
+    from .ast_walker import iter_fn_decls
+    for fn in iter_fn_decls(prog):
+        if "unwind" in fn.attrs:
+            out.append(fn)
     return out
 
 

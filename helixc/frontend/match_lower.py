@@ -224,8 +224,14 @@ def _rewrite_expr(expr: A.Expr) -> A.Expr:
         expr.callee = _rewrite_expr(expr.callee)
         expr.indices = [_rewrite_expr(i) for i in expr.indices]
         return expr
-    if isinstance(expr, A.Return) and expr.value is not None:
-        expr.value = _rewrite_expr(expr.value)
+    if isinstance(expr, A.Return):
+        # Stage 28.9 cycle 60 audit-T F59-1 fix (HIGH conf 95): pre-fix
+        # this arm was gated by `and expr.value is not None`, so bare
+        # `return;` fell through to the cycle-58 loud-fail catchall and
+        # crashed. Mirrors the Break arm (lines 261-264) which already
+        # treated the no-value case as a no-op recurse target.
+        if expr.value is not None:
+            expr.value = _rewrite_expr(expr.value)
         return expr
     if isinstance(expr, A.StructLit):
         expr.fields = [(name, _rewrite_expr(value))
