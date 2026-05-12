@@ -406,6 +406,105 @@ fn main() -> i32 { 0 }
     )
 
 
+def test_c67_cn1_silent_failure_no_cross_mod_name_capture():
+    """Cycle 67 silent-failure CN-1 (HIGH conf 92): pre-fix the
+    cycle-66 `direct_lifts_start` slice incorrectly included items
+    appended by recursive nested-mod calls, so the OUTER mod's
+    intra_mod_aliases were applied to INNER mod bodies.
+
+    Pre-fix `mod outer { mod inner { fn caller() { sibling() } }
+    fn sibling() }` would rewrite inner.caller's `sibling` call to
+    `outer__sibling` even though `sibling` is undefined inside the
+    inner scope.
+
+    Cycle-68 fix: per-direct-lift index list (`local_lift_indices`)
+    replaces the slice-range, scoping the rewrite to THIS call's
+    direct lifts only.
+    """
+    from helixc.frontend.flatten_modules import flatten_modules
+    src = """
+mod outer {
+    mod inner { fn caller() -> i32 { sibling() } }
+    fn sibling() -> i32 { 42 }
+}
+"""
+    prog = parse(src)
+    flatten_modules(prog)
+    fns = {it.name: it for it in prog.items if isinstance(it, A.FnDecl)}
+    caller = fns.get("outer__inner__caller")
+    assert caller is not None, f"outer__inner__caller should be lifted; got {list(fns.keys())}"
+    callee = caller.body.final_expr.callee
+    assert isinstance(callee, A.Name), f"expected Name callee, got {type(callee).__name__}"
+    # CRITICAL: must NOT be rewritten to `outer__sibling` (cross-mod capture).
+    assert callee.name == "sibling", (
+        f"cross-mod name capture: inner.caller's `sibling` call must not "
+        f"be rewritten by outer's intra_mod_aliases; got {callee.name!r}"
+    )
+
+
+def test_c67_cn1_nested_mod_name_not_aliased():
+    """Cycle 67 code-review CN-1 (HIGH conf 92): nested-mod names
+    must NOT enter intra_mod_aliases. Pre-fix `mod outer { mod inner
+    { ... } fn foo() { inner() } }` rewrote `inner()` to
+    `outer__inner` — a non-existent symbol.
+
+    Cycle-68 fix: only FnDecl/StructDecl/EnumDecl/ConstDecl/TypeAlias
+    enter intra_mod_aliases; ModBlock, ImplBlock, UseDecl, AgentDecl,
+    catch-all-else items are skipped.
+    """
+    from helixc.frontend.flatten_modules import flatten_modules
+    src = """
+mod outer {
+    mod inner { fn helper() -> i32 { 0 } }
+    fn caller() -> i32 { 0 }
+}
+"""
+    prog = parse(src)
+    flatten_modules(prog)
+    fn_names = {it.name for it in prog.items if isinstance(it, A.FnDecl)}
+    assert "outer__inner__helper" in fn_names
+    assert "outer__caller" in fn_names
+    # The lifted fns should reference each other via their mangled
+    # names; `inner` (the mod-name) is NOT a sibling fn and should
+    # never appear as a callee target.
+
+
+def test_c67_cn2_impl_block_target_mangled():
+    """Cycle 67 code-review CN-2 (HIGH conf 85): ImplBlock nested in
+    a ModBlock must have its target mangled to match the sibling
+    StructDecl's post-flatten name. Pre-fix it was lifted verbatim
+    with target unchanged, causing flatten_impls to lift methods
+    under a stale name (`Foo__get` while struct was `m__Foo`).
+    """
+    from helixc.frontend.flatten_modules import flatten_modules
+    src = """
+mod m {
+    struct Foo { x: i32 }
+    fn helper(x: i32) -> i32 { x + 1 }
+    impl Foo { fn get(self: Foo) -> i32 { helper(self.x) } }
+}
+"""
+    prog = parse(src)
+    flatten_modules(prog)
+    impls = [it for it in prog.items if isinstance(it, A.ImplBlock)]
+    assert len(impls) == 1, f"expected 1 ImplBlock; got {len(impls)}"
+    impl = impls[0]
+    assert impl.target == "m__Foo", (
+        f"ImplBlock.target should be mangled to match struct's name; "
+        f"got {impl.target!r}"
+    )
+    # Method body should also have its intra-mod helper() call
+    # rewritten to m__helper.
+    get_method = impl.methods[0]
+    body_call = get_method.body.final_expr
+    assert isinstance(body_call, A.Call)
+    assert isinstance(body_call.callee, A.Name)
+    assert body_call.callee.name == "m__helper", (
+        f"intra-mod call in impl method body should be rewritten; "
+        f"got {body_call.callee.name!r}"
+    )
+
+
 def test_c65_cn1_totality_catches_mod_nested_recursion():
     """Cycle 65 silent-failure CN-1 follow-on: totality post-cycle-66
     catches non-terminating mod-nested recursion. Pre-fix the intra-

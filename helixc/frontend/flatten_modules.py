@@ -94,20 +94,50 @@ def _flatten_one(mb: A.ModBlock, prefix: str, new_items: list[A.Item]) -> int:
     # name-based passes (totality self-call detection, deprecated
     # call-site walker, etc.) fail to match and silently miss the
     # call.
+    # Stage 28.9 cycle 68 CN-1 fix (HIGH conf 92): only register
+    # aliases for item kinds that are actually mangled+lifted with
+    # their original name slot. Pre-fix iterating via `getattr(sub,
+    # "name", None)` also pulled in ModBlock names — but a nested
+    # `mod inner { ... }` is NOT itself lifted as `outer__inner`;
+    # only its CHILDREN are (`outer__inner__sub`). The bogus alias
+    # rewrote sibling-fn bodies that referenced `inner` (e.g. via
+    # `let m = inner;`) to a non-existent `outer__inner`. AgentDecl
+    # falls into the else branch (line 155) un-mangled, so it must
+    # also be excluded. ImplBlock has no `name` field (it has
+    # `target`), so it's naturally excluded by the type filter.
     intra_mod_aliases: dict[str, str] = {}
     for sub in mb.items:
-        sub_name = getattr(sub, "name", None)
-        if sub_name is not None:
-            intra_mod_aliases[sub_name] = base + "__" + sub_name
-    # Track the slice of new_items added by THIS call's direct lifts
-    # (nested ModBlock recursion adds to new_items too but for a
-    # different intra-mod scope — we don't rewrite those here).
-    direct_lifts_start = len(new_items)
+        if isinstance(sub, (A.FnDecl, A.StructDecl, A.EnumDecl,
+                             A.ConstDecl, A.TypeAlias)):
+            intra_mod_aliases[sub.name] = base + "__" + sub.name
+    # Stage 28.9 cycle 68 silent-failure CN-1 fix (HIGH conf 92):
+    # track the indices of items lifted DIRECTLY by this _flatten_one
+    # call (NOT via recursion into a nested ModBlock). Pre-fix used
+    # a single `direct_lifts_start = len(new_items)` index and a
+    # `range(direct_lifts_start, len(new_items))` walk after the loop,
+    # which included items appended by recursive nested-mod calls.
+    # That applied OUTER's intra_mod_aliases to INNER-scope bodies —
+    # an unqualified `Name(sibling)` callee inside the inner mod
+    # silently rebound to `outer__sibling` if the outer mod had a
+    # fn `sibling`. Cross-mod name capture.
+    # Fix: per-direct-lift index list. Nested-mod items are added by
+    # the recursive call's own walk (with its own aliases) so we
+    # don't touch them here.
+    local_lift_indices: list[int] = []
     n = 0
     for sub in mb.items:
         if isinstance(sub, A.ModBlock):
+            # Nested ModBlock: recurse with its own intra-mod scope.
+            # We deliberately DO NOT record this in local_lift_indices
+            # since the recursive call applies its own aliases to its
+            # own lifted items.
             n += _flatten_one(sub, prefix=base, new_items=new_items)
-        elif isinstance(sub, A.FnDecl):
+            continue
+        # All other branches: lift to top level + record the slot
+        # index so the post-loop walk only touches THIS call's
+        # direct lifts.
+        local_lift_indices.append(len(new_items))
+        if isinstance(sub, A.FnDecl):
             new_name = base + "__" + sub.name
             # Stage 28.9 cycle 61 type-design O60-F (HIGH conf 85,
             # surfaced in cycle-60 follow-up audit): the lifted FnDecl
@@ -151,6 +181,33 @@ def _flatten_one(mb: A.ModBlock, prefix: str, new_items: list[A.Item]) -> int:
             n += 1
         elif isinstance(sub, A.UseDecl):
             new_items.append(sub)
+        elif isinstance(sub, A.ImplBlock):
+            # Stage 28.9 cycle 68 CN-2 fix (HIGH conf 85): ImplBlocks
+            # nested inside a ModBlock get lifted to top level with
+            # `target` field mangled to match the sibling StructDecl's
+            # post-flatten name. Pre-fix the ImplBlock fell into the
+            # generic `else: append(sub)` branch and was lifted
+            # verbatim — its `target` stayed as the unqualified struct
+            # name (e.g. "Foo") while the sibling StructDecl was lifted
+            # to "m__Foo". flatten_impls then lifted methods as
+            # `Foo__method` (a name that doesn't reference the real
+            # struct), and method-body sibling-fn calls were never
+            # rewritten because this loop only walks FnDecl/ConstDecl.
+            # Now: if the target matches a sibling StructDecl (i.e. is
+            # in intra_mod_aliases), rewrite it; and walk every method
+            # body with the alias dict so intra-mod sibling calls in
+            # methods are rewritten consistently.
+            new_target = intra_mod_aliases.get(sub.target, sub.target)
+            new_methods: list[A.FnDecl] = []
+            for m in sub.methods:
+                # Rewrite intra-mod calls in the method body first.
+                m.body = _rewrite_expr(m.body, intra_mod_aliases)
+                new_methods.append(m)
+            new_items.append(A.ImplBlock(
+                span=sub.span, target=new_target,
+                methods=new_methods, trait_name=sub.trait_name,
+                is_pub=sub.is_pub,
+            ))
         else:
             new_items.append(sub)
     # Stage 28.9 cycle 66 silent-failure CN-1 fix: rewrite intra-mod
@@ -163,7 +220,7 @@ def _flatten_one(mb: A.ModBlock, prefix: str, new_items: list[A.Item]) -> int:
     # _rewrite_expr already handles `Name(N) -> Name(aliases[N])` via
     # _rewrite_callee, so we reuse it with `intra_mod_aliases` here.
     if intra_mod_aliases:
-        for i in range(direct_lifts_start, len(new_items)):
+        for i in local_lift_indices:
             it = new_items[i]
             if isinstance(it, A.FnDecl) and not it.is_extern:
                 it.body = _rewrite_expr(it.body, intra_mod_aliases)
