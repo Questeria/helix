@@ -290,7 +290,17 @@ def _rewrite_expr(e: A.Expr, aliases: dict[str, str]) -> A.Expr:
     if isinstance(e, A.ArrayLit):
         return A.ArrayLit(span=e.span, elems=[_rewrite_expr(x, aliases) for x in e.elems])
     if isinstance(e, A.StructLit):
-        return A.StructLit(span=e.span, name=e.name,
+        # Stage 28.9 cycle 71 code-review CN-3 fix (HIGH conf 88):
+        # `StructLit.name` is a struct-type reference that mod-flattening
+        # must remap. Inside `mod m { struct Foo; fn make() { Foo {x:1} } }`,
+        # post-flatten the FnDecl becomes `m__make` and the StructDecl
+        # becomes `m__Foo`, but the inner `StructLit(name="Foo")` was not
+        # rewritten — typecheck then warns "unknown struct 'Foo'" and
+        # the backend (which runs flatten before typecheck) compiles a
+        # stale name. Apply the same alias mapping the call-site walker
+        # uses: if `e.name` matches an alias, remap.
+        new_name = aliases.get(e.name, e.name)
+        return A.StructLit(span=e.span, name=new_name,
                            fields=[(n, _rewrite_expr(v, aliases)) for (n, v) in e.fields])
     if isinstance(e, A.Assign):
         return A.Assign(span=e.span, target=_rewrite_expr(e.target, aliases),
