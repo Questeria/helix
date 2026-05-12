@@ -2004,7 +2004,20 @@ class Lowerer:
             self.builder.ret(v)
             return None
         if isinstance(expr, A.Range):
-            return None
+            # Stage 28.9 cycle 110 audit-S F2 fix (HIGH conf 92): pre-fix
+            # A.Range silently returned None — the caller's `or const_int
+            # (0)` then substituted 0 for whatever the user meant. A
+            # range-in-expr-position is currently only meaningful as the
+            # `iter_expr` of a `for` (handled at line 1820 directly on
+            # the A.For arm). Every other position is a misuse the
+            # parser admits but the lower can't represent. Loud-fail so
+            # the gap surfaces at lower time rather than as `=0`
+            # miscompile. Sibling of cycle-108 F8 (CharLit/StructLit/
+            # TileLit) loud-fail arms.
+            raise NotImplementedError(
+                f"range expression in non-For-iter position not yet "
+                f"supported in IR lowering at "
+                f"{expr.span.line}:{expr.span.col}")
         if isinstance(expr, A.Assign):
             v = self._lower_expr(expr.value)
             if v is None:

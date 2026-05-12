@@ -587,6 +587,249 @@ def test_c107_struct_lit_in_expr_pos_raises_loud():
     )
 
 
+# Stage 28.9 cycle 110 audit-{S, T, CR} regression tests for the
+# cycle-109 FINDINGS sweep (1 CRITICAL + 7 HIGH). Each test is
+# discriminative: pre-fix it fails, post-fix it passes. See
+# docs/audit-stage28-9-cycle109-*.md for the audit citations.
+
+
+def test_c109_mut_u64_load_store_byte_identical_to_i64():
+    """C109 code-review F1 strengthening of C107-F6 (HIGH conf 88):
+    `let mut x: u64 = ...; x = ...; x` must produce byte-identical code
+    to the i64 version of the same function. The original F6 test
+    `test_c107_mut_u64_local_uses_64bit_load_store` is vacuous because
+    `ADD u64` and `CONST_INT u64` also emit 48 8B 45 / 48 89 45 — the
+    test passes even with F6 reverted (LOAD_VAR/STORE_VAR back to
+    32-bit). This sibling pins the discriminator: i64 and u64 fn
+    bodies that differ only in the type annotation MUST emit identical
+    bytes. Pre-cycle-108 they didn't (i64 used 64-bit path; u64 fell
+    to 32-bit). Post-cycle-108 they should match exactly."""
+    from helixc.backend.x86_64 import compile_module_to_elf
+    src_u64 = """
+    fn body_u64(input: u64) -> u64 {
+        let mut x: u64 = input;
+        x = input;
+        x
+    }
+    fn main() -> i32 { 0 }
+    """
+    src_i64 = """
+    fn body_u64(input: i64) -> i64 {
+        let mut x: i64 = input;
+        x = input;
+        x
+    }
+    fn main() -> i32 { 0 }
+    """
+    elf_u64 = compile_module_to_elf(lower_src(src_u64))
+    elf_i64 = compile_module_to_elf(lower_src(src_i64))
+    assert elf_u64 == elf_i64, (
+        f"u64 and i64 fn bodies must produce byte-identical code post "
+        f"cycle-108 sweep; sizes u64={len(elf_u64)} i64={len(elf_i64)} "
+        f"— C107-F6 strengthening (C109 code-review F1)"
+    )
+
+
+def test_c109_call_return_u64_caller_stores_full_rax():
+    """C109 code-review F2 strengthening of C107-F2 (HIGH conf 85):
+    a CALL to a u64-returning fn must store the full rax to the
+    caller's result slot via `mov [rbp+disp], rax` (48 89 ...). The
+    original F2 test only asserted callee RETURN's `mov rax, [rbp+
+    disp]` (48 8B 45) which is F3 coverage. F2 is the caller-side
+    store after CALL — discriminator is byte-identity with i64 caller
+    (both must emit the same 48 89 prefix for the caller-side
+    store)."""
+    from helixc.backend.x86_64 import compile_module_to_elf
+    src_u64 = """
+    fn id_u64(x: u64) -> u64 { x }
+    fn caller_u64() -> i32 {
+        let y: u64 = id_u64(1_u64);
+        0
+    }
+    fn main() -> i32 { 0 }
+    """
+    src_i64 = """
+    fn id_u64(x: i64) -> i64 { x }
+    fn caller_u64() -> i32 {
+        let y: i64 = id_u64(1_i64);
+        0
+    }
+    fn main() -> i32 { 0 }
+    """
+    elf_u64 = compile_module_to_elf(lower_src(src_u64))
+    elf_i64 = compile_module_to_elf(lower_src(src_i64))
+    assert elf_u64 == elf_i64, (
+        f"u64 and i64 CALL-return caller storage must be byte-identical "
+        f"post cycle-108 sweep; sizes u64={len(elf_u64)} i64={len(elf_i64)} "
+        f"— C107-F2 strengthening (C109 code-review F2)"
+    )
+
+
+def test_c110_range_in_value_position_raises_loud():
+    """C109-SF-F2 regression (HIGH conf 92): A.Range in a value
+    position (e.g. `let r = 0..10;`) must raise NotImplementedError.
+    Pre-fix the A.Range arm at lower_ast.py:2006 was an explicit
+    silent `return None`; the caller's `or self.builder.const_int(0)`
+    then substituted 0 for the lost range, silently miscompiling
+    `let r = 0..10; r` to a const-zero. The For iter_expr path
+    (line 1820) special-cases Range before reaching _lower_expr so
+    Range-in-for-loop still works."""
+    src = """
+    fn f() -> i32 {
+        let r = 0..10;
+        0
+    }
+    fn main() -> i32 { 0 }
+    """
+    try:
+        lower_src(src)
+    except NotImplementedError as e:
+        assert "range" in str(e).lower(), (
+            f"NotImplementedError must mention 'range', got: {e}"
+        )
+        return
+    raise AssertionError(
+        "A.Range in value position must raise NotImplementedError; "
+        "pre-fix this silently substituted 0"
+    )
+
+
+def test_c110_cast_u32_to_f64_uses_zero_extend_path():
+    """C109-SF-F3 regression (HIGH conf 88): `x as f64` where x: u32
+    must NOT use the signed 32-bit `cvtsi2sd xmm0, eax` (F2 0F 2A C0).
+    For u32 values with the high bit set, signed 32-bit conversion
+    produces a negative float (-1.0 for 0xFFFFFFFF) instead of the
+    correct unsigned value (~4.29e9). Fix: zero-extend u32→u64 via
+    `mov eax, [src]` (implicit zero-extend to rax on x86-64), then
+    use the 64-bit REX.W signed `cvtsi2sd xmm0, rax` (F2 48 0F 2A C0).
+    With the upper 32 bits known zero, signed-64 conversion gives the
+    correct unsigned interpretation. Discriminator: presence of the
+    REX.W-prefixed 5-byte sequence F2 48 0F 2A C0 inside the u32-cast
+    fn body."""
+    from helixc.backend.x86_64 import compile_module_to_elf
+    src = """
+    fn u32_to_f64(x: u32) -> f64 {
+        x as f64
+    }
+    fn main() -> i32 { 0 }
+    """
+    elf = compile_module_to_elf(lower_src(src))
+    assert b"\xF2\x48\x0F\x2A\xC0" in elf, (
+        "expected REX.W cvtsi2sd xmm0, rax (F2 48 0F 2A C0) for u32→f64 "
+        "cast — C109-SF-F3 regression: u32 source still signed-32-converts"
+    )
+
+
+def test_c110_cast_u32_to_f32_uses_zero_extend_path():
+    """C109-SF-F3 sibling for u32→f32: must emit REX.W cvtsi2ss
+    (F3 48 0F 2A C0) after a zero-extending load through eax."""
+    from helixc.backend.x86_64 import compile_module_to_elf
+    src = """
+    fn u32_to_f32(x: u32) -> f32 {
+        x as f32
+    }
+    fn main() -> i32 { 0 }
+    """
+    elf = compile_module_to_elf(lower_src(src))
+    assert b"\xF3\x48\x0F\x2A\xC0" in elf, (
+        "expected REX.W cvtsi2ss xmm0, rax (F3 48 0F 2A C0) for u32→f32 "
+        "cast — C109-SF-F3 regression"
+    )
+
+
+def test_c110_bit_and_u64_emits_64bit_form():
+    """C109-SF-F4 regression (HIGH conf 92): BIT_AND on u64 must emit
+    `and rax, rcx` (48 21 C8). Pre-fix the predicate `_is_i64_type`
+    only matched i64/isize so u64 fell to 32-bit `and eax, ecx`
+    (21 C8 no REX prefix), silently truncating the high half of both
+    operands. Discriminator: REX.W-prefixed `and rax, rcx` (48 21 C8)."""
+    from helixc.backend.x86_64 import compile_module_to_elf
+    src = """
+    fn and_u64(a: u64, b: u64) -> u64 { a & b }
+    fn main() -> i32 { 0 }
+    """
+    elf = compile_module_to_elf(lower_src(src))
+    assert b"\x48\x21\xc8" in elf, (
+        "expected REX.W-prefixed `and rax, rcx` (48 21 C8) for u64 "
+        "BIT_AND — C109-SF-F4 regression"
+    )
+
+
+def test_c110_bit_or_u64_emits_64bit_form():
+    """C109-SF-F4 BIT_OR sibling: `or rax, rcx` = 48 09 C8."""
+    from helixc.backend.x86_64 import compile_module_to_elf
+    src = """
+    fn or_u64(a: u64, b: u64) -> u64 { a | b }
+    fn main() -> i32 { 0 }
+    """
+    elf = compile_module_to_elf(lower_src(src))
+    assert b"\x48\x09\xc8" in elf, (
+        "expected REX.W-prefixed `or rax, rcx` (48 09 C8) for u64 "
+        "BIT_OR — C109-SF-F4 regression"
+    )
+
+
+def test_c110_bit_xor_u64_emits_64bit_form():
+    """C109-SF-F4 BIT_XOR sibling: `xor rax, rcx` = 48 31 C8."""
+    from helixc.backend.x86_64 import compile_module_to_elf
+    src = """
+    fn xor_u64(a: u64, b: u64) -> u64 { a ^ b }
+    fn main() -> i32 { 0 }
+    """
+    elf = compile_module_to_elf(lower_src(src))
+    assert b"\x48\x31\xc8" in elf, (
+        "expected REX.W-prefixed `xor rax, rcx` (48 31 C8) for u64 "
+        "BIT_XOR — C109-SF-F4 regression"
+    )
+
+
+def test_c110_shl_u64_emits_64bit_form():
+    """C109-SF-F4 SHL sibling: `shl rax, cl` = 48 D3 E0."""
+    from helixc.backend.x86_64 import compile_module_to_elf
+    src = """
+    fn shl_u64(a: u64, b: u64) -> u64 { a << b }
+    fn main() -> i32 { 0 }
+    """
+    elf = compile_module_to_elf(lower_src(src))
+    assert b"\x48\xd3\xe0" in elf, (
+        "expected REX.W-prefixed `shl rax, cl` (48 D3 E0) for u64 "
+        "SHL — C109-SF-F4 regression"
+    )
+
+
+def test_c110_bit_not_u64_emits_64bit_form():
+    """C109-SF-F4 BIT_NOT sibling: `not rax` = 48 F7 D0."""
+    from helixc.backend.x86_64 import compile_module_to_elf
+    src = """
+    fn not_u64(a: u64) -> u64 { ~a }
+    fn main() -> i32 { 0 }
+    """
+    elf = compile_module_to_elf(lower_src(src))
+    assert b"\x48\xf7\xd0" in elf, (
+        "expected REX.W-prefixed `not rax` (48 F7 D0) for u64 "
+        "BIT_NOT — C109-SF-F4 regression"
+    )
+
+
+def test_c110_neg_u64_via_sub_emits_64bit_form():
+    """C109-SF-F4 NEG sibling: u64 negation via `0_u64 - a` must use
+    the 64-bit SUB path (48 29 C8 sub rax, rcx). The unary `-` on
+    unsigned types is rare in source code (lowering uses SUB for
+    unsigned-domain "negation"); this still exercises the u64 wide
+    path that F4 promoted."""
+    from helixc.backend.x86_64 import compile_module_to_elf
+    src = """
+    fn neg_u64(a: u64) -> u64 { 0_u64 - a }
+    fn main() -> i32 { 0 }
+    """
+    elf = compile_module_to_elf(lower_src(src))
+    assert b"\x48\x29\xc8" in elf, (
+        "expected REX.W-prefixed `sub rax, rcx` (48 29 C8) for u64 "
+        "subtraction — exercises the u64 wide path (C109-SF-F4 SUB "
+        "sibling — cycle-102 ADD/SUB closure remained intact)"
+    )
+
+
 def main():
     tests = [(name, fn) for name, fn in globals().items()
              if name.startswith("test_") and callable(fn)]

@@ -1326,6 +1326,35 @@ class FnCompiler:
                 self.asm.mov_rax_mem_rbp(src_slot)
                 self.asm.mov_mem_rbp_rax(res_slot)
                 return
+            # Stage 28.9 cycle 110 audit-S F3 fix (HIGH conf 88): when
+            # the source is an unsigned int (u8/u16/u32), the
+            # `cvtsi2sd`/`cvtsi2ss` instructions interpret the source as
+            # signed. For u32 with the high bit set this miscompiles —
+            # e.g. `0xFFFFFFFF_u32 as f64` would convert as -1.0 instead
+            # of 4294967295.0. Fix: load the unsigned value into eax
+            # (x86-64 implicitly zero-extends to rax), then use the
+            # rex.W-prefixed cvtsi2sd/ss-from-rax to convert the full
+            # 64-bit zero-extended value as signed (which equals the
+            # original unsigned value since the high bit of the 64-bit
+            # interpretation is now 0).
+            if (not from_is_float
+                    and self._is_unsigned_int_type(from_ty)
+                    and not from_is_i64
+                    and to_is_f64):
+                self.asm.mov_eax_mem_rbp(src_slot)
+                # F2 48 0F 2A C0 = cvtsi2sd xmm0, rax
+                self.asm.b.emit(0xF2, 0x48, 0x0F, 0x2A, 0xC0)
+                self.asm.movsd_mem_rbp_xmm0(res_slot)
+                return
+            if (not from_is_float
+                    and self._is_unsigned_int_type(from_ty)
+                    and not from_is_i64
+                    and to_is_float):
+                self.asm.mov_eax_mem_rbp(src_slot)
+                # F3 48 0F 2A C0 = cvtsi2ss xmm0, rax
+                self.asm.b.emit(0xF3, 0x48, 0x0F, 0x2A, 0xC0)
+                self.asm.movss_mem_rbp_xmm0(res_slot)
+                return
             # i32 -> f64
             if not from_is_float and to_is_f64:
                 self.asm.mov_eax_mem_rbp(src_slot)
@@ -1512,11 +1541,17 @@ class FnCompiler:
         # 64-bit AND/OR/XOR via REX.W variants. Float operands are nonsense
         # for bitwise (caller's typecheck rejects them); we still default to
         # 32-bit emission for safety.
+        # Stage 28.9 cycle 110 audit-S F4 fix (HIGH conf 92): bitwise
+        # AND/OR/XOR/SHL/NOT/NEG width-gates extended from `_is_i64_type`
+        # to `_is_64bit_int_type` so u64/usize takes the 64-bit codegen
+        # path. Pre-fix u64 bitwise ops silently truncated to 32 bits.
+        # These instructions are sign-agnostic at the machine level —
+        # only width matters.
         if op.kind == tir.OpKind.BIT_AND:
             l_slot = self._slot_of(op.operands[0])
             r_slot = self._slot_of(op.operands[1])
             res_slot = self._slot_of(op.results[0])
-            if self._is_i64_type(op.results[0].ty):
+            if self._is_64bit_int_type(op.results[0].ty):
                 self.asm.mov_rax_mem_rbp(l_slot)
                 self.asm.mov_rcx_mem_rbp(r_slot)
                 self.asm.and_rax_rcx()
@@ -1531,7 +1566,7 @@ class FnCompiler:
             l_slot = self._slot_of(op.operands[0])
             r_slot = self._slot_of(op.operands[1])
             res_slot = self._slot_of(op.results[0])
-            if self._is_i64_type(op.results[0].ty):
+            if self._is_64bit_int_type(op.results[0].ty):
                 self.asm.mov_rax_mem_rbp(l_slot)
                 self.asm.mov_rcx_mem_rbp(r_slot)
                 self.asm.or_rax_rcx()
@@ -1546,7 +1581,7 @@ class FnCompiler:
             l_slot = self._slot_of(op.operands[0])
             r_slot = self._slot_of(op.operands[1])
             res_slot = self._slot_of(op.results[0])
-            if self._is_i64_type(op.results[0].ty):
+            if self._is_64bit_int_type(op.results[0].ty):
                 self.asm.mov_rax_mem_rbp(l_slot)
                 self.asm.mov_rcx_mem_rbp(r_slot)
                 self.asm.xor_rax_rcx()
@@ -1561,7 +1596,7 @@ class FnCompiler:
             l_slot = self._slot_of(op.operands[0])
             r_slot = self._slot_of(op.operands[1])
             res_slot = self._slot_of(op.results[0])
-            if self._is_i64_type(op.results[0].ty):
+            if self._is_64bit_int_type(op.results[0].ty):
                 self.asm.mov_rax_mem_rbp(l_slot)
                 self.asm.mov_rcx_mem_rbp(r_slot)
                 self.asm.shl_rax_cl()
@@ -1590,7 +1625,7 @@ class FnCompiler:
         if op.kind == tir.OpKind.BIT_NOT:
             slot = self._slot_of(op.operands[0])
             res_slot = self._slot_of(op.results[0])
-            if self._is_i64_type(op.results[0].ty):
+            if self._is_64bit_int_type(op.results[0].ty):
                 self.asm.mov_rax_mem_rbp(slot)
                 self.asm.not_rax()
                 self.asm.mov_mem_rbp_rax(res_slot)
@@ -1603,7 +1638,7 @@ class FnCompiler:
             slot = self._slot_of(op.operands[0])
             res_slot = self._slot_of(op.results[0])
             ty = op.operands[0].ty
-            if self._is_i64_type(ty):
+            if self._is_64bit_int_type(ty):
                 self.asm.mov_rax_mem_rbp(slot)
                 self.asm.neg_rax()
                 self.asm.mov_mem_rbp_rax(res_slot)
