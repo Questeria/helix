@@ -3287,13 +3287,11 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
                     if post_loop_t == 17 {
                         cur_advance(sb);                   // consume `>`
                     };
-                    // Stage 29 fix (2026-05-12): rewrote 3 early returns as
-                    // sentinel pattern (early_err set on guard failure;
-                    // checked at end) so bootstrap parser (which doesn't
-                    // support `return` keyword) can self-host. Inner code
-                    // unchanged; sentinel checked at final expression.
-                    // KNOWN Stage 30 cycle-1 H1: sentinel set but not returned
-                    // — silent-failure regression. Fix queued for cycle-2.
+                    // Stage 29 + Stage 30 cycle-2 H1 fix (2026-05-12):
+                    // sentinel pattern + outer if/else dispatch restores
+                    // the cycle-3 silent-failure trap semantics. Bootstrap
+                    // parser doesn't support `return` keyword, so the
+                    // outer if/else IS the return mechanism.
                     let mut early_err: i32 = 0 - 1;
                     if ta_bad_token == 1 { early_err = mk_node(99, 62033, 0, 0); };
                     if early_err == (0 - 1) {
@@ -3302,6 +3300,9 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
                     if early_err == (0 - 1) {
                         if ta_count != gp_count_pre { early_err = mk_node(99, 62032, 0, 0); };
                     };
+                    if early_err != (0 - 1) {
+                        early_err
+                    } else {
                     // Build mangled name `OrigName__TY1_TY2` in arena.
                     let mang_s = mangle_name_into_arena(id_start, id_len, ta_arr_base, ta_count);
                     let mang_l = mangle_name_len(id_len, ta_arr_base, ta_count);
@@ -3507,6 +3508,7 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
                             }
                         }}
                     }}
+                    }   // Stage 30 cycle-2 H1: close my outer else for early_err sentinel
                 } else {
                     // Not a generic struct use — fall through to var
                     // ref (the surrounding parser handles `<` as a
