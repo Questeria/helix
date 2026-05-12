@@ -211,20 +211,43 @@ class ASTVisitor:
             self.visit(child)
 
 
-def iter_fn_decls(prog) -> "Iterator":
+def iter_fn_decls(prog) -> "Iterable":
     """Stage 28.9 cycle 60 audit-R C59-1 helper: yield every `A.FnDecl`
     reachable from `prog`, recursing through `A.ImplBlock.methods` and
     `A.ModBlock.items`. Centralises the walker-drift discipline so
-    Item-level passes (deprecated, totality, panic, unsafe, trace) all
-    share the same item-walk surface and a future Item subclass that
-    holds FnDecls forces an explicit dispatch decision in ONE place
-    instead of N.
+    Item-level passes (panic, unsafe, trace, and partially deprecated /
+    totality) share the same item-walk surface — a future Item subclass
+    that holds FnDecls forces an explicit dispatch decision in ONE
+    place instead of N.
+
+    **Pre-/post-flatten contract** (cycle-61 CN-2 follow-up — adds the
+    docstring text that the cycle-60 commit message claimed but never
+    actually inserted):
+
+    Safe to call EITHER pre-flatten OR post-flatten — both work.
+    - Pre-flatten: recurses through ImplBlock.methods + ModBlock.items
+      to expose nested fns to scanners that run on the `helixc check`
+      surface tool path (no flatten passes upstream).
+    - Post-flatten (after `flatten_impls` + `flatten_modules`): the
+      impl/mod branches are no-ops because the prior passes have
+      already lifted those items to top-level FnDecls. The recursion
+      adds zero work in the canonical pipeline; only top-level items
+      remain at that point.
+
+    Both production drivers (`helixc/check.py` and `helixc/backend/
+    x86_64.py`) call this helper post-flatten; the `helixc check`
+    surface tool benefits from the pre-flatten case for diagnostics
+    on programs containing nested mods/impls.
 
     Pre-cycle-58 every pass iterated `prog.items` filtered for
     `isinstance(it, A.FnDecl)` and missed mod-/impl-nested fns in the
-    `helixc check` surface tool (which doesn't run flatten_modules
-    before these passes). cycle-58 fixed deprecated_pass + totality
-    in-place; cycle-60 routes everything through this helper.
+    `helixc check` surface tool. cycle-58 fixed deprecated_pass +
+    totality in-place; cycle-60 routes panic/unsafe/trace through
+    this helper. deprecated_pass.find_deprecated_decls remains
+    separate because it collects ALL decl kinds (not just FnDecl)
+    and was further restricted to post-flatten-only in cycle-61
+    after the C59-3 recursion was found to introduce a name-
+    collision bug (CN-1).
     """
     from . import ast_nodes as A
 

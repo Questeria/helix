@@ -203,5 +203,128 @@ fn main() -> i32 {
     )
 
 
+def test_c61_cn1_no_false_positive_mod_nested_collision():
+    """Cycle 61 CN-1 (HIGH conf 88, both silent-failure + code-review):
+    pre-cycle-62 the C59-3 fix recursed into ModBlock.items, collecting
+    `@deprecated fn foo()` from inside `mod m { ... }` into a flat
+    `dict[str, str]` keyed by short name. A top-level `fn foo()` call
+    in `main` was then flagged as deprecated because `Name("foo")` hit
+    the dict — even though it actually resolves to the top-level un-
+    deprecated `foo`.
+
+    Post-fix (cycle-62): find_deprecated_decls iterates only top-level
+    items. mod-nested decls are surfaced via flatten_modules in the
+    canonical pipeline (which mangles `m::foo` to `m__foo`).
+    """
+    src = """
+mod legacy { @deprecated("internal v0") fn helper() -> i32 { 0 } }
+fn helper() -> i32 { 42 }
+fn main() -> i32 { helper() }
+"""
+    prog = parse(src)
+    deps = find_deprecated_decls(prog)
+    # Top-level `helper` is NOT @deprecated; the dict should not be
+    # poisoned by the mod-nested one.
+    assert "helper" not in deps, (
+        f"top-level helper should not be marked deprecated; got deps={deps}"
+    )
+    sites = find_deprecation_call_sites(prog)
+    names = {n for (n, _, _) in sites}
+    assert "helper" not in names, (
+        f"top-level helper() call should NOT produce a deprecation site; "
+        f"got sites={names}"
+    )
+
+
+def test_c59_3_post_flatten_mod_nested_decls_detected():
+    """Cycle 59 C59-3 (MED conf 78) — restored contract: after
+    `flatten_modules` runs, mod-nested `@deprecated fn foo()` becomes
+    top-level `m__foo`, so a call rewritten to `m__foo()` SHOULD be
+    detected. This exercises the canonical pipeline path."""
+    from helixc.frontend.flatten_modules import flatten_modules
+    src = """
+mod inner { @deprecated("module v0") fn helper() -> i32 { 0 } }
+fn caller() -> i32 { inner::helper() }
+"""
+    prog = parse(src)
+    flatten_modules(prog)
+    deps = find_deprecated_decls(prog)
+    # The lifted name is `inner__helper`.
+    assert "inner__helper" in deps, (
+        f"post-flatten mod-nested @deprecated should be visible; got deps={deps}"
+    )
+    sites = find_deprecation_call_sites(prog)
+    names = {n for (n, _, _) in sites}
+    assert "inner__helper" in names, (
+        f"post-flatten call to inner::helper() should warn; got sites={names}"
+    )
+
+
+def test_c59_1_panic_in_mod_nested_fn_detected():
+    """Cycle 59 C59-1 (HIGH conf 88): pre-fix the panic_pass walker
+    iterated only top-level FnDecl. A `panic("...")` call inside
+    `mod m { fn x() { panic("oops"); 0 } }` was invisible in the
+    `helixc check` surface tool because flatten_modules doesn't run
+    there. iter_fn_decls now recurses through ModBlock pre-flatten.
+    """
+    from helixc.frontend.panic_pass import collect_panics
+    src = """
+mod inner {
+    fn x() -> i32 { panic("oops"); 0 }
+}
+"""
+    prog = parse(src)
+    panics = collect_panics(prog)
+    fn_names = {n for (n, _, _) in panics}
+    assert "x" in fn_names, (
+        f"panic inside mod inner::x should be detected; got panics={panics}"
+    )
+
+
+def test_f59_1_bare_return_through_match_lower():
+    """Cycle 59 F59-1 (HIGH conf 95): pre-fix match_lower._rewrite_expr
+    Return arm was gated by `expr.value is not None`. A bare `return;`
+    inside a fn body whose body contains a Match would walk into the
+    Return-None case via _rewrite_expr and crash the cycle-58 loud
+    NotImplementedError catchall. Cycle-60 fix: mirror Break's value-
+    None-as-noop pattern.
+
+    Crafted minimally: build the AST directly (the surface grammar
+    requires `return X;` since match arms are expressions, not blocks
+    of stmts that can host a value-less return)."""
+    from helixc.frontend.match_lower import _rewrite_expr
+    from helixc.frontend import ast_nodes as A
+    span = A.Span(line=1, col=1)
+    # A bare `Return(value=None)` — pre-fix this hit the loud catchall.
+    bare_return = A.Return(span=span, value=None)
+    out = _rewrite_expr(bare_return)
+    assert out is bare_return, (
+        f"bare return should pass through unchanged; got {out!r}"
+    )
+
+
+def test_c61_o60f_flatten_modules_preserves_extern():
+    """Cycle 61 type-design O60-F (conf 85): pre-fix
+    `flatten_modules._flatten_one` dropped `is_extern` and `extern_abi`
+    when lifting FnDecls from a module to top-level. `mod m { extern
+    "C" fn foo() -> i32; }` post-flatten became a regular FnDecl with
+    an empty placeholder body — and a call to `m__foo` lowered to a
+    zero-byte stub instead of a GOT/PLT relocation."""
+    from helixc.frontend.flatten_modules import flatten_modules
+    src = """
+mod m {
+    extern "C" fn foo() -> i32;
+}
+"""
+    prog = parse(src)
+    flatten_modules(prog)
+    foo = next(it for it in prog.items
+               if isinstance(it, A.FnDecl) and it.name == "m__foo")
+    assert foo.is_extern, "lifted FnDecl should retain is_extern=True"
+    assert foo.extern_abi == "C", (
+        f"lifted FnDecl should retain extern_abi='C'; got {foo.extern_abi!r}"
+    )
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-v"]))

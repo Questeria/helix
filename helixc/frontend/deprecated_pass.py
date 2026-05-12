@@ -77,34 +77,38 @@ def since_marker(decl) -> Optional[str]:
 
 
 def find_deprecated_decls(prog: A.Program) -> dict[str, str]:
-    """Return {name: msg} for every deprecated fn/struct/enum reachable
-    from the program. Empty string msg = bare @deprecated.
+    """Return {name: msg} for every deprecated top-level fn (or any decl
+    with attrs) in `prog`. Empty string msg = bare @deprecated.
 
-    Stage 28.9 cycle 60 audit-R C59-3 fix (MED conf 78): pre-fix the
-    walker iterated only `prog.items` and missed decls nested inside
-    `mod m { ... }` or `impl S { ... }`. The C57-5 call-site walker
-    was patched but its decl-side sibling was not, so a `@deprecated
-    fn foo(...) { }` declared inside a module was invisible: every
-    call site in `find_deprecation_call_sites` checked the deps dict,
-    which didn't contain `foo`, so no warning. Now recurses through
-    ImplBlock.methods and ModBlock.items, mirroring iter_fn_decls
-    but covering all decl kinds (StructDecl, EnumDecl, FnDecl).
-    """
+    **Pipeline contract**: this helper is post-flatten only. Both
+    production drivers (`helixc/check.py` and `helixc/backend/x86_64.py`)
+    run `flatten_impls` + `flatten_modules` before `emit_warnings`, so
+    a `mod m { @deprecated fn foo() {} }` arrives here already mangled
+    to top-level `m__foo` and a sibling-mod call `foo()` arrives as
+    `Name("m__foo")`. The flat unqualified-name dict is collision-free
+    under those conditions.
+
+    Stage 28.9 cycle 61 CN-1 (HIGH conf 88): the cycle-60 C59-3
+    fix recursed through `ModBlock.items`, populating the dict with
+    bare unqualified names from inside mods. That introduced a
+    false-positive class: a top-level call `foo()` was flagged as
+    deprecated whenever ANY mod-nested `@deprecated fn foo()` existed,
+    because `_DeprecationCallSiteCollector` matches `A.Name(name)`
+    syntactically against the flat dict (it has no lexical-scope
+    tracking). Reverting the recursion restores correctness; the
+    pre-flatten `helixc check` case was already covered by
+    `flatten_modules` running upstream, so no information is lost.
+    Pre-flatten direct callers that bypass the canonical pipeline
+    must call `flatten_modules(prog)` first to surface mod-nested
+    decls."""
     out: dict[str, str] = {}
-
-    def collect(items):
-        for it in items:
-            name = getattr(it, "name", None)
-            if name is not None:
-                msg = deprecation_msg(it)
-                if msg is not None:
-                    out[name] = msg or ""
-            if isinstance(it, A.ImplBlock):
-                collect(it.methods)
-            elif isinstance(it, A.ModBlock):
-                collect(it.items)
-
-    collect(prog.items)
+    for it in prog.items:
+        name = getattr(it, "name", None)
+        if name is None:
+            continue
+        msg = deprecation_msg(it)
+        if msg is not None:
+            out[name] = msg or ""
     return out
 
 

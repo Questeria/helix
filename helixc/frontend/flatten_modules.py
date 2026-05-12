@@ -91,11 +91,21 @@ def _flatten_one(mb: A.ModBlock, prefix: str, new_items: list[A.Item]) -> int:
             n += _flatten_one(sub, prefix=base, new_items=new_items)
         elif isinstance(sub, A.FnDecl):
             new_name = base + "__" + sub.name
+            # Stage 28.9 cycle 61 type-design O60-F (HIGH conf 85,
+            # surfaced in cycle-60 follow-up audit): the lifted FnDecl
+            # constructor pre-fix dropped `is_extern` and `extern_abi`.
+            # `mod m { extern "C" fn foo() -> i32; }` was silently
+            # demoted to a regular fn-decl with an empty placeholder
+            # body, which then became the actual lowering target — the
+            # GOT/PLT relocation that should have been emitted was
+            # skipped and a call to the lifted `m__foo` produced a
+            # zero-byte stub. Preserve the extern shape end-to-end.
             new_items.append(A.FnDecl(
                 span=sub.span, name=new_name, generics=sub.generics,
                 params=sub.params, return_ty=sub.return_ty,
                 where_clauses=sub.where_clauses, body=sub.body,
-                attrs=sub.attrs, is_pub=sub.is_pub))
+                attrs=sub.attrs, is_pub=sub.is_pub,
+                is_extern=sub.is_extern, extern_abi=sub.extern_abi))
             n += 1
         elif isinstance(sub, A.StructDecl):
             new_name = base + "__" + sub.name
