@@ -5258,6 +5258,17 @@ fn parse_fn_decl(tok_base: i32, sb: i32) -> i32 {
                 };
             }}};
         }
+        // Stage 28.11 INC-1 cycle-3 polish (cycle-2 code-review F-4
+        // conf 75): DEFERRED-KNOWN breadcrumb — this fn-generic loop
+        // shares the same silent-acceptance defect class as the
+        // post-cycle-2 struct-generic loop (parse_struct_decl ~6022):
+        // bare `cur_advance` in else-arm + unconditional post-loop
+        // advance. Same root cause as SF-1/SF-2/SF-3 silent-failure
+        // cycle-1 findings. Pre-existing Stage-8 surface, not under
+        // active iteration; left as DEFERRED-KNOWN per narrow-scope
+        // discipline (workspace cycle-71 note). Should be fixed in a
+        // separate hardening pass that applies the cycle-2 fix-sweep
+        // pattern (TK_IDENT-only else-arm + TK_GT-guarded post-advance).
         cur_advance(sb);                        // consume '>'
     };
     cur_advance(sb);     // '('
@@ -6043,8 +6054,20 @@ fn parse_struct_decl(tok_base: i32, sb: i32) -> i32 {
     // The Stage-8 sister fn-generic loop (~5219-5262) has the same
     // pattern; per narrow-scope discipline (workspace cycle-71 note)
     // it is left as DEFERRED-KNOWN; should be fixed in a separate
-    // commit since it's not under active iteration. See cycle-2
+    // commit since it's not under active iteration. See cycle-1
     // silent-failure findings SF-1/SF-2/SF-3/SF-5 for detail.
+    //
+    // Stage 28.11 INC-1 cycle-3 polish (cycle-2 type-design OBS-2,
+    // MED conf 82): residual bounded-misparse vector — `struct X<T,
+    // struct Y { ... }` (missing `>` AND next IDENT is a keyword-led
+    // decl). Keywords in the bootstrap are post-lex IDENTs (TK_IDENT
+    // tag 2 at the lex level), so the loop consumes `struct`, `Y`,
+    // then exits on `{`. The X decl absorbs Y's body and Y vanishes.
+    // Severity: MED (requires missing-`>` typo spanning two decls,
+    // result bounded to one sibling-decl eaten). KNOWN LIMITATION;
+    // proper fix requires a keyword-string check inside this loop
+    // (bootstrap currently does keyword detection at decl-dispatch
+    // time, not here). Out-of-scope for INC-1; track for INC-2/3.
     let g_peek = tok_tag(tok_base, cur_get(sb));
     if g_peek == 16 {                        // TK_LT = `<`
         cur_advance(sb);                     // consume '<'
@@ -6078,6 +6101,17 @@ fn parse_struct_decl(tok_base: i32, sb: i32) -> i32 {
             cur_advance(sb);                 // consume '>'
         };
     };
+    // Stage 28.11 INC-1 cycle-3 polish (cycle-2 silent-failure RE-2,
+    // MED conf 90): the unconditional `cur_advance` below — and the
+    // RBRACE consume at the field-loop tail — rely on the host
+    // `__arena_get` returning 0 for OOB indices (x86_64.py:1946-1968
+    // ARENA_GET, `jb in_bounds` fall-through to `mov eax, 0`). So
+    // `tok_tag` of an over-advanced cursor returns 0, which equals
+    // TK_EOF, which the surrounding `while keep==1` loops respect
+    // as a clean exit. Truncated-generics paths (`struct X<T,<EOF>`)
+    // implicitly depend on this contract. If a future arena-bounds
+    // policy traps on OOB or emits non-zero sentinels, these advance
+    // sites + the RBRACE consume need explicit EOF guards.
     cur_advance(sb);                         // consume '{' (LBRACE = 5)
     let mut field_count: i32 = 0;
     let mut fields_ptr: i32 = 0;             // 0 if no fields
