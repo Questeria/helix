@@ -1042,6 +1042,39 @@ class Lowerer:
             return self.builder.emit(tir.OpKind.CONST_BOOL,
                                      result_ty=tir.TIRScalar("bool"),
                                      attrs={"value": expr.value})
+        # Stage 28.9 cycle 108 audit-S C107-F8 fix (HIGH conf 82):
+        # explicit loud-fail arms for A.CharLit / A.StructLit (in expr
+        # position) / A.TileLit (in expr position). Pre-fix the bottom-
+        # of-_lower_expr `return None` silently dropped these three
+        # subclasses; the caller-side `or self.builder.const_int(0)`
+        # then substituted 0 for the lost value. Typical surface:
+        # `let c = 'A';` lowered to const_int(0), making `c == 'A'`
+        # silently return `0 == 0 -> true` for the wrong reason.
+        # Cycle-106 added explicit arms for A.Break / A.Continue with
+        # the same loud-fail pattern; this cycle extends it to the
+        # remaining subclasses the parser accepts but lowering has no
+        # arm for. The bottom `return None` at line ~2245 is preserved
+        # for A.StrLit (cycle-101 F1 deferred-known) — the StrLit case
+        # is not yet ported to IR and the user has accepted its silent
+        # miscompile under the deferred-known contract; converting the
+        # catch-all would close it without a real implementation.
+        if isinstance(expr, A.CharLit):
+            raise NotImplementedError(
+                f"char literal not yet supported in IR lowering at "
+                f"{expr.span.line}:{expr.span.col}")
+        if isinstance(expr, A.StructLit):
+            # Handled in LetStmt at line 848 by short-circuit; reaching
+            # _lower_expr means the StructLit appears in an arg / if-arm
+            # / return / assign rhs position the let-stmt path can't see.
+            raise NotImplementedError(
+                f"struct literal in expression position not yet supported "
+                f"in IR lowering at {expr.span.line}:{expr.span.col}")
+        if isinstance(expr, A.TileLit):
+            # Handled in LetStmt at line 762 by short-circuit; sibling
+            # of StructLit-in-expr-position above.
+            raise NotImplementedError(
+                f"tile literal in expression position not yet supported "
+                f"in IR lowering at {expr.span.line}:{expr.span.col}")
         if isinstance(expr, A.Name):
             v = self._lookup(expr.name)
             if v is not None:

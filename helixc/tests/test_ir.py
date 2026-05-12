@@ -399,6 +399,194 @@ def test_c105_unit_return_type_compatible():
     typecheck(_parse(src))
 
 
+# Stage 28.9 cycle 108 audit-S regression tests for C107-F1..F8.
+# The cycle-107 silent-failures audit flagged 7 _is_i64_type sibling
+# sites in x86_64.py that the cycle-106 sweep left on the unsafe
+# predicate, plus a catch-all silent-fallthrough in _lower_expr that
+# the cycle-106 fix did not generalise.
+
+
+def test_c107_call_return_u64_stores_full_8_bytes():
+    """C107-F2 regression (HIGH conf 90): a CALL whose callee returns
+    u64 must store the full 8-byte rax to the caller's result slot
+    via `mov [rbp+disp], rax` (48 89 ...). Pre-fix `_is_i64_type` did
+    not match u64, so only eax (low 32 bits) was stored — silently
+    dropping the high half of the SysV-ABI-delivered return value.
+    Also covers C107-F3 (callee RETURN of u64): the callee must load
+    via `mov rax, [rbp+disp]` (48 8B 45 ...) — the byte sequence
+    `48 8B 45` is the discriminative opcode for the wide load."""
+    from helixc.backend.x86_64 import compile_module_to_elf
+    src = """
+    fn id_u64(x: u64) -> u64 { x }
+    fn main() -> i32 {
+        let y: u64 = id_u64(1_u64);
+        0
+    }
+    """
+    elf = compile_module_to_elf(lower_src(src))
+    # `mov rax, [rbp+disp8]` = 48 8B 45 <disp> — required by callee
+    # RETURN path (F3) and caller's slot loads.
+    assert b"\x48\x8b\x45" in elf, (
+        "expected `mov rax, [rbp+disp8]` (48 8B 45 ..) for u64 "
+        "load — C107-F3 regression: RETURN still 32-bit"
+    )
+
+
+def test_c107_call_arg_u64_uses_64bit_reg():
+    """C107-F1 regression (HIGH conf 90): a CALL passing a u64 arg
+    must use the 64-bit `mov rdi, [rbp+disp]` (48 8B 7D <disp>) form.
+    Pre-fix only i64/isize args went through INT_REGS_64; u64/usize
+    args fell through to `mov edi, [rbp+disp]` (8B 7D <disp>), losing
+    the high half of the slot."""
+    from helixc.backend.x86_64 import compile_module_to_elf
+    src = """
+    fn take_u64(x: u64) -> i32 { 0 }
+    fn main() -> i32 {
+        let v: u64 = 42_u64;
+        take_u64(v)
+    }
+    """
+    elf = compile_module_to_elf(lower_src(src))
+    # `mov rdi, [rbp+disp8]` = 48 8B 7D <disp> — the 64-bit form for
+    # the first SysV int-arg register.
+    assert b"\x48\x8b\x7d" in elf, (
+        "expected `mov rdi, [rbp+disp8]` (48 8B 7D ..) for u64 CALL "
+        "arg — C107-F1 regression: arg still loaded via 32-bit mov edi"
+    )
+
+
+def test_c107_if_else_u64_emits_64bit_branch_copy():
+    """C107-F5 regression (HIGH conf 88): an `if c { a_u64 } else
+    { b_u64 }` lowers to a merge block with a u64 param. The BR
+    block-param copy must use the 64-bit path: `mov rax, [rbp+src]`
+    (48 8B 45 ...) + `mov [rbp+dst], rax` (48 89 45 ...). Pre-fix the
+    BR arm ran through eax, silently truncating both branches'
+    computed u64 values to 32 bits on entry to the merge block."""
+    from helixc.backend.x86_64 import compile_module_to_elf
+    src = """
+    fn pick(c: i32, a: u64, b: u64) -> u64 {
+        if c == 0 { a } else { b }
+    }
+    fn main() -> i32 { 0 }
+    """
+    elf = compile_module_to_elf(lower_src(src))
+    # The BR-side merge copy is `mov rax, [rbp+src]` (48 8B 45 disp)
+    # then `mov [rbp+dst], rax` (48 89 45 disp). Both 48-prefixed.
+    assert b"\x48\x89\x45" in elf, (
+        "expected `mov [rbp+disp], rax` (48 89 45 ..) for BR "
+        "block-param u64 store — C107-F5 regression: BR still 32-bit"
+    )
+
+
+def test_c107_mut_u64_local_uses_64bit_load_store():
+    """C107-F6 regression (HIGH conf 90): `let mut x: u64 = ...; x =
+    x + 1u64; x` must use the 64-bit LOAD_VAR/STORE_VAR path. Pre-
+    fix every read-modify-write cycle of a mutable u64 local silently
+    dropped the high half of the var slot via 32-bit eax-based moves."""
+    from helixc.backend.x86_64 import compile_module_to_elf
+    src = """
+    fn rmw_u64() -> u64 {
+        let mut x: u64 = 1_u64;
+        x = x + 1_u64;
+        x
+    }
+    fn main() -> i32 { 0 }
+    """
+    elf = compile_module_to_elf(lower_src(src))
+    # LOAD_VAR / STORE_VAR for u64 must emit `mov rax, [...]` (48 8B
+    # 45) and `mov [...], rax` (48 89 45). Both opcodes are required.
+    assert b"\x48\x8b\x45" in elf and b"\x48\x89\x45" in elf, (
+        "expected 64-bit LOAD_VAR/STORE_VAR opcodes (48 8B 45 and "
+        "48 89 45) for u64 mutable local — C107-F6 regression"
+    )
+
+
+def test_c107_cast_u32_to_u64_uses_zero_extend_not_sign_extend():
+    """C107-F7 regression (HIGH conf 85): `x as u64` where x: u32 must
+    ZERO-extend, not sign-extend. Pre-fix the predicates `_is_i64_type`
+    missed u64 so the cast fell to the bottom 4-byte mov-copy, leaving
+    the high 4 bytes of the result slot stale (not zero, not sign-
+    extended — uninitialised). Fix adds an unsigned-widening arm that
+    emits `mov eax, [src]` + `mov [dst], rax` (relies on x86-64's
+    implicit zero-extension of 32-bit destination writes to rax) —
+    must NOT emit `movsxd` (48 63 C0)."""
+    from helixc.backend.x86_64 import compile_module_to_elf
+    src = """
+    fn widen_u32(x: u32) -> u64 {
+        x as u64
+    }
+    fn main() -> i32 { 0 }
+    """
+    elf = compile_module_to_elf(lower_src(src))
+    # The unsigned-widening arm emits `mov eax, [rbp+src]` (8B 45 ...)
+    # followed by `mov [rbp+dst], rax` (48 89 45 ...). The sign-
+    # extension form `movsxd rax, eax` = 48 63 C0 must NOT appear in
+    # the body of widen_u32.
+    assert b"\x48\x63\xc0" not in elf, (
+        "movsxd (48 63 C0) found — C107-F7 regression: u32->u64 "
+        "took sign-extension path; should be zero-extension via "
+        "`mov eax, [..]` + `mov [..], rax`"
+    )
+    assert b"\x48\x89\x45" in elf, (
+        "expected `mov [rbp+disp], rax` (48 89 45 ..) from the "
+        "unsigned-widening arm — C107-F7 regression"
+    )
+
+
+def test_c107_char_lit_in_expr_pos_raises_loud():
+    """C107-F8 regression (HIGH conf 82): A.CharLit in expression
+    position must raise NotImplementedError. Pre-fix the bottom-of-
+    _lower_expr `return None` silently dropped CharLit; the caller's
+    `or const_int(0)` substitution then folded `'A'` to `0`, making
+    downstream `c == 'A'` silently evaluate to `0 == 0 -> true` for
+    the wrong reason."""
+    src = """
+    fn f() -> i32 {
+        let c = 'A';
+        0
+    }
+    fn main() -> i32 { 0 }
+    """
+    try:
+        lower_src(src)
+    except NotImplementedError as e:
+        assert "char" in str(e).lower(), (
+            f"NotImplementedError must mention 'char', got: {e}"
+        )
+        return
+    raise AssertionError(
+        "A.CharLit must raise NotImplementedError until IR lowering "
+        "has a real arm; pre-fix this silently substituted 0"
+    )
+
+
+def test_c107_struct_lit_in_expr_pos_raises_loud():
+    """C107-F8 regression (HIGH conf 82): A.StructLit appearing in a
+    non-let-stmt expression position (call-arg, if-arm, return value,
+    assign rhs) must raise NotImplementedError. The let-stmt path at
+    lower_ast.py:848 handles `let x = S{a:1};`; any other expression
+    position routed through _lower_expr's bottom `return None`,
+    silently folding the StructLit to 0."""
+    src = """
+    struct Pt { x: i32, y: i32 }
+    fn take(p: Pt) -> i32 { p.x }
+    fn main() -> i32 {
+        take(Pt { x: 1, y: 2 })
+    }
+    """
+    try:
+        lower_src(src)
+    except NotImplementedError as e:
+        assert "struct" in str(e).lower(), (
+            f"NotImplementedError must mention 'struct', got: {e}"
+        )
+        return
+    raise AssertionError(
+        "A.StructLit in expression position must raise "
+        "NotImplementedError; pre-fix this silently substituted 0"
+    )
+
+
 def main():
     tests = [(name, fn) for name, fn in globals().items()
              if name.startswith("test_") and callable(fn)]

@@ -1279,12 +1279,33 @@ class FnCompiler:
             to_is_f64 = self._is_f64_type(to_ty)
             from_is_float = self._is_float_type(from_ty)
             to_is_float = self._is_float_type(to_ty)
-            from_is_i64 = self._is_i64_type(from_ty)
-            to_is_i64 = self._is_i64_type(to_ty)
+            # Stage 28.9 cycle 108 audit-S C107-F7 fix (HIGH conf 85):
+            # CAST width-gate must include u64/usize. Pre-fix
+            # `cast<u32, u64>` fell through to the 4-byte mov-copy
+            # (stale high half), `cast<u64, f64>` fell through to the
+            # i32->float arms (silent low-32-only signed-int read),
+            # `cast<u64, i32>` was coincidentally non-corrupting, and
+            # `cast<f64, u64>` truncated to f64->i32. Predicate-extend
+            # plus an unsigned-widening arm below closes all four.
+            from_is_i64 = self._is_64bit_int_type(from_ty)
+            to_is_i64 = self._is_64bit_int_type(to_ty)
             # i64 -> i32: just take low 32 bits via 32-bit mov.
             if from_is_i64 and not to_is_float and not to_is_i64:
                 self.asm.mov_eax_mem_rbp(src_slot)
                 self.asm.mov_mem_rbp_eax(res_slot)
+                return
+            # Stage 28.9 cycle 108 audit-S C107-F7 unsigned-widening arm
+            # (HIGH conf 85): u32/u16/u8 -> u64/i64 must ZERO-extend, not
+            # sign-extend. `mov eax, [src]` implicitly zero-extends the
+            # destination 32-bit reg's upper half to rax on x86-64; we
+            # then store the full 8-byte rax to the dest slot. Must fire
+            # BEFORE the i32->i64 movsxd arm below; otherwise a u32 source
+            # with the high bit set sign-extends to 0xFFFFFFFF_xxxxxxxx
+            # when it should zero-extend to 0x00000000_xxxxxxxx.
+            if (not from_is_float and not from_is_i64 and to_is_i64
+                    and self._is_unsigned_int_type(from_ty)):
+                self.asm.mov_eax_mem_rbp(src_slot)
+                self.asm.mov_mem_rbp_rax(res_slot)
                 return
             # i32 -> i64: load 32-bit, sign-extend via movsxd rax, eax.
             if not from_is_float and not from_is_i64 and to_is_i64:
@@ -1758,7 +1779,11 @@ class FnCompiler:
             res_slot = self._slot_of(op.results[0])
             res_ty = op.results[0].ty
             is_f64 = self._is_f64_type(res_ty)
-            is_i64 = self._is_i64_type(res_ty)
+            # Stage 28.9 cycle 108 audit-S C107-F4 fix (HIGH conf 90):
+            # SELECT result-width gate must include u64/usize, not just
+            # i64/isize. Pre-fix `let x = if c { a_u64 } else { b_u64 };`
+            # ran load/store through eax — silently truncating both arms.
+            is_i64 = self._is_64bit_int_type(res_ty)
             buf = self.asm.b
             # mov eax, [cond]
             self.asm.mov_eax_mem_rbp(cond_slot)
@@ -1845,7 +1870,16 @@ class FnCompiler:
                         raise NotImplementedError(
                             "v0.1 supports up to 6 int args"
                         )
-                    if self._is_i64_type(arg.ty):
+                    # Stage 28.9 cycle 108 audit-S C107-F1 fix (HIGH conf
+                    # 90): u64/usize int args silently truncated to 32 bits
+                    # via INT_REGS (`mov edi, [...]`) pre-fix because
+                    # `_is_i64_type` only matches i64/isize. The sibling
+                    # FFI_CALL arm at line 1917 was cycle-77-fixed via the
+                    # explicit `or _is_u64_type` inline; the internal CALL
+                    # arm was the asymmetric sibling that escaped both the
+                    # cycle-77 and cycle-106 sweeps. SysV ABI delivers the
+                    # full 8-byte arg in rdi/rsi/rdx/rcx/r8/r9.
+                    if self._is_64bit_int_type(arg.ty):
                         INT_REGS_64[int_idx](arg_slot)
                     else:
                         INT_REGS[int_idx](arg_slot)
@@ -1853,12 +1887,16 @@ class FnCompiler:
             self.asm.call_rel32(str(target))
             if op.results:
                 res_slot = self._slot_of(op.results[0])
-                # SysV: float return in xmm0, int return in eax.
+                # SysV: float return in xmm0, int return in eax/rax.
+                # Stage 28.9 cycle 108 audit-S C107-F2 fix (HIGH conf 90):
+                # u64/usize return value silently truncated to eax pre-fix.
+                # Mirror of FFI_CALL return at line 1936 which was already
+                # correct via inline `or _is_u64_type`.
                 if self._is_f64_type(op.results[0].ty):
                     self.asm.movsd_mem_rbp_xmm0(res_slot)
                 elif self._is_float_type(op.results[0].ty):
                     self.asm.movss_mem_rbp_xmm0(res_slot)
-                elif self._is_i64_type(op.results[0].ty):
+                elif self._is_64bit_int_type(op.results[0].ty):
                     self.asm.mov_mem_rbp_rax(res_slot)
                 else:
                     self.asm.mov_mem_rbp_eax(res_slot)
@@ -1955,11 +1993,19 @@ class FnCompiler:
             if op.operands:
                 slot = self._slot_of(op.operands[0])
                 # SysV: float return in xmm0, int return in eax/rax.
+                # Stage 28.9 cycle 108 audit-S C107-F3 fix (HIGH conf 90):
+                # u64/usize return silently truncated to eax pre-fix
+                # because `_is_i64_type` only matches i64/isize. Cycle-102
+                # fixed ADD/SUB/MUL u64 and cycle-106 fixed CONST_INT/
+                # param-spill — RETURN then 32-bit-loaded the freshly-
+                # computed full 8-byte value into eax, silently truncating
+                # the very value the upstream sweeps went to lengths to
+                # compute correctly.
                 if self._is_f64_type(op.operands[0].ty):
                     self.asm.movsd_xmm0_mem_rbp(slot)
                 elif self._is_float_type(op.operands[0].ty):
                     self.asm.movss_xmm0_mem_rbp(slot)
-                elif self._is_i64_type(op.operands[0].ty):
+                elif self._is_64bit_int_type(op.operands[0].ty):
                     self.asm.mov_rax_mem_rbp(slot)
                 else:
                     self.asm.mov_eax_mem_rbp(slot)
@@ -1984,10 +2030,16 @@ class FnCompiler:
                 src_slot = self._slot_of(op.operands[0])
                 dst_slot = self._slot_of(target_blk.params[0])
                 operand_ty = op.operands[0].ty
+                # Stage 28.9 cycle 108 audit-S C107-F5 fix (HIGH conf 88):
+                # BR block-param copy must include u64/usize, not just
+                # i64/isize. `let x = if c { a_u64 } else { b_u64 };`
+                # lowers to a merge block with a u64 param; pre-fix the
+                # BR-side copy ran through eax and silently dropped the
+                # high half of both arms' computed values.
                 if self._is_f64_type(operand_ty):
                     self.asm._movsd_load_xmmN(0, src_slot)
                     self.asm.movsd_mem_rbp_xmm0(dst_slot)
-                elif self._is_i64_type(operand_ty):
+                elif self._is_64bit_int_type(operand_ty):
                     self.asm.mov_rax_mem_rbp(src_slot)
                     self.asm.mov_mem_rbp_rax(dst_slot)
                 else:
@@ -2018,7 +2070,13 @@ class FnCompiler:
             var_slot = self.var_slots[name]
             res_slot = self._slot_of(op.results[0])
             # 32-bit movs for i32 / f32 (bit pattern round-trips). 64-bit
-            # movs for i64 / f64 so the upper 4 bytes survive the copy.
+            # movs for i64 / u64 / isize / usize / f64 so the upper 4
+            # bytes survive the copy.
+            # Stage 28.9 cycle 108 audit-S C107-F6 fix (HIGH conf 90):
+            # LOAD_VAR/STORE_VAR for mutable u64/usize locals must take
+            # the 8-byte path. Pre-fix every read-modify-write cycle on a
+            # `let mut x: u64` silently dropped the high 4 bytes of the
+            # var slot.
             res_ty = op.results[0].ty
             if self._is_f64_type(res_ty):
                 self.asm._movsd_load_xmmN(0, var_slot)
@@ -2026,7 +2084,7 @@ class FnCompiler:
             elif self._is_float_type(res_ty):
                 self.asm.movss_xmm0_mem_rbp(var_slot)
                 self.asm.movss_mem_rbp_xmm0(res_slot)
-            elif self._is_i64_type(res_ty):
+            elif self._is_64bit_int_type(res_ty):
                 self.asm.mov_rax_mem_rbp(var_slot)
                 self.asm.mov_mem_rbp_rax(res_slot)
             else:
@@ -2038,13 +2096,15 @@ class FnCompiler:
             var_slot = self.var_slots[name]
             src_slot = self._slot_of(op.operands[0])
             src_ty = op.operands[0].ty
+            # Cycle 108 audit-S C107-F6 fix — STORE_VAR sibling of LOAD_VAR
+            # above. Same 64-bit-int width-gate.
             if self._is_f64_type(src_ty):
                 self.asm._movsd_load_xmmN(0, src_slot)
                 self.asm.movsd_mem_rbp_xmm0(var_slot)
             elif self._is_float_type(src_ty):
                 self.asm.movss_xmm0_mem_rbp(src_slot)
                 self.asm.movss_mem_rbp_xmm0(var_slot)
-            elif self._is_i64_type(src_ty):
+            elif self._is_64bit_int_type(src_ty):
                 self.asm.mov_rax_mem_rbp(src_slot)
                 self.asm.mov_mem_rbp_rax(var_slot)
             else:
