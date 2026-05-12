@@ -1631,15 +1631,38 @@ fn parse_unary(tok_base: i32, sb: i32) -> i32 {
                         let f_idx = struct_tab_field_lookup(sb, lhs_struct_idx, field_s, field_l);
                         if f_idx >= 0 {
                             // Iter D: is this field struct-typed?
+                            // Stage 28.11 INCREMENT 3a: a field's
+                            // struct_idx slot may now carry the
+                            // generic-param marker `200 + gp_idx`
+                            // (written by parse_struct_decl when the
+                            // field's declared type matched a
+                            // generic-param name like `T`). Treat
+                            // such fields as SCALAR (4-byte i32
+                            // shape) for now — INC-3b will read this
+                            // marker at use-sites (Pt<i32>) to drive
+                            // monomorphization. Pre-3a-fix the
+                            // `>= 0` check would have classified a
+                            // 200+ value as a nested-struct field,
+                            // emitting an 8-byte (REX.W) pointer read
+                            // of a 4-byte slot — silent miscompile.
                             let f_struct_idx = struct_tab_field_struct_idx(sb, lhs_struct_idx, f_idx);
                             if f_struct_idx >= 0 {
-                                // Nested struct field: emit AST_TUPLE_FIELD
-                                // with p3 == 1 to mark an 8-byte (REX.W)
-                                // read of the child pointer, and propagate
-                                // struct_idx forward for the next chained
-                                // access.
-                                prim = mk_node(52, prim, f_idx, 1);
-                                cur_struct_idx = f_struct_idx;
+                                if f_struct_idx < 200 {
+                                    // Nested struct field: emit AST_TUPLE_FIELD
+                                    // with p3 == 1 to mark an 8-byte (REX.W)
+                                    // read of the child pointer, and propagate
+                                    // struct_idx forward for the next chained
+                                    // access.
+                                    prim = mk_node(52, prim, f_idx, 1);
+                                    cur_struct_idx = f_struct_idx;
+                                } else {
+                                    // Stage 28.11 INC-3a: 200+ marker
+                                    // — generic-param-typed field,
+                                    // treated as scalar pending INC-3b
+                                    // monomorphization at use site.
+                                    prim = mk_node(52, prim, f_idx, 0);
+                                    cur_struct_idx = 0 - 1;
+                                };
                             } else {
                                 prim = mk_node(52, prim, f_idx, 0);
                                 cur_struct_idx = 0 - 1;
@@ -6155,34 +6178,33 @@ fn parse_struct_decl(tok_base: i32, sb: i32) -> i32 {
             let t_s = tok_p2(tok_base, tk);
             let t_l = tok_p3(tok_base, tk);
             cur_advance(sb);                 // consume type IDENT
-            // Stage 28.11 INCREMENT 2 scope decision: gp_tab is now
-            // populated above, so a field typed `T` (matching a
-            // generic-param name) COULD encode as `200 + gp_idx`
-            // (mirroring parse_fn_decl's fn-param encoding at
-            // parser.hx:5346). However, the downstream reader at
-            // parser.hx:1635 — `struct_tab_field_struct_idx >= 0`
-            // — would interpret a 200+ value as a nested-struct
-            // field, emit an 8-byte (REX.W) read of a 4-byte slot,
-            // and propagate cur_struct_idx = 200+gp_idx into
-            // subsequent field accesses where struct_tab indexing
-            // would read off the end of the table.
+            // Stage 28.11 INCREMENT 3a: field-type encoding for
+            // generic structs. If the field type IDENT matches a
+            // generic-param name registered in gp_tab during the
+            // `<T1, T2, ...>` parse above, encode the slot as
+            // `200 + gp_idx` (mirrors parse_fn_decl's fn-param
+            // encoding at parser.hx:5346). Otherwise fall through
+            // to `struct_tab_lookup_idx` so scalar / nested-struct
+            // semantics are unchanged for non-generic fields.
             //
-            // INCREMENT 2 keeps the field encoding unchanged
-            // (scalar-fallback via struct_tab_lookup_idx → -1 for
-            // generic-typed fields). INCREMENT 3 will land BOTH
-            // (a) the 200+gp_idx field encoding AND (b) the
-            // downstream reader-side check (`< 200`) AND (c) the
-            // monomorphization pass that rewrites generic structs
-            // into concrete clones — atomically as a coherent unit.
-            // This avoids an intermediate-state regression where
-            // INC-2 alone would break the existing
-            // `struct Pt<T> { x: T, y: T }` probe by mis-reading
-            // T-typed fields as 8-byte struct pointers.
+            // The 200+ encoding is RESERVED for future INC-3b
+            // monomorphization (`struct_mr_tab` + concrete clones).
+            // For INC-3a, the downstream reader at parser.hx:1635
+            // is updated atomically (in the same commit) with a
+            // `< 200` guard so 200+gp_idx values are treated as
+            // scalar (4-byte i32-shaped) field reads — preserving
+            // the existing `struct Pt<T> { x: T, y: T }` probe
+            // behavior (exits 42 with i32 field semantics).
             //
-            // gp_tab is still populated above so INCREMENT 3 has
-            // the data it needs; only the field-type-tag write
-            // is deferred.
-            let f_struct_idx = struct_tab_lookup_idx(sb, t_s, t_l);
+            // INC-3b will read the 200+ encoding at use-sites
+            // (parse_primary's struct-lit detection) to drive
+            // monomorphization.
+            let gp_idx = gp_tab_lookup(sb, t_s, t_l);
+            let f_struct_idx = if gp_idx >= 0 {
+                200 + gp_idx
+            } else {
+                struct_tab_lookup_idx(sb, t_s, t_l)
+            };
             // Push (name_s, name_l, field_struct_idx) triple into
             // fields region. Capture fields_ptr from the FIRST push so
             // subsequent fields append after it (arena grows linearly).
