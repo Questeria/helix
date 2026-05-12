@@ -4788,15 +4788,11 @@ def test_bootstrap_kovc_self_host_loop():
     #
     # Substantial multi-cycle effort. Re-skipping until Stage 29 work
     # is dedicated to closing this gap.
-    # Stage 29 SIGILL FIXED (2026-05-12 commit 8e325cb). K2 no longer
-    # crashes with illegal instruction on simple inputs. K3 returns 42
-    # correctly for those. Stage 29.2 follow-up: K2 still SIGILLs at
-    # process exit AFTER writing K3, AND for fn-list inputs may SIGILL
-    # BEFORE writing K3. Behavior is non-deterministic across WSL state
-    # changes — re-skipping until Stage 29.2 settles the tail-SIGILL
-    # and fn-list parsing issue.
-    import pytest as _pytest
-    _pytest.skip("Stage 29.2 work item: K2 tail SIGILL — K3 may or may not be produced")
+    # Stage 29 FULLY COMPLETE (2026-05-12). Self-host loop works:
+    # K1 → K2 → K3, K3 returns 42, K2 exits cleanly. Three commits:
+    # 8e325cb (return keyword fix), c89432e (cap bumps), and the
+    # parse_primary TK_RBRACE catch-all fix that compiles empty
+    # blocks to AST_INT(0) instead of trap_with_id(6).
     """Full self-host: P0 (kovc-by-Python) compiles the entire
     bootstrap source (lexer.hx + parser.hx + kovc.hx + driver_main)
     into binary K1. K1 reads the SAME bootstrap source from disk
@@ -4911,27 +4907,12 @@ fn main() -> i32 {
          "chmod +x /tmp/sh_k1_out.bin && /tmp/sh_k1_out.bin"],
         capture_output=True, timeout=30,
     )
-    # Original assertion (kept commented for Stage 29.2 to re-enable):
-    # assert run_k2.returncode < 128, (
-    #     f"K2 (compiled by K1 from bootstrap source) crashed: "
-    #     f"exit={run_k2.returncode} stderr={run_k2.stderr!r}"
-    # )
-    # Relaxed assertion: K3 file must exist and be non-empty.
-    import os.path
-    # Convert /tmp/sh_k2_out.bin via wsl
-    k3_check = subprocess.run(
-        ["wsl", "-e", "bash", "-c",
-         "test -f /tmp/sh_k2_out.bin && wc -c < /tmp/sh_k2_out.bin || echo MISSING"],
-        capture_output=True, timeout=10,
-    )
-    k3_size_str = k3_check.stdout.decode().strip()
-    assert k3_size_str != "MISSING", (
-        f"K2 did not produce /tmp/sh_k2_out.bin (K3). "
-        f"K2 exit={run_k2.returncode} stderr={run_k2.stderr!r}"
-    )
-    assert int(k3_size_str) > 0, (
-        f"K2 produced empty K3 (0 bytes). "
-        f"K2 exit={run_k2.returncode} stderr={run_k2.stderr!r}"
+    # Stage 29 (2026-05-12): K2 now exits cleanly. K2's exit code is
+    # bytes-written mod 256 (non-zero is expected from write_file_to_arena
+    # returning the byte count); SIGILL would set rc >= 128.
+    assert run_k2.returncode < 128, (
+        f"K2 (compiled by K1 from bootstrap source) crashed: "
+        f"exit={run_k2.returncode} stderr={run_k2.stderr!r}"
     )
 
     # K2's main wrote K3 to /tmp/sh_k2_out.bin. Run K3.

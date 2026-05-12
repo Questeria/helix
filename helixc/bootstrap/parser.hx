@@ -3781,7 +3781,17 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
                 };
             };
         };
-        mk_node(99, t, 0, 0)
+        // Stage 29.2 fix (2026-05-12): for TK_RBRACE (6) — empty block
+        // body like `else {}` — return AST_INT(0) instead of AST_ERR(6).
+        // The AST_ERR(6) gets codegen'd as trap_with_id(6) which fires
+        // SIGILL at runtime if reached. Empty blocks are valid Helix
+        // semantics (unit value); they should compile to a no-op `0`
+        // rather than a hard trap.
+        if t == 6 {
+            mk_node(0, 0, 0, 0)
+        } else {
+            mk_node(99, t, 0, 0)
+        }
     }}}}}}}}}}}}}}}}     // Stage 9: extra '}' closes the leading t == 28 closure wrapper
 }
 
