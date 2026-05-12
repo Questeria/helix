@@ -11184,13 +11184,22 @@ def test_stdlib_ti1d_l2_norm_sq():
 def test_stdlib_vec_first_legacy_api():
     """first([42,99]) = 42.
 
-    Stage 28.9 cycle 91 audit-CR C90-1 docstring: cycle-89 renamed
-    this from `test_stdlib_vec_first` after C88-1 caught that an
-    intra-file duplicate name (Python rebinds) was silently shadowing
-    this test body. The `_legacy_api` suffix is a bookkeeping marker
-    NOT an API-version claim — both variants currently exercise the
-    `__arena_push` shape. Keep both bodies during the Phase-0 stdlib
-    transition; merge or further differentiate in a follow-up cycle."""
+    Stage 28.9 cycle 91 audit-CR C90-1 + cycle 93 audit-CR C92-1
+    docstring: cycle-89 renamed this from `test_stdlib_vec_first`
+    after C88-1 caught that an intra-file duplicate name (Python
+    rebinds) was silently shadowing this test body.
+
+    This variant uses `__arena_push(val)` (push-to-arena-tail) +
+    2-arg `vec_first(arena_base, len)`. The canonical
+    `test_stdlib_vec_first` near line 12814 uses 3-arg
+    `vec_push(arena, idx, val)` + 2-arg `vec_first(arena, len)`.
+    Both API shapes co-exist during Phase-0 stdlib transition;
+    preserving both bodies pins each shape so a regression on
+    either caller form surfaces.
+
+    (The earlier cycle-91 docstring incorrectly claimed both
+    variants used `__arena_push`; cycle-93 audit-CR C92-1 corrected
+    the mischaracterisation.)"""
     src = """
     fn main() -> i32 {
         let v = __arena_len();
@@ -11205,9 +11214,11 @@ def test_stdlib_vec_first_legacy_api():
 def test_stdlib_vec_last_legacy_api():
     """last([99,42]) = 42.
 
-    Stage 28.9 cycle 91 audit-CR C90-1 docstring: cycle-89 renamed
-    from `test_stdlib_vec_last`. See test_stdlib_vec_first_legacy_api
-    above for full rationale."""
+    Stage 28.9 cycle 91 audit-CR C90-1 + cycle 93 audit-CR C92-1
+    docstring: cycle-89 renamed from `test_stdlib_vec_last`. This
+    variant uses `__arena_push(val)`; canonical near line 12832 uses
+    3-arg `vec_push(arena, idx, val)`. See
+    test_stdlib_vec_first_legacy_api above for full rationale."""
     src = """
     fn main() -> i32 {
         let v = __arena_len();

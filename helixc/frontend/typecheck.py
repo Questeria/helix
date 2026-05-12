@@ -372,6 +372,17 @@ class FunctionSig:
 
 # ============================================================================
 # Type checker
+# Stage 28.9 cycle 93 audit-T F1: literal-suffix domain sets for the
+# IntLit/FloatLit kind-coherence checks in `_check_expr`. Float-domain
+# suffix on IntLit (or vice versa) is a silent cross-domain miscompile
+# pre-fix.
+_FLOAT_PRIM_NAMES = frozenset({"f16", "bf16", "f32", "f64"})
+_INT_PRIM_NAMES = frozenset({
+    "i8", "u8", "i16", "u16", "i32", "u32", "i64", "u64",
+    "isize", "usize",
+})
+
+
 # ============================================================================
 class TypeChecker:
     def __init__(self, prog: A.Program):
@@ -1198,9 +1209,35 @@ class TypeChecker:
 
     def _check_expr(self, expr: A.Expr, scope: Scope) -> Type:
         if isinstance(expr, A.IntLit):
-            # Default integer type is i32 unless suffix specified
+            # Default integer type is i32 unless suffix specified.
+            # Stage 28.9 cycle 93 audit-T F1 fix (HIGH conf 85):
+            # reject IntLit with float-domain suffix. Pre-fix
+            # `42_f32` lexed as IntLit(value=42, type_suffix="f32"),
+            # passed typecheck as TyPrim("f32"), lowered via
+            # IRBuilder.const_int to CONST_INT(result_ty=TIRScalar
+            # ("f32")), and x86_64 stored the raw int bit-pattern
+            # 0x2A into the f32 slot (≈5.88e-44, not 42.0).
+            if expr.type_suffix in _FLOAT_PRIM_NAMES:
+                self.errors.append(TypeError_(
+                    f"integer literal '{expr.value}' has float-domain "
+                    f"suffix '{expr.type_suffix}'; use a float literal "
+                    f"(e.g. {expr.value}.0_{expr.type_suffix}) "
+                    f"or change the suffix to an integer type",
+                    expr.span,
+                ))
+                return TyPrim("i32")
             return TyPrim(expr.type_suffix or "i32")
         if isinstance(expr, A.FloatLit):
+            # Stage 28.9 cycle 93 audit-T F1 fix: symmetric check —
+            # reject FloatLit with integer-domain suffix.
+            if expr.type_suffix in _INT_PRIM_NAMES:
+                self.errors.append(TypeError_(
+                    f"float literal '{expr.value}' has integer-domain "
+                    f"suffix '{expr.type_suffix}'; use an integer literal "
+                    f"or change the suffix to a float type",
+                    expr.span,
+                ))
+                return TyPrim("f32")
             return TyPrim(expr.type_suffix or "f32")
         if isinstance(expr, A.StrLit):
             return TyRef(TyPrim("char"), is_mut=False)  # &str-ish

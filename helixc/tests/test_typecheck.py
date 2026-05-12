@@ -1739,6 +1739,51 @@ def test_d7_deep_ref_cast_bounded():
     )
 
 
+def test_c92_f1_intlit_with_float_suffix_rejected():
+    """Stage 28.9 cycle 93 audit-T F1 regression (HIGH conf 85):
+    `42_f32` (IntLit with float-domain suffix) must be rejected by
+    typecheck. Pre-fix this lexed as IntLit(value=42,
+    type_suffix='f32'), passed typecheck as TyPrim('f32'), lowered
+    to CONST_INT(result_ty=TIRScalar('f32')), and the backend stored
+    the raw int bit-pattern 0x2A into the f32 slot — silently
+    representing 5.88e-44 instead of 42.0."""
+    from helixc.frontend.typecheck import typecheck
+    from helixc.frontend.parser import parse
+    src = "fn main() -> i32 { let x: f32 = 42_f32; 0 }"
+    errs = typecheck(parse(src))
+    assert any("float-domain suffix" in str(e) for e in errs), (
+        f"expected float-domain-suffix diagnostic, got: "
+        f"{[str(e) for e in errs]}"
+    )
+
+
+def test_c92_f1_floatlit_with_int_suffix_rejected():
+    """C92-F1 regression (HIGH): symmetric — `4.2_i32` (FloatLit
+    with integer-domain suffix) must be rejected."""
+    from helixc.frontend.typecheck import typecheck
+    from helixc.frontend.parser import parse
+    src = "fn main() -> i32 { let x: i32 = 4.2_i32; 0 }"
+    errs = typecheck(parse(src))
+    assert any("integer-domain suffix" in str(e) for e in errs), (
+        f"expected integer-domain-suffix diagnostic, got: "
+        f"{[str(e) for e in errs]}"
+    )
+
+
+def test_c92_f1_valid_intlit_int_suffix_accepted():
+    """C92-F1 regression: ensure correct shapes still pass —
+    `42_i32` is valid; no kind-coherence diagnostic should fire."""
+    from helixc.frontend.typecheck import typecheck
+    from helixc.frontend.parser import parse
+    src = "fn main() -> i32 { let x: i32 = 42_i32; x }"
+    errs = typecheck(parse(src))
+    assert not any(("float-domain" in str(e) or "integer-domain" in str(e))
+                   for e in errs), (
+        f"unexpected kind-coherence error for valid 42_i32: "
+        f"{[str(e) for e in errs]}"
+    )
+
+
 def main():
     # Tests requiring pytest fixtures (tmp_path / monkeypatch / capsys /
     # etc.) are skipped here — the manual runner can't synthesize
