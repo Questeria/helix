@@ -618,7 +618,11 @@ def test_c73_cn1_totality_no_double_descent():
     ASTVisitor base-class auto-descent. Verify by counting calls
     discovered for a recursive fn whose body has a nested self-call:
     `fn rec(n) { rec(rec(n - 1)) }` — should find exactly 2 self-
-    calls, not 4 or 6.
+    calls. Pre-fix (cycle 73) produced 3 for this source — the inner
+    `rec(n-1)` got recorded twice (once from the override's explicit
+    `generic_visit`, once from the base-class's post-override
+    `generic_visit`). Cycle 75 code-review verified the exact 3-vs-2
+    discriminator empirically.
     """
     from helixc.frontend.totality import _SelfCallCollector
     src = """
