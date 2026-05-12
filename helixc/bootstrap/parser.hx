@@ -222,6 +222,32 @@ fn gp_tab_lookup(sb: i32, name_s: i32, name_l: i32) -> i32 {
     }
     found
 }
+
+// Stage 28.11 INC-3a cycle-5 polish (cycle-4 type-design F1+F2+F3, MED
+// conf 80-85): centralized helpers for the generic-param marker
+// encoding `200 + gp_idx`. Pre-fix the literal `200` was open-coded at
+// 4+ sites (writer parse_struct_decl ~6204, reader parse_primary ~1650,
+// fn-param sibling encoding at parser.hx:5380/5385). With INC-3b about
+// to add a third reader at parse_primary's struct-lit detection, the
+// magic-number proliferation would have reached 5-6 sites — making
+// future cap bumps fragile.
+//
+// Invariant: struct_tab cap (currently 8) MUST remain below
+// `gp_marker_base()` (= 200). The 192-slot gap between struct_tab's
+// max idx (7) and the gp marker range (200..) gives substantial
+// headroom but isn't unlimited. If struct_tab cap is ever raised
+// (INC-3b will add monomorphized clones), confirm `struct_tab_count
+// < gp_marker_base()` is preserved. Future hardening: trap when
+// struct_tab_add would assign idx >= gp_marker_base().
+fn gp_marker_base() -> i32 { 200 }
+fn gp_marker_encode(gp_idx: i32) -> i32 { gp_marker_base() + gp_idx }
+fn gp_marker_is(v: i32) -> i32 {
+    if v >= gp_marker_base() { 1 } else { 0 }
+}
+// gp_marker_decode is reserved for INC-3b's monomorphization pass
+// (parse_primary use-site reading the encoded gp_idx).
+fn gp_marker_decode(v: i32) -> i32 { v - gp_marker_base() }
+
 // Stage 8: mono-instantiation request table. Entries pushed by turbofish-
 // at-call-site code in parse_primary; consumed at end of parse_program
 // to synthesize cloned AST_FN_DECL nodes with concrete-type substitution.
@@ -1647,7 +1673,12 @@ fn parse_unary(tok_base: i32, sb: i32) -> i32 {
                             // of a 4-byte slot — silent miscompile.
                             let f_struct_idx = struct_tab_field_struct_idx(sb, lhs_struct_idx, f_idx);
                             if f_struct_idx >= 0 {
-                                if f_struct_idx < 200 {
+                                // Stage 28.11 INC-3a cycle-5: gp_marker_is
+                                // centralizes the 200-boundary check so a
+                                // future struct_tab cap bump (INC-3b) only
+                                // needs to update `gp_marker_base()` in one
+                                // place instead of grepping `< 200` literals.
+                                if gp_marker_is(f_struct_idx) == 0 {
                                     // Nested struct field: emit AST_TUPLE_FIELD
                                     // with p3 == 1 to mark an 8-byte (REX.W)
                                     // read of the child pointer, and propagate
@@ -6199,9 +6230,12 @@ fn parse_struct_decl(tok_base: i32, sb: i32) -> i32 {
             // INC-3b will read the 200+ encoding at use-sites
             // (parse_primary's struct-lit detection) to drive
             // monomorphization.
+            // Stage 28.11 INC-3a cycle-5: gp_marker_encode helper
+            // centralizes the `200 + gp_idx` boundary so INC-3b's
+            // use-site reader composes against the same primitive.
             let gp_idx = gp_tab_lookup(sb, t_s, t_l);
             let f_struct_idx = if gp_idx >= 0 {
-                200 + gp_idx
+                gp_marker_encode(gp_idx)
             } else {
                 struct_tab_lookup_idx(sb, t_s, t_l)
             };
