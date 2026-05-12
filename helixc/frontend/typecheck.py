@@ -372,11 +372,22 @@ class FunctionSig:
 
 # ============================================================================
 # Type checker
-# Stage 28.9 cycle 93 audit-T F1: literal-suffix domain sets for the
-# IntLit/FloatLit kind-coherence checks in `_check_expr`. Float-domain
-# suffix on IntLit (or vice versa) is a silent cross-domain miscompile
-# pre-fix.
-_FLOAT_PRIM_NAMES = frozenset({"f16", "bf16", "f32", "f64"})
+# Stage 28.9 cycle 93 audit-T F1 (extended cycle 95 F1): literal-suffix
+# domain sets for the IntLit/FloatLit kind-coherence checks in
+# `_check_expr`. Float-domain suffix on IntLit (or vice versa) is a
+# silent cross-domain miscompile pre-fix.
+#
+# Cycle 95 expanded `_FLOAT_PRIM_NAMES` to include the quantized-float
+# suffixes the lexer accepts (`fp8`, `mxfp4`, `nvfp4`) and the
+# unclassified-low-precision `ternary` suffix. Cycle 94 audits found
+# the cycle-93 set was incomplete vs lexer at lines 338-341 — `42_fp8`
+# bypassed the kind-coherence check and reproduced the original
+# defect (raw int bits in float slot). The sets here must be kept in
+# sync with the lexer suffix whitelist.
+_FLOAT_PRIM_NAMES = frozenset({
+    "f16", "bf16", "f32", "f64",
+    "fp8", "mxfp4", "nvfp4", "ternary",
+})
 _INT_PRIM_NAMES = frozenset({
     "i8", "u8", "i16", "u16", "i32", "u32", "i64", "u64",
     "isize", "usize",

@@ -362,18 +362,16 @@ class Parser:
         if t.kind != T.INT:
             raise ParseError("expected integer in autotune list", t)
         self.i += 1
-        # Token's value is a string; strip type-suffix (e.g. "16_i32")
-        s = t.value.split("_")[0]
-        try:
-            if s.startswith("0x"):
-                return int(s, 16)
-            if s.startswith("0o"):
-                return int(s, 8)
-            if s.startswith("0b"):
-                return int(s, 2)
-            return int(s)
-        except ValueError:
+        # Stage 28.9 cycle 95 audit-R F2 fix (HIGH conf 90): pre-fix
+        # used `t.value.split("_")[0]` to strip the type-suffix, but
+        # `_` is ALSO the digit-separator character. So `1_000_000`
+        # was split to `["1", "000", "000"]` and only `"1"` survived,
+        # silently truncating `@autotune(block: [1_000_000])` to
+        # `[1]`. The lexer already computed `t.int_value` with full
+        # precision (line 354); use that directly.
+        if t.int_value is None:
             raise ParseError(f"bad integer literal {t.value!r}", t)
+        return t.int_value
 
     def _parse_string_attr_arg(self) -> "str | None":
         """Parse a single string literal in `(msg)` form for

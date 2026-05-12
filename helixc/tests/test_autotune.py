@@ -285,5 +285,41 @@ fn k(a: i32) -> i32 { a }
     assert params == {"B": [16, 32]}
 
 
+def test_c94_f2_autotune_int_digit_separators_preserved():
+    """Stage 28.9 cycle 95 audit-R F2 regression (HIGH conf 90):
+    `_parse_autotune_int` pre-fix used `t.value.split('_')[0]` to
+    strip the type-suffix. But `_` is ALSO the digit-separator
+    character, so `1_000_000` got split to `['1', '000', '000']`
+    and only `'1'` survived — silently truncating
+    `@autotune(BLOCK: [1_000_000])` to `[1]`. Now uses the lexer's
+    pre-computed `t.int_value` which honours separators correctly."""
+    src = """
+@autotune(BLOCK: [1_000_000, 2_000, 16])
+fn k(a: i32) -> i32 { a }
+"""
+    prog = parse(src)
+    fn = next(it for it in prog.items if isinstance(it, A.FnDecl))
+    params, _diags = parse_autotune_attrs(fn)
+    assert params == {"BLOCK": [1_000_000, 2_000, 16]}, (
+        f"expected digit-separator-preserving parse to give "
+        f"[1000000, 2000, 16]; got {params}"
+    )
+
+
+def test_c94_f2_autotune_int_suffix_still_stripped():
+    """C94-F2 regression: ensure typed literals still work — the
+    int_value path strips the suffix correctly."""
+    src = """
+@autotune(BLOCK: [16_i32, 32_i32])
+fn k(a: i32) -> i32 { a }
+"""
+    prog = parse(src)
+    fn = next(it for it in prog.items if isinstance(it, A.FnDecl))
+    params, _diags = parse_autotune_attrs(fn)
+    assert params == {"BLOCK": [16, 32]}, (
+        f"expected typed-literal parse to give [16, 32]; got {params}"
+    )
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-v"]))
