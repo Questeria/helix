@@ -4739,8 +4739,22 @@ def test_bootstrap_kovc_self_host_loop():
     # 2026-05-10 audit cycle 1 follow-up: pytest.skip ensures heavy gate
     # treats this as SKIPPED, not FAIL. _SkipTest was only ever caught by
     # this file's manual __main__ runner, never by pytest.
+    # Stage 29 status (2026-05-12, post Stage 28.11 + 28.13.1):
+    # Attempted unskip — result: K1 (Python-compiled bootstrap) runs
+    # successfully and produces K2 binary, but K2 crashes with SIGILL
+    # (exit 132) when run. This means the bootstrap PARSES + LEXES +
+    # GENERATES code for its own source, but the generated x86 has
+    # at least one bug causing illegal-instruction at runtime.
+    #
+    # Investigating Stage 29 requires: (a) run K2 under gdb/strace to
+    # localize the failing instruction, (b) bisect bootstrap features
+    # to identify the bad codegen, (c) fix the codegen, (d) re-verify
+    # K2 → K3 → exit 42 chain, (e) verify K2 byte-identical to K1.
+    #
+    # Substantial multi-cycle effort. Re-skipping until Stage 29 work
+    # is dedicated to closing this gap.
     import pytest as _pytest
-    _pytest.skip("Stage 29 work item: self-host loop closure")
+    _pytest.skip("Stage 29 work item: K2 SIGILL — generated x86 has a bug")
     """Full self-host: P0 (kovc-by-Python) compiles the entire
     bootstrap source (lexer.hx + parser.hx + kovc.hx + driver_main)
     into binary K1. K1 reads the SAME bootstrap source from disk
