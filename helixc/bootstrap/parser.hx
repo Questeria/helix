@@ -6072,23 +6072,105 @@ fn parse_pattern(tok_base: i32, sb: i32) -> i32 {
     } else {
         // Build OR alt-chain. Each alt is wrapped in a TUPLE_CONS
         // (tag 51) cell: p1 = alt_idx, p2 = next_cell, p3 = unused.
-        let head = mk_node(51, first, 0, 0);
-        let mut tail: i32 = head;
-        let mut count: i32 = 1;
-        let mut keep: i32 = 1;
-        while keep == 1 {
-            let nk2 = cur_get(sb);
-            if tok_tag(tok_base, nk2) == 28 {
-                cur_advance(sb);                       // consume `|`
-                let alt = parse_pattern_atom(tok_base, sb);
-                let new_cell = mk_node(51, alt, 0, 0);
-                __arena_set(tail + 2, new_cell);
-                tail = new_cell;
-                count = count + 1;
-            } else { keep = 0; };
+        // Stage 28.10 cycle-78 CN-2 fix (HIGH conf 93): reject
+        // PAT_BIND alts at parse-time. Pre-fix the comment claimed
+        // "no binders in OR alts" but nothing enforced it; an alt
+        // containing PAT_BIND (tag 65) would `bind_push` at codegen
+        // without a matching `bind_pop`, leaking the bind-state
+        // stack and resolving the bound name in later arms to
+        // garbage. Mirror Python `_collect_binds` PatOr semantics.
+        // Also: cap alts at 15 (CN-3 fix) since fail_jmp_state cap
+        // is 16; 16 alts would emit 15 success-jmp disps (fine) +
+        // the last alt's fail-disps (also fine), but 17+ alts
+        // overflow silently. Emit AST_ERR with trap-id 62009 if
+        // alt count exceeds 15.
+        if pattern_contains_bind(first) == 1 {
+            // first atom already has a bind — surface trap eagerly.
+            cur_advance(sb);                           // consume `|`
+            mk_node(99, 62008, 0, 0)
+        } else {
+            let head = mk_node(51, first, 0, 0);
+            let mut tail: i32 = head;
+            let mut count: i32 = 1;
+            let mut keep: i32 = 1;
+            let mut bind_violation: i32 = 0;
+            let mut nested_violation: i32 = 0;
+            while keep == 1 {
+                let nk2 = cur_get(sb);
+                if tok_tag(tok_base, nk2) == 28 {
+                    cur_advance(sb);                   // consume `|`
+                    let alt = parse_pattern_atom(tok_base, sb);
+                    // CN-2: reject binds in alts.
+                    if pattern_contains_bind(alt) == 1 {
+                        bind_violation = 1;
+                    };
+                    // CN-1: reject nested OR (parse_pattern_atom
+                    // doesn't call parse_pattern, so alts can't
+                    // themselves be OR; but sub-patterns inside a
+                    // variant/tuple could be — defensive check).
+                    if __arena_get(alt) == 68 {
+                        nested_violation = 1;
+                    };
+                    let new_cell = mk_node(51, alt, 0, 0);
+                    __arena_set(tail + 2, new_cell);
+                    tail = new_cell;
+                    count = count + 1;
+                } else { keep = 0; };
+            }
+            // Decide final node based on collected violations + count.
+            if bind_violation == 1 {
+                mk_node(99, 62008, 0, 0)                // PAT_BIND in OR
+            } else { if nested_violation == 1 {
+                mk_node(99, 62010, 0, 0)                // nested OR
+            } else { if count > 15 {
+                mk_node(99, 62009, 0, 0)                // alt-cap overflow
+            } else {
+                mk_node(68, head, count, 0)             // valid PAT_OR
+            }}}
         }
-        mk_node(68, head, count, 0)
     }
+}
+
+// Stage 28.10 cycle-78 CN-2 helper: does the pattern (or any of its
+// sub-patterns inside a variant/tuple) contain a PAT_BIND? Used by
+// parse_pattern to reject `Some(x) | Other(x)`-style sources because
+// bootstrap codegen doesn't yet support OR-bind intersection (Python
+// match_lower.py::_collect_binds handles this; deferred from Phase-0).
+fn pattern_contains_bind(pat_idx: i32) -> i32 {
+    if pat_idx == 0 { return 0; };
+    let pt = __arena_get(pat_idx);
+    if pt == 65 { return 1; };                           // PAT_BIND
+    if pt == 69 {
+        // PAT_VARIANT — walk sub_pats (p2 is head of TUPLE_CONS chain).
+        let mut cur = __arena_get(pat_idx + 2);
+        while cur != 0 {
+            let sub = __arena_get(cur + 1);
+            if pattern_contains_bind(sub) == 1 { return 1; };
+            cur = __arena_get(cur + 2);
+        }
+        return 0;
+    };
+    if pt == 70 {
+        // PAT_TUPLE — same chain shape as PAT_VARIANT.
+        let mut cur2 = __arena_get(pat_idx + 2);
+        while cur2 != 0 {
+            let sub2 = __arena_get(cur2 + 1);
+            if pattern_contains_bind(sub2) == 1 { return 1; };
+            cur2 = __arena_get(cur2 + 2);
+        }
+        return 0;
+    };
+    if pt == 68 {
+        // Nested OR — also check its alts.
+        let mut cur3 = __arena_get(pat_idx + 1);
+        while cur3 != 0 {
+            let alt = __arena_get(cur3 + 1);
+            if pattern_contains_bind(alt) == 1 { return 1; };
+            cur3 = __arena_get(cur3 + 2);
+        }
+        return 0;
+    };
+    0
 }
 
 // Stage 7: parse a single pattern atom (no `|` allowed at this layer —

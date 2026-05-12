@@ -4402,9 +4402,17 @@ fn count_pattern_binds(pat_idx: i32) -> i32 {
             cur = __arena_get(cur + 2);
         }
         total
+    } else { if pt == 68 {
+        // Stage 28.10 cycle-78 CN-2 follow-up: PAT_OR alts may not
+        // contain PAT_BIND (parser enforces via trap 62008 at
+        // parse_pattern). Defensive return 0 — if a future cycle
+        // lifts the parse-time restriction (e.g. by implementing
+        // Python's `_collect_binds` intersection), this branch
+        // must compute the intersection-count, not just 0.
+        0
     } else {
         0
-    }}}
+    }}}}
 }
 
 // Stage 7: match_state region — packs fail_state + end_table into one
