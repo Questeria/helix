@@ -2021,12 +2021,16 @@ fn parse_closure_lit(tok_base: i32, sb: i32) -> i32 {
             };
             ki = ki + 1;
         }
+        // Stage 29 fix (2026-05-12): bootstrap parser doesn't support
+        // `return` keyword. Rewrote early-return as if/else expression
+        // so the bootstrap parser can self-host. Helix is expression-
+        // based; `return EXPR;` ≡ tail-expr-of-if-block.
         if nonint_capture == 1 {
             // Loud failure: AST_ERR(76003) propagates to codegen which
             // emits a hard trap when the closure is invoked. The full
             // type-preserving capture is a follow-on cycle.
-            return mk_node(99, 76003, 0, 0);
-        }
+            mk_node(99, 76003, 0, 0)
+        } else {
         let mut pi: i32 = 0;
         while pi < p_count {
             let pp = p_base + pi * 2;
@@ -2076,6 +2080,7 @@ fn parse_closure_lit(tok_base: i32, sb: i32) -> i32 {
         // Return a placeholder AST_INT(0). The closure's runtime value is
         // unused — only the binding name matters at the call site.
         mk_node(0, 0, 0, 0)
+        }      // Stage 29 fix: closes the `else` branch of nonint_capture
     }
 }
 
@@ -3282,14 +3287,18 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
                     if post_loop_t == 17 {
                         cur_advance(sb);                   // consume `>`
                     };
-                    if ta_bad_token == 1 {
-                        return mk_node(99, 62033, 0, 0);
+                    // Stage 29 fix (2026-05-12): rewrote 3 early returns as
+                    // sentinel pattern (early_err set on guard failure;
+                    // checked at end) so bootstrap parser (which doesn't
+                    // support `return` keyword) can self-host. Inner code
+                    // unchanged; sentinel checked at final expression.
+                    let mut early_err: i32 = 0 - 1;
+                    if ta_bad_token == 1 { early_err = mk_node(99, 62033, 0, 0); };
+                    if early_err == (0 - 1) {
+                        if post_loop_t != 17 { early_err = mk_node(99, 62033, 0, 0); };
                     };
-                    if post_loop_t != 17 {
-                        return mk_node(99, 62033, 0, 0);   // bad terminator
-                    };
-                    if ta_count != gp_count_pre {
-                        return mk_node(99, 62032, 0, 0);   // arity mismatch
+                    if early_err == (0 - 1) {
+                        if ta_count != gp_count_pre { early_err = mk_node(99, 62032, 0, 0); };
                     };
                     // Build mangled name `OrigName__TY1_TY2` in arena.
                     let mang_s = mangle_name_into_arena(id_start, id_len, ta_arr_base, ta_count);
@@ -6968,41 +6977,52 @@ fn drain_or_alts(tok_base: i32, sb: i32) -> i32 {
 // parse_pattern to reject `Some(x) | Other(x)`-style sources because
 // bootstrap codegen doesn't yet support OR-bind intersection (Python
 // match_lower.py::_collect_binds handles this; deferred from Phase-0).
+// Stage 29 fix (2026-05-12): rewrote 6 early returns as accumulator
+// pattern (found flag + while loop) so bootstrap parser (which doesn't
+// support `return` keyword) can self-host.
 fn pattern_contains_bind(pat_idx: i32) -> i32 {
-    if pat_idx == 0 { return 0; };
-    let pt = __arena_get(pat_idx);
-    if pt == 65 { return 1; };                           // PAT_BIND
-    if pt == 69 {
-        // PAT_VARIANT — walk sub_pats (p2 is head of TUPLE_CONS chain).
-        let mut cur = __arena_get(pat_idx + 2);
-        while cur != 0 {
-            let sub = __arena_get(cur + 1);
-            if pattern_contains_bind(sub) == 1 { return 1; };
-            cur = __arena_get(cur + 2);
-        }
-        return 0;
-    };
-    if pt == 70 {
-        // PAT_TUPLE — same chain shape as PAT_VARIANT.
-        let mut cur2 = __arena_get(pat_idx + 2);
-        while cur2 != 0 {
-            let sub2 = __arena_get(cur2 + 1);
-            if pattern_contains_bind(sub2) == 1 { return 1; };
-            cur2 = __arena_get(cur2 + 2);
-        }
-        return 0;
-    };
-    if pt == 68 {
-        // Nested OR — also check its alts.
-        let mut cur3 = __arena_get(pat_idx + 1);
-        while cur3 != 0 {
-            let alt = __arena_get(cur3 + 1);
-            if pattern_contains_bind(alt) == 1 { return 1; };
-            cur3 = __arena_get(cur3 + 2);
-        }
-        return 0;
-    };
-    0
+    if pat_idx == 0 { 0 }
+    else {
+        let pt = __arena_get(pat_idx);
+        if pt == 65 { 1 }                                // PAT_BIND
+        else { if pt == 69 {
+            // PAT_VARIANT — walk sub_pats (p2 is head of TUPLE_CONS chain).
+            let mut cur = __arena_get(pat_idx + 2);
+            let mut found = 0;
+            while cur != 0 {
+                if found == 0 {
+                    let sub = __arena_get(cur + 1);
+                    if pattern_contains_bind(sub) == 1 { found = 1; };
+                };
+                cur = __arena_get(cur + 2);
+            }
+            found
+        } else { if pt == 70 {
+            // PAT_TUPLE — same chain shape as PAT_VARIANT.
+            let mut cur2 = __arena_get(pat_idx + 2);
+            let mut found2 = 0;
+            while cur2 != 0 {
+                if found2 == 0 {
+                    let sub2 = __arena_get(cur2 + 1);
+                    if pattern_contains_bind(sub2) == 1 { found2 = 1; };
+                };
+                cur2 = __arena_get(cur2 + 2);
+            }
+            found2
+        } else { if pt == 68 {
+            // Nested OR — also check its alts.
+            let mut cur3 = __arena_get(pat_idx + 1);
+            let mut found3 = 0;
+            while cur3 != 0 {
+                if found3 == 0 {
+                    let alt = __arena_get(cur3 + 1);
+                    if pattern_contains_bind(alt) == 1 { found3 = 1; };
+                };
+                cur3 = __arena_get(cur3 + 2);
+            }
+            found3
+        } else { 0 } } } }
+    }
 }
 
 // Stage 28.10 cycle-79 CN-1 deep-fix helper: does the pattern (or any
@@ -7016,29 +7036,37 @@ fn pattern_contains_bind(pat_idx: i32) -> i32 {
 // Cycle-79 fix: replace the shallow tag check with this recursive
 // walker, mirroring pattern_contains_bind's shape across PAT_VARIANT
 // (69), PAT_TUPLE (70), and PAT_OR (68) sub-chains.
+// Stage 29 fix (2026-05-12): rewrote 5 early returns as accumulator
+// pattern so bootstrap parser can self-host.
 fn pattern_contains_or(pat_idx: i32) -> i32 {
-    if pat_idx == 0 { return 0; };
-    let pt = __arena_get(pat_idx);
-    if pt == 68 { return 1; };                           // PAT_OR
-    if pt == 69 {
-        let mut cur = __arena_get(pat_idx + 2);
-        while cur != 0 {
-            let sub = __arena_get(cur + 1);
-            if pattern_contains_or(sub) == 1 { return 1; };
-            cur = __arena_get(cur + 2);
-        }
-        return 0;
-    };
-    if pt == 70 {
-        let mut cur2 = __arena_get(pat_idx + 2);
-        while cur2 != 0 {
-            let sub2 = __arena_get(cur2 + 1);
-            if pattern_contains_or(sub2) == 1 { return 1; };
-            cur2 = __arena_get(cur2 + 2);
-        }
-        return 0;
-    };
-    0
+    if pat_idx == 0 { 0 }
+    else {
+        let pt = __arena_get(pat_idx);
+        if pt == 68 { 1 }                                // PAT_OR
+        else { if pt == 69 {
+            let mut cur = __arena_get(pat_idx + 2);
+            let mut found = 0;
+            while cur != 0 {
+                if found == 0 {
+                    let sub = __arena_get(cur + 1);
+                    if pattern_contains_or(sub) == 1 { found = 1; };
+                };
+                cur = __arena_get(cur + 2);
+            }
+            found
+        } else { if pt == 70 {
+            let mut cur2 = __arena_get(pat_idx + 2);
+            let mut found2 = 0;
+            while cur2 != 0 {
+                if found2 == 0 {
+                    let sub2 = __arena_get(cur2 + 1);
+                    if pattern_contains_or(sub2) == 1 { found2 = 1; };
+                };
+                cur2 = __arena_get(cur2 + 2);
+            }
+            found2
+        } else { 0 } } }
+    }
 }
 
 // Stage 7: parse a single pattern atom (no `|` allowed at this layer —
