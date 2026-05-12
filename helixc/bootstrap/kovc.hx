@@ -4206,6 +4206,76 @@ fn emit_pat_lit(scrut_off: i32, lit: i32, fail_state: i32) -> i32 {
     n_load + n_cmp + 6
 }
 
+// Stage 28.10 INCREMENT 3: emit_pat_or — codegen for PAT_OR (tag 68).
+// Mirrors helixc/frontend/match_lower.py::_or_chain semantics: each
+// alt is tested in sequence; on first match jump to the body; on last
+// alt's mismatch jump to the actual fail_state.
+//
+// pat_idx slots: p1 = head_alt cell (AST_TUPLE_CONS chain, tag 51),
+//                p2 = count (informational), p3 = unused.
+// Each cell: p1 = alt_pat_idx, p2 = next_cell (0 = end).
+//
+// Slot allocation in bn_state:
+//   bn_state + 123 (17 slots) = success_state — collects jmp disp slots
+//                                 from "this alt matched, skip rest" jmps
+//   bn_state + 140 (17 slots) = alt_fail_state — collects the current
+//                                 alt's fail jne disp slots; patched to
+//                                 next-alt label between alts.
+//
+// Phase-0 limitation: PAT_OR alts may not bind variables (no PAT_BIND
+// inside OR alts), because each alt's bind_state would be different.
+// Common Phase-0 use: scalar literal alternation like `1 | 2 | 3 =>
+// body`. Nested OR (e.g. `Some(1 | 2)`) is parsed correctly but the
+// inner OR's bind-state is constrained to no-binders.
+//
+// Slot 123 + 140 are read past the bn_state init-loop cap of 118 but
+// within the binary's arena buffer (statically sized at 32K i32
+// slots). The BSS-zero-fill ensures fresh state on first access.
+fn emit_pat_or(pat_idx: i32, scrut_off: i32, fail_state: i32,
+               bind_state: i32, bn_state: i32) -> i32 {
+    let head = __arena_get(pat_idx + 1);
+    let success_state = bn_state + 123;
+    let alt_fail_state = bn_state + 140;
+    fail_jmp_state_reset(success_state);
+    let mut total: i32 = 0;
+    let mut cur: i32 = head;
+    while cur != 0 {
+        let alt_idx = __arena_get(cur + 1);
+        let next = __arena_get(cur + 2);
+        let is_last = if next == 0 { 1 } else { 0 };
+        if is_last == 1 {
+            // Last alt: use the real fail_state. Mismatch jumps to
+            // actual fail target (next match arm). On match, fall
+            // through to body via success_state patching below.
+            let n_test = emit_pattern_test(alt_idx, scrut_off, fail_state, bind_state, bn_state);
+            total = total + n_test;
+        } else {
+            // Non-last alt: use temp alt_fail_state. On mismatch,
+            // patch to next-alt label so we try the next one.
+            fail_jmp_state_reset(alt_fail_state);
+            let n_test = emit_pattern_test(alt_idx, scrut_off, alt_fail_state, bind_state, bn_state);
+            // On match: emit unconditional jmp to "after-OR" label
+            // (collected via success_state, patched once all alts emit).
+            let jmp_disp = emit_jmp_rel32_placeholder();
+            fail_jmp_state_add(success_state, jmp_disp);
+            // Patch alt_fail_state's jne disps to "right here" (the
+            // next-alt code that will be emitted on the next loop
+            // iteration). __arena_len() returns the current code
+            // emission offset; that's where the next alt's test will
+            // start.
+            let next_alt_label = __arena_len();
+            fail_jmp_state_patch_all(alt_fail_state, next_alt_label);
+            total = total + n_test + 5;
+        };
+        cur = next;
+    }
+    // Patch all success-state jumps to fall through here (after all
+    // alts). Body emission resumes from this offset.
+    let after_or = __arena_len();
+    fail_jmp_state_patch_all(success_state, after_or);
+    total
+}
+
 // Stage 7 PAT_RANGE helper (exclusive: lo <= x < hi).
 fn emit_pat_range(scrut_off: i32, lo: i32, hi: i32, fail_state: i32) -> i32 {
     let n_load = emit_mov_eax_local(scrut_off);
@@ -4295,14 +4365,9 @@ fn emit_pattern_test(pat_idx: i32, scrut_off: i32, fail_state: i32,
         let pp1 = __arena_get(pat_idx + 1);
         emit_trap_with_id(pp1)
     } else { if pt == 68 {
-        // Stage 28.10 INCREMENT 2: PAT_OR (or-pattern `a | b | c`)
-        // codegen stub. Parser emits this when it sees `|` between
-        // pattern atoms. Real codegen (INCREMENT 3) will emit
-        // per-alt tests + success-jmp / next-alt-jmp threading.
-        // For now: trap with id 62007 so a SIGILL surfaces with
-        // the trap-id in eax if any source uses `|`-patterns.
-        // Test programs without `|`-patterns are unaffected.
-        emit_trap_with_id(62007)
+        // Stage 28.10 INCREMENT 3: PAT_OR codegen lands here. See
+        // emit_pat_or above for the alt-threading strategy.
+        emit_pat_or(pat_idx, scrut_off, fail_state, bind_state, bn_state)
     } else { if pt >= 69 {
         emit_compound_pattern_test(pat_idx, scrut_off, fail_state, bind_state, bn_state)
     } else {
