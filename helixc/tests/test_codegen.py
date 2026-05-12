@@ -2668,6 +2668,34 @@ fn main() -> i32 {
         "let l = Line { Pt { 1, 2 }, Pt { 3, 39 } }; "
         "l.to.y }"
     ) == 39, "Stage 5 Iter D: nested struct second-field access (l.to.y)"
+    # Stage 28.11 INCREMENT 1: bootstrap parser accepts the optional
+    # `<T1, T2, ...>` generic-params clause between a struct name and
+    # its `{` body. INCREMENT 1 is a pure-parser slice: the generic
+    # tokens are parsed-and-discarded so the struct compiles identically
+    # to its non-generic equivalent. INCREMENT 2 will populate gp_tab +
+    # encode T-typed fields as `200 + gp_idx`; INCREMENT 3 will rewrite
+    # uses to mangled mono'd struct names.
+    #
+    # Probes pin the INCREMENT 1 contract: single param, two params,
+    # three params, and the degenerate `<>` empty list all parse, and
+    # fields concretely-typed i32 produce identical codegen to the
+    # non-generic surface above (returns 42 in every case).
+    assert compile_and_exec(
+        "struct Pt<T> { x: i32, y: i32 } "
+        "fn main() -> i32 { let p = Pt { 10, 32 }; p.x + p.y }"
+    ) == 42, "Stage 28.11 INCREMENT 1: <T> single generic-param parses"
+    assert compile_and_exec(
+        "struct Pair<A, B> { a: i32, b: i32 } "
+        "fn main() -> i32 { let p = Pair { 30, 12 }; p.a + p.b }"
+    ) == 42, "Stage 28.11 INCREMENT 1: <A, B> two-param decl parses"
+    assert compile_and_exec(
+        "struct Triple<X, Y, Z> { a: i32, b: i32, c: i32 } "
+        "fn main() -> i32 { let t = Triple { 10, 20, 12 }; t.a + t.b + t.c }"
+    ) == 42, "Stage 28.11 INCREMENT 1: <X, Y, Z> three-param decl parses"
+    assert compile_and_exec(
+        "struct Empty<> { x: i32 } "
+        "fn main() -> i32 { let e = Empty { 42 }; e.x }"
+    ) == 42, "Stage 28.11 INCREMENT 1: <> empty generic-param list parses"
     # Stage 6A: enum decl is parsed and registered, codegen treats it as
     # a 0-byte no-op (folded into AST_STRUCT_DECL tag 54). The program
     # below should compile and return 0 with no surprises.

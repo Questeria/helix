@@ -6004,6 +6004,40 @@ fn parse_struct_decl(tok_base: i32, sb: i32) -> i32 {
     let name_s = tok_p2(tok_base, nk);
     let name_l = tok_p3(tok_base, nk);
     cur_advance(sb);                         // consume name IDENT
+    // Stage 28.11 INCREMENT 1: accept optional `<T1, T2, ...>`
+    // generic-params clause between the struct name and `{`. The
+    // syntax is parsed-and-discarded in this increment so existing
+    // tests stay green. Subsequent increments (port of struct_mono.py):
+    //   * INCREMENT 2 — populate gp_tab during field parsing so a
+    //     field typed `T` encodes as 200 + gp_idx (mirroring the
+    //     Stage-8 fn-param mechanism); accumulate concrete uses
+    //     (`Pt<i32>`) at use sites into a struct_mr_tab.
+    //   * INCREMENT 3 — synthesize monomorphized struct_tab entries
+    //     with mangled names (`Pt__i32`) so codegen sees concrete
+    //     i32-typed fields.
+    // Mirrors `helixc/frontend/struct_mono.py::collect_generic_structs`
+    // and the Stage-8 fn-generic parsing scaffold (parser.hx ~5219).
+    // Phase-0 parses (count) and discards — no slot in struct_tab yet.
+    let g_peek = tok_tag(tok_base, cur_get(sb));
+    if g_peek == 16 {                        // TK_LT = `<`
+        cur_advance(sb);                     // consume '<'
+        let mut keep_g: i32 = 1;
+        while keep_g == 1 {
+            let gtt = tok_tag(tok_base, cur_get(sb));
+            if gtt == 17 {                   // TK_GT = `>` end
+                keep_g = 0;
+            } else { if gtt == 13 {          // COMMA
+                cur_advance(sb);
+            } else { if gtt == 0 {           // EOF safety
+                keep_g = 0;
+            } else {
+                // Discard generic-param IDENT. INCREMENT 2 will
+                // capture (name_s, name_l) into gp_tab here.
+                cur_advance(sb);
+            }}};
+        }
+        cur_advance(sb);                     // consume '>'
+    };
     cur_advance(sb);                         // consume '{' (LBRACE = 5)
     let mut field_count: i32 = 0;
     let mut fields_ptr: i32 = 0;             // 0 if no fields
