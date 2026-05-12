@@ -605,5 +605,38 @@ fn build() -> Bar { Bar { y: 7 } }
     )
 
 
+def test_c73_cn1_totality_no_double_descent():
+    """Cycle 73 type-design CN-1 (HIGH conf 90): pre-fix
+    `_SelfCallCollector.visit_Call` explicitly called
+    `self.generic_visit(node)` AND returned None, causing
+    ASTVisitor.visit's base-class generic_visit to run a SECOND time.
+    Nested self-calls inside args expressions got duplicated in
+    `self.calls`, inflating the `len(recursive_calls)` count in the
+    diagnostic.
+
+    Cycle-74 fix: remove the explicit generic_visit; rely on
+    ASTVisitor base-class auto-descent. Verify by counting calls
+    discovered for a recursive fn whose body has a nested self-call:
+    `fn rec(n) { rec(rec(n - 1)) }` — should find exactly 2 self-
+    calls, not 4 or 6.
+    """
+    from helixc.frontend.totality import _SelfCallCollector
+    src = """
+fn rec(n: i32) -> i32 { rec(rec(n - 1)) }
+"""
+    prog = parse(src)
+    fn = next(it for it in prog.items
+              if isinstance(it, A.FnDecl) and it.name == "rec")
+    collector = _SelfCallCollector("rec")
+    collector.visit(fn.body)
+    # Body is Block(stmts=[], final_expr=Call(rec, [Call(rec, [n-1])])).
+    # The outer Call AND the inner Call should each be counted once.
+    assert len(collector.calls) == 2, (
+        f"expected exactly 2 self-calls (outer + inner), got "
+        f"{len(collector.calls)} (pre-fix would have been 4+ from "
+        f"double-descent)"
+    )
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-v"]))

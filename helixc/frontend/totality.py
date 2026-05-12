@@ -65,8 +65,15 @@ class _SelfCallCollector(ASTVisitor):
         callee = node.callee
         if isinstance(callee, A.Name) and callee.name == self.fn_name:
             self.calls.append(node)
-        # Continue into the call's args + callee for nested self-calls.
-        self.generic_visit(node)
+        # Stage 28.9 cycle 73 type-design CN-1 fix (HIGH conf 90): do
+        # NOT call `self.generic_visit(node)` here. ASTVisitor.visit
+        # (ast_walker.py:191-196) auto-descends AFTER this override
+        # returns unless we return False. The pre-fix explicit call
+        # caused double-descent — nested self-calls inside arg
+        # expressions appeared twice in `self.calls`, inflating the
+        # `len(recursive_calls)` count in the totality diagnostic.
+        # Sister `panic_pass._PanicCollector.visit_Call` follows the
+        # same auto-descent pattern.
 
 
 def check_totality(prog: A.Program) -> list[tuple[str, str]]:
