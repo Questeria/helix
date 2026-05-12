@@ -4294,11 +4294,20 @@ fn emit_pattern_test(pat_idx: i32, scrut_off: i32, fail_state: i32,
     if pt == 99 {
         let pp1 = __arena_get(pat_idx + 1);
         emit_trap_with_id(pp1)
+    } else { if pt == 68 {
+        // Stage 28.10 INCREMENT 2: PAT_OR (or-pattern `a | b | c`)
+        // codegen stub. Parser emits this when it sees `|` between
+        // pattern atoms. Real codegen (INCREMENT 3) will emit
+        // per-alt tests + success-jmp / next-alt-jmp threading.
+        // For now: trap with id 62007 so a SIGILL surfaces with
+        // the trap-id in eax if any source uses `|`-patterns.
+        // Test programs without `|`-patterns are unaffected.
+        emit_trap_with_id(62007)
     } else { if pt >= 69 {
         emit_compound_pattern_test(pat_idx, scrut_off, fail_state, bind_state, bn_state)
     } else {
         emit_scalar_pattern_test(pat_idx, scrut_off, fail_state, bind_state)
-    }}
+    }}}
 }
 
 // Stage 7: count bind_push entries done by pattern. Mirror of

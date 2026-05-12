@@ -6048,7 +6048,52 @@ fn parse_struct_decl(tok_base: i32, sb: i32) -> i32 {
     mk_node(54, 0, 0, 0)
 }
 
-// Stage 7: parse a single pattern. Dispatches on the current token:
+// Stage 28.10 INCREMENT 1: top-level `parse_pattern` is a wrapper that
+// supports or-patterns `pat1 | pat2 | pat3`. Each atomic pattern is
+// parsed via `parse_pattern_atom` (the renamed prior parse_pattern body);
+// after the atom, we peek for TK_PIPE (28). If present, parse the
+// alternatives chained via mk_node(51, alt, next, 0) tuple-cons reuse
+// and emit PAT_OR (tag 68) with p1 = head_alt, p2 = count, p3 = 0.
+//
+// Recursion: parse_pattern's 6 internal call sites (variant/tuple
+// sub-pats + match-arm pat positions) all go through this wrapper, so
+// sub-patterns like `Some(1 | 2)` and `(1 | 2, 3)` are also supported.
+//
+// Mirrors `helixc/frontend/match_lower.py::_or_chain` which lowers
+// or-patterns to `||` chains of tests; bootstrap codegen will do the
+// same at the IR level (see emit_pat_or, Stage 28.10 INCREMENT 3).
+fn parse_pattern(tok_base: i32, sb: i32) -> i32 {
+    let first = parse_pattern_atom(tok_base, sb);
+    let nk = cur_get(sb);
+    let nt = tok_tag(tok_base, nk);
+    if nt != 28 {
+        // No `|` — return the atom unwrapped (common case).
+        first
+    } else {
+        // Build OR alt-chain. Each alt is wrapped in a TUPLE_CONS
+        // (tag 51) cell: p1 = alt_idx, p2 = next_cell, p3 = unused.
+        let head = mk_node(51, first, 0, 0);
+        let mut tail: i32 = head;
+        let mut count: i32 = 1;
+        let mut keep: i32 = 1;
+        while keep == 1 {
+            let nk2 = cur_get(sb);
+            if tok_tag(tok_base, nk2) == 28 {
+                cur_advance(sb);                       // consume `|`
+                let alt = parse_pattern_atom(tok_base, sb);
+                let new_cell = mk_node(51, alt, 0, 0);
+                __arena_set(tail + 2, new_cell);
+                tail = new_cell;
+                count = count + 1;
+            } else { keep = 0; };
+        }
+        mk_node(68, head, count, 0)
+    }
+}
+
+// Stage 7: parse a single pattern atom (no `|` allowed at this layer —
+// `|` is handled by the parse_pattern wrapper above). Dispatches on the
+// current token:
 //   INT          -> PAT_LIT (tag 64) p1 = value
 //                   if followed by `..` and another INT: PAT_RANGE (tag 67)
 //                   p1 = lo, p2 = hi (exclusive). For Phase-0 only INT lo/hi
@@ -6061,7 +6106,7 @@ fn parse_struct_decl(tok_base: i32, sb: i32) -> i32 {
 //
 // FLAT prefix-trap pattern: single ladder of let-rebinds, no nested
 // if-else statements. Returns the AST node index.
-fn parse_pattern(tok_base: i32, sb: i32) -> i32 {
+fn parse_pattern_atom(tok_base: i32, sb: i32) -> i32 {
     let k = cur_get(sb);
     let t = tok_tag(tok_base, k);
     if t == 1 {
