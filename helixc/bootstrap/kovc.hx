@@ -980,7 +980,12 @@ fn bind_init() -> i32 {
     __arena_push(0);                        // top = 0
     __arena_push(state + 3);                // table_base = state + 3
     let mut i: i32 = 0;
-    while i < 256 {                         // 64 entries * 4 slots
+    // Stage 29.1 fix (2026-05-12): bump cap from 64 to 512 entries.
+    // After the Stage 29 SIGILL fix exposed all fns to compilation,
+    // parser.hx's parse_primary (single-fn cap on bindings) needs
+    // far more than 64. Empirically the bootstrap source needs ~200
+    // bindings per fn at peak; 512 gives 2.5x headroom.
+    while i < 2048 {                        // 512 entries * 4 slots
         __arena_push(0);
         i = i + 1;
     }
@@ -1004,7 +1009,8 @@ fn bind_push(state: i32, name_start: i32, name_len: i32, offset: i32) -> i32 {
 fn bind_push_typed(state: i32, name_start: i32, name_len: i32,
                    offset: i32, ty: i32) -> i32 {
     let top = __arena_get(state + 1);
-    if top >= 64 {
+    // Stage 29.1 fix (2026-05-12): bumped cap from 64 to 512.
+    if top >= 512 {
         0 - 1
     } else {
         let table_base = __arena_get(state + 2);
@@ -1566,15 +1572,18 @@ fn fn_table_lookup(state: i32, name_start: i32, name_len: i32) -> i32 {
 }
 
 // patch_table: records pending CALL + LEA backpatches. Each entry:
-// [disp_slot, target_name_start, target_name_len]. Capacity 4096 —
-// kovc.hx self-compiling has ~1500 patch entries (1159 fn calls +
-// 339 inline-builtin LEAs across lexer + parser + kovc). 4096
-// gives 2.7x headroom.
+// [disp_slot, target_name_start, target_name_len]. Stage 29.1 fix
+// (2026-05-12): bumped cap from 4096 to 16384. Post-Stage-29 SIGILL
+// fix, the bootstrap parser now successfully parses ALL fns of its own
+// source — emit count jumped from ~1500 to ~6800 patches (4719 calls +
+// 2059 LEAs), overflowing the 4096 cap and dropping ~2700 patches
+// (LEA disps stayed 0 → K2 read from wrong arena base → empty K3).
+// 16384 gives 2.4x headroom over the new measured 6800.
 fn patch_table_init() -> i32 {
     let state = __arena_push(0);            // top = 0
     __arena_push(state + 2);                // table_base = state + 2
     let mut i: i32 = 0;
-    while i < 12288 {                       // 4096 entries * 3 slots
+    while i < 49152 {                       // 16384 entries * 3 slots
         __arena_push(0);
         i = i + 1;
     }
@@ -1583,10 +1592,10 @@ fn patch_table_init() -> i32 {
 
 fn patch_table_add(state: i32, disp_slot: i32, name_start: i32, name_len: i32) -> i32 {
     // Audit fix #10: cap-check before writing. patch_table_init
-    // allocates 4096 entries; without this guard, a source with > 4096
+    // allocates 16384 entries; without this guard, a source with > 16384
     // CALL+LEA patches would silently corrupt adjacent arena memory.
     let top = __arena_get(state);
-    if top >= 4096 {
+    if top >= 16384 {
         0 - 1
     } else {
         let table_base = __arena_get(state + 1);
