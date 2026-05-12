@@ -3292,6 +3292,8 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
                     // checked at end) so bootstrap parser (which doesn't
                     // support `return` keyword) can self-host. Inner code
                     // unchanged; sentinel checked at final expression.
+                    // KNOWN Stage 30 cycle-1 H1: sentinel set but not returned
+                    // — silent-failure regression. Fix queued for cycle-2.
                     let mut early_err: i32 = 0 - 1;
                     if ta_bad_token == 1 { early_err = mk_node(99, 62033, 0, 0); };
                     if early_err == (0 - 1) {
