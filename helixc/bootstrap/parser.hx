@@ -6084,10 +6084,18 @@ fn parse_pattern(tok_base: i32, sb: i32) -> i32 {
         // the last alt's fail-disps (also fine), but 17+ alts
         // overflow silently. Emit AST_ERR with trap-id 62009 if
         // alt count exceeds 15.
+        // Cycle 79 CN-1 deep-fix: check `first` AND each alt via the
+        // recursive `pattern_contains_or` walker — cycle-78's shallow
+        // tag check only caught top-level PAT_OR, missing the
+        // `Some(1 | 2) | None` case where OR hides inside a variant/
+        // tuple sub-pattern. The static-slot collision in emit_pat_or
+        // would otherwise miscompile.
         if pattern_contains_bind(first) == 1 {
-            // first atom already has a bind — surface trap eagerly.
             cur_advance(sb);                           // consume `|`
             mk_node(99, 62008, 0, 0)
+        } else { if pattern_contains_or(first) == 1 {
+            cur_advance(sb);                           // consume `|`
+            mk_node(99, 62010, 0, 0)
         } else {
             let head = mk_node(51, first, 0, 0);
             let mut tail: i32 = head;
@@ -6104,11 +6112,9 @@ fn parse_pattern(tok_base: i32, sb: i32) -> i32 {
                     if pattern_contains_bind(alt) == 1 {
                         bind_violation = 1;
                     };
-                    // CN-1: reject nested OR (parse_pattern_atom
-                    // doesn't call parse_pattern, so alts can't
-                    // themselves be OR; but sub-patterns inside a
-                    // variant/tuple could be — defensive check).
-                    if __arena_get(alt) == 68 {
+                    // CN-1 deep: reject ANY nested OR (top-level or
+                    // hidden inside a variant/tuple sub-pattern).
+                    if pattern_contains_or(alt) == 1 {
                         nested_violation = 1;
                     };
                     let new_cell = mk_node(51, alt, 0, 0);
@@ -6118,16 +6124,21 @@ fn parse_pattern(tok_base: i32, sb: i32) -> i32 {
                 } else { keep = 0; };
             }
             // Decide final node based on collected violations + count.
+            // Cycle 79 CN-3 off-by-one: fail_jmp_state cap is 16, and
+            // each non-last alt adds 1 success-jmp disp (count - 1
+            // total for N alts). N = 17 is the first failing case
+            // (16 success-jmp disps overflow on the 17th add). So
+            // the correct rejection bound is `count > 16`, not 15.
             if bind_violation == 1 {
                 mk_node(99, 62008, 0, 0)                // PAT_BIND in OR
             } else { if nested_violation == 1 {
                 mk_node(99, 62010, 0, 0)                // nested OR
-            } else { if count > 15 {
+            } else { if count > 16 {
                 mk_node(99, 62009, 0, 0)                // alt-cap overflow
             } else {
                 mk_node(68, head, count, 0)             // valid PAT_OR
             }}}
-        }
+        }}
     }
 }
 
@@ -6167,6 +6178,42 @@ fn pattern_contains_bind(pat_idx: i32) -> i32 {
             let alt = __arena_get(cur3 + 1);
             if pattern_contains_bind(alt) == 1 { return 1; };
             cur3 = __arena_get(cur3 + 2);
+        }
+        return 0;
+    };
+    0
+}
+
+// Stage 28.10 cycle-79 CN-1 deep-fix helper: does the pattern (or any
+// of its sub-patterns) contain a PAT_OR (tag 68)? The cycle-78 fix
+// only checked the alt's TOP-LEVEL tag, but `parse_pattern_atom` calls
+// `parse_pattern` on variant/tuple sub-patterns, so an OR can hide
+// inside `Some(1 | 2)`. The cycle-78 check therefore failed to detect
+// `Some(1 | 2) | None` — leaving the static-slot collision in
+// emit_pat_or (bn_state + 123 / + 140) reachable.
+//
+// Cycle-79 fix: replace the shallow tag check with this recursive
+// walker, mirroring pattern_contains_bind's shape across PAT_VARIANT
+// (69), PAT_TUPLE (70), and PAT_OR (68) sub-chains.
+fn pattern_contains_or(pat_idx: i32) -> i32 {
+    if pat_idx == 0 { return 0; };
+    let pt = __arena_get(pat_idx);
+    if pt == 68 { return 1; };                           // PAT_OR
+    if pt == 69 {
+        let mut cur = __arena_get(pat_idx + 2);
+        while cur != 0 {
+            let sub = __arena_get(cur + 1);
+            if pattern_contains_or(sub) == 1 { return 1; };
+            cur = __arena_get(cur + 2);
+        }
+        return 0;
+    };
+    if pt == 70 {
+        let mut cur2 = __arena_get(pat_idx + 2);
+        while cur2 != 0 {
+            let sub2 = __arena_get(cur2 + 1);
+            if pattern_contains_or(sub2) == 1 { return 1; };
+            cur2 = __arena_get(cur2 + 2);
         }
         return 0;
     };
