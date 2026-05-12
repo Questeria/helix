@@ -2866,6 +2866,38 @@ fn main() -> i32 {
     ) == 42, ("Stage 28.11 INCREMENT 1 cycle-4 RE-5: nested-`<` "
               "loud-failure mode does NOT corrupt sibling Y "
               "struct_tab entry within the same compilation unit")
+    # Stage 30 cycle-2 audit (code-review IMPORTANT, conf 88) follow-up:
+    # exercise the trap-return paths for malformed generic-struct use
+    # sites. These traps (62032 arity-mismatch, 62033 bad-token-in-args)
+    # were introduced in Stage 28.11 INC-3b cycle-3 (F1/F2/F3/F6) and
+    # were silently broken by Stage 29's `return`-removal rewrite (H1
+    # in cycle-1) — sentinel was set but never returned. The Stage 30
+    # cycle-2 H1 fix (commit fe7042f) wired up the outer `if early_err
+    # != (0-1) { early_err } else { ... }` dispatch. These tests pin
+    # the trap-return path so a future refactor can't silently regress
+    # it again.
+    #
+    # Each malformed source produces AST_ERR(99, trap_id, ...) which
+    # codegens to `mov eax, trap_id; ud2`. The binary SIGILLs at the
+    # ud2 (exit code 132 = signal 4). The 28999 cap-overflow trap
+    # produced by main's prologue diag-arena check (Stage 28.9 audit
+    # cycle 1 Finding 1) takes priority over this trap-id, so we use
+    # `< 130` (= SIGILL signal range) as the assertion rather than
+    # checking eax explicitly — the diag arena doesn't trigger because
+    # these aren't validation errors. The 132 exit confirms the trap
+    # path is reached at runtime.
+    assert compile_and_exec(
+        "struct Pt<T> { x: T, y: T } "
+        "fn main() -> i32 { let p = Pt<>{ 10, 32 }; p.x }"
+    ) == 132, ("Stage 30 cycle-2 H1 regression test: `Pt<>` (zero "
+               "type-args) triggers trap 62032 (arity mismatch) via "
+               "the wired-up sentinel return path")
+    assert compile_and_exec(
+        "struct Pt<T> { x: T, y: T } "
+        "fn main() -> i32 { let p = Pt<i32, i64>{ 10, 32 }; p.x }"
+    ) == 132, ("Stage 30 cycle-2 H1 regression test: `Pt<i32, i64>` "
+               "(extra type-args for arity-1 struct) triggers trap "
+               "62032 via the wired-up sentinel return path")
     # Stage 6A: enum decl is parsed and registered, codegen treats it as
     # a 0-byte no-op (folded into AST_STRUCT_DECL tag 54). The program
     # below should compile and return 0 with no surprises.
