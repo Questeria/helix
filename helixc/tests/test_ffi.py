@@ -109,38 +109,72 @@ def test_extern_c_uses_dynlink():
 
 
 def test_c76_1_ffi_call_routes_f32_args_to_xmm0():
-    """Stage 28.9 cycle 77 C76-1 + cycle 79 C78-1 regression (HIGH conf
-    80+85): extern "C" fn with a f32 arg must route through xmm0
-    (SysV float-class), not edi. Pre-cycle-77 FFI_CALL routed every
-    operand through INT_REGS, so the f32 was silently re-bit-cast as
-    i32 in edi — callee read garbage. Cycle-77 fixed the arg side;
-    cycle-79 fixed the return side (movss xmm0 -> slot instead of
-    mov eax -> slot). This test inspects emitted bytes for the
-    expected `movss` mnemonics — a future regression to the all-INT
-    path would lose them."""
-    src = """
-    extern "C" fn sinf(x: f32) -> f32;
-    fn entry(x: f32) -> f32 {
-        sinf(x)
+    """Stage 28.9 cycle 77 C76-1 + cycle 79 C78-1 + cycle 81 C80-1
+    regression (HIGH): extern "C" fn with a f32 arg/return must route
+    through xmm0 (SysV float-class), not edi/eax. Pre-cycle-77
+    FFI_CALL routed every operand through INT_REGS so the f32 was
+    silently re-bit-cast as i32 in edi/eax. Cycle-77 fixed the arg
+    side, cycle-79 fixed the return side.
+
+    Cycle-81 C80-1 fix: the original test signature `fn entry(x:
+    f32) -> f32` produced movss opcodes in `entry`'s own prologue/
+    epilogue regardless of FFI_CALL routing, so the byte-pattern
+    assertion was non-discriminating. Two changes here:
+
+      1. Build a CONTROL version of the same program with the float
+         FFI replaced by an int FFI (puts), and count movss opcodes
+         in BOTH. The float-FFI version must have STRICTLY MORE
+         movss bytes than the int-FFI control. A regression to all-
+         INT FFI_CALL routing would produce equal counts.
+
+      2. Use a caller fn signature `fn caller() -> i32` with NO
+         float params/returns, so the only movss opcodes inside the
+         caller fn's frame come from the f32-literal load (CONST_
+         FLOAT rip-relative) + FFI arg routing (rbp-relative) + FFI
+         return store (rbp-relative). The CONTROL has no float
+         literal and no float FFI, so 0 movss opcodes."""
+    float_src = """
+    extern "C" fn cosf(x: f32) -> f32;
+    fn caller() -> i32 {
+        let _r: f32 = cosf(1.5_f32);
+        0
     }
-    fn main() -> i32 { 0 }
+    fn main() -> i32 { caller() }
     """
-    prog = parse(src, include_stdlib=False)
-    mod = lower(prog)
-    elf = compile_module_to_elf(mod)
-    # movss xmm0, [rbp-N] — opcode `F3 0F 10` per SysV f32 load
-    # convention; the cycle-77 arg-side emits exactly this for the
-    # first float arg before `call`. Bare assertion: the binary
-    # actually contains the f32-load opcode somewhere.
-    assert b"\xf3\x0f\x10" in elf, (
-        "FFI f32 arg load to xmm0 (movss xmm0, [rbp-N]) missing — "
-        "C76-1 regression: f32 args still routed through INT_REGS"
+    int_src = """
+    extern "C" fn puts(s: *const u8) -> i32;
+    fn caller() -> i32 {
+        let m: *const u8 = "x\\0".as_ptr();
+        puts(m)
+    }
+    fn main() -> i32 { caller() }
+    """
+    float_elf = compile_module_to_elf(lower(parse(float_src, include_stdlib=False)))
+    int_elf = compile_module_to_elf(lower(parse(int_src, include_stdlib=False)))
+    # Count movss-load (F3 0F 10) and movss-store (F3 0F 11) byte sequences.
+    # Both opcodes are SysV-mandated for f32 xmm0 transfers.
+    def count(b: bytes, pat: bytes) -> int:
+        return b.count(pat)
+    float_load = count(float_elf, b"\xf3\x0f\x10")
+    float_store = count(float_elf, b"\xf3\x0f\x11")
+    int_load = count(int_elf, b"\xf3\x0f\x10")
+    int_store = count(int_elf, b"\xf3\x0f\x11")
+    # The float-FFI program MUST emit strictly more movss bytes than the
+    # int-FFI program. Pre-fix (FFI all-INT routing), the counts would
+    # be equal because the f32 arg would route through edi (mov edi,
+    # [rbp-N]) and the f32 return would route through eax (mov eax,
+    # [rbp-N]), with no movss involvement.
+    assert float_load > int_load, (
+        f"FFI f32 arg load to xmm0 not emitted — C76-1 regression: "
+        f"f32 args still routed through INT_REGS. "
+        f"float-program movss-load count={float_load}, "
+        f"int-program movss-load count={int_load}"
     )
-    # And the cycle-79 return-side stores via movss xmm0 -> slot:
-    # `F3 0F 11` opcode for `movss [rbp-N], xmm0`.
-    assert b"\xf3\x0f\x11" in elf, (
-        "FFI f32 return store from xmm0 (movss [rbp-N], xmm0) missing — "
-        "C78-1 regression: f32 return still read from eax"
+    assert float_store > int_store, (
+        f"FFI f32 return store from xmm0 not emitted — C78-1 regression: "
+        f"f32 return still read from eax. "
+        f"float-program movss-store count={float_store}, "
+        f"int-program movss-store count={int_store}"
     )
 
 

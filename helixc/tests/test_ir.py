@@ -168,7 +168,7 @@ def test_c76_f1_for_range_i64_increment_dtype_matches_iterator():
     fn loop_i64() -> i32 {
         let mut total: i64 = 0_i64;
         for _i in 0_i64 .. 5_i64 {
-            total += 1_i64;
+            total += 7_i64;
         }
         total as i32
     }
