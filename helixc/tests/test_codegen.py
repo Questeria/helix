@@ -8380,7 +8380,17 @@ def test_stdlib_vec_contains():
 
 
 def test_stdlib_vec_eq_legacy_api():
-    """vec_eq returns 1 when all elements match, 0 on first divergence."""
+    """vec_eq returns 1 when all elements match, 0 on first divergence.
+
+    Stage 28.9 cycle 91 audit-CR C90-1 docstring: cycle-89 renamed
+    this from `test_stdlib_vec_eq` after C88-1 caught that an
+    intra-file duplicate name (Python rebinds) was silently shadowing
+    this test body. This case uses `vec_push(arena, idx, val)` (3-arg
+    form) and 3-arg `vec_eq(a, b, len)`. The other `test_stdlib_vec_eq`
+    near line 13443 uses 4-arg `vec_eq(a, len_a, b, len_b)` with
+    `__arena_push(val)`. Both API surfaces co-exist during Phase-0
+    stdlib transition; preserving both bodies pins each shape so a
+    regression on either caller form surfaces."""
     src = """
     fn main() -> i32 {
         let a = vec_new();
@@ -8400,7 +8410,14 @@ def test_stdlib_vec_eq_legacy_api():
 
 
 def test_stdlib_vec_reverse_inplace_legacy_api():
-    """vec_reverse_inplace reverses elements; check via index lookup."""
+    """vec_reverse_inplace reverses elements; check via index lookup.
+
+    Stage 28.9 cycle 91 audit-CR C90-1: cycle-89 renamed this from
+    `test_stdlib_vec_reverse_inplace` after C88-1 caught the intra-
+    file duplicate name (the redef near line 11738 was silently
+    shadowing this body). This body uses the 3-arg `vec_push(arena,
+    idx, val)` form; see the other `test_stdlib_vec_reverse_inplace`
+    for the `__arena_push` variant."""
     src = """
     fn main() -> i32 {
         let s = vec_new();
@@ -11165,7 +11182,15 @@ def test_stdlib_ti1d_l2_norm_sq():
 
 
 def test_stdlib_vec_first_legacy_api():
-    """first([42,99]) = 42."""
+    """first([42,99]) = 42.
+
+    Stage 28.9 cycle 91 audit-CR C90-1 docstring: cycle-89 renamed
+    this from `test_stdlib_vec_first` after C88-1 caught that an
+    intra-file duplicate name (Python rebinds) was silently shadowing
+    this test body. The `_legacy_api` suffix is a bookkeeping marker
+    NOT an API-version claim — both variants currently exercise the
+    `__arena_push` shape. Keep both bodies during the Phase-0 stdlib
+    transition; merge or further differentiate in a follow-up cycle."""
     src = """
     fn main() -> i32 {
         let v = __arena_len();
@@ -11178,7 +11203,11 @@ def test_stdlib_vec_first_legacy_api():
 
 
 def test_stdlib_vec_last_legacy_api():
-    """last([99,42]) = 42."""
+    """last([99,42]) = 42.
+
+    Stage 28.9 cycle 91 audit-CR C90-1 docstring: cycle-89 renamed
+    from `test_stdlib_vec_last`. See test_stdlib_vec_first_legacy_api
+    above for full rationale."""
     src = """
     fn main() -> i32 {
         let v = __arena_len();
