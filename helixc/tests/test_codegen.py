@@ -2696,6 +2696,45 @@ fn main() -> i32 {
         "struct Empty<> { x: i32 } "
         "fn main() -> i32 { let e = Empty { 42 }; e.x }"
     ) == 42, "Stage 28.11 INCREMENT 1: <> empty generic-param list parses"
+    # Cycle-1 code-review observation (MED 75): pin
+    # cursor-cleanliness across a decl-follow-up + trailing-comma combo.
+    # If the new generic-params loop ever drifts on advance-count, a
+    # subsequent decl would mis-parse. Pin: trailing comma in the
+    # generic-param list AND a sibling non-generic struct decl after,
+    # exercised together. Catches: (a) cursor leftover from the new
+    # block, (b) trailing-comma in `<T,>`, (c) decl-after-decl flow.
+    assert compile_and_exec(
+        "struct S<T,> { x: i32 } "
+        "struct R { y: i32 } "
+        "fn main() -> i32 { let s = S { 30 }; let r = R { 12 }; s.x + r.y }"
+    ) == 42, ("Stage 28.11 INCREMENT 1: <T,> trailing comma + sibling "
+              "non-generic decl parse together (cursor cleanliness)")
+    # INC-1 cycle-2 SF-4 fix: semantic scalar-fallback test. A field
+    # typed `T` (a generic param name) falls through `gp_tab_lookup`
+    # → `struct_tab_lookup_idx` → -1 (unknown ident) → treated as
+    # scalar/i32 at codegen time. This is the INCREMENT 1 contract
+    # ("parses identically to non-generic equivalent"); INCREMENT 2
+    # will replace the scalar fallback with `200 + gp_idx` encoding.
+    assert compile_and_exec(
+        "struct Pt<T> { x: T, y: T } "
+        "fn main() -> i32 { let p = Pt { 10, 32 }; p.x + p.y }"
+    ) == 42, ("Stage 28.11 INCREMENT 1 cycle-2 SF-4: field typed `T` "
+              "scalar-falls-back to i32 (INCREMENT 2 will encode 200+idx)")
+    # INC-1 cycle-2 SF-1 regression-pin: pre-fix `struct X<T { ... }`
+    # (missing `>`) made the generic-params loop devour the struct
+    # body AND subsequent decls until a stray `>` or EOF — a
+    # one-character typo silently ate `fn main`. Post-fix the loop
+    # exits on the LBRACE (non-IDENT/non-COMMA/non-GT), leaving the
+    # `{` in the stream for the field-parser. The `<T` is silently
+    # dropped (still acceptance of malformed input — bounded though),
+    # so `fn main` is preserved and exits 42 as expected. Pre-fix this
+    # would have eaten `fn main` and returned a different exit code.
+    assert compile_and_exec(
+        "struct X<T { x: i32 } "
+        "fn main() -> i32 { let v = X { 42 }; v.x }"
+    ) == 42, ("Stage 28.11 INCREMENT 1 cycle-2 SF-1 regression: "
+              "missing `>` no longer devours subsequent decls "
+              "(`fn main` preserved, X parsed as if non-generic)")
     # Stage 6A: enum decl is parsed and registered, codegen treats it as
     # a 0-byte no-op (folded into AST_STRUCT_DECL tag 54). The program
     # below should compile and return 0 with no surprises.

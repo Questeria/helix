@@ -6018,6 +6018,33 @@ fn parse_struct_decl(tok_base: i32, sb: i32) -> i32 {
     // Mirrors `helixc/frontend/struct_mono.py::collect_generic_structs`
     // and the Stage-8 fn-generic parsing scaffold (parser.hx ~5219).
     // Phase-0 parses (count) and discards — no slot in struct_tab yet.
+    //
+    // Stage 28.11 INC-1 cycle-2 silent-failure fix-sweep (SF-1 CRITICAL
+    // conf 95 + SF-2 CRITICAL conf 92 + SF-3 HIGH conf 88):
+    // Pre-fix the else-arm accepted ANY non-COMMA/GT/EOF token via a
+    // bare `cur_advance`, so `struct X<T { x: i32 }` (missing `>`) made
+    // the loop devour the entire struct body AND subsequent decls until
+    // it found a stray `>` or EOF — a one-character typo silently ate
+    // arbitrary source. Also the post-loop `cur_advance` was
+    // unconditional, so `struct X<T,<EOF>` silently registered a
+    // truncated 0-field struct with no diagnostic. Same root cause
+    // class (silent malformed-input acceptance) as the Stage 28.10
+    // cycle 84/89 Audit-13-class bugs.
+    //
+    // The fix:
+    //   (a) else-arm restricted to TK_IDENT (tag 2) only; any other
+    //       tag exits the loop without consuming so the bad token
+    //       remains in the stream where downstream errors land
+    //       loudly instead of silently misaligning.
+    //   (b) post-loop `cur_advance(sb); // consume '>'` is now guarded
+    //       by an explicit TK_GT check; on EOF-mid-list or bad-exit
+    //       the advance is skipped so we don't over-advance past the
+    //       lex-emitted token stream.
+    // The Stage-8 sister fn-generic loop (~5219-5262) has the same
+    // pattern; per narrow-scope discipline (workspace cycle-71 note)
+    // it is left as DEFERRED-KNOWN; should be fixed in a separate
+    // commit since it's not under active iteration. See cycle-2
+    // silent-failure findings SF-1/SF-2/SF-3/SF-5 for detail.
     let g_peek = tok_tag(tok_base, cur_get(sb));
     if g_peek == 16 {                        // TK_LT = `<`
         cur_advance(sb);                     // consume '<'
@@ -6028,15 +6055,28 @@ fn parse_struct_decl(tok_base: i32, sb: i32) -> i32 {
                 keep_g = 0;
             } else { if gtt == 13 {          // COMMA
                 cur_advance(sb);
-            } else { if gtt == 0 {           // EOF safety
-                keep_g = 0;
-            } else {
-                // Discard generic-param IDENT. INCREMENT 2 will
-                // capture (name_s, name_l) into gp_tab here.
+            } else { if gtt == 2 {           // TK_IDENT — discard
+                // INCREMENT 2 will capture (name_s, name_l) into
+                // gp_tab here. Phase-0 just discards.
                 cur_advance(sb);
+            } else {
+                // Stage 28.11 INC-1 cycle-2 SF-1/SF-3 fix: any token
+                // other than IDENT/COMMA/GT exits the loop WITHOUT
+                // advancing — covers EOF (tag 0), LBRACE/RBRACE
+                // (5/6), nested `<` (16), operators, literals, etc.
+                // The post-loop guard below handles the cursor.
+                keep_g = 0;
             }}};
         }
-        cur_advance(sb);                     // consume '>'
+        // Stage 28.11 INC-1 cycle-2 SF-2 fix: only advance past `>`
+        // if the cursor actually points at one. EOF-mid-list or
+        // bad-token-exit leaves the cursor on the offending token
+        // where the LBRACE advance below (or a downstream field
+        // parser) will land an error loudly instead of silently
+        // misaligning the token stream.
+        if tok_tag(tok_base, cur_get(sb)) == 17 {
+            cur_advance(sb);                 // consume '>'
+        };
     };
     cur_advance(sb);                         // consume '{' (LBRACE = 5)
     let mut field_count: i32 = 0;
