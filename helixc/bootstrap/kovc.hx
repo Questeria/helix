@@ -4152,8 +4152,22 @@ fn fail_jmp_state_patch_all(state: i32, target: i32) -> i32 {
 // scrut_off is the slot holding the enum pointer. Each sub-pattern gets
 // a fresh slot; rax is re-loaded between sub-pats since prior tests
 // clobber it.
+//
+// Stage 28.10 cycle-90 CN-1 fix (HIGH conf 92): thread bn_state through
+// to emit_pattern_test. Pre-fix this helper called emit_pattern_test
+// with 4 args, but emit_pattern_test takes 5 (last is bn_state). The
+// missing arg meant r8 carried garbage from prior emission into the
+// callee. Pre-Stage-28.10 this was a latent dead-store (only the
+// pt>=69 compound branch needed bn_state). Stage 28.10 INCREMENT 3
+// made it newly LIVE by adding the pt==68 dispatch to emit_pat_or,
+// which immediately uses bn_state to compute success_state =
+// bn_state + 123 and alt_fail_state = bn_state + 140 — with garbage
+// bn_state, those become arbitrary arena writes. Reproducer:
+// `match v { Some(1 | 2) => 42, _ => 0 }`. Same defect class as
+// Audit-13 — and the cycle-85 init bump alone is insufficient if
+// callers pass garbage.
 fn emit_variant_subpats(sub_head: i32, scrut_off: i32, fail_state: i32,
-                        bind_state: i32) -> i32 {
+                        bind_state: i32, bn_state: i32) -> i32 {
     // Audit-stage5-6 Finding #9 fix: the inner load uses disp8 (signed,
     // -128..127). At idx_in_payload >= 16, off_in_payload >= 128 wraps
     // to a negative disp and the load silently reads BELOW the variant
@@ -4176,7 +4190,7 @@ fn emit_variant_subpats(sub_head: i32, scrut_off: i32, fail_state: i32,
         // mov rax, [rax + disp8]  (48 8B 40 disp8 = 4 bytes)
         emit_byte(0x48); emit_byte(0x8B); emit_byte(0x40); emit_byte(off_in_payload);
         let n_st = emit_mov_local_rax_64(sub_off);
-        let n_sub = emit_pattern_test(sub_pat, sub_off, fail_state, bind_state);
+        let n_sub = emit_pattern_test(sub_pat, sub_off, fail_state, bind_state, bn_state);
         total = total + n_rl + n_trap + 4 + n_st + n_sub;
         idx_in_payload = idx_in_payload + 1;
         cur = __arena_get(cur + 2);
@@ -4185,8 +4199,10 @@ fn emit_variant_subpats(sub_head: i32, scrut_off: i32, fail_state: i32,
 }
 
 // Stage 7 PAT_TUPLE helper. Same as variant but starts at slot 0 (no disc).
+// Stage 28.10 cycle-90 CN-1 fix: thread bn_state (see emit_variant_subpats
+// for full rationale — both helpers had the same 4-vs-5-arg bug).
 fn emit_tuple_subpats(sub_head: i32, scrut_off: i32, fail_state: i32,
-                      bind_state: i32) -> i32 {
+                      bind_state: i32, bn_state: i32) -> i32 {
     // Audit-stage5-6 Finding #9 fix (tuple variant): mirror the
     // emit_variant_subpats cap-trap. idx_in_tuple >= 16 → off >= 128
     // wraps signed disp8.
@@ -4203,7 +4219,7 @@ fn emit_tuple_subpats(sub_head: i32, scrut_off: i32, fail_state: i32,
         let off_in_tuple = idx_in_tuple * 8;
         emit_byte(0x48); emit_byte(0x8B); emit_byte(0x40); emit_byte(off_in_tuple);
         let n_st = emit_mov_local_rax_64(sub_off);
-        let n_sub = emit_pattern_test(sub_pat, sub_off, fail_state, bind_state);
+        let n_sub = emit_pattern_test(sub_pat, sub_off, fail_state, bind_state, bn_state);
         total = total + n_rl + n_trap + 4 + n_st + n_sub;
         idx_in_tuple = idx_in_tuple + 1;
         cur = __arena_get(cur + 2);
@@ -4361,10 +4377,10 @@ fn emit_compound_pattern_test(pat_idx: i32, scrut_off: i32, fail_state: i32,
     let pp2 = __arena_get(pat_idx + 2);
     if pt == 69 {
         let n_disc = emit_pat_variant_disc(scrut_off, pp1, fail_state, bn_state);
-        let n_subs = emit_variant_subpats(pp2, scrut_off, fail_state, bind_state);
+        let n_subs = emit_variant_subpats(pp2, scrut_off, fail_state, bind_state, bn_state);
         n_disc + n_subs
     } else { if pt == 70 {
-        emit_tuple_subpats(pp2, scrut_off, fail_state, bind_state)
+        emit_tuple_subpats(pp2, scrut_off, fail_state, bind_state, bn_state)
     } else { 0 }}
 }
 
