@@ -87,6 +87,12 @@ def test_parse_args_emit_flags():
     assert "--emit-ptx" in a.flags
 
 
+def test_parse_args_no_stdlib():
+    a, errs = parse_args(["--no-stdlib", "foo.hx"])
+    assert not errs
+    assert "--no-stdlib" in a.flags
+
+
 def test_parse_args_check_only():
     a, errs = parse_args(["--check-only", "foo.hx"])
     assert "--check-only" in a.flags
@@ -531,28 +537,41 @@ def _count_op_kinds(mod):
     return c
 
 
-def test_o1_invokes_fold_module(monkeypatch, capsys, tmp_path):
-    """Audit 28.8 A10: -O1 must invoke fold_module (constant folding) in
-    addition to fdce_module. Pre-fix, only fdce ran. We monkeypatch
-    fold_module to count invocations from check.py.main()."""
-    from helixc.ir.passes import const_fold
-    call_count = [0]
+def test_o1_invokes_backend_default_pass_order(monkeypatch, capsys, tmp_path):
+    """Stage 31: check.py -O1 must mirror x86_64.py default pass order."""
+    from helixc.ir.passes import const_fold, cse, dce, fdce
+    calls = []
     real_fold = const_fold.fold_module
+    real_cse = cse.cse_module
+    real_dce = dce.dce_module
+    real_fdce = fdce.fdce_module
 
     def counted(mod):
-        call_count[0] += 1
+        calls.append("fold")
         return real_fold(mod)
 
+    def cse_counted(mod):
+        calls.append("cse")
+        return real_cse(mod)
+
+    def dce_counted(mod):
+        calls.append("dce")
+        return real_dce(mod)
+
+    def fdce_counted(mod):
+        calls.append("fdce")
+        return real_fdce(mod)
+
     monkeypatch.setattr(const_fold, "fold_module", counted)
-    # check.py imports fold_module by attribute access at call site, but
-    # since we monkey at module-level we need to patch the binding the
-    # check module uses too — the import happens at runtime inside main().
+    monkeypatch.setattr(cse, "cse_module", cse_counted)
+    monkeypatch.setattr(dce, "dce_module", dce_counted)
+    monkeypatch.setattr(fdce, "fdce_module", fdce_counted)
     src_path = str(tmp_path / "fold.hx")
     with open(src_path, "w") as f:
         f.write("fn main() -> i32 { 1 + 2 }\n")
     rc = main([src_path, "--emit-ir", "-O1"])
     assert rc == 0, "compile must succeed"
-    assert call_count[0] == 1, "fold_module must be invoked at -O1"
+    assert calls == ["fold", "cse", "dce", "fdce"]
 
 
 def test_o0_skips_optimization(monkeypatch, capsys, tmp_path):
@@ -592,9 +611,9 @@ def test_o0_skips_optimization(monkeypatch, capsys, tmp_path):
 
 
 def test_o2_invokes_cse_and_dce(monkeypatch, capsys, tmp_path):
-    """Audit 28.8 A10: -O2 must invoke cse_module + dce_module (on top
-    of -O1's fdce + fold). Pre-fix had a no-op try/import-pass
-    placeholder; this guards the regression."""
+    """Audit 28.8 A10: -O2 currently keeps the same cse/dce coverage as
+    -O1. Pre-fix had a no-op try/import-pass placeholder; this guards the
+    regression."""
     from helixc.ir.passes import cse, dce
     cse_calls = [0]
     dce_calls = [0]
@@ -940,6 +959,345 @@ def test_c24_1_hello_world_compiles_under_check_py(capsys, tmp_path):
         f"hello-world shape (main with io, no @effect(io)) must rc=0 "
         f"by default; got rc={rc}. stderr={captured.err!r}"
     )
+
+
+def test_stage31_strict_without_emit_runs_effect_check(capsys, tmp_path):
+    src_path = str(tmp_path / "strict_effect.hx")
+    with open(src_path, "w") as f:
+        f.write('fn main() -> i32 { print_str("Hello\\n"); 0 }\n')
+    rc = main([src_path, "--strict"])
+    captured = capsys.readouterr()
+    out = captured.out + captured.err
+    assert rc == 1, out
+    assert "effect-check" in out
+    assert "--strict aborts" in out
+    assert "internal error" not in out
+
+
+def test_stage31_refinement_violation_reports_clear_cli_diagnostic(capsys, tmp_path):
+    src_path = str(tmp_path / "bad_refinement.hx")
+    with open(src_path, "w") as f:
+        f.write(
+            "type Probability = f64 where 0.0 <= self <= 1.0;\n"
+            "fn main() -> i32 {\n"
+            "    let p: Probability = 1.2_f64;\n"
+            "    42\n"
+            "}\n"
+        )
+    rc = main([src_path, "--emit-ir", "-O0"])
+    captured = capsys.readouterr()
+    assert rc == 1, f"expected refinement violation to fail; stderr={captured.err!r}"
+    out = captured.out + captured.err
+    assert "refinement Probability violated" in out
+    assert "1.2" in out
+    assert "0.0 <= self <= 1.0" in out
+    assert "Traceback" not in out
+
+
+def test_stage31_valid_refinement_alias_erases_for_cli_ir(capsys, tmp_path):
+    src_path = str(tmp_path / "valid_refinement.hx")
+    with open(src_path, "w") as f:
+        f.write(
+            "type Probability = f64 where 0.0 <= self <= 1.0;\n"
+            "fn main() -> i32 {\n"
+            "    let p: Probability = 0.5_f64;\n"
+            "    42\n"
+            "}\n"
+        )
+    rc = main([src_path, "--emit-ir", "-O0"])
+    captured = capsys.readouterr()
+    assert rc == 0, (
+        f"valid refined alias should typecheck and lower as its base type; "
+        f"out={captured.out!r} err={captured.err!r}"
+    )
+
+
+def test_stage31_cli_checks_module_local_refinement_alias(capsys, tmp_path):
+    src_path = str(tmp_path / "mod_refinement.hx")
+    with open(src_path, "w") as f:
+        f.write(
+            "mod m {\n"
+            "    type Probability = f64 where 0.0 <= self <= 1.0;\n"
+            "    fn f() { let p: Probability = 1.2_f64; }\n"
+            "}\n"
+            "fn main() -> i32 { 0 }\n"
+        )
+    rc = main([src_path, "--emit-ir", "-O0"])
+    captured = capsys.readouterr()
+    assert rc == 1, (
+        f"module-local refined alias violation should fail in CLI; "
+        f"out={captured.out!r} err={captured.err!r}"
+    )
+    assert "refinement m__Probability violated" in (
+        captured.out + captured.err)
+
+
+def test_stage31_cli_emit_ir_runs_fn_mono_before_typecheck(capsys, tmp_path):
+    src_path = str(tmp_path / "generic_alias_emit_ir.hx")
+    with open(src_path, "w") as f:
+        f.write(
+            "type I = i32;\n"
+            "fn id[T](x: T) -> T { x }\n"
+            "fn main() -> i32 { id::<I>(42) }\n"
+        )
+    rc = main([src_path, "--emit-ir", "-O0"])
+    captured = capsys.readouterr()
+    assert rc == 0, (
+        f"--emit-ir should mirror backend function-mono ordering; "
+        f"out={captured.out!r} err={captured.err!r}"
+    )
+    assert "body type T does not match return type i32" not in (
+        captured.out + captured.err)
+
+
+def test_stage31_cli_emit_ir_includes_stdlib_by_default(capsys, tmp_path):
+    src_path = str(tmp_path / "stdlib_default.hx")
+    with open(src_path, "w") as f:
+        f.write(
+            "fn main() -> i32 {\n"
+            "    let s = vec_new();\n"
+            "    let n = vec_push(s, 0, 42);\n"
+            "    vec_get(s, 0)\n"
+            "}\n"
+        )
+    rc = main([src_path, "--emit-ir", "-O0"])
+    captured = capsys.readouterr()
+    assert rc == 0, (
+        f"check.py should match backend's stdlib-by-default behavior; "
+        f"out={captured.out!r} err={captured.err!r}"
+    )
+
+    rc_no_stdlib = main([src_path, "--emit-ir", "-O0", "--no-stdlib"])
+    captured_no_stdlib = capsys.readouterr()
+    assert rc_no_stdlib == 1
+    no_stdlib_out = captured_no_stdlib.out + captured_no_stdlib.err
+    assert "typecheck:" in no_stdlib_out
+    assert "vec_" in no_stdlib_out
+
+
+def test_stage31_cli_rejects_function_typed_call_before_codegen(capsys, tmp_path):
+    src_path = str(tmp_path / "fn_typed_call.hx")
+    with open(src_path, "w") as f:
+        f.write(
+            "type Positive = i32 where self > 0;\n"
+            "struct Box[T] { v: T }\n"
+            "type B = Box<Positive>;\n"
+            "fn use_box(b: B) -> i32 { b.v }\n"
+            "fn apply(fp: fn(B) -> i32, b: B) -> i32 { fp(b) }\n"
+            "fn main(b: B) -> i32 { apply(use_box, b) }\n"
+        )
+    rc = main([src_path, "--no-stdlib", "--emit-ir", "-O0"])
+    captured = capsys.readouterr()
+    out = captured.out + captured.err
+    assert rc == 1, out
+    assert "function-typed calls are not supported by the Stage 31 backend" in out
+    assert "internal error" not in out
+    assert "compiler bug" not in out
+
+
+def test_stage31_strict_o0_default_stdlib_prunes_unused(capsys, tmp_path):
+    src_path = str(tmp_path / "strict_o0_stdlib.hx")
+    with open(src_path, "w") as f:
+        f.write("fn main() -> i32 { 42 }\n")
+    rc = main([src_path, "--strict", "-O0"])
+    captured = capsys.readouterr()
+    assert rc == 0, captured.out + captured.err
+
+
+def test_stage31_strict_o0_default_stdlib_checks_pub_without_main(capsys, tmp_path):
+    src_path = str(tmp_path / "strict_o0_pub_no_main.hx")
+    with open(src_path, "w") as f:
+        f.write(
+            '@pure pub fn bad() -> i32 { print_str("x"); 0 }\n'
+        )
+    rc = main([src_path, "--strict", "-O0"])
+    captured = capsys.readouterr()
+    out = captured.out + captured.err
+    assert rc == 1, out
+    assert "@pure function 'bad'" in out
+    assert "actual effects {io}" in out
+
+
+def test_stage31_strict_o0_default_stdlib_checks_private_without_main(capsys, tmp_path):
+    src_path = str(tmp_path / "strict_o0_private_no_main.hx")
+    with open(src_path, "w") as f:
+        f.write(
+            '@pure fn bad() -> i32 { print_str("x"); 0 }\n'
+        )
+    rc = main([src_path, "--strict", "-O0"])
+    captured = capsys.readouterr()
+    out = captured.out + captured.err
+    assert rc == 1, out
+    assert "@pure function 'bad'" in out
+    assert "actual effects {io}" in out
+
+
+def test_stage31_strict_default_stdlib_checks_private_dead_pure(capsys, tmp_path):
+    src_path = str(tmp_path / "strict_dead_private_pure.hx")
+    with open(src_path, "w") as f:
+        f.write(
+            '@pure fn bad() -> i32 { print_str("x"); 0 }\n'
+            'fn main() -> i32 { 0 }\n'
+        )
+    rc = main([src_path, "--strict"])
+    captured = capsys.readouterr()
+    out = captured.out + captured.err
+    assert rc == 1, out
+    assert "@pure function 'bad'" in out
+    assert "actual effects {io}" in out
+
+
+def test_stage31_strict_default_stdlib_no_main_prunes_unused(capsys, tmp_path):
+    src_path = str(tmp_path / "strict_default_stdlib_no_main.hx")
+    with open(src_path, "w") as f:
+        f.write("fn helper() -> i32 { 1 }\n")
+    rc = main([src_path, "--strict"])
+    captured = capsys.readouterr()
+    out = captured.out + captured.err
+    assert rc == 0, out
+    assert "vec_push" not in out
+    assert "effect-check warning" not in out
+
+
+def test_stage31_emit_ir_o0_default_stdlib_prunes_unused_warnings(capsys, tmp_path):
+    src_path = str(tmp_path / "emit_ir_o0_stdlib.hx")
+    with open(src_path, "w") as f:
+        f.write("fn main() -> i32 { 42 }\n")
+    rc = main([src_path, "--emit-ir", "-O0"])
+    captured = capsys.readouterr()
+    assert rc == 0, captured.out + captured.err
+    assert "warning: effect-check:" not in captured.err
+
+
+def test_stage31_backend_strict_no_opt_default_stdlib_prunes_unused(tmp_path):
+    src_path = tmp_path / "backend_strict_no_opt_stdlib.hx"
+    out_path = tmp_path / "backend_strict_no_opt_stdlib.bin"
+    src_path.write_text("fn main() -> i32 { 42 }\n", encoding="utf-8")
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.backend.x86_64",
+         str(src_path), str(out_path), "--strict", "--no-opt"],
+        cwd=proj_root,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert out_path.exists()
+
+
+def test_stage31_backend_strict_default_stdlib_checks_private_dead_pure(tmp_path):
+    src_path = tmp_path / "backend_strict_dead_private_pure.hx"
+    out_path = tmp_path / "backend_strict_dead_private_pure.bin"
+    src_path.write_text(
+        '@pure fn bad() -> i32 { print_str("x"); 0 }\n'
+        'fn main() -> i32 { 0 }\n',
+        encoding="utf-8",
+    )
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.backend.x86_64",
+         str(src_path), str(out_path), "--strict"],
+        cwd=proj_root,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    out = proc.stdout + proc.stderr
+    assert proc.returncode == 1, out
+    assert "@pure function 'bad'" in out
+    assert "actual effects {io}" in out
+    assert not out_path.exists()
+
+
+def test_stage31_backend_no_opt_default_stdlib_prunes_unused_warnings(tmp_path):
+    src_path = tmp_path / "backend_no_opt_stdlib.hx"
+    out_path = tmp_path / "backend_no_opt_stdlib.bin"
+    src_path.write_text("fn main() -> i32 { 42 }\n", encoding="utf-8")
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.backend.x86_64",
+         str(src_path), str(out_path), "--no-opt"],
+        cwd=proj_root,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "warning: effect-check:" not in proc.stderr
+    assert out_path.exists()
+
+
+def test_stage31_check_py_lex_error_is_user_diagnostic(capsys, tmp_path):
+    src_path = str(tmp_path / "bad_lex.hx")
+    with open(src_path, "w") as f:
+        f.write("fn main() -> i32 { # }\n")
+    rc = main([src_path, "--check-only"])
+    captured = capsys.readouterr()
+    out = captured.out + captured.err
+    assert rc == 1, out
+    assert "LEX ERROR:" in out
+    assert "unexpected character '#'" in out
+    assert "internal error" not in out
+    assert "compiler bug" not in out
+
+
+def test_stage31_backend_lex_error_is_not_traceback(tmp_path):
+    src_path = tmp_path / "bad_lex_backend.hx"
+    out_path = tmp_path / "bad_lex_backend.bin"
+    src_path.write_text("fn main() -> i32 { # }\n", encoding="utf-8")
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.backend.x86_64",
+         str(src_path), str(out_path), "--no-stdlib"],
+        cwd=proj_root,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    assert "error: lex:" in proc.stderr
+    assert "unexpected character '#'" in proc.stderr
+    assert "Traceback" not in proc.stderr
+    assert not out_path.exists()
+
+
+def test_stage31_backend_flatten_error_is_not_traceback(tmp_path):
+    src_path = tmp_path / "bad_flatten_backend.hx"
+    out_path = tmp_path / "bad_flatten_backend.bin"
+    src_path.write_text(
+        "mod m { fn foo() -> i32 { 1 } }\n"
+        "fn m__foo() -> i32 { 2 }\n"
+        "fn main() -> i32 { m::foo() }\n",
+        encoding="utf-8",
+    )
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.backend.x86_64",
+         str(src_path), str(out_path), "--no-stdlib"],
+        cwd=proj_root,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    assert "error: mod-flatten:" in proc.stderr
+    assert "trap 78001" in proc.stderr
+    assert "Traceback" not in proc.stderr
+    assert not out_path.exists()
+
+
+def test_stage31_check_only_strict_stays_frontend_only(capsys, tmp_path):
+    src_path = str(tmp_path / "check_only_strict_effect.hx")
+    with open(src_path, "w") as f:
+        f.write(
+            "@pure fn bad() -> i32 { print_str(\"x\"); 0 }\n"
+            "fn main() -> i32 { bad() }\n"
+        )
+    rc = main([src_path, "--check-only", "--strict"])
+    captured = capsys.readouterr()
+    assert rc == 0, captured.out + captured.err
+    assert "-- clean (check-only)" in captured.out
 
 
 def test_c29_r3_real_hello_world_example_compiles(capsys):

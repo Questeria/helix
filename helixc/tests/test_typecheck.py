@@ -14,6 +14,14 @@ def check(src: str) -> list[str]:
     return [str(e) for e in errs]
 
 
+def check_after_flatten(src: str) -> list[str]:
+    from helixc.frontend.flatten_modules import flatten_modules
+    prog = parse(src)
+    flatten_modules(prog)
+    errs = typecheck(prog)
+    return [str(e) for e in errs]
+
+
 # ============================================================================
 # Should typecheck (no errors)
 # ============================================================================
@@ -139,6 +147,1364 @@ def test_c117_array_literal_elements_must_match():
     errs2 = check("fn f() { let xs = [1_u32, -1_i32]; }")
     assert any("array literal element type i32 incompatible with first element type u32" in e
                for e in errs2), errs2
+
+
+def test_stage31_refinement_probability_confidence_constants_compile():
+    src = """
+    type Probability = f64 where 0.0 <= self <= 1.0;
+    type Confidence = f64 where 0.0 <= self <= 1.0;
+    fn f() {
+        let p0: Probability = 0.0_f64;
+        let p1: Probability = 0.5_f64;
+        let p2: Probability = 1.0_f64;
+        let c: Confidence = 0.95_f64;
+    }
+    """
+    assert check_after_flatten(src) == []
+
+
+def test_stage31_refinement_probability_constant_below_zero_fails():
+    src = """
+    type Probability = f64 where 0.0 <= self <= 1.0;
+    fn f() {
+        let p: Probability = -0.1_f64;
+    }
+    """
+    errs = check(src)
+    assert any("refinement Probability violated" in e
+               and "-0.1" in e
+               and "0.0 <= self <= 1.0" in e
+               and "31001" in e for e in errs), errs
+
+
+def test_stage31_refinement_probability_constant_above_one_fails():
+    src = """
+    type Probability = f64 where 0.0 <= self <= 1.0;
+    fn f() {
+        let p: Probability = 1.2_f64;
+    }
+    """
+    errs = check(src)
+    assert any("refinement Probability violated" in e
+               and "1.2" in e
+               and "0.0 <= self <= 1.0" in e
+               and "31001" in e for e in errs), errs
+
+
+def test_stage31_refinement_confidence_constant_above_one_fails():
+    src = """
+    type Confidence = f64 where 0.0 <= self <= 1.0;
+    fn f() {
+        let c: Confidence = 1.01_f64;
+    }
+    """
+    errs = check(src)
+    assert any("refinement Confidence violated" in e
+               and "1.01" in e
+               and "0.0 <= self <= 1.0" in e
+               and "31001" in e for e in errs), errs
+
+
+def test_stage31_refinement_call_arg_constant_checked():
+    src = """
+    type Probability = f64 where 0.0 <= self <= 1.0;
+    fn use_p(p: Probability) -> i32 { 42 }
+    fn f() -> i32 {
+        use_p(1.2_f64)
+    }
+    """
+    errs = check(src)
+    assert any("call to 'use_p': arg 'p'" in e
+               and "refinement Probability violated" in e for e in errs), errs
+
+
+def test_stage31_refinement_return_constant_checked():
+    src = """
+    type Probability = f64 where 0.0 <= self <= 1.0;
+    fn f() -> Probability {
+        1.2_f64
+    }
+    """
+    errs = check(src)
+    assert any("return value of function 'f'" in e
+               and "refinement Probability violated" in e for e in errs), errs
+
+
+def test_stage31_refinement_value_carries_proof_through_call_and_return():
+    src = """
+    type Probability = f64 where 0.0 <= self <= 1.0;
+    fn id(p: Probability) -> Probability {
+        p
+    }
+    fn use_p(p: Probability) -> i32 { 42 }
+    fn f() -> i32 {
+        let p: Probability = 0.75_f64;
+        let q: Probability = id(p);
+        use_p(q)
+    }
+    """
+    assert check_after_flatten(src) == []
+
+
+def test_stage31_refined_scalar_arithmetic_erases_to_base_scalar():
+    src = """
+    type Positive = i32 where self > 0;
+    fn add_one_raw(x: Positive) -> i32 {
+        x + 1
+    }
+    """
+    assert check_after_flatten(src) == []
+
+
+def test_stage31_cast_to_refined_alias_checks_literal_predicate():
+    src = """
+    type Probability = f64 where 0.0 <= self <= 1.0;
+    fn f() {
+        let p: Probability = 2.0_f64 as Probability;
+    }
+    """
+    errs = check(src)
+    assert any("cast to refined type Probability" in e
+               and "refinement Probability violated" in e
+               for e in errs), errs
+
+
+def test_stage31_refinement_local_const_proofs_use_local_value():
+    ok_src = """
+    type Probability = f64 where 0.0 <= self <= 1.0;
+    fn f() {
+        const P: f64 = 0.5_f64;
+        let p = P as Probability;
+    }
+    """
+    assert check(ok_src) == []
+
+    bad_src = """
+    const LIMIT: f64 = 0.5_f64;
+    type Probability = f64 where 0.0 <= self <= 1.0;
+    fn f() {
+        const LIMIT: f64 = 1.5_f64;
+        let p: Probability = LIMIT;
+    }
+    """
+    errs = check(bad_src)
+    assert any("refinement Probability violated" in e for e in errs), errs
+
+
+def test_stage31_refinement_assignment_constant_checked():
+    src = """
+    type Probability = f64 where 0.0 <= self <= 1.0;
+    fn f() {
+        let mut p: Probability = 0.25_f64;
+        p = 1.2_f64;
+    }
+    """
+    errs = check(src)
+    assert any("assignment" in e
+               and "refinement Probability violated" in e for e in errs), errs
+
+
+def test_stage31_refinement_uninitialized_let_rejected():
+    src = """
+    type Probability = f64 where 0.0 <= self <= 1.0;
+    fn f() {
+        let p: Probability;
+    }
+    """
+    errs = check(src)
+    assert any("requires an initializer" in e for e in errs), errs
+
+
+def test_stage31_refinement_const_values_checked():
+    local_src = """
+    type Probability = f64 where 0.0 <= self <= 1.0;
+    fn f() {
+        const P: Probability = 1.2_f64;
+    }
+    """
+    local_errs = check(local_src)
+    assert any("const 'P'" in e
+               and "refinement Probability violated" in e
+               for e in local_errs), local_errs
+
+    top_src = """
+    type Probability = f64 where 0.0 <= self <= 1.0;
+    const P: Probability = 1.2_f64;
+    fn f() {}
+    """
+    top_errs = check(top_src)
+    assert any("const 'P'" in e
+               and "refinement Probability violated" in e
+               for e in top_errs), top_errs
+
+
+def test_stage31_refinement_struct_and_array_members_checked():
+    struct_src = """
+    type Probability = f64 where 0.0 <= self <= 1.0;
+    struct Reading { p: Probability }
+    fn f() {
+        let r = Reading { p: 1.2_f64 };
+    }
+    """
+    struct_errs = check(struct_src)
+    assert any("struct 'Reading'.p" in e
+               and "refinement Probability violated" in e
+               for e in struct_errs), struct_errs
+
+    array_src = """
+    type Probability = f64 where 0.0 <= self <= 1.0;
+    fn f() {
+        let ps: [Probability; 2] = [0.5_f64, 1.2_f64];
+    }
+    """
+    array_errs = check(array_src)
+    assert any("array element" in e
+               and "refinement Probability violated" in e
+               for e in array_errs), array_errs
+
+
+def test_stage31_refinement_enum_payload_checked():
+    src = """
+    type Probability = f64 where 0.0 <= self <= 1.0;
+    enum Maybe { None, Some(Probability) }
+    fn f() {
+        let x = Maybe::Some(1.2_f64);
+    }
+    """
+    errs = check(src)
+    assert any("enum Maybe::Some arg 0" in e
+               and "refinement Probability violated" in e for e in errs), errs
+
+
+def test_stage31_nested_refinement_alias_inherits_base_predicate():
+    src = """
+    type Probability = f64 where 0.0 <= self <= 1.0;
+    type Certain = Probability where self >= 0.9;
+    fn f() {
+        let c: Certain = 1.2_f64;
+    }
+    """
+    errs = check(src)
+    assert any("refinement Probability violated" in e for e in errs), errs
+
+
+def test_stage31_unknown_refinement_alias_target_errors():
+    src = """
+    type Bad = Missing where self > 0.0;
+    fn f() {
+        let x: Bad = 1.0_f64;
+    }
+    """
+    errs = check(src)
+    assert any("target type could not be resolved" in e for e in errs), errs
+
+
+def test_stage31_if_branch_cannot_forge_refined_proof():
+    src = """
+    type Probability = f64 where 0.0 <= self <= 1.0;
+    fn pick(b: bool, p: Probability) -> Probability {
+        if b { p } else { 1.2_f64 }
+    }
+    """
+    errs = check(src)
+    assert any("return value of function 'pick'" in e
+               and "could not prove" in e for e in errs), errs
+
+
+def test_stage31_match_arm_cannot_forge_refined_proof():
+    src = """
+    type Probability = f64 where 0.0 <= self <= 1.0;
+    fn pick(b: bool, p: Probability) -> Probability {
+        match b {
+            true => p,
+            false => 1.2_f64,
+        }
+    }
+    """
+    errs = check(src)
+    assert any("return value of function 'pick'" in e
+               and "could not prove" in e for e in errs), errs
+
+
+def test_stage31_module_local_refinement_alias_survives_flatten():
+    src = """
+    mod m {
+        type Probability = f64 where 0.0 <= self <= 1.0;
+        fn f() {
+            let p: Probability = 1.2_f64;
+        }
+    }
+    """
+    errs = check_after_flatten(src)
+    assert any("refinement m__Probability violated" in e for e in errs), errs
+
+
+def test_stage31_module_type_alias_does_not_capture_function_generic():
+    from helixc.frontend import ast_nodes as A
+    from helixc.frontend.flatten_modules import flatten_modules
+
+    src = """
+    mod m {
+        type T = f64 where 0.0 <= self <= 1.0;
+        fn id[T](x: T) -> T { x }
+    }
+    """
+    prog = parse(src)
+    flatten_modules(prog)
+    fn = next(
+        it for it in prog.items
+        if isinstance(it, A.FnDecl) and it.name == "m__id"
+    )
+    assert isinstance(fn.params[0].ty, A.TyName)
+    assert fn.params[0].ty.name == "T"
+    assert isinstance(fn.return_ty, A.TyName)
+    assert fn.return_ty.name == "T"
+
+
+def test_stage31_module_type_alias_rewrites_type_expr_names():
+    from helixc.frontend import ast_nodes as A
+    from helixc.frontend.flatten_modules import flatten_modules
+
+    src = """
+    mod m {
+        const N: i32 = 4;
+        type Vec = [i32; N];
+    }
+    """
+    prog = parse(src)
+    flatten_modules(prog)
+    alias = next(
+        it for it in prog.items
+        if isinstance(it, A.TypeAlias) and it.name == "m__Vec"
+    )
+    assert isinstance(alias.target, A.TyArray)
+    assert isinstance(alias.target.size, A.Name)
+    assert alias.target.size.name == "m__N"
+
+
+def test_stage31_module_type_alias_rewrites_type_expr_paths():
+    from helixc.frontend import ast_nodes as A
+    from helixc.frontend.flatten_modules import flatten_modules
+
+    src = """
+    mod m { const N: i32 = 4; }
+    type Vec = [i32; m::N];
+    fn f(v: Vec) {}
+    """
+    prog = parse(src)
+    flatten_modules(prog)
+    alias = next(
+        it for it in prog.items
+        if isinstance(it, A.TypeAlias) and it.name == "Vec"
+    )
+    assert isinstance(alias.target, A.TyArray)
+    assert isinstance(alias.target.size, A.Name)
+    assert alias.target.size.name == "m__N"
+    assert check_after_flatten(src) == []
+
+
+def test_stage31_module_type_alias_rewrites_predicate_names():
+    from helixc.frontend import ast_nodes as A
+    from helixc.frontend.flatten_modules import flatten_modules
+
+    src = """
+    mod m {
+        const MAX: f64 = 1.0_f64;
+        type Probability = f64 where 0.0 <= self <= MAX;
+    }
+    """
+    prog = parse(src)
+    flatten_modules(prog)
+    alias = next(
+        it for it in prog.items
+        if isinstance(it, A.TypeAlias) and it.name == "m__Probability"
+    )
+    pred = alias.where_clauses[0].constraint
+    assert isinstance(pred, A.Binary)
+    assert isinstance(pred.right, A.Name)
+    assert pred.right.name == "m__MAX"
+
+
+def test_stage31_module_type_alias_rewrites_predicate_paths():
+    from helixc.frontend import ast_nodes as A
+    from helixc.frontend.flatten_modules import flatten_modules
+
+    src = """
+    mod m { const MAX: f64 = 1.0_f64; }
+    type Probability = f64 where 0.0 <= self <= m::MAX;
+    fn f(p: Probability) {}
+    """
+    prog = parse(src)
+    flatten_modules(prog)
+    alias = next(
+        it for it in prog.items
+        if isinstance(it, A.TypeAlias) and it.name == "Probability"
+    )
+    pred = alias.where_clauses[0].constraint
+    assert isinstance(pred, A.Binary)
+    assert isinstance(pred.right, A.Name)
+    assert pred.right.name == "m__MAX"
+    assert check_after_flatten(src) == []
+
+
+def test_stage31_refined_array_call_and_return_checked():
+    call_src = """
+    type Probability = f64 where 0.0 <= self <= 1.0;
+    fn use_ps(ps: [Probability; 2]) -> i32 { 0 }
+    fn f() -> i32 {
+        use_ps([0.5_f64, 1.2_f64])
+    }
+    """
+    call_errs = check(call_src)
+    assert any("call to 'use_ps': arg 'ps'" in e
+               and "array element" in e for e in call_errs), call_errs
+
+    return_src = """
+    type Probability = f64 where 0.0 <= self <= 1.0;
+    fn f() -> [Probability; 2] {
+        [0.5_f64, 1.2_f64]
+    }
+    """
+    return_errs = check(return_src)
+    assert any("return value of function 'f'" in e
+               and "array element" in e for e in return_errs), return_errs
+
+
+def test_stage31_function_typed_call_checks_refined_args():
+    src = """
+    type Probability = f64 where 0.0 <= self <= 1.0;
+    fn use_p(p: Probability) -> i32 { 0 }
+    fn f() -> i32 {
+        let fp: fn(Probability) -> i32 = use_p;
+        fp(1.2_f64)
+    }
+    """
+    errs = check(src)
+    assert any("function-typed call arg 0" in e
+               and "refinement Probability violated" in e for e in errs), errs
+
+    arity_errs = check("""
+    fn use_i(x: i32) -> i32 { x }
+    fn f() -> i32 {
+        let fp: fn(i32) -> i32 = use_i;
+        fp()
+    }
+    """)
+    assert any("function-typed call: expected 1 args, got 0" in e
+               for e in arity_errs), arity_errs
+
+
+def test_stage31_function_pointer_cannot_forge_refined_return():
+    src = """
+    type Probability = f64 where 0.0 <= self <= 1.0;
+    fn raw() -> f64 { 1.2_f64 }
+    fn f() -> Probability {
+        let fp: fn() -> Probability = raw;
+        fp()
+    }
+    """
+    errs = check(src)
+    assert any("function type conversion from fn() -> f64 "
+               "to fn() -> Probability would change refined" in e
+               for e in errs), errs
+
+
+def test_stage31_refined_function_cannot_weaken_to_raw_function_type():
+    src = """
+    type Probability = f64 where 0.0 <= self <= 1.0;
+    fn use_p(p: Probability) -> i32 { 0 }
+    fn f() -> i32 {
+        let fp: fn(f64) -> i32 = use_p;
+        fp(1.2_f64)
+    }
+    """
+    errs = check(src)
+    assert any("function type conversion from fn(Probability) -> i32 "
+               "to fn(f64) -> i32 would change refined parameter" in e
+               for e in errs), errs
+
+
+def test_stage31_refined_function_cannot_weaken_through_call_arg():
+    src = """
+    type Probability = f64 where 0.0 <= self <= 1.0;
+    fn use_p(p: Probability) -> i32 { 0 }
+    fn take_raw(f: fn(f64) -> i32) -> i32 { f(1.2_f64) }
+    fn main() -> i32 {
+        take_raw(use_p)
+    }
+    """
+    errs = check(src)
+    assert any("call to 'take_raw': arg 'f'" in e
+               and "function type conversion from fn(Probability) -> i32 "
+               "to fn(f64) -> i32 would change refined parameter" in e
+               for e in errs), errs
+
+
+def test_stage31_refined_function_cannot_weaken_through_return():
+    src = """
+    type Probability = f64 where 0.0 <= self <= 1.0;
+    fn use_p(p: Probability) -> i32 { 0 }
+    fn leak() -> fn(f64) -> i32 {
+        use_p
+    }
+    """
+    errs = check(src)
+    assert any("return value of function 'leak'" in e
+               and "function type conversion from fn(Probability) -> i32 "
+               "to fn(f64) -> i32 would change refined parameter" in e
+               for e in errs), errs
+
+
+def test_stage31_refined_function_cannot_weaken_through_explicit_return():
+    src = """
+    type Probability = f64 where 0.0 <= self <= 1.0;
+    fn use_p(p: Probability) -> i32 { 0 }
+    fn raw(p: f64) -> i32 { 0 }
+    fn leak() -> fn(f64) -> i32 {
+        return use_p;
+        raw
+    }
+    """
+    errs = check(src)
+    assert any("return value of function 'leak'" in e
+               and "function type conversion from fn(Probability) -> i32 "
+               "to fn(f64) -> i32 would change refined parameter" in e
+               for e in errs), errs
+
+
+def test_stage31_refined_function_cannot_weaken_through_branch_join():
+    src = """
+    type Probability = f64 where 0.0 <= self <= 1.0;
+    fn use_p(p: Probability) -> i32 { 0 }
+    fn raw(p: f64) -> i32 { 1 }
+    fn leak(b: bool) -> fn(f64) -> i32 {
+        if b { use_p } else { raw }
+    }
+    """
+    errs = check(src)
+    assert any("branch function types fn(Probability) -> i32 and "
+               "fn(f64) -> i32 differ in refined parameter" in e
+               for e in errs), errs
+
+
+def test_stage31_refined_function_cannot_weaken_through_let_branch_join():
+    src = """
+    type Probability = f64 where 0.0 <= self <= 1.0;
+    fn use_p(p: Probability) -> i32 { 0 }
+    fn raw(p: f64) -> i32 { 1 }
+    fn f(b: bool) -> i32 {
+        let fp: fn(f64) -> i32 = if b { use_p } else { raw };
+        fp(1.2_f64)
+    }
+    """
+    errs = check(src)
+    assert any("branch function types fn(Probability) -> i32 and "
+               "fn(f64) -> i32 differ in refined parameter" in e
+               for e in errs), errs
+
+
+def test_stage31_refined_function_cannot_weaken_through_array_literal():
+    src = """
+    type Probability = f64 where 0.0 <= self <= 1.0;
+    fn use_p(p: Probability) -> i32 { 0 }
+    fn raw(p: f64) -> i32 { 1 }
+    fn f() -> i32 {
+        let fps = [use_p, raw];
+        fps[0](1.2_f64)
+    }
+    """
+    errs = check(src)
+    assert any("array literal function element types "
+               "fn(Probability) -> i32 and fn(f64) -> i32 differ "
+               "in refined parameter" in e for e in errs), errs
+
+
+def test_stage31_refined_function_cannot_weaken_through_array_branch_join():
+    src = """
+    type Probability = f64 where 0.0 <= self <= 1.0;
+    fn use_p(p: Probability) -> i32 { 0 }
+    fn raw(p: f64) -> i32 { 1 }
+    fn f(b: bool) -> i32 {
+        let fps = if b { [use_p] } else { [raw] };
+        fps[0](1.2_f64)
+    }
+    """
+    errs = check(src)
+    assert any("branch function types [fn(Probability) -> i32" in e
+               and "differ in refined parameter" in e for e in errs), errs
+
+
+def test_stage31_refined_function_cannot_weaken_through_reference():
+    src = """
+    type Probability = f64 where 0.0 <= self <= 1.0;
+    fn take_raw(r: &fn(f64) -> i32) -> i32 { 0 }
+    fn bridge(r: &fn(Probability) -> i32) -> i32 {
+        take_raw(r)
+    }
+    """
+    errs = check(src)
+    assert any("call to 'take_raw': arg 'r'" in e
+               and "reference type conversion from &fn(Probability) -> i32 "
+               "to &fn(f64) -> i32 would change refined parameter" in e
+               for e in errs), errs
+
+
+def test_stage31_refined_function_cannot_weaken_through_pointer():
+    src = """
+    type Probability = f64 where 0.0 <= self <= 1.0;
+    fn take_raw(p: *const fn(f64) -> i32) -> i32 { 0 }
+    fn bridge(p: *const fn(Probability) -> i32) -> i32 {
+        take_raw(p)
+    }
+    """
+    errs = check(src)
+    assert any("call to 'take_raw': arg 'p'" in e
+               and "pointer type conversion from *const fn(Probability) -> i32 "
+               "to *const fn(f64) -> i32 would change refined parameter" in e
+               for e in errs), errs
+
+
+def test_stage31_refined_pointer_cannot_weaken_to_raw_pointer():
+    src = """
+    type Probability = f64 where 0.0 <= self <= 1.0;
+    extern "C" fn poison(p: *mut f64) -> i32;
+    fn bridge(p: *mut Probability) -> i32 {
+        poison(p)
+    }
+    """
+    errs = check(src)
+    assert any("call to 'poison': arg 'p'" in e
+               and "pointer type conversion from *mut Probability "
+               "to *mut f64 would change refined parameter" in e
+               for e in errs), errs
+
+
+def test_stage31_refined_function_array_cannot_reannotate_to_raw_array():
+    src = """
+    type Probability = f64 where 0.0 <= self <= 1.0;
+    fn use_p(p: Probability) -> i32 { 0 }
+    fn f() -> i32 {
+        let fps = [use_p];
+        let raws: [fn(f64) -> i32; 1] = fps;
+        raws[0](1.2_f64)
+    }
+    """
+    errs = check(src)
+    assert any("array type conversion from [fn(Probability) -> i32; 1] "
+               "to [fn(f64) -> i32; 1] would change refined parameter" in e
+               for e in errs), errs
+
+
+def test_stage31_refined_pointer_array_cannot_reannotate_to_raw_array():
+    src = """
+    type Probability = f64 where 0.0 <= self <= 1.0;
+    fn f(p: *mut Probability) -> i32 {
+        let xs = [p];
+        let raw: [*mut f64; 1] = xs;
+        0
+    }
+    """
+    errs = check(src)
+    assert any("array type conversion from [*mut Probability; 1] "
+               "to [*mut f64; 1] would change refined parameter" in e
+               for e in errs), errs
+
+
+def test_stage31_refined_function_tuple_cannot_reannotate_to_raw_tuple():
+    src = """
+    type Probability = f64 where 0.0 <= self <= 1.0;
+    fn use_p(p: Probability) -> i32 { 0 }
+    fn f() -> i32 {
+        let fps = (use_p,);
+        let raws: (fn(f64) -> i32,) = fps;
+        0
+    }
+    """
+    errs = check(src)
+    assert any("tuple type conversion from (fn(Probability) -> i32) "
+               "to (fn(f64) -> i32) would change refined parameter" in e
+               for e in errs), errs
+
+
+def test_stage31_refined_wrapper_cannot_weaken_to_raw_wrapper():
+    diff = check("""
+    type Probability = f64 where 0.0 <= self <= 1.0;
+    fn leak(x: D<Probability>) -> D<f64> { x }
+    """)
+    assert any("type conversion from D<Probability> to D<f64> "
+               "would change refined" in e for e in diff), diff
+
+    logic = check("""
+    type Probability = f64 where 0.0 <= self <= 1.0;
+    fn leak(x: Logic<Probability>) -> Logic<f64> { x }
+    """)
+    assert any("type conversion from Logic<Probability> to Logic<f64> "
+               "would change refined" in e for e in logic), logic
+
+    mem = check("""
+    type Probability = f64 where 0.0 <= self <= 1.0;
+    fn leak(x: WorkingMem<Probability>) -> WorkingMem<f64> { x }
+    """)
+    assert any("type conversion from WorkingMem<Probability> "
+               "to WorkingMem<f64> would change refined" in e
+               for e in mem), mem
+
+
+def test_stage31_refined_tensor_dtype_cannot_weaken_to_raw_dtype():
+    src = """
+    type Probability = f32 where 0.0 <= self <= 1.0;
+    fn leak(x: tensor<Probability, [4]>) -> tensor<f32, [4]> { x }
+    """
+    errs = check(src)
+    assert any("type conversion from tensor<Probability, [4]> "
+               "to tensor<f32, [4]> would change refined" in e
+               for e in errs), errs
+
+
+def test_stage31_function_typed_call_checks_refined_actual_wrappers():
+    src = """
+    type Probability = f64 where 0.0 <= self <= 1.0;
+    fn use_raw(x: D<f64>) -> i32 { 0 }
+    fn bridge(x: D<Probability>) -> i32 {
+        let fp: fn(D<f64>) -> i32 = use_raw;
+        fp(x)
+    }
+    """
+    errs = check(src)
+    assert any("function-typed call arg 0" in e
+               and "type conversion from D<Probability> to D<f64> "
+               "would change refined" in e for e in errs), errs
+
+
+def test_stage31_function_typed_call_fails_before_backend():
+    src = """
+    fn use_i(x: i32) -> i32 { x }
+    fn apply(fp: fn(i32) -> i32, x: i32) -> i32 {
+        fp(x)
+    }
+    fn main() -> i32 { apply(use_i, 42) }
+    """
+    errs = check(src)
+    assert any("function-typed calls are not supported by the Stage 31 "
+               "backend" in e for e in errs), errs
+
+
+def test_stage31_extern_signatures_cannot_claim_refined_types():
+    ret = check("""
+    type Probability = f64 where 0.0 <= self <= 1.0;
+    extern "C" fn c_prob() -> Probability;
+    fn use_p(p: Probability) -> i32 { 42 }
+    fn main() -> i32 { use_p(c_prob()) }
+    """)
+    assert any("extern function 'c_prob': return type Probability "
+               "cannot use refined types" in e for e in ret), ret
+
+    param = check("""
+    type Probability = f64 where 0.0 <= self <= 1.0;
+    extern "C" fn poison(p: *mut Probability) -> i32;
+    fn main(p: *mut Probability) -> i32 { poison(p) }
+    """)
+    assert any("extern function 'poison': parameter 'p' type "
+               "*mut Probability cannot use refined types" in e
+               for e in param), param
+
+    wrapped = check("""
+    type Probability = f64 where 0.0 <= self <= 1.0;
+    extern "C" fn c_prob() -> D<Probability>;
+    """)
+    assert any("extern function 'c_prob': return type D<Probability> "
+               "cannot use refined types" in e for e in wrapped), wrapped
+
+
+def test_stage31_extern_signature_cannot_smuggle_refined_struct_field():
+    errs = check_after_flatten("""
+    type Probability = f64 where 0.0 <= self <= 1.0;
+    struct Reading { p: Probability }
+    extern "C" fn c_reading() -> Reading;
+    fn use_p(p: Probability) -> i32 { 42 }
+    fn main() -> i32 { use_p(c_reading().p) }
+    """)
+    assert any("extern function 'c_reading': return type Reading "
+               "cannot use refined types" in e for e in errs), errs
+
+
+def test_stage31_extern_signature_cannot_smuggle_refined_enum_payload():
+    errs = check_after_flatten("""
+    type Probability = f64 where self >= 0.0 && self <= 1.0;
+    enum Box { Some(Probability), None }
+    extern "C" fn sink(x: Box) -> i32;
+    fn main() -> i32 { 0 }
+    """)
+    assert any("extern function 'sink': parameter 'x' type Box "
+               "cannot use refined types" in e for e in errs), errs
+
+
+def test_stage31_refined_composite_nonliteral_requires_existing_proof():
+    src = """
+    type Probability = f64 where 0.0 <= self <= 1.0;
+    fn f() {
+        let raw = [1.2_f64];
+        let ps: [Probability; 1] = raw;
+    }
+    """
+    errs = check(src)
+    assert any("refined array type" in e
+               and "requires an array literal" in e for e in errs), errs
+
+
+def test_stage31_refined_tuple_nonliteral_requires_existing_proof():
+    src = """
+    type Probability = f64 where 0.0 <= self <= 1.0;
+    fn f() {
+        let raw = (1.2_f64, 0.5_f64);
+        let ps: (Probability, Probability) = raw;
+    }
+    """
+    errs = check(src)
+    assert any("refined tuple type" in e
+               and "requires a tuple literal" in e for e in errs), errs
+
+
+def test_stage31_unused_bad_type_aliases_are_diagnosed():
+    bad_target = check("""
+    type Bad = Missing where self > 0.0;
+    fn f() {}
+    """)
+    assert any("target type could not be resolved" in e for e in bad_target), bad_target
+
+    generic = check("""
+    type Box[T] = f64 where self > 0.0;
+    fn f() {}
+    """)
+    assert any("generic aliases are not supported" in e for e in generic), generic
+
+    recursive = check("""
+    type A = A where self > 0.0;
+    fn f() {}
+    """)
+    assert any("is recursive" in e for e in recursive), recursive
+
+
+def test_stage31_alias_targets_reject_nested_unknowns():
+    array_alias = check("""
+    type Bad = [Missing; 1];
+    fn f() {}
+    """)
+    assert any("target type could not be resolved" in e
+               and "unknown name Missing" in e for e in array_alias), array_alias
+
+    tuple_alias = check("""
+    type Bad = (Missing, i32);
+    fn f() {}
+    """)
+    assert any("target type could not be resolved" in e
+               and "unknown name Missing" in e for e in tuple_alias), tuple_alias
+
+    fn_alias = check("""
+    type Bad = fn(Missing) -> i32;
+    fn f() {}
+    """)
+    assert any("target type could not be resolved" in e
+               and "unknown name Missing" in e for e in fn_alias), fn_alias
+
+
+def test_stage31_unknown_generic_type_rejected_before_refinement_bypass():
+    src = """
+    mod m {
+        type Probability = f64 where 0.0 <= self <= 1.0;
+    }
+    use m::Probability;
+    fn f() {
+        let p: Missing<Probability> = 1.2_f64;
+    }
+    """
+    errs = check_after_flatten(src)
+    assert any("unknown generic type 'Missing'" in e for e in errs), errs
+
+
+def test_stage31_generic_struct_args_are_resolved_in_alias_targets():
+    src = """
+    struct Box[T] { v: T }
+    type Alias = Box<Probability>;
+    fn bad(p: Alias) -> i32 { 0 }
+    """
+    errs = check(src)
+    assert any("unknown type 'Probability'" in e for e in errs), errs
+    assert any("type alias 'Alias': target type could not be resolved" in e
+               for e in errs), errs
+
+
+def test_stage31_alias_to_enum_target_resolves():
+    errs = check("""
+    enum List { Nil }
+    type L = List;
+    fn f(l: L) {}
+    """)
+    assert errs == []
+
+
+def test_stage31_nonrecursive_aggregate_returns_rejected_before_lowering():
+    struct_errs = check("""
+    struct Pt { x: i32, y: i32 }
+    fn make() -> Pt {
+        let p = Pt { x: 10, y: 32 };
+        p
+    }
+    """)
+    assert any("aggregate return type Pt is not supported" in e
+               for e in struct_errs), struct_errs
+
+    enum_errs = check("""
+    enum Maybe { None, Some(i32) }
+    fn make() -> Maybe { Maybe::Some(42) }
+    """)
+    assert any("aggregate return type Maybe is not supported" in e
+               for e in enum_errs), enum_errs
+
+    tuple_errs = check("""
+    fn make() -> (i32, i32) { (1, 2) }
+    """)
+    assert any("aggregate return type (i32, i32) is not supported" in e
+               for e in tuple_errs), tuple_errs
+
+    array_errs = check("""
+    fn make() -> [i32; 2] { [1, 2] }
+    """)
+    assert any("aggregate return type [i32; 2] is not supported" in e
+               for e in array_errs), array_errs
+
+
+def test_stage31_recursive_enum_return_stays_supported():
+    errs = check("""
+    enum List { Nil, Cons(i32, List) }
+    fn make() -> List { List::Nil }
+    """)
+    assert errs == [], errs
+
+
+def test_stage31_enum_constructor_args_match_enum_params():
+    errs = check("""
+    enum Maybe { None, Some(i32) }
+    fn unwrap(m: Maybe, d: i32) -> i32 { d }
+    fn main() -> i32 {
+        unwrap(Maybe::Some(42), 0) + unwrap(Maybe::None, 0)
+    }
+    """)
+    assert errs == [], errs
+
+
+def test_stage31_wrong_enum_match_pattern_rejected():
+    errs = check_after_flatten("""
+    enum A { X }
+    enum B { X }
+    fn f(a: A) -> i32 {
+        match a { B::X => 42 }
+    }
+    fn main() -> i32 { f(A::X) }
+    """)
+    assert any("pattern B::X cannot match scrutinee type A" in e
+               for e in errs), errs
+
+
+def test_stage31_unused_bad_refinement_predicates_are_diagnosed():
+    missing = check("""
+    type Bad = f64 where missing > 0.0;
+    fn f() {}
+    """)
+    assert any("refinement predicate missing > 0.0 is not supported" in e
+               for e in missing), missing
+
+    non_bool = check("""
+    type Bad = f64 where self + 1.0;
+    fn f() {}
+    """)
+    assert any("refinement predicate (self + 1.0) is not supported" in e
+               for e in non_bool), non_bool
+
+    bool_base = check("""
+    type BoolRange = bool where 0.0 <= self <= 1.0;
+    fn f() {}
+    """)
+    assert any("numeric scalar base type" in e
+               and "bool" in e for e in bool_base), bool_base
+
+    array_base = check("""
+    type Bad = [i32; 1] where self > 0;
+    fn f() {}
+    """)
+    assert any("numeric scalar base type" in e
+               and "[i32; 1]" in e for e in array_base), array_base
+
+    bool_operand = check("""
+    type Bad = f64 where false < self;
+    fn f() {}
+    """)
+    assert any("refinement predicate false < self is not supported" in e
+               for e in bool_operand), bool_operand
+
+
+def test_stage31_nested_module_use_rewrites_refined_alias_type():
+    src = """
+    mod m {
+        type Probability = f64 where 0.0 <= self <= 1.0;
+    }
+    mod n {
+        use m::Probability;
+        fn f() { let p: Probability = 1.2_f64; }
+    }
+    """
+    errs = check_after_flatten(src)
+    assert any("refinement m__Probability violated" in e for e in errs), errs
+
+
+def test_stage31_parent_module_use_rewrites_child_module():
+    src = """
+    mod m {
+        type Probability = f64 where 0.0 <= self <= 1.0;
+    }
+    mod outer {
+        use m::Probability;
+        mod child { fn f() { let p: Probability = 1.2_f64; } }
+    }
+    """
+    errs = check_after_flatten(src)
+    assert any("refinement m__Probability violated" in e for e in errs), errs
+
+
+def test_stage31_parent_module_sibling_alias_does_not_capture_child():
+    from helixc.frontend import ast_nodes as A
+    from helixc.frontend.flatten_modules import flatten_modules
+
+    src = """
+    mod outer {
+        type Probability = f64 where 0.0 <= self <= 1.0;
+        mod child { fn f() { let p: Probability = 1.2_f64; } }
+    }
+    """
+    prog = parse(src)
+    flatten_modules(prog)
+    fn = next(
+        it for it in prog.items
+        if isinstance(it, A.FnDecl) and it.name == "outer__child__f"
+    )
+    let_stmt = fn.body.stmts[0]
+    assert isinstance(let_stmt, A.Let)
+    assert isinstance(let_stmt.ty, A.TyName)
+    assert let_stmt.ty.name == "Probability"
+    errs = check_after_flatten(src)
+    assert any("unknown type 'Probability'" in e for e in errs), errs
+
+
+def test_stage31_flatten_rewrites_module_enum_match_patterns():
+    src = """
+    mod m {
+        enum E { A, B }
+        fn f(e: E) -> i32 {
+            match e { E::A => 1, E::B => 2 }
+        }
+    }
+    """
+    errs = check_after_flatten(src)
+    assert errs == [], errs
+
+
+def test_stage31_flatten_rewrites_module_enum_value_paths():
+    src = """
+    mod m { enum E { A } }
+    fn main() -> i32 {
+        match m::E::A { m::E::A => 42 }
+    }
+    """
+    errs = check_after_flatten(src)
+    assert errs == [], errs
+
+
+def test_stage31_flatten_rewrites_module_enum_payload_constructors():
+    src = """
+    mod m {
+        enum Maybe { None, Some(i32) }
+        fn take(m: Maybe) -> i32 { 0 }
+        fn make() -> i32 { take(Maybe::Some(42)) }
+    }
+    """
+    errs = check_after_flatten(src)
+    assert errs == [], errs
+
+
+def test_stage31_flatten_rewrites_module_const_value_paths():
+    from helixc.frontend import ast_nodes as A
+    from helixc.frontend.flatten_modules import flatten_modules
+
+    src = """
+    mod m { const N: i32 = 7; }
+    fn main() -> i32 { m::N }
+    """
+    prog = parse(src)
+    flatten_modules(prog)
+    fn = next(
+        it for it in prog.items
+        if isinstance(it, A.FnDecl) and it.name == "main"
+    )
+    assert isinstance(fn.body.final_expr, A.Name)
+    assert fn.body.final_expr.name == "m__N"
+    assert check_after_flatten(src) == []
+
+
+def test_stage31_flatten_rewrites_module_sibling_const_value_paths():
+    from helixc.frontend import ast_nodes as A
+    from helixc.frontend.flatten_modules import flatten_modules
+
+    src = """
+    mod m {
+        const A: i32 = 7;
+        const B: i32 = A;
+    }
+    fn main() -> i32 { m::B }
+    """
+    prog = parse(src)
+    flatten_modules(prog)
+    b_const = next(
+        it for it in prog.items
+        if isinstance(it, A.ConstDecl) and it.name == "m__B"
+    )
+    assert isinstance(b_const.value, A.Name)
+    assert b_const.value.name == "m__A"
+    assert check_after_flatten(src) == []
+
+
+def test_stage31_flatten_rewrites_module_local_fn_const_names():
+    from helixc.frontend import ast_nodes as A
+    from helixc.frontend.flatten_modules import flatten_modules
+
+    src = """
+    mod m {
+        const N: i32 = 7;
+        fn f() -> i32 { N }
+    }
+    fn main() -> i32 { m::f() }
+    """
+    prog = parse(src)
+    flatten_modules(prog)
+    fn = next(
+        it for it in prog.items
+        if isinstance(it, A.FnDecl) and it.name == "m__f"
+    )
+    assert isinstance(fn.body.final_expr, A.Name)
+    assert fn.body.final_expr.name == "m__N"
+    assert check_after_flatten(src) == []
+
+
+def test_stage31_module_local_const_rewrite_respects_param_shadowing():
+    from helixc.frontend import ast_nodes as A
+    from helixc.frontend.flatten_modules import flatten_modules
+
+    src = """
+    mod m {
+        const N: i32 = 7;
+        fn f(N: i32) -> i32 { N }
+    }
+    fn main() -> i32 { m::f(3) }
+    """
+    prog = parse(src)
+    flatten_modules(prog)
+    fn = next(
+        it for it in prog.items
+        if isinstance(it, A.FnDecl) and it.name == "m__f"
+    )
+    assert isinstance(fn.body.final_expr, A.Name)
+    assert fn.body.final_expr.name == "N"
+    assert check_after_flatten(src) == []
+
+
+def test_stage31_local_const_shadows_module_alias_in_type_size():
+    from helixc.frontend import ast_nodes as A
+    from helixc.frontend.flatten_modules import flatten_modules
+
+    src = """
+    mod m {
+        const N: i32 = 7;
+        fn f() -> i32 {
+            const N: i32 = 3;
+            let xs: [i32; N] = [1, 2, 3];
+            0
+        }
+    }
+    """
+    prog = parse(src)
+    flatten_modules(prog)
+    fn = next(
+        it for it in prog.items
+        if isinstance(it, A.FnDecl) and it.name == "m__f"
+    )
+    let_stmt = fn.body.stmts[1]
+    assert isinstance(let_stmt, A.Let)
+    assert isinstance(let_stmt.ty, A.TyArray)
+    assert isinstance(let_stmt.ty.size, A.Name)
+    assert let_stmt.ty.size.name == "N"
+    errs = typecheck(prog)
+    assert errs == [], errs
+
+
+def test_stage31_refinement_uses_alias_declaration_const_not_local_shadow():
+    src = """
+    const MAX: f64 = 1.0_f64;
+    type Probability = f64 where 0.0 <= self <= MAX;
+    fn f() {
+        const MAX: f64 = 2.0_f64;
+        let p: Probability = 1.5_f64;
+    }
+    """
+    errs = check(src)
+    assert any("refinement Probability violated" in e
+               and "1.5" in e for e in errs), errs
+
+
+def test_stage31_flatten_preserves_refinement_self_binder():
+    src = """
+    mod m {
+        const self: f64 = 1.0_f64;
+        type Probability = f64 where 0.0 <= self <= 1.0;
+        fn f() { let p: Probability = 0.5_f64; }
+    }
+    """
+    errs = check_after_flatten(src)
+    assert errs == [], errs
+
+
+def test_stage31_global_use_rewrite_respects_param_shadowing():
+    from helixc.frontend import ast_nodes as A
+    from helixc.frontend.flatten_modules import flatten_modules
+
+    src = """
+    mod m { fn fp(x: i32) -> i32 { x } }
+    use m::fp;
+    fn apply(fp: fn(i32) -> i32) -> i32 { fp(1) }
+    """
+    prog = parse(src)
+    flatten_modules(prog)
+    fn = next(
+        it for it in prog.items
+        if isinstance(it, A.FnDecl) and it.name == "apply"
+    )
+    assert isinstance(fn.body.final_expr, A.Call)
+    assert isinstance(fn.body.final_expr.callee, A.Name)
+    assert fn.body.final_expr.callee.name == "fp"
+    errs = typecheck(prog)
+    assert any("function-typed calls are not supported by the Stage 31 "
+               "backend" in str(e) for e in errs), errs
+
+
+def test_stage31_global_use_rewrites_const_value_names():
+    from helixc.frontend import ast_nodes as A
+    from helixc.frontend.flatten_modules import flatten_modules
+
+    src = """
+    mod m { const N: i32 = 7; }
+    use m::N;
+    fn main() -> i32 { N }
+    """
+    prog = parse(src)
+    flatten_modules(prog)
+    fn = next(
+        it for it in prog.items
+        if isinstance(it, A.FnDecl) and it.name == "main"
+    )
+    assert isinstance(fn.body.final_expr, A.Name)
+    assert fn.body.final_expr.name == "m__N"
+    errs = typecheck(prog)
+    assert errs == [], errs
+
+
+def test_stage31_module_local_bad_use_fails_flatten():
+    import pytest
+    from helixc.frontend.flatten_modules import FlattenError, flatten_modules
+
+    src = "mod n { use missing::Probability; fn f() -> i32 { 1 } }"
+    prog = parse(src)
+    with pytest.raises(FlattenError, match="trap 79001"):
+        flatten_modules(prog)
+
+
+def test_stage31_bad_use_not_proven_by_unrelated_mangled_prefix():
+    import pytest
+    from helixc.frontend.flatten_modules import FlattenError, flatten_modules
+
+    src = """
+    fn missing__Probability__fake() -> i32 { 0 }
+    use missing::Probability;
+    fn main() -> i32 { 0 }
+    """
+    prog = parse(src)
+    with pytest.raises(FlattenError, match="trap 79001"):
+        flatten_modules(prog)
+
+
+def test_stage31_use_module_alias_rewrites_const_path():
+    from helixc.frontend import ast_nodes as A
+    from helixc.frontend.flatten_modules import flatten_modules
+
+    src = """
+    mod m { mod child { const N: i32 = 7; } }
+    use m::child;
+    fn main() -> i32 { child::N }
+    """
+    prog = parse(src)
+    flatten_modules(prog)
+    fn = next(
+        it for it in prog.items
+        if isinstance(it, A.FnDecl) and it.name == "main"
+    )
+    assert isinstance(fn.body.final_expr, A.Name)
+    assert fn.body.final_expr.name == "m__child__N"
+    errs = typecheck(prog)
+    assert errs == [], errs
+
+
+def test_stage31_use_module_alias_rewrites_call_path():
+    from helixc.frontend import ast_nodes as A
+    from helixc.frontend.flatten_modules import flatten_modules
+
+    src = """
+    mod m { mod child { fn f() -> i32 { 7 } } }
+    use m::child;
+    fn main() -> i32 { child::f() }
+    """
+    prog = parse(src)
+    flatten_modules(prog)
+    fn = next(
+        it for it in prog.items
+        if isinstance(it, A.FnDecl) and it.name == "main"
+    )
+    assert isinstance(fn.body.final_expr, A.Call)
+    assert isinstance(fn.body.final_expr.callee, A.Name)
+    assert fn.body.final_expr.callee.name == "m__child__f"
+    errs = typecheck(prog)
+    assert errs == [], errs
+
+
+def test_stage31_use_module_alias_rewrites_turbofish_call_path():
+    from helixc.frontend import ast_nodes as A
+    from helixc.frontend.flatten_modules import flatten_modules
+    from helixc.frontend.monomorphize import monomorphize_safe
+
+    src = """
+    mod m { mod child { fn id[T](x: T) -> T { x } } }
+    use m::child;
+    fn main() -> i32 { child::id::<i32>(42) }
+    """
+    prog = parse(src)
+    flatten_modules(prog)
+    fn = next(
+        it for it in prog.items
+        if isinstance(it, A.FnDecl) and it.name == "main"
+    )
+    assert isinstance(fn.body.final_expr, A.Call)
+    assert isinstance(fn.body.final_expr.callee, A.Name)
+    assert fn.body.final_expr.callee.name == "m__child__id"
+    _, mono_diags = monomorphize_safe(prog)
+    assert mono_diags == []
+    errs = typecheck(prog)
+    assert errs == [], errs
 
 
 def test_c117_non_scalar_binary_operands_rejected():

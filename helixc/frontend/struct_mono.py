@@ -203,6 +203,8 @@ def collect_concrete_uses(prog: A.Program,
         elif isinstance(it, A.ConstDecl):
             visit_ty(it.ty)
             visit_expr(it.value)
+        elif isinstance(it, A.TypeAlias):
+            visit_ty(it.target)
 
     return out
 

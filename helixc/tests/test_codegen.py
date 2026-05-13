@@ -10385,6 +10385,612 @@ def test_module_with_generics():
     assert code == 42, f"expected 42, got {code}"
 
 
+def test_type_alias_to_struct_param_preserves_aggregate_abi():
+    """Alias erasure must happen before aggregate slot expansion."""
+    src = """
+    struct Point { x: i32, y: i32 }
+    type PointAlias = Point;
+    fn sum(p: PointAlias) -> i32 { p.x + p.y }
+    fn main() -> i32 {
+        let p = Point { x: 20, y: 22 };
+        sum(p)
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_type_alias_to_generic_struct_param_preserves_aggregate_abi():
+    """Alias erasure must resolve mono struct targets before ABI expansion."""
+    from helixc.frontend.parser import parse
+    from helixc.frontend.flatten_modules import flatten_modules
+    from helixc.frontend.struct_mono import monomorphize_structs
+    from helixc.frontend.typecheck import typecheck
+    from helixc.ir.lower_ast import lower
+    from helixc.ir.tir import OpKind
+
+    src = """
+    struct Box[T] { v: T }
+    type B = Box<i32>;
+    fn get(b: B) -> i32 { b.v }
+    """
+    prog = parse(src)
+    flatten_modules(prog)
+    prog, diags = monomorphize_structs(prog)
+    assert diags == []
+    errs = typecheck(prog)
+    assert errs == []
+    mod = lower(prog)
+    get_fn = mod.functions["get"]
+    assert [(p.name_hint, getattr(p.ty, "name", None))
+            for p in get_fn.params] == [("b__slot0", "i32")]
+    assert any(op.kind == OpKind.LOAD_ELEM for op in get_fn.entry.ops)
+
+
+def test_type_alias_to_generic_refined_struct_param_preserves_slot_type():
+    """Refined aliases erase to their real scalar type inside mono structs."""
+    from helixc.frontend.parser import parse
+    from helixc.frontend.flatten_modules import flatten_modules
+    from helixc.frontend.struct_mono import monomorphize_structs
+    from helixc.frontend.typecheck import typecheck
+    from helixc.ir.lower_ast import lower
+    from helixc.ir.tir import OpKind, TIRScalar
+
+    src = """
+    type Probability = f64 where 0.0 <= self <= 1.0;
+    struct Box[T] { v: T }
+    type B = Box<Probability>;
+    fn get(b: B) -> f64 { b.v }
+    """
+    prog = parse(src)
+    flatten_modules(prog)
+    prog, diags = monomorphize_structs(prog)
+    assert diags == []
+    errs = typecheck(prog)
+    assert errs == []
+    mod = lower(prog)
+    get_fn = mod.functions["get"]
+
+    assert [(p.name_hint, getattr(p.ty, "name", None))
+            for p in get_fn.params] == [("b__slot0", "f64")]
+    allocs = [op for op in get_fn.entry.ops
+              if op.kind == OpKind.ALLOC_ARRAY and op.attrs.get("name") == "b"]
+    assert allocs
+    assert allocs[0].attrs["dtype"] == TIRScalar("f64")
+    loads = [op for op in get_fn.entry.ops if op.kind == OpKind.LOAD_ELEM]
+    assert loads
+    assert loads[-1].results[0].ty == TIRScalar("f64")
+    rets = [op for op in get_fn.entry.ops if op.kind == OpKind.RETURN]
+    assert rets
+    assert rets[-1].operands[0].ty == TIRScalar("f64")
+
+
+def test_stage31_mixed_struct_literal_field_access_lowers_without_bug():
+    from helixc.frontend.parser import parse
+    from helixc.frontend.typecheck import typecheck
+    from helixc.ir.lower_ast import lower
+    from helixc.ir.tir import OpKind, TIRScalar
+
+    src = """
+    struct Pair { a: i32, b: f64 }
+    fn main() -> i32 {
+        let p = Pair { a: 7, b: 1.5_f64 };
+        p.a
+    }
+    """
+    prog = parse(src, include_stdlib=False)
+    errs = typecheck(prog)
+    assert errs == []
+    mod = lower(prog)
+    main_fn = mod.functions["main"]
+    assert not [
+        op for op in main_fn.entry.ops
+        if op.kind == OpKind.ALLOC_ARRAY and op.attrs.get("name") == "p"
+    ]
+    rets = [op for op in main_fn.entry.ops if op.kind == OpKind.RETURN]
+    assert rets
+    assert rets[-1].operands[0].ty == TIRScalar("i32")
+
+
+def test_stage31_mixed_struct_param_field_access_preserves_slot_types():
+    from helixc.frontend.parser import parse
+    from helixc.frontend.typecheck import typecheck
+    from helixc.ir.lower_ast import lower
+    from helixc.ir.tir import OpKind, TIRScalar
+
+    src = """
+    struct Pair { a: i32, b: f64 }
+    fn get_b(p: Pair) -> f64 { p.b }
+    """
+    prog = parse(src, include_stdlib=False)
+    errs = typecheck(prog)
+    assert errs == []
+    mod = lower(prog)
+    get_fn = mod.functions["get_b"]
+    assert [(p.name_hint, getattr(p.ty, "name", None))
+            for p in get_fn.params] == [("p__slot0", "i32"),
+                                        ("p__slot1", "f64")]
+    assert not [op for op in get_fn.entry.ops
+                if op.kind == OpKind.ALLOC_ARRAY
+                and op.attrs.get("name") == "p"]
+    rets = [op for op in get_fn.entry.ops if op.kind == OpKind.RETURN]
+    assert rets
+    assert rets[-1].operands[0].ty == TIRScalar("f64")
+
+
+def test_stage31_mixed_struct_e2e_reads_i32_field():
+    src = """
+    struct Pair { a: i32, b: f64 }
+    fn main() -> i32 {
+        let p = Pair { a: 7, b: 1.5_f64 };
+        p.a
+    }
+    """
+    assert compile_and_run(src) == 7
+
+
+def test_stage31_module_enum_payload_constructor_e2e():
+    src = """
+    mod m { pub enum Maybe { None, Some(i32) } }
+    use m::Maybe;
+    fn take(x: Maybe) -> i32 {
+        match x { Maybe::Some(v) => v, Maybe::None => 0 }
+    }
+    fn main() -> i32 { take(m::Maybe::Some(42)) }
+    """
+    assert compile_and_run(src) == 42
+
+
+def test_stage31_f64_enum_payload_inline_arg_e2e():
+    src = """
+    enum MaybeF { None, Some(f64) }
+    fn take(x: MaybeF) -> i32 {
+        match x {
+            MaybeF::Some(v) => if v > 41.5_f64 { 42 } else { 2 },
+            MaybeF::None => 1,
+        }
+    }
+    fn main() -> i32 { take(MaybeF::Some(42.0_f64)) }
+    """
+    assert compile_and_run(src) == 42
+
+
+def test_stage31_f64_enum_payload_bound_name_e2e():
+    src = """
+    enum MaybeF { None, Some(f64) }
+    fn take(x: MaybeF) -> i32 {
+        match x {
+            MaybeF::Some(v) => if v > 41.5_f64 { 42 } else { 2 },
+            MaybeF::None => 1,
+        }
+    }
+    fn main() -> i32 {
+        let m = MaybeF::Some(42.0_f64);
+        take(m)
+    }
+    """
+    assert compile_and_run(src) == 42
+
+
+def test_stage31_lower_rejects_wrong_inline_enum_constructor_arg():
+    import pytest
+    from helixc.frontend.parser import parse
+    from helixc.frontend.typecheck import typecheck
+    from helixc.ir.lower_ast import lower
+
+    src = """
+    enum A { Some(f64) }
+    enum B { Some(f64) }
+    fn take(x: A) -> i32 {
+        match x { A::Some(v) => if v > 41.5_f64 { 42 } else { 0 } }
+    }
+    fn main() -> i32 { take(B::Some(42.0_f64)) }
+    """
+    prog = parse(src, include_stdlib=False)
+    errs = typecheck(prog)
+    assert any("call to 'take': arg 'x' expects A, got B" in str(e)
+               for e in errs), errs
+    with pytest.raises(NotImplementedError,
+                       match="expects A, got inline enum constructor B"):
+        lower(prog)
+
+
+def test_stage31_lower_rejects_same_enum_bad_payload_arg_after_flatten():
+    import pytest
+    from helixc.frontend.flatten_modules import flatten_modules
+    from helixc.frontend.parser import parse
+    from helixc.frontend.typecheck import typecheck
+    from helixc.ir.lower_ast import lower
+
+    src = """
+    mod m { pub enum A { Some(f64) } }
+    use m::A;
+    fn take(x: A) -> i32 { 0 }
+    fn main() -> i32 { take(m::A::Some(42)) }
+    """
+    prog = parse(src, include_stdlib=False)
+    flatten_modules(prog)
+    errs = typecheck(prog)
+    assert any("enum m__A::Some arg 0: expected f64, got i32" in str(e)
+               for e in errs), errs
+    with pytest.raises(NotImplementedError,
+                       match="m__A::Some arg 0: expected f64, got i32"):
+        lower(prog)
+
+
+def test_stage31_lower_rejects_inline_enum_constructor_for_struct_param():
+    import pytest
+    from helixc.frontend.parser import parse
+    from helixc.frontend.typecheck import typecheck
+    from helixc.ir.lower_ast import lower
+
+    src = """
+    struct Pair { a: i32, b: f64 }
+    enum B { Some(f64) }
+    fn take(x: Pair) -> i32 { x.a }
+    fn main() -> i32 { take(B::Some(42.0_f64)) }
+    """
+    prog = parse(src, include_stdlib=False)
+    errs = typecheck(prog)
+    assert any("call to 'take': arg 'x' expects Pair, got B" in str(e)
+               for e in errs), errs
+    with pytest.raises(NotImplementedError,
+                       match="expects Pair, got inline enum constructor B"):
+        lower(prog)
+
+
+def test_stage31_flattened_enum_constructor_name_can_be_shadowed():
+    src = """
+    mod m { pub enum Maybe { None, Some(i32) } }
+    use m::Maybe;
+    fn take(x: Maybe) -> i32 {
+        match x { Maybe::Some(v) => v, Maybe::None => 0 }
+    }
+    fn main() -> i32 {
+        let m__Maybe__Some = Maybe::Some(7);
+        take(m__Maybe__Some)
+    }
+    """
+    assert compile_and_run(src) == 7
+
+
+def test_stage31_tuple_let_field_access_e2e():
+    src = """
+    fn main() -> i32 {
+        let t = (10, 20, 12);
+        t.0 + t.1 + t.2
+    }
+    """
+    assert compile_and_run(src) == 42
+
+
+def test_stage31_lower_rejects_scalar_actual_for_aggregate_param():
+    import pytest
+    from helixc.frontend.parser import parse
+    from helixc.frontend.typecheck import typecheck
+    from helixc.ir.lower_ast import lower
+
+    src = """
+    struct Pair { a: i32, b: f64 }
+    fn get_a(p: Pair) -> i32 { p.a }
+    fn main() -> i32 { get_a(1) }
+    """
+    prog = parse(src, include_stdlib=False)
+    errs = typecheck(prog)
+    assert any("call to 'get_a': arg 'p' expects Pair, got i32" in str(e)
+               for e in errs), errs
+    with pytest.raises(NotImplementedError, match="aggregate argument"):
+        lower(prog)
+
+
+def test_stage31_lower_rejects_function_typed_call_direct_path():
+    import pytest
+
+    src = """
+    fn use_i(x: i32) -> i32 { x }
+    fn main() -> i32 {
+        let fp: fn(i32) -> i32 = use_i;
+        fp(42)
+    }
+    """
+    with pytest.raises(NotImplementedError,
+                       match="function-typed calls are not supported"):
+        lower(parse(src, include_stdlib=False))
+
+
+def test_stage31_flattened_module_const_value_path_lowers_to_const_value():
+    from helixc.ir.tir import OpKind
+
+    src = """
+    mod m { const N: i32 = 7; }
+    fn main() -> i32 { m::N }
+    """
+    prog = parse(src, include_stdlib=False)
+    flatten_modules(prog)
+    mod = lower(prog)
+    main = mod.functions["main"]
+    rets = [op for op in main.entry.ops if op.kind == OpKind.RETURN]
+    assert rets
+    ret = rets[-1].operands[0]
+    defining = next(
+        op for op in main.entry.ops
+        if op.results and op.results[0] == ret
+    )
+    assert defining.kind == OpKind.CONST_INT
+    assert defining.attrs["value"] == 7
+
+
+def test_stage31_flattened_module_sibling_const_value_path_lowers_to_value():
+    from helixc.ir.tir import OpKind
+
+    src = """
+    mod m {
+        const A: i32 = 7;
+        const B: i32 = A;
+    }
+    fn main() -> i32 { m::B }
+    """
+    prog = parse(src, include_stdlib=False)
+    flatten_modules(prog)
+    mod = lower(prog)
+    main = mod.functions["main"]
+    rets = [op for op in main.entry.ops if op.kind == OpKind.RETURN]
+    assert rets
+    ret = rets[-1].operands[0]
+    defining = next(
+        op for op in main.entry.ops
+        if op.results and op.results[0] == ret
+    )
+    assert defining.kind == OpKind.CONST_INT
+    assert defining.attrs["value"] == 7
+
+
+def test_stage31_module_local_fn_const_name_lowers_to_value():
+    from helixc.ir.tir import OpKind
+
+    src = """
+    mod m {
+        const N: i32 = 7;
+        fn f() -> i32 { N }
+    }
+    fn main() -> i32 { m::f() }
+    """
+    prog = parse(src, include_stdlib=False)
+    flatten_modules(prog)
+    mod = lower(prog)
+    fn = mod.functions["m__f"]
+    rets = [op for op in fn.entry.ops if op.kind == OpKind.RETURN]
+    assert rets
+    ret = rets[-1].operands[0]
+    defining = next(
+        op for op in fn.entry.ops
+        if op.results and op.results[0] == ret
+    )
+    assert defining.kind == OpKind.CONST_INT
+    assert defining.attrs["value"] == 7
+
+
+def test_stage31_forward_module_const_alias_lowers_to_value():
+    from helixc.frontend.typecheck import typecheck
+    from helixc.ir.tir import OpKind
+
+    src = """
+    mod m {
+        const B: i32 = A;
+        const A: i32 = 7;
+        fn f() -> i32 { B }
+    }
+    fn main() -> i32 { m::f() }
+    """
+    prog = parse(src, include_stdlib=False)
+    flatten_modules(prog)
+    errs = typecheck(prog)
+    assert errs == []
+    mod = lower(prog)
+    fn = mod.functions["m__f"]
+    rets = [op for op in fn.entry.ops if op.kind == OpKind.RETURN]
+    assert rets
+    ret = rets[-1].operands[0]
+    defining = next(
+        op for op in fn.entry.ops
+        if op.results and op.results[0] == ret
+    )
+    assert defining.kind == OpKind.CONST_INT
+    assert defining.attrs["value"] == 7
+
+
+def test_stage31_f32_const_alias_preserves_ir_type():
+    from helixc.frontend.typecheck import typecheck
+    from helixc.ir.tir import OpKind, TIRScalar
+
+    src = """
+    const X: f32 = 1.0_f32;
+    fn main() -> f32 { X }
+    """
+    prog = parse(src, include_stdlib=False)
+    errs = typecheck(prog)
+    assert errs == []
+    mod = lower(prog)
+    main = mod.functions["main"]
+    rets = [op for op in main.entry.ops if op.kind == OpKind.RETURN]
+    assert rets
+    ret = rets[-1].operands[0]
+    assert ret.ty == TIRScalar("f32")
+
+
+def test_stage31_f32_const_alias_runtime_bits():
+    src = (
+        "const X: f32 = 42.0_f32;\n"
+        "fn main() -> i32 { __bits_of_f32(X) / 16777216 - 24 }\n"
+    )
+    assert compile_and_run(src, optimize=False) == 42
+
+
+def test_stage31_lower_rejects_unresolved_value_name():
+    import pytest
+
+    src = "fn main() -> i32 { missing_value }"
+    with pytest.raises(NotImplementedError, match="unresolved value name"):
+        lower(parse(src, include_stdlib=False))
+
+
+def test_stage31_lower_rejects_unknown_call_target():
+    import pytest
+
+    src = "fn main() -> i32 { missing_fn() }"
+    with pytest.raises(NotImplementedError, match="unknown function 'missing_fn'"):
+        lower(parse(src, include_stdlib=False))
+
+
+def test_stage31_lower_accepts_const_function_alias_value():
+    from helixc.frontend.flatten_impls import flatten_impls
+    from helixc.frontend.struct_mono import monomorphize_structs
+    from helixc.frontend.monomorphize import monomorphize_safe
+    from helixc.frontend.typecheck import typecheck
+
+    src = """
+    mod m {
+        fn f() -> i32 { 7 }
+        const F: fn() -> i32 = f;
+    }
+    fn main() -> i32 {
+        let fp: fn() -> i32 = m::F;
+        0
+    }
+    """
+    prog = parse(src, include_stdlib=False)
+    flatten_modules(prog)
+    flatten_impls(prog)
+    prog, struct_diags = monomorphize_structs(prog)
+    assert struct_diags == []
+    _, mono_diags = monomorphize_safe(prog)
+    assert mono_diags == []
+    errs = typecheck(prog)
+    assert errs == []
+    lower(prog)
+
+
+def test_stage31_lower_rejects_const_function_alias_call():
+    import pytest
+
+    src = """
+    mod m {
+        fn f() -> i32 { 7 }
+        const F: fn() -> i32 = f;
+    }
+    fn main() -> i32 { m::F() }
+    """
+    prog = parse(src, include_stdlib=False)
+    flatten_modules(prog)
+    with pytest.raises(NotImplementedError,
+                       match="function-typed calls are not supported"):
+        lower(prog)
+
+
+def test_stage31_lower_rejects_unmonomorphized_generic_struct_alias():
+    import pytest
+
+    src = """
+    type Probability = f64 where 0.0 <= self <= 1.0;
+    struct Box[T] { v: T }
+    type B = Box<Probability>;
+    fn get(b: B) -> f64 { b.v }
+    fn main() -> i32 { 0 }
+    """
+    with pytest.raises(NotImplementedError, match="unresolved generic type"):
+        lower(parse(src, include_stdlib=False))
+
+
+def test_stage31_lower_rejects_generic_type_alias_direct_path():
+    import pytest
+
+    src = "type Alias[T] = i32; fn main(x: Alias) -> i32 { x }"
+    with pytest.raises(NotImplementedError, match="generic type alias 'Alias'"):
+        lower(parse(src, include_stdlib=False))
+
+
+def test_type_alias_to_recursive_enum_param_preserves_single_slot_abi():
+    """Recursive enum aliases must stay single-slot at call sites too."""
+    src = """
+    enum List { Nil, Cons(i32, List) }
+    type L = List;
+    fn head_or(l: L, d: i32) -> i32 {
+        match l {
+            List::Nil => d,
+            List::Cons(x, rest) => x,
+        }
+    }
+    fn main() -> i32 {
+        head_or(List::Cons(42, List::Nil), 0)
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_type_alias_mediated_recursive_enum_preserves_single_slot_abi():
+    """Recursive enum detection must follow aliases inside payloads."""
+    src = """
+    type L = List;
+    enum List { Nil, Cons(i32, L) }
+    fn head_or(l: List, d: i32) -> i32 {
+        match l {
+            List::Nil => d,
+            List::Cons(x, rest) => x,
+        }
+    }
+    fn main() -> i32 {
+        head_or(List::Cons(42, List::Nil), 0)
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stage31_lower_rejects_scalar_actual_for_recursive_enum_param():
+    import pytest
+    from helixc.frontend.parser import parse
+    from helixc.frontend.typecheck import typecheck
+    from helixc.ir.lower_ast import lower
+
+    src = """
+    enum List { Nil, Cons(i32, List) }
+    fn head_or(l: List, d: i32) -> i32 {
+        match l { List::Nil => d, List::Cons(x, rest) => x }
+    }
+    fn main() -> i32 { head_or(0, 7) }
+    """
+    prog = parse(src, include_stdlib=False)
+    errs = typecheck(prog)
+    assert any("call to 'head_or': arg 'l' expects List, got i32" in str(e)
+               for e in errs), errs
+    with pytest.raises(NotImplementedError,
+                       match="expects List, got IntLit"):
+        lower(prog)
+
+
+def test_stage31_lower_rejects_bare_payload_variant_as_arg():
+    import pytest
+    from helixc.frontend.parser import parse
+    from helixc.frontend.typecheck import typecheck
+    from helixc.ir.lower_ast import lower
+
+    src = """
+    enum Maybe { None, Some(i32) }
+    fn take(x: Maybe) -> i32 {
+        match x { Maybe::Some(v) => v, Maybe::None => 0 }
+    }
+    fn main() -> i32 { take(Maybe::Some) }
+    """
+    prog = parse(src, include_stdlib=False)
+    errs = typecheck(prog)
+    assert any("payload - call as a function instead" in str(e)
+               for e in errs), errs
+    with pytest.raises(NotImplementedError,
+                       match="Maybe::Some expects 1 payload arg"):
+        lower(prog)
+
+
 def test_generic_instantiation_count_in_module():
     """Verify the monomorphizer adds the expected number of fns."""
     from helixc.frontend.parser import parse
@@ -10543,6 +11149,96 @@ def test_inline_recursive_enum_ctor_as_fn_arg():
     }
     """
     code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_inline_recursive_enum_ctor_payload_tail_is_arena_node():
+    """Inline recursive enum payloads must be arena-pushed before use.
+
+    This catches a bug where List::Nil inside List::Cons was lowered as raw
+    tag 0 instead of a separate arena node, so recursing into the tail could
+    jump back to the outer Cons node.
+    """
+    src = """
+    enum List { Nil, Cons(i32, List) }
+    fn sum_list(l: List) -> i32 {
+        match l {
+            List::Nil => 0,
+            List::Cons(x, tail) => x + sum_list(tail),
+        }
+    }
+    fn main() -> i32 {
+        sum_list(List::Cons(1, List::Nil))
+    }
+    """
+    code = compile_and_run(src, optimize=False)
+    assert code == 1, f"expected 1, got {code}"
+
+
+def test_recursive_enum_return_value_can_be_matched():
+    """A function returning a recursive enum returns an arena index.
+
+    The caller must remember that the returned scalar is a recursive enum so
+    match-lowered `scrut[0]` reads the arena tag instead of treating the arena
+    index itself as the tag.
+    """
+    src = """
+    enum List { Nil, Cons(i32, List) }
+    fn make() -> List {
+        let nil = List::Nil;
+        List::Cons(42, nil)
+    }
+    fn main() -> i32 {
+        match make() {
+            List::Cons(x, xs) => x,
+            List::Nil => 0,
+        }
+    }
+    """
+    code = compile_and_run(src, optimize=False)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_recursive_enum_tag_only_return_value_can_be_matched():
+    src = """
+    enum E { A, B, Cons(i32, E) }
+    fn make() -> E { E::B }
+    fn main() -> i32 {
+        let e = make();
+        match e { E::A => 1, E::B => 42, E::Cons(x, r) => x }
+    }
+    """
+    code = compile_and_run(src, optimize=False)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_recursive_enum_explicit_return_tag_only_can_be_matched():
+    src = """
+    enum E { A, B, Cons(i32, E) }
+    fn make(flag: bool) -> E {
+        if flag { return E::B; }
+        E::A
+    }
+    fn main() -> i32 {
+        let e = make(true);
+        match e { E::A => 1, E::B => 42, E::Cons(x, r) => x }
+    }
+    """
+    code = compile_and_run(src, optimize=False)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_recursive_enum_payload_accepts_function_returning_same_enum():
+    src = """
+    enum List { Nil, Cons(i32, List) }
+    fn tail() -> List { List::Nil }
+    fn make() -> List { List::Cons(42, tail()) }
+    fn head(l: List) -> i32 {
+        match l { List::Cons(x, _) => x, List::Nil => 0 }
+    }
+    fn main() -> i32 { head(make()) }
+    """
+    code = compile_and_run(src, optimize=False)
     assert code == 42, f"expected 42, got {code}"
 
 

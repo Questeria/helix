@@ -562,6 +562,18 @@ def test_c20_t2_real_unused_effect_still_flags_19002():
     )
 
 
+def test_stage31_stdlib_marker_is_not_declared_effect():
+    i32 = tir.TIRScalar("i32")
+    fn = tir.FnIR(
+        name="stdlib_helper",
+        params=[],
+        return_ty=i32,
+        blocks=[],
+        attrs={"__stdlib": True},
+    )
+    assert declared_effects(fn) == frozenset()
+
+
 def main():
     tests = [(name, fn) for name, fn in globals().items()
              if name.startswith("test_") and callable(fn)]

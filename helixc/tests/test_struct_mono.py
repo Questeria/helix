@@ -361,6 +361,20 @@ fn bad(p: Pt<i32, f64>) -> i32 { 0 }
     assert isinstance(p_ty, TyUnknown)
 
 
+def test_type_alias_target_collects_generic_struct_instantiation():
+    src = """
+type Probability = f64 where 0.0 <= self <= 1.0;
+struct Box[T] { v: T }
+type Alias = Box<Probability>;
+fn f(p: Alias) -> f64 { p.v }
+"""
+    prog = parse(src)
+    prog, diags = monomorphize_structs(prog)
+    assert diags == []
+    structs = _structs(prog)
+    assert "Box__Probability" in structs
+
+
 # ----------------------------------------------------------------------
 # Audit 28.8 A13 — _ty_key proper arms (no collapse to "?")
 # ----------------------------------------------------------------------

@@ -251,6 +251,7 @@ fn unify_shallow(pat_off: i32, term_off: i32, b: i32) -> i32 {
 // caller-provided table.
 //
 // Returns 1 on success, 0 on failure.
+@partial
 fn unify_deep(pat_off: i32, term_off: i32, child_mask: i32, b: i32) -> i32 {
     let pat_tag = __arena_get(pat_off);
     if pat_tag == unify_var_tag() {
@@ -324,6 +325,7 @@ fn unify_deep(pat_off: i32, term_off: i32, child_mask: i32, b: i32) -> i32 {
 //   unify_deep_table(pat, term, mask_table, 3, b)
 //
 // Returns 1 on success, 0 on failure.
+@partial
 fn unify_deep_table(pat_off: i32, term_off: i32, mask_table: i32,
                     mask_table_len: i32, b: i32) -> i32 {
     let pat_tag = __arena_get(pat_off);

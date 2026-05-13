@@ -17,7 +17,8 @@ Exit codes:
   2 = bad invocation (missing file, unknown flag)
 
 Flags:
-  --stdlib              Bundle helixc/stdlib/transcendentals.hx
+  --stdlib              Bundle stdlib (default; kept for compatibility)
+  --no-stdlib           Do not bundle helixc/stdlib/*.hx
   --hash                Print structural hash per top-level fn
   --hash-cons           Dedup AST nodes, print rewrite count
   --strict              Fail if totality fails
@@ -28,9 +29,10 @@ Flags:
   --emit-ptx            Print PTX kernels and exit
   --doc                 Extract /// doc comments to markdown and exit
   -O0 / -O1 / -O2 / -O3
-                        Optimization level (0=none, 1=fdce+fold,
-                        2=+cse+dce, 3=alias of -O2 until an aggressive
-                        layer lands). Default -O1.
+                        Optimization level (0=none, 1=fold+cse+dce+fdce
+                        for host IR/ELF; PTX skips DCE/FDCE so emitted
+                        kernel text stays inspectable. 2/3 currently alias
+                        -O1 until stronger layers land). Default -O1.
   -o <path>             Write ELF output to <path> instead of default
   -l <libname>          Mark <libname> as external (FFI prerequisite)
   -W<flag>              Warning policy (e.g. -Wdeprecated, -Wdeprecated=error)
@@ -54,6 +56,7 @@ from __future__ import annotations
 import sys
 import os
 
+from .frontend.lexer import LexError
 from .frontend.parser import parse, ParseError
 from .frontend.typecheck import typecheck
 from .frontend.totality import check_totality
@@ -79,7 +82,7 @@ class CliArgs:
 
 
 _KNOWN_LONG_FLAGS = frozenset({
-    "--stdlib", "--hash", "--hash-cons", "--strict",
+    "--stdlib", "--no-stdlib", "--hash", "--hash-cons", "--strict",
     "--check-only", "--emit-ast", "--emit-ir", "--emit-asm",
     "--emit-ptx", "--doc", "--help", "--no-color", "--color",
     "-h",
@@ -376,9 +379,15 @@ def _main_inner(argv: list[str] | None,
     # can drain AD warnings on ANY return below (including error paths).
     a_holder.append(a)
 
+    include_stdlib = "--no-stdlib" not in a.flags
+
     # 1. Parse
     try:
-        prog = parse(src, include_stdlib=("--stdlib" in a.flags))
+        prog = parse(src, include_stdlib=include_stdlib)
+    except LexError as e:
+        print("LEX ERROR:", file=sys.stderr)
+        print(f"  {path}:{e}", file=sys.stderr)
+        return 1
     except ParseError as e:
         rendered = e.render(source=src, filename=path, color=a.color)
         print("PARSE ERROR:", file=sys.stderr)
@@ -399,35 +408,11 @@ def _main_inner(argv: list[str] | None,
                 print(f"{type(it).__name__}")
         return 0
 
-    # 2. Typecheck
-    tc_errs = typecheck(prog)
-    if tc_errs:
-        print(f"   typecheck: {len(tc_errs)} ERRORS")
-        for e in tc_errs[:20]:
-            rendered = e.render(source=src, filename=path, color=a.color) \
-                if hasattr(e, "render") else str(e)
-            for line in rendered.splitlines():
-                print(f"     {line}")
-        if len(tc_errs) > 20:
-            print(f"     ... and {len(tc_errs) - 20} more")
-        return 1
-    print(f"   typecheck: OK")
-
-    # 2.5 Stage 28 — parametric-struct monomorphization (Audit 28.8
-    # A3/B1/C1-M2). Surfaces arity-mismatch diagnostics + appends the
-    # mono'd StructDecls so downstream passes (lowering, codegen) can
-    # find them by mangled name. Doesn't replace typecheck's lookup
-    # (which goes through `_resolve_type` -> `mangle_struct` and
-    # produces `TyStruct(mangled)` directly).
-    from .frontend.struct_mono import monomorphize_structs
-    prog, sm_diags = monomorphize_structs(prog)
-    if sm_diags:
-        print(f"   struct-mono: {len(sm_diags)} ERROR(s)")
-        for d in sm_diags:
-            print(f"     {d}")
-        return 1
-
-    # 2.55 Stage 28.9 cycle 66 fix-sweep — flatten modules BEFORE
+    # 2. Surface-shape rewrites before typecheck. This mirrors the backend
+    # driver, so typecheck sees module-local aliases/functions and lifted
+    # impl methods rather than silently skipping nested items.
+    #
+    # Stage 28.9 cycle 66 fix-sweep — flatten modules BEFORE
     # flatten_impls, matching `helixc/backend/x86_64.py` order
     # (lines 3104+3107). Cycle-63 audit found the surface tool
     # skipped flatten_modules entirely so mod-nested @deprecated
@@ -452,7 +437,7 @@ def _main_inner(argv: list[str] | None,
         print(f"     {e}", file=sys.stderr)
         return 1
 
-    # 2.6 Audit 28.8 cycle 2 B:C7 — flatten impls so trap 74002
+    # Audit 28.8 cycle 2 B:C7 — flatten impls so trap 74002
     # (duplicate method name across distinct structs) is reachable
     # from the surface tool. Pre-fix `flatten_impls` was only invoked
     # inside the backend, so users iterating with `helixc check
@@ -469,6 +454,49 @@ def _main_inner(argv: list[str] | None,
         print(f"   impl-flatten: ERROR")
         print(f"     {e}")
         return 1
+
+    # Stage 28 — parametric-struct monomorphization (Audit 28.8
+    # A3/B1/C1-M2). Surfaces arity-mismatch diagnostics + appends the
+    # mono'd StructDecls so downstream passes (lowering, codegen) can
+    # find them by mangled name. Doesn't replace typecheck's lookup
+    # (which goes through `_resolve_type` -> `mangle_struct` and
+    # produces `TyStruct(mangled)` directly).
+    from .frontend.struct_mono import monomorphize_structs
+    prog, sm_diags = monomorphize_structs(prog)
+    if sm_diags:
+        print(f"   struct-mono: {len(sm_diags)} ERROR(s)")
+        for d in sm_diags:
+            print(f"     {d}")
+        return 1
+
+    # Function monomorphization must run before typecheck for the developer
+    # CLI too. The x86 backend already does this; without it, --emit-ir can
+    # reject valid generic calls using type aliases while the backend accepts
+    # the same source.
+    from .frontend.monomorphize import monomorphize_safe
+    mono_count, mono_diags = monomorphize_safe(prog)
+    if mono_diags:
+        print(f"   fn-mono: {len(mono_diags)} ERROR(s)")
+        for d in mono_diags:
+            print(f"     {d}")
+        return 1
+    if mono_count > 0:
+        print(f"   fn-mono: {mono_count} generic instantiation(s)")
+
+    # 2.5 Typecheck after flatten/mono, matching the backend's user-error
+    # gate and catching module-local refined aliases before IR emission.
+    tc_errs = typecheck(prog)
+    if tc_errs:
+        print(f"   typecheck: {len(tc_errs)} ERRORS")
+        for e in tc_errs[:20]:
+            rendered = e.render(source=src, filename=path, color=a.color) \
+                if hasattr(e, "render") else str(e)
+            for line in rendered.splitlines():
+                print(f"     {line}")
+        if len(tc_errs) > 20:
+            print(f"     ... and {len(tc_errs) - 20} more")
+        return 1
+    print(f"   typecheck: OK")
 
     # 3. Totality
     # Stage 28.9 cycle 28 audit-R C27-6 fix (conf 70): pre-fix the
@@ -613,9 +641,10 @@ def _main_inner(argv: list[str] | None,
 
     # 5. Lower + (optional) optimization passes
     if any(f in a.flags for f in ("--emit-ir", "--emit-asm", "--emit-ptx")) \
+            or "--strict" in a.flags \
             or a.output is not None:
         from .ir.lower_ast import lower
-        from .ir.passes.fdce import fdce_module
+        from .ir.passes.fdce import fdce_module, diagnostic_function_names
         from .ir.passes.const_fold import fold_module, FoldError
         from .ir.passes.cse import cse_module
         from .ir.passes.dce import dce_module
@@ -641,13 +670,20 @@ def _main_inner(argv: list[str] | None,
         from .frontend.grad_pass import grad_pass
         grad_pass(prog)
         mod = lower(prog)
-        # Optimization pipeline (Audit 28.8 A10):
+        pre_opt_effect_scope = None
+        if include_stdlib:
+            pre_opt_effect_scope = diagnostic_function_names(mod)
+        pre_opt_eff_errs = effect_check_module(
+            mod, only_functions=pre_opt_effect_scope)
+        # Optimization pipeline (Audit 28.8 A10, Stage 31 parity):
         #   -O0          — no opts
-        #   -O1 (default)— fdce + const_fold
-        #   -O2          — -O1 + cse + dce
-        #   -O3          — -O2 (no aggressive layer yet; surface here so
-        #                  future passes have a hook). Documented identical
-        #                  to -O2 until a Phase-0+ aggressive layer exists.
+        #   -O1 (default) mirrors x86_64.py default for host IR/ELF:
+        #                  const_fold + cse + dce + fdce
+        #                  (`--emit-ptx` keeps DCE/FDCE off because the
+        #                  textual kernel body is the inspected artifact)
+        #   -O2          same pass set for now
+        #   -O3          same pass set for now; reserved for a future
+        #                  aggressive layer.
         #
         # The pre-fix code ran ONLY fdce at -O1+ and stubbed -O2 with an
         # empty try/import-pass placeholder — so users invoking `-O2`
@@ -665,12 +701,16 @@ def _main_inner(argv: list[str] | None,
         # level error.) Mirrors the FoldError-as-user-diagnostic
         # pattern used implicitly by x86_64.py.
         try:
+            emit_ptx = "--emit-ptx" in a.flags
             if a.opt_level >= 1:
-                fdce_module(mod)
                 fold_module(mod)
-            if a.opt_level >= 2:
                 cse_module(mod)
-                dce_module(mod)
+                if not emit_ptx:
+                    dce_module(mod)
+                    fdce_module(mod)
+            if a.opt_level >= 2:
+                # Same pass set as -O1 until a stronger layer lands.
+                pass
             if a.opt_level >= 3:
                 # No aggressive layer yet — kept distinct from -O2 so a
                 # future pass can wire in without re-shaping the
@@ -684,7 +724,13 @@ def _main_inner(argv: list[str] | None,
             return 1
 
         # Stage 28.9 cycle 24 → cycle 26 → cycle 28 evolution: effect-
-        # check classification was previously done by inline substring
+        # Strict mode must not fail on unused auto-bundled stdlib fns when
+        # -O0 skips the normal FDCE optimization pipeline.
+        effect_scope = None
+        if include_stdlib:
+            effect_scope = diagnostic_function_names(mod)
+
+        # Effect-check classification was previously done by inline substring
         # matching duplicated across this driver and x86_64.py. Cycle 28
         # audit-R C27-2/C27-3 refactored it: the canonical classifier
         # lives in effect_check.classify_effect_error, so the message
@@ -707,7 +753,14 @@ def _main_inner(argv: list[str] | None,
         # Stage 28.9 cycle 30 audit-R C29-5 (conf 68): the per-line
         # dispatch loop is now in `effect_check.report_diagnostics`
         # so check.py and x86_64.py share one printing implementation.
-        eff_errs = effect_check_module(mod)
+        post_opt_eff_errs = effect_check_module(
+            mod, only_functions=effect_scope)
+        eff_errs = list(pre_opt_eff_errs)
+        seen_eff_errs = set(eff_errs)
+        for err in post_opt_eff_errs:
+            if err not in seen_eff_errs:
+                eff_errs.append(err)
+                seen_eff_errs.add(err)
         hard_count = report_effect_diagnostics(eff_errs, stderr=sys.stderr)
         if hard_count > 0 and "--strict" in a.flags:
             print(

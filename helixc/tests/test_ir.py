@@ -636,19 +636,15 @@ def test_c107_char_lit_in_expr_pos_raises_loud():
     )
 
 
-def test_c107_struct_lit_in_expr_pos_raises_loud():
-    """C107-F8 regression (HIGH conf 82): A.StructLit appearing in a
-    non-let-stmt expression position (call-arg, if-arm, return value,
-    assign rhs) must raise NotImplementedError. The let-stmt path at
-    lower_ast.py:848 handles `let x = S{a:1};`; any other expression
-    position routed through _lower_expr's bottom `return None`,
-    silently folding the StructLit to 0."""
+def test_c107_struct_lit_invalid_expr_pos_raises_loud():
+    """C107-F8 regression (HIGH conf 82): an unsupported StructLit
+    expression must raise NotImplementedError instead of silently folding
+    to 0. Stage 31 now supports the valid call-argument case when the
+    callee parameter is the same aggregate type, so keep this pin on a
+    scalar return position where no aggregate expansion is available."""
     src = """
     struct Pt { x: i32, y: i32 }
-    fn take(p: Pt) -> i32 { p.x }
-    fn main() -> i32 {
-        take(Pt { x: 1, y: 2 })
-    }
+    fn main() -> i32 { Pt { x: 1, y: 2 } }
     """
     try:
         lower_src(src)

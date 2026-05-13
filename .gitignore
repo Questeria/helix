@@ -54,3 +54,4 @@ desktop.ini
 # Logs
 *.log
 /runs/
+/.stage31-logs/

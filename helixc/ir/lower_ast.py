@@ -45,9 +45,13 @@ class Lowerer:
         self._mut_shadow_counter: dict[str, int] = {}
         # Arrays: name -> (elem_ty, length)
         self.array_scope: list[dict[str, tuple[tir.TIRType, int]]] = []
+        # Heterogeneous aggregates: name -> typed slot SSA values. Homogeneous
+        # structs/enums still use array_scope for the older backend path.
+        self.aggregate_scope: list[dict[str, list[tir.Value]]] = []
         # Structs: binding-name -> struct-decl-name (so we can resolve
         # `p.field_x` to a LOAD_ELEM at the correct field index).
         self.struct_scope: list[dict[str, str]] = []
+        self.enum_scope: list[dict[str, str]] = []
         # Recursive enums: binding-name -> enum-decl-name. The binding
         # holds a scalar i32 (arena index); Index(Name, k) on it emits
         # ARENA_GET(arena_index + k) — the dispatch primitive for
@@ -80,6 +84,7 @@ class Lowerer:
         # Name of the currently-being-lowered fn (used as TRACE_EXIT
         # attr). None when not inside a fn body.
         self._current_fn_name: str | None = None
+        self._current_expected_rec_enum: str | None = None
         # struct-decl-name -> ordered list of field names (declaration order).
         # Built from prog.items at lower-time. Used for the flat (single-
         # level) struct case where every field is i32.
@@ -90,8 +95,16 @@ class Lowerer:
         #   {"Outer": [("count",), ("inner", "value")], "Inner": [("value",)]}.
         # Used for nested StructLit + chained Field access.
         self._struct_flat_paths: dict[str, list[tuple[str, ...]]] = {}
+        self._struct_flat_slot_types: dict[str, list[tir.TIRType]] = {}
         # enum-decl-name -> {variant-name: index}.
         self._enum_variants: dict[str, dict[str, int]] = {}
+        # Stage 31: type aliases, including refined aliases, erase to their
+        # target type before IR so backend scalar names stay primitive.
+        self._type_aliases: dict[str, A.TypeAlias] = {}
+        self._lowering_type_aliases: set[str] = set()
+        self._const_scalar_values: dict[str, int | float | bool] = {}
+        self._const_scalar_types: dict[str, tir.TIRType] = {}
+        self._const_fn_aliases: dict[str, str] = {}
         # name -> FnIR (registered functions)
         self.functions: dict[str, tir.FnIR] = {}
         # quote-handle assignment table: maps AST pretty-form -> unique cell
@@ -112,6 +125,9 @@ class Lowerer:
                 self._enum_variants[item.name] = {
                     v.name: i for i, v in enumerate(item.variants)
                 }
+            elif isinstance(item, A.TypeAlias):
+                self._type_aliases[item.name] = item
+        self._index_const_values()
         # Build flat paths for each struct. Requires all referenced sub-
         # struct decls already indexed (above).  Iterate to fixpoint to
         # handle forward references.
@@ -120,6 +136,7 @@ class Lowerer:
 
         def _ty_struct_name(ty) -> Optional[str]:
             """Return the struct-decl name a type refers to, or None."""
+            ty = self._resolve_type_alias_node(ty)
             if isinstance(ty, A.TyName) and ty.name in struct_decls:
                 return ty.name
             return None
@@ -148,9 +165,29 @@ class Lowerer:
                     paths.append((p.name,))
             return paths
 
+        def _field_type_for_path(name: str, path: tuple[str, ...]) -> A.TyNode:
+            cur_name = name
+            leaf_ty: A.TyNode = A.TyName(A.Span(0, 0), "i32")
+            for seg in path:
+                decl = struct_decls.get(cur_name)
+                if decl is None:
+                    break
+                field = next((p for p in decl.fields if p.name == seg), None)
+                if field is None:
+                    break
+                leaf_ty = field.ty
+                sub_name = _ty_struct_name(field.ty)
+                if sub_name is not None:
+                    cur_name = sub_name
+            return leaf_ty
+
         for name in struct_decls:
             self._struct_flat_paths[name] = _flat_paths_for(
                 name, frozenset())
+            self._struct_flat_slot_types[name] = [
+                self._lower_type(_field_type_for_path(name, path))
+                for path in self._struct_flat_paths[name]
+            ]
 
         # Detect recursive enum types: any enum where a variant payload
         # references the enum itself (directly or transitively). Recursive
@@ -171,6 +208,7 @@ class Lowerer:
                 return False
             for v in decl.variants:
                 for pty in v.payload_tys:
+                    pty = self._resolve_type_alias_node(pty)
                     if isinstance(pty, A.TyName) and pty.name in enum_decls:
                         if _enum_references(pty.name, target,
                                             visiting | {name}):
@@ -197,7 +235,9 @@ class Lowerer:
         self.scope.append({})
         self.mut_scope.append({})
         self.array_scope.append({})
+        self.aggregate_scope.append({})
         self.struct_scope.append({})
+        self.enum_scope.append({})
         self.rec_enum_scope.append({})
         self.tile_scope.append({})
         self.hbm_tile_scope.append({})
@@ -205,7 +245,9 @@ class Lowerer:
         self.scope.pop()
         self.mut_scope.pop()
         self.array_scope.pop()
+        self.aggregate_scope.pop()
         self.struct_scope.pop()
+        self.enum_scope.pop()
         self.rec_enum_scope.pop()
         self.tile_scope.pop()
         self.hbm_tile_scope.pop()
@@ -247,13 +289,56 @@ class Lowerer:
         return ir_name
     def _bind_array(self, name: str, elem_ty: tir.TIRType, length: int) -> None:
         self.array_scope[-1][name] = (elem_ty, length)
+    def _bind_aggregate(self, name: str, values: list[tir.Value]) -> None:
+        self.aggregate_scope[-1][name] = values
+    def _lookup_aggregate(self, name: str) -> Optional[list[tir.Value]]:
+        for sc in reversed(self.aggregate_scope):
+            if name in sc:
+                return sc[name]
+        return None
     def _bind_struct(self, binding_name: str, struct_name: str) -> None:
         self.struct_scope[-1][binding_name] = struct_name
+    def _bind_enum(self, binding_name: str, enum_name: str) -> None:
+        self.enum_scope[-1][binding_name] = enum_name
+    def _lookup_enum(self, name: str) -> Optional[str]:
+        for sc in reversed(self.enum_scope):
+            if name in sc:
+                return sc[name]
+        return None
     def _lookup_struct(self, name: str) -> Optional[str]:
         for sc in reversed(self.struct_scope):
             if name in sc:
                 return sc[name]
         return None
+
+    def _enum_variant_for_expr(
+        self, expr: A.Expr,
+    ) -> Optional[tuple[str, str, int]]:
+        """Resolve `Enum::Variant` and flattened `mod__Enum__Variant`."""
+        ename: Optional[str] = None
+        vname: Optional[str] = None
+        if isinstance(expr, A.Path):
+            segs = list(expr.segments)
+            if len(segs) >= 3 and segs[0] == "crate":
+                segs = segs[1:]
+            if len(segs) == 2:
+                ename, vname = segs
+        elif isinstance(expr, A.Name) and "__" in expr.name:
+            parts = expr.name.split("__")
+            for i in range(len(parts) - 1, 0, -1):
+                candidate = "__".join(parts[:i])
+                variants = self._enum_variants.get(candidate)
+                if variants is None:
+                    continue
+                tail = "__".join(parts[i:])
+                if tail in variants:
+                    return candidate, tail, variants[tail]
+        if ename is None or vname is None:
+            return None
+        variants = self._enum_variants.get(ename)
+        if variants is None or vname not in variants:
+            return None
+        return ename, vname, variants[vname]
 
     def _resolve_path_value(self, slit: "A.StructLit",
                               path: tuple[str, ...]) -> "Optional[tir.Value]":
@@ -287,6 +372,11 @@ class Lowerer:
                     idx_int = src_paths.index(remaining)
                 except ValueError:
                     return None
+                agg = self._lookup_aggregate(cur.name)
+                if agg is not None:
+                    if 0 <= idx_int < len(agg):
+                        return agg[idx_int]
+                    return None
                 arr = self._lookup_array(cur.name)
                 if arr is None:
                     return None
@@ -302,33 +392,372 @@ class Lowerer:
 
     def _aggregate_slot_count(self, ty: "A.TyNode") -> Optional[int]:
         """If `ty` is a struct or enum decl name, return the number of
-        i32 slots it occupies (struct: flat field count; enum: max
+        ABI slots it occupies (struct: flat field count; enum: max
         payload count + 1 for tag, OR 1 if recursive — arena index).
         None for non-aggregate types."""
+        slot_types = self._aggregate_slot_types(ty)
+        return len(slot_types) if slot_types is not None else None
+
+    def _aggregate_slot_types(
+        self, ty: "A.TyNode",
+    ) -> Optional[list[tir.TIRType]]:
+        ty = self._resolve_type_alias_node(ty)
         if not isinstance(ty, A.TyName):
             return None
         # Struct: flat-path length already encodes nested-struct flattening.
-        flat = self._struct_flat_paths.get(ty.name)
-        if flat is not None:
-            return len(flat)
+        slots = self._struct_flat_slot_types.get(ty.name)
+        if slots is not None:
+            return slots
         # Recursive enum: the value is a single i32 arena index.
         if ty.name in getattr(self, "_recursive_enums", set()):
-            return 1
+            return [tir.TIRScalar("i32")]
         # Non-recursive enum: tag (1) + max payload arity across variants.
         if ty.name in self._enum_variants:
-            decl = next(
-                (it for it in self.prog.items
-                 if isinstance(it, A.EnumDecl) and it.name == ty.name),
-                None,
-            )
-            if decl is None:
-                return 1
-            max_payload = max(
-                (len(v.payload_tys) for v in decl.variants),
-                default=0,
-            )
-            return 1 + max_payload
+            return self._enum_slot_types(ty.name)
         return None
+
+    def _enum_slot_types(self, enum_name: str) -> list[tir.TIRType]:
+        decl = next(
+            (it for it in self.prog.items
+             if isinstance(it, A.EnumDecl) and it.name == enum_name),
+            None,
+        )
+        if decl is None:
+            return [tir.TIRScalar("i32")]
+        max_payload = max(
+            (len(v.payload_tys) for v in decl.variants),
+            default=0,
+        )
+        slot_types: list[tir.TIRType] = [tir.TIRScalar("i32")]
+        for payload_idx in range(max_payload):
+            seen: Optional[tir.TIRType] = None
+            for variant in decl.variants:
+                if payload_idx >= len(variant.payload_tys):
+                    continue
+                payload_ty = self._lower_type(variant.payload_tys[payload_idx])
+                if seen is None:
+                    seen = payload_ty
+                elif payload_ty != seen:
+                    raise NotImplementedError(
+                        f"enum {enum_name} payload slot {payload_idx} has "
+                        f"mixed types {tir.fmt_type(seen)} and "
+                        f"{tir.fmt_type(payload_ty)}; mixed-type enum "
+                        f"payload positions need a tagged-union ABI"
+                    )
+            slot_types.append(seen or tir.TIRScalar("i32"))
+        return slot_types
+
+    def _enum_variant_decl(
+        self, enum_name: str, variant_name: str,
+    ) -> Optional[A.EnumVariant]:
+        decl = next(
+            (it for it in self.prog.items
+             if isinstance(it, A.EnumDecl) and it.name == enum_name),
+            None,
+        )
+        if decl is None:
+            return None
+        return next(
+            (variant for variant in decl.variants
+             if variant.name == variant_name),
+            None,
+        )
+
+    def _require_tag_only_enum_variant(
+        self, enum_name: str, variant_name: str,
+    ) -> None:
+        variant = self._enum_variant_decl(enum_name, variant_name)
+        if variant is not None and variant.payload_tys:
+            raise NotImplementedError(
+                f"enum constructor {enum_name}::{variant_name} expects "
+                f"{len(variant.payload_tys)} payload arg(s); call it with "
+                f"payload values before IR lowering"
+            )
+
+    def _lower_enum_payload_args(
+        self, enum_name: str, variant_name: str, args: list[A.Expr],
+    ) -> list[tir.Value]:
+        variant = self._enum_variant_decl(enum_name, variant_name)
+        if variant is None:
+            raise NotImplementedError(
+                f"enum constructor {enum_name}::{variant_name} reached IR "
+                f"lowering but no matching variant exists; run typecheck first"
+            )
+        if len(args) != len(variant.payload_tys):
+            raise NotImplementedError(
+                f"enum constructor {enum_name}::{variant_name} expects "
+                f"{len(variant.payload_tys)} payload arg(s), got "
+                f"{len(args)}; run typecheck first"
+            )
+        values: list[tir.Value] = []
+        for idx, (arg_expr, payload_ty) in enumerate(
+                zip(args, variant.payload_tys)):
+            resolved_payload_ty = self._resolve_type_alias_node(payload_ty)
+            if (isinstance(resolved_payload_ty, A.TyName)
+                    and resolved_payload_ty.name in self._recursive_enums):
+                expected = tir.TIRScalar("i32")
+                value = self._lower_recursive_enum_payload_arg(
+                    arg_expr, resolved_payload_ty.name,
+                    f"{enum_name}::{variant_name} arg {idx}")
+            else:
+                expected = self._lower_type(payload_ty)
+                value = self._lower_expr(arg_expr)
+                if value is None:
+                    value = self.builder.const_int(0)
+            if value.ty != expected:
+                raise NotImplementedError(
+                    f"enum constructor {enum_name}::{variant_name} arg "
+                    f"{idx}: expected {tir.fmt_type(expected)}, got "
+                    f"{tir.fmt_type(value.ty)}; run typecheck first"
+                )
+            values.append(value)
+        return values
+
+    def _lower_recursive_enum_payload_arg(
+        self, expr: A.Expr, enum_name: str, context: str,
+    ) -> tir.Value:
+        if isinstance(expr, A.Call):
+            enum_variant = self._enum_variant_for_expr(expr.callee)
+            if enum_variant is not None:
+                ename, vname, tag = enum_variant
+                if ename != enum_name:
+                    raise NotImplementedError(
+                        f"{context}: expected {enum_name}, got inline enum "
+                        f"constructor {ename}; run typecheck first"
+                    )
+                tag_v = self.builder.const_int(tag)
+                payload_vals = self._lower_enum_payload_args(
+                    ename, vname, expr.args)
+                return self._arena_push_slots([tag_v] + payload_vals)
+            call_rec = self._recursive_enum_name_for_expr(expr)
+            if call_rec is not None:
+                if call_rec != enum_name:
+                    raise NotImplementedError(
+                        f"{context}: expected {enum_name}, got function "
+                        f"returning {call_rec}; run typecheck first"
+                    )
+                value = self._lower_expr(expr, expected_rec_enum=enum_name)
+                if value is not None:
+                    return value
+        enum_variant = self._enum_variant_for_expr(expr)
+        if enum_variant is not None:
+            ename, vname, tag = enum_variant
+            if ename != enum_name:
+                raise NotImplementedError(
+                    f"{context}: expected {enum_name}, got inline enum "
+                    f"constructor {ename}; run typecheck first"
+                )
+            self._require_tag_only_enum_variant(ename, vname)
+            return self._arena_push_slots([self.builder.const_int(tag)])
+        if isinstance(expr, A.Name) and self._lookup_rec_enum(expr.name) == enum_name:
+            value = self._lower_expr(expr)
+            if value is not None:
+                return value
+        got = type(expr).__name__
+        if isinstance(expr, A.Name):
+            got = self._lookup_rec_enum(expr.name) or f"scalar/name '{expr.name}'"
+        raise NotImplementedError(
+            f"{context}: expected {enum_name}, got {got}; run typecheck first"
+        )
+
+    def _arena_push_slots(self, slots: list[tir.Value]) -> tir.Value:
+        start_idx: Optional[tir.Value] = None
+        for value in slots:
+            pushed = self.builder.emit(
+                tir.OpKind.ARENA_PUSH, value,
+                result_ty=tir.TIRScalar("i32"))
+            if start_idx is None:
+                start_idx = pushed
+        return start_idx or self.builder.const_int(0)
+
+    def _recursive_enum_name_for_type_node(
+        self, ty: Optional["A.TyNode"],
+    ) -> Optional[str]:
+        if ty is None:
+            return None
+        resolved = self._resolve_type_alias_node(ty)
+        if (isinstance(resolved, A.TyName)
+                and resolved.name in self._recursive_enums):
+            return resolved.name
+        return None
+
+    def _recursive_enum_name_for_expr(
+        self, expr: Optional[A.Expr],
+    ) -> Optional[str]:
+        if expr is None:
+            return None
+        if isinstance(expr, A.Name):
+            rec_enum = self._lookup_rec_enum(expr.name)
+            if rec_enum is not None:
+                return rec_enum
+        enum_variant = self._enum_variant_for_expr(expr)
+        if enum_variant is not None:
+            ename, _vname, _tag = enum_variant
+            if ename in self._recursive_enums:
+                return ename
+        if isinstance(expr, A.Call):
+            enum_ctor = self._enum_variant_for_expr(expr.callee)
+            if enum_ctor is not None:
+                ename, _vname, _tag = enum_ctor
+                if ename in self._recursive_enums:
+                    return ename
+            if isinstance(expr.callee, A.Name):
+                for item in self.prog.items:
+                    if (isinstance(item, A.FnDecl)
+                            and item.name == expr.callee.name):
+                        return self._recursive_enum_name_for_type_node(
+                            item.return_ty)
+        return None
+
+    def _recursive_enum_name_for_value(
+        self, ty: Optional["A.TyNode"], expr: Optional[A.Expr],
+        value: tir.Value,
+    ) -> Optional[str]:
+        rec_enum = self._recursive_enum_name_for_type_node(ty)
+        if rec_enum is not None:
+            return rec_enum
+        rec_enum = self._recursive_enum_name_for_expr(expr)
+        if rec_enum is not None:
+            return rec_enum
+        if (isinstance(value.ty, tir.TIRScalar)
+                and value.ty.name in self._recursive_enums):
+            return value.ty.name
+        return None
+
+    def _resolve_type_alias_node(self, ty: "A.TyNode") -> "A.TyNode":
+        """Erase type-alias nodes before ABI-shape decisions."""
+        seen: set[str] = set()
+        while isinstance(ty, A.TyName):
+            alias = self._type_aliases.get(ty.name)
+            if alias is None or alias.name in seen:
+                return self._resolve_monomorphized_struct_type(ty)
+            if alias.generics:
+                raise NotImplementedError(
+                    f"generic type alias '{alias.name}' reached IR "
+                    f"lowering; generic aliases are not supported in Stage 31"
+                )
+            seen.add(alias.name)
+            ty = alias.target
+        return self._resolve_monomorphized_struct_type(ty)
+
+    def _resolve_monomorphized_struct_type(
+        self, ty: "A.TyNode",
+    ) -> "A.TyNode":
+        if isinstance(ty, A.TyGeneric):
+            try:
+                from ..frontend.struct_mono import mangle_struct
+                mangled = mangle_struct(ty.base, list(ty.args))
+            except Exception:
+                return ty
+            if mangled in self._struct_fields:
+                return A.TyName(span=ty.span, name=mangled)
+        return ty
+
+    def _zero_for_type(self, ty: tir.TIRType) -> tir.Value:
+        if isinstance(ty, tir.TIRScalar) and ty.name in {
+                "bf16", "f16", "f32", "f64"}:
+            return self.builder.const_float(0.0, dtype=ty.name)
+        if isinstance(ty, tir.TIRScalar):
+            return self.builder.const_int(0, dtype=ty.name)
+        return self.builder.const_int(0)
+
+    @staticmethod
+    def _homogeneous_slot_type(
+        slot_types: list[tir.TIRType],
+    ) -> tir.TIRType:
+        first = slot_types[0]
+        if any(slot_ty != first for slot_ty in slot_types[1:]):
+            raise NotImplementedError(
+                "heterogeneous aggregate ABI reassembly is not supported yet")
+        return first
+
+    @staticmethod
+    def _is_homogeneous_slot_list(slot_types: list[tir.TIRType]) -> bool:
+        first = slot_types[0]
+        return all(slot_ty == first for slot_ty in slot_types[1:])
+
+    def _index_const_values(self) -> None:
+        consts = [item for item in self.prog.items
+                  if isinstance(item, A.ConstDecl)]
+        fn_names = {item.name for item in self.prog.items
+                    if isinstance(item, A.FnDecl)}
+        for _ in range(len(consts)):
+            progressed = False
+            for decl in consts:
+                if decl.name not in self._const_scalar_values:
+                    value = self._eval_const_scalar_expr(decl.value)
+                    if value is not None:
+                        self._const_scalar_values[decl.name] = value
+                        self._const_scalar_types[decl.name] = self._lower_type(
+                            decl.ty)
+                        progressed = True
+                        continue
+                if decl.name not in self._const_fn_aliases:
+                    fn_alias = self._eval_const_fn_alias_expr(
+                        decl.value, fn_names)
+                    if fn_alias is not None:
+                        self._const_fn_aliases[decl.name] = fn_alias
+                        progressed = True
+            if not progressed:
+                break
+
+    def _eval_const_scalar_expr(
+        self, expr: A.Expr,
+    ) -> Optional[int | float | bool]:
+        if isinstance(expr, A.IntLit):
+            return expr.value
+        if isinstance(expr, A.FloatLit):
+            return expr.value
+        if isinstance(expr, A.BoolLit):
+            return expr.value
+        if isinstance(expr, A.Name):
+            return self._const_scalar_values.get(expr.name)
+        if isinstance(expr, A.Unary) and expr.op == "-":
+            inner = self._eval_const_scalar_expr(expr.operand)
+            if (isinstance(inner, (int, float))
+                    and not isinstance(inner, bool)):
+                return -inner
+        if isinstance(expr, A.Binary):
+            left = self._eval_const_scalar_expr(expr.left)
+            right = self._eval_const_scalar_expr(expr.right)
+            if not (isinstance(left, (int, float))
+                    and isinstance(right, (int, float))
+                    and not isinstance(left, bool)
+                    and not isinstance(right, bool)):
+                return None
+            if expr.op == "+":
+                return left + right
+            if expr.op == "-":
+                return left - right
+            if expr.op == "*":
+                return left * right
+            if expr.op == "/" and right != 0:
+                return left / right
+            if expr.op == "%" and right != 0:
+                return left % right
+        return None
+
+    def _eval_const_fn_alias_expr(
+        self, expr: A.Expr, fn_names: set[str],
+    ) -> Optional[str]:
+        if isinstance(expr, A.Name):
+            if expr.name in fn_names:
+                return expr.name
+            return self._const_fn_aliases.get(expr.name)
+        return None
+
+    def _match_payload_rec_enum_name(self, stmt: A.Let) -> Optional[str]:
+        if not isinstance(stmt.value, A.Index):
+            return None
+        payload_ty = getattr(stmt.value, "_match_payload_ty", None)
+        if payload_ty is None:
+            return None
+        payload_ty = self._resolve_type_alias_node(payload_ty)
+        if (isinstance(payload_ty, A.TyName)
+                and payload_ty.name in self._recursive_enums):
+            return payload_ty.name
+        return None
+
     def _lookup(self, name: str) -> Optional[tir.Value]:
         for sc in reversed(self.scope):
             if name in sc:
@@ -368,7 +797,10 @@ class Lowerer:
     })
 
     def _lower_type(self, ty: A.TyNode) -> tir.TIRType:
+        ty = self._resolve_type_alias_node(ty)
         if isinstance(ty, A.TyName):
+            if ty.name in getattr(self, "_recursive_enums", set()):
+                return tir.TIRScalar("i32")
             # Recognize struct / enum / primitive names. Anything else is
             # likely a generic type parameter (e.g. T in `fn id[T](x: T)`).
             # Generic type params lower to TIRScalar(name) which defaults
@@ -398,6 +830,10 @@ class Lowerer:
             # Stage 16.5: raw pointer lowers to u64 in IR. The pointee type
             # is preserved on the AST for diagnostics but unused at IR level.
             return tir.TIRScalar("u64")
+        if isinstance(ty, A.TyGeneric):
+            raise NotImplementedError(
+                f"unresolved generic type {ty.base}<...> reached IR "
+                f"lowering; run struct monomorphization first")
         return tir.TIRScalar("?")
 
     def _lower_dim(self, expr: A.Expr) -> tir.Dim:
@@ -422,27 +858,27 @@ class Lowerer:
     # ---- function registration ----
     def _register_fn(self, fn: A.FnDecl) -> None:
         # Build the IR-level param list. AGGREGATE-typed AST params (struct
-        # or enum) expand to N i32 IR params, where N is the slot count.
+        # or enum) expand to N typed IR params, where N is the slot count.
         # The callee uses param-name suffixed with "__slot{i}" to
         # distinguish; reassembly into an array binding happens in
         # _lower_fn_body.
         params: list[tuple[str, tir.TIRType]] = []
         for p in fn.params:
+            p_ty = self._resolve_type_alias_node(p.ty)
             # Recursive enum: single i32 arena index (no slot expansion).
-            if (isinstance(p.ty, A.TyName)
-                    and p.ty.name in self._recursive_enums):
+            if (isinstance(p_ty, A.TyName)
+                    and p_ty.name in self._recursive_enums):
                 params.append((p.name, tir.TIRScalar("i32")))
                 continue
-            n_slots = self._aggregate_slot_count(p.ty)
+            slot_types = self._aggregate_slot_types(p_ty)
             # Aggregate-typed params always go through the multi-slot
             # path, even single-field ones — the body uses field-access
             # syntax which expects an array binding.
-            if n_slots is not None and n_slots >= 1:
-                for i in range(n_slots):
-                    params.append((f"{p.name}__slot{i}",
-                                   tir.TIRScalar("i32")))
+            if slot_types is not None and len(slot_types) >= 1:
+                for i, slot_ty in enumerate(slot_types):
+                    params.append((f"{p.name}__slot{i}", slot_ty))
             else:
-                t = self._lower_type(p.ty)
+                t = self._lower_type(p_ty)
                 params.append((p.name, t))
         ret = self._lower_type(fn.return_ty) if fn.return_ty else tir.TIRUnit()
         attrs: dict[str, object] = {}
@@ -490,8 +926,11 @@ class Lowerer:
         # epilogue at the end of this function).
         prev_is_fn_traced = self._is_fn_traced
         prev_current_fn_name = self._current_fn_name
+        prev_expected_rec_enum = self._current_expected_rec_enum
         self._is_fn_traced = is_fn_traced
         self._current_fn_name = fn.name
+        self._current_expected_rec_enum = (
+            self._recursive_enum_name_for_type_node(fn.return_ty))
         # Stage 16 — track kernel context. thread_idx() and indexed-tile ops
         # are only valid inside @kernel fns.
         prev_in_kernel = self._in_kernel
@@ -505,24 +944,25 @@ class Lowerer:
         # the PTX backend to know which `.param .u64 param_N` slot to load.
         kernel_hbm_param_pos = 0
         for p in fn.params:
+            p_ty = self._resolve_type_alias_node(p.ty)
             # Stage 16 — kernel param typed `tile<dtype, [N], HBM>`. Register
             # for indexed-load/store lowering. Skip the multi-slot expansion
             # below (kernel tile params are opaque pointers at this level).
             if (self._in_kernel
-                    and isinstance(p.ty, A.TyTile)
-                    and self._stringify_marker(p.ty.memspace) in ("HBM", "hbm")):
+                    and isinstance(p_ty, A.TyTile)
+                    and self._stringify_marker(p_ty.memspace) in ("HBM", "hbm")):
                 # Validate dtype + shape constraints. Phase-0: 1D, dtype known.
-                dtype_node = p.ty.dtype
+                dtype_node = p_ty.dtype
                 if not (isinstance(dtype_node, A.TyName)
                         and dtype_node.name in ("f32", "i32")):
                     raise NotImplementedError(
                         "Stage 16 HBM tile param dtype must be f32/i32; "
                         f"got {dtype_node}")
-                if len(p.ty.shape) != 1:
+                if len(p_ty.shape) != 1:
                     raise NotImplementedError(
                         "Stage 16 HBM tile param shape must be 1D; "
-                        f"got {len(p.ty.shape)}D")
-                length_expr = p.ty.shape[0]
+                        f"got {len(p_ty.shape)}D")
+                length_expr = p_ty.shape[0]
                 length = (length_expr.value
                           if isinstance(length_expr, A.IntLit) else 0)
                 # Skip IR param consumption — kernel param ptrs are not bound
@@ -538,32 +978,41 @@ class Lowerer:
             # Recursive-enum-typed param: scalar i32 arena index. Bind as
             # scalar + register in rec_enum scope so Index access emits
             # ARENA_GET against it.
-            if (isinstance(p.ty, A.TyName)
-                    and p.ty.name in self._recursive_enums):
+            if (isinstance(p_ty, A.TyName)
+                    and p_ty.name in self._recursive_enums):
                 v = ir_fn.params[ir_param_idx]
                 ir_param_idx += 1
                 self._bind(p.name, v)
-                self._bind_rec_enum(p.name, p.ty.name)
+                self._bind_rec_enum(p.name, p_ty.name)
                 continue
-            n_slots = self._aggregate_slot_count(p.ty)
-            if n_slots is not None and n_slots >= 1:
-                # Take next n_slots IR params, allocate array, store each.
+            slot_types = self._aggregate_slot_types(p_ty)
+            if slot_types is not None and len(slot_types) >= 1:
+                n_slots = len(slot_types)
+                # Take next n_slots IR params. Homogeneous aggregates keep the
+                # older array-backed path; heterogeneous aggregates bind typed
+                # slots directly so field access preserves each slot type.
                 slot_vals = list(ir_fn.params[ir_param_idx:
                                               ir_param_idx + n_slots])
                 ir_param_idx += n_slots
-                elem_ty = tir.TIRScalar("i32")
-                self.builder.emit(tir.OpKind.ALLOC_ARRAY,
-                                  attrs={"name": p.name,
-                                         "dtype": elem_ty,
-                                         "length": n_slots})
-                for i, sv in enumerate(slot_vals):
-                    idx = self.builder.const_int(i)
-                    self.builder.emit(tir.OpKind.STORE_ELEM, idx, sv,
-                                      attrs={"name": p.name})
-                self._bind_array(p.name, elem_ty, n_slots)
-                if isinstance(p.ty, A.TyName) \
-                        and p.ty.name in self._struct_flat_paths:
-                    self._bind_struct(p.name, p.ty.name)
+                if self._is_homogeneous_slot_list(slot_types):
+                    elem_ty = slot_types[0]
+                    self.builder.emit(tir.OpKind.ALLOC_ARRAY,
+                                      attrs={"name": p.name,
+                                             "dtype": elem_ty,
+                                             "length": n_slots})
+                    for i, sv in enumerate(slot_vals):
+                        idx = self.builder.const_int(i)
+                        self.builder.emit(tir.OpKind.STORE_ELEM, idx, sv,
+                                          attrs={"name": p.name})
+                    self._bind_array(p.name, elem_ty, n_slots)
+                else:
+                    self._bind_aggregate(p.name, slot_vals)
+                if isinstance(p_ty, A.TyName) \
+                        and p_ty.name in self._struct_flat_paths:
+                    self._bind_struct(p.name, p_ty.name)
+                if (isinstance(p_ty, A.TyName)
+                        and p_ty.name in self._enum_variants):
+                    self._bind_enum(p.name, p_ty.name)
             else:
                 v = ir_fn.params[ir_param_idx]
                 ir_param_idx += 1
@@ -575,8 +1024,13 @@ class Lowerer:
                                       attrs={"name": ir_name})
                 else:
                     self._bind(p.name, v)
+                if (isinstance(p_ty, A.TyName)
+                        and p_ty.name in self._enum_variants):
+                    self._bind_enum(p.name, p_ty.name)
         # Lower body block
-        body_val = self._lower_block(fn.body)
+        body_val = self._lower_block(
+            fn.body,
+            expected_rec_enum=self._current_expected_rec_enum)
         # Audit 28.8 A7 — Stage 25 @trace epilogue. Emit TRACE_EXIT
         # with the return value (so the runtime can record it) before
         # the actual return instruction. If the fn returns Unit, pass
@@ -602,15 +1056,20 @@ class Lowerer:
         # Audit 28.8 cycle 2 C2-2 — restore traced-fn state.
         self._is_fn_traced = prev_is_fn_traced
         self._current_fn_name = prev_current_fn_name
+        self._current_expected_rec_enum = prev_expected_rec_enum
         self.builder.end_function()
 
-    def _lower_block(self, block: A.Block) -> Optional[tir.Value]:
+    def _lower_block(
+        self, block: A.Block, expected_rec_enum: Optional[str] = None,
+    ) -> Optional[tir.Value]:
         self._push_scope()
         try:
             for stmt in block.stmts:
                 self._lower_stmt(stmt)
             if block.final_expr is not None:
-                return self._lower_expr(block.final_expr)
+                return self._lower_expr(
+                    block.final_expr,
+                    expected_rec_enum=expected_rec_enum)
             return None
         finally:
             self._pop_scope()
@@ -800,61 +1259,59 @@ class Lowerer:
             # EXCEPTION: tag-only path of a RECURSIVE enum needs to be
             # arena-allocated (the binding's value is the arena index,
             # not the tag itself).
-            if (stmt.value is not None
-                    and isinstance(stmt.value, A.Path)
-                    and len(stmt.value.segments) == 2):
-                ename, vname = stmt.value.segments
-                variants = self._enum_variants.get(ename)
-                if (variants is not None and vname in variants
-                        and ename in self._recursive_enums):
-                    tag_v = self.builder.const_int(variants[vname])
+            if stmt.value is not None:
+                enum_variant = self._enum_variant_for_expr(stmt.value)
+            else:
+                enum_variant = None
+            if enum_variant is not None:
+                ename, vname, tag = enum_variant
+                self._require_tag_only_enum_variant(ename, vname)
+                if ename in self._recursive_enums:
+                    tag_v = self.builder.const_int(tag)
                     pushed = self.builder.emit(
                         tir.OpKind.ARENA_PUSH, tag_v,
                         result_ty=tir.TIRScalar("i32"))
                     self._bind(stmt.name, pushed)
                     self._bind_rec_enum(stmt.name, ename)
                     return
+                tag_v = self.builder.const_int(tag)
+                self._bind(stmt.name, tag_v)
+                self._bind_enum(stmt.name, ename)
+                return
             if (stmt.value is not None
-                    and isinstance(stmt.value, A.Call)
-                    and isinstance(stmt.value.callee, A.Path)
-                    and len(stmt.value.callee.segments) == 2):
-                ename, vname = stmt.value.callee.segments
-                variants = self._enum_variants.get(ename)
-                if variants is not None and vname in variants:
-                    tag_v = self.builder.const_int(variants[vname])
-                    arg_vals = []
-                    for a in stmt.value.args:
-                        v = self._lower_expr(a)
-                        if v is None:
-                            v = self.builder.const_int(0)
-                        arg_vals.append(v)
+                    and isinstance(stmt.value, A.Call)):
+                enum_variant = self._enum_variant_for_expr(stmt.value.callee)
+                if enum_variant is not None:
+                    ename, vname, tag = enum_variant
+                    tag_v = self.builder.const_int(tag)
+                    arg_vals = self._lower_enum_payload_args(
+                        ename, vname, stmt.value.args)
                     slots = [tag_v] + arg_vals
                     # Recursive enum: arena-indirected. Push slots into
                     # the arena, bind name to the start index (scalar
                     # i32). Match dispatch will use ARENA_GET against
                     # the index.
                     if ename in self._recursive_enums:
-                        start_idx = None
-                        for ev in slots:
-                            pushed = self.builder.emit(
-                                tir.OpKind.ARENA_PUSH, ev,
-                                result_ty=tir.TIRScalar("i32"))
-                            if start_idx is None:
-                                start_idx = pushed
+                        start_idx = self._arena_push_slots(slots)
                         self._bind(stmt.name, start_idx)
                         self._bind_rec_enum(stmt.name, ename)
                         return
-                    elem_ty = slots[0].ty
                     n = len(slots)
-                    self.builder.emit(tir.OpKind.ALLOC_ARRAY,
-                                      attrs={"name": stmt.name,
-                                             "dtype": elem_ty,
-                                             "length": n})
-                    for i, ev in enumerate(slots):
-                        idx = self.builder.const_int(i)
-                        self.builder.emit(tir.OpKind.STORE_ELEM, idx, ev,
-                                          attrs={"name": stmt.name})
-                    self._bind_array(stmt.name, elem_ty, n)
+                    if self._is_homogeneous_slot_list(
+                            [slot.ty for slot in slots]):
+                        elem_ty = slots[0].ty
+                        self.builder.emit(tir.OpKind.ALLOC_ARRAY,
+                                          attrs={"name": stmt.name,
+                                                 "dtype": elem_ty,
+                                                 "length": n})
+                        for i, ev in enumerate(slots):
+                            idx = self.builder.const_int(i)
+                            self.builder.emit(tir.OpKind.STORE_ELEM, idx, ev,
+                                              attrs={"name": stmt.name})
+                        self._bind_array(stmt.name, elem_ty, n)
+                    else:
+                        self._bind_aggregate(stmt.name, slots)
+                    self._bind_enum(stmt.name, ename)
                     return
             # Special case: struct literal initializer -> back it with a
             # fixed-length stack array indexed by flat-path order.
@@ -881,24 +1338,20 @@ class Lowerer:
                 if not elem_vals:
                     self._bind(stmt.name, self.builder.const_int(0))
                     return
-                elem_ty = elem_vals[0].ty
-                for ev in elem_vals[1:]:
-                    if ev.ty != elem_ty:
-                        raise TypeError(
-                            f"array literal element type mismatch after "
-                            f"typecheck: first element is "
-                            f"{tir.fmt_type(elem_ty)}, later element is "
-                            f"{tir.fmt_type(ev.ty)}"
-                        )
                 n = len(elem_vals)
-                self.builder.emit(tir.OpKind.ALLOC_ARRAY,
-                                  attrs={"name": stmt.name, "dtype": elem_ty,
-                                         "length": n})
-                for i, ev in enumerate(elem_vals):
-                    idx = self.builder.const_int(i)
-                    self.builder.emit(tir.OpKind.STORE_ELEM, idx, ev,
-                                      attrs={"name": stmt.name})
-                self._bind_array(stmt.name, elem_ty, n)
+                if all(ev.ty == elem_vals[0].ty for ev in elem_vals[1:]):
+                    elem_ty = elem_vals[0].ty
+                    self.builder.emit(tir.OpKind.ALLOC_ARRAY,
+                                      attrs={"name": stmt.name,
+                                             "dtype": elem_ty,
+                                             "length": n})
+                    for i, ev in enumerate(elem_vals):
+                        idx = self.builder.const_int(i)
+                        self.builder.emit(tir.OpKind.STORE_ELEM, idx, ev,
+                                          attrs={"name": stmt.name})
+                    self._bind_array(stmt.name, elem_ty, n)
+                else:
+                    self._bind_aggregate(stmt.name, elem_vals)
                 self._bind_struct(stmt.name, slit.name)
                 return
             # Special case: tuple literal initializer -> back it with an
@@ -1017,6 +1470,7 @@ class Lowerer:
                         self._bind(stmt.name, src_v)
                         self._bind_rec_enum(stmt.name, src_rec)
                         return
+                src_enum = self._lookup_enum(src_name)
                 src_arr = self._lookup_array(src_name)
                 if src_arr is not None:
                     elem_ty, length = src_arr
@@ -1024,6 +1478,8 @@ class Lowerer:
                     src_struct = self._lookup_struct(src_name)
                     if src_struct is not None:
                         self._bind_struct(stmt.name, src_struct)
+                    if src_enum is not None:
+                        self._bind_enum(stmt.name, src_enum)
                     # Also alias the storage at the IR level: rebind the
                     # old array name to the new name via STORE_ELEM/LOAD_
                     # ELEM aliasing. The simplest correct way is to copy
@@ -1042,6 +1498,21 @@ class Lowerer:
                             tir.OpKind.STORE_ELEM, idx, loaded,
                             attrs={"name": stmt.name})
                     return
+                src_agg = self._lookup_aggregate(src_name)
+                if src_agg is not None:
+                    self._bind_aggregate(stmt.name, list(src_agg))
+                    src_struct = self._lookup_struct(src_name)
+                    if src_struct is not None:
+                        self._bind_struct(stmt.name, src_struct)
+                    if src_enum is not None:
+                        self._bind_enum(stmt.name, src_enum)
+                    return
+                if src_enum is not None:
+                    src_v = self._lookup(src_name)
+                    if src_v is not None:
+                        self._bind(stmt.name, src_v)
+                        self._bind_enum(stmt.name, src_enum)
+                        return
 
             v: Optional[tir.Value] = None
             if stmt.value is not None:
@@ -1059,6 +1530,14 @@ class Lowerer:
                                   attrs={"name": ir_name})
             else:
                 self._bind(stmt.name, v)
+                rec_enum = self._recursive_enum_name_for_value(
+                    stmt.ty, stmt.value, v)
+                if rec_enum is not None:
+                    self._bind_rec_enum(stmt.name, rec_enum)
+                else:
+                    payload_rec = self._match_payload_rec_enum_name(stmt)
+                    if payload_rec is not None:
+                        self._bind_rec_enum(stmt.name, payload_rec)
             return
         if isinstance(stmt, A.ExprStmt):
             self._lower_expr(stmt.expr)
@@ -1070,7 +1549,9 @@ class Lowerer:
             self._bind(stmt.name, v)
             return
 
-    def _lower_expr(self, expr: A.Expr) -> Optional[tir.Value]:
+    def _lower_expr(
+        self, expr: A.Expr, expected_rec_enum: Optional[str] = None,
+    ) -> Optional[tir.Value]:
         if isinstance(expr, A.IntLit):
             return self.builder.const_int(expr.value, expr.type_suffix or "i32")
         if isinstance(expr, A.FloatLit):
@@ -1116,6 +1597,21 @@ class Lowerer:
             v = self._lookup(expr.name)
             if v is not None:
                 return v
+            const_value = self._const_scalar_values.get(expr.name)
+            if isinstance(const_value, bool):
+                return self.builder.emit(tir.OpKind.CONST_BOOL,
+                                         result_ty=tir.TIRScalar("bool"),
+                                         attrs={"value": const_value})
+            if isinstance(const_value, int):
+                const_ty = self._const_scalar_types.get(expr.name)
+                if isinstance(const_ty, tir.TIRScalar):
+                    return self.builder.const_int(
+                        const_value, dtype=const_ty.name)
+                return self.builder.const_int(const_value)
+            if isinstance(const_value, float):
+                const_ty = self._const_scalar_types.get(expr.name)
+                dtype = const_ty.name if isinstance(const_ty, tir.TIRScalar) else "f64"
+                return self.builder.const_float(const_value, dtype=dtype)
             # Mutable variable -> emit LOAD_VAR (use mangled IR name)
             mut_ty = self._lookup_mut(expr.name)
             if mut_ty is not None:
@@ -1130,7 +1626,27 @@ class Lowerer:
             # Maybe a function reference (v0.1: emit a call-able marker)
             if expr.name in self.functions:
                 return self.builder.const_int(0)
-            return self.builder.const_int(0)
+            fn_alias = self._const_fn_aliases.get(expr.name)
+            if fn_alias in self.functions:
+                return self.builder.const_int(0)
+            enum_variant = self._enum_variant_for_expr(expr)
+            if enum_variant is not None:
+                ename, vname, tag = enum_variant
+                self._require_tag_only_enum_variant(ename, vname)
+                if expected_rec_enum is not None:
+                    if ename != expected_rec_enum:
+                        raise NotImplementedError(
+                            f"expected recursive enum {expected_rec_enum}, "
+                            f"got enum constructor {ename}; run typecheck first"
+                        )
+                    if ename in self._recursive_enums:
+                        return self._arena_push_slots(
+                            [self.builder.const_int(tag)])
+                return self.builder.const_int(tag)
+            raise NotImplementedError(
+                f"unresolved value name '{expr.name}' in IR lowering at "
+                f"{expr.span.line}:{expr.span.col}; run typecheck first"
+            )
         if isinstance(expr, A.Path):
             # Lower `EnumName::VariantName` to const_int(variant_index).
             # Tag-only variants only — payload variants need separate
@@ -1142,17 +1658,23 @@ class Lowerer:
             # Path in expr position for a recursive enum produces just
             # the tag (not an arena index), which breaks downstream
             # match. Workaround: bind via a let first.
+            enum_variant = self._enum_variant_for_expr(expr)
+            if enum_variant is not None:
+                ename, vname, tag = enum_variant
+                self._require_tag_only_enum_variant(ename, vname)
+                if expected_rec_enum is not None:
+                    if ename != expected_rec_enum:
+                        raise NotImplementedError(
+                            f"expected recursive enum {expected_rec_enum}, "
+                            f"got enum constructor {ename}; run typecheck first"
+                        )
+                    if ename in self._recursive_enums:
+                        return self._arena_push_slots(
+                            [self.builder.const_int(tag)])
+                return self.builder.const_int(tag)
             segs = list(expr.segments)
-            # `crate::EnumName::Variant` is a Phase-0 alias for
-            # `EnumName::Variant`. Strip a leading "crate" segment so
-            # the resolution below works without a real module system.
             if len(segs) >= 3 and segs[0] == "crate":
                 segs = segs[1:]
-            if len(segs) == 2:
-                ename, vname = segs
-                variants = self._enum_variants.get(ename)
-                if variants is not None and vname in variants:
-                    return self.builder.const_int(variants[vname])
             # 3+-segment paths that aren't an enum variant: raise rather
             # than silently lower to 0 (which used to make pattern arms
             # collide and match the wrong variant). 2-segment paths that
@@ -1163,10 +1685,30 @@ class Lowerer:
                     f"supported in Phase 0 (no module system). Use "
                     f"`EnumName::Variant` or `crate::EnumName::Variant`."
                 )
-            return self.builder.const_int(0)
+            raise NotImplementedError(
+                f"unresolved path {'::'.join(expr.segments)} cannot be "
+                f"lowered"
+            )
         if isinstance(expr, A.Binary):
-            l = self._lower_expr(expr.left)
-            r = self._lower_expr(expr.right)
+            if expr.op in ("==", "!="):
+                # match_lower desugars enum-pattern dispatch to
+                # `scrut[0] == Enum::Variant`. Payload-bearing variants are
+                # valid as tag constants only in that generated index-compare
+                # shape; ordinary value-position lowering still fails closed.
+                right_variant = self._enum_variant_for_expr(expr.right)
+                left_variant = self._enum_variant_for_expr(expr.left)
+                if right_variant is not None and isinstance(expr.left, A.Index):
+                    l = self._lower_expr(expr.left)
+                    r = self.builder.const_int(right_variant[2])
+                elif left_variant is not None and isinstance(expr.right, A.Index):
+                    l = self.builder.const_int(left_variant[2])
+                    r = self._lower_expr(expr.right)
+                else:
+                    l = self._lower_expr(expr.left)
+                    r = self._lower_expr(expr.right)
+            else:
+                l = self._lower_expr(expr.left)
+                r = self._lower_expr(expr.right)
             if l is None or r is None:
                 return None
             arith = {
@@ -1278,25 +1820,14 @@ class Lowerer:
             # a fn arg, but appearing as the result of a match arm body
             # or a let value in expression position). Push slots into
             # the arena and return the start index as the value.
-            if (isinstance(expr.callee, A.Path)
-                    and len(expr.callee.segments) == 2):
-                ename, vname = expr.callee.segments
-                variants = self._enum_variants.get(ename)
-                if (variants is not None and vname in variants
-                        and ename in self._recursive_enums):
-                    tag_v = self.builder.const_int(variants[vname])
-                    arg_vals = []
-                    for a in expr.args:
-                        v = self._lower_expr(a) or self.builder.const_int(0)
-                        arg_vals.append(v)
-                    start_idx = None
-                    for ev in [tag_v] + arg_vals:
-                        pushed = self.builder.emit(
-                            tir.OpKind.ARENA_PUSH, ev,
-                            result_ty=tir.TIRScalar("i32"))
-                        if start_idx is None:
-                            start_idx = pushed
-                    return start_idx
+            enum_variant = self._enum_variant_for_expr(expr.callee)
+            if enum_variant is not None:
+                ename, vname, tag = enum_variant
+                if ename in self._recursive_enums:
+                    tag_v = self.builder.const_int(tag)
+                    arg_vals = self._lower_enum_payload_args(
+                        ename, vname, expr.args)
+                    return self._arena_push_slots([tag_v] + arg_vals)
             # Intercept print_str(string_literal) — emits a PRINT op whose
             # attr carries the literal bytes; backend writes them to stdout
             # via a write(1, ptr, len) syscall.
@@ -1625,91 +2156,233 @@ class Lowerer:
                 #   (c) anything else → lower normally, pad to N slots
                 expanded = False
                 if callee_ast is not None and i < len(callee_ast.params):
-                    p_ty = callee_ast.params[i].ty
+                    p_ty = self._resolve_type_alias_node(
+                        callee_ast.params[i].ty)
                     # Recursive-enum-typed param: callee expects a SINGLE
                     # i32 (the arena index). For inline constructors, we
                     # must arena-push and pass the resulting index — NOT
                     # expand into flat slots like the non-recursive case.
                     if (isinstance(p_ty, A.TyName)
                             and p_ty.name in self._recursive_enums):
-                        if (isinstance(a, A.Call)
-                                and isinstance(a.callee, A.Path)
-                                and len(a.callee.segments) == 2):
-                            ename2, vname2 = a.callee.segments
-                            variants2 = self._enum_variants.get(ename2)
-                            if variants2 is not None and vname2 in variants2:
-                                tag_v = self.builder.const_int(
-                                    variants2[vname2])
-                                arg_vals = [
-                                    self._lower_expr(x)
-                                    or self.builder.const_int(0)
-                                    for x in a.args]
-                                start_idx = None
-                                for ev in [tag_v] + arg_vals:
-                                    pushed = self.builder.emit(
-                                        tir.OpKind.ARENA_PUSH, ev,
-                                        result_ty=tir.TIRScalar("i32"))
-                                    if start_idx is None:
-                                        start_idx = pushed
-                                args.append(start_idx)
+                        if isinstance(a, A.Call):
+                            enum_variant = self._enum_variant_for_expr(
+                                a.callee)
+                            if enum_variant is not None:
+                                ename2, vname2, tag = enum_variant
+                                if ename2 != p_ty.name:
+                                    raise NotImplementedError(
+                                        f"aggregate argument for parameter "
+                                        f"'{callee_ast.params[i].name}' "
+                                        f"expects {p_ty.name}, got inline "
+                                        f"enum constructor {ename2}; run "
+                                        f"typecheck first"
+                                    )
+                                tag_v = self.builder.const_int(tag)
+                                arg_vals = self._lower_enum_payload_args(
+                                    ename2, vname2, a.args)
+                                args.append(
+                                    self._arena_push_slots([tag_v] + arg_vals))
                                 expanded = True
-                        elif (isinstance(a, A.Path)
-                              and len(a.segments) == 2):
-                            ename2, vname2 = a.segments
-                            variants2 = self._enum_variants.get(ename2)
-                            if variants2 is not None and vname2 in variants2:
-                                tag_v = self.builder.const_int(
-                                    variants2[vname2])
-                                pushed = self.builder.emit(
-                                    tir.OpKind.ARENA_PUSH, tag_v,
-                                    result_ty=tir.TIRScalar("i32"))
-                                args.append(pushed)
+                            if not expanded:
+                                call_rec = self._recursive_enum_name_for_expr(a)
+                                if call_rec is not None:
+                                    if call_rec != p_ty.name:
+                                        raise NotImplementedError(
+                                            f"aggregate argument for parameter "
+                                            f"'{callee_ast.params[i].name}' "
+                                            f"expects {p_ty.name}, got "
+                                            f"function returning {call_rec}; "
+                                            f"run typecheck first"
+                                        )
+                                    v = self._lower_expr(
+                                        a, expected_rec_enum=p_ty.name)
+                                    args.append(v or self.builder.const_int(0))
+                                    expanded = True
+                        else:
+                            name_is_bound = (
+                                isinstance(a, A.Name)
+                                and (
+                                    self._lookup(a.name) is not None
+                                    or self._lookup_mut(a.name) is not None
+                                    or self._lookup_array(a.name) is not None
+                                    or self._lookup_aggregate(a.name)
+                                    is not None
+                                )
+                            )
+                            enum_variant = self._enum_variant_for_expr(a)
+                            if enum_variant is not None and not name_is_bound:
+                                ename2, vname2, tag = enum_variant
+                                if ename2 != p_ty.name:
+                                    raise NotImplementedError(
+                                        f"aggregate argument for parameter "
+                                        f"'{callee_ast.params[i].name}' "
+                                        f"expects {p_ty.name}, got inline "
+                                        f"enum constructor {ename2}; run "
+                                        f"typecheck first"
+                                    )
+                                self._require_tag_only_enum_variant(
+                                    ename2, vname2)
+                                args.append(
+                                    self._arena_push_slots(
+                                        [self.builder.const_int(tag)]))
                                 expanded = True
                         if not expanded:
                             # Existing rec-enum binding: pass the scalar
                             # arena index directly via _lower_expr.
-                            v = self._lower_expr(a)
-                            args.append(v or self.builder.const_int(0))
-                            expanded = True
-                        continue
-                    n_slots = self._aggregate_slot_count(p_ty)
-                    if n_slots is not None and n_slots >= 1:
+                            if (isinstance(a, A.Name)
+                                    and self._lookup_rec_enum(a.name)
+                                    == p_ty.name):
+                                v = self._lower_expr(a)
+                                args.append(v or self.builder.const_int(0))
+                                expanded = True
+                            else:
+                                got = type(a).__name__
+                                if isinstance(a, A.Name):
+                                    bound_enum = self._lookup_rec_enum(a.name)
+                                    got = bound_enum or f"scalar/name '{a.name}'"
+                                raise NotImplementedError(
+                                    f"aggregate argument for parameter "
+                                    f"'{callee_ast.params[i].name}' expects "
+                                    f"{p_ty.name}, got {got}; run "
+                                    f"typecheck first"
+                                )
+                        if expanded:
+                            continue
+                    slot_types = self._aggregate_slot_types(p_ty)
+                    if slot_types is not None and len(slot_types) >= 1:
+                        is_struct_param = (
+                            isinstance(p_ty, A.TyName)
+                            and p_ty.name in self._struct_flat_paths
+                        )
+                        is_enum_param = (
+                            isinstance(p_ty, A.TyName)
+                            and p_ty.name in self._enum_variants
+                        )
+                        n_slots = len(slot_types)
                         # Inline enum constructor as fn arg, e.g.
                         # `f(Maybe::Some(42))`. Recognize the pattern and
                         # emit [tag, payload, ...] directly without an
                         # intermediate let-bind.
-                        if (isinstance(a, A.Call)
-                                and isinstance(a.callee, A.Path)
-                                and len(a.callee.segments) == 2):
-                            ename, vname = a.callee.segments
-                            variants = self._enum_variants.get(ename)
-                            if variants is not None and vname in variants:
-                                args.append(self.builder.const_int(
-                                    variants[vname]))
-                                for arg_expr in a.args:
-                                    av = self._lower_expr(arg_expr)
-                                    if av is None:
-                                        av = self.builder.const_int(0)
+                        if isinstance(a, A.Call):
+                            enum_variant = self._enum_variant_for_expr(
+                                a.callee)
+                            if enum_variant is not None:
+                                ename, vname, tag = enum_variant
+                                if not is_enum_param:
+                                    raise NotImplementedError(
+                                        f"aggregate argument for parameter "
+                                        f"'{callee_ast.params[i].name}' "
+                                        f"expects {getattr(p_ty, 'name', p_ty)}, "
+                                        f"got inline enum constructor "
+                                        f"{ename}; run typecheck first"
+                                    )
+                                if ename != p_ty.name:
+                                    raise NotImplementedError(
+                                        f"aggregate argument for parameter "
+                                        f"'{callee_ast.params[i].name}' "
+                                        f"expects {p_ty.name}, got inline "
+                                        f"enum constructor {ename}; run "
+                                        f"typecheck first"
+                                    )
+                                args.append(self.builder.const_int(tag))
+                                for av in self._lower_enum_payload_args(
+                                        ename, vname, a.args):
                                     args.append(av)
                                 # Pad to n_slots if variant has fewer args.
                                 payload_count = len(a.args)
-                                for _ in range(n_slots - 1 - payload_count):
-                                    args.append(self.builder.const_int(0))
+                                for slot_ty in slot_types[
+                                        1 + payload_count:]:
+                                    args.append(self._zero_for_type(slot_ty))
                                 expanded = True
                         # Inline tag-only path as fn arg, e.g. `f(Maybe::None)`.
-                        if (not expanded and isinstance(a, A.Path)
-                                and len(a.segments) == 2):
-                            ename, vname = a.segments
-                            variants = self._enum_variants.get(ename)
-                            if variants is not None and vname in variants:
-                                args.append(self.builder.const_int(
-                                    variants[vname]))
-                                for _ in range(n_slots - 1):
-                                    args.append(self.builder.const_int(0))
+                        if not expanded:
+                            name_is_bound = (
+                                isinstance(a, A.Name)
+                                and (
+                                    self._lookup(a.name) is not None
+                                    or self._lookup_mut(a.name) is not None
+                                    or self._lookup_array(a.name) is not None
+                                    or self._lookup_aggregate(a.name)
+                                    is not None
+                                )
+                            )
+                            enum_variant = self._enum_variant_for_expr(a)
+                            if enum_variant is not None and not name_is_bound:
+                                ename, vname, tag = enum_variant
+                                if not is_enum_param:
+                                    raise NotImplementedError(
+                                        f"aggregate argument for parameter "
+                                        f"'{callee_ast.params[i].name}' "
+                                        f"expects {getattr(p_ty, 'name', p_ty)}, "
+                                        f"got inline enum constructor "
+                                        f"{ename}; run typecheck first"
+                                    )
+                                if ename != p_ty.name:
+                                    raise NotImplementedError(
+                                        f"aggregate argument for parameter "
+                                        f"'{callee_ast.params[i].name}' "
+                                        f"expects {p_ty.name}, got inline "
+                                        f"enum constructor {ename}; run "
+                                        f"typecheck first"
+                                    )
+                                self._require_tag_only_enum_variant(
+                                    ename, vname)
+                                args.append(self.builder.const_int(tag))
+                                for slot_ty in slot_types[1:]:
+                                    args.append(self._zero_for_type(slot_ty))
                                 expanded = True
+                        if (not expanded and is_struct_param
+                                and isinstance(a, A.StructLit)):
+                            if a.name != p_ty.name:
+                                raise NotImplementedError(
+                                    f"aggregate argument for parameter "
+                                    f"'{callee_ast.params[i].name}' expects "
+                                    f"{p_ty.name}, got {a.name}"
+                                )
+                            flat_paths = self._struct_flat_paths.get(
+                                p_ty.name, [])
+                            for path in flat_paths:
+                                av = self._resolve_path_value(a, path)
+                                if av is None:
+                                    raise NotImplementedError(
+                                        f"aggregate argument for parameter "
+                                        f"'{callee_ast.params[i].name}' "
+                                        f"could not lower field "
+                                        f"{'.'.join(path)}"
+                                    )
+                                args.append(av)
+                            expanded = True
                         if not expanded and isinstance(a, A.Name):
+                            if (is_struct_param
+                                    and self._lookup_struct(a.name)
+                                    != p_ty.name):
+                                raise NotImplementedError(
+                                    f"aggregate argument for parameter "
+                                    f"'{callee_ast.params[i].name}' expects "
+                                    f"{p_ty.name}, got scalar/name "
+                                    f"'{a.name}'"
+                                )
+                            if (is_enum_param
+                                    and self._lookup_enum(a.name)
+                                    != p_ty.name):
+                                raise NotImplementedError(
+                                    f"aggregate argument for parameter "
+                                    f"'{callee_ast.params[i].name}' expects "
+                                    f"{p_ty.name}, got scalar/name "
+                                    f"'{a.name}'"
+                                )
+                            agg = self._lookup_aggregate(a.name)
+                            if ((is_struct_param or is_enum_param)
+                                    and agg is not None):
+                                for j in range(n_slots):
+                                    if j < len(agg):
+                                        args.append(agg[j])
+                                    else:
+                                        args.append(
+                                            self._zero_for_type(slot_types[j]))
+                                expanded = True
                             arr = self._lookup_array(a.name)
-                            if arr is not None:
+                            if not expanded and arr is not None:
                                 elem_ty, length = arr
                                 for j in range(n_slots):
                                     if j < length:
@@ -1720,8 +2393,17 @@ class Lowerer:
                                             attrs={"name": a.name})
                                         args.append(loaded)
                                     else:
-                                        args.append(self.builder.const_int(0))
+                                        args.append(
+                                            self._zero_for_type(slot_types[j]))
                                 expanded = True
+                            if not expanded and is_enum_param:
+                                scalar_v = self._lookup(a.name)
+                                if scalar_v is not None:
+                                    args.append(scalar_v)
+                                    for slot_ty in slot_types[1:]:
+                                        args.append(
+                                            self._zero_for_type(slot_ty))
+                                    expanded = True
                         # Field chain: passing a sub-struct of a struct.
                         # E.g. `mul_tokens(e.lhs, e.rhs)` where e.lhs is a
                         # Token (sub-struct) of e (BinExpr). Locate the
@@ -1745,8 +2427,19 @@ class Lowerer:
                                             if base_idx is None:
                                                 base_idx = idx_int
                                     if base_idx is not None:
+                                        agg = self._lookup_aggregate(base)
+                                        if agg is not None:
+                                            for j in range(n_slots):
+                                                src_idx = base_idx + j
+                                                if src_idx < len(agg):
+                                                    args.append(agg[src_idx])
+                                                else:
+                                                    args.append(
+                                                        self._zero_for_type(
+                                                            slot_types[j]))
+                                            expanded = True
                                         arr = self._lookup_array(base)
-                                        if arr is not None:
+                                        if not expanded and arr is not None:
                                             elem_ty, _ = arr
                                             for j in range(n_slots):
                                                 idx_v = self.builder.const_int(
@@ -1759,35 +2452,47 @@ class Lowerer:
                                                 args.append(loaded)
                                             expanded = True
                         if not expanded:
-                            # Generic case: lower the arg as a scalar,
-                            # treat it as the tag (slot 0), pad the rest
-                            # with zero. Covers tag-only enum paths
-                            # (Maybe::None) and accidental scalar args.
-                            v = self._lower_expr(a)
-                            if v is None:
-                                v = self.builder.const_int(0)
-                            args.append(v)
-                            for _ in range(n_slots - 1):
-                                args.append(self.builder.const_int(0))
-                            expanded = True
+                            raise NotImplementedError(
+                                f"aggregate argument for parameter "
+                                f"'{callee_ast.params[i].name}' expects "
+                                f"{getattr(p_ty, 'name', repr(p_ty))}, got "
+                                f"{type(a).__name__}; run typecheck first"
+                            )
                 if not expanded:
                     v = self._lower_expr(a)
                     if v is not None:
                         args.append(v)
             # Determine call target name
+            if (isinstance(expr.callee, A.Name)
+                    and expr.callee.name not in self.functions
+                    and (self._lookup(expr.callee.name) is not None
+                         or self._lookup_mut(expr.callee.name) is not None)):
+                raise NotImplementedError(
+                    "function-typed calls are not supported by the Stage 31 "
+                    "backend"
+                )
             target = "<unknown>"
             if isinstance(expr.callee, A.Name):
                 target = expr.callee.name
             elif isinstance(expr.callee, A.Path):
                 target = "::".join(expr.callee.segments)
+            if target not in self.functions:
+                if target in self._const_fn_aliases:
+                    raise NotImplementedError(
+                        "function-typed calls are not supported by the Stage "
+                        "31 backend"
+                    )
+                raise NotImplementedError(
+                    f"unknown function '{target}' in IR lowering at "
+                    f"{expr.span.line}:{expr.span.col}; run typecheck first"
+                )
             # Emit as opaque CALL with return type from the registered fn
             ret_ty: tir.TIRType = tir.TIRScalar("?")
             is_extern_target = False
-            if isinstance(expr.callee, A.Name) and expr.callee.name in self.functions:
-                callee_ir = self.functions[expr.callee.name]
-                ret_ty = callee_ir.return_ty
-                if callee_ir.attrs.get("is_extern"):
-                    is_extern_target = True
+            callee_ir = self.functions[target]
+            ret_ty = callee_ir.return_ty
+            if callee_ir.attrs.get("is_extern"):
+                is_extern_target = True
             # Stage 16.5: route extern "C" calls through FFI_CALL so the
             # backend emits a GOT-indirect call resolved by the dynamic
             # linker, not a relative call to a user-fn body.
@@ -1815,7 +2520,8 @@ class Lowerer:
 
             # Then arm
             self.builder.switch_to(then_blk)
-            t_val = self._lower_block(expr.then)
+            t_val = self._lower_block(
+                expr.then, expected_rec_enum=expected_rec_enum)
             if t_val is None:
                 t_val = self.builder.const_int(0)
             self.builder.emit(tir.OpKind.BR, t_val,
@@ -1826,9 +2532,13 @@ class Lowerer:
             if expr.else_ is None:
                 e_val = self.builder.const_int(0)
             elif isinstance(expr.else_, A.Block):
-                e_val = self._lower_block(expr.else_) or self.builder.const_int(0)
+                e_val = self._lower_block(
+                    expr.else_, expected_rec_enum=expected_rec_enum,
+                ) or self.builder.const_int(0)
             else:
-                e_val = self._lower_expr(expr.else_) or self.builder.const_int(0)
+                e_val = self._lower_expr(
+                    expr.else_, expected_rec_enum=expected_rec_enum,
+                ) or self.builder.const_int(0)
             self.builder.emit(tir.OpKind.BR, e_val,
                               attrs={"target_block": merge_blk.id})
 
@@ -1846,9 +2556,10 @@ class Lowerer:
             # helixc/check.py). The lowering pass intentionally does
             # NOT replicate the syntactic gate — there's nothing to
             # add to the IR for a permitted op.
-            return self._lower_block(expr.body)
+            return self._lower_block(
+                expr.body, expected_rec_enum=expected_rec_enum)
         if isinstance(expr, A.Block):
-            return self._lower_block(expr)
+            return self._lower_block(expr, expected_rec_enum=expected_rec_enum)
         if isinstance(expr, A.For):
             # Desugar `for i in start..end { body }` into:
             #   let mut __for_i = start
@@ -2025,7 +2736,10 @@ class Lowerer:
                 f"{expr.span.line}:{expr.span.col}. If you've added a new "
                 "AST item type that holds expressions, extend lower_matches.")
         if isinstance(expr, A.Return):
-            v = self._lower_expr(expr.value) if expr.value is not None else None
+            v = (self._lower_expr(
+                    expr.value,
+                    expected_rec_enum=self._current_expected_rec_enum)
+                 if expr.value is not None else None)
             # Audit 28.8 cycle 2 C2-2 — emit TRACE_EXIT before the
             # `ret` op when the enclosing fn is @trace'd. Pre-fix, only
             # the fall-through return at the end of _lower_fn_body
@@ -2204,6 +2918,12 @@ class Lowerer:
                         return self.builder.emit(
                             tir.OpKind.ARENA_GET, full_idx,
                             result_ty=tir.TIRScalar("i32"))
+                agg = self._lookup_aggregate(expr.callee.name)
+                if (agg is not None and len(expr.indices) == 1
+                        and isinstance(expr.indices[0], A.IntLit)):
+                    idx_int = expr.indices[0].value
+                    if 0 <= idx_int < len(agg):
+                        return agg[idx_int]
                 arr = self._lookup_array(expr.callee.name)
                 if arr is not None and len(expr.indices) == 1:
                     elem_ty, _length = arr
@@ -2257,6 +2977,9 @@ class Lowerer:
                     except ValueError:
                         idx_int = -1
                     if idx_int >= 0:
+                        agg = self._lookup_aggregate(base_name)
+                        if agg is not None and 0 <= idx_int < len(agg):
+                            return agg[idx_int]
                         arr = self._lookup_array(base_name)
                         if arr is not None:
                             elem_ty, _ = arr

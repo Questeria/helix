@@ -41,6 +41,14 @@ class TyPrim(Type):
 
 
 @dataclass(frozen=True)
+class TyRefined(Type):
+    """Stage 31: named refinement alias erased to `base` after checks."""
+    name: str
+    base: Type
+    predicates: tuple[A.Expr, ...]
+
+
+@dataclass(frozen=True)
 class TyVar(Type):
     """Generic type variable bound by a function signature."""
     name: str
@@ -112,6 +120,12 @@ class TyUnknown(Type):
 @dataclass(frozen=True)
 class TyStruct(Type):
     """A nominal struct type; field types resolved via TypeChecker._struct_decls."""
+    name: str
+
+
+@dataclass(frozen=True)
+class TyEnum(Type):
+    """A nominal enum type; variant payloads are tracked by _enum_decls."""
     name: str
 
 
@@ -431,6 +445,12 @@ class TypeChecker:
         # here so re-running check() on the same instance doesn't carry
         # stale entries that would silence real new errors.
         self._seen_unbound: set[str] = set()
+        self._seen_unknown_type_names: set[str] = set()
+        self._resolving_type_aliases: set[str] = set()
+        self._type_alias_cache: dict[str, Type] = {}
+        self._const_scalar_values: dict[str, int | float] = {}
+        self._local_const_scalar_scopes: list[dict[str, int | float | None]] = []
+        self._current_return_ty: Type = TyUnit()
         # Audit 28.8 B3: unsafe-context depth counter. Incremented when
         # descending into an A.UnsafeBlock; consulted by the Cast
         # handler so raw-pointer casts (TyPtr targets from non-TyPtr
@@ -445,17 +465,45 @@ class TypeChecker:
         # params as TyUnknown until body-check).
         self._struct_decls: dict[str, A.StructDecl] = {}
         self._enum_decls: dict[str, A.EnumDecl] = {}
+        self._type_alias_decls: dict[str, A.TypeAlias] = {}
+        self._const_decls: dict[str, A.ConstDecl] = {}
+        self._recursive_enum_names: set[str] = set()
+        self._type_alias_cache = {}
+        self._local_const_scalar_scopes = []
         for item in self.prog.items:
             if isinstance(item, A.StructDecl):
                 self._struct_decls[item.name] = item
             elif isinstance(item, A.EnumDecl):
                 self._enum_decls[item.name] = item
+            elif isinstance(item, A.TypeAlias):
+                self._type_alias_decls[item.name] = item
+            elif isinstance(item, A.ConstDecl):
+                self._const_decls[item.name] = item
+
+        self._recursive_enum_names = self._compute_recursive_enum_names()
+        self._index_const_scalar_values()
+
+        # Validate aliases even if unused. Otherwise bad refined aliases can
+        # sit silently until a later edit happens to reference them.
+        for item in self.prog.items:
+            if isinstance(item, A.TypeAlias):
+                self._resolve_type_alias(item, Scope())
 
         # Pass 1: register function signatures (don't check bodies yet)
         for item in self.prog.items:
             if isinstance(item, A.FnDecl):
                 try:
                     self._register_fn(item)
+                except TypeError_ as e:
+                    self.errors.append(e)
+
+        # Pass 1.5: check top-level constants after function signatures are
+        # registered, so a const initializer can still reference earlier
+        # compiler-known functions if future Helix allows it.
+        for item in self.prog.items:
+            if isinstance(item, A.ConstDecl):
+                try:
+                    self._check_const_decl(item)
                 except TypeError_ as e:
                     self.errors.append(e)
 
@@ -469,7 +517,59 @@ class TypeChecker:
 
         return self.errors
 
+    def _index_const_scalar_values(self) -> None:
+        consts = [item for item in self.prog.items
+                  if isinstance(item, A.ConstDecl)]
+        for _ in range(len(consts)):
+            progressed = False
+            for decl in consts:
+                if decl.name in self._const_scalar_values:
+                    continue
+                value = self._eval_const_scalar_expr(decl.value, None)
+                if (isinstance(value, (int, float))
+                        and not isinstance(value, bool)):
+                    self._const_scalar_values[decl.name] = value
+                    progressed = True
+            if not progressed:
+                break
+
+    def _push_local_const_scope(self) -> None:
+        self._local_const_scalar_scopes.append({})
+
+    def _pop_local_const_scope(self) -> None:
+        self._local_const_scalar_scopes.pop()
+
+    def _define_local_const_scalar(
+        self, name: str, value: int | float | None,
+    ) -> None:
+        if self._local_const_scalar_scopes:
+            self._local_const_scalar_scopes[-1][name] = value
+
+    def _lookup_local_const_scalar(
+        self, name: str,
+    ) -> tuple[bool, int | float | None]:
+        for scope in reversed(self._local_const_scalar_scopes):
+            if name in scope:
+                return True, scope[name]
+        return False, None
+
     # ---- registration ----
+    def _check_const_decl(self, decl: A.ConstDecl) -> None:
+        scope = Scope()
+        declared = self._resolve_type(decl.ty, scope)
+        value_ty = self._check_expr(decl.value, scope)
+        if not self._compatible(value_ty, declared):
+            self.errors.append(TypeError_(
+                f"const {decl.name!r}: declared {self._fmt(declared)} "
+                f"but value is {self._fmt(value_ty)}",
+                decl.span,
+            ))
+            return
+        self._check_refinement_contextual_value(
+            decl.value, value_ty, declared, decl.span, f"const {decl.name!r}",
+            scope,
+        )
+
     def _register_fn(self, fn: A.FnDecl) -> None:
         # Build the generic-bindings scope
         gen_scope = Scope()
@@ -487,6 +587,14 @@ class TypeChecker:
         params: list[tuple[str, Type]] = []
         for p in fn.params:
             t = self._resolve_type(p.ty, gen_scope)
+            if fn.is_extern and self._contains_refinement(t):
+                self.errors.append(TypeError_(
+                    f"extern function {fn.name!r}: parameter {p.name!r} "
+                    f"type {self._fmt(t)} cannot use refined types in "
+                    f"Stage 31",
+                    p.span,
+                    hint="use raw FFI types and validate at a Helix boundary",
+                ))
             params.append((p.name, t))
 
         # Resolve return type
@@ -494,6 +602,23 @@ class TypeChecker:
             ret = self._resolve_type(fn.return_ty, gen_scope)
         else:
             ret = TyUnit()
+        if self._is_unsupported_aggregate_return_type(ret):
+            self.errors.append(TypeError_(
+                f"function {fn.name!r}: aggregate return type "
+                f"{self._fmt(ret)} is not supported by the Stage 31 "
+                f"backend ABI",
+                fn.return_ty.span if fn.return_ty is not None else fn.span,
+                hint="return a scalar handle or pass an output aggregate "
+                     "parameter until aggregate return ABI support lands",
+            ))
+        if fn.is_extern and self._contains_refinement(ret):
+            self.errors.append(TypeError_(
+                f"extern function {fn.name!r}: return type "
+                f"{self._fmt(ret)} cannot use refined types in Stage 31",
+                fn.return_ty.span if fn.return_ty is not None else fn.span,
+                hint="return a raw FFI type and validate it at a Helix "
+                     "boundary",
+            ))
 
         # Record constraints (not yet solved)
         for w in fn.where_clauses:
@@ -524,6 +649,72 @@ class TypeChecker:
             raise TypeError_(f"duplicate function {fn.name!r}", fn.span)
         self.functions[fn.name] = sig
 
+    def _compute_recursive_enum_names(self) -> set[str]:
+        recursive: set[str] = set()
+
+        def refs_enum(
+            ty: A.TyNode, target: str, visiting: frozenset[str],
+            seen_aliases: frozenset[str],
+        ) -> bool:
+            if isinstance(ty, A.TyName):
+                if ty.name == target:
+                    return True
+                alias = self._type_alias_decls.get(ty.name)
+                if alias is not None and alias.name not in seen_aliases:
+                    return refs_enum(
+                        alias.target, target, visiting,
+                        seen_aliases | {alias.name})
+                enum_decl = self._enum_decls.get(ty.name)
+                if enum_decl is not None and ty.name not in visiting:
+                    return any(
+                        refs_enum(payload_ty, target, visiting | {ty.name},
+                                  seen_aliases)
+                        for variant in enum_decl.variants
+                        for payload_ty in variant.payload_tys
+                    )
+                return False
+            if isinstance(ty, A.TyGeneric):
+                return any(refs_enum(arg, target, visiting, seen_aliases)
+                           for arg in ty.args)
+            if isinstance(ty, A.TyTuple):
+                return any(refs_enum(elem, target, visiting, seen_aliases)
+                           for elem in ty.elems)
+            if isinstance(ty, A.TyArray):
+                return refs_enum(ty.elem, target, visiting, seen_aliases)
+            if isinstance(ty, A.TyRef):
+                return refs_enum(ty.inner, target, visiting, seen_aliases)
+            if isinstance(ty, A.TyPtr):
+                return refs_enum(ty.inner, target, visiting, seen_aliases)
+            if isinstance(ty, A.TyFn):
+                return (any(refs_enum(param, target, visiting, seen_aliases)
+                            for param in ty.params)
+                        or refs_enum(ty.ret, target, visiting, seen_aliases))
+            if isinstance(ty, A.TyTensor):
+                return refs_enum(ty.dtype, target, visiting, seen_aliases)
+            if isinstance(ty, A.TyTile):
+                return refs_enum(ty.dtype, target, visiting, seen_aliases)
+            return False
+
+        for name, decl in self._enum_decls.items():
+            for variant in decl.variants:
+                if any(refs_enum(payload_ty, name, frozenset({name}),
+                                 frozenset())
+                       for payload_ty in variant.payload_tys):
+                    recursive.add(name)
+                    break
+        return recursive
+
+    def _is_unsupported_aggregate_return_type(self, ty: Type) -> bool:
+        if isinstance(ty, TyStruct):
+            return True
+        if isinstance(ty, TyEnum):
+            return ty.name not in self._recursive_enum_names
+        if isinstance(ty, TyTuple):
+            return True
+        if isinstance(ty, TyArray):
+            return True
+        return False
+
     # ---- type resolution ----
     def _resolve_type(self, ty: A.TyNode, scope: Scope) -> Type:
         if isinstance(ty, A.TyName):
@@ -537,6 +728,9 @@ class TypeChecker:
             looked = scope.lookup(ty.name)
             if looked is not None:
                 return looked
+            alias = getattr(self, "_type_alias_decls", {}).get(ty.name)
+            if alias is not None:
+                return self._resolve_type_alias(alias, scope)
             # Recognise nominal struct types so field-access on a struct-
             # typed field (e.g. nested struct: `inner: Inner`) gets a real
             # TyStruct instead of falling all the way to TyUnknown — that
@@ -544,7 +738,15 @@ class TypeChecker:
             # struct-field-typecheck to trivially pass.
             if ty.name in getattr(self, "_struct_decls", {}):
                 return TyStruct(name=ty.name)
-            # Unresolved: treat as unknown user type for v0.1
+            if ty.name in getattr(self, "_enum_decls", {}):
+                return TyEnum(name=ty.name)
+            if ty.name not in self._seen_unknown_type_names:
+                self._seen_unknown_type_names.add(ty.name)
+                self.errors.append(TypeError_(
+                    f"unknown type {ty.name!r}",
+                    ty.span,
+                    hint="declare this type or import it before use",
+                ))
             return TyUnknown(hint=f"unknown name {ty.name}")
         if isinstance(ty, A.TyTuple):
             return TyTuple(tuple(self._resolve_type(e, scope) for e in ty.elems))
@@ -610,13 +812,194 @@ class TypeChecker:
             user_struct = getattr(self, "_struct_decls", {}).get(ty.base)
             if (user_struct is not None
                     and len(ty.args) == len(user_struct.generics)):
+                resolved_args = [self._resolve_type(arg, scope)
+                                 for arg in ty.args]
+                if any(self._contains_unknown_type(arg_ty)
+                       for arg_ty in resolved_args):
+                    return TyUnknown(hint=f"generic {ty.base}")
                 from .struct_mono import mangle_struct
                 return TyStruct(name=mangle_struct(ty.base, ty.args))
             # User type with generic args, arity mismatch or unknown — v0.1
             # falls back to TyUnknown (existing behaviour preserved so
             # non-struct generic types don't regress).
+            for arg in ty.args:
+                self._resolve_type(arg, scope)
+            if user_struct is not None:
+                self.errors.append(TypeError_(
+                    f"generic type {ty.base!r} expects "
+                    f"{len(user_struct.generics)} arg(s), got "
+                    f"{len(ty.args)}",
+                    ty.span,
+                ))
+            elif ty.base in getattr(self, "_type_alias_decls", {}):
+                self.errors.append(TypeError_(
+                    f"type alias {ty.base!r} cannot be used with generic "
+                    f"arguments in Stage 31",
+                    ty.span,
+                ))
+            elif ty.base in PRIMITIVES:
+                self.errors.append(TypeError_(
+                    f"type {ty.base!r} is not generic",
+                    ty.span,
+                ))
+            elif ty.base not in self._seen_unknown_type_names:
+                self._seen_unknown_type_names.add(ty.base)
+                self.errors.append(TypeError_(
+                    f"unknown generic type {ty.base!r}",
+                    ty.span,
+                    hint="declare this generic type or import it before use",
+                ))
             return TyUnknown(hint=f"generic {ty.base}")
         return TyUnknown(hint=f"unknown ty node {type(ty).__name__}")
+
+    def _resolve_type_alias(self, alias: A.TypeAlias, scope: Scope) -> Type:
+        cached = self._type_alias_cache.get(alias.name)
+        if cached is not None:
+            return cached
+        if alias.generics:
+            unknown = TyUnknown(hint=f"generic type alias {alias.name}")
+            self.errors.append(TypeError_(
+                f"type alias {alias.name!r}: generic aliases are not "
+                f"supported in Stage 31",
+                alias.span,
+            ))
+            self._type_alias_cache[alias.name] = unknown
+            return unknown
+        if alias.name in self._resolving_type_aliases:
+            unknown = TyUnknown(hint=f"recursive alias {alias.name}")
+            self.errors.append(TypeError_(
+                f"type alias {alias.name!r} is recursive", alias.span,
+            ))
+            self._type_alias_cache[alias.name] = unknown
+            return unknown
+        self._resolving_type_aliases.add(alias.name)
+        try:
+            # Alias targets resolve at declaration/global scope, not at use
+            # sites, so `type Alias = T` cannot capture a function generic T.
+            base = self._resolve_type(alias.target, Scope())
+        finally:
+            self._resolving_type_aliases.discard(alias.name)
+        if self._contains_unknown_type(base):
+            self.errors.append(TypeError_(
+                f"type alias {alias.name!r}: target type could not be "
+                f"resolved ({self._fmt(base)})",
+                alias.span,
+            ))
+            self._type_alias_cache[alias.name] = base
+            return base
+        if alias.where_clauses:
+            self._validate_refinement_predicates(alias, base)
+            resolved = TyRefined(
+                name=alias.name,
+                base=base,
+                predicates=tuple(w.constraint for w in alias.where_clauses),
+            )
+            self._type_alias_cache[alias.name] = resolved
+            return resolved
+        self._type_alias_cache[alias.name] = base
+        return base
+
+    def _validate_refinement_predicates(
+        self, alias: A.TypeAlias, base: Type,
+    ) -> None:
+        if not self._is_numeric_refinement_base(base):
+            self.errors.append(TypeError_(
+                f"type alias {alias.name!r}: refinement predicates in "
+                f"Stage 31 require a numeric scalar base type, got "
+                f"{self._fmt(base)}",
+                alias.span,
+                hint="refine integer or float aliases in this stage; "
+                     "structured and boolean refinements need later proof "
+                     "support",
+            ))
+            return
+        for w in alias.where_clauses:
+            if not self._refinement_predicate_shape_supported(w.constraint):
+                self.errors.append(TypeError_(
+                    f"type alias {alias.name!r}: refinement predicate "
+                    f"{self._fmt_refinement_expr(w.constraint)} is not "
+                    f"supported by Stage 31",
+                    w.span,
+                    hint="use a boolean constant, a comparison chain over "
+                         "`self`, or combine supported predicates with "
+                         "`&&` / `||`",
+                ))
+
+    def _is_numeric_refinement_base(self, ty: Type) -> bool:
+        if isinstance(ty, TyRefined):
+            return self._is_numeric_refinement_base(ty.base)
+        return isinstance(ty, TyPrim) and ty.name in (
+            "i8", "i16", "i32", "i64", "isize",
+            "u8", "u16", "u32", "u64", "usize",
+            "bf16", "f16", "f32", "f64",
+        )
+
+    def _refinement_predicate_shape_supported(self, expr: A.Expr) -> bool:
+        if isinstance(expr, A.BoolLit):
+            return False
+        if isinstance(expr, A.Binary) and expr.op in ("&&", "||"):
+            return (self._refinement_predicate_shape_supported(expr.left)
+                    and self._refinement_predicate_shape_supported(expr.right))
+        chain = self._flatten_relational_chain(expr)
+        if chain is None:
+            return False
+        _ops, operands = chain
+        return (any(self._expr_mentions_self(op) for op in operands)
+                and all(self._refinement_scalar_expr_supported(op)
+                        for op in operands))
+
+    def _refinement_scalar_expr_supported(self, expr: A.Expr) -> bool:
+        if isinstance(expr, (A.IntLit, A.FloatLit)):
+            return True
+        if isinstance(expr, A.Name):
+            if expr.name == "self":
+                return True
+            const_value = self._const_scalar_values.get(expr.name)
+            return (isinstance(const_value, (int, float))
+                    and not isinstance(const_value, bool))
+        if isinstance(expr, A.Unary) and expr.op == "-":
+            return self._refinement_scalar_expr_supported(expr.operand)
+        if isinstance(expr, A.Binary) and expr.op in ("+", "-", "*", "/", "%"):
+            return (self._refinement_scalar_expr_supported(expr.left)
+                    and self._refinement_scalar_expr_supported(expr.right))
+        return False
+
+    def _expr_mentions_self(self, expr: A.Expr) -> bool:
+        if isinstance(expr, A.Name):
+            return expr.name == "self"
+        if isinstance(expr, A.Unary):
+            return self._expr_mentions_self(expr.operand)
+        if isinstance(expr, A.Binary):
+            return (self._expr_mentions_self(expr.left)
+                    or self._expr_mentions_self(expr.right))
+        return False
+
+    def _enum_variant_for_expr(
+        self, expr: A.Expr,
+    ) -> Optional[tuple[str, A.EnumVariant]]:
+        """Resolve `Enum::Variant` or flattened `mod__Enum__Variant`."""
+        ename: Optional[str] = None
+        vname: Optional[str] = None
+        if isinstance(expr, A.Path) and len(expr.segments) == 2:
+            ename, vname = expr.segments
+        elif isinstance(expr, A.Name) and "__" in expr.name:
+            parts = expr.name.split("__")
+            if len(parts) >= 2:
+                for i in range(len(parts) - 1, 0, -1):
+                    candidate = "__".join(parts[:i])
+                    if candidate in getattr(self, "_enum_decls", {}):
+                        ename = candidate
+                        vname = "__".join(parts[i:])
+                        break
+        if ename is None or vname is None:
+            return None
+        edecl = getattr(self, "_enum_decls", {}).get(ename)
+        if edecl is None:
+            return None
+        for variant in edecl.variants:
+            if variant.name == vname:
+                return ename, variant
+        return None
 
     def _resolve_size_expr(self, expr: A.Expr, scope: Scope) -> Type:
         """A size-expression is either a literal int, a name (size param), or
@@ -662,9 +1045,31 @@ class TypeChecker:
                 ))
             return TyPrim(f"size_{v}")
         if isinstance(expr, A.Name):
+            found_local, local_const_value = self._lookup_local_const_scalar(
+                expr.name)
+            if found_local:
+                if (isinstance(local_const_value, int)
+                        and not isinstance(local_const_value, bool)):
+                    if local_const_value <= 0:
+                        self.errors.append(TypeError_(
+                            f"array size must be > 0, got {local_const_value} "
+                            f"(trap {TRAP_ARRAY_SIZE_NEGATIVE_OR_ZERO})",
+                            expr.span,
+                        ))
+                    return TyPrim(f"size_{local_const_value}")
             looked = scope.lookup(expr.name)
             if looked is not None:
                 return looked
+            const_value = self._const_scalar_values.get(expr.name)
+            if (isinstance(const_value, int)
+                    and not isinstance(const_value, bool)):
+                if const_value <= 0:
+                    self.errors.append(TypeError_(
+                        f"array size must be > 0, got {const_value} "
+                        f"(trap {TRAP_ARRAY_SIZE_NEGATIVE_OR_ZERO})",
+                        expr.span,
+                    ))
+                return TyPrim(f"size_{const_value}")
             return TyUnknown(hint=f"unbound size {expr.name}")
         if isinstance(expr, A.Binary) and expr.op in ("+", "-", "*", "/", "%"):
             # Symbolically compose; record as constraint material
@@ -694,6 +1099,11 @@ class TypeChecker:
         if isinstance(expr, A.IntLit):
             return P.lit(expr.value)
         if isinstance(expr, A.Name):
+            found_local, local_const_value = self._lookup_local_const_scalar(
+                expr.name)
+            if found_local and isinstance(local_const_value, int) \
+                    and not isinstance(local_const_value, bool):
+                return P.lit(local_const_value)
             looked = scope.lookup(expr.name)
             if looked is not None:
                 return self._size_type_to_lin(looked)
@@ -734,7 +1144,7 @@ class TypeChecker:
     # Argument count + basic type checking for function calls
     # ------------------------------------------------------------------
     def _check_call_basic(self, call: A.Call, sig: FunctionSig,
-                          arg_tys: list[Type]) -> None:
+                          arg_tys: list[Type], scope: Scope) -> None:
         """Check argument count and primitive type compatibility.
         Tensor-shape checking is in _check_call_shapes.
 
@@ -754,7 +1164,7 @@ class TypeChecker:
             return
         # Collect provenance violations across params for B:C10 batching.
         prov_violations: list[tuple[str, Type, Type, str]] = []
-        for (pname, pty), aty in zip(sig.params, arg_tys):
+        for ((pname, pty), aty, arg_expr) in zip(sig.params, arg_tys, call.args):
             # For primitives, require an exact name match (i32 vs f32 etc.)
             if isinstance(pty, TyPrim) and isinstance(aty, TyPrim):
                 if pty.name != aty.name:
@@ -809,6 +1219,15 @@ class TypeChecker:
             kind = self._logic_provenance_violation_kind(pty, aty)
             if kind is not None:
                 prov_violations.append((pname, pty, aty, kind))
+            if ((self._contains_refinement(pty)
+                    or self._contains_refinement(aty))
+                    and self._compatible(aty, pty)
+                    and not self._refinement_proof_carried(aty, pty)):
+                self._check_refinement_contextual_value(
+                    arg_expr, aty, pty, call.span,
+                    f"call to {sig.name!r}: arg {pname!r}",
+                    scope,
+                )
         # B:C10 — emit one grouped diagnostic if 2+ violations; else
         # the existing per-param path.
         if len(prov_violations) == 1:
@@ -1050,6 +1469,35 @@ class TypeChecker:
                 fn_name, param_name, param_ty, actual_ty, kind, span,
             )
 
+    def _check_function_typed_call(
+        self, call: A.Call, callee: TyFn, arg_tys: list[Type], scope: Scope,
+    ) -> None:
+        if len(arg_tys) != len(callee.params):
+            self.errors.append(TypeError_(
+                f"function-typed call: expected {len(callee.params)} args, "
+                f"got {len(arg_tys)}",
+                call.span,
+            ))
+            return
+        for i, (arg_expr, arg_ty, param_ty) in enumerate(
+                zip(call.args, arg_tys, callee.params)):
+            if not self._compatible(arg_ty, param_ty):
+                self.errors.append(TypeError_(
+                    f"function-typed call arg {i}: expected "
+                    f"{self._fmt(param_ty)}, got {self._fmt(arg_ty)}",
+                    arg_expr.span,
+                ))
+                continue
+            if ((self._contains_refinement(param_ty)
+                 or self._contains_refinement(arg_ty))
+                    and not self._refinement_proof_carried(
+                        arg_ty, param_ty)):
+                self._check_refinement_contextual_value(
+                    arg_expr, arg_ty, param_ty, arg_expr.span,
+                    f"function-typed call arg {i}",
+                    scope,
+                )
+
     def _check_call_effects(self, call: A.Call, sig: FunctionSig) -> None:
         """Verify that calling a function with effects is permitted in the
         current calling context.
@@ -1195,11 +1643,13 @@ class TypeChecker:
         prev_name = self._current_fn_name
         prev_is_kernel = self._current_is_kernel
         prev_hbm_tile_indexables = self._current_hbm_tile_indexables
+        prev_return_ty = self._current_return_ty
         self._current_pure = sig.is_pure
         self._current_effects = sig.effects
         self._current_fn_name = sig.name
         self._current_is_kernel = "kernel" in fn.attrs
         self._current_hbm_tile_indexables = set(kernel_hbm_indexables)
+        self._current_return_ty = sig.ret
         try:
             self._check_fn_body(fn, sig)
         finally:
@@ -1208,6 +1658,7 @@ class TypeChecker:
             self._current_fn_name = prev_name
             self._current_is_kernel = prev_is_kernel
             self._current_hbm_tile_indexables = prev_hbm_tile_indexables
+            self._current_return_ty = prev_return_ty
 
     def _validate_kernel_hbm_params(
         self, fn: A.FnDecl, sig: FunctionSig
@@ -1256,14 +1707,35 @@ class TypeChecker:
                 f"does not match return type {self._fmt(sig.ret)}",
                 fn.span,
             ))
+        elif (isinstance(sig.ret, TyRefined)
+              and fn.body.final_expr is not None
+              and not self._refinement_proof_carried(body_ty, sig.ret)):
+            self._check_refinement_const_value(
+                fn.body.final_expr, sig.ret, fn.body.final_expr.span,
+                f"return value of function {fn.name!r}",
+                body_scope,
+            )
+        elif (fn.body.final_expr is not None
+              and (self._contains_refinement(sig.ret)
+                   or self._contains_refinement(body_ty))
+              and not self._refinement_proof_carried(body_ty, sig.ret)):
+            self._check_refinement_contextual_value(
+                fn.body.final_expr, body_ty, sig.ret, fn.body.final_expr.span,
+                f"return value of function {fn.name!r}",
+                body_scope,
+            )
 
     def _check_block(self, block: A.Block, scope: Scope) -> Type:
         inner = Scope(parent=scope)
-        for stmt in block.stmts:
-            self._check_stmt(stmt, inner)
-        if block.final_expr is not None:
-            return self._check_expr(block.final_expr, inner)
-        return TyUnit()
+        self._push_local_const_scope()
+        try:
+            for stmt in block.stmts:
+                self._check_stmt(stmt, inner)
+            if block.final_expr is not None:
+                return self._check_expr(block.final_expr, inner)
+            return TyUnit()
+        finally:
+            self._pop_local_const_scope()
 
     def _check_stmt(self, stmt: A.Stmt, scope: Scope) -> None:
         if isinstance(stmt, A.Let):
@@ -1285,16 +1757,51 @@ class TypeChecker:
                         and isinstance(stmt.value, A.IntLit)
                         and isinstance(declared, TyPrim)):
                     self._check_int_lit_fits(stmt.value, declared)
+                if stmt.value is not None:
+                    self._check_refinement_contextual_value(
+                        stmt.value, value_ty, declared, stmt.span,
+                        f"let {stmt.name!r}",
+                        scope,
+                    )
+                elif self._contains_refinement(declared):
+                    self.errors.append(TypeError_(
+                        f"let {stmt.name!r}: refined type "
+                        f"{self._fmt(declared)} requires an initializer "
+                        f"that proves its refinement in Stage 31",
+                        stmt.span,
+                        hint="initialize refined values with a proven value",
+                    ))
                 scope.define(stmt.name, declared, is_mut=stmt.is_mut)
             else:
                 scope.define(stmt.name, value_ty, is_mut=stmt.is_mut)
+            self._define_local_const_scalar(stmt.name, None)
             return
         if isinstance(stmt, A.ExprStmt):
             self._check_expr(stmt.expr, scope)
             return
         if isinstance(stmt, A.ConstStmt):
             ty = self._resolve_type(stmt.ty, scope)
+            value_ty = self._check_expr(stmt.value, scope)
+            if not self._compatible(value_ty, ty):
+                self.errors.append(TypeError_(
+                    f"const {stmt.name!r}: declared {self._fmt(ty)} "
+                    f"but value is {self._fmt(value_ty)}",
+                    stmt.span,
+                ))
+            else:
+                self._check_refinement_contextual_value(
+                    stmt.value, value_ty, ty, stmt.span,
+                    f"const {stmt.name!r}",
+                    scope,
+                )
             scope.define(stmt.name, ty)
+            const_value = self._eval_const_scalar_expr(
+                stmt.value, None, use_local_consts=True)
+            if (isinstance(const_value, (int, float))
+                    and not isinstance(const_value, bool)):
+                self._define_local_const_scalar(stmt.name, const_value)
+            else:
+                self._define_local_const_scalar(stmt.name, None)
             return
 
     def _check_expr(self, expr: A.Expr, scope: Scope) -> Type:
@@ -1339,10 +1846,23 @@ class TypeChecker:
             looked = scope.lookup(expr.name)
             if looked is not None:
                 return looked
+            const_decl = getattr(self, "_const_decls", {}).get(expr.name)
+            if const_decl is not None:
+                return self._resolve_type(const_decl.ty, Scope())
             # Function reference?
             if expr.name in self.functions:
                 sig = self.functions[expr.name]
                 return TyFn(tuple(t for _, t in sig.params), sig.ret)
+            enum_variant = self._enum_variant_for_expr(expr)
+            if enum_variant is not None:
+                ename, variant = enum_variant
+                if variant.payload_tys:
+                    self.errors.append(TypeError_(
+                        f"enum variant {ename}::{variant.name} has "
+                        f"payload - call as a function instead",
+                        expr.span,
+                    ))
+                return TyEnum(name=ename)
             if expr.name in self._GPU_INDEX_BUILTINS:
                 self.errors.append(TypeError_(
                     f"{expr.name} must be called as {expr.name}()",
@@ -1357,21 +1877,19 @@ class TypeChecker:
             return TyUnknown(hint=f"unbound {expr.name}")
         if isinstance(expr, A.Path):
             # Check for `EnumName::VariantName` paths.
+            enum_variant = self._enum_variant_for_expr(expr)
+            if enum_variant is not None:
+                ename, variant = enum_variant
+                if variant.payload_tys:
+                    self.errors.append(TypeError_(
+                        f"enum variant {ename}::{variant.name} has "
+                        f"payload - call as a function instead",
+                        expr.span,
+                    ))
+                return TyEnum(name=ename)
             if len(expr.segments) == 2:
                 ename, vname = expr.segments
-                edecl = getattr(self, "_enum_decls", {}).get(ename)
-                if edecl is not None:
-                    for v in edecl.variants:
-                        if v.name == vname:
-                            # Payload-bearing variants need constructor-call
-                            # form; bare path on those is an error.
-                            if v.payload_tys:
-                                self.errors.append(TypeError_(
-                                    f"enum variant {ename}::{vname} has "
-                                    f"payload — call as a function instead",
-                                    expr.span,
-                                ))
-                            return TyPrim("i32")  # tag-only variant
+                if ename in getattr(self, "_enum_decls", {}):
                     self.errors.append(TypeError_(
                         f"enum {ename!r} has no variant {vname!r}",
                         expr.span,
@@ -1633,7 +2151,7 @@ class TypeChecker:
                 return wrapped
             # Arithmetic: take the left type (simplified)
             self._check_plain_binary_scalar_compat(l, r, expr.op, expr.span)
-            return l
+            return self._erase_refinement(l)
         if isinstance(expr, A.Call):
             # Stage 16.5: "literal".as_ptr() — type is *const u8 (TyPtr(u8, mut=False)).
             if (isinstance(expr.callee, A.Field)
@@ -1657,40 +2175,37 @@ class TypeChecker:
                     ))
                 return TyPrim("i32")
             # Payload-bearing enum constructor: `Maybe::Some(42)`.
-            if (isinstance(expr.callee, A.Path)
-                    and len(expr.callee.segments) == 2):
-                ename, vname = expr.callee.segments
-                edecl = getattr(self, "_enum_decls", {}).get(ename)
-                if edecl is not None:
-                    for v in edecl.variants:
-                        if v.name == vname:
-                            # Type-check args against payload_tys.
-                            arg_tys = [self._check_expr(a, scope) for a in expr.args]
-                            if len(arg_tys) != len(v.payload_tys):
-                                self.errors.append(TypeError_(
-                                    f"enum variant {ename}::{vname} expects "
-                                    f"{len(v.payload_tys)} payload arg(s), "
-                                    f"got {len(arg_tys)}",
-                                    expr.span,
-                                ))
-                            else:
-                                for i, (at, pt) in enumerate(zip(arg_tys, v.payload_tys)):
-                                    expected = self._resolve_type(pt, scope)
-                                    if not self._compatible(at, expected):
-                                        self.errors.append(TypeError_(
-                                            f"enum {ename}::{vname} arg {i}: "
-                                            f"expected {self._fmt(expected)}, "
-                                            f"got {self._fmt(at)}",
-                                            expr.span,
-                                        ))
-                            return TyPrim("i32")  # tagged value backed by [tag, ...payload]
+            enum_variant = self._enum_variant_for_expr(expr.callee)
+            if enum_variant is not None:
+                ename, variant = enum_variant
+                # Type-check args against payload_tys.
+                arg_tys = [self._check_expr(a, scope) for a in expr.args]
+                if len(arg_tys) != len(variant.payload_tys):
                     self.errors.append(TypeError_(
-                        f"enum {ename!r} has no variant {vname!r}",
+                        f"enum variant {ename}::{variant.name} expects "
+                        f"{len(variant.payload_tys)} payload arg(s), "
+                        f"got {len(arg_tys)}",
                         expr.span,
                     ))
-                    for a in expr.args:
-                        self._check_expr(a, scope)
-                    return TyUnknown(hint=f"enum {ename}")
+                else:
+                    for i, (at, pt) in enumerate(
+                            zip(arg_tys, variant.payload_tys)):
+                        expected = self._resolve_type(pt, scope)
+                        if not self._compatible(at, expected):
+                            self.errors.append(TypeError_(
+                                f"enum {ename}::{variant.name} arg {i}: "
+                                f"expected {self._fmt(expected)}, "
+                                f"got {self._fmt(at)}",
+                                expr.span,
+                            ))
+                        else:
+                            self._check_refinement_contextual_value(
+                                expr.args[i], at, expected,
+                                expr.args[i].span,
+                                f"enum {ename}::{variant.name} arg {i}",
+                                scope,
+                            )
+                return TyEnum(name=ename)
             callee = self._check_expr(expr.callee, scope)
             arg_tys = [self._check_expr(a, scope) for a in expr.args]
             # Built-in functions for type-level transitions
@@ -1753,11 +2268,19 @@ class TypeChecker:
             # If callee is a known function (by name), do checks
             if isinstance(expr.callee, A.Name) and expr.callee.name in self.functions:
                 sig = self.functions[expr.callee.name]
-                self._check_call_basic(expr, sig, arg_tys)
+                self._check_call_basic(expr, sig, arg_tys, scope)
                 self._check_call_shapes(expr, sig, arg_tys, scope)
                 self._check_call_effects(expr, sig)
                 return sig.ret
             if isinstance(callee, TyFn):
+                self._check_function_typed_call(expr, callee, arg_tys, scope)
+                self.errors.append(TypeError_(
+                    "function-typed calls are not supported by the Stage 31 "
+                    "backend",
+                    expr.span,
+                    hint="call a named function directly until indirect-call "
+                         "lowering lands",
+                ))
                 return callee.ret
             return TyUnknown(hint="call")
         if isinstance(expr, A.Index):
@@ -1815,6 +2338,12 @@ class TypeChecker:
                         f"struct {obj_ty.name!r} has no field {expr.name!r}",
                         expr.span,
                     ))
+                else:
+                    self.errors.append(TypeError_(
+                        f"unknown struct type {obj_ty.name!r} for field "
+                        f"access {expr.name!r}",
+                        expr.span,
+                    ))
             # Tuple field access: `t.0`, `t.1`. The field "name" is a
             # stringified integer (per parser convention).
             if isinstance(obj_ty, TyTuple) and expr.name.isdigit():
@@ -1831,17 +2360,19 @@ class TypeChecker:
         if isinstance(expr, A.If):
             self._check_expr(expr.cond, scope)
             t = self._check_block(expr.then, scope)
+            branch_tys = [t]
             if expr.else_ is not None:
                 if isinstance(expr.else_, A.Block):
                     e = self._check_block(expr.else_, scope)
                 else:
                     e = self._check_expr(expr.else_, scope)
+                branch_tys.append(e)
                 if not self._compatible(t, e):
                     self.errors.append(TypeError_(
                         f"if/else branches differ: {self._fmt(t)} vs {self._fmt(e)}",
                         expr.span,
                     ))
-            return t
+            return self._join_branch_types(branch_tys, expr.span)
         if isinstance(expr, A.Match):
             scrut_ty = self._check_expr(expr.scrutinee, scope)
             arm_tys: list[Type] = []
@@ -1868,7 +2399,7 @@ class TypeChecker:
                         f"with arm 0 type {self._fmt(first)}",
                         expr.arms[i].span,
                     ))
-            return first
+            return self._join_branch_types(arm_tys, expr.span)
         if isinstance(expr, A.For):
             iter_ty = self._check_expr(expr.iter_expr, scope)
             inner = Scope(parent=scope)
@@ -1915,6 +2446,19 @@ class TypeChecker:
                     expr.span,
                     hint="use an explicit cast on the assigned value",
                 ))
+            elif expr.op == "=":
+                self._check_refinement_contextual_value(
+                    expr.value, r, target_ty, expr.span, "assignment",
+                    scope,
+                )
+            elif self._contains_refinement(target_ty):
+                self.errors.append(TypeError_(
+                    f"compound assignment to refined type "
+                    f"{self._fmt(target_ty)} requires proof support beyond "
+                    f"Stage 31 constants",
+                    expr.span,
+                    hint="assign an explicitly proven refined value instead",
+                ))
             return TyUnit()
         if isinstance(expr, A.TupleLit):
             return TyTuple(tuple(self._check_expr(e, scope) for e in expr.elems))
@@ -1931,6 +2475,22 @@ class TypeChecker:
                         hint="use an explicit cast so every array element "
                              "has the same type",
                     ))
+                elif ((self._contains_refined_function(elem)
+                       or self._contains_refined_function(t))
+                      and not self._refinement_shape_exact(elem, t)):
+                    self.errors.append(TypeError_(
+                        f"array literal function element types "
+                        f"{self._fmt(elem)} and {self._fmt(t)} differ in "
+                        f"refined parameter or return requirements in "
+                        f"Stage 31",
+                        expr.span,
+                        hint="use function elements with exactly matching "
+                             "refinements",
+                    ))
+                    elem = self._erase_refinement(elem)
+                elif (self._contains_refinement(elem)
+                      and not self._refinement_proof_carried(t, elem)):
+                    elem = self._erase_refinement(elem)
             return TyArray(elem, TyPrim(f"size_{len(ts)}"))
         if isinstance(expr, A.StructLit):
             decl = getattr(self, "_struct_decls", {}).get(expr.name)
@@ -1970,12 +2530,36 @@ class TypeChecker:
                             f"{self._fmt(expected)}, got {self._fmt(v_ty)}",
                             fval.span,
                         ))
+                    else:
+                        self._check_refinement_contextual_value(
+                            fval, v_ty, expected, fval.span,
+                            f"struct {expr.name!r}.{fname}",
+                            scope,
+                        )
             return TyStruct(name=expr.name)
         if isinstance(expr, (A.Break, A.Continue)):
             return TyUnit()
         if isinstance(expr, A.Return):
             if expr.value is not None:
-                self._check_expr(expr.value, scope)
+                value_ty = self._check_expr(expr.value, scope)
+                if not self._compatible(value_ty, self._current_return_ty):
+                    self.errors.append(TypeError_(
+                        f"return value of function "
+                        f"{self._current_fn_name!r}: expected "
+                        f"{self._fmt(self._current_return_ty)}, got "
+                        f"{self._fmt(value_ty)}",
+                        expr.span,
+                    ))
+                elif ((self._contains_refinement(self._current_return_ty)
+                       or self._contains_refinement(value_ty))
+                      and not self._refinement_proof_carried(
+                          value_ty, self._current_return_ty)):
+                    self._check_refinement_contextual_value(
+                        expr.value, value_ty, self._current_return_ty,
+                        expr.span,
+                        f"return value of function {self._current_fn_name!r}",
+                        scope,
+                    )
                 if self._current_is_kernel:
                     self.errors.append(TypeError_(
                         "@kernel functions cannot return a value in PTX",
@@ -1999,6 +2583,24 @@ class TypeChecker:
         if isinstance(expr, A.Cast):
             src_ty = self._check_expr(expr.value, scope)
             tgt_ty = self._resolve_type(expr.target_ty, scope)
+            if isinstance(tgt_ty, TyRefined):
+                if self._refinement_proof_carried(src_ty, tgt_ty):
+                    return tgt_ty
+                self._check_refinement_const_value(
+                    expr.value, tgt_ty, expr.span,
+                    f"cast to refined type {self._fmt(tgt_ty)}",
+                    scope,
+                )
+                return tgt_ty
+            if self._contains_refinement(tgt_ty):
+                self.errors.append(TypeError_(
+                    f"cast to {self._fmt(tgt_ty)} would change refined "
+                    f"parameter or return requirements in Stage 31",
+                    expr.span,
+                    hint="construct refined composite values explicitly so "
+                         "the checker can verify their proofs",
+                ))
+                return tgt_ty
             # Audit 28.8 B3 (trap 28603): raw-pointer casts must be in
             # an unsafe block. `int as *mut T` outside unsafe is a
             # forged pointer; `float as *T` is dubious even inside
@@ -2127,6 +2729,658 @@ class TypeChecker:
                 f"{lo}..={hi})", lit.span, hint=hint,
             ))
 
+    def _check_refinement_const_value(
+        self, value_expr: A.Expr, refined: "TyRefined", span: A.Span,
+        context: str, scope: Scope,
+    ) -> None:
+        value = self._eval_const_scalar_expr(
+            value_expr, None, use_local_consts=True)
+        predicate_text = " and ".join(
+            self._fmt_refinement_expr(p) for p in refined.predicates
+        )
+        if value is None:
+            self.errors.append(TypeError_(
+                f"{context}: refinement {refined.name} requires a "
+                f"compile-time-proven value in Stage 31; could not prove "
+                f"{predicate_text}",
+                span,
+                hint="use a literal that satisfies the refinement for now; "
+                     "SMT/runtime proof support is a later Stage 31 step",
+            ))
+            return
+        for pred in refined.predicates:
+            ok = self._eval_refinement_predicate(pred, value)
+            if ok is None:
+                self.errors.append(TypeError_(
+                    f"{context}: refinement {refined.name} predicate "
+                    f"{self._fmt_refinement_expr(pred)} is not supported by "
+                    f"the Stage 31 constant checker",
+                    span,
+                ))
+                continue
+            if not ok:
+                self.errors.append(TypeError_(
+                    f"{context}: refinement {refined.name} violated: "
+                    f"value {self._fmt_scalar_value(value)} does not satisfy "
+                    f"{self._fmt_refinement_expr(pred)} (trap 31001)",
+                    span,
+                    hint="refined values must satisfy their `where` predicate",
+                ))
+        if isinstance(refined.base, TyRefined):
+            self._check_refinement_const_value(
+                value_expr, refined.base, span, context, scope,
+            )
+
+    def _contains_unknown_type(self, ty: Type) -> bool:
+        if isinstance(ty, TyUnknown):
+            return True
+        if isinstance(ty, TyRefined):
+            return self._contains_unknown_type(ty.base)
+        if isinstance(ty, TyArray):
+            return (self._contains_unknown_type(ty.elem)
+                    or self._contains_unknown_type(ty.size))
+        if isinstance(ty, TyTuple):
+            return any(self._contains_unknown_type(e) for e in ty.elems)
+        if isinstance(ty, TyRef):
+            return self._contains_unknown_type(ty.inner)
+        if isinstance(ty, TyPtr):
+            return self._contains_unknown_type(ty.inner)
+        if isinstance(ty, TyFn):
+            return (any(self._contains_unknown_type(p) for p in ty.params)
+                    or self._contains_unknown_type(ty.ret))
+        if isinstance(ty, TyTensor):
+            return (self._contains_unknown_type(ty.dtype)
+                    or any(self._contains_unknown_type(s)
+                           for s in ty.shape))
+        if isinstance(ty, TyTile):
+            return (self._contains_unknown_type(ty.dtype)
+                    or any(self._contains_unknown_type(s)
+                           for s in ty.shape))
+        return False
+
+    def _refinement_proof_carried(
+        self, value_ty: Type, target: Type,
+    ) -> bool:
+        """Whether `value_ty` already carries the target refinement proof.
+
+        Stage 31's first checker can prove literals only, but a variable that
+        already has the same refined type should carry its proof forward
+        through lets, calls, and returns.
+        """
+        if isinstance(target, TyArray) and isinstance(value_ty, TyArray):
+            return self._refinement_proof_carried(value_ty.elem, target.elem)
+        if isinstance(target, TyTuple) and isinstance(value_ty, TyTuple):
+            return (len(value_ty.elems) == len(target.elems)
+                    and all(self._refinement_proof_carried(v, t)
+                            for v, t in zip(value_ty.elems, target.elems)))
+        if isinstance(target, TyFn) and isinstance(value_ty, TyFn):
+            return self._function_refinement_shape_exact(value_ty, target)
+        if isinstance(target, TyRef) and isinstance(value_ty, TyRef):
+            if target.is_mut != value_ty.is_mut:
+                return False
+            if (self._contains_refinement(value_ty.inner)
+                    or self._contains_refinement(target.inner)):
+                return self._refinement_shape_exact(
+                    value_ty.inner, target.inner)
+            return True
+        if isinstance(target, TyPtr) and isinstance(value_ty, TyPtr):
+            if target.is_mut != value_ty.is_mut:
+                return False
+            if (self._contains_refinement(value_ty.inner)
+                    or self._contains_refinement(target.inner)):
+                return self._refinement_shape_exact(
+                    value_ty.inner, target.inner)
+            return True
+        if isinstance(target, TyDiff) and isinstance(value_ty, TyDiff):
+            return self._refinement_shape_exact(value_ty.inner, target.inner)
+        if isinstance(target, TyLogic) and isinstance(value_ty, TyLogic):
+            return (target.provenance == value_ty.provenance
+                    and self._refinement_shape_exact(
+                        value_ty.inner, target.inner))
+        if isinstance(target, TyQuote) and isinstance(value_ty, TyQuote):
+            return self._refinement_shape_exact(value_ty.inner, target.inner)
+        if isinstance(target, TyMemTier) and isinstance(value_ty, TyMemTier):
+            return (target.tier == value_ty.tier
+                    and self._refinement_shape_exact(
+                        value_ty.inner, target.inner))
+        if isinstance(target, TyTensor) and isinstance(value_ty, TyTensor):
+            return (len(target.shape) == len(value_ty.shape)
+                    and self._refinement_shape_exact(
+                        value_ty.dtype, target.dtype)
+                    and all(self._size_compatible(vs, ts)
+                            for vs, ts in zip(value_ty.shape, target.shape))
+                    and value_ty.device == target.device
+                    and value_ty.layout == target.layout)
+        if isinstance(target, TyTile) and isinstance(value_ty, TyTile):
+            return (len(target.shape) == len(value_ty.shape)
+                    and self._refinement_shape_exact(
+                        value_ty.dtype, target.dtype)
+                    and all(self._size_compatible(vs, ts)
+                            for vs, ts in zip(value_ty.shape, target.shape))
+                    and value_ty.memspace == target.memspace)
+        if not isinstance(target, TyRefined):
+            return not self._contains_refinement(target)
+        if not isinstance(value_ty, TyRefined):
+            return False
+        if (value_ty.name == target.name
+                and self._compatible(value_ty.base, target.base)):
+            return True
+        return self._refinement_proof_carried(value_ty.base, target)
+
+    def _check_refinement_contextual_value(
+        self, value_expr: A.Expr, value_ty: Type, target_ty: Type,
+        span: A.Span, context: str, scope: Scope,
+    ) -> None:
+        if isinstance(target_ty, TyRefined):
+            if not self._refinement_proof_carried(value_ty, target_ty):
+                self._check_refinement_const_value(
+                    value_expr, target_ty, span, context, scope,
+                )
+            return
+        if isinstance(target_ty, TyArray) and isinstance(value_expr, A.ArrayLit):
+            for elem_expr in value_expr.elems:
+                elem_ty = self._check_expr(elem_expr, scope)
+                self._check_refinement_contextual_value(
+                    elem_expr, elem_ty, target_ty.elem, elem_expr.span,
+                    f"{context}: array element",
+                    scope,
+                )
+            return
+        if isinstance(target_ty, TyArray):
+            if (self._contains_refinement(target_ty)
+                    or self._contains_refinement(value_ty)):
+                if self._refinement_proof_carried(value_ty, target_ty):
+                    return
+                if self._contains_refinement(target_ty):
+                    self.errors.append(TypeError_(
+                        f"{context}: refined array type "
+                        f"{self._fmt(target_ty)} requires an array literal "
+                        f"or already-proven refined array in Stage 31",
+                        span,
+                        hint="use an array literal with proven refined "
+                             "elements for now",
+                    ))
+                else:
+                    self.errors.append(TypeError_(
+                        f"{context}: array type conversion from "
+                        f"{self._fmt(value_ty)} to {self._fmt(target_ty)} "
+                        f"would change refined parameter or return "
+                        f"requirements in Stage 31",
+                        span,
+                        hint="use an array type with exactly matching "
+                             "refinements",
+                    ))
+            return
+        if isinstance(target_ty, TyTuple) and isinstance(value_expr, A.TupleLit):
+            for elem_expr, elem_target in zip(value_expr.elems, target_ty.elems):
+                elem_ty = self._check_expr(elem_expr, scope)
+                self._check_refinement_contextual_value(
+                    elem_expr, elem_ty, elem_target, elem_expr.span,
+                    f"{context}: tuple element",
+                    scope,
+                )
+            return
+        if isinstance(target_ty, TyTuple):
+            if (self._contains_refinement(target_ty)
+                    or self._contains_refinement(value_ty)):
+                if self._refinement_proof_carried(value_ty, target_ty):
+                    return
+                if self._contains_refinement(target_ty):
+                    self.errors.append(TypeError_(
+                        f"{context}: refined tuple type "
+                        f"{self._fmt(target_ty)} requires a tuple literal "
+                        f"or already-proven refined tuple in Stage 31",
+                        span,
+                        hint="use a tuple literal with proven refined "
+                             "elements for now",
+                    ))
+                else:
+                    self.errors.append(TypeError_(
+                        f"{context}: tuple type conversion from "
+                        f"{self._fmt(value_ty)} to {self._fmt(target_ty)} "
+                        f"would change refined parameter or return "
+                        f"requirements in Stage 31",
+                        span,
+                        hint="use a tuple type with exactly matching "
+                             "refinements",
+                    ))
+            return
+        if isinstance(target_ty, TyFn):
+            if (self._contains_refinement(target_ty)
+                    or self._contains_refinement(value_ty)):
+                if not self._function_refinement_shape_exact(
+                        value_ty, target_ty):
+                    self.errors.append(TypeError_(
+                        f"{context}: function type conversion from "
+                        f"{self._fmt(value_ty)} to {self._fmt(target_ty)} "
+                        f"would change refined parameter or return "
+                        f"requirements in Stage 31",
+                        span,
+                        hint="use a function type with exactly matching "
+                             "refinements",
+                    ))
+            return
+        if isinstance(target_ty, TyRef):
+            if (self._contains_refinement(target_ty)
+                    or self._contains_refinement(value_ty)):
+                if not self._refinement_proof_carried(value_ty, target_ty):
+                    self.errors.append(TypeError_(
+                        f"{context}: reference type conversion from "
+                        f"{self._fmt(value_ty)} to {self._fmt(target_ty)} "
+                        f"would change refined parameter or return "
+                        f"requirements in Stage 31",
+                        span,
+                        hint="use a reference type with exactly matching "
+                             "refinements",
+                    ))
+            return
+        if isinstance(target_ty, TyPtr):
+            if (self._contains_refinement(target_ty)
+                    or self._contains_refinement(value_ty)):
+                if not self._refinement_proof_carried(value_ty, target_ty):
+                    self.errors.append(TypeError_(
+                        f"{context}: pointer type conversion from "
+                        f"{self._fmt(value_ty)} to {self._fmt(target_ty)} "
+                        f"would change refined parameter or return "
+                        f"requirements in Stage 31",
+                        span,
+                        hint="use a pointer type with exactly matching "
+                             "refinements",
+                    ))
+            return
+        if (self._contains_refinement(value_ty)
+                or self._contains_refinement(target_ty)):
+            if self._is_refinement_container(value_ty) \
+                    or self._is_refinement_container(target_ty):
+                if not self._refinement_proof_carried(value_ty, target_ty):
+                    self.errors.append(TypeError_(
+                        f"{context}: type conversion from "
+                        f"{self._fmt(value_ty)} to {self._fmt(target_ty)} "
+                        f"would change refined parameter or return "
+                        f"requirements in Stage 31",
+                        span,
+                        hint="use a type with exactly matching refinements",
+                    ))
+                return
+
+    def _function_refinement_shape_exact(
+        self, value_ty: Type, target_ty: Type,
+    ) -> bool:
+        if not isinstance(value_ty, TyFn) or not isinstance(target_ty, TyFn):
+            return False
+        if len(value_ty.params) != len(target_ty.params):
+            return False
+        return (all(self._refinement_shape_exact(v, t)
+                    for v, t in zip(value_ty.params, target_ty.params))
+                and self._refinement_shape_exact(value_ty.ret, target_ty.ret))
+
+    def _refinement_shape_exact(self, a: Type, b: Type) -> bool:
+        if isinstance(a, TyRefined) or isinstance(b, TyRefined):
+            return (isinstance(a, TyRefined)
+                    and isinstance(b, TyRefined)
+                    and a.name == b.name
+                    and self._refinement_shape_exact(a.base, b.base))
+        if isinstance(a, TyArray) and isinstance(b, TyArray):
+            return self._refinement_shape_exact(a.elem, b.elem)
+        if isinstance(a, TyTuple) and isinstance(b, TyTuple):
+            return (len(a.elems) == len(b.elems)
+                    and all(self._refinement_shape_exact(x, y)
+                            for x, y in zip(a.elems, b.elems)))
+        if isinstance(a, TyFn) and isinstance(b, TyFn):
+            return self._function_refinement_shape_exact(a, b)
+        if isinstance(a, TyRef) and isinstance(b, TyRef):
+            return (a.is_mut == b.is_mut
+                    and self._refinement_shape_exact(a.inner, b.inner))
+        if isinstance(a, TyPtr) and isinstance(b, TyPtr):
+            return (a.is_mut == b.is_mut
+                    and self._refinement_shape_exact(a.inner, b.inner))
+        if isinstance(a, TyDiff) and isinstance(b, TyDiff):
+            return self._refinement_shape_exact(a.inner, b.inner)
+        if isinstance(a, TyLogic) and isinstance(b, TyLogic):
+            return (a.provenance == b.provenance
+                    and self._refinement_shape_exact(a.inner, b.inner))
+        if isinstance(a, TyQuote) and isinstance(b, TyQuote):
+            return self._refinement_shape_exact(a.inner, b.inner)
+        if isinstance(a, TyMemTier) and isinstance(b, TyMemTier):
+            return (a.tier == b.tier
+                    and self._refinement_shape_exact(a.inner, b.inner))
+        if isinstance(a, TyTensor) and isinstance(b, TyTensor):
+            return (len(a.shape) == len(b.shape)
+                    and self._refinement_shape_exact(a.dtype, b.dtype)
+                    and all(self._size_compatible(x, y)
+                            for x, y in zip(a.shape, b.shape))
+                    and a.device == b.device
+                    and a.layout == b.layout)
+        if isinstance(a, TyTile) and isinstance(b, TyTile):
+            return (len(a.shape) == len(b.shape)
+                    and self._refinement_shape_exact(a.dtype, b.dtype)
+                    and all(self._size_compatible(x, y)
+                            for x, y in zip(a.shape, b.shape))
+                    and a.memspace == b.memspace)
+        return (not self._contains_refinement(a)
+                and not self._contains_refinement(b))
+
+    def _refinements_equivalent(self, a: Type, b: Type) -> bool:
+        return (isinstance(a, TyRefined)
+                and isinstance(b, TyRefined)
+                and a.name == b.name
+                and self._compatible(a.base, b.base)
+                and self._compatible(b.base, a.base))
+
+    def _erase_refinement(self, ty: Type) -> Type:
+        if isinstance(ty, TyRefined):
+            return self._erase_refinement(ty.base)
+        if isinstance(ty, TyArray):
+            return TyArray(self._erase_refinement(ty.elem), ty.size)
+        if isinstance(ty, TyTuple):
+            return TyTuple(tuple(self._erase_refinement(e) for e in ty.elems))
+        if isinstance(ty, TyRef):
+            return TyRef(self._erase_refinement(ty.inner), ty.is_mut)
+        if isinstance(ty, TyPtr):
+            return TyPtr(self._erase_refinement(ty.inner), ty.is_mut)
+        if isinstance(ty, TyDiff):
+            return TyDiff(self._erase_refinement(ty.inner))
+        if isinstance(ty, TyLogic):
+            return TyLogic(self._erase_refinement(ty.inner), ty.provenance)
+        if isinstance(ty, TyQuote):
+            return TyQuote(self._erase_refinement(ty.inner))
+        if isinstance(ty, TyMemTier):
+            return TyMemTier(ty.tier, self._erase_refinement(ty.inner))
+        if isinstance(ty, TyTensor):
+            return TyTensor(
+                self._erase_refinement(ty.dtype), ty.shape, ty.device,
+                ty.layout)
+        if isinstance(ty, TyTile):
+            return TyTile(
+                self._erase_refinement(ty.dtype), ty.shape, ty.memspace)
+        if isinstance(ty, TyFn):
+            return TyFn(
+                tuple(self._erase_refinement(p) for p in ty.params),
+                self._erase_refinement(ty.ret),
+            )
+        return ty
+
+    def _join_branch_types(
+        self, tys: list[Type], span: Optional[A.Span] = None,
+    ) -> Type:
+        if not tys:
+            return TyUnit()
+        joined = tys[0]
+        for t in tys[1:]:
+            if ((self._contains_refined_function(joined)
+                 or self._contains_refined_function(t))
+                    and not self._refinement_shape_exact(joined, t)):
+                self.errors.append(TypeError_(
+                    f"branch function types {self._fmt(joined)} and "
+                    f"{self._fmt(t)} differ in refined parameter or "
+                    f"return requirements in Stage 31",
+                    span or A.Span(0, 0),
+                    hint="make each branch return a function with exactly "
+                    "matching refinements",
+                ))
+                joined = self._erase_refinement(joined)
+                continue
+            if ((self._is_refinement_container(joined)
+                 or self._is_refinement_container(t))
+                    and (self._contains_refinement(joined)
+                         or self._contains_refinement(t))
+                    and not (self._refinement_proof_carried(joined, t)
+                             and self._refinement_proof_carried(t, joined))):
+                self.errors.append(TypeError_(
+                    f"branch types {self._fmt(joined)} and "
+                    f"{self._fmt(t)} differ in refined parameter or "
+                    f"return requirements in Stage 31",
+                    span or A.Span(0, 0),
+                    hint="make each branch return a type with exactly "
+                    "matching refinements",
+                ))
+                joined = self._erase_refinement(joined)
+                continue
+            if (self._contains_refinement(joined)
+                    or self._contains_refinement(t)):
+                if (self._refinement_proof_carried(joined, t)
+                        and self._refinement_proof_carried(t, joined)):
+                    continue
+                joined = self._erase_refinement(joined)
+        return joined
+
+    def _contains_refinement(
+        self, ty: Type, _seen_structs: Optional[set[str]] = None,
+    ) -> bool:
+        if _seen_structs is None:
+            _seen_structs = set()
+        if isinstance(ty, TyRefined):
+            return True
+        if isinstance(ty, TyArray):
+            return self._contains_refinement(ty.elem, _seen_structs)
+        if isinstance(ty, TyTuple):
+            return any(self._contains_refinement(e, _seen_structs)
+                       for e in ty.elems)
+        if isinstance(ty, TyStruct):
+            if ty.name in _seen_structs:
+                return False
+            decl = getattr(self, "_struct_decls", {}).get(ty.name)
+            if decl is None:
+                return False
+            next_seen = set(_seen_structs)
+            next_seen.add(ty.name)
+            return any(
+                self._contains_refinement(
+                    self._resolve_type(field.ty, Scope()), next_seen)
+                for field in decl.fields
+            )
+        if isinstance(ty, TyEnum):
+            key = f"enum:{ty.name}"
+            if key in _seen_structs:
+                return False
+            decl = getattr(self, "_enum_decls", {}).get(ty.name)
+            if decl is None:
+                return False
+            next_seen = set(_seen_structs)
+            next_seen.add(key)
+            return any(
+                self._contains_refinement(
+                    self._resolve_type(payload_ty, Scope()), next_seen)
+                for variant in decl.variants
+                for payload_ty in variant.payload_tys
+            )
+        if isinstance(ty, TyRef):
+            return self._contains_refinement(ty.inner, _seen_structs)
+        if isinstance(ty, TyPtr):
+            return self._contains_refinement(ty.inner, _seen_structs)
+        if isinstance(ty, TyDiff):
+            return self._contains_refinement(ty.inner, _seen_structs)
+        if isinstance(ty, TyLogic):
+            return self._contains_refinement(ty.inner, _seen_structs)
+        if isinstance(ty, TyQuote):
+            return self._contains_refinement(ty.inner, _seen_structs)
+        if isinstance(ty, TyMemTier):
+            return self._contains_refinement(ty.inner, _seen_structs)
+        if isinstance(ty, TyTensor):
+            return (self._contains_refinement(ty.dtype, _seen_structs)
+                    or any(self._contains_refinement(s, _seen_structs)
+                           for s in ty.shape))
+        if isinstance(ty, TyTile):
+            return (self._contains_refinement(ty.dtype, _seen_structs)
+                    or any(self._contains_refinement(s, _seen_structs)
+                           for s in ty.shape))
+        if isinstance(ty, TyFn):
+            return (any(self._contains_refinement(p, _seen_structs)
+                        for p in ty.params)
+                    or self._contains_refinement(ty.ret, _seen_structs))
+        return False
+
+    def _is_refinement_container(self, ty: Type) -> bool:
+        return isinstance(ty, (
+            TyArray, TyTuple, TyRef, TyPtr, TyFn, TyDiff, TyLogic, TyQuote,
+            TyMemTier, TyTensor, TyTile,
+        ))
+
+    def _contains_refined_function(self, ty: Type) -> bool:
+        if isinstance(ty, TyFn):
+            return self._contains_refinement(ty)
+        if isinstance(ty, TyArray):
+            return self._contains_refined_function(ty.elem)
+        if isinstance(ty, TyTuple):
+            return any(self._contains_refined_function(e) for e in ty.elems)
+        if isinstance(ty, TyRef):
+            return self._contains_refined_function(ty.inner)
+        if isinstance(ty, TyPtr):
+            return self._contains_refined_function(ty.inner)
+        if isinstance(ty, TyDiff):
+            return self._contains_refined_function(ty.inner)
+        if isinstance(ty, TyLogic):
+            return self._contains_refined_function(ty.inner)
+        if isinstance(ty, TyQuote):
+            return self._contains_refined_function(ty.inner)
+        if isinstance(ty, TyMemTier):
+            return self._contains_refined_function(ty.inner)
+        if isinstance(ty, TyTensor):
+            return (self._contains_refined_function(ty.dtype)
+                    or any(self._contains_refined_function(s)
+                           for s in ty.shape))
+        if isinstance(ty, TyTile):
+            return (self._contains_refined_function(ty.dtype)
+                    or any(self._contains_refined_function(s)
+                           for s in ty.shape))
+        return False
+
+    def _eval_refinement_predicate(
+        self, expr: A.Expr, self_value: int | float | bool,
+    ) -> Optional[bool]:
+        if isinstance(expr, A.BoolLit):
+            return expr.value
+        if isinstance(expr, A.Binary) and expr.op in ("&&", "||"):
+            left = self._eval_refinement_predicate(expr.left, self_value)
+            right = self._eval_refinement_predicate(expr.right, self_value)
+            if left is None or right is None:
+                return None
+            return (left and right) if expr.op == "&&" else (left or right)
+        chain = self._flatten_relational_chain(expr)
+        if chain is not None:
+            ops, operands = chain
+            values = [self._eval_const_scalar_expr(e, self_value)
+                      for e in operands]
+            if any(v is None for v in values):
+                return None
+            return all(self._compare_scalar(values[i], ops[i], values[i + 1])
+                       for i in range(len(ops)))
+        return None
+
+    def _flatten_relational_chain(
+        self, expr: A.Expr,
+    ) -> Optional[tuple[list[str], list[A.Expr]]]:
+        ops: list[str] = []
+        rights: list[A.Expr] = []
+        cur = expr
+        while isinstance(cur, A.Binary) and cur.op in ("<", "<=", ">", ">=",
+                                                       "==", "!="):
+            ops.append(cur.op)
+            rights.append(cur.right)
+            cur = cur.left
+        if not ops:
+            return None
+        return list(reversed(ops)), [cur] + list(reversed(rights))
+
+    def _eval_const_scalar_expr(
+        self, expr: A.Expr, self_value: int | float | bool | None,
+        *, use_local_consts: bool = False,
+    ) -> Optional[int | float | bool]:
+        if isinstance(expr, A.IntLit):
+            return expr.value
+        if isinstance(expr, A.FloatLit):
+            return expr.value
+        if isinstance(expr, A.BoolLit):
+            return expr.value
+        if isinstance(expr, A.Name) and expr.name == "self":
+            return self_value
+        if isinstance(expr, A.Name):
+            if use_local_consts:
+                found_local, local_value = self._lookup_local_const_scalar(
+                    expr.name)
+                if found_local:
+                    return local_value
+            return self._const_scalar_values.get(expr.name)
+        if isinstance(expr, A.Unary) and expr.op == "-":
+            inner = self._eval_const_scalar_expr(
+                expr.operand, self_value,
+                use_local_consts=use_local_consts,
+            )
+            if isinstance(inner, (int, float)) and not isinstance(inner, bool):
+                return -inner
+            return None
+        if isinstance(expr, A.Binary):
+            if expr.op in ("<", "<=", ">", ">=", "==", "!=", "&&", "||"):
+                return self._eval_refinement_predicate(expr, self_value)
+            left = self._eval_const_scalar_expr(
+                expr.left, self_value, use_local_consts=use_local_consts)
+            right = self._eval_const_scalar_expr(
+                expr.right, self_value, use_local_consts=use_local_consts)
+            if not (isinstance(left, (int, float))
+                    and isinstance(right, (int, float))
+                    and not isinstance(left, bool)
+                    and not isinstance(right, bool)):
+                return None
+            if expr.op == "+":
+                return left + right
+            if expr.op == "-":
+                return left - right
+            if expr.op == "*":
+                return left * right
+            if expr.op == "/" and right != 0:
+                return left / right
+            if expr.op == "%" and right != 0:
+                return left % right
+        return None
+
+    def _compare_scalar(
+        self, left: int | float | bool, op: str, right: int | float | bool,
+    ) -> bool:
+        if op == "<":
+            return left < right
+        if op == "<=":
+            return left <= right
+        if op == ">":
+            return left > right
+        if op == ">=":
+            return left >= right
+        if op == "==":
+            return left == right
+        if op == "!=":
+            return left != right
+        return False
+
+    def _fmt_scalar_value(self, value: int | float | bool) -> str:
+        if isinstance(value, bool):
+            return "true" if value else "false"
+        return str(value)
+
+    def _fmt_refinement_expr(self, expr: A.Expr) -> str:
+        chain = self._flatten_relational_chain(expr)
+        if chain is not None:
+            ops, operands = chain
+            out = self._fmt_refinement_atom(operands[0])
+            for op, operand in zip(ops, operands[1:]):
+                out += f" {op} {self._fmt_refinement_atom(operand)}"
+            return out
+        return self._fmt_refinement_atom(expr)
+
+    def _fmt_refinement_atom(self, expr: A.Expr) -> str:
+        if isinstance(expr, A.IntLit):
+            return str(expr.value)
+        if isinstance(expr, A.FloatLit):
+            return str(expr.value)
+        if isinstance(expr, A.BoolLit):
+            return "true" if expr.value else "false"
+        if isinstance(expr, A.Name):
+            return expr.name
+        if isinstance(expr, A.Unary):
+            return f"{expr.op}{self._fmt_refinement_atom(expr.operand)}"
+        if isinstance(expr, A.Binary):
+            return (f"({self._fmt_refinement_expr(expr.left)} {expr.op} "
+                    f"{self._fmt_refinement_expr(expr.right)})")
+        return type(expr).__name__
+
     @staticmethod
     def _suggest_wider_int(value: int, current: str) -> "Optional[str]":
         for cand in ("i32", "i64"):
@@ -2145,6 +3399,16 @@ class TypeChecker:
             return
         if isinstance(pat, A.PatLit):
             self._check_expr(pat.value, scope)
+            if isinstance(pat.value, A.Path):
+                enum_variant = self._enum_variant_for_expr(pat.value)
+                if enum_variant is not None and isinstance(scrut_ty, TyEnum):
+                    ename, _variant = enum_variant
+                    if ename != scrut_ty.name:
+                        self.errors.append(TypeError_(
+                            f"pattern {ename}::{_variant.name} cannot match "
+                            f"scrutinee type {scrut_ty.name}",
+                            pat.span,
+                        ))
             return
         if isinstance(pat, A.PatBind):
             scope.define(pat.name, scrut_ty)
@@ -2188,6 +3452,13 @@ class TypeChecker:
             # its corresponding payload type.
             if len(pat.path.segments) == 2:
                 ename, vname = pat.path.segments
+                if isinstance(scrut_ty, TyEnum) and ename != scrut_ty.name:
+                    self.errors.append(TypeError_(
+                        f"pattern {ename}::{vname} cannot match scrutinee "
+                        f"type {scrut_ty.name}",
+                        pat.span,
+                    ))
+                    return
                 edecl = getattr(self, "_enum_decls", {}).get(ename)
                 if edecl is not None:
                     for v in edecl.variants:
@@ -2312,9 +3583,11 @@ class TypeChecker:
         for arm in expr.arms:
             if arm.guard is None and _arm_is_total(arm.pattern):
                 return
-        # Enum-shaped match: if every non-trivial arm uses a Path / PatVariant
-        # rooted at the same enum, check coverage of that enum's variants.
-        enum_name = self._infer_enum_name_from_arms(expr.arms)
+        # Enum-shaped match: prefer the actual scrutinee enum. Inferring only
+        # from arm roots lets `match A { B::X => ... }` confuse equal tag
+        # numbers across different enums.
+        enum_name = (scrut_ty.name if isinstance(scrut_ty, TyEnum)
+                     else self._infer_enum_name_from_arms(expr.arms))
         if enum_name is not None:
             edecl = getattr(self, "_enum_decls", {}).get(enum_name)
             if edecl is not None:
@@ -2382,6 +3655,7 @@ class TypeChecker:
     _HBM_TILE_INDEX_DTYPES = _HBM_TILE_PARAM_DTYPES
 
     def _is_numeric_scalar(self, t: Type) -> bool:
+        t = self._erase_refinement(t)
         if not isinstance(t, TyPrim):
             return False
         return (t.name in self._NUMERIC_INT_PRIMS
@@ -2389,9 +3663,11 @@ class TypeChecker:
                 or t.name in self._NUMERIC_BOOL_PRIMS)
 
     def _is_int_scalar(self, t: Type) -> bool:
+        t = self._erase_refinement(t)
         return isinstance(t, TyPrim) and t.name in self._NUMERIC_INT_PRIMS
 
     def _is_float_scalar(self, t: Type) -> bool:
+        t = self._erase_refinement(t)
         return isinstance(t, TyPrim) and t.name in self._NUMERIC_FLOAT_PRIMS
 
     def _check_assignment_target(self, expr: A.Assign, scope: Scope) -> None:
@@ -2433,6 +3709,8 @@ class TypeChecker:
         if isinstance(left, (TyUnknown, TyVar, TySize)) \
                 or isinstance(right, (TyUnknown, TyVar, TySize)):
             return True
+        left = self._erase_refinement(left)
+        right = self._erase_refinement(right)
         if not (isinstance(left, TyPrim) and isinstance(right, TyPrim)):
             self.errors.append(TypeError_(
                 f"operator {op!r} does not support operand types "
@@ -2480,6 +3758,8 @@ class TypeChecker:
         if isinstance(left, (TyUnknown, TyVar, TySize)) \
                 or isinstance(right, (TyUnknown, TyVar, TySize)):
             return
+        left = self._erase_refinement(left)
+        right = self._erase_refinement(right)
         if not (isinstance(left, TyPrim) and isinstance(right, TyPrim)):
             self.errors.append(TypeError_(
                 f"operator {op!r} does not support operand types "
@@ -2686,6 +3966,16 @@ class TypeChecker:
     def _compatible(self, a: Type, b: Type) -> bool:
         if isinstance(a, TyUnknown) or isinstance(b, TyUnknown):
             return True
+        if isinstance(a, TyRefined) and isinstance(b, TyRefined):
+            return self._compatible(a.base, b.base)
+        if isinstance(a, TyRefined):
+            return self._compatible(a.base, b)
+        if isinstance(b, TyRefined):
+            return self._compatible(a, b.base)
+        if isinstance(a, TyEnum) and isinstance(b, TyEnum):
+            return a.name == b.name
+        if isinstance(a, TyEnum) or isinstance(b, TyEnum):
+            return False
         # Memory-tier types are incompatible across tiers (must explicitly
         # consolidate / recall to convert).
         #
@@ -2830,10 +4120,12 @@ class TypeChecker:
 
     def _fmt(self, t: Type) -> str:
         if isinstance(t, TyPrim): return t.name
+        if isinstance(t, TyRefined): return t.name
         # Audit 28.8 cycle 3 D8: print TyStruct as its declared name
         # (e.g. `Foo`) instead of falling through to repr (which gave
         # `TyStruct(name='Foo')` in user-facing diagnostics).
         if isinstance(t, TyStruct): return t.name
+        if isinstance(t, TyEnum): return t.name
         if isinstance(t, TyVar): return t.name
         if isinstance(t, TySize): return f"size:{t.name}"
         if isinstance(t, TyTensor):

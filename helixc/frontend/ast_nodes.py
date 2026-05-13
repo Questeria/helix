@@ -488,6 +488,7 @@ class TypeAlias(Item):
     generics: list[GenericParam]
     target: "TyNode"
     is_pub: bool = False
+    where_clauses: list[WhereClause] = field(default_factory=list)
 
 
 @dataclass

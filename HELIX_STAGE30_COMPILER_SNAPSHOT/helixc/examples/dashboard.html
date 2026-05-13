@@ -1,0 +1,923 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>Helix AGI Dashboard — live agent</title>
+<style>
+  body {
+    background: #1a1a1a;
+    color: #e0e0e0;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    margin: 0;
+    padding: 20px;
+  }
+  h1 {
+    color: #ff8800;
+    margin: 0 0 4px 0;
+    font-size: 22px;
+  }
+  .subtitle {
+    color: #888;
+    font-size: 13px;
+    margin-bottom: 16px;
+  }
+  .layout {
+    display: grid;
+    grid-template-columns: 460px 1fr;
+    gap: 24px;
+    align-items: start;
+  }
+  .panel {
+    background: #2a2a2a;
+    border: 1px solid #3a3a3a;
+    border-radius: 8px;
+    padding: 16px;
+  }
+  .panel h2 {
+    margin: 0 0 12px 0;
+    font-size: 15px;
+    color: #ff8800;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+  }
+  #grid {
+    display: grid;
+    gap: 2px;
+    background: #0d0d0d;
+    padding: 4px;
+    border-radius: 4px;
+  }
+  .cell {
+    background: #2f2f2f;
+    border-radius: 3px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 18px;
+    font-weight: bold;
+    transition: all 0.15s ease;
+  }
+  .cell.obstacle {
+    background: #4a2a2a;
+    color: #ff5544;
+  }
+  .cell.goal {
+    background: #2a4a2a;
+    color: #44ff66;
+  }
+  .cell.agent {
+    background: #ff8800;
+    color: #000;
+    box-shadow: 0 0 12px rgba(255, 136, 0, 0.7);
+  }
+  .cell.visited {
+    background: #2a2a3a;
+  }
+  .cell.path-tail {
+    background: rgba(255, 136, 0, 0.3);
+  }
+  .cell.optimal {
+    box-shadow: inset 0 0 0 2px #66ddff;
+  }
+  .cell .policy-arrow {
+    position: absolute;
+    bottom: 1px;
+    right: 2px;
+    font-size: 11px;
+    color: rgba(102, 221, 255, 0.85);
+    pointer-events: none;
+    font-weight: bold;
+  }
+  .cell { position: relative; }
+  .controls {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 12px;
+    align-items: center;
+    flex-wrap: wrap;
+  }
+  button {
+    background: #ff8800;
+    color: #000;
+    border: none;
+    padding: 6px 14px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-weight: bold;
+    font-family: inherit;
+  }
+  button:hover { background: #ffaa33; }
+  button:disabled { background: #555; color: #888; cursor: not-allowed; }
+  input[type=range] { flex: 1; max-width: 180px; }
+  label { font-size: 13px; color: #aaa; }
+  .stats {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+    font-size: 14px;
+  }
+  .stat {
+    background: #1f1f1f;
+    padding: 8px 10px;
+    border-radius: 4px;
+    border-left: 3px solid #ff8800;
+  }
+  .stat-label { color: #888; font-size: 11px; text-transform: uppercase; }
+  .stat-value { color: #fff; font-size: 18px; font-weight: bold; }
+  #log {
+    font-family: 'Consolas', 'Courier New', monospace;
+    font-size: 11px;
+    color: #99ccff;
+    background: #0d0d0d;
+    padding: 8px;
+    border-radius: 4px;
+    height: 220px;
+    overflow-y: auto;
+    margin-top: 12px;
+  }
+  #log .json { color: #88aaff; }
+  #log .step { color: #ff8800; font-weight: bold; }
+  .chart-canvas {
+    width: 100%;
+    height: 140px;
+    background: #0d0d0d;
+    border-radius: 4px;
+    margin-top: 8px;
+  }
+  .legend { display: flex; gap: 12px; margin-top: 8px; font-size: 12px; }
+  .legend span { display: inline-block; }
+  .swatch {
+    display: inline-block;
+    width: 12px; height: 12px;
+    border-radius: 2px;
+    margin-right: 4px;
+    vertical-align: middle;
+  }
+  .status {
+    padding: 6px 10px;
+    border-radius: 4px;
+    margin-bottom: 8px;
+    font-size: 13px;
+    text-align: center;
+  }
+  .status.running { background: #2a4a2a; color: #88ff88; }
+  .status.idle { background: #3a3a3a; color: #aaa; }
+  .status.done-ok { background: #2a4a2a; color: #88ff88; }
+  .status.done-fail { background: #4a2a2a; color: #ff8888; }
+</style>
+</head>
+<body>
+<h1>Helix AGI Dashboard — live agent</h1>
+<div class="subtitle">Browser visualisation of a Helix-compiled grid-world agent. The agent's logic, world model, search, working memory, episodic memory all run in a native ELF binary; this dashboard streams its JSON output and renders it.</div>
+
+<div class="layout">
+  <div class="panel">
+    <h2>World</h2>
+    <div id="status" class="status idle">Press Run to start</div>
+    <div id="grid"></div>
+    <div class="legend">
+      <span><span class="swatch" style="background:#ff8800"></span>Agent</span>
+      <span><span class="swatch" style="background:#44ff66"></span>Goal</span>
+      <span><span class="swatch" style="background:#ff5544"></span>Obstacle</span>
+      <span><span class="swatch" style="background:#2a2a3a"></span>Visited</span>
+      <span><span class="swatch" style="border:2px solid #66ddff;background:transparent;width:10px;height:10px"></span>BFS-optimal</span>
+    </div>
+    <div style="margin-top:6px">
+      <label style="font-size:12px"><input type="checkbox" id="showOptimal" checked onchange="updateOptimal()"/> Show BFS shortest-path overlay (cyan border)</label>
+    </div>
+    <div style="margin-top:6px">
+      <label style="font-size:12px"><input type="checkbox" id="showPolicy" checked onchange="updatePolicy()"/> Show learned policy arrows (per-cell argmax-Q action)</label>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2>Controls</h2>
+    <div class="controls">
+      <label>Agent:</label>
+      <select id="agentKind" style="background:#2a2a2a;color:#e0e0e0;border:1px solid #555;padding:4px 8px;border-radius:4px">
+        <option value="hillclimb">Hill-climbing (deterministic, no learning)</option>
+        <option value="qlearn" selected>Q-learning (tabular, fast)</option>
+        <option value="nn">Neural network (32-hidden + ReLU + replay buffer; experimental, often slower than tabular Q)</option>
+      </select>
+    </div>
+    <div class="controls">
+      <label>Map seed:</label>
+      <input type="number" id="seedInput" value="12345" style="width:90px;background:#2a2a2a;color:#e0e0e0;border:1px solid #555;padding:4px 6px;border-radius:4px"/>
+      <button id="randBtn" onclick="randomSeed()" title="Generate a fresh map">🎲 Random</button>
+      <label style="margin-left:10px"><input type="checkbox" id="mazeMode"/> Maze (wall lines)</label>
+    </div>
+    <div class="controls">
+      <button id="runBtn" onclick="runAgent()">Run</button>
+      <button id="benchBtn" onclick="runBenchmark()" title="Run all 3 agents on the same seed and compare">⚖ Benchmark all 3</button>
+      <button id="pauseBtn" onclick="togglePause()" disabled>Pause</button>
+      <button id="stepBtn" onclick="stepOnce()" disabled>Step ▶</button>
+      <button id="resetBtn" onclick="resetAll()">Reset</button>
+    </div>
+    <div class="controls">
+      <label>Max events to play:</label>
+      <input type="range" id="iterRange" min="100" max="20000" step="100" value="20000" oninput="document.getElementById('iterVal').textContent = this.checked ? '∞' : this.value" />
+      <span id="iterVal">20000</span>
+      <label style="margin-left:8px"><input type="checkbox" id="unlimitedEvents" checked onchange="document.getElementById('iterVal').textContent = this.checked ? '∞ (unlimited)' : document.getElementById('iterRange').value"/> ∞ unlimited</label>
+    </div>
+    <div class="controls">
+      <label>Speed:</label>
+      <input type="range" id="speedRange" min="1" max="100000" value="1000" oninput="syncSpeedFromSlider()" />
+      <input type="number" id="speedInput" min="1" max="500000" value="1000" style="width:90px;background:#2a2a2a;color:#e0e0e0;border:1px solid #555;padding:4px 6px;border-radius:4px" oninput="syncSpeedFromInput()" />
+      <span id="speedVal">1.0k ev/s</span>
+    </div>
+    <div class="controls">
+      <label>World size:</label>
+      <select id="gridSize" onchange="onSizeChange()" style="background:#2a2a2a;color:#e0e0e0;border:1px solid #555;padding:4px 8px;border-radius:4px">
+        <option value="10" selected>10 × 10 (small)</option>
+        <option value="15">15 × 15 (medium)</option>
+        <option value="20">20 × 20 (large)</option>
+      </select>
+      <span id="sizeNote" style="font-size:11px;color:#888"></span>
+    </div>
+    <h2 style="margin-top:16px">Stats</h2>
+    <div class="stats">
+      <div class="stat"><div class="stat-label">Episode</div><div class="stat-value" id="stEp">0</div></div>
+      <div class="stat"><div class="stat-label">Step</div><div class="stat-value" id="stStep">0</div></div>
+      <div class="stat"><div class="stat-label">Position</div><div class="stat-value" id="stPos">0</div></div>
+      <div class="stat"><div class="stat-label">Action</div><div class="stat-value" id="stAct">—</div></div>
+      <div class="stat"><div class="stat-label">Reward</div><div class="stat-value" id="stReward">—</div></div>
+      <div class="stat"><div class="stat-label">Epsilon%</div><div class="stat-value" id="stEpsilon">—</div></div>
+      <div class="stat"><div class="stat-label">Visited</div><div class="stat-value" id="stVisited">0</div></div>
+      <div class="stat"><div class="stat-label">Status</div><div class="stat-value" id="stDone">idle</div></div>
+    </div>
+    <h2 style="margin-top:16px">Steps per episode (lower = better)</h2>
+    <canvas id="episodeChart" class="chart-canvas"></canvas>
+    <div id="benchmarkPanel" style="display:none;margin-top:12px;padding:10px;background:#1f1f1f;border-radius:6px;border-left:3px solid #66ddff">
+      <h2 style="margin:0 0 8px 0">Benchmark — agent comparison</h2>
+      <div id="benchmarkResults" style="font-family:monospace;font-size:12px"></div>
+      <canvas id="benchmarkChart" style="width:100%;height:160px;background:#0d0d0d;border-radius:4px;margin-top:8px"></canvas>
+      <div style="display:flex;gap:14px;font-size:11px;margin-top:6px">
+        <span><span style="display:inline-block;width:10px;height:10px;background:#888;border-radius:50%"></span> Hill-climb</span>
+        <span><span style="display:inline-block;width:10px;height:10px;background:#ff8800;border-radius:50%"></span> Q-learning</span>
+        <span><span style="display:inline-block;width:10px;height:10px;background:#66ddff;border-radius:50%"></span> Neural net</span>
+      </div>
+    </div>
+    <h2 style="margin-top:16px">Q-value heatmap (after each episode)</h2>
+    <div style="font-size:11px;color:#888;margin-bottom:6px">
+      Brighter cells = higher learned value. Cells fill in as the agent
+      backs up reward from the goal across training. Watch values radiate.
+    </div>
+    <canvas id="heatmap" style="width:100%;height:220px;background:#0d0d0d;border-radius:4px"></canvas>
+    <div style="font-size:11px;color:#666;margin-top:4px">Heatmap shows max-Q per cell from latest episode.</div>
+    <h2 style="margin-top:16px">Score over time</h2>
+    <canvas id="chart" class="chart-canvas"></canvas>
+    <h2 style="margin-top:16px">Saved sessions <span style="font-size:11px;color:#888;font-weight:normal">(click any to replay; cleared on browser close)</span></h2>
+    <div id="sessions" style="background:#0d0d0d;border-radius:4px;padding:6px;max-height:140px;overflow-y:auto;font-family:monospace;font-size:11px"></div>
+    <div class="controls" style="margin-top:6px">
+      <button onclick="clearSessions()" style="background:#553333;color:#fff">Clear all</button>
+      <button onclick="exportSessions()" title="Download JSON of all saved runs">⬇ Export</button>
+    </div>
+    <h2 style="margin-top:16px">JSON stream (raw Helix output)</h2>
+    <div id="log"></div>
+  </div>
+</div>
+
+<script>
+let N = 10;  // dynamic — set from init JSON grid_n
+const ACTION_NAMES = { 0: 'UP', 1: 'DOWN', 2: 'LEFT', 3: 'RIGHT', '-1': 'init' };
+let allEvents = [];
+let timer = null;
+let cursor = 0;
+let paused = false;
+let visited = new Set();
+
+function updateSpeedLabel() {
+  const eps = parseInt(document.getElementById('speedInput').value) || 1000;
+  let label;
+  if (eps < 100) label = eps + ' ev/s';
+  else if (eps < 1000) label = eps + ' ev/s';
+  else label = (eps / 1000).toFixed(1) + 'k ev/s';
+  const ms = (1000 / eps).toFixed(2);
+  document.getElementById('speedVal').textContent = label + ' (' + ms + 'ms/step)';
+}
+function syncSpeedFromSlider() {
+  document.getElementById('speedInput').value = document.getElementById('speedRange').value;
+  updateSpeedLabel();
+}
+function syncSpeedFromInput() {
+  const v = Math.max(1, Math.min(500000, parseInt(document.getElementById('speedInput').value) || 1000));
+  // Slider is capped at 100k so don't try to set above its max.
+  if (v <= 100000) document.getElementById('speedRange').value = v;
+  updateSpeedLabel();
+}
+
+let currentObstacles = [];
+let currentGoal = 99;
+let optimalPath = new Set();
+
+function buildGrid(obstacles, goal, gridN) {
+  if (gridN) N = gridN;
+  // Compute cell size: 400px / N gives 40px for 10x10, 26px for 15x15, 20px for 20x20.
+  const cellSize = Math.max(18, Math.min(40, Math.floor(400 / N)));
+  const grid = document.getElementById('grid');
+  grid.style.gridTemplateColumns = 'repeat(' + N + ', ' + cellSize + 'px)';
+  grid.style.gridTemplateRows = 'repeat(' + N + ', ' + cellSize + 'px)';
+  currentObstacles = obstacles || [];
+  currentGoal = goal;
+  grid.innerHTML = '';
+  for (let i = 0; i < N * N; i++) {
+    const cell = document.createElement('div');
+    cell.id = 'c' + i;
+    cell.className = 'cell';
+    if (obstacles && obstacles.indexOf(i) >= 0) {
+      cell.classList.add('obstacle');
+      cell.textContent = '#';
+    } else if (i === goal) {
+      cell.classList.add('goal');
+      cell.textContent = 'G';
+    }
+    grid.appendChild(cell);
+  }
+  // Compute BFS shortest path from cell 0 to goal.
+  optimalPath = bfsShortestPath(0, goal, obstacles || []);
+  updateOptimal();
+}
+
+function bfsShortestPath(start, goal, obstacles) {
+  const obs = new Set(obstacles);
+  const parent = {};
+  const visited = new Set([start]);
+  const queue = [start];
+  parent[start] = -1;
+  while (queue.length > 0) {
+    const cur = queue.shift();
+    if (cur === goal) break;
+    const r = Math.floor(cur / N), c = cur % N;
+    const candidates = [
+      r > 0     ? (r - 1) * N + c : -1,
+      r < N - 1 ? (r + 1) * N + c : -1,
+      c > 0     ? r * N + (c - 1) : -1,
+      c < N - 1 ? r * N + (c + 1) : -1,
+    ];
+    for (const nxt of candidates) {
+      if (nxt < 0) continue;
+      if (obs.has(nxt)) continue;
+      if (visited.has(nxt)) continue;
+      visited.add(nxt);
+      parent[nxt] = cur;
+      queue.push(nxt);
+    }
+  }
+  // Reconstruct path
+  const path = new Set();
+  if (!(goal in parent)) return path;
+  let cur = goal;
+  while (cur !== -1) {
+    path.add(cur);
+    cur = parent[cur];
+  }
+  return path;
+}
+
+function updateOptimal() {
+  const show = document.getElementById('showOptimal').checked;
+  document.querySelectorAll('.cell.optimal').forEach(c => c.classList.remove('optimal'));
+  if (show) {
+    optimalPath.forEach(p => {
+      if (p === 0 || p === currentGoal) return;
+      const c = document.getElementById('c' + p);
+      if (c) c.classList.add('optimal');
+    });
+  }
+}
+
+function setAgent(pos) {
+  // Reset all main glyphs.
+  document.querySelectorAll('.cell').forEach(c => {
+    c.classList.remove('agent', 'path-tail');
+    // Set the main glyph (first text node).
+    let mainText = '';
+    if (c.classList.contains('obstacle')) mainText = '#';
+    else if (c.classList.contains('goal')) mainText = 'G';
+    // Find existing main text node or create one.
+    let textNode = null;
+    for (const n of c.childNodes) { if (n.nodeType === 3) { textNode = n; break; } }
+    if (textNode) textNode.nodeValue = mainText;
+    else if (mainText) c.insertBefore(document.createTextNode(mainText), c.firstChild);
+  });
+  if (pos === undefined || pos < 0) return;
+  const cell = document.getElementById('c' + pos);
+  if (!cell) return;
+  cell.classList.add('agent');
+  let textNode = null;
+  for (const n of cell.childNodes) { if (n.nodeType === 3) { textNode = n; break; } }
+  if (textNode) textNode.nodeValue = 'A';
+  else cell.insertBefore(document.createTextNode('A'), cell.firstChild);
+  visited.add(pos);
+  for (let p of visited) {
+    const c2 = document.getElementById('c' + p);
+    if (c2 && p !== pos && !c2.classList.contains('obstacle') && !c2.classList.contains('goal')) {
+      c2.classList.add('visited');
+    }
+  }
+}
+
+function logLine(text, cls) {
+  const log = document.getElementById('log');
+  const div = document.createElement('div');
+  if (cls) div.className = cls;
+  div.textContent = text;
+  log.appendChild(div);
+  log.scrollTop = log.scrollHeight;
+}
+
+let chartHistory = [];
+function drawChart() {
+  const canvas = document.getElementById('chart');
+  const ctx = canvas.getContext('2d');
+  const w = canvas.clientWidth;
+  const h = canvas.clientHeight;
+  canvas.width = w;
+  canvas.height = h;
+  ctx.fillStyle = '#0d0d0d';
+  ctx.fillRect(0, 0, w, h);
+  if (chartHistory.length < 2) return;
+  const minS = Math.min(...chartHistory);
+  const maxS = Math.max(...chartHistory);
+  const span = Math.max(1, maxS - minS);
+  ctx.strokeStyle = '#ff8800';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  for (let i = 0; i < chartHistory.length; i++) {
+    const x = (i / (chartHistory.length - 1 || 1)) * (w - 4) + 2;
+    const y = h - 4 - ((chartHistory[i] - minS) / span) * (h - 8);
+    if (i === 0) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
+  }
+  ctx.stroke();
+  ctx.fillStyle = '#888';
+  ctx.font = '10px monospace';
+  ctx.fillText('min ' + minS, 4, h - 4);
+  ctx.fillText('max ' + maxS, 4, 12);
+}
+
+let episodeStepHistory = [];
+
+let currentPolicy = null;
+
+function drawPolicy(actions) {
+  currentPolicy = actions;
+  updatePolicy();
+}
+
+function updatePolicy() {
+  const show = document.getElementById('showPolicy').checked;
+  document.querySelectorAll('.policy-arrow').forEach(a => a.remove());
+  if (!show || !currentPolicy) return;
+  const ARROWS = ['↑', '↓', '←', '→'];
+  for (let i = 0; i < currentPolicy.length; i++) {
+    if (i === currentGoal || currentObstacles.indexOf(i) >= 0) continue;
+    const cell = document.getElementById('c' + i);
+    if (!cell) continue;
+    const arrow = document.createElement('span');
+    arrow.className = 'policy-arrow';
+    arrow.textContent = ARROWS[currentPolicy[i]] || '';
+    cell.appendChild(arrow);
+  }
+}
+
+function drawHeatmap(qmax) {
+  const canvas = document.getElementById('heatmap');
+  const ctx = canvas.getContext('2d');
+  const w = canvas.clientWidth;
+  const h = canvas.clientHeight;
+  canvas.width = w;
+  canvas.height = h;
+  ctx.fillStyle = '#0d0d0d';
+  ctx.fillRect(0, 0, w, h);
+  if (!qmax || qmax.length === 0) return;
+  // Find min/max for color scaling.
+  let lo = Infinity, hi = -Infinity;
+  for (let v of qmax) { if (v < lo) lo = v; if (v > hi) hi = v; }
+  const span = Math.max(1, hi - lo);
+  const cellW = w / 10;
+  const cellH = h / 10;
+  for (let i = 0; i < 100; i++) {
+    const r = i % 10;  // col
+    const c = Math.floor(i / 10);  // row
+    const v = qmax[i];
+    const t = (v - lo) / span;  // 0..1
+    // Color: black -> blue -> orange -> yellow
+    let red, green, blue;
+    if (t < 0.5) {
+      const u = t * 2;
+      red = Math.round(20 * (1 - u));
+      green = Math.round(40 * (1 - u));
+      blue = Math.round(120 + 80 * u);
+    } else {
+      const u = (t - 0.5) * 2;
+      red = Math.round(120 + 135 * u);
+      green = Math.round(60 + 195 * u);
+      blue = Math.round(80 * (1 - u));
+    }
+    ctx.fillStyle = `rgb(${red},${green},${blue})`;
+    ctx.fillRect(r * cellW, c * cellH, cellW - 1, cellH - 1);
+  }
+}
+
+function applyEvent(ev) {
+  if (ev.type === 'init') {
+    buildGrid(ev.obstacles, ev.goal, ev.grid_n);
+    if (ev.seed !== undefined) {
+      document.getElementById('status').className = 'status running';
+      document.getElementById('status').textContent = 'Map seed: ' + ev.seed + ' (' + (ev.grid_n||10) + 'x' + (ev.grid_n||10) + ') — running ' + (ev.n_episodes || '') + ' episodes';
+    }
+    return;
+  }
+  if (ev.type === 'qmap') {
+    drawHeatmap(ev.qmax);
+    return;
+  }
+  if (ev.type === 'policy') {
+    drawPolicy(ev.actions);
+    return;
+  }
+  if (ev.type === 'episode') {
+    // Episode summary line (Q-learning).
+    episodeStepHistory.push({ ep: ev.ep, steps: ev.steps, reached: ev.reached, reward: ev.total_reward });
+    drawEpisodeChart();
+    document.getElementById('stEp').textContent = ev.ep;
+    document.getElementById('stEpsilon').textContent = ev.epsilon !== undefined ? ev.epsilon : '—';
+    if (ev.reached) {
+      document.getElementById('status').className = 'status done-ok';
+      document.getElementById('status').textContent = '✓ Episode ' + ev.ep + ' reached goal in ' + ev.steps + ' steps (ε=' + ev.epsilon + '%)';
+    } else {
+      document.getElementById('status').className = 'status running';
+      document.getElementById('status').textContent = '✗ Episode ' + ev.ep + ' did not reach goal (ε=' + ev.epsilon + '%)';
+    }
+    // Reset per-episode visited tracking on new episode.
+    visited = new Set();
+    document.querySelectorAll('.cell.visited').forEach(c => c.classList.remove('visited'));
+    logLine('--- ' + JSON.stringify(ev) + ' ---', 'step');
+    return;
+  }
+  if (ev.type === 'summary') {
+    if (ev.best_steps && ev.best_steps < 9999) {
+      document.getElementById('status').className = 'status done-ok';
+      document.getElementById('status').textContent = '✓ Training done. Best path: ' + ev.best_steps + ' steps over ' + ev.episodes + ' episodes';
+    } else {
+      document.getElementById('status').className = 'status done-fail';
+      document.getElementById('status').textContent = '✗ Agent NEVER reached the goal in ' + ev.episodes + ' episodes — gave up. Try a different seed, smaller world, or another agent.';
+    }
+    logLine('=== ' + JSON.stringify(ev) + ' ===', 'step');
+    return;
+  }
+  // Step events ("type":"step" for qlearn, or no type for hillclimb).
+  if (ev.ep !== undefined) document.getElementById('stEp').textContent = ev.ep;
+  document.getElementById('stStep').textContent = ev.step;
+  document.getElementById('stPos').textContent = ev.pos;
+  document.getElementById('stAct').textContent = ACTION_NAMES[ev.action] || '—';
+  if (ev.reward !== undefined) {
+    document.getElementById('stReward').textContent = ev.reward;
+  } else if (ev.score !== undefined) {
+    document.getElementById('stReward').textContent = ev.score;
+  }
+  setAgent(ev.pos);
+  document.getElementById('stVisited').textContent = visited.size;
+  const chartVal = ev.qmax !== undefined ? ev.qmax : (ev.score !== undefined ? ev.score : null);
+  if (chartVal !== null) {
+    chartHistory.push(chartVal);
+    drawChart();
+  }
+  if (ev.done) {
+    if (ev.reached_goal) {
+      document.getElementById('status').className = 'status done-ok';
+      document.getElementById('status').textContent = '✓ Goal reached at step ' + ev.step;
+      document.getElementById('stDone').textContent = '✓ done';
+    } else {
+      document.getElementById('status').className = 'status done-fail';
+      document.getElementById('status').textContent = '✗ Did not reach goal in ' + ev.step + ' steps';
+      document.getElementById('stDone').textContent = '✗ stuck';
+    }
+  }
+  logLine(JSON.stringify(ev), 'json');
+}
+
+function drawEpisodeChart() {
+  const canvas = document.getElementById('episodeChart');
+  const ctx = canvas.getContext('2d');
+  const w = canvas.clientWidth;
+  const h = canvas.clientHeight;
+  canvas.width = w;
+  canvas.height = h;
+  ctx.fillStyle = '#0d0d0d';
+  ctx.fillRect(0, 0, w, h);
+  if (episodeStepHistory.length === 0) return;
+  const steps = episodeStepHistory.map(e => e.steps);
+  const maxS = Math.max(...steps);
+  const minS = Math.min(...steps);
+  // Draw bars: green if reached, red if not.
+  const barW = (w - 8) / episodeStepHistory.length;
+  for (let i = 0; i < episodeStepHistory.length; i++) {
+    const e = episodeStepHistory[i];
+    const x = 4 + i * barW;
+    const barH = ((e.steps - 0) / (maxS || 1)) * (h - 24);
+    ctx.fillStyle = e.reached ? '#44ff66' : '#ff5544';
+    ctx.fillRect(x, h - 4 - barH, Math.max(2, barW - 2), barH);
+    // Episode number label
+    ctx.fillStyle = '#666';
+    ctx.font = '9px monospace';
+    ctx.fillText(e.ep, x, h - 8 - barH);
+  }
+  ctx.fillStyle = '#888';
+  ctx.font = '10px monospace';
+  ctx.fillText('best ' + minS, 4, 12);
+  ctx.fillText('worst ' + maxS, 4, 24);
+}
+
+function randomSeed() {
+  const s = Math.floor(Math.random() * 100000) + 1;
+  document.getElementById('seedInput').value = s;
+}
+
+async function runBenchmark() {
+  const seed = parseInt(document.getElementById('seedInput').value) || 12345;
+  const maze = document.getElementById('mazeMode').checked ? '1' : '0';
+  const size = document.getElementById('gridSize').value;
+  const panel = document.getElementById('benchmarkPanel');
+  const results = document.getElementById('benchmarkResults');
+  panel.style.display = 'block';
+  results.innerHTML = '<div style="color:#aaa">Running 3 agents on seed=' + seed + ', size=' + size + ', maze=' + (maze==='1') + '... watch the grid replay each one</div>';
+  const benchData = {};
+  const agents = [
+    { kind: 'hillclimb', label: 'Hill-climb', color: '#888' },
+    { kind: 'qlearn',    label: 'Q-learning', color: '#ff8800' },
+    { kind: 'nn',        label: 'Neural net', color: '#66ddff' },
+  ];
+  for (const a of agents) {
+    results.innerHTML += '<div style="color:' + a.color + '">▶ ' + a.label + ' (compiling + running)...</div>';
+    const t0 = performance.now();
+    const resp = await fetch('/run?iter=99999&kind=' + a.kind + '&seed=' + seed + '&maze=' + maze + '&size=' + size);
+    const text = await resp.text();
+    const t1 = performance.now();
+    const evs = text.trim().split('\n').filter(l => l).map(l => { try { return JSON.parse(l); } catch (e) { return null; } }).filter(e => e);
+    const summary = evs.find(e => e.type === 'summary');
+    const episodes = evs.filter(e => e.type === 'episode');
+    benchData[a.kind] = {
+      label: a.label,
+      color: a.color,
+      stepsByEpisode: episodes.map(e => ({ ep: e.ep, steps: e.steps, reached: e.reached })),
+      best: summary && summary.best_steps && summary.best_steps < 9999 ? summary.best_steps : null,
+      runtime_ms: t1 - t0,
+    };
+    // Replay this agent's run on the grid (sub-second overview).
+    results.innerHTML += '<div style="color:' + a.color + '">  ↳ playing on grid (best ' + (benchData[a.kind].best || '∞') + ' steps)...</div>';
+    allEvents = evs;
+    cursor = 0;
+    document.getElementById('speedInput').value = 30000;
+    syncSpeedFromInput();
+    visited = new Set();
+    chartHistory = [];
+    episodeStepHistory = [];
+    drawChart();
+    drawEpisodeChart();
+    await new Promise(r => {
+      const orig = scheduleNext;
+      const watchEnd = setInterval(() => {
+        if (cursor >= allEvents.length) {
+          clearInterval(watchEnd);
+          r();
+        }
+      }, 200);
+      scheduleNext();
+    });
+  }
+  results.innerHTML = '';
+  let html = '<table style="width:100%;border-collapse:collapse"><tr style="color:#888;border-bottom:1px solid #444"><th style="text-align:left;padding:4px">Agent</th><th>Best path</th><th>Compile+run</th><th>Reached goal</th></tr>';
+  for (const a of agents) {
+    const d = benchData[a.kind];
+    const reachedCount = d.stepsByEpisode.filter(e => e.reached).length;
+    html += '<tr style="color:' + a.color + ';border-bottom:1px solid #1a1a1a">';
+    html += '<td style="padding:4px"><b>' + d.label + '</b></td>';
+    html += '<td style="text-align:center">' + (d.best !== null ? d.best + ' steps' : '<span style="color:#ff5544">never</span>') + '</td>';
+    html += '<td style="text-align:center">' + (d.runtime_ms / 1000).toFixed(2) + 's</td>';
+    html += '<td style="text-align:center">' + reachedCount + ' / ' + d.stepsByEpisode.length + '</td>';
+    html += '</tr>';
+  }
+  html += '</table>';
+  results.innerHTML = html;
+  drawBenchmarkChart(benchData, agents);
+}
+
+function drawBenchmarkChart(benchData, agents) {
+  const canvas = document.getElementById('benchmarkChart');
+  const ctx = canvas.getContext('2d');
+  const w = canvas.clientWidth;
+  const h = canvas.clientHeight;
+  canvas.width = w;
+  canvas.height = h;
+  ctx.fillStyle = '#0d0d0d';
+  ctx.fillRect(0, 0, w, h);
+  // Find max episodes + max steps across all agents.
+  let maxEp = 0, maxSt = 1;
+  for (const a of agents) {
+    const d = benchData[a.kind];
+    if (!d || !d.stepsByEpisode) continue;
+    if (d.stepsByEpisode.length > maxEp) maxEp = d.stepsByEpisode.length;
+    for (const e of d.stepsByEpisode) if (e.steps > maxSt) maxSt = e.steps;
+  }
+  if (maxEp === 0) return;
+  // Plot each agent's steps-per-episode line.
+  for (const a of agents) {
+    const d = benchData[a.kind];
+    if (!d || d.stepsByEpisode.length < 2) continue;
+    ctx.strokeStyle = a.color;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    for (let i = 0; i < d.stepsByEpisode.length; i++) {
+      const x = 8 + (i / (maxEp - 1)) * (w - 16);
+      const y = h - 8 - (d.stepsByEpisode[i].steps / maxSt) * (h - 24);
+      if (i === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+  }
+  // Axis labels
+  ctx.fillStyle = '#666';
+  ctx.font = '10px monospace';
+  ctx.fillText('episodes →', 8, h - 1);
+  ctx.fillText('steps', 4, 12);
+  ctx.fillText(maxSt, 4, 22);
+}
+
+// Session storage (in-memory; cleared on browser close).
+const SESSIONS = [];
+
+function saveSession(meta, events) {
+  SESSIONS.push({
+    id: Date.now(),
+    timestamp: new Date().toLocaleTimeString(),
+    meta: meta,
+    events: events,
+  });
+  if (SESSIONS.length > 30) SESSIONS.shift();
+  renderSessions();
+}
+
+function renderSessions() {
+  const list = document.getElementById('sessions');
+  if (SESSIONS.length === 0) {
+    list.innerHTML = '<div style="color:#666;padding:6px">No saved sessions yet. Click Run to save one.</div>';
+    return;
+  }
+  list.innerHTML = '';
+  for (let i = SESSIONS.length - 1; i >= 0; i--) {
+    const s = SESSIONS[i];
+    const row = document.createElement('div');
+    row.style.cssText = 'padding:4px 6px;border-bottom:1px solid #1a1a1a;cursor:pointer;color:#aaa';
+    row.onmouseover = () => row.style.background = '#2a2a2a';
+    row.onmouseout = () => row.style.background = '';
+    row.onclick = () => replaySession(s);
+    const m = s.meta;
+    const summary = `[${s.timestamp}] ${m.kind} seed=${m.seed} size=${m.size||10} ${m.maze?'maze':'scatter'} → best=${m.best||'?'} (${s.events.length} events)`;
+    row.textContent = summary;
+    list.appendChild(row);
+  }
+}
+
+function replaySession(s) {
+  resetAll();
+  document.getElementById('status').className = 'status running';
+  document.getElementById('status').textContent = '⟲ Replaying session from ' + s.timestamp;
+  allEvents = s.events.slice();
+  cursor = 0;
+  document.getElementById('runBtn').disabled = true;
+  document.getElementById('pauseBtn').disabled = false;
+  scheduleNext();
+}
+
+function clearSessions() {
+  SESSIONS.length = 0;
+  renderSessions();
+}
+
+function exportSessions() {
+  const blob = new Blob([JSON.stringify(SESSIONS, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'helix_dashboard_sessions.json';
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+async function runAgent() {
+  resetAll();
+  document.getElementById('runBtn').disabled = true;
+  document.getElementById('pauseBtn').disabled = false;
+  document.getElementById('status').className = 'status running';
+  document.getElementById('status').textContent = 'Compiling and running Helix...';
+  const iter = parseInt(document.getElementById('iterRange').value);
+  const kind = document.getElementById('agentKind').value;
+  const seed = parseInt(document.getElementById('seedInput').value) || 12345;
+  const maze = document.getElementById('mazeMode').checked ? '1' : '0';
+  const size = document.getElementById('gridSize').value;
+  const resp = await fetch('/run?iter=' + iter + '&kind=' + kind + '&seed=' + seed + '&maze=' + maze + '&size=' + size);
+  const text = await resp.text();
+  allEvents = text.trim().split('\n').filter(l => l.length > 0).map(l => {
+    try { return JSON.parse(l); } catch (e) { return null; }
+  }).filter(e => e !== null);
+  // Cap event count unless ∞ unlimited is checked.
+  const unlimited = document.getElementById('unlimitedEvents').checked;
+  if (!unlimited && iter > 0 && allEvents.length > iter) {
+    allEvents = allEvents.slice(0, iter);
+  }
+  // Save the session for replay.
+  const summaryEv = allEvents.find(e => e.type === 'summary');
+  saveSession({
+    kind: kind, seed: seed, size: size,
+    maze: maze === '1',
+    best: summaryEv && summaryEv.best_steps && summaryEv.best_steps < 9999 ? summaryEv.best_steps : null,
+    episodes: summaryEv ? summaryEv.episodes : null,
+  }, allEvents);
+  cursor = 0;
+  document.getElementById('status').textContent = 'Playing back ' + allEvents.length + ' events';
+  scheduleNext();
+}
+
+function scheduleNext() {
+  if (paused || cursor >= allEvents.length) {
+    if (cursor >= allEvents.length) {
+      document.getElementById('runBtn').disabled = false;
+      document.getElementById('pauseBtn').disabled = true;
+      document.getElementById('stepBtn').disabled = true;
+    }
+    return;
+  }
+  const eps = parseInt(document.getElementById('speedInput').value) || parseInt(document.getElementById('speedRange').value);
+  // Browser timers clamp to ~4ms minimum; for faster playback we BATCH
+  // events per frame. At 60Hz refresh, batch_size = ceil(eps / 60).
+  const FRAME_HZ = 60;
+  const batch = Math.max(1, Math.ceil(eps / FRAME_HZ));
+  // For slow playback (eps < FRAME_HZ), fire one event per N frames.
+  const delay = eps >= FRAME_HZ ? Math.floor(1000 / FRAME_HZ) : Math.floor(1000 / eps);
+  let processed = 0;
+  while (processed < batch && cursor < allEvents.length) {
+    applyEvent(allEvents[cursor]);
+    cursor++;
+    processed++;
+  }
+  timer = setTimeout(scheduleNext, delay);
+}
+
+function togglePause() {
+  paused = !paused;
+  if (paused) {
+    if (timer) clearTimeout(timer);
+    document.getElementById('pauseBtn').textContent = 'Resume';
+    document.getElementById('stepBtn').disabled = false;
+  } else {
+    document.getElementById('pauseBtn').textContent = 'Pause';
+    document.getElementById('stepBtn').disabled = true;
+    scheduleNext();
+  }
+}
+
+function stepOnce() {
+  if (cursor < allEvents.length) {
+    applyEvent(allEvents[cursor]);
+    cursor++;
+  }
+}
+
+function resetAll() {
+  if (timer) clearTimeout(timer);
+  timer = null;
+  paused = false;
+  cursor = 0;
+  visited = new Set();
+  chartHistory = [];
+  episodeStepHistory = [];
+  allEvents = [];
+  document.getElementById('runBtn').disabled = false;
+  document.getElementById('pauseBtn').disabled = true;
+  document.getElementById('pauseBtn').textContent = 'Pause';
+  document.getElementById('stepBtn').disabled = true;
+  document.getElementById('log').innerHTML = '';
+  document.getElementById('stStep').textContent = '0';
+  document.getElementById('stPos').textContent = '0';
+  document.getElementById('stAct').textContent = '—';
+  document.getElementById('stVisited').textContent = '0';
+  document.getElementById('stDone').textContent = 'idle';
+  document.getElementById('stEp').textContent = '0';
+  document.getElementById('stReward').textContent = '—';
+  document.getElementById('stEpsilon').textContent = '—';
+  document.getElementById('status').className = 'status idle';
+  document.getElementById('status').textContent = 'Press Run to start';
+  drawChart();
+  drawEpisodeChart();
+  // Initialize empty grid (10x10 default, will be resized when init arrives)
+  buildGrid([12,13,14,25,35,45,47,48,56,67,78,88], 99, 10);
+}
+
+resetAll();
+renderSessions();
+updateSpeedLabel();
+</script>
+</body>
+</html>

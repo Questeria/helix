@@ -563,9 +563,13 @@ class Parser:
         generics = self._parse_generic_params()
         self._eat(T.EQ)
         target = self._parse_type()
+        where_clauses: list[ast.WhereClause] = []
+        if self._match(T.KW_WHERE):
+            where_clauses = self._parse_where_clauses()
         self._eat(T.SEMI)
         return ast.TypeAlias(span=self._span_of(kw), name=name,
-                             generics=generics, target=target, is_pub=is_pub)
+                             generics=generics, target=target, is_pub=is_pub,
+                             where_clauses=where_clauses)
 
     def _parse_use_decl(self) -> ast.UseDecl:
         kw = self._eat(T.KW_USE)
@@ -1571,6 +1575,19 @@ def _merge_stdlib(user_prog: "ast.Program") -> None:
         # within the stdlib itself if encountered.
         return type(item).__name__
 
+    def _mark_stdlib_item(item) -> None:
+        if isinstance(item, ast.FnDecl):
+            if "__stdlib" not in item.attrs:
+                item.attrs.append("__stdlib")
+            return
+        if isinstance(item, ast.ImplBlock):
+            for method in item.methods:
+                _mark_stdlib_item(method)
+            return
+        if isinstance(item, ast.ModBlock):
+            for sub in item.items:
+                _mark_stdlib_item(sub)
+
     user_keys: set[tuple[str, str]] = set()
     for it in user_prog.items:
         name = getattr(it, "name", None)
@@ -1589,6 +1606,7 @@ def _merge_stdlib(user_prog: "ast.Program") -> None:
             stdlib_src = f.read()
         stdlib_prog = Parser(lex(stdlib_src, stdlib_path)).parse_program()
         for item in stdlib_prog.items:
+            _mark_stdlib_item(item)
             name = getattr(item, "name", None)
             if name is not None:
                 key = (_kind_tag(item), name)

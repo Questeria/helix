@@ -88,7 +88,6 @@ _NON_NODE_FIELD_NAMES = frozenset({
     "attrs",         # list[str] on FnDecl
     "var_name",      # str on For
     "generics",      # list of TyNode on Name/FnDecl/StructDecl/EnumDecl
-    "where_clauses",  # list on FnDecl
     "trait_name",    # Optional[str] on ImplBlock
 })
 

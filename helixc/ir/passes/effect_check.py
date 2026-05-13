@@ -142,6 +142,9 @@ META_ATTRS = frozenset({
     "device",
     # @partial / @total are AST-level totality directives, not effects.
     "partial", "total",
+    # Parser/flatten/lower mark bundled stdlib helpers with this metadata so
+    # drivers can scope diagnostics away from unused stdlib code.
+    "__stdlib",
     # Audit / debug markers introduced by post-AD passes (kept META so
     # they don't masquerade as declared effects).
     "checkpoint", "verifier",
@@ -323,7 +326,11 @@ def compute_closure(module: tir.Module) -> dict[str, frozenset[str]]:
     return {n: frozenset(s) for n, s in closure.items()}
 
 
-def check_module(module: tir.Module) -> list[str]:
+def check_module(
+    module: tir.Module,
+    *,
+    only_functions: set[str] | frozenset[str] | None = None,
+) -> list[str]:
     """Return list of human-readable error messages. Empty list = pass.
 
     Reports the two Stage-19 trap classes:
@@ -343,6 +350,8 @@ def check_module(module: tir.Module) -> list[str]:
     closure = compute_closure(module)
     errors: list[str] = []
     for name, fn in module.functions.items():
+        if only_functions is not None and name not in only_functions:
+            continue
         clos = closure[name]
         if is_pure_decl(fn):
             # Stage 28.9 cycle 21 audit-T C20-T1 fix (conf 95): exempt

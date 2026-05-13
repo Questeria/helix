@@ -24,12 +24,13 @@ from __future__ import annotations
 from .. import tir
 
 
-def fdce_module(module: tir.Module, entry_fn: str = "main") -> int:
-    """Remove unreachable functions from `module`. Returns the count of
-    functions dropped."""
-    if entry_fn not in module.functions:
-        return 0
+def live_function_names(module: tir.Module, entry_fn: str = "main") -> set[str]:
+    """Return function names reachable from the entry roots without mutating.
 
+    This is the same reachability relation used by fdce_module. Drivers can
+    use it at -O0/no-opt to scope diagnostics without performing an
+    optimization pass.
+    """
     # Build the call graph. Functions are "called" via:
     #   - direct CALL op (target attr)
     #   - MODIFY op's verifier_fn attr (verifier-gated reflection)
@@ -65,7 +66,9 @@ def fdce_module(module: tir.Module, entry_fn: str = "main") -> int:
     # + Stage 16 @kernel fns (called from GPU launch, not from host code;
     #   keeping them visible to the backend so PTX text gets emitted).
     live: set[str] = set()
-    worklist: list[str] = [entry_fn]
+    worklist: list[str] = []
+    if entry_fn in module.functions:
+        worklist.append(entry_fn)
     for name, fn in module.functions.items():
         if fn.attrs.get("is_pub"):
             worklist.append(name)
@@ -82,6 +85,33 @@ def fdce_module(module: tir.Module, entry_fn: str = "main") -> int:
         for c in callees.get(n, ()):
             if c not in live:
                 worklist.append(c)
+
+    return live
+
+
+def diagnostic_function_names(
+    module: tir.Module, entry_fn: str = "main",
+) -> set[str]:
+    """Return functions that should be checked when stdlib is bundled.
+
+    FDCE reachability suppresses unused bundled stdlib helpers. Diagnostics,
+    however, must still include every user-authored function, even when a file
+    has no `main` or the function is private and currently uncalled.
+    """
+    live = live_function_names(module, entry_fn=entry_fn)
+    for name, fn in module.functions.items():
+        if not fn.attrs.get("__stdlib"):
+            live.add(name)
+    return live
+
+
+def fdce_module(module: tir.Module, entry_fn: str = "main") -> int:
+    """Remove unreachable functions from `module`. Returns the count of
+    functions dropped."""
+    if entry_fn not in module.functions:
+        return 0
+
+    live = live_function_names(module, entry_fn=entry_fn)
 
     # Drop any function not in `live`
     dead = [n for n in module.functions if n not in live]

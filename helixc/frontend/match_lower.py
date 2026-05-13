@@ -50,6 +50,10 @@ def lower_matches(prog: A.Program) -> A.Program:
     # determinism: two calls to lower_matches() on the same prog must
     # generate identical fresh names.
     _FRESH_COUNTER[0] = 0
+    _ENUM_DECLS.clear()
+    for item in prog.items:
+        if isinstance(item, A.EnumDecl):
+            _ENUM_DECLS[item.name] = item
     for item in prog.items:
         _rewrite_item(item)
     return prog
@@ -84,15 +88,16 @@ def _rewrite_item(item: A.Item) -> None:
         # ModBlock.items is a nested list of Items; recurse.
         for sub in item.items:
             _rewrite_item(sub)
+    elif isinstance(item, A.TypeAlias):
+        for w in item.where_clauses:
+            w.constraint = _rewrite_expr(w.constraint)
     elif isinstance(item, (A.StructDecl, A.EnumDecl, A.ModuleDecl,
-                            A.UseDecl, A.TypeAlias, A.AgentDecl)):
+                            A.UseDecl, A.AgentDecl)):
         # Leaf decls with no Expr-bearing children at Phase-0.
         # StructDecl.fields are TyNodes; EnumDecl.variants are payload
         # tag/type metadata; ModuleDecl/UseDecl are metadata-only.
-        # TypeAlias.target is a TyNode (cycle-17 audit-B C17-T1 fix,
-        # conf 85: pre-fix any `type Foo = Bar;` would trip the loud
-        # NotImplementedError catchall even with no match in the
-        # program).
+        # TypeAlias.target is a TyNode, and where-clauses are handled
+        # in the TypeAlias arm above.
         #
         # AgentDecl (cycle-17 audit-A C17-1 fix, conf 92): the C16-1
         # fix originally recursed into `AgentDecl.methods[].body`,
@@ -126,11 +131,39 @@ def _rewrite_item(item: A.Item) -> None:
 # is reachable only via ``lower_matches``; the reset entry point is
 # the single externally-visible function.
 _FRESH_COUNTER = [0]
+_ENUM_DECLS: dict[str, A.EnumDecl] = {}
 
 
 def _fresh_name(prefix: str = "__scrut") -> str:
     _FRESH_COUNTER[0] += 1
     return f"{prefix}_{_FRESH_COUNTER[0]}"
+
+
+def _variant_payload_ty(pat: A.PatVariant, payload_idx: int) -> Optional[A.TyNode]:
+    if len(pat.path.segments) != 2:
+        return None
+    ename, vname = pat.path.segments
+    decl = _ENUM_DECLS.get(ename)
+    if decl is None:
+        return None
+    for variant in decl.variants:
+        if variant.name == vname and payload_idx < len(variant.payload_tys):
+            return variant.payload_tys[payload_idx]
+    return None
+
+
+def _slot_load(
+    scrut: str, span: A.Span, slot_idx: int,
+    payload_ty: Optional[A.TyNode] = None,
+) -> A.Index:
+    idx = A.Index(
+        span=span,
+        callee=A.Name(span=span, name=scrut),
+        indices=[A.IntLit(span=span, value=slot_idx)],
+    )
+    if payload_ty is not None:
+        setattr(idx, "_match_payload_ty", payload_ty)
+    return idx
 
 
 def _rewrite_block(block: A.Block) -> None:
@@ -620,14 +653,11 @@ def _collect_binds(pat: A.Pattern, scrut: str, span: A.Span) -> list[A.Let]:
         # inner PatBinds (e.g. `Cons(Some(x), tail)`) still get bound.
         for i, sub in enumerate(pat.sub_patterns):
             slot_idx = i + 1
-            slot_load = A.Index(
-                span=span,
-                callee=A.Name(span=span, name=scrut),
-                indices=[A.IntLit(span=span, value=slot_idx)],
-            )
+            payload_ty = _variant_payload_ty(pat, i)
+            slot_load = _slot_load(scrut, span, slot_idx, payload_ty)
             if isinstance(sub, A.PatBind):
                 binds.append(A.Let(
-                    span=span, name=sub.name, is_mut=False, ty=None,
+                    span=span, name=sub.name, is_mut=False, ty=payload_ty,
                     value=slot_load,
                 ))
             elif isinstance(sub, (A.PatVariant, A.PatTuple, A.PatOr)):
@@ -640,7 +670,7 @@ def _collect_binds(pat: A.Pattern, scrut: str, span: A.Span) -> list[A.Let]:
                 # same temp-bind + recurse path closes the gap.
                 tmp = _fresh_name(prefix="__sub")
                 binds.append(A.Let(
-                    span=span, name=tmp, is_mut=False, ty=None,
+                    span=span, name=tmp, is_mut=False, ty=payload_ty,
                     value=slot_load,
                 ))
                 binds.extend(_collect_binds(sub, tmp, span))

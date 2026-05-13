@@ -95,6 +95,16 @@ def test_fn_with_where_clauses():
     assert len(fn.where_clauses) == 2
 
 
+def test_stage31_type_alias_with_refinement_where_clause():
+    p = parse("type Probability = f64 where 0.0 <= self <= 1.0;")
+    alias = p.items[0]
+    assert isinstance(alias, ast.TypeAlias)
+    assert alias.name == "Probability"
+    assert isinstance(alias.target, ast.TyName)
+    assert alias.target.name == "f64"
+    assert len(alias.where_clauses) == 1
+
+
 # ============================================================================
 # Tensor and tile types
 # ============================================================================

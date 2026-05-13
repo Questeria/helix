@@ -3830,18 +3830,19 @@ def compile_module_to_elf(module: tir.Module, entry_fn: str = "main") -> bytes:
 
 if __name__ == "__main__":
     import sys
-    from ..frontend.parser import parse
+    from ..frontend.lexer import LexError
+    from ..frontend.parser import parse, ParseError
     from ..frontend.typecheck import typecheck
     from ..frontend.grad_pass import grad_pass
     from ..frontend.monomorphize import monomorphize_safe
     from ..frontend.struct_mono import monomorphize_structs
-    from ..frontend.flatten_modules import flatten_modules
+    from ..frontend.flatten_modules import flatten_modules, FlattenError
     from ..frontend.flatten_impls import flatten_impls
     from ..ir.lower_ast import lower
     from ..ir.passes.const_fold import fold_module, FoldError
     from ..ir.passes.dce import dce_module
     from ..ir.passes.cse import cse_module
-    from ..ir.passes.fdce import fdce_module
+    from ..ir.passes.fdce import fdce_module, diagnostic_function_names
     # Stage 28.9 cycle 30 audit-R C29-R2/C29-5 (conf 88/68): co-locate
     # report_diagnostics with check_module — both drivers now use
     # the shared per-line dispatch in effect_check.report_diagnostics
@@ -3870,8 +3871,23 @@ if __name__ == "__main__":
     # Auto-include stdlib by default. The fdce / dce passes drop unused
     # stdlib fns so the binary cost is zero. Pass --no-stdlib to compile
     # without it (only useful for stdlib internals or custom-runtime tests).
-    prog = parse(src, include_stdlib=not no_stdlib)
-    mod_count = flatten_modules(prog)
+    try:
+        prog = parse(src, include_stdlib=not no_stdlib)
+    except LexError as e:
+        print(f"error: lex: {sys.argv[1]}:{e}", file=sys.stderr)
+        sys.exit(1)
+    except ParseError as e:
+        print("error: parse:", file=sys.stderr)
+        rendered = e.render(source=src, filename=sys.argv[1])
+        for line in rendered.splitlines():
+            print(f"  {line}", file=sys.stderr)
+        sys.exit(1)
+    try:
+        mod_count = flatten_modules(prog)
+    except FlattenError as e:
+        print("error: mod-flatten:", file=sys.stderr)
+        print(f"  {e}", file=sys.stderr)
+        sys.exit(1)
     if mod_count > 0:
         print(f"mod: {mod_count} item(s) lifted from block modules", file=sys.stderr)
     impl_count = flatten_impls(prog)
@@ -3971,6 +3987,11 @@ if __name__ == "__main__":
         sys.exit(1)
 
     mod = lower(prog)
+    pre_opt_effect_scope = None
+    if not no_stdlib:
+        pre_opt_effect_scope = diagnostic_function_names(mod)
+    pre_opt_eff_errs = effect_check_module(
+        mod, only_functions=pre_opt_effect_scope)
     # Optimization passes (run twice — fold can expose new CSE opportunities, etc.)
     # Stage 28.9 cycle 26 audit-R C25-4 fix (conf 85): symmetric fix to
     # check.py's cycle-24 C23-1 FoldError wrapper. Pre-fix, x86_64.py
@@ -3999,11 +4020,24 @@ if __name__ == "__main__":
             sys.exit(1)
 
     # Stage 19 — IR-level effect check. Runs AFTER all optimization passes
+    effect_scope = None
+    if not no_stdlib:
+        # Default-stdlib diagnostics should ignore unreachable bundled helpers.
+        # This still matters when FDCE is skipped (-no-opt) or cannot root
+        # from main (files that intentionally contain helper fns only).
+        effect_scope = diagnostic_function_names(mod)
+
     # because fdce/dce can prune call edges (removing transitive effects)
     # and we want the post-opt closure to be authoritative. Reports each
     # @pure fn whose closure is non-empty (trap 19001) and each fn whose
     # declared effect set differs from its actual closure.
-    eff_errs = effect_check_module(mod)
+    post_opt_eff_errs = effect_check_module(mod, only_functions=effect_scope)
+    eff_errs = list(pre_opt_eff_errs)
+    seen_eff_errs = set(eff_errs)
+    for err in post_opt_eff_errs:
+        if err not in seen_eff_errs:
+            eff_errs.append(err)
+            seen_eff_errs.add(err)
     # Stage 28.9 cycle 28 audit-R C27-2/C27-3/C27-4 fix (conf 78-82):
     # use the shared classifier from effect_check so this driver and
     # check.py partition consistently. Fail-closed for unknown trap-
