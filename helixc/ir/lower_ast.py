@@ -23,6 +23,12 @@ from . import tir
 # Lowerer
 # ============================================================================
 class Lowerer:
+    _GPU_INDEX_BUILTINS = frozenset({
+        "thread_idx", "thread_idx_x", "thread_idx_y", "thread_idx_z",
+        "block_idx", "block_idx_x", "block_idx_y", "block_idx_z",
+        "block_dim", "block_dim_x", "block_dim_y", "block_dim_z",
+    })
+
     def __init__(self, prog: A.Program):
         self.prog = prog
         self.module = tir.Module()
@@ -508,9 +514,9 @@ class Lowerer:
                 # Validate dtype + shape constraints. Phase-0: 1D, dtype known.
                 dtype_node = p.ty.dtype
                 if not (isinstance(dtype_node, A.TyName)
-                        and dtype_node.name in ("f32", "i32", "f16", "bf16")):
+                        and dtype_node.name in ("f32", "i32")):
                     raise NotImplementedError(
-                        "Stage 16 HBM tile param dtype must be f32/i32/f16/bf16; "
+                        "Stage 16 HBM tile param dtype must be f32/i32; "
                         f"got {dtype_node}")
                 if len(p.ty.shape) != 1:
                     raise NotImplementedError(
@@ -561,7 +567,14 @@ class Lowerer:
             else:
                 v = ir_fn.params[ir_param_idx]
                 ir_param_idx += 1
-                self._bind(p.name, v)
+                if p.is_mut:
+                    ir_name = self._bind_mut(p.name, v.ty)
+                    self.builder.emit(tir.OpKind.ALLOC_VAR,
+                                      attrs={"name": ir_name, "dtype": v.ty})
+                    self.builder.emit(tir.OpKind.STORE_VAR, v,
+                                      attrs={"name": ir_name})
+                else:
+                    self._bind(p.name, v)
         # Lower body block
         body_val = self._lower_block(fn.body)
         # Audit 28.8 A7 — Stage 25 @trace epilogue. Emit TRACE_EXIT
@@ -1110,6 +1123,10 @@ class Lowerer:
                 return self.builder.emit(tir.OpKind.LOAD_VAR,
                                          result_ty=mut_ty,
                                          attrs={"name": ir_name})
+            if expr.name in self._GPU_INDEX_BUILTINS:
+                raise NotImplementedError(
+                    f"GPU builtin {expr.name} must be called as {expr.name}()"
+                )
             # Maybe a function reference (v0.1: emit a call-able marker)
             if expr.name in self.functions:
                 return self.builder.const_int(0)
@@ -1337,7 +1354,7 @@ class Lowerer:
                 return self.builder.emit(
                     tir.OpKind.THREAD_IDX,
                     result_ty=tir.TIRScalar("i32"),
-                    attrs={"dim": dim})
+                    attrs={"dim": dim, "sreg": "tid"})
             # Stage 16 — `block_idx()` / `block_dim()` companions to thread_idx.
             # These return %ctaid.x and %ntid.x respectively. Same x/y/z variants
             # available.

@@ -94,16 +94,20 @@ class PtxEmitter:
 
     def emit_module(self, mod: ti.TileModule) -> str:
         self.emit_module_header()
+        emitted_kernel = False
         for fn in mod.functions.values():
-            if fn.attrs.get("kernel"):
+            if fn.attrs.get("kernel") and not fn.attrs.get("is_extern"):
+                emitted_kernel = True
                 self.emit_kernel(fn)
-            else:
-                # Non-kernel functions: emit as .func (device-only) for v0.1
-                self.emit_device_func(fn)
+        if not emitted_kernel:
+            raise RuntimeError(
+                "PTX emission requires at least one @kernel function"
+            )
         return self.buf.getvalue()
 
     # ---- kernel ----
     def emit_kernel(self, fn: ti.TileFn) -> None:
+        self._validate_kernel_params(fn)
         params_str = ", ".join(self._format_param(p, i) for i, p in enumerate(fn.params))
         self._line(f".visible .entry {fn.name}({params_str})")
         self._line("{")
@@ -139,15 +143,9 @@ class PtxEmitter:
         self._line()
 
     def emit_device_func(self, fn: ti.TileFn) -> None:
-        # Minimal stub: empty .func
-        ret_str = self._ptx_type_str(fn.return_ty)
-        ret_decl = f".func ({ret_str} %retval)" if ret_str else ".func"
-        params_str = ", ".join(self._format_param(p, i) for i, p in enumerate(fn.params))
-        self._line(f"{ret_decl} {fn.name}({params_str})")
-        self._line("{")
-        self._line("    ret;")
-        self._line("}")
-        self._line()
+        raise RuntimeError(
+            f"PTX device function emission is not supported yet for {fn.name!r}"
+        )
 
     def _format_param(self, p: ti.TileValue, idx: int) -> str:
         # Kernel params are in `.param` space; addresses come in as .b64
@@ -175,71 +173,263 @@ class PtxEmitter:
             return ""
         return ".b64"
 
+    def _validate_kernel_params(self, fn: ti.TileFn) -> None:
+        if not isinstance(fn.return_ty, tir.TIRUnit):
+            raise RuntimeError(
+                "PTX kernels with non-unit returns are not supported yet"
+            )
+        for p in fn.params:
+            if (isinstance(p.ty, tir.TIRTileTy)
+                    and p.ty.memspace.lower() == "hbm"):
+                self._require_supported_hbm_dtype(p.ty.dtype.name)
+                if len(p.ty.shape) != 1:
+                    raise RuntimeError(
+                        "PTX HBM tile parameters must be 1D; "
+                        f"got {len(p.ty.shape)}D"
+                    )
+                continue
+            raise RuntimeError(
+                "PTX kernel parameter is not supported yet; "
+                "only HBM tile parameters are currently lowered"
+            )
+
+    def _require_reg(self, op: ti.TileOp, operand_index: int, role: str) -> str:
+        if operand_index >= len(op.operands):
+            raise RuntimeError(f"missing PTX operand for {role}")
+        reg = self.reg_map.get(op.operands[operand_index].id)
+        if reg is None:
+            raise RuntimeError(
+                f"missing PTX register for {role}; "
+                "only lowered values are supported"
+            )
+        return reg
+
+    def _scalar_type_name(self, value: ti.TileValue) -> str | None:
+        if isinstance(value.ty, tir.TIRScalar):
+            return value.ty.name
+        return None
+
+    def _require_scalar_type(
+        self, value: ti.TileValue, role: str, allowed: set[str]
+    ) -> str:
+        name = self._scalar_type_name(value)
+        if name not in allowed:
+            allowed_s = ", ".join(sorted(allowed))
+            raise RuntimeError(
+                f"unsupported PTX {role} type {name}; "
+                f"only {allowed_s} is currently lowered"
+            )
+        return name
+
+    def _require_scalar_result_type(
+        self, op: ti.TileOp, expected: str, role: str
+    ) -> None:
+        self._require_scalar_type(op.results[0], role, {expected})
+
+    def _require_reg_class(self, reg: str, prefix: str, role: str) -> None:
+        if reg.startswith("%rd"):
+            actual = "%rd"
+        elif reg.startswith("%r"):
+            actual = "%r"
+        elif reg.startswith("%f"):
+            actual = "%f"
+        elif reg.startswith("%p"):
+            actual = "%p"
+        else:
+            actual = reg
+        if actual != prefix:
+            raise RuntimeError(
+                f"unsupported PTX {role} register {reg}; "
+                f"expected {prefix} register class"
+            )
+
+    def _require_result_count(self, op: ti.TileOp, count: int, role: str) -> None:
+        if len(op.results) != count:
+            raise RuntimeError(f"{role} expects exactly {count} result(s)")
+
+    def _require_operand_count(self, op: ti.TileOp, count: int, role: str) -> None:
+        if len(op.operands) != count:
+            raise RuntimeError(f"{role} expects exactly {count} operand(s)")
+
+    def _require_supported_hbm_dtype(self, dtype: str) -> None:
+        if dtype not in {"f32", "i32"}:
+            raise RuntimeError(
+                f"unsupported PTX HBM tile dtype {dtype}; "
+                "only f32 and i32 HBM tile elements are currently lowered"
+            )
+
+    def _require_hbm_dtype_attr(self, op: ti.TileOp) -> str:
+        if "dtype" not in op.attrs:
+            raise RuntimeError("missing PTX HBM tile dtype attr")
+        dtype = str(op.attrs["dtype"])
+        self._require_supported_hbm_dtype(dtype)
+        return dtype
+
+    def _require_hbm_index_reg(self, op: ti.TileOp, operand_index: int) -> str:
+        value = op.operands[operand_index]
+        self._require_scalar_type(value, "HBM tile index", {"i32"})
+        reg = self._require_reg(op, operand_index, "HBM tile index")
+        self._require_reg_class(reg, "%r", "HBM tile index")
+        return reg
+
+    def _require_hbm_value_reg(
+        self, op: ti.TileOp, operand_index: int, dtype: str, role: str
+    ) -> str:
+        value = op.operands[operand_index]
+        expected = {"f32": ("f32", "%f"),
+                    "i32": ("i32", "%r")}[dtype]
+        self._require_scalar_type(value, role, {expected[0]})
+        reg = self._require_reg(op, operand_index, role)
+        self._require_reg_class(reg, expected[1], role)
+        return reg
+
+    def _require_hbm_load_result_type(self, op: ti.TileOp, dtype: str) -> None:
+        if not op.results:
+            return
+        expected = {"f32": "f32", "i32": "i32"}[dtype]
+        self._require_scalar_type(op.results[0], "HBM tile load result", {expected})
+
     # ---- ops ----
     def emit_op(self, op: ti.TileOp) -> None:
         # v0.1: only handle a tiny scalar subset for sanity testing
         if op.kind == ti.TileOpKind.SCALAR_CONST_INT:
+            self._require_operand_count(op, 0, "SCALAR_CONST_INT")
+            self._require_result_count(op, 1, "SCALAR_CONST_INT")
+            self._require_scalar_type(
+                op.results[0], "integer constant", {"bool", "i32"}
+            )
+            if "value" not in op.attrs:
+                raise RuntimeError("SCALAR_CONST_INT requires value attr")
             r = self._new_reg("r")
-            v = op.attrs.get("value", 0)
-            self._line(f"    mov.b32 {r}, {int(v)};")
+            v = op.attrs["value"]
+            result_ty = self._scalar_type_name(op.results[0])
+            if result_ty == "bool":
+                if type(v) is bool:
+                    v = 1 if v else 0
+                elif type(v) is int and v in (0, 1):
+                    pass
+                else:
+                    raise RuntimeError(
+                        "SCALAR_CONST_INT bool value must be true/false or 0/1"
+                    )
+            elif type(v) is not int:
+                raise RuntimeError("SCALAR_CONST_INT i32 value must be an int")
+            elif v < -(2 ** 31) or v > (2 ** 31 - 1):
+                raise RuntimeError("SCALAR_CONST_INT i32 value out of range")
+            self._line(f"    mov.b32 {r}, {v};")
             if op.results:
                 self.reg_map[op.results[0].id] = r
             return
         if op.kind == ti.TileOpKind.SCALAR_ADD:
+            self._require_operand_count(op, 2, "SCALAR_ADD")
+            self._require_result_count(op, 1, "SCALAR_ADD")
             # Stage 16 — float and int operand dispatch. If either operand
             # is in a %f register (TILE_INDEX_LOAD_HBM result), emit
             # `add.f32`; otherwise the integer fallback.
-            a_reg = self.reg_map.get(op.operands[0].id, "%r0")
-            b_reg = self.reg_map.get(op.operands[1].id, "%r1")
-            if a_reg.startswith("%f") or b_reg.startswith("%f"):
+            a_reg = self._require_reg(op, 0, "scalar add lhs")
+            b_reg = self._require_reg(op, 1, "scalar add rhs")
+            a_ty = self._require_scalar_type(op.operands[0], "scalar add lhs",
+                                             {"f32", "i32"})
+            b_ty = self._require_scalar_type(op.operands[1], "scalar add rhs",
+                                             {"f32", "i32"})
+            if a_ty != b_ty:
+                raise RuntimeError("unsupported PTX mixed scalar add types")
+            self._require_scalar_result_type(op, a_ty, "scalar add result")
+            if a_ty == "f32":
+                self._require_reg_class(a_reg, "%f", "scalar add lhs")
+                self._require_reg_class(b_reg, "%f", "scalar add rhs")
                 r = self._new_reg("f")
                 self._line(f"    add.f32 {r}, {a_reg}, {b_reg};")
             else:
+                self._require_reg_class(a_reg, "%r", "scalar add lhs")
+                self._require_reg_class(b_reg, "%r", "scalar add rhs")
                 r = self._new_reg("r")
                 self._line(f"    add.s32 {r}, {a_reg}, {b_reg};")
             if op.results:
                 self.reg_map[op.results[0].id] = r
             return
         if op.kind == ti.TileOpKind.SCALAR_MUL:
-            a_reg = self.reg_map.get(op.operands[0].id, "%r0")
-            b_reg = self.reg_map.get(op.operands[1].id, "%r1")
-            if a_reg.startswith("%f") or b_reg.startswith("%f"):
+            self._require_operand_count(op, 2, "SCALAR_MUL")
+            self._require_result_count(op, 1, "SCALAR_MUL")
+            a_reg = self._require_reg(op, 0, "scalar multiply lhs")
+            b_reg = self._require_reg(op, 1, "scalar multiply rhs")
+            a_ty = self._require_scalar_type(op.operands[0], "scalar multiply lhs",
+                                             {"f32", "i32"})
+            b_ty = self._require_scalar_type(op.operands[1], "scalar multiply rhs",
+                                             {"f32", "i32"})
+            if a_ty != b_ty:
+                raise RuntimeError("unsupported PTX mixed scalar multiply types")
+            self._require_scalar_result_type(op, a_ty, "scalar multiply result")
+            if a_ty == "f32":
+                self._require_reg_class(a_reg, "%f", "scalar multiply lhs")
+                self._require_reg_class(b_reg, "%f", "scalar multiply rhs")
                 r = self._new_reg("f")
                 self._line(f"    mul.f32 {r}, {a_reg}, {b_reg};")
             else:
+                self._require_reg_class(a_reg, "%r", "scalar multiply lhs")
+                self._require_reg_class(b_reg, "%r", "scalar multiply rhs")
                 r = self._new_reg("r")
                 self._line(f"    mul.lo.s32 {r}, {a_reg}, {b_reg};")
             if op.results:
                 self.reg_map[op.results[0].id] = r
             return
         if op.kind == ti.TileOpKind.SCALAR_SUB:
-            a_reg = self.reg_map.get(op.operands[0].id, "%r0")
-            b_reg = self.reg_map.get(op.operands[1].id, "%r1")
-            if a_reg.startswith("%f") or b_reg.startswith("%f"):
+            self._require_operand_count(op, 2, "SCALAR_SUB")
+            self._require_result_count(op, 1, "SCALAR_SUB")
+            a_reg = self._require_reg(op, 0, "scalar subtract lhs")
+            b_reg = self._require_reg(op, 1, "scalar subtract rhs")
+            a_ty = self._require_scalar_type(op.operands[0], "scalar subtract lhs",
+                                             {"f32", "i32"})
+            b_ty = self._require_scalar_type(op.operands[1], "scalar subtract rhs",
+                                             {"f32", "i32"})
+            if a_ty != b_ty:
+                raise RuntimeError("unsupported PTX mixed scalar subtract types")
+            self._require_scalar_result_type(op, a_ty, "scalar subtract result")
+            if a_ty == "f32":
+                self._require_reg_class(a_reg, "%f", "scalar subtract lhs")
+                self._require_reg_class(b_reg, "%f", "scalar subtract rhs")
                 r = self._new_reg("f")
                 self._line(f"    sub.f32 {r}, {a_reg}, {b_reg};")
             else:
+                self._require_reg_class(a_reg, "%r", "scalar subtract lhs")
+                self._require_reg_class(b_reg, "%r", "scalar subtract rhs")
                 r = self._new_reg("r")
                 self._line(f"    sub.s32 {r}, {a_reg}, {b_reg};")
             if op.results:
                 self.reg_map[op.results[0].id] = r
             return
         if op.kind == ti.TileOpKind.SCALAR_NEG:
-            a_reg = self.reg_map.get(op.operands[0].id, "%r0")
-            if a_reg.startswith("%f"):
+            self._require_operand_count(op, 1, "SCALAR_NEG")
+            self._require_result_count(op, 1, "SCALAR_NEG")
+            a_reg = self._require_reg(op, 0, "scalar neg operand")
+            a_ty = self._require_scalar_type(op.operands[0], "scalar neg operand",
+                                             {"f32", "i32"})
+            self._require_scalar_result_type(op, a_ty, "scalar neg result")
+            if a_ty == "f32":
+                self._require_reg_class(a_reg, "%f", "scalar neg operand")
                 r = self._new_reg("f")
                 self._line(f"    neg.f32 {r}, {a_reg};")
             else:
+                self._require_reg_class(a_reg, "%r", "scalar neg operand")
                 r = self._new_reg("r")
                 self._line(f"    neg.s32 {r}, {a_reg};")
             if op.results:
                 self.reg_map[op.results[0].id] = r
             return
         if op.kind == ti.TileOpKind.SCALAR_CONST_FLOAT:
+            self._require_operand_count(op, 0, "SCALAR_CONST_FLOAT")
+            self._require_result_count(op, 1, "SCALAR_CONST_FLOAT")
+            self._require_scalar_type(
+                op.results[0], "float constant", {"f32"}
+            )
+            if "value" not in op.attrs:
+                raise RuntimeError("SCALAR_CONST_FLOAT requires value attr")
             # f32 constant. Emit via mov.f32 with the hex bit pattern so
             # ptxas accepts the exact bits unambiguously.
             import struct
-            v = float(op.attrs.get("value", 0.0))
+            v = op.attrs["value"]
+            if type(v) is not float:
+                raise RuntimeError("SCALAR_CONST_FLOAT value must be a float")
             bits = struct.unpack("<I", struct.pack("<f", v))[0]
             r = self._new_reg("f")
             self._line(f"    mov.f32 {r}, 0f{bits:08X};")
@@ -247,20 +437,42 @@ class PtxEmitter:
                 self.reg_map[op.results[0].id] = r
             return
         if op.kind == ti.TileOpKind.SCALAR_CMP:
-            cmp_op = op.attrs.get("cmp", "cmp.eq")
+            self._require_operand_count(op, 2, "SCALAR_CMP")
+            self._require_result_count(op, 1, "SCALAR_CMP")
+            self._require_scalar_type(op.results[0], "scalar compare result", {"bool"})
+            if "cmp" not in op.attrs:
+                raise RuntimeError("SCALAR_CMP requires cmp attr")
+            cmp_op = op.attrs["cmp"]
             cmp_map = {"cmp.eq": "eq", "cmp.ne": "ne", "cmp.lt": "lt",
                         "cmp.le": "le", "cmp.gt": "gt", "cmp.ge": "ge"}
-            cmp_suffix = cmp_map.get(cmp_op, "eq")
-            a_reg = self.reg_map.get(op.operands[0].id, "%r0")
-            b_reg = self.reg_map.get(op.operands[1].id, "%r1")
+            if cmp_op not in cmp_map:
+                raise RuntimeError(f"unsupported PTX scalar compare op {cmp_op!r}")
+            cmp_suffix = cmp_map[cmp_op]
+            a_reg = self._require_reg(op, 0, "scalar compare lhs")
+            b_reg = self._require_reg(op, 1, "scalar compare rhs")
+            a_ty = self._require_scalar_type(op.operands[0], "scalar compare lhs",
+                                             {"f32", "i32"})
+            b_ty = self._require_scalar_type(op.operands[1], "scalar compare rhs",
+                                             {"f32", "i32"})
+            if a_ty != b_ty:
+                raise RuntimeError("unsupported PTX mixed scalar compare types")
             # Result lives in a %p predicate register. Phase-0 emits the
-            # signed-int form; float compares would need setp.<cmp>.f32.
+            # signed-int or f32 form based on the lowered register class.
             r = self._new_reg("p")
-            self._line(f"    setp.{cmp_suffix}.s32 {r}, {a_reg}, {b_reg};")
+            if a_ty == "f32":
+                self._require_reg_class(a_reg, "%f", "scalar compare lhs")
+                self._require_reg_class(b_reg, "%f", "scalar compare rhs")
+                self._line(f"    setp.{cmp_suffix}.f32 {r}, {a_reg}, {b_reg};")
+            else:
+                self._require_reg_class(a_reg, "%r", "scalar compare lhs")
+                self._require_reg_class(b_reg, "%r", "scalar compare rhs")
+                self._line(f"    setp.{cmp_suffix}.s32 {r}, {a_reg}, {b_reg};")
             if op.results:
                 self.reg_map[op.results[0].id] = r
             return
         if op.kind == ti.TileOpKind.RETURN:
+            if op.operands or op.results:
+                raise RuntimeError("PTX kernels cannot return values")
             return
         # Stage 16 — GPU primitives.
         if op.kind == ti.TileOpKind.THREAD_IDX:
@@ -268,14 +480,25 @@ class PtxEmitter:
             # where dim is "x"/"y"/"z" and sreg is "tid" (default), "ctaid"
             # (block index), or "ntid" (block dim). Maps to PTX `mov.u32
             # %r, %<sreg>.<dim>`.
-            dim = op.attrs.get("dim", "x")
-            sreg = op.attrs.get("sreg", "tid")
+            self._require_operand_count(op, 0, "THREAD_IDX")
+            self._require_result_count(op, 1, "THREAD_IDX")
+            self._require_scalar_type(op.results[0], "THREAD_IDX result", {"i32"})
+            if "dim" not in op.attrs or "sreg" not in op.attrs:
+                raise RuntimeError("THREAD_IDX requires explicit dim and sreg attrs")
+            dim = op.attrs["dim"]
+            sreg = op.attrs["sreg"]
+            if dim not in {"x", "y", "z"}:
+                raise RuntimeError(f"unsupported PTX THREAD_IDX dim {dim!r}")
+            if sreg not in {"tid", "ctaid", "ntid"}:
+                raise RuntimeError(f"unsupported PTX THREAD_IDX sreg {sreg!r}")
             r = self._new_reg("r")
             self._line(f"    mov.u32 {r}, %{sreg}.{dim};")
             if op.results:
                 self.reg_map[op.results[0].id] = r
             return
         if op.kind == ti.TileOpKind.TILE_INDEX_LOAD_HBM:
+            self._require_operand_count(op, 1, "TILE_INDEX_LOAD_HBM")
+            self._require_result_count(op, 1, "TILE_INDEX_LOAD_HBM")
             # `name[i]` for an HBM tile param. Sequence:
             #   ld.param.u64  %rdN, [<kernel>_param_<idx>]   (kernel-arg ptr)
             #   cvta.to.global.u64 %rdM, %rdN                (generic -> global)
@@ -285,19 +508,21 @@ class PtxEmitter:
             # Phase-0 collapses some of these: we just emit the textbook
             # PTX sequence for clarity; ptxas will optimize.
             name = op.attrs.get("name")
-            dtype = op.attrs.get("dtype", "f32")
+            dtype = self._require_hbm_dtype_attr(op)
             slot = self.hbm_param_map.get(name)
             if slot is None:
-                # Trap-id 97001: HBM tile name not found (lowering bug).
-                self._line(f"    // ERROR trap 97001: HBM tile {name!r} not in param map")
-                return
-            param_idx, _dtype_in_map = slot
-            idx_reg = self.reg_map.get(op.operands[0].id)
-            if idx_reg is None:
                 raise RuntimeError(
-                    "missing PTX register for HBM tile index; "
-                    "only lowered index values are supported"
+                    f"HBM tile {name!r} not in PTX param map; "
+                    "only lowered HBM tile parameters are supported"
                 )
+            param_idx, dtype_in_map = slot
+            if str(dtype) != dtype_in_map:
+                raise RuntimeError(
+                    f"HBM tile {name!r} dtype mismatch: op requested {dtype}, "
+                    f"but kernel param is {dtype_in_map}"
+                )
+            self._require_hbm_load_result_type(op, str(dtype))
+            idx_reg = self._require_hbm_index_reg(op, 0)
             base = self._new_reg("rd")    # raw param-space pointer
             gen = self._new_reg("rd")     # generic-space pointer (after cvta)
             off = self._new_reg("rd")     # byte offset (idx * sizeof)
@@ -313,26 +538,27 @@ class PtxEmitter:
                 self.reg_map[op.results[0].id] = dst
             return
         if op.kind == ti.TileOpKind.TILE_INDEX_STORE_HBM:
+            self._require_operand_count(op, 2, "TILE_INDEX_STORE_HBM")
+            self._require_result_count(op, 0, "TILE_INDEX_STORE_HBM")
             # `name[i] = v` for an HBM tile param. operands: [idx, value].
             name = op.attrs.get("name")
-            dtype = op.attrs.get("dtype", "f32")
+            dtype = self._require_hbm_dtype_attr(op)
             slot = self.hbm_param_map.get(name)
             if slot is None:
-                self._line(f"    // ERROR trap 97001: HBM tile {name!r} not in param map")
-                return
-            param_idx, _dtype_in_map = slot
-            idx_reg = self.reg_map.get(op.operands[0].id)
-            if idx_reg is None:
                 raise RuntimeError(
-                    "missing PTX register for HBM tile index; "
-                    "only lowered index values are supported"
+                    f"HBM tile {name!r} not in PTX param map; "
+                    "only lowered HBM tile parameters are supported"
                 )
-            val_reg = self.reg_map.get(op.operands[1].id)
-            if val_reg is None:
+            param_idx, dtype_in_map = slot
+            if str(dtype) != dtype_in_map:
                 raise RuntimeError(
-                    "missing PTX register for HBM tile store value; "
-                    "only lowered values are supported"
+                    f"HBM tile {name!r} dtype mismatch: op requested {dtype}, "
+                    f"but kernel param is {dtype_in_map}"
                 )
+            idx_reg = self._require_hbm_index_reg(op, 0)
+            val_reg = self._require_hbm_value_reg(
+                op, 1, str(dtype), "HBM tile store value"
+            )
             base = self._new_reg("rd")
             gen = self._new_reg("rd")
             off = self._new_reg("rd")
@@ -343,8 +569,10 @@ class PtxEmitter:
             self._line(f"    add.s64 {addr}, {gen}, {off};")
             self._line(f"    st.global.{self._ptx_load_suffix(dtype)} [{addr}], {val_reg};")
             return
-        # Unhandled — emit a comment for visibility, don't crash
-        self._line(f"    // TODO: {op.kind.value}")
+        raise RuntimeError(
+            f"unsupported PTX op {op.kind.value}; "
+            "add lowering before emitting PTX"
+        )
 
     # Stage 16 — helpers for HBM addressing.
     # Audit 28.8 cycle 21 C20-1 (HIGH): include isize/usize as 8-byte

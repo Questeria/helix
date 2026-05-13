@@ -1101,6 +1101,14 @@ class TypeChecker:
         # Stage 28.5 — panic/abort policy. `panic` is a builtin that
         # takes a single string-literal arg and emits a trap (id 28501).
         "panic",
+        "thread_idx", "thread_idx_x", "thread_idx_y", "thread_idx_z",
+        "block_idx", "block_idx_x", "block_idx_y", "block_idx_z",
+        "block_dim", "block_dim_x", "block_dim_y", "block_dim_z",
+    })
+    _GPU_INDEX_BUILTINS = frozenset({
+        "thread_idx", "thread_idx_x", "thread_idx_y", "thread_idx_z",
+        "block_idx", "block_idx_x", "block_idx_y", "block_idx_z",
+        "block_dim", "block_dim_x", "block_dim_y", "block_dim_z",
     })
 
     # Names of well-known stdlib functions that are surfaced as
@@ -1165,11 +1173,21 @@ class TypeChecker:
 
     # ---- function body checking ----
     def _check_fn(self, fn: A.FnDecl) -> None:
-        # Stage 16.5: extern "C" declarations have no body to check.
-        if fn.is_extern:
-            return
         sig = self.functions.get(fn.name)
         if sig is None:
+            return
+        kernel_hbm_indexables = (
+            self._validate_kernel_hbm_params(fn, sig)
+            if "kernel" in fn.attrs else set()
+        )
+        if "kernel" in fn.attrs and not isinstance(sig.ret, TyUnit):
+            self.errors.append(TypeError_(
+                "@kernel functions must return () for PTX emission",
+                fn.span,
+            ))
+        # Stage 16.5: extern "C" declarations have no body to check,
+        # but kernel ABI validation above still applies.
+        if fn.is_extern:
             return
         # Set effect-checking context for this function
         prev_pure = self._current_pure
@@ -1181,15 +1199,7 @@ class TypeChecker:
         self._current_effects = sig.effects
         self._current_fn_name = sig.name
         self._current_is_kernel = "kernel" in fn.attrs
-        self._current_hbm_tile_indexables = set()
-        if self._current_is_kernel:
-            for name, ty in sig.params:
-                if (isinstance(ty, TyTile)
-                        and ty.memspace.lower() == "hbm"
-                        and len(ty.shape) == 1
-                        and isinstance(ty.dtype, TyPrim)
-                        and ty.dtype.name in self._HBM_TILE_INDEX_DTYPES):
-                    self._current_hbm_tile_indexables.add(name)
+        self._current_hbm_tile_indexables = set(kernel_hbm_indexables)
         try:
             self._check_fn_body(fn, sig)
         finally:
@@ -1199,6 +1209,34 @@ class TypeChecker:
             self._current_is_kernel = prev_is_kernel
             self._current_hbm_tile_indexables = prev_hbm_tile_indexables
 
+    def _validate_kernel_hbm_params(
+        self, fn: A.FnDecl, sig: FunctionSig
+    ) -> set[str]:
+        indexables: set[str] = set()
+        for param, (name, ty) in zip(fn.params, sig.params):
+            if not (isinstance(ty, TyTile)
+                    and ty.memspace.lower() == "hbm"):
+                continue
+            if (not isinstance(ty.dtype, TyPrim)
+                    or ty.dtype.name not in self._HBM_TILE_PARAM_DTYPES):
+                got = self._fmt(ty.dtype)
+                allowed = ", ".join(sorted(self._HBM_TILE_PARAM_DTYPES))
+                self.errors.append(TypeError_(
+                    f"@kernel HBM tile parameter dtype {got} is not "
+                    f"supported by PTX yet; expected one of {allowed}",
+                    param.span,
+                ))
+                continue
+            if len(ty.shape) != 1:
+                self.errors.append(TypeError_(
+                    "@kernel HBM tile parameters must be 1D for PTX "
+                    f"emission; got {len(ty.shape)}D",
+                    param.span,
+                ))
+                continue
+            indexables.add(name)
+        return indexables
+
     def _check_fn_body(self, fn: A.FnDecl, sig: FunctionSig) -> None:
         gen_scope = Scope()
         for g in fn.generics:
@@ -1207,8 +1245,8 @@ class TypeChecker:
             else:
                 gen_scope.define(g.name, TyVar(g.name))
         body_scope = Scope(parent=gen_scope)
-        for name, t in sig.params:
-            body_scope.define(name, t)
+        for param, (name, t) in zip(fn.params, sig.params):
+            body_scope.define(name, t, is_mut=param.is_mut)
         # Check body expression / block
         body_ty = self._check_block(fn.body, body_scope)
         # Compatibility check (simplified — strict equality on resolved types)
@@ -1305,6 +1343,12 @@ class TypeChecker:
             if expr.name in self.functions:
                 sig = self.functions[expr.name]
                 return TyFn(tuple(t for _, t in sig.params), sig.ret)
+            if expr.name in self._GPU_INDEX_BUILTINS:
+                self.errors.append(TypeError_(
+                    f"{expr.name} must be called as {expr.name}()",
+                    expr.span,
+                ))
+                return TyUnknown(hint=f"bare builtin {expr.name}")
             # Name truly unbound. Emit a soft diagnostic with a Levenshtein
             # "did you mean?" suggestion drawn from in-scope names + known
             # functions. Don't raise — return TyUnknown so cascade-style
@@ -1597,6 +1641,21 @@ class TypeChecker:
                     and isinstance(expr.callee.obj, A.StrLit)
                     and len(expr.args) == 0):
                 return TyPtr(inner=TyPrim("u8"), is_mut=False)
+            if (isinstance(expr.callee, A.Name)
+                    and expr.callee.name in self._GPU_INDEX_BUILTINS):
+                bn = expr.callee.name
+                arg_tys = [self._check_expr(a, scope) for a in expr.args]
+                if arg_tys:
+                    self.errors.append(TypeError_(
+                        f"{bn}() expects 0 args, got {len(arg_tys)}",
+                        expr.span,
+                    ))
+                if not self._current_is_kernel:
+                    self.errors.append(TypeError_(
+                        f"{bn}() is only allowed inside @kernel functions",
+                        expr.span,
+                    ))
+                return TyPrim("i32")
             # Payload-bearing enum constructor: `Maybe::Some(42)`.
             if (isinstance(expr.callee, A.Path)
                     and len(expr.callee.segments) == 2):
@@ -1679,6 +1738,18 @@ class TypeChecker:
                     if (isinstance(expr.args[0], A.StrLit)):
                         task_name = expr.args[0].value
                     return TySkill(inner=TyUnknown(hint=task_name), task=task_name)
+                if bn in self._GPU_INDEX_BUILTINS:
+                    if arg_tys:
+                        self.errors.append(TypeError_(
+                            f"{bn}() expects 0 args, got {len(arg_tys)}",
+                            expr.span,
+                        ))
+                    if not self._current_is_kernel:
+                        self.errors.append(TypeError_(
+                            f"{bn}() is only allowed inside @kernel functions",
+                            expr.span,
+                        ))
+                    return TyPrim("i32")
             # If callee is a known function (by name), do checks
             if isinstance(expr.callee, A.Name) and expr.callee.name in self.functions:
                 sig = self.functions[expr.callee.name]
@@ -1900,7 +1971,16 @@ class TypeChecker:
                             fval.span,
                         ))
             return TyStruct(name=expr.name)
-        if isinstance(expr, (A.Break, A.Continue, A.Return)):
+        if isinstance(expr, (A.Break, A.Continue)):
+            return TyUnit()
+        if isinstance(expr, A.Return):
+            if expr.value is not None:
+                self._check_expr(expr.value, scope)
+                if self._current_is_kernel:
+                    self.errors.append(TypeError_(
+                        "@kernel functions cannot return a value in PTX",
+                        expr.span,
+                    ))
             return TyUnit()
         if isinstance(expr, A.UnsafeBlock):
             # Audit 28.8 B3: track unsafe-context depth so Cast checks
@@ -2298,7 +2378,8 @@ class TypeChecker:
         "f16", "bf16", "f32", "f64", "fp8", "mxfp4", "nvfp4",
     })
     _NUMERIC_BOOL_PRIMS = frozenset({"bool", "char"})
-    _HBM_TILE_INDEX_DTYPES = frozenset({"f32", "i32", "f16", "bf16"})
+    _HBM_TILE_PARAM_DTYPES = frozenset({"f32", "i32"})
+    _HBM_TILE_INDEX_DTYPES = _HBM_TILE_PARAM_DTYPES
 
     def _is_numeric_scalar(self, t: Type) -> bool:
         if not isinstance(t, TyPrim):
@@ -2325,6 +2406,13 @@ class TypeChecker:
                 ))
             return
         if isinstance(target, A.Index):
+            if not isinstance(target.callee, A.Name):
+                self.errors.append(TypeError_(
+                    "invalid assignment target; indexed assignments require "
+                    "a named array or tile binding",
+                    target.span,
+                ))
+                return
             if (expr.op != "="
                     and isinstance(target.callee, A.Name)
                     and target.callee.name in self._current_hbm_tile_indexables):

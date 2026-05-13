@@ -335,6 +335,17 @@ def test_mutable_let():
     assert compile_and_run(src) == 42
 
 
+def test_c119_mut_param_codegen_uses_allocated_slot():
+    src = """
+    fn f(mut x: i32) -> i32 {
+        x = 41;
+        x + 1
+    }
+    fn main() -> i32 { f(1) }
+    """
+    assert compile_and_run(src) == 42
+
+
 def test_compound_assign():
     src = """
     fn main() -> i32 {

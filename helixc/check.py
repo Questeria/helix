@@ -766,11 +766,6 @@ def _main_inner(argv: list[str] | None,
         from .ir.tile_ir import lower_to_tile
         from .backend.ptx import emit_ptx
         tile_mod = lower_to_tile(mod)
-        kernel_count = sum(1 for fn in tile_mod.functions.values()
-                           if fn.attrs.get("kernel"))
-        if kernel_count == 0:
-            print("   ptx: no @kernel fns in program")
-            return 0
         try:
             ptx = emit_ptx(tile_mod)
             print(ptx)

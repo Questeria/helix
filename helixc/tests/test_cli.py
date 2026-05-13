@@ -101,6 +101,140 @@ def test_c117_emit_ptx_uses_kernel_attrs(capsys):
     assert "no @kernel fns" not in captured.out
 
 
+def test_c119_emit_ptx_rejects_no_kernel_modules(capsys):
+    src = write_src("fn helper(x: i32) -> i32 { x + 1 }\n")
+    try:
+        rc = main([src, "--emit-ptx"])
+        captured = capsys.readouterr()
+    finally:
+        if os.path.exists(src):
+            os.remove(src)
+    assert rc == 1, captured.out + captured.err
+    assert "PTX emission requires at least one @kernel function" in captured.err
+    assert "no @kernel fns" not in captured.out
+
+
+def test_c119_emit_ptx_rejects_unsupported_hbm_float_dtype(capsys):
+    src = write_src("""
+    @kernel fn k(a: tile<f16, [256], HBM>) {
+        let x = a[0];
+        let y = x < 1.0_f16;
+    }
+    """)
+    try:
+        rc = main([src, "--emit-ptx"])
+        captured = capsys.readouterr()
+    finally:
+        if os.path.exists(src):
+            os.remove(src)
+    assert rc == 1, captured.out + captured.err
+    assert "@kernel HBM tile parameter dtype f16 is not supported" in captured.out
+    assert "ld.global.f16" not in captured.out
+
+
+def test_c119_emit_ptx_allows_folded_bool_constants(capsys):
+    src = write_src("@kernel fn k() { let y = 1 < 2; }\n")
+    try:
+        rc = main([src, "--emit-ptx"])
+        captured = capsys.readouterr()
+    finally:
+        if os.path.exists(src):
+            os.remove(src)
+    assert rc == 0, captured.err
+    assert "mov.b32" in captured.out
+    assert "unsupported PTX integer constant type bool" not in captured.err
+
+
+def test_c119_emit_ptx_accepts_kernel_index_builtin(capsys):
+    src = write_src("@kernel fn k() { let i = thread_idx(); }\n")
+    try:
+        rc = main([src, "--emit-ptx"])
+        captured = capsys.readouterr()
+    finally:
+        if os.path.exists(src):
+            os.remove(src)
+    assert rc == 0, captured.err
+    assert "%tid.x" in captured.out
+
+
+def test_c119_emit_ptx_rejects_bare_kernel_index_builtin(capsys):
+    src = write_src("@kernel fn k() { let i: i32 = thread_idx; }\n")
+    try:
+        rc = main([src, "--emit-ptx"])
+        captured = capsys.readouterr()
+    finally:
+        if os.path.exists(src):
+            os.remove(src)
+    assert rc == 1, captured.out + captured.err
+    assert "thread_idx must be called as thread_idx()" in captured.out
+    assert "mov.b32" not in captured.out
+
+
+def test_c119_emit_ptx_rejects_non_1d_hbm_params(capsys):
+    src = write_src("@kernel fn k(a: tile<f32, [16, 16], HBM>) {}\n")
+    try:
+        rc = main([src, "--emit-ptx"])
+        captured = capsys.readouterr()
+    finally:
+        if os.path.exists(src):
+            os.remove(src)
+    assert rc == 1, captured.out + captured.err
+    assert "@kernel HBM tile parameters must be 1D" in captured.out
+    assert "internal error" not in captured.err
+
+
+def test_c119_emit_ptx_rejects_non_1d_extern_hbm_params(capsys):
+    src = write_src('@kernel extern "C" fn k(a: tile<f32, [16, 16], HBM>);\n')
+    try:
+        rc = main([src, "--emit-ptx"])
+        captured = capsys.readouterr()
+    finally:
+        if os.path.exists(src):
+            os.remove(src)
+    assert rc == 1, captured.out + captured.err
+    assert "@kernel HBM tile parameters must be 1D" in captured.out
+    assert "internal error" not in captured.err
+
+
+def test_c119_emit_ptx_rejects_extern_only_kernels(capsys):
+    src = write_src('@kernel extern "C" fn k(a: tile<f32, [16], HBM>);\n')
+    try:
+        rc = main([src, "--emit-ptx"])
+        captured = capsys.readouterr()
+    finally:
+        if os.path.exists(src):
+            os.remove(src)
+    assert rc == 1, captured.out + captured.err
+    assert "PTX emission requires at least one @kernel function" in captured.err
+    assert ".visible .entry" not in captured.out
+
+
+def test_c119_emit_ptx_rejects_non_unit_kernel_returns(capsys):
+    src = write_src("@kernel fn k() -> i32 { 42 }\n")
+    try:
+        rc = main([src, "--emit-ptx"])
+        captured = capsys.readouterr()
+    finally:
+        if os.path.exists(src):
+            os.remove(src)
+    assert rc == 1, captured.out + captured.err
+    assert "@kernel functions must return ()" in captured.out
+    assert "mov.b32" not in captured.out
+
+
+def test_c119_emit_ptx_rejects_kernel_value_returns(capsys):
+    src = write_src("@kernel fn k() { return 1; }\n")
+    try:
+        rc = main([src, "--emit-ptx"])
+        captured = capsys.readouterr()
+    finally:
+        if os.path.exists(src):
+            os.remove(src)
+    assert rc == 1, captured.out + captured.err
+    assert "@kernel functions cannot return a value" in captured.out
+    assert "mov.b32" not in captured.out
+
+
 def test_c117_backend_cli_aborts_on_struct_mono_errors(tmp_path):
     src_path = tmp_path / "bad_struct_mono.hx"
     out_path = tmp_path / "bad_struct_mono.bin"

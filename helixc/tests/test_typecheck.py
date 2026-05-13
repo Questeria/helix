@@ -284,6 +284,7 @@ def test_c118_unary_operator_domains_checked():
 
 def test_c118_assignment_targets_must_be_assignable():
     assert check("fn f() { let mut x: i32 = 1; x = 2; }") == []
+    assert check("fn f(mut x: i32) -> i32 { x = 2; x }") == []
     assert check("fn f() { let xs = [0]; xs[0] = 1; }") == []
 
     errs = check("fn f() { 1 = 2; }")
@@ -300,6 +301,69 @@ def test_c118_assignment_targets_must_be_assignable():
     """)
     assert any("compound assignment to HBM tile indices is not supported" in e
                for e in errs3), errs3
+
+
+def test_c119_indexed_assignment_requires_named_place():
+    errs = check("fn f() { [0][0] = 1; }")
+    assert any("indexed assignments require a named array or tile binding" in e
+               for e in errs), errs
+
+    errs2 = check("""
+    fn id(a: [i32; 1]) -> [i32; 1] { a }
+    fn f(a: [i32; 1]) { id(a)[0] = 1; }
+    """)
+    assert any("indexed assignments require a named array or tile binding" in e
+               for e in errs2), errs2
+
+
+def test_c119_kernel_index_builtins_typecheck_inside_kernel_only():
+    assert check("""
+    @kernel fn k() {
+        let i: i32 = thread_idx();
+        let bx: i32 = block_idx_y();
+        let nt: i32 = block_dim_z();
+    }
+    """) == []
+
+    errs = check("fn f() { let i = thread_idx(); }")
+    assert any("thread_idx() is only allowed inside @kernel functions" in e
+               for e in errs), errs
+
+    errs2 = check("@kernel fn k() { let i: i32 = thread_idx; }")
+    assert any("thread_idx must be called as thread_idx()" in e
+               for e in errs2), errs2
+
+
+def test_c119_kernel_hbm_param_dtypes_match_ptx_surface():
+    assert check("@kernel fn k(a: tile<f32, [16], HBM>) {}") == []
+    assert check("@kernel fn k(a: tile<i32, [16], HBM>) {}") == []
+
+    errs = check("@kernel fn k(a: tile<u32, [16], HBM>) {}")
+    assert any("@kernel HBM tile parameter dtype u32 is not supported" in e
+               for e in errs), errs
+
+    errs2 = check("@kernel fn k(a: tile<f16, [16], HBM>) {}")
+    assert any("@kernel HBM tile parameter dtype f16 is not supported" in e
+               for e in errs2), errs2
+
+
+def test_c119_kernel_hbm_param_shape_matches_ptx_surface():
+    errs = check("@kernel fn k(a: tile<f32, [16, 16], HBM>) {}")
+    assert any("@kernel HBM tile parameters must be 1D" in e
+               for e in errs), errs
+
+    errs2 = check('@kernel extern "C" fn k(a: tile<f32, [16, 16], HBM>);')
+    assert any("@kernel HBM tile parameters must be 1D" in e
+               for e in errs2), errs2
+
+
+def test_c119_kernel_return_type_matches_ptx_surface():
+    errs = check("@kernel fn k() -> i32 { 42 }")
+    assert any("@kernel functions must return ()" in e for e in errs), errs
+
+    errs2 = check("@kernel fn k() { return 1; }")
+    assert any("@kernel functions cannot return a value" in e
+               for e in errs2), errs2
 
 
 # ============================================================================

@@ -90,6 +90,25 @@ def test_c118_direct_lower_rejects_compound_tensor_index_base():
         lower_src(src3)
 
 
+def test_c119_mut_param_lowers_as_mutable_binding():
+    mod = lower_src("fn f(mut x: i32) -> i32 { x = 2; x }")
+    fn = mod.functions["f"]
+    alloc_ops = [op for op in fn.entry.ops
+                 if op.kind == tir.OpKind.ALLOC_VAR]
+    store_ops = [op for op in fn.entry.ops
+                 if op.kind == tir.OpKind.STORE_VAR]
+    load_ops = [op for op in fn.entry.ops
+                if op.kind == tir.OpKind.LOAD_VAR]
+    assert alloc_ops, "mutable parameter should allocate a mutable slot"
+    assert store_ops, "mutable parameter should be stored into a mutable slot"
+    assert load_ops, "later uses of mutable parameter should load the slot"
+
+
+def test_c119_bare_gpu_builtin_does_not_lower_to_zero():
+    with pytest.raises(NotImplementedError, match="must be called"):
+        lower_src("@kernel fn k() { let i: i32 = thread_idx; }")
+
+
 def test_constant_int():
     mod = lower_src("fn k() -> i32 { 42 }")
     fn = mod.functions["k"]

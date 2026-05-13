@@ -4,10 +4,12 @@ from __future__ import annotations
 import os, sys
 import subprocess
 import tempfile
+import pytest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 from helixc.frontend.parser import parse
 from helixc.ir.lower_ast import lower
+from helixc.ir import tir, tile_ir as ti
 from helixc.ir.tile_ir import lower_to_tile
 from helixc.backend.ptx import emit_ptx
 
@@ -16,13 +18,13 @@ def emit(src: str) -> str:
     return emit_ptx(lower_to_tile(lower(parse(src))))
 
 
-def test_c118_direct_ptx_cli_aborts_on_type_errors():
+def run_ptx_cli(src: str) -> subprocess.CompletedProcess[str]:
     fd, path = tempfile.mkstemp(suffix=".hx", text=True)
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
-            f.write("@kernel fn k() { let mut b: bool = true; b += false; }\n")
+            f.write(src)
         proj_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        proc = subprocess.run(
+        return subprocess.run(
             [sys.executable, "-m", "helixc.backend.ptx", path],
             cwd=proj_root,
             capture_output=True,
@@ -32,35 +34,397 @@ def test_c118_direct_ptx_cli_aborts_on_type_errors():
     finally:
         if os.path.exists(path):
             os.remove(path)
+
+
+def test_c118_direct_ptx_cli_aborts_on_type_errors():
+    proc = run_ptx_cli("@kernel fn k() { let mut b: bool = true; b += false; }\n")
     assert proc.returncode != 0, proc.stdout + proc.stderr
     assert "operator '+' does not support operand type bool" in proc.stderr
     assert "add.s32" not in proc.stdout
 
 
 def test_c118_hbm_tile_index_missing_ptx_register_fails_closed():
+    a = ti.TileValue(0, tir.TIRTileTy(
+        tir.TIRScalar("f32"), (tir.DimConst(256),), "HBM"
+    ), name_hint="a")
+    missing_index = ti.TileValue(1, tir.TIRScalar("i32"))
+    out = ti.TileValue(2, tir.TIRScalar("f32"))
+    block = ti.TileBlock(0, ops=[
+        ti.TileOp(ti.TileOpKind.TILE_INDEX_LOAD_HBM, [missing_index], [out],
+                  attrs={"name": "a", "dtype": "f32"})
+    ])
+    fn = ti.TileFn("k", [a], tir.TIRUnit(), [block], attrs={"kernel": True})
+    mod = ti.TileModule(functions={"k": fn})
+    with pytest.raises(RuntimeError, match="missing PTX register for HBM tile index"):
+        emit_ptx(mod)
+
+
+def test_c119_hbm_tile_missing_param_map_entry_fails_closed():
+    idx = ti.TileValue(0, tir.TIRScalar("i32"))
+    out = ti.TileValue(1, tir.TIRScalar("f32"))
+    block = ti.TileBlock(0, ops=[
+        ti.TileOp(ti.TileOpKind.SCALAR_CONST_INT, [], [idx], attrs={"value": 0}),
+        ti.TileOp(ti.TileOpKind.TILE_INDEX_LOAD_HBM, [idx], [out],
+                  attrs={"name": "missing", "dtype": "f32"}),
+    ])
+    fn = ti.TileFn("k", [], tir.TIRUnit(), [block], attrs={"kernel": True})
+    mod = ti.TileModule(functions={"k": fn})
+    with pytest.raises(RuntimeError, match="not in PTX param map"):
+        emit_ptx(mod)
+
+
+def test_c119_hbm_tile_index_rejects_address_register_class():
+    from helixc.backend.ptx import PtxEmitter
+    idx = ti.TileValue(0, tir.TIRScalar("i32"))
+    out = ti.TileValue(1, tir.TIRScalar("f32"))
+    op = ti.TileOp(ti.TileOpKind.TILE_INDEX_LOAD_HBM, [idx], [out],
+                   attrs={"name": "a", "dtype": "f32"})
+    em = PtxEmitter()
+    em.hbm_param_map = {"a": (0, "f32")}
+    em.reg_map = {idx.id: "%rd0"}
+    with pytest.raises(RuntimeError, match="expected %r register class"):
+        em.emit_op(op)
+
+
+def test_c119_hbm_store_value_must_match_tile_dtype():
+    idx = ti.TileValue(0, tir.TIRScalar("i32"))
+    bad_value = ti.TileValue(1, tir.TIRScalar("bool"))
+    param = ti.TileValue(10, tir.TIRTileTy(
+        tir.TIRScalar("f32"), (tir.DimConst(4),), "HBM"
+    ), name_hint="a")
+    block = ti.TileBlock(0, ops=[
+        ti.TileOp(ti.TileOpKind.SCALAR_CONST_INT, [], [idx], attrs={"value": 0}),
+        ti.TileOp(ti.TileOpKind.SCALAR_CONST_INT, [], [bad_value], attrs={"value": 1}),
+        ti.TileOp(ti.TileOpKind.TILE_INDEX_STORE_HBM, [idx, bad_value], [],
+                  attrs={"name": "a", "dtype": "f32"}),
+    ])
+    fn = ti.TileFn("k", [param], tir.TIRUnit(), [block], attrs={"kernel": True})
+    mod = ti.TileModule(functions={"k": fn})
+    with pytest.raises(RuntimeError, match="unsupported PTX HBM tile store value type bool"):
+        emit_ptx(mod)
+
+
+def test_c119_hbm_op_dtype_must_match_param_map_dtype():
+    idx = ti.TileValue(0, tir.TIRScalar("i32"))
+    out = ti.TileValue(1, tir.TIRScalar("f32"))
+    param = ti.TileValue(10, tir.TIRTileTy(
+        tir.TIRScalar("i32"), (tir.DimConst(4),), "HBM"
+    ), name_hint="a")
+    block = ti.TileBlock(0, ops=[
+        ti.TileOp(ti.TileOpKind.SCALAR_CONST_INT, [], [idx], attrs={"value": 0}),
+        ti.TileOp(ti.TileOpKind.TILE_INDEX_LOAD_HBM, [idx], [out],
+                  attrs={"name": "a", "dtype": "f32"}),
+    ])
+    fn = ti.TileFn("k", [param], tir.TIRUnit(), [block], attrs={"kernel": True})
+    mod = ti.TileModule(functions={"k": fn})
+    with pytest.raises(RuntimeError, match="dtype mismatch"):
+        emit_ptx(mod)
+
+
+def test_c119_hbm_param_shape_validated_in_direct_ptx():
+    param = ti.TileValue(10, tir.TIRTileTy(
+        tir.TIRScalar("f32"), (tir.DimConst(4), tir.DimConst(4)), "HBM"
+    ), name_hint="a")
+    fn = ti.TileFn("k", [param], tir.TIRUnit(), [ti.TileBlock(0)],
+                   attrs={"kernel": True})
+    mod = ti.TileModule(functions={"k": fn})
+    with pytest.raises(RuntimeError, match="HBM tile parameters must be 1D"):
+        emit_ptx(mod)
+
+
+def test_c119_hbm_ops_require_dtype_attr():
+    idx = ti.TileValue(0, tir.TIRScalar("i32"))
+    out = ti.TileValue(1, tir.TIRScalar("f32"))
+    param = ti.TileValue(10, tir.TIRTileTy(
+        tir.TIRScalar("f32"), (tir.DimConst(4),), "HBM"
+    ), name_hint="a")
+    block = ti.TileBlock(0, ops=[
+        ti.TileOp(ti.TileOpKind.SCALAR_CONST_INT, [], [idx], attrs={"value": 0}),
+        ti.TileOp(ti.TileOpKind.TILE_INDEX_LOAD_HBM, [idx], [out],
+                  attrs={"name": "a"}),
+    ])
+    fn = ti.TileFn("k", [param], tir.TIRUnit(), [block], attrs={"kernel": True})
+    mod = ti.TileModule(functions={"k": fn})
+    with pytest.raises(RuntimeError, match="missing PTX HBM tile dtype attr"):
+        emit_ptx(mod)
+
+
+def test_c119_thread_idx_requires_valid_attrs_in_direct_ptx():
+    out = ti.TileValue(0, tir.TIRScalar("i32"))
+
+    def mod_for(attrs):
+        block = ti.TileBlock(0, ops=[
+            ti.TileOp(ti.TileOpKind.THREAD_IDX, [], [out], attrs=attrs)
+        ])
+        fn = ti.TileFn("k", [], tir.TIRUnit(), [block], attrs={"kernel": True})
+        return ti.TileModule(functions={"k": fn})
+
+    with pytest.raises(RuntimeError, match="requires explicit dim and sreg"):
+        emit_ptx(mod_for({}))
+    with pytest.raises(RuntimeError, match="unsupported PTX THREAD_IDX dim"):
+        emit_ptx(mod_for({"dim": "w", "sreg": "tid"}))
+    with pytest.raises(RuntimeError, match="unsupported PTX THREAD_IDX sreg"):
+        emit_ptx(mod_for({"dim": "x", "sreg": "foo"}))
+
+
+def test_c119_thread_idx_requires_valid_op_shape_in_direct_ptx():
+    good = ti.TileValue(0, tir.TIRScalar("i32"))
+    bad = ti.TileValue(1, tir.TIRScalar("f32"))
+    attrs = {"dim": "x", "sreg": "tid"}
+
+    def mod_for(op):
+        block = ti.TileBlock(0, ops=[op])
+        fn = ti.TileFn("k", [], tir.TIRUnit(), [block], attrs={"kernel": True})
+        return ti.TileModule(functions={"k": fn})
+
+    with pytest.raises(RuntimeError, match="expects exactly 0 operand"):
+        emit_ptx(mod_for(ti.TileOp(ti.TileOpKind.THREAD_IDX, [good], [good],
+                                   attrs=attrs)))
+    with pytest.raises(RuntimeError, match="expects exactly 1 result"):
+        emit_ptx(mod_for(ti.TileOp(ti.TileOpKind.THREAD_IDX, [], [],
+                                   attrs=attrs)))
+    with pytest.raises(RuntimeError, match="unsupported PTX THREAD_IDX result type f32"):
+        emit_ptx(mod_for(ti.TileOp(ti.TileOpKind.THREAD_IDX, [], [bad],
+                                   attrs=attrs)))
+
+
+def test_c119_scalar_constants_require_value_attr_in_direct_ptx():
+    int_out = ti.TileValue(0, tir.TIRScalar("i32"))
+    float_out = ti.TileValue(1, tir.TIRScalar("f32"))
+
+    def mod_for(op):
+        block = ti.TileBlock(0, ops=[op])
+        fn = ti.TileFn("k", [], tir.TIRUnit(), [block], attrs={"kernel": True})
+        return ti.TileModule(functions={"k": fn})
+
+    with pytest.raises(RuntimeError, match="SCALAR_CONST_INT requires value attr"):
+        emit_ptx(mod_for(ti.TileOp(ti.TileOpKind.SCALAR_CONST_INT, [], [int_out])))
+    with pytest.raises(RuntimeError, match="SCALAR_CONST_FLOAT requires value attr"):
+        emit_ptx(mod_for(ti.TileOp(ti.TileOpKind.SCALAR_CONST_FLOAT, [], [float_out])))
+
+
+def test_c119_scalar_constant_values_are_not_coerced_in_direct_ptx():
+    int_out = ti.TileValue(0, tir.TIRScalar("i32"))
+    bool_out = ti.TileValue(1, tir.TIRScalar("bool"))
+    float_out = ti.TileValue(2, tir.TIRScalar("f32"))
+
+    def mod_for(op):
+        block = ti.TileBlock(0, ops=[op])
+        fn = ti.TileFn("k", [], tir.TIRUnit(), [block], attrs={"kernel": True})
+        return ti.TileModule(functions={"k": fn})
+
+    with pytest.raises(RuntimeError, match="i32 value must be an int"):
+        emit_ptx(mod_for(ti.TileOp(ti.TileOpKind.SCALAR_CONST_INT, [], [int_out],
+                                   attrs={"value": 1.9})))
+    with pytest.raises(RuntimeError, match="i32 value must be an int"):
+        emit_ptx(mod_for(ti.TileOp(ti.TileOpKind.SCALAR_CONST_INT, [], [int_out],
+                                   attrs={"value": "7"})))
+    with pytest.raises(RuntimeError, match="bool value must be true/false or 0/1"):
+        emit_ptx(mod_for(ti.TileOp(ti.TileOpKind.SCALAR_CONST_INT, [], [bool_out],
+                                   attrs={"value": 2})))
+    with pytest.raises(RuntimeError, match="value must be a float"):
+        emit_ptx(mod_for(ti.TileOp(ti.TileOpKind.SCALAR_CONST_FLOAT, [], [float_out],
+                                   attrs={"value": "1.25"})))
+
+
+def test_c119_i32_scalar_constants_require_i32_range():
+    int_out = ti.TileValue(0, tir.TIRScalar("i32"))
+    block = ti.TileBlock(0, ops=[
+        ti.TileOp(ti.TileOpKind.SCALAR_CONST_INT, [], [int_out],
+                  attrs={"value": 2 ** 40})
+    ])
+    fn = ti.TileFn("k", [], tir.TIRUnit(), [block], attrs={"kernel": True})
+    mod = ti.TileModule(functions={"k": fn})
+    with pytest.raises(RuntimeError, match="i32 value out of range"):
+        emit_ptx(mod)
+
+
+def test_c119_direct_ptx_rejects_non_unit_kernel_returns():
+    fn = ti.TileFn("k", [], tir.TIRScalar("i32"), [ti.TileBlock(0)],
+                   attrs={"kernel": True})
+    mod = ti.TileModule(functions={"k": fn})
+    with pytest.raises(RuntimeError, match="non-unit returns"):
+        emit_ptx(mod)
+
+
+def test_c119_direct_ptx_rejects_return_value_ops():
+    value = ti.TileValue(0, tir.TIRScalar("i32"))
+    block = ti.TileBlock(0, ops=[
+        ti.TileOp(ti.TileOpKind.SCALAR_CONST_INT, [], [value], attrs={"value": 1}),
+        ti.TileOp(ti.TileOpKind.RETURN, [value], []),
+    ])
+    fn = ti.TileFn("k", [], tir.TIRUnit(), [block], attrs={"kernel": True})
+    mod = ti.TileModule(functions={"k": fn})
+    with pytest.raises(RuntimeError, match="cannot return values"):
+        emit_ptx(mod)
+
+
+def test_c119_scalar_compare_requires_valid_cmp_attr_in_direct_ptx():
+    a = ti.TileValue(0, tir.TIRScalar("i32"))
+    b = ti.TileValue(1, tir.TIRScalar("i32"))
+    out = ti.TileValue(2, tir.TIRScalar("bool"))
+
+    def mod_for(attrs):
+        block = ti.TileBlock(0, ops=[
+            ti.TileOp(ti.TileOpKind.SCALAR_CONST_INT, [], [a], attrs={"value": 1}),
+            ti.TileOp(ti.TileOpKind.SCALAR_CONST_INT, [], [b], attrs={"value": 2}),
+            ti.TileOp(ti.TileOpKind.SCALAR_CMP, [a, b], [out], attrs=attrs),
+        ])
+        fn = ti.TileFn("k", [], tir.TIRUnit(), [block], attrs={"kernel": True})
+        return ti.TileModule(functions={"k": fn})
+
+    with pytest.raises(RuntimeError, match="SCALAR_CMP requires cmp attr"):
+        emit_ptx(mod_for({}))
+    with pytest.raises(RuntimeError, match="unsupported PTX scalar compare op"):
+        emit_ptx(mod_for({"cmp": "cmp.nope"}))
+
+
+def test_c119_ptx_ops_require_exact_operand_counts():
+    a = ti.TileValue(0, tir.TIRScalar("i32"))
+    b = ti.TileValue(1, tir.TIRScalar("i32"))
+    c = ti.TileValue(2, tir.TIRScalar("i32"))
+    out = ti.TileValue(3, tir.TIRScalar("i32"))
+    param = ti.TileValue(10, tir.TIRTileTy(
+        tir.TIRScalar("f32"), (tir.DimConst(4),), "HBM"
+    ), name_hint="a")
+    fval = ti.TileValue(11, tir.TIRScalar("f32"))
+
+    def mod_for(op, params=None):
+        block = ti.TileBlock(0, ops=[op])
+        fn = ti.TileFn("k", params or [], tir.TIRUnit(), [block],
+                       attrs={"kernel": True})
+        return ti.TileModule(functions={"k": fn})
+
+    with pytest.raises(RuntimeError, match="SCALAR_ADD expects exactly 2 operand"):
+        emit_ptx(mod_for(ti.TileOp(ti.TileOpKind.SCALAR_ADD, [a, b, c], [out])))
+    with pytest.raises(RuntimeError, match="SCALAR_CMP expects exactly 2 operand"):
+        emit_ptx(mod_for(ti.TileOp(ti.TileOpKind.SCALAR_CMP, [a, b, c], [out],
+                                   attrs={"cmp": "cmp.lt"})))
+    with pytest.raises(RuntimeError, match="TILE_INDEX_LOAD_HBM expects exactly 1 operand"):
+        emit_ptx(mod_for(ti.TileOp(ti.TileOpKind.TILE_INDEX_LOAD_HBM, [a, b], [fval],
+                                   attrs={"name": "a", "dtype": "f32"}), [param]))
+    with pytest.raises(RuntimeError, match="TILE_INDEX_STORE_HBM expects exactly 2 operand"):
+        emit_ptx(mod_for(ti.TileOp(ti.TileOpKind.TILE_INDEX_STORE_HBM, [a, fval, b], [],
+                                   attrs={"name": "a", "dtype": "f32"}), [param]))
+
+
+def test_c119_scalar_arithmetic_result_type_must_match_operands():
+    a = ti.TileValue(0, tir.TIRScalar("i32"))
+    b = ti.TileValue(1, tir.TIRScalar("i32"))
+    bad_out = ti.TileValue(2, tir.TIRScalar("f32"))
+    block = ti.TileBlock(0, ops=[
+        ti.TileOp(ti.TileOpKind.SCALAR_CONST_INT, [], [a], attrs={"value": 1}),
+        ti.TileOp(ti.TileOpKind.SCALAR_CONST_INT, [], [b], attrs={"value": 2}),
+        ti.TileOp(ti.TileOpKind.SCALAR_ADD, [a, b], [bad_out]),
+    ])
+    fn = ti.TileFn("k", [], tir.TIRUnit(), [block], attrs={"kernel": True})
+    mod = ti.TileModule(functions={"k": fn})
+    with pytest.raises(RuntimeError, match="unsupported PTX scalar add result type f32"):
+        emit_ptx(mod)
+
+
+def test_c119_direct_ptx_cli_rejects_kernel_helper_calls():
     src = """
-    @kernel fn k(a: tile<f32, [256], HBM>, i: i64) {
-        let x = a[i];
+    fn helper(x: i32) -> i32 { x + 1 }
+    @kernel fn k() { let y = helper(41); }
+    """
+    proc = run_ptx_cli(src)
+    assert proc.returncode != 0, proc.stdout + proc.stderr
+    assert "unsupported PTX op call" in proc.stderr
+    assert "// TODO:" not in proc.stdout
+
+
+def test_c119_direct_ptx_cli_rejects_scalar_kernel_params():
+    proc = run_ptx_cli("@kernel fn k(x: i32) { let z = x + 2; }\n")
+    assert proc.returncode != 0, proc.stdout + proc.stderr
+    assert "PTX kernel parameter is not supported yet" in proc.stderr
+    assert "add.s32" not in proc.stdout
+
+
+def test_c119_direct_ptx_cli_rejects_modules_without_kernels():
+    proc = run_ptx_cli("fn helper(x: i32) -> i32 { x + 1 }\n")
+    assert proc.returncode != 0, proc.stdout + proc.stderr
+    assert "PTX emission requires at least one @kernel function" in proc.stderr
+    assert ".func" not in proc.stdout
+
+
+def test_c119_direct_ptx_cli_rejects_unsupported_hbm_float_dtype():
+    src = """
+    @kernel fn k(a: tile<f16, [256], HBM>) {
+        let x = a[0];
+        let y = x < 1.0_f16;
     }
     """
-    fd, path = tempfile.mkstemp(suffix=".hx", text=True)
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            f.write(src)
-        proj_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        proc = subprocess.run(
-            [sys.executable, "-m", "helixc.backend.ptx", path],
-            cwd=proj_root,
-            capture_output=True,
-            text=True,
-            timeout=60,
-        )
-    finally:
-        if os.path.exists(path):
-            os.remove(path)
+    proc = run_ptx_cli(src)
     assert proc.returncode != 0, proc.stdout + proc.stderr
-    assert "missing PTX register for HBM tile index" in proc.stderr
-    assert "mul.wide.s32" not in proc.stdout
+    assert "@kernel HBM tile parameter dtype f16 is not supported" in proc.stderr
+    assert "ld.global.f16" not in proc.stdout
+
+
+def test_c119_direct_ptx_cli_rejects_unused_unsupported_hbm_dtype():
+    proc = run_ptx_cli("@kernel fn k(a: tile<f16, [16], HBM>) { }\n")
+    assert proc.returncode != 0, proc.stdout + proc.stderr
+    assert "@kernel HBM tile parameter dtype f16 is not supported" in proc.stderr
+    assert ".visible .entry" not in proc.stdout
+
+
+def test_c119_direct_ptx_cli_accepts_kernel_index_builtin():
+    proc = run_ptx_cli("@kernel fn k() { let i = thread_idx(); }\n")
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "%tid.x" in proc.stdout
+
+
+def test_c119_direct_ptx_cli_rejects_extern_only_kernels():
+    proc = run_ptx_cli('@kernel extern "C" fn k(a: tile<f32, [16], HBM>);\n')
+    assert proc.returncode != 0, proc.stdout + proc.stderr
+    assert "PTX emission requires at least one @kernel function" in proc.stderr
+    assert ".visible .entry" not in proc.stdout
+
+
+def test_c119_emit_ptx_rejects_unsupported_kernel_ops():
+    with pytest.raises(RuntimeError, match="unsupported PTX op call"):
+        emit("@kernel fn k() { let z = 4 / 2; }")
+    with pytest.raises(RuntimeError, match="unsupported PTX op call"):
+        emit("@kernel fn k() { let z = ~1; }")
+    with pytest.raises(RuntimeError, match="unsupported PTX float constant type f64"):
+        emit("@kernel fn k() { let z = 1.0_f64; }")
+
+
+def test_c119_ptx_scalar_ops_require_mapped_operands():
+    a = ti.TileValue(100, tir.TIRScalar("i32"))
+    b = ti.TileValue(101, tir.TIRScalar("i32"))
+    out = ti.TileValue(102, tir.TIRScalar("i32"))
+    block = ti.TileBlock(0, ops=[
+        ti.TileOp(ti.TileOpKind.SCALAR_ADD, [a, b], [out])
+    ])
+    fn = ti.TileFn("k", [], tir.TIRUnit(), [block], attrs={"kernel": True})
+    mod = ti.TileModule(functions={"k": fn})
+    with pytest.raises(RuntimeError, match="missing PTX register for scalar add lhs"):
+        emit_ptx(mod)
+
+
+def test_c119_ptx_scalar_ops_reject_address_register_operands():
+    from helixc.backend.ptx import PtxEmitter
+    a = ti.TileValue(100, tir.TIRScalar("i32"))
+    b = ti.TileValue(101, tir.TIRScalar("i32"))
+    out = ti.TileValue(102, tir.TIRScalar("i32"))
+    op = ti.TileOp(ti.TileOpKind.SCALAR_ADD, [a, b], [out])
+    em = PtxEmitter()
+    em.reg_map = {a.id: "%rd0", b.id: "%rd1"}
+    with pytest.raises(RuntimeError, match="expected %r register class"):
+        em.emit_op(op)
+
+
+def test_c119_ptx_float_compare_uses_f32_setp():
+    src = """
+    @kernel fn k(a: tile<f32, [256], HBM>) {
+        let x = a[0];
+        let y = x < 1.0_f32;
+    }
+    """
+    out = emit(src)
+    assert "setp.lt.f32" in out
+    assert "setp.lt.s32" not in out
 
 
 def test_module_header():
@@ -108,13 +472,13 @@ def test_scalar_mul():
     assert "mul.lo.s32" in out
 
 
-def test_non_kernel_emits_func():
+def test_non_kernel_functions_are_not_stubbed():
     src = """
     fn helper() -> i32 { 42 }
     @kernel fn k() {}
     """
     out = emit(src)
-    assert ".func" in out
+    assert ".func" not in out
     assert ".visible .entry k" in out
 
 
