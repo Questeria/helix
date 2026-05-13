@@ -51,7 +51,7 @@ What works today:
 - Did-you-mean error suggestions, algebraic identity folds (x*0, x-x, etc.)
 - Property test verifying forward and reverse AD agree numerically
 
-See [QUICKSTART.md](QUICKSTART.md) for build-and-run instructions, [`docs/HELIX_PURPOSE.md`](docs/HELIX_PURPOSE.md) for the broad Helix purpose, [`docs/ROADMAP.md`](docs/ROADMAP.md) for prioritized roadmap, [`docs/research/WAVE1_FINDINGS.md`](docs/research/WAVE1_FINDINGS.md) for the synthesized research direction, `docs/lang/spec.md` for the language reference, `docs/lang/tutorial.md` for a beginner guide, `docs/lang/agi-features.md` for the AGI-specific features deep dive.
+See [QUICKSTART.md](QUICKSTART.md) for build-and-run instructions, [`docs/HELIX_PURPOSE.md`](docs/HELIX_PURPOSE.md) for the broad Helix purpose, [`docs/HELIX_FINAL_PRODUCT_RESEARCH.md`](docs/HELIX_FINAL_PRODUCT_RESEARCH.md) for the research-backed final-product blueprint, [`docs/ROADMAP.md`](docs/ROADMAP.md) for prioritized roadmap, [`docs/research/WAVE1_FINDINGS.md`](docs/research/WAVE1_FINDINGS.md) for the synthesized research direction, `docs/lang/spec.md` for the language reference, `docs/lang/tutorial.md` for a beginner guide, `docs/lang/agi-features.md` for the AGI-specific features deep dive.
 
 ## License
 

@@ -69,3 +69,11 @@ It should make it natural to ask:
 
 Helix should become a language for building systems that can learn, reason,
 prove, act, explain, and improve without hiding the uncertainty that remains.
+
+## Research Blueprint
+
+The fuller north-star design is maintained in
+[`HELIX_FINAL_PRODUCT_RESEARCH.md`](HELIX_FINAL_PRODUCT_RESEARCH.md). That file
+connects the mission above to external research, concrete Layer 0 compiler
+requirements, runtime/tooling requirements, domain demonstrations, and the
+phased roadmap after Stage 30.
