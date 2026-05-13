@@ -4,6 +4,8 @@ from __future__ import annotations
 import os, sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
+import pytest
+
 from helixc.frontend.parser import parse
 from helixc.ir.lower_ast import lower
 from helixc.ir import tir
@@ -31,6 +33,33 @@ def test_arith_function():
     assert fn.return_ty.name == "i32"
     # Should have an ADD op
     assert any(op.kind == tir.OpKind.ADD for op in fn.entry.ops)
+
+
+def test_c117_direct_lower_rejects_mixed_array_literal_elements():
+    with pytest.raises(TypeError, match="array literal element type mismatch"):
+        lower_src("fn f() { let xs = [1_i32, 2.0_f32]; }")
+
+
+def test_c117_direct_lower_rejects_unsupported_tensor_tile_indexing():
+    with pytest.raises(TypeError, match="unsupported tensor/tile indexing"):
+        lower_src("fn f(a: tensor<f32, [4, 4]>) -> f32 { a[0] }")
+    with pytest.raises(TypeError, match="unsupported tensor/tile indexing"):
+        lower_src("fn f(a: tensor<f32, [4, 4]>) { a[0] = 1.0_f32; }")
+
+    src = """
+    @kernel fn k(a: tile<f32, [256], HBM>) {
+        let x = a[0, 1];
+    }
+    """
+    with pytest.raises(TypeError, match="unsupported tensor/tile indexing"):
+        lower_src(src)
+    src2 = """
+    @kernel fn k(a: tile<f32, [256], HBM>) {
+        a[0, 1] = 1.0_f32;
+    }
+    """
+    with pytest.raises(TypeError, match="unsupported tensor/tile indexing"):
+        lower_src(src2)
 
 
 def test_constant_int():

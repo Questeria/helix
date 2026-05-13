@@ -3851,6 +3851,10 @@ if __name__ == "__main__":
         report_diagnostics as report_effect_diagnostics,
     )
     from ..frontend.totality import check_totality
+    from ..frontend.trace_pass import validate_trace_attrs
+    from ..frontend.panic_pass import validate_panic_args, validate_unwind
+    from ..frontend.unsafe_pass import check_unsafe_ops
+    from ..frontend.autotune import validate_autotune_prog
     from ..frontend.hash_cons import hash_cons
 
     if len(sys.argv) < 3:
@@ -3878,7 +3882,8 @@ if __name__ == "__main__":
     prog, sm_diags = monomorphize_structs(prog)
     if sm_diags:
         for d in sm_diags:
-            print(f"warning: struct-mono: {d}", file=sys.stderr)
+            print(f"error: struct-mono: {d}", file=sys.stderr)
+        sys.exit(1)
     # Audit 28.8 cycle 4 C4-5 / E3: catch ShapeFoldError from fn-mono
     # so the trap-28801 diagnostic comes through cleanly instead of
     # being mislabeled as a compiler-internal-error by the outer
@@ -3935,6 +3940,35 @@ if __name__ == "__main__":
             print(f"\n{len(tot_fails)} totality failure(s); --strict aborts.",
                   file=sys.stderr)
             sys.exit(1)
+
+    trace_diags = validate_trace_attrs(prog)
+    if trace_diags:
+        for d in trace_diags:
+            print(f"error: trace: {d}", file=sys.stderr)
+        sys.exit(1)
+
+    panic_diags = validate_panic_args(prog)
+    unwind_diags = validate_unwind(prog)
+    if panic_diags:
+        for d in panic_diags:
+            print(f"error: panic: {d}", file=sys.stderr)
+    if unwind_diags:
+        for d in unwind_diags:
+            print(f"error: unwind: {d}", file=sys.stderr)
+    if panic_diags or unwind_diags:
+        sys.exit(1)
+
+    unsafe_diags = check_unsafe_ops(prog)
+    if unsafe_diags:
+        for d in unsafe_diags:
+            print(f"error: unsafe: {d}", file=sys.stderr)
+        sys.exit(1)
+
+    autotune_diags = validate_autotune_prog(prog)
+    if autotune_diags:
+        for d in autotune_diags:
+            print(f"error: autotune: {d}", file=sys.stderr)
+        sys.exit(1)
 
     mod = lower(prog)
     # Optimization passes (run twice — fold can expose new CSE opportunities, etc.)

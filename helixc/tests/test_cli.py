@@ -92,6 +92,80 @@ def test_parse_args_check_only():
     assert "--check-only" in a.flags
 
 
+def test_c117_emit_ptx_uses_kernel_attrs(capsys):
+    src = write_src("@kernel fn k() { }\nfn main() -> i32 { 42 }\n")
+    rc = main([src, "--emit-ptx"])
+    captured = capsys.readouterr()
+    assert rc == 0, captured.err
+    assert ".visible .entry k" in captured.out, captured.out
+    assert "no @kernel fns" not in captured.out
+
+
+def test_c117_backend_cli_aborts_on_struct_mono_errors(tmp_path):
+    src_path = tmp_path / "bad_struct_mono.hx"
+    out_path = tmp_path / "bad_struct_mono.bin"
+    src_path.write_text(
+        "struct Pt[T] { x: T }\n"
+        "fn bad(p: Pt<i32, f64>) -> i32 { 0 }\n"
+        "fn main() -> i32 { 42 }\n",
+        encoding="utf-8",
+    )
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.backend.x86_64",
+         str(src_path), str(out_path), "--no-stdlib"],
+        cwd=proj_root,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert proc.returncode != 0, proc.stdout + proc.stderr
+    assert "error: struct-mono:" in proc.stderr
+    assert not out_path.exists(), "backend emitted a binary after struct-mono error"
+
+
+def test_c117_backend_cli_panic_validation_no_traceback(tmp_path):
+    src_path = tmp_path / "bad_panic.hx"
+    out_path = tmp_path / "bad_panic.bin"
+    src_path.write_text("fn main() -> i32 { panic(); 0 }\n", encoding="utf-8")
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.backend.x86_64",
+         str(src_path), str(out_path), "--no-stdlib"],
+        cwd=proj_root,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert proc.returncode != 0, proc.stdout + proc.stderr
+    assert "error: panic:" in proc.stderr
+    assert "Traceback" not in proc.stderr
+    assert not out_path.exists(), "backend emitted a binary after panic validation error"
+
+
+def test_c117_backend_cli_aborts_on_bad_compound_assignment(tmp_path):
+    src_path = tmp_path / "bad_compound.hx"
+    out_path = tmp_path / "bad_compound.bin"
+    src_path.write_text(
+        "fn main() -> i32 { let mut b: bool = true; b += false; 42 }\n",
+        encoding="utf-8",
+    )
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.backend.x86_64",
+         str(src_path), str(out_path), "--no-stdlib"],
+        cwd=proj_root,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert proc.returncode != 0, proc.stdout + proc.stderr
+    assert "operator '+' does not support operand type bool" in proc.stderr
+    assert not out_path.exists(), (
+        "backend emitted a binary after invalid compound assignment"
+    )
+
+
 def test_parse_args_no_color():
     a, errs = parse_args(["--no-color", "foo.hx"])
     assert a.color is False

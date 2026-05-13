@@ -869,6 +869,14 @@ class Lowerer:
                     self._bind(stmt.name, self.builder.const_int(0))
                     return
                 elem_ty = elem_vals[0].ty
+                for ev in elem_vals[1:]:
+                    if ev.ty != elem_ty:
+                        raise TypeError(
+                            f"array literal element type mismatch after "
+                            f"typecheck: first element is "
+                            f"{tir.fmt_type(elem_ty)}, later element is "
+                            f"{tir.fmt_type(ev.ty)}"
+                        )
                 n = len(elem_vals)
                 self.builder.emit(tir.OpKind.ALLOC_ARRAY,
                                   attrs={"name": stmt.name, "dtype": elem_ty,
@@ -911,6 +919,14 @@ class Lowerer:
                         )
                     elem_vals.append(v)
                 elem_ty = elem_vals[0].ty
+                for ev in elem_vals[1:]:
+                    if ev.ty != elem_ty:
+                        raise TypeError(
+                            f"array literal element type mismatch after "
+                            f"typecheck: first element is "
+                            f"{tir.fmt_type(elem_ty)}, later element is "
+                            f"{tir.fmt_type(ev.ty)}"
+                        )
                 n = len(elem_vals)
                 self.builder.emit(tir.OpKind.ALLOC_ARRAY,
                                   attrs={"name": stmt.name, "dtype": elem_ty,
@@ -952,6 +968,14 @@ class Lowerer:
                         )
                     elem_vals.append(v)
                 elem_ty = elem_vals[0].ty
+                for ev in elem_vals[1:]:
+                    if ev.ty != elem_ty:
+                        raise TypeError(
+                            f"array literal element type mismatch after "
+                            f"typecheck: first element is "
+                            f"{tir.fmt_type(elem_ty)}, later element is "
+                            f"{tir.fmt_type(ev.ty)}"
+                        )
                 n = len(elem_vals)
                 self.builder.emit(tir.OpKind.ALLOC_ARRAY,
                                   attrs={"name": stmt.name, "dtype": elem_ty,
@@ -2044,6 +2068,14 @@ class Lowerer:
                                "dtype": dtype_name,
                                "memspace": "hbm"})
                     return None
+            if isinstance(expr.target, A.Index) and isinstance(expr.target.callee, A.Name):
+                base_v = self._lookup(expr.target.callee.name)
+                if base_v is not None and isinstance(
+                        base_v.ty, (tir.TIRTensorTy, tir.TIRTileTy)):
+                    raise TypeError(
+                        "unsupported tensor/tile indexing reached lowering; "
+                        "run typecheck first or add matching TIR lowering"
+                    )
             # Array element assignment: arr[i] = e (or compound)
             if isinstance(expr.target, A.Index) and isinstance(expr.target.callee, A.Name):
                 arr_name = expr.target.callee.name
@@ -2119,6 +2151,13 @@ class Lowerer:
                                "memspace": "hbm"})
             # If callee is a Name pointing to an array, emit LOAD_ELEM.
             if isinstance(expr.callee, A.Name):
+                base_v = self._lookup(expr.callee.name)
+                if base_v is not None and isinstance(
+                        base_v.ty, (tir.TIRTensorTy, tir.TIRTileTy)):
+                    raise TypeError(
+                        "unsupported tensor/tile indexing reached lowering; "
+                        "run typecheck first or add matching TIR lowering"
+                    )
                 # Recursive-enum binding: scalar value is the arena
                 # index. Index(name, k) lowers to ARENA_GET(idx + k).
                 rec_enum = self._lookup_rec_enum(expr.callee.name)

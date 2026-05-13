@@ -413,6 +413,8 @@ class TypeChecker:
         self._current_pure: bool = False
         self._current_effects: frozenset[str] = frozenset()
         self._current_fn_name: str = ""
+        self._current_is_kernel: bool = False
+        self._current_hbm_tile_indexables: set[str] = set()
         # Cascade-suppression set for unbound-name diagnostics. Initialized
         # here so re-running check() on the same instance doesn't carry
         # stale entries that would silence real new errors.
@@ -1161,15 +1163,29 @@ class TypeChecker:
         prev_pure = self._current_pure
         prev_effects = self._current_effects
         prev_name = self._current_fn_name
+        prev_is_kernel = self._current_is_kernel
+        prev_hbm_tile_indexables = self._current_hbm_tile_indexables
         self._current_pure = sig.is_pure
         self._current_effects = sig.effects
         self._current_fn_name = sig.name
+        self._current_is_kernel = "kernel" in fn.attrs
+        self._current_hbm_tile_indexables = set()
+        if self._current_is_kernel:
+            for name, ty in sig.params:
+                if (isinstance(ty, TyTile)
+                        and ty.memspace.lower() == "hbm"
+                        and len(ty.shape) == 1
+                        and isinstance(ty.dtype, TyPrim)
+                        and ty.dtype.name in self._HBM_TILE_INDEX_DTYPES):
+                    self._current_hbm_tile_indexables.add(name)
         try:
             self._check_fn_body(fn, sig)
         finally:
             self._current_pure = prev_pure
             self._current_effects = prev_effects
             self._current_fn_name = prev_name
+            self._current_is_kernel = prev_is_kernel
+            self._current_hbm_tile_indexables = prev_hbm_tile_indexables
 
     def _check_fn_body(self, fn: A.FnDecl, sig: FunctionSig) -> None:
         gen_scope = Scope()
@@ -1404,6 +1420,9 @@ class TypeChecker:
                 # `(l_is_diff OR r_is_diff) AND inner mismatch`.
                 l_inner = _unwrap(l)
                 r_inner = _unwrap(r)
+                if not self._check_wrapped_binary_operator_domain(
+                        l_inner, r_inner, expr.op, expr.span):
+                    return TyUnknown(hint="wrapped binary")
 
                 # Cycle 3 C3-2: dedup AD002 emission. The tie callback
                 # fires the same-rank-tie message; the outer call would
@@ -1631,9 +1650,47 @@ class TypeChecker:
                 return callee.ret
             return TyUnknown(hint="call")
         if isinstance(expr, A.Index):
-            self._check_expr(expr.callee, scope)
+            callee_ty = self._check_expr(expr.callee, scope)
             for i in expr.indices:
-                self._check_expr(i, scope)
+                idx_ty = self._check_expr(i, scope)
+                if not isinstance(idx_ty, (TyUnknown, TyVar, TySize)) \
+                        and not self._is_int_scalar(idx_ty):
+                    self.errors.append(TypeError_(
+                        f"array index must be an integer, got "
+                        f"{self._fmt(idx_ty)}",
+                        i.span,
+                    ))
+            if isinstance(callee_ty, TyArray):
+                if len(expr.indices) != 1:
+                    self.errors.append(TypeError_(
+                        f"array index expects 1 index, got "
+                        f"{len(expr.indices)}",
+                        expr.span,
+                    ))
+                return callee_ty.elem
+            if isinstance(callee_ty, TyTensor):
+                self.errors.append(TypeError_(
+                    "tensor indexing is not supported until tensor index "
+                    "lowering is implemented",
+                    expr.span,
+                ))
+                return TyUnknown(hint="tensor index")
+            if isinstance(callee_ty, TyTile):
+                if (isinstance(expr.callee, A.Name)
+                        and expr.callee.name in self._current_hbm_tile_indexables
+                        and len(expr.indices) == 1):
+                    return callee_ty.dtype
+                self.errors.append(TypeError_(
+                    "tile indexing currently supports only @kernel HBM tile "
+                    "parameters with exactly 1 index",
+                    expr.span,
+                ))
+                return TyUnknown(hint="tile index")
+            if not isinstance(callee_ty, (TyUnknown, TyVar, TySize)):
+                self.errors.append(TypeError_(
+                    f"type {self._fmt(callee_ty)} is not indexable",
+                    expr.span,
+                ))
             return TyUnknown(hint="index")
         if isinstance(expr, A.Field):
             obj_ty = self._check_expr(expr.obj, scope)
@@ -1728,6 +1785,17 @@ class TypeChecker:
         if isinstance(expr, A.Assign):
             r = self._check_expr(expr.value, scope)
             target_ty = self._check_expr(expr.target, scope)
+            if expr.op != "=":
+                op = {
+                    "+=": "+",
+                    "-=": "-",
+                    "*=": "*",
+                    "/=": "/",
+                    "%=": "%",
+                }.get(expr.op)
+                if op is not None:
+                    self._check_plain_binary_scalar_compat(
+                        target_ty, r, op, expr.span)
             if not self._compatible(r, target_ty):
                 self.errors.append(TypeError_(
                     f"assignment target type {self._fmt(target_ty)} "
@@ -1741,6 +1809,16 @@ class TypeChecker:
         if isinstance(expr, A.ArrayLit):
             ts = [self._check_expr(e, scope) for e in expr.elems]
             elem = ts[0] if ts else TyUnknown(hint="empty array")
+            for t in ts[1:]:
+                if not self._compatible(t, elem):
+                    self.errors.append(TypeError_(
+                        f"array literal element type {self._fmt(t)} "
+                        f"incompatible with first element type "
+                        f"{self._fmt(elem)}",
+                        expr.span,
+                        hint="use an explicit cast so every array element "
+                             "has the same type",
+                    ))
             return TyArray(elem, TyPrim(f"size_{len(ts)}"))
         if isinstance(expr, A.StructLit):
             decl = getattr(self, "_struct_decls", {}).get(expr.name)
@@ -2179,6 +2257,7 @@ class TypeChecker:
         "f16", "bf16", "f32", "f64", "fp8", "mxfp4", "nvfp4",
     })
     _NUMERIC_BOOL_PRIMS = frozenset({"bool", "char"})
+    _HBM_TILE_INDEX_DTYPES = frozenset({"f32", "i32", "f16", "bf16"})
 
     def _is_numeric_scalar(self, t: Type) -> bool:
         if not isinstance(t, TyPrim):
@@ -2193,25 +2272,115 @@ class TypeChecker:
     def _is_float_scalar(self, t: Type) -> bool:
         return isinstance(t, TyPrim) and t.name in self._NUMERIC_FLOAT_PRIMS
 
+    def _check_wrapped_binary_operator_domain(self, left: Type, right: Type,
+                                              op: str, span: A.Span) -> bool:
+        if isinstance(left, (TyUnknown, TyVar, TySize)) \
+                or isinstance(right, (TyUnknown, TyVar, TySize)):
+            return True
+        if not (isinstance(left, TyPrim) and isinstance(right, TyPrim)):
+            self.errors.append(TypeError_(
+                f"operator {op!r} does not support operand types "
+                f"{self._fmt(left)} and {self._fmt(right)}",
+                span,
+                hint="wrapper arithmetic needs scalar inner types",
+            ))
+            return False
+        left_is_int = self._is_int_scalar(left)
+        right_is_int = self._is_int_scalar(right)
+        left_is_float = self._is_float_scalar(left)
+        right_is_float = self._is_float_scalar(right)
+        float_arith = op in ("+", "-", "*", "/")
+        int_only = op in ("%", "&", "|", "^", "<<", ">>")
+        if float_arith:
+            if (left_is_int or left_is_float) \
+                    and (right_is_int or right_is_float):
+                return True
+        elif int_only:
+            if left_is_int and right_is_int:
+                return True
+        else:
+            self._check_plain_binary_scalar_compat(left, right, op, span)
+            return False
+        if left.name == right.name:
+            self.errors.append(TypeError_(
+                f"operator {op!r} does not support operand type "
+                f"{self._fmt(left)}",
+                span,
+                hint="use an explicit supported inner scalar type for "
+                     "wrapped arithmetic",
+            ))
+            return False
+        self.errors.append(TypeError_(
+            f"operator {op!r} has incompatible operand types "
+            f"{self._fmt(left)} and {self._fmt(right)}",
+            span,
+            hint="use an explicit cast or a supported operator for these "
+                 "wrapped inner types",
+        ))
+        return False
+
     def _check_plain_binary_scalar_compat(self, left: Type, right: Type,
                                           op: str, span: A.Span) -> None:
         if isinstance(left, (TyUnknown, TyVar, TySize)) \
                 or isinstance(right, (TyUnknown, TyVar, TySize)):
             return
         if not (isinstance(left, TyPrim) and isinstance(right, TyPrim)):
-            return
-        if left.name == right.name:
-            return
-        if self._is_int_scalar(left) and self._is_int_scalar(right):
-            return
-        if self._is_numeric_scalar(left) or self._is_numeric_scalar(right):
             self.errors.append(TypeError_(
-                f"operator {op!r} has incompatible operand types "
+                f"operator {op!r} does not support operand types "
                 f"{self._fmt(left)} and {self._fmt(right)}",
                 span,
-                hint="use an explicit cast so lowering and codegen agree "
-                     "on the operand representation",
+                hint="use an explicit scalar value or implement this "
+                     "operator for the aggregate type",
             ))
+            return
+        is_eq = op in ("==", "!=")
+        is_order = op in ("<", "<=", ">", ">=")
+        left_is_int = self._is_int_scalar(left)
+        right_is_int = self._is_int_scalar(right)
+        left_is_float = self._is_float_scalar(left)
+        right_is_float = self._is_float_scalar(right)
+        left_is_bool = left.name == "bool"
+        right_is_bool = right.name == "bool"
+        left_is_char = left.name == "char"
+        right_is_char = right.name == "char"
+        float_arith = op in ("+", "-", "*", "/")
+        int_only = op in ("%", "&", "|", "^", "<<", ">>")
+        if is_eq:
+            if left.name == right.name and (
+                    left_is_int or left_is_float or left_is_bool
+                    or left_is_char):
+                return
+            if left_is_int and right_is_int:
+                return
+        elif is_order:
+            if left_is_int and right_is_int:
+                return
+            if left_is_float and right_is_float and left.name == right.name:
+                return
+        elif float_arith:
+            if left_is_int and right_is_int:
+                return
+            if left_is_float and right_is_float and left.name == right.name:
+                return
+        elif int_only:
+            if left_is_int and right_is_int:
+                return
+        if left.name == right.name:
+            self.errors.append(TypeError_(
+                f"operator {op!r} does not support operand type "
+                f"{self._fmt(left)}",
+                span,
+                hint="use an explicit cast or a supported operator for "
+                     "this type",
+            ))
+            return
+        self.errors.append(TypeError_(
+            f"operator {op!r} has incompatible operand types "
+            f"{self._fmt(left)} and {self._fmt(right)}",
+            span,
+            hint="use an explicit cast so lowering and codegen agree "
+                 "on the operand representation",
+        ))
 
     def _check_cast_compat(self, src: Type, tgt: Type, span: A.Span,
                             _depth: int = 0,

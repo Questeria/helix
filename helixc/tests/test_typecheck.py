@@ -121,6 +121,149 @@ def test_c116_assignment_type_mismatch_errors():
                for e in errs2), errs2
 
 
+def test_c117_indexed_assignment_type_mismatch_errors():
+    errs = check("fn f() { let mut a: [i32; 1] = [0]; a[0] = 1.5_f64; }")
+    assert any("assignment target type i32 incompatible with value type f64" in e
+               for e in errs), errs
+
+    errs2 = check("fn f() { let mut a: [i64; 1] = [1_i64]; a[0] += 2_i32; }")
+    assert any("assignment target type i64 incompatible with value type i32" in e
+               for e in errs2), errs2
+
+
+def test_c117_array_literal_elements_must_match():
+    errs = check("fn f() { let xs = [1_i32, 2.0_f32]; }")
+    assert any("array literal element type f32 incompatible with first element type i32" in e
+               for e in errs), errs
+
+    errs2 = check("fn f() { let xs = [1_u32, -1_i32]; }")
+    assert any("array literal element type i32 incompatible with first element type u32" in e
+               for e in errs2), errs2
+
+
+def test_c117_non_scalar_binary_operands_rejected():
+    errs = check("fn f() -> bool { let xs = [1_i32]; xs == xs }")
+    assert any("does not support operand types [i32; 1] and [i32; 1]" in e
+               for e in errs), errs
+
+    errs2 = check("fn f() { let xs = [1_i32]; let ys = xs + xs; }")
+    assert any("does not support operand types [i32; 1] and [i32; 1]" in e
+               for e in errs2), errs2
+
+    errs3 = check('fn f() { let p = "abc".as_ptr(); let q = p + 1_u64; }')
+    assert any("does not support operand types *const u8 and u64" in e
+               for e in errs3), errs3
+
+
+def test_c117_bool_and_char_operator_domains():
+    assert check("fn f() -> bool { true == false }") == []
+    assert check("fn f() -> bool { true && false }") == []
+
+    errs = check("fn f() -> bool { true + false }")
+    assert any("operator '+' does not support operand type bool" in e
+               for e in errs), errs
+
+    errs2 = check("fn f() -> bool { true < false }")
+    assert any("operator '<' does not support operand type bool" in e
+               for e in errs2), errs2
+
+    errs3 = check("fn f() -> char { 'a' + 'b' }")
+    assert any("operator '+' does not support operand type char" in e
+               for e in errs3), errs3
+
+
+def test_c117_compound_assignment_uses_operator_domain():
+    errs = check("fn f() { let mut b: bool = true; b += false; }")
+    assert any("operator '+' does not support operand type bool" in e
+               for e in errs), errs
+
+    errs2 = check("fn f() { let mut c: char = 'a'; c += 'b'; }")
+    assert any("operator '+' does not support operand type char" in e
+               for e in errs2), errs2
+
+    errs3 = check("fn f() { let mut a: [bool; 1] = [true]; a[0] += false; }")
+    assert any("operator '+' does not support operand type bool" in e
+               for e in errs3), errs3
+
+
+def test_c117_int_only_operators_reject_floats():
+    errs = check("fn f() -> f32 { 1.0_f32 & 2.0_f32 }")
+    assert any("operator '&' does not support operand type f32" in e
+               for e in errs), errs
+
+    errs2 = check("fn f() -> f32 { 1.0_f32 << 1.0_f32 }")
+    assert any("operator '<<' does not support operand type f32" in e
+               for e in errs2), errs2
+
+    errs3 = check("fn f() -> f32 { 5.0_f32 % 2.0_f32 }")
+    assert any("operator '%' does not support operand type f32" in e
+               for e in errs3), errs3
+
+    assert check("fn f() -> f32 { 6.0_f32 / 2.0_f32 }") == []
+
+
+def test_c117_scalar_index_rejected():
+    errs = check("fn f() -> i32 { let x = 7_i32; x[0] }")
+    assert any("type i32 is not indexable" in e for e in errs), errs
+
+    errs2 = check("fn f() { let mut x: i32 = 1_i32; x[0] = 2_i32; }")
+    assert any("type i32 is not indexable" in e for e in errs2), errs2
+
+
+def test_c117_tensor_tile_indexing_matches_lowered_contract():
+    src = """
+    @kernel fn k(a: tile<f32, [256], HBM>) {
+        let x = a[0];
+    }
+    """
+    assert check(src) == []
+
+    errs = check("""
+    @kernel fn k(a: tile<f32, [256], HBM>) {
+        let x = a[0, 1];
+    }
+    """)
+    assert any("tile indexing currently supports only @kernel HBM tile parameters with exactly 1 index" in e
+               for e in errs), errs
+
+    errs2 = check("""
+    @kernel fn k(a: tile<f32, [16, 16], HBM>) {
+        let x = a[0];
+    }
+    """)
+    assert any("tile indexing currently supports only @kernel HBM tile parameters with exactly 1 index" in e
+               for e in errs2), errs2
+
+    errs3 = check("fn f(a: tensor<f32, [4, 4]>) -> f32 { a[0] }")
+    assert any("tensor indexing is not supported until tensor index lowering is implemented" in e
+               for e in errs3), errs3
+
+    errs4 = check("fn f(a: tile<f32, [256], HBM>) -> f32 { a[0] }")
+    assert any("tile indexing currently supports only @kernel HBM tile parameters with exactly 1 index" in e
+               for e in errs4), errs4
+
+
+def test_c117_wrapped_operator_domains_use_inner_scalar_rules():
+    assert check("fn f(x: D<i32>, y: D<i32>) -> D<i32> { x % y }") == []
+    assert check("fn f(x: D<f64>, y: i32) -> D<f64> { x + y }") == []
+
+    errs = check("fn f(x: D<f32>, y: D<f32>) -> D<f32> { x % y }")
+    assert any("operator '%' does not support operand type f32" in e
+               for e in errs), errs
+
+    errs2 = check("fn f(x: D<f32>, y: D<f32>) -> D<f32> { x & y }")
+    assert any("operator '&' does not support operand type f32" in e
+               for e in errs2), errs2
+
+    errs3 = check("""
+    fn f(x: Logic<bool>, y: Logic<bool>) -> Logic<bool> {
+        x + y
+    }
+    """)
+    assert any("operator '+' does not support operand type bool" in e
+               for e in errs3), errs3
+
+
 # ============================================================================
 # Compile-time shape checking via Presburger solver (Phase 3-iv)
 # ============================================================================
