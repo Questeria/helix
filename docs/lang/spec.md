@@ -3,7 +3,7 @@
 **Status**: living draft — updated as the implementation teaches us.
 **Date**: 2026-05-03
 
-Helix is the from-scratch programming language for the Kovostov AGI project. Designed to be (a) AI-author-friendly, (b) tile/tensor-native for GPU kernels, (c) compile cleanly to x86-64 and NVIDIA PTX without LLVM, (d) shape-typed with optional refinements.
+Helix is a from-scratch programming language for AGI development and high-certainty computing. Kovostov is its first flagship system, but Helix is meant for any project that needs auditable, reproducible, uncertainty-aware software: AI/AGI, scientific research, medicine, genomics, physics, mathematics, robotics, infrastructure, and other domains where software should reason from evidence rather than hide assumptions. Designed to be (a) AI-author-friendly, (b) tile/tensor-native for GPU kernels, (c) compile cleanly to x86-64 and NVIDIA PTX without LLVM, (d) shape-typed with optional refinements.
 
 ## Design principles (in priority order)
 
@@ -14,6 +14,7 @@ Helix is the from-scratch programming language for the Kovostov AGI project. Des
 5. **Composable transformations.** `grad`, `vmap`, `jit`, `device` are functions that take and return functions. JAX-style.
 6. **Functional core, imperative boundary.** Pure expressions inside, effects at the seam.
 7. **No surprises.** No operator overloading on user types beyond a fixed list. No implicit conversions.
+8. **Reduce uncertainty.** When uncertainty can be represented, bounded, proven, or surfaced to the caller, the language should make that explicit instead of letting it disappear into runtime convention.
 
 ## File extension and source structure
 

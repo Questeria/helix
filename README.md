@@ -1,8 +1,14 @@
 # Kovostov-Native
 
-**An open-source AGI-aspirational system, bootstrapped from raw binary up.**
+**An open-source AGI-aspirational system and Helix language stack, bootstrapped from raw binary up.**
 
-This is the from-scratch implementation of Kovostov: a local AI system where every layer above silicon is auditable, owned, and reproducible from a hand-written hex seed.
+This is the from-scratch implementation of Kovostov and Helix. Kovostov is the first flagship AGI-aspirational system built on the stack; Helix is the general-purpose language and compiler meant to serve any serious AGI project, scientific system, or high-certainty industrial system where correctness, provenance, and uncertainty reduction matter.
+
+## Helix purpose
+
+Helix is not meant to stay an internal language for Kovostov only. The long-term goal is for Helix to become the dominant open language for AGI development and for any field that benefits from auditable, reproducible, high-certainty computation: AI/AGI research, scientific discovery, medicine, genomics, physics, mathematics, robotics, climate, energy, infrastructure, education, and future industries that need machines to reason with evidence instead of guesswork.
+
+The purpose of Helix is to remove uncertainty wherever software can honestly remove it: through typed effects, refinement and confidence types, proof-carrying compilation, deterministic self-hosting, explicit provenance, reproducible binaries, and verifier-gated self-improvement. Kovostov is the first major user of this language, not the boundary of its ambition.
 
 ## Hard constraints
 
@@ -14,8 +20,8 @@ This is the from-scratch implementation of Kovostov: a local AI system where eve
 
 ## Stack identity
 
-- **System / AI**: Kovostov
-- **Language**: Helix (`.hx` source files)
+- **System / AI**: Kovostov, the first flagship AGI-aspirational system built on Helix
+- **Language**: Helix (`.hx` source files), a general AGI and high-certainty computing language
 - **Compiler**: `helixc`
 - **Runtime**: `helixrt`
 - **Bootstrap chain**: stage0 (hand-encoded hex) → hex1 → M0 (assembler) → M1 → M2 (C-subset compiler) → helixc-bootstrap (in C-subset) → helixc (self-hosted in Helix)
@@ -45,7 +51,7 @@ What works today:
 - Did-you-mean error suggestions, algebraic identity folds (x*0, x-x, etc.)
 - Property test verifying forward and reverse AD agree numerically
 
-See [QUICKSTART.md](QUICKSTART.md) for build-and-run instructions, [`docs/ROADMAP.md`](docs/ROADMAP.md) for prioritized roadmap, [`docs/research/WAVE1_FINDINGS.md`](docs/research/WAVE1_FINDINGS.md) for the synthesized research direction, `docs/lang/spec.md` for the language reference, `docs/lang/tutorial.md` for a beginner guide, `docs/lang/agi-features.md` for the AGI-specific features deep dive.
+See [QUICKSTART.md](QUICKSTART.md) for build-and-run instructions, [`docs/HELIX_PURPOSE.md`](docs/HELIX_PURPOSE.md) for the broad Helix purpose, [`docs/ROADMAP.md`](docs/ROADMAP.md) for prioritized roadmap, [`docs/research/WAVE1_FINDINGS.md`](docs/research/WAVE1_FINDINGS.md) for the synthesized research direction, `docs/lang/spec.md` for the language reference, `docs/lang/tutorial.md` for a beginner guide, `docs/lang/agi-features.md` for the AGI-specific features deep dive.
 
 ## License
 

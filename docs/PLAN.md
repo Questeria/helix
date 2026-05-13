@@ -11,18 +11,20 @@
 2. **Open source, end-to-end.** Apache 2.0 for code. CC-BY 4.0 for docs. CC0 for trained model weights. All training data is public.
 3. **No proprietary AI APIs in training or runtime.** No Claude / GPT / Gemini outputs in training data. Public corpora only.
 4. **Consumer hardware.** RTX 3070 laptop now, RTX 5090 + Ryzen 9 9950X soon. Optional cloud bursts.
-5. **End goal: AGI.** Open-source AGI is the north star. Honest expectation: years of work, no guarantee of success. Measurable progress on AGI-properties (sample efficiency, continual learning, compositional generalization, transfer, self-improvement) is the operational metric.
+5. **End goal: AGI for humanity.** Open-source AGI and broadly useful high-certainty computing are the north star. Honest expectation: years of work, no guarantee of success. Measurable progress on AGI-properties (sample efficiency, continual learning, compositional generalization, transfer, self-improvement) and on uncertainty reduction in real domains is the operational metric.
 
 ## Vision
 
-Kovostov is an artificial general intelligence built layer-by-layer from raw binary, with every layer auditable. The bootstrap chain produces a custom programming language (Helix) and compiler (helixc) targeting x86-64 + NVIDIA PTX directly. The language is designed for AI to read and write; an AI written in Helix runs on the Helix runtime; that AI eventually rewrites and extends itself under verifier gates.
+Kovostov is the first flagship artificial-general-intelligence system built layer-by-layer from raw binary, with every layer auditable. The bootstrap chain produces Helix and `helixc`, a self-hosted language/compiler stack targeting x86-64 + NVIDIA PTX directly.
+
+Helix itself is broader than Kovostov. Its purpose is to become a dominant open language for AGI development and for any science, medicine, engineering, mathematics, or industrial system that benefits from auditable computation, explicit provenance, and aggressive uncertainty reduction. The language is designed for AI to read and write; AI systems written in Helix run on the Helix runtime; those systems eventually rewrite and extend themselves under verifier gates.
 
 ## Stack identity
 
 | Component | Name | Purpose |
 |---|---|---|
-| System / AI | **Kovostov** | the AGI-aspirational artifact |
-| Language | **Helix** (`.hx`) | typed AI-focused language |
+| System / AI | **Kovostov** | first flagship AGI-aspirational artifact built on Helix |
+| Language | **Helix** (`.hx`) | typed AGI and high-certainty computing language |
 | Compiler | **`helixc`** | Helix → x86-64 + PTX |
 | Runtime | **`helixrt`** | loads compiled kernels, manages devices |
 | Bootstrap chain | hex0 → hex1 → M0 → M1 → M2 → C-subset → helixc-bootstrap → helixc (self-hosted) | stage0 lineage |

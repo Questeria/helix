@@ -4,7 +4,11 @@
 
 **User directive (2026-05-11)**: "Anything that should be in Helix or is better in Helix do it for Helix compilation. Also do research on what other features like these we should add for the final Helix."
 
+**Purpose update (2026-05-13)**: Helix is not limited to Kovostov. Kovostov is the first flagship system built on Helix; Helix itself should become a dominant open language for AGI development and for high-certainty systems across science, medicine, genomics, physics, mathematics, robotics, climate, energy, infrastructure, education, and any future field where auditable computation can reduce uncertainty for humanity.
+
 This document captures features that **must** be added at the Helix language / compiler level (cannot be expressed as a library on top), plus a research catalog of features beyond the Locus-spec that should be considered for the final Helix.
+
+The final product should be ambitious: not merely a better Python or Rust for AI, but a language where uncertainty, evidence, provenance, proof obligations, resource limits, sensor trust, and self-modification safety are first-class. Helix should make it harder for powerful systems to silently guess, silently corrupt, silently overclaim, or silently act outside their verified authority.
 
 ---
 
@@ -16,7 +20,16 @@ Rust's precedent: `core` (the unsafe-allowed primitives) → `std` (written in R
 
 - **Layer 0 — Helix-core (compiler-built-in)**: types/effects/runtime model that can't be a library
 - **Layer 1 — Helix-std (in Helix-itself)**: compositional types built on Layer 0 primitives
-- **Layer 2 — Helix programs / domain SDKs**: application logic
+- **Layer 2 — Helix programs / domain SDKs**: application logic for AGI, science, medicine, engineering, education, and industry
+
+### Civilization-scale product goals
+
+- **Uncertainty as a typed value**: confidence, probability, intervals, evidence quality, and out-of-distribution status should propagate through programs instead of being comments or dashboard text.
+- **Proof-carrying computation**: critical functions should carry machine-checkable obligations and certificates where practical, especially in medicine, infrastructure, robotics, and scientific claims.
+- **Causal and scientific reasoning**: support experiments, interventions, counterfactuals, units, dimensions, and provenance so research code can distinguish correlation, causation, assumption, and measurement.
+- **Reproducible discovery**: binaries, datasets, model weights, transformations, and conclusions should be traceable and rebuildable.
+- **Safe self-improvement**: reflection and code modification must stay verifier-gated, staged, reviewable, and reversible.
+- **Human benefit as a design constraint**: features should be justified by the human problem they help solve, not by novelty alone.
 
 ---
 
