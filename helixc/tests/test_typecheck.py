@@ -779,6 +779,149 @@ def test_stage31_refined_pointer_cannot_weaken_to_raw_pointer():
                for e in errs), errs
 
 
+def test_unary_address_of_types_as_reference():
+    src = """
+    fn take(r: &i32) -> i32 { 0 }
+    fn main() -> i32 {
+        let x: i32 = 7;
+        take(&x)
+    }
+    """
+    errs = check(src)
+    assert any("operator '&' is type-known but not lowerable yet" in e
+               for e in errs), errs
+    assert not any("arg 'r' expects &i32, got i32" in e for e in errs), errs
+
+
+def test_unary_mut_address_of_types_as_mut_reference():
+    src = """
+    fn take(r: &mut i32) -> i32 { 0 }
+    fn main() -> i32 {
+        let mut x: i32 = 7;
+        take(&mut x)
+    }
+    """
+    errs = check(src)
+    assert any("operator '&mut' is type-known but not lowerable yet" in e
+               for e in errs), errs
+    assert not any("immutable binding" in e for e in errs), errs
+    assert not any("arg 'r' expects &mut i32, got i32" in e
+                   for e in errs), errs
+
+
+def test_unary_mut_address_of_requires_mutable_binding():
+    src = """
+    fn take(r: &mut i32) -> i32 { 0 }
+    fn main() -> i32 {
+        let x: i32 = 7;
+        take(&mut x)
+    }
+    """
+    errs = check(src)
+    assert any("cannot take mutable reference to immutable binding 'x'" in e
+               for e in errs), errs
+
+
+def test_unary_address_of_requires_named_binding():
+    src = """
+    fn take(r: &i32) -> i32 { 0 }
+    fn main() -> i32 {
+        take(&(1 + 2))
+    }
+    """
+    errs = check(src)
+    assert any("operator '&' requires an addressable named binding" in e
+               for e in errs), errs
+
+
+def test_unary_address_of_requires_local_binding_not_function():
+    src = """
+    fn helper() -> i32 { 1 }
+    fn take(r: &fn() -> i32) -> i32 { 0 }
+    fn main() -> i32 {
+        take(&helper)
+    }
+    """
+    errs = check(src)
+    assert any("operator '&' requires a local binding; 'helper' is not "
+               "addressable" in e for e in errs), errs
+
+
+def test_unary_mut_address_of_rejects_const_symbol():
+    src = """
+    const C: i32 = 1;
+    fn take(r: &mut i32) -> i32 { 0 }
+    fn main() -> i32 {
+        take(&mut C)
+    }
+    """
+    errs = check(src)
+    assert any("operator '&mut' requires a local binding; 'C' is not "
+               "addressable" in e for e in errs), errs
+
+
+def test_unary_deref_inside_unsafe_types_as_pointee():
+    src = """
+    fn main() -> i32 {
+        let p: *const i32 = unsafe { 0 as *const i32 };
+        let x: i32 = unsafe { *p };
+        x
+    }
+    """
+    errs = check(src)
+    assert any("raw-pointer dereference is type-known but not lowerable yet"
+               in e for e in errs), errs
+    assert not any("declared i32 but value is *const i32" in e
+                   for e in errs), errs
+
+
+def test_unary_deref_outside_unsafe_traps_28601():
+    src = """
+    fn main() -> i32 {
+        let p: *const i32 = unsafe { 0 as *const i32 };
+        *p
+    }
+    """
+    errs = check(src)
+    assert any("28601" in e for e in errs), errs
+
+
+def test_unary_deref_requires_pointer_or_reference_operand():
+    src = """
+    fn main() -> i32 {
+        let x: i32 = 7;
+        *x
+    }
+    """
+    errs = check(src)
+    assert any("operator '*' expects pointer or reference operand" in e
+               for e in errs), errs
+
+
+def test_unary_generic_address_of_is_not_false_clean():
+    src = """
+    fn f[T](x: T) -> i32 {
+        let r = &x;
+        0
+    }
+    """
+    errs = check(src)
+    assert any("operator '&' is type-known but not lowerable yet" in e
+               for e in errs), errs
+
+
+def test_unary_generic_deref_is_not_false_clean():
+    src = """
+    fn f[T](x: T) -> i32 {
+        unsafe { *x };
+        0
+    }
+    """
+    errs = check(src)
+    assert any("operator '*' cannot dereference unresolved operand type T" in e
+               for e in errs), errs
+
+
 def test_stage31_refined_function_array_cannot_reannotate_to_raw_array():
     src = """
     type Probability = f64 where 0.0 <= self <= 1.0;

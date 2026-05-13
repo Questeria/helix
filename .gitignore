@@ -55,3 +55,5 @@ desktop.ini
 *.log
 /runs/
 /.stage31-logs/
+/.stage31-bin/
+/.stage31-venv/

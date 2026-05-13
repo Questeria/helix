@@ -1769,7 +1769,21 @@ class Lowerer:
                 zero = self.builder.const_int(0)
                 return self.builder.emit(tir.OpKind.CMP_EQ, inner, zero,
                                          result_ty=tir.TIRScalar("bool"))
-            return inner
+            if expr.op in ("&", "&mut"):
+                raise NotImplementedError(
+                    f"unary {expr.op} address-of lowering is not implemented "
+                    "yet; check-only typing is available, but compiled "
+                    "reference storage needs a real IR operation"
+                )
+            if expr.op == "*":
+                raise NotImplementedError(
+                    "unary * dereference lowering is not implemented yet; "
+                    "check-only typing is available, but compiled pointer "
+                    "loads need a real IR operation"
+                )
+            raise NotImplementedError(
+                f"unsupported unary operator {expr.op!r} reached lowering"
+            )
         if isinstance(expr, A.Call):
             # Stage 16.5: "literal".as_ptr() — emit STR_PTR op that resolves
             # to a `lea rax, [rip + sym]` of the literal's bytes. The result

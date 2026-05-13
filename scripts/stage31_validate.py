@@ -22,6 +22,30 @@ import time
 
 ROOT = Path(__file__).resolve().parents[1]
 LOG_DIR = ROOT / ".stage31-logs"
+BIN_DIR = ROOT / ".stage31-bin"
+
+
+def validation_env(extra: dict[str, str] | None = None) -> dict[str, str]:
+    env = os.environ.copy()
+    if os.environ.get("WSL_DISTRO_NAME"):
+        BIN_DIR.mkdir(exist_ok=True)
+        shim = BIN_DIR / "wsl"
+        shim.write_text(
+            "#!/usr/bin/env bash\n"
+            "if [[ \"${1:-}\" == \"--\" || \"${1:-}\" == \"-e\" ]]; then\n"
+            "    shift\n"
+            "fi\n"
+            "exec \"$@\"\n",
+            encoding="utf-8",
+        )
+        shim.chmod(0o755)
+        env["PATH"] = (
+            f"{BIN_DIR}:/usr/local/sbin:/usr/local/bin:"
+            "/usr/sbin:/usr/bin:/sbin:/bin"
+        )
+    if extra:
+        env.update(extra)
+    return env
 
 
 def run_logged(name: str, cmd: list[str], *, env: dict[str, str] | None = None) -> int:
@@ -90,10 +114,12 @@ def quick(py: str) -> int:
             "helixc/tests/test_cli.py::test_o2_invokes_cse_and_dce",
             "helixc/tests/test_cli.py::test_o3_runs_at_least_o2_passes",
         ],
+        env=validation_env(),
     )
 
 
 def full(py: str, shards: int) -> int:
+    env = validation_env()
     jobs: list[tuple[str, list[str], dict[str, str] | None]] = [
         (
             "pytest-no-codegen",
@@ -107,7 +133,7 @@ def full(py: str, shards: int) -> int:
                 "helixc/tests",
                 "--ignore=helixc/tests/test_codegen.py",
             ],
-            None,
+            env,
         )
     ]
     for index in range(shards):
@@ -123,7 +149,7 @@ def full(py: str, shards: int) -> int:
                     str(index),
                     "helixc/tests/test_codegen.py",
                 ],
-                None,
+                env,
             )
         )
     return run_parallel(jobs)
@@ -138,14 +164,17 @@ def snapshot_smoke(py: str) -> int:
             file=sys.stderr,
         )
         return 1
-    scratch = Path("C:/Projects/Helix-Scratch")
+    scratch = (Path("/mnt/c/Projects/Helix-Scratch")
+               if os.environ.get("WSL_DISTRO_NAME")
+               else Path("C:/Projects/Helix-Scratch"))
     scratch.mkdir(parents=True, exist_ok=True)
     src = scratch / "stage31_validate_hello.hx"
     out = scratch / "stage31_validate_hello.bin"
     src.write_text("fn main() -> i32 { 42 }\n", encoding="utf-8")
-    env = os.environ.copy()
-    env["PYTHONDONTWRITEBYTECODE"] = "1"
-    env["PYTHONPATH"] = str(snapshot)
+    env = validation_env({
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "PYTHONPATH": str(snapshot),
+    })
     rc = run_logged(
         "snapshot-check",
         [py, "-m", "helixc.check", "--check-only", "--strict", str(src)],
@@ -167,17 +196,15 @@ def snapshot_smoke(py: str) -> int:
     )
     if rc:
         return rc
-    run = subprocess.run(
-        [
-            "wsl",
-            "--",
-            "bash",
-            "-lc",
-            "chmod +x /mnt/c/Projects/Helix-Scratch/stage31_validate_hello.bin "
-            "&& /mnt/c/Projects/Helix-Scratch/stage31_validate_hello.bin",
-        ],
-        cwd=str(ROOT),
+    run_script = (
+        "chmod +x /mnt/c/Projects/Helix-Scratch/stage31_validate_hello.bin "
+        "&& /mnt/c/Projects/Helix-Scratch/stage31_validate_hello.bin"
     )
+    if os.environ.get("WSL_DISTRO_NAME"):
+        run_cmd = ["bash", "-lc", run_script]
+    else:
+        run_cmd = ["wsl", "--", "bash", "-lc", run_script]
+    run = subprocess.run(run_cmd, cwd=str(ROOT))
     print(f"snapshot-run: rc={run.returncode}")
     return 0 if run.returncode == 42 else 1
 
@@ -190,7 +217,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         default="quick",
         help="quick runs recent regressions; full runs the broad suite",
     )
-    parser.add_argument("--shards", type=int, default=2)
+    parser.add_argument("--shards", type=int, default=4)
     parser.add_argument("--skip-snapshot", action="store_true")
     return parser.parse_args(argv)
 

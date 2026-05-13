@@ -1945,7 +1945,92 @@ class TypeChecker:
                             expr.span,
                         ))
                 return TyPrim("bool")
-            return inner
+            if expr.op in ("&", "&mut"):
+                # Stage 31 safety hardening: address-of has always parsed,
+                # but previously fell through as the operand type. Keep the
+                # type surface honest while emitting a diagnostic until real
+                # reference storage/address semantics land in lowering.
+                if not isinstance(expr.operand, A.Name):
+                    self.errors.append(TypeError_(
+                        f"operator {expr.op!r} requires an addressable "
+                        "named binding in Stage 31",
+                        expr.span,
+                        hint="bind the value with `let` before taking a "
+                             "reference",
+                    ))
+                elif scope.lookup(expr.operand.name) is None:
+                    self.errors.append(TypeError_(
+                        f"operator {expr.op!r} requires a local binding; "
+                        f"{expr.operand.name!r} is not addressable in "
+                        "Stage 31",
+                        expr.span,
+                        hint="only local `let` bindings have reference "
+                             "storage in this stage",
+                    ))
+                elif (expr.op == "&mut"
+                      and not scope.lookup_mutable(expr.operand.name)):
+                    self.errors.append(TypeError_(
+                        f"cannot take mutable reference to immutable binding "
+                        f"{expr.operand.name!r}",
+                        expr.span,
+                        hint="declare the binding with `let mut`",
+                    ))
+                else:
+                    self.errors.append(TypeError_(
+                        f"operator {expr.op!r} is type-known but not "
+                        "lowerable yet in Stage 31",
+                        expr.span,
+                        hint="compiled reference storage needs a real IR "
+                             "operation before this can pass check-only",
+                    ))
+                return TyRef(inner=inner, is_mut=(expr.op == "&mut"))
+            if expr.op == "*":
+                if isinstance(inner, TyPtr):
+                    if self._in_unsafe_depth == 0:
+                        self.errors.append(TypeError_(
+                            "raw-pointer dereference outside unsafe block "
+                            "(trap 28601)",
+                            expr.span,
+                            hint="wrap the dereference in `unsafe { ... }`",
+                        ))
+                    else:
+                        self.errors.append(TypeError_(
+                            "raw-pointer dereference is type-known but not "
+                            "lowerable yet in Stage 31",
+                            expr.span,
+                            hint="compiled pointer loads need a real IR "
+                                 "operation before this can pass check-only",
+                    ))
+                    return inner.inner
+                if isinstance(inner, TyRef):
+                    self.errors.append(TypeError_(
+                        "reference dereference is type-known but not "
+                        "lowerable yet in Stage 31",
+                        expr.span,
+                        hint="compiled reference loads need a real IR "
+                             "operation before this can pass check-only",
+                    ))
+                    return inner.inner
+                if isinstance(inner, (TyUnknown, TyVar, TySize)):
+                    self.errors.append(TypeError_(
+                        f"operator '*' cannot dereference unresolved "
+                        f"operand type {self._fmt(inner)} in Stage 31",
+                        expr.span,
+                        hint="use an explicit pointer or reference type once "
+                             "deref lowering exists",
+                    ))
+                    return TyUnknown(hint="deref")
+                self.errors.append(TypeError_(
+                    f"operator '*' expects pointer or reference operand, "
+                    f"got {self._fmt(inner)}",
+                    expr.span,
+                ))
+                return TyUnknown(hint="deref")
+            self.errors.append(TypeError_(
+                f"unsupported unary operator {expr.op!r}",
+                expr.span,
+            ))
+            return TyUnknown(hint=f"unary {expr.op}")
         if isinstance(expr, A.Binary):
             l = self._check_expr(expr.left, scope)
             r = self._check_expr(expr.right, scope)

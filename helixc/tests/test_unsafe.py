@@ -169,22 +169,34 @@ def test_unsafe_block_lowers_as_block():
     )
 
 
-def test_unsafe_block_with_deref_lowers():
-    """A2: `unsafe { *p }` lowers without errors (pre-fix it would
-    fall into the generic dispatch and produce an unexpected op-kind)."""
+def test_unsafe_block_with_deref_lowering_fails_closed():
+    """`unsafe { *p }` typechecks, but lowering must not pretend that
+    dereference is a no-op until real pointer-load IR exists."""
     from helixc.ir.lower_ast import lower
     src = """
 fn main() -> i32 {
-    let p: *const i32 = 0 as *const i32;
+    let p: *const i32 = unsafe { 0 as *const i32 };
     unsafe { *p }
 }
 """
     prog = parse(src)
-    # Lowering should succeed without raising — the IR may not be
-    # *runnable* (0 as *const i32 is a null ptr), but the codegen path
-    # must accept the syntactic form.
-    mod = lower(prog)
-    assert "main" in mod.functions
+    with pytest.raises(NotImplementedError, match="dereference lowering"):
+        lower(prog)
+
+
+def test_address_of_lowering_fails_closed():
+    """`&x` has a check-only reference type, but lowering is blocked
+    until references have explicit storage/address semantics."""
+    from helixc.ir.lower_ast import lower
+    src = """
+fn main() -> i32 {
+    let x: i32 = 7;
+    &x
+}
+"""
+    prog = parse(src)
+    with pytest.raises(NotImplementedError, match="address-of lowering"):
+        lower(prog)
 
 
 def test_cli_check_unsafe_ops_wired(capsys, tmp_path):
@@ -192,8 +204,9 @@ def test_cli_check_unsafe_ops_wired(capsys, tmp_path):
 
     Audit 28.8 B3: the typecheck now also blocks `0 as *const i32`
     outside unsafe with trap 28603 — so we wrap the cast in an
-    unsafe block to keep this test focused on the unsafe_pass wiring
-    (28601 on raw deref outside unsafe)."""
+    unsafe block to keep this test focused on trap 28601 for raw
+    deref outside unsafe. Stage 31 unary typing can now surface the
+    same trap before the separate unsafe_pass banner is printed."""
     from helixc.check import main
     # Wrap the cast in unsafe so typecheck passes; the bare `*p;` is
     # what we want check_unsafe_ops to flag with 28601.
@@ -211,12 +224,12 @@ fn main() -> i32 { helper() }
     rc = main([p, "--check-only"])
     out = capsys.readouterr().out
     assert rc == 1, f"expected build to fail; rc={rc}; out={out!r}"
-    assert "unsafe:" in out
     assert "28601" in out
 
 
-def test_cli_unsafe_block_passes(capsys, tmp_path):
-    """A2: `unsafe { *p; 0 }` (inside unsafe) passes check-only cleanly.
+def test_cli_unsafe_block_deref_fails_until_pointer_load_ir(capsys, tmp_path):
+    """A2: `unsafe { *p; 0 }` clears the unsafe-boundary gate, but
+    check-only still fails until pointer-load IR exists.
 
     Audit 28.8 B3: also wrap the cast so typecheck doesn't fire 28603."""
     from helixc.check import main
@@ -232,8 +245,9 @@ fn main() -> i32 { helper() }
         f.write(src)
     rc = main([p, "--check-only"])
     out = capsys.readouterr().out
-    assert rc == 0, f"expected clean exit; rc={rc}; out={out!r}"
+    assert rc == 1, f"expected unsupported deref failure; rc={rc}; out={out!r}"
     assert "unsafe:" not in out
+    assert "raw-pointer dereference is type-known but not lowerable yet" in out
 
 
 # ----------------------------------------------------------------------

@@ -3,79 +3,67 @@
 set -u
 cd "$(dirname "$0")/.."
 
-TOTAL_PASS=0
-TOTAL_FAIL=0
-TOTAL_SKIP=0
+SHARDS="${HELIX_TEST_SHARDS:-4}"
 
-for test in helixc/tests/test_*.py; do
-    name=$(basename "$test" .py)
-    output=$(python "$test" 2>&1)
-    last_line=$(echo "$output" | tail -1)
-    if [[ "$last_line" =~ ^([0-9]+)\ passed,\ ([0-9]+)\ failed(,\ ([0-9]+)\ skipped)?$ ]]; then
-        # Legacy runner format: "N passed, N failed[, N skipped]"
-        pass="${BASH_REMATCH[1]}"
-        fail="${BASH_REMATCH[2]}"
-        skip="${BASH_REMATCH[4]:-0}"
-        TOTAL_PASS=$((TOTAL_PASS + pass))
-        TOTAL_FAIL=$((TOTAL_FAIL + fail))
-        TOTAL_SKIP=$((TOTAL_SKIP + skip))
-        suffix=""
-        if [[ "$skip" -gt 0 ]]; then
-            suffix=", $skip skipped"
-        fi
-        if [[ "$fail" -gt 0 ]]; then
-            echo "  FAIL  $name: $pass passed, $fail failed$suffix"
-        else
-            echo "  ok    $name: $pass passed$suffix"
-        fi
-    elif [[ "$last_line" =~ ^=+\ ([0-9]+)\ passed(,\ ([0-9]+)\ skipped)?(,\ ([0-9]+)\ failed)?\ in\ [0-9.]+s\ =+$ ]]; then
-        # pytest summary: "= N passed[, N skipped][, N failed] in X.XXs ="
-        pass="${BASH_REMATCH[1]}"
-        skip="${BASH_REMATCH[3]:-0}"
-        fail="${BASH_REMATCH[5]:-0}"
-        TOTAL_PASS=$((TOTAL_PASS + pass))
-        TOTAL_FAIL=$((TOTAL_FAIL + fail))
-        TOTAL_SKIP=$((TOTAL_SKIP + skip))
-        suffix=""
-        if [[ "$skip" -gt 0 ]]; then
-            suffix=", $skip skipped"
-        fi
-        if [[ "$fail" -gt 0 ]]; then
-            echo "  FAIL  $name: $pass passed, $fail failed$suffix"
-        else
-            echo "  ok    $name: $pass passed$suffix"
-        fi
-    elif [[ "$last_line" =~ ^=+\ ([0-9]+)\ failed,\ ([0-9]+)\ passed(,\ ([0-9]+)\ skipped)?\ in\ [0-9.]+s\ =+$ ]]; then
-        # pytest summary with failures listed first.
-        fail="${BASH_REMATCH[1]}"
-        pass="${BASH_REMATCH[2]}"
-        skip="${BASH_REMATCH[4]:-0}"
-        TOTAL_PASS=$((TOTAL_PASS + pass))
-        TOTAL_FAIL=$((TOTAL_FAIL + fail))
-        TOTAL_SKIP=$((TOTAL_SKIP + skip))
-        suffix=""
-        if [[ "$skip" -gt 0 ]]; then
-            suffix=", $skip skipped"
-        fi
-        echo "  FAIL  $name: $pass passed, $fail failed$suffix"
-    else
-        echo "  ?     $name: unrecognized output: $last_line"
-        TOTAL_FAIL=$((TOTAL_FAIL + 1))
+ensure_python_with_pytest() {
+    local candidate="${PYTHON:-python}"
+    if "$candidate" -c "import pytest" >/dev/null 2>&1; then
+        PYTHON_BIN="$candidate"
+        return 0
     fi
-done
 
-# Also run hex0 tests
+    local venv_py=".stage31-venv/bin/python"
+    if [[ ! -x "$venv_py" ]]; then
+        echo "python pytest unavailable; creating .stage31-venv"
+        if ! "$candidate" -m venv .stage31-venv; then
+            echo "failed to create .stage31-venv with $candidate"
+            return 1
+        fi
+    fi
+    if ! "$venv_py" -c "import pytest" >/dev/null 2>&1; then
+        echo "installing pytest into .stage31-venv"
+        if ! "$venv_py" -m pip install -q pytest; then
+            echo "failed to install pytest into .stage31-venv"
+            return 1
+        fi
+    fi
+    PYTHON_BIN="$venv_py"
+    return 0
+}
+
+echo "pytest (stage31 sharded gate):"
+if ! ensure_python_with_pytest; then
+    PYTEST_RC=1
+elif "$PYTHON_BIN" scripts/stage31_validate.py \
+        --mode full \
+        --shards "$SHARDS"; then
+    PYTEST_RC=0
+else
+    PYTEST_RC=$?
+fi
+
 echo
 echo "stage0/hex0:"
-if wsl -- bash -c "cd /mnt/c/Projects/Kovostov-Native/stage0/hex0 && bash run_tests.sh 2>&1 | tail -3"; then
-    :
+if [[ -f stage0/hex0/run_tests.sh ]]; then
+    if (cd stage0/hex0 && bash run_tests.sh); then
+        HEX0_RC=0
+    else
+        HEX0_RC=$?
+    fi
+else
+    echo "stage0/hex0/run_tests.sh not found"
+    HEX0_RC=1
 fi
 
 echo
 echo "============================="
-TOTAL_LINE="TOTAL: $TOTAL_PASS passed, $TOTAL_FAIL failed"
-if [[ "$TOTAL_SKIP" -gt 0 ]]; then
-    TOTAL_LINE="$TOTAL_LINE, $TOTAL_SKIP skipped"
+echo "pytest gate rc: $PYTEST_RC"
+echo "stage0/hex0 rc: $HEX0_RC"
+
+if [[ "$PYTEST_RC" -eq 0 && "$HEX0_RC" -eq 0 ]]; then
+    echo "TOTAL: all gates passed"
+    exit 0
 fi
-echo "$TOTAL_LINE"
-exit $([[ "$TOTAL_FAIL" -eq 0 ]] && echo 0 || echo 1)
+
+echo "TOTAL: one or more gates failed"
+exit 1

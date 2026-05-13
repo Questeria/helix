@@ -677,6 +677,7 @@ def test_stdlib_merges_struct_decls(tmp_path, monkeypatch):
     Simulate a stdlib drop-in that exports a struct + an impl block,
     and verify both survive the merge."""
     import os as _os
+    import shutil
     import helixc.frontend.parser as _p
 
     # Build a fake stdlib in tmp_path.
@@ -701,7 +702,7 @@ def test_stdlib_merges_struct_decls(tmp_path, monkeypatch):
         "stdlib",
     )
     real_fake = _os.path.join(real_stdlib, "fake_pair.hx")
-    _os.rename(str(fake_file), real_fake)
+    shutil.move(str(fake_file), real_fake)
     try:
         prog = _p.parse("fn main() -> i32 { 0 }\n", include_stdlib=True)
     finally:
@@ -726,6 +727,7 @@ def test_stdlib_user_wins_on_conflict(tmp_path, monkeypatch):
     silently — same as pre-A8 behaviour for FnDecls, now applied
     uniformly across kinds)."""
     import os as _os
+    import shutil
     import helixc.frontend.parser as _p
 
     fake_file = tmp_path / "fake_dup.hx"
@@ -735,7 +737,7 @@ def test_stdlib_user_wins_on_conflict(tmp_path, monkeypatch):
         "stdlib",
     )
     real_fake = _os.path.join(real_stdlib, "fake_dup.hx")
-    _os.rename(str(fake_file), real_fake)
+    shutil.move(str(fake_file), real_fake)
     monkeypatch.setattr(_p, "STDLIB_FILES", ["fake_dup.hx"])
     try:
         prog = _p.parse(

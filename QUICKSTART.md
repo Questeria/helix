@@ -135,24 +135,24 @@ bash scripts/run_all_tests.sh
 You should see something like:
 
 ```
-  ok    test_codegen: 52 passed
-  ok    test_const_fold: 9 passed
-  ok    test_dce: 6 passed
-  ok    test_ir: 13 passed
-  ok    test_lexer: 42 passed
-  ok    test_parser: 46 passed
-  ok    test_presburger: 24 passed
-  ok    test_ptx: 8 passed
-  ok    test_tile_ir: 7 passed
-  ok    test_typecheck: 43 passed
-  ok    test_autodiff: 13 passed
+pytest (stage31 sharded gate):
+pytest-no-codegen: rc=0 log=.stage31-logs/pytest-no-codegen.log
+pytest-codegen-shard-1-of-4: rc=0 log=.stage31-logs/pytest-codegen-shard-1-of-4.log
+pytest-codegen-shard-2-of-4: rc=0 log=.stage31-logs/pytest-codegen-shard-2-of-4.log
+pytest-codegen-shard-3-of-4: rc=0 log=.stage31-logs/pytest-codegen-shard-3-of-4.log
+pytest-codegen-shard-4-of-4: rc=0 log=.stage31-logs/pytest-codegen-shard-4-of-4.log
+snapshot-check: rc=0 log=.stage31-logs/snapshot-check.log
+snapshot-compile: rc=0 log=.stage31-logs/snapshot-compile.log
+snapshot-run: rc=42
 
 stage0/hex0:
 PASS 03-empty
 Results: 3 passed, 0 failed
 
 =============================
-TOTAL: 263 passed, 0 failed
+pytest gate rc: 0
+stage0/hex0 rc: 0
+TOTAL: all gates passed
 ```
 
 ## Project layout

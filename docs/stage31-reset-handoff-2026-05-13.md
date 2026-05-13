@@ -98,6 +98,11 @@ New scripts:
 - `scripts\pytest_shard.py`: stable hash-based pytest sharding.
 - `scripts\stage31_validate.py`: quick/full validation runner. Full mode runs
   non-codegen plus sharded `test_codegen.py` in parallel, then snapshot smoke.
+- `scripts\run_all_tests.sh`: legacy "run everything" entry point now delegates
+  pytest coverage and snapshot smoke to `stage31_validate.py --mode full --shards 4`,
+  bootstraps a local `.stage31-venv` if Bash's Python lacks pytest, uses a
+  `.stage31-bin/wsl` compatibility shim when already inside WSL, then still
+  runs the `stage0/hex0` bootstrap-floor gate directly from the current Bash.
 
 ## Do Not Forget
 
