@@ -2076,6 +2076,15 @@ class Lowerer:
                         "unsupported tensor/tile indexing reached lowering; "
                         "run typecheck first or add matching TIR lowering"
                     )
+            if isinstance(expr.target, A.Index) and not isinstance(
+                    expr.target.callee, A.Name):
+                base_v = self._lower_expr(expr.target.callee)
+                if base_v is not None and isinstance(
+                        base_v.ty, (tir.TIRTensorTy, tir.TIRTileTy)):
+                    raise TypeError(
+                        "unsupported tensor/tile indexing reached lowering; "
+                        "run typecheck first or add matching TIR lowering"
+                    )
             # Array element assignment: arr[i] = e (or compound)
             if isinstance(expr.target, A.Index) and isinstance(expr.target.callee, A.Name):
                 arr_name = expr.target.callee.name
@@ -2198,7 +2207,13 @@ class Lowerer:
                         and expr.indices[0].value == 0):
                     return scalar_v
             # Fallback: opaque
-            self._lower_expr(expr.callee)
+            callee_v = self._lower_expr(expr.callee)
+            if callee_v is not None and isinstance(
+                    callee_v.ty, (tir.TIRTensorTy, tir.TIRTileTy)):
+                raise TypeError(
+                    "unsupported tensor/tile indexing reached lowering; "
+                    "run typecheck first or add matching TIR lowering"
+                )
             for i in expr.indices:
                 self._lower_expr(i)
             return None

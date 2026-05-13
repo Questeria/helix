@@ -355,6 +355,7 @@ PRIMITIVES = {
 class Scope:
     parent: Optional["Scope"] = None
     locals: dict[str, Type] = field(default_factory=dict)
+    mutables: set[str] = field(default_factory=set)
 
     def lookup(self, name: str) -> Optional[Type]:
         if name in self.locals:
@@ -363,8 +364,19 @@ class Scope:
             return self.parent.lookup(name)
         return None
 
-    def define(self, name: str, ty: Type) -> None:
+    def lookup_mutable(self, name: str) -> bool:
+        if name in self.locals:
+            return name in self.mutables
+        if self.parent is not None:
+            return self.parent.lookup_mutable(name)
+        return False
+
+    def define(self, name: str, ty: Type, is_mut: bool = False) -> None:
         self.locals[name] = ty
+        if is_mut:
+            self.mutables.add(name)
+        else:
+            self.mutables.discard(name)
 
 
 @dataclass
@@ -1235,9 +1247,9 @@ class TypeChecker:
                         and isinstance(stmt.value, A.IntLit)
                         and isinstance(declared, TyPrim)):
                     self._check_int_lit_fits(stmt.value, declared)
-                scope.define(stmt.name, declared)
+                scope.define(stmt.name, declared, is_mut=stmt.is_mut)
             else:
-                scope.define(stmt.name, value_ty)
+                scope.define(stmt.name, value_ty, is_mut=stmt.is_mut)
             return
         if isinstance(stmt, A.ExprStmt):
             self._check_expr(stmt.expr, scope)
@@ -1343,6 +1355,34 @@ class TypeChecker:
         # (Recognized by name in Call expressions below.)
         if isinstance(expr, A.Unary):
             inner = self._check_expr(expr.operand, scope)
+            if expr.op == "-":
+                if not isinstance(inner, (TyUnknown, TyVar, TySize)) \
+                        and not (self._is_int_scalar(inner)
+                                 or self._is_float_scalar(inner)):
+                    self.errors.append(TypeError_(
+                        f"operator '-' does not support operand type "
+                        f"{self._fmt(inner)}",
+                        expr.span,
+                    ))
+                return inner
+            if expr.op == "~":
+                if not isinstance(inner, (TyUnknown, TyVar, TySize)) \
+                        and not self._is_int_scalar(inner):
+                    self.errors.append(TypeError_(
+                        f"operator '~' does not support operand type "
+                        f"{self._fmt(inner)}",
+                        expr.span,
+                    ))
+                return inner
+            if expr.op == "!":
+                if not (isinstance(inner, TyPrim) and inner.name == "bool"):
+                    if not isinstance(inner, (TyUnknown, TyVar, TySize)):
+                        self.errors.append(TypeError_(
+                            f"operator '!' expects bool operand, got "
+                            f"{self._fmt(inner)}",
+                            expr.span,
+                        ))
+                return TyPrim("bool")
             return inner
         if isinstance(expr, A.Binary):
             l = self._check_expr(expr.left, scope)
@@ -1785,6 +1825,7 @@ class TypeChecker:
         if isinstance(expr, A.Assign):
             r = self._check_expr(expr.value, scope)
             target_ty = self._check_expr(expr.target, scope)
+            self._check_assignment_target(expr, scope)
             if expr.op != "=":
                 op = {
                     "+=": "+",
@@ -2271,6 +2312,33 @@ class TypeChecker:
 
     def _is_float_scalar(self, t: Type) -> bool:
         return isinstance(t, TyPrim) and t.name in self._NUMERIC_FLOAT_PRIMS
+
+    def _check_assignment_target(self, expr: A.Assign, scope: Scope) -> None:
+        target = expr.target
+        if isinstance(target, A.Name):
+            if scope.lookup(target.name) is not None \
+                    and not scope.lookup_mutable(target.name):
+                self.errors.append(TypeError_(
+                    f"cannot assign to immutable binding {target.name!r}",
+                    target.span,
+                    hint="declare the binding with `let mut`",
+                ))
+            return
+        if isinstance(target, A.Index):
+            if (expr.op != "="
+                    and isinstance(target.callee, A.Name)
+                    and target.callee.name in self._current_hbm_tile_indexables):
+                self.errors.append(TypeError_(
+                    "compound assignment to HBM tile indices is not "
+                    "supported; use load + arithmetic + store",
+                    expr.span,
+                ))
+            return
+        self.errors.append(TypeError_(
+            "invalid assignment target; expected a mutable variable or "
+            "index expression",
+            target.span,
+        ))
 
     def _check_wrapped_binary_operator_domain(self, left: Type, right: Type,
                                               op: str, span: A.Span) -> bool:

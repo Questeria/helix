@@ -264,6 +264,44 @@ def test_c117_wrapped_operator_domains_use_inner_scalar_rules():
                for e in errs3), errs3
 
 
+def test_c118_unary_operator_domains_checked():
+    assert check("fn f() -> bool { !true }") == []
+    assert check("fn f() -> i32 { ~1_i32 }") == []
+    assert check("fn f() -> f32 { -1.0_f32 }") == []
+
+    errs = check("fn f() -> bool { !1.0_f32 }")
+    assert any("operator '!' expects bool operand, got f32" in e
+               for e in errs), errs
+
+    errs2 = check("fn f() -> f32 { ~1.0_f32 }")
+    assert any("operator '~' does not support operand type f32" in e
+               for e in errs2), errs2
+
+    errs3 = check("fn f() -> bool { -true }")
+    assert any("operator '-' does not support operand type bool" in e
+               for e in errs3), errs3
+
+
+def test_c118_assignment_targets_must_be_assignable():
+    assert check("fn f() { let mut x: i32 = 1; x = 2; }") == []
+    assert check("fn f() { let xs = [0]; xs[0] = 1; }") == []
+
+    errs = check("fn f() { 1 = 2; }")
+    assert any("invalid assignment target" in e for e in errs), errs
+
+    errs2 = check("fn f() { let x: i32 = 1; x = 2; }")
+    assert any("cannot assign to immutable binding 'x'" in e
+               for e in errs2), errs2
+
+    errs3 = check("""
+    @kernel fn k(a: tile<f32, [256], HBM>) {
+        a[0] += 1.0_f32;
+    }
+    """)
+    assert any("compound assignment to HBM tile indices is not supported" in e
+               for e in errs3), errs3
+
+
 # ============================================================================
 # Compile-time shape checking via Presburger solver (Phase 3-iv)
 # ============================================================================

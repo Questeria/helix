@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 import os, sys
+import subprocess
+import tempfile
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 from helixc.frontend.parser import parse
@@ -12,6 +14,53 @@ from helixc.backend.ptx import emit_ptx
 
 def emit(src: str) -> str:
     return emit_ptx(lower_to_tile(lower(parse(src))))
+
+
+def test_c118_direct_ptx_cli_aborts_on_type_errors():
+    fd, path = tempfile.mkstemp(suffix=".hx", text=True)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write("@kernel fn k() { let mut b: bool = true; b += false; }\n")
+        proj_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        proc = subprocess.run(
+            [sys.executable, "-m", "helixc.backend.ptx", path],
+            cwd=proj_root,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+    finally:
+        if os.path.exists(path):
+            os.remove(path)
+    assert proc.returncode != 0, proc.stdout + proc.stderr
+    assert "operator '+' does not support operand type bool" in proc.stderr
+    assert "add.s32" not in proc.stdout
+
+
+def test_c118_hbm_tile_index_missing_ptx_register_fails_closed():
+    src = """
+    @kernel fn k(a: tile<f32, [256], HBM>, i: i64) {
+        let x = a[i];
+    }
+    """
+    fd, path = tempfile.mkstemp(suffix=".hx", text=True)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(src)
+        proj_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        proc = subprocess.run(
+            [sys.executable, "-m", "helixc.backend.ptx", path],
+            cwd=proj_root,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+    finally:
+        if os.path.exists(path):
+            os.remove(path)
+    assert proc.returncode != 0, proc.stdout + proc.stderr
+    assert "missing PTX register for HBM tile index" in proc.stderr
+    assert "mul.wide.s32" not in proc.stdout
 
 
 def test_module_header():

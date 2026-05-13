@@ -62,6 +62,34 @@ def test_c117_direct_lower_rejects_unsupported_tensor_tile_indexing():
         lower_src(src2)
 
 
+def test_c118_direct_lower_rejects_compound_tensor_index_base():
+    src = """
+    fn id(a: tensor<f32, [4, 4]>) -> tensor<f32, [4, 4]> { a }
+    fn g(a: tensor<f32, [4, 4]>) -> f32 { id(a)[0] }
+    """
+    with pytest.raises(TypeError, match="unsupported tensor/tile indexing"):
+        lower_src(src)
+
+    src2 = """
+    fn id(a: tensor<f32, [4, 4]>) -> tensor<f32, [4, 4]> { a }
+    fn f(a: tensor<f32, [4, 4]>) -> i32 {
+        let x = id(a)[0];
+        x
+    }
+    """
+    with pytest.raises(TypeError, match="unsupported tensor/tile indexing"):
+        lower_src(src2)
+
+    src3 = """
+    fn id(a: tensor<f32, [4, 4]>) -> tensor<f32, [4, 4]> { a }
+    fn f(a: tensor<f32, [4, 4]>) {
+        id(a)[0] = 1.0_f32;
+    }
+    """
+    with pytest.raises(TypeError, match="unsupported tensor/tile indexing"):
+        lower_src(src3)
+
+
 def test_constant_int():
     mod = lower_src("fn k() -> i32 { 42 }")
     fn = mod.functions["k"]

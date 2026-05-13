@@ -292,7 +292,12 @@ class PtxEmitter:
                 self._line(f"    // ERROR trap 97001: HBM tile {name!r} not in param map")
                 return
             param_idx, _dtype_in_map = slot
-            idx_reg = self.reg_map.get(op.operands[0].id, "%r0")
+            idx_reg = self.reg_map.get(op.operands[0].id)
+            if idx_reg is None:
+                raise RuntimeError(
+                    "missing PTX register for HBM tile index; "
+                    "only lowered index values are supported"
+                )
             base = self._new_reg("rd")    # raw param-space pointer
             gen = self._new_reg("rd")     # generic-space pointer (after cvta)
             off = self._new_reg("rd")     # byte offset (idx * sizeof)
@@ -316,8 +321,18 @@ class PtxEmitter:
                 self._line(f"    // ERROR trap 97001: HBM tile {name!r} not in param map")
                 return
             param_idx, _dtype_in_map = slot
-            idx_reg = self.reg_map.get(op.operands[0].id, "%r0")
-            val_reg = self.reg_map.get(op.operands[1].id, "%f0")
+            idx_reg = self.reg_map.get(op.operands[0].id)
+            if idx_reg is None:
+                raise RuntimeError(
+                    "missing PTX register for HBM tile index; "
+                    "only lowered index values are supported"
+                )
+            val_reg = self.reg_map.get(op.operands[1].id)
+            if val_reg is None:
+                raise RuntimeError(
+                    "missing PTX register for HBM tile store value; "
+                    "only lowered values are supported"
+                )
             base = self._new_reg("rd")
             gen = self._new_reg("rd")
             off = self._new_reg("rd")
@@ -385,6 +400,7 @@ def emit_ptx(tile_module: ti.TileModule, target: str = DEFAULT_TARGET) -> str:
 if __name__ == "__main__":
     import sys
     from ..frontend.parser import parse
+    from ..frontend.typecheck import typecheck
     from ..ir.lower_ast import lower
     from ..ir.tile_ir import lower_to_tile
 
@@ -394,6 +410,15 @@ if __name__ == "__main__":
         with open(sys.argv[1]) as f:
             src = f.read()
     prog = parse(src)
-    tir_mod = lower(prog)
-    tile_mod = lower_to_tile(tir_mod)
-    print(emit_ptx(tile_mod))
+    errs = typecheck(prog)
+    if errs:
+        for e in errs:
+            print(f"error: {e}", file=sys.stderr)
+        sys.exit(1)
+    try:
+        tir_mod = lower(prog)
+        tile_mod = lower_to_tile(tir_mod)
+        print(emit_ptx(tile_mod))
+    except Exception as e:
+        print(f"error: ptx: {e}", file=sys.stderr)
+        sys.exit(1)
