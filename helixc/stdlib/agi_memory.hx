@@ -23,6 +23,13 @@
 //
 // License: Apache 2.0
 
+// Foundational AGI-safe scalar refinements. These keep common uncertainty
+// and physical-measure constraints available by default instead of forcing
+// every Helix program to redefine them locally.
+type Confidence = f64 where 0.0 <= self <= 1.0;
+type Probability = f64 where 0.0 <= self <= 1.0;
+type DistanceMeters = f64 where self >= 0.0;
+
 @pure fn wm_capacity() -> i32 { 16 }
 
 fn wm_new() -> i32 {

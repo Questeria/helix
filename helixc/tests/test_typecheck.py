@@ -22,6 +22,12 @@ def check_after_flatten(src: str) -> list[str]:
     return [str(e) for e in errs]
 
 
+def check_with_stdlib(src: str) -> list[str]:
+    prog = parse(src, include_stdlib=True)
+    errs = typecheck(prog)
+    return [str(e) for e in errs]
+
+
 # ============================================================================
 # Should typecheck (no errors)
 # ============================================================================
@@ -161,6 +167,56 @@ def test_stage31_refinement_probability_confidence_constants_compile():
     }
     """
     assert check_after_flatten(src) == []
+
+
+def test_stage31_stdlib_agi_safe_scalar_refinements_compile_by_default():
+    src = """
+    fn f() {
+        let c: Confidence = 0.95_f64;
+        let p: Probability = 0.25_f64;
+        let d: DistanceMeters = 12.5_f64;
+    }
+    """
+    assert check_with_stdlib(src) == []
+
+
+def test_stage31_stdlib_confidence_refinement_constant_above_one_fails():
+    src = """
+    fn f() {
+        let c: Confidence = 1.01_f64;
+    }
+    """
+    errs = check_with_stdlib(src)
+    assert any("refinement Confidence violated" in e
+               and "1.01" in e
+               and "0.0 <= self <= 1.0" in e
+               and "31001" in e for e in errs), errs
+
+
+def test_stage31_stdlib_probability_refinement_constant_above_one_fails():
+    src = """
+    fn f() {
+        let p: Probability = 1.2_f64;
+    }
+    """
+    errs = check_with_stdlib(src)
+    assert any("refinement Probability violated" in e
+               and "1.2" in e
+               and "0.0 <= self <= 1.0" in e
+               and "31001" in e for e in errs), errs
+
+
+def test_stage31_stdlib_distance_meters_negative_constant_fails():
+    src = """
+    fn f() {
+        let d: DistanceMeters = -0.5_f64;
+    }
+    """
+    errs = check_with_stdlib(src)
+    assert any("refinement DistanceMeters violated" in e
+               and "-0.5" in e
+               and "self >= 0.0" in e
+               and "31001" in e for e in errs), errs
 
 
 def test_stage31_refinement_probability_constant_below_zero_fails():

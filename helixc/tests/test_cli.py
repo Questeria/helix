@@ -1012,6 +1012,75 @@ def test_stage31_valid_refinement_alias_erases_for_cli_ir(capsys, tmp_path):
     )
 
 
+def test_stage31_cli_default_stdlib_agi_safe_scalar_refinements(capsys, tmp_path):
+    src_path = str(tmp_path / "stdlib_agi_scalars.hx")
+    with open(src_path, "w") as f:
+        f.write(
+            "fn main() -> i32 {\n"
+            "    let c: Confidence = 0.95_f64;\n"
+            "    let p: Probability = 0.5_f64;\n"
+            "    let d: DistanceMeters = 12.0_f64;\n"
+            "    0\n"
+            "}\n"
+        )
+    rc = main([src_path, "--check-only"])
+    captured = capsys.readouterr()
+    assert rc == 0, captured.out + captured.err
+
+
+def test_stage31_cli_default_stdlib_confidence_violation(capsys, tmp_path):
+    src_path = str(tmp_path / "stdlib_bad_confidence.hx")
+    with open(src_path, "w") as f:
+        f.write(
+            "fn main() -> i32 {\n"
+            "    let c: Confidence = 1.2_f64;\n"
+            "    0\n"
+            "}\n"
+        )
+    rc = main([src_path, "--check-only"])
+    captured = capsys.readouterr()
+    out = captured.out + captured.err
+    assert rc == 1, out
+    assert "refinement Confidence violated" in out
+    assert "1.2" in out
+    assert "0.0 <= self <= 1.0" in out
+
+
+def test_stage31_cli_default_stdlib_probability_violation(capsys, tmp_path):
+    src_path = str(tmp_path / "stdlib_bad_probability.hx")
+    with open(src_path, "w") as f:
+        f.write(
+            "fn main() -> i32 {\n"
+            "    let p: Probability = 1.2_f64;\n"
+            "    0\n"
+            "}\n"
+        )
+    rc = main([src_path, "--check-only"])
+    captured = capsys.readouterr()
+    out = captured.out + captured.err
+    assert rc == 1, out
+    assert "refinement Probability violated" in out
+    assert "1.2" in out
+    assert "0.0 <= self <= 1.0" in out
+
+
+def test_stage31_cli_no_stdlib_requires_local_agi_scalar_aliases(capsys, tmp_path):
+    src_path = str(tmp_path / "stdlib_scalars_disabled.hx")
+    with open(src_path, "w") as f:
+        f.write(
+            "fn main() -> i32 {\n"
+            "    let c: Confidence = 0.95_f64;\n"
+            "    0\n"
+            "}\n"
+        )
+    rc = main([src_path, "--check-only", "--no-stdlib"])
+    captured = capsys.readouterr()
+    out = captured.out + captured.err
+    assert rc == 1, out
+    assert "Confidence" in out
+    assert "declare this type or import it before use" in out
+
+
 def test_stage31_cli_checks_module_local_refinement_alias(capsys, tmp_path):
     src_path = str(tmp_path / "mod_refinement.hx")
     with open(src_path, "w") as f:

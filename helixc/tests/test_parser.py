@@ -754,6 +754,35 @@ def test_stdlib_user_wins_on_conflict(tmp_path, monkeypatch):
     # User-defined version wins (its body returns 999, not 1).
 
 
+def test_stdlib_user_type_name_wins_over_alias_conflict():
+    """User nominal types must block same-named stdlib type aliases.
+
+    Without this, `struct Probability` could coexist with the default
+    `type Probability = ...`, and type resolution would silently choose
+    the alias first.
+    """
+    prog = parse(
+        "struct Probability { v: i32 }\n"
+        "enum Confidence { Exact }\n"
+        "fn main() -> i32 { 0 }\n",
+        include_stdlib=True,
+    )
+    probability_items = [
+        it for it in prog.items
+        if getattr(it, "name", None) == "Probability"
+        and isinstance(it, (ast.TypeAlias, ast.StructDecl, ast.EnumDecl))
+    ]
+    confidence_items = [
+        it for it in prog.items
+        if getattr(it, "name", None) == "Confidence"
+        and isinstance(it, (ast.TypeAlias, ast.StructDecl, ast.EnumDecl))
+    ]
+    assert len(probability_items) == 1
+    assert isinstance(probability_items[0], ast.StructDecl)
+    assert len(confidence_items) == 1
+    assert isinstance(confidence_items[0], ast.EnumDecl)
+
+
 def test_stdlib_missing_file_strict_env_raises(monkeypatch):
     """Audit 28.8 A8: with HELIXC_STDLIB_STRICT=1, a missing stdlib
     file raises FileNotFoundError instead of being silently skipped."""

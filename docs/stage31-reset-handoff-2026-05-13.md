@@ -104,6 +104,23 @@ New scripts:
   `.stage31-bin/wsl` compatibility shim when already inside WSL, then still
   runs the `stage0/hex0` bootstrap-floor gate directly from the current Bash.
 
+## 2026-05-13 Follow-Up Increment
+
+Bundled the first AGI-safe scalar refinement aliases into the default stdlib:
+
+- `Confidence = f64 where 0.0 <= self <= 1.0`
+- `Probability = f64 where 0.0 <= self <= 1.0`
+- `DistanceMeters = f64 where self >= 0.0`
+
+These names now work in ordinary Helix programs without local redefinition
+when the default stdlib is enabled. `--no-stdlib` still requires the program to
+define or import these names explicitly.
+
+Audit follow-up: default stdlib merge now treats `type`, `struct`, and `enum`
+as one type-name namespace for user-vs-stdlib conflicts. This prevents a user
+`struct Probability` or `enum Confidence` from silently coexisting with and
+being shadowed by the bundled stdlib aliases.
+
 ## Do Not Forget
 
 - Send Telegram updates using:
@@ -116,3 +133,5 @@ python C:\Projects\Kovostov\runtime\lib\kovostov_telegram.py send --chat 8212106
 - Do not stage broad/unrelated files. Use explicit paths only.
 - Old untracked audit docs are unrelated unless the user asks.
 - After any code/doc fix, reset clean gate count and rerun 3 fresh clean gates.
+- If an audit gate stalls or times out, replace it with a fresh audit instead
+  of waiting endlessly.

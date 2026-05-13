@@ -1549,7 +1549,9 @@ def _merge_stdlib(user_prog: "ast.Program") -> None:
     KIND (fn vs fn, struct vs struct, etc.), the stdlib item is
     skipped. Cross-kind name overlap (a user fn and a stdlib struct
     with the same name) is left to downstream typecheck — we don't
-    silently merge those.
+    silently merge those, except for `type`/`struct`/`enum` names. Those
+    share one type namespace during stdlib merge so user-defined nominal
+    types override same-named stdlib aliases.
 
     Missing-stdlib-file handling: by default the file is silently
     skipped (legacy behaviour). With `HELIXC_STDLIB_STRICT=1`, missing
@@ -1575,6 +1577,9 @@ def _merge_stdlib(user_prog: "ast.Program") -> None:
         # within the stdlib itself if encountered.
         return type(item).__name__
 
+    def _is_type_namespace_item(item) -> bool:
+        return isinstance(item, (ast.TypeAlias, ast.StructDecl, ast.EnumDecl))
+
     def _mark_stdlib_item(item) -> None:
         if isinstance(item, ast.FnDecl):
             if "__stdlib" not in item.attrs:
@@ -1589,10 +1594,13 @@ def _merge_stdlib(user_prog: "ast.Program") -> None:
                 _mark_stdlib_item(sub)
 
     user_keys: set[tuple[str, str]] = set()
+    user_type_names: set[str] = set()
     for it in user_prog.items:
         name = getattr(it, "name", None)
         if name is not None:
             user_keys.add((_kind_tag(it), name))
+            if _is_type_namespace_item(it):
+                user_type_names.add(name)
 
     for fname in STDLIB_FILES:
         stdlib_path = _os.path.join(stdlib_dir, fname)
@@ -1610,11 +1618,15 @@ def _merge_stdlib(user_prog: "ast.Program") -> None:
             name = getattr(item, "name", None)
             if name is not None:
                 key = (_kind_tag(item), name)
-                if key in user_keys:
+                if key in user_keys or (
+                    _is_type_namespace_item(item) and name in user_type_names
+                ):
                     # User declared something of the same kind+name —
-                    # user takes precedence; skip the stdlib version.
+                    # type-namespace conflicts; user takes precedence.
                     continue
                 user_keys.add(key)
+                if _is_type_namespace_item(item):
+                    user_type_names.add(name)
             # Audit 28.8 A8: merge ALL named-item kinds, not just
             # FnDecl/EnumDecl. StructDecl, TraitDecl-via-ImplBlock,
             # ImplBlock, ConstDecl, TypeAlias, ModuleDecl, ModBlock,
