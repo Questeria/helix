@@ -342,6 +342,17 @@ itself is a readable file, so an artifact for another file cannot substitute
 for it. Stage 31 quick validation now runs the full proof source gate
 regression file.
 
+## 2026-05-14 Unsupported Proof Status Slice
+
+Proof-obligation artifacts now have validator support for the `unsupported`
+status described by the Stage 31 proof contract. Plain artifact validation
+accepts `unsupported` as a well-formed status so audit tooling can preserve
+the compiler's exact proof state. Clean-policy validation still rejects it,
+because an unsupported obligation is not proved and cannot pass a proof gate.
+
+Stage 31 quick validation now covers unsupported-obligation emission, plain
+validator acceptance, and `--require-clean` rejection.
+
 ## Do Not Forget
 
 - Send Telegram updates using:

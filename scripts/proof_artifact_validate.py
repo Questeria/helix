@@ -18,7 +18,7 @@ from scripts.proof_artifact_key import cache_key_for_artifact, load_artifact
 
 
 SHA256_RE = re.compile(r"[0-9a-f]{64}")
-OBLIGATION_STATUSES = {"proved", "failed", "unproven"}
+OBLIGATION_STATUSES = {"proved", "failed", "unproven", "unsupported"}
 SUMMARY_COUNTS = {
     "obligations": "obligations",
     "pipeline_errors": "pipeline_errors",

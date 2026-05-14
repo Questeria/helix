@@ -89,6 +89,45 @@ def test_require_clean_rejects_unproven_obligation(capsys, tmp_path):
     assert "typecheck_errors must be empty" in captured.err
 
 
+def test_validate_accepts_unsupported_obligation_structurally(capsys, tmp_path):
+    source_path, artifact_path, artifact = _real_artifact(
+        capsys,
+        tmp_path,
+        src=(
+            "type Weird = f64 where self + 1.0;\n"
+            "fn main() -> i32 { let w: Weird = 0.5_f64; 0 }\n"
+        ),
+        expected_rc=1,
+    )
+    assert artifact["obligations"][0]["status"] == "unsupported"
+    rc = proof_artifact_validate.main([
+        str(artifact_path), "--source", str(source_path),
+    ])
+    captured = capsys.readouterr()
+    assert rc == 0, captured.err
+    assert captured.out.strip() == "proof-artifact-validate: ok"
+
+
+def test_require_clean_rejects_unsupported_obligation(capsys, tmp_path):
+    source_path, artifact_path, artifact = _real_artifact(
+        capsys,
+        tmp_path,
+        src=(
+            "type Weird = f64 where self + 1.0;\n"
+            "fn main() -> i32 { let w: Weird = 0.5_f64; 0 }\n"
+        ),
+        expected_rc=1,
+    )
+    assert artifact["obligations"][0]["status"] == "unsupported"
+    rc = proof_artifact_validate.main([
+        str(artifact_path), "--source", str(source_path), "--require-clean",
+    ])
+    captured = capsys.readouterr()
+    assert rc == 1
+    assert "is 'unsupported', not 'proved'" in captured.err
+    assert "typecheck_errors must be empty" in captured.err
+
+
 def test_require_clean_rejects_pipeline_errors(capsys, tmp_path):
     _source_path, artifact_path, artifact = _real_artifact(capsys, tmp_path)
     artifact["pipeline_errors"] = [{"phase": "demo", "message": "not clean"}]

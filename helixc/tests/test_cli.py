@@ -1442,6 +1442,33 @@ def test_stage31_emit_proof_obligations_json_for_unproven_refinement(
     assert "compile-time-proven value" in artifact["typecheck_errors"][0]
 
 
+def test_stage31_emit_proof_obligations_json_for_unsupported_refinement(
+    capsys, tmp_path,
+):
+    src_path = str(tmp_path / "unsupported_obligation.hx")
+    with open(src_path, "w") as f:
+        f.write(
+            "type Weird = f64 where self + 1.0;\n"
+            "fn main() -> i32 {\n"
+            "    let w: Weird = 0.5_f64;\n"
+            "    0\n"
+            "}\n"
+        )
+    rc = main([src_path, "--emit-proof-obligations", "--no-stdlib"])
+    captured = capsys.readouterr()
+    assert rc == 1
+    artifact = json.loads(captured.out)
+    assert artifact["summary"]["typecheck_errors"] == 2
+    obligation = artifact["obligations"][0]
+    assert obligation["refinement"] == "Weird"
+    assert obligation["predicate"] == "(self + 1.0)"
+    assert obligation["status"] == "unsupported"
+    assert obligation["value"] == "0.5"
+    assert "not supported by the Stage 31 constant checker" in (
+        artifact["typecheck_errors"][1]
+    )
+
+
 def test_stage31_emit_proof_obligations_includes_inherited_unproven_refinement(
     capsys, tmp_path,
 ):
