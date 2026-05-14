@@ -13,11 +13,13 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import json
 import os
 from pathlib import Path
 import shlex
 import subprocess
 import sys
+import time
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -34,6 +36,9 @@ from helixc.ir.passes.const_fold import fold_module
 from helixc.ir.passes.cse import cse_module
 from helixc.ir.passes.dce import dce_module
 from helixc.ir.passes.fdce import fdce_module
+
+
+CASCADE_REPORT_SCHEMA = "helix.selfhost_cascade.v0"
 
 
 def compile_seed_elf(src: str) -> bytes:
@@ -153,7 +158,7 @@ def build_next(generation: int, compiler_path: str, next_path: str,
     return fields
 
 
-def run_smoke(final_compiler: str, input_path: str, output_path: str) -> None:
+def run_smoke(final_compiler: str, input_path: str, output_path: str) -> list[dict[str, int | str]]:
     cases = [
         ("literal", "fn main() -> i32 { 42 }", 42),
         (
@@ -169,6 +174,7 @@ def run_smoke(final_compiler: str, input_path: str, output_path: str) -> None:
             42,
         ),
     ]
+    results: list[dict[str, int | str]] = []
     for idx, (name, src, expected) in enumerate(cases, 1):
         write_wsl(input_path, src.encode("utf-8"))
         qcompiler = shlex.quote(final_compiler)
@@ -190,6 +196,51 @@ def run_smoke(final_compiler: str, input_path: str, output_path: str) -> None:
                 f"stderr={proc.stderr!r}"
             )
         print(f"smoke {name}: exit={expected}")
+        results.append({"name": name, "expected_exit": expected, "actual_exit": expected})
+    return results
+
+
+def cascade_report(
+    *,
+    generations_requested: int,
+    seed_size: int,
+    seed_sha: str,
+    generations: list[dict[str, str | int]],
+    smoke: list[dict[str, int | str]] | None = None,
+) -> dict[str, object]:
+    stable_hashes = {str(info["sha"]) for info in generations}
+    stable_sizes = {int(info["size"]) for info in generations}
+    stable = len(stable_hashes) == 1 and len(stable_sizes) == 1
+    return {
+        "schema": CASCADE_REPORT_SCHEMA,
+        "generated_at_unix": time.time(),
+        "generations_requested": generations_requested,
+        "seed": {"generation": 1, "size": seed_size, "sha256": seed_sha},
+        "self_host_generations": [
+            {
+                "generation": index + 2,
+                "exit_low_byte": info.get("exit_low_byte"),
+                "size": info.get("size"),
+                "sha256": info.get("sha"),
+            }
+            for index, info in enumerate(generations)
+        ],
+        "stable": stable,
+        "stable_sha256": next(iter(stable_hashes)) if stable else None,
+        "stable_size": next(iter(stable_sizes)) if stable else None,
+        "smoke": smoke or [],
+    }
+
+
+def write_report(path: str | None, report: dict[str, object]) -> None:
+    if not path:
+        return
+    out = Path(path)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
 
 
 def main() -> int:
@@ -197,6 +248,7 @@ def main() -> int:
     parser.add_argument("--generations", type=int, default=10)
     parser.add_argument("--prefix", default="/tmp/helix_cascade")
     parser.add_argument("--keep", action="store_true")
+    parser.add_argument("--json-out", help="optional path to write a cascade report JSON")
     args = parser.parse_args()
 
     if args.generations < 2:
@@ -208,10 +260,11 @@ def main() -> int:
     print(f"cascade: seed + {args.generations} self-host rebuilds")
     source = bootstrap_source(input_path, output_path)
     seed = compile_seed_elf(source)
+    seed_sha = sha256_bytes(seed)
     seed_path = f"{args.prefix}_g1.bin"
     write_wsl(input_path, source.encode("utf-8"))
     write_wsl(seed_path, seed, executable=True)
-    print(f"G1 seed: size={len(seed)} sha={sha256_bytes(seed)}")
+    print(f"G1 seed: size={len(seed)} sha={seed_sha}")
 
     generations: list[dict[str, str | int]] = []
     compiler_path = seed_path
@@ -231,6 +284,15 @@ def main() -> int:
         print("cascade: FAILED")
         print(f"unique hashes: {sorted(stable_hashes)}")
         print(f"unique sizes: {sorted(stable_sizes)}")
+        write_report(
+            args.json_out,
+            cascade_report(
+                generations_requested=args.generations,
+                seed_size=len(seed),
+                seed_sha=seed_sha,
+                generations=generations,
+            ),
+        )
         return 2
 
     print(
@@ -238,8 +300,18 @@ def main() -> int:
         f"G2..G{args.generations + 1} are byte-identical "
         f"sha={next(iter(stable_hashes))}"
     )
-    run_smoke(compiler_path, input_path, output_path)
+    smoke = run_smoke(compiler_path, input_path, output_path)
     print("smoke: PASS final generation compiled and ran all smoke programs")
+    write_report(
+        args.json_out,
+        cascade_report(
+            generations_requested=args.generations,
+            seed_size=len(seed),
+            seed_sha=seed_sha,
+            generations=generations,
+            smoke=smoke,
+        ),
+    )
 
     if not args.keep:
         cleanup = (
