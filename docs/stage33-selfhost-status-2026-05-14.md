@@ -56,3 +56,27 @@ The next Stage 33 slice should convert this report into a stricter gate:
 2. Fail closed if stable is false, expected smoke cases are missing, or the
    stable generation set drifts.
 3. Use that validator before any self-host parity change is committed.
+
+## Slice 2 - Cascade Report Validator
+
+`scripts/selfhost_cascade_validate.py` validates a cascade report and fails
+closed when:
+
+- the schema is wrong
+- `stable` is not true
+- the stable hash or stable size is malformed
+- any self-host generation drifts from the stable hash or size
+- a generation exit low byte does not match the stable size low byte
+- literal, call, or loop smoke evidence is missing or does not return `42`
+
+The validator also supports `--expect-stable-sha` so a release gate can pin a
+known compiler fixed point.
+
+Validation:
+
+- `python -m pytest -q helixc\tests\test_selfhost_cascade_validate.py helixc\tests\test_selfhost_cascade.py helixc\tests\test_stage32_select_tests.py`
+  - Result: `21 passed`
+- `python scripts\selfhost_cascade_validate.py .stage33-logs\selfhost-cascade-g3.json --min-generations 3 --expect-stable-sha 5a7367ad436e72ade3d8f96a9860e0d08b64528cbb15295e1a47076090667408`
+  - Result: `selfhost-cascade-validate: ok`
+- `python scripts\stage31_validate.py --mode focused --skip-snapshot scripts\selfhost_cascade_validate.py helixc\tests\test_selfhost_cascade_validate.py scripts\stage32_select_tests.py helixc\tests\test_stage32_select_tests.py`
+  - Result: `rc=0`

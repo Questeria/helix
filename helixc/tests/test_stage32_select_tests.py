@@ -61,9 +61,13 @@ def test_stage32_selector_maps_backend_to_codegen_and_determinism():
 def test_stage32_selector_maps_selfhost_cascade_to_own_test():
     selection = stage32_select_tests.select_tests_for_paths([
         "scripts/selfhost_cascade.py",
+        "scripts/selfhost_cascade_validate.py",
     ])
 
-    assert selection.pytest_targets == ["helixc/tests/test_selfhost_cascade.py"]
+    assert selection.pytest_targets == [
+        "helixc/tests/test_selfhost_cascade.py",
+        "helixc/tests/test_selfhost_cascade_validate.py",
+    ]
     assert selection.notes == []
 
 

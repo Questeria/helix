@@ -43,6 +43,7 @@ SOURCE_RULES: list[tuple[tuple[str, ...], list[str]]] = [
     (("scripts/stage32_select_tests.py",), ["helixc/tests/test_stage32_select_tests.py"]),
     (("scripts/stage31_validate.py", "scripts/pytest_shard.py"), TOOLING_TESTS),
     (("scripts/selfhost_cascade.py",), ["helixc/tests/test_selfhost_cascade.py"]),
+    (("scripts/selfhost_cascade_validate.py",), ["helixc/tests/test_selfhost_cascade_validate.py"]),
     (("scripts/proof_artifact_key.py", "scripts/proof_artifact_validate.py"), PROOF_QUICK_TESTS),
     (("helixc/check.py",), PROOF_QUICK_TESTS + STAGE31_PROOF_REGRESSION_TARGETS),
     (("helixc/backend/x86_64.py", "helixc/backend/elf_dyn.py"), [
