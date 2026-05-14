@@ -13,6 +13,7 @@ manual waiting:
 from __future__ import annotations
 
 import argparse
+import json
 import os
 from pathlib import Path
 import re
@@ -27,6 +28,7 @@ BIN_DIR = ROOT / ".stage31-bin"
 MAX_SHARDS = 8
 MAX_NO_CODEGEN_SHARDS = 4
 PYTEST_SUMMARY_RE = re.compile(r"\bin (?P<seconds>[0-9]+(?:\.[0-9]+)?)s(?:\s|$)")
+TIMING_SUMMARY_PATH = LOG_DIR / "pytest-shard-timings.json"
 
 
 def default_shards() -> int:
@@ -165,18 +167,49 @@ def pytest_summary_from_log(log_path: Path) -> tuple[float, str] | None:
 def print_slowest_pytest_shards(
     procs: list[tuple[str, subprocess.Popen[str], object, Path, list[str], dict[str, str] | None]],
 ) -> None:
-    summaries = []
+    summaries = pytest_shard_summaries(procs)
+    if not summaries:
+        return
+    write_pytest_timing_summary(summaries)
+    print("slowest pytest shards:")
+    for summary in summaries[:5]:
+        print(
+            f"  {summary['name']}: {summary['seconds']:.1f}s | "
+            f"{summary['summary']}"
+        )
+
+
+def pytest_shard_summaries(
+    procs: list[tuple[str, subprocess.Popen[str], object, Path, list[str], dict[str, str] | None]],
+) -> list[dict[str, object]]:
+    summaries: list[dict[str, object]] = []
     for name, _proc, _log, log_path, _cmd, _env in procs:
         summary = pytest_summary_from_log(log_path)
         if summary is None:
             continue
         seconds, line = summary
-        summaries.append((seconds, name, line))
-    if not summaries:
-        return
-    print("slowest pytest shards:")
-    for seconds, name, line in sorted(summaries, reverse=True)[:5]:
-        print(f"  {name}: {seconds:.1f}s | {line}")
+        summaries.append({
+            "name": name,
+            "seconds": seconds,
+            "summary": line,
+            "log": str(log_path),
+        })
+    return sorted(summaries, key=lambda item: item["seconds"], reverse=True)
+
+
+def write_pytest_timing_summary(
+    summaries: list[dict[str, object]],
+    path: Path = TIMING_SUMMARY_PATH,
+) -> None:
+    payload = {
+        "schema": "helix.stage31.pytest_shard_timings.v0",
+        "generated_at_unix": time.time(),
+        "shards": summaries,
+    }
+    path.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
 
 
 def quick(py: str) -> int:

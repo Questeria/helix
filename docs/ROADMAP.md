@@ -146,7 +146,8 @@ only the part that flaked, and distribute work evenly across the machine.
 
 Important features:
 - Slow-test telemetry by test node, not only by shard.
-- Machine-readable timing summaries.
+- Machine-readable timing summaries. Stage 32 starts with
+  `.stage31-logs/pytest-shard-timings.json`.
 - Duration-weighted shard assignment.
 - Failed-shard retry evidence.
 - Changed-file to focused-test mapping.

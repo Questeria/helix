@@ -144,6 +144,25 @@ def test_stage31_validate_prints_slowest_pytest_shards(tmp_path, capsys):
     assert "fast: 1.2s" in captured.out
 
 
+def test_stage31_validate_writes_machine_readable_timing_summary(tmp_path):
+    out = tmp_path / "timings.json"
+    summaries = [
+        {
+            "name": "slow",
+            "seconds": 12.5,
+            "summary": "5 passed in 12.50s",
+            "log": "slow.log",
+        }
+    ]
+
+    stage31_validate.write_pytest_timing_summary(summaries, out)
+
+    text = out.read_text(encoding="utf-8")
+    assert '"schema": "helix.stage31.pytest_shard_timings.v0"' in text
+    assert '"name": "slow"' in text
+    assert '"seconds": 12.5' in text
+
+
 def test_stage31_validate_rejects_excessive_manual_shards(capsys):
     rc = stage31_validate.main([
         "--mode",
