@@ -2,6 +2,10 @@
 
 User asked to stop at a good point so the computer can reset.
 
+Final closeout: Stage 31 is now closed. See
+`docs/stage31-closeout-2026-05-14.md` for shipped commits, verification
+evidence, and the Stage 32+ handoff.
+
 ## Current State
 
 - Worktree: `C:\Projects\Kovostov-Native`
