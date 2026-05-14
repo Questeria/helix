@@ -379,6 +379,18 @@ truth values even when the other side mentions `self`. For unknown input,
 `false && self >= 0.0` records `failed` with trap `31001`, while
 `true || self >= 0.0` records `proved`.
 
+## 2026-05-14 Constant Comparison Refinement Slice
+
+Stage 31 refinement predicate shape validation now accepts self-independent
+constant comparison chains when the proof evaluator can decide them. This
+removes the stale unsupported-alias error for predicates such as
+`where 1.0 < 2.0` and `where 2.0 < 1.0`. The first records a `proved`
+obligation even for unknown input values; the second records a `failed`
+obligation with trap `31001`.
+
+Stage 31 quick validation now covers typecheck and proof-obligation JSON for
+constant-true and constant-false comparison predicates.
+
 ## Do Not Forget
 
 - Send Telegram updates using:

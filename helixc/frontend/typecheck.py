@@ -974,9 +974,14 @@ class TypeChecker:
         if chain is None:
             return False
         _ops, operands = chain
-        return (any(self._expr_mentions_self(op) for op in operands)
-                and all(self._refinement_scalar_expr_supported(op)
-                        for op in operands))
+        operands_supported = all(
+            self._refinement_scalar_expr_supported(op) for op in operands
+        )
+        if not operands_supported:
+            return False
+        if any(self._expr_mentions_self(op) for op in operands):
+            return True
+        return self._eval_refinement_predicate(expr, None) is not None
 
     def _refinement_scalar_expr_supported(self, expr: A.Expr) -> bool:
         if isinstance(expr, (A.IntLit, A.FloatLit)):

@@ -1405,6 +1405,21 @@ def test_stage31_boolean_short_circuit_refinements_are_decisive():
     assert true_or == [], true_or
 
 
+def test_stage31_constant_comparison_refinement_predicates_are_supported():
+    always = check("""
+    type Always = f64 where 1.0 < 2.0;
+    fn use_raw(x: f64) -> i32 { let a: Always = x; 0 }
+    """)
+    assert always == [], always
+
+    never = check("""
+    type Never = f64 where 2.0 < 1.0;
+    fn use_raw(x: f64) -> i32 { let n: Never = x; 0 }
+    """)
+    assert not any("predicate 2.0 < 1.0 is not supported" in e for e in never), never
+    assert any("predicate 2.0 < 1.0 is always false" in e for e in never), never
+
+
 def test_stage31_nested_module_use_rewrites_refined_alias_type():
     src = """
     mod m {

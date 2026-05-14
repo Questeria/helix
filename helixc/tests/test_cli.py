@@ -1611,6 +1611,45 @@ def test_stage31_emit_proof_obligations_json_for_short_circuit_predicates(
     assert "value" not in obligation
 
 
+def test_stage31_emit_proof_obligations_json_for_constant_comparisons(
+    capsys, tmp_path,
+):
+    always_path = str(tmp_path / "constant_true_obligation.hx")
+    with open(always_path, "w") as f:
+        f.write(
+            "type Always = f64 where 1.0 < 2.0;\n"
+            "fn use_raw(x: f64) -> i32 { let a: Always = x; 0 }\n"
+        )
+    rc = main([always_path, "--emit-proof-obligations", "--no-stdlib"])
+    captured = capsys.readouterr()
+    assert rc == 0, captured.out + captured.err
+    artifact = json.loads(captured.out)
+    assert artifact["summary"]["typecheck_errors"] == 0
+    obligation = artifact["obligations"][0]
+    assert obligation["refinement"] == "Always"
+    assert obligation["predicate"] == "1.0 < 2.0"
+    assert obligation["status"] == "proved"
+    assert "value" not in obligation
+
+    never_path = str(tmp_path / "constant_false_obligation.hx")
+    with open(never_path, "w") as f:
+        f.write(
+            "type Never = f64 where 2.0 < 1.0;\n"
+            "fn use_raw(x: f64) -> i32 { let n: Never = x; 0 }\n"
+        )
+    rc = main([never_path, "--emit-proof-obligations", "--no-stdlib"])
+    captured = capsys.readouterr()
+    assert rc == 1
+    artifact = json.loads(captured.out)
+    assert artifact["summary"]["typecheck_errors"] == 1
+    obligation = artifact["obligations"][0]
+    assert obligation["refinement"] == "Never"
+    assert obligation["predicate"] == "2.0 < 1.0"
+    assert obligation["status"] == "failed"
+    assert obligation["trap"] == "31001"
+    assert "value" not in obligation
+
+
 def test_stage31_emit_proof_obligations_includes_inherited_unproven_refinement(
     capsys, tmp_path,
 ):
