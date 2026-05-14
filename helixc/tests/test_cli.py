@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import json
+import hashlib
 import sys
 import subprocess
 import tempfile
@@ -11,6 +12,7 @@ import tempfile
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 from helixc.check import parse_args, extract_doc_comments, main
+from helixc.frontend import parser as parser_mod
 
 
 def write_src(content: str) -> str:
@@ -66,10 +68,22 @@ def test_parse_args_lib_attached():
 
 
 def test_parse_args_warnings():
-    a, errs = parse_args(["-Wdeprecated", "-Wfoo=error", "foo.hx"])
+    a, errs = parse_args(["-Wdeprecated", "-Wad=error", "foo.hx"])
     assert not errs
     assert a.warnings["deprecated"] == "warn"
-    assert a.warnings["foo"] == "error"
+    assert a.warnings["ad"] == "error"
+
+
+def test_parse_args_rejects_unknown_warning_policy():
+    _a, errs = parse_args(["-Wdeprecated=erro", "foo.hx"])
+    assert errs
+    assert "unknown warning policy" in errs[0]
+
+
+def test_parse_args_rejects_unknown_warning_name():
+    _a, errs = parse_args(["-Wdeprectaed=error", "foo.hx"])
+    assert errs
+    assert "unknown warning name" in errs[0]
 
 
 def test_parse_args_unknown_flag():
@@ -109,10 +123,14 @@ def test_emit_modes_are_mutually_exclusive(capsys, tmp_path):
     rc = main([src_path, "--emit-proof-obligations", "--emit-ast"])
     captured = capsys.readouterr()
     assert rc == 2
-    assert captured.out == ""
+    artifact = json.loads(captured.out)
+    assert artifact["summary"]["pipeline_errors"] == 1
+    assert artifact["pipeline_errors"][0]["phase"] == "invocation"
+    message = artifact["pipeline_errors"][0]["message"]
+    assert "choose exactly one stdout-producing mode" in message
+    assert "--emit-proof-obligations" in message
+    assert "--emit-ast" in message
     assert "choose exactly one stdout-producing mode" in captured.err
-    assert "--emit-proof-obligations" in captured.err
-    assert "--emit-ast" in captured.err
 
 
 def test_doc_and_emit_proof_obligations_are_mutually_exclusive(
@@ -124,10 +142,60 @@ def test_doc_and_emit_proof_obligations_are_mutually_exclusive(
     rc = main([src_path, "--emit-proof-obligations", "--doc"])
     captured = capsys.readouterr()
     assert rc == 2
-    assert captured.out == ""
+    artifact = json.loads(captured.out)
+    assert artifact["summary"]["pipeline_errors"] == 1
+    assert artifact["pipeline_errors"][0]["phase"] == "invocation"
+    message = artifact["pipeline_errors"][0]["message"]
+    assert "choose exactly one stdout-producing mode" in message
+    assert "--emit-proof-obligations" in message
+    assert "--doc" in message
     assert "choose exactly one stdout-producing mode" in captured.err
-    assert "--emit-proof-obligations" in captured.err
-    assert "--doc" in captured.err
+
+
+def test_stage31_emit_proof_obligations_missing_path_stays_json(capsys):
+    rc = main(["--emit-proof-obligations"])
+    captured = capsys.readouterr()
+    assert rc == 2
+    artifact = json.loads(captured.out)
+    assert artifact["path"] is None
+    assert artifact["input"]["source_sha256"] is None
+    assert artifact["input"]["source_available"] is False
+    assert artifact["summary"]["pipeline_errors"] == 1
+    assert artifact["pipeline_errors"][0]["phase"] == "invocation"
+    assert "source path required" in artifact["pipeline_errors"][0]["message"]
+    assert "helixc/check.py" not in captured.out
+
+
+def test_stage31_emit_proof_obligations_missing_file_stays_json(
+    capsys, tmp_path,
+):
+    missing = str(tmp_path / "missing_source.hx")
+    rc = main([missing, "--emit-proof-obligations", "--no-stdlib"])
+    captured = capsys.readouterr()
+    assert rc == 2
+    artifact = json.loads(captured.out)
+    assert artifact["path"] == missing
+    assert artifact["input"]["source_sha256"] is None
+    assert artifact["input"]["source_available"] is False
+    assert artifact["summary"]["pipeline_errors"] == 1
+    assert artifact["pipeline_errors"][0]["phase"] == "invocation"
+    assert "file not found" in artifact["pipeline_errors"][0]["message"]
+
+
+def test_stage31_emit_proof_obligations_directory_path_stays_json(
+    capsys, tmp_path,
+):
+    rc = main([str(tmp_path), "--emit-proof-obligations", "--no-stdlib"])
+    captured = capsys.readouterr()
+    assert rc == 2
+    artifact = json.loads(captured.out)
+    assert artifact["path"] == str(tmp_path)
+    assert artifact["input"]["source_sha256"] is None
+    assert artifact["input"]["source_available"] is False
+    assert artifact["summary"]["pipeline_errors"] == 1
+    assert artifact["pipeline_errors"][0]["phase"] == "source-read"
+    assert "SOURCE READ ERROR" in artifact["pipeline_errors"][0]["message"]
+
 
 
 def test_c117_emit_ptx_uses_kernel_attrs(capsys):
@@ -1048,20 +1116,36 @@ def test_stage31_emit_proof_obligations_json_for_proved_refinement(
     capsys, tmp_path,
 ):
     src_path = str(tmp_path / "proved_obligation.hx")
-    with open(src_path, "w") as f:
-        f.write(
-            "type Probability = f64 where 0.0 <= self <= 1.0;\n"
-            "fn main() -> i32 {\n"
-            "    let p: Probability = 0.5_f64;\n"
-            "    0\n"
-            "}\n"
-        )
+    src = (
+        "type Probability = f64 where 0.0 <= self <= 1.0;\n"
+        "fn main() -> i32 {\n"
+        "    let p: Probability = 0.5_f64;\n"
+        "    0\n"
+        "}\n"
+    )
+    with open(src_path, "wb") as f:
+        f.write(src.encode("utf-8"))
     rc = main([src_path, "--emit-proof-obligations", "--no-stdlib"])
     captured = capsys.readouterr()
     assert rc == 0, captured.out + captured.err
     artifact = json.loads(captured.out)
     assert artifact["schema"] == "helix.proof_obligations.v0"
+    assert artifact["input"]["source_sha256"] == (
+        hashlib.sha256(src.encode("utf-8")).hexdigest()
+    )
+    assert artifact["input"]["include_stdlib"] is False
+    assert artifact["input"]["stdlib_manifest_sha256"] == (
+        hashlib.sha256(b"[]").hexdigest()
+    )
+    assert artifact["input"]["stdlib_files"] == []
+    assert artifact["input"]["flags"] == [
+        "--emit-proof-obligations", "--no-stdlib",
+    ]
+    assert artifact["input"]["opt_level"] == 1
+    assert artifact["input"]["color"] == "auto"
     assert artifact["summary"]["typecheck_errors"] == 0
+    assert artifact["summary"]["warning_diagnostics"] == 0
+    assert artifact["summary"]["warning_errors"] == 0
     assert artifact["summary"]["obligations"] == 1
     obligation = artifact["obligations"][0]
     assert obligation["kind"] == "refinement"
@@ -1071,6 +1155,166 @@ def test_stage31_emit_proof_obligations_json_for_proved_refinement(
     assert obligation["status"] == "proved"
     assert obligation["value"] == "0.5"
     assert "parse:" in captured.err
+
+
+def test_stage31_emit_proof_obligations_input_hashes_default_stdlib(
+    capsys, tmp_path,
+):
+    src_path = str(tmp_path / "default_stdlib_obligation.hx")
+    src = "fn main() -> i32 { let p: Probability = 0.5_f64; 0 }\n"
+    with open(src_path, "wb") as f:
+        f.write(src.encode("utf-8"))
+    rc = main([src_path, "--emit-proof-obligations"])
+    captured = capsys.readouterr()
+    assert rc == 0, captured.out + captured.err
+    artifact = json.loads(captured.out)
+    assert artifact["input"]["source_sha256"] == (
+        hashlib.sha256(src.encode("utf-8")).hexdigest()
+    )
+    assert artifact["input"]["include_stdlib"] is True
+    assert len(artifact["input"]["stdlib_manifest_sha256"]) == 64
+    assert artifact["input"]["stdlib_files"]
+    assert any(
+        item["path"] == "agi_memory.hx"
+        and len(item.get("sha256", "")) == 64
+        for item in artifact["input"]["stdlib_files"]
+    )
+    assert artifact["summary"]["typecheck_errors"] == 0
+    assert artifact["summary"]["obligations"] == 1
+
+
+def test_stage31_emit_proof_obligations_normalizes_stdlib_flag(
+    capsys, tmp_path,
+):
+    src_path = str(tmp_path / "explicit_stdlib_flag.hx")
+    src = "fn main() -> i32 { let p: Probability = 0.5_f64; 0 }\n"
+    with open(src_path, "wb") as f:
+        f.write(src.encode("utf-8"))
+    rc_default = main([src_path, "--emit-proof-obligations"])
+    captured_default = capsys.readouterr()
+    assert rc_default == 0, captured_default.out + captured_default.err
+    default_artifact = json.loads(captured_default.out)
+
+    rc_explicit = main([src_path, "--emit-proof-obligations", "--stdlib"])
+    captured_explicit = capsys.readouterr()
+    assert rc_explicit == 0, captured_explicit.out + captured_explicit.err
+    explicit_artifact = json.loads(captured_explicit.out)
+
+    assert default_artifact["input"] == explicit_artifact["input"]
+    assert "--stdlib" not in explicit_artifact["input"]["flags"]
+
+
+def test_stage31_emit_proof_obligations_counts_missing_stdlib_warning(
+    monkeypatch, capsys, tmp_path,
+):
+    src_path = str(tmp_path / "missing_stdlib_warning.hx")
+    with open(src_path, "wb") as f:
+        f.write(b"fn main() -> i32 { 0 }\n")
+    monkeypatch.setattr(
+        parser_mod,
+        "STDLIB_FILES",
+        ["does_not_exist_anywhere_for_proof_metadata.hx"],
+    )
+    rc = main([src_path, "--emit-proof-obligations"])
+    captured = capsys.readouterr()
+    assert rc == 0, captured.out + captured.err
+    artifact = json.loads(captured.out)
+    assert artifact["input"]["include_stdlib"] is True
+    assert artifact["input"]["stdlib_files"][0]["missing"] is True
+    assert artifact["summary"]["warning_diagnostics"] == 1
+    assert artifact["summary"]["warning_errors"] == 0
+    warning = artifact["warning_diagnostics"][0]
+    assert warning["kind"] == "stdlib"
+    assert warning["promoted_to_error"] is False
+    assert "does_not_exist_anywhere_for_proof_metadata.hx" in warning["message"]
+    assert "stdlib file missing" in captured.err
+
+
+def test_stage31_emit_proof_obligations_strict_missing_stdlib_stays_json(
+    monkeypatch, capsys, tmp_path,
+):
+    src_path = str(tmp_path / "strict_missing_stdlib.hx")
+    with open(src_path, "wb") as f:
+        f.write(b"fn main() -> i32 { 0 }\n")
+    monkeypatch.setattr(
+        parser_mod,
+        "STDLIB_FILES",
+        ["strict_missing_stdlib_for_proof_metadata.hx"],
+    )
+    monkeypatch.setenv(parser_mod.STDLIB_STRICT_ENV, "1")
+    rc = main([src_path, "--emit-proof-obligations"])
+    captured = capsys.readouterr()
+    assert rc == 2
+    artifact = json.loads(captured.out)
+    assert artifact["input"]["stdlib_strict"] is True
+    assert artifact["input"]["stdlib_files"][0]["missing"] is True
+    assert artifact["summary"]["pipeline_errors"] == 1
+    assert artifact["pipeline_errors"][0]["phase"] == "stdlib"
+    assert "C:\\Projects\\Kovostov-Native" not in (
+        artifact["pipeline_errors"][0]["message"]
+    )
+    assert "helixc\\stdlib" not in artifact["pipeline_errors"][0]["message"]
+    assert artifact["summary"]["warning_diagnostics"] == 1
+    assert artifact["summary"]["warning_errors"] == 1
+    warning = artifact["warning_diagnostics"][0]
+    assert warning["kind"] == "stdlib"
+    assert warning["policy"] == "error"
+    assert warning["promoted_to_error"] is True
+    assert "stdlib file missing" in captured.err
+
+
+def test_stage31_emit_proof_obligations_decode_error_stays_json(
+    capsys, tmp_path,
+):
+    src_path = str(tmp_path / "bad_utf8.hx")
+    with open(src_path, "wb") as f:
+        f.write(b"\xff\n")
+    rc = main([src_path, "--emit-proof-obligations", "--no-stdlib"])
+    captured = capsys.readouterr()
+    assert rc == 2
+    artifact = json.loads(captured.out)
+    assert artifact["input"]["source_sha256"] == hashlib.sha256(b"\xff\n").hexdigest()
+    assert artifact["summary"]["pipeline_errors"] == 1
+    assert artifact["pipeline_errors"][0]["phase"] == "decode"
+    assert "encoding error reading source" in (
+        artifact["pipeline_errors"][0]["message"]
+    )
+
+
+def test_stage31_emit_proof_obligations_invalid_warning_name_stays_json(
+    capsys, tmp_path,
+):
+    src_path = str(tmp_path / "bad_warning_name.hx")
+    with open(src_path, "w") as f:
+        f.write("fn main() -> i32 { 0 }\n")
+    rc = main([
+        src_path, "--emit-proof-obligations", "--no-stdlib",
+        "-Wdeprectaed=error",
+    ])
+    captured = capsys.readouterr()
+    assert rc == 2
+    artifact = json.loads(captured.out)
+    assert artifact["summary"]["pipeline_errors"] == 1
+    assert artifact["pipeline_errors"][0]["phase"] == "invocation"
+    assert "unknown warning name" in artifact["pipeline_errors"][0]["message"]
+
+
+def test_stage31_emit_proof_obligations_invalid_warning_policy_stays_json(
+    capsys, tmp_path,
+):
+    src_path = str(tmp_path / "bad_warning_policy.hx")
+    with open(src_path, "w") as f:
+        f.write("fn main() -> i32 { 0 }\n")
+    rc = main([
+        src_path, "--emit-proof-obligations", "--no-stdlib",
+        "-Wdeprecated=erro",
+    ])
+    captured = capsys.readouterr()
+    assert rc == 2
+    artifact = json.loads(captured.out)
+    assert artifact["summary"]["pipeline_errors"] == 1
+    assert artifact["pipeline_errors"][0]["phase"] == "invocation"
+    assert "unknown warning policy" in artifact["pipeline_errors"][0]["message"]
 
 
 def test_stage31_emit_proof_obligations_json_for_failed_refinement(
@@ -1089,6 +1333,8 @@ def test_stage31_emit_proof_obligations_json_for_failed_refinement(
     captured = capsys.readouterr()
     assert rc == 1
     artifact = json.loads(captured.out)
+    assert artifact["input"]["include_stdlib"] is False
+    assert artifact["summary"]["warning_diagnostics"] == 0
     assert artifact["summary"]["typecheck_errors"] == 1
     assert len(artifact["typecheck_errors"]) == 1
     obligation = artifact["obligations"][0]
@@ -1162,9 +1408,146 @@ def test_stage31_emit_proof_obligations_stdout_stays_json_with_ad_warning(
     artifact = json.loads(captured.out)
     assert artifact["schema"] == "helix.proof_obligations.v0"
     assert artifact["summary"]["typecheck_errors"] == 0
+    assert artifact["summary"]["warning_diagnostics"] == 1
+    assert artifact["summary"]["warning_errors"] == 0
+    assert artifact["warning_diagnostics"][0]["kind"] == "ad"
+    assert artifact["warning_diagnostics"][0]["promoted_to_error"] is False
     assert "ad:" not in captured.out
     assert "ad:" in captured.err
     assert "24200" in captured.err or "AD002" in captured.err
+
+
+def test_stage31_emit_proof_obligations_classifies_ad_warning_error(
+    capsys, tmp_path,
+):
+    src_path = str(tmp_path / "proof_with_ad_error.hx")
+    with open(src_path, "w") as f:
+        f.write(
+            "fn loss(x: D<f64>, y: D<i32>) -> D<f64> { x + y }\n"
+            "fn main() -> i32 { 0 }\n"
+        )
+    rc = main([
+        src_path, "--emit-proof-obligations", "--no-stdlib", "-Wad=error",
+    ])
+    captured = capsys.readouterr()
+    assert rc == 1, captured.out + captured.err
+    artifact = json.loads(captured.out)
+    assert artifact["summary"]["typecheck_errors"] == 0
+    assert artifact["summary"]["warning_diagnostics"] == 1
+    assert artifact["summary"]["warning_errors"] == 1
+    warning = artifact["warning_diagnostics"][0]
+    assert warning["kind"] == "ad"
+    assert warning["policy"] == "error"
+    assert warning["promoted_to_error"] is True
+    assert "24200" in warning["message"] or "AD002" in warning["message"]
+    assert "ad:" in captured.err
+
+
+def test_stage31_emit_proof_obligations_classifies_deprecated_error(
+    capsys, tmp_path,
+):
+    src_path = str(tmp_path / "proof_deprecated_error.hx")
+    with open(src_path, "w") as f:
+        f.write(
+            "@deprecated fn old() -> i32 { 0 }\n"
+            "fn main() -> i32 { old() }\n"
+        )
+    rc = main([
+        src_path, "--emit-proof-obligations", "--no-stdlib",
+        "-Wdeprecated=error",
+    ])
+    captured = capsys.readouterr()
+    assert rc == 1, captured.out + captured.err
+    artifact = json.loads(captured.out)
+    assert artifact["summary"]["typecheck_errors"] == 0
+    assert artifact["summary"]["warning_errors"] == 1
+    assert artifact["warning_diagnostics"][0]["kind"] == "deprecated"
+    assert artifact["warning_diagnostics"][0]["policy"] == "error"
+    assert artifact["warning_diagnostics"][0]["promoted_to_error"] is True
+    assert "old" in artifact["warning_diagnostics"][0]["message"]
+    assert "deprecated:" in captured.err
+
+
+def test_stage31_emit_proof_obligations_classifies_strict_effect_error(
+    capsys, tmp_path,
+):
+    src_path = str(tmp_path / "proof_strict_effect_error.hx")
+    with open(src_path, "w") as f:
+        f.write(
+            "@pure fn bad(x: i32) -> i32 { print_int(x); x }\n"
+            "fn main() -> i32 { bad(42) }\n"
+        )
+    rc = main([src_path, "--emit-proof-obligations", "--strict"])
+    captured = capsys.readouterr()
+    assert rc == 1, captured.out + captured.err
+    artifact = json.loads(captured.out)
+    assert artifact["summary"]["typecheck_errors"] == 0
+    assert artifact["summary"]["warning_errors"] >= 1
+    effect_records = [
+        w for w in artifact["warning_diagnostics"]
+        if w["kind"] == "effect-check"
+    ]
+    assert effect_records
+    assert effect_records[0]["severity"] == "hard"
+    assert effect_records[0]["promoted_to_error"] is True
+    assert "19001" in effect_records[0]["message"]
+    assert "effect-check" in captured.err
+
+
+def test_stage31_emit_proof_obligations_keeps_strict_effect_records_with_pipeline_error(
+    capsys, tmp_path,
+):
+    src_path = str(tmp_path / "proof_trace_and_effect_error.hx")
+    with open(src_path, "w") as f:
+        f.write(
+            '@trace\n'
+            'extern "C" fn ext(x: i32) -> i32;\n'
+            "@pure fn bad(x: i32) -> i32 { print_int(x); x }\n"
+            "fn main() -> i32 { bad(ext(1)) }\n"
+        )
+    rc = main([
+        src_path, "--emit-proof-obligations", "--no-stdlib", "--strict",
+    ])
+    captured = capsys.readouterr()
+    assert rc == 1, captured.out + captured.err
+    artifact = json.loads(captured.out)
+    assert artifact["summary"]["pipeline_errors"] >= 1
+    assert any(e["phase"] == "trace" for e in artifact["pipeline_errors"])
+    assert artifact["summary"]["warning_errors"] >= 1
+    effect_records = [
+        w for w in artifact["warning_diagnostics"]
+        if w["kind"] == "effect-check"
+    ]
+    assert effect_records
+    assert any("19001" in w["message"] for w in effect_records)
+
+
+def test_stage31_emit_proof_obligations_strict_effect_pass_failure_stays_json(
+    monkeypatch, capsys, tmp_path,
+):
+    from helixc.ir.passes import cse
+
+    src_path = str(tmp_path / "proof_strict_effect_pass_failure.hx")
+    with open(src_path, "w") as f:
+        f.write("fn main() -> i32 { 0 }\n")
+
+    def boom(_mod):
+        raise RuntimeError("forced cse failure")
+
+    monkeypatch.setattr(cse, "cse_module", boom)
+    rc = main([
+        src_path, "--emit-proof-obligations", "--no-stdlib", "--strict",
+    ])
+    captured = capsys.readouterr()
+    assert rc == 1
+    artifact = json.loads(captured.out)
+    assert any(
+        e["phase"] == "strict-effect-check"
+        and "forced cse failure" in e["message"]
+        for e in artifact["pipeline_errors"]
+    )
+    assert "internal error" not in captured.err
+    assert "Traceback" not in captured.err
 
 
 def test_stage31_emit_proof_obligations_json_for_struct_mono_error(
@@ -1176,11 +1559,17 @@ def test_stage31_emit_proof_obligations_json_for_struct_mono_error(
             "struct Pt[T] { x: T }\n"
             "fn bad(p: Pt<i32, f64>) -> i32 { 0 }\n"
         )
-    rc = main([src_path, "--emit-proof-obligations", "--no-stdlib"])
+    rc = main([
+        src_path, "--emit-proof-obligations", "--no-stdlib",
+        "-O3", "-lm", "-l", "c", "-Wdeprecated=error",
+    ])
     captured = capsys.readouterr()
     assert rc == 1
     artifact = json.loads(captured.out)
     assert artifact["schema"] == "helix.proof_obligations.v0"
+    assert artifact["input"]["opt_level"] == 3
+    assert artifact["input"]["libs"] == ["m", "c"]
+    assert artifact["input"]["warnings"] == {"deprecated": "error"}
     assert artifact["summary"]["pipeline_errors"] == 1
     assert artifact["summary"]["typecheck_errors"] == 0
     assert artifact["pipeline_errors"][0]["phase"] == "struct-mono"
@@ -1188,20 +1577,125 @@ def test_stage31_emit_proof_obligations_json_for_struct_mono_error(
     assert "struct-mono" in captured.err
 
 
-def test_stage31_emit_proof_obligations_json_for_parse_error(
+def test_stage31_emit_proof_obligations_pipeline_error_counts_missing_stdlib(
+    monkeypatch, capsys, tmp_path,
+):
+    src_path = str(tmp_path / "proof_struct_mono_missing_stdlib.hx")
+    with open(src_path, "w") as f:
+        f.write(
+            "struct Pt[T] { x: T }\n"
+            "fn bad(p: Pt<i32, f64>) -> i32 { 0 }\n"
+        )
+    monkeypatch.setattr(
+        parser_mod,
+        "STDLIB_FILES",
+        ["pipeline_missing_stdlib_for_proof_metadata.hx"],
+    )
+    rc = main([src_path, "--emit-proof-obligations"])
+    captured = capsys.readouterr()
+    assert rc == 1
+    artifact = json.loads(captured.out)
+    assert artifact["summary"]["pipeline_errors"] == 1
+    assert artifact["pipeline_errors"][0]["phase"] == "struct-mono"
+    assert artifact["input"]["stdlib_files"][0]["missing"] is True
+    assert artifact["summary"]["warning_diagnostics"] == 1
+    assert artifact["warning_diagnostics"][0]["kind"] == "stdlib"
+    assert "stdlib file missing" in captured.err
+
+
+def test_stage31_emit_proof_obligations_classifies_trace_validation_error(
     capsys, tmp_path,
 ):
-    src_path = str(tmp_path / "proof_parse_error.hx")
+    src_path = str(tmp_path / "proof_trace_validation_error.hx")
     with open(src_path, "w") as f:
-        f.write("fn main( -> i32 { 0 }\n")
+        f.write(
+            '@trace\n'
+            'extern "C" fn external_fn(x: i32) -> i32;\n'
+            "fn user_main() -> i32 { external_fn(1) }\n"
+        )
     rc = main([src_path, "--emit-proof-obligations", "--no-stdlib"])
     captured = capsys.readouterr()
     assert rc == 1
     artifact = json.loads(captured.out)
     assert artifact["summary"]["pipeline_errors"] == 1
+    assert artifact["pipeline_errors"][0]["phase"] == "trace"
+    assert "extern" in artifact["pipeline_errors"][0]["message"]
+    assert "trace:" in captured.err
+
+
+def test_stage31_emit_proof_obligations_classifies_panic_validation_error(
+    capsys, tmp_path,
+):
+    src_path = str(tmp_path / "proof_panic_validation_error.hx")
+    with open(src_path, "w") as f:
+        f.write("fn main() -> i32 { panic(); 0 }\n")
+    rc = main([src_path, "--emit-proof-obligations", "--no-stdlib"])
+    captured = capsys.readouterr()
+    assert rc == 1
+    artifact = json.loads(captured.out)
+    assert artifact["summary"]["pipeline_errors"] == 1
+    assert artifact["pipeline_errors"][0]["phase"] == "panic"
+    assert "panic" in artifact["pipeline_errors"][0]["message"]
+    assert "panic:" in captured.err
+
+
+def test_stage31_emit_proof_obligations_strict_panic_error_stays_json(
+    capsys, tmp_path,
+):
+    src_path = str(tmp_path / "proof_strict_panic_validation_error.hx")
+    with open(src_path, "w") as f:
+        f.write("fn main() -> i32 { panic(); 0 }\n")
+    rc = main([
+        src_path, "--emit-proof-obligations", "--no-stdlib", "--strict",
+    ])
+    captured = capsys.readouterr()
+    assert rc == 1
+    artifact = json.loads(captured.out)
+    assert any(e["phase"] == "panic" for e in artifact["pipeline_errors"])
+    assert any(
+        e["phase"] == "strict-effect-check"
+        for e in artifact["pipeline_errors"]
+    )
+    assert "internal error" not in captured.err
+    assert "Traceback" not in captured.err
+
+
+def test_stage31_emit_proof_obligations_json_for_parse_error(
+    capsys, tmp_path,
+):
+    src_path = str(tmp_path / "proof_parse_error.hx")
+    src = "fn main( -> i32 { 0 }\n"
+    with open(src_path, "wb") as f:
+        f.write(src.encode("utf-8"))
+    rc = main([src_path, "--emit-proof-obligations", "--no-stdlib"])
+    captured = capsys.readouterr()
+    assert rc == 1
+    artifact = json.loads(captured.out)
+    assert artifact["input"]["source_sha256"] == (
+        hashlib.sha256(src.encode("utf-8")).hexdigest()
+    )
+    assert artifact["summary"]["pipeline_errors"] == 1
     assert artifact["pipeline_errors"][0]["phase"] == "parse"
     assert "PARSE ERROR" in artifact["pipeline_errors"][0]["message"]
     assert "PARSE ERROR" in captured.err
+
+
+def test_stage31_emit_proof_obligations_parse_error_is_color_stable(
+    capsys, tmp_path,
+):
+    src_path = str(tmp_path / "proof_parse_error_color.hx")
+    with open(src_path, "wb") as f:
+        f.write(b"fn main( -> i32 { 0 }\n")
+    rc = main([
+        src_path, "--emit-proof-obligations", "--no-stdlib", "--color",
+    ])
+    captured = capsys.readouterr()
+    assert rc == 1
+    artifact = json.loads(captured.out)
+    assert artifact["input"]["color"] == "always"
+    message = artifact["pipeline_errors"][0]["message"]
+    assert "PARSE ERROR" in message
+    assert "\x1b[" not in message
 
 
 def test_stage31_cli_default_stdlib_agi_safe_scalar_refinements(capsys, tmp_path):

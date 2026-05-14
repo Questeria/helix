@@ -22,7 +22,8 @@ User asked to stop at a good point so the computer can reset.
 - Snapshot guide exists and its simple compile/run path was verified:
   - `C:\Projects\Kovostov-Native\HELIX_STAGE30_COMPILER_SNAPSHOT\AI_USAGE_GUIDE.md`
   - Verified command path produced `EXIT:42`.
-- Fresh clean gate count is `0/3`.
+- Fresh clean gate count is `3/3` after the proof/source-read and validation
+  harness fixes.
 
 ## Important Answer To User Question
 
@@ -99,10 +100,17 @@ New scripts:
 - `scripts\stage31_validate.py`: quick/full validation runner. Full mode runs
   non-codegen plus sharded `test_codegen.py` in parallel, then snapshot smoke.
 - `scripts\run_all_tests.sh`: legacy "run everything" entry point now delegates
-  pytest coverage and snapshot smoke to `stage31_validate.py --mode full --shards 4`,
+  pytest coverage and snapshot smoke to `stage31_validate.py --mode full`,
   bootstraps a local `.stage31-venv` if Bash's Python lacks pytest, uses a
   `.stage31-bin/wsl` compatibility shim when already inside WSL, then still
   runs the `stage0/hex0` bootstrap-floor gate directly from the current Bash.
+  Follow-up speedup: the default full gate now auto-selects `min(cpu_count, 8)`
+  codegen shards, while `HELIX_TEST_SHARDS=N` still overrides it. This keeps
+  the same tests and hash-based one-shard-per-test coverage; it only increases
+  safe parallelism on machines with enough cores.
+  Verification: `bash scripts/run_all_tests.sh` auto-selected 8 shards on the
+  16-core development machine and passed pytest, snapshot smoke, and
+  `stage0/hex0` in about 506 seconds.
 
 ## 2026-05-13 Follow-Up Increment
 
@@ -147,6 +155,97 @@ now writes unique temp ELF names instead of naming only by ELF hash. Many
 different tests compile to byte-identical "return 42" binaries, and sharded
 pytest workers could collide while WSL was chmod/execing those files. The
 failed shards passed after this harness fix, and the full wrapper gate passed.
+
+## 2026-05-13 Proof Artifact Metadata Slice
+
+Proof-obligation JSON now includes an `input` block:
+
+- `source_sha256`: SHA-256 of the exact UTF-8 source bytes read by `helixc.check`.
+- `include_stdlib`: whether default stdlib was merged.
+- `stdlib_manifest_sha256` and `stdlib_files`: deterministic hashes for every
+  stdlib file included in the proof input.
+- `opt_level`, `flags`, `libs`, and `warnings`: normalized CLI settings.
+- `color`: normalized diagnostic color mode (`auto`, `always`, or `never`).
+
+This gives future proof caches and audit tooling a stable key tying the proof
+artifact back to the source and compiler invocation.
+
+Audit follow-up: proof-mode parse diagnostics are rendered colorless inside the
+JSON artifact so `--color` cannot inject ANSI escapes into machine-readable
+messages. AD warnings drained after proof typecheck now appear in
+`warning_diagnostics`, with `summary.warning_errors` tracking `-Wad=error`
+promotions that make the command fail even when typecheck itself succeeded.
+Second audit follow-up: proof artifacts also classify missing stdlib-file
+warnings, deprecated warnings promoted by `-Wdeprecated=error`, totality
+warnings promoted by `--strict`, and strict effect-check warnings. This prevents
+stdout JSON from looking clean when stderr or the process exit code says the
+invocation failed.
+Third audit follow-up: proof mode now keeps JSON output for strict missing
+stdlib failures and mirrors the normal hard validation passes for trace, panic,
+unwind, unsafe, and autotune errors before declaring a proof artifact clean.
+Fourth audit follow-up: proof input flags now drop the explicit `--stdlib`
+compatibility no-op so default stdlib and explicit stdlib produce the same
+proof key. CLI warning policies are validated up front; typoed values like
+`-Wdeprecated=erro` are rejected as bad invocations instead of silently
+demoting a requested warning promotion.
+Fifth audit follow-up: CLI warning names are also validated (`ad` and
+`deprecated` are the current supported names), so typos like
+`-Wdeprectaed=error` cannot silently fail to promote. Proof mode now still
+collects strict effect-check warning records even when hard validation
+pipeline errors, such as trace errors, are already present.
+Sixth audit follow-up: strict proof-mode effect checking now traps its own
+lowering failures into a `strict-effect-check` pipeline error, preserving JSON
+stdout for invalid source shapes like malformed `panic()` that were already
+reported by hard validation.
+Seventh audit follow-up: strict missing-stdlib proof errors use stable relative
+stdlib names in JSON instead of absolute checkout paths. Source decode failures
+in proof mode now emit a JSON artifact with `phase: "decode"` and the source
+hash instead of returning stderr-only.
+Eighth audit follow-up: proof-mode bad invocations with a real source path
+now emit `phase: "invocation"` JSON artifacts for invalid warning names or
+policies. Strict effect-check now catches failures from optimization/effect
+passes, not just lowering, and reports them as `strict-effect-check` pipeline
+errors instead of escaping to the generic internal-error handler.
+Ninth audit follow-up: proof-mode stdout conflicts, missing source paths, and
+missing source files now also emit `phase: "invocation"` JSON artifacts instead
+of empty stdout, help text, or stderr-only failures.
+Verification after this follow-up: focused proof-invocation tests passed, full
+`test_cli.py` passed with 113 tests, `test_typecheck.py` passed with 229 tests,
+and `bash scripts/run_all_tests.sh` passed with 8 auto-selected codegen shards,
+snapshot smoke, and `stage0/hex0` in about 507 seconds.
+
+## 2026-05-13 Validation Harness Override Fix
+
+Manual shard overrides are now capped at 8. The full gate still auto-selects
+up to 8 shards by default, but unreasonable values such as
+`HELIX_TEST_SHARDS=999999` fail immediately with rc=2 instead of trying to
+launch impossible numbers of pytest workers.
+Verification: `test_stage31_validate.py` covers the cap and fallback behavior,
+the combined CLI/typecheck/validator focused suite passed with 345 tests, and
+`bash scripts/run_all_tests.sh` passed again with 8 shards, snapshot smoke, and
+`stage0/hex0` in about 575 seconds.
+Audit follow-up: `run_all_tests.sh` now validates `HELIX_TEST_SHARDS` before
+starting pytest setup or `stage0/hex0`, so invalid overrides exit immediately
+with rc=2 at the wrapper level too.
+Verification after the wrapper follow-up: the Bash-side invalid override check
+returned rc=2 before gates, the combined CLI/typecheck/validator suite passed
+with 346 tests, and `bash scripts/run_all_tests.sh` passed with 8 shards,
+snapshot smoke, and `stage0/hex0` in about 536 seconds.
+Proof source-read follow-up: proof mode now emits `phase: "source-read"` JSON
+when the supplied source path exists but cannot be opened as a readable file,
+such as when the path is a directory.
+Verification after the source-read follow-up: the directory-path proof repro
+returned parseable JSON with `phase: "source-read"`, the combined
+CLI/typecheck/validator suite passed with 347 tests, and
+`bash scripts/run_all_tests.sh` passed with 8 shards, snapshot smoke, and
+`stage0/hex0` in about 845 seconds.
+Wrapper parsing follow-up: `run_all_tests.sh` now parses `HELIX_TEST_SHARDS`
+in base 10 before range checks, so zero-padded values like `09` fail cleanly
+before pytest or `stage0/hex0` starts.
+Verification after the wrapper parsing follow-up: `HELIX_TEST_SHARDS=09`
+returned rc=2 before gate banners, the combined CLI/typecheck/validator suite
+passed with 348 tests, and `bash scripts/run_all_tests.sh` passed with 8
+shards, snapshot smoke, and `stage0/hex0` in about 855 seconds.
 
 ## Do Not Forget
 

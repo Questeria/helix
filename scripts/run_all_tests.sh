@@ -3,7 +3,21 @@
 set -u
 cd "$(dirname "$0")/.."
 
-SHARDS="${HELIX_TEST_SHARDS:-4}"
+SHARDS="${HELIX_TEST_SHARDS:-}"
+MAX_SHARDS=8
+
+if [[ -n "$SHARDS" ]]; then
+    if ! [[ "$SHARDS" =~ ^[0-9]+$ ]]; then
+        echo "HELIX_TEST_SHARDS must be an integer from 1 to $MAX_SHARDS" >&2
+        exit 2
+    fi
+    SHARDS_DEC=$((10#$SHARDS))
+    if (( SHARDS_DEC < 1 || SHARDS_DEC > MAX_SHARDS )); then
+        echo "HELIX_TEST_SHARDS must be an integer from 1 to $MAX_SHARDS" >&2
+        exit 2
+    fi
+    SHARDS="$SHARDS_DEC"
+fi
 
 ensure_python_with_pytest() {
     local candidate="${PYTHON:-python}"
@@ -32,11 +46,16 @@ ensure_python_with_pytest() {
 }
 
 echo "pytest (stage31 sharded gate):"
+SHARD_ARGS=()
+if [[ -n "$SHARDS" ]]; then
+    SHARD_ARGS=(--shards "$SHARDS")
+fi
+
 if ! ensure_python_with_pytest; then
     PYTEST_RC=1
 elif "$PYTHON_BIN" scripts/stage31_validate.py \
         --mode full \
-        --shards "$SHARDS"; then
+        "${SHARD_ARGS[@]}"; then
     PYTEST_RC=0
 else
     PYTEST_RC=$?

@@ -56,10 +56,12 @@ License: Apache 2.0
 from __future__ import annotations
 
 import json
+import hashlib
 import sys
 import os
 
 from .frontend.lexer import LexError
+from .frontend import parser as parser_mod
 from .frontend.parser import parse, ParseError
 from .frontend.typecheck import typecheck, typecheck_with_obligations
 from .frontend.totality import check_totality
@@ -90,6 +92,8 @@ _KNOWN_LONG_FLAGS = frozenset({
     "--emit-ptx", "--emit-proof-obligations", "--doc", "--help",
     "--no-color", "--color", "-h",
 })
+
+_KNOWN_WARNING_NAMES = frozenset({"ad", "deprecated"})
 
 
 def parse_args(argv: list[str]) -> tuple[CliArgs, list[str]]:
@@ -142,8 +146,22 @@ def parse_args(argv: list[str]) -> tuple[CliArgs, list[str]]:
             body = tok[2:]
             if "=" in body:
                 name, val = body.split("=", 1)
+                if name not in _KNOWN_WARNING_NAMES:
+                    errors.append(f"unknown warning name: {name}")
+                    i += 1
+                    continue
+                if val not in ("warn", "error"):
+                    errors.append(
+                        f"unknown warning policy for -W{name}: {val}"
+                    )
+                    i += 1
+                    continue
                 a.warnings[name] = val
             else:
+                if body not in _KNOWN_WARNING_NAMES:
+                    errors.append(f"unknown warning name: {body}")
+                    i += 1
+                    continue
                 a.warnings[body] = "warn"
             i += 1
         elif tok.startswith("--") or tok.startswith("-"):
@@ -222,14 +240,16 @@ def extract_doc_comments(src: str) -> str:
 # ----------------------------------------------------------------------
 # AD warning drain (Audit 28.8 cycle 2 C2-1)
 # ----------------------------------------------------------------------
-def _drain_ad_warnings(a: "CliArgs") -> int:
-    """Drain the AD-warning channel and emit diagnostics to stderr.
+def _drain_ad_warnings_to_records(
+    a: "CliArgs",
+) -> tuple[list[dict[str, object]], int]:
+    """Drain the AD-warning channel and emit diagnostics.
 
-    Returns 1 if `-Wad=error` was set AND any warnings were drained,
-    else 0. Must be called on every code path that exits successfully
-    from `main()` so that B13 widening warnings emitted during typecheck
-    are surfaced even when the user runs with no `--emit-*` / `-o` /
-    or `--check-only`.
+    Returns structured records plus rc=1 if `-Wad=error` was set AND any
+    warnings were drained, else rc=0. Must be called on every code path that
+    exits successfully from `main()` so that B13 widening warnings emitted
+    during typecheck are surfaced even when the user runs with no `--emit-*` /
+    `-o` / or `--check-only`.
 
     The drain itself ALWAYS clears `_DIFF_WARNINGS` (via `take_diff_
     warnings`) — even when the policy is "warn" rather than "error",
@@ -238,16 +258,29 @@ def _drain_ad_warnings(a: "CliArgs") -> int:
     from .frontend.autodiff import take_diff_warnings
     ad_warnings = take_diff_warnings()
     if not ad_warnings:
-        return 0
+        return [], 0
     ad_policy = a.warnings.get("ad", "warn")
     label = "ERROR" if ad_policy == "error" else "warning"
     stream = sys.stderr if "--emit-proof-obligations" in a.flags else sys.stdout
     print(f"   ad:        {len(ad_warnings)} {label}(s)", file=stream)
+    records = []
     for w in ad_warnings:
         print(f"     helixc: {w}", file=sys.stderr)
+        records.append({
+            "kind": "ad",
+            "policy": ad_policy,
+            "message": w,
+            "promoted_to_error": ad_policy == "error",
+        })
     if ad_policy == "error":
-        return 1
-    return 0
+        return records, 1
+    return records, 0
+
+
+def _drain_ad_warnings(a: "CliArgs") -> int:
+    """Drain AD warnings for the normal CLI wrapper."""
+    _, rc = _drain_ad_warnings_to_records(a)
+    return rc
 
 
 def _emit_env_error(msg: str) -> None:
@@ -346,19 +379,28 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _emit_proof_obligation_artifact(
-    path: str,
+    path: str | None,
     obligations,
     typecheck_errors,
     pipeline_errors=None,
+    input_metadata=None,
+    warning_diagnostics=None,
 ) -> None:
     pipeline_errors = list(pipeline_errors or [])
+    warning_diagnostics = list(warning_diagnostics or [])
     artifact = {
         "schema": "helix.proof_obligations.v0",
         "path": path,
+        "input": dict(input_metadata or {}),
         "summary": {
             "obligations": len(obligations),
             "pipeline_errors": len(pipeline_errors),
             "typecheck_errors": len(typecheck_errors),
+            "warning_diagnostics": len(warning_diagnostics),
+            "warning_errors": sum(
+                1 for d in warning_diagnostics
+                if d.get("promoted_to_error")
+            ),
         },
         "obligations": [
             o.to_json_dict() if hasattr(o, "to_json_dict") else dict(o)
@@ -366,15 +408,20 @@ def _emit_proof_obligation_artifact(
         ],
         "pipeline_errors": pipeline_errors,
         "typecheck_errors": [str(e) for e in typecheck_errors],
+        "warning_diagnostics": warning_diagnostics,
     }
     print(json.dumps(artifact, indent=2, sort_keys=True))
 
 
 def _emit_proof_pipeline_error(
-    path: str,
+    path: str | None,
     phase: str,
     messages: list[str],
+    input_metadata=None,
+    warning_diagnostics=None,
 ) -> None:
+    if warning_diagnostics is None and input_metadata is not None:
+        warning_diagnostics = _proof_input_warning_diagnostics(input_metadata)
     for msg in messages:
         print(msg, file=sys.stderr)
     _emit_proof_obligation_artifact(
@@ -382,7 +429,338 @@ def _emit_proof_pipeline_error(
         [],
         [],
         pipeline_errors=[{"phase": phase, "message": "\n".join(messages)}],
+        input_metadata=input_metadata,
+        warning_diagnostics=warning_diagnostics,
     )
+
+
+def _proof_input_metadata(
+    src_bytes: bytes,
+    a: "CliArgs",
+    include_stdlib: bool,
+) -> dict[str, object]:
+    stdlib = _proof_stdlib_manifest(include_stdlib)
+    return {
+        "source_sha256": hashlib.sha256(src_bytes).hexdigest(),
+        "include_stdlib": include_stdlib,
+        "stdlib_strict": stdlib["strict"],
+        "stdlib_manifest_sha256": stdlib["manifest_sha256"],
+        "stdlib_files": stdlib["files"],
+        "opt_level": a.opt_level,
+        "flags": _proof_normalized_flags(a.flags),
+        "libs": list(a.libs),
+        "warnings": {k: a.warnings[k] for k in sorted(a.warnings)},
+        "color": (
+            "auto" if a.color is None
+            else "always" if a.color
+            else "never"
+        ),
+    }
+
+
+def _proof_invocation_input_metadata(a: "CliArgs") -> dict[str, object]:
+    include_stdlib = "--no-stdlib" not in a.flags
+    if a.path is not None:
+        try:
+            with open(a.path, "rb") as f:
+                return _proof_input_metadata(f.read(), a, include_stdlib)
+        except OSError as e:
+            source_error = str(e)
+    else:
+        source_error = "source path is missing"
+    stdlib = _proof_stdlib_manifest(include_stdlib)
+    return {
+        "source_sha256": None,
+        "source_available": False,
+        "source_error": source_error,
+        "include_stdlib": include_stdlib,
+        "stdlib_strict": stdlib["strict"],
+        "stdlib_manifest_sha256": stdlib["manifest_sha256"],
+        "stdlib_files": stdlib["files"],
+        "opt_level": a.opt_level,
+        "flags": _proof_normalized_flags(a.flags),
+        "libs": list(a.libs),
+        "warnings": {k: a.warnings[k] for k in sorted(a.warnings)},
+        "color": (
+            "auto" if a.color is None
+            else "always" if a.color
+            else "never"
+        ),
+    }
+
+
+def _emit_proof_invocation_error(a: "CliArgs", messages: list[str]) -> None:
+    _emit_proof_pipeline_error(
+        a.path,
+        "invocation",
+        ["INVOCATION ERROR:"] + [f"  {msg}" for msg in messages],
+        input_metadata=_proof_invocation_input_metadata(a),
+    )
+
+
+def _emit_proof_source_read_error(
+    a: "CliArgs",
+    path: str,
+    error: OSError,
+) -> None:
+    _emit_proof_pipeline_error(
+        path,
+        "source-read",
+        ["SOURCE READ ERROR:", f"  helixc: {error}"],
+        input_metadata=_proof_invocation_input_metadata(a),
+    )
+
+
+def _proof_normalized_flags(flags: set[str]) -> list[str]:
+    normalized = set(flags)
+    # `--stdlib` is an explicit compatibility spelling of the default.
+    # Keep `include_stdlib` as the semantic bit and omit this no-op flag so
+    # default and explicit-stdlib invocations share the same proof key.
+    normalized.discard("--stdlib")
+    return sorted(normalized)
+
+
+def _proof_stdlib_manifest(include_stdlib: bool) -> dict[str, object]:
+    files: list[dict[str, object]] = []
+    strict = (
+        os.environ.get(parser_mod.STDLIB_STRICT_ENV, "").lower()
+        in ("1", "true", "yes")
+    )
+    if include_stdlib:
+        stdlib_dir = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(parser_mod.__file__))),
+            "stdlib",
+        )
+        for fname in parser_mod.STDLIB_FILES:
+            path = os.path.join(stdlib_dir, fname)
+            entry: dict[str, object] = {"path": fname}
+            if os.path.isfile(path):
+                with open(path, "rb") as f:
+                    data = f.read()
+                entry["sha256"] = hashlib.sha256(data).hexdigest()
+                entry["bytes"] = len(data)
+            else:
+                entry["missing"] = True
+            files.append(entry)
+    manifest_src = json.dumps(
+        files,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return {
+        "files": files,
+        "manifest_sha256": hashlib.sha256(manifest_src).hexdigest(),
+        "strict": strict if include_stdlib else False,
+    }
+
+
+def _proof_input_warning_diagnostics(
+    input_metadata: dict[str, object],
+) -> list[dict[str, object]]:
+    records: list[dict[str, object]] = []
+    strict = bool(input_metadata.get("stdlib_strict"))
+    for entry in input_metadata.get("stdlib_files", []):
+        if not isinstance(entry, dict) or not entry.get("missing"):
+            continue
+        records.append({
+            "kind": "stdlib",
+            "policy": "error" if strict else "warn",
+            "message": f"stdlib file missing: {entry.get('path')}",
+            "promoted_to_error": strict,
+            "path": entry.get("path"),
+        })
+    return records
+
+
+def _proof_deprecated_warning_diagnostics(
+    prog: A.Program,
+    a: "CliArgs",
+) -> tuple[list[dict[str, object]], int]:
+    from .frontend.deprecated_pass import emit_warnings
+
+    policy = a.warnings.get("deprecated", "warn")
+    warnings = emit_warnings(prog)
+    if not warnings:
+        return [], 0
+    label = "ERROR" if policy == "error" else "warning"
+    print(f"   deprecated: {len(warnings)} {label}(s)", file=sys.stderr)
+    records = []
+    for w in warnings:
+        print(f"     {w}", file=sys.stderr)
+        records.append({
+            "kind": "deprecated",
+            "policy": policy,
+            "message": w,
+            "promoted_to_error": policy == "error",
+        })
+    return records, 1 if policy == "error" else 0
+
+
+def _proof_hard_validation_pipeline_errors(
+    prog: A.Program,
+) -> list[dict[str, str]]:
+    errors: list[dict[str, str]] = []
+
+    def record(phase: str, header: str, diags: list[object]) -> None:
+        if not diags:
+            return
+        lines = [header] + [f"     {d}" for d in diags]
+        print(header, file=sys.stderr)
+        for d in diags:
+            print(f"     {d}", file=sys.stderr)
+        errors.append({"phase": phase, "message": "\n".join(lines)})
+
+    from .frontend.trace_pass import validate_trace_attrs
+    trace_diags = validate_trace_attrs(prog)
+    record("trace", f"   trace:     {len(trace_diags)} ERROR(s)", trace_diags)
+
+    from .frontend.panic_pass import (
+        validate_panic_args, validate_unwind,
+    )
+    panic_diags = validate_panic_args(prog)
+    unwind_diags = validate_unwind(prog)
+    record("panic", f"   panic:     {len(panic_diags)} ERROR(s)", panic_diags)
+    record("unwind", f"   unwind:    {len(unwind_diags)} ERROR(s)", unwind_diags)
+
+    from .frontend.unsafe_pass import check_unsafe_ops
+    unsafe_diags = check_unsafe_ops(prog)
+    record("unsafe", f"   unsafe:    {len(unsafe_diags)} ERROR(s)", unsafe_diags)
+
+    from .frontend.autotune import validate_autotune_prog
+    autotune_diags = validate_autotune_prog(prog)
+    record(
+        "autotune",
+        f"   autotune:  {len(autotune_diags)} ERROR(s)",
+        autotune_diags,
+    )
+    return errors
+
+
+def _proof_totality_warning_diagnostics(
+    prog: A.Program,
+    a: "CliArgs",
+) -> tuple[list[dict[str, object]], int]:
+    fails = check_totality(prog)
+    if not fails:
+        print(f"   totality:  OK", file=sys.stderr)
+        return [], 0
+    print(
+        f"warning: totality: {len(fails)} fn(s) NOT proven total",
+        file=sys.stderr,
+    )
+    strict = "--strict" in a.flags
+    records = []
+    for name, reason in fails:
+        message = f"totality: {name}: {reason} (trap 21001)"
+        print(f"warning: [trap 21001] {message}", file=sys.stderr)
+        records.append({
+            "kind": "totality",
+            "policy": "error" if strict else "warn",
+            "message": message,
+            "function": name,
+            "promoted_to_error": strict,
+        })
+    if strict:
+        print(
+            f"\n{len(fails)} totality warning(s); --strict aborts.",
+            file=sys.stderr,
+        )
+        return records, 1
+    return records, 0
+
+
+def _proof_strict_effect_warning_diagnostics(
+    prog: A.Program,
+    a: "CliArgs",
+    include_stdlib: bool,
+) -> tuple[list[dict[str, object]], int, list[dict[str, str]]]:
+    if "--strict" not in a.flags:
+        return [], 0, []
+
+    from .ir.lower_ast import lower
+    from .ir.passes.fdce import fdce_module, diagnostic_function_names
+    from .ir.passes.const_fold import fold_module, FoldError
+    from .ir.passes.cse import cse_module
+    from .ir.passes.dce import dce_module
+    from .ir.passes.effect_check import (
+        check_module as effect_check_module,
+        report_diagnostics as report_effect_diagnostics,
+        classify_effect_error,
+    )
+    from .frontend.grad_pass import grad_pass
+
+    try:
+        grad_pass(prog)
+        mod = lower(prog)
+    except Exception as e:
+        msg = (
+            f"strict-effect-check: ERROR\n"
+            f"     {type(e).__name__}: {e}"
+        )
+        print(msg, file=sys.stderr)
+        return [], 1, [{"phase": "strict-effect-check", "message": msg}]
+    try:
+        pre_opt_effect_scope = None
+        if include_stdlib:
+            pre_opt_effect_scope = diagnostic_function_names(mod)
+        pre_opt_eff_errs = effect_check_module(
+            mod, only_functions=pre_opt_effect_scope)
+        if a.opt_level >= 1:
+            fold_module(mod)
+            cse_module(mod)
+            dce_module(mod)
+            fdce_module(mod)
+    except FoldError as fe:
+        msg = f"helixc: const-fold error: {fe}"
+        print(msg, file=sys.stderr)
+        return [], 1, [{"phase": "const-fold", "message": msg}]
+    except Exception as e:
+        msg = (
+            f"strict-effect-check: ERROR\n"
+            f"     {type(e).__name__}: {e}"
+        )
+        print(msg, file=sys.stderr)
+        return [], 1, [{"phase": "strict-effect-check", "message": msg}]
+
+    try:
+        effect_scope = None
+        if include_stdlib:
+            effect_scope = diagnostic_function_names(mod)
+        post_opt_eff_errs = effect_check_module(
+            mod, only_functions=effect_scope)
+        eff_errs = list(pre_opt_eff_errs)
+        seen_eff_errs = set(eff_errs)
+        for err in post_opt_eff_errs:
+            if err not in seen_eff_errs:
+                eff_errs.append(err)
+                seen_eff_errs.add(err)
+
+        hard_count = report_effect_diagnostics(eff_errs, stderr=sys.stderr)
+        records = []
+        for err in eff_errs:
+            severity = classify_effect_error(err)
+            promoted = severity in ("hard", "unknown")
+            records.append({
+                "kind": "effect-check",
+                "policy": "error" if promoted else "info",
+                "severity": severity,
+                "message": err,
+                "promoted_to_error": promoted,
+            })
+        if hard_count > 0:
+            print(
+                f"\n{hard_count} effect-check warning(s); --strict aborts.",
+                file=sys.stderr,
+            )
+            return records, 1, []
+        return records, 0, []
+    except Exception as e:
+        msg = (
+            f"strict-effect-check: ERROR\n"
+            f"     {type(e).__name__}: {e}"
+        )
+        print(msg, file=sys.stderr)
+        return [], 1, [{"phase": "strict-effect-check", "message": msg}]
 
 
 def _main_inner(argv: list[str] | None,
@@ -395,6 +773,7 @@ def _main_inner(argv: list[str] | None,
     `_DIFF_WARNINGS` to drain because typecheck never ran."""
     argv = list(argv if argv is not None else sys.argv[1:])
     a, errs = parse_args(argv)
+    proof_mode = "--emit-proof-obligations" in a.flags
     if "--help" in a.flags:
         _print_help()
         return 0
@@ -404,34 +783,76 @@ def _main_inner(argv: list[str] | None,
     }
     selected_stdout_modes = sorted(a.flags & stdout_modes)
     if len(selected_stdout_modes) > 1:
-        for mode in selected_stdout_modes:
-            print(f"helixc: stdout mode selected: {mode}", file=sys.stderr)
-        print(
-            "helixc: choose exactly one stdout-producing mode per invocation",
-            file=sys.stderr,
+        messages = [
+            f"helixc: stdout mode selected: {mode}"
+            for mode in selected_stdout_modes
+        ]
+        messages.append(
+            "helixc: choose exactly one stdout-producing mode per invocation"
         )
+        if proof_mode:
+            _emit_proof_invocation_error(a, messages)
+        else:
+            for msg in messages:
+                print(msg, file=sys.stderr)
         return 2
     if errs:
-        for e in errs:
-            print(f"helixc: {e}", file=sys.stderr)
+        if proof_mode:
+            _emit_proof_invocation_error(
+                a,
+                [f"helixc: {e}" for e in errs],
+            )
+        else:
+            for e in errs:
+                print(f"helixc: {e}", file=sys.stderr)
         return 2
     if a.path is None:
+        if proof_mode:
+            _emit_proof_invocation_error(a, ["helixc: source path required"])
+            return 2
         _print_help()
         return 2
     path = a.path
     if not os.path.exists(path):
+        if proof_mode:
+            _emit_proof_invocation_error(
+                a,
+                [f"helixc: file not found: {path}"],
+            )
+            return 2
         print(f"helixc: file not found: {path}", file=sys.stderr)
         return 2
 
-    with open(path, "r", encoding="utf-8") as f:
-        src = f.read()
+    try:
+        with open(path, "rb") as f:
+            src_bytes = f.read()
+    except OSError as e:
+        if proof_mode:
+            _emit_proof_source_read_error(a, path, e)
+            return 2
+        raise
+    try:
+        src = src_bytes.decode("utf-8")
+    except UnicodeDecodeError as e:
+        if proof_mode:
+            proof_input = _proof_input_metadata(
+                src_bytes,
+                a,
+                "--no-stdlib" not in a.flags,
+            )
+            _emit_proof_pipeline_error(
+                path,
+                "decode",
+                ["DECODE ERROR:", f"  encoding error reading source: {e}"],
+                input_metadata=proof_input,
+            )
+            return 2
+        raise
 
     # Doc extraction is a separate mode: parse not required.
     if "--doc" in a.flags:
         print(extract_doc_comments(src))
         return 0
-
-    proof_mode = "--emit-proof-obligations" in a.flags
 
     def info(msg: str) -> None:
         print(msg, file=sys.stderr if proof_mode else sys.stdout)
@@ -442,27 +863,51 @@ def _main_inner(argv: list[str] | None,
     a_holder.append(a)
 
     include_stdlib = "--no-stdlib" not in a.flags
+    proof_input = _proof_input_metadata(src_bytes, a, include_stdlib)
 
     # 1. Parse
     try:
         prog = parse(src, include_stdlib=include_stdlib)
+    except FileNotFoundError as e:
+        if proof_mode:
+            stdlib_missing = [
+                str(d["message"]) for d in
+                _proof_input_warning_diagnostics(proof_input)
+                if d.get("kind") == "stdlib"
+            ]
+            _emit_proof_pipeline_error(
+                path,
+                "stdlib",
+                ["STDLIB ERROR:"]
+                + [f"  {msg}" for msg in stdlib_missing]
+                + ([] if stdlib_missing else [f"  {e}"]),
+                input_metadata=proof_input,
+            )
+            return 2
+        raise
     except LexError as e:
         if proof_mode:
             _emit_proof_pipeline_error(
                 path, "lex", ["LEX ERROR:", f"  {path}:{e}"],
+                input_metadata=proof_input,
             )
             return 1
         print("LEX ERROR:", file=sys.stderr)
         print(f"  {path}:{e}", file=sys.stderr)
         return 1
     except ParseError as e:
-        rendered = e.render(source=src, filename=path, color=a.color)
+        rendered = e.render(
+            source=src,
+            filename=path,
+            color=False if proof_mode else a.color,
+        )
         if proof_mode:
             _emit_proof_pipeline_error(
                 path,
                 "parse",
                 ["PARSE ERROR:"] + [f"  {line}"
                                     for line in rendered.splitlines()],
+                input_metadata=proof_input,
             )
             return 1
         print("PARSE ERROR:", file=sys.stderr)
@@ -512,6 +957,7 @@ def _main_inner(argv: list[str] | None,
             _emit_proof_pipeline_error(
                 path, "mod-flatten",
                 ["   mod-flatten: ERROR", f"     {e}"],
+                input_metadata=proof_input,
             )
             return 1
         print(f"   mod-flatten: ERROR", file=sys.stderr)
@@ -536,6 +982,7 @@ def _main_inner(argv: list[str] | None,
             _emit_proof_pipeline_error(
                 path, "impl-flatten",
                 ["   impl-flatten: ERROR", f"     {e}"],
+                input_metadata=proof_input,
             )
             return 1
         print(f"   impl-flatten: ERROR")
@@ -557,6 +1004,7 @@ def _main_inner(argv: list[str] | None,
                 "struct-mono",
                 [f"   struct-mono: {len(sm_diags)} ERROR(s)"]
                 + [f"     {d}" for d in sm_diags],
+                input_metadata=proof_input,
             )
             return 1
         print(f"   struct-mono: {len(sm_diags)} ERROR(s)")
@@ -577,6 +1025,7 @@ def _main_inner(argv: list[str] | None,
                 "fn-mono",
                 [f"   fn-mono: {len(mono_diags)} ERROR(s)"]
                 + [f"     {d}" for d in mono_diags],
+                input_metadata=proof_input,
             )
             return 1
         print(f"   fn-mono: {len(mono_diags)} ERROR(s)")
@@ -595,7 +1044,14 @@ def _main_inner(argv: list[str] | None,
         tc_errs = typecheck(prog)
     if tc_errs:
         if proof_mode:
-            _emit_proof_obligation_artifact(path, proof_obligations, tc_errs)
+            warning_diagnostics = _proof_input_warning_diagnostics(proof_input)
+            ad_diagnostics, _warning_rc = _drain_ad_warnings_to_records(a)
+            warning_diagnostics.extend(ad_diagnostics)
+            _emit_proof_obligation_artifact(
+                path, proof_obligations, tc_errs,
+                input_metadata=proof_input,
+                warning_diagnostics=warning_diagnostics,
+            )
             return 1
         print(f"   typecheck: {len(tc_errs)} ERRORS")
         for e in tc_errs[:20]:
@@ -608,8 +1064,41 @@ def _main_inner(argv: list[str] | None,
         return 1
     info(f"   typecheck: OK")
     if proof_mode:
-        _emit_proof_obligation_artifact(path, proof_obligations, tc_errs)
-        return 0
+        warning_diagnostics = _proof_input_warning_diagnostics(proof_input)
+        warning_rc = 1 if any(
+            d.get("promoted_to_error") for d in warning_diagnostics
+        ) else 0
+        proof_pipeline_errors: list[dict[str, str]] = []
+        totality_records, totality_rc = _proof_totality_warning_diagnostics(
+            prog, a)
+        warning_diagnostics.extend(totality_records)
+        warning_rc = max(warning_rc, totality_rc)
+        deprecated_records, deprecated_rc = _proof_deprecated_warning_diagnostics(
+            prog, a)
+        warning_diagnostics.extend(deprecated_records)
+        warning_rc = max(warning_rc, deprecated_rc)
+        proof_pipeline_errors.extend(_proof_hard_validation_pipeline_errors(prog))
+        if proof_pipeline_errors:
+            warning_rc = max(warning_rc, 1)
+        effect_records, effect_rc, effect_pipeline_errors = (
+            _proof_strict_effect_warning_diagnostics(
+                prog, a, include_stdlib)
+        )
+        warning_diagnostics.extend(effect_records)
+        warning_rc = max(warning_rc, effect_rc)
+        proof_pipeline_errors.extend(effect_pipeline_errors)
+        ad_diagnostics, ad_rc = _drain_ad_warnings_to_records(a)
+        warning_diagnostics.extend(ad_diagnostics)
+        warning_rc = max(warning_rc, ad_rc)
+        _emit_proof_obligation_artifact(
+            path, proof_obligations, tc_errs,
+            pipeline_errors=proof_pipeline_errors,
+            input_metadata=proof_input,
+            warning_diagnostics=warning_diagnostics,
+        )
+        if proof_pipeline_errors:
+            return 1
+        return warning_rc
 
     # 3. Totality
     # Stage 28.9 cycle 28 audit-R C27-6 fix (conf 70): pre-fix the

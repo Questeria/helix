@@ -23,6 +23,12 @@ import time
 ROOT = Path(__file__).resolve().parents[1]
 LOG_DIR = ROOT / ".stage31-logs"
 BIN_DIR = ROOT / ".stage31-bin"
+MAX_SHARDS = 8
+
+
+def default_shards() -> int:
+    """Pick a conservative parallel default without reducing test coverage."""
+    return min(MAX_SHARDS, max(1, os.cpu_count() or 4))
 
 
 def validation_env(extra: dict[str, str] | None = None) -> dict[str, str]:
@@ -119,6 +125,7 @@ def quick(py: str) -> int:
 
 
 def full(py: str, shards: int) -> int:
+    print(f"full: codegen shards={shards}")
     env = validation_env()
     jobs: list[tuple[str, list[str], dict[str, str] | None]] = [
         (
@@ -217,7 +224,12 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         default="quick",
         help="quick runs recent regressions; full runs the broad suite",
     )
-    parser.add_argument("--shards", type=int, default=4)
+    parser.add_argument(
+        "--shards",
+        type=int,
+        default=default_shards(),
+        help="codegen shard count for full mode (default: min(cpu_count, 8))",
+    )
     parser.add_argument("--skip-snapshot", action="store_true")
     return parser.parse_args(argv)
 
@@ -226,6 +238,9 @@ def main(argv: list[str] | None = None) -> int:
     args = parse_args(list(sys.argv[1:] if argv is None else argv))
     if args.shards < 1:
         print("--shards must be >= 1", file=sys.stderr)
+        return 2
+    if args.shards > MAX_SHARDS:
+        print(f"--shards must be <= {MAX_SHARDS}", file=sys.stderr)
         return 2
     py = sys.executable
     rc = quick(py) if args.mode == "quick" else full(py, args.shards)
