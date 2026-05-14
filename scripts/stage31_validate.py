@@ -140,6 +140,7 @@ def quick(py: str) -> int:
             "helixc/tests/test_proof_artifact_validate.py::test_require_clean_rejects_pipeline_errors",
             "helixc/tests/test_proof_artifact_validate.py::test_require_clean_rejects_promoted_warning",
             "helixc/tests/test_proof_artifact_validate.py::test_require_clean_rejects_source_unavailable_artifact",
+            "helixc/tests/test_proof_artifact_gate.py",
         ],
         env=validation_env(),
     )

@@ -317,6 +317,31 @@ Stage 31 quick validation now exercises the clean-policy happy path plus
 unproven obligations, pipeline errors, promoted warnings, and unavailable-source
 rejections.
 
+## 2026-05-14 Proof Artifact Source Gate Slice
+
+Added `scripts\proof_artifact_gate.py`, a source-to-proof gate that runs
+`python -m helixc.check --emit-proof-obligations`, writes the emitted artifact
+when requested, validates the artifact against the source, and then applies the
+clean proof policy. This gives future stage gates a single command that passes
+only when the compiler produced a structurally valid proof artifact with no
+unproven obligations, typecheck errors, pipeline errors, promoted warnings, or
+missing source bytes.
+
+Stage 31 quick validation now includes the gate happy path and an unproven
+refinement rejection.
+
+Audit follow-up: the source gate now rejects `--artifact-out` paths that point
+at the source file, reports artifact write failures without raw Python
+tracebacks, blocks output/debug compiler flags such as `-o` and `--emit-ir`,
+and cross-checks the emitted JSON against a recomputed proof artifact before
+accepting a clean result. This binds the artifact to the requested source path
+and prevents structurally valid but partial proof JSON from silently hiding
+obligations or typecheck errors. A later audit follow-up closed the missing
+requested-source case: gate success now requires that the requested source path
+itself is a readable file, so an artifact for another file cannot substitute
+for it. Stage 31 quick validation now runs the full proof source gate
+regression file.
+
 ## Do Not Forget
 
 - Send Telegram updates using:
