@@ -151,7 +151,9 @@ Important features:
 - Duration-weighted shard assignment. Stage 32 added optional per-test timing
   weights with stable-hash fallback.
 - Failed-shard retry evidence.
-- Changed-file to focused-test mapping.
+- Changed-file to focused-test mapping. Stage 32 adds
+  `scripts/stage32_select_tests.py` for conservative first-pass pytest
+  selection before the full gate.
 
 Importance: very high. This does not make Helix more powerful directly, but it
 removes waiting from every future compiler and AI feature.

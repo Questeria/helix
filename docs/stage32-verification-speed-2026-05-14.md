@@ -68,3 +68,39 @@ Validation after duration-weighted sharding:
   - Parallel pytest group time: about 4m21s
   - Snapshot smoke: `rc=42`
   - stage0/hex0: `3 passed, 0 failed`
+
+## Slice 3 - Focused-Test Selector
+
+Stage 32 now includes `scripts/stage32_select_tests.py`, a conservative
+changed-file to pytest-target selector for the fast edit loop. It does not
+replace full gates. It answers: "which small tests should run first for these
+changed files?"
+
+Examples:
+
+- Validation tooling changes select the Stage 31 validator, shard helper, and
+  selector tests.
+- Typecheck changes select `test_typecheck.py` plus the Stage 31 proof and
+  refinement regression targets.
+- Backend x86 changes select codegen, codegen determinism, and the CLI
+  backend-pass regression.
+- Docs-only changes produce no pytest targets and recommend `git diff --check`.
+
+The selector can print newline-separated pytest targets for shell use or JSON
+for future automation:
+
+- `python scripts/stage32_select_tests.py helixc/frontend/typecheck.py`
+- `python scripts/stage32_select_tests.py --json docs/ROADMAP.md`
+
+Validation after the focused-test selector:
+
+- `python -m pytest -q helixc\tests\test_stage32_select_tests.py`
+  - Result: `10 passed`
+- `python scripts\stage31_validate.py --mode quick --skip-snapshot`
+  - Result: `rc=0`
+- `bash scripts/run_all_tests.sh`
+  - Result: all gates passed
+  - Parallel pytest group time: about 4m15s
+  - All shards passed without retry in the final run
+  - Snapshot smoke: `rc=42`
+  - stage0/hex0: `3 passed, 0 failed`
