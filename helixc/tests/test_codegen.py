@@ -63,12 +63,14 @@ def compile_and_run(src: str, optimize: bool = True) -> int:
     proj_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     out_dir = os.path.join(proj_root, "helixc", "tests", "_tmp")
     os.makedirs(out_dir, exist_ok=True)
-    # Use a hash of the source so concurrent / interleaved test runs
-    # don't overwrite each other's binaries before WSL executes them.
+    # Use a content hint plus a unique tempfile. Many different tests compile
+    # to byte-identical "return 42" ELFs, so an ELF-hash-only name can collide
+    # while sharded pytest workers are chmod/execing through WSL.
     import hashlib
-    h = hashlib.sha256(elf).hexdigest()[:12]
-    out_path = os.path.join(out_dir, f"test_{h}.bin")
-    with open(out_path, "wb") as f:
+    h = hashlib.sha256(src.encode("utf-8") + b"\0" + elf).hexdigest()[:12]
+    fd, out_path = tempfile.mkstemp(prefix=f"test_{h}_", suffix=".bin",
+                                    dir=out_dir)
+    with os.fdopen(fd, "wb") as f:
         f.write(elf)
     os.chmod(out_path, 0o755)
     # Run via WSL

@@ -25,6 +25,8 @@ Flags:
   --check-only          Stop after typecheck + totality (no IR/codegen)
   --emit-ast            Print AST and exit
   --emit-ir             Print Tensor IR and exit
+  --emit-proof-obligations
+                        Print Stage 31 proof-obligation JSON and exit
   --emit-asm            Print x86_64 hex/textual disassembly and exit
   --emit-ptx            Print PTX kernels and exit
   --doc                 Extract /// doc comments to markdown and exit
@@ -53,12 +55,13 @@ License: Apache 2.0
 
 from __future__ import annotations
 
+import json
 import sys
 import os
 
 from .frontend.lexer import LexError
 from .frontend.parser import parse, ParseError
-from .frontend.typecheck import typecheck
+from .frontend.typecheck import typecheck, typecheck_with_obligations
 from .frontend.totality import check_totality
 from .frontend.ast_hash import structural_hash, short_hash
 from .frontend.hash_cons import hash_cons
@@ -84,8 +87,8 @@ class CliArgs:
 _KNOWN_LONG_FLAGS = frozenset({
     "--stdlib", "--no-stdlib", "--hash", "--hash-cons", "--strict",
     "--check-only", "--emit-ast", "--emit-ir", "--emit-asm",
-    "--emit-ptx", "--doc", "--help", "--no-color", "--color",
-    "-h",
+    "--emit-ptx", "--emit-proof-obligations", "--doc", "--help",
+    "--no-color", "--color", "-h",
 })
 
 
@@ -238,7 +241,8 @@ def _drain_ad_warnings(a: "CliArgs") -> int:
         return 0
     ad_policy = a.warnings.get("ad", "warn")
     label = "ERROR" if ad_policy == "error" else "warning"
-    print(f"   ad:        {len(ad_warnings)} {label}(s)")
+    stream = sys.stderr if "--emit-proof-obligations" in a.flags else sys.stdout
+    print(f"   ad:        {len(ad_warnings)} {label}(s)", file=stream)
     for w in ad_warnings:
         print(f"     helixc: {w}", file=sys.stderr)
     if ad_policy == "error":
@@ -341,6 +345,46 @@ def main(argv: list[str] | None = None) -> int:
     return rc
 
 
+def _emit_proof_obligation_artifact(
+    path: str,
+    obligations,
+    typecheck_errors,
+    pipeline_errors=None,
+) -> None:
+    pipeline_errors = list(pipeline_errors or [])
+    artifact = {
+        "schema": "helix.proof_obligations.v0",
+        "path": path,
+        "summary": {
+            "obligations": len(obligations),
+            "pipeline_errors": len(pipeline_errors),
+            "typecheck_errors": len(typecheck_errors),
+        },
+        "obligations": [
+            o.to_json_dict() if hasattr(o, "to_json_dict") else dict(o)
+            for o in obligations
+        ],
+        "pipeline_errors": pipeline_errors,
+        "typecheck_errors": [str(e) for e in typecheck_errors],
+    }
+    print(json.dumps(artifact, indent=2, sort_keys=True))
+
+
+def _emit_proof_pipeline_error(
+    path: str,
+    phase: str,
+    messages: list[str],
+) -> None:
+    for msg in messages:
+        print(msg, file=sys.stderr)
+    _emit_proof_obligation_artifact(
+        path,
+        [],
+        [],
+        pipeline_errors=[{"phase": phase, "message": "\n".join(messages)}],
+    )
+
+
 def _main_inner(argv: list[str] | None,
                 a_holder: list["CliArgs"]) -> int:
     """Inner pipeline. Pushes the parsed CliArgs into `a_holder` (a
@@ -354,6 +398,19 @@ def _main_inner(argv: list[str] | None,
     if "--help" in a.flags:
         _print_help()
         return 0
+    stdout_modes = {
+        "--emit-ast", "--emit-ir", "--emit-asm", "--emit-ptx",
+        "--emit-proof-obligations", "--doc",
+    }
+    selected_stdout_modes = sorted(a.flags & stdout_modes)
+    if len(selected_stdout_modes) > 1:
+        for mode in selected_stdout_modes:
+            print(f"helixc: stdout mode selected: {mode}", file=sys.stderr)
+        print(
+            "helixc: choose exactly one stdout-producing mode per invocation",
+            file=sys.stderr,
+        )
+        return 2
     if errs:
         for e in errs:
             print(f"helixc: {e}", file=sys.stderr)
@@ -374,7 +431,12 @@ def _main_inner(argv: list[str] | None,
         print(extract_doc_comments(src))
         return 0
 
-    print(f"-- helixc-check: {path}")
+    proof_mode = "--emit-proof-obligations" in a.flags
+
+    def info(msg: str) -> None:
+        print(msg, file=sys.stderr if proof_mode else sys.stdout)
+
+    print(f"-- helixc-check: {path}", file=sys.stderr if proof_mode else sys.stdout)
     # Audit 28.8 cycle 2 C2-1: register CliArgs so the outer wrapper
     # can drain AD warnings on ANY return below (including error paths).
     a_holder.append(a)
@@ -385,17 +447,30 @@ def _main_inner(argv: list[str] | None,
     try:
         prog = parse(src, include_stdlib=include_stdlib)
     except LexError as e:
+        if proof_mode:
+            _emit_proof_pipeline_error(
+                path, "lex", ["LEX ERROR:", f"  {path}:{e}"],
+            )
+            return 1
         print("LEX ERROR:", file=sys.stderr)
         print(f"  {path}:{e}", file=sys.stderr)
         return 1
     except ParseError as e:
         rendered = e.render(source=src, filename=path, color=a.color)
+        if proof_mode:
+            _emit_proof_pipeline_error(
+                path,
+                "parse",
+                ["PARSE ERROR:"] + [f"  {line}"
+                                    for line in rendered.splitlines()],
+            )
+            return 1
         print("PARSE ERROR:", file=sys.stderr)
         for line in rendered.splitlines():
             print(f"  {line}", file=sys.stderr)
         return 1
     fn_count = sum(1 for it in prog.items if isinstance(it, A.FnDecl))
-    print(f"   parse:    OK  ({fn_count} fns, {len(prog.items)} items)")
+    info(f"   parse:    OK  ({fn_count} fns, {len(prog.items)} items)")
 
     # --emit-ast (early exit before typecheck for debugging parser)
     if "--emit-ast" in a.flags:
@@ -433,6 +508,12 @@ def _main_inner(argv: list[str] | None,
     try:
         flatten_modules(prog)
     except FlattenError as e:
+        if proof_mode:
+            _emit_proof_pipeline_error(
+                path, "mod-flatten",
+                ["   mod-flatten: ERROR", f"     {e}"],
+            )
+            return 1
         print(f"   mod-flatten: ERROR", file=sys.stderr)
         print(f"     {e}", file=sys.stderr)
         return 1
@@ -451,6 +532,12 @@ def _main_inner(argv: list[str] | None,
     try:
         flatten_impls(prog)
     except DuplicateMethodError as e:
+        if proof_mode:
+            _emit_proof_pipeline_error(
+                path, "impl-flatten",
+                ["   impl-flatten: ERROR", f"     {e}"],
+            )
+            return 1
         print(f"   impl-flatten: ERROR")
         print(f"     {e}")
         return 1
@@ -464,6 +551,14 @@ def _main_inner(argv: list[str] | None,
     from .frontend.struct_mono import monomorphize_structs
     prog, sm_diags = monomorphize_structs(prog)
     if sm_diags:
+        if proof_mode:
+            _emit_proof_pipeline_error(
+                path,
+                "struct-mono",
+                [f"   struct-mono: {len(sm_diags)} ERROR(s)"]
+                + [f"     {d}" for d in sm_diags],
+            )
+            return 1
         print(f"   struct-mono: {len(sm_diags)} ERROR(s)")
         for d in sm_diags:
             print(f"     {d}")
@@ -476,17 +571,32 @@ def _main_inner(argv: list[str] | None,
     from .frontend.monomorphize import monomorphize_safe
     mono_count, mono_diags = monomorphize_safe(prog)
     if mono_diags:
+        if proof_mode:
+            _emit_proof_pipeline_error(
+                path,
+                "fn-mono",
+                [f"   fn-mono: {len(mono_diags)} ERROR(s)"]
+                + [f"     {d}" for d in mono_diags],
+            )
+            return 1
         print(f"   fn-mono: {len(mono_diags)} ERROR(s)")
         for d in mono_diags:
             print(f"     {d}")
         return 1
     if mono_count > 0:
-        print(f"   fn-mono: {mono_count} generic instantiation(s)")
+        info(f"   fn-mono: {mono_count} generic instantiation(s)")
 
     # 2.5 Typecheck after flatten/mono, matching the backend's user-error
     # gate and catching module-local refined aliases before IR emission.
-    tc_errs = typecheck(prog)
+    proof_obligations = []
+    if proof_mode:
+        tc_errs, proof_obligations = typecheck_with_obligations(prog)
+    else:
+        tc_errs = typecheck(prog)
     if tc_errs:
+        if proof_mode:
+            _emit_proof_obligation_artifact(path, proof_obligations, tc_errs)
+            return 1
         print(f"   typecheck: {len(tc_errs)} ERRORS")
         for e in tc_errs[:20]:
             rendered = e.render(source=src, filename=path, color=a.color) \
@@ -496,7 +606,10 @@ def _main_inner(argv: list[str] | None,
         if len(tc_errs) > 20:
             print(f"     ... and {len(tc_errs) - 20} more")
         return 1
-    print(f"   typecheck: OK")
+    info(f"   typecheck: OK")
+    if proof_mode:
+        _emit_proof_obligation_artifact(path, proof_obligations, tc_errs)
+        return 0
 
     # 3. Totality
     # Stage 28.9 cycle 28 audit-R C27-6 fix (conf 70): pre-fix the

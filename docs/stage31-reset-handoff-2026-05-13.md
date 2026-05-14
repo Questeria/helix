@@ -121,6 +121,33 @@ as one type-name namespace for user-vs-stdlib conflicts. This prevents a user
 `struct Probability` or `enum Confidence` from silently coexisting with and
 being shadowed by the bundled stdlib aliases.
 
+## 2026-05-13 Proof Artifact Slice
+
+Added `python -m helixc.check --emit-proof-obligations <file.hx>`.
+
+The flag emits JSON with schema `helix.proof_obligations.v0`. Stage 31 records
+refinement obligations as:
+
+- `proved`: the constant checker proved the predicate.
+- `failed`: the checker proved violation and reports trap `31001`.
+- `unproven`: the value is not compile-time-proven yet; future SMT/runtime
+  proof support is needed.
+- `unsupported`: the predicate shape is outside the Stage 31 constant checker.
+
+Normal progress lines go to stderr in this mode so stdout remains parseable
+JSON for tooling. Stdout-producing modes are mutually exclusive; combining
+`--emit-proof-obligations` with `--doc`, `--emit-ast`, `--emit-ir`,
+`--emit-asm`, or `--emit-ptx` is a bad invocation with rc=2.
+For nested aliases, unproven values emit obligations for both the outer
+refinement and inherited base refinements, so future SMT tooling sees the full
+constraint set.
+
+Validation reliability follow-up: `helixc/tests/test_codegen.py::compile_and_run`
+now writes unique temp ELF names instead of naming only by ELF hash. Many
+different tests compile to byte-identical "return 42" binaries, and sharded
+pytest workers could collide while WSL was chmod/execing those files. The
+failed shards passed after this harness fix, and the full wrapper gate passed.
+
 ## Do Not Forget
 
 - Send Telegram updates using:

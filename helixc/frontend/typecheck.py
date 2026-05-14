@@ -49,6 +49,35 @@ class TyRefined(Type):
 
 
 @dataclass(frozen=True)
+class ProofObligation:
+    """Machine-readable Stage 31 proof obligation artifact."""
+    kind: str
+    context: str
+    refinement: str
+    predicate: str
+    status: str
+    line: int
+    col: int
+    value: str | None = None
+    trap: str | None = None
+
+    def to_json_dict(self) -> dict[str, object]:
+        data: dict[str, object] = {
+            "kind": self.kind,
+            "context": self.context,
+            "refinement": self.refinement,
+            "predicate": self.predicate,
+            "status": self.status,
+            "span": {"line": self.line, "col": self.col},
+        }
+        if self.value is not None:
+            data["value"] = self.value
+        if self.trap is not None:
+            data["trap"] = self.trap
+        return data
+
+
+@dataclass(frozen=True)
 class TyVar(Type):
     """Generic type variable bound by a function signature."""
     name: str
@@ -451,6 +480,7 @@ class TypeChecker:
         self._const_scalar_values: dict[str, int | float] = {}
         self._local_const_scalar_scopes: list[dict[str, int | float | None]] = []
         self._current_return_ty: Type = TyUnit()
+        self.proof_obligations: list[ProofObligation] = []
         # Audit 28.8 B3: unsafe-context depth counter. Incremented when
         # descending into an A.UnsafeBlock; consulted by the Cast
         # handler so raw-pointer casts (TyPtr targets from non-TyPtr
@@ -2824,6 +2854,8 @@ class TypeChecker:
             self._fmt_refinement_expr(p) for p in refined.predicates
         )
         if value is None:
+            self._record_unproven_refinement_obligations(
+                context, refined, span)
             self.errors.append(TypeError_(
                 f"{context}: refinement {refined.name} requires a "
                 f"compile-time-proven value in Stage 31; could not prove "
@@ -2836,6 +2868,9 @@ class TypeChecker:
         for pred in refined.predicates:
             ok = self._eval_refinement_predicate(pred, value)
             if ok is None:
+                self._record_refinement_obligation(
+                    context, refined, pred, "unsupported", span, value,
+                )
                 self.errors.append(TypeError_(
                     f"{context}: refinement {refined.name} predicate "
                     f"{self._fmt_refinement_expr(pred)} is not supported by "
@@ -2844,6 +2879,10 @@ class TypeChecker:
                 ))
                 continue
             if not ok:
+                self._record_refinement_obligation(
+                    context, refined, pred, "failed", span, value,
+                    trap="31001",
+                )
                 self.errors.append(TypeError_(
                     f"{context}: refinement {refined.name} violated: "
                     f"value {self._fmt_scalar_value(value)} does not satisfy "
@@ -2851,10 +2890,42 @@ class TypeChecker:
                     span,
                     hint="refined values must satisfy their `where` predicate",
                 ))
+            else:
+                self._record_refinement_obligation(
+                    context, refined, pred, "proved", span, value,
+                )
         if isinstance(refined.base, TyRefined):
             self._check_refinement_const_value(
                 value_expr, refined.base, span, context, scope,
             )
+
+    def _record_unproven_refinement_obligations(
+        self, context: str, refined: "TyRefined", span: A.Span,
+    ) -> None:
+        for pred in refined.predicates:
+            self._record_refinement_obligation(
+                context, refined, pred, "unproven", span, None,
+            )
+        if isinstance(refined.base, TyRefined):
+            self._record_unproven_refinement_obligations(
+                context, refined.base, span)
+
+    def _record_refinement_obligation(
+        self, context: str, refined: "TyRefined", predicate: A.Expr,
+        status: str, span: A.Span, value: int | float | bool | None,
+        *, trap: str | None = None,
+    ) -> None:
+        self.proof_obligations.append(ProofObligation(
+            kind="refinement",
+            context=context,
+            refinement=refined.name,
+            predicate=self._fmt_refinement_expr(predicate),
+            status=status,
+            line=span.line,
+            col=span.col,
+            value=(None if value is None else self._fmt_scalar_value(value)),
+            trap=trap,
+        ))
 
     def _contains_unknown_type(self, ty: Type) -> bool:
         if isinstance(ty, TyUnknown):
@@ -4260,6 +4331,14 @@ class TypeChecker:
 
 def typecheck(prog: A.Program) -> list[TypeError_]:
     return TypeChecker(prog).check()
+
+
+def typecheck_with_obligations(
+    prog: A.Program,
+) -> tuple[list[TypeError_], list[ProofObligation]]:
+    checker = TypeChecker(prog)
+    errors = checker.check()
+    return errors, checker.proof_obligations
 
 
 if __name__ == "__main__":

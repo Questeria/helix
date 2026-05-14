@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import json
 import sys
 import subprocess
 import tempfile
@@ -86,6 +87,9 @@ def test_parse_args_emit_flags():
     a, errs = parse_args(["--emit-ptx", "foo.hx"])
     assert "--emit-ptx" in a.flags
 
+    a, errs = parse_args(["--emit-proof-obligations", "foo.hx"])
+    assert "--emit-proof-obligations" in a.flags
+
 
 def test_parse_args_no_stdlib():
     a, errs = parse_args(["--no-stdlib", "foo.hx"])
@@ -96,6 +100,34 @@ def test_parse_args_no_stdlib():
 def test_parse_args_check_only():
     a, errs = parse_args(["--check-only", "foo.hx"])
     assert "--check-only" in a.flags
+
+
+def test_emit_modes_are_mutually_exclusive(capsys, tmp_path):
+    src_path = str(tmp_path / "emit_conflict.hx")
+    with open(src_path, "w") as f:
+        f.write("fn main() -> i32 { 0 }\n")
+    rc = main([src_path, "--emit-proof-obligations", "--emit-ast"])
+    captured = capsys.readouterr()
+    assert rc == 2
+    assert captured.out == ""
+    assert "choose exactly one stdout-producing mode" in captured.err
+    assert "--emit-proof-obligations" in captured.err
+    assert "--emit-ast" in captured.err
+
+
+def test_doc_and_emit_proof_obligations_are_mutually_exclusive(
+    capsys, tmp_path,
+):
+    src_path = str(tmp_path / "doc_conflict.hx")
+    with open(src_path, "w") as f:
+        f.write("/// Main docs\nfn main() -> i32 { 0 }\n")
+    rc = main([src_path, "--emit-proof-obligations", "--doc"])
+    captured = capsys.readouterr()
+    assert rc == 2
+    assert captured.out == ""
+    assert "choose exactly one stdout-producing mode" in captured.err
+    assert "--emit-proof-obligations" in captured.err
+    assert "--doc" in captured.err
 
 
 def test_c117_emit_ptx_uses_kernel_attrs(capsys):
@@ -1010,6 +1042,166 @@ def test_stage31_valid_refinement_alias_erases_for_cli_ir(capsys, tmp_path):
         f"valid refined alias should typecheck and lower as its base type; "
         f"out={captured.out!r} err={captured.err!r}"
     )
+
+
+def test_stage31_emit_proof_obligations_json_for_proved_refinement(
+    capsys, tmp_path,
+):
+    src_path = str(tmp_path / "proved_obligation.hx")
+    with open(src_path, "w") as f:
+        f.write(
+            "type Probability = f64 where 0.0 <= self <= 1.0;\n"
+            "fn main() -> i32 {\n"
+            "    let p: Probability = 0.5_f64;\n"
+            "    0\n"
+            "}\n"
+        )
+    rc = main([src_path, "--emit-proof-obligations", "--no-stdlib"])
+    captured = capsys.readouterr()
+    assert rc == 0, captured.out + captured.err
+    artifact = json.loads(captured.out)
+    assert artifact["schema"] == "helix.proof_obligations.v0"
+    assert artifact["summary"]["typecheck_errors"] == 0
+    assert artifact["summary"]["obligations"] == 1
+    obligation = artifact["obligations"][0]
+    assert obligation["kind"] == "refinement"
+    assert obligation["context"] == "let 'p'"
+    assert obligation["refinement"] == "Probability"
+    assert obligation["predicate"] == "0.0 <= self <= 1.0"
+    assert obligation["status"] == "proved"
+    assert obligation["value"] == "0.5"
+    assert "parse:" in captured.err
+
+
+def test_stage31_emit_proof_obligations_json_for_failed_refinement(
+    capsys, tmp_path,
+):
+    src_path = str(tmp_path / "failed_obligation.hx")
+    with open(src_path, "w") as f:
+        f.write(
+            "type Probability = f64 where 0.0 <= self <= 1.0;\n"
+            "fn main() -> i32 {\n"
+            "    let p: Probability = 1.2_f64;\n"
+            "    0\n"
+            "}\n"
+        )
+    rc = main([src_path, "--emit-proof-obligations", "--no-stdlib"])
+    captured = capsys.readouterr()
+    assert rc == 1
+    artifact = json.loads(captured.out)
+    assert artifact["summary"]["typecheck_errors"] == 1
+    assert len(artifact["typecheck_errors"]) == 1
+    obligation = artifact["obligations"][0]
+    assert obligation["refinement"] == "Probability"
+    assert obligation["status"] == "failed"
+    assert obligation["trap"] == "31001"
+    assert obligation["value"] == "1.2"
+
+
+def test_stage31_emit_proof_obligations_json_for_unproven_refinement(
+    capsys, tmp_path,
+):
+    src_path = str(tmp_path / "unproven_obligation.hx")
+    with open(src_path, "w") as f:
+        f.write(
+            "type Probability = f64 where 0.0 <= self <= 1.0;\n"
+            "fn use_raw(x: f64) -> i32 {\n"
+            "    let p: Probability = x;\n"
+            "    0\n"
+            "}\n"
+        )
+    rc = main([src_path, "--emit-proof-obligations", "--no-stdlib"])
+    captured = capsys.readouterr()
+    assert rc == 1
+    artifact = json.loads(captured.out)
+    assert artifact["summary"]["typecheck_errors"] == 1
+    obligation = artifact["obligations"][0]
+    assert obligation["refinement"] == "Probability"
+    assert obligation["status"] == "unproven"
+    assert "value" not in obligation
+    assert "compile-time-proven value" in artifact["typecheck_errors"][0]
+
+
+def test_stage31_emit_proof_obligations_includes_inherited_unproven_refinement(
+    capsys, tmp_path,
+):
+    src_path = str(tmp_path / "nested_unproven_obligation.hx")
+    with open(src_path, "w") as f:
+        f.write(
+            "type Probability = f64 where 0.0 <= self <= 1.0;\n"
+            "type Certain = Probability where self >= 0.9;\n"
+            "fn use_raw(x: f64) -> i32 {\n"
+            "    let c: Certain = x;\n"
+            "    0\n"
+            "}\n"
+        )
+    rc = main([src_path, "--emit-proof-obligations", "--no-stdlib"])
+    captured = capsys.readouterr()
+    assert rc == 1
+    artifact = json.loads(captured.out)
+    observed = {
+        (o["refinement"], o["predicate"], o["status"])
+        for o in artifact["obligations"]
+    }
+    assert ("Certain", "self >= 0.9", "unproven") in observed
+    assert ("Probability", "0.0 <= self <= 1.0", "unproven") in observed
+
+
+def test_stage31_emit_proof_obligations_stdout_stays_json_with_ad_warning(
+    capsys, tmp_path,
+):
+    src_path = str(tmp_path / "proof_with_ad_warning.hx")
+    with open(src_path, "w") as f:
+        f.write(
+            "fn loss(x: D<f64>, y: D<i32>) -> D<f64> { x + y }\n"
+            "fn main() -> i32 { 0 }\n"
+        )
+    rc = main([src_path, "--emit-proof-obligations", "--no-stdlib"])
+    captured = capsys.readouterr()
+    assert rc == 0, captured.out + captured.err
+    artifact = json.loads(captured.out)
+    assert artifact["schema"] == "helix.proof_obligations.v0"
+    assert artifact["summary"]["typecheck_errors"] == 0
+    assert "ad:" not in captured.out
+    assert "ad:" in captured.err
+    assert "24200" in captured.err or "AD002" in captured.err
+
+
+def test_stage31_emit_proof_obligations_json_for_struct_mono_error(
+    capsys, tmp_path,
+):
+    src_path = str(tmp_path / "proof_struct_mono_error.hx")
+    with open(src_path, "w") as f:
+        f.write(
+            "struct Pt[T] { x: T }\n"
+            "fn bad(p: Pt<i32, f64>) -> i32 { 0 }\n"
+        )
+    rc = main([src_path, "--emit-proof-obligations", "--no-stdlib"])
+    captured = capsys.readouterr()
+    assert rc == 1
+    artifact = json.loads(captured.out)
+    assert artifact["schema"] == "helix.proof_obligations.v0"
+    assert artifact["summary"]["pipeline_errors"] == 1
+    assert artifact["summary"]["typecheck_errors"] == 0
+    assert artifact["pipeline_errors"][0]["phase"] == "struct-mono"
+    assert "struct-mono" in artifact["pipeline_errors"][0]["message"]
+    assert "struct-mono" in captured.err
+
+
+def test_stage31_emit_proof_obligations_json_for_parse_error(
+    capsys, tmp_path,
+):
+    src_path = str(tmp_path / "proof_parse_error.hx")
+    with open(src_path, "w") as f:
+        f.write("fn main( -> i32 { 0 }\n")
+    rc = main([src_path, "--emit-proof-obligations", "--no-stdlib"])
+    captured = capsys.readouterr()
+    assert rc == 1
+    artifact = json.loads(captured.out)
+    assert artifact["summary"]["pipeline_errors"] == 1
+    assert artifact["pipeline_errors"][0]["phase"] == "parse"
+    assert "PARSE ERROR" in artifact["pipeline_errors"][0]["message"]
+    assert "PARSE ERROR" in captured.err
 
 
 def test_stage31_cli_default_stdlib_agi_safe_scalar_refinements(capsys, tmp_path):
