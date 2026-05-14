@@ -92,6 +92,11 @@ for future automation:
 - `python scripts/stage32_select_tests.py helixc/frontend/typecheck.py`
 - `python scripts/stage32_select_tests.py --json docs/ROADMAP.md`
 
+The Stage 31/32 validator can also run the selector directly:
+
+- `python scripts/stage31_validate.py --mode focused --skip-snapshot`
+- `python scripts/stage31_validate.py --mode focused --skip-snapshot helixc/frontend/typecheck.py`
+
 Validation after the focused-test selector:
 
 - `python -m pytest -q helixc\tests\test_stage32_select_tests.py`
@@ -102,5 +107,28 @@ Validation after the focused-test selector:
   - Result: all gates passed
   - Parallel pytest group time: about 4m15s
   - All shards passed without retry in the final run
+  - Snapshot smoke: `rc=42`
+  - stage0/hex0: `3 passed, 0 failed`
+
+## Slice 4 - Focused Validator Mode
+
+`scripts/stage31_validate.py` now has `--mode focused`. This wires the Stage
+32 selector into the validator so the fast edit-loop command is one step:
+
+- with changed source paths, it runs the selected pytest targets
+- with docs-only changes, it runs `git diff --check`
+- with no explicit paths, it reads tracked changes and untracked files from git
+
+Validation after focused validator mode:
+
+- `python -m pytest -q helixc\tests\test_stage31_validate.py helixc\tests\test_stage32_select_tests.py`
+  - Result: `29 passed`
+- `python scripts\stage31_validate.py --mode focused --skip-snapshot scripts\stage32_select_tests.py`
+  - Result: `rc=0`
+- `python scripts\stage31_validate.py --mode focused --skip-snapshot docs\ROADMAP.md`
+  - Result: `rc=0`
+- `bash scripts/run_all_tests.sh`
+  - Result: all gates passed
+  - Parallel pytest group time: about 4m11s
   - Snapshot smoke: `rc=42`
   - stage0/hex0: `3 passed, 0 failed`

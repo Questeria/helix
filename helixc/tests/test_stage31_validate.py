@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import shlex
 import subprocess
+import sys
 from types import SimpleNamespace
 
 from scripts import stage31_validate
@@ -64,6 +65,87 @@ def test_stage31_validate_can_disable_failed_shard_retry(monkeypatch):
 
     assert stage31_validate.full("python", shards=2, retry_failed_once=False) == 0
     assert retry_flags == [False]
+
+
+def test_stage31_validate_focused_runs_selected_pytest_targets(monkeypatch):
+    calls = []
+
+    def fake_changed_paths(base):
+        assert base == "HEAD"
+        return ["scripts/stage32_select_tests.py"]
+
+    def fake_run_logged(name, cmd, *, env=None, cwd=None):
+        calls.append((name, cmd, env, cwd))
+        return 0
+
+    monkeypatch.setattr(
+        stage31_validate.stage32_select_tests,
+        "changed_paths_from_git",
+        fake_changed_paths,
+    )
+    monkeypatch.setattr(stage31_validate, "validation_env", lambda: {"TEST": "1"})
+    monkeypatch.setattr(stage31_validate, "run_logged", fake_run_logged)
+
+    rc = stage31_validate.focused("python", [], base="HEAD")
+
+    assert rc == 0
+    name, cmd, env, cwd = calls[0]
+    assert name == "stage32-focused"
+    assert env == {"TEST": "1"}
+    assert cwd is None
+    assert cmd[:5] == ["python", "-m", "pytest", "-q", "-p"]
+    assert "helixc/tests/test_stage32_select_tests.py" in cmd
+
+
+def test_stage31_validate_focused_runs_diff_check_for_docs_only(monkeypatch):
+    calls = []
+
+    def fake_run_logged(name, cmd, *, env=None, cwd=None):
+        calls.append((name, cmd))
+        return 0
+
+    monkeypatch.setattr(stage31_validate, "validation_env", lambda: {})
+    monkeypatch.setattr(stage31_validate, "run_logged", fake_run_logged)
+
+    rc = stage31_validate.focused("python", ["docs/ROADMAP.md"])
+
+    assert rc == 0
+    assert calls == [("stage32-focused-diff-check", ["git", "diff", "--check"])]
+
+
+def test_stage31_validate_focused_mode_accepts_paths(monkeypatch):
+    focused_calls = []
+
+    def fake_focused(py, paths, *, base="HEAD"):
+        focused_calls.append((py, paths, base))
+        return 0
+
+    monkeypatch.setattr(stage31_validate, "focused", fake_focused)
+
+    rc = stage31_validate.main([
+        "--mode",
+        "focused",
+        "--skip-snapshot",
+        "scripts/stage32_select_tests.py",
+    ])
+
+    assert rc == 0
+    assert focused_calls == [
+        (sys.executable, ["scripts/stage32_select_tests.py"], "HEAD")
+    ]
+
+
+def test_stage31_validate_rejects_paths_outside_focused_mode(capsys):
+    rc = stage31_validate.main([
+        "--mode",
+        "quick",
+        "--skip-snapshot",
+        "scripts/stage32_select_tests.py",
+    ])
+    captured = capsys.readouterr()
+
+    assert rc == 2
+    assert "paths are only accepted with --mode focused" in captured.err
 
 
 def test_stage31_validate_retries_failed_parallel_shards_once(monkeypatch, capsys):

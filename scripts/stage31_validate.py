@@ -23,6 +23,11 @@ import time
 
 
 ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from scripts import stage32_select_tests
+
 LOG_DIR = ROOT / ".stage31-logs"
 BIN_DIR = ROOT / ".stage31-bin"
 MAX_SHARDS = 8
@@ -336,6 +341,47 @@ def quick(py: str) -> int:
     )
 
 
+def focused(py: str, paths: list[str], *, base: str = "HEAD") -> int:
+    changed_paths = paths or stage32_select_tests.changed_paths_from_git(base)
+    selection = stage32_select_tests.select_tests_for_paths(changed_paths)
+
+    if changed_paths:
+        print("focused: changed paths:")
+        for path in changed_paths:
+            print(f"  {path}")
+    else:
+        print("focused: no changed paths")
+
+    if selection.pytest_targets:
+        print("focused: pytest targets:")
+        for target in selection.pytest_targets:
+            print(f"  {target}")
+        return run_logged(
+            "stage32-focused",
+            [
+                py,
+                "-m",
+                "pytest",
+                "-q",
+                "-p",
+                "no:cacheprovider",
+                *selection.pytest_targets,
+            ],
+            env=validation_env(),
+        )
+
+    if "git diff --check" in selection.extra_commands:
+        print("focused: no pytest targets; running git diff --check")
+        return run_logged(
+            "stage32-focused-diff-check",
+            ["git", "diff", "--check"],
+            env=validation_env(),
+        )
+
+    print("focused: nothing selected")
+    return 0
+
+
 def full(py: str, shards: int, *, retry_failed_once: bool = True) -> int:
     no_codegen_shards = no_codegen_shards_for(shards)
     print(f"full: no-codegen shards={no_codegen_shards} codegen shards={shards}")
@@ -448,9 +494,12 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--mode",
-        choices=("quick", "full"),
+        choices=("focused", "quick", "full"),
         default="quick",
-        help="quick runs recent regressions; full runs the broad suite",
+        help=(
+            "focused selects tests from changed files; quick runs recent "
+            "regressions; full runs the broad suite"
+        ),
     )
     parser.add_argument(
         "--shards",
@@ -464,6 +513,16 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         help="do not rerun failed parallel shards once before returning failure",
     )
     parser.add_argument("--skip-snapshot", action="store_true")
+    parser.add_argument(
+        "--base",
+        default="HEAD",
+        help="git diff base for focused mode when no paths are supplied",
+    )
+    parser.add_argument(
+        "paths",
+        nargs="*",
+        help="changed paths for focused mode; ignored by quick/full",
+    )
     return parser.parse_args(argv)
 
 
@@ -476,10 +535,15 @@ def main(argv: list[str] | None = None) -> int:
         print(f"--shards must be <= {MAX_SHARDS}", file=sys.stderr)
         return 2
     py = sys.executable
-    rc = (
-        quick(py) if args.mode == "quick"
-        else full(py, args.shards, retry_failed_once=not args.no_retry_failed)
-    )
+    if args.paths and args.mode != "focused":
+        print("paths are only accepted with --mode focused", file=sys.stderr)
+        return 2
+    if args.mode == "focused":
+        rc = focused(py, args.paths, base=args.base)
+    elif args.mode == "quick":
+        rc = quick(py)
+    else:
+        rc = full(py, args.shards, retry_failed_once=not args.no_retry_failed)
     if rc:
         return rc
     if not args.skip_snapshot:
