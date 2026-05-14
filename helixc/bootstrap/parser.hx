@@ -45,6 +45,10 @@
 //                      slot 11: is_unwind flag (Stage 28.9)
 //                      slot 12: deprecated_msg_start (Stage 33)
 //                      slot 13: deprecated_msg_len (Stage 33)
+//                      slot 14: is_kernel flag (Stage 33)
+//                      slot 15: is_autotune flag (Stage 33)
+//                      slot 16: autotune_variant_product (Stage 33)
+//                      slot 17: autotune_parse_error flag (Stage 33)
 //  15  AST_FN_LIST   p1 = current fn_decl_idx, p2 = next list node
 //                    idx (or 0 at end). Linked list of top-level fn
 //                    declarations. Built by parse_top when source
@@ -2052,11 +2056,13 @@ fn parse_closure_lit(tok_base: i32, sb: i32) -> i32 {
             };
             pi = pi + 1;
         }
-        // Allocate AST_FN_DECL with 14 contiguous slots (Stage 33 layout).
+        // Allocate AST_FN_DECL with 18 contiguous slots (Stage 33 layout).
         // p1=name_s, p2=name_l, p3=body, p4=params_head, p5=ret_ty,
         // p6=is_generic, p7=gp_names_head, p8=is_checkpoint,
         // p9=is_deprecated, p10=is_trace, p11=is_unwind,
-        // p12=deprecated_msg_start, p13=deprecated_msg_len.
+        // p12=deprecated_msg_start, p13=deprecated_msg_len,
+        // p14=is_kernel, p15=is_autotune, p16=autotune_product,
+        // p17=autotune_parse_error.
         let fn_node = mk_node(14, name_start, name_len, body);
         __arena_push(params_head);
         __arena_push(0);                         // ret_ty = 0 (i32)
@@ -2068,6 +2074,10 @@ fn parse_closure_lit(tok_base: i32, sb: i32) -> i32 {
         __arena_push(0);                         // is_unwind = 0 (Stage 28.9)
         __arena_push(0);                         // deprecated_msg_start = 0 (Stage 33)
         __arena_push(0);                         // deprecated_msg_len = 0 (Stage 33)
+        __arena_push(0);                         // is_kernel = 0 (Stage 33)
+        __arena_push(0);                         // is_autotune = 0 (Stage 33)
+        __arena_push(0);                         // autotune_product = 0 (Stage 33)
+        __arena_push(0);                         // autotune_parse_error = 0 (Stage 33)
         // Wrap in AST_FN_LIST and append to cl_pending chain.
         let list_node = mk_node(15, fn_node, 0, 0);
         let head = cl_pending_head(sb);
@@ -4143,6 +4153,15 @@ fn parse_top(tok_base: i32) -> i32 {
     // clears and writes them into AST_FN_DECL slots 12/13.
     __arena_push(0);
     __arena_push(0);
+    // Stage 33: slots 82..85 = kernel/autotune attr scratch.
+    //   82 = next_fn_is_kernel
+    //   83 = next_fn_is_autotune
+    //   84 = next_fn_autotune_product
+    //   85 = next_fn_autotune_parse_error
+    __arena_push(0);
+    __arena_push(0);
+    __arena_push(0);
+    __arena_push(0);
     install_keywords(cur_slot);
     var_struct_tab_init(cur_slot);
     var_enum_tab_init(cur_slot);
@@ -4244,6 +4263,117 @@ fn parse_top(tok_base: i32) -> i32 {
     }
 }
 
+fn autotune_seen_value(vals_base: i32, count: i32, value: i32) -> i32 {
+    let mut i: i32 = 0;
+    let mut hit: i32 = 0;
+    while i < count {
+        if __arena_get(vals_base + i) == value {
+            hit = 1;
+        };
+        i = i + 1;
+    }
+    hit
+}
+
+// Parse a narrow Stage-33 subset of @autotune(KEY: [1, 2], ...). This is
+// validation metadata only; it does not generate kernel variants.
+fn capture_autotune_args(tok_base: i32, first_tok: i32, sb: i32) -> i32 {
+    set_next_fn_autotune_product(sb, 1);
+    set_next_fn_autotune_error(sb, 0);
+    if tok_tag(tok_base, first_tok) != 3 {
+        set_next_fn_autotune_product(sb, 0);
+        set_next_fn_autotune_error(sb, 1);
+        0
+    } else {
+        let mut k: i32 = first_tok + 1;
+        let mut params_seen: i32 = 0;
+        let mut product: i32 = 1;
+        let mut malformed: i32 = 0;
+        let mut keep_args: i32 = 1;
+        while keep_args == 1 {
+            let tt = tok_tag(tok_base, k);
+            if tt == 4 {
+                keep_args = 0;
+            } else { if tt == 0 {
+                malformed = 1;
+                keep_args = 0;
+            } else { if tt == 13 {
+                k = k + 1;
+            } else { if tt == 2 {
+                k = k + 1;
+                if tok_tag(tok_base, k) == 14 {
+                    k = k + 1;
+                } else {
+                    malformed = 1;
+                };
+                if tok_tag(tok_base, k) == 20 {
+                    k = k + 1;
+                    let vals_base = __arena_push(0);
+                    let mut vi: i32 = 1;
+                    while vi < 16 {
+                        __arena_push(0);
+                        vi = vi + 1;
+                    }
+                    let mut val_count: i32 = 0;
+                    let mut keep_vals: i32 = 1;
+                    while keep_vals == 1 {
+                        let vt = tok_tag(tok_base, k);
+                        if vt == 21 {
+                            keep_vals = 0;
+                            k = k + 1;
+                        } else { if vt == 0 {
+                            malformed = 1;
+                            keep_vals = 0;
+                            keep_args = 0;
+                        } else { if vt == 4 {
+                            malformed = 1;
+                            keep_vals = 0;
+                            keep_args = 0;
+                        } else { if vt == 13 {
+                            k = k + 1;
+                        } else { if vt == 1 {
+                            let v = tok_p1(tok_base, k);
+                            let lookup_count = if val_count < 16 { val_count } else { 16 };
+                            if autotune_seen_value(vals_base, lookup_count, v) == 0 {
+                                if val_count < 16 {
+                                    __arena_set(vals_base + val_count, v);
+                                };
+                                val_count = val_count + 1;
+                            };
+                            k = k + 1;
+                        } else {
+                            malformed = 1;
+                            k = k + 1;
+                        }}}}}
+                    }
+                    if val_count == 0 {
+                        malformed = 1;
+                    } else {
+                        product = product * val_count;
+                        if product > 16 {
+                            product = 17;
+                        };
+                    };
+                    params_seen = params_seen + 1;
+                } else {
+                    malformed = 1;
+                    k = k + 1;
+                };
+            } else {
+                malformed = 1;
+                k = k + 1;
+            }}}}
+        }
+        if params_seen == 0 {
+            malformed = 1;
+            product = 0;
+        };
+        set_next_fn_autotune_product(sb, product);
+        set_next_fn_autotune_error(sb, malformed);
+        0
+    }
+}
+
 // Consume zero or more `@<IDENT>` (or `@<IDENT>(<args>)`) attribute
 // markers. Most attributes (`@pure`, `@effect`, ...) are skipped as
 // no-ops in Phase 0. Stage 14.5: `@checkpoint` is special — when seen
@@ -4255,6 +4385,9 @@ fn parse_top(tok_base: i32) -> i32 {
 // Stage 33: if `@deprecated("message")` has a first string-literal
 // argument, preserve that message body range in scratch slots 80/81
 // for AST_FN_DECL slots 12/13.
+// Stage 33: also recognizes `@kernel` and enough `@autotune(...)`
+// metadata for bootstrap-side validation of kernel requirement,
+// malformed/empty parameter lists, and variant-product cap.
 fn skip_attributes(tok_base: i32, sb: i32) -> i32 {
     let mut keep: i32 = 1;
     while keep == 1 {
@@ -4340,6 +4473,34 @@ fn skip_attributes(tok_base: i32, sb: i32) -> i32 {
                         } else { 0 } } else { 0 } } else { 0 } } else { 0 };
                     if is_unwind == 1 {
                         set_next_fn_is_unwind(sb, 1);
+                    };
+                    // Stage 33: `kernel` (6 bytes: 107 101 114 110 101 108).
+                    let is_kernel = if ub0 == 107 { if ub1 == 101 {
+                        if ub2 == 114 { if ub3 == 110 { if ub4 == 101 {
+                        if ub5 == 108 { 1 } else { 0 } } else { 0 }
+                        } else { 0 } } else { 0 } } else { 0 } } else { 0 };
+                    if is_kernel == 1 {
+                        set_next_fn_is_kernel(sb, 1);
+                    };
+                };
+                // Stage 33: `autotune` (8 bytes: 97 117 116 111 116 117 110 101).
+                if attr_l == 8 {
+                    let ab0 = __arena_get(attr_s);
+                    let ab1 = __arena_get(attr_s + 1);
+                    let ab2 = __arena_get(attr_s + 2);
+                    let ab3 = __arena_get(attr_s + 3);
+                    let ab4 = __arena_get(attr_s + 4);
+                    let ab5 = __arena_get(attr_s + 5);
+                    let ab6 = __arena_get(attr_s + 6);
+                    let ab7 = __arena_get(attr_s + 7);
+                    let is_autotune = if ab0 == 97 { if ab1 == 117 {
+                        if ab2 == 116 { if ab3 == 111 { if ab4 == 116 {
+                        if ab5 == 117 { if ab6 == 110 { if ab7 == 101 {
+                        1 } else { 0 } } else { 0 } } else { 0 }
+                        } else { 0 } } else { 0 } } else { 0 } } else { 0 } } else { 0 };
+                    if is_autotune == 1 {
+                        set_next_fn_is_autotune(sb, 1);
+                        capture_autotune_args(tok_base, cur_get(sb) + 1, sb);
                     };
                 };
                 cur_advance(sb);
@@ -4758,6 +4919,10 @@ fn monomorphize_pass(sb: i32, head: i32) -> i32 {
                 let tpl_is_unwind = __arena_get(tpl_idx + 11);
                 let tpl_dep_msg_s = __arena_get(tpl_idx + 12);
                 let tpl_dep_msg_l = __arena_get(tpl_idx + 13);
+                let tpl_is_kernel = __arena_get(tpl_idx + 14);
+                let tpl_is_autotune = __arena_get(tpl_idx + 15);
+                let tpl_autotune_product = __arena_get(tpl_idx + 16);
+                let tpl_autotune_error = __arena_get(tpl_idx + 17);
                 let clone_idx = mk_node(14, mang_s, mang_l, cloned_body);
                 __arena_push(new_params_head);
                 __arena_push(new_ret_ty);
@@ -4769,6 +4934,10 @@ fn monomorphize_pass(sb: i32, head: i32) -> i32 {
                 __arena_push(tpl_is_unwind);     // slot 11 (Stage 28.9)
                 __arena_push(tpl_dep_msg_s);      // slot 12 (Stage 33)
                 __arena_push(tpl_dep_msg_l);      // slot 13 (Stage 33)
+                __arena_push(tpl_is_kernel);      // slot 14 (Stage 33)
+                __arena_push(tpl_is_autotune);    // slot 15 (Stage 33)
+                __arena_push(tpl_autotune_product); // slot 16 (Stage 33)
+                __arena_push(tpl_autotune_error); // slot 17 (Stage 33)
                 // Append to fn_list tail.
                 let new_list_node = mk_node(15, clone_idx, 0, 0);
                 __arena_set(tail + 2, new_list_node);
@@ -5186,6 +5355,14 @@ fn next_fn_deprecated_msg_s(sb: i32) -> i32 { __arena_get(sb + 80) }
 fn set_next_fn_deprecated_msg_s(sb: i32, v: i32) -> i32 { __arena_set(sb + 80, v); 0 }
 fn next_fn_deprecated_msg_l(sb: i32) -> i32 { __arena_get(sb + 81) }
 fn set_next_fn_deprecated_msg_l(sb: i32, v: i32) -> i32 { __arena_set(sb + 81, v); 0 }
+fn next_fn_is_kernel(sb: i32) -> i32 { __arena_get(sb + 82) }
+fn set_next_fn_is_kernel(sb: i32, v: i32) -> i32 { __arena_set(sb + 82, v); 0 }
+fn next_fn_is_autotune(sb: i32) -> i32 { __arena_get(sb + 83) }
+fn set_next_fn_is_autotune(sb: i32, v: i32) -> i32 { __arena_set(sb + 83, v); 0 }
+fn next_fn_autotune_product(sb: i32) -> i32 { __arena_get(sb + 84) }
+fn set_next_fn_autotune_product(sb: i32, v: i32) -> i32 { __arena_set(sb + 84, v); 0 }
+fn next_fn_autotune_error(sb: i32) -> i32 { __arena_get(sb + 85) }
+fn set_next_fn_autotune_error(sb: i32, v: i32) -> i32 { __arena_set(sb + 85, v); 0 }
 fn bucket_reset(sb: i32) -> i32 {
     set_bucket_head(sb, 0);
     set_bucket_count(sb, 0);
@@ -5484,6 +5661,10 @@ fn grad_pass(sb: i32, head: i32) -> i32 {
                 __arena_push(0);             // slot 11: is_unwind = 0
                 __arena_push(0);             // slot 12: deprecated_msg_start = 0
                 __arena_push(0);             // slot 13: deprecated_msg_len = 0
+                __arena_push(0);             // slot 14: is_kernel = 0
+                __arena_push(0);             // slot 15: is_autotune = 0
+                __arena_push(0);             // slot 16: autotune_product = 0
+                __arena_push(0);             // slot 17: autotune_parse_error = 0
                 let new_list_node = mk_node(15, clone_fn, 0, 0);
                 __arena_set(tail + 2, new_list_node);
                 tail = new_list_node;
@@ -5844,6 +6025,10 @@ fn grad_rev_pass(sb: i32, head: i32) -> i32 {
                 __arena_push(0);             // slot 11: is_unwind = 0
                 __arena_push(0);             // slot 12: deprecated_msg_start = 0
                 __arena_push(0);             // slot 13: deprecated_msg_len = 0
+                __arena_push(0);             // slot 14: is_kernel = 0
+                __arena_push(0);             // slot 15: is_autotune = 0
+                __arena_push(0);             // slot 16: autotune_product = 0
+                __arena_push(0);             // slot 17: autotune_parse_error = 0
                 let new_list_node = mk_node(15, clone_fn, 0, 0);
                 __arena_set(tail + 2, new_list_node);
                 tail = new_list_node;
@@ -6148,6 +6333,14 @@ fn parse_fn_decl(tok_base: i32, sb: i32) -> i32 {
     set_next_fn_is_trace(sb, 0);
     let is_unwind_now = next_fn_is_unwind(sb);
     set_next_fn_is_unwind(sb, 0);
+    let is_kernel_now = next_fn_is_kernel(sb);
+    set_next_fn_is_kernel(sb, 0);
+    let is_autotune_now = next_fn_is_autotune(sb);
+    set_next_fn_is_autotune(sb, 0);
+    let autotune_product_now = next_fn_autotune_product(sb);
+    set_next_fn_autotune_product(sb, 0);
+    let autotune_error_now = next_fn_autotune_error(sb);
+    set_next_fn_autotune_error(sb, 0);
     let node = mk_node(14, name_start, name_len, body);
     __arena_push(params_head);
     __arena_push(ret_ty_final);
@@ -6159,6 +6352,10 @@ fn parse_fn_decl(tok_base: i32, sb: i32) -> i32 {
     __arena_push(is_unwind_now);             // slot 11: is_unwind flag (Stage 28.9)
     __arena_push(dep_msg_s_now);             // slot 12: deprecated_msg_start (Stage 33)
     __arena_push(dep_msg_l_now);             // slot 13: deprecated_msg_len (Stage 33)
+    __arena_push(is_kernel_now);             // slot 14: is_kernel flag (Stage 33)
+    __arena_push(is_autotune_now);           // slot 15: is_autotune flag (Stage 33)
+    __arena_push(autotune_product_now);      // slot 16: autotune product (Stage 33)
+    __arena_push(autotune_error_now);        // slot 17: autotune parse error (Stage 33)
     node
 }
 
@@ -6392,6 +6589,10 @@ fn parse_impl_method(tok_base: i32, sb: i32, target_s: i32, target_l: i32, targe
     __arena_push(0);                         // slot 11: is_unwind = 0 (Stage 28.9)
     __arena_push(0);                         // slot 12: deprecated_msg_start = 0 (Stage 33)
     __arena_push(0);                         // slot 13: deprecated_msg_len = 0 (Stage 33)
+    __arena_push(0);                         // slot 14: is_kernel = 0 (Stage 33)
+    __arena_push(0);                         // slot 15: is_autotune = 0 (Stage 33)
+    __arena_push(0);                         // slot 16: autotune_product = 0 (Stage 33)
+    __arena_push(0);                         // slot 17: autotune_parse_error = 0 (Stage 33)
     node
 }
 

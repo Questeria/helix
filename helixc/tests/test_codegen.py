@@ -5605,7 +5605,7 @@ def test_bootstrap_kovc_deprecated_message_attr_preserved():
     subprocess.run(
         ["wsl", "-e", "bash", "-c",
          f"printf %s {repr(src_text)} > {src_path}"],
-        check=True, timeout=10,
+        check=True, timeout=30,
     )
     driver = lexer_no_main + parser_body + kovc_lib + f"""
 fn main() -> i32 {{
@@ -5642,10 +5642,198 @@ fn main() -> i32 {{
     rc = compile_and_run(driver)
     subprocess.run(
         ["wsl", "-e", "bash", "-c", f"rm -f {src_path}"],
-        capture_output=True, timeout=10,
+        capture_output=True, timeout=30,
     )
     assert rc == 42, (
         f"bootstrap parser should preserve @deprecated message bytes; got rc={rc}"
+    )
+
+
+def test_bootstrap_kovc_autotune_clean_metadata_at_cap():
+    """Stage 33: bootstrap parser captures @kernel/@autotune metadata.
+
+    Product counting mirrors the Python frontend's per-key dedup contract:
+    A=[1,1,2,3,4] counts as 4, B=[10,20,30,40] counts as 4, so the
+    product is exactly the Phase-0 cap of 16 and should stay clean.
+    """
+    import os, subprocess
+    proj = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    lexer = open(os.path.join(proj, "helixc", "bootstrap", "lexer.hx")).read()
+    lexer_no_main = lexer.rsplit(
+        "// --------------------------------------------------------------\n// Demo:",
+        1,
+    )[0]
+    parser_body = open(os.path.join(proj, "helixc", "bootstrap", "parser.hx")).read()
+    kovc = open(os.path.join(proj, "helixc", "bootstrap", "kovc.hx")).read()
+    kovc_lib = kovc.rsplit(
+        "// --------------------------------------------------------------\n// Demo:",
+        1,
+    )[0]
+    import uuid
+    tag = uuid.uuid4().hex[:10]
+    src_path = f"/tmp/helix_autotune_clean_src_{tag}.hx"
+    src_text = (
+        "@kernel @autotune(A: [1, 1, 2, 3, 4], B: [10, 20, 30, 40]) "
+        "fn tuned(a: i32) -> i32 { a } "
+        "fn main() -> i32 { 42 }"
+    )
+    subprocess.run(
+        ["wsl", "-e", "bash", "-c",
+         f"printf %s {repr(src_text)} > {src_path}"],
+        check=True, timeout=30,
+    )
+    driver = lexer_no_main + parser_body + kovc_lib + f"""
+fn main() -> i32 {{
+    let src_start = __arena_len();
+    let src_len = read_file_to_arena("{src_path}");
+    let tok_base = __arena_len();
+    lex(src_start, src_len);
+    let ast_root = parse_top(tok_base);
+    let tuned_fn = __arena_get(ast_root + 1);
+    let diag_state = diag_arena_init();
+    autotune_pass(ast_root, diag_state);
+    let is_kernel = __arena_get(tuned_fn + 14);
+    let is_autotune = __arena_get(tuned_fn + 15);
+    let product = __arena_get(tuned_fn + 16);
+    let parse_error = __arena_get(tuned_fn + 17);
+    let diag_count = diag_arena_count(diag_state);
+    let mut code: i32 = 42;
+    if is_kernel != 1 {{ code = 10; }} else {{ 0 }};
+    if is_autotune != 1 {{ code = 11; }} else {{ 0 }};
+    if product != 16 {{ code = 12; }} else {{ 0 }};
+    if parse_error != 0 {{ code = 13; }} else {{ 0 }};
+    if diag_count != 0 {{ code = 14; }} else {{ 0 }};
+    code
+}}
+"""
+    rc = compile_and_run(driver)
+    subprocess.run(
+        ["wsl", "-e", "bash", "-c", f"rm -f {src_path}"],
+        capture_output=True, timeout=30,
+    )
+    assert rc == 42, (
+        f"bootstrap parser/autotune_pass should accept clean at-cap metadata; got rc={rc}"
+    )
+
+
+def test_bootstrap_kovc_autotune_validation_diagnostics():
+    """Stage 33: bootstrap-side autotune_pass emits static diagnostics."""
+    import os, subprocess
+    proj = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    lexer = open(os.path.join(proj, "helixc", "bootstrap", "lexer.hx")).read()
+    lexer_no_main = lexer.rsplit(
+        "// --------------------------------------------------------------\n// Demo:",
+        1,
+    )[0]
+    parser_body = open(os.path.join(proj, "helixc", "bootstrap", "parser.hx")).read()
+    kovc = open(os.path.join(proj, "helixc", "bootstrap", "kovc.hx")).read()
+    kovc_lib = kovc.rsplit(
+        "// --------------------------------------------------------------\n// Demo:",
+        1,
+    )[0]
+    import uuid
+    tag = uuid.uuid4().hex[:10]
+    src_path = f"/tmp/helix_autotune_bad_src_{tag}.hx"
+    src_text = (
+        "@autotune(B: [16]) fn no_kernel(a: i32) -> i32 { a } "
+        "@kernel @autotune(B: []) fn empty(a: i32) -> i32 { a } "
+        "@kernel @autotune(B: [16, fast]) fn malformed(a: i32) -> i32 { a } "
+        "@kernel @autotune(A: [1, 2, 3, 4, 5], B: [10, 20, 30, 40, 50]) "
+        "fn too_many(a: i32) -> i32 { a } "
+        "fn main() -> i32 { 42 }"
+    )
+    subprocess.run(
+        ["wsl", "-e", "bash", "-c",
+         f"printf %s {repr(src_text)} > {src_path}"],
+        check=True, timeout=30,
+    )
+    driver = lexer_no_main + parser_body + kovc_lib + f"""
+fn main() -> i32 {{
+    let src_start = __arena_len();
+    let src_len = read_file_to_arena("{src_path}");
+    let tok_base = __arena_len();
+    lex(src_start, src_len);
+    let ast_root = parse_top(tok_base);
+    let diag_state = diag_arena_init();
+    autotune_pass(ast_root, diag_state);
+    let n = diag_arena_count(diag_state);
+    let mut i: i32 = 0;
+    let mut c27001: i32 = 0;
+    let mut c27002: i32 = 0;
+    let mut c27003: i32 = 0;
+    while i < n {{
+        let code = diag_get_code(diag_state, i);
+        if code == 27001 {{ c27001 = c27001 + 1; }} else {{ 0 }};
+        if code == 27002 {{ c27002 = c27002 + 1; }} else {{ 0 }};
+        if code == 27003 {{ c27003 = c27003 + 1; }} else {{ 0 }};
+        i = i + 1;
+    }}
+    let mut rc: i32 = 42;
+    if c27001 != 1 {{ rc = 1; }} else {{ 0 }};
+    if c27002 != 1 {{ rc = 2; }} else {{ 0 }};
+    if c27003 != 2 {{ rc = 3; }} else {{ 0 }};
+    rc
+}}
+"""
+    rc = compile_and_run(driver)
+    subprocess.run(
+        ["wsl", "-e", "bash", "-c", f"rm -f {src_path}"],
+        capture_output=True, timeout=30,
+    )
+    assert rc == 42, (
+        f"autotune_pass should emit 27001/27002/27003 diagnostics; got rc={rc}"
+    )
+
+
+def test_bootstrap_kovc_autotune_error_traps_in_codegen():
+    """Stage 33: emit_elf_for_ast_to_path runs autotune_pass before codegen."""
+    import os, subprocess
+    proj = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    lexer = open(os.path.join(proj, "helixc", "bootstrap", "lexer.hx")).read()
+    lexer_no_main = lexer.rsplit(
+        "// --------------------------------------------------------------\n// Demo:",
+        1,
+    )[0]
+    parser_body = open(os.path.join(proj, "helixc", "bootstrap", "parser.hx")).read()
+    kovc = open(os.path.join(proj, "helixc", "bootstrap", "kovc.hx")).read()
+    kovc_lib = kovc.rsplit(
+        "// --------------------------------------------------------------\n// Demo:",
+        1,
+    )[0]
+    import uuid
+    tag = uuid.uuid4().hex[:10]
+    src_path = f"/tmp/helix_autotune_trap_src_{tag}.hx"
+    bin_path = f"/tmp/kovc_autotune_trap_bin_{tag}.bin"
+    src_text = "@autotune(B: [16]) fn main() -> i32 { 7 }"
+    subprocess.run(
+        ["wsl", "-e", "bash", "-c",
+         f"printf %s {repr(src_text)} > {src_path}"],
+        check=True, timeout=30,
+    )
+    driver = lexer_no_main + parser_body + kovc_lib + f"""
+fn main() -> i32 {{
+    let src_start = __arena_len();
+    let src_len = read_file_to_arena("{src_path}");
+    let tok_base = __arena_len();
+    lex(src_start, src_len);
+    let ast_root = parse_top(tok_base);
+    let total = emit_elf_for_ast_to_path(ast_root);
+    let elf_start = __arena_len() - total;
+    write_file_to_arena("{bin_path}", elf_start, total)
+}}
+"""
+    compile_and_run(driver)
+    run = subprocess.run(
+        ["wsl", "-e", "bash", "-c",
+         f"sync && chmod +x {bin_path} && {bin_path}; "
+         f"rc=$?; echo $rc; rm -f {src_path} {bin_path}"],
+        capture_output=True, timeout=30,
+    )
+    last_line = run.stdout.decode().strip().splitlines()[-1] if run.stdout else ""
+    rc = int(last_line) if last_line.isdigit() else -1
+    assert rc >= 128, (
+        f"@autotune without @kernel should trap before main returns 7; "
+        f"got rc={rc}, stdout={run.stdout!r}, stderr={run.stderr!r}"
     )
 
 

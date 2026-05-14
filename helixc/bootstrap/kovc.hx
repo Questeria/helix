@@ -2113,7 +2113,8 @@ fn match_scrut_ty_get(bn_state: i32) -> i32 {
 
 // --------------------------------------------------------------
 // Stage 28.9: diag_arena — collected diagnostics from validation
-// passes (panic_pass, unsafe_pass, deprecated_pass, trace_pass).
+// passes (panic_pass, unsafe_pass, deprecated_pass, trace_pass,
+// autotune_pass).
 // Mirrors the Python `_deprecation_warnings` channel but as a
 // structured side-table, not monkey-patched on the AST.
 //
@@ -2121,7 +2122,8 @@ fn match_scrut_ty_get(bn_state: i32) -> i32 {
 // is a capacity, then `cap` 4-slot entries, then a sticky
 // "overflowed" flag slot. Each entry stores:
 //   slot 0: trap-id code (e.g. 28501 panic, 28601 unsafe, 28701
-//           deprecated, 28502 unwind). 0 sentinel = empty slot.
+//           deprecated, 28502 unwind, 27001 autotune product).
+//           0 sentinel = empty slot.
 //   slot 1: severity (1 = warning, 2 = error)
 //   slot 2: ast_node_idx (the arena index of the AST node where the
 //           diagnostic fires — e.g. the AST_CALL node for panic_pass,
@@ -2603,7 +2605,53 @@ fn trace_pass(ast_root: i32, diag_state: i32) -> i32 {
 }
 
 // --------------------------------------------------------------
-// Stage 28.9: deprecated_pass — port of
+// Stage 33: autotune_pass -- summary validation only.
+//
+// The Python frontend validates @autotune statically before any
+// variant generation. Bootstrap parity for this slice is deliberately
+// narrower: parser.hx stores only summary metadata on AST_FN_DECL:
+//   slot 14: is_kernel
+//   slot 15: is_autotune
+//   slot 16: deduped variant product (saturated at 17)
+//   slot 17: parse_error / empty-list / no-params flag
+//
+// Full kernel-variant generation and dispatch stay Python-only for now.
+// --------------------------------------------------------------
+fn autotune_pass(ast_root: i32, diag_state: i32) -> i32 {
+    let root_tag = __arena_get(ast_root);
+    if root_tag != 15 {
+        0
+    } else {
+        let mut walk: i32 = ast_root;
+        while walk != 0 {
+            let fn_idx = __arena_get(walk + 1);
+            let is_autotune = __arena_get(fn_idx + 15);
+            if is_autotune == 1 {
+                let name_s = __arena_get(fn_idx + 1);
+                let is_kernel = __arena_get(fn_idx + 14);
+                let product = __arena_get(fn_idx + 16);
+                let parse_error = __arena_get(fn_idx + 17);
+                if is_kernel != 1 {
+                    // 27002: @autotune requires @kernel.
+                    diag_emit(diag_state, 27002, 2, fn_idx, name_s);
+                };
+                if parse_error == 1 {
+                    // 27003: malformed/no-param/empty-list autotune args.
+                    diag_emit(diag_state, 27003, 2, fn_idx, name_s);
+                };
+                if product > 16 {
+                    // 27001: variant product exceeds Phase-0 cap.
+                    diag_emit(diag_state, 27001, 2, fn_idx, name_s);
+                };
+            };
+            walk = __arena_get(walk + 2);
+        }
+        0
+    }
+}
+
+// --------------------------------------------------------------
+// Stage 28.9: deprecated_pass.
 // deprecated_pass.emit_warnings.
 //
 // Walks the fn_list to collect all fns marked `@deprecated` (slot
@@ -6219,7 +6267,7 @@ fn emit_elf_for_ast_to_path(ast_root: i32) -> i32 {
     let patch_state = patch_table_init();
     let bn_state = install_builtin_names();
     // Stage 28.9: diag_arena for validation passes (panic_pass,
-    // unsafe_pass, deprecated_pass, trace_pass). Allocated BEFORE
+    // unsafe_pass, deprecated_pass, trace_pass, autotune_pass). Allocated BEFORE
     // the ELF region so its slots don't pollute the contiguous code
     // byte stream.
     let diag_state = diag_arena_init();
@@ -6229,14 +6277,16 @@ fn emit_elf_for_ast_to_path(ast_root: i32) -> i32 {
     // fires.
     //   * panic_pass:      malformed panic(...) calls (28501)
     //   * unwind_pass:     @unwind not yet supported    (28502)
+    //   * autotune_pass:   @autotune static validation (27001/27002/27003)
     //   * trace_pass:      @trace recognised (warning)  (25003 sev 1)
     //   * deprecated_pass: call to @deprecated fn       (28701 sev 1)
     //   * unsafe_pass:     stub (no AST_UNSAFE in bootstrap yet)
     //
     // Order matters only for the FIRST-error-wins trap-id picked
     // by the codegen guard. We run panic first (most-common test
-    // case) then unwind then trace then deprecated.
+    // case) then autotune/unwind errors then trace/deprecated warnings.
     panic_pass(ast_root, diag_state);
+    autotune_pass(ast_root, diag_state);
     unwind_pass(ast_root, diag_state);
     trace_pass(ast_root, diag_state);
     deprecated_pass(ast_root, diag_state);

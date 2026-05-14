@@ -1,6 +1,6 @@
 # Helix Trap ID Registry
 
-**Last updated**: 2026-05-11 (Stage 28.9 cycle 1 audit A Finding 3 fix — added 28702 DIAG_DEP_TAB_CAPACITY for `dep_tab` cap-overflow when >16 `@deprecated` fns exist in one program)
+**Last updated**: 2026-05-14 (Stage 33 autotune bootstrap validation — added 27002/27003 for missing `@kernel` and malformed/no-param/empty-list `@autotune` args)
 **Convention**: Each runtime trap has a numeric ID. The ID is encoded into `eax` immediately before a `ud2` instruction (SIGILL on x86_64), or surfaced as a structured `HelixCompileError` at compile time. Tools and tests cross-reference traps by ID.
 
 ## Two ID namespaces
@@ -51,6 +51,8 @@ Used by the Python frontend (`helixc/frontend/*.py`) and audit-introduced trap I
 | 26002 | `TRAP_PYTREE_NON_DIFF_LEAF` | `helixc/frontend/pytree.py:50` | 26 | pytree flatten saw a non-leaf-non-struct field type |
 | 26003 | `TRAP_PYTREE_CYCLE` | `helixc/frontend/pytree.py:51` | 26 | cyclic struct reference detected during pytree walk |
 | 27001 | `TRAP_AUTOTUNE_OVERSIZED` | `helixc/frontend/autotune.py:42` | 27 | `@autotune` variant Cartesian product exceeds 16 |
+| 27002 | (bootstrap autotune_pass) | `helixc/bootstrap/kovc.hx` | 33 | `@autotune` attribute is present without required `@kernel` |
+| 27003 | (bootstrap autotune_pass) | `helixc/bootstrap/kovc.hx` | 33 | malformed, empty, or missing `@autotune(...)` parameter list |
 | 28001 | `TRAP_PARAM_STRUCT_UNINSTANTIATED` | `helixc/frontend/struct_mono.py:38` | 28 | parametric struct used without `<T>` instantiation |
 | 28002 | `TRAP_PARAM_STRUCT_CONSTEVAL` | `helixc/frontend/struct_mono.py:39` | 28 | parametric struct const-eval failed |
 | 28501 | `TRAP_PANIC_INVOKED` | `helixc/frontend/panic_pass.py:35` | 28.5 | `panic("msg")` reached at runtime |

@@ -164,9 +164,55 @@ Focused validation note:
   - Recovery: replaced with bounded direct parser/deprecated suites plus fresh
     3-generation and 10-generation Stage 33 self-host gates.
 
+## Slice 6 - Autotune Validation Metadata
+
+The bootstrap parser now captures summary metadata for `@kernel` and
+`@autotune(...)` attributes on `AST_FN_DECL`:
+
+- slot 14: `is_kernel`
+- slot 15: `is_autotune`
+- slot 16: deduped autotune variant product, saturated at `17`
+- slot 17: autotune parse-error flag for malformed, empty, or missing params
+
+`kovc.hx` now has a bootstrap-side `autotune_pass` that runs before codegen and
+emits severity-2 diagnostics for:
+
+- `27001`: variant product exceeds the Phase-0 cap of `16`
+- `27002`: `@autotune` is present without `@kernel`
+- `27003`: malformed/no-param/empty-list autotune args
+
+Full variant generation and runtime dispatch remain out of scope for this
+slice.
+
+Validation:
+
+- `python -m pytest -q helixc\tests\test_codegen.py::test_bootstrap_kovc_autotune_clean_metadata_at_cap helixc\tests\test_codegen.py::test_bootstrap_kovc_autotune_validation_diagnostics helixc\tests\test_codegen.py::test_bootstrap_kovc_autotune_error_traps_in_codegen`
+  - Result: `3 passed`
+- `python -m pytest -q helixc\tests\test_autotune.py helixc\tests\test_effect_check.py::test_c20_t2_autotune_attr_no_spurious_19002 helixc\tests\test_effect_check.py::test_c20_t2_combo_attrs_no_spurious_19002 helixc\tests\test_codegen.py::test_bootstrap_kovc_autotune_clean_metadata_at_cap helixc\tests\test_codegen.py::test_bootstrap_kovc_autotune_validation_diagnostics helixc\tests\test_codegen.py::test_bootstrap_kovc_autotune_error_traps_in_codegen helixc\tests\test_codegen.py::test_bootstrap_kovc_deprecated_message_attr_preserved`
+  - Result: `30 passed`
+- `python -m pytest -q helixc\tests\test_parser.py helixc\tests\test_autotune.py helixc\tests\test_codegen.py::test_bootstrap_kovc_autotune_clean_metadata_at_cap helixc\tests\test_codegen.py::test_bootstrap_kovc_autotune_validation_diagnostics helixc\tests\test_codegen.py::test_bootstrap_kovc_autotune_error_traps_in_codegen`
+  - Result: `92 passed`
+- `python scripts\stage33_selfhost_gate.py --generations 3 --json-out .stage33-logs\selfhost-cascade-autotune-g3.json`
+  - Result: `rc=0`
+  - G2..G4 stable SHA-256:
+    `0ebfb630c34092fe06ab28ad4f1022f6f03666f4d0cbdfa9559cf8af3aafee81`
+  - G2..G4 stable size: `285186` bytes
+  - Final-generation smoke cases: literal, call, and loop all returned `42`
+  - Validator result: `selfhost-cascade-validate: ok`
+- `python scripts\stage33_selfhost_gate.py --generations 10 --expect-stable-sha 0ebfb630c34092fe06ab28ad4f1022f6f03666f4d0cbdfa9559cf8af3aafee81 --json-out .stage33-logs\selfhost-cascade-autotune-g10.json`
+  - Result: `rc=0`
+  - G2..G11 stable SHA-256:
+    `0ebfb630c34092fe06ab28ad4f1022f6f03666f4d0cbdfa9559cf8af3aafee81`
+  - G2..G11 stable size: `285186` bytes
+  - Final-generation smoke cases: literal, call, and loop all returned `42`
+  - Validator result: `selfhost-cascade-validate: ok`
+- `python scripts\stage31_validate.py --mode quick --skip-snapshot`
+  - Result: `rc=0`
+
 ## Next
 
-The next Stage 33 slice should move to the next smallest Python-only compiler
-behavior. Current candidate: bootstrap-side `@autotune` validation only
-(`@autotune` parsing, required `@kernel`, malformed/empty values, and capped
-variant product), while deferring full variant dispatch.
+The next Stage 33 slice should either thread preserved deprecated/autotune
+metadata into richer diagnostic rendering, or take the next parser-safe
+Python-only behavior from the Stage 33 candidate list. Full autotune variant
+generation remains larger than the current slice size and should stay gated
+behind another self-host proof.
