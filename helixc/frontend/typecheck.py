@@ -966,7 +966,7 @@ class TypeChecker:
 
     def _refinement_predicate_shape_supported(self, expr: A.Expr) -> bool:
         if isinstance(expr, A.BoolLit):
-            return False
+            return True
         if isinstance(expr, A.Binary) and expr.op in ("&&", "||"):
             return (self._refinement_predicate_shape_supported(expr.left)
                     and self._refinement_predicate_shape_supported(expr.right))
@@ -2854,16 +2854,26 @@ class TypeChecker:
             self._fmt_refinement_expr(p) for p in refined.predicates
         )
         if value is None:
-            self._record_unproven_refinement_obligations(
-                context, refined, span)
-            self.errors.append(TypeError_(
-                f"{context}: refinement {refined.name} requires a "
-                f"compile-time-proven value in Stage 31; could not prove "
-                f"{predicate_text}",
-                span,
-                hint="use a literal that satisfies the refinement for now; "
-                     "SMT/runtime proof support is a later Stage 31 step",
-            ))
+            pending = self._check_self_independent_refinement(
+                refined, span, context,
+            )
+            if pending:
+                for pred in pending:
+                    self._record_refinement_obligation(
+                        context, refined, pred, "unproven", span, None,
+                    )
+                self.errors.append(TypeError_(
+                    f"{context}: refinement {refined.name} requires a "
+                    f"compile-time-proven value in Stage 31; could not prove "
+                    f"{' and '.join(self._fmt_refinement_expr(p) for p in pending)}",
+                    span,
+                    hint="use a literal that satisfies the refinement for now; "
+                         "SMT/runtime proof support is a later Stage 31 step",
+                ))
+            if isinstance(refined.base, TyRefined):
+                self._check_refinement_const_value(
+                    value_expr, refined.base, span, context, scope,
+                )
             return
         for pred in refined.predicates:
             ok = self._eval_refinement_predicate(pred, value)
@@ -2898,6 +2908,49 @@ class TypeChecker:
             self._check_refinement_const_value(
                 value_expr, refined.base, span, context, scope,
             )
+
+    def _check_self_independent_refinement(
+        self, refined: "TyRefined", span: A.Span, context: str,
+    ) -> list[A.Expr]:
+        """Check predicates that do not depend on `self`.
+
+        These predicates can be proved or failed even when the assigned value is
+        not a compile-time scalar. Return predicates that still need the value.
+        """
+        pending: list[A.Expr] = []
+        for pred in refined.predicates:
+            ok = self._eval_refinement_predicate(pred, None)
+            if ok is None and self._expr_mentions_self(pred):
+                pending.append(pred)
+                continue
+            if ok is None:
+                self._record_refinement_obligation(
+                    context, refined, pred, "unsupported", span, None,
+                )
+                self.errors.append(TypeError_(
+                    f"{context}: refinement {refined.name} predicate "
+                    f"{self._fmt_refinement_expr(pred)} is not supported by "
+                    f"the Stage 31 constant checker",
+                    span,
+                ))
+                continue
+            if not ok:
+                self._record_refinement_obligation(
+                    context, refined, pred, "failed", span, None,
+                    trap="31001",
+                )
+                self.errors.append(TypeError_(
+                    f"{context}: refinement {refined.name} violated: "
+                    f"predicate {self._fmt_refinement_expr(pred)} is always "
+                    f"false (trap 31001)",
+                    span,
+                    hint="refined values must satisfy their `where` predicate",
+                ))
+            else:
+                self._record_refinement_obligation(
+                    context, refined, pred, "proved", span, None,
+                )
+        return pending
 
     def _record_unproven_refinement_obligations(
         self, context: str, refined: "TyRefined", span: A.Span,
@@ -3409,9 +3462,20 @@ class TypeChecker:
         if isinstance(expr, A.Binary) and expr.op in ("&&", "||"):
             left = self._eval_refinement_predicate(expr.left, self_value)
             right = self._eval_refinement_predicate(expr.right, self_value)
+            if expr.op == "&&":
+                if left is False or right is False:
+                    return False
+                if left is True and right is True:
+                    return True
+                return None
+            if expr.op == "||":
+                if left is True or right is True:
+                    return True
+                if left is False and right is False:
+                    return False
+                return None
             if left is None or right is None:
                 return None
-            return (left and right) if expr.op == "&&" else (left or right)
         chain = self._flatten_relational_chain(expr)
         if chain is not None:
             ops, operands = chain

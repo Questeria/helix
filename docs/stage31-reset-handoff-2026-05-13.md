@@ -353,6 +353,32 @@ because an unsupported obligation is not proved and cannot pass a proof gate.
 Stage 31 quick validation now covers unsupported-obligation emission, plain
 validator acceptance, and `--require-clean` rejection.
 
+## 2026-05-14 Boolean Literal Refinement Slice
+
+Stage 31 refinement predicate shape validation now accepts boolean literals.
+This aligns alias validation with the existing proof evaluator: `where true`
+is a valid always-satisfied refinement and emits a `proved` proof obligation,
+while `where false` is a valid but uninhabited refinement and emits a `failed`
+obligation with trap `31001` when a value is assigned to it. Before this slice,
+alias validation rejected boolean literal predicates as unsupported even though
+the proof evaluator could already evaluate them.
+
+Stage 31 quick validation now covers boolean-literal refinement typechecking
+and proof-obligation JSON for both `true` and `false` predicates.
+Audit follow-up: self-independent predicates now evaluate before the checker
+falls back to "unproven." That means `where false` rejects even unknown/raw
+input values as an always-false predicate, while `where true` proves without
+requiring the assigned value to be compile-time-known.
+Second audit follow-up: this is now per-predicate rather than all-or-nothing.
+Mixed refinements such as `where false, self >= 0.0` record the `false`
+predicate as `failed` while preserving the `self >= 0.0` predicate as
+`unproven`, and inherited base aliases keep their self-independent failures
+instead of being downgraded by an outer `self` predicate.
+Third audit follow-up: boolean short-circuit predicates now preserve decisive
+truth values even when the other side mentions `self`. For unknown input,
+`false && self >= 0.0` records `failed` with trap `31001`, while
+`true || self >= 0.0` records `proved`.
+
 ## Do Not Forget
 
 - Send Telegram updates using:

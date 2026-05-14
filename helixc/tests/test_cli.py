@@ -1469,6 +1469,148 @@ def test_stage31_emit_proof_obligations_json_for_unsupported_refinement(
     )
 
 
+def test_stage31_emit_proof_obligations_json_for_boolean_literal_refinements(
+    capsys, tmp_path,
+):
+    always_path = str(tmp_path / "always_obligation.hx")
+    with open(always_path, "w") as f:
+        f.write(
+            "type Always = f64 where true;\n"
+            "fn main() -> i32 { let a: Always = 0.5_f64; 0 }\n"
+        )
+    rc = main([always_path, "--emit-proof-obligations", "--no-stdlib"])
+    captured = capsys.readouterr()
+    assert rc == 0, captured.out + captured.err
+    artifact = json.loads(captured.out)
+    assert artifact["summary"]["typecheck_errors"] == 0
+    obligation = artifact["obligations"][0]
+    assert obligation["refinement"] == "Always"
+    assert obligation["predicate"] == "true"
+    assert obligation["status"] == "proved"
+    assert obligation["value"] == "0.5"
+
+    never_path = str(tmp_path / "never_obligation.hx")
+    with open(never_path, "w") as f:
+        f.write(
+            "type Never = f64 where false;\n"
+            "fn main() -> i32 { let n: Never = 0.5_f64; 0 }\n"
+        )
+    rc = main([never_path, "--emit-proof-obligations", "--no-stdlib"])
+    captured = capsys.readouterr()
+    assert rc == 1
+    artifact = json.loads(captured.out)
+    assert artifact["summary"]["typecheck_errors"] == 1
+    obligation = artifact["obligations"][0]
+    assert obligation["refinement"] == "Never"
+    assert obligation["predicate"] == "false"
+    assert obligation["status"] == "failed"
+    assert obligation["trap"] == "31001"
+    assert obligation["value"] == "0.5"
+
+
+def test_stage31_emit_proof_obligations_json_for_self_independent_false(
+    capsys, tmp_path,
+):
+    src_path = str(tmp_path / "never_raw_obligation.hx")
+    with open(src_path, "w") as f:
+        f.write(
+            "type Never = f64 where false;\n"
+            "fn use_raw(x: f64) -> i32 { let n: Never = x; 0 }\n"
+        )
+    rc = main([src_path, "--emit-proof-obligations", "--no-stdlib"])
+    captured = capsys.readouterr()
+    assert rc == 1
+    artifact = json.loads(captured.out)
+    assert artifact["summary"]["typecheck_errors"] == 1
+    obligation = artifact["obligations"][0]
+    assert obligation["refinement"] == "Never"
+    assert obligation["predicate"] == "false"
+    assert obligation["status"] == "failed"
+    assert obligation["trap"] == "31001"
+    assert "value" not in obligation
+    assert "predicate false is always false" in artifact["typecheck_errors"][0]
+
+
+def test_stage31_emit_proof_obligations_json_for_mixed_independent_predicates(
+    capsys, tmp_path,
+):
+    src_path = str(tmp_path / "mixed_bool_obligation.hx")
+    with open(src_path, "w") as f:
+        f.write(
+            "type Mixed = f64 where false, self >= 0.0;\n"
+            "fn use_raw(x: f64) -> i32 { let m: Mixed = x; 0 }\n"
+        )
+    rc = main([src_path, "--emit-proof-obligations", "--no-stdlib"])
+    captured = capsys.readouterr()
+    assert rc == 1
+    artifact = json.loads(captured.out)
+    observed = {
+        (o["refinement"], o["predicate"], o["status"], o.get("trap"))
+        for o in artifact["obligations"]
+    }
+    assert ("Mixed", "false", "failed", "31001") in observed
+    assert ("Mixed", "self >= 0.0", "unproven", None) in observed
+
+
+def test_stage31_emit_proof_obligations_json_for_inherited_independent_false(
+    capsys, tmp_path,
+):
+    src_path = str(tmp_path / "inherited_never_obligation.hx")
+    with open(src_path, "w") as f:
+        f.write(
+            "type Never = f64 where false;\n"
+            "type NonNegativeNever = Never where self >= 0.0;\n"
+            "fn use_raw(x: f64) -> i32 { let n: NonNegativeNever = x; 0 }\n"
+        )
+    rc = main([src_path, "--emit-proof-obligations", "--no-stdlib"])
+    captured = capsys.readouterr()
+    assert rc == 1
+    artifact = json.loads(captured.out)
+    observed = {
+        (o["refinement"], o["predicate"], o["status"], o.get("trap"))
+        for o in artifact["obligations"]
+    }
+    assert ("NonNegativeNever", "self >= 0.0", "unproven", None) in observed
+    assert ("Never", "false", "failed", "31001") in observed
+
+
+def test_stage31_emit_proof_obligations_json_for_short_circuit_predicates(
+    capsys, tmp_path,
+):
+    false_and_path = str(tmp_path / "false_and_obligation.hx")
+    with open(false_and_path, "w") as f:
+        f.write(
+            "type Never = f64 where false && self >= 0.0;\n"
+            "fn use_raw(x: f64) -> i32 { let n: Never = x; 0 }\n"
+        )
+    rc = main([false_and_path, "--emit-proof-obligations", "--no-stdlib"])
+    captured = capsys.readouterr()
+    assert rc == 1
+    artifact = json.loads(captured.out)
+    obligation = artifact["obligations"][0]
+    assert obligation["refinement"] == "Never"
+    assert obligation["predicate"] == "(false && self >= 0.0)"
+    assert obligation["status"] == "failed"
+    assert obligation["trap"] == "31001"
+    assert "value" not in obligation
+
+    true_or_path = str(tmp_path / "true_or_obligation.hx")
+    with open(true_or_path, "w") as f:
+        f.write(
+            "type Always = f64 where true || self >= 0.0;\n"
+            "fn use_raw(x: f64) -> i32 { let a: Always = x; 0 }\n"
+        )
+    rc = main([true_or_path, "--emit-proof-obligations", "--no-stdlib"])
+    captured = capsys.readouterr()
+    assert rc == 0, captured.out + captured.err
+    artifact = json.loads(captured.out)
+    obligation = artifact["obligations"][0]
+    assert obligation["refinement"] == "Always"
+    assert obligation["predicate"] == "(true || self >= 0.0)"
+    assert obligation["status"] == "proved"
+    assert "value" not in obligation
+
+
 def test_stage31_emit_proof_obligations_includes_inherited_unproven_refinement(
     capsys, tmp_path,
 ):

@@ -1342,6 +1342,69 @@ def test_stage31_unused_bad_refinement_predicates_are_diagnosed():
                for e in bool_operand), bool_operand
 
 
+def test_stage31_boolean_literal_refinement_predicates_are_supported():
+    always = check("""
+    type Always = f64 where true;
+    fn main() -> i32 { let a: Always = 0.5_f64; 0 }
+    """)
+    assert always == [], always
+
+    never = check("""
+    type Never = f64 where false;
+    fn main() -> i32 { let n: Never = 0.5_f64; 0 }
+    """)
+    assert not any("predicate false is not supported" in e for e in never), never
+    assert any("refinement Never violated" in e for e in never), never
+
+
+def test_stage31_self_independent_false_refinement_rejects_unknown_values():
+    never = check("""
+    type Never = f64 where false;
+    fn use_raw(x: f64) -> i32 { let n: Never = x; 0 }
+    """)
+    assert not any("compile-time-proven value" in e for e in never), never
+    assert any("predicate false is always false" in e for e in never), never
+
+    always = check("""
+    type Always = f64 where true;
+    fn use_raw(x: f64) -> i32 { let a: Always = x; 0 }
+    """)
+    assert always == [], always
+
+
+def test_stage31_mixed_self_independent_refinements_do_not_downgrade():
+    mixed = check("""
+    type Mixed = f64 where false, self >= 0.0;
+    fn use_raw(x: f64) -> i32 { let m: Mixed = x; 0 }
+    """)
+    assert any("predicate false is always false" in e for e in mixed), mixed
+    assert any("could not prove self >= 0.0" in e for e in mixed), mixed
+
+    inherited = check("""
+    type Never = f64 where false;
+    type NonNegativeNever = Never where self >= 0.0;
+    fn use_raw(x: f64) -> i32 { let n: NonNegativeNever = x; 0 }
+    """)
+    assert any("predicate false is always false" in e for e in inherited), inherited
+    assert any("could not prove self >= 0.0" in e for e in inherited), inherited
+
+
+def test_stage31_boolean_short_circuit_refinements_are_decisive():
+    false_and = check("""
+    type Never = f64 where false && self >= 0.0;
+    fn use_raw(x: f64) -> i32 { let n: Never = x; 0 }
+    """)
+    assert not any("compile-time-proven value" in e for e in false_and), false_and
+    assert any("predicate (false && self >= 0.0) is always false" in e
+               for e in false_and), false_and
+
+    true_or = check("""
+    type Always = f64 where true || self >= 0.0;
+    fn use_raw(x: f64) -> i32 { let a: Always = x; 0 }
+    """)
+    assert true_or == [], true_or
+
+
 def test_stage31_nested_module_use_rewrites_refined_alias_type():
     src = """
     mod m {
