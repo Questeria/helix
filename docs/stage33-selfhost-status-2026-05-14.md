@@ -48,14 +48,9 @@ Validation:
   - Result: PASS
   - JSON report confirms `stable: true`
 
-## Next
+## Completed Follow-Up
 
-The next Stage 33 slice should convert this report into a stricter gate:
-
-1. Add a lightweight validator for cascade report JSON.
-2. Fail closed if stable is false, expected smoke cases are missing, or the
-   stable generation set drifts.
-3. Use that validator before any self-host parity change is committed.
+The planned stricter cascade gate is now in place through Slice 2 and Slice 3.
 
 ## Slice 2 - Cascade Report Validator
 
@@ -108,3 +103,27 @@ Validation:
   - G2..G4 stable SHA-256:
     `5a7367ad436e72ade3d8f96a9860e0d08b64528cbb15295e1a47076090667408`
   - Validator result: `selfhost-cascade-validate: ok`
+
+## Slice 4 - Ten-Generation Release Gate
+
+The Stage 33 one-command gate now has fresh 10-generation evidence matching
+the Stage 30 fixed point. This directly exercises the longer cascade the user
+requested before moving past the self-host proof layer.
+
+Validation:
+
+- `python scripts\stage33_selfhost_gate.py --generations 10 --expect-stable-sha 5a7367ad436e72ade3d8f96a9860e0d08b64528cbb15295e1a47076090667408 --json-out .stage33-logs\selfhost-cascade-g10.json`
+  - Result: `rc=0`
+  - G2..G11 stable SHA-256:
+    `5a7367ad436e72ade3d8f96a9860e0d08b64528cbb15295e1a47076090667408`
+  - G2..G11 stable size: `277899` bytes
+  - Final-generation smoke cases: literal, call, and loop all returned `42`
+  - Validator result: `selfhost-cascade-validate: ok`
+
+## Next
+
+The next Stage 33 slice should remove or mirror the smallest remaining
+Python-only compiler behavior. The current best candidate is preserving
+`@deprecated("message")` metadata in the bootstrap compiler, because bare
+`@deprecated` handling is already present and the slice avoids opening a new
+AST family.
