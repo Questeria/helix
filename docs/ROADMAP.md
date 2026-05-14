@@ -131,3 +131,99 @@ Tier 1 + Tier 2 #6 together are roughly 4-5 months of work and
 unblock real model training. Tier 3 #10 (neuro-symbolic primitives)
 should start scoping in parallel since it's the strategic moat and
 the work is mostly orthogonal to GPU codegen.
+
+## Post-Stage-31 Sequence
+
+Stage 31 shifted the practical bottleneck from "can we test enough?" to "can we
+test fast enough while preserving trust?" The next stages should reflect that.
+
+### Stage 32 - Verification Speed Infrastructure
+
+Purpose: make every later stage faster without weakening any gate.
+
+Beginner meaning: the test system should tell us exactly what is slow, retry
+only the part that flaked, and distribute work evenly across the machine.
+
+Important features:
+- Slow-test telemetry by test node, not only by shard.
+- Machine-readable timing summaries.
+- Duration-weighted shard assignment.
+- Failed-shard retry evidence.
+- Changed-file to focused-test mapping.
+
+Importance: very high. This does not make Helix more powerful directly, but it
+removes waiting from every future compiler and AI feature.
+
+Relative work: medium to large.
+
+### Stage 33 - Self-Host Parity And Python Removal Path
+
+Purpose: return to the central bootstrap goal: Helix should compile Helix.
+
+Beginner meaning: keep moving remaining Python-only compiler abilities into the
+Helix compiler until the Python compiler can become only a historical
+reference.
+
+Important features:
+- Port remaining Python-only validation/frontend passes.
+- Keep bootstrap compiler behavior byte-stable and deterministic.
+- Strengthen self-host cascade tests.
+- Expand binary-level comparison gates.
+
+Importance: highest. This is the independence milestone.
+
+Relative work: large to very large.
+
+### Stage 34 - Proof And Refinement Expansion
+
+Purpose: make Helix better at proving uncertainty-reducing claims.
+
+Beginner meaning: Helix should understand more safety rules at compile time and
+produce trustworthy proof artifacts about them.
+
+Important features:
+- More refinement predicate shapes.
+- Better proof artifact workflows.
+- SMT-backed implication checks when ready.
+- Clean integration with proof gates.
+
+Importance: very high. This is central to Helix being an uncertainty-reducing
+language, not only a fast language.
+
+Relative work: large.
+
+### Stage 35 - AI/ML Capability Push
+
+Purpose: unlock more real model-training code in Helix.
+
+Beginner meaning: make Helix better at gradients, model structures, tensors,
+and eventually GPU execution.
+
+Important features:
+- Multi-output reverse-mode AD.
+- Pytrees for nested model parameters.
+- Tile/tensor lowering.
+- PTX/GPU path and FFI support.
+- Autotune for generated kernels.
+
+Importance: highest for practical AI usefulness.
+
+Relative work: very large.
+
+### Stage 36 - Strategic AGI Features
+
+Purpose: build the features that make Helix meaningfully different from normal
+ML languages.
+
+Beginner meaning: give Helix native tools for evidence, provenance,
+self-inspection, and safe self-improvement.
+
+Important features:
+- Provenance-typed neuro-symbolic primitives.
+- Trace-based introspection.
+- Verifier-gated self-modification with stronger proof objects.
+- Memory/knowledge types as the language grows toward the broader vision.
+
+Importance: existential to the long-term Helix mission.
+
+Relative work: very large to hardest.
