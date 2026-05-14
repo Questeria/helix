@@ -243,10 +243,52 @@ Validation:
 - `python scripts\stage31_validate.py --mode quick --skip-snapshot`
   - Result: `rc=0`
 
+## Slice 8 - Since Metadata Preservation
+
+The Python frontend preserves `@since("version")` as metadata alongside
+`@deprecated("message")`. The bootstrap parser previously consumed `@since`
+as a generic skipped attribute, so self-hosted code could not retain the
+version marker.
+
+The bootstrap parser now preserves the first string-literal argument to
+`@since(...)` on `AST_FN_DECL`:
+
+- slot 18: `since_msg_start`
+- slot 19: `since_msg_len`
+
+The new slots are zeroed on synthetic closure/AD/impl functions and propagated
+through generic monomorph clones, matching the existing Stage 33 metadata
+pattern. There is still no `@since` validation pass; this slice only preserves
+the data so future bootstrap diagnostics can use it.
+
+Validation:
+
+- `python -m pytest -q helixc\tests\test_codegen.py::test_bootstrap_kovc_since_message_attr_preserved helixc\tests\test_codegen.py::test_bootstrap_kovc_deprecated_message_attr_preserved helixc\tests\test_deprecated.py::test_parse_since helixc\tests\test_effect_check.py::test_c20_t2_since_attr_no_spurious_19002`
+  - Result: `4 passed`
+- `python -m pytest -q helixc\tests\test_deprecated.py helixc\tests\test_effect_check.py::test_c20_t2_deprecated_attr_no_spurious_19002 helixc\tests\test_effect_check.py::test_c20_t2_since_attr_no_spurious_19002 helixc\tests\test_effect_check.py::test_c20_t2_combo_attrs_no_spurious_19002 helixc\tests\test_codegen.py::test_bootstrap_kovc_deprecated_message_attr_preserved helixc\tests\test_codegen.py::test_bootstrap_kovc_since_message_attr_preserved`
+  - Result: `33 passed`
+- `python -m pytest -q helixc\tests\test_parser.py helixc\tests\test_codegen.py::test_bootstrap_kovc_since_message_attr_preserved helixc\tests\test_codegen.py::test_bootstrap_kovc_deprecated_message_attr_preserved helixc\tests\test_codegen.py::test_bootstrap_kovc_autotune_typed_int_values_preserved`
+  - Result: `68 passed`
+- `python scripts\stage33_selfhost_gate.py --generations 3 --json-out .stage33-logs\selfhost-cascade-since-msg-g3.json`
+  - Result: `rc=0`
+  - G2..G4 stable SHA-256:
+    `8ed554fd76ea253d23a417800606d0f343b81f6d75652f873cab68d90f4498f0`
+  - G2..G4 stable size: `287119` bytes
+  - Final-generation smoke cases: literal, call, and loop all returned `42`
+  - Validator result: `selfhost-cascade-validate: ok`
+- `python scripts\stage33_selfhost_gate.py --generations 10 --expect-stable-sha 8ed554fd76ea253d23a417800606d0f343b81f6d75652f873cab68d90f4498f0 --json-out .stage33-logs\selfhost-cascade-since-msg-g10-final.json`
+  - Result: `rc=0`
+  - G2..G11 stable SHA-256:
+    `8ed554fd76ea253d23a417800606d0f343b81f6d75652f873cab68d90f4498f0`
+  - G2..G11 stable size: `287119` bytes
+  - Final-generation smoke cases: literal, call, and loop all returned `42`
+  - Validator result: `selfhost-cascade-validate: ok`
+- `python scripts\stage31_validate.py --mode quick --skip-snapshot`
+  - Result: `rc=0`
+
 ## Next
 
-The next Stage 33 slice should either thread preserved deprecated/autotune
-metadata into richer diagnostic rendering, or take the next parser-safe
-Python-only behavior from the Stage 33 candidate list. Full autotune variant
-generation remains larger than the current slice size and should stay gated
-behind another self-host proof.
+The next Stage 33 slice should thread preserved `@deprecated("message")`
+metadata into richer bootstrap deprecated diagnostics, then repeat the focused
+tests and self-host gates. Full autotune variant generation remains larger than
+the current slice size and should stay gated behind another self-host proof.

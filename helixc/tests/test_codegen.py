@@ -5649,6 +5649,67 @@ fn main() -> i32 {{
     )
 
 
+def test_bootstrap_kovc_since_message_attr_preserved():
+    """Stage 33: bootstrap parser preserves @since("version") payload."""
+    import os, subprocess
+    proj = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    lexer = open(os.path.join(proj, "helixc", "bootstrap", "lexer.hx")).read()
+    lexer_no_main = lexer.rsplit(
+        "// --------------------------------------------------------------\n// Demo:",
+        1,
+    )[0]
+    parser_body = open(os.path.join(proj, "helixc", "bootstrap", "parser.hx")).read()
+    kovc = open(os.path.join(proj, "helixc", "bootstrap", "kovc.hx")).read()
+    kovc_lib = kovc.rsplit(
+        "// --------------------------------------------------------------\n// Demo:",
+        1,
+    )[0]
+    import uuid
+    tag = uuid.uuid4().hex[:10]
+    src_path = f"/tmp/helix_since_msg_src_{tag}.hx"
+    src_text = (
+        '@since("v0.3") fn new_api() -> i32 { 1 } '
+        '@since fn born_api() -> i32 { 2 } '
+        'fn main() -> i32 { new_api() }'
+    )
+    subprocess.run(
+        ["wsl", "-e", "bash", "-c",
+         f"printf %s {repr(src_text)} > {src_path}"],
+        check=True, timeout=30,
+    )
+    driver = lexer_no_main + parser_body + kovc_lib + f"""
+fn main() -> i32 {{
+    let src_start = __arena_len();
+    let src_len = read_file_to_arena("{src_path}");
+    let tok_base = __arena_len();
+    lex(src_start, src_len);
+    let ast_root = parse_top(tok_base);
+    let new_fn = __arena_get(ast_root + 1);
+    let bare_list = __arena_get(ast_root + 2);
+    let bare_fn = __arena_get(bare_list + 1);
+    let new_msg_s = __arena_get(new_fn + 18);
+    let new_msg_l = __arena_get(new_fn + 19);
+    let bare_msg_l = __arena_get(bare_fn + 19);
+    let mut code: i32 = 42;
+    if new_msg_l != 4 {{ code = 10; }} else {{ 0 }};
+    if bare_msg_l != 0 {{ code = 11; }} else {{ 0 }};
+    if __arena_get(new_msg_s) != 118 {{ code = 20; }} else {{ 0 }};
+    if __arena_get(new_msg_s + 1) != 48 {{ code = 21; }} else {{ 0 }};
+    if __arena_get(new_msg_s + 2) != 46 {{ code = 22; }} else {{ 0 }};
+    if __arena_get(new_msg_s + 3) != 51 {{ code = 23; }} else {{ 0 }};
+    code
+}}
+"""
+    rc = compile_and_run(driver)
+    subprocess.run(
+        ["wsl", "-e", "bash", "-c", f"rm -f {src_path}"],
+        capture_output=True, timeout=30,
+    )
+    assert rc == 42, (
+        f"bootstrap parser should preserve @since message bytes; got rc={rc}"
+    )
+
+
 def test_bootstrap_kovc_autotune_clean_metadata_at_cap():
     """Stage 33: bootstrap parser captures @kernel/@autotune metadata.
 

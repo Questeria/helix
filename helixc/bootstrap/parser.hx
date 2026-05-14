@@ -49,6 +49,8 @@
 //                      slot 15: is_autotune flag (Stage 33)
 //                      slot 16: autotune_variant_product (Stage 33)
 //                      slot 17: autotune_parse_error flag (Stage 33)
+//                      slot 18: since_msg_start (Stage 33)
+//                      slot 19: since_msg_len (Stage 33)
 //  15  AST_FN_LIST   p1 = current fn_decl_idx, p2 = next list node
 //                    idx (or 0 at end). Linked list of top-level fn
 //                    declarations. Built by parse_top when source
@@ -2056,13 +2058,13 @@ fn parse_closure_lit(tok_base: i32, sb: i32) -> i32 {
             };
             pi = pi + 1;
         }
-        // Allocate AST_FN_DECL with 18 contiguous slots (Stage 33 layout).
+        // Allocate AST_FN_DECL with 20 contiguous slots (Stage 33 layout).
         // p1=name_s, p2=name_l, p3=body, p4=params_head, p5=ret_ty,
         // p6=is_generic, p7=gp_names_head, p8=is_checkpoint,
         // p9=is_deprecated, p10=is_trace, p11=is_unwind,
         // p12=deprecated_msg_start, p13=deprecated_msg_len,
         // p14=is_kernel, p15=is_autotune, p16=autotune_product,
-        // p17=autotune_parse_error.
+        // p17=autotune_parse_error, p18=since_msg_start, p19=since_msg_len.
         let fn_node = mk_node(14, name_start, name_len, body);
         __arena_push(params_head);
         __arena_push(0);                         // ret_ty = 0 (i32)
@@ -2078,6 +2080,8 @@ fn parse_closure_lit(tok_base: i32, sb: i32) -> i32 {
         __arena_push(0);                         // is_autotune = 0 (Stage 33)
         __arena_push(0);                         // autotune_product = 0 (Stage 33)
         __arena_push(0);                         // autotune_parse_error = 0 (Stage 33)
+        __arena_push(0);                         // since_msg_start = 0 (Stage 33)
+        __arena_push(0);                         // since_msg_len = 0 (Stage 33)
         // Wrap in AST_FN_LIST and append to cl_pending chain.
         let list_node = mk_node(15, fn_node, 0, 0);
         let head = cl_pending_head(sb);
@@ -4063,13 +4067,8 @@ fn install_keywords(sb: i32) -> i32 {
 // Reserves 7 state slots, then dispatches into parse_expr.
 // --------------------------------------------------------------
 fn parse_top(tok_base: i32) -> i32 {
-    // 33 state slots: cursor + 7 keyword (start, len) pairs +
-    // struct_table (base + count) + var_struct_table (base + count) +
-    // last_struct_idx scratch + enum_table (base + count) +
-    // var_enum_table (base + count) + last_enum_idx scratch +
-    // enum keyword (start + len) + match keyword (start + len) +
-    // generic_params (base + count) + mono_request (base + count).
-    // Stage 6 added slots 20..26; Stage 7 added 27..28; Stage 8 added 29..32.
+    // Parser state slots: cursor + keyword pairs + staged scratch/table
+    // regions. Later comments below document each added range through slot 87.
     let cur_slot = __arena_push(0);
     __arena_push(0); __arena_push(0); __arena_push(0); __arena_push(0);
     __arena_push(0); __arena_push(0); __arena_push(0); __arena_push(0);
@@ -4160,6 +4159,9 @@ fn parse_top(tok_base: i32) -> i32 {
     //   85 = next_fn_autotune_parse_error
     __arena_push(0);
     __arena_push(0);
+    __arena_push(0);
+    __arena_push(0);
+    // Stage 33: slots 86/87 = next @since message body start/len.
     __arena_push(0);
     __arena_push(0);
     install_keywords(cur_slot);
@@ -4388,9 +4390,9 @@ fn capture_autotune_args(tok_base: i32, first_tok: i32, sb: i32) -> i32 {
 // Stage 28.9: similarly recognizes `@deprecated` (slot 75),
 // `@trace` (slot 76), `@unwind` (slot 77) so the bootstrap-side
 // validation passes can observe them on AST_FN_DECL slots 9/10/11.
-// Stage 33: if `@deprecated("message")` has a first string-literal
-// argument, preserve that message body range in scratch slots 80/81
-// for AST_FN_DECL slots 12/13.
+// Stage 33: if `@deprecated("message")` or `@since("version")` has a
+// first string-literal argument, preserve that message body range in
+// scratch slots 80/81 or 86/87 for AST_FN_DECL slots 12/13 or 18/19.
 // Stage 33: also recognizes `@kernel` and enough `@autotune(...)`
 // metadata for bootstrap-side validation of kernel requirement,
 // malformed/empty parameter lists, and variant-product cap.
@@ -4463,6 +4465,20 @@ fn skip_attributes(tok_base: i32, sb: i32) -> i32 {
                         else { 0 } } else { 0 } } else { 0 } } else { 0 } } else { 0 };
                     if is_trace == 1 {
                         set_next_fn_is_trace(sb, 1);
+                    };
+                    let is_since = if tb0 == 115 { if tb1 == 105 {
+                        if tb2 == 110 { if tb3 == 99 { if tb4 == 101 { 1 }
+                        else { 0 } } else { 0 } } else { 0 } } else { 0 } } else { 0 };
+                    if is_since == 1 {
+                        set_next_fn_since_msg_s(sb, 0);
+                        set_next_fn_since_msg_l(sb, 0);
+                        if tok_tag(tok_base, cur_get(sb) + 1) == 3 {
+                            let msg_tok = cur_get(sb) + 2;
+                            if tok_tag(tok_base, msg_tok) == 25 {
+                                set_next_fn_since_msg_s(sb, tok_p2(tok_base, msg_tok));
+                                set_next_fn_since_msg_l(sb, tok_p3(tok_base, msg_tok));
+                            };
+                        };
                     };
                 };
                 // Stage 28.9: `unwind` (6 bytes: 117 110 119 105 110 100).
@@ -4929,6 +4945,8 @@ fn monomorphize_pass(sb: i32, head: i32) -> i32 {
                 let tpl_is_autotune = __arena_get(tpl_idx + 15);
                 let tpl_autotune_product = __arena_get(tpl_idx + 16);
                 let tpl_autotune_error = __arena_get(tpl_idx + 17);
+                let tpl_since_msg_s = __arena_get(tpl_idx + 18);
+                let tpl_since_msg_l = __arena_get(tpl_idx + 19);
                 let clone_idx = mk_node(14, mang_s, mang_l, cloned_body);
                 __arena_push(new_params_head);
                 __arena_push(new_ret_ty);
@@ -4944,6 +4962,8 @@ fn monomorphize_pass(sb: i32, head: i32) -> i32 {
                 __arena_push(tpl_is_autotune);    // slot 15 (Stage 33)
                 __arena_push(tpl_autotune_product); // slot 16 (Stage 33)
                 __arena_push(tpl_autotune_error); // slot 17 (Stage 33)
+                __arena_push(tpl_since_msg_s);    // slot 18 (Stage 33)
+                __arena_push(tpl_since_msg_l);    // slot 19 (Stage 33)
                 // Append to fn_list tail.
                 let new_list_node = mk_node(15, clone_idx, 0, 0);
                 __arena_set(tail + 2, new_list_node);
@@ -5369,6 +5389,10 @@ fn next_fn_autotune_product(sb: i32) -> i32 { __arena_get(sb + 84) }
 fn set_next_fn_autotune_product(sb: i32, v: i32) -> i32 { __arena_set(sb + 84, v); 0 }
 fn next_fn_autotune_error(sb: i32) -> i32 { __arena_get(sb + 85) }
 fn set_next_fn_autotune_error(sb: i32, v: i32) -> i32 { __arena_set(sb + 85, v); 0 }
+fn next_fn_since_msg_s(sb: i32) -> i32 { __arena_get(sb + 86) }
+fn set_next_fn_since_msg_s(sb: i32, v: i32) -> i32 { __arena_set(sb + 86, v); 0 }
+fn next_fn_since_msg_l(sb: i32) -> i32 { __arena_get(sb + 87) }
+fn set_next_fn_since_msg_l(sb: i32, v: i32) -> i32 { __arena_set(sb + 87, v); 0 }
 fn bucket_reset(sb: i32) -> i32 {
     set_bucket_head(sb, 0);
     set_bucket_count(sb, 0);
@@ -5671,6 +5695,8 @@ fn grad_pass(sb: i32, head: i32) -> i32 {
                 __arena_push(0);             // slot 15: is_autotune = 0
                 __arena_push(0);             // slot 16: autotune_product = 0
                 __arena_push(0);             // slot 17: autotune_parse_error = 0
+                __arena_push(0);             // slot 18: since_msg_start = 0
+                __arena_push(0);             // slot 19: since_msg_len = 0
                 let new_list_node = mk_node(15, clone_fn, 0, 0);
                 __arena_set(tail + 2, new_list_node);
                 tail = new_list_node;
@@ -6035,6 +6061,8 @@ fn grad_rev_pass(sb: i32, head: i32) -> i32 {
                 __arena_push(0);             // slot 15: is_autotune = 0
                 __arena_push(0);             // slot 16: autotune_product = 0
                 __arena_push(0);             // slot 17: autotune_parse_error = 0
+                __arena_push(0);             // slot 18: since_msg_start = 0
+                __arena_push(0);             // slot 19: since_msg_len = 0
                 let new_list_node = mk_node(15, clone_fn, 0, 0);
                 __arena_set(tail + 2, new_list_node);
                 tail = new_list_node;
@@ -6347,6 +6375,10 @@ fn parse_fn_decl(tok_base: i32, sb: i32) -> i32 {
     set_next_fn_autotune_product(sb, 0);
     let autotune_error_now = next_fn_autotune_error(sb);
     set_next_fn_autotune_error(sb, 0);
+    let since_msg_s_now = next_fn_since_msg_s(sb);
+    let since_msg_l_now = next_fn_since_msg_l(sb);
+    set_next_fn_since_msg_s(sb, 0);
+    set_next_fn_since_msg_l(sb, 0);
     let node = mk_node(14, name_start, name_len, body);
     __arena_push(params_head);
     __arena_push(ret_ty_final);
@@ -6362,6 +6394,8 @@ fn parse_fn_decl(tok_base: i32, sb: i32) -> i32 {
     __arena_push(is_autotune_now);           // slot 15: is_autotune flag (Stage 33)
     __arena_push(autotune_product_now);      // slot 16: autotune product (Stage 33)
     __arena_push(autotune_error_now);        // slot 17: autotune parse error (Stage 33)
+    __arena_push(since_msg_s_now);           // slot 18: since_msg_start (Stage 33)
+    __arena_push(since_msg_l_now);           // slot 19: since_msg_len (Stage 33)
     node
 }
 
@@ -6599,6 +6633,8 @@ fn parse_impl_method(tok_base: i32, sb: i32, target_s: i32, target_l: i32, targe
     __arena_push(0);                         // slot 15: is_autotune = 0 (Stage 33)
     __arena_push(0);                         // slot 16: autotune_product = 0 (Stage 33)
     __arena_push(0);                         // slot 17: autotune_parse_error = 0 (Stage 33)
+    __arena_push(0);                         // slot 18: since_msg_start = 0 (Stage 33)
+    __arena_push(0);                         // slot 19: since_msg_len = 0 (Stage 33)
     node
 }
 
