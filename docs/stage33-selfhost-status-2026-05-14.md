@@ -80,3 +80,31 @@ Validation:
   - Result: `selfhost-cascade-validate: ok`
 - `python scripts\stage31_validate.py --mode focused --skip-snapshot scripts\selfhost_cascade_validate.py helixc\tests\test_selfhost_cascade_validate.py scripts\stage32_select_tests.py helixc\tests\test_stage32_select_tests.py`
   - Result: `rc=0`
+
+## Slice 3 - One-Command Self-Host Gate
+
+`scripts/stage33_selfhost_gate.py` runs the cascade and then validates the JSON
+report in one command. This is the command future self-host parity work should
+use before commit:
+
+```powershell
+python scripts\stage33_selfhost_gate.py --generations 3 --expect-stable-sha 5a7367ad436e72ade3d8f96a9860e0d08b64528cbb15295e1a47076090667408
+```
+
+The default report path is `.stage33-logs/selfhost-cascade-latest.json`, which
+is ignored as generated evidence. The default prefix is the canonical
+`/tmp/helix_cascade` prefix used by the Stage 30 baseline, because the driver
+embeds its input/output paths and those path strings affect the stable binary
+hash.
+
+Validation:
+
+- `python -m pytest -q helixc\tests\test_stage33_selfhost_gate.py helixc\tests\test_selfhost_cascade_validate.py helixc\tests\test_selfhost_cascade.py helixc\tests\test_stage32_select_tests.py`
+  - Result: `26 passed`
+- `python scripts\stage31_validate.py --mode focused --skip-snapshot scripts\stage33_selfhost_gate.py helixc\tests\test_stage33_selfhost_gate.py`
+  - Result: `rc=0`
+- `python scripts\stage33_selfhost_gate.py --generations 3 --expect-stable-sha 5a7367ad436e72ade3d8f96a9860e0d08b64528cbb15295e1a47076090667408`
+  - Result: `rc=0`
+  - G2..G4 stable SHA-256:
+    `5a7367ad436e72ade3d8f96a9860e0d08b64528cbb15295e1a47076090667408`
+  - Validator result: `selfhost-cascade-validate: ok`
