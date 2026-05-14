@@ -4275,6 +4275,12 @@ fn autotune_seen_value(vals_base: i32, count: i32, value: i32) -> i32 {
     hit
 }
 
+fn autotune_is_int_value_token(tag: i32) -> i32 {
+    if tag == 1 { 1 } else { if tag == 33 { 1 } else { if tag == 34 { 1 } else {
+    if tag == 35 { 1 } else { if tag == 36 { 1 } else { if tag == 37 { 1 } else {
+    if tag == 38 { 1 } else { if tag == 39 { 1 } else { 0 } } } } } } } }
+}
+
 // Parse a narrow Stage-33 subset of @autotune(KEY: [1, 2], ...). This is
 // validation metadata only; it does not generate kernel variants.
 fn capture_autotune_args(tok_base: i32, first_tok: i32, sb: i32) -> i32 {
@@ -4331,7 +4337,7 @@ fn capture_autotune_args(tok_base: i32, first_tok: i32, sb: i32) -> i32 {
                             keep_args = 0;
                         } else { if vt == 13 {
                             k = k + 1;
-                        } else { if vt == 1 {
+                        } else { if autotune_is_int_value_token(vt) == 1 {
                             let v = tok_p1(tok_base, k);
                             let lookup_count = if val_count < 16 { val_count } else { 16 };
                             if autotune_seen_value(vals_base, lookup_count, v) == 0 {

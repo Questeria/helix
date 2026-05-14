@@ -209,6 +209,40 @@ Validation:
 - `python scripts\stage31_validate.py --mode quick --skip-snapshot`
   - Result: `rc=0`
 
+## Slice 7 - Autotune Typed Integer Parity
+
+A local bounded audit after Slice 6 found that the bootstrap autotune metadata
+parser accepted plain integer tokens but rejected typed integer literal tokens
+such as `_i64`, `_u32`, `_u8`, `_u64`, `_i8`, `_i16`, and `_u16`.
+
+The bootstrap parser now treats those typed integer token families as valid
+autotune parameter values, matching the Python frontend's typed-literal
+contract. This only affects metadata capture for validation; it still does not
+generate or dispatch specialized variants.
+
+Validation:
+
+- `python -m pytest -q helixc\tests\test_codegen.py::test_bootstrap_kovc_autotune_typed_int_values_preserved helixc\tests\test_codegen.py::test_bootstrap_kovc_autotune_clean_metadata_at_cap helixc\tests\test_autotune.py::test_c94_f2_autotune_int_suffix_still_stripped`
+  - Result: `3 passed`
+- `python -m pytest -q helixc\tests\test_autotune.py helixc\tests\test_codegen.py::test_bootstrap_kovc_autotune_clean_metadata_at_cap helixc\tests\test_codegen.py::test_bootstrap_kovc_autotune_validation_diagnostics helixc\tests\test_codegen.py::test_bootstrap_kovc_autotune_error_traps_in_codegen helixc\tests\test_codegen.py::test_bootstrap_kovc_autotune_typed_int_values_preserved`
+  - Result: `28 passed`
+- `python scripts\stage33_selfhost_gate.py --generations 3 --json-out .stage33-logs\selfhost-cascade-autotune-typed-int-g3.json`
+  - Result: `rc=0`
+  - G2..G4 stable SHA-256:
+    `dec42c7a2f46a9c6213bab1ea208ba38299a68ea7f5c37ed4d63f8d6c7e20cff`
+  - G2..G4 stable size: `285564` bytes
+  - Final-generation smoke cases: literal, call, and loop all returned `42`
+  - Validator result: `selfhost-cascade-validate: ok`
+- `python scripts\stage33_selfhost_gate.py --generations 10 --expect-stable-sha dec42c7a2f46a9c6213bab1ea208ba38299a68ea7f5c37ed4d63f8d6c7e20cff --json-out .stage33-logs\selfhost-cascade-autotune-typed-int-g10.json`
+  - Result: `rc=0`
+  - G2..G11 stable SHA-256:
+    `dec42c7a2f46a9c6213bab1ea208ba38299a68ea7f5c37ed4d63f8d6c7e20cff`
+  - G2..G11 stable size: `285564` bytes
+  - Final-generation smoke cases: literal, call, and loop all returned `42`
+  - Validator result: `selfhost-cascade-validate: ok`
+- `python scripts\stage31_validate.py --mode quick --skip-snapshot`
+  - Result: `rc=0`
+
 ## Next
 
 The next Stage 33 slice should either thread preserved deprecated/autotune

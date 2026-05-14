@@ -5837,6 +5837,69 @@ fn main() -> i32 {{
     )
 
 
+def test_bootstrap_kovc_autotune_typed_int_values_preserved():
+    """Stage 33: bootstrap autotune metadata accepts typed int literals."""
+    import os, subprocess
+    proj = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    lexer = open(os.path.join(proj, "helixc", "bootstrap", "lexer.hx")).read()
+    lexer_no_main = lexer.rsplit(
+        "// --------------------------------------------------------------\n// Demo:",
+        1,
+    )[0]
+    parser_body = open(os.path.join(proj, "helixc", "bootstrap", "parser.hx")).read()
+    kovc = open(os.path.join(proj, "helixc", "bootstrap", "kovc.hx")).read()
+    kovc_lib = kovc.rsplit(
+        "// --------------------------------------------------------------\n// Demo:",
+        1,
+    )[0]
+    import uuid
+    tag = uuid.uuid4().hex[:10]
+    src_path = f"/tmp/helix_autotune_typed_int_src_{tag}.hx"
+    src_text = (
+        "@kernel @autotune(B: [1, 2_i64, 3_u32, 4_u8, "
+        "5_u64, 6_i8, 7_i16, 8_u16]) "
+        "fn tuned(a: i32) -> i32 { a } "
+        "fn main() -> i32 { 42 }"
+    )
+    subprocess.run(
+        ["wsl", "-e", "bash", "-c",
+         f"printf %s {repr(src_text)} > {src_path}"],
+        check=True, timeout=30,
+    )
+    driver = lexer_no_main + parser_body + kovc_lib + f"""
+fn main() -> i32 {{
+    let src_start = __arena_len();
+    let src_len = read_file_to_arena("{src_path}");
+    let tok_base = __arena_len();
+    lex(src_start, src_len);
+    let ast_root = parse_top(tok_base);
+    let tuned_fn = __arena_get(ast_root + 1);
+    let diag_state = diag_arena_init();
+    autotune_pass(ast_root, diag_state);
+    let is_kernel = __arena_get(tuned_fn + 14);
+    let is_autotune = __arena_get(tuned_fn + 15);
+    let product = __arena_get(tuned_fn + 16);
+    let parse_error = __arena_get(tuned_fn + 17);
+    let diag_count = diag_arena_count(diag_state);
+    let mut code: i32 = 42;
+    if is_kernel != 1 {{ code = 10; }} else {{ 0 }};
+    if is_autotune != 1 {{ code = 11; }} else {{ 0 }};
+    if product != 8 {{ code = 12; }} else {{ 0 }};
+    if parse_error != 0 {{ code = 13; }} else {{ 0 }};
+    if diag_count != 0 {{ code = 14; }} else {{ 0 }};
+    code
+}}
+"""
+    rc = compile_and_run(driver)
+    subprocess.run(
+        ["wsl", "-e", "bash", "-c", f"rm -f {src_path}"],
+        capture_output=True, timeout=30,
+    )
+    assert rc == 42, (
+        f"bootstrap autotune metadata should preserve typed int values; got rc={rc}"
+    )
+
+
 def test_bootstrap_kovc_inline_read_file_to_arena():
     """kovc.hx self-hosted file builtin: read_file_to_arena loads a
     file's bytes into the arena and returns count. Pre-stage the file
