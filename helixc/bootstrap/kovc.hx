@@ -2614,13 +2614,10 @@ fn trace_pass(ast_root: i32, diag_state: i32) -> i32 {
 // promotes them to errors at the CLI driver level (not implemented
 // in bootstrap Phase-0).
 //
-// Phase-0 limitation: this pass does NOT track the @deprecated
-// MESSAGE string. The Python pass extracts the message from the
-// `deprecated:<msg>` attrs entry; the bootstrap parser doesn't
-// preserve attribute args (skip_attributes consumes them blindly).
-// All bootstrap warnings render as "call to deprecated <name>"
-// without message. To wire messages in, a follow-up would extend
-// the parser to capture attr args.
+// Stage 33: the bootstrap parser preserves @deprecated("message")
+// string-literal body ranges on AST_FN_DECL slots 12/13. Diagnostics
+// still render as "call to deprecated <name>" without the message;
+// a follow-up can thread those slots through the warning renderer.
 // --------------------------------------------------------------
 
 // Auxiliary: collect every deprecated fn name's (name_s, name_l)

@@ -40,6 +40,11 @@
 //                      slot 6: is_generic flag (Stage 8)
 //                      slot 7: gp_names_head (Stage 8.5)
 //                      slot 8: is_checkpoint flag (Stage 14.5)
+//                      slot 9: is_deprecated flag (Stage 28.9)
+//                      slot 10: is_trace flag (Stage 28.9)
+//                      slot 11: is_unwind flag (Stage 28.9)
+//                      slot 12: deprecated_msg_start (Stage 33)
+//                      slot 13: deprecated_msg_len (Stage 33)
 //  15  AST_FN_LIST   p1 = current fn_decl_idx, p2 = next list node
 //                    idx (or 0 at end). Linked list of top-level fn
 //                    declarations. Built by parse_top when source
@@ -2047,10 +2052,11 @@ fn parse_closure_lit(tok_base: i32, sb: i32) -> i32 {
             };
             pi = pi + 1;
         }
-        // Allocate AST_FN_DECL with 12 contiguous slots (Stage 28.9 layout).
+        // Allocate AST_FN_DECL with 14 contiguous slots (Stage 33 layout).
         // p1=name_s, p2=name_l, p3=body, p4=params_head, p5=ret_ty,
         // p6=is_generic, p7=gp_names_head, p8=is_checkpoint,
-        // p9=is_deprecated, p10=is_trace, p11=is_unwind.
+        // p9=is_deprecated, p10=is_trace, p11=is_unwind,
+        // p12=deprecated_msg_start, p13=deprecated_msg_len.
         let fn_node = mk_node(14, name_start, name_len, body);
         __arena_push(params_head);
         __arena_push(0);                         // ret_ty = 0 (i32)
@@ -2060,6 +2066,8 @@ fn parse_closure_lit(tok_base: i32, sb: i32) -> i32 {
         __arena_push(0);                         // is_deprecated = 0 (Stage 28.9)
         __arena_push(0);                         // is_trace = 0 (Stage 28.9)
         __arena_push(0);                         // is_unwind = 0 (Stage 28.9)
+        __arena_push(0);                         // deprecated_msg_start = 0 (Stage 33)
+        __arena_push(0);                         // deprecated_msg_len = 0 (Stage 33)
         // Wrap in AST_FN_LIST and append to cl_pending chain.
         let list_node = mk_node(15, fn_node, 0, 0);
         let head = cl_pending_head(sb);
@@ -4130,6 +4138,11 @@ fn parse_top(tok_base: i32) -> i32 {
     // parse_primary when `Pt<i32>` is seen.
     __arena_push(0);
     __arena_push(0);
+    // Stage 33: slots 80/81 = next deprecated message body start/len.
+    // skip_attributes fills these for @deprecated("..."); parse_fn_decl
+    // clears and writes them into AST_FN_DECL slots 12/13.
+    __arena_push(0);
+    __arena_push(0);
     install_keywords(cur_slot);
     var_struct_tab_init(cur_slot);
     var_enum_tab_init(cur_slot);
@@ -4239,6 +4252,9 @@ fn parse_top(tok_base: i32) -> i32 {
 // Stage 28.9: similarly recognizes `@deprecated` (slot 75),
 // `@trace` (slot 76), `@unwind` (slot 77) so the bootstrap-side
 // validation passes can observe them on AST_FN_DECL slots 9/10/11.
+// Stage 33: if `@deprecated("message")` has a first string-literal
+// argument, preserve that message body range in scratch slots 80/81
+// for AST_FN_DECL slots 12/13.
 fn skip_attributes(tok_base: i32, sb: i32) -> i32 {
     let mut keep: i32 = 1;
     while keep == 1 {
@@ -4285,6 +4301,15 @@ fn skip_attributes(tok_base: i32, sb: i32) -> i32 {
                         } else { 0 } } else { 0 } } else { 0 } } else { 0 } } else { 0 };
                     if is_dep == 1 {
                         set_next_fn_is_deprecated(sb, 1);
+                        set_next_fn_deprecated_msg_s(sb, 0);
+                        set_next_fn_deprecated_msg_l(sb, 0);
+                        if tok_tag(tok_base, cur_get(sb) + 1) == 3 {
+                            let msg_tok = cur_get(sb) + 2;
+                            if tok_tag(tok_base, msg_tok) == 25 {
+                                set_next_fn_deprecated_msg_s(sb, tok_p2(tok_base, msg_tok));
+                                set_next_fn_deprecated_msg_l(sb, tok_p3(tok_base, msg_tok));
+                            };
+                        };
                     };
                 };
                 // Stage 28.9: `trace` (5 bytes: 116 114 97 99 101).
@@ -4731,6 +4756,8 @@ fn monomorphize_pass(sb: i32, head: i32) -> i32 {
                 let tpl_is_deprecated = __arena_get(tpl_idx + 9);
                 let tpl_is_trace = __arena_get(tpl_idx + 10);
                 let tpl_is_unwind = __arena_get(tpl_idx + 11);
+                let tpl_dep_msg_s = __arena_get(tpl_idx + 12);
+                let tpl_dep_msg_l = __arena_get(tpl_idx + 13);
                 let clone_idx = mk_node(14, mang_s, mang_l, cloned_body);
                 __arena_push(new_params_head);
                 __arena_push(new_ret_ty);
@@ -4740,6 +4767,8 @@ fn monomorphize_pass(sb: i32, head: i32) -> i32 {
                 __arena_push(tpl_is_deprecated); // slot 9 (Stage 28.9)
                 __arena_push(tpl_is_trace);      // slot 10 (Stage 28.9)
                 __arena_push(tpl_is_unwind);     // slot 11 (Stage 28.9)
+                __arena_push(tpl_dep_msg_s);      // slot 12 (Stage 33)
+                __arena_push(tpl_dep_msg_l);      // slot 13 (Stage 33)
                 // Append to fn_list tail.
                 let new_list_node = mk_node(15, clone_idx, 0, 0);
                 __arena_set(tail + 2, new_list_node);
@@ -5153,6 +5182,10 @@ fn next_fn_is_trace(sb: i32) -> i32 { __arena_get(sb + 76) }
 fn set_next_fn_is_trace(sb: i32, v: i32) -> i32 { __arena_set(sb + 76, v); 0 }
 fn next_fn_is_unwind(sb: i32) -> i32 { __arena_get(sb + 77) }
 fn set_next_fn_is_unwind(sb: i32, v: i32) -> i32 { __arena_set(sb + 77, v); 0 }
+fn next_fn_deprecated_msg_s(sb: i32) -> i32 { __arena_get(sb + 80) }
+fn set_next_fn_deprecated_msg_s(sb: i32, v: i32) -> i32 { __arena_set(sb + 80, v); 0 }
+fn next_fn_deprecated_msg_l(sb: i32) -> i32 { __arena_get(sb + 81) }
+fn set_next_fn_deprecated_msg_l(sb: i32, v: i32) -> i32 { __arena_set(sb + 81, v); 0 }
 fn bucket_reset(sb: i32) -> i32 {
     set_bucket_head(sb, 0);
     set_bucket_count(sb, 0);
@@ -5449,6 +5482,8 @@ fn grad_pass(sb: i32, head: i32) -> i32 {
                 __arena_push(0);             // slot 9: is_deprecated = 0
                 __arena_push(0);             // slot 10: is_trace = 0
                 __arena_push(0);             // slot 11: is_unwind = 0
+                __arena_push(0);             // slot 12: deprecated_msg_start = 0
+                __arena_push(0);             // slot 13: deprecated_msg_len = 0
                 let new_list_node = mk_node(15, clone_fn, 0, 0);
                 __arena_set(tail + 2, new_list_node);
                 tail = new_list_node;
@@ -5807,6 +5842,8 @@ fn grad_rev_pass(sb: i32, head: i32) -> i32 {
                 __arena_push(0);             // slot 9: is_deprecated = 0
                 __arena_push(0);             // slot 10: is_trace = 0
                 __arena_push(0);             // slot 11: is_unwind = 0
+                __arena_push(0);             // slot 12: deprecated_msg_start = 0
+                __arena_push(0);             // slot 13: deprecated_msg_len = 0
                 let new_list_node = mk_node(15, clone_fn, 0, 0);
                 __arena_set(tail + 2, new_list_node);
                 tail = new_list_node;
@@ -6102,7 +6139,11 @@ fn parse_fn_decl(tok_base: i32, sb: i32) -> i32 {
     // (deprecated_pass, trace_pass, panic_pass.@unwind) can observe
     // attribute info that the parser otherwise discards.
     let is_deprecated_now = next_fn_is_deprecated(sb);
+    let dep_msg_s_now = next_fn_deprecated_msg_s(sb);
+    let dep_msg_l_now = next_fn_deprecated_msg_l(sb);
     set_next_fn_is_deprecated(sb, 0);
+    set_next_fn_deprecated_msg_s(sb, 0);
+    set_next_fn_deprecated_msg_l(sb, 0);
     let is_trace_now = next_fn_is_trace(sb);
     set_next_fn_is_trace(sb, 0);
     let is_unwind_now = next_fn_is_unwind(sb);
@@ -6116,6 +6157,8 @@ fn parse_fn_decl(tok_base: i32, sb: i32) -> i32 {
     __arena_push(is_deprecated_now);         // slot 9: is_deprecated flag (Stage 28.9)
     __arena_push(is_trace_now);              // slot 10: is_trace flag (Stage 28.9)
     __arena_push(is_unwind_now);             // slot 11: is_unwind flag (Stage 28.9)
+    __arena_push(dep_msg_s_now);             // slot 12: deprecated_msg_start (Stage 33)
+    __arena_push(dep_msg_l_now);             // slot 13: deprecated_msg_len (Stage 33)
     node
 }
 
@@ -6347,6 +6390,8 @@ fn parse_impl_method(tok_base: i32, sb: i32, target_s: i32, target_l: i32, targe
     __arena_push(0);                         // slot 9: is_deprecated = 0 (Stage 28.9)
     __arena_push(0);                         // slot 10: is_trace = 0 (Stage 28.9)
     __arena_push(0);                         // slot 11: is_unwind = 0 (Stage 28.9)
+    __arena_push(0);                         // slot 12: deprecated_msg_start = 0 (Stage 33)
+    __arena_push(0);                         // slot 13: deprecated_msg_len = 0 (Stage 33)
     node
 }
 

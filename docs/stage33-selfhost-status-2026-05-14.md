@@ -120,10 +120,53 @@ Validation:
   - Final-generation smoke cases: literal, call, and loop all returned `42`
   - Validator result: `selfhost-cascade-validate: ok`
 
+## Slice 5 - Deprecated Message Metadata
+
+The bootstrap parser now preserves `@deprecated("message")` string-literal
+payloads instead of reducing every deprecated marker to a bare flag. Since the
+bootstrap AST has no Python-style attribute list, the message body range is
+stored on `AST_FN_DECL` slots 12/13:
+
+- slot 12: deprecated message byte start
+- slot 13: deprecated message byte length
+
+The warning renderer still emits the existing deprecated-call diagnostic shape.
+This slice only makes the metadata available in the Helix bootstrap compiler
+without opening a broader diagnostics-rendering change.
+
+Validation:
+
+- `python -m pytest -q helixc\tests\test_codegen.py::test_bootstrap_kovc_deprecated_message_attr_preserved`
+  - Result: `1 passed`
+- `python -m pytest -q helixc\tests\test_deprecated.py helixc\tests\test_codegen.py::test_bootstrap_kovc_deprecated_pass_warning_does_not_trap helixc\tests\test_codegen.py::test_bootstrap_kovc_dep_tab_overflow_emits_28702 helixc\tests\test_codegen.py::test_bootstrap_kovc_deprecated_message_attr_preserved helixc\tests\test_stage33_selfhost_gate.py`
+  - Result: `36 passed`
+- `python -m pytest -q helixc\tests\test_parser.py helixc\tests\test_codegen.py::test_bootstrap_kovc_deprecated_pass_warning_does_not_trap helixc\tests\test_codegen.py::test_bootstrap_kovc_dep_tab_overflow_emits_28702 helixc\tests\test_codegen.py::test_bootstrap_kovc_deprecated_message_attr_preserved`
+  - Result: `68 passed`
+- `python scripts\stage33_selfhost_gate.py --generations 3 --json-out .stage33-logs\selfhost-cascade-deprecated-msg-g3.json`
+  - Result: `rc=0`
+  - G2..G4 stable SHA-256:
+    `3da2bf2338eadc53e933246adc05698f10dcc001def71ac252dd58bb77421454`
+  - G2..G4 stable size: `279185` bytes
+  - Final-generation smoke cases: literal, call, and loop all returned `42`
+  - Validator result: `selfhost-cascade-validate: ok`
+- `python scripts\stage33_selfhost_gate.py --generations 10 --expect-stable-sha 3da2bf2338eadc53e933246adc05698f10dcc001def71ac252dd58bb77421454 --json-out .stage33-logs\selfhost-cascade-deprecated-msg-g10.json`
+  - Result: `rc=0`
+  - G2..G11 stable SHA-256:
+    `3da2bf2338eadc53e933246adc05698f10dcc001def71ac252dd58bb77421454`
+  - G2..G11 stable size: `279185` bytes
+  - Final-generation smoke cases: literal, call, and loop all returned `42`
+  - Validator result: `selfhost-cascade-validate: ok`
+
+Focused validation note:
+
+- `python scripts\stage31_validate.py --mode focused --skip-snapshot helixc\bootstrap\parser.hx helixc\bootstrap\kovc.hx helixc\tests\test_codegen.py`
+  - Result: timed out after 15 minutes while selecting/running broad focused coverage.
+  - Recovery: replaced with bounded direct parser/deprecated suites plus fresh
+    3-generation and 10-generation Stage 33 self-host gates.
+
 ## Next
 
-The next Stage 33 slice should remove or mirror the smallest remaining
-Python-only compiler behavior. The current best candidate is preserving
-`@deprecated("message")` metadata in the bootstrap compiler, because bare
-`@deprecated` handling is already present and the slice avoids opening a new
-AST family.
+The next Stage 33 slice should move to the next smallest Python-only compiler
+behavior. Current candidate: bootstrap-side `@autotune` validation only
+(`@autotune` parsing, required `@kernel`, malformed/empty values, and capped
+variant product), while deferring full variant dispatch.

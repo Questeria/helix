@@ -5571,6 +5571,84 @@ fn main() -> i32 {{
     )
 
 
+def test_bootstrap_kovc_deprecated_message_attr_preserved():
+    """Stage 33: bootstrap parser preserves @deprecated("msg") payload.
+
+    The Python frontend stores this as attrs ["deprecated",
+    "deprecated:<msg>"]. Bootstrap does not have a Python-style attrs list,
+    so it records the string literal body byte range on AST_FN_DECL slots
+    12/13. This probe parses one message-bearing deprecated fn and one bare
+    deprecated fn, then returns 42 only if the message survives exactly and
+    the bare form keeps an empty message range.
+    """
+    import os, subprocess
+    proj = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    lexer = open(os.path.join(proj, "helixc", "bootstrap", "lexer.hx")).read()
+    lexer_no_main = lexer.rsplit(
+        "// --------------------------------------------------------------\n// Demo:",
+        1,
+    )[0]
+    parser_body = open(os.path.join(proj, "helixc", "bootstrap", "parser.hx")).read()
+    kovc = open(os.path.join(proj, "helixc", "bootstrap", "kovc.hx")).read()
+    kovc_lib = kovc.rsplit(
+        "// --------------------------------------------------------------\n// Demo:",
+        1,
+    )[0]
+    import uuid
+    tag = uuid.uuid4().hex[:10]
+    src_path = f"/tmp/helix_dep_msg_src_{tag}.hx"
+    src_text = (
+        '@deprecated("use new_api") fn old_api() -> i32 { 1 } '
+        '@deprecated fn bare_api() -> i32 { 2 } '
+        'fn main() -> i32 { old_api() }'
+    )
+    subprocess.run(
+        ["wsl", "-e", "bash", "-c",
+         f"printf %s {repr(src_text)} > {src_path}"],
+        check=True, timeout=10,
+    )
+    driver = lexer_no_main + parser_body + kovc_lib + f"""
+fn main() -> i32 {{
+    let src_start = __arena_len();
+    let src_len = read_file_to_arena("{src_path}");
+    let tok_base = __arena_len();
+    lex(src_start, src_len);
+    let ast_root = parse_top(tok_base);
+    let old_fn = __arena_get(ast_root + 1);
+    let bare_list = __arena_get(ast_root + 2);
+    let bare_fn = __arena_get(bare_list + 1);
+    let old_is_dep = __arena_get(old_fn + 9);
+    let old_msg_s = __arena_get(old_fn + 12);
+    let old_msg_l = __arena_get(old_fn + 13);
+    let bare_msg_l = __arena_get(bare_fn + 13);
+    let mut code: i32 = 42;
+    if old_is_dep != 1 {{ code = 10; }} else {{ 0 }};
+    if old_msg_l != 11 {{ code = 11; }} else {{ 0 }};
+    if bare_msg_l != 0 {{ code = 12; }} else {{ 0 }};
+    if __arena_get(old_msg_s) != 117 {{ code = 20; }} else {{ 0 }};
+    if __arena_get(old_msg_s + 1) != 115 {{ code = 21; }} else {{ 0 }};
+    if __arena_get(old_msg_s + 2) != 101 {{ code = 22; }} else {{ 0 }};
+    if __arena_get(old_msg_s + 3) != 32 {{ code = 23; }} else {{ 0 }};
+    if __arena_get(old_msg_s + 4) != 110 {{ code = 24; }} else {{ 0 }};
+    if __arena_get(old_msg_s + 5) != 101 {{ code = 25; }} else {{ 0 }};
+    if __arena_get(old_msg_s + 6) != 119 {{ code = 26; }} else {{ 0 }};
+    if __arena_get(old_msg_s + 7) != 95 {{ code = 27; }} else {{ 0 }};
+    if __arena_get(old_msg_s + 8) != 97 {{ code = 28; }} else {{ 0 }};
+    if __arena_get(old_msg_s + 9) != 112 {{ code = 29; }} else {{ 0 }};
+    if __arena_get(old_msg_s + 10) != 105 {{ code = 30; }} else {{ 0 }};
+    code
+}}
+"""
+    rc = compile_and_run(driver)
+    subprocess.run(
+        ["wsl", "-e", "bash", "-c", f"rm -f {src_path}"],
+        capture_output=True, timeout=10,
+    )
+    assert rc == 42, (
+        f"bootstrap parser should preserve @deprecated message bytes; got rc={rc}"
+    )
+
+
 def test_bootstrap_kovc_inline_read_file_to_arena():
     """kovc.hx self-hosted file builtin: read_file_to_arena loads a
     file's bytes into the arena and returns count. Pre-stage the file
