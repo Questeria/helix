@@ -47,6 +47,28 @@ def test_stage31_validate_full_shards_non_codegen_suite(monkeypatch):
     assert all("--ignore=helixc/tests/test_codegen.py" in cmd for cmd in no_codegen_cmds)
 
 
+def test_stage31_validate_extracts_pytest_shard_summary(tmp_path):
+    log = tmp_path / "pytest-shard.log"
+    log.write_text(
+        "$ python scripts/pytest_shard.py ...\n"
+        "................................\n"
+        "107 passed, 635 deselected in 705.14s (0:11:45)\n",
+        encoding="utf-8",
+    )
+
+    assert stage31_validate.pytest_summary_from_log(log) == (
+        705.14,
+        "107 passed, 635 deselected in 705.14s (0:11:45)",
+    )
+
+
+def test_stage31_validate_ignores_logs_without_pytest_summary(tmp_path):
+    log = tmp_path / "other.log"
+    log.write_text("$ echo hello\nhello\n", encoding="utf-8")
+
+    assert stage31_validate.pytest_summary_from_log(log) is None
+
+
 def test_stage31_validate_rejects_excessive_manual_shards(capsys):
     rc = stage31_validate.main([
         "--mode",

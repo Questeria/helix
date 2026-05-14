@@ -440,6 +440,20 @@ audit batches timed out and were shut down rather than waited on indefinitely:
 `docs/audit-stage31-clean-gate2-validator-speed-2026-05-14.md`, and
 `docs/audit-stage31-clean-gate3-bootstrap-isolation-2026-05-14.md`.
 
+## 2026-05-14 Slow-Shard Telemetry Slice
+
+The Stage 31 full validator now prints the slowest pytest shard summaries after
+the parallel group finishes. This does not change coverage or pass/fail
+semantics; it only surfaces which shard consumed the most wall time so future
+testing-speed work can target the real bottleneck. Unit tests cover summary
+extraction and the no-summary path.
+
+Development speed planning was captured in
+`docs/stage31-development-speed-plan-2026-05-14.md`. The key rule is one
+commit-producing implementation lane at a time, with read-only audits,
+future-stage preparation, docs/tooling work, or separate worktrees allowed to
+run in parallel.
+
 ## Do Not Forget
 
 - Send Telegram updates using:

@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 import time
@@ -25,6 +26,7 @@ LOG_DIR = ROOT / ".stage31-logs"
 BIN_DIR = ROOT / ".stage31-bin"
 MAX_SHARDS = 8
 MAX_NO_CODEGEN_SHARDS = 4
+PYTEST_SUMMARY_RE = re.compile(r"\bin (?P<seconds>[0-9]+(?:\.[0-9]+)?)s(?:\s|$)")
 
 
 def default_shards() -> int:
@@ -113,7 +115,42 @@ def run_parallel(jobs: list[tuple[str, list[str], dict[str, str] | None]]) -> in
         rc = rc or code
     elapsed = time.monotonic() - started
     print(f"parallel group time={elapsed:.1f}s")
+    print_slowest_pytest_shards(procs)
     return rc
+
+
+def pytest_summary_from_log(log_path: Path) -> tuple[float, str] | None:
+    try:
+        lines = log_path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return None
+    for line in reversed(lines):
+        if " in " not in line:
+            continue
+        if not any(word in line for word in (" passed", " failed", " error")):
+            continue
+        match = PYTEST_SUMMARY_RE.search(line)
+        if match is None:
+            continue
+        return float(match.group("seconds")), line.strip()
+    return None
+
+
+def print_slowest_pytest_shards(
+    procs: list[tuple[str, subprocess.Popen[str], object, Path]],
+) -> None:
+    summaries = []
+    for name, _proc, _log, log_path in procs:
+        summary = pytest_summary_from_log(log_path)
+        if summary is None:
+            continue
+        seconds, line = summary
+        summaries.append((seconds, name, line))
+    if not summaries:
+        return
+    print("slowest pytest shards:")
+    for seconds, name, line in sorted(summaries, reverse=True)[:5]:
+        print(f"  {name}: {seconds:.1f}s | {line}")
 
 
 def quick(py: str) -> int:
