@@ -9,6 +9,35 @@ Only one lane owns a commit-producing code slice at a time. Other lanes may run
 in parallel if they are read-only, documentation-only, or isolated to clearly
 disjoint files/worktrees.
 
+## Mini-Stage Batching
+
+Use mini-stage batches instead of auditing every tiny edit. A mini-stage should
+be describable in one sentence and contain only related work.
+
+Recommended rhythm:
+
+1. Implement 2-4 related sub-slices.
+2. Run focused tests after each sub-slice.
+3. Run the quick gate after the batch.
+4. Run one broad/full gate.
+5. Run the 3 clean audit gates once for the batch.
+6. Run the final official gate.
+7. Commit and push.
+
+Good batch examples:
+- Stage 31 validator speed tooling.
+- Proof-artifact CLI polish.
+- Stdlib scalar refinement aliases.
+
+Avoid batches that mix compiler-core surfaces:
+- Parser plus typechecker plus codegen plus stdlib in one commit.
+- Proof system plus unrelated AD work.
+- Bootstrap changes alongside regular frontend cleanup.
+
+Batch-size rule:
+- If the batch cannot be explained in one sentence, split it.
+- If a focused test failure cannot be blamed quickly, split it.
+
 ## Parallel Lanes
 
 ### 1. Main Implementation Lane
@@ -78,6 +107,7 @@ Avoid:
 1. Keep stable sharding for codegen and non-codegen suites.
 2. Print slowest shards after every full run.
 3. Add a failed-shard rerun mode to distinguish real failures from flakes.
+   - Status: added in Stage 31 validator with one retry and `-retry1` logs.
 4. Add slow-test telemetry by node id, not just by shard.
 5. Balance codegen shards by historical duration instead of hash count.
 6. Keep full gates for commit boundaries, but use focused tests plus quick gate
@@ -87,12 +117,10 @@ Avoid:
 
 ## Next Practical Improvements
 
-1. Add a `--rerun-failed` or `--retry-failed-once` option to
-   `scripts/stage31_validate.py`.
-2. Save slow-shard summaries into a machine-readable JSON file.
-3. Add duration-weighted shard assignment for `test_codegen.py`.
-4. Add a changed-files-to-tests map for focused gates.
-5. Use separate worktrees for truly independent stage work while the main lane
+1. Save slow-shard summaries into a machine-readable JSON file.
+2. Add duration-weighted shard assignment for `test_codegen.py`.
+3. Add a changed-files-to-tests map for focused gates.
+4. Use separate worktrees for truly independent stage work while the main lane
    runs final gates.
 
 ## Commit Discipline

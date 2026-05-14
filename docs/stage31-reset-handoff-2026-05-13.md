@@ -454,6 +454,15 @@ commit-producing implementation lane at a time, with read-only audits,
 future-stage preparation, docs/tooling work, or separate worktrees allowed to
 run in parallel.
 
+## 2026-05-14 Failed-Shard Retry Slice
+
+The Stage 31 full validator now retries failed parallel shards once before
+returning failure. This keeps coverage intact: a failed shard can only recover
+if the exact shard command passes on retry, and persistent failures still leave
+the gate red. The retry uses a `-retry1` log suffix so the original failure and
+the retry evidence both remain available. `--no-retry-failed` disables this
+behavior for strict diagnosis.
+
 ## Do Not Forget
 
 - Send Telegram updates using:

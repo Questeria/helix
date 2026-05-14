@@ -89,7 +89,10 @@ def run_logged(
     return proc.returncode
 
 
-def run_parallel(jobs: list[tuple[str, list[str], dict[str, str] | None]]) -> int:
+ParallelJob = tuple[str, list[str], dict[str, str] | None]
+
+
+def run_parallel_once(jobs: list[ParallelJob]) -> tuple[int, list[ParallelJob]]:
     LOG_DIR.mkdir(exist_ok=True)
     procs = []
     started = time.monotonic()
@@ -106,16 +109,39 @@ def run_parallel(jobs: list[tuple[str, list[str], dict[str, str] | None]]) -> in
             stdout=log,
             stderr=subprocess.STDOUT,
         )
-        procs.append((name, proc, log, log_path))
+        procs.append((name, proc, log, log_path, cmd, env))
     rc = 0
-    for name, proc, log, log_path in procs:
+    failed: list[ParallelJob] = []
+    for name, proc, log, log_path, cmd, env in procs:
         code = proc.wait()
         log.close()
         print(f"{name}: rc={code} log={log_path}")
         rc = rc or code
+        if code:
+            failed.append((name, cmd, env))
     elapsed = time.monotonic() - started
     print(f"parallel group time={elapsed:.1f}s")
     print_slowest_pytest_shards(procs)
+    return rc, failed
+
+
+def run_parallel(
+    jobs: list[ParallelJob], *, retry_failed_once: bool = False,
+) -> int:
+    rc, failed = run_parallel_once(jobs)
+    if rc and retry_failed_once and failed:
+        print("retrying failed shards once:")
+        retry_jobs = [
+            (f"{name}-retry1", cmd, env) for name, cmd, env in failed
+        ]
+        retry_rc, retry_failed = run_parallel_once(retry_jobs)
+        if retry_rc == 0:
+            recovered = ", ".join(name for name, _cmd, _env in failed)
+            print(f"failed shards recovered on retry: {recovered}")
+            return 0
+        still_failed = ", ".join(name for name, _cmd, _env in retry_failed)
+        print(f"failed shards still failing after retry: {still_failed}")
+        return retry_rc
     return rc
 
 
@@ -137,10 +163,10 @@ def pytest_summary_from_log(log_path: Path) -> tuple[float, str] | None:
 
 
 def print_slowest_pytest_shards(
-    procs: list[tuple[str, subprocess.Popen[str], object, Path]],
+    procs: list[tuple[str, subprocess.Popen[str], object, Path, list[str], dict[str, str] | None]],
 ) -> None:
     summaries = []
-    for name, _proc, _log, log_path in procs:
+    for name, _proc, _log, log_path, _cmd, _env in procs:
         summary = pytest_summary_from_log(log_path)
         if summary is None:
             continue
@@ -210,7 +236,7 @@ def quick(py: str) -> int:
     )
 
 
-def full(py: str, shards: int) -> int:
+def full(py: str, shards: int, *, retry_failed_once: bool = True) -> int:
     no_codegen_shards = no_codegen_shards_for(shards)
     print(f"full: no-codegen shards={no_codegen_shards} codegen shards={shards}")
     env = validation_env()
@@ -248,7 +274,7 @@ def full(py: str, shards: int) -> int:
                 env,
             )
         )
-    return run_parallel(jobs)
+    return run_parallel(jobs, retry_failed_once=retry_failed_once)
 
 
 def snapshot_smoke(py: str) -> int:
@@ -321,6 +347,11 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         default=default_shards(),
         help="codegen shard count for full mode (default: min(cpu_count, 8))",
     )
+    parser.add_argument(
+        "--no-retry-failed",
+        action="store_true",
+        help="do not rerun failed parallel shards once before returning failure",
+    )
     parser.add_argument("--skip-snapshot", action="store_true")
     return parser.parse_args(argv)
 
@@ -334,7 +365,10 @@ def main(argv: list[str] | None = None) -> int:
         print(f"--shards must be <= {MAX_SHARDS}", file=sys.stderr)
         return 2
     py = sys.executable
-    rc = quick(py) if args.mode == "quick" else full(py, args.shards)
+    rc = (
+        quick(py) if args.mode == "quick"
+        else full(py, args.shards, retry_failed_once=not args.no_retry_failed)
+    )
     if rc:
         return rc
     if not args.skip_snapshot:

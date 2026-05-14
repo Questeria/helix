@@ -22,9 +22,11 @@ def test_stage31_validate_default_shards_fallback_when_cpu_unknown(monkeypatch):
 
 def test_stage31_validate_full_shards_non_codegen_suite(monkeypatch):
     calls = []
+    retry_flags = []
 
-    def fake_run_parallel(jobs):
+    def fake_run_parallel(jobs, *, retry_failed_once=False):
         calls.extend(jobs)
+        retry_flags.append(retry_failed_once)
         return 0
 
     monkeypatch.setattr(stage31_validate, "validation_env", lambda: {"TEST": "1"})
@@ -33,6 +35,7 @@ def test_stage31_validate_full_shards_non_codegen_suite(monkeypatch):
     rc = stage31_validate.full("python", shards=6)
 
     assert rc == 0
+    assert retry_flags == [True]
     names = [name for name, _cmd, _env in calls]
     assert "pytest-no-codegen-shard-1-of-4" in names
     assert "pytest-no-codegen-shard-4-of-4" in names
@@ -45,6 +48,61 @@ def test_stage31_validate_full_shards_non_codegen_suite(monkeypatch):
     assert len(no_codegen_cmds) == stage31_validate.MAX_NO_CODEGEN_SHARDS
     assert all("scripts/pytest_shard.py" in cmd for cmd in no_codegen_cmds)
     assert all("--ignore=helixc/tests/test_codegen.py" in cmd for cmd in no_codegen_cmds)
+
+
+def test_stage31_validate_can_disable_failed_shard_retry(monkeypatch):
+    retry_flags = []
+
+    def fake_run_parallel(jobs, *, retry_failed_once=False):
+        retry_flags.append(retry_failed_once)
+        return 0
+
+    monkeypatch.setattr(stage31_validate, "validation_env", lambda: {})
+    monkeypatch.setattr(stage31_validate, "run_parallel", fake_run_parallel)
+
+    assert stage31_validate.full("python", shards=2, retry_failed_once=False) == 0
+    assert retry_flags == [False]
+
+
+def test_stage31_validate_retries_failed_parallel_shards_once(monkeypatch, capsys):
+    jobs = [
+        ("fast", ["python", "-c", "pass"], None),
+        ("flaky", ["python", "-c", "pass"], {"ENV": "1"}),
+    ]
+    calls = []
+
+    def fake_run_parallel_once(run_jobs):
+        calls.append(run_jobs)
+        if len(calls) == 1:
+            return 1, [run_jobs[1]]
+        return 0, []
+
+    monkeypatch.setattr(stage31_validate, "run_parallel_once", fake_run_parallel_once)
+
+    rc = stage31_validate.run_parallel(jobs, retry_failed_once=True)
+    captured = capsys.readouterr()
+
+    assert rc == 0
+    assert [name for name, _cmd, _env in calls[1]] == ["flaky-retry1"]
+    assert "failed shards recovered on retry: flaky" in captured.out
+
+
+def test_stage31_validate_failed_retry_keeps_gate_red(monkeypatch, capsys):
+    jobs = [("bad", ["python", "-c", "raise SystemExit(1)"], None)]
+    calls = []
+
+    def fake_run_parallel_once(run_jobs):
+        calls.append(run_jobs)
+        return 1, [run_jobs[0]]
+
+    monkeypatch.setattr(stage31_validate, "run_parallel_once", fake_run_parallel_once)
+
+    rc = stage31_validate.run_parallel(jobs, retry_failed_once=True)
+    captured = capsys.readouterr()
+
+    assert rc == 1
+    assert len(calls) == 2
+    assert "failed shards still failing after retry: bad-retry1" in captured.out
 
 
 def test_stage31_validate_extracts_pytest_shard_summary(tmp_path):
@@ -67,6 +125,23 @@ def test_stage31_validate_ignores_logs_without_pytest_summary(tmp_path):
     log.write_text("$ echo hello\nhello\n", encoding="utf-8")
 
     assert stage31_validate.pytest_summary_from_log(log) is None
+
+
+def test_stage31_validate_prints_slowest_pytest_shards(tmp_path, capsys):
+    slow = tmp_path / "slow.log"
+    fast = tmp_path / "fast.log"
+    slow.write_text("5 passed in 12.50s\n", encoding="utf-8")
+    fast.write_text("5 passed in 1.25s\n", encoding="utf-8")
+
+    stage31_validate.print_slowest_pytest_shards([
+        ("slow", object(), object(), slow, ["python"], None),
+        ("fast", object(), object(), fast, ["python"], None),
+    ])
+    captured = capsys.readouterr()
+
+    assert "slowest pytest shards:" in captured.out
+    assert "slow: 12.5s" in captured.out
+    assert "fast: 1.2s" in captured.out
 
 
 def test_stage31_validate_rejects_excessive_manual_shards(capsys):
