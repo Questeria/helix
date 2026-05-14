@@ -135,6 +135,11 @@ def quick(py: str) -> int:
             "helixc/tests/test_proof_artifact_validate.py::test_validate_rejects_bad_stdlib_manifest_hash",
             "helixc/tests/test_proof_artifact_validate.py::test_validate_rejects_malformed_missing_stdlib_entry",
             "helixc/tests/test_proof_artifact_validate.py::test_validate_source_unavailable_rejects_proof_content",
+            "helixc/tests/test_proof_artifact_validate.py::test_require_clean_accepts_proved_artifact",
+            "helixc/tests/test_proof_artifact_validate.py::test_require_clean_rejects_unproven_obligation",
+            "helixc/tests/test_proof_artifact_validate.py::test_require_clean_rejects_pipeline_errors",
+            "helixc/tests/test_proof_artifact_validate.py::test_require_clean_rejects_promoted_warning",
+            "helixc/tests/test_proof_artifact_validate.py::test_require_clean_rejects_source_unavailable_artifact",
         ],
         env=validation_env(),
     )

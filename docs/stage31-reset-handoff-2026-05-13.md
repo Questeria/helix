@@ -304,6 +304,19 @@ shards, snapshot smoke, and `stage0/hex0` in about 899 seconds. Clean-audit
 gate after the final source-unavailable and snapshot-isolation fixes: 3/3
 passed at high confidence.
 
+## 2026-05-14 Proof Artifact Policy Gate Slice
+
+`scripts\proof_artifact_validate.py` now supports `--require-clean`. Plain
+validation still answers "is this proof artifact structurally valid and tied to
+the claimed source/input?" The new clean-policy mode answers "is this artifact
+good enough to pass a proof gate?" It rejects non-`proved` proof obligations,
+pipeline errors, typecheck errors, promoted warning diagnostics, and artifacts
+whose source bytes are unavailable.
+
+Stage 31 quick validation now exercises the clean-policy happy path plus
+unproven obligations, pipeline errors, promoted warnings, and unavailable-source
+rejections.
+
 ## Do Not Forget
 
 - Send Telegram updates using:

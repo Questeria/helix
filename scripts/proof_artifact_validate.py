@@ -331,6 +331,50 @@ def validate_artifact(
     return errors
 
 
+def clean_policy_errors(artifact: dict[str, object]) -> list[str]:
+    """Return proof-gate failures for a structurally valid artifact."""
+    errors: list[str] = []
+
+    input_metadata = artifact.get("input")
+    if isinstance(input_metadata, dict) and input_metadata.get("source_sha256") is None:
+        errors.append("input.source_sha256 is required for --require-clean")
+
+    obligations = artifact.get("obligations")
+    if isinstance(obligations, list):
+        for idx, obligation in enumerate(obligations):
+            if not isinstance(obligation, dict):
+                continue
+            status = obligation.get("status")
+            if status != "proved":
+                refinement = obligation.get("refinement", "<unknown>")
+                errors.append(
+                    f"obligations[{idx}] for {refinement!r} is {status!r}, "
+                    "not 'proved'"
+                )
+
+    pipeline_errors = artifact.get("pipeline_errors")
+    if isinstance(pipeline_errors, list) and pipeline_errors:
+        errors.append(f"pipeline_errors must be empty, found {len(pipeline_errors)}")
+
+    typecheck_errors = artifact.get("typecheck_errors")
+    if isinstance(typecheck_errors, list) and typecheck_errors:
+        errors.append(f"typecheck_errors must be empty, found {len(typecheck_errors)}")
+
+    warning_diagnostics = artifact.get("warning_diagnostics")
+    if isinstance(warning_diagnostics, list):
+        promoted = [
+            warning for warning in warning_diagnostics
+            if isinstance(warning, dict) and warning.get("promoted_to_error")
+        ]
+        if promoted:
+            errors.append(
+                "warning_diagnostics must not contain promoted errors, "
+                f"found {len(promoted)}"
+            )
+
+    return errors
+
+
 def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -342,6 +386,14 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument(
         "--source",
         help="optional source path whose SHA-256 must match artifact input",
+    )
+    parser.add_argument(
+        "--require-clean",
+        action="store_true",
+        help=(
+            "also require no pipeline/typecheck errors, no promoted warnings, "
+            "and every proof obligation to be proved"
+        ),
     )
     return parser.parse_args(argv)
 
@@ -362,6 +414,8 @@ def main(argv: list[str] | None = None) -> int:
         source_path=args.source,
         artifact_dir=artifact_dir,
     )
+    if not errors and args.require_clean:
+        errors.extend(clean_policy_errors(artifact))
     if errors:
         for error in errors:
             print(f"proof-artifact-validate: {error}", file=sys.stderr)

@@ -20,7 +20,13 @@ def _manifest_sha256(files: list[dict[str, object]]) -> str:
     return hashlib.sha256(raw).hexdigest()
 
 
-def _real_artifact(capsys, tmp_path, src: str | None = None):
+def _real_artifact(
+    capsys,
+    tmp_path,
+    src: str | None = None,
+    *,
+    expected_rc: int = 0,
+):
     source = (
         src
         if src is not None
@@ -35,7 +41,7 @@ def _real_artifact(capsys, tmp_path, src: str | None = None):
         str(source_path), "--emit-proof-obligations", "--no-stdlib",
     ])
     captured = capsys.readouterr()
-    assert rc == 0, captured.out + captured.err
+    assert rc == expected_rc, captured.out + captured.err
     artifact = json.loads(captured.out)
     artifact_path = tmp_path / "artifact.json"
     artifact_path.write_text(json.dumps(artifact), encoding="utf-8")
@@ -50,6 +56,65 @@ def test_validate_real_artifact_with_source_passes(capsys, tmp_path):
     captured = capsys.readouterr()
     assert rc == 0
     assert captured.out.strip() == "proof-artifact-validate: ok"
+
+
+def test_require_clean_accepts_proved_artifact(capsys, tmp_path):
+    source_path, artifact_path, _artifact = _real_artifact(capsys, tmp_path)
+    rc = proof_artifact_validate.main([
+        str(artifact_path), "--source", str(source_path), "--require-clean",
+    ])
+    captured = capsys.readouterr()
+    assert rc == 0
+    assert captured.out.strip() == "proof-artifact-validate: ok"
+
+
+def test_require_clean_rejects_unproven_obligation(capsys, tmp_path):
+    source_path, artifact_path, artifact = _real_artifact(
+        capsys,
+        tmp_path,
+        src=(
+            "type Probability = f64 where 0.0 <= self <= 1.0;\n"
+            "fn use_raw(x: f64) -> i32 { let p: Probability = x; 0 }\n"
+        ),
+        expected_rc=1,
+    )
+    assert artifact["obligations"][0]["status"] == "unproven"
+    assert artifact["typecheck_errors"]
+    rc = proof_artifact_validate.main([
+        str(artifact_path), "--source", str(source_path), "--require-clean",
+    ])
+    captured = capsys.readouterr()
+    assert rc == 1
+    assert "is 'unproven', not 'proved'" in captured.err
+    assert "typecheck_errors must be empty" in captured.err
+
+
+def test_require_clean_rejects_pipeline_errors(capsys, tmp_path):
+    _source_path, artifact_path, artifact = _real_artifact(capsys, tmp_path)
+    artifact["pipeline_errors"] = [{"phase": "demo", "message": "not clean"}]
+    artifact["summary"]["pipeline_errors"] = 1
+    artifact_path.write_text(json.dumps(artifact), encoding="utf-8")
+    rc = proof_artifact_validate.main([str(artifact_path), "--require-clean"])
+    captured = capsys.readouterr()
+    assert rc == 1
+    assert "pipeline_errors must be empty" in captured.err
+
+
+def test_require_clean_rejects_promoted_warning(capsys, tmp_path):
+    _source_path, artifact_path, artifact = _real_artifact(capsys, tmp_path)
+    artifact["warning_diagnostics"] = [{
+        "kind": "demo",
+        "policy": "error",
+        "message": "not clean",
+        "promoted_to_error": True,
+    }]
+    artifact["summary"]["warning_diagnostics"] = 1
+    artifact["summary"]["warning_errors"] = 1
+    artifact_path.write_text(json.dumps(artifact), encoding="utf-8")
+    rc = proof_artifact_validate.main([str(artifact_path), "--require-clean"])
+    captured = capsys.readouterr()
+    assert rc == 1
+    assert "promoted errors" in captured.err
 
 
 def test_validate_rejects_source_hash_mismatch(capsys, tmp_path):
@@ -384,3 +449,42 @@ def test_validate_source_unavailable_rejects_proof_content(capsys, tmp_path):
     assert rc == 1
     assert "obligations must be empty" in captured.err
     assert "typecheck_errors must be empty" in captured.err
+
+
+def test_require_clean_rejects_source_unavailable_artifact(capsys, tmp_path):
+    artifact = {
+        "schema": "helix.proof_obligations.v0",
+        "cache_key": None,
+        "path": None,
+        "input": {
+            "source_sha256": None,
+            "source_available": False,
+            "source_error": "source path is missing",
+            "include_stdlib": False,
+            "stdlib_strict": False,
+            "stdlib_manifest_sha256": EMPTY_MANIFEST_SHA256,
+            "stdlib_files": [],
+            "opt_level": 1,
+            "flags": ["--emit-proof-obligations", "--no-stdlib"],
+            "libs": [],
+            "warnings": {},
+            "color": "auto",
+        },
+        "summary": {
+            "obligations": 0,
+            "pipeline_errors": 0,
+            "typecheck_errors": 0,
+            "warning_diagnostics": 0,
+            "warning_errors": 0,
+        },
+        "obligations": [],
+        "pipeline_errors": [],
+        "typecheck_errors": [],
+        "warning_diagnostics": [],
+    }
+    artifact_path = tmp_path / "artifact.json"
+    artifact_path.write_text(json.dumps(artifact), encoding="utf-8")
+    rc = proof_artifact_validate.main([str(artifact_path), "--require-clean"])
+    captured = capsys.readouterr()
+    assert rc == 1
+    assert "input.source_sha256 is required for --require-clean" in captured.err
