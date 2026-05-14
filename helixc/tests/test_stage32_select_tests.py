@@ -121,7 +121,10 @@ def test_stage32_selector_git_paths_include_untracked(monkeypatch):
         if cmd[1:] == ["ls-files", "--others", "--exclude-standard"]:
             return SimpleNamespace(
                 returncode=0,
-                stdout="scripts/stage32_select_tests.py\n",
+                stdout=(
+                    "scripts/stage32_select_tests.py\n"
+                    "docs/audit-stage30-cycle114-codereview.md\n"
+                ),
                 stderr="",
             )
         raise AssertionError(cmd)

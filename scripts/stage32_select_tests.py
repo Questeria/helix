@@ -143,10 +143,19 @@ def git_lines(args: list[str]) -> list[str]:
     return [line.strip() for line in proc.stdout.splitlines() if line.strip()]
 
 
+def include_untracked_path(path: str) -> bool:
+    normalized = normalize_path(path)
+    return normalized.startswith("helixc/") or normalized.startswith("scripts/")
+
+
 def changed_paths_from_git(base: str) -> list[str]:
     paths: list[str] = []
     add_unique(paths, git_lines(["diff", "--name-only", base]))
-    add_unique(paths, git_lines(["ls-files", "--others", "--exclude-standard"]))
+    add_unique(paths, [
+        path
+        for path in git_lines(["ls-files", "--others", "--exclude-standard"])
+        if include_untracked_path(path)
+    ])
     return paths
 
 

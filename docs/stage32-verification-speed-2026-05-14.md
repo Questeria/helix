@@ -117,7 +117,8 @@ Validation after the focused-test selector:
 
 - with changed source paths, it runs the selected pytest targets
 - with docs-only changes, it runs `git diff --check`
-- with no explicit paths, it reads tracked changes and untracked files from git
+- with no explicit paths, it reads tracked changes and untracked source/test
+  files from git
 
 Validation after focused validator mode:
 
@@ -127,8 +128,28 @@ Validation after focused validator mode:
   - Result: `rc=0`
 - `python scripts\stage31_validate.py --mode focused --skip-snapshot docs\ROADMAP.md`
   - Result: `rc=0`
+- `python scripts\stage31_validate.py --mode focused --skip-snapshot`
+  - Result: `rc=0`
+  - Confirmed old untracked audit docs do not drive focused pytest selection
 - `bash scripts/run_all_tests.sh`
   - Result: all gates passed
   - Parallel pytest group time: about 4m11s
   - Snapshot smoke: `rc=42`
   - stage0/hex0: `3 passed, 0 failed`
+
+Audit-fix validation:
+
+- `python -m pytest -q helixc\tests\test_stage31_validate.py helixc\tests\test_stage32_select_tests.py`
+  - Result: `29 passed`
+- `python scripts\stage31_validate.py --mode focused --skip-snapshot`
+  - Result: `rc=0`
+  - Confirmed default focused mode ignores stale untracked audit docs
+- `python scripts\stage31_validate.py --mode quick --skip-snapshot`
+  - Result: `rc=0`
+- `bash scripts/run_all_tests.sh`
+  - Result: all gates passed
+  - Parallel pytest group time: about 17m55s on this run
+  - Snapshot smoke: `rc=42`
+  - stage0/hex0: `3 passed, 0 failed`
+  - Note: this run was much slower than the earlier Stage 32 gates, but it
+    completed green and produced slow-shard evidence.
