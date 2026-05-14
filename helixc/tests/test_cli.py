@@ -1442,6 +1442,87 @@ def test_stage31_emit_proof_obligations_json_for_unproven_refinement(
     assert "compile-time-proven value" in artifact["typecheck_errors"][0]
 
 
+def test_stage31_emit_proof_obligations_json_for_equivalent_refinement_alias(
+    capsys, tmp_path,
+):
+    src_path = str(tmp_path / "equivalent_alias_obligation.hx")
+    with open(src_path, "w") as f:
+        f.write(
+            "type NonNegativeA = f64 where self >= 0.0;\n"
+            "type NonNegativeB = f64 where self >= 0.0;\n"
+            "fn lift(a: NonNegativeA) -> NonNegativeB { a }\n"
+        )
+    rc = main([src_path, "--emit-proof-obligations", "--no-stdlib"])
+    captured = capsys.readouterr()
+    assert rc == 0, captured.out + captured.err
+    artifact = json.loads(captured.out)
+    assert artifact["summary"]["typecheck_errors"] == 0
+    assert artifact["obligations"] == []
+
+
+def test_stage31_emit_proof_obligations_rejects_generic_refinement_name(
+    capsys, tmp_path,
+):
+    src_path = str(tmp_path / "generic_refinement_name_obligation.hx")
+    with open(src_path, "w") as f:
+        f.write(
+            "type A = f64 where self::<Missing> >= 0.0;\n"
+            "fn f() -> A { 1.0_f64 }\n"
+        )
+    rc = main([src_path, "--emit-proof-obligations", "--no-stdlib"])
+    captured = capsys.readouterr()
+    assert rc == 1
+    artifact = json.loads(captured.out)
+    assert artifact["summary"]["typecheck_errors"] >= 1
+    assert any(
+        "self::<Missing> >= 0.0 is not supported" in err
+        for err in artifact["typecheck_errors"]
+    )
+    assert any(
+        obligation["refinement"] == "A"
+        and obligation["predicate"] == "self::<Missing> >= 0.0"
+        and obligation["status"] == "unsupported"
+        for obligation in artifact["obligations"]
+    )
+
+
+def test_stage31_emit_proof_obligations_rejects_duplicate_proof_names(
+    capsys, tmp_path,
+):
+    alias_path = str(tmp_path / "duplicate_alias_obligation.hx")
+    with open(alias_path, "w") as f:
+        f.write(
+            "type Gate = f64 where self >= 0.0;\n"
+            "type Gate = f64 where self <= 0.0;\n"
+            "fn bad() -> Gate { 1.0_f64 }\n"
+        )
+    rc = main([alias_path, "--emit-proof-obligations", "--no-stdlib"])
+    captured = capsys.readouterr()
+    assert rc == 1
+    artifact = json.loads(captured.out)
+    assert any(
+        "name collision after module flattening: 'Gate'" in err["message"]
+        for err in artifact["pipeline_errors"]
+    )
+
+    const_path = str(tmp_path / "duplicate_const_obligation.hx")
+    with open(const_path, "w") as f:
+        f.write(
+            "const LIMIT: f64 = 1.0_f64;\n"
+            "const LIMIT: f64 = 0.0_f64;\n"
+            "type A = f64 where self <= LIMIT;\n"
+            "fn bad() -> A { 1.0_f64 }\n"
+        )
+    rc = main([const_path, "--emit-proof-obligations", "--no-stdlib"])
+    captured = capsys.readouterr()
+    assert rc == 1
+    artifact = json.loads(captured.out)
+    assert any(
+        "name collision after module flattening: 'LIMIT'" in err["message"]
+        for err in artifact["pipeline_errors"]
+    )
+
+
 def test_stage31_emit_proof_obligations_json_for_unsupported_refinement(
     capsys, tmp_path,
 ):

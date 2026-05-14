@@ -500,15 +500,32 @@ class TypeChecker:
         self._recursive_enum_names: set[str] = set()
         self._type_alias_cache = {}
         self._local_const_scalar_scopes = []
+        self._duplicate_type_alias_items: set[int] = set()
+        self._duplicate_const_items: set[int] = set()
+        self._type_namespace_names: dict[str, str] = {}
         for item in self.prog.items:
             if isinstance(item, A.StructDecl):
-                self._struct_decls[item.name] = item
+                if self._define_type_namespace_name(
+                        item.name, "struct", item.span):
+                    self._struct_decls[item.name] = item
             elif isinstance(item, A.EnumDecl):
-                self._enum_decls[item.name] = item
+                if self._define_type_namespace_name(
+                        item.name, "enum", item.span):
+                    self._enum_decls[item.name] = item
             elif isinstance(item, A.TypeAlias):
-                self._type_alias_decls[item.name] = item
+                if self._define_type_namespace_name(
+                        item.name, "type alias", item.span):
+                    self._type_alias_decls[item.name] = item
+                else:
+                    self._duplicate_type_alias_items.add(id(item))
             elif isinstance(item, A.ConstDecl):
-                self._const_decls[item.name] = item
+                if item.name in self._const_decls:
+                    self.errors.append(TypeError_(
+                        f"duplicate const {item.name!r}", item.span,
+                    ))
+                    self._duplicate_const_items.add(id(item))
+                else:
+                    self._const_decls[item.name] = item
 
         self._recursive_enum_names = self._compute_recursive_enum_names()
         self._index_const_scalar_values()
@@ -517,6 +534,8 @@ class TypeChecker:
         # sit silently until a later edit happens to reference them.
         for item in self.prog.items:
             if isinstance(item, A.TypeAlias):
+                if id(item) in self._duplicate_type_alias_items:
+                    continue
                 self._resolve_type_alias(item, Scope())
 
         # Pass 1: register function signatures (don't check bodies yet)
@@ -532,6 +551,8 @@ class TypeChecker:
         # compiler-known functions if future Helix allows it.
         for item in self.prog.items:
             if isinstance(item, A.ConstDecl):
+                if id(item) in self._duplicate_const_items:
+                    continue
                 try:
                     self._check_const_decl(item)
                 except TypeError_ as e:
@@ -547,9 +568,26 @@ class TypeChecker:
 
         return self.errors
 
+    def _define_type_namespace_name(
+        self, name: str, kind: str, span: A.Span,
+    ) -> bool:
+        existing = self._type_namespace_names.get(name)
+        if existing is not None:
+            self.errors.append(TypeError_(
+                f"duplicate type namespace name {name!r}: "
+                f"{kind} conflicts with earlier {existing}",
+                span,
+            ))
+            return False
+        self._type_namespace_names[name] = kind
+        return True
+
     def _index_const_scalar_values(self) -> None:
-        consts = [item for item in self.prog.items
-                  if isinstance(item, A.ConstDecl)]
+        consts = [
+            item for item in self.prog.items
+            if (isinstance(item, A.ConstDecl)
+                and id(item) not in self._duplicate_const_items)
+        ]
         for _ in range(len(consts)):
             progressed = False
             for decl in consts:
@@ -987,6 +1025,8 @@ class TypeChecker:
         if isinstance(expr, (A.IntLit, A.FloatLit)):
             return True
         if isinstance(expr, A.Name):
+            if expr.generics:
+                return False
             if expr.name == "self":
                 return True
             const_value = self._const_scalar_values.get(expr.name)
@@ -1001,7 +1041,7 @@ class TypeChecker:
 
     def _expr_mentions_self(self, expr: A.Expr) -> bool:
         if isinstance(expr, A.Name):
-            return expr.name == "self"
+            return expr.name == "self" and not expr.generics
         if isinstance(expr, A.Unary):
             return self._expr_mentions_self(expr.operand)
         if isinstance(expr, A.Binary):
@@ -3079,7 +3119,90 @@ class TypeChecker:
         if (value_ty.name == target.name
                 and self._compatible(value_ty.base, target.base)):
             return True
+        if self._refinement_predicates_cover(value_ty, target):
+            return True
         return self._refinement_proof_carried(value_ty.base, target)
+
+    def _refinement_predicates_cover(
+        self, value_ty: Type, target: "TyRefined",
+    ) -> bool:
+        """Whether value_ty proves every exact predicate required by target.
+
+        This is deliberately syntactic. Stage 31 can reuse already-carried
+        proofs for alias-equivalent refinements and exact predicate subsets,
+        but mathematical implication remains future SMT work.
+        """
+        if not isinstance(value_ty, TyRefined):
+            return False
+        if self._erase_refinement(value_ty) != self._erase_refinement(target):
+            return False
+        value_preds = self._refinement_predicate_keys(value_ty)
+        target_preds = self._refinement_predicate_keys(target)
+        if value_preds is None or target_preds is None:
+            return False
+        return bool(target_preds) and target_preds.issubset(value_preds)
+
+    def _refinement_predicate_keys(
+        self, ty: Type,
+    ) -> Optional[set[tuple[object, ...]]]:
+        if not isinstance(ty, TyRefined):
+            return set()
+        out: set[tuple[object, ...]] = set()
+        for pred in ty.predicates:
+            key = self._refinement_predicate_key(pred)
+            if key is None:
+                return None
+            out.add(key)
+        base_keys = self._refinement_predicate_keys(ty.base)
+        if base_keys is None:
+            return None
+        out.update(base_keys)
+        return out
+
+    def _refinement_predicate_key(
+        self, expr: A.Expr,
+    ) -> Optional[tuple[object, ...]]:
+        if isinstance(expr, A.BoolLit):
+            return ("bool", expr.value)
+        if isinstance(expr, A.Binary) and expr.op in ("&&", "||"):
+            left = self._refinement_predicate_key(expr.left)
+            right = self._refinement_predicate_key(expr.right)
+            if left is None or right is None:
+                return None
+            return ("logical", expr.op, left, right)
+        chain = self._flatten_relational_chain(expr)
+        if chain is None:
+            return None
+        ops, operands = chain
+        operand_keys = tuple(
+            self._refinement_scalar_expr_key(operand)
+            for operand in operands
+        )
+        if any(key is None for key in operand_keys):
+            return None
+        return ("rel", tuple(ops), operand_keys)
+
+    def _refinement_scalar_expr_key(
+        self, expr: A.Expr,
+    ) -> Optional[tuple[object, ...]]:
+        if isinstance(expr, A.IntLit):
+            return ("int", expr.value, expr.type_suffix)
+        if isinstance(expr, A.FloatLit):
+            return ("float", expr.value, expr.type_suffix)
+        if isinstance(expr, A.Name) and not expr.generics:
+            return ("name", expr.name)
+        if isinstance(expr, A.Unary) and expr.op == "-":
+            operand = self._refinement_scalar_expr_key(expr.operand)
+            if operand is None:
+                return None
+            return ("unary", expr.op, operand)
+        if isinstance(expr, A.Binary) and expr.op in ("+", "-", "*", "/", "%"):
+            left = self._refinement_scalar_expr_key(expr.left)
+            right = self._refinement_scalar_expr_key(expr.right)
+            if left is None or right is None:
+                return None
+            return ("arith", expr.op, left, right)
+        return None
 
     def _check_refinement_contextual_value(
         self, value_expr: A.Expr, value_ty: Type, target_ty: Type,
@@ -3517,6 +3640,8 @@ class TypeChecker:
             return expr.value
         if isinstance(expr, A.BoolLit):
             return expr.value
+        if isinstance(expr, A.Name) and expr.generics:
+            return None
         if isinstance(expr, A.Name) and expr.name == "self":
             return self_value
         if isinstance(expr, A.Name):
@@ -3598,6 +3723,12 @@ class TypeChecker:
         if isinstance(expr, A.BoolLit):
             return "true" if expr.value else "false"
         if isinstance(expr, A.Name):
+            if expr.generics:
+                args = ", ".join(
+                    self._fmt_refinement_ty_arg(arg)
+                    for arg in expr.generics
+                )
+                return f"{expr.name}::<{args}>"
             return expr.name
         if isinstance(expr, A.Unary):
             return f"{expr.op}{self._fmt_refinement_atom(expr.operand)}"
@@ -3605,6 +3736,25 @@ class TypeChecker:
             return (f"({self._fmt_refinement_expr(expr.left)} {expr.op} "
                     f"{self._fmt_refinement_expr(expr.right)})")
         return type(expr).__name__
+
+    def _fmt_refinement_ty_arg(self, ty: A.TyNode) -> str:
+        if isinstance(ty, A.TyName):
+            return ty.name
+        if isinstance(ty, A.TyGeneric):
+            args = ", ".join(
+                self._fmt_refinement_ty_arg(arg) for arg in ty.args
+            )
+            return f"{ty.base}<{args}>"
+        if isinstance(ty, A.TyTuple):
+            return "(" + ", ".join(
+                self._fmt_refinement_ty_arg(elem) for elem in ty.elems
+            ) + ")"
+        if isinstance(ty, A.TyArray):
+            return (
+                f"[{self._fmt_refinement_ty_arg(ty.elem)}; "
+                f"{self._fmt_refinement_expr(ty.size)}]"
+            )
+        return type(ty).__name__
 
     @staticmethod
     def _suggest_wider_int(value: int, current: str) -> "Optional[str]":

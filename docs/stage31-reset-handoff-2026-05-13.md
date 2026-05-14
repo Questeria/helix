@@ -391,6 +391,55 @@ obligation with trap `31001`.
 Stage 31 quick validation now covers typecheck and proof-obligation JSON for
 constant-true and constant-false comparison predicates.
 
+## 2026-05-14 Structural Refinement Proof-Carry Slice
+
+Stage 31 now carries already-proven values across different refinement aliases
+when the erased base type is the same and every target predicate is already
+present in the source alias chain. This is intentionally syntactic: exact
+alias-equivalent predicates and exact predicate subsets can reuse proof, while
+stronger targets still require a fresh proof. Deeper mathematical implication
+remains future SMT work.
+
+Stage 31 quick validation now covers typecheck and proof-obligation JSON for
+equivalent refinement aliases.
+Audit follow-up: proof-carry identity now uses structural predicate keys rather
+than formatted text. Unsupported predicate ASTs therefore cannot collide through
+fallback names such as `Call`, and algebraically equivalent but syntactically
+different predicates still require a future SMT proof.
+Second audit follow-up: generic-qualified names such as
+`self::<Missing>` and `LIMIT::<Missing>` are now rejected inside Stage 31
+constant refinement predicates. They no longer validate or evaluate as plain
+`self`/`LIMIT`, so unknown type arguments cannot be silently ignored by proof
+mode.
+Third audit follow-up: duplicate top-level proof names now fail closed.
+Type aliases, structs, and enums share one type namespace during typechecking,
+and duplicate `const` declarations are rejected before they can overwrite the
+constant table. This prevents proof mode from validating a value against stale
+alias or constant definitions.
+
+## 2026-05-14 Full Gate Speedup Slice
+
+The Stage 31 full validator now shards the broad non-codegen pytest suite as
+well as `test_codegen.py`. Coverage is unchanged because the same pytest
+collection is selected by stable node-id hashing; the difference is that the
+previous single `pytest-no-codegen` bottleneck is split across four workers by
+default. A broad `stage31_validate.py --mode full --skip-snapshot` run passed
+with 4 non-codegen shards plus 8 codegen shards in about 4 minutes 21 seconds.
+
+The bootstrap self-host arithmetic test now uses per-worktree WSL `/tmp` input
+and output paths in its cached Helix bootstrap driver, guarded by a short WSL
+lock. This preserves the same end-to-end test and still reuses the cached
+bootstrap binary, while preventing concurrent full gates from sharing the old
+global `/tmp/helix_src_in.hx` and `/tmp/helix_bin_out.bin` names. The
+previously flaky bootstrap arithmetic test passed in focused validation after
+the change.
+
+Clean-gate follow-up: three local audit records were added after two subagent
+audit batches timed out and were shut down rather than waited on indefinitely:
+`docs/audit-stage31-clean-gate1-proof-carry-2026-05-14.md`,
+`docs/audit-stage31-clean-gate2-validator-speed-2026-05-14.md`, and
+`docs/audit-stage31-clean-gate3-bootstrap-isolation-2026-05-14.md`.
+
 ## Do Not Forget
 
 - Send Telegram updates using:

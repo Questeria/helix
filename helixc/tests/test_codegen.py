@@ -2323,11 +2323,11 @@ def test_bootstrap_kovc_full_pipeline_arithmetic():
     )[0]
 
     # Speedup #3: bootstrap binary caching. Build the bootstrap compiler
-    # ONCE per session (keyed by hash of lexer + parser + kovc), reuse for
-    # every compile_and_exec call. Each call writes source to a fixed
-    # path /tmp/helix_src_in.hx, runs the cached binary which compiles it
-    # and writes the output ELF to /tmp/helix_bin_out.bin, then runs that
-    # output binary and reads the exit code.
+    # ONCE per worktree (keyed by lexer + parser + kovc + I/O path), reuse
+    # for every compile_and_exec call. Each call writes source to a per-worktree
+    # /tmp path, runs the cached binary which compiles it and writes the
+    # output ELF to the paired per-process /tmp path, then runs that output
+    # binary and reads the exit code.
     #
     # Pre-cache: each compile_and_exec re-ran Python helixc on the full
     # ~7000-line bootstrap+driver, ~1.7 sec/call. With ~285 calls in this
@@ -2336,27 +2336,41 @@ def test_bootstrap_kovc_full_pipeline_arithmetic():
     # Expected speedup: ~3x heavy gate.
     cache_dir = os.path.join(proj, "helixc", "tests", "_bootstrap_cache")
     os.makedirs(cache_dir, exist_ok=True)
+    tmp_suffix = hashlib.sha256(proj.encode("utf-8")).hexdigest()[:12]
+    src_tmp_path = f"/tmp/helix_src_in_{tmp_suffix}.hx"
+    bin_tmp_path = f"/tmp/helix_bin_out_{tmp_suffix}.bin"
+    lock_tmp_path = f"/tmp/helix_bootstrap_{tmp_suffix}.lockdir"
     bootstrap_src_hash = hashlib.sha256(
-        (lexer_no_main + "\n||PARSER||\n" + parser_body + "\n||KOVC||\n" + kovc_lib).encode("utf-8")
+        (
+            lexer_no_main
+            + "\n||PARSER||\n"
+            + parser_body
+            + "\n||KOVC||\n"
+            + kovc_lib
+            + "\n||BOOTSTRAP_IO||\n"
+            + src_tmp_path
+            + "\0"
+            + bin_tmp_path
+        ).encode("utf-8")
     ).hexdigest()[:16]
     cached_bootstrap = os.path.join(cache_dir, f"bootstrap_{bootstrap_src_hash}.bin")
 
     if not os.path.exists(cached_bootstrap):
         # Build the bootstrap compiler ONCE. The driver reads from a
-        # FIXED input path and writes to a FIXED output path, so the
-        # binary is identical regardless of which source is being
-        # compiled — only the I/O paths matter, and they're constants.
-        bootstrap_driver = lexer_no_main + parser_body + kovc_lib + """
-fn main() -> i32 {
+        # per-process input path and writes to a per-process output path.
+        # The path is included in the cache key because it is part of the
+        # compiled driver.
+        bootstrap_driver = lexer_no_main + parser_body + kovc_lib + f"""
+fn main() -> i32 {{
     let src_start = __arena_len();
-    let src_len = read_file_to_arena("/tmp/helix_src_in.hx");
+    let src_len = read_file_to_arena("{src_tmp_path}");
     let tok_base = __arena_len();
     lex(src_start, src_len);
     let ast_root = parse_top(tok_base);
     let total = emit_elf_for_ast_to_path(ast_root);
     let elf_start = __arena_len() - total;
-    write_file_to_arena("/tmp/helix_bin_out.bin", elf_start, total)
-}
+    write_file_to_arena("{bin_tmp_path}", elf_start, total)
+}}
 """
         # Use compile_and_run's underlying logic, but write to cache.
         prog = parse(bootstrap_driver, include_stdlib=True)
@@ -2370,23 +2384,28 @@ fn main() -> i32 {
         dce_module(mod)
         fdce_module(mod)
         elf = compile_module_to_elf(mod)
-        with open(cached_bootstrap, "wb") as f:
+        tmp_bootstrap = os.path.join(
+            cache_dir, f"bootstrap_{bootstrap_src_hash}.{os.getpid()}.tmp",
+        )
+        with open(tmp_bootstrap, "wb") as f:
             f.write(elf)
+        os.chmod(tmp_bootstrap, 0o755)
+        os.replace(tmp_bootstrap, cached_bootstrap)
         os.chmod(cached_bootstrap, 0o755)
 
     # Convert cache path to WSL path once.
     cached_wsl = _win_to_wsl(cached_bootstrap)
 
     def compile_and_exec(source_text: str) -> int:
-        # Speedup #3 fast path: write source to fixed /tmp path, exec
+        # Speedup #3 fast path: write source to per-process /tmp path, exec
         # cached bootstrap binary (which compiles it and writes ELF to
-        # fixed /tmp output path), exec output, capture exit code, then
-        # clean up. The bootstrap binary is reused across all calls.
-        # Serial within a single pytest test — no concurrency concern.
+        # the paired /tmp output path), exec output, capture exit code, then
+        # clean up. The bootstrap binary is reused across all calls; a small
+        # WSL lock keeps concurrent gates from sharing the same temp files.
         #
         # Cycle 11 audit A (A1) root-caused the historical flake to the
-        # `;`-vs-`&&` sequencing: under `;` semantics, a missing
-        # /tmp/helix_bin_out.bin causes `chmod +x` to fail and `echo $?`
+        # `;`-vs-`&&` sequencing: under `;` semantics, a missing output
+        # binary causes `chmod +x` to fail and `echo $?`
         # then mis-reports chmod's exit code as if it were the output
         # binary's. The audit's recommended fix (use `&&` strictly)
         # doesn't work because the bootstrap binary INTENTIONALLY exits
@@ -2395,33 +2414,47 @@ fn main() -> i32 {
         # binary.
         #
         # Proper fix: clear any stale output first, then assert
-        # /tmp/helix_bin_out.bin actually exists after the bootstrap runs
+        # the output binary actually exists after the bootstrap runs
         # (via `test -f`); only then chmod+exec it. On any failure in the
         # chain, raise a clear AssertionError rather than returning a
         # misleading exit code from a chmod, stale binary, or the
         # bootstrap's byte-count.
         cmd = (
-            f"rm -f /tmp/helix_src_in.hx /tmp/helix_bin_out.bin && "
-            f"printf %s {repr(source_text)} > /tmp/helix_src_in.hx && "
+            f"lock_dir={lock_tmp_path}; "
+            f"acquired=0; i=0; "
+            f"while [ $i -lt 600 ]; do "
+            f"  if mkdir \"$lock_dir\" 2>/dev/null; then acquired=1; break; fi; "
+            f"  i=$((i + 1)); sleep 0.1; "
+            f"done; "
+            f"if [ \"$acquired\" -ne 1 ]; then "
+            f"  echo '__HARNESS_FAIL_BOOTSTRAP_LOCK_TIMEOUT__'; exit 124; "
+            f"fi; "
+            f"trap 'rmdir \"$lock_dir\"' EXIT; "
+            f"rm -f {src_tmp_path} {bin_tmp_path} && "
+            f"printf %s {repr(source_text)} > {src_tmp_path} && "
             f"sync && chmod +x {cached_wsl} && "
             f"{cached_wsl} > /dev/null; "
-            f"sync && test -f /tmp/helix_bin_out.bin && "
-            f"chmod +x /tmp/helix_bin_out.bin && /tmp/helix_bin_out.bin; "
+            f"sync && test -f {bin_tmp_path} && "
+            f"chmod +x {bin_tmp_path} && {bin_tmp_path}; "
             f"out_rc=$?; "
-            f"if [ ! -f /tmp/helix_bin_out.bin ]; then "
+            f"if [ ! -f {bin_tmp_path} ]; then "
             f"  echo '__HARNESS_FAIL_BOOTSTRAP_DID_NOT_WRITE_OUTPUT__'; "
             f"else "
             f"  echo $out_rc; "
             f"fi; "
-            f"rm -f /tmp/helix_src_in.hx /tmp/helix_bin_out.bin"
+            f"rm -f {src_tmp_path} {bin_tmp_path}"
         )
         run = subprocess.run(
             ["wsl", "-e", "bash", "-c", cmd],
             capture_output=True, timeout=30,
         )
         last = run.stdout.decode().strip().splitlines()[-1] if run.stdout else ""
+        assert last != "__HARNESS_FAIL_BOOTSTRAP_LOCK_TIMEOUT__", (
+            f"bootstrap temp-file lock timed out at {lock_tmp_path}; "
+            f"stderr: {run.stderr.decode()[:500]}"
+        )
         assert last != "__HARNESS_FAIL_BOOTSTRAP_DID_NOT_WRITE_OUTPUT__", (
-            f"bootstrap did not produce /tmp/helix_bin_out.bin for source "
+            f"bootstrap did not produce {bin_tmp_path} for source "
             f"{source_text!r}; stderr: {run.stderr.decode()[:500]}"
         )
         return int(last)

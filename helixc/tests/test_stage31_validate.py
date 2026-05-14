@@ -20,6 +20,33 @@ def test_stage31_validate_default_shards_fallback_when_cpu_unknown(monkeypatch):
     assert stage31_validate.default_shards() == 4
 
 
+def test_stage31_validate_full_shards_non_codegen_suite(monkeypatch):
+    calls = []
+
+    def fake_run_parallel(jobs):
+        calls.extend(jobs)
+        return 0
+
+    monkeypatch.setattr(stage31_validate, "validation_env", lambda: {"TEST": "1"})
+    monkeypatch.setattr(stage31_validate, "run_parallel", fake_run_parallel)
+
+    rc = stage31_validate.full("python", shards=6)
+
+    assert rc == 0
+    names = [name for name, _cmd, _env in calls]
+    assert "pytest-no-codegen-shard-1-of-4" in names
+    assert "pytest-no-codegen-shard-4-of-4" in names
+    assert "pytest-codegen-shard-1-of-6" in names
+    assert "pytest-codegen-shard-6-of-6" in names
+    no_codegen_cmds = [
+        cmd for name, cmd, _env in calls
+        if name.startswith("pytest-no-codegen-shard")
+    ]
+    assert len(no_codegen_cmds) == stage31_validate.MAX_NO_CODEGEN_SHARDS
+    assert all("scripts/pytest_shard.py" in cmd for cmd in no_codegen_cmds)
+    assert all("--ignore=helixc/tests/test_codegen.py" in cmd for cmd in no_codegen_cmds)
+
+
 def test_stage31_validate_rejects_excessive_manual_shards(capsys):
     rc = stage31_validate.main([
         "--mode",

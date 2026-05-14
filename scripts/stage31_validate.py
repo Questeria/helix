@@ -4,8 +4,8 @@ The runner speeds up validation by orchestrating the same checks with less
 manual waiting:
 
 - quick mode runs the recent high-signal regression tests.
-- full mode runs the non-codegen suite plus sharded `test_codegen.py` workers
-  in parallel.
+- full mode runs sharded non-codegen and `test_codegen.py` workers in
+  parallel.
 - snapshot smoke verifies the copied Stage 30 compiler snapshot can check,
   compile, and run a tiny Helix program.
 """
@@ -24,11 +24,17 @@ ROOT = Path(__file__).resolve().parents[1]
 LOG_DIR = ROOT / ".stage31-logs"
 BIN_DIR = ROOT / ".stage31-bin"
 MAX_SHARDS = 8
+MAX_NO_CODEGEN_SHARDS = 4
 
 
 def default_shards() -> int:
     """Pick a conservative parallel default without reducing test coverage."""
     return min(MAX_SHARDS, max(1, os.cpu_count() or 4))
+
+
+def no_codegen_shards_for(shards: int) -> int:
+    """Shard the broad non-codegen suite without overloading WSL/IO."""
+    return max(1, min(MAX_NO_CODEGEN_SHARDS, shards))
 
 
 def validation_env(extra: dict[str, str] | None = None) -> dict[str, str]:
@@ -128,6 +134,9 @@ def quick(py: str) -> int:
             "helixc/tests/test_cli.py::test_o3_runs_at_least_o2_passes",
             "helixc/tests/test_cli.py::test_stage31_emit_proof_obligations_cache_key_path_independent",
             "helixc/tests/test_cli.py::test_stage31_emit_proof_obligations_json_for_unsupported_refinement",
+            "helixc/tests/test_cli.py::test_stage31_emit_proof_obligations_json_for_equivalent_refinement_alias",
+            "helixc/tests/test_cli.py::test_stage31_emit_proof_obligations_rejects_generic_refinement_name",
+            "helixc/tests/test_cli.py::test_stage31_emit_proof_obligations_rejects_duplicate_proof_names",
             "helixc/tests/test_cli.py::test_stage31_emit_proof_obligations_json_for_boolean_literal_refinements",
             "helixc/tests/test_cli.py::test_stage31_emit_proof_obligations_json_for_self_independent_false",
             "helixc/tests/test_cli.py::test_stage31_emit_proof_obligations_json_for_mixed_independent_predicates",
@@ -135,6 +144,10 @@ def quick(py: str) -> int:
             "helixc/tests/test_cli.py::test_stage31_emit_proof_obligations_json_for_short_circuit_predicates",
             "helixc/tests/test_cli.py::test_stage31_emit_proof_obligations_json_for_constant_comparisons",
             "helixc/tests/test_typecheck.py::test_stage31_boolean_literal_refinement_predicates_are_supported",
+            "helixc/tests/test_typecheck.py::test_stage31_equivalent_refinement_aliases_carry_exact_proofs",
+            "helixc/tests/test_typecheck.py::test_stage31_unsupported_refinement_predicates_do_not_carry_by_name",
+            "helixc/tests/test_typecheck.py::test_stage31_generic_qualified_refinement_names_are_unsupported",
+            "helixc/tests/test_typecheck.py::test_stage31_duplicate_refinement_names_fail_closed",
             "helixc/tests/test_typecheck.py::test_stage31_self_independent_false_refinement_rejects_unknown_values",
             "helixc/tests/test_typecheck.py::test_stage31_mixed_self_independent_refinements_do_not_downgrade",
             "helixc/tests/test_typecheck.py::test_stage31_boolean_short_circuit_refinements_are_decisive",
@@ -161,24 +174,27 @@ def quick(py: str) -> int:
 
 
 def full(py: str, shards: int) -> int:
-    print(f"full: codegen shards={shards}")
+    no_codegen_shards = no_codegen_shards_for(shards)
+    print(f"full: no-codegen shards={no_codegen_shards} codegen shards={shards}")
     env = validation_env()
-    jobs: list[tuple[str, list[str], dict[str, str] | None]] = [
-        (
-            "pytest-no-codegen",
-            [
-                py,
-                "-m",
-                "pytest",
-                "-q",
-                "-p",
-                "no:cacheprovider",
-                "helixc/tests",
-                "--ignore=helixc/tests/test_codegen.py",
-            ],
-            env,
+    jobs: list[tuple[str, list[str], dict[str, str] | None]] = []
+    for index in range(no_codegen_shards):
+        jobs.append(
+            (
+                f"pytest-no-codegen-shard-{index + 1}-of-{no_codegen_shards}",
+                [
+                    py,
+                    "scripts/pytest_shard.py",
+                    "--total",
+                    str(no_codegen_shards),
+                    "--index",
+                    str(index),
+                    "helixc/tests",
+                    "--ignore=helixc/tests/test_codegen.py",
+                ],
+                env,
+            )
         )
-    ]
     for index in range(shards):
         jobs.append(
             (

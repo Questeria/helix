@@ -109,6 +109,35 @@ def test_duplicate_function():
     assert any("duplicate function" in e for e in errs), errs
 
 
+def test_stage31_duplicate_refinement_names_fail_closed():
+    duplicate_alias = check("""
+    type Gate = f64 where self >= 0.0;
+    type Gate = f64 where self <= 0.0;
+    fn bad() -> Gate { 1.0_f64 }
+    """)
+    assert any("duplicate type namespace name 'Gate'" in e
+               and "type alias conflicts with earlier type alias" in e
+               for e in duplicate_alias), duplicate_alias
+
+    duplicate_const = check("""
+    const LIMIT: f64 = 1.0_f64;
+    const LIMIT: f64 = 0.0_f64;
+    type A = f64 where self <= LIMIT;
+    fn bad() -> A { 1.0_f64 }
+    """)
+    assert any("duplicate const 'LIMIT'" in e
+               for e in duplicate_const), duplicate_const
+
+    type_namespace = check("""
+    struct Reading { x: i32 }
+    type Reading = f64 where self >= 0.0;
+    fn f() {}
+    """)
+    assert any("duplicate type namespace name 'Reading'" in e
+               and "type alias conflicts with earlier struct" in e
+               for e in type_namespace), type_namespace
+
+
 def test_c116_mixed_float_scalar_ops_require_explicit_cast():
     errs = check("fn f(a: f64, b: i32) -> f64 { a + b }")
     assert any("incompatible operand types f64 and i32" in e for e in errs), errs
@@ -300,6 +329,86 @@ def test_stage31_refinement_value_carries_proof_through_call_and_return():
     }
     """
     assert check_after_flatten(src) == []
+
+
+def test_stage31_equivalent_refinement_aliases_carry_exact_proofs():
+    same_predicate = check("""
+    type NonNegativeA = f64 where self >= 0.0;
+    type NonNegativeB = f64 where self >= 0.0;
+    fn lift(a: NonNegativeA) -> NonNegativeB {
+        a
+    }
+    """)
+    assert same_predicate == [], same_predicate
+
+    subset_predicate = check("""
+    type UnitInterval = f64 where self >= 0.0, self <= 1.0;
+    type NonNegative = f64 where self >= 0.0;
+    fn lower(u: UnitInterval) -> NonNegative {
+        u
+    }
+    """)
+    assert subset_predicate == [], subset_predicate
+
+    stronger_target = check("""
+    type NonNegative = f64 where self >= 0.0;
+    type UnitInterval = f64 where self >= 0.0, self <= 1.0;
+    fn lift(n: NonNegative) -> UnitInterval {
+        n
+    }
+    """)
+    assert any("return value of function 'lift'" in e
+               and "could not prove" in e
+               for e in stronger_target), stronger_target
+
+    reordered = check("""
+    type NonNegativeA = f64 where self >= 0.0;
+    type NonNegativeB = f64 where 0.0 <= self;
+    fn lift(a: NonNegativeA) -> NonNegativeB {
+        a
+    }
+    """)
+    assert any("return value of function 'lift'" in e
+               and "could not prove" in e
+               for e in reordered), reordered
+
+
+def test_stage31_unsupported_refinement_predicates_do_not_carry_by_name():
+    errs = check("""
+    type Source = f64 where foo();
+    type Target = f64 where bar();
+    fn f(s: Source) -> Target {
+        s
+    }
+    """)
+    assert any("type alias 'Source': refinement predicate Call is not supported"
+               in e for e in errs), errs
+    assert any("type alias 'Target': refinement predicate Call is not supported"
+               in e for e in errs), errs
+    assert any("return value of function 'f'" in e
+               and "predicate Call is not supported" in e
+               for e in errs), errs
+
+
+def test_stage31_generic_qualified_refinement_names_are_unsupported():
+    bad_self = check("""
+    type A = f64 where self::<Missing> >= 0.0;
+    fn f() -> A { 1.0_f64 }
+    """)
+    assert any(
+        "refinement predicate self::<Missing> >= 0.0 is not supported" in e
+        for e in bad_self
+    ), bad_self
+
+    bad_const = check("""
+    const LIMIT: f64 = 0.0_f64;
+    type A = f64 where LIMIT::<Missing> >= 0.0;
+    fn f() -> A { 1.0_f64 }
+    """)
+    assert any(
+        "refinement predicate LIMIT::<Missing> >= 0.0 is not supported" in e
+        for e in bad_const
+    ), bad_const
 
 
 def test_stage31_refined_scalar_arithmetic_erases_to_base_scalar():
