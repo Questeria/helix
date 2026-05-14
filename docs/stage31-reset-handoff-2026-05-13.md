@@ -247,6 +247,31 @@ returned rc=2 before gate banners, the combined CLI/typecheck/validator suite
 passed with 348 tests, and `bash scripts/run_all_tests.sh` passed with 8
 shards, snapshot smoke, and `stage0/hex0` in about 855 seconds.
 
+## 2026-05-14 Proof Cache Key Slice
+
+Proof-obligation JSON now emits a top-level `cache_key` derived from canonical
+JSON over `{schema, input}`. This makes the artifact's proof input key explicit
+for future verification gates and cache tooling. The key is path-independent
+for readable source files because `path` is not part of the hashed payload.
+Artifacts whose source bytes are unavailable, such as missing or unreadable
+source paths, report `cache_key: null` instead of pretending to be cacheable.
+
+Added `scripts\proof_artifact_key.py` to recompute or check a proof artifact's
+cache key. The helper accepts UTF-8 and PowerShell redirected UTF-16 JSON so
+Windows users can pipe artifacts without knowing shell encoding details. Stage
+31 quick validation now includes the path-independence regression for proof
+cache keys.
+Audit follow-up: stdin now uses the same UTF-8/UTF-16 decoding path as file
+input, so `proof_artifact_key.py --check -` works with PowerShell-style piped
+artifacts too. Tests include an independent golden SHA-256 assertion for the
+canonical `{schema,input}` payload.
+Verification after this follow-up: focused proof/cache-key tests passed, the
+helper checked a real PowerShell-redirected artifact through stdin, Stage 31
+quick validation passed, the combined CLI/typecheck/validator/helper suite
+passed with 356 tests, and `bash scripts/run_all_tests.sh` passed with 8
+shards, snapshot smoke, and `stage0/hex0` in about 800 seconds.
+Clean-audit gate after the stdin follow-up: 3/3 passed at high confidence.
+
 ## Do Not Forget
 
 - Send Telegram updates using:

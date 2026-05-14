@@ -190,6 +190,7 @@ def test_stage31_emit_proof_obligations_directory_path_stays_json(
     assert rc == 2
     artifact = json.loads(captured.out)
     assert artifact["path"] == str(tmp_path)
+    assert artifact["cache_key"] is None
     assert artifact["input"]["source_sha256"] is None
     assert artifact["input"]["source_available"] is False
     assert artifact["summary"]["pipeline_errors"] == 1
@@ -1130,6 +1131,7 @@ def test_stage31_emit_proof_obligations_json_for_proved_refinement(
     assert rc == 0, captured.out + captured.err
     artifact = json.loads(captured.out)
     assert artifact["schema"] == "helix.proof_obligations.v0"
+    assert len(artifact["cache_key"]) == 64
     assert artifact["input"]["source_sha256"] == (
         hashlib.sha256(src.encode("utf-8")).hexdigest()
     )
@@ -1183,6 +1185,76 @@ def test_stage31_emit_proof_obligations_input_hashes_default_stdlib(
     assert artifact["summary"]["obligations"] == 1
 
 
+def test_stage31_emit_proof_obligations_cache_key_path_independent(
+    capsys, tmp_path,
+):
+    src = (
+        "type Probability = f64 where 0.0 <= self <= 1.0;\n"
+        "fn main() -> i32 { let p: Probability = 0.5_f64; 0 }\n"
+    )
+    first = tmp_path / "first.hx"
+    second_dir = tmp_path / "nested"
+    second_dir.mkdir()
+    second = second_dir / "second.hx"
+    first.write_bytes(src.encode("utf-8"))
+    second.write_bytes(src.encode("utf-8"))
+
+    rc_first = main([
+        str(first), "--emit-proof-obligations", "--no-stdlib",
+    ])
+    captured_first = capsys.readouterr()
+    assert rc_first == 0, captured_first.out + captured_first.err
+    first_artifact = json.loads(captured_first.out)
+
+    rc_second = main([
+        str(second), "--emit-proof-obligations", "--no-stdlib",
+    ])
+    captured_second = capsys.readouterr()
+    assert rc_second == 0, captured_second.out + captured_second.err
+    second_artifact = json.loads(captured_second.out)
+
+    assert first_artifact["path"] != second_artifact["path"]
+    assert len(first_artifact["cache_key"]) == 64
+    assert first_artifact["cache_key"] == second_artifact["cache_key"]
+    assert first_artifact["input"] == second_artifact["input"]
+
+
+def test_stage31_emit_proof_obligations_cache_key_changes_with_source(
+    capsys, tmp_path,
+):
+    first = tmp_path / "first.hx"
+    second = tmp_path / "second.hx"
+    first.write_text(
+        "type Probability = f64 where 0.0 <= self <= 1.0;\n"
+        "fn main() -> i32 { let p: Probability = 0.5_f64; 0 }\n",
+        encoding="utf-8",
+    )
+    second.write_text(
+        "type Probability = f64 where 0.0 <= self <= 1.0;\n"
+        "fn main() -> i32 { let p: Probability = 0.6_f64; 0 }\n",
+        encoding="utf-8",
+    )
+
+    rc_first = main([
+        str(first), "--emit-proof-obligations", "--no-stdlib",
+    ])
+    captured_first = capsys.readouterr()
+    assert rc_first == 0, captured_first.out + captured_first.err
+    first_artifact = json.loads(captured_first.out)
+
+    rc_second = main([
+        str(second), "--emit-proof-obligations", "--no-stdlib",
+    ])
+    captured_second = capsys.readouterr()
+    assert rc_second == 0, captured_second.out + captured_second.err
+    second_artifact = json.loads(captured_second.out)
+
+    assert first_artifact["input"]["source_sha256"] != (
+        second_artifact["input"]["source_sha256"]
+    )
+    assert first_artifact["cache_key"] != second_artifact["cache_key"]
+
+
 def test_stage31_emit_proof_obligations_normalizes_stdlib_flag(
     capsys, tmp_path,
 ):
@@ -1201,6 +1273,7 @@ def test_stage31_emit_proof_obligations_normalizes_stdlib_flag(
     explicit_artifact = json.loads(captured_explicit.out)
 
     assert default_artifact["input"] == explicit_artifact["input"]
+    assert default_artifact["cache_key"] == explicit_artifact["cache_key"]
     assert "--stdlib" not in explicit_artifact["input"]["flags"]
 
 
@@ -1273,6 +1346,7 @@ def test_stage31_emit_proof_obligations_decode_error_stays_json(
     captured = capsys.readouterr()
     assert rc == 2
     artifact = json.loads(captured.out)
+    assert len(artifact["cache_key"]) == 64
     assert artifact["input"]["source_sha256"] == hashlib.sha256(b"\xff\n").hexdigest()
     assert artifact["summary"]["pipeline_errors"] == 1
     assert artifact["pipeline_errors"][0]["phase"] == "decode"

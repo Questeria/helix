@@ -71,6 +71,9 @@ from .frontend import ast_nodes as A
 from .frontend import diagnostics as diag
 
 
+PROOF_SCHEMA = "helix.proof_obligations.v0"
+
+
 # ----------------------------------------------------------------------
 # Argument parsing
 # ----------------------------------------------------------------------
@@ -387,11 +390,13 @@ def _emit_proof_obligation_artifact(
     warning_diagnostics=None,
 ) -> None:
     pipeline_errors = list(pipeline_errors or [])
+    input_metadata = dict(input_metadata or {})
     warning_diagnostics = list(warning_diagnostics or [])
     artifact = {
-        "schema": "helix.proof_obligations.v0",
+        "schema": PROOF_SCHEMA,
+        "cache_key": proof_cache_key(input_metadata),
         "path": path,
-        "input": dict(input_metadata or {}),
+        "input": input_metadata,
         "summary": {
             "obligations": len(obligations),
             "pipeline_errors": len(pipeline_errors),
@@ -411,6 +416,26 @@ def _emit_proof_obligation_artifact(
         "warning_diagnostics": warning_diagnostics,
     }
     print(json.dumps(artifact, indent=2, sort_keys=True))
+
+
+def proof_cache_key(
+    input_metadata: dict[str, object],
+    *,
+    schema: str = PROOF_SCHEMA,
+) -> str | None:
+    """Return the stable proof-input cache key, or None when no source exists."""
+    if input_metadata.get("source_sha256") is None:
+        return None
+    payload = {
+        "schema": schema,
+        "input": input_metadata,
+    }
+    canonical = json.dumps(
+        payload,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(canonical).hexdigest()
 
 
 def _emit_proof_pipeline_error(

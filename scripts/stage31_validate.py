@@ -119,6 +119,7 @@ def quick(py: str) -> int:
             "helixc/tests/test_cli.py::test_o1_invokes_backend_default_pass_order",
             "helixc/tests/test_cli.py::test_o2_invokes_cse_and_dce",
             "helixc/tests/test_cli.py::test_o3_runs_at_least_o2_passes",
+            "helixc/tests/test_cli.py::test_stage31_emit_proof_obligations_cache_key_path_independent",
         ],
         env=validation_env(),
     )
