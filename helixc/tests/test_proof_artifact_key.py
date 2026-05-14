@@ -11,8 +11,8 @@ from scripts import proof_artifact_key
 
 
 EMPTY_MANIFEST_SHA256 = (
-    "e3b0c44298fc1c149afbf4c8996fb924"
-    "27ae41e4649b934ca495991b7852b855"
+    "4f53cda18c2baa0c0354bb5f9a3ecbe5"
+    "ed12ab4d8e11ba873c2f11161202b945"
 )
 
 

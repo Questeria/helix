@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import shlex
 import subprocess
+from types import SimpleNamespace
 
 from scripts import stage31_validate
 
@@ -73,3 +74,31 @@ def test_run_all_tests_rejects_zero_padded_excessive_manual_shards_before_gates(
     assert "value too great for base" not in proc.stderr
     assert "stage0/hex0" not in proc.stdout
     assert "pytest (stage31 sharded gate)" not in proc.stdout
+
+
+def test_snapshot_smoke_runs_modules_outside_repo_root(monkeypatch):
+    calls = []
+
+    def fake_run_logged(name, cmd, *, env=None, cwd=None):
+        calls.append((name, cmd, env, cwd))
+        return 0
+
+    def fake_run(cmd, cwd=None, **_kwargs):
+        calls.append(("snapshot-run", cmd, None, cwd))
+        return SimpleNamespace(returncode=42)
+
+    monkeypatch.setattr(stage31_validate, "run_logged", fake_run_logged)
+    monkeypatch.setattr(stage31_validate.subprocess, "run", fake_run)
+
+    rc = stage31_validate.snapshot_smoke("python")
+
+    assert rc == 0
+    module_calls = [call for call in calls if call[0].startswith("snapshot-")]
+    check = next(call for call in module_calls if call[0] == "snapshot-check")
+    compile_ = next(call for call in module_calls if call[0] == "snapshot-compile")
+    assert check[3] != stage31_validate.ROOT
+    assert compile_[3] != stage31_validate.ROOT
+    assert check[3] == compile_[3]
+    assert check[2]["PYTHONPATH"] == str(
+        stage31_validate.ROOT / "HELIX_STAGE30_COMPILER_SNAPSHOT"
+    )

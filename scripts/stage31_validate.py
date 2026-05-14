@@ -54,7 +54,13 @@ def validation_env(extra: dict[str, str] | None = None) -> dict[str, str]:
     return env
 
 
-def run_logged(name: str, cmd: list[str], *, env: dict[str, str] | None = None) -> int:
+def run_logged(
+    name: str,
+    cmd: list[str],
+    *,
+    env: dict[str, str] | None = None,
+    cwd: Path | str | None = None,
+) -> int:
     LOG_DIR.mkdir(exist_ok=True)
     log_path = LOG_DIR / f"{name}.log"
     started = time.monotonic()
@@ -63,7 +69,7 @@ def run_logged(name: str, cmd: list[str], *, env: dict[str, str] | None = None) 
         log.flush()
         proc = subprocess.run(
             cmd,
-            cwd=str(ROOT),
+            cwd=str(ROOT if cwd is None else cwd),
             env=env,
             text=True,
             stdout=subprocess.PIPE,
@@ -116,10 +122,19 @@ def quick(py: str) -> int:
             "no:cacheprovider",
             "helixc/tests/test_typecheck.py::test_stage31_nonrecursive_aggregate_returns_rejected_before_lowering",
             "helixc/tests/test_typecheck.py::test_stage31_refined_array_call_and_return_checked",
+            "helixc/tests/test_stage31_validate.py::test_snapshot_smoke_runs_modules_outside_repo_root",
             "helixc/tests/test_cli.py::test_o1_invokes_backend_default_pass_order",
             "helixc/tests/test_cli.py::test_o2_invokes_cse_and_dce",
             "helixc/tests/test_cli.py::test_o3_runs_at_least_o2_passes",
             "helixc/tests/test_cli.py::test_stage31_emit_proof_obligations_cache_key_path_independent",
+            "helixc/tests/test_proof_artifact_validate.py::test_validate_real_artifact_with_source_passes",
+            "helixc/tests/test_proof_artifact_validate.py::test_validate_rejects_malformed_diagnostic_sections",
+            "helixc/tests/test_proof_artifact_validate.py::test_validate_rejects_missing_embedded_source_path",
+            "helixc/tests/test_proof_artifact_validate.py::test_validate_resolves_relative_artifact_path_from_artifact_dir",
+            "helixc/tests/test_proof_artifact_validate.py::test_validate_rejects_boolean_integer_fields",
+            "helixc/tests/test_proof_artifact_validate.py::test_validate_rejects_bad_stdlib_manifest_hash",
+            "helixc/tests/test_proof_artifact_validate.py::test_validate_rejects_malformed_missing_stdlib_entry",
+            "helixc/tests/test_proof_artifact_validate.py::test_validate_source_unavailable_rejects_proof_content",
         ],
         env=validation_env(),
     )
@@ -187,6 +202,7 @@ def snapshot_smoke(py: str) -> int:
         "snapshot-check",
         [py, "-m", "helixc.check", "--check-only", "--strict", str(src)],
         env=env,
+        cwd=scratch,
     )
     if rc:
         return rc
@@ -201,6 +217,7 @@ def snapshot_smoke(py: str) -> int:
             "--no-stdlib",
         ],
         env=env,
+        cwd=scratch,
     )
     if rc:
         return rc

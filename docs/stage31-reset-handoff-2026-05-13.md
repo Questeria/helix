@@ -272,6 +272,38 @@ passed with 356 tests, and `bash scripts/run_all_tests.sh` passed with 8
 shards, snapshot smoke, and `stage0/hex0` in about 800 seconds.
 Clean-audit gate after the stdin follow-up: 3/3 passed at high confidence.
 
+## 2026-05-14 Proof Artifact Validator Slice
+
+Added `scripts\proof_artifact_validate.py` to validate proof-obligation JSON
+artifacts before they are trusted as audit evidence. The validator checks the
+top-level schema and `cache_key`, recomputes the proof cache key, validates
+summary counts, diagnostic entry shapes, proof-obligation shape, source hashes,
+required input metadata, stdlib manifest consistency, and Windows-friendly
+UTF-8/UTF-16 artifact loading through the shared proof-artifact loader.
+
+Audit follow-ups made the validator stricter in the places that matter most:
+malformed diagnostic sections are rejected, required proof-input metadata is
+enforced, stale source files are caught automatically when the artifact path can
+be resolved, relative artifact paths are resolved from the artifact JSON
+directory, missing embedded source paths fail closed, JSON booleans are rejected
+for integer fields, stdlib manifest hashes are recomputed from `stdlib_files`,
+malformed missing-stdlib entries are rejected, source-unavailable artifacts must
+carry an explicit `cache_key: null`, and source-unavailable artifacts cannot
+carry proof obligations or typecheck diagnostics.
+
+Stage 31 quick validation now includes high-signal proof-artifact validator
+regressions. The snapshot smoke gate also now runs `python -m helixc...` from
+the scratch directory while pointing `PYTHONPATH` at
+`HELIX_STAGE30_COMPILER_SNAPSHOT`, so it verifies the frozen Stage 30 snapshot
+instead of accidentally importing the live compiler from the repo root.
+
+Verification after this slice: focused validator/key/stage31 tests passed, the
+Stage 31 quick gate passed, the combined CLI/typecheck/validator/key suite
+passed with 374 tests, and `bash scripts/run_all_tests.sh` passed with 8
+shards, snapshot smoke, and `stage0/hex0` in about 899 seconds. Clean-audit
+gate after the final source-unavailable and snapshot-isolation fixes: 3/3
+passed at high confidence.
+
 ## Do Not Forget
 
 - Send Telegram updates using:
