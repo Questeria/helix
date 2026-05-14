@@ -39,3 +39,32 @@ With 2 codegen shards and 2 non-codegen shards:
 That confirms codegen remains the largest verification bottleneck when shard
 count is low. The next Stage 32 improvement should use the JSON data to balance
 codegen shards by historical duration instead of only stable hashing.
+
+## Slice 2 - Duration-Weighted Shard Assignment
+
+The shard helper now records per-test node durations and can use a prior
+duration file to assign collected tests greedily by historical runtime. If no
+duration file exists, the helper falls back to stable hash sharding.
+
+The full validator now passes:
+
+- `--weights .stage31-logs/pytest-node-durations.json`
+- `--durations-out .stage31-logs/<shard-name>-node-durations.json`
+
+After the parallel group finishes, it merges shard duration files back into
+`.stage31-logs/pytest-node-durations.json`. This gives the next run better
+balancing data while preserving one-shard-per-test coverage.
+
+Validation after duration-weighted sharding:
+
+- `python -m pytest -q helixc\tests\test_pytest_shard.py helixc\tests\test_stage31_validate.py`
+  - Result: `19 passed`
+- `python scripts\stage31_validate.py --mode quick --skip-snapshot`
+  - Result: `rc=0`
+- `python scripts\stage31_validate.py --mode full --shards 2 --skip-snapshot --no-retry-failed`
+  - Result: `rc=0`
+- `bash scripts/run_all_tests.sh`
+  - Result: all gates passed
+  - Parallel pytest group time: about 4m21s
+  - Snapshot smoke: `rc=42`
+  - stage0/hex0: `3 passed, 0 failed`

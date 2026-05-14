@@ -48,6 +48,8 @@ def test_stage31_validate_full_shards_non_codegen_suite(monkeypatch):
     assert len(no_codegen_cmds) == stage31_validate.MAX_NO_CODEGEN_SHARDS
     assert all("scripts/pytest_shard.py" in cmd for cmd in no_codegen_cmds)
     assert all("--ignore=helixc/tests/test_codegen.py" in cmd for cmd in no_codegen_cmds)
+    assert all("--weights" in cmd for cmd in no_codegen_cmds)
+    assert all("--durations-out" in cmd for cmd in no_codegen_cmds)
 
 
 def test_stage31_validate_can_disable_failed_shard_retry(monkeypatch):
@@ -161,6 +163,29 @@ def test_stage31_validate_writes_machine_readable_timing_summary(tmp_path):
     assert '"schema": "helix.stage31.pytest_shard_timings.v0"' in text
     assert '"name": "slow"' in text
     assert '"seconds": 12.5' in text
+
+
+def test_stage31_validate_merges_node_duration_files(tmp_path, monkeypatch):
+    monkeypatch.setattr(stage31_validate, "LOG_DIR", tmp_path)
+    out = tmp_path / "merged.json"
+    first = tmp_path / "job-a-node-durations.json"
+    second = tmp_path / "job-b-node-durations.json"
+    first.write_text(
+        '{"tests": [{"nodeid": "a::test_one", "seconds": 1.5}]}',
+        encoding="utf-8",
+    )
+    second.write_text(
+        '{"tests": [{"nodeid": "b::test_two", "seconds": 2.5}]}',
+        encoding="utf-8",
+    )
+
+    stage31_validate.merge_pytest_node_duration_files([
+        ("job-a", object(), object(), tmp_path / "a.log", ["python"], None),
+        ("job-b", object(), object(), tmp_path / "b.log", ["python"], None),
+    ], path=out)
+
+    merged = stage31_validate.load_pytest_node_durations(out)
+    assert merged == {"a::test_one": 1.5, "b::test_two": 2.5}
 
 
 def test_stage31_validate_rejects_excessive_manual_shards(capsys):

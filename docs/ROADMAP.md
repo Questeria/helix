@@ -148,7 +148,8 @@ Important features:
 - Slow-test telemetry by test node, not only by shard.
 - Machine-readable timing summaries. Stage 32 starts with
   `.stage31-logs/pytest-shard-timings.json`.
-- Duration-weighted shard assignment.
+- Duration-weighted shard assignment. Stage 32 added optional per-test timing
+  weights with stable-hash fallback.
 - Failed-shard retry evidence.
 - Changed-file to focused-test mapping.
 

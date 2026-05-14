@@ -29,6 +29,8 @@ MAX_SHARDS = 8
 MAX_NO_CODEGEN_SHARDS = 4
 PYTEST_SUMMARY_RE = re.compile(r"\bin (?P<seconds>[0-9]+(?:\.[0-9]+)?)s(?:\s|$)")
 TIMING_SUMMARY_PATH = LOG_DIR / "pytest-shard-timings.json"
+NODE_TIMING_SUMMARY_PATH = LOG_DIR / "pytest-node-durations.json"
+NODE_DURATION_SCHEMA = "helix.pytest_node_durations.v0"
 
 
 def default_shards() -> int:
@@ -124,6 +126,7 @@ def run_parallel_once(jobs: list[ParallelJob]) -> tuple[int, list[ParallelJob]]:
     elapsed = time.monotonic() - started
     print(f"parallel group time={elapsed:.1f}s")
     print_slowest_pytest_shards(procs)
+    merge_pytest_node_duration_files(procs)
     return rc, failed
 
 
@@ -212,6 +215,70 @@ def write_pytest_timing_summary(
     )
 
 
+def node_duration_path_for(job_name: str) -> Path:
+    return LOG_DIR / f"{job_name}-node-durations.json"
+
+
+def load_pytest_node_durations(path: Path) -> dict[str, float]:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    raw_tests = payload.get("tests", {})
+    if isinstance(raw_tests, dict):
+        iterator = raw_tests.items()
+    elif isinstance(raw_tests, list):
+        iterator = (
+            (entry.get("nodeid"), entry.get("seconds"))
+            for entry in raw_tests
+            if isinstance(entry, dict)
+        )
+    else:
+        return {}
+    durations: dict[str, float] = {}
+    for nodeid, seconds in iterator:
+        if not isinstance(nodeid, str):
+            continue
+        if not isinstance(seconds, (int, float)) or seconds < 0:
+            continue
+        durations[nodeid] = float(seconds)
+    return durations
+
+
+def write_pytest_node_durations(
+    durations: dict[str, float],
+    path: Path = NODE_TIMING_SUMMARY_PATH,
+) -> None:
+    payload = {
+        "schema": NODE_DURATION_SCHEMA,
+        "generated_at_unix": time.time(),
+        "tests": [
+            {"nodeid": nodeid, "seconds": seconds}
+            for nodeid, seconds in sorted(durations.items())
+        ],
+    }
+    path.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+
+def merge_pytest_node_duration_files(
+    procs: list[tuple[str, subprocess.Popen[str], object, Path, list[str], dict[str, str] | None]],
+    path: Path = NODE_TIMING_SUMMARY_PATH,
+) -> None:
+    durations = load_pytest_node_durations(path)
+    updated = False
+    for name, _proc, _log, _log_path, _cmd, _env in procs:
+        shard_durations = load_pytest_node_durations(node_duration_path_for(name))
+        if not shard_durations:
+            continue
+        durations.update(shard_durations)
+        updated = True
+    if updated:
+        write_pytest_node_durations(durations, path)
+
+
 def quick(py: str) -> int:
     return run_logged(
         "stage31-quick",
@@ -274,10 +341,12 @@ def full(py: str, shards: int, *, retry_failed_once: bool = True) -> int:
     print(f"full: no-codegen shards={no_codegen_shards} codegen shards={shards}")
     env = validation_env()
     jobs: list[tuple[str, list[str], dict[str, str] | None]] = []
+    weights_path = str(NODE_TIMING_SUMMARY_PATH)
     for index in range(no_codegen_shards):
+        name = f"pytest-no-codegen-shard-{index + 1}-of-{no_codegen_shards}"
         jobs.append(
             (
-                f"pytest-no-codegen-shard-{index + 1}-of-{no_codegen_shards}",
+                name,
                 [
                     py,
                     "scripts/pytest_shard.py",
@@ -285,6 +354,10 @@ def full(py: str, shards: int, *, retry_failed_once: bool = True) -> int:
                     str(no_codegen_shards),
                     "--index",
                     str(index),
+                    "--weights",
+                    weights_path,
+                    "--durations-out",
+                    str(node_duration_path_for(name)),
                     "helixc/tests",
                     "--ignore=helixc/tests/test_codegen.py",
                 ],
@@ -292,9 +365,10 @@ def full(py: str, shards: int, *, retry_failed_once: bool = True) -> int:
             )
         )
     for index in range(shards):
+        name = f"pytest-codegen-shard-{index + 1}-of-{shards}"
         jobs.append(
             (
-                f"pytest-codegen-shard-{index + 1}-of-{shards}",
+                name,
                 [
                     py,
                     "scripts/pytest_shard.py",
@@ -302,6 +376,10 @@ def full(py: str, shards: int, *, retry_failed_once: bool = True) -> int:
                     str(shards),
                     "--index",
                     str(index),
+                    "--weights",
+                    weights_path,
+                    "--durations-out",
+                    str(node_duration_path_for(name)),
                     "helixc/tests/test_codegen.py",
                 ],
                 env,
