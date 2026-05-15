@@ -2137,9 +2137,10 @@ fn match_scrut_ty_get(bn_state: i32) -> i32 {
 //           `src_byte_start` (misleading — the value passed is an AST
 //           arena index, not a byte offset). All 5 emit sites already
 //           pass AST indices; this rename clarifies the contract.
-//   slot 3: aux i32 — pass-specific data (e.g. for deprecated_pass
+//   slot 3: aux i32 — pass-specific data (e.g. deprecated_pass
 //           28701: dep_tab entry ptr, deprecated_pass 28702: dropped
-//           fn name start, panic_pass: arg_count)
+//           fn name start, panic_pass: arg_count, autotune_pass
+//           27001: saturated product, autotune_pass 27003: parse-error kind)
 //
 // Header slots:
 //   slot 0 (base+0):     count
@@ -2615,7 +2616,11 @@ fn trace_pass(ast_root: i32, diag_state: i32) -> i32 {
 //   slot 14: is_kernel
 //   slot 15: is_autotune
 //   slot 16: deduped variant product (saturated at 17)
-//   slot 17: parse_error / empty-list / no-params flag
+//   slot 17: parse_error_kind
+//     0 = clean
+//     1 = missing parenthesized argument list
+//     2 = malformed token/shape inside the argument list
+//     3 = empty parameter list or empty value list
 //
 // Full kernel-variant generation and dispatch stay Python-only for now.
 // --------------------------------------------------------------
@@ -2637,13 +2642,13 @@ fn autotune_pass(ast_root: i32, diag_state: i32) -> i32 {
                     // 27002: @autotune requires @kernel.
                     diag_emit(diag_state, 27002, 2, fn_idx, name_s);
                 };
-                if parse_error == 1 {
-                    // 27003: malformed/no-param/empty-list autotune args.
-                    diag_emit(diag_state, 27003, 2, fn_idx, name_s);
+                if parse_error != 0 {
+                    // 27003 aux: parse_error_kind (1 missing, 2 malformed, 3 empty).
+                    diag_emit(diag_state, 27003, 2, fn_idx, parse_error);
                 };
                 if product > 16 {
-                    // 27001: variant product exceeds Phase-0 cap.
-                    diag_emit(diag_state, 27001, 2, fn_idx, name_s);
+                    // 27001 aux: saturated variant product.
+                    diag_emit(diag_state, 27001, 2, fn_idx, product);
                 };
             };
             walk = __arena_get(walk + 2);

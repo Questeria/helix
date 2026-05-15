@@ -48,7 +48,7 @@
 //                      slot 14: is_kernel flag (Stage 33)
 //                      slot 15: is_autotune flag (Stage 33)
 //                      slot 16: autotune_variant_product (Stage 33)
-//                      slot 17: autotune_parse_error flag (Stage 33)
+//                      slot 17: autotune_parse_error_kind (Stage 33)
 //                      slot 18: since_msg_start (Stage 33)
 //                      slot 19: since_msg_len (Stage 33)
 //  15  AST_FN_LIST   p1 = current fn_decl_idx, p2 = next list node
@@ -2064,7 +2064,7 @@ fn parse_closure_lit(tok_base: i32, sb: i32) -> i32 {
         // p9=is_deprecated, p10=is_trace, p11=is_unwind,
         // p12=deprecated_msg_start, p13=deprecated_msg_len,
         // p14=is_kernel, p15=is_autotune, p16=autotune_product,
-        // p17=autotune_parse_error, p18=since_msg_start, p19=since_msg_len.
+        // p17=autotune_parse_error_kind, p18=since_msg_start, p19=since_msg_len.
         let fn_node = mk_node(14, name_start, name_len, body);
         __arena_push(params_head);
         __arena_push(0);                         // ret_ty = 0 (i32)
@@ -2079,7 +2079,7 @@ fn parse_closure_lit(tok_base: i32, sb: i32) -> i32 {
         __arena_push(0);                         // is_kernel = 0 (Stage 33)
         __arena_push(0);                         // is_autotune = 0 (Stage 33)
         __arena_push(0);                         // autotune_product = 0 (Stage 33)
-        __arena_push(0);                         // autotune_parse_error = 0 (Stage 33)
+        __arena_push(0);                         // autotune_parse_error_kind = 0 (Stage 33)
         __arena_push(0);                         // since_msg_start = 0 (Stage 33)
         __arena_push(0);                         // since_msg_len = 0 (Stage 33)
         // Wrap in AST_FN_LIST and append to cl_pending chain.
@@ -4156,7 +4156,7 @@ fn parse_top(tok_base: i32) -> i32 {
     //   82 = next_fn_is_kernel
     //   83 = next_fn_is_autotune
     //   84 = next_fn_autotune_product
-    //   85 = next_fn_autotune_parse_error
+    //   85 = next_fn_autotune_parse_error_kind
     __arena_push(0);
     __arena_push(0);
     __arena_push(0);
@@ -4283,8 +4283,18 @@ fn autotune_is_int_value_token(tag: i32) -> i32 {
     if tag == 38 { 1 } else { if tag == 39 { 1 } else { 0 } } } } } } } }
 }
 
+fn autotune_first_error_kind(current: i32, next: i32) -> i32 {
+    if current == 0 { next } else { current }
+}
+
 // Parse a narrow Stage-33 subset of @autotune(KEY: [1, 2], ...). This is
 // validation metadata only; it does not generate kernel variants.
+//
+// Error-kind encoding stored in AST_FN_DECL slot 17:
+//   0 = clean
+//   1 = missing parenthesized argument list
+//   2 = malformed token/shape inside the argument list
+//   3 = empty parameter list or empty value list
 fn capture_autotune_args(tok_base: i32, first_tok: i32, sb: i32) -> i32 {
     set_next_fn_autotune_product(sb, 1);
     set_next_fn_autotune_error(sb, 0);
@@ -4296,14 +4306,14 @@ fn capture_autotune_args(tok_base: i32, first_tok: i32, sb: i32) -> i32 {
         let mut k: i32 = first_tok + 1;
         let mut params_seen: i32 = 0;
         let mut product: i32 = 1;
-        let mut malformed: i32 = 0;
+        let mut error_kind: i32 = 0;
         let mut keep_args: i32 = 1;
         while keep_args == 1 {
             let tt = tok_tag(tok_base, k);
             if tt == 4 {
                 keep_args = 0;
             } else { if tt == 0 {
-                malformed = 1;
+                error_kind = autotune_first_error_kind(error_kind, 2);
                 keep_args = 0;
             } else { if tt == 13 {
                 k = k + 1;
@@ -4312,7 +4322,7 @@ fn capture_autotune_args(tok_base: i32, first_tok: i32, sb: i32) -> i32 {
                 if tok_tag(tok_base, k) == 14 {
                     k = k + 1;
                 } else {
-                    malformed = 1;
+                    error_kind = autotune_first_error_kind(error_kind, 2);
                 };
                 if tok_tag(tok_base, k) == 20 {
                     k = k + 1;
@@ -4330,11 +4340,11 @@ fn capture_autotune_args(tok_base: i32, first_tok: i32, sb: i32) -> i32 {
                             keep_vals = 0;
                             k = k + 1;
                         } else { if vt == 0 {
-                            malformed = 1;
+                            error_kind = autotune_first_error_kind(error_kind, 2);
                             keep_vals = 0;
                             keep_args = 0;
                         } else { if vt == 4 {
-                            malformed = 1;
+                            error_kind = autotune_first_error_kind(error_kind, 2);
                             keep_vals = 0;
                             keep_args = 0;
                         } else { if vt == 13 {
@@ -4350,12 +4360,12 @@ fn capture_autotune_args(tok_base: i32, first_tok: i32, sb: i32) -> i32 {
                             };
                             k = k + 1;
                         } else {
-                            malformed = 1;
+                            error_kind = autotune_first_error_kind(error_kind, 2);
                             k = k + 1;
                         }}}}}
                     }
                     if val_count == 0 {
-                        malformed = 1;
+                        error_kind = autotune_first_error_kind(error_kind, 3);
                     } else {
                         product = product * val_count;
                         if product > 16 {
@@ -4364,20 +4374,20 @@ fn capture_autotune_args(tok_base: i32, first_tok: i32, sb: i32) -> i32 {
                     };
                     params_seen = params_seen + 1;
                 } else {
-                    malformed = 1;
+                    error_kind = autotune_first_error_kind(error_kind, 2);
                     k = k + 1;
                 };
             } else {
-                malformed = 1;
+                error_kind = autotune_first_error_kind(error_kind, 2);
                 k = k + 1;
             }}}}
         }
         if params_seen == 0 {
-            malformed = 1;
+            error_kind = autotune_first_error_kind(error_kind, 3);
             product = 0;
         };
         set_next_fn_autotune_product(sb, product);
-        set_next_fn_autotune_error(sb, malformed);
+        set_next_fn_autotune_error(sb, error_kind);
         0
     }
 }
@@ -5694,7 +5704,7 @@ fn grad_pass(sb: i32, head: i32) -> i32 {
                 __arena_push(0);             // slot 14: is_kernel = 0
                 __arena_push(0);             // slot 15: is_autotune = 0
                 __arena_push(0);             // slot 16: autotune_product = 0
-                __arena_push(0);             // slot 17: autotune_parse_error = 0
+                __arena_push(0);             // slot 17: autotune_parse_error_kind = 0
                 __arena_push(0);             // slot 18: since_msg_start = 0
                 __arena_push(0);             // slot 19: since_msg_len = 0
                 let new_list_node = mk_node(15, clone_fn, 0, 0);
@@ -6060,7 +6070,7 @@ fn grad_rev_pass(sb: i32, head: i32) -> i32 {
                 __arena_push(0);             // slot 14: is_kernel = 0
                 __arena_push(0);             // slot 15: is_autotune = 0
                 __arena_push(0);             // slot 16: autotune_product = 0
-                __arena_push(0);             // slot 17: autotune_parse_error = 0
+                __arena_push(0);             // slot 17: autotune_parse_error_kind = 0
                 __arena_push(0);             // slot 18: since_msg_start = 0
                 __arena_push(0);             // slot 19: since_msg_len = 0
                 let new_list_node = mk_node(15, clone_fn, 0, 0);
@@ -6393,7 +6403,7 @@ fn parse_fn_decl(tok_base: i32, sb: i32) -> i32 {
     __arena_push(is_kernel_now);             // slot 14: is_kernel flag (Stage 33)
     __arena_push(is_autotune_now);           // slot 15: is_autotune flag (Stage 33)
     __arena_push(autotune_product_now);      // slot 16: autotune product (Stage 33)
-    __arena_push(autotune_error_now);        // slot 17: autotune parse error (Stage 33)
+    __arena_push(autotune_error_now);        // slot 17: autotune parse error kind (Stage 33)
     __arena_push(since_msg_s_now);           // slot 18: since_msg_start (Stage 33)
     __arena_push(since_msg_l_now);           // slot 19: since_msg_len (Stage 33)
     node
@@ -6632,7 +6642,7 @@ fn parse_impl_method(tok_base: i32, sb: i32, target_s: i32, target_l: i32, targe
     __arena_push(0);                         // slot 14: is_kernel = 0 (Stage 33)
     __arena_push(0);                         // slot 15: is_autotune = 0 (Stage 33)
     __arena_push(0);                         // slot 16: autotune_product = 0 (Stage 33)
-    __arena_push(0);                         // slot 17: autotune_parse_error = 0 (Stage 33)
+    __arena_push(0);                         // slot 17: autotune_parse_error_kind = 0 (Stage 33)
     __arena_push(0);                         // slot 18: since_msg_start = 0 (Stage 33)
     __arena_push(0);                         // slot 19: since_msg_len = 0 (Stage 33)
     node

@@ -5987,6 +5987,7 @@ def test_bootstrap_kovc_autotune_validation_diagnostics():
         "@autotune(B: [16]) fn no_kernel(a: i32) -> i32 { a } "
         "@kernel @autotune(B: []) fn empty(a: i32) -> i32 { a } "
         "@kernel @autotune(B: [16, fast]) fn malformed(a: i32) -> i32 { a } "
+        "@kernel @autotune fn missing(a: i32) -> i32 { a } "
         "@kernel @autotune(A: [1, 2, 3, 4, 5], B: [10, 20, 30, 40, 50]) "
         "fn too_many(a: i32) -> i32 { a } "
         "fn main() -> i32 { 42 }"
@@ -6010,17 +6011,41 @@ fn main() -> i32 {{
     let mut c27001: i32 = 0;
     let mut c27002: i32 = 0;
     let mut c27003: i32 = 0;
+    let mut c27001_aux17: i32 = 0;
+    let mut c27003_missing: i32 = 0;
+    let mut c27003_malformed: i32 = 0;
+    let mut c27003_empty: i32 = 0;
+    let mut bad_aux: i32 = 0;
     while i < n {{
         let code = diag_get_code(diag_state, i);
-        if code == 27001 {{ c27001 = c27001 + 1; }} else {{ 0 }};
+        let aux = diag_get_aux(diag_state, i);
+        if code == 27001 {{
+            c27001 = c27001 + 1;
+            if aux == 17 {{ c27001_aux17 = c27001_aux17 + 1; }} else {{ bad_aux = 1; }};
+        }} else {{ 0 }};
         if code == 27002 {{ c27002 = c27002 + 1; }} else {{ 0 }};
-        if code == 27003 {{ c27003 = c27003 + 1; }} else {{ 0 }};
+        if code == 27003 {{
+            c27003 = c27003 + 1;
+            if aux == 1 {{ c27003_missing = c27003_missing + 1; }} else {{ 0 }};
+            if aux == 2 {{ c27003_malformed = c27003_malformed + 1; }} else {{ 0 }};
+            if aux == 3 {{ c27003_empty = c27003_empty + 1; }} else {{ 0 }};
+            if aux != 1 {{
+                if aux != 2 {{
+                    if aux != 3 {{ bad_aux = 2; }} else {{ 0 }};
+                }} else {{ 0 }};
+            }} else {{ 0 }};
+        }} else {{ 0 }};
         i = i + 1;
     }}
     let mut rc: i32 = 42;
     if c27001 != 1 {{ rc = 1; }} else {{ 0 }};
     if c27002 != 1 {{ rc = 2; }} else {{ 0 }};
-    if c27003 != 2 {{ rc = 3; }} else {{ 0 }};
+    if c27003 != 3 {{ rc = 3; }} else {{ 0 }};
+    if c27001_aux17 != 1 {{ rc = 4; }} else {{ 0 }};
+    if c27003_missing != 1 {{ rc = 5; }} else {{ 0 }};
+    if c27003_malformed != 1 {{ rc = 6; }} else {{ 0 }};
+    if c27003_empty != 1 {{ rc = 7; }} else {{ 0 }};
+    if bad_aux != 0 {{ rc = 8 + bad_aux; }} else {{ 0 }};
     rc
 }}
 """

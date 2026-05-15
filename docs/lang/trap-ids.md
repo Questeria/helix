@@ -1,6 +1,6 @@
 # Helix Trap ID Registry
 
-**Last updated**: 2026-05-14 (Stage 33 bootstrap metadata — `28701` aux now points to deprecated metadata; added autotune 27002/27003)
+**Last updated**: 2026-05-14 (Stage 33 bootstrap metadata — `28701` aux now points to deprecated metadata; autotune aux payloads are specific)
 **Convention**: Each runtime trap has a numeric ID. The ID is encoded into `eax` immediately before a `ud2` instruction (SIGILL on x86_64), or surfaced as a structured `HelixCompileError` at compile time. Tools and tests cross-reference traps by ID.
 
 ## Two ID namespaces
@@ -50,9 +50,9 @@ Used by the Python frontend (`helixc/frontend/*.py`) and audit-introduced trap I
 | 26001 | `TRAP_PYTREE_DEPTH` | `helixc/frontend/pytree.py:49` | 26 | pytree flatten/unflatten depth cap exceeded (Phase-0 cap = 4); _unflatten guard added cycle 2 (deferred observation #17) |
 | 26002 | `TRAP_PYTREE_NON_DIFF_LEAF` | `helixc/frontend/pytree.py:50` | 26 | pytree flatten saw a non-leaf-non-struct field type |
 | 26003 | `TRAP_PYTREE_CYCLE` | `helixc/frontend/pytree.py:51` | 26 | cyclic struct reference detected during pytree walk |
-| 27001 | `TRAP_AUTOTUNE_OVERSIZED` | `helixc/frontend/autotune.py:42` | 27 | `@autotune` variant Cartesian product exceeds 16 |
+| 27001 | `TRAP_AUTOTUNE_OVERSIZED` | `helixc/frontend/autotune.py:42` | 27 | `@autotune` variant Cartesian product exceeds 16; bootstrap aux is the saturated product |
 | 27002 | (bootstrap autotune_pass) | `helixc/bootstrap/kovc.hx` | 33 | `@autotune` attribute is present without required `@kernel` |
-| 27003 | (bootstrap autotune_pass) | `helixc/bootstrap/kovc.hx` | 33 | malformed, empty, or missing `@autotune(...)` parameter list |
+| 27003 | (bootstrap autotune_pass) | `helixc/bootstrap/kovc.hx` | 33 | malformed, empty, or missing `@autotune(...)` parameter list; bootstrap aux kind: 1 missing parens, 2 malformed shape/token, 3 empty params/value-list |
 | 28001 | `TRAP_PARAM_STRUCT_UNINSTANTIATED` | `helixc/frontend/struct_mono.py:38` | 28 | parametric struct used without `<T>` instantiation |
 | 28002 | `TRAP_PARAM_STRUCT_CONSTEVAL` | `helixc/frontend/struct_mono.py:39` | 28 | parametric struct const-eval failed |
 | 28501 | `TRAP_PANIC_INVOKED` | `helixc/frontend/panic_pass.py:35` | 28.5 | `panic("msg")` reached at runtime |

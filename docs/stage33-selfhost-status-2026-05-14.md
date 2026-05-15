@@ -172,14 +172,15 @@ The bootstrap parser now captures summary metadata for `@kernel` and
 - slot 14: `is_kernel`
 - slot 15: `is_autotune`
 - slot 16: deduped autotune variant product, saturated at `17`
-- slot 17: autotune parse-error flag for malformed, empty, or missing params
+- slot 17: autotune parse-error kind (`0` clean; nonzero means invalid args)
 
 `kovc.hx` now has a bootstrap-side `autotune_pass` that runs before codegen and
 emits severity-2 diagnostics for:
 
 - `27001`: variant product exceeds the Phase-0 cap of `16`
 - `27002`: `@autotune` is present without `@kernel`
-- `27003`: malformed/no-param/empty-list autotune args
+- `27003`: malformed/no-param/empty-list autotune args; later Slice 11
+  makes aux carry the specific parse-error kind
 
 Full variant generation and runtime dispatch remain out of scope for this
 slice.
@@ -369,9 +370,51 @@ Validation:
 - `python scripts\stage31_validate.py --mode quick --skip-snapshot`
   - Result: `rc=0`
 
+## Slice 11: Autotune Diagnostic Payload Specificity
+
+The bootstrap parser now stores `AST_FN_DECL` slot 17 as a parse-error kind
+instead of a boolean flag:
+
+- `0`: clean
+- `1`: missing parenthesized argument list
+- `2`: malformed token or argument-list shape
+- `3`: empty parameter list or empty value list
+
+`autotune_pass` now uses those payloads in diagnostics:
+
+- `27001` aux is the saturated variant product.
+- `27003` aux is the parse-error kind.
+- `27002` continues to point at the function name start for the missing-kernel
+  diagnostic.
+
+Validation:
+
+- `python -m pytest -q helixc\tests\test_codegen.py::test_bootstrap_kovc_autotune_validation_diagnostics helixc\tests\test_codegen.py::test_bootstrap_kovc_autotune_clean_metadata_at_cap helixc\tests\test_codegen.py::test_bootstrap_kovc_autotune_error_traps_in_codegen helixc\tests\test_codegen.py::test_bootstrap_kovc_autotune_typed_int_values_preserved`
+  - Result: `4 passed`
+- `python -m pytest -q helixc\tests\test_autotune.py helixc\tests\test_codegen.py::test_bootstrap_kovc_autotune_clean_metadata_at_cap helixc\tests\test_codegen.py::test_bootstrap_kovc_autotune_validation_diagnostics helixc\tests\test_codegen.py::test_bootstrap_kovc_autotune_error_traps_in_codegen helixc\tests\test_codegen.py::test_bootstrap_kovc_autotune_typed_int_values_preserved`
+  - Result: `28 passed`
+- `python -m pytest -q helixc\tests\test_parser.py helixc\tests\test_codegen.py::test_bootstrap_kovc_autotune_validation_diagnostics helixc\tests\test_codegen.py::test_bootstrap_kovc_autotune_typed_int_values_preserved`
+  - Result: `67 passed`
+- `python scripts\stage33_selfhost_gate.py --generations 3 --json-out .stage33-logs\selfhost-cascade-autotune-aux-g3.json`
+  - Result: `rc=0`
+  - G2..G4 stable SHA-256:
+    `6ba1318d7ec0395746a4b2aabc0ac517475a844db86e1cfa36176c4176bf9543`
+  - G2..G4 stable size: `287612` bytes
+  - Final-generation smoke cases: literal, call, and loop all returned `42`
+  - Validator result: `selfhost-cascade-validate: ok`
+- `python scripts\stage33_selfhost_gate.py --generations 10 --expect-stable-sha 6ba1318d7ec0395746a4b2aabc0ac517475a844db86e1cfa36176c4176bf9543 --json-out .stage33-logs\selfhost-cascade-autotune-aux-g10.json`
+  - Result: `rc=0`
+  - G2..G11 stable SHA-256:
+    `6ba1318d7ec0395746a4b2aabc0ac517475a844db86e1cfa36176c4176bf9543`
+  - G2..G11 stable size: `287612` bytes
+  - Final-generation smoke cases: literal, call, and loop all returned `42`
+  - Validator result: `selfhost-cascade-validate: ok`
+- `python scripts\stage31_validate.py --mode quick --skip-snapshot`
+  - Result: `rc=0`
+
 ## Next
 
-The next Stage 33 slice should either run another metadata clean-gate rotation
-or make bootstrap autotune diagnostic payloads more specific. Full autotune
-variant generation remains larger than the current slice size and should stay
-gated behind another self-host proof.
+The next Stage 33 slice should run the next metadata clean-gate rotation across
+deprecated, since, and autotune metadata together. Full autotune variant
+generation remains larger than the current slice size and should stay gated
+behind another self-host proof.
