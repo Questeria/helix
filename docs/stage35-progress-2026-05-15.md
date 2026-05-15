@@ -1146,6 +1146,40 @@ Clean-gate status:
 - Stage 35 clean gates remain `0/3`.
 - Next step is another fresh Stage 35 clean gate on this fixed commit.
 
+## Increment 34 - Fifteenth Clean-Gate Restart Fix Sweep
+
+The next fresh Stage 35 audit restart found tensor square-overflow reads,
+remaining `--emit-ptx` stdout contamination on validation failures, and stale
+historical research/work-queue wording. The gate did not count as clean and
+remains at `0/3`.
+
+Fixes landed in this increment:
+
+- `tf2d_diag` and `tf2d_trace` now reject positive square shapes whose
+  `rows * cols` length overflows before deriving diagonal offsets.
+- `helixc.check --emit-ptx` now routes frontend validation diagnostics through
+  stderr when stdout is reserved for PTX artifacts, including autotune and
+  typecheck failures.
+- `docs/research-log.md` and `docs/research/WORK_QUEUE.md` now mark old claims
+  as historical snapshot evidence instead of current competitor or gate status.
+
+Focused verification:
+
+- Per-file stdlib parser sweep across `STDLIB_FILES`
+  - Result: parsed 16 stdlib files.
+- `python -m py_compile helixc\check.py`
+  - Result: passed.
+- `python -m pytest helixc\tests\test_codegen.py helixc\tests\test_cli.py -k "overflow_tf2d_diag_trace_do_not_read_after_matrix or rectangular_tf2d_diag_trace_do_not_read_after_matrix or overflow_t2d_len_and_alloc_do_not_alias_next_slot or stage35_emit_ptx_stdout_starts_with_ptx_module or stage35_emit_ptx_autotune_failure_stdout_is_empty or stage35_emit_ptx_typecheck_failure_stdout_is_empty or c117_emit_ptx_uses_kernel_attrs or c119_emit_ptx_rejects" -q`
+  - Result: 15 passed.
+- Docs scan for stale Phase 3 exclusivity, work-queue test-count, and old
+  projection wording
+  - Result: no matches.
+
+Clean-gate status:
+
+- Stage 35 clean gates remain `0/3`.
+- Next step is another fresh Stage 35 clean gate on this fixed commit.
+
 ## Next Work
 
 Likely follow-up slices:

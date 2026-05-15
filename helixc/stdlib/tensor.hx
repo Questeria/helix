@@ -972,6 +972,7 @@ fn tf2d_diag(m: i32, rows: i32, cols: i32, dst: i32) -> i32 {
     if rows <= 0 { 0 }
     else { if cols <= 0 { 0 }
     else { if rows != cols { 0 }
+    else { if t2d_len(rows, cols) == 0 { 0 }
     else {
     let n = rows;
     let mut i: i32 = 0;
@@ -980,7 +981,7 @@ fn tf2d_diag(m: i32, rows: i32, cols: i32, dst: i32) -> i32 {
         i = i + 1;
     }
     0
-    }}}
+    }}}}
 }
 
 // tf2d_eye(n): allocate a new n*n identity matrix (1.0 on diagonal,
@@ -1008,6 +1009,7 @@ fn tf2d_trace(m: i32, rows: i32, cols: i32) -> f32 {
     if rows <= 0 { 0.0_f32 }
     else { if cols <= 0 { 0.0_f32 }
     else { if rows != cols { 0.0_f32 }
+    else { if t2d_len(rows, cols) == 0 { 0.0_f32 }
     else {
     let n = rows;
     let mut i: i32 = 0;
@@ -1017,7 +1019,7 @@ fn tf2d_trace(m: i32, rows: i32, cols: i32) -> f32 {
         i = i + 1;
     }
     total
-    }}}
+    }}}}
 }
 
 // tf1d_lerp(a, b, t, dst, n): linear interpolation. dst[i] = a[i] +

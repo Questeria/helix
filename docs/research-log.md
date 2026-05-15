@@ -343,10 +343,11 @@ This compiles to Linux ELF that produces the correct exit code, with NO external
 
 ---
 
-## 2026-05-04 (Phase 3 complete) — Helix has 4 unique compile-time AGI features
+## 2026-05-04 (Phase 3 complete) — Helix demonstrated 4 intended compile-time AGI differentiators
 
-Phase 3 wraps with Helix as a genuinely differentiated language. The type
-system enforces FOUR things no other AI language enforces at compile time:
+At this 2026-05-04 snapshot, Phase 3 wrapped with Helix demonstrating four
+intended compile-time AGI differentiators. This was historical milestone
+evidence, not a current competitor-exclusivity survey:
 
 ### 1. Tensor shape constraints via Presburger arithmetic
 - `helixc/frontend/presburger.py`: linear-arithmetic constraint solver

@@ -903,6 +903,11 @@ def _main_inner(argv: list[str] | None,
             file=sys.stderr if proof_mode or artifact_stdout_mode else sys.stdout,
         )
 
+    diagnostic_stream = sys.stderr if artifact_stdout_mode else sys.stdout
+
+    def diag_out(msg: str = "") -> None:
+        print(msg, file=diagnostic_stream)
+
     print(
         f"-- helixc-check: {path}",
         file=sys.stderr if proof_mode or artifact_stdout_mode else sys.stdout,
@@ -1034,8 +1039,8 @@ def _main_inner(argv: list[str] | None,
                 input_metadata=proof_input,
             )
             return 1
-        print(f"   impl-flatten: ERROR")
-        print(f"     {e}")
+        diag_out(f"   impl-flatten: ERROR")
+        diag_out(f"     {e}")
         return 1
 
     # Stage 28 — parametric-struct monomorphization (Audit 28.8
@@ -1056,9 +1061,9 @@ def _main_inner(argv: list[str] | None,
                 input_metadata=proof_input,
             )
             return 1
-        print(f"   struct-mono: {len(sm_diags)} ERROR(s)")
+        diag_out(f"   struct-mono: {len(sm_diags)} ERROR(s)")
         for d in sm_diags:
-            print(f"     {d}")
+            diag_out(f"     {d}")
         return 1
 
     # Function monomorphization must run before typecheck for the developer
@@ -1077,9 +1082,9 @@ def _main_inner(argv: list[str] | None,
                 input_metadata=proof_input,
             )
             return 1
-        print(f"   fn-mono: {len(mono_diags)} ERROR(s)")
+        diag_out(f"   fn-mono: {len(mono_diags)} ERROR(s)")
         for d in mono_diags:
-            print(f"     {d}")
+            diag_out(f"     {d}")
         return 1
     if mono_count > 0:
         info(f"   fn-mono: {mono_count} generic instantiation(s)")
@@ -1106,14 +1111,14 @@ def _main_inner(argv: list[str] | None,
                 proof_carries=proof_carries,
             )
             return 1
-        print(f"   typecheck: {len(tc_errs)} ERRORS")
+        diag_out(f"   typecheck: {len(tc_errs)} ERRORS")
         for e in tc_errs[:20]:
             rendered = e.render(source=src, filename=path, color=a.color) \
                 if hasattr(e, "render") else str(e)
             for line in rendered.splitlines():
-                print(f"     {line}")
+                diag_out(f"     {line}")
         if len(tc_errs) > 20:
-            print(f"     ... and {len(tc_errs) - 20} more")
+            diag_out(f"     ... and {len(tc_errs) - 20} more")
         return 1
     info(f"   typecheck: OK")
     if proof_mode:
@@ -1197,9 +1202,9 @@ def _main_inner(argv: list[str] | None,
     warnings = emit_warnings(prog)
     if warnings:
         label = "ERROR" if deprecate_policy == "error" else "warning"
-        print(f"   deprecated: {len(warnings)} {label}(s)")
+        diag_out(f"   deprecated: {len(warnings)} {label}(s)")
         for w in warnings:
-            print(f"     {w}")
+            diag_out(f"     {w}")
         if deprecate_policy == "error":
             return 1
 
@@ -1210,9 +1215,9 @@ def _main_inner(argv: list[str] | None,
     from .frontend.trace_pass import validate_trace_attrs
     trace_diags = validate_trace_attrs(prog)
     if trace_diags:
-        print(f"   trace:     {len(trace_diags)} ERROR(s)")
+        diag_out(f"   trace:     {len(trace_diags)} ERROR(s)")
         for d in trace_diags:
-            print(f"     {d}")
+            diag_out(f"     {d}")
         return 1
 
     # Stage 28.5: panic / unwind validation passes (Audit 28.8 A1).
@@ -1227,13 +1232,13 @@ def _main_inner(argv: list[str] | None,
     panic_diags = validate_panic_args(prog)
     unwind_diags = validate_unwind(prog)
     if panic_diags:
-        print(f"   panic:     {len(panic_diags)} ERROR(s)")
+        diag_out(f"   panic:     {len(panic_diags)} ERROR(s)")
         for d in panic_diags:
-            print(f"     {d}")
+            diag_out(f"     {d}")
     if unwind_diags:
-        print(f"   unwind:    {len(unwind_diags)} ERROR(s)")
+        diag_out(f"   unwind:    {len(unwind_diags)} ERROR(s)")
         for d in unwind_diags:
-            print(f"     {d}")
+            diag_out(f"     {d}")
     if panic_diags or unwind_diags:
         return 1
 
@@ -1243,9 +1248,9 @@ def _main_inner(argv: list[str] | None,
     from .frontend.unsafe_pass import check_unsafe_ops
     unsafe_diags = check_unsafe_ops(prog)
     if unsafe_diags:
-        print(f"   unsafe:    {len(unsafe_diags)} ERROR(s)")
+        diag_out(f"   unsafe:    {len(unsafe_diags)} ERROR(s)")
         for d in unsafe_diags:
-            print(f"     {d}")
+            diag_out(f"     {d}")
         return 1
 
     # Stage 27: @autotune validation (Audit 28.8 A12).
@@ -1258,23 +1263,25 @@ def _main_inner(argv: list[str] | None,
     from .frontend.autotune import validate_autotune_prog
     autotune_diags = validate_autotune_prog(prog)
     if autotune_diags:
-        print(f"   autotune:  {len(autotune_diags)} ERROR(s)")
+        diag_out(f"   autotune:  {len(autotune_diags)} ERROR(s)")
         for d in autotune_diags:
-            print(f"     {d}")
+            diag_out(f"     {d}")
         return 1
 
 
     # 4. Optional hash dump
     if "--hash" in a.flags:
-        print("   hashes:")
+        diag_out("   hashes:")
         for it in prog.items:
             if isinstance(it, A.FnDecl):
-                print(f"     {it.name:<40} {short_hash(structural_hash(it))}")
+                diag_out(
+                    f"     {it.name:<40} {short_hash(structural_hash(it))}"
+                )
 
     # 4.5 Optional hash-cons
     if "--hash-cons" in a.flags:
         n_shared = hash_cons(prog)
-        print(f"   hash-cons: {n_shared} AST node(s) deduped")
+        diag_out(f"   hash-cons: {n_shared} AST node(s) deduped")
 
     # --check-only short-circuit: stop here.
     # Stage 28.9 cycle 26 audit-R C25-1 NOTE (conf 92): the audit
@@ -1292,7 +1299,7 @@ def _main_inner(argv: list[str] | None,
     # backend driver — so any compile that produces a binary goes
     # through it. Cycle 26 documents the trade-off explicitly.
     if "--check-only" in a.flags:
-        print("-- clean (check-only)")
+        diag_out("-- clean (check-only)")
         return 0
 
     # 5. Lower + (optional) optimization passes

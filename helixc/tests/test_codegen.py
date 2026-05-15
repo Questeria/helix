@@ -15422,6 +15422,26 @@ def test_rectangular_tf2d_diag_trace_do_not_read_after_matrix():
     assert code == 42, f"expected 42, got {code}"
 
 
+def test_overflow_tf2d_diag_trace_do_not_read_after_matrix():
+    src = """
+    fn main() -> i32 {
+        let m = tf2d_zeros(46341, 46341);
+        let guard = t1d_new(3);
+        tf1d_set(guard, 0, 99.0_f32);
+        tf1d_set(guard, 1, 99.0_f32);
+        tf1d_set(guard, 2, 99.0_f32);
+        let dst = t1d_new(1);
+        tf1d_set(dst, 0, 42.0_f32);
+        tf2d_diag(m, 46341, 46341, dst);
+        if (tf1d_get(dst, 0) as i32) == 42 {
+            if (tf2d_trace(m, 46341, 46341) as i32) == 0 { 42 } else { 7 }
+        } else { 7 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
 def test_stdlib_tf1d_lerp():
     """lerp([0,0], [4,4], t=0.5) -> [2,2]; sum=4; bits 0x40800000; top=64; -22=42."""
     src = """

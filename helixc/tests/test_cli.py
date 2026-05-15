@@ -226,6 +226,45 @@ def test_stage35_emit_ptx_stdout_starts_with_ptx_module(tmp_path):
     assert "typecheck:" not in proc.stdout
 
 
+def test_stage35_emit_ptx_autotune_failure_stdout_is_empty(tmp_path):
+    src_path = tmp_path / "bad_autotune.hx"
+    src_path.write_text(
+        "@kernel @autotune(B: []) fn k(a: tile<f32, [16], HBM>) { }\n",
+        encoding="utf-8",
+    )
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.check", str(src_path), "--emit-ptx"],
+        cwd=proj_root,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    assert proc.stdout == ""
+    assert "autotune:" in proc.stderr
+    assert "empty value list" in proc.stderr
+
+
+def test_stage35_emit_ptx_typecheck_failure_stdout_is_empty(tmp_path):
+    src_path = tmp_path / "bad_typecheck.hx"
+    src_path.write_text(
+        "@kernel fn k() { let x: i32 = true; }\n",
+        encoding="utf-8",
+    )
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.check", str(src_path), "--emit-ptx"],
+        cwd=proj_root,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    assert proc.stdout == ""
+    assert "typecheck:" in proc.stderr
+
+
 def test_c119_emit_ptx_rejects_no_kernel_modules(capsys):
     src = write_src("fn helper(x: i32) -> i32 { x + 1 }\n")
     try:
@@ -253,7 +292,8 @@ def test_c119_emit_ptx_rejects_unsupported_hbm_float_dtype(capsys):
         if os.path.exists(src):
             os.remove(src)
     assert rc == 1, captured.out + captured.err
-    assert "@kernel HBM tile parameter dtype f16 is not supported" in captured.out
+    assert captured.out == ""
+    assert "@kernel HBM tile parameter dtype f16 is not supported" in captured.err
     assert "ld.global.f16" not in captured.out
 
 
@@ -291,7 +331,8 @@ def test_c119_emit_ptx_rejects_bare_kernel_index_builtin(capsys):
         if os.path.exists(src):
             os.remove(src)
     assert rc == 1, captured.out + captured.err
-    assert "thread_idx must be called as thread_idx()" in captured.out
+    assert captured.out == ""
+    assert "thread_idx must be called as thread_idx()" in captured.err
     assert "mov.b32" not in captured.out
 
 
@@ -304,7 +345,8 @@ def test_c119_emit_ptx_rejects_non_1d_hbm_params(capsys):
         if os.path.exists(src):
             os.remove(src)
     assert rc == 1, captured.out + captured.err
-    assert "@kernel HBM tile parameters must be 1D" in captured.out
+    assert captured.out == ""
+    assert "@kernel HBM tile parameters must be 1D" in captured.err
     assert "internal error" not in captured.err
 
 
@@ -317,7 +359,8 @@ def test_c119_emit_ptx_rejects_non_1d_extern_hbm_params(capsys):
         if os.path.exists(src):
             os.remove(src)
     assert rc == 1, captured.out + captured.err
-    assert "@kernel HBM tile parameters must be 1D" in captured.out
+    assert captured.out == ""
+    assert "@kernel HBM tile parameters must be 1D" in captured.err
     assert "internal error" not in captured.err
 
 
@@ -358,7 +401,8 @@ def test_c119_emit_ptx_rejects_non_unit_kernel_returns(capsys):
         if os.path.exists(src):
             os.remove(src)
     assert rc == 1, captured.out + captured.err
-    assert "@kernel functions must return ()" in captured.out
+    assert captured.out == ""
+    assert "@kernel functions must return ()" in captured.err
     assert "mov.b32" not in captured.out
 
 
@@ -371,7 +415,8 @@ def test_c119_emit_ptx_rejects_kernel_value_returns(capsys):
         if os.path.exists(src):
             os.remove(src)
     assert rc == 1, captured.out + captured.err
-    assert "@kernel functions cannot return a value" in captured.out
+    assert captured.out == ""
+    assert "@kernel functions cannot return a value" in captured.err
     assert "mov.b32" not in captured.out
 
 

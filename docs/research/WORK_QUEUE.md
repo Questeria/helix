@@ -1,6 +1,12 @@
 # Helix Foreground Work Queue
 
-Generated 2026-05-04 by long-horizon planner. Each ticket is sized for a single 5–15 min foreground tick. Pop the **top** unchecked item; mark it done and append a one-line note when finished. Re-prioritize only if a ticket is blocked.
+> Historical snapshot: this file records a 2026-05-04 foreground queue. It is
+> not current Stage 35 gate evidence and should not be used as the live work
+> selector. Use `docs/ROADMAP.md` and `docs/stage35-progress-2026-05-15.md`
+> for current status.
+
+Generated 2026-05-04 by long-horizon planner. Each ticket was sized for a
+single 5-15 min foreground tick in that historical queue.
 
 Sizing: **S** ≤ 50 lines / 30 min, **M** ≤ 200 lines / 2 h, **L** ≤ 600 lines / 1 day. Anything **L** is split into S/M sub-tickets.
 
@@ -118,7 +124,9 @@ Parser + AST already support `match`, `if`-guards, `PatLit | PatBind | PatWildca
 2. If sized **S**: implement + write the listed test + run `python -m pytest helixc/tests/ -q`. If green, commit (one ticket = one commit). Append `[done <commit-hash>]` to the bullet.
 3. If sized **M**: implement against the listed test only; defer broader regression to a follow-up ticket; commit. Append `[done <commit-hash>]`.
 4. If a ticket is blocked (missing infrastructure, ambiguous spec), append `[blocked: <reason>]` and skip to the next.
-5. After every 5 done tickets, run the full suite once and update `README.md` test count.
+5. At the time of this snapshot, workers were expected to run the full suite
+   after every 5 done tickets and update the then-current test count. Do not
+   use those snapshot counts as current Stage 35 evidence.
 
 ## Backlog seeds (out-of-tick, do not pick yet)
 
@@ -135,7 +143,7 @@ When Tier A through Tier D above are mostly green, regenerate this file from the
 
 ## Tier F — Wave 2 work (post-2026-05-04)
 
-Generated 2026-05-04 evening after the enum-payload + struct-flatten + tuple-field epic landed (commits `a39a9aa`..`3a83a38`). This wave focuses on (1) **closing the self-host gap** — payload pattern-extraction and struct-by-value are the two features that block writing a real `helixc-bootstrap` in HBS — (2) **paying down latent bugs** surfaced when struct/enum codegen landed, and (3) **tightening UX** so dogfood programs stop hitting "unsupported" papercuts. Expected to take this branch from 484 → ~520 green tests.
+Generated 2026-05-04 evening after the enum-payload + struct-flatten + tuple-field epic landed (commits `a39a9aa`..`3a83a38`). This historical wave focused on (1) **closing the self-host gap** — payload pattern-extraction and struct-by-value were the two features then blocking a real `helixc-bootstrap` in HBS — (2) **paying down latent bugs** surfaced when struct/enum codegen landed, and (3) **tightening UX** so dogfood programs stopped hitting "unsupported" papercuts. Its old green-test growth target was a 2026-05-04 projection, not a current test count.
 
 ### 21. Payload pattern extraction in match arms (M) [done f5fa4a7]
 Today `Maybe::Some(x) => body` parses but the parser **discards the payload binders** (parser.py:1040-1060: "Skip the payload args for now") and lowers the whole arm as a tag-only `PatLit`. So users must write `match m[0] { 1 => m[1], _ => 0 }` — defeats the abstraction. Fix in three places:
