@@ -38,3 +38,21 @@ Good follow-up slices:
 - Add proof-artifact summaries that distinguish exact proof-carry from
   implication proof-carry.
 - Expand clean gates around proof-carry through arrays, tuples, and references.
+
+## Increment 2 - Equality-Derived Bounds
+
+The next Stage 34 slice extends proof-carry for exact numeric equality. Helix
+can now treat `self == N` and `N == self` as both an inclusive lower bound and
+an inclusive upper bound.
+
+Examples now accepted:
+
+- `self == 1.0` proves `self >= 0.0`
+- `self == 1.0` proves `self <= 1.0`
+- `self == 1.0` and `1.0 == self` carry equivalent exact-value proofs
+
+The implementation remains fail-closed:
+
+- `self == 1.0` does not prove `self < 1.0`
+- `self == 1.0` does not prove `self > 1.0`
+- `self != 0.0` does not prove any lower or upper bound

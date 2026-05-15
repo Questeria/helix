@@ -3225,8 +3225,8 @@ class TypeChecker:
         ops, operands = chain
         out: list[tuple[str, int | float, bool]] = []
         for left, op, right in zip(operands, ops, operands[1:]):
-            bound = self._refinement_binary_bound(left, op, right)
-            if bound is None:
+            bounds = self._refinement_binary_bounds(left, op, right)
+            if bounds is None:
                 ok = self._eval_refinement_predicate(
                     A.Binary(left=left, op=op, right=right, span=expr.span),
                     None,
@@ -3234,12 +3234,12 @@ class TypeChecker:
                 if ok is True:
                     continue
                 return None
-            out.append(bound)
+            out.extend(bounds)
         return out
 
-    def _refinement_binary_bound(
+    def _refinement_binary_bounds(
         self, left: A.Expr, op: str, right: A.Expr,
-    ) -> Optional[tuple[str, int | float, bool]]:
+    ) -> Optional[list[tuple[str, int | float, bool]]]:
         left_is_self = self._expr_is_plain_self(left)
         right_is_self = self._expr_is_plain_self(right)
         if left_is_self == right_is_self:
@@ -3252,38 +3252,38 @@ class TypeChecker:
 
     def _bound_from_self_compare(
         self, op: str, value: int | float | bool | None,
-    ) -> Optional[tuple[str, int | float, bool]]:
+    ) -> Optional[list[tuple[str, int | float, bool]]]:
         if not (isinstance(value, (int, float)) and not isinstance(value, bool)):
             return None
         if op == ">":
-            return ("lower", value, False)
+            return [("lower", value, False)]
         if op == ">=":
-            return ("lower", value, True)
+            return [("lower", value, True)]
         if op == "<":
-            return ("upper", value, False)
+            return [("upper", value, False)]
         if op == "<=":
-            return ("upper", value, True)
+            return [("upper", value, True)]
         if op == "==":
-            return None
+            return [("lower", value, True), ("upper", value, True)]
         if op == "!=":
             return None
         return None
 
     def _bound_from_const_compare(
         self, op: str, value: int | float | bool | None,
-    ) -> Optional[tuple[str, int | float, bool]]:
+    ) -> Optional[list[tuple[str, int | float, bool]]]:
         if not (isinstance(value, (int, float)) and not isinstance(value, bool)):
             return None
         if op == "<":
-            return ("lower", value, False)
+            return [("lower", value, False)]
         if op == "<=":
-            return ("lower", value, True)
+            return [("lower", value, True)]
         if op == ">":
-            return ("upper", value, False)
+            return [("upper", value, False)]
         if op == ">=":
-            return ("upper", value, True)
+            return [("upper", value, True)]
         if op == "==":
-            return None
+            return [("lower", value, True), ("upper", value, True)]
         if op == "!=":
             return None
         return None

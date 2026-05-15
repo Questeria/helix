@@ -442,6 +442,70 @@ def test_stage34_numeric_bound_implication_respects_strictness():
     assert strong_upper == [], strong_upper
 
 
+def test_stage34_equality_refinement_implies_matching_bounds():
+    lower = check("""
+    type ExactlyOne = f64 where self == 1.0;
+    type NonNegative = f64 where self >= 0.0;
+    fn lift(x: ExactlyOne) -> NonNegative {
+        x
+    }
+    """)
+    assert lower == [], lower
+
+    upper = check("""
+    type ExactlyHalf = f64 where 0.5 == self;
+    type AtMostOne = f64 where self <= 1.0;
+    fn lift(x: ExactlyHalf) -> AtMostOne {
+        x
+    }
+    """)
+    assert upper == [], upper
+
+    same_value_reordered = check("""
+    type ExactlyOneA = f64 where self == 1.0;
+    type ExactlyOneB = f64 where 1.0 == self;
+    fn lift(x: ExactlyOneA) -> ExactlyOneB {
+        x
+    }
+    """)
+    assert same_value_reordered == [], same_value_reordered
+
+
+def test_stage34_equality_refinement_keeps_strict_bounds_fail_closed():
+    too_strict_upper = check("""
+    type ExactlyOne = f64 where self == 1.0;
+    type LessThanOne = f64 where self < 1.0;
+    fn lift(x: ExactlyOne) -> LessThanOne {
+        x
+    }
+    """)
+    assert any("return value of function 'lift'" in e
+               and "could not prove self < 1.0" in e
+               for e in too_strict_upper), too_strict_upper
+
+    too_strict_lower = check("""
+    type ExactlyOne = f64 where self == 1.0;
+    type GreaterThanOne = f64 where self > 1.0;
+    fn lift(x: ExactlyOne) -> GreaterThanOne {
+        x
+    }
+    """)
+    assert any("return value of function 'lift'" in e
+               and "could not prove self > 1.0" in e
+               for e in too_strict_lower), too_strict_lower
+
+    not_equal = check("""
+    type NonZero = f64 where self != 0.0;
+    type NonNegative = f64 where self >= 0.0;
+    fn lift(x: NonZero) -> NonNegative {
+        x
+    }
+    """)
+    assert any("return value of function 'lift'" in e
+               and "could not prove self >= 0.0" in e
+               for e in not_equal), not_equal
+
+
 def test_stage31_unsupported_refinement_predicates_do_not_carry_by_name():
     errs = check("""
     type Source = f64 where foo();
