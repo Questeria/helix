@@ -172,6 +172,8 @@ def validate_artifact(
 
     if artifact.get("schema") != PROOF_SCHEMA:
         errors.append(f"schema must be {PROOF_SCHEMA!r}")
+    if "path" not in artifact:
+        errors.append("path field is required")
     path_value = artifact.get("path")
     if path_value is not None and not isinstance(path_value, str):
         errors.append("path must be a string or null")
@@ -216,7 +218,11 @@ def validate_artifact(
         field_name: _list_field(artifact, field_name, errors)
         for field_name in SUMMARY_COUNTS.values()
     }
-    proof_carries_value = artifact.get("proof_carries", [])
+    if "proof_carries" not in artifact:
+        errors.append("proof_carries field is required")
+        proof_carries_value = []
+    else:
+        proof_carries_value = artifact.get("proof_carries")
     if "proof_carries" in artifact and not isinstance(proof_carries_value, list):
         errors.append("proof_carries must be a list")
         proof_carries = []
@@ -244,10 +250,8 @@ def validate_artifact(
                 f"summary.proof_carries={observed_carries!r} "
                 f"but proof_carries has {len(proof_carries)} entries"
             )
-    elif proof_carries:
-        errors.append(
-            "summary.proof_carries is required when proof_carries is non-empty"
-        )
+    else:
+        errors.append("summary.proof_carries must be an integer")
 
     expected_strategies: dict[str, int] = {}
     for carry in proof_carries:
@@ -281,11 +285,8 @@ def validate_artifact(
                     "summary.proof_carry_strategies does not match "
                     "proof_carries"
                 )
-    elif proof_carries:
-        errors.append(
-            "summary.proof_carry_strategies is required when proof_carries "
-            "is non-empty"
-        )
+    else:
+        errors.append("summary.proof_carry_strategies must be an object")
 
     warning_errors = sum(
         1 for warning in lists["warning_diagnostics"]
@@ -419,12 +420,17 @@ def validate_artifact(
             "source path is required to verify artifacts with source_sha256"
         )
 
+    if source_hash is not None and not isinstance(path_value, str):
+        errors.append("path must be a string when input.source_sha256 is present")
+
     if source_path is not None and isinstance(path_value, str):
         artifact_source = Path(path_value)
         if not artifact_source.is_absolute() and artifact_dir is not None:
             artifact_source = Path(artifact_dir) / artifact_source
         if artifact_source.resolve() != Path(source_path).resolve():
             errors.append("proof artifact path mismatch against provided source")
+    elif source_path is not None:
+        errors.append("proof artifact path mismatch against provided source")
 
     if source_to_check is not None:
         if source_hash is None:

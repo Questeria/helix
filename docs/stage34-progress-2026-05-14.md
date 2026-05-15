@@ -442,3 +442,36 @@ before this fix set was committed:
 
 Those are now covered by additional typecheck, proof-gate, validator, and quick
 gate tests.
+
+## Clean Gate 1 Seventh Restart - Failed; Fix Verified; Counter Reset
+
+Fresh clean-gate auditors on commit `1487810` found two more Stage 34
+proof-honesty gaps:
+
+- `f32` predicate arithmetic rounded literal leaves but did not round each
+  arithmetic operation result back through `f32`. This let
+  `self + 1.0_f32 > 16777216.0_f32` prove true for
+  `self = 16777216.0_f32`, even though real `f32` arithmetic rounds the left
+  side to `16777216.0`.
+- Normal `proof_artifact_validate.py --source` still accepted source-backed
+  artifacts with `path: null`, and it also accepted artifacts where carried
+  proof metadata was stripped. `--require-clean` caught the forged artifacts by
+  recomputing, but plain validation now fails closed too.
+
+The fix threads the erased numeric base into refinement predicate evaluation,
+rounds `f32` predicate arithmetic results after each operation, disables affine
+real-number bound extraction for `f32` proof carries, stores local scalar consts
+through their declared representation, and requires source-backed proof
+artifacts to keep `path`, `proof_carries`, `summary.proof_carries`, and
+`summary.proof_carry_strategies`.
+
+Verification after this fix set:
+
+- Focused auditor regressions: `6 passed`
+- `python scripts\stage31_validate.py --mode quick --skip-snapshot`: pass
+- `python -m pytest -q helixc/tests/test_typecheck.py helixc/tests/test_cli.py helixc/tests/test_proof_artifact_validate.py helixc/tests/test_proof_artifact_gate.py`:
+  `467 passed`
+- `python scripts\stage31_validate.py --mode full --skip-snapshot --shards 8`:
+  pass across all 12 shards
+
+The clean-gate counter remains reset to `0/3`.

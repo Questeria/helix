@@ -975,6 +975,19 @@ def test_stage34_predicate_arithmetic_rejects_nonfinite_results():
                for e in carry_errs), carry_errs
 
 
+def test_stage34_f32_predicate_arithmetic_rounds_each_operation():
+    errs = check("""
+    type Above = f32 where self + 1.0_f32 > 16777216.0_f32;
+    fn f() -> Above {
+        16777216.0_f32
+    }
+    """)
+    assert any("return value of function 'f'" in e
+               and "value 16777216.0 does not satisfy "
+                   "(self + 1.0) > 16777216.0" in e
+               for e in errs), errs
+
+
 def test_stage34_fixed_point_preserves_unknown_type_errors():
     errs = check("""
     type AlwaysI32 = i32 where true;

@@ -240,6 +240,26 @@ def test_validate_rejects_forged_artifact_path_with_source_by_default(
     )
 
 
+def test_validate_rejects_null_artifact_path_with_source_by_default(
+    capsys, tmp_path,
+):
+    source_path, artifact_path, artifact = _real_artifact(capsys, tmp_path)
+    artifact["path"] = None
+    artifact_path.write_text(json.dumps(artifact), encoding="utf-8")
+
+    rc = proof_artifact_validate.main([
+        str(artifact_path), "--source", str(source_path),
+    ])
+    captured = capsys.readouterr()
+    assert rc == 1
+    assert "path must be a string when input.source_sha256 is present" in (
+        captured.err
+    )
+    assert "proof artifact path mismatch against provided source" in (
+        captured.err
+    )
+
+
 def test_validate_rejects_stale_artifact_path_by_default(capsys, tmp_path):
     source_path, artifact_path, _artifact = _real_artifact(capsys, tmp_path)
     source_path.write_text(
@@ -345,6 +365,34 @@ def test_validate_checks_stage34_proof_carry_records(capsys, tmp_path):
     assert "summary.proof_carry_strategies does not match" in captured.err
     assert "proof_carries[0].strategy" in captured.err
     assert "proof_carries[0].span.line must be an integer" in captured.err
+
+
+def test_validate_rejects_missing_proof_carry_metadata_by_default(
+    capsys, tmp_path,
+):
+    source_path, artifact_path, artifact = _real_artifact(
+        capsys,
+        tmp_path,
+        src=(
+            "type AtLeastOne = f64 where self >= 1.0;\n"
+            "type NonNegative = f64 where self >= 0.0;\n"
+            "fn lift(a: AtLeastOne) -> NonNegative { a }\n"
+        ),
+    )
+    assert artifact["summary"]["proof_carries"] == 1
+    artifact.pop("proof_carries")
+    artifact["summary"].pop("proof_carries")
+    artifact["summary"].pop("proof_carry_strategies")
+    artifact_path.write_text(json.dumps(artifact), encoding="utf-8")
+
+    rc = proof_artifact_validate.main([
+        str(artifact_path), "--source", str(source_path),
+    ])
+    captured = capsys.readouterr()
+    assert rc == 1
+    assert "proof_carries field is required" in captured.err
+    assert "summary.proof_carries must be an integer" in captured.err
+    assert "summary.proof_carry_strategies must be an object" in captured.err
 
 
 def test_validate_rejects_boolean_integer_fields(capsys, tmp_path):
@@ -488,12 +536,15 @@ def test_validate_source_unavailable_artifact_accepts_null_cache(capsys, tmp_pat
         },
         "summary": {
             "obligations": 0,
+            "proof_carries": 0,
             "pipeline_errors": 0,
             "typecheck_errors": 0,
             "warning_diagnostics": 0,
             "warning_errors": 0,
+            "proof_carry_strategies": {},
         },
         "obligations": [],
+        "proof_carries": [],
         "pipeline_errors": [],
         "typecheck_errors": [],
         "warning_diagnostics": [],
@@ -526,12 +577,15 @@ def test_validate_source_unavailable_requires_cache_key_field(capsys, tmp_path):
         },
         "summary": {
             "obligations": 0,
+            "proof_carries": 0,
             "pipeline_errors": 0,
             "typecheck_errors": 0,
             "warning_diagnostics": 0,
             "warning_errors": 0,
+            "proof_carry_strategies": {},
         },
         "obligations": [],
+        "proof_carries": [],
         "pipeline_errors": [],
         "typecheck_errors": [],
         "warning_diagnostics": [],
@@ -623,12 +677,15 @@ def test_require_clean_rejects_source_unavailable_artifact(capsys, tmp_path):
         },
         "summary": {
             "obligations": 0,
+            "proof_carries": 0,
             "pipeline_errors": 0,
             "typecheck_errors": 0,
             "warning_diagnostics": 0,
             "warning_errors": 0,
+            "proof_carry_strategies": {},
         },
         "obligations": [],
+        "proof_carries": [],
         "pipeline_errors": [],
         "typecheck_errors": [],
         "warning_diagnostics": [],

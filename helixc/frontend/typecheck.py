@@ -640,11 +640,12 @@ class TypeChecker:
             for decl in consts:
                 if decl.name in self._const_scalar_values:
                     continue
-                value = self._eval_const_scalar_expr(
-                    decl.value, None, honor_float_suffix=True)
                 target = self._const_index_target_type(decl)
                 if target is None:
                     continue
+                value = self._eval_const_scalar_expr(
+                    decl.value, None, honor_float_suffix=True,
+                    numeric_base=target)
                 represented = self._cast_const_scalar_to_type(value, target)
                 if (isinstance(represented, (int, float))
                         and not isinstance(represented, bool)):
@@ -1962,7 +1963,11 @@ class TypeChecker:
                 bind_ty = self._erase_refinement(ty)
             scope.define(stmt.name, bind_ty)
             const_value = self._eval_const_scalar_expr(
-                stmt.value, None, use_local_consts=True)
+                stmt.value, None, use_local_consts=True,
+                honor_float_suffix=True,
+                numeric_base=self._erase_refinement(ty))
+            const_value = self._cast_const_scalar_to_type(
+                const_value, self._erase_refinement(ty))
             if (len(self.errors) == stmt_error_start
                     and isinstance(const_value, (int, float))
                     and not isinstance(const_value, bool)):
@@ -3073,7 +3078,8 @@ class TypeChecker:
                 )
             return
         for pred in refined.predicates:
-            ok = self._eval_refinement_predicate(pred, represented)
+            ok = self._eval_refinement_predicate(
+                pred, represented, numeric_base=target_base)
             if ok is None:
                 self._record_refinement_obligation(
                     context, refined, pred, "unsupported", span, represented,
@@ -3164,7 +3170,8 @@ class TypeChecker:
                 ) and proved
             return proved
         for pred in refined.predicates:
-            ok = self._eval_refinement_predicate(pred, converted)
+            ok = self._eval_refinement_predicate(
+                pred, converted, numeric_base=target_base)
             if ok is None:
                 proved = False
                 self._record_refinement_obligation(
@@ -3308,7 +3315,8 @@ class TypeChecker:
         """
         pending: list[A.Expr] = []
         for pred in refined.predicates:
-            ok = self._eval_refinement_predicate(pred, None)
+            ok = self._eval_refinement_predicate(
+                pred, None, numeric_base=self._erase_refinement(refined))
             if ok is None and self._expr_mentions_self(pred):
                 pending.append(pred)
                 continue
@@ -3572,7 +3580,8 @@ class TypeChecker:
         lower: tuple[int | float, bool] | None = None
         upper: tuple[int | float, bool] | None = None
         for pred in self._refinement_predicate_exprs(ty):
-            bounds = self._refinement_predicate_bounds(pred)
+            bounds = self._refinement_predicate_bounds(
+                pred, self._erase_refinement(ty))
             if bounds is None:
                 return None
             for kind, value, inclusive in bounds:
@@ -3616,15 +3625,18 @@ class TypeChecker:
         return out
 
     def _refinement_predicate_bounds(
-        self, expr: A.Expr,
+        self, expr: A.Expr, numeric_base: Type | None = None,
     ) -> Optional[list[tuple[str, int | float, bool]]]:
         if isinstance(expr, A.BoolLit):
             return [] if expr.value else None
         if isinstance(expr, A.Unary) and expr.op == "!":
-            return self._negated_refinement_predicate_bounds(expr.operand)
+            return self._negated_refinement_predicate_bounds(
+                expr.operand, numeric_base)
         if isinstance(expr, A.Binary) and expr.op == "&&":
-            left = self._refinement_predicate_bounds(expr.left)
-            right = self._refinement_predicate_bounds(expr.right)
+            left = self._refinement_predicate_bounds(
+                expr.left, numeric_base)
+            right = self._refinement_predicate_bounds(
+                expr.right, numeric_base)
             if left is None or right is None:
                 return None
             return left + right
@@ -3636,11 +3648,13 @@ class TypeChecker:
         ops, operands = chain
         out: list[tuple[str, int | float, bool]] = []
         for left, op, right in zip(operands, ops, operands[1:]):
-            bounds = self._refinement_binary_bounds(left, op, right)
+            bounds = self._refinement_binary_bounds(
+                left, op, right, numeric_base)
             if bounds is None:
                 ok = self._eval_refinement_predicate(
                     A.Binary(left=left, op=op, right=right, span=expr.span),
                     None,
+                    numeric_base=numeric_base,
                 )
                 if ok is True:
                     continue
@@ -3649,12 +3663,13 @@ class TypeChecker:
         return out
 
     def _negated_refinement_predicate_bounds(
-        self, expr: A.Expr,
+        self, expr: A.Expr, numeric_base: Type | None = None,
     ) -> Optional[list[tuple[str, int | float, bool]]]:
         if isinstance(expr, A.BoolLit):
             return [] if not expr.value else None
         if isinstance(expr, A.Unary) and expr.op == "!":
-            return self._refinement_predicate_bounds(expr.operand)
+            return self._refinement_predicate_bounds(
+                expr.operand, numeric_base)
         if isinstance(expr, A.Binary) and expr.op in ("&&", "||"):
             return None
         chain = self._flatten_relational_chain(expr)
@@ -3667,7 +3682,7 @@ class TypeChecker:
         if negated_op is None:
             return None
         return self._refinement_binary_bounds(
-            operands[0], negated_op, operands[1])
+            operands[0], negated_op, operands[1], numeric_base)
 
     def _negate_comparison_op(self, op: str) -> str | None:
         return {
@@ -3681,8 +3696,12 @@ class TypeChecker:
 
     def _refinement_binary_bounds(
         self, left: A.Expr, op: str, right: A.Expr,
+        numeric_base: Type | None = None,
     ) -> Optional[list[tuple[str, int | float, bool]]]:
-        affine = self._refinement_affine_binary_bounds(left, op, right)
+        affine = None
+        if not self._numeric_base_is_f32(numeric_base):
+            affine = self._refinement_affine_binary_bounds(
+                left, op, right, numeric_base)
         if affine is not None:
             return affine
         left_is_self = self._expr_is_plain_self(left)
@@ -3691,17 +3710,20 @@ class TypeChecker:
             return None
         if left_is_self:
             value = self._eval_const_scalar_expr(
-                right, None, honor_float_suffix=True)
+                right, None, honor_float_suffix=True,
+                numeric_base=numeric_base)
             return self._bound_from_self_compare(op, value)
         value = self._eval_const_scalar_expr(
-            left, None, honor_float_suffix=True)
+            left, None, honor_float_suffix=True,
+            numeric_base=numeric_base)
         return self._bound_from_const_compare(op, value)
 
     def _refinement_affine_binary_bounds(
         self, left: A.Expr, op: str, right: A.Expr,
+        numeric_base: Type | None = None,
     ) -> Optional[list[tuple[str, int | float, bool]]]:
-        left_affine = self._refinement_affine_expr(left)
-        right_affine = self._refinement_affine_expr(right)
+        left_affine = self._refinement_affine_expr(left, numeric_base)
+        right_affine = self._refinement_affine_expr(right, numeric_base)
         if left_affine is None or right_affine is None:
             return None
         left_coeff, left_const = left_affine
@@ -3717,25 +3739,26 @@ class TypeChecker:
         return self._bound_from_self_compare(bound_op, bound_value)
 
     def _refinement_affine_expr(
-        self, expr: A.Expr,
+        self, expr: A.Expr, numeric_base: Type | None = None,
     ) -> Optional[tuple[int | float, int | float]]:
         if self._expr_is_plain_self(expr):
             return (1, 0)
         if not self._expr_mentions_self(expr):
             value = self._eval_const_scalar_expr(
-                expr, None, honor_float_suffix=True)
+                expr, None, honor_float_suffix=True,
+                numeric_base=numeric_base)
             if isinstance(value, (int, float)) and not isinstance(value, bool):
                 return (0, value)
             return None
         if isinstance(expr, A.Unary) and expr.op == "-":
-            inner = self._refinement_affine_expr(expr.operand)
+            inner = self._refinement_affine_expr(expr.operand, numeric_base)
             if inner is None:
                 return None
             coeff, const = inner
             return (-coeff, -const)
         if isinstance(expr, A.Binary) and expr.op in ("+", "-"):
-            left = self._refinement_affine_expr(expr.left)
-            right = self._refinement_affine_expr(expr.right)
+            left = self._refinement_affine_expr(expr.left, numeric_base)
+            right = self._refinement_affine_expr(expr.right, numeric_base)
             if left is None or right is None:
                 return None
             left_coeff, left_const = left
@@ -3744,8 +3767,8 @@ class TypeChecker:
                 return (left_coeff + right_coeff, left_const + right_const)
             return (left_coeff - right_coeff, left_const - right_const)
         if isinstance(expr, A.Binary) and expr.op == "*":
-            left = self._refinement_affine_expr(expr.left)
-            right = self._refinement_affine_expr(expr.right)
+            left = self._refinement_affine_expr(expr.left, numeric_base)
+            right = self._refinement_affine_expr(expr.right, numeric_base)
             if left is None or right is None:
                 return None
             if left[0] == 0:
@@ -3754,8 +3777,8 @@ class TypeChecker:
                 return (left[0] * right[1], left[1] * right[1])
             return None
         if isinstance(expr, A.Binary) and expr.op == "/":
-            left = self._refinement_affine_expr(expr.left)
-            right = self._refinement_affine_expr(expr.right)
+            left = self._refinement_affine_expr(expr.left, numeric_base)
+            right = self._refinement_affine_expr(expr.right, numeric_base)
             if left is None or right is None or right[0] != 0 or right[1] == 0:
                 return None
             return (left[0] / right[1], left[1] / right[1])
@@ -4293,18 +4316,22 @@ class TypeChecker:
         return False
 
     def _eval_refinement_predicate(
-        self, expr: A.Expr, self_value: int | float | bool,
+        self, expr: A.Expr, self_value: int | float | bool | None,
+        numeric_base: Type | None = None,
     ) -> Optional[bool]:
         if isinstance(expr, A.BoolLit):
             return expr.value
         if isinstance(expr, A.Unary) and expr.op == "!":
-            inner = self._eval_refinement_predicate(expr.operand, self_value)
+            inner = self._eval_refinement_predicate(
+                expr.operand, self_value, numeric_base=numeric_base)
             if inner is None:
                 return None
             return not inner
         if isinstance(expr, A.Binary) and expr.op in ("&&", "||"):
-            left = self._eval_refinement_predicate(expr.left, self_value)
-            right = self._eval_refinement_predicate(expr.right, self_value)
+            left = self._eval_refinement_predicate(
+                expr.left, self_value, numeric_base=numeric_base)
+            right = self._eval_refinement_predicate(
+                expr.right, self_value, numeric_base=numeric_base)
             if expr.op == "&&":
                 if left is False or right is False:
                     return False
@@ -4323,7 +4350,8 @@ class TypeChecker:
         if chain is not None:
             ops, operands = chain
             values = [self._eval_const_scalar_expr(
-                e, self_value, honor_float_suffix=True)
+                e, self_value, honor_float_suffix=True,
+                numeric_base=numeric_base)
                       for e in operands]
             if any(v is None for v in values):
                 return None
@@ -4349,6 +4377,7 @@ class TypeChecker:
     def _eval_const_scalar_expr(
         self, expr: A.Expr, self_value: int | float | bool | None,
         *, use_local_consts: bool = False, honor_float_suffix: bool = False,
+        numeric_base: Type | None = None,
     ) -> Optional[int | float | bool]:
         if isinstance(expr, A.IntLit):
             return expr.value
@@ -4374,19 +4403,24 @@ class TypeChecker:
                 expr.operand, self_value,
                 use_local_consts=use_local_consts,
                 honor_float_suffix=honor_float_suffix,
+                numeric_base=numeric_base,
             )
             if isinstance(inner, (int, float)) and not isinstance(inner, bool):
-                return self._finite_const_scalar_result(-inner)
+                return self._const_scalar_arithmetic_result(
+                    -inner, numeric_base)
             return None
         if isinstance(expr, A.Binary):
             if expr.op in ("<", "<=", ">", ">=", "==", "!=", "&&", "||"):
-                return self._eval_refinement_predicate(expr, self_value)
+                return self._eval_refinement_predicate(
+                    expr, self_value, numeric_base=numeric_base)
             left = self._eval_const_scalar_expr(
                 expr.left, self_value, use_local_consts=use_local_consts,
-                honor_float_suffix=honor_float_suffix)
+                honor_float_suffix=honor_float_suffix,
+                numeric_base=numeric_base)
             right = self._eval_const_scalar_expr(
                 expr.right, self_value, use_local_consts=use_local_consts,
-                honor_float_suffix=honor_float_suffix)
+                honor_float_suffix=honor_float_suffix,
+                numeric_base=numeric_base)
             if not (isinstance(left, (int, float))
                     and isinstance(right, (int, float))
                     and not isinstance(left, bool)
@@ -4394,18 +4428,33 @@ class TypeChecker:
                 return None
             try:
                 if expr.op == "+":
-                    return self._finite_const_scalar_result(left + right)
+                    return self._const_scalar_arithmetic_result(
+                        left + right, numeric_base)
                 if expr.op == "-":
-                    return self._finite_const_scalar_result(left - right)
+                    return self._const_scalar_arithmetic_result(
+                        left - right, numeric_base)
                 if expr.op == "*":
-                    return self._finite_const_scalar_result(left * right)
+                    return self._const_scalar_arithmetic_result(
+                        left * right, numeric_base)
                 if expr.op == "/" and right != 0:
-                    return self._finite_const_scalar_result(left / right)
+                    return self._const_scalar_arithmetic_result(
+                        left / right, numeric_base)
                 if expr.op == "%" and right != 0:
-                    return self._finite_const_scalar_result(left % right)
+                    return self._const_scalar_arithmetic_result(
+                        left % right, numeric_base)
             except (OverflowError, ValueError):
                 return None
         return None
+
+    def _const_scalar_arithmetic_result(
+        self, value: int | float, numeric_base: Type | None = None,
+    ) -> int | float | None:
+        if self._numeric_base_is_f32(numeric_base):
+            if not (isinstance(value, (int, float))
+                    and not isinstance(value, bool)):
+                return None
+            return self._round_const_scalar_to_f32(float(value))
+        return self._finite_const_scalar_result(value)
 
     def _finite_const_scalar_result(
         self, value: int | float,
@@ -4413,6 +4462,9 @@ class TypeChecker:
         if isinstance(value, float) and not math.isfinite(value):
             return None
         return value
+
+    def _numeric_base_is_f32(self, numeric_base: Type | None) -> bool:
+        return isinstance(numeric_base, TyPrim) and numeric_base.name == "f32"
 
     def _eval_float_lit_scalar(self, expr: A.FloatLit) -> float | None:
         suffix = expr.type_suffix
