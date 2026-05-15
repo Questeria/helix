@@ -1,5 +1,9 @@
 # Approach A: Full Bootstrap Port — Helix Compiled in Helix
 
+> Historical bootstrap plan: this document is superseded for live stage
+> tracking. Use `docs/ROADMAP.md` and `docs/stage35-progress-2026-05-15.md` for
+> the current Stage 35 status.
+
 **Goal:** `kovc.hx` (Helix bootstrap) compiles ALL programs that `helixc-Python` compiles, byte-identical. After completion, `helixc-Python` is dropped as a dependency. The final product builds from raw binary (hex0 → ... → kovc) without Python.
 
 **Constraints:**
@@ -258,7 +262,7 @@ Research agent (2026-05-07) flagged production-grade gaps. Integrated:
 ## Status
 
 - **Started:** 2026-05-07
-- **Current stage:** Stage 2.4b MUL+ unblocked; resuming sequence.
+- **Historical snapshot stage:** Stage 2.4b MUL+ unblocked; resuming sequence.
 - **Stages landed:** 1, 1.6, 1.7, 2.1, 2.2, 2.3, 2.4a, 2.4b-ADD, 2.4b-SUB, 2.5a
 - **Total stages:** 30 + 7 amendments + tooling appendix
 - **Estimated commits:** 200-400
@@ -281,7 +285,9 @@ Verified by re-running the original failing pattern (dead-code arm
 addition to expr_type) — passes now. Stage 2.4b MUL+ / 2.5b/c / 1.5 /
 3+ all unblocked. Headroom: ~4×.
 
-This document is the canonical plan. Each loop iteration reads it and resumes from the current stage.
+This document was the canonical bootstrap plan for this historical slice. Live
+stage tracking now resumes from `docs/ROADMAP.md` and
+`docs/stage35-progress-2026-05-15.md`.
 
 ---
 

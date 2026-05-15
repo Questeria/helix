@@ -1024,6 +1024,45 @@ Clean-gate status:
 - Stage 35 clean gates remain `0/3`.
 - Next step is another fresh Stage 35 clean gate on this fixed commit.
 
+## Increment 31 - Twelfth Clean-Gate Restart Fix Sweep
+
+The next fresh Stage 35 audit restart found stale live-stage documentation
+claims, and local runtime review found sibling invalid-shape matrix helpers in
+the same family as recent matvec/dense fixes. The gate did not count as clean
+and remains at `0/3`.
+
+Fixes landed in this increment:
+
+- `ti2d_matmul` and `tf2d_matmul` now treat non-positive matrix dimensions as
+  no-op cases before writing output matrices.
+- `tf2d_row_sum` and `tf2d_col_sum` now treat non-positive rows or columns as
+  no-op cases before writing destination vectors.
+- `docs/HELIX_V1_FINAL_FEATURES.md` and
+  `docs/HELIX_FINAL_PRODUCT_RESEARCH.md` now point current stage tracking at
+  Stage 35 instead of stale Stage 34 wording.
+- `docs/lang/hbs.md` now labels the 2026-05-04 HBS verification and 501-test
+  count as historical snapshot evidence, not current Stage 35 gate evidence.
+- `docs/APPROACH_A_PLAN.md` and `docs/APPROACH_A_DETAILED_PLAN.md` now carry
+  historical/superseded banners for live stage tracking.
+- Timed-out audit lanes were closed instead of being waited on indefinitely;
+  they will be relaunched fresh after this fix.
+
+Focused verification:
+
+- Per-file stdlib parser sweep across `STDLIB_FILES`
+  - Result: all stdlib files parsed.
+- `python -m pytest -q helixc\tests\test_codegen.py -k "negative_ti2d_matmul_shapes_do_not_write_outputs or negative_tf2d_matmul_shapes_do_not_write_outputs or negative_tf2d_row_col_sum_shapes_do_not_write_outputs or negative_dense_layer_f32_grad_x_shape_does_not_write_outputs or negative_tf1d_dot_with_offset_does_not_read_before_start or negative_tf1d_range_helpers_do_not_read_before_start or tensor_ti2d_matmul or tensor_f32_matmul or stdlib_tf2d_row_sum or stdlib_tf2d_col_sum" --tb=short`
+  - Result: 11 passed.
+- Docs scan for stale current-stage, historical test-count, stale tile-lowering,
+  dogfood, clean-gate, and source-rewrite wording
+  - Result: only an old Stage 34 progress-file reference remained; no Stage 35
+    contradiction.
+
+Clean-gate status:
+
+- Stage 35 clean gates remain `0/3`.
+- Next step is another fresh Stage 35 clean gate on this fixed commit.
+
 ## Next Work
 
 Likely follow-up slices:

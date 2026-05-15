@@ -114,9 +114,9 @@ function autonomous_robot(motor: cap Motor, sensor: cap Sensor) {
 ### 2.4 — Deadline / real-time types (obsolete Stage 34 label)
 
 Stage-numbering note: this section predates the live roadmap. `docs/ROADMAP.md`
-is authoritative for current stage numbers; current Stage 34 is Proof And
-Refinement Expansion. Deadline and WCET work remains important, but its older
-Stage 34 label is obsolete.
+is authoritative for current stage numbers; current Stage 35 is the AI/ML
+Capability Push in audit cleanup. Deadline and WCET work remains important, but
+its older Stage 34 label is obsolete.
 
 ```helix
 function emergency_brake() requires {

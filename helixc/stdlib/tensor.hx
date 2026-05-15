@@ -375,6 +375,10 @@ fn ti1d_ones(n: i32) -> i32 {
 //   A is (a_rows x a_cols), B is (a_cols x b_cols), C is (a_rows x b_cols).
 fn ti2d_matmul(a_start: i32, a_rows: i32, a_cols: i32,
                b_start: i32, b_cols: i32, c_start: i32) -> i32 {
+    if a_rows <= 0 { 0 }
+    else { if a_cols <= 0 { 0 }
+    else { if b_cols <= 0 { 0 }
+    else {
     let mut r: i32 = 0;
     while r < a_rows {
         let mut c: i32 = 0;
@@ -393,6 +397,7 @@ fn ti2d_matmul(a_start: i32, a_rows: i32, a_cols: i32,
         r = r + 1;
     }
     0
+    }}}
 }
 
 // Reshape: copy n elements from src to dst. (For row-major tensors a
@@ -534,6 +539,10 @@ fn tf1d_mul_scalar(x_start: i32, scalar: f32, y_start: i32, n: i32) -> i32 {
 //   A is (a_rows x a_cols), B is (a_cols x b_cols), C is (a_rows x b_cols).
 fn tf2d_matmul(a_start: i32, a_rows: i32, a_cols: i32,
                b_start: i32, b_cols: i32, c_start: i32) -> i32 {
+    if a_rows <= 0 { 0 }
+    else { if a_cols <= 0 { 0 }
+    else { if b_cols <= 0 { 0 }
+    else {
     let mut r: i32 = 0;
     while r < a_rows {
         let mut c: i32 = 0;
@@ -552,6 +561,7 @@ fn tf2d_matmul(a_start: i32, a_rows: i32, a_cols: i32,
         r = r + 1;
     }
     0
+    }}}
 }
 
 
@@ -873,6 +883,9 @@ fn tf1d_sum_in_range(start: i32, lo: i32, hi: i32) -> f32 {
 // tf2d_row_sum(start, rows, cols, dst): for each row r, write
 // sum(M[r, *]) to dst[r]. dst pre-allocated by caller (size = rows).
 fn tf2d_row_sum(start: i32, rows: i32, cols: i32, dst: i32) -> i32 {
+    if rows <= 0 { 0 }
+    else { if cols <= 0 { 0 }
+    else {
     let mut r: i32 = 0;
     while r < rows {
         let mut c: i32 = 0;
@@ -885,11 +898,15 @@ fn tf2d_row_sum(start: i32, rows: i32, cols: i32, dst: i32) -> i32 {
         r = r + 1;
     }
     0
+    }}
 }
 
 // tf2d_col_sum(start, rows, cols, dst): for each col c, write
 // sum(M[*, c]) to dst[c]. dst pre-allocated by caller (size = cols).
 fn tf2d_col_sum(start: i32, rows: i32, cols: i32, dst: i32) -> i32 {
+    if rows <= 0 { 0 }
+    else { if cols <= 0 { 0 }
+    else {
     let mut c: i32 = 0;
     while c < cols {
         let mut r: i32 = 0;
@@ -902,6 +919,7 @@ fn tf2d_col_sum(start: i32, rows: i32, cols: i32, dst: i32) -> i32 {
         c = c + 1;
     }
     0
+    }}
 }
 
 // tf1d_arange(start_val, n): allocate a new f32 vec of length n with

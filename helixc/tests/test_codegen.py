@@ -10399,6 +10399,23 @@ def test_tensor_ti2d_matmul():
     assert code == 69, f"expected 69 (19 + 50), got {code}"
 
 
+def test_negative_ti2d_matmul_shapes_do_not_write_outputs():
+    src = """
+    fn main() -> i32 {
+        let a = t1d_new(1);
+        __arena_set(a, 5);
+        let b = t1d_new(1);
+        __arena_set(b, 7);
+        let c = t1d_new(1);
+        __arena_set(c, 42);
+        ti2d_matmul(a, 1, 0 - 1, b, 1, c);
+        if __arena_get(c) == 42 { 42 } else { 7 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
 def test_tensor_reductions_min_mean_argmax():
     """Reductions: min, mean (floor), argmax."""
     src = """
@@ -10628,6 +10645,23 @@ def test_tensor_f32_matmul_nontrivial():
     """
     code = compile_and_run(src)
     assert code == 11, f"expected 11 (1*3 + 2*4), got {code}"
+
+
+def test_negative_tf2d_matmul_shapes_do_not_write_outputs():
+    src = """
+    fn main() -> i32 {
+        let a = t1d_new(1);
+        tf1d_set(a, 0, 5.0_f32);
+        let b = t1d_new(1);
+        tf1d_set(b, 0, 7.0_f32);
+        let c = t1d_new(1);
+        tf1d_set(c, 0, 42.0_f32);
+        tf2d_matmul(a, 1, 0 - 1, b, 1, c);
+        if (tf1d_get(c, 0) as i32) == 42 { 42 } else { 7 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
 
 
 def test_revad_grad_mul():
@@ -15527,6 +15561,26 @@ def test_stdlib_tf2d_col_sum():
         tf2d_col_sum(m, 2, 2, dst);
         let s = tf1d_get(dst, 0) + tf1d_get(dst, 1);
         __bits_of_f32(s) / 16777216 - 23
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_negative_tf2d_row_col_sum_shapes_do_not_write_outputs():
+    src = """
+    fn main() -> i32 {
+        let m = t1d_new(1);
+        tf1d_set(m, 0, 5.0_f32);
+        let row_dst = t1d_new(1);
+        tf1d_set(row_dst, 0, 42.0_f32);
+        tf2d_row_sum(m, 1, 0 - 1, row_dst);
+        if (tf1d_get(row_dst, 0) as i32) == 42 {
+            let col_dst = t1d_new(1);
+            tf1d_set(col_dst, 0, 42.0_f32);
+            tf2d_col_sum(m, 0 - 1, 1, col_dst);
+            if (tf1d_get(col_dst, 0) as i32) == 42 { 42 } else { 7 }
+        } else { 7 }
     }
     """
     code = compile_and_run(src)

@@ -1,6 +1,10 @@
 # Approach A: Detailed Implementation Plan — Stages 6-30
 
-**Purpose:** Per-stage implementation specifics for the Helix bootstrap port. Single source of truth so any subagent can pick up Stage N without re-reading the entire codebase.
+> Historical bootstrap plan: this document is superseded for live stage
+> tracking. Use `docs/ROADMAP.md` and `docs/stage35-progress-2026-05-15.md` for
+> the current Stage 35 status.
+
+**Purpose:** Historical per-stage implementation specifics for the Helix bootstrap port. It is no longer the single source of truth for the live stage.
 
 **Status snapshot (2026-05-08):** Stages 1-5 (Iter A complete, Iter B steps 1-4 complete) landed. Sequence resumes at Stage 5 Iter B step 5 (named field access), then Stage 6.
 

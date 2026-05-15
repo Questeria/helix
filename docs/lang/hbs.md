@@ -1,6 +1,8 @@
 # Helix Bootstrap Subset (HBS) — v0.1 spec
 
-**Status**: living draft — frozen pieces marked FROZEN, in-flux pieces marked DRAFT.
+**Status**: Historical HBS snapshot (2026-05-04, commit `cc9c01f`); not current
+Stage 35 gate evidence. Live stage tracking is in `docs/ROADMAP.md` and
+`docs/stage35-progress-2026-05-15.md`.
 **Date**: 2026-05-04
 **Goal**: identify the minimal Helix fragment needed to host a self-hosted compiler. Once HBS is closed the Python `helixc` becomes a parser + codegen shell while the rest of the compiler (typecheck, AD, IR passes) is itself written in Helix using only HBS features.
 
@@ -89,7 +91,7 @@ Phase 1: AST as first-class Helix value (WAVE1 #7) — promote `quote` from "sta
 
 Phase 2: migrate one pass at a time to Helix. Order suggested: DCE → const-fold → CSE → typecheck → IR lowering. Each migration is a separate PR with parity tests against Python.
 
-## What's verified today
+## Historical Snapshot Verification
 
 As of 2026-05-04 (commit `cc9c01f`):
 - AST hashing (`helixc.frontend.ast_hash.structural_hash`) covers all HBS expression types including Match, TupleLit, ArrayLit, Field, Range. `Quote`/`Splice`/`Modify` are reflection and OUT of HBS but hashed for content-addressing.
@@ -101,7 +103,8 @@ As of 2026-05-04 (commit `cc9c01f`):
 - Totality stub (`helixc.frontend.totality`) checks structural recursion for HBS shapes (`p - k`, `p / k`).
 - Diagnostic IO: `print_int(i32)` writes decimal to stdout; `print_str("...")` for literals.
 - Tooling: `helixc check` runs parse + typecheck + totality with source-with-caret error display and `--emit-ir` IR dump.
-- Test count: 501 (all green); 38 commits this session.
+- Historical test count at that snapshot: 501 green; 38 commits in that session.
+  This is not current Stage 35 gate evidence.
 
 ### Known limitations (deferred)
 - Pass-by-value of structs/enums to functions. Inside a fn, a struct/enum-typed parameter loses its array binding — payload extraction yields 0. Workaround: keep struct manipulation in main / one fn for now.
