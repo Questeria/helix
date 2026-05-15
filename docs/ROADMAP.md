@@ -71,8 +71,8 @@ These are blockers for any real ML training, in priority order.
 10. **Provenance-typed neuro-symbolic primitives** (`D<Logic<T>>`).
     Differentiable relational data with provenance semirings (Scallop /
     Lobster pattern). Statically-typed, gradient-traced symbolic
-    reasoning. **NO OTHER AI LANGUAGE HAS THIS.** This is the
-    strategic moat against Mojo/JAX/Triton — they're tensor-only.
+    reasoning. This is a strategic target against tensor-only AI stacks
+    like Mojo/JAX/Triton.
     Unlocks trainable knowledge graphs, gradient-traced planners,
     end-to-end-differentiable retrieval. **4-6 weeks for MVP.**
 
@@ -121,8 +121,8 @@ The quietly-load-bearing observation from research agent #1: Helix's
 combination of (a) compile-time-enforced effect system, (b)
 verifier-gated reflection runtime, (c) source-level reverse-mode AD,
 (d) memory-tier types, and (e) future provenance-typed
-neuro-symbolic primitives is a genuinely unoccupied niche. No other
-AI language hits this combination. The "better than existing on the
+neuro-symbolic primitives appears to be an under-served niche. The
+"better than existing on the
 AGI axis" target is achievable; the language doesn't need to win on
 GEMM throughput to win on AGI.
 

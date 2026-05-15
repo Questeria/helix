@@ -433,6 +433,40 @@ def test_stage35_direct_ptx_cli_includes_stdlib_by_default():
     assert "unbound name '__relu'" not in proc.stderr
 
 
+def test_stage35_direct_ptx_cli_strict_allows_clean_default_stdlib_kernel():
+    proc = run_ptx_cli("@kernel fn k() { let i = thread_idx(); }\n", "--strict")
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert ".visible .entry k" in proc.stdout
+    assert "effect-check warning" not in proc.stderr
+    assert "vec_push" not in proc.stderr
+
+
+def test_stage35_direct_ptx_cli_accepts_stdlib_compat_flag():
+    src = """
+    fn host(x: f32) -> f32 { __relu(x) }
+    @kernel fn k() { let i = thread_idx(); }
+    """
+    proc = run_ptx_cli(src, "--stdlib")
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert ".visible .entry k" in proc.stdout
+    assert "unknown flag --stdlib" not in proc.stderr
+
+
+def test_stage35_direct_ptx_cli_reports_missing_file_without_traceback():
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    missing = os.path.join(proj_root, "__definitely_missing_stage35__.hx")
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.backend.ptx", missing],
+        cwd=proj_root,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert proc.returncode != 0, proc.stdout + proc.stderr
+    assert "cannot read" in proc.stderr
+    assert "Traceback" not in proc.stderr
+
+
 def test_stage35_direct_ptx_cli_reports_parse_error_without_traceback():
     proc = run_ptx_cli("@kernel fn k( { let i = thread_idx(); }\n")
     assert proc.returncode != 0, proc.stdout + proc.stderr

@@ -10878,11 +10878,13 @@ def test_negative_length_tensor_nn_helpers_return_empty_values():
             if tf1d_argmax(fx, 0 - 1) == (0 - 1) {
             if tf1d_argmin(fx, 0 - 1) == (0 - 1) {
             if ti1d_is_empty(x, 0 - 1) == 1 {
+            if tf1d_is_empty(fx, 0 - 1) == 1 {
             if ti1d_first(x, 0 - 1) == 0 {
             if ti1d_last(x, 0 - 1) == 0 {
             if (tf1d_first(fx, 0 - 1) as i32) == 0 {
             if (tf1d_last(fx, 0 - 1) as i32) == 0 { 42 } else { 7 }
             } else { 7 }} else { 7 }} else { 7 }} else { 7 }} else { 7 }
+            } else { 7 }
             } else { 7 }} else { 7 }} else { 7 }} else { 7 }} else { 7 };
         ok
     }

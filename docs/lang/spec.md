@@ -1,7 +1,7 @@
 # Helix Language Specification (v0.1 draft)
 
 **Status**: living draft — updated as the implementation teaches us.
-**Date**: 2026-05-03
+**Date**: 2026-05-15
 
 Helix is a from-scratch programming language for AGI development and high-certainty computing. Kovostov is its first flagship system, but Helix is meant for any project that needs auditable, reproducible, uncertainty-aware software: AI/AGI, scientific research, medicine, genomics, physics, mathematics, robotics, infrastructure, and other domains where software should reason from evidence rather than hide assumptions. Designed to be (a) AI-author-friendly, (b) tile/tensor-native for GPU kernels, (c) compile cleanly to x86-64 and an early Phase-0 NVIDIA PTX subset without LLVM, (d) shape-typed with optional refinements.
 

@@ -1047,10 +1047,10 @@ fn tf1d_count_eq_zero(start: i32, n: i32) -> i32 {
     total
 }
 
-// tf1d_is_empty(start, n): @pure. 1 if n == 0.
+// tf1d_is_empty(start, n): @pure. 1 if n <= 0.
 @pure
 fn tf1d_is_empty(start: i32, n: i32) -> i32 {
-    if n == 0 { 1 } else { 0 }
+    if n <= 0 { 1 } else { 0 }
 }
 
 // ti1d_count_above(start, n, threshold): @pure. Count int elements > threshold.
@@ -1091,7 +1091,7 @@ fn ti1d_max_abs(start: i32, n: i32) -> i32 {
     best
 }
 
-// ti1d_is_empty(start, n): @pure. 1 if n == 0.
+// ti1d_is_empty(start, n): @pure. 1 if n <= 0.
 @pure
 fn ti1d_is_empty(start: i32, n: i32) -> i32 {
     if n <= 0 { 1 } else { 0 }

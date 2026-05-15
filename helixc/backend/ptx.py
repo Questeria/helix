@@ -642,6 +642,7 @@ if __name__ == "__main__":
     from ..ir.lower_ast import lower
     from ..ir.passes.const_fold import fold_module
     from ..ir.passes.cse import cse_module
+    from ..ir.passes.fdce import diagnostic_function_names
     from ..ir.passes.effect_check import (
         check_module as effect_check_module,
         report_diagnostics as report_effect_diagnostics,
@@ -649,7 +650,7 @@ if __name__ == "__main__":
     from ..ir.tile_ir import lower_to_tile
 
     cli_args = sys.argv[1:]
-    allowed_flags = {"--strict", "--no-stdlib"}
+    allowed_flags = {"--strict", "--stdlib", "--no-stdlib"}
     flags = {a for a in cli_args if a.startswith("-")}
     unknown_flags = sorted(flags - allowed_flags)
     if unknown_flags:
@@ -666,8 +667,12 @@ if __name__ == "__main__":
     if not paths:
         src = sys.stdin.read()
     else:
-        with open(paths[0]) as f:
-            src = f.read()
+        try:
+            with open(paths[0]) as f:
+                src = f.read()
+        except OSError as e:
+            print(f"error: ptx: cannot read {paths[0]}: {e}", file=sys.stderr)
+            sys.exit(1)
     try:
         prog = parse(src, filename=filename, include_stdlib=include_stdlib)
     except LexError as e:
@@ -721,21 +726,28 @@ if __name__ == "__main__":
     try:
         grad_pass(prog)
         tir_mod = lower(prog)
-        pre_eff = effect_check_module(tir_mod)
-        pre_hard = report_effect_diagnostics(pre_eff, stderr=sys.stderr)
-        if pre_hard > 0 and strict:
-            print(
-                f"\n{pre_hard} effect-check warning(s); --strict aborts.",
-                file=sys.stderr,
-            )
-            sys.exit(1)
+        pre_effect_scope = None
+        if include_stdlib:
+            pre_effect_scope = diagnostic_function_names(tir_mod)
+        pre_eff = effect_check_module(
+            tir_mod, only_functions=pre_effect_scope)
         fold_module(tir_mod)
         cse_module(tir_mod)
-        post_eff = effect_check_module(tir_mod)
-        post_hard = report_effect_diagnostics(post_eff, stderr=sys.stderr)
-        if post_hard > 0 and strict:
+        post_effect_scope = None
+        if include_stdlib:
+            post_effect_scope = diagnostic_function_names(tir_mod)
+        post_eff = effect_check_module(
+            tir_mod, only_functions=post_effect_scope)
+        eff_errs = list(pre_eff)
+        seen_eff_errs = set(eff_errs)
+        for err in post_eff:
+            if err not in seen_eff_errs:
+                eff_errs.append(err)
+                seen_eff_errs.add(err)
+        hard_count = report_effect_diagnostics(eff_errs, stderr=sys.stderr)
+        if hard_count > 0 and strict:
             print(
-                f"\n{post_hard} effect-check warning(s); --strict aborts.",
+                f"\n{hard_count} effect-check warning(s); --strict aborts.",
                 file=sys.stderr,
             )
             sys.exit(1)

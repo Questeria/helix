@@ -1,7 +1,8 @@
 # Helix AGI-specific language features
 
-These are the things in Helix that **no other language has**. The C-equivalent
-foundation (loops, arrays, floats) exists to make these implementable.
+These are the AGI-focused combinations Helix is being built to make first-class.
+The C-equivalent foundation (loops, arrays, floats) exists to make these
+implementable.
 
 ## 1. Reflection: `quote` and `splice`
 
@@ -14,11 +15,11 @@ let ast = quote { fib(n - 1) + fib(n - 2) };
 
 `splice(ast)` does the inverse — re-injects an AST value into source position.
 
-**This is unique because**: most languages have macros that run at compile-time
+**Differentiator target**: most languages have macros that run at compile-time
 only. Helix's `quote` produces *runtime values* of type `AstNode`. The AGI can
-read its own source, transform it, splice it, and run the result. None of:
-C, C++, Rust, Mojo, Zig, Triton, JAX, Julia, Python — have this with the same
-combination of static-typing + first-class runtime AST values.
+read its own source, transform it, splice it, and run the result. Mainstream
+systems and AI languages usually offer pieces of this, not the same combination
+of static typing plus first-class runtime AST values.
 
 **Closest precedent**: Lisp `(quote ...)`, Scheme syntax-rules, Rust proc-macros
 (but compile-time only), Julia `:expr` (but not statically typed). Helix is a
@@ -256,10 +257,10 @@ formally expresses, at the type level:
 - The function is implicitly `@pure` so the compiler enforces it cannot do
   I/O, network, or `modify_self`
 
-No other AI language (Mojo, Triton, JAX, Julia, PyTorch, TensorFlow,
-Rust+Burn, Swift-for-TF) expresses all four of these at the type level.
-Mojo and Hasktorch get partial credit for shape; nothing else has the
-combination.
+Helix's target is to express all four of these at the type level in one
+language. Mojo and Hasktorch get partial credit for shape; the strategic goal is
+to combine shape, memory tiers, differentiability, and effect constraints in the
+same type-level surface.
 
 See `helixc/examples/agi_demo.hx` for a working demonstration that
 typechecks cleanly with all four features stacked.

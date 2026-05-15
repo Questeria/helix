@@ -777,3 +777,58 @@ Clean-gate status:
 
 - Stage 35 clean gates remain `0/3`.
 - Next step is another fresh Stage 35 clean gate on this fixed commit.
+
+## Increment 26 - Seventh Clean-Gate Restart Fix Sweep
+
+The next fresh Stage 35 audit restart found one remaining tensor negative-length
+sentinel gap, direct PTX CLI parity drift, and public-documentation overclaiming,
+so the gate did not count as clean and remains at `0/3`.
+
+Fixes landed in this increment:
+
+- `tf1d_is_empty` now treats `n <= 0` as empty, matching the hardened integer
+  mirror and the rest of the f32 empty/sentinel helpers.
+- The negative-length tensor/NN regression now explicitly covers
+  `tf1d_is_empty(fx, -1)`.
+- The standalone PTX CLI now accepts `--stdlib` as the compatibility spelling of
+  the default bundled-stdlib mode.
+- Direct PTX effect checking now scopes bundled-stdlib diagnostics the same way
+  `helixc.check --emit-ptx` does, so clean strict kernels are not failed by
+  unused stdlib helper warnings.
+- Direct PTX missing-file errors now render as clean user-facing diagnostics
+  instead of Python tracebacks.
+- Public docs now frame AGI feature claims as Helix differentiator targets and
+  under-served combinations instead of absolute "no other language" claims.
+- The living language spec date now reflects the Stage 35 update.
+
+Focused verification:
+
+- `python -m py_compile helixc\backend\ptx.py`
+  - Result: passed.
+- `python -m pytest -q helixc\tests\test_codegen.py -k "negative_length_tensor_nn_helpers_return_empty_values" --tb=short`
+  - Result: 1 passed.
+- `python -m pytest -q helixc\tests\test_ptx.py -k "stage35_direct_ptx_cli_strict_allows_clean_default_stdlib_kernel or stage35_direct_ptx_cli_accepts_stdlib_compat_flag or stage35_direct_ptx_cli_reports_missing_file_without_traceback or stage35_direct_ptx_cli_strict_rejects_effect_violation or stage35_direct_ptx_cli_includes_stdlib_by_default or stage35_direct_ptx_cli_reports_parse_error_without_traceback" --tb=short`
+  - Result: 6 passed.
+- Public docs uniqueness/date scan for broad "no other language" claims and old
+  spec date
+  - Result: no matches.
+- `python -m pytest -q helixc\tests\test_codegen.py -k "nn_ or stage35 or softmax or ce_loss or dense_classifier_sgd_step_f32 or adam_f32_step or builtin_adam_step or revad_ or grad_rev_all_writes_f64 or negative_length_tensor_nn_helpers or builtin_bce_uses_stable_log_near_zero or builtin_bce_and_nn_bce_are_stable_near_one" --tb=short`
+  - Result: 79 passed.
+- `python -m pytest -q helixc\tests\test_ptx.py helixc\tests\test_tile_ir.py helixc\tests\test_autotune.py helixc\tests\test_cli.py -k "emit_ptx or ptx or tile_ir or autotune or unwind or unsafe or trace or stage35" --tb=short`
+  - Result: 114 passed.
+- `python -m pytest -q helixc\tests\test_autodiff.py helixc\tests\test_autodiff_reverse.py helixc\tests\test_pytree.py --tb=short`
+  - Result: 90 passed.
+- `python scripts\stage31_validate.py --mode quick --skip-snapshot`
+  - Result: passed, `stage31-quick: rc=0`.
+- `python -m pytest -q helixc\tests\test_codegen.py -k "stage13 or grad_rejects_opaque_call_in_loss or grad_rev_rejects_opaque_call_in_loss or grad_pass_preserves_f64_gradient_signature or grad_rev_all or grad_rev or grad_rejects_aggregate_param or scalar_target_when_sibling_aggregate" --tb=short`
+  - Result: 23 passed.
+- `git diff --check`
+  - Result: passed.
+- Stage/docs stale-claim scan for historic stage labels and old gradient/PTX/f64
+  claims
+  - Result: no matches.
+
+Clean-gate status:
+
+- Stage 35 clean gates remain `0/3`.
+- Next step is another fresh Stage 35 clean gate on this fixed commit.
