@@ -10416,6 +10416,22 @@ def test_negative_ti2d_matmul_shapes_do_not_write_outputs():
     assert code == 42, f"expected 42, got {code}"
 
 
+def test_overflow_t2d_len_and_alloc_do_not_alias_next_slot():
+    src = """
+    fn main() -> i32 {
+        if t2d_len(50000, 50000) == 0 {
+            let m = tf2d_zeros(50000, 50000);
+            let guard = t1d_new(1);
+            tf1d_set(guard, 0, 42.0_f32);
+            tf2d_set(m, 50000, 0, 0, 1.0_f32);
+            if (tf1d_get(guard, 0) as i32) == 42 { 42 } else { 7 }
+        } else { 7 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
 def test_tensor_reductions_min_mean_argmax():
     """Reductions: min, mean (floor), argmax."""
     src = """

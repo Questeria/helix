@@ -43,7 +43,14 @@
 
 @pure fn t2d_len(rows: i32, cols: i32) -> i32 {
     if rows <= 0 { 0 }
-    else { if cols <= 0 { 0 } else { rows * cols } }
+    else { if cols <= 0 { 0 }
+    else { if rows > 2147483647 / cols { 0 } else { rows * cols } } }
+}
+
+@pure fn t2d_alloc_len(rows: i32, cols: i32) -> i32 {
+    if rows <= 0 { 0 }
+    else { if cols <= 0 { 0 }
+    else { if rows > 2147483647 / cols { 1 } else { rows * cols } } }
 }
 
 fn t1d_set_i32_bits(start: i32, i: i32, bits: i32) -> i32 {
@@ -100,7 +107,7 @@ fn ti1d_axpy(y_start: i32, a: i32, x_start: i32, n: i32) -> i32 {
 
 // 2D row-major access: M[i,j] lives at slot start + i*cols + j.
 @pure fn ti2d_new(rows: i32, cols: i32) -> i32 {
-    let n = t2d_len(rows, cols);
+    let n = t2d_alloc_len(rows, cols);
     t1d_new(n)
 }
 
@@ -1040,12 +1047,12 @@ fn tf2d_norm_frobenius_sq(start: i32, rows: i32, cols: i32) -> f32 {
 // tf2d_zeros(rows, cols): allocate a new rows*cols matrix filled with 0.0_f32.
 @pure
 fn tf2d_zeros(rows: i32, cols: i32) -> i32 {
-    t1d_new(t2d_len(rows, cols))
+    t1d_new(t2d_alloc_len(rows, cols))
 }
 
 // tf2d_ones(rows, cols): allocate a new rows*cols matrix filled with 1.0_f32.
 fn tf2d_ones(rows: i32, cols: i32) -> i32 {
-    let n = t2d_len(rows, cols);
+    let n = t2d_alloc_len(rows, cols);
     let s = t1d_new(n);
     let one_bits = __bits_of_f32(1.0_f32);
     let mut i: i32 = 0;

@@ -1105,6 +1105,47 @@ Clean-gate status:
 - Stage 35 clean gates remain `0/3`.
 - Next step is another fresh Stage 35 clean gate on this fixed commit.
 
+## Increment 33 - Fourteenth Clean-Gate Restart Fix Sweep
+
+The next fresh Stage 35 audit restart found reverse-AD match-alias gradient
+loss, 2D tensor length overflow aliasing, non-pure `--emit-ptx` stdout, and
+several stale documentation claims. The gate did not count as clean and remains
+at `0/3`.
+
+Fixes landed in this increment:
+
+- Reverse-mode AD now fails closed for match pattern bindings that alias a
+  differentiable scrutinee instead of silently returning zero gradients.
+- `t2d_len` now returns zero on positive dimension overflow, and 2D constructors
+  use an allocation length helper that reserves a sentinel slot for positive
+  overflow so invalid handles do not alias the next allocation.
+- `helixc.check --emit-ptx` now routes progress/status text to stderr so stdout
+  starts with the PTX module.
+- Tutorial and research docs now avoid stale example counts, unsupported
+  competitor-exclusivity wording, and unmarked pre-Stage-29 snapshot context.
+
+Focused verification:
+
+- Per-file stdlib parser sweep across `STDLIB_FILES`
+  - Result: all stdlib files parsed.
+- `python -m py_compile helixc\check.py helixc\frontend\autodiff_reverse.py`
+  - Result: passed.
+- `python -m pytest -q helixc\tests\test_autodiff_reverse.py -k "match_bind_alias_of_scrutinee_fails_closed or match_with_pattern_shadow_is_zero or match_bool_propagates_per_arm" --tb=short`
+  - Result: 3 passed.
+- `python -m pytest -q helixc\tests\test_codegen.py -k "overflow_t2d_len_and_alloc_do_not_alias_next_slot or negative_ti2d_matmul_shapes_do_not_write_outputs or negative_tf2d_matmul_shapes_do_not_write_outputs" --tb=short`
+  - Result: 3 passed.
+- `python -m pytest -q helixc\tests\test_cli.py -k "stage35_emit_ptx_stdout_starts_with_ptx_module or c117_emit_ptx_uses_kernel_attrs" --tb=short`
+  - Result: 2 passed.
+- Docs scan for stale tutorial/research/current-stage/canonical-plan/tile/dogfood
+  and clean-gate wording
+  - Result: only an old Stage 34 progress-file reference remained; no Stage 35
+    contradiction.
+
+Clean-gate status:
+
+- Stage 35 clean gates remain `0/3`.
+- Next step is another fresh Stage 35 clean gate on this fixed commit.
+
 ## Next Work
 
 Likely follow-up slices:

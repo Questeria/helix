@@ -1,7 +1,7 @@
 # Helix tutorial — getting started
 
 This guide walks through the core of Helix in 10 short steps, ending with
-a program that uses every unique compile-time AGI feature.
+a program that combines several AGI-oriented type-level Helix features.
 
 Every example here parses, type-checks, and (where applicable) compiles
 through the current `helixc` toolchain. Examples run through the same
@@ -267,7 +267,8 @@ This combination is an intended Helix differentiator at the type level.
 
 ## Where to go from here
 
-- Run `python helixc/tests/test_typecheck.py` to see ~38 examples.
+- Run `python -m pytest -q helixc/tests/test_typecheck.py` to see the current
+  type-check surface.
 - Read `helixc/examples/*.hx` for working programs.
 - See `docs/lang/spec.md` for the full language reference.
 - See `docs/lang/agi-features.md` for the AGI-specific feature deep-dive.

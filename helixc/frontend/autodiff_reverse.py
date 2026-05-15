@@ -405,9 +405,18 @@ def _propagate(node: A.Expr, adj: A.Expr, acc: dict[str, list[A.Expr]]) -> None:
         # per-arm gradient contributions. Discrete choice → scrutinee has
         # zero local derivative. Pattern-bound names (PatBind) are local
         # to the arm; if they shadow a param, that param's contribution
-        # inside the arm is dropped (the shadow shadows). If a body's
-        # gradient depends on the scrutinee through a PatBind alias, that
-        # is NOT propagated back to the scrutinee — known limitation.
+        # inside the arm is dropped (the shadow shadows). A PatBind alias of a
+        # differentiable scrutinee is not yet rewritten into the arm body, so
+        # fail closed instead of silently returning a zero gradient.
+        if _expr_depends_on_param(node.scrutinee, set(acc.keys())):
+            for arm in node.arms:
+                if _pattern_binds_any(arm.pattern):
+                    raise NotImplementedError(
+                        "reverse-mode AD does not support match pattern "
+                        "bindings that alias a differentiable scrutinee; "
+                        "rewrite the arm to use the original value or add "
+                        "alias propagation"
+                    )
         arm_accs: list[dict[str, list[A.Expr]]] = [
             {p: [] for p in acc} for _ in node.arms
         ]
@@ -492,6 +501,28 @@ def _pattern_shadowed_names(pat: A.Pattern, candidates: set[str]) -> set[str]:
             out |= _pattern_shadowed_names(sub, candidates)
         return out
     return set()
+
+
+def _expr_depends_on_param(expr: A.Expr, candidates: set[str]) -> bool:
+    path = _field_path(expr)
+    if path is not None:
+        return any(
+            path == c or path.startswith(c + ".") or c.startswith(path + ".")
+            for c in candidates
+        )
+    return False
+
+
+def _pattern_binds_any(pat: A.Pattern) -> bool:
+    if isinstance(pat, A.PatBind):
+        return True
+    if isinstance(pat, A.PatOr):
+        return any(_pattern_binds_any(alt) for alt in pat.alts)
+    if isinstance(pat, A.PatTuple):
+        return any(_pattern_binds_any(sub) for sub in pat.elems)
+    if isinstance(pat, A.PatVariant):
+        return any(_pattern_binds_any(sub) for sub in (pat.sub_patterns or []))
+    return False
 
 
 def _has_related_target(path: str, acc: dict[str, list[A.Expr]]) -> bool:

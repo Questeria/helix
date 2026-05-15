@@ -1,5 +1,9 @@
 # Helix Pre-Self-Host Feature Research
 
+> Historical pre-Stage-29 research snapshot; not live gate evidence for Stage
+> 35. Live status is tracked in `docs/ROADMAP.md` and
+> `docs/stage35-progress-2026-05-15.md`.
+
 **Date**: 2026-05-10
 **Context**: Before Stage 29 (drop Python reference), what should Helix add?
 **Scope**: Read-only research. No source modifications.
@@ -9,7 +13,7 @@
 
 ## Executive Summary
 
-Helix as of Stage 28.8 is a remarkably complete ML-first systems language. The
+At this snapshot, Helix as of Stage 28.8 was a remarkably complete ML-first systems language. The
 core language carries twelve scalar types (i8..u64 + bf16/f16/f32/f64), full
 sum types, pattern matching with exhaustiveness checking, generics with trait
 bounds, closures lowered through env-passing, modules + impl blocks, raw-binary

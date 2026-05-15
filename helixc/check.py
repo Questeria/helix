@@ -895,10 +895,18 @@ def _main_inner(argv: list[str] | None,
         print(extract_doc_comments(src))
         return 0
 
-    def info(msg: str) -> None:
-        print(msg, file=sys.stderr if proof_mode else sys.stdout)
+    artifact_stdout_mode = "--emit-ptx" in a.flags
 
-    print(f"-- helixc-check: {path}", file=sys.stderr if proof_mode else sys.stdout)
+    def info(msg: str) -> None:
+        print(
+            msg,
+            file=sys.stderr if proof_mode or artifact_stdout_mode else sys.stdout,
+        )
+
+    print(
+        f"-- helixc-check: {path}",
+        file=sys.stderr if proof_mode or artifact_stdout_mode else sys.stdout,
+    )
     # Audit 28.8 cycle 2 C2-1: register CliArgs so the outer wrapper
     # can drain AD warnings on ANY return below (including error paths).
     a_holder.append(a)
@@ -1180,7 +1188,7 @@ def _main_inner(argv: list[str] | None,
             )
             return 1
     else:
-        print(f"   totality:  OK")
+        info(f"   totality:  OK")
 
     # Stage 28.7: @deprecated pass. Runs the Python-side walker and
     # collects warnings; the -Wdeprecated=error flag promotes them.

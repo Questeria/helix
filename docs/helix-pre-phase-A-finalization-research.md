@@ -1,5 +1,9 @@
 # Helix Pre-Phase-A Finalization Research
 
+> Historical pre-Stage-29 research snapshot; not live gate evidence for Stage
+> 35. Live status is tracked in `docs/ROADMAP.md` and
+> `docs/stage35-progress-2026-05-15.md`.
+
 **Date**: 2026-05-11
 **Context**: Stage 28.8 (pre-29 audit gate) is essentially closed after 11
 audit cycles (cycle 11 cleaning advances counter to 5/5 per cycle-11
@@ -624,8 +628,8 @@ Phase A's 28.13 ergonomics commit batch.
 
 ### D4. Test parity
 
-Ran `python -m pytest helixc/tests --collect-only -q | tail -5` →
-1430 tests collected. Spot-checked which tests use Python-only features
+At that snapshot, `python -m pytest helixc/tests --collect-only -q | tail -5`
+reported 1430 collected tests. Spot-checked which tests use Python-only features
 that wouldn't work post-Stage-29:
 
 - `test_autodiff.py` / `test_autodiff_parity.py` / `test_autodiff_reverse.py`:

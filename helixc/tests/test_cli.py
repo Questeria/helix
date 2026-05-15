@@ -208,6 +208,24 @@ def test_c117_emit_ptx_uses_kernel_attrs(capsys):
     assert "no @kernel fns" not in captured.out
 
 
+def test_stage35_emit_ptx_stdout_starts_with_ptx_module(tmp_path):
+    src_path = tmp_path / "kernel.hx"
+    src_path.write_text("@kernel fn k() { let i = thread_idx(); }\n", encoding="utf-8")
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.check", str(src_path), "--emit-ptx"],
+        cwd=proj_root,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert proc.stdout.lstrip().startswith(".version"), proc.stdout
+    assert "-- helixc-check:" not in proc.stdout
+    assert "parse:" not in proc.stdout
+    assert "typecheck:" not in proc.stdout
+
+
 def test_c119_emit_ptx_rejects_no_kernel_modules(capsys):
     src = write_src("fn helper(x: i32) -> i32 { x + 1 }\n")
     try:

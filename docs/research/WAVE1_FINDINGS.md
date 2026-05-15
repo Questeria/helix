@@ -96,9 +96,9 @@ Ryzen 9950X):
 The ML-from-scratch agent concluded the single largest novelty win is
 a Helix-native pipeline where weight updates are conditional on
 Lean-verified properties of the resulting model, with rewards from
-formal verifiers rather than human labels. No existing AGI project
-has fully built this; it's the unique combination Helix's substrate
-enables.
+formal verifiers rather than human labels. The intended differentiator is
+combining verifier-gated weight updates, formal reward signals, and Helix's
+effect/provenance substrate in one language/runtime.
 
 ## Recommended implementation order (next ~4 months)
 

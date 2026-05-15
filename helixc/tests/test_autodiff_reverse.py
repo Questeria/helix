@@ -5,6 +5,7 @@ are exercised end-to-end via test_codegen tests for grad_rev(...)."""
 
 from __future__ import annotations
 import os, sys
+import pytest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 from helixc.frontend.parser import parse
@@ -162,6 +163,18 @@ def test_match_with_pattern_shadow_is_zero():
     grads = differentiate_reverse(body, ["x"])
     out = fmt(grads["x"])
     assert out == "0", f"shadowed param should give 0, got {out}"
+
+
+def test_stage35_match_bind_alias_of_scrutinee_fails_closed():
+    body = _body_of("""
+    fn f(x: f32) -> f32 {
+        match x {
+            y => y * y
+        }
+    }
+    """)
+    with pytest.raises(NotImplementedError, match="match pattern bindings"):
+        differentiate_reverse(body, ["x"])
 
 
 def test_stage35_match_pattern_shadow_covers_field_leaves():
