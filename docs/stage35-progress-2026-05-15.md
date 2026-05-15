@@ -64,6 +64,25 @@ Initial focused checks:
 - `python scripts\stage31_validate.py --mode quick --skip-snapshot`
   - Result: passed, `stage31-quick: rc=0`.
 
+## Increment 10 - f32 Dense-Layer Backprop Helpers
+
+The Helix neural-network stdlib now includes dense-layer gradient helpers for
+`y = W @ x + b`:
+
+- `dense_layer_f32_grad_w`
+- `dense_layer_f32_grad_b`
+- `dense_layer_f32_grad_x`
+
+These compute gradients for weights, bias, and inputs. This is a core step
+toward training multi-layer models directly in Helix.
+
+Focused verification:
+
+- `python -m pytest -q helixc\tests\test_codegen.py -k "dense_layer_f32_grad or dense_layer_f32_forward or tf2d_matvec or sgd_f32_step" --tb=short`
+  - Result: 5 passed, 763 deselected.
+- `python scripts\stage31_validate.py --mode quick --skip-snapshot`
+  - Result: passed, `stage31-quick: rc=0`.
+
 ## Increment 9 - f32 Classification Helpers
 
 The Helix neural-network stdlib now includes:

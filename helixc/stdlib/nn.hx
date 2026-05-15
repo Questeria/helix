@@ -204,6 +204,52 @@ fn dense_layer_f32_forward(w_start: i32, w_rows: i32, w_cols: i32,
     0
 }
 
+// Dense layer backward helpers for y = W @ x + b.
+// grad_w[r, c] = grad_y[r] * x[c]
+fn dense_layer_f32_grad_w(dy_start: i32, x_start: i32,
+                          grad_w_start: i32, rows: i32, cols: i32) -> i32 {
+    let mut r: i32 = 0;
+    while r < rows {
+        let dy = __f32_from_bits(__arena_get(dy_start + r));
+        let mut c: i32 = 0;
+        while c < cols {
+            let x = __f32_from_bits(__arena_get(x_start + c));
+            __arena_set(grad_w_start + r * cols + c, __bits_of_f32(dy * x));
+            c = c + 1;
+        }
+        r = r + 1;
+    }
+    0
+}
+
+fn dense_layer_f32_grad_b(dy_start: i32, grad_b_start: i32, rows: i32) -> i32 {
+    let mut r: i32 = 0;
+    while r < rows {
+        __arena_set(grad_b_start + r, __arena_get(dy_start + r));
+        r = r + 1;
+    }
+    0
+}
+
+// grad_x[c] = sum_r W[r, c] * grad_y[r]
+fn dense_layer_f32_grad_x(w_start: i32, dy_start: i32,
+                          grad_x_start: i32, rows: i32, cols: i32) -> i32 {
+    let mut c: i32 = 0;
+    while c < cols {
+        let mut r: i32 = 0;
+        let mut acc: f32 = 0.0_f32;
+        while r < rows {
+            let w = __f32_from_bits(__arena_get(w_start + r * cols + c));
+            let dy = __f32_from_bits(__arena_get(dy_start + r));
+            acc = acc + w * dy;
+            r = r + 1;
+        }
+        __arena_set(grad_x_start + c, __bits_of_f32(acc));
+        c = c + 1;
+    }
+    0
+}
+
 // Leaky ReLU.
 fn leaky_relu_layer(x_start: i32, alpha: f32, y_start: i32, n: i32) -> i32 {
     let mut i: i32 = 0;

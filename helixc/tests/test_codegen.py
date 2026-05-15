@@ -9282,6 +9282,62 @@ def test_nn_sgd_f32_step():
     assert code == 57, f"expected 57, got {code}"
 
 
+def test_nn_dense_layer_f32_grad_w():
+    """dy=[2,3], x=[5,7] -> grad_w sum=60; -18=42."""
+    src = """
+    fn main() -> i32 {
+        let dy = t1d_new(2);
+        tf1d_set(dy, 0, 2.0_f32);
+        tf1d_set(dy, 1, 3.0_f32);
+        let x = t1d_new(2);
+        tf1d_set(x, 0, 5.0_f32);
+        tf1d_set(x, 1, 7.0_f32);
+        let gw = t1d_new(4);
+        dense_layer_f32_grad_w(dy, x, gw, 2, 2);
+        (tf1d_sum(gw, 4) as i32) - 18
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_nn_dense_layer_f32_grad_b():
+    """grad_b copies dy=[2,3]. sum=5; *10-8=42."""
+    src = """
+    fn main() -> i32 {
+        let dy = t1d_new(2);
+        tf1d_set(dy, 0, 2.0_f32);
+        tf1d_set(dy, 1, 3.0_f32);
+        let gb = t1d_new(2);
+        dense_layer_f32_grad_b(dy, gb, 2);
+        ((tf1d_sum(gb, 2) * 10.0_f32) as i32) - 8
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_nn_dense_layer_f32_grad_x():
+    """W=[[1,2],[3,4]], dy=[5,7] -> grad_x=[26,38], sum=64; -22=42."""
+    src = """
+    fn main() -> i32 {
+        let w = t1d_new(4);
+        tf1d_set(w, 0, 1.0_f32);
+        tf1d_set(w, 1, 2.0_f32);
+        tf1d_set(w, 2, 3.0_f32);
+        tf1d_set(w, 3, 4.0_f32);
+        let dy = t1d_new(2);
+        tf1d_set(dy, 0, 5.0_f32);
+        tf1d_set(dy, 1, 7.0_f32);
+        let gx = t1d_new(2);
+        dense_layer_f32_grad_x(w, dy, gx, 2, 2);
+        (tf1d_sum(gx, 2) as i32) - 22
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
 def test_nn_clip_grad_norm_f32_scales_large_grad():
     """clip [3,4] from norm 5 to max 2.5, allowing sqrt-rounding tolerance."""
     src = """
