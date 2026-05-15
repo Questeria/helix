@@ -126,7 +126,7 @@ def autotune_variants(params: dict[str, list[int]]) -> list[dict[str, int]]:
     variants."""
     if not params:
         return []
-    keys = list(params.keys())
+    keys = sorted(params.keys())
     # Per-key dedup preserves first occurrence (matches
     # parse_autotune_attrs's dedup contract).
     val_lists: list[list[int]] = []

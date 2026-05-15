@@ -64,6 +64,22 @@ Initial focused checks:
 - `python scripts\stage31_validate.py --mode quick --skip-snapshot`
   - Result: passed, `stage31-quick: rc=0`.
 
+## Increment 14 - Deterministic Autotune Variant Order
+
+Autotune variant generation now sorts parameter keys before creating the
+Cartesian product.
+
+This makes generated variant order reproducible even if attributes arrive in a
+different key order. Reproducibility matters because autotune output eventually
+feeds generated kernel names, cache records, and benchmark comparisons.
+
+Focused verification:
+
+- `python -m pytest -q helixc\tests\test_autotune.py -k "variants" --tb=short`
+  - Result: 4 passed, 21 deselected.
+- `python scripts\stage31_validate.py --mode quick --skip-snapshot`
+  - Result: passed, `stage31-quick: rc=0`.
+
 ## Increment 13 - PTX Kernel Regression Expansion
 
 Stage 35 added GPU/PTX regression coverage for additional kernel forms:

@@ -219,6 +219,16 @@ def test_autotune_variants_dedups():
     assert vs == [{"BS": 1}, {"BS": 2}]
 
 
+def test_stage35_autotune_variants_sorted_key_order():
+    """Stage 35: variant generation order is stable regardless of attr order."""
+    vs = autotune_variants({"Z": [9], "A": [1, 2]})
+    names = [mangled_variant_name("k", cfg) for cfg in vs]
+    assert names == [
+        "k__autotune_A_1_Z_9",
+        "k__autotune_A_2_Z_9",
+    ]
+
+
 def test_autotune_variant_count_dedups():
     """variant_count must agree with the deduped autotune_variants
     output (otherwise the cap check at 16 lies)."""
