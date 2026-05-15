@@ -480,6 +480,57 @@ fn softmax_layer(x_start: i32, y_start: i32, n: i32) -> i32 {
     }
 }
 
+fn softmax_rows_f32(logits_start: i32, probs_start: i32,
+                    rows: i32, cols: i32) -> i32 {
+    if rows <= 0 { 0 }
+    else { if cols <= 0 { 0 }
+    else {
+        let mut r: i32 = 0;
+        while r < rows {
+            let row_in = logits_start + r * cols;
+            let row_out = probs_start + r * cols;
+            softmax_layer(row_in, row_out, cols);
+            r = r + 1;
+        }
+        0
+    }}
+}
+
+fn softmax_ce_grad_f32(probs_start: i32, target_start: i32,
+                       grad_start: i32, rows: i32, cols: i32) -> i32 {
+    if rows <= 0 { 0 }
+    else { if cols <= 0 { 0 }
+    else {
+        let mut status: i32 = 0;
+        let scale = 1.0_f32 / (rows as f32);
+        let mut r: i32 = 0;
+        while r < rows {
+            let target = __arena_get(target_start + r);
+            let row_start = probs_start + r * cols;
+            let grad_row = grad_start + r * cols;
+            if target < 0 {
+                status = 35001;
+            }
+            else {
+                if target >= cols {
+                    status = 35001;
+                }
+                else {
+                    let mut c: i32 = 0;
+                    while c < cols {
+                        let p = __f32_from_bits(__arena_get(row_start + c));
+                        let y = if c == target { 1.0_f32 } else { 0.0_f32 };
+                        __arena_set(grad_row + c, __bits_of_f32((p - y) * scale));
+                        c = c + 1;
+                    }
+                };
+            };
+            r = r + 1;
+        }
+        status
+    }}
+}
+
 // BCE.
 @pure
 fn bce_loss_scalar(p: f32, t: f32) -> f32 {

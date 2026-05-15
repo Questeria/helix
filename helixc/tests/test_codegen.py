@@ -9104,6 +9104,28 @@ def test_nn_softmax_sums_to_one():
     assert code >= 99 and code <= 101, f"expected ~100, got {code}"
 
 
+def test_nn_softmax_rows_f32_sums_each_row():
+    """Row-wise softmax turns each logits row into probabilities summing to 1."""
+    src = """
+    fn main() -> i32 {
+        let logits = t1d_new(4);
+        tf1d_set(logits, 0, 0.0_f32);
+        tf1d_set(logits, 1, 0.0_f32);
+        tf1d_set(logits, 2, 1.0_f32);
+        tf1d_set(logits, 3, 2.0_f32);
+        let probs = t1d_new(4);
+        softmax_rows_f32(logits, probs, 2, 2);
+        let row0 = __f32_from_bits(__arena_get(probs))
+            + __f32_from_bits(__arena_get(probs + 1));
+        let row1 = __f32_from_bits(__arena_get(probs + 2))
+            + __f32_from_bits(__arena_get(probs + 3));
+        (((row0 + row1) * 100.0_f32) as i32) - 158
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
 def test_nn_argmax_rows_f32():
     """Two rows of logits -> predicted classes [1,2]. 1*20 + 2*11 = 42."""
     src = """
@@ -9203,6 +9225,49 @@ def test_nn_ce_loss_batch_f32_rejects_invalid_label():
         __arena_set(target, 2);
         let loss = ce_loss_batch_f32(probs, target, 1, 2);
         if loss > 999999.0_f32 { 42 } else { 1 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_nn_softmax_ce_grad_f32():
+    """For two balanced rows, softmax CE gradients have total abs sum 1."""
+    src = """
+    fn main() -> i32 {
+        let probs = t1d_new(4);
+        tf1d_set(probs, 0, 0.5_f32);
+        tf1d_set(probs, 1, 0.5_f32);
+        tf1d_set(probs, 2, 0.5_f32);
+        tf1d_set(probs, 3, 0.5_f32);
+        let target = t1d_new(2);
+        __arena_set(target, 0);
+        __arena_set(target + 1, 1);
+        let gout = t1d_new(4);
+        let status = softmax_ce_grad_f32(probs, target, gout, 2, 2);
+        let total =
+            __abs(__f32_from_bits(__arena_get(gout)))
+            + __abs(__f32_from_bits(__arena_get(gout + 1)))
+            + __abs(__f32_from_bits(__arena_get(gout + 2)))
+            + __abs(__f32_from_bits(__arena_get(gout + 3)));
+        (((total * 42.0_f32) as i32) + status)
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_nn_softmax_ce_grad_f32_rejects_invalid_label():
+    """Invalid softmax-CE labels return the Stage 35 sentinel status."""
+    src = """
+    fn main() -> i32 {
+        let probs = t1d_new(2);
+        tf1d_set(probs, 0, 0.5_f32);
+        tf1d_set(probs, 1, 0.5_f32);
+        let target = t1d_new(1);
+        __arena_set(target, 2);
+        let gout = t1d_new(2);
+        softmax_ce_grad_f32(probs, target, gout, 1, 2) - 34959
     }
     """
     code = compile_and_run(src)

@@ -64,6 +64,35 @@ Initial focused checks:
 - `python scripts\stage31_validate.py --mode quick --skip-snapshot`
   - Result: passed, `stage31-quick: rc=0`.
 
+## Increment 17 - Classifier Training Helpers
+
+The Helix neural-network stdlib now includes two classifier-training helpers:
+
+- `softmax_rows_f32(logits_start, probs_start, rows, cols)`
+- `softmax_ce_grad_f32(probs_start, target_start, grad_start, rows, cols)`
+
+Beginner meaning:
+
+- `softmax_rows_f32` turns each row of classifier scores into probabilities.
+- `softmax_ce_grad_f32` writes the standard gradient for softmax plus
+  cross-entropy, which is the usual first backward step for classification
+  models.
+
+Safety behavior:
+
+- Empty or invalid matrix sizes return success without writing.
+- Invalid class labels return sentinel status `35001`, so bad target data does
+  not quietly produce believable gradients.
+
+Focused verification:
+
+- `python -m pytest -q helixc\tests\test_codegen.py -k "softmax_rows_f32 or softmax_ce_grad_f32 or ce_loss_batch_f32 or softmax_sums_to_one" --tb=short`
+  - Result: 7 passed, 772 deselected.
+- `python -m pytest -q helixc\tests\test_codegen.py -k "nn_ or softmax or ce_loss or dense_layer_f32_grad" --tb=short`
+  - Result: 39 passed, 740 deselected.
+- `python scripts\stage31_validate.py --mode quick --skip-snapshot`
+  - Result: passed, `stage31-quick: rc=0`.
+
 ## Increment 16 - Stage 35 Audit Response
 
 Three read-only Stage 35 audit lanes found real issues. This increment closes
