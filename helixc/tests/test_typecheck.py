@@ -956,6 +956,131 @@ def test_stage34_self_independent_refinement_rejects_unrepresentable_values():
                for e in if_cast_errs), if_cast_errs
 
 
+def test_stage34_unrepresentable_scalar_evidence_covers_value_surfaces():
+    def assert_unrepresentable(src: str, needle: str) -> None:
+        errs = check(src)
+        assert any(needle in e
+                   and "requires a representable target value" in e
+                   for e in errs), errs
+
+    assert_unrepresentable("""
+    type AlwaysF64 = f64 where true;
+    fn f() -> AlwaysF64 {
+        { 1e309_f64 }
+    }
+    """, "return value of function 'f'")
+
+    assert_unrepresentable("""
+    type AlwaysF64 = f64 where true;
+    fn f(b: bool) {
+        let pair: (AlwaysF64, f64) =
+            (if b { 1e309_f64 } else { 0.0_f64 }, 0.0_f64);
+    }
+    """, "let 'pair': tuple element")
+
+    assert_unrepresentable("""
+    type AlwaysF64 = f64 where true;
+    fn f(b: bool) {
+        let xs: [AlwaysF64; 1] = [if b { 1e309_f64 } else { 0.0_f64 }];
+    }
+    """, "let 'xs': array element")
+
+    assert_unrepresentable("""
+    type AlwaysF64 = f64 where true;
+    struct Box { value: AlwaysF64 }
+    fn f(b: bool) {
+        let x = Box { value: if b { 1e309_f64 } else { 0.0_f64 } };
+    }
+    """, "struct 'Box'.value")
+
+    assert_unrepresentable("""
+    type AlwaysF64 = f64 where true;
+    struct Raw { value: f64 }
+    fn f(b: bool) -> AlwaysF64 {
+        Raw { value: if b { 1e309_f64 } else { 0.0_f64 } }.value
+    }
+    """, "return value of function 'f'")
+
+    assert_unrepresentable("""
+    type AlwaysF64 = f64 where true;
+    fn f(b: bool) -> AlwaysF64 {
+        [if b { 1e309_f64 } else { 0.0_f64 }][0]
+    }
+    """, "return value of function 'f'")
+
+    assert_unrepresentable("""
+    type AlwaysF64 = f64 where true;
+    fn accept(x: AlwaysF64) -> i32 { 0 }
+    fn f(b: bool) -> i32 {
+        accept(if b { 1e309_f64 } else { 0.0_f64 })
+    }
+    """, "call to 'accept': arg 'x'")
+
+    assert_unrepresentable("""
+    type AlwaysF64 = f64 where true;
+    fn f(b: bool) -> AlwaysF64 {
+        let mut x = 0.0_f64;
+        x = if b { 1e309_f64 } else { 0.0_f64 };
+        x
+    }
+    """, "return value of function 'f'")
+
+    repaired = check("""
+    type AlwaysF64 = f64 where true;
+    fn f(b: bool) -> AlwaysF64 {
+        let mut x = if b { 1e309_f64 } else { 0.0_f64 };
+        x = 0.0_f64;
+        x
+    }
+    """)
+    assert repaired == [], repaired
+
+
+def test_stage34_unrepresentable_primitive_return_producer_is_not_clean():
+    errs = check("""
+    type AlwaysF64 = f64 where true;
+    fn raw_bad() -> f64 {
+        1e309_f64
+    }
+    fn f() -> AlwaysF64 {
+        raw_bad()
+    }
+    """)
+    assert any("return value of function 'f'" in e
+               and "requires a representable target value" in e
+               and "target base f64" in e
+               for e in errs), errs
+
+    explicit_return_errs = check("""
+    type AlwaysF64 = f64 where true;
+    fn raw_bad() -> f64 {
+        return 1e309_f64;
+    }
+    fn f() -> AlwaysF64 {
+        raw_bad()
+    }
+    """)
+    assert any("return value of function 'f'" in e
+               and "requires a representable target value" in e
+               and "target base f64" in e
+               for e in explicit_return_errs), explicit_return_errs
+
+    local_consumer_errs = check("""
+    type AlwaysF64 = f64 where true;
+    fn raw_bad() -> f64 {
+        1e309_f64
+    }
+    fn f() -> AlwaysF64 {
+        let x = raw_bad();
+        x
+    }
+    """)
+    assert any("return value of function 'f'" in e
+               and "requires a representable target value" in e
+               and "target base f64" in e
+               for e in local_consumer_errs), local_consumer_errs
+
+
 def test_stage34_fixed_point_preserves_unbound_name_errors():
     errs = check("""
     type AlwaysI32 = i32 where true;

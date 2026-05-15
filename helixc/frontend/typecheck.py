@@ -505,6 +505,7 @@ class TypeChecker:
         self._unrepresentable_const_scalar_names: set[str] = set()
         self._invalid_const_names: set[str] = set()
         self._invalid_refined_return_functions: set[str] = set()
+        self._unrepresentable_scalar_return_functions: set[str] = set()
         self._local_const_scalar_scopes: list[dict[str, int | float | None]] = []
         self._local_const_unrepresentable_scopes: list[set[str]] = []
         self._current_return_ty: Type = TyUnit()
@@ -528,6 +529,7 @@ class TypeChecker:
         self._const_decls: dict[str, A.ConstDecl] = {}
         self._invalid_const_names = set()
         self._invalid_refined_return_functions = set()
+        self._unrepresentable_scalar_return_functions = set()
         self._unrepresentable_const_scalar_names = set()
         self._recursive_enum_names: set[str] = set()
         self._type_alias_cache = {}
@@ -609,12 +611,16 @@ class TypeChecker:
             self._seen_unbound = set()
             self._seen_unknown_type_names = set()
             invalid_before = set(self._invalid_refined_return_functions)
+            scalar_invalid_before = set(
+                self._unrepresentable_scalar_return_functions)
             for item in fn_items:
                 try:
                     self._check_fn(item)
                 except TypeError_ as e:
                     self.errors.append(e)
-            if self._invalid_refined_return_functions == invalid_before:
+            if (self._invalid_refined_return_functions == invalid_before
+                    and self._unrepresentable_scalar_return_functions
+                    == scalar_invalid_before):
                 break
 
         return self.errors
@@ -1945,6 +1951,18 @@ class TypeChecker:
                         final_context,
                         inner,
                     )
+                elif (expected_final_ty is not None
+                      and final_context is not None
+                      and self._compatible(final_ty, expected_final_ty)):
+                    if self._check_unrepresentable_scalar_context(
+                            block.final_expr,
+                            expected_final_ty,
+                            block.final_expr.span,
+                            final_context,
+                            report=False,
+                    ):
+                        self._unrepresentable_scalar_return_functions.add(
+                            self._current_fn_name)
                 return final_ty
             return TyUnit()
         finally:
@@ -2903,6 +2921,15 @@ class TypeChecker:
                         f"return value of function {self._current_fn_name!r}",
                         scope,
                     )
+                elif self._check_unrepresentable_scalar_context(
+                    expr.value,
+                    self._current_return_ty,
+                    expr.span,
+                    f"return value of function {self._current_fn_name!r}",
+                    report=False,
+                ):
+                    self._unrepresentable_scalar_return_functions.add(
+                        self._current_fn_name)
                 if self._current_is_kernel:
                     self.errors.append(TypeError_(
                         "@kernel functions cannot return a value in PTX",
@@ -3478,6 +3505,13 @@ class TypeChecker:
                 )
             )
         if isinstance(expr, A.Call):
+            if (isinstance(expr.callee, A.Name)
+                    and expr.callee.name in getattr(
+                        self,
+                        "_unrepresentable_scalar_return_functions",
+                        set(),
+                    )):
+                return True
             return (
                 self._expr_has_unrepresentable_typed_const_scalar(expr.callee)
                 or any(
@@ -4409,6 +4443,33 @@ class TypeChecker:
                         hint="use a type with exactly matching refinements",
                     ))
                 return
+
+    def _check_unrepresentable_scalar_context(
+        self,
+        value_expr: A.Expr,
+        target_ty: Type,
+        span: A.Span,
+        context: str,
+        *,
+        report: bool = True,
+    ) -> bool:
+        if self._contains_refinement(target_ty):
+            return False
+        target_base = self._const_eval_numeric_base(target_ty)
+        if target_base is None:
+            return False
+        if not self._expr_has_unrepresentable_typed_const_scalar(value_expr):
+            return False
+        if not report:
+            return True
+        self.errors.append(TypeError_(
+            f"{context}: value requires a representable target value in "
+            f"Stage 34 for target base {self._fmt(target_base)}",
+            span,
+            hint="values must be representable by their erased target type "
+                 "before they can be used as proof sources",
+        ))
+        return True
 
     def _function_refinement_shape_exact(
         self, value_ty: Type, target_ty: Type,
