@@ -327,9 +327,51 @@ Validation:
 - `python scripts\stage31_validate.py --mode quick --skip-snapshot`
   - Result: `rc=0`
 
+## Slice 10 - Metadata Clean Gate 1
+
+Two read-only audit passes and one local stacked-metadata pass checked the
+combined Stage 33 metadata surface after the deprecated, since, and autotune
+slices.
+
+Findings:
+
+- AST layout audit: clean. All six `AST_FN_DECL` construction paths cover
+  slots through 19, with ordinary functions preserving metadata, generic
+  monomorph clones propagating it, and synthetic closure/AD/impl functions
+  zeroing it intentionally.
+- Deprecated diagnostic audit: implementation is consistent, but comments
+  around `diag_arena` needed to distinguish `28701` call-site AST nodes from
+  `28702` table-cap AST nodes.
+- Deprecated diagnostic test gap: the first `28701` test covered one
+  message-bearing function, but not multiple deprecated callees or a bare
+  `@deprecated` function with `msg_l == 0`.
+
+Fixes:
+
+- Clarified bootstrap `diag_arena` comments for `ast_node_idx` and aux payloads.
+- Added a regression test proving two deprecated call sites map to their own
+  metadata entries: `old_b` keeps `"use_b"` and bare `old_c` keeps message
+  length `0`.
+
+Validation:
+
+- `python -m pytest -q helixc\tests\test_codegen.py::test_bootstrap_kovc_deprecated_diag_aux_matches_each_callee helixc\tests\test_codegen.py::test_bootstrap_kovc_deprecated_diag_aux_carries_message helixc\tests\test_codegen.py::test_bootstrap_kovc_dep_tab_overflow_emits_28702`
+  - Result: `3 passed`
+- `python -m pytest -q helixc\tests\test_deprecated.py helixc\tests\test_codegen.py::test_bootstrap_kovc_deprecated_diag_aux_carries_message helixc\tests\test_codegen.py::test_bootstrap_kovc_deprecated_diag_aux_matches_each_callee helixc\tests\test_codegen.py::test_bootstrap_kovc_deprecated_message_attr_preserved helixc\tests\test_codegen.py::test_bootstrap_kovc_since_message_attr_preserved helixc\tests\test_effect_check.py::test_c20_t2_combo_attrs_no_spurious_19002`
+  - Result: `33 passed`
+- `python scripts\stage33_selfhost_gate.py --generations 3 --expect-stable-sha 8858854a0c35a56ac87b1420e76f2cfded015dae17789bc3745e03ee1b4922cc --json-out .stage33-logs\selfhost-cascade-metadata-clean1-g3.json`
+  - Result: `rc=0`
+  - G2..G4 stable SHA-256:
+    `8858854a0c35a56ac87b1420e76f2cfded015dae17789bc3745e03ee1b4922cc`
+  - G2..G4 stable size: `287399` bytes
+  - Final-generation smoke cases: literal, call, and loop all returned `42`
+  - Validator result: `selfhost-cascade-validate: ok`
+- `python scripts\stage31_validate.py --mode quick --skip-snapshot`
+  - Result: `rc=0`
+
 ## Next
 
-The next Stage 33 slice should either make bootstrap autotune diagnostic
-payloads more specific, or run a local audit/clean gate across the Stage 33
-metadata changes. Full autotune variant generation remains larger than the
-current slice size and should stay gated behind another self-host proof.
+The next Stage 33 slice should either run another metadata clean-gate rotation
+or make bootstrap autotune diagnostic payloads more specific. Full autotune
+variant generation remains larger than the current slice size and should stay
+gated behind another self-host proof.

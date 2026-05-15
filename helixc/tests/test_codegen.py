@@ -5738,6 +5738,105 @@ fn main() -> i32 {{
     )
 
 
+def test_bootstrap_kovc_deprecated_diag_aux_matches_each_callee():
+    """Stage 33: deprecated diag aux distinguishes multiple callees."""
+    import os, subprocess
+    proj = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    lexer = open(os.path.join(proj, "helixc", "bootstrap", "lexer.hx")).read()
+    lexer_no_main = lexer.rsplit(
+        "// --------------------------------------------------------------\n// Demo:",
+        1,
+    )[0]
+    parser_body = open(os.path.join(proj, "helixc", "bootstrap", "parser.hx")).read()
+    kovc = open(os.path.join(proj, "helixc", "bootstrap", "kovc.hx")).read()
+    kovc_lib = kovc.rsplit(
+        "// --------------------------------------------------------------\n// Demo:",
+        1,
+    )[0]
+    import uuid
+    tag = uuid.uuid4().hex[:10]
+    src_path = f"/tmp/helix_dep_diag_multi_src_{tag}.hx"
+    src_text = (
+        '@deprecated("use_a") fn old_a() -> i32 { 1 } '
+        '@deprecated("use_b") fn old_b() -> i32 { 2 } '
+        '@deprecated fn old_c() -> i32 { 3 } '
+        'fn main() -> i32 { old_b() + old_c() }'
+    )
+    subprocess.run(
+        ["wsl", "-e", "bash", "-c",
+         f"printf %s {repr(src_text)} > {src_path}"],
+        check=True, timeout=30,
+    )
+    driver = lexer_no_main + parser_body + kovc_lib + f"""
+fn main() -> i32 {{
+    let src_start = __arena_len();
+    let src_len = read_file_to_arena("{src_path}");
+    let tok_base = __arena_len();
+    lex(src_start, src_len);
+    let ast_root = parse_top(tok_base);
+    let diag_state = diag_arena_init();
+    deprecated_pass(ast_root, diag_state);
+    let n = diag_arena_count(diag_state);
+    let mut i: i32 = 0;
+    let mut hits: i32 = 0;
+    let mut b_hits: i32 = 0;
+    let mut c_hits: i32 = 0;
+    let mut other_hits: i32 = 0;
+    let mut b_bad: i32 = 0;
+    let mut c_bad: i32 = 0;
+    while i < n {{
+        let code = diag_get_code(diag_state, i);
+        if code == 28701 {{
+            hits = hits + 1;
+            let dep_entry = diag_get_aux(diag_state, i);
+            let call_idx = diag_get_ast_node_idx(diag_state, i);
+            let call_name_s = __arena_get(call_idx + 1);
+            let call_name_l = __arena_get(call_idx + 2);
+            let call_last = if call_name_l == 5 {{ __arena_get(call_name_s + 4) }} else {{ 0 }};
+            let dep_name_s = __arena_get(dep_entry);
+            let dep_name_l = __arena_get(dep_entry + 1);
+            let dep_last = if dep_name_l == 5 {{ __arena_get(dep_name_s + 4) }} else {{ 0 }};
+            let msg_s = dep_tab_msg_s_from_entry(dep_entry);
+            let msg_l = dep_tab_msg_l_from_entry(dep_entry);
+            if call_last == 98 {{
+                b_hits = b_hits + 1;
+                if dep_last != 98 {{ b_bad = 1; }} else {{ 0 }};
+                if msg_l != 5 {{ b_bad = 2; }} else {{ 0 }};
+                if __arena_get(msg_s) != 117 {{ b_bad = 3; }} else {{ 0 }};
+                if __arena_get(msg_s + 1) != 115 {{ b_bad = 4; }} else {{ 0 }};
+                if __arena_get(msg_s + 2) != 101 {{ b_bad = 5; }} else {{ 0 }};
+                if __arena_get(msg_s + 3) != 95 {{ b_bad = 6; }} else {{ 0 }};
+                if __arena_get(msg_s + 4) != 98 {{ b_bad = 7; }} else {{ 0 }};
+            }} else {{ if call_last == 99 {{
+                c_hits = c_hits + 1;
+                if dep_last != 99 {{ c_bad = 1; }} else {{ 0 }};
+                if msg_l != 0 {{ c_bad = 2; }} else {{ 0 }};
+            }} else {{
+                other_hits = other_hits + 1;
+            }} }};
+        }} else {{ 0 }};
+        i = i + 1;
+    }}
+    let mut rc: i32 = 42;
+    if hits != 2 {{ rc = 10; }} else {{ 0 }};
+    if b_hits != 1 {{ rc = 11; }} else {{ 0 }};
+    if c_hits != 1 {{ rc = 12; }} else {{ 0 }};
+    if other_hits != 0 {{ rc = 13; }} else {{ 0 }};
+    if b_bad != 0 {{ rc = 20 + b_bad; }} else {{ 0 }};
+    if c_bad != 0 {{ rc = 30 + c_bad; }} else {{ 0 }};
+    rc
+}}
+"""
+    rc = compile_and_run(driver)
+    subprocess.run(
+        ["wsl", "-e", "bash", "-c", f"rm -f {src_path}"],
+        capture_output=True, timeout=30,
+    )
+    assert rc == 42, (
+        f"deprecated diag aux should match each callee's metadata; got rc={rc}"
+    )
+
+
 def test_bootstrap_kovc_since_message_attr_preserved():
     """Stage 33: bootstrap parser preserves @since("version") payload."""
     import os, subprocess

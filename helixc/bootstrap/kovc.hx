@@ -2126,9 +2126,10 @@ fn match_scrut_ty_get(bn_state: i32) -> i32 {
 //           0 sentinel = empty slot.
 //   slot 1: severity (1 = warning, 2 = error)
 //   slot 2: ast_node_idx (the arena index of the AST node where the
-//           diagnostic fires — e.g. the AST_CALL node for panic_pass,
-//           the AST_FN_DECL for trace/unwind/deprecated). Phase-0 has
-//           no source-byte span on AST nodes; full line/col
+//           diagnostic fires — e.g. the AST_CALL node for panic_pass
+//           and deprecated call-site warnings, or the AST_FN_DECL for
+//           trace/unwind/autotune/deprecated-table-cap diagnostics).
+//           Phase-0 has no source-byte span on AST nodes; full line/col
 //           reconstruction is deferred to a future stage that wires
 //           a side-table from AST node idx → source byte range.
 //
@@ -2136,8 +2137,9 @@ fn match_scrut_ty_get(bn_state: i32) -> i32 {
 //           `src_byte_start` (misleading — the value passed is an AST
 //           arena index, not a byte offset). All 5 emit sites already
 //           pass AST indices; this rename clarifies the contract.
-//   slot 3: aux i32 — pass-specific data (e.g. for deprecated_pass:
-//           dep_tab entry ptr; for panic_pass: arg_count)
+//   slot 3: aux i32 — pass-specific data (e.g. for deprecated_pass
+//           28701: dep_tab entry ptr, deprecated_pass 28702: dropped
+//           fn name start, panic_pass: arg_count)
 //
 // Header slots:
 //   slot 0 (base+0):     count
