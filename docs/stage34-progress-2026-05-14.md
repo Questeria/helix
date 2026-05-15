@@ -1080,3 +1080,29 @@ Verification after this fix set:
   pass across all 12 shards
 
 The clean-gate counter remains reset to `0/3`.
+
+## Clean Gate 1 Twenty Seventh Restart - Failed; Fix Verified; Counter Reset
+
+Fresh archive reproducibility auditors on commit `b636256` found one Stage 34
+gate issue outside the proof checker:
+
+- A clean `git archive HEAD` extraction failed `stage0/hex0/run_tests.sh`
+  under WSL because `01-hello.expected` and `02-comments-ws.expected` exported
+  with CRLF bytes. The expected values contained a trailing carriage return,
+  while the actual `hex0.bin` output did not.
+
+The fix adds `.gitattributes` rules forcing LF for Stage 0 hex0 `.expected`
+and `.hex0` fixtures. A new regression test archives the candidate tree,
+checks those fixture bytes, and runs the Stage 0 shell gate from the extracted
+archive. The quick validation list now includes that archive fixture
+regression.
+
+Verification after this fix set:
+
+- Candidate archive fixture byte scan: `CR=0` for the checked Stage 0 fixture
+  files
+- Candidate archive Stage 0 shell gate: `3 passed, 0 failed`
+- Stage 0 archive regression: `1 passed`
+- `python scripts\stage31_validate.py --mode quick`: pass
+
+The clean-gate counter remains reset to `0/3`.
