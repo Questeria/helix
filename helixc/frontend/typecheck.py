@@ -3055,6 +3055,35 @@ class TypeChecker:
             col=span.col,
         ))
 
+    def _record_refinement_proof_carries_for_type(
+        self, context: str, value_ty: Type, target_ty: Type, span: A.Span,
+    ) -> None:
+        if isinstance(target_ty, TyRefined) and isinstance(value_ty, TyRefined):
+            strategy = self._refinement_proof_carry_strategy(
+                value_ty, target_ty)
+            if strategy is not None:
+                self._record_refinement_proof_carry(
+                    context, value_ty, target_ty, strategy, span)
+            return
+        if isinstance(target_ty, TyArray) and isinstance(value_ty, TyArray):
+            self._record_refinement_proof_carries_for_type(
+                f"{context}: array element",
+                value_ty.elem,
+                target_ty.elem,
+                span,
+            )
+            return
+        if isinstance(target_ty, TyTuple) and isinstance(value_ty, TyTuple):
+            for idx, (value_elem, target_elem) in enumerate(
+                    zip(value_ty.elems, target_ty.elems)):
+                self._record_refinement_proof_carries_for_type(
+                    f"{context}: tuple element {idx}",
+                    value_elem,
+                    target_elem,
+                    span,
+                )
+            return
+
     def _contains_unknown_type(self, ty: Type) -> bool:
         if isinstance(ty, TyUnknown):
             return True
@@ -3474,13 +3503,10 @@ class TypeChecker:
         span: A.Span, context: str, scope: Scope,
     ) -> None:
         if isinstance(target_ty, TyRefined):
-            strategy = (self._refinement_proof_carry_strategy(
-                value_ty, target_ty)
-                if isinstance(value_ty, TyRefined) else None)
-            if strategy is not None:
-                self._record_refinement_proof_carry(
-                    context, value_ty, target_ty, strategy, span)
-            elif not self._refinement_proof_carried(value_ty, target_ty):
+            if self._refinement_proof_carried(value_ty, target_ty):
+                self._record_refinement_proof_carries_for_type(
+                    context, value_ty, target_ty, span)
+            else:
                 self._check_refinement_const_value(
                     value_expr, target_ty, span, context, scope,
                 )
@@ -3498,6 +3524,8 @@ class TypeChecker:
             if (self._contains_refinement(target_ty)
                     or self._contains_refinement(value_ty)):
                 if self._refinement_proof_carried(value_ty, target_ty):
+                    self._record_refinement_proof_carries_for_type(
+                        context, value_ty, target_ty, span)
                     return
                 if self._contains_refinement(target_ty):
                     self.errors.append(TypeError_(
@@ -3532,6 +3560,8 @@ class TypeChecker:
             if (self._contains_refinement(target_ty)
                     or self._contains_refinement(value_ty)):
                 if self._refinement_proof_carried(value_ty, target_ty):
+                    self._record_refinement_proof_carries_for_type(
+                        context, value_ty, target_ty, span)
                     return
                 if self._contains_refinement(target_ty):
                     self.errors.append(TypeError_(

@@ -99,3 +99,16 @@ Examples now accepted:
 - `!(self >= 1.0)` behaves as `self < 1.0`
 
 Strictness is preserved: `!(self < 0.0)` does not prove `self > 0.0`.
+
+## Increment 6 - Container Proof-Carry Artifact Records
+
+Proof-carry records now include refined array and tuple element carries when a
+container proof is accepted.
+
+Example:
+
+- Passing `[AtLeastOne; 2]` where `[NonNegative; 2]` is required now emits a
+  `proof_carries` record for the array element refinement proof.
+
+This keeps the proof artifact useful for higher-level audit tools that need to
+see why a container-valued call or assignment was accepted.

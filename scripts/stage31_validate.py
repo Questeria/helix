@@ -305,6 +305,7 @@ def quick(py: str) -> int:
             "helixc/tests/test_cli.py::test_stage31_emit_proof_obligations_json_for_equivalent_refinement_alias",
             "helixc/tests/test_cli.py::test_stage34_emit_proof_obligations_json_for_numeric_bound_implication",
             "helixc/tests/test_cli.py::test_stage34_emit_proof_obligations_json_for_equality_bound_implication",
+            "helixc/tests/test_cli.py::test_stage34_emit_proof_carry_json_for_array_bound_implication",
             "helixc/tests/test_cli.py::test_stage31_emit_proof_obligations_rejects_generic_refinement_name",
             "helixc/tests/test_cli.py::test_stage31_emit_proof_obligations_rejects_duplicate_proof_names",
             "helixc/tests/test_cli.py::test_stage31_emit_proof_obligations_json_for_boolean_literal_refinements",
