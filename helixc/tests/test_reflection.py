@@ -1,10 +1,9 @@
-"""End-to-end tests for verifier-gated self-modification.
+"""End-to-end tests for verifier-gated reflection runtime behavior.
 
-These tests exercise the real reflection runtime: 64 mutable cells in the
+These tests exercise 64 mutable cells in the
 binary's writable region, modify(handle, new_value, verifier_fn) calls the
-verifier function and conditionally writes the cell, splice(handle) reads
-it back. This is the unique-to-Helix AGI primitive — no other AI language
-exposes verifier-gated state mutation as a first-class feature.
+verifier function and conditionally writes the cell, while splice(handle)
+reads it back.
 """
 
 from __future__ import annotations

@@ -939,3 +939,28 @@ Verification after this fix set:
   `test_print_int_zero` passed
 
 The clean-gate counter remains reset to `0/3`.
+
+## Clean Gate 1 Twenty Third Restart - Failed; Fix Verified; Counter Reset
+
+Fresh clean-gate docs and coverage auditors on commit `343587d` found one
+stale broad claim in a touched test file:
+
+- `helixc/tests/test_reflection.py` made an overbroad uniqueness claim about
+  verifier-gated reflection rather than limiting the docstring to the runtime
+  behavior under test.
+
+The fix narrows the reflection test docstring to the behavior under test:
+verifier-gated reflection runtime cells, `modify`, and `splice`.
+
+Verification after this fix set:
+
+- Stale broad-claim grep in `helixc/tests/test_reflection.py`: no matches
+- Focused regression slice: `3 passed`
+- `python scripts\stage31_validate.py --mode quick`: pass
+- `python scripts\stage31_validate.py --mode full --skip-snapshot --shards 8`:
+  pass across all 12 shards with no retries
+- Staged-tree archive check for shell scripts: `scripts/run_all_tests.sh`,
+  `stage0/hex0/run_tests.sh`, and `stage0/hex0/build.sh` extracted with
+  `CRLF=0`; `bash -n` accepted the shell scripts
+
+The clean-gate counter remains reset to `0/3`.
