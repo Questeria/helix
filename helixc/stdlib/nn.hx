@@ -570,8 +570,8 @@ fn dense_classifier_sgd_step_f32(w_start: i32, b_start: i32, x_start: i32,
                                  shape_start: i32, lr: f32) -> i32 {
     let classes = __arena_get(shape_start);
     let in_dim = __arena_get(shape_start + 1);
-    if classes <= 0 { 0 }
-    else { if in_dim <= 0 { 0 }
+    if classes <= 0 { 35001 }
+    else { if in_dim <= 0 { 35001 }
     else {
         if target < 0 { 35001 }
         else { if target >= classes { 35001 }

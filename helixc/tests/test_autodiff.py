@@ -275,9 +275,9 @@ def test_grad_through_match():
 # ============================================================================
 # Audit 28.8 B5: warnings for unhandled AD nodes (trap 85001)
 # ============================================================================
-def test_b5_ad_warns_on_opaque_call():
-    """B5: an opaque user fn call (not in the chain-rule table) was
-    silently a zero derivative. Now emits a warning to _DIFF_WARNINGS."""
+def test_b5_ad_rejects_opaque_call():
+    """Opaque calls now fail closed instead of compiling a zero derivative."""
+    import pytest
     from helixc.frontend.autodiff import (
         differentiate, take_diff_warnings, clear_diff_cache,
     )
@@ -288,12 +288,9 @@ def test_b5_ad_warns_on_opaque_call():
     prog = parse(src)
     fn = prog.items[0]
     body = fn.body.final_expr
-    # Note: no fn_table is passed, so the call site falls through to
-    # the unmatched-call branch and produces the warning.
-    deriv = differentiate(body, "x")
-    warnings = take_diff_warnings()
-    assert any("85001" in w for w in warnings), \
-        f"expected 85001 warning for opaque call, got: {warnings}"
+    with pytest.raises(NotImplementedError, match="forward-mode AD.*strange_helper"):
+        differentiate(body, "x")
+    assert take_diff_warnings() == []
 
 
 def test_b5_ad_warns_on_unsafe_block_with_unknown_inner():
@@ -342,12 +339,18 @@ def test_b5_take_diff_warnings_drains():
     )
     clear_diff_cache()  # avoid cached zero-derivs skipping the warn site
     take_diff_warnings()
-    # Use a different fn name than other B5 tests so the memoization
-    # by structural hash doesn't return a cached deriv from earlier.
-    src = "fn _f(y: f32) -> f32 { totally_unknown_fn_xyz(y) }"
-    prog = parse(src)
-    body = prog.items[0].body.final_expr
-    differentiate(body, "y")
+    # Use a warning-producing non-call node; opaque calls now hard-fail.
+    from helixc.frontend import ast_nodes as A
+    span = A.Span(0, 0)
+    body = A.Block(
+        span=span,
+        stmts=[A.Let(span=span, name="t", is_mut=False, ty=None,
+                     value=A.FloatLit(span=span, value=1.0,
+                                       type_suffix=None))],
+        final_expr=None,
+    )
+    from helixc.frontend import autodiff
+    autodiff._inline_lets(body, {})
     first = take_diff_warnings()
     assert first, "expected at least one warning on first take"
     second = take_diff_warnings()

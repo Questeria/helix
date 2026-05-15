@@ -139,7 +139,7 @@ function process_image(img: Image) -> Result deadline: 33.ms  // 30fps
 
 **Estimated effort**: Large. WCET analysis is non-trivial. ~3000 LOC.
 
-### 2.5 — Continuous execution model (Stage 35)
+### 2.5 — Continuous execution model (future post-Stage-35 roadmap item)
 
 ```helix
 continuous program robot_brain {
@@ -423,9 +423,10 @@ PHASE 1 (Stages 31-37, written in Python helixc → ported through bootstrap):
   Stage 33 — Effect-system extensions (Learning, Asking, Motor, Sensor, capabilities)
   Stage 34 — Proof And Refinement Expansion (see docs/ROADMAP.md; replaces the
               older Deadline + WCET label)
-  Stage 35 — Continuous execution model
-  Stage 36 — Tiered memory (hot/warm/cold)
-  Stage 37 — Theorem-prover integration (Z3)
+  Stage 35 — AI/ML Capability Push (see docs/ROADMAP.md)
+  Stage 36 — Strategic AGI features (see docs/ROADMAP.md)
+  Stage 37+ — Continuous execution, tiered memory, theorem-prover integration
+              sequencing will be assigned after the Stage 35 closeout.
 
 PHASE 2 (Stages 38-46, written IN HELIX in helixc/stdlib/):
   Stage 38 — Spatial types + frames

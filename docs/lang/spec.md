@@ -11,7 +11,7 @@ Helix is a from-scratch programming language for AGI development and high-certai
 2. **No hidden state.** No globals, no implicit allocators, no monkey patching. All effects are typed and explicit.
 3. **Tile-first.** Tiles are first-class values with memory-space tags. The compiler tracks where every tensor lives.
 4. **Shape-typed.** Sizes are type parameters; mismatches caught at compile time. Optional refinements via Presburger arithmetic.
-5. **Composable transformations.** `grad`, `vmap`, `jit`, `device` are functions that take and return functions. JAX-style.
+5. **Composable transformations.** `grad`, `grad_rev`, and `grad_rev_all` are current compiler-rewritten surfaces for scalar floating-point functions. `vmap`, `jit`, and `device` remain design targets.
 6. **Functional core, imperative boundary.** Pure expressions inside, effects at the seam.
 7. **No surprises.** No operator overloading on user types beyond a fixed list. No implicit conversions.
 8. **Reduce uncertainty.** When uncertainty can be represented, bounded, proven, or surfaced to the caller, the language should make that explicit instead of letting it disappear into runtime convention.
@@ -205,7 +205,9 @@ fn print(s: &str) { ... }
 fn rand_uniform[N: size](shape: [N]) -> tensor<f32, [N]> { ... }
 ```
 
-`@pure` is required for functions consumed by `grad`/`jvp`/`vjp`.
+`@pure` is required for functions consumed by current AD rewrites (`grad`,
+`grad_rev`, `grad_rev_all`) and will also be required by future `jvp`/`vjp`
+surfaces.
 Kernel purity and effect rules are being tightened separately; current
 Phase-0 PTX tests accept bare `@kernel` functions when their body lowers to
 the supported device subset.
@@ -242,24 +244,40 @@ Standard fare, with these notes:
 ## Autodiff API
 
 ```
-fn loss(x: tensor<f32, [N]>) -> f32 { ... }
+fn loss(x: f32) -> f32 { x * x }
 
-let g = grad(loss);                  // g : tensor<f32, [N]> -> tensor<f32, [N]>
-let (val, grad_val) = value_and_grad(loss)(x);
-let v = vjp(loss, x);                // v : (vector) -> tensor<f32, [N]>
-let j = jacrev(loss);                // jacobian-reverse
+let g = grad(loss);                  // g : f32 -> f32
+let rg = grad_rev(loss);             // reverse-mode scalar gradient
+let all = grad_rev_all(loss);        // writes named scalar gradients
 ```
 
-`grad`, `jvp`, `vjp` etc are *compiler primitives* exposed as library functions. The compiler implements `jvp` rules per primitive, derives `linearize` + `transpose`, and composes for the rest.
+Current Stage 35 contract: these surfaces support `f32`/`f64` scalar
+parameters. Aggregate parameters, integer parameters, and opaque calls without
+known chain rules fail closed. Pytree leaf expansion, `value_and_grad`, `jvp`,
+`vjp`, `jacrev`, and tensor-valued gradients are design targets, not current
+public behavior.
 
 ## Composable transformations
 
 ```
-let f_jit = jit(f);
-let f_vmapped = vmap(f, axis=0);
-let f_gpu = device(gpu(0))(f);
-let composed = jit(grad(vmap(loss, axis=0)));
+// Design target, not the current Stage 35 public surface:
+// let f_jit = jit(f);
+// let f_vmapped = vmap(f, axis=0);
+// let f_gpu = device(gpu(0))(f);
+// let composed = jit(grad(vmap(loss, axis=0)));
 ```
+
+Current compiler behavior is intentionally narrower: scalar `grad`,
+`grad_rev`, and `grad_rev_all` are available first, with broader composition
+added only after each transform has verifier-backed tests.
+
+## FFI Status
+
+`extern "C"` FFI exists as a Stage 16.5 feature for the current native backend.
+It is effect-checked as `ffi`, participates in dynamic-link emission, and has
+focused tests for integer, pointer, and `f32` ABI routing. Cross-platform ABI
+coverage, Python/CUDA/ROCm interop, ownership-preserving wrappers, and richer
+capability contracts remain future work.
 
 ## Module system (v0.1)
 

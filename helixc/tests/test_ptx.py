@@ -371,6 +371,20 @@ def test_stage35_direct_ptx_cli_ignores_host_helper_with_unsupported_tile_op():
     assert "elem.div" not in proc.stderr
 
 
+def test_stage35_direct_ptx_cli_rejects_unwind_attr():
+    proc = run_ptx_cli("@unwind @kernel fn k() { let i = thread_idx(); }\n")
+    assert proc.returncode != 0, proc.stdout + proc.stderr
+    assert "unwind" in proc.stderr
+    assert ".visible .entry" not in proc.stdout
+
+
+def test_stage35_direct_ptx_cli_folds_kernel_before_tile_lowering():
+    proc = run_ptx_cli("@kernel fn k() { let z = 4 / 2; }\n")
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert ".visible .entry k" in proc.stdout
+    assert "elem.div" not in proc.stderr
+
+
 def test_c119_direct_ptx_cli_rejects_unsupported_hbm_float_dtype():
     src = """
     @kernel fn k(a: tile<f16, [256], HBM>) {

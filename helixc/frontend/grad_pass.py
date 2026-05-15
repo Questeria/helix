@@ -18,6 +18,8 @@ License: Apache 2.0
 
 from __future__ import annotations
 
+import copy
+
 from . import ast_nodes as A
 from .ast_walker import ASTVisitor
 from .autodiff import differentiate, _inline_lets
@@ -27,8 +29,6 @@ from .autodiff_reverse import differentiate_reverse
 _GRAD_CALL_NAMES = frozenset({"grad", "grad_rev", "grad_rev_all"})
 _SCALAR_GRAD_TYPES = frozenset({
     "f32", "f64",
-    "i8", "i16", "i32", "i64", "isize",
-    "u8", "u16", "u32", "u64", "usize",
 })
 
 
@@ -558,10 +558,11 @@ def _generate_grad_rev_all_fn(fn: A.FnDecl,
         final_expr=A.IntLit(span=span, value=0),
     )
 
-    # Params: original f's params (cast to f32) + trailing base: i32.
+    # Params: preserve original scalar types; do not silently narrow f64 to f32.
+    # Stage 35 keeps f64 as f64 here instead of narrowing generated signatures.
     new_params = [
         A.FnParam(span=p.span, name=p.name,
-                  ty=A.TyName(span=p.ty.span, name="f32"))
+                  ty=copy.deepcopy(p.ty))
         for p in fn.params
     ]
     new_params.append(A.FnParam(
@@ -633,10 +634,10 @@ def _generate_grad_fn(fn: A.FnDecl, param_idx: int = 0,
     # Wrap the derivative expression in a block (the FnDecl expects a Block body)
     new_body = A.Block(span=fn.body.span, stmts=[], final_expr=deriv)
 
-    # Build new params (same names, all f32 — gradient takes plain floats)
+    # Build new params with original scalar types; f64 stays f64.
     new_params = [
         A.FnParam(span=p.span, name=p.name,
-                  ty=A.TyName(span=p.ty.span, name="f32"))
+                  ty=copy.deepcopy(p.ty))
         for p in fn.params
     ]
 
@@ -647,7 +648,7 @@ def _generate_grad_fn(fn: A.FnDecl, param_idx: int = 0,
         name=f"{fn.name}{suffix}",
         generics=[],
         params=new_params,
-        return_ty=A.TyName(span=fn.span, name="f32"),
+        return_ty=copy.deepcopy(fn.return_ty),
         where_clauses=[],
         body=new_body,
         attrs=["pure"],
@@ -665,6 +666,8 @@ def _reject_unsupported_grad_params(fn: A.FnDecl, surface: str) -> None:
     if unsupported:
         joined = ", ".join(unsupported)
         raise NotImplementedError(
-            f"{surface} does not yet support aggregate/non-scalar "
-            f"parameter(s): {joined}; flatten pytree leaves before grad_pass"
+            f"{surface} aggregate/non-floating parameter(s) unsupported; "
+            f"supports only f32/f64 scalar parameter(s) today; "
+            f"unsupported parameter(s): {joined}; flatten pytree leaves or "
+            "cast non-floating inputs before grad_pass"
         )

@@ -47,11 +47,12 @@
 
 fn rev_tape_new(cap: i32) -> i32 {
     let start = __arena_len();
+    let safe_cap = if cap < 0 { 0 } else { cap };
     __arena_push(0);     // count
-    __arena_push(cap);   // cap
+    __arena_push(safe_cap);   // cap
     __arena_push(0 - 1); // adj_start (set later)
     let mut i: i32 = 0;
-    while i < cap {
+    while i < safe_cap {
         __arena_push(0); __arena_push(0); __arena_push(0); __arena_push(0);
         i = i + 1;
     }
@@ -88,13 +89,18 @@ fn rev_remaining(tape: i32) -> i32 {
 
 fn rev_push(tape: i32, kind: i32, in1: i32, in2: i32, value: i32) -> i32 {
     let cnt = __arena_get(tape);
-    let off = tape + 3 + cnt * 4;
-    __arena_set(off, kind);
-    __arena_set(off + 1, in1);
-    __arena_set(off + 2, in2);
-    __arena_set(off + 3, value);
-    __arena_set(tape, cnt + 1);
-    cnt
+    let cap = __arena_get(tape + 1);
+    if cnt < 0 { 0 - 1 }
+    else { if cnt >= cap { 0 - 1 }
+    else {
+        let off = tape + 3 + cnt * 4;
+        __arena_set(off, kind);
+        __arena_set(off + 1, in1);
+        __arena_set(off + 2, in2);
+        __arena_set(off + 3, value);
+        __arena_set(tape, cnt + 1);
+        cnt
+    }}
 }
 
 fn rev_leaf(tape: i32, value: i32) -> i32 {

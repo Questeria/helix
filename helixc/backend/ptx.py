@@ -629,8 +629,14 @@ if __name__ == "__main__":
     import sys
     from ..frontend.parser import parse
     from ..frontend.typecheck import typecheck
+    from ..frontend.trace_pass import validate_trace_attrs
+    from ..frontend.panic_pass import validate_panic_args, validate_unwind
+    from ..frontend.unsafe_pass import check_unsafe_ops
     from ..frontend.autotune import validate_autotune_prog
+    from ..frontend.grad_pass import grad_pass
     from ..ir.lower_ast import lower
+    from ..ir.passes.const_fold import fold_module
+    from ..ir.passes.cse import cse_module
     from ..ir.tile_ir import lower_to_tile
 
     if len(sys.argv) < 2:
@@ -644,13 +650,25 @@ if __name__ == "__main__":
         for e in errs:
             print(f"error: {e}", file=sys.stderr)
         sys.exit(1)
-    autotune_diags = validate_autotune_prog(prog)
-    if autotune_diags:
-        for e in autotune_diags:
-            print(f"error: autotune: {e}", file=sys.stderr)
+    validation_groups = [
+        ("trace", validate_trace_attrs(prog)),
+        ("panic", validate_panic_args(prog)),
+        ("unwind", validate_unwind(prog)),
+        ("unsafe", check_unsafe_ops(prog)),
+        ("autotune", validate_autotune_prog(prog)),
+    ]
+    had_validation_error = False
+    for phase, diags in validation_groups:
+        for e in diags:
+            print(f"error: {phase}: {e}", file=sys.stderr)
+            had_validation_error = True
+    if had_validation_error:
         sys.exit(1)
     try:
+        grad_pass(prog)
         tir_mod = lower(prog)
+        fold_module(tir_mod)
+        cse_module(tir_mod)
         kernel_mod = type(tir_mod)(
             functions={
                 name: fn for name, fn in tir_mod.functions.items()

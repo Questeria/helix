@@ -324,7 +324,8 @@ def _inline_user_calls(expr: A.Expr, fn_table: dict[str, "A.FnDecl"],
       - Functions currently in `visiting` (mutual / direct recursion
         guard — prevents exponential AST expansion when inlining cycles
         like a→b→a). Stage 13: traps via the trap-id 87001 documented in
-        the plan; runtime impact is "leave call as opaque, gradient is 0".
+        the plan; runtime impact is now "leave call as opaque so AD fails
+        closed unless a chain rule exists".
       - depth >= max_depth (safety net).
       - Functions not in fn_table (treated as opaque external).
       - Extern declarations and bodyless functions (left opaque; AD engines
@@ -341,8 +342,8 @@ def _inline_user_calls(expr: A.Expr, fn_table: dict[str, "A.FnDecl"],
                        "__relu", "__sigmoid", "__tanh", "__softplus",
                        "__silu", "__abs", "__gelu", "__powi",
                        # min/max/clamp aren't differentiable at switch
-                       # points; treat as opaque (zero gradient) rather
-                       # than try to inline (audit-10).
+                       # points; leave opaque so the AD surface can reject
+                       # missing chain rules instead of inlining conditionals.
                        "__min", "__max", "__clamp",
                        "__min_i32", "__max_i32", "__clamp_i32"}
     visiting = visiting or frozenset()
@@ -835,10 +836,14 @@ def _diff(expr: A.Expr, var: str) -> A.Expr:
         deriv = _diff_call_chain_rule(expr, var, span)
         if deriv is not None:
             return deriv
-        # Audit 28.8 B5: unknown call site — emit warning + 0.
-        _ad_warn(expr, f"unrecognized call to "
-                       f"{getattr(expr.callee, 'name', '<?>')!r}")
-        return A.FloatLit(span=expr.span, value=0.0)
+        # Audit 28.8 B5 / Stage 35: unknown call sites fail closed.
+        # Stage 35: this branch now raises instead of returning a zero
+        # derivative, so unsupported gradients cannot hide behind warnings.
+        callee = getattr(expr.callee, "name", "<?>")
+        raise NotImplementedError(
+            f"forward-mode AD does not support opaque call {callee!r}; "
+            "add a chain rule or inline a differentiable helper"
+        )
     # Audit 28.8 B5: Cast arm. Numeric `x as f64` propagates the
     # derivative through (chain-rule factor is 1 for numeric widening).
     # Non-numeric Cast (e.g., `x as *T`) returns 0 with a warning.

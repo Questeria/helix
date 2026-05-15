@@ -7295,10 +7295,8 @@ def test_stage13b_grad_through_multi_level_helpers():
 def test_stage13c_grad_recursion_guard_does_not_infinite_loop():
     # Stage 13 visited-set guard for direct recursion: r calls itself.
     # Inlining is suppressed at the recursive call (otherwise the AST
-    # explodes). The recursive call is left opaque, so its derivative is
-    # treated as 0 (best-effort) — but importantly: the compiler must
-    # NOT infinite-loop. Test passes if compile_and_run returns at all.
-    # d/dx (r(x)) is opaque so result is 0; +42 = 42.
+    # explodes). The recursive call is left opaque, so Stage 35 now requires
+    # a fail-closed AD error instead of a zero-gradient surrogate.
     src = """
     fn r(x: f32) -> f32 { r(x) }
     fn main() -> i32 {
@@ -7306,7 +7304,9 @@ def test_stage13c_grad_recursion_guard_does_not_infinite_loop():
         (g + 42.0) as i32
     }
     """
-    assert compile_and_run(src) == 42
+    import pytest
+    with pytest.raises(NotImplementedError, match="forward-mode AD.*r"):
+        compile_and_run(src)
 
 
 def test_stage13d_grad_mutual_recursion_does_not_infinite_loop():
@@ -7325,7 +7325,37 @@ def test_stage13d_grad_mutual_recursion_does_not_infinite_loop():
         if g >= 0.0 { 42 } else { 1 }
     }
     """
-    assert compile_and_run(src) == 42
+    import pytest
+    with pytest.raises(NotImplementedError, match="forward-mode AD.*(a|b)"):
+        compile_and_run(src)
+
+
+def test_grad_rejects_opaque_call_in_loss():
+    import pytest
+    src = """
+    extern "C" fn opaque_loss(x: f32) -> f32;
+    fn loss(x: f32) -> f32 { opaque_loss(x) }
+    fn main() -> i32 {
+        grad(loss)(2.0) as i32
+    }
+    """
+    with pytest.raises(NotImplementedError, match="forward-mode AD.*opaque_loss"):
+        compile_and_run(src)
+
+
+def test_grad_pass_preserves_f64_gradient_signature():
+    from helixc.frontend import ast_nodes as A
+    prog = parse(
+        "fn sq(x: f64) -> f64 { x * x } "
+        "fn main() -> i32 { __f64_to_i32(grad(sq)(2.0_f64)) }"
+    )
+    grad_pass(prog)
+    grad_fn = next(it for it in prog.items
+                   if isinstance(it, A.FnDecl) and it.name == "sq__grad")
+    assert isinstance(grad_fn.params[0].ty, A.TyName)
+    assert grad_fn.params[0].ty.name == "f64"
+    assert isinstance(grad_fn.return_ty, A.TyName)
+    assert grad_fn.return_ty.name == "f64"
 
 
 def test_stage13e_pure_attr_still_works_for_back_compat():
@@ -9449,6 +9479,25 @@ def test_nn_dense_classifier_sgd_step_f32_rejects_invalid_label():
     assert code == 42, f"expected 42, got {code}"
 
 
+def test_nn_dense_classifier_sgd_step_f32_rejects_invalid_shape():
+    """Dense classifier step should reject invalid model shapes loudly."""
+    src = """
+    fn main() -> i32 {
+        let w = t1d_new(4);
+        let b = t1d_new(2);
+        let x = t1d_new(2);
+        let scratch = t1d_new(3);
+        let shape = t1d_new(2);
+        __arena_set(shape, 0);
+        __arena_set(shape + 1, 2);
+        dense_classifier_sgd_step_f32(
+            w, b, x, 0, scratch, shape, 1.0_f32) - 34959
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
 def test_nn_dense_classifier_sgd_step_f32_does_not_clobber_small_scratch():
     """Classifier step must not trust undersized caller scratch space."""
     src = """
@@ -10650,6 +10699,42 @@ def test_revad_remaining():
     """
     code = compile_and_run(src)
     assert code == 42, f"expected 42 (10 + 7*5 - 3), got {code}"
+
+
+def test_revad_push_rejects_full_tape_without_overwrite():
+    """A full reverse-AD tape should return -1 and leave following arena alone."""
+    src = """
+    fn main() -> i32 {
+        let tape = rev_tape_new(0);
+        let guard = t1d_new(1);
+        __arena_set(guard, 123);
+        let idx = rev_leaf(tape, 5);
+        if idx == (0 - 1) {
+            if rev_count(tape) == 0 {
+                if __arena_get(guard) == 123 { 42 } else { 7 }
+            } else { 7 }
+        } else { 7 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_revad_negative_capacity_is_clamped_to_zero():
+    """Negative tape capacities should not create impossible remaining space."""
+    src = """
+    fn main() -> i32 {
+        let tape = rev_tape_new(0 - 3);
+        let idx = rev_leaf(tape, 9);
+        if rev_cap(tape) == 0 {
+            if rev_remaining(tape) == 0 {
+                if idx == (0 - 1) { 42 } else { 7 }
+            } else { 7 }
+        } else { 7 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
 
 
 def test_autodiff_polynomial_derivative():

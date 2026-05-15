@@ -104,9 +104,10 @@ fn loss(x: D<f32>, y: D<f32>) -> D<f32> {
 ```
 
 `D<T>` means "differentiable T". The compiler propagates gradient flow at
-type-check time. `grad(f)` is a compiler pass that produces the backward
-function. `D<T>` values can compose with non-differentiable code only via
-explicit `detach`.
+type-check time. Stage 35 exposes scalar `grad`, `grad_rev`, and
+`grad_rev_all` compiler rewrites for `f32`/`f64`; broader tensor gradients and
+pytree leaf expansion are still being wired. `D<T>` values can compose with
+non-differentiable code only via explicit `detach`.
 
 **Unique because**: PyTorch tracks gradients at *runtime* via a tape.
 JAX tracks them via *function transformations*. Helix tracks them in the
@@ -187,11 +188,19 @@ a *language primitive* with type-level guarantees is novel.
 | 6. Shape-typed tensors + Presburger | ✅ working | 28 (24 solver + 4 integration) | catches matmul mismatches at compile time |
 | 7. Agent type declarations | ✅ parsing | 4 parser | `agent Foo { fn ...; }` |
 | 8. Tile types in codegen | Phase-0 PTX lowering | PTX / Tile IR tests | 1D HBM `f32`/`i32` kernels plus scalar ops; broader GPU lowering remains in progress |
-| 9. Composable transforms (`grad`/`vmap`) | ✅ engine working (CLI) | 13 autodiff | symbolic forward-mode AD; CLI prints derivatives |
+| 9. Composable transforms (`grad`/`grad_rev`) | Stage 35 scalar surface | autodiff + codegen tests | scalar forward/reverse AD with fail-closed opaque calls; `vmap`/`jit` remain future work |
 | 10. Auto-curriculum (`learn_to`) | ✅ working (type-level) | 2 typecheck | returns Skill<F>; runtime registry TBD |
 
 Live test and commit counts move quickly during staged development; see the
 current stage progress note and `pytest` output for authoritative evidence.
+
+### FFI status
+
+`extern "C"` is implemented for the current native backend and is tested for
+dynamic linking plus integer, pointer, and `f32` ABI routing. It is not the
+full future interop vision yet: Python/CUDA/ROCm bindings, cross-platform ABI
+coverage, ownership-preserving wrappers, and richer capability contracts remain
+future work.
 
 ### Autodiff usage
 
@@ -216,9 +225,10 @@ deriv = differentiate(fn.body.final_expr, "x")
 print(fmt(deriv))   # = (((x + x) * x) + (x * x))
 ```
 
-This is the engine that will eventually power a `grad(f)` builtin in the
-language. The engine handles +, -, *, /, unary -, constants, and variables.
-Future work: chain rule for function calls, blocks/let-bindings, reverse-mode.
+This engine now powers the scalar `grad(f)` surface for inlinable functions and
+known chain-rule calls. Reverse-mode is available through `grad_rev` and
+`grad_rev_all`. Future work: tensor gradients, pytree public expansion,
+`vmap`/`jit`, and custom chain-rule registration.
 
 ## What this gives Helix as a foundation
 
