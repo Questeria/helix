@@ -1124,3 +1124,25 @@ Three fresh read-only clean-gate lanes passed on commit `8cc5512`:
 
 The clean-gate counter advances to `1/3`. Clean Gate 2 should start from the
 commit containing this pass record.
+
+## Clean Gate 2 Passed - Counter 2/3
+
+Three fresh read-only clean-gate lanes passed on commit `a4d6abb`:
+
+- Proof-soundness audit: PASS with high confidence. It found no refined-return
+  false-clean across the Stage 34 proof surfaces and verified the static index
+  repair behavior with focused suites and independent probes.
+- Proof artifact and archive reproducibility audit: PASS with high confidence.
+  It verified archive LF scope, extracted Stage 0 run/build gates, extracted
+  runtime-test paths, proof-artifact negative tests, and quick/full validation
+  from the extracted archive tree.
+- Documentation and gate-discipline audit: PASS with high confidence. It
+  verified the Clean Gate 1 pass record, chronology through Twenty Seventh,
+  and the counter state.
+
+The archive audit noted CR bytes in non-fixture Stage 0 reference files, but
+did not count them as a Stage 34 gate failure because the shell scripts, Stage
+0 hex0 test fixtures, and extracted Stage 0 run/build gates are clean.
+
+The clean-gate counter advances to `2/3`. Clean Gate 3 should start from the
+commit containing this pass record.
