@@ -892,6 +892,40 @@ def test_gate_rejects_unrepresentable_generic_call_arg_false_pass(
     )
 
 
+def test_gate_rejects_unrepresentable_generic_wrapper_false_pass(
+    capsys, tmp_path,
+):
+    source = tmp_path / "unrepresentable_generic_wrapper.hx"
+    source.write_text(
+        "type AlwaysF64 = f64 where true;\n"
+        "fn id[T](x: T) -> T { x }\n"
+        "fn via[T](x: T) -> AlwaysF64 { x }\n"
+        "fn f() -> AlwaysF64 { via(id(id(1e309_f64))) }\n"
+        "fn main() -> i32 { 0 }\n",
+        encoding="utf-8",
+    )
+    artifact_path = tmp_path / "unrepresentable_generic_wrapper.proof.json"
+
+    rc = proof_artifact_gate.main([
+        str(source),
+        "--artifact-out",
+        str(artifact_path),
+        "--",
+        "--no-stdlib",
+    ])
+
+    captured = capsys.readouterr()
+    assert rc == 1
+    assert "typecheck_errors must be empty" in captured.err
+    artifact = json.loads(artifact_path.read_text(encoding="utf-8"))
+    assert artifact["summary"]["typecheck_errors"] >= 1
+    assert any(
+        "call to 'via': arg 'x'" in error
+        and "requires a representable target value" in error
+        for error in artifact["typecheck_errors"]
+    )
+
+
 def test_gate_returns_bad_invocation_for_missing_source(capsys, tmp_path):
     source = tmp_path / "missing.hx"
     artifact_path = tmp_path / "missing.proof.json"

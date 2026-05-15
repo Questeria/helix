@@ -964,3 +964,35 @@ Verification after this fix set:
   `CRLF=0`; `bash -n` accepted the shell scripts
 
 The clean-gate counter remains reset to `0/3`.
+
+## Clean Gate 1 Twenty Fourth Restart - Failed; Fix Verified; Counter Reset
+
+Fresh clean-gate auditors on commit `e27eb87` found one more Stage 34
+proof-soundness issue and one documentation discipline issue:
+
+- A generic wrapper returning a refined value could still hide unrepresentable
+  scalar evidence. `via[T](x: T) -> AlwaysF64` accepted `via(1e309_f64)`
+  because the representability check used formal type `T`, which has no
+  concrete numeric base.
+- `helixc/tests/test_reflection.py` still had broad demo comments around the
+  self-improving-agent and verifier examples.
+
+The fix carries erased numeric base evidence alongside local unrepresentable
+scalar markers and lets the Stage 34 representability check recover a base from
+the expression itself when the formal parameter type is still generic.
+Typecheck and proof-gate regressions now pin direct generic wrappers,
+local-let wrappers, and nested generic pass-through into a refined return. The
+remaining reflection comments were narrowed to test-scoped behavior.
+
+Verification after this fix set:
+
+- Focused generic-wrapper and reflection regressions: `20 passed`
+- Stage 34 focused typecheck/CLI/proof-gate slice plus reflection tests:
+  `56 passed`
+- `python -m pytest -q helixc/tests/test_typecheck.py helixc/tests/test_cli.py helixc/tests/test_proof_artifact_validate.py helixc/tests/test_proof_artifact_gate.py helixc/tests/test_strings_io.py helixc/tests/test_reflection.py helixc/tests/test_select_codegen.py`:
+  `528 passed`
+- `python scripts\stage31_validate.py --mode quick`: pass
+- `python scripts\stage31_validate.py --mode full --skip-snapshot --shards 8`:
+  pass across all 12 shards with no retries
+
+The clean-gate counter remains reset to `0/3`.

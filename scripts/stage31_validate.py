@@ -357,6 +357,7 @@ def quick(py: str) -> int:
             "helixc/tests/test_typecheck.py::test_stage34_unrepresentable_primitive_return_producer_is_not_clean",
             "helixc/tests/test_typecheck.py::test_stage34_unrepresentable_scalar_evidence_rejects_refined_return_call_args",
             "helixc/tests/test_typecheck.py::test_stage34_unrepresentable_scalar_evidence_rejects_generic_call_args",
+            "helixc/tests/test_typecheck.py::test_stage34_unrepresentable_scalar_evidence_rejects_generic_wrappers",
             "helixc/tests/test_typecheck.py::test_stage34_fixed_point_preserves_unbound_name_errors",
             "helixc/tests/test_typecheck.py::test_stage34_refinement_predicate_float_literals_use_target_suffix",
             "helixc/tests/test_typecheck.py::test_stage34_numeric_bound_carry_uses_represented_predicate_literals",

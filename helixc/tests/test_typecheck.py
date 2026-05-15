@@ -1148,6 +1148,54 @@ def test_stage34_unrepresentable_scalar_evidence_rejects_generic_call_args():
                for e in local_errs), local_errs
 
 
+def test_stage34_unrepresentable_scalar_evidence_rejects_generic_wrappers():
+    errs = check("""
+    type AlwaysF64 = f64 where true;
+    fn via[T](x: T) -> AlwaysF64 {
+        x
+    }
+    fn f() -> AlwaysF64 {
+        via(1e309_f64)
+    }
+    """)
+    assert any("call to 'via': arg 'x'" in e
+               and "requires a representable target value" in e
+               and "target base f64" in e
+               for e in errs), errs
+
+    local_errs = check("""
+    type AlwaysF64 = f64 where true;
+    fn via[T](x: T) -> AlwaysF64 {
+        let y = x;
+        y
+    }
+    fn f() -> AlwaysF64 {
+        via(1e309_f64)
+    }
+    """)
+    assert any("call to 'via': arg 'x'" in e
+               and "requires a representable target value" in e
+               and "target base f64" in e
+               for e in local_errs), local_errs
+
+    nested_errs = check("""
+    type AlwaysF64 = f64 where true;
+    fn id[T](x: T) -> T {
+        x
+    }
+    fn via[T](x: T) -> AlwaysF64 {
+        x
+    }
+    fn f() -> AlwaysF64 {
+        via(id(id(1e309_f64)))
+    }
+    """)
+    assert any("call to 'via': arg 'x'" in e
+               and "requires a representable target value" in e
+               and "target base f64" in e
+               for e in nested_errs), nested_errs
+
+
 def test_stage34_fixed_point_preserves_unbound_name_errors():
     errs = check("""
     type AlwaysI32 = i32 where true;

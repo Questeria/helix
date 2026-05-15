@@ -188,10 +188,10 @@ def test_dogfood_04_xor_relu_perceptron():
     assert compile_and_run(src) == 42
 
 
-def test_flagship_self_improving_agent_example():
+def test_self_improving_agent_example():
     # Compiles and runs helixc/examples/self_improving_agent.hx — the
-    # flagship demo composing reverse-mode AD + reflection + verifier
-    # gating + effect annotations all in one program.
+    # example composing reverse-mode AD + reflection + verifier gating +
+    # effect annotations all in one program.
     proj_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     example_path = os.path.join(proj_root, "helixc", "examples", "self_improving_agent.hx")
     with open(example_path) as f:
@@ -254,7 +254,7 @@ def test_modify_oob_handle_does_not_write():
 
 def test_verifier_can_bound_state():
     # An agent learns by gradient descent; verifier ensures the state
-    # never exceeds a safe range. This is the AGI demo in miniature.
+    # never exceeds a safe range.
     src = """
     fn safe_range(h: i32, v: i32) -> i32 {
         if v >= 0 { if v <= 100 { 1 } else { 0 } } else { 0 }

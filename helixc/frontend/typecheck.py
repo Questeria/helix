@@ -508,6 +508,7 @@ class TypeChecker:
         self._unrepresentable_scalar_return_functions: set[str] = set()
         self._local_const_scalar_scopes: list[dict[str, int | float | None]] = []
         self._local_const_unrepresentable_scopes: list[set[str]] = []
+        self._local_const_unrepresentable_base_scopes: list[dict[str, Type]] = []
         self._current_return_ty: Type = TyUnit()
         self.proof_obligations: list[ProofObligation] = []
         self.proof_carries: list[ProofCarry] = []
@@ -691,10 +692,12 @@ class TypeChecker:
     def _push_local_const_scope(self) -> None:
         self._local_const_scalar_scopes.append({})
         self._local_const_unrepresentable_scopes.append(set())
+        self._local_const_unrepresentable_base_scopes.append({})
 
     def _pop_local_const_scope(self) -> None:
         self._local_const_scalar_scopes.pop()
         self._local_const_unrepresentable_scopes.pop()
+        self._local_const_unrepresentable_base_scopes.pop()
 
     def _define_local_const_scalar(
         self, name: str, value: int | float | None,
@@ -702,25 +705,37 @@ class TypeChecker:
         if self._local_const_scalar_scopes:
             self._local_const_scalar_scopes[-1][name] = value
 
-    def _mark_local_const_unrepresentable(self, name: str) -> None:
+    def _mark_local_const_unrepresentable(
+        self, name: str, base: Type | None = None,
+    ) -> None:
         if self._local_const_unrepresentable_scopes:
             self._local_const_unrepresentable_scopes[-1].add(name)
+            if base is not None:
+                self._local_const_unrepresentable_base_scopes[-1][name] = base
 
     def _set_local_const_unrepresentable(
-        self, name: str, unrepresentable: bool,
+        self, name: str, unrepresentable: bool, base: Type | None = None,
     ) -> None:
         for idx in range(len(self._local_const_scalar_scopes) - 1, -1, -1):
             if name not in self._local_const_scalar_scopes[idx]:
                 continue
             if unrepresentable:
                 self._local_const_unrepresentable_scopes[idx].add(name)
+                if base is not None:
+                    self._local_const_unrepresentable_base_scopes[idx][name] = (
+                        base)
             else:
                 self._local_const_unrepresentable_scopes[idx].discard(name)
+                self._local_const_unrepresentable_base_scopes[idx].pop(
+                    name, None)
             return
         if self._local_const_scalar_scopes:
             self._local_const_scalar_scopes[-1][name] = None
             if unrepresentable:
                 self._local_const_unrepresentable_scopes[-1].add(name)
+                if base is not None:
+                    self._local_const_unrepresentable_base_scopes[-1][name] = (
+                        base)
 
     def _lookup_local_const_scalar(
         self, name: str,
@@ -740,6 +755,15 @@ class TypeChecker:
                     name in self._local_const_unrepresentable_scopes[idx],
                 )
         return False, False
+
+    def _lookup_local_const_unrepresentable_base(
+        self, name: str,
+    ) -> Type | None:
+        for idx in range(len(self._local_const_scalar_scopes) - 1, -1, -1):
+            if name in self._local_const_scalar_scopes[idx]:
+                return self._local_const_unrepresentable_base_scopes[idx].get(
+                    name)
+        return None
 
     # ---- registration ----
     def _check_const_decl(self, decl: A.ConstDecl) -> None:
@@ -2032,7 +2056,11 @@ class TypeChecker:
             if (stmt.value is not None
                     and self._expr_has_unrepresentable_typed_const_scalar(
                         stmt.value)):
-                self._mark_local_const_unrepresentable(stmt.name)
+                self._mark_local_const_unrepresentable(
+                    stmt.name,
+                    self._expr_unrepresentable_typed_const_scalar_base(
+                        stmt.value),
+                )
             return
         if isinstance(stmt, A.ExprStmt):
             self._check_expr(stmt.expr, scope)
@@ -2069,7 +2097,11 @@ class TypeChecker:
                 const_value, self._erase_refinement(ty))
             if source_unrepresentable:
                 self._define_local_const_scalar(stmt.name, None)
-                self._mark_local_const_unrepresentable(stmt.name)
+                self._mark_local_const_unrepresentable(
+                    stmt.name,
+                    self._expr_unrepresentable_typed_const_scalar_base(
+                        stmt.value),
+                )
             elif (len(self.errors) == stmt_error_start
                     and isinstance(const_value, (int, float))
                     and not isinstance(const_value, bool)):
@@ -2829,10 +2861,16 @@ class TypeChecker:
                     hint="assign an explicitly proven refined value instead",
                 ))
             if expr.op == "=" and isinstance(expr.target, A.Name):
+                assigned_unrepresentable = (
+                    self._expr_has_unrepresentable_typed_const_scalar(
+                        expr.value)
+                )
                 self._set_local_const_unrepresentable(
                     expr.target.name,
-                    self._expr_has_unrepresentable_typed_const_scalar(
-                        expr.value),
+                    assigned_unrepresentable,
+                    self._expr_unrepresentable_typed_const_scalar_base(
+                        expr.value)
+                    if assigned_unrepresentable else None,
                 )
             return TyUnit()
         if isinstance(expr, A.TupleLit):
@@ -3539,6 +3577,129 @@ class TypeChecker:
             )
         return False
 
+    def _expr_unrepresentable_typed_const_scalar_base(
+        self, expr: A.Expr,
+    ) -> Type | None:
+        if isinstance(expr, A.Name) and not expr.generics:
+            local_base = self._lookup_local_const_unrepresentable_base(
+                expr.name)
+            if local_base is not None:
+                return local_base
+            if expr.name in self._unrepresentable_const_scalar_names:
+                decl = self._const_decls.get(expr.name)
+                if decl is not None:
+                    return self._const_index_target_type(decl)
+            return None
+        base = self._infer_const_expr_numeric_base(expr)
+        if base is not None:
+            typed_value = self._eval_const_scalar_expr(
+                expr, None, use_local_consts=True,
+                honor_float_suffix=True, numeric_base=base)
+            if typed_value is None:
+                raw_value = self._eval_raw_const_scalar_fallback(expr)
+                if (raw_value is not None
+                        and self._cast_const_scalar_to_type(
+                            raw_value, base) is None):
+                    return base
+        if isinstance(expr, A.Cast):
+            return self._expr_unrepresentable_typed_const_scalar_base(
+                expr.value)
+        if isinstance(expr, A.Unary):
+            return self._expr_unrepresentable_typed_const_scalar_base(
+                expr.operand)
+        if isinstance(expr, A.Binary):
+            return (
+                self._expr_unrepresentable_typed_const_scalar_base(expr.left)
+                or self._expr_unrepresentable_typed_const_scalar_base(
+                    expr.right)
+            )
+        if isinstance(expr, A.If):
+            branches = [expr.then]
+            if expr.else_ is not None:
+                branches.append(expr.else_)
+            for branch in branches:
+                base = self._expr_unrepresentable_typed_const_scalar_base(
+                    branch)
+                if base is not None:
+                    return base
+            return None
+        if isinstance(expr, A.Match):
+            for arm in expr.arms:
+                base = self._expr_unrepresentable_typed_const_scalar_base(
+                    arm.body)
+                if base is not None:
+                    return base
+            return None
+        if isinstance(expr, A.Block):
+            for stmt in expr.stmts:
+                base = self._stmt_unrepresentable_typed_const_scalar_base(stmt)
+                if base is not None:
+                    return base
+            if expr.final_expr is not None:
+                return self._expr_unrepresentable_typed_const_scalar_base(
+                    expr.final_expr)
+            return None
+        if isinstance(expr, A.TupleLit):
+            for elem in expr.elems:
+                base = self._expr_unrepresentable_typed_const_scalar_base(
+                    elem)
+                if base is not None:
+                    return base
+            return None
+        if isinstance(expr, A.ArrayLit):
+            for elem in expr.elems:
+                base = self._expr_unrepresentable_typed_const_scalar_base(
+                    elem)
+                if base is not None:
+                    return base
+            return None
+        if isinstance(expr, A.StructLit):
+            for _, value in expr.fields:
+                base = self._expr_unrepresentable_typed_const_scalar_base(
+                    value)
+                if base is not None:
+                    return base
+            return None
+        if isinstance(expr, A.Field):
+            return self._expr_unrepresentable_typed_const_scalar_base(expr.obj)
+        if isinstance(expr, A.Index):
+            base = self._expr_unrepresentable_typed_const_scalar_base(
+                expr.callee)
+            if base is not None:
+                return base
+            for index in expr.indices:
+                base = self._expr_unrepresentable_typed_const_scalar_base(
+                    index)
+                if base is not None:
+                    return base
+            return None
+        if isinstance(expr, A.Call):
+            if (isinstance(expr.callee, A.Name)
+                    and expr.callee.name in getattr(
+                        self,
+                        "_unrepresentable_scalar_return_functions",
+                        set(),
+                    )):
+                sig = self.functions.get(expr.callee.name)
+                if sig is not None:
+                    return self._const_eval_numeric_base(sig.ret)
+            base = self._expr_unrepresentable_typed_const_scalar_base(
+                expr.callee)
+            if base is not None:
+                return base
+            for arg in expr.args:
+                base = self._expr_unrepresentable_typed_const_scalar_base(arg)
+                if base is not None:
+                    return base
+            return None
+        if isinstance(expr, A.Assign):
+            return (
+                self._expr_unrepresentable_typed_const_scalar_base(expr.target)
+                or self._expr_unrepresentable_typed_const_scalar_base(
+                    expr.value)
+            )
+        return None
+
     def _stmt_has_unrepresentable_typed_const_scalar(
         self, stmt: A.Stmt,
     ) -> bool:
@@ -3555,6 +3716,20 @@ class TypeChecker:
             return self._expr_has_unrepresentable_typed_const_scalar(
                 stmt.expr)
         return False
+
+    def _stmt_unrepresentable_typed_const_scalar_base(
+        self, stmt: A.Stmt,
+    ) -> Type | None:
+        if isinstance(stmt, A.Let) and stmt.value is not None:
+            return self._expr_unrepresentable_typed_const_scalar_base(
+                stmt.value)
+        if isinstance(stmt, A.ConstStmt):
+            return self._expr_unrepresentable_typed_const_scalar_base(
+                stmt.value)
+        if isinstance(stmt, A.ExprStmt):
+            return self._expr_unrepresentable_typed_const_scalar_base(
+                stmt.expr)
+        return None
 
     def _eval_raw_const_scalar_fallback(
         self, expr: A.Expr,
@@ -4470,7 +4645,10 @@ class TypeChecker:
             return False
         target_base = self._const_eval_numeric_base(target_ty)
         if target_base is None:
-            return False
+            target_base = self._expr_unrepresentable_typed_const_scalar_base(
+                value_expr)
+            if target_base is None:
+                return False
         if not self._expr_has_unrepresentable_typed_const_scalar(value_expr):
             return False
         if not report:
