@@ -11007,6 +11007,62 @@ def test_negative_2d_shape_helpers_treat_shape_as_empty():
     assert code == 42, f"expected 42, got {code}"
 
 
+def test_negative_2d_matvec_shapes_do_not_write_outputs():
+    src = """
+    fn main() -> i32 {
+        let w = t1d_new(1);
+        __arena_set(w, 5);
+        let x = t1d_new(1);
+        __arena_set(x, 7);
+        let y = t1d_new(1);
+        __arena_set(y, 42);
+        ti2d_matvec(w, 1, 0 - 1, x, y);
+        if __arena_get(y) == 42 {
+            let wf = t1d_new(1);
+            tf1d_set(wf, 0, 5.0_f32);
+            let xf = t1d_new(1);
+            tf1d_set(xf, 0, 7.0_f32);
+            let yf = t1d_new(1);
+            tf1d_set(yf, 0, 42.0_f32);
+            tf2d_matvec(wf, 1, 0 - 1, xf, yf);
+            if (tf1d_get(yf, 0) as i32) == 42 { 42 } else { 7 }
+        } else { 7 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_negative_dense_layer_shapes_do_not_write_outputs():
+    src = """
+    fn main() -> i32 {
+        let w = t1d_new(1);
+        __arena_set(w, 5);
+        let x = t1d_new(1);
+        __arena_set(x, 7);
+        let b = t1d_new(1);
+        __arena_set(b, 11);
+        let y = t1d_new(1);
+        __arena_set(y, 42);
+        dense_layer_forward(w, 1, 0 - 1, x, b, y);
+        if __arena_get(y) == 42 {
+            let wf = t1d_new(1);
+            tf1d_set(wf, 0, 5.0_f32);
+            let xf = t1d_new(1);
+            tf1d_set(xf, 0, 7.0_f32);
+            let bf = t1d_new(1);
+            tf1d_set(bf, 0, 11.0_f32);
+            let yf = t1d_new(1);
+            tf1d_set(yf, 0, 42.0_f32);
+            dense_layer_f32_forward(wf, 1, 0 - 1, xf, bf, yf);
+            if (tf1d_get(yf, 0) as i32) == 42 { 42 } else { 7 }
+        } else { 7 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
 def test_autodiff_polynomial_derivative():
     """Phase 2.1: forward-mode AD via dual numbers in Helix.
     f(x) = x*x + 2x + 1; df/dx = 2x+2; at x=3 -> 8."""

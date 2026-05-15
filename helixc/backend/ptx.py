@@ -628,7 +628,7 @@ def emit_ptx(tile_module: ti.TileModule, target: str = DEFAULT_TARGET) -> str:
 if __name__ == "__main__":
     import sys
     from ..frontend.lexer import LexError
-    from ..frontend.parser import parse, ParseError
+    from ..frontend.parser import parse, ParseError, STDLIB_STRICT_ENV
     from ..frontend.typecheck import typecheck
     from ..frontend.flatten_modules import flatten_modules, FlattenError
     from ..frontend.flatten_impls import flatten_impls, DuplicateMethodError
@@ -651,6 +651,9 @@ if __name__ == "__main__":
     from ..ir.tile_ir import lower_to_tile
 
     cli_args = sys.argv[1:]
+    if not cli_args:
+        print("error: ptx: missing input path", file=sys.stderr)
+        sys.exit(2)
     allowed_flags = {"--strict", "--stdlib", "--no-stdlib"}
     flags = {a for a in cli_args if a.startswith("-")}
     unknown_flags = sorted(flags - allowed_flags)
@@ -686,6 +689,12 @@ if __name__ == "__main__":
         for line in rendered.splitlines():
             print(f"  {line}", file=sys.stderr)
         sys.exit(1)
+    except FileNotFoundError as e:
+        msg = str(e)
+        if not msg:
+            msg = f"stdlib file missing with {STDLIB_STRICT_ENV}=1"
+        print(f"error: ptx: {msg}", file=sys.stderr)
+        sys.exit(2)
     try:
         flatten_modules(prog)
         flatten_impls(prog)

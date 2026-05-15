@@ -68,11 +68,12 @@ Functions inherit the union of their callees' capabilities. `@pure` functions
 have *no* capabilities. The type system enforces that capabilities can only
 be passed to functions that declare permission for them.
 
-**The AGI safety story**: a function marked `@effect(modify_self)` can rewrite
-the AGI's source. The compiler tracks which functions can do this. A
-capability-typed function pointer cannot be passed to a `@pure` context, even
-through indirection. This makes "the AGI cannot modify itself unless given
-capability X" formally checkable.
+**The AGI safety story**: a function marked `@effect(modify_self)` is the
+explicit permission boundary for future source-rewrite-capable operations. The
+compiler tracks which functions carry that capability. A capability-typed
+function pointer cannot be passed to a `@pure` context, even through
+indirection. This makes "the AGI cannot modify itself unless given capability
+X" formally checkable as the real rewrite surface lands.
 
 **Why this matters**: effect systems already exist in research and production
 languages, but Helix's target is to make AGI-safety capabilities part of the
@@ -90,10 +91,11 @@ type SemanticMem<T> = Indexed<T>;     // knowledge graph node
 type ProceduralMem<F> = Skill<F>;     // learned procedure
 ```
 
-Cross-tier ops (e.g., consolidating episodic → semantic) are first-class
-operators: `consolidate(epi)`, `recall(query)`, `retrieve(addr)`. The compiler
-enforces invariants: episodic memories must carry timestamps, semantic
-entries must be deduplicated, etc.
+Current Stage 35 behavior is type-level plus selected builtins: memory wrappers
+typecheck, and `consolidate` / `recall` have special-case checking. The broader
+target is first-class cross-tier operators such as `consolidate(epi)`,
+`recall(query)`, and `retrieve(addr)` with compiler-enforced timestamp,
+provenance, and deduplication invariants.
 
 **Why this matters**: cognitive-science memory models normally live outside the
 programming language. Helix's target is to make the AGI's memory architecture
@@ -200,7 +202,7 @@ target is to make skills a language primitive with type-level guarantees.
 | 1. Reflection (`quote`/`splice`/`modify`) | ✅ working (stub semantics) | 4 codegen | `quote` returns a stable AST hash; runtime AST/splice execution remains future work |
 | 2. Verifier-gated modify | ✅ scaffolded | 2 codegen | accept/reject based on verifier value; real rewrite/commit semantics remain future work |
 | 3. Effect/capability types | ✅ working | 6 typecheck | `@pure` / `@io` etc. propagate at compile time |
-| 4. Memory-tier types | ✅ working | 5 typecheck | Working/Episodic/Semantic/Procedural |
+| 4. Memory-tier types | ✅ working (type-level) | 5 typecheck | Working/Episodic/Semantic/Procedural wrappers plus selected `consolidate` / `recall` checks; broader runtime invariants remain future work |
 | 5. Differentiable types `D<T>` | ✅ working | 5 typecheck | propagates through binary ops |
 | 6. Shape-typed tensors + Presburger | ✅ working | 28 (24 solver + 4 integration) | catches matmul mismatches at compile time |
 | 7. Agent type declarations | ✅ parsing | 4 parser | `agent Foo { fn ...; }` |

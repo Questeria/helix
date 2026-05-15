@@ -19,6 +19,9 @@
 // slots) and gets z+b. Returns 0.
 fn dense_layer_forward(w_start: i32, w_rows: i32, w_cols: i32,
                        x_start: i32, b_start: i32, y_start: i32) -> i32 {
+    if w_rows <= 0 { 0 }
+    else { if w_cols <= 0 { 0 }
+    else {
     ti2d_matvec(w_start, w_rows, w_cols, x_start, y_start);
     let mut r: i32 = 0;
     while r < w_rows {
@@ -27,6 +30,7 @@ fn dense_layer_forward(w_start: i32, w_rows: i32, w_cols: i32,
         r = r + 1;
     }
     0
+    }}
 }
 
 // Element-wise relu in-place: y[i] = max(0, x[i]). Returns 0.
@@ -240,6 +244,9 @@ fn mse_loss_f32_grad(y_start: i32, t_start: i32,
 
 fn dense_layer_f32_forward(w_start: i32, w_rows: i32, w_cols: i32,
                            x_start: i32, b_start: i32, y_start: i32) -> i32 {
+    if w_rows <= 0 { 0 }
+    else { if w_cols <= 0 { 0 }
+    else {
     tf2d_matvec(w_start, w_rows, w_cols, x_start, y_start);
     let mut r: i32 = 0;
     while r < w_rows {
@@ -249,6 +256,7 @@ fn dense_layer_f32_forward(w_start: i32, w_rows: i32, w_cols: i32,
         r = r + 1;
     }
     0
+    }}
 }
 
 // Dense layer backward helpers for y = W @ x + b.

@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 import os, sys
+import io
+import runpy
 import subprocess
 import tempfile
 import pytest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
+from helixc.frontend import parser as parser_mod
 from helixc.frontend.parser import parse
 from helixc.ir.lower_ast import lower
 from helixc.ir import tir, tile_ir as ti
@@ -482,6 +485,16 @@ def test_stage35_direct_ptx_cli_reports_missing_file_without_traceback():
 def test_stage35_direct_ptx_cli_bad_invocation_returns_two():
     proj_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     proc = subprocess.run(
+        [sys.executable, "-m", "helixc.backend.ptx"],
+        cwd=proj_root,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert proc.returncode == 2, proc.stdout + proc.stderr
+    assert "missing input path" in proc.stderr
+
+    proc = subprocess.run(
         [sys.executable, "-m", "helixc.backend.ptx", "--bogus"],
         cwd=proj_root,
         capture_output=True,
@@ -500,6 +513,20 @@ def test_stage35_direct_ptx_cli_bad_invocation_returns_two():
     )
     assert proc.returncode == 2, proc.stdout + proc.stderr
     assert "expected at most one input path" in proc.stderr
+
+
+def test_stage35_direct_ptx_cli_missing_strict_stdlib_returns_two(monkeypatch, capsys):
+    monkeypatch.setenv(parser_mod.STDLIB_STRICT_ENV, "1")
+    monkeypatch.setattr(parser_mod, "STDLIB_FILES", ["__definitely_missing_stage35_stdlib__.hx"])
+    monkeypatch.setattr(sys, "argv", ["helixc.backend.ptx", "--stdlib"])
+    monkeypatch.setattr(sys, "stdin", io.StringIO("@kernel fn k() { let i = thread_idx(); }\n"))
+    monkeypatch.delitem(sys.modules, "helixc.backend.ptx", raising=False)
+    with pytest.raises(SystemExit) as exc:
+        runpy.run_module("helixc.backend.ptx", run_name="__main__")
+    captured = capsys.readouterr()
+    assert exc.value.code == 2, captured.out + captured.err
+    assert "stdlib file missing" in captured.err
+    assert "Traceback" not in captured.err
 
 
 def test_stage35_direct_ptx_cli_reports_parse_error_without_traceback():

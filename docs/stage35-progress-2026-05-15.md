@@ -924,6 +924,58 @@ Clean-gate status:
 - Stage 35 clean gates remain `0/3`.
 - Next step is another fresh Stage 35 clean gate on this fixed commit.
 
+## Increment 29 - Tenth Clean-Gate Restart Fix Sweep
+
+The next fresh Stage 35 audit restart found one negative-shape runtime write
+bug, two direct PTX invocation-parity gaps, and current-vs-future documentation
+issues, so the gate did not count as clean and remains at `0/3`.
+
+Fixes landed in this increment:
+
+- `ti2d_matvec` and `tf2d_matvec` now treat non-positive row or column counts as
+  empty no-op shapes before writing outputs.
+- Integer and f32 dense-layer forward helpers now inherit the same non-positive
+  shape no-op behavior instead of adding bias over invalid matrix metadata.
+- Direct PTX no-argument invocation now returns exit code `2` with a missing
+  input path diagnostic.
+- Direct PTX strict stdlib loading now converts missing stdlib files into clean
+  exit code `2` diagnostics instead of Python tracebacks.
+- AGI feature docs now describe `modify_self` as the current explicit
+  capability boundary for future source-rewrite operations.
+- Memory-tier docs now distinguish the current type-level wrappers and selected
+  builtin checks from future first-class cross-tier runtime invariants.
+- The roadmap dogfood count now matches the five current dogfood programs/tests.
+
+Focused verification:
+
+- Per-file stdlib parser sweep across `STDLIB_FILES`
+  - Result: all stdlib files parsed.
+- `python -m py_compile helixc\backend\ptx.py`
+  - Result: passed.
+- `python -m pytest -q helixc\tests\test_codegen.py -k "negative_2d_matvec_shapes_do_not_write_outputs or negative_dense_layer_shapes_do_not_write_outputs or revad_seed_rejects_corrupt_adj_cap_metadata_without_guard_write or revad_grad_rejects_corrupt_adj_cap_metadata_without_guard_read or revad_seed_rejects_corrupt_adj_guard_metadata" --tb=short`
+  - Result: 5 passed.
+- `python -m pytest -q helixc\tests\test_ptx.py -k "stage35_direct_ptx_cli_bad_invocation_returns_two or stage35_direct_ptx_cli_missing_strict_stdlib_returns_two or stage35_direct_ptx_cli_reports_missing_file_without_traceback or stage35_direct_ptx_cli_strict_rejects_totality_failure" --tb=short`
+  - Result: 4 passed.
+- `python -m pytest -q helixc\tests\test_codegen.py -k "nn_ or stage35 or softmax or ce_loss or dense_classifier_sgd_step_f32 or adam_f32_step or builtin_adam_step or revad_ or grad_rev_all_writes_f64 or negative_length_tensor_nn_helpers or negative_length_integer_min_max or negative_2d_shape_helpers or builtin_bce_uses_stable_log_near_zero or builtin_bce_and_nn_bce_are_stable_near_one" --tb=short`
+  - Result: 85 passed.
+- `python -m pytest -q helixc\tests\test_ptx.py helixc\tests\test_tile_ir.py helixc\tests\test_autotune.py helixc\tests\test_cli.py -k "emit_ptx or ptx or tile_ir or autotune or unwind or unsafe or trace or stage35" --tb=short`
+  - Result: 117 passed.
+- `python -m pytest -q helixc\tests\test_autodiff.py helixc\tests\test_autodiff_reverse.py helixc\tests\test_pytree.py --tb=short`
+  - Result: 90 passed.
+- `python scripts\stage31_validate.py --mode quick --skip-snapshot`
+  - Result: passed, `stage31-quick: rc=0`.
+- `git diff --check`
+  - Result: passed.
+- Current-vs-future docs scan for dogfood count, source rewriting,
+  memory-tier runtime claims, and broad comparison wording
+  - Result: remaining matches are explicitly future-target phrasing, not
+    current capability claims.
+
+Clean-gate status:
+
+- Stage 35 clean gates remain `0/3`.
+- Next step is another fresh Stage 35 clean gate on this fixed commit.
+
 ## Next Work
 
 Likely follow-up slices:

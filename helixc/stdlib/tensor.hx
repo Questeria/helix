@@ -116,6 +116,9 @@ fn ti2d_set(start: i32, cols: i32, i: i32, j: i32, x: i32) -> i32 {
 // y = W @ x. W is rows*cols, x is cols, y is rows.
 fn ti2d_matvec(w_start: i32, w_rows: i32, w_cols: i32,
                x_start: i32, y_start: i32) -> i32 {
+    if w_rows <= 0 { 0 }
+    else { if w_cols <= 0 { 0 }
+    else {
     let mut r: i32 = 0;
     while r < w_rows {
         let mut c: i32 = 0;
@@ -128,6 +131,7 @@ fn ti2d_matvec(w_start: i32, w_rows: i32, w_cols: i32,
         r = r + 1;
     }
     0
+    }}
 }
 
 // Element-wise: y[i] = relu(x[i]) for i in [0, n). Integer relu.
@@ -252,6 +256,9 @@ fn tf2d_set(start: i32, cols: i32, i: i32, j: i32, x: f32) -> i32 {
 
 fn tf2d_matvec(w_start: i32, w_rows: i32, w_cols: i32,
                x_start: i32, y_start: i32) -> i32 {
+    if w_rows <= 0 { 0 }
+    else { if w_cols <= 0 { 0 }
+    else {
     let mut r: i32 = 0;
     while r < w_rows {
         let mut c: i32 = 0;
@@ -266,6 +273,7 @@ fn tf2d_matvec(w_start: i32, w_rows: i32, w_cols: i32,
         r = r + 1;
     }
     0
+    }}
 }
 
 // =========================================================================
