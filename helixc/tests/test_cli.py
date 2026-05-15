@@ -1676,11 +1676,9 @@ def test_stage34_failed_refined_cast_does_not_emit_return_carry(
         and obligation["status"] == "unproven"
         for obligation in artifact["obligations"]
     )
-    assert not any(
-        carry["context"] == "return value of function 'f'"
-        and carry["strategy"] == "same-refinement"
-        for carry in artifact["proof_carries"]
-    )
+    assert artifact["summary"]["proof_carries"] == 0
+    assert artifact["summary"]["proof_carry_strategies"] == {}
+    assert artifact["proof_carries"] == []
 
 
 def test_stage34_emit_proof_obligations_json_for_refined_f32_rounding(
