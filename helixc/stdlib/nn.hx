@@ -333,6 +333,43 @@ fn gelu_layer(x_start: i32, y_start: i32, n: i32) -> i32 {
     0
 }
 
+fn relu_layer_f32_backward(x_start: i32, dy_start: i32,
+                           dx_start: i32, n: i32) -> i32 {
+    let mut i: i32 = 0;
+    while i < n {
+        let x = __f32_from_bits(__arena_get(x_start + i));
+        let dy = __f32_from_bits(__arena_get(dy_start + i));
+        let dx = if x > 0.0_f32 { dy } else { 0.0_f32 };
+        __arena_set(dx_start + i, __bits_of_f32(dx));
+        i = i + 1;
+    }
+    0
+}
+
+fn sigmoid_layer_backward(y_start: i32, dy_start: i32,
+                          dx_start: i32, n: i32) -> i32 {
+    let mut i: i32 = 0;
+    while i < n {
+        let y = __f32_from_bits(__arena_get(y_start + i));
+        let dy = __f32_from_bits(__arena_get(dy_start + i));
+        __arena_set(dx_start + i, __bits_of_f32(dy * y * (1.0_f32 - y)));
+        i = i + 1;
+    }
+    0
+}
+
+fn tanh_layer_backward(y_start: i32, dy_start: i32,
+                       dx_start: i32, n: i32) -> i32 {
+    let mut i: i32 = 0;
+    while i < n {
+        let y = __f32_from_bits(__arena_get(y_start + i));
+        let dy = __f32_from_bits(__arena_get(dy_start + i));
+        __arena_set(dx_start + i, __bits_of_f32(dy * (1.0_f32 - y * y)));
+        i = i + 1;
+    }
+    0
+}
+
 // Layer normalization over one f32 vector.
 // y[i] = (x[i] - mean(x)) / sqrt(variance(x) + eps)
 fn layer_norm_f32(x_start: i32, y_start: i32, n: i32, eps: f32) -> i32 {

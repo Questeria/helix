@@ -64,6 +64,26 @@ Initial focused checks:
 - `python scripts\stage31_validate.py --mode quick --skip-snapshot`
   - Result: passed, `stage31-quick: rc=0`.
 
+## Increment 11 - f32 Activation Backprop Helpers
+
+The Helix neural-network stdlib now includes backward helpers for common f32
+activation layers:
+
+- `relu_layer_f32_backward`
+- `sigmoid_layer_backward`
+- `tanh_layer_backward`
+
+These helpers turn upstream gradients into input gradients for activation
+layers. This is another step toward writing full training loops directly in
+Helix.
+
+Focused verification:
+
+- `python -m pytest -q helixc\tests\test_codegen.py -k "activation_backprop_layers or relu_layer_f32_backward or sigmoid_layer_backward or tanh_layer_backward or modern_activation_layers" --tb=short`
+  - Result: 2 passed, 767 deselected.
+- `python scripts\stage31_validate.py --mode quick --skip-snapshot`
+  - Result: passed, `stage31-quick: rc=0`.
+
 ## Increment 10 - f32 Dense-Layer Backprop Helpers
 
 The Helix neural-network stdlib now includes dense-layer gradient helpers for

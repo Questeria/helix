@@ -9234,6 +9234,41 @@ def test_nn_modern_activation_layers():
     assert code == 42, f"expected 42, got {code}"
 
 
+def test_nn_activation_backprop_layers():
+    """ReLU, sigmoid, and tanh backward helpers produce simple known grads."""
+    src = """
+    fn main() -> i32 {
+        let x = t1d_new(2);
+        tf1d_set(x, 0, 0.0_f32 - 1.0_f32);
+        tf1d_set(x, 1, 2.0_f32);
+        let dy = t1d_new(2);
+        tf1d_set(dy, 0, 5.0_f32);
+        tf1d_set(dy, 1, 7.0_f32);
+        let dx = t1d_new(2);
+        relu_layer_f32_backward(x, dy, dx, 2);
+        let relu_score = (tf1d_sum(dx, 2) as i32) * 3;
+
+        let y_sig = t1d_new(1);
+        tf1d_set(y_sig, 0, 0.5_f32);
+        let dy_sig = t1d_new(1);
+        tf1d_set(dy_sig, 0, 8.0_f32);
+        let dx_sig = t1d_new(1);
+        sigmoid_layer_backward(y_sig, dy_sig, dx_sig, 1);
+        let sig_score = (tf1d_sum(dx_sig, 1) as i32) * 5;
+
+        let y_tanh = t1d_new(1);
+        tf1d_set(y_tanh, 0, 0.0_f32);
+        let dy_tanh = t1d_new(1);
+        tf1d_set(dy_tanh, 0, 11.0_f32);
+        let dx_tanh = t1d_new(1);
+        tanh_layer_backward(y_tanh, dy_tanh, dx_tanh, 1);
+        relu_score + sig_score + (tf1d_sum(dx_tanh, 1) as i32)
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
 def test_nn_dropout_f32_keep_prob_one_copies_input():
     """dropout keep_prob=1 copies input unchanged. [2,3] sum=5; *10-8=42."""
     src = """
