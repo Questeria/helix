@@ -229,7 +229,7 @@ Verification after the target-representation fix:
 - `python scripts\stage31_validate.py --mode full --skip-snapshot --shards 8`:
   pass
 
-## Clean Gate 1 Second Restart - Failed, F32 Overflow Fix In Progress
+## Clean Gate 1 Second Restart - Failed; Fix Verified; Counter Reset
 
 The second restarted clean gate did not count as clean. The proof-artifact
 audit found that `f32` overflow could still be converted to `inf` inside the
@@ -249,7 +249,8 @@ refined values, so enclosing contexts cannot record proof carries from them.
 Verification after the overflow and failed-cast artifact fixes:
 
 - Focused regression slice: `5 passed`
-- Exact failed-cast repro: `rc=1`, `proof_carries=[]`
+- Exact failed-cast repro: `rc=1`, `proof_carries=[]`; pinned by
+  `test_stage34_failed_refined_cast_does_not_emit_return_carry`
 - `python scripts\stage31_validate.py --mode quick --skip-snapshot`: pass
 - `python -m pytest -q helixc/tests/test_typecheck.py helixc/tests/test_cli.py helixc/tests/test_proof_artifact_gate.py`:
   `408 passed`

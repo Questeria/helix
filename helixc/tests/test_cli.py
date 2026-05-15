@@ -1654,11 +1654,7 @@ def test_stage34_emit_proof_obligations_json_for_refined_cast_target_value(
     assert "target value 0 does not satisfy self == 0.5" in (
         artifact["typecheck_errors"][0]
     )
-    assert not any(
-        carry["context"] == "return value of function 'f'"
-        and carry["strategy"] == "same-refinement"
-        for carry in artifact["proof_carries"]
-    )
+    assert artifact["proof_carries"] == []
 
 
 def test_stage34_failed_refined_cast_does_not_emit_return_carry(
