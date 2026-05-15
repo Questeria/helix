@@ -19,6 +19,7 @@ License: Apache 2.0
 from __future__ import annotations
 
 import copy
+from dataclasses import fields, is_dataclass
 
 from . import ast_nodes as A
 from .ast_walker import ASTVisitor
@@ -36,6 +37,39 @@ def _ty_name(ty: A.TyNode | None) -> str | None:
     if isinstance(ty, A.TyName):
         return ty.name
     return None
+
+
+def _with_float_literal_suffix(expr: A.Expr, suffix: str) -> A.Expr:
+    """Return a copy where unsuffixed float literals carry `suffix`.
+
+    Reverse AD can simplify a f64 derivative to an unsuffixed literal like
+    `2.0`. Lowering defaults unsuffixed floats to f32, which is unsafe when the
+    generated reflection writer is `modify_f64`.
+    """
+    cloned = copy.deepcopy(expr)
+
+    def visit(node: object) -> None:
+        if isinstance(node, A.FloatLit) and node.type_suffix is None:
+            node.type_suffix = suffix
+        if not is_dataclass(node):
+            return
+        for f in fields(node):
+            value = getattr(node, f.name)
+            if isinstance(value, list):
+                for item in value:
+                    if isinstance(item, tuple):
+                        for part in item:
+                            visit(part)
+                    else:
+                        visit(item)
+            elif isinstance(value, tuple):
+                for item in value:
+                    visit(item)
+            else:
+                visit(value)
+
+    visit(cloned)
+    return cloned
 
 
 # Stage 28.8.2: grad_pass's `_expr_has_grad` predicate migrated to
@@ -539,16 +573,19 @@ def _generate_grad_rev_all_fn(fn: A.FnDecl,
     base_name = "__base"
     for i, p_name in enumerate(var_names):
         g_var = f"__g_{i}"
+        ty_name = _ty_name(fn.params[i].ty)
+        grad_expr = all_grads[p_name]
+        if ty_name in ("f32", "f64"):
+            grad_expr = _with_float_literal_suffix(grad_expr, ty_name)
         body_stmts.append(A.Let(
             span=span, name=g_var, ty=None,
-            value=all_grads[p_name], is_mut=False,
+            value=grad_expr, is_mut=False,
         ))
         # base + i
         idx_expr = (A.Name(span=span, name=base_name) if i == 0
                     else A.Binary(span=span, op="+",
                                    left=A.Name(span=span, name=base_name),
                                    right=A.IntLit(span=span, value=i)))
-        ty_name = _ty_name(fn.params[i].ty)
         modify_name = "modify_f64" if ty_name == "f64" else "modify_f"
         verifier_name = "__always_accept_f64" if ty_name == "f64" else "__always_accept"
         call = A.Call(

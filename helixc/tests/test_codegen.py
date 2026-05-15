@@ -7530,6 +7530,18 @@ def test_grad_rev_all_writes_f64_gradient_to_f64_cell():
     assert code == 6, f"expected 6, got {code}"
 
 
+def test_grad_rev_all_writes_f64_constant_gradient_to_f64_cell():
+    src = """
+    fn loss(x: f64) -> f64 { 2.0_f64 * x }
+    fn main() -> i32 {
+        grad_rev_all(loss)(9.0_f64, 0);
+        splice_f64(quote(0)) as i32
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 2, f"expected 2, got {code}"
+
+
 def test_grad_rejects_scalar_target_when_sibling_aggregate_param_exists():
     import pytest
     src = """
@@ -10811,6 +10823,68 @@ def test_revad_backward_rejects_corrupt_operand_index():
         if status == (0 - 1) {
             if rev_grad(adj, x) == 0 { 42 } else { 7 }
         } else { 7 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_revad_seed_rejects_invalid_index_without_corrupting_tape():
+    src = """
+    fn main() -> i32 {
+        let tape = rev_tape_new(2);
+        let x = rev_leaf(tape, 5);
+        let adj = rev_alloc_adjoints(tape);
+        let status = rev_seed(adj, 0 - 1, 99);
+        if status == (0 - 1) {
+            if rev_value_at(tape, x) == 5 { 42 } else { 7 }
+        } else { 7 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_revad_grad_invalid_index_returns_zero():
+    src = """
+    fn main() -> i32 {
+        let tape = rev_tape_new(2);
+        let x = rev_leaf(tape, 5);
+        let adj = rev_alloc_adjoints(tape);
+        rev_seed(adj, x, 11);
+        if rev_grad(adj, 0 - 1) == 0 {
+            if rev_grad(adj, 9) == 0 { 42 } else { 7 }
+        } else { 7 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_negative_length_tensor_nn_helpers_return_empty_values():
+    src = """
+    fn main() -> i32 {
+        let x = t1d_new(2);
+        __arena_set(x, 99);
+        __arena_set(x + 1, 77);
+        let fx = t1d_new(2);
+        tf1d_set(fx, 0, 5.0_f32);
+        tf1d_set(fx, 1, 7.0_f32);
+        let ok =
+            if argmax(x, 0 - 1) == (0 - 1) {
+            if argmin(x, 0 - 1) == (0 - 1) {
+            if ti1d_argmax(x, 0 - 1) == (0 - 1) {
+            if ti1d_argmin(x, 0 - 1) == (0 - 1) {
+            if tf1d_argmax(fx, 0 - 1) == (0 - 1) {
+            if tf1d_argmin(fx, 0 - 1) == (0 - 1) {
+            if ti1d_is_empty(x, 0 - 1) == 1 {
+            if ti1d_first(x, 0 - 1) == 0 {
+            if ti1d_last(x, 0 - 1) == 0 {
+            if (tf1d_first(fx, 0 - 1) as i32) == 0 {
+            if (tf1d_last(fx, 0 - 1) as i32) == 0 { 42 } else { 7 }
+            } else { 7 }} else { 7 }} else { 7 }} else { 7 }} else { 7 }
+            } else { 7 }} else { 7 }} else { 7 }} else { 7 }} else { 7 };
+        ok
     }
     """
     code = compile_and_run(src)

@@ -317,7 +317,7 @@ fn tf2d_matvec(w_start: i32, w_rows: i32, w_cols: i32,
 // Integer-tensor argmin (returns index of smallest element).
 // Companion to ti1d_argmax. n == 0 returns -1.
 @pure fn ti1d_argmin(start: i32, n: i32) -> i32 {
-    if n == 0 { 0 - 1 }
+    if n <= 0 { 0 - 1 }
     else {
         let mut best = __arena_get(start);
         let mut best_idx: i32 = 0;
@@ -333,7 +333,7 @@ fn tf2d_matvec(w_start: i32, w_rows: i32, w_cols: i32,
 
 // Integer-tensor argmax (returns index of largest element).
 @pure fn ti1d_argmax(start: i32, n: i32) -> i32 {
-    if n == 0 { 0 - 1 }
+    if n <= 0 { 0 - 1 }
     else {
         let mut best_idx: i32 = 0;
         let mut best_val = __arena_get(start);
@@ -415,7 +415,7 @@ fn ti1d_mul_scalar(x_start: i32, scalar: i32, y_start: i32, n: i32) -> i32 {
 
 // f32 reductions
 @pure fn tf1d_mean(start: i32, n: i32) -> f32 {
-    if n == 0 { 0.0_f32 }
+    if n <= 0 { 0.0_f32 }
     else { tf1d_sum(start, n) / (n as f32) }
 }
 
@@ -434,7 +434,7 @@ fn ti1d_mul_scalar(x_start: i32, scalar: i32, y_start: i32, n: i32) -> i32 {
 }
 
 @pure fn tf1d_min(start: i32, n: i32) -> f32 {
-    if n == 0 { 0.0_f32 }
+    if n <= 0 { 0.0_f32 }
     else {
         let mut best = __f32_from_bits(__arena_get(start));
         let mut i: i32 = 1;
@@ -448,7 +448,7 @@ fn ti1d_mul_scalar(x_start: i32, scalar: i32, y_start: i32, n: i32) -> i32 {
 }
 
 @pure fn tf1d_argmax(start: i32, n: i32) -> i32 {
-    if n == 0 { 0 - 1 }
+    if n <= 0 { 0 - 1 }
     else {
         let mut best_idx: i32 = 0;
         let mut best_val = __f32_from_bits(__arena_get(start));
@@ -683,7 +683,7 @@ fn tf1d_clamp(x_start: i32, lo: f32, hi: f32, dst: i32, n: i32) -> i32 {
 // tf1d_argmin(start, n): @pure. Index of the smallest f32 element.
 // Returns -1 if n == 0.
 @pure fn tf1d_argmin(start: i32, n: i32) -> i32 {
-    if n == 0 { 0 - 1 }
+    if n <= 0 { 0 - 1 }
     else {
         let mut i: i32 = 1;
         let mut best_idx: i32 = 0;
@@ -1094,31 +1094,31 @@ fn ti1d_max_abs(start: i32, n: i32) -> i32 {
 // ti1d_is_empty(start, n): @pure. 1 if n == 0.
 @pure
 fn ti1d_is_empty(start: i32, n: i32) -> i32 {
-    if n == 0 { 1 } else { 0 }
+    if n <= 0 { 1 } else { 0 }
 }
 
 // tf1d_first(start, n): @pure. f32 v[0]. 0.0_f32 if empty.
 @pure
 fn tf1d_first(start: i32, n: i32) -> f32 {
-    if n == 0 { 0.0_f32 } else { __f32_from_bits(__arena_get(start)) }
+    if n <= 0 { 0.0_f32 } else { __f32_from_bits(__arena_get(start)) }
 }
 
 // tf1d_last(start, n): @pure. f32 v[n-1]. 0.0_f32 if empty.
 @pure
 fn tf1d_last(start: i32, n: i32) -> f32 {
-    if n == 0 { 0.0_f32 } else { __f32_from_bits(__arena_get(start + n - 1)) }
+    if n <= 0 { 0.0_f32 } else { __f32_from_bits(__arena_get(start + n - 1)) }
 }
 
 // ti1d_first(start, n): @pure. v[0] or 0 if empty.
 @pure
 fn ti1d_first(start: i32, n: i32) -> i32 {
-    if n == 0 { 0 } else { __arena_get(start) }
+    if n <= 0 { 0 } else { __arena_get(start) }
 }
 
 // ti1d_last(start, n): @pure. v[n-1] or 0 if empty.
 @pure
 fn ti1d_last(start: i32, n: i32) -> i32 {
-    if n == 0 { 0 } else { __arena_get(start + n - 1) }
+    if n <= 0 { 0 } else { __arena_get(start + n - 1) }
 }
 
 // ti1d_count_eq(start, n, target): @pure. Count of v[i] == target.

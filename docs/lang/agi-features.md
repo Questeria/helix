@@ -115,6 +115,8 @@ JAX tracks them via *function transformations*. Helix tracks them in the
 
 ## 6. Tile-as-first-class type with memory hierarchy
 
+Future design target:
+
 ```helix
 let a_tile: tile<bf16, [16, 16], smem> = tile::load_global(a, [i, j]);
 let b_tile: tile<bf16, [16, 16], smem> = tile::load_global(b, [j, k]);
@@ -122,9 +124,13 @@ let c_tile: tile<f32, [16, 16], reg> = tile::matmul(a_tile, b_tile);
 tile::store_global(c, [i, k], c_tile);
 ```
 
-The compiler tracks: dtype, shape, memory space (HBM / SMEM / REG / TMEM).
-Cross-memory-space operations require explicit movement. The compiler
-schedules tile-level computation around the memory hierarchy automatically.
+Current Stage 35 behavior is narrower: Phase-0 PTX lowering supports 1D HBM
+`tile<f32, ...>` / `tile<i32, ...>` kernel parameters plus a small scalar op
+subset. The broader design is for the compiler to track dtype, shape, and
+memory space (HBM / SMEM / REG / TMEM), require explicit movement across memory
+spaces, and eventually schedule tile-level computation around the memory
+hierarchy automatically. The `bf16` SMEM/REG matmul example above is not
+current public backend behavior.
 
 **Unique because**: Triton has tiles but they're not in the type system —
 the programmer manages memory placement implicitly. Mojo has SIMD types but
@@ -264,8 +270,8 @@ typechecks cleanly with all four features stacked.
 |---|---|---|
 | Real reflection (runtime AST inspection) | 2-3 weeks | the AGI literally reads its own source |
 | Real verifier semantics for `modify` | 1 week | safety boundary for self-modification |
-| Tile-typed kernels in codegen | 2-3 months | GPU performance parity with Triton/Mojo |
-| `grad` as compiler primitive | 1-2 months | source-level autodiff better than JAX |
+| Broader tile/GPU lowering beyond Phase-0 HBM kernels | 2-3 months | GPU performance parity with Triton/Mojo |
+| Broader transform surface beyond scalar `grad`/`grad_rev` | 1-2 months | tensor gradients, pytrees, `vmap`, and `jit` |
 | `society::dispatch` semantics | 1-2 weeks | makes agent declarations actually work |
 | `curriculum::learn_to` semantics | 1 week | first-class auto-curriculum |
 | Constant folding + DCE | 1 week | basic optimizations for production code |

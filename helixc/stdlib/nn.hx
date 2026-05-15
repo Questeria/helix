@@ -37,7 +37,7 @@ fn relu_layer(x_start: i32, y_start: i32, n: i32) -> i32 {
 // argmax: return the index of the largest element in x.
 @pure
 fn argmax(x_start: i32, n: i32) -> i32 {
-    if n == 0 { 0 - 1 }
+    if n <= 0 { 0 - 1 }
     else {
         let mut best_idx: i32 = 0;
         let mut best_val: i32 = __arena_get(x_start);
@@ -205,7 +205,7 @@ fn adam_f32_step(w_start: i32, g_start: i32, m_start: i32, v_start: i32,
 // MSE on f32 tensors.
 @pure
 fn mse_loss_f32(y_start: i32, t_start: i32, n: i32) -> f32 {
-    if n == 0 { 0.0_f32 }
+    if n <= 0 { 0.0_f32 }
     else {
         let mut i: i32 = 0;
         let mut total: f32 = 0.0_f32;
@@ -757,7 +757,7 @@ fn ce_loss_batch_f32(probs_start: i32, target_start: i32,
 // Returns -1 on empty.
 @pure
 fn argmin(x_start: i32, n: i32) -> i32 {
-    if n == 0 { 0 - 1 }
+    if n <= 0 { 0 - 1 }
     else {
         let mut best_idx: i32 = 0;
         let mut best_val: i32 = __arena_get(x_start);
@@ -792,7 +792,7 @@ fn mae_loss(y_start: i32, t_start: i32, n: i32) -> i32 {
 // MAE on f32 tensors (mean absolute error, returns 0.0 on empty).
 @pure
 fn mae_loss_f32(y_start: i32, t_start: i32, n: i32) -> f32 {
-    if n == 0 { 0.0_f32 }
+    if n <= 0 { 0.0_f32 }
     else {
         let mut i: i32 = 0;
         let mut total: f32 = 0.0_f32;

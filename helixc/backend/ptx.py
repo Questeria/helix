@@ -627,7 +627,8 @@ def emit_ptx(tile_module: ti.TileModule, target: str = DEFAULT_TARGET) -> str:
 # ============================================================================
 if __name__ == "__main__":
     import sys
-    from ..frontend.parser import parse
+    from ..frontend.lexer import LexError
+    from ..frontend.parser import parse, ParseError
     from ..frontend.typecheck import typecheck
     from ..frontend.flatten_modules import flatten_modules, FlattenError
     from ..frontend.flatten_impls import flatten_impls, DuplicateMethodError
@@ -641,14 +642,44 @@ if __name__ == "__main__":
     from ..ir.lower_ast import lower
     from ..ir.passes.const_fold import fold_module
     from ..ir.passes.cse import cse_module
+    from ..ir.passes.effect_check import (
+        check_module as effect_check_module,
+        report_diagnostics as report_effect_diagnostics,
+    )
     from ..ir.tile_ir import lower_to_tile
 
-    if len(sys.argv) < 2:
+    cli_args = sys.argv[1:]
+    allowed_flags = {"--strict", "--no-stdlib"}
+    flags = {a for a in cli_args if a.startswith("-")}
+    unknown_flags = sorted(flags - allowed_flags)
+    if unknown_flags:
+        for flag in unknown_flags:
+            print(f"error: ptx: unknown flag {flag}", file=sys.stderr)
+        sys.exit(1)
+    strict = "--strict" in flags
+    include_stdlib = "--no-stdlib" not in flags
+    paths = [a for a in cli_args if not a.startswith("-")]
+    if len(paths) > 1:
+        print("error: ptx: expected at most one input path", file=sys.stderr)
+        sys.exit(1)
+    filename = paths[0] if paths else "<stdin>"
+    if not paths:
         src = sys.stdin.read()
     else:
-        with open(sys.argv[1]) as f:
+        with open(paths[0]) as f:
             src = f.read()
-    prog = parse(src)
+    try:
+        prog = parse(src, filename=filename, include_stdlib=include_stdlib)
+    except LexError as e:
+        print("LEX ERROR:", file=sys.stderr)
+        print(f"  {filename}:{e}", file=sys.stderr)
+        sys.exit(1)
+    except ParseError as e:
+        print("PARSE ERROR:", file=sys.stderr)
+        rendered = e.render(source=src, filename=filename, color=False)
+        for line in rendered.splitlines():
+            print(f"  {line}", file=sys.stderr)
+        sys.exit(1)
     try:
         flatten_modules(prog)
         flatten_impls(prog)
@@ -690,8 +721,24 @@ if __name__ == "__main__":
     try:
         grad_pass(prog)
         tir_mod = lower(prog)
+        pre_eff = effect_check_module(tir_mod)
+        pre_hard = report_effect_diagnostics(pre_eff, stderr=sys.stderr)
+        if pre_hard > 0 and strict:
+            print(
+                f"\n{pre_hard} effect-check warning(s); --strict aborts.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
         fold_module(tir_mod)
         cse_module(tir_mod)
+        post_eff = effect_check_module(tir_mod)
+        post_hard = report_effect_diagnostics(post_eff, stderr=sys.stderr)
+        if post_hard > 0 and strict:
+            print(
+                f"\n{post_hard} effect-check warning(s); --strict aborts.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
         kernel_mod = type(tir_mod)(
             functions={
                 name: fn for name, fn in tir_mod.functions.items()

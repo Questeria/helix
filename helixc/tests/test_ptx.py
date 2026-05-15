@@ -18,14 +18,14 @@ def emit(src: str) -> str:
     return emit_ptx(lower_to_tile(lower(parse(src))))
 
 
-def run_ptx_cli(src: str) -> subprocess.CompletedProcess[str]:
+def run_ptx_cli(src: str, *extra_args: str) -> subprocess.CompletedProcess[str]:
     fd, path = tempfile.mkstemp(suffix=".hx", text=True)
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             f.write(src)
         proj_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
         return subprocess.run(
-            [sys.executable, "-m", "helixc.backend.ptx", path],
+            [sys.executable, "-m", "helixc.backend.ptx", path, *extra_args],
             cwd=proj_root,
             capture_output=True,
             text=True,
@@ -406,6 +406,38 @@ def test_stage35_direct_ptx_cli_rejects_duplicate_autotune_key():
     assert proc.returncode != 0, proc.stdout + proc.stderr
     assert "duplicate parameter" in proc.stderr
     assert ".visible .entry" not in proc.stdout
+
+
+def test_stage35_direct_ptx_cli_strict_rejects_effect_violation():
+    src = """
+    @pure fn host() -> i32 {
+        print_int(1);
+        0
+    }
+    @kernel fn k() { let i = thread_idx(); }
+    """
+    proc = run_ptx_cli(src, "--strict", "--no-stdlib")
+    assert proc.returncode != 0, proc.stdout + proc.stderr
+    assert "--strict aborts" in proc.stderr
+    assert ".visible .entry" not in proc.stdout
+
+
+def test_stage35_direct_ptx_cli_includes_stdlib_by_default():
+    src = """
+    fn host(x: f32) -> f32 { __relu(x) }
+    @kernel fn k() { let i = thread_idx(); }
+    """
+    proc = run_ptx_cli(src)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert ".visible .entry k" in proc.stdout
+    assert "unbound name '__relu'" not in proc.stderr
+
+
+def test_stage35_direct_ptx_cli_reports_parse_error_without_traceback():
+    proc = run_ptx_cli("@kernel fn k( { let i = thread_idx(); }\n")
+    assert proc.returncode != 0, proc.stdout + proc.stderr
+    assert "PARSE ERROR" in proc.stderr
+    assert "Traceback" not in proc.stderr
 
 
 def test_c119_direct_ptx_cli_rejects_unsupported_hbm_float_dtype():

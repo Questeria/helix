@@ -163,6 +163,8 @@ fn rev_value_at(tape: i32, idx: i32) -> i32 {
 
 fn rev_alloc_adjoints(tape: i32) -> i32 {
     let cap = __arena_get(tape + 1);
+    let header = __arena_len();
+    __arena_push(cap);
     let start = __arena_len();
     __arena_set(tape + 2, start);
     let mut i: i32 = 0;
@@ -174,13 +176,21 @@ fn rev_alloc_adjoints(tape: i32) -> i32 {
 }
 
 fn rev_seed(adj_start: i32, idx: i32, seed: i32) -> i32 {
-    __arena_set(adj_start + idx, seed);
-    0
+    let cap = __arena_get(adj_start - 1);
+    if idx < 0 { 0 - 1 }
+    else { if idx >= cap { 0 - 1 }
+    else {
+        __arena_set(adj_start + idx, seed);
+        0
+    }}
 }
 
 @pure
 fn rev_grad(adj_start: i32, idx: i32) -> i32 {
-    __arena_get(adj_start + idx)
+    let cap = __arena_get(adj_start - 1);
+    if idx < 0 { 0 }
+    else { if idx >= cap { 0 }
+    else { __arena_get(adj_start + idx) }}
 }
 
 // Walk tape in reverse, propagating adjoints.
