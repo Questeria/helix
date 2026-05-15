@@ -516,27 +516,36 @@ Fixes landed in this increment:
 - `grad`, `grad_rev`, and `grad_rev_all` now reject aggregate/non-scalar
   parameters in `grad_pass` until pytree leaf expansion is wired into the
   public surface.
-- `dense_classifier_sgd_step_f32` no longer trusts caller scratch capacity. It
-  allocates a correctly sized internal temporary workspace before writing
-  logits, probabilities, deltas, and weight gradients.
+- `dense_classifier_sgd_step_f32` no longer needs a full weight-gradient scratch
+  matrix. It reuses caller scratch for logits/probabilities/deltas and applies
+  each weight update directly, so repeated training steps do not grow the arena.
 - `adam_f32_step` avoids a zero denominator, so zero-gradient updates with
   `eps = 0` keep weights stable.
+- Scalar `__adam_step` now shares the same zero-denominator guard.
 - Builtin `__bce` uses `__log_stable`, matching the fixed NN BCE path.
+- Batch CE invalid labels stay sentinel-grade instead of being averaged down.
+- `softmax_ce_grad_f32` prevalidates targets before writing output gradients.
 - Tile IR now raises on unsupported TIR ops instead of silently mapping them to
   generic opaque calls.
+- Public `--emit-ptx` now reports those Tile IR failures as normal PTX errors
+  without an internal-compiler-bug label.
 - The autotune docstring now distinguishes current Phase-0 static spec support
   from the long-term runtime timing/dispatch design.
 
 Regression and focused verification:
 
-- `python -m pytest -q helixc\tests\test_codegen.py -k "dense_classifier_sgd_step_f32_does_not_clobber_small_scratch or adam_f32_step_zero_grad_zero_eps_keeps_weight or builtin_bce_uses_stable_log_near_zero or grad_rev_rejects_aggregate_param or grad_rev_all_rejects_aggregate_param" --tb=short`
-  - Result: 5 passed.
+- `python -m pytest -q helixc\tests\test_codegen.py -k "grad_rejects_aggregate_param or ce_loss_batch_f32_invalid_label_not_averaged_down or softmax_ce_grad_f32_invalid_batch_does_not_partially_mutate or dense_classifier_sgd_step_f32_reuses_scratch_without_arena_growth or dense_classifier_sgd_step_f32_does_not_clobber_small_scratch or builtin_adam_step_zero_denom_returns_zero or adam_f32_step_zero_grad_zero_eps_keeps_weight" --tb=short`
+  - Result: 7 passed.
+- `python -m pytest -q helixc\tests\test_cli.py -k "stage35_emit_ptx_reports_tile_lowering_error_without_bug_label or c117_emit_ptx_uses_kernel_attrs or c119_emit_ptx_rejects_no_kernel_modules or c119_emit_ptx_allows_folded_bool_constants or c119_emit_ptx_accepts_kernel_index_builtin or c119_emit_ptx_rejects_extern_only_kernels" --tb=short`
+  - Result: 6 passed.
 - `python -m pytest -q helixc\tests\test_tile_ir.py -k "tile_ir_rejects_unmapped_scalar_div or if_lowered_to_cfg_in_tile_ir or arith_passes_through or call_lowered" --tb=short`
   - Result: 4 passed.
 - `python -m pytest -q helixc\tests\test_autodiff_reverse.py helixc\tests\test_pytree.py helixc\tests\test_ptx.py helixc\tests\test_tile_ir.py helixc\tests\test_autotune.py helixc\tests\test_ffi.py --tb=short`
   - Result: 139 passed.
-- `python -m pytest -q helixc\tests\test_codegen.py -k "nn_ or stage35 or softmax or ce_loss or dense_classifier_sgd_step_f32 or adam_f32_step or grad_rev_rejects_aggregate_param or grad_rev_all_rejects_aggregate_param or builtin_bce_uses_stable_log_near_zero" --tb=short`
-  - Result: 50 passed.
+- `python -m pytest -q helixc\tests\test_codegen.py -k "nn_ or stage35 or softmax or ce_loss or dense_classifier_sgd_step_f32 or adam_f32_step or builtin_adam_step_zero_denom_returns_zero or grad_rejects_aggregate_param or grad_rev_rejects_aggregate_param or grad_rev_all_rejects_aggregate_param or builtin_bce_uses_stable_log_near_zero" --tb=short`
+  - Result: 55 passed.
+- `python -m pytest -q helixc\tests\test_autodiff_reverse.py helixc\tests\test_pytree.py helixc\tests\test_ptx.py helixc\tests\test_tile_ir.py helixc\tests\test_autotune.py helixc\tests\test_ffi.py helixc\tests\test_cli.py -k "emit_ptx or ptx or tile_ir or autotune or ffi or stage35 or grad_rejects_aggregate" --tb=short`
+  - Result: 108 passed.
 
 Clean-gate status:
 

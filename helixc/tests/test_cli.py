@@ -316,6 +316,21 @@ def test_c119_emit_ptx_rejects_extern_only_kernels(capsys):
     assert ".visible .entry" not in captured.out
 
 
+def test_stage35_emit_ptx_reports_tile_lowering_error_without_bug_label(capsys):
+    src = write_src("@kernel fn k() { let i = thread_idx(); let z = i / 2; }\n")
+    try:
+        rc = main([src, "--emit-ptx"])
+        captured = capsys.readouterr()
+    finally:
+        if os.path.exists(src):
+            os.remove(src)
+    assert rc == 1, captured.out + captured.err
+    assert "Tile IR lowering does not support TIR op elem.div" in captured.err
+    assert "internal error" not in captured.err
+    assert "compiler bug" not in captured.err
+    assert ".visible .entry" not in captured.out
+
+
 def test_c119_emit_ptx_rejects_non_unit_kernel_returns(capsys):
     src = write_src("@kernel fn k() -> i32 { 42 }\n")
     try:

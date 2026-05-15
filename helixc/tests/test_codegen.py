@@ -7446,6 +7446,20 @@ def test_grad_rev_multi_param_without_index_errors():
     raise AssertionError("expected grad_rev(multi_param) to error")
 
 
+def test_grad_rejects_aggregate_param_until_pytree_bridge_is_wired():
+    import pytest
+    src = """
+    struct Model { w: f32 }
+    fn loss(m: Model, x: f32) -> f32 { m.w * x }
+    fn probe(m: Model) -> f32 {
+        grad(loss, 0)(m, 2.0)
+    }
+    fn main() -> i32 { 42 }
+    """
+    with pytest.raises(NotImplementedError, match="grad.*aggregate"):
+        compile_and_run(src)
+
+
 def test_grad_rev_rejects_aggregate_param_until_pytree_bridge_is_wired():
     import pytest
     src = """
@@ -9259,6 +9273,26 @@ def test_nn_ce_loss_batch_f32_rejects_invalid_label():
     assert code == 42, f"expected 42, got {code}"
 
 
+def test_nn_ce_loss_batch_f32_invalid_label_not_averaged_down():
+    """Invalid labels stay sentinel-grade even in multi-row batches."""
+    src = """
+    fn main() -> i32 {
+        let probs = t1d_new(4);
+        tf1d_set(probs, 0, 0.9_f32);
+        tf1d_set(probs, 1, 0.1_f32);
+        tf1d_set(probs, 2, 0.1_f32);
+        tf1d_set(probs, 3, 0.9_f32);
+        let target = t1d_new(2);
+        __arena_set(target, 0);
+        __arena_set(target + 1, 2);
+        let loss = ce_loss_batch_f32(probs, target, 2, 2);
+        if loss > 999999.0_f32 { 42 } else { 1 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
 def test_nn_softmax_ce_grad_f32():
     """For two balanced rows, softmax CE gradients have total abs sum 1."""
     src = """
@@ -9296,6 +9330,31 @@ def test_nn_softmax_ce_grad_f32_rejects_invalid_label():
         __arena_set(target, 2);
         let gout = t1d_new(2);
         softmax_ce_grad_f32(probs, target, gout, 1, 2) - 34959
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_nn_softmax_ce_grad_f32_invalid_batch_does_not_partially_mutate():
+    """Mixed valid/invalid batches fail before writing any gradient rows."""
+    src = """
+    fn main() -> i32 {
+        let probs = t1d_new(4);
+        tf1d_set(probs, 0, 0.5_f32);
+        tf1d_set(probs, 1, 0.5_f32);
+        tf1d_set(probs, 2, 0.5_f32);
+        tf1d_set(probs, 3, 0.5_f32);
+        let target = t1d_new(2);
+        __arena_set(target, 0);
+        __arena_set(target + 1, 2);
+        let gout = t1d_new(4);
+        tf1d_set(gout, 0, 9.0_f32);
+        tf1d_set(gout, 1, 9.0_f32);
+        tf1d_set(gout, 2, 9.0_f32);
+        tf1d_set(gout, 3, 9.0_f32);
+        let status = softmax_ce_grad_f32(probs, target, gout, 2, 2);
+        (tf1d_sum(gout, 4) as i32) + status - 34995
     }
     """
     code = compile_and_run(src)
@@ -9369,6 +9428,37 @@ def test_nn_dense_classifier_sgd_step_f32_does_not_clobber_small_scratch():
         let status = dense_classifier_sgd_step_f32(
             w, b, x, 0, scratch, shape, 1.0_f32);
         __arena_get(guard) - 1192 + status
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_nn_dense_classifier_sgd_step_f32_reuses_scratch_without_arena_growth():
+    """Adequate caller scratch should be reused across repeated training steps."""
+    src = """
+    fn main() -> i32 {
+        let w = t1d_new(4);
+        tf1d_set(w, 0, 0.0_f32); tf1d_set(w, 1, 0.0_f32);
+        tf1d_set(w, 2, 0.0_f32); tf1d_set(w, 3, 0.0_f32);
+        let b = t1d_new(2);
+        tf1d_set(b, 0, 0.0_f32); tf1d_set(b, 1, 0.0_f32);
+        let x = t1d_new(2);
+        tf1d_set(x, 0, 1.0_f32); tf1d_set(x, 1, 0.0_f32);
+        let scratch = t1d_new(6);
+        let shape = t1d_new(2);
+        __arena_set(shape, 2);
+        __arena_set(shape + 1, 2);
+        let before = __arena_len();
+        let s1 = dense_classifier_sgd_step_f32(
+            w, b, x, 0, scratch, shape, 0.5_f32);
+        let middle = __arena_len();
+        let s2 = dense_classifier_sgd_step_f32(
+            w, b, x, 0, scratch, shape, 0.5_f32);
+        let after = __arena_len();
+        if before == middle {
+            if middle == after { 42 + s1 + s2 } else { 7 }
+        } else { 7 }
     }
     """
     code = compile_and_run(src)
@@ -9595,6 +9685,18 @@ def test_builtin_bce_uses_stable_log_near_zero():
     fn main() -> i32 {
         let loss = __bce(0.000001_f32, 1.0_f32);
         if loss > 10.0_f32 { 42 } else { 7 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_builtin_adam_step_zero_denom_returns_zero():
+    """Scalar Adam helper should share the array Adam zero-denominator guard."""
+    src = """
+    fn main() -> i32 {
+        let step = __adam_step(0.0_f32, 0.0_f32, 0.0_f32);
+        (step as i32) + 42
     }
     """
     code = compile_and_run(src)

@@ -526,33 +526,38 @@ fn softmax_ce_grad_f32(probs_start: i32, target_start: i32,
     if rows <= 0 { 0 }
     else { if cols <= 0 { 0 }
     else {
-        let mut status: i32 = 0;
-        let scale = 1.0_f32 / (rows as f32);
         let mut r: i32 = 0;
         while r < rows {
             let target = __arena_get(target_start + r);
-            let row_start = probs_start + r * cols;
-            let grad_row = grad_start + r * cols;
             if target < 0 {
-                status = 35001;
+                r = rows + 1;
             }
             else {
                 if target >= cols {
-                    status = 35001;
-                }
-                else {
-                    let mut c: i32 = 0;
-                    while c < cols {
-                        let p = __f32_from_bits(__arena_get(row_start + c));
-                        let y = if c == target { 1.0_f32 } else { 0.0_f32 };
-                        __arena_set(grad_row + c, __bits_of_f32((p - y) * scale));
-                        c = c + 1;
-                    }
+                    r = rows + 1;
                 };
             };
             r = r + 1;
         }
-        status
+        if r > rows { 35001 }
+        else {
+            let scale = 1.0_f32 / (rows as f32);
+            let mut rr: i32 = 0;
+            while rr < rows {
+                let target2 = __arena_get(target_start + rr);
+                let row_start = probs_start + rr * cols;
+                let grad_row = grad_start + rr * cols;
+                let mut c: i32 = 0;
+                while c < cols {
+                    let p = __f32_from_bits(__arena_get(row_start + c));
+                    let y = if c == target2 { 1.0_f32 } else { 0.0_f32 };
+                    __arena_set(grad_row + c, __bits_of_f32((p - y) * scale));
+                    c = c + 1;
+                }
+                rr = rr + 1;
+            }
+            0
+        }
     }}
 }
 
@@ -567,12 +572,9 @@ fn dense_classifier_sgd_step_f32(w_start: i32, b_start: i32, x_start: i32,
         if target < 0 { 35001 }
         else { if target >= classes { 35001 }
         else {
-            let scratch_need = classes * 3 + classes * in_dim;
-            let safe_scratch = t1d_new(scratch_need);
-            let logits_start = safe_scratch;
-            let probs_start = safe_scratch + classes;
-            let dy_start = safe_scratch + classes * 2;
-            let gw_start = safe_scratch + classes * 3;
+            let logits_start = scratch_start;
+            let probs_start = scratch_start + classes;
+            let dy_start = scratch_start + classes * 2;
             dense_layer_f32_forward(w_start, classes, in_dim, x_start,
                                     b_start, logits_start);
             softmax_layer(logits_start, probs_start, classes);
@@ -583,10 +585,21 @@ fn dense_classifier_sgd_step_f32(w_start: i32, b_start: i32, x_start: i32,
                 __arena_set(dy_start + k, __bits_of_f32(p - y));
                 k = k + 1;
             }
-            dense_layer_f32_grad_w(dy_start, x_start, gw_start,
-                                   classes, in_dim);
-            sgd_f32_step(w_start, gw_start, lr, classes * in_dim);
-            sgd_f32_step(b_start, dy_start, lr, classes);
+            let mut cls: i32 = 0;
+            while cls < classes {
+                let dy = __f32_from_bits(__arena_get(dy_start + cls));
+                let mut j: i32 = 0;
+                while j < in_dim {
+                    let w_idx = w_start + cls * in_dim + j;
+                    let wv = __f32_from_bits(__arena_get(w_idx));
+                    let xv = __f32_from_bits(__arena_get(x_start + j));
+                    __arena_set(w_idx, __bits_of_f32(wv - lr * dy * xv));
+                    j = j + 1;
+                }
+                let bv = __f32_from_bits(__arena_get(b_start + cls));
+                __arena_set(b_start + cls, __bits_of_f32(bv - lr * dy));
+                cls = cls + 1;
+            }
             0
         }}
     }}
@@ -677,15 +690,16 @@ fn ce_loss_batch_f32(probs_start: i32, target_start: i32,
     else {
         let mut r: i32 = 0;
         let mut total: f32 = 0.0_f32;
+        let mut invalid: i32 = 0;
         while r < rows {
             let row_start = probs_start + r * cols;
             let target = __arena_get(target_start + r);
             if target < 0 {
-                total = total + 1000000.0_f32;
+                invalid = 1;
             }
             else {
                 if target >= cols {
-                    total = total + 1000000.0_f32;
+                    invalid = 1;
                 }
                 else {
                     total = total + ce_loss(row_start, target);
@@ -693,7 +707,8 @@ fn ce_loss_batch_f32(probs_start: i32, target_start: i32,
             };
             r = r + 1;
         }
-        total / (rows as f32)
+        if invalid == 1 { 1000000.0_f32 }
+        else { total / (rows as f32) }
     }}
 }
 

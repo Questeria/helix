@@ -1466,8 +1466,16 @@ def _main_inner(argv: list[str] | None,
     if "--emit-ptx" in a.flags:
         from .ir.tile_ir import lower_to_tile
         from .backend.ptx import emit_ptx
-        tile_mod = lower_to_tile(mod)
         try:
+            kernel_mod = type(mod)(
+                functions={
+                    name: fn for name, fn in mod.functions.items()
+                    if fn.attrs.get("kernel")
+                },
+                next_value_id=mod.next_value_id,
+                next_block_id=mod.next_block_id,
+            )
+            tile_mod = lower_to_tile(kernel_mod)
             ptx = emit_ptx(tile_mod)
             print(ptx)
         except Exception as e:
