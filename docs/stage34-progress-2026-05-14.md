@@ -69,3 +69,19 @@ Covered cases:
 - Comma-separated bounds can carry proof into equivalent `&&` bounds.
 - Stronger numeric bounds carry through refined array elements.
 - Stronger numeric bounds carry through refined tuple elements.
+
+## Increment 4 - Proof-Carry Artifact Records
+
+Proof artifacts now include a separate `proof_carries` section. This records
+cases where Helix did not need a new proof obligation because the value already
+carried proof for the target refinement.
+
+Recorded strategies:
+
+- `same-refinement`
+- `exact-predicate-subset`
+- `numeric-bound-implication`
+
+This keeps `obligations` focused on proof work that had to be checked at the
+assignment/call/return site, while still making accepted carried proofs visible
+in machine-readable output.

@@ -78,6 +78,28 @@ class ProofObligation:
 
 
 @dataclass(frozen=True)
+class ProofCarry:
+    """Machine-readable Stage 34 already-carried proof evidence."""
+    kind: str
+    context: str
+    source_refinement: str
+    target_refinement: str
+    strategy: str
+    line: int
+    col: int
+
+    def to_json_dict(self) -> dict[str, object]:
+        return {
+            "kind": self.kind,
+            "context": self.context,
+            "source_refinement": self.source_refinement,
+            "target_refinement": self.target_refinement,
+            "strategy": self.strategy,
+            "span": {"line": self.line, "col": self.col},
+        }
+
+
+@dataclass(frozen=True)
 class TyVar(Type):
     """Generic type variable bound by a function signature."""
     name: str
@@ -481,6 +503,7 @@ class TypeChecker:
         self._local_const_scalar_scopes: list[dict[str, int | float | None]] = []
         self._current_return_ty: Type = TyUnit()
         self.proof_obligations: list[ProofObligation] = []
+        self.proof_carries: list[ProofCarry] = []
         # Audit 28.8 B3: unsafe-context depth counter. Incremented when
         # descending into an A.UnsafeBlock; consulted by the Cast
         # handler so raw-pointer casts (TyPtr targets from non-TyPtr
@@ -1297,7 +1320,7 @@ class TypeChecker:
             if ((self._contains_refinement(pty)
                     or self._contains_refinement(aty))
                     and self._compatible(aty, pty)
-                    and not self._refinement_proof_carried(aty, pty)):
+                    and not isinstance(pty, TyUnknown)):
                 self._check_refinement_contextual_value(
                     arg_expr, aty, pty, call.span,
                     f"call to {sig.name!r}: arg {pname!r}",
@@ -1782,18 +1805,9 @@ class TypeChecker:
                 f"does not match return type {self._fmt(sig.ret)}",
                 fn.span,
             ))
-        elif (isinstance(sig.ret, TyRefined)
-              and fn.body.final_expr is not None
-              and not self._refinement_proof_carried(body_ty, sig.ret)):
-            self._check_refinement_const_value(
-                fn.body.final_expr, sig.ret, fn.body.final_expr.span,
-                f"return value of function {fn.name!r}",
-                body_scope,
-            )
         elif (fn.body.final_expr is not None
               and (self._contains_refinement(sig.ret)
-                   or self._contains_refinement(body_ty))
-              and not self._refinement_proof_carried(body_ty, sig.ret)):
+                   or self._contains_refinement(body_ty))):
             self._check_refinement_contextual_value(
                 fn.body.final_expr, body_ty, sig.ret, fn.body.final_expr.span,
                 f"return value of function {fn.name!r}",
@@ -3025,6 +3039,20 @@ class TypeChecker:
             trap=trap,
         ))
 
+    def _record_refinement_proof_carry(
+        self, context: str, value_ty: "TyRefined", target: "TyRefined",
+        strategy: str, span: A.Span,
+    ) -> None:
+        self.proof_carries.append(ProofCarry(
+            kind="refinement-proof-carry",
+            context=context,
+            source_refinement=value_ty.name,
+            target_refinement=target.name,
+            strategy=strategy,
+            line=span.line,
+            col=span.col,
+        ))
+
     def _contains_unknown_type(self, ty: Type) -> bool:
         if isinstance(ty, TyUnknown):
             return True
@@ -3116,12 +3144,23 @@ class TypeChecker:
             return not self._contains_refinement(target)
         if not isinstance(value_ty, TyRefined):
             return False
-        if (value_ty.name == target.name
-                and self._compatible(value_ty.base, target.base)):
-            return True
-        if self._refinement_predicates_cover(value_ty, target):
+        if self._refinement_proof_carry_strategy(value_ty, target) is not None:
             return True
         return self._refinement_proof_carried(value_ty.base, target)
+
+    def _refinement_proof_carry_strategy(
+        self, value_ty: "TyRefined", target: "TyRefined",
+    ) -> str | None:
+        if (value_ty.name == target.name
+                and self._compatible(value_ty.base, target.base)):
+            return "same-refinement"
+        if self._refinement_predicates_exact_cover(value_ty, target):
+            return "exact-predicate-subset"
+        if self._refinement_numeric_bounds_cover(value_ty, target):
+            return "numeric-bound-implication"
+        if isinstance(value_ty.base, TyRefined):
+            return self._refinement_proof_carry_strategy(value_ty.base, target)
+        return None
 
     def _refinement_predicates_cover(
         self, value_ty: Type, target: "TyRefined",
@@ -3137,13 +3176,22 @@ class TypeChecker:
             return False
         if self._erase_refinement(value_ty) != self._erase_refinement(target):
             return False
+        if self._refinement_predicates_exact_cover(value_ty, target):
+            return True
+        return self._refinement_numeric_bounds_cover(value_ty, target)
+
+    def _refinement_predicates_exact_cover(
+        self, value_ty: Type, target: "TyRefined",
+    ) -> bool:
+        if not isinstance(value_ty, TyRefined):
+            return False
+        if self._erase_refinement(value_ty) != self._erase_refinement(target):
+            return False
         value_preds = self._refinement_predicate_keys(value_ty)
         target_preds = self._refinement_predicate_keys(target)
         if value_preds is None or target_preds is None:
             return False
-        if bool(target_preds) and target_preds.issubset(value_preds):
-            return True
-        return self._refinement_numeric_bounds_cover(value_ty, target)
+        return bool(target_preds) and target_preds.issubset(value_preds)
 
     def _refinement_numeric_bounds_cover(
         self, value_ty: "TyRefined", target: "TyRefined",
@@ -3386,7 +3434,13 @@ class TypeChecker:
         span: A.Span, context: str, scope: Scope,
     ) -> None:
         if isinstance(target_ty, TyRefined):
-            if not self._refinement_proof_carried(value_ty, target_ty):
+            strategy = (self._refinement_proof_carry_strategy(
+                value_ty, target_ty)
+                if isinstance(value_ty, TyRefined) else None)
+            if strategy is not None:
+                self._record_refinement_proof_carry(
+                    context, value_ty, target_ty, strategy, span)
+            elif not self._refinement_proof_carried(value_ty, target_ty):
                 self._check_refinement_const_value(
                     value_expr, target_ty, span, context, scope,
                 )
@@ -4732,9 +4786,16 @@ def typecheck(prog: A.Program) -> list[TypeError_]:
 def typecheck_with_obligations(
     prog: A.Program,
 ) -> tuple[list[TypeError_], list[ProofObligation]]:
+    errors, obligations, _carries = typecheck_with_proof_artifacts(prog)
+    return errors, obligations
+
+
+def typecheck_with_proof_artifacts(
+    prog: A.Program,
+) -> tuple[list[TypeError_], list[ProofObligation], list[ProofCarry]]:
     checker = TypeChecker(prog)
     errors = checker.check()
-    return errors, checker.proof_obligations
+    return errors, checker.proof_obligations, checker.proof_carries
 
 
 if __name__ == "__main__":

@@ -246,6 +246,31 @@ def test_validate_rejects_summary_count_mismatch(capsys, tmp_path):
     assert "summary.obligations" in captured.err
 
 
+def test_validate_checks_stage34_proof_carry_records(capsys, tmp_path):
+    _source_path, artifact_path, artifact = _real_artifact(
+        capsys,
+        tmp_path,
+        src=(
+            "type AtLeastOne = f64 where self >= 1.0;\n"
+            "type NonNegative = f64 where self >= 0.0;\n"
+            "fn lift(a: AtLeastOne) -> NonNegative { a }\n"
+        ),
+    )
+    assert artifact["summary"]["proof_carries"] == 1
+    assert artifact["proof_carries"][0]["strategy"] == "numeric-bound-implication"
+
+    artifact["summary"]["proof_carries"] = 99
+    artifact["proof_carries"][0]["strategy"] = "made-up-proof"
+    artifact["proof_carries"][0]["span"]["line"] = False
+    artifact_path.write_text(json.dumps(artifact), encoding="utf-8")
+    rc = proof_artifact_validate.main([str(artifact_path)])
+    captured = capsys.readouterr()
+    assert rc == 1
+    assert "summary.proof_carries" in captured.err
+    assert "proof_carries[0].strategy" in captured.err
+    assert "proof_carries[0].span.line must be an integer" in captured.err
+
+
 def test_validate_rejects_boolean_integer_fields(capsys, tmp_path):
     _source_path, artifact_path, artifact = _real_artifact(capsys, tmp_path)
     artifact["summary"]["obligations"] = True

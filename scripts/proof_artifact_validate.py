@@ -19,6 +19,11 @@ from scripts.proof_artifact_key import cache_key_for_artifact, load_artifact
 
 SHA256_RE = re.compile(r"[0-9a-f]{64}")
 OBLIGATION_STATUSES = {"proved", "failed", "unproven", "unsupported"}
+PROOF_CARRY_STRATEGIES = {
+    "same-refinement",
+    "exact-predicate-subset",
+    "numeric-bound-implication",
+}
 SUMMARY_COUNTS = {
     "obligations": "obligations",
     "pipeline_errors": "pipeline_errors",
@@ -209,6 +214,14 @@ def validate_artifact(
         field_name: _list_field(artifact, field_name, errors)
         for field_name in SUMMARY_COUNTS.values()
     }
+    proof_carries_value = artifact.get("proof_carries", [])
+    if "proof_carries" in artifact and not isinstance(proof_carries_value, list):
+        errors.append("proof_carries must be a list")
+        proof_carries = []
+    else:
+        proof_carries = list(proof_carries_value) \
+            if isinstance(proof_carries_value, list) else []
+    lists["proof_carries"] = proof_carries
     for summary_name, field_name in SUMMARY_COUNTS.items():
         observed_count = summary.get(summary_name)
         expected_count = len(lists[field_name])
@@ -219,6 +232,20 @@ def validate_artifact(
                 f"summary.{summary_name}={observed_count!r} "
                 f"but {field_name} has {expected_count} entries"
             )
+
+    observed_carries = summary.get("proof_carries")
+    if observed_carries is not None:
+        if not _is_json_int(observed_carries):
+            errors.append("summary.proof_carries must be an integer")
+        elif observed_carries != len(proof_carries):
+            errors.append(
+                f"summary.proof_carries={observed_carries!r} "
+                f"but proof_carries has {len(proof_carries)} entries"
+            )
+    elif proof_carries:
+        errors.append(
+            "summary.proof_carries is required when proof_carries is non-empty"
+        )
 
     warning_errors = sum(
         1 for warning in lists["warning_diagnostics"]
@@ -253,6 +280,41 @@ def validate_artifact(
                 errors.append(f"obligations[{idx}].span.line must be an integer")
             if not _is_json_int(span.get("col")):
                 errors.append(f"obligations[{idx}].span.col must be an integer")
+
+    for idx, carry in enumerate(lists["proof_carries"]):
+        if not isinstance(carry, dict):
+            errors.append(f"proof_carries[{idx}] must be an object")
+            continue
+        for field in (
+            "kind",
+            "context",
+            "source_refinement",
+            "target_refinement",
+            "strategy",
+        ):
+            if not isinstance(carry.get(field), str):
+                errors.append(f"proof_carries[{idx}].{field} must be a string")
+        if carry.get("kind") != "refinement-proof-carry":
+            errors.append(
+                f"proof_carries[{idx}].kind must be 'refinement-proof-carry'"
+            )
+        if carry.get("strategy") not in PROOF_CARRY_STRATEGIES:
+            errors.append(
+                f"proof_carries[{idx}].strategy must be one of "
+                f"{sorted(PROOF_CARRY_STRATEGIES)}"
+            )
+        span = carry.get("span")
+        if not isinstance(span, dict):
+            errors.append(f"proof_carries[{idx}].span must be an object")
+        else:
+            if not _is_json_int(span.get("line")):
+                errors.append(
+                    f"proof_carries[{idx}].span.line must be an integer"
+                )
+            if not _is_json_int(span.get("col")):
+                errors.append(
+                    f"proof_carries[{idx}].span.col must be an integer"
+                )
 
     for idx, pipeline_error in enumerate(lists["pipeline_errors"]):
         if not isinstance(pipeline_error, dict):

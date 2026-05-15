@@ -63,7 +63,7 @@ import os
 from .frontend.lexer import LexError
 from .frontend import parser as parser_mod
 from .frontend.parser import parse, ParseError
-from .frontend.typecheck import typecheck, typecheck_with_obligations
+from .frontend.typecheck import typecheck, typecheck_with_proof_artifacts
 from .frontend.totality import check_totality
 from .frontend.ast_hash import structural_hash, short_hash
 from .frontend.hash_cons import hash_cons
@@ -388,10 +388,12 @@ def _emit_proof_obligation_artifact(
     pipeline_errors=None,
     input_metadata=None,
     warning_diagnostics=None,
+    proof_carries=None,
 ) -> None:
     pipeline_errors = list(pipeline_errors or [])
     input_metadata = dict(input_metadata or {})
     warning_diagnostics = list(warning_diagnostics or [])
+    proof_carries = list(proof_carries or [])
     artifact = {
         "schema": PROOF_SCHEMA,
         "cache_key": proof_cache_key(input_metadata),
@@ -399,6 +401,7 @@ def _emit_proof_obligation_artifact(
         "input": input_metadata,
         "summary": {
             "obligations": len(obligations),
+            "proof_carries": len(proof_carries),
             "pipeline_errors": len(pipeline_errors),
             "typecheck_errors": len(typecheck_errors),
             "warning_diagnostics": len(warning_diagnostics),
@@ -410,6 +413,10 @@ def _emit_proof_obligation_artifact(
         "obligations": [
             o.to_json_dict() if hasattr(o, "to_json_dict") else dict(o)
             for o in obligations
+        ],
+        "proof_carries": [
+            c.to_json_dict() if hasattr(c, "to_json_dict") else dict(c)
+            for c in proof_carries
         ],
         "pipeline_errors": pipeline_errors,
         "typecheck_errors": [str(e) for e in typecheck_errors],
@@ -1063,8 +1070,11 @@ def _main_inner(argv: list[str] | None,
     # 2.5 Typecheck after flatten/mono, matching the backend's user-error
     # gate and catching module-local refined aliases before IR emission.
     proof_obligations = []
+    proof_carries = []
     if proof_mode:
-        tc_errs, proof_obligations = typecheck_with_obligations(prog)
+        tc_errs, proof_obligations, proof_carries = (
+            typecheck_with_proof_artifacts(prog)
+        )
     else:
         tc_errs = typecheck(prog)
     if tc_errs:
@@ -1076,6 +1086,7 @@ def _main_inner(argv: list[str] | None,
                 path, proof_obligations, tc_errs,
                 input_metadata=proof_input,
                 warning_diagnostics=warning_diagnostics,
+                proof_carries=proof_carries,
             )
             return 1
         print(f"   typecheck: {len(tc_errs)} ERRORS")
@@ -1120,6 +1131,7 @@ def _main_inner(argv: list[str] | None,
             pipeline_errors=proof_pipeline_errors,
             input_metadata=proof_input,
             warning_diagnostics=warning_diagnostics,
+            proof_carries=proof_carries,
         )
         if proof_pipeline_errors:
             return 1

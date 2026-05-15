@@ -133,6 +133,7 @@ def _obligation_completeness_errors(
         "input",
         "summary",
         "obligations",
+        "proof_carries",
         "pipeline_errors",
         "typecheck_errors",
         "warning_diagnostics",

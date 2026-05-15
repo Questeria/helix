@@ -1458,6 +1458,12 @@ def test_stage31_emit_proof_obligations_json_for_equivalent_refinement_alias(
     artifact = json.loads(captured.out)
     assert artifact["summary"]["typecheck_errors"] == 0
     assert artifact["obligations"] == []
+    assert artifact["summary"]["proof_carries"] == 1
+    carry = artifact["proof_carries"][0]
+    assert carry["kind"] == "refinement-proof-carry"
+    assert carry["source_refinement"] == "NonNegativeA"
+    assert carry["target_refinement"] == "NonNegativeB"
+    assert carry["strategy"] == "exact-predicate-subset"
 
 
 def test_stage34_emit_proof_obligations_json_for_numeric_bound_implication(
@@ -1476,6 +1482,11 @@ def test_stage34_emit_proof_obligations_json_for_numeric_bound_implication(
     artifact = json.loads(captured.out)
     assert artifact["summary"]["typecheck_errors"] == 0
     assert artifact["obligations"] == []
+    assert artifact["summary"]["proof_carries"] == 1
+    carry = artifact["proof_carries"][0]
+    assert carry["source_refinement"] == "AtLeastOne"
+    assert carry["target_refinement"] == "NonNegative"
+    assert carry["strategy"] == "numeric-bound-implication"
 
 
 def test_stage34_emit_proof_obligations_json_for_equality_bound_implication(
@@ -1494,6 +1505,11 @@ def test_stage34_emit_proof_obligations_json_for_equality_bound_implication(
     artifact = json.loads(captured.out)
     assert artifact["summary"]["typecheck_errors"] == 0
     assert artifact["obligations"] == []
+    assert artifact["summary"]["proof_carries"] == 1
+    carry = artifact["proof_carries"][0]
+    assert carry["source_refinement"] == "ExactlyOne"
+    assert carry["target_refinement"] == "AtMostOne"
+    assert carry["strategy"] == "numeric-bound-implication"
 
 
 def test_stage31_emit_proof_obligations_rejects_generic_refinement_name(
