@@ -25,16 +25,16 @@ Algorithm:
         *  : adj_l = adj * r,    adj_r = adj * l
         /  : adj_l = adj / r,    adj_r = -adj * l / (r * r)
         neg: adj_op = -adj
-  3. At each Name node referencing a parameter, accumulate adj into that
-     parameter's bucket.
+  3. At each Name or Field path node referencing a parameter, accumulate adj
+     into that parameter's bucket.
   4. After the walk, sum each parameter's bucket into the gradient.
 
 Because the same parameter may appear multiple times in the inlined tree, the
 final gradient is the sum of contributions across all occurrences — handled by
 the simplifier in _sum_exprs (a chain of binary +).
 
-Currently supported AST nodes: IntLit, FloatLit, BoolLit, Name, Unary("-"),
-Binary("+", "-", "*", "/"). Calls and ifs are not yet supported.
+Currently supported AST nodes: IntLit, FloatLit, BoolLit, Name, Field,
+Unary("-"), Binary("+", "-", "*", "/"), Call, If, Match, Cast, UnsafeBlock.
 
 License: Apache 2.0
 """
@@ -76,14 +76,37 @@ def differentiate_reverse(expr: A.Expr, param_names: list[str],
     }
 
 
+def _field_path(node: A.Expr) -> Optional[str]:
+    if isinstance(node, A.Name):
+        return node.name
+    if isinstance(node, A.Field):
+        base = _field_path(node.obj)
+        if base is None:
+            return None
+        return f"{base}.{node.name}"
+    return None
+
+
 def _propagate(node: A.Expr, adj: A.Expr, acc: dict[str, list[A.Expr]]) -> None:
     """Send the adjoint `adj` through `node`, depositing contributions into
-    `acc[name]` for each parameter Name encountered."""
+    `acc[name]` for each parameter Name or Field path encountered."""
     if isinstance(node, (A.IntLit, A.FloatLit, A.BoolLit, A.StrLit, A.CharLit)):
         return
     if isinstance(node, A.Name):
         if node.name in acc:
             acc[node.name].append(adj)
+        return
+    if isinstance(node, A.Field):
+        path = _field_path(node)
+        if path is None:
+            _ad_warn(
+                node,
+                "field expression has no static differentiable path "
+                "(reverse-mode)",
+            )
+            return
+        if path in acc:
+            acc[path].append(adj)
         return
     if isinstance(node, A.Unary):
         if node.op == "-":

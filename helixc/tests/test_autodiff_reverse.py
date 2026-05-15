@@ -232,6 +232,98 @@ def test_two_param_if_zero_literals_distinct_objects():
 
 
 # ----------------------------------------------------------------------
+# Stage 35 — reverse-mode model-field leaves.
+# ----------------------------------------------------------------------
+def _field_path(node: A.Expr) -> str | None:
+    if isinstance(node, A.Name):
+        return node.name
+    if isinstance(node, A.Field):
+        base = _field_path(node.obj)
+        if base is None:
+            return None
+        return f"{base}.{node.name}"
+    return None
+
+
+def _collect_field_paths(node: A.Expr | None) -> set[str]:
+    out: set[str] = set()
+
+    def walk(expr: A.Expr | None) -> None:
+        if expr is None:
+            return
+        path = _field_path(expr)
+        if isinstance(expr, A.Field) and path is not None:
+            out.add(path)
+        for attr in ("cond", "then", "else_", "final_expr", "left", "right",
+                     "operand", "value", "callee", "scrutinee"):
+            if hasattr(expr, attr):
+                walk(getattr(expr, attr))
+        for attr in ("stmts", "args", "elems", "indices"):
+            if hasattr(expr, attr):
+                for child in getattr(expr, attr) or []:
+                    walk(child)
+        if hasattr(expr, "arms"):
+            for arm in getattr(expr, "arms") or []:
+                walk(arm.body)
+
+    walk(node)
+    return out
+
+
+def test_stage35_reverse_ad_accumulates_model_field_leaves():
+    body = _body_of("""
+    struct Model { w1: f32, w2: f32 }
+    fn loss(m: Model, x: f32) -> f32 {
+        m.w1 * x + m.w2 * x
+    }
+    """)
+    grads = differentiate_reverse(body, ["m.w1", "m.w2", "x"])
+
+    assert fmt(grads["m.w1"]) == "x", f"got {fmt(grads['m.w1'])}"
+    assert fmt(grads["m.w2"]) == "x", f"got {fmt(grads['m.w2'])}"
+    x_fields = _collect_field_paths(grads["x"])
+    assert {"m.w1", "m.w2"} <= x_fields, (
+        f"x gradient should keep both model-field coefficients, got {x_fields}"
+    )
+
+
+def test_stage35_reverse_ad_accumulates_nested_model_field_leaf():
+    body = _body_of("""
+    struct Layer { w: f32 }
+    struct Model { layer: Layer }
+    fn loss(m: Model, x: f32) -> f32 {
+        m.layer.w * x
+    }
+    """)
+    grads = differentiate_reverse(body, ["m.layer.w", "x"])
+
+    assert fmt(grads["m.layer.w"]) == "x", (
+        f"got {fmt(grads['m.layer.w'])}"
+    )
+    assert "m.layer.w" in _collect_field_paths(grads["x"])
+
+
+def test_stage35_reverse_ad_treats_non_target_field_as_coefficient():
+    from helixc.frontend import autodiff
+    autodiff.take_diff_warnings()
+    body = _body_of("""
+    struct Model { w: f32 }
+    fn loss(m: Model, x: f32) -> f32 {
+        m.w * x
+    }
+    """)
+    grads = differentiate_reverse(body, ["x"])
+    warnings = autodiff.take_diff_warnings()
+
+    assert fmt(grads["x"]) != "0", "x gradient should keep m.w coefficient"
+    assert "m.w" in _collect_field_paths(grads["x"])
+    assert not any("unhandled expression kind" in w for w in warnings), (
+        f"field coefficient should not produce an unhandled-node warning: "
+        f"{warnings}"
+    )
+
+
+# ----------------------------------------------------------------------
 # Audit 28.8 cycle 2 C2-3 — reverse-mode emits warnings for unhandled
 # Unary / Binary ops (pre-fix it silently zeroed gradient contribution).
 # ----------------------------------------------------------------------
