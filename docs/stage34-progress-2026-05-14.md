@@ -702,3 +702,33 @@ Verification after this fix set:
   pass across all 12 shards with no retries
 
 The clean-gate counter remains reset to `0/3`.
+
+## Clean Gate 1 Sixteenth Restart - Failed; Fix Verified; Counter Reset
+
+Fresh clean-gate auditors on commit `e879f48` found two more Stage 34 issues:
+
+- A top-level or local primitive `const` could hide a prior `f32` overflow from
+  later refined return checking. The checker remembered only successfully
+  represented scalar constants, so references to an unrepresentable constant
+  source could look like an unknown value and pass a self-independent
+  refinement such as `where true`.
+- Proof artifact replay inputs still accepted libraries. The gate allowed
+  `-l forgedlib`, and source-backed validation reconstructed `-l <lib>` from
+  artifact-controlled `input.libs`.
+
+The fix tracks named constants whose source scalar expression contains an
+unrepresentable typed value, keeps local-const proof evidence visible while
+checking function final-expression refinements, rejects `-l` at the clean proof
+gate, and requires `input.libs` to be empty for proof replay validation.
+
+Verification after this fix set:
+
+- Focused latest-reset regressions: `4 passed`
+- Wider targeted regressions: `7 passed`
+- `python scripts\stage31_validate.py --mode quick`: pass
+- `python -m pytest -q helixc/tests/test_typecheck.py helixc/tests/test_proof_artifact_validate.py helixc/tests/test_proof_artifact_gate.py`:
+  `342 passed`
+- `python scripts\stage31_validate.py --mode full --skip-snapshot --shards 8`:
+  pass after built-in retry recovered no-codegen shard 3
+
+The clean-gate counter remains reset to `0/3`.

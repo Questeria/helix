@@ -107,6 +107,9 @@ def _validate_input_metadata(
 
     _validate_string_list(input_metadata.get("flags"), name="input.flags", errors=errors)
     _validate_string_list(input_metadata.get("libs"), name="input.libs", errors=errors)
+    libs = input_metadata.get("libs")
+    if isinstance(libs, list) and all(isinstance(lib, str) for lib in libs):
+        _validate_proof_replay_libs(libs, errors=errors)
     flags = input_metadata.get("flags")
     if isinstance(flags, list) and all(isinstance(flag, str) for flag in flags):
         _validate_proof_replay_flags(
@@ -193,6 +196,14 @@ def _validate_proof_replay_flags(
     if include_stdlib is True and "--no-stdlib" in flag_set:
         errors.append(
             "input.flags must omit --no-stdlib when include_stdlib is true"
+        )
+
+
+def _validate_proof_replay_libs(libs: list[str], *, errors: list[str]) -> None:
+    if libs:
+        errors.append(
+            "input.libs must be empty for proof replay; found: "
+            + ", ".join(libs)
         )
 
 
@@ -562,8 +573,7 @@ def _proof_args_from_artifact(
 
     libs = input_metadata.get("libs")
     if isinstance(libs, list) and all(isinstance(lib, str) for lib in libs):
-        for lib in libs:
-            args.extend(["-l", lib])
+        _validate_proof_replay_libs(libs, errors=errors)
     else:
         errors.append("input.libs must be a list of strings")
 

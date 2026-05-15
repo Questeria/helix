@@ -86,6 +86,11 @@ def _validate_compiler_args(source: Path, compiler_args: list[str]) -> list[str]
     ])
     if parsed.output is not None:
         errors.append("-o is not allowed in proof_artifact_gate")
+    if parsed.libs:
+        errors.append(
+            "libraries are not allowed in proof_artifact_gate: "
+            + ", ".join(parsed.libs)
+        )
     disallowed = sorted(parsed.flags & DISALLOWED_PROOF_GATE_FLAGS)
     if disallowed:
         errors.append(

@@ -502,9 +502,11 @@ class TypeChecker:
         self._resolving_type_aliases: set[str] = set()
         self._type_alias_cache: dict[str, Type] = {}
         self._const_scalar_values: dict[str, int | float] = {}
+        self._unrepresentable_const_scalar_names: set[str] = set()
         self._invalid_const_names: set[str] = set()
         self._invalid_refined_return_functions: set[str] = set()
         self._local_const_scalar_scopes: list[dict[str, int | float | None]] = []
+        self._local_const_unrepresentable_scopes: list[set[str]] = []
         self._current_return_ty: Type = TyUnit()
         self.proof_obligations: list[ProofObligation] = []
         self.proof_carries: list[ProofCarry] = []
@@ -526,9 +528,11 @@ class TypeChecker:
         self._const_decls: dict[str, A.ConstDecl] = {}
         self._invalid_const_names = set()
         self._invalid_refined_return_functions = set()
+        self._unrepresentable_const_scalar_names = set()
         self._recursive_enum_names: set[str] = set()
         self._type_alias_cache = {}
         self._local_const_scalar_scopes = []
+        self._local_const_unrepresentable_scopes = []
         self._duplicate_type_alias_items: set[int] = set()
         self._duplicate_const_items: set[int] = set()
         self._type_namespace_names: dict[str, str] = {}
@@ -638,10 +642,16 @@ class TypeChecker:
         for _ in range(len(consts)):
             progressed = False
             for decl in consts:
-                if decl.name in self._const_scalar_values:
+                if (decl.name in self._const_scalar_values
+                        or decl.name in self._unrepresentable_const_scalar_names):
                     continue
                 target = self._const_index_target_type(decl)
                 if target is None:
+                    continue
+                if self._expr_has_unrepresentable_typed_const_scalar(
+                        decl.value):
+                    self._unrepresentable_const_scalar_names.add(decl.name)
+                    progressed = True
                     continue
                 value = self._eval_const_scalar_expr(
                     decl.value, None, honor_float_suffix=True,
@@ -674,15 +684,21 @@ class TypeChecker:
 
     def _push_local_const_scope(self) -> None:
         self._local_const_scalar_scopes.append({})
+        self._local_const_unrepresentable_scopes.append(set())
 
     def _pop_local_const_scope(self) -> None:
         self._local_const_scalar_scopes.pop()
+        self._local_const_unrepresentable_scopes.pop()
 
     def _define_local_const_scalar(
         self, name: str, value: int | float | None,
     ) -> None:
         if self._local_const_scalar_scopes:
             self._local_const_scalar_scopes[-1][name] = value
+
+    def _mark_local_const_unrepresentable(self, name: str) -> None:
+        if self._local_const_unrepresentable_scopes:
+            self._local_const_unrepresentable_scopes[-1].add(name)
 
     def _lookup_local_const_scalar(
         self, name: str,
@@ -691,6 +707,17 @@ class TypeChecker:
             if name in scope:
                 return True, scope[name]
         return False, None
+
+    def _lookup_local_const_unrepresentable(
+        self, name: str,
+    ) -> tuple[bool, bool]:
+        for idx in range(len(self._local_const_scalar_scopes) - 1, -1, -1):
+            if name in self._local_const_scalar_scopes[idx]:
+                return (
+                    True,
+                    name in self._local_const_unrepresentable_scopes[idx],
+                )
+        return False, False
 
     # ---- registration ----
     def _check_const_decl(self, decl: A.ConstDecl) -> None:
@@ -1860,7 +1887,12 @@ class TypeChecker:
         for param, (name, t) in zip(fn.params, sig.params):
             body_scope.define(name, t, is_mut=param.is_mut)
         # Check body expression / block
-        body_ty = self._check_block(fn.body, body_scope)
+        body_ty = self._check_block(
+            fn.body,
+            body_scope,
+            expected_final_ty=sig.ret,
+            final_context=f"return value of function {fn.name!r}",
+        )
         # Compatibility check (simplified — strict equality on resolved types)
         if not self._compatible(body_ty, sig.ret):
             self.errors.append(TypeError_(
@@ -1868,23 +1900,36 @@ class TypeChecker:
                 f"does not match return type {self._fmt(sig.ret)}",
                 fn.span,
             ))
-        elif (fn.body.final_expr is not None
-              and (self._contains_refinement(sig.ret)
-                   or self._contains_refinement(body_ty))):
-            self._check_refinement_contextual_value(
-                fn.body.final_expr, body_ty, sig.ret, fn.body.final_expr.span,
-                f"return value of function {fn.name!r}",
-                body_scope,
-            )
 
-    def _check_block(self, block: A.Block, scope: Scope) -> Type:
+    def _check_block(
+        self,
+        block: A.Block,
+        scope: Scope,
+        *,
+        expected_final_ty: Type | None = None,
+        final_context: str | None = None,
+    ) -> Type:
         inner = Scope(parent=scope)
         self._push_local_const_scope()
         try:
             for stmt in block.stmts:
                 self._check_stmt(stmt, inner)
             if block.final_expr is not None:
-                return self._check_expr(block.final_expr, inner)
+                final_ty = self._check_expr(block.final_expr, inner)
+                if (expected_final_ty is not None
+                        and final_context is not None
+                        and self._compatible(final_ty, expected_final_ty)
+                        and (self._contains_refinement(expected_final_ty)
+                             or self._contains_refinement(final_ty))):
+                    self._check_refinement_contextual_value(
+                        block.final_expr,
+                        final_ty,
+                        expected_final_ty,
+                        block.final_expr.span,
+                        final_context,
+                        inner,
+                    )
+                return final_ty
             return TyUnit()
         finally:
             self._pop_local_const_scope()
@@ -1962,13 +2007,19 @@ class TypeChecker:
                     and len(self.errors) != stmt_error_start):
                 bind_ty = self._erase_refinement(ty)
             scope.define(stmt.name, bind_ty)
+            source_unrepresentable = (
+                self._expr_has_unrepresentable_typed_const_scalar(stmt.value)
+            )
             const_value = self._eval_const_scalar_expr(
                 stmt.value, None, use_local_consts=True,
                 honor_float_suffix=True,
                 numeric_base=self._erase_refinement(ty))
             const_value = self._cast_const_scalar_to_type(
                 const_value, self._erase_refinement(ty))
-            if (len(self.errors) == stmt_error_start
+            if source_unrepresentable:
+                self._define_local_const_scalar(stmt.name, None)
+                self._mark_local_const_unrepresentable(stmt.name)
+            elif (len(self.errors) == stmt_error_start
                     and isinstance(const_value, (int, float))
                     and not isinstance(const_value, bool)):
                 self._define_local_const_scalar(stmt.name, const_value)
@@ -3034,7 +3085,7 @@ class TypeChecker:
                      "carrying its value into another refinement",
             ))
             return
-        if value is None:
+        if value is None and not source_unrepresentable:
             pending = self._check_self_independent_refinement(
                 refined, span, context,
             )
@@ -3139,7 +3190,7 @@ class TypeChecker:
                     refined, span, context,
                 )
             )
-            if value is not None or pending or invalid_source:
+            if value is not None or source_unrepresentable or pending or invalid_source:
                 proved = False
                 for pred in pending:
                     self._record_refinement_obligation(
@@ -3152,7 +3203,7 @@ class TypeChecker:
                             "; could not prove "
                             f"{' and '.join(self._fmt_refinement_expr(p) for p in pending)}"
                         )
-                elif value is not None:
+                elif value is not None or source_unrepresentable:
                     detail = "value is not representable"
                     if pending:
                         detail += (
@@ -3278,11 +3329,14 @@ class TypeChecker:
         if value is not None:
             return value, False
 
+        source_unrepresentable = (
+            self._expr_has_unrepresentable_typed_const_scalar(expr)
+        )
         raw_value = self._eval_raw_const_scalar_fallback(expr)
         if raw_value is None:
-            return None, False
+            return None, source_unrepresentable
 
-        if self._expr_has_unrepresentable_typed_const_scalar(expr):
+        if source_unrepresentable:
             return raw_value, True
 
         if source_base is None:
@@ -3318,6 +3372,13 @@ class TypeChecker:
     def _expr_has_unrepresentable_typed_const_scalar(
         self, expr: A.Expr,
     ) -> bool:
+        if isinstance(expr, A.Name) and not expr.generics:
+            found_local, local_unrepresentable = (
+                self._lookup_local_const_unrepresentable(expr.name)
+            )
+            if found_local:
+                return local_unrepresentable
+            return expr.name in self._unrepresentable_const_scalar_names
         base = self._infer_const_expr_numeric_base(expr)
         if base is not None:
             typed_value = self._eval_const_scalar_expr(

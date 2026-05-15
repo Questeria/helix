@@ -691,6 +691,39 @@ def test_gate_rejects_f32_overflow_hidden_by_primitive_cast_return_false_pass(
     )
 
 
+def test_gate_rejects_f32_overflow_hidden_by_top_level_const_return_false_pass(
+    capsys, tmp_path,
+):
+    source = tmp_path / "f32_overflow_hidden_by_const_return.hx"
+    source.write_text(
+        "type AlwaysF64 = f64 where true;\n"
+        "const OVER: f64 = (3.4028235e38_f32 * 2.0_f32) as f64;\n"
+        "fn f() -> AlwaysF64 { OVER }\n"
+        "fn main() -> i32 { 0 }\n",
+        encoding="utf-8",
+    )
+    artifact_path = tmp_path / "f32_overflow_hidden_by_const_return.json"
+
+    rc = proof_artifact_gate.main([
+        str(source),
+        "--artifact-out",
+        str(artifact_path),
+        "--",
+        "--no-stdlib",
+    ])
+
+    captured = capsys.readouterr()
+    assert rc == 1
+    assert "typecheck_errors must be empty" in captured.err
+    artifact = json.loads(artifact_path.read_text(encoding="utf-8"))
+    assert artifact["summary"]["typecheck_errors"] >= 1
+    assert any(
+        "return value of function 'f'" in error
+        and "requires a representable target value" in error
+        for error in artifact["typecheck_errors"]
+    )
+
+
 def test_gate_returns_bad_invocation_for_missing_source(capsys, tmp_path):
     source = tmp_path / "missing.hx"
     artifact_path = tmp_path / "missing.proof.json"
@@ -768,6 +801,28 @@ def test_gate_rejects_disallowed_output_args(capsys, tmp_path):
     assert rc == 2
     assert "-o is not allowed" in captured.err
     assert not output.exists()
+
+
+def test_gate_rejects_replay_libraries(capsys, tmp_path):
+    source = tmp_path / "input.hx"
+    _write_clean_source(source)
+    artifact_path = tmp_path / "input.proof.json"
+
+    rc = proof_artifact_gate.main([
+        str(source),
+        "--artifact-out",
+        str(artifact_path),
+        "--",
+        "-l",
+        "forgedlib",
+        "--no-stdlib",
+    ])
+
+    captured = capsys.readouterr()
+    assert rc == 2
+    assert "libraries are not allowed in proof_artifact_gate" in captured.err
+    assert "forgedlib" in captured.err
+    assert not artifact_path.exists()
 
 
 def test_gate_rejects_disallowed_debug_output_arg(capsys, tmp_path):

@@ -875,6 +875,30 @@ def test_stage34_self_independent_refinement_rejects_unrepresentable_values():
                and "target base f64" in e
                for e in f32_overflow_return_errs), f32_overflow_return_errs
 
+    top_level_const_errs = check("""
+    type AlwaysF64 = f64 where true;
+    const OVER: f64 = (3.4028235e38_f32 * 2.0_f32) as f64;
+    fn f() -> AlwaysF64 {
+        OVER
+    }
+    """)
+    assert any("return value of function 'f'" in e
+               and "requires a representable target value" in e
+               and "target base f64" in e
+               for e in top_level_const_errs), top_level_const_errs
+
+    local_const_errs = check("""
+    type AlwaysF64 = f64 where true;
+    fn f() -> AlwaysF64 {
+        const OVER: f64 = (3.4028235e38_f32 * 2.0_f32) as f64;
+        OVER
+    }
+    """)
+    assert any("return value of function 'f'" in e
+               and "requires a representable target value" in e
+               and "target base f64" in e
+               for e in local_const_errs), local_const_errs
+
 
 def test_stage34_fixed_point_preserves_unbound_name_errors():
     errs = check("""
