@@ -601,7 +601,7 @@ def test_stage34_negated_comparison_bounds_carry_proofs():
                for e in too_strict), too_strict
 
 
-def test_stage34_affine_numeric_bounds_carry_proofs():
+def test_stage34_affine_numeric_bounds_fail_closed_for_fixed_width_numbers():
     shifted = check("""
     type ShiftedAtLeastOne = i32 where self + 1 >= 2;
     type AtLeastOne = i32 where self >= 1;
@@ -609,7 +609,9 @@ def test_stage34_affine_numeric_bounds_carry_proofs():
         x
     }
     """)
-    assert shifted == [], shifted
+    assert any("return value of function 'lift'" in e
+               and "could not prove self >= 1" in e
+               for e in shifted), shifted
 
     scaled = check("""
     type ScaledAtLeastOne = i32 where 2 * self >= 2;
@@ -618,7 +620,9 @@ def test_stage34_affine_numeric_bounds_carry_proofs():
         x
     }
     """)
-    assert scaled == [], scaled
+    assert any("return value of function 'lift'" in e
+               and "could not prove self >= 1" in e
+               for e in scaled), scaled
 
     flipped = check("""
     type AtMostHalf = i32 where 2 - self >= 1;
@@ -627,7 +631,9 @@ def test_stage34_affine_numeric_bounds_carry_proofs():
         x
     }
     """)
-    assert flipped == [], flipped
+    assert any("return value of function 'lift'" in e
+               and "could not prove self <= 1" in e
+               for e in flipped), flipped
 
 
 def test_stage34_affine_numeric_bounds_keep_strictness():
@@ -649,7 +655,9 @@ def test_stage34_affine_numeric_bounds_keep_strictness():
         x
     }
     """)
-    assert strict == [], strict
+    assert any("return value of function 'lift'" in e
+               and "could not prove self > 0" in e
+               for e in strict), strict
 
 
 def test_stage34_named_constant_bounds_carry_proofs():
@@ -673,7 +681,9 @@ def test_stage34_named_constant_bounds_carry_proofs():
         x
     }
     """)
-    assert named_affine == [], named_affine
+    assert any("return value of function 'lift'" in e
+               and "could not prove self >= OFFSET" in e
+               for e in named_affine), named_affine
 
 
 def test_stage34_numeric_bound_implication_requires_same_erased_base():
@@ -1017,6 +1027,39 @@ def test_stage34_float_affine_bound_carry_fails_closed():
                and "could not prove "
                    "(self + 1.0) > 9007199254740992.0" in e
                for e in f64_errs), f64_errs
+
+
+def test_stage34_integer_predicate_arithmetic_uses_machine_semantics():
+    div_errs = check("""
+    type HalfPositive = i32 where self / 2 > 0;
+    fn f() -> HalfPositive {
+        1
+    }
+    """)
+    assert any("return value of function 'f'" in e
+               and "value 1 does not satisfy (self / 2) > 0" in e
+               for e in div_errs), div_errs
+
+    overflow_errs = check("""
+    type WrapPositive = i32 where self + 1 > 0;
+    fn f() -> WrapPositive {
+        2147483647
+    }
+    """)
+    assert any("return value of function 'f'" in e
+               and "predicate (self + 1) > 0 is not supported" in e
+               for e in overflow_errs), overflow_errs
+
+    carry_errs = check("""
+    type Source = i32 where self / 2 <= 1;
+    type Target = i32 where self <= 2;
+    fn lift(x: Source) -> Target {
+        x
+    }
+    """)
+    assert any("return value of function 'lift'" in e
+               and "could not prove self <= 2" in e
+               for e in carry_errs), carry_errs
 
 
 def test_stage34_fixed_point_preserves_unknown_type_errors():

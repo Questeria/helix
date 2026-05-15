@@ -117,10 +117,14 @@ see why a container-valued call or assignment was accepted.
 
 ## Increment 7 - Simple Affine Bound Implication
 
-Proof-carry now handles simple linear arithmetic around `self` when reducing
-numeric bounds.
+Initial Stage 34 work accepted simple linear arithmetic around `self` when
+reducing numeric bounds.
 
-Examples now accepted:
+Those early examples were later narrowed by clean-gate findings: affine
+proof-carry extraction now fails closed for fixed-width integer and
+floating-point bases unless it is a simple direct `self` versus constant bound.
+The old examples below are retained as design intent, not current accepted
+behavior:
 
 - `self + 1.0 >= 2.0` proves `self >= 1.0`
 - `2.0 * self >= 2.0` proves `self >= 1.0`
@@ -137,8 +141,9 @@ refinement predicates.
 Covered cases:
 
 - `self >= FLOOR` can prove `self >= ZERO` when the constant values imply it.
-- `self + OFFSET >= TARGET` can prove `self >= OFFSET` when the constants make
-  the affine bound equivalent.
+- Direct named bounds remain supported. Affine named-constant proof carry for
+  fixed-width numbers is now fail-closed until overflow and rounding semantics
+  can be modeled exactly.
 
 ## Increment 9 - Mid-Stage Audit Fixes
 
@@ -476,6 +481,39 @@ Verification after this fix set:
 
 The clean-gate counter remains reset to `0/3`.
 
+## Clean Gate 1 Ninth Restart - Failed; Fix Verified; Counter Reset
+
+Fresh clean-gate auditors on commit `4be3e3c` found one docs issue and two
+proof-honesty gaps:
+
+- The progress doc still had old affine examples worded as current accepted
+  behavior. Those examples are now documented as design intent only.
+- Integer refinement predicate arithmetic used Python real division, while Helix
+  integer division truncates toward zero. This allowed `self / 2 > 0` to prove
+  true for `self = 1`.
+- Source-backed proof artifact validation recomputed carried-proof metadata only
+  when the user supplied explicit `--source`; an artifact with a valid embedded
+  source path could still erase proof carries and update its summary.
+
+The fix makes direct integer predicate arithmetic use Helix-style truncating
+division and modulo, fails closed when fixed-width integer arithmetic leaves the
+declared range, fails closed for affine proof-carry extraction over all
+fixed-width numeric bases, and recomputes carried-proof metadata from either an
+explicit source or a resolvable embedded artifact path.
+
+Verification after this fix set:
+
+- Focused fixed-width arithmetic and embedded-carry regressions: `9 passed`
+- `python scripts\stage31_validate.py --mode quick --skip-snapshot`: pass
+- `python -m pytest -q helixc/tests/test_typecheck.py helixc/tests/test_cli.py helixc/tests/test_proof_artifact_validate.py helixc/tests/test_proof_artifact_gate.py`:
+  `473 passed`
+- `python scripts\stage31_validate.py --mode full --skip-snapshot --shards 8`:
+  pass after retry recovered no-codegen shard 2
+- `python -m pytest -q helixc/tests/test_strings_io.py::test_print_int_decimal_output`:
+  pass after inspecting the recovered shard's transient failure
+
+The clean-gate counter remains reset to `0/3`.
+
 ## Clean Gate 1 Eighth Restart - Failed; Fix Verified; Counter Reset
 
 Fresh clean-gate auditors on commit `3d20693` found two proof-honesty gaps:
@@ -491,7 +529,7 @@ Fresh clean-gate auditors on commit `3d20693` found two proof-honesty gaps:
 
 The fix passes the erased numeric base into target requirement extraction,
 fails closed for affine proof-carry extraction over floating-point bases,
-retargets positive affine proof-carry coverage to exact `i32` arithmetic, and
+keeps direct integer and float bounds as the supported proof-carry subset, and
 makes normal `proof_artifact_validate.py --source` recompute and compare
 carried-proof metadata even without `--require-clean`.
 

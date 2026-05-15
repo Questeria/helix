@@ -3700,7 +3700,7 @@ class TypeChecker:
         numeric_base: Type | None = None,
     ) -> Optional[list[tuple[str, int | float, bool]]]:
         affine = None
-        if not self._numeric_base_is_float(numeric_base):
+        if not self._numeric_base_is_fixed_width_number(numeric_base):
             affine = self._refinement_affine_binary_bounds(
                 left, op, right, numeric_base)
         if affine is not None:
@@ -3778,6 +3778,8 @@ class TypeChecker:
                 return (left[0] * right[1], left[1] * right[1])
             return None
         if isinstance(expr, A.Binary) and expr.op == "/":
+            if self._numeric_base_is_int(numeric_base):
+                return None
             left = self._refinement_affine_expr(expr.left, numeric_base)
             right = self._refinement_affine_expr(expr.right, numeric_base)
             if left is None or right is None or right[0] != 0 or right[1] == 0:
@@ -4438,9 +4440,21 @@ class TypeChecker:
                     return self._const_scalar_arithmetic_result(
                         left * right, numeric_base)
                 if expr.op == "/" and right != 0:
+                    if self._numeric_base_is_int(numeric_base):
+                        if isinstance(left, int) and isinstance(right, int):
+                            return self._const_scalar_arithmetic_result(
+                                self._trunc_div_int(left, right),
+                                numeric_base)
+                        return None
                     return self._const_scalar_arithmetic_result(
                         left / right, numeric_base)
                 if expr.op == "%" and right != 0:
+                    if self._numeric_base_is_int(numeric_base):
+                        if isinstance(left, int) and isinstance(right, int):
+                            return self._const_scalar_arithmetic_result(
+                                self._trunc_mod_int(left, right),
+                                numeric_base)
+                        return None
                     return self._const_scalar_arithmetic_result(
                         left % right, numeric_base)
             except (OverflowError, ValueError):
@@ -4455,6 +4469,9 @@ class TypeChecker:
                     and not isinstance(value, bool)):
                 return None
             return self._round_const_scalar_to_f32(float(value))
+        if self._numeric_base_is_int(numeric_base):
+            return self._representable_int_arithmetic_result(
+                value, numeric_base)
         return self._finite_const_scalar_result(value)
 
     def _finite_const_scalar_result(
@@ -4467,11 +4484,49 @@ class TypeChecker:
     def _numeric_base_is_f32(self, numeric_base: Type | None) -> bool:
         return isinstance(numeric_base, TyPrim) and numeric_base.name == "f32"
 
+    def _numeric_base_is_int(self, numeric_base: Type | None) -> bool:
+        return (
+            isinstance(numeric_base, TyPrim)
+            and numeric_base.name in _INT_PRIM_NAMES
+        )
+
     def _numeric_base_is_float(self, numeric_base: Type | None) -> bool:
         return (
             isinstance(numeric_base, TyPrim)
             and numeric_base.name in _FLOAT_PRIM_NAMES
         )
+
+    def _numeric_base_is_fixed_width_number(
+        self, numeric_base: Type | None,
+    ) -> bool:
+        return (
+            self._numeric_base_is_int(numeric_base)
+            or self._numeric_base_is_float(numeric_base)
+        )
+
+    def _representable_int_arithmetic_result(
+        self, value: int | float, numeric_base: Type | None,
+    ) -> int | None:
+        if (not isinstance(value, int)
+                or isinstance(value, bool)
+                or not isinstance(numeric_base, TyPrim)):
+            return None
+        bounds = self._INT_BOUNDS.get(numeric_base.name)
+        if bounds is None:
+            return None
+        lo, hi = bounds
+        if value < lo or value > hi:
+            return None
+        return value
+
+    def _trunc_div_int(self, left: int, right: int) -> int:
+        quotient = abs(left) // abs(right)
+        if (left < 0) != (right < 0):
+            quotient = -quotient
+        return quotient
+
+    def _trunc_mod_int(self, left: int, right: int) -> int:
+        return left - self._trunc_div_int(left, right) * right
 
     def _eval_float_lit_scalar(self, expr: A.FloatLit) -> float | None:
         suffix = expr.type_suffix

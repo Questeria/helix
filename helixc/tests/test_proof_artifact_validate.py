@@ -427,6 +427,32 @@ def test_validate_rejects_erased_proof_carries_with_source_by_default(
     )
 
 
+def test_validate_rejects_erased_proof_carries_from_embedded_source_path(
+    capsys, tmp_path,
+):
+    _source_path, artifact_path, artifact = _real_artifact(
+        capsys,
+        tmp_path,
+        src=(
+            "type AtLeastOne = f64 where self >= 1.0;\n"
+            "type NonNegative = f64 where self >= 0.0;\n"
+            "fn lift(a: AtLeastOne) -> NonNegative { a }\n"
+        ),
+    )
+    assert artifact["summary"]["proof_carries"] == 1
+    artifact["proof_carries"] = []
+    artifact["summary"]["proof_carries"] = 0
+    artifact["summary"]["proof_carry_strategies"] = {}
+    artifact_path.write_text(json.dumps(artifact), encoding="utf-8")
+
+    rc = proof_artifact_validate.main([str(artifact_path)])
+    captured = capsys.readouterr()
+    assert rc == 1
+    assert "proof artifact proof_carries mismatch against recomputed source" in (
+        captured.err
+    )
+
+
 def test_validate_rejects_boolean_integer_fields(capsys, tmp_path):
     _source_path, artifact_path, artifact = _real_artifact(capsys, tmp_path)
     artifact["summary"]["obligations"] = True

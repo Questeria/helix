@@ -1595,18 +1595,17 @@ def test_stage34_emit_proof_carry_json_for_tuple_bound_implication(
                for carry in artifact["proof_carries"])
 
 
-def test_stage34_emit_proof_carry_json_for_affine_and_negated_bounds(
+def test_stage34_emit_proof_carry_json_for_negated_bounds_only(
     capsys, tmp_path,
 ):
-    src_path = str(tmp_path / "affine_and_negated_bound_carry.hx")
+    src_path = str(tmp_path / "negated_bound_carry.hx")
     with open(src_path, "w") as f:
         f.write(
-            "type ShiftedAtLeastOne = i32 where self + 1 >= 2;\n"
             "type NotBelowZero = i32 where !(self < 0);\n"
             "type NonNegative = i32 where self >= 0;\n"
             "fn use_n(x: NonNegative) -> i32 { 0 }\n"
-            "fn lift(a: ShiftedAtLeastOne, b: NotBelowZero) -> i32 {\n"
-            "    use_n(a) + use_n(b)\n"
+            "fn lift(b: NotBelowZero) -> i32 {\n"
+            "    use_n(b)\n"
             "}\n"
         )
     rc = main([src_path, "--emit-proof-obligations", "--no-stdlib"])
@@ -1615,16 +1614,15 @@ def test_stage34_emit_proof_carry_json_for_affine_and_negated_bounds(
     artifact = json.loads(captured.out)
     assert artifact["summary"]["typecheck_errors"] == 0
     assert artifact["obligations"] == []
-    assert artifact["summary"]["proof_carries"] == 2
+    assert artifact["summary"]["proof_carries"] == 1
     assert artifact["summary"]["proof_carry_strategies"] == {
-        "numeric-bound-implication": 2,
+        "numeric-bound-implication": 1,
     }
     sources = {
         carry["source_refinement"]: carry["strategy"]
         for carry in artifact["proof_carries"]
     }
     assert sources == {
-        "ShiftedAtLeastOne": "numeric-bound-implication",
         "NotBelowZero": "numeric-bound-implication",
     }
 

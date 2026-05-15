@@ -650,6 +650,35 @@ def recomputed_source_metadata_errors(
     return errors
 
 
+def source_path_for_metadata_recompute(
+    artifact: dict[str, object],
+    *,
+    explicit_source: str | None,
+    artifact_dir: str | Path | None = None,
+) -> str | None:
+    if explicit_source is not None:
+        return explicit_source
+    input_metadata = artifact.get("input")
+    if (not isinstance(input_metadata, dict)
+            or input_metadata.get("source_sha256") is None):
+        return None
+    path_value = artifact.get("path")
+    if not isinstance(path_value, str):
+        return None
+    artifact_source = Path(path_value)
+    candidates: list[Path] = []
+    if artifact_source.is_absolute():
+        candidates.append(artifact_source)
+    else:
+        if artifact_dir is not None:
+            candidates.append(Path(artifact_dir) / artifact_source)
+        candidates.append(artifact_source)
+    for candidate in candidates:
+        if candidate.is_file():
+            return str(candidate)
+    return None
+
+
 def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -689,10 +718,15 @@ def main(argv: list[str] | None = None) -> int:
         source_path=args.source,
         artifact_dir=artifact_dir,
     )
-    if not errors and args.source is not None:
+    metadata_source = source_path_for_metadata_recompute(
+        artifact,
+        explicit_source=args.source,
+        artifact_dir=artifact_dir,
+    )
+    if not errors and metadata_source is not None:
         errors.extend(recomputed_source_metadata_errors(
             artifact,
-            source_path=args.source,
+            source_path=metadata_source,
         ))
     if not errors and args.require_clean:
         errors.extend(clean_policy_errors(artifact))
