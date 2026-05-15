@@ -506,6 +506,48 @@ def test_stage34_equality_refinement_keeps_strict_bounds_fail_closed():
                for e in not_equal), not_equal
 
 
+def test_stage34_compound_numeric_bounds_carry_proofs():
+    logical_and_to_commas = check("""
+    type Tight = f64 where self >= 0.25 && self <= 0.75;
+    type Loose = f64 where self >= 0.0, self <= 1.0;
+    fn lift(x: Tight) -> Loose {
+        x
+    }
+    """)
+    assert logical_and_to_commas == [], logical_and_to_commas
+
+    commas_to_logical_and = check("""
+    type Tight = f64 where self >= 0.25, self <= 0.75;
+    type Loose = f64 where self >= 0.0 && self <= 1.0;
+    fn lift(x: Tight) -> Loose {
+        x
+    }
+    """)
+    assert commas_to_logical_and == [], commas_to_logical_and
+
+
+def test_stage34_numeric_bounds_carry_through_array_and_tuple_proofs():
+    arrays = check("""
+    type AtLeastOne = f64 where self >= 1.0;
+    type NonNegative = f64 where self >= 0.0;
+    fn use_values(xs: [NonNegative; 2]) -> i32 { 0 }
+    fn lift(xs: [AtLeastOne; 2]) -> i32 {
+        use_values(xs)
+    }
+    """)
+    assert arrays == [], arrays
+
+    tuples = check("""
+    type AtMostHalf = f64 where self <= 0.5;
+    type AtMostOne = f64 where self <= 1.0;
+    fn lift(xs: (AtMostHalf, AtMostHalf)) -> i32 {
+        let ys: (AtMostOne, AtMostOne) = xs;
+        0
+    }
+    """)
+    assert tuples == [], tuples
+
+
 def test_stage31_unsupported_refinement_predicates_do_not_carry_by_name():
     errs = check("""
     type Source = f64 where foo();

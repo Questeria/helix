@@ -56,3 +56,16 @@ The implementation remains fail-closed:
 - `self == 1.0` does not prove `self < 1.0`
 - `self == 1.0` does not prove `self > 1.0`
 - `self != 0.0` does not prove any lower or upper bound
+
+## Increment 3 - Compound And Container Regression Coverage
+
+Stage 34 now pins proof-carry behavior through compound predicate forms and
+simple refined containers.
+
+Covered cases:
+
+- `self >= A && self <= B` can carry proof into equivalent comma-separated
+  bounds.
+- Comma-separated bounds can carry proof into equivalent `&&` bounds.
+- Stronger numeric bounds carry through refined array elements.
+- Stronger numeric bounds carry through refined tuple elements.

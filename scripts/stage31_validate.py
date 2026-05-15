@@ -319,6 +319,8 @@ def quick(py: str) -> int:
             "helixc/tests/test_typecheck.py::test_stage34_numeric_bound_implication_respects_strictness",
             "helixc/tests/test_typecheck.py::test_stage34_equality_refinement_implies_matching_bounds",
             "helixc/tests/test_typecheck.py::test_stage34_equality_refinement_keeps_strict_bounds_fail_closed",
+            "helixc/tests/test_typecheck.py::test_stage34_compound_numeric_bounds_carry_proofs",
+            "helixc/tests/test_typecheck.py::test_stage34_numeric_bounds_carry_through_array_and_tuple_proofs",
             "helixc/tests/test_typecheck.py::test_stage31_unsupported_refinement_predicates_do_not_carry_by_name",
             "helixc/tests/test_typecheck.py::test_stage31_generic_qualified_refinement_names_are_unsupported",
             "helixc/tests/test_typecheck.py::test_stage31_duplicate_refinement_names_fail_closed",
