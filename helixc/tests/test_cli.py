@@ -1460,6 +1460,24 @@ def test_stage31_emit_proof_obligations_json_for_equivalent_refinement_alias(
     assert artifact["obligations"] == []
 
 
+def test_stage34_emit_proof_obligations_json_for_numeric_bound_implication(
+    capsys, tmp_path,
+):
+    src_path = str(tmp_path / "numeric_bound_implication_obligation.hx")
+    with open(src_path, "w") as f:
+        f.write(
+            "type AtLeastOne = f64 where self >= 1.0;\n"
+            "type NonNegative = f64 where self >= 0.0;\n"
+            "fn lift(a: AtLeastOne) -> NonNegative { a }\n"
+        )
+    rc = main([src_path, "--emit-proof-obligations", "--no-stdlib"])
+    captured = capsys.readouterr()
+    assert rc == 0, captured.out + captured.err
+    artifact = json.loads(captured.out)
+    assert artifact["summary"]["typecheck_errors"] == 0
+    assert artifact["obligations"] == []
+
+
 def test_stage31_emit_proof_obligations_rejects_generic_refinement_name(
     capsys, tmp_path,
 ):

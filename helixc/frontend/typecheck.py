@@ -3126,11 +3126,12 @@ class TypeChecker:
     def _refinement_predicates_cover(
         self, value_ty: Type, target: "TyRefined",
     ) -> bool:
-        """Whether value_ty proves every exact predicate required by target.
+        """Whether value_ty proves every predicate required by target.
 
-        This is deliberately syntactic. Stage 31 can reuse already-carried
-        proofs for alias-equivalent refinements and exact predicate subsets,
-        but mathematical implication remains future SMT work.
+        Stage 31 reused already-carried proofs for alias-equivalent
+        refinements and exact predicate subsets. Stage 34 adds a small,
+        fail-closed implication step for simple numeric bounds such as
+        `self >= 1.0` proving `self >= 0.0`.
         """
         if not isinstance(value_ty, TyRefined):
             return False
@@ -3140,7 +3141,183 @@ class TypeChecker:
         target_preds = self._refinement_predicate_keys(target)
         if value_preds is None or target_preds is None:
             return False
-        return bool(target_preds) and target_preds.issubset(value_preds)
+        if bool(target_preds) and target_preds.issubset(value_preds):
+            return True
+        return self._refinement_numeric_bounds_cover(value_ty, target)
+
+    def _refinement_numeric_bounds_cover(
+        self, value_ty: "TyRefined", target: "TyRefined",
+    ) -> bool:
+        value_bounds = self._refinement_numeric_bounds(value_ty)
+        target_reqs = self._refinement_numeric_requirements(target)
+        if value_bounds is None or target_reqs is None:
+            return False
+        return all(
+            self._numeric_bounds_imply(value_bounds, req)
+            for req in target_reqs
+        )
+
+    def _refinement_numeric_bounds(
+        self, ty: Type,
+    ) -> Optional[dict[str, tuple[int | float, bool]]]:
+        lower: tuple[int | float, bool] | None = None
+        upper: tuple[int | float, bool] | None = None
+        for pred in self._refinement_predicate_exprs(ty):
+            bounds = self._refinement_predicate_bounds(pred)
+            if bounds is None:
+                return None
+            for kind, value, inclusive in bounds:
+                if kind == "lower":
+                    if (lower is None
+                            or value > lower[0]
+                            or (value == lower[0]
+                                and lower[1] and not inclusive)):
+                        lower = (value, inclusive)
+                elif kind == "upper":
+                    if (upper is None
+                            or value < upper[0]
+                            or (value == upper[0]
+                                and upper[1] and not inclusive)):
+                        upper = (value, inclusive)
+                else:
+                    return None
+        out: dict[str, tuple[int | float, bool]] = {}
+        if lower is not None:
+            out["lower"] = lower
+        if upper is not None:
+            out["upper"] = upper
+        return out
+
+    def _refinement_numeric_requirements(
+        self, ty: Type,
+    ) -> Optional[list[tuple[str, int | float, bool]]]:
+        out: list[tuple[str, int | float, bool]] = []
+        for pred in self._refinement_predicate_exprs(ty):
+            bounds = self._refinement_predicate_bounds(pred)
+            if bounds is None:
+                return None
+            out.extend(bounds)
+        return out
+
+    def _refinement_predicate_exprs(self, ty: Type) -> list[A.Expr]:
+        if not isinstance(ty, TyRefined):
+            return []
+        out = list(ty.predicates)
+        out.extend(self._refinement_predicate_exprs(ty.base))
+        return out
+
+    def _refinement_predicate_bounds(
+        self, expr: A.Expr,
+    ) -> Optional[list[tuple[str, int | float, bool]]]:
+        if isinstance(expr, A.BoolLit):
+            return [] if expr.value else None
+        if isinstance(expr, A.Binary) and expr.op == "&&":
+            left = self._refinement_predicate_bounds(expr.left)
+            right = self._refinement_predicate_bounds(expr.right)
+            if left is None or right is None:
+                return None
+            return left + right
+        if isinstance(expr, A.Binary) and expr.op == "||":
+            return None
+        chain = self._flatten_relational_chain(expr)
+        if chain is None:
+            return None
+        ops, operands = chain
+        out: list[tuple[str, int | float, bool]] = []
+        for left, op, right in zip(operands, ops, operands[1:]):
+            bound = self._refinement_binary_bound(left, op, right)
+            if bound is None:
+                ok = self._eval_refinement_predicate(
+                    A.Binary(left=left, op=op, right=right, span=expr.span),
+                    None,
+                )
+                if ok is True:
+                    continue
+                return None
+            out.append(bound)
+        return out
+
+    def _refinement_binary_bound(
+        self, left: A.Expr, op: str, right: A.Expr,
+    ) -> Optional[tuple[str, int | float, bool]]:
+        left_is_self = self._expr_is_plain_self(left)
+        right_is_self = self._expr_is_plain_self(right)
+        if left_is_self == right_is_self:
+            return None
+        if left_is_self:
+            value = self._eval_const_scalar_expr(right, None)
+            return self._bound_from_self_compare(op, value)
+        value = self._eval_const_scalar_expr(left, None)
+        return self._bound_from_const_compare(op, value)
+
+    def _bound_from_self_compare(
+        self, op: str, value: int | float | bool | None,
+    ) -> Optional[tuple[str, int | float, bool]]:
+        if not (isinstance(value, (int, float)) and not isinstance(value, bool)):
+            return None
+        if op == ">":
+            return ("lower", value, False)
+        if op == ">=":
+            return ("lower", value, True)
+        if op == "<":
+            return ("upper", value, False)
+        if op == "<=":
+            return ("upper", value, True)
+        if op == "==":
+            return None
+        if op == "!=":
+            return None
+        return None
+
+    def _bound_from_const_compare(
+        self, op: str, value: int | float | bool | None,
+    ) -> Optional[tuple[str, int | float, bool]]:
+        if not (isinstance(value, (int, float)) and not isinstance(value, bool)):
+            return None
+        if op == "<":
+            return ("lower", value, False)
+        if op == "<=":
+            return ("lower", value, True)
+        if op == ">":
+            return ("upper", value, False)
+        if op == ">=":
+            return ("upper", value, True)
+        if op == "==":
+            return None
+        if op == "!=":
+            return None
+        return None
+
+    def _numeric_bounds_imply(
+        self,
+        value_bounds: dict[str, tuple[int | float, bool]],
+        req: tuple[str, int | float, bool],
+    ) -> bool:
+        kind, req_value, req_inclusive = req
+        value_bound = value_bounds.get(kind)
+        if value_bound is None:
+            return False
+        value, inclusive = value_bound
+        if kind == "lower":
+            if value > req_value:
+                return True
+            if value < req_value:
+                return False
+        elif kind == "upper":
+            if value < req_value:
+                return True
+            if value > req_value:
+                return False
+        else:
+            return False
+        if req_inclusive:
+            return True
+        return not inclusive
+
+    def _expr_is_plain_self(self, expr: A.Expr) -> bool:
+        return (isinstance(expr, A.Name)
+                and expr.name == "self"
+                and not expr.generics)
 
     def _refinement_predicate_keys(
         self, ty: Type,

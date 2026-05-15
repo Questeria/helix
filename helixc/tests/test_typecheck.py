@@ -368,9 +368,78 @@ def test_stage31_equivalent_refinement_aliases_carry_exact_proofs():
         a
     }
     """)
+    assert reordered == [], reordered
+
+
+def test_stage34_numeric_bound_implication_carries_proofs():
+    lower = check("""
+    type AtLeastOne = f64 where self >= 1.0;
+    type NonNegative = f64 where self >= 0.0;
+    fn lift(x: AtLeastOne) -> NonNegative {
+        x
+    }
+    """)
+    assert lower == [], lower
+
+    upper = check("""
+    type BelowHalf = f64 where self <= 0.5;
+    type AtMostOne = f64 where self <= 1.0;
+    fn lift(x: BelowHalf) -> AtMostOne {
+        x
+    }
+    """)
+    assert upper == [], upper
+
+    chained = check("""
+    type SmallPositive = f64 where 0.25 <= self <= 0.75;
+    type LooseUnit = f64 where 0.0 <= self <= 1.0;
+    fn lift(x: SmallPositive) -> LooseUnit {
+        x
+    }
+    """)
+    assert chained == [], chained
+
+
+def test_stage34_numeric_bound_implication_respects_strictness():
+    weak_lower = check("""
+    type NonNegative = f64 where self >= 0.0;
+    type Positive = f64 where self > 0.0;
+    fn lift(x: NonNegative) -> Positive {
+        x
+    }
+    """)
     assert any("return value of function 'lift'" in e
-               and "could not prove" in e
-               for e in reordered), reordered
+               and "could not prove self > 0.0" in e
+               for e in weak_lower), weak_lower
+
+    strong_lower = check("""
+    type Positive = f64 where self > 0.0;
+    type NonNegative = f64 where self >= 0.0;
+    fn lift(x: Positive) -> NonNegative {
+        x
+    }
+    """)
+    assert strong_lower == [], strong_lower
+
+    weak_upper = check("""
+    type AtMostOne = f64 where self <= 1.0;
+    type LessThanOne = f64 where self < 1.0;
+    fn lift(x: AtMostOne) -> LessThanOne {
+        x
+    }
+    """)
+    assert any("return value of function 'lift'" in e
+               and "could not prove self < 1.0" in e
+               for e in weak_upper), weak_upper
+
+    strong_upper = check("""
+    type LessThanOne = f64 where self < 1.0;
+    type AtMostOne = f64 where self <= 1.0;
+    fn lift(x: LessThanOne) -> AtMostOne {
+        x
+    }
+    """)
+    assert strong_upper == [], strong_upper
 
 
 def test_stage31_unsupported_refinement_predicates_do_not_carry_by_name():
