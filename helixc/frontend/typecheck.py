@@ -602,6 +602,7 @@ class TypeChecker:
             self.proof_obligations = (
                 self.proof_obligations[:function_obligation_start])
             self.proof_carries = self.proof_carries[:function_carry_start]
+            self._seen_unbound = set()
             invalid_before = set(self._invalid_refined_return_functions)
             for item in fn_items:
                 try:
@@ -2988,6 +2989,17 @@ class TypeChecker:
             value_expr, None, use_local_consts=True)
         target_base = self._erase_refinement(refined)
         represented = self._cast_const_scalar_to_type(value, target_base)
+        if self._expr_uses_invalid_refined_return(value_expr):
+            self._record_unproven_refinement_obligations(
+                context, refined, span)
+            self.errors.append(TypeError_(
+                f"{context}: refinement {refined.name} depends on a "
+                f"failed refined-return producer in Stage 34",
+                span,
+                hint="repair the producer's refined return proof before "
+                     "carrying its value into another refinement",
+            ))
+            return
         if value is None:
             pending = self._check_self_independent_refinement(
                 refined, span, context,
@@ -3079,18 +3091,28 @@ class TypeChecker:
             value_expr, None, use_local_consts=True)
         target_base = self._erase_refinement(refined)
         converted = self._cast_const_scalar_to_type(value, target_base)
+        invalid_source = self._expr_uses_invalid_refined_return(value_expr)
         proved = True
         if converted is None:
-            pending = self._check_self_independent_refinement(
-                refined, span, context,
+            pending = [] if invalid_source else (
+                self._check_self_independent_refinement(
+                    refined, span, context,
+                )
             )
-            if value is not None or pending:
+            if value is not None or pending or invalid_source:
                 proved = False
                 for pred in pending:
                     self._record_refinement_obligation(
                         context, refined, pred, "unproven", span, None,
                     )
-                if value is not None:
+                if invalid_source:
+                    detail = "source depends on a failed refined-return producer"
+                    if pending:
+                        detail += (
+                            "; could not prove "
+                            f"{' and '.join(self._fmt_refinement_expr(p) for p in pending)}"
+                        )
+                elif value is not None:
                     detail = "value is not representable"
                     if pending:
                         detail += (
@@ -3155,6 +3177,41 @@ class TypeChecker:
                 value_expr, src_ty, refined.base, span, context, scope,
             ) and proved
         return proved
+
+    def _expr_uses_invalid_refined_return(self, expr: A.Expr) -> bool:
+        invalid = getattr(self, "_invalid_refined_return_functions", set())
+        if isinstance(expr, A.Call):
+            if isinstance(expr.callee, A.Name) and expr.callee.name in invalid:
+                return True
+            return (self._expr_uses_invalid_refined_return(expr.callee)
+                    or any(self._expr_uses_invalid_refined_return(arg)
+                           for arg in expr.args))
+        if isinstance(expr, A.Cast):
+            return self._expr_uses_invalid_refined_return(expr.value)
+        if isinstance(expr, A.Unary):
+            return self._expr_uses_invalid_refined_return(expr.operand)
+        if isinstance(expr, A.Binary):
+            return (self._expr_uses_invalid_refined_return(expr.left)
+                    or self._expr_uses_invalid_refined_return(expr.right))
+        if isinstance(expr, A.TupleLit):
+            return any(self._expr_uses_invalid_refined_return(e)
+                       for e in expr.elems)
+        if isinstance(expr, A.ArrayLit):
+            return any(self._expr_uses_invalid_refined_return(e)
+                       for e in expr.elems)
+        if isinstance(expr, A.Field):
+            return self._expr_uses_invalid_refined_return(expr.obj)
+        if isinstance(expr, A.Index):
+            return (self._expr_uses_invalid_refined_return(expr.callee)
+                    or any(self._expr_uses_invalid_refined_return(i)
+                           for i in expr.indices))
+        if isinstance(expr, A.StructLit):
+            return any(self._expr_uses_invalid_refined_return(v)
+                       for _, v in expr.fields)
+        if isinstance(expr, A.Assign):
+            return (self._expr_uses_invalid_refined_return(expr.target)
+                    or self._expr_uses_invalid_refined_return(expr.value))
+        return False
 
     def _cast_const_scalar_to_type(
         self, value: int | float | bool | None, target: Type,
@@ -4238,7 +4295,8 @@ class TypeChecker:
         chain = self._flatten_relational_chain(expr)
         if chain is not None:
             ops, operands = chain
-            values = [self._eval_const_scalar_expr(e, self_value)
+            values = [self._eval_const_scalar_expr(
+                e, self_value, honor_float_suffix=True)
                       for e in operands]
             if any(v is None for v in values):
                 return None
@@ -4263,11 +4321,13 @@ class TypeChecker:
 
     def _eval_const_scalar_expr(
         self, expr: A.Expr, self_value: int | float | bool | None,
-        *, use_local_consts: bool = False,
+        *, use_local_consts: bool = False, honor_float_suffix: bool = False,
     ) -> Optional[int | float | bool]:
         if isinstance(expr, A.IntLit):
             return expr.value
         if isinstance(expr, A.FloatLit):
+            if honor_float_suffix:
+                return self._eval_float_lit_scalar(expr)
             return expr.value
         if isinstance(expr, A.BoolLit):
             return expr.value
@@ -4286,6 +4346,7 @@ class TypeChecker:
             inner = self._eval_const_scalar_expr(
                 expr.operand, self_value,
                 use_local_consts=use_local_consts,
+                honor_float_suffix=honor_float_suffix,
             )
             if isinstance(inner, (int, float)) and not isinstance(inner, bool):
                 return -inner
@@ -4294,9 +4355,11 @@ class TypeChecker:
             if expr.op in ("<", "<=", ">", ">=", "==", "!=", "&&", "||"):
                 return self._eval_refinement_predicate(expr, self_value)
             left = self._eval_const_scalar_expr(
-                expr.left, self_value, use_local_consts=use_local_consts)
+                expr.left, self_value, use_local_consts=use_local_consts,
+                honor_float_suffix=honor_float_suffix)
             right = self._eval_const_scalar_expr(
-                expr.right, self_value, use_local_consts=use_local_consts)
+                expr.right, self_value, use_local_consts=use_local_consts,
+                honor_float_suffix=honor_float_suffix)
             if not (isinstance(left, (int, float))
                     and isinstance(right, (int, float))
                     and not isinstance(left, bool)
@@ -4313,6 +4376,19 @@ class TypeChecker:
             if expr.op == "%" and right != 0:
                 return left % right
         return None
+
+    def _eval_float_lit_scalar(self, expr: A.FloatLit) -> float | None:
+        suffix = expr.type_suffix
+        if suffix == "f32":
+            return self._round_const_scalar_to_f32(float(expr.value))
+        if suffix == "f64":
+            value = float(expr.value)
+            if not math.isfinite(value):
+                return None
+            return value
+        if suffix in ("bf16", "f16", "fp8"):
+            return None
+        return expr.value
 
     def _compare_scalar(
         self, left: int | float | bool, op: str, right: int | float | bool,

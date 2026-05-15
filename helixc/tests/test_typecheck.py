@@ -825,6 +825,50 @@ def test_stage34_self_independent_refinement_rejects_unrepresentable_values():
                for e in cast_errs), cast_errs
 
 
+def test_stage34_fixed_point_preserves_unbound_name_errors():
+    errs = check("""
+    type AlwaysI32 = i32 where true;
+    fn bad() -> AlwaysI32 {
+        missing
+    }
+    fn main() -> i32 { 0 }
+    """)
+    assert any("unbound name 'missing'" in e for e in errs), errs
+
+
+def test_stage34_refinement_predicate_float_literals_use_target_suffix():
+    rounded_errs = check("""
+    type BelowRounded = f32 where self < 16777217.0_f32;
+    fn f() -> BelowRounded {
+        16777216.0_f32
+    }
+    """)
+    assert any("return value of function 'f'" in e
+               and "value 16777216.0 does not satisfy "
+                   "self < 16777217.0" in e
+               for e in rounded_errs), rounded_errs
+
+    f32_overflow_errs = check("""
+    type BelowOverflow = f32 where self < 1e40_f32;
+    fn f() -> BelowOverflow {
+        0.0_f32
+    }
+    """)
+    assert any("return value of function 'f'" in e
+               and "predicate self < 1e+40 is not supported" in e
+               for e in f32_overflow_errs), f32_overflow_errs
+
+    f64_nonfinite_errs = check("""
+    type BelowNonFinite = f64 where self < 1e309_f64;
+    fn f() -> BelowNonFinite {
+        0.0_f64
+    }
+    """)
+    assert any("return value of function 'f'" in e
+               and "predicate self < inf is not supported" in e
+               for e in f64_nonfinite_errs), f64_nonfinite_errs
+
+
 def test_stage31_unsupported_refinement_predicates_do_not_carry_by_name():
     errs = check("""
     type Source = f64 where foo();

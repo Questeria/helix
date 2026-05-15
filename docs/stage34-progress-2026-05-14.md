@@ -373,12 +373,28 @@ function-body pass now reaches a fixed point over failed refined-return
 producers, so callers declared before a failed producer are also checked with
 that fail-closed knowledge.
 
+Two follow-up audits of the same restart found related holes before this fix
+set was committed:
+
+- The fixed-point body loop truncated diagnostics between passes but did not
+  reset unbound-name suppression, so `fn bad() -> AlwaysI32 { missing }` could
+  lose the `unbound name 'missing'` diagnostic and leave a false proved
+  `where true` obligation.
+- Refinement predicate float literals with explicit suffixes were evaluated as
+  raw Python floats. For example, `16777217.0_f32` inside a predicate did not
+  round to `16777216.0`, allowing a false proof of
+  `16777216.0_f32 < 16777217.0_f32`.
+
+The final fix also resets unbound-name suppression on each fixed-point pass and
+evaluates explicit `_f32` / `_f64` predicate literals through their Helix
+representation before comparison.
+
 Verification after the self-independent and invalid-return fixes:
 
-- Exact focused regressions: `3 passed`
-- Nearby proof-carry and proof-gate slice: `29 passed`
+- Predicate-literal focused regressions: `2 passed`
+- Nearby proof-carry and proof-gate slices: `33 passed`
 - `python scripts\stage31_validate.py --mode quick --skip-snapshot`: pass
 - `python -m pytest -q helixc/tests/test_typecheck.py helixc/tests/test_cli.py helixc/tests/test_proof_artifact_validate.py helixc/tests/test_proof_artifact_gate.py`:
-  `447 passed`
+  `451 passed`
 - `python scripts\stage31_validate.py --mode full --skip-snapshot --shards 8`:
-  pass after built-in retry recovered no-codegen shard 1
+  pass after built-in retry recovered no-codegen shards 2 and 3
