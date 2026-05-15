@@ -750,6 +750,19 @@ def test_stage34_refined_f32_checks_rounded_target_value():
                for e in direct_errs), direct_errs
 
 
+def test_stage34_refined_f32_rejects_overflow_before_proof():
+    errs = check("""
+    type Huge = f32 where self > 3.5e38;
+    fn f() -> Huge {
+        1e40_f32
+    }
+    """)
+    assert any("return value of function 'f'" in e
+               and "target base f32" in e
+               and "could not prove self > 3.5e+38" in e
+               for e in errs), errs
+
+
 def test_stage31_unsupported_refinement_predicates_do_not_carry_by_name():
     errs = check("""
     type Source = f64 where foo();

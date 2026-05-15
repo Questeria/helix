@@ -18,7 +18,6 @@ License: Apache 2.0
 
 from __future__ import annotations
 
-import math
 import struct
 from dataclasses import dataclass, field
 from typing import Optional
@@ -2760,11 +2759,14 @@ class TypeChecker:
             src_ty = self._check_expr(expr.value, scope)
             tgt_ty = self._resolve_type(expr.target_ty, scope)
             if isinstance(tgt_ty, TyRefined):
+                before_cast_errors = len(self.errors)
                 self._check_cast_compat(
                     self._erase_refinement(src_ty),
                     self._erase_refinement(tgt_ty),
                     expr.span,
                 )
+                if len(self.errors) != before_cast_errors:
+                    return TyUnknown(hint="invalid refined cast")
                 if self._refinement_proof_carried(src_ty, tgt_ty):
                     self._record_refinement_proof_carries_for_type(
                         f"cast to refined type {self._fmt(tgt_ty)}",
@@ -2773,11 +2775,12 @@ class TypeChecker:
                         expr.span,
                     )
                     return tgt_ty
-                self._check_refinement_cast_value(
+                if not self._check_refinement_cast_value(
                     expr.value, src_ty, tgt_ty, expr.span,
                     f"cast to refined type {self._fmt(tgt_ty)}",
                     scope,
-                )
+                ):
+                    return TyUnknown(hint="failed refined cast")
                 return tgt_ty
             if self._contains_refinement(tgt_ty):
                 self.errors.append(TypeError_(
@@ -3009,16 +3012,18 @@ class TypeChecker:
     def _check_refinement_cast_value(
         self, value_expr: A.Expr, src_ty: Type, refined: "TyRefined",
         span: A.Span, context: str, scope: Scope,
-    ) -> None:
+    ) -> bool:
         value = self._eval_const_scalar_expr(
             value_expr, None, use_local_consts=True)
         target_base = self._erase_refinement(refined)
         converted = self._cast_const_scalar_to_type(value, target_base)
+        proved = True
         if converted is None:
             pending = self._check_self_independent_refinement(
                 refined, span, context,
             )
             if pending:
+                proved = False
                 for pred in pending:
                     self._record_refinement_obligation(
                         context, refined, pred, "unproven", span, None,
@@ -3034,13 +3039,14 @@ class TypeChecker:
                          "value can be proven to satisfy the predicate",
                 ))
             if isinstance(refined.base, TyRefined):
-                self._check_refinement_cast_value(
+                proved = self._check_refinement_cast_value(
                     value_expr, src_ty, refined.base, span, context, scope,
-                )
-            return
+                ) and proved
+            return proved
         for pred in refined.predicates:
             ok = self._eval_refinement_predicate(pred, converted)
             if ok is None:
+                proved = False
                 self._record_refinement_obligation(
                     context, refined, pred, "unsupported", span, converted,
                 )
@@ -3052,6 +3058,7 @@ class TypeChecker:
                 ))
                 continue
             if not ok:
+                proved = False
                 self._record_refinement_obligation(
                     context, refined, pred, "failed", span, converted,
                     trap="31001",
@@ -3070,9 +3077,10 @@ class TypeChecker:
                     context, refined, pred, "proved", span, converted,
                 )
         if isinstance(refined.base, TyRefined):
-            self._check_refinement_cast_value(
+            proved = self._check_refinement_cast_value(
                 value_expr, src_ty, refined.base, span, context, scope,
-            )
+            ) and proved
+        return proved
 
     def _cast_const_scalar_to_type(
         self, value: int | float | bool | None, target: Type,
@@ -3115,9 +3123,7 @@ class TypeChecker:
         try:
             return struct.unpack("<f", struct.pack("<f", value))[0]
         except OverflowError:
-            if math.isnan(value):
-                return math.nan
-            return math.inf if value > 0 else -math.inf
+            return None
         except (ValueError, struct.error):
             return None
 

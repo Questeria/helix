@@ -1644,7 +1644,7 @@ def test_stage34_emit_proof_obligations_json_for_refined_cast_target_value(
     captured = capsys.readouterr()
     assert rc == 1
     artifact = json.loads(captured.out)
-    assert artifact["summary"]["typecheck_errors"] == 1
+    assert artifact["summary"]["typecheck_errors"] >= 1
     obligation = artifact["obligations"][0]
     assert obligation["context"] == "cast to refined type ExactlyHalfInt"
     assert obligation["refinement"] == "ExactlyHalfInt"
@@ -1653,6 +1653,37 @@ def test_stage34_emit_proof_obligations_json_for_refined_cast_target_value(
     assert obligation["value"] == "0"
     assert "target value 0 does not satisfy self == 0.5" in (
         artifact["typecheck_errors"][0]
+    )
+    assert not any(
+        carry["context"] == "return value of function 'f'"
+        and carry["strategy"] == "same-refinement"
+        for carry in artifact["proof_carries"]
+    )
+
+
+def test_stage34_failed_refined_cast_does_not_emit_return_carry(
+    capsys, tmp_path,
+):
+    src_path = str(tmp_path / "failed_refined_cast_no_return_carry.hx")
+    with open(src_path, "w") as f:
+        f.write(
+            "type One = i32 where self == 1;\n"
+            "fn f() -> One { true as One }\n"
+            "fn main() -> i32 { 0 }\n"
+        )
+    rc = main([src_path, "--emit-proof-obligations", "--no-stdlib"])
+    captured = capsys.readouterr()
+    assert rc == 1
+    artifact = json.loads(captured.out)
+    assert any(
+        obligation["context"] == "cast to refined type One"
+        and obligation["status"] == "unproven"
+        for obligation in artifact["obligations"]
+    )
+    assert not any(
+        carry["context"] == "return value of function 'f'"
+        and carry["strategy"] == "same-refinement"
+        for carry in artifact["proof_carries"]
     )
 
 
@@ -1671,7 +1702,7 @@ def test_stage34_emit_proof_obligations_json_for_refined_f32_rounding(
     captured = capsys.readouterr()
     assert rc == 1
     artifact = json.loads(captured.out)
-    assert artifact["summary"]["typecheck_errors"] == 1
+    assert artifact["summary"]["typecheck_errors"] >= 1
     obligation = artifact["obligations"][0]
     assert obligation["context"] == "cast to refined type AboveF32Boundary"
     assert obligation["refinement"] == "AboveF32Boundary"

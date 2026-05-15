@@ -228,3 +228,30 @@ Verification after the target-representation fix:
   `405 passed`
 - `python scripts\stage31_validate.py --mode full --skip-snapshot --shards 8`:
   pass
+
+## Clean Gate 1 Second Restart - Failed, F32 Overflow Fix In Progress
+
+The second restarted clean gate did not count as clean. The proof-artifact
+audit found that `f32` overflow could still be converted to `inf` inside the
+checker and then marked proved, while the backend still tried to pack the
+original finite literal and failed.
+
+The fix now treats `f32` overflow as not representable for proof purposes, so
+overflowing refined `f32` literals fail before any proved obligation can be
+recorded.
+
+The same clean-gate attempt also found that a failed refined cast still
+returned the refined target type internally, allowing an enclosing return to
+record a misleading `same-refinement` carry. The cast checker now reports
+whether its proof succeeded; failed refined casts no longer type as proven
+refined values, so enclosing contexts cannot record proof carries from them.
+
+Verification after the overflow and failed-cast artifact fixes:
+
+- Focused regression slice: `5 passed`
+- Exact failed-cast repro: `rc=1`, `proof_carries=[]`
+- `python scripts\stage31_validate.py --mode quick --skip-snapshot`: pass
+- `python -m pytest -q helixc/tests/test_typecheck.py helixc/tests/test_cli.py helixc/tests/test_proof_artifact_gate.py`:
+  `408 passed`
+- `python scripts\stage31_validate.py --mode full --skip-snapshot --shards 8`:
+  pass after built-in retry recovered no-codegen shard 1
