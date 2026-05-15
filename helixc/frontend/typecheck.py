@@ -2790,7 +2790,7 @@ class TypeChecker:
                     hint="construct refined composite values explicitly so "
                          "the checker can verify their proofs",
                 ))
-                return tgt_ty
+                return TyUnknown(hint="invalid refined composite cast")
             # Audit 28.8 B3 (trap 28603): raw-pointer casts must be in
             # an unsafe block. `int as *mut T` outside unsafe is a
             # forged pointer; `float as *T` is dubious even inside

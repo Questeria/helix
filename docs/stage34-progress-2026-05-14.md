@@ -256,3 +256,27 @@ Verification after the overflow and failed-cast artifact fixes:
   `408 passed`
 - `python scripts\stage31_validate.py --mode full --skip-snapshot --shards 8`:
   pass after built-in retry recovered no-codegen shard 1
+
+## Clean Gate 1 Restart - Failed, Composite Cast And Validator Fix In Progress
+
+The next clean-gate attempt found two more artifact-honesty gaps:
+
+- Failed casts to refined composite targets, such as `[NonNegative; 1]`, still
+  typed internally as the refined target and could let enclosing `let`
+  contexts record bogus array or tuple proof carries.
+- `proof_artifact_validate.py --require-clean --source` verified source hashes
+  but did not recompute the artifact, so a forged clean JSON artifact could be
+  accepted when the source itself still failed proof checking.
+
+The fixes make rejected refined composite casts type as unknown and make the
+validator recompute source-backed clean artifacts before accepting them.
+
+Verification after the composite-cast and validator fixes:
+
+- Focused regression slice: `3 passed`
+- Composite failed-cast repro: type errors present, `proof_carries=[]`
+- `python scripts\stage31_validate.py --mode quick --skip-snapshot`: pass
+- `python -m pytest -q helixc/tests/test_typecheck.py helixc/tests/test_cli.py helixc/tests/test_proof_artifact_validate.py helixc/tests/test_proof_artifact_gate.py`:
+  `435 passed`
+- `python scripts\stage31_validate.py --mode full --skip-snapshot --shards 8`:
+  pass

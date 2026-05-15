@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import hashlib
+import io
 import json
 import re
 from pathlib import Path
@@ -13,7 +15,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from helixc.check import PROOF_SCHEMA
+from helixc.check import PROOF_SCHEMA, main as check_main
 from scripts.proof_artifact_key import cache_key_for_artifact, load_artifact
 
 
@@ -475,6 +477,114 @@ def clean_policy_errors(artifact: dict[str, object]) -> list[str]:
     return errors
 
 
+def _proof_args_from_artifact(
+    artifact: dict[str, object],
+    source_path: Path,
+) -> tuple[list[str], list[str]]:
+    input_metadata = artifact.get("input")
+    if not isinstance(input_metadata, dict):
+        return [], ["input must be an object"]
+
+    errors: list[str] = []
+    args: list[str] = [str(source_path)]
+
+    opt_level = input_metadata.get("opt_level")
+    if _is_json_int(opt_level):
+        if opt_level != 1:
+            args.append(f"-O{opt_level}")
+    else:
+        errors.append("input.opt_level must be an integer")
+
+    flags = input_metadata.get("flags")
+    if isinstance(flags, list) and all(isinstance(flag, str) for flag in flags):
+        args.extend(flags)
+        if "--emit-proof-obligations" not in flags:
+            args.append("--emit-proof-obligations")
+    else:
+        errors.append("input.flags must be a list of strings")
+
+    libs = input_metadata.get("libs")
+    if isinstance(libs, list) and all(isinstance(lib, str) for lib in libs):
+        for lib in libs:
+            args.extend(["-l", lib])
+    else:
+        errors.append("input.libs must be a list of strings")
+
+    warnings = input_metadata.get("warnings")
+    if isinstance(warnings, dict):
+        for key in sorted(warnings):
+            value = warnings[key]
+            if isinstance(key, str) and isinstance(value, str):
+                args.append(f"-W{key}={value}")
+            else:
+                errors.append("input.warnings must map strings to strings")
+    else:
+        errors.append("input.warnings must be an object")
+
+    color = input_metadata.get("color")
+    if color == "always":
+        args.append("--color")
+    elif color == "never":
+        args.append("--no-color")
+    elif color != "auto":
+        errors.append(f"input.color must be one of {sorted(INPUT_COLORS)}")
+
+    return args, errors
+
+
+def recomputed_clean_errors(
+    artifact: dict[str, object],
+    *,
+    source_path: str | None,
+) -> list[str]:
+    if source_path is None:
+        return [
+            "--source is required with --require-clean so the proof artifact "
+            "can be recomputed"
+        ]
+
+    source = Path(source_path)
+    if not source.is_file():
+        return [f"source path is not a readable file: {source}"]
+
+    args, arg_errors = _proof_args_from_artifact(artifact, source)
+    if arg_errors:
+        return arg_errors
+
+    out = io.StringIO()
+    err = io.StringIO()
+    try:
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            rc = check_main(args)
+        recomputed = json.loads(out.getvalue())
+    except Exception as e:
+        return [f"could not recompute proof artifact from source: {e}"]
+    if not isinstance(recomputed, dict):
+        return ["recomputed proof artifact must be a JSON object"]
+
+    errors: list[str] = []
+    for field in (
+        "schema",
+        "cache_key",
+        "input",
+        "summary",
+        "obligations",
+        "proof_carries",
+        "pipeline_errors",
+        "typecheck_errors",
+        "warning_diagnostics",
+    ):
+        if artifact.get(field) != recomputed.get(field):
+            errors.append(
+                f"proof artifact {field} mismatch against recomputed source"
+            )
+    if rc != 0:
+        errors.append(
+            f"recomputed proof run exited {rc}, expected a clean proof run"
+        )
+    return errors
+
+
 def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -516,6 +626,10 @@ def main(argv: list[str] | None = None) -> int:
     )
     if not errors and args.require_clean:
         errors.extend(clean_policy_errors(artifact))
+        errors.extend(recomputed_clean_errors(
+            artifact,
+            source_path=args.source,
+        ))
     if errors:
         for error in errors:
             print(f"proof-artifact-validate: {error}", file=sys.stderr)

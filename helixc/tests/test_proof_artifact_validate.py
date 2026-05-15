@@ -89,6 +89,41 @@ def test_require_clean_rejects_unproven_obligation(capsys, tmp_path):
     assert "typecheck_errors must be empty" in captured.err
 
 
+def test_require_clean_rejects_forged_clean_artifact_with_source(
+    capsys, tmp_path,
+):
+    source_path, artifact_path, artifact = _real_artifact(
+        capsys,
+        tmp_path,
+        src=(
+            "type Probability = f64 where 0.0 <= self <= 1.0;\n"
+            "fn use_raw(x: f64) -> i32 { let p: Probability = x; 0 }\n"
+            "fn main() -> i32 { 0 }\n"
+        ),
+        expected_rc=1,
+    )
+    artifact["obligations"][0]["status"] = "proved"
+    artifact["typecheck_errors"] = []
+    artifact["summary"]["typecheck_errors"] = 0
+    artifact_path.write_text(json.dumps(artifact), encoding="utf-8")
+
+    rc = proof_artifact_validate.main([
+        str(artifact_path), "--source", str(source_path), "--require-clean",
+    ])
+    captured = capsys.readouterr()
+    assert rc == 1
+    assert "proof artifact summary mismatch against recomputed source" in (
+        captured.err
+    )
+    assert "proof artifact obligations mismatch against recomputed source" in (
+        captured.err
+    )
+    assert "proof artifact typecheck_errors mismatch against recomputed source" in (
+        captured.err
+    )
+    assert "recomputed proof run exited 1" in captured.err
+
+
 def test_validate_accepts_unsupported_obligation_structurally(capsys, tmp_path):
     source_path, artifact_path, artifact = _real_artifact(
         capsys,

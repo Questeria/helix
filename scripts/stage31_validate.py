@@ -311,6 +311,7 @@ def quick(py: str) -> int:
             "helixc/tests/test_cli.py::test_stage34_emit_proof_carry_json_for_affine_and_negated_bounds",
             "helixc/tests/test_cli.py::test_stage34_emit_proof_obligations_json_for_refined_cast_target_value",
             "helixc/tests/test_cli.py::test_stage34_failed_refined_cast_does_not_emit_return_carry",
+            "helixc/tests/test_cli.py::test_stage34_failed_refined_composite_casts_do_not_emit_carries",
             "helixc/tests/test_cli.py::test_stage34_emit_proof_obligations_json_for_refined_f32_rounding",
             "helixc/tests/test_cli.py::test_stage34_emit_proof_carry_json_for_explicit_return_route",
             "helixc/tests/test_cli.py::test_stage34_emit_proof_carry_json_for_refined_cast_route",

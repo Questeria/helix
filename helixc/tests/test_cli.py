@@ -1681,6 +1681,30 @@ def test_stage34_failed_refined_cast_does_not_emit_return_carry(
     assert artifact["proof_carries"] == []
 
 
+def test_stage34_failed_refined_composite_casts_do_not_emit_carries(
+    capsys, tmp_path,
+):
+    src_path = str(tmp_path / "failed_refined_composite_cast_no_carry.hx")
+    with open(src_path, "w") as f:
+        f.write(
+            "type NonNegative = f64 where self >= 0.0;\n"
+            "fn f(xs: [f64; 1], pair: (f64, f64)) -> i32 {\n"
+            "    let ys: [NonNegative; 1] = xs as [NonNegative; 1];\n"
+            "    let zs: (NonNegative, NonNegative) = pair as "
+            "(NonNegative, NonNegative);\n"
+            "    0\n"
+            "}\n"
+        )
+    rc = main([src_path, "--emit-proof-obligations", "--no-stdlib"])
+    captured = capsys.readouterr()
+    assert rc == 1
+    artifact = json.loads(captured.out)
+    assert artifact["summary"]["typecheck_errors"] >= 2
+    assert artifact["summary"]["proof_carries"] == 0
+    assert artifact["summary"]["proof_carry_strategies"] == {}
+    assert artifact["proof_carries"] == []
+
+
 def test_stage34_emit_proof_obligations_json_for_refined_f32_rounding(
     capsys, tmp_path,
 ):
