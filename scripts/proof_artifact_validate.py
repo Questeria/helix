@@ -419,6 +419,13 @@ def validate_artifact(
             "source path is required to verify artifacts with source_sha256"
         )
 
+    if source_path is not None and isinstance(path_value, str):
+        artifact_source = Path(path_value)
+        if not artifact_source.is_absolute() and artifact_dir is not None:
+            artifact_source = Path(artifact_dir) / artifact_source
+        if artifact_source.resolve() != Path(source_path).resolve():
+            errors.append("proof artifact path mismatch against provided source")
+
     if source_to_check is not None:
         if source_hash is None:
             errors.append("cannot verify source path when input.source_sha256 is null")

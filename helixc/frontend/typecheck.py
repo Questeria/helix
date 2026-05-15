@@ -4376,7 +4376,7 @@ class TypeChecker:
                 honor_float_suffix=honor_float_suffix,
             )
             if isinstance(inner, (int, float)) and not isinstance(inner, bool):
-                return -inner
+                return self._finite_const_scalar_result(-inner)
             return None
         if isinstance(expr, A.Binary):
             if expr.op in ("<", "<=", ">", ">=", "==", "!=", "&&", "||"):
@@ -4392,21 +4392,31 @@ class TypeChecker:
                     and not isinstance(left, bool)
                     and not isinstance(right, bool)):
                 return None
-            if expr.op == "+":
-                return left + right
-            if expr.op == "-":
-                return left - right
-            if expr.op == "*":
-                return left * right
-            if expr.op == "/" and right != 0:
-                return left / right
-            if expr.op == "%" and right != 0:
-                return left % right
+            try:
+                if expr.op == "+":
+                    return self._finite_const_scalar_result(left + right)
+                if expr.op == "-":
+                    return self._finite_const_scalar_result(left - right)
+                if expr.op == "*":
+                    return self._finite_const_scalar_result(left * right)
+                if expr.op == "/" and right != 0:
+                    return self._finite_const_scalar_result(left / right)
+                if expr.op == "%" and right != 0:
+                    return self._finite_const_scalar_result(left % right)
+            except (OverflowError, ValueError):
+                return None
         return None
+
+    def _finite_const_scalar_result(
+        self, value: int | float,
+    ) -> int | float | None:
+        if isinstance(value, float) and not math.isfinite(value):
+            return None
+        return value
 
     def _eval_float_lit_scalar(self, expr: A.FloatLit) -> float | None:
         suffix = expr.type_suffix
-        if suffix == "f32":
+        if suffix is None or suffix == "f32":
             return self._round_const_scalar_to_f32(float(expr.value))
         if suffix == "f64":
             value = float(expr.value)

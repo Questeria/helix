@@ -868,6 +868,17 @@ def test_stage34_refinement_predicate_float_literals_use_target_suffix():
                and "predicate self < inf is not supported" in e
                for e in f64_nonfinite_errs), f64_nonfinite_errs
 
+    default_f32_errs = check("""
+    type BelowRounded = f32 where self < 16777217.0;
+    fn f() -> BelowRounded {
+        16777216.0_f32
+    }
+    """)
+    assert any("return value of function 'f'" in e
+               and "value 16777216.0 does not satisfy "
+                   "self < 16777217.0" in e
+               for e in default_f32_errs), default_f32_errs
+
 
 def test_stage34_numeric_bound_carry_uses_represented_predicate_literals():
     rounded_errs = check("""
@@ -892,6 +903,41 @@ def test_stage34_numeric_bound_carry_uses_represented_predicate_literals():
                and "could not prove self > 16777216.0" in e
                for e in affine_errs), affine_errs
 
+    default_f32_errs = check("""
+    type Source = f32 where self >= 16777217.0;
+    type Target = f32 where self > 16777216.0;
+    fn bad(s: Source) -> Target {
+        s
+    }
+    """)
+    assert any("return value of function 'bad'" in e
+               and "could not prove self > 16777216.0" in e
+               for e in default_f32_errs), default_f32_errs
+
+
+def test_stage34_numeric_bound_carry_uses_represented_f64_predicates():
+    nonfinite_bound_errs = check("""
+    type Source = f64 where self >= (1e308_f64 * 10.0_f64);
+    type Target = f64 where self >= 0.0;
+    fn bad(s: Source) -> Target {
+        s
+    }
+    """)
+    assert any("return value of function 'bad'" in e
+               and "could not prove self >= 0.0" in e
+               for e in nonfinite_bound_errs), nonfinite_bound_errs
+
+    affine_nonfinite_errs = check("""
+    type Source = f64 where self + (1e308_f64 * 10.0_f64) >= 0.0;
+    type Target = f64 where self >= 0.0;
+    fn bad(s: Source) -> Target {
+        s
+    }
+    """)
+    assert any("return value of function 'bad'" in e
+               and "could not prove self >= 0.0" in e
+               for e in affine_nonfinite_errs), affine_nonfinite_errs
+
 
 def test_stage34_const_predicate_uses_declared_scalar_representation():
     errs = check("""
@@ -904,6 +950,29 @@ def test_stage34_const_predicate_uses_declared_scalar_representation():
     assert any("return value of function 'f'" in e
                and "value 16777216.0 does not satisfy self < LIMIT" in e
                for e in errs), errs
+
+
+def test_stage34_predicate_arithmetic_rejects_nonfinite_results():
+    overflow_errs = check("""
+    type Below = f64 where self < (1e308_f64 * 10.0_f64);
+    fn f() -> Below {
+        0.0_f64
+    }
+    """)
+    assert any("return value of function 'f'" in e
+               and "predicate self < (1e+308 * 10.0) is not supported" in e
+               for e in overflow_errs), overflow_errs
+
+    carry_errs = check("""
+    type Source = f64 where self >= ((1e308_f64 * 10.0_f64) - (1e308_f64 * 10.0_f64));
+    type Target = f64 where self >= 0.0;
+    fn bad(s: Source) -> Target {
+        s
+    }
+    """)
+    assert any("return value of function 'bad'" in e
+               and "could not prove self >= 0.0" in e
+               for e in carry_errs), carry_errs
 
 
 def test_stage34_fixed_point_preserves_unknown_type_errors():

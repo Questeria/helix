@@ -422,10 +422,23 @@ fixed-point pass.
 
 Verification after the bound-implication, const-cache, and unknown-type fixes:
 
-- Exact focused regressions: `6 passed`
-- Nearby proof-carry and proof-gate slices: `32 passed`
+- Exact focused regressions: `8 passed`
+- Validator trust regressions: `5 passed`
 - `python scripts\stage31_validate.py --mode quick --skip-snapshot`: pass
 - `python -m pytest -q helixc/tests/test_typecheck.py helixc/tests/test_cli.py helixc/tests/test_proof_artifact_validate.py helixc/tests/test_proof_artifact_gate.py`:
-  `457 passed`
+  `463 passed`
 - `python scripts\stage31_validate.py --mode full --skip-snapshot --shards 8`:
-  pass after built-in retry recovered no-codegen shard 1
+  pass with no shard retries
+
+Two follow-up clean-gate auditors found additional coverage and trust gaps
+before this fix set was committed:
+
+- Unsuffixed float predicate literals must also use Helix's default `f32`
+  representation in predicate evaluation and bound implication.
+- Predicate arithmetic can create `inf` or `nan` after literal checks; those
+  results must fail closed instead of becoming proof constants.
+- Plain `proof_artifact_validate.py --source` should reject a forged artifact
+  `path`, not only `--require-clean`.
+
+Those are now covered by additional typecheck, proof-gate, validator, and quick
+gate tests.

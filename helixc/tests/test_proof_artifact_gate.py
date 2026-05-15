@@ -280,6 +280,39 @@ def test_gate_rejects_rounded_f32_predicate_literal(capsys, tmp_path):
     )
 
 
+def test_gate_rejects_unsuffixed_rounded_f32_predicate_literal(
+    capsys, tmp_path,
+):
+    source = tmp_path / "unsuffixed_rounded_f32_predicate_literal.hx"
+    source.write_text(
+        "type BelowRounded = f32 where self < 16777217.0;\n"
+        "fn f() -> BelowRounded { 16777216.0_f32 }\n"
+        "fn main() -> i32 { let x: BelowRounded = f(); 0 }\n",
+        encoding="utf-8",
+    )
+    artifact_path = (
+        tmp_path / "unsuffixed_rounded_f32_predicate_literal.proof.json")
+
+    rc = proof_artifact_gate.main([
+        str(source),
+        "--artifact-out",
+        str(artifact_path),
+        "--",
+        "--no-stdlib",
+    ])
+
+    captured = capsys.readouterr()
+    assert rc == 1
+    assert "typecheck_errors must be empty" in captured.err
+    artifact = json.loads(artifact_path.read_text(encoding="utf-8"))
+    assert artifact["summary"]["typecheck_errors"] >= 1
+    assert not any(
+        obligation.get("status") == "proved"
+        and obligation.get("refinement") == "BelowRounded"
+        for obligation in artifact["obligations"]
+    )
+
+
 def test_gate_rejects_false_carry_from_rounded_f32_bounds(capsys, tmp_path):
     source = tmp_path / "rounded_f32_bound_false_carry.hx"
     source.write_text(
@@ -291,6 +324,40 @@ def test_gate_rejects_false_carry_from_rounded_f32_bounds(capsys, tmp_path):
         encoding="utf-8",
     )
     artifact_path = tmp_path / "rounded_f32_bound_false_carry.proof.json"
+
+    rc = proof_artifact_gate.main([
+        str(source),
+        "--artifact-out",
+        str(artifact_path),
+        "--",
+        "--no-stdlib",
+    ])
+
+    captured = capsys.readouterr()
+    assert rc == 1
+    assert "typecheck_errors must be empty" in captured.err
+    artifact = json.loads(artifact_path.read_text(encoding="utf-8"))
+    assert artifact["summary"]["typecheck_errors"] >= 1
+    assert not any(
+        carry.get("strategy") == "numeric-bound-implication"
+        and carry.get("source_refinement") == "Source"
+        and carry.get("target_refinement") == "Target"
+        for carry in artifact["proof_carries"]
+    )
+
+
+def test_gate_rejects_false_carry_from_unsuffixed_f32_bounds(
+    capsys, tmp_path,
+):
+    source = tmp_path / "unsuffixed_f32_bound_false_carry.hx"
+    source.write_text(
+        "type Source = f32 where self >= 16777217.0;\n"
+        "type Target = f32 where self > 16777216.0;\n"
+        "fn bad(s: Source) -> Target { s }\n"
+        "fn main() -> i32 { 0 }\n",
+        encoding="utf-8",
+    )
+    artifact_path = tmp_path / "unsuffixed_f32_bound_false_carry.proof.json"
 
     rc = proof_artifact_gate.main([
         str(source),
@@ -340,6 +407,36 @@ def test_gate_rejects_raw_const_predicate_bound(capsys, tmp_path):
     assert not any(
         obligation.get("status") == "proved"
         and obligation.get("refinement") == "BelowLimit"
+        for obligation in artifact["obligations"]
+    )
+
+
+def test_gate_rejects_nonfinite_predicate_arithmetic(capsys, tmp_path):
+    source = tmp_path / "nonfinite_predicate_arithmetic.hx"
+    source.write_text(
+        "type Below = f64 where self < (1e308_f64 * 10.0_f64);\n"
+        "fn f() -> Below { 0.0_f64 }\n"
+        "fn main() -> i32 { let x: Below = f(); 0 }\n",
+        encoding="utf-8",
+    )
+    artifact_path = tmp_path / "nonfinite_predicate_arithmetic.proof.json"
+
+    rc = proof_artifact_gate.main([
+        str(source),
+        "--artifact-out",
+        str(artifact_path),
+        "--",
+        "--no-stdlib",
+    ])
+
+    captured = capsys.readouterr()
+    assert rc == 1
+    assert "typecheck_errors must be empty" in captured.err
+    artifact = json.loads(artifact_path.read_text(encoding="utf-8"))
+    assert artifact["summary"]["typecheck_errors"] >= 1
+    assert not any(
+        obligation.get("status") == "proved"
+        and obligation.get("refinement") == "Below"
         for obligation in artifact["obligations"]
     )
 
