@@ -632,6 +632,10 @@ def recomputed_source_artifact_errors(
 
     errors: list[str] = []
     for field in (
+        "schema",
+        "cache_key",
+        "path",
+        "input",
         "summary",
         "obligations",
         "proof_carries",

@@ -3259,9 +3259,48 @@ class TypeChecker:
             return base
         return None
 
+    def _const_eval_type_node_base(self, ty: A.TyNode) -> Type | None:
+        if isinstance(ty, A.TyName) and (
+                ty.name in _INT_PRIM_NAMES
+                or ty.name in _FLOAT_PRIM_NAMES
+                or ty.name == "bool"):
+            return TyPrim(ty.name)
+        return None
+
+    def _infer_const_expr_numeric_base(self, expr: A.Expr) -> Type | None:
+        if isinstance(expr, A.IntLit):
+            suffix = expr.type_suffix or "i32"
+            if suffix in _INT_PRIM_NAMES:
+                return TyPrim(suffix)
+            return None
+        if isinstance(expr, A.FloatLit):
+            suffix = expr.type_suffix or "f32"
+            if suffix in _FLOAT_PRIM_NAMES:
+                return TyPrim(suffix)
+            return None
+        if isinstance(expr, A.BoolLit):
+            return TyPrim("bool")
+        if isinstance(expr, A.Cast):
+            return self._const_eval_type_node_base(expr.target_ty)
+        if isinstance(expr, A.Unary):
+            return self._infer_const_expr_numeric_base(expr.operand)
+        if isinstance(expr, A.Binary):
+            return self._infer_const_expr_numeric_base(expr.left)
+        return None
+
     def _eval_raw_const_scalar_fallback(
         self, expr: A.Expr,
     ) -> int | float | bool | None:
+        if isinstance(expr, A.Cast):
+            inner_value = self._eval_raw_const_scalar_fallback(expr.value)
+            target_base = self._const_eval_type_node_base(expr.target_ty)
+            if target_base is None:
+                return None
+            converted = self._cast_const_scalar_to_type(
+                inner_value, target_base)
+            if converted is None:
+                return inner_value
+            return converted
         value = self._eval_const_scalar_expr(
             expr, None, use_local_consts=True)
         if isinstance(value, (int, float)) and not isinstance(value, bool):
@@ -4427,6 +4466,21 @@ class TypeChecker:
                 if found_local:
                     return local_value
             return self._const_scalar_values.get(expr.name)
+        if isinstance(expr, A.Cast):
+            target_base = self._const_eval_type_node_base(expr.target_ty)
+            if target_base is None:
+                return None
+            inner_base = (
+                self._infer_const_expr_numeric_base(expr.value)
+                or numeric_base
+            )
+            value = self._eval_const_scalar_expr(
+                expr.value, self_value,
+                use_local_consts=use_local_consts,
+                honor_float_suffix=honor_float_suffix,
+                numeric_base=inner_base,
+            )
+            return self._cast_const_scalar_to_type(value, target_base)
         if isinstance(expr, A.Unary) and expr.op == "-":
             inner = self._eval_const_scalar_expr(
                 expr.operand, self_value,

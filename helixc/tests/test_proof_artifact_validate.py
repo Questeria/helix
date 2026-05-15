@@ -487,6 +487,28 @@ def test_validate_rejects_forged_clean_status_with_source_by_default(
     )
 
 
+def test_validate_rejects_forged_input_and_cache_with_source_by_default(
+    capsys, tmp_path,
+):
+    source_path, artifact_path, artifact = _real_artifact(capsys, tmp_path)
+    artifact["input"]["flags"].append("--stdlib")
+    artifact["input"]["flags"] = sorted(artifact["input"]["flags"])
+    artifact["cache_key"] = proof_cache_key(artifact["input"])
+    artifact_path.write_text(json.dumps(artifact), encoding="utf-8")
+
+    rc = proof_artifact_validate.main([
+        str(artifact_path), "--source", str(source_path),
+    ])
+    captured = capsys.readouterr()
+    assert rc == 1
+    assert "proof artifact cache_key mismatch against recomputed source" in (
+        captured.err
+    )
+    assert "proof artifact input mismatch against recomputed source" in (
+        captured.err
+    )
+
+
 def test_validate_rejects_boolean_integer_fields(capsys, tmp_path):
     _source_path, artifact_path, artifact = _real_artifact(capsys, tmp_path)
     artifact["summary"]["obligations"] = True

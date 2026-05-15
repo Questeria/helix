@@ -481,37 +481,33 @@ Verification after this fix set:
 
 The clean-gate counter remains reset to `0/3`.
 
-## Clean Gate 1 Tenth Restart - Failed; Fix Verified; Counter Reset
+## Clean Gate 1 Eighth Restart - Failed; Fix Verified; Counter Reset
 
-Fresh clean-gate auditors on commit `2ebac36` found two proof-honesty gaps:
+Fresh clean-gate auditors on commit `3d20693` found two proof-honesty gaps:
 
-- Refined initializer checks used generic Python scalar evaluation instead of
-  the declared source machine type. This let `-1_i32 % 2_i32` pass a positive
-  refinement because Python modulo produced `1`, while Helix signed machine
-  modulo produces `-1`. The same path could also miss per-operation `f32`
-  rounding at precision boundaries.
-- Plain source-backed artifact validation recomputed some carry metadata, but
-  did not compare the full proof-relevant artifact body. A forged artifact could
-  promote an unproved obligation to `proved` and erase typecheck errors without
-  being rejected by default validation.
+- Float affine proof-carry extraction still treated target predicates as exact
+  real-number algebra. This let precision-boundary values satisfy predicates
+  such as `self + 1.0 > 16777216.0` for `f32`, even when IEEE arithmetic rounds
+  the addition back to the original value. The same risk existed for `f64`.
+- Plain source-backed proof artifact validation rejected missing carried-proof
+  metadata but still accepted an internally consistent artifact where
+  `proof_carries` was erased and `summary.proof_carries` /
+  `summary.proof_carry_strategies` were updated to match the erased list.
 
-The fix evaluates refined initializer and cast constants through the erased
-source numeric type before target refinement checking, keeps a raw-scalar
-fallback for representability diagnostics, compares the full source-recomputed
-proof artifact surface, and keeps strict clean-policy reporting active even when
-source recomputation already finds mismatches.
+The fix passes the erased numeric base into target requirement extraction,
+fails closed for affine proof-carry extraction over floating-point bases,
+keeps direct integer and float bounds as the supported proof-carry subset, and
+makes normal `proof_artifact_validate.py --source` recompute and compare
+carried-proof metadata even without `--require-clean`.
 
 Verification after this fix set:
 
-- Focused refined-initializer and source-recompute regressions: `6 passed`
-- Follow-up strict-mode and representability regressions: `8 passed`
+- Focused float-affine and erased-carry regressions: `7 passed`
 - `python scripts\stage31_validate.py --mode quick --skip-snapshot`: pass
 - `python -m pytest -q helixc/tests/test_typecheck.py helixc/tests/test_cli.py helixc/tests/test_proof_artifact_validate.py helixc/tests/test_proof_artifact_gate.py`:
-  `476 passed`
+  `470 passed`
 - `python scripts\stage31_validate.py --mode full --skip-snapshot --shards 8`:
-  pass after retry recovered no-codegen shard 1
-- `python -m pytest -q helixc/tests/test_transcendentals.py::test_grad_through_user_defined_function_call`:
-  pass after inspecting the recovered shard's transient failure
+  pass across all 12 shards
 
 The clean-gate counter remains reset to `0/3`.
 
@@ -548,32 +544,70 @@ Verification after this fix set:
 
 The clean-gate counter remains reset to `0/3`.
 
-## Clean Gate 1 Eighth Restart - Failed; Fix Verified; Counter Reset
+## Clean Gate 1 Tenth Restart - Failed; Fix Verified; Counter Reset
 
-Fresh clean-gate auditors on commit `3d20693` found two proof-honesty gaps:
+Fresh clean-gate auditors on commit `2ebac36` found two proof-honesty gaps:
 
-- Float affine proof-carry extraction still treated target predicates as exact
-  real-number algebra. This let precision-boundary values satisfy predicates
-  such as `self + 1.0 > 16777216.0` for `f32`, even when IEEE arithmetic rounds
-  the addition back to the original value. The same risk existed for `f64`.
-- Plain source-backed proof artifact validation rejected missing carried-proof
-  metadata but still accepted an internally consistent artifact where
-  `proof_carries` was erased and `summary.proof_carries` /
-  `summary.proof_carry_strategies` were updated to match the erased list.
+- Refined initializer checks used generic Python scalar evaluation instead of
+  the declared source machine type. This let `-1_i32 % 2_i32` pass a positive
+  refinement because Python modulo produced `1`, while Helix signed machine
+  modulo produces `-1`. The same path could also miss per-operation `f32`
+  rounding at precision boundaries.
+- Plain source-backed artifact validation recomputed some carry metadata, but
+  did not compare the full proof-relevant artifact body. A forged artifact could
+  promote an unproved obligation to `proved` and erase typecheck errors without
+  being rejected by default validation.
 
-The fix passes the erased numeric base into target requirement extraction,
-fails closed for affine proof-carry extraction over floating-point bases,
-keeps direct integer and float bounds as the supported proof-carry subset, and
-makes normal `proof_artifact_validate.py --source` recompute and compare
-carried-proof metadata even without `--require-clean`.
+The fix evaluates refined initializer and cast constants through the erased
+source numeric type before target refinement checking, keeps a raw-scalar
+fallback for representability diagnostics, compares the full source-recomputed
+proof artifact surface, and keeps strict clean-policy reporting active even when
+source recomputation already finds mismatches.
 
 Verification after this fix set:
 
-- Focused float-affine and erased-carry regressions: `7 passed`
+- Focused refined-initializer and source-recompute regressions: `6 passed`
+- Follow-up strict-mode and representability regressions: `8 passed`
 - `python scripts\stage31_validate.py --mode quick --skip-snapshot`: pass
 - `python -m pytest -q helixc/tests/test_typecheck.py helixc/tests/test_cli.py helixc/tests/test_proof_artifact_validate.py helixc/tests/test_proof_artifact_gate.py`:
-  `470 passed`
+  `476 passed`
 - `python scripts\stage31_validate.py --mode full --skip-snapshot --shards 8`:
-  pass across all 12 shards
+  pass after retry recovered no-codegen shard 1
+- `python -m pytest -q helixc/tests/test_transcendentals.py::test_grad_through_user_defined_function_call`:
+  pass after inspecting the recovered shard's transient failure
+
+The clean-gate counter remains reset to `0/3`.
+
+## Clean Gate 1 Eleventh Restart - Failed; Fix Verified; Counter Reset
+
+Fresh clean-gate auditors on commit `8ddb14f` found two proof-honesty gaps and
+one documentation consistency issue:
+
+- Source-backed default validation recomputed the proof body, but did not
+  compare recomputed `input` or `cache_key`. A forged artifact could advertise a
+  different proof input and internally consistent cache key while still passing
+  default validation.
+- Constant scalar evaluation did not model nested `as` casts. This let
+  `(1e309_f64 as f64) as AlwaysF64` hide the same nonfinite representability
+  failure that direct `1e309_f64 as AlwaysF64` already rejected.
+- The progress file listed recent restart sections out of order
+  (`Seventh`, `Tenth`, `Ninth`, `Eighth`). The sections now read
+  chronologically.
+
+The fix makes source-backed default validation compare `schema`, `cache_key`,
+`path`, and `input` in addition to the proof body, adds constant evaluation for
+simple primitive casts, and keeps raw-scalar diagnostics from hiding known
+unrepresentable cast sources.
+
+Verification after this fix set:
+
+- Focused latest-reset regressions: `7 passed`
+- `python scripts\stage31_validate.py --mode quick --skip-snapshot`: pass
+- `python -m pytest -q helixc/tests/test_typecheck.py helixc/tests/test_cli.py helixc/tests/test_proof_artifact_validate.py helixc/tests/test_proof_artifact_gate.py`:
+  `478 passed`
+- `python scripts\stage31_validate.py --mode full --skip-snapshot --shards 8`:
+  pass after retry recovered no-codegen shards 1 and 2
+- `python -m pytest -q helixc/tests/test_strings_io.py::test_print_str_multiple_calls helixc/tests/test_strings_io.py::test_print_int_decimal_output`:
+  pass after inspecting the recovered shard's transient failures
 
 The clean-gate counter remains reset to `0/3`.

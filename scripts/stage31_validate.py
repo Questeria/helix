@@ -386,6 +386,7 @@ def quick(py: str) -> int:
             "helixc/tests/test_proof_artifact_validate.py::test_validate_rejects_erased_proof_carries_with_source_by_default",
             "helixc/tests/test_proof_artifact_validate.py::test_validate_rejects_erased_proof_carries_from_embedded_source_path",
             "helixc/tests/test_proof_artifact_validate.py::test_validate_rejects_forged_clean_status_with_source_by_default",
+            "helixc/tests/test_proof_artifact_validate.py::test_validate_rejects_forged_input_and_cache_with_source_by_default",
             "helixc/tests/test_proof_artifact_validate.py::test_require_clean_rejects_forged_clean_artifact_with_source",
             "helixc/tests/test_proof_artifact_validate.py::test_validate_rejects_boolean_integer_fields",
             "helixc/tests/test_proof_artifact_validate.py::test_validate_rejects_bad_stdlib_manifest_hash",
