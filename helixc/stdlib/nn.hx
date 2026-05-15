@@ -257,6 +257,32 @@ fn sigmoid_layer(x_start: i32, y_start: i32, n: i32) -> i32 {
     0
 }
 
+// Layer normalization over one f32 vector.
+// y[i] = (x[i] - mean(x)) / sqrt(variance(x) + eps)
+fn layer_norm_f32(x_start: i32, y_start: i32, n: i32, eps: f32) -> i32 {
+    if n == 0 { 0 }
+    else {
+        let mean = tf1d_mean(x_start, n);
+        let mut i: i32 = 0;
+        let mut var: f32 = 0.0_f32;
+        while i < n {
+            let x = __f32_from_bits(__arena_get(x_start + i));
+            let d = x - mean;
+            var = var + d * d;
+            i = i + 1;
+        }
+        var = var / (n as f32);
+        let inv_std = 1.0_f32 / __sqrt(var + eps);
+        let mut j: i32 = 0;
+        while j < n {
+            let xj = __f32_from_bits(__arena_get(x_start + j));
+            __arena_set(y_start + j, __bits_of_f32((xj - mean) * inv_std));
+            j = j + 1;
+        }
+        0
+    }
+}
+
 // Softmax (max-subtract, uses __exp + tf1d_max).
 fn softmax_layer(x_start: i32, y_start: i32, n: i32) -> i32 {
     if n == 0 { 0 }

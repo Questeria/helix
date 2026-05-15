@@ -9137,6 +9137,22 @@ def test_nn_leaky_relu():
     assert code == 48, f"expected 48, got {code}"
 
 
+def test_nn_layer_norm_f32_centers_and_scales():
+    """layer_norm([1,3]) -> about [-1,1]. Sum is 0, max_abs is 1."""
+    src = """
+    fn main() -> i32 {
+        let x = t1d_new(2);
+        tf1d_set(x, 0, 1.0_f32);
+        tf1d_set(x, 1, 3.0_f32);
+        let y = t1d_new(2);
+        layer_norm_f32(x, y, 2, 0.0_f32);
+        ((tf1d_sum(y, 2) as i32) + ((tf1d_max_abs(y, 2) * 10.0_f32) as i32)) + 32
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
 def test_nn_sgd_f32_step():
     """f32 SGD: w-lr*g over array. w=[10,20], lr=0.5, g=[1,2] -> [9.5, 19.0]; sum*2=57."""
     src = """

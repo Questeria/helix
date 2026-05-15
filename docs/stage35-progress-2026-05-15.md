@@ -64,6 +64,25 @@ Initial focused checks:
 - `python scripts\stage31_validate.py --mode quick --skip-snapshot`
   - Result: passed, `stage31-quick: rc=0`.
 
+## Increment 5 - f32 Layer Normalization
+
+The Helix neural-network stdlib now includes:
+
+- `layer_norm_f32(x_start, y_start, n, eps)`
+
+It normalizes one f32 vector by subtracting its mean and dividing by
+`sqrt(variance + eps)`.
+
+This is an important AI building block because layer normalization keeps model
+activations in a stable range, especially in transformer-style networks.
+
+Focused verification:
+
+- `python -m pytest -q helixc\tests\test_codegen.py -k "layer_norm_f32 or softmax or tanh_layer or leaky_relu" --tb=short`
+  - Result: 6 passed, 753 deselected.
+- `python scripts\stage31_validate.py --mode quick --skip-snapshot`
+  - Result: passed, `stage31-quick: rc=0`.
+
 ## Increment 4 - f32 Stable SGD Step
 
 The Helix neural-network stdlib now includes:
