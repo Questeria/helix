@@ -689,6 +689,30 @@ def test_stage34_numeric_bound_implication_requires_same_erased_base():
                for e in errs), errs
 
 
+def test_stage34_refined_cast_checks_target_converted_value():
+    errs = check("""
+    type ExactlyHalfInt = i32 where self == 0.5;
+    fn f() -> ExactlyHalfInt {
+        0.5_f64 as ExactlyHalfInt
+    }
+    """)
+    assert any("cast to refined type ExactlyHalfInt" in e
+               and "target value 0 does not satisfy self == 0.5" in e
+               for e in errs), errs
+
+
+def test_stage34_refined_cast_rejects_boolean_source_to_numeric_refinement():
+    errs = check("""
+    type Probability = f64 where 0.0 <= self <= 1.0;
+    fn f() -> Probability {
+        true as Probability
+    }
+    """)
+    assert any("cast to refined type Probability" in e
+               and "after casting bool to f64" in e
+               for e in errs), errs
+
+
 def test_stage31_unsupported_refinement_predicates_do_not_carry_by_name():
     errs = check("""
     type Source = f64 where foo();

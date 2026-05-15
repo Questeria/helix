@@ -1604,6 +1604,119 @@ def test_stage34_emit_proof_carry_json_for_affine_and_negated_bounds(
     }
 
 
+def test_stage34_emit_proof_obligations_json_for_refined_cast_target_value(
+    capsys, tmp_path,
+):
+    src_path = str(tmp_path / "refined_cast_target_value.hx")
+    with open(src_path, "w") as f:
+        f.write(
+            "type ExactlyHalfInt = i32 where self == 0.5;\n"
+            "fn f() -> ExactlyHalfInt {\n"
+            "    0.5_f64 as ExactlyHalfInt\n"
+            "}\n"
+        )
+    rc = main([src_path, "--emit-proof-obligations", "--no-stdlib"])
+    captured = capsys.readouterr()
+    assert rc == 1
+    artifact = json.loads(captured.out)
+    assert artifact["summary"]["typecheck_errors"] == 1
+    obligation = artifact["obligations"][0]
+    assert obligation["context"] == "cast to refined type ExactlyHalfInt"
+    assert obligation["refinement"] == "ExactlyHalfInt"
+    assert obligation["predicate"] == "self == 0.5"
+    assert obligation["status"] == "failed"
+    assert obligation["value"] == "0"
+    assert "target value 0 does not satisfy self == 0.5" in (
+        artifact["typecheck_errors"][0]
+    )
+
+
+def test_stage34_emit_proof_carry_json_for_explicit_return_route(
+    capsys, tmp_path,
+):
+    src_path = str(tmp_path / "explicit_return_bound_carry.hx")
+    with open(src_path, "w") as f:
+        f.write(
+            "type AtLeastOne = f64 where self >= 1.0;\n"
+            "type NonNegative = f64 where self >= 0.0;\n"
+            "fn lift(a: AtLeastOne) -> NonNegative {\n"
+            "    return a;\n"
+            "    a\n"
+            "}\n"
+        )
+    rc = main([src_path, "--emit-proof-obligations", "--no-stdlib"])
+    captured = capsys.readouterr()
+    assert rc == 0, captured.out + captured.err
+    artifact = json.loads(captured.out)
+    assert artifact["summary"]["typecheck_errors"] == 0
+    assert artifact["obligations"] == []
+    assert any(
+        carry["context"] == "return value of function 'lift'"
+        and carry["source_refinement"] == "AtLeastOne"
+        and carry["target_refinement"] == "NonNegative"
+        and carry["strategy"] == "numeric-bound-implication"
+        for carry in artifact["proof_carries"]
+    )
+
+
+def test_stage34_emit_proof_carry_json_for_refined_cast_route(
+    capsys, tmp_path,
+):
+    src_path = str(tmp_path / "refined_cast_bound_carry.hx")
+    with open(src_path, "w") as f:
+        f.write(
+            "type AtLeastOne = f64 where self >= 1.0;\n"
+            "type NonNegative = f64 where self >= 0.0;\n"
+            "fn lift(a: AtLeastOne) -> NonNegative {\n"
+            "    a as NonNegative\n"
+            "}\n"
+        )
+    rc = main([src_path, "--emit-proof-obligations", "--no-stdlib"])
+    captured = capsys.readouterr()
+    assert rc == 0, captured.out + captured.err
+    artifact = json.loads(captured.out)
+    assert artifact["summary"]["typecheck_errors"] == 0
+    assert artifact["obligations"] == []
+    assert any(
+        carry["context"] == "cast to refined type NonNegative"
+        and carry["source_refinement"] == "AtLeastOne"
+        and carry["target_refinement"] == "NonNegative"
+        and carry["strategy"] == "numeric-bound-implication"
+        for carry in artifact["proof_carries"]
+    )
+
+
+def test_stage34_emit_proof_carry_json_for_function_typed_call_route(
+    capsys, tmp_path,
+):
+    src_path = str(tmp_path / "function_typed_call_bound_carry.hx")
+    with open(src_path, "w") as f:
+        f.write(
+            "type AtLeastOne = f64 where self >= 1.0;\n"
+            "type NonNegative = f64 where self >= 0.0;\n"
+            "fn use_n(x: NonNegative) -> i32 { 0 }\n"
+            "fn lift(a: AtLeastOne) -> i32 {\n"
+            "    let fp: fn(NonNegative) -> i32 = use_n;\n"
+            "    fp(a)\n"
+            "}\n"
+        )
+    rc = main([src_path, "--emit-proof-obligations", "--no-stdlib"])
+    captured = capsys.readouterr()
+    assert rc == 1
+    artifact = json.loads(captured.out)
+    assert any(
+        "function-typed calls are not supported by the Stage 31 backend"
+        in err for err in artifact["typecheck_errors"]
+    )
+    assert any(
+        carry["context"] == "function-typed call arg 0"
+        and carry["source_refinement"] == "AtLeastOne"
+        and carry["target_refinement"] == "NonNegative"
+        and carry["strategy"] == "numeric-bound-implication"
+        for carry in artifact["proof_carries"]
+    )
+
+
 def test_stage31_emit_proof_obligations_rejects_generic_refinement_name(
     capsys, tmp_path,
 ):

@@ -2758,6 +2758,11 @@ class TypeChecker:
             src_ty = self._check_expr(expr.value, scope)
             tgt_ty = self._resolve_type(expr.target_ty, scope)
             if isinstance(tgt_ty, TyRefined):
+                self._check_cast_compat(
+                    self._erase_refinement(src_ty),
+                    self._erase_refinement(tgt_ty),
+                    expr.span,
+                )
                 if self._refinement_proof_carried(src_ty, tgt_ty):
                     self._record_refinement_proof_carries_for_type(
                         f"cast to refined type {self._fmt(tgt_ty)}",
@@ -2766,8 +2771,8 @@ class TypeChecker:
                         expr.span,
                     )
                     return tgt_ty
-                self._check_refinement_const_value(
-                    expr.value, tgt_ty, expr.span,
+                self._check_refinement_cast_value(
+                    expr.value, src_ty, tgt_ty, expr.span,
                     f"cast to refined type {self._fmt(tgt_ty)}",
                     scope,
                 )
@@ -2973,6 +2978,99 @@ class TypeChecker:
             self._check_refinement_const_value(
                 value_expr, refined.base, span, context, scope,
             )
+
+    def _check_refinement_cast_value(
+        self, value_expr: A.Expr, src_ty: Type, refined: "TyRefined",
+        span: A.Span, context: str, scope: Scope,
+    ) -> None:
+        value = self._eval_const_scalar_expr(
+            value_expr, None, use_local_consts=True)
+        target_base = self._erase_refinement(refined)
+        converted = self._cast_const_scalar_to_type(value, target_base)
+        if converted is None:
+            pending = self._check_self_independent_refinement(
+                refined, span, context,
+            )
+            if pending:
+                for pred in pending:
+                    self._record_refinement_obligation(
+                        context, refined, pred, "unproven", span, None,
+                    )
+                self.errors.append(TypeError_(
+                    f"{context}: refinement {refined.name} requires a "
+                    f"compile-time-proven target value in Stage 34; could "
+                    f"not prove {' and '.join(self._fmt_refinement_expr(p) for p in pending)} "
+                    f"after casting {self._fmt(src_ty)} to "
+                    f"{self._fmt(target_base)}",
+                    span,
+                    hint="cast to the refined type only when the target "
+                         "value can be proven to satisfy the predicate",
+                ))
+            if isinstance(refined.base, TyRefined):
+                self._check_refinement_cast_value(
+                    value_expr, src_ty, refined.base, span, context, scope,
+                )
+            return
+        for pred in refined.predicates:
+            ok = self._eval_refinement_predicate(pred, converted)
+            if ok is None:
+                self._record_refinement_obligation(
+                    context, refined, pred, "unsupported", span, converted,
+                )
+                self.errors.append(TypeError_(
+                    f"{context}: refinement {refined.name} predicate "
+                    f"{self._fmt_refinement_expr(pred)} is not supported by "
+                    f"the Stage 34 cast checker",
+                    span,
+                ))
+                continue
+            if not ok:
+                self._record_refinement_obligation(
+                    context, refined, pred, "failed", span, converted,
+                    trap="31001",
+                )
+                self.errors.append(TypeError_(
+                    f"{context}: refinement {refined.name} violated: "
+                    f"target value {self._fmt_scalar_value(converted)} "
+                    f"does not satisfy {self._fmt_refinement_expr(pred)} "
+                    f"(trap 31001)",
+                    span,
+                    hint="refined casts must satisfy their `where` "
+                         "predicate after target conversion",
+                ))
+            else:
+                self._record_refinement_obligation(
+                    context, refined, pred, "proved", span, converted,
+                )
+        if isinstance(refined.base, TyRefined):
+            self._check_refinement_cast_value(
+                value_expr, src_ty, refined.base, span, context, scope,
+            )
+
+    def _cast_const_scalar_to_type(
+        self, value: int | float | bool | None, target: Type,
+    ) -> int | float | bool | None:
+        if value is None:
+            return None
+        if not isinstance(target, TyPrim):
+            return value
+        if target.name in _INT_PRIM_NAMES:
+            if not (isinstance(value, (int, float))
+                    and not isinstance(value, bool)):
+                return None
+            converted = int(value)
+            bounds = self._INT_BOUNDS.get(target.name)
+            if bounds is not None:
+                lo, hi = bounds
+                if converted < lo or converted > hi:
+                    return None
+            return converted
+        if target.name in ("bf16", "f16", "f32", "f64"):
+            if not (isinstance(value, (int, float))
+                    and not isinstance(value, bool)):
+                return None
+            return float(value)
+        return value
 
     def _check_self_independent_refinement(
         self, refined: "TyRefined", span: A.Span, context: str,

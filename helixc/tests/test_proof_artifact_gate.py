@@ -67,6 +67,36 @@ def test_gate_rejects_unproven_obligation_and_writes_artifact(capsys, tmp_path):
     assert artifact["typecheck_errors"]
 
 
+def test_gate_rejects_boolean_to_numeric_refined_cast(capsys, tmp_path):
+    source = tmp_path / "bool_cast_refined.hx"
+    source.write_text(
+        "type Probability = f64 where 0.0 <= self <= 1.0;\n"
+        "fn f() -> Probability { true as Probability }\n"
+        "fn main() -> i32 { 0 }\n",
+        encoding="utf-8",
+    )
+    artifact_path = tmp_path / "bool_cast_refined.proof.json"
+
+    rc = proof_artifact_gate.main([
+        str(source),
+        "--artifact-out",
+        str(artifact_path),
+        "--",
+        "--no-stdlib",
+    ])
+
+    captured = capsys.readouterr()
+    assert rc == 1
+    assert "typecheck_errors must be empty" in captured.err
+    artifact = json.loads(artifact_path.read_text(encoding="utf-8"))
+    assert artifact["summary"]["typecheck_errors"] >= 1
+    assert not any(
+        obligation.get("status") == "proved"
+        and obligation.get("value") == "true"
+        for obligation in artifact["obligations"]
+    )
+
+
 def test_gate_returns_bad_invocation_for_missing_source(capsys, tmp_path):
     source = tmp_path / "missing.hx"
     artifact_path = tmp_path / "missing.proof.json"

@@ -170,3 +170,31 @@ Example:
 The validator checks that this summary matches the actual `proof_carries`
 records, so downstream tools can trust the quick counts without re-walking the
 full list.
+
+## Clean Gate 1 - Failed, Fix In Progress
+
+The first Stage 34 clean gate did not count as clean. The audit found three
+issues:
+
+- Cross-base refined casts checked literal predicates before target conversion.
+  Example: `0.5_f64 as ExactlyHalfInt` could incorrectly prove
+  `self == 0.5` for an `i32` refinement even though the target value becomes
+  `0`.
+- Boolean-to-numeric refined casts could also bypass the normal assignment
+  check and produce a misleading proved artifact.
+- The artifact route claims for explicit returns, refined casts, and
+  function-typed calls needed direct regression tests.
+
+The fix now checks refined cast predicates against the converted target value
+and refuses unsupported source-to-target proof conversions instead of recording
+a false proof. It also adds direct machine-readable proof-artifact coverage for
+those three routes. Clean-gate counting restarts after the focused and quick
+gates are green again.
+
+Verification after the fix:
+
+- Focused regression slice: `7 passed`
+- `python scripts\stage31_validate.py --mode quick --skip-snapshot`: pass
+- `python -m pytest -q helixc/tests/test_typecheck.py`: `252 passed`
+- `python -m pytest -q helixc/tests/test_cli.py helixc/tests/test_proof_artifact_gate.py`:
+  `148 passed`
