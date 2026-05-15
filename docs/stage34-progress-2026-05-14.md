@@ -398,3 +398,34 @@ Verification after the self-independent and invalid-return fixes:
   `451 passed`
 - `python scripts\stage31_validate.py --mode full --skip-snapshot --shards 8`:
   pass after built-in retry recovered no-codegen shards 2 and 3
+
+## Clean Gate 1 Sixth Restart - Failed; Fix Verified; Counter Reset
+
+The next clean-gate attempt found another set of proof-honesty issues:
+
+- Numeric-bound proof-carry implication still evaluated predicate constants as
+  raw Python floats. This meant `self >= 16777217.0_f32` could imply
+  `self > 16777216.0_f32` even though both bounds represent
+  `16777216.0` as `f32`.
+- Top-level const scalar caching stored raw literal values before the declared
+  const type was applied, so `const LIMIT: f32 = 16777217.0_f32` could be used
+  as if `LIMIT` were still `16777217.0` inside a predicate.
+- The fixed-point function-body loop reset unbound-name suppression but not
+  unknown-type suppression, so an `unknown type 'Missing'` diagnostic could be
+  lost across fixed-point passes.
+
+The fix makes numeric-bound and affine proof-carry extraction evaluate
+predicate constants with explicit float suffix representation. It also stores
+top-level scalar const values after casting them through their declared
+primitive/refined base type, and resets unknown-type suppression on each
+fixed-point pass.
+
+Verification after the bound-implication, const-cache, and unknown-type fixes:
+
+- Exact focused regressions: `6 passed`
+- Nearby proof-carry and proof-gate slices: `32 passed`
+- `python scripts\stage31_validate.py --mode quick --skip-snapshot`: pass
+- `python -m pytest -q helixc/tests/test_typecheck.py helixc/tests/test_cli.py helixc/tests/test_proof_artifact_validate.py helixc/tests/test_proof_artifact_gate.py`:
+  `457 passed`
+- `python scripts\stage31_validate.py --mode full --skip-snapshot --shards 8`:
+  pass after built-in retry recovered no-codegen shard 1

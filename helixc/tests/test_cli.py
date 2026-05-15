@@ -1814,6 +1814,31 @@ def test_stage34_self_independent_unrepresentable_value_is_not_clean(
     assert artifact["proof_carries"] == []
 
 
+def test_stage34_f32_predicate_rounding_does_not_false_carry_bounds(
+    capsys, tmp_path,
+):
+    src_path = str(tmp_path / "f32_predicate_rounding_no_false_carry.hx")
+    with open(src_path, "w") as f:
+        f.write(
+            "type Source = f32 where self >= 16777217.0_f32;\n"
+            "type Target = f32 where self > 16777216.0_f32;\n"
+            "fn make() -> Source { 16777216.0_f32 }\n"
+            "fn bad(s: Source) -> Target { s }\n"
+            "fn main() -> i32 { let t: Target = bad(make()); 0 }\n"
+        )
+    rc = main([src_path, "--emit-proof-obligations", "--no-stdlib"])
+    captured = capsys.readouterr()
+    assert rc == 1
+    artifact = json.loads(captured.out)
+    assert artifact["summary"]["typecheck_errors"] >= 1
+    assert not any(
+        carry["strategy"] == "numeric-bound-implication"
+        and carry["source_refinement"] == "Source"
+        and carry["target_refinement"] == "Target"
+        for carry in artifact["proof_carries"]
+    )
+
+
 def test_stage34_fixed_point_unbound_name_is_not_clean(
     capsys, tmp_path,
 ):

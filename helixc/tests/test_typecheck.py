@@ -869,6 +869,54 @@ def test_stage34_refinement_predicate_float_literals_use_target_suffix():
                for e in f64_nonfinite_errs), f64_nonfinite_errs
 
 
+def test_stage34_numeric_bound_carry_uses_represented_predicate_literals():
+    rounded_errs = check("""
+    type Source = f32 where self >= 16777217.0_f32;
+    type Target = f32 where self > 16777216.0_f32;
+    fn bad(s: Source) -> Target {
+        s
+    }
+    """)
+    assert any("return value of function 'bad'" in e
+               and "could not prove self > 16777216.0" in e
+               for e in rounded_errs), rounded_errs
+
+    affine_errs = check("""
+    type Source = f32 where self + 1.0_f32 >= 16777217.0_f32;
+    type Target = f32 where self > 16777216.0_f32;
+    fn bad(s: Source) -> Target {
+        s
+    }
+    """)
+    assert any("return value of function 'bad'" in e
+               and "could not prove self > 16777216.0" in e
+               for e in affine_errs), affine_errs
+
+
+def test_stage34_const_predicate_uses_declared_scalar_representation():
+    errs = check("""
+    const LIMIT: f32 = 16777217.0_f32;
+    type BelowLimit = f32 where self < LIMIT;
+    fn f() -> BelowLimit {
+        16777216.0_f32
+    }
+    """)
+    assert any("return value of function 'f'" in e
+               and "value 16777216.0 does not satisfy self < LIMIT" in e
+               for e in errs), errs
+
+
+def test_stage34_fixed_point_preserves_unknown_type_errors():
+    errs = check("""
+    type AlwaysI32 = i32 where true;
+    fn bad() -> AlwaysI32 {
+        let x: Missing = 0;
+        1e309_f64 as AlwaysI32
+    }
+    """)
+    assert any("unknown type 'Missing'" in e for e in errs), errs
+
+
 def test_stage31_unsupported_refinement_predicates_do_not_carry_by_name():
     errs = check("""
     type Source = f64 where foo();

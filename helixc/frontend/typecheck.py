@@ -603,6 +603,7 @@ class TypeChecker:
                 self.proof_obligations[:function_obligation_start])
             self.proof_carries = self.proof_carries[:function_carry_start]
             self._seen_unbound = set()
+            self._seen_unknown_type_names = set()
             invalid_before = set(self._invalid_refined_return_functions)
             for item in fn_items:
                 try:
@@ -639,13 +640,36 @@ class TypeChecker:
             for decl in consts:
                 if decl.name in self._const_scalar_values:
                     continue
-                value = self._eval_const_scalar_expr(decl.value, None)
-                if (isinstance(value, (int, float))
-                        and not isinstance(value, bool)):
-                    self._const_scalar_values[decl.name] = value
+                value = self._eval_const_scalar_expr(
+                    decl.value, None, honor_float_suffix=True)
+                target = self._const_index_target_type(decl)
+                if target is None:
+                    continue
+                represented = self._cast_const_scalar_to_type(value, target)
+                if (isinstance(represented, (int, float))
+                        and not isinstance(represented, bool)):
+                    self._const_scalar_values[decl.name] = represented
                     progressed = True
             if not progressed:
                 break
+
+    def _const_index_target_type(self, decl: A.ConstDecl) -> Type | None:
+        errors_before = len(self.errors)
+        seen_unknown_before = set(self._seen_unknown_type_names)
+        alias_cache_before = dict(self._type_alias_cache)
+        resolving_aliases_before = set(self._resolving_type_aliases)
+        try:
+            declared = self._resolve_type(decl.ty, Scope())
+        finally:
+            self.errors = self.errors[:errors_before]
+            self._seen_unknown_type_names = seen_unknown_before
+            self._type_alias_cache = alias_cache_before
+            self._resolving_type_aliases = resolving_aliases_before
+        target = self._erase_refinement(declared)
+        if isinstance(target, TyPrim) and (
+                target.name in _INT_PRIM_NAMES or target.name in _FLOAT_PRIM_NAMES):
+            return target
+        return None
 
     def _push_local_const_scope(self) -> None:
         self._local_const_scalar_scopes.append({})
@@ -3666,9 +3690,11 @@ class TypeChecker:
         if left_is_self == right_is_self:
             return None
         if left_is_self:
-            value = self._eval_const_scalar_expr(right, None)
+            value = self._eval_const_scalar_expr(
+                right, None, honor_float_suffix=True)
             return self._bound_from_self_compare(op, value)
-        value = self._eval_const_scalar_expr(left, None)
+        value = self._eval_const_scalar_expr(
+            left, None, honor_float_suffix=True)
         return self._bound_from_const_compare(op, value)
 
     def _refinement_affine_binary_bounds(
@@ -3696,7 +3722,8 @@ class TypeChecker:
         if self._expr_is_plain_self(expr):
             return (1, 0)
         if not self._expr_mentions_self(expr):
-            value = self._eval_const_scalar_expr(expr, None)
+            value = self._eval_const_scalar_expr(
+                expr, None, honor_float_suffix=True)
             if isinstance(value, (int, float)) and not isinstance(value, bool):
                 return (0, value)
             return None
