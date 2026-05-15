@@ -2137,7 +2137,7 @@ fn match_scrut_ty_get(bn_state: i32) -> i32 {
 //           arena index, not a byte offset). All 5 emit sites already
 //           pass AST indices; this rename clarifies the contract.
 //   slot 3: aux i32 — pass-specific data (e.g. for deprecated_pass:
-//           callee_name_start; for panic_pass: arg_count)
+//           dep_tab entry ptr; for panic_pass: arg_count)
 //
 // Header slots:
 //   slot 0 (base+0):     count
@@ -2664,24 +2664,25 @@ fn autotune_pass(ast_root: i32, diag_state: i32) -> i32 {
 //
 // Stage 33: the bootstrap parser preserves @deprecated("message")
 // string-literal body ranges on AST_FN_DECL slots 12/13. Diagnostics
-// still render as "call to deprecated <name>" without the message;
-// a follow-up can thread those slots through the warning renderer.
+// now carry a dep_tab entry pointer in aux so future renderers can recover
+// both the deprecated callee name and its optional message.
 // --------------------------------------------------------------
 
-// Auxiliary: collect every deprecated fn name's (name_s, name_l)
+// Auxiliary: collect every deprecated fn's name and optional message
 // into a small fixed-cap table at the diag_state arena's tail.
 // We side-channel this table because the diag_arena slots only hold
-// 4 i32s per entry and we need (name_s, name_l) pairs at lookup
+// 4 i32s per entry and we need (name_s, name_l, msg_s, msg_l) at lookup
 // time. Phase-0 cap = 16 deprecated fns (matches Python tests
 // which never use more than a handful).
 //
-// Layout: a 33-slot region: 1 count + 16 * 2 (name_s, name_l) pairs.
+// Layout: a 65-slot region: 1 count + 16 * 4
+// (name_s, name_l, msg_s, msg_l) entries.
 // Caller passes the base offset. Init = zero count + zero entries.
 
 fn dep_tab_init() -> i32 {
     let base = __arena_push(0);
     let mut i: i32 = 0;
-    while i < 32 {
+    while i < 64 {
         __arena_push(0);
         i = i + 1;
     }
@@ -2699,16 +2700,19 @@ fn dep_tab_init() -> i32 {
 // some of the call-site detection was lost. The 0-return signals
 // the drop and the caller emits a 28702 (DIAG_DEP_TAB_CAPACITY)
 // severity-1 warning per drop.
-fn dep_tab_add(dep_tab: i32, name_s: i32, name_l: i32) -> i32 {
+fn dep_tab_add(dep_tab: i32, name_s: i32, name_l: i32,
+               msg_s: i32, msg_l: i32) -> i32 {
     let count = __arena_get(dep_tab);
     if count >= 16 {
         // Cap reached; signal drop to caller. Deprecation is a
         // warning-only pass so we still don't HARD-error here.
         0
     } else {
-        let entry = dep_tab + 1 + count * 2;
+        let entry = dep_tab + 1 + count * 4;
         __arena_set(entry, name_s);
         __arena_set(entry + 1, name_l);
+        __arena_set(entry + 2, msg_s);
+        __arena_set(entry + 3, msg_l);
         __arena_set(dep_tab, count + 1);
         1
     }
@@ -2716,27 +2720,30 @@ fn dep_tab_add(dep_tab: i32, name_s: i32, name_l: i32) -> i32 {
 
 @pure fn dep_tab_count(dep_tab: i32) -> i32 { __arena_get(dep_tab) }
 @pure fn dep_tab_name_s(dep_tab: i32, idx: i32) -> i32 {
-    __arena_get(dep_tab + 1 + idx * 2)
+    __arena_get(dep_tab + 1 + idx * 4)
 }
 @pure fn dep_tab_name_l(dep_tab: i32, idx: i32) -> i32 {
-    __arena_get(dep_tab + 1 + idx * 2 + 1)
+    __arena_get(dep_tab + 1 + idx * 4 + 1)
 }
+@pure fn dep_tab_msg_s_from_entry(entry: i32) -> i32 { __arena_get(entry + 2) }
+@pure fn dep_tab_msg_l_from_entry(entry: i32) -> i32 { __arena_get(entry + 3) }
 
 // Check whether a (name_s, name_l) byte-matches any deprecated fn
-// in the table. Returns 1 on match, 0 otherwise.
-fn dep_tab_contains(dep_tab: i32, name_s: i32, name_l: i32) -> i32 {
+// in the table. Returns the entry pointer on match, 0 otherwise.
+fn dep_tab_lookup(dep_tab: i32, name_s: i32, name_l: i32) -> i32 {
     let count = __arena_get(dep_tab);
     let mut i: i32 = 0;
-    let mut hit: i32 = 0;
+    let mut found: i32 = 0;
     while i < count {
-        let ds = __arena_get(dep_tab + 1 + i * 2);
-        let dl = __arena_get(dep_tab + 1 + i * 2 + 1);
+        let entry = dep_tab + 1 + i * 4;
+        let ds = __arena_get(entry);
+        let dl = __arena_get(entry + 1);
         if kovc_byte_eq(name_s, name_l, ds, dl) == 1 {
-            hit = 1;
+            found = entry;
         };
         i = i + 1;
     }
-    hit
+    found
 }
 
 // Walker: scan for AST_CALL whose callee name appears in dep_tab.
@@ -2750,10 +2757,12 @@ fn walk_for_deprecated(idx: i32, dep_tab: i32, diag_state: i32) -> i32 {
         let p3 = __arena_get(idx + 3);
         if t == 16 {
             // AST_CALL: check the callee against dep_tab.
-            if dep_tab_contains(dep_tab, p1, p2) == 1 {
-                // aux = p1 (callee name byte_start), severity=1
-                // (warning) — matches Python -Wdeprecated default.
-                diag_emit(diag_state, 28701, 1, idx, p1);
+            let dep_entry = dep_tab_lookup(dep_tab, p1, p2);
+            if dep_entry != 0 {
+                // aux = dep_tab entry ptr, severity=1 (warning) — matches
+                // Python -Wdeprecated default. The AST_CALL node carries the
+                // use-site callee name; aux carries the decl message.
+                diag_emit(diag_state, 28701, 1, idx, dep_entry);
             };
             // Always recurse into args.
             let mut cur_arg: i32 = p3;
@@ -2872,7 +2881,9 @@ fn deprecated_pass(ast_root: i32, diag_state: i32) -> i32 {
             if is_deprecated == 1 {
                 let name_s = __arena_get(fn_idx + 1);
                 let name_l = __arena_get(fn_idx + 2);
-                let added = dep_tab_add(dep_tab, name_s, name_l);
+                let msg_s = __arena_get(fn_idx + 12);
+                let msg_l = __arena_get(fn_idx + 13);
+                let added = dep_tab_add(dep_tab, name_s, name_l, msg_s, msg_l);
                 if added == 0 {
                     // aux = fn_idx's name_s (callee name byte_start) so
                     // a future driver can identify which @deprecated fn

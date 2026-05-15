@@ -5649,6 +5649,95 @@ fn main() -> i32 {{
     )
 
 
+def test_bootstrap_kovc_deprecated_diag_aux_carries_message():
+    """Stage 33: deprecated diagnostics can recover declaration messages."""
+    import os, subprocess
+    proj = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    lexer = open(os.path.join(proj, "helixc", "bootstrap", "lexer.hx")).read()
+    lexer_no_main = lexer.rsplit(
+        "// --------------------------------------------------------------\n// Demo:",
+        1,
+    )[0]
+    parser_body = open(os.path.join(proj, "helixc", "bootstrap", "parser.hx")).read()
+    kovc = open(os.path.join(proj, "helixc", "bootstrap", "kovc.hx")).read()
+    kovc_lib = kovc.rsplit(
+        "// --------------------------------------------------------------\n// Demo:",
+        1,
+    )[0]
+    import uuid
+    tag = uuid.uuid4().hex[:10]
+    src_path = f"/tmp/helix_dep_diag_msg_src_{tag}.hx"
+    src_text = (
+        '@deprecated("use new_api") fn old_api() -> i32 { 1 } '
+        'fn main() -> i32 { old_api() }'
+    )
+    subprocess.run(
+        ["wsl", "-e", "bash", "-c",
+         f"printf %s {repr(src_text)} > {src_path}"],
+        check=True, timeout=30,
+    )
+    driver = lexer_no_main + parser_body + kovc_lib + f"""
+fn main() -> i32 {{
+    let src_start = __arena_len();
+    let src_len = read_file_to_arena("{src_path}");
+    let tok_base = __arena_len();
+    lex(src_start, src_len);
+    let ast_root = parse_top(tok_base);
+    let diag_state = diag_arena_init();
+    deprecated_pass(ast_root, diag_state);
+    let n = diag_arena_count(diag_state);
+    let mut i: i32 = 0;
+    let mut hits: i32 = 0;
+    let mut dep_entry: i32 = 0;
+    let mut call_idx: i32 = 0;
+    while i < n {{
+        let code = diag_get_code(diag_state, i);
+        if code == 28701 {{
+            hits = hits + 1;
+            dep_entry = diag_get_aux(diag_state, i);
+            call_idx = diag_get_ast_node_idx(diag_state, i);
+        }} else {{ 0 }};
+        i = i + 1;
+    }}
+    let mut rc: i32 = 42;
+    if hits != 1 {{ rc = 10; }} else {{ 0 }};
+    if dep_entry == 0 {{ rc = 11; }} else {{ 0 }};
+    if call_idx == 0 {{ rc = 12; }} else {{ 0 }};
+    let dep_name_s = __arena_get(dep_entry);
+    let dep_name_l = __arena_get(dep_entry + 1);
+    let dep_msg_s = dep_tab_msg_s_from_entry(dep_entry);
+    let dep_msg_l = dep_tab_msg_l_from_entry(dep_entry);
+    let call_name_s = __arena_get(call_idx + 1);
+    let call_name_l = __arena_get(call_idx + 2);
+    if dep_name_l != 7 {{ rc = 20; }} else {{ 0 }};
+    if call_name_l != 7 {{ rc = 21; }} else {{ 0 }};
+    if __arena_get(dep_name_s) != 111 {{ rc = 22; }} else {{ 0 }};
+    if __arena_get(call_name_s) != 111 {{ rc = 23; }} else {{ 0 }};
+    if dep_msg_l != 11 {{ rc = 30; }} else {{ 0 }};
+    if __arena_get(dep_msg_s) != 117 {{ rc = 31; }} else {{ 0 }};
+    if __arena_get(dep_msg_s + 1) != 115 {{ rc = 32; }} else {{ 0 }};
+    if __arena_get(dep_msg_s + 2) != 101 {{ rc = 33; }} else {{ 0 }};
+    if __arena_get(dep_msg_s + 3) != 32 {{ rc = 34; }} else {{ 0 }};
+    if __arena_get(dep_msg_s + 4) != 110 {{ rc = 35; }} else {{ 0 }};
+    if __arena_get(dep_msg_s + 5) != 101 {{ rc = 36; }} else {{ 0 }};
+    if __arena_get(dep_msg_s + 6) != 119 {{ rc = 37; }} else {{ 0 }};
+    if __arena_get(dep_msg_s + 7) != 95 {{ rc = 38; }} else {{ 0 }};
+    if __arena_get(dep_msg_s + 8) != 97 {{ rc = 39; }} else {{ 0 }};
+    if __arena_get(dep_msg_s + 9) != 112 {{ rc = 40; }} else {{ 0 }};
+    if __arena_get(dep_msg_s + 10) != 105 {{ rc = 41; }} else {{ 0 }};
+    rc
+}}
+"""
+    rc = compile_and_run(driver)
+    subprocess.run(
+        ["wsl", "-e", "bash", "-c", f"rm -f {src_path}"],
+        capture_output=True, timeout=30,
+    )
+    assert rc == 42, (
+        f"deprecated diag aux should point to callee metadata/message; got rc={rc}"
+    )
+
+
 def test_bootstrap_kovc_since_message_attr_preserved():
     """Stage 33: bootstrap parser preserves @since("version") payload."""
     import os, subprocess

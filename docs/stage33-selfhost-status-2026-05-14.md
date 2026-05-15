@@ -286,9 +286,50 @@ Validation:
 - `python scripts\stage31_validate.py --mode quick --skip-snapshot`
   - Result: `rc=0`
 
+## Slice 9 - Deprecated Diagnostic Message Payload
+
+The bootstrap parser already preserved `@deprecated("message")` strings, but
+`deprecated_pass` diagnostics only carried the called function name start.
+Future renderers could not recover the stored message from a `28701` warning.
+
+The bootstrap deprecated table now stores:
+
+- deprecated function name start/length
+- deprecated message start/length
+
+For `28701` diagnostics, the `aux` slot now points to the deprecated-table
+entry. The call-site AST node still provides the actual call name, while `aux`
+provides the declaration-side optional message. This keeps the warning
+severity unchanged and does not change runtime codegen.
+
+Validation:
+
+- `python -m pytest -q helixc\tests\test_codegen.py::test_bootstrap_kovc_deprecated_diag_aux_carries_message helixc\tests\test_codegen.py::test_bootstrap_kovc_deprecated_message_attr_preserved helixc\tests\test_codegen.py::test_bootstrap_kovc_dep_tab_overflow_emits_28702`
+  - Result: `3 passed`
+- `python -m pytest -q helixc\tests\test_deprecated.py helixc\tests\test_codegen.py::test_bootstrap_kovc_deprecated_pass_warning_does_not_trap helixc\tests\test_codegen.py::test_bootstrap_kovc_dep_tab_overflow_emits_28702 helixc\tests\test_codegen.py::test_bootstrap_kovc_deprecated_message_attr_preserved helixc\tests\test_codegen.py::test_bootstrap_kovc_deprecated_diag_aux_carries_message helixc\tests\test_codegen.py::test_bootstrap_kovc_since_message_attr_preserved`
+  - Result: `33 passed`
+- `python -m pytest -q helixc\tests\test_parser.py helixc\tests\test_codegen.py::test_bootstrap_kovc_deprecated_diag_aux_carries_message helixc\tests\test_codegen.py::test_bootstrap_kovc_deprecated_message_attr_preserved helixc\tests\test_codegen.py::test_bootstrap_kovc_since_message_attr_preserved`
+  - Result: `68 passed`
+- `python scripts\stage33_selfhost_gate.py --generations 3 --json-out .stage33-logs\selfhost-cascade-deprecated-diag-msg-g3.json`
+  - Result: `rc=0`
+  - G2..G4 stable SHA-256:
+    `8858854a0c35a56ac87b1420e76f2cfded015dae17789bc3745e03ee1b4922cc`
+  - G2..G4 stable size: `287399` bytes
+  - Final-generation smoke cases: literal, call, and loop all returned `42`
+  - Validator result: `selfhost-cascade-validate: ok`
+- `python scripts\stage33_selfhost_gate.py --generations 10 --expect-stable-sha 8858854a0c35a56ac87b1420e76f2cfded015dae17789bc3745e03ee1b4922cc --json-out .stage33-logs\selfhost-cascade-deprecated-diag-msg-g10.json`
+  - Result: `rc=0`
+  - G2..G11 stable SHA-256:
+    `8858854a0c35a56ac87b1420e76f2cfded015dae17789bc3745e03ee1b4922cc`
+  - G2..G11 stable size: `287399` bytes
+  - Final-generation smoke cases: literal, call, and loop all returned `42`
+  - Validator result: `selfhost-cascade-validate: ok`
+- `python scripts\stage31_validate.py --mode quick --skip-snapshot`
+  - Result: `rc=0`
+
 ## Next
 
-The next Stage 33 slice should thread preserved `@deprecated("message")`
-metadata into richer bootstrap deprecated diagnostics, then repeat the focused
-tests and self-host gates. Full autotune variant generation remains larger than
-the current slice size and should stay gated behind another self-host proof.
+The next Stage 33 slice should either make bootstrap autotune diagnostic
+payloads more specific, or run a local audit/clean gate across the Stage 33
+metadata changes. Full autotune variant generation remains larger than the
+current slice size and should stay gated behind another self-host proof.
