@@ -672,10 +672,13 @@ if __name__ == "__main__":
         sys.exit(2)
     filename = paths[0]
     try:
-        with open(paths[0]) as f:
+        with open(paths[0], encoding="utf-8") as f:
             src = f.read()
     except OSError as e:
         print(f"error: ptx: cannot read {paths[0]}: {e}", file=sys.stderr)
+        sys.exit(2)
+    except UnicodeDecodeError as e:
+        print(f"error: ptx: encoding error reading source: {e}", file=sys.stderr)
         sys.exit(2)
     try:
         prog = parse(src, filename=filename, include_stdlib=include_stdlib)

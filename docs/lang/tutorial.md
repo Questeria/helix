@@ -240,7 +240,8 @@ and `recall`. Direct assignment between tiers is a compile error.
 
 ## All-in-one
 
-The single function below uses every unique Helix feature:
+The single function below combines several AGI-oriented type-level Helix
+features:
 
 ```kov
 @pure
@@ -260,7 +261,7 @@ In one signature:
 - working-memory inputs/outputs
 - `@pure` (no I/O, no self-modification)
 
-No other AI language expresses all four at the type level.
+This combination is an intended Helix differentiator at the type level.
 
 ---
 

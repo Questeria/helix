@@ -844,11 +844,12 @@ fn tf2d_mul(a: i32, b: i32, c: i32, rows: i32, cols: i32) -> i32 {
     0
 }
 
-// tf1d_argmax_in_range(start, lo, hi): @pure. Index of largest f32
-// in x[lo..hi). Returns -1 if hi <= lo.
+// tf1d_argmax_in_range(start, n, lo, hi): @pure. Index of largest f32
+// in x[lo..hi). Returns -1 if bounds are invalid.
 @pure
-fn tf1d_argmax_in_range(start: i32, lo: i32, hi: i32) -> i32 {
+fn tf1d_argmax_in_range(start: i32, n: i32, lo: i32, hi: i32) -> i32 {
     if lo < 0 { 0 - 1 }
+    else { if hi > n { 0 - 1 }
     else { if hi <= lo { 0 - 1 }
     else {
         let mut i: i32 = lo + 1;
@@ -860,14 +861,15 @@ fn tf1d_argmax_in_range(start: i32, lo: i32, hi: i32) -> i32 {
             i = i + 1;
         }
         best_idx
-    }}
+    }}}
 }
 
-// tf1d_sum_in_range(start, lo, hi): @pure. Sum of x[lo..hi). 0.0 if
-// hi <= lo. Useful for partial accumulators.
+// tf1d_sum_in_range(start, n, lo, hi): @pure. Sum of x[lo..hi). 0.0 if
+// bounds are invalid. Useful for partial accumulators.
 @pure
-fn tf1d_sum_in_range(start: i32, lo: i32, hi: i32) -> f32 {
+fn tf1d_sum_in_range(start: i32, n: i32, lo: i32, hi: i32) -> f32 {
     if lo < 0 { 0.0_f32 }
+    else { if hi > n { 0.0_f32 }
     else { if hi <= lo { 0.0_f32 }
     else {
     let mut i: i32 = lo;
@@ -877,7 +879,7 @@ fn tf1d_sum_in_range(start: i32, lo: i32, hi: i32) -> f32 {
         i = i + 1;
     }
     total
-    }}
+    }}}
 }
 
 // tf2d_row_sum(start, rows, cols, dst): for each row r, write
@@ -957,15 +959,21 @@ fn tf1d_dot_with_offset(a: i32, a_off: i32, b: i32, b_off: i32, n: i32) -> f32 {
     }}}
 }
 
-// tf2d_diag(m, rows_eq_cols, dst): for a square matrix M of side N,
-// extract the diagonal into dst (size N). Requires square (rows == cols).
-fn tf2d_diag(m: i32, n: i32, dst: i32) -> i32 {
+// tf2d_diag(m, rows, cols, dst): for a square matrix M, extract the diagonal
+// into dst. Rectangular or empty shapes are no-ops.
+fn tf2d_diag(m: i32, rows: i32, cols: i32, dst: i32) -> i32 {
+    if rows <= 0 { 0 }
+    else { if cols <= 0 { 0 }
+    else { if rows != cols { 0 }
+    else {
+    let n = rows;
     let mut i: i32 = 0;
     while i < n {
         __arena_set(dst + i, __arena_get(m + i * n + i));
         i = i + 1;
     }
     0
+    }}}
 }
 
 // tf2d_eye(n): allocate a new n*n identity matrix (1.0 on diagonal,
@@ -986,9 +994,15 @@ fn tf2d_eye(n: i32) -> i32 {
     s
 }
 
-// tf2d_trace(m, n): @pure. Sum of diagonal elements of an n*n matrix.
+// tf2d_trace(m, rows, cols): @pure. Sum of diagonal elements of a square
+// matrix. Rectangular or empty shapes return 0.0.
 @pure
-fn tf2d_trace(m: i32, n: i32) -> f32 {
+fn tf2d_trace(m: i32, rows: i32, cols: i32) -> f32 {
+    if rows <= 0 { 0.0_f32 }
+    else { if cols <= 0 { 0.0_f32 }
+    else { if rows != cols { 0.0_f32 }
+    else {
+    let n = rows;
     let mut i: i32 = 0;
     let mut total: f32 = 0.0_f32;
     while i < n {
@@ -996,6 +1010,7 @@ fn tf2d_trace(m: i32, n: i32) -> f32 {
         i = i + 1;
     }
     total
+    }}}
 }
 
 // tf1d_lerp(a, b, t, dst, n): linear interpolation. dst[i] = a[i] +

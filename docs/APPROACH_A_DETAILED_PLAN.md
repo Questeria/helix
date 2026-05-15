@@ -1995,4 +1995,6 @@ if cond { emit_trap_with_id(N) } else { ... existing body ... }
 
 ---
 
-This document is the canonical detailed plan; supersedes per-session re-derivations of stage scope. Update in place as stages complete — mark `done` in tag table; revise difficulty / commit estimates if reality diverges.
+This document is a historical detailed bootstrap plan retained for context.
+Live stage scope and status are tracked in `docs/ROADMAP.md` and
+`docs/stage35-progress-2026-05-15.md`.

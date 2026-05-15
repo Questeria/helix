@@ -76,7 +76,9 @@ The self-hosted HBS compiler emits IR for these builtins as opaque calls; only t
 
 ## Bootstrap order (proposed)
 
-Phase 0 (NOW — DRAFT): write a `helixc/bootstrap_compiler/` directory in Helix that compiles the HBS-only Helix-source-of-helixc back to itself. Order:
+Historical Phase 0 draft at the 2026-05-04 snapshot: write a
+`helixc/bootstrap_compiler/` directory in Helix that compiles the HBS-only
+Helix-source-of-helixc back to itself. Order:
 1. Lexer → token stream
 2. Parser → AST
 3. AST hasher (`structural_hash` for HBS subset)

@@ -657,8 +657,9 @@ Acceptance gate:
 
 ### Safe Self-Improvement
 
-Helix already has verifier-gated reflection. The final system should expand it
-into a complete self-improvement discipline.
+Helix currently has a verifier-gated reflective-cell scaffold. The final system
+should expand it into a complete self-improvement discipline with runtime AST
+handles, real splice execution, and source rewrite/commit semantics.
 
 Required gates:
 

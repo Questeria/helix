@@ -15343,7 +15343,7 @@ def test_stdlib_tf2d_diag():
         tf2d_set(m, 2, 0, 0, 1.0_f32); tf2d_set(m, 2, 0, 1, 2.0_f32);
         tf2d_set(m, 2, 1, 0, 3.0_f32); tf2d_set(m, 2, 1, 1, 4.0_f32);
         let dst = t1d_new(2);
-        tf2d_diag(m, 2, dst);
+        tf2d_diag(m, 2, 2, dst);
         let s = tf1d_get(dst, 0) + tf1d_get(dst, 1);
         // s = 5.0_f32; bits 0x40A00000; top byte 0x40=64; -22=42.
         __bits_of_f32(s) / 16777216 - 22
@@ -15358,7 +15358,7 @@ def test_stdlib_tf2d_eye():
     src = """
     fn main() -> i32 {
         let m = tf2d_eye(3);
-        let s = tf2d_trace(m, 3);
+        let s = tf2d_trace(m, 3, 3);
         // 3.0_f32 = 0x40400000; top byte 0x40=64; -22=42.
         __bits_of_f32(s) / 16777216 - 22
     }
@@ -15375,7 +15375,31 @@ def test_stdlib_tf2d_trace():
         tf2d_set(m, 3, 0, 0, 2.0_f32);
         tf2d_set(m, 3, 1, 1, 4.0_f32);
         tf2d_set(m, 3, 2, 2, 2.0_f32);
-        __bits_of_f32(tf2d_trace(m, 3)) / 16777216 - 23
+        __bits_of_f32(tf2d_trace(m, 3, 3)) / 16777216 - 23
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_rectangular_tf2d_diag_trace_do_not_read_after_matrix():
+    src = """
+    fn main() -> i32 {
+        let m = ti2d_new(2, 3);
+        tf2d_set(m, 3, 0, 0, 1.0_f32);
+        tf2d_set(m, 3, 1, 2, 2.0_f32);
+        let guard = t1d_new(3);
+        tf1d_set(guard, 0, 99.0_f32);
+        tf1d_set(guard, 1, 99.0_f32);
+        tf1d_set(guard, 2, 99.0_f32);
+        let dst = t1d_new(3);
+        tf1d_set(dst, 0, 42.0_f32);
+        tf1d_set(dst, 1, 42.0_f32);
+        tf1d_set(dst, 2, 42.0_f32);
+        tf2d_diag(m, 2, 3, dst);
+        if (tf1d_get(dst, 0) as i32) == 42 {
+            if (tf2d_trace(m, 2, 3) as i32) == 0 { 42 } else { 7 }
+        } else { 7 }
     }
     """
     code = compile_and_run(src)
@@ -15814,7 +15838,7 @@ def test_stdlib_tf1d_argmax_in_range():
         tf1d_set(x, 1, 3.0_f32);
         tf1d_set(x, 2, 9.0_f32);
         tf1d_set(x, 3, 1.0_f32);
-        tf1d_argmax_in_range(x, 1, 4) * 21
+        tf1d_argmax_in_range(x, 4, 1, 4) * 21
     }
     """
     code = compile_and_run(src)
@@ -15830,7 +15854,7 @@ def test_stdlib_tf1d_sum_in_range():
         tf1d_set(x, 1, 2.0_f32);
         tf1d_set(x, 2, 3.0_f32);
         tf1d_set(x, 3, 4.0_f32);
-        __bits_of_f32(tf1d_sum_in_range(x, 1, 4)) / 16777216 - 23
+        __bits_of_f32(tf1d_sum_in_range(x, 4, 1, 4)) / 16777216 - 23
     }
     """
     code = compile_and_run(src)
@@ -15845,8 +15869,25 @@ def test_negative_tf1d_range_helpers_do_not_read_before_start():
         let x = t1d_new(2);
         tf1d_set(x, 0, 1.0_f32);
         tf1d_set(x, 1, 2.0_f32);
-        if tf1d_argmax_in_range(x, 0 - 1, 1) == (0 - 1) {
-            if (tf1d_sum_in_range(x, 0 - 1, 1) as i32) == 0 { 42 } else { 7 }
+        if tf1d_argmax_in_range(x, 2, 0 - 1, 1) == (0 - 1) {
+            if (tf1d_sum_in_range(x, 2, 0 - 1, 1) as i32) == 0 { 42 } else { 7 }
+        } else { 7 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_overrange_tf1d_range_helpers_do_not_read_after_end():
+    src = """
+    fn main() -> i32 {
+        let x = t1d_new(2);
+        tf1d_set(x, 0, 1.0_f32);
+        tf1d_set(x, 1, 2.0_f32);
+        let guard = t1d_new(1);
+        tf1d_set(guard, 0, 99.0_f32);
+        if tf1d_argmax_in_range(x, 2, 0, 3) == (0 - 1) {
+            if (tf1d_sum_in_range(x, 2, 0, 3) as i32) == 0 { 42 } else { 7 }
         } else { 7 }
     }
     """
@@ -17716,7 +17757,7 @@ def test_stdlib_tf2d_ones():
     src = """
     fn main() -> i32 {
         let m = tf2d_ones(2, 2);
-        __bits_of_f32(tf2d_trace(m, 2)) / 16777216 - 22
+        __bits_of_f32(tf2d_trace(m, 2, 2)) / 16777216 - 22
     }
     """
     code = compile_and_run(src)

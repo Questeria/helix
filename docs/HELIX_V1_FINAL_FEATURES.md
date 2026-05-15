@@ -222,7 +222,7 @@ These compose on top of Layer 0 — they get written in `.hx` files in `helixc/s
 | **Spatial types + frames** (`Position<Frame>`, transform safety) | refinement + phantom generics (Helix already has) | 38 |
 | **Temporal types** (Timestamp, Duration, history queries) | refinement-bounded i64 + std combinators | 39 |
 | **Knowledge<T>, Unknown<T>, Belief<T>** | confidence + temporal + provenance struct | 40 |
-| **Self-model primitives** (self.confidence, self.knowledge) | reflection (Helix already has quote/splice) | 41 |
+| **Self-model primitives** (self.confidence, self.knowledge) | reflective-cell / quote scaffold (stable quote hashes today; runtime AST/splice future) | 41 |
 | **World modeling primitives** (WorldModel, SemanticMap, ConfidenceMap, Pattern) | spatial + temporal + knowledge | 42 |
 | **Sensor fusion** (`fuse { camera, lidar, imu } into ...`) | algebraic effects + spatial alignment | 43 |
 | **Active learning primitives** (`novelty(obs)`, curiosity) | Learning effect + Knowledge<T> | 44 |
@@ -319,7 +319,11 @@ enum Term<T> {
 fn eval<T>(t: Term<T>) -> T { ... }
 ```
 
-Why critical: Helix's quote/splice (reflection) currently returns opaque AST handles. GADTs let reflected ASTs be **typed** — `Term<i32>` vs `Term<bool>`. Massive upgrade to metaprogramming safety. Necessary for the AGI self-modification story.
+Why critical: Helix's current reflection surface is a quote/hash and
+reflective-cell scaffold; runtime AST handles, real splice execution, and
+source rewrite/commit semantics remain future work. GADTs would let reflected
+ASTs become **typed** — `Term<i32>` vs `Term<bool>`. That is a major upgrade to
+metaprogramming safety and the AGI self-modification story.
 
 ### 4.2 — Tier A (Strong additions)
 

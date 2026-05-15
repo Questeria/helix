@@ -481,6 +481,22 @@ def test_stage35_direct_ptx_cli_reports_missing_file_without_traceback():
     assert "Traceback" not in proc.stderr
 
 
+def test_stage35_direct_ptx_cli_reports_encoding_error_without_traceback(tmp_path):
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    bad = tmp_path / "bad_utf8.hx"
+    bad.write_bytes(b"\xff\xfe\xfd")
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.backend.ptx", str(bad)],
+        cwd=proj_root,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert proc.returncode == 2, proc.stdout + proc.stderr
+    assert "encoding error reading source" in proc.stderr
+    assert "Traceback" not in proc.stderr
+
+
 def test_stage35_direct_ptx_cli_bad_invocation_returns_two():
     proj_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     proc = subprocess.run(

@@ -1063,6 +1063,48 @@ Clean-gate status:
 - Stage 35 clean gates remain `0/3`.
 - Next step is another fresh Stage 35 clean gate on this fixed commit.
 
+## Increment 32 - Thirteenth Clean-Gate Restart Fix Sweep
+
+The next fresh Stage 35 audit restart found one direct PTX decode-diagnostic
+gap, two runtime shape-boundary API gaps, and several stale documentation
+overclaims. The gate did not count as clean and remains at `0/3`.
+
+Fixes landed in this increment:
+
+- Direct PTX now reads source files as UTF-8 explicitly and reports decode
+  failures as clean exit-code-2 diagnostics instead of Python tracebacks.
+- `tf1d_argmax_in_range` and `tf1d_sum_in_range` are now length-aware and reject
+  `hi > n` before reading past the vector.
+- `tf2d_diag` and `tf2d_trace` now take `rows, cols` and no-op / return zero
+  unless the shape is non-empty and square.
+- Approach A detailed-plan wording now agrees with its historical/superseded
+  banner.
+- Reflection/self-improvement docs now consistently describe the current
+  reflective-cell / quote scaffold and leave runtime AST handles, real splice
+  execution, and source rewrite/commit semantics as future work.
+- The HBS and tutorial docs now avoid live "NOW" and unsupported competitor
+  exclusivity wording.
+
+Focused verification:
+
+- Per-file stdlib parser sweep across `STDLIB_FILES`
+  - Result: all stdlib files parsed.
+- `python -m py_compile helixc\backend\ptx.py`
+  - Result: passed.
+- `python -m pytest -q helixc\tests\test_ptx.py -k "stage35_direct_ptx_cli_reports_encoding_error_without_traceback or stage35_direct_ptx_cli_reports_missing_file_without_traceback or stage35_direct_ptx_cli_bad_invocation_returns_two" --tb=short`
+  - Result: 3 passed.
+- `python -m pytest -q helixc\tests\test_codegen.py -k "stdlib_tf1d_argmax_in_range or stdlib_tf1d_sum_in_range or negative_tf1d_range_helpers_do_not_read_before_start or overrange_tf1d_range_helpers_do_not_read_after_end or stdlib_tf2d_diag or stdlib_tf2d_trace or rectangular_tf2d_diag_trace_do_not_read_after_matrix or stdlib_tf2d_ones" --tb=short`
+  - Result: 8 passed.
+- Docs scan for stale reflection, historical-plan, HBS, broad tutorial,
+  tile-lowering, dogfood, clean-gate, and source-rewrite wording
+  - Result: only an old Stage 34 progress-file reference remained; no Stage 35
+    contradiction.
+
+Clean-gate status:
+
+- Stage 35 clean gates remain `0/3`.
+- Next step is another fresh Stage 35 clean gate on this fixed commit.
+
 ## Next Work
 
 Likely follow-up slices:
