@@ -111,7 +111,12 @@ function autonomous_robot(motor: cap Motor, sensor: cap Sensor) {
 
 **Estimated effort**: Small (builds on existing effect system). ~400 LOC.
 
-### 2.4 — Deadline / real-time types (Stage 34)
+### 2.4 — Deadline / real-time types (obsolete Stage 34 label)
+
+Stage-numbering note: this section predates the live roadmap. `docs/ROADMAP.md`
+is authoritative for current stage numbers; current Stage 34 is Proof And
+Refinement Expansion. Deadline and WCET work remains important, but its older
+Stage 34 label is obsolete.
 
 ```helix
 function emergency_brake() requires {
@@ -416,7 +421,8 @@ PHASE 1 (Stages 31-37, written in Python helixc → ported through bootstrap):
   Stage 31 — Refinement types + SMT bridge (foundation for everything else)
   Stage 32 — Confidence types (depends on 31)
   Stage 33 — Effect-system extensions (Learning, Asking, Motor, Sensor, capabilities)
-  Stage 34 — Deadline + WCET analysis
+  Stage 34 — Proof And Refinement Expansion (see docs/ROADMAP.md; replaces the
+              older Deadline + WCET label)
   Stage 35 — Continuous execution model
   Stage 36 — Tiered memory (hot/warm/cold)
   Stage 37 — Theorem-prover integration (Z3)

@@ -1466,6 +1466,31 @@ def test_stage31_emit_proof_obligations_json_for_equivalent_refinement_alias(
     assert carry["strategy"] == "exact-predicate-subset"
 
 
+def test_stage34_emit_proof_carry_json_for_same_refinement_strategy(
+    capsys, tmp_path,
+):
+    src_path = str(tmp_path / "same_refinement_carry.hx")
+    with open(src_path, "w") as f:
+        f.write(
+            "type NonNegative = f64 where self >= 0.0;\n"
+            "fn lift(a: NonNegative) -> NonNegative { a }\n"
+        )
+    rc = main([src_path, "--emit-proof-obligations", "--no-stdlib"])
+    captured = capsys.readouterr()
+    assert rc == 0, captured.out + captured.err
+    artifact = json.loads(captured.out)
+    assert artifact["summary"]["typecheck_errors"] == 0
+    assert artifact["obligations"] == []
+    assert artifact["summary"]["proof_carries"] == 1
+    carry = artifact["proof_carries"][0]
+    assert carry["source_refinement"] == "NonNegative"
+    assert carry["target_refinement"] == "NonNegative"
+    assert carry["strategy"] == "same-refinement"
+    assert artifact["summary"]["proof_carry_strategies"] == {
+        "same-refinement": 1,
+    }
+
+
 def test_stage34_emit_proof_obligations_json_for_numeric_bound_implication(
     capsys, tmp_path,
 ):
@@ -1629,6 +1654,30 @@ def test_stage34_emit_proof_obligations_json_for_refined_cast_target_value(
     assert "target value 0 does not satisfy self == 0.5" in (
         artifact["typecheck_errors"][0]
     )
+
+
+def test_stage34_emit_proof_obligations_json_for_refined_f32_rounding(
+    capsys, tmp_path,
+):
+    src_path = str(tmp_path / "refined_f32_rounding.hx")
+    with open(src_path, "w") as f:
+        f.write(
+            "type AboveF32Boundary = f32 where self > 16777216.0;\n"
+            "fn f() -> AboveF32Boundary {\n"
+            "    16777217.0_f64 as AboveF32Boundary\n"
+            "}\n"
+        )
+    rc = main([src_path, "--emit-proof-obligations", "--no-stdlib"])
+    captured = capsys.readouterr()
+    assert rc == 1
+    artifact = json.loads(captured.out)
+    assert artifact["summary"]["typecheck_errors"] == 1
+    obligation = artifact["obligations"][0]
+    assert obligation["context"] == "cast to refined type AboveF32Boundary"
+    assert obligation["refinement"] == "AboveF32Boundary"
+    assert obligation["predicate"] == "self > 16777216.0"
+    assert obligation["status"] == "failed"
+    assert obligation["value"] == "16777216.0"
 
 
 def test_stage34_emit_proof_carry_json_for_explicit_return_route(

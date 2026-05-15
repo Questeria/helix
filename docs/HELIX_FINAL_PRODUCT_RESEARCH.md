@@ -829,6 +829,11 @@ Exit gate:
 
 ### Phase B: Proof and Constraint Core
 
+Stage-numbering note: this research blueprint predates the live roadmap. The
+authoritative current stage labels are in `docs/ROADMAP.md`; current Stage 34
+is Proof And Refinement Expansion, not the temporal/deadline/resource slice
+listed below.
+
 Likely stages:
 
 - Stage 31: refinement types and proof obligations.

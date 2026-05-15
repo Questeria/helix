@@ -18,6 +18,8 @@ License: Apache 2.0
 
 from __future__ import annotations
 
+import math
+import struct
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -2920,9 +2922,8 @@ class TypeChecker:
     ) -> None:
         value = self._eval_const_scalar_expr(
             value_expr, None, use_local_consts=True)
-        predicate_text = " and ".join(
-            self._fmt_refinement_expr(p) for p in refined.predicates
-        )
+        target_base = self._erase_refinement(refined)
+        represented = self._cast_const_scalar_to_type(value, target_base)
         if value is None:
             pending = self._check_self_independent_refinement(
                 refined, span, context,
@@ -2945,11 +2946,36 @@ class TypeChecker:
                     value_expr, refined.base, span, context, scope,
                 )
             return
+        if represented is None:
+            pending = self._check_self_independent_refinement(
+                refined, span, context,
+            )
+            if pending:
+                for pred in pending:
+                    self._record_refinement_obligation(
+                        context, refined, pred, "unproven", span, None,
+                    )
+                self.errors.append(TypeError_(
+                    f"{context}: refinement {refined.name} requires a "
+                    f"compile-time-proven value in Stage 34 target "
+                    f"representation; could not prove "
+                    f"{' and '.join(self._fmt_refinement_expr(p) for p in pending)} "
+                    f"for target base {self._fmt(target_base)}",
+                    span,
+                    hint="refined values must be representable by their "
+                         "erased base type before their predicates can be "
+                         "proved",
+                ))
+            if isinstance(refined.base, TyRefined):
+                self._check_refinement_const_value(
+                    value_expr, refined.base, span, context, scope,
+                )
+            return
         for pred in refined.predicates:
-            ok = self._eval_refinement_predicate(pred, value)
+            ok = self._eval_refinement_predicate(pred, represented)
             if ok is None:
                 self._record_refinement_obligation(
-                    context, refined, pred, "unsupported", span, value,
+                    context, refined, pred, "unsupported", span, represented,
                 )
                 self.errors.append(TypeError_(
                     f"{context}: refinement {refined.name} predicate "
@@ -2960,19 +2986,20 @@ class TypeChecker:
                 continue
             if not ok:
                 self._record_refinement_obligation(
-                    context, refined, pred, "failed", span, value,
+                    context, refined, pred, "failed", span, represented,
                     trap="31001",
                 )
                 self.errors.append(TypeError_(
                     f"{context}: refinement {refined.name} violated: "
-                    f"value {self._fmt_scalar_value(value)} does not satisfy "
-                    f"{self._fmt_refinement_expr(pred)} (trap 31001)",
+                    f"value {self._fmt_scalar_value(represented)} does not "
+                    f"satisfy {self._fmt_refinement_expr(pred)} "
+                    f"(trap 31001)",
                     span,
                     hint="refined values must satisfy their `where` predicate",
                 ))
             else:
                 self._record_refinement_obligation(
-                    context, refined, pred, "proved", span, value,
+                    context, refined, pred, "proved", span, represented,
                 )
         if isinstance(refined.base, TyRefined):
             self._check_refinement_const_value(
@@ -3065,12 +3092,34 @@ class TypeChecker:
                 if converted < lo or converted > hi:
                     return None
             return converted
-        if target.name in ("bf16", "f16", "f32", "f64"):
+        if target.name in ("bf16", "f16"):
+            return None
+        if target.name == "f32":
+            if not (isinstance(value, (int, float))
+                    and not isinstance(value, bool)):
+                return None
+            return self._round_const_scalar_to_f32(float(value))
+        if target.name == "f64":
             if not (isinstance(value, (int, float))
                     and not isinstance(value, bool)):
                 return None
             return float(value)
+        if target.name == "bool":
+            if isinstance(value, bool):
+                return value
+            if isinstance(value, (int, float)):
+                return bool(value)
         return value
+
+    def _round_const_scalar_to_f32(self, value: float) -> float | None:
+        try:
+            return struct.unpack("<f", struct.pack("<f", value))[0]
+        except OverflowError:
+            if math.isnan(value):
+                return math.nan
+            return math.inf if value > 0 else -math.inf
+        except (ValueError, struct.error):
+            return None
 
     def _check_self_independent_refinement(
         self, refined: "TyRefined", span: A.Span, context: str,

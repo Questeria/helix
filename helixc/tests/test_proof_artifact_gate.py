@@ -97,6 +97,43 @@ def test_gate_rejects_boolean_to_numeric_refined_cast(capsys, tmp_path):
     )
 
 
+def test_gate_rejects_impossible_refined_integer_alias(capsys, tmp_path):
+    source = tmp_path / "bad_refined_u8.hx"
+    source.write_text(
+        "type Exactly300 = u8 where self == 300;\n"
+        "fn f() -> Exactly300 {\n"
+        "    return 300_u8;\n"
+        "    300_u8\n"
+        "}\n"
+        "fn use_arr(xs: [Exactly300; 1]) -> i32 { 0 }\n"
+        "fn main() -> i32 {\n"
+        "    let xs: [Exactly300; 1] = [300_u8];\n"
+        "    use_arr(xs)\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    artifact_path = tmp_path / "bad_refined_u8.proof.json"
+
+    rc = proof_artifact_gate.main([
+        str(source),
+        "--artifact-out",
+        str(artifact_path),
+        "--",
+        "--no-stdlib",
+    ])
+
+    captured = capsys.readouterr()
+    assert rc == 1
+    assert "typecheck_errors must be empty" in captured.err
+    artifact = json.loads(artifact_path.read_text(encoding="utf-8"))
+    assert artifact["summary"]["typecheck_errors"] >= 1
+    assert not any(
+        obligation.get("status") == "proved"
+        and obligation.get("value") == "300"
+        for obligation in artifact["obligations"]
+    )
+
+
 def test_gate_returns_bad_invocation_for_missing_source(capsys, tmp_path):
     source = tmp_path / "missing.hx"
     artifact_path = tmp_path / "missing.proof.json"

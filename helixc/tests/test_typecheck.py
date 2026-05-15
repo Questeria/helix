@@ -713,6 +713,43 @@ def test_stage34_refined_cast_rejects_boolean_source_to_numeric_refinement():
                for e in errs), errs
 
 
+def test_stage34_refined_integer_alias_checks_base_width_before_proof():
+    errs = check("""
+    type Exactly300 = u8 where self == 300;
+    fn f() -> Exactly300 {
+        300_u8
+    }
+    """)
+    assert any("return value of function 'f'" in e
+               and "target base u8" in e
+               and "could not prove self == 300" in e
+               for e in errs), errs
+
+
+def test_stage34_refined_f32_checks_rounded_target_value():
+    cast_errs = check("""
+    type AboveF32Boundary = f32 where self > 16777216.0;
+    fn f() -> AboveF32Boundary {
+        16777217.0_f64 as AboveF32Boundary
+    }
+    """)
+    assert any("cast to refined type AboveF32Boundary" in e
+               and "target value 16777216.0 does not satisfy "
+                   "self > 16777216.0" in e
+               for e in cast_errs), cast_errs
+
+    direct_errs = check("""
+    type AboveF32Boundary = f32 where self > 16777216.0;
+    fn f() -> AboveF32Boundary {
+        16777217.0_f32
+    }
+    """)
+    assert any("return value of function 'f'" in e
+               and "value 16777216.0 does not satisfy "
+                   "self > 16777216.0" in e
+               for e in direct_errs), direct_errs
+
+
 def test_stage31_unsupported_refinement_predicates_do_not_carry_by_name():
     errs = check("""
     type Source = f64 where foo();

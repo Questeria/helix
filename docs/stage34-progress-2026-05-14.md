@@ -18,7 +18,7 @@ The implementation remains fail-closed:
 - `self <= 1.0` does not prove `self < 1.0`
 - Unsupported or non-bound predicates still do not gain proof-carry behavior
 
-## Verification
+## Initial Verification
 
 - Focused Stage 34 regression slice:
   - `python -m pytest -q helixc/tests/test_typecheck.py::test_stage34_numeric_bound_implication_carries_proofs helixc/tests/test_typecheck.py::test_stage34_numeric_bound_implication_respects_strictness helixc/tests/test_cli.py::test_stage34_emit_proof_obligations_json_for_numeric_bound_implication`
@@ -32,12 +32,14 @@ The implementation remains fail-closed:
 
 ## Next Stage 34 Work
 
-Good follow-up slices:
+Current follow-up slices:
 
-- Extend implication to simple equality-derived bounds when it is safe.
-- Add proof-artifact summaries that distinguish exact proof-carry from
-  implication proof-carry.
-- Expand clean gates around proof-carry through arrays, tuples, and references.
+- Restart three clean audit gates after the target-representation fixes are
+  verified.
+- Keep proof-carry artifact coverage aligned with every accepted proof-carry
+  strategy and route.
+- Consider reference, pointer, tensor, and tile proof-carry artifact records
+  only when Stage 34 explicitly claims those surfaces.
 
 ## Increment 2 - Equality-Derived Bounds
 
@@ -171,7 +173,7 @@ The validator checks that this summary matches the actual `proof_carries`
 records, so downstream tools can trust the quick counts without re-walking the
 full list.
 
-## Clean Gate 1 - Failed, Fix In Progress
+## Clean Gate 1 - Failed; Fix Verified; Counter Reset
 
 The first Stage 34 clean gate did not count as clean. The audit found three
 issues:
@@ -198,3 +200,31 @@ Verification after the fix:
 - `python -m pytest -q helixc/tests/test_typecheck.py`: `252 passed`
 - `python -m pytest -q helixc/tests/test_cli.py helixc/tests/test_proof_artifact_gate.py`:
   `148 passed`
+
+## Clean Gate 1 Restart - Failed; Fix Verified; Counter Reset
+
+The restarted clean gate also did not count as clean. It found that target
+representation must be checked before a proof is recorded:
+
+- Refined integer aliases could prove values impossible for their erased base,
+  such as `type Exactly300 = u8 where self == 300`.
+- Refined `f32` casts could prove predicates against Python's unrounded
+  double value instead of the real stored `f32` value.
+- The `same-refinement` proof-carry strategy needed a direct producer test,
+  not only a validator allowlist entry.
+- Older planning text still used obsolete Stage 34 numbering.
+
+The fix now checks predicates against the represented target value for both
+plain refined values and refined casts, adds direct regressions for impossible
+integer aliases and rounded `f32` values, pins the `same-refinement` artifact
+strategy, and marks older stage-numbering plans as superseded by the live
+roadmap.
+
+Verification after the target-representation fix:
+
+- Focused regression slice: `5 passed`
+- `python scripts\stage31_validate.py --mode quick --skip-snapshot`: pass
+- `python -m pytest -q helixc/tests/test_typecheck.py helixc/tests/test_cli.py helixc/tests/test_proof_artifact_gate.py`:
+  `405 passed`
+- `python scripts\stage31_validate.py --mode full --skip-snapshot --shards 8`:
+  pass
