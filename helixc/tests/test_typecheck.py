@@ -601,6 +601,57 @@ def test_stage34_negated_comparison_bounds_carry_proofs():
                for e in too_strict), too_strict
 
 
+def test_stage34_affine_numeric_bounds_carry_proofs():
+    shifted = check("""
+    type ShiftedAtLeastOne = f64 where self + 1.0 >= 2.0;
+    type AtLeastOne = f64 where self >= 1.0;
+    fn lift(x: ShiftedAtLeastOne) -> AtLeastOne {
+        x
+    }
+    """)
+    assert shifted == [], shifted
+
+    scaled = check("""
+    type ScaledAtLeastOne = f64 where 2.0 * self >= 2.0;
+    type AtLeastOne = f64 where self >= 1.0;
+    fn lift(x: ScaledAtLeastOne) -> AtLeastOne {
+        x
+    }
+    """)
+    assert scaled == [], scaled
+
+    flipped = check("""
+    type AtMostHalf = f64 where 1.5 - self >= 1.0;
+    type AtMostOne = f64 where self <= 1.0;
+    fn lift(x: AtMostHalf) -> AtMostOne {
+        x
+    }
+    """)
+    assert flipped == [], flipped
+
+
+def test_stage34_affine_numeric_bounds_keep_strictness():
+    weak = check("""
+    type ShiftedNonNegative = f64 where self + 1.0 >= 1.0;
+    type Positive = f64 where self > 0.0;
+    fn lift(x: ShiftedNonNegative) -> Positive {
+        x
+    }
+    """)
+    assert any("return value of function 'lift'" in e
+               and "could not prove self > 0.0" in e
+               for e in weak), weak
+
+    strict = check("""
+    type ShiftedPositive = f64 where self + 1.0 > 1.0;
+    type Positive = f64 where self > 0.0;
+    fn lift(x: ShiftedPositive) -> Positive {
+        x
+    }
+    """)
+    assert strict == [], strict
+
+
 def test_stage31_unsupported_refinement_predicates_do_not_carry_by_name():
     errs = check("""
     type Source = f64 where foo();

@@ -3352,6 +3352,9 @@ class TypeChecker:
     def _refinement_binary_bounds(
         self, left: A.Expr, op: str, right: A.Expr,
     ) -> Optional[list[tuple[str, int | float, bool]]]:
+        affine = self._refinement_affine_binary_bounds(left, op, right)
+        if affine is not None:
+            return affine
         left_is_self = self._expr_is_plain_self(left)
         right_is_self = self._expr_is_plain_self(right)
         if left_is_self == right_is_self:
@@ -3361,6 +3364,79 @@ class TypeChecker:
             return self._bound_from_self_compare(op, value)
         value = self._eval_const_scalar_expr(left, None)
         return self._bound_from_const_compare(op, value)
+
+    def _refinement_affine_binary_bounds(
+        self, left: A.Expr, op: str, right: A.Expr,
+    ) -> Optional[list[tuple[str, int | float, bool]]]:
+        left_affine = self._refinement_affine_expr(left)
+        right_affine = self._refinement_affine_expr(right)
+        if left_affine is None or right_affine is None:
+            return None
+        left_coeff, left_const = left_affine
+        right_coeff, right_const = right_affine
+        coeff = left_coeff - right_coeff
+        const = left_const - right_const
+        if coeff == 0:
+            return None
+        bound_value = -const / coeff
+        bound_op = op if coeff > 0 else self._flip_comparison_op(op)
+        if bound_op is None:
+            return None
+        return self._bound_from_self_compare(bound_op, bound_value)
+
+    def _refinement_affine_expr(
+        self, expr: A.Expr,
+    ) -> Optional[tuple[int | float, int | float]]:
+        if self._expr_is_plain_self(expr):
+            return (1, 0)
+        if not self._expr_mentions_self(expr):
+            value = self._eval_const_scalar_expr(expr, None)
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                return (0, value)
+            return None
+        if isinstance(expr, A.Unary) and expr.op == "-":
+            inner = self._refinement_affine_expr(expr.operand)
+            if inner is None:
+                return None
+            coeff, const = inner
+            return (-coeff, -const)
+        if isinstance(expr, A.Binary) and expr.op in ("+", "-"):
+            left = self._refinement_affine_expr(expr.left)
+            right = self._refinement_affine_expr(expr.right)
+            if left is None or right is None:
+                return None
+            left_coeff, left_const = left
+            right_coeff, right_const = right
+            if expr.op == "+":
+                return (left_coeff + right_coeff, left_const + right_const)
+            return (left_coeff - right_coeff, left_const - right_const)
+        if isinstance(expr, A.Binary) and expr.op == "*":
+            left = self._refinement_affine_expr(expr.left)
+            right = self._refinement_affine_expr(expr.right)
+            if left is None or right is None:
+                return None
+            if left[0] == 0:
+                return (right[0] * left[1], right[1] * left[1])
+            if right[0] == 0:
+                return (left[0] * right[1], left[1] * right[1])
+            return None
+        if isinstance(expr, A.Binary) and expr.op == "/":
+            left = self._refinement_affine_expr(expr.left)
+            right = self._refinement_affine_expr(expr.right)
+            if left is None or right is None or right[0] != 0 or right[1] == 0:
+                return None
+            return (left[0] / right[1], left[1] / right[1])
+        return None
+
+    def _flip_comparison_op(self, op: str) -> str | None:
+        return {
+            "<": ">",
+            "<=": ">=",
+            ">": "<",
+            ">=": "<=",
+            "==": "==",
+            "!=": "!=",
+        }.get(op)
 
     def _bound_from_self_compare(
         self, op: str, value: int | float | bool | None,

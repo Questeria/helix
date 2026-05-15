@@ -112,3 +112,17 @@ Example:
 
 This keeps the proof artifact useful for higher-level audit tools that need to
 see why a container-valued call or assignment was accepted.
+
+## Increment 7 - Simple Affine Bound Implication
+
+Proof-carry now handles simple linear arithmetic around `self` when reducing
+numeric bounds.
+
+Examples now accepted:
+
+- `self + 1.0 >= 2.0` proves `self >= 1.0`
+- `2.0 * self >= 2.0` proves `self >= 1.0`
+- `1.5 - self >= 1.0` proves `self <= 0.5`
+
+Strictness is preserved: `self + 1.0 >= 1.0` proves `self >= 0.0`, but not
+`self > 0.0`.

@@ -324,6 +324,8 @@ def quick(py: str) -> int:
             "helixc/tests/test_typecheck.py::test_stage34_numeric_bounds_carry_through_array_and_tuple_proofs",
             "helixc/tests/test_typecheck.py::test_stage34_negated_comparison_refinements_are_supported",
             "helixc/tests/test_typecheck.py::test_stage34_negated_comparison_bounds_carry_proofs",
+            "helixc/tests/test_typecheck.py::test_stage34_affine_numeric_bounds_carry_proofs",
+            "helixc/tests/test_typecheck.py::test_stage34_affine_numeric_bounds_keep_strictness",
             "helixc/tests/test_typecheck.py::test_stage31_unsupported_refinement_predicates_do_not_carry_by_name",
             "helixc/tests/test_typecheck.py::test_stage31_generic_qualified_refinement_names_are_unsupported",
             "helixc/tests/test_typecheck.py::test_stage31_duplicate_refinement_names_fail_closed",
