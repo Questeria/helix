@@ -554,6 +554,40 @@ fn softmax_ce_grad_f32(probs_start: i32, target_start: i32,
     }}
 }
 
+fn dense_classifier_sgd_step_f32(w_start: i32, b_start: i32, x_start: i32,
+                                 target: i32, scratch_start: i32,
+                                 shape_start: i32, lr: f32) -> i32 {
+    let classes = __arena_get(shape_start);
+    let in_dim = __arena_get(shape_start + 1);
+    let logits_start = scratch_start;
+    let probs_start = scratch_start + classes;
+    let dy_start = scratch_start + classes * 2;
+    let gw_start = scratch_start + classes * 3;
+    if classes <= 0 { 0 }
+    else { if in_dim <= 0 { 0 }
+    else {
+        if target < 0 { 35001 }
+        else { if target >= classes { 35001 }
+        else {
+            dense_layer_f32_forward(w_start, classes, in_dim, x_start,
+                                    b_start, logits_start);
+            softmax_layer(logits_start, probs_start, classes);
+            let mut k: i32 = 0;
+            while k < classes {
+                let p = __f32_from_bits(__arena_get(probs_start + k));
+                let y = if k == target { 1.0_f32 } else { 0.0_f32 };
+                __arena_set(dy_start + k, __bits_of_f32(p - y));
+                k = k + 1;
+            }
+            dense_layer_f32_grad_w(dy_start, x_start, gw_start,
+                                   classes, in_dim);
+            sgd_f32_step(w_start, gw_start, lr, classes * in_dim);
+            sgd_f32_step(b_start, dy_start, lr, classes);
+            0
+        }}
+    }}
+}
+
 // BCE.
 @pure
 fn bce_loss_scalar(p: f32, t: f32) -> f32 {

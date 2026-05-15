@@ -64,6 +64,43 @@ Initial focused checks:
 - `python scripts\stage31_validate.py --mode quick --skip-snapshot`
   - Result: passed, `stage31-quick: rc=0`.
 
+## Increment 19 - Dense Classifier SGD Step
+
+The Helix neural-network stdlib now includes:
+
+- `dense_classifier_sgd_step_f32(w_start, b_start, x_start, target, scratch_start, shape_start, lr)`
+
+Beginner meaning:
+
+This is a compact one-sample classifier training step. It composes existing
+Helix-native pieces:
+
+- dense forward pass with bias
+- softmax probabilities
+- softmax-cross-entropy gradient
+- dense weight gradient
+- SGD updates for weights and bias
+
+The API intentionally uses `scratch_start` and `shape_start` arena handles so it
+stays within the current backend's six-integer-argument limit.
+
+Safety behavior:
+
+- Invalid class labels return sentinel status `35001`.
+- Invalid or empty dimensions return success without writing.
+
+Focused verification:
+
+- `python -m pytest -q helixc\tests\test_codegen.py -k "dense_classifier_sgd_step_f32 or softmax_ce_grad_f32 or dense_layer_f32_grad_w or sgd_f32_step" --tb=short`
+  - Result: 7 passed, 775 deselected.
+- `python -m pytest -q helixc\tests\test_codegen.py -k "nn_ or dense_classifier_sgd_step_f32 or softmax_ce_grad_f32 or dense_layer_f32" --tb=short`
+  - Result: 41 passed, 741 deselected.
+- `python scripts\stage31_validate.py --mode quick --skip-snapshot`
+  - First result: failed because the new helper called `dense_layer_f32_forward`
+    with the old five-argument shape.
+  - Fixed by using the existing bias-aware six-argument signature.
+  - Final result: passed, `stage31-quick: rc=0`.
+
 ## Increment 18 - Adam Optimizer Helper
 
 The Helix neural-network stdlib now includes:

@@ -9274,6 +9274,53 @@ def test_nn_softmax_ce_grad_f32_rejects_invalid_label():
     assert code == 42, f"expected 42, got {code}"
 
 
+def test_nn_dense_classifier_sgd_step_f32_one_sample():
+    """One balanced 2-class sample updates correct-class weights upward."""
+    src = """
+    fn main() -> i32 {
+        let w = t1d_new(4);
+        tf1d_set(w, 0, 0.0_f32); tf1d_set(w, 1, 0.0_f32);
+        tf1d_set(w, 2, 0.0_f32); tf1d_set(w, 3, 0.0_f32);
+        let b = t1d_new(2);
+        tf1d_set(b, 0, 0.0_f32); tf1d_set(b, 1, 0.0_f32);
+        let x = t1d_new(2);
+        tf1d_set(x, 0, 1.0_f32); tf1d_set(x, 1, 0.0_f32);
+        let scratch = t1d_new(10);
+        let shape = t1d_new(2);
+        __arena_set(shape, 2);
+        __arena_set(shape + 1, 2);
+        let status = dense_classifier_sgd_step_f32(
+            w, b, x, 0, scratch, shape, 1.0_f32);
+        let score = (__f32_from_bits(__arena_get(w))
+            - __f32_from_bits(__arena_get(w + 2))
+            + __f32_from_bits(__arena_get(b))
+            - __f32_from_bits(__arena_get(b + 1))) * 21.0_f32;
+        (score as i32) + status
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_nn_dense_classifier_sgd_step_f32_rejects_invalid_label():
+    """Dense classifier step should reject labels outside [0, classes)."""
+    src = """
+    fn main() -> i32 {
+        let w = t1d_new(4);
+        let b = t1d_new(2);
+        let x = t1d_new(2);
+        let scratch = t1d_new(10);
+        let shape = t1d_new(2);
+        __arena_set(shape, 2);
+        __arena_set(shape + 1, 2);
+        dense_classifier_sgd_step_f32(
+            w, b, x, 2, scratch, shape, 1.0_f32) - 34959
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
 def test_nn_tanh_layer():
     """tanh: 0->0, big->1, -big->-1; sum~=0; +42 = 42."""
     src = """
