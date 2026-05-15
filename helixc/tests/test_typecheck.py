@@ -652,6 +652,43 @@ def test_stage34_affine_numeric_bounds_keep_strictness():
     assert strict == [], strict
 
 
+def test_stage34_named_constant_bounds_carry_proofs():
+    named_bound = check("""
+    const FLOOR: f64 = 1.0_f64;
+    const ZERO: f64 = 0.0_f64;
+    type AtLeastFloor = f64 where self >= FLOOR;
+    type NonNegative = f64 where self >= ZERO;
+    fn lift(x: AtLeastFloor) -> NonNegative {
+        x
+    }
+    """)
+    assert named_bound == [], named_bound
+
+    named_affine = check("""
+    const OFFSET: f64 = 1.0_f64;
+    const TARGET: f64 = 2.0_f64;
+    type ShiftedAtLeastOne = f64 where self + OFFSET >= TARGET;
+    type AtLeastOne = f64 where self >= OFFSET;
+    fn lift(x: ShiftedAtLeastOne) -> AtLeastOne {
+        x
+    }
+    """)
+    assert named_affine == [], named_affine
+
+
+def test_stage34_numeric_bound_implication_requires_same_erased_base():
+    errs = check("""
+    type AtLeastOneI32 = i32 where self >= 1;
+    type NonNegativeF64 = f64 where self >= 0.0;
+    fn lift(x: AtLeastOneI32) -> NonNegativeF64 {
+        x as NonNegativeF64
+    }
+    """)
+    assert any("cast to refined type NonNegativeF64" in e
+               and "could not prove self >= 0.0" in e
+               for e in errs), errs
+
+
 def test_stage31_unsupported_refinement_predicates_do_not_carry_by_name():
     errs = check("""
     type Source = f64 where foo();

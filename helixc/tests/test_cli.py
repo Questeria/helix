@@ -1537,6 +1537,70 @@ def test_stage34_emit_proof_carry_json_for_array_bound_implication(
     assert carry["strategy"] == "numeric-bound-implication"
 
 
+def test_stage34_emit_proof_carry_json_for_tuple_bound_implication(
+    capsys, tmp_path,
+):
+    src_path = str(tmp_path / "tuple_bound_implication_carry.hx")
+    with open(src_path, "w") as f:
+        f.write(
+            "type AtMostHalf = f64 where self <= 0.5;\n"
+            "type AtMostOne = f64 where self <= 1.0;\n"
+            "fn lift(xs: (AtMostHalf, AtMostHalf)) -> i32 {\n"
+            "    let ys: (AtMostOne, AtMostOne) = xs;\n"
+            "    0\n"
+            "}\n"
+        )
+    rc = main([src_path, "--emit-proof-obligations", "--no-stdlib"])
+    captured = capsys.readouterr()
+    assert rc == 0, captured.out + captured.err
+    artifact = json.loads(captured.out)
+    assert artifact["summary"]["typecheck_errors"] == 0
+    assert artifact["obligations"] == []
+    assert artifact["summary"]["proof_carries"] == 2
+    contexts = {carry["context"] for carry in artifact["proof_carries"]}
+    assert contexts == {
+        "let 'ys': tuple element 0",
+        "let 'ys': tuple element 1",
+    }
+    assert all(carry["source_refinement"] == "AtMostHalf"
+               for carry in artifact["proof_carries"])
+    assert all(carry["target_refinement"] == "AtMostOne"
+               for carry in artifact["proof_carries"])
+    assert all(carry["strategy"] == "numeric-bound-implication"
+               for carry in artifact["proof_carries"])
+
+
+def test_stage34_emit_proof_carry_json_for_affine_and_negated_bounds(
+    capsys, tmp_path,
+):
+    src_path = str(tmp_path / "affine_and_negated_bound_carry.hx")
+    with open(src_path, "w") as f:
+        f.write(
+            "type ShiftedAtLeastOne = f64 where self + 1.0 >= 2.0;\n"
+            "type NotBelowZero = f64 where !(self < 0.0);\n"
+            "type NonNegative = f64 where self >= 0.0;\n"
+            "fn use_n(x: NonNegative) -> i32 { 0 }\n"
+            "fn lift(a: ShiftedAtLeastOne, b: NotBelowZero) -> i32 {\n"
+            "    use_n(a) + use_n(b)\n"
+            "}\n"
+        )
+    rc = main([src_path, "--emit-proof-obligations", "--no-stdlib"])
+    captured = capsys.readouterr()
+    assert rc == 0, captured.out + captured.err
+    artifact = json.loads(captured.out)
+    assert artifact["summary"]["typecheck_errors"] == 0
+    assert artifact["obligations"] == []
+    assert artifact["summary"]["proof_carries"] == 2
+    sources = {
+        carry["source_refinement"]: carry["strategy"]
+        for carry in artifact["proof_carries"]
+    }
+    assert sources == {
+        "ShiftedAtLeastOne": "numeric-bound-implication",
+        "NotBelowZero": "numeric-bound-implication",
+    }
+
+
 def test_stage31_emit_proof_obligations_rejects_generic_refinement_name(
     capsys, tmp_path,
 ):

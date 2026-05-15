@@ -1590,8 +1590,7 @@ class TypeChecker:
                 continue
             if ((self._contains_refinement(param_ty)
                  or self._contains_refinement(arg_ty))
-                    and not self._refinement_proof_carried(
-                        arg_ty, param_ty)):
+                    and not isinstance(param_ty, TyUnknown)):
                 self._check_refinement_contextual_value(
                     arg_expr, arg_ty, param_ty, arg_expr.span,
                     f"function-typed call arg {i}",
@@ -2728,8 +2727,7 @@ class TypeChecker:
                     ))
                 elif ((self._contains_refinement(self._current_return_ty)
                        or self._contains_refinement(value_ty))
-                      and not self._refinement_proof_carried(
-                          value_ty, self._current_return_ty)):
+                      and not isinstance(self._current_return_ty, TyUnknown)):
                     self._check_refinement_contextual_value(
                         expr.value, value_ty, self._current_return_ty,
                         expr.span,
@@ -2761,6 +2759,12 @@ class TypeChecker:
             tgt_ty = self._resolve_type(expr.target_ty, scope)
             if isinstance(tgt_ty, TyRefined):
                 if self._refinement_proof_carried(src_ty, tgt_ty):
+                    self._record_refinement_proof_carries_for_type(
+                        f"cast to refined type {self._fmt(tgt_ty)}",
+                        src_ty,
+                        tgt_ty,
+                        expr.span,
+                    )
                     return tgt_ty
                 self._check_refinement_const_value(
                     expr.value, tgt_ty, expr.span,
@@ -3227,6 +3231,8 @@ class TypeChecker:
     def _refinement_numeric_bounds_cover(
         self, value_ty: "TyRefined", target: "TyRefined",
     ) -> bool:
+        if self._erase_refinement(value_ty) != self._erase_refinement(target):
+            return False
         value_bounds = self._refinement_numeric_bounds(value_ty)
         target_reqs = self._refinement_numeric_requirements(target)
         if value_bounds is None or target_reqs is None:

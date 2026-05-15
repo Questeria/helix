@@ -126,3 +126,30 @@ Examples now accepted:
 
 Strictness is preserved: `self + 1.0 >= 1.0` proves `self >= 0.0`, but not
 `self > 0.0`.
+
+## Increment 8 - Named Constant Bound Coverage
+
+Stage 34 now pins proof-carry through top-level numeric constants used inside
+refinement predicates.
+
+Covered cases:
+
+- `self >= FLOOR` can prove `self >= ZERO` when the constant values imply it.
+- `self + OFFSET >= TARGET` can prove `self >= OFFSET` when the constants make
+  the affine bound equivalent.
+
+## Increment 9 - Mid-Stage Audit Fixes
+
+The first mid-stage Stage 34 audit found one safety-relevant guard gap and a
+few proof-artifact visibility gaps.
+
+Fixes:
+
+- Numeric-bound implication now explicitly requires the source and target
+  refinements to erase to the same base type.
+- Cross-base refined casts no longer reuse numeric proof just because the
+  predicate values imply each other.
+- Explicit returns, casts, and function-typed calls now route accepted proof
+  carries through the artifact recorder.
+- Quick-gate proof-artifact coverage now includes tuple carries plus affine and
+  negated-bound carries.
