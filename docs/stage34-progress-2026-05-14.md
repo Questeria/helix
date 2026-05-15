@@ -123,15 +123,15 @@ reducing numeric bounds.
 Those early examples were later narrowed by clean-gate findings: affine
 proof-carry extraction now fails closed for fixed-width integer and
 floating-point bases unless it is a simple direct `self` versus constant bound.
-The old examples below are retained as design intent, not current accepted
-behavior:
+The old examples below are retained as design intent only. They are not current
+accepted behavior:
 
 - `self + 1.0 >= 2.0` proves `self >= 1.0`
 - `2.0 * self >= 2.0` proves `self >= 1.0`
 - `1.5 - self >= 1.0` proves `self <= 0.5`
 
-Strictness is preserved: `self + 1.0 >= 1.0` proves `self >= 0.0`, but not
-`self > 0.0`.
+Current behavior is conservative: affine proof-carry strictness examples are
+rejected as unproven until Helix can model overflow and rounding exactly.
 
 ## Increment 8 - Named Constant Bound Coverage
 
@@ -158,8 +158,9 @@ Fixes:
   predicate values imply each other.
 - Explicit returns, casts, and function-typed calls now route accepted proof
   carries through the artifact recorder.
-- Quick-gate proof-artifact coverage now includes tuple carries plus affine and
-  negated-bound carries.
+- Quick-gate proof-artifact coverage now includes tuple carries plus
+  negated-bound carries, while affine cases are covered as fail-closed
+  typecheck regressions.
 
 ## Increment 10 - Proof-Carry Strategy Summary
 
@@ -730,5 +731,36 @@ Verification after this fix set:
   `342 passed`
 - `python scripts\stage31_validate.py --mode full --skip-snapshot --shards 8`:
   pass after built-in retry recovered no-codegen shard 3
+
+The clean-gate counter remains reset to `0/3`.
+
+## Clean Gate 1 Seventeenth Restart - Failed; Fix Verified; Counter Reset
+
+Fresh clean-gate auditors on commit `5f422b5` found three more Stage 34 issues:
+
+- Suffixed integer literals were not checked against their own source width
+  before refined proof checking. This let `2147483648_i32 as PositiveI64`
+  record a proved obligation after casting to `i64`, even though the source
+  literal cannot be represented as `i32`.
+- Source-unavailable artifacts accepted impossible input metadata, including
+  opt levels outside `0..3`, unknown warning names or policies, and fake stdlib
+  manifests with self-consistent hashes.
+- The progress document still had stale affine proof-carry wording that sounded
+  accepted, even though current Stage 34 behavior rejects those affine cases as
+  unproven.
+
+The fix makes integer constant evaluation apply literal suffix/source-base
+representation before refined proofs, hardens source-unavailable artifact
+metadata validation to match proof-safe checker inputs, and updates the affine
+documentation to describe current fail-closed behavior.
+
+Verification after this fix set:
+
+- Focused latest-reset regressions: `3 passed`
+- `python -m pytest -q helixc/tests/test_typecheck.py helixc/tests/test_proof_artifact_validate.py helixc/tests/test_proof_artifact_gate.py`:
+  `344 passed`
+- `python scripts\stage31_validate.py --mode quick`: pass
+- `python scripts\stage31_validate.py --mode full --skip-snapshot --shards 8`:
+  pass across all 12 shards with no retries
 
 The clean-gate counter remains reset to `0/3`.

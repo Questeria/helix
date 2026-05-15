@@ -732,8 +732,19 @@ def test_stage34_refined_integer_alias_checks_base_width_before_proof():
     """)
     assert any("return value of function 'f'" in e
                and "target base u8" in e
-               and "could not prove self == 300" in e
+               and "requires a representable target value" in e
                for e in errs), errs
+
+    cast_errs = check("""
+    type PositiveI64 = i64 where self > 0;
+    fn f() -> PositiveI64 {
+        2147483648_i32 as PositiveI64
+    }
+    """)
+    assert any("cast to refined type PositiveI64" in e
+               and "value is not representable" in e
+               and "after casting i32 to i64" in e
+               for e in cast_errs), cast_errs
 
 
 def test_stage34_refined_f32_checks_rounded_target_value():

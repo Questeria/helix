@@ -783,6 +783,87 @@ def test_validate_source_unavailable_rejects_unsafe_flags(capsys, tmp_path):
     assert "input.flags must include --emit-proof-obligations" in captured.err
 
 
+def test_validate_source_unavailable_rejects_impossible_input_metadata(
+    capsys, tmp_path,
+):
+    def base_artifact():
+        return {
+            "schema": "helix.proof_obligations.v0",
+            "cache_key": None,
+            "path": None,
+            "input": {
+                "source_sha256": None,
+                "source_available": False,
+                "source_error": "source path is missing",
+                "include_stdlib": False,
+                "stdlib_strict": False,
+                "stdlib_manifest_sha256": EMPTY_MANIFEST_SHA256,
+                "stdlib_files": [],
+                "opt_level": 1,
+                "flags": ["--emit-proof-obligations", "--no-stdlib"],
+                "libs": [],
+                "warnings": {},
+                "color": "auto",
+            },
+            "summary": {
+                "obligations": 0,
+                "proof_carries": 0,
+                "pipeline_errors": 0,
+                "typecheck_errors": 0,
+                "warning_diagnostics": 0,
+                "warning_errors": 0,
+                "proof_carry_strategies": {},
+            },
+            "obligations": [],
+            "proof_carries": [],
+            "pipeline_errors": [],
+            "typecheck_errors": [],
+            "warning_diagnostics": [],
+        }
+
+    def run_case(name, mutate):
+        artifact = base_artifact()
+        mutate(artifact)
+        artifact_path = tmp_path / name
+        artifact_path.write_text(json.dumps(artifact), encoding="utf-8")
+        rc = proof_artifact_validate.main([str(artifact_path)])
+        captured = capsys.readouterr()
+        return rc, captured.err
+
+    rc, err = run_case(
+        "bad-opt.json",
+        lambda artifact: artifact["input"].__setitem__("opt_level", 4),
+    )
+    assert rc == 1
+    assert "input.opt_level must be between 0 and 3" in err
+
+    def bad_warnings(artifact):
+        artifact["input"]["warnings"] = {
+            "deprecated": "panic",
+            "evil": "warn",
+        }
+
+    rc, err = run_case("bad-warnings.json", bad_warnings)
+    assert rc == 1
+    assert "input.warnings['deprecated'] must be one of" in err
+    assert "input.warnings contains unknown warning name: evil" in err
+
+    def fake_stdlib(artifact):
+        files = [{"path": "stdlib-forgery.hx", "sha256": "a" * 64, "bytes": 12}]
+        artifact["input"].update({
+            "include_stdlib": True,
+            "stdlib_files": files,
+            "stdlib_manifest_sha256": _manifest_sha256(files),
+            "flags": ["--emit-proof-obligations"],
+        })
+
+    rc, err = run_case("fake-stdlib.json", fake_stdlib)
+    assert rc == 1
+    assert "input.include_stdlib must be false" in err
+    assert "input.stdlib_files must be empty" in err
+    assert "input.stdlib_manifest_sha256 must match an empty" in err
+
+
 def test_validate_source_unavailable_requires_cache_key_field(capsys, tmp_path):
     artifact = {
         "schema": "helix.proof_obligations.v0",

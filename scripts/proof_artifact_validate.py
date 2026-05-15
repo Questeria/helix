@@ -33,6 +33,9 @@ SUMMARY_COUNTS = {
     "warning_diagnostics": "warning_diagnostics",
 }
 INPUT_COLORS = {"auto", "always", "never"}
+INPUT_WARNING_NAMES = {"ad", "deprecated"}
+INPUT_WARNING_POLICIES = {"warn", "error"}
+EMPTY_STDLIB_MANIFEST_SHA256 = hashlib.sha256(b"[]").hexdigest()
 PROOF_REPLAY_FLAGS = frozenset({
     "--emit-proof-obligations",
     "--no-stdlib",
@@ -100,8 +103,11 @@ def _validate_input_metadata(
         errors.append(
             "input.stdlib_manifest_sha256 must be a lowercase SHA-256 hex digest"
         )
-    if not _is_json_int(input_metadata.get("opt_level")):
+    opt_level = input_metadata.get("opt_level")
+    if not _is_json_int(opt_level):
         errors.append("input.opt_level must be an integer")
+    elif not (0 <= opt_level <= 3):
+        errors.append("input.opt_level must be between 0 and 3")
     if input_metadata.get("color") not in INPUT_COLORS:
         errors.append(f"input.color must be one of {sorted(INPUT_COLORS)}")
 
@@ -122,11 +128,7 @@ def _validate_input_metadata(
     if not isinstance(warnings, dict):
         errors.append("input.warnings must be an object")
     else:
-        for key, value in warnings.items():
-            if not isinstance(key, str):
-                errors.append("input.warnings keys must be strings")
-            if not isinstance(value, str):
-                errors.append(f"input.warnings[{key!r}] must be a string")
+        _validate_warning_metadata(warnings, errors=errors)
 
     stdlib_files = input_metadata.get("stdlib_files")
     if not isinstance(stdlib_files, list):
@@ -205,6 +207,27 @@ def _validate_proof_replay_libs(libs: list[str], *, errors: list[str]) -> None:
             "input.libs must be empty for proof replay; found: "
             + ", ".join(libs)
         )
+
+
+def _validate_warning_metadata(
+    warnings: dict[object, object],
+    *,
+    errors: list[str],
+) -> None:
+    for key, value in warnings.items():
+        key_is_str = isinstance(key, str)
+        value_is_str = isinstance(value, str)
+        if not key_is_str:
+            errors.append("input.warnings keys must be strings")
+        elif key not in INPUT_WARNING_NAMES:
+            errors.append(f"input.warnings contains unknown warning name: {key}")
+        if not value_is_str:
+            errors.append(f"input.warnings[{key!r}] must be a string")
+        elif value not in INPUT_WARNING_POLICIES:
+            errors.append(
+                f"input.warnings[{key!r}] must be one of "
+                f"{sorted(INPUT_WARNING_POLICIES)}"
+            )
 
 
 def _source_sha256(path: Path) -> str:
@@ -432,6 +455,30 @@ def validate_artifact(
             )
 
     if source_hash is None:
+        if isinstance(input_metadata, dict):
+            if input_metadata.get("include_stdlib") is not False:
+                errors.append(
+                    "input.include_stdlib must be false when "
+                    "input.source_sha256 is null"
+                )
+            if input_metadata.get("stdlib_strict") is not False:
+                errors.append(
+                    "input.stdlib_strict must be false when "
+                    "input.source_sha256 is null"
+                )
+            if input_metadata.get("stdlib_files") != []:
+                errors.append(
+                    "input.stdlib_files must be empty when "
+                    "input.source_sha256 is null"
+                )
+            if (
+                input_metadata.get("stdlib_manifest_sha256")
+                != EMPTY_STDLIB_MANIFEST_SHA256
+            ):
+                errors.append(
+                    "input.stdlib_manifest_sha256 must match an empty "
+                    "stdlib manifest when input.source_sha256 is null"
+                )
         if lists["obligations"]:
             errors.append(
                 "obligations must be empty when input.source_sha256 is null"
@@ -579,12 +626,13 @@ def _proof_args_from_artifact(
 
     warnings = input_metadata.get("warnings")
     if isinstance(warnings, dict):
+        warning_errors_before = len(errors)
+        _validate_warning_metadata(warnings, errors=errors)
+        if len(errors) != warning_errors_before:
+            return args, errors
         for key in sorted(warnings):
             value = warnings[key]
-            if isinstance(key, str) and isinstance(value, str):
-                args.append(f"-W{key}={value}")
-            else:
-                errors.append("input.warnings must map strings to strings")
+            args.append(f"-W{key}={value}")
     else:
         errors.append("input.warnings must be an object")
 

@@ -134,6 +134,38 @@ def test_gate_rejects_impossible_refined_integer_alias(capsys, tmp_path):
     )
 
 
+def test_gate_rejects_unrepresentable_suffixed_int_source_cast_to_refined(
+    capsys, tmp_path,
+):
+    source = tmp_path / "bad_suffixed_int_refined_cast.hx"
+    source.write_text(
+        "type PositiveI64 = i64 where self > 0;\n"
+        "fn f() -> PositiveI64 { 2147483648_i32 as PositiveI64 }\n"
+        "fn main() -> i32 { 0 }\n",
+        encoding="utf-8",
+    )
+    artifact_path = tmp_path / "bad_suffixed_int_refined_cast.proof.json"
+
+    rc = proof_artifact_gate.main([
+        str(source),
+        "--artifact-out",
+        str(artifact_path),
+        "--",
+        "--no-stdlib",
+    ])
+
+    captured = capsys.readouterr()
+    assert rc == 1
+    assert "typecheck_errors must be empty" in captured.err
+    artifact = json.loads(artifact_path.read_text(encoding="utf-8"))
+    assert artifact["summary"]["typecheck_errors"] >= 1
+    assert any(
+        "cast to refined type PositiveI64" in error
+        and "value is not representable" in error
+        for error in artifact["typecheck_errors"]
+    )
+
+
 def test_gate_rejects_overflowing_refined_f32_literal(capsys, tmp_path):
     source = tmp_path / "overflow_refined_f32.hx"
     source.write_text(

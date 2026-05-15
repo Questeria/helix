@@ -4611,7 +4611,7 @@ class TypeChecker:
         numeric_base: Type | None = None,
     ) -> Optional[int | float | bool]:
         if isinstance(expr, A.IntLit):
-            return expr.value
+            return self._eval_int_lit_scalar(expr, numeric_base)
         if isinstance(expr, A.FloatLit):
             if honor_float_suffix:
                 return self._eval_float_lit_scalar(expr)
@@ -4770,6 +4770,24 @@ class TypeChecker:
 
     def _trunc_mod_int(self, left: int, right: int) -> int:
         return left - self._trunc_div_int(left, right) * right
+
+    def _eval_int_lit_scalar(
+        self, expr: A.IntLit, numeric_base: Type | None,
+    ) -> int | None:
+        suffix = expr.type_suffix
+        target: Type | None = None
+        if suffix in _INT_PRIM_NAMES:
+            target = TyPrim(suffix)
+        elif suffix is not None:
+            return None
+        elif self._numeric_base_is_int(numeric_base):
+            target = numeric_base
+        if target is None:
+            return expr.value
+        represented = self._cast_const_scalar_to_type(expr.value, target)
+        if isinstance(represented, int) and not isinstance(represented, bool):
+            return represented
+        return None
 
     def _eval_float_lit_scalar(self, expr: A.FloatLit) -> float | None:
         suffix = expr.type_suffix

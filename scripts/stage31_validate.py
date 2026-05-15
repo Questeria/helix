@@ -396,6 +396,7 @@ def quick(py: str) -> int:
             "helixc/tests/test_proof_artifact_validate.py::test_validate_rejects_malformed_missing_stdlib_entry",
             "helixc/tests/test_proof_artifact_validate.py::test_validate_source_unavailable_rejects_proof_content",
             "helixc/tests/test_proof_artifact_validate.py::test_validate_source_unavailable_rejects_unsafe_flags",
+            "helixc/tests/test_proof_artifact_validate.py::test_validate_source_unavailable_rejects_impossible_input_metadata",
             "helixc/tests/test_proof_artifact_validate.py::test_require_clean_accepts_proved_artifact",
             "helixc/tests/test_proof_artifact_validate.py::test_require_clean_rejects_unproven_obligation",
             "helixc/tests/test_proof_artifact_validate.py::test_validate_accepts_unsupported_obligation_structurally",
