@@ -548,6 +548,59 @@ def test_stage34_numeric_bounds_carry_through_array_and_tuple_proofs():
     assert tuples == [], tuples
 
 
+def test_stage34_negated_comparison_refinements_are_supported():
+    ok = check("""
+    type NonNegative = f64 where !(self < 0.0);
+    fn f() -> i32 {
+        let x: NonNegative = 0.0_f64;
+        0
+    }
+    """)
+    assert ok == [], ok
+
+    bad = check("""
+    type NonNegative = f64 where !(self < 0.0);
+    fn f() -> i32 {
+        let x: NonNegative = -0.25_f64;
+        0
+    }
+    """)
+    assert not any("predicate !(self < 0.0) is not supported" in e
+                   for e in bad), bad
+    assert any("refinement NonNegative violated" in e for e in bad), bad
+
+
+def test_stage34_negated_comparison_bounds_carry_proofs():
+    lower = check("""
+    type NotBelowZero = f64 where !(self < 0.0);
+    type NonNegative = f64 where self >= 0.0;
+    fn lift(x: NotBelowZero) -> NonNegative {
+        x
+    }
+    """)
+    assert lower == [], lower
+
+    strict_lower = check("""
+    type AboveZero = f64 where !(self <= 0.0);
+    type Positive = f64 where self > 0.0;
+    fn lift(x: AboveZero) -> Positive {
+        x
+    }
+    """)
+    assert strict_lower == [], strict_lower
+
+    too_strict = check("""
+    type NonNegative = f64 where !(self < 0.0);
+    type Positive = f64 where self > 0.0;
+    fn lift(x: NonNegative) -> Positive {
+        x
+    }
+    """)
+    assert any("return value of function 'lift'" in e
+               and "could not prove self > 0.0" in e
+               for e in too_strict), too_strict
+
+
 def test_stage31_unsupported_refinement_predicates_do_not_carry_by_name():
     errs = check("""
     type Source = f64 where foo();

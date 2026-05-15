@@ -1012,8 +1012,8 @@ class TypeChecker:
                     f"supported by Stage 31",
                     w.span,
                     hint="use a boolean constant, a comparison chain over "
-                         "`self`, or combine supported predicates with "
-                         "`&&` / `||`",
+                         "`self`, negate a supported predicate with `!`, "
+                         "or combine supported predicates with `&&` / `||`",
                 ))
 
     def _is_numeric_refinement_base(self, ty: Type) -> bool:
@@ -1028,6 +1028,8 @@ class TypeChecker:
     def _refinement_predicate_shape_supported(self, expr: A.Expr) -> bool:
         if isinstance(expr, A.BoolLit):
             return True
+        if isinstance(expr, A.Unary) and expr.op == "!":
+            return self._refinement_predicate_shape_supported(expr.operand)
         if isinstance(expr, A.Binary) and expr.op in ("&&", "||"):
             return (self._refinement_predicate_shape_supported(expr.left)
                     and self._refinement_predicate_shape_supported(expr.right))
@@ -3259,6 +3261,8 @@ class TypeChecker:
     ) -> Optional[list[tuple[str, int | float, bool]]]:
         if isinstance(expr, A.BoolLit):
             return [] if expr.value else None
+        if isinstance(expr, A.Unary) and expr.op == "!":
+            return self._negated_refinement_predicate_bounds(expr.operand)
         if isinstance(expr, A.Binary) and expr.op == "&&":
             left = self._refinement_predicate_bounds(expr.left)
             right = self._refinement_predicate_bounds(expr.right)
@@ -3284,6 +3288,37 @@ class TypeChecker:
                 return None
             out.extend(bounds)
         return out
+
+    def _negated_refinement_predicate_bounds(
+        self, expr: A.Expr,
+    ) -> Optional[list[tuple[str, int | float, bool]]]:
+        if isinstance(expr, A.BoolLit):
+            return [] if not expr.value else None
+        if isinstance(expr, A.Unary) and expr.op == "!":
+            return self._refinement_predicate_bounds(expr.operand)
+        if isinstance(expr, A.Binary) and expr.op in ("&&", "||"):
+            return None
+        chain = self._flatten_relational_chain(expr)
+        if chain is None:
+            return None
+        ops, operands = chain
+        if len(ops) != 1:
+            return None
+        negated_op = self._negate_comparison_op(ops[0])
+        if negated_op is None:
+            return None
+        return self._refinement_binary_bounds(
+            operands[0], negated_op, operands[1])
+
+    def _negate_comparison_op(self, op: str) -> str | None:
+        return {
+            "<": ">=",
+            "<=": ">",
+            ">": "<=",
+            ">=": "<",
+            "==": "!=",
+            "!=": "==",
+        }.get(op)
 
     def _refinement_binary_bounds(
         self, left: A.Expr, op: str, right: A.Expr,
@@ -3389,6 +3424,11 @@ class TypeChecker:
     ) -> Optional[tuple[object, ...]]:
         if isinstance(expr, A.BoolLit):
             return ("bool", expr.value)
+        if isinstance(expr, A.Unary) and expr.op == "!":
+            operand = self._refinement_predicate_key(expr.operand)
+            if operand is None:
+                return None
+            return ("not", operand)
         if isinstance(expr, A.Binary) and expr.op in ("&&", "||"):
             left = self._refinement_predicate_key(expr.left)
             right = self._refinement_predicate_key(expr.right)
@@ -3818,6 +3858,11 @@ class TypeChecker:
     ) -> Optional[bool]:
         if isinstance(expr, A.BoolLit):
             return expr.value
+        if isinstance(expr, A.Unary) and expr.op == "!":
+            inner = self._eval_refinement_predicate(expr.operand, self_value)
+            if inner is None:
+                return None
+            return not inner
         if isinstance(expr, A.Binary) and expr.op in ("&&", "||"):
             left = self._eval_refinement_predicate(expr.left, self_value)
             right = self._eval_refinement_predicate(expr.right, self_value)

@@ -85,3 +85,17 @@ Recorded strategies:
 This keeps `obligations` focused on proof work that had to be checked at the
 assignment/call/return site, while still making accepted carried proofs visible
 in machine-readable output.
+
+## Increment 5 - Negated Comparison Predicates
+
+Refinement predicates now support boolean negation over supported predicates.
+The first proof-carry use is negated numeric comparisons.
+
+Examples now accepted:
+
+- `!(self < 0.0)` behaves as `self >= 0.0`
+- `!(self <= 0.0)` behaves as `self > 0.0`
+- `!(self > 1.0)` behaves as `self <= 1.0`
+- `!(self >= 1.0)` behaves as `self < 1.0`
+
+Strictness is preserved: `!(self < 0.0)` does not prove `self > 0.0`.
