@@ -257,6 +257,36 @@ fn sigmoid_layer(x_start: i32, y_start: i32, n: i32) -> i32 {
     0
 }
 
+fn softplus_layer(x_start: i32, y_start: i32, n: i32) -> i32 {
+    let mut i: i32 = 0;
+    while i < n {
+        let xi = __f32_from_bits(__arena_get(x_start + i));
+        __arena_set(y_start + i, __bits_of_f32(__softplus(xi)));
+        i = i + 1;
+    }
+    0
+}
+
+fn silu_layer(x_start: i32, y_start: i32, n: i32) -> i32 {
+    let mut i: i32 = 0;
+    while i < n {
+        let xi = __f32_from_bits(__arena_get(x_start + i));
+        __arena_set(y_start + i, __bits_of_f32(__silu(xi)));
+        i = i + 1;
+    }
+    0
+}
+
+fn gelu_layer(x_start: i32, y_start: i32, n: i32) -> i32 {
+    let mut i: i32 = 0;
+    while i < n {
+        let xi = __f32_from_bits(__arena_get(x_start + i));
+        __arena_set(y_start + i, __bits_of_f32(__gelu(xi)));
+        i = i + 1;
+    }
+    0
+}
+
 // Layer normalization over one f32 vector.
 // y[i] = (x[i] - mean(x)) / sqrt(variance(x) + eps)
 fn layer_norm_f32(x_start: i32, y_start: i32, n: i32, eps: f32) -> i32 {

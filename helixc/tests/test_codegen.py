@@ -9153,6 +9153,25 @@ def test_nn_layer_norm_f32_centers_and_scales():
     assert code == 42, f"expected 42, got {code}"
 
 
+def test_nn_modern_activation_layers():
+    """Softplus(20)=20, SiLU(31)=31, GELU(20)=20 in saturation regions."""
+    src = """
+    fn main() -> i32 {
+        let x = t1d_new(3);
+        tf1d_set(x, 0, 20.0_f32);
+        tf1d_set(x, 1, 31.0_f32);
+        tf1d_set(x, 2, 20.0_f32);
+        let y = t1d_new(3);
+        softplus_layer(x, y, 1);
+        silu_layer(x + 1, y + 1, 1);
+        gelu_layer(x + 2, y + 2, 1);
+        (tf1d_sum(y, 3) as i32) - 29
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
 def test_nn_dropout_f32_keep_prob_one_copies_input():
     """dropout keep_prob=1 copies input unchanged. [2,3] sum=5; *10-8=42."""
     src = """

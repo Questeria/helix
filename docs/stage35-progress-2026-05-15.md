@@ -64,6 +64,33 @@ Initial focused checks:
 - `python scripts\stage31_validate.py --mode quick --skip-snapshot`
   - Result: passed, `stage31-quick: rc=0`.
 
+## Neural-Network Cluster Verification
+
+After increments 2 through 6, the broader neural-network regression slice was:
+
+- `python -m pytest -q helixc\tests\test_codegen.py -k "nn_ or attention_softmax_f32" --tb=short`
+  - Result: 24 passed, 737 deselected.
+
+## Increment 7 - Modern f32 Activation Layers
+
+The Helix neural-network stdlib now includes vector layers for existing scalar
+modern activations:
+
+- `softplus_layer`
+- `silu_layer`
+- `gelu_layer`
+
+These matter because modern AI models often use smooth activations rather than
+plain ReLU alone. GELU and SiLU in particular are common in transformer-style
+networks.
+
+Focused verification:
+
+- `python -m pytest -q helixc\tests\test_codegen.py -k "modern_activation_layers or softplus or silu or gelu or sigmoid_layer or tanh_layer" --tb=short`
+  - Result: 2 passed, 760 deselected.
+- `python scripts\stage31_validate.py --mode quick --skip-snapshot`
+  - Result: passed, `stage31-quick: rc=0`.
+
 ## Increment 6 - f32 Dropout
 
 The Helix neural-network stdlib now includes:
