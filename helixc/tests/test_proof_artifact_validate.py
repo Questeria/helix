@@ -310,6 +310,34 @@ def test_validate_resolves_relative_artifact_path_from_artifact_dir(
     assert "source sha256 mismatch" in captured.err
 
 
+def test_require_clean_uses_embedded_relative_source_path(
+    capsys, monkeypatch, tmp_path,
+):
+    source_path = tmp_path / "input.hx"
+    source_path.write_text(
+        "type Probability = f64 where 0.0 <= self <= 1.0;\n"
+        "fn main() -> i32 { let p: Probability = 0.5_f64; 0 }\n",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+    rc = check_main(["input.hx", "--emit-proof-obligations", "--no-stdlib"])
+    captured = capsys.readouterr()
+    assert rc == 0, captured.out + captured.err
+    artifact = json.loads(captured.out)
+    assert artifact["path"] == "input.hx"
+
+    artifact_path = tmp_path / "artifact.json"
+    artifact_path.write_text(json.dumps(artifact), encoding="utf-8")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    monkeypatch.chdir(outside)
+
+    rc = proof_artifact_validate.main([str(artifact_path), "--require-clean"])
+    captured = capsys.readouterr()
+    assert rc == 0
+    assert captured.out.strip() == "proof-artifact-validate: ok"
+
+
 def test_validate_rejects_missing_embedded_source_path(capsys, tmp_path):
     _source_path, artifact_path, artifact = _real_artifact(capsys, tmp_path)
     artifact["path"] = "missing-source.hx"

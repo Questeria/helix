@@ -802,7 +802,7 @@ def main(argv: list[str] | None = None) -> int:
         errors.extend(clean_policy_errors(artifact))
         errors.extend(recomputed_clean_errors(
             artifact,
-            source_path=args.source,
+            source_path=metadata_source,
         ))
     if errors:
         for error in errors:

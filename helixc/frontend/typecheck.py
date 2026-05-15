@@ -3015,13 +3015,14 @@ class TypeChecker:
         span: A.Span, context: str, scope: Scope,
     ) -> None:
         source_base = self._const_eval_numeric_base(value_ty)
-        value = self._eval_const_scalar_expr(
-            value_expr, None, use_local_consts=True,
-            honor_float_suffix=True, numeric_base=source_base)
-        if value is None:
-            value = self._eval_raw_const_scalar_fallback(value_expr)
+        value, source_unrepresentable = (
+            self._eval_refinement_source_scalar(value_expr, source_base)
+        )
         target_base = self._erase_refinement(refined)
-        represented = self._cast_const_scalar_to_type(value, target_base)
+        represented = (
+            None if source_unrepresentable
+            else self._cast_const_scalar_to_type(value, target_base)
+        )
         if self._expr_uses_invalid_refined_return(value_expr):
             self._record_unproven_refinement_obligations(
                 context, refined, span)
@@ -3122,13 +3123,14 @@ class TypeChecker:
         span: A.Span, context: str, scope: Scope,
     ) -> bool:
         source_base = self._const_eval_numeric_base(src_ty)
-        value = self._eval_const_scalar_expr(
-            value_expr, None, use_local_consts=True,
-            honor_float_suffix=True, numeric_base=source_base)
-        if value is None:
-            value = self._eval_raw_const_scalar_fallback(value_expr)
+        value, source_unrepresentable = (
+            self._eval_refinement_source_scalar(value_expr, source_base)
+        )
         target_base = self._erase_refinement(refined)
-        converted = self._cast_const_scalar_to_type(value, target_base)
+        converted = (
+            None if source_unrepresentable
+            else self._cast_const_scalar_to_type(value, target_base)
+        )
         invalid_source = self._expr_uses_invalid_refined_return(value_expr)
         proved = True
         if converted is None:
@@ -3266,6 +3268,28 @@ class TypeChecker:
                 or ty.name == "bool"):
             return TyPrim(ty.name)
         return None
+
+    def _eval_refinement_source_scalar(
+        self, expr: A.Expr, source_base: Type | None,
+    ) -> tuple[int | float | bool | None, bool]:
+        value = self._eval_const_scalar_expr(
+            expr, None, use_local_consts=True,
+            honor_float_suffix=True, numeric_base=source_base)
+        if value is not None:
+            return value, False
+
+        raw_value = self._eval_raw_const_scalar_fallback(expr)
+        if raw_value is None:
+            return None, False
+
+        if source_base is None:
+            return raw_value, False
+
+        source_represented = self._cast_const_scalar_to_type(
+            raw_value, source_base)
+        if source_represented is None:
+            return raw_value, True
+        return None, False
 
     def _infer_const_expr_numeric_base(self, expr: A.Expr) -> Type | None:
         if isinstance(expr, A.IntLit):

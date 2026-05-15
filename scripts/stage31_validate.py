@@ -377,6 +377,7 @@ def quick(py: str) -> int:
             "helixc/tests/test_proof_artifact_validate.py::test_validate_rejects_malformed_diagnostic_sections",
             "helixc/tests/test_proof_artifact_validate.py::test_validate_rejects_missing_embedded_source_path",
             "helixc/tests/test_proof_artifact_validate.py::test_validate_resolves_relative_artifact_path_from_artifact_dir",
+            "helixc/tests/test_proof_artifact_validate.py::test_require_clean_uses_embedded_relative_source_path",
             "helixc/tests/test_proof_artifact_validate.py::test_validate_rejects_cache_key_mismatch",
             "helixc/tests/test_proof_artifact_validate.py::test_validate_rejects_forged_artifact_path_with_source_by_default",
             "helixc/tests/test_proof_artifact_validate.py::test_validate_rejects_null_artifact_path_with_source_by_default",
