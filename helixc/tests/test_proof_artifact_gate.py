@@ -770,8 +770,9 @@ def test_gate_returns_bad_invocation_for_missing_source(capsys, tmp_path):
 
     captured = capsys.readouterr()
     assert rc == 2
-    assert "input.source_sha256 is required for --require-clean" in captured.err
-    assert "compiler exited 2" in captured.err
+    assert "pipeline_errors must be empty when input.source_sha256 is null" in (
+        captured.err
+    )
     artifact = json.loads(artifact_path.read_text(encoding="utf-8"))
     assert artifact["input"]["source_sha256"] is None
     assert artifact["cache_key"] is None

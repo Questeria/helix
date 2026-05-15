@@ -764,3 +764,34 @@ Verification after this fix set:
   pass across all 12 shards with no retries
 
 The clean-gate counter remains reset to `0/3`.
+
+## Clean Gate 1 Eighteenth Restart - Failed; Fix Verified; Counter Reset
+
+Fresh clean-gate auditors on commit `2d91f4e` found one more validator trust
+issue:
+
+- Source-unavailable artifacts could still carry forged `warning_diagnostics`,
+  and their `input.flags` could be duplicated or non-canonical even though real
+  artifacts emit sorted and deduplicated flags.
+
+A proof-soundness auditor did not find a new scalar/refinement false-clean in
+its temp repro matrix, but it did catch quick-gate assertions that needed to be
+updated after the stricter validator behavior.
+
+The fix requires proof replay flags to match the compiler's canonical metadata
+form and rejects `pipeline_errors` plus `warning_diagnostics` when
+`input.source_sha256` is null. Tests now expect these stricter structural
+failures.
+
+Verification after this fix set:
+
+- Focused latest-reset regressions: `4 passed`
+- `python -m pytest -q helixc/tests/test_proof_artifact_validate.py helixc/tests/test_proof_artifact_gate.py`:
+  `74 passed`
+- `python scripts\stage31_validate.py --mode quick`: pass
+- `python scripts\stage31_validate.py --mode full --skip-snapshot --shards 8`:
+  pass after built-in retry recovered no-codegen shard 1
+- `python -m pytest -q helixc/tests/test_strings_io.py::test_print_str_writes_to_stdout`:
+  pass after inspecting the recovered shard's transient failure
+
+The clean-gate counter remains reset to `0/3`.

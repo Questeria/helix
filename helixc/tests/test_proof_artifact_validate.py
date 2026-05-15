@@ -524,7 +524,7 @@ def test_validate_rejects_forged_input_and_cache_with_source_by_default(
     capsys, tmp_path,
 ):
     source_path, artifact_path, artifact = _real_artifact(capsys, tmp_path)
-    artifact["input"]["flags"].append("--emit-proof-obligations")
+    artifact["input"]["source_available"] = False
     artifact["cache_key"] = proof_cache_key(artifact["input"])
     artifact_path.write_text(json.dumps(artifact), encoding="utf-8")
 
@@ -848,6 +848,30 @@ def test_validate_source_unavailable_rejects_impossible_input_metadata(
     assert "input.warnings['deprecated'] must be one of" in err
     assert "input.warnings contains unknown warning name: evil" in err
 
+    rc, err = run_case(
+        "duplicate-flags.json",
+        lambda artifact: artifact["input"].__setitem__(
+            "flags",
+            [
+                "--emit-proof-obligations",
+                "--emit-proof-obligations",
+                "--no-stdlib",
+            ],
+        ),
+    )
+    assert rc == 1
+    assert "input.flags must be sorted and deduplicated" in err
+
+    rc, err = run_case(
+        "reversed-flags.json",
+        lambda artifact: artifact["input"].__setitem__(
+            "flags",
+            ["--no-stdlib", "--emit-proof-obligations"],
+        ),
+    )
+    assert rc == 1
+    assert "input.flags must be sorted and deduplicated" in err
+
     def fake_stdlib(artifact):
         files = [{"path": "stdlib-forgery.hx", "sha256": "a" * 64, "bytes": 12}]
         artifact["input"].update({
@@ -927,9 +951,9 @@ def test_validate_source_unavailable_rejects_proof_content(capsys, tmp_path):
         "summary": {
             "obligations": 1,
             "proof_carries": 1,
-            "pipeline_errors": 0,
+            "pipeline_errors": 1,
             "typecheck_errors": 1,
-            "warning_diagnostics": 0,
+            "warning_diagnostics": 1,
             "warning_errors": 0,
             "proof_carry_strategies": {"same-refinement": 1},
         },
@@ -949,9 +973,14 @@ def test_validate_source_unavailable_rejects_proof_content(capsys, tmp_path):
             "strategy": "same-refinement",
             "span": {"line": 1, "col": 1},
         }],
-        "pipeline_errors": [],
+        "pipeline_errors": [{"phase": "forged", "message": "fake pipeline error"}],
         "typecheck_errors": ["fake typecheck error"],
-        "warning_diagnostics": [],
+        "warning_diagnostics": [{
+            "kind": "forged",
+            "policy": "warn",
+            "message": "fake warning",
+            "promoted_to_error": False,
+        }],
     }
     artifact_path = tmp_path / "artifact.json"
     artifact_path.write_text(json.dumps(artifact), encoding="utf-8")
@@ -961,6 +990,8 @@ def test_validate_source_unavailable_rejects_proof_content(capsys, tmp_path):
     assert "obligations must be empty" in captured.err
     assert "proof_carries must be empty" in captured.err
     assert "typecheck_errors must be empty" in captured.err
+    assert "pipeline_errors must be empty" in captured.err
+    assert "warning_diagnostics must be empty" in captured.err
 
 
 def test_require_clean_rejects_source_unavailable_artifact(capsys, tmp_path):

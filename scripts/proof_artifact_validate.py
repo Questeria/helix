@@ -183,6 +183,9 @@ def _validate_proof_replay_flags(
     errors: list[str],
 ) -> None:
     flag_set = set(flags)
+    canonical = sorted(flag_set)
+    if flags != canonical:
+        errors.append("input.flags must be sorted and deduplicated")
     disallowed = sorted(flag_set - PROOF_REPLAY_FLAGS)
     if disallowed:
         errors.append(
@@ -490,6 +493,14 @@ def validate_artifact(
         if lists["typecheck_errors"]:
             errors.append(
                 "typecheck_errors must be empty when input.source_sha256 is null"
+            )
+        if lists["pipeline_errors"]:
+            errors.append(
+                "pipeline_errors must be empty when input.source_sha256 is null"
+            )
+        if lists["warning_diagnostics"]:
+            errors.append(
+                "warning_diagnostics must be empty when input.source_sha256 is null"
             )
 
     source_to_check = source_path
