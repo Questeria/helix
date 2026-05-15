@@ -2122,6 +2122,13 @@ class Lowerer:
                                          result_ty=tir.TIRScalar("f32"),
                                          attrs={"value_kind": "f32"})
             if (isinstance(expr.callee, A.Name)
+                    and expr.callee.name == "splice_f64"
+                    and len(expr.args) == 1):
+                handle = self._lower_expr(expr.args[0]) or self.builder.const_int(0)
+                return self.builder.emit(tir.OpKind.SPLICE, handle,
+                                         result_ty=tir.TIRScalar("f64"),
+                                         attrs={"value_kind": "f64"})
+            if (isinstance(expr.callee, A.Name)
                     and expr.callee.name == "modify_f"
                     and len(expr.args) == 3):
                 target_v = self._lower_expr(expr.args[0]) or self.builder.const_int(0)
@@ -2142,6 +2149,30 @@ class Lowerer:
                 # No matching verifier — fallback to runtime-value form.
                 # Drop the f32 hint so the backend doesn't emit movss from an
                 # operand slot whose actual type wasn't validated as float.
+                attrs.pop("value_kind", None)
+                vrt = self._lower_expr(v_arg) or self.builder.const_int(0)
+                return self.builder.emit(tir.OpKind.MODIFY,
+                                         target_v, xform_v, vrt,
+                                         result_ty=tir.TIRScalar("i32"),
+                                         attrs=attrs)
+            if (isinstance(expr.callee, A.Name)
+                    and expr.callee.name == "modify_f64"
+                    and len(expr.args) == 3):
+                target_v = self._lower_expr(expr.args[0]) or self.builder.const_int(0)
+                xform_v = self._lower_expr(expr.args[1]) or self.builder.const_int(0)
+                attrs: dict[str, object] = {"value_kind": "f64"}
+                v_arg = expr.args[2]
+                if (isinstance(v_arg, A.Name)
+                        and v_arg.name in self.functions
+                        and self._lookup(v_arg.name) is None
+                        and self._lookup_mut(v_arg.name) is None
+                        and self._verifier_abi_matches_f64(v_arg.name)):
+                    attrs["verifier_fn"] = v_arg.name
+                    placeholder = self.builder.const_int(0)
+                    return self.builder.emit(tir.OpKind.MODIFY,
+                                             target_v, xform_v, placeholder,
+                                             result_ty=tir.TIRScalar("i32"),
+                                             attrs=attrs)
                 attrs.pop("value_kind", None)
                 vrt = self._lower_expr(v_arg) or self.builder.const_int(0)
                 return self.builder.emit(tir.OpKind.MODIFY,
@@ -3109,6 +3140,26 @@ class Lowerer:
             raise ValueError(
                 f"verifier function {fn_name!r} has parameters (i32, f32) "
                 f"but returns {ir_fn.return_ty!r} — verifiers must return "
+                f"i32 or bool"
+            )
+        return True
+
+    def _verifier_abi_matches_f64(self, fn_name: str) -> bool:
+        """A modify_f64 verifier takes (handle: i32, val: f64) and returns
+        i32/bool. System V passes the f64 in xmm0 and the int in edi."""
+        ir_fn = self.functions.get(fn_name)
+        if ir_fn is None or len(ir_fn.params) != 2:
+            return False
+        p0, p1 = ir_fn.params
+        if not (isinstance(p0.ty, tir.TIRScalar) and p0.ty.name == "i32"):
+            return False
+        if not (isinstance(p1.ty, tir.TIRScalar) and p1.ty.name == "f64"):
+            return False
+        if not (isinstance(ir_fn.return_ty, tir.TIRScalar)
+                and ir_fn.return_ty.name in ("i32", "bool")):
+            raise ValueError(
+                f"verifier function {fn_name!r} has parameters (i32, f64) "
+                f"but returns {ir_fn.return_ty!r} - verifiers must return "
                 f"i32 or bool"
             )
         return True

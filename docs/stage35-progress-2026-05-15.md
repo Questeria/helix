@@ -620,6 +620,61 @@ Clean-gate status:
 - Stage 35 clean gates remain `0/3`.
 - Next step is another fresh Stage 35 clean gate on this fixed commit.
 
+## Increment 24 - Fifth Clean-Gate Restart Fix Sweep
+
+The next fresh Stage 35 audit restart found real AD/runtime, PTX/autotune, and
+documentation issues, so the gate did not count as clean and remains at `0/3`.
+
+Fixes landed in this increment:
+
+- Added explicit f64 reflection support with `splice_f64`, `modify_f64`, and
+  `__always_accept_f64`; `grad_rev_all` now writes f64 gradients through the
+  f64 cell path instead of corrupting them through `modify_f`.
+- Hardened the Helix reverse-AD tape runtime so operation constructors reject
+  invalid operand indices and `rev_backward` fails closed on corrupt tape
+  operands instead of writing before the adjoint array.
+- Clamped scalar CE probabilities to the same safe open interval used by BCE,
+  preventing negative loss for probability values above 1.
+- Made `softmax_layer` reject negative lengths without touching output cells,
+  and made `tf1d_max` return 0 for non-positive lengths.
+- Brought the standalone PTX CLI closer to `helixc.check --emit-ptx` parity by
+  running module flattening, impl flattening, struct monomorphization, and
+  function monomorphization before typecheck/lowering.
+- `@autotune` duplicate keys now fail closed instead of overwriting earlier
+  values.
+- Public docs now identify Stage 35 as the active stage, remove the old
+  zero-gradient opaque-call claim, and state the current x86_64 f64/PTX limits
+  accurately.
+
+Focused verification:
+
+- `python -m pytest -q helixc\tests\test_codegen.py -k "grad_rev_all_writes_f64_gradient_to_f64_cell or revad_ops_reject_invalid_operand_index_without_push or revad_backward_rejects_corrupt_operand_index or nn_ce_loss_clamps_probability_above_one or nn_softmax_layer_rejects_negative_length_without_write" --tb=short`
+  - Result: 5 passed.
+- `python -m pytest -q helixc\tests\test_autotune.py -k "duplicate_key or validate_autotune_surfaces_parse_diags or validate_autotune_prog_collects_diags" --tb=short`
+  - Result: 3 passed.
+- `python -m pytest -q helixc\tests\test_ptx.py -k "stage35_direct_ptx_cli_flattens_module_kernel or stage35_direct_ptx_cli_rejects_duplicate_autotune_key or stage35_direct_ptx_cli_rejects_unwind_attr or stage35_direct_ptx_cli_folds_kernel_before_tile_lowering" --tb=short`
+  - Result: 4 passed.
+- `python -m pytest -q helixc\tests\test_codegen.py -k "nn_ or stage35 or softmax or ce_loss or dense_classifier_sgd_step_f32 or adam_f32_step or builtin_adam_step or revad_ or grad_rev_all_writes_f64_gradient_to_f64_cell or builtin_bce_uses_stable_log_near_zero or builtin_bce_and_nn_bce_are_stable_near_one" --tb=short`
+  - Result: 75 passed.
+- `python -m pytest -q helixc\tests\test_ptx.py helixc\tests\test_tile_ir.py helixc\tests\test_autotune.py helixc\tests\test_cli.py -k "emit_ptx or ptx or tile_ir or autotune or unwind or unsafe or trace or stage35" --tb=short`
+  - Result: 108 passed.
+- `python -m pytest -q helixc\tests\test_autodiff.py helixc\tests\test_autodiff_reverse.py helixc\tests\test_pytree.py --tb=short`
+  - Result: 90 passed.
+- `python -m pytest -q helixc\tests\test_codegen.py -k "stage13 or grad_rejects_opaque_call_in_loss or grad_rev_rejects_opaque_call_in_loss or grad_pass_preserves_f64_gradient_signature or grad_rev_all or grad_rev or grad_rejects_aggregate_param or scalar_target_when_sibling_aggregate" --tb=short`
+  - Result: 22 passed.
+- `python scripts\stage31_validate.py --mode quick --skip-snapshot`
+  - Result: passed, `stage31-quick: rc=0`.
+- `git diff --check`
+  - Result: passed.
+- Stage/docs stale-claim scan for Stage 28.9/Stage 30/old gradient/PTX/f64
+  claims
+  - Result: no matches.
+
+Clean-gate status:
+
+- Stage 35 clean gates remain `0/3`.
+- Next step is another fresh Stage 35 clean gate on this fixed commit.
+
 ## Increment 23 - Fourth Clean-Gate Restart Fix Sweep
 
 The next fresh Stage 35 audit restart again found real code and documentation

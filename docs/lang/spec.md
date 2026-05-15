@@ -3,7 +3,7 @@
 **Status**: living draft — updated as the implementation teaches us.
 **Date**: 2026-05-03
 
-Helix is a from-scratch programming language for AGI development and high-certainty computing. Kovostov is its first flagship system, but Helix is meant for any project that needs auditable, reproducible, uncertainty-aware software: AI/AGI, scientific research, medicine, genomics, physics, mathematics, robotics, infrastructure, and other domains where software should reason from evidence rather than hide assumptions. Designed to be (a) AI-author-friendly, (b) tile/tensor-native for GPU kernels, (c) compile cleanly to x86-64 and NVIDIA PTX without LLVM, (d) shape-typed with optional refinements.
+Helix is a from-scratch programming language for AGI development and high-certainty computing. Kovostov is its first flagship system, but Helix is meant for any project that needs auditable, reproducible, uncertainty-aware software: AI/AGI, scientific research, medicine, genomics, physics, mathematics, robotics, infrastructure, and other domains where software should reason from evidence rather than hide assumptions. Designed to be (a) AI-author-friendly, (b) tile/tensor-native for GPU kernels, (c) compile cleanly to x86-64 and an early Phase-0 NVIDIA PTX subset without LLVM, (d) shape-typed with optional refinements.
 
 ## Design principles (in priority order)
 
@@ -372,14 +372,14 @@ These intentionally-deferred items shape the bootstrap path:
 7. **3+-segment paths.** `crate::EnumName::Variant` is supported as a Phase-0 alias for `EnumName::Variant`. Other 3+-segment paths (e.g. `module::sub::Variant`) raise `NotImplementedError` at lowering rather than silently lowering to const_int(0). v0.1 has no module system.
 8. **`@total` is conservative.** Recognizes `f(p - k)` and `f(p / k>=2)` but not Collatz-style or accumulator-based decrease. Use `@partial` for those.
 9. **Inline enum-with-payload return value DOES work** (audit-7 cycle), but enum returns from fns of recursive-enum type fall back to the index encoding — preserved across calls correctly via the multi-slot ABI.
-10. **Float types beyond f32.** `f64`, `f16`, `bf16` in scalar position raise `NotImplementedError` at lowering — the x86_64 backend uses movss (4 bytes) for all SSE float ops. Phase-0 PTX currently accepts only 1D HBM `tile<f32, ...>` and `tile<i32, ...>` kernel parameters; `tile<bf16, ...>`, SMEM, and REG kernel examples are design targets, not current public backend support.
+10. **Float coverage.** Scalar `f32` and `f64` are supported on the x86_64 path used by Stage 35 AD and FFI work. Scalar `f16`, `bf16`, and `fp8` remain future targets. Phase-0 PTX currently accepts only 1D HBM `tile<f32, ...>` and `tile<i32, ...>` kernel parameters; `tile<bf16, ...>`, SMEM, and REG kernel examples are design targets, not current public backend support.
 11. **Generic type params lower to i32-sized ABI.** `fn id[T](x: T) -> T { x }` works for i32 type args; calls with i64/f32/struct args silently truncate. Callers should specialize manually until v0.2 monomorphization ships.
 
 ### Bugs fixed in 2026-05-04 deep-research cycle (8 fixes; 510 → 576 tests)
 
 - **read_file_to_arena disp8 sign-extension**: `sub rsp, 128` with disp8 sign-extends 0x80 to -128, so it added 128 to rsp instead of subtracting. Fixed via `BUF_SIZE = 0x40` (fits signed disp8 cleanly).
 - **Reverse-mode AD through match**: `autodiff_reverse` returned 0 for any function containing a Match. Now propagates per-arm contributions and wraps them as a Match with the same scrutinee.
-- **f64/f16/bf16 scalar use silently truncated**: scalar usage now raises `NotImplementedError` at lowering with a clear message.
+- **f64/f16/bf16 scalar use silently truncated**: this cycle first hardened the compiler to fail instead of truncating. Later Stage 35 work enabled x86_64 scalar `f64`; `f16` and `bf16` still fail closed until their backends are implemented.
 - **`let mut x` shadowing**: inner `let mut x` shared the outer's stack slot; codegen's name→slot table aliased them. Lowerer now mangles shadowed IR names (`x`, `x__1`, `x__2`).
 - **Const-fold integer wraparound**: `INT_MAX + 1` folded to 2147483648 in Python (no wrap), breaking comparisons. Fix wraps every fold result to the target type's signed range so optimized + unoptimized builds agree.
 - **`@effect(io)` parser**: parser dropped the `(io)` argument; typecheck couldn't tell which effects a function declared. Now records `effect:io`, `effect:rng` etc.

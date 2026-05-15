@@ -1,6 +1,6 @@
 # Helix v1 Final Features — Compiler-Level Design
 
-**Status**: Design doc — implementation queued for Stages 31+ after Stage 28.9-30 (bootstrap completion) lands.
+**Status**: Design doc and forward roadmap. Stages 31-34 have landed; Stage 35 (AI/ML Capability Push) is in audit cleanup as of 2026-05-15.
 
 **User directive (2026-05-11)**: "Anything that should be in Helix or is better in Helix do it for Helix compilation. Also do research on what other features like these we should add for the final Helix."
 
@@ -411,11 +411,10 @@ For modular AGI architecture composition.
 
 ```
 CURRENT (May 2026):
-  Stage 28.9 — bootstrap port (audit cycles 51+)
-  Stage 28.10-28.13 — port remaining frontend passes
-  Stage 29 — byte-identical self-hosting verification
-  Stage 30 — 5 clean audits on self-host alone
-  → v0.1 RELEASE (self-hosting Helix as it is today)
+  Stage 35 — AI/ML Capability Push
+  Clean-gate status — 0/3 clean Stage 35 audit gates after the latest
+                      restart findings; see docs/stage35-progress-2026-05-15.md.
+  Stage 36 — Strategic AGI features follows after Stage 35 closes.
 
 PHASE 1 (Stages 31-37, written in Python helixc → ported through bootstrap):
   Stage 31 — Refinement types + SMT bridge (foundation for everything else)
@@ -472,7 +471,7 @@ PHASE 3 (Stages 47+, written IN HELIX):
 
 1. **Every feature must justify itself by which AGI outcome it enables.** Same as Locus's design principle. No bloat.
 
-2. **Layer 0 features have to survive the audit-driven 5-clean criterion** for each stage, same as Stage 28.9. No shortcuts.
+2. **Layer 0 features have to survive the audit-driven clean-gate criterion** for each stage. Current Stage 35 closeout uses 3 clean gates. No shortcuts.
 
 3. **Layer 1+ in Helix-itself, not Python.** Once self-hosting, the language must extend itself. If we write `Knowledge<T>` in Python helixc, we've defeated the self-hosting goal.
 
@@ -490,11 +489,11 @@ PHASE 3 (Stages 47+, written IN HELIX):
 
 ## Status
 
-**Active**: Stage 28.9 audit cycles 51+ (this document drafted at cycle 53 fix-sweep, heavy gate green at 1514/1/0).
+**Active**: Stage 35 — AI/ML Capability Push audit cleanup.
 
-**Next major milestone**: Stage 30 — 5 clean audits on self-host alone → v0.1 release.
+**Next major milestone**: Stage 35 closeout after 3 clean gates, then Stage 36 — Strategic AGI features.
 
-**Then**: Stage 31 — Refinement types (Phase 1 begins).
+**Then**: Stage 37+ sequencing for continuous execution, tiered memory, theorem-prover integration, and the longer v1 roadmap.
 
 ---
 

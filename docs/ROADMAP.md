@@ -5,7 +5,7 @@ deep-research passes (2026-05-04). It's a forward-looking plan; not
 everything here will land, and priorities will shift as dogfooding
 reveals which features actually matter.
 
-## Current state (350 tests passing)
+## Current state (Stage 35 audit cleanup, 2026-05-15)
 
 - Working from-scratch x86-64 ELF compiler
 - Forward + reverse-mode symbolic AD with chain rules for __exp, __log,
@@ -13,9 +13,10 @@ reveals which features actually matter.
 - IR-level effect/capability enforcement
 - Verifier-gated reflection runtime (64 mutable cells, real verifier
   function calls with SysV ABI)
-- f32 reflection cells (splice_f / modify_f)
+- f32/f64 reflection cells (splice_f / splice_f64 / modify_f / modify_f64)
 - 4 dogfood programs running real gradient descent
 - Stdlib for transcendentals auto-included
+- Stage 35 clean-gate status is tracked in docs/stage35-progress-2026-05-15.md
 
 ## Tier 1 — must-have next (do first)
 
@@ -24,11 +25,11 @@ These are blockers for any real ML training, in priority order.
 1. **Transcendentals** ✅ DONE — Taylor series approximations for
    exp/log/sin/cos/sqrt + their AD chain rules. Stdlib auto-included.
 
-2. **AD across user-defined function calls.** `grad_rev(loss)` where
-   `loss` calls helper functions currently treats those calls as
-   opaque (gradient = 0). Need to inline at AD time, or chain-rule
-   through call ops by analytically differentiating the callee. **3-4
-   weeks.** Without this every loss must be one big inlined function.
+2. **AD across user-defined function calls.** `grad(loss)` and
+   `grad_rev(loss)` inline supported pure helper calls before
+   differentiation. Opaque/bodyless calls now fail closed instead of
+   producing a zero-gradient surrogate. Remaining work is broader
+   chain-rule registration and richer helper coverage. **In progress.**
 
 3. **Multi-output reverse-mode AD.** Currently `grad_rev(f, n)` runs a
    separate AD pass per parameter index. For real models with thousands

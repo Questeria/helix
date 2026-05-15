@@ -420,7 +420,7 @@ fn ti1d_mul_scalar(x_start: i32, scalar: i32, y_start: i32, n: i32) -> i32 {
 }
 
 @pure fn tf1d_max(start: i32, n: i32) -> f32 {
-    if n == 0 { 0.0_f32 }
+    if n <= 0 { 0.0_f32 }
     else {
         let mut best = __f32_from_bits(__arena_get(start));
         let mut i: i32 = 1;

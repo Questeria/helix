@@ -385,6 +385,29 @@ def test_stage35_direct_ptx_cli_folds_kernel_before_tile_lowering():
     assert "elem.div" not in proc.stderr
 
 
+def test_stage35_direct_ptx_cli_flattens_module_kernel():
+    src = """
+    mod m {
+        @kernel fn k() { let i = thread_idx(); }
+    }
+    """
+    proc = run_ptx_cli(src)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert ".visible .entry m__k" in proc.stdout
+
+
+def test_stage35_direct_ptx_cli_rejects_duplicate_autotune_key():
+    src = """
+    @kernel
+    @autotune(A: [1], A: [2])
+    fn k() { let i = thread_idx(); }
+    """
+    proc = run_ptx_cli(src)
+    assert proc.returncode != 0, proc.stdout + proc.stderr
+    assert "duplicate parameter" in proc.stderr
+    assert ".visible .entry" not in proc.stdout
+
+
 def test_c119_direct_ptx_cli_rejects_unsupported_hbm_float_dtype():
     src = """
     @kernel fn k(a: tile<f16, [256], HBM>) {

@@ -212,6 +212,27 @@ def test_parse_autotune_diagnostic_on_no_equals():
     assert any("no `=`" in d for d in diags)
 
 
+def test_parse_autotune_diagnostic_on_duplicate_key():
+    span = A.Span(0, 0)
+    fn = A.FnDecl(
+        span=span, name="k", generics=[], params=[],
+        return_ty=A.TyName(span=span, name="i32"),
+        where_clauses=[],
+        body=A.Block(span=span, stmts=[],
+                     final_expr=A.IntLit(span=span, value=0,
+                                         type_suffix=None)),
+        attrs=[
+            "kernel", "autotune",
+            "autotune:BS=16,32",
+            "autotune:BS=64",
+        ],
+        is_pub=False,
+    )
+    params, diags = parse_autotune_attrs(fn)
+    assert params == {"BS": [16, 32]}
+    assert any("duplicate parameter" in d for d in diags)
+
+
 def test_autotune_variants_dedups():
     """Audit 28.8 A12: `@autotune(X: [1, 1, 2])` should generate
     2 variants, not 3, so duplicate-named variants don't collide."""

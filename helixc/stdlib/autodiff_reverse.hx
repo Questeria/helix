@@ -63,18 +63,28 @@ fn rev_tape_new(cap: i32) -> i32 {
 @pure fn rev_cap(tape: i32) -> i32 { __arena_get(tape + 1) }
 
 @pure
+fn rev_valid_index(tape: i32, idx: i32) -> i32 {
+    let cnt = __arena_get(tape);
+    if idx < 0 { 0 }
+    else { if idx >= cnt { 0 } else { 1 } }
+}
+
+@pure
 fn rev_kind_at(tape: i32, idx: i32) -> i32 {
-    __arena_get(tape + 3 + idx * 4)
+    if rev_valid_index(tape, idx) == 0 { 0 - 1 }
+    else { __arena_get(tape + 3 + idx * 4) }
 }
 
 @pure
 fn rev_in1_at(tape: i32, idx: i32) -> i32 {
-    __arena_get(tape + 3 + idx * 4 + 1)
+    if rev_valid_index(tape, idx) == 0 { 0 - 1 }
+    else { __arena_get(tape + 3 + idx * 4 + 1) }
 }
 
 @pure
 fn rev_in2_at(tape: i32, idx: i32) -> i32 {
-    __arena_get(tape + 3 + idx * 4 + 2)
+    if rev_valid_index(tape, idx) == 0 { 0 - 1 }
+    else { __arena_get(tape + 3 + idx * 4 + 2) }
 }
 
 @pure
@@ -108,31 +118,47 @@ fn rev_leaf(tape: i32, value: i32) -> i32 {
 }
 
 fn rev_add(tape: i32, ai: i32, bi: i32) -> i32 {
-    let av = rev_value_at(tape, ai);
-    let bv = rev_value_at(tape, bi);
-    rev_push(tape, rev_kind_add(), ai, bi, av + bv)
+    if rev_valid_index(tape, ai) == 0 { 0 - 1 }
+    else { if rev_valid_index(tape, bi) == 0 { 0 - 1 }
+    else {
+        let av = rev_value_at(tape, ai);
+        let bv = rev_value_at(tape, bi);
+        rev_push(tape, rev_kind_add(), ai, bi, av + bv)
+    }}
 }
 
 fn rev_sub(tape: i32, ai: i32, bi: i32) -> i32 {
-    let av = rev_value_at(tape, ai);
-    let bv = rev_value_at(tape, bi);
-    rev_push(tape, rev_kind_sub(), ai, bi, av - bv)
+    if rev_valid_index(tape, ai) == 0 { 0 - 1 }
+    else { if rev_valid_index(tape, bi) == 0 { 0 - 1 }
+    else {
+        let av = rev_value_at(tape, ai);
+        let bv = rev_value_at(tape, bi);
+        rev_push(tape, rev_kind_sub(), ai, bi, av - bv)
+    }}
 }
 
 fn rev_mul(tape: i32, ai: i32, bi: i32) -> i32 {
-    let av = rev_value_at(tape, ai);
-    let bv = rev_value_at(tape, bi);
-    rev_push(tape, rev_kind_mul(), ai, bi, av * bv)
+    if rev_valid_index(tape, ai) == 0 { 0 - 1 }
+    else { if rev_valid_index(tape, bi) == 0 { 0 - 1 }
+    else {
+        let av = rev_value_at(tape, ai);
+        let bv = rev_value_at(tape, bi);
+        rev_push(tape, rev_kind_mul(), ai, bi, av * bv)
+    }}
 }
 
 fn rev_neg(tape: i32, ai: i32) -> i32 {
-    let av = rev_value_at(tape, ai);
-    rev_push(tape, rev_kind_neg(), ai, 0 - 1, 0 - av)
+    if rev_valid_index(tape, ai) == 0 { 0 - 1 }
+    else {
+        let av = rev_value_at(tape, ai);
+        rev_push(tape, rev_kind_neg(), ai, 0 - 1, 0 - av)
+    }
 }
 
 @pure
 fn rev_value_at(tape: i32, idx: i32) -> i32 {
-    __arena_get(tape + 3 + idx * 4 + 3)
+    if rev_valid_index(tape, idx) == 0 { 0 }
+    else { __arena_get(tape + 3 + idx * 4 + 3) }
 }
 
 fn rev_alloc_adjoints(tape: i32) -> i32 {
@@ -167,31 +193,49 @@ fn rev_grad(adj_start: i32, idx: i32) -> i32 {
 fn rev_backward(tape: i32, adj_start: i32) -> i32 {
     let cnt = __arena_get(tape);
     let mut i: i32 = cnt - 1;
+    let mut status: i32 = 0;
     while i >= 0 {
-        let off = tape + 3 + i * 4;
-        let kind = __arena_get(off);
-        let in1 = __arena_get(off + 1);
-        let in2 = __arena_get(off + 2);
-        let adj_i = __arena_get(adj_start + i);
-        if kind == 1 {
-            // add
-            __arena_set(adj_start + in1, __arena_get(adj_start + in1) + adj_i);
-            __arena_set(adj_start + in2, __arena_get(adj_start + in2) + adj_i);
-        } else { if kind == 2 {
-            // sub
-            __arena_set(adj_start + in1, __arena_get(adj_start + in1) + adj_i);
-            __arena_set(adj_start + in2, __arena_get(adj_start + in2) - adj_i);
-        } else { if kind == 3 {
-            // mul: adj[a] += adj[i]*v(b); adj[b] += adj[i]*v(a)
-            let v_a = rev_value_at(tape, in1);
-            let v_b = rev_value_at(tape, in2);
-            __arena_set(adj_start + in1, __arena_get(adj_start + in1) + adj_i * v_b);
-            __arena_set(adj_start + in2, __arena_get(adj_start + in2) + adj_i * v_a);
-        } else { if kind == 4 {
-            // neg: adj[a] -= adj[i]
-            __arena_set(adj_start + in1, __arena_get(adj_start + in1) - adj_i);
-        }}}};
+        if status == 0 {
+            let off = tape + 3 + i * 4;
+            let kind = __arena_get(off);
+            let in1 = __arena_get(off + 1);
+            let in2 = __arena_get(off + 2);
+            let adj_i = __arena_get(adj_start + i);
+            if kind == 0 {
+                status = 0;
+            } else { if kind == 1 {
+                if rev_valid_index(tape, in1) == 0 { status = 0 - 1; }
+                else { if rev_valid_index(tape, in2) == 0 { status = 0 - 1; }
+                else {
+                    __arena_set(adj_start + in1, __arena_get(adj_start + in1) + adj_i);
+                    __arena_set(adj_start + in2, __arena_get(adj_start + in2) + adj_i);
+                }}
+            } else { if kind == 2 {
+                if rev_valid_index(tape, in1) == 0 { status = 0 - 1; }
+                else { if rev_valid_index(tape, in2) == 0 { status = 0 - 1; }
+                else {
+                    __arena_set(adj_start + in1, __arena_get(adj_start + in1) + adj_i);
+                    __arena_set(adj_start + in2, __arena_get(adj_start + in2) - adj_i);
+                }}
+            } else { if kind == 3 {
+                if rev_valid_index(tape, in1) == 0 { status = 0 - 1; }
+                else { if rev_valid_index(tape, in2) == 0 { status = 0 - 1; }
+                else {
+                    let v_a = rev_value_at(tape, in1);
+                    let v_b = rev_value_at(tape, in2);
+                    __arena_set(adj_start + in1, __arena_get(adj_start + in1) + adj_i * v_b);
+                    __arena_set(adj_start + in2, __arena_get(adj_start + in2) + adj_i * v_a);
+                }}
+            } else { if kind == 4 {
+                if rev_valid_index(tape, in1) == 0 { status = 0 - 1; }
+                else {
+                    __arena_set(adj_start + in1, __arena_get(adj_start + in1) - adj_i);
+                }
+            } else {
+                status = 0 - 1;
+            }}}}};
+        };
         i = i - 1;
     }
-    0
+    status
 }

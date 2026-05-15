@@ -32,6 +32,12 @@ _SCALAR_GRAD_TYPES = frozenset({
 })
 
 
+def _ty_name(ty: A.TyNode | None) -> str | None:
+    if isinstance(ty, A.TyName):
+        return ty.name
+    return None
+
+
 # Stage 28.8.2: grad_pass's `_expr_has_grad` predicate migrated to
 # ASTVisitor. The pre-fix walker hand-rolled a 50-LoC isinstance
 # cascade that audit cycle 2 C2-4 caught missing Field / Index /
@@ -542,13 +548,15 @@ def _generate_grad_rev_all_fn(fn: A.FnDecl,
                     else A.Binary(span=span, op="+",
                                    left=A.Name(span=span, name=base_name),
                                    right=A.IntLit(span=span, value=i)))
-        # modify_f(idx, g_i, __always_accept)
+        ty_name = _ty_name(fn.params[i].ty)
+        modify_name = "modify_f64" if ty_name == "f64" else "modify_f"
+        verifier_name = "__always_accept_f64" if ty_name == "f64" else "__always_accept"
         call = A.Call(
             span=span,
-            callee=A.Name(span=span, name="modify_f"),
+            callee=A.Name(span=span, name=modify_name),
             args=[idx_expr,
                   A.Name(span=span, name=g_var),
-                  A.Name(span=span, name="__always_accept")],
+                  A.Name(span=span, name=verifier_name)],
         )
         body_stmts.append(A.ExprStmt(span=span, expr=call))
 

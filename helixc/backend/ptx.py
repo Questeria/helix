@@ -629,6 +629,10 @@ if __name__ == "__main__":
     import sys
     from ..frontend.parser import parse
     from ..frontend.typecheck import typecheck
+    from ..frontend.flatten_modules import flatten_modules, FlattenError
+    from ..frontend.flatten_impls import flatten_impls, DuplicateMethodError
+    from ..frontend.struct_mono import monomorphize_structs
+    from ..frontend.monomorphize import monomorphize_safe
     from ..frontend.trace_pass import validate_trace_attrs
     from ..frontend.panic_pass import validate_panic_args, validate_unwind
     from ..frontend.unsafe_pass import check_unsafe_ops
@@ -645,6 +649,25 @@ if __name__ == "__main__":
         with open(sys.argv[1]) as f:
             src = f.read()
     prog = parse(src)
+    try:
+        flatten_modules(prog)
+        flatten_impls(prog)
+        prog, struct_diags = monomorphize_structs(prog)
+        if struct_diags:
+            for e in struct_diags:
+                print(f"error: struct-mono: {e}", file=sys.stderr)
+            sys.exit(1)
+        _mono_count, mono_diags = monomorphize_safe(prog)
+        if mono_diags:
+            for e in mono_diags:
+                print(f"error: fn-mono: {e}", file=sys.stderr)
+            sys.exit(1)
+    except FlattenError as e:
+        print(f"error: mod-flatten: {e}", file=sys.stderr)
+        sys.exit(1)
+    except DuplicateMethodError as e:
+        print(f"error: impl-flatten: {e}", file=sys.stderr)
+        sys.exit(1)
     errs = typecheck(prog)
     if errs:
         for e in errs:

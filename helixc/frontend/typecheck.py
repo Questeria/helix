@@ -1838,7 +1838,8 @@ class TypeChecker:
     _BUILTIN_NAMES = frozenset({
         "detach", "attach", "consolidate", "recall", "learn_to",
         "grad", "grad_rev", "grad_rev_all",
-        "quote", "splice", "splice_f", "modify", "modify_f",
+        "quote", "splice", "splice_f", "splice_f64",
+        "modify", "modify_f", "modify_f64",
         "print_str", "print_int", "write_file", "read_file_int",
         "read_file_to_arena", "write_file_to_arena",
         "__arena_push", "__arena_get", "__arena_set", "__arena_len",

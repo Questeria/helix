@@ -3437,7 +3437,11 @@ class FnCompiler:
                 if not (-128 <= d <= 127):
                     raise ValueError(f"SPLICE {name} disp out of rel8: {d}")
                 buf.bytes_[off] = d & 0xFF
-            self.asm.mov_mem_rbp_eax(res_slot)
+            value_kind = op.attrs.get("value_kind", "i32")
+            if value_kind == "f64":
+                self.asm.mov_mem_rbp_rax(res_slot)
+            else:
+                self.asm.mov_mem_rbp_eax(res_slot)
             return
         if op.kind == tir.OpKind.MODIFY:
             # modify(handle, new_value, verifier_fn_name):
@@ -3479,11 +3483,14 @@ class FnCompiler:
 
             # In-range: pass args to verifier. ABI:
             #   default i32 verifier — edi=handle, esi=new_value
-            #   f32 verifier (modify_f) — edi=handle, xmm0=new_value
+            #   f32/f64 verifier (modify_f/modify_f64) — edi=handle,
+            #   xmm0=new_value
             value_kind = op.attrs.get("value_kind", "i32")
             self.asm.mov_edi_mem_rbp(handle_slot)
             if value_kind == "f32":
                 self.asm.movss_xmm0_mem_rbp(new_val_slot)
+            elif value_kind == "f64":
+                self.asm.movsd_xmm0_mem_rbp(new_val_slot)
             else:
                 self.asm.mov_esi_mem_rbp(new_val_slot)
             self.asm.call_rel32(verifier_name)
@@ -3499,14 +3506,18 @@ class FnCompiler:
             self.asm.mov_ecx_mem_rbp(handle_slot)
             buf.emit(0x48, 0x63, 0xC9)   # movsxd rcx, ecx
             # rdx = new_value. For i32 we sign-extend; for f32 we zero-extend
-            # so the cell's upper 32 bits stay clean. Negative floats have bit
-            # 31 set; sign-extending would corrupt the high half of the cell.
-            self.asm.mov_eax_mem_rbp(new_val_slot)
+            # so the cell's upper 32 bits stay clean. For f64, copy the full
+            # 64-bit bit pattern so splice_f64 sees the exact double.
             if value_kind == "f32":
+                self.asm.mov_eax_mem_rbp(new_val_slot)
                 # mov edx, eax (89 C0 → no, that's mov eax, eax; 89 C2 is
                 # mov edx, eax). Implicitly zero-extends rdx upper 32 bits.
                 buf.emit(0x89, 0xC2)
+            elif value_kind == "f64":
+                self.asm.mov_rax_mem_rbp(new_val_slot)
+                buf.emit(0x48, 0x89, 0xC2)  # mov rdx, rax
             else:
+                self.asm.mov_eax_mem_rbp(new_val_slot)
                 # movsxd rdx, eax  (48 63 D0)
                 buf.emit(0x48, 0x63, 0xD0)
             # rax = state base address

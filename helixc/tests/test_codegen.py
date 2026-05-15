@@ -7518,6 +7518,18 @@ def test_grad_rev_all_rejects_aggregate_param_until_pytree_bridge_is_wired():
         compile_and_run(src)
 
 
+def test_grad_rev_all_writes_f64_gradient_to_f64_cell():
+    src = """
+    fn loss(x: f64) -> f64 { x * x }
+    fn main() -> i32 {
+        grad_rev_all(loss)(3.0_f64, 0);
+        splice_f64(quote(0)) as i32
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 6, f"expected 6, got {code}"
+
+
 def test_grad_rejects_scalar_target_when_sibling_aggregate_param_exists():
     import pytest
     src = """
@@ -9217,6 +9229,22 @@ def test_nn_softmax_sums_to_one():
     assert code >= 99 and code <= 101, f"expected ~100, got {code}"
 
 
+def test_nn_softmax_layer_rejects_negative_length_without_write():
+    src = """
+    fn main() -> i32 {
+        let x = t1d_new(1);
+        let y = t1d_new(1);
+        __arena_set(y, 123);
+        let status = softmax_layer(x, y, 0 - 1);
+        if status == 35001 {
+            if __arena_get(y) == 123 { 42 } else { 7 }
+        } else { 7 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
 def test_nn_softmax_rows_f32_sums_each_row():
     """Row-wise softmax turns each logits row into probabilities summing to 1."""
     src = """
@@ -9358,6 +9386,19 @@ def test_nn_ce_loss_batch_f32_invalid_label_not_averaged_down():
         __arena_set(target + 1, 2);
         let loss = ce_loss_batch_f32(probs, target, 2, 2);
         if loss > 999999.0_f32 { 42 } else { 1 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_nn_ce_loss_clamps_probability_above_one():
+    src = """
+    fn main() -> i32 {
+        let probs = t1d_new(1);
+        tf1d_set(probs, 0, 2.0_f32);
+        let loss = ce_loss(probs, 0, 1);
+        if loss < 0.0_f32 { 7 } else { 42 }
     }
     """
     code = compile_and_run(src)
@@ -10730,6 +10771,45 @@ def test_revad_negative_capacity_is_clamped_to_zero():
             if rev_remaining(tape) == 0 {
                 if idx == (0 - 1) { 42 } else { 7 }
             } else { 7 }
+        } else { 7 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_revad_ops_reject_invalid_operand_index_without_push():
+    src = """
+    fn main() -> i32 {
+        let tape = rev_tape_new(4);
+        let x = rev_leaf(tape, 5);
+        let guard = t1d_new(1);
+        __arena_set(guard, 123);
+        let bad = rev_add(tape, 0 - 1, x);
+        if bad == (0 - 1) {
+            if rev_count(tape) == 1 {
+                if __arena_get(guard) == 123 { 42 } else { 7 }
+            } else { 7 }
+        } else { 7 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_revad_backward_rejects_corrupt_operand_index():
+    src = """
+    fn main() -> i32 {
+        let tape = rev_tape_new(4);
+        let x = rev_leaf(tape, 5);
+        let y = rev_leaf(tape, 7);
+        let f = rev_add(tape, x, y);
+        __arena_set(tape + 3 + f * 4 + 1, 0 - 1);
+        let adj = rev_alloc_adjoints(tape);
+        rev_seed(adj, f, 1);
+        let status = rev_backward(tape, adj);
+        if status == (0 - 1) {
+            if rev_grad(adj, x) == 0 { 42 } else { 7 }
         } else { 7 }
     }
     """

@@ -487,7 +487,8 @@ fn dropout_f32(x_start: i32, y_start: i32, n: i32,
 
 // Softmax (max-subtract, uses __exp + tf1d_max).
 fn softmax_layer(x_start: i32, y_start: i32, n: i32) -> i32 {
-    if n == 0 { 0 }
+    if n < 0 { 35001 }
+    else { if n == 0 { 0 }
     else {
         let max_v = tf1d_max(x_start, n);
         let mut i: i32 = 0;
@@ -506,7 +507,7 @@ fn softmax_layer(x_start: i32, y_start: i32, n: i32) -> i32 {
             j = j + 1;
         }
         0
-    }
+    }}
 }
 
 fn softmax_rows_f32(logits_start: i32, probs_start: i32,
@@ -659,7 +660,7 @@ fn ce_loss(p_start: i32, target_idx: i32, cols: i32) -> f32 {
     else {
         let p = __f32_from_bits(__arena_get(p_start + target_idx));
         let eps = 0.0001_f32;
-        let pc = __max(p, eps);
+        let pc = __max(__min(p, 1.0_f32 - eps), eps);
         0.0_f32 - __log_stable(pc)
     }}
 }

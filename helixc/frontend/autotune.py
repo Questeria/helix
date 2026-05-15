@@ -71,6 +71,12 @@ def parse_autotune_attrs(fn: A.FnDecl) -> tuple[dict[str, list[int]], list[str]]
                 f"empty key before `=`"
             )
             continue
+        if key in out:
+            diags.append(
+                f"@autotune on fn {fn.name!r}: duplicate parameter {key!r}; "
+                "combine values into one list instead of repeating the key"
+            )
+            continue
         raw_vals = [v for v in vals_str.split(",") if v]
         parsed: list[int] = []
         for v in raw_vals:
