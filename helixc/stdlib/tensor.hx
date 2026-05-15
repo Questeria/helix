@@ -41,6 +41,11 @@
     start
 }
 
+@pure fn t2d_len(rows: i32, cols: i32) -> i32 {
+    if rows <= 0 { 0 }
+    else { if cols <= 0 { 0 } else { rows * cols } }
+}
+
 fn t1d_set_i32_bits(start: i32, i: i32, bits: i32) -> i32 {
     __arena_set(start + i, bits);
     0
@@ -95,7 +100,7 @@ fn ti1d_axpy(y_start: i32, a: i32, x_start: i32, n: i32) -> i32 {
 
 // 2D row-major access: M[i,j] lives at slot start + i*cols + j.
 @pure fn ti2d_new(rows: i32, cols: i32) -> i32 {
-    let n = rows * cols;
+    let n = t2d_len(rows, cols);
     t1d_new(n)
 }
 
@@ -269,13 +274,13 @@ fn tf2d_matvec(w_start: i32, w_rows: i32, w_cols: i32,
 
 // Integer-tensor mean (returns floor(sum/n)).
 @pure fn ti1d_mean(start: i32, n: i32) -> i32 {
-    if n == 0 { 0 }
+    if n <= 0 { 0 }
     else { ti1d_sum(start, n) / n }
 }
 
 // Integer-tensor product.
 @pure fn ti1d_prod(start: i32, n: i32) -> i32 {
-    if n == 0 { 1 }
+    if n <= 0 { 1 }
     else {
         let mut i: i32 = 0;
         let mut p: i32 = 1;
@@ -286,7 +291,7 @@ fn tf2d_matvec(w_start: i32, w_rows: i32, w_cols: i32,
 
 // Integer-tensor min.
 @pure fn ti1d_min(start: i32, n: i32) -> i32 {
-    if n == 0 { 0 }
+    if n <= 0 { 0 }
     else {
         let mut best = __arena_get(start);
         let mut i: i32 = 1;
@@ -301,7 +306,7 @@ fn tf2d_matvec(w_start: i32, w_rows: i32, w_cols: i32,
 
 // Integer-tensor max (companion to ti1d_min).
 @pure fn ti1d_max(start: i32, n: i32) -> i32 {
-    if n == 0 { 0 }
+    if n <= 0 { 0 }
     else {
         let mut best = __arena_get(start);
         let mut i: i32 = 1;
@@ -743,7 +748,7 @@ fn tf1d_scale_inplace(start: i32, n: i32, scalar: f32) -> i32 {
 // tf2d_add(a, b, c, rows, cols): elementwise 2D add c = a + b. All
 // three matrices share row-major layout with `cols` columns.
 fn tf2d_add(a: i32, b: i32, c: i32, rows: i32, cols: i32) -> i32 {
-    let n = rows * cols;
+    let n = t2d_len(rows, cols);
     let mut i: i32 = 0;
     while i < n {
         let av = __f32_from_bits(__arena_get(a + i));
@@ -757,7 +762,7 @@ fn tf2d_add(a: i32, b: i32, c: i32, rows: i32, cols: i32) -> i32 {
 // tf2d_scale_inplace(start, rows, cols, scalar): multiply every element
 // of the 2D matrix in place by scalar.
 fn tf2d_scale_inplace(start: i32, rows: i32, cols: i32, scalar: f32) -> i32 {
-    let n = rows * cols;
+    let n = t2d_len(rows, cols);
     let mut i: i32 = 0;
     while i < n {
         let v = __f32_from_bits(__arena_get(start + i));
@@ -797,7 +802,7 @@ fn tf1d_axpby(x_start: i32, y_start: i32, a: f32, b: f32, n: i32) -> i32 {
 
 // tf2d_sub(a, b, c, rows, cols): elementwise 2D subtract c = a - b.
 fn tf2d_sub(a: i32, b: i32, c: i32, rows: i32, cols: i32) -> i32 {
-    let n = rows * cols;
+    let n = t2d_len(rows, cols);
     let mut i: i32 = 0;
     while i < n {
         let av = __f32_from_bits(__arena_get(a + i));
@@ -810,7 +815,7 @@ fn tf2d_sub(a: i32, b: i32, c: i32, rows: i32, cols: i32) -> i32 {
 
 // tf2d_mul(a, b, c, rows, cols): elementwise 2D Hadamard (NOT matmul).
 fn tf2d_mul(a: i32, b: i32, c: i32, rows: i32, cols: i32) -> i32 {
-    let n = rows * cols;
+    let n = t2d_len(rows, cols);
     let mut i: i32 = 0;
     while i < n {
         let av = __f32_from_bits(__arena_get(a + i));
@@ -977,19 +982,19 @@ fn tf1d_lerp(a: i32, b: i32, t: f32, dst: i32, n: i32) -> i32 {
 // 2D matrices.
 @pure
 fn tf2d_norm_frobenius_sq(start: i32, rows: i32, cols: i32) -> f32 {
-    let n = rows * cols;
+    let n = t2d_len(rows, cols);
     tf1d_l2_norm_sq(start, n)
 }
 
 // tf2d_zeros(rows, cols): allocate a new rows*cols matrix filled with 0.0_f32.
 @pure
 fn tf2d_zeros(rows: i32, cols: i32) -> i32 {
-    t1d_new(rows * cols)
+    t1d_new(t2d_len(rows, cols))
 }
 
 // tf2d_ones(rows, cols): allocate a new rows*cols matrix filled with 1.0_f32.
 fn tf2d_ones(rows: i32, cols: i32) -> i32 {
-    let n = rows * cols;
+    let n = t2d_len(rows, cols);
     let s = t1d_new(n);
     let one_bits = __bits_of_f32(1.0_f32);
     let mut i: i32 = 0;
@@ -1004,7 +1009,7 @@ fn tf2d_ones(rows: i32, cols: i32) -> i32 {
 // all elements of a 2D matrix. 0.0 if rows*cols == 0.
 @pure
 fn tf2d_max_abs(start: i32, rows: i32, cols: i32) -> f32 {
-    let n = rows * cols;
+    let n = t2d_len(rows, cols);
     tf1d_max_abs(start, n)
 }
 

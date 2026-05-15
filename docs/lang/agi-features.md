@@ -43,10 +43,9 @@ diagnostic.
 Verifiers themselves can be: type checks, test-suite runners, formal proof
 checkers, regression-bench runners.
 
-**This is unique because**: existing systems either (a) don't support
-self-modification at all (C/Rust/most languages) or (b) support it without
-formal verification (Lisp, Forth, eval). Helix makes the verifier a *required*
-parameter, formalizing the safety boundary.
+**Why this matters**: existing systems usually either avoid self-modification or
+leave it outside a formal verification boundary. Helix makes the verifier a
+*required* parameter, formalizing the safety boundary.
 
 ## 3. Effect/capability types
 
@@ -67,9 +66,9 @@ capability-typed function pointer cannot be passed to a `@pure` context, even
 through indirection. This makes "the AGI cannot modify itself unless given
 capability X" formally checkable.
 
-**Unique because**: effect systems exist (Koka, Eff, Idris, Ocaml-5) but none
-focus on AGI-safety capabilities. Mojo doesn't have this. JAX doesn't have
-this.
+**Why this matters**: effect systems already exist in research and production
+languages, but Helix's target is to make AGI-safety capabilities part of the
+same everyday effect surface.
 
 ## 4. Memory-tier types
 
@@ -88,9 +87,9 @@ operators: `consolidate(epi)`, `recall(query)`, `retrieve(addr)`. The compiler
 enforces invariants: episodic memories must carry timestamps, semantic
 entries must be deduplicated, etc.
 
-**Unique because**: Hippocampus-formal-models exist in cognitive science but
-no programming language exposes them as language types. This makes the
-AGI's memory architecture *part of its program text*.
+**Why this matters**: cognitive-science memory models normally live outside the
+programming language. Helix's target is to make the AGI's memory architecture
+*part of its program text*.
 
 ## 5. Differentiable types
 
@@ -110,9 +109,9 @@ type-check time. Stage 35 exposes scalar `grad`, `grad_rev`, and
 pytree leaf expansion are still being wired. `D<T>` values can compose with
 non-differentiable code only via explicit `detach`.
 
-**Unique because**: PyTorch tracks gradients at *runtime* via a tape.
-JAX tracks them via *function transformations*. Helix tracks them in the
-*type system*, catching gradient bugs at compile time.
+**Why this matters**: PyTorch tracks gradients at *runtime* via a tape.
+JAX tracks them via *function transformations*. Helix's target is to track them
+in the *type system*, catching gradient bugs at compile time.
 
 ## 6. Tile-as-first-class type with memory hierarchy
 
@@ -133,9 +132,8 @@ spaces, and eventually schedule tile-level computation around the memory
 hierarchy automatically. The `bf16` SMEM/REG matmul example above is not
 current public backend behavior.
 
-**Unique because**: Triton has tiles but they're not in the type system —
-the programmer manages memory placement implicitly. Mojo has SIMD types but
-not memory-space types. Helix makes memory tiers part of the type signature.
+**Why this matters**: tile and SIMD systems already exist, but Helix's target is
+to make memory tiers and placement constraints part of the type signature.
 
 ## 7. Agent types
 
@@ -159,9 +157,9 @@ let action = society::dispatch(propose, state);
 primitives. The compiler can lower agent dispatch to function calls,
 async tasks, or distributed RPC.
 
-**Unique because**: actor languages (Erlang, Elixir, Akka) exist but they
-don't model cognitive society-of-mind concepts (proposer/critic/voter/
-broadcaster). Helix bakes the cognitive architecture into the type system.
+**Why this matters**: actor languages already model isolated concurrent
+components. Helix's target is to express cognitive society-of-mind concepts
+(proposer/critic/voter/broadcaster) in the type system.
 
 ## 8. Auto-curriculum primitives
 
@@ -178,8 +176,8 @@ AGI can request "skills at difficulty X" — the runtime selects the closest
 match or proposes a learning task. This is the Voyager / Eureka / Goldilocks
 pattern, made first-class.
 
-**Unique because**: skill libraries exist as Python registries; making this
-a *language primitive* with type-level guarantees is novel.
+**Why this matters**: skill libraries often live as external registries. Helix's
+target is to make skills a language primitive with type-level guarantees.
 
 ---
 
@@ -239,8 +237,8 @@ known chain-rule calls. Reverse-mode is available through `grad_rev` and
 
 ## What this gives Helix as a foundation
 
-Combining the type-system features above gives Helix capabilities no other
-language has. The single function signature
+Combining the type-system features above gives Helix a deliberately integrated
+AGI-language foundation. The single function signature
 
 ```kov
 fn agi_step[N: size](

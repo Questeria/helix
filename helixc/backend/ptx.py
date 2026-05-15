@@ -639,6 +639,7 @@ if __name__ == "__main__":
     from ..frontend.unsafe_pass import check_unsafe_ops
     from ..frontend.autotune import validate_autotune_prog
     from ..frontend.grad_pass import grad_pass
+    from ..frontend.totality import check_totality
     from ..ir.lower_ast import lower
     from ..ir.passes.const_fold import fold_module
     from ..ir.passes.cse import cse_module
@@ -709,6 +710,23 @@ if __name__ == "__main__":
         for e in errs:
             print(f"error: {e}", file=sys.stderr)
         sys.exit(1)
+    totality_fails = check_totality(prog)
+    if totality_fails:
+        print(
+            f"warning: totality: {len(totality_fails)} fn(s) NOT proven total",
+            file=sys.stderr,
+        )
+        for name, reason in totality_fails:
+            print(
+                f"warning: [trap 21001] totality: {name}: {reason}",
+                file=sys.stderr,
+            )
+        if strict:
+            print(
+                f"\n{len(totality_fails)} totality warning(s); --strict aborts.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
     validation_groups = [
         ("trace", validate_trace_attrs(prog)),
         ("panic", validate_panic_args(prog)),

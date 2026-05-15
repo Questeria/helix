@@ -121,16 +121,15 @@ The quietly-load-bearing observation from research agent #1: Helix's
 combination of (a) compile-time-enforced effect system, (b)
 verifier-gated reflection runtime, (c) source-level reverse-mode AD,
 (d) memory-tier types, and (e) future provenance-typed
-neuro-symbolic primitives appears to be an under-served niche. The
-"better than existing on the
-AGI axis" target is achievable; the language doesn't need to win on
+neuro-symbolic primitives appears to be an under-served niche. A strong
+AGI-axis target is achievable; the language doesn't need to win on
 GEMM throughput to win on AGI.
 
 ## Sequencing note
 
 Tier 1 + Tier 2 #6 together are roughly 4-5 months of work and
 unblock real model training. Tier 3 #10 (neuro-symbolic primitives)
-should start scoping in parallel since it's the strategic moat and
+should start scoping in parallel since it is a strategic differentiator and
 the work is mostly orthogonal to GPU codegen.
 
 ## Post-Stage-31 Sequence

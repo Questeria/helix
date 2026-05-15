@@ -65,8 +65,10 @@ fn rev_tape_new(cap: i32) -> i32 {
 @pure
 fn rev_valid_index(tape: i32, idx: i32) -> i32 {
     let cnt = __arena_get(tape);
+    let cap = __arena_get(tape + 1);
     if idx < 0 { 0 }
-    else { if idx >= cnt { 0 } else { 1 } }
+    else { if idx >= cnt { 0 }
+    else { if idx >= cap { 0 } else { 1 } } }
 }
 
 @pure
@@ -202,6 +204,12 @@ fn rev_grad(adj_start: i32, idx: i32) -> i32 {
 //   K = neg:   adj[a] -= adj[i]
 fn rev_backward(tape: i32, adj_start: i32) -> i32 {
     let cnt = __arena_get(tape);
+    let cap = __arena_get(tape + 1);
+    let adj_cap = __arena_get(adj_start - 1);
+    if cnt < 0 { 0 - 1 }
+    else { if cnt > cap { 0 - 1 }
+    else { if cnt > adj_cap { 0 - 1 }
+    else {
     let mut i: i32 = cnt - 1;
     let mut status: i32 = 0;
     while i >= 0 {
@@ -248,4 +256,5 @@ fn rev_backward(tape: i32, adj_start: i32) -> i32 {
         i = i - 1;
     }
     status
+    }}}
 }

@@ -10861,6 +10861,26 @@ def test_revad_grad_invalid_index_returns_zero():
     assert code == 42, f"expected 42, got {code}"
 
 
+def test_revad_backward_rejects_count_above_capacity_without_adj_corruption():
+    src = """
+    fn main() -> i32 {
+        let tape = rev_tape_new(1);
+        let x = rev_leaf(tape, 7);
+        let adj = rev_alloc_adjoints(tape);
+        rev_seed(adj, x, 1);
+        let guard = __arena_len();
+        __arena_push(123);
+        __arena_set(tape, 2);
+        let status = rev_backward(tape, adj);
+        if status == (0 - 1) {
+            if __arena_get(guard) == 123 { 42 } else { __arena_get(guard) }
+        } else { status }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
 def test_negative_length_tensor_nn_helpers_return_empty_values():
     src = """
     fn main() -> i32 {
@@ -10887,6 +10907,48 @@ def test_negative_length_tensor_nn_helpers_return_empty_values():
             } else { 7 }
             } else { 7 }} else { 7 }} else { 7 }} else { 7 }} else { 7 };
         ok
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_negative_length_integer_min_max_return_empty_sentinel():
+    src = """
+    fn main() -> i32 {
+        let x = t1d_new(1);
+        __arena_set(x, 37);
+        if ti1d_min(x, 0 - 1) == 0 {
+        if ti1d_max(x, 0 - 1) == 0 { 42 } else { 7 }
+        } else { 7 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_negative_2d_shape_helpers_treat_shape_as_empty():
+    src = """
+    fn main() -> i32 {
+        let before = __arena_len();
+        let ones = tf2d_ones(0 - 1, 0 - 1);
+        let after_ones = __arena_len();
+        let zeros = tf2d_zeros(0 - 1, 0 - 1);
+        let after_zeros = __arena_len();
+        let x = t1d_new(1);
+        tf1d_set(x, 0, 7.0_f32);
+        let y = t1d_new(1);
+        tf1d_set(y, 0, 5.0_f32);
+        let dst = t1d_new(1);
+        tf1d_set(dst, 0, 9.0_f32);
+        tf2d_add(x, y, dst, 0 - 1, 0 - 1);
+        if ones == before {
+        if zeros == before {
+        if after_ones == before {
+        if after_zeros == before {
+        if (tf2d_max_abs(x, 0 - 1, 0 - 1) as i32) == 0 {
+        if (tf1d_get(dst, 0) as i32) == 9 { 42 } else { 7 }
+        } else { 7 }} else { 7 }} else { 7 }} else { 7 }} else { 7 }
     }
     """
     code = compile_and_run(src)

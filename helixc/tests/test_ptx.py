@@ -422,6 +422,18 @@ def test_stage35_direct_ptx_cli_strict_rejects_effect_violation():
     assert ".visible .entry" not in proc.stdout
 
 
+def test_stage35_direct_ptx_cli_strict_rejects_totality_failure():
+    src = """
+    fn spin(n: i32) -> i32 { spin(n) }
+    @kernel fn k() { let i = thread_idx(); }
+    """
+    proc = run_ptx_cli(src, "--strict")
+    assert proc.returncode != 0, proc.stdout + proc.stderr
+    assert "totality" in proc.stderr
+    assert "--strict aborts" in proc.stderr
+    assert ".visible .entry" not in proc.stdout
+
+
 def test_stage35_direct_ptx_cli_includes_stdlib_by_default():
     src = """
     fn host(x: f32) -> f32 { __relu(x) }

@@ -64,95 +64,298 @@ Initial focused checks:
 - `python scripts\stage31_validate.py --mode quick --skip-snapshot`
   - Result: passed, `stage31-quick: rc=0`.
 
-## Increment 19 - Dense Classifier SGD Step
+## Increment 2 - f32 Gradient-Norm Clipping
 
 The Helix neural-network stdlib now includes:
 
-- `dense_classifier_sgd_step_f32(w_start, b_start, x_start, target, scratch_start, shape_start, lr)`
+- `clip_grad_norm_f32(g_start, max_norm, n)`
 
-Beginner meaning:
+It computes the f32 gradient vector's L2 norm and scales the vector in place
+when the norm is larger than `max_norm`.
 
-This is a compact one-sample classifier training step. It composes existing
-Helix-native pieces:
+This matters for AI training because clipping prevents a very large gradient
+from making a model update unstable.
 
-- dense forward pass with bias
-- softmax probabilities
-- softmax-cross-entropy gradient
-- dense weight gradient
-- SGD updates for weights and bias
+Behavior added:
 
-The API intentionally uses `scratch_start` and `shape_start` arena handles so it
-stays within the current backend's six-integer-argument limit.
-
-Safety behavior:
-
-- Invalid class labels return sentinel status `35001`.
-- Invalid or empty dimensions return success without writing.
+- Large gradients are scaled down toward the requested maximum norm.
+- Small gradients are left unchanged.
+- Empty or zero-norm gradients return cleanly.
+- Negative `max_norm` is treated as `0.0`, so the helper remains deterministic.
 
 Focused verification:
 
-- `python -m pytest -q helixc\tests\test_codegen.py -k "dense_classifier_sgd_step_f32 or softmax_ce_grad_f32 or dense_layer_f32_grad_w or sgd_f32_step" --tb=short`
-  - Result: 7 passed, 775 deselected.
-- `python -m pytest -q helixc\tests\test_codegen.py -k "nn_ or dense_classifier_sgd_step_f32 or softmax_ce_grad_f32 or dense_layer_f32" --tb=short`
-  - Result: 41 passed, 741 deselected.
-- `python scripts\stage31_validate.py --mode quick --skip-snapshot`
-  - First result: failed because the new helper called `dense_layer_f32_forward`
-    with the old five-argument shape.
-  - Fixed by using the existing bias-aware six-argument signature.
-  - Final result: passed, `stage31-quick: rc=0`.
-
-## Increment 18 - Adam Optimizer Helper
-
-The Helix neural-network stdlib now includes:
-
-- `adam_f32_step(w_start, g_start, m_start, v_start, lr, beta1, beta2, eps, n)`
-
-Beginner meaning:
-
-- SGD moves weights directly by the current gradient.
-- Adam also tracks a moving average of the gradient and squared gradient, which
-  is much closer to how modern AI models are usually trained.
-
-Current scope:
-
-- This is an Adam-style step with uncorrected moving moments.
-- It updates weights, first moment `m`, and second moment `v` in Helix memory.
-
-Focused verification:
-
-- `python -m pytest -q helixc\tests\test_codegen.py -k "adam_f32_step or sgd_f32_step or clip_grad_norm_f32 or add_weight_decay_grad_f32" --tb=short`
-  - Result: 6 passed, 774 deselected.
-- `python -m pytest -q helixc\tests\test_codegen.py -k "nn_ or adam_f32_step or sgd_f32_step or dense_layer_f32_grad" --tb=short`
-  - Result: 39 passed, 741 deselected.
+- `python -m pytest -q helixc\tests\test_codegen.py -k "clip_grad_norm_f32 or sgd_f32_step or tf1d_l2_norm_sq or tf1d_scale_inplace" --tb=short`
+  - Result: 5 passed, 751 deselected.
 - `python scripts\stage31_validate.py --mode quick --skip-snapshot`
   - Result: passed, `stage31-quick: rc=0`.
 
-## Increment 17 - Classifier Training Helpers
+## Increment 3 - f32 Weight-Decay Gradient Helper
 
-The Helix neural-network stdlib now includes two classifier-training helpers:
+The Helix neural-network stdlib now includes:
 
-- `softmax_rows_f32(logits_start, probs_start, rows, cols)`
-- `softmax_ce_grad_f32(probs_start, target_start, grad_start, rows, cols)`
+- `add_weight_decay_grad_f32(g_start, w_start, decay, n)`
 
-Beginner meaning:
+It updates a gradient vector in place:
 
-- `softmax_rows_f32` turns each row of classifier scores into probabilities.
-- `softmax_ce_grad_f32` writes the standard gradient for softmax plus
-  cross-entropy, which is the usual first backward step for classification
-  models.
+- `g[i] = g[i] + decay * w[i]`
 
-Safety behavior:
-
-- Empty or invalid matrix sizes return success without writing.
-- Invalid class labels return sentinel status `35001`, so bad target data does
-  not quietly produce believable gradients.
+This is the standard gradient contribution for L2 weight decay. In beginner
+terms, it helps keep model weights from growing too large during training.
 
 Focused verification:
 
-- `python -m pytest -q helixc\tests\test_codegen.py -k "softmax_rows_f32 or softmax_ce_grad_f32 or ce_loss_batch_f32 or softmax_sums_to_one" --tb=short`
-  - Result: 7 passed, 772 deselected.
-- `python -m pytest -q helixc\tests\test_codegen.py -k "nn_ or softmax or ce_loss or dense_layer_f32_grad" --tb=short`
-  - Result: 39 passed, 740 deselected.
+- `python -m pytest -q helixc\tests\test_codegen.py -k "weight_decay_grad_f32 or clip_grad_norm_f32 or tf1d_axpby" --tb=short`
+  - Result: 4 passed, 753 deselected.
+- `python scripts\stage31_validate.py --mode quick --skip-snapshot`
+  - Result: passed, `stage31-quick: rc=0`.
+
+## Increment 4 - f32 Stable SGD Step
+
+The Helix neural-network stdlib now includes:
+
+- `sgd_f32_step_decay_clip(w_start, g_start, lr, decay, max_norm, n)`
+
+It composes the training helpers into one practical update:
+
+1. Add weight decay to the gradient.
+2. Clip the gradient norm.
+3. Apply the f32 SGD step.
+
+This is still simple, but it is closer to what real model training needs than
+raw SGD alone.
+
+Focused verification:
+
+- `python -m pytest -q helixc\tests\test_codegen.py -k "sgd_f32_step_decay_clip or weight_decay_grad_f32 or clip_grad_norm_f32 or sgd_f32_step" --tb=short`
+  - Result: 5 passed, 753 deselected.
+- `python scripts\stage31_validate.py --mode quick --skip-snapshot`
+  - Result: passed, `stage31-quick: rc=0`.
+
+## Increment 5 - f32 Layer Normalization
+
+The Helix neural-network stdlib now includes:
+
+- `layer_norm_f32(x_start, y_start, n, eps)`
+
+It normalizes one f32 vector by subtracting its mean and dividing by
+`sqrt(variance + eps)`.
+
+This is an important AI building block because layer normalization keeps model
+activations in a stable range, especially in transformer-style networks.
+
+Focused verification:
+
+- `python -m pytest -q helixc\tests\test_codegen.py -k "layer_norm_f32 or softmax or tanh_layer or leaky_relu" --tb=short`
+  - Result: 6 passed, 753 deselected.
+- `python scripts\stage31_validate.py --mode quick --skip-snapshot`
+  - Result: passed, `stage31-quick: rc=0`.
+
+## Increment 6 - f32 Dropout
+
+The Helix neural-network stdlib now includes:
+
+- `dropout_f32(x_start, y_start, n, keep_prob, seed)`
+
+It implements deterministic inverted dropout for f32 vectors. Kept values are
+scaled by `1 / keep_prob`; dropped values become zero. The helper returns the
+final RNG state so callers can continue a reproducible training stream.
+
+This matters because dropout is a standard training-time regularization tool.
+In beginner terms, it helps models avoid relying too heavily on one activation
+path.
+
+Focused verification:
+
+- `python -m pytest -q helixc\tests\test_codegen.py -k "dropout_f32 or layer_norm_f32 or rand_step" --tb=short`
+  - Result: 3 passed, 758 deselected.
+- `python scripts\stage31_validate.py --mode quick --skip-snapshot`
+  - Result: passed, `stage31-quick: rc=0`.
+
+## Increment 7 - Modern f32 Activation Layers
+
+The Helix neural-network stdlib now includes vector layers for existing scalar
+modern activations:
+
+- `softplus_layer`
+- `silu_layer`
+- `gelu_layer`
+
+These matter because modern AI models often use smooth activations rather than
+plain ReLU alone. GELU and SiLU in particular are common in transformer-style
+networks.
+
+Focused verification:
+
+- `python -m pytest -q helixc\tests\test_codegen.py -k "modern_activation_layers or softplus or silu or gelu or sigmoid_layer or tanh_layer" --tb=short`
+  - Result: 2 passed, 760 deselected.
+- `python scripts\stage31_validate.py --mode quick --skip-snapshot`
+  - Result: passed, `stage31-quick: rc=0`.
+
+## Increment 8 - Row-Wise f32 Argmax
+
+The Helix neural-network stdlib now includes:
+
+- `argmax_rows_f32(logits_start, rows, cols, out_start)`
+
+It reads a row-major f32 logits matrix and writes one predicted class id per
+row. This is a common step after model inference for classification tasks.
+
+Focused verification:
+
+- `python -m pytest -q helixc\tests\test_codegen.py -k "argmax_rows_f32 or softmax or count_correct" --tb=short`
+  - Result: 5 passed, 758 deselected.
+- `python scripts\stage31_validate.py --mode quick --skip-snapshot`
+  - Result: passed, `stage31-quick: rc=0`.
+
+## Neural-Network Cluster Verification
+
+After increments 2 through 6, the broader neural-network regression slice was:
+
+- `python -m pytest -q helixc\tests\test_codegen.py -k "nn_ or attention_softmax_f32" --tb=short`
+  - Result: 24 passed, 737 deselected.
+
+## Increment 9 - f32 Classification Helpers
+
+The Helix neural-network stdlib now includes:
+
+- `accuracy_count_from_logits_f32`
+- `ce_loss_batch_f32`
+
+These make classification workflows more complete:
+
+- `accuracy_count_from_logits_f32` counts correct predictions directly from a
+  row-major logits matrix.
+- `ce_loss_batch_f32` computes average cross-entropy over probability rows.
+
+Focused verification:
+
+- `python -m pytest -q helixc\tests\test_codegen.py -k "accuracy_count_from_logits_f32 or ce_loss_batch_f32 or argmax_rows_f32 or ce_loss or count_correct" --tb=short`
+  - Result: 4 passed, 761 deselected.
+- `python scripts\stage31_validate.py --mode quick --skip-snapshot`
+  - Result: passed, `stage31-quick: rc=0`.
+
+## Increment 10 - f32 Dense-Layer Backprop Helpers
+
+The Helix neural-network stdlib now includes dense-layer gradient helpers for
+`y = W @ x + b`:
+
+- `dense_layer_f32_grad_w`
+- `dense_layer_f32_grad_b`
+- `dense_layer_f32_grad_x`
+
+These compute gradients for weights, bias, and inputs. This is a core step
+toward training multi-layer models directly in Helix.
+
+Focused verification:
+
+- `python -m pytest -q helixc\tests\test_codegen.py -k "dense_layer_f32_grad or dense_layer_f32_forward or tf2d_matvec or sgd_f32_step" --tb=short`
+  - Result: 5 passed, 763 deselected.
+- `python scripts\stage31_validate.py --mode quick --skip-snapshot`
+  - Result: passed, `stage31-quick: rc=0`.
+
+## Increment 11 - f32 Activation Backprop Helpers
+
+The Helix neural-network stdlib now includes backward helpers for common f32
+activation layers:
+
+- `relu_layer_f32_backward`
+- `sigmoid_layer_backward`
+- `tanh_layer_backward`
+
+These helpers turn upstream gradients into input gradients for activation
+layers. This is another step toward writing full training loops directly in
+Helix.
+
+Focused verification:
+
+- `python -m pytest -q helixc\tests\test_codegen.py -k "activation_backprop_layers or relu_layer_f32_backward or sigmoid_layer_backward or tanh_layer_backward or modern_activation_layers" --tb=short`
+  - Result: 2 passed, 767 deselected.
+- `python scripts\stage31_validate.py --mode quick --skip-snapshot`
+  - Result: passed, `stage31-quick: rc=0`.
+
+## Increment 12 - f32 MSE-Loss Gradient Helper
+
+The Helix neural-network stdlib now includes:
+
+- `mse_loss_f32_grad(y_start, t_start, dy_start, n)`
+
+It writes the gradient of mean squared error with respect to the prediction
+vector:
+
+- `dy[i] = 2 * (y[i] - target[i]) / n`
+
+This supplies a simple starting gradient for backpropagation through a model.
+
+Focused verification:
+
+- `python -m pytest -q helixc\tests\test_codegen.py -k "mse_loss_f32_grad or mse_loss_f32 or dense_layer_f32_grad" --tb=short`
+  - Result: 4 passed, 766 deselected.
+- `python scripts\stage31_validate.py --mode quick --skip-snapshot`
+  - Result: passed, `stage31-quick: rc=0`.
+
+## Increment 13 - PTX Kernel Regression Expansion
+
+Stage 35 added GPU/PTX regression coverage for additional kernel forms:
+
+- f32 HBM vector multiply emits `mul.f32`.
+- f32 HBM vector negation emits `neg.f32`.
+- i32 HBM vector add emits signed global load/store and `add.s32`.
+
+This does not yet mean Helix runs GPU kernels directly from the test harness.
+It strengthens the PTX codegen path by proving the embedded PTX module covers
+more than the original f32 add kernel.
+
+Focused verification:
+
+- `python -m pytest -q helixc\tests\test_codegen.py -k "stage35_vec_mul_kernel_ptx_in_binary or stage35_vec_neg_kernel_ptx_in_binary or stage35_i32_kernel_ptx_in_binary or stage16" --tb=short`
+  - Result: 6 passed, 767 deselected.
+- `python scripts\stage31_validate.py --mode quick --skip-snapshot`
+  - Result: passed, `stage31-quick: rc=0`.
+
+## Neural-Network Cluster Verification 2
+
+After the dense and activation backprop work, the broader neural-network slice
+was:
+
+- `python -m pytest -q helixc\tests\test_codegen.py -k "nn_ or attention_softmax_f32" --tb=short`
+  - Result: 32 passed, 737 deselected.
+
+## Increment 14 - Deterministic Autotune Variant Order
+
+Autotune variant generation now sorts parameter keys before creating the
+Cartesian product.
+
+This makes generated variant order reproducible even if attributes arrive in a
+different key order. Reproducibility matters because autotune output eventually
+feeds generated kernel names, cache records, and benchmark comparisons.
+
+Focused verification:
+
+- `python -m pytest -q helixc\tests\test_autotune.py -k "variants" --tb=short`
+  - Result: 4 passed, 21 deselected.
+- `python scripts\stage31_validate.py --mode quick --skip-snapshot`
+  - Result: passed, `stage31-quick: rc=0`.
+
+## Increment 15 - Pytree Parameter Path Bridge
+
+The Python frontend pytree support now includes:
+
+- `flatten_pytree_param(param, struct_decls)`
+
+It turns function parameters into AD-ready leaf paths:
+
+- scalar parameter `x: f32` becomes `x`
+- struct parameter `model: Model` becomes leaves like `model.layer.w`
+
+This bridges the Stage 35 field-leaf AD work with nested model parameters. It
+does not yet fully expose `grad(loss)(model)` as a runtime surface, but it
+adds the static naming helper needed for that next wire-up.
+
+Focused verification:
+
+- `python -m pytest -q helixc\tests\test_pytree.py -k "stage35_flatten_pytree_param or flatten_nested_struct" --tb=short`
+  - Result: 3 passed, 21 deselected.
 - `python scripts\stage31_validate.py --mode quick --skip-snapshot`
   - Result: passed, `stage31-quick: rc=0`.
 
@@ -198,309 +401,97 @@ Focused verification:
 - `python scripts\stage31_validate.py --mode quick --skip-snapshot`
   - Result: passed, `stage31-quick: rc=0`.
 
-## Increment 15 - Pytree Parameter Path Bridge
+## Increment 17 - Classifier Training Helpers
 
-The Python frontend pytree support now includes:
+The Helix neural-network stdlib now includes two classifier-training helpers:
 
-- `flatten_pytree_param(param, struct_decls)`
+- `softmax_rows_f32(logits_start, probs_start, rows, cols)`
+- `softmax_ce_grad_f32(probs_start, target_start, grad_start, rows, cols)`
 
-It turns function parameters into AD-ready leaf paths:
+Beginner meaning:
 
-- scalar parameter `x: f32` becomes `x`
-- struct parameter `model: Model` becomes leaves like `model.layer.w`
+- `softmax_rows_f32` turns each row of classifier scores into probabilities.
+- `softmax_ce_grad_f32` writes the standard gradient for softmax plus
+  cross-entropy, which is the usual first backward step for classification
+  models.
 
-This bridges the Stage 35 field-leaf AD work with nested model parameters. It
-does not yet fully expose `grad(loss)(model)` as a runtime surface, but it
-adds the static naming helper needed for that next wire-up.
+Safety behavior:
 
-Focused verification:
-
-- `python -m pytest -q helixc\tests\test_pytree.py -k "stage35_flatten_pytree_param or flatten_nested_struct" --tb=short`
-  - Result: 3 passed, 21 deselected.
-- `python scripts\stage31_validate.py --mode quick --skip-snapshot`
-  - Result: passed, `stage31-quick: rc=0`.
-
-## Increment 14 - Deterministic Autotune Variant Order
-
-Autotune variant generation now sorts parameter keys before creating the
-Cartesian product.
-
-This makes generated variant order reproducible even if attributes arrive in a
-different key order. Reproducibility matters because autotune output eventually
-feeds generated kernel names, cache records, and benchmark comparisons.
+- Empty or invalid matrix sizes return success without writing.
+- Invalid class labels return sentinel status `35001`, so bad target data does
+  not quietly produce believable gradients.
 
 Focused verification:
 
-- `python -m pytest -q helixc\tests\test_autotune.py -k "variants" --tb=short`
-  - Result: 4 passed, 21 deselected.
+- `python -m pytest -q helixc\tests\test_codegen.py -k "softmax_rows_f32 or softmax_ce_grad_f32 or ce_loss_batch_f32 or softmax_sums_to_one" --tb=short`
+  - Result: 7 passed, 772 deselected.
+- `python -m pytest -q helixc\tests\test_codegen.py -k "nn_ or softmax or ce_loss or dense_layer_f32_grad" --tb=short`
+  - Result: 39 passed, 740 deselected.
 - `python scripts\stage31_validate.py --mode quick --skip-snapshot`
   - Result: passed, `stage31-quick: rc=0`.
 
-## Increment 13 - PTX Kernel Regression Expansion
-
-Stage 35 added GPU/PTX regression coverage for additional kernel forms:
-
-- f32 HBM vector multiply emits `mul.f32`.
-- f32 HBM vector negation emits `neg.f32`.
-- i32 HBM vector add emits signed global load/store and `add.s32`.
-
-This does not yet mean Helix runs GPU kernels directly from the test harness.
-It strengthens the PTX codegen path by proving the embedded PTX module covers
-more than the original f32 add kernel.
-
-Focused verification:
-
-- `python -m pytest -q helixc\tests\test_codegen.py -k "stage35_vec_mul_kernel_ptx_in_binary or stage35_vec_neg_kernel_ptx_in_binary or stage35_i32_kernel_ptx_in_binary or stage16" --tb=short`
-  - Result: 6 passed, 767 deselected.
-- `python scripts\stage31_validate.py --mode quick --skip-snapshot`
-  - Result: passed, `stage31-quick: rc=0`.
-
-## Neural-Network Cluster Verification 2
-
-After the dense and activation backprop work, the broader neural-network slice
-was:
-
-- `python -m pytest -q helixc\tests\test_codegen.py -k "nn_ or attention_softmax_f32" --tb=short`
-  - Result: 32 passed, 737 deselected.
-
-## Increment 12 - f32 MSE-Loss Gradient Helper
+## Increment 18 - Adam Optimizer Helper
 
 The Helix neural-network stdlib now includes:
 
-- `mse_loss_f32_grad(y_start, t_start, dy_start, n)`
+- `adam_f32_step(w_start, g_start, m_start, v_start, lr, beta1, beta2, eps, n)`
 
-It writes the gradient of mean squared error with respect to the prediction
-vector:
+Beginner meaning:
 
-- `dy[i] = 2 * (y[i] - target[i]) / n`
+- SGD moves weights directly by the current gradient.
+- Adam also tracks a moving average of the gradient and squared gradient, which
+  is much closer to how modern AI models are usually trained.
 
-This supplies a simple starting gradient for backpropagation through a model.
+Current scope:
 
-Focused verification:
-
-- `python -m pytest -q helixc\tests\test_codegen.py -k "mse_loss_f32_grad or mse_loss_f32 or dense_layer_f32_grad" --tb=short`
-  - Result: 4 passed, 766 deselected.
-- `python scripts\stage31_validate.py --mode quick --skip-snapshot`
-  - Result: passed, `stage31-quick: rc=0`.
-
-## Increment 11 - f32 Activation Backprop Helpers
-
-The Helix neural-network stdlib now includes backward helpers for common f32
-activation layers:
-
-- `relu_layer_f32_backward`
-- `sigmoid_layer_backward`
-- `tanh_layer_backward`
-
-These helpers turn upstream gradients into input gradients for activation
-layers. This is another step toward writing full training loops directly in
-Helix.
+- This is an Adam-style step with uncorrected moving moments.
+- It updates weights, first moment `m`, and second moment `v` in Helix memory.
 
 Focused verification:
 
-- `python -m pytest -q helixc\tests\test_codegen.py -k "activation_backprop_layers or relu_layer_f32_backward or sigmoid_layer_backward or tanh_layer_backward or modern_activation_layers" --tb=short`
-  - Result: 2 passed, 767 deselected.
+- `python -m pytest -q helixc\tests\test_codegen.py -k "adam_f32_step or sgd_f32_step or clip_grad_norm_f32 or add_weight_decay_grad_f32" --tb=short`
+  - Result: 6 passed, 774 deselected.
+- `python -m pytest -q helixc\tests\test_codegen.py -k "nn_ or adam_f32_step or sgd_f32_step or dense_layer_f32_grad" --tb=short`
+  - Result: 39 passed, 741 deselected.
 - `python scripts\stage31_validate.py --mode quick --skip-snapshot`
   - Result: passed, `stage31-quick: rc=0`.
 
-## Increment 10 - f32 Dense-Layer Backprop Helpers
-
-The Helix neural-network stdlib now includes dense-layer gradient helpers for
-`y = W @ x + b`:
-
-- `dense_layer_f32_grad_w`
-- `dense_layer_f32_grad_b`
-- `dense_layer_f32_grad_x`
-
-These compute gradients for weights, bias, and inputs. This is a core step
-toward training multi-layer models directly in Helix.
-
-Focused verification:
-
-- `python -m pytest -q helixc\tests\test_codegen.py -k "dense_layer_f32_grad or dense_layer_f32_forward or tf2d_matvec or sgd_f32_step" --tb=short`
-  - Result: 5 passed, 763 deselected.
-- `python scripts\stage31_validate.py --mode quick --skip-snapshot`
-  - Result: passed, `stage31-quick: rc=0`.
-
-## Increment 9 - f32 Classification Helpers
+## Increment 19 - Dense Classifier SGD Step
 
 The Helix neural-network stdlib now includes:
 
-- `accuracy_count_from_logits_f32`
-- `ce_loss_batch_f32`
+- `dense_classifier_sgd_step_f32(w_start, b_start, x_start, target, scratch_start, shape_start, lr)`
 
-These make classification workflows more complete:
+Beginner meaning:
 
-- `accuracy_count_from_logits_f32` counts correct predictions directly from a
-  row-major logits matrix.
-- `ce_loss_batch_f32` computes average cross-entropy over probability rows.
+This is a compact one-sample classifier training step. It composes existing
+Helix-native pieces:
 
-Focused verification:
+- dense forward pass with bias
+- softmax probabilities
+- softmax-cross-entropy gradient
+- dense weight gradient
+- SGD updates for weights and bias
 
-- `python -m pytest -q helixc\tests\test_codegen.py -k "accuracy_count_from_logits_f32 or ce_loss_batch_f32 or argmax_rows_f32 or ce_loss or count_correct" --tb=short`
-  - Result: 4 passed, 761 deselected.
-- `python scripts\stage31_validate.py --mode quick --skip-snapshot`
-  - Result: passed, `stage31-quick: rc=0`.
+The API intentionally uses `scratch_start` and `shape_start` arena handles so it
+stays within the current backend's six-integer-argument limit.
 
-## Increment 8 - Row-Wise f32 Argmax
+Safety behavior:
 
-The Helix neural-network stdlib now includes:
-
-- `argmax_rows_f32(logits_start, rows, cols, out_start)`
-
-It reads a row-major f32 logits matrix and writes one predicted class id per
-row. This is a common step after model inference for classification tasks.
+- Invalid class labels return sentinel status `35001`.
+- Invalid or empty dimensions return success without writing.
 
 Focused verification:
 
-- `python -m pytest -q helixc\tests\test_codegen.py -k "argmax_rows_f32 or softmax or count_correct" --tb=short`
-  - Result: 5 passed, 758 deselected.
+- `python -m pytest -q helixc\tests\test_codegen.py -k "dense_classifier_sgd_step_f32 or softmax_ce_grad_f32 or dense_layer_f32_grad_w or sgd_f32_step" --tb=short`
+  - Result: 7 passed, 775 deselected.
+- `python -m pytest -q helixc\tests\test_codegen.py -k "nn_ or dense_classifier_sgd_step_f32 or softmax_ce_grad_f32 or dense_layer_f32" --tb=short`
+  - Result: 41 passed, 741 deselected.
 - `python scripts\stage31_validate.py --mode quick --skip-snapshot`
-  - Result: passed, `stage31-quick: rc=0`.
-
-## Neural-Network Cluster Verification
-
-After increments 2 through 6, the broader neural-network regression slice was:
-
-- `python -m pytest -q helixc\tests\test_codegen.py -k "nn_ or attention_softmax_f32" --tb=short`
-  - Result: 24 passed, 737 deselected.
-
-## Increment 7 - Modern f32 Activation Layers
-
-The Helix neural-network stdlib now includes vector layers for existing scalar
-modern activations:
-
-- `softplus_layer`
-- `silu_layer`
-- `gelu_layer`
-
-These matter because modern AI models often use smooth activations rather than
-plain ReLU alone. GELU and SiLU in particular are common in transformer-style
-networks.
-
-Focused verification:
-
-- `python -m pytest -q helixc\tests\test_codegen.py -k "modern_activation_layers or softplus or silu or gelu or sigmoid_layer or tanh_layer" --tb=short`
-  - Result: 2 passed, 760 deselected.
-- `python scripts\stage31_validate.py --mode quick --skip-snapshot`
-  - Result: passed, `stage31-quick: rc=0`.
-
-## Increment 6 - f32 Dropout
-
-The Helix neural-network stdlib now includes:
-
-- `dropout_f32(x_start, y_start, n, keep_prob, seed)`
-
-It implements deterministic inverted dropout for f32 vectors. Kept values are
-scaled by `1 / keep_prob`; dropped values become zero. The helper returns the
-final RNG state so callers can continue a reproducible training stream.
-
-This matters because dropout is a standard training-time regularization tool.
-In beginner terms, it helps models avoid relying too heavily on one activation
-path.
-
-Focused verification:
-
-- `python -m pytest -q helixc\tests\test_codegen.py -k "dropout_f32 or layer_norm_f32 or rand_step" --tb=short`
-  - Result: 3 passed, 758 deselected.
-- `python scripts\stage31_validate.py --mode quick --skip-snapshot`
-  - Result: passed, `stage31-quick: rc=0`.
-
-## Increment 5 - f32 Layer Normalization
-
-The Helix neural-network stdlib now includes:
-
-- `layer_norm_f32(x_start, y_start, n, eps)`
-
-It normalizes one f32 vector by subtracting its mean and dividing by
-`sqrt(variance + eps)`.
-
-This is an important AI building block because layer normalization keeps model
-activations in a stable range, especially in transformer-style networks.
-
-Focused verification:
-
-- `python -m pytest -q helixc\tests\test_codegen.py -k "layer_norm_f32 or softmax or tanh_layer or leaky_relu" --tb=short`
-  - Result: 6 passed, 753 deselected.
-- `python scripts\stage31_validate.py --mode quick --skip-snapshot`
-  - Result: passed, `stage31-quick: rc=0`.
-
-## Increment 4 - f32 Stable SGD Step
-
-The Helix neural-network stdlib now includes:
-
-- `sgd_f32_step_decay_clip(w_start, g_start, lr, decay, max_norm, n)`
-
-It composes the training helpers into one practical update:
-
-1. Add weight decay to the gradient.
-2. Clip the gradient norm.
-3. Apply the f32 SGD step.
-
-This is still simple, but it is closer to what real model training needs than
-raw SGD alone.
-
-Focused verification:
-
-- `python -m pytest -q helixc\tests\test_codegen.py -k "sgd_f32_step_decay_clip or weight_decay_grad_f32 or clip_grad_norm_f32 or sgd_f32_step" --tb=short`
-  - Result: 5 passed, 753 deselected.
-- `python scripts\stage31_validate.py --mode quick --skip-snapshot`
-  - Result: passed, `stage31-quick: rc=0`.
-
-## Increment 3 - f32 Weight-Decay Gradient Helper
-
-The Helix neural-network stdlib now includes:
-
-- `add_weight_decay_grad_f32(g_start, w_start, decay, n)`
-
-It updates a gradient vector in place:
-
-- `g[i] = g[i] + decay * w[i]`
-
-This is the standard gradient contribution for L2 weight decay. In beginner
-terms, it helps keep model weights from growing too large during training.
-
-Focused verification:
-
-- `python -m pytest -q helixc\tests\test_codegen.py -k "weight_decay_grad_f32 or clip_grad_norm_f32 or tf1d_axpby" --tb=short`
-  - Result: 4 passed, 753 deselected.
-- `python scripts\stage31_validate.py --mode quick --skip-snapshot`
-  - Result: passed, `stage31-quick: rc=0`.
-
-## Next Work
-
-Likely follow-up slices:
-
-- Wire field-path leaves into the higher-level `grad_rev_all`/pytree model
-  surface.
-- Keep PTX/tile/autotune expansion behind focused tests until the CPU AI/ML
-  substrate is stronger.
-
-## Increment 2 - f32 Gradient-Norm Clipping
-
-The Helix neural-network stdlib now includes:
-
-- `clip_grad_norm_f32(g_start, max_norm, n)`
-
-It computes the f32 gradient vector's L2 norm and scales the vector in place
-when the norm is larger than `max_norm`.
-
-This matters for AI training because clipping prevents a very large gradient
-from making a model update unstable.
-
-Behavior added:
-
-- Large gradients are scaled down toward the requested maximum norm.
-- Small gradients are left unchanged.
-- Empty or zero-norm gradients return cleanly.
-- Negative `max_norm` is treated as `0.0`, so the helper remains deterministic.
-
-Focused verification:
-
-- `python -m pytest -q helixc\tests\test_codegen.py -k "clip_grad_norm_f32 or sgd_f32_step or tf1d_l2_norm_sq or tf1d_scale_inplace" --tb=short`
-  - Result: 5 passed, 751 deselected.
-- `python scripts\stage31_validate.py --mode quick --skip-snapshot`
-  - Result: passed, `stage31-quick: rc=0`.
+  - First result: failed because the new helper called `dense_layer_f32_forward`
+    with the old five-argument shape.
+  - Fixed by using the existing bias-aware six-argument signature.
+  - Final result: passed, `stage31-quick: rc=0`.
 
 ## Increment 20 - Clean Gate 1 Fix Sweep
 
@@ -798,7 +789,7 @@ Fixes landed in this increment:
 - Direct PTX missing-file errors now render as clean user-facing diagnostics
   instead of Python tracebacks.
 - Public docs now frame AGI feature claims as Helix differentiator targets and
-  under-served combinations instead of absolute "no other language" claims.
+  under-served combinations instead of absolute comparison claims.
 - The living language spec date now reflects the Stage 35 update.
 
 Focused verification:
@@ -809,7 +800,7 @@ Focused verification:
   - Result: 1 passed.
 - `python -m pytest -q helixc\tests\test_ptx.py -k "stage35_direct_ptx_cli_strict_allows_clean_default_stdlib_kernel or stage35_direct_ptx_cli_accepts_stdlib_compat_flag or stage35_direct_ptx_cli_reports_missing_file_without_traceback or stage35_direct_ptx_cli_strict_rejects_effect_violation or stage35_direct_ptx_cli_includes_stdlib_by_default or stage35_direct_ptx_cli_reports_parse_error_without_traceback" --tb=short`
   - Result: 6 passed.
-- Public docs uniqueness/date scan for broad "no other language" claims and old
+- Public docs absolute-comparison/date scan for broad competitor claims and old
   spec date
   - Result: no matches.
 - `python -m pytest -q helixc\tests\test_codegen.py -k "nn_ or stage35 or softmax or ce_loss or dense_classifier_sgd_step_f32 or adam_f32_step or builtin_adam_step or revad_ or grad_rev_all_writes_f64 or negative_length_tensor_nn_helpers or builtin_bce_uses_stable_log_near_zero or builtin_bce_and_nn_bce_are_stable_near_one" --tb=short`
@@ -832,3 +823,58 @@ Clean-gate status:
 
 - Stage 35 clean gates remain `0/3`.
 - Next step is another fresh Stage 35 clean gate on this fixed commit.
+
+## Increment 27 - Eighth Clean-Gate Restart Fix Sweep
+
+The next fresh Stage 35 audit restart found deeper runtime, PTX strict-parity,
+and documentation/status issues, so the gate did not count as clean and remains
+at `0/3`.
+
+Fixes landed in this increment:
+
+- Reverse-AD valid indices are now bounded by both tape `count` and tape `cap`.
+- `rev_backward` now rejects corrupted tape counts before reading or writing
+  adjoints when `count` exceeds the tape or adjoint capacity.
+- 2D tensor helpers now use a safe shape length helper so negative dimensions
+  are treated as empty instead of multiplying into a positive element count.
+- `ti1d_min` and `ti1d_max` now treat negative lengths as empty sentinel cases.
+- The standalone PTX CLI now mirrors `helixc.check --emit-ptx --strict`
+  totality enforcement before emitting PTX.
+- `docs/lang/agi-features.md` and `docs/ROADMAP.md` now avoid broad absolute
+  comparison phrasing and use differentiator/target wording.
+- The Stage 35 progress ledger is mechanically reordered so visible increment
+  chronology reads `1` through `27`.
+
+Focused verification:
+
+- `python -m py_compile helixc\backend\ptx.py`
+  - Result: passed.
+- `python -m pytest -q helixc\tests\test_ptx.py -k "stage35_direct_ptx_cli_strict_rejects_totality_failure or stage35_direct_ptx_cli_strict_allows_clean_default_stdlib_kernel or stage35_direct_ptx_cli_accepts_stdlib_compat_flag or stage35_direct_ptx_cli_reports_missing_file_without_traceback" --tb=short`
+  - Result: 4 passed.
+- `python -m pytest -q helixc\tests\test_codegen.py -k "revad_backward_rejects_count_above_capacity_without_adj_corruption or negative_length_integer_min_max_return_empty_sentinel or negative_2d_shape_helpers_treat_shape_as_empty or negative_length_tensor_nn_helpers_return_empty_values" --tb=short`
+  - Result: 4 passed.
+- Public docs absolute-comparison scan
+  - Result: no matches.
+- Stage/docs stale-claim scan for historic stage labels and old gradient/PTX/f64
+  claims
+  - Result: no matches.
+- `python -m pytest -q helixc\tests\test_codegen.py -k "nn_ or stage35 or softmax or ce_loss or dense_classifier_sgd_step_f32 or adam_f32_step or builtin_adam_step or revad_ or grad_rev_all_writes_f64 or negative_length_tensor_nn_helpers or negative_length_integer_min_max or negative_2d_shape_helpers or builtin_bce_uses_stable_log_near_zero or builtin_bce_and_nn_bce_are_stable_near_one" --tb=short`
+  - Result: 82 passed.
+- `python -m pytest -q helixc\tests\test_ptx.py helixc\tests\test_tile_ir.py helixc\tests\test_autotune.py helixc\tests\test_cli.py -k "emit_ptx or ptx or tile_ir or autotune or unwind or unsafe or trace or stage35" --tb=short`
+  - Result: 115 passed.
+- `python -m pytest -q helixc\tests\test_autodiff.py helixc\tests\test_autodiff_reverse.py helixc\tests\test_pytree.py --tb=short`
+  - Result: 90 passed.
+- `python scripts\stage31_validate.py --mode quick --skip-snapshot`
+  - Result: passed, `stage31-quick: rc=0`.
+
+Clean-gate status:
+
+- Stage 35 clean gates remain `0/3`.
+- Next step is another fresh Stage 35 clean gate on this fixed commit.
+
+## Next Work
+
+Likely follow-up slices:
+
+- Run another fresh Stage 35 clean gate from the newest fixed commit.
+- Keep PTX/tile/autotune expansion behind focused tests until the CPU AI/ML substrate is stronger.
