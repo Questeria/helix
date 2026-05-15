@@ -9373,6 +9373,25 @@ def test_nn_dense_layer_f32_grad_x():
     assert code == 42, f"expected 42, got {code}"
 
 
+def test_nn_mse_loss_f32_grad():
+    """MSE mean grad: y=[3,5], t=[1,1], n=2 -> [2,4]. sum*7=42."""
+    src = """
+    fn main() -> i32 {
+        let y = t1d_new(2);
+        tf1d_set(y, 0, 3.0_f32);
+        tf1d_set(y, 1, 5.0_f32);
+        let t = t1d_new(2);
+        tf1d_set(t, 0, 1.0_f32);
+        tf1d_set(t, 1, 1.0_f32);
+        let dy = t1d_new(2);
+        mse_loss_f32_grad(y, t, dy, 2);
+        (tf1d_sum(dy, 2) as i32) * 7
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
 def test_nn_clip_grad_norm_f32_scales_large_grad():
     """clip [3,4] from norm 5 to max 2.5, allowing sqrt-rounding tolerance."""
     src = """

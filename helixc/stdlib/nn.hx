@@ -191,6 +191,24 @@ fn mse_loss_f32(y_start: i32, t_start: i32, n: i32) -> f32 {
     }
 }
 
+// Gradient of mean squared error with respect to y:
+//   d/dy[i] mean((y - t)^2) = 2 * (y[i] - t[i]) / n
+fn mse_loss_f32_grad(y_start: i32, t_start: i32,
+                     dy_start: i32, n: i32) -> i32 {
+    if n <= 0 { 0 }
+    else {
+        let scale = 2.0_f32 / (n as f32);
+        let mut i: i32 = 0;
+        while i < n {
+            let yv = __f32_from_bits(__arena_get(y_start + i));
+            let tv = __f32_from_bits(__arena_get(t_start + i));
+            __arena_set(dy_start + i, __bits_of_f32((yv - tv) * scale));
+            i = i + 1;
+        }
+        0
+    }
+}
+
 fn dense_layer_f32_forward(w_start: i32, w_rows: i32, w_cols: i32,
                            x_start: i32, b_start: i32, y_start: i32) -> i32 {
     tf2d_matvec(w_start, w_rows, w_cols, x_start, y_start);

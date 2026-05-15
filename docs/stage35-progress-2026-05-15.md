@@ -64,6 +64,34 @@ Initial focused checks:
 - `python scripts\stage31_validate.py --mode quick --skip-snapshot`
   - Result: passed, `stage31-quick: rc=0`.
 
+## Neural-Network Cluster Verification 2
+
+After the dense and activation backprop work, the broader neural-network slice
+was:
+
+- `python -m pytest -q helixc\tests\test_codegen.py -k "nn_ or attention_softmax_f32" --tb=short`
+  - Result: 32 passed, 737 deselected.
+
+## Increment 12 - f32 MSE-Loss Gradient Helper
+
+The Helix neural-network stdlib now includes:
+
+- `mse_loss_f32_grad(y_start, t_start, dy_start, n)`
+
+It writes the gradient of mean squared error with respect to the prediction
+vector:
+
+- `dy[i] = 2 * (y[i] - target[i]) / n`
+
+This supplies a simple starting gradient for backpropagation through a model.
+
+Focused verification:
+
+- `python -m pytest -q helixc\tests\test_codegen.py -k "mse_loss_f32_grad or mse_loss_f32 or dense_layer_f32_grad" --tb=short`
+  - Result: 4 passed, 766 deselected.
+- `python scripts\stage31_validate.py --mode quick --skip-snapshot`
+  - Result: passed, `stage31-quick: rc=0`.
+
 ## Increment 11 - f32 Activation Backprop Helpers
 
 The Helix neural-network stdlib now includes backward helpers for common f32
