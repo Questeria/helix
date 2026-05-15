@@ -1789,6 +1789,29 @@ def test_stage34_failed_top_level_const_initializer_does_not_emit_later_carries(
     assert artifact["proof_carries"] == []
 
 
+def test_stage34_self_independent_unrepresentable_value_is_not_clean(
+    capsys, tmp_path,
+):
+    src_path = str(tmp_path / "self_independent_unrepresentable_value.hx")
+    with open(src_path, "w") as f:
+        f.write(
+            "type AlwaysF64 = f64 where true;\n"
+            "type AlwaysInt = i32 where true;\n"
+            "fn use_f64(x: AlwaysF64) -> i32 { 0 }\n"
+            "fn call_bad() -> i32 { use_f64(literal_bad()) }\n"
+            "fn literal_bad() -> AlwaysF64 { 1e309_f64 }\n"
+            "fn cast_bad() -> AlwaysInt { 1e309_f64 as AlwaysInt }\n"
+        )
+    rc = main([src_path, "--emit-proof-obligations", "--no-stdlib"])
+    captured = capsys.readouterr()
+    assert rc == 1
+    artifact = json.loads(captured.out)
+    assert artifact["summary"]["typecheck_errors"] >= 2
+    assert artifact["summary"]["proof_carries"] == 0
+    assert artifact["summary"]["proof_carry_strategies"] == {}
+    assert artifact["proof_carries"] == []
+
+
 def test_stage34_emit_proof_obligations_json_for_refined_f32_rounding(
     capsys, tmp_path,
 ):

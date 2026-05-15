@@ -802,6 +802,29 @@ def test_stage34_refined_integer_cast_rejects_nonfinite_before_proof():
                for e in errs), errs
 
 
+def test_stage34_self_independent_refinement_rejects_unrepresentable_values():
+    literal_errs = check("""
+    type AlwaysF64 = f64 where true;
+    fn f() -> AlwaysF64 {
+        1e309_f64
+    }
+    """)
+    assert any("return value of function 'f'" in e
+               and "requires a representable target value" in e
+               and "target base f64" in e
+               for e in literal_errs), literal_errs
+
+    cast_errs = check("""
+    type AlwaysInt = i32 where true;
+    fn f() -> AlwaysInt {
+        1e309_f64 as AlwaysInt
+    }
+    """)
+    assert any("cast to refined type AlwaysInt" in e
+               and "value is not representable after casting f64 to i32" in e
+               for e in cast_errs), cast_errs
+
+
 def test_stage31_unsupported_refinement_predicates_do_not_carry_by_name():
     errs = check("""
     type Source = f64 where foo();

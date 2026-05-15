@@ -503,6 +503,7 @@ class TypeChecker:
         self._type_alias_cache: dict[str, Type] = {}
         self._const_scalar_values: dict[str, int | float] = {}
         self._invalid_const_names: set[str] = set()
+        self._invalid_refined_return_functions: set[str] = set()
         self._local_const_scalar_scopes: list[dict[str, int | float | None]] = []
         self._current_return_ty: Type = TyUnit()
         self.proof_obligations: list[ProofObligation] = []
@@ -524,6 +525,7 @@ class TypeChecker:
         self._type_alias_decls: dict[str, A.TypeAlias] = {}
         self._const_decls: dict[str, A.ConstDecl] = {}
         self._invalid_const_names = set()
+        self._invalid_refined_return_functions = set()
         self._recursive_enum_names: set[str] = set()
         self._type_alias_cache = {}
         self._local_const_scalar_scopes = []
@@ -585,13 +587,29 @@ class TypeChecker:
                 except TypeError_ as e:
                     self.errors.append(e)
 
-        # Pass 2: check function bodies
-        for item in self.prog.items:
-            if isinstance(item, A.FnDecl):
+        # Pass 2: check function bodies. Refined-return functions that fail
+        # must be known before later proof-carry artifacts are trusted, even
+        # when callers are declared before the failed producer. Run a small
+        # fixed point over function bodies, discarding intermediate
+        # function-body diagnostics until the invalid-producer set stabilizes.
+        function_error_start = len(self.errors)
+        function_obligation_start = len(self.proof_obligations)
+        function_carry_start = len(self.proof_carries)
+        fn_items = [item for item in self.prog.items
+                    if isinstance(item, A.FnDecl)]
+        for _ in range(max(1, len(fn_items) + 1)):
+            self.errors = self.errors[:function_error_start]
+            self.proof_obligations = (
+                self.proof_obligations[:function_obligation_start])
+            self.proof_carries = self.proof_carries[:function_carry_start]
+            invalid_before = set(self._invalid_refined_return_functions)
+            for item in fn_items:
                 try:
                     self._check_fn(item)
                 except TypeError_ as e:
                     self.errors.append(e)
+            if self._invalid_refined_return_functions == invalid_before:
+                break
 
         return self.errors
 
@@ -1734,6 +1752,8 @@ class TypeChecker:
         sig = self.functions.get(fn.name)
         if sig is None:
             return
+        error_start = len(self.errors)
+        completed = False
         kernel_hbm_indexables = (
             self._validate_kernel_hbm_params(fn, sig)
             if "kernel" in fn.attrs else set()
@@ -1762,6 +1782,7 @@ class TypeChecker:
         self._current_return_ty = sig.ret
         try:
             self._check_fn_body(fn, sig)
+            completed = True
         finally:
             self._current_pure = prev_pure
             self._current_effects = prev_effects
@@ -1769,6 +1790,10 @@ class TypeChecker:
             self._current_is_kernel = prev_is_kernel
             self._current_hbm_tile_indexables = prev_hbm_tile_indexables
             self._current_return_ty = prev_return_ty
+        if (completed
+                and self._contains_refinement(sig.ret)
+                and len(self.errors) != error_start):
+            self._invalid_refined_return_functions.add(fn.name)
 
     def _validate_kernel_hbm_params(
         self, fn: A.FnDecl, sig: FunctionSig
@@ -1972,7 +1997,11 @@ class TypeChecker:
             # Function reference?
             if expr.name in self.functions:
                 sig = self.functions[expr.name]
-                return TyFn(tuple(t for _, t in sig.params), sig.ret)
+                ret = sig.ret
+                if expr.name in getattr(
+                        self, "_invalid_refined_return_functions", set()):
+                    ret = self._erase_refinement(ret)
+                return TyFn(tuple(t for _, t in sig.params), ret)
             enum_variant = self._enum_variant_for_expr(expr)
             if enum_variant is not None:
                 ename, variant = enum_variant
@@ -2476,6 +2505,9 @@ class TypeChecker:
                 self._check_call_basic(expr, sig, arg_tys, scope)
                 self._check_call_shapes(expr, sig, arg_tys, scope)
                 self._check_call_effects(expr, sig)
+                if expr.callee.name in getattr(
+                        self, "_invalid_refined_return_functions", set()):
+                    return self._erase_refinement(sig.ret)
                 return sig.ret
             if isinstance(callee, TyFn):
                 self._check_function_typed_call(expr, callee, arg_tys, scope)
@@ -2982,22 +3014,23 @@ class TypeChecker:
             pending = self._check_self_independent_refinement(
                 refined, span, context,
             )
-            if pending:
-                for pred in pending:
-                    self._record_refinement_obligation(
-                        context, refined, pred, "unproven", span, None,
-                    )
-                self.errors.append(TypeError_(
-                    f"{context}: refinement {refined.name} requires a "
-                    f"compile-time-proven value in Stage 34 target "
-                    f"representation; could not prove "
-                    f"{' and '.join(self._fmt_refinement_expr(p) for p in pending)} "
-                    f"for target base {self._fmt(target_base)}",
-                    span,
-                    hint="refined values must be representable by their "
-                         "erased base type before their predicates can be "
-                         "proved",
-                ))
+            for pred in pending:
+                self._record_refinement_obligation(
+                    context, refined, pred, "unproven", span, None,
+                )
+            detail = (
+                f"; could not prove "
+                f"{' and '.join(self._fmt_refinement_expr(p) for p in pending)}"
+                if pending else ""
+            )
+            self.errors.append(TypeError_(
+                f"{context}: refinement {refined.name} requires a "
+                f"representable target value in Stage 34{detail} for "
+                f"target base {self._fmt(target_base)}",
+                span,
+                hint="refined values must be representable by their erased "
+                     "base type before they can become refined values",
+            ))
             if isinstance(refined.base, TyRefined):
                 self._check_refinement_const_value(
                     value_expr, refined.base, span, context, scope,
@@ -3051,21 +3084,33 @@ class TypeChecker:
             pending = self._check_self_independent_refinement(
                 refined, span, context,
             )
-            if pending:
+            if value is not None or pending:
                 proved = False
                 for pred in pending:
                     self._record_refinement_obligation(
                         context, refined, pred, "unproven", span, None,
                     )
+                if value is not None:
+                    detail = "value is not representable"
+                    if pending:
+                        detail += (
+                            "; could not prove "
+                            f"{' and '.join(self._fmt_refinement_expr(p) for p in pending)}"
+                        )
+                else:
+                    detail = (
+                        "could not prove "
+                        f"{' and '.join(self._fmt_refinement_expr(p) for p in pending)}"
+                    )
                 self.errors.append(TypeError_(
                     f"{context}: refinement {refined.name} requires a "
-                    f"compile-time-proven target value in Stage 34; could "
-                    f"not prove {' and '.join(self._fmt_refinement_expr(p) for p in pending)} "
-                    f"after casting {self._fmt(src_ty)} to "
+                    f"compile-time-proven target value in Stage 34; "
+                    f"{detail} after casting {self._fmt(src_ty)} to "
                     f"{self._fmt(target_base)}",
                     span,
                     hint="cast to the refined type only when the target "
-                         "value can be proven to satisfy the predicate",
+                         "value can be represented and proven to satisfy "
+                         "the predicate",
                 ))
             if isinstance(refined.base, TyRefined):
                 proved = self._check_refinement_cast_value(

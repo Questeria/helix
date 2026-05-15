@@ -352,3 +352,33 @@ Verification after the top-level const and non-finite integer fixes:
   `444 passed`
 - `python scripts\stage31_validate.py --mode full --skip-snapshot --shards 8`:
   pass with no shard retries
+
+## Clean Gate 1 Fifth Restart - Failed; Fix Verified; Counter Reset
+
+The next clean-gate attempt found another proof-honesty edge case:
+
+- If a refined type used only self-independent predicates such as `where true`,
+  an unrepresentable constant value could still be treated as proven because
+  there were no pending `self` predicates to force the target-representation
+  error path.
+- The same issue could poison calls through a function whose refined return
+  body failed; later callers still saw the declared refined return type.
+
+The fix makes any known constant value that cannot be represented by the
+erased target type a proof/typecheck error, even when all predicates are
+self-independent. It also tracks functions whose refined return checking
+failed and erases their return refinements for later direct calls and function
+references, preventing downstream proof carries from a failed producer. The
+function-body pass now reaches a fixed point over failed refined-return
+producers, so callers declared before a failed producer are also checked with
+that fail-closed knowledge.
+
+Verification after the self-independent and invalid-return fixes:
+
+- Exact focused regressions: `3 passed`
+- Nearby proof-carry and proof-gate slice: `29 passed`
+- `python scripts\stage31_validate.py --mode quick --skip-snapshot`: pass
+- `python -m pytest -q helixc/tests/test_typecheck.py helixc/tests/test_cli.py helixc/tests/test_proof_artifact_validate.py helixc/tests/test_proof_artifact_gate.py`:
+  `447 passed`
+- `python scripts\stage31_validate.py --mode full --skip-snapshot --shards 8`:
+  pass after built-in retry recovered no-codegen shard 1
