@@ -398,6 +398,34 @@ fn ce_loss(p_start: i32, target_idx: i32) -> f32 {
     0.0_f32 - __log(pc)
 }
 
+// For a row-major logits matrix (rows x cols), write each row's argmax class
+// index to out_start[row].
+fn argmax_rows_f32(logits_start: i32, rows: i32, cols: i32,
+                   out_start: i32) -> i32 {
+    if rows <= 0 { 0 }
+    else { if cols <= 0 { 0 }
+    else {
+        let mut r: i32 = 0;
+        while r < rows {
+            let row_start = logits_start + r * cols;
+            let mut best_idx: i32 = 0;
+            let mut best_val: f32 = __f32_from_bits(__arena_get(row_start));
+            let mut c: i32 = 1;
+            while c < cols {
+                let v = __f32_from_bits(__arena_get(row_start + c));
+                if v > best_val {
+                    best_val = v;
+                    best_idx = c;
+                };
+                c = c + 1;
+            }
+            __arena_set(out_start + r, best_idx);
+            r = r + 1;
+        }
+        0
+    }}
+}
+
 // argmin: index of smallest element. Companion to argmax.
 // Returns -1 on empty.
 @pure

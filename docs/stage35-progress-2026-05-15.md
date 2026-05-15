@@ -64,6 +64,22 @@ Initial focused checks:
 - `python scripts\stage31_validate.py --mode quick --skip-snapshot`
   - Result: passed, `stage31-quick: rc=0`.
 
+## Increment 8 - Row-Wise f32 Argmax
+
+The Helix neural-network stdlib now includes:
+
+- `argmax_rows_f32(logits_start, rows, cols, out_start)`
+
+It reads a row-major f32 logits matrix and writes one predicted class id per
+row. This is a common step after model inference for classification tasks.
+
+Focused verification:
+
+- `python -m pytest -q helixc\tests\test_codegen.py -k "argmax_rows_f32 or softmax or count_correct" --tb=short`
+  - Result: 5 passed, 758 deselected.
+- `python scripts\stage31_validate.py --mode quick --skip-snapshot`
+  - Result: passed, `stage31-quick: rc=0`.
+
 ## Neural-Network Cluster Verification
 
 After increments 2 through 6, the broader neural-network regression slice was:

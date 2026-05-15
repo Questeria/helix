@@ -9104,6 +9104,26 @@ def test_nn_softmax_sums_to_one():
     assert code >= 99 and code <= 101, f"expected ~100, got {code}"
 
 
+def test_nn_argmax_rows_f32():
+    """Two rows of logits -> predicted classes [1,2]. 1*20 + 2*11 = 42."""
+    src = """
+    fn main() -> i32 {
+        let logits = t1d_new(6);
+        tf1d_set(logits, 0, 0.1_f32);
+        tf1d_set(logits, 1, 0.9_f32);
+        tf1d_set(logits, 2, 0.2_f32);
+        tf1d_set(logits, 3, 0.3_f32);
+        tf1d_set(logits, 4, 0.2_f32);
+        tf1d_set(logits, 5, 0.8_f32);
+        let pred = t1d_new(2);
+        argmax_rows_f32(logits, 2, 3, pred);
+        __arena_get(pred) * 20 + __arena_get(pred + 1) * 11
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
 def test_nn_tanh_layer():
     """tanh: 0->0, big->1, -big->-1; sum~=0; +42 = 42."""
     src = """
