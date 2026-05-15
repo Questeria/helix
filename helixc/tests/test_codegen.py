@@ -5535,9 +5535,9 @@ def test_bootstrap_kovc_dep_tab_overflow_emits_28702():
         check=True, timeout=10,
     )
     # Probe driver: parse + init diag_arena + run deprecated_pass, then
-    # count entries with code 28702. The bootstrap exposes diag_arena_count
-    # and diag_get_code, so we iterate. The driver returns the count as
-    # the exit code.
+    # count entries with code 28702 and verify aux points to the dropped
+    # function name. The bootstrap exposes diag_arena_count and diag_get_code,
+    # so we iterate. The driver returns 42 only if the payload is exact.
     driver = lexer_no_main + parser_body + kovc_lib + f"""
 fn main() -> i32 {{
     let src_start = __arena_len();
@@ -5550,12 +5550,27 @@ fn main() -> i32 {{
     let n = diag_arena_count(diag_state);
     let mut i: i32 = 0;
     let mut hits: i32 = 0;
+    let mut bad_aux: i32 = 0;
     while i < n {{
         let code = diag_get_code(diag_state, i);
-        if code == 28702 {{ hits = hits + 1; }};
+        if code == 28702 {{
+            hits = hits + 1;
+            let fn_idx = diag_get_ast_node_idx(diag_state, i);
+            let aux = diag_get_aux(diag_state, i);
+            let name_s = __arena_get(fn_idx + 1);
+            let name_l = __arena_get(fn_idx + 2);
+            if aux != name_s {{ bad_aux = 1; }} else {{ 0 }};
+            if name_l != 3 {{ bad_aux = 2; }} else {{ 0 }};
+            if __arena_get(aux) != 100 {{ bad_aux = 3; }} else {{ 0 }};
+            if __arena_get(aux + 1) != 49 {{ bad_aux = 4; }} else {{ 0 }};
+            if __arena_get(aux + 2) != 55 {{ bad_aux = 5; }} else {{ 0 }};
+        }} else {{ 0 }};
         i = i + 1;
     }}
-    hits
+    let mut rc: i32 = 42;
+    if hits != 1 {{ rc = 1; }} else {{ 0 }};
+    if bad_aux != 0 {{ rc = 10 + bad_aux; }} else {{ 0 }};
+    rc
 }}
 """
     # Use compile_and_run's return value (which is the exit code).
@@ -5565,9 +5580,9 @@ fn main() -> i32 {{
         ["wsl", "-e", "bash", "-c", f"rm -f {src_path}"],
         capture_output=True, timeout=10,
     )
-    assert rc == 1, (
+    assert rc == 42, (
         f"dep_tab cap-overflow should emit exactly 1 28702 diag for "
-        f"the 17th deprecated fn; got rc={rc}"
+        f"the 17th deprecated fn with aux pointing at d17; got rc={rc}"
     )
 
 
@@ -5898,6 +5913,70 @@ fn main() -> i32 {{
     )
 
 
+def test_bootstrap_kovc_attrs_on_non_fn_do_not_bleed_to_next_fn():
+    """Stage 33: attributes on metadata-only decls must not mark next fn."""
+    import os, subprocess
+    proj = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    lexer = open(os.path.join(proj, "helixc", "bootstrap", "lexer.hx")).read()
+    lexer_no_main = lexer.rsplit(
+        "// --------------------------------------------------------------\n// Demo:",
+        1,
+    )[0]
+    parser_body = open(os.path.join(proj, "helixc", "bootstrap", "parser.hx")).read()
+    kovc = open(os.path.join(proj, "helixc", "bootstrap", "kovc.hx")).read()
+    kovc_lib = kovc.rsplit(
+        "// --------------------------------------------------------------\n// Demo:",
+        1,
+    )[0]
+    import uuid
+    tag = uuid.uuid4().hex[:10]
+    src_path = f"/tmp/helix_attr_non_fn_src_{tag}.hx"
+    src_text = (
+        '@deprecated("bad") @since("v9") @kernel @autotune(A: [1]) '
+        'struct Marker { x: i32 } '
+        'fn clean(a: i32) -> i32 { a } '
+        'fn main() -> i32 { clean(42) }'
+    )
+    subprocess.run(
+        ["wsl", "-e", "bash", "-c",
+         f"printf %s {repr(src_text)} > {src_path}"],
+        check=True, timeout=30,
+    )
+    driver = lexer_no_main + parser_body + kovc_lib + f"""
+fn main() -> i32 {{
+    let src_start = __arena_len();
+    let src_len = read_file_to_arena("{src_path}");
+    let tok_base = __arena_len();
+    lex(src_start, src_len);
+    let ast_root = parse_top(tok_base);
+    let clean_fn = __arena_get(ast_root + 1);
+    let diag_state = diag_arena_init();
+    deprecated_pass(ast_root, diag_state);
+    autotune_pass(ast_root, diag_state);
+    let mut rc: i32 = 42;
+    if __arena_get(clean_fn + 9) != 0 {{ rc = 10; }} else {{ 0 }};
+    if __arena_get(clean_fn + 12) != 0 {{ rc = 11; }} else {{ 0 }};
+    if __arena_get(clean_fn + 13) != 0 {{ rc = 12; }} else {{ 0 }};
+    if __arena_get(clean_fn + 14) != 0 {{ rc = 13; }} else {{ 0 }};
+    if __arena_get(clean_fn + 15) != 0 {{ rc = 14; }} else {{ 0 }};
+    if __arena_get(clean_fn + 16) != 0 {{ rc = 15; }} else {{ 0 }};
+    if __arena_get(clean_fn + 17) != 0 {{ rc = 16; }} else {{ 0 }};
+    if __arena_get(clean_fn + 18) != 0 {{ rc = 17; }} else {{ 0 }};
+    if __arena_get(clean_fn + 19) != 0 {{ rc = 18; }} else {{ 0 }};
+    if diag_arena_count(diag_state) != 0 {{ rc = 19; }} else {{ 0 }};
+    rc
+}}
+"""
+    rc = compile_and_run(driver)
+    subprocess.run(
+        ["wsl", "-e", "bash", "-c", f"rm -f {src_path}"],
+        capture_output=True, timeout=30,
+    )
+    assert rc == 42, (
+        f"attributes on a non-fn decl should not bleed into next fn; got rc={rc}"
+    )
+
+
 def test_bootstrap_kovc_autotune_clean_metadata_at_cap():
     """Stage 33: bootstrap parser captures @kernel/@autotune metadata.
 
@@ -6009,9 +6088,10 @@ fn main() -> i32 {{
     let n = diag_arena_count(diag_state);
     let mut i: i32 = 0;
     let mut c27001: i32 = 0;
-    let mut c27002: i32 = 0;
+    let mut c27004: i32 = 0;
     let mut c27003: i32 = 0;
     let mut c27001_aux17: i32 = 0;
+    let mut c27004_aux_name: i32 = 0;
     let mut c27003_missing: i32 = 0;
     let mut c27003_malformed: i32 = 0;
     let mut c27003_empty: i32 = 0;
@@ -6023,7 +6103,21 @@ fn main() -> i32 {{
             c27001 = c27001 + 1;
             if aux == 17 {{ c27001_aux17 = c27001_aux17 + 1; }} else {{ bad_aux = 1; }};
         }} else {{ 0 }};
-        if code == 27002 {{ c27002 = c27002 + 1; }} else {{ 0 }};
+        if code == 27004 {{
+            c27004 = c27004 + 1;
+            let fn_idx = diag_get_ast_node_idx(diag_state, i);
+            let name_s = __arena_get(fn_idx + 1);
+            let name_l = __arena_get(fn_idx + 2);
+            if aux == name_s {{
+                if name_l == 9 {{
+                    if __arena_get(aux) == 110 {{
+                        if __arena_get(aux + 3) == 107 {{
+                            c27004_aux_name = c27004_aux_name + 1;
+                        }} else {{ bad_aux = 3; }};
+                    }} else {{ bad_aux = 4; }};
+                }} else {{ bad_aux = 5; }};
+            }} else {{ bad_aux = 6; }};
+        }} else {{ 0 }};
         if code == 27003 {{
             c27003 = c27003 + 1;
             if aux == 1 {{ c27003_missing = c27003_missing + 1; }} else {{ 0 }};
@@ -6039,12 +6133,13 @@ fn main() -> i32 {{
     }}
     let mut rc: i32 = 42;
     if c27001 != 1 {{ rc = 1; }} else {{ 0 }};
-    if c27002 != 1 {{ rc = 2; }} else {{ 0 }};
+    if c27004 != 1 {{ rc = 2; }} else {{ 0 }};
     if c27003 != 3 {{ rc = 3; }} else {{ 0 }};
     if c27001_aux17 != 1 {{ rc = 4; }} else {{ 0 }};
-    if c27003_missing != 1 {{ rc = 5; }} else {{ 0 }};
-    if c27003_malformed != 1 {{ rc = 6; }} else {{ 0 }};
-    if c27003_empty != 1 {{ rc = 7; }} else {{ 0 }};
+    if c27004_aux_name != 1 {{ rc = 5; }} else {{ 0 }};
+    if c27003_missing != 1 {{ rc = 6; }} else {{ 0 }};
+    if c27003_malformed != 1 {{ rc = 7; }} else {{ 0 }};
+    if c27003_empty != 1 {{ rc = 8; }} else {{ 0 }};
     if bad_aux != 0 {{ rc = 8 + bad_aux; }} else {{ 0 }};
     rc
 }}
@@ -6055,7 +6150,74 @@ fn main() -> i32 {{
         capture_output=True, timeout=30,
     )
     assert rc == 42, (
-        f"autotune_pass should emit 27001/27002/27003 diagnostics; got rc={rc}"
+        f"autotune_pass should emit 27001/27003/27004 diagnostics; got rc={rc}"
+    )
+
+
+def test_bootstrap_kovc_autotune_missing_separators_are_malformed():
+    """Stage 33: bootstrap autotune syntax requires comma separators."""
+    import os, subprocess
+    proj = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    lexer = open(os.path.join(proj, "helixc", "bootstrap", "lexer.hx")).read()
+    lexer_no_main = lexer.rsplit(
+        "// --------------------------------------------------------------\n// Demo:",
+        1,
+    )[0]
+    parser_body = open(os.path.join(proj, "helixc", "bootstrap", "parser.hx")).read()
+    kovc = open(os.path.join(proj, "helixc", "bootstrap", "kovc.hx")).read()
+    kovc_lib = kovc.rsplit(
+        "// --------------------------------------------------------------\n// Demo:",
+        1,
+    )[0]
+    import uuid
+    tag = uuid.uuid4().hex[:10]
+    src_path = f"/tmp/helix_autotune_sep_src_{tag}.hx"
+    src_text = (
+        "@kernel @autotune(A: [1 2]) fn missing_value_comma(a: i32) -> i32 { a } "
+        "@kernel @autotune(A: [1] B: [2]) fn missing_param_comma(a: i32) -> i32 { a } "
+        "fn main() -> i32 { 42 }"
+    )
+    subprocess.run(
+        ["wsl", "-e", "bash", "-c",
+         f"printf %s {repr(src_text)} > {src_path}"],
+        check=True, timeout=30,
+    )
+    driver = lexer_no_main + parser_body + kovc_lib + f"""
+fn main() -> i32 {{
+    let src_start = __arena_len();
+    let src_len = read_file_to_arena("{src_path}");
+    let tok_base = __arena_len();
+    lex(src_start, src_len);
+    let ast_root = parse_top(tok_base);
+    let diag_state = diag_arena_init();
+    autotune_pass(ast_root, diag_state);
+    let n = diag_arena_count(diag_state);
+    let mut i: i32 = 0;
+    let mut malformed: i32 = 0;
+    let mut other: i32 = 0;
+    while i < n {{
+        let code = diag_get_code(diag_state, i);
+        let aux = diag_get_aux(diag_state, i);
+        if code == 27003 {{
+            if aux == 2 {{ malformed = malformed + 1; }} else {{ other = other + 1; }};
+        }} else {{
+            other = other + 1;
+        }};
+        i = i + 1;
+    }}
+    let mut rc: i32 = 42;
+    if malformed != 2 {{ rc = 10; }} else {{ 0 }};
+    if other != 0 {{ rc = 11; }} else {{ 0 }};
+    rc
+}}
+"""
+    rc = compile_and_run(driver)
+    subprocess.run(
+        ["wsl", "-e", "bash", "-c", f"rm -f {src_path}"],
+        capture_output=True, timeout=30,
+    )
+    assert rc == 42, (
+        f"missing autotune separators should emit 27003 aux=2 twice; got rc={rc}"
     )
 
 

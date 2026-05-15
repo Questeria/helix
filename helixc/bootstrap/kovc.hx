@@ -2140,7 +2140,8 @@ fn match_scrut_ty_get(bn_state: i32) -> i32 {
 //   slot 3: aux i32 — pass-specific data (e.g. deprecated_pass
 //           28701: dep_tab entry ptr, deprecated_pass 28702: dropped
 //           fn name start, panic_pass: arg_count, autotune_pass
-//           27001: saturated product, autotune_pass 27003: parse-error kind)
+//           27001: saturated product, autotune_pass 27003:
+//           parse-error kind, autotune_pass 27004: fn name start)
 //
 // Header slots:
 //   slot 0 (base+0):     count
@@ -2639,8 +2640,8 @@ fn autotune_pass(ast_root: i32, diag_state: i32) -> i32 {
                 let product = __arena_get(fn_idx + 16);
                 let parse_error = __arena_get(fn_idx + 17);
                 if is_kernel != 1 {
-                    // 27002: @autotune requires @kernel.
-                    diag_emit(diag_state, 27002, 2, fn_idx, name_s);
+                    // 27004 aux: fn name start.
+                    diag_emit(diag_state, 27004, 2, fn_idx, name_s);
                 };
                 if parse_error != 0 {
                     // 27003 aux: parse_error_kind (1 missing, 2 malformed, 3 empty).
@@ -6295,7 +6296,7 @@ fn emit_elf_for_ast_to_path(ast_root: i32) -> i32 {
     // fires.
     //   * panic_pass:      malformed panic(...) calls (28501)
     //   * unwind_pass:     @unwind not yet supported    (28502)
-    //   * autotune_pass:   @autotune static validation (27001/27002/27003)
+    //   * autotune_pass:   @autotune static validation (27001/27003/27004)
     //   * trace_pass:      @trace recognised (warning)  (25003 sev 1)
     //   * deprecated_pass: call to @deprecated fn       (28701 sev 1)
     //   * unsafe_pass:     stub (no AST_UNSAFE in bootstrap yet)

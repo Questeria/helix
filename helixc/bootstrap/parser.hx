@@ -4359,6 +4359,12 @@ fn capture_autotune_args(tok_base: i32, first_tok: i32, sb: i32) -> i32 {
                                 val_count = val_count + 1;
                             };
                             k = k + 1;
+                            let after_value = tok_tag(tok_base, k);
+                            if after_value != 13 {
+                                if after_value != 21 {
+                                    error_kind = autotune_first_error_kind(error_kind, 2);
+                                } else { 0 };
+                            } else { 0 };
                         } else {
                             error_kind = autotune_first_error_kind(error_kind, 2);
                             k = k + 1;
@@ -4373,6 +4379,14 @@ fn capture_autotune_args(tok_base: i32, first_tok: i32, sb: i32) -> i32 {
                         };
                     };
                     params_seen = params_seen + 1;
+                    let after_param = tok_tag(tok_base, k);
+                    if after_param != 13 {
+                        if after_param != 4 {
+                            if after_param != 0 {
+                                error_kind = autotune_first_error_kind(error_kind, 2);
+                            } else { 0 };
+                        } else { 0 };
+                    } else { 0 };
                 } else {
                     error_kind = autotune_first_error_kind(error_kind, 2);
                     k = k + 1;
@@ -4585,16 +4599,22 @@ fn parse_program(tok_base: i32, sb: i32) -> i32 {
             let is_use_kw = byte_eq(s, l, kw_use_s(sb), kw_use_n(sb));
             if is_struct_kw == 1 {
                 parse_struct_decl(tok_base, sb);
+                __arena_set(sb + 74, 0); __arena_set(sb + 75, 0); __arena_set(sb + 76, 0); __arena_set(sb + 77, 0); __arena_set(sb + 80, 0); __arena_set(sb + 81, 0); __arena_set(sb + 82, 0); __arena_set(sb + 83, 0); __arena_set(sb + 84, 0); __arena_set(sb + 85, 0); __arena_set(sb + 86, 0); __arena_set(sb + 87, 0);
             } else { if is_enum_kw == 1 {
                 parse_enum_decl(tok_base, sb);
+                __arena_set(sb + 74, 0); __arena_set(sb + 75, 0); __arena_set(sb + 76, 0); __arena_set(sb + 77, 0); __arena_set(sb + 80, 0); __arena_set(sb + 81, 0); __arena_set(sb + 82, 0); __arena_set(sb + 83, 0); __arena_set(sb + 84, 0); __arena_set(sb + 85, 0); __arena_set(sb + 86, 0); __arena_set(sb + 87, 0);
             } else { if is_trait_kw == 1 {
                 parse_trait_decl(tok_base, sb);
+                __arena_set(sb + 74, 0); __arena_set(sb + 75, 0); __arena_set(sb + 76, 0); __arena_set(sb + 77, 0); __arena_set(sb + 80, 0); __arena_set(sb + 81, 0); __arena_set(sb + 82, 0); __arena_set(sb + 83, 0); __arena_set(sb + 84, 0); __arena_set(sb + 85, 0); __arena_set(sb + 86, 0); __arena_set(sb + 87, 0);
             } else { if is_impl_kw == 1 {
                 parse_impl_block(tok_base, sb);
+                __arena_set(sb + 74, 0); __arena_set(sb + 75, 0); __arena_set(sb + 76, 0); __arena_set(sb + 77, 0); __arena_set(sb + 80, 0); __arena_set(sb + 81, 0); __arena_set(sb + 82, 0); __arena_set(sb + 83, 0); __arena_set(sb + 84, 0); __arena_set(sb + 85, 0); __arena_set(sb + 86, 0); __arena_set(sb + 87, 0);
             } else { if is_mod_kw == 1 {
                 parse_mod_decl(tok_base, sb, 0, 0);
+                __arena_set(sb + 74, 0); __arena_set(sb + 75, 0); __arena_set(sb + 76, 0); __arena_set(sb + 77, 0); __arena_set(sb + 80, 0); __arena_set(sb + 81, 0); __arena_set(sb + 82, 0); __arena_set(sb + 83, 0); __arena_set(sb + 84, 0); __arena_set(sb + 85, 0); __arena_set(sb + 86, 0); __arena_set(sb + 87, 0);
             } else { if is_use_kw == 1 {
                 parse_use_decl(tok_base, sb);
+                __arena_set(sb + 74, 0); __arena_set(sb + 75, 0); __arena_set(sb + 76, 0); __arena_set(sb + 77, 0); __arena_set(sb + 80, 0); __arena_set(sb + 81, 0); __arena_set(sb + 82, 0); __arena_set(sb + 83, 0); __arena_set(sb + 84, 0); __arena_set(sb + 85, 0); __arena_set(sb + 86, 0); __arena_set(sb + 87, 0);
             } else {
                 keep_decl = 0;
             }}}}}};
@@ -4636,17 +4656,24 @@ fn parse_program(tok_base: i32, sb: i32) -> i32 {
                 prev_list = new_node;
             } else { if is_struct_kw2 == 1 {
                 parse_struct_decl(tok_base, sb);
+                __arena_set(sb + 74, 0); __arena_set(sb + 75, 0); __arena_set(sb + 76, 0); __arena_set(sb + 77, 0); __arena_set(sb + 80, 0); __arena_set(sb + 81, 0); __arena_set(sb + 82, 0); __arena_set(sb + 83, 0); __arena_set(sb + 84, 0); __arena_set(sb + 85, 0); __arena_set(sb + 86, 0); __arena_set(sb + 87, 0);
             } else { if is_enum_kw2 == 1 {
                 parse_enum_decl(tok_base, sb);
+                __arena_set(sb + 74, 0); __arena_set(sb + 75, 0); __arena_set(sb + 76, 0); __arena_set(sb + 77, 0); __arena_set(sb + 80, 0); __arena_set(sb + 81, 0); __arena_set(sb + 82, 0); __arena_set(sb + 83, 0); __arena_set(sb + 84, 0); __arena_set(sb + 85, 0); __arena_set(sb + 86, 0); __arena_set(sb + 87, 0);
             } else { if is_trait_kw2 == 1 {
                 parse_trait_decl(tok_base, sb);
+                __arena_set(sb + 74, 0); __arena_set(sb + 75, 0); __arena_set(sb + 76, 0); __arena_set(sb + 77, 0); __arena_set(sb + 80, 0); __arena_set(sb + 81, 0); __arena_set(sb + 82, 0); __arena_set(sb + 83, 0); __arena_set(sb + 84, 0); __arena_set(sb + 85, 0); __arena_set(sb + 86, 0); __arena_set(sb + 87, 0);
             } else { if is_impl_kw2 == 1 {
                 parse_impl_block(tok_base, sb);
+                __arena_set(sb + 74, 0); __arena_set(sb + 75, 0); __arena_set(sb + 76, 0); __arena_set(sb + 77, 0); __arena_set(sb + 80, 0); __arena_set(sb + 81, 0); __arena_set(sb + 82, 0); __arena_set(sb + 83, 0); __arena_set(sb + 84, 0); __arena_set(sb + 85, 0); __arena_set(sb + 86, 0); __arena_set(sb + 87, 0);
             } else { if is_mod_kw2 == 1 {
                 parse_mod_decl(tok_base, sb, 0, 0);
+                __arena_set(sb + 74, 0); __arena_set(sb + 75, 0); __arena_set(sb + 76, 0); __arena_set(sb + 77, 0); __arena_set(sb + 80, 0); __arena_set(sb + 81, 0); __arena_set(sb + 82, 0); __arena_set(sb + 83, 0); __arena_set(sb + 84, 0); __arena_set(sb + 85, 0); __arena_set(sb + 86, 0); __arena_set(sb + 87, 0);
             } else { if is_use_kw2 == 1 {
                 parse_use_decl(tok_base, sb);
+                __arena_set(sb + 74, 0); __arena_set(sb + 75, 0); __arena_set(sb + 76, 0); __arena_set(sb + 77, 0); __arena_set(sb + 80, 0); __arena_set(sb + 81, 0); __arena_set(sb + 82, 0); __arena_set(sb + 83, 0); __arena_set(sb + 84, 0); __arena_set(sb + 85, 0); __arena_set(sb + 86, 0); __arena_set(sb + 87, 0);
             } else {
+                __arena_set(sb + 74, 0); __arena_set(sb + 75, 0); __arena_set(sb + 76, 0); __arena_set(sb + 77, 0); __arena_set(sb + 80, 0); __arena_set(sb + 81, 0); __arena_set(sb + 82, 0); __arena_set(sb + 83, 0); __arena_set(sb + 84, 0); __arena_set(sb + 85, 0); __arena_set(sb + 86, 0); __arena_set(sb + 87, 0);
                 keep = 0;
             }}}}}}};
         } else {

@@ -178,7 +178,7 @@ The bootstrap parser now captures summary metadata for `@kernel` and
 emits severity-2 diagnostics for:
 
 - `27001`: variant product exceeds the Phase-0 cap of `16`
-- `27002`: `@autotune` is present without `@kernel`
+- `27004`: `@autotune` is present without `@kernel`
 - `27003`: malformed/no-param/empty-list autotune args; later Slice 11
   makes aux carry the specific parse-error kind
 
@@ -384,7 +384,7 @@ instead of a boolean flag:
 
 - `27001` aux is the saturated variant product.
 - `27003` aux is the parse-error kind.
-- `27002` continues to point at the function name start for the missing-kernel
+- `27004` points at the function name start for the missing-kernel
   diagnostic.
 
 Validation:
@@ -412,9 +412,82 @@ Validation:
 - `python scripts\stage31_validate.py --mode quick --skip-snapshot`
   - Result: `rc=0`
 
+## Slice 12: Metadata Clean Gate 2
+
+Three read-only clean-gate audits checked the combined Stage 33 metadata
+surface after Slice 11.
+
+Findings:
+
+- Trap ID `27002` was overloaded: bootstrap already used it for f32 literal
+  overflow, while `autotune_pass` also used it for missing `@kernel`.
+- The trap registry still listed active `28701` as reserved/unused.
+- Tests counted but did not pin the aux payloads for missing-kernel autotune
+  diagnostics or `28702` deprecated-table overflow diagnostics.
+- Attributes consumed before non-function declarations could bleed into the
+  next function through the `next_fn_*` scratch slots.
+- Bootstrap `@autotune(...)` accepted missing comma separators such as
+  `A: [1 2]` and `A: [1] B: [2]` as clean metadata.
+- The self-host cascade only smoked literal/call/loop programs, so it did not
+  exercise final-generation Stage 33 metadata parsing.
+
+Fixes:
+
+- Moved bootstrap missing-kernel autotune diagnostics from `27002` to `27004`;
+  `27002` is now documented only as the f32 literal overflow trap.
+- Removed the stale reserved/unused `28701` registry row.
+- Pinned `27004` aux to the function name start and `28702` aux to the dropped
+  deprecated function name start.
+- Cleared function-attribute scratch slots after parsing top-level non-function
+  declarations. The first attempt used a helper function and produced a
+  self-hosted compiler that segfaulted on every input; the final fix inlines
+  the arena clears and is self-host stable.
+- Added malformed-aux tests for missing autotune separators.
+- Added a final-generation `metadata_attrs` self-host smoke case and required
+  it in the cascade validator.
+
+Validation:
+
+- `python -m pytest -q helixc\tests\test_codegen.py::test_bootstrap_kovc_autotune_validation_diagnostics helixc\tests\test_codegen.py::test_bootstrap_kovc_dep_tab_overflow_emits_28702 helixc\tests\test_codegen.py::test_bootstrap_kovc_attrs_on_non_fn_do_not_bleed_to_next_fn helixc\tests\test_codegen.py::test_bootstrap_kovc_autotune_missing_separators_are_malformed`
+  - Result: `4 passed`
+- `python -m pytest -q helixc\tests\test_selfhost_cascade.py helixc\tests\test_selfhost_cascade_validate.py`
+  - Result: `10 passed`
+- `python -m pytest -q helixc\tests\test_deprecated.py helixc\tests\test_autotune.py helixc\tests\test_codegen.py::test_bootstrap_kovc_deprecated_message_attr_preserved helixc\tests\test_codegen.py::test_bootstrap_kovc_deprecated_diag_aux_carries_message helixc\tests\test_codegen.py::test_bootstrap_kovc_deprecated_diag_aux_matches_each_callee helixc\tests\test_codegen.py::test_bootstrap_kovc_dep_tab_overflow_emits_28702 helixc\tests\test_codegen.py::test_bootstrap_kovc_since_message_attr_preserved helixc\tests\test_codegen.py::test_bootstrap_kovc_attrs_on_non_fn_do_not_bleed_to_next_fn helixc\tests\test_codegen.py::test_bootstrap_kovc_autotune_validation_diagnostics helixc\tests\test_codegen.py::test_bootstrap_kovc_autotune_missing_separators_are_malformed helixc\tests\test_codegen.py::test_bootstrap_kovc_autotune_typed_int_values_preserved helixc\tests\test_selfhost_cascade.py helixc\tests\test_selfhost_cascade_validate.py`
+  - Result: `71 passed`
+- `python -m pytest -q helixc\tests\test_parser.py helixc\tests\test_codegen.py::test_bootstrap_kovc_attrs_on_non_fn_do_not_bleed_to_next_fn helixc\tests\test_codegen.py::test_bootstrap_kovc_autotune_missing_separators_are_malformed helixc\tests\test_codegen.py::test_bootstrap_kovc_autotune_validation_diagnostics helixc\tests\test_codegen.py::test_bootstrap_kovc_since_message_attr_preserved`
+  - Result: `69 passed`
+- `python scripts\stage33_selfhost_gate.py --generations 2 --json-out .stage33-logs\selfhost-cascade-metadata-clean2-g2-inline.json`
+  - Result: `rc=0`
+  - G2..G3 stable SHA-256:
+    `88b7600c2d8b1b739fa5f09c40e94d5a555ee8a89a03bb4a94547ebe49875d48`
+  - G2..G3 stable size: `294329` bytes
+  - Final-generation smoke cases: literal, call, loop, and metadata_attrs all
+    returned `42`
+  - Validator result: `selfhost-cascade-validate: ok`
+- `python scripts\stage33_selfhost_gate.py --generations 3 --json-out .stage33-logs\selfhost-cascade-metadata-clean2-g3.json`
+  - Result: `rc=0`
+  - G2..G4 stable SHA-256:
+    `88b7600c2d8b1b739fa5f09c40e94d5a555ee8a89a03bb4a94547ebe49875d48`
+  - G2..G4 stable size: `294329` bytes
+  - Final-generation smoke cases: literal, call, loop, and metadata_attrs all
+    returned `42`
+  - Validator result: `selfhost-cascade-validate: ok`
+- `python scripts\stage33_selfhost_gate.py --generations 10 --expect-stable-sha 88b7600c2d8b1b739fa5f09c40e94d5a555ee8a89a03bb4a94547ebe49875d48 --json-out .stage33-logs\selfhost-cascade-metadata-clean2-g10.json`
+  - Result: `rc=0`
+  - G2..G11 stable SHA-256:
+    `88b7600c2d8b1b739fa5f09c40e94d5a555ee8a89a03bb4a94547ebe49875d48`
+  - G2..G11 stable size: `294329` bytes
+  - Final-generation smoke cases: literal, call, loop, and metadata_attrs all
+    returned `42`
+  - Validator result: `selfhost-cascade-validate: ok`
+- `python scripts\stage31_validate.py --mode quick --skip-snapshot`
+  - Result: `rc=0`
+- `git diff --check`
+  - Result: no whitespace errors
+
 ## Next
 
-The next Stage 33 slice should run the next metadata clean-gate rotation across
-deprecated, since, and autotune metadata together. Full autotune variant
-generation remains larger than the current slice size and should stay gated
-behind another self-host proof.
+The next Stage 33 slice should run metadata clean gate 3. If clean, Stage 33 can
+be closed with the three requested audit clean gates and then the project can
+move to Stage 34. Full autotune variant generation remains larger than the
+current slice size and should stay gated behind another self-host proof.

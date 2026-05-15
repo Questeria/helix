@@ -173,6 +173,14 @@ def run_smoke(final_compiler: str, input_path: str, output_path: str) -> list[di
             "while x < 42 { x = x + 1; } x }",
             42,
         ),
+        (
+            "metadata_attrs",
+            '@deprecated("old") fn old_api() -> i32 { 1 } '
+            '@since("v1") @kernel @autotune(A: [1, 2]) '
+            "fn tuned(a: i32) -> i32 { a } "
+            "fn main() -> i32 { old_api() + tuned(41) }",
+            42,
+        ),
     ]
     results: list[dict[str, int | str]] = []
     for idx, (name, src, expected) in enumerate(cases, 1):

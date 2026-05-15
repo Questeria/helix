@@ -1,6 +1,6 @@
 # Helix Trap ID Registry
 
-**Last updated**: 2026-05-14 (Stage 33 bootstrap metadata — `28701` aux now points to deprecated metadata; autotune aux payloads are specific)
+**Last updated**: 2026-05-14 (Stage 33 bootstrap metadata — autotune trap IDs are collision-free and aux payloads are specific)
 **Convention**: Each runtime trap has a numeric ID. The ID is encoded into `eax` immediately before a `ud2` instruction (SIGILL on x86_64), or surfaced as a structured `HelixCompileError` at compile time. Tools and tests cross-reference traps by ID.
 
 ## Two ID namespaces
@@ -51,8 +51,9 @@ Used by the Python frontend (`helixc/frontend/*.py`) and audit-introduced trap I
 | 26002 | `TRAP_PYTREE_NON_DIFF_LEAF` | `helixc/frontend/pytree.py:50` | 26 | pytree flatten saw a non-leaf-non-struct field type |
 | 26003 | `TRAP_PYTREE_CYCLE` | `helixc/frontend/pytree.py:51` | 26 | cyclic struct reference detected during pytree walk |
 | 27001 | `TRAP_AUTOTUNE_OVERSIZED` | `helixc/frontend/autotune.py:42` | 27 | `@autotune` variant Cartesian product exceeds 16; bootstrap aux is the saturated product |
-| 27002 | (bootstrap autotune_pass) | `helixc/bootstrap/kovc.hx` | 33 | `@autotune` attribute is present without required `@kernel` |
+| 27002 | (bootstrap f32 literal) | `helixc/bootstrap/kovc.hx` | pre-33 | f32 literal has more than 9 digits in the bootstrap literal parser |
 | 27003 | (bootstrap autotune_pass) | `helixc/bootstrap/kovc.hx` | 33 | malformed, empty, or missing `@autotune(...)` parameter list; bootstrap aux kind: 1 missing parens, 2 malformed shape/token, 3 empty params/value-list |
+| 27004 | (bootstrap autotune_pass) | `helixc/bootstrap/kovc.hx` | 33 | `@autotune` attribute is present without required `@kernel`; bootstrap aux is the function name start |
 | 28001 | `TRAP_PARAM_STRUCT_UNINSTANTIATED` | `helixc/frontend/struct_mono.py:38` | 28 | parametric struct used without `<T>` instantiation |
 | 28002 | `TRAP_PARAM_STRUCT_CONSTEVAL` | `helixc/frontend/struct_mono.py:39` | 28 | parametric struct const-eval failed |
 | 28501 | `TRAP_PANIC_INVOKED` | `helixc/frontend/panic_pass.py:35` | 28.5 | `panic("msg")` reached at runtime |
@@ -77,12 +78,6 @@ Used by the Python frontend (`helixc/frontend/*.py`) and audit-introduced trap I
 | 91001 | (bootstrap tile) | `helixc/ir/lower_ast.py` | 15 | tile shape cap (Phase-0: HBM 1D only) |
 | 99001 | (bootstrap AST_ERR) | `helixc/bootstrap/kovc.hx` | n/a | generic error sentinel (catch-all in codegen fallback) |
 
-## Reserved-but-unused
-
-| ID | Meaning | Note |
-|----:|---------|------|
-| 28701 (would be Stage 28.7) | `@deprecated` runtime violation | Currently surfaces as compile-time warning only; no runtime path |
-
 ## How to add a new trap ID
 
 1. Pick a namespace:
@@ -96,6 +91,7 @@ Used by the Python frontend (`helixc/frontend/*.py`) and audit-introduced trap I
 ## Collision history
 
 - **24001** double-claim (resolved 2026-05-10 cycle 1 A4): bootstrap kovc.hx emits 24001 for AST_MOD bf16 (existing); typecheck.py reserved 24001 for provenance — reassigned to 24100. Going forward, the rule is: Python-side reservations should NOT overlap the bootstrap's `AST_TAG * 1000 + sub_id` ranges 1xxx..99xxx.
+- **27002** double-claim (resolved 2026-05-14 Stage 33 clean gate): bootstrap already emitted 27002 for f32 literal overflow; bootstrap autotune missing-`@kernel` diagnostics moved to 27004.
 
 ## Audit-time invariants
 

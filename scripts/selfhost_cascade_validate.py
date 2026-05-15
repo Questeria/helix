@@ -21,6 +21,7 @@ REQUIRED_SMOKE = {
     "literal": 42,
     "call": 42,
     "loop": 42,
+    "metadata_attrs": 42,
 }
 
 

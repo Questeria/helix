@@ -35,6 +35,7 @@ def valid_report() -> dict[str, object]:
             {"name": "literal", "expected_exit": 42, "actual_exit": 42},
             {"name": "call", "expected_exit": 42, "actual_exit": 42},
             {"name": "loop", "expected_exit": 42, "actual_exit": 42},
+            {"name": "metadata_attrs", "expected_exit": 42, "actual_exit": 42},
         ],
     }
 
