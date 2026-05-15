@@ -551,3 +551,39 @@ Clean-gate status:
 
 - Stage 35 clean gates reset to `0/3`.
 - Next step is a fresh Stage 35 clean gate on the fixed commit.
+
+## Increment 21 - Second Clean-Gate Restart Fix Sweep
+
+Another fresh Stage 35 clean-gate restart found more concrete issues, so the
+gate still did not count as clean.
+
+Fixes landed in this increment:
+
+- `dense_classifier_sgd_step_f32` no longer writes caller scratch at all. It
+  computes dense scores, the softmax denominator, and each class delta directly
+  before applying weight and bias updates.
+- `adam_f32_step` and scalar `__adam_step` now treat a zero or negative
+  denominator as no step, instead of creating a huge artificial update.
+- Scalar `ce_loss` returns the loud sentinel for negative target labels.
+- Embedded PTX generation in `x86_64.py` now lowers only kernel functions to
+  Tile IR, so host-only helpers with unsupported-for-PTX ops do not break kernel
+  embedding.
+- `docs/lang/spec.md` now states current Phase-0 PTX support honestly: 1D HBM
+  `f32` and `i32` kernel parameters only.
+- Added `grad(..., 1)` and `grad_rev(..., 1)` sibling-aggregate regressions.
+
+Focused verification:
+
+- `python -m pytest -q helixc\tests\test_codegen.py -k "dense_classifier_sgd_step_f32_does_not_clobber_small_scratch or adam_f32_step_nonzero_m_zero_denom_keeps_weight or builtin_adam_step_nonzero_m_zero_denom_returns_zero or ce_loss_rejects_negative_scalar_label or grad_rejects_scalar_target_when_sibling_aggregate_param_exists or grad_rev_rejects_scalar_target_when_sibling_aggregate_param_exists or embedded_ptx_ignores_host_helper_with_unsupported_tile_op" --tb=short`
+  - Result: 7 passed.
+- `python -m pytest -q helixc\tests\test_codegen.py -k "nn_ or stage35 or softmax or ce_loss or dense_classifier_sgd_step_f32 or adam_f32_step or builtin_adam_step or grad_rejects_aggregate_param or grad_rev_rejects_aggregate_param or grad_rev_all_rejects_aggregate_param or scalar_target_when_sibling_aggregate or embedded_ptx_ignores_host_helper or builtin_bce_uses_stable_log_near_zero" --tb=short`
+  - Result: 61 passed.
+- `python -m pytest -q helixc\tests\test_autodiff_reverse.py helixc\tests\test_pytree.py helixc\tests\test_ptx.py helixc\tests\test_tile_ir.py helixc\tests\test_autotune.py helixc\tests\test_ffi.py helixc\tests\test_cli.py -k "emit_ptx or ptx or tile_ir or autotune or ffi or stage35 or grad_rejects_aggregate or scalar_target_when_sibling_aggregate" --tb=short`
+  - Result: 108 passed.
+- `python scripts\stage31_validate.py --mode quick --skip-snapshot`
+  - Result: passed, `stage31-quick: rc=0`.
+
+Clean-gate status:
+
+- Stage 35 clean gates reset to `0/3`.
+- Next step is another fresh Stage 35 clean gate on the fixed commit.

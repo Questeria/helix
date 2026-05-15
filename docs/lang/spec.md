@@ -209,7 +209,11 @@ fn rand_uniform[N: size](shape: [N]) -> tensor<f32, [N]> { ... }
 
 ### Kernels
 
-Functions marked `@kernel` are compiled to GPU device code:
+Functions marked `@kernel` are intended to compile to GPU device code. Current
+Phase-0 PTX support is intentionally narrow: 1D HBM tile parameters with `f32`
+or `i32` element types and a small scalar-op subset. SMEM/REG tiles, `bf16`
+kernel parameters, and full tiled matmul remain design targets rather than
+shipped behavior.
 
 ```
 @kernel
@@ -348,7 +352,7 @@ These intentionally-deferred items shape the bootstrap path:
 7. **3+-segment paths.** `crate::EnumName::Variant` is supported as a Phase-0 alias for `EnumName::Variant`. Other 3+-segment paths (e.g. `module::sub::Variant`) raise `NotImplementedError` at lowering rather than silently lowering to const_int(0). v0.1 has no module system.
 8. **`@total` is conservative.** Recognizes `f(p - k)` and `f(p / k>=2)` but not Collatz-style or accumulator-based decrease. Use `@partial` for those.
 9. **Inline enum-with-payload return value DOES work** (audit-7 cycle), but enum returns from fns of recursive-enum type fall back to the index encoding — preserved across calls correctly via the multi-slot ABI.
-10. **Float types beyond f32.** `f64`, `f16`, `bf16` in scalar position raise `NotImplementedError` at lowering — the x86_64 backend uses movss (4 bytes) for all SSE float ops. Tile dtypes (`tile<bf16, ...>`) are still allowed because the GPU/PTX backend handles them.
+10. **Float types beyond f32.** `f64`, `f16`, `bf16` in scalar position raise `NotImplementedError` at lowering — the x86_64 backend uses movss (4 bytes) for all SSE float ops. Phase-0 PTX currently accepts only 1D HBM `tile<f32, ...>` and `tile<i32, ...>` kernel parameters; `tile<bf16, ...>`, SMEM, and REG kernel examples are design targets, not current public backend support.
 11. **Generic type params lower to i32-sized ABI.** `fn id[T](x: T) -> T { x }` works for i32 type args; calls with i64/f32/struct args silently truncate. Callers should specialize manually until v0.2 monomorphization ships.
 
 ### Bugs fixed in 2026-05-04 deep-research cycle (8 fixes; 510 → 576 tests)

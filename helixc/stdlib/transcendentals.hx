@@ -491,8 +491,7 @@ fn __always_accept(h: i32, v: f32) -> i32 {
 // Returns the parameter update direction; callers do w := w - lr * step.
 @pure fn __adam_step(m: f32, v: f32, eps: f32) -> f32 {
     let raw_denom = __sqrt(v) + eps;
-    let denom = if raw_denom <= 0.0_f32 { 0.000001_f32 } else { raw_denom };
-    m / denom
+    if raw_denom <= 0.0_f32 { 0.0_f32 } else { m / raw_denom }
 }
 
 // =========================================================================

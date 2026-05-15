@@ -3753,7 +3753,12 @@ def compile_module_to_elf(module: tir.Module, entry_fn: str = "main") -> bytes:
         # PTX modules are text-only this is cheap). The lowering step is
         # idempotent — re-running lower_to_tile on the same Module just
         # produces a fresh TileModule.
-        tile_mod = lower_to_tile(module)
+        kernel_module = type(module)(
+            functions={kf.name: kf for kf in kernel_fns},
+            next_value_id=module.next_value_id,
+            next_block_id=module.next_block_id,
+        )
+        tile_mod = lower_to_tile(kernel_module)
         ptx_emitter = PtxEmitter(DEFAULT_TARGET)
         ptx_emitter.emit_module_header()
         for kf in kernel_fns:

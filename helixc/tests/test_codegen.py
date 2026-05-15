@@ -7488,6 +7488,34 @@ def test_grad_rev_all_rejects_aggregate_param_until_pytree_bridge_is_wired():
         compile_and_run(src)
 
 
+def test_grad_rejects_scalar_target_when_sibling_aggregate_param_exists():
+    import pytest
+    src = """
+    struct Model { w: f32 }
+    fn loss(m: Model, x: f32) -> f32 { m.w * x }
+    fn probe(m: Model) -> f32 {
+        grad(loss, 1)(m, 2.0)
+    }
+    fn main() -> i32 { 42 }
+    """
+    with pytest.raises(NotImplementedError, match="aggregate.*m"):
+        compile_and_run(src)
+
+
+def test_grad_rev_rejects_scalar_target_when_sibling_aggregate_param_exists():
+    import pytest
+    src = """
+    struct Model { w: f32 }
+    fn loss(m: Model, x: f32) -> f32 { m.w * x }
+    fn probe(m: Model) -> f32 {
+        grad_rev(loss, 1)(m, 2.0)
+    }
+    fn main() -> i32 { 42 }
+    """
+    with pytest.raises(NotImplementedError, match="aggregate.*m"):
+        compile_and_run(src)
+
+
 def test_grad_through_if_takes_correct_branch():
     # f(x) = if x > 0 then x*x else x*3
     # ∂f/∂x at x=5 = 2x = 10. (Was previously broken: the autodiff would
@@ -9419,7 +9447,7 @@ def test_nn_dense_classifier_sgd_step_f32_does_not_clobber_small_scratch():
         tf1d_set(b, 0, 0.0_f32); tf1d_set(b, 1, 0.0_f32);
         let x = t1d_new(2);
         tf1d_set(x, 0, 1.0_f32); tf1d_set(x, 1, 0.0_f32);
-        let scratch = t1d_new(6);
+        let scratch = t1d_new(5);
         let guard = t1d_new(1);
         __arena_set(guard, 1234);
         let shape = t1d_new(2);
@@ -9679,6 +9707,26 @@ def test_nn_adam_f32_step_zero_grad_zero_eps_keeps_weight():
     assert code == 42, f"expected 42, got {code}"
 
 
+def test_nn_adam_f32_step_nonzero_m_zero_denom_keeps_weight():
+    """Nonzero moment with zero denom must not produce a huge weight jump."""
+    src = """
+    fn main() -> i32 {
+        let w = t1d_new(1);
+        tf1d_set(w, 0, 10.0_f32);
+        let g = t1d_new(1);
+        tf1d_set(g, 0, 0.0_f32);
+        let m = t1d_new(1);
+        tf1d_set(m, 0, 1.0_f32);
+        let v = t1d_new(1);
+        tf1d_set(v, 0, 0.0_f32);
+        adam_f32_step(w, g, m, v, 0.5_f32, 1.0_f32, 1.0_f32, 0.0_f32, 1);
+        ((__f32_from_bits(__arena_get(w)) * 4.0_f32) as i32) + 2
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
 def test_builtin_bce_uses_stable_log_near_zero():
     """The transcendentals BCE helper should match valid extreme probabilities."""
     src = """
@@ -9697,6 +9745,35 @@ def test_builtin_adam_step_zero_denom_returns_zero():
     fn main() -> i32 {
         let step = __adam_step(0.0_f32, 0.0_f32, 0.0_f32);
         (step as i32) + 42
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_builtin_adam_step_nonzero_m_zero_denom_returns_zero():
+    """Scalar Adam helper should not turn m=1, v=0, eps=0 into a huge step."""
+    src = """
+    fn main() -> i32 {
+        let step = __adam_step(1.0_f32, 0.0_f32, 0.0_f32);
+        (step as i32) + 42
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_nn_ce_loss_rejects_negative_scalar_label():
+    """Scalar CE should not read the arena cell before the probability row."""
+    src = """
+    fn main() -> i32 {
+        let guard = t1d_new(1);
+        tf1d_set(guard, 0, 1.0_f32);
+        let probs = t1d_new(2);
+        tf1d_set(probs, 0, 0.1_f32);
+        tf1d_set(probs, 1, 0.9_f32);
+        let loss = ce_loss(probs, 0 - 1);
+        if loss > 999999.0_f32 { 42 } else { 7 }
     }
     """
     code = compile_and_run(src)
@@ -17306,6 +17383,27 @@ def test_stage35_i32_kernel_ptx_in_binary():
     assert "add.s32 %r3, %r1, %r2;" in ptx
     assert "st.global.s32 [%rd11], %r3;" in ptx
     assert "// TODO:" not in ptx
+
+
+def test_stage35_embedded_ptx_ignores_host_helper_with_unsupported_tile_op():
+    """Host-only helpers must not break embedded PTX tile lowering."""
+    src = """
+    @kernel
+    fn k_copy(a: tile<f32, [16], HBM>, b: tile<f32, [16], HBM>) {
+        let i = thread_idx();
+        b[i] = a[i];
+    }
+
+    fn div2(x: i32) -> i32 { x / 2 }
+
+    fn main() -> i32 { div2(84) }
+    """
+    elf = _compile_to_elf_bytes(src)
+    ptx = _extract_ptx_text_from_elf(elf)
+    assert ".visible .entry k_copy" in ptx
+    assert "ld.global.f32" in ptx
+    assert "st.global.f32" in ptx
+    assert "elem.div" not in ptx
 
 
 def main():

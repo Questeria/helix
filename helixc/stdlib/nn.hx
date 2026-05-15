@@ -190,9 +190,13 @@ fn adam_f32_step(w_start: i32, g_start: i32, m_start: i32, v_start: i32,
         __arena_set(m_start + i, __bits_of_f32(next_m));
         __arena_set(v_start + i, __bits_of_f32(next_v));
         let raw_denom = __sqrt(next_v) + eps;
-        let denom = if raw_denom <= 0.0_f32 { 0.000001_f32 } else { raw_denom };
-        __arena_set(w_start + i,
-            __bits_of_f32(w_i - lr * next_m / denom));
+        if raw_denom <= 0.0_f32 {
+            __arena_set(w_start + i, __bits_of_f32(w_i));
+        }
+        else {
+            __arena_set(w_start + i,
+                __bits_of_f32(w_i - lr * next_m / raw_denom));
+        };
         i = i + 1;
     }
     0
@@ -572,22 +576,54 @@ fn dense_classifier_sgd_step_f32(w_start: i32, b_start: i32, x_start: i32,
         if target < 0 { 35001 }
         else { if target >= classes { 35001 }
         else {
-            let logits_start = scratch_start;
-            let probs_start = scratch_start + classes;
-            let dy_start = scratch_start + classes * 2;
-            dense_layer_f32_forward(w_start, classes, in_dim, x_start,
-                                    b_start, logits_start);
-            softmax_layer(logits_start, probs_start, classes);
-            let mut k: i32 = 0;
-            while k < classes {
-                let p = __f32_from_bits(__arena_get(probs_start + k));
-                let y = if k == target { 1.0_f32 } else { 0.0_f32 };
-                __arena_set(dy_start + k, __bits_of_f32(p - y));
-                k = k + 1;
+            let mut max_score = __f32_from_bits(__arena_get(b_start));
+            let mut j0: i32 = 0;
+            while j0 < in_dim {
+                let w0 = __f32_from_bits(__arena_get(w_start + j0));
+                let x0 = __f32_from_bits(__arena_get(x_start + j0));
+                max_score = max_score + w0 * x0;
+                j0 = j0 + 1;
+            }
+            let mut mc: i32 = 1;
+            while mc < classes {
+                let mut score = __f32_from_bits(__arena_get(b_start + mc));
+                let mut mj: i32 = 0;
+                while mj < in_dim {
+                    let wv = __f32_from_bits(__arena_get(w_start + mc * in_dim + mj));
+                    let xv = __f32_from_bits(__arena_get(x_start + mj));
+                    score = score + wv * xv;
+                    mj = mj + 1;
+                }
+                if score > max_score { max_score = score; };
+                mc = mc + 1;
+            }
+            let mut sum_e: f32 = 0.0_f32;
+            let mut ec: i32 = 0;
+            while ec < classes {
+                let mut score2 = __f32_from_bits(__arena_get(b_start + ec));
+                let mut ej: i32 = 0;
+                while ej < in_dim {
+                    let wv2 = __f32_from_bits(__arena_get(w_start + ec * in_dim + ej));
+                    let xv2 = __f32_from_bits(__arena_get(x_start + ej));
+                    score2 = score2 + wv2 * xv2;
+                    ej = ej + 1;
+                }
+                sum_e = sum_e + __exp(score2 - max_score);
+                ec = ec + 1;
             }
             let mut cls: i32 = 0;
             while cls < classes {
-                let dy = __f32_from_bits(__arena_get(dy_start + cls));
+                let mut score3 = __f32_from_bits(__arena_get(b_start + cls));
+                let mut sj: i32 = 0;
+                while sj < in_dim {
+                    let wv3 = __f32_from_bits(__arena_get(w_start + cls * in_dim + sj));
+                    let xv3 = __f32_from_bits(__arena_get(x_start + sj));
+                    score3 = score3 + wv3 * xv3;
+                    sj = sj + 1;
+                }
+                let p = __exp(score3 - max_score) / sum_e;
+                let y = if cls == target { 1.0_f32 } else { 0.0_f32 };
+                let dy = p - y;
                 let mut j: i32 = 0;
                 while j < in_dim {
                     let w_idx = w_start + cls * in_dim + j;
@@ -618,10 +654,13 @@ fn bce_loss_scalar(p: f32, t: f32) -> f32 {
 // Cross-entropy.
 @pure
 fn ce_loss(p_start: i32, target_idx: i32) -> f32 {
-    let p = __f32_from_bits(__arena_get(p_start + target_idx));
-    let eps = 0.0001_f32;
-    let pc = __max(p, eps);
-    0.0_f32 - __log_stable(pc)
+    if target_idx < 0 { 1000000.0_f32 }
+    else {
+        let p = __f32_from_bits(__arena_get(p_start + target_idx));
+        let eps = 0.0001_f32;
+        let pc = __max(p, eps);
+        0.0_f32 - __log_stable(pc)
+    }
 }
 
 // For a row-major logits matrix (rows x cols), write each row's argmax class
