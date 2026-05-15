@@ -3282,6 +3282,9 @@ class TypeChecker:
         if raw_value is None:
             return None, False
 
+        if self._expr_has_unrepresentable_typed_const_scalar(expr):
+            return raw_value, True
+
         if source_base is None:
             return raw_value, False
 
@@ -3311,6 +3314,33 @@ class TypeChecker:
         if isinstance(expr, A.Binary):
             return self._infer_const_expr_numeric_base(expr.left)
         return None
+
+    def _expr_has_unrepresentable_typed_const_scalar(
+        self, expr: A.Expr,
+    ) -> bool:
+        base = self._infer_const_expr_numeric_base(expr)
+        if base is not None:
+            typed_value = self._eval_const_scalar_expr(
+                expr, None, use_local_consts=True,
+                honor_float_suffix=True, numeric_base=base)
+            if typed_value is None:
+                raw_value = self._eval_raw_const_scalar_fallback(expr)
+                if (raw_value is not None
+                        and self._cast_const_scalar_to_type(
+                            raw_value, base) is None):
+                    return True
+        if isinstance(expr, A.Cast):
+            return self._expr_has_unrepresentable_typed_const_scalar(
+                expr.value)
+        if isinstance(expr, A.Unary):
+            return self._expr_has_unrepresentable_typed_const_scalar(
+                expr.operand)
+        if isinstance(expr, A.Binary):
+            return (
+                self._expr_has_unrepresentable_typed_const_scalar(expr.left)
+                or self._expr_has_unrepresentable_typed_const_scalar(expr.right)
+            )
+        return False
 
     def _eval_raw_const_scalar_fallback(
         self, expr: A.Expr,

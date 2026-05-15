@@ -107,6 +107,13 @@ def _validate_input_metadata(
 
     _validate_string_list(input_metadata.get("flags"), name="input.flags", errors=errors)
     _validate_string_list(input_metadata.get("libs"), name="input.libs", errors=errors)
+    flags = input_metadata.get("flags")
+    if isinstance(flags, list) and all(isinstance(flag, str) for flag in flags):
+        _validate_proof_replay_flags(
+            flags,
+            include_stdlib=input_metadata.get("include_stdlib"),
+            errors=errors,
+        )
 
     warnings = input_metadata.get("warnings")
     if not isinstance(warnings, dict):
@@ -162,6 +169,31 @@ def _validate_input_metadata(
 
     if input_metadata.get("include_stdlib") is False and stdlib_files != []:
         errors.append("input.stdlib_files must be empty when include_stdlib is false")
+
+
+def _validate_proof_replay_flags(
+    flags: list[str],
+    *,
+    include_stdlib: object,
+    errors: list[str],
+) -> None:
+    flag_set = set(flags)
+    disallowed = sorted(flag_set - PROOF_REPLAY_FLAGS)
+    if disallowed:
+        errors.append(
+            "input.flags contains non-proof replay flags: "
+            + ", ".join(disallowed)
+        )
+    if "--emit-proof-obligations" not in flag_set:
+        errors.append("input.flags must include --emit-proof-obligations")
+    if include_stdlib is False and "--no-stdlib" not in flag_set:
+        errors.append(
+            "input.flags must include --no-stdlib when include_stdlib is false"
+        )
+    if include_stdlib is True and "--no-stdlib" in flag_set:
+        errors.append(
+            "input.flags must omit --no-stdlib when include_stdlib is true"
+        )
 
 
 def _source_sha256(path: Path) -> str:
@@ -521,23 +553,6 @@ def _proof_args_from_artifact(
     flags = input_metadata.get("flags")
     if isinstance(flags, list) and all(isinstance(flag, str) for flag in flags):
         flag_set = set(flags)
-        disallowed = sorted(flag_set - PROOF_REPLAY_FLAGS)
-        if disallowed:
-            errors.append(
-                "input.flags contains non-proof replay flags: "
-                + ", ".join(disallowed)
-            )
-        if "--emit-proof-obligations" not in flag_set:
-            errors.append("input.flags must include --emit-proof-obligations")
-        include_stdlib = input_metadata.get("include_stdlib")
-        if include_stdlib is False and "--no-stdlib" not in flag_set:
-            errors.append(
-                "input.flags must include --no-stdlib when include_stdlib is false"
-            )
-        if include_stdlib is True and "--no-stdlib" in flag_set:
-            errors.append(
-                "input.flags must omit --no-stdlib when include_stdlib is true"
-            )
         args.append("--emit-proof-obligations")
         for flag in ("--no-stdlib", "--strict", "--check-only"):
             if flag in flag_set:

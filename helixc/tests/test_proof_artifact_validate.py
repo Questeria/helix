@@ -726,6 +726,50 @@ def test_validate_source_unavailable_artifact_accepts_null_cache(capsys, tmp_pat
     assert captured.out.strip() == "proof-artifact-validate: ok"
 
 
+def test_validate_source_unavailable_rejects_unsafe_flags(capsys, tmp_path):
+    artifact = {
+        "schema": "helix.proof_obligations.v0",
+        "cache_key": None,
+        "path": None,
+        "input": {
+            "source_sha256": None,
+            "source_available": False,
+            "source_error": "source path is missing",
+            "include_stdlib": False,
+            "stdlib_strict": False,
+            "stdlib_manifest_sha256": EMPTY_MANIFEST_SHA256,
+            "stdlib_files": [],
+            "opt_level": 1,
+            "flags": ["-o", str(tmp_path / "should-not-exist.bin")],
+            "libs": [],
+            "warnings": {},
+            "color": "auto",
+        },
+        "summary": {
+            "obligations": 0,
+            "proof_carries": 0,
+            "pipeline_errors": 0,
+            "typecheck_errors": 0,
+            "warning_diagnostics": 0,
+            "warning_errors": 0,
+            "proof_carry_strategies": {},
+        },
+        "obligations": [],
+        "proof_carries": [],
+        "pipeline_errors": [],
+        "typecheck_errors": [],
+        "warning_diagnostics": [],
+    }
+    artifact_path = tmp_path / "artifact.json"
+    artifact_path.write_text(json.dumps(artifact), encoding="utf-8")
+    rc = proof_artifact_validate.main([str(artifact_path)])
+    captured = capsys.readouterr()
+    assert rc == 1
+    assert not (tmp_path / "should-not-exist.bin").exists()
+    assert "input.flags contains non-proof replay flags" in captured.err
+    assert "input.flags must include --emit-proof-obligations" in captured.err
+
+
 def test_validate_source_unavailable_requires_cache_key_field(capsys, tmp_path):
     artifact = {
         "schema": "helix.proof_obligations.v0",

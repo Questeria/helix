@@ -675,3 +675,30 @@ Verification after this fix set:
   pass across all 12 shards with no retries
 
 The clean-gate counter remains reset to `0/3`.
+
+## Clean Gate 1 Fifteenth Restart - Failed; Fix Verified; Counter Reset
+
+Fresh clean-gate auditors on commit `0f8b6ca` found two more Stage 34 issues:
+
+- A primitive `as f64` cast could hide a prior `f32` overflow in refined return
+  checking. `(3.4028235e38_f32 * 2.0_f32) as f64` returned as `AlwaysF64`
+  passed even though the inner `f32 * f32` overflowed before the value reached
+  the `f64` cast.
+- Source-unavailable proof artifacts still accepted unsafe or impossible
+  `input.flags`, including output flags such as `-o`, because the proof-safe
+  replay flag whitelist only ran during source-backed recomputation.
+
+The fix detects unrepresentable typed constant subexpressions inside primitive
+casts and runs proof-safe flag validation during structural artifact validation,
+including source-unavailable artifacts.
+
+Verification after this fix set:
+
+- Focused latest-reset regressions: `5 passed`
+- `python scripts\stage31_validate.py --mode quick --skip-snapshot`: pass
+- `python -m pytest -q helixc/tests/test_typecheck.py helixc/tests/test_cli.py helixc/tests/test_proof_artifact_validate.py helixc/tests/test_proof_artifact_gate.py`:
+  `484 passed`
+- `python scripts\stage31_validate.py --mode full --skip-snapshot --shards 8`:
+  pass across all 12 shards with no retries
+
+The clean-gate counter remains reset to `0/3`.
