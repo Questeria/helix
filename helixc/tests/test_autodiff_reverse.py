@@ -164,6 +164,21 @@ def test_match_with_pattern_shadow_is_zero():
     assert out == "0", f"shadowed param should give 0, got {out}"
 
 
+def test_stage35_match_pattern_shadow_covers_field_leaves():
+    body = _body_of("""
+    struct Model { w: f32 }
+    fn f(m: Model, n: Model) -> f32 {
+        match n {
+            m => m.w,
+            _ => 0.0
+        }
+    }
+    """)
+    grads = differentiate_reverse(body, ["m.w"])
+    out = fmt(grads["m.w"])
+    assert out == "0", f"shadowed field leaf should give 0, got {out}"
+
+
 def test_match_no_param_use():
     # Match where no arm references the param → gradient is 0.
     body = _body_of("""
@@ -320,6 +335,24 @@ def test_stage35_reverse_ad_treats_non_target_field_as_coefficient():
     assert not any("unhandled expression kind" in w for w in warnings), (
         f"field coefficient should not produce an unhandled-node warning: "
         f"{warnings}"
+    )
+
+
+def test_stage35_reverse_ad_warns_on_unexpanded_struct_target():
+    from helixc.frontend import autodiff
+    autodiff.take_diff_warnings()
+    body = _body_of("""
+    struct Model { w: f32 }
+    fn loss(m: Model, x: f32) -> f32 {
+        m.w * x
+    }
+    """)
+    grads = differentiate_reverse(body, ["m"])
+    warnings = autodiff.take_diff_warnings()
+
+    assert fmt(grads["m"]) == "0"
+    assert any("m.w" in w and "exact leaf accumulator" in w for w in warnings), (
+        f"expected unsupported struct-target warning, got {warnings}"
     )
 
 

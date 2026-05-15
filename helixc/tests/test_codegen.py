@@ -9166,6 +9166,49 @@ def test_nn_ce_loss_batch_f32_one_hot_is_zero():
     assert code == 42, f"expected 42, got {code}"
 
 
+def test_nn_ce_loss_batch_f32_regular_probabilities():
+    """CE should be accurate for ordinary probabilities, not only p=1."""
+    src = """
+    fn main() -> i32 {
+        let target = t1d_new(1);
+        __arena_set(target, 0);
+
+        let p_half = t1d_new(2);
+        tf1d_set(p_half, 0, 0.5_f32);
+        tf1d_set(p_half, 1, 0.5_f32);
+        let loss_half = ce_loss_batch_f32(p_half, target, 1, 2);
+
+        let p_tenth = t1d_new(2);
+        tf1d_set(p_tenth, 0, 0.1_f32);
+        tf1d_set(p_tenth, 1, 0.9_f32);
+        let loss_tenth = ce_loss_batch_f32(p_tenth, target, 1, 2);
+
+        ((loss_half * 100.0_f32) as i32)
+            + ((loss_tenth * 100.0_f32) as i32)
+            - 257
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_nn_ce_loss_batch_f32_rejects_invalid_label():
+    """Invalid labels should return a loud sentinel instead of reading past row."""
+    src = """
+    fn main() -> i32 {
+        let probs = t1d_new(2);
+        tf1d_set(probs, 0, 0.1_f32);
+        tf1d_set(probs, 1, 0.9_f32);
+        let target = t1d_new(1);
+        __arena_set(target, 2);
+        let loss = ce_loss_batch_f32(probs, target, 1, 2);
+        if loss > 999999.0_f32 { 42 } else { 1 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
 def test_nn_tanh_layer():
     """tanh: 0->0, big->1, -big->-1; sum~=0; +42 = 42."""
     src = """
@@ -9228,6 +9271,26 @@ def test_nn_modern_activation_layers():
         silu_layer(x + 1, y + 1, 1);
         gelu_layer(x + 2, y + 2, 1);
         (tf1d_sum(y, 3) as i32) - 29
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_nn_softplus_layer_central_range():
+    """Softplus(0), Softplus(-2), Softplus(2) protect the non-saturated path."""
+    src = """
+    fn main() -> i32 {
+        let x = t1d_new(3);
+        tf1d_set(x, 0, 0.0_f32);
+        tf1d_set(x, 1, 0.0_f32 - 2.0_f32);
+        tf1d_set(x, 2, 2.0_f32);
+        let y = t1d_new(3);
+        softplus_layer(x, y, 3);
+        (( __f32_from_bits(__arena_get(y)) * 100.0_f32) as i32)
+            + ((__f32_from_bits(__arena_get(y + 1)) * 100.0_f32) as i32)
+            + ((__f32_from_bits(__arena_get(y + 2)) * 100.0_f32) as i32)
+            - 251
     }
     """
     code = compile_and_run(src)
@@ -16763,6 +16826,15 @@ def _compile_to_elf_bytes(src: str, optimize: bool = True) -> bytes:
     return _emit(mod)
 
 
+def _extract_ptx_text_from_elf(elf: bytes) -> str:
+    start = elf.find(b".version 8.3")
+    assert start >= 0, "PTX module header (.version 8.3) missing from binary"
+    end = elf.find(b"\x00", start)
+    if end < 0:
+        end = len(elf)
+    return elf[start:end].decode("ascii", errors="ignore")
+
+
 def test_stage16_vec_add_kernel_ptx_in_binary():
     """Stage 16 capstone: compile a vec_add @kernel + main() to ELF and
     verify the PTX text is embedded in the binary's rodata blob."""
@@ -16845,10 +16917,20 @@ def test_stage35_vec_mul_kernel_ptx_in_binary():
     fn main() -> i32 { 0 }
     """
     elf = _compile_to_elf_bytes(src)
-    assert b".visible .entry vec_mul" in elf
-    assert b"ld.global.f32" in elf
-    assert b"st.global.f32" in elf
-    assert b"mul.f32" in elf
+    ptx = _extract_ptx_text_from_elf(elf)
+    assert ".visible .entry vec_mul" in ptx
+    assert ".param .b64 param_0" in ptx
+    assert ".param .b64 param_1" in ptx
+    assert ".param .b64 param_2" in ptx
+    assert "mov.u32 %r0, %tid.x;" in ptx
+    assert ptx.count("ld.global.f32") == 2
+    assert ptx.count("st.global.f32") == 1
+    assert "ld.param.u64 %rd0, [param_0];" in ptx
+    assert "ld.param.u64 %rd4, [param_1];" in ptx
+    assert "ld.param.u64 %rd8, [param_2];" in ptx
+    assert "mul.f32 %f2, %f0, %f1;" in ptx
+    assert "st.global.f32 [%rd11], %f2;" in ptx
+    assert "// TODO:" not in ptx
 
 
 def test_stage35_vec_neg_kernel_ptx_in_binary():
@@ -16862,9 +16944,18 @@ def test_stage35_vec_neg_kernel_ptx_in_binary():
     fn main() -> i32 { 0 }
     """
     elf = _compile_to_elf_bytes(src)
-    assert b".visible .entry vec_neg" in elf
-    assert b"neg.f32" in elf
-    assert b"st.global.f32" in elf
+    ptx = _extract_ptx_text_from_elf(elf)
+    assert ".visible .entry vec_neg" in ptx
+    assert ".param .b64 param_0" in ptx
+    assert ".param .b64 param_1" in ptx
+    assert "mov.u32 %r0, %tid.x;" in ptx
+    assert ptx.count("ld.global.f32") == 1
+    assert ptx.count("st.global.f32") == 1
+    assert "ld.param.u64 %rd0, [param_0];" in ptx
+    assert "ld.param.u64 %rd4, [param_1];" in ptx
+    assert "neg.f32 %f1, %f0;" in ptx
+    assert "st.global.f32 [%rd7], %f1;" in ptx
+    assert "// TODO:" not in ptx
 
 
 def test_stage35_i32_kernel_ptx_in_binary():
@@ -16878,10 +16969,20 @@ def test_stage35_i32_kernel_ptx_in_binary():
     fn main() -> i32 { 0 }
     """
     elf = _compile_to_elf_bytes(src)
-    assert b".visible .entry vec_i32_add" in elf
-    assert b"ld.global.s32" in elf
-    assert b"st.global.s32" in elf
-    assert b"add.s32" in elf
+    ptx = _extract_ptx_text_from_elf(elf)
+    assert ".visible .entry vec_i32_add" in ptx
+    assert ".param .b64 param_0" in ptx
+    assert ".param .b64 param_1" in ptx
+    assert ".param .b64 param_2" in ptx
+    assert "mov.u32 %r0, %tid.x;" in ptx
+    assert ptx.count("ld.global.s32") == 2
+    assert ptx.count("st.global.s32") == 1
+    assert "ld.param.u64 %rd0, [param_0];" in ptx
+    assert "ld.param.u64 %rd4, [param_1];" in ptx
+    assert "ld.param.u64 %rd8, [param_2];" in ptx
+    assert "add.s32 %r3, %r1, %r2;" in ptx
+    assert "st.global.s32 [%rd11], %r3;" in ptx
+    assert "// TODO:" not in ptx
 
 
 def main():

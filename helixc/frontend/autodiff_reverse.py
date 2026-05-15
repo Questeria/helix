@@ -95,6 +95,12 @@ def _propagate(node: A.Expr, adj: A.Expr, acc: dict[str, list[A.Expr]]) -> None:
     if isinstance(node, A.Name):
         if node.name in acc:
             acc[node.name].append(adj)
+        elif _has_related_target(node.name, acc):
+            _ad_warn(
+                node,
+                f"name {node.name!r} is related to differentiable field "
+                "leaves but no exact accumulator exists (reverse-mode)",
+            )
         return
     if isinstance(node, A.Field):
         path = _field_path(node)
@@ -107,6 +113,12 @@ def _propagate(node: A.Expr, adj: A.Expr, acc: dict[str, list[A.Expr]]) -> None:
             return
         if path in acc:
             acc[path].append(adj)
+        elif _has_related_target(path, acc):
+            _ad_warn(
+                node,
+                f"field path {path!r} is related to a differentiable "
+                "target but no exact leaf accumulator exists (reverse-mode)",
+            )
         return
     if isinstance(node, A.Unary):
         if node.op == "-":
@@ -460,7 +472,8 @@ def _propagate(node: A.Expr, adj: A.Expr, acc: dict[str, list[A.Expr]]) -> None:
 def _pattern_shadowed_names(pat: A.Pattern, candidates: set[str]) -> set[str]:
     """Return the subset of `candidates` shadowed by names bound in `pat`."""
     if isinstance(pat, A.PatBind):
-        return {pat.name} & candidates
+        prefix = f"{pat.name}."
+        return {c for c in candidates if c == pat.name or c.startswith(prefix)}
     if isinstance(pat, A.PatOr):
         out: set[str] = set()
         for alt in pat.alts:
@@ -477,6 +490,21 @@ def _pattern_shadowed_names(pat: A.Pattern, candidates: set[str]) -> set[str]:
             out |= _pattern_shadowed_names(sub, candidates)
         return out
     return set()
+
+
+def _has_related_target(path: str, acc: dict[str, list[A.Expr]]) -> bool:
+    """True when `path` and any AD target sit in the same field tree.
+
+    This keeps struct-parameter gradients loud before full pytree codegen is
+    wired. `m.w` is a harmless coefficient when differentiating w.r.t. `x`,
+    but it must not silently become zero when the requested target is `m`.
+    """
+    prefix = f"{path}."
+    for target in acc:
+        target_prefix = f"{target}."
+        if target.startswith(prefix) or path.startswith(target_prefix):
+            return True
+    return False
 
 
 def _sum_exprs(exprs: list[A.Expr], span: A.Span) -> A.Expr:

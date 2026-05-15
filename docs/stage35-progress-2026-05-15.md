@@ -64,6 +64,48 @@ Initial focused checks:
 - `python scripts\stage31_validate.py --mode quick --skip-snapshot`
   - Result: passed, `stage31-quick: rc=0`.
 
+## Increment 16 - Stage 35 Audit Response
+
+Three read-only Stage 35 audit lanes found real issues. This increment closes
+the concrete findings before adding more features.
+
+AD and pytree safety:
+
+- Reverse-mode AD now warns when a caller asks for a top-level struct target
+  such as `m`, but the expression only has a field path such as `m.w`.
+- Match-pattern shadowing now treats `m` as shadowing dotted leaves like
+  `m.w`, preventing false gradients from arm-local bindings.
+
+PTX regression strength:
+
+- Stage 35 PTX tests now extract the embedded PTX module from the ELF and
+  check dataflow-sensitive details, including parameter slots, `%tid.x`,
+  global load/store counts, and exact operation register flow.
+
+Neural-network stdlib safety:
+
+- Cross-entropy and BCE now use `__log_stable` for ordinary probabilities
+  such as `0.5` and `0.1`, not only one-hot `1.0`.
+- `ce_loss_batch_f32` now rejects invalid class labels with a loud sentinel
+  instead of reading outside the row.
+- `softplus_layer` now uses the stable softplus formula through
+  `__log_stable`, covering central values such as `0`, `-2`, and `2`.
+
+Focused verification:
+
+- `python -m pytest -q helixc\tests\test_autodiff_reverse.py -k "stage35 or pattern_shadow" --tb=short`
+  - Result: 6 passed, 20 deselected.
+- `python -m pytest -q helixc\tests\test_codegen.py -k "stage35_vec_mul_kernel_ptx_in_binary or stage35_vec_neg_kernel_ptx_in_binary or stage35_i32_kernel_ptx_in_binary" --tb=short`
+  - Result: 3 passed, 773 deselected.
+- `python -m pytest -q helixc\tests\test_codegen.py -k "ce_loss_batch_f32 or softplus_layer_central_range or modern_activation_layers" --tb=short`
+  - Result: 5 passed, 771 deselected.
+- `python -m pytest -q helixc\tests\test_autodiff_reverse.py helixc\tests\test_pytree.py helixc\tests\test_ptx.py helixc\tests\test_tile_ir.py --tb=short`
+  - Result: 109 passed.
+- `python -m pytest -q helixc\tests\test_codegen.py -k "nn_ or stage35 or stage16" --tb=short`
+  - Result: 41 passed, 735 deselected.
+- `python scripts\stage31_validate.py --mode quick --skip-snapshot`
+  - Result: passed, `stage31-quick: rc=0`.
+
 ## Increment 15 - Pytree Parameter Path Bridge
 
 The Python frontend pytree support now includes:

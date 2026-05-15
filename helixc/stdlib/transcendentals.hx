@@ -91,6 +91,39 @@
     y - y2 * 0.5 + y3 * 0.33333333 - y4 * 0.25 + y5 * 0.2
 }
 
+@pure fn __log_stable(x: f32) -> f32 {
+    if x <= 0.0 {
+        0.0 - 1000000.0
+    } else {
+        let mut m: f32 = x;
+        let mut k: i32 = 0;
+        while m > 1.41421356 {
+            m = m * 0.5;
+            k = k + 1;
+        }
+        while m < 0.70710678 {
+            m = m * 2.0;
+            k = k - 1;
+        }
+        let z = (m - 1.0) / (m + 1.0);
+        let z2 = z * z;
+        let z3 = z * z2;
+        let z5 = z3 * z2;
+        let z7 = z5 * z2;
+        let z9 = z7 * z2;
+        let z11 = z9 * z2;
+        let z13 = z11 * z2;
+        let core = 2.0 * (z
+            + z3 * 0.33333333
+            + z5 * 0.2
+            + z7 * 0.14285714
+            + z9 * 0.11111111
+            + z11 * 0.09090909
+            + z13 * 0.07692308);
+        core + (k as f32) * 0.69314718
+    }
+}
+
 @pure fn __sqrt(x: f32) -> f32 {
     // Defined as 0 for x <= 0 to avoid divide-by-zero in Newton's method
     // (y0 = x*0.5 + 0.5; for x = -1, y0 = 0 -> x/y0 = inf, propagates NaN
@@ -347,8 +380,8 @@ fn __always_accept(h: i32, v: f32) -> i32 {
 // Since __log is only good near 1, we approximate log(1+y) ≈ y for very
 // small y (large |x|): the asymptote.
 @pure fn __softplus(x: f32) -> f32 {
-    if x > 15.0 { x }
-    else { if x < 0.0 - 15.0 { __exp(x) }
+    if x > 20.0 { x }
+    else { if x < 0.0 - 20.0 { __exp(x) }
            else {
                // |x| within the accurate range of __log(1+y) when
                // y = exp(x) - 1 stays small. For x in [-1, 1], y is
@@ -356,11 +389,11 @@ fn __always_accept(h: i32, v: f32) -> i32 {
                // within [-15, 15] we use the symmetric formulation:
                //   softplus(x) = max(x, 0) + log(1 + exp(-|x|))
                // and approximate log(1+y) ≈ y - y²/2 for the small y.
-               let abs_x = if x < 0.0 { 0.0 - x } else { x };
-               let y = __exp(0.0 - abs_x);
-               let log_1py = y - y * y * 0.5 + y * y * y * 0.33333333;
-               let pos_part = if x > 0.0 { x } else { 0.0 };
-               pos_part + log_1py
+               if x > 0.0 {
+                   x + __log_stable(1.0 + __exp(0.0 - x))
+               } else {
+                   __log_stable(1.0 + __exp(x))
+               }
            }
     }
 }
