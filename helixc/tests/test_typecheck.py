@@ -603,8 +603,8 @@ def test_stage34_negated_comparison_bounds_carry_proofs():
 
 def test_stage34_affine_numeric_bounds_carry_proofs():
     shifted = check("""
-    type ShiftedAtLeastOne = f64 where self + 1.0 >= 2.0;
-    type AtLeastOne = f64 where self >= 1.0;
+    type ShiftedAtLeastOne = i32 where self + 1 >= 2;
+    type AtLeastOne = i32 where self >= 1;
     fn lift(x: ShiftedAtLeastOne) -> AtLeastOne {
         x
     }
@@ -612,8 +612,8 @@ def test_stage34_affine_numeric_bounds_carry_proofs():
     assert shifted == [], shifted
 
     scaled = check("""
-    type ScaledAtLeastOne = f64 where 2.0 * self >= 2.0;
-    type AtLeastOne = f64 where self >= 1.0;
+    type ScaledAtLeastOne = i32 where 2 * self >= 2;
+    type AtLeastOne = i32 where self >= 1;
     fn lift(x: ScaledAtLeastOne) -> AtLeastOne {
         x
     }
@@ -621,8 +621,8 @@ def test_stage34_affine_numeric_bounds_carry_proofs():
     assert scaled == [], scaled
 
     flipped = check("""
-    type AtMostHalf = f64 where 1.5 - self >= 1.0;
-    type AtMostOne = f64 where self <= 1.0;
+    type AtMostHalf = i32 where 2 - self >= 1;
+    type AtMostOne = i32 where self <= 1;
     fn lift(x: AtMostHalf) -> AtMostOne {
         x
     }
@@ -632,19 +632,19 @@ def test_stage34_affine_numeric_bounds_carry_proofs():
 
 def test_stage34_affine_numeric_bounds_keep_strictness():
     weak = check("""
-    type ShiftedNonNegative = f64 where self + 1.0 >= 1.0;
-    type Positive = f64 where self > 0.0;
+    type ShiftedNonNegative = i32 where self + 1 >= 1;
+    type Positive = i32 where self > 0;
     fn lift(x: ShiftedNonNegative) -> Positive {
         x
     }
     """)
     assert any("return value of function 'lift'" in e
-               and "could not prove self > 0.0" in e
+               and "could not prove self > 0" in e
                for e in weak), weak
 
     strict = check("""
-    type ShiftedPositive = f64 where self + 1.0 > 1.0;
-    type Positive = f64 where self > 0.0;
+    type ShiftedPositive = i32 where self + 1 > 1;
+    type Positive = i32 where self > 0;
     fn lift(x: ShiftedPositive) -> Positive {
         x
     }
@@ -665,10 +665,10 @@ def test_stage34_named_constant_bounds_carry_proofs():
     assert named_bound == [], named_bound
 
     named_affine = check("""
-    const OFFSET: f64 = 1.0_f64;
-    const TARGET: f64 = 2.0_f64;
-    type ShiftedAtLeastOne = f64 where self + OFFSET >= TARGET;
-    type AtLeastOne = f64 where self >= OFFSET;
+    const OFFSET: i32 = 1;
+    const TARGET: i32 = 2;
+    type ShiftedAtLeastOne = i32 where self + OFFSET >= TARGET;
+    type AtLeastOne = i32 where self >= OFFSET;
     fn lift(x: ShiftedAtLeastOne) -> AtLeastOne {
         x
     }
@@ -986,6 +986,37 @@ def test_stage34_f32_predicate_arithmetic_rounds_each_operation():
                and "value 16777216.0 does not satisfy "
                    "(self + 1.0) > 16777216.0" in e
                for e in errs), errs
+
+
+def test_stage34_float_affine_bound_carry_fails_closed():
+    f32_errs = check("""
+    type Source = f32 where self >= 16777216.0_f32;
+    type Target = f32 where self + 1.0_f32 > 16777216.0_f32;
+    fn make() -> Source {
+        16777216.0_f32
+    }
+    fn main() -> Target {
+        make()
+    }
+    """)
+    assert any("return value of function 'main'" in e
+               and "could not prove (self + 1.0) > 16777216.0" in e
+               for e in f32_errs), f32_errs
+
+    f64_errs = check("""
+    type Source = f64 where self >= 9007199254740992.0_f64;
+    type Target = f64 where self + 1.0_f64 > 9007199254740992.0_f64;
+    fn make() -> Source {
+        9007199254740992.0_f64
+    }
+    fn main() -> Target {
+        make()
+    }
+    """)
+    assert any("return value of function 'main'" in e
+               and "could not prove "
+                   "(self + 1.0) > 9007199254740992.0" in e
+               for e in f64_errs), f64_errs
 
 
 def test_stage34_fixed_point_preserves_unknown_type_errors():

@@ -3565,8 +3565,10 @@ class TypeChecker:
     ) -> bool:
         if self._erase_refinement(value_ty) != self._erase_refinement(target):
             return False
-        value_bounds = self._refinement_numeric_bounds(value_ty)
-        target_reqs = self._refinement_numeric_requirements(target)
+        value_bounds = self._refinement_numeric_bounds(
+            value_ty, self._erase_refinement(value_ty))
+        target_reqs = self._refinement_numeric_requirements(
+            target, self._erase_refinement(target))
         if value_bounds is None or target_reqs is None:
             return False
         return all(
@@ -3575,13 +3577,12 @@ class TypeChecker:
         )
 
     def _refinement_numeric_bounds(
-        self, ty: Type,
+        self, ty: Type, numeric_base: Type | None = None,
     ) -> Optional[dict[str, tuple[int | float, bool]]]:
         lower: tuple[int | float, bool] | None = None
         upper: tuple[int | float, bool] | None = None
         for pred in self._refinement_predicate_exprs(ty):
-            bounds = self._refinement_predicate_bounds(
-                pred, self._erase_refinement(ty))
+            bounds = self._refinement_predicate_bounds(pred, numeric_base)
             if bounds is None:
                 return None
             for kind, value, inclusive in bounds:
@@ -3607,11 +3608,11 @@ class TypeChecker:
         return out
 
     def _refinement_numeric_requirements(
-        self, ty: Type,
+        self, ty: Type, numeric_base: Type | None = None,
     ) -> Optional[list[tuple[str, int | float, bool]]]:
         out: list[tuple[str, int | float, bool]] = []
         for pred in self._refinement_predicate_exprs(ty):
-            bounds = self._refinement_predicate_bounds(pred)
+            bounds = self._refinement_predicate_bounds(pred, numeric_base)
             if bounds is None:
                 return None
             out.extend(bounds)
@@ -3699,7 +3700,7 @@ class TypeChecker:
         numeric_base: Type | None = None,
     ) -> Optional[list[tuple[str, int | float, bool]]]:
         affine = None
-        if not self._numeric_base_is_f32(numeric_base):
+        if not self._numeric_base_is_float(numeric_base):
             affine = self._refinement_affine_binary_bounds(
                 left, op, right, numeric_base)
         if affine is not None:
@@ -4465,6 +4466,12 @@ class TypeChecker:
 
     def _numeric_base_is_f32(self, numeric_base: Type | None) -> bool:
         return isinstance(numeric_base, TyPrim) and numeric_base.name == "f32"
+
+    def _numeric_base_is_float(self, numeric_base: Type | None) -> bool:
+        return (
+            isinstance(numeric_base, TyPrim)
+            and numeric_base.name in _FLOAT_PRIM_NAMES
+        )
 
     def _eval_float_lit_scalar(self, expr: A.FloatLit) -> float | None:
         suffix = expr.type_suffix

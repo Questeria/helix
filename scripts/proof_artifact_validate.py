@@ -603,6 +603,53 @@ def recomputed_clean_errors(
     return errors
 
 
+def recomputed_source_metadata_errors(
+    artifact: dict[str, object],
+    *,
+    source_path: str | None,
+) -> list[str]:
+    if source_path is None:
+        return []
+
+    source = Path(source_path)
+    if not source.is_file():
+        return [f"source path is not a readable file: {source}"]
+
+    args, arg_errors = _proof_args_from_artifact(artifact, source)
+    if arg_errors:
+        return arg_errors
+
+    out = io.StringIO()
+    err = io.StringIO()
+    try:
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            check_main(args)
+        recomputed = json.loads(out.getvalue())
+    except Exception as e:
+        return [f"could not recompute proof artifact from source: {e}"]
+    if not isinstance(recomputed, dict):
+        return ["recomputed proof artifact must be a JSON object"]
+
+    errors: list[str] = []
+    summary = artifact.get("summary")
+    recomputed_summary = recomputed.get("summary")
+    summary = summary if isinstance(summary, dict) else {}
+    recomputed_summary = (
+        recomputed_summary if isinstance(recomputed_summary, dict) else {}
+    )
+    if artifact.get("proof_carries") != recomputed.get("proof_carries"):
+        errors.append(
+            "proof artifact proof_carries mismatch against recomputed source"
+        )
+    for field in ("proof_carries", "proof_carry_strategies"):
+        if summary.get(field) != recomputed_summary.get(field):
+            errors.append(
+                f"proof artifact summary.{field} mismatch against "
+                "recomputed source"
+            )
+    return errors
+
+
 def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -642,6 +689,11 @@ def main(argv: list[str] | None = None) -> int:
         source_path=args.source,
         artifact_dir=artifact_dir,
     )
+    if not errors and args.source is not None:
+        errors.extend(recomputed_source_metadata_errors(
+            artifact,
+            source_path=args.source,
+        ))
     if not errors and args.require_clean:
         errors.extend(clean_policy_errors(artifact))
         errors.extend(recomputed_clean_errors(

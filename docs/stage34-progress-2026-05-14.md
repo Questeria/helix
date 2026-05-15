@@ -475,3 +475,33 @@ Verification after this fix set:
   pass across all 12 shards
 
 The clean-gate counter remains reset to `0/3`.
+
+## Clean Gate 1 Eighth Restart - Failed; Fix Verified; Counter Reset
+
+Fresh clean-gate auditors on commit `3d20693` found two proof-honesty gaps:
+
+- Float affine proof-carry extraction still treated target predicates as exact
+  real-number algebra. This let precision-boundary values satisfy predicates
+  such as `self + 1.0 > 16777216.0` for `f32`, even when IEEE arithmetic rounds
+  the addition back to the original value. The same risk existed for `f64`.
+- Plain source-backed proof artifact validation rejected missing carried-proof
+  metadata but still accepted an internally consistent artifact where
+  `proof_carries` was erased and `summary.proof_carries` /
+  `summary.proof_carry_strategies` were updated to match the erased list.
+
+The fix passes the erased numeric base into target requirement extraction,
+fails closed for affine proof-carry extraction over floating-point bases,
+retargets positive affine proof-carry coverage to exact `i32` arithmetic, and
+makes normal `proof_artifact_validate.py --source` recompute and compare
+carried-proof metadata even without `--require-clean`.
+
+Verification after this fix set:
+
+- Focused float-affine and erased-carry regressions: `7 passed`
+- `python scripts\stage31_validate.py --mode quick --skip-snapshot`: pass
+- `python -m pytest -q helixc/tests/test_typecheck.py helixc/tests/test_cli.py helixc/tests/test_proof_artifact_validate.py helixc/tests/test_proof_artifact_gate.py`:
+  `470 passed`
+- `python scripts\stage31_validate.py --mode full --skip-snapshot --shards 8`:
+  pass across all 12 shards
+
+The clean-gate counter remains reset to `0/3`.

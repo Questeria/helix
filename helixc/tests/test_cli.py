@@ -1601,9 +1601,9 @@ def test_stage34_emit_proof_carry_json_for_affine_and_negated_bounds(
     src_path = str(tmp_path / "affine_and_negated_bound_carry.hx")
     with open(src_path, "w") as f:
         f.write(
-            "type ShiftedAtLeastOne = f64 where self + 1.0 >= 2.0;\n"
-            "type NotBelowZero = f64 where !(self < 0.0);\n"
-            "type NonNegative = f64 where self >= 0.0;\n"
+            "type ShiftedAtLeastOne = i32 where self + 1 >= 2;\n"
+            "type NotBelowZero = i32 where !(self < 0);\n"
+            "type NonNegative = i32 where self >= 0;\n"
             "fn use_n(x: NonNegative) -> i32 { 0 }\n"
             "fn lift(a: ShiftedAtLeastOne, b: NotBelowZero) -> i32 {\n"
             "    use_n(a) + use_n(b)\n"
