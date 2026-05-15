@@ -3291,8 +3291,33 @@ class TypeChecker:
     def _eval_raw_const_scalar_fallback(
         self, expr: A.Expr,
     ) -> int | float | bool | None:
+        return self._eval_raw_const_scalar_expr(
+            expr, None, use_local_consts=True)
+
+    def _eval_raw_const_scalar_expr(
+        self, expr: A.Expr, self_value: int | float | bool | None,
+        *, use_local_consts: bool = False,
+    ) -> int | float | bool | None:
+        if isinstance(expr, A.IntLit):
+            return expr.value
+        if isinstance(expr, A.FloatLit):
+            return expr.value
+        if isinstance(expr, A.BoolLit):
+            return expr.value
+        if isinstance(expr, A.Name) and expr.generics:
+            return None
+        if isinstance(expr, A.Name) and expr.name == "self":
+            return self_value
+        if isinstance(expr, A.Name):
+            if use_local_consts:
+                found_local, local_value = self._lookup_local_const_scalar(
+                    expr.name)
+                if found_local:
+                    return local_value
+            return self._const_scalar_values.get(expr.name)
         if isinstance(expr, A.Cast):
-            inner_value = self._eval_raw_const_scalar_fallback(expr.value)
+            inner_value = self._eval_raw_const_scalar_expr(
+                expr.value, self_value, use_local_consts=use_local_consts)
             target_base = self._const_eval_type_node_base(expr.target_ty)
             if target_base is None:
                 return None
@@ -3301,12 +3326,35 @@ class TypeChecker:
             if converted is None:
                 return inner_value
             return converted
-        value = self._eval_const_scalar_expr(
-            expr, None, use_local_consts=True)
-        if isinstance(value, (int, float)) and not isinstance(value, bool):
-            return value
-        if isinstance(value, bool):
-            return value
+        if isinstance(expr, A.Unary) and expr.op == "-":
+            inner = self._eval_raw_const_scalar_expr(
+                expr.operand, self_value, use_local_consts=use_local_consts)
+            if isinstance(inner, (int, float)) and not isinstance(inner, bool):
+                return -inner
+            return None
+        if isinstance(expr, A.Binary):
+            left = self._eval_raw_const_scalar_expr(
+                expr.left, self_value, use_local_consts=use_local_consts)
+            right = self._eval_raw_const_scalar_expr(
+                expr.right, self_value, use_local_consts=use_local_consts)
+            if not (isinstance(left, (int, float))
+                    and isinstance(right, (int, float))
+                    and not isinstance(left, bool)
+                    and not isinstance(right, bool)):
+                return None
+            try:
+                if expr.op == "+":
+                    return left + right
+                if expr.op == "-":
+                    return left - right
+                if expr.op == "*":
+                    return left * right
+                if expr.op == "/" and right != 0:
+                    return left / right
+                if expr.op == "%" and right != 0:
+                    return left % right
+            except (OverflowError, ValueError):
+                return None
         return None
 
     def _cast_const_scalar_to_type(

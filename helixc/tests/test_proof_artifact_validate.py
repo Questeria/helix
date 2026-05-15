@@ -291,6 +291,11 @@ def test_validate_resolves_relative_artifact_path_from_artifact_dir(
 
     artifact_path = tmp_path / "artifact.json"
     artifact_path.write_text(json.dumps(artifact), encoding="utf-8")
+    rc = proof_artifact_validate.main([str(artifact_path)])
+    captured = capsys.readouterr()
+    assert rc == 0
+    assert captured.out.strip() == "proof-artifact-validate: ok"
+
     source_path.write_text(
         "type Probability = f64 where 0.0 <= self <= 1.0;\n"
         "fn main() -> i32 { let p: Probability = 0.6_f64; 0 }\n",
@@ -491,8 +496,7 @@ def test_validate_rejects_forged_input_and_cache_with_source_by_default(
     capsys, tmp_path,
 ):
     source_path, artifact_path, artifact = _real_artifact(capsys, tmp_path)
-    artifact["input"]["flags"].append("--stdlib")
-    artifact["input"]["flags"] = sorted(artifact["input"]["flags"])
+    artifact["input"]["flags"].append("--emit-proof-obligations")
     artifact["cache_key"] = proof_cache_key(artifact["input"])
     artifact_path.write_text(json.dumps(artifact), encoding="utf-8")
 
@@ -507,6 +511,29 @@ def test_validate_rejects_forged_input_and_cache_with_source_by_default(
     assert "proof artifact input mismatch against recomputed source" in (
         captured.err
     )
+
+
+def test_validate_rejects_unsafe_replay_flags_without_side_effect(
+    capsys, tmp_path,
+):
+    source_path, artifact_path, artifact = _real_artifact(capsys, tmp_path)
+    side_effect = tmp_path / "validator-wrote-this.bin"
+    artifact["input"]["flags"] = [
+        "--no-stdlib",
+        "-o",
+        str(side_effect),
+        "-l",
+    ]
+    artifact["cache_key"] = proof_cache_key(artifact["input"])
+    artifact_path.write_text(json.dumps(artifact), encoding="utf-8")
+
+    rc = proof_artifact_validate.main([
+        str(artifact_path), "--source", str(source_path),
+    ])
+    captured = capsys.readouterr()
+    assert rc == 1
+    assert not side_effect.exists()
+    assert "input.flags contains non-proof replay flags" in captured.err
 
 
 def test_validate_rejects_boolean_integer_fields(capsys, tmp_path):

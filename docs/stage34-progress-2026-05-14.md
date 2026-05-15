@@ -262,7 +262,7 @@ Verification after the overflow and failed-cast artifact fixes:
 - `python scripts\stage31_validate.py --mode full --skip-snapshot --shards 8`:
   pass after built-in retry recovered no-codegen shard 1
 
-## Clean Gate 1 Restart - Failed; Fix Verified; Counter Reset
+## Clean Gate 1 Third Restart - Failed; Fix Verified; Counter Reset
 
 The next clean-gate attempt found two more artifact-honesty gaps:
 
@@ -302,7 +302,7 @@ Verification after the composite-cast and validator fixes:
 - `python scripts\stage31_validate.py --mode full --skip-snapshot --shards 8`:
   pass
 
-## Clean Gate 1 Third Restart - Failed; Fix Verified; Counter Reset
+## Clean Gate 1 Fourth Restart - Failed; Fix Verified; Counter Reset
 
 The next clean-gate attempt still did not count as clean. The replacement
 soundness audit found two more ways proof artifacts could overstate what the
@@ -332,7 +332,7 @@ Verification after the failed-initializer and non-finite literal fixes:
 - `python scripts\stage31_validate.py --mode full --skip-snapshot --shards 8`:
   pass after built-in retry recovered no-codegen shards 1 and 3
 
-## Clean Gate 1 Fourth Restart - Failed; Fix Verified; Counter Reset
+## Clean Gate 1 Fifth Restart - Failed; Fix Verified; Counter Reset
 
 The next clean-gate attempt found two more proof-honesty issues:
 
@@ -358,7 +358,7 @@ Verification after the top-level const and non-finite integer fixes:
 - `python scripts\stage31_validate.py --mode full --skip-snapshot --shards 8`:
   pass with no shard retries
 
-## Clean Gate 1 Fifth Restart - Failed; Fix Verified; Counter Reset
+## Clean Gate 1 Sixth Restart - Failed; Fix Verified; Counter Reset
 
 The next clean-gate attempt found another proof-honesty edge case:
 
@@ -404,7 +404,7 @@ Verification after the self-independent and invalid-return fixes:
 - `python scripts\stage31_validate.py --mode full --skip-snapshot --shards 8`:
   pass after built-in retry recovered no-codegen shards 2 and 3
 
-## Clean Gate 1 Sixth Restart - Failed; Fix Verified; Counter Reset
+## Clean Gate 1 Seventh Restart - Failed; Fix Verified; Counter Reset
 
 The next clean-gate attempt found another set of proof-honesty issues:
 
@@ -448,7 +448,7 @@ before this fix set was committed:
 Those are now covered by additional typecheck, proof-gate, validator, and quick
 gate tests.
 
-## Clean Gate 1 Seventh Restart - Failed; Fix Verified; Counter Reset
+## Clean Gate 1 Eighth Restart - Failed; Fix Verified; Counter Reset
 
 Fresh clean-gate auditors on commit `1487810` found two more Stage 34
 proof-honesty gaps:
@@ -481,7 +481,7 @@ Verification after this fix set:
 
 The clean-gate counter remains reset to `0/3`.
 
-## Clean Gate 1 Eighth Restart - Failed; Fix Verified; Counter Reset
+## Clean Gate 1 Ninth Restart - Failed; Fix Verified; Counter Reset
 
 Fresh clean-gate auditors on commit `3d20693` found two proof-honesty gaps:
 
@@ -511,7 +511,7 @@ Verification after this fix set:
 
 The clean-gate counter remains reset to `0/3`.
 
-## Clean Gate 1 Ninth Restart - Failed; Fix Verified; Counter Reset
+## Clean Gate 1 Tenth Restart - Failed; Fix Verified; Counter Reset
 
 Fresh clean-gate auditors on commit `4be3e3c` found one docs issue and two
 proof-honesty gaps:
@@ -544,7 +544,7 @@ Verification after this fix set:
 
 The clean-gate counter remains reset to `0/3`.
 
-## Clean Gate 1 Tenth Restart - Failed; Fix Verified; Counter Reset
+## Clean Gate 1 Eleventh Restart - Failed; Fix Verified; Counter Reset
 
 Fresh clean-gate auditors on commit `2ebac36` found two proof-honesty gaps:
 
@@ -578,7 +578,7 @@ Verification after this fix set:
 
 The clean-gate counter remains reset to `0/3`.
 
-## Clean Gate 1 Eleventh Restart - Failed; Fix Verified; Counter Reset
+## Clean Gate 1 Twelfth Restart - Failed; Fix Verified; Counter Reset
 
 Fresh clean-gate auditors on commit `8ddb14f` found two proof-honesty gaps and
 one documentation consistency issue:
@@ -609,5 +609,39 @@ Verification after this fix set:
   pass after retry recovered no-codegen shards 1 and 2
 - `python -m pytest -q helixc/tests/test_strings_io.py::test_print_str_multiple_calls helixc/tests/test_strings_io.py::test_print_int_decimal_output`:
   pass after inspecting the recovered shard's transient failures
+
+The clean-gate counter remains reset to `0/3`.
+
+## Clean Gate 1 Thirteenth Restart - Failed; Fix Verified; Counter Reset
+
+Fresh clean-gate auditors on commit `eaff977` found two proof-honesty gaps and
+one documentation consistency issue:
+
+- Constant scalar evaluation still collapsed nonfinite arithmetic to unknown.
+  This let `(1e309_f64 + 0.0_f64) as AlwaysF64` pass a `where true`
+  refinement and produce clean proof artifacts, even though the value is not a
+  representable `f64`.
+- Source-backed validation replayed artifact-controlled `input.flags` directly
+  into `helixc.check`. A forged artifact could use flags such as `-o` and cause
+  validation to write an output file before validation failed.
+- The progress file still had a duplicate unnumbered `Clean Gate 1 Restart`
+  after `Second Restart`, then continued with `Third Restart`. That made the
+  stage record non-chronological.
+
+The fix preserves raw nonfinite arithmetic evidence for refinement cast
+diagnostics, reconstructs validator replay arguments from a proof-safe
+whitelist, compares relative and absolute source paths semantically during
+source-backed recomputation, and renumbers the restart headings into sequence.
+
+Verification after this fix set:
+
+- Focused latest-reset regressions: `5 passed`
+- Focused proof artifact validator/gate files: `65 passed`
+- `python scripts\stage31_validate.py --mode quick --skip-snapshot`: pass
+- `python -m pytest -q helixc/tests/test_typecheck.py helixc/tests/test_cli.py helixc/tests/test_proof_artifact_validate.py helixc/tests/test_proof_artifact_gate.py`:
+  `480 passed`
+- `python scripts\stage31_validate.py --mode full --skip-snapshot --shards 8`:
+  pass across all 12 shards with no retries
+- `git diff --check`: pass
 
 The clean-gate counter remains reset to `0/3`.

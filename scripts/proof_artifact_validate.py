@@ -33,6 +33,12 @@ SUMMARY_COUNTS = {
     "warning_diagnostics": "warning_diagnostics",
 }
 INPUT_COLORS = {"auto", "always", "never"}
+PROOF_REPLAY_FLAGS = frozenset({
+    "--emit-proof-obligations",
+    "--no-stdlib",
+    "--strict",
+    "--check-only",
+})
 
 
 def _is_sha256(value: object) -> bool:
@@ -514,9 +520,28 @@ def _proof_args_from_artifact(
 
     flags = input_metadata.get("flags")
     if isinstance(flags, list) and all(isinstance(flag, str) for flag in flags):
-        args.extend(flags)
-        if "--emit-proof-obligations" not in flags:
-            args.append("--emit-proof-obligations")
+        flag_set = set(flags)
+        disallowed = sorted(flag_set - PROOF_REPLAY_FLAGS)
+        if disallowed:
+            errors.append(
+                "input.flags contains non-proof replay flags: "
+                + ", ".join(disallowed)
+            )
+        if "--emit-proof-obligations" not in flag_set:
+            errors.append("input.flags must include --emit-proof-obligations")
+        include_stdlib = input_metadata.get("include_stdlib")
+        if include_stdlib is False and "--no-stdlib" not in flag_set:
+            errors.append(
+                "input.flags must include --no-stdlib when include_stdlib is false"
+            )
+        if include_stdlib is True and "--no-stdlib" in flag_set:
+            errors.append(
+                "input.flags must omit --no-stdlib when include_stdlib is true"
+            )
+        args.append("--emit-proof-obligations")
+        for flag in ("--no-stdlib", "--strict", "--check-only"):
+            if flag in flag_set:
+                args.append(flag)
     else:
         errors.append("input.flags must be a list of strings")
 
@@ -549,6 +574,52 @@ def _proof_args_from_artifact(
     return args, errors
 
 
+def _same_recomputed_path(
+    left: object,
+    right: object,
+    *,
+    source_path: str | None,
+) -> bool:
+    if left == right:
+        return True
+    if not (isinstance(left, str) and isinstance(right, str)
+            and source_path is not None):
+        return False
+    base = Path(source_path).resolve().parent
+
+    def resolve_for_compare(value: str) -> Path:
+        path = Path(value)
+        if not path.is_absolute():
+            path = base / path
+        return path.resolve()
+
+    return resolve_for_compare(left) == resolve_for_compare(right)
+
+
+def _source_recomputed_field_mismatches(
+    artifact: dict[str, object],
+    recomputed: dict[str, object],
+    *,
+    fields: tuple[str, ...],
+    source_path: str | None,
+) -> list[str]:
+    errors: list[str] = []
+    for field in fields:
+        if field == "path":
+            if not _same_recomputed_path(
+                    artifact.get(field), recomputed.get(field),
+                    source_path=source_path):
+                errors.append(
+                    "proof artifact path mismatch against recomputed source"
+                )
+            continue
+        if artifact.get(field) != recomputed.get(field):
+            errors.append(
+                f"proof artifact {field} mismatch against recomputed source"
+            )
+    return errors
+
+
 def recomputed_clean_errors(
     artifact: dict[str, object],
     *,
@@ -579,23 +650,23 @@ def recomputed_clean_errors(
     if not isinstance(recomputed, dict):
         return ["recomputed proof artifact must be a JSON object"]
 
-    errors: list[str] = []
-    for field in (
-        "schema",
-        "cache_key",
-        "path",
-        "input",
-        "summary",
-        "obligations",
-        "proof_carries",
-        "pipeline_errors",
-        "typecheck_errors",
-        "warning_diagnostics",
-    ):
-        if artifact.get(field) != recomputed.get(field):
-            errors.append(
-                f"proof artifact {field} mismatch against recomputed source"
-            )
+    errors = _source_recomputed_field_mismatches(
+        artifact,
+        recomputed,
+        fields=(
+            "schema",
+            "cache_key",
+            "path",
+            "input",
+            "summary",
+            "obligations",
+            "proof_carries",
+            "pipeline_errors",
+            "typecheck_errors",
+            "warning_diagnostics",
+        ),
+        source_path=source_path,
+    )
     if rc != 0:
         errors.append(
             f"recomputed proof run exited {rc}, expected a clean proof run"
@@ -630,24 +701,23 @@ def recomputed_source_artifact_errors(
     if not isinstance(recomputed, dict):
         return ["recomputed proof artifact must be a JSON object"]
 
-    errors: list[str] = []
-    for field in (
-        "schema",
-        "cache_key",
-        "path",
-        "input",
-        "summary",
-        "obligations",
-        "proof_carries",
-        "pipeline_errors",
-        "typecheck_errors",
-        "warning_diagnostics",
-    ):
-        if artifact.get(field) != recomputed.get(field):
-            errors.append(
-                f"proof artifact {field} mismatch against recomputed source"
-            )
-    return errors
+    return _source_recomputed_field_mismatches(
+        artifact,
+        recomputed,
+        fields=(
+            "schema",
+            "cache_key",
+            "path",
+            "input",
+            "summary",
+            "obligations",
+            "proof_carries",
+            "pipeline_errors",
+            "typecheck_errors",
+            "warning_diagnostics",
+        ),
+        source_path=source_path,
+    )
 
 
 def source_path_for_metadata_recompute(

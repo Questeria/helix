@@ -844,6 +844,16 @@ def test_stage34_self_independent_refinement_rejects_unrepresentable_values():
                and "value is not representable after casting f64 to f64" in e
                for e in hidden_cast_errs), hidden_cast_errs
 
+    arithmetic_errs = check("""
+    type AlwaysF64 = f64 where true;
+    fn f() -> AlwaysF64 {
+        (1e309_f64 + 0.0_f64) as AlwaysF64
+    }
+    """)
+    assert any("cast to refined type AlwaysF64" in e
+               and "value is not representable after casting f64 to f64" in e
+               for e in arithmetic_errs), arithmetic_errs
+
 
 def test_stage34_fixed_point_preserves_unbound_name_errors():
     errs = check("""
