@@ -9203,6 +9203,24 @@ def test_nn_add_weight_decay_grad_f32():
     assert code == 42, f"expected 42, got {code}"
 
 
+def test_nn_sgd_f32_step_decay_clip():
+    """decay then SGD. w=[10,20], g=[1,2], decay=.1, lr=.5 -> [9,18]."""
+    src = """
+    fn main() -> i32 {
+        let w = t1d_new(2);
+        tf1d_set(w, 0, 10.0_f32);
+        tf1d_set(w, 1, 20.0_f32);
+        let g = t1d_new(2);
+        tf1d_set(g, 0, 1.0_f32);
+        tf1d_set(g, 1, 2.0_f32);
+        sgd_f32_step_decay_clip(w, g, 0.5_f32, 0.1_f32, 10.0_f32, 2);
+        ((tf1d_sum(w, 2) * 2.0_f32) as i32) - 12
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
 def test_nn_sgd_step_scalar():
     """SGD step: w_new = w - lr*grad. w=10, lr=1, grad=3 -> 7."""
     src = """

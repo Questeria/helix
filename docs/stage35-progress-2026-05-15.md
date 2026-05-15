@@ -64,6 +64,28 @@ Initial focused checks:
 - `python scripts\stage31_validate.py --mode quick --skip-snapshot`
   - Result: passed, `stage31-quick: rc=0`.
 
+## Increment 4 - f32 Stable SGD Step
+
+The Helix neural-network stdlib now includes:
+
+- `sgd_f32_step_decay_clip(w_start, g_start, lr, decay, max_norm, n)`
+
+It composes the training helpers into one practical update:
+
+1. Add weight decay to the gradient.
+2. Clip the gradient norm.
+3. Apply the f32 SGD step.
+
+This is still simple, but it is closer to what real model training needs than
+raw SGD alone.
+
+Focused verification:
+
+- `python -m pytest -q helixc\tests\test_codegen.py -k "sgd_f32_step_decay_clip or weight_decay_grad_f32 or clip_grad_norm_f32 or sgd_f32_step" --tb=short`
+  - Result: 5 passed, 753 deselected.
+- `python scripts\stage31_validate.py --mode quick --skip-snapshot`
+  - Result: passed, `stage31-quick: rc=0`.
+
 ## Increment 3 - f32 Weight-Decay Gradient Helper
 
 The Helix neural-network stdlib now includes:

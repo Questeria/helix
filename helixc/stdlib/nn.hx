@@ -162,6 +162,17 @@ fn add_weight_decay_grad_f32(g_start: i32, w_start: i32,
     tf1d_axpby(w_start, g_start, decay, 1.0_f32, n)
 }
 
+// One stable f32 optimizer step:
+//   1. add weight decay to gradient
+//   2. clip gradient norm
+//   3. apply SGD
+fn sgd_f32_step_decay_clip(w_start: i32, g_start: i32, lr: f32,
+                           decay: f32, max_norm: f32, n: i32) -> i32 {
+    add_weight_decay_grad_f32(g_start, w_start, decay, n);
+    clip_grad_norm_f32(g_start, max_norm, n);
+    sgd_f32_step(w_start, g_start, lr, n)
+}
+
 // MSE on f32 tensors.
 @pure
 fn mse_loss_f32(y_start: i32, t_start: i32, n: i32) -> f32 {
