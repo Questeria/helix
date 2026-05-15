@@ -135,6 +135,25 @@ fn sgd_f32_step(w_start: i32, g_start: i32, lr: f32, n: i32) -> i32 {
     0
 }
 
+// Clip an f32 gradient vector in place if its L2 norm is above max_norm.
+// Returns 0; g_start is mutated only when clipping is needed.
+fn clip_grad_norm_f32(g_start: i32, max_norm: f32, n: i32) -> i32 {
+    if n <= 0 { 0 }
+    else {
+        let norm_sq = tf1d_l2_norm_sq(g_start, n);
+        if norm_sq <= 0.0_f32 { 0 }
+        else {
+            let norm = __sqrt(norm_sq);
+            let target = if max_norm < 0.0_f32 { 0.0_f32 } else { max_norm };
+            if norm > target {
+                let scale = target / norm;
+                tf1d_scale_inplace(g_start, n, scale);
+            };
+            0
+        }
+    }
+}
+
 // MSE on f32 tensors.
 @pure
 fn mse_loss_f32(y_start: i32, t_start: i32, n: i32) -> f32 {

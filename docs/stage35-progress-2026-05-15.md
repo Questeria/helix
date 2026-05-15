@@ -74,3 +74,29 @@ Likely follow-up slices:
   Helix stdlib.
 - Keep PTX/tile/autotune expansion behind focused tests until the CPU AI/ML
   substrate is stronger.
+
+## Increment 2 - f32 Gradient-Norm Clipping
+
+The Helix neural-network stdlib now includes:
+
+- `clip_grad_norm_f32(g_start, max_norm, n)`
+
+It computes the f32 gradient vector's L2 norm and scales the vector in place
+when the norm is larger than `max_norm`.
+
+This matters for AI training because clipping prevents a very large gradient
+from making a model update unstable.
+
+Behavior added:
+
+- Large gradients are scaled down toward the requested maximum norm.
+- Small gradients are left unchanged.
+- Empty or zero-norm gradients return cleanly.
+- Negative `max_norm` is treated as `0.0`, so the helper remains deterministic.
+
+Focused verification:
+
+- `python -m pytest -q helixc\tests\test_codegen.py -k "clip_grad_norm_f32 or sgd_f32_step or tf1d_l2_norm_sq or tf1d_scale_inplace" --tb=short`
+  - Result: 5 passed, 751 deselected.
+- `python scripts\stage31_validate.py --mode quick --skip-snapshot`
+  - Result: passed, `stage31-quick: rc=0`.

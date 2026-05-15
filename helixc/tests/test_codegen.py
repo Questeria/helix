@@ -9153,6 +9153,38 @@ def test_nn_sgd_f32_step():
     assert code == 57, f"expected 57, got {code}"
 
 
+def test_nn_clip_grad_norm_f32_scales_large_grad():
+    """clip [3,4] from norm 5 to max 2.5, allowing sqrt-rounding tolerance."""
+    src = """
+    fn main() -> i32 {
+        let g = t1d_new(2);
+        tf1d_set(g, 0, 3.0_f32);
+        tf1d_set(g, 1, 4.0_f32);
+        clip_grad_norm_f32(g, 2.5_f32, 2);
+        let norm_sq = tf1d_l2_norm_sq(g, 2);
+        if norm_sq < 6.0_f32 { 1 }
+        else { if norm_sq > 6.6_f32 { 2 } else { 42 } }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_nn_clip_grad_norm_f32_leaves_small_grad_unchanged():
+    """clip [3,4] with max 10 leaves it unchanged. top bytes 64+64-86=42."""
+    src = """
+    fn main() -> i32 {
+        let g = t1d_new(2);
+        tf1d_set(g, 0, 3.0_f32);
+        tf1d_set(g, 1, 4.0_f32);
+        clip_grad_norm_f32(g, 10.0_f32, 2);
+        (__arena_get(g) / 16777216) + (__arena_get(g + 1) / 16777216) - 86
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
 def test_nn_sgd_step_scalar():
     """SGD step: w_new = w - lr*grad. w=10, lr=1, grad=3 -> 7."""
     src = """
