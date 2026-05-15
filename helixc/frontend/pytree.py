@@ -11,6 +11,9 @@ shape.
 This module provides the Python-side spec:
   * flatten_pytree(decl, struct_decls, path="") -> list of (path, leaf_ty)
     walks a StructDecl recursively, yielding one entry per scalar leaf.
+  * flatten_pytree_param(param, struct_decls) -> list of PytreeLeaf
+    prefixes a function parameter name onto every leaf path, e.g.
+    model.layer.w. This is the static naming bridge used by AD surfaces.
   * unflatten_pytree(decl, gradients_by_path, default=...) -> dict
     given a path -> gradient mapping, reassembles a same-shape dict.
     By default raises ValueError on missing paths so AD-pass bugs that
@@ -205,6 +208,36 @@ def flatten_pytree(decl, struct_decls: dict,
                 f"{_ty_to_prim_name(f.ty)} (trap 26002)"
             )
     return leaves
+
+
+def flatten_pytree_param(param: A.FnParam,
+                         struct_decls: dict) -> list[PytreeLeaf]:
+    """Flatten one function parameter into AD-ready leaf paths.
+
+    Scalar float parameters become a single leaf named after the parameter.
+    Struct parameters become `param.field.subfield` leaves.
+    """
+    ty = param.ty
+    if is_pytree_leaf(ty):
+        return [PytreeLeaf(
+            path=param.name,
+            ty_name=_ty_to_prim_name(ty),
+            is_diff=_is_diff_wrapper(ty),
+        )]
+    if _is_struct_ref(ty, struct_decls):
+        decl = struct_decls[_resolve_struct_name(ty)]
+        return [
+            PytreeLeaf(
+                path=f"{param.name}.{leaf.path}",
+                ty_name=leaf.ty_name,
+                is_diff=leaf.is_diff,
+            )
+            for leaf in flatten_pytree(decl, struct_decls)
+        ]
+    raise ValueError(
+        f"pytree param {param.name!r}: non-differentiable type "
+        f"{_ty_to_prim_name(ty)} (trap 26002)"
+    )
 
 
 def pytree_depth(decl, struct_decls: dict, depth: int = 0,

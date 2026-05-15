@@ -15,6 +15,7 @@ from helixc.frontend.pytree import (
     is_pytree_leaf,
     is_diff_leaf,
     flatten_pytree,
+    flatten_pytree_param,
     unflatten_pytree,
     pytree_depth,
     validate_pytree,
@@ -84,6 +85,32 @@ struct Net { l1: Layer, l2: Layer }
     leaves = flatten_pytree(decls["Net"], decls)
     paths = [l.path for l in leaves]
     assert paths == ["l1.w", "l1.b", "l2.w", "l2.b"]
+
+
+def test_stage35_flatten_pytree_param_prefixes_model_name():
+    src = """
+struct Layer { w: f32 }
+struct Model { layer: Layer, bias: f32 }
+"""
+    decls = _decls(src)
+    param = A.FnParam(
+        span=A.Span(0, 0),
+        name="model",
+        ty=A.TyName(span=A.Span(0, 0), name="Model"),
+    )
+    leaves = flatten_pytree_param(param, decls)
+    assert [l.path for l in leaves] == ["model.layer.w", "model.bias"]
+    assert [l.ty_name for l in leaves] == ["f32", "f32"]
+
+
+def test_stage35_flatten_pytree_param_accepts_scalar_param():
+    param = A.FnParam(
+        span=A.Span(0, 0),
+        name="x",
+        ty=A.TyName(span=A.Span(0, 0), name="f32"),
+    )
+    leaves = flatten_pytree_param(param, {})
+    assert leaves == [PytreeLeaf(path="x", ty_name="f32", is_diff=False)]
 
 
 def test_flatten_depth_3():

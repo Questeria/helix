@@ -64,6 +64,28 @@ Initial focused checks:
 - `python scripts\stage31_validate.py --mode quick --skip-snapshot`
   - Result: passed, `stage31-quick: rc=0`.
 
+## Increment 15 - Pytree Parameter Path Bridge
+
+The Python frontend pytree support now includes:
+
+- `flatten_pytree_param(param, struct_decls)`
+
+It turns function parameters into AD-ready leaf paths:
+
+- scalar parameter `x: f32` becomes `x`
+- struct parameter `model: Model` becomes leaves like `model.layer.w`
+
+This bridges the Stage 35 field-leaf AD work with nested model parameters. It
+does not yet fully expose `grad(loss)(model)` as a runtime surface, but it
+adds the static naming helper needed for that next wire-up.
+
+Focused verification:
+
+- `python -m pytest -q helixc\tests\test_pytree.py -k "stage35_flatten_pytree_param or flatten_nested_struct" --tb=short`
+  - Result: 3 passed, 21 deselected.
+- `python scripts\stage31_validate.py --mode quick --skip-snapshot`
+  - Result: passed, `stage31-quick: rc=0`.
+
 ## Increment 14 - Deterministic Autotune Variant Order
 
 Autotune variant generation now sorts parameter keys before creating the
