@@ -1705,6 +1705,45 @@ def test_stage34_failed_refined_composite_casts_do_not_emit_carries(
     assert artifact["proof_carries"] == []
 
 
+def test_stage34_failed_refined_initializer_does_not_emit_later_carries(
+    capsys, tmp_path,
+):
+    src_path = str(tmp_path / "failed_refined_initializer_no_later_carry.hx")
+    with open(src_path, "w") as f:
+        f.write(
+            "type One = i32 where self == 1;\n"
+            "type NonNegative = f64 where self >= 0.0;\n"
+            "fn use_one(x: One) -> i32 { 0 }\n"
+            "fn use_array(xs: [NonNegative; 1]) -> i32 { 0 }\n"
+            "fn scalar_bad() -> One {\n"
+            "    let bad: One = true as One;\n"
+            "    bad\n"
+            "}\n"
+            "fn call_bad() -> i32 {\n"
+            "    let bad: One = true as One;\n"
+            "    let fp: fn(One) -> i32 = use_one;\n"
+            "    fp(bad)\n"
+            "}\n"
+            "fn array_bad(xs: [f64; 1]) -> i32 {\n"
+            "    let ys: [NonNegative; 1] = xs as [NonNegative; 1];\n"
+            "    use_array(ys)\n"
+            "}\n"
+            "fn tuple_bad(pair: (f64, f64)) -> (NonNegative, NonNegative) {\n"
+            "    let bad: (NonNegative, NonNegative) = pair as "
+            "(NonNegative, NonNegative);\n"
+            "    bad\n"
+            "}\n"
+        )
+    rc = main([src_path, "--emit-proof-obligations", "--no-stdlib"])
+    captured = capsys.readouterr()
+    assert rc == 1
+    artifact = json.loads(captured.out)
+    assert artifact["summary"]["typecheck_errors"] >= 4
+    assert artifact["summary"]["proof_carries"] == 0
+    assert artifact["summary"]["proof_carry_strategies"] == {}
+    assert artifact["proof_carries"] == []
+
+
 def test_stage34_emit_proof_obligations_json_for_refined_f32_rounding(
     capsys, tmp_path,
 ):

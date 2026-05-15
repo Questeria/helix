@@ -18,6 +18,7 @@ License: Apache 2.0
 
 from __future__ import annotations
 
+import math
 import struct
 from dataclasses import dataclass, field
 from typing import Optional
@@ -1831,6 +1832,7 @@ class TypeChecker:
     def _check_stmt(self, stmt: A.Stmt, scope: Scope) -> None:
         if isinstance(stmt, A.Let):
             value_ty: Type = TyUnit()
+            stmt_error_start = len(self.errors)
             if stmt.value is not None:
                 value_ty = self._check_expr(stmt.value, scope)
             if stmt.ty is not None:
@@ -1848,7 +1850,8 @@ class TypeChecker:
                         and isinstance(stmt.value, A.IntLit)
                         and isinstance(declared, TyPrim)):
                     self._check_int_lit_fits(stmt.value, declared)
-                if stmt.value is not None:
+                if (stmt.value is not None
+                        and len(self.errors) == stmt_error_start):
                     self._check_refinement_contextual_value(
                         stmt.value, value_ty, declared, stmt.span,
                         f"let {stmt.name!r}",
@@ -1862,15 +1865,24 @@ class TypeChecker:
                         stmt.span,
                         hint="initialize refined values with a proven value",
                     ))
-                scope.define(stmt.name, declared, is_mut=stmt.is_mut)
+                bind_ty = declared
+                if (self._contains_refinement(declared)
+                        and len(self.errors) != stmt_error_start):
+                    bind_ty = self._erase_refinement(declared)
+                scope.define(stmt.name, bind_ty, is_mut=stmt.is_mut)
             else:
-                scope.define(stmt.name, value_ty, is_mut=stmt.is_mut)
+                bind_ty = value_ty
+                if (self._contains_refinement(value_ty)
+                        and len(self.errors) != stmt_error_start):
+                    bind_ty = self._erase_refinement(value_ty)
+                scope.define(stmt.name, bind_ty, is_mut=stmt.is_mut)
             self._define_local_const_scalar(stmt.name, None)
             return
         if isinstance(stmt, A.ExprStmt):
             self._check_expr(stmt.expr, scope)
             return
         if isinstance(stmt, A.ConstStmt):
+            stmt_error_start = len(self.errors)
             ty = self._resolve_type(stmt.ty, scope)
             value_ty = self._check_expr(stmt.value, scope)
             if not self._compatible(value_ty, ty):
@@ -1879,16 +1891,21 @@ class TypeChecker:
                     f"but value is {self._fmt(value_ty)}",
                     stmt.span,
                 ))
-            else:
+            elif len(self.errors) == stmt_error_start:
                 self._check_refinement_contextual_value(
                     stmt.value, value_ty, ty, stmt.span,
                     f"const {stmt.name!r}",
                     scope,
                 )
-            scope.define(stmt.name, ty)
+            bind_ty = ty
+            if (self._contains_refinement(ty)
+                    and len(self.errors) != stmt_error_start):
+                bind_ty = self._erase_refinement(ty)
+            scope.define(stmt.name, bind_ty)
             const_value = self._eval_const_scalar_expr(
                 stmt.value, None, use_local_consts=True)
-            if (isinstance(const_value, (int, float))
+            if (len(self.errors) == stmt_error_start
+                    and isinstance(const_value, (int, float))
                     and not isinstance(const_value, bool)):
                 self._define_local_const_scalar(stmt.name, const_value)
             else:
@@ -3111,7 +3128,13 @@ class TypeChecker:
             if not (isinstance(value, (int, float))
                     and not isinstance(value, bool)):
                 return None
-            return float(value)
+            try:
+                converted = float(value)
+            except OverflowError:
+                return None
+            if not math.isfinite(converted):
+                return None
+            return converted
         if target.name == "bool":
             if isinstance(value, bool):
                 return value
@@ -3120,12 +3143,17 @@ class TypeChecker:
         return value
 
     def _round_const_scalar_to_f32(self, value: float) -> float | None:
+        if not math.isfinite(value):
+            return None
         try:
-            return struct.unpack("<f", struct.pack("<f", value))[0]
+            rounded = struct.unpack("<f", struct.pack("<f", value))[0]
         except OverflowError:
             return None
         except (ValueError, struct.error):
             return None
+        if not math.isfinite(rounded):
+            return None
+        return rounded
 
     def _check_self_independent_refinement(
         self, refined: "TyRefined", span: A.Span, context: str,

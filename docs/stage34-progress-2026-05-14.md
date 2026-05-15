@@ -296,3 +296,33 @@ Verification after the composite-cast and validator fixes:
   `435 passed`
 - `python scripts\stage31_validate.py --mode full --skip-snapshot --shards 8`:
   pass
+
+## Clean Gate 1 Third Restart - Failed; Fix Verified; Counter Reset
+
+The next clean-gate attempt still did not count as clean. The replacement
+soundness audit found two more ways proof artifacts could overstate what the
+checker had actually proved:
+
+- A failed refined initializer still bound the declared refined type in local
+  scope. Later returns or function-typed calls could then record a
+  `same-refinement` carry for a variable whose initializer had already failed.
+- A non-finite `f32` literal such as `1e309_f32` could enter the checker as
+  `inf` and satisfy impossible predicates before backend representation checks
+  had a chance to reject it.
+
+The fix makes failed refined `let` and local `const` initializers bind the
+erased base type instead of the refined declared type. That preserves the
+shape of the value for follow-up diagnostics but prevents later code from
+carrying a proof that was never established. The checker now also rejects
+non-finite scalar values before using them for refined `f32` or `f64` proof
+evaluation.
+
+Verification after the failed-initializer and non-finite literal fixes:
+
+- New focused regressions: `3 passed`
+- Nearby proof-carry and proof-gate slice: `29 passed`
+- `python scripts\stage31_validate.py --mode quick --skip-snapshot`: pass
+- `python -m pytest -q helixc/tests/test_typecheck.py helixc/tests/test_cli.py helixc/tests/test_proof_artifact_validate.py helixc/tests/test_proof_artifact_gate.py`:
+  `439 passed`
+- `python scripts\stage31_validate.py --mode full --skip-snapshot --shards 8`:
+  pass after built-in retry recovered no-codegen shards 1 and 3
