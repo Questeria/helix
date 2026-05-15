@@ -872,6 +872,58 @@ Clean-gate status:
 - Stage 35 clean gates remain `0/3`.
 - Next step is another fresh Stage 35 clean gate on this fixed commit.
 
+## Increment 28 - Ninth Clean-Gate Restart Fix Sweep
+
+The next fresh Stage 35 audit restart found one reverse-AD metadata integrity
+gap, one direct PTX CLI invocation-parity gap, and several documentation
+current-vs-future wording issues, so the gate did not count as clean and
+remains at `0/3`.
+
+Fixes landed in this increment:
+
+- Reverse-AD adjoint arrays now store redundant metadata guards before and
+  after the adjoint array.
+- `rev_seed`, `rev_grad`, and `rev_backward` now validate adjoint metadata before
+  trusting the capacity.
+- Direct PTX now returns exit code `2` for bad invocations such as unknown
+  flags, extra paths, and missing input files, matching `helixc.check`.
+- AGI feature docs now say reflection, `modify`, and auto-curriculum runtime
+  behavior are design targets while the current implementation is stub or
+  type-level.
+- The spec now separates unrestricted runtime type info from the verifier-gated
+  reflection scaffold, marks the GPU/tile example as design-target code, and
+  labels the 2026-05-04 implementation/test section as historical.
+- The roadmap now calls reflection a scaffold and avoids broad AGI win
+  comparison wording.
+
+Focused verification:
+
+- `python -m py_compile helixc\backend\ptx.py`
+  - Result: passed.
+- `python -m pytest -q helixc\tests\test_ptx.py -k "stage35_direct_ptx_cli_bad_invocation_returns_two or stage35_direct_ptx_cli_reports_missing_file_without_traceback or stage35_direct_ptx_cli_strict_rejects_totality_failure" --tb=short`
+  - Result: 3 passed.
+- `python -m pytest -q helixc\tests\test_codegen.py -k "revad_seed_rejects_corrupt_adj_cap_metadata_without_guard_write or revad_grad_rejects_corrupt_adj_cap_metadata_without_guard_read or revad_seed_rejects_corrupt_adj_guard_metadata or revad_backward_rejects_count_above_capacity_without_adj_corruption or revad_seed_rejects_invalid_index_without_corrupting_tape or revad_grad_invalid_index_returns_zero" --tb=short`
+  - Result: 6 passed.
+- Current-vs-future docs scan for reflection, modify, auto-curriculum, PTX, test
+  count, and broad comparison wording
+  - Result: no matches.
+- Stage/docs stale-claim scan for historic stage labels and old gradient/PTX/f64
+  claims
+  - Result: no matches.
+- `python -m pytest -q helixc\tests\test_codegen.py -k "nn_ or stage35 or softmax or ce_loss or dense_classifier_sgd_step_f32 or adam_f32_step or builtin_adam_step or revad_ or grad_rev_all_writes_f64 or negative_length_tensor_nn_helpers or negative_length_integer_min_max or negative_2d_shape_helpers or builtin_bce_uses_stable_log_near_zero or builtin_bce_and_nn_bce_are_stable_near_one" --tb=short`
+  - Result: 85 passed.
+- `python -m pytest -q helixc\tests\test_ptx.py helixc\tests\test_tile_ir.py helixc\tests\test_autotune.py helixc\tests\test_cli.py -k "emit_ptx or ptx or tile_ir or autotune or unwind or unsafe or trace or stage35" --tb=short`
+  - Result: 116 passed.
+- `python -m pytest -q helixc\tests\test_autodiff.py helixc\tests\test_autodiff_reverse.py helixc\tests\test_pytree.py --tb=short`
+  - Result: 90 passed.
+- `python scripts\stage31_validate.py --mode quick --skip-snapshot`
+  - Result: passed, `stage31-quick: rc=0`.
+
+Clean-gate status:
+
+- Stage 35 clean gates remain `0/3`.
+- Next step is another fresh Stage 35 clean gate on this fixed commit.
+
 ## Next Work
 
 Likely follow-up slices:

@@ -122,7 +122,8 @@ tile<dtype, [d1, d2, ..., dN], memspace>
 - `layout`: `row_major` (default), `col_major`, `blocked(B1, B2)`, or omitted (compiler chooses)
 - `memspace`: for `tile` only — `hbm`, `smem`, `reg`, `tmem`
 
-Examples:
+Syntax examples. Some examples are design-target type syntax beyond current
+backend support:
 ```
 tensor<f32, [64, 128]>                          // 64x128 f32, default device, default layout
 tensor<bf16, [N, M], gpu(0)>                    // size-polymorphic, on GPU 0
@@ -240,6 +241,7 @@ Standard fare, with these notes:
 - Tensor literals: `tensor::<f32>([2, 3], &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0])`
 - Tensor indexing: `a[i, j]` desugars to `tensor::index(a, i, j)`
 - Tile primitive operations: `tile::load(...)`, `tile::store(...)`, `tile::matmul(...)`
+  as a design target beyond the current Phase-0 PTX subset
 
 ## Autodiff API
 
@@ -298,14 +300,20 @@ priv fn internal() { ... }
 - Custom autodiff rules (`@custom_jvp`, `@custom_vjp`)
 - Concurrency primitives
 
-## Out of scope (likely never)
+## Outside the v0.1 General Surface
 - Inheritance
 - Implicit conversions between numeric types
 - Operator overloading on user types
-- Reflection / runtime type info (in user-facing surface; compiler internals are different)
+- Unrestricted runtime type info in the general user-facing surface. This does
+  not exclude the verifier-gated reflection scaffold and future AST reflection
+  targets described in the AGI roadmap.
 - Garbage collection
 
-## Example program
+## Example Program (Design Target)
+
+The example below describes the intended higher-level GPU/tile surface. It is
+not current Phase-0 PTX backend behavior; current PTX support is limited to the
+1D HBM `f32`/`i32` tile subset described above.
 
 ```helix
 module examples::matmul
@@ -333,7 +341,11 @@ where N % 16 == 0, M % 16 == 0, P % 16 == 0,
 }
 ```
 
-## Implementation status (2026-05-04)
+## Historical Implementation Snapshot (2026-05-04)
+
+This section is retained as a historical baseline. It is not the current test
+or stage status; for current evidence, see `docs/stage35-progress-2026-05-15.md`
+and fresh `pytest` output.
 
 - Spec: this document, v0.1 draft (foundation-complete; HBS frozen pending)
 - Lexer: **shipped** — `helixc/frontend/lexer.py`, ~120 token kinds, 1-char lookahead, multichar `..= -> => :: << >>` etc.
@@ -387,9 +399,12 @@ These intentionally-deferred items shape the bootstrap path:
 - **Negative-bound range patterns** (`-10..=-1`): parser rejected `MINUS` in a pattern atom. Now eats negative literals as `Unary("-", IntLit(...))` for both lo and hi range bounds.
 - **3+-segment paths**: silently lowered to `const_int(0)` and made all match arms collide. `crate::E::V` now works as 2-segment alias; other 3+-segment paths error explicitly.
 
-### Test count + audit history
+### Historical Test Count + Audit History
 
-As of 2026-05-04 deep-research cycle 2: **576 tests** in `helixc/tests/` all green. Determinism verified after commit `cd6667c` fixed a WSL test-bin race that was producing flaky failures.
+At the 2026-05-04 deep-research cycle 2 snapshot there were **576 tests** in
+`helixc/tests/` green. Determinism was verified after commit `cd6667c` fixed a
+WSL test-bin race that had produced flaky failures. This is historical evidence,
+not the current Stage 35 gate claim.
 
 10 audit-pass cycles + 2 deep-research cycles have caught and fixed 33 real bugs. Audit candidates explicitly considered:
 - ARENA bounds (off-by-one), buffer +1 slot, bumped to fix

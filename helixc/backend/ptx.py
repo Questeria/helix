@@ -657,13 +657,13 @@ if __name__ == "__main__":
     if unknown_flags:
         for flag in unknown_flags:
             print(f"error: ptx: unknown flag {flag}", file=sys.stderr)
-        sys.exit(1)
+        sys.exit(2)
     strict = "--strict" in flags
     include_stdlib = "--no-stdlib" not in flags
     paths = [a for a in cli_args if not a.startswith("-")]
     if len(paths) > 1:
         print("error: ptx: expected at most one input path", file=sys.stderr)
-        sys.exit(1)
+        sys.exit(2)
     filename = paths[0] if paths else "<stdin>"
     if not paths:
         src = sys.stdin.read()
@@ -673,7 +673,7 @@ if __name__ == "__main__":
                 src = f.read()
         except OSError as e:
             print(f"error: ptx: cannot read {paths[0]}: {e}", file=sys.stderr)
-            sys.exit(1)
+            sys.exit(2)
     try:
         prog = parse(src, filename=filename, include_stdlib=include_stdlib)
     except LexError as e:

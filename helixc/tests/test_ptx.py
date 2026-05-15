@@ -474,9 +474,32 @@ def test_stage35_direct_ptx_cli_reports_missing_file_without_traceback():
         text=True,
         timeout=60,
     )
-    assert proc.returncode != 0, proc.stdout + proc.stderr
+    assert proc.returncode == 2, proc.stdout + proc.stderr
     assert "cannot read" in proc.stderr
     assert "Traceback" not in proc.stderr
+
+
+def test_stage35_direct_ptx_cli_bad_invocation_returns_two():
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.backend.ptx", "--bogus"],
+        cwd=proj_root,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert proc.returncode == 2, proc.stdout + proc.stderr
+    assert "unknown flag --bogus" in proc.stderr
+
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.backend.ptx", "a.hx", "b.hx"],
+        cwd=proj_root,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert proc.returncode == 2, proc.stdout + proc.stderr
+    assert "expected at most one input path" in proc.stderr
 
 
 def test_stage35_direct_ptx_cli_reports_parse_error_without_traceback():

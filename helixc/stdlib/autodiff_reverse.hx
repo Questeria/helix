@@ -16,6 +16,10 @@
 //   slot 0: count     (number of ops on tape)
 //   slot 1: cap       (max ops)
 //   slot 2: adj_start (arena index of adjoint array, allocated by rev_alloc_adjoints)
+// Adjoint metadata:
+//   adj_start - 2: cap
+//   adj_start - 1: guard = -cap - 1
+//   adj_start + cap: footer guard = -cap - 1
 //
 // API:
 //   rev_tape_new(cap)               -> i32   allocate tape, return start
@@ -167,6 +171,7 @@ fn rev_alloc_adjoints(tape: i32) -> i32 {
     let cap = __arena_get(tape + 1);
     let header = __arena_len();
     __arena_push(cap);
+    __arena_push(0 - cap - 1);
     let start = __arena_len();
     __arena_set(tape + 2, start);
     let mut i: i32 = 0;
@@ -174,25 +179,40 @@ fn rev_alloc_adjoints(tape: i32) -> i32 {
         __arena_push(0);
         i = i + 1;
     }
+    __arena_push(0 - cap - 1);
     start
 }
 
+@pure
+fn rev_adj_cap(adj_start: i32) -> i32 {
+    let cap = __arena_get(adj_start - 2);
+    let guard = __arena_get(adj_start - 1);
+    if cap < 0 { 0 - 1 }
+    else {
+    let footer = __arena_get(adj_start + cap);
+    if guard == (0 - cap - 1) {
+        if footer == (0 - cap - 1) { cap } else { 0 - 1 }
+    } else { 0 - 1 } }
+}
+
 fn rev_seed(adj_start: i32, idx: i32, seed: i32) -> i32 {
-    let cap = __arena_get(adj_start - 1);
-    if idx < 0 { 0 - 1 }
+    let cap = rev_adj_cap(adj_start);
+    if cap < 0 { 0 - 1 }
+    else { if idx < 0 { 0 - 1 }
     else { if idx >= cap { 0 - 1 }
     else {
         __arena_set(adj_start + idx, seed);
         0
-    }}
+    }}}
 }
 
 @pure
 fn rev_grad(adj_start: i32, idx: i32) -> i32 {
-    let cap = __arena_get(adj_start - 1);
-    if idx < 0 { 0 }
+    let cap = rev_adj_cap(adj_start);
+    if cap < 0 { 0 }
+    else { if idx < 0 { 0 }
     else { if idx >= cap { 0 }
-    else { __arena_get(adj_start + idx) }}
+    else { __arena_get(adj_start + idx) }}}
 }
 
 // Walk tape in reverse, propagating adjoints.
@@ -205,9 +225,10 @@ fn rev_grad(adj_start: i32, idx: i32) -> i32 {
 fn rev_backward(tape: i32, adj_start: i32) -> i32 {
     let cnt = __arena_get(tape);
     let cap = __arena_get(tape + 1);
-    let adj_cap = __arena_get(adj_start - 1);
+    let adj_cap = rev_adj_cap(adj_start);
     if cnt < 0 { 0 - 1 }
     else { if cnt > cap { 0 - 1 }
+    else { if adj_cap < 0 { 0 - 1 }
     else { if cnt > adj_cap { 0 - 1 }
     else {
     let mut i: i32 = cnt - 1;
@@ -256,5 +277,5 @@ fn rev_backward(tape: i32, adj_start: i32) -> i32 {
         i = i - 1;
     }
     status
-    }}}
+    }}}}
 }

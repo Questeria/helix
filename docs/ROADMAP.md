@@ -11,8 +11,8 @@ reveals which features actually matter.
 - Forward + reverse-mode symbolic AD with chain rules for __exp, __log,
   __sin, __cos, __sqrt, __relu, __sigmoid
 - IR-level effect/capability enforcement
-- Verifier-gated reflection runtime (64 mutable cells, real verifier
-  function calls with SysV ABI)
+- Verifier-gated reflective-cell scaffold (64 mutable cells, real verifier
+  function calls with SysV ABI; real runtime AST reflection remains future work)
 - f32/f64 reflection cells (splice_f / splice_f64 / modify_f / modify_f64)
 - 4 dogfood programs running real gradient descent
 - Stdlib for transcendentals auto-included
@@ -119,11 +119,12 @@ These are blockers for any real ML training, in priority order.
 
 The quietly-load-bearing observation from research agent #1: Helix's
 combination of (a) compile-time-enforced effect system, (b)
-verifier-gated reflection runtime, (c) source-level reverse-mode AD,
+verifier-gated reflective-cell scaffold with future AST reflection target,
+(c) source-level reverse-mode AD,
 (d) memory-tier types, and (e) future provenance-typed
 neuro-symbolic primitives appears to be an under-served niche. A strong
-AGI-axis target is achievable; the language doesn't need to win on
-GEMM throughput to win on AGI.
+AGI-axis target is achievable without requiring Helix to lead on GEMM
+throughput first.
 
 ## Sequencing note
 

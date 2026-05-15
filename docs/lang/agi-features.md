@@ -6,7 +6,7 @@ implementable.
 
 ## 1. Reflection: `quote` and `splice`
 
-Every Helix expression can be captured as data:
+Design target:
 
 ```helix
 let ast = quote { fib(n - 1) + fib(n - 2) };
@@ -15,11 +15,16 @@ let ast = quote { fib(n - 1) + fib(n - 2) };
 
 `splice(ast)` does the inverse — re-injects an AST value into source position.
 
+Current Stage 35 behavior is narrower: `quote` has stub semantics and returns a
+stable AST hash. Real runtime AST inspection and real `splice` execution are
+future work.
+
 **Differentiator target**: most languages have macros that run at compile-time
-only. Helix's `quote` produces *runtime values* of type `AstNode`. The AGI can
-read its own source, transform it, splice it, and run the result. Mainstream
-systems and AI languages usually offer pieces of this, not the same combination
-of static typing plus first-class runtime AST values.
+only. The intended Helix reflection surface would produce runtime `AstNode`
+values so a future AGI system could read its own source, transform it, splice
+it, and run the result. Mainstream systems and AI languages usually offer
+pieces of this, not the same combination of static typing plus first-class
+runtime AST values.
 
 **Closest precedent**: Lisp `(quote ...)`, Scheme syntax-rules, Rust proc-macros
 (but compile-time only), Julia `:expr` (but not statically typed). Helix is a
@@ -35,10 +40,13 @@ fn modify[F](
 ) -> Result<(), ModifyError>;
 ```
 
-The AGI proposes a transformation to a function in its own program. The
-verifier runs over the new AST. If verifier returns true, the transformation
-is committed; the program now has the new function. If false, rejected with
-diagnostic.
+Design target: the AGI proposes a transformation to a function in its own
+program. The verifier runs over the new AST. If verifier returns true, the
+transformation would be committed and the program would use the new function.
+If false, the transformation is rejected with a diagnostic.
+
+Current Stage 35 behavior is a scaffold: the verifier value controls
+accept/reject, but real AST rewrite/commit semantics are future work.
 
 Verifiers themselves can be: type checks, test-suite runners, formal proof
 checkers, regression-bench runners.
@@ -171,10 +179,14 @@ let skill = curriculum::learn_to(
 );
 ```
 
-The compiler maintains a registry of skills with measured difficulties. The
-AGI can request "skills at difficulty X" — the runtime selects the closest
-match or proposes a learning task. This is the Voyager / Eureka / Goldilocks
-pattern, made first-class.
+Design target: the compiler and runtime maintain a registry of skills with
+measured difficulties. The AGI can request "skills at difficulty X"; the
+runtime would select the closest match or propose a learning task. This is the
+Voyager / Eureka / Goldilocks pattern, made first-class.
+
+Current Stage 35 behavior is type-level only: `learn_to` can return
+`Skill<F>`, while the runtime registry and task-selection semantics remain
+future work.
 
 **Why this matters**: skill libraries often live as external registries. Helix's
 target is to make skills a language primitive with type-level guarantees.
@@ -185,8 +197,8 @@ target is to make skills a language primitive with type-level guarantees.
 
 | Feature | Status | Tests | Notes |
 |---|---|---|---|
-| 1. Reflection (`quote`/`splice`/`modify`) | ✅ working (stub semantics) | 4 codegen | `quote` returns a stable AST hash |
-| 2. Verifier-gated modify | ✅ scaffolded | 2 codegen | accept/reject based on verifier value |
+| 1. Reflection (`quote`/`splice`/`modify`) | ✅ working (stub semantics) | 4 codegen | `quote` returns a stable AST hash; runtime AST/splice execution remains future work |
+| 2. Verifier-gated modify | ✅ scaffolded | 2 codegen | accept/reject based on verifier value; real rewrite/commit semantics remain future work |
 | 3. Effect/capability types | ✅ working | 6 typecheck | `@pure` / `@io` etc. propagate at compile time |
 | 4. Memory-tier types | ✅ working | 5 typecheck | Working/Episodic/Semantic/Procedural |
 | 5. Differentiable types `D<T>` | ✅ working | 5 typecheck | propagates through binary ops |
@@ -194,7 +206,7 @@ target is to make skills a language primitive with type-level guarantees.
 | 7. Agent type declarations | ✅ parsing | 4 parser | `agent Foo { fn ...; }` |
 | 8. Tile types in codegen | Phase-0 PTX lowering | PTX / Tile IR tests | 1D HBM `f32`/`i32` kernels plus scalar ops; broader GPU lowering remains in progress |
 | 9. Composable transforms (`grad`/`grad_rev`) | Stage 35 scalar surface | autodiff + codegen tests | scalar forward/reverse AD with fail-closed opaque calls; `vmap`/`jit` remain future work |
-| 10. Auto-curriculum (`learn_to`) | ✅ working (type-level) | 2 typecheck | returns Skill<F>; runtime registry TBD |
+| 10. Auto-curriculum (`learn_to`) | ✅ working (type-level) | 2 typecheck | returns Skill<F>; runtime registry and selection semantics remain future work |
 
 Live test and commit counts move quickly during staged development; see the
 current stage progress note and `pytest` output for authoritative evidence.
