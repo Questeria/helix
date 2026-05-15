@@ -251,11 +251,14 @@ The Python frontend preserves `@since("version")` as metadata alongside
 as a generic skipped attribute, so self-hosted code could not retain the
 version marker.
 
-The bootstrap parser now preserves the first string-literal argument to
-`@since(...)` on `AST_FN_DECL`:
+The bootstrap parser preserves `@since(...)` on `AST_FN_DECL`:
 
 - slot 18: `since_msg_start`
 - slot 19: `since_msg_len`
+
+Absent `@since` is encoded as `0/0`. Bare `@since` is encoded as the
+attribute-name start with length `0`. `@since("version")` is encoded as the
+string body start/length.
 
 The new slots are zeroed on synthetic closure/AD/impl functions and propagated
 through generic monomorph clones, matching the existing Stage 33 metadata
@@ -485,9 +488,58 @@ Validation:
 - `git diff --check`
   - Result: no whitespace errors
 
+## Slice 13: Metadata Clean Gate 3
+
+The third clean-gate rotation found three remaining metadata edge cases:
+
+- Split `@autotune(...)` attributes overwrote the prior product instead of
+  combining it, so a function could bypass the variant-product cap by writing
+  `@autotune(A: [...]) @autotune(B: [...])`.
+- Attributes immediately after leading metadata-only declarations were not
+  skipped before parsing the first function, so `struct Marker { ... }
+  @deprecated("old") fn old(...)` dropped the function metadata.
+- Bare `@since` was represented the same as absent `@since` in bootstrap
+  metadata.
+
+Fixes:
+
+- `capture_autotune_args` now combines repeated autotune products and preserves
+  the first nonzero parse-error kind.
+- `parse_program` now skips attributes before the first real function after the
+  leading metadata-declaration loop.
+- Bare `@since` now stores the attribute-name start with length `0`; absent
+  `@since` remains `0/0`, and `@since("version")` still stores the string body.
+
+Validation:
+
+- `python -m pytest -q helixc\tests\test_codegen.py::test_bootstrap_kovc_since_message_attr_preserved helixc\tests\test_codegen.py::test_bootstrap_kovc_attrs_after_leading_non_fn_reach_first_fn helixc\tests\test_codegen.py::test_bootstrap_kovc_autotune_split_attrs_accumulate_product helixc\tests\test_codegen.py::test_bootstrap_kovc_autotune_validation_diagnostics`
+  - Result: `4 passed`
+- `python -m pytest -q helixc\tests\test_deprecated.py helixc\tests\test_autotune.py helixc\tests\test_codegen.py::test_bootstrap_kovc_deprecated_message_attr_preserved helixc\tests\test_codegen.py::test_bootstrap_kovc_deprecated_diag_aux_carries_message helixc\tests\test_codegen.py::test_bootstrap_kovc_deprecated_diag_aux_matches_each_callee helixc\tests\test_codegen.py::test_bootstrap_kovc_dep_tab_overflow_emits_28702 helixc\tests\test_codegen.py::test_bootstrap_kovc_since_message_attr_preserved helixc\tests\test_codegen.py::test_bootstrap_kovc_attrs_on_non_fn_do_not_bleed_to_next_fn helixc\tests\test_codegen.py::test_bootstrap_kovc_attrs_after_leading_non_fn_reach_first_fn helixc\tests\test_codegen.py::test_bootstrap_kovc_autotune_validation_diagnostics helixc\tests\test_codegen.py::test_bootstrap_kovc_autotune_missing_separators_are_malformed helixc\tests\test_codegen.py::test_bootstrap_kovc_autotune_split_attrs_accumulate_product helixc\tests\test_codegen.py::test_bootstrap_kovc_autotune_typed_int_values_preserved helixc\tests\test_selfhost_cascade.py helixc\tests\test_selfhost_cascade_validate.py`
+  - Result: `73 passed`
+- `python -m pytest -q helixc\tests\test_parser.py helixc\tests\test_codegen.py::test_bootstrap_kovc_attrs_on_non_fn_do_not_bleed_to_next_fn helixc\tests\test_codegen.py::test_bootstrap_kovc_attrs_after_leading_non_fn_reach_first_fn helixc\tests\test_codegen.py::test_bootstrap_kovc_autotune_missing_separators_are_malformed helixc\tests\test_codegen.py::test_bootstrap_kovc_autotune_split_attrs_accumulate_product helixc\tests\test_codegen.py::test_bootstrap_kovc_since_message_attr_preserved`
+  - Result: `70 passed`
+- `python scripts\stage33_selfhost_gate.py --generations 3 --json-out .stage33-logs\selfhost-cascade-metadata-clean3-g3.json`
+  - Result: `rc=0`
+  - G2..G4 stable SHA-256:
+    `a6f1ee44eb4418ba296954528d05564f5a37627dc38bb350b2308675d86b8986`
+  - G2..G4 stable size: `294558` bytes
+  - Final-generation smoke cases: literal, call, loop, and metadata_attrs all
+    returned `42`
+  - Validator result: `selfhost-cascade-validate: ok`
+- `python scripts\stage33_selfhost_gate.py --generations 10 --expect-stable-sha a6f1ee44eb4418ba296954528d05564f5a37627dc38bb350b2308675d86b8986 --json-out .stage33-logs\selfhost-cascade-metadata-clean3-g10.json`
+  - Result: `rc=0`
+  - G2..G11 stable SHA-256:
+    `a6f1ee44eb4418ba296954528d05564f5a37627dc38bb350b2308675d86b8986`
+  - G2..G11 stable size: `294558` bytes
+  - Final-generation smoke cases: literal, call, loop, and metadata_attrs all
+    returned `42`
+  - Validator result: `selfhost-cascade-validate: ok`
+- `python scripts\stage31_validate.py --mode quick --skip-snapshot`
+  - Result: `rc=0`
+
 ## Next
 
-The next Stage 33 slice should run metadata clean gate 3. If clean, Stage 33 can
-be closed with the three requested audit clean gates and then the project can
-move to Stage 34. Full autotune variant generation remains larger than the
-current slice size and should stay gated behind another self-host proof.
+Stage 33 has completed the three requested metadata clean gates. The next step
+is a final Stage 33 closure commit/tag note, then Stage 34 can begin. Full
+autotune variant generation remains larger than the current slice size and
+should stay gated behind another self-host proof.

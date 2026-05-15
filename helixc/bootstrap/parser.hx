@@ -4296,11 +4296,11 @@ fn autotune_first_error_kind(current: i32, next: i32) -> i32 {
 //   2 = malformed token/shape inside the argument list
 //   3 = empty parameter list or empty value list
 fn capture_autotune_args(tok_base: i32, first_tok: i32, sb: i32) -> i32 {
-    set_next_fn_autotune_product(sb, 1);
-    set_next_fn_autotune_error(sb, 0);
+    let prior_product = next_fn_autotune_product(sb);
+    let prior_error = next_fn_autotune_error(sb);
     if tok_tag(tok_base, first_tok) != 3 {
         set_next_fn_autotune_product(sb, 0);
-        set_next_fn_autotune_error(sb, 1);
+        set_next_fn_autotune_error(sb, autotune_first_error_kind(prior_error, 1));
         0
     } else {
         let mut k: i32 = first_tok + 1;
@@ -4400,8 +4400,15 @@ fn capture_autotune_args(tok_base: i32, first_tok: i32, sb: i32) -> i32 {
             error_kind = autotune_first_error_kind(error_kind, 3);
             product = 0;
         };
-        set_next_fn_autotune_product(sb, product);
-        set_next_fn_autotune_error(sb, error_kind);
+        let combined_error = autotune_first_error_kind(prior_error, error_kind);
+        let combined_product = if prior_product == 0 { product } else {
+            if product == 0 { 0 } else {
+                let raw_product = prior_product * product;
+                if raw_product > 16 { 17 } else { raw_product }
+            }
+        };
+        set_next_fn_autotune_product(sb, combined_product);
+        set_next_fn_autotune_error(sb, combined_error);
         0
     }
 }
@@ -4494,7 +4501,7 @@ fn skip_attributes(tok_base: i32, sb: i32) -> i32 {
                         if tb2 == 110 { if tb3 == 99 { if tb4 == 101 { 1 }
                         else { 0 } } else { 0 } } else { 0 } } else { 0 } } else { 0 };
                     if is_since == 1 {
-                        set_next_fn_since_msg_s(sb, 0);
+                        set_next_fn_since_msg_s(sb, attr_s);
                         set_next_fn_since_msg_l(sb, 0);
                         if tok_tag(tok_base, cur_get(sb) + 1) == 3 {
                             let msg_tok = cur_get(sb) + 2;
@@ -4622,6 +4629,8 @@ fn parse_program(tok_base: i32, sb: i32) -> i32 {
             keep_decl = 0;
         };
     }
+    // Leading non-fn decls may be followed by attributes for the first fn.
+    skip_attributes(tok_base, sb);
     let first_fn = parse_fn_decl(tok_base, sb);
     let user_first_node = mk_node(15, first_fn, 0, 0);
     let mut prev_list = user_first_node;

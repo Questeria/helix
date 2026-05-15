@@ -5892,10 +5892,17 @@ fn main() -> i32 {{
     let bare_fn = __arena_get(bare_list + 1);
     let new_msg_s = __arena_get(new_fn + 18);
     let new_msg_l = __arena_get(new_fn + 19);
+    let bare_msg_s = __arena_get(bare_fn + 18);
     let bare_msg_l = __arena_get(bare_fn + 19);
     let mut code: i32 = 42;
     if new_msg_l != 4 {{ code = 10; }} else {{ 0 }};
     if bare_msg_l != 0 {{ code = 11; }} else {{ 0 }};
+    if bare_msg_s == 0 {{ code = 12; }} else {{ 0 }};
+    if __arena_get(bare_msg_s) != 115 {{ code = 13; }} else {{ 0 }};
+    if __arena_get(bare_msg_s + 1) != 105 {{ code = 14; }} else {{ 0 }};
+    if __arena_get(bare_msg_s + 2) != 110 {{ code = 15; }} else {{ 0 }};
+    if __arena_get(bare_msg_s + 3) != 99 {{ code = 16; }} else {{ 0 }};
+    if __arena_get(bare_msg_s + 4) != 101 {{ code = 17; }} else {{ 0 }};
     if __arena_get(new_msg_s) != 118 {{ code = 20; }} else {{ 0 }};
     if __arena_get(new_msg_s + 1) != 48 {{ code = 21; }} else {{ 0 }};
     if __arena_get(new_msg_s + 2) != 46 {{ code = 22; }} else {{ 0 }};
@@ -5974,6 +5981,69 @@ fn main() -> i32 {{
     )
     assert rc == 42, (
         f"attributes on a non-fn decl should not bleed into next fn; got rc={rc}"
+    )
+
+
+def test_bootstrap_kovc_attrs_after_leading_non_fn_reach_first_fn():
+    """Stage 33: attributes after leading metadata decls apply to first fn."""
+    import os, subprocess
+    proj = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    lexer = open(os.path.join(proj, "helixc", "bootstrap", "lexer.hx")).read()
+    lexer_no_main = lexer.rsplit(
+        "// --------------------------------------------------------------\n// Demo:",
+        1,
+    )[0]
+    parser_body = open(os.path.join(proj, "helixc", "bootstrap", "parser.hx")).read()
+    kovc = open(os.path.join(proj, "helixc", "bootstrap", "kovc.hx")).read()
+    kovc_lib = kovc.rsplit(
+        "// --------------------------------------------------------------\n// Demo:",
+        1,
+    )[0]
+    import uuid
+    tag = uuid.uuid4().hex[:10]
+    src_path = f"/tmp/helix_attr_after_non_fn_src_{tag}.hx"
+    src_text = (
+        'struct Marker { x: i32 } '
+        '@deprecated("old") @since("v1") @kernel @autotune(A: [1, 2]) '
+        'fn old(a: i32) -> i32 { a } '
+        'fn main() -> i32 { old(42) }'
+    )
+    subprocess.run(
+        ["wsl", "-e", "bash", "-c",
+         f"printf %s {repr(src_text)} > {src_path}"],
+        check=True, timeout=30,
+    )
+    driver = lexer_no_main + parser_body + kovc_lib + f"""
+fn main() -> i32 {{
+    let src_start = __arena_len();
+    let src_len = read_file_to_arena("{src_path}");
+    let tok_base = __arena_len();
+    lex(src_start, src_len);
+    let ast_root = parse_top(tok_base);
+    let old_fn = __arena_get(ast_root + 1);
+    let diag_state = diag_arena_init();
+    deprecated_pass(ast_root, diag_state);
+    autotune_pass(ast_root, diag_state);
+    let mut rc: i32 = 42;
+    if __arena_get(old_fn + 9) != 1 {{ rc = 10; }} else {{ 0 }};
+    if __arena_get(old_fn + 13) != 3 {{ rc = 11; }} else {{ 0 }};
+    if __arena_get(old_fn + 14) != 1 {{ rc = 12; }} else {{ 0 }};
+    if __arena_get(old_fn + 15) != 1 {{ rc = 13; }} else {{ 0 }};
+    if __arena_get(old_fn + 16) != 2 {{ rc = 14; }} else {{ 0 }};
+    if __arena_get(old_fn + 17) != 0 {{ rc = 15; }} else {{ 0 }};
+    if __arena_get(old_fn + 19) != 2 {{ rc = 16; }} else {{ 0 }};
+    if diag_arena_count(diag_state) != 1 {{ rc = 17; }} else {{ 0 }};
+    if diag_get_code(diag_state, 0) != 28701 {{ rc = 18; }} else {{ 0 }};
+    rc
+}}
+"""
+    rc = compile_and_run(driver)
+    subprocess.run(
+        ["wsl", "-e", "bash", "-c", f"rm -f {src_path}"],
+        capture_output=True, timeout=30,
+    )
+    assert rc == 42, (
+        f"attributes after leading non-fn decl should reach first fn; got rc={rc}"
     )
 
 
@@ -6218,6 +6288,78 @@ fn main() -> i32 {{
     )
     assert rc == 42, (
         f"missing autotune separators should emit 27003 aux=2 twice; got rc={rc}"
+    )
+
+
+def test_bootstrap_kovc_autotune_split_attrs_accumulate_product():
+    """Stage 33: repeated @autotune attrs combine for the variant cap."""
+    import os, subprocess
+    proj = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    lexer = open(os.path.join(proj, "helixc", "bootstrap", "lexer.hx")).read()
+    lexer_no_main = lexer.rsplit(
+        "// --------------------------------------------------------------\n// Demo:",
+        1,
+    )[0]
+    parser_body = open(os.path.join(proj, "helixc", "bootstrap", "parser.hx")).read()
+    kovc = open(os.path.join(proj, "helixc", "bootstrap", "kovc.hx")).read()
+    kovc_lib = kovc.rsplit(
+        "// --------------------------------------------------------------\n// Demo:",
+        1,
+    )[0]
+    import uuid
+    tag = uuid.uuid4().hex[:10]
+    src_path = f"/tmp/helix_autotune_split_src_{tag}.hx"
+    src_text = (
+        "@kernel @autotune(A: [1, 2, 3, 4, 5]) "
+        "@autotune(B: [10, 20, 30, 40, 50]) "
+        "fn too_many(a: i32) -> i32 { a } "
+        "fn main() -> i32 { 42 }"
+    )
+    subprocess.run(
+        ["wsl", "-e", "bash", "-c",
+         f"printf %s {repr(src_text)} > {src_path}"],
+        check=True, timeout=30,
+    )
+    driver = lexer_no_main + parser_body + kovc_lib + f"""
+fn main() -> i32 {{
+    let src_start = __arena_len();
+    let src_len = read_file_to_arena("{src_path}");
+    let tok_base = __arena_len();
+    lex(src_start, src_len);
+    let ast_root = parse_top(tok_base);
+    let fn_idx = __arena_get(ast_root + 1);
+    let diag_state = diag_arena_init();
+    autotune_pass(ast_root, diag_state);
+    let n = diag_arena_count(diag_state);
+    let mut i: i32 = 0;
+    let mut cap_hits: i32 = 0;
+    let mut bad_aux: i32 = 0;
+    while i < n {{
+        let code = diag_get_code(diag_state, i);
+        let aux = diag_get_aux(diag_state, i);
+        if code == 27001 {{
+            cap_hits = cap_hits + 1;
+            if aux != 17 {{ bad_aux = 1; }} else {{ 0 }};
+        }} else {{
+            bad_aux = 2;
+        }};
+        i = i + 1;
+    }}
+    let mut rc: i32 = 42;
+    if __arena_get(fn_idx + 16) != 17 {{ rc = 10; }} else {{ 0 }};
+    if __arena_get(fn_idx + 17) != 0 {{ rc = 11; }} else {{ 0 }};
+    if cap_hits != 1 {{ rc = 12; }} else {{ 0 }};
+    if bad_aux != 0 {{ rc = 20 + bad_aux; }} else {{ 0 }};
+    rc
+}}
+"""
+    rc = compile_and_run(driver)
+    subprocess.run(
+        ["wsl", "-e", "bash", "-c", f"rm -f {src_path}"],
+        capture_output=True, timeout=30,
+    )
+    assert rc == 42, (
+        f"split @autotune attrs should combine product and emit 27001; got rc={rc}"
     )
 
 
