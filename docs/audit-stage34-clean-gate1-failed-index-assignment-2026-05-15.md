@@ -1,9 +1,11 @@
-# Stage 34 Clean Gate 1 Index Assignment Restart
+# Stage 34 Clean Gate 1 Index Assignment Finding
 
 Date: 2026-05-15
 Stage: 34
 Gate: Clean gate 1
 Result: Failed, fixed, and reset to 0/3 clean gates
+Rotation: Same failed `c9f9606` clean-gate rotation as the reflection bound
+comment finding; this was not a separate clean-gate restart.
 
 ## Finding
 
@@ -25,11 +27,11 @@ looked clean and could prove the self-independent refinement.
 
 ## Fix
 
-When a simple indexed assignment writes unrepresentable scalar evidence into a
-named aggregate, the checker now marks the named aggregate as carrying that
-evidence. A later indexed read sees the marker and refined proof checking fails
-closed. A repair assignment, such as `xs[0] = 0.0_f64`, clears the marker for
-simple local aggregate cases.
+When a simple static indexed assignment writes unrepresentable scalar evidence
+into a named aggregate, the checker now marks that static element as carrying
+the evidence. A later read of the same element sees the marker and refined
+proof checking fails closed. A repair assignment, such as `xs[0] = 0.0_f64`,
+clears only that static element for simple local aggregate cases.
 
 ## Verification
 
@@ -44,5 +46,4 @@ simple local aggregate cases.
 
 ## Gate State
 
-The clean-gate counter remains reset to `0/3`. A fresh clean gate should start
-from the commit containing this fix set.
+The clean-gate counter remained reset to `0/3` after this historical finding.

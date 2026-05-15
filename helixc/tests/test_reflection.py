@@ -168,9 +168,8 @@ def test_dogfood_03_affine_with_f32_cells():
 
 
 def test_dogfood_05_binary_classifier():
-    # Sigmoid-based logistic regression with BCE loss + grad_rev_all.
-    # First Helix program that trains an actual probabilistic classifier
-    # end-to-end. Required range-reduced __exp.
+    # Sigmoid-based logistic regression exercising BCE loss, grad_rev_all,
+    # and range-reduced __exp.
     proj_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     p = os.path.join(proj_root, "helixc", "examples", "dogfood_05_binary_classifier.hx")
     with open(p) as f:
@@ -190,8 +189,8 @@ def test_dogfood_04_xor_relu_perceptron():
 
 def test_self_improving_agent_example():
     # Compiles and runs helixc/examples/self_improving_agent.hx — the
-    # example composing reverse-mode AD + reflection + verifier gating +
-    # effect annotations all in one program.
+    # example covering reverse-mode AD, reflection, verifier gating, and
+    # effect annotations together.
     proj_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     example_path = os.path.join(proj_root, "helixc", "examples", "self_improving_agent.hx")
     with open(example_path) as f:

@@ -1,9 +1,11 @@
-# Stage 34 Clean Gate 1 Reflection Bound Comment Restart
+# Stage 34 Clean Gate 1 Reflection Bound Comment Finding
 
 Date: 2026-05-15
 Stage: 34
 Gate: Clean gate 1
 Result: Failed, fixed, and reset to 0/3 clean gates
+Rotation: Same failed `c9f9606` clean-gate rotation as the index assignment
+finding; this was not a separate clean-gate restart.
 
 ## Finding
 
@@ -30,5 +32,4 @@ updates must keep reflected state inside a safe range.
 
 ## Gate State
 
-The clean-gate counter remains reset to `0/3`. A fresh clean gate should start
-from the commit containing this fix set.
+The clean-gate counter remained reset to `0/3` after this historical finding.

@@ -1020,20 +1020,20 @@ Verification after this fix set:
 
 The clean-gate counter remains reset to `0/3`.
 
-## Clean Gate 1 Twenty Sixth Restart - Failed; Fix Verified; Counter Reset
+## Additional Finding From Clean Gate 1 Twenty Fifth Restart - Fix Verified
 
-Fresh proof-soundness auditors on commit `c9f9606` found one more Stage 34
-proof-honesty gap:
+The same failed clean-gate rotation on commit `c9f9606` also found one more
+Stage 34 proof-honesty gap:
 
 - Indexed assignments could hide unrepresentable scalar evidence. Plain
   assignment evidence worked for `x = bad`, but `xs[0] = bad; xs[0]` did not
   mark the aggregate `xs`, so the later index read could prove a
   self-independent refinement as clean.
 
-The fix marks a named aggregate as carrying unrepresentable scalar evidence
-when a simple indexed assignment writes such evidence into it. A later indexed
-read sees the aggregate marker and refined proof checking fails closed. A
-simple repair assignment to the indexed aggregate clears the marker.
+The fix set tracks simple static indexed evidence separately. A later indexed
+read sees the matching unsafe element marker and refined proof checking fails
+closed, while a repair assignment to the same static element can clear only
+that element.
 
 Verification after this fix set:
 
@@ -1045,5 +1045,38 @@ Verification after this fix set:
 - `python scripts\stage31_validate.py --mode quick`: pass
 - `python scripts\stage31_validate.py --mode full --skip-snapshot --shards 8`:
   pass across all 12 shards with no retries
+
+The clean-gate counter remains reset to `0/3`.
+
+## Clean Gate 1 Twenty Sixth Restart - Failed; Fix Verified; Counter Reset
+
+Fresh clean-gate auditors on commit `b374615` found one more Stage 34
+proof-soundness issue and two documentation discipline issues:
+
+- Indexed assignment repair was too broad. After `xs[0] = bad`, a clean write
+  to `xs[1]` cleared the whole aggregate marker, so a later `xs[0]` read could
+  still look clean.
+- The previous reflection-bound-comment and index-assignment findings were
+  recorded as sequential restarts even though both came from the same failed
+  `c9f9606` clean-gate rotation.
+- `helixc/tests/test_reflection.py` still had broad binary-classifier comment
+  wording.
+
+The fix tracks simple static indexed evidence per element. A clean write to
+`xs[1]` can clear only `xs[1]`, while evidence on `xs[0]` remains visible to
+later `xs[0]` reads. The historical docs now describe the reflection and index
+assignment findings as one failed `c9f9606` rotation, and the broad reflection
+comments were narrowed to the behaviors under test.
+
+Verification after this fix set:
+
+- Focused index-repair and reflection checks: `4 passed`
+- Stage 34 typecheck/proof-gate/reflection slice:
+  `38 passed, 296 deselected`
+- `python -m pytest -q helixc/tests/test_typecheck.py helixc/tests/test_cli.py helixc/tests/test_proof_artifact_validate.py helixc/tests/test_proof_artifact_gate.py helixc/tests/test_strings_io.py helixc/tests/test_reflection.py helixc/tests/test_select_codegen.py`:
+  `531 passed`
+- `python scripts\stage31_validate.py --mode quick`: pass
+- `python scripts\stage31_validate.py --mode full --skip-snapshot --shards 8`:
+  pass across all 12 shards
 
 The clean-gate counter remains reset to `0/3`.

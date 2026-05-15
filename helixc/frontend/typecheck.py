@@ -714,11 +714,18 @@ class TypeChecker:
                 self._local_const_unrepresentable_base_scopes[-1][name] = base
 
     def _set_local_const_unrepresentable(
-        self, name: str, unrepresentable: bool, base: Type | None = None,
+        self,
+        name: str,
+        unrepresentable: bool,
+        base: Type | None = None,
+        *,
+        anchor_name: str | None = None,
     ) -> None:
+        scope_name = anchor_name or name
         for idx in range(len(self._local_const_scalar_scopes) - 1, -1, -1):
-            if name not in self._local_const_scalar_scopes[idx]:
+            if scope_name not in self._local_const_scalar_scopes[idx]:
                 continue
+            self._local_const_scalar_scopes[idx].setdefault(name, None)
             if unrepresentable:
                 self._local_const_unrepresentable_scopes[idx].add(name)
                 if base is not None:
@@ -736,6 +743,60 @@ class TypeChecker:
                 if base is not None:
                     self._local_const_unrepresentable_base_scopes[-1][name] = (
                         base)
+
+    def _local_const_index_key(self, name: str, index: int) -> str:
+        return f"<index:{name}:{index}>"
+
+    def _simple_local_const_index_key(
+        self, expr: A.Index,
+    ) -> tuple[str, str] | None:
+        if (not isinstance(expr.callee, A.Name)
+                or expr.callee.generics
+                or len(expr.indices) != 1):
+            return None
+        index = expr.indices[0]
+        if not isinstance(index, A.IntLit):
+            return None
+        return (
+            expr.callee.name,
+            self._local_const_index_key(expr.callee.name, index.value),
+        )
+
+    def _clear_local_const_index_unrepresentable(
+        self, name: str,
+    ) -> None:
+        prefix = f"<index:{name}:"
+        for idx in range(len(self._local_const_scalar_scopes) - 1, -1, -1):
+            if name not in self._local_const_scalar_scopes[idx]:
+                continue
+            keys = [
+                key for key in self._local_const_scalar_scopes[idx]
+                if key.startswith(prefix)
+            ]
+            for key in keys:
+                self._local_const_scalar_scopes[idx].pop(key, None)
+                self._local_const_unrepresentable_scopes[idx].discard(key)
+                self._local_const_unrepresentable_base_scopes[idx].pop(
+                    key, None)
+            return
+
+    def _mark_array_literal_unrepresentable_elements(
+        self, name: str, value: A.Expr,
+    ) -> bool:
+        if not isinstance(value, A.ArrayLit):
+            return False
+        marked = False
+        for idx, elem in enumerate(value.elems):
+            if not self._expr_has_unrepresentable_typed_const_scalar(elem):
+                continue
+            self._set_local_const_unrepresentable(
+                self._local_const_index_key(name, idx),
+                True,
+                self._expr_unrepresentable_typed_const_scalar_base(elem),
+                anchor_name=name,
+            )
+            marked = True
+        return marked
 
     def _lookup_local_const_scalar(
         self, name: str,
@@ -2056,11 +2117,13 @@ class TypeChecker:
             if (stmt.value is not None
                     and self._expr_has_unrepresentable_typed_const_scalar(
                         stmt.value)):
-                self._mark_local_const_unrepresentable(
-                    stmt.name,
-                    self._expr_unrepresentable_typed_const_scalar_base(
-                        stmt.value),
-                )
+                if not self._mark_array_literal_unrepresentable_elements(
+                        stmt.name, stmt.value):
+                    self._mark_local_const_unrepresentable(
+                        stmt.name,
+                        self._expr_unrepresentable_typed_const_scalar_base(
+                            stmt.value),
+                    )
             return
         if isinstance(stmt, A.ExprStmt):
             self._check_expr(stmt.expr, scope)
@@ -2861,17 +2924,25 @@ class TypeChecker:
                     hint="assign an explicitly proven refined value instead",
                 ))
             if expr.op == "=" and isinstance(expr.target, A.Name):
+                self._clear_local_const_index_unrepresentable(
+                    expr.target.name)
                 assigned_unrepresentable = (
                     self._expr_has_unrepresentable_typed_const_scalar(
                         expr.value)
                 )
-                self._set_local_const_unrepresentable(
-                    expr.target.name,
-                    assigned_unrepresentable,
-                    self._expr_unrepresentable_typed_const_scalar_base(
-                        expr.value)
-                    if assigned_unrepresentable else None,
-                )
+                if (assigned_unrepresentable
+                        and self._mark_array_literal_unrepresentable_elements(
+                            expr.target.name, expr.value)):
+                    self._set_local_const_unrepresentable(
+                        expr.target.name, False)
+                else:
+                    self._set_local_const_unrepresentable(
+                        expr.target.name,
+                        assigned_unrepresentable,
+                        self._expr_unrepresentable_typed_const_scalar_base(
+                            expr.value)
+                        if assigned_unrepresentable else None,
+                    )
             elif (expr.op == "="
                   and isinstance(expr.target, A.Index)
                   and isinstance(expr.target.callee, A.Name)):
@@ -2879,13 +2950,24 @@ class TypeChecker:
                     self._expr_has_unrepresentable_typed_const_scalar(
                         expr.value)
                 )
-                self._set_local_const_unrepresentable(
-                    expr.target.callee.name,
-                    assigned_unrepresentable,
-                    self._expr_unrepresentable_typed_const_scalar_base(
-                        expr.value)
-                    if assigned_unrepresentable else None,
-                )
+                indexed_key = self._simple_local_const_index_key(expr.target)
+                if indexed_key is not None:
+                    aggregate_name, key = indexed_key
+                    self._set_local_const_unrepresentable(
+                        key,
+                        assigned_unrepresentable,
+                        self._expr_unrepresentable_typed_const_scalar_base(
+                            expr.value)
+                        if assigned_unrepresentable else None,
+                        anchor_name=aggregate_name,
+                    )
+                elif assigned_unrepresentable:
+                    self._set_local_const_unrepresentable(
+                        expr.target.callee.name,
+                        True,
+                        self._expr_unrepresentable_typed_const_scalar_base(
+                            expr.value),
+                    )
             return TyUnit()
         if isinstance(expr, A.TupleLit):
             return TyTuple(tuple(self._check_expr(e, scope) for e in expr.elems))
@@ -3562,6 +3644,14 @@ class TypeChecker:
         if isinstance(expr, A.Field):
             return self._expr_has_unrepresentable_typed_const_scalar(expr.obj)
         if isinstance(expr, A.Index):
+            indexed_key = self._simple_local_const_index_key(expr)
+            if indexed_key is not None:
+                _, key = indexed_key
+                found_local, local_unrepresentable = (
+                    self._lookup_local_const_unrepresentable(key)
+                )
+                if found_local and local_unrepresentable:
+                    return True
             return (
                 self._expr_has_unrepresentable_typed_const_scalar(expr.callee)
                 or any(
@@ -3677,6 +3767,12 @@ class TypeChecker:
         if isinstance(expr, A.Field):
             return self._expr_unrepresentable_typed_const_scalar_base(expr.obj)
         if isinstance(expr, A.Index):
+            indexed_key = self._simple_local_const_index_key(expr)
+            if indexed_key is not None:
+                _, key = indexed_key
+                base = self._lookup_local_const_unrepresentable_base(key)
+                if base is not None:
+                    return base
             base = self._expr_unrepresentable_typed_const_scalar_base(
                 expr.callee)
             if base is not None:

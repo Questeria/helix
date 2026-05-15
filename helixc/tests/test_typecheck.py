@@ -1060,6 +1060,20 @@ def test_stage34_unrepresentable_scalar_evidence_covers_index_assignment():
     """)
     assert repaired == [], repaired
 
+    wrong_index_repair = check("""
+    type AlwaysF64 = f64 where true;
+    fn f(b: bool) -> AlwaysF64 {
+        let mut xs = [0.0_f64, 0.0_f64];
+        xs[0] = if b { 1e309_f64 } else { 0.0_f64 };
+        xs[1] = 0.0_f64;
+        xs[0]
+    }
+    """)
+    assert any("return value of function 'f'" in e
+               and "requires a representable target value" in e
+               and "target base f64" in e
+               for e in wrong_index_repair), wrong_index_repair
+
 
 def test_stage34_unrepresentable_primitive_return_producer_is_not_clean():
     errs = check("""
