@@ -247,6 +247,44 @@ def validate_artifact(
             "summary.proof_carries is required when proof_carries is non-empty"
         )
 
+    expected_strategies: dict[str, int] = {}
+    for carry in proof_carries:
+        if isinstance(carry, dict):
+            strategy = carry.get("strategy")
+            if isinstance(strategy, str):
+                expected_strategies[strategy] = (
+                    expected_strategies.get(strategy, 0) + 1
+                )
+    observed_strategies = summary.get("proof_carry_strategies")
+    if observed_strategies is not None:
+        if not isinstance(observed_strategies, dict):
+            errors.append("summary.proof_carry_strategies must be an object")
+        else:
+            normalized: dict[str, int] = {}
+            for key, value in observed_strategies.items():
+                if not isinstance(key, str):
+                    errors.append(
+                        "summary.proof_carry_strategies keys must be strings"
+                    )
+                    continue
+                if not _is_json_int(value):
+                    errors.append(
+                        f"summary.proof_carry_strategies.{key} "
+                        "must be an integer"
+                    )
+                    continue
+                normalized[key] = value
+            if normalized != expected_strategies:
+                errors.append(
+                    "summary.proof_carry_strategies does not match "
+                    "proof_carries"
+                )
+    elif proof_carries:
+        errors.append(
+            "summary.proof_carry_strategies is required when proof_carries "
+            "is non-empty"
+        )
+
     warning_errors = sum(
         1 for warning in lists["warning_diagnostics"]
         if isinstance(warning, dict) and warning.get("promoted_to_error")

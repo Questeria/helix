@@ -153,3 +153,20 @@ Fixes:
   carries through the artifact recorder.
 - Quick-gate proof-artifact coverage now includes tuple carries plus affine and
   negated-bound carries.
+
+## Increment 10 - Proof-Carry Strategy Summary
+
+Proof artifacts now summarize carried proof strategies in
+`summary.proof_carry_strategies`.
+
+Example:
+
+```json
+{
+  "numeric-bound-implication": 2
+}
+```
+
+The validator checks that this summary matches the actual `proof_carries`
+records, so downstream tools can trust the quick counts without re-walking the
+full list.

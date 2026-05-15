@@ -258,8 +258,14 @@ def test_validate_checks_stage34_proof_carry_records(capsys, tmp_path):
     )
     assert artifact["summary"]["proof_carries"] == 1
     assert artifact["proof_carries"][0]["strategy"] == "numeric-bound-implication"
+    assert artifact["summary"]["proof_carry_strategies"] == {
+        "numeric-bound-implication": 1,
+    }
 
     artifact["summary"]["proof_carries"] = 99
+    artifact["summary"]["proof_carry_strategies"] = {
+        "numeric-bound-implication": 2,
+    }
     artifact["proof_carries"][0]["strategy"] = "made-up-proof"
     artifact["proof_carries"][0]["span"]["line"] = False
     artifact_path.write_text(json.dumps(artifact), encoding="utf-8")
@@ -267,6 +273,7 @@ def test_validate_checks_stage34_proof_carry_records(capsys, tmp_path):
     captured = capsys.readouterr()
     assert rc == 1
     assert "summary.proof_carries" in captured.err
+    assert "summary.proof_carry_strategies does not match" in captured.err
     assert "proof_carries[0].strategy" in captured.err
     assert "proof_carries[0].span.line must be an integer" in captured.err
 

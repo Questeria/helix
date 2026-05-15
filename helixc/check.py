@@ -394,6 +394,14 @@ def _emit_proof_obligation_artifact(
     input_metadata = dict(input_metadata or {})
     warning_diagnostics = list(warning_diagnostics or [])
     proof_carries = list(proof_carries or [])
+    proof_carry_strategies: dict[str, int] = {}
+    for carry in proof_carries:
+        data = carry.to_json_dict() if hasattr(carry, "to_json_dict") else dict(carry)
+        strategy = data.get("strategy")
+        if isinstance(strategy, str):
+            proof_carry_strategies[strategy] = (
+                proof_carry_strategies.get(strategy, 0) + 1
+            )
     artifact = {
         "schema": PROOF_SCHEMA,
         "cache_key": proof_cache_key(input_metadata),
@@ -409,6 +417,7 @@ def _emit_proof_obligation_artifact(
                 1 for d in warning_diagnostics
                 if d.get("promoted_to_error")
             ),
+            "proof_carry_strategies": proof_carry_strategies,
         },
         "obligations": [
             o.to_json_dict() if hasattr(o, "to_json_dict") else dict(o)

@@ -1591,6 +1591,9 @@ def test_stage34_emit_proof_carry_json_for_affine_and_negated_bounds(
     assert artifact["summary"]["typecheck_errors"] == 0
     assert artifact["obligations"] == []
     assert artifact["summary"]["proof_carries"] == 2
+    assert artifact["summary"]["proof_carry_strategies"] == {
+        "numeric-bound-implication": 2,
+    }
     sources = {
         carry["source_refinement"]: carry["strategy"]
         for carry in artifact["proof_carries"]
