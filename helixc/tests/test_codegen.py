@@ -9445,6 +9445,29 @@ def test_nn_sgd_f32_step():
     assert code == 57, f"expected 57, got {code}"
 
 
+def test_nn_adam_f32_step_updates_moments_and_weight():
+    """Adam-style step with beta1=beta2=0: w=10,g=4,lr=.5 -> w=9.5."""
+    src = """
+    fn main() -> i32 {
+        let w = t1d_new(1);
+        tf1d_set(w, 0, 10.0_f32);
+        let g = t1d_new(1);
+        tf1d_set(g, 0, 4.0_f32);
+        let m = t1d_new(1);
+        tf1d_set(m, 0, 0.0_f32);
+        let v = t1d_new(1);
+        tf1d_set(v, 0, 0.0_f32);
+        adam_f32_step(w, g, m, v, 0.5_f32, 0.0_f32, 0.0_f32, 0.0_f32, 1);
+        let score = (__f32_from_bits(__arena_get(w)) * 10.0_f32) as i32;
+        let m_score = __f32_from_bits(__arena_get(m)) as i32;
+        let v_score = __f32_from_bits(__arena_get(v)) as i32;
+        score + m_score + v_score - 73
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
 def test_nn_dense_layer_f32_grad_w():
     """dy=[2,3], x=[5,7] -> grad_w sum=60; -18=42."""
     src = """

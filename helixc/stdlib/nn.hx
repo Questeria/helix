@@ -173,6 +173,29 @@ fn sgd_f32_step_decay_clip(w_start: i32, g_start: i32, lr: f32,
     sgd_f32_step(w_start, g_start, lr, n)
 }
 
+// Adam-style optimizer step with uncorrected moving moments.
+// m[i] = beta1*m[i] + (1-beta1)*g[i]
+// v[i] = beta2*v[i] + (1-beta2)*g[i]^2
+// w[i] = w[i] - lr*m[i]/(sqrt(v[i]) + eps)
+fn adam_f32_step(w_start: i32, g_start: i32, m_start: i32, v_start: i32,
+                 lr: f32, beta1: f32, beta2: f32, eps: f32, n: i32) -> i32 {
+    let mut i: i32 = 0;
+    while i < n {
+        let w_i = __f32_from_bits(__arena_get(w_start + i));
+        let g_i = __f32_from_bits(__arena_get(g_start + i));
+        let m_i = __f32_from_bits(__arena_get(m_start + i));
+        let v_i = __f32_from_bits(__arena_get(v_start + i));
+        let next_m = beta1 * m_i + (1.0_f32 - beta1) * g_i;
+        let next_v = beta2 * v_i + (1.0_f32 - beta2) * g_i * g_i;
+        __arena_set(m_start + i, __bits_of_f32(next_m));
+        __arena_set(v_start + i, __bits_of_f32(next_v));
+        __arena_set(w_start + i,
+            __bits_of_f32(w_i - lr * next_m / (__sqrt(next_v) + eps)));
+        i = i + 1;
+    }
+    0
+}
+
 // MSE on f32 tensors.
 @pure
 fn mse_loss_f32(y_start: i32, t_start: i32, n: i32) -> f32 {

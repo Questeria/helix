@@ -64,6 +64,32 @@ Initial focused checks:
 - `python scripts\stage31_validate.py --mode quick --skip-snapshot`
   - Result: passed, `stage31-quick: rc=0`.
 
+## Increment 18 - Adam Optimizer Helper
+
+The Helix neural-network stdlib now includes:
+
+- `adam_f32_step(w_start, g_start, m_start, v_start, lr, beta1, beta2, eps, n)`
+
+Beginner meaning:
+
+- SGD moves weights directly by the current gradient.
+- Adam also tracks a moving average of the gradient and squared gradient, which
+  is much closer to how modern AI models are usually trained.
+
+Current scope:
+
+- This is an Adam-style step with uncorrected moving moments.
+- It updates weights, first moment `m`, and second moment `v` in Helix memory.
+
+Focused verification:
+
+- `python -m pytest -q helixc\tests\test_codegen.py -k "adam_f32_step or sgd_f32_step or clip_grad_norm_f32 or add_weight_decay_grad_f32" --tb=short`
+  - Result: 6 passed, 774 deselected.
+- `python -m pytest -q helixc\tests\test_codegen.py -k "nn_ or adam_f32_step or sgd_f32_step or dense_layer_f32_grad" --tb=short`
+  - Result: 39 passed, 741 deselected.
+- `python scripts\stage31_validate.py --mode quick --skip-snapshot`
+  - Result: passed, `stage31-quick: rc=0`.
+
 ## Increment 17 - Classifier Training Helpers
 
 The Helix neural-network stdlib now includes two classifier-training helpers:
