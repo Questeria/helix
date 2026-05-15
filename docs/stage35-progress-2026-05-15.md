@@ -64,6 +64,27 @@ Initial focused checks:
 - `python scripts\stage31_validate.py --mode quick --skip-snapshot`
   - Result: passed, `stage31-quick: rc=0`.
 
+## Increment 6 - f32 Dropout
+
+The Helix neural-network stdlib now includes:
+
+- `dropout_f32(x_start, y_start, n, keep_prob, seed)`
+
+It implements deterministic inverted dropout for f32 vectors. Kept values are
+scaled by `1 / keep_prob`; dropped values become zero. The helper returns the
+final RNG state so callers can continue a reproducible training stream.
+
+This matters because dropout is a standard training-time regularization tool.
+In beginner terms, it helps models avoid relying too heavily on one activation
+path.
+
+Focused verification:
+
+- `python -m pytest -q helixc\tests\test_codegen.py -k "dropout_f32 or layer_norm_f32 or rand_step" --tb=short`
+  - Result: 3 passed, 758 deselected.
+- `python scripts\stage31_validate.py --mode quick --skip-snapshot`
+  - Result: passed, `stage31-quick: rc=0`.
+
 ## Increment 5 - f32 Layer Normalization
 
 The Helix neural-network stdlib now includes:

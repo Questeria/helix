@@ -9153,6 +9153,38 @@ def test_nn_layer_norm_f32_centers_and_scales():
     assert code == 42, f"expected 42, got {code}"
 
 
+def test_nn_dropout_f32_keep_prob_one_copies_input():
+    """dropout keep_prob=1 copies input unchanged. [2,3] sum=5; *10-8=42."""
+    src = """
+    fn main() -> i32 {
+        let x = t1d_new(2);
+        tf1d_set(x, 0, 2.0_f32);
+        tf1d_set(x, 1, 3.0_f32);
+        let y = t1d_new(2);
+        dropout_f32(x, y, 2, 1.0_f32, 7);
+        ((tf1d_sum(y, 2) * 10.0_f32) as i32) - 8
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_nn_dropout_f32_keep_prob_zero_zeros_output():
+    """dropout keep_prob=0 writes zeros."""
+    src = """
+    fn main() -> i32 {
+        let x = t1d_new(2);
+        tf1d_set(x, 0, 2.0_f32);
+        tf1d_set(x, 1, 3.0_f32);
+        let y = t1d_new(2);
+        dropout_f32(x, y, 2, 0.0_f32, 7);
+        (tf1d_sum(y, 2) as i32) + 42
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
 def test_nn_sgd_f32_step():
     """f32 SGD: w-lr*g over array. w=[10,20], lr=0.5, g=[1,2] -> [9.5, 19.0]; sum*2=57."""
     src = """

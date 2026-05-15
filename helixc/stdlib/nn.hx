@@ -283,6 +283,48 @@ fn layer_norm_f32(x_start: i32, y_start: i32, n: i32, eps: f32) -> i32 {
     }
 }
 
+// Inverted dropout for f32 vectors. During training, each element is kept with
+// probability keep_prob and scaled by 1/keep_prob; dropped elements become 0.
+// Returns the final deterministic RNG state.
+fn dropout_f32(x_start: i32, y_start: i32, n: i32,
+               keep_prob: f32, seed: i32) -> i32 {
+    if keep_prob <= 0.0_f32 {
+        let mut i: i32 = 0;
+        while i < n {
+            __arena_set(y_start + i, __bits_of_f32(0.0_f32));
+            i = i + 1;
+        }
+        seed
+    }
+    else {
+        if keep_prob >= 1.0_f32 {
+            let mut j: i32 = 0;
+            while j < n {
+                __arena_set(y_start + j, __arena_get(x_start + j));
+                j = j + 1;
+            }
+            seed
+        }
+        else {
+            let mut state: i32 = seed;
+            let mut k: i32 = 0;
+            while k < n {
+                state = __rand_step(state);
+                let r = __rand_float(state);
+                if r < keep_prob {
+                    let x = __f32_from_bits(__arena_get(x_start + k));
+                    __arena_set(y_start + k, __bits_of_f32(x / keep_prob));
+                }
+                else {
+                    __arena_set(y_start + k, __bits_of_f32(0.0_f32));
+                };
+                k = k + 1;
+            }
+            state
+        }
+    }
+}
+
 // Softmax (max-subtract, uses __exp + tf1d_max).
 fn softmax_layer(x_start: i32, y_start: i32, n: i32) -> i32 {
     if n == 0 { 0 }
