@@ -1081,6 +1081,36 @@ def test_stage34_unrepresentable_primitive_return_producer_is_not_clean():
                for e in local_consumer_errs), local_consumer_errs
 
 
+def test_stage34_unrepresentable_scalar_evidence_rejects_refined_return_call_args():
+    errs = check("""
+    type AlwaysF64 = f64 where true;
+    fn accept(x: f64) -> AlwaysF64 {
+        x
+    }
+    fn f() -> AlwaysF64 {
+        accept(1e309_f64)
+    }
+    """)
+    assert any("call to 'accept': arg 'x'" in e
+               and "requires a representable target value" in e
+               and "target base f64" in e
+               for e in errs), errs
+
+    hidden_errs = check("""
+    type AlwaysF64 = f64 where true;
+    fn accept(x: f64) -> AlwaysF64 {
+        x
+    }
+    fn f(b: bool) -> AlwaysF64 {
+        accept(if b { 1e309_f64 } else { 0.0_f64 })
+    }
+    """)
+    assert any("call to 'accept': arg 'x'" in e
+               and "requires a representable target value" in e
+               and "target base f64" in e
+               for e in hidden_errs), hidden_errs
+
+
 def test_stage34_fixed_point_preserves_unbound_name_errors():
     errs = check("""
     type AlwaysI32 = i32 where true;

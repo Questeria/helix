@@ -482,46 +482,6 @@ Verification after this fix set:
 
 The clean-gate counter remains reset to `0/3`.
 
-## Clean Gate 1 Twentieth Restart - Failed; Fix Verified; Counter Reset
-
-Fresh clean-gate auditors on commit `02007a5` found one more Stage 34
-proof-soundness issue and one coverage/documentation mismatch:
-
-- A primitive-return function could hide an unrepresentable scalar from a later
-  refined proof. For example, `raw_bad() -> f64 { 1e309_f64 }` could be called
-  by `f() -> AlwaysF64 where true`, and the refined return could look clean.
-- The prior progress note claimed unrepresentable scalar detection covered
-  blocks, tuples, arrays, structs, fields, indexes, calls, and assignments, but
-  tests only pinned a narrower subset.
-
-A separate validator trust-boundary auditor did not find a proof artifact
-gate/validator bypass on `02007a5`.
-
-The fix tracks primitive-return producers as unsafe proof sources without
-turning plain primitive returns into immediate type errors. Calls to those
-producers now count as unrepresentable evidence when used for refined proofs.
-The regression suite now pins primitive producers, explicit returns, local call
-consumers, block final expressions, tuple elements, array elements, struct
-fields, field/index access, call arguments, assignment evidence, and assignment
-repair/clear behavior. The proof artifact gate also covers the
-primitive-producer false-pass shape, and the quick gate includes the new Stage
-34 coverage tests.
-
-Verification after this fix set:
-
-- Focused latest-reset regressions plus const-fold compatibility check:
-  `4 passed`
-- Stage 34 focused typecheck/CLI/proof-gate slice: `53 passed`
-- `python -m pytest -q helixc/tests/test_typecheck.py helixc/tests/test_cli.py helixc/tests/test_proof_artifact_validate.py helixc/tests/test_proof_artifact_gate.py`:
-  `493 passed`
-- `python scripts\stage31_validate.py --mode quick`: pass
-- `python scripts\stage31_validate.py --mode full --skip-snapshot --shards 8`:
-  pass after built-in retry recovered no-codegen shard 1
-- `python -m pytest -q helixc/tests/test_strings_io.py::test_print_int_zero`:
-  pass after inspecting the recovered shard's transient failure
-
-The clean-gate counter remains reset to `0/3`.
-
 ## Clean Gate 1 Ninth Restart - Failed; Fix Verified; Counter Reset
 
 Fresh clean-gate auditors on commit `3d20693` found two proof-honesty gaps:
@@ -863,5 +823,80 @@ Verification after this fix set:
 - `python scripts\stage31_validate.py --mode quick`: pass
 - `python scripts\stage31_validate.py --mode full --skip-snapshot --shards 8`:
   pass across all 12 shards with no retries
+
+The clean-gate counter remains reset to `0/3`.
+
+## Clean Gate 1 Twentieth Restart - Failed; Fix Verified; Counter Reset
+
+Fresh clean-gate auditors on commit `02007a5` found one more Stage 34
+proof-soundness issue and one coverage/documentation mismatch:
+
+- A primitive-return function could hide an unrepresentable scalar from a later
+  refined proof. For example, `raw_bad() -> f64 { 1e309_f64 }` could be called
+  by `f() -> AlwaysF64 where true`, and the refined return could look clean.
+- The prior Nineteenth restart progress note claimed unrepresentable scalar
+  detection covered blocks, tuples, arrays, structs, fields, indexes, calls,
+  and assignments, but tests only pinned a narrower subset at that time.
+
+A separate validator trust-boundary auditor did not find a proof artifact
+gate/validator bypass on `02007a5`.
+
+The fix tracks primitive-return producers as unsafe proof sources without
+turning plain primitive returns into immediate type errors. Calls to those
+producers now count as unrepresentable evidence when used for refined proofs.
+The regression suite now pins primitive producers, explicit returns, local call
+consumers, block final expressions, tuple elements, array elements, struct
+fields, field/index access, call arguments, assignment evidence, and assignment
+repair/clear behavior. The proof artifact gate also covers the
+primitive-producer false-pass shape, and the quick gate includes the new Stage
+34 coverage tests.
+
+Verification after this fix set:
+
+- Focused latest-reset regressions plus const-fold compatibility check:
+  `4 passed`
+- Stage 34 focused typecheck/CLI/proof-gate slice: `53 passed`
+- `python -m pytest -q helixc/tests/test_typecheck.py helixc/tests/test_cli.py helixc/tests/test_proof_artifact_validate.py helixc/tests/test_proof_artifact_gate.py`:
+  `493 passed`
+- `python scripts\stage31_validate.py --mode quick`: pass
+- `python scripts\stage31_validate.py --mode full --skip-snapshot --shards 8`:
+  pass after built-in retry recovered no-codegen shard 1
+- `python -m pytest -q helixc/tests/test_strings_io.py::test_print_int_zero`:
+  pass after inspecting the recovered shard's transient failure
+
+The clean-gate counter remains reset to `0/3`.
+
+## Clean Gate 1 Twenty First Restart - Failed; Fix Verified; Counter Reset
+
+Fresh clean-gate auditors on commit `2cc20ba` found one more Stage 34
+proof-soundness issue and one audit-trail issue:
+
+- An unrepresentable scalar could enter a primitive numeric parameter of a
+  function that returns a refined value. For example,
+  `accept(1e309_f64)` could call `accept(x: f64) -> AlwaysF64` and let the
+  callee prove `where true` from parameter `x`.
+- The Twentieth restart progress entry was inserted before older restart
+  sections, leaving the chronological audit trail misleading.
+
+The fix rejects unrepresentable typed scalar evidence at the call boundary when
+the callee can return a refined value through compatible primitive numeric
+parameters. This keeps Stage 34 fail-closed until Helix has finer
+interprocedural dependency tracking. The progress file now records the
+Nineteenth, Twentieth, and Twenty First restarts in chronological order.
+
+Verification after this fix set:
+
+- Focused latest-reset regressions: `5 passed`
+- Stage 34 focused typecheck/CLI/proof-gate slice: `54 passed`
+- `python -m pytest -q helixc/tests/test_typecheck.py helixc/tests/test_cli.py helixc/tests/test_proof_artifact_validate.py helixc/tests/test_proof_artifact_gate.py`:
+  `495 passed`
+- `python scripts\stage31_validate.py --mode quick`: pass
+- `python scripts\stage31_validate.py --mode full --skip-snapshot --shards 8`:
+  pass after built-in retry recovered no-codegen shards 1 and 2
+- `python -m pytest -q helixc/tests/test_strings_io.py::test_read_file_int_round_trips helixc/tests/test_strings_io.py::test_read_file_int_missing_file_returns_zero`:
+  `2 passed` after inspecting the recovered shard failures
+- Direct checks for the proof-artifact auditor's archived-copy full-gate
+  concerns: stage31 validation shard-guard repros `2 passed`, strings I/O
+  repros `3 passed`
 
 The clean-gate counter remains reset to `0/3`.

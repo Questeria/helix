@@ -1432,6 +1432,15 @@ class TypeChecker:
                     f"call to {sig.name!r}: arg {pname!r}",
                     scope,
                 )
+            elif (self._contains_refinement(sig.ret)
+                  and self._compatible(aty, pty)
+                  and not isinstance(pty, TyUnknown)):
+                self._check_unrepresentable_scalar_context(
+                    arg_expr,
+                    pty,
+                    arg_expr.span,
+                    f"call to {sig.name!r}: arg {pname!r}",
+                )
         # B:C10 — emit one grouped diagnostic if 2+ violations; else
         # the existing per-param path.
         if len(prov_violations) == 1:
