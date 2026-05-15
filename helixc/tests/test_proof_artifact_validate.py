@@ -206,6 +206,23 @@ def test_validate_rejects_source_hash_mismatch(capsys, tmp_path):
     assert "source sha256 mismatch" in captured.err
 
 
+def test_require_clean_rejects_forged_artifact_path_with_source(
+    capsys, tmp_path,
+):
+    source_path, artifact_path, artifact = _real_artifact(capsys, tmp_path)
+    artifact["path"] = str(tmp_path / "not-the-source.hx")
+    artifact_path.write_text(json.dumps(artifact), encoding="utf-8")
+
+    rc = proof_artifact_validate.main([
+        str(artifact_path), "--source", str(source_path), "--require-clean",
+    ])
+    captured = capsys.readouterr()
+    assert rc == 1
+    assert "proof artifact path mismatch against recomputed source" in (
+        captured.err
+    )
+
+
 def test_validate_rejects_stale_artifact_path_by_default(capsys, tmp_path):
     source_path, artifact_path, _artifact = _real_artifact(capsys, tmp_path)
     source_path.write_text(
@@ -531,10 +548,12 @@ def test_validate_source_unavailable_rejects_proof_content(capsys, tmp_path):
         },
         "summary": {
             "obligations": 1,
+            "proof_carries": 1,
             "pipeline_errors": 0,
             "typecheck_errors": 1,
             "warning_diagnostics": 0,
             "warning_errors": 0,
+            "proof_carry_strategies": {"same-refinement": 1},
         },
         "obligations": [{
             "kind": "refinement",
@@ -542,6 +561,14 @@ def test_validate_source_unavailable_rejects_proof_content(capsys, tmp_path):
             "refinement": "Probability",
             "predicate": "0.0 <= self <= 1.0",
             "status": "proved",
+            "span": {"line": 1, "col": 1},
+        }],
+        "proof_carries": [{
+            "kind": "refinement-proof-carry",
+            "context": "let 'p'",
+            "source_refinement": "Probability",
+            "target_refinement": "Probability",
+            "strategy": "same-refinement",
             "span": {"line": 1, "col": 1},
         }],
         "pipeline_errors": [],
@@ -554,6 +581,7 @@ def test_validate_source_unavailable_rejects_proof_content(capsys, tmp_path):
     captured = capsys.readouterr()
     assert rc == 1
     assert "obligations must be empty" in captured.err
+    assert "proof_carries must be empty" in captured.err
     assert "typecheck_errors must be empty" in captured.err
 
 

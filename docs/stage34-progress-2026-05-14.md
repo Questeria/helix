@@ -271,6 +271,22 @@ The next clean-gate attempt found two more artifact-honesty gaps:
 The fixes make rejected refined composite casts type as unknown and make the
 validator recompute source-backed clean artifacts before accepting them.
 
+The follow-up validator audit found two tighter trust-boundary requirements:
+
+- Source-backed `--require-clean` recomputation must compare the artifact
+  `path`, not only hash-bearing metadata and proof lists.
+- Source-unavailable artifacts must not carry `proof_carries`, because no
+  source exists to support those proof records.
+
+Verification after the validator path-honesty fixes:
+
+- Focused regression slice: `3 passed`
+- `python scripts\stage31_validate.py --mode quick --skip-snapshot`: pass
+- `python -m pytest -q helixc/tests/test_proof_artifact_validate.py helixc/tests/test_proof_artifact_gate.py`:
+  `42 passed`
+- `python scripts\stage31_validate.py --mode full --skip-snapshot --shards 8`:
+  pass after built-in retry recovered no-codegen shard 4
+
 Verification after the composite-cast and validator fixes:
 
 - Focused regression slice: `3 passed`

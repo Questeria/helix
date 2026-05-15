@@ -386,6 +386,10 @@ def validate_artifact(
             errors.append(
                 "obligations must be empty when input.source_sha256 is null"
             )
+        if proof_carries:
+            errors.append(
+                "proof_carries must be empty when input.source_sha256 is null"
+            )
         if lists["typecheck_errors"]:
             errors.append(
                 "typecheck_errors must be empty when input.source_sha256 is null"
@@ -566,6 +570,7 @@ def recomputed_clean_errors(
     for field in (
         "schema",
         "cache_key",
+        "path",
         "input",
         "summary",
         "obligations",
