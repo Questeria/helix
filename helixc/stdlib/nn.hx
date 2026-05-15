@@ -154,6 +154,14 @@ fn clip_grad_norm_f32(g_start: i32, max_norm: f32, n: i32) -> i32 {
     }
 }
 
+// Add L2 weight-decay contribution to an f32 gradient vector:
+//   g[i] = g[i] + decay * w[i]
+// This is the standard gradient contribution for 0.5 * decay * ||w||^2.
+fn add_weight_decay_grad_f32(g_start: i32, w_start: i32,
+                             decay: f32, n: i32) -> i32 {
+    tf1d_axpby(w_start, g_start, decay, 1.0_f32, n)
+}
+
 // MSE on f32 tensors.
 @pure
 fn mse_loss_f32(y_start: i32, t_start: i32, n: i32) -> f32 {

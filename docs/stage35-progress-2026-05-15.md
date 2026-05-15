@@ -64,6 +64,26 @@ Initial focused checks:
 - `python scripts\stage31_validate.py --mode quick --skip-snapshot`
   - Result: passed, `stage31-quick: rc=0`.
 
+## Increment 3 - f32 Weight-Decay Gradient Helper
+
+The Helix neural-network stdlib now includes:
+
+- `add_weight_decay_grad_f32(g_start, w_start, decay, n)`
+
+It updates a gradient vector in place:
+
+- `g[i] = g[i] + decay * w[i]`
+
+This is the standard gradient contribution for L2 weight decay. In beginner
+terms, it helps keep model weights from growing too large during training.
+
+Focused verification:
+
+- `python -m pytest -q helixc\tests\test_codegen.py -k "weight_decay_grad_f32 or clip_grad_norm_f32 or tf1d_axpby" --tb=short`
+  - Result: 4 passed, 753 deselected.
+- `python scripts\stage31_validate.py --mode quick --skip-snapshot`
+  - Result: passed, `stage31-quick: rc=0`.
+
 ## Next Work
 
 Likely follow-up slices:
