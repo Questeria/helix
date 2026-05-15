@@ -348,6 +348,29 @@ def test_c119_direct_ptx_cli_rejects_modules_without_kernels():
     assert ".func" not in proc.stdout
 
 
+def test_stage35_direct_ptx_cli_rejects_oversized_autotune():
+    src = """
+    @kernel
+    @autotune(A: [1, 2, 3, 4, 5], B: [10, 20, 30, 40, 50])
+    fn k() { let i = thread_idx(); }
+    """
+    proc = run_ptx_cli(src)
+    assert proc.returncode != 0, proc.stdout + proc.stderr
+    assert "trap 27001" in proc.stderr
+    assert ".visible .entry" not in proc.stdout
+
+
+def test_stage35_direct_ptx_cli_ignores_host_helper_with_unsupported_tile_op():
+    src = """
+    fn host_helper(x: i32) -> i32 { x / 2 }
+    @kernel fn k() { let i = thread_idx(); }
+    """
+    proc = run_ptx_cli(src)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert ".visible .entry k" in proc.stdout
+    assert "elem.div" not in proc.stderr
+
+
 def test_c119_direct_ptx_cli_rejects_unsupported_hbm_float_dtype():
     src = """
     @kernel fn k(a: tile<f16, [256], HBM>) {

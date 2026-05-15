@@ -517,8 +517,9 @@ Fixes landed in this increment:
   parameters in `grad_pass` until pytree leaf expansion is wired into the
   public surface.
 - `dense_classifier_sgd_step_f32` no longer needs a full weight-gradient scratch
-  matrix. It reuses caller scratch for logits/probabilities/deltas and applies
-  each weight update directly, so repeated training steps do not grow the arena.
+  matrix. A later restart sweep tightened this further: the helper no longer
+  writes the caller scratch handle at all, so repeated training steps do not
+  grow the arena or mutate scratch cells.
 - `adam_f32_step` avoids a zero denominator, so zero-gradient updates with
   `eps = 0` keep weights stable.
 - Scalar `__adam_step` now shares the same zero-denominator guard.
@@ -587,3 +588,36 @@ Clean-gate status:
 
 - Stage 35 clean gates reset to `0/3`.
 - Next step is another fresh Stage 35 clean gate on the fixed commit.
+
+## Increment 22 - Third Clean-Gate Restart Fix Sweep
+
+The next fresh Stage 35 audit restart again found real issues, so the gate did
+not count as clean and remains at `0/3`.
+
+Fixes landed in this increment:
+
+- Reverse-mode AD now fails closed on opaque calls instead of compiling a
+  zero-gradient surrogate. The shared AD inliner now leaves extern/bodyless
+  declarations opaque so `grad_rev` can reject them explicitly.
+- Public scalar `ce_loss` now takes the row width and rejects both negative and
+  positive out-of-range class labels with the loud sentinel.
+- The standalone PTX CLI now matches the main `--emit-ptx` safety path by
+  running autotune validation and lowering only `@kernel` functions to Tile IR.
+- Stage documentation now reflects the current Phase-0 GPU limits, current FFI
+  status, and the finalized dense-classifier scratch behavior.
+
+Focused verification:
+
+- `python -m pytest -q helixc\tests\test_codegen.py -k "grad_rev_rejects_opaque_call_in_loss or ce_loss_rejects_negative_scalar_label or ce_loss_rejects_positive_out_of_range_label or dense_classifier_sgd_step_f32_leaves_scratch_unchanged or builtin_bce_and_nn_bce_are_stable_near_one" --tb=short`
+  - Result: 5 passed.
+- `python -m pytest -q helixc\tests\test_ptx.py -k "stage35_direct_ptx_cli_rejects_oversized_autotune or stage35_direct_ptx_cli_ignores_host_helper_with_unsupported_tile_op or c119_direct_ptx_cli_rejects_modules_without_kernels or c119_direct_ptx_cli_rejects_kernel_helper_calls" --tb=short`
+  - Result: 4 passed.
+- `python -m pytest -q helixc\tests\test_codegen.py -k "nn_ or stage35 or softmax or ce_loss or dense_classifier_sgd_step_f32 or adam_f32_step or builtin_adam_step or grad_rejects_aggregate_param or grad_rev_rejects_aggregate_param or grad_rev_all_rejects_aggregate_param or scalar_target_when_sibling_aggregate or grad_rev_rejects_opaque_call_in_loss or embedded_ptx_ignores_host_helper or builtin_bce_uses_stable_log_near_zero or builtin_bce_and_nn_bce_are_stable_near_one" --tb=short`
+  - Result: 65 passed.
+- `python -m pytest -q helixc\tests\test_autodiff.py helixc\tests\test_autodiff_reverse.py helixc\tests\test_ptx.py helixc\tests\test_tile_ir.py helixc\tests\test_autotune.py helixc\tests\test_ffi.py helixc\tests\test_cli.py -k "ad_warns_on_opaque_call or reverse or emit_ptx or ptx or tile_ir or autotune or ffi or stage35 or grad_rejects_aggregate or scalar_target_when_sibling_aggregate" --tb=short`
+  - Result: 130 passed.
+
+Clean-gate status:
+
+- Stage 35 clean gates remain `0/3`.
+- Next step is another fresh Stage 35 clean gate on this fixed commit.

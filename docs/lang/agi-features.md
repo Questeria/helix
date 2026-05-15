@@ -186,11 +186,12 @@ a *language primitive* with type-level guarantees is novel.
 | 5. Differentiable types `D<T>` | ✅ working | 5 typecheck | propagates through binary ops |
 | 6. Shape-typed tensors + Presburger | ✅ working | 28 (24 solver + 4 integration) | catches matmul mismatches at compile time |
 | 7. Agent type declarations | ✅ parsing | 4 parser | `agent Foo { fn ...; }` |
-| 8. Tile types in codegen | ⏳ type-level only | — | Tile IR exists, no GPU lowering yet |
+| 8. Tile types in codegen | Phase-0 PTX lowering | PTX / Tile IR tests | 1D HBM `f32`/`i32` kernels plus scalar ops; broader GPU lowering remains in progress |
 | 9. Composable transforms (`grad`/`vmap`) | ✅ engine working (CLI) | 13 autodiff | symbolic forward-mode AD; CLI prints derivatives |
 | 10. Auto-curriculum (`learn_to`) | ✅ working (type-level) | 2 typecheck | returns Skill<F>; runtime registry TBD |
 
-As of the latest commit: **40 commits, 263 tests across 11 test files, all passing.**
+Live test and commit counts move quickly during staged development; see the
+current stage progress note and `pytest` output for authoritative evidence.
 
 ### Autodiff usage
 

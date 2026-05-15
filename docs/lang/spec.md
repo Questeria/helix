@@ -205,7 +205,10 @@ fn print(s: &str) { ... }
 fn rand_uniform[N: size](shape: [N]) -> tensor<f32, [N]> { ... }
 ```
 
-`@pure` is required for kernel functions and for functions consumed by `grad`/`jvp`/`vjp`.
+`@pure` is required for functions consumed by `grad`/`jvp`/`vjp`.
+Kernel purity and effect rules are being tightened separately; current
+Phase-0 PTX tests accept bare `@kernel` functions when their body lowers to
+the supported device subset.
 
 ### Kernels
 
@@ -276,7 +279,6 @@ priv fn internal() { ... }
 - Macros (compile-time)
 - Custom autodiff rules (`@custom_jvp`, `@custom_vjp`)
 - Concurrency primitives
-- FFI (`extern "C"`)
 
 ## Out of scope (likely never)
 - Inheritance

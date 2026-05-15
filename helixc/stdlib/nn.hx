@@ -653,14 +653,15 @@ fn bce_loss_scalar(p: f32, t: f32) -> f32 {
 
 // Cross-entropy.
 @pure
-fn ce_loss(p_start: i32, target_idx: i32) -> f32 {
+fn ce_loss(p_start: i32, target_idx: i32, cols: i32) -> f32 {
     if target_idx < 0 { 1000000.0_f32 }
+    else { if target_idx >= cols { 1000000.0_f32 }
     else {
         let p = __f32_from_bits(__arena_get(p_start + target_idx));
         let eps = 0.0001_f32;
         let pc = __max(p, eps);
         0.0_f32 - __log_stable(pc)
-    }
+    }}
 }
 
 // For a row-major logits matrix (rows x cols), write each row's argmax class
@@ -741,7 +742,7 @@ fn ce_loss_batch_f32(probs_start: i32, target_start: i32,
                     invalid = 1;
                 }
                 else {
-                    total = total + ce_loss(row_start, target);
+                    total = total + ce_loss(row_start, target, cols);
                 };
             };
             r = r + 1;

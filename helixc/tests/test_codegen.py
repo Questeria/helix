@@ -7516,6 +7516,19 @@ def test_grad_rev_rejects_scalar_target_when_sibling_aggregate_param_exists():
         compile_and_run(src)
 
 
+def test_grad_rev_rejects_opaque_call_in_loss():
+    import pytest
+    src = """
+    extern "C" fn opaque_loss(x: f32) -> f32;
+    fn loss(x: f32) -> f32 { opaque_loss(x) }
+    fn main() -> i32 {
+        grad_rev(loss)(2.0) as i32
+    }
+    """
+    with pytest.raises(NotImplementedError, match="reverse-mode AD.*opaque_loss"):
+        compile_and_run(src)
+
+
 def test_grad_through_if_takes_correct_branch():
     # f(x) = if x > 0 then x*x else x*3
     # ∂f/∂x at x=5 = 2x = 10. (Was previously broken: the autodiff would
@@ -9772,8 +9785,73 @@ def test_nn_ce_loss_rejects_negative_scalar_label():
         let probs = t1d_new(2);
         tf1d_set(probs, 0, 0.1_f32);
         tf1d_set(probs, 1, 0.9_f32);
-        let loss = ce_loss(probs, 0 - 1);
+        let loss = ce_loss(probs, 0 - 1, 2);
         if loss > 999999.0_f32 { 42 } else { 7 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_nn_ce_loss_rejects_positive_out_of_range_label():
+    """Scalar CE should not read the cell after a probability row."""
+    src = """
+    fn main() -> i32 {
+        let probs = t1d_new(2);
+        tf1d_set(probs, 0, 0.1_f32);
+        tf1d_set(probs, 1, 0.9_f32);
+        let guard = t1d_new(1);
+        tf1d_set(guard, 0, 1.0_f32);
+        let loss = ce_loss(probs, 2, 2);
+        if loss > 999999.0_f32 { 42 } else { 7 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_nn_dense_classifier_sgd_step_f32_leaves_scratch_unchanged():
+    """Classifier step no longer uses the scratch handle at all."""
+    src = """
+    fn main() -> i32 {
+        let w = t1d_new(4);
+        tf1d_set(w, 0, 0.0_f32); tf1d_set(w, 1, 0.0_f32);
+        tf1d_set(w, 2, 0.0_f32); tf1d_set(w, 3, 0.0_f32);
+        let b = t1d_new(2);
+        tf1d_set(b, 0, 0.0_f32); tf1d_set(b, 1, 0.0_f32);
+        let x = t1d_new(2);
+        tf1d_set(x, 0, 1.0_f32); tf1d_set(x, 1, 0.0_f32);
+        let scratch = t1d_new(3);
+        __arena_set(scratch, 11);
+        __arena_set(scratch + 1, 22);
+        __arena_set(scratch + 2, 33);
+        let shape = t1d_new(2);
+        __arena_set(shape, 2);
+        __arena_set(shape + 1, 2);
+        let before = __arena_len();
+        let status = dense_classifier_sgd_step_f32(
+            w, b, x, 0, scratch, shape, 0.5_f32);
+        let after = __arena_len();
+        let scratch_sum = __arena_get(scratch) + __arena_get(scratch + 1)
+            + __arena_get(scratch + 2);
+        if before == after {
+            scratch_sum - 24 + status
+        } else { 7 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_builtin_bce_and_nn_bce_are_stable_near_one():
+    """Both BCE public paths should be large for p near one and target zero."""
+    src = """
+    fn main() -> i32 {
+        let a = __bce(0.999999_f32, 0.0_f32);
+        let b = bce_loss_scalar(0.999999_f32, 0.0_f32);
+        if a > 10.0_f32 {
+            if b > 8.0_f32 { 42 } else { 7 }
+        } else { 7 }
     }
     """
     code = compile_and_run(src)

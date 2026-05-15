@@ -345,11 +345,13 @@ def _propagate(node: A.Expr, adj: A.Expr, acc: dict[str, list[A.Expr]]) -> None:
                 _propagate(u, new_adj, acc)
                 return
         # Audit 28.8 B5: opaque user call — was silently a zero
-        # contribution. Now emits a diagnostic; users grepping for
-        # "AD: assumed 0" can find the gap and add a chain rule.
-        _ad_warn(node, f"unrecognized call to "
-                       f"{getattr(node.callee, 'name', '<?>')!r}")
-        return
+        # contribution. Reverse-mode now fails closed instead of compiling
+        # a zero-gradient surrogate.
+        callee = getattr(node.callee, "name", "<?>")
+        raise NotImplementedError(
+            f"reverse-mode AD does not support opaque call {callee!r}; "
+            "add a chain rule or inline a differentiable helper"
+        )
     if isinstance(node, A.If):
         # The runtime `if` picks one branch, so the gradient through it is also
         # an `if` — NOT a sum of both branches. Compute each branch's adjoint

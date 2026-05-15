@@ -629,6 +629,7 @@ if __name__ == "__main__":
     import sys
     from ..frontend.parser import parse
     from ..frontend.typecheck import typecheck
+    from ..frontend.autotune import validate_autotune_prog
     from ..ir.lower_ast import lower
     from ..ir.tile_ir import lower_to_tile
 
@@ -643,9 +644,22 @@ if __name__ == "__main__":
         for e in errs:
             print(f"error: {e}", file=sys.stderr)
         sys.exit(1)
+    autotune_diags = validate_autotune_prog(prog)
+    if autotune_diags:
+        for e in autotune_diags:
+            print(f"error: autotune: {e}", file=sys.stderr)
+        sys.exit(1)
     try:
         tir_mod = lower(prog)
-        tile_mod = lower_to_tile(tir_mod)
+        kernel_mod = type(tir_mod)(
+            functions={
+                name: fn for name, fn in tir_mod.functions.items()
+                if fn.attrs.get("kernel")
+            },
+            next_value_id=tir_mod.next_value_id,
+            next_block_id=tir_mod.next_block_id,
+        )
+        tile_mod = lower_to_tile(kernel_mod)
         print(emit_ptx(tile_mod))
     except Exception as e:
         print(f"error: ptx: {e}", file=sys.stderr)

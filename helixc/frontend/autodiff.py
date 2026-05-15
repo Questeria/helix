@@ -327,6 +327,8 @@ def _inline_user_calls(expr: A.Expr, fn_table: dict[str, "A.FnDecl"],
         the plan; runtime impact is "leave call as opaque, gradient is 0".
       - depth >= max_depth (safety net).
       - Functions not in fn_table (treated as opaque external).
+      - Extern declarations and bodyless functions (left opaque; AD engines
+        must handle or reject the call explicitly).
     """
     import copy as _copy
 
@@ -355,6 +357,10 @@ def _inline_user_calls(expr: A.Expr, fn_table: dict[str, "A.FnDecl"],
                     and new_callee.name not in visiting
                     and depth < max_depth):
                 fn = fn_table[new_callee.name]
+                if (getattr(fn, "is_extern", False)
+                        or fn.body is None
+                        or getattr(fn.body, "final_expr", None) is None):
+                    return A.Call(span=e.span, callee=new_callee, args=new_args)
                 # Stage 13: inline if @pure OR inferably pure (arithmetic/
                 # pure-call chain). Other fns may have effects whose
                 # differentiation is unsound — leave as opaque call.
