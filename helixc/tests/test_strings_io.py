@@ -1,7 +1,7 @@
 """Tests for string literals + print_str + write_file builtins."""
 
 from __future__ import annotations
-import os, sys, subprocess
+import os, sys, subprocess, tempfile, shlex
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 from helixc.frontend.parser import parse
@@ -9,6 +9,17 @@ from helixc.frontend.grad_pass import grad_pass
 from helixc.ir.lower_ast import lower
 from helixc.ir.passes.fdce import fdce_module
 from helixc.backend.x86_64 import compile_module_to_elf
+
+
+def _win_to_wsl(win_path: str) -> str:
+    p = os.path.abspath(win_path).replace("\\", "/")
+    if len(p) >= 2 and p[1] == ":":
+        drive = p[0].lower()
+        rest = p[2:]
+        if not rest.startswith("/"):
+            rest = "/" + rest
+        return f"/mnt/{drive}{rest}"
+    return p
 
 
 def _build_and_run(src: str) -> tuple[int, str, str]:
@@ -20,11 +31,10 @@ def _build_and_run(src: str) -> tuple[int, str, str]:
     proj_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     out_dir = os.path.join(proj_root, "helixc", "tests", "_tmp")
     os.makedirs(out_dir, exist_ok=True)
-    out = os.path.join(out_dir, "io.bin")
-    with open(out, "wb") as f:
+    fd, out = tempfile.mkstemp(prefix="io_", suffix=".bin", dir=out_dir)
+    with os.fdopen(fd, "wb") as f:
         f.write(elf)
-    rel = os.path.relpath(out, proj_root).replace("\\", "/")
-    wsl_path = f"/mnt/c/Projects/Kovostov-Native/{rel}"
+    wsl_path = shlex.quote(_win_to_wsl(out))
     p = subprocess.run(
         ["wsl", "--", "bash", "-c", f"chmod +x {wsl_path} && {wsl_path}"],
         capture_output=True, text=True, timeout=10

@@ -900,3 +900,42 @@ Verification after this fix set:
   repros `3 passed`
 
 The clean-gate counter remains reset to `0/3`.
+
+## Clean Gate 1 Twenty Second Restart - Failed; Fix Verified; Counter Reset
+
+Fresh clean-gate auditors on commit `8a497f4` found one more Stage 34
+proof-soundness issue and two clean-gate reproducibility issues:
+
+- Generic pass-through could hide unrepresentable scalar evidence before a
+  refined-return call. `accept(1e309_f64)` failed correctly, but
+  `accept(id(1e309_f64))` could pass because the generic `id[T]` left the
+  argument type as `T` at the call boundary.
+- `git archive` could extract shell scripts with CRLF line endings, so bash
+  rejected `scripts/run_all_tests.sh` before tests ran.
+- Some WSL runtime helpers used a hardcoded live checkout path, so archive-copy
+  tests could execute binaries from `C:\Projects\Kovostov-Native` instead of
+  the extracted archive.
+
+The fix runs the Stage 34 representability check across deferred generic
+`TyVar` and `TySize` argument/parameter boundaries when the callee can return a
+refined value. It also pins shell scripts to LF through `.gitattributes`, makes
+strings I/O, reflection, and select-codegen WSL helpers derive paths from the
+current checkout, and gives those helpers unique temporary binary names to
+avoid parallel shard collisions.
+
+Verification after this fix set:
+
+- Focused latest-reset and archive-helper regressions: `7 passed`
+- Stage 34 focused typecheck/CLI/proof-gate slice: `55 passed`
+- Direct archive-repro tests for shard guards and strings I/O: `5 passed`
+- `python -m pytest -q helixc/tests/test_typecheck.py helixc/tests/test_cli.py helixc/tests/test_proof_artifact_validate.py helixc/tests/test_proof_artifact_gate.py helixc/tests/test_strings_io.py helixc/tests/test_reflection.py helixc/tests/test_select_codegen.py`:
+  `526 passed`
+- `python scripts\stage31_validate.py --mode quick`: pass
+- `python scripts\stage31_validate.py --mode full --skip-snapshot --shards 8`:
+  pass across all 12 shards with no retries
+- Staged-tree archive check for shell scripts: `scripts/run_all_tests.sh`,
+  `stage0/hex0/run_tests.sh`, and `stage0/hex0/build.sh` extracted with
+  `CRLF=0`; `bash -n` accepted the shell scripts, and archive-copy
+  `test_print_int_zero` passed
+
+The clean-gate counter remains reset to `0/3`.

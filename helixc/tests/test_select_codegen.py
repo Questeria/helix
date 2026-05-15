@@ -19,11 +19,22 @@ exercise both the small-frame and large-frame paths.
 """
 
 from __future__ import annotations
-import os, sys, subprocess, tempfile
+import os, sys, subprocess, tempfile, shlex
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 from helixc.ir import tir
 from helixc.backend.x86_64 import compile_module_to_elf
+
+
+def _win_to_wsl(win_path: str) -> str:
+    p = os.path.abspath(win_path).replace("\\", "/")
+    if len(p) >= 2 and p[1] == ":":
+        drive = p[0].lower()
+        rest = p[2:]
+        if not rest.startswith("/"):
+            rest = "/" + rest
+        return f"/mnt/{drive}{rest}"
+    return p
 
 
 def _make_module_with_select(n_padding_slots: int) -> tir.Module:
@@ -93,15 +104,15 @@ def _run_elf(elf_bytes: bytes) -> int:
     proj_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     out_dir = os.path.join(proj_root, "helixc", "tests", "_tmp")
     os.makedirs(out_dir, exist_ok=True)
-    out_path = os.path.join(out_dir, "select_test.bin")
-    with open(out_path, "wb") as f:
+    fd, out_path = tempfile.mkstemp(
+        prefix="select_", suffix=".bin", dir=out_dir)
+    with os.fdopen(fd, "wb") as f:
         f.write(elf_bytes)
     try:
         os.chmod(out_path, 0o755)
     except OSError:
         pass
-    rel = os.path.relpath(out_path, proj_root).replace("\\", "/")
-    wsl_path = f"/mnt/c/Projects/Kovostov-Native/{rel}"
+    wsl_path = shlex.quote(_win_to_wsl(out_path))
     proc = subprocess.run(
         ["wsl", "--", "bash", "-c", f"chmod +x {wsl_path} && {wsl_path}"],
         capture_output=True, timeout=10

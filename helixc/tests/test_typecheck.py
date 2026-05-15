@@ -1111,6 +1111,43 @@ def test_stage34_unrepresentable_scalar_evidence_rejects_refined_return_call_arg
                for e in hidden_errs), hidden_errs
 
 
+def test_stage34_unrepresentable_scalar_evidence_rejects_generic_call_args():
+    errs = check("""
+    type AlwaysF64 = f64 where true;
+    fn id[T](x: T) -> T {
+        x
+    }
+    fn accept(x: f64) -> AlwaysF64 {
+        x
+    }
+    fn f() -> AlwaysF64 {
+        accept(id(1e309_f64))
+    }
+    """)
+    assert any("call to 'accept': arg 'x'" in e
+               and "requires a representable target value" in e
+               and "target base f64" in e
+               for e in errs), errs
+
+    local_errs = check("""
+    type AlwaysF64 = f64 where true;
+    fn id[T](x: T) -> T {
+        x
+    }
+    fn accept(x: f64) -> AlwaysF64 {
+        x
+    }
+    fn f() -> AlwaysF64 {
+        let x = id(1e309_f64);
+        accept(x)
+    }
+    """)
+    assert any("call to 'accept': arg 'x'" in e
+               and "requires a representable target value" in e
+               and "target base f64" in e
+               for e in local_errs), local_errs
+
+
 def test_stage34_fixed_point_preserves_unbound_name_errors():
     errs = check("""
     type AlwaysI32 = i32 where true;

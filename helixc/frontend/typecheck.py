@@ -1433,7 +1433,11 @@ class TypeChecker:
                     scope,
                 )
             elif (self._contains_refinement(sig.ret)
-                  and self._compatible(aty, pty)
+                  and (
+                      self._compatible(aty, pty)
+                      or isinstance(aty, (TyVar, TySize))
+                      or isinstance(pty, (TyVar, TySize))
+                  )
                   and not isinstance(pty, TyUnknown)):
                 self._check_unrepresentable_scalar_context(
                     arg_expr,
