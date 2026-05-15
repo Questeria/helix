@@ -795,3 +795,33 @@ Verification after this fix set:
   pass after inspecting the recovered shard's transient failure
 
 The clean-gate counter remains reset to `0/3`.
+
+## Clean Gate 1 Nineteenth Restart - Failed; Fix Verified; Counter Reset
+
+Fresh clean-gate auditors on commit `2acc0cc` found another Stage 34
+proof-soundness issue:
+
+- Value-producing control flow could hide an unrepresentable scalar source from
+  refined proof checking. Direct `1e309_f64` returns failed correctly, but
+  `if b { 1e309_f64 } else { 0.0_f64 }` returned as `AlwaysF64 where true`
+  could still produce a proved obligation and pass clean proof validation.
+  Similar holes existed through `match`, local `let` indirection, and refined
+  casts fed by such control flow.
+
+The fix makes unrepresentable typed scalar detection walk value-producing
+syntax such as `if`, `match`, blocks, tuples, arrays, structs, fields, indexes,
+calls, and assignments. Local `let` bindings initialized from such sources now
+carry fail-closed evidence into later name references, and simple assignments
+update that local evidence.
+
+Verification after this fix set:
+
+- Focused latest-reset regressions: `2 passed`
+- Stage 34 focused typecheck/CLI/proof-gate slice: `51 passed`
+- `python -m pytest -q helixc/tests/test_typecheck.py helixc/tests/test_cli.py helixc/tests/test_proof_artifact_validate.py helixc/tests/test_proof_artifact_gate.py`:
+  `490 passed`
+- `python scripts\stage31_validate.py --mode quick`: pass
+- `python scripts\stage31_validate.py --mode full --skip-snapshot --shards 8`:
+  pass across all 12 shards with no retries
+
+The clean-gate counter remains reset to `0/3`.

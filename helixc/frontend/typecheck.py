@@ -700,6 +700,22 @@ class TypeChecker:
         if self._local_const_unrepresentable_scopes:
             self._local_const_unrepresentable_scopes[-1].add(name)
 
+    def _set_local_const_unrepresentable(
+        self, name: str, unrepresentable: bool,
+    ) -> None:
+        for idx in range(len(self._local_const_scalar_scopes) - 1, -1, -1):
+            if name not in self._local_const_scalar_scopes[idx]:
+                continue
+            if unrepresentable:
+                self._local_const_unrepresentable_scopes[idx].add(name)
+            else:
+                self._local_const_unrepresentable_scopes[idx].discard(name)
+            return
+        if self._local_const_scalar_scopes:
+            self._local_const_scalar_scopes[-1][name] = None
+            if unrepresentable:
+                self._local_const_unrepresentable_scopes[-1].add(name)
+
     def _lookup_local_const_scalar(
         self, name: str,
     ) -> tuple[bool, int | float | None]:
@@ -1982,6 +1998,10 @@ class TypeChecker:
                     bind_ty = self._erase_refinement(value_ty)
                 scope.define(stmt.name, bind_ty, is_mut=stmt.is_mut)
             self._define_local_const_scalar(stmt.name, None)
+            if (stmt.value is not None
+                    and self._expr_has_unrepresentable_typed_const_scalar(
+                        stmt.value)):
+                self._mark_local_const_unrepresentable(stmt.name)
             return
         if isinstance(stmt, A.ExprStmt):
             self._check_expr(stmt.expr, scope)
@@ -2777,6 +2797,12 @@ class TypeChecker:
                     expr.span,
                     hint="assign an explicitly proven refined value instead",
                 ))
+            if expr.op == "=" and isinstance(expr.target, A.Name):
+                self._set_local_const_unrepresentable(
+                    expr.target.name,
+                    self._expr_has_unrepresentable_typed_const_scalar(
+                        expr.value),
+                )
             return TyUnit()
         if isinstance(expr, A.TupleLit):
             return TyTuple(tuple(self._check_expr(e, scope) for e in expr.elems))
@@ -3401,6 +3427,86 @@ class TypeChecker:
                 self._expr_has_unrepresentable_typed_const_scalar(expr.left)
                 or self._expr_has_unrepresentable_typed_const_scalar(expr.right)
             )
+        if isinstance(expr, A.If):
+            branches = [expr.then]
+            if expr.else_ is not None:
+                branches.append(expr.else_)
+            return any(
+                self._expr_has_unrepresentable_typed_const_scalar(branch)
+                for branch in branches
+            )
+        if isinstance(expr, A.Match):
+            return any(
+                self._expr_has_unrepresentable_typed_const_scalar(arm.body)
+                for arm in expr.arms
+            )
+        if isinstance(expr, A.Block):
+            return (
+                any(
+                    self._stmt_has_unrepresentable_typed_const_scalar(stmt)
+                    for stmt in expr.stmts
+                )
+                or (
+                    expr.final_expr is not None
+                    and self._expr_has_unrepresentable_typed_const_scalar(
+                        expr.final_expr)
+                )
+            )
+        if isinstance(expr, A.TupleLit):
+            return any(
+                self._expr_has_unrepresentable_typed_const_scalar(elem)
+                for elem in expr.elems
+            )
+        if isinstance(expr, A.ArrayLit):
+            return any(
+                self._expr_has_unrepresentable_typed_const_scalar(elem)
+                for elem in expr.elems
+            )
+        if isinstance(expr, A.StructLit):
+            return any(
+                self._expr_has_unrepresentable_typed_const_scalar(value)
+                for _, value in expr.fields
+            )
+        if isinstance(expr, A.Field):
+            return self._expr_has_unrepresentable_typed_const_scalar(expr.obj)
+        if isinstance(expr, A.Index):
+            return (
+                self._expr_has_unrepresentable_typed_const_scalar(expr.callee)
+                or any(
+                    self._expr_has_unrepresentable_typed_const_scalar(index)
+                    for index in expr.indices
+                )
+            )
+        if isinstance(expr, A.Call):
+            return (
+                self._expr_has_unrepresentable_typed_const_scalar(expr.callee)
+                or any(
+                    self._expr_has_unrepresentable_typed_const_scalar(arg)
+                    for arg in expr.args
+                )
+            )
+        if isinstance(expr, A.Assign):
+            return (
+                self._expr_has_unrepresentable_typed_const_scalar(expr.target)
+                or self._expr_has_unrepresentable_typed_const_scalar(expr.value)
+            )
+        return False
+
+    def _stmt_has_unrepresentable_typed_const_scalar(
+        self, stmt: A.Stmt,
+    ) -> bool:
+        if isinstance(stmt, A.Let):
+            return (
+                stmt.value is not None
+                and self._expr_has_unrepresentable_typed_const_scalar(
+                    stmt.value)
+            )
+        if isinstance(stmt, A.ConstStmt):
+            return self._expr_has_unrepresentable_typed_const_scalar(
+                stmt.value)
+        if isinstance(stmt, A.ExprStmt):
+            return self._expr_has_unrepresentable_typed_const_scalar(
+                stmt.expr)
         return False
 
     def _eval_raw_const_scalar_fallback(

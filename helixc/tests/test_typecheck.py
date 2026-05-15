@@ -910,6 +910,51 @@ def test_stage34_self_independent_refinement_rejects_unrepresentable_values():
                and "target base f64" in e
                for e in local_const_errs), local_const_errs
 
+    if_errs = check("""
+    type AlwaysF64 = f64 where true;
+    fn f(b: bool) -> AlwaysF64 {
+        if b { 1e309_f64 } else { 0.0_f64 }
+    }
+    """)
+    assert any("return value of function 'f'" in e
+               and "requires a representable target value" in e
+               and "target base f64" in e
+               for e in if_errs), if_errs
+
+    let_if_errs = check("""
+    type AlwaysF64 = f64 where true;
+    fn f(b: bool) -> AlwaysF64 {
+        let x = if b { 1e309_f64 } else { 0.0_f64 };
+        x
+    }
+    """)
+    assert any("return value of function 'f'" in e
+               and "requires a representable target value" in e
+               and "target base f64" in e
+               for e in let_if_errs), let_if_errs
+
+    match_errs = check("""
+    type AlwaysF64 = f64 where true;
+    fn f(b: bool) -> AlwaysF64 {
+        match b { true => 1e309_f64, false => 0.0_f64 }
+    }
+    """)
+    assert any("return value of function 'f'" in e
+               and "requires a representable target value" in e
+               and "target base f64" in e
+               for e in match_errs), match_errs
+
+    if_cast_errs = check("""
+    type PositiveI64 = i64 where self > 0;
+    fn f(b: bool) -> PositiveI64 {
+        (if b { 2147483648_i32 as i64 } else { 1_i64 }) as PositiveI64
+    }
+    """)
+    assert any("cast to refined type PositiveI64" in e
+               and "value is not representable" in e
+               and "after casting i64 to i64" in e
+               for e in if_cast_errs), if_cast_errs
+
 
 def test_stage34_fixed_point_preserves_unbound_name_errors():
     errs = check("""
