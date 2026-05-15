@@ -6,6 +6,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 
 from helixc.frontend.parser import parse
 from helixc.ir.lower_ast import lower
+import pytest
+
 from helixc.ir.tile_ir import lower_to_tile, TileOpKind, MemSpace
 
 
@@ -38,11 +40,13 @@ def test_cmp_carries_attr():
 
 
 def test_if_lowered_to_cfg_in_tile_ir():
-    mod = lower_chain("fn f(b: bool) -> i32 { if b { 1 } else { 2 } }")
-    fn = mod.functions["f"]
-    # The Tile IR maps Tensor IR's COND_BR/BR opaquely (via CALL fallback in
-    # v0.1). What matters for now is that the function has multiple blocks.
-    assert len(fn.blocks) >= 4
+    with pytest.raises(NotImplementedError, match="cond_br|br"):
+        lower_chain("fn f(b: bool) -> i32 { if b { 1 } else { 2 } }")
+
+
+def test_tile_ir_rejects_unmapped_scalar_div():
+    with pytest.raises(NotImplementedError, match="elem.div"):
+        lower_chain("fn f() -> i32 { 4 / 2 }")
 
 
 def test_call_lowered():

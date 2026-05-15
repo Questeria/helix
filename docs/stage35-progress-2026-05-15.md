@@ -503,3 +503,42 @@ Focused verification:
   - Result: 5 passed, 751 deselected.
 - `python scripts\stage31_validate.py --mode quick --skip-snapshot`
   - Result: passed, `stage31-quick: rc=0`.
+
+## Increment 20 - Clean Gate 1 Fix Sweep
+
+The first Stage 35 clean-gate audit did not count as clean. Three read-only
+audit lanes found real issues in the AD/pytree public rewrite surface, NN
+training helpers, BCE stability, Adam edge handling, and Tile IR fail-open
+behavior.
+
+Fixes landed in this increment:
+
+- `grad`, `grad_rev`, and `grad_rev_all` now reject aggregate/non-scalar
+  parameters in `grad_pass` until pytree leaf expansion is wired into the
+  public surface.
+- `dense_classifier_sgd_step_f32` no longer trusts caller scratch capacity. It
+  allocates a correctly sized internal temporary workspace before writing
+  logits, probabilities, deltas, and weight gradients.
+- `adam_f32_step` avoids a zero denominator, so zero-gradient updates with
+  `eps = 0` keep weights stable.
+- Builtin `__bce` uses `__log_stable`, matching the fixed NN BCE path.
+- Tile IR now raises on unsupported TIR ops instead of silently mapping them to
+  generic opaque calls.
+- The autotune docstring now distinguishes current Phase-0 static spec support
+  from the long-term runtime timing/dispatch design.
+
+Regression and focused verification:
+
+- `python -m pytest -q helixc\tests\test_codegen.py -k "dense_classifier_sgd_step_f32_does_not_clobber_small_scratch or adam_f32_step_zero_grad_zero_eps_keeps_weight or builtin_bce_uses_stable_log_near_zero or grad_rev_rejects_aggregate_param or grad_rev_all_rejects_aggregate_param" --tb=short`
+  - Result: 5 passed.
+- `python -m pytest -q helixc\tests\test_tile_ir.py -k "tile_ir_rejects_unmapped_scalar_div or if_lowered_to_cfg_in_tile_ir or arith_passes_through or call_lowered" --tb=short`
+  - Result: 4 passed.
+- `python -m pytest -q helixc\tests\test_autodiff_reverse.py helixc\tests\test_pytree.py helixc\tests\test_ptx.py helixc\tests\test_tile_ir.py helixc\tests\test_autotune.py helixc\tests\test_ffi.py --tb=short`
+  - Result: 139 passed.
+- `python -m pytest -q helixc\tests\test_codegen.py -k "nn_ or stage35 or softmax or ce_loss or dense_classifier_sgd_step_f32 or adam_f32_step or grad_rev_rejects_aggregate_param or grad_rev_all_rejects_aggregate_param or builtin_bce_uses_stable_log_near_zero" --tb=short`
+  - Result: 50 passed.
+
+Clean-gate status:
+
+- Stage 35 clean gates reset to `0/3`.
+- Next step is a fresh Stage 35 clean gate on the fixed commit.

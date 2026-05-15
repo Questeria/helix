@@ -382,9 +382,9 @@ def test_c119_direct_ptx_cli_rejects_extern_only_kernels():
 
 
 def test_c119_emit_ptx_rejects_unsupported_kernel_ops():
-    with pytest.raises(RuntimeError, match="unsupported PTX op call"):
+    with pytest.raises(NotImplementedError, match="elem.div"):
         emit("@kernel fn k() { let z = 4 / 2; }")
-    with pytest.raises(RuntimeError, match="unsupported PTX op call"):
+    with pytest.raises(NotImplementedError, match="bit.not"):
         emit("@kernel fn k() { let z = ~1; }")
     with pytest.raises(RuntimeError, match="unsupported PTX float constant type f64"):
         emit("@kernel fn k() { let z = 1.0_f64; }")

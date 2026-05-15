@@ -4,9 +4,9 @@ helixc/frontend/autotune.py — Stage 27: Triton-style autotune.
 A `@autotune(BLOCK_SIZE: [16, 32, 64], NUM_WARPS: [4, 8])` attribute
 on a `@kernel` fn declares a sweep over kernel-launch parameters. At
 compile time, one kernel variant is generated per (BLOCK_SIZE,
-NUM_WARPS) tuple in the cross product. At runtime, the first call
-times each variant and records the fastest; subsequent calls jump to
-the fastest variant.
+NUM_WARPS) tuple in the cross product. The long-term design is runtime
+measurement plus cached dispatch to the fastest variant; Phase-0 only
+records and validates the static sweep specification.
 
 Phase-0 scope:
   * Parser captures `@autotune(K: [v1, v2, ...])` via attrs as

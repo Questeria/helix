@@ -7446,6 +7446,34 @@ def test_grad_rev_multi_param_without_index_errors():
     raise AssertionError("expected grad_rev(multi_param) to error")
 
 
+def test_grad_rev_rejects_aggregate_param_until_pytree_bridge_is_wired():
+    import pytest
+    src = """
+    struct Model { w: f32 }
+    fn loss(m: Model, x: f32) -> f32 { m.w * x }
+    fn probe(m: Model) -> f32 {
+        grad_rev(loss, 0)(m, 2.0)
+    }
+    fn main() -> i32 { 42 }
+    """
+    with pytest.raises(NotImplementedError, match="grad_rev.*aggregate"):
+        compile_and_run(src)
+
+
+def test_grad_rev_all_rejects_aggregate_param_until_pytree_bridge_is_wired():
+    import pytest
+    src = """
+    struct Model { w: f32 }
+    fn loss(m: Model, x: f32) -> f32 { m.w * x }
+    fn probe(m: Model) -> i32 {
+        grad_rev_all(loss)(m, 2.0, 0)
+    }
+    fn main() -> i32 { 42 }
+    """
+    with pytest.raises(NotImplementedError, match="grad_rev_all.*aggregate"):
+        compile_and_run(src)
+
+
 def test_grad_through_if_takes_correct_branch():
     # f(x) = if x > 0 then x*x else x*3
     # ∂f/∂x at x=5 = 2x = 10. (Was previously broken: the autodiff would
@@ -9321,6 +9349,32 @@ def test_nn_dense_classifier_sgd_step_f32_rejects_invalid_label():
     assert code == 42, f"expected 42, got {code}"
 
 
+def test_nn_dense_classifier_sgd_step_f32_does_not_clobber_small_scratch():
+    """Classifier step must not trust undersized caller scratch space."""
+    src = """
+    fn main() -> i32 {
+        let w = t1d_new(4);
+        tf1d_set(w, 0, 0.0_f32); tf1d_set(w, 1, 0.0_f32);
+        tf1d_set(w, 2, 0.0_f32); tf1d_set(w, 3, 0.0_f32);
+        let b = t1d_new(2);
+        tf1d_set(b, 0, 0.0_f32); tf1d_set(b, 1, 0.0_f32);
+        let x = t1d_new(2);
+        tf1d_set(x, 0, 1.0_f32); tf1d_set(x, 1, 0.0_f32);
+        let scratch = t1d_new(6);
+        let guard = t1d_new(1);
+        __arena_set(guard, 1234);
+        let shape = t1d_new(2);
+        __arena_set(shape, 2);
+        __arena_set(shape + 1, 2);
+        let status = dense_classifier_sgd_step_f32(
+            w, b, x, 0, scratch, shape, 1.0_f32);
+        __arena_get(guard) - 1192 + status
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
 def test_nn_tanh_layer():
     """tanh: 0->0, big->1, -big->-1; sum~=0; +42 = 42."""
     src = """
@@ -9509,6 +9563,38 @@ def test_nn_adam_f32_step_updates_moments_and_weight():
         let m_score = __f32_from_bits(__arena_get(m)) as i32;
         let v_score = __f32_from_bits(__arena_get(v)) as i32;
         score + m_score + v_score - 73
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_nn_adam_f32_step_zero_grad_zero_eps_keeps_weight():
+    """Zero gradient with zero eps must not turn the weight into NaN/garbage."""
+    src = """
+    fn main() -> i32 {
+        let w = t1d_new(1);
+        tf1d_set(w, 0, 10.0_f32);
+        let g = t1d_new(1);
+        tf1d_set(g, 0, 0.0_f32);
+        let m = t1d_new(1);
+        tf1d_set(m, 0, 0.0_f32);
+        let v = t1d_new(1);
+        tf1d_set(v, 0, 0.0_f32);
+        adam_f32_step(w, g, m, v, 0.5_f32, 0.0_f32, 0.0_f32, 0.0_f32, 1);
+        ((__f32_from_bits(__arena_get(w)) * 4.0_f32) as i32) + 2
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_builtin_bce_uses_stable_log_near_zero():
+    """The transcendentals BCE helper should match valid extreme probabilities."""
+    src = """
+    fn main() -> i32 {
+        let loss = __bce(0.000001_f32, 1.0_f32);
+        if loss > 10.0_f32 { 42 } else { 7 }
     }
     """
     code = compile_and_run(src)

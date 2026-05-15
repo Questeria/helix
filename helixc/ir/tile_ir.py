@@ -150,9 +150,11 @@ class TileModule:
 # Tensor IR -> Tile IR lowering (v0.1 trivial)
 # ============================================================================
 class TirToTileLowerer:
-    """v0.1 lowering: scalar ops pass through unchanged. Tensor ops emit
-    TODO markers. The intent is to develop the real tiling rules
-    incrementally as we add tensor-op support."""
+    """v0.1 lowering: supported scalar/GPU ops pass through unchanged.
+
+    Unsupported Tensor IR ops fail closed so tile lowering cannot silently
+    report a generic opaque call for behavior it does not yet represent.
+    """
 
     SCALAR_OP_MAP = {
         tir.OpKind.CONST_INT: TileOpKind.SCALAR_CONST_INT,
@@ -216,8 +218,9 @@ class TirToTileLowerer:
     def _lower_op(self, op: tir.Op) -> TileOp:
         new_kind = self.SCALAR_OP_MAP.get(op.kind)
         if new_kind is None:
-            # Tensor op: emit a marker (TODO real tiling rules)
-            new_kind = TileOpKind.CALL   # treat as opaque for v0.1
+            raise NotImplementedError(
+                f"Tile IR lowering does not support TIR op {op.kind.value}"
+            )
         operands = [self._map_value(o) for o in op.operands]
         results = [self._map_value(r) for r in op.results]
         attrs = dict(op.attrs)

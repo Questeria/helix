@@ -433,7 +433,7 @@ fn __always_accept(h: i32, v: f32) -> i32 {
 // We clamp away from 0/1 to avoid log(0) → -inf.
 @pure fn __bce(p: f32, y: f32) -> f32 {
     let p_safe = __clamp(p, 0.000001, 0.999999);
-    0.0 - (y * __log(p_safe) + (1.0 - y) * __log(1.0 - p_safe))
+    0.0 - (y * __log_stable(p_safe) + (1.0 - y) * __log_stable(1.0 - p_safe))
 }
 
 // Huber loss: quadratic for |d| < delta, linear beyond. Robust to outliers.

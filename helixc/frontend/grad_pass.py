@@ -25,6 +25,11 @@ from .autodiff_reverse import differentiate_reverse
 
 
 _GRAD_CALL_NAMES = frozenset({"grad", "grad_rev", "grad_rev_all"})
+_SCALAR_GRAD_TYPES = frozenset({
+    "f32", "f64",
+    "i8", "i16", "i32", "i64", "isize",
+    "u8", "u16", "u32", "u64", "usize",
+})
 
 
 # Stage 28.8.2: grad_pass's `_expr_has_grad` predicate migrated to
@@ -515,6 +520,7 @@ def _generate_grad_rev_all_fn(fn: A.FnDecl,
     """
     if not fn.params:
         return None
+    _reject_unsupported_grad_params(fn, "grad_rev_all")
     span = fn.span
     var_names = [p.name for p in fn.params]
 
@@ -594,6 +600,7 @@ def _generate_grad_fn(fn: A.FnDecl, param_idx: int = 0,
         return None
     if param_idx < 0 or param_idx >= len(fn.params):
         return None
+    _reject_unsupported_grad_params(fn, "grad_rev" if mode == "reverse" else "grad")
     var = fn.params[param_idx].name
 
     # Lazy per-FnDecl cache. Keyed by (mode, all-param-names tuple) so we
@@ -646,3 +653,18 @@ def _generate_grad_fn(fn: A.FnDecl, param_idx: int = 0,
         attrs=["pure"],
         is_pub=fn.is_pub,
     )
+
+
+def _reject_unsupported_grad_params(fn: A.FnDecl, surface: str) -> None:
+    """Fail closed on aggregate parameters until pytree leaves reach grad_pass."""
+    unsupported: list[str] = []
+    for p in fn.params:
+        ty = p.ty
+        if not isinstance(ty, A.TyName) or ty.name not in _SCALAR_GRAD_TYPES:
+            unsupported.append(p.name)
+    if unsupported:
+        joined = ", ".join(unsupported)
+        raise NotImplementedError(
+            f"{surface} does not yet support aggregate/non-scalar "
+            f"parameter(s): {joined}; flatten pytree leaves before grad_pass"
+        )

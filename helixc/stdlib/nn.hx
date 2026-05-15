@@ -189,8 +189,10 @@ fn adam_f32_step(w_start: i32, g_start: i32, m_start: i32, v_start: i32,
         let next_v = beta2 * v_i + (1.0_f32 - beta2) * g_i * g_i;
         __arena_set(m_start + i, __bits_of_f32(next_m));
         __arena_set(v_start + i, __bits_of_f32(next_v));
+        let raw_denom = __sqrt(next_v) + eps;
+        let denom = if raw_denom <= 0.0_f32 { 0.000001_f32 } else { raw_denom };
         __arena_set(w_start + i,
-            __bits_of_f32(w_i - lr * next_m / (__sqrt(next_v) + eps)));
+            __bits_of_f32(w_i - lr * next_m / denom));
         i = i + 1;
     }
     0
@@ -559,16 +561,18 @@ fn dense_classifier_sgd_step_f32(w_start: i32, b_start: i32, x_start: i32,
                                  shape_start: i32, lr: f32) -> i32 {
     let classes = __arena_get(shape_start);
     let in_dim = __arena_get(shape_start + 1);
-    let logits_start = scratch_start;
-    let probs_start = scratch_start + classes;
-    let dy_start = scratch_start + classes * 2;
-    let gw_start = scratch_start + classes * 3;
     if classes <= 0 { 0 }
     else { if in_dim <= 0 { 0 }
     else {
         if target < 0 { 35001 }
         else { if target >= classes { 35001 }
         else {
+            let scratch_need = classes * 3 + classes * in_dim;
+            let safe_scratch = t1d_new(scratch_need);
+            let logits_start = safe_scratch;
+            let probs_start = safe_scratch + classes;
+            let dy_start = safe_scratch + classes * 2;
+            let gw_start = safe_scratch + classes * 3;
             dense_layer_f32_forward(w_start, classes, in_dim, x_start,
                                     b_start, logits_start);
             softmax_layer(logits_start, probs_start, classes);
