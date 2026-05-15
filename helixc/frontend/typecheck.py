@@ -502,6 +502,7 @@ class TypeChecker:
         self._resolving_type_aliases: set[str] = set()
         self._type_alias_cache: dict[str, Type] = {}
         self._const_scalar_values: dict[str, int | float] = {}
+        self._invalid_const_names: set[str] = set()
         self._local_const_scalar_scopes: list[dict[str, int | float | None]] = []
         self._current_return_ty: Type = TyUnit()
         self.proof_obligations: list[ProofObligation] = []
@@ -522,6 +523,7 @@ class TypeChecker:
         self._enum_decls: dict[str, A.EnumDecl] = {}
         self._type_alias_decls: dict[str, A.TypeAlias] = {}
         self._const_decls: dict[str, A.ConstDecl] = {}
+        self._invalid_const_names = set()
         self._recursive_enum_names: set[str] = set()
         self._type_alias_cache = {}
         self._local_const_scalar_scopes = []
@@ -649,6 +651,7 @@ class TypeChecker:
     # ---- registration ----
     def _check_const_decl(self, decl: A.ConstDecl) -> None:
         scope = Scope()
+        error_start = len(self.errors)
         declared = self._resolve_type(decl.ty, scope)
         value_ty = self._check_expr(decl.value, scope)
         if not self._compatible(value_ty, declared):
@@ -657,11 +660,17 @@ class TypeChecker:
                 f"but value is {self._fmt(value_ty)}",
                 decl.span,
             ))
+        elif len(self.errors) == error_start:
+            self._check_refinement_contextual_value(
+                decl.value, value_ty, declared, decl.span,
+                f"const {decl.name!r}",
+                scope,
+            )
+        if (self._contains_refinement(declared)
+                and len(self.errors) != error_start):
+            self._invalid_const_names.add(decl.name)
+            self._const_scalar_values.pop(decl.name, None)
             return
-        self._check_refinement_contextual_value(
-            decl.value, value_ty, declared, decl.span, f"const {decl.name!r}",
-            scope,
-        )
 
     def _register_fn(self, fn: A.FnDecl) -> None:
         # Build the generic-bindings scope
@@ -1956,7 +1965,10 @@ class TypeChecker:
                 return looked
             const_decl = getattr(self, "_const_decls", {}).get(expr.name)
             if const_decl is not None:
-                return self._resolve_type(const_decl.ty, Scope())
+                const_ty = self._resolve_type(const_decl.ty, Scope())
+                if expr.name in getattr(self, "_invalid_const_names", set()):
+                    return self._erase_refinement(const_ty)
+                return const_ty
             # Function reference?
             if expr.name in self.functions:
                 sig = self.functions[expr.name]
@@ -3110,7 +3122,12 @@ class TypeChecker:
             if not (isinstance(value, (int, float))
                     and not isinstance(value, bool)):
                 return None
-            converted = int(value)
+            if isinstance(value, float) and not math.isfinite(value):
+                return None
+            try:
+                converted = int(value)
+            except (OverflowError, ValueError):
+                return None
             bounds = self._INT_BOUNDS.get(target.name)
             if bounds is not None:
                 lo, hi = bounds

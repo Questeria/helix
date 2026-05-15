@@ -326,3 +326,29 @@ Verification after the failed-initializer and non-finite literal fixes:
   `439 passed`
 - `python scripts\stage31_validate.py --mode full --skip-snapshot --shards 8`:
   pass after built-in retry recovered no-codegen shards 1 and 3
+
+## Clean Gate 1 Fourth Restart - Failed; Fix Verified; Counter Reset
+
+The next clean-gate attempt found two more proof-honesty issues:
+
+- Failed top-level refined `const` initializers still resolved as their
+  declared refined type when referenced later. That could emit false
+  `same-refinement` carries through call arguments and returns.
+- Non-finite float values cast to refined integer aliases could raise an
+  internal `OverflowError` during `int(value)` conversion instead of becoming a
+  normal proof/typecheck failure.
+
+The fix tracks invalid top-level const declarations and erases their
+refinements during later `Name` lookup. It also rejects non-finite integer
+target conversions before calling `int()`, so casts such as
+`1e309_f64 as NonNegativeInt` fail closed without crashing the checker.
+
+Verification after the top-level const and non-finite integer fixes:
+
+- New focused regressions: `5 passed`
+- Nearby proof-carry and proof-gate slice: `28 passed`
+- `python scripts\stage31_validate.py --mode quick --skip-snapshot`: pass
+- `python -m pytest -q helixc/tests/test_typecheck.py helixc/tests/test_cli.py helixc/tests/test_proof_artifact_validate.py helixc/tests/test_proof_artifact_gate.py`:
+  `444 passed`
+- `python scripts\stage31_validate.py --mode full --skip-snapshot --shards 8`:
+  pass with no shard retries

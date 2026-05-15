@@ -1744,6 +1744,51 @@ def test_stage34_failed_refined_initializer_does_not_emit_later_carries(
     assert artifact["proof_carries"] == []
 
 
+def test_stage34_failed_local_const_initializer_does_not_emit_later_carries(
+    capsys, tmp_path,
+):
+    src_path = str(tmp_path / "failed_local_const_initializer_no_carry.hx")
+    with open(src_path, "w") as f:
+        f.write(
+            "type One = i32 where self == 1;\n"
+            "fn use_one(x: One) -> i32 { 0 }\n"
+            "fn local_const_bad() -> i32 {\n"
+            "    const bad: One = 2;\n"
+            "    use_one(bad)\n"
+            "}\n"
+        )
+    rc = main([src_path, "--emit-proof-obligations", "--no-stdlib"])
+    captured = capsys.readouterr()
+    assert rc == 1
+    artifact = json.loads(captured.out)
+    assert artifact["summary"]["typecheck_errors"] >= 1
+    assert artifact["summary"]["proof_carries"] == 0
+    assert artifact["summary"]["proof_carry_strategies"] == {}
+    assert artifact["proof_carries"] == []
+
+
+def test_stage34_failed_top_level_const_initializer_does_not_emit_later_carries(
+    capsys, tmp_path,
+):
+    src_path = str(tmp_path / "failed_top_level_const_initializer_no_carry.hx")
+    with open(src_path, "w") as f:
+        f.write(
+            "type One = i32 where self == 1;\n"
+            "const BAD: One = 2;\n"
+            "fn use_one(x: One) -> i32 { 0 }\n"
+            "fn call_bad() -> i32 { use_one(BAD) }\n"
+            "fn return_bad() -> One { BAD }\n"
+        )
+    rc = main([src_path, "--emit-proof-obligations", "--no-stdlib"])
+    captured = capsys.readouterr()
+    assert rc == 1
+    artifact = json.loads(captured.out)
+    assert artifact["summary"]["typecheck_errors"] >= 1
+    assert artifact["summary"]["proof_carries"] == 0
+    assert artifact["summary"]["proof_carry_strategies"] == {}
+    assert artifact["proof_carries"] == []
+
+
 def test_stage34_emit_proof_obligations_json_for_refined_f32_rounding(
     capsys, tmp_path,
 ):

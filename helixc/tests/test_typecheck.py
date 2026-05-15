@@ -776,6 +776,32 @@ def test_stage34_refined_f32_rejects_nonfinite_literal_before_proof():
                for e in errs), errs
 
 
+def test_stage34_refined_f64_rejects_nonfinite_literal_before_proof():
+    errs = check("""
+    type Huge = f64 where self > 1.0e308;
+    fn f() -> Huge {
+        1e309_f64
+    }
+    """)
+    assert any("return value of function 'f'" in e
+               and "target base f64" in e
+               and "could not prove self > 1e+308" in e
+               for e in errs), errs
+
+
+def test_stage34_refined_integer_cast_rejects_nonfinite_before_proof():
+    errs = check("""
+    type NonNegativeInt = i32 where self >= 0;
+    fn f() -> NonNegativeInt {
+        1e309_f64 as NonNegativeInt
+    }
+    """)
+    assert any("cast to refined type NonNegativeInt" in e
+               and "could not prove self >= 0" in e
+               and "after casting f64 to i32" in e
+               for e in errs), errs
+
+
 def test_stage31_unsupported_refinement_predicates_do_not_carry_by_name():
     errs = check("""
     type Source = f64 where foo();
