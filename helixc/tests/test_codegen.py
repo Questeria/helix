@@ -9124,6 +9124,48 @@ def test_nn_argmax_rows_f32():
     assert code == 42, f"expected 42, got {code}"
 
 
+def test_nn_accuracy_count_from_logits_f32():
+    """Two logits rows, one target match. count=1; *42=42."""
+    src = """
+    fn main() -> i32 {
+        let logits = t1d_new(6);
+        tf1d_set(logits, 0, 0.1_f32);
+        tf1d_set(logits, 1, 0.9_f32);
+        tf1d_set(logits, 2, 0.2_f32);
+        tf1d_set(logits, 3, 0.8_f32);
+        tf1d_set(logits, 4, 0.1_f32);
+        tf1d_set(logits, 5, 0.3_f32);
+        let target = t1d_new(2);
+        __arena_set(target, 1);
+        __arena_set(target + 1, 2);
+        accuracy_count_from_logits_f32(logits, target, 2, 3) * 42
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_nn_ce_loss_batch_f32_one_hot_is_zero():
+    """One-hot correct probabilities have batch CE 0; +42=42."""
+    src = """
+    fn main() -> i32 {
+        let probs = t1d_new(6);
+        tf1d_set(probs, 0, 0.0_f32);
+        tf1d_set(probs, 1, 1.0_f32);
+        tf1d_set(probs, 2, 0.0_f32);
+        tf1d_set(probs, 3, 1.0_f32);
+        tf1d_set(probs, 4, 0.0_f32);
+        tf1d_set(probs, 5, 0.0_f32);
+        let target = t1d_new(2);
+        __arena_set(target, 1);
+        __arena_set(target + 1, 0);
+        ((ce_loss_batch_f32(probs, target, 2, 3) * 100.0_f32) as i32) + 42
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
 def test_nn_tanh_layer():
     """tanh: 0->0, big->1, -big->-1; sum~=0; +42 = 42."""
     src = """

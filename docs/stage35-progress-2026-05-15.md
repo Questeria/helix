@@ -64,6 +64,26 @@ Initial focused checks:
 - `python scripts\stage31_validate.py --mode quick --skip-snapshot`
   - Result: passed, `stage31-quick: rc=0`.
 
+## Increment 9 - f32 Classification Helpers
+
+The Helix neural-network stdlib now includes:
+
+- `accuracy_count_from_logits_f32`
+- `ce_loss_batch_f32`
+
+These make classification workflows more complete:
+
+- `accuracy_count_from_logits_f32` counts correct predictions directly from a
+  row-major logits matrix.
+- `ce_loss_batch_f32` computes average cross-entropy over probability rows.
+
+Focused verification:
+
+- `python -m pytest -q helixc\tests\test_codegen.py -k "accuracy_count_from_logits_f32 or ce_loss_batch_f32 or argmax_rows_f32 or ce_loss or count_correct" --tb=short`
+  - Result: 4 passed, 761 deselected.
+- `python scripts\stage31_validate.py --mode quick --skip-snapshot`
+  - Result: passed, `stage31-quick: rc=0`.
+
 ## Increment 8 - Row-Wise f32 Argmax
 
 The Helix neural-network stdlib now includes:

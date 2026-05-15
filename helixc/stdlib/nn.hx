@@ -426,6 +426,54 @@ fn argmax_rows_f32(logits_start: i32, rows: i32, cols: i32,
     }}
 }
 
+@pure
+fn accuracy_count_from_logits_f32(logits_start: i32, target_start: i32,
+                                  rows: i32, cols: i32) -> i32 {
+    if rows <= 0 { 0 }
+    else { if cols <= 0 { 0 }
+    else {
+        let mut r: i32 = 0;
+        let mut hits: i32 = 0;
+        while r < rows {
+            let row_start = logits_start + r * cols;
+            let mut best_idx: i32 = 0;
+            let mut best_val: f32 = __f32_from_bits(__arena_get(row_start));
+            let mut c: i32 = 1;
+            while c < cols {
+                let v = __f32_from_bits(__arena_get(row_start + c));
+                if v > best_val {
+                    best_val = v;
+                    best_idx = c;
+                };
+                c = c + 1;
+            }
+            if best_idx == __arena_get(target_start + r) {
+                hits = hits + 1;
+            };
+            r = r + 1;
+        }
+        hits
+    }}
+}
+
+@pure
+fn ce_loss_batch_f32(probs_start: i32, target_start: i32,
+                     rows: i32, cols: i32) -> f32 {
+    if rows <= 0 { 0.0_f32 }
+    else { if cols <= 0 { 0.0_f32 }
+    else {
+        let mut r: i32 = 0;
+        let mut total: f32 = 0.0_f32;
+        while r < rows {
+            let row_start = probs_start + r * cols;
+            let target = __arena_get(target_start + r);
+            total = total + ce_loss(row_start, target);
+            r = r + 1;
+        }
+        total / (rows as f32)
+    }}
+}
+
 // argmin: index of smallest element. Companion to argmax.
 // Returns -1 on empty.
 @pure
