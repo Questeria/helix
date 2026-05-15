@@ -64,6 +64,25 @@ Initial focused checks:
 - `python scripts\stage31_validate.py --mode quick --skip-snapshot`
   - Result: passed, `stage31-quick: rc=0`.
 
+## Increment 13 - PTX Kernel Regression Expansion
+
+Stage 35 added GPU/PTX regression coverage for additional kernel forms:
+
+- f32 HBM vector multiply emits `mul.f32`.
+- f32 HBM vector negation emits `neg.f32`.
+- i32 HBM vector add emits signed global load/store and `add.s32`.
+
+This does not yet mean Helix runs GPU kernels directly from the test harness.
+It strengthens the PTX codegen path by proving the embedded PTX module covers
+more than the original f32 add kernel.
+
+Focused verification:
+
+- `python -m pytest -q helixc\tests\test_codegen.py -k "stage35_vec_mul_kernel_ptx_in_binary or stage35_vec_neg_kernel_ptx_in_binary or stage35_i32_kernel_ptx_in_binary or stage16" --tb=short`
+  - Result: 6 passed, 767 deselected.
+- `python scripts\stage31_validate.py --mode quick --skip-snapshot`
+  - Result: passed, `stage31-quick: rc=0`.
+
 ## Neural-Network Cluster Verification 2
 
 After the dense and activation backprop work, the broader neural-network slice

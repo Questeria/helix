@@ -16834,6 +16834,56 @@ def test_stage16_two_kernels_share_one_ptx_module():
     assert b".visible .entry k_copy" in elf
 
 
+def test_stage35_vec_mul_kernel_ptx_in_binary():
+    """Stage 35: f32 HBM kernels should lower multiply, not only add."""
+    src = """
+    @kernel
+    fn vec_mul(a: tile<f32, [128], HBM>, b: tile<f32, [128], HBM>, c: tile<f32, [128], HBM>) {
+        let i = thread_idx();
+        c[i] = a[i] * b[i];
+    }
+    fn main() -> i32 { 0 }
+    """
+    elf = _compile_to_elf_bytes(src)
+    assert b".visible .entry vec_mul" in elf
+    assert b"ld.global.f32" in elf
+    assert b"st.global.f32" in elf
+    assert b"mul.f32" in elf
+
+
+def test_stage35_vec_neg_kernel_ptx_in_binary():
+    """Stage 35: f32 HBM kernels should lower unary negation."""
+    src = """
+    @kernel
+    fn vec_neg(a: tile<f32, [128], HBM>, c: tile<f32, [128], HBM>) {
+        let i = thread_idx();
+        c[i] = -a[i];
+    }
+    fn main() -> i32 { 0 }
+    """
+    elf = _compile_to_elf_bytes(src)
+    assert b".visible .entry vec_neg" in elf
+    assert b"neg.f32" in elf
+    assert b"st.global.f32" in elf
+
+
+def test_stage35_i32_kernel_ptx_in_binary():
+    """Stage 35: i32 HBM kernels should use signed global loads/stores."""
+    src = """
+    @kernel
+    fn vec_i32_add(a: tile<i32, [64], HBM>, b: tile<i32, [64], HBM>, c: tile<i32, [64], HBM>) {
+        let i = thread_idx();
+        c[i] = a[i] + b[i];
+    }
+    fn main() -> i32 { 0 }
+    """
+    elf = _compile_to_elf_bytes(src)
+    assert b".visible .entry vec_i32_add" in elf
+    assert b"ld.global.s32" in elf
+    assert b"st.global.s32" in elf
+    assert b"add.s32" in elf
+
+
 def main():
     # Recognise both the legacy `_SkipTest` exception and pytest's
     # `Skipped` outcome class so tests can use either to signal a skip
