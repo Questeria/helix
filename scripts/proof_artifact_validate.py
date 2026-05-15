@@ -603,7 +603,7 @@ def recomputed_clean_errors(
     return errors
 
 
-def recomputed_source_metadata_errors(
+def recomputed_source_artifact_errors(
     artifact: dict[str, object],
     *,
     source_path: str | None,
@@ -631,21 +631,17 @@ def recomputed_source_metadata_errors(
         return ["recomputed proof artifact must be a JSON object"]
 
     errors: list[str] = []
-    summary = artifact.get("summary")
-    recomputed_summary = recomputed.get("summary")
-    summary = summary if isinstance(summary, dict) else {}
-    recomputed_summary = (
-        recomputed_summary if isinstance(recomputed_summary, dict) else {}
-    )
-    if artifact.get("proof_carries") != recomputed.get("proof_carries"):
-        errors.append(
-            "proof artifact proof_carries mismatch against recomputed source"
-        )
-    for field in ("proof_carries", "proof_carry_strategies"):
-        if summary.get(field) != recomputed_summary.get(field):
+    for field in (
+        "summary",
+        "obligations",
+        "proof_carries",
+        "pipeline_errors",
+        "typecheck_errors",
+        "warning_diagnostics",
+    ):
+        if artifact.get(field) != recomputed.get(field):
             errors.append(
-                f"proof artifact summary.{field} mismatch against "
-                "recomputed source"
+                f"proof artifact {field} mismatch against recomputed source"
             )
     return errors
 
@@ -724,11 +720,11 @@ def main(argv: list[str] | None = None) -> int:
         artifact_dir=artifact_dir,
     )
     if not errors and metadata_source is not None:
-        errors.extend(recomputed_source_metadata_errors(
+        errors.extend(recomputed_source_artifact_errors(
             artifact,
             source_path=metadata_source,
         ))
-    if not errors and args.require_clean:
+    if args.require_clean:
         errors.extend(clean_policy_errors(artifact))
         errors.extend(recomputed_clean_errors(
             artifact,

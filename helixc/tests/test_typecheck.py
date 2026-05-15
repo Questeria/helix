@@ -1062,6 +1062,30 @@ def test_stage34_integer_predicate_arithmetic_uses_machine_semantics():
                for e in carry_errs), carry_errs
 
 
+def test_stage34_refined_initializers_use_source_machine_semantics():
+    mod_errs = check("""
+    type Positive = i32 where self > 0;
+    fn f() -> i32 {
+        let x: Positive = -1_i32 % 2_i32;
+        0
+    }
+    """)
+    assert any("let 'x'" in e
+               and "value -1 does not satisfy self > 0" in e
+               for e in mod_errs), mod_errs
+
+    f32_errs = check("""
+    type Exact = f32 where self == 16777218.0_f32;
+    fn f() -> i32 {
+        let x: Exact = (16777216.0_f32 + 1.0_f32) + 1.0_f32;
+        0
+    }
+    """)
+    assert any("let 'x'" in e
+               and "value 16777216.0 does not satisfy self == 16777218.0"
+               in e for e in f32_errs), f32_errs
+
+
 def test_stage34_fixed_point_preserves_unknown_type_errors():
     errs = check("""
     type AlwaysI32 = i32 where true;

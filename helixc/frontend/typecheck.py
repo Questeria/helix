@@ -3011,11 +3011,15 @@ class TypeChecker:
             ))
 
     def _check_refinement_const_value(
-        self, value_expr: A.Expr, refined: "TyRefined", span: A.Span,
-        context: str, scope: Scope,
+        self, value_expr: A.Expr, value_ty: Type, refined: "TyRefined",
+        span: A.Span, context: str, scope: Scope,
     ) -> None:
+        source_base = self._const_eval_numeric_base(value_ty)
         value = self._eval_const_scalar_expr(
-            value_expr, None, use_local_consts=True)
+            value_expr, None, use_local_consts=True,
+            honor_float_suffix=True, numeric_base=source_base)
+        if value is None:
+            value = self._eval_raw_const_scalar_fallback(value_expr)
         target_base = self._erase_refinement(refined)
         represented = self._cast_const_scalar_to_type(value, target_base)
         if self._expr_uses_invalid_refined_return(value_expr):
@@ -3048,7 +3052,7 @@ class TypeChecker:
                 ))
             if isinstance(refined.base, TyRefined):
                 self._check_refinement_const_value(
-                    value_expr, refined.base, span, context, scope,
+                    value_expr, value_ty, refined.base, span, context, scope,
                 )
             return
         if represented is None:
@@ -3074,7 +3078,7 @@ class TypeChecker:
             ))
             if isinstance(refined.base, TyRefined):
                 self._check_refinement_const_value(
-                    value_expr, refined.base, span, context, scope,
+                    value_expr, value_ty, refined.base, span, context, scope,
                 )
             return
         for pred in refined.predicates:
@@ -3110,15 +3114,19 @@ class TypeChecker:
                 )
         if isinstance(refined.base, TyRefined):
             self._check_refinement_const_value(
-                value_expr, refined.base, span, context, scope,
+                value_expr, value_ty, refined.base, span, context, scope,
             )
 
     def _check_refinement_cast_value(
         self, value_expr: A.Expr, src_ty: Type, refined: "TyRefined",
         span: A.Span, context: str, scope: Scope,
     ) -> bool:
+        source_base = self._const_eval_numeric_base(src_ty)
         value = self._eval_const_scalar_expr(
-            value_expr, None, use_local_consts=True)
+            value_expr, None, use_local_consts=True,
+            honor_float_suffix=True, numeric_base=source_base)
+        if value is None:
+            value = self._eval_raw_const_scalar_fallback(value_expr)
         target_base = self._erase_refinement(refined)
         converted = self._cast_const_scalar_to_type(value, target_base)
         invalid_source = self._expr_uses_invalid_refined_return(value_expr)
@@ -3243,6 +3251,24 @@ class TypeChecker:
             return (self._expr_uses_invalid_refined_return(expr.target)
                     or self._expr_uses_invalid_refined_return(expr.value))
         return False
+
+    def _const_eval_numeric_base(self, ty: Type) -> Type | None:
+        base = self._erase_refinement(ty)
+        if isinstance(base, TyPrim) and (
+                base.name in _INT_PRIM_NAMES or base.name in _FLOAT_PRIM_NAMES):
+            return base
+        return None
+
+    def _eval_raw_const_scalar_fallback(
+        self, expr: A.Expr,
+    ) -> int | float | bool | None:
+        value = self._eval_const_scalar_expr(
+            expr, None, use_local_consts=True)
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            return value
+        if isinstance(value, bool):
+            return value
+        return None
 
     def _cast_const_scalar_to_type(
         self, value: int | float | bool | None, target: Type,
@@ -3943,7 +3969,7 @@ class TypeChecker:
                     context, value_ty, target_ty, span)
             else:
                 self._check_refinement_const_value(
-                    value_expr, target_ty, span, context, scope,
+                    value_expr, value_ty, target_ty, span, context, scope,
                 )
             return
         if isinstance(target_ty, TyArray) and isinstance(value_expr, A.ArrayLit):

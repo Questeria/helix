@@ -421,8 +421,7 @@ def test_validate_rejects_erased_proof_carries_with_source_by_default(
     assert "proof artifact proof_carries mismatch against recomputed source" in (
         captured.err
     )
-    assert "proof artifact summary.proof_carries mismatch" in captured.err
-    assert "proof artifact summary.proof_carry_strategies mismatch" in (
+    assert "proof artifact summary mismatch against recomputed source" in (
         captured.err
     )
 
@@ -449,6 +448,41 @@ def test_validate_rejects_erased_proof_carries_from_embedded_source_path(
     captured = capsys.readouterr()
     assert rc == 1
     assert "proof artifact proof_carries mismatch against recomputed source" in (
+        captured.err
+    )
+
+
+def test_validate_rejects_forged_clean_status_with_source_by_default(
+    capsys, tmp_path,
+):
+    source_path, artifact_path, artifact = _real_artifact(
+        capsys,
+        tmp_path,
+        src=(
+            "type Probability = f64 where 0.0 <= self <= 1.0;\n"
+            "fn use_raw(x: f64) -> i32 { let p: Probability = x; 0 }\n"
+            "fn main() -> i32 { 0 }\n"
+        ),
+        expected_rc=1,
+    )
+    assert artifact["obligations"][0]["status"] == "unproven"
+    artifact["obligations"][0]["status"] = "proved"
+    artifact["typecheck_errors"] = []
+    artifact["summary"]["typecheck_errors"] = 0
+    artifact_path.write_text(json.dumps(artifact), encoding="utf-8")
+
+    rc = proof_artifact_validate.main([
+        str(artifact_path), "--source", str(source_path),
+    ])
+    captured = capsys.readouterr()
+    assert rc == 1
+    assert "proof artifact summary mismatch against recomputed source" in (
+        captured.err
+    )
+    assert "proof artifact obligations mismatch against recomputed source" in (
+        captured.err
+    )
+    assert "proof artifact typecheck_errors mismatch against recomputed source" in (
         captured.err
     )
 

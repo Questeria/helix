@@ -481,6 +481,40 @@ Verification after this fix set:
 
 The clean-gate counter remains reset to `0/3`.
 
+## Clean Gate 1 Tenth Restart - Failed; Fix Verified; Counter Reset
+
+Fresh clean-gate auditors on commit `2ebac36` found two proof-honesty gaps:
+
+- Refined initializer checks used generic Python scalar evaluation instead of
+  the declared source machine type. This let `-1_i32 % 2_i32` pass a positive
+  refinement because Python modulo produced `1`, while Helix signed machine
+  modulo produces `-1`. The same path could also miss per-operation `f32`
+  rounding at precision boundaries.
+- Plain source-backed artifact validation recomputed some carry metadata, but
+  did not compare the full proof-relevant artifact body. A forged artifact could
+  promote an unproved obligation to `proved` and erase typecheck errors without
+  being rejected by default validation.
+
+The fix evaluates refined initializer and cast constants through the erased
+source numeric type before target refinement checking, keeps a raw-scalar
+fallback for representability diagnostics, compares the full source-recomputed
+proof artifact surface, and keeps strict clean-policy reporting active even when
+source recomputation already finds mismatches.
+
+Verification after this fix set:
+
+- Focused refined-initializer and source-recompute regressions: `6 passed`
+- Follow-up strict-mode and representability regressions: `8 passed`
+- `python scripts\stage31_validate.py --mode quick --skip-snapshot`: pass
+- `python -m pytest -q helixc/tests/test_typecheck.py helixc/tests/test_cli.py helixc/tests/test_proof_artifact_validate.py helixc/tests/test_proof_artifact_gate.py`:
+  `476 passed`
+- `python scripts\stage31_validate.py --mode full --skip-snapshot --shards 8`:
+  pass after retry recovered no-codegen shard 1
+- `python -m pytest -q helixc/tests/test_transcendentals.py::test_grad_through_user_defined_function_call`:
+  pass after inspecting the recovered shard's transient failure
+
+The clean-gate counter remains reset to `0/3`.
+
 ## Clean Gate 1 Ninth Restart - Failed; Fix Verified; Counter Reset
 
 Fresh clean-gate auditors on commit `4be3e3c` found one docs issue and two
