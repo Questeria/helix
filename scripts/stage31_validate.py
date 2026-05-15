@@ -354,6 +354,7 @@ def quick(py: str) -> int:
             "helixc/tests/test_typecheck.py::test_stage34_refined_integer_cast_rejects_nonfinite_before_proof",
             "helixc/tests/test_typecheck.py::test_stage34_self_independent_refinement_rejects_unrepresentable_values",
             "helixc/tests/test_typecheck.py::test_stage34_unrepresentable_scalar_evidence_covers_value_surfaces",
+            "helixc/tests/test_typecheck.py::test_stage34_unrepresentable_scalar_evidence_covers_index_assignment",
             "helixc/tests/test_typecheck.py::test_stage34_unrepresentable_primitive_return_producer_is_not_clean",
             "helixc/tests/test_typecheck.py::test_stage34_unrepresentable_scalar_evidence_rejects_refined_return_call_args",
             "helixc/tests/test_typecheck.py::test_stage34_unrepresentable_scalar_evidence_rejects_generic_call_args",

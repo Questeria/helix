@@ -2872,6 +2872,20 @@ class TypeChecker:
                         expr.value)
                     if assigned_unrepresentable else None,
                 )
+            elif (expr.op == "="
+                  and isinstance(expr.target, A.Index)
+                  and isinstance(expr.target.callee, A.Name)):
+                assigned_unrepresentable = (
+                    self._expr_has_unrepresentable_typed_const_scalar(
+                        expr.value)
+                )
+                self._set_local_const_unrepresentable(
+                    expr.target.callee.name,
+                    assigned_unrepresentable,
+                    self._expr_unrepresentable_typed_const_scalar_base(
+                        expr.value)
+                    if assigned_unrepresentable else None,
+                )
             return TyUnit()
         if isinstance(expr, A.TupleLit):
             return TyTuple(tuple(self._check_expr(e, scope) for e in expr.elems))

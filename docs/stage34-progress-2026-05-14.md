@@ -974,8 +974,8 @@ proof-soundness issue and one documentation discipline issue:
   scalar evidence. `via[T](x: T) -> AlwaysF64` accepted `via(1e309_f64)`
   because the representability check used formal type `T`, which has no
   concrete numeric base.
-- `helixc/tests/test_reflection.py` still had broad demo comments around the
-  self-improving-agent and verifier examples.
+- `helixc/tests/test_reflection.py` still had comments whose wording exceeded
+  the specific behavior under test.
 
 The fix carries erased numeric base evidence alongside local unrepresentable
 scalar markers and lets the Stage 34 representability check recover a base from
@@ -991,6 +991,57 @@ Verification after this fix set:
   `56 passed`
 - `python -m pytest -q helixc/tests/test_typecheck.py helixc/tests/test_cli.py helixc/tests/test_proof_artifact_validate.py helixc/tests/test_proof_artifact_gate.py helixc/tests/test_strings_io.py helixc/tests/test_reflection.py helixc/tests/test_select_codegen.py`:
   `528 passed`
+- `python scripts\stage31_validate.py --mode quick`: pass
+- `python scripts\stage31_validate.py --mode full --skip-snapshot --shards 8`:
+  pass across all 12 shards with no retries
+
+The clean-gate counter remains reset to `0/3`.
+
+## Clean Gate 1 Twenty Fifth Restart - Failed; Fix Verified; Counter Reset
+
+Fresh clean-gate docs and coverage auditors on commit `c9f9606` found one
+remaining inaccurate comment in `helixc/tests/test_reflection.py`:
+
+- `test_verifier_can_bound_state` described the test as gradient-descent
+  learning, but the body performs fixed verifier-gated `modify` updates and
+  checks the final reflected state.
+
+The fix narrows that comment to the behavior under test: fixed verifier-gated
+updates must keep reflected state inside a safe range.
+
+Verification after this fix set:
+
+- Broad reflection wording grep in `helixc/tests/test_reflection.py`: no
+  matches
+- Focused regression slice: `3 passed`
+- `python scripts\stage31_validate.py --mode quick`: pass
+- `python scripts\stage31_validate.py --mode full --skip-snapshot --shards 8`:
+  pass across all 12 shards with no retries
+
+The clean-gate counter remains reset to `0/3`.
+
+## Clean Gate 1 Twenty Sixth Restart - Failed; Fix Verified; Counter Reset
+
+Fresh proof-soundness auditors on commit `c9f9606` found one more Stage 34
+proof-honesty gap:
+
+- Indexed assignments could hide unrepresentable scalar evidence. Plain
+  assignment evidence worked for `x = bad`, but `xs[0] = bad; xs[0]` did not
+  mark the aggregate `xs`, so the later index read could prove a
+  self-independent refinement as clean.
+
+The fix marks a named aggregate as carrying unrepresentable scalar evidence
+when a simple indexed assignment writes such evidence into it. A later indexed
+read sees the aggregate marker and refined proof checking fails closed. A
+simple repair assignment to the indexed aggregate clears the marker.
+
+Verification after this fix set:
+
+- Focused index-assignment and reflection checks: `3 passed`
+- Stage 34 focused typecheck/CLI/proof-gate slice plus reflection tests:
+  `57 passed`
+- `python -m pytest -q helixc/tests/test_typecheck.py helixc/tests/test_cli.py helixc/tests/test_proof_artifact_validate.py helixc/tests/test_proof_artifact_gate.py helixc/tests/test_strings_io.py helixc/tests/test_reflection.py helixc/tests/test_select_codegen.py`:
+  `530 passed`
 - `python scripts\stage31_validate.py --mode quick`: pass
 - `python scripts\stage31_validate.py --mode full --skip-snapshot --shards 8`:
   pass across all 12 shards with no retries

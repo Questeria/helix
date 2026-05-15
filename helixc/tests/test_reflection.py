@@ -253,8 +253,8 @@ def test_modify_oob_handle_does_not_write():
 
 
 def test_verifier_can_bound_state():
-    # An agent learns by gradient descent; verifier ensures the state
-    # never exceeds a safe range.
+    # Fixed verifier-gated updates must keep the reflected state inside a
+    # safe range.
     src = """
     fn safe_range(h: i32, v: i32) -> i32 {
         if v >= 0 { if v <= 100 { 1 } else { 0 } } else { 0 }
