@@ -49,9 +49,10 @@ These are blockers for any real ML training, in priority order.
 ## Tier 2 — high value (do after Tier 1)
 
 6. **Tensor codegen** with explicit memory-space movement
-   (HBM/SMEM/REG/TMEM). The type system has tile types; the codegen
-   doesn't lower them. Without this, no SIMD elementwise, no matmul,
-   no real performance. **2-3 months.**
+   (HBM/SMEM/REG/TMEM). Phase-0 PTX lowering currently supports 1D
+   HBM `tile<f32, ...>` / `tile<i32, ...>` kernels plus a small scalar-op
+   subset. Broader tensor/tile codegen, SMEM/REG tiles, `bf16`, matmul,
+   and performance-oriented GPU lowering remain future work. **2-3 months.**
 
 7. **JAX-style pytrees.** `grad(loss)(model)` where `model` is a nested
    struct. Composes `grad/vmap/jit` over arbitrary tree-structured

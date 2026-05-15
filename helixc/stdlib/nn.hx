@@ -289,6 +289,9 @@ fn dense_layer_f32_grad_b(dy_start: i32, grad_b_start: i32, rows: i32) -> i32 {
 // grad_x[c] = sum_r W[r, c] * grad_y[r]
 fn dense_layer_f32_grad_x(w_start: i32, dy_start: i32,
                           grad_x_start: i32, rows: i32, cols: i32) -> i32 {
+    if rows <= 0 { 0 }
+    else { if cols <= 0 { 0 }
+    else {
     let mut c: i32 = 0;
     while c < cols {
         let mut r: i32 = 0;
@@ -303,6 +306,7 @@ fn dense_layer_f32_grad_x(w_start: i32, dy_start: i32,
         c = c + 1;
     }
     0
+    }}
 }
 
 // Leaky ReLU.

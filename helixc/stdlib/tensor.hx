@@ -838,7 +838,8 @@ fn tf2d_mul(a: i32, b: i32, c: i32, rows: i32, cols: i32) -> i32 {
 // in x[lo..hi). Returns -1 if hi <= lo.
 @pure
 fn tf1d_argmax_in_range(start: i32, lo: i32, hi: i32) -> i32 {
-    if hi <= lo { 0 - 1 }
+    if lo < 0 { 0 - 1 }
+    else { if hi <= lo { 0 - 1 }
     else {
         let mut i: i32 = lo + 1;
         let mut best_idx: i32 = lo;
@@ -849,13 +850,16 @@ fn tf1d_argmax_in_range(start: i32, lo: i32, hi: i32) -> i32 {
             i = i + 1;
         }
         best_idx
-    }
+    }}
 }
 
 // tf1d_sum_in_range(start, lo, hi): @pure. Sum of x[lo..hi). 0.0 if
 // hi <= lo. Useful for partial accumulators.
 @pure
 fn tf1d_sum_in_range(start: i32, lo: i32, hi: i32) -> f32 {
+    if lo < 0 { 0.0_f32 }
+    else { if hi <= lo { 0.0_f32 }
+    else {
     let mut i: i32 = lo;
     let mut total: f32 = 0.0_f32;
     while i < hi {
@@ -863,6 +867,7 @@ fn tf1d_sum_in_range(start: i32, lo: i32, hi: i32) -> f32 {
         i = i + 1;
     }
     total
+    }}
 }
 
 // tf2d_row_sum(start, rows, cols, dst): for each row r, write
@@ -918,6 +923,10 @@ fn tf1d_arange(start_val: f32, n: i32) -> i32 {
 // a[a_off..a_off+n] and b[b_off..b_off+n]. @pure.
 @pure
 fn tf1d_dot_with_offset(a: i32, a_off: i32, b: i32, b_off: i32, n: i32) -> f32 {
+    if a_off < 0 { 0.0_f32 }
+    else { if b_off < 0 { 0.0_f32 }
+    else { if n <= 0 { 0.0_f32 }
+    else {
     let mut i: i32 = 0;
     let mut total: f32 = 0.0_f32;
     while i < n {
@@ -927,6 +936,7 @@ fn tf1d_dot_with_offset(a: i32, a_off: i32, b: i32, b_off: i32, n: i32) -> f32 {
         i = i + 1;
     }
     total
+    }}}
 }
 
 // tf2d_diag(m, rows_eq_cols, dst): for a square matrix M of side N,

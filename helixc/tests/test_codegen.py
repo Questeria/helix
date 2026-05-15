@@ -10016,6 +10016,26 @@ def test_nn_dense_layer_f32_grad_x():
     assert code == 42, f"expected 42, got {code}"
 
 
+def test_negative_dense_layer_f32_grad_x_shape_does_not_write_outputs():
+    src = """
+    fn main() -> i32 {
+        let w = t1d_new(1);
+        tf1d_set(w, 0, 5.0_f32);
+        let dy = t1d_new(1);
+        tf1d_set(dy, 0, 7.0_f32);
+        let gx = t1d_new(2);
+        tf1d_set(gx, 0, 42.0_f32);
+        tf1d_set(gx, 1, 42.0_f32);
+        dense_layer_f32_grad_x(w, dy, gx, 0 - 1, 2);
+        if (tf1d_get(gx, 0) as i32) == 42 {
+            if (tf1d_get(gx, 1) as i32) == 42 { 42 } else { 7 }
+        } else { 7 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
 def test_nn_mse_loss_f32_grad():
     """MSE mean grad: y=[3,5], t=[1,1], n=2 -> [2,4]. sum*7=42."""
     src = """
@@ -15546,6 +15566,28 @@ def test_stdlib_tf1d_dot_with_offset():
     assert code == 42, f"expected 42, got {code}"
 
 
+def test_negative_tf1d_dot_with_offset_does_not_read_before_start():
+    src = """
+    fn main() -> i32 {
+        let guard_a = t1d_new(1);
+        tf1d_set(guard_a, 0, 99.0_f32);
+        let a = t1d_new(1);
+        tf1d_set(a, 0, 2.0_f32);
+        let guard_b = t1d_new(1);
+        tf1d_set(guard_b, 0, 99.0_f32);
+        let b = t1d_new(1);
+        tf1d_set(b, 0, 3.0_f32);
+        if (tf1d_dot_with_offset(a, 0 - 1, b, 0, 1) as i32) == 0 {
+            if (tf1d_dot_with_offset(a, 0, b, 0 - 1, 1) as i32) == 0 {
+                if (tf1d_dot_with_offset(a, 0, b, 0, 0 - 1) as i32) == 0 { 42 } else { 7 }
+            } else { 7 }
+        } else { 7 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
 def test_stdlib_vec_unique_alloc():
     """unique_alloc([1,2,1,3,2,3]) -> [1,2,3]; sum=6; *7=42."""
     src = """
@@ -15735,6 +15777,23 @@ def test_stdlib_tf1d_sum_in_range():
         tf1d_set(x, 2, 3.0_f32);
         tf1d_set(x, 3, 4.0_f32);
         __bits_of_f32(tf1d_sum_in_range(x, 1, 4)) / 16777216 - 23
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_negative_tf1d_range_helpers_do_not_read_before_start():
+    src = """
+    fn main() -> i32 {
+        let guard = t1d_new(1);
+        tf1d_set(guard, 0, 99.0_f32);
+        let x = t1d_new(2);
+        tf1d_set(x, 0, 1.0_f32);
+        tf1d_set(x, 1, 2.0_f32);
+        if tf1d_argmax_in_range(x, 0 - 1, 1) == (0 - 1) {
+            if (tf1d_sum_in_range(x, 0 - 1, 1) as i32) == 0 { 42 } else { 7 }
+        } else { 7 }
     }
     """
     code = compile_and_run(src)

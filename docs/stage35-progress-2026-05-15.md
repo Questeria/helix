@@ -976,6 +976,54 @@ Clean-gate status:
 - Stage 35 clean gates remain `0/3`.
 - Next step is another fresh Stage 35 clean gate on this fixed commit.
 
+## Increment 30 - Eleventh Clean-Gate Restart Fix Sweep
+
+The next fresh Stage 35 audit restart found invalid-shape f32 gradient writes,
+negative-offset f32 range reads, direct PTX flags-only invocation drift, and one
+roadmap contradiction, so the gate did not count as clean and remains at `0/3`.
+
+Fixes landed in this increment:
+
+- `dense_layer_f32_grad_x` now treats non-positive row or column counts as a
+  no-op before writing `grad_x`.
+- `tf1d_argmax_in_range` and `tf1d_sum_in_range` now reject negative lower
+  bounds before reading from the arena.
+- `tf1d_dot_with_offset` now rejects negative offsets or non-positive lengths
+  before reading from the arena.
+- Direct PTX now requires a source path after flag parsing, so `--strict`,
+  `--stdlib`, or both without a path return exit code `2`.
+- The roadmap now describes current Phase-0 PTX tile lowering honestly while
+  keeping broader tensor/tile GPU lowering as future work.
+
+Focused verification:
+
+- Per-file stdlib parser sweep across `STDLIB_FILES`
+  - Result: all stdlib files parsed.
+- `python -m py_compile helixc\backend\ptx.py`
+  - Result: passed.
+- `python -m pytest -q helixc\tests\test_ptx.py -k "stage35_direct_ptx_cli_bad_invocation_returns_two or stage35_direct_ptx_cli_missing_strict_stdlib_returns_two" --tb=short`
+  - Result: 2 passed.
+- `python -m pytest -q helixc\tests\test_codegen.py -k "negative_dense_layer_f32_grad_x_shape_does_not_write_outputs or negative_tf1d_dot_with_offset_does_not_read_before_start or negative_tf1d_range_helpers_do_not_read_before_start or nn_dense_layer_f32_grad_x or stdlib_tf1d_dot_with_offset or stdlib_tf1d_argmax_in_range or stdlib_tf1d_sum_in_range" --tb=short`
+  - Result: 7 passed.
+- `python -m pytest -q helixc\tests\test_codegen.py -k "nn_ or stage35 or softmax or ce_loss or dense_classifier_sgd_step_f32 or adam_f32_step or builtin_adam_step or revad_ or grad_rev_all_writes_f64 or negative_length_tensor_nn_helpers or negative_length_integer_min_max or negative_2d_shape_helpers or negative_tf1d or builtin_bce_uses_stable_log_near_zero or builtin_bce_and_nn_bce_are_stable_near_one" --tb=short`
+  - Result: 87 passed.
+- `python -m pytest -q helixc\tests\test_ptx.py helixc\tests\test_tile_ir.py helixc\tests\test_autotune.py helixc\tests\test_cli.py -k "emit_ptx or ptx or tile_ir or autotune or unwind or unsafe or trace or stage35" --tb=short`
+  - Result: 117 passed.
+- `python -m pytest -q helixc\tests\test_autodiff.py helixc\tests\test_autodiff_reverse.py helixc\tests\test_pytree.py --tb=short`
+  - Result: 90 passed.
+- `python scripts\stage31_validate.py --mode quick --skip-snapshot`
+  - Result: passed, `stage31-quick: rc=0`.
+- `git diff --check`
+  - Result: passed.
+- Docs scan for stale tile-lowering, dogfood, clean-gate, source-rewrite, and
+  reflection/modify current-vs-future wording
+  - Result: no matches.
+
+Clean-gate status:
+
+- Stage 35 clean gates remain `0/3`.
+- Next step is another fresh Stage 35 clean gate on this fixed commit.
+
 ## Next Work
 
 Likely follow-up slices:
