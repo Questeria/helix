@@ -257,7 +257,7 @@ Verification after the overflow and failed-cast artifact fixes:
 - `python scripts\stage31_validate.py --mode full --skip-snapshot --shards 8`:
   pass after built-in retry recovered no-codegen shard 1
 
-## Clean Gate 1 Restart - Failed, Composite Cast And Validator Fix In Progress
+## Clean Gate 1 Restart - Failed; Fix Verified; Counter Reset
 
 The next clean-gate attempt found two more artifact-honesty gaps:
 
