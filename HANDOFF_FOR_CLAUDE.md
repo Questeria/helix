@@ -22,10 +22,10 @@ The latest completed fix sweep is restart 51:
 - Progress ledger: `docs/stage35-progress-2026-05-15.md` (see Increment 70
   for restart 51; 69 for restart 50; 68 for restart 49; 67 for restart 48;
   66 for restart 47; 65 for restart 46)
-- Current-facing status files now say restart 51 and 2,498 collected tests
+- Current-facing status files now say restart 51 and 2,497 collected tests
   (live count after restart 51 reconciliation; restart 50 ledger forecast
   2,489 which was off by 2 from the live 2,487 at HEAD `7b945fa` before
-  restart 51 added 11 new canaries → 2,498)
+  restart 51 added 11 new canaries → 2,497)
 
 Restart 51 ran a fresh 3-lane read-only audit on top of restart 50's HEAD
 plus picked up the restart-50-deferred C8 carry-forward. Result: 15
@@ -64,7 +64,7 @@ a "restart 50 is latest" paragraph); `stats_and_facts.md` preamble
 reconciled with the table row (was: line 8 said restart 49, line 14
 said restart 50); `HANDOFF_FOR_CHATGPT.md` continuation pointer reconciled
 the same way; live test-count reconciled across 8 surfaces from the
-restart-50 forecast 2,489 to the actual 2,498 post-restart-51;
+restart-50 forecast 2,489 to the actual 2,497 post-restart-51;
 `HELIX_REFERENCE.md` "Increments 50-68+" / "50-67+" anchors replaced
 with "Increments 50 onward" (open-ended, restart-drift-proof); C8
 carry-forward closed by adding `"6 bare fn (+0 @-attributed)"` to

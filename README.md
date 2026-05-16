@@ -28,7 +28,7 @@ The purpose of Helix is to remove uncertainty wherever software can honestly rem
 
 ## Status (2026-05-16)
 
-**Current stage: Stage 35 audit cleanup.** Clean gates remain `0/3` as of the latest Stage 35 progress ledger, and the exact test count changes as each audit adds regressions. Continue from the newest pushed `git log -1 --oneline` and the tail of `docs/stage35-progress-2026-05-15.md`; restart 51 is the latest recorded fix sweep in this status text. Restart 51 fix verification collected 2,498 live `helixc/tests` pytest tests (live count after the restart-50 forecast-vs-actual reconciliation); run `python -m pytest helixc/tests --collect-only -q` for the current count.
+**Current stage: Stage 35 audit cleanup.** Clean gates remain `0/3` as of the latest Stage 35 progress ledger, and the exact test count changes as each audit adds regressions. Continue from the newest pushed `git log -1 --oneline` and the tail of `docs/stage35-progress-2026-05-15.md`; restart 51 is the latest recorded fix sweep in this status text. Restart 51 fix verification collected 2,497 live `helixc/tests` pytest tests (live count after the restart-50 forecast-vs-actual reconciliation); run `python -m pytest helixc/tests --collect-only -q` for the current count.
 
 The production compiler path is still the Python-hosted `helixc` implementation. A Helix self-hosted compiler remains the target of the bootstrap roadmap, not a shipped replacement for Python yet.
 

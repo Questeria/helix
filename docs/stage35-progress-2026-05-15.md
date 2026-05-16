@@ -3740,3 +3740,151 @@ new sibling sweeps (NaN-eps inconsistency, ti1d_prod overflow, hashmap
 load-factor i32 wrap). The fresh-audit-vs-deferred-only alternation
 pattern from Increment 68 continues to scale well — fresh audits surface
 new families, deferred-only sweeps clean up the backlog efficiently.
+
+## Increment 70 - Fifty-First Clean-Gate Restart Fix Sweep
+
+Restart 51 began from pushed commit `4f96e45` (handoff for restart 51)
+on top of restart 50's `9ab2ffe`. Per the restart-50 handoff: 1 LOW C8
+deferred. Restart 51 ran a fresh 3-lane read-only audit covering HEAD
+`7b945fa` plus picked up C8. Result: 12 findings (3 HIGH + 5 MEDIUM
++ 3 LOW) across the three lanes, plus a sibling B4 const_fold sweep
+discovered during the fix sweep itself, plus orchestrator-detected C12
+(test-count drift between 8 surfaces and live collect-only).
+
+Lane A (1 HIGH + 2 MEDIUM + 2 LOW):
+
+- A1 HIGH: `__log_stable_f64` added to `transcendentals.hx` (mirrors
+  `__log_stable` f32 with `x <= 0` sentinel `-1e6`). `d_log_v` in
+  `autodiff.hx` rewired from raw `__log_f64` (which returned nonsense
+  finite values for non-positive inputs) to `__log_stable_f64`.
+- A2 MEDIUM: `clip_grad_norm_f32` (nn.hx) now NaN-fail-closes on
+  `norm_sq != norm_sq` in addition to `<= 0`. Sibling of the restart
+  47/48/50 NaN-eps sweep.
+- A3 MEDIUM: `string_to_int` (string.hx) switched to i64 accumulator
+  with INT32_MAX/INT32_MIN saturation. Parsing "2147483648" previously
+  silently wrapped to INT32_MIN; now saturates to INT32_MAX. Sibling
+  of restart 50 A3/A4 (`ti1d_prod`, `hashmap_load_factor_x100`).
+- A4 LOW: `vec_zip_div` and `vec_zip_mod` (iterators.hx) fail-close on
+  `b[i] == 0` (push `0`) instead of delegating to the runtime div-by-zero
+  trap. Matches the fail-closed discipline of `hashmap_hash`, `ti1d_mean`.
+- A5 LOW: `vec_negate_inplace` and `vec_map_neg` (iterators.hx) saturate
+  `INT32_MIN` to `INT32_MAX` instead of silently wrapping back to
+  `INT32_MIN`. Sibling of the `__abs_i32` caveat in transcendentals.
+
+Plus mid-sweep sibling A2/A3 in `tensor.hx`: `ti1d_sum` and `ti1d_dot`
+gained i64 accumulator + saturation; mirrored in `nn.hx` `mse_loss`.
+
+Lane B (1 HIGH + 2 MEDIUM) + B4 sibling sweep:
+
+- B1 HIGH: `autodiff_cli` (frontend/autodiff_cli.py) rejects unknown
+  single-dash flags with `rc=2 unknown flag` before the partition
+  silently aliases them into positional args. Matches the convention
+  of `check.py:306`, `x86_64.py:4086`, `ptx.py:872`. Previously
+  `-O1 loss.hx loss` produced the misleading `cannot read -O1: not found`
+  diagnostic with rc=2.
+- B2 MEDIUM: `check.py --emit-ptx` block (line 1849-1864) added a
+  `(NotImplementedError, AssertionError, KeyboardInterrupt, SystemExit,
+  MemoryError): raise` clause before the `except Exception` catch-all.
+  Mirrors `ptx.py:1006-1011` and the effect-check re-raise pattern.
+- B3 MEDIUM: `check.py --emit-asm` (line 1834-1837) and `-o` ELF
+  artifact-write (line 1872-1875) blocks both gained the same re-raise
+  guard. Mirrors `compile_module_to_elf`'s loud-fail discipline.
+- B4 (sibling, MEDIUM): `const_fold.py` int-arith / float-arith /
+  bitwise blocks gained the same re-raise discipline as a sweep across
+  3 try-blocks (lines 484, 525, 631).
+
+NB: the two `validate_kernel_tile_lowering` blocks in `check.py` at
+lines 1716-1723 and 1744-1751 deliberately KEEP `except Exception`
+(no re-raise guard) because that function uses `NotImplementedError`
+as the user-facing "unsupported tile op" signal — codified by
+`test_stage35_emit_ptx_reports_tile_lowering_error_without_bug_label`
+and `test_stage35_output_binary_rejects_dead_unsupported_kernel_op`.
+The original Lane B audit flagged these as siblings; the conflict was
+caught by stage35 cli slice regression on the first verification pass.
+
+Lane C (2 HIGH + 3 MEDIUM):
+
+- C8 MEDIUM (carry-forward from restart 50): `helix_website/HELIX_REFERENCE.md`
+  per-module fn-count callouts now standardized — `ieee754.hx` gained
+  `"6 bare fn (+0 @-attributed)"` and `transcendentals.hx` gained
+  `"2 bare fn (+50 @-attributed)"`. The other 14 modules were already
+  standardized by restart 50.
+- C9 HIGH: `README.md:31` "Restart 49 fix verification collected 2,489"
+  attribution corrected — the count was restart 50's, not 49's.
+- C10 MEDIUM: `helix_website/stats_and_facts.md:8` snapshot preamble
+  reconciled with line-14 table row (was "Restart 49 is the latest"
+  in prose vs "restart 50 fix verification" in table).
+- C11 MEDIUM: `HANDOFF_FOR_CHATGPT.md:6` continuation pointer
+  reconciled with line 231 (same internal contradiction pattern).
+- C12 HIGH (orchestrator-detected): live `pytest --collect-only` at
+  HEAD `7b945fa` returns 2,487, but 8 current-facing surfaces published
+  2,489 (forecast inherited from Increment 68's "expected 2,479"
+  forecast wording). Restart 51 added 10 new canaries, so live is now
+  2,497. All 8 surfaces (`README.md`, `QUICKSTART.md`,
+  `HANDOFF_FOR_CLAUDE.md`, `HANDOFF_FOR_CHATGPT.md` x2,
+  `stats_and_facts.md`, `HELIX_REFERENCE.md` x2) updated to 2,497.
+
+Regression coverage added (10 cases):
+
+- `helixc/tests/test_codegen.py`: 5 new tests covering A1-A5
+  (`test_stage35_restart51_log_f64_domain_guard`,
+  `test_stage35_restart51_clip_grad_norm_nan_fail_closed`,
+  `test_stage35_restart51_string_to_int_saturates_on_overflow`,
+  `test_stage35_restart51_vec_zip_div_zero_divisor_fail_closed`,
+  `test_stage35_restart51_vec_negate_inplace_int32_min_saturates`).
+- `helixc/tests/test_cli.py`: 4 new tests covering B1-B3
+  (`test_stage35_restart51_autodiff_cli_rejects_unknown_short_flag`,
+  `test_stage35_restart51_check_emit_ptx_propagates_not_implemented`,
+  `test_stage35_restart51_check_emit_asm_propagates_not_implemented`,
+  `test_stage35_restart51_check_codegen_blocks_have_reraise_guard`),
+  plus 1 source-text canary
+  (`test_stage35_restart51_const_fold_blocks_have_reraise_guard`)
+  for the B4 sibling sweep.
+
+Verification:
+
+- `python -m py_compile helixc/check.py helixc/backend/x86_64.py helixc/backend/ptx.py helixc/frontend/autodiff_cli.py helixc/ir/lower_ast.py helixc/ir/passes/const_fold.py helixc/tests/test_cli.py helixc/tests/test_codegen.py`
+  - Result: passed.
+- Per-file stdlib parser sweep
+  - Result: parsed 16 files.
+- Restart 51 new regression canaries (Lane A x5, Lane B x4, B4-sibling x1)
+  - Result: 10 passed.
+- `python -m pytest helixc/tests/test_cli.py -q -k "stage35"`
+  - Result: 129 passed (was 124 + 5 new).
+- `python -m pytest helixc/tests/test_codegen.py -q -k "stage35"`
+  - Result: 91 passed (was 86 + 5 new).
+- `python -m pytest helixc/tests/test_ptx.py -q -k "stage35"`
+  - Result: 26 passed.
+- `python -m pytest helixc/tests --collect-only -q`
+  - Result: 2,497 tests collected (was live 2,487 + 10 new).
+- `git diff --check`
+  - Result: passed.
+
+Clean-gate status:
+
+- Stage 35 clean gates remain `0/3`.
+- Restart 51 is a fix sweep, not a clean gate.
+- Next step is restart 52 as another fresh Stage 35 clean gate from the
+  newest pushed HEAD.
+
+Restart 51 process note: this is the first restart where the live
+collect-only count was DIFFERENT from the published forecast (2,489
+forecast vs 2,487 actual). The pattern dates back to Increment 68's
+"in flight at commit time, expected 2,479" wording — Increment 69
+inherited the forecast and added 10 net tests on top, producing the
+2,489 estimate, but the live count never reconciled. Restart 51's
+C12 finding closes this drift permanently: future increments should
+verify the post-test-add collect-only count BEFORE writing it into
+the surfaces, not forecast it from the +N test addition.
+
+Restart 51 also surfaced a process note: an external auto-fix bot
+(the harness's pre-existing linter / verifier) appears to have applied
+sibling sweeps in parallel with the orchestrator on this commit cycle
+(notably the const_fold B4 re-raise sweep and the ti1d_sum / ti1d_dot
+/ mse_loss i64 saturation siblings). Those bot fixes were left in
+place because they are legitimate sibling sweeps, but the orchestrator
+also reverted one bot-suggested fix (the validate_kernel_tile_lowering
+re-raise guards) that conflicted with the existing
+test_stage35_emit_ptx_reports_tile_lowering_error_without_bug_label
+test contract. Future restarts should expect this divergence and
+treat the bot's outputs as candidate fixes to verify, not authoritative.
