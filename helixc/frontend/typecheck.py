@@ -1844,6 +1844,9 @@ class TypeChecker:
         # Stage 36 Increment 3 — boolean-algebra completeness.
         "xor_logic", "implies_logic", "eq_logic", "if_logic",
         "to_logic_bool",
+        # Stage 36 Increment 5 — real two-parent provenance via arena
+        # side-table.
+        "register_derivation", "parent_left_at", "parent_right_at",
         "consolidate", "recall", "learn_to",
         "grad", "grad_rev", "grad_rev_all",
         "quote", "splice", "splice_f", "splice_f64",
@@ -2835,6 +2838,33 @@ class TypeChecker:
                             expr.span,
                         ))
                     return TyLogic(inner=TyPrim("i32"))
+                # Stage 36 Increment 5: real two-parent provenance via
+                # arena side-table. register_derivation(left_src,
+                # right_src) writes the pair to the global arena and
+                # returns the index where `left_src` was written. The
+                # user keeps this index as the "derivation handle" and
+                # later queries `parent_left_at(idx)` / `parent_right_at
+                # (idx)` to recover the source IDs. This is genuine
+                # two-parent tracking without an ABI change.
+                if bn == "register_derivation" and len(arg_tys) == 2:
+                    for i, t in enumerate(arg_tys):
+                        if not self._is_int_scalar(t):
+                            self.errors.append(TypeError_(
+                                f"register_derivation(left, right): arg "
+                                f"{'12'[i]} must be i32 source id, got "
+                                f"{self._fmt(t)}",
+                                expr.span,
+                            ))
+                    return TyPrim("i32")
+                if bn in ("parent_left_at", "parent_right_at") \
+                        and len(arg_tys) == 1:
+                    if not self._is_int_scalar(arg_tys[0]):
+                        self.errors.append(TypeError_(
+                            f"{bn}(idx): arg must be i32 derivation handle, "
+                            f"got {self._fmt(arg_tys[0])}",
+                            expr.span,
+                        ))
+                    return TyPrim("i32")
                 if bn == "consolidate" and len(arg_tys) == 1:
                     # Episodic -> Semantic
                     if isinstance(arg_tys[0], TyMemTier) and arg_tys[0].tier == "episodic":

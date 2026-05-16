@@ -249,6 +249,73 @@ the strategic D<Logic<T>> composition runs, the Stage 24 scaffolding
 is no longer dead, and the path to real provenance + AD is clearly
 mapped.
 
+## Increment 5 - Real Two-Parent Provenance via Arena Side-Table (SHIPPED, 2026-05-16)
+
+Goal: close the "single-tag provenance" Phase-0 limitation flagged
+in Increments 2-4 without requiring an ABI representation change.
+
+Approach: instead of changing `Logic<T>`'s runtime representation
+(which would break the SysV ABI and require multi-slot returns), use
+the existing global arena as a side-table. User code maintains
+explicit source IDs, calls `register_derivation(left_src, right_src)`
+to record a relationship under an arena-allocated handle, then
+queries `parent_left_at(handle)` / `parent_right_at(handle)` later.
+
+This is **real two-parent provenance** — observable at runtime,
+queryable, distinct from the single-tag prove() tag.
+
+What landed:
+
+- `helixc/frontend/typecheck.py` — 3 new typecheck-recognized builtins
+  registered in `_BUILTIN_NAMES`:
+  - `register_derivation(left_src: i32, right_src: i32) -> i32`
+  - `parent_left_at(handle: i32) -> i32`
+  - `parent_right_at(handle: i32) -> i32`
+- `helixc/ir/lower_ast.py` — `register_derivation` emits two
+  `ARENA_PUSH` ops and returns the index of the first push (the
+  handle). `parent_left_at` lowers to `ARENA_GET(idx)`,
+  `parent_right_at` to `ARENA_GET(idx + 1)`.
+
+5 end-to-end runnable verifications (all exit-code-checked):
+
+1. `parent_left_at` recovers the first source ID.
+2. `parent_right_at` recovers the second.
+3. Both parents readable as a sum.
+4. Two independent derivations produce independent handles —
+   reads on h1 don't disturb h2's data.
+5. Integrated Datalog: the grandparent rule fires (and_logic) AND
+   the provenance handle correctly identifies both parent source
+   IDs. The same program both proves a logical conclusion AND
+   recovers the evidence trail.
+
+Tests: 31 pass in test_stage36_provenance.py (Inc 1's 3 + Inc 2's 8
++ Inc 3's 10 + Inc 4's 4 + Inc 5's 6 new). Self-host gate: PASS.
+
+### Phase-0 limitation that remains
+
+The arena side-table is a flat append-only log: `register_derivation`
+allocates 2 i32 entries linearly. There's no hashmap index, so
+"find all derivations of source X" is an O(n) scan. For typical
+Datalog programs (hundreds of facts) this is fine; an Increment 6+
+upgrade can wire a hashmap if needed.
+
+The user must explicitly call `register_derivation` — the combinators
+(`derive`, `and_logic`, etc.) do NOT auto-register. A future increment
+can make this automatic by reserving a "current derivation handle"
+slot per Logic<T> at the IR level, but that's a representation
+change deferred to a later session.
+
+## Increment 6 - AD Gradient Flow Through Logic Ops (planned)
+
+The remaining strategic goal: `grad(loss)(...)` where `loss` is a
+function returning `Logic<f32>` or `D<Logic<T>>`. The AD passes
+need chain rules registered for `and_logic`, `or_logic`, `not_logic`
+(fuzzy-relaxation derivatives, e.g. sigmoid-relaxed AND).
+
+This is genuinely bigger work than Increments 1-5 because it touches
+the autodiff passes (`helixc/frontend/grad_pass.py`,
+`helixc/stdlib/autodiff_reverse.hx`). Reserved for a later session.
+
 Sketch:
 
 - Runtime representation: a `Logic<T>` becomes a pair

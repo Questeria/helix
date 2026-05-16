@@ -1949,6 +1949,52 @@ class Lowerer:
                     and expr.callee.name == "to_logic_bool"
                     and len(expr.args) == 1):
                 return self._lower_expr(expr.args[0])
+            # Stage 36 Increment 5: real two-parent provenance via
+            # arena side-table.
+            # register_derivation(l, r) emits two ARENA_PUSH ops and
+            # returns the arena index of the FIRST one (the user keeps
+            # this as the derivation handle).
+            if (isinstance(expr.callee, A.Name)
+                    and expr.callee.name == "register_derivation"
+                    and len(expr.args) == 2):
+                l = self._lower_expr(expr.args[0])
+                r = self._lower_expr(expr.args[1])
+                if l is None or r is None:
+                    return l or r
+                # ARENA_PUSH returns the index where the value was pushed.
+                # The handle is the index of `l` (the first push). The
+                # second push for `r` lands at handle+1.
+                handle = self.builder.emit(
+                    tir.OpKind.ARENA_PUSH, l,
+                    result_ty=tir.TIRScalar("i32"))
+                self.builder.emit(
+                    tir.OpKind.ARENA_PUSH, r,
+                    result_ty=tir.TIRScalar("i32"))
+                return handle
+            # parent_left_at(idx) → __arena_get(idx)
+            if (isinstance(expr.callee, A.Name)
+                    and expr.callee.name == "parent_left_at"
+                    and len(expr.args) == 1):
+                idx = self._lower_expr(expr.args[0])
+                if idx is None:
+                    return idx
+                return self.builder.emit(
+                    tir.OpKind.ARENA_GET, idx,
+                    result_ty=tir.TIRScalar("i32"))
+            # parent_right_at(idx) → __arena_get(idx + 1)
+            if (isinstance(expr.callee, A.Name)
+                    and expr.callee.name == "parent_right_at"
+                    and len(expr.args) == 1):
+                idx = self._lower_expr(expr.args[0])
+                if idx is None:
+                    return idx
+                one = self.builder.const_int(1)
+                idx_plus_1 = self.builder.emit(
+                    tir.OpKind.ADD, idx, one,
+                    result_ty=tir.TIRScalar("i32"))
+                return self.builder.emit(
+                    tir.OpKind.ARENA_GET, idx_plus_1,
+                    result_ty=tir.TIRScalar("i32"))
             # Stage 16.5: "literal".as_ptr() — emit STR_PTR op that resolves
             # to a `lea rax, [rip + sym]` of the literal's bytes. The result
             # is a u64 raw pointer suitable for FFI calls.

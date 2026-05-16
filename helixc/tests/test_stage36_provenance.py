@@ -435,6 +435,111 @@ fn main() -> i32 {
     assert rc == 42
 
 
+# Stage 36 Increment 5 — real two-parent provenance via arena side-table.
+#
+# Phase-0 Logic<T> wrapper has no runtime overhead, so source IDs
+# aren't recoverable from a Logic value at runtime. Increment 5 closes
+# that gap by giving user code an arena-backed mechanism: register the
+# (left_src, right_src) pair under an explicit handle, then look up
+# either parent later via the handle. This is real two-parent
+# provenance — observable at runtime, queryable, without any ABI
+# change.
+
+
+def test_stage36_inc5_builtins_registered():
+    """register_derivation, parent_left_at, parent_right_at are
+    registered as builtins."""
+    tc = TypeChecker(parse("fn main() -> i32 { 0 }"))
+    for name in ("register_derivation", "parent_left_at", "parent_right_at"):
+        assert name in tc._BUILTIN_NAMES, f"{name} not a builtin"
+
+
+def test_stage36_inc5_parent_left_recovers_first_src():
+    """parent_left_at(register_derivation(L, R)) recovers L."""
+    src = """
+fn main() -> i32 {
+    let h = register_derivation(100, 200);
+    parent_left_at(h) - 58
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    assert typecheck(prog) == []
+    elf = compile_module_to_elf(lower(prog))
+    rc = _run_elf(elf)
+    assert rc == 42, f"expected 42 (100-58), got {rc}"
+
+
+def test_stage36_inc5_parent_right_recovers_second_src():
+    """parent_right_at(register_derivation(L, R)) recovers R."""
+    src = """
+fn main() -> i32 {
+    let h = register_derivation(100, 200);
+    parent_right_at(h) - 158
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    assert typecheck(prog) == []
+    elf = compile_module_to_elf(lower(prog))
+    rc = _run_elf(elf)
+    assert rc == 42, f"expected 42 (200-158), got {rc}"
+
+
+def test_stage36_inc5_two_derivations_independent():
+    """Multiple register_derivation calls produce independent handles.
+    Reading from h1 returns h1's data, h2 returns h2's data."""
+    src = """
+fn main() -> i32 {
+    let h1 = register_derivation(10, 20);
+    let h2 = register_derivation(30, 40);
+    parent_left_at(h1) + parent_right_at(h2)
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    assert typecheck(prog) == []
+    elf = compile_module_to_elf(lower(prog))
+    rc = _run_elf(elf)
+    assert rc == 50, f"expected 50 (10+40), got {rc}"
+
+
+def test_stage36_inc5_datalog_with_provenance_recovery():
+    """Integrated: the Datalog grandparent rule fires AND the
+    provenance handle correctly identifies both parent source IDs."""
+    src = """
+fn main() -> i32 {
+    let p_ab: Logic<i32> = prove(1, 1);
+    let p_bc: Logic<i32> = prove(1, 2);
+    let grandparent: Logic<i32> = and_logic(p_ab, p_bc);
+    let h = register_derivation(1, 2);
+    if unwrap_logic(grandparent) == 1 {
+        if parent_left_at(h) == 1 {
+            if parent_right_at(h) == 2 {
+                42
+            } else { 0 }
+        } else { 0 }
+    } else { 0 }
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    assert typecheck(prog) == []
+    elf = compile_module_to_elf(lower(prog))
+    rc = _run_elf(elf)
+    assert rc == 42
+
+
+def test_stage36_inc5_register_rejects_non_int_src():
+    """register_derivation arguments must be i32 source IDs."""
+    src = """
+fn main() -> i32 {
+    let h = register_derivation(1.5_f32, 2);
+    0
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    errs = typecheck(prog)
+    assert any("register_derivation" in str(e) for e in errs), \
+        f"expected register_derivation type error, got {[str(e) for e in errs]}"
+
+
 if __name__ == "__main__":
     import pytest
     raise SystemExit(pytest.main([__file__, "-v"]))
