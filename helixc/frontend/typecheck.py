@@ -1839,6 +1839,8 @@ class TypeChecker:
         "detach", "attach",
         # Stage 36 Increment 1 — provenance-typed primitives.
         "prove", "unwrap_logic",
+        # Stage 36 Increment 2 — provenance-composing combinators.
+        "derive", "and_logic", "or_logic", "not_logic",
         "consolidate", "recall", "learn_to",
         "grad", "grad_rev", "grad_rev_all",
         "quote", "splice", "splice_f", "splice_f64",
@@ -2717,6 +2719,71 @@ class TypeChecker:
                         expr.span,
                     ))
                     return arg_tys[0]
+                # Stage 36 Increment 2: provenance-composing combinators.
+                # derive(a: Logic<T>, b: Logic<U>) -> Logic<T> — propagates
+                # provenance through a binary derivation step. The result
+                # carries the value of `a` (Phase-0 single-tag provenance;
+                # the lattice/semiring upgrade tracks BOTH parents). Both
+                # inputs must already be Logic-wrapped — passing a bare T
+                # is a trap-24100 boundary violation.
+                if bn == "derive" and len(arg_tys) == 2:
+                    if not isinstance(arg_tys[0], TyLogic):
+                        self.errors.append(TypeError_(
+                            f"derive(a, b): arg a must be Logic<T>, got "
+                            f"{self._fmt(arg_tys[0])} [trap 24100]",
+                            expr.span,
+                        ))
+                    if not isinstance(arg_tys[1], TyLogic):
+                        self.errors.append(TypeError_(
+                            f"derive(a, b): arg b must be Logic<T>, got "
+                            f"{self._fmt(arg_tys[1])} [trap 24100]",
+                            expr.span,
+                        ))
+                    if isinstance(arg_tys[0], TyLogic):
+                        return arg_tys[0]
+                    return TyLogic(inner=arg_tys[0])
+                # and_logic(a: Logic<i32>, b: Logic<i32>) -> Logic<i32>
+                # — boolean AND on provenance-tagged truth values. The
+                # result is the integer min (0/1 truth value); provenance
+                # is taken from `a` in Phase-0.
+                if bn == "and_logic" and len(arg_tys) == 2:
+                    for i, t in enumerate(arg_tys):
+                        if not isinstance(t, TyLogic):
+                            self.errors.append(TypeError_(
+                                f"and_logic(a, b): arg {'ab'[i]} must be "
+                                f"Logic<i32>, got {self._fmt(t)} [trap 24100]",
+                                expr.span,
+                            ))
+                    if (isinstance(arg_tys[0], TyLogic)
+                            and isinstance(arg_tys[1], TyLogic)):
+                        return arg_tys[0]
+                    return TyLogic(inner=TyPrim("i32"))
+                # or_logic(a: Logic<i32>, b: Logic<i32>) -> Logic<i32>
+                # — boolean OR on provenance-tagged truth values.
+                if bn == "or_logic" and len(arg_tys) == 2:
+                    for i, t in enumerate(arg_tys):
+                        if not isinstance(t, TyLogic):
+                            self.errors.append(TypeError_(
+                                f"or_logic(a, b): arg {'ab'[i]} must be "
+                                f"Logic<i32>, got {self._fmt(t)} [trap 24100]",
+                                expr.span,
+                            ))
+                    if (isinstance(arg_tys[0], TyLogic)
+                            and isinstance(arg_tys[1], TyLogic)):
+                        return arg_tys[0]
+                    return TyLogic(inner=TyPrim("i32"))
+                # not_logic(a: Logic<i32>) -> Logic<i32> — boolean NOT,
+                # provenance preserved (single-parent).
+                if bn == "not_logic" and len(arg_tys) == 1:
+                    if not isinstance(arg_tys[0], TyLogic):
+                        self.errors.append(TypeError_(
+                            f"not_logic(a): arg must be Logic<i32>, got "
+                            f"{self._fmt(arg_tys[0])} [trap 24100]",
+                            expr.span,
+                        ))
+                    if isinstance(arg_tys[0], TyLogic):
+                        return arg_tys[0]
+                    return TyLogic(inner=TyPrim("i32"))
                 if bn == "consolidate" and len(arg_tys) == 1:
                     # Episodic -> Semantic
                     if isinstance(arg_tys[0], TyMemTier) and arg_tys[0].tier == "episodic":

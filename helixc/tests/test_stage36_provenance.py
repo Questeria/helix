@@ -93,6 +93,120 @@ def test_stage36_prove_unwrap_is_builtin():
     assert "unwrap_logic" in tc._BUILTIN_NAMES
 
 
+# Stage 36 Increment 2 — provenance-composing combinators.
+
+
+def test_stage36_inc2_combinators_are_builtins():
+    """derive, and_logic, or_logic, not_logic are registered."""
+    tc = TypeChecker(parse("fn main() -> i32 { 0 }"))
+    assert "derive" in tc._BUILTIN_NAMES
+    assert "and_logic" in tc._BUILTIN_NAMES
+    assert "or_logic" in tc._BUILTIN_NAMES
+    assert "not_logic" in tc._BUILTIN_NAMES
+
+
+def test_stage36_inc2_and_logic_truth_table():
+    """and_logic on 0/1 truth values: 1 AND 1 = 1, 1 AND 0 = 0,
+    0 AND 0 = 0."""
+    for a, b, want in [(1, 1, 1), (1, 0, 0), (0, 1, 0), (0, 0, 0)]:
+        src = f"""
+fn main() -> i32 {{
+    unwrap_logic(and_logic(prove({a}, 0), prove({b}, 0)))
+}}
+"""
+        prog = parse(src, include_stdlib=True)
+        assert typecheck(prog) == []
+        elf = compile_module_to_elf(lower(prog))
+        rc = _run_elf(elf)
+        assert rc == want, f"and_logic({a},{b}) -> {rc}, expected {want}"
+
+
+def test_stage36_inc2_or_logic_truth_table():
+    """or_logic on 0/1 truth values: covers all four input cases."""
+    for a, b, want in [(1, 1, 1), (1, 0, 1), (0, 1, 1), (0, 0, 0)]:
+        src = f"""
+fn main() -> i32 {{
+    unwrap_logic(or_logic(prove({a}, 0), prove({b}, 0)))
+}}
+"""
+        prog = parse(src, include_stdlib=True)
+        assert typecheck(prog) == []
+        elf = compile_module_to_elf(lower(prog))
+        rc = _run_elf(elf)
+        assert rc == want, f"or_logic({a},{b}) -> {rc}, expected {want}"
+
+
+def test_stage36_inc2_not_logic_inverts():
+    """not_logic: NOT 0 = 1, NOT 1 = 0."""
+    for a, want in [(0, 1), (1, 0)]:
+        src = f"fn main() -> i32 {{ unwrap_logic(not_logic(prove({a}, 0))) }}"
+        prog = parse(src, include_stdlib=True)
+        assert typecheck(prog) == []
+        elf = compile_module_to_elf(lower(prog))
+        rc = _run_elf(elf)
+        assert rc == want, f"not_logic({a}) -> {rc}, expected {want}"
+
+
+def test_stage36_inc2_derive_keeps_first_parent_value():
+    """derive(a, b) returns a's value in Phase-0 single-tag
+    provenance. The lattice upgrade tracks both parents."""
+    src = """
+fn main() -> i32 {
+    unwrap_logic(derive(prove(42, 1), prove(7, 2)))
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    assert typecheck(prog) == []
+    elf = compile_module_to_elf(lower(prog))
+    rc = _run_elf(elf)
+    assert rc == 42
+
+
+def test_stage36_inc2_compound_expression():
+    """Compound: (1 AND 1) OR (NOT 0) = 1, times 42 = 42."""
+    src = """
+fn main() -> i32 {
+    let t = prove(1, 0);
+    let f = prove(0, 0);
+    let r = or_logic(and_logic(t, t), not_logic(f));
+    unwrap_logic(r) * 42
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    assert typecheck(prog) == []
+    elf = compile_module_to_elf(lower(prog))
+    rc = _run_elf(elf)
+    assert rc == 42
+
+
+def test_stage36_inc2_and_logic_rejects_bare_value():
+    """and_logic with a bare i32 (not Logic) fires trap 24100."""
+    src = """
+fn main() -> i32 {
+    let a = prove(1, 0);
+    unwrap_logic(and_logic(a, 1))
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    errs = typecheck(prog)
+    assert any("24100" in str(e) for e in errs), \
+        f"expected trap 24100, got {[str(e) for e in errs]}"
+
+
+def test_stage36_inc2_derive_rejects_bare_first_arg():
+    """derive(bare, Logic) fires trap 24100."""
+    src = """
+fn main() -> i32 {
+    let b = prove(1, 0);
+    unwrap_logic(derive(1, b))
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    errs = typecheck(prog)
+    assert any("24100" in str(e) for e in errs), \
+        f"expected trap 24100, got {[str(e) for e in errs]}"
+
+
 if __name__ == "__main__":
     import pytest
     raise SystemExit(pytest.main([__file__, "-v"]))

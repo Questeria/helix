@@ -1820,6 +1820,54 @@ class Lowerer:
                     and expr.callee.name == "unwrap_logic"
                     and len(expr.args) == 1):
                 return self._lower_expr(expr.args[0])
+            # Stage 36 Increment 2: provenance-composing combinators.
+            # derive(a, b) lowers to a (Phase-0: provenance is single-tag,
+            # so the derived value carries the value + provenance of the
+            # first parent). and_logic / or_logic lower to bitwise i32
+            # min/max on 0/1 truth values. not_logic flips 0<->1.
+            if (isinstance(expr.callee, A.Name)
+                    and expr.callee.name == "derive"
+                    and len(expr.args) == 2):
+                # Evaluate b for side effects but return a's value.
+                # In practice both are pure Logic<T> values; the second
+                # lower keeps a uniform AST traversal pattern.
+                self._lower_expr(expr.args[1])
+                return self._lower_expr(expr.args[0])
+            if (isinstance(expr.callee, A.Name)
+                    and expr.callee.name == "and_logic"
+                    and len(expr.args) == 2):
+                a = self._lower_expr(expr.args[0])
+                b = self._lower_expr(expr.args[1])
+                if a is None or b is None:
+                    return a or b
+                # AND on 0/1 truth values: bitwise AND (preserves
+                # 0/1 semantics correctly for boolean inputs).
+                return self.builder.emit(
+                    tir.OpKind.BIT_AND, a, b,
+                    result_ty=tir.TIRScalar("i32"))
+            if (isinstance(expr.callee, A.Name)
+                    and expr.callee.name == "or_logic"
+                    and len(expr.args) == 2):
+                a = self._lower_expr(expr.args[0])
+                b = self._lower_expr(expr.args[1])
+                if a is None or b is None:
+                    return a or b
+                # OR on 0/1 truth values: bitwise OR (preserves 0/1
+                # semantics correctly for boolean inputs).
+                return self.builder.emit(
+                    tir.OpKind.BIT_OR, a, b,
+                    result_ty=tir.TIRScalar("i32"))
+            if (isinstance(expr.callee, A.Name)
+                    and expr.callee.name == "not_logic"
+                    and len(expr.args) == 1):
+                a = self._lower_expr(expr.args[0])
+                if a is None:
+                    return a
+                # NOT on a 0/1 truth value: 1 - a.
+                one = self.builder.const_int(1)
+                return self.builder.emit(
+                    tir.OpKind.SUB, one, a,
+                    result_ty=tir.TIRScalar("i32"))
             # Stage 16.5: "literal".as_ptr() — emit STR_PTR op that resolves
             # to a `lea rax, [rip + sym]` of the literal's bytes. The result
             # is a u64 raw pointer suitable for FFI calls.

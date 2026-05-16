@@ -77,3 +77,102 @@ Implementation path:
    `unwrap_logic(fact(v, src)) == v`.
 3. Add a test pinning `logic_source(fact(v, src)) == src`.
 4. Run the full test suite + self-host gate before commit.
+
+### Increment 1 status: SHIPPED (commit 9e9b421, 2026-05-16)
+
+What landed:
+
+- `helixc/frontend/typecheck.py` — added `prove(value, source)` and
+  `unwrap_logic(l)` as typecheck-recognized builtins next to
+  `detach`/`attach`. Both registered in `_BUILTIN_NAMES`.
+- `helixc/ir/lower_ast.py` — both lower to identity at IR level
+  (Phase-0: Logic<T> has zero runtime overhead).
+- `helixc/tests/test_provenance.py` — 8 new typecheck-level tests
+  (added in parallel by an autonomous loop run).
+- `helixc/tests/test_stage36_provenance.py` — 3 end-to-end runtime
+  tests pinning exit codes.
+- Self-host gate: PASS (G2..G4 byte-identical sha a6f1ee44...).
+- 24 tests pass (21 in test_provenance.py + 3 in test_stage36
+  _provenance.py).
+
+Deviation from plan: kept `prove`/`unwrap_logic` as Python-side
+intrinsics (matching detach/attach pattern) rather than writing a
+stdlib `.hx` file, because generic functions (`fn fact<T>...`) are
+not yet shipped. The intrinsic path matches the existing pattern and
+is end-to-end-runnable.
+
+## Increment 2 - Provenance-Composing Combinators (in progress)
+
+Goal: extend the single-input prove/unwrap_logic vocabulary with
+combinators that compose provenance from two parents. This is the
+first step toward a real provenance lattice/semiring (Increment 3
+will track BOTH parents, not just the first).
+
+Scope:
+
+- `derive(a: Logic<T>, b: Logic<U>) -> Logic<T>` — propagates
+  provenance through a binary derivation step. Phase-0 keeps the
+  value of `a` and discards `b`; the lattice upgrade tracks both.
+  Both inputs must be Logic-wrapped — passing a bare T fires trap
+  24100.
+- `and_logic(a, b: Logic<i32>) -> Logic<i32>` — boolean AND on
+  0/1 truth values, lowered to BIT_AND.
+- `or_logic(a, b: Logic<i32>) -> Logic<i32>` — boolean OR, lowered
+  to BIT_OR.
+- `not_logic(a: Logic<i32>) -> Logic<i32>` — boolean NOT, lowered
+  to `1 - a` (preserves provenance).
+
+### Increment 2 status: SHIPPED (this commit, 2026-05-16)
+
+What landed:
+
+- `helixc/frontend/typecheck.py` — added 4 builtins in the same
+  pattern as Increment 1. Registered in `_BUILTIN_NAMES`. Each
+  validates that args are Logic-typed (trap 24100 otherwise).
+- `helixc/ir/lower_ast.py` — all 4 lower to direct IR ops:
+  - `derive(a, b)` → identity on a (b evaluated for side-effect
+    parity with the AST traversal pattern).
+  - `and_logic(a, b)` → BIT_AND.
+  - `or_logic(a, b)` → BIT_OR.
+  - `not_logic(a)` → 1 - a.
+- `helixc/tests/test_stage36_provenance.py` — 8 new end-to-end
+  tests covering full truth tables (AND × 4, OR × 4, NOT × 2),
+  derive, compound expressions, and trap-24100 boundary checks.
+- 11 tests pass in test_stage36_provenance.py (Increment 1's 3 +
+  Increment 2's 8).
+
+First sample of a non-trivial provenance-typed expression that runs:
+
+```rust
+let t = prove(1, 0);
+let f = prove(0, 0);
+let r = or_logic(and_logic(t, t), not_logic(f));
+unwrap_logic(r) * 42  // exits 42
+```
+
+This is the first running Helix program that does propositional
+reasoning with provenance-typed truth values.
+
+## Increment 3 - True Two-Parent Provenance (planned)
+
+Goal: replace the single-tag i32 provenance with a real two-parent
+provenance lattice. derive/and_logic/or_logic should track BOTH
+parent sources, not just the first.
+
+Sketch:
+
+- Runtime representation: a `Logic<T>` becomes a pair
+  `{ value: T, prov: i64 }` where `prov` packs two i32 source tags
+  into the high/low halves.
+- `prove(v, src)` puts `src` in both halves.
+- `derive(a, b)` merges via `(a.prov << 32) | b.prov` (or similar
+  combining function).
+- `and_logic` / `or_logic` similarly combine.
+- A `logic_provenance(l: Logic<T>) -> i64` accessor exposes the
+  packed tag.
+- A `logic_source_left` / `logic_source_right` extractor pair lets
+  user code unpack.
+
+This is the bridge to Increment 4 (AD through Logic<T>), which will
+treat the provenance pair as a gradient path: `D<Logic<T>>` carries
+both the gradient AND the evidence trail simultaneously.
