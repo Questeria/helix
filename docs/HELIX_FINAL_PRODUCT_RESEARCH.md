@@ -1,6 +1,6 @@
 # Helix Final Product Research Blueprint
 
-**Status**: research-backed north star for post-Stage-30 Helix.
+**Status**: research-backed north star for post-Stage-35 Helix.
 **Date**: 2026-05-13.
 **Scope**: what Helix should fully become, what it must dream toward, and what
 specific capabilities are needed for Helix to become a language for future

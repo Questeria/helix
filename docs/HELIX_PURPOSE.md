@@ -78,4 +78,4 @@ The fuller north-star design is maintained in
 [`HELIX_FINAL_PRODUCT_RESEARCH.md`](HELIX_FINAL_PRODUCT_RESEARCH.md). That file
 connects the mission above to external research, concrete Layer 0 compiler
 requirements, runtime/tooling requirements, domain demonstrations, and the
-phased roadmap after Stage 30.
+phased roadmap after Stage 35.
