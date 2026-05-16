@@ -25,12 +25,15 @@ The latest completed fix sweep is restart 51:
 - Current-facing status files now say restart 51 and 2,497 collected tests
   (live count after restart 51 reconciliation; restart 50 ledger forecast
   2,489 which was off by 2 from the live 2,487 at HEAD `7b945fa` before
-  restart 51 added 11 new canaries → 2,497)
+  restart 51 added 10 new canaries → 2,497)
 
 Restart 51 ran a fresh 3-lane read-only audit on top of restart 50's HEAD
-plus picked up the restart-50-deferred C8 carry-forward. Result: 15
-findings (3 HIGH + 5 MEDIUM + 7 LOW). The fix sweep closed all 15 plus
-the C8 carry-forward; **no items deferred to restart 52.**
+plus picked up the restart-50-deferred C8 carry-forward. Result: 12
+findings (4 HIGH + 5 MEDIUM + 3 LOW) plus a sibling B4 const_fold sweep
+discovered during the fix sweep itself. Fix sweep closed all 12 plus
+the C8 carry-forward; **no items deferred to restart 52.** See
+`docs/stage35-progress-2026-05-15.md` Increment 70 for the authoritative
+breakdown.
 
 ## Restart 51 → Restart 52 deferred findings
 
@@ -49,14 +52,23 @@ INT32_MAX+1); `vec_zip_mod` and `vec_zip_div` fail-closed on b[i] == 0
 (was: trap to runtime); `vec_negate_inplace` + `vec_map_neg` saturate
 INT32_MIN to INT32_MAX (was: silent wrap to INT32_MIN).
 
-Lane B (2 HIGH + 1 MEDIUM + 1 LOW): `autodiff_cli` rejects unknown
+Lane B (1 HIGH + 2 MEDIUM): `autodiff_cli` rejects unknown
 single-dash flags with `rc=2 unknown flag` (was: silent positional-arg
-aliasing); `check.py validate_kernel_tile_lowering` re-raises loud-fail
-signals at both call sites (was: aliased to `PTX validation error rc=1`);
-`check.py --emit-asm`/`--emit-ptx`/`-o` artifact-emit branches re-raise
-loud-fail signals; `const_fold.py` int-arith / float-arith / bitwise
-blocks re-raise loud-fail signals before the `except Exception: return
-None` catch-all (sibling sweep across 3 try-blocks).
+aliasing); `check.py --emit-asm`/`--emit-ptx`/`-o` artifact-emit branches
+re-raise `(NotImplementedError, AssertionError, ...)` loud-fail signals
+before the catch-all `except Exception`. Sibling sweep: `const_fold.py`
+int-arith / float-arith / bitwise blocks gained the same re-raise
+discipline (3 try-blocks).
+
+**Important — do NOT re-flag in restart 52**: the two
+`validate_kernel_tile_lowering` blocks in `check.py` (lines ~1716 and
+~1750) deliberately KEEP `except Exception` without a re-raise guard.
+That function uses `NotImplementedError` as the user-facing
+"unsupported tile op" signal, codified by
+`test_stage35_emit_ptx_reports_tile_lowering_error_without_bug_label`
+and `test_stage35_output_binary_rejects_dead_unsupported_kernel_op`.
+An earlier audit-lane reviewer flagged these as siblings and the fix
+was applied + reverted before commit. The current state is intentional.
 
 Lane C (1 HIGH + 3 MEDIUM + 1 LOW + C8 carry-forward): `README.md`
 restart-attribution corrected (was: "restart 49 collected 2,489" inside
@@ -72,10 +84,11 @@ carry-forward closed by adding `"6 bare fn (+0 @-attributed)"` to
 `transcendentals.hx` per-module callouts (the other 14 modules were
 already standardized by restart 50).
 
-Regression coverage added (11 cases): 5 in `test_codegen.py` (Lane A
-A1-A5), 5 in `test_cli.py` (Lane B B1-B4 with one source-text canary
-covering both B2 sites), and 1 source-text canary in `test_cli.py` for
-B4 const_fold re-raise.
+Regression coverage added (10 cases): 5 in `test_codegen.py` (Lane A
+A1-A5), 4 in `test_cli.py` (Lane B B1 unknown-short-flag + B2 emit-ptx
+NIE-propagation + B3 emit-asm NIE-propagation + 1 source-text canary
+covering the 3 check.py codegen re-raise sites), and 1 source-text
+canary in `test_cli.py` for the const_fold re-raise sibling sweep.
 
 ## What Restart 50 Fixed
 
