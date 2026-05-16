@@ -1,6 +1,6 @@
 # Helix v1 Final Features — Compiler-Level Design
 
-**Status**: Design doc and forward roadmap. Stages 31-34 have landed; Stage 35 (AI/ML Capability Push) is in audit cleanup as of 2026-05-15.
+**Status**: Design doc and forward roadmap. The Stage-numbering used in sections 2.1-2.7 (refinement types as "Stage 31", confidence types as "Stage 32", etc.) is from this document's planning era and pre-dates the current live numbering — `docs/ROADMAP.md` is authoritative for live stage scope. Under the live numbering, Stages 31-34 (refinement-proof-carry tooling, verification-speed infra, self-host parity, proof + refinement expansion) have closed; Stage 35 (AI/ML Capability Push) is in audit cleanup. Clean-gate count and current restart number live in `docs/stage35-progress-2026-05-15.md`.
 
 **User directive (2026-05-11)**: "Anything that should be in Helix or is better in Helix do it for Helix compilation. Also do research on what other features like these we should add for the final Helix."
 

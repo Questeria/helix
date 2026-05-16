@@ -3536,3 +3536,98 @@ restart 47 B1 from a single exception site to the surrounding driver code.
 Lane C continues to find residual marketing-claim seams; this restart's
 "65+ stages" fix follows the same pattern as restart 46/47's license-triple
 and bootstrap-chain softening.
+
+## Increment 68 - Forty-Ninth Clean-Gate Restart Fix Sweep
+
+Restart 49 began from pushed commit `a4e3f15` (the handoff doc commit after
+restart 48's `5ee0362` fix sweep). The restart-48 handoff explicitly listed
+7 Lane B / Lane C audit findings deferred from restart 48; restart 49
+applied all 7 (plus 1 new B4 finding discovered during the lower_ast
+sibling-sweep) without dispatching a fresh 3-lane audit. This deferred-only
+fix sweep pattern is faster when the prior restart left a well-documented
+backlog.
+
+Fixes in this increment:
+
+Lane B (4 fixes):
+
+- B1: `autodiff_cli` exit codes now match the check/x86/ptx convention.
+  Bad invocation (no args, missing required arg, `--dump-ast-hashes` with
+  no path) returns rc=2. Parse error returns rc=1. Differentiate runtime
+  failure returns rc=1. Previously: bad invocation rc=1, parse error rc=2,
+  differentiate failure rc=2 (all wrong).
+- B2: `-h` / `--help` works on every CLI (was missing on
+  `helixc.backend.x86_64`, `helixc.backend.ptx`, and
+  `helixc.frontend.autodiff_cli`). All four CLIs (`helixc.check` plus
+  the three above) now print a banner to stdout and exit 0.
+- B3: `helixc.backend.x86_64` and `helixc.backend.ptx` banners now
+  enumerate every accepted flag: `-O0..-O3`, `--no-opt`, `-Wad=*`,
+  `-Wdeprecated=*` (restart 46/47), plus `-l <libname>`, `--no-color`,
+  `--color`, `--hash`, `--hash-cons` (restart 47 B4). `helixc.backend.ptx`
+  also gained a usage banner; it previously printed only
+  `error: ptx: missing input path` on bare invocation.
+- B4: `helixc/ir/lower_ast.py:3082-3086` `except Exception` around
+  `structural_hash(expr.inner)` narrowed to
+  `except (KeyError, AttributeError, TypeError, ValueError)` so
+  `NotImplementedError` from `ast_hash._hash_into`'s cycle-14/15 loud-fail
+  discipline propagates instead of aliasing distinct quote bodies to the
+  same `_pretty` fallback string. Mirror of restart 47 B1 (lower_ast
+  `_resolve_monomorphized_struct_type` narrowing) and restart 48 B2/B3
+  (ptx + autodiff_cli narrowings).
+
+Lane C (6 fixes; closes the restart-48 deferred list):
+
+- C3: `docs/HELIX_V1_FINAL_FEATURES.md` line 3 status sentence rewritten
+  to disclaim its planning-era Stage 31-34 numbering and point at
+  `docs/ROADMAP.md` as authoritative.
+- C4: `docs/ROADMAP.md` line 17 corrected from "5 dogfood programs" to
+  "6 dogfood programs + a self-improving-agent flagship".
+- C5: Date stamps in `docs/ROADMAP.md`, `docs/HELIX_V1_FINAL_FEATURES.md`,
+  `docs/HELIX_PURPOSE.md` switched from fixed dates to ledger-anchored
+  phrasings so they don't drift each day.
+- C6: `helix_website/HELIX_REFERENCE.md` Compiler-Architecture stdlib
+  list (lines 956-962, sibling of restart 48 C1) rewritten with all 16
+  actual modules and per-module purpose tags.
+- C7: HELIX_REFERENCE.md "23+ silent-corruption bugs (and counting)"
+  reframed as "Dozens of silent-corruption defects (live count grows with
+  each restart; see Increments 50-67+ for the open-ended ledger)" so the
+  headline doesn't understate by an order of magnitude.
+- C8: `HANDOFF_FOR_CHATGPT.md` line 17 historical-block license-triple
+  softened to match the current-facing surfaces.
+
+Regression coverage added in `helixc/tests/test_cli.py` (13 cases): 2
+exit-code tests for B1, 8 parametrized -h/--help tests for B2 (4 CLIs × 2
+flags), 2 banner-content tests for B3, 1 source-text invariant test for
+B4 narrowing.
+
+Verification:
+
+- `python -m py_compile helixc/check.py helixc/backend/x86_64.py helixc/backend/ptx.py helixc/frontend/autodiff_cli.py helixc/ir/lower_ast.py helixc/tests/test_cli.py helixc/tests/test_codegen.py`
+  - Result: passed.
+- Per-file stdlib parser sweep
+  - Result: parsed 16 files.
+- Restart 49 new regression canaries (B1 × 2, B2 × 8 parametrized, B3 × 2, B4)
+  - Result: 13 passed, 252 deselected.
+- Manual `--help` / `-h` invocation on all 4 CLIs
+  - Result: each prints a banner to stdout and exits 0.
+- `python -m pytest helixc/tests/test_cli.py -q -k "stage35"`
+  - Result: in flight at commit time, expected ~120 passed (was 107 + 13 new).
+- `python -m pytest helixc/tests --collect-only -q`
+  - Result: in flight at commit time, expected 2,479 (was 2,466 + 13 new).
+- `git diff --check`
+  - Result: passed.
+
+Clean-gate status:
+
+- Stage 35 clean gates remain `0/3`.
+- Restart 49 is a fix sweep that closed the entire restart-48 deferred
+  backlog, not a clean gate.
+- Next step is restart 50 as another fresh Stage 35 clean gate from the
+  newest pushed HEAD.
+
+Restart 49 protocol note: deferred-only fix sweeps (when the prior
+restart's handoff lists a concrete backlog) are 2-3x faster than
+audit-and-fix cycles. Use this pattern when the prior restart left a
+well-documented deferred list AND the deferred items have no overlap
+with active development. If the prior restart's deferred list is empty,
+restart N+1 must run a fresh 3-lane audit.

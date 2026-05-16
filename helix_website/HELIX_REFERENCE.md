@@ -507,7 +507,7 @@ Phase-0 stores cell *values* (not full ASTs). Phase-1 will support full AST cell
 
 ## Standard Library
 
-The Helix standard library lives in `helixc/stdlib/` and is written in Helix itself (no `unsafe`, no FFI for core operations). As of Stage 35 restart 48 fix verification the library has 16 modules with ~455 bare `fn` declarations (644 including `@attribute`-prefixed declarations). The list below names every module; each line points at the actual `.hx` file.
+The Helix standard library lives in `helixc/stdlib/` and is written in Helix itself (no `unsafe`, no FFI for core operations). As of Stage 35 restart 49 fix verification the library has 16 modules with ~455 bare `fn` declarations (644 including `@attribute`-prefixed declarations). The list below names every module; each line points at the actual `.hx` file.
 
 ### Numerics & IEEE 754
 
@@ -524,7 +524,7 @@ The Helix standard library lives in `helixc/stdlib/` and is written in Helix its
 
 ### Autodiff
 
-- `autodiff.hx` — symbolic forward-mode derivative helpers (`d_add/sub/mul/div/neg/sqrt/sq/scale/log/recip/sin/cos/relu/abs/...`), each fail-closed at the analytical singularity (restart 48/48 hardening).
+- `autodiff.hx` — symbolic forward-mode derivative helpers (`d_add/sub/mul/div/neg/sqrt/sq/scale/log/recip/sin/cos/relu/abs/...`), each fail-closed at the analytical singularity (restart 47-48 hardening).
 - `autodiff_reverse.hx` — reverse-mode tape (`rev_tape_new`, `rev_push`, `rev_leaf`, `rev_add/sub/mul/neg`, `rev_value_at`, `rev_alloc_adjoints`, `rev_seed`, `rev_backward`, `rev_grad`). Tape and adjoint validators (`rev_tape_valid`, `rev_adj_cap`) include the full forge-guard sweep from restart 45-47. ~35 functions.
 
 ### AGI primitives (used by `helixc/examples/self_improving_agent.hx`)
@@ -941,14 +941,24 @@ Kovostov-Native/
 │   │   ├── x86_64.py   # ELF + SysV ABI
 │   │   ├── ptx.py      # NVIDIA PTX
 │   │   └── elf_dyn.py  # FFI dynamic linking
-│   ├── stdlib/         # standard library, in Helix
-│   │   ├── core.hx
-│   │   ├── ieee754.hx
-│   │   ├── math.hx
-│   │   ├── nn.hx
-│   │   ├── option.hx
-│   │   └── autodiff.hx
-│   ├── tests/          # 2,466 tests collected in restart 48 fix verification
+│   ├── stdlib/         # standard library, in Helix (16 modules)
+│   │   ├── agi_match.hx       # pattern matching, tree-node, bindings
+│   │   ├── agi_memory.hx      # working + episodic memory typed handles
+│   │   ├── agi_search.hx      # BFS, visited, priority queue, beam, A*, attention
+│   │   ├── agi_world.hx       # world-model tables, world-memory lines
+│   │   ├── autodiff.hx        # forward-mode derivative rules
+│   │   ├── autodiff_reverse.hx # reverse-mode tape + backward pass
+│   │   ├── hashmap.hx         # typed-handle hashmap
+│   │   ├── ieee754.hx         # bit-pattern conversions
+│   │   ├── iterators.hx       # method-chain iterator combinators
+│   │   ├── nn.hx              # activations, losses, optimizers, layers
+│   │   ├── option.hx          # Option<T>
+│   │   ├── result.hx          # Result<T, E>
+│   │   ├── string.hx          # byte-string helpers
+│   │   ├── tensor.hx          # 1D/2D tensor primitives
+│   │   ├── transcendentals.hx # __exp/__log/__sin/__cos/__sqrt/__sigmoid/__tanh + scalar optim steps
+│   │   └── vec.hx             # caller-trust Vec<i32>-style sequences
+│   ├── tests/          # 2,479 tests collected in restart 49 fix verification
 │   │   ├── test_codegen.py
 │   │   ├── test_parser.py
 │   │   ├── test_match.py
@@ -1533,9 +1543,9 @@ Or: a single character `λ` in monospace inside a hex bracket `[λ]`. Clean, sho
 
 - **299 bytes** — current hex0 binary size
 - **Python-hosted helixc** — current production compiler implementation
-- **2,466 live tests collected** — restart 48 fix verification; rerun scoped pytest collection before publishing
+- **2,479 live tests collected** — restart 49 fix verification; rerun scoped pytest collection before publishing
 - **Approach A roadmap (30 numbered stages)** — historical bootstrap-port sequencing; current live design doc (`docs/HELIX_V1_FINAL_FEATURES.md`) references stage numbers up to Stage 65 (35 distinct stages enumerated; not a strict consecutive sequence).
-- **23+ silent-corruption bugs (and counting; live audit ledger in `docs/stage35-progress-2026-05-15.md`)** — found and disclosed during development
+- **Dozens of silent-corruption defects (live count grows with each Stage 35 restart; see `docs/stage35-progress-2026-05-15.md` Increments 50-67+ for the open-ended ledger)** — found and disclosed during development
 - **restart-gated audit campaign** — multi-agent code review cycles continue until three clean gates pass
 - **Target bootstrap chain: 0 external toolchain dependencies once complete** — current production path still uses Python 3.10+ and Linux/WSL for ELFs
 - **self-hosting target** — not shipped yet

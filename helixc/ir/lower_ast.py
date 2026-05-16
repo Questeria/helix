@@ -3079,10 +3079,22 @@ class Lowerer:
             # in the binary.
             from ..backend.x86_64 import HELIX_NUM_CELLS
             from ..frontend.ast_hash import structural_hash
+            # Restart 49 B4: narrow exception scope. structural_hash
+            # raises NotImplementedError (per ast_hash._hash_into's
+            # cycle-14/15 loud-fail discipline) for unhandled AST
+            # subclasses. The previous wide `except Exception` swallowed
+            # the loud-fail and aliased two distinct quote() bodies of
+            # the new AST type to the same _pretty fallback string,
+            # silently miscompiling quote-cell lookup. Mirrors the
+            # restart-47 B1 narrowing in
+            # _resolve_monomorphized_struct_type and the autodiff.py
+            # sibling pattern. Catch only the lookup-style errors that
+            # legitimately mean "this expression isn't hashable by name";
+            # let loud-fail signals propagate so the new AST subclass
+            # forces explicit dispatch.
             try:
                 key = structural_hash(expr.inner)
-            except Exception:
-                # Fall back to pretty-string if hashing fails for any reason.
+            except (KeyError, AttributeError, TypeError, ValueError):
                 key = _pretty(expr.inner)
             if key not in self._quote_handle_table:
                 idx = len(self._quote_handle_table)

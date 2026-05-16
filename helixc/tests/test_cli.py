@@ -4715,6 +4715,109 @@ def test_stage35_autodiff_cli_differentiate_propagates_not_implemented(tmp_path,
         cli.differentiate(None, "x")
 
 
+# ---- Restart 49 B1: autodiff_cli exit codes match check/x86/ptx convention ----
+
+def test_stage35_autodiff_cli_bad_invocation_exits_rc2():
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli"],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 2, (
+        f"autodiff_cli with no args should exit 2 (bad invocation), got "
+        f"rc={proc.returncode}, stderr={proc.stderr!r}"
+    )
+
+
+def test_stage35_autodiff_cli_parse_error_exits_rc1(tmp_path):
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    bad = tmp_path / "bad.hx"
+    bad.write_text("fn (\n", encoding="utf-8")
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         str(bad), "anything"],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 1, (
+        f"autodiff_cli parse error should exit 1 (source error), got "
+        f"rc={proc.returncode}, stderr={proc.stderr!r}"
+    )
+
+
+# ---- Restart 49 B2: -h / --help on every CLI returns rc=0 + a banner ----
+
+@pytest.mark.parametrize("module,flag", [
+    ("helixc.check", "-h"),
+    ("helixc.check", "--help"),
+    ("helixc.backend.x86_64", "-h"),
+    ("helixc.backend.x86_64", "--help"),
+    ("helixc.backend.ptx", "-h"),
+    ("helixc.backend.ptx", "--help"),
+    ("helixc.frontend.autodiff_cli", "-h"),
+    ("helixc.frontend.autodiff_cli", "--help"),
+])
+def test_stage35_cli_help_flag_works_and_exits_zero(module, flag):
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    proc = subprocess.run(
+        [sys.executable, "-m", module, flag],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0, (
+        f"{module} {flag} should exit 0, got rc={proc.returncode}, "
+        f"stderr={proc.stderr!r}"
+    )
+    assert "usage:" in proc.stdout.lower() or "python -m" in proc.stdout.lower(), (
+        f"{module} {flag} should print a usage banner to stdout"
+    )
+
+
+# ---- Restart 49 B3: x86_64 + ptx banners mention restart-47 parity flags ----
+
+def test_stage35_x86_banner_mentions_restart47_parity_flags():
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.backend.x86_64", "--help"],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0
+    for flag in ["-l", "--no-color", "--color", "--hash", "--hash-cons",
+                 "-Wad=", "-Wdeprecated=", "-O0", "-O3"]:
+        assert flag in proc.stdout, (
+            f"x86 banner missing restart-47/46 flag {flag!r}"
+        )
+
+
+def test_stage35_ptx_banner_mentions_restart47_parity_flags():
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.backend.ptx", "--help"],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0
+    for flag in ["-l", "--no-color", "--color", "--hash", "--hash-cons",
+                 "-Wad=", "-Wdeprecated=", "-O0", "--no-opt"]:
+        assert flag in proc.stdout, (
+            f"ptx banner missing restart-47/46 flag {flag!r}"
+        )
+
+
+# ---- Restart 49 B4: lower_ast structural_hash narrowing ----
+
+def test_stage35_lower_ast_structural_hash_narrowed_to_lookup_errors():
+    """lower_ast._lower_expr Quote branch must NOT have bare `except
+    Exception` around structural_hash. Source-text invariant."""
+    import inspect
+    from helixc.ir import lower_ast
+    src = inspect.getsource(lower_ast)
+    idx = src.find("structural_hash(expr.inner)")
+    assert idx >= 0, "structural_hash call site not found in lower_ast.py"
+    window = src[idx:idx + 500]
+    assert "except (KeyError, AttributeError, TypeError, ValueError)" in window, (
+        f"lower_ast structural_hash should narrow to (KeyError, "
+        f"AttributeError, TypeError, ValueError); window: {window[:300]!r}"
+    )
+
+
 if __name__ == "__main__":
     import pytest
     raise SystemExit(pytest.main([__file__, "-v"]))

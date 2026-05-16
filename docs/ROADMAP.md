@@ -5,7 +5,7 @@ deep-research passes (2026-05-04). It's a forward-looking plan; not
 everything here will land, and priorities will shift as dogfooding
 reveals which features actually matter.
 
-## Current state (Stage 35 audit cleanup, 2026-05-15)
+## Current state (Stage 35 audit cleanup; see `docs/stage35-progress-2026-05-15.md` for the latest restart and test count)
 
 - Working from-scratch x86-64 ELF compiler
 - Forward + reverse-mode symbolic AD with chain rules for __exp, __log,
@@ -14,7 +14,7 @@ reveals which features actually matter.
 - Verifier-gated reflective-cell scaffold (64 mutable cells, real verifier
   function calls with SysV ABI; real runtime AST reflection remains future work)
 - f32/f64 reflection cells (splice_f / splice_f64 / modify_f / modify_f64)
-- 5 dogfood programs/tests running real gradient descent
+- 6 dogfood programs/tests running real gradient descent + a self-improving-agent flagship that composes them (see `helixc/examples/dogfood_*.hx` and `helixc/examples/self_improving_agent.hx`)
 - Stdlib for transcendentals auto-included
 - Stage 35 clean-gate status is tracked in docs/stage35-progress-2026-05-15.md
 

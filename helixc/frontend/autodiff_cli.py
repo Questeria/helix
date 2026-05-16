@@ -61,8 +61,11 @@ def _parse_or_exit(src: str, path: str):
             SystemExit, MemoryError):
         raise
     except Exception as e:
+        # Restart 49 B1: parse error is a SOURCE error → rc=1 (matches
+        # check.py / x86_64.py / ptx.py convention). Bad invocation is
+        # rc=2; runtime/internal errors are rc=1.
         print(f"error: autodiff_cli: parse: {path}: {e}", file=sys.stderr)
-        sys.exit(2)
+        sys.exit(1)
 
 
 def _dump_ast_hashes(path: str) -> int:
@@ -75,21 +78,30 @@ def _dump_ast_hashes(path: str) -> int:
 
 
 def main():
+    # Restart 49 B2: accept -h / --help → print docstring to stdout, exit 0
+    # (matches check.py UX convention).
+    if "-h" in sys.argv[1:] or "--help" in sys.argv[1:]:
+        print(__doc__.strip())
+        sys.exit(0)
+    # Restart 49 B1: bad invocation (no args) is rc=2 to match the convention
+    # established by check.py / x86_64.py / ptx.py.
     if len(sys.argv) < 2:
         print(__doc__.strip(), file=sys.stderr)
-        sys.exit(1)
+        sys.exit(2)
     args = [a for a in sys.argv[1:] if not a.startswith("--")]
     flags = {a for a in sys.argv[1:] if a.startswith("--")}
 
     if "--dump-ast-hashes" in flags:
         if len(args) < 1:
             print("usage: --dump-ast-hashes <file.hx>", file=sys.stderr)
-            sys.exit(1)
+            # Restart 49 B1: bad-invocation rc=2.
+            sys.exit(2)
         sys.exit(_dump_ast_hashes(args[0]))
 
     if len(sys.argv) < 3 or len(args) < 2:
         print(__doc__.strip(), file=sys.stderr)
-        sys.exit(1)
+        # Restart 49 B1: bad-invocation rc=2.
+        sys.exit(2)
 
     path = args[0]
     fn_name = args[1]
@@ -120,8 +132,11 @@ def main():
             SystemExit, MemoryError):
         raise
     except Exception as e:
+        # Restart 49 B1: differentiate runtime failures are SOURCE/INTERNAL
+        # errors → rc=1 (matches check.py / x86_64.py / ptx.py convention
+        # for internal-error exits). Bad-invocation only is rc=2.
         print(f"error: autodiff_cli: differentiate: {e}", file=sys.stderr)
-        sys.exit(2)
+        sys.exit(1)
 
     if emit_function:
         # Emit a complete Helix function definition: fn <name>__grad(...) -> ... {

@@ -798,8 +798,25 @@ if __name__ == "__main__":
         )
 
     cli_args = sys.argv[1:]
+    # Restart 49 B2 + B3: -h/--help prints a real banner to stdout and exits
+    # 0. The banner enumerates all currently-accepted flags including the
+    # restart-46 additions (-O0/-O1/-O2/-O3, --no-opt) and the restart-47
+    # additions (-l, --no-color/--color, --hash/--hash-cons). Bare-invocation
+    # also prints the banner (was missing pre-restart-49).
+    _ptx_usage_banner = (
+        "usage: python -m helixc.backend.ptx <input.hx> "
+        "[--strict] [--no-opt] [-O0|-O1|-O2|-O3] "
+        "[--stdlib] [--no-stdlib] "
+        "[-Wad=warn|error] [-Wdeprecated=warn|error] "
+        "[-l <libname>] [-l<libname>] "
+        "[--no-color] [--color] "
+        "[--hash] [--hash-cons]"
+    )
+    if "-h" in cli_args or "--help" in cli_args:
+        print(_ptx_usage_banner)
+        sys.exit(0)
     if not cli_args:
-        print("error: ptx: missing input path", file=sys.stderr)
+        print(_ptx_usage_banner, file=sys.stderr)
         sys.exit(2)
     # Restart 46 B2: accept --no-opt and -O0/-O1/-O2/-O3 for flag parity
     # with helixc.check and helixc.backend.x86_64. The PTX text emitter

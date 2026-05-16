@@ -3990,11 +3990,26 @@ if __name__ == "__main__":
         except OSError:
             pass
 
+    # Restart 49 B2 + B3: -h/--help prints the banner to stdout and exits 0;
+    # the banner enumerates all currently-accepted flags including the
+    # restart-47 additions (-l, --no-color/--color, --hash/--hash-cons) and
+    # the restart-46 additions (-O0/.../-O3, -Wdeprecated). Source of truth
+    # is this banner; if a new flag is added, update both the banner and
+    # the parser.
+    _x86_usage_banner = (
+        "usage: python -m helixc.backend.x86_64 <input.hx> <output.bin> "
+        "[--strict] [--no-opt] [-O0|-O1|-O2|-O3] "
+        "[--stdlib] [--no-stdlib] "
+        "[-Wad=warn|error] [-Wdeprecated=warn|error] "
+        "[-l <libname>] [-l<libname>] "
+        "[--no-color] [--color] "
+        "[--hash] [--hash-cons]"
+    )
+    if "-h" in sys.argv[1:] or "--help" in sys.argv[1:]:
+        print(_x86_usage_banner)
+        sys.exit(0)
     if len(sys.argv) < 3:
-        print("usage: python -m helixc.backend.x86_64 <input.hx> <output.bin> "
-              "[--strict] [--no-opt] [-O0|-O1|-O2|-O3] [--stdlib] [--no-stdlib] "
-              "[-Wad=warn|error] [-Wdeprecated=warn|error]",
-              file=sys.stderr)
+        print(_x86_usage_banner, file=sys.stderr)
         sys.exit(2)
     if sys.argv[1].startswith("-"):
         print(f"error: input: input path cannot be a flag: {sys.argv[1]}",
