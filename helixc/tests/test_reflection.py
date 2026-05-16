@@ -199,6 +199,20 @@ def test_dogfood_06_provenance_datalog():
     assert compile_and_run(src) == 42
 
 
+def test_dogfood_07_provenance_sgd():
+    # Stage 36 Increment 7 dogfood: SGD over a fuzzy-logic loss
+    # surface. The first running Helix program that LEARNS a
+    # provenance-typed parameter via gradients that flow through
+    # propositional logic. loss(w) = (fuzzy_and(0.5, w) - 0.4)^2;
+    # converges to w = 0.8 with lr=2.0 in one step. Exit 42 confirms
+    # w_rounded * 100 - 38 = 42, i.e. w ≈ 0.8.
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    p = os.path.join(proj_root, "helixc", "examples", "dogfood_07_provenance_sgd.hx")
+    with open(p) as f:
+        src = f.read()
+    assert compile_and_run(src) == 42
+
+
 def test_self_improving_agent_example():
     # Compiles and runs helixc/examples/self_improving_agent.hx — the
     # example covering reverse-mode AD, reflection, verifier gating, and

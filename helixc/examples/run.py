@@ -66,6 +66,11 @@ DEMOS: dict[str, dict] = {
         "title": "Datalog-shaped reasoning over Logic<i32> (Stage 36 Inc 4)",
         "expects": "exit code 42  (grandparent rule fires + tautology holds for both P)",
     },
+    "fuzzysgd": {
+        "file": "dogfood_07_provenance_sgd.hx",
+        "title": "SGD learns a fuzzy-logic rule via gradients-through-Logic (Stage 36 Inc 7)",
+        "expects": "exit code 42  (w converges to 0.8 from grad_rev(fuzzy_and(0.5, w) - 0.4)^2)",
+    },
 }
 
 

@@ -370,21 +370,59 @@ This is the differentiable neuro-symbolic substrate that
 distinguishes Helix from JAX/Mojo/Triton. The Tier 3 #10 strategic
 target is met.
 
-## What's left in Stage 36 (Increment 7+)
+## Increment 7 - SGD Over Fuzzy-Logic Loss Surface Dogfood (SHIPPED, 2026-05-16)
+
+Goal: end-to-end strategic demonstration of the Tier 3 #10
+capability — write a Helix program that LEARNS a provenance-typed
+parameter via gradients-through-propositional-logic.
+
+What landed: `helixc/examples/dogfood_07_provenance_sgd.hx` — the
+first running Helix program where SGD updates a fuzzy-logic weight
+using gradients computed through `fuzzy_and` + `prove` +
+`unwrap_logic`. Composition exercised:
+
+    loss(w) = (fuzzy_and(prove(0.5, 100), prove(w, 200)) - 0.4)^2
+    step:   w := w - lr * grad_rev(loss)(w)
+
+With lr=2.0 the gradient step is exact (the product rule's chain
+factor reduces to 0.5, so one step converges to w=0.8 — the
+closed-form solution since 0.5 * 0.8 = 0.4). Running 30 iterations
+confirms convergence is stable. Exit 42 iff w rounds to 0.80.
+
+Wired into:
+- `helixc/tests/test_reflection.py::test_dogfood_07_provenance_sgd`
+  (asserts compile + run → exit 42).
+- `helixc/examples/run.py` as the `fuzzysgd` demo
+  (`python -m helixc.examples.run fuzzysgd`).
+- `docs/ROADMAP.md` — Current-state bullet advanced from 6 to 7
+  dogfood programs.
+
+Strategic significance: this dogfood demonstrates the complete
+Stage 36 Tier 3 #10 capability in a single ~75-line program:
+provenance-typed values + propositional algebra + autodiff +
+mutable parameter + SGD-via-grad_rev, all running natively on
+x86-64 ELF compiled by Helix itself.
+
+Self-host gate: PASS (G2..G4 byte-identical, smoke programs all
+exit 42).
+
+## What's left in Stage 36 (Increment 8+)
 
 1. **Auto-registration of derivations** — combinators (`and_logic`,
    `or_logic`, etc.) should automatically write a derivation entry
    to the arena, so `parent_left_at(derived)` works without explicit
    `register_derivation` calls. Needs IR-level per-Logic<T> handle
-   slots.
+   slots (representation change).
 2. **Print / debug observation** — `print_provenance(l)`,
    `trace_evidence(l, depth)`. Useful but Phase-1 cosmetics.
 3. **Multi-parent provenance** — generalize the 2-tag arena entries
    to N-tag (e.g. for ternary connectives or rule-fire records).
-4. **Larger Datalog demo** — a 2nd dogfood (`dogfood_07_*`) that
-   trains a small differentiable rule system via gradient descent
-   on a propositional loss surface. Demonstrates the full strategic
-   capability.
+4. **Multi-output reverse-mode AD** — currently `grad_rev(loss, n)`
+   runs a separate AD pass per parameter index. For rule systems
+   with many learnable weights this is N× too expensive.
+5. **JAX-style pytrees** — `grad(loss)(model)` where `model` is a
+   nested struct of provenance-typed values. Required for
+   real-shape rule systems.
 
 Sketch:
 
