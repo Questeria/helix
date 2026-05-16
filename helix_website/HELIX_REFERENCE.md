@@ -955,7 +955,7 @@ Kovostov-Native/
 │   │   ├── nn.hx
 │   │   ├── option.hx
 │   │   └── autodiff.hx
-│   ├── tests/          # 2,282 tests collected in restart 23 fix verification
+│   ├── tests/          # 2,285 tests collected in restart 24 fix verification
 │   │   ├── test_codegen.py
 │   │   ├── test_parser.py
 │   │   ├── test_match.py
@@ -1084,7 +1084,7 @@ The Kovostov AGI project (which Helix is the foundation for) commits to training
 
 | Dimension | Helix | Rust |
 |-----------|-------|------|
-| Bootstrap | From 299 bytes hex | Requires LLVM, GCC |
+| Bootstrap | Live 299-byte `hex0` root; full chain target | Requires LLVM, GCC |
 | Autodiff | Built-in | External crate (`burn`, `dfdx`) |
 | GPU | PTX backend in language | External (`cudarc`, etc.) |
 | Memory model | Region/arena (Phase-0) | Borrow checker |
@@ -1096,7 +1096,7 @@ The Kovostov AGI project (which Helix is the foundation for) commits to training
 | Dimension | Helix | Mojo |
 |-----------|-------|------|
 | License | Apache 2.0, fully open | Proprietary (partial) |
-| Bootstrap | Self-hosted from hex | Closed-source binary |
+| Bootstrap | Self-host target growing from live `hex0` | Closed-source binary |
 | Tile types | First-class | First-class |
 | Autodiff | Built-in | External (uses MAX engine) |
 | Backend | x86 + PTX (planned) | x86 + GPU via MLIR |
@@ -1519,7 +1519,7 @@ Or: a single character `λ` in monospace inside a hex bracket `[λ]`. Clean, sho
 
 - **299 bytes** — current hex0 binary size
 - **Python-hosted helixc** — current production compiler implementation
-- **2,282 live tests collected** — restart 23 fix verification; rerun scoped pytest collection before publishing
+- **2,285 live tests collected** — restart 24 fix verification; rerun scoped pytest collection before publishing
 - **30+ stages** — Approach A roadmap
 - **23 silent-corruption bugs** — found and disclosed during development
 - **9 audit passes** — multi-agent code review cycles

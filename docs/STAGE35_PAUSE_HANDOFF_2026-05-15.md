@@ -12,14 +12,13 @@ Stage: 35 AI/ML Capability Push
 Clean gates after restart 21: `0/3`
 Restart 21 final commit: `c6dfb53 Fix Stage 35 twenty-first restart findings`
 
-Current status:
+Later continuation:
 
 - Restart 21 is closed.
 - Restart 22 is closed by commit `01f3d46`.
-- The latest active work is restart 23, which began from `01f3d46`.
+- Restart 23 is closed by commit `a3874b1`.
 - Any future continuation should follow `docs/stage35-progress-2026-05-15.md`
-  and the newest restart-23 audit/fix documents instead of the stale pre-reboot
-  checklist this file replaced.
+  instead of this historical pre-reboot checklist.
 
 What restart 21 closed:
 

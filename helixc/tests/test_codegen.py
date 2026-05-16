@@ -10998,6 +10998,24 @@ def test_revad_seed_rejects_invalid_index_without_corrupting_tape():
     assert code == 42, f"expected 42, got {code}"
 
 
+def test_revad_seed_rejects_index_between_count_and_capacity():
+    src = """
+    fn main() -> i32 {
+        let tape = rev_tape_new(4);
+        let x = rev_leaf(tape, 5);
+        let adj = rev_alloc_adjoints(tape);
+        let status = rev_seed(adj, 3, 99);
+        if status == (0 - 1) {
+            if rev_grad(adj, x) == 0 {
+            if rev_grad(adj, 3) == 0 { 42 } else { 7 }
+            } else { 7 }
+        } else { 7 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
 def test_revad_grad_invalid_index_returns_zero():
     src = """
     fn main() -> i32 {
@@ -11008,6 +11026,20 @@ def test_revad_grad_invalid_index_returns_zero():
         if rev_grad(adj, 0 - 1) == 0 {
             if rev_grad(adj, 9) == 0 { 42 } else { 7 }
         } else { 7 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_revad_grad_hides_index_between_count_and_capacity():
+    src = """
+    fn main() -> i32 {
+        let tape = rev_tape_new(4);
+        let x = rev_leaf(tape, 5);
+        let adj = rev_alloc_adjoints(tape);
+        __arena_set(adj + 3, 99);
+        if rev_grad(adj, 3) == 0 { 42 } else { 7 }
     }
     """
     code = compile_and_run(src)
@@ -11034,6 +11066,24 @@ def test_revad_backward_rejects_count_above_capacity_without_adj_corruption():
     assert code == 42, f"expected 42, got {code}"
 
 
+def test_revad_backward_rejects_tape_grown_after_adjoints_allocated():
+    src = """
+    fn main() -> i32 {
+        let tape = rev_tape_new(4);
+        let x = rev_leaf(tape, 5);
+        let adj = rev_alloc_adjoints(tape);
+        let y = rev_leaf(tape, 7);
+        let f = rev_add(tape, x, y);
+        let status = rev_backward(tape, adj);
+        if status == (0 - 1) {
+            if rev_grad(adj, x) == 0 { 42 } else { 7 }
+        } else { 7 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
 def test_revad_seed_rejects_corrupt_adj_cap_metadata_without_guard_write():
     src = """
     fn main() -> i32 {
@@ -11042,7 +11092,7 @@ def test_revad_seed_rejects_corrupt_adj_cap_metadata_without_guard_write():
         let adj = rev_alloc_adjoints(tape);
         let guard = __arena_len();
         __arena_push(123);
-        __arena_set(adj - 2, 2);
+        __arena_set(adj - 3, 2);
         let status = rev_seed(adj, 1, 99);
         if status == (0 - 1) {
             if __arena_get(guard) == 123 { 42 } else { __arena_get(guard) }
@@ -11061,7 +11111,7 @@ def test_revad_grad_rejects_corrupt_adj_cap_metadata_without_guard_read():
         let adj = rev_alloc_adjoints(tape);
         let guard = __arena_len();
         __arena_push(42);
-        __arena_set(adj - 2, 2);
+        __arena_set(adj - 3, 2);
         if rev_grad(adj, 1) == 0 { 42 } else { 7 }
     }
     """

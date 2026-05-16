@@ -17,7 +17,8 @@
 //   slot 1: cap       (max ops)
 //   slot 2: adj_start (arena index of adjoint array, allocated by rev_alloc_adjoints)
 // Adjoint metadata:
-//   adj_start - 2: cap
+//   adj_start - 3: cap
+//   adj_start - 2: logical count snapshotted at allocation
 //   adj_start - 1: guard = -cap - 1
 //   adj_start + cap: footer guard = -cap - 1
 //
@@ -169,8 +170,10 @@ fn rev_value_at(tape: i32, idx: i32) -> i32 {
 
 fn rev_alloc_adjoints(tape: i32) -> i32 {
     let cap = __arena_get(tape + 1);
+    let cnt = __arena_get(tape);
     let header = __arena_len();
     __arena_push(cap);
+    __arena_push(cnt);
     __arena_push(0 - cap - 1);
     let start = __arena_len();
     __arena_set(tape + 2, start);
@@ -185,21 +188,30 @@ fn rev_alloc_adjoints(tape: i32) -> i32 {
 
 @pure
 fn rev_adj_cap(adj_start: i32) -> i32 {
-    let cap = __arena_get(adj_start - 2);
+    let cap = __arena_get(adj_start - 3);
+    let cnt = __arena_get(adj_start - 2);
     let guard = __arena_get(adj_start - 1);
     if cap < 0 { 0 - 1 }
+    else { if cnt < 0 { 0 - 1 }
+    else { if cnt > cap { 0 - 1 }
     else {
     let footer = __arena_get(adj_start + cap);
     if guard == (0 - cap - 1) {
         if footer == (0 - cap - 1) { cap } else { 0 - 1 }
-    } else { 0 - 1 } }
+    } else { 0 - 1 } }}}
+}
+
+@pure
+fn rev_adj_count(adj_start: i32) -> i32 {
+    let cap = rev_adj_cap(adj_start);
+    if cap < 0 { 0 - 1 } else { __arena_get(adj_start - 2) }
 }
 
 fn rev_seed(adj_start: i32, idx: i32, seed: i32) -> i32 {
-    let cap = rev_adj_cap(adj_start);
-    if cap < 0 { 0 - 1 }
+    let cnt = rev_adj_count(adj_start);
+    if cnt < 0 { 0 - 1 }
     else { if idx < 0 { 0 - 1 }
-    else { if idx >= cap { 0 - 1 }
+    else { if idx >= cnt { 0 - 1 }
     else {
         __arena_set(adj_start + idx, seed);
         0
@@ -208,10 +220,10 @@ fn rev_seed(adj_start: i32, idx: i32, seed: i32) -> i32 {
 
 @pure
 fn rev_grad(adj_start: i32, idx: i32) -> i32 {
-    let cap = rev_adj_cap(adj_start);
-    if cap < 0 { 0 }
+    let cnt = rev_adj_count(adj_start);
+    if cnt < 0 { 0 }
     else { if idx < 0 { 0 }
-    else { if idx >= cap { 0 }
+    else { if idx >= cnt { 0 }
     else { __arena_get(adj_start + idx) }}}
 }
 
@@ -226,9 +238,11 @@ fn rev_backward(tape: i32, adj_start: i32) -> i32 {
     let cnt = __arena_get(tape);
     let cap = __arena_get(tape + 1);
     let adj_cap = rev_adj_cap(adj_start);
+    let adj_cnt = rev_adj_count(adj_start);
     if cnt < 0 { 0 - 1 }
     else { if cnt > cap { 0 - 1 }
     else { if adj_cap < 0 { 0 - 1 }
+    else { if adj_cnt < cnt { 0 - 1 }
     else { if cnt > adj_cap { 0 - 1 }
     else { if __arena_get(tape + 2) != adj_start { 0 - 1 }
     else {
@@ -312,5 +326,5 @@ fn rev_backward(tape: i32, adj_start: i32) -> i32 {
         i = i - 1;
     }
     status
-    }}}}}
+    }}}}}}
 }
