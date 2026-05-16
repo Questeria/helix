@@ -4692,3 +4692,95 @@ read + analyze + apply + commit — sidesteps the dispatch
 abbreviation entirely. Recommend restart 63 onward use the same
 combined pattern when running under scheduled-task fire conditions.
 
+
+## Increment 80 — Sixty-Third Clean-Gate Restart CLEAN (1/3) (2026-05-16)
+
+Restart 63 ran as a **combined audit-AND-fix** agent (single dispatch,
+continuing the restart 62 anti-abbreviation pattern). Fresh 3-lane
+audit on top of `e441173` (the restart 62 combined audit-and-fix HEAD).
+
+**Result: zero findings across all three lanes — FIRST CLEAN GATE.**
+Clean-gate counter advances `0/3` → `1/3`.
+
+### Lane audit at HEAD e441173
+
+- **Lane A: CLEAN (0 findings).** Frontier verified exhausted:
+  - `accuracy_count_from_logits_f32` NaN-at-col-0 guard already in place
+    (restart 61 A2, `seen = 0` sentinel pattern verified at lines
+    1011-1025 of `helixc/stdlib/nn.hx`).
+  - No new optimizer surfaces introduced since restart 62 (rmsprop /
+    adagrad / adamw / nesterov absent). The three NaN-fail-closed
+    optimizers (adam restart 50 A2, sgd restart 62 A1, momentum restart
+    62 A2) are the complete optimizer set.
+  - `__powi` (transcendentals.hx:399) is by-design pass-through for
+    NaN — caller-domain responsibility per the transcendentals
+    convention (matches `__sin`/`__cos`/`__log`/`__exp` pattern).
+  - No new `__sqrt`/`__log`/division sites introduced since
+    `c697f3d`; the only stdlib diff vs `c697f3d` is the two restart 62
+    NaN-fail-closed sites already audited.
+  - Full i32/NaN/INT_MIN sibling families verified closed in restarts
+    46-62; no missed siblings remain.
+
+- **Lane B: CLEAN (0 findings).** Sixth consecutive Lane B clean
+  window since restart 58. No Python source changes since the restart
+  61 commit (`c697f3d`); restart 62 touched only `nn.hx` + test files.
+  No new bare `except Exception` introduced.
+
+- **Lane C: CLEAN (0 findings).** All eight current-facing surfaces
+  consistent at "restart 62 combined audit-and-fix / 2,556+ tests":
+  - `README.md:31` (paragraph header)
+  - `QUICKSTART.md:21`
+  - `HANDOFF_FOR_CHATGPT.md:6` + `:231` (both agree)
+  - `HANDOFF_FOR_CLAUDE.md:7` + `:38` (status + count)
+  - `helix_website/HELIX_REFERENCE.md:1568`
+  - `helix_website/stats_and_facts.md:8` + `:14`
+  - Ledger Increment 79 is the latest before this one.
+  - All restart 61 + 62 lane audit docs exist on disk.
+
+### Verification
+
+- `python -m pytest helixc/tests --collect-only -q`
+  - Result: **2,556 tests collected** (matches surface claim exactly).
+- Git working tree clean at HEAD `e441173`.
+- No commits since `e441173`; no abbreviation debt to catch up.
+
+### Clean-gate status after restart 63
+
+- Stage 35 clean gates advance **0/3 → 1/3**.
+- Two more consecutive clean gates from this same HEAD (or any HEAD
+  that does not regress the invariants) close Stage 35.
+- Restart 64 starts from this HEAD as the second clean-gate attempt.
+
+### Restart 64 starting protocol
+
+When the next scheduled-task fire runs:
+
+1. Pull the latest `main`; verify HEAD includes Increment 80.
+2. Dispatch a combined audit-AND-fix agent (single dispatch, no
+   separate read-only / fix-apply dispatches — restart 62/63
+   anti-abbreviation pattern).
+3. If all three lanes return CLEAN: advance clean gates `1/3` → `2/3`,
+   commit a "Stage 35 restart 64 CLEAN — advance counter to 2/3"
+   entry to the ledger, push.
+4. If any lane finds an issue: apply the full fix sweep + canaries +
+   lane docs + ledger increment + surface refresh **in the same
+   commit**. Restart the clean-gate counter from `0/3`.
+
+### Frontier exhaustion note
+
+Restart 63 is the first restart in the campaign to return zero
+findings across all three lanes on a fresh audit. The audit surface
+that drove restarts 46-62 (i32-overflow sibling sweeps, NaN-skip
+sibling sweeps, INT32_MIN saturation siblings, autodiff singularity
+fail-closed, optimizer NaN-fail-closed, transcendentals range
+reduction, bare `except Exception` narrowing, surface drift) is now
+substantively closed. The remaining risk in restarts 64 + 65 is
+regression introduced by unrelated work, not residual audit debt.
+
+### Process-discipline observation
+
+Restart 63 followed the restart 62 combined audit-and-fix pattern
+exactly: single dispatch, full bookkeeping in one commit, no
+abbreviation. The pattern is now validated across two consecutive
+restarts and should remain the default through Stage 35 closure.
+
