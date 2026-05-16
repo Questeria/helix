@@ -831,9 +831,13 @@ Exit gate:
 ### Phase B: Proof and Constraint Core
 
 Stage-numbering note: this research blueprint predates the live roadmap. The
-authoritative current stage labels are in `docs/ROADMAP.md`; current Stage 35 is
-the AI/ML Capability Push in audit cleanup. The temporal/deadline/resource slice
-listed below is still important, but its older stage label is obsolete.
+authoritative current stage labels are in `docs/ROADMAP.md`; as of 2026-05-16
+Stage 35 is CLOSED (3/3 clean gates at restart 65) and Stage 36 opens next.
+Refinement types (Phase B Stage 31 here) shipped via live Stages 31 + 34;
+expanded effects and capabilities (Phase B Stage 33 here) shipped via the live
+effect system. The temporal/deadline/resource slice listed below is still
+important, but its older stage label is obsolete. Stage 36 first-deliverable
+selection is tracked in `docs/STAGE_36_STARTING_PROTOCOL.md`.
 
 Likely stages:
 

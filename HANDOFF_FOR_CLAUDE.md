@@ -119,12 +119,25 @@ allowed implicit enum→i32 conversion; the right repair is to tighten
 the user-side type annotations to the actual enum, not to weaken the
 checker.
 
-**MEDIUM / LOW findings deferred** to Stage 36 backlog: stale
-"post-Stage-30" references in HELIX_PURPOSE.md and HELIX_FINAL_PRODUCT
-_RESEARCH.md; stale codegen shard timings; split test_codegen.py
-(21,504 lines); delete `_probe_stage29_*.py`; promote Stage 36
-starting protocol out of the progress ledger; reconcile three docs
-that disagree on Stage 36 first deliverable.
+**MEDIUM / LOW findings deferred** to Stage 36 backlog:
+
+- DONE (98d8e1f) — delete `_probe_stage29_*.py` (11 files, 1,940
+  lines of dev-time bisect scripts).
+- DONE (98d8e1f) — refresh stale "post-Stage-30" doc references in
+  HELIX_PURPOSE.md and HELIX_FINAL_PRODUCT_RESEARCH.md.
+- DONE (this commit) — promote Stage 36 starting protocol out of the
+  progress ledger to `docs/STAGE_36_STARTING_PROTOCOL.md`.
+- DONE (this commit) — reconcile three-docs-disagree framing on
+  Stage 36 first deliverable. Refinement types + capability tokens
+  already shipped (Stages 31/33/34); live candidates documented in
+  STAGE_36_STARTING_PROTOCOL.md §3; provenance-typed primitives
+  recommended pending user approval.
+- DEFERRED — stale `pytest-codegen-shard-1-of-2 / 1-of-4` timing
+  JSONs in `.stage31-logs/` (unused by current 1-of-8 sharding;
+  cleanup-only, no functional impact).
+- DEFERRED — split `helixc/tests/test_codegen.py` (21,504 lines).
+  Touches every Stage 1-35 codegen test; deserves its own scoped
+  commit campaign, not a Stage 36 prep sweep.
 
 ## What Restart 64 Returned (CLEAN — gate 2/3)
 

@@ -497,7 +497,7 @@ PHASE 3 (Stages 47+, written IN HELIX):
 
 **Just completed**: Stage 35 — AI/ML Capability Push, closed at restart 65 via 3 consecutive clean audit gates. See Stage 35 progress ledger Increment 82 (`docs/stage35-progress-2026-05-15.md`) for the closure narrative.
 
-**Next major milestone**: Stage 36 first deliverable selection (provenance-typed primitives, refinement types, or capability tokens — three docs still disagree on starting point; choice should be promoted to a discoverable location and the Stage 36 starting protocol promoted out of the progress ledger).
+**Next major milestone**: Stage 36 first deliverable selection. The three-docs-disagree framing is reconciled in `docs/STAGE_36_STARTING_PROTOCOL.md` §3: refinement types and capability tokens already shipped (Stages 31/33/34), so the live candidates are provenance-typed neuro-symbolic primitives, trace-based introspection, verifier-gated self-modification, or tiered memory. Recommended first: provenance-typed primitives (ROADMAP Tier 3 #10 strategic differentiator). Pending explicit user approval before Stage 36 opens.
 
 **Then**: Stage 37+ sequencing for continuous execution, tiered memory, theorem-prover integration, and the longer v1 roadmap.
 
