@@ -231,8 +231,34 @@ fn rev_backward(tape: i32, adj_start: i32) -> i32 {
     else { if adj_cap < 0 { 0 - 1 }
     else { if cnt > adj_cap { 0 - 1 }
     else {
-    let mut i: i32 = cnt - 1;
+    let mut check_i: i32 = cnt - 1;
     let mut status: i32 = 0;
+    while check_i >= 0 {
+        if status == 0 {
+            let check_off = tape + 3 + check_i * 4;
+            let check_kind = __arena_get(check_off);
+            let check_in1 = __arena_get(check_off + 1);
+            let check_in2 = __arena_get(check_off + 2);
+            if check_kind == 0 {
+                status = 0;
+            } else { if check_kind == 1 {
+                if rev_valid_index(tape, check_in1) == 0 { status = 0 - 1; }
+                else { if rev_valid_index(tape, check_in2) == 0 { status = 0 - 1; } }
+            } else { if check_kind == 2 {
+                if rev_valid_index(tape, check_in1) == 0 { status = 0 - 1; }
+                else { if rev_valid_index(tape, check_in2) == 0 { status = 0 - 1; } }
+            } else { if check_kind == 3 {
+                if rev_valid_index(tape, check_in1) == 0 { status = 0 - 1; }
+                else { if rev_valid_index(tape, check_in2) == 0 { status = 0 - 1; } }
+            } else { if check_kind == 4 {
+                if rev_valid_index(tape, check_in1) == 0 { status = 0 - 1; }
+            } else {
+                status = 0 - 1;
+            }}}}};
+        };
+        check_i = check_i - 1;
+    }
+    let mut i: i32 = cnt - 1;
     while i >= 0 {
         if status == 0 {
             let off = tape + 3 + i * 4;

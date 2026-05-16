@@ -9261,12 +9261,12 @@ def test_nn_softmax_rows_f32_sums_each_row():
     """Row-wise softmax turns each logits row into probabilities summing to 1."""
     src = """
     fn main() -> i32 {
-        let logits = t1d_new(4);
+        let logits = tf2d_zeros(2, 2);
         tf1d_set(logits, 0, 0.0_f32);
         tf1d_set(logits, 1, 0.0_f32);
         tf1d_set(logits, 2, 1.0_f32);
         tf1d_set(logits, 3, 2.0_f32);
-        let probs = t1d_new(4);
+        let probs = tf2d_zeros(2, 2);
         softmax_rows_f32(logits, probs, 2, 2);
         let row0 = __f32_from_bits(__arena_get(probs))
             + __f32_from_bits(__arena_get(probs + 1));
@@ -9283,7 +9283,7 @@ def test_nn_argmax_rows_f32():
     """Two rows of logits -> predicted classes [1,2]. 1*20 + 2*11 = 42."""
     src = """
     fn main() -> i32 {
-        let logits = t1d_new(6);
+        let logits = tf2d_zeros(2, 3);
         tf1d_set(logits, 0, 0.1_f32);
         tf1d_set(logits, 1, 0.9_f32);
         tf1d_set(logits, 2, 0.2_f32);
@@ -9303,7 +9303,7 @@ def test_nn_accuracy_count_from_logits_f32():
     """Two logits rows, one target match. count=1; *42=42."""
     src = """
     fn main() -> i32 {
-        let logits = t1d_new(6);
+        let logits = tf2d_zeros(2, 3);
         tf1d_set(logits, 0, 0.1_f32);
         tf1d_set(logits, 1, 0.9_f32);
         tf1d_set(logits, 2, 0.2_f32);
@@ -9324,7 +9324,7 @@ def test_nn_ce_loss_batch_f32_one_hot_is_zero():
     """One-hot correct probabilities have batch CE 0; +42=42."""
     src = """
     fn main() -> i32 {
-        let probs = t1d_new(6);
+        let probs = tf2d_zeros(2, 3);
         tf1d_set(probs, 0, 0.0_f32);
         tf1d_set(probs, 1, 1.0_f32);
         tf1d_set(probs, 2, 0.0_f32);
@@ -9348,12 +9348,12 @@ def test_nn_ce_loss_batch_f32_regular_probabilities():
         let target = t1d_new(1);
         __arena_set(target, 0);
 
-        let p_half = t1d_new(2);
+        let p_half = tf2d_zeros(1, 2);
         tf1d_set(p_half, 0, 0.5_f32);
         tf1d_set(p_half, 1, 0.5_f32);
         let loss_half = ce_loss_batch_f32(p_half, target, 1, 2);
 
-        let p_tenth = t1d_new(2);
+        let p_tenth = tf2d_zeros(1, 2);
         tf1d_set(p_tenth, 0, 0.1_f32);
         tf1d_set(p_tenth, 1, 0.9_f32);
         let loss_tenth = ce_loss_batch_f32(p_tenth, target, 1, 2);
@@ -9371,7 +9371,7 @@ def test_nn_ce_loss_batch_f32_rejects_invalid_label():
     """Invalid labels should return a loud sentinel instead of reading past row."""
     src = """
     fn main() -> i32 {
-        let probs = t1d_new(2);
+        let probs = tf2d_zeros(1, 2);
         tf1d_set(probs, 0, 0.1_f32);
         tf1d_set(probs, 1, 0.9_f32);
         let target = t1d_new(1);
@@ -9388,7 +9388,7 @@ def test_nn_ce_loss_batch_f32_invalid_label_not_averaged_down():
     """Invalid labels stay sentinel-grade even in multi-row batches."""
     src = """
     fn main() -> i32 {
-        let probs = t1d_new(4);
+        let probs = tf2d_zeros(2, 2);
         tf1d_set(probs, 0, 0.9_f32);
         tf1d_set(probs, 1, 0.1_f32);
         tf1d_set(probs, 2, 0.1_f32);
@@ -9421,7 +9421,7 @@ def test_nn_softmax_ce_grad_f32():
     """For two balanced rows, softmax CE gradients have total abs sum 1."""
     src = """
     fn main() -> i32 {
-        let probs = t1d_new(4);
+        let probs = tf2d_zeros(2, 2);
         tf1d_set(probs, 0, 0.5_f32);
         tf1d_set(probs, 1, 0.5_f32);
         tf1d_set(probs, 2, 0.5_f32);
@@ -9429,7 +9429,7 @@ def test_nn_softmax_ce_grad_f32():
         let target = t1d_new(2);
         __arena_set(target, 0);
         __arena_set(target + 1, 1);
-        let gout = t1d_new(4);
+        let gout = tf2d_zeros(2, 2);
         let status = softmax_ce_grad_f32(probs, target, gout, 2, 2);
         let total =
             __abs(__f32_from_bits(__arena_get(gout)))
@@ -9447,12 +9447,12 @@ def test_nn_softmax_ce_grad_f32_rejects_invalid_label():
     """Invalid softmax-CE labels return the Stage 35 sentinel status."""
     src = """
     fn main() -> i32 {
-        let probs = t1d_new(2);
+        let probs = tf2d_zeros(1, 2);
         tf1d_set(probs, 0, 0.5_f32);
         tf1d_set(probs, 1, 0.5_f32);
         let target = t1d_new(1);
         __arena_set(target, 2);
-        let gout = t1d_new(2);
+        let gout = tf2d_zeros(1, 2);
         softmax_ce_grad_f32(probs, target, gout, 1, 2) - 34959
     }
     """
@@ -9464,7 +9464,7 @@ def test_nn_softmax_ce_grad_f32_invalid_batch_does_not_partially_mutate():
     """Mixed valid/invalid batches fail before writing any gradient rows."""
     src = """
     fn main() -> i32 {
-        let probs = t1d_new(4);
+        let probs = tf2d_zeros(2, 2);
         tf1d_set(probs, 0, 0.5_f32);
         tf1d_set(probs, 1, 0.5_f32);
         tf1d_set(probs, 2, 0.5_f32);
@@ -9472,7 +9472,7 @@ def test_nn_softmax_ce_grad_f32_invalid_batch_does_not_partially_mutate():
         let target = t1d_new(2);
         __arena_set(target, 0);
         __arena_set(target + 1, 2);
-        let gout = t1d_new(4);
+        let gout = tf2d_zeros(2, 2);
         tf1d_set(gout, 0, 9.0_f32);
         tf1d_set(gout, 1, 9.0_f32);
         tf1d_set(gout, 2, 9.0_f32);
@@ -9489,7 +9489,7 @@ def test_nn_dense_classifier_sgd_step_f32_one_sample():
     """One balanced 2-class sample updates correct-class weights upward."""
     src = """
     fn main() -> i32 {
-        let w = t1d_new(4);
+        let w = tf2d_zeros(2, 2);
         tf1d_set(w, 0, 0.0_f32); tf1d_set(w, 1, 0.0_f32);
         tf1d_set(w, 2, 0.0_f32); tf1d_set(w, 3, 0.0_f32);
         let b = t1d_new(2);
@@ -9517,7 +9517,7 @@ def test_nn_dense_classifier_sgd_step_f32_rejects_invalid_label():
     """Dense classifier step should reject labels outside [0, classes)."""
     src = """
     fn main() -> i32 {
-        let w = t1d_new(4);
+        let w = tf2d_zeros(2, 2);
         let b = t1d_new(2);
         let x = t1d_new(2);
         let scratch = t1d_new(10);
@@ -9536,7 +9536,7 @@ def test_nn_dense_classifier_sgd_step_f32_rejects_invalid_shape():
     """Dense classifier step should reject invalid model shapes loudly."""
     src = """
     fn main() -> i32 {
-        let w = t1d_new(4);
+        let w = tf2d_zeros(2, 2);
         let b = t1d_new(2);
         let x = t1d_new(2);
         let scratch = t1d_new(3);
@@ -9555,7 +9555,7 @@ def test_nn_dense_classifier_sgd_step_f32_does_not_clobber_small_scratch():
     """Classifier step must not trust undersized caller scratch space."""
     src = """
     fn main() -> i32 {
-        let w = t1d_new(4);
+        let w = tf2d_zeros(2, 2);
         tf1d_set(w, 0, 0.0_f32); tf1d_set(w, 1, 0.0_f32);
         tf1d_set(w, 2, 0.0_f32); tf1d_set(w, 3, 0.0_f32);
         let b = t1d_new(2);
@@ -9581,7 +9581,7 @@ def test_nn_dense_classifier_sgd_step_f32_reuses_scratch_without_arena_growth():
     """Adequate caller scratch should be reused across repeated training steps."""
     src = """
     fn main() -> i32 {
-        let w = t1d_new(4);
+        let w = tf2d_zeros(2, 2);
         tf1d_set(w, 0, 0.0_f32); tf1d_set(w, 1, 0.0_f32);
         tf1d_set(w, 2, 0.0_f32); tf1d_set(w, 3, 0.0_f32);
         let b = t1d_new(2);
@@ -9916,7 +9916,7 @@ def test_nn_dense_classifier_sgd_step_f32_leaves_scratch_unchanged():
     """Classifier step no longer uses the scratch handle at all."""
     src = """
     fn main() -> i32 {
-        let w = t1d_new(4);
+        let w = tf2d_zeros(2, 2);
         tf1d_set(w, 0, 0.0_f32); tf1d_set(w, 1, 0.0_f32);
         tf1d_set(w, 2, 0.0_f32); tf1d_set(w, 3, 0.0_f32);
         let b = t1d_new(2);
@@ -9970,7 +9970,7 @@ def test_nn_dense_layer_f32_grad_w():
         let x = t1d_new(2);
         tf1d_set(x, 0, 5.0_f32);
         tf1d_set(x, 1, 7.0_f32);
-        let gw = t1d_new(4);
+        let gw = tf2d_zeros(2, 2);
         dense_layer_f32_grad_w(dy, x, gw, 2, 2);
         (tf1d_sum(gw, 4) as i32) - 18
     }
@@ -9999,7 +9999,7 @@ def test_nn_dense_layer_f32_grad_x():
     """W=[[1,2],[3,4]], dy=[5,7] -> grad_x=[26,38], sum=64; -22=42."""
     src = """
     fn main() -> i32 {
-        let w = t1d_new(4);
+        let w = tf2d_zeros(2, 2);
         tf1d_set(w, 0, 1.0_f32);
         tf1d_set(w, 1, 2.0_f32);
         tf1d_set(w, 2, 3.0_f32);
@@ -10899,6 +10899,28 @@ def test_revad_backward_rejects_corrupt_operand_index():
     assert code == 42, f"expected 42, got {code}"
 
 
+def test_revad_backward_prevalidates_before_adj_mutation():
+    src = """
+    fn main() -> i32 {
+        let tape = rev_tape_new(6);
+        let x = rev_leaf(tape, 5);
+        let y = rev_leaf(tape, 7);
+        let m = rev_mul(tape, x, y);
+        let f = rev_add(tape, m, y);
+        __arena_set(tape + 3 + m * 4 + 1, 0 - 1);
+        let adj = rev_alloc_adjoints(tape);
+        rev_seed(adj, f, 1);
+        let status = rev_backward(tape, adj);
+        if status == (0 - 1) {
+        if rev_grad(adj, m) == 0 {
+        if rev_grad(adj, y) == 0 { 42 } else { 7 }
+        } else { 7 }} else { 7 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
 def test_revad_seed_rejects_invalid_index_without_corrupting_tape():
     src = """
     fn main() -> i32 {
@@ -11164,6 +11186,30 @@ def test_stage35_2d_accessors_reject_row_oob_offsets():
             if (tf2d_get(mf, 1, 1, 0) as i32) == 0 { 42 } else { 7 }
             } else { 7 }
         } else { 7 }} else { 7 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stage35_2d_helpers_reject_shape_metadata_mismatch():
+    src = """
+    fn main() -> i32 {
+        let m = tf2d_zeros(1, 1);
+        tf2d_set(m, 1, 0, 0, 2.0_f32);
+        let guard = tf1d_zeros(1);
+        tf1d_set(guard, 0, 40.0_f32);
+        let dst = tf1d_zeros(1);
+        tf2d_row_sum(m, 1, 2, dst);
+        if (tf1d_get(dst, 0) as i32) == 0 {
+        if (tf1d_get(guard, 0) as i32) == 40 {
+            let a = tf2d_zeros(1, 1);
+            let b = tf2d_zeros(1, 1);
+            let c = tf2d_zeros(1, 1);
+            tf2d_set(c, 1, 0, 0, 7.0_f32);
+            tf2d_matmul(a, 1, 2, b, 1, c);
+            if (tf2d_get(c, 1, 0, 0) as i32) == 7 { 42 } else { 6 }
+        } else { 5 }} else { 4 }
     }
     """
     code = compile_and_run(src)

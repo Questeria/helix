@@ -242,6 +242,51 @@ def test_grad_through_silu():
     assert compile_and_run(src) == 42
 
 
+def test_forward_grad_through_gelu():
+    src = """
+    @pure fn loss(x: f32) -> f32 { __gelu(x) }
+    fn main() -> i32 {
+        let g = grad(loss)(0.0);
+        ((g * 84.0) as i32)
+    }
+    """
+    assert compile_and_run(src) == 42
+
+
+def test_grad_through_gelu():
+    src = """
+    @pure fn loss(x: f32) -> f32 { __gelu(x) }
+    fn main() -> i32 {
+        let g = grad_rev(loss)(0.0);
+        ((g * 84.0) as i32)
+    }
+    """
+    assert compile_and_run(src) == 42
+
+
+def test_forward_grad_through_bce_loss_scalar():
+    src = """
+    @pure fn loss(p: f32) -> f32 { bce_loss_scalar(p, 1.0) }
+    fn main() -> i32 {
+        let g = grad(loss)(0.5);
+        (((0.0 - g) * 21.0) as i32)
+    }
+    """
+    assert compile_and_run(src) == 42
+
+
+def test_grad_rev_all_through_bce():
+    src = """
+    @pure fn loss(p: f32, y: f32) -> f32 { __bce(p, y) }
+    fn main() -> i32 {
+        grad_rev_all(loss)(0.5, 1.0, 0);
+        let gp = splice_f(quote(0));
+        (((0.0 - gp) * 21.0) as i32)
+    }
+    """
+    assert compile_and_run(src) == 42
+
+
 def test_grad_through_abs_positive():
     # d(abs(x)) at x=5 = 1; +41 = 42
     src = """

@@ -855,7 +855,7 @@ The trust root of Helix is **299 bytes of hand-encoded x86-64 machine code**: `h
 
 ```
                     ┌─────────────────┐
-                    │  hex0 (120 B)   │  hand-encoded; "0123456789ABCDEF" + space
+                    │  hex0 (299 B)   │  hand-encoded; "0123456789ABCDEF" + space
                     └────────┬────────┘
                              │ compiles
                              ▼
@@ -942,7 +942,7 @@ Kovostov-Native/
 │   │   ├── nn.hx
 │   │   ├── option.hx
 │   │   └── autodiff.hx
-│   ├── tests/          # 1000+ tests
+│   ├── tests/          # 2,264 tests collected in restart 21 fix verification
 │   │   ├── test_codegen.py
 │   │   ├── test_parser.py
 │   │   ├── test_match.py
@@ -1441,7 +1441,7 @@ Or: a single character `λ` in monospace inside a hex bracket `[λ]`. Clean, sho
 │                                                             │
 │   Built from 299 bytes toward a self-hosted compiler        │
 │   ┌───────────────────────────────────────────────────┐     │
-│   │ ▓ 120 ▓▓▓ 700 ▓▓▓▓▓ 3K ▓▓▓▓▓▓▓ 8K ▓▓▓▓▓▓▓▓▓ 30K  │     │
+│   │ ▓ 299 ▓▓▓ 700 ▓▓▓▓▓ 3K ▓▓▓▓▓▓▓ 8K ▓▓▓▓▓▓▓▓▓ 30K  │     │
 │   └───────────────────────────────────────────────────┘     │
 └─────────────────────────────────────────────────────────────┘
 ```
@@ -1501,7 +1501,7 @@ Or: a single character `λ` in monospace inside a hex bracket `[λ]`. Clean, sho
 
 - **299 bytes** — current hex0 binary size
 - **Python-hosted helixc** — current production compiler implementation
-- **2,254 live tests collected** — restart 19 fix-sweep snapshot; rerun scoped pytest collection before publishing
+- **2,264 live tests collected** — restart 21 fix verification; rerun scoped pytest collection before publishing
 - **30+ stages** — Approach A roadmap
 - **23 silent-corruption bugs** — found and disclosed during development
 - **9 audit passes** — multi-agent code review cycles

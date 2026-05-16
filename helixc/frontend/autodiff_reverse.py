@@ -210,6 +210,50 @@ def _propagate(node: A.Expr, adj: A.Expr, acc: dict[str, list[A.Expr]]) -> None:
             )
             _propagate(x, new_adj, acc)
             return
+        if (isinstance(node.callee, A.Name) and node.callee.name == "__bce"
+                and len(node.args) == 2):
+            p = node.args[0]
+            y = node.args[1]
+
+            def f(v: float) -> A.FloatLit:
+                return A.FloatLit(span=node.span, value=v)
+
+            def binary(op: str, a: A.Expr, b: A.Expr) -> A.Binary:
+                return A.Binary(span=node.span, op=op, left=a, right=b)
+
+            def calln(fn: str, args: list[A.Expr]) -> A.Call:
+                return A.Call(span=node.span,
+                              callee=A.Name(span=node.span, name=fn),
+                              args=args)
+
+            p_safe = calln("__clamp", [copy.deepcopy(p), f(0.000001), f(0.999999)])
+            denom = binary("*", copy.deepcopy(p_safe),
+                           binary("-", f(1.0), copy.deepcopy(p_safe)))
+            raw_dp = binary("/", binary("-", copy.deepcopy(p_safe),
+                                        copy.deepcopy(y)), denom)
+            cond_lo = binary("<", copy.deepcopy(p), f(0.000001))
+            cond_hi = binary(">", copy.deepcopy(p), f(0.999999))
+            gated_hi = A.If(
+                span=node.span,
+                cond=cond_hi,
+                then=A.Block(span=node.span, stmts=[], final_expr=f(0.0)),
+                else_=A.Block(span=node.span, stmts=[], final_expr=raw_dp),
+            )
+            deriv_p = A.If(
+                span=node.span,
+                cond=cond_lo,
+                then=A.Block(span=node.span, stmts=[], final_expr=f(0.0)),
+                else_=A.Block(span=node.span, stmts=[], final_expr=gated_hi),
+            )
+            log_one_minus = calln(
+                "__log_stable",
+                [binary("-", f(1.0), copy.deepcopy(p_safe))],
+            )
+            log_p = calln("__log_stable", [copy.deepcopy(p_safe)])
+            deriv_y = binary("-", log_one_minus, log_p)
+            _propagate(p, binary("*", adj, deriv_p), acc)
+            _propagate(y, binary("*", copy.deepcopy(adj), deriv_y), acc)
+            return
         # Chain rule for known transcendentals: propagate adj * f'(u) into u.
         if (isinstance(node.callee, A.Name) and len(node.args) == 1):
             name = node.callee.name
@@ -323,6 +367,73 @@ def _propagate(node: A.Expr, adj: A.Expr, acc: dict[str, list[A.Expr]]) -> None:
                 deriv = A.Binary(span=node.span, op="*", left=s1, right=inner)
                 new_adj = A.Binary(span=node.span, op="*", left=adj,
                                    right=deriv)
+                _propagate(u, new_adj, acc)
+                return
+            if name == "__gelu":
+                # Tanh-approx GELU derivative:
+                # 0.5*(1+tanh(inner)) + 0.5*u*(1-tanh(inner)^2)*inner'
+                x2 = A.Binary(span=node.span, op="*",
+                              left=copy.deepcopy(u), right=copy.deepcopy(u))
+                x3 = A.Binary(span=node.span, op="*", left=copy.deepcopy(x2),
+                              right=copy.deepcopy(u))
+                inner_arg = A.Binary(
+                    span=node.span,
+                    op="+",
+                    left=copy.deepcopy(u),
+                    right=A.Binary(span=node.span, op="*",
+                                   left=A.FloatLit(span=node.span, value=0.044715),
+                                   right=x3),
+                )
+                inner = A.Binary(
+                    span=node.span,
+                    op="*",
+                    left=A.FloatLit(span=node.span, value=0.7978846),
+                    right=inner_arg,
+                )
+                t1 = call1("__tanh", copy.deepcopy(inner))
+                t2 = call1("__tanh", copy.deepcopy(inner))
+                first = A.Binary(
+                    span=node.span,
+                    op="*",
+                    left=A.FloatLit(span=node.span, value=0.5),
+                    right=A.Binary(span=node.span, op="+",
+                                   left=A.FloatLit(span=node.span, value=1.0),
+                                   right=t1),
+                )
+                one_minus_t2 = A.Binary(
+                    span=node.span,
+                    op="-",
+                    left=A.FloatLit(span=node.span, value=1.0),
+                    right=A.Binary(span=node.span, op="*", left=t2,
+                                   right=call1("__tanh", copy.deepcopy(inner))),
+                )
+                inner_prime = A.Binary(
+                    span=node.span,
+                    op="*",
+                    left=A.FloatLit(span=node.span, value=0.7978846),
+                    right=A.Binary(
+                        span=node.span,
+                        op="+",
+                        left=A.FloatLit(span=node.span, value=1.0),
+                        right=A.Binary(
+                            span=node.span,
+                            op="*",
+                            left=A.FloatLit(span=node.span, value=0.134145),
+                            right=x2,
+                        ),
+                    ),
+                )
+                second = A.Binary(
+                    span=node.span,
+                    op="*",
+                    left=A.Binary(span=node.span, op="*",
+                                  left=A.FloatLit(span=node.span, value=0.5),
+                                  right=copy.deepcopy(u)),
+                    right=A.Binary(span=node.span, op="*", left=one_minus_t2,
+                                   right=inner_prime),
+                )
+                deriv = A.Binary(span=node.span, op="+", left=first, right=second)
+                new_adj = A.Binary(span=node.span, op="*", left=adj, right=deriv)
                 _propagate(u, new_adj, acc)
                 return
             if name == "__abs":

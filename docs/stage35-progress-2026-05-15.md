@@ -1400,6 +1400,56 @@ Clean-gate status:
 - Stage 35 clean gates remain `0/3`.
 - Next step is another fresh Stage 35 clean gate on this fixed commit.
 
+## Increment 40 - Twenty-First Clean-Gate Restart Fix Sweep
+
+Restart 21 began from commit `c6273a9` with green smoke checks and supporting
+regression slices, but Lane A and Lane C found remaining issues. Lane B did not
+produce a completed PTX finding packet before the restart-21 fix sweep began, so
+restart 22 must include a fresh PTX lane. The gate did not count as clean and
+remains at `0/3`.
+
+Fixes landed in this increment:
+
+- Higher-level 2D, matrix, and NN helpers now require matching 2D arena metadata
+  before treating a flat buffer as a matrix, closing the gap left after direct
+  accessor row/column checks were added.
+- `rev_backward` now pre-validates the full reverse-AD tape before mutating
+  adjoints, so corrupt later tape entries cannot leave partial backward-state
+  changes behind.
+- Forward-mode and reverse-mode AD now have analytic chain rules for `__gelu`.
+- `bce_loss_scalar` now routes through AD-known `__bce`, and forward/reverse AD
+  chain rules cover BCE gradients directly.
+- Public docs and website draft status surfaces now reflect the restart-21 fix
+  verification count and the current 299-byte hex0 value.
+
+Focused verification:
+
+- Per-file stdlib parser sweep across `helixc/stdlib/*.hx`
+  - Result: parsed 16 stdlib files.
+- `python -m py_compile helixc\frontend\autodiff.py helixc\frontend\autodiff_reverse.py`
+  - Result: passed.
+- `python -m pytest helixc/tests/test_codegen.py -k "stage35_2d_helpers_reject_shape_metadata_mismatch or revad_backward_prevalidates_before_adj_mutation" -q`
+  - Result: 2 passed.
+- `python -m pytest helixc/tests/test_transcendentals.py -k "gelu or bce" -q`
+  - Result: 4 passed.
+- `python -m pytest helixc/tests/test_transcendentals.py helixc/tests/test_autodiff.py helixc/tests/test_autodiff_reverse.py -q`
+  - Result: 97 passed.
+- `python -m pytest helixc/tests/test_codegen.py -k "softmax_rows_f32 or argmax_rows_f32 or accuracy_count_from_logits_f32 or ce_loss_batch_f32 or softmax_ce_grad_f32 or dense_classifier_sgd_step_f32 or dense_layer_f32_grad_w or dense_layer_f32_grad_x" -q`
+  - Result: 19 passed.
+- `python -m pytest helixc/tests/test_codegen.py -k "t1d or t2d or ti2d or tf2d or tensor or stage35_2d or nn_ or dense_layer or softmax_rows_f32 or softmax_ce_grad_f32 or argmax_rows_f32 or accuracy_count_from_logits_f32 or ce_loss_batch_f32 or bce or gelu or revad" -q`
+  - Result: 122 passed.
+- `python -m pytest helixc/tests/test_cli.py -q`
+  - Result: 156 passed.
+- `python -m pytest helixc/tests/test_ptx.py -q`
+  - Result: 72 passed.
+- `python -m pytest helixc/tests --collect-only -q -p no:cacheprovider`
+  - Result: 2,264 tests collected.
+
+Clean-gate status:
+
+- Stage 35 clean gates remain `0/3`.
+- Next step is another fresh Stage 35 clean gate on this fixed commit.
+
 ## Next Work
 
 Likely follow-up slices:

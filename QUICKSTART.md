@@ -15,7 +15,7 @@ ELF (`stage0/hex0/hex0.bin`) and builds itself up.
 
 This is an early in-development language. Stage 35 is currently in audit
 cleanup, and clean gates remain `0/3` in the Stage 35 progress ledger. Restart
-19 collected 2,254 live `helixc/tests` pytest tests; run
+21 fix verification collected 2,264 live `helixc/tests` pytest tests; run
 `python -m pytest helixc/tests --collect-only -q -p no:cacheprovider` for the
 current count.
 

@@ -17,7 +17,7 @@
 //   t1d_axpy(y_start, a, x_start, n) -> i32  y[i] += a*x[i]; returns 0
 //
 // API (2D, f32, row-major):
-//   t2d_new(rows, cols)         -> i32   reserve rows*cols slots
+//   t2d_new(rows, cols)         -> i32   reserve rows*cols data slots
 //   t2d_set(start, cols, i, j, x) -> i32  M[i,j] = x
 //   t2d_get(start, cols, i, j)  -> f32   M[i,j]
 //   t2d_matvec(W_start, W_rows, W_cols, x_start, y_start) -> i32
@@ -89,6 +89,14 @@
         let linear = i * cols + j;
         if linear > 2147483647 - start { 0 - 1 } else { start + linear }
     }}}}}}}}}}}
+}
+
+@pure fn t2d_shape_ok(start: i32, rows: i32, cols: i32) -> i32 {
+    if t2d_len(rows, cols) == 0 { 0 }
+    else { if start < 3 { 0 }
+    else { if __arena_get(start - 3) != t2d_magic() { 0 }
+    else { if __arena_get(start - 2) != rows { 0 }
+    else { if __arena_get(start - 1) != cols { 0 } else { 1 } }}}}
 }
 
 fn t1d_set_i32_bits(start: i32, i: i32, bits: i32) -> i32 {
@@ -168,6 +176,7 @@ fn ti2d_matvec(w_start: i32, w_rows: i32, w_cols: i32,
     if w_rows <= 0 { 0 }
     else { if w_cols <= 0 { 0 }
     else { if t2d_len(w_rows, w_cols) == 0 { 0 }
+    else { if t2d_shape_ok(w_start, w_rows, w_cols) == 0 { 0 }
     else {
     let mut r: i32 = 0;
     while r < w_rows {
@@ -181,7 +190,7 @@ fn ti2d_matvec(w_start: i32, w_rows: i32, w_cols: i32,
         r = r + 1;
     }
     0
-    }}}
+    }}}}
 }
 
 // Element-wise: y[i] = relu(x[i]) for i in [0, n). Integer relu.
@@ -313,6 +322,7 @@ fn tf2d_matvec(w_start: i32, w_rows: i32, w_cols: i32,
     if w_rows <= 0 { 0 }
     else { if w_cols <= 0 { 0 }
     else { if t2d_len(w_rows, w_cols) == 0 { 0 }
+    else { if t2d_shape_ok(w_start, w_rows, w_cols) == 0 { 0 }
     else {
     let mut r: i32 = 0;
     while r < w_rows {
@@ -328,7 +338,7 @@ fn tf2d_matvec(w_start: i32, w_rows: i32, w_cols: i32,
         r = r + 1;
     }
     0
-    }}}
+    }}}}
 }
 
 // =========================================================================
@@ -436,6 +446,9 @@ fn ti2d_matmul(a_start: i32, a_rows: i32, a_cols: i32,
     else { if t2d_len(a_rows, a_cols) == 0 { 0 }
     else { if t2d_len(a_cols, b_cols) == 0 { 0 }
     else { if t2d_len(a_rows, b_cols) == 0 { 0 }
+    else { if t2d_shape_ok(a_start, a_rows, a_cols) == 0 { 0 }
+    else { if t2d_shape_ok(b_start, a_cols, b_cols) == 0 { 0 }
+    else { if t2d_shape_ok(c_start, a_rows, b_cols) == 0 { 0 }
     else {
     let mut r: i32 = 0;
     while r < a_rows {
@@ -455,7 +468,7 @@ fn ti2d_matmul(a_start: i32, a_rows: i32, a_cols: i32,
         r = r + 1;
     }
     0
-    }}}}}}
+    }}}}}}}}}
 }
 
 // Reshape: copy n elements from src to dst. (For row-major tensors a
@@ -603,6 +616,9 @@ fn tf2d_matmul(a_start: i32, a_rows: i32, a_cols: i32,
     else { if t2d_len(a_rows, a_cols) == 0 { 0 }
     else { if t2d_len(a_cols, b_cols) == 0 { 0 }
     else { if t2d_len(a_rows, b_cols) == 0 { 0 }
+    else { if t2d_shape_ok(a_start, a_rows, a_cols) == 0 { 0 }
+    else { if t2d_shape_ok(b_start, a_cols, b_cols) == 0 { 0 }
+    else { if t2d_shape_ok(c_start, a_rows, b_cols) == 0 { 0 }
     else {
     let mut r: i32 = 0;
     while r < a_rows {
@@ -622,7 +638,7 @@ fn tf2d_matmul(a_start: i32, a_rows: i32, a_cols: i32,
         r = r + 1;
     }
     0
-    }}}}}}
+    }}}}}}}}}
 }
 
 
@@ -650,6 +666,8 @@ fn ti2d_transpose(src: i32, rows: i32, cols: i32, dst: i32) -> i32 {
     if rows <= 0 { 0 }
     else { if cols <= 0 { 0 }
     else { if t2d_len(rows, cols) == 0 { 0 }
+    else { if t2d_shape_ok(src, rows, cols) == 0 { 0 }
+    else { if t2d_shape_ok(dst, cols, rows) == 0 { 0 }
     else {
     let mut r: i32 = 0;
     while r < rows {
@@ -661,7 +679,7 @@ fn ti2d_transpose(src: i32, rows: i32, cols: i32, dst: i32) -> i32 {
         r = r + 1;
     }
     0
-    }}}
+    }}}}}
 }
 
 // ti1d_clamp(x, lo, hi, dst, n): elementwise clamp each x[i] into
@@ -747,6 +765,8 @@ fn tf2d_transpose(src: i32, rows: i32, cols: i32, dst: i32) -> i32 {
     if rows <= 0 { 0 }
     else { if cols <= 0 { 0 }
     else { if t2d_len(rows, cols) == 0 { 0 }
+    else { if t2d_shape_ok(src, rows, cols) == 0 { 0 }
+    else { if t2d_shape_ok(dst, cols, rows) == 0 { 0 }
     else {
     let mut r: i32 = 0;
     while r < rows {
@@ -758,7 +778,7 @@ fn tf2d_transpose(src: i32, rows: i32, cols: i32, dst: i32) -> i32 {
         r = r + 1;
     }
     0
-    }}}
+    }}}}}
 }
 
 // tf1d_clamp(x, lo, hi, dst, n): elementwise clamp each x[i] into [lo, hi].
@@ -838,6 +858,9 @@ fn tf1d_scale_inplace(start: i32, n: i32, scalar: f32) -> i32 {
 // three matrices share row-major layout with `cols` columns.
 fn tf2d_add(a: i32, b: i32, c: i32, rows: i32, cols: i32) -> i32 {
     let n = t2d_len(rows, cols);
+    if t2d_shape_ok(a, rows, cols) == 0 { 0 }
+    else { if t2d_shape_ok(b, rows, cols) == 0 { 0 }
+    else { if t2d_shape_ok(c, rows, cols) == 0 { 0 } else {
     let mut i: i32 = 0;
     while i < n {
         let av = __f32_from_bits(__arena_get(a + i));
@@ -846,12 +869,14 @@ fn tf2d_add(a: i32, b: i32, c: i32, rows: i32, cols: i32) -> i32 {
         i = i + 1;
     }
     0
+    }}}
 }
 
 // tf2d_scale_inplace(start, rows, cols, scalar): multiply every element
 // of the 2D matrix in place by scalar.
 fn tf2d_scale_inplace(start: i32, rows: i32, cols: i32, scalar: f32) -> i32 {
     let n = t2d_len(rows, cols);
+    if t2d_shape_ok(start, rows, cols) == 0 { 0 } else {
     let mut i: i32 = 0;
     while i < n {
         let v = __f32_from_bits(__arena_get(start + i));
@@ -859,6 +884,7 @@ fn tf2d_scale_inplace(start: i32, rows: i32, cols: i32, scalar: f32) -> i32 {
         i = i + 1;
     }
     0
+    }
 }
 
 // tf1d_max_abs(start, n): @pure. Max of |x[i]| (Linf norm). Returns
@@ -892,6 +918,9 @@ fn tf1d_axpby(x_start: i32, y_start: i32, a: f32, b: f32, n: i32) -> i32 {
 // tf2d_sub(a, b, c, rows, cols): elementwise 2D subtract c = a - b.
 fn tf2d_sub(a: i32, b: i32, c: i32, rows: i32, cols: i32) -> i32 {
     let n = t2d_len(rows, cols);
+    if t2d_shape_ok(a, rows, cols) == 0 { 0 }
+    else { if t2d_shape_ok(b, rows, cols) == 0 { 0 }
+    else { if t2d_shape_ok(c, rows, cols) == 0 { 0 } else {
     let mut i: i32 = 0;
     while i < n {
         let av = __f32_from_bits(__arena_get(a + i));
@@ -900,11 +929,15 @@ fn tf2d_sub(a: i32, b: i32, c: i32, rows: i32, cols: i32) -> i32 {
         i = i + 1;
     }
     0
+    }}}
 }
 
 // tf2d_mul(a, b, c, rows, cols): elementwise 2D Hadamard (NOT matmul).
 fn tf2d_mul(a: i32, b: i32, c: i32, rows: i32, cols: i32) -> i32 {
     let n = t2d_len(rows, cols);
+    if t2d_shape_ok(a, rows, cols) == 0 { 0 }
+    else { if t2d_shape_ok(b, rows, cols) == 0 { 0 }
+    else { if t2d_shape_ok(c, rows, cols) == 0 { 0 } else {
     let mut i: i32 = 0;
     while i < n {
         let av = __f32_from_bits(__arena_get(a + i));
@@ -913,6 +946,7 @@ fn tf2d_mul(a: i32, b: i32, c: i32, rows: i32, cols: i32) -> i32 {
         i = i + 1;
     }
     0
+    }}}
 }
 
 // tf1d_argmax_in_range(start, n, lo, hi): @pure. Index of largest f32
@@ -959,6 +993,7 @@ fn tf2d_row_sum(start: i32, rows: i32, cols: i32, dst: i32) -> i32 {
     if rows <= 0 { 0 }
     else { if cols <= 0 { 0 }
     else { if t2d_len(rows, cols) == 0 { 0 }
+    else { if t2d_shape_ok(start, rows, cols) == 0 { 0 }
     else {
     let mut r: i32 = 0;
     while r < rows {
@@ -972,7 +1007,7 @@ fn tf2d_row_sum(start: i32, rows: i32, cols: i32, dst: i32) -> i32 {
         r = r + 1;
     }
     0
-    }}}
+    }}}}
 }
 
 // tf2d_col_sum(start, rows, cols, dst): for each col c, write
@@ -981,6 +1016,7 @@ fn tf2d_col_sum(start: i32, rows: i32, cols: i32, dst: i32) -> i32 {
     if rows <= 0 { 0 }
     else { if cols <= 0 { 0 }
     else { if t2d_len(rows, cols) == 0 { 0 }
+    else { if t2d_shape_ok(start, rows, cols) == 0 { 0 }
     else {
     let mut c: i32 = 0;
     while c < cols {
@@ -994,7 +1030,7 @@ fn tf2d_col_sum(start: i32, rows: i32, cols: i32, dst: i32) -> i32 {
         c = c + 1;
     }
     0
-    }}}
+    }}}}
 }
 
 // tf1d_arange(start_val, n): allocate a new f32 vec of length n with
@@ -1039,6 +1075,7 @@ fn tf2d_diag(m: i32, rows: i32, cols: i32, dst: i32) -> i32 {
     else { if cols <= 0 { 0 }
     else { if rows != cols { 0 }
     else { if t2d_len(rows, cols) == 0 { 0 }
+    else { if t2d_shape_ok(m, rows, cols) == 0 { 0 }
     else {
     let n = rows;
     let mut i: i32 = 0;
@@ -1047,7 +1084,7 @@ fn tf2d_diag(m: i32, rows: i32, cols: i32, dst: i32) -> i32 {
         i = i + 1;
     }
     0
-    }}}}
+    }}}}}
 }
 
 // tf2d_eye(n): allocate a new n*n identity matrix (1.0 on diagonal,
@@ -1079,6 +1116,7 @@ fn tf2d_trace(m: i32, rows: i32, cols: i32) -> f32 {
     else { if cols <= 0 { 0.0_f32 }
     else { if rows != cols { 0.0_f32 }
     else { if t2d_len(rows, cols) == 0 { 0.0_f32 }
+    else { if t2d_shape_ok(m, rows, cols) == 0 { 0.0_f32 }
     else {
     let n = rows;
     let mut i: i32 = 0;
@@ -1088,7 +1126,7 @@ fn tf2d_trace(m: i32, rows: i32, cols: i32) -> f32 {
         i = i + 1;
     }
     total
-    }}}}
+    }}}}}
 }
 
 // tf1d_lerp(a, b, t, dst, n): linear interpolation. dst[i] = a[i] +
@@ -1112,7 +1150,8 @@ fn tf1d_lerp(a: i32, b: i32, t: f32, dst: i32, n: i32) -> i32 {
 @pure
 fn tf2d_norm_frobenius_sq(start: i32, rows: i32, cols: i32) -> f32 {
     let n = t2d_len(rows, cols);
-    tf1d_l2_norm_sq(start, n)
+    if t2d_shape_ok(start, rows, cols) == 0 { 0.0_f32 }
+    else { tf1d_l2_norm_sq(start, n) }
 }
 
 // tf2d_zeros(rows, cols): allocate a new rows*cols matrix filled with 0.0_f32.
@@ -1139,7 +1178,8 @@ fn tf2d_ones(rows: i32, cols: i32) -> i32 {
 @pure
 fn tf2d_max_abs(start: i32, rows: i32, cols: i32) -> f32 {
     let n = t2d_len(rows, cols);
-    tf1d_max_abs(start, n)
+    if t2d_shape_ok(start, rows, cols) == 0 { 0.0_f32 }
+    else { tf1d_max_abs(start, n) }
 }
 
 // tf1d_count_above(start, n, threshold): @pure. Count elements > threshold.

@@ -352,7 +352,7 @@ export const STUB_BOOTSTRAP_CHAIN: BootstrapStage[] = [
   {
     name: 'hex0',
     title: 'hex0 — the trust root',
-    sizeBytes: 120,
+    sizeBytes: 299,
     sourceLanguage: 'hand-encoded x86-64 hex',
     capability: 'Reads hex digits from stdin, writes byte values to stdout. That\'s it.',
     compiles: 'hex1',

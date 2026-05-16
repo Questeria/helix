@@ -340,7 +340,7 @@ def _inline_user_calls(expr: A.Expr, fn_table: dict[str, "A.FnDecl"],
     # silently-wrong gradients when the body uses if/while.
     TRANSCENDENTALS = {"__exp", "__log", "__sin", "__cos", "__sqrt",
                        "__relu", "__sigmoid", "__tanh", "__softplus",
-                       "__silu", "__abs", "__gelu", "__powi",
+                       "__silu", "__abs", "__gelu", "__powi", "__bce",
                        # min/max/clamp aren't differentiable at switch
                        # points; leave opaque so the AD surface can reject
                        # missing chain rules instead of inlining conditionals.
@@ -905,6 +905,46 @@ def _diff_call_chain_rule(call: A.Call, var: str,
                                           left=n_lit, right=x_pow),
                             right=dx)
         # Non-literal n: fall through to zero derivative.
+    if call.callee.name == "__bce" and len(call.args) == 2:
+        p = call.args[0]
+        y = call.args[1]
+        dp = _diff(p, var)
+        dy = _diff(y, var)
+
+        def f(v: float) -> A.FloatLit:
+            return A.FloatLit(span=span, value=v)
+
+        def binary(op: str, a: A.Expr, b: A.Expr) -> A.Binary:
+            return A.Binary(span=span, op=op, left=a, right=b)
+
+        def calln(fn: str, args: list[A.Expr]) -> A.Call:
+            return A.Call(span=span, callee=A.Name(span=span, name=fn), args=args)
+
+        eps = f(0.000001)
+        hi = f(0.999999)
+        p_safe = calln("__clamp", [_copy.deepcopy(p), f(0.000001), f(0.999999)])
+        one_minus_p = binary("-", f(1.0), _copy.deepcopy(p_safe))
+        denom = binary("*", _copy.deepcopy(p_safe), one_minus_p)
+        raw_dp = binary("/", binary("-", _copy.deepcopy(p_safe), _copy.deepcopy(y)), denom)
+        cond_lo = binary("<", _copy.deepcopy(p), eps)
+        cond_hi = binary(">", _copy.deepcopy(p), hi)
+        zero = f(0.0)
+        gated_dp_hi = A.If(
+            span=span,
+            cond=cond_hi,
+            then=A.Block(span=span, stmts=[], final_expr=f(0.0)),
+            else_=A.Block(span=span, stmts=[], final_expr=raw_dp),
+        )
+        deriv_p = A.If(
+            span=span,
+            cond=cond_lo,
+            then=A.Block(span=span, stmts=[], final_expr=zero),
+            else_=A.Block(span=span, stmts=[], final_expr=gated_dp_hi),
+        )
+        log_one_minus = calln("__log_stable", [binary("-", f(1.0), _copy.deepcopy(p_safe))])
+        log_p = calln("__log_stable", [_copy.deepcopy(p_safe)])
+        deriv_y = binary("-", log_one_minus, log_p)
+        return binary("+", binary("*", deriv_p, dp), binary("*", deriv_y, dy))
     if len(call.args) != 1:
         return None
     name = call.callee.name
@@ -958,7 +998,6 @@ def _diff_call_chain_rule(call: A.Call, var: str,
         # The two __sigmoid(u) call nodes get DEEPCOPIES of u so the second
         # call doesn't share its argument tree with the first — protects
         # against in-place mutation by later passes.
-        import copy as _copy
         s1 = call1("__sigmoid", _copy.deepcopy(u))
         s2 = call1("__sigmoid", _copy.deepcopy(u))
         one_minus = A.Binary(span=span, op="-",
@@ -970,7 +1009,6 @@ def _diff_call_chain_rule(call: A.Call, var: str,
         # square shares structure with the other — same protection used
         # by __sigmoid below to survive in-place AST mutation by
         # downstream passes.
-        import copy as _copy
         t1 = call1("__tanh", _copy.deepcopy(u))
         t2 = call1("__tanh", _copy.deepcopy(u))
         t_sq = A.Binary(span=span, op="*", left=t1, right=t2)
@@ -983,7 +1021,6 @@ def _diff_call_chain_rule(call: A.Call, var: str,
     if name == "__silu":
         # d(silu(u))/dx = sigmoid(u) + u * sigmoid(u) * (1 - sigmoid(u)) * du/dx
         # = sigmoid(u) * (1 + u * (1 - sigmoid(u))) * du/dx
-        import copy as _copy
         s1 = call1("__sigmoid", _copy.deepcopy(u))
         s2 = call1("__sigmoid", _copy.deepcopy(u))
         one_minus_s = A.Binary(span=span, op="-",
@@ -994,10 +1031,66 @@ def _diff_call_chain_rule(call: A.Call, var: str,
                          left=A.FloatLit(span=span, value=1.0),
                          right=u_times_oms)
         return mul(mul(s1, inner), du)
+    if name == "__gelu":
+        # Tanh-approx GELU derivative:
+        # 0.5*(1+tanh(inner)) + 0.5*u*(1-tanh(inner)^2)*inner'
+        c = A.FloatLit(span=span, value=0.7978846)
+        x2 = A.Binary(span=span, op="*",
+                      left=_copy.deepcopy(u), right=_copy.deepcopy(u))
+        x3 = A.Binary(span=span, op="*", left=_copy.deepcopy(x2),
+                      right=_copy.deepcopy(u))
+        inner_arg = A.Binary(
+            span=span,
+            op="+",
+            left=_copy.deepcopy(u),
+            right=A.Binary(span=span, op="*",
+                           left=A.FloatLit(span=span, value=0.044715),
+                           right=x3),
+        )
+        inner = A.Binary(span=span, op="*", left=c, right=inner_arg)
+        t1 = call1("__tanh", _copy.deepcopy(inner))
+        t2 = call1("__tanh", _copy.deepcopy(inner))
+        first = A.Binary(
+            span=span,
+            op="*",
+            left=A.FloatLit(span=span, value=0.5),
+            right=A.Binary(span=span, op="+",
+                           left=A.FloatLit(span=span, value=1.0),
+                           right=t1),
+        )
+        one_minus_t2 = A.Binary(
+            span=span,
+            op="-",
+            left=A.FloatLit(span=span, value=1.0),
+            right=A.Binary(span=span, op="*", left=t2,
+                           right=call1("__tanh", _copy.deepcopy(inner))),
+        )
+        inner_prime = A.Binary(
+            span=span,
+            op="*",
+            left=A.FloatLit(span=span, value=0.7978846),
+            right=A.Binary(
+                span=span,
+                op="+",
+                left=A.FloatLit(span=span, value=1.0),
+                right=A.Binary(span=span, op="*",
+                               left=A.FloatLit(span=span, value=0.134145),
+                               right=x2),
+            ),
+        )
+        second = A.Binary(
+            span=span,
+            op="*",
+            left=A.Binary(span=span, op="*",
+                          left=A.FloatLit(span=span, value=0.5),
+                          right=_copy.deepcopy(u)),
+            right=A.Binary(span=span, op="*", left=one_minus_t2,
+                           right=inner_prime),
+        )
+        return mul(A.Binary(span=span, op="+", left=first, right=second), du)
     if name == "__abs":
         # d(abs(u))/dx = sign(u) * du/dx; at u=0 use 0.
         # Implement as if u>0 then 1 else (if u<0 then -1 else 0) * du.
-        import copy as _copy
         u_copy = _copy.deepcopy(u)
         zero = A.FloatLit(span=span, value=0.0)
         cond_pos = A.Binary(span=span, op=">", left=u_copy,
