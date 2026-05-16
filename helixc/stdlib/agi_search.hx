@@ -22,8 +22,12 @@
 // License: Apache 2.0
 
 @pure fn bfs_capacity() -> i32 { 256 }
+@pure fn bfs_magic() -> i32 { 6106101 }
+@pure fn bfs_slot_count() -> i32 { 3 + bfs_capacity() }
+@pure fn bfs_footer() -> i32 { 0 - bfs_magic() - bfs_slot_count() - 1 }
 
 fn bfs_queue_new() -> i32 {
+    __arena_push(bfs_magic());
     let start = __arena_len();
     __arena_push(0);   // head (next pop index)
     __arena_push(0);   // tail (next push index)
@@ -34,14 +38,35 @@ fn bfs_queue_new() -> i32 {
         __arena_push(0);
         i = i + 1;
     }
+    __arena_push(bfs_footer());
     start
+}
+
+@pure fn bfs_ok(q: i32) -> i32 {
+    let cap = bfs_capacity();
+    if q <= 0 { 0 }
+    else { if __arena_get(q - 1) != bfs_magic() { 0 }
+    else { if q + bfs_slot_count() >= __arena_len() { 0 }
+    else { if __arena_get(q + bfs_slot_count()) != bfs_footer() { 0 }
+    else {
+        let head = __arena_get(q);
+        let tail = __arena_get(q + 1);
+        let cnt = __arena_get(q + 2);
+        if head < 0 { 0 }
+        else { if head >= cap { 0 }
+        else { if tail < 0 { 0 }
+        else { if tail >= cap { 0 }
+        else { if cnt < 0 { 0 }
+        else { if cnt > cap { 0 } else { 1 } } } } } }
+    }}}}
 }
 
 fn bfs_enqueue(q: i32, state: i32) -> i32 {
     let cap = bfs_capacity();
+    if bfs_ok(q) == 0 { 0 - 1 }
+    else {
     let cnt = __arena_get(q + 2);
-    if cnt >= cap {
-        0 - 1
+    if cnt >= cap { 0 - 1
     } else {
         let tail = __arena_get(q + 1);
         __arena_set(q + 3 + tail, state);
@@ -50,10 +75,13 @@ fn bfs_enqueue(q: i32, state: i32) -> i32 {
         __arena_set(q + 2, cnt + 1);
         0
     }
+    }
 }
 
 fn bfs_dequeue(q: i32) -> i32 {
     let cap = bfs_capacity();
+    if bfs_ok(q) == 0 { 0 - 1 }
+    else {
     let cnt = __arena_get(q + 2);
     if cnt == 0 {
         0 - 1
@@ -65,21 +93,27 @@ fn bfs_dequeue(q: i32) -> i32 {
         __arena_set(q + 2, cnt - 1);
         v
     }
+    }
 }
 
 @pure fn bfs_size(q: i32) -> i32 {
-    __arena_get(q + 2)
+    if bfs_ok(q) == 0 { 0 } else { __arena_get(q + 2) }
 }
 
 @pure fn bfs_is_empty(q: i32) -> i32 {
-    if __arena_get(q + 2) == 0 { 1 } else { 0 }
+    if bfs_ok(q) == 0 { 1 }
+    else { if __arena_get(q + 2) == 0 { 1 } else { 0 } }
 }
 
 // Visited set: bounded-size linear-probe table of state ids.
 // Layout: slot 0 = count, slot 1..1+cap = entries (-1 means empty slot).
 @pure fn visited_capacity() -> i32 { 256 }
+@pure fn visited_magic() -> i32 { 6206201 }
+@pure fn visited_slot_count() -> i32 { 1 + visited_capacity() }
+@pure fn visited_footer() -> i32 { 0 - visited_magic() - visited_slot_count() - 1 }
 
 fn visited_new() -> i32 {
+    __arena_push(visited_magic());
     let start = __arena_len();
     __arena_push(0);
     let cap = visited_capacity();
@@ -88,12 +122,28 @@ fn visited_new() -> i32 {
         __arena_push(0 - 1);
         i = i + 1;
     }
+    __arena_push(visited_footer());
     start
+}
+
+@pure fn visited_ok(v: i32) -> i32 {
+    let cap = visited_capacity();
+    if v <= 0 { 0 }
+    else { if __arena_get(v - 1) != visited_magic() { 0 }
+    else { if v + visited_slot_count() >= __arena_len() { 0 }
+    else { if __arena_get(v + visited_slot_count()) != visited_footer() { 0 }
+    else {
+        let cnt = __arena_get(v);
+        if cnt < 0 { 0 }
+        else { if cnt > cap { 0 } else { 1 } }
+    }}}}
 }
 
 // Returns 1 if marked, 0 if already present.
 fn visited_mark(v: i32, state: i32) -> i32 {
     let cap = visited_capacity();
+    if visited_ok(v) == 0 { 0 - 1 }
+    else {
     let mut i: i32 = 0;
     let mut found: i32 = 0;
     while i < cap {
@@ -113,11 +163,14 @@ fn visited_mark(v: i32, state: i32) -> i32 {
             0 - 1
         }
     }
+    }
 }
 
 @pure
 fn visited_has(v: i32, state: i32) -> i32 {
     let cap = visited_capacity();
+    if visited_ok(v) == 0 { 0 }
+    else {
     let mut i: i32 = 0;
     let mut found: i32 = 0;
     while i < cap {
@@ -125,10 +178,11 @@ fn visited_has(v: i32, state: i32) -> i32 {
         i = i + 1;
     }
     found
+    }
 }
 
 @pure fn visited_count(v: i32) -> i32 {
-    __arena_get(v)
+    if visited_ok(v) == 0 { 0 } else { __arena_get(v) }
 }
 
 // Pick the highest-scoring neighbor from a list. neighbors_start points
@@ -137,8 +191,21 @@ fn visited_has(v: i32, state: i32) -> i32 {
 // Returns the chosen neighbor id, or -1 if the list is empty.
 @pure
 fn hillclimb_step(neighbors_start: i32, n: i32, scoring_start: i32) -> i32 {
-    if n == 0 { 0 - 1 }
+    if n <= 0 { 0 - 1 }
+    else { if t1d_slice_ok(neighbors_start, n) == 0 { 0 - 1 }
     else {
+        let mut max_state: i32 = 0;
+        let mut scan: i32 = 0;
+        let mut valid: i32 = 1;
+        while scan < n {
+            let st = __arena_get(neighbors_start + scan);
+            if st < 0 { valid = 0; }
+            else { if st > max_state { max_state = st; } }
+            scan = scan + 1;
+        }
+        if valid == 0 { 0 - 1 }
+        else { if t1d_slice_ok(scoring_start, max_state + 1) == 0 { 0 - 1 }
+        else {
         let mut i: i32 = 1;
         let mut best: i32 = __arena_get(neighbors_start);
         let mut best_score: i32 = __arena_get(scoring_start + best);
@@ -152,6 +219,7 @@ fn hillclimb_step(neighbors_start: i32, n: i32, scoring_start: i32) -> i32 {
             i = i + 1;
         }
         best
+    }}}
     }
 }
 
@@ -165,9 +233,13 @@ fn hillclimb_step(neighbors_start: i32, n: i32, scoring_start: i32) -> i32 {
 //   slot 2..2+cap: states
 //   slot 2+cap..2+2*cap: scores (lower = better)
 @pure fn pq_capacity() -> i32 { 256 }
+@pure fn pq_magic() -> i32 { 6306301 }
+@pure fn pq_slot_count() -> i32 { 2 + pq_capacity() * 2 }
+@pure fn pq_footer() -> i32 { 0 - pq_magic() - pq_slot_count() - 1 }
 
 fn pq_new() -> i32 {
     let cap = pq_capacity();
+    __arena_push(pq_magic());
     let start = __arena_len();
     __arena_push(0);
     __arena_push(cap);
@@ -181,26 +253,49 @@ fn pq_new() -> i32 {
         __arena_push(0);
         j = j + 1;
     }
+    __arena_push(pq_footer());
     start
 }
 
-@pure fn pq_size(q: i32) -> i32 { __arena_get(q) }
+@pure fn pq_ok(q: i32) -> i32 {
+    let cap = pq_capacity();
+    if q <= 0 { 0 }
+    else { if __arena_get(q - 1) != pq_magic() { 0 }
+    else { if q + pq_slot_count() >= __arena_len() { 0 }
+    else { if __arena_get(q + pq_slot_count()) != pq_footer() { 0 }
+    else {
+        let cnt = __arena_get(q);
+        let stored_cap = __arena_get(q + 1);
+        if stored_cap != cap { 0 }
+        else { if cnt < 0 { 0 }
+        else { if cnt > cap { 0 } else { 1 } } }
+    }}}}
+}
+
+@pure fn pq_size(q: i32) -> i32 {
+    if pq_ok(q) == 0 { 0 } else { __arena_get(q) }
+}
 
 @pure fn pq_is_empty(q: i32) -> i32 {
-    if __arena_get(q) == 0 { 1 } else { 0 }
+    if pq_ok(q) == 0 { 1 }
+    else { if __arena_get(q) == 0 { 1 } else { 0 } }
 }
 
 // Peek lowest-scoring entry without removing it. Returns -1 if empty.
 // Pairs with pq_pop_min; the priority-queue layout keeps the lowest
 // score at index 0, so this is a constant-time read.
 @pure fn pq_peek_min(q: i32) -> i32 {
-    if __arena_get(q) == 0 { 0 - 1 }
+    if pq_ok(q) == 0 { 0 - 1 }
+    else { if __arena_get(q) == 0 { 0 - 1 }
     else { __arena_get(q + 2) }
+    }
 }
 
 // Insert: linear scan to insert in sorted order (simple, O(n); good for
 // the small AGI problem sizes Phase 4 targets).
 fn pq_insert(q: i32, state: i32, score: i32) -> i32 {
+    if pq_ok(q) == 0 { 0 - 1 }
+    else {
     let cap = __arena_get(q + 1);
     let cnt = __arena_get(q);
     if cnt >= cap {
@@ -234,10 +329,13 @@ fn pq_insert(q: i32, state: i32, score: i32) -> i32 {
         __arena_set(q, cnt + 1);
         0
     }
+    }
 }
 
 // Pop the lowest-scoring entry. Returns the state id, or -1 if empty.
 fn pq_pop_min(q: i32) -> i32 {
+    if pq_ok(q) == 0 { 0 - 1 }
+    else {
     let cap = __arena_get(q + 1);
     let cnt = __arena_get(q);
     if cnt == 0 { 0 - 1 }
@@ -253,6 +351,7 @@ fn pq_pop_min(q: i32) -> i32 {
         __arena_set(q, cnt - 1);
         v
     }
+    }
 }
 
 // Beam search step: keep the top k highest-scoring entries from a
@@ -261,10 +360,26 @@ fn pq_pop_min(q: i32) -> i32 {
 @pure
 fn beam_top_k(candidates_start: i32, n: i32, scoring_start: i32,
               result_start: i32, k: i32) -> i32 {
-    if n == 0 { 0 }
+    if n < 0 { 0 - 1 }
+    else { if k < 0 { 0 - 1 }
+    else { if n == 0 { 0 }
+    else { if t1d_slice_ok(candidates_start, n) == 0 { 0 - 1 }
     else {
-        let mut copied: i32 = 0;
         let kept = if n < k { n } else { k };
+        if t1d_slice_ok(result_start, kept) == 0 { 0 - 1 }
+        else {
+        let mut max_state: i32 = 0;
+        let mut scan: i32 = 0;
+        let mut valid: i32 = 1;
+        while scan < n {
+            let st = __arena_get(candidates_start + scan);
+            if st < 0 { valid = 0; }
+            else { if st > max_state { max_state = st; } }
+            scan = scan + 1;
+        }
+        if valid == 0 { 0 - 1 }
+        else { if t1d_slice_ok(scoring_start, max_state + 1) == 0 { 0 - 1 }
+        else {
         // Selection sort first `kept` highest-scoring by direct copy.
         // O(n*k) but k is small for beam.
         let mut chosen_count: i32 = 0;
@@ -302,7 +417,9 @@ fn beam_top_k(candidates_start: i32, n: i32, scoring_start: i32,
             }
         }
         chosen_count
+    }}}
     }
+    }}}
 }
 
 // =========================================================================
@@ -326,17 +443,26 @@ fn beam_top_k(candidates_start: i32, n: i32, scoring_start: i32,
 
 @pure
 fn astar_priority(g_start: i32, h_start: i32, state: i32) -> i32 {
-    __arena_get(g_start + state) + __arena_get(h_start + state)
+    if state < 0 { 0 - 1 }
+    else { if t1d_slice_ok(g_start, state + 1) == 0 { 0 - 1 }
+    else { if t1d_slice_ok(h_start, state + 1) == 0 { 0 - 1 }
+    else { __arena_get(g_start + state) + __arena_get(h_start + state) } } }
 }
 
 fn astar_path_set(came_from_start: i32, child: i32, parent: i32) -> i32 {
-    __arena_set(came_from_start + child, parent);
-    0
+    if child < 0 { 0 - 1 }
+    else { if t1d_slice_ok(came_from_start, child + 1) == 0 { 0 - 1 }
+    else {
+        __arena_set(came_from_start + child, parent);
+        0
+    } }
 }
 
 @pure
 fn astar_path_get(came_from_start: i32, state: i32) -> i32 {
-    __arena_get(came_from_start + state)
+    if state < 0 { 0 - 1 }
+    else { if t1d_slice_ok(came_from_start, state + 1) == 0 { 0 - 1 }
+    else { __arena_get(came_from_start + state) } }
 }
 
 // Reconstruct path from start to goal by walking came_from backwards.
@@ -356,25 +482,30 @@ fn astar_path_get(came_from_start: i32, state: i32) -> i32 {
 // minused) the buffer. Now we just return the loop-tracked len.
 fn astar_reconstruct(came_from_start: i32, goal: i32, out_start: i32,
                      max_len: i32) -> i32 {
+    if max_len <= 0 { 0 }
+    else { if t1d_slice_ok(out_start, max_len) == 0 { 0 - 1 }
+    else {
     let mut cur = goal;
     let mut len: i32 = 0;
     let mut keep: i32 = 1;
     while keep == 1 {
         if cur < 0 { keep = 0; }
         else { if len >= max_len { keep = 0; }
+        else { if t1d_slice_ok(came_from_start, cur + 1) == 0 { keep = 0; }
         else {
             __arena_set(out_start + len, cur);
             len = len + 1;
             let prev = __arena_get(came_from_start + cur);
             if prev == cur { keep = 0; }
             else { cur = prev; }
-        }};
+        }}};
     }
     // Write -1 terminator if the buffer has room.
     if len < max_len {
         __arena_set(out_start + len, 0 - 1);
     }
     len
+    }}
 }
 
 // =========================================================================
@@ -390,6 +521,16 @@ fn astar_reconstruct(came_from_start: i32, goal: i32, out_start: i32,
 
 fn attention_softmax_f32(q_start: i32, keys_start: i32, vals_start: i32,
                           n: i32, d: i32, out_start: i32) -> i32 {
+    if n <= 0 { t2d_error() }
+    else { if d <= 0 { t2d_error() }
+    else { if n > 2147483647 / d { t2d_error() }
+    else {
+    let total = n * d;
+    if t1d_slice_ok(q_start, d) == 0 { t2d_error() }
+    else { if t1d_slice_ok(keys_start, total) == 0 { t2d_error() }
+    else { if t1d_slice_ok(vals_start, total) == 0 { t2d_error() }
+    else { if t1d_slice_ok(out_start, d) == 0 { t2d_error() }
+    else {
     // Step 1: scores[k] = dot(q, keys[k]).
     let scores = t1d_new(n);
     let inv_sqrt_d = 1.0_f32 / __sqrt((d as f32));
@@ -428,6 +569,8 @@ fn attention_softmax_f32(q_start: i32, keys_start: i32, vals_start: i32,
         k2 = k2 + 1;
     }
     0
+    }}}}
+    }}}
 }
 
 // Attention: scaled dot-product attention single-head, integer-only
@@ -442,6 +585,16 @@ fn attention_softmax_f32(q_start: i32, keys_start: i32, vals_start: i32,
 // integer-attention via dot-product approximates relative magnitudes).
 fn attention_dot(query_start: i32, keys_start: i32, values_start: i32,
                  n: i32, d: i32, output_start: i32) -> i32 {
+    if n <= 0 { t2d_error() }
+    else { if d <= 0 { t2d_error() }
+    else { if n > 2147483647 / d { t2d_error() }
+    else {
+    let total = n * d;
+    if t1d_slice_ok(query_start, d) == 0 { t2d_error() }
+    else { if t1d_slice_ok(keys_start, total) == 0 { t2d_error() }
+    else { if t1d_slice_ok(values_start, total) == 0 { t2d_error() }
+    else { if t1d_slice_ok(output_start, d) == 0 { t2d_error() }
+    else {
     // Initialize output to 0.
     let mut o: i32 = 0;
     while o < d { __arena_set(output_start + o, 0); o = o + 1; }
@@ -479,4 +632,6 @@ fn attention_dot(query_start: i32, keys_start: i32, values_start: i32,
         }
     }
     0
+    }}}}
+    }}}
 }

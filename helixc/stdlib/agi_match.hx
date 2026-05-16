@@ -214,6 +214,15 @@ fn bindings_set(b: i32, var_id: i32, term: i32) -> i32 {
     }
 }
 
+fn bindings_rewind(b: i32, count: i32) -> i32 {
+    if count < 0 { 0 - 1 }
+    else { if count > 32 { 0 - 1 }
+    else {
+        __arena_set(b, count);
+        0
+    } }
+}
+
 // Single-level unify: if pat is a var, bind it; else compare tags + payload.
 // Returns 1 on success, 0 on failure. Sub-tree unification is the caller's
 // responsibility (recurse on p1, p2, p3 if they're tree refs).
@@ -223,8 +232,7 @@ fn unify_shallow(pat_off: i32, term_off: i32, b: i32) -> i32 {
         let var_id = __arena_get(pat_off + 1);
         let existing = bindings_get(b, var_id);
         if existing < 0 {
-            bindings_set(b, var_id, term_off);
-            1
+            if bindings_set(b, var_id, term_off) == 0 { 1 } else { 0 }
         } else {
             // Already bound: must match the existing binding.
             tree_eq_shallow(existing, term_off)
@@ -253,13 +261,13 @@ fn unify_shallow(pat_off: i32, term_off: i32, b: i32) -> i32 {
 // Returns 1 on success, 0 on failure.
 @partial
 fn unify_deep(pat_off: i32, term_off: i32, child_mask: i32, b: i32) -> i32 {
+    let start_count = __arena_get(b);
     let pat_tag = __arena_get(pat_off);
     if pat_tag == unify_var_tag() {
         let var_id = __arena_get(pat_off + 1);
         let existing = bindings_get(b, var_id);
         if existing < 0 {
-            bindings_set(b, var_id, term_off);
-            1
+            if bindings_set(b, var_id, term_off) == 0 { 1 } else { 0 }
         } else {
             // Already-bound var: existing must structurally match term.
             unify_deep(existing, term_off, child_mask, b)
@@ -294,6 +302,7 @@ fn unify_deep(pat_off: i32, term_off: i32, child_mask: i32, b: i32) -> i32 {
             } else {
                 if __arena_get(pat_off + 3) != __arena_get(term_off + 3) { ok = 0; }
             }
+            if ok == 0 { bindings_rewind(b, start_count); }
             ok
         } else {
             0
@@ -328,13 +337,13 @@ fn unify_deep(pat_off: i32, term_off: i32, child_mask: i32, b: i32) -> i32 {
 @partial
 fn unify_deep_table(pat_off: i32, term_off: i32, mask_table: i32,
                     mask_table_len: i32, b: i32) -> i32 {
+    let start_count = __arena_get(b);
     let pat_tag = __arena_get(pat_off);
     if pat_tag == unify_var_tag() {
         let var_id = __arena_get(pat_off + 1);
         let existing = bindings_get(b, var_id);
         if existing < 0 {
-            bindings_set(b, var_id, term_off);
-            1
+            if bindings_set(b, var_id, term_off) == 0 { 1 } else { 0 }
         } else {
             // Already-bound var: existing must structurally match term
             // (recurse with the same table — the existing tree may have
@@ -384,6 +393,7 @@ fn unify_deep_table(pat_off: i32, term_off: i32, mask_table: i32,
             } else {
                 if __arena_get(pat_off + 3) != __arena_get(term_off + 3) { ok = 0; }
             }
+            if ok == 0 { bindings_rewind(b, start_count); }
             ok
         } else {
             0

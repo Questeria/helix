@@ -2122,6 +2122,89 @@ Verification:
 Clean-gate status:
 
 - Stage 35 clean gates remain `0/3`.
-- Next step is to commit and push this restart-33 fix sweep, then begin
-  restart 34 as another fresh Stage 35 clean-gate attempt from the newest
-  pushed HEAD.
+- Restart 33 was committed and pushed as `09b692c`.
+- Restart 34 began from `09b692c`; support checks were green, then three fresh
+  audit lanes found AGI runtime, CLI/backend, and docs blockers.
+
+## Increment 53 - Thirty-Fourth Clean-Gate Restart Fix Sweep
+
+Restart 34 began from commit `09b692c` with restart-33 pushed to
+`origin/main`. Baseline support checks were green:
+
+- Per-file stdlib parser sweep across `helixc/stdlib/*.hx`
+  - Result: parsed 16 files.
+- `python -m py_compile helixc\check.py helixc\backend\x86_64.py helixc\backend\ptx.py helixc\tests\test_cli.py helixc\tests\test_codegen.py helixc\tests\test_ptx.py`
+  - Result: passed.
+- `python -m pytest helixc\tests\test_cli.py -q -k "stage35 or emit_ast or emit_ir or emit_asm or emit_ptx or output or direct_x86"`
+  - Result: 68 passed, 125 deselected.
+- `python -m pytest helixc\tests\test_codegen.py -q -k "tf2d or t2d or tensor or revad or agi_memory"`
+  - Result: 79 passed, 811 deselected.
+- `python -m pytest helixc\tests\test_ptx.py -q -k "stage35 or direct_ptx or wad or deprecated"`
+  - Result: 42 passed, 36 deselected.
+- `python -m pytest helixc\tests --collect-only -q`
+  - Result: 2,362 tests collected.
+- `git diff --check`
+  - Result: passed.
+
+The fresh restart-34 audit was not clean. Findings:
+
+- AGI world-model tables lacked magic/footer and bounds validation.
+- AGI search containers and raw-buffer helpers accepted forged or short
+  buffers.
+- Failed deep unification could leave stale variable bindings.
+- Prediction-error helpers could overflow into invalid metric values.
+- `helixc.check` could print AD warning summaries to stdout during a different
+  promoted warning failure.
+- Direct x86 rejected explicit `--stdlib` unlike `helixc.check` and direct PTX.
+- `helixc.check -o` and direct x86 wrote output artifacts non-atomically.
+- Public/current docs still pointed to restart 33 as needing commit/push and
+  older test counts.
+
+Fixes landed in this increment:
+
+- Added magic/footer validation and bounds-checked offsets for world-model
+  tables.
+- Added guard validation for BFS, visited-set, and priority-queue containers.
+- Added slice validation for hill-climb, beam search, A*, and attention helpers.
+- Added rollback on failed deep and table-driven unification.
+- Saturated absolute and squared prediction errors at `2147483647`.
+- Routed AD warning summaries to stderr whenever any warning policy is
+  promoted to error.
+- Added direct x86 `--stdlib` compatibility and stdlib conflict rejection.
+- Reworked `helixc.check -o` and direct x86 output writes to temp-file plus
+  replace, with cleanup on failure.
+- Updated current docs and website facts to restart 34 and 2,372 collected
+  tests.
+
+Verification:
+
+- Per-file stdlib parser sweep across `helixc/stdlib/*.hx`
+  - Result: parsed 16 files.
+- `python -m py_compile helixc\check.py helixc\backend\x86_64.py helixc\tests\test_cli.py helixc\tests\test_codegen.py`
+  - Result: passed.
+- `python -m pytest helixc\tests\test_codegen.py -q -k "wmt_rejects_invalid or prediction_error_saturates or search_rejects_forged or attention_rejects_short or unify_deep_failures_rewind"`
+  - Result: 5 passed, 890 deselected.
+- `python -m pytest helixc\tests\test_cli.py -q -k "deprecated_error_with_ad_warning or atomic_replace_failure or handles_oserror_on_write or direct_x86_accepts_stdlib or direct_x86_rejects_conflicting_stdlib or direct_x86_chmod_failure"`
+  - Result: 6 passed, 192 deselected.
+- `python -m pytest helixc\tests\test_codegen.py -q -k "agi_ or wmt or wml or wm_prediction or bfs or visited or pq or beam or astar or attention or unify"`
+  - Result: 59 passed, 836 deselected.
+- `python -m pytest helixc\tests\test_cli.py -q -k "stage35 or output or direct_x86 or deprecated or wad or check_only or stdlib"`
+  - Result: 81 passed, 117 deselected.
+- `python -m pytest helixc\tests\test_ptx.py -q -k "stage35 or direct_ptx or wad or deprecated or stdlib"`
+  - Result: 42 passed, 36 deselected.
+- `python -m pytest helixc\tests\test_codegen.py -q -k "stage35"`
+  - Result: 42 passed, 853 deselected.
+- `python -m pytest helixc\tests\test_cli.py -q -k "stage35"`
+  - Result: 53 passed, 145 deselected.
+- `python -m pytest helixc\tests\test_ptx.py -q -k "stage35"`
+  - Result: 26 passed, 52 deselected.
+- `python -m pytest helixc\tests --collect-only -q`
+  - Result: 2,372 tests collected.
+- `git diff --check`
+  - Result: passed.
+
+Clean-gate status:
+
+- Stage 35 clean gates remain `0/3`.
+- After this restart-34 fix sweep lands, begin restart 35 as another fresh
+  Stage 35 clean-gate attempt from the newest pushed HEAD.

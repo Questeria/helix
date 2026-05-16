@@ -1119,27 +1119,47 @@ def test_main_o_traps_backend_error(monkeypatch, capsys, tmp_path):
 def test_main_o_handles_oserror_on_write(monkeypatch, capsys, tmp_path):
     """Audit 28.8 A9: -o catches OSError on the file write so
     permission / disk-full failures get a clean diagnostic too."""
-    import builtins as _bi
-    real_open = _bi.open
+    from helixc import check as _check
 
     src_path = str(tmp_path / "in.hx")
     with open(src_path, "w") as f:
         f.write("fn main() -> i32 { 1 }\n")
-    out_path = str(tmp_path / "noway" / "deep" / "out.bin")
+    out_path = str(tmp_path / "out.bin")
 
-    def _open_blocking(path, *args, **kwargs):
-        # Only block the wb open for the output file.
-        if str(path) == out_path and "b" in (args[0] if args else
-                                              kwargs.get("mode", "")):
-            raise PermissionError("synthetic permission denied")
-        return real_open(path, *args, **kwargs)
+    def _mkstemp_blocking(*args, **kwargs):
+        raise PermissionError("synthetic permission denied")
 
-    monkeypatch.setattr(_bi, "open", _open_blocking)
+    monkeypatch.setattr(_check.tempfile, "mkstemp", _mkstemp_blocking)
     rc = main([src_path, "-o", out_path])
     cap = capsys.readouterr()
     assert rc == 1
     assert "cannot write output" in cap.err
     assert "synthetic permission denied" in cap.err
+    assert not os.path.exists(out_path)
+
+
+def test_stage35_check_output_atomic_replace_failure_keeps_existing(
+    monkeypatch, capsys, tmp_path
+):
+    from helixc import check as _check
+
+    src_path = str(tmp_path / "atomic_replace.hx")
+    out_path = tmp_path / "atomic_replace.bin"
+    with open(src_path, "w") as f:
+        f.write("fn main() -> i32 { 42 }\n")
+    out_path.write_bytes(b"OLD")
+
+    def _replace_blocking(src, dst):
+        raise PermissionError("synthetic replace denied")
+
+    monkeypatch.setattr(_check.os, "replace", _replace_blocking)
+    rc = main([src_path, "-o", str(out_path)])
+    cap = capsys.readouterr()
+    assert rc == 1
+    assert "cannot write output" in cap.err
+    assert "synthetic replace denied" in cap.err
+    assert out_path.read_bytes() == b"OLD"
+    assert list(tmp_path.glob(".atomic_replace.bin.*.tmp")) == []
 
 
 def _count_op_kinds(mod):
@@ -1599,6 +1619,31 @@ def test_stage35_deprecated_error_default_keeps_stdout_empty(tmp_path):
     assert "ERROR" in proc.stderr
 
 
+def test_stage35_deprecated_error_with_ad_warning_keeps_stdout_empty(tmp_path):
+    src_path = tmp_path / "deprecated_ad_default.hx"
+    src_path.write_text(
+        "fn loss(x: D<f64>, y: D<i32>) -> D<f64> { x + y }\n"
+        "@deprecated fn old() -> i32 { 0 }\n"
+        "fn main() -> i32 { old() }\n",
+        encoding="utf-8",
+    )
+    proc = subprocess.run(
+        [
+            sys.executable, "-m", "helixc.check", str(src_path),
+            "--no-stdlib", "-Wdeprecated=error",
+        ],
+        cwd=os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    assert proc.stdout == ""
+    assert "deprecated:" in proc.stderr
+    assert "ad:" in proc.stderr
+    assert "ERROR" in proc.stderr
+
+
 def test_stage35_direct_x86_honors_wad_error_before_writing(tmp_path):
     src_path = tmp_path / "loss_ad_warning_direct.hx"
     out_path = tmp_path / "direct.bin"
@@ -1720,6 +1765,45 @@ def test_stage35_direct_x86_rejects_unknown_flags_without_writing(tmp_path):
     assert proc.returncode == 2, proc.stdout + proc.stderr
     assert not out_path.exists()
     assert "unknown flag" in proc.stderr
+    assert "Traceback" not in proc.stderr
+
+
+def test_stage35_direct_x86_accepts_stdlib_compat_flag(tmp_path):
+    src_path = tmp_path / "ok_stdlib.hx"
+    out_path = tmp_path / "ok_stdlib.bin"
+    src_path.write_text("fn main() -> i32 { 42 }\n", encoding="utf-8")
+    proc = subprocess.run(
+        [
+            sys.executable, "-m", "helixc.backend.x86_64",
+            str(src_path), str(out_path), "--stdlib",
+        ],
+        cwd=os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert out_path.exists()
+    assert "unknown flag --stdlib" not in proc.stderr
+
+
+def test_stage35_direct_x86_rejects_conflicting_stdlib_flags(tmp_path):
+    src_path = tmp_path / "conflicting_stdlib_x86.hx"
+    out_path = tmp_path / "conflicting_stdlib_x86.bin"
+    src_path.write_text("fn main() -> i32 { 42 }\n", encoding="utf-8")
+    proc = subprocess.run(
+        [
+            sys.executable, "-m", "helixc.backend.x86_64",
+            str(src_path), str(out_path), "--stdlib", "--no-stdlib",
+        ],
+        cwd=os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert proc.returncode == 2, proc.stdout + proc.stderr
+    assert not out_path.exists()
+    assert "conflicting stdlib flags" in proc.stderr
     assert "Traceback" not in proc.stderr
 
 
@@ -1859,6 +1943,40 @@ def test_stage35_direct_x86_missing_output_dir_reports_clean_error(tmp_path):
     assert not out_path.exists()
     assert "error: output:" in proc.stderr
     assert "Traceback" not in proc.stderr
+
+
+def test_stage35_direct_x86_chmod_failure_removes_temp_and_final(
+    monkeypatch, capsys, tmp_path
+):
+    src_path = tmp_path / "chmod_fail.hx"
+    out_path = tmp_path / "chmod_fail.bin"
+    src_path.write_text("fn main() -> i32 { 42 }\n", encoding="utf-8")
+
+    def _chmod_blocking(path, mode):
+        raise PermissionError("synthetic chmod denied")
+
+    monkeypatch.setattr(os, "chmod", _chmod_blocking)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "helixc.backend.x86_64",
+            str(src_path),
+            str(out_path),
+            "--no-stdlib",
+        ],
+    )
+    monkeypatch.delitem(sys.modules, "helixc.backend.x86_64", raising=False)
+
+    with pytest.raises(SystemExit) as exc:
+        runpy.run_module("helixc.backend.x86_64", run_name="__main__")
+
+    captured = capsys.readouterr()
+    assert exc.value.code == 1
+    assert "error: output:" in captured.err
+    assert "synthetic chmod denied" in captured.err
+    assert not out_path.exists()
+    assert list(tmp_path.glob(".chmod_fail.bin.*.tmp")) == []
 
 
 def test_ad_drain_subprocess_default(tmp_path):

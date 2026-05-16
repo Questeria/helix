@@ -8215,6 +8215,31 @@ def test_agi_wmt_predict():
     assert code == 21, f"expected 21 (1 + 2*10), got {code}"
 
 
+def test_stage35_wmt_rejects_invalid_tables_and_bounds():
+    src = """
+    fn main() -> i32 {
+        let bad = wmt_new(0 - 1, 2);
+        let guard = t1d_new(1);
+        ti1d_set(guard, 0, 42);
+        let bad_set = wmt_set(bad, 0, 0, 99);
+        let bad_predict = wmt_predict(bad, 0, 0);
+
+        let wmt = wmt_new(1, 1);
+        let oob_set = wmt_set(wmt, 1, 0, 99);
+        let oob_predict = wmt_predict(wmt, 1, 0);
+        if bad == (0 - 1) {
+        if bad_set == (0 - 1) {
+        if bad_predict == (0 - 1) {
+        if oob_set == (0 - 1) {
+        if oob_predict == (0 - 1) {
+        if ti1d_get(guard, 0) == 42 { 42 } else { 7 }
+        } else { 7 }} else { 7 }} else { 7 }} else { 7 }} else { 7 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
 def test_agi_wml_predict():
     """Linear scalar world model: w_s*state + w_a*action + b.
     With w_s=2, w_a=3, b=10: predict(s=4, a=1) = 8+3+10 = 21."""
@@ -8268,6 +8293,20 @@ def test_agi_wm_prediction_error_sq():
     """
     code = compile_and_run(src)
     assert code == 18, f"expected 18 (9 + 9), got {code}"
+
+
+def test_stage35_wm_prediction_error_saturates_overflow():
+    src = """
+    fn main() -> i32 {
+        let abs_bad = wm_prediction_error(0 - 2147483647 - 1, 0);
+        let sq_bad = wm_prediction_error_sq(50000, 0);
+        if abs_bad == 2147483647 {
+        if sq_bad == 2147483647 { 42 } else { 7 }
+        } else { 7 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
 
 
 def test_agi_wmt_predict_or():
@@ -8512,6 +8551,42 @@ def test_agi_astar_priority():
     assert code == 13, f"expected 13, got {code}"
 
 
+def test_stage35_search_rejects_forged_and_short_buffers():
+    src = """
+    fn main() -> i32 {
+        let fake = t1d_new(3);
+        __arena_set(fake, 0);
+        __arena_set(fake + 1, 0);
+        __arena_set(fake + 2, 0);
+        let q_status = bfs_enqueue(fake, 99);
+        let v_status = visited_mark(fake, 7);
+        let pq_status = pq_insert(fake, 1, 1);
+
+        let cf = t1d_new(1);
+        let astar_status = astar_path_set(cf, 2, 0);
+        let astar_get_status = astar_path_get(cf, 2);
+
+        let cand = t1d_new(2);
+        ti1d_set(cand, 0, 0);
+        ti1d_set(cand, 1, 1);
+        let scores = t1d_new(2);
+        let result_short = t1d_new(1);
+        let beam_status = beam_top_k(cand, 2, scores, result_short, 2);
+
+        if q_status == (0 - 1) {
+        if v_status == (0 - 1) {
+        if pq_status == (0 - 1) {
+        if astar_status == (0 - 1) {
+        if astar_get_status == (0 - 1) {
+        if beam_status == (0 - 1) {
+        if t1d_slice_ok(fake, 3) == 1 { 42 } else { 7 }
+        } else { 7 }} else { 7 }} else { 7 }} else { 7 }} else { 7 }} else { 7 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
 def test_agi_astar_path_set_get():
     """came_from[child] = parent; round-trip."""
     src = """
@@ -8611,6 +8686,26 @@ def test_agi_attention_softmax_f32():
     assert code == 10, f"expected 10, got {code}"
 
 
+def test_stage35_attention_rejects_short_output_buffer():
+    src = """
+    fn main() -> i32 {
+        let q = t1d_new(2);
+        tf1d_set(q, 0, 1.0_f32); tf1d_set(q, 1, 1.0_f32);
+        let keys = tf2d_zeros(2, 2);
+        let vals = tf2d_zeros(2, 2);
+        let out = t1d_new(1);
+        let softmax_status = attention_softmax_f32(q, keys, vals, 2, 2, out);
+        let dot_status = attention_dot(q, keys, vals, 2, 2, out);
+        if softmax_status == t2d_error() {
+        if dot_status == t2d_error() {
+        if t1d_slice_ok(out, 1) == 1 { 42 } else { 7 }
+        } else { 7 }} else { 7 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
 def test_agi_unify_deep_table_mixed_shape():
     """Phase 4 perfection: unify_deep_table looks up child_mask per-tag
     from a caller-provided table, so mixed-shape trees compose cleanly.
@@ -8671,6 +8766,41 @@ def test_agi_unify_deep_recursive():
             let bound = bindings_get(b, 0);
             if bound >= 0 { 42 } else { 0 }
         } else { 0 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stage35_unify_deep_failures_rewind_bindings():
+    src = """
+    fn main() -> i32 {
+        let b1 = bindings_new();
+        let var1 = tree_node_new(unify_var_tag(), 0, 0, 0);
+        let leaf1 = tree_node_new(0, 99, 0, 0);
+        let pat1 = tree_node_new(1, var1, 5, 0);
+        let term1 = tree_node_new(1, leaf1, 6, 0);
+        let ok1 = unify_deep(pat1, term1, 1, b1);
+        let stale1 = bindings_get(b1, 0);
+
+        let mask_tbl = __arena_len();
+        __arena_push(0);
+        __arena_push(3);
+        let b2 = bindings_new();
+        let var2 = tree_node_new(unify_var_tag(), 0, 0, 0);
+        let pat_right = tree_node_new(0, 1, 0, 0);
+        let pat2 = tree_node_new(1, var2, pat_right, 0);
+        let term_left = tree_node_new(0, 99, 0, 0);
+        let term_right = tree_node_new(0, 2, 0, 0);
+        let term2 = tree_node_new(1, term_left, term_right, 0);
+        let ok2 = unify_deep_table(pat2, term2, mask_tbl, 2, b2);
+        let stale2 = bindings_get(b2, 0);
+
+        if ok1 == 0 {
+        if stale1 == (0 - 1) {
+        if ok2 == 0 {
+        if stale2 == (0 - 1) { 42 } else { 7 }
+        } else { 7 }} else { 7 }} else { 7 }
     }
     """
     code = compile_and_run(src)

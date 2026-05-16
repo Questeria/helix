@@ -33,30 +33,78 @@
 
 // ---- Table-backed world model ----------------------------------------
 
+@pure fn wmt_magic() -> i32 { 6006001 }
+
+@pure fn wmt_footer(num_states: i32, num_actions: i32) -> i32 {
+    0 - wmt_magic() - num_states - num_actions
+}
+
+@pure fn wmt_len(num_states: i32, num_actions: i32) -> i32 {
+    if num_states <= 0 { 0 }
+    else { if num_actions <= 0 { 0 }
+    else { if num_states > 2147483647 / num_actions { 0 }
+    else { num_states * num_actions } } }
+}
+
 fn wmt_new(num_states: i32, num_actions: i32) -> i32 {
-    let start = __arena_len();
-    __arena_push(num_states);
-    __arena_push(num_actions);
-    let total = num_states * num_actions;
-    let mut i: i32 = 0;
-    while i < total {
-        __arena_push(0 - 1);
-        i = i + 1;
+    let total = wmt_len(num_states, num_actions);
+    if total == 0 { 0 - 1 }
+    else {
+        __arena_push(wmt_magic());
+        let start = __arena_len();
+        __arena_push(num_states);
+        __arena_push(num_actions);
+        let mut i: i32 = 0;
+        while i < total {
+            __arena_push(0 - 1);
+            i = i + 1;
+        }
+        __arena_push(wmt_footer(num_states, num_actions));
+        start
     }
-    start
+}
+
+@pure fn wmt_ok(wmt: i32) -> i32 {
+    if wmt <= 0 { 0 }
+    else { if __arena_get(wmt - 1) != wmt_magic() { 0 }
+    else {
+        let num_states = __arena_get(wmt);
+        let num_actions = __arena_get(wmt + 1);
+        let total = wmt_len(num_states, num_actions);
+        if total == 0 { 0 }
+        else { if total > 2147483647 - wmt - 2 { 0 }
+        else { if wmt + 2 + total >= __arena_len() { 0 }
+        else { if __arena_get(wmt + 2 + total) != wmt_footer(num_states, num_actions) { 0 }
+        else { 1 } } } }
+    }}
+}
+
+@pure fn wmt_offset(wmt: i32, state: i32, action: i32) -> i32 {
+    if wmt_ok(wmt) == 0 { 0 - 1 }
+    else {
+        let num_states = __arena_get(wmt);
+        let num_actions = __arena_get(wmt + 1);
+        if state < 0 { 0 - 1 }
+        else { if state >= num_states { 0 - 1 }
+        else { if action < 0 { 0 - 1 }
+        else { if action >= num_actions { 0 - 1 }
+        else { wmt + 2 + state * num_actions + action } } } }
+    }
 }
 
 fn wmt_set(wmt: i32, state: i32, action: i32, next_state: i32) -> i32 {
-    let num_actions = __arena_get(wmt + 1);
-    let off = wmt + 2 + state * num_actions + action;
-    __arena_set(off, next_state);
-    0
+    let off = wmt_offset(wmt, state, action);
+    if off < 0 { 0 - 1 }
+    else {
+        __arena_set(off, next_state);
+        0
+    }
 }
 
 @pure
 fn wmt_predict(wmt: i32, state: i32, action: i32) -> i32 {
-    let num_actions = __arena_get(wmt + 1);
-    __arena_get(wmt + 2 + state * num_actions + action)
+    let off = wmt_offset(wmt, state, action);
+    if off < 0 { 0 - 1 } else { __arena_get(off) }
 }
 
 // ---- Linear scalar world model ---------------------------------------
@@ -78,59 +126,74 @@ fn wml_predict(wml: i32, state: i32, action: i32) -> i32 {
 
 @pure
 fn wm_prediction_error(predicted: i32, actual: i32) -> i32 {
-    let d = predicted - actual;
-    if d < 0 { 0 - d } else { d }
+    if predicted >= actual {
+        if actual < 0 {
+            let limit = 2147483647 + actual;
+            if predicted > limit { 2147483647 } else { predicted - actual }
+        } else { predicted - actual }
+    } else {
+        if predicted < 0 {
+            let limit = 2147483647 + predicted;
+            if actual > limit { 2147483647 } else { actual - predicted }
+        } else { actual - predicted }
+    }
 }
 
 @pure
 fn wm_prediction_error_sq(predicted: i32, actual: i32) -> i32 {
-    let d = predicted - actual;
-    d * d
+    let d = wm_prediction_error(predicted, actual);
+    if d > 46340 { 2147483647 } else { d * d }
 }
 
 // ---- Imagination rollout: simulate `steps` actions from a state ----
 
 @pure
 fn wmt_rollout(wmt: i32, start_state: i32, action_seq_start: i32, steps: i32) -> i32 {
-    let num_actions = __arena_get(wmt + 1);
-    let mut s: i32 = start_state;
-    let mut i: i32 = 0;
-    while i < steps {
-        let a = __arena_get(action_seq_start + i);
-        let off = wmt + 2 + s * num_actions + a;
-        let nxt = __arena_get(off);
-        s = if nxt < 0 { s } else { nxt };
-        i = i + 1;
-    }
-    s
+    if steps < 0 { start_state }
+    else { if wmt_ok(wmt) == 0 { start_state }
+    else { if t1d_slice_ok(action_seq_start, steps) == 0 { start_state }
+    else {
+        let mut s: i32 = start_state;
+        let mut i: i32 = 0;
+        while i < steps {
+            let a = __arena_get(action_seq_start + i);
+            let off = wmt_offset(wmt, s, a);
+            let nxt = if off < 0 { 0 - 1 } else { __arena_get(off) };
+            s = if nxt < 0 { s } else { nxt };
+            i = i + 1;
+        }
+        s
+    }}}
 }
 
 // ---- Table-backed accessors mirroring the option_*/result_* style ----
 
 @pure
 fn wmt_predict_or(wmt: i32, state: i32, action: i32, default_v: i32) -> i32 {
-    let num_actions = __arena_get(wmt + 1);
-    let nxt = __arena_get(wmt + 2 + state * num_actions + action);
+    let off = wmt_offset(wmt, state, action);
+    let nxt = if off < 0 { 0 - 1 } else { __arena_get(off) };
     if nxt < 0 { default_v } else { nxt }
 }
 
 @pure
 fn wmt_count_set(wmt: i32) -> i32 {
-    let num_states = __arena_get(wmt);
-    let num_actions = __arena_get(wmt + 1);
-    let total = num_states * num_actions;
-    let mut i: i32 = 0;
-    let mut count: i32 = 0;
-    while i < total {
-        if __arena_get(wmt + 2 + i) >= 0 { count = count + 1; }
-        i = i + 1;
+    if wmt_ok(wmt) == 0 { 0 }
+    else {
+        let num_states = __arena_get(wmt);
+        let num_actions = __arena_get(wmt + 1);
+        let total = num_states * num_actions;
+        let mut i: i32 = 0;
+        let mut count: i32 = 0;
+        while i < total {
+            if __arena_get(wmt + 2 + i) >= 0 { count = count + 1; }
+            i = i + 1;
+        }
+        count
     }
-    count
 }
 
 @pure
 fn wmt_is_self_loop(wmt: i32, state: i32, action: i32) -> i32 {
-    let num_actions = __arena_get(wmt + 1);
-    let nxt = __arena_get(wmt + 2 + state * num_actions + action);
+    let nxt = wmt_predict(wmt, state, action);
     if nxt == state { 1 } else { 0 }
 }

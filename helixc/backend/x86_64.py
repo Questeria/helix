@@ -3957,7 +3957,7 @@ if __name__ == "__main__":
 
     if len(sys.argv) < 3:
         print("usage: python -m helixc.backend.x86_64 <input.hx> <output.bin> "
-              "[--strict] [--no-opt] [--no-stdlib] [-Wad=warn|error]",
+              "[--strict] [--no-opt] [--stdlib] [--no-stdlib] [-Wad=warn|error]",
               file=sys.stderr)
         sys.exit(1)
     if sys.argv[2].startswith("-"):
@@ -3969,6 +3969,10 @@ if __name__ == "__main__":
     strict = "--strict" in sys.argv
     no_opt = "--no-opt" in sys.argv
     no_stdlib = "--no-stdlib" in sys.argv
+    if "--stdlib" in sys.argv and "--no-stdlib" in sys.argv:
+        print("error: conflicting stdlib flags: choose --stdlib or --no-stdlib",
+              file=sys.stderr)
+        sys.exit(2)
     warning_policies: dict[str, str] = {}
     for arg in sys.argv[3:]:
         if arg.startswith("-W"):
@@ -3981,9 +3985,33 @@ if __name__ == "__main__":
                 print(f"error: unknown warning policy {arg}", file=sys.stderr)
                 sys.exit(2)
             warning_policies[name] = val
-        elif arg not in ("--strict", "--no-opt", "--no-stdlib"):
+        elif arg not in ("--strict", "--no-opt", "--stdlib", "--no-stdlib"):
             print(f"error: unknown flag {arg}", file=sys.stderr)
             sys.exit(2)
+
+    def _atomic_write_output(path: str, data: bytes, mode: int) -> None:
+        import os
+        import tempfile
+        directory = os.path.dirname(os.path.abspath(path)) or "."
+        base = os.path.basename(path)
+        tmp_path = ""
+        try:
+            fd, tmp_path = tempfile.mkstemp(
+                prefix=f".{base}.",
+                suffix=".tmp",
+                dir=directory,
+            )
+            with os.fdopen(fd, "wb") as f:
+                f.write(data)
+            os.chmod(tmp_path, mode)
+            os.replace(tmp_path, path)
+        except OSError:
+            if tmp_path:
+                try:
+                    os.remove(tmp_path)
+                except OSError:
+                    pass
+            raise
 
     def _drain_cli_ad_warnings() -> int:
         ad_warnings = take_diff_warnings()
@@ -4244,15 +4272,8 @@ if __name__ == "__main__":
         print(f"error: codegen: {e}", file=sys.stderr)
         sys.exit(1)
     try:
-        with open(sys.argv[2], "wb") as f:
-            f.write(elf)
+        _atomic_write_output(sys.argv[2], elf, 0o755)
     except OSError as e:
         print(f"error: output: {e}", file=sys.stderr)
-        sys.exit(1)
-    import os
-    try:
-        os.chmod(sys.argv[2], 0o755)
-    except OSError as e:
-        print(f"error: chmod: {e}", file=sys.stderr)
         sys.exit(1)
     print(f"Wrote {sys.argv[2]} ({len(elf)} bytes)")

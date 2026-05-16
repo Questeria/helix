@@ -60,6 +60,7 @@ import json
 import hashlib
 import sys
 import os
+import tempfile
 
 from .frontend.lexer import LexError
 from .frontend import parser as parser_mod
@@ -389,7 +390,12 @@ def _drain_ad_warnings_to_records(
         or "--emit-asm" in a.flags
         or "--emit-ast" in a.flags
     )
-    stream = sys.stderr if artifact_stdout or ad_policy == "error" else sys.stdout
+    warning_error_mode = any(policy == "error" for policy in a.warnings.values())
+    stream = (
+        sys.stderr
+        if artifact_stdout or ad_policy == "error" or warning_error_mode
+        else sys.stdout
+    )
     print(f"   ad:        {len(ad_warnings)} {label}(s)", file=stream)
     records = []
     for w in ad_warnings:
@@ -428,6 +434,28 @@ def _emit_env_error(msg: str) -> None:
     if text.lstrip().startswith("helixc:"):
         text = text.lstrip()[len("helixc:"):].lstrip()
     print(f"helixc: {text}", file=sys.stderr)
+
+
+def _atomic_write_bytes(path: str, data: bytes) -> None:
+    directory = os.path.dirname(os.path.abspath(path)) or "."
+    base = os.path.basename(path)
+    tmp_path = ""
+    try:
+        fd, tmp_path = tempfile.mkstemp(
+            prefix=f".{base}.",
+            suffix=".tmp",
+            dir=directory,
+        )
+        with os.fdopen(fd, "wb") as f:
+            f.write(data)
+        os.replace(tmp_path, path)
+    except OSError:
+        if tmp_path:
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
+        raise
 
 
 # ----------------------------------------------------------------------
@@ -1737,8 +1765,7 @@ def _main_inner(argv: list[str] | None,
             )
             return 1
         try:
-            with open(a.output, "wb") as f:
-                f.write(elf)
+            _atomic_write_bytes(a.output, elf)
         except OSError as e:
             print(
                 f"helixc: cannot write output {a.output!r}: {e}",
