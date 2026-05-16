@@ -1847,6 +1847,8 @@ class TypeChecker:
         # Stage 36 Increment 5 — real two-parent provenance via arena
         # side-table.
         "register_derivation", "parent_left_at", "parent_right_at",
+        # Stage 36 Increment 6 — fuzzy logic over Logic<f32> for AD.
+        "fuzzy_and", "fuzzy_or", "fuzzy_not",
         "consolidate", "recall", "learn_to",
         "grad", "grad_rev", "grad_rev_all",
         "quote", "splice", "splice_f", "splice_f64",
@@ -2865,6 +2867,37 @@ class TypeChecker:
                             expr.span,
                         ))
                     return TyPrim("i32")
+                # Stage 36 Increment 6: fuzzy logic operators over
+                # Logic<f32>. Truth values live in [0, 1]; operators
+                # use product semantics so they're smooth and
+                # differentiable: fuzzy_and = a*b, fuzzy_or = a+b-a*b,
+                # fuzzy_not = 1-a. Because they lower to MUL/ADD/SUB
+                # (which already have AD chain rules), grad() flows
+                # through them automatically — the bridge to neuro-
+                # symbolic AD without overhauling the AD passes.
+                if bn in ("fuzzy_and", "fuzzy_or") and len(arg_tys) == 2:
+                    for i, t in enumerate(arg_tys):
+                        if not isinstance(t, TyLogic):
+                            self.errors.append(TypeError_(
+                                f"{bn}(a, b): arg {'ab'[i]} must be "
+                                f"Logic<f32>, got {self._fmt(t)} "
+                                f"[trap 24100]",
+                                expr.span,
+                            ))
+                    if (isinstance(arg_tys[0], TyLogic)
+                            and isinstance(arg_tys[1], TyLogic)):
+                        return arg_tys[0]
+                    return TyLogic(inner=TyPrim("f32"))
+                if bn == "fuzzy_not" and len(arg_tys) == 1:
+                    if not isinstance(arg_tys[0], TyLogic):
+                        self.errors.append(TypeError_(
+                            f"fuzzy_not(a): arg must be Logic<f32>, got "
+                            f"{self._fmt(arg_tys[0])} [trap 24100]",
+                            expr.span,
+                        ))
+                    if isinstance(arg_tys[0], TyLogic):
+                        return arg_tys[0]
+                    return TyLogic(inner=TyPrim("f32"))
                 if bn == "consolidate" and len(arg_tys) == 1:
                     # Episodic -> Semantic
                     if isinstance(arg_tys[0], TyMemTier) and arg_tys[0].tier == "episodic":

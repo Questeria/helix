@@ -55,6 +55,15 @@ AD_KNOWN_PURE_CALLS = {
     "__min_i32", "__max_i32", "__clamp_i32",
     "__min_f64", "__max_f64", "__clamp_f64",
     "__sign", "__sign_f64",
+    # Stage 36 Increment 6: provenance + fuzzy logic primitives are
+    # AD-pure. prove/unwrap_logic/attach/detach lower as identity at
+    # IR. fuzzy_and/fuzzy_or/fuzzy_not lower to MUL/ADD/SUB chains
+    # which AD already knows how to differentiate. Registering them
+    # here lets `grad(loss)` and `grad_rev(loss)` flow gradients
+    # through Logic-typed sub-expressions.
+    "prove", "unwrap_logic",
+    "attach", "detach",
+    "fuzzy_and", "fuzzy_or", "fuzzy_not",
 }
 
 
@@ -1031,6 +1040,39 @@ def _diff_call_chain_rule(call: A.Call, var: str,
         log_p = calln("__log_stable", [_copy.deepcopy(p_safe)])
         deriv_y = binary("-", log_one_minus, log_p)
         return binary("+", binary("*", deriv_p, dp), binary("*", deriv_y, dy))
+    # Stage 36 Increment 6: 2-arg fuzzy logic operators. These must be
+    # handled before the `len(call.args) != 1` early return below
+    # (mirrors the __powi and __bce placement above).
+    if call.callee.name == "fuzzy_and" and len(call.args) == 2:
+        # d(a*b)/dx = a'*b + a*b'
+        a, b = call.args
+        da = _diff(a, var)
+        db = _diff(b, var)
+        ab_term = A.Binary(span=span, op="*", left=da,
+                           right=_copy.deepcopy(b))
+        ba_term = A.Binary(span=span, op="*",
+                           left=_copy.deepcopy(a), right=db)
+        return A.Binary(span=span, op="+", left=ab_term, right=ba_term)
+    if call.callee.name == "fuzzy_or" and len(call.args) == 2:
+        # d(a + b - a*b)/dx = a'*(1-b) + b'*(1-a)
+        a, b = call.args
+        da = _diff(a, var)
+        db = _diff(b, var)
+        one_minus_b = A.Binary(span=span, op="-",
+                               left=A.FloatLit(span=span, value=1.0),
+                               right=_copy.deepcopy(b))
+        one_minus_a = A.Binary(span=span, op="-",
+                               left=A.FloatLit(span=span, value=1.0),
+                               right=_copy.deepcopy(a))
+        return A.Binary(
+            span=span, op="+",
+            left=A.Binary(span=span, op="*", left=da, right=one_minus_b),
+            right=A.Binary(span=span, op="*", left=db, right=one_minus_a))
+    # prove(value, source) is a 2-arg identity wrapper. The source tag
+    # is non-differentiable so the chain rule is identity on the first
+    # arg.
+    if call.callee.name == "prove" and len(call.args) == 2:
+        return _diff(call.args[0], var)
     if len(call.args) != 1:
         return None
     name = call.callee.name
@@ -1260,6 +1302,15 @@ def _diff_call_chain_rule(call: A.Call, var: str,
                                   final_expr=A.FloatLit(span=span, value=1.0)),
                      else_=A.Block(span=span, stmts=[], final_expr=inner_else))
         return mul(gated, du)
+    # Stage 36 Increment 6: forward-mode chain rules for 1-arg wrapper
+    # builtins (unwrap_logic, attach, detach are identity; fuzzy_not
+    # is 1 - a, derivative -a'). prove and 2-arg fuzzy_* live above
+    # the `len(call.args) != 1` gate.
+    if name in ("unwrap_logic", "attach", "detach"):
+        return du
+    if name == "fuzzy_not":
+        # d(1 - a)/dx = -a'
+        return A.Unary(span=span, op="-", operand=du)
     return None
 
 

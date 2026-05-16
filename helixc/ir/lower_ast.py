@@ -1995,6 +1995,49 @@ class Lowerer:
                 return self.builder.emit(
                     tir.OpKind.ARENA_GET, idx_plus_1,
                     result_ty=tir.TIRScalar("i32"))
+            # Stage 36 Increment 6: fuzzy logic operators over
+            # Logic<f32>. Product semantics for AND, probabilistic OR.
+            # All three lower to MUL/ADD/SUB so the existing AD chain
+            # rules apply — grad() flows through them automatically.
+            if (isinstance(expr.callee, A.Name)
+                    and expr.callee.name == "fuzzy_and"
+                    and len(expr.args) == 2):
+                a = self._lower_expr(expr.args[0])
+                b = self._lower_expr(expr.args[1])
+                if a is None or b is None:
+                    return a or b
+                # fuzzy_and(a, b) = a * b
+                return self.builder.emit(
+                    tir.OpKind.MUL, a, b,
+                    result_ty=tir.TIRScalar("f32"))
+            if (isinstance(expr.callee, A.Name)
+                    and expr.callee.name == "fuzzy_or"
+                    and len(expr.args) == 2):
+                a = self._lower_expr(expr.args[0])
+                b = self._lower_expr(expr.args[1])
+                if a is None or b is None:
+                    return a or b
+                # fuzzy_or(a, b) = a + b - a*b (probabilistic sum)
+                sum_ab = self.builder.emit(
+                    tir.OpKind.ADD, a, b,
+                    result_ty=tir.TIRScalar("f32"))
+                prod_ab = self.builder.emit(
+                    tir.OpKind.MUL, a, b,
+                    result_ty=tir.TIRScalar("f32"))
+                return self.builder.emit(
+                    tir.OpKind.SUB, sum_ab, prod_ab,
+                    result_ty=tir.TIRScalar("f32"))
+            if (isinstance(expr.callee, A.Name)
+                    and expr.callee.name == "fuzzy_not"
+                    and len(expr.args) == 1):
+                a = self._lower_expr(expr.args[0])
+                if a is None:
+                    return a
+                # fuzzy_not(a) = 1.0 - a
+                one = self.builder.const_float(1.0, dtype="f32")
+                return self.builder.emit(
+                    tir.OpKind.SUB, one, a,
+                    result_ty=tir.TIRScalar("f32"))
             # Stage 16.5: "literal".as_ptr() — emit STR_PTR op that resolves
             # to a `lea rax, [rip + sym]` of the literal's bytes. The result
             # is a u64 raw pointer suitable for FFI calls.

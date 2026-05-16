@@ -540,6 +540,185 @@ fn main() -> i32 {
         f"expected register_derivation type error, got {[str(e) for e in errs]}"
 
 
+# Stage 36 Increment 6 — fuzzy logic + AD chain rules through Logic.
+#
+# Bridge to differentiable neuro-symbolic AI. fuzzy_and/or/not
+# operate on Logic<f32> truth values in [0, 1] using product
+# semantics so they're smooth and differentiable. grad() and
+# grad_rev() now flow gradients through prove/unwrap_logic/attach/
+# detach (identity chain rule) and through the fuzzy ops (product
+# / probabilistic chain rules registered in autodiff.py and
+# autodiff_reverse.py).
+#
+# This is the first running Helix code that COMPUTES GRADIENTS
+# THROUGH PROPOSITIONAL LOGIC — the strategic Tier 3 #10 moat is
+# now end-to-end functional, not just a type-level promise.
+
+
+def _stage36_inc6_pipeline(src):
+    """Stage 36 AD tests need grad_pass before lower. Returns rc."""
+    from helixc.frontend.grad_pass import grad_pass
+    prog = parse(src, include_stdlib=True)
+    errs = typecheck(prog)
+    if errs:
+        raise AssertionError(f"typecheck errors: {[str(e) for e in errs]}")
+    grad_pass(prog)
+    elf = compile_module_to_elf(lower(prog))
+    return _run_elf(elf)
+
+
+def test_stage36_inc6_fuzzy_builtins_registered():
+    """fuzzy_and, fuzzy_or, fuzzy_not are registered as builtins."""
+    tc = TypeChecker(parse("fn main() -> i32 { 0 }"))
+    for name in ("fuzzy_and", "fuzzy_or", "fuzzy_not"):
+        assert name in tc._BUILTIN_NAMES, f"{name} not a builtin"
+
+
+def test_stage36_inc6_fuzzy_and_product_semantics():
+    """fuzzy_and(0.5, 0.8) = 0.4 (product semantics)."""
+    src = """
+fn main() -> i32 {
+    let a: Logic<f32> = prove(0.5_f32, 0);
+    let b: Logic<f32> = prove(0.8_f32, 0);
+    let v: f32 = unwrap_logic(fuzzy_and(a, b));
+    if v > 0.39_f32 { if v < 0.41_f32 { 42 } else { 0 } } else { 0 }
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    assert typecheck(prog) == []
+    elf = compile_module_to_elf(lower(prog))
+    assert _run_elf(elf) == 42
+
+
+def test_stage36_inc6_fuzzy_or_probabilistic():
+    """fuzzy_or(0.5, 0.5) = 0.5 + 0.5 - 0.25 = 0.75."""
+    src = """
+fn main() -> i32 {
+    let v: f32 = unwrap_logic(
+        fuzzy_or(prove(0.5_f32, 0), prove(0.5_f32, 0)));
+    if v > 0.74_f32 { if v < 0.76_f32 { 42 } else { 0 } } else { 0 }
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    assert typecheck(prog) == []
+    elf = compile_module_to_elf(lower(prog))
+    assert _run_elf(elf) == 42
+
+
+def test_stage36_inc6_fuzzy_not_complement():
+    """fuzzy_not(0.3) = 0.7."""
+    src = """
+fn main() -> i32 {
+    let v: f32 = unwrap_logic(fuzzy_not(prove(0.3_f32, 0)));
+    if v > 0.69_f32 { if v < 0.71_f32 { 42 } else { 0 } } else { 0 }
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    assert typecheck(prog) == []
+    elf = compile_module_to_elf(lower(prog))
+    assert _run_elf(elf) == 42
+
+
+def test_stage36_inc6_fuzzy_de_morgan():
+    """De Morgan in fuzzy logic: fuzzy_not(fuzzy_and(a, b)) ==
+    fuzzy_or(fuzzy_not(a), fuzzy_not(b)) for a=0.6, b=0.7.
+    LHS: 1 - 0.42 = 0.58
+    RHS: 0.4 + 0.3 - 0.12 = 0.58. |diff| < 0.01 -> 42."""
+    src = """
+fn main() -> i32 {
+    let a: Logic<f32> = prove(0.6_f32, 0);
+    let b: Logic<f32> = prove(0.7_f32, 0);
+    let lhs: f32 = unwrap_logic(fuzzy_not(fuzzy_and(a, b)));
+    let rhs: f32 = unwrap_logic(fuzzy_or(fuzzy_not(a), fuzzy_not(b)));
+    let diff: f32 = lhs - rhs;
+    let abs_diff: f32 = if diff < 0.0_f32 { 0.0_f32 - diff } else { diff };
+    if abs_diff < 0.01_f32 { 42 } else { 0 }
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    assert typecheck(prog) == []
+    elf = compile_module_to_elf(lower(prog))
+    assert _run_elf(elf) == 42
+
+
+def test_stage36_inc6_grad_rev_through_fuzzy_and():
+    """grad_rev(loss)(2.0) where loss(x) = fuzzy_and(x, 0.5) gives
+    0.5 (since fuzzy_and is x * 0.5, d/dx = 0.5)."""
+    src = """
+fn loss(x: f32) -> f32 {
+    unwrap_logic(fuzzy_and(prove(x, 0), prove(0.5_f32, 0)))
+}
+fn main() -> i32 {
+    let g: f32 = grad_rev(loss)(2.0_f32);
+    let g_int: i32 = (g * 100.0_f32) as i32;
+    g_int - 8
+}
+"""
+    assert _stage36_inc6_pipeline(src) == 42
+
+
+def test_stage36_inc6_grad_rev_through_fuzzy_not():
+    """grad_rev(loss)(0.4) where loss(x) = fuzzy_not(x) = 1 - x
+    gives -1."""
+    src = """
+fn loss(x: f32) -> f32 {
+    unwrap_logic(fuzzy_not(prove(x, 0)))
+}
+fn main() -> i32 {
+    let g: f32 = grad_rev(loss)(0.4_f32);
+    if g < -0.99_f32 { if g > -1.01_f32 { 42 } else { 1 } } else { 2 }
+}
+"""
+    assert _stage36_inc6_pipeline(src) == 42
+
+
+def test_stage36_inc6_grad_rev_nested_fuzzy_compose():
+    """grad_rev through fuzzy_not(fuzzy_and(x, 0.5)) = 1 - 0.5x.
+    d/dx = -0.5."""
+    src = """
+fn loss(x: f32) -> f32 {
+    let a: Logic<f32> = prove(x, 0);
+    let b: Logic<f32> = prove(0.5_f32, 0);
+    unwrap_logic(fuzzy_not(fuzzy_and(a, b)))
+}
+fn main() -> i32 {
+    let g: f32 = grad_rev(loss)(0.6_f32);
+    if g < -0.49_f32 { if g > -0.51_f32 { 42 } else { 1 } } else { 2 }
+}
+"""
+    assert _stage36_inc6_pipeline(src) == 42
+
+
+def test_stage36_inc6_grad_forward_through_fuzzy_and():
+    """Forward-mode grad() through fuzzy_and: same gradient as
+    reverse-mode."""
+    src = """
+fn loss(x: f32) -> f32 {
+    unwrap_logic(fuzzy_and(prove(x, 0), prove(0.5_f32, 0)))
+}
+fn main() -> i32 {
+    let g: f32 = grad(loss)(2.0_f32);
+    let g_int: i32 = (g * 100.0_f32) as i32;
+    g_int - 8
+}
+"""
+    assert _stage36_inc6_pipeline(src) == 42
+
+
+def test_stage36_inc6_grad_forward_through_fuzzy_not():
+    """Forward-mode grad() through fuzzy_not."""
+    src = """
+fn loss(x: f32) -> f32 {
+    unwrap_logic(fuzzy_not(prove(x, 0)))
+}
+fn main() -> i32 {
+    let g: f32 = grad(loss)(0.4_f32);
+    if g < -0.99_f32 { if g > -1.01_f32 { 42 } else { 1 } } else { 2 }
+}
+"""
+    assert _stage36_inc6_pipeline(src) == 42
+
+
 if __name__ == "__main__":
     import pytest
     raise SystemExit(pytest.main([__file__, "-v"]))

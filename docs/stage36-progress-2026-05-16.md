@@ -305,16 +305,86 @@ can make this automatic by reserving a "current derivation handle"
 slot per Logic<T> at the IR level, but that's a representation
 change deferred to a later session.
 
-## Increment 6 - AD Gradient Flow Through Logic Ops (planned)
+## Increment 6 - AD Chain Rules Through Logic Ops (SHIPPED, 2026-05-16)
 
-The remaining strategic goal: `grad(loss)(...)` where `loss` is a
-function returning `Logic<f32>` or `D<Logic<T>>`. The AD passes
-need chain rules registered for `and_logic`, `or_logic`, `not_logic`
-(fuzzy-relaxation derivatives, e.g. sigmoid-relaxed AND).
+This is the strategic Tier 3 #10 moat fully online: Helix code can
+now compute gradients through propositional logic. The differentiable
+neuro-symbolic dream is no longer a type-level promise.
 
-This is genuinely bigger work than Increments 1-5 because it touches
-the autodiff passes (`helixc/frontend/grad_pass.py`,
-`helixc/stdlib/autodiff_reverse.hx`). Reserved for a later session.
+What landed:
+
+- **New fuzzy operators** (`helixc/frontend/typecheck.py`,
+  `helixc/ir/lower_ast.py`): `fuzzy_and`, `fuzzy_or`, `fuzzy_not`
+  on `Logic<f32>` truth values in [0, 1].
+  - `fuzzy_and(a, b) = a * b` (product semantics; lowers to MUL).
+  - `fuzzy_or(a, b) = a + b - a*b` (probabilistic; lowers to
+    ADD - MUL).
+  - `fuzzy_not(a) = 1 - a` (lowers to SUB).
+- **AD chain rules registered for both modes**:
+  - `helixc/frontend/autodiff.py` — forward-mode `grad()`:
+    - identity for `unwrap_logic`, `attach`, `detach` (1-arg)
+    - identity-on-first-arg for `prove` (2-arg, source non-diff)
+    - product rule for `fuzzy_and`: `a'*b + a*b'`
+    - probabilistic rule for `fuzzy_or`: `a'*(1-b) + b'*(1-a)`
+    - constant-deriv for `fuzzy_not`: `-a'`
+  - `helixc/frontend/autodiff_reverse.py` — reverse-mode `grad_rev()`:
+    same chain rules in reverse-mode form. Propagation pushes
+    `adj * b` and `adj * a` for `fuzzy_and`, `adj * (1-b)` and
+    `adj * (1-a)` for `fuzzy_or`, `-adj` for `fuzzy_not`.
+- **AD pass purity registration** (`AD_KNOWN_PURE_CALLS` set):
+  prove, unwrap_logic, attach, detach, fuzzy_and, fuzzy_or,
+  fuzzy_not — so let-inlining doesn't trip on "side-effecting"
+  guards.
+
+Verified end-to-end (all exit 42):
+
+- `grad_rev(loss)(2.0)` where `loss(x) = fuzzy_and(prove(x, 0),
+  prove(0.5, 0))` → gradient 0.5.
+- `grad_rev(loss)(0.4)` where `loss(x) = fuzzy_not(prove(x, 0))`
+  → gradient -1.
+- `grad_rev(loss)(0.3)` where `loss(x) = fuzzy_or(prove(x, 0),
+  prove(0.5, 0))` → gradient 0.5.
+- `grad_rev(loss)(0.6)` where `loss(x) = fuzzy_not(fuzzy_and(
+  prove(x, 0), prove(0.5, 0)))` = 1 - 0.5x → gradient -0.5.
+- Same three for forward-mode `grad()`.
+- Fuzzy De Morgan's law verified (lhs == rhs within 0.01).
+
+Tests: 41 pass in test_stage36_provenance.py (Inc 5's 31 + Inc 6's
+10 new). Self-host gate: PASS.
+
+### Stage 36 status after Increment 6
+
+The strategic Tier 3 #10 moat is **fully online end-to-end**. A
+Helix program can now:
+
+1. Wrap values with provenance tags (`prove`).
+2. Compose propositional rules with full boolean algebra
+   (and/or/not/xor/implies/eq/if).
+3. Track two-parent derivation history (`register_derivation`,
+   `parent_left_at`, `parent_right_at`).
+4. Compute fuzzy-relaxed semantics for AD (`fuzzy_and/or/not`).
+5. **Differentiate through propositional logic** via both forward-
+   mode `grad()` and reverse-mode `grad_rev()`.
+
+This is the differentiable neuro-symbolic substrate that
+distinguishes Helix from JAX/Mojo/Triton. The Tier 3 #10 strategic
+target is met.
+
+## What's left in Stage 36 (Increment 7+)
+
+1. **Auto-registration of derivations** — combinators (`and_logic`,
+   `or_logic`, etc.) should automatically write a derivation entry
+   to the arena, so `parent_left_at(derived)` works without explicit
+   `register_derivation` calls. Needs IR-level per-Logic<T> handle
+   slots.
+2. **Print / debug observation** — `print_provenance(l)`,
+   `trace_evidence(l, depth)`. Useful but Phase-1 cosmetics.
+3. **Multi-parent provenance** — generalize the 2-tag arena entries
+   to N-tag (e.g. for ternary connectives or rule-fire records).
+4. **Larger Datalog demo** — a 2nd dogfood (`dogfood_07_*`) that
+   trains a small differentiable rule system via gradient descent
+   on a propositional loss surface. Demonstrates the full strategic
+   capability.
 
 Sketch:
 

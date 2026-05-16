@@ -553,6 +553,60 @@ def _propagate(node: A.Expr, adj: A.Expr, acc: dict[str, list[A.Expr]]) -> None:
                 new_adj = A.Binary(span=node.span, op="*", left=adj, right=gated)
                 _propagate(u, new_adj, acc)
                 return
+        # Stage 36 Increment 6: provenance + fuzzy-logic chain rules.
+        # prove/unwrap_logic/attach/detach are identity functions at
+        # the IR level (Logic<T> and D<T> wrappers have zero runtime
+        # representation in Phase-0). For AD purposes, the chain rule
+        # is therefore identity: adj of the result equals adj of the
+        # first (value) argument; the provenance tag (second arg of
+        # prove) is non-differentiable and doesn't get an update.
+        if isinstance(node.callee, A.Name) and node.callee.name in (
+                "prove", "unwrap_logic", "attach", "detach"):
+            if node.args:
+                _propagate(node.args[0], adj, acc)
+            return
+        # fuzzy_and(a, b) = a * b: ∂/∂a = b, ∂/∂b = a.
+        if (isinstance(node.callee, A.Name)
+                and node.callee.name == "fuzzy_and"
+                and len(node.args) == 2):
+            a_arg, b_arg = node.args
+            adj_a = A.Binary(span=node.span, op="*",
+                             left=adj, right=copy.deepcopy(b_arg))
+            adj_b = A.Binary(span=node.span, op="*",
+                             left=copy.deepcopy(adj),
+                             right=copy.deepcopy(a_arg))
+            _propagate(a_arg, adj_a, acc)
+            _propagate(b_arg, adj_b, acc)
+            return
+        # fuzzy_or(a, b) = a + b - a*b:
+        #   ∂/∂a = 1 - b, ∂/∂b = 1 - a.
+        if (isinstance(node.callee, A.Name)
+                and node.callee.name == "fuzzy_or"
+                and len(node.args) == 2):
+            a_arg, b_arg = node.args
+            one_minus_b = A.Binary(
+                span=node.span, op="-",
+                left=A.FloatLit(span=node.span, value=1.0),
+                right=copy.deepcopy(b_arg))
+            one_minus_a = A.Binary(
+                span=node.span, op="-",
+                left=A.FloatLit(span=node.span, value=1.0),
+                right=copy.deepcopy(a_arg))
+            adj_a = A.Binary(span=node.span, op="*",
+                             left=adj, right=one_minus_b)
+            adj_b = A.Binary(span=node.span, op="*",
+                             left=copy.deepcopy(adj), right=one_minus_a)
+            _propagate(a_arg, adj_a, acc)
+            _propagate(b_arg, adj_b, acc)
+            return
+        # fuzzy_not(a) = 1 - a: ∂/∂a = -1.
+        if (isinstance(node.callee, A.Name)
+                and node.callee.name == "fuzzy_not"
+                and len(node.args) == 1):
+            a_arg = node.args[0]
+            adj_a = A.Unary(span=node.span, op="-", operand=adj)
+            _propagate(a_arg, adj_a, acc)
+            return
         # Audit 28.8 B5: opaque user call — was silently a zero
         # contribution. Reverse-mode now fails closed instead of compiling
         # a zero-gradient surrogate.
