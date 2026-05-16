@@ -64,21 +64,33 @@
     scale * exp_r
 }
 
+// Restart 56 A1: range-reduce x into [-π, π] before the Taylor series.
+// The 4-term series is only accurate for |x| < π/2 ≈ 1.57; without
+// reduction, |x| > 2π produces nonsense. Mirrors __exp range reduction
+// discipline. Two-pi constant inlined as 6.28318530718; round-via-i32-
+// cast handles |x| up to ~2 billion before integer overflow becomes a
+// concern (well past any realistic angle).
 @pure fn __sin(x: f32) -> f32 {
+    let two_pi = 6.28318530718_f32;
+    let k = ((x / two_pi) + (if x >= 0.0_f32 { 0.5_f32 } else { 0.0_f32 - 0.5_f32 })) as i32;
+    let xr = x - (k as f32) * two_pi;
     // sin(x) = x - x³/3! + x⁵/5! - x⁷/7!
-    let x2 = x * x;
-    let x3 = x2 * x;
+    let x2 = xr * xr;
+    let x3 = x2 * xr;
     let x5 = x3 * x2;
     let x7 = x5 * x2;
-    x - x3 * 0.16666667 + x5 * 0.00833333 - x7 * 0.00019841
+    xr - x3 * 0.16666667_f32 + x5 * 0.00833333_f32 - x7 * 0.00019841_f32
 }
 
 @pure fn __cos(x: f32) -> f32 {
+    let two_pi = 6.28318530718_f32;
+    let k = ((x / two_pi) + (if x >= 0.0_f32 { 0.5_f32 } else { 0.0_f32 - 0.5_f32 })) as i32;
+    let xr = x - (k as f32) * two_pi;
     // cos(x) = 1 - x²/2! + x⁴/4! - x⁶/6!
-    let x2 = x * x;
+    let x2 = xr * xr;
     let x4 = x2 * x2;
     let x6 = x4 * x2;
-    1.0 - x2 * 0.5 + x4 * 0.04166667 - x6 * 0.00138889
+    1.0_f32 - x2 * 0.5_f32 + x4 * 0.04166667_f32 - x6 * 0.00138889_f32
 }
 
 @pure fn __log(x: f32) -> f32 {
@@ -227,18 +239,25 @@
     if x < lo { lo } else { if x > hi { hi } else { x } }
 }
 
+// Restart 56 A1 (f64 mirror): range-reduce x into [-π, π] before Taylor.
 @pure fn __sin_f64(x: f64) -> f64 {
-    let x2 = x * x;
-    let x3 = x2 * x;
+    let two_pi = 6.283185307179586_f64;
+    let k = ((x / two_pi) + (if x >= 0.0_f64 { 0.5_f64 } else { 0.0_f64 - 0.5_f64 })) as i32;
+    let xr = x - (k as f64) * two_pi;
+    let x2 = xr * xr;
+    let x3 = x2 * xr;
     let x5 = x3 * x2;
     let x7 = x5 * x2;
-    x - x3 * 0.16666666666666666_f64
-      + x5 * 0.008333333333333333_f64
-      - x7 * 0.0001984126984126984_f64
+    xr - x3 * 0.16666666666666666_f64
+       + x5 * 0.008333333333333333_f64
+       - x7 * 0.0001984126984126984_f64
 }
 
 @pure fn __cos_f64(x: f64) -> f64 {
-    let x2 = x * x;
+    let two_pi = 6.283185307179586_f64;
+    let k = ((x / two_pi) + (if x >= 0.0_f64 { 0.5_f64 } else { 0.0_f64 - 0.5_f64 })) as i32;
+    let xr = x - (k as f64) * two_pi;
+    let x2 = xr * xr;
     let x4 = x2 * x2;
     let x6 = x4 * x2;
     1.0_f64 - x2 * 0.5_f64
