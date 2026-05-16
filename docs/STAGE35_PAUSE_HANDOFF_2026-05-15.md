@@ -21,8 +21,9 @@ Later continuation:
 - Restart 25 is closed by commit `45bf6ff`.
 - Restart 26 is closed by commit `44c6b6a`.
 - Restart 27 is closed by commit `3830869`.
-- Restart 28 began from `3830869`; use the progress ledger for its current
-  result and newest commit.
+- Restart 28 is closed by commit `e6c9ced`.
+- Restart 29 should begin from `e6c9ced`; use the progress ledger for its
+  current result and newest commit.
 - Any future continuation should follow `docs/stage35-progress-2026-05-15.md`
   instead of this historical pre-reboot checklist.
 
