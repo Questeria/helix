@@ -6,6 +6,7 @@ import os
 import json
 import hashlib
 import runpy
+import stat
 import sys
 import subprocess
 import tempfile
@@ -1063,6 +1064,8 @@ def test_main_o_writes_file(tmp_path):
     assert rc == 0
     assert os.path.exists(out_path)
     assert os.path.getsize(out_path) > 0
+    if os.name != "nt":
+        assert os.stat(out_path).st_mode & stat.S_IXUSR
 
 
 def test_main_emit_asm_traps_backend_error(monkeypatch, capsys, tmp_path):
@@ -1191,6 +1194,29 @@ def test_stage35_check_output_atomic_replace_failure_keeps_existing(
     assert "synthetic replace denied" in cap.err
     assert out_path.read_bytes() == b"OLD"
     assert list(tmp_path.glob(".atomic_replace.bin.*.tmp")) == []
+
+
+def test_stage35_check_output_chmod_failure_removes_temp(
+    monkeypatch, capsys, tmp_path
+):
+    from helixc import check as _check
+
+    src_path = str(tmp_path / "chmod_failure.hx")
+    out_path = tmp_path / "chmod_failure.bin"
+    with open(src_path, "w") as f:
+        f.write("fn main() -> i32 { 42 }\n")
+
+    def _chmod_blocking(path, mode):
+        raise PermissionError("synthetic chmod denied")
+
+    monkeypatch.setattr(_check.os, "chmod", _chmod_blocking)
+    rc = main([src_path, "-o", str(out_path)])
+    cap = capsys.readouterr()
+    assert rc == 1
+    assert "cannot write output" in cap.err
+    assert "synthetic chmod denied" in cap.err
+    assert not out_path.exists()
+    assert list(tmp_path.glob(".chmod_failure.bin.*.tmp")) == []
 
 
 def _count_op_kinds(mod):

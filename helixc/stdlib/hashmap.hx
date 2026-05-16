@@ -68,8 +68,8 @@ fn hashmap_hash(k: i32, cap: i32) -> i32 {
     if cap <= 0 { 0 }
     else {
         let mut h = k * 31 + 7;
-        if h < 0 { h = 0 - h; }
-        h % cap
+        let r = h % cap;
+        if r < 0 { r + cap } else { r }
     }
 }
 

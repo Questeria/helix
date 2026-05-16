@@ -436,7 +436,7 @@ def _emit_env_error(msg: str) -> None:
     print(f"helixc: {text}", file=sys.stderr)
 
 
-def _atomic_write_bytes(path: str, data: bytes) -> None:
+def _atomic_write_bytes(path: str, data: bytes, mode: int | None = None) -> None:
     directory = os.path.dirname(os.path.abspath(path)) or "."
     base = os.path.basename(path)
     tmp_path = ""
@@ -448,6 +448,8 @@ def _atomic_write_bytes(path: str, data: bytes) -> None:
         )
         with os.fdopen(fd, "wb") as f:
             f.write(data)
+        if mode is not None:
+            os.chmod(tmp_path, mode)
         os.replace(tmp_path, path)
     except OSError:
         if tmp_path:
@@ -1726,15 +1728,6 @@ def _main_inner(argv: list[str] | None,
             elf = compile_module_to_elf(mod)
         except Exception as e:
             return _report_x86_codegen_exception(e)
-            print(
-                f"helixc: internal error: {type(e).__name__}: {e}",
-                file=sys.stderr,
-            )
-            print(
-                "helixc: this is a compiler bug — please file an issue.",
-                file=sys.stderr,
-            )
-            return 1
         # Phase-0: ELF hex dump. A real disassembler would use objdump.
         print(f"   asm: {len(elf)} bytes of ELF (use `objdump -d` for asm)")
         for i in range(0, len(elf), 16):
@@ -1773,17 +1766,8 @@ def _main_inner(argv: list[str] | None,
             elf = compile_module_to_elf(mod)
         except Exception as e:
             return _report_x86_codegen_exception(e)
-            print(
-                f"helixc: internal error: {type(e).__name__}: {e}",
-                file=sys.stderr,
-            )
-            print(
-                "helixc: this is a compiler bug — please file an issue.",
-                file=sys.stderr,
-            )
-            return 1
         try:
-            _atomic_write_bytes(a.output, elf)
+            _atomic_write_bytes(a.output, elf, mode=0o755)
         except OSError as e:
             print(
                 f"helixc: cannot write output {a.output!r}: {e}",

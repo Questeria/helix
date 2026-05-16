@@ -3,7 +3,7 @@
 **Historical snapshot date**: 2026-05-12
 **Historical snapshot HEAD**: `a2e7fc4` (Stage 30 cycle-5 prep: document M2 trade-off)
 **Current-status warning**: this file is a historical handoff, not the current repo state. As of 2026-05-16, continue from the Stage 35 progress ledger, live git HEAD, and `git status --short` instead.
-**Current continuation pointer**: Stage 35 audit cleanup; restart 31 is closed at `fb9400d`, restart 32 is closed at `5d8b4c4`, restart 33 is closed at `09b692c`, restart 34 is closed at `fcfc20e`, and restart 35 is the current fix sweep from pushed audit baseline `fcfc20e`. Clean gates remain `0/3`. Run `git log -1 --oneline`, `git status --short`, and `docs/stage35-progress-2026-05-15.md` for the newest truth.
+**Current continuation pointer**: Stage 35 audit cleanup; restart 35 is closed at pushed commit `465a9b4`, and restart 36 is the active fix sweep from `465a9b4`. Clean gates remain `0/3`. Live `helixc/tests` collection is 2,379. Run `git log -1 --oneline`, `git status --short`, and `docs/stage35-progress-2026-05-15.md` for the newest truth.
 **Project**: `C:\Projects\Kovostov-Native\` — Helix language self-hosting compiler
 
 User backed up the entire folder before this handoff in case of issues.
@@ -225,7 +225,7 @@ Continue autonomously per these directives.
 
 Per user's audit protocol:
 - **ZERO HIGH/MEDIUM/LOW issues** per cycle for CLEAN declaration
-- Heavy gate must be GREEN before declaring clean. Historical snapshot had 670+ tests; Stage 35 restart 35 fix verification collected 2,376 live `helixc/tests` tests, so refresh with `python -m pytest helixc/tests --collect-only -q`.
+- Heavy gate must be GREEN before declaring clean. Historical snapshot had 670+ tests; Stage 35 restart 36 fix verification collected 2,379 live `helixc/tests` tests, so refresh with `python -m pytest helixc/tests --collect-only -q`.
 - 3 CONSECUTIVE clean cycles on the SAME HEAD to declare stage done
 - If issues found: apply fix-sweep, re-test, dispatch next cycle
 

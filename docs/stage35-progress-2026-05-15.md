@@ -2274,3 +2274,77 @@ Clean-gate status:
 
 - Stage 35 clean gates remain `0/3`.
 - Restart 35 is a fix sweep, not a clean gate.
+- Restart 35 was committed and pushed as `465a9b4`.
+- Restart 36 began from `465a9b4`; the fresh audit found more fixable issues,
+  so the gate still does not count as clean.
+
+## Increment 55 - Thirty-Sixth Clean-Gate Restart Fix Sweep
+
+Restart 36 began from pushed commit `465a9b4` with restart-35 closed. Baseline
+support checks were green:
+
+- `python -m py_compile helixc\check.py helixc\backend\x86_64.py helixc\backend\ptx.py helixc\tests\test_cli.py helixc\tests\test_codegen.py helixc\tests\test_ptx.py`
+  - Result: passed.
+- Per-file stdlib parser sweep across `helixc/stdlib/*.hx`
+  - Result: parsed 16 files.
+- `python -m pytest helixc\tests\test_cli.py -q -k "stage35 or emit_ast or emit_ir or emit_asm or emit_ptx or output or direct_x86 or missing_main"`
+  - Result: 75 passed, 125 deselected.
+- `python -m pytest helixc\tests\test_codegen.py -q -k "hashmap or agi_ or wmt or wml or wm_prediction or tensor or revad or agi_memory or bfs or visited or pq or astar or attention or unify"`
+  - Result: 152 passed, 745 deselected.
+- `python -m pytest helixc\tests\test_ptx.py -q -k "stage35 or direct_ptx or wad or deprecated"`
+  - Result: 42 passed, 36 deselected.
+- `python -m pytest helixc\tests --collect-only -q`
+  - Result: 2,376 tests collected at the `465a9b4` baseline.
+
+The fresh restart-36 audit was not clean. Findings:
+
+- `hashmap_hash` could produce a negative bucket for an `INT_MIN` remainder,
+  allowing a valid hashmap to write before its bucket region.
+- `wmt_rollout` silently returned impossible start states from a bounded model.
+- `helixc.check -o` wrote ELF artifacts without executable permission on POSIX.
+- The recent x86 exception helper left unreachable legacy diagnostic blocks.
+- Current docs still pointed at restart 35 / `fcfc20e` instead of restart 36.
+
+Fixes in this increment:
+
+- Normalized hashmap remainders after modulo so `hashmap_hash` never returns a
+  negative bucket.
+- Added rollout start-state validation for table-backed world models.
+- Made `helixc.check -o` chmod temporary ELF artifacts to `0o755` before the
+  atomic replace and clean up temp files if chmod fails.
+- Removed unreachable legacy exception-print blocks after the x86 diagnostic
+  helper return.
+- Updated current docs, handoff text, and website facts to restart 36 and the
+  live 2,379-test collection.
+
+Verification:
+
+- `python -m py_compile helixc\check.py helixc\tests\test_cli.py helixc\tests\test_codegen.py`
+  - Result: passed.
+- Per-file stdlib parser sweep across `helixc/stdlib/*.hx`
+  - Result: parsed 16 files.
+- `python -m pytest helixc\tests\test_codegen.py -q -k "hashmap_hash_int_min or wmt_rollout_rejects_invalid or stage35_hashmap_rejects_forged or agi_wmt_rollout"`
+  - Result: 4 passed, 895 deselected.
+- `python -m pytest helixc\tests\test_cli.py -q -k "main_o_writes_file or check_output_chmod_failure or check_output_atomic_replace_failure or missing_main_is_user_codegen_error"`
+  - Result: 5 passed, 196 deselected.
+- `python -m pytest helixc\tests\test_codegen.py -q -k "hashmap or agi_ or wmt or wml or wm_prediction or tensor or revad or agi_memory or bfs or visited or pq or astar or attention or unify"`
+  - Result: 154 passed, 745 deselected.
+- `python -m pytest helixc\tests\test_cli.py -q -k "stage35 or emit_ast or emit_ir or emit_asm or emit_ptx or output or direct_x86 or missing_main"`
+  - Result: 76 passed, 125 deselected.
+- `python -m pytest helixc\tests\test_ptx.py -q -k "stage35 or direct_ptx or wad or deprecated"`
+  - Result: 42 passed, 36 deselected.
+- `python -m pytest helixc\tests\test_codegen.py -q -k "stage35"`
+  - Result: 46 passed, 853 deselected.
+- `python -m pytest helixc\tests\test_cli.py -q -k "stage35"`
+  - Result: 56 passed, 145 deselected.
+- `python -m pytest helixc\tests\test_ptx.py -q -k "stage35"`
+  - Result: 26 passed, 52 deselected.
+- `python -m pytest helixc\tests --collect-only -q`
+  - Result: 2,379 tests collected.
+- `git diff --check`
+  - Result: passed.
+
+Clean-gate status:
+
+- Stage 35 clean gates remain `0/3`.
+- Restart 36 is a fix sweep, not a clean gate.

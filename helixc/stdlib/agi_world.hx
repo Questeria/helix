@@ -170,6 +170,8 @@ fn wmt_rollout(wmt: i32, start_state: i32, action_seq_start: i32, steps: i32) ->
     if steps < 0 { start_state }
     else { if wmt_ok(wmt) == 0 { start_state }
     else { if t1d_slice_ok(action_seq_start, steps) == 0 { start_state }
+    else { if start_state < 0 { 0 - 1 }
+    else { if start_state >= __arena_get(wmt) { 0 - 1 }
     else {
         let mut s: i32 = start_state;
         let mut i: i32 = 0;
@@ -181,7 +183,7 @@ fn wmt_rollout(wmt: i32, start_state: i32, action_seq_start: i32, steps: i32) ->
             i = i + 1;
         }
         s
-    }}}
+    } } }}}
 }
 
 // ---- Table-backed accessors mirroring the option_*/result_* style ----

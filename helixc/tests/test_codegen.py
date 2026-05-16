@@ -8307,6 +8307,24 @@ def test_agi_wmt_rollout():
     assert code == 42, f"expected 42 (0 + 42), got {code}"
 
 
+def test_stage35_wmt_rollout_rejects_invalid_start_state():
+    src = """
+    fn main() -> i32 {
+        let wmt = wmt_new(2, 1);
+        wmt_set(wmt, 0, 0, 1);
+        let actions = t1d_new(1);
+        ti1d_set(actions, 0, 0);
+        let too_high = wmt_rollout(wmt, 99, actions, 1);
+        let negative = wmt_rollout(wmt, 0 - 1, actions, 1);
+        if too_high == (0 - 1) {
+        if negative == (0 - 1) { 42 } else { 7 }
+        } else { 7 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
 def test_agi_wm_prediction_error_sq():
     """Squared error: (predicted - actual)^2."""
     src = """
@@ -12938,6 +12956,25 @@ def test_stage35_hashmap_rejects_forged_and_mismatched_handles():
         if ok_put == 1 {
         if ok_get == 42 { 42 } else { 7 }
         } else { 7 }} else { 7 }} else { 7 }} else { 7 }} else { 7 }} else { 7 }} else { 7 }} else { 7 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stage35_hashmap_hash_int_min_remainder_stays_in_bounds():
+    src = """
+    fn main() -> i32 {
+        let guard = t1d_new(20);
+        ti1d_set(guard, 15, 77);
+        let m = hashmap_new(5);
+        let r = hashmap_put(m, 5, 1316199655, 42);
+        let v = hashmap_get(m, 5, 1316199655, 0);
+        let g = ti1d_get(guard, 15);
+        if r == 1 {
+        if v == 42 {
+        if g == 77 { 42 } else { 7 }
+        } else { 7 }} else { 7 }
     }
     """
     code = compile_and_run(src)
