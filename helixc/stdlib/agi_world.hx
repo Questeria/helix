@@ -142,7 +142,14 @@ fn wml_ok(wml: i32) -> i32 {
 @pure
 fn wml_predict(wml: i32, state: i32, action: i32) -> i32 {
     if wml_ok(wml) == 0 { 0 - 1 }
-    else { __arena_get(wml) * state + __arena_get(wml + 1) * action + __arena_get(wml + 2) }
+    else {
+        let raw: i64 = (__arena_get(wml) as i64) * (state as i64)
+            + (__arena_get(wml + 1) as i64) * (action as i64)
+            + (__arena_get(wml + 2) as i64);
+        if raw > 2147483647_i64 { 2147483647 }
+        else { if raw < ((0_i64 - 2147483647_i64) - 1_i64) { (0 - 2147483647) - 1 }
+        else { raw as i32 } }
+    }
 }
 
 // ---- Self-supervised learning aid ------------------------------------

@@ -82,7 +82,7 @@ fn t1d_new(n: i32) -> i32 {
 @pure fn t1d_range_ok(start: i32, off: i32, n: i32) -> i32 {
     if off < 0 { 0 }
     else { if n < 0 { 0 }
-    else { if n == 0 { 1 }
+    else { if n == 0 { t1d_capacity_ok(start, off) }
     else { if off > 2147483647 - n { 0 }
     else { t1d_capacity_ok(start, off + n) } } } }
 }
@@ -91,8 +91,8 @@ fn t1d_new(n: i32) -> i32 {
     if t1d_capacity_ok(start, n) != 0 { 1 }
     else { if start < 0 { 0 }
     else { if n < 0 { 0 }
-    else { if n == 0 { 1 }
     else { if start >= __arena_len() { 0 }
+    else { if n == 0 { 0 }
     else { if start > 2147483647 - n { 0 }
     else {
         let end = start + n;

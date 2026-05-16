@@ -8276,6 +8276,23 @@ def test_stage35_wml_rejects_forged_linear_model():
     assert code == 42, f"expected 42, got {code}"
 
 
+def test_stage35_wml_predict_saturates_overflow():
+    src = """
+    fn main() -> i32 {
+        let high = wml_new(2147483647, 0, 0);
+        let high_pred = wml_predict(high, 2, 0);
+        let low = (0 - 2147483647) - 1;
+        let neg = wml_new(low, 0, 0);
+        let neg_pred = wml_predict(neg, 2, 0);
+        if high_pred == 2147483647 {
+        if neg_pred == low { 42 } else { 7 }
+        } else { 7 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
 def test_agi_wm_prediction_error():
     """Absolute error: |predicted - actual|."""
     src = """
@@ -8489,6 +8506,28 @@ def test_agi_tree_eq_shallow():
     assert code == 10, f"expected 10 (1*10 + 0), got {code}"
 
 
+def test_stage35_tree_and_unify_reject_forged_offsets():
+    src = """
+    fn main() -> i32 {
+        let b1 = bindings_new();
+        let shallow = tree_eq_shallow(2147483000, 2147483004);
+        let uni = unify_shallow(2147483000, 2147483004, b1);
+        let deep = unify_deep(2147483000, 2147483004, 0, b1);
+        let mask_tbl = __arena_len();
+        __arena_push(0);
+        let b2 = bindings_new();
+        let tabled = unify_deep_table(2147483000, 2147483004, mask_tbl, 1, b2);
+        if shallow == 0 {
+        if uni == 0 {
+        if deep == 0 {
+        if tabled == 0 { 42 } else { 7 }
+        } else { 7 }} else { 7 }} else { 7 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
 def test_agi_tree_hash_stable():
     """Same node values yield same hash."""
     src = """
@@ -8540,6 +8579,18 @@ def test_stage35_t1d_slice_ok_rejects_huge_forged_start_fast():
     src = """
     fn main() -> i32 {
         if t1d_slice_ok(2147483646, 1) == 0 { 42 } else { 7 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stage35_t1d_zero_length_validators_reject_forged_start():
+    src = """
+    fn main() -> i32 {
+        if t1d_slice_ok(2147483646, 0) == 0 {
+        if t1d_range_ok(2147483646, 0, 0) == 0 { 42 } else { 7 }
+        } else { 7 }
     }
     """
     code = compile_and_run(src)
@@ -8955,6 +9006,20 @@ def test_stage35_unify_deep_failures_rewind_bindings():
         if ok2 == 0 {
         if stale2 == (0 - 1) { 42 } else { 7 }
         } else { 7 }} else { 7 }} else { 7 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stage35_bindings_get_rejects_forged_count_over_capacity():
+    src = """
+    fn main() -> i32 {
+        let fake_b = t1d_new(70);
+        ti1d_set(fake_b, 0, 33);
+        ti1d_set(fake_b, 65, 9);
+        ti1d_set(fake_b, 66, 42);
+        if bindings_get(fake_b, 9) == (0 - 1) { 42 } else { 7 }
     }
     """
     code = compile_and_run(src)

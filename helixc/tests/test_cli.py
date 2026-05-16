@@ -393,6 +393,22 @@ def test_stage35_emit_ptx_missing_path_keeps_stdout_empty(capsys):
     assert "source path required" in captured.err
 
 
+def test_stage35_source_required_modes_keep_stdout_empty(capsys, tmp_path):
+    rc_check = main(["--check-only"])
+    captured_check = capsys.readouterr()
+    assert rc_check == 2
+    assert captured_check.out == ""
+    assert "source path required" in captured_check.err
+
+    out_path = tmp_path / "missing-source.bin"
+    rc_output = main(["-o", str(out_path)])
+    captured_output = capsys.readouterr()
+    assert rc_output == 2
+    assert captured_output.out == ""
+    assert "source path required" in captured_output.err
+    assert not out_path.exists()
+
+
 def test_stage35_emit_ptx_strict_ignores_host_ad_function(tmp_path):
     src_path = tmp_path / "strict_host_ad_kernel.hx"
     src_path.write_text(

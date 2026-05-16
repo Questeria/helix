@@ -1064,7 +1064,7 @@ def _main_inner(argv: list[str] | None,
         if proof_mode:
             _emit_proof_invocation_error(a, ["helixc: source path required"])
             return 2
-        if selected_stdout_modes:
+        if selected_stdout_modes or argv:
             print("helixc: source path required", file=sys.stderr)
             return 2
         _print_help()

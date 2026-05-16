@@ -35,10 +35,20 @@ fn tree_node_new(tag: i32, p1: i32, p2: i32, p3: i32) -> i32 {
 @pure fn tree_node_p2(off: i32) -> i32 { __arena_get(off + 2) }
 @pure fn tree_node_p3(off: i32) -> i32 { __arena_get(off + 3) }
 
+@pure
+fn tree_node_ok(off: i32) -> i32 {
+    if off < 0 { 0 }
+    else { if off > 2147483647 - 3 { 0 }
+    else { if off + 3 >= __arena_len() { 0 } else { 1 } } }
+}
+
 // Structural equality: compare tag + p1 + p2 + p3 at the top level
 // only. For deep equality, the caller recurses on child nodes.
 @pure
 fn tree_eq_shallow(a: i32, b: i32) -> i32 {
+    if tree_node_ok(a) == 0 { 0 }
+    else { if tree_node_ok(b) == 0 { 0 }
+    else {
     if __arena_get(a) == __arena_get(b) {
         if __arena_get(a + 1) == __arena_get(b + 1) {
             if __arena_get(a + 2) == __arena_get(b + 2) {
@@ -48,6 +58,7 @@ fn tree_eq_shallow(a: i32, b: i32) -> i32 {
             } else { 0 }
         } else { 0 }
     } else { 0 }
+    }}
 }
 
 // Stable hash: combines tag/p1/p2/p3 into a single i32 via shifts.
@@ -56,12 +67,15 @@ fn tree_eq_shallow(a: i32, b: i32) -> i32 {
 // sufficient for use as WM keys / dedup probes.)
 @pure
 fn tree_hash_shallow(off: i32) -> i32 {
+    if tree_node_ok(off) == 0 { 0 }
+    else {
     let tag = __arena_get(off);
     let p1 = __arena_get(off + 1);
     let p2 = __arena_get(off + 2);
     let p3 = __arena_get(off + 3);
     // 4-byte-rotated linear-combination.
     tag * 31 * 31 * 31 + p1 * 31 * 31 + p2 * 31 + p3
+    }
 }
 
 // Bag (multiset) similarity by intersection size. Both arrays are
@@ -190,7 +204,10 @@ fn sequence_match(a_start: i32, b_start: i32, n: i32) -> i32 {
 // instantiated patterns.
 @pure
 fn tree_node_is_var(off: i32) -> i32 {
+    if tree_node_ok(off) == 0 { 0 }
+    else {
     if __arena_get(off) == unify_var_tag() { 1 } else { 0 }
+    }
 }
 
 fn bindings_new() -> i32 {
@@ -206,8 +223,20 @@ fn bindings_new() -> i32 {
 }
 
 @pure
+fn bindings_storage_ok(b: i32) -> i32 {
+    if b < 0 { 0 }
+    else { if b > 2147483647 - 64 { 0 }
+    else { if b + 64 >= __arena_len() { 0 } else { 1 } } }
+}
+
+@pure
 fn bindings_get(b: i32, var_id: i32) -> i32 {
+    if bindings_storage_ok(b) == 0 { 0 - 1 }
+    else {
     let cnt = __arena_get(b);
+    if cnt < 0 { 0 - 1 }
+    else { if cnt > 32 { 0 - 1 }
+    else {
     let mut i: i32 = 0;
     let mut found: i32 = 0 - 1;
     while i < cnt {
@@ -217,16 +246,22 @@ fn bindings_get(b: i32, var_id: i32) -> i32 {
         i = i + 1;
     }
     found
+    }}
+    }
 }
 
 fn bindings_set(b: i32, var_id: i32, term: i32) -> i32 {
+    if bindings_storage_ok(b) == 0 { 0 - 1 }
+    else {
     let cnt = __arena_get(b);
-    if cnt >= 32 { 0 - 1 }
+    if cnt < 0 { 0 - 1 }
+    else { if cnt >= 32 { 0 - 1 }
     else {
         __arena_set(b + 1 + cnt * 2, var_id);
         __arena_set(b + 1 + cnt * 2 + 1, term);
         __arena_set(b, cnt + 1);
         0
+    }}
     }
 }
 
@@ -243,6 +278,10 @@ fn bindings_rewind(b: i32, count: i32) -> i32 {
 // Returns 1 on success, 0 on failure. Sub-tree unification is the caller's
 // responsibility (recurse on p1, p2, p3 if they're tree refs).
 fn unify_shallow(pat_off: i32, term_off: i32, b: i32) -> i32 {
+    if tree_node_ok(pat_off) == 0 { 0 }
+    else { if tree_node_ok(term_off) == 0 { 0 }
+    else { if bindings_storage_ok(b) == 0 { 0 }
+    else {
     let pat_tag = __arena_get(pat_off);
     if pat_tag == unify_var_tag() {
         let var_id = __arena_get(pat_off + 1);
@@ -256,6 +295,7 @@ fn unify_shallow(pat_off: i32, term_off: i32, b: i32) -> i32 {
     } else {
         tree_eq_shallow(pat_off, term_off)
     }
+    }}}
 }
 
 // Deep unify: tags must match; recursively unify each child slot
@@ -277,6 +317,10 @@ fn unify_shallow(pat_off: i32, term_off: i32, b: i32) -> i32 {
 // Returns 1 on success, 0 on failure.
 @partial
 fn unify_deep(pat_off: i32, term_off: i32, child_mask: i32, b: i32) -> i32 {
+    if tree_node_ok(pat_off) == 0 { 0 }
+    else { if tree_node_ok(term_off) == 0 { 0 }
+    else { if bindings_storage_ok(b) == 0 { 0 }
+    else {
     let start_count = __arena_get(b);
     let pat_tag = __arena_get(pat_off);
     if pat_tag == unify_var_tag() {
@@ -324,6 +368,7 @@ fn unify_deep(pat_off: i32, term_off: i32, child_mask: i32, b: i32) -> i32 {
             0
         }
     }
+    }}}
 }
 
 // =========================================================================
@@ -353,6 +398,10 @@ fn unify_deep(pat_off: i32, term_off: i32, child_mask: i32, b: i32) -> i32 {
 @partial
 fn unify_deep_table(pat_off: i32, term_off: i32, mask_table: i32,
                     mask_table_len: i32, b: i32) -> i32 {
+    if tree_node_ok(pat_off) == 0 { 0 }
+    else { if tree_node_ok(term_off) == 0 { 0 }
+    else { if bindings_storage_ok(b) == 0 { 0 }
+    else {
     let start_count = __arena_get(b);
     let pat_tag = __arena_get(pat_off);
     if pat_tag == unify_var_tag() {
@@ -415,6 +464,7 @@ fn unify_deep_table(pat_off: i32, term_off: i32, mask_table: i32,
             0
         }
     }
+    }}}
 }
 
 // =========================================================================

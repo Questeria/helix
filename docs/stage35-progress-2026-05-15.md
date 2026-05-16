@@ -2671,3 +2671,87 @@ Clean-gate status:
 - Restart 40 is a fix sweep, not a clean gate.
 - Next step is restart 41 as another fresh Stage 35 clean gate from the newest
   pushed HEAD.
+
+## Increment 60 - Forty-First Clean-Gate Restart Fix Sweep
+
+Restart 41 began from pushed commit `1b7064e` after restart 40. Baseline support
+checks:
+
+- `git status --short --branch`
+  - Result: clean at `1b7064e`.
+- `python -m py_compile helixc\check.py helixc\backend\x86_64.py helixc\tests\test_cli.py helixc\tests\test_codegen.py helixc\tests\test_ptx.py`
+  - Result: passed.
+- Per-file stdlib parser sweep across `helixc/stdlib/*.hx`
+  - Result: parsed 16 files.
+- `python -m pytest helixc\tests\test_codegen.py -q -k "stage35 or agi or hashmap or tensor"`
+  - Result: 167 passed, 746 deselected.
+- `python -m pytest helixc\tests\test_cli.py -q -k "stage35"`
+  - Result: 60 passed, 145 deselected.
+- `python -m pytest helixc\tests\test_ptx.py -q -k "stage35"`
+  - Result: 26 passed, 52 deselected.
+
+Restart 41 audit findings:
+
+- Forged AGI tree offsets could match as valid nodes because shallow equality
+  and unification read raw arena slots without first proving the node offset
+  covered four live arena cells.
+- Forged binding tables could advertise counts beyond the documented 32-entry
+  capacity and make `bindings_get` read outside the binding table.
+- `wml_predict` used plain `i32` arithmetic, so large linear predictions could
+  wrap instead of saturating.
+- `t1d_slice_ok(ptr, 0)` accepted forged starts without proving the start was
+  inside a real tensor slice.
+- Source-required non-artifact CLI modes such as `--check-only` and `-o out`
+  with no source printed help on stdout instead of `source path required` on
+  stderr.
+- Website reference stats still had a stale exact audit-pass count and
+  2026-05-15 review marker.
+
+Fixes in this increment:
+
+- Added `tree_node_ok` and guarded shallow tree equality, tree hashing,
+  variable checks, and unification entry points before arena reads.
+- Added binding storage/count checks; `bindings_get` now fails closed for
+  counts outside `0..32`, and `bindings_set` rejects invalid or negative
+  counts before writing.
+- `wml_predict` now computes in `i64` and saturates into the `i32` return
+  range.
+- Zero-length `t1d` slice/range validation now requires a real backing tensor
+  handle instead of accepting arbitrary forged starts.
+- Missing source for non-artifact modes now reports `source path required` on
+  stderr with empty stdout.
+- Website stats wording now avoids stale exact audit-pass counts and marks the
+  current-status review as 2026-05-16.
+- Added regressions for every fixed surface.
+
+Verification:
+
+- `python -m py_compile helixc\check.py helixc\tests\test_cli.py helixc\tests\test_codegen.py`
+  - Result: passed.
+- Per-file stdlib parser sweep across `helixc/stdlib/*.hx`
+  - Result: parsed 16 files.
+- `python -m pytest helixc\tests\test_cli.py -q -k "source_required_modes or emit_ptx_missing_path"`
+  - Result: 2 passed, 204 deselected.
+- `python -m pytest helixc\tests\test_codegen.py -q -k "wml_predict_saturates or tree_and_unify_reject_forged or t1d_zero_length_validators or bindings_get_rejects_forged"`
+  - Result: 4 passed, 913 deselected.
+- `python -m pytest helixc\tests\test_codegen.py -q -k "stage35 or agi or hashmap or tensor"`
+  - Result: 171 passed, 746 deselected.
+- `python -m pytest helixc\tests\test_cli.py -q -k "stage35"`
+  - Result: 61 passed, 145 deselected.
+- `python -m pytest helixc\tests\test_ptx.py -q -k "stage35"`
+  - Result: 26 passed, 52 deselected.
+- `python -m pytest helixc\tests\test_cli.py -q`
+  - Result: 206 passed.
+- `python -m pytest helixc\tests\test_ptx.py -q`
+  - Result: 78 passed.
+- `python -m pytest helixc\tests --collect-only -q`
+  - Result: 2,402 tests collected.
+- `git diff --check`
+  - Result: passed.
+
+Clean-gate status:
+
+- Stage 35 clean gates remain `0/3`.
+- Restart 41 is a fix sweep, not a clean gate.
+- Next step is restart 42 as another fresh Stage 35 clean gate from the newest
+  pushed HEAD.

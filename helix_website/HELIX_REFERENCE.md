@@ -955,7 +955,7 @@ Kovostov-Native/
 │   │   ├── nn.hx
 │   │   ├── option.hx
 │   │   └── autodiff.hx
-│   ├── tests/          # 2,397 tests collected in restart 40 fix verification
+│   ├── tests/          # 2,402 tests collected in restart 41 fix verification
 │   │   ├── test_codegen.py
 │   │   ├── test_parser.py
 │   │   ├── test_match.py
@@ -1521,10 +1521,10 @@ Or: a single character `λ` in monospace inside a hex bracket `[λ]`. Clean, sho
 
 - **299 bytes** — current hex0 binary size
 - **Python-hosted helixc** — current production compiler implementation
-- **2,397 live tests collected** — restart 40 fix verification; rerun scoped pytest collection before publishing
+- **2,402 live tests collected** — restart 41 fix verification; rerun scoped pytest collection before publishing
 - **30+ stages** — Approach A roadmap
 - **23 silent-corruption bugs** — found and disclosed during development
-- **9 audit passes** — multi-agent code review cycles
+- **restart-gated audit campaign** — multi-agent code review cycles continue until three clean gates pass
 - **0 toolchain dependencies** — for the bootstrap chain
 - **self-hosting target** — not shipped yet
 - **100+ AST tags** — language richness
@@ -1541,4 +1541,4 @@ Helix is built to last. Every design decision favors transparency, reproducibili
 
 The website is the public face of that effort. Make it as honest, technical, and beautiful as the language itself.
 
-— *Draft website reference, reviewed for current-status honesty on 2026-05-15*
+— *Draft website reference, reviewed for current-status honesty on 2026-05-16*
