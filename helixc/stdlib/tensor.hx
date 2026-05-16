@@ -31,14 +31,31 @@
 //
 // License: Apache 2.0
 
+@pure fn t1d_empty_magic() -> i32 { 0 - 4104101 }
+
 fn t1d_new(n: i32) -> i32 {
     let start = __arena_len();
+    if n <= 0 {
+        __arena_push(t1d_empty_magic());
+        start
+    } else {
     let mut i: i32 = 0;
     while i < n {
         __arena_push(0);
         i = i + 1;
     }
     start
+    }
+}
+
+@pure fn t1d_capacity_ok(start: i32, n: i32) -> i32 {
+    if start < 0 { 0 }
+    else { if n < 0 { 0 }
+    else { if n == 0 { 1 }
+    else { if start >= __arena_len() { 0 }
+    else { if __arena_get(start) == t1d_empty_magic() { 0 }
+    else { if n > 2147483647 - start { 0 }
+    else { if start + n > __arena_len() { 0 } else { 1 } } } } } } }
 }
 
 @pure fn t2d_len(rows: i32, cols: i32) -> i32 {
@@ -64,7 +81,8 @@ fn t1d_new(n: i32) -> i32 {
 fn t2d_new(rows: i32, cols: i32) -> i32 {
     let n = t2d_len(rows, cols);
     if n <= 0 {
-        t1d_new(t2d_alloc_len(rows, cols))
+        let fallback = t2d_alloc_len(rows, cols);
+        if fallback <= 0 { __arena_len() } else { t1d_new(fallback) }
     } else {
         let start = __arena_len();
         __arena_push(t2d_magic());
@@ -123,8 +141,11 @@ fn t2d_new(rows: i32, cols: i32) -> i32 {
 }
 
 fn t1d_set_i32_bits(start: i32, i: i32, bits: i32) -> i32 {
-    __arena_set(start + i, bits);
-    0
+    if t1d_capacity_ok(start, i + 1) == 0 { t2d_error() }
+    else {
+        __arena_set(start + i, bits);
+        0
+    }
 }
 
 fn t1d_get_i32_bits(start: i32, i: i32) -> i32 {
@@ -139,8 +160,11 @@ fn t1d_get_i32_bits(start: i32, i: i32) -> i32 {
 }
 
 fn ti1d_set(start: i32, i: i32, x: i32) -> i32 {
-    __arena_set(start + i, x);
-    x
+    if t1d_capacity_ok(start, i + 1) == 0 { t2d_error() }
+    else {
+        __arena_set(start + i, x);
+        x
+    }
 }
 
 @pure fn ti1d_sum(start: i32, n: i32) -> i32 {
@@ -272,8 +296,11 @@ fn ti1d_mul(x_start: i32, y_start: i32, z_start: i32, n: i32) -> i32 {
 // a type-system shim.
 
 fn tf1d_set(start: i32, i: i32, x: f32) -> i32 {
-    __arena_set(start + i, __bits_of_f32(x));
-    0
+    if t1d_capacity_ok(start, i + 1) == 0 { t2d_error() }
+    else {
+        __arena_set(start + i, __bits_of_f32(x));
+        0
+    }
 }
 
 @pure fn tf1d_get(start: i32, i: i32) -> f32 {

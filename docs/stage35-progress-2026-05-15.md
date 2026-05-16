@@ -1681,3 +1681,58 @@ Clean-gate status:
 - Stage 35 clean gates remain `0/3`.
 - Next step is restart 27 as another fresh Stage 35 clean gate from the newest
   committed fix sweep.
+
+## Increment 46 - Twenty-Seventh Clean-Gate Restart Fix Sweep
+
+Restart 27 began from commit `44c6b6a` with green support checks. The docs lane
+returned clean, but the AD/tensor and backend/PTX lanes found multiple
+remaining blockers, so the gate did not count as clean and Stage 35 remains at
+`0/3` clean gates.
+
+Fixes landed in this increment:
+
+- Forward and reverse AD now reject side-effecting block final expressions
+  instead of silently compiling final assignments into zero gradients.
+- Reverse-AD adjoint buffers now record their owner tape, and `rev_backward`
+  rejects spoofed foreign adjoint buffers even if a tape header is mutated to
+  point at them.
+- `t1d_new` now reserves an empty-allocation sentinel for zero/negative
+  1D allocations; 1D setters and f32 dense-gradient helpers use capacity guards
+  to avoid writing through empty output buffers.
+- PTX validation paths run AD rewriting before full-program lowering so valid
+  host `grad(...)` code no longer blocks `--emit-ptx` kernel emission.
+- `-Wad=error` is checked before x86 artifact emission for `-o`, `--emit-asm`,
+  and the direct `helixc.backend.x86_64` entry point.
+- Kernel PTX embedding now requires pre-DCE kernel tile validation, preventing
+  direct backend API callers from validating only after optimizer cleanup has
+  erased unsupported dead kernel operations.
+- Public/status docs now reflect restart 27 and 2,304 collected tests.
+
+Focused verification:
+
+- Per-file stdlib parser sweep across `helixc/stdlib/*.hx`
+  - Result: parsed stdlib files.
+- `python -m py_compile helixc\frontend\autodiff.py helixc\backend\ptx.py helixc\backend\x86_64.py helixc\check.py`
+  - Result: passed.
+- `python -m pytest helixc/tests/test_codegen.py -k "side_effecting_final_assignment or spoofed_foreign_adjoint_buffer or negative_t1d_new_does_not_alias_next_allocation or dense_layer_f32_grad_x_rejects_empty_output_buffer or compile_module_to_elf_requires_pre_dce_kernel_validation" -q`
+  - Result: 6 passed, 852 deselected.
+- `python -m pytest helixc/tests/test_cli.py -k "emit_ptx_allows_valid_host_grad_call or wad_error_output_binary_does_not_write_artifact or wad_error_emit_asm_does_not_print_artifact or direct_x86_honors_wad_error_before_writing" -q`
+  - Result: 4 passed, 165 deselected.
+- `python -m pytest helixc/tests/test_transcendentals.py helixc/tests/test_autodiff.py helixc/tests/test_autodiff_reverse.py -q`
+  - Result: 103 passed.
+- `python -m pytest helixc/tests/test_codegen.py -k "t1d or t2d or ti2d or tf2d or tensor or stage35_2d or nn_ or dense_layer or softmax_rows_f32 or softmax_ce_grad_f32 or argmax_rows_f32 or accuracy_count_from_logits_f32 or ce_loss_batch_f32 or bce or gelu or revad or grad_rejects_allocator_let or side_effecting_final_assignment or negative_t1d_new or compile_module_to_elf_requires_pre_dce_kernel_validation" -q`
+  - Result: 139 passed, 719 deselected.
+- `python -m pytest helixc/tests/test_cli.py -q`
+  - Result: 169 passed.
+- `python -m pytest helixc/tests/test_ptx.py -q`
+  - Result: 76 passed.
+- `python -m pytest helixc/tests/test_effect_check.py -q`
+  - Result: 34 passed.
+- `python -m pytest helixc/tests --collect-only -q -p no:cacheprovider`
+  - Result: 2,304 tests collected.
+
+Clean-gate status:
+
+- Stage 35 clean gates remain `0/3`.
+- Next step is restart 28 as another fresh Stage 35 clean gate from the newest
+  committed fix sweep.

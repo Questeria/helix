@@ -308,6 +308,28 @@ def test_stage35_emit_ptx_ignores_host_ad_function(tmp_path):
     assert "unresolved generic type D" not in proc.stderr
 
 
+def test_stage35_emit_ptx_allows_valid_host_grad_call(tmp_path):
+    src_path = tmp_path / "host_grad_kernel.hx"
+    src_path.write_text(
+        "fn loss(x: f32) -> f32 { x * x }\n"
+        "fn main() -> i32 { grad(loss)(2.0) as i32 }\n"
+        "@kernel fn k() { let i = thread_idx(); }\n",
+        encoding="utf-8",
+    )
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.check", str(src_path), "--emit-ptx", "--no-stdlib"],
+        cwd=proj_root,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert ".visible .entry k" in proc.stdout
+    assert "unknown function '<unknown>'" not in proc.stderr
+    assert "PTX validation error" not in proc.stderr
+
+
 def test_stage35_emit_ptx_wad_error_does_not_emit_artifact(tmp_path):
     src_path = tmp_path / "host_ad_kernel_error.hx"
     src_path.write_text(
@@ -1268,6 +1290,79 @@ def test_ad_drain_wad_error_promotes(capsys, tmp_path):
         f"rc={rc} stdout={cap.out!r} stderr={cap.err!r}"
     )
     assert "ERROR" in cap.out or "ERROR" in cap.err
+
+
+def test_stage35_wad_error_output_binary_does_not_write_artifact(tmp_path):
+    src_path = tmp_path / "loss_ad_warning.hx"
+    out_path = tmp_path / "out.bin"
+    src_path.write_text(
+        "fn loss(x: D<f64>, y: D<i32>) -> D<f64> { x + y }\n"
+        "fn main() -> i32 { 0 }\n",
+        encoding="utf-8",
+    )
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    proc = subprocess.run(
+        [
+            sys.executable, "-m", "helixc.check", str(src_path),
+            "-o", str(out_path), "--no-stdlib", "-Wad=error",
+        ],
+        cwd=proj_root,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    assert not out_path.exists()
+    assert "codegen:   OK" not in proc.stdout
+    assert "ERROR" in proc.stdout or "ERROR" in proc.stderr
+
+
+def test_stage35_wad_error_emit_asm_does_not_print_artifact(tmp_path):
+    src_path = tmp_path / "loss_ad_warning_asm.hx"
+    src_path.write_text(
+        "fn loss(x: D<f64>, y: D<i32>) -> D<f64> { x + y }\n"
+        "fn main() -> i32 { 0 }\n",
+        encoding="utf-8",
+    )
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    proc = subprocess.run(
+        [
+            sys.executable, "-m", "helixc.check", str(src_path),
+            "--emit-asm", "--no-stdlib", "-Wad=error",
+        ],
+        cwd=proj_root,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    assert "asm:" not in proc.stdout
+    assert "ERROR" in proc.stdout or "ERROR" in proc.stderr
+
+
+def test_stage35_direct_x86_honors_wad_error_before_writing(tmp_path):
+    src_path = tmp_path / "loss_ad_warning_direct.hx"
+    out_path = tmp_path / "direct.bin"
+    src_path.write_text(
+        "fn loss(x: D<f64>, y: D<i32>) -> D<f64> { x + y }\n"
+        "fn main() -> i32 { 0 }\n",
+        encoding="utf-8",
+    )
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    proc = subprocess.run(
+        [
+            sys.executable, "-m", "helixc.backend.x86_64",
+            str(src_path), str(out_path), "--no-stdlib", "-Wad=error",
+        ],
+        cwd=proj_root,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    assert not out_path.exists()
+    assert "Wrote" not in proc.stdout
+    assert "ERROR" in proc.stderr
 
 
 def test_ad_drain_subprocess_default(tmp_path):

@@ -640,6 +640,7 @@ def validate_kernel_tile_lowering(module: tir.Module) -> None:
     if not kernel_mod.functions:
         return
     ti.lower_to_tile(kernel_mod)
+    setattr(module, "_helix_kernel_tile_validated", True)
 
 
 # ============================================================================
@@ -933,7 +934,9 @@ if __name__ == "__main__":
     try:
         full_eff = []
         try:
-            full_mod = lower(_drop_unreachable_diff_signature_fns(prog))
+            full_prog = _drop_unreachable_diff_signature_fns(prog)
+            grad_pass(full_prog)
+            full_mod = lower(full_prog)
             full_scope = None
             if include_stdlib:
                 full_scope = diagnostic_function_names(full_mod)

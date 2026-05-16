@@ -19,6 +19,7 @@
 //   slot -1: magic    (guards against forged t1d buffers)
 //   slot 3 + cap*4: footer guard derived from cap
 // Adjoint metadata:
+//   adj_start - 4: owner tape start
 //   adj_start - 3: cap
 //   adj_start - 2: logical count snapshotted at allocation
 //   adj_start - 1: guard = -cap - 1
@@ -207,6 +208,7 @@ fn rev_alloc_adjoints(tape: i32) -> i32 {
         let cap = __arena_get(tape + 1);
         let cnt = __arena_get(tape);
         let header = __arena_len();
+        __arena_push(tape);
         __arena_push(cap);
         __arena_push(cnt);
         __arena_push(0 - cap - 1);
@@ -224,6 +226,7 @@ fn rev_alloc_adjoints(tape: i32) -> i32 {
 
 @pure
 fn rev_adj_cap(adj_start: i32) -> i32 {
+    if adj_start < 4 { 0 - 1 } else {
     let cap = __arena_get(adj_start - 3);
     let cnt = __arena_get(adj_start - 2);
     let guard = __arena_get(adj_start - 1);
@@ -234,7 +237,13 @@ fn rev_adj_cap(adj_start: i32) -> i32 {
     let footer = __arena_get(adj_start + cap);
     if guard == (0 - cap - 1) {
         if footer == (0 - cap - 1) { cap } else { 0 - 1 }
-    } else { 0 - 1 } }}}
+    } else { 0 - 1 } }}}}
+}
+
+@pure
+fn rev_adj_owner(adj_start: i32) -> i32 {
+    let cap = rev_adj_cap(adj_start);
+    if cap < 0 { 0 - 1 } else { __arena_get(adj_start - 4) }
 }
 
 @pure
@@ -277,9 +286,11 @@ fn rev_backward(tape: i32, adj_start: i32) -> i32 {
     let cap = __arena_get(tape + 1);
     let adj_cap = rev_adj_cap(adj_start);
     let adj_cnt = rev_adj_count(adj_start);
+    let adj_owner = rev_adj_owner(adj_start);
     if cnt < 0 { 0 - 1 }
     else { if cnt > cap { 0 - 1 }
     else { if adj_cap < 0 { 0 - 1 }
+    else { if adj_owner != tape { 0 - 1 }
     else { if adj_cnt != cnt { 0 - 1 }
     else { if cnt > adj_cap { 0 - 1 }
     else { if __arena_get(tape + 2) != adj_start { 0 - 1 }
@@ -364,5 +375,5 @@ fn rev_backward(tape: i32, adj_start: i32) -> i32 {
         i = i - 1;
     }
     status
-    }}}}}}}
+    }}}}}}}}
 }

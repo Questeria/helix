@@ -635,6 +635,8 @@ def _inline_lets(expr: A.Expr | None, env: dict[str, A.Expr]) -> A.Expr | None:
             elif isinstance(stmt, A.ExprStmt):
                 _raise_if_ad_erases_effect(stmt.expr, "expression statement")
         if expr.final_expr is not None:
+            _raise_if_ad_erases_effect(
+                expr.final_expr, "block final expression")
             return _inline_lets(expr.final_expr, local_env)
         # Audit 28.8 cycle 2 (deferred observation #18): pre-fix this
         # returned FloatLit(0.0) silently when a Block had stmts but no

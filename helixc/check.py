@@ -1454,8 +1454,9 @@ def _main_inner(argv: list[str] | None,
         ptx_full_eff_errs = []
         if "--emit-ptx" in a.flags:
             try:
-                ptx_full_mod = lower(
-                    _drop_unreachable_diff_signature_fns(prog))
+                ptx_full_prog = _drop_unreachable_diff_signature_fns(prog)
+                grad_pass(ptx_full_prog)
+                ptx_full_mod = lower(ptx_full_prog)
                 ptx_full_scope = None
                 if include_stdlib:
                     ptx_full_scope = diagnostic_function_names(
@@ -1621,6 +1622,9 @@ def _main_inner(argv: list[str] | None,
 
     if "--emit-asm" in a.flags:
         from .backend.x86_64 import compile_module_to_elf
+        ad_rc = _drain_ad_warnings(a)
+        if ad_rc != 0:
+            return ad_rc
         # Audit 28.8 A9: wrap backend call in try/except so internal
         # compiler errors render as `helixc: internal error: ...`
         # instead of leaking Python tracebacks. Mirrors the existing
@@ -1664,6 +1668,9 @@ def _main_inner(argv: list[str] | None,
     # 6. Codegen to ELF (when -o)
     if a.output is not None:
         from .backend.x86_64 import compile_module_to_elf
+        ad_rc = _drain_ad_warnings(a)
+        if ad_rc != 0:
+            return ad_rc
         # Audit 28.8 A9: wrap backend call so internal codegen errors
         # render cleanly. Also catch OSError on the file write so
         # permission / disk-full failures surface as a real diagnostic,

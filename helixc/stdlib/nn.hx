@@ -271,6 +271,8 @@ fn dense_layer_f32_grad_w(dy_start: i32, x_start: i32,
     else { if cols <= 0 { 0 }
     else { if t2d_len(rows, cols) == 0 { t2d_error() }
     else { if t2d_shape_ok(grad_w_start, rows, cols) == 0 { t2d_error() }
+    else { if t1d_capacity_ok(dy_start, rows) == 0 { t2d_error() }
+    else { if t1d_capacity_ok(x_start, cols) == 0 { t2d_error() }
     else {
     let mut r: i32 = 0;
     while r < rows {
@@ -284,16 +286,21 @@ fn dense_layer_f32_grad_w(dy_start: i32, x_start: i32,
         r = r + 1;
     }
     0
-    }}}}
+    }}}}}}
 }
 
 fn dense_layer_f32_grad_b(dy_start: i32, grad_b_start: i32, rows: i32) -> i32 {
+    if rows <= 0 { 0 }
+    else { if t1d_capacity_ok(dy_start, rows) == 0 { t2d_error() }
+    else { if t1d_capacity_ok(grad_b_start, rows) == 0 { t2d_error() }
+    else {
     let mut r: i32 = 0;
     while r < rows {
         __arena_set(grad_b_start + r, __arena_get(dy_start + r));
         r = r + 1;
     }
     0
+    }}}
 }
 
 // grad_x[c] = sum_r W[r, c] * grad_y[r]
@@ -303,6 +310,8 @@ fn dense_layer_f32_grad_x(w_start: i32, dy_start: i32,
     else { if cols <= 0 { 0 }
     else { if t2d_len(rows, cols) == 0 { t2d_error() }
     else { if t2d_shape_ok(w_start, rows, cols) == 0 { t2d_error() }
+    else { if t1d_capacity_ok(dy_start, rows) == 0 { t2d_error() }
+    else { if t1d_capacity_ok(grad_x_start, cols) == 0 { t2d_error() }
     else {
     let mut c: i32 = 0;
     while c < cols {
@@ -318,7 +327,7 @@ fn dense_layer_f32_grad_x(w_start: i32, dy_start: i32,
         c = c + 1;
     }
     0
-    }}}}
+    }}}}}}
 }
 
 // Leaky ReLU.

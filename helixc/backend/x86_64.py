@@ -3760,6 +3760,10 @@ def compile_module_to_elf(module: tir.Module, entry_fn: str = "main") -> bytes:
     if kernel_fns:
         from ..ir.tile_ir import lower_to_tile
         from .ptx import PtxEmitter, DEFAULT_TARGET
+        if not getattr(module, "_helix_kernel_tile_validated", False):
+            raise RuntimeError(
+                "kernel PTX validation must run before x86 embedding"
+            )
         # We emit a single PTX module containing every @kernel fn (since
         # PTX modules are text-only this is cheap). The lowering step is
         # idempotent — re-running lower_to_tile on the same Module just
@@ -3952,12 +3956,26 @@ if __name__ == "__main__":
 
     if len(sys.argv) < 3:
         print("usage: python -m helixc.backend.x86_64 <input.hx> <output.bin> "
-              "[--strict] [--no-opt] [--no-stdlib]",
+              "[--strict] [--no-opt] [--no-stdlib] [-Wad=warn|error]",
               file=sys.stderr)
         sys.exit(1)
+    from ..frontend.autodiff import take_diff_warnings
+    take_diff_warnings()
     strict = "--strict" in sys.argv
     no_opt = "--no-opt" in sys.argv
     no_stdlib = "--no-stdlib" in sys.argv
+    warning_policies: dict[str, str] = {}
+    for arg in sys.argv[3:]:
+        if arg.startswith("-W"):
+            body = arg[2:]
+            if "=" in body:
+                name, val = body.split("=", 1)
+            else:
+                name, val = body, "warn"
+            if name != "ad" or val not in ("warn", "error"):
+                print(f"error: unknown warning policy {arg}", file=sys.stderr)
+                sys.exit(2)
+            warning_policies[name] = val
     with open(sys.argv[1]) as f:
         src = f.read()
     # Auto-include stdlib by default. The fdce / dce passes drop unused
@@ -4158,6 +4176,16 @@ if __name__ == "__main__":
         print(f"\n{hard_count} effect-check warning(s); --strict aborts.",
               file=sys.stderr)
         sys.exit(1)
+
+    ad_warnings = take_diff_warnings()
+    if ad_warnings:
+        ad_policy = warning_policies.get("ad", "warn")
+        label = "ERROR" if ad_policy == "error" else "warning"
+        print(f"   ad:        {len(ad_warnings)} {label}(s)", file=sys.stderr)
+        for warning in ad_warnings:
+            print(f"     helixc: {warning}", file=sys.stderr)
+        if ad_policy == "error":
+            sys.exit(1)
 
     elf = compile_module_to_elf(mod)
     with open(sys.argv[2], "wb") as f:

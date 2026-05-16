@@ -10016,6 +10016,30 @@ def test_nn_dense_layer_f32_grad_x():
     assert code == 42, f"expected 42, got {code}"
 
 
+def test_dense_layer_f32_grad_x_rejects_empty_output_buffer():
+    src = """
+    fn main() -> i32 {
+        let w = tf2d_zeros(2, 2);
+        tf1d_set(w, 0, 1.0_f32);
+        tf1d_set(w, 1, 2.0_f32);
+        tf1d_set(w, 2, 3.0_f32);
+        tf1d_set(w, 3, 4.0_f32);
+        let dy = t1d_new(2);
+        tf1d_set(dy, 0, 5.0_f32);
+        tf1d_set(dy, 1, 7.0_f32);
+        let gx = t1d_new(0);
+        let guard = t1d_new(1);
+        tf1d_set(guard, 0, 7.0_f32);
+        let status = dense_layer_f32_grad_x(w, dy, gx, 2, 2);
+        if status == 35001 {
+            if (tf1d_get(guard, 0) as i32) == 7 { 42 } else { 9 }
+        } else { 8 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
 def test_negative_dense_layer_f32_grad_x_shape_does_not_write_outputs():
     src = """
     fn main() -> i32 {
@@ -10940,6 +10964,28 @@ def test_revad_backward_rejects_foreign_adjoint_buffer():
     assert code == 42, f"expected 42, got {code}"
 
 
+def test_revad_backward_rejects_spoofed_foreign_adjoint_buffer():
+    src = """
+    fn main() -> i32 {
+        let tape1 = rev_tape_new(4);
+        let x1 = rev_leaf(tape1, 5);
+        let y1 = rev_leaf(tape1, 7);
+        let tape2 = rev_tape_new(4);
+        let x2 = rev_leaf(tape2, 11);
+        let adj2 = rev_alloc_adjoints(tape2);
+        rev_seed(adj2, x2, 1);
+        __arena_set(tape1 + 2, adj2);
+        let status = rev_backward(tape1, adj2);
+        if status == (0 - 1) {
+        if rev_grad(adj2, x2) == 1 {
+        if rev_grad(adj2, y1) == 0 { 42 } else { 7 }
+        } else { 7 }} else { 7 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
 def test_revad_backward_rejects_self_referential_operand_before_mutation():
     src = """
     fn main() -> i32 {
@@ -11187,6 +11233,32 @@ def test_grad_rejects_allocator_let_in_differentiated_body():
         compile_and_run(src)
 
 
+def test_grad_rejects_side_effecting_final_assignment():
+    import pytest
+    src = """
+    fn loss(x: f32) -> f32 {
+        let mut y = x;
+        y = x * x
+    }
+    fn main() -> i32 { grad(loss)(3.0) as i32 }
+    """
+    with pytest.raises(NotImplementedError, match="block final expression"):
+        compile_and_run(src)
+
+
+def test_grad_rev_rejects_side_effecting_final_assignment():
+    import pytest
+    src = """
+    fn loss(x: f32) -> f32 {
+        let mut y = x;
+        y = x * x
+    }
+    fn main() -> i32 { grad_rev(loss)(3.0) as i32 }
+    """
+    with pytest.raises(NotImplementedError, match="block final expression"):
+        compile_and_run(src)
+
+
 def test_stage35_tensor_allocators_are_not_marked_pure():
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     with open(os.path.join(root, "stdlib", "tensor.hx"), encoding="utf-8") as f:
@@ -11224,6 +11296,22 @@ def test_negative_length_tensor_nn_helpers_return_empty_values():
             } else { 7 }
             } else { 7 }} else { 7 }} else { 7 }} else { 7 }} else { 7 };
         ok
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_negative_t1d_new_does_not_alias_next_allocation():
+    src = """
+    fn main() -> i32 {
+        let bad = t1d_new(0 - 1);
+        let guard = t1d_new(1);
+        ti1d_set(guard, 0, 42);
+        let status = ti1d_set(bad, 0, 99);
+        if status == 35001 {
+            if ti1d_get(guard, 0) == 42 { 42 } else { 7 }
+        } else { 7 }
     }
     """
     code = compile_and_run(src)
@@ -18262,10 +18350,12 @@ def _compile_to_elf_bytes(src: str, optimize: bool = True) -> bytes:
     from helixc.ir.passes.cse import cse_module as _cse
     from helixc.ir.passes.dce import dce_module as _dce
     from helixc.ir.passes.fdce import fdce_module as _fdce
+    from helixc.backend.ptx import validate_kernel_tile_lowering as _validate_ptx
     from helixc.backend.x86_64 import compile_module_to_elf as _emit
     prog = _parse(src, include_stdlib=True)
     _fmods(prog); _fimpls(prog); _mono(prog); _grad(prog)
     mod = _lower(prog)
+    _validate_ptx(mod)
     if optimize:
         _fold(mod); _cse(mod); _dce(mod); _fdce(mod)
     return _emit(mod)
@@ -18278,6 +18368,32 @@ def _extract_ptx_text_from_elf(elf: bytes) -> str:
     if end < 0:
         end = len(elf)
     return elf[start:end].decode("ascii", errors="ignore")
+
+
+def test_stage35_compile_module_to_elf_requires_pre_dce_kernel_validation():
+    from helixc.frontend.parser import parse as _parse
+    from helixc.frontend.grad_pass import grad_pass as _grad
+    from helixc.ir.lower_ast import lower as _lower
+    from helixc.ir.passes.const_fold import fold_module as _fold
+    from helixc.ir.passes.cse import cse_module as _cse
+    from helixc.ir.passes.dce import dce_module as _dce
+    from helixc.ir.passes.fdce import fdce_module as _fdce
+    from helixc.backend.x86_64 import compile_module_to_elf as _emit
+    import pytest
+    src = """
+    @kernel fn k(a: tile<i32, [16], HBM>) {
+        let i = thread_idx();
+        let dead = i / 2;
+        a[i] = i;
+    }
+    fn main() -> i32 { 0 }
+    """
+    prog = _parse(src, include_stdlib=True)
+    _grad(prog)
+    mod = _lower(prog)
+    _fold(mod); _cse(mod); _dce(mod); _fdce(mod)
+    with pytest.raises(RuntimeError, match="kernel PTX validation"):
+        _emit(mod)
 
 
 def test_stage16_vec_add_kernel_ptx_in_binary():
