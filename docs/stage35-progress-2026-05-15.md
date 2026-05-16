@@ -4362,3 +4362,159 @@ step. Restart 58 onward must include the bookkeeping in the same
 commit as the source fix, OR explicitly defer to a "catch-up
 sweep" labeled as such (like restart 57 here) so the gap is
 visible in the ledger.
+
+
+## Increment 77 — Fifty-Ninth Clean-Gate Restart Catch-up Sweep (2026-05-16)
+
+Restart 58 fired and produced commit `c8398d3` ("Fix Stage 35 fifty-
+eighth restart findings" — title +1 drift in the same anti-pattern as
+restarts 55 and 56), which closed 3 of the 4 carry-forward NaN-skip
+siblings (`tf1d_dot`, `tf1d_l1_norm`, `tf1d_max_abs`) from the restart
+57 explicit work item. The commit shipped source-only — no canaries, no
+lane docs, no ledger entry, no surface label refresh — the same
+abbreviation anti-pattern as restarts 52, 55, and 56 (now four out of
+thirteen restarts since 46, ~31% miss rate, explicitly warned against
+in Increment 76).
+
+Increment 77 IS the restart 58 catch-up sweep: it closes the bookkeeping
+debt from c8398d3, runs a fresh three-lane audit on top of c8398d3, and
+lands all new findings in the same commit.
+
+### Lane audit at HEAD c8398d3 (three lanes, read-only)
+
+Three parallel read-only audit subagents (lanes A/B/C) inspected
+c8398d3. Reports live in:
+
+- `docs/audit-stage35-restart58-laneA.md`
+- `docs/audit-stage35-restart58-laneB.md`
+- `docs/audit-stage35-restart58-laneC.md`
+
+Totals:
+
+- Lane A: **1 HIGH + 5 MEDIUM + 1 LOW = 7 findings**.
+- Lane B: **CLEAN** (third consecutive Lane B clean window).
+- Lane C: **3 HIGH + 2 MEDIUM + 2 LOW = 7 findings**.
+
+### Lane A fix sweep (7 findings)
+
+- **A1 HIGH**: `helixc/stdlib/tensor.hx` `tf1d_sum_in_range` — NaN-skip
+  via `if v == v`. The missed carry-forward sibling from restart 57
+  that c8398d3 should have closed.
+- **A2 MEDIUM**: `helixc/stdlib/iterators.hx` `vec_map_abs` — INT32_MIN
+  saturation to INT32_MAX. Direct sibling of `vec_map_neg` /
+  `vec_negate_inplace` (restart 51 A5) and `ti1d_max_abs` /
+  `vec_max_abs` (restart 56 A2/A3) that the prior INT32_MIN sweeps
+  missed.
+- **A3 MEDIUM**: `helixc/stdlib/tensor.hx` `tf1d_dot_with_offset` —
+  NaN-skip per element. Offset twin of the just-fixed `tf1d_dot`.
+- **A4 MEDIUM**: `helixc/stdlib/tensor.hx` `tf2d_matvec` + `tf2d_matmul`
+  — NaN-skip per cell. Extends the dot-product NaN-skip discipline to
+  the 2D layer.
+- **A5 MEDIUM**: `helixc/stdlib/tensor.hx` `tf2d_row_sum`, `tf2d_col_sum`,
+  `tf2d_trace` — NaN-skip per element. Extends restart 57 `tf1d_sum`
+  fix to the 2D-reduction layer.
+- **A6 MEDIUM**: `helixc/stdlib/nn.hx` `mse_loss_f32` + `mae_loss_f32`
+  — NaN-skip on per-element error. One bad slot no longer poisons the
+  whole batch loss. Divisor held at `n` per the `tf1d_sum` convention.
+- **A7 LOW**: `helixc/stdlib/tensor.hx` `tf1d_max`, `tf1d_min`,
+  `tf1d_argmax`, `tf1d_argmin`, `tf1d_argmax_in_range` + `helixc/stdlib/nn.hx`
+  `argmax_rows_f32` — NaN-at-index-0 robustness via the `seen = 0`
+  sentinel pattern. Bare-init `best = arena_get(start)` previously
+  froze the result if the first slot was NaN.
+
+### Lane C fix sweep (7 findings)
+
+- **C1 HIGH**: `README.md:31` rewrote stale "restart 54 / 2,522 /
+  Increments 70-73" status paragraph.
+- **C2 HIGH**: `HANDOFF_FOR_CHATGPT.md:6` reconciled with the line-231
+  STRICT CRITERION block — both now agree on "restart 58 catch-up
+  sweep / 2,530+ / Increments 70 onward".
+- **C3 MEDIUM**: `helix_website/stats_and_facts.md:8` rewrote snapshot-
+  prose header from "Restart 53" to the restart 58 catch-up sweep
+  (Increment 77).
+- **C4 MEDIUM**: `README.md:44` dropped the 4-cycle-stale "as of Stage
+  35 restart 53" attribution; defer to `HELIX_REFERENCE.md` for live
+  per-module counts (drift-proof).
+- **C5 HIGH**: Restart 58 source commit shipped without paired
+  bookkeeping — closed by THIS increment plus the lane docs plus the
+  canaries plus the surface refresh, all in one catch-up commit.
+- **C6 LOW**: Roadmap-snippets attribution on `HELIX_REFERENCE.md:1153`
+  and `code_samples.md:8` rewritten to drift-proof "see the
+  `docs/audit-stage35-restart*-laneC.md` series".
+- **C7 LOW**: `HELIX_REFERENCE.md:961` project-tree comment rewritten
+  to drift-proof "2,530+ tests; see ledger".
+
+### Surface refresh (8 surfaces)
+
+Restart 58 catch-up advanced all eight current-facing surfaces in
+lockstep so future N-cycle-behind drift does not accumulate again:
+`README.md` (×2), `QUICKSTART.md`, `HANDOFF_FOR_CHATGPT.md` (×2),
+`HANDOFF_FOR_CLAUDE.md`, `helix_website/HELIX_REFERENCE.md` (×3),
+`helix_website/stats_and_facts.md` (×2), `helix_website/code_samples.md`.
+
+### Regression canaries added
+
+- **In `helixc/tests/test_codegen.py`** (10 cases):
+  - 3 retroactive canaries pinning the c8398d3 source fixes:
+    `test_stage35_restart58_tf1d_dot_nan_skip_fails_closed`,
+    `test_stage35_restart58_tf1d_l1_norm_nan_skip_fails_closed`,
+    `test_stage35_restart58_tf1d_max_abs_nan_skip_fails_closed`.
+  - 7 new canaries pinning A1-A7:
+    `test_stage35_restart58_tf1d_sum_in_range_nan_skip_fails_closed`,
+    `test_stage35_restart58_vec_map_abs_saturates_on_int32_min`,
+    `test_stage35_restart58_tf1d_dot_with_offset_nan_skip_fails_closed`,
+    `test_stage35_restart58_tf2d_matvec_nan_skip_per_cell`,
+    `test_stage35_restart58_tf2d_row_sum_nan_skip`,
+    `test_stage35_restart58_mse_loss_f32_nan_skip`,
+    `test_stage35_restart58_tf1d_argmax_skips_nan_at_index_0`.
+- **In `helixc/tests/test_cli.py`** (6 cases):
+  - `test_stage35_readme_status_paragraph_advanced_past_restart_56` (C1)
+  - `test_stage35_handoff_chatgpt_header_and_strict_criterion_agree_on_count` (C2)
+  - `test_stage35_stats_facts_header_advanced_past_restart_56` (C3)
+  - `test_stage35_restart58_handoff_documents_what_restart_58_fixed` (C5)
+  - `test_stage35_restart58_ledger_has_increment_77` (C5)
+  - `test_stage35_restart58_lane_audit_docs_exist` (C5)
+
+Live test count after restart 58 catch-up: 2,527 (restart 57 baseline)
++ 10 (test_codegen.py) + 6 (test_cli.py) = 2,543 collected. Re-verify
+with `python -m pytest helixc/tests --collect-only -q`.
+
+### Clean-gate status
+
+- Stage 35 clean gates remain **0/3**.
+- Restart 58 produced 7 Lane A + 7 Lane C findings (non-zero) — gate
+  stays 0/3.
+- The restart 58 catch-up sweep (this Increment) is not itself a clean
+  gate; it is a bookkeeping-and-fix commit.
+- Next step is restart 59 as another fresh Stage 35 clean gate from
+  the newest pushed HEAD.
+
+### Restart 59 starting protocol
+
+When the next scheduled-task fire runs:
+
+1. Pull the latest `main`; verify HEAD includes Increment 77.
+2. Dispatch 3-lane read-only audit (Lane A, B, C) on the new HEAD.
+3. If all three lanes return CLEAN: advance clean gates 0/3 → 1/3,
+   commit a "Restart 59 clean gate 1/3" entry to the ledger, push.
+4. If any lane finds an issue: apply the full fix sweep + canaries +
+   lane docs + ledger increment + surface refresh **in the same
+   commit**. Do not abbreviate.
+5. Stage 35 closes when three consecutive clean gates land from the
+   same HEAD onward.
+
+### Process-discipline observation
+
+Restart 58 was the fourth abbreviated restart in the campaign (after
+52/55/56). Consider:
+
+- A pre-push validation gate that fails commits touching
+  `helixc/stdlib/*.hx` without a paired `test_stage35_restart*` canary.
+- Re-frame the HANDOFF restart protocol so the scheduled-task fire
+  path defaults to producing a single "catch-up sweep" labelled commit
+  if it cannot complete the full bookkeeping cycle, instead of
+  silently shipping source-only.
+
+The catch-up labelling convention is working as a fallback (Increment
+77 here, Increment 76 for 55/56), but the underlying anti-pattern
+recurrence is the real signal.
