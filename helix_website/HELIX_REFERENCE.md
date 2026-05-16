@@ -507,63 +507,51 @@ Phase-0 stores cell *values* (not full ASTs). Phase-1 will support full AST cell
 
 ## Standard Library
 
-The Helix standard library lives in `helixc/stdlib/` and is written in Helix itself (no `unsafe`, no FFI for core operations).
+The Helix standard library lives in `helixc/stdlib/` and is written in Helix itself (no `unsafe`, no FFI for core operations). As of Stage 35 restart 48 fix verification the library has 16 modules with ~455 bare `fn` declarations (644 including `@attribute`-prefixed declarations). The list below names every module; each line points at the actual `.hx` file.
 
-### Core (`std::core`)
+### Numerics & IEEE 754
 
-- `__abs_i32(x) -> i32` — absolute value
-- `__sign_i32(x) -> i32` — -1 / 0 / 1
-- `__sign_f64(x) -> f64`
-- `__min_i32(a, b)`, `__max_i32(a, b)`, `__clamp_i32(v, lo, hi)`
-- `__min_f32`, `__max_f32`, `__clamp_f32` (and f64 variants)
+- `ieee754.hx` — bit-pattern conversions: `__bits_of_f32`, `__f32_from_bits`, `__bits_hi_f64`, `__bits_lo_f64`, `__f64_pack`, `__f64_to_f32`, `__f32_to_f64`, `__f64_to_i32`, `f32_bits_zero`, `f32_bits_one`, `f32_bits_neg`.
+- `transcendentals.hx` — math + helpers: `__exp`, `__log`, `__sin`, `__cos`, `__tan`, `__sqrt`, `__powi` (integer power, n cap 16), `__sigmoid`, `__relu`, `__tanh`, `__abs_i32`, `__sign_i32`/`f64`, `__min_*`/`__max_*`/`__clamp_*` for i32/f32/f64, plus scalar `__sgd_step`/`__momentum_step_v`/`__adam_step` optimizer steps. All transcendentals participate in the autodiff chain rule.
 
-### IEEE 754 introspection (`std::ieee754`)
+### Tensors & tiles
 
-- `__bits_of_f32(x: f32) -> i32` — bit pattern
-- `__f32_of_bits(b: i32) -> f32`
-- `__bits_hi_f64(x: f64) -> i32`, `__bits_lo_f64(x: f64) -> i32`
-- `__f64_pack(hi: i32, lo: i32) -> f64`
-- `__f64_to_f32(x: f64) -> f32`, `__f32_to_f64(x: f32) -> f64`
-- `__f64_to_i32(x: f64) -> i32` (truncation)
-- `f32_bits_zero()`, `f32_bits_one()`, `f32_bits_neg(b: i32)`
+- `tensor.hx` — typed-handle 1D/2D tensor primitives: `t1d_new`/`t2d_new`, `tf1d_*` / `ti1d_*` (set/get/sum/max/min/mean/scale/dot/axpby/...), `t1d_capacity_ok`/`t2d_shape_ok`, `arena_span_in_tensor_payload`. ~113 functions.
 
-### Math (`std::math`)
+### Neural networks (production)
 
-- `__exp(x: f64) -> f64`, `__log(x: f64) -> f64`
-- `__sin(x: f64) -> f64`, `__cos(x: f64) -> f64`, `__tan(x: f64) -> f64`
-- `__sqrt(x: f64) -> f64`
-- `__powi(x: f64, n: i32) -> f64` — integer power, n cap 16
-- `__sigmoid(x: f64) -> f64`, `__relu(x: f64) -> f64`, `__tanh(x: f64) -> f64`
+- `nn.hx` — high-level NN helpers (~75 functions): activation layers (`sigmoid_layer`/`tanh_layer`/`relu_layer`/`softplus_layer`/`silu_layer`/`gelu_layer`/`modern_activation_layers`), losses (`mse_loss_f32`/`mae_loss_f32`/`bce_loss_*`/`huber_loss_f32`/`count_correct`), optimizers (`sgd_f32_step`, `sgd_f32_step_decay_clip`, `momentum_step`, `adam_f32_step`), regularization (`clip_grad_norm_f32`, `add_weight_decay_grad_f32`, `dropout_f32`), normalization (`layer_norm_f32`), classification (`argmax_rows_f32`, `softmax_layer`, `softmax_rows_f32`, `dense_classifier_sgd_step_f32`, plus dense / activation backprop helpers).
 
-All transcendentals participate in the autodiff chain rule.
+### Autodiff
 
-### Autodiff (`std::autodiff`)
+- `autodiff.hx` — symbolic forward-mode derivative helpers (`d_add/sub/mul/div/neg/sqrt/sq/scale/log/recip/sin/cos/relu/abs/...`), each fail-closed at the analytical singularity (restart 48/48 hardening).
+- `autodiff_reverse.hx` — reverse-mode tape (`rev_tape_new`, `rev_push`, `rev_leaf`, `rev_add/sub/mul/neg`, `rev_value_at`, `rev_alloc_adjoints`, `rev_seed`, `rev_backward`, `rev_grad`). Tape and adjoint validators (`rev_tape_valid`, `rev_adj_cap`) include the full forge-guard sweep from restart 45-47. ~35 functions.
 
-- `grad(f)(x)` — forward-mode derivative
-- `grad_rev_all(f)(x, y, z) -> Grad { dx, dy, dz }` — reverse-mode all gradients
-- `d_abs(x)`, `d_max_const(x, c)`, `d_min_const(x, c)`, `d_sub_const(x, c)` — convenience derivatives
+### AGI primitives (used by `helixc/examples/self_improving_agent.hx`)
 
-### Neural network primitives (`std::nn`)
+- `agi_match.hx` — pattern matching + tree-node + bindings primitives. Includes `tree_node_*`, `bindings_*`, `bindings_rewind` (restart-44 shrink-cannot-resurrect), and shallow/deep unification scaffolding. ~31 functions.
+- `agi_memory.hx` — working memory (`wm_*`) and episodic memory (`ep_*`) typed handles with magic + footer + tensor-payload-forge guards. ~27 functions.
+- `agi_search.hx` — BFS frontier (`bfs_*`), visited-set (`visited_*`), priority queue (`pq_*`), beam/A*/hill-climb/attention helpers. ~40 functions.
+- `agi_world.hx` — world-model tables (`wmt_*`) and world-memory lines (`wml_*`). ~19 functions.
 
-- `argmin(arr, n) -> i32`, `argmax(arr, n) -> i32`
-- `mae_loss_f32(pred, target) -> f32`, `mae_loss_f64`
-- `mse_f64(pred, target) -> f64`
-- `count_correct(pred, target, n) -> i32`
+### Collections (shipped — not "planned")
 
-### AGI search primitives (`std::agi_search`)
+- `vec.hx` — caller-trust `Vec<i32>`-style sequences. ~13 functions.
+- `hashmap.hx` — typed-handle hashmap with magic + footer + tensor-payload-forge guard (restart 45). ~41 functions.
+- `string.hx` — byte-string helpers (`string_from_int`, `string_len`, ...). ~55 functions.
+- `iterators.hx` — iterator combinators and method-chain-style helpers. ~112 functions.
+- `option.hx` — `enum Option<T> { None, Some(T) }` + `option_min`/`option_sum`/`option_eq`/`option_or_one`. ~5 functions.
+- `result.hx` — `Result<T, E>` companion to Option. ~7 functions.
 
-- `bfs_is_empty`, `bfs_push`, `bfs_pop` — BFS frontier
-- `pq_is_empty`, `pq_peek_min`, `pq_push`, `pq_pop` — priority queue
-- `visited_count`, `visited_mark`, `visited_check`
+### Discoverability
 
-### Option / Result (`std::option`)
+To list the live function count per module, run from the project root:
 
-- `enum Option<T> { None, Some(T) }`
-- `option_min`, `option_sum`, `option_eq`, `option_or_one`
+```bash
+for f in helixc/stdlib/*.hx; do echo "$f: $(grep -c '^fn ' "$f") bare fn (+ $(grep -c '^@' "$f") @-decls)"; done
+```
 
-### Collections (`std::vec`, `std::hashmap`, planned)
-
-Phase-1 introduces `Vec<T>`, `HashMap<K, V>`, `String`, iterators with method-chain syntax.
+The source of truth for this section is `ls helixc/stdlib/*.hx` and per-file grep — module names below should always match the live tree.
 
 ---
 
@@ -960,7 +948,7 @@ Kovostov-Native/
 │   │   ├── nn.hx
 │   │   ├── option.hx
 │   │   └── autodiff.hx
-│   ├── tests/          # 2,459 tests collected in restart 47 fix verification
+│   ├── tests/          # 2,466 tests collected in restart 48 fix verification
 │   │   ├── test_codegen.py
 │   │   ├── test_parser.py
 │   │   ├── test_match.py
@@ -1545,15 +1533,15 @@ Or: a single character `λ` in monospace inside a hex bracket `[λ]`. Clean, sho
 
 - **299 bytes** — current hex0 binary size
 - **Python-hosted helixc** — current production compiler implementation
-- **2,459 live tests collected** — restart 47 fix verification; rerun scoped pytest collection before publishing
-- **Approach A roadmap (30 numbered stages)** — historical bootstrap-port sequencing; current live sequencing extends through Stage 65+ in `docs/HELIX_V1_FINAL_FEATURES.md`.
+- **2,466 live tests collected** — restart 48 fix verification; rerun scoped pytest collection before publishing
+- **Approach A roadmap (30 numbered stages)** — historical bootstrap-port sequencing; current live design doc (`docs/HELIX_V1_FINAL_FEATURES.md`) references stage numbers up to Stage 65 (35 distinct stages enumerated; not a strict consecutive sequence).
 - **23+ silent-corruption bugs (and counting; live audit ledger in `docs/stage35-progress-2026-05-15.md`)** — found and disclosed during development
 - **restart-gated audit campaign** — multi-agent code review cycles continue until three clean gates pass
 - **Target bootstrap chain: 0 external toolchain dependencies once complete** — current production path still uses Python 3.10+ and Linux/WSL for ELFs
 - **self-hosting target** — not shipped yet
 - **100+ AST tags** — language richness
 - **12 numeric types** — i32/i64/u8-u64/i8-i16/f32/f64/bf16
-- **Live roadmap scope: 65+ stages across Phase 1/2/3** (`docs/HELIX_V1_FINAL_FEATURES.md`); Approach A legacy roadmap was 30 stages + amendments.
+- **Live roadmap scope: design doc references stage numbers up to Stage 65** (`docs/HELIX_V1_FINAL_FEATURES.md` — 35 distinct numbered stages spanning Layer 0 / Layer 1 / research-tier sections); Approach A legacy roadmap was 30 stages + amendments.
 
 (Use these for "by-the-numbers" sections, infographics, and copy.)
 

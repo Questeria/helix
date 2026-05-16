@@ -18,7 +18,7 @@ rebuild the compiler reproducibly.
 
 This is an early in-development language. Stage 35 is currently in audit
 cleanup, and clean gates remain `0/3` in the Stage 35 progress ledger. Restart
-47 fix verification collected 2,459 live `helixc/tests` pytest tests; run
+48 fix verification collected 2,466 live `helixc/tests` pytest tests; run
 `python -m pytest helixc/tests --collect-only -q -p no:cacheprovider` for the
 current count.
 
@@ -60,15 +60,23 @@ chmod +x hello.bin
 echo $?     # prints: 34   (Fibonacci(9))
 ```
 
-CLI flags for `python -m helixc.backend.x86_64`:
+CLI flags for `python -m helixc.backend.x86_64` (the `python -m helixc.check`
+driver accepts the same set plus the `--emit-*`, `--check-only`, `--doc`,
+and `-o` modes — see `python -m helixc.check --help` for the canonical
+list):
 - `--strict` — make totality/effect warnings hard errors
 - `--no-opt` or `-O0` — disable optimization passes (const-fold + CSE + DCE + FDCE)
 - `-O1` (default) / `-O2` / `-O3` — optimization level
 - `--stdlib` (default) / `--no-stdlib` — bundle (or skip) `helixc/stdlib/*.hx`
 - `-Wad=warn|error` / `-Wdeprecated=warn|error` — warning policy
+- `-l <libname>` / `-l<libname>` — mark external library (FFI prerequisite;
+  no-op for backends that don't link)
+- `--no-color` / `--color` — disable / force ANSI escapes (also: `NO_COLOR` env)
+- `--hash` / `--hash-cons` — structural hash / dedup helpers (no-op in
+  backends; meaningful in `helixc.check`)
 
 Run with no arguments to see the full banner. `python -m helixc.check --help`
-documents the `helixc.check` driver's additional flags.
+is the canonical source of truth for accepted flags.
 
 ## Type-check only (no codegen)
 

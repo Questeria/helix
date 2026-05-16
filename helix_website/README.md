@@ -19,7 +19,7 @@ A modern marketing + documentation website for Helix. Suggested pages (full deta
 
 - `/` — Landing with hero animation
 - `/why` — The pitch
-- `/learn` — 10-lesson interactive tutorial
+- `/learn` — Planned beginner tutorial sequence (lesson count and curriculum TBD; no shipped content yet)
 - `/playground` — Embedded Helix editor with live compilation
 - `/features` — Feature grid with interactive demos
 - `/bootstrap-chain` — Animated explorer of the hex0 → kovc chain
@@ -27,7 +27,7 @@ A modern marketing + documentation website for Helix. Suggested pages (full deta
 - `/tiles` — Tile/matmul visualization
 - `/reflection` — Quote/Splice/modify demo
 - `/spec` — Language reference
-- `/roadmap` — Stage tracker (Approach A's 30 historical stages + the current 65+ live stages in `HELIX_V1_FINAL_FEATURES.md`)
+- `/roadmap` — Stage tracker (Approach A's 30 historical stages + the design doc `HELIX_V1_FINAL_FEATURES.md` which references stage numbers up to Stage 65; 35 distinct stages enumerated, not a strict consecutive sequence)
 - `/audits` — Future public page exposing repo-local audit findings
 - `/compare` — Helix vs Rust/Mojo/Triton/Python
 - `/contribute` — Get involved

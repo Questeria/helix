@@ -32,9 +32,15 @@
 }
 
 // d/dx (a/b) = (a' b - a b') / b^2
-@pure fn d_div_v(a_v: f64, a_dx: f64, b_v: f64, b_dx: f64) -> f64 { a_v / b_v }
+// Restart 48 A1: fail-closed at b_v == 0 (singular). Direct sibling of
+// d_recip_v/dx which restart 47 A6/A7 guarded; d_recip_* is the a==1
+// special case of d_div_*. Matches the same precedent.
+@pure fn d_div_v(a_v: f64, a_dx: f64, b_v: f64, b_dx: f64) -> f64 {
+    if b_v == 0.0_f64 { 0.0_f64 } else { a_v / b_v }
+}
 @pure fn d_div_dx(a_v: f64, a_dx: f64, b_v: f64, b_dx: f64) -> f64 {
-    (a_dx * b_v - a_v * b_dx) / (b_v * b_v)
+    if b_v == 0.0_f64 { 0.0_f64 }
+    else { (a_dx * b_v - a_v * b_dx) / (b_v * b_v) }
 }
 
 // d/dx (-a) = -a'

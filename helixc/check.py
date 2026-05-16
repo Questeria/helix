@@ -35,6 +35,7 @@ Flags:
                         for host IR/ELF; PTX skips DCE/FDCE so emitted
                         kernel text stays inspectable. 2/3 currently alias
                         -O1 until stronger layers land). Default -O1.
+  --no-opt              Synonym for -O0 (parity with backend CLIs).
   -o <path>             Write ELF output to <path> instead of default
   -l <libname>          Mark <libname> as external (FFI prerequisite)
   -W<flag>              Warning policy (e.g. -Wdeprecated, -Wdeprecated=error)
@@ -208,6 +209,12 @@ _KNOWN_LONG_FLAGS = frozenset({
     "--check-only", "--emit-ast", "--emit-ir", "--emit-asm",
     "--emit-ptx", "--emit-proof-obligations", "--doc", "--help",
     "--no-color", "--color", "-h",
+    # Restart 48 B1: --no-opt is documented in HELIX_REFERENCE.md and
+    # QUICKSTART.md as a synonym for -O0 and is accepted by both backends
+    # (since restart 46). The check.py side was missed in the restart 47
+    # B4 flag-parity sweep — that pass only mirrored check.py-only flags
+    # into the backends, not the reverse. Treated here as -O0.
+    "--no-opt",
 })
 
 _KNOWN_WARNING_NAMES = frozenset({"ad", "deprecated"})
@@ -231,6 +238,11 @@ def parse_args(argv: list[str]) -> tuple[CliArgs, list[str]]:
             i += 1
         elif tok == "--color":
             a.color = True
+            i += 1
+        elif tok == "--no-opt":
+            # Restart 48 B1: synonym for -O0 (matches backend behavior).
+            a.opt_level = 0
+            a.flags.add(tok)
             i += 1
         elif tok in _KNOWN_LONG_FLAGS:
             a.flags.add(tok)

@@ -20183,6 +20183,81 @@ def test_stage35_d_recip_fail_closed_at_zero():
     assert code == 42, f"expected 42, got {code}"
 
 
+def test_stage35_d_div_fail_closed_at_zero_denominator():
+    # Restart 48 A1: d_div_v and d_div_dx previously divided by b_v / b_v*b_v
+    # with no zero guard. Direct sibling of d_recip_v/dx (restart 47 A6/A7);
+    # d_recip is the a==1 special case of d_div. Both must fail-closed at
+    # b_v == 0 to match the same precedent.
+    src = """
+    fn main() -> i32 {
+        let v = d_div_v(1.0_f64, 0.0_f64, 0.0_f64, 0.0_f64);
+        let dx = d_div_dx(1.0_f64, 0.0_f64, 0.0_f64, 0.0_f64);
+        if (v as i32) == 0 { if (dx as i32) == 0 {
+            // Sanity: non-singular path still computes correctly.
+            let v_ok = d_div_v(6.0_f64, 0.0_f64, 2.0_f64, 0.0_f64);
+            let dx_ok = d_div_dx(6.0_f64, 0.0_f64, 2.0_f64, 0.0_f64);
+            if (v_ok as i32) == 3 { if (dx_ok as i32) == 0 { 42 } else { 7 } } else { 7 }
+        } else { 7 } } else { 7 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stage35_softmax_layer_fail_closed_on_degenerate_sum_e():
+    # Restart 48 A2: softmax_layer previously divided by sum_e with no guard.
+    # When every __exp(xi - max_v) underflows to 0 (extreme negative inputs)
+    # or when any xi is NaN, sum_e becomes 0 or NaN and the divide poisons
+    # every output slot. Fail-closed writes the maximum-entropy distribution
+    # (1/n to every slot), matching restart 47 A3's layer_norm precedent.
+    src = """
+    fn main() -> i32 {
+        // Seed a NaN logit via bit pattern 0x7FC00000.
+        let x = t1d_new(3);
+        tf1d_set(x, 0, __f32_from_bits(2143289344));  // NaN
+        tf1d_set(x, 1, 0.0_f32);
+        tf1d_set(x, 2, 0.0_f32);
+        let y = t1d_new(3);
+        softmax_layer(x, y, 3);
+        let y0 = tf1d_get(y, 0);
+        let y1 = tf1d_get(y, 1);
+        let y2 = tf1d_get(y, 2);
+        // After fix: every slot == 1/3 (maximum entropy fail-closed).
+        // y0/y1/y2 should all be finite (not NaN). Test finiteness via
+        // self-equality (NaN != NaN).
+        if (y0 == y0) { if (y1 == y1) { if (y2 == y2) { 42 } else { 7 } }
+                        else { 7 } }
+        else { 7 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stage35_tanh_layer_does_not_nan_at_saturation_boundary():
+    # Restart 48 A3: tanh_layer previously inlined __exp(2*xi) directly,
+    # bypassing __tanh's |x| > 20 short-circuit. For xi near 24, the inline
+    # form saturates and may NaN. The fix delegates to __tanh.
+    src = """
+    fn main() -> i32 {
+        let x = t1d_new(2);
+        tf1d_set(x, 0, 30.0_f32);
+        tf1d_set(x, 1, 0.0_f32 - 30.0_f32);
+        let y = t1d_new(2);
+        tanh_layer(x, y, 2);
+        let y_pos = tf1d_get(y, 0);
+        let y_neg = tf1d_get(y, 1);
+        // After fix: y_pos approximately 1.0, y_neg approximately -1.0
+        // (both finite, neither NaN). Test finiteness + sign.
+        if (y_pos == y_pos) { if (y_neg == y_neg) {
+            if y_pos > 0.5_f32 { if y_neg < 0.0_f32 - 0.5_f32 { 42 } else { 7 } } else { 7 }
+        } else { 7 } } else { 7 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
 def main():
     # Recognise both the legacy `_SkipTest` exception and pytest's
     # `Skipped` outcome class so tests can use either to signal a skip

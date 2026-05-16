@@ -981,6 +981,14 @@ if __name__ == "__main__":
                 full_scope = diagnostic_function_names(full_mod)
             full_eff = effect_check_module(
                 full_mod, only_functions=full_scope)
+        # Restart 48 B2: do NOT swallow loud-fail signals. Re-raise the
+        # loud-fail discipline set (NotImplementedError, AssertionError)
+        # plus user-interrupt classes; only convert genuine domain errors
+        # into one-line diagnostics. Mirrors restart 47 B1's narrowing of
+        # lower_ast._resolve_monomorphized_struct_type.
+        except (NotImplementedError, AssertionError, KeyboardInterrupt,
+                SystemExit, MemoryError):
+            raise
         except Exception as e:
             print(f"error: ptx: validation: {e}", file=sys.stderr)
             sys.exit(1)
@@ -1022,6 +1030,11 @@ if __name__ == "__main__":
         if ad_rc != 0:
             sys.exit(ad_rc)
         print(ptx)
+    # Restart 48 B2: preserve loud-fail discipline at the outermost handler
+    # too; only convert domain errors into one-line diagnostics.
+    except (NotImplementedError, AssertionError, KeyboardInterrupt,
+            SystemExit, MemoryError):
+        raise
     except Exception as e:
         print(f"error: ptx: {e}", file=sys.stderr)
         sys.exit(1)

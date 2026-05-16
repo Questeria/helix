@@ -50,8 +50,16 @@ def _read_source(path: str) -> str:
 
 
 def _parse_or_exit(src: str, path: str):
+    # Restart 48 B3: preserve loud-fail discipline. NotImplementedError
+    # from parser.parse() signals a TyNode/ASTNode subclass that needs
+    # explicit dispatch — must propagate, not be flattened to "parse
+    # error: ...". Mirrors restart 47 B1's narrowing of
+    # lower_ast._resolve_monomorphized_struct_type.
     try:
         return parse(src)
+    except (NotImplementedError, AssertionError, KeyboardInterrupt,
+            SystemExit, MemoryError):
+        raise
     except Exception as e:
         print(f"error: autodiff_cli: parse: {path}: {e}", file=sys.stderr)
         sys.exit(2)
@@ -106,6 +114,11 @@ def main():
     differentiate_var = var or target.params[0].name
     try:
         deriv = differentiate(target.body, differentiate_var)
+    # Restart 48 B3: preserve loud-fail discipline (same precedent as
+    # _parse_or_exit above).
+    except (NotImplementedError, AssertionError, KeyboardInterrupt,
+            SystemExit, MemoryError):
+        raise
     except Exception as e:
         print(f"error: autodiff_cli: differentiate: {e}", file=sys.stderr)
         sys.exit(2)

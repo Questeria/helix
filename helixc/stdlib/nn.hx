@@ -411,7 +411,13 @@ fn momentum_step(w_start: i32, v_start: i32, g_start: i32,
     }}}}
 }
 
-// tanh layer (uses __exp).
+// tanh layer (delegates to scalar __tanh).
+// Restart 48 A3: delegate to __tanh (transcendentals.hx) instead of
+// inlining __exp(2*xi). __tanh short-circuits at |x| > 20 to avoid
+// saturating __exp's range, matching the precedent set by sigmoid_layer
+// (delegates to __sigmoid), softplus_layer (delegates to __softplus),
+// silu_layer/gelu_layer (delegate via __sigmoid/__tanh). The inline form
+// could NaN at the saturation boundary.
 fn tanh_layer(x_start: i32, y_start: i32, n: i32) -> i32 {
     if n <= 0 { 0 }
     else { if t1d_slice_ok(x_start, n) == 0 { t2d_error() }
@@ -420,8 +426,7 @@ fn tanh_layer(x_start: i32, y_start: i32, n: i32) -> i32 {
     let mut i: i32 = 0;
     while i < n {
         let xi = __f32_from_bits(__arena_get(x_start + i));
-        let e2x = __exp(2.0_f32 * xi);
-        let v = (e2x - 1.0_f32) / (e2x + 1.0_f32);
+        let v = __tanh(xi);
         __arena_set(y_start + i, __bits_of_f32(v));
         i = i + 1;
     }
@@ -653,12 +658,30 @@ fn softmax_layer(x_start: i32, y_start: i32, n: i32) -> i32 {
             sum_e = sum_e + e;
             i = i + 1;
         }
-        let mut j: i32 = 0;
-        while j < n {
-            let e = __f32_from_bits(__arena_get(y_start + j));
-            __arena_set(y_start + j, __bits_of_f32(e / sum_e));
-            j = j + 1;
+        // Restart 48 A2: fail-closed when sum_e <= 0 or NaN. sum_e can be 0
+        // if every __exp(xi - max_v) underflowed to 0 (extreme negative
+        // inputs), and can be NaN if any xi was NaN (poisoned earlier layer
+        // output). Either way, dividing by sum_e produces +Inf or NaN that
+        // poisons every downstream consumer. Fail-closed writes the
+        // maximum-entropy distribution (1/n to every slot), matching the
+        // restart-47 layer_norm_f32 precedent (write zeros there, write the
+        // canonical "no information" distribution here).
+        let inv_n = if n > 0 { 1.0_f32 / (n as f32) } else { 0.0_f32 };
+        if (sum_e <= 0.0_f32) || (sum_e != sum_e) {
+            let mut k: i32 = 0;
+            while k < n {
+                __arena_set(y_start + k, __bits_of_f32(inv_n));
+                k = k + 1;
+            }
         }
+        else {
+            let mut j: i32 = 0;
+            while j < n {
+                let e = __f32_from_bits(__arena_get(y_start + j));
+                __arena_set(y_start + j, __bits_of_f32(e / sum_e));
+                j = j + 1;
+            }
+        };
         0
     }}}}
 }
@@ -778,32 +801,41 @@ fn dense_classifier_sgd_step_f32(w_start: i32, b_start: i32, x_start: i32,
                 sum_e = sum_e + __exp(score2 - max_score);
                 ec = ec + 1;
             }
-            let mut cls: i32 = 0;
-            while cls < classes {
-                let mut score3 = __f32_from_bits(__arena_get(b_start + cls));
-                let mut sj: i32 = 0;
-                while sj < in_dim {
-                    let wv3 = __f32_from_bits(__arena_get(w_start + cls * in_dim + sj));
-                    let xv3 = __f32_from_bits(__arena_get(x_start + sj));
-                    score3 = score3 + wv3 * xv3;
-                    sj = sj + 1;
+            // Restart 48 A2 (sibling): fail-closed no-op step when sum_e is
+            // degenerate. Same precedent as softmax_layer's sum_e guard:
+            // if every __exp(score - max) underflowed to 0 (sum_e == 0) or
+            // any score is NaN (sum_e == NaN), the probabilities are
+            // poisoned. A no-op step leaves weights untouched rather than
+            // applying a divide-by-zero gradient that corrupts them.
+            if (sum_e <= 0.0_f32) || (sum_e != sum_e) { 0 }
+            else {
+                let mut cls: i32 = 0;
+                while cls < classes {
+                    let mut score3 = __f32_from_bits(__arena_get(b_start + cls));
+                    let mut sj: i32 = 0;
+                    while sj < in_dim {
+                        let wv3 = __f32_from_bits(__arena_get(w_start + cls * in_dim + sj));
+                        let xv3 = __f32_from_bits(__arena_get(x_start + sj));
+                        score3 = score3 + wv3 * xv3;
+                        sj = sj + 1;
+                    }
+                    let p = __exp(score3 - max_score) / sum_e;
+                    let y = if cls == target { 1.0_f32 } else { 0.0_f32 };
+                    let dy = p - y;
+                    let mut j: i32 = 0;
+                    while j < in_dim {
+                        let w_idx = w_start + cls * in_dim + j;
+                        let wv = __f32_from_bits(__arena_get(w_idx));
+                        let xv = __f32_from_bits(__arena_get(x_start + j));
+                        __arena_set(w_idx, __bits_of_f32(wv - lr * dy * xv));
+                        j = j + 1;
+                    }
+                    let bv = __f32_from_bits(__arena_get(b_start + cls));
+                    __arena_set(b_start + cls, __bits_of_f32(bv - lr * dy));
+                    cls = cls + 1;
                 }
-                let p = __exp(score3 - max_score) / sum_e;
-                let y = if cls == target { 1.0_f32 } else { 0.0_f32 };
-                let dy = p - y;
-                let mut j: i32 = 0;
-                while j < in_dim {
-                    let w_idx = w_start + cls * in_dim + j;
-                    let wv = __f32_from_bits(__arena_get(w_idx));
-                    let xv = __f32_from_bits(__arena_get(x_start + j));
-                    __arena_set(w_idx, __bits_of_f32(wv - lr * dy * xv));
-                    j = j + 1;
-                }
-                let bv = __f32_from_bits(__arena_get(b_start + cls));
-                __arena_set(b_start + cls, __bits_of_f32(bv - lr * dy));
-                cls = cls + 1;
+                0
             }
-            0
         }}
     }}}}}}
     }

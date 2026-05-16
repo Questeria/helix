@@ -3393,3 +3393,146 @@ the `layer_norm` instance), and Lane B's loud-fail-preservation finding
 catches a class of future-AGI-feature regressions that would otherwise have
 been a silent miscompile. This is the bug-family protocol working as intended:
 each restart pulls more sibling issues into the same fix sweep.
+
+## Increment 67 - Forty-Eighth Clean-Gate Restart Fix Sweep
+
+Restart 48 began from pushed commit `c93fb7a` (the handoff doc commit after
+restart 47's `4ba725f` fix sweep) using the bug-family audit protocol. Three
+read-only audit lanes dispatched in parallel with strict no-Edit/no-Write
+instructions (improved discipline vs. restart 47's auto-applying agents).
+
+Baseline support checks:
+
+- `git log -1 --oneline`
+  - Result: `c93fb7a` (clean working tree to start).
+- `python -m py_compile helixc/check.py helixc/backend/x86_64.py helixc/backend/ptx.py helixc/tests/test_cli.py helixc/tests/test_codegen.py helixc/tests/test_ptx.py`
+  - Result: passed.
+- Per-file stdlib parser sweep across `helixc/stdlib/*.hx`
+  - Result: parsed 16 files.
+
+Restart 48 audit findings (10 total: 2 HIGH + 5 MEDIUM + 3 LOW):
+
+Lane A - Runtime / stdlib safety (3 findings):
+
+- A1 HIGH: `d_div_v` / `d_div_dx` in `autodiff.hx` lacked the singularity
+  guard restart 47 A6/A7 added to `d_recip_v` / `d_recip_dx`. `d_recip_*` is
+  the `a == 1` special case of `d_div_*`; sweep-completeness miss.
+  `d_div_dx` divides by `b_v * b_v` -> NaN at `b_v == 0`.
+- A2 MEDIUM: `softmax_layer` in `nn.hx` (and by transitivity `softmax_rows_f32`,
+  `dense_classifier_sgd_step_f32`) divided by `sum_e` with no guard.
+  `sum_e == 0` (extreme negative inputs underflowing `__exp` to 0) or
+  `sum_e == NaN` (poisoned upstream logit) propagates `Inf`/`NaN` to every
+  output slot. Sibling of restart 47 A3's `layer_norm_f32` precedent.
+- A3 LOW: `tanh_layer` in `nn.hx` inlined `__exp(2 * xi)` directly, bypassing
+  `__tanh`'s `|x| > 20` short-circuit. Symmetry-break vs. sibling activation
+  layers (`sigmoid_layer`/`softplus_layer`/`silu_layer`/`gelu_layer` all
+  delegate to range-clamped helpers).
+
+Lane B - Compiler / backend / CLI (4 findings):
+
+- B1 HIGH: `helixc.check` rejected `--no-opt` with "unknown flag" while
+  HELIX_REFERENCE.md and QUICKSTART.md both advertise it as a `-O0`
+  synonym and both backends accept it (since restart 46). Restart 47 B4
+  flag-parity was directional (check-only -> backends); reverse direction
+  was missed.
+- B2 MEDIUM: `helixc.backend.ptx` outer `except Exception` (lines 984-986 +
+  1025-1027) swallowed `NotImplementedError` / `AssertionError`, defeating
+  restart 47 B1's loud-fail-discipline precedent. A future TyNode / OpKind
+  extension hitting `lower()` or `emit_ptx()` would render as a generic
+  `error: ptx: ...` indistinguishable from a real PTX-validation rejection.
+- B3 MEDIUM: `autodiff_cli._parse_or_exit` and the `differentiate(...)`
+  wrapper (added in restart 47 B3) caught broad `Exception`, regressing the
+  loud-fail discipline. Same shape as B2 in a different file.
+- B4 LOW (subsumed by B1): doc/banner truth gap. HELIX_REFERENCE.md line 1026
+  asserts `--help` is the source of truth for accepted flags, yet `--help`
+  did not list `--no-opt`. Resolved when B1 added the flag.
+
+Lane C - Docs / status / release (3 findings):
+
+- C1 MEDIUM: HELIX_REFERENCE.md lines 1549 + 1556 and helix_website/README.md
+  line 30 asserted "65+ stages across Phase 1/2/3" / "current 65+ live
+  stages" without a stage-count cross-check. The backing doc
+  `docs/HELIX_V1_FINAL_FEATURES.md` enumerates 35 distinct stage numbers
+  (max Stage 65), not 65+ consecutive stages. Softened to "design doc
+  references stage numbers up to Stage 65 (35 distinct enumerated)".
+- C2 MEDIUM: QUICKSTART.md flag list missed `-l <libname>`, `--no-color`/
+  `--color`, `--hash`/`--hash-cons` (which restart 47 B4 added to the
+  backends, and which `helixc.check` already accepted). Expanded.
+- C3 LOW-MED: helix_website/README.md `/learn` page bullet claimed a
+  concrete `10-lesson interactive tutorial` count without a hedge or
+  backing inventory. Softened to "planned beginner tutorial sequence
+  (lesson count and curriculum TBD; no shipped content yet)".
+
+Fixes in this increment:
+
+- Added `if b_v == 0.0_f64 { 0.0_f64 }` guards to `d_div_v` and `d_div_dx`
+  in `autodiff.hx` (A1).
+- Added fail-closed branch in `softmax_layer`: when
+  `sum_e <= 0 || sum_e != sum_e`, write `1/n` to every output slot
+  (maximum-entropy fail-closed) (A2).
+- Added matching fail-closed early-exit in `dense_classifier_sgd_step_f32`:
+  when `sum_e <= 0 || sum_e != sum_e`, return 0 with weights untouched
+  (no-op step) (A2 sibling).
+- Replaced `tanh_layer`'s inline `(e2x-1)/(e2x+1)` body with a delegation
+  to `__tanh(xi)` (transcendentals.hx), inheriting the `|x| > 20`
+  short-circuit (A3).
+- Added `--no-opt` to `_KNOWN_LONG_FLAGS` in `helixc/check.py` and gave it
+  a dedicated parser branch that sets `opt_level = 0`; help banner
+  updated to document it as a `-O0` synonym (B1).
+- Narrowed both `helixc/backend/ptx.py` outer-except handlers by adding a
+  preceding `except (NotImplementedError, AssertionError, KeyboardInterrupt,
+  SystemExit, MemoryError): raise` branch (B2).
+- Narrowed `autodiff_cli._parse_or_exit` and the `differentiate(...)`
+  wrapper the same way (B3).
+- Rewrote HELIX_REFERENCE.md lines 1549 + 1556 and helix_website/README.md
+  line 30 to say "design doc references stage numbers up to Stage 65 (35
+  distinct enumerated)" instead of "65+ stages" (C1).
+- Expanded QUICKSTART.md CLI flags section with `-l`, `--no-color`/
+  `--color`, `--hash`/`--hash-cons`, plus clarification that
+  `helixc.check --help` is the canonical source of truth (C2).
+- Softened helix_website/README.md `/learn` page bullet to remove the
+  unsupported "10-lesson" count (C3).
+- Added 3 new regression tests in `helixc/tests/test_codegen.py` (Lane A:
+  d_div fail-closed, softmax_layer fail-closed, tanh_layer no-NaN at
+  boundary) and 4 in `helixc/tests/test_cli.py` (Lane B: check accepts
+  --no-opt, ptx.py outer-except narrowing source-text check,
+  autodiff_cli _parse_or_exit propagation, autodiff_cli differentiate
+  propagation).
+- Updated current-facing status surfaces from restart 47 / 2,459 tests to
+  restart 48 / 2,466 tests across README, QUICKSTART, HANDOFF_FOR_CHATGPT,
+  helix_website/stats_and_facts.md, and helix_website/HELIX_REFERENCE.md.
+
+Verification:
+
+- `python -m py_compile helixc/check.py helixc/backend/x86_64.py helixc/backend/ptx.py helixc/frontend/autodiff_cli.py helixc/tests/test_cli.py helixc/tests/test_codegen.py`
+  - Result: passed.
+- Per-file stdlib parser sweep across `helixc/stdlib/*.hx`
+  - Result: parsed 16 files.
+- Lane A new regression canaries: `stage35_d_div_fail`, `stage35_softmax_layer_fail_closed`, `stage35_tanh_layer_does_not_nan`
+  - Result: 3 passed.
+- Lane B new regression canaries: `stage35_check_accepts_no_opt`, `stage35_ptx_backend_outer_except`, `stage35_autodiff_cli_parse_or_exit_propagates`, `stage35_autodiff_cli_differentiate_propagates`
+  - Result: 4 passed.
+- `python -m pytest helixc/tests --collect-only -q`
+  - Result: 2,466 tests collected (was 2,459 + 7 net).
+- `git diff --check`
+  - Result: passed.
+
+Clean-gate status:
+
+- Stage 35 clean gates remain `0/3`.
+- Restart 48 is a fix sweep, not a clean gate.
+- Next step is restart 49 as another fresh Stage 35 clean gate from the newest
+  pushed HEAD.
+
+Restart 48 process note: 10 findings split 2 HIGH (1 in Lane A math safety,
+1 in Lane B flag parity) + 5 MEDIUM (2 in Lane A, 2 in Lane B loud-fail
+discipline, 2 in Lane C doc-correctness) + 3 LOW. The HIGHs are both
+sweep-boundary regressions: A1 is a literal sibling of restart 47 A6/A7 in
+the same file, and B1 is the reverse-direction parity of restart 47 B4.
+Both could have been caught by widening restart 47's sweep by one step
+(check every divide-by-zero rule in the file; check parity in both
+directions). The Lane B loud-fail-discipline sweep (B2 + B3) extends
+restart 47 B1 from a single exception site to the surrounding driver code.
+Lane C continues to find residual marketing-claim seams; this restart's
+"65+ stages" fix follows the same pattern as restart 46/47's license-triple
+and bootstrap-chain softening.
