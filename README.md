@@ -24,11 +24,13 @@ The purpose of Helix is to remove uncertainty wherever software can honestly rem
 - **Language**: Helix (`.hx` source files), a general AGI and high-certainty computing language
 - **Compiler**: `helixc`
 - **Runtime**: `helixrt`
-- **Bootstrap chain**: stage0 (hand-encoded hex) → hex1 → M0 (assembler) → M1 → M2 (C-subset compiler) → helixc-bootstrap (in C-subset) → helixc (self-hosted in Helix)
+- **Target bootstrap chain**: stage0 (hand-encoded hex) → hex1 → M0 (assembler) → M1 → M2 (C-subset compiler) → helixc-bootstrap (in C-subset) → helixc (self-hosted in Helix)
 
-## Status (2026-05-11)
+## Status (2026-05-15)
 
-**Test suite: ~1,500 tests** (1 skipped), Stage 28.9 active (bootstrap kovc.hx self-hosting effort), 38+ audit-driven cycles refining the Python frontend. (Exact count drifts with each audit cycle adding regression tests; see `git log` for current.)
+**Current stage: Stage 35 audit cleanup.** Clean gates remain `0/3` as of the latest Stage 35 progress ledger, and the exact test count changes as each audit adds regressions. Restart 19 collected 2,254 live `helixc/tests` pytest tests; run `python -m pytest helixc/tests --collect-only -q -p no:cacheprovider` for the current count.
+
+The production compiler path is still the Python-hosted `helixc` implementation. A Helix self-hosted compiler remains the target of the bootstrap roadmap, not a shipped replacement for Python yet.
 
 Major direction shift this session: Helix is now being optimized **for AI to USE and EXTEND, not for human developers**. Where ergonomics conflicts with structural regularity, structural regularity wins.
 

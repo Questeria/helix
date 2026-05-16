@@ -13,25 +13,26 @@ ELF (`stage0/hex0/hex0.bin`) and builds itself up.
 
 ## Build status
 
-This is an early in-development language. Working today:
+This is an early in-development language. Stage 35 is currently in audit
+cleanup, and clean gates remain `0/3` in the Stage 35 progress ledger. Restart
+19 collected 2,254 live `helixc/tests` pytest tests; run
+`python -m pytest helixc/tests --collect-only -q -p no:cacheprovider` for the
+current count.
 
-| Layer | Status | Test count |
-|---|---|---|
-| Lexer | working | 42 tests |
-| Parser | working | 46 tests |
-| AST | working | included |
-| Type checker | working — 9 classes of bugs caught at compile time | 43 tests |
-| Presburger constraint solver | working | 24 tests |
-| Tensor IR | working | 13 tests |
-| Tile IR | data structures only | 7 tests |
-| Const folding | working + integrated | 9 tests |
-| Dead code elimination | working + integrated | 6 tests |
-| Forward-mode autodiff | working as CLI tool | 13 tests |
-| x86-64 backend | works for scalars, control flow, arrays, floats | 52 e2e tests |
-| PTX backend | text emission only (no GPU codegen yet) | 8 tests |
-| stage0 hex0 monitor | working binary | 3 fixture tests |
+Working today:
 
-**Total: 263 Python tests + 3 hex0 fixtures = 266 tests, all passing.**
+| Layer | Status |
+|---|---|
+| Lexer/parser/AST | working and covered by pytest |
+| Type checker | working, with refinements/effects/shapes under active audit |
+| Presburger constraint solver | working |
+| Tensor IR | working |
+| Tile IR | data structures plus PTX-oriented lowering paths under Stage 35 audit |
+| Const folding / CSE / DCE / FDCE | working and integrated |
+| Forward and reverse autodiff | working for the covered symbolic/runtime paths |
+| x86-64 backend | works for scalars, control flow, arrays, floats, arena-backed tensors |
+| PTX backend | text emission for covered kernels; GPU execution is still not a shipped capability |
+| stage0 hex0 monitor | working 299-byte binary fixture |
 
 ## Compile and run a Helix program
 
@@ -122,9 +123,9 @@ fn loss__grad(x: f32) -> f32 {
 Paste that into your file, compile, and you have a working
 `loss__grad(x)` function.
 
-Helix is the only AI language that does autodiff at compile time as
-plain symbolic AST manipulation — the result is just another Helix
-function you can read, edit, optimize, or hand-tune.
+Helix's autodiff path is built around compile-time symbolic AST manipulation:
+the result is another Helix function you can read, edit, optimize, or
+hand-tune.
 
 ## Run the test suite
 
@@ -166,7 +167,7 @@ Kovostov-Native/
 │   │   └── passes/     # const_fold, dce
 │   ├── backend/        # x86_64 (works), ptx (text-emit stub)
 │   ├── examples/       # working .hx programs
-│   └── tests/          # 263 tests
+│   └── tests/          # pytest suite; audits keep adding regressions
 ├── docs/
 │   ├── PLAN.md
 │   ├── lang/
@@ -179,7 +180,7 @@ Kovostov-Native/
 
 ## What makes Helix different
 
-Helix is the only language with all of:
+Helix is being built to combine:
 1. **Compile-time tensor shape checking** via Presburger arithmetic — catches matmul dimension bugs before code runs.
 2. **Effect/capability typing** — `@pure` cannot accidentally call `@io`.
 3. **Differentiable types `D<T>`** — gradient flow tracked at the type level.

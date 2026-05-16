@@ -1,6 +1,6 @@
 # Helix — Complete Reference
 
-> A comprehensive reference for Claude Design to build the public Helix website. This document treats Helix as a complete, shipped language. Every feature described is real, designed, and either implemented or specified down to the byte level. Use this as the single source of truth for marketing copy, feature explainers, code samples, and architecture diagrams.
+> A comprehensive reference for Claude Design to build the public Helix website. This is a marketing/design draft, not the source of truth for current shipped capability. Before publishing, check `README.md`, `docs/stage35-progress-2026-05-15.md`, and live tests. Clearly distinguish implemented features from roadmap targets.
 
 ---
 
@@ -29,26 +29,26 @@
 
 ## What is Helix
 
-**Helix is a from-scratch ML-native systems language that bootstraps from raw binary to a self-hosting compiler with no toolchain dependencies, with first-class autodiff and tile/tensor primitives built into the language.**
+**Helix is a from-scratch ML-native systems language being built from a raw-binary bootstrap toward a self-hosting compiler, with first-class autodiff and tile/tensor primitives as core language goals.**
 
 ### One-line pitches (pick one for the hero)
 
-- "A compiler that builds itself from 120 bytes of hex."
+- "A language stack growing from a 299-byte audited bootstrap root."
 - "Systems performance, math notation, autodiff in the language."
 - "The language that compiles itself — designed for machine learning, built from raw binary."
-- "Helix: from one machine instruction to a full self-hosting ML compiler."
+- "Helix: from one audited machine-code root toward a self-hosting ML compiler."
 
 ### Three-pillar pitch (use as feature triplet)
 
 🔓 **Open-source weights, data, and code.** Apache 2.0 source · CC-BY 4.0 docs · CC0 model weights. Public training data only.
 
-⚙️ **Bootstrapped from raw binary.** No NASM, no GCC, no Cargo. The hex0 bootstrap is 120 bytes; from there, six layers compile each other up to the self-hosted Helix compiler `kovc`.
+⚙️ **Bootstrapped from raw binary.** The verified hex0 bootstrap root is 299 bytes. The long-term chain is designed to climb from that root toward a self-hosted Helix compiler; today the production compiler is still Python-hosted `helixc`.
 
 🧠 **ML-first, not ML-bolted-on.** Autodiff (`grad`, `grad_rev_all`), checkpoint rematerialization, tile/tensor types, and an x86 + PTX backend are part of the language — not a library.
 
 ### The 30-second elevator pitch
 
-> Helix is a programming language designed for machine learning, but unlike Python or Mojo, it builds itself from scratch — starting from a 120-byte hex bootstrap binary and ending at a fully self-hosted compiler called `kovc`. It has the type safety of Rust, the math notation of Julia, the autodiff of JAX, and the GPU primitives of Triton, all in one language. Every byte of the toolchain is open source under permissive licenses (Apache 2.0 code, CC-BY 4.0 docs, CC0 model weights). Helix is the foundation of the Kovostov AGI project — an attempt to build artificial general intelligence on a fully open, fully auditable stack.
+> Helix is a programming language designed for machine learning and auditable systems work. The project starts from a 299-byte raw-binary bootstrap root and is working toward a self-hosted compiler, while today's production compiler remains Python-hosted `helixc`. It aims to combine type safety, symbolic autodiff, tensor/tile primitives, and verifier-gated self-improvement in one open stack. The toolchain is open source under permissive licenses (Apache 2.0 code, CC-BY 4.0 docs, CC0 model weights when produced). Helix is the foundation of the Kovostov AGI project: an attempt to build AGI on a fully open, fully auditable stack.
 
 ---
 
@@ -62,7 +62,7 @@ Every place where the compiler could silently produce wrong code traps with a un
 
 The Helix toolchain has zero external dependencies. The chain is:
 
-`hex0` (120 bytes, hand-built) → `hex1` → `M0` → `M1` → `M2-Planet` → `kovc-bootstrap` → `kovc` (self-hosted, ~50KB)
+Target chain: `hex0` (299 bytes, hand-built) → `hex1` → `M0` → `M1` → `M2-Planet` → `kovc-bootstrap` → self-hosted Helix compiler.
 
 Each link compiles the next. You can audit every byte. No assembler, no linker, no Cargo. `libc` is optional — only needed when user code uses FFI.
 
@@ -851,7 +851,7 @@ fn main() -> i32 {
 
 ## Bootstrap Chain
 
-The trust root of Helix is **120 bytes of hand-encoded x86-64 machine code**: `hex0`.
+The trust root of Helix is **299 bytes of hand-encoded x86-64 machine code**: `hex0`.
 
 ```
                     ┌─────────────────┐
@@ -887,7 +887,7 @@ The trust root of Helix is **120 bytes of hand-encoded x86-64 machine code**: `h
                              │ compiles
                              ▼
                     ┌─────────────────┐
-                    │  kovc (~50 KB)  │  self-hosted Helix compiler
+                    │  helixc         │  current Python-hosted compiler
                     └─────────────────┘  (in Helix itself)
 ```
 
@@ -908,7 +908,7 @@ Kovostov-Native/
 │   ├── hex1/
 │   └── ...
 ├── helixc/             # the Helix compiler
-│   ├── bootstrap/      # kovc.hx (the self-hosted compiler, in Helix)
+│   ├── bootstrap/      # kovc.hx (self-host target, in Helix)
 │   │   ├── lexer.hx
 │   │   ├── parser.hx
 │   │   └── kovc.hx     # codegen + IR + driver
@@ -963,7 +963,7 @@ Kovostov-Native/
 
 The Python implementation (`helixc/frontend/...`) is the *executable specification*. It runs the test suite, produces reference outputs, and is used to bootstrap the initial `kovc-bootstrap` binary.
 
-The Helix self-host (`helixc/bootstrap/kovc.hx`) is the *production* compiler: it compiles itself and any other Helix program. After Stage 29 ("Drop Python"), the Python implementation is archived as a reference; the Helix self-host is the only compiler shipped.
+The Python-hosted `helixc` is currently the production compiler. The Helix self-host (`helixc/bootstrap/kovc.hx`) is the bootstrap target: once it can compile itself and user programs reproducibly, Python can become a reference implementation instead of the main compiler.
 
 ### Audit cycles
 
@@ -1066,7 +1066,7 @@ The Kovostov AGI project (which Helix is the foundation for) commits to training
 
 | Dimension | Helix | Rust |
 |-----------|-------|------|
-| Bootstrap | From 120 bytes hex | Requires LLVM, GCC |
+| Bootstrap | From 299 bytes hex | Requires LLVM, GCC |
 | Autodiff | Built-in | External crate (`burn`, `dfdx`) |
 | GPU | PTX backend in language | External (`cudarc`, etc.) |
 | Memory model | Region/arena (Phase-0) | Borrow checker |
@@ -1393,7 +1393,7 @@ For the website, here's a visual direction proposal — Claude Design can adapt 
 
 ### Distinctive visual elements (must-haves regardless of axis)
 
-1. **The byte counter** — animated counter at the top: "Built from 120 bytes". Counts up on scroll.
+1. **The byte counter** — animated counter at the top: "Built from 299 bytes". Counts up on scroll.
 2. **The bootstrap chain explorer** — interactive: click each link in the chain (hex0 → ... → kovc), see its size, its source, what it produced.
 3. **Compilation animation** — recurring motif: tokens flow into trees, trees flow into IR, IR flows into hex bytes. Use it on Hero, Features, How-it-works.
 4. **Math notation** — KaTeX for autodiff page. Render `∂/∂x (x² + 3x) = 2x + 3` properly.
@@ -1420,7 +1420,7 @@ Or: a single character `λ` in monospace inside a hex bracket `[λ]`. Clean, sho
 ├─────────────────────────────────────────────────────────────┤
 │                                                             │
 │   A compiler that builds itself                             │
-│   from 120 bytes of hex.                                    │
+│   from 299 bytes of hex.                                    │
 │                                                             │
 │   The open-source ML language with autodiff,                │
 │   tile types, and GPU codegen — all built                   │
@@ -1439,7 +1439,7 @@ Or: a single character `λ` in monospace inside a hex bracket `[λ]`. Clean, sho
 │                                                             │
 │   🔓 Open · ⚙️ Bootstrapped · 🧠 ML-first                   │
 │                                                             │
-│   Built from 120 bytes →→→→ 50 KB self-hosted compiler      │
+│   Built from 299 bytes toward a self-hosted compiler        │
 │   ┌───────────────────────────────────────────────────┐     │
 │   │ ▓ 120 ▓▓▓ 700 ▓▓▓▓▓ 3K ▓▓▓▓▓▓▓ 8K ▓▓▓▓▓▓▓▓▓ 30K  │     │
 │   └───────────────────────────────────────────────────┘     │
@@ -1472,15 +1472,15 @@ Or: a single character `λ` in monospace inside a hex bracket `[λ]`. Clean, sho
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│  How Helix builds itself from 120 bytes                     │
+│  How Helix grows from 299 bytes                             │
 ├─────────────────────────────────────────────────────────────┤
 │                                                             │
 │   ●────●────●────●────●────●────●                           │
 │  hex0 hex1  M0   M1  M2  kovc-bs kovc                       │
-│  120B 700B  3KB  8KB 30KB  80KB  50KB                       │
+│  299B 700B  3KB  8KB 30KB  80KB  target                     │
 │                                                             │
 │   ┌───────────────────────────────────────┐                 │
-│   │  hex0: 120 bytes                      │                 │
+│   │  hex0: 299 bytes                      │                 │
 │   │                                       │                 │
 │   │  31 C0 B8 ...                         │                 │
 │   │  (full hex dump shown)                │                 │
@@ -1499,14 +1499,14 @@ Or: a single character `λ` in monospace inside a hex bracket `[λ]`. Clean, sho
 
 ## Stats and Numbers (Use Throughout)
 
-- **120 bytes** — hex0 binary size
-- **50 KB** — self-hosted kovc compiler size
-- **3000+ tests** — passing test count
+- **299 bytes** — current hex0 binary size
+- **Python-hosted helixc** — current production compiler implementation
+- **2,254 live tests collected** — restart 19 fix-sweep snapshot; rerun scoped pytest collection before publishing
 - **30+ stages** — Approach A roadmap
 - **23 silent-corruption bugs** — found and disclosed during development
 - **9 audit passes** — multi-agent code review cycles
 - **0 toolchain dependencies** — for the bootstrap chain
-- **6 weeks** — from first commit to self-hosting
+- **self-hosting target** — not shipped yet
 - **100+ AST tags** — language richness
 - **12 numeric types** — i32/i64/u8-u64/i8-i16/f32/f64/bf16
 - **39 stages + amendments** — full Approach A scope
@@ -1521,4 +1521,4 @@ Helix is built to last. Every design decision favors transparency, reproducibili
 
 The website is the public face of that effort. Make it as honest, technical, and beautiful as the language itself.
 
-— *Claude Code, on behalf of the Helix project, 2026-05-09*
+— *Draft website reference, reviewed for current-status honesty on 2026-05-15*

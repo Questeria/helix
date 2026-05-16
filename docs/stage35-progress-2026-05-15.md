@@ -1305,6 +1305,50 @@ Clean-gate status:
 - Stage 35 clean gates remain `0/3`.
 - Next step is another fresh Stage 35 clean gate on this fixed commit.
 
+## Increment 38 - Nineteenth Clean-Gate Restart Fix Sweep
+
+Restart 19 began from commit `33a6b11` with green smoke checks and a clean
+runtime lane, but the PTX/CLI and documentation lanes found remaining issues.
+The gate did not count as clean and remains at `0/3`.
+
+Fixes landed in this increment:
+
+- `helixc.check --emit-ptx` now keeps artifact stdout empty for missing source
+  paths and reports the invocation diagnostic on stderr.
+- Public `helixc.check --emit-ptx` now lowers only the kernel-reachable AST in
+  both strict and non-strict modes, so unrelated host-only AD helpers no longer
+  surface as compiler-bug diagnostics before AD warning policy is applied.
+- New regressions cover `--emit-ptx` missing-path stdout isolation, strict
+  host-AD warning mode, and strict `-Wad=error` stdout isolation.
+- `README.md`, `QUICKSTART.md`, and website draft facts/reference files now
+  identify Stage 35 audit cleanup as current, keep clean gates at `0/3`, state
+  that the production compiler is still Python-hosted `helixc`, use the
+  299-byte hex0 root, and remove unsupported absolute comparison / shipped
+  self-hosting / `3000+` test claims.
+
+Focused verification:
+
+- `python -m pytest helixc\tests\test_cli.py -k "stage35_emit_ptx_missing_path_keeps_stdout_empty or stage35_emit_ptx_strict_ignores_host_ad_function or stage35_emit_ptx_strict_wad_error_keeps_stdout_empty or stage35_emit_ptx_wad_error_does_not_emit_artifact or stage35_emit_ptx_ignores_host_ad_function" -q`
+  - Result: 5 passed.
+- `python -m pytest helixc\tests\test_cli.py -k "emit_ptx" -q`
+  - Result: 21 passed.
+- `python -m pytest helixc\tests\test_cli.py -q`
+  - Result: 155 passed.
+- `python -m pytest helixc\tests\test_ptx.py -q`
+  - Result: 70 passed.
+- `python -m py_compile helixc\check.py`
+  - Result: passed.
+- `python -m pytest helixc\tests --collect-only -q -p no:cacheprovider`
+  - Result: 2,254 tests collected.
+- Public-doc stale claim scan for old status/test/self-hosting/120-byte/3000+
+  phrases
+  - Result: no matches.
+
+Clean-gate status:
+
+- Stage 35 clean gates remain `0/3`.
+- Next step is another fresh Stage 35 clean gate on this fixed commit.
+
 ## Next Work
 
 Likely follow-up slices:

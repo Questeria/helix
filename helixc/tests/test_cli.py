@@ -333,6 +333,68 @@ def test_stage35_emit_ptx_wad_error_does_not_emit_artifact(tmp_path):
     assert "AD002" in proc.stderr or "24200" in proc.stderr
 
 
+def test_stage35_emit_ptx_missing_path_keeps_stdout_empty(capsys):
+    rc = main(["--emit-ptx"])
+    captured = capsys.readouterr()
+    assert rc == 2
+    assert captured.out == ""
+    assert "source path required" in captured.err
+
+
+def test_stage35_emit_ptx_strict_ignores_host_ad_function(tmp_path):
+    src_path = tmp_path / "strict_host_ad_kernel.hx"
+    src_path.write_text(
+        "fn loss(x: D<f64>, y: D<i32>) -> D<f64> { x + y }\n"
+        "@kernel fn k() { let i = thread_idx(); }\n",
+        encoding="utf-8",
+    )
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    proc = subprocess.run(
+        [
+            sys.executable, "-m", "helixc.check", str(src_path),
+            "--emit-ptx", "--strict",
+        ],
+        cwd=proj_root,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert ".visible .entry k" in proc.stdout
+    assert "ad:" in proc.stderr
+    assert "unresolved generic type D" not in proc.stderr
+    assert "internal error" not in proc.stderr
+    assert "compiler bug" not in proc.stderr
+
+
+def test_stage35_emit_ptx_strict_wad_error_keeps_stdout_empty(tmp_path):
+    src_path = tmp_path / "strict_host_ad_kernel_error.hx"
+    src_path.write_text(
+        "fn loss(x: D<f64>, y: D<i32>) -> D<f64> { x + y }\n"
+        "@kernel fn k() { let i = thread_idx(); }\n",
+        encoding="utf-8",
+    )
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    proc = subprocess.run(
+        [
+            sys.executable, "-m", "helixc.check", str(src_path),
+            "--emit-ptx", "--strict", "-Wad=error",
+        ],
+        cwd=proj_root,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    assert proc.stdout == ""
+    assert "ad:" in proc.stderr
+    assert "ERROR" in proc.stderr
+    assert "AD002" in proc.stderr or "24200" in proc.stderr
+    assert "unresolved generic type D" not in proc.stderr
+    assert "internal error" not in proc.stderr
+    assert "compiler bug" not in proc.stderr
+
+
 def test_c119_emit_ptx_rejects_no_kernel_modules(capsys):
     src = write_src("fn helper(x: i32) -> i32 { x + 1 }\n")
     try:

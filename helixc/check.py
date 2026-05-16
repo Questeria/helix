@@ -906,6 +906,9 @@ def _main_inner(argv: list[str] | None,
         if proof_mode:
             _emit_proof_invocation_error(a, ["helixc: source path required"])
             return 2
+        if selected_stdout_modes:
+            print("helixc: source path required", file=sys.stderr)
+            return 2
         _print_help()
         return 2
     path = a.path
@@ -1387,7 +1390,7 @@ def _main_inner(argv: list[str] | None,
         # programs that don't use grad().
         from .frontend.grad_pass import grad_pass
         lower_prog = prog
-        if "--emit-ptx" in a.flags and "--strict" not in a.flags:
+        if "--emit-ptx" in a.flags:
             lower_prog = _kernel_reachable_program(prog)
         grad_pass(lower_prog)
         mod = lower(lower_prog)
