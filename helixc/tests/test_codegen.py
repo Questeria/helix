@@ -9077,6 +9077,28 @@ def test_stage35_bindings_reject_forged_in_bounds_handles():
     assert code == 42, f"expected 42, got {code}"
 
 
+def test_stage35_bindings_rewind_cannot_grow_or_resurrect_stale_entries():
+    src = """
+    fn main() -> i32 {
+        let b = bindings_new();
+        let term = tree_node_new(1, 42, 0, 0);
+        let set_ok = bindings_set(b, 7, term);
+        let shrink = bindings_rewind(b, 0);
+        let grow = bindings_rewind(b, 1);
+        let hidden = bindings_get(b, 7);
+
+        let mut ok = 1;
+        if set_ok != 0 { ok = 0; };
+        if shrink != 0 { ok = 0; };
+        if grow != (0 - 1) { ok = 0; };
+        if hidden != (0 - 1) { ok = 0; };
+        if ok == 1 { 42 } else { 7 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
 def test_stage35_safe_tensor_payloads_cannot_forge_typed_handles():
     src = """
     fn main() -> i32 {

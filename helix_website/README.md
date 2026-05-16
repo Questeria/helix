@@ -28,7 +28,7 @@ A modern marketing + documentation website for Helix. Suggested pages (full deta
 - `/reflection` — Quote/Splice/modify demo
 - `/spec` — Language reference
 - `/roadmap` — Stage tracker (39 stages)
-- `/audits` — Public audit findings
+- `/audits` — Future public page exposing repo-local audit findings
 - `/compare` — Helix vs Rust/Mojo/Triton/Python
 - `/contribute` — Get involved
 - `/blog` — Engineering posts

@@ -2901,3 +2901,76 @@ Clean-gate status:
 - Restart 43 is a fix sweep, not a clean gate.
 - Next step is restart 44 as another fresh Stage 35 clean gate from the newest
   pushed HEAD.
+
+## Increment 63 - Forty-Fourth Clean-Gate Restart Fix Sweep
+
+Restart 44 began from pushed commit `f9f129d` after restart 43. Baseline support
+checks:
+
+- `git status --short --branch`
+  - Result: clean at `f9f129d`.
+- `python -m py_compile helixc\check.py helixc\backend\x86_64.py helixc\tests\test_cli.py helixc\tests\test_codegen.py helixc\tests\test_ptx.py`
+  - Result: passed.
+- Per-file stdlib parser sweep across `helixc/stdlib/*.hx`
+  - Result: parsed 16 files.
+- `python -m pytest helixc\tests\test_cli.py -q -k "stage35"`
+  - Result: 61 passed, 145 deselected.
+- `python -m pytest helixc\tests\test_ptx.py -q -k "stage35"`
+  - Result: 26 passed, 52 deselected.
+- `python -m pytest helixc\tests --collect-only -q`
+  - Result: 2,405 tests collected.
+
+Restart 44 audit findings:
+
+- Runtime lane found that `bindings_rewind` could grow the logical binding count
+  after a shrink and resurrect a stale binding.
+- Docs/status lane found stale or over-broad wording around the historical
+  5-clean-audit directive, PTX/GPU execution status, the target zero-toolchain
+  bootstrap claim, and the future `/audits` website page.
+- CLI/backend artifact lane was clean.
+
+Fixes in this increment:
+
+- `bindings_rewind` now rejects counts above the current count, validates the
+  current stored count, and clears truncated binding slots while shrinking.
+- Added a regression proving a caller cannot shrink to zero, grow back to one,
+  and read the old binding again.
+- Marked the preserved 5-clean-audit handoff quote as historical and
+  non-authoritative for current Stage 35.
+- Normalized PTX/GPU wording to "PTX text emission for covered kernels; GPU
+  launch/execution remains future work."
+- Clarified that zero external toolchain dependencies are the target bootstrap
+  chain goal, while the current production path still uses Python and
+  Linux/WSL.
+- Clarified that `/audits` is a future website page exposing existing
+  repo-local audit findings.
+
+Verification:
+
+- Per-file stdlib parser sweep across `helixc/stdlib/*.hx`
+  - Result: parsed 16 files.
+- `python -m py_compile helixc\tests\test_codegen.py`
+  - Result: passed.
+- `python -m pytest helixc\tests\test_codegen.py -q -k "bindings_rewind_cannot_grow_or_resurrect or unify_deep_failures_rewind_bindings or bindings_reject_forged"`
+  - Result: 3 passed, 918 deselected.
+- `python -m pytest helixc\tests\test_cli.py -q -k "stage35"`
+  - Result: 61 passed, 145 deselected.
+- `python -m pytest helixc\tests\test_ptx.py -q -k "stage35"`
+  - Result: 26 passed, 52 deselected.
+- `python -m pytest helixc\tests\test_codegen.py -q -k "stage35 or agi or hashmap or tensor"`
+  - Result: 175 passed, 746 deselected.
+- `python -m pytest helixc\tests\test_cli.py -q`
+  - Result: 206 passed.
+- `python -m pytest helixc\tests\test_ptx.py -q`
+  - Result: 78 passed.
+- `python -m pytest helixc\tests --collect-only -q`
+  - Result: 2,406 tests collected.
+- `git diff --check`
+  - Result: passed.
+
+Clean-gate status:
+
+- Stage 35 clean gates remain `0/3`.
+- Restart 44 is a fix sweep, not a clean gate.
+- Next step is restart 45 as another fresh Stage 35 clean gate from the newest
+  pushed HEAD.

@@ -56,7 +56,7 @@
 
 ### 1. No silent corruption
 
-Every place where the compiler could silently produce wrong code traps with a unique trap-id (convention: `AST_TAG * 1000 + sub_id`). When a compile-time invariant fails, the produced binary contains a `ud2` instruction (SIGILL) with the trap-id encoded — clear signal vs. silent garbage. 23+ silent-corruption bugs were found and fixed during development; all have public reproducer + status entries on `/audits`.
+Every place where the compiler could silently produce wrong code traps with a unique trap-id (convention: `AST_TAG * 1000 + sub_id`). When a compile-time invariant fails, the produced binary contains a `ud2` instruction (SIGILL) with the trap-id encoded — clear signal vs. silent garbage. 23+ silent-corruption bugs were found and fixed during development; their repo-local audit docs include reproducers and status, and a future `/audits` website page should expose them publicly.
 
 ### 2. Growing from raw binary
 
@@ -377,7 +377,7 @@ Closures lower at parse time to a synthetic struct (env) plus a synthetic functi
 | `@partial` | Function may not terminate. Required for Collatz-style functions. |
 | `@total` | Function is provably total (default; explicit form for documentation). |
 | `@checkpoint` | In reverse-mode AD, recompute this segment instead of saving activations. |
-| `@kernel` | Emit as PTX kernel (GPU). |
+| `@kernel` | Emit PTX text for covered kernels; GPU launch/execution remains future work. |
 | `@autotune(grid=[...])` | Generate parameter sweeps; pick fastest. |
 | `@deprecated("reason")` | Compile warning when called. |
 | `@since("v0.3")` | Documentation marker. |
@@ -955,7 +955,7 @@ Kovostov-Native/
 │   │   ├── nn.hx
 │   │   ├── option.hx
 │   │   └── autodiff.hx
-│   ├── tests/          # 2,405 tests collected in restart 43 fix verification
+│   ├── tests/          # 2,406 tests collected in restart 44 fix verification
 │   │   ├── test_codegen.py
 │   │   ├── test_parser.py
 │   │   ├── test_match.py
@@ -1088,7 +1088,7 @@ The Kovostov AGI project (which Helix is the foundation for) commits to training
 |-----------|-------|------|
 | Bootstrap | Live 299-byte `hex0` root; full chain target | Requires LLVM, GCC |
 | Autodiff | Built-in | External crate (`burn`, `dfdx`) |
-| GPU | Phase-0 PTX text backend in compiler | External (`cudarc`, etc.) |
+| GPU | Phase-0 PTX text backend in compiler; GPU execution future | External (`cudarc`, etc.) |
 | Memory model | Region/arena (Phase-0) | Borrow checker |
 | Macros | Reflection (Quote/Splice) | `macro_rules!` + proc macros |
 | Compile time | <1s for 10K LOC | 30s+ |
@@ -1101,7 +1101,7 @@ The Kovostov AGI project (which Helix is the foundation for) commits to training
 | Bootstrap | Self-host target growing from live `hex0` | Closed-source binary |
 | Tile types | First-class | First-class |
 | Autodiff | Built-in | External (uses MAX engine) |
-| Backend | x86 + PTX (planned) | x86 + GPU via MLIR |
+| Backend | x86 + PTX text emission; GPU launch future | x86 + GPU via MLIR |
 
 ### Helix vs Triton
 
@@ -1521,11 +1521,11 @@ Or: a single character `λ` in monospace inside a hex bracket `[λ]`. Clean, sho
 
 - **299 bytes** — current hex0 binary size
 - **Python-hosted helixc** — current production compiler implementation
-- **2,405 live tests collected** — restart 43 fix verification; rerun scoped pytest collection before publishing
+- **2,406 live tests collected** — restart 44 fix verification; rerun scoped pytest collection before publishing
 - **30+ stages** — Approach A roadmap
 - **23 silent-corruption bugs** — found and disclosed during development
 - **restart-gated audit campaign** — multi-agent code review cycles continue until three clean gates pass
-- **0 toolchain dependencies** — for the bootstrap chain
+- **Target bootstrap chain: 0 external toolchain dependencies once complete** — current production path still uses Python 3.10+ and Linux/WSL for ELFs
 - **self-hosting target** — not shipped yet
 - **100+ AST tags** — language richness
 - **12 numeric types** — i32/i64/u8-u64/i8-i16/f32/f64/bf16

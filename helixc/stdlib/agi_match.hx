@@ -295,8 +295,20 @@ fn bindings_rewind(b: i32, count: i32) -> i32 {
     else { if count < 0 { 0 - 1 }
     else { if count > 32 { 0 - 1 }
     else {
+        let cnt = __arena_get(b);
+        if cnt < 0 { 0 - 1 }
+        else { if cnt > 32 { 0 - 1 }
+        else { if count > cnt { 0 - 1 }
+        else {
+        let mut i = count;
+        while i < cnt {
+            __arena_set(b + 1 + i * 2, 0);
+            __arena_set(b + 1 + i * 2 + 1, tree_invalid_value());
+            i = i + 1;
+        }
         __arena_set(b, count);
         0
+        } } }
     } } }
 }
 
