@@ -66,6 +66,19 @@ def test_stage35_parse_args_output_rejects_flag_value():
     assert "--no-stdlib" in a.flags
 
 
+def test_stage35_parse_args_lib_rejects_flag_value():
+    a, errs = parse_args(["foo.hx", "-l", "--emit-ptx"])
+    assert errs
+    assert a.libs == []
+    assert "--emit-ptx" in a.flags
+    assert any("-l requires a library name" in e for e in errs)
+
+    a_attached, errs_attached = parse_args(["foo.hx", "-l--emit-ptx"])
+    assert errs_attached
+    assert a_attached.libs == []
+    assert any("-l requires a library name" in e for e in errs_attached)
+
+
 def test_parse_args_lib_separate():
     a, errs = parse_args(["-l", "m", "-l", "c", "foo.hx"])
     assert not errs

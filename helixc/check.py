@@ -256,11 +256,18 @@ def parse_args(argv: list[str]) -> tuple[CliArgs, list[str]]:
             if i + 1 >= n:
                 errors.append("-l requires an argument")
                 i += 1
+            elif argv[i + 1].startswith("-"):
+                errors.append(f"-l requires a library name, got flag: {argv[i + 1]}")
+                i += 1
             else:
                 a.libs.append(argv[i + 1])
                 i += 2
         elif tok.startswith("-l") and len(tok) > 2:
-            a.libs.append(tok[2:])
+            lib_name = tok[2:]
+            if lib_name.startswith("-"):
+                errors.append(f"-l requires a library name, got flag: {lib_name}")
+            else:
+                a.libs.append(lib_name)
             i += 1
         elif tok.startswith("-W"):
             body = tok[2:]

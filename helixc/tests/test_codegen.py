@@ -8448,6 +8448,19 @@ def test_agi_wmt_count_set():
     assert code == 42, f"expected 42 (3 + 39), got {code}"
 
 
+def test_stage35_wmt_count_set_ignores_corrupt_next_states():
+    src = """
+    fn main() -> i32 {
+        let wmt = wmt_new(2, 1);
+        wmt_set(wmt, 0, 0, 1);
+        __arena_set(wmt + 2, 99);
+        if wmt_count_set(wmt) == 0 { 42 } else { 7 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
 def test_agi_wmt_is_self_loop():
     """1 if predict(s,a) == s else 0."""
     src = """
@@ -9029,6 +9042,22 @@ def test_agi_hier_count_achieved():
     assert code == 2, f"expected 2, got {code}"
 
 
+def test_stage35_hier_count_achieved_rejects_forged_table_offsets():
+    src = """
+    fn main() -> i32 {
+        let goals = t1d_new(1);
+        ti1d_set(goals, 0, 3);
+        let table = t1d_new(1);
+        ti1d_set(table, 0, 0);
+        let pad = t1d_new(1);
+        ti1d_set(pad, 0, 1);
+        if hier_count_achieved(goals, 1, table) == 0 { 42 } else { 7 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
 def test_agi_ensemble_mean_and_uncertainty():
     """Ensemble: mean and uncertainty (range)."""
     src = """
@@ -9044,6 +9073,37 @@ def test_agi_ensemble_mean_and_uncertainty():
     code = compile_and_run(src)
     # mean = 52/4 = 13; uncertainty = 16 - 10 = 6; total = 19
     assert code == 19, f"expected 19, got {code}"
+
+
+def test_stage35_ensemble_rejects_forged_slices_and_saturates():
+    src = """
+    fn main() -> i32 {
+        let forged = wmt_new(2, 1);
+        let forged_mean = ensemble_mean(forged, 2);
+        let forged_unc = ensemble_uncertainty(forged, 2);
+        let forged_argmax = ensemble_argmax(forged, 2);
+
+        let high = t1d_new(2);
+        ti1d_set(high, 0, 2147483647);
+        ti1d_set(high, 1, 2147483647);
+        let high_mean = ensemble_mean(high, 2);
+
+        let spread = t1d_new(2);
+        let low = (0 - 2147483647) - 1;
+        ti1d_set(spread, 0, low);
+        ti1d_set(spread, 1, 2147483647);
+        let unc = ensemble_uncertainty(spread, 2);
+
+        if forged_mean == 0 {
+        if forged_unc == 0 {
+        if forged_argmax == (0 - 1) {
+        if high_mean == 2147483647 {
+        if unc == 2147483647 { 42 } else { 7 }
+        } else { 7 }} else { 7 }} else { 7 }} else { 7 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
 
 
 def test_agi_bag_difference():
@@ -17007,6 +17067,29 @@ def test_stdlib_hashmap_sum_keys():
     assert code == 42, f"expected 42, got {code}"
 
 
+def test_stage35_hashmap_sum_keys_saturates_on_overflow():
+    src = """
+    fn main() -> i32 {
+        let high = hashmap_new(8);
+        hashmap_put(high, 8, 2147483647, 1);
+        hashmap_put(high, 8, 2147483646, 1);
+        let high_sum = hashmap_sum_keys(high, 8);
+
+        let low = (0 - 2147483647) - 1;
+        let neg = hashmap_new(8);
+        hashmap_put(neg, 8, low, 1);
+        hashmap_put(neg, 8, 0 - 2147483647, 1);
+        let neg_sum = hashmap_sum_keys(neg, 8);
+
+        if high_sum == 2147483647 {
+        if neg_sum == low { 42 } else { 7 }
+        } else { 7 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
 def test_stdlib_tf2d_row_sum():
     """row_sum [[1,2],[3,4]] -> [3.0, 7.0]; sum=10.0_f32; bits 0x41200000;
     top byte 0x41=65; -23=42."""
@@ -17798,6 +17881,27 @@ def test_stdlib_hashmap_increment():
         let m = hashmap_new(8);
         hashmap_increment(m, 8, 7, 10);
         hashmap_increment(m, 8, 7, 32)
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stage35_hashmap_increment_saturates_on_overflow():
+    src = """
+    fn main() -> i32 {
+        let high = hashmap_new(8);
+        hashmap_put(high, 8, 1, 2147483647);
+        let high_inc = hashmap_increment(high, 8, 1, 1);
+
+        let low = (0 - 2147483647) - 1;
+        let neg = hashmap_new(8);
+        hashmap_put(neg, 8, 1, low);
+        let neg_inc = hashmap_increment(neg, 8, 1, 0 - 1);
+
+        if high_inc == 2147483647 {
+        if neg_inc == low { 42 } else { 7 }
+        } else { 7 }
     }
     """
     code = compile_and_run(src)

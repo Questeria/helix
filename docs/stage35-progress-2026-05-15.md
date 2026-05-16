@@ -2593,3 +2593,81 @@ Clean-gate status:
 - Restart 39 is a fix sweep, not a clean gate.
 - Next step is restart 40 as another fresh Stage 35 clean gate from the newest
   pushed HEAD.
+
+## Increment 59 - Fortieth Clean-Gate Restart Fix Sweep
+
+Restart 40 began from a clean baseline after restart 39:
+
+- `python -m py_compile helixc\check.py helixc\tests\test_cli.py helixc\tests\test_codegen.py`
+  - Result: passed.
+- Per-file stdlib parser sweep across `helixc/stdlib/*.hx`
+  - Result: parsed 16 files.
+- `python -m pytest helixc\tests\test_codegen.py -q -k "stage35 or agi or hashmap or tensor"`
+  - Result: 162 passed, 746 deselected.
+- `python -m pytest helixc\tests\test_cli.py -q -k "stage35"`
+  - Result: 59 passed, 145 deselected.
+- `python -m pytest helixc\tests\test_ptx.py -q -k "stage35"`
+  - Result: 26 passed, 52 deselected.
+- `python -m pytest helixc\tests --collect-only -q`
+  - Result: 2,391 tests collected.
+
+Restart 40 audit findings:
+
+- `hier_count_achieved` read outside the achieved table when subgoal ids
+  referenced cells beyond the table slice.
+- `ensemble_mean`, `ensemble_uncertainty`, and `ensemble_argmax` accepted
+  forged prediction slices; mean and uncertainty also had `i32` overflow
+  edges.
+- `wmt_count_set` counted corrupt next-state cells as if they were valid set
+  transitions.
+- `hashmap_increment` and `hashmap_sum_keys` still had overflow sibling
+  surfaces.
+- `helixc.check -l` could swallow a following flag as a library name.
+- Website README status still described the code sample surface as 20 samples
+  after the reference had grown to 30.
+
+Fixes in this increment:
+
+- `hier_count_achieved` now validates the subgoal-id slice and every achieved
+  table access before reading.
+- Ensemble helpers now reject forged slices; mean and uncertainty accumulate in
+  `i64` and saturate back to `i32` where needed.
+- `wmt_count_set` now counts only next states in the declared state range.
+- `hashmap_increment` and `hashmap_sum_keys` now use `i64` intermediates and
+  saturate into the `i32` return range.
+- `helixc.check -l` now rejects flag-shaped separate and attached library
+  values.
+- Website README status now points at the 30-sample code sample file.
+- Added regressions for all fixed surfaces.
+
+Verification:
+
+- `python -m py_compile helixc\check.py helixc\tests\test_cli.py helixc\tests\test_codegen.py`
+  - Result: passed.
+- Per-file stdlib parser sweep across `helixc/stdlib/*.hx`
+  - Result: parsed 16 files.
+- `python -m pytest helixc\tests\test_cli.py -q -k "lib_rejects_flag_value or parse_args_lib or output_rejects_flag_value"`
+  - Result: 4 passed, 201 deselected.
+- `python -m pytest helixc\tests\test_codegen.py -q -k "wmt_count_set_ignores_corrupt or hier_count_achieved_rejects_forged or ensemble_rejects_forged or hashmap_sum_keys_saturates or hashmap_increment_saturates"`
+  - Result: 5 passed, 908 deselected.
+- `python -m pytest helixc\tests\test_codegen.py -q -k "stage35 or agi or hashmap or tensor"`
+  - Result: 167 passed, 746 deselected.
+- `python -m pytest helixc\tests\test_cli.py -q -k "stage35"`
+  - Result: 60 passed, 145 deselected.
+- `python -m pytest helixc\tests\test_ptx.py -q -k "stage35"`
+  - Result: 26 passed, 52 deselected.
+- `python -m pytest helixc\tests\test_cli.py -q`
+  - Result: 205 passed.
+- `python -m pytest helixc\tests\test_ptx.py -q`
+  - Result: 78 passed.
+- `python -m pytest helixc\tests --collect-only -q`
+  - Result: 2,397 tests collected.
+- `git diff --check`
+  - Result: passed.
+
+Clean-gate status:
+
+- Stage 35 clean gates remain `0/3`.
+- Restart 40 is a fix sweep, not a clean gate.
+- Next step is restart 41 as another fresh Stage 35 clean gate from the newest
+  pushed HEAD.

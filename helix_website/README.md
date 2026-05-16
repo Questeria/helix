@@ -8,7 +8,7 @@ This directory holds the public website for the Helix programming language.
 
 - All marketing copy
 - Feature pages and explainers
-- Code samples (20 ready-to-use snippets in the gallery section)
+- Code samples (30 ready-to-use snippets in `code_samples.md`)
 - Roadmap and stage descriptions
 - Comparison tables
 - Visual identity direction
@@ -86,6 +86,6 @@ Recommendation: try #3 for broadest appeal, keep hex-byte motif from #1 as a rec
 ## Example assets to fetch
 
 - Logo: simple `λ` in hex bracket `[λ]` or double-helix + hex trail
-- Code samples: 20 in the gallery section of HELIX_REFERENCE.md
+- Code samples: 30 in `code_samples.md`; use `HELIX_REFERENCE.md` as a partial/design-reference gallery
 - Bootstrap chain stages: use the current 299-byte hex0 root, then mark later byte counts as target/approximate where they are not live artifacts.
 - Number-stat block: use `stats_and_facts.md`; do not hardcode stale test totals or shipped self-hosting claims.

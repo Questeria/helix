@@ -227,7 +227,10 @@ fn wmt_count_set(wmt: i32) -> i32 {
         let mut i: i32 = 0;
         let mut count: i32 = 0;
         while i < total {
-            if __arena_get(wmt + 2 + i) >= 0 { count = count + 1; }
+            let nxt = __arena_get(wmt + 2 + i);
+            if nxt >= 0 {
+            if nxt < num_states { count = count + 1; };
+            };
             i = i + 1;
         }
         count

@@ -253,7 +253,10 @@ fn hashmap_increment(start: i32, cap: i32, k: i32, delta: i32) -> i32 {
             probes = cap;
         } else {
             if __arena_get(base + 1) == k {
-                let new_val = __arena_get(base + 2) + delta;
+                let raw_val: i64 = (__arena_get(base + 2) as i64) + (delta as i64);
+                let new_val = if raw_val > 2147483647_i64 { 2147483647 }
+                    else { if raw_val < ((0_i64 - 2147483647_i64) - 1_i64) { (0 - 2147483647) - 1 }
+                    else { raw_val as i32 } };
                 __arena_set(base + 2, new_val);
                 result = new_val;
                 probes = cap;
@@ -478,15 +481,17 @@ fn hashmap_sum_keys(start: i32, cap: i32) -> i32 {
     if hashmap_ok(start, cap) == 0 { 0 }
     else {
     let mut i: i32 = 0;
-    let mut total: i32 = 0;
+    let mut total: i64 = 0_i64;
     while i < cap {
         let base = start + i * 3;
         if __arena_get(base) == 1 {
-            total = total + __arena_get(base + 1);
+            total = total + (__arena_get(base + 1) as i64);
         };
         i = i + 1;
     }
-    total
+    if total > 2147483647_i64 { 2147483647 }
+    else { if total < ((0_i64 - 2147483647_i64) - 1_i64) { (0 - 2147483647) - 1 }
+    else { total as i32 } }
     }
 }
 

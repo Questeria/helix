@@ -427,16 +427,26 @@ fn unify_deep_table(pat_off: i32, term_off: i32, mask_table: i32,
 
 @pure
 fn hier_count_achieved(subgoal_ids_start: i32, n: i32, achieved_table: i32) -> i32 {
+    if n <= 0 { 0 }
+    else { if t1d_slice_ok(subgoal_ids_start, n) == 0 { 0 }
+    else {
     let mut i: i32 = 0;
     let mut done: i32 = 0;
     while i < n {
         let sg = __arena_get(subgoal_ids_start + i);
+        if sg >= 0 {
+        if sg < 2147483647 {
+        if t1d_slice_ok(achieved_table, sg + 1) == 1 {
         if __arena_get(achieved_table + sg) == 1 {
             done = done + 1;
-        }
+        };
+        };
+        };
+        };
         i = i + 1;
     }
     done
+    }}
 }
 
 // =========================================================================
@@ -449,21 +459,26 @@ fn hier_count_achieved(subgoal_ids_start: i32, n: i32, achieved_table: i32) -> i
 @pure
 fn ensemble_mean(predictions_start: i32, n: i32) -> i32 {
     if n == 0 { 0 }
+    else { if t1d_slice_ok(predictions_start, n) == 0 { 0 }
     else {
         let mut i: i32 = 0;
-        let mut total: i32 = 0;
+        let mut total: i64 = 0_i64;
         while i < n {
-            total = total + __arena_get(predictions_start + i);
+            total = total + (__arena_get(predictions_start + i) as i64);
             i = i + 1;
         }
-        total / n
-    }
+        let mean: i64 = total / (n as i64);
+        if mean > 2147483647_i64 { 2147483647 }
+        else { if mean < ((0_i64 - 2147483647_i64) - 1_i64) { (0 - 2147483647) - 1 }
+        else { mean as i32 } }
+    }}
 }
 
 // Range = max - min: simple uncertainty estimate.
 @pure
 fn ensemble_uncertainty(predictions_start: i32, n: i32) -> i32 {
     if n == 0 { 0 }
+    else { if t1d_slice_ok(predictions_start, n) == 0 { 0 }
     else {
         let mut i: i32 = 1;
         let mut lo = __arena_get(predictions_start);
@@ -474,8 +489,9 @@ fn ensemble_uncertainty(predictions_start: i32, n: i32) -> i32 {
             if v > hi { hi = v; }
             i = i + 1;
         }
-        hi - lo
-    }
+        let range: i64 = (hi as i64) - (lo as i64);
+        if range > 2147483647_i64 { 2147483647 } else { range as i32 }
+    }}
 }
 
 // Index of the strictly-largest prediction; returns -1 on empty.
@@ -485,6 +501,7 @@ fn ensemble_uncertainty(predictions_start: i32, n: i32) -> i32 {
 @pure
 fn ensemble_argmax(predictions_start: i32, n: i32) -> i32 {
     if n == 0 { 0 - 1 }
+    else { if t1d_slice_ok(predictions_start, n) == 0 { 0 - 1 }
     else {
         let mut i: i32 = 1;
         let mut best_v = __arena_get(predictions_start);
@@ -498,5 +515,5 @@ fn ensemble_argmax(predictions_start: i32, n: i32) -> i32 {
             i = i + 1;
         }
         best_i
-    }
+    }}
 }
