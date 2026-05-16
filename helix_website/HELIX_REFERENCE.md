@@ -56,7 +56,7 @@
 
 ### 1. No silent corruption
 
-Every place where the compiler could silently produce wrong code traps with a unique trap-id (convention: `AST_TAG * 1000 + sub_id`). When a compile-time invariant fails, the produced binary contains a `ud2` instruction (SIGILL) with the trap-id encoded — clear signal vs. silent garbage. Dozens of silent-corruption defects have been found and fixed during development (live count grows with each Stage 35 restart; see `docs/stage35-progress-2026-05-15.md` Increments 50-68+ for the open-ended ledger). Repo-local audit docs include reproducers and status; a future `/audits` website page should expose them publicly.
+Every place where the compiler could silently produce wrong code traps with a unique trap-id (convention: `AST_TAG * 1000 + sub_id`). When a compile-time invariant fails, the produced binary contains a `ud2` instruction (SIGILL) with the trap-id encoded — clear signal vs. silent garbage. Dozens of silent-corruption defects have been found and fixed during development (live count grows with each Stage 35 restart; see `docs/stage35-progress-2026-05-15.md` Increments 50 onward for the open-ended ledger). Repo-local audit docs include reproducers and status; a future `/audits` website page should expose them publicly.
 
 ### 2. Growing from raw binary
 
@@ -511,8 +511,8 @@ The Helix standard library lives in `helixc/stdlib/` and is written in Helix its
 
 ### Numerics & IEEE 754
 
-- `ieee754.hx` — bit-pattern conversions: `__bits_of_f32`, `__f32_from_bits`, `__bits_hi_f64`, `__bits_lo_f64`, `__f64_pack`, `__f64_to_f32`, `__f32_to_f64`, `__f64_to_i32`, `f32_bits_zero`, `f32_bits_one`, `f32_bits_neg`.
-- `transcendentals.hx` — math + helpers: `__exp`, `__log`, `__sin`, `__cos`, `__tan`, `__sqrt`, `__powi` (integer power, n cap 16), `__sigmoid`, `__relu`, `__tanh`, `__abs_i32`, `__sign_i32`/`f64`, `__min_*`/`__max_*`/`__clamp_*` for i32/f32/f64, plus scalar `__sgd_step`/`__momentum_step_v`/`__adam_step` optimizer steps. All transcendentals participate in the autodiff chain rule.
+- `ieee754.hx` — bit-pattern conversions: `__bits_of_f32`, `__f32_from_bits`, `__bits_hi_f64`, `__bits_lo_f64`, `__f64_pack`, `__f64_to_f32`, `__f32_to_f64`, `__f64_to_i32`, `f32_bits_zero`, `f32_bits_one`, `f32_bits_neg`. 6 bare fn (+0 @-attributed).
+- `transcendentals.hx` — math + helpers: `__exp`, `__log`, `__sin`, `__cos`, `__tan`, `__sqrt`, `__powi` (integer power, n cap 16), `__sigmoid`, `__relu`, `__tanh`, `__abs_i32`, `__sign_i32`/`f64`, `__min_*`/`__max_*`/`__clamp_*` for i32/f32/f64, plus scalar `__sgd_step`/`__momentum_step_v`/`__adam_step` optimizer steps. All transcendentals participate in the autodiff chain rule. 2 bare fn (+50 @-attributed).
 
 ### Tensors & tiles
 
@@ -958,7 +958,7 @@ Kovostov-Native/
 │   │   ├── tensor.hx          # 1D/2D tensor primitives
 │   │   ├── transcendentals.hx # __exp/__log/__sin/__cos/__sqrt/__sigmoid/__tanh + scalar optim steps
 │   │   └── vec.hx             # caller-trust Vec<i32>-style sequences
-│   ├── tests/          # 2,489 tests collected in restart 50 fix verification
+│   ├── tests/          # 2,498 tests collected in restart 51 fix verification
 │   │   ├── test_codegen.py
 │   │   ├── test_parser.py
 │   │   ├── test_match.py
@@ -1564,9 +1564,9 @@ Or: a single character `λ` in monospace inside a hex bracket `[λ]`. Clean, sho
 
 - **299 bytes** — current hex0 binary size
 - **Python-hosted helixc** — current production compiler implementation
-- **2,489 live tests collected** — restart 50 fix verification; rerun scoped pytest collection before publishing
+- **2,498 live tests collected** — restart 51 fix verification (restart 50 ledger forecast 2,489; restart 51 reconciled to actual); rerun scoped pytest collection before publishing
 - **Approach A roadmap (30 numbered stages)** — historical bootstrap-port sequencing; current live design doc (`docs/HELIX_V1_FINAL_FEATURES.md`) references stage numbers up to Stage 65 (35 distinct stages enumerated; not a strict consecutive sequence).
-- **Dozens of silent-corruption defects (live count grows with each Stage 35 restart; see `docs/stage35-progress-2026-05-15.md` Increments 50-67+ for the open-ended ledger)** — found and disclosed during development
+- **Dozens of silent-corruption defects (live count grows with each Stage 35 restart; see `docs/stage35-progress-2026-05-15.md` Increments 50 onward for the open-ended ledger)** — found and disclosed during development
 - **restart-gated audit campaign** — multi-agent code review cycles continue until three clean gates pass
 - **Target bootstrap chain: 0 external toolchain dependencies once complete** — current production path still uses Python 3.10+ and Linux/WSL for ELFs
 - **self-hosting target** — not shipped yet

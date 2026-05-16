@@ -299,32 +299,46 @@ fn ti1d_set(start: i32, i: i32, x: i32) -> i32 {
     }}
 }
 
+// Restart 51 A2: i64 accumulator + INT32 saturation. Matches the
+// ti1d_prod / hashmap_sum_values / mse_loss precedent. Prior i32 total
+// silently wrapped for any non-trivial integer-tensor sum.
 @pure fn ti1d_sum(start: i32, n: i32) -> i32 {
     if n <= 0 { 0 }
     else { if t1d_slice_ok(start, n) == 0 { 0 }
     else {
     let mut i: i32 = 0;
-    let mut total: i32 = 0;
+    let mut total: i64 = 0_i64;
+    let hi: i64 = 2147483647_i64;
+    let lo: i64 = (0_i64 - 2147483647_i64) - 1_i64;
     while i < n {
-        total = total + __arena_get(start + i);
+        total = total + (__arena_get(start + i) as i64);
+        if total > hi { total = hi; }
+        else { if total < lo { total = lo; } };
         i = i + 1;
     }
-    total
+    total as i32
     }}
 }
 
+// Restart 51 A3: i64 accumulator + INT32 saturation. Single |a[i]*b[i]|
+// term can overflow i32 at values around 46341. Same family as
+// mse_loss / ti1d_sum.
 @pure fn ti1d_dot(a_start: i32, b_start: i32, n: i32) -> i32 {
     if n <= 0 { 0 }
     else { if t1d_slice_ok(a_start, n) == 0 { 0 }
     else { if t1d_slice_ok(b_start, n) == 0 { 0 }
     else {
     let mut i: i32 = 0;
-    let mut total: i32 = 0;
+    let mut total: i64 = 0_i64;
+    let hi: i64 = 2147483647_i64;
+    let lo: i64 = (0_i64 - 2147483647_i64) - 1_i64;
     while i < n {
-        total = total + __arena_get(a_start + i) * __arena_get(b_start + i);
+        total = total + (__arena_get(a_start + i) as i64) * (__arena_get(b_start + i) as i64);
+        if total > hi { total = hi; }
+        else { if total < lo { total = lo; } };
         i = i + 1;
     }
-    total
+    total as i32
     }}}
 }
 
@@ -1011,19 +1025,23 @@ fn ti1d_clamp(x_start: i32, lo: i32, hi: i32, dst: i32, n: i32) -> i32 {
 }
 
 // ti1d_l1_norm(x, n): L1 norm = sum of |x[i]|. @pure (read-only).
+// Restart 51 A4: i64 accumulator + INT32 saturation, plus INT32_MIN
+// special case for abs (0 - INT32_MIN wraps back to INT32_MIN in i32).
 @pure fn ti1d_l1_norm(start: i32, n: i32) -> i32 {
     if n <= 0 { 0 }
     else { if t1d_slice_ok(start, n) == 0 { 0 }
     else {
     let mut i: i32 = 0;
-    let mut total: i32 = 0;
+    let mut total: i64 = 0_i64;
+    let hi: i64 = 2147483647_i64;
     while i < n {
-        let v = __arena_get(start + i);
-        let av = if v < 0 { 0 - v } else { v };
+        let v: i64 = __arena_get(start + i) as i64;
+        let av: i64 = if v < 0_i64 { 0_i64 - v } else { v };
         total = total + av;
+        if total > hi { total = hi; };
         i = i + 1;
     }
-    total
+    total as i32
     }}
 }
 
@@ -1035,13 +1053,17 @@ fn ti1d_clamp(x_start: i32, lo: i32, hi: i32, dst: i32, n: i32) -> i32 {
     else { if t1d_slice_ok(start, n) == 0 { 0 }
     else {
     let mut i: i32 = 0;
-    let mut total: i32 = 0;
+    // Restart 51 A5: i64 accumulator + INT32 saturation. Single |v|>=46341
+    // makes v*v exceed INT32_MAX. Matches mse_loss / ti1d_dot precedent.
+    let mut total: i64 = 0_i64;
+    let hi: i64 = 2147483647_i64;
     while i < n {
-        let v = __arena_get(start + i);
+        let v: i64 = __arena_get(start + i) as i64;
         total = total + v * v;
+        if total > hi { total = hi; };
         i = i + 1;
     }
-    total
+    total as i32
     }}
 }
 

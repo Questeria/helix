@@ -20334,6 +20334,122 @@ def test_stage35_ti1d_prod_saturates_on_i32_overflow():
     assert code == 42, f"expected 42, got {code}"
 
 
+def test_stage35_restart51_log_f64_domain_guard():
+    """Restart 51 A1: __log_stable_f64 fail-closes on x <= 0.
+
+    Previously `__log_f64` (a Taylor series around x=1) returned nonsense
+    finite values for non-positive inputs. d_log_v now delegates to
+    __log_stable_f64 which returns -1e6 sentinel for x <= 0."""
+    src = """
+    fn main() -> i32 {
+        let a = __log_stable_f64(0.0_f64);
+        let b = __log_stable_f64(0.0_f64 - 1.0_f64);
+        let c = __log_stable_f64(1.0_f64);
+        let ok_a = if a < (0.0_f64 - 999999.0_f64) { 1 } else { 0 };
+        let ok_b = if b < (0.0_f64 - 999999.0_f64) { 1 } else { 0 };
+        let ok_c = if (c > (0.0_f64 - 0.001_f64)) {
+            if (c < 0.001_f64) { 1 } else { 0 }
+        } else { 0 };
+        if ok_a == 1 { if ok_b == 1 { if ok_c == 1 { 42 } else { 7 } } else { 7 } } else { 7 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stage35_restart51_clip_grad_norm_nan_fail_closed():
+    """Restart 51 A2: clip_grad_norm_f32 NaN-fail-closes on norm_sq == NaN.
+
+    A single NaN slot in the gradient previously poisoned every slot because
+    the function only guarded `norm_sq <= 0`. NaN < 0 is false in IEEE 754,
+    so __sqrt(NaN) = 0.0 and scale = target/0 propagated."""
+    src = """
+    fn main() -> i32 {
+        let g = t1d_new(4);
+        let nan_bits = 2143289344;
+        tf1d_set(g, 0, __f32_from_bits(nan_bits));
+        tf1d_set(g, 1, 1.0_f32);
+        tf1d_set(g, 2, 2.0_f32);
+        tf1d_set(g, 3, 3.0_f32);
+        clip_grad_norm_f32(g, 1.0_f32, 4);
+        let v1 = tf1d_get(g, 1);
+        let v2 = tf1d_get(g, 2);
+        let v3 = tf1d_get(g, 3);
+        if (v1 == v1) { if (v2 == v2) { if (v3 == v3) { 42 } else { 7 } } else { 7 } } else { 7 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stage35_restart51_string_to_int_saturates_on_overflow():
+    """Restart 51 A3: string_to_int uses i64 accumulator + saturation.
+
+    Parsing "2147483648" (INT32_MAX + 1) previously silently wrapped to
+    INT32_MIN. Now saturates to INT32_MAX."""
+    src = """
+    fn main() -> i32 {
+        let start = __arena_len();
+        __arena_push(50);
+        __arena_push(49);
+        __arena_push(52);
+        __arena_push(55);
+        __arena_push(52);
+        __arena_push(56);
+        __arena_push(51);
+        __arena_push(54);
+        __arena_push(52);
+        __arena_push(56);
+        let n = string_to_int(start, 10);
+        if n == 2147483647 { 42 } else { 7 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stage35_restart51_vec_zip_div_zero_divisor_fail_closed():
+    """Restart 51 A4: vec_zip_div / vec_zip_mod fail-close on b[i] == 0.
+
+    Previously delegated to the integer-div trap. In an arena runtime
+    without OS exception recovery, a trap is a process crash."""
+    src = """
+    fn main() -> i32 {
+        let a = __arena_len();
+        __arena_push(10); __arena_push(20); __arena_push(30);
+        let b = __arena_len();
+        __arena_push(2); __arena_push(0); __arena_push(5);
+        let r = vec_zip_div(a, b, 3);
+        let r0 = __arena_get(r);
+        let r1 = __arena_get(r + 1);
+        let r2 = __arena_get(r + 2);
+        if r0 == 5 { if r1 == 0 { if r2 == 6 { 42 } else { 7 } } else { 7 } } else { 7 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stage35_restart51_vec_negate_inplace_int32_min_saturates():
+    """Restart 51 A5: vec_negate_inplace + vec_map_neg saturate INT32_MIN.
+
+    Previously `0 - INT32_MIN` silently wrapped back to INT32_MIN (no-op).
+    Now saturates to INT32_MAX."""
+    src = """
+    fn main() -> i32 {
+        let s = __arena_len();
+        __arena_push(0 - 2147483647 - 1);
+        __arena_push(5);
+        vec_negate_inplace(s, 2);
+        let r0 = __arena_get(s);
+        let r1 = __arena_get(s + 1);
+        if r0 == 2147483647 { if r1 == 0 - 5 { 42 } else { 7 } } else { 7 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
 def main():
     # Recognise both the legacy `_SkipTest` exception and pytest's
     # `Skipped` outcome class so tests can use either to signal a skip

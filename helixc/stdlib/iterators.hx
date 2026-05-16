@@ -177,7 +177,11 @@ fn vec_map_neg(start: i32, count: i32) -> i32 {
     let s: i32 = __arena_len();
     let mut i: i32 = 0;
     while i < count {
-        __arena_push(0 - __arena_get(start + i));
+        // Restart 51 A5: saturate INT32_MIN to INT32_MAX. -INT32_MIN can't
+        // be represented as i32 and would silently wrap back to INT32_MIN.
+        let v = __arena_get(start + i);
+        let nv = if v == ((0 - 2147483647) - 1) { 2147483647 } else { 0 - v };
+        __arena_push(nv);
         i = i + 1;
     }
     s
@@ -432,8 +436,11 @@ fn vec_relu_inplace(start: i32, count: i32) -> i32 {
 fn vec_negate_inplace(start: i32, count: i32) -> i32 {
     let mut i: i32 = 0;
     while i < count {
+        // Restart 51 A5: saturate INT32_MIN to INT32_MAX (same rationale as
+        // vec_map_neg). Sibling of __abs_i32 caveat (transcendentals.hx).
         let v = __arena_get(start + i);
-        __arena_set(start + i, 0 - v);
+        let nv = if v == ((0 - 2147483647) - 1) { 2147483647 } else { 0 - v };
+        __arena_set(start + i, nv);
         i = i + 1;
     }
     start
@@ -605,14 +612,17 @@ fn vec_repeat(value: i32, count: i32) -> i32 {
 }
 
 // vec_zip_mod(a, b, count): element-wise modulo a[i] % b[i].
-// Returns a new slice. b[i] == 0 emits ud2 (handled by Helix's
-// integer-mod trap on division by zero — std behavior, not stdlib's
-// concern). Useful for hashing into buckets and modular arithmetic.
+// Returns a new slice. Restart 51 A4: fail-closed on b[i] == 0 (pushes 0)
+// rather than trapping. Matches the fail-closed discipline of hashmap_hash,
+// ti1d_mean, etc. — in an arena runtime without OS exception recovery, a
+// hardware trap is a process crash.
 fn vec_zip_mod(a: i32, b: i32, count: i32) -> i32 {
     let s: i32 = __arena_len();
     let mut i: i32 = 0;
     while i < count {
-        __arena_push(__arena_get(a + i) % __arena_get(b + i));
+        let bv = __arena_get(b + i);
+        if bv == 0 { __arena_push(0); }
+        else { __arena_push(__arena_get(a + i) % bv); }
         i = i + 1;
     }
     s
@@ -667,13 +677,15 @@ fn vec_concat(a: i32, na: i32, b: i32, nb: i32) -> i32 {
 }
 
 // vec_zip_div(a, b, count): element-wise division a[i] / b[i].
-// Returns a new slice. b[i] == 0 emits the standard integer-div
-// division-by-zero trap. Companion to vec_zip_mul / vec_zip_mod.
+// Returns a new slice. Restart 51 A4: fail-closed on b[i] == 0 (pushes 0)
+// rather than trapping. Sibling of vec_zip_mod's fail-closed pattern.
 fn vec_zip_div(a: i32, b: i32, count: i32) -> i32 {
     let s: i32 = __arena_len();
     let mut i: i32 = 0;
     while i < count {
-        __arena_push(__arena_get(a + i) / __arena_get(b + i));
+        let bv = __arena_get(b + i);
+        if bv == 0 { __arena_push(0); }
+        else { __arena_push(__arena_get(a + i) / bv); }
         i = i + 1;
     }
     s

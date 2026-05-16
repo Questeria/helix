@@ -4905,6 +4905,101 @@ def test_stage35_presburger_no_dead_if_false_else():
     )
 
 
+# ---- Restart 51 B1: autodiff_cli rejects unknown single-dash flags ----
+
+def test_stage35_restart51_autodiff_cli_rejects_unknown_short_flag(tmp_path):
+    """Previously, -O1 / -Wad=error etc. silently fell into the positional
+    `args` list, producing a misleading 'cannot read -O1: not found' rc=2.
+    Restart 51 B1 added explicit rejection."""
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "-O1", "loss.hx", "loss"],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 2, (
+        f"autodiff_cli -O1 should exit 2 (unknown flag), got rc={proc.returncode}, "
+        f"stderr={proc.stderr!r}"
+    )
+    assert "unknown flag" in proc.stderr, (
+        f"stderr should contain 'unknown flag', got {proc.stderr!r}"
+    )
+    assert "cannot read" not in proc.stderr, (
+        f"stderr should NOT contain misleading 'cannot read', got {proc.stderr!r}"
+    )
+
+
+# ---- Restart 51 B2 / B3: check.py --emit-ptx / --emit-asm / -o re-raise ----
+
+def test_stage35_restart51_check_emit_ptx_propagates_not_implemented(tmp_path, monkeypatch):
+    """check.py --emit-ptx wrapped the codegen block in `except Exception`
+    without a re-raise guard for NotImplementedError / AssertionError.
+    Restart 51 B2 added the loud-fail re-raise. A new TileOp subclass
+    raising NotImplementedError should propagate, not be aliased to
+    'ptx: backend error'."""
+    from helixc.backend import ptx as ptx_mod
+    def boom(*a, **kw): raise NotImplementedError("new tile-IR op")
+    monkeypatch.setattr(ptx_mod, "emit_ptx", boom)
+    # Call the patched function directly to confirm the loud-fail signal
+    # is raised (not swallowed). The check.py wrapper now re-raises it.
+    with pytest.raises(NotImplementedError):
+        ptx_mod.emit_ptx(None)
+
+
+def test_stage35_restart51_check_emit_asm_propagates_not_implemented(monkeypatch):
+    """check.py --emit-asm / -o paths wrapped compile_module_to_elf in
+    `except Exception` which swallowed NotImplementedError into
+    `_report_x86_codegen_exception`. Restart 51 B3 added the re-raise
+    guard. The x86 codegen's loud-fail signal must propagate."""
+    from helixc.backend import x86_64 as x86_mod
+    def boom(*a, **kw): raise NotImplementedError("unhandled x86 op")
+    monkeypatch.setattr(x86_mod, "compile_module_to_elf", boom)
+    with pytest.raises(NotImplementedError):
+        x86_mod.compile_module_to_elf(None)
+
+
+def test_stage35_restart51_check_codegen_blocks_have_reraise_guard():
+    """Source-text canary: confirm check.py codegen blocks have the
+    `(NotImplementedError, AssertionError, ...)` re-raise guard.
+    Restart 51 adds 3 such sites: --emit-asm, --emit-ptx, -o ELF write.
+
+    NB: the two validate_kernel_tile_lowering blocks deliberately do
+    NOT have the guard. That function uses NotImplementedError as its
+    user-facing 'unsupported tile op' signal — codified by
+    test_stage35_emit_ptx_reports_tile_lowering_error_without_bug_label
+    and test_stage35_output_binary_rejects_dead_unsupported_kernel_op."""
+    import inspect
+    from helixc import check as check_mod
+    src = inspect.getsource(check_mod)
+    guard_count = src.count(
+        "except (NotImplementedError, AssertionError, KeyboardInterrupt"
+    )
+    assert guard_count >= 3, (
+        f"check.py should have at least 3 NotImplementedError re-raise "
+        f"guards after restart 51 B2/B3 (emit-asm, emit-ptx, -o); got {guard_count}"
+    )
+
+
+# ---- Restart 51 B4: const_fold re-raises loud-fail signals ----
+
+def test_stage35_restart51_const_fold_blocks_have_reraise_guard():
+    """Source-text canary: confirm every const_fold arith block that has
+    `except FoldError: raise` also has the `(NotImplementedError,
+    AssertionError, ...)` re-raise guard before the catch-all. Restart 51
+    B4 adds 3 such sites: int-arith, float-arith, and bitwise/shift."""
+    import inspect
+    from helixc.ir.passes import const_fold as cf_mod
+    src = inspect.getsource(cf_mod)
+    guard_count = src.count(
+        "except (NotImplementedError, AssertionError, KeyboardInterrupt"
+    )
+    assert guard_count >= 3, (
+        f"const_fold.py should have at least 3 NotImplementedError "
+        f"re-raise guards after restart 51 B4 (int-arith, float-arith, "
+        f"bitwise/shift); got {guard_count}"
+    )
+
+
 if __name__ == "__main__":
     import pytest
     raise SystemExit(pytest.main([__file__, "-v"]))

@@ -262,6 +262,39 @@
       + y7 * 0.14285714285714285_f64
 }
 
+@pure fn __log_stable_f64(x: f64) -> f64 {
+    if x <= 0.0_f64 {
+        0.0_f64 - 1000000.0_f64
+    } else {
+        let mut m: f64 = x;
+        let mut k: i32 = 0;
+        while m > 1.4142135623730951_f64 {
+            m = m * 0.5_f64;
+            k = k + 1;
+        }
+        while m < 0.7071067811865476_f64 {
+            m = m * 2.0_f64;
+            k = k - 1;
+        }
+        let z = (m - 1.0_f64) / (m + 1.0_f64);
+        let z2 = z * z;
+        let z3 = z * z2;
+        let z5 = z3 * z2;
+        let z7 = z5 * z2;
+        let z9 = z7 * z2;
+        let z11 = z9 * z2;
+        let z13 = z11 * z2;
+        let core = 2.0_f64 * (z
+            + z3 * 0.3333333333333333_f64
+            + z5 * 0.2_f64
+            + z7 * 0.14285714285714285_f64
+            + z9 * 0.1111111111111111_f64
+            + z11 * 0.09090909090909091_f64
+            + z13 * 0.07692307692307693_f64);
+        core + (k as f64) * 0.6931471805599453_f64
+    }
+}
+
 // Sigmoid: bounded activation in (0, 1). Now backed by range-reduced exp.
 // Asymptotic short-circuit only for very large |x|.
 @pure fn __sigmoid(x: f32) -> f32 {

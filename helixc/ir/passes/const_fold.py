@@ -481,6 +481,15 @@ def _try_fold_op(op: tir.Op, defs: dict) -> tir.Op | None:
                 # 17002) would never surface to the user. Re-raise
                 # before the catch-all sees them.
                 raise
+            except (NotImplementedError, AssertionError, KeyboardInterrupt,
+                    SystemExit, MemoryError):
+                # Restart 51 B4: preserve loud-fail discipline. Sibling of
+                # restart 50 B2 narrowing at lines 367-370. Without this,
+                # NotImplementedError from a future _wrap_int_to_type or
+                # _binary_int_bits subclass would be aliased to a silent
+                # fold-skip — exactly the pattern restart 47 fixed in
+                # lower_ast._resolve_monomorphized_struct_type.
+                raise
             except Exception:
                 return None
             # Wrap to target type's bit width to match runtime semantics.
@@ -512,6 +521,11 @@ def _try_fold_op(op: tir.Op, defs: dict) -> tir.Op | None:
                 # block (the NaN check at line ~385 is below `except`),
                 # but a future edit might move it inside. Re-raise so
                 # the trap contract is never silently swallowed.
+                raise
+            except (NotImplementedError, AssertionError, KeyboardInterrupt,
+                    SystemExit, MemoryError):
+                # Restart 51 B4: preserve loud-fail discipline (sibling of
+                # the int-case re-raise added above + restart 50 B2).
                 raise
             except Exception:
                 return None
@@ -613,6 +627,11 @@ def _try_fold_op(op: tir.Op, defs: dict) -> tir.Op | None:
                 # re-raise, the generic `except Exception` below would
                 # silently swallow them — defeating the trap-17002
                 # contract documented in cycle 19 audit-A C19-1.
+                raise
+            except (NotImplementedError, AssertionError, KeyboardInterrupt,
+                    SystemExit, MemoryError):
+                # Restart 51 B4: preserve loud-fail discipline. Mirrors the
+                # int-arith and float-arith re-raise sites added above.
                 raise
             except Exception:
                 return None

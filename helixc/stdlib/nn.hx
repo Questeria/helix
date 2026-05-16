@@ -65,6 +65,10 @@ fn argmax(x_start: i32, n: i32) -> i32 {
 }
 
 // Sum of squared differences: sum((y[i] - t[i])^2). Lower = closer.
+// Restart 51 A1: i64 accumulator + INT32 saturation. A single element
+// |diff| >= 46341 makes diff*diff exceed INT32_MAX; the prior i32 total
+// silently wrapped, fooling any "lower-is-better" loss monitor. Matches
+// the ti1d_prod (restart 50 A3) and hashmap_sum_values precedent.
 @pure
 fn mse_loss(y_start: i32, t_start: i32, n: i32) -> i32 {
     if n <= 0 { 0 }
@@ -72,13 +76,15 @@ fn mse_loss(y_start: i32, t_start: i32, n: i32) -> i32 {
     else { if t1d_slice_ok(t_start, n) == 0 { 0 }
     else {
     let mut i: i32 = 0;
-    let mut total: i32 = 0;
+    let mut total: i64 = 0_i64;
+    let hi: i64 = 2147483647_i64;
     while i < n {
-        let diff = __arena_get(y_start + i) - __arena_get(t_start + i);
+        let diff = (__arena_get(y_start + i) as i64) - (__arena_get(t_start + i) as i64);
         total = total + diff * diff;
+        if total > hi { total = hi; };
         i = i + 1;
     }
-    total
+    total as i32
     }}}
 }
 
@@ -167,7 +173,7 @@ fn clip_grad_norm_f32(g_start: i32, max_norm: f32, n: i32) -> i32 {
     else { if t1d_slice_ok(g_start, n) == 0 { t2d_error() }
     else {
         let norm_sq = tf1d_l2_norm_sq(g_start, n);
-        if norm_sq <= 0.0_f32 { 0 }
+        if (norm_sq <= 0.0_f32) || (norm_sq != norm_sq) { 0 }
         else {
             let norm = __sqrt(norm_sq);
             let target = if max_norm < 0.0_f32 { 0.0_f32 } else { max_norm };
@@ -991,20 +997,26 @@ fn argmin(x_start: i32, n: i32) -> i32 {
 // MAE (sum of absolute differences) on integer tensors.
 // Sibling of mse_loss; cheaper since no multiplication and no overflow risk.
 @pure
+// Restart 51 A6: i64 accumulator + INT32 saturation. Both the inner
+// `y[i] - t[i]` subtraction (i64-promoted to handle the boundary case
+// y=INT32_MAX, t=-1) and the outer sum-of-abs are protected. Matches
+// the mse_loss / ti1d_sum / ti1d_dot precedent.
 fn mae_loss(y_start: i32, t_start: i32, n: i32) -> i32 {
     if n <= 0 { 0 }
     else { if t1d_slice_ok(y_start, n) == 0 { 0 }
     else { if t1d_slice_ok(t_start, n) == 0 { 0 }
     else {
     let mut i: i32 = 0;
-    let mut total: i32 = 0;
+    let mut total: i64 = 0_i64;
+    let hi: i64 = 2147483647_i64;
     while i < n {
-        let d = __arena_get(y_start + i) - __arena_get(t_start + i);
-        let ad = if d < 0 { 0 - d } else { d };
+        let d: i64 = (__arena_get(y_start + i) as i64) - (__arena_get(t_start + i) as i64);
+        let ad: i64 = if d < 0_i64 { 0_i64 - d } else { d };
         total = total + ad;
+        if total > hi { total = hi; };
         i = i + 1;
     }
-    total
+    total as i32
     }}}
 }
 

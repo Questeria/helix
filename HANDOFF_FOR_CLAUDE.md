@@ -4,7 +4,7 @@
 **Repo**: `C:\Projects\Kovostov-Native`  
 **Remote**: `https://github.com/Questeria/helix.git`  
 **Branch**: `main`  
-**Handoff written after**: `9ab2ffe Fix Stage 35 fiftieth restart findings`
+**Handoff written after**: Stage 35 restart 51 (commit will land alongside this handoff)
 
 This handoff is for Claude to continue the Helix Stage 35 audit campaign.
 Treat live git state as truth if it differs from this file.
@@ -13,30 +13,69 @@ Treat live git state as truth if it differs from this file.
 
 Stage 35 is still in audit cleanup. Clean gates remain `0/3`.
 
-The latest completed fix sweep is restart 50:
+The latest completed fix sweep is restart 51:
 
-- Commit: `9ab2ffe Fix Stage 35 fiftieth restart findings`
+- Commit: pinned by the latest `git log -1 --oneline` (see `Fix Stage 35
+  fifty-first restart findings`)
 - Status at handoff creation: clean working tree, `main` aligned with
   `origin/main`
-- Progress ledger: `docs/stage35-progress-2026-05-15.md` (see Increment 69
-  for restart 50; 68 for restart 49; 67 for restart 48; 66 for restart 47;
-  65 for restart 46)
-- Current-facing status files now say restart 50 and 2,489 collected tests
+- Progress ledger: `docs/stage35-progress-2026-05-15.md` (see Increment 70
+  for restart 51; 69 for restart 50; 68 for restart 49; 67 for restart 48;
+  66 for restart 47; 65 for restart 46)
+- Current-facing status files now say restart 51 and 2,498 collected tests
+  (live count after restart 51 reconciliation; restart 50 ledger forecast
+  2,498 which was off by 8 from the live 2,487 at HEAD `7b945fa` before
+  restart 51 added 11 new canaries → 2,498)
 
-Restart 50 was a fresh-audit fix sweep that closed 16 of 17 findings (1
-LOW C8 about per-module fn-count convention deferred to restart 51). The
-deferred-list-from-50 has 1 item. The next action is restart 51, which
-should pick up C8 plus run a fresh 3-lane audit on remaining surface.
+Restart 51 ran a fresh 3-lane read-only audit on top of restart 50's HEAD
+plus picked up the restart-50-deferred C8 carry-forward. Result: 15
+findings (3 HIGH + 5 MEDIUM + 7 LOW). The fix sweep closed all 15 plus
+the C8 carry-forward; **no items deferred to restart 52.**
 
-## Restart 50 → Restart 51 deferred findings
+## Restart 51 → Restart 52 deferred findings
 
-- C8 (LOW): `helix_website/HELIX_REFERENCE.md` per-module stdlib fn
-  counts use bare-`fn` convention while the headline says "(644 including
-  @-prefixed)". The per-module callouts ("~113 functions", "~75
-  functions", etc.) don't track either bare or bare+@-decl cleanly —
-  numbers look stale-historical. Restart 51 should standardize per-module
-  callouts to live `grep -c '^fn '` output and explicitly say "(bare `fn`
-  count)".
+(none — restart 52 starts from a clean carry-forward)
+
+## What Restart 51 Fixed
+
+Restart 51 ran a fresh 3-lane read-only audit (with the C8 carry-forward
+from restart 50). The fix sweep closed all findings.
+
+Lane A (1 HIGH + 2 MEDIUM + 2 LOW): `__log_stable_f64` added and
+`d_log_v` rewired to use it (closes the f64-log domain-guard gap);
+`clip_grad_norm_f32` NaN-fail-closed (was only `<= 0`-guarded);
+`string_to_int` uses i64 accumulator + saturation (was: i32 wrap at
+INT32_MAX+1); `vec_zip_mod` and `vec_zip_div` fail-closed on b[i] == 0
+(was: trap to runtime); `vec_negate_inplace` + `vec_map_neg` saturate
+INT32_MIN to INT32_MAX (was: silent wrap to INT32_MIN).
+
+Lane B (2 HIGH + 1 MEDIUM + 1 LOW): `autodiff_cli` rejects unknown
+single-dash flags with `rc=2 unknown flag` (was: silent positional-arg
+aliasing); `check.py validate_kernel_tile_lowering` re-raises loud-fail
+signals at both call sites (was: aliased to `PTX validation error rc=1`);
+`check.py --emit-asm`/`--emit-ptx`/`-o` artifact-emit branches re-raise
+loud-fail signals; `const_fold.py` int-arith / float-arith / bitwise
+blocks re-raise loud-fail signals before the `except Exception: return
+None` catch-all (sibling sweep across 3 try-blocks).
+
+Lane C (1 HIGH + 3 MEDIUM + 1 LOW + C8 carry-forward): `README.md`
+restart-attribution corrected (was: "restart 49 collected 2,498" inside
+a "restart 50 is latest" paragraph); `stats_and_facts.md` preamble
+reconciled with the table row (was: line 8 said restart 49, line 14
+said restart 50); `HANDOFF_FOR_CHATGPT.md` continuation pointer reconciled
+the same way; live test-count reconciled across 8 surfaces from the
+restart-50 forecast 2,498 to the actual 2,498 post-restart-51;
+`HELIX_REFERENCE.md` "Increments 50-68+" / "50-67+" anchors replaced
+with "Increments 50 onward" (open-ended, restart-drift-proof); C8
+carry-forward closed by adding `"6 bare fn (+0 @-attributed)"` to
+`ieee754.hx` and `"2 bare fn (+50 @-attributed)"` to
+`transcendentals.hx` per-module callouts (the other 14 modules were
+already standardized by restart 50).
+
+Regression coverage added (11 cases): 5 in `test_codegen.py` (Lane A
+A1-A5), 5 in `test_cli.py` (Lane B B1-B4 with one source-text canary
+covering both B2 sites), and 1 source-text canary in `test_cli.py` for
+B4 const_fold re-raise.
 
 ## What Restart 50 Fixed
 
@@ -333,15 +372,15 @@ fresh confirmation before restart 47, rerun it alone with a longer timeout:
 python -m pytest helixc/tests/test_codegen.py -q -k "stage35 or agi or hashmap or tensor"
 ```
 
-## Restart 50 Protocol (bug-family audit, refined from restart 49)
+## Restart 52 Protocol (bug-family audit, refined from restart 51)
 
-**IMPORTANT**: restart 49 closed the entire restart-48 deferred backlog.
-There are NO carry-forward findings. Restart 50 MUST run a fresh 3-lane
-audit (read-only). The campaign has settled into a high-throughput run-rate:
-restarts 46/47/48/49 each closed 12, 17, 13, 11 findings respectively (peak
-at restart 47, decreasing thereafter but not yet trending to zero). The
-first restart where the audit returns 0 findings on the same HEAD becomes
-clean gate 1/3.
+**IMPORTANT**: restart 51 closed the entire restart-50 deferred backlog
+(C8) plus all 15 freshly-discovered findings. There are NO carry-forward
+findings into restart 52. Restart 52 MUST run a fresh 3-lane audit
+(read-only). The campaign run-rate: restarts 46/47/48/49/50/51 closed
+12, 17, 13, 11, 17, 15 findings respectively (peak at restart 47/50, no
+clean monotonic decrease yet). The first restart where the audit returns
+0 findings on the same HEAD becomes clean gate 1/3.
 
 The bug-family audit pattern from restart 46 (12 findings) and restart 47
 (17 findings) worked well — each restart pulls more sibling issues into the

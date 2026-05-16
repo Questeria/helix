@@ -88,6 +88,17 @@ def main():
     if len(sys.argv) < 2:
         print(__doc__.strip(), file=sys.stderr)
         sys.exit(2)
+    # Restart 51 B1: reject unknown single-dash flags (e.g. -O1, -Wad=error)
+    # before the partition below silently consumes them as positional args.
+    # Matches the unknown-flag-rc=2 convention of check.py / x86_64.py / ptx.py.
+    _single_dash_unknowns = [
+        a for a in sys.argv[1:]
+        if a.startswith("-") and not a.startswith("--") and a != "-h"
+    ]
+    if _single_dash_unknowns:
+        for uf in _single_dash_unknowns:
+            print(f"error: autodiff_cli: unknown flag {uf}", file=sys.stderr)
+        sys.exit(2)
     args = [a for a in sys.argv[1:] if not a.startswith("--")]
     flags = {a for a in sys.argv[1:] if a.startswith("--")}
 

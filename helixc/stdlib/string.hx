@@ -192,17 +192,26 @@ fn string_to_int(start: i32, len: i32) -> i32 {
             neg = 1;
             i = 1;
         }
-        let mut acc: i32 = 0;
+        // Restart 51 A3: i64 accumulator + saturation. Previously a 10-digit
+        // input like "2147483648" silently wrapped acc * 10 + 8 back to INT32_MIN.
+        let mut acc: i64 = 0_i64;
         while i < len {
             let b: i32 = __arena_get(start + i);
             if b >= 48 {
                 if b <= 57 {
-                    acc = acc * 10 + (b - 48);
+                    acc = acc * 10_i64 + ((b - 48) as i64);
+                    if acc > 2147483647_i64 { acc = 2147483647_i64; }
                 }
             }
             i = i + 1;
         }
-        if neg == 1 { 0 - acc } else { acc }
+        if neg == 1 {
+            let neg_acc = 0_i64 - acc;
+            let min_i32 = (0_i64 - 2147483647_i64) - 1_i64;
+            if neg_acc < min_i32 { (0 - 2147483647) - 1 } else { neg_acc as i32 }
+        } else {
+            acc as i32
+        }
     }
 }
 

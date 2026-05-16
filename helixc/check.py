@@ -1716,6 +1716,12 @@ def _main_inner(argv: list[str] | None,
                     try:
                         validate_kernel_tile_lowering(mod)
                     except Exception as e:
+                        # NB: validate_kernel_tile_lowering deliberately raises
+                        # NotImplementedError as the user-facing signal for
+                        # unsupported tile ops (see test_stage35_emit_ptx_*
+                        # and test_stage35_output_binary_rejects_dead_*). Do
+                        # NOT add a re-raise guard here — it would alias the
+                        # readable error into a `compiler bug` traceback.
                         print(
                             f"helixc: PTX validation error: {e}",
                             file=sys.stderr,
@@ -1744,6 +1750,8 @@ def _main_inner(argv: list[str] | None,
             try:
                 validate_kernel_tile_lowering(mod)
             except Exception as e:
+                # See note above the -O1+ sibling: NIE is the user-facing
+                # signal for unsupported tile ops; no re-raise guard here.
                 print(
                     f"helixc: PTX validation error: {e}",
                     file=sys.stderr,
@@ -1833,6 +1841,10 @@ def _main_inner(argv: list[str] | None,
         # --emit-ptx error-path pattern (line 422-427).
         try:
             elf = compile_module_to_elf(mod)
+        except (NotImplementedError, AssertionError, KeyboardInterrupt,
+                SystemExit, MemoryError):
+            # Restart 51 B3: preserve loud-fail discipline (sibling of B2).
+            raise
         except Exception as e:
             return _report_x86_codegen_exception(e)
         # Phase-0: ELF hex dump. A real disassembler would use objdump.
@@ -1854,6 +1866,11 @@ def _main_inner(argv: list[str] | None,
             if ad_rc != 0:
                 return ad_rc
             print(ptx)
+        except (NotImplementedError, AssertionError, KeyboardInterrupt,
+                SystemExit, MemoryError):
+            # Restart 51 B2: preserve loud-fail discipline. Mirrors the
+            # ptx.py:1006-1011 + effect-check re-raise pattern.
+            raise
         except Exception as e:
             print(f"   ptx: backend error: {e}", file=sys.stderr)
             return 1
@@ -1871,6 +1888,10 @@ def _main_inner(argv: list[str] | None,
         # not a partial-file + traceback.
         try:
             elf = compile_module_to_elf(mod)
+        except (NotImplementedError, AssertionError, KeyboardInterrupt,
+                SystemExit, MemoryError):
+            # Restart 51 B3: preserve loud-fail discipline (sibling of B2).
+            raise
         except Exception as e:
             return _report_x86_codegen_exception(e)
         try:

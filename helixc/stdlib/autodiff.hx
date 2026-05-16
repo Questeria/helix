@@ -81,8 +81,8 @@
 @pure fn d_scale_dx(a_v: f64, a_dx: f64, c: f64) -> f64 { a_dx * c }
 
 // d/dx ln(a) = a' / a  (defined for a > 0)
-// Restart 47 A5: fail-closed at a <= 0 (singular). Same precedent as A4.
-@pure fn d_log_v(a_v: f64, a_dx: f64) -> f64 { __log_f64(a_v) }
+// Restart 47 A5 + restart 51 A1: fail-closed at a <= 0 via __log_stable_f64.
+@pure fn d_log_v(a_v: f64, a_dx: f64) -> f64 { __log_stable_f64(a_v) }
 @pure fn d_log_dx(a_v: f64, a_dx: f64) -> f64 {
     if a_v <= 0.0_f64 { 0.0_f64 } else { a_dx / a_v }
 }
