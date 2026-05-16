@@ -132,12 +132,61 @@ checker.
   already shipped (Stages 31/33/34); live candidates documented in
   STAGE_36_STARTING_PROTOCOL.md §3; provenance-typed primitives
   recommended pending user approval.
+- DONE (eb476b4, 2026-05-16) — refresh stale Stage 35 status pointer
+  in HELIX_PURPOSE.md to point at live Stage 36 progress ledger.
 - DEFERRED — stale `pytest-codegen-shard-1-of-2 / 1-of-4` timing
   JSONs in `.stage31-logs/` (unused by current 1-of-8 sharding;
   cleanup-only, no functional impact).
 - DEFERRED — split `helixc/tests/test_codegen.py` (21,504 lines).
   Touches every Stage 1-35 codegen test; deserves its own scoped
   commit campaign, not a Stage 36 prep sweep.
+
+## Stage 36 Increments 1-5 SHIPPED (2026-05-16)
+
+User-approved 2026-05-16: Stage 36 first deliverable is
+**provenance-typed neuro-symbolic primitives** (ROADMAP Tier 3 #10
+strategic differentiator vs JAX/Mojo/Triton). Five increments
+shipped in this session plus one dogfood program:
+
+| # | Commit | What landed |
+|---|--------|-------------|
+| 1 | 9e9b421 | `prove(value, source) -> Logic<T>` + `unwrap_logic(l) -> T` builtins. Logic<T> wrapper lowers to identity at IR (Phase-0 zero-overhead). |
+| 2 | c142ce0 | `derive(a, b)`, `and_logic`, `or_logic`, `not_logic`. Boolean ops on Logic<i32> via BIT_AND / BIT_OR / 1-a. |
+| 3 | fb36c51 | `xor_logic`, `implies_logic`, `eq_logic`, `if_logic`, `to_logic_bool`. Boolean algebra feature-complete. De Morgan's law verified end-to-end at runtime. |
+| 4 | de0b60b | `attach` + `detach` wired through IR as identity, unblocking `D<Logic<T>>` strategic composition end-to-end. 4 patterns runnable (D<i32>, D<Logic<i32>>, D<Logic> boolean compute, derive-as-rule). |
+| dogfood | 8784976 | `helixc/examples/dogfood_06_provenance_datalog.hx` — Datalog-shaped reasoning: grandparent rule + tautology check over Logic<i32>. ROADMAP advanced from 5 to 6 dogfood programs. Wired into `examples/run.py` as the `provenance` demo. |
+| 5 | 60c7b4a | Real two-parent provenance via arena side-table: `register_derivation(L, R)`, `parent_left_at(h)`, `parent_right_at(h)`. Lowers to ARENA_PUSH + ARENA_GET. Same program can prove a conclusion AND recover the evidence trail. |
+
+**Stage 36 progress ledger**: `docs/stage36-progress-2026-05-16.md`
+documents all 5 increments + Increment 6 plan (AD chain rules
+through Logic ops, genuinely larger work).
+
+**Tests**: 31 passing in `helixc/tests/test_stage36_provenance.py`,
+8 typecheck-level tests in `helixc/tests/test_provenance.py`,
+1 dogfood runtime test in `helixc/tests/test_reflection.py`.
+
+**Self-host gate**: PASS at every increment commit (G2..G4 byte-
+identical, smoke programs all exit 42, validate ok).
+
+**Total Stage 36 surface area** (16 new typecheck-recognized
+builtins): prove, unwrap_logic, derive, and_logic, or_logic,
+not_logic, xor_logic, implies_logic, eq_logic, if_logic,
+to_logic_bool, register_derivation, parent_left_at, parent_right_at,
+plus the now-runnable attach + detach from Stage 24.
+
+### What's still missing from Stage 36
+
+1. **AD gradient flow through Logic ops** (Increment 6, planned).
+   `grad(loss)(...)` over `loss: Logic<f32> -> Logic<f32>` needs
+   chain rules registered for and_logic/or_logic/not_logic via
+   sigmoid-relaxation. Touches `helixc/frontend/grad_pass.py` and
+   `helixc/stdlib/autodiff_reverse.hx`. Genuinely larger than 1-5.
+2. **Auto-registration of derivations**. Today user code calls
+   `register_derivation` explicitly; combinators (`and_logic`,
+   `or_logic`) don't auto-record. Auto-registration would need
+   IR-level per-Logic<T> handle slots — a representation change.
+3. **Pretty-printing / debug observation** — print_provenance(l),
+   trace_evidence(l, depth) — useful but Phase-1 cosmetics.
 
 ## What Restart 64 Returned (CLEAN — gate 2/3)
 
