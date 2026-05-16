@@ -644,10 +644,20 @@ class Lowerer:
         self, ty: "A.TyNode",
     ) -> "A.TyNode":
         if isinstance(ty, A.TyGeneric):
+            # Restart 47 B1: narrow exception scope. mangle_struct ->
+            # _mangle_ty explicitly raises NotImplementedError as a loud-fail
+            # discipline ("Promote to loud-fail so future additions force
+            # explicit dispatch here"). A bare `except Exception` here
+            # defeated that discipline: a future TyNode subclass (refinement,
+            # confidence, tiered memory) would silently fall through to the
+            # unresolved TyGeneric instead of forcing the dispatch.
+            # Narrow to (KeyError, AttributeError) which are the
+            # mangle_struct-internal lookup failures that legitimately mean
+            # "this isn't a known monomorphized struct, return unresolved".
             try:
                 from ..frontend.struct_mono import mangle_struct
                 mangled = mangle_struct(ty.base, list(ty.args))
-            except Exception:
+            except (KeyError, AttributeError):
                 return ty
             if mangled in self._struct_fields:
                 return A.TyName(span=ty.span, name=mangled)

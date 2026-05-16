@@ -218,7 +218,14 @@ fn adam_f32_step(w_start: i32, g_start: i32, m_start: i32, v_start: i32,
         let m_i = __f32_from_bits(__arena_get(m_start + i));
         let v_i = __f32_from_bits(__arena_get(v_start + i));
         let next_m = beta1 * m_i + (1.0_f32 - beta1) * g_i;
-        let next_v = beta2 * v_i + (1.0_f32 - beta2) * g_i * g_i;
+        // Restart 47 A1: clamp next_v to >= 0 before __sqrt. A caller can
+        // pass a negative v_i (uninitialized arena or hostile input). With a
+        // negative next_v, __sqrt returns 0 (transcendentals fallback), then
+        // raw_denom = eps; if eps is tiny (~1e-8), w_i - lr*m/eps explodes.
+        // Matches the layer_norm_f32 negative-eps clamp precedent from
+        // restart 46.
+        let raw_next_v = beta2 * v_i + (1.0_f32 - beta2) * g_i * g_i;
+        let next_v = if raw_next_v < 0.0_f32 { 0.0_f32 } else { raw_next_v };
         __arena_set(m_start + i, __bits_of_f32(next_m));
         __arena_set(v_start + i, __bits_of_f32(next_v));
         let raw_denom = __sqrt(next_v) + eps;
@@ -557,13 +564,28 @@ fn layer_norm_f32(x_start: i32, y_start: i32, n: i32, eps: f32) -> i32 {
         }
         var = var / (n as f32);
         let safe_eps = if eps < 0.0_f32 { 0.0_f32 } else { eps };
-        let inv_std = 1.0_f32 / __sqrt(var + safe_eps);
-        let mut j: i32 = 0;
-        while j < n {
-            let xj = __f32_from_bits(__arena_get(x_start + j));
-            __arena_set(y_start + j, __bits_of_f32((xj - mean) * inv_std));
-            j = j + 1;
+        let denom = __sqrt(var + safe_eps);
+        // Restart 47 A3: when both var == 0 (constant input) and safe_eps
+        // == 0, denom == 0, then 1.0 / 0 = +Inf and (xj - mean) * Inf =
+        // 0 * Inf = NaN. Fail-closed: write 0 to every output slot, which
+        // is the mathematically correct centered output for a constant
+        // input (x - mean = 0 for all j).
+        if denom <= 0.0_f32 {
+            let mut j: i32 = 0;
+            while j < n {
+                __arena_set(y_start + j, __bits_of_f32(0.0_f32));
+                j = j + 1;
+            }
         }
+        else {
+            let inv_std = 1.0_f32 / denom;
+            let mut j: i32 = 0;
+            while j < n {
+                let xj = __f32_from_bits(__arena_get(x_start + j));
+                __arena_set(y_start + j, __bits_of_f32((xj - mean) * inv_std));
+                j = j + 1;
+            }
+        };
     0
     }}}
 }

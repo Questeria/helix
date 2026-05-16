@@ -53,9 +53,13 @@
 }
 
 // d/dx sqrt(a) = a' / (2 * sqrt(a))
+// Restart 47 A4: fail-closed at the singularity a=0 (mathematically the
+// derivative is +inf there). Matches the layer_norm_f32 / adam_step
+// fail-closed-at-zero precedent from restart 46/47.
 @pure fn d_sqrt_v(a_v: f64, a_dx: f64) -> f64 { __sqrt_f64(a_v) }
 @pure fn d_sqrt_dx(a_v: f64, a_dx: f64) -> f64 {
-    a_dx / (2.0_f64 * __sqrt_f64(a_v))
+    if a_v <= 0.0_f64 { 0.0_f64 }
+    else { a_dx / (2.0_f64 * __sqrt_f64(a_v)) }
 }
 
 // d/dx (a*a) — convenient shorthand. d_sq_dx(x, 1.0) = 2x.
@@ -71,13 +75,20 @@
 @pure fn d_scale_dx(a_v: f64, a_dx: f64, c: f64) -> f64 { a_dx * c }
 
 // d/dx ln(a) = a' / a  (defined for a > 0)
+// Restart 47 A5: fail-closed at a <= 0 (singular). Same precedent as A4.
 @pure fn d_log_v(a_v: f64, a_dx: f64) -> f64 { __log_f64(a_v) }
-@pure fn d_log_dx(a_v: f64, a_dx: f64) -> f64 { a_dx / a_v }
+@pure fn d_log_dx(a_v: f64, a_dx: f64) -> f64 {
+    if a_v <= 0.0_f64 { 0.0_f64 } else { a_dx / a_v }
+}
 
 // d/dx (1/a) = -a' / a^2
-@pure fn d_recip_v(a_v: f64, a_dx: f64) -> f64 { 1.0_f64 / a_v }
+// Restart 47 A6/A7: fail-closed at a == 0 (singular). Same precedent as A4.
+@pure fn d_recip_v(a_v: f64, a_dx: f64) -> f64 {
+    if a_v == 0.0_f64 { 0.0_f64 } else { 1.0_f64 / a_v }
+}
 @pure fn d_recip_dx(a_v: f64, a_dx: f64) -> f64 {
-    (0.0_f64 - a_dx) / (a_v * a_v)
+    if a_v == 0.0_f64 { 0.0_f64 }
+    else { (0.0_f64 - a_dx) / (a_v * a_v) }
 }
 
 // d/dx sin(a) = cos(a) * a'

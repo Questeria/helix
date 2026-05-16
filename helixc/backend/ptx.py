@@ -806,16 +806,20 @@ if __name__ == "__main__":
     # currently always runs fold + cse with no per-level staging, so these
     # flags are accepted as a no-op; the goal is to close the parity gap
     # so users can pass the same flags they pass to helixc.check.
+    # Restart 47 B4: extended to --no-color, --color, --hash, --hash-cons
+    # plus -l/-l<name> for symmetric parity.
     allowed_flags = {
         "--strict", "--stdlib", "--no-stdlib",
         "--no-opt", "-O0", "-O1", "-O2", "-O3",
+        "--no-color", "--color", "--hash", "--hash-cons",
     }
     warning_policies: dict[str, str] = {}
     known_warning_names = {"ad", "deprecated"}
     flags: set[str] = set()
     paths: list[str] = []
     unknown_flags: list[str] = []
-    for flag in cli_args:
+    _iter = iter(cli_args)
+    for flag in _iter:
         if flag in allowed_flags:
             flags.add(flag)
             continue
@@ -835,6 +839,18 @@ if __name__ == "__main__":
                     unknown_flags.append(flag)
                     continue
                 warning_policies[body] = "warn"
+            continue
+        if flag == "-l":
+            # Restart 47 B4: consume the following library-name argument
+            # (no-op for PTX which does not link host libraries).
+            try:
+                next(_iter)
+            except StopIteration:
+                print("error: ptx: -l requires a library name", file=sys.stderr)
+                sys.exit(2)
+            continue
+        if flag.startswith("-l") and len(flag) > 2:
+            # Joined form: -lm (no-op).
             continue
         if flag.startswith("-"):
             unknown_flags.append(flag)

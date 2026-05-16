@@ -4028,8 +4028,19 @@ if __name__ == "__main__":
         _bad_invocation_cleanup_output()
         sys.exit(2)
     _opt_flag_set = {"-O0", "-O1", "-O2", "-O3"}
+    # Restart 47 B4: accept -l/-l<name>, --no-color/--color, --hash,
+    # --hash-cons for parity with helixc.check. Treated as no-ops here: the
+    # backend doesn't link libraries (FFI plumbing is in check.py), doesn't
+    # currently colorize backend-only diagnostics, and doesn't implement
+    # hash-cons gating at this layer. The goal is flag-acceptance parity so
+    # users can pass the same flag set to either CLI without spurious
+    # "unknown flag" errors.
+    _parity_passthrough_flags = {
+        "--no-color", "--color", "--hash", "--hash-cons",
+    }
     warning_policies: dict[str, str] = {}
-    for arg in sys.argv[3:]:
+    _argv_iter = iter(sys.argv[3:])
+    for arg in _argv_iter:
         if arg.startswith("-W"):
             body = arg[2:]
             if "=" in body:
@@ -4042,6 +4053,19 @@ if __name__ == "__main__":
                 sys.exit(2)
             warning_policies[name] = val
         elif arg in _opt_flag_set:
+            continue
+        elif arg in _parity_passthrough_flags:
+            continue
+        elif arg == "-l":
+            # Consume the following library-name argument (no-op).
+            try:
+                next(_argv_iter)
+            except StopIteration:
+                print("error: -l requires a library name", file=sys.stderr)
+                _bad_invocation_cleanup_output()
+                sys.exit(2)
+        elif arg.startswith("-l") and len(arg) > 2:
+            # Joined form: -lm (no-op).
             continue
         elif arg not in ("--strict", "--no-opt", "--stdlib", "--no-stdlib"):
             print(f"error: unknown flag {arg}", file=sys.stderr)

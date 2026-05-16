@@ -494,8 +494,13 @@ fn __always_accept_f64(h: i32, v: f64) -> i32 {
 
 // Adam-like step (single-step, no bias correction for simplicity).
 // Returns the parameter update direction; callers do w := w - lr * step.
+// Restart 47 A2: clamp v to >= 0 before __sqrt to match the in-arena
+// adam_f32_step (nn.hx) and the layer_norm_f32 negative-eps clamp
+// precedent. A negative v from upstream would otherwise produce
+// __sqrt(v) = 0 -> raw_denom = eps -> m / tiny eps -> spurious large step.
 @pure fn __adam_step(m: f32, v: f32, eps: f32) -> f32 {
-    let raw_denom = __sqrt(v) + eps;
+    let safe_v = if v < 0.0_f32 { 0.0_f32 } else { v };
+    let raw_denom = __sqrt(safe_v) + eps;
     if raw_denom <= 0.0_f32 { 0.0_f32 } else { m / raw_denom }
 }
 

@@ -67,8 +67,30 @@ def compile_helix(kind, seed=None, maze=False, grid_size=None):
                 f"@pure fn grid_n() -> i32 {{ {int(grid_size)} }}",
             )
         compile_path = os.path.join(EXAMPLES, f"_{kind}_compiled.hx")
-        with open(compile_path, "w", encoding="utf-8") as f:
-            f.write(new_src)
+        # Restart 47 B2: atomic-write so a Ctrl-C / OOM mid-write does not
+        # leave a truncated source at compile_path for the next backend
+        # invocation to consume. Mirrors examples/run.py (restart 46 B5) and
+        # helixc.check._atomic_write_bytes.
+        import tempfile
+        directory = os.path.dirname(os.path.abspath(compile_path)) or "."
+        base = os.path.basename(compile_path)
+        tmp_path = ""
+        try:
+            fd, tmp_path = tempfile.mkstemp(
+                prefix=f".{base}.",
+                suffix=".tmp",
+                dir=directory,
+            )
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                f.write(new_src)
+            os.replace(tmp_path, compile_path)
+        except BaseException:
+            if tmp_path:
+                try:
+                    os.remove(tmp_path)
+                except OSError:
+                    pass
+            raise
     rel = os.path.relpath(compile_path, PROJ).replace("\\", "/")
     cmd = [
         sys.executable, "-m", "helixc.backend.x86_64",

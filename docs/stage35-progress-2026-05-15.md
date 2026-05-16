@@ -3235,3 +3235,161 @@ BOTH `sys.argv[1]` and `sys.argv[2]` look like real file paths and they
 normalize-differ. Recorded here as a process note: the bug-family audit
 protocol surfaced the issue immediately on the post-fix CLI Stage 35 slice,
 which is exactly the safety net it was designed to provide.
+
+## Increment 66 - Forty-Seventh Clean-Gate Restart Fix Sweep
+
+Restart 47 began from pushed commit `4d75cf2` (the handoff doc commit after
+restart 46's `4c98a62` fix sweep) using the bug-family audit protocol. Three
+read-only audit lanes were dispatched in parallel; each was given the
+explicit-no-edit instruction this time, after the restart-46 agents
+"auto-applied" their findings.
+
+Baseline support checks:
+
+- `git status --short --branch`
+  - Result: clean at `4d75cf2`.
+- `python -m py_compile helixc/check.py helixc/backend/x86_64.py helixc/backend/ptx.py helixc/tests/test_cli.py helixc/tests/test_codegen.py helixc/tests/test_ptx.py`
+  - Result: passed.
+- Per-file stdlib parser sweep across `helixc/stdlib/*.hx`
+  - Result: parsed 16 files.
+- `python -m pytest helixc/tests/test_cli.py -q -k "stage35"`
+  - Result: 87 passed, 145 deselected.
+- `python -m pytest helixc/tests/test_ptx.py -q -k "stage35"`
+  - Result: 26 passed, 52 deselected.
+
+Restart 47 audit findings (17 total: 5 MEDIUM + 12 LOW):
+
+Lane A - Runtime / stdlib safety (7 findings):
+
+- A1 MEDIUM: `adam_f32_step` in `nn.hx` did not clamp `next_v` to `>= 0`
+  before `__sqrt(next_v)`. A negative `v_i` (uninitialized arena or hostile)
+  yields `__sqrt(negative) = 0` (transcendentals fallback), then
+  `raw_denom = eps`; with a tiny eps the weight update explodes.
+- A2 MEDIUM: `__adam_step` in `transcendentals.hx` had the same gap
+  (scalar-companion of A1).
+- A3 LOW: `layer_norm_f32` still produced NaN/Inf when both `var = 0`
+  (constant input) AND `eps = 0`. Restart-46 fixed negative eps only.
+- A4 MEDIUM: `d_sqrt_dx` in `autodiff.hx` divided by `2 * __sqrt_f64(a_v)`
+  with no zero guard, yielding `+Inf` at `a_v = 0` (the analytical
+  singularity).
+- A5 LOW: `d_log_dx` divided by `a_v` with no zero guard.
+- A6 LOW: `d_recip_v` computed `1 / a_v` with no zero guard.
+- A7 LOW: `d_recip_dx` computed `-a_dx / (a_v * a_v)` with no zero guard.
+
+Lane B - Compiler / backend / CLI (5 findings):
+
+- B1 MEDIUM: `_resolve_monomorphized_struct_type` in `lower_ast.py` had a
+  bare `except Exception: return ty` that swallowed
+  `NotImplementedError` from `struct_mono._mangle_ty`'s loud-fail
+  discipline. Future `TyNode` subclasses (refinement types, confidence
+  types, tiered memory) would silently return the unresolved generic
+  instead of forcing explicit dispatch.
+- B2 LOW: `helixc/examples/dashboard_server.py` wrote the generated
+  `_<kind>_compiled.hx` source with a plain `open(..., "w")`. A Ctrl-C
+  mid-write would feed the next backend invocation a truncated source.
+  Drift from the restart-46 atomic-write pattern in `examples/run.py`.
+- B3 LOW: `helixc/frontend/autodiff_cli.py` had zero `try/except`; every
+  file-IO and parse error leaked a raw Python traceback rather than a
+  one-line `error:`-prefixed diagnostic.
+- B4 LOW: Backends rejected `-l <libname>`, `--no-color`, `--color`,
+  `--hash`, `--hash-cons` with "unknown flag" while `helixc.check` accepts
+  them. Closes the residual flag-parity gap after restart 46's
+  `-O0..-O3 / --no-opt` pass.
+- B5 LOW (defensive-only): `_bad_invocation_cleanup_output` in
+  `x86_64.py` skips on flag-shaped `sys.argv[2]` (intentionally — see
+  Increment 65 process note). Documented; no fix.
+
+Lane C - Docs / status / release (5 findings):
+
+- C1 MEDIUM: `helix_website/HELIX_REFERENCE.md` lines 998-1015 listed
+  fictitious `helixc.check` flags (`--dump-ast-hashes`,
+  `--no-bootstrap-cache`, `--target=x86_64`, `--target=wasm32`,
+  `--version`). `--dump-ast-hashes` lives on `helixc.frontend.autodiff_cli`,
+  not `helixc.check`; the others don't exist anywhere.
+- C2 LOW: `helix_website/HELIX_REFERENCE.md` lines 1063-1066
+  (Open-Source Commitments section) still presented Apache 2.0 + CC-BY 4.0
+  + CC0 triple as file-resident. Restart 46 softened the pillar / pitch /
+  hard-constraint sections but missed this one.
+- C3 LOW: `helix_website/HELIX_REFERENCE.md` lines 869-905 bootstrap-chain
+  diagram showed `kovc-bootstrap --compiles--> helixc` as if the current
+  Python-hosted `helixc` were produced by the chain. It isn't.
+- C4 LOW: `QUICKSTART.md` lines 63-65 listed only `--strict` and
+  `--no-opt`, missing the `-O0..-O3`, `-Wad`, `-Wdeprecated`, `--stdlib`,
+  `--no-stdlib` flags that restart 46 added to the backend banner.
+- C5 LOW: `README.md` line 44 still said "30+ stdlib builtins" when the
+  current stdlib is ~455 functions across 16 files.
+
+Fixes in this increment:
+
+- Clamped `next_v` to `max(0, raw_next_v)` in `adam_f32_step` and `safe_v`
+  to `max(0, v)` in `__adam_step` before `__sqrt`. Matches the
+  layer-norm-eps clamp precedent.
+- Added a fail-closed branch in `layer_norm_f32`: when
+  `denom = __sqrt(var + safe_eps) <= 0`, write 0 to every output slot
+  (mathematically correct centered output for a constant input).
+- Added `if a_v <= 0 { 0 } else { ... }` to `d_sqrt_dx` and `d_log_dx`,
+  and `if a_v == 0 { 0 } else { ... }` to `d_recip_v` and `d_recip_dx`.
+- Narrowed `except Exception` in `lower_ast._resolve_monomorphized_struct_type`
+  to `(KeyError, AttributeError)` so `NotImplementedError` from the
+  loud-fail discipline propagates.
+- Rewrote `examples/dashboard_server.py:compile_helix`'s source write to
+  the canonical `tempfile.mkstemp` + `os.replace` + on-failure-cleanup
+  pattern.
+- Added `_read_source`/`_parse_or_exit` helpers in `autodiff_cli.py` plus
+  a `try/except` around `differentiate(...)`. All three failure surfaces
+  now emit `error: autodiff_cli: ...` diagnostics instead of tracebacks.
+- Added `-l`/`-l<name>`/`--no-color`/`--color`/`--hash`/`--hash-cons` to
+  the accepted-flag handling in both `helixc.backend.x86_64` and
+  `helixc.backend.ptx` (treated as no-ops for parity).
+- Rewrote `helix_website/HELIX_REFERENCE.md` Live-compiler-driver flag
+  list against `helixc/check.py`'s actual help text.
+- Softened the Open-Source Commitments license section in
+  `helix_website/HELIX_REFERENCE.md` to match the restart-46 pattern.
+- Updated the bootstrap-chain ASCII diagram so the final node says
+  "self-hosted Helix compiler (roadmap target)" and added a separate side
+  note explaining the current Python-hosted `helixc` is not chain-derived.
+- Expanded `QUICKSTART.md` CLI-flags section to include `-O0..-O3`,
+  `--stdlib`/`--no-stdlib`, and `-Wad`/`-Wdeprecated` policies.
+- Updated `README.md` "30+ stdlib builtins" claim to
+  "Stdlib in `helixc/stdlib/*.hx` (16 modules, ~455 functions ...)" with
+  the broader surface description.
+- Added regression coverage in `helixc/tests/test_codegen.py` (6 new
+  tests for A1-A7) and `helixc/tests/test_cli.py` (16 new parametrized
+  cases for B1-B4, including the post-restart-46 struct-syntax fix from
+  `<T>` to `[T]` in B1's regression).
+- Updated current-facing status surfaces from restart 46 / 2,437 tests to
+  restart 47 / 2,459 tests across README, QUICKSTART, both HANDOFF files,
+  helix_website/stats_and_facts.md, and helix_website/HELIX_REFERENCE.md.
+
+Verification:
+
+- `python -m py_compile helixc/check.py helixc/backend/x86_64.py helixc/backend/ptx.py helixc/examples/dashboard_server.py helixc/frontend/autodiff_cli.py helixc/ir/lower_ast.py helixc/tests/test_cli.py helixc/tests/test_codegen.py`
+  - Result: passed.
+- Per-file stdlib parser sweep across `helixc/stdlib/*.hx`
+  - Result: parsed 16 files.
+- `python -m pytest helixc/tests/test_codegen.py -q -k "stage35_..." (Lane A new regression canaries)`
+  - Result: 6 passed.
+- `python -m pytest helixc/tests/test_cli.py -q -k "stage35_..." (Lane B new regression canaries)`
+  - Result: 16 passed (including parametrized expansion).
+- Full Stage 35 CLI / PTX / broader codegen slices: all green (see Verification subsection of HANDOFF_FOR_CLAUDE for the restart-48 baseline numbers).
+- `python -m pytest helixc/tests --collect-only -q`
+  - Result: 2,459 tests collected (was 2,437 + 22 net).
+- `git diff --check`
+  - Result: passed.
+
+Clean-gate status:
+
+- Stage 35 clean gates remain `0/3`.
+- Restart 47 is a fix sweep, not a clean gate.
+- Next step is restart 48 as another fresh Stage 35 clean gate from the newest
+  pushed HEAD.
+
+Restart 47 process note: the 17 findings split into 5 MEDIUM (3 in Lane A
+math safety, 1 in Lane B compiler discipline, 1 in Lane C user-facing flag
+list) and 12 LOW. The MEDIUMs are all real correctness defenses, not polish.
+The Lane A audit explicitly identified a sweep boundary the restart-46 round
+hadn't fully crossed (fail-closed numerical helpers as a *family*, not just
+the `layer_norm` instance), and Lane B's loud-fail-preservation finding
+catches a class of future-AGI-feature regressions that would otherwise have
+been a silent miscompile. This is the bug-family protocol working as intended:
+each restart pulls more sibling issues into the same fix sweep.

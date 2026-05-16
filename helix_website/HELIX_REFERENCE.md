@@ -895,14 +895,19 @@ The trust root of Helix is **299 bytes of hand-encoded x86-64 machine code**: `h
                              ▼
                     ┌─────────────────┐
                     │ kovc-bootstrap  │  initial Helix compiler in C
-                    │     (~80 KB)    │
+                    │     (~80 KB)    │  (roadmap target)
                     └────────┬────────┘
-                             │ compiles
+                             │ compiles (target)
                              ▼
-                    ┌─────────────────┐
-                    │  helixc         │  current Python-hosted compiler
-                    └─────────────────┘  (Helix self-host remains target)
+                    ┌──────────────────────────────────┐
+                    │  self-hosted Helix compiler      │  roadmap target
+                    │  (`helixc/bootstrap/kovc.hx`)    │
+                    └──────────────────────────────────┘
 ```
+
+Today's production compiler is the Python-hosted `helixc` at `helixc/`,
+which is **not** produced by the chain above — it is a hand-written
+reference implementation while the chain is being completed.
 
 Current bootstrap root to audit: **299 bytes**. Later self-hosting steps remain roadmap targets until the Helix compiler can compile itself reproducibly.
 
@@ -955,7 +960,7 @@ Kovostov-Native/
 │   │   ├── nn.hx
 │   │   ├── option.hx
 │   │   └── autodiff.hx
-│   ├── tests/          # 2,437 tests collected in restart 46 fix verification
+│   ├── tests/          # 2,459 tests collected in restart 47 fix verification
 │   │   ├── test_codegen.py
 │   │   ├── test_parser.py
 │   │   ├── test_match.py
@@ -999,20 +1004,31 @@ findings.
 python -m helixc.check <source.hx> [options]
 
 Options:
-  -o <file>             Output binary path (default: a.out)
-  --emit-ir             Emit textual IR to stdout, don't generate binary
-  --emit-asm            Emit x86-64 assembly listing
-  --emit-ptx            Emit PTX text for @kernel fns
-  --dump-ast-hashes     Print structural hashes of AST nodes (for hash-cons)
-  --check-only          Parse + typecheck + totality, no codegen
-  --no-bootstrap-cache  Disable bootstrap binary caching (testing)
-  --target=x86_64       (default) emit x86-64 ELF
-  --target=wasm32       emit WebAssembly module (Phase-2)
-  -O0 / -O1 / -O2 / -O3 Optimization level
-  -l <libname>          Link external library (FFI)
-  --version
-  --doc                 Extract /// doc comments to markdown
+  -o <file>                  Output binary path
+  --emit-ast                 Print AST and exit (stdout-only mode)
+  --emit-ir                  Print Tensor IR and exit
+  --emit-asm                 Print x86-64 hex disassembly and exit
+  --emit-ptx                 Print PTX kernels and exit
+  --emit-proof-obligations   Print Stage 31 proof-obligation JSON and exit
+  --check-only               Parse + typecheck + totality, no codegen
+  --hash / --hash-cons       Structural hash / dedup helpers
+  --strict                   Fail if totality or effect warnings fire
+  --stdlib / --no-stdlib     Bundle (default) or skip helixc/stdlib/*.hx
+  -O0 / -O1 / -O2 / -O3      Optimization level (default -O1)
+  --no-opt                   Synonym for -O0
+  -l <libname>               Mark external library (FFI prerequisite)
+  -W<flag>=warn|error        Warning policy, e.g. -Wdeprecated=error
+  --no-color / --color       Disable / force ANSI escapes
+  --doc                      Extract /// doc comments to markdown
+  -h / --help                Show this help
 ```
+
+Source of truth: `python -m helixc.check --help`. Other backend-facing
+flags accepted by `python -m helixc.backend.x86_64` and
+`python -m helixc.backend.ptx` match the names above where applicable
+(restart 46 / 47 closed the parity gaps). `--dump-ast-hashes` lives on
+`python -m helixc.frontend.autodiff_cli`, not `helixc.check`. WebAssembly /
+wasm32 targets and `--version` are roadmap items, not shipped flags.
 
 The self-hosted `kovc`/Helix-native compiler remains a bootstrap target, not the
 current user-facing executable in this checkout.
@@ -1060,10 +1076,10 @@ error: undefined function `__exf`
 
 ### Licenses
 
-- **Source code**: Apache 2.0
-- **Documentation**: CC-BY 4.0
-- **Logos and brand**: CC-BY 4.0
-- **Model weights** (when shipped): CC0 (public domain)
+- **Source code**: Apache 2.0 (file-resident in `LICENSE`)
+- **Documentation**: CC-BY 4.0 (stated policy, not yet file-resident)
+- **Logos and brand**: CC-BY 4.0 (stated policy, not yet file-resident)
+- **Model weights** (when shipped): CC0 (public domain; stated policy)
 
 ### Training data policy
 
@@ -1529,7 +1545,7 @@ Or: a single character `λ` in monospace inside a hex bracket `[λ]`. Clean, sho
 
 - **299 bytes** — current hex0 binary size
 - **Python-hosted helixc** — current production compiler implementation
-- **2,437 live tests collected** — restart 46 fix verification; rerun scoped pytest collection before publishing
+- **2,459 live tests collected** — restart 47 fix verification; rerun scoped pytest collection before publishing
 - **Approach A roadmap (30 numbered stages)** — historical bootstrap-port sequencing; current live sequencing extends through Stage 65+ in `docs/HELIX_V1_FINAL_FEATURES.md`.
 - **23+ silent-corruption bugs (and counting; live audit ledger in `docs/stage35-progress-2026-05-15.md`)** — found and disclosed during development
 - **restart-gated audit campaign** — multi-agent code review cycles continue until three clean gates pass

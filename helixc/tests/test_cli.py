@@ -4517,6 +4517,124 @@ def test_stage35_examples_run_uses_atomic_write_pattern():
     )
 
 
+# ---- Restart 47 B1: lower_ast does not swallow loud-fail discipline ----
+
+def test_stage35_lower_ast_does_not_swallow_mangle_struct_loud_fail():
+    """NotImplementedError from struct_mono._mangle_ty's loud-fail discipline
+    must propagate through lower_ast._resolve_monomorphized_struct_type
+    instead of being silently returned as the unresolved TyGeneric.
+
+    Restart 47 B1: bare `except Exception: return ty` was narrowed to
+    `(KeyError, AttributeError)` so loud-fail signals (NotImplementedError)
+    propagate.
+    """
+    from unittest.mock import patch
+    from helixc.frontend.parser import parse as parse_src
+    from helixc.ir.lower_ast import lower
+    src = "struct Box[T] { v: T }\ntype B = Box<i32>;\nfn get(b: B) -> i32 { b.v }\n"
+    prog = parse_src(src, include_stdlib=False)
+    with patch("helixc.frontend.struct_mono.mangle_struct",
+               side_effect=NotImplementedError("unknown TyNode subclass")):
+        with pytest.raises(NotImplementedError):
+            lower(prog)
+
+
+# ---- Restart 47 B2: dashboard_server uses atomic-write pattern ----
+
+def test_stage35_dashboard_server_uses_atomic_write_for_generated_source():
+    """examples/dashboard_server.py's compile_helix() must use the canonical
+    atomic-write pattern (tempfile + os.replace) so a Ctrl-C mid-write does
+    not feed the backend a truncated source file."""
+    import inspect
+    import helixc.examples.dashboard_server as ds
+    src = inspect.getsource(ds.compile_helix)
+    assert "tempfile.mkstemp" in src and "os.replace" in src, (
+        "dashboard_server.compile_helix uses plain open(..., 'w') instead of "
+        "the canonical atomic-write pattern (tempfile + replace + cleanup)"
+    )
+
+
+# ---- Restart 47 B3: autodiff_cli surfaces clean diagnostics, not tracebacks ----
+
+def test_stage35_autodiff_cli_handles_missing_file_cleanly(tmp_path):
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         str(tmp_path / "does_not_exist.hx"), "anything"],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode != 0
+    assert "Traceback (most recent call last)" not in proc.stderr, (
+        f"autodiff_cli leaked Python traceback for missing file: {proc.stderr!r}"
+    )
+    assert "error: autodiff_cli:" in proc.stderr
+
+
+def test_stage35_autodiff_cli_handles_parse_error_cleanly(tmp_path):
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    bad = tmp_path / "bad.hx"
+    bad.write_text("fn (\n", encoding="utf-8")
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli", str(bad), "x"],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode != 0
+    assert "Traceback (most recent call last)" not in proc.stderr, (
+        f"autodiff_cli leaked Python traceback for parse error: {proc.stderr!r}"
+    )
+
+
+# ---- Restart 47 B4: backend flag parity (-l, --no-color, --hash, --hash-cons) ----
+
+@pytest.mark.parametrize("flag,extra_args", [
+    ("-l", ["m"]),
+    ("-lm", []),
+    ("--no-color", []),
+    ("--color", []),
+    ("--hash", []),
+    ("--hash-cons", []),
+])
+def test_stage35_x86_backend_accepts_parity_flags(tmp_path, flag, extra_args):
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    src = tmp_path / "parity.hx"
+    src.write_text("fn main() -> i32 { 0 }\n", encoding="utf-8")
+    out = tmp_path / "parity.bin"
+    argv = [
+        sys.executable, "-m", "helixc.backend.x86_64",
+        str(src), str(out), "--no-stdlib", flag, *extra_args,
+    ]
+    proc = subprocess.run(
+        argv, cwd=proj_root, capture_output=True, text=True, timeout=120,
+    )
+    assert "unknown flag" not in proc.stderr, (
+        f"x86 backend rejects {flag}: {proc.stderr!r}"
+    )
+
+
+@pytest.mark.parametrize("flag,extra_args", [
+    ("-l", ["m"]),
+    ("-lm", []),
+    ("--no-color", []),
+    ("--color", []),
+    ("--hash", []),
+    ("--hash-cons", []),
+])
+def test_stage35_ptx_backend_accepts_parity_flags(tmp_path, flag, extra_args):
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    src = tmp_path / "parity_ptx.hx"
+    src.write_text("@kernel fn k(p: ptr<f32>) -> () { return; }\n", encoding="utf-8")
+    argv = [
+        sys.executable, "-m", "helixc.backend.ptx",
+        str(src), flag, *extra_args,
+    ]
+    proc = subprocess.run(
+        argv, cwd=proj_root, capture_output=True, text=True, timeout=120,
+    )
+    assert "unknown flag" not in proc.stderr, (
+        f"ptx backend rejects {flag}: {proc.stderr!r}"
+    )
+
+
 if __name__ == "__main__":
     import pytest
     raise SystemExit(pytest.main([__file__, "-v"]))

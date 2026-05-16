@@ -20066,6 +20066,123 @@ def test_stage35_layer_norm_f32_clamps_negative_eps():
     assert code == 42, f"expected 42, got {code}"
 
 
+def test_stage35_adam_f32_step_clamps_negative_v():
+    # Restart 47 A1: adam_f32_step previously computed
+    # raw_denom = __sqrt(next_v) + eps with no clamp on next_v. A
+    # hostile/uninitialized v_i could be negative; __sqrt(negative) = 0
+    # (transcendentals fallback); then raw_denom = eps (~1e-8) and the
+    # weight update m_i / 1e-8 explodes. The fix clamps next_v to >= 0.
+    src = """
+    fn main() -> i32 {
+        let w = t1d_new(1); tf1d_set(w, 0, 100.0_f32);
+        let g = t1d_new(1); tf1d_set(g, 0, 0.0_f32);
+        let m = t1d_new(1); tf1d_set(m, 0, 1.0_f32);
+        let v = t1d_new(1); tf1d_set(v, 0, 0.0_f32 - 100.0_f32);
+        adam_f32_step(w, g, m, v, 0.01_f32, 1.0_f32, 1.0_f32, 0.00000001_f32, 1);
+        let result = tf1d_get(w, 0);
+        // After fix: next_v clamped to 0, raw_denom = sqrt(0) + 1e-8 = 1e-8
+        // which still triggers a large update via the raw_denom > 0 branch.
+        // But because we clamped, the SIGNED behavior matches the v=0 case;
+        // result will be ~ 100 - 1.0*0.01/1e-8 = -1_000_000. The CLAMP
+        // changes behavior elsewhere when raw_denom <= 0 -> w_i unchanged.
+        // To exercise the fail-closed branch: use eps == 0 too.
+        let w2 = t1d_new(1); tf1d_set(w2, 0, 50.0_f32);
+        let g2 = t1d_new(1); tf1d_set(g2, 0, 0.0_f32);
+        let m2 = t1d_new(1); tf1d_set(m2, 0, 1.0_f32);
+        let v2 = t1d_new(1); tf1d_set(v2, 0, 0.0_f32 - 100.0_f32);
+        adam_f32_step(w2, g2, m2, v2, 0.01_f32, 1.0_f32, 1.0_f32, 0.0_f32, 1);
+        let r2 = tf1d_get(w2, 0);
+        // After fix: next_v clamped to 0, raw_denom = sqrt(0) + 0 = 0,
+        // raw_denom <= 0 branch returns w2 unchanged -> r2 == 50.
+        // Before fix: __sqrt(negative)=0, raw_denom = 0+0=0 -> branch also
+        // returned w unchanged but next_v slot stored a negative value
+        // which corrupts later steps. Test the persistence of next_v.
+        let stored_v = tf1d_get(v2, 0);
+        // After fix: stored_v == 0 (clamped). Before fix: stored_v < 0.
+        if (r2 as i32) == 50 { if stored_v >= 0.0_f32 { 42 } else { 7 } } else { 7 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stage35_adam_step_scalar_handles_negative_v():
+    # Restart 47 A2: scalar __adam_step (transcendentals.hx) — same family
+    # as A1. Assertion: bounded behavior when v negative + small eps.
+    src = """
+    fn main() -> i32 {
+        // Before fix: sqrt(neg)=0, raw_denom = 0 + 0.001 = 0.001,
+        // step = 1.0 / 0.001 = 1000. After fix: same (clamp gives same
+        // numeric result). The fix is for consistency / future hardening.
+        let step = __adam_step(1.0_f32, 0.0_f32 - 1000.0_f32, 0.001_f32);
+        if (step as i32) >= 999 { if (step as i32) <= 1001 { 42 } else { 7 } } else { 7 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stage35_layer_norm_f32_constant_input_zero_eps_is_finite():
+    # Restart 47 A3: when all x[i] == mean (constant input) and eps == 0,
+    # __sqrt(0) = 0, 1/0 = +Inf, (x - mean) * Inf = 0 * Inf = NaN. The
+    # fail-closed fix writes 0 to every output slot.
+    src = """
+    fn main() -> i32 {
+        let x = t1d_new(4);
+        tf1d_set(x, 0, 1.0_f32); tf1d_set(x, 1, 1.0_f32);
+        tf1d_set(x, 2, 1.0_f32); tf1d_set(x, 3, 1.0_f32);
+        let y = t1d_new(4);
+        layer_norm_f32(x, y, 4, 0.0_f32);
+        let y0 = tf1d_get(y, 0);
+        // After fix: y0 == 0.0 (deterministic). Before fix: y0 is NaN.
+        if y0 == y0 { if (y0 as i32) == 0 { 42 } else { 7 } } else { 7 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stage35_d_sqrt_dx_fail_closed_at_nonpositive():
+    # Restart 47 A4: d_sqrt_dx previously divided by 2*sqrt(0) = 0,
+    # producing +Inf. The fix returns 0 when a_v <= 0.
+    src = """
+    fn main() -> i32 {
+        let dx0 = d_sqrt_dx(0.0_f64, 1.0_f64);
+        let dx_neg = d_sqrt_dx(0.0_f64 - 1.0_f64, 1.0_f64);
+        if (dx0 as i32) == 0 { if (dx_neg as i32) == 0 { 42 } else { 7 } } else { 7 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stage35_d_log_dx_fail_closed_at_nonpositive():
+    # Restart 47 A5: d_log_dx previously did a_dx / a_v with no zero guard.
+    src = """
+    fn main() -> i32 {
+        let dx0 = d_log_dx(0.0_f64, 1.0_f64);
+        let dx_neg = d_log_dx(0.0_f64 - 1.0_f64, 1.0_f64);
+        if (dx0 as i32) == 0 { if (dx_neg as i32) == 0 { 42 } else { 7 } } else { 7 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stage35_d_recip_fail_closed_at_zero():
+    # Restart 47 A6/A7: d_recip_v and d_recip_dx previously divided by a_v
+    # / a_v*a_v with no zero guard.
+    src = """
+    fn main() -> i32 {
+        let v = d_recip_v(0.0_f64, 1.0_f64);
+        let dx = d_recip_dx(0.0_f64, 1.0_f64);
+        if (v as i32) == 0 { if (dx as i32) == 0 { 42 } else { 7 } } else { 7 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
 def main():
     # Recognise both the legacy `_SkipTest` exception and pytest's
     # `Skipped` outcome class so tests can use either to signal a skip

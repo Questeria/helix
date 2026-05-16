@@ -31,10 +31,35 @@ from .autodiff import differentiate, fmt
 from .ast_hash import structural_hash, short_hash
 
 
+# Restart 47 B3: structured error handling matching helixc.check /
+# helixc.backend.x86_64 / helixc.backend.ptx — surface OSError, parse errors,
+# and internal AD errors as one-line diagnostics rather than raw Python
+# tracebacks.
+def _read_source(path: str) -> str:
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return f.read()
+    except FileNotFoundError:
+        print(f"error: autodiff_cli: cannot read {path}: not found",
+              file=sys.stderr)
+        sys.exit(2)
+    except OSError as e:
+        print(f"error: autodiff_cli: cannot read {path}: {e}",
+              file=sys.stderr)
+        sys.exit(2)
+
+
+def _parse_or_exit(src: str, path: str):
+    try:
+        return parse(src)
+    except Exception as e:
+        print(f"error: autodiff_cli: parse: {path}: {e}", file=sys.stderr)
+        sys.exit(2)
+
+
 def _dump_ast_hashes(path: str) -> int:
-    with open(path, "r", encoding="utf-8") as f:
-        src = f.read()
-    prog = parse(src)
+    src = _read_source(path)
+    prog = _parse_or_exit(src, path)
     for it in prog.items:
         if isinstance(it, A.FnDecl):
             print(f"{it.name} : {short_hash(structural_hash(it))}")
@@ -63,9 +88,8 @@ def main():
     var = args[2] if len(args) > 2 else None
     emit_function = "--as-function" in flags
 
-    with open(path, "r", encoding="utf-8") as f:
-        src = f.read()
-    prog = parse(src)
+    src = _read_source(path)
+    prog = _parse_or_exit(src, path)
     target = None
     for it in prog.items:
         if isinstance(it, A.FnDecl) and it.name == fn_name:
@@ -80,7 +104,11 @@ def main():
         sys.exit(1)
 
     differentiate_var = var or target.params[0].name
-    deriv = differentiate(target.body, differentiate_var)
+    try:
+        deriv = differentiate(target.body, differentiate_var)
+    except Exception as e:
+        print(f"error: autodiff_cli: differentiate: {e}", file=sys.stderr)
+        sys.exit(2)
 
     if emit_function:
         # Emit a complete Helix function definition: fn <name>__grad(...) -> ... {
