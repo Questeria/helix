@@ -2755,3 +2755,73 @@ Clean-gate status:
 - Restart 41 is a fix sweep, not a clean gate.
 - Next step is restart 42 as another fresh Stage 35 clean gate from the newest
   pushed HEAD.
+
+## Increment 61 - Forty-Second Clean-Gate Restart Fix Sweep
+
+Restart 42 began from pushed commit `e512418` after restart 41. Baseline support
+checks:
+
+- `git status --short --branch`
+  - Result: clean at `e512418`.
+- `python -m py_compile helixc\check.py helixc\backend\x86_64.py helixc\tests\test_cli.py helixc\tests\test_codegen.py helixc\tests\test_ptx.py`
+  - Result: passed.
+- Per-file stdlib parser sweep across `helixc/stdlib/*.hx`
+  - Result: parsed 16 files.
+- `python -m pytest helixc\tests\test_cli.py -q -k "stage35"`
+  - Result: 61 passed, 145 deselected.
+- `python -m pytest helixc\tests\test_ptx.py -q -k "stage35"`
+  - Result: 26 passed, 52 deselected.
+- `python -m pytest helixc\tests\test_codegen.py -q -k "stage35 or agi or hashmap or tensor"`
+  - Result: 171 passed, 746 deselected.
+
+Restart 42 audit findings:
+
+- Forged in-bounds binding handles could still pass `bindings_storage_ok`
+  because the check proved only cell coverage, not object identity.
+- `bindings_rewind` could mutate a forged object because it skipped the
+  storage check.
+- Forged in-bounds tensor slices could impersonate tree nodes because
+  `tree_node_ok` proved only four readable cells.
+- Raw tree accessors still returned arena values for invalid offsets, which
+  failed open to zero through `__arena_get`.
+- CLI/backend lane and docs/status lane were clean.
+
+Fixes in this increment:
+
+- Tree nodes now carry a magic header and footer, and `tree_node_ok` validates
+  both before tree equality, hashing, variable checks, and unification can read
+  payload cells.
+- Raw tree accessors now return a sentinel invalid value for invalid handles.
+- Binding tables now carry a magic header and footer, and
+  `bindings_storage_ok` validates both before reads or writes.
+- `bindings_rewind` now rejects forged binding handles before mutation.
+- Added regressions for forged in-bounds tree handles, raw invalid tree
+  accessors, forged in-bounds binding tables, and forged binding rewinds.
+
+Verification:
+
+- `python -m py_compile helixc\tests\test_codegen.py`
+  - Result: passed.
+- Per-file stdlib parser sweep across `helixc/stdlib/*.hx`
+  - Result: parsed 16 files.
+- `python -m pytest helixc\tests\test_codegen.py -q -k "tree_helpers_reject_forged or bindings_reject_forged or tree_and_unify_reject_forged or bindings_get_rejects_forged"`
+  - Result: 4 passed, 915 deselected.
+- `python -m pytest helixc\tests\test_codegen.py -q -k "stage35 or agi or hashmap or tensor"`
+  - Result: 173 passed, 746 deselected.
+- `python -m pytest helixc\tests\test_cli.py -q -k "stage35"`
+  - Result: 61 passed, 145 deselected.
+- `python -m pytest helixc\tests\test_ptx.py -q -k "stage35"`
+  - Result: 26 passed, 52 deselected.
+- `python -m pytest helixc\tests\test_cli.py -q`
+  - Result: 206 passed.
+- `python -m pytest helixc\tests\test_ptx.py -q`
+  - Result: 78 passed.
+- `python -m pytest helixc\tests --collect-only -q`
+  - Result: 2,404 tests collected.
+
+Clean-gate status:
+
+- Stage 35 clean gates remain `0/3`.
+- Restart 42 is a fix sweep, not a clean gate.
+- Next step is restart 43 as another fresh Stage 35 clean gate from the newest
+  pushed HEAD.

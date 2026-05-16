@@ -8528,6 +8528,38 @@ def test_stage35_tree_and_unify_reject_forged_offsets():
     assert code == 42, f"expected 42, got {code}"
 
 
+def test_stage35_tree_helpers_reject_forged_in_bounds_handles():
+    src = """
+    fn main() -> i32 {
+        let a = t1d_new(4);
+        ti1d_set(a, 0, 1);
+        ti1d_set(a, 1, 2);
+        ti1d_set(a, 2, 3);
+        ti1d_set(a, 3, 4);
+        let b = t1d_new(4);
+        ti1d_set(b, 0, 1);
+        ti1d_set(b, 1, 2);
+        ti1d_set(b, 2, 3);
+        ti1d_set(b, 3, 4);
+
+        let fake_var = t1d_new(4);
+        ti1d_set(fake_var, 0, unify_var_tag());
+        let term = tree_node_new(1, 42, 0, 0);
+        let bindings = bindings_new();
+
+        let low = (0 - 2147483647) - 1;
+        if tree_eq_shallow(a, b) == 0 {
+        if tree_node_is_var(fake_var) == 0 {
+        if unify_shallow(fake_var, term, bindings) == 0 {
+        if tree_node_tag(2147483000) == low {
+        if tree_node_p1(2147483000) == low { 42 } else { 7 }
+        } else { 7 }} else { 7 }} else { 7 }} else { 7 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
 def test_agi_tree_hash_stable():
     """Same node values yield same hash."""
     src = """
@@ -9020,6 +9052,25 @@ def test_stage35_bindings_get_rejects_forged_count_over_capacity():
         ti1d_set(fake_b, 65, 9);
         ti1d_set(fake_b, 66, 42);
         if bindings_get(fake_b, 9) == (0 - 1) { 42 } else { 7 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stage35_bindings_reject_forged_in_bounds_handles():
+    src = """
+    fn main() -> i32 {
+        let fake = t1d_new(65);
+        ti1d_set(fake, 0, 1);
+        ti1d_set(fake, 1, 9);
+        ti1d_set(fake, 2, 42);
+        let got = bindings_get(fake, 9);
+        let rewind = bindings_rewind(fake, 0);
+        if got == (0 - 1) {
+        if rewind == (0 - 1) {
+        if ti1d_get(fake, 0) == 1 { 42 } else { 7 }
+        } else { 7 }} else { 7 }
     }
     """
     code = compile_and_run(src)

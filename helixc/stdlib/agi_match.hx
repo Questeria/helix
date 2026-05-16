@@ -21,25 +21,41 @@
 //
 // License: Apache 2.0
 
+@pure fn tree_node_magic() -> i32 { 7007001 }
+@pure fn tree_node_footer() -> i32 { 0 - tree_node_magic() - 4 }
+
 fn tree_node_new(tag: i32, p1: i32, p2: i32, p3: i32) -> i32 {
+    __arena_push(tree_node_magic());
     let off = __arena_len();
     __arena_push(tag);
     __arena_push(p1);
     __arena_push(p2);
     __arena_push(p3);
+    __arena_push(tree_node_footer());
     off
 }
 
-@pure fn tree_node_tag(off: i32) -> i32 { __arena_get(off) }
-@pure fn tree_node_p1(off: i32) -> i32 { __arena_get(off + 1) }
-@pure fn tree_node_p2(off: i32) -> i32 { __arena_get(off + 2) }
-@pure fn tree_node_p3(off: i32) -> i32 { __arena_get(off + 3) }
-
 @pure
 fn tree_node_ok(off: i32) -> i32 {
-    if off < 0 { 0 }
-    else { if off > 2147483647 - 3 { 0 }
-    else { if off + 3 >= __arena_len() { 0 } else { 1 } } }
+    if off <= 0 { 0 }
+    else { if off > 2147483647 - 4 { 0 }
+    else { if off + 4 >= __arena_len() { 0 }
+    else { if __arena_get(off - 1) != tree_node_magic() { 0 }
+    else { if __arena_get(off + 4) != tree_node_footer() { 0 } else { 1 } } } } }
+}
+
+@pure fn tree_invalid_value() -> i32 { (0 - 2147483647) - 1 }
+@pure fn tree_node_tag(off: i32) -> i32 {
+    if tree_node_ok(off) == 0 { tree_invalid_value() } else { __arena_get(off) }
+}
+@pure fn tree_node_p1(off: i32) -> i32 {
+    if tree_node_ok(off) == 0 { tree_invalid_value() } else { __arena_get(off + 1) }
+}
+@pure fn tree_node_p2(off: i32) -> i32 {
+    if tree_node_ok(off) == 0 { tree_invalid_value() } else { __arena_get(off + 2) }
+}
+@pure fn tree_node_p3(off: i32) -> i32 {
+    if tree_node_ok(off) == 0 { tree_invalid_value() } else { __arena_get(off + 3) }
 }
 
 // Structural equality: compare tag + p1 + p2 + p3 at the top level
@@ -210,7 +226,11 @@ fn tree_node_is_var(off: i32) -> i32 {
     }
 }
 
+@pure fn bindings_magic() -> i32 { 7008001 }
+@pure fn bindings_footer() -> i32 { 0 - bindings_magic() - 65 }
+
 fn bindings_new() -> i32 {
+    __arena_push(bindings_magic());
     let start = __arena_len();
     __arena_push(0);   // count
     let mut i: i32 = 0;
@@ -219,14 +239,17 @@ fn bindings_new() -> i32 {
         __arena_push(0);       // bound arena offset
         i = i + 1;
     }
+    __arena_push(bindings_footer());
     start
 }
 
 @pure
 fn bindings_storage_ok(b: i32) -> i32 {
-    if b < 0 { 0 }
-    else { if b > 2147483647 - 64 { 0 }
-    else { if b + 64 >= __arena_len() { 0 } else { 1 } } }
+    if b <= 0 { 0 }
+    else { if b > 2147483647 - 65 { 0 }
+    else { if b + 65 >= __arena_len() { 0 }
+    else { if __arena_get(b - 1) != bindings_magic() { 0 }
+    else { if __arena_get(b + 65) != bindings_footer() { 0 } else { 1 } } } } }
 }
 
 @pure
@@ -266,12 +289,13 @@ fn bindings_set(b: i32, var_id: i32, term: i32) -> i32 {
 }
 
 fn bindings_rewind(b: i32, count: i32) -> i32 {
-    if count < 0 { 0 - 1 }
+    if bindings_storage_ok(b) == 0 { 0 - 1 }
+    else { if count < 0 { 0 - 1 }
     else { if count > 32 { 0 - 1 }
     else {
         __arena_set(b, count);
         0
-    } }
+    } } }
 }
 
 // Single-level unify: if pat is a var, bind it; else compare tags + payload.
