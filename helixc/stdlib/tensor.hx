@@ -555,6 +555,9 @@ fn tf1d_sum(start: i32, n: i32) -> f32 {
     }}
 }
 
+// Restart 58 A1: NaN-skip on per-element product. Single NaN slot in
+// either input no longer poisons the entire dot product. Same family
+// as restart 57 tf1d_sum.
 @pure
 fn tf1d_dot(a_start: i32, b_start: i32, n: i32) -> f32 {
     if n <= 0 { 0.0_f32 }
@@ -566,7 +569,8 @@ fn tf1d_dot(a_start: i32, b_start: i32, n: i32) -> f32 {
     while i < n {
         let av = __f32_from_bits(__arena_get(a_start + i));
         let bv = __f32_from_bits(__arena_get(b_start + i));
-        total = total + av * bv;
+        let prod = av * bv;
+        if prod == prod { total = total + prod; };
         i = i + 1;
     }
     total
@@ -1162,6 +1166,7 @@ fn tf1d_l2_norm_sq(start: i32, n: i32) -> f32 {
 // tf1d_l1_norm(x, n): L1 norm = sum of |x[i]|. f32 mirror of ti1d_l1_norm.
 // Reads each f32, computes absolute value via SSE fabs (sign-bit clear),
 // accumulates. Loop is the bf32 form so float promotion is implicit.
+// Restart 58 A2: NaN-skip. Same family as tf1d_sum / tf1d_dot.
 fn tf1d_l1_norm(start: i32, n: i32) -> f32 {
     if n <= 0 { 0.0_f32 }
     else { if t1d_slice_ok(start, n) == 0 { 0.0_f32 }
@@ -1170,8 +1175,10 @@ fn tf1d_l1_norm(start: i32, n: i32) -> f32 {
     let mut total: f32 = 0.0_f32;
     while i < n {
         let v = __f32_from_bits(__arena_get(start + i));
+        if v == v {
         let av = if v < 0.0_f32 { 0.0_f32 - v } else { v };
         total = total + av;
+        };
         i = i + 1;
     }
     total
@@ -1329,6 +1336,10 @@ fn tf2d_scale_inplace(start: i32, rows: i32, cols: i32, scalar: f32) -> i32 {
 
 // tf1d_max_abs(start, n): @pure. Max of |x[i]| (Linf norm). Returns
 // 0.0 for empty input.
+// Restart 58 A3: NaN-skip. NaN compares false in both directions so
+// would silently skip via `av > best` anyway, but the abs step itself
+// could produce a spurious NaN; explicit guard documents intent and
+// matches the tf1d_sum / tf1d_dot / tf1d_l1_norm pattern.
 @pure
 fn tf1d_max_abs(start: i32, n: i32) -> f32 {
     if n <= 0 { 0.0_f32 }
@@ -1338,8 +1349,10 @@ fn tf1d_max_abs(start: i32, n: i32) -> f32 {
     let mut best: f32 = 0.0_f32;
     while i < n {
         let v = __f32_from_bits(__arena_get(start + i));
+        if v == v {
         let av = if v < 0.0_f32 { 0.0_f32 - v } else { v };
         if av > best { best = av; };
+        };
         i = i + 1;
     }
     best
