@@ -4784,3 +4784,90 @@ exactly: single dispatch, full bookkeeping in one commit, no
 abbreviation. The pattern is now validated across two consecutive
 restarts and should remain the default through Stage 35 closure.
 
+
+## Increment 81 — Sixty-Fourth Clean-Gate Restart CLEAN (2/3) (2026-05-16)
+
+Restart 64 ran as a **combined audit-AND-fix** agent (single dispatch,
+continuing the restart 62/63 anti-abbreviation pattern). Fresh 3-lane
+audit on top of `d6851f0` (the restart 63 CLEAN gate HEAD).
+
+**Result: zero findings across all three lanes — SECOND CLEAN GATE.**
+Clean-gate counter advances `1/3` → `2/3`. One more consecutive clean
+gate closes Stage 35.
+
+### Lane audit at HEAD d6851f0
+
+- **Lane A: CLEAN (0 findings).** Frontier remains exhausted. No
+  helixc/ changes since restart 62 commit `e441173` — only the
+  restart 63 CLEAN ledger/handoff commit (`d6851f0`) sits on top, and
+  that commit touched only `docs/stage35-progress-2026-05-15.md` and
+  `HANDOFF_FOR_CLAUDE.md`. Spot-check `git diff e441173..HEAD --
+  helixc/stdlib/` returns empty. All restart-62-era guarantees
+  (`accuracy_count_from_logits_f32` NaN guard, sgd/adam/momentum
+  NaN-fail-closed, transcendentals NaN pass-through convention,
+  i32/INT_MIN saturation sibling closure) carry forward unchanged.
+
+- **Lane B: CLEAN (0 findings).** Seventh consecutive Lane B clean
+  window since restart 58. No Python source changes since the restart
+  61 commit (`c697f3d`); restart 62 touched only `nn.hx` + test files;
+  restart 63 was ledger/handoff only. No new bare `except Exception`
+  introduced anywhere in `helixc/` since restart 62.
+
+- **Lane C: CLEAN (0 findings).** All eight current-facing surfaces
+  still consistent at "restart 62 / 2,556+ tests" — restart 63 CLEAN
+  deliberately deferred the surface refresh per the convention
+  (clean-gate restarts only update the ledger + handoff, not the
+  count-bearing surfaces, since no test count changed). Surface
+  refresh remains deferred until a non-clean restart adds canaries.
+
+### Verification
+
+- `python -m pytest helixc/tests --collect-only -q`
+  - Result: **2,556 tests collected** (matches surface claim exactly).
+- `git diff e441173..HEAD -- helixc/` returns empty.
+- `git diff e441173..HEAD -- helixc/stdlib/` returns empty.
+- Git working tree clean at HEAD `d6851f0`.
+
+### Clean-gate status after restart 64
+
+- Stage 35 clean gates advance **1/3 → 2/3**.
+- One more consecutive clean gate from this same HEAD (or any HEAD
+  that does not regress the invariants) closes Stage 35.
+- Restart 65 starts from this HEAD as the **THIRD AND FINAL**
+  clean-gate attempt. If clean, Stage 35 CLOSES.
+
+### Restart 65 starting protocol (FINAL CLEAN-GATE)
+
+When the next scheduled-task fire runs:
+
+1. Pull the latest `main`; verify HEAD includes Increment 81.
+2. Dispatch a combined audit-AND-fix agent (single dispatch, no
+   separate read-only / fix-apply dispatches — restart 62/63/64
+   anti-abbreviation pattern).
+3. If all three lanes return CLEAN: advance clean gates `2/3` → `3/3`,
+   commit a "Stage 35 restart 65 CLEAN — Stage 35 CLOSED (3/3)"
+   entry to the ledger, push. Stage 35 closes; campaign archives.
+4. If any lane finds an issue: apply the full fix sweep + canaries +
+   lane docs + ledger increment + surface refresh **in the same
+   commit**. Restart the clean-gate counter from `0/3`.
+
+### Frontier exhaustion confirmation (cycle 2)
+
+Restart 64 is the second consecutive restart returning zero findings
+across all three lanes. The audit frontier closed by restarts 46-62
+(i32-overflow sibling sweeps, NaN-skip sibling sweeps, INT32_MIN
+saturation siblings, autodiff singularity fail-closed, optimizer
+NaN-fail-closed, transcendentals range reduction, bare `except
+Exception` narrowing, surface drift) remains substantively closed.
+The remaining risk in restart 65 is regression introduced by
+unrelated work, not residual audit debt — and no unrelated work has
+landed since `e441173`.
+
+### Process-discipline observation
+
+Restart 64 followed the combined audit-and-fix pattern exactly:
+single dispatch, full bookkeeping in one commit, no abbreviation.
+Pattern now validated across **three consecutive restarts**
+(62 + 63 + 64) and should remain the default through Stage 35
+closure at restart 65.
+

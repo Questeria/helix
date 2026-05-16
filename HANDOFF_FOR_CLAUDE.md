@@ -4,17 +4,18 @@
 **Repo**: `C:\Projects\Kovostov-Native`  
 **Remote**: `https://github.com/Questeria/helix.git`  
 **Branch**: `main`  
-**Handoff written after**: Stage 35 restart 63 CLEAN (advance counter to 1/3)
-(Increment 80; lands alongside this handoff)
+**Handoff written after**: Stage 35 restart 64 CLEAN (advance counter to 2/3)
+(Increment 81; lands alongside this handoff)
 
 This handoff is for Claude to continue the Helix Stage 35 audit campaign.
 Treat live git state as truth if it differs from this file.
 
 ## Current State
 
-Stage 35 audit cleanup. **Clean gates 1/3** (advanced by restart 63 — the
-first all-clean fresh audit of the campaign). Two more consecutive clean
-gates from `e441173` (or any non-regressing HEAD) close Stage 35.
+Stage 35 audit cleanup. **Clean gates 2/3** (advanced by restart 64 — the
+second consecutive all-clean fresh audit of the campaign). One more
+consecutive clean gate from `e441173` (or any non-regressing HEAD)
+closes Stage 35.
 
 The most recent fix sweeps are restart 58 catch-up sweep (Increment 77
 — closed restart 58's bookkeeping debt + landed 7 Lane A + 7 Lane C
@@ -26,23 +27,51 @@ restart 60 closing 6 sibling-class sites across 5 families with 8
 canaries), restart 62 combined audit-and-fix (Increments 78 + 79
 — retroactive ledger + lane docs for restart 61 PLUS 2 Lane A
 optimizer NaN-fail-closed fixes from a fresh audit on top of c697f3d),
-and restart 63 CLEAN (Increment 80 — the first all-clean fresh audit
-of the campaign on top of e441173; clean-gate counter `0/3` → `1/3`).
+restart 63 CLEAN (Increment 80 — the first all-clean fresh audit
+of the campaign on top of e441173; clean-gate counter `0/3` → `1/3`),
+and restart 64 CLEAN (Increment 81 — the second consecutive all-clean
+fresh audit on top of d6851f0; clean-gate counter `1/3` → `2/3`).
 
 - Commit: pinned by the latest `git log -1 --oneline`
 - Status at handoff creation: clean working tree, `main` aligned with
   `origin/main`
 - Progress ledger: `docs/stage35-progress-2026-05-15.md` (see Increment
-  80 for the restart 63 CLEAN gate; 79 for the restart 62 combined
-  audit-and-fix; 78 for restart 61 retroactive; 77 for restart 58
-  catch-up sweep; 76 for restart 57 catch-up sweep; 75 for restart 56
-  retroactive; 74 for restart 55 retroactive; 73 for restart 54; 72
-  for restart 53; 71 for restart 52; 70 for restart 51; 69 for restart
-  50; 68 for restart 49)
+  81 for the restart 64 CLEAN gate; 80 for the restart 63 CLEAN gate;
+  79 for the restart 62 combined audit-and-fix; 78 for restart 61
+  retroactive; 77 for restart 58 catch-up sweep; 76 for restart 57
+  catch-up sweep; 75 for restart 56 retroactive; 74 for restart 55
+  retroactive; 73 for restart 54; 72 for restart 53; 71 for restart 52;
+  70 for restart 51; 69 for restart 50; 68 for restart 49)
 - Current-facing status files still say "restart 62 combined audit-and-fix
-  / 2,556+ tests" since restart 63 was CLEAN (no new canaries, no test
-  count change). Surface refresh deferred until a non-clean restart;
-  Increment 80 in the ledger is the live restart 63 record.
+  / 2,556+ tests" since restarts 63 + 64 were CLEAN (no new canaries,
+  no test count change). Surface refresh deferred until a non-clean
+  restart; Increments 80 + 81 in the ledger are the live restart 63 +
+  64 records.
+
+## What Restart 64 Returned (CLEAN — gate 2/3)
+
+Restart 64 ran as a **combined audit-AND-fix** agent (single dispatch,
+continuing the restart 62/63 anti-abbreviation pattern) on top of
+`d6851f0`. **Result: zero findings across all three lanes — SECOND
+CLEAN GATE of the campaign.** Increment 81 in the ledger.
+
+- Lane A: CLEAN. Frontier remains exhausted. `git diff e441173..HEAD
+  -- helixc/` is empty — restart 63 touched only ledger + handoff,
+  not source. All restart-62-era guarantees carry forward unchanged.
+- Lane B: CLEAN (seventh consecutive Lane B clean window). No Python
+  source changes since restart 61 commit `c697f3d`.
+- Lane C: CLEAN. All eight current-facing surfaces consistent at
+  "restart 62 / 2,556+ tests" (deliberately deferred surface refresh
+  during clean-gate runs per convention).
+
+Verification: `python -m pytest helixc/tests --collect-only -q` →
+**2,556 tests** (exact match with surface claim).
+
+Clean-gate counter advances `1/3` → `2/3`. No source / test edits, no
+canary additions. Increment 81 is the only ledger change.
+
+Next: restart 65 starts from this HEAD as the **THIRD AND FINAL**
+clean-gate attempt. Three consecutive clean gates close Stage 35.
 
 ## What Restart 63 Returned (CLEAN — gate 1/3)
 
@@ -65,9 +94,6 @@ Verification: `python -m pytest helixc/tests --collect-only -q` →
 
 Clean-gate counter advances `0/3` → `1/3`. No source / test edits, no
 canary additions. Increment 80 is the only ledger change.
-
-Next: restart 64 starts from this HEAD as the second clean-gate
-attempt. Three consecutive clean gates close Stage 35.
 
 ## What Restart 62 Fixed (Combined Audit-and-Fix)
 
