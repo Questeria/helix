@@ -11224,6 +11224,27 @@ def test_stage35_revad_backward_rejects_tape_value_mutated_after_adjoints():
     assert code == 42, f"expected 42, got {code}"
 
 
+def test_stage35_revad_backward_rejects_digest_collision_payload_mutation():
+    src = """
+    fn main() -> i32 {
+        let tape = rev_tape_new(4);
+        let x = rev_leaf(tape, 5);
+        let y = rev_leaf(tape, 7);
+        let f = rev_mul(tape, x, y);
+        let adj = rev_alloc_adjoints(tape);
+        rev_seed(adj, f, 1);
+        __arena_set(tape + 3 + x * 4 + 3, 6);
+        __arena_set(tape + 3 + y * 4 + 3, 7 - 923521);
+        let status = rev_backward(tape, adj);
+        if status == (0 - 1) {
+            if rev_grad(adj, x) == 0 { 42 } else { 7 }
+        } else { 7 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
 def test_revad_alloc_adjoints_rejects_interleaved_arena_allocation():
     src = """
     fn main() -> i32 {
@@ -11738,6 +11759,62 @@ def test_stage35_2d_accessors_reject_overflow_offsets():
             if (tf2d_get(mf, 65536, 65536, 0) as i32) == 0 { 42 } else { 7 }
             } else { 7 }
         } else { 7 }} else { 7 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stage35_tf1d_reducers_reject_short_input():
+    src = """
+    fn main() -> i32 {
+        let x = t1d_new(1);
+        tf1d_set(x, 0, 5.0_f32);
+        let guard = t1d_new(1);
+        tf1d_set(guard, 0, 99.0_f32);
+        let max_bad = tf1d_max(x, 2);
+        let min_bad = tf1d_min(x, 2);
+        let argmax_bad = tf1d_argmax(x, 2);
+        let argmin_bad = tf1d_argmin(x, 2);
+        if (max_bad as i32) == 0 {
+        if (min_bad as i32) == 0 {
+        if argmax_bad == (0 - 1) {
+        if argmin_bad == (0 - 1) {
+        if (tf1d_get(guard, 0) as i32) == 99 { 42 } else { 7 }
+        } else { 7 }} else { 7 }} else { 7 }} else { 7 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stage35_nn_argmax_rejects_short_input():
+    src = """
+    fn main() -> i32 {
+        let x = t1d_new(1);
+        ti1d_set(x, 0, 5);
+        let guard = t1d_new(1);
+        ti1d_set(guard, 0, 42);
+        let bad = argmax(x, 2);
+        if bad == (0 - 1) {
+        if ti1d_get(guard, 0) == 42 { 42 } else { 7 }
+        } else { 7 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stage35_agi_memory_rejects_forged_tensor_objects():
+    src = """
+    fn main() -> i32 {
+        let fake_wm = t1d_new(wm_slot_count());
+        let fake_ep = t1d_new(ep_slot_count());
+        let wm_status = wm_store(fake_wm, 11, 22);
+        let ep_status = ep_record(fake_ep, 3, 44);
+        if wm_status == (0 - 1) {
+        if ep_status == (0 - 1) { 42 } else { 7 }
+        } else { 7 }
     }
     """
     code = compile_and_run(src)

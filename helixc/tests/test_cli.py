@@ -5,9 +5,12 @@ from __future__ import annotations
 import os
 import json
 import hashlib
+import runpy
 import sys
 import subprocess
 import tempfile
+
+import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
@@ -1417,6 +1420,52 @@ def test_stage35_wad_error_emit_ir_does_not_print_artifact(tmp_path):
     assert "ERROR" in proc.stderr
 
 
+def test_stage35_wad_warn_emit_ir_keeps_warning_summary_off_stdout(tmp_path):
+    src_path = tmp_path / "loss_ad_warning_ir_warn.hx"
+    src_path.write_text(
+        "fn loss(x: D<f64>, y: D<i32>) -> D<f64> { x + y }\n"
+        "fn main() -> i32 { 0 }\n",
+        encoding="utf-8",
+    )
+    proc = subprocess.run(
+        [
+            sys.executable, "-m", "helixc.check", str(src_path),
+            "--emit-ir", "--no-stdlib", "-Wad=warn",
+        ],
+        cwd=os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "fn main" in proc.stdout
+    assert "ad:" not in proc.stdout
+    assert "ad:" in proc.stderr
+
+
+def test_stage35_deprecated_warn_emit_asm_keeps_warning_summary_off_stdout(tmp_path):
+    src_path = tmp_path / "deprecated_asm_warn.hx"
+    src_path.write_text(
+        "@deprecated fn old() -> i32 { 0 }\n"
+        "fn main() -> i32 { old() }\n",
+        encoding="utf-8",
+    )
+    proc = subprocess.run(
+        [
+            sys.executable, "-m", "helixc.check", str(src_path),
+            "--emit-asm", "--no-stdlib", "-Wdeprecated=warn",
+        ],
+        cwd=os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "asm:" in proc.stdout
+    assert "deprecated:" not in proc.stdout
+    assert "deprecated:" in proc.stderr
+
+
 def test_stage35_wad_error_default_does_not_print_clean(tmp_path):
     src_path = tmp_path / "loss_ad_warning_default.hx"
     src_path.write_text(
@@ -1626,6 +1675,52 @@ def test_stage35_direct_x86_missing_input_reports_clean_error(tmp_path):
     assert not out_path.exists()
     assert "error: input:" in proc.stderr
     assert "Traceback" not in proc.stderr
+
+
+def test_stage35_direct_x86_invalid_utf8_reports_clean_error(tmp_path):
+    src_path = tmp_path / "bad_utf8.hx"
+    out_path = tmp_path / "bad_utf8.bin"
+    src_path.write_bytes(b"\xff\n")
+    proc = subprocess.run(
+        [
+            sys.executable, "-m", "helixc.backend.x86_64",
+            str(src_path), str(out_path),
+        ],
+        cwd=os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    assert not out_path.exists()
+    assert "encoding error reading source" in proc.stderr
+    assert "Traceback" not in proc.stderr
+
+
+def test_stage35_direct_x86_missing_strict_stdlib_reports_clean_error(
+    monkeypatch, capsys, tmp_path
+):
+    src_path = tmp_path / "strict_missing_stdlib.hx"
+    out_path = tmp_path / "strict_missing_stdlib.bin"
+    src_path.write_text("fn main() -> i32 { 42 }\n", encoding="utf-8")
+    monkeypatch.setenv(parser_mod.STDLIB_STRICT_ENV, "1")
+    monkeypatch.setattr(parser_mod, "STDLIB_FILES", ["stage35_missing_stdlib.hx"])
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["helixc.backend.x86_64", str(src_path), str(out_path)],
+    )
+    monkeypatch.delitem(sys.modules, "helixc.backend.x86_64", raising=False)
+
+    with pytest.raises(SystemExit) as exc:
+        runpy.run_module("helixc.backend.x86_64", run_name="__main__")
+
+    captured = capsys.readouterr()
+    assert exc.value.code == 1
+    assert not out_path.exists()
+    assert "error: stdlib:" in captured.err
+    assert "stdlib file missing" in captured.err
+    assert "Traceback" not in captured.err
 
 
 def test_stage35_direct_x86_duplicate_impl_reports_clean_error(tmp_path):

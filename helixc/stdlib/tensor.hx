@@ -722,6 +722,7 @@ fn ti1d_mul_scalar(x_start: i32, scalar: i32, y_start: i32, n: i32) -> i32 {
 
 @pure fn tf1d_max(start: i32, n: i32) -> f32 {
     if n <= 0 { 0.0_f32 }
+    else { if t1d_slice_ok(start, n) == 0 { 0.0_f32 }
     else {
         let mut best = __f32_from_bits(__arena_get(start));
         let mut i: i32 = 1;
@@ -731,11 +732,12 @@ fn ti1d_mul_scalar(x_start: i32, scalar: i32, y_start: i32, n: i32) -> i32 {
             i = i + 1;
         }
         best
-    }
+    }}
 }
 
 @pure fn tf1d_min(start: i32, n: i32) -> f32 {
     if n <= 0 { 0.0_f32 }
+    else { if t1d_slice_ok(start, n) == 0 { 0.0_f32 }
     else {
         let mut best = __f32_from_bits(__arena_get(start));
         let mut i: i32 = 1;
@@ -745,11 +747,12 @@ fn ti1d_mul_scalar(x_start: i32, scalar: i32, y_start: i32, n: i32) -> i32 {
             i = i + 1;
         }
         best
-    }
+    }}
 }
 
 @pure fn tf1d_argmax(start: i32, n: i32) -> i32 {
     if n <= 0 { 0 - 1 }
+    else { if t1d_slice_ok(start, n) == 0 { 0 - 1 }
     else {
         let mut best_idx: i32 = 0;
         let mut best_val = __f32_from_bits(__arena_get(start));
@@ -760,7 +763,7 @@ fn ti1d_mul_scalar(x_start: i32, scalar: i32, y_start: i32, n: i32) -> i32 {
             i = i + 1;
         }
         best_idx
-    }
+    }}
 }
 
 // f32 element-wise: z[i] = x[i] + y[i].
@@ -1065,6 +1068,7 @@ fn tf1d_clamp(x_start: i32, lo: f32, hi: f32, dst: i32, n: i32) -> i32 {
 // Returns -1 if n == 0.
 @pure fn tf1d_argmin(start: i32, n: i32) -> i32 {
     if n <= 0 { 0 - 1 }
+    else { if t1d_slice_ok(start, n) == 0 { 0 - 1 }
     else {
         let mut i: i32 = 1;
         let mut best_idx: i32 = 0;
@@ -1075,7 +1079,7 @@ fn tf1d_clamp(x_start: i32, lo: f32, hi: f32, dst: i32, n: i32) -> i32 {
             i = i + 1;
         }
         best_idx
-    }
+    }}
 }
 
 // tf1d_running_sum(start, n): allocate a new vec where r[i] = sum

@@ -98,7 +98,8 @@ Status: findings present.
 
 ## Next Step
 
-Commit the restart-30 fix sweep, then begin restart 31 from the new HEAD as
-another clean-gate attempt. For speed, prefer the targeted/wide slices above
-over the full monolithic `test_codegen.py` command unless the environment can
-run it with much longer timeouts.
+Restart 30 was committed and pushed as `9efee28`. Restart 31 has begun from
+that pushed HEAD with green support checks, so use the Stage 35 progress ledger
+and live git state for continuation. For speed, prefer the targeted/wide slices
+above over the full monolithic `test_codegen.py` command unless the environment
+can run it with much longer timeouts.

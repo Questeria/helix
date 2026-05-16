@@ -4005,6 +4005,9 @@ if __name__ == "__main__":
     except OSError as e:
         print(f"error: input: {e}", file=sys.stderr)
         sys.exit(1)
+    except UnicodeDecodeError as e:
+        print(f"error: input: encoding error reading source: {e}", file=sys.stderr)
+        sys.exit(1)
     # Auto-include stdlib by default. The fdce / dce passes drop unused
     # stdlib fns so the binary cost is zero. Pass --no-stdlib to compile
     # without it (only useful for stdlib internals or custom-runtime tests).
@@ -4018,6 +4021,12 @@ if __name__ == "__main__":
         rendered = e.render(source=src, filename=sys.argv[1])
         for line in rendered.splitlines():
             print(f"  {line}", file=sys.stderr)
+        sys.exit(1)
+    except FileNotFoundError as e:
+        msg = str(e)
+        if not msg:
+            msg = "stdlib file missing"
+        print(f"error: stdlib: {msg}", file=sys.stderr)
         sys.exit(1)
     try:
         mod_count = flatten_modules(prog)

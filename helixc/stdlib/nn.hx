@@ -47,6 +47,7 @@ fn relu_layer(x_start: i32, y_start: i32, n: i32) -> i32 {
 @pure
 fn argmax(x_start: i32, n: i32) -> i32 {
     if n <= 0 { 0 - 1 }
+    else { if t1d_slice_ok(x_start, n) == 0 { 0 - 1 }
     else {
         let mut best_idx: i32 = 0;
         let mut best_val: i32 = __arena_get(x_start);
@@ -60,7 +61,7 @@ fn argmax(x_start: i32, n: i32) -> i32 {
             i = i + 1;
         }
         best_idx
-    }
+    }}
 }
 
 // Sum of squared differences: sum((y[i] - t[i])^2). Lower = closer.

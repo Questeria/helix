@@ -26,9 +26,9 @@ The purpose of Helix is to remove uncertainty wherever software can honestly rem
 - **Runtime**: `helixrt`
 - **Target bootstrap chain**: stage0 (hand-encoded hex) → hex1 → M0 (assembler) → M1 → M2 (C-subset compiler) → helixc-bootstrap (in C-subset) → helixc (self-hosted in Helix)
 
-## Status (2026-05-15)
+## Status (2026-05-16)
 
-**Current stage: Stage 35 audit cleanup.** Clean gates remain `0/3` as of the latest Stage 35 progress ledger, and the exact test count changes as each audit adds regressions. Restart 29 fix verification collected 2,325 live `helixc/tests` pytest tests; run `python -m pytest helixc/tests --collect-only -q -p no:cacheprovider` for the current count.
+**Current stage: Stage 35 audit cleanup.** Clean gates remain `0/3` as of the latest Stage 35 progress ledger, and the exact test count changes as each audit adds regressions. Restart 31 fix verification collected 2,347 live `helixc/tests` pytest tests; run `python -m pytest helixc/tests --collect-only -q` for the current count.
 
 The production compiler path is still the Python-hosted `helixc` implementation. A Helix self-hosted compiler remains the target of the bootstrap roadmap, not a shipped replacement for Python yet.
 

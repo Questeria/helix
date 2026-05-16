@@ -378,7 +378,10 @@ def _drain_ad_warnings_to_records(
     ad_policy = a.warnings.get("ad", "warn")
     label = "ERROR" if ad_policy == "error" else "warning"
     artifact_stdout = (
-        "--emit-proof-obligations" in a.flags or "--emit-ptx" in a.flags
+        "--emit-proof-obligations" in a.flags
+        or "--emit-ptx" in a.flags
+        or "--emit-ir" in a.flags
+        or "--emit-asm" in a.flags
     )
     stream = sys.stderr if artifact_stdout or ad_policy == "error" else sys.stdout
     print(f"   ad:        {len(ad_warnings)} {label}(s)", file=stream)
@@ -1022,7 +1025,11 @@ def _main_inner(argv: list[str] | None,
         print(extract_doc_comments(src))
         return 0
 
-    artifact_stdout_mode = "--emit-ptx" in a.flags
+    artifact_stdout_mode = (
+        "--emit-ptx" in a.flags
+        or "--emit-ir" in a.flags
+        or "--emit-asm" in a.flags
+    )
     warning_error_mode = any(policy == "error" for policy in a.warnings.values())
 
     def info(msg: str) -> None:

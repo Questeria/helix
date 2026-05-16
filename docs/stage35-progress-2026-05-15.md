@@ -1915,5 +1915,74 @@ Focused verification:
 Clean-gate status:
 
 - Stage 35 clean gates remain `0/3`.
-- Next step is to commit restart 30, then begin restart 31 as another fresh
-  Stage 35 clean gate from the newest committed fix sweep.
+- Restart 30 was committed and pushed as `9efee28`.
+- Restart 31 has begun from `9efee28` with green support checks; continue the
+  active restart-31 audit/fix loop from the live git state.
+
+## Increment 50 - Thirty-First Clean-Gate Restart Fix Sweep
+
+Restart 31 began from commit `9efee28` with restart-30 pushed to `origin/main`.
+Support checks were green, then three fresh audit lanes found remaining
+blockers. The gate did not count as clean and Stage 35 remains at `0/3` clean
+gates.
+
+Fixes landed in this increment:
+
+- Reverse-AD adjoint allocation now stores a payload snapshot next to adjoint
+  metadata; validation compares the live tape to that snapshot before seeds,
+  gradients, or backward propagation use it.
+- Attempts to append to a reverse-AD tape after adjoint allocation now poison
+  the tape footer so later backward passes fail closed.
+- f32 reducers and public NN `argmax` now validate logical slice lengths before
+  reads.
+- Working-memory and episodic-memory objects now carry magic and footer guards,
+  preventing forged tensor buffers from passing as memory objects.
+- Direct x86 CLI now converts invalid UTF-8 and strict-missing-stdlib failures
+  into clean `error:` diagnostics without tracebacks.
+- `--emit-ir` and `--emit-asm` warning summaries now stay on stderr so stdout
+  remains artifact-only.
+- Continuation docs now describe restart 30 as closed and restart 31 as the
+  current fix sweep.
+
+Focused verification:
+
+- Per-file stdlib parser sweep across `helixc/stdlib/*.hx`
+  - Result: parsed 16 files.
+- `python -m py_compile helixc\check.py helixc\backend\x86_64.py helixc\frontend\grad_pass.py helixc\tests\test_cli.py helixc\tests\test_codegen.py`
+  - Result: passed.
+- `python -m pytest helixc\tests\test_cli.py -q -k "wad_warn_emit_ir or deprecated_warn_emit_asm or invalid_utf8 or missing_strict_stdlib"`
+  - Result: 4 passed, 182 deselected.
+- `python -m pytest helixc\tests\test_codegen.py -q -k "digest_collision or tf1d_reducers_reject_short_input or nn_argmax_rejects_short_input or agi_memory_rejects_forged_tensor_objects"`
+  - Result: 4 passed, 880 deselected.
+- `python -m pytest helixc\tests\test_codegen.py -q -k "tape_grown_after_adjoints or digest_collision or tape_value_mutated_after_adjoints"`
+  - Result: 3 passed, 881 deselected.
+- `python -m pytest helixc\tests\test_codegen.py -q -k "revad or grad_rev_all or autodiff_reverse or tf1d or t1d or dense_classifier or argmax_rows or accuracy_count or ce_loss_batch or mae_loss or count_correct or agi_memory"`
+  - Result: 89 passed, 795 deselected.
+- `python -m pytest helixc\tests\test_cli.py -q -k "stage35 or wad or deprecated or direct_x86"`
+  - Result: 43 passed, 143 deselected.
+- `python -m pytest helixc\tests\test_ptx.py -q -k "stage35 or direct_ptx or wad or deprecated"`
+  - Result: 40 passed, 36 deselected.
+- `python -m pytest helixc\tests\test_codegen.py -q -k "autodiff or autodiff_reverse or transcendentals"`
+  - Result: 14 passed, 870 deselected.
+- `python -m pytest helixc\tests\test_codegen.py -q -k "reflection or effect"`
+  - Result: 3 passed, 881 deselected.
+- `python -m pytest helixc\tests\test_codegen.py -q -k "stage35"`
+  - Result: 31 passed, 853 deselected.
+- `python -m pytest helixc\tests\test_cli.py -q -k "stage35"`
+  - Result: 41 passed, 145 deselected.
+- `python -m pytest helixc\tests\test_ptx.py -q -k "stage35"`
+  - Result: 24 passed, 52 deselected.
+- `python -m pytest helixc\tests --collect-only -q`
+  - Result: 2,347 tests collected.
+- `git diff --check`
+  - Result: passed.
+- Unscoped `python -m pytest --collect-only -q`
+  - Result: failed because it also collected `HELIX_STAGE30_COMPILER_SNAPSHOT`
+    and hit duplicate pytest module names. This is a command-scope issue; use
+    scoped live-suite collection for Stage 35.
+
+Clean-gate status:
+
+- Stage 35 clean gates remain `0/3`.
+- Next step is to commit and push this restart-31 fix sweep, then begin
+  restart 32 as another fresh Stage 35 clean gate from the newest pushed HEAD.

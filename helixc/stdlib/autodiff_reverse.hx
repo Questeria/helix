@@ -60,25 +60,11 @@
 @pure fn rev_tape_footer_with_adj(cap: i32, adj_start: i32) -> i32 {
     rev_tape_footer(cap) - adj_start - 17
 }
-@pure fn rev_tape_digest(tape: i32, cnt: i32) -> i32 {
-    if tape <= 0 { 0 }
-    else { if cnt < 0 { 0 }
-    else {
-        let mut i: i32 = 0;
-        let mut acc: i32 = 911;
-        while i < cnt {
-            let off = tape + 3 + i * 4;
-            acc = acc * 31 + __arena_get(off);
-            acc = acc * 31 + __arena_get(off + 1);
-            acc = acc * 31 + __arena_get(off + 2);
-            acc = acc * 31 + __arena_get(off + 3);
-            i = i + 1;
-        }
-        acc
-    }}
-}
 @pure fn rev_adj_guard(owner: i32, cap: i32, cnt: i32, adj_start: i32) -> i32 {
-    rev_tape_footer_with_adj(cap, adj_start) - owner - cnt - rev_tape_digest(owner, cnt) - 31
+    rev_tape_footer_with_adj(cap, adj_start) - owner - cnt - 31
+}
+@pure fn rev_snapshot_footer(owner: i32, cap: i32, cnt: i32, adj_start: i32) -> i32 {
+    rev_adj_guard(owner, cap, cnt, adj_start) - 73
 }
 
 fn rev_tape_new(cap: i32) -> i32 {
@@ -116,13 +102,14 @@ fn rev_tape_valid(tape: i32) -> i32 {
             if footer >= __arena_len() { 0 }
             else {
                 let adj_start = __arena_get(tape + 2);
-                if adj_start < 0 {
+                if adj_start == (0 - 1) {
                     if __arena_get(footer) != rev_tape_footer(cap) { 0 } else { 1 }
-                } else {
+                } else { if adj_start < 0 { 0 }
+                else {
                     let expected_adj = tape + 3 + cap * 4 + 5;
                     if adj_start != expected_adj { 0 }
                     else { if __arena_get(footer) != rev_tape_footer_with_adj(cap, adj_start) { 0 } else { 1 } }
-                }
+                }}
             }
         }}}}
     }}
@@ -175,7 +162,12 @@ fn rev_push(tape: i32, kind: i32, in1: i32, in2: i32, value: i32) -> i32 {
     else {
         let cnt = __arena_get(tape);
         let cap = __arena_get(tape + 1);
-        if cnt < 0 { 0 - 1 }
+        let adj_slot = __arena_get(tape + 2);
+        if adj_slot != (0 - 1) {
+            __arena_set(tape + 3 + cap * 4, 0);
+            0 - 1
+        }
+        else { if cnt < 0 { 0 - 1 }
         else { if cnt >= cap { 0 - 1 }
         else {
             let off = tape + 3 + cnt * 4;
@@ -185,7 +177,7 @@ fn rev_push(tape: i32, kind: i32, in1: i32, in2: i32, value: i32) -> i32 {
             __arena_set(off + 3, value);
             __arena_set(tape, cnt + 1);
             cnt
-        }}
+        }}}
     }
 }
 
@@ -268,6 +260,13 @@ fn rev_alloc_adjoints(tape: i32) -> i32 {
             i = i + 1;
         }
         __arena_push(rev_adj_guard(tape, cap, cnt, start));
+        let mut snap_i: i32 = 0;
+        let snap_total = cnt * 4;
+        while snap_i < snap_total {
+            __arena_push(__arena_get(tape + 3 + snap_i));
+            snap_i = snap_i + 1;
+        }
+        __arena_push(rev_snapshot_footer(tape, cap, cnt, start));
         __arena_set(tape + 3 + cap * 4, rev_tape_footer_with_adj(cap, start));
         start
         }}
@@ -276,25 +275,48 @@ fn rev_alloc_adjoints(tape: i32) -> i32 {
 
 @pure
 fn rev_adj_cap(adj_start: i32) -> i32 {
-    if adj_start < 4 { 0 - 1 } else {
-    let owner = __arena_get(adj_start - 4);
-    let cap = __arena_get(adj_start - 3);
-    let cnt = __arena_get(adj_start - 2);
-    let guard = __arena_get(adj_start - 1);
-    if rev_tape_valid(owner) == 0 { 0 - 1 }
-    else { if rev_expected_adj_start(owner) != adj_start { 0 - 1 }
-    else { if __arena_get(owner + 2) != adj_start { 0 - 1 }
-    else { if cap < 0 { 0 - 1 }
-    else { if cnt < 0 { 0 - 1 }
-    else { if cnt > cap { 0 - 1 }
-    else { if cap != __arena_get(owner + 1) { 0 - 1 }
-    else {
-    let footer = __arena_get(adj_start + cap);
-    let expected_guard = rev_adj_guard(owner, cap, cnt, adj_start);
-    if guard == expected_guard {
-        if footer == expected_guard { cap } else { 0 - 1 }
-    } else { 0 - 1 } }}}}}}}
-}
+    let mut result: i32 = 0 - 1;
+    if adj_start >= 4 {
+        let owner = __arena_get(adj_start - 4);
+        let cap = __arena_get(adj_start - 3);
+        let cnt = __arena_get(adj_start - 2);
+        let guard = __arena_get(adj_start - 1);
+        if rev_tape_valid(owner) != 0 {
+        if rev_expected_adj_start(owner) == adj_start {
+        if __arena_get(owner + 2) == adj_start {
+        if cap >= 0 {
+        if cnt >= 0 {
+        if cnt <= cap {
+        if cap == __arena_get(owner + 1) {
+        if cap <= 2147483647 - adj_start {
+            let adj_footer = adj_start + cap;
+            if adj_footer < __arena_len() {
+                let footer = __arena_get(adj_footer);
+                let expected_guard = rev_adj_guard(owner, cap, cnt, adj_start);
+                if guard == expected_guard {
+                if footer == expected_guard {
+                    let snapshot_start = adj_footer + 1;
+                    let snapshot_total = cnt * 4;
+                    if cnt <= (2147483647 - snapshot_start - 1) / 4 {
+                        let snapshot_footer = snapshot_start + snapshot_total;
+                        if snapshot_footer < __arena_len() {
+                        if __arena_get(snapshot_footer) == rev_snapshot_footer(owner, cap, cnt, adj_start) {
+                            let mut snap_i: i32 = 0;
+                            let mut snap_ok: i32 = 1;
+                            while snap_i < snapshot_total {
+                                if __arena_get(snapshot_start + snap_i) != __arena_get(owner + 3 + snap_i) {
+                                    snap_ok = 0;
+                                }
+                                snap_i = snap_i + 1;
+                            }
+                            if snap_ok != 0 { result = cap; }
+                        }}
+                    }
+                }}
+            }
+        }}}}}}}}
+    }
+    result
 }
 
 @pure

@@ -17,9 +17,11 @@
 //   wm_clear(start)            -> i32       drop all items (size -> 0)
 //
 // Layout (per WM):
+//   slot -1: magic guard
 //   slot 0: size (current count, 0..16)
 //   slot 1: tick (monotonic counter for recency)
 //   slot 2..2+16*3: 16 entries, each 3 slots (key, val, last_used_tick)
+//   slot wm_slot_count(): footer guard
 //
 // License: Apache 2.0
 
@@ -33,19 +35,24 @@ type DistanceMeters = f64 where self >= 0.0;
 @pure fn wm_capacity() -> i32 { 16 }
 
 @pure fn wm_slot_count() -> i32 { 2 + wm_capacity() * 3 }
+@pure fn wm_magic() -> i32 { 4004001 }
+@pure fn wm_footer() -> i32 { 0 - wm_magic() - wm_slot_count() - 1 }
 
 @pure fn wm_ok(start: i32) -> i32 {
-    if start < 0 { 0 }
+    if start <= 0 { 0 }
+    else { if __arena_get(start - 1) != wm_magic() { 0 }
     else { if start > 2147483647 - wm_slot_count() { 0 }
-    else { if start + wm_slot_count() > __arena_len() { 0 }
+    else { if start + wm_slot_count() >= __arena_len() { 0 }
+    else { if __arena_get(start + wm_slot_count()) != wm_footer() { 0 }
     else {
         let count = __arena_get(start);
         if count < 0 { 0 }
         else { if count > wm_capacity() { 0 } else { 1 } }
-    }}}
+    }}}}}
 }
 
 fn wm_new() -> i32 {
+    __arena_push(wm_magic());
     let start = __arena_len();
     __arena_push(0);   // size
     __arena_push(0);   // tick counter
@@ -57,6 +64,7 @@ fn wm_new() -> i32 {
         __arena_push(0);   // last_used_tick
         i = i + 1;
     }
+    __arena_push(wm_footer());
     start
 }
 
@@ -173,19 +181,25 @@ fn wm_load(start: i32, key: i32) -> i32 {
 // retrospection, and "I tried X earlier" deduplication.
 //
 // Layout:
+//   slot -1: magic guard
 //   slot 0: head (next write index, 0..cap)
 //   slot 1: count (entries written, capped at cap once filled)
 //   slot 2: tick (monotonic event timestamp)
 //   slot 3..3+cap*3: cap entries, each 3 slots (tick, kind, payload)
+//   slot ep_slot_count(): footer guard
 
 @pure fn ep_capacity() -> i32 { 64 }
 
 @pure fn ep_slot_count() -> i32 { 3 + ep_capacity() * 3 }
+@pure fn ep_magic() -> i32 { 5005001 }
+@pure fn ep_footer() -> i32 { 0 - ep_magic() - ep_slot_count() - 1 }
 
 @pure fn ep_ok(start: i32) -> i32 {
-    if start < 0 { 0 }
+    if start <= 0 { 0 }
+    else { if __arena_get(start - 1) != ep_magic() { 0 }
     else { if start > 2147483647 - ep_slot_count() { 0 }
-    else { if start + ep_slot_count() > __arena_len() { 0 }
+    else { if start + ep_slot_count() >= __arena_len() { 0 }
+    else { if __arena_get(start + ep_slot_count()) != ep_footer() { 0 }
     else {
         let head = __arena_get(start);
         let cnt = __arena_get(start + 1);
@@ -195,10 +209,11 @@ fn wm_load(start: i32, key: i32) -> i32 {
         else { if cnt < 0 { 0 }
         else { if cnt > ep_capacity() { 0 }
         else { if tick < 0 { 0 } else { 1 } } } } }
-    }}}
+    }}}}}
 }
 
 fn ep_new() -> i32 {
+    __arena_push(ep_magic());
     let start = __arena_len();
     __arena_push(0);   // head
     __arena_push(0);   // count
@@ -211,6 +226,7 @@ fn ep_new() -> i32 {
         __arena_push(0);   // payload
         i = i + 1;
     }
+    __arena_push(ep_footer());
     start
 }
 
