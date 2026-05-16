@@ -3,7 +3,7 @@
 **Historical snapshot date**: 2026-05-12
 **Historical snapshot HEAD**: `a2e7fc4` (Stage 30 cycle-5 prep: document M2 trade-off)
 **Current-status warning**: this file is a historical handoff, not the current repo state. As of 2026-05-16, continue from the Stage 35 progress ledger, live git HEAD, and `git status --short` instead.
-**Current continuation pointer**: Stage 35 audit cleanup. Continue from the newest pushed HEAD shown by `git log -1 --oneline`, not from any older fixed hash in this historical handoff. Restart 51 is the latest recorded fix sweep in this file; clean gates remain `0/3`, and live `helixc/tests` collection is 2,497 (restart 50 ledger forecast 2,497; restart 51 reconciled to actual). Run `git status --short` and tail `docs/stage35-progress-2026-05-15.md` for the newest truth.
+**Current continuation pointer**: Stage 35 audit cleanup. Continue from the newest pushed HEAD shown by `git log -1 --oneline`, not from any older fixed hash in this historical handoff. Restart 51 is the latest recorded fix sweep in this file; clean gates remain `0/3`, and live `helixc/tests` collection is 2,497 (restart 50 ledger forecast 2,489; restart 51 reconciled to actual). Run `git status --short` and tail `docs/stage35-progress-2026-05-15.md` for the newest truth.
 **Project**: `C:\Projects\Kovostov-Native\` — Helix language self-hosting compiler
 
 User backed up the entire folder before this handoff in case of issues.
@@ -228,7 +228,7 @@ older 5-clean-audit count as historical context; Stage 35 currently requires
 
 Per user's audit protocol:
 - **ZERO HIGH/MEDIUM/LOW issues** per cycle for CLEAN declaration
-- Heavy gate must be GREEN before declaring clean. Historical snapshot had 670+ tests; Stage 35 restart 51 fix verification collected 2,497 live `helixc/tests` tests (restart 50 forecast 2,497; restart 51 reconciled to actual), so refresh with `python -m pytest helixc/tests --collect-only -q`.
+- Heavy gate must be GREEN before declaring clean. Historical snapshot had 670+ tests; Stage 35 restart 51 fix verification collected 2,497 live `helixc/tests` tests (restart 50 forecast 2,489; restart 51 reconciled to actual), so refresh with `python -m pytest helixc/tests --collect-only -q`.
 - 3 CONSECUTIVE clean cycles on the SAME HEAD to declare stage done
 - If issues found: apply fix-sweep, re-test, dispatch next cycle
 

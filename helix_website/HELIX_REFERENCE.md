@@ -507,12 +507,12 @@ Phase-0 stores cell *values* (not full ASTs). Phase-1 will support full AST cell
 
 ## Standard Library
 
-The Helix standard library lives in `helixc/stdlib/` and is written in Helix itself (no `unsafe`, no FFI for core operations). As of Stage 35 restart 50 fix verification the library has 16 modules with 455 bare `fn` declarations and 436 additional `@`-attributed declarations (`@pure`, `@kernel`, `@deprecated`, etc.) — 891 declarations total. The list below names every module; each line points at the actual `.hx` file. Per-module counts are bare-fn only (matches the 455 grand total); to see the bare + `@`-decl breakdown per module, run the `Discoverability` snippet at the end of this section.
+The Helix standard library lives in `helixc/stdlib/` and is written in Helix itself (no `unsafe`, no FFI for core operations). As of Stage 35 restart 52 fix verification the library has 16 modules with 455 bare `fn` declarations and 437 additional `@`-attributed declarations (`@pure`, `@kernel`, `@deprecated`, etc.) — 892 declarations total. The list below names every module; each line points at the actual `.hx` file. Per-module counts are bare-fn only (matches the 455 grand total); to see the bare + `@`-decl breakdown per module, run the `Discoverability` snippet at the end of this section.
 
 ### Numerics & IEEE 754
 
-- `ieee754.hx` — bit-pattern conversions: `__bits_of_f32`, `__f32_from_bits`, `__bits_hi_f64`, `__bits_lo_f64`, `__f64_pack`, `__f64_to_f32`, `__f32_to_f64`, `__f64_to_i32`, `f32_bits_zero`, `f32_bits_one`, `f32_bits_neg`. 6 bare fn (+0 @-attributed).
-- `transcendentals.hx` — math + helpers: `__exp`, `__log`, `__sin`, `__cos`, `__tan`, `__sqrt`, `__powi` (integer power, n cap 16), `__sigmoid`, `__relu`, `__tanh`, `__abs_i32`, `__sign_i32`/`f64`, `__min_*`/`__max_*`/`__clamp_*` for i32/f32/f64, plus scalar `__sgd_step`/`__momentum_step_v`/`__adam_step` optimizer steps. All transcendentals participate in the autodiff chain rule. 2 bare fn (+50 @-attributed).
+- `ieee754.hx` — bit-pattern conversions: `__bits_of_f32`, `__f32_from_bits`, `__bits_hi_f64`, `__bits_lo_f64`, `__f64_pack`, `__f64_to_f32`, `__f32_to_f64`, `__f64_to_i32`, `f32_bits_zero`, `f32_bits_one`, `f32_bits_neg`. 6 bare fn (+6 @-attributed).
+- `transcendentals.hx` — math + helpers: `__exp`, `__log`, `__sin`, `__cos`, `__tan`, `__sqrt`, `__powi` (integer power, n cap 16), `__sigmoid`, `__relu`, `__tanh`, `__abs_i32`, `__sign_i32`/`f64`, `__min_*`/`__max_*`/`__clamp_*` for i32/f32/f64, plus scalar `__sgd_step`/`__momentum_step_v`/`__adam_step` optimizer steps. All transcendentals participate in the autodiff chain rule. 2 bare fn (+53 @-attributed).
 
 ### Tensors & tiles
 

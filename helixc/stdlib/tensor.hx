@@ -387,15 +387,23 @@ fn ti2d_matvec(w_start: i32, w_rows: i32, w_cols: i32,
     else { if t1d_slice_ok(x_start, w_cols) == 0 { t2d_error() }
     else { if t1d_slice_ok(y_start, w_rows) == 0 { t2d_error() }
     else {
+    // Restart 52 A1: i64 accumulator + INT32 saturation per output cell.
+    // Sibling of restart 51 A3 (ti1d_dot) — the 1D case got the fix but
+    // the 2D matvec was missed in that sweep. Single |w|*|x| term
+    // overflows i32 at values around 46341; running sum wraps faster.
     let mut r: i32 = 0;
+    let hi: i64 = 2147483647_i64;
+    let lo: i64 = (0_i64 - 2147483647_i64) - 1_i64;
     while r < w_rows {
         let mut c: i32 = 0;
-        let mut acc: i32 = 0;
+        let mut acc: i64 = 0_i64;
         while c < w_cols {
-            acc = acc + __arena_get(w_start + r * w_cols + c) * __arena_get(x_start + c);
+            acc = acc + (__arena_get(w_start + r * w_cols + c) as i64) * (__arena_get(x_start + c) as i64);
+            if acc > hi { acc = hi; }
+            else { if acc < lo { acc = lo; } };
             c = c + 1;
         }
-        __arena_set(y_start + r, acc);
+        __arena_set(y_start + r, acc as i32);
         r = r + 1;
     }
     0
@@ -727,19 +735,25 @@ fn ti2d_matmul(a_start: i32, a_rows: i32, a_cols: i32,
     else { if t2d_shape_ok(b_start, a_cols, b_cols) == 0 { t2d_error() }
     else { if t2d_shape_ok(c_start, a_rows, b_cols) == 0 { t2d_error() }
     else {
+    // Restart 52 A1: i64 accumulator + INT32 saturation per output cell.
+    // Sibling of restart 51 A3 (ti1d_dot) extended to 2D matmul.
     let mut r: i32 = 0;
+    let hi: i64 = 2147483647_i64;
+    let lo: i64 = (0_i64 - 2147483647_i64) - 1_i64;
     while r < a_rows {
         let mut c: i32 = 0;
         while c < b_cols {
             let mut k: i32 = 0;
-            let mut acc: i32 = 0;
+            let mut acc: i64 = 0_i64;
             while k < a_cols {
-                let av = __arena_get(a_start + r * a_cols + k);
-                let bv = __arena_get(b_start + k * b_cols + c);
+                let av: i64 = __arena_get(a_start + r * a_cols + k) as i64;
+                let bv: i64 = __arena_get(b_start + k * b_cols + c) as i64;
                 acc = acc + av * bv;
+                if acc > hi { acc = hi; }
+                else { if acc < lo { acc = lo; } };
                 k = k + 1;
             }
-            __arena_set(c_start + r * b_cols + c, acc);
+            __arena_set(c_start + r * b_cols + c, acc as i32);
             c = c + 1;
         }
         r = r + 1;
