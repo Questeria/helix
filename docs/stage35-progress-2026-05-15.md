@@ -2038,5 +2038,90 @@ Focused verification:
 Clean-gate status:
 
 - Stage 35 clean gates remain `0/3`.
-- Next step is to commit and push this restart-32 fix sweep, then begin
-  restart 33 as another fresh Stage 35 clean gate from the newest pushed HEAD.
+- Restart 32 was committed and pushed as `5d8b4c4`.
+- Restart 33 began from `5d8b4c4`; support checks were green, then three fresh
+  audit lanes found remaining runtime, CLI/PTX, and docs blockers.
+
+## Increment 52 - Thirty-Third Clean-Gate Restart Fix Sweep
+
+Restart 33 began from commit `5d8b4c4` with restart-32 pushed to
+`origin/main`. Baseline support checks were green:
+
+- Per-file stdlib parser sweep across `helixc/stdlib/*.hx`
+  - Result: parsed 16 files.
+- `python -m py_compile helixc\check.py helixc\backend\x86_64.py helixc\tests\test_cli.py helixc\tests\test_codegen.py`
+  - Result: passed.
+- `python -m pytest helixc\tests\test_cli.py -q -k "stage35 or emit_ast or emit_ir or emit_asm or emit_ptx or output or direct_x86"`
+  - Result: 65 passed, 125 deselected.
+- `python -m pytest helixc\tests\test_codegen.py -q -k "tf2d or t2d or tensor or revad or agi_memory"`
+  - Result: 104 passed, 783 deselected.
+- `python -m pytest helixc\tests\test_ptx.py -q -k "stage35 or direct_ptx or wad or deprecated"`
+  - Result: 40 passed, 36 deselected.
+- `python -m pytest helixc\tests --collect-only -q`
+  - Result: 2,354 tests collected.
+- `git diff --check`
+  - Result: passed.
+
+The fresh restart-33 audit was not clean. Findings:
+
+- 2D integer/f32 matvec helpers validated the matrix but not the x/y vector
+  slices.
+- 2D integer/f32 setters did not fail loudly on invalid coordinates.
+- Working-memory and episodic-memory validators accepted corrupted per-entry
+  timestamps.
+- `--check-only` could be combined with stdout artifact modes or `-o`, causing
+  artifact requests to be silently ignored.
+- Direct PTX warning policy parsing did not preserve argument order, so repeated
+  `-Wad=...` flags could select the wrong policy.
+- Direct PTX accepted conflicting `--stdlib` and `--no-stdlib` flags.
+- Continuation docs still described restart 32 as needing commit/push after it
+  had already landed as `5d8b4c4`.
+
+Fixes landed in this increment:
+
+- `ti2d_matvec` and `tf2d_matvec` now validate both input and output vector
+  slices before reading or writing.
+- `ti2d_set` and `tf2d_set` now return `t2d_error()` on invalid coordinates.
+- `wm_ok` and `ep_ok` now reject negative or future per-entry timestamps.
+- `helixc.check` now rejects conflicting stdlib flags and rejects
+  `--check-only` combined with artifact modes or `-o`.
+- Direct PTX now parses flags in CLI order, honors the last warning policy, and
+  rejects conflicting stdlib flags.
+- The handoff and restart docs now point at restart 33 from pushed
+  `5d8b4c4`.
+
+Verification:
+
+- Per-file stdlib parser sweep across `helixc/stdlib/*.hx`
+  - Result: parsed 16 files.
+- `python -m py_compile helixc\check.py helixc\backend\ptx.py helixc\tests\test_cli.py helixc\tests\test_ptx.py helixc\tests\test_codegen.py`
+  - Result: passed.
+- `python -m pytest helixc\tests\test_codegen.py -q -k "2d_matvec_rejects_short_vectors or 2d_setters_return_error or agi_memory_rejects_corrupt_entry_timestamps"`
+  - Result: 3 passed, 887 deselected.
+- `python -m pytest helixc\tests\test_cli.py -q -k "conflicting_stdlib or check_only_rejects_artifact"`
+  - Result: 3 passed, 190 deselected.
+- `python -m pytest helixc\tests\test_ptx.py -q -k "warning_policy_uses_last_flag or conflicting_stdlib"`
+  - Result: 2 passed, 76 deselected.
+- `python -m pytest helixc\tests\test_codegen.py -q -k "tf2d or ti2d or t2d or matvec or agi_memory"`
+  - Result: 30 passed, 860 deselected.
+- `python -m pytest helixc\tests\test_cli.py -q -k "stage35 or check_only or emit_ir or emit_asm or emit_ptx or output or stdlib"`
+  - Result: 89 passed, 104 deselected.
+- `python -m pytest helixc\tests\test_ptx.py -q -k "stage35 or direct_ptx or wad or deprecated or stdlib"`
+  - Result: 42 passed, 36 deselected.
+- `python -m pytest helixc\tests\test_codegen.py -q -k "stage35"`
+  - Result: 37 passed, 853 deselected.
+- `python -m pytest helixc\tests\test_cli.py -q -k "stage35"`
+  - Result: 48 passed, 145 deselected.
+- `python -m pytest helixc\tests\test_ptx.py -q -k "stage35"`
+  - Result: 26 passed, 52 deselected.
+- `python -m pytest helixc\tests --collect-only -q`
+  - Result: 2,362 tests collected.
+- `git diff --check`
+  - Result: passed.
+
+Clean-gate status:
+
+- Stage 35 clean gates remain `0/3`.
+- Next step is to commit and push this restart-33 fix sweep, then begin
+  restart 34 as another fresh Stage 35 clean-gate attempt from the newest
+  pushed HEAD.

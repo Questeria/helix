@@ -3,7 +3,7 @@
 **Historical snapshot date**: 2026-05-12
 **Historical snapshot HEAD**: `a2e7fc4` (Stage 30 cycle-5 prep: document M2 trade-off)
 **Current-status warning**: this file is a historical handoff, not the current repo state. As of 2026-05-16, continue from the Stage 35 progress ledger, live git HEAD, and `git status --short` instead.
-**Current continuation pointer**: Stage 35 audit cleanup; restart 31 is closed at `fb9400d`, restart 32 found and fixed issues from that pushed HEAD, and clean gates remain `0/3`. Run `git log -1 --oneline`, `git status --short`, and `docs/stage35-progress-2026-05-15.md` for the newest truth.
+**Current continuation pointer**: Stage 35 audit cleanup; restart 31 is closed at `fb9400d`, restart 32 is closed at `5d8b4c4`, restart 33 found and fixed issues from that pushed HEAD, and clean gates remain `0/3`. Run `git log -1 --oneline`, `git status --short`, and `docs/stage35-progress-2026-05-15.md` for the newest truth.
 **Project**: `C:\Projects\Kovostov-Native\` — Helix language self-hosting compiler
 
 User backed up the entire folder before this handoff in case of issues.

@@ -804,10 +804,12 @@ if __name__ == "__main__":
     allowed_flags = {"--strict", "--stdlib", "--no-stdlib"}
     warning_policies: dict[str, str] = {}
     known_warning_names = {"ad", "deprecated"}
-    flags = {a for a in cli_args if a.startswith("-")}
+    flags: set[str] = set()
+    paths: list[str] = []
     unknown_flags: list[str] = []
-    for flag in sorted(flags):
+    for flag in cli_args:
         if flag in allowed_flags:
+            flags.add(flag)
             continue
         if flag.startswith("-W"):
             body = flag[2:]
@@ -826,15 +828,23 @@ if __name__ == "__main__":
                     continue
                 warning_policies[body] = "warn"
             continue
-        unknown_flags.append(flag)
+        if flag.startswith("-"):
+            unknown_flags.append(flag)
+        else:
+            paths.append(flag)
     if unknown_flags:
         for flag in unknown_flags:
             print(f"error: ptx: unknown flag {flag}", file=sys.stderr)
         sys.exit(2)
+    if "--stdlib" in flags and "--no-stdlib" in flags:
+        print(
+            "error: ptx: conflicting stdlib flags: choose --stdlib or --no-stdlib",
+            file=sys.stderr,
+        )
+        sys.exit(2)
     strict = "--strict" in flags
     ad_policy = warning_policies.get("ad", "warn")
     include_stdlib = "--no-stdlib" not in flags
-    paths = [a for a in cli_args if not a.startswith("-")]
     if not paths:
         print("error: ptx: missing input path", file=sys.stderr)
         sys.exit(2)

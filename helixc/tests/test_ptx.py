@@ -448,6 +448,34 @@ def test_stage35_direct_ptx_cli_accepts_wad_warn_policy():
     assert "ad:" in proc.stderr
 
 
+def test_stage35_direct_ptx_cli_warning_policy_uses_last_flag():
+    src = """
+    fn loss(x: D<f64>, y: D<i32>) -> D<f64> { x + y }
+    @kernel fn k() { let i = thread_idx(); }
+    """
+    error_proc = run_ptx_cli(src, "-Wad=warn", "-Wad=error")
+    assert error_proc.returncode == 1, error_proc.stdout + error_proc.stderr
+    assert error_proc.stdout == ""
+    assert "ad:" in error_proc.stderr
+    assert "ERROR" in error_proc.stderr
+
+    warn_proc = run_ptx_cli(src, "-Wad=error", "-Wad=warn")
+    assert warn_proc.returncode == 0, warn_proc.stdout + warn_proc.stderr
+    assert ".visible .entry k" in warn_proc.stdout
+    assert "ad:" in warn_proc.stderr
+    assert "ERROR" not in warn_proc.stderr
+
+
+def test_stage35_direct_ptx_cli_rejects_conflicting_stdlib_flags():
+    proc = run_ptx_cli(
+        "@kernel fn k() { let i = thread_idx(); }\n",
+        "--stdlib", "--no-stdlib",
+    )
+    assert proc.returncode == 2, proc.stdout + proc.stderr
+    assert proc.stdout == ""
+    assert "conflicting stdlib flags" in proc.stderr
+
+
 def test_stage35_direct_ptx_cli_deprecated_warning_policy():
     src = """
     @deprecated fn old() -> i32 { 0 }

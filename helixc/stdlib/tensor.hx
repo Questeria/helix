@@ -302,7 +302,7 @@ fn ti2d_new(rows: i32, cols: i32) -> i32 {
 
 fn ti2d_set(start: i32, cols: i32, i: i32, j: i32, x: i32) -> i32 {
     let off = t2d_offset(start, cols, i, j);
-    if off < 0 { x }
+    if off < 0 { t2d_error() }
     else {
         __arena_set(off, x);
         x
@@ -321,6 +321,8 @@ fn ti2d_matvec(w_start: i32, w_rows: i32, w_cols: i32,
     else { if w_cols <= 0 { 0 }
     else { if t2d_len(w_rows, w_cols) == 0 { t2d_error() }
     else { if t2d_shape_ok(w_start, w_rows, w_cols) == 0 { t2d_error() }
+    else { if t1d_slice_ok(x_start, w_cols) == 0 { t2d_error() }
+    else { if t1d_slice_ok(y_start, w_rows) == 0 { t2d_error() }
     else {
     let mut r: i32 = 0;
     while r < w_rows {
@@ -334,7 +336,7 @@ fn ti2d_matvec(w_start: i32, w_rows: i32, w_cols: i32,
         r = r + 1;
     }
     0
-    }}}}
+    }}}}}}
 }
 
 // Element-wise: y[i] = relu(x[i]) for i in [0, n). Integer relu.
@@ -503,10 +505,11 @@ fn tf2d_get(start: i32, cols: i32, i: i32, j: i32) -> f32 {
 
 fn tf2d_set(start: i32, cols: i32, i: i32, j: i32, x: f32) -> i32 {
     let off = t2d_offset(start, cols, i, j);
-    if off >= 0 {
+    if off < 0 { t2d_error() }
+    else {
         __arena_set(off, __bits_of_f32(x));
+        0
     }
-    0
 }
 
 fn tf2d_matvec(w_start: i32, w_rows: i32, w_cols: i32,
@@ -515,6 +518,8 @@ fn tf2d_matvec(w_start: i32, w_rows: i32, w_cols: i32,
     else { if w_cols <= 0 { 0 }
     else { if t2d_len(w_rows, w_cols) == 0 { t2d_error() }
     else { if t2d_shape_ok(w_start, w_rows, w_cols) == 0 { t2d_error() }
+    else { if t1d_slice_ok(x_start, w_cols) == 0 { t2d_error() }
+    else { if t1d_slice_ok(y_start, w_rows) == 0 { t2d_error() }
     else {
     let mut r: i32 = 0;
     while r < w_rows {
@@ -530,7 +535,7 @@ fn tf2d_matvec(w_start: i32, w_rows: i32, w_cols: i32,
         r = r + 1;
     }
     0
-    }}}}
+    }}}}}}
 }
 
 // =========================================================================

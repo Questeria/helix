@@ -121,6 +121,12 @@ def test_parse_args_no_stdlib():
     assert "--no-stdlib" in a.flags
 
 
+def test_stage35_parse_args_rejects_conflicting_stdlib_flags():
+    a, errs = parse_args(["--stdlib", "--no-stdlib", "foo.hx"])
+    assert a.path == "foo.hx"
+    assert any("conflicting stdlib flags" in e for e in errs)
+
+
 def test_parse_args_check_only():
     a, errs = parse_args(["--check-only", "foo.hx"])
     assert "--check-only" in a.flags
@@ -1474,6 +1480,32 @@ def test_stage35_output_flag_value_rejected_without_writing(tmp_path, capsys, mo
     assert rc == 2
     assert not (tmp_path / "--no-stdlib").exists()
     assert "-o requires an output path" in captured.err
+
+
+def test_stage35_check_only_rejects_artifact_modes_and_output(tmp_path, capsys):
+    src_path = tmp_path / "check_only_artifacts.hx"
+    src_path.write_text("fn main() -> i32 { 42 }\n", encoding="utf-8")
+    out_path = tmp_path / "check_only_artifacts.bin"
+
+    rc_emit = main([str(src_path), "--check-only", "--emit-ir", "--no-stdlib"])
+    captured_emit = capsys.readouterr()
+    assert rc_emit == 2
+    assert "--check-only cannot be combined with --emit-ir" in captured_emit.err
+
+    rc_output = main([str(src_path), "--check-only", "-o", str(out_path), "--no-stdlib"])
+    captured_output = capsys.readouterr()
+    assert rc_output == 2
+    assert "--check-only cannot be combined with -o" in captured_output.err
+    assert not out_path.exists()
+
+
+def test_stage35_main_rejects_conflicting_stdlib_flags(tmp_path, capsys):
+    src_path = tmp_path / "conflict_stdlib.hx"
+    src_path.write_text("fn main() -> i32 { 42 }\n", encoding="utf-8")
+    rc = main([str(src_path), "--stdlib", "--no-stdlib"])
+    captured = capsys.readouterr()
+    assert rc == 2
+    assert "conflicting stdlib flags" in captured.err
 
 
 def test_stage35_deprecated_warn_emit_asm_keeps_warning_summary_off_stdout(tmp_path):

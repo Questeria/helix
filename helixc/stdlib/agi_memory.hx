@@ -49,7 +49,18 @@ type DistanceMeters = f64 where self >= 0.0;
         let tick = __arena_get(start + 1);
         if count < 0 { 0 }
         else { if count > wm_capacity() { 0 }
-        else { if tick < 0 { 0 } else { 1 } } }
+        else { if tick < 0 { 0 }
+        else {
+            let mut i: i32 = 0;
+            let mut ok: i32 = 1;
+            while i < count {
+                let entry_tick = __arena_get(start + 2 + i * 3 + 2);
+                if entry_tick < 0 { ok = 0; }
+                else { if entry_tick > tick { ok = 0; } }
+                i = i + 1;
+            }
+            ok
+        } } }
     }}}}}
 }
 
@@ -216,7 +227,18 @@ fn wm_load(start: i32, key: i32) -> i32 {
         else { if head >= ep_capacity() { 0 }
         else { if cnt < 0 { 0 }
         else { if cnt > ep_capacity() { 0 }
-        else { if tick < 0 { 0 } else { 1 } } } } }
+        else { if tick < 0 { 0 }
+        else {
+            let mut i: i32 = 0;
+            let mut ok: i32 = 1;
+            while i < cnt {
+                let event_tick = __arena_get(start + 3 + i * 3);
+                if event_tick < 0 { ok = 0; }
+                else { if event_tick > tick { ok = 0; } }
+                i = i + 1;
+            }
+            ok
+        } } } } }
     }}}}}
 }
 

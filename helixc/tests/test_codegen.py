@@ -11889,6 +11889,102 @@ def test_stage35_tf2d_output_helpers_reject_short_destinations():
     assert code == 42, f"expected 42, got {code}"
 
 
+def test_stage35_2d_matvec_rejects_short_vectors():
+    src = """
+    fn main() -> i32 {
+        let iw = ti2d_new(2, 1);
+        ti2d_set(iw, 1, 0, 0, 2);
+        ti2d_set(iw, 1, 1, 0, 3);
+        let ix = t1d_new(1);
+        ti1d_set(ix, 0, 4);
+        let iy_short = t1d_new(1);
+        ti1d_set(iy_short, 0, 9);
+        let int_short_y = ti2d_matvec(iw, 2, 1, ix, iy_short);
+
+        let iw2 = ti2d_new(1, 2);
+        ti2d_set(iw2, 2, 0, 0, 2);
+        ti2d_set(iw2, 2, 0, 1, 3);
+        let ix_short = t1d_new(1);
+        ti1d_set(ix_short, 0, 4);
+        let iy = t1d_new(1);
+        ti1d_set(iy, 0, 9);
+        let int_short_x = ti2d_matvec(iw2, 1, 2, ix_short, iy);
+
+        let fw = tf2d_zeros(2, 1);
+        tf2d_set(fw, 1, 0, 0, 2.0_f32);
+        tf2d_set(fw, 1, 1, 0, 3.0_f32);
+        let fx = t1d_new(1);
+        tf1d_set(fx, 0, 4.0_f32);
+        let fy_short = t1d_new(1);
+        tf1d_set(fy_short, 0, 9.0_f32);
+        let float_short_y = tf2d_matvec(fw, 2, 1, fx, fy_short);
+
+        let fw2 = tf2d_zeros(1, 2);
+        tf2d_set(fw2, 2, 0, 0, 2.0_f32);
+        tf2d_set(fw2, 2, 0, 1, 3.0_f32);
+        let fx_short = t1d_new(1);
+        tf1d_set(fx_short, 0, 4.0_f32);
+        let fy = t1d_new(1);
+        tf1d_set(fy, 0, 9.0_f32);
+        let float_short_x = tf2d_matvec(fw2, 1, 2, fx_short, fy);
+
+        if int_short_y == t2d_error() {
+        if int_short_x == t2d_error() {
+        if float_short_y == t2d_error() {
+        if float_short_x == t2d_error() {
+        if ti1d_get(iy_short, 0) == 9 {
+        if ti1d_get(iy, 0) == 9 {
+        if (tf1d_get(fy_short, 0) as i32) == 9 {
+        if (tf1d_get(fy, 0) as i32) == 9 { 42 } else { 7 }
+        } else { 7 }} else { 7 }} else { 7 }} else { 7 }} else { 7 }} else { 7 }} else { 7 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stage35_2d_setters_return_error_on_invalid_coordinates():
+    src = """
+    fn main() -> i32 {
+        let im = ti2d_new(1, 1);
+        let istatus = ti2d_set(im, 1, 1, 0, 42);
+        let fm = tf2d_zeros(1, 1);
+        let fstatus = tf2d_set(fm, 1, 1, 0, 42.0_f32);
+        if istatus == t2d_error() {
+        if fstatus == t2d_error() {
+        if ti2d_get(im, 1, 0, 0) == 0 {
+        if (tf2d_get(fm, 1, 0, 0) as i32) == 0 { 42 } else { 7 }
+        } else { 7 }} else { 7 }} else { 7 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stage35_agi_memory_rejects_corrupt_entry_timestamps():
+    src = """
+    fn main() -> i32 {
+        let wm = wm_new();
+        wm_store(wm, 10, 20);
+        __arena_set(wm + 2 + 2, 0 - 1);
+        let wm_status = wm_store(wm, 11, 22);
+
+        let ep = ep_new();
+        ep_record(ep, 1, 99);
+        __arena_set(ep + 3, 0 - 1);
+        let ep_status = ep_record(ep, 2, 100);
+
+        if wm_ok(wm) == 0 {
+        if wm_status == (0 - 1) {
+        if ep_ok(ep) == 0 {
+        if ep_status == (0 - 1) { 42 } else { 7 }
+        } else { 7 }} else { 7 }} else { 7 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
 def test_stage35_2d_accessors_reject_negative_offsets():
     src = """
     fn main() -> i32 {

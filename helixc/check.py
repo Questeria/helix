@@ -293,6 +293,8 @@ def parse_args(argv: list[str]) -> tuple[CliArgs, list[str]]:
         a.path = positional[0]
         if len(positional) > 1:
             errors.append(f"unexpected extra arg(s): {positional[1:]}")
+    if "--stdlib" in a.flags and "--no-stdlib" in a.flags:
+        errors.append("conflicting stdlib flags: choose --stdlib or --no-stdlib")
     return a, errors
 
 
@@ -981,6 +983,17 @@ def _main_inner(argv: list[str] | None,
     if a.output is not None and selected_stdout_modes:
         messages = [
             f"helixc: {selected_stdout_modes[0]} writes to stdout and cannot be combined with -o"
+        ]
+        if proof_mode:
+            _emit_proof_invocation_error(a, messages)
+        else:
+            for msg in messages:
+                print(msg, file=sys.stderr)
+        return 2
+    if "--check-only" in a.flags and (selected_stdout_modes or a.output is not None):
+        target = selected_stdout_modes[0] if selected_stdout_modes else "-o"
+        messages = [
+            f"helixc: --check-only cannot be combined with {target}"
         ]
         if proof_mode:
             _emit_proof_invocation_error(a, messages)

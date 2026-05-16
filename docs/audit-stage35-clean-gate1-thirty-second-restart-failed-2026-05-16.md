@@ -86,5 +86,5 @@ Status: findings present.
 
 ## Next Step
 
-Commit and push this restart-32 fix sweep, then begin restart 33 as another
-fresh Stage 35 clean-gate attempt from the newest pushed HEAD.
+Restart 32 was committed and pushed as `5d8b4c4`. Restart 33 began from that
+pushed HEAD as the next fresh Stage 35 clean-gate attempt.
