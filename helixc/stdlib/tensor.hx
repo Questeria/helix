@@ -342,16 +342,25 @@ fn ti1d_set(start: i32, i: i32, x: i32) -> i32 {
     }}}
 }
 
+// Restart 53 A5: i64 intermediate + INT32 saturation per element.
+// Sibling of ti1d_dot / ti2d_matmul saturation; the per-element
+// write still needed protection because a single a*xi term can
+// overflow i32 at modest magnitudes (~46341).
 fn ti1d_axpy(y_start: i32, a: i32, x_start: i32, n: i32) -> i32 {
     if n <= 0 { 0 }
     else { if t1d_slice_ok(y_start, n) == 0 { t2d_error() }
     else { if t1d_slice_ok(x_start, n) == 0 { t2d_error() }
     else {
     let mut i: i32 = 0;
+    let hi: i64 = 2147483647_i64;
+    let lo: i64 = (0_i64 - 2147483647_i64) - 1_i64;
     while i < n {
-        let cur = __arena_get(y_start + i);
-        let xi = __arena_get(x_start + i);
-        __arena_set(y_start + i, cur + a * xi);
+        let cur: i64 = __arena_get(y_start + i) as i64;
+        let xi: i64 = __arena_get(x_start + i) as i64;
+        let mut v: i64 = cur + (a as i64) * xi;
+        if v > hi { v = hi; }
+        else { if v < lo { v = lo; } };
+        __arena_set(y_start + i, v as i32);
         i = i + 1;
     }
     0
@@ -780,28 +789,44 @@ fn ti1d_copy(src: i32, dst: i32, n: i32) -> i32 {
 }
 
 // Broadcasting: y[i] = x[i] + scalar (element-wise add of scalar to vec).
+// Restart 53 A5: per-element i64 intermediate + INT32 saturation.
 fn ti1d_add_scalar(x_start: i32, scalar: i32, y_start: i32, n: i32) -> i32 {
     if n <= 0 { 0 }
     else { if t1d_slice_ok(x_start, n) == 0 { t2d_error() }
     else { if t1d_slice_ok(y_start, n) == 0 { t2d_error() }
     else {
     let mut i: i32 = 0;
+    let hi: i64 = 2147483647_i64;
+    let lo: i64 = (0_i64 - 2147483647_i64) - 1_i64;
+    let s: i64 = scalar as i64;
     while i < n {
-        __arena_set(y_start + i, __arena_get(x_start + i) + scalar);
+        let mut v: i64 = (__arena_get(x_start + i) as i64) + s;
+        if v > hi { v = hi; }
+        else { if v < lo { v = lo; } };
+        __arena_set(y_start + i, v as i32);
         i = i + 1;
     }
     0
     }}}
 }
 
+// Restart 53 A5: per-element i64 intermediate + INT32 saturation.
+// Sibling of ti1d_axpy / ti1d_add_scalar; protects the per-element
+// product from silent i32 wrap-around.
 fn ti1d_mul_scalar(x_start: i32, scalar: i32, y_start: i32, n: i32) -> i32 {
     if n <= 0 { 0 }
     else { if t1d_slice_ok(x_start, n) == 0 { t2d_error() }
     else { if t1d_slice_ok(y_start, n) == 0 { t2d_error() }
     else {
     let mut i: i32 = 0;
+    let hi: i64 = 2147483647_i64;
+    let lo: i64 = (0_i64 - 2147483647_i64) - 1_i64;
+    let s: i64 = scalar as i64;
     while i < n {
-        __arena_set(y_start + i, __arena_get(x_start + i) * scalar);
+        let mut v: i64 = (__arena_get(x_start + i) as i64) * s;
+        if v > hi { v = hi; }
+        else { if v < lo { v = lo; } };
+        __arena_set(y_start + i, v as i32);
         i = i + 1;
     }
     0

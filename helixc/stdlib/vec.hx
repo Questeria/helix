@@ -47,15 +47,22 @@ fn vec_set(start: i32, i: i32, x: i32) -> i32 {
     x
 }
 
+// Restart 53 A3: i64 accumulator + INT32 saturation. Sibling of
+// ti1d_sum (restart 51 A2) and iterators.hx vec_sum_pure (restart 53).
+// The vec.hx companion was missed in the original sweep.
 @pure
 fn vec_sum(start: i32, count: i32) -> i32 {
     let mut i: i32 = 0;
-    let mut total: i32 = 0;
+    let mut total: i64 = 0_i64;
+    let hi: i64 = 2147483647_i64;
+    let lo: i64 = (0_i64 - 2147483647_i64) - 1_i64;
     while i < count {
-        total = total + __arena_get(start + i);
+        total = total + (__arena_get(start + i) as i64);
+        if total > hi { total = hi; }
+        else { if total < lo { total = lo; } };
         i = i + 1;
     }
-    total
+    total as i32
 }
 
 @pure
@@ -73,15 +80,22 @@ fn vec_max(start: i32, count: i32) -> i32 {
     }
 }
 
+// Restart 53 A3: i64 accumulator + INT32 saturation. Sibling of
+// ti1d_prod (restart 50 A3). A single multiplicand of even modest
+// magnitude (~46341) quickly overflows the i32 product.
 @pure
 fn vec_product(start: i32, count: i32) -> i32 {
     let mut i: i32 = 0;
-    let mut p: i32 = 1;
+    let mut p: i64 = 1_i64;
+    let hi: i64 = 2147483647_i64;
+    let lo: i64 = (0_i64 - 2147483647_i64) - 1_i64;
     while i < count {
-        p = p * __arena_get(start + i);
+        p = p * (__arena_get(start + i) as i64);
+        if p > hi { p = hi; }
+        else { if p < lo { p = lo; } };
         i = i + 1;
     }
-    p
+    p as i32
 }
 
 @pure

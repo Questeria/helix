@@ -28,10 +28,20 @@ fn dense_layer_forward(w_start: i32, w_rows: i32, w_cols: i32,
     else { if t1d_slice_ok(y_start, w_rows) == 0 { t2d_error() }
     else {
     ti2d_matvec(w_start, w_rows, w_cols, x_start, y_start);
+    // Restart 53 A6: i64 intermediate + INT32 saturation on the bias
+    // add so the saturation guarantee from ti2d_matvec (restart 52 A1)
+    // is preserved through the dense-layer output (otherwise an
+    // INT32_MAX cur + positive bias silently wraps to negative).
     let mut r: i32 = 0;
+    let hi: i64 = 2147483647_i64;
+    let lo: i64 = (0_i64 - 2147483647_i64) - 1_i64;
     while r < w_rows {
-        let cur = __arena_get(y_start + r);
-        __arena_set(y_start + r, cur + __arena_get(b_start + r));
+        let cur: i64 = __arena_get(y_start + r) as i64;
+        let bv: i64 = __arena_get(b_start + r) as i64;
+        let mut v: i64 = cur + bv;
+        if v > hi { v = hi; }
+        else { if v < lo { v = lo; } };
+        __arena_set(y_start + r, v as i32);
         r = r + 1;
     }
     0
@@ -112,16 +122,26 @@ fn sgd_step_scalar(w: i32, g: i32, lr: i32) -> i32 {
 // SGD update for a 1D parameter array in-place.
 //   w[i] = w[i] - lr * grad[i] for i in [0, n)
 // Returns 0.
+// Restart 53 A7: per-element i64 intermediate + INT32 saturation.
+// Sibling of ti1d_axpy saturation; a single `lr * gi` term can wrap
+// i32 (e.g. lr=1, gi=INT32_MAX/2 with negative w), corrupting the
+// weight under hostile or uninitialized grads.
 fn sgd_step_array(w_start: i32, g_start: i32, lr: i32, n: i32) -> i32 {
     if n <= 0 { 0 }
     else { if t1d_slice_ok(w_start, n) == 0 { t2d_error() }
     else { if t1d_slice_ok(g_start, n) == 0 { t2d_error() }
     else {
     let mut i: i32 = 0;
+    let hi: i64 = 2147483647_i64;
+    let lo: i64 = (0_i64 - 2147483647_i64) - 1_i64;
+    let lr64: i64 = lr as i64;
     while i < n {
-        let w = __arena_get(w_start + i);
-        let gi = __arena_get(g_start + i);
-        __arena_set(w_start + i, w - lr * gi);
+        let w: i64 = __arena_get(w_start + i) as i64;
+        let gi: i64 = __arena_get(g_start + i) as i64;
+        let mut v: i64 = w - lr64 * gi;
+        if v > hi { v = hi; }
+        else { if v < lo { v = lo; } };
+        __arena_set(w_start + i, v as i32);
         i = i + 1;
     }
     0

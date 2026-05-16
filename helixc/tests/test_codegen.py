@@ -20450,6 +20450,281 @@ def test_stage35_restart51_vec_negate_inplace_int32_min_saturates():
     assert code == 42, f"expected 42, got {code}"
 
 
+def test_stage35_restart52_ti2d_matvec_saturates_on_i32_overflow():
+    """Restart 52 A1: ti2d_matvec uses i64 accumulator + INT32 saturation.
+
+    A single |w|*|x| term overflows i32 at values around 46341; running
+    sum wraps faster. The fix saturates per output cell."""
+    src = """
+    fn main() -> i32 {
+        let w = ti2d_new(2, 2);
+        ti2d_set(w, 2, 0, 0, 46341);
+        ti2d_set(w, 2, 0, 1, 46341);
+        ti2d_set(w, 2, 1, 0, 0);
+        ti2d_set(w, 2, 1, 1, 0);
+        let x = t1d_new(2);
+        ti1d_set(x, 0, 46341); ti1d_set(x, 1, 46341);
+        let y = t1d_new(2);
+        ti2d_matvec(w, 2, 2, x, y);
+        let y0 = ti1d_get(y, 0);
+        if y0 == 2147483647 { 42 } else { 7 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stage35_restart52_ti2d_matmul_saturates_on_i32_overflow():
+    """Restart 52 A1: ti2d_matmul i64 accumulator + INT32 saturation
+    per output cell. Sibling of restart 51 A3 extended to 2D matmul."""
+    src = """
+    fn main() -> i32 {
+        let a = ti2d_new(2, 2);
+        ti2d_set(a, 2, 0, 0, 46341);
+        ti2d_set(a, 2, 0, 1, 46341);
+        ti2d_set(a, 2, 1, 0, 0);
+        ti2d_set(a, 2, 1, 1, 0);
+        let b = ti2d_new(2, 2);
+        ti2d_set(b, 2, 0, 0, 46341);
+        ti2d_set(b, 2, 0, 1, 0);
+        ti2d_set(b, 2, 1, 0, 46341);
+        ti2d_set(b, 2, 1, 1, 0);
+        let c = ti2d_new(2, 2);
+        ti2d_matmul(a, 2, 2, b, 2, c);
+        let c00 = ti2d_get(c, 2, 0, 0);
+        if c00 == 2147483647 { 42 } else { 7 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stage35_restart53_vec_dot_saturates_on_i32_overflow():
+    """Restart 53 A1: iterators.hx vec_dot uses i64 accumulator +
+    INT32 saturation. Sibling of restart 51 A3 / restart 52 A1."""
+    src = """
+    fn main() -> i32 {
+        let a = __arena_len();
+        __arena_push(46341); __arena_push(46341);
+        let b = __arena_len();
+        __arena_push(46341); __arena_push(46341);
+        let r = vec_dot(a, b, 2);
+        if r == 2147483647 { 42 } else { 7 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stage35_restart53_vec_dot_pure_saturates_on_i32_overflow():
+    """Restart 53 A1: vec_dot_pure (@pure) — sibling of vec_dot."""
+    src = """
+    fn main() -> i32 {
+        let a = __arena_len();
+        __arena_push(46341); __arena_push(46341);
+        let b = __arena_len();
+        __arena_push(46341); __arena_push(46341);
+        let r = vec_dot_pure(a, b, 2);
+        if r == 2147483647 { 42 } else { 7 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stage35_restart53_vec_sum_saturates_on_i32_overflow():
+    """Restart 53 A3: vec.hx vec_sum uses i64 accumulator +
+    INT32 saturation. Sibling of ti1d_sum (restart 51 A2)."""
+    src = """
+    fn main() -> i32 {
+        let s = __arena_len();
+        __arena_push(2147483647);
+        __arena_push(2147483647);
+        let r = vec_sum(s, 2);
+        if r == 2147483647 { 42 } else { 7 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stage35_restart53_vec_product_saturates_on_i32_overflow():
+    """Restart 53 A3: vec.hx vec_product uses i64 accumulator +
+    INT32 saturation. Sibling of ti1d_prod (restart 50 A3)."""
+    src = """
+    fn main() -> i32 {
+        let s = __arena_len();
+        let mut i: i32 = 0;
+        while i < 32 { __arena_push(2); i = i + 1; }
+        let p = vec_product(s, 32);
+        if p == 2147483647 { 42 } else { 7 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stage35_restart53_vec_cumsum_per_slot_saturates():
+    """Restart 53 A2: vec_cumsum saturates each pushed slot — no
+    silent mid-slice wrap into negative."""
+    src = """
+    fn main() -> i32 {
+        let s = __arena_len();
+        __arena_push(2147483647);
+        __arena_push(2147483647);
+        let r = vec_cumsum(s, 2);
+        let r0 = __arena_get(r);
+        let r1 = __arena_get(r + 1);
+        if r0 == 2147483647 { if r1 == 2147483647 { 42 } else { 7 } } else { 7 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stage35_restart53_vec_mean_saturates_then_divides():
+    """Restart 53 A2: vec_mean saturates the partial sum before the
+    integer division, so the mean is monotonic in the input magnitudes
+    (no garbage from a wrapped sum)."""
+    src = """
+    fn main() -> i32 {
+        let s = __arena_len();
+        __arena_push(2147483647);
+        __arena_push(2147483647);
+        let m = vec_mean(s, 2);
+        if m == (2147483647 / 2) { 42 } else { 7 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stage35_restart53_ti1d_axpy_saturates_per_element():
+    """Restart 53 A5: ti1d_axpy uses per-element i64 intermediate +
+    INT32 saturation."""
+    src = """
+    fn main() -> i32 {
+        let y = t1d_new(1);
+        ti1d_set(y, 0, 0);
+        let x = t1d_new(1);
+        ti1d_set(x, 0, 46341);
+        ti1d_axpy(y, 46341, x, 1);
+        let v = ti1d_get(y, 0);
+        if v == 2147483647 { 42 } else { 7 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stage35_restart53_ti1d_mul_scalar_saturates_per_element():
+    """Restart 53 A5: ti1d_mul_scalar uses per-element i64
+    intermediate + INT32 saturation."""
+    src = """
+    fn main() -> i32 {
+        let x = t1d_new(1);
+        ti1d_set(x, 0, 46341);
+        let y = t1d_new(1);
+        ti1d_mul_scalar(x, 46341, y, 1);
+        let v = ti1d_get(y, 0);
+        if v == 2147483647 { 42 } else { 7 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stage35_restart53_dense_layer_forward_bias_preserves_saturation():
+    """Restart 53 A6: the bias-add following a saturated matvec must
+    keep the saturation guarantee. INT32_MAX matvec output + positive
+    bias used to wrap to negative."""
+    src = """
+    fn main() -> i32 {
+        let w = ti2d_new(2, 2);
+        ti2d_set(w, 2, 0, 0, 46341);
+        ti2d_set(w, 2, 0, 1, 46341);
+        ti2d_set(w, 2, 1, 0, 0);
+        ti2d_set(w, 2, 1, 1, 0);
+        let x = t1d_new(2);
+        ti1d_set(x, 0, 46341); ti1d_set(x, 1, 46341);
+        let b = t1d_new(2);
+        ti1d_set(b, 0, 1000); ti1d_set(b, 1, 0);
+        let y = t1d_new(2);
+        dense_layer_forward(w, 2, 2, x, b, y);
+        let y0 = ti1d_get(y, 0);
+        if y0 == 2147483647 { 42 } else { 7 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stage35_restart53_sgd_step_array_saturates_per_element():
+    """Restart 53 A7: sgd_step_array uses per-element i64 intermediate
+    + INT32 saturation. Previously `w - lr * gi` could wrap silently."""
+    src = """
+    fn main() -> i32 {
+        let w = t1d_new(1);
+        ti1d_set(w, 0, 0 - 2147483647 - 1);
+        let g = t1d_new(1);
+        ti1d_set(g, 0, 1);
+        sgd_step_array(w, g, 2147483647, 1);
+        let v = ti1d_get(w, 0);
+        if v == (0 - 2147483647) - 1 { 42 } else { 7 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stage35_restart53_attention_dot_saturates_per_cell():
+    """Restart 53 A4: attention_dot uses i64 dot + i64 weighted
+    accumulator + i64 total_w with INT32 saturation. Previously the
+    three nested i32 accumulators silently wrapped."""
+    src = """
+    fn main() -> i32 {
+        let q = t1d_new(2);
+        ti1d_set(q, 0, 46341); ti1d_set(q, 1, 46341);
+        let k = t1d_new(2);
+        ti1d_set(k, 0, 46341); ti1d_set(k, 1, 46341);
+        let v = t1d_new(2);
+        ti1d_set(v, 0, 1); ti1d_set(v, 1, 1);
+        let out = t1d_new(2);
+        attention_dot(q, k, v, 1, 2, out);
+        let o0 = ti1d_get(out, 0);
+        let o1 = ti1d_get(out, 1);
+        if o0 == 1 { if o1 == 1 { 42 } else { 7 } } else { 7 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stage35_restart53_attention_softmax_f32_nan_fail_closed():
+    """Restart 53 A8: attention_softmax_f32 NaN-fail-closed on output.
+    A single NaN slot in vals_start used to poison the corresponding
+    out_start slot."""
+    src = """
+    fn main() -> i32 {
+        let q = t1d_new(2);
+        tf1d_set(q, 0, 1.0_f32); tf1d_set(q, 1, 1.0_f32);
+        let k = t1d_new(2);
+        tf1d_set(k, 0, 1.0_f32); tf1d_set(k, 1, 1.0_f32);
+        let v = t1d_new(2);
+        let nan_bits = 2143289344;
+        tf1d_set(v, 0, __f32_from_bits(nan_bits));
+        tf1d_set(v, 1, 0.0_f32);
+        let out = t1d_new(2);
+        attention_softmax_f32(q, k, v, 1, 2, out);
+        let o0 = tf1d_get(out, 0);
+        let o1 = tf1d_get(out, 1);
+        if (o0 == o0) { if (o1 == o1) { 42 } else { 7 } } else { 7 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
 def main():
     # Recognise both the legacy `_SkipTest` exception and pytest's
     # `Skipped` outcome class so tests can use either to signal a skip

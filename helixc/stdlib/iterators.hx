@@ -397,15 +397,20 @@ fn vec_zip_max(a: i32, b: i32, count: i32) -> i32 {
     s
 }
 
+// Restart 53 A2: i64 accumulator + INT32 saturation. Sibling of
+// restart 51 A4 (ti1d_l1_norm); the i32 accumulator could wrap when
+// the column of values summed exceeds INT32_MAX magnitude.
 fn vec_abs_sum(start: i32, count: i32) -> i32 {
     let mut i: i32 = 0;
-    let mut acc: i32 = 0;
+    let mut acc: i64 = 0_i64;
+    let hi: i64 = 2147483647_i64;
     while i < count {
-        let v = __arena_get(start + i);
-        if v < 0 { acc = acc - v; } else { acc = acc + v; }
+        let v: i64 = __arena_get(start + i) as i64;
+        if v < 0_i64 { acc = acc - v; } else { acc = acc + v; }
+        if acc > hi { acc = hi; };
         i = i + 1;
     }
-    acc
+    acc as i32
 }
 
 // Restart 53 A2: i64 accumulator + INT32 saturation. Single |v|>=46341
@@ -549,13 +554,20 @@ fn vec_map_square(start: i32, count: i32) -> i32 {
 // vec_cumsum(start, count): allocate a new arena slice where
 // out[i] = sum(in[0..=i]). Standard cumulative-sum / prefix-sum.
 // out[0] = in[0], out[1] = in[0]+in[1], ..., out[count-1] = total.
+// Restart 53 A2: i64 accumulator + INT32 saturation per pushed slot.
+// Sibling of ti1d_sum / vec_abs_sum saturation — keeps every emitted
+// prefix sum inside i32 range instead of silently wrapping mid-slice.
 fn vec_cumsum(start: i32, count: i32) -> i32 {
     let s: i32 = __arena_len();
     let mut i: i32 = 0;
-    let mut acc: i32 = 0;
+    let mut acc: i64 = 0_i64;
+    let hi: i64 = 2147483647_i64;
+    let lo: i64 = (0_i64 - 2147483647_i64) - 1_i64;
     while i < count {
-        acc = acc + __arena_get(start + i);
-        __arena_push(acc);
+        acc = acc + (__arena_get(start + i) as i64);
+        if acc > hi { acc = hi; }
+        else { if acc < lo { acc = lo; } };
+        __arena_push(acc as i32);
         i = i + 1;
     }
     s
@@ -720,17 +732,24 @@ fn vec_zip_eq(a: i32, b: i32, count: i32) -> i32 {
 // vec_mean(start, count): arithmetic mean via integer division
 // (sum / count). Useful for ML running averages, stats, sanity
 // checks. count <= 0 returns 0 (avoid div-by-zero trap).
+// Restart 53 A2: i64 accumulator + INT32 saturation before divide.
+// A wrapped i32 sum divided by count returns garbage; saturating
+// first keeps the mean monotonic in the input magnitudes.
 @pure
 fn vec_mean(start: i32, count: i32) -> i32 {
     if count <= 0 { 0 }
     else {
         let mut i: i32 = 0;
-        let mut acc: i32 = 0;
+        let mut acc: i64 = 0_i64;
+        let hi: i64 = 2147483647_i64;
+        let lo: i64 = (0_i64 - 2147483647_i64) - 1_i64;
         while i < count {
-            acc = acc + __arena_get(start + i);
+            acc = acc + (__arena_get(start + i) as i64);
+            if acc > hi { acc = hi; }
+            else { if acc < lo { acc = lo; } };
             i = i + 1;
         }
-        acc / count
+        (acc / (count as i64)) as i32
     }
 }
 
@@ -1501,27 +1520,40 @@ fn vec_min_pure(start: i32, count: i32) -> i32 {
 }
 
 // vec_sum_pure(start, count): @pure. Sum of all elements. 0 if empty.
+// Restart 53 A2: i64 accumulator + INT32 saturation. Sibling of
+// ti1d_sum (restart 51 A2) and vec_sum / vec_abs_sum (restart 53).
 @pure
 fn vec_sum_pure(start: i32, count: i32) -> i32 {
     let mut i: i32 = 0;
-    let mut total: i32 = 0;
+    let mut total: i64 = 0_i64;
+    let hi: i64 = 2147483647_i64;
+    let lo: i64 = (0_i64 - 2147483647_i64) - 1_i64;
     while i < count {
-        total = total + __arena_get(start + i);
+        total = total + (__arena_get(start + i) as i64);
+        if total > hi { total = hi; }
+        else { if total < lo { total = lo; } };
         i = i + 1;
     }
-    total
+    total as i32
 }
 
 // vec_dot_pure(a, b, count): @pure. Inner product (sum of a[i]*b[i]).
+// Restart 53 A1: i64 accumulator + INT32 saturation. Sibling of
+// restart 51 A3 (ti1d_dot), restart 52 A1 (ti2d_matmul/matvec) and
+// restart 53 vec_dot.
 @pure
 fn vec_dot_pure(a: i32, b: i32, count: i32) -> i32 {
     let mut i: i32 = 0;
-    let mut total: i32 = 0;
+    let mut total: i64 = 0_i64;
+    let hi: i64 = 2147483647_i64;
+    let lo: i64 = (0_i64 - 2147483647_i64) - 1_i64;
     while i < count {
-        total = total + __arena_get(a + i) * __arena_get(b + i);
+        total = total + (__arena_get(a + i) as i64) * (__arena_get(b + i) as i64);
+        if total > hi { total = hi; }
+        else { if total < lo { total = lo; } };
         i = i + 1;
     }
-    total
+    total as i32
 }
 
 // vec_clone_alloc(start, count): allocate a new vec containing a copy

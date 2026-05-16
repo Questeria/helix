@@ -574,6 +574,21 @@ fn attention_softmax_f32(q_start: i32, keys_start: i32, vals_start: i32,
         }
         k2 = k2 + 1;
     }
+    // Restart 53 A8: NaN-fail-closed sweep of output. A single
+    // NaN/Inf in vals_start would otherwise poison the corresponding
+    // out_start slot; the layer_norm_f32 / softmax_layer precedent
+    // is to write 0 on detection rather than propagate.
+    let mut nd: i32 = 0;
+    while nd < d {
+        let ov = __f32_from_bits(__arena_get(out_start + nd));
+        // NaN: ov != ov is the canonical IEEE-754 test.
+        // Inf: |ov| > F32_MAX; we use a finite sentinel because Helix
+        // f32 literals can't denote Inf directly.
+        let abs_ov = if ov < 0.0_f32 { 0.0_f32 - ov } else { ov };
+        if ov != ov { __arena_set(out_start + nd, __bits_of_f32(0.0_f32)); }
+        else { if abs_ov > 3.4028234e38_f32 { __arena_set(out_start + nd, __bits_of_f32(0.0_f32)); } };
+        nd = nd + 1;
+    }
     0
     }}}}
     }}}
@@ -601,39 +616,64 @@ fn attention_dot(query_start: i32, keys_start: i32, values_start: i32,
     else { if t1d_slice_ok(values_start, total) == 0 { t2d_error() }
     else { if t1d_slice_ok(output_start, d) == 0 { t2d_error() }
     else {
-    // Initialize output to 0.
+    // Restart 53 A4: i64 dot + i64 per-cell weighted accumulator +
+    // i64 total_w, each saturated to INT32. The original i32 paths
+    // could wrap silently in three independent ways (dot product per
+    // key, weighted-output accumulator per dim, and the normalization
+    // denominator). The integer-attention output written to
+    // output_start stays bounded by INT32 even under hostile inputs.
+    let hi: i64 = 2147483647_i64;
+    let lo: i64 = (0_i64 - 2147483647_i64) - 1_i64;
+    // Initialize output accumulators to 0. We accumulate i64 in a
+    // scratch slice (allocated below), then saturate to i32 on final
+    // normalize.
+    let scratch = t1d_new(d);
     let mut o: i32 = 0;
-    while o < d { __arena_set(output_start + o, 0); o = o + 1; }
-    // Compute total attention weight for normalization (sum over all keys).
-    let mut total_w: i32 = 0;
+    while o < d {
+        __arena_set(output_start + o, 0);
+        __arena_set(scratch + o, 0);
+        o = o + 1;
+    }
+    // The d-wide weighted accumulator stays bounded by saturating
+    // each per-cell sum to INT32 — we store the saturated i32 back
+    // into scratch each iteration so the running magnitude is
+    // bounded.
+    let mut total_w: i64 = 0_i64;
     let mut k: i32 = 0;
     while k < n {
         let mut dim: i32 = 0;
-        let mut dot: i32 = 0;
+        let mut dot: i64 = 0_i64;
         while dim < d {
-            dot = dot + __arena_get(query_start + dim) *
-                        __arena_get(keys_start + k * d + dim);
+            dot = dot + (__arena_get(query_start + dim) as i64) *
+                        (__arena_get(keys_start + k * d + dim) as i64);
+            if dot > hi { dot = hi; }
+            else { if dot < lo { dot = lo; } };
             dim = dim + 1;
         }
         // Clamp to non-negative (no exp needed for this approximation).
-        let w = if dot > 0 { dot } else { 0 };
-        // Accumulate weighted value.
+        let w: i64 = if dot > 0_i64 { dot } else { 0_i64 };
+        // Accumulate weighted value with per-cell saturation.
         let mut vd: i32 = 0;
         while vd < d {
-            let cur = __arena_get(output_start + vd);
-            __arena_set(output_start + vd,
-                        cur + w * __arena_get(values_start + k * d + vd));
+            let cur: i64 = __arena_get(scratch + vd) as i64;
+            let val: i64 = __arena_get(values_start + k * d + vd) as i64;
+            let mut v: i64 = cur + w * val;
+            if v > hi { v = hi; }
+            else { if v < lo { v = lo; } };
+            __arena_set(scratch + vd, v as i32);
             vd = vd + 1;
         }
         total_w = total_w + w;
+        if total_w > hi { total_w = hi; };
         k = k + 1;
     }
-    // Normalize by total_w (skip if zero).
-    if total_w > 0 {
+    // Normalize by total_w (skip if zero — fail-closed: output stays
+    // zero rather than emitting un-normalized weighted sums).
+    if total_w > 0_i64 {
         let mut nd: i32 = 0;
         while nd < d {
-            let cur = __arena_get(output_start + nd);
-            __arena_set(output_start + nd, cur / total_w);
+            let cur: i64 = __arena_get(scratch + nd) as i64;
+            __arena_set(output_start + nd, (cur / total_w) as i32);
             nd = nd + 1;
         }
     }

@@ -4323,6 +4323,13 @@ if __name__ == "__main__":
                 try:
                     validate_kernel_tile_lowering(mod)
                 except Exception as e:
+                    # NB: validate_kernel_tile_lowering deliberately raises
+                    # NotImplementedError as the user-facing signal for
+                    # unsupported tile ops (see test_stage35_emit_ptx_*
+                    # and test_stage35_output_binary_rejects_dead_*). Do
+                    # NOT add a re-raise guard here — it would alias the
+                    # readable error into a `compiler bug` traceback.
+                    # Mirrors the check.py:1718 sibling.
                     print(f"error: ptx: {e}", file=sys.stderr)
                     _exit_after_ad_drain(1)
             removed = dce_module(mod)
@@ -4340,6 +4347,9 @@ if __name__ == "__main__":
             try:
                 validate_kernel_tile_lowering(mod)
             except Exception as e:
+                # See note above the -O1+ sibling: NIE is the user-facing
+                # signal for unsupported tile ops; no re-raise guard here.
+                # Mirrors check.py:1753.
                 print(f"error: ptx: {e}", file=sys.stderr)
                 _exit_after_ad_drain(1)
 
