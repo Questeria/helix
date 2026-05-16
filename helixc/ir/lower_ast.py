@@ -2038,6 +2038,46 @@ class Lowerer:
                 return self.builder.emit(
                     tir.OpKind.SUB, one, a,
                     result_ty=tir.TIRScalar("f32"))
+            # Stage 36 Increment 8: fuzzy_xor + fuzzy_implies.
+            # fuzzy_xor(a, b) = a + b - 2*a*b
+            if (isinstance(expr.callee, A.Name)
+                    and expr.callee.name == "fuzzy_xor"
+                    and len(expr.args) == 2):
+                a = self._lower_expr(expr.args[0])
+                b = self._lower_expr(expr.args[1])
+                if a is None or b is None:
+                    return a or b
+                sum_ab = self.builder.emit(
+                    tir.OpKind.ADD, a, b,
+                    result_ty=tir.TIRScalar("f32"))
+                prod_ab = self.builder.emit(
+                    tir.OpKind.MUL, a, b,
+                    result_ty=tir.TIRScalar("f32"))
+                two = self.builder.const_float(2.0, dtype="f32")
+                two_prod = self.builder.emit(
+                    tir.OpKind.MUL, two, prod_ab,
+                    result_ty=tir.TIRScalar("f32"))
+                return self.builder.emit(
+                    tir.OpKind.SUB, sum_ab, two_prod,
+                    result_ty=tir.TIRScalar("f32"))
+            # fuzzy_implies(a, b) = 1 - a + a*b
+            if (isinstance(expr.callee, A.Name)
+                    and expr.callee.name == "fuzzy_implies"
+                    and len(expr.args) == 2):
+                a = self._lower_expr(expr.args[0])
+                b = self._lower_expr(expr.args[1])
+                if a is None or b is None:
+                    return a or b
+                one = self.builder.const_float(1.0, dtype="f32")
+                one_minus_a = self.builder.emit(
+                    tir.OpKind.SUB, one, a,
+                    result_ty=tir.TIRScalar("f32"))
+                prod_ab = self.builder.emit(
+                    tir.OpKind.MUL, a, b,
+                    result_ty=tir.TIRScalar("f32"))
+                return self.builder.emit(
+                    tir.OpKind.ADD, one_minus_a, prod_ab,
+                    result_ty=tir.TIRScalar("f32"))
             # Stage 16.5: "literal".as_ptr() — emit STR_PTR op that resolves
             # to a `lea rax, [rip + sym]` of the literal's bytes. The result
             # is a u64 raw pointer suitable for FFI calls.

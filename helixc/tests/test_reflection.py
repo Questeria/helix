@@ -213,6 +213,19 @@ def test_dogfood_07_provenance_sgd():
     assert compile_and_run(src) == 42
 
 
+def test_dogfood_08_two_param_fuzzy_rule():
+    # Stage 36 Increment 8 dogfood: TWO-parameter SGD over a fuzzy
+    # rule. hypothesis = fuzzy_or(fuzzy_and(a, w1), fuzzy_and(b, w2)).
+    # Trains w1 from example (1, 0)→0.9 and w2 from (0, 1)→0.7 via
+    # grad_rev with indexed argument differentiation. Exit 42 iff
+    # w1*100 + w2*100 ≈ 160 (i.e. w1≈0.9, w2≈0.7).
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    p = os.path.join(proj_root, "helixc", "examples", "dogfood_08_two_param_fuzzy_rule.hx")
+    with open(p) as f:
+        src = f.read()
+    assert compile_and_run(src) == 42
+
+
 def test_self_improving_agent_example():
     # Compiles and runs helixc/examples/self_improving_agent.hx — the
     # example covering reverse-mode AD, reflection, verifier gating, and

@@ -64,6 +64,8 @@ AD_KNOWN_PURE_CALLS = {
     "prove", "unwrap_logic",
     "attach", "detach",
     "fuzzy_and", "fuzzy_or", "fuzzy_not",
+    # Stage 36 Increment 8: fuzzy XOR + implication.
+    "fuzzy_xor", "fuzzy_implies",
 }
 
 
@@ -1068,6 +1070,43 @@ def _diff_call_chain_rule(call: A.Call, var: str,
             span=span, op="+",
             left=A.Binary(span=span, op="*", left=da, right=one_minus_b),
             right=A.Binary(span=span, op="*", left=db, right=one_minus_a))
+    # Stage 36 Increment 8: fuzzy_xor and fuzzy_implies chain rules.
+    # fuzzy_xor(a, b) = a + b - 2*a*b
+    # d/da = 1 - 2*b, d/db = 1 - 2*a
+    if call.callee.name == "fuzzy_xor" and len(call.args) == 2:
+        a, b = call.args
+        da = _diff(a, var)
+        db = _diff(b, var)
+        two_b = A.Binary(span=span, op="*",
+                         left=A.FloatLit(span=span, value=2.0),
+                         right=_copy.deepcopy(b))
+        two_a = A.Binary(span=span, op="*",
+                         left=A.FloatLit(span=span, value=2.0),
+                         right=_copy.deepcopy(a))
+        coeff_a = A.Binary(span=span, op="-",
+                           left=A.FloatLit(span=span, value=1.0),
+                           right=two_b)
+        coeff_b = A.Binary(span=span, op="-",
+                           left=A.FloatLit(span=span, value=1.0),
+                           right=two_a)
+        return A.Binary(
+            span=span, op="+",
+            left=A.Binary(span=span, op="*", left=da, right=coeff_a),
+            right=A.Binary(span=span, op="*", left=db, right=coeff_b))
+    # fuzzy_implies(a, b) = 1 - a + a*b
+    # d/da = -1 + b, d/db = a
+    if call.callee.name == "fuzzy_implies" and len(call.args) == 2:
+        a, b = call.args
+        da = _diff(a, var)
+        db = _diff(b, var)
+        coeff_a = A.Binary(span=span, op="-",
+                           left=_copy.deepcopy(b),
+                           right=A.FloatLit(span=span, value=1.0))
+        return A.Binary(
+            span=span, op="+",
+            left=A.Binary(span=span, op="*", left=da, right=coeff_a),
+            right=A.Binary(span=span, op="*", left=db,
+                           right=_copy.deepcopy(a)))
     # prove(value, source) is a 2-arg identity wrapper. The source tag
     # is non-differentiable so the chain rule is identity on the first
     # arg.

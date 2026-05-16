@@ -71,6 +71,11 @@ DEMOS: dict[str, dict] = {
         "title": "SGD learns a fuzzy-logic rule via gradients-through-Logic (Stage 36 Inc 7)",
         "expects": "exit code 42  (w converges to 0.8 from grad_rev(fuzzy_and(0.5, w) - 0.4)^2)",
     },
+    "twoparam": {
+        "file": "dogfood_08_two_param_fuzzy_rule.hx",
+        "title": "Two-param SGD learns a fuzzy_or(fuzzy_and(...)) rule (Stage 36 Inc 8)",
+        "expects": "exit code 42  (w1→0.9, w2→0.7 via indexed grad_rev across multi-arg loss)",
+    },
 }
 
 

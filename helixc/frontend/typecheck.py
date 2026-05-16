@@ -1849,6 +1849,8 @@ class TypeChecker:
         "register_derivation", "parent_left_at", "parent_right_at",
         # Stage 36 Increment 6 — fuzzy logic over Logic<f32> for AD.
         "fuzzy_and", "fuzzy_or", "fuzzy_not",
+        # Stage 36 Increment 8 — fuzzy algebra completeness.
+        "fuzzy_xor", "fuzzy_implies",
         "consolidate", "recall", "learn_to",
         "grad", "grad_rev", "grad_rev_all",
         "quote", "splice", "splice_f", "splice_f64",
@@ -2896,6 +2898,26 @@ class TypeChecker:
                             expr.span,
                         ))
                     if isinstance(arg_tys[0], TyLogic):
+                        return arg_tys[0]
+                    return TyLogic(inner=TyPrim("f32"))
+                # Stage 36 Increment 8: round out the fuzzy algebra.
+                # fuzzy_xor(a, b) = a + b - 2*a*b  (probabilistic XOR)
+                # fuzzy_implies(a, b) = 1 - a + a*b (Reichenbach implication)
+                # Both compose to MUL/ADD/SUB and are auto-differentiable
+                # via the chain rules added in Inc 8 (autodiff.py +
+                # autodiff_reverse.py).
+                if bn in ("fuzzy_xor", "fuzzy_implies") \
+                        and len(arg_tys) == 2:
+                    for i, t in enumerate(arg_tys):
+                        if not isinstance(t, TyLogic):
+                            self.errors.append(TypeError_(
+                                f"{bn}(a, b): arg {'ab'[i]} must be "
+                                f"Logic<f32>, got {self._fmt(t)} "
+                                f"[trap 24100]",
+                                expr.span,
+                            ))
+                    if (isinstance(arg_tys[0], TyLogic)
+                            and isinstance(arg_tys[1], TyLogic)):
                         return arg_tys[0]
                     return TyLogic(inner=TyPrim("f32"))
                 if bn == "consolidate" and len(arg_tys) == 1:

@@ -406,7 +406,51 @@ x86-64 ELF compiled by Helix itself.
 Self-host gate: PASS (G2..G4 byte-identical, smoke programs all
 exit 42).
 
-## What's left in Stage 36 (Increment 8+)
+## Increment 8 - fuzzy_xor + fuzzy_implies + Two-Param SGD Dogfood (SHIPPED, 2026-05-16)
+
+Rounds out the fuzzy algebra started in Increment 6 and ships a
+second SGD dogfood that demonstrates multi-parameter learning over
+a fuzzy rule structure.
+
+**New fuzzy operators**:
+
+- `fuzzy_xor(a, b) = a + b - 2*a*b` (probabilistic XOR; lowers to
+  ADD + 2*MUL + SUB)
+- `fuzzy_implies(a, b) = 1 - a + a*b` (Reichenbach implication;
+  lowers to SUB + MUL + ADD)
+
+Both registered in `_BUILTIN_NAMES` and `AD_KNOWN_PURE_CALLS`.
+Chain rules in both forward and reverse mode:
+- d/da fuzzy_xor = 1 - 2*b; d/db = 1 - 2*a
+- d/da fuzzy_implies = -1 + b; d/db = a
+
+**New dogfood**: `helixc/examples/dogfood_08_two_param_fuzzy_rule.hx`.
+A TWO-parameter SGD over a fuzzy rule:
+
+    hypothesis(a, b) = fuzzy_or(fuzzy_and(a, w1), fuzzy_and(b, w2))
+
+Training data:
+- Example 1: (a=1, b=0) → target 0.9
+- Example 2: (a=0, b=1) → target 0.7
+
+Uses indexed `grad_rev(loss, 0)` and `grad_rev(loss, 1)` to
+differentiate each loss w.r.t. its respective parameter. After
+50 SGD steps with lr=0.5, w1 → 0.9 and w2 → 0.7. Exit 42 iff
+both converge (w1*100 + w2*100 ≈ 160; 160 - 118 = 42).
+
+This dogfood demonstrates:
+1. Multi-parameter learning over a fuzzy logic rule structure
+2. The indexed `grad_rev(fn, k)` path through fuzzy combinators
+3. That the fuzzy algebra composes cleanly under SGD
+
+Wired into `helixc/tests/test_reflection.py::test_dogfood_08_*`
+and `helixc/examples/run.py` as the `twoparam` demo.
+
+Tests: 48 pass in test_stage36_provenance.py (Inc 1's 3 + Inc 2's 8
++ Inc 3's 10 + Inc 4's 4 + Inc 5's 6 + Inc 6's 10 + Inc 8's 7).
+Self-host gate: PASS.
+
+## What's left in Stage 36 (Increment 9+)
 
 1. **Auto-registration of derivations** — combinators (`and_logic`,
    `or_logic`, etc.) should automatically write a derivation entry

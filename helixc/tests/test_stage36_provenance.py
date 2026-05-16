@@ -719,6 +719,104 @@ fn main() -> i32 {
     assert _stage36_inc6_pipeline(src) == 42
 
 
+# Stage 36 Increment 8 — fuzzy_xor + fuzzy_implies for fuzzy-algebra
+# completeness.
+
+
+def test_stage36_inc8_builtins_registered():
+    """fuzzy_xor, fuzzy_implies are registered as builtins."""
+    tc = TypeChecker(parse("fn main() -> i32 { 0 }"))
+    for name in ("fuzzy_xor", "fuzzy_implies"):
+        assert name in tc._BUILTIN_NAMES, f"{name} not a builtin"
+
+
+def test_stage36_inc8_fuzzy_xor_probabilistic():
+    """fuzzy_xor(0.3, 0.7) = 0.3 + 0.7 - 2*0.21 = 0.58 ~ 0.58."""
+    src = """
+fn main() -> i32 {
+    let v: f32 = unwrap_logic(fuzzy_xor(prove(0.3_f32, 0), prove(0.7_f32, 0)));
+    if v > 0.57_f32 { if v < 0.59_f32 { 42 } else { 1 } } else { 2 }
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    assert typecheck(prog) == []
+    elf = compile_module_to_elf(lower(prog))
+    assert _run_elf(elf) == 42
+
+
+def test_stage36_inc8_fuzzy_xor_self_inverse():
+    """fuzzy_xor(0.5, 0.5) = 2*0.5*(1-0.5) = 0.5 (not zero — fuzzy
+    XOR doesn't have the classical XOR(x,x)=0 property in [0,1])."""
+    src = """
+fn main() -> i32 {
+    let v: f32 = unwrap_logic(fuzzy_xor(prove(0.5_f32, 0), prove(0.5_f32, 0)));
+    if v > 0.49_f32 { if v < 0.51_f32 { 42 } else { 1 } } else { 2 }
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    assert typecheck(prog) == []
+    elf = compile_module_to_elf(lower(prog))
+    assert _run_elf(elf) == 42
+
+
+def test_stage36_inc8_fuzzy_implies_reichenbach():
+    """Reichenbach: fuzzy_implies(0.8, 0.6) = 1 - 0.8 + 0.48 = 0.68."""
+    src = """
+fn main() -> i32 {
+    let v: f32 = unwrap_logic(
+        fuzzy_implies(prove(0.8_f32, 0), prove(0.6_f32, 0)));
+    if v > 0.67_f32 { if v < 0.69_f32 { 42 } else { 1 } } else { 2 }
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    assert typecheck(prog) == []
+    elf = compile_module_to_elf(lower(prog))
+    assert _run_elf(elf) == 42
+
+
+def test_stage36_inc8_grad_rev_fuzzy_xor_at_b_half():
+    """d/da fuzzy_xor(a, b) at b=0.5 is 1 - 2*0.5 = 0."""
+    src = """
+fn loss(x: f32) -> f32 {
+    unwrap_logic(fuzzy_xor(prove(x, 0), prove(0.5_f32, 0)))
+}
+fn main() -> i32 {
+    let g: f32 = grad_rev(loss)(0.3_f32);
+    if g > -0.01_f32 { if g < 0.01_f32 { 42 } else { 1 } } else { 2 }
+}
+"""
+    assert _stage36_inc6_pipeline(src) == 42
+
+
+def test_stage36_inc8_grad_rev_fuzzy_implies():
+    """d/da fuzzy_implies(a, b) = -1 + b. At b=0.6, gradient = -0.4."""
+    src = """
+fn loss(x: f32) -> f32 {
+    unwrap_logic(fuzzy_implies(prove(x, 0), prove(0.6_f32, 0)))
+}
+fn main() -> i32 {
+    let g: f32 = grad_rev(loss)(0.3_f32);
+    if g > -0.41_f32 { if g < -0.39_f32 { 42 } else { 1 } } else { 2 }
+}
+"""
+    assert _stage36_inc6_pipeline(src) == 42
+
+
+def test_stage36_inc8_grad_forward_fuzzy_implies():
+    """Forward-mode grad() through fuzzy_implies; same gradient as
+    reverse-mode."""
+    src = """
+fn loss(x: f32) -> f32 {
+    unwrap_logic(fuzzy_implies(prove(x, 0), prove(0.6_f32, 0)))
+}
+fn main() -> i32 {
+    let g: f32 = grad(loss)(0.3_f32);
+    if g > -0.41_f32 { if g < -0.39_f32 { 42 } else { 1 } } else { 2 }
+}
+"""
+    assert _stage36_inc6_pipeline(src) == 42
+
+
 if __name__ == "__main__":
     import pytest
     raise SystemExit(pytest.main([__file__, "-v"]))

@@ -599,6 +599,49 @@ def _propagate(node: A.Expr, adj: A.Expr, acc: dict[str, list[A.Expr]]) -> None:
             _propagate(a_arg, adj_a, acc)
             _propagate(b_arg, adj_b, acc)
             return
+        # Stage 36 Increment 8 — fuzzy_xor + fuzzy_implies reverse-mode.
+        # fuzzy_xor(a, b) = a + b - 2*a*b:
+        #   ∂/∂a = 1 - 2*b, ∂/∂b = 1 - 2*a.
+        if (isinstance(node.callee, A.Name)
+                and node.callee.name == "fuzzy_xor"
+                and len(node.args) == 2):
+            a_arg, b_arg = node.args
+            two_b = A.Binary(span=node.span, op="*",
+                             left=A.FloatLit(span=node.span, value=2.0),
+                             right=copy.deepcopy(b_arg))
+            two_a = A.Binary(span=node.span, op="*",
+                             left=A.FloatLit(span=node.span, value=2.0),
+                             right=copy.deepcopy(a_arg))
+            coeff_a = A.Binary(span=node.span, op="-",
+                               left=A.FloatLit(span=node.span, value=1.0),
+                               right=two_b)
+            coeff_b = A.Binary(span=node.span, op="-",
+                               left=A.FloatLit(span=node.span, value=1.0),
+                               right=two_a)
+            adj_a = A.Binary(span=node.span, op="*",
+                             left=adj, right=coeff_a)
+            adj_b = A.Binary(span=node.span, op="*",
+                             left=copy.deepcopy(adj), right=coeff_b)
+            _propagate(a_arg, adj_a, acc)
+            _propagate(b_arg, adj_b, acc)
+            return
+        # fuzzy_implies(a, b) = 1 - a + a*b:
+        #   ∂/∂a = -1 + b, ∂/∂b = a.
+        if (isinstance(node.callee, A.Name)
+                and node.callee.name == "fuzzy_implies"
+                and len(node.args) == 2):
+            a_arg, b_arg = node.args
+            coeff_a = A.Binary(span=node.span, op="-",
+                               left=copy.deepcopy(b_arg),
+                               right=A.FloatLit(span=node.span, value=1.0))
+            adj_a = A.Binary(span=node.span, op="*",
+                             left=adj, right=coeff_a)
+            adj_b = A.Binary(span=node.span, op="*",
+                             left=copy.deepcopy(adj),
+                             right=copy.deepcopy(a_arg))
+            _propagate(a_arg, adj_a, acc)
+            _propagate(b_arg, adj_b, acc)
+            return
         # fuzzy_not(a) = 1 - a: ∂/∂a = -1.
         if (isinstance(node.callee, A.Name)
                 and node.callee.name == "fuzzy_not"
