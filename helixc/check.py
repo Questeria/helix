@@ -38,7 +38,7 @@ Flags:
   --no-opt              Synonym for -O0 (parity with backend CLIs).
   -o <path>             Write ELF output to <path> instead of default
   -l <libname>          Mark <libname> as external (FFI prerequisite)
-  -W<flag>              Warning policy (e.g. -Wdeprecated, -Wdeprecated=error)
+  -W<flag>              Warning policy (e.g. -Wad, -Wad=error, -Wdeprecated, -Wdeprecated=error)
   --no-color            Disable ANSI escapes (also: NO_COLOR env)
   --color               Force ANSI escapes on
   -h / --help           Show this help

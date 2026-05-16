@@ -195,13 +195,23 @@ fn rev_leaf(tape: i32, value: i32) -> i32 {
     rev_push(tape, rev_kind_leaf(), 0 - 1, 0 - 1, value)
 }
 
+// Restart 54 A1: i64 intermediate + INT32 saturation on forward-record
+// value. Sibling of restart 51 A3 (ti1d_dot), restart 52 A1 (ti2d_matmul),
+// restart 53 A1/A4 (vec_dot, attention_dot). The autodiff tape was the
+// missed sibling — silent i32 wrap on the recorded value silently
+// corrupts every downstream gradient.
 fn rev_add(tape: i32, ai: i32, bi: i32) -> i32 {
     if rev_valid_index(tape, ai) == 0 { 0 - 1 }
     else { if rev_valid_index(tape, bi) == 0 { 0 - 1 }
     else {
-        let av = rev_value_at(tape, ai);
-        let bv = rev_value_at(tape, bi);
-        rev_push(tape, rev_kind_add(), ai, bi, av + bv)
+        let av: i64 = rev_value_at(tape, ai) as i64;
+        let bv: i64 = rev_value_at(tape, bi) as i64;
+        let hi: i64 = 2147483647_i64;
+        let lo: i64 = (0_i64 - 2147483647_i64) - 1_i64;
+        let mut v: i64 = av + bv;
+        if v > hi { v = hi; }
+        else { if v < lo { v = lo; } };
+        rev_push(tape, rev_kind_add(), ai, bi, v as i32)
     }}
 }
 
@@ -209,9 +219,14 @@ fn rev_sub(tape: i32, ai: i32, bi: i32) -> i32 {
     if rev_valid_index(tape, ai) == 0 { 0 - 1 }
     else { if rev_valid_index(tape, bi) == 0 { 0 - 1 }
     else {
-        let av = rev_value_at(tape, ai);
-        let bv = rev_value_at(tape, bi);
-        rev_push(tape, rev_kind_sub(), ai, bi, av - bv)
+        let av: i64 = rev_value_at(tape, ai) as i64;
+        let bv: i64 = rev_value_at(tape, bi) as i64;
+        let hi: i64 = 2147483647_i64;
+        let lo: i64 = (0_i64 - 2147483647_i64) - 1_i64;
+        let mut v: i64 = av - bv;
+        if v > hi { v = hi; }
+        else { if v < lo { v = lo; } };
+        rev_push(tape, rev_kind_sub(), ai, bi, v as i32)
     }}
 }
 
@@ -219,17 +234,27 @@ fn rev_mul(tape: i32, ai: i32, bi: i32) -> i32 {
     if rev_valid_index(tape, ai) == 0 { 0 - 1 }
     else { if rev_valid_index(tape, bi) == 0 { 0 - 1 }
     else {
-        let av = rev_value_at(tape, ai);
-        let bv = rev_value_at(tape, bi);
-        rev_push(tape, rev_kind_mul(), ai, bi, av * bv)
+        let av: i64 = rev_value_at(tape, ai) as i64;
+        let bv: i64 = rev_value_at(tape, bi) as i64;
+        let hi: i64 = 2147483647_i64;
+        let lo: i64 = (0_i64 - 2147483647_i64) - 1_i64;
+        let mut v: i64 = av * bv;
+        if v > hi { v = hi; }
+        else { if v < lo { v = lo; } };
+        rev_push(tape, rev_kind_mul(), ai, bi, v as i32)
     }}
 }
 
 fn rev_neg(tape: i32, ai: i32) -> i32 {
     if rev_valid_index(tape, ai) == 0 { 0 - 1 }
     else {
-        let av = rev_value_at(tape, ai);
-        rev_push(tape, rev_kind_neg(), ai, 0 - 1, 0 - av)
+        let av: i64 = rev_value_at(tape, ai) as i64;
+        let hi: i64 = 2147483647_i64;
+        let lo: i64 = (0_i64 - 2147483647_i64) - 1_i64;
+        let mut v: i64 = 0_i64 - av;
+        if v > hi { v = hi; }
+        else { if v < lo { v = lo; } };
+        rev_push(tape, rev_kind_neg(), ai, 0 - 1, v as i32)
     }
 }
 
@@ -433,35 +458,73 @@ fn rev_backward(tape: i32, adj_start: i32) -> i32 {
             let in1 = __arena_get(off + 1);
             let in2 = __arena_get(off + 2);
             let adj_i = __arena_get(adj_start + i);
+            // Restart 54 A1: i64 intermediates + INT32 saturation on
+            // every adjoint accumulator update. The mul branch is the
+            // critical one (adj_i * v_b can wrap, then the add wraps
+            // again), but every branch must saturate to remain
+            // monotonic in the input magnitudes.
+            let hi: i64 = 2147483647_i64;
+            let lo: i64 = (0_i64 - 2147483647_i64) - 1_i64;
             if kind == 0 {
                 status = 0;
             } else { if kind == 1 {
                 if rev_valid_index(tape, in1) == 0 { status = 0 - 1; }
                 else { if rev_valid_index(tape, in2) == 0 { status = 0 - 1; }
                 else {
-                    __arena_set(adj_start + in1, __arena_get(adj_start + in1) + adj_i);
-                    __arena_set(adj_start + in2, __arena_get(adj_start + in2) + adj_i);
+                    let adj_i64: i64 = adj_i as i64;
+                    let mut v1: i64 = (__arena_get(adj_start + in1) as i64) + adj_i64;
+                    if v1 > hi { v1 = hi; }
+                    else { if v1 < lo { v1 = lo; } };
+                    __arena_set(adj_start + in1, v1 as i32);
+                    let mut v2: i64 = (__arena_get(adj_start + in2) as i64) + adj_i64;
+                    if v2 > hi { v2 = hi; }
+                    else { if v2 < lo { v2 = lo; } };
+                    __arena_set(adj_start + in2, v2 as i32);
                 }}
             } else { if kind == 2 {
                 if rev_valid_index(tape, in1) == 0 { status = 0 - 1; }
                 else { if rev_valid_index(tape, in2) == 0 { status = 0 - 1; }
                 else {
-                    __arena_set(adj_start + in1, __arena_get(adj_start + in1) + adj_i);
-                    __arena_set(adj_start + in2, __arena_get(adj_start + in2) - adj_i);
+                    let adj_i64: i64 = adj_i as i64;
+                    let mut v1: i64 = (__arena_get(adj_start + in1) as i64) + adj_i64;
+                    if v1 > hi { v1 = hi; }
+                    else { if v1 < lo { v1 = lo; } };
+                    __arena_set(adj_start + in1, v1 as i32);
+                    let mut v2: i64 = (__arena_get(adj_start + in2) as i64) - adj_i64;
+                    if v2 > hi { v2 = hi; }
+                    else { if v2 < lo { v2 = lo; } };
+                    __arena_set(adj_start + in2, v2 as i32);
                 }}
             } else { if kind == 3 {
                 if rev_valid_index(tape, in1) == 0 { status = 0 - 1; }
                 else { if rev_valid_index(tape, in2) == 0 { status = 0 - 1; }
                 else {
-                    let v_a = rev_value_at(tape, in1);
-                    let v_b = rev_value_at(tape, in2);
-                    __arena_set(adj_start + in1, __arena_get(adj_start + in1) + adj_i * v_b);
-                    __arena_set(adj_start + in2, __arena_get(adj_start + in2) + adj_i * v_a);
+                    let v_a: i64 = rev_value_at(tape, in1) as i64;
+                    let v_b: i64 = rev_value_at(tape, in2) as i64;
+                    let adj_i64: i64 = adj_i as i64;
+                    let mut prod_b: i64 = adj_i64 * v_b;
+                    if prod_b > hi { prod_b = hi; }
+                    else { if prod_b < lo { prod_b = lo; } };
+                    let mut v1: i64 = (__arena_get(adj_start + in1) as i64) + prod_b;
+                    if v1 > hi { v1 = hi; }
+                    else { if v1 < lo { v1 = lo; } };
+                    __arena_set(adj_start + in1, v1 as i32);
+                    let mut prod_a: i64 = adj_i64 * v_a;
+                    if prod_a > hi { prod_a = hi; }
+                    else { if prod_a < lo { prod_a = lo; } };
+                    let mut v2: i64 = (__arena_get(adj_start + in2) as i64) + prod_a;
+                    if v2 > hi { v2 = hi; }
+                    else { if v2 < lo { v2 = lo; } };
+                    __arena_set(adj_start + in2, v2 as i32);
                 }}
             } else { if kind == 4 {
                 if rev_valid_index(tape, in1) == 0 { status = 0 - 1; }
                 else {
-                    __arena_set(adj_start + in1, __arena_get(adj_start + in1) - adj_i);
+                    let adj_i64: i64 = adj_i as i64;
+                    let mut v1: i64 = (__arena_get(adj_start + in1) as i64) - adj_i64;
+                    if v1 > hi { v1 = hi; }
+                    else { if v1 < lo { v1 = lo; } };
+                    __arena_set(adj_start + in1, v1 as i32);
                 }
             } else {
                 status = 0 - 1;

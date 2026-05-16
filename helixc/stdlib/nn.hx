@@ -114,9 +114,16 @@ fn mse_loss(y_start: i32, t_start: i32, n: i32) -> i32 {
 // SGD update for a single int parameter: w_new = w - lr * grad.
 // Returns the new value. (Integer math; use lr=1 for "1 unit per
 // gradient step" semantics. Float training pending Phase 2.2 step 2.)
+// Restart 54 A6: i64 intermediate + INT32 saturation. Sibling of
+// sgd_step_array (restart 53 A7); the scalar mirror was missed.
 @pure
 fn sgd_step_scalar(w: i32, g: i32, lr: i32) -> i32 {
-    w - lr * g
+    let hi: i64 = 2147483647_i64;
+    let lo: i64 = (0_i64 - 2147483647_i64) - 1_i64;
+    let mut v: i64 = (w as i64) - (lr as i64) * (g as i64);
+    if v > hi { v = hi; }
+    else { if v < lo { v = lo; } };
+    v as i32
 }
 
 // SGD update for a 1D parameter array in-place.
@@ -153,20 +160,41 @@ fn sgd_step_array(w_start: i32, g_start: i32, lr: i32, n: i32) -> i32 {
 //   d_loss/d_w = 2 * (w*x + b - target) * x
 // Useful for demo problems; real NN backprop computes per-layer
 // gradients via reverse-mode AD (Phase 2.1 step 2).
+// Restart 54 A6: i64 intermediates + INT32 saturation. Every product
+// in the chain (`w*x`, `2*err`, `2*err*x`) is a wrap candidate.
 @pure
 fn lin_reg_grad_w(w: i32, b: i32, x: i32, target: i32) -> i32 {
-    let pred = w * x + b;
-    let err = pred - target;
-    2 * err * x
+    let hi: i64 = 2147483647_i64;
+    let lo: i64 = (0_i64 - 2147483647_i64) - 1_i64;
+    let mut pred: i64 = (w as i64) * (x as i64) + (b as i64);
+    if pred > hi { pred = hi; }
+    else { if pred < lo { pred = lo; } };
+    let mut err: i64 = pred - (target as i64);
+    if err > hi { err = hi; }
+    else { if err < lo { err = lo; } };
+    let mut r: i64 = 2_i64 * err * (x as i64);
+    if r > hi { r = hi; }
+    else { if r < lo { r = lo; } };
+    r as i32
 }
 
 // Linear-regression gradient w.r.t. bias b:
 //   d_loss/d_b = 2 * (w*x + b - target)
+// Restart 54 A6: i64 intermediates + INT32 saturation.
 @pure
 fn lin_reg_grad_b(w: i32, b: i32, x: i32, target: i32) -> i32 {
-    let pred = w * x + b;
-    let err = pred - target;
-    2 * err
+    let hi: i64 = 2147483647_i64;
+    let lo: i64 = (0_i64 - 2147483647_i64) - 1_i64;
+    let mut pred: i64 = (w as i64) * (x as i64) + (b as i64);
+    if pred > hi { pred = hi; }
+    else { if pred < lo { pred = lo; } };
+    let mut err: i64 = pred - (target as i64);
+    if err > hi { err = hi; }
+    else { if err < lo { err = lo; } };
+    let mut r: i64 = 2_i64 * err;
+    if r > hi { r = hi; }
+    else { if r < lo { r = lo; } };
+    r as i32
 }
 
 // f32 SGD step over an array: w[i] = w[i] - lr * g[i].

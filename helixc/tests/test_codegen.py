@@ -20725,6 +20725,199 @@ def test_stage35_restart53_attention_softmax_f32_nan_fail_closed():
     assert code == 42, f"expected 42, got {code}"
 
 
+def test_stage35_restart54_rev_mul_forward_saturates_on_i32_overflow():
+    """Restart 54 A1: autodiff_reverse.hx rev_mul lifts forward value
+    record to i64 + INT32 saturation. Two leaves of 46341 multiplied
+    yield 2,147,488,281 (> INT32_MAX) which previously silently wrapped."""
+    src = """
+    fn main() -> i32 {
+        let tape = rev_tape_new(5);
+        let x = rev_leaf(tape, 46341);
+        let y = rev_leaf(tape, 46341);
+        let f = rev_mul(tape, x, y);
+        let v = rev_value_at(tape, f);
+        if v == 2147483647 { 42 } else { 7 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stage35_restart54_rev_backward_mul_adjoint_saturates_on_i32_overflow():
+    """Restart 54 A1: rev_backward kind=3 (mul) lifts adj_i * v_b
+    multiply AND adj accumulator add to i64 + INT32 saturation. With
+    seed=46341 and v_b=46341 the adjoint multiply silently wrapped
+    before this fix."""
+    src = """
+    fn main() -> i32 {
+        let tape = rev_tape_new(5);
+        let x = rev_leaf(tape, 46341);
+        let y = rev_leaf(tape, 46341);
+        let f = rev_mul(tape, x, y);
+        let adj = rev_alloc_adjoints(tape);
+        rev_seed(adj, f, 46341);
+        rev_backward(tape, adj);
+        let g = rev_grad(adj, x);
+        if g == 2147483647 { 42 } else { 7 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stage35_restart54_ti1d_mul_hadamard_saturates_on_i32_overflow():
+    """Restart 54 A2: tensor.hx ti1d_mul Hadamard product uses per-
+    element i64 + INT32 saturation. Sibling of restart 53 A5 (*_scalar)
+    extended to the binary integer multiply."""
+    src = """
+    fn main() -> i32 {
+        let x = t1d_new(1); ti1d_set(x, 0, 46341);
+        let y = t1d_new(1); ti1d_set(y, 0, 46341);
+        let z = t1d_new(1);
+        ti1d_mul(x, y, z, 1);
+        let v = ti1d_get(z, 0);
+        if v == 2147483647 { 42 } else { 7 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stage35_restart54_vec_zip_mul_saturates_on_i32_overflow():
+    """Restart 54 A3: iterators.hx vec_zip_mul Hadamard product uses
+    per-element i64 + INT32 saturation. Sibling of vec_dot (restart 53)."""
+    src = """
+    fn main() -> i32 {
+        let a = __arena_len();
+        __arena_push(46341);
+        let b = __arena_len();
+        __arena_push(46341);
+        let r = vec_zip_mul(a, b, 1);
+        let v = __arena_get(r);
+        if v == 2147483647 { 42 } else { 7 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stage35_restart54_vec_window_sum_saturates_on_i32_overflow():
+    """Restart 54 A4: iterators.hx vec_window_sum uses i64 rolling
+    accumulator + per-output INT32 saturation. With 3 elements at
+    INT32_MAX/2+1 and win=2, the first window sums to INT32_MAX (sat)
+    rather than wrapping to a negative."""
+    src = """
+    fn main() -> i32 {
+        let s = __arena_len();
+        __arena_push(1073741825);
+        __arena_push(1073741825);
+        __arena_push(1073741825);
+        let r = vec_window_sum(s, 3, 2);
+        let v0 = __arena_get(r);
+        let v1 = __arena_get(r + 1);
+        if v0 == 2147483647 { if v1 == 2147483647 { 42 } else { 7 } } else { 7 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stage35_restart54_vec_l2_squared_distance_saturates():
+    """Restart 54 A5: iterators.hx vec_l2_squared_distance uses i64
+    accumulator + INT32 saturation. With a=46341, b=0, d*d overflows
+    i32; without saturation the accumulator wraps negative and
+    inverts ranking."""
+    src = """
+    fn main() -> i32 {
+        let a = __arena_len();
+        __arena_push(46341);
+        let b = __arena_len();
+        __arena_push(0);
+        let r = vec_l2_squared_distance(a, b, 1);
+        if r == 2147483647 { 42 } else { 7 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stage35_restart54_lin_reg_grad_w_saturates_on_i32_overflow():
+    """Restart 54 A6: nn.hx lin_reg_grad_w uses i64 intermediates +
+    INT32 saturation across w*x, pred-target, and 2*err*x."""
+    src = """
+    fn main() -> i32 {
+        let g = lin_reg_grad_w(46341, 0, 46341, 0);
+        if g == 2147483647 { 42 } else { 7 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stage35_restart54_sgd_step_scalar_saturates_on_i32_overflow():
+    """Restart 54 A6: nn.hx sgd_step_scalar uses i64 intermediate +
+    INT32 saturation. lr*g of 100000 * 100000 = 10^10 wraps, then the
+    subtraction from w saturates to INT32_MIN."""
+    src = """
+    fn main() -> i32 {
+        let w = sgd_step_scalar(0, 100000, 100000);
+        if w == ((0 - 2147483647) - 1) { 42 } else { 7 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stage35_restart54_iterators_arithmetic_helpers_saturate_on_i32_overflow():
+    """Restart 54 A7: family canary — vec_zip_add, vec_zip_sub,
+    vec_offset_inplace, vec_scale_inplace, vec_pairwise_sum,
+    vec_pairwise_diff, vec_sum_in_range, vec_fold_op all per-element-
+    saturate via i64 intermediate."""
+    src = """
+    fn main() -> i32 {
+        let a = __arena_len();
+        __arena_push(2147483647); __arena_push(2147483647);
+        let b = __arena_len();
+        __arena_push(1); __arena_push(1);
+        let add_r = vec_zip_add(a, b, 2);
+        if __arena_get(add_r) != 2147483647 { return 1; };
+        let neg_one = __arena_len();
+        __arena_push(0 - 1); __arena_push(0 - 1);
+        let sub_r = vec_zip_sub(neg_one, a, 2);
+        if __arena_get(sub_r) != ((0 - 2147483647) - 1) { return 2; };
+        let off_r = vec_offset_alloc(a, 1, 5);
+        if __arena_get(off_r) != 2147483647 { return 3; };
+        let inp = __arena_len();
+        __arena_push(2147483647);
+        vec_offset_inplace(inp, 1, 100);
+        if __arena_get(inp) != 2147483647 { return 4; };
+        let inp2 = __arena_len();
+        __arena_push(46341);
+        vec_scale_inplace(inp2, 1, 46341);
+        if __arena_get(inp2) != 2147483647 { return 5; };
+        let ps_in = __arena_len();
+        __arena_push(2147483647); __arena_push(2147483647);
+        let ps_r = vec_pairwise_sum(ps_in, 2);
+        if __arena_get(ps_r) != 2147483647 { return 6; };
+        let pd_in = __arena_len();
+        __arena_push(((0 - 2147483647) - 1)); __arena_push(2147483647);
+        let pd_r = vec_pairwise_diff(pd_in, 2);
+        if __arena_get(pd_r) != 2147483647 { return 7; };
+        let sr_in = __arena_len();
+        __arena_push(2147483647); __arena_push(2147483647);
+        let sr = vec_sum_in_range(sr_in, 0, 2);
+        if sr != 2147483647 { return 8; };
+        let fo_in = __arena_len();
+        __arena_push(2147483647); __arena_push(2147483647);
+        let fo = vec_fold_op(fo_in, 2, 0, 0);
+        if fo != 2147483647 { return 9; };
+        42
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
 def main():
     # Recognise both the legacy `_SkipTest` exception and pytest's
     # `Skipped` outcome class so tests can use either to signal a skip

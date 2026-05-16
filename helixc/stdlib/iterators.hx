@@ -138,36 +138,67 @@ fn vec_count_ne(start: i32, count: i32, t: i32) -> i32 {
     n
 }
 
+// Restart 54 A7: i64 accumulator + INT32 saturation for op=0/1 (add /
+// mul reducers). Sibling of vec_sum / vec_product (restart 53 A3) which
+// are the public single-purpose mirrors; this generic reducer was
+// missed in that sweep.
 @pure
 fn vec_fold_op(start: i32, count: i32, init: i32, op: i32) -> i32 {
     let mut i: i32 = 0;
-    let mut acc: i32 = init;
+    let mut acc_i: i64 = init as i64;
+    let mut acc_b: i32 = init;
+    let hi: i64 = 2147483647_i64;
+    let lo: i64 = (0_i64 - 2147483647_i64) - 1_i64;
     while i < count {
         let v = __arena_get(start + i);
-        if op == 0 { acc = acc + v; }
-        if op == 1 { acc = acc * v; }
-        if op == 2 { if v > acc { acc = v; } }
-        if op == 3 { if v < acc { acc = v; } }
+        if op == 0 {
+            acc_i = acc_i + (v as i64);
+            if acc_i > hi { acc_i = hi; }
+            else { if acc_i < lo { acc_i = lo; } };
+        }
+        if op == 1 {
+            acc_i = acc_i * (v as i64);
+            if acc_i > hi { acc_i = hi; }
+            else { if acc_i < lo { acc_i = lo; } };
+        }
+        if op == 2 { if v > acc_b { acc_b = v; } }
+        if op == 3 { if v < acc_b { acc_b = v; } }
         i = i + 1;
     }
-    acc
+    if op == 0 { acc_i as i32 }
+    else { if op == 1 { acc_i as i32 }
+    else { acc_b } }
 }
 
+// Restart 54 A7: per-element i64 intermediate + INT32 saturation.
 fn vec_map_add_scalar(start: i32, count: i32, k: i32) -> i32 {
     let s: i32 = __arena_len();
     let mut i: i32 = 0;
+    let hi: i64 = 2147483647_i64;
+    let lo: i64 = (0_i64 - 2147483647_i64) - 1_i64;
+    let kk: i64 = k as i64;
     while i < count {
-        __arena_push(__arena_get(start + i) + k);
+        let mut v: i64 = (__arena_get(start + i) as i64) + kk;
+        if v > hi { v = hi; }
+        else { if v < lo { v = lo; } };
+        __arena_push(v as i32);
         i = i + 1;
     }
     s
 }
 
+// Restart 54 A7: per-element i64 intermediate + INT32 saturation.
 fn vec_map_mul_scalar(start: i32, count: i32, k: i32) -> i32 {
     let s: i32 = __arena_len();
     let mut i: i32 = 0;
+    let hi: i64 = 2147483647_i64;
+    let lo: i64 = (0_i64 - 2147483647_i64) - 1_i64;
+    let kk: i64 = k as i64;
     while i < count {
-        __arena_push(__arena_get(start + i) * k);
+        let mut v: i64 = (__arena_get(start + i) as i64) * kk;
+        if v > hi { v = hi; }
+        else { if v < lo { v = lo; } };
+        __arena_push(v as i32);
         i = i + 1;
     }
     s
@@ -209,21 +240,35 @@ fn vec_map_relu(start: i32, count: i32) -> i32 {
     s
 }
 
+// Restart 54 A3/A7: per-element i64 intermediate + INT32 saturation.
 fn vec_zip_add(a: i32, b: i32, count: i32) -> i32 {
     let s: i32 = __arena_len();
     let mut i: i32 = 0;
+    let hi: i64 = 2147483647_i64;
+    let lo: i64 = (0_i64 - 2147483647_i64) - 1_i64;
     while i < count {
-        __arena_push(__arena_get(a + i) + __arena_get(b + i));
+        let mut v: i64 = (__arena_get(a + i) as i64) + (__arena_get(b + i) as i64);
+        if v > hi { v = hi; }
+        else { if v < lo { v = lo; } };
+        __arena_push(v as i32);
         i = i + 1;
     }
     s
 }
 
+// Restart 54 A3: Hadamard product — per-element i64 + INT32 saturation.
+// Sibling of vec_dot / vec_dot_pure (restart 53 A1); element-wise was
+// missed when the inner-product paths were saturated.
 fn vec_zip_mul(a: i32, b: i32, count: i32) -> i32 {
     let s: i32 = __arena_len();
     let mut i: i32 = 0;
+    let hi: i64 = 2147483647_i64;
+    let lo: i64 = (0_i64 - 2147483647_i64) - 1_i64;
     while i < count {
-        __arena_push(__arena_get(a + i) * __arena_get(b + i));
+        let mut v: i64 = (__arena_get(a + i) as i64) * (__arena_get(b + i) as i64);
+        if v > hi { v = hi; }
+        else { if v < lo { v = lo; } };
+        __arena_push(v as i32);
         i = i + 1;
     }
     s
@@ -313,11 +358,17 @@ fn vec_filter_ne(start: i32, count: i32, t: i32) -> i32 {
     kept
 }
 
+// Restart 54 A7: per-element i64 intermediate + INT32 saturation.
 fn vec_zip_sub(a: i32, b: i32, count: i32) -> i32 {
     let s: i32 = __arena_len();
     let mut i: i32 = 0;
+    let hi: i64 = 2147483647_i64;
+    let lo: i64 = (0_i64 - 2147483647_i64) - 1_i64;
     while i < count {
-        __arena_push(__arena_get(a + i) - __arena_get(b + i));
+        let mut v: i64 = (__arena_get(a + i) as i64) - (__arena_get(b + i) as i64);
+        if v > hi { v = hi; }
+        else { if v < lo { v = lo; } };
+        __arena_push(v as i32);
         i = i + 1;
     }
     s
@@ -462,21 +513,33 @@ fn vec_negate_inplace(start: i32, count: i32) -> i32 {
     start
 }
 
+// Restart 54 A7: per-element i64 intermediate + INT32 saturation.
 fn vec_scale_inplace(start: i32, count: i32, k: i32) -> i32 {
     let mut i: i32 = 0;
+    let hi: i64 = 2147483647_i64;
+    let lo: i64 = (0_i64 - 2147483647_i64) - 1_i64;
+    let kk: i64 = k as i64;
     while i < count {
-        let v = __arena_get(start + i);
-        __arena_set(start + i, v * k);
+        let mut v: i64 = (__arena_get(start + i) as i64) * kk;
+        if v > hi { v = hi; }
+        else { if v < lo { v = lo; } };
+        __arena_set(start + i, v as i32);
         i = i + 1;
     }
     start
 }
 
+// Restart 54 A7: per-element i64 intermediate + INT32 saturation.
 fn vec_offset_inplace(start: i32, count: i32, k: i32) -> i32 {
     let mut i: i32 = 0;
+    let hi: i64 = 2147483647_i64;
+    let lo: i64 = (0_i64 - 2147483647_i64) - 1_i64;
+    let kk: i64 = k as i64;
     while i < count {
-        let v = __arena_get(start + i);
-        __arena_set(start + i, v + k);
+        let mut v: i64 = (__arena_get(start + i) as i64) + kk;
+        if v > hi { v = hi; }
+        else { if v < lo { v = lo; } };
+        __arena_set(start + i, v as i32);
         i = i + 1;
     }
     start
@@ -499,28 +562,37 @@ fn vec_swap_inplace(start: i32, i: i32, j: i32) -> i32 {
     start
 }
 
+// Restart 54 A5: i64 accumulator + INT32 saturation. Sibling of
+// vec_sum_squares / ti1d_l1_norm; the distance companions were missed.
 @pure
 fn vec_l1_distance(a: i32, b: i32, count: i32) -> i32 {
     let mut i: i32 = 0;
-    let mut acc: i32 = 0;
+    let mut acc: i64 = 0_i64;
+    let hi: i64 = 2147483647_i64;
     while i < count {
-        let d = __arena_get(a + i) - __arena_get(b + i);
-        if d < 0 { acc = acc - d; } else { acc = acc + d; }
+        let d: i64 = (__arena_get(a + i) as i64) - (__arena_get(b + i) as i64);
+        if d < 0_i64 { acc = acc - d; } else { acc = acc + d; }
+        if acc > hi { acc = hi; }
         i = i + 1;
     }
-    acc
+    acc as i32
 }
 
+// Restart 54 A5: i64 accumulator + INT32 saturation. A single
+// |d| >= 46341 makes d*d overflow i32; without saturation the
+// accumulator wraps negative and inverts nearest-neighbour ranking.
 @pure
 fn vec_l2_squared_distance(a: i32, b: i32, count: i32) -> i32 {
     let mut i: i32 = 0;
-    let mut acc: i32 = 0;
+    let mut acc: i64 = 0_i64;
+    let hi: i64 = 2147483647_i64;
     while i < count {
-        let d = __arena_get(a + i) - __arena_get(b + i);
+        let d: i64 = (__arena_get(a + i) as i64) - (__arena_get(b + i) as i64);
         acc = acc + d * d;
+        if acc > hi { acc = hi; }
         i = i + 1;
     }
-    acc
+    acc as i32
 }
 
 @pure
@@ -982,25 +1054,35 @@ fn vec_rotate_left_alloc(start: i32, count: i32, k: i32) -> i32 {
 // vec_window_sum(start, count, win): allocate a new vec of length
 // (count - win + 1) where r[i] = sum(v[i..i+win]). Uses rolling sum
 // for O(count) total. If win > count, returns empty.
+// Restart 54 A4: i64 rolling accumulator + per-output INT32 saturation.
+// Sibling of vec_cumsum / vec_mean (restart 53 A2) — the rolling-window
+// pattern was missed and was actively worse because a mid-window wrap
+// then propagates via subtraction into every subsequent output slot.
 fn vec_window_sum(start: i32, count: i32, win: i32) -> i32 {
     let s: i32 = __arena_len();
     if win > count { s }
     else { if win <= 0 { s }
     else {
-        // Initial window sum.
-        let mut acc: i32 = 0;
+        let hi: i64 = 2147483647_i64;
+        let lo: i64 = (0_i64 - 2147483647_i64) - 1_i64;
+        let mut acc: i64 = 0_i64;
         let mut i: i32 = 0;
         while i < win {
-            acc = acc + __arena_get(start + i);
+            acc = acc + (__arena_get(start + i) as i64);
             i = i + 1;
         }
-        __arena_push(acc);
-        // Slide: subtract leaving element, add entering.
+        let mut out: i64 = acc;
+        if out > hi { out = hi; }
+        else { if out < lo { out = lo; } };
+        __arena_push(out as i32);
         let mut j: i32 = win;
         while j < count {
-            acc = acc - __arena_get(start + j - win);
-            acc = acc + __arena_get(start + j);
-            __arena_push(acc);
+            acc = acc - (__arena_get(start + j - win) as i64);
+            acc = acc + (__arena_get(start + j) as i64);
+            out = acc;
+            if out > hi { out = hi; }
+            else { if out < lo { out = lo; } };
+            __arena_push(out as i32);
             j = j + 1;
         }
         s
@@ -1142,13 +1224,19 @@ fn vec_count_in_range(start: i32, count: i32, lo: i32, hi: i32) -> i32 {
 // vec_pairwise_diff(start, count): allocate a new vec of length
 // (count - 1) where r[i] = v[i+1] - v[i]. Discrete derivative.
 // Empty if count <= 1.
+// Restart 54 A7: per-element i64 intermediate + INT32 saturation.
 fn vec_pairwise_diff(start: i32, count: i32) -> i32 {
     let s: i32 = __arena_len();
     if count <= 1 { s }
     else {
         let mut i: i32 = 1;
+        let hi: i64 = 2147483647_i64;
+        let lo: i64 = (0_i64 - 2147483647_i64) - 1_i64;
         while i < count {
-            __arena_push(__arena_get(start + i) - __arena_get(start + i - 1));
+            let mut v: i64 = (__arena_get(start + i) as i64) - (__arena_get(start + i - 1) as i64);
+            if v > hi { v = hi; }
+            else { if v < lo { v = lo; } };
+            __arena_push(v as i32);
             i = i + 1;
         }
         s
@@ -1192,15 +1280,22 @@ fn vec_argmin_in_range(start: i32, lo: i32, hi: i32) -> i32 {
 }
 
 // vec_sum_in_range(start, lo, hi): @pure. Partial sum over v[lo..hi).
+// Restart 54 A4: i64 accumulator + INT32 saturation. Sibling of
+// vec_cumsum / vec_sum_pure (restart 53 A2); the slice-range mirror
+// was missed.
 @pure
 fn vec_sum_in_range(start: i32, lo: i32, hi: i32) -> i32 {
     let mut i: i32 = lo;
-    let mut total: i32 = 0;
+    let mut total: i64 = 0_i64;
+    let himax: i64 = 2147483647_i64;
+    let lomin: i64 = (0_i64 - 2147483647_i64) - 1_i64;
     while i < hi {
-        total = total + __arena_get(start + i);
+        total = total + (__arena_get(start + i) as i64);
+        if total > himax { total = himax; }
+        else { if total < lomin { total = lomin; } };
         i = i + 1;
     }
-    total
+    total as i32
 }
 
 // vec_reverse_inplace(start, count): swap pairs (i, count-1-i) in place.
@@ -1357,13 +1452,19 @@ fn vec_split_at(start: i32, count: i32, idx: i32) -> i32 {
 
 // vec_pairwise_sum(start, count): allocate a new vec of length
 // (count - 1) where r[i] = v[i] + v[i+1]. Mirror of vec_pairwise_diff.
+// Restart 54 A7: per-element i64 intermediate + INT32 saturation.
 fn vec_pairwise_sum(start: i32, count: i32) -> i32 {
     let s: i32 = __arena_len();
     if count <= 1 { s }
     else {
         let mut i: i32 = 1;
+        let hi: i64 = 2147483647_i64;
+        let lo: i64 = (0_i64 - 2147483647_i64) - 1_i64;
         while i < count {
-            __arena_push(__arena_get(start + i - 1) + __arena_get(start + i));
+            let mut v: i64 = (__arena_get(start + i - 1) as i64) + (__arena_get(start + i) as i64);
+            if v > hi { v = hi; }
+            else { if v < lo { v = lo; } };
+            __arena_push(v as i32);
             i = i + 1;
         }
         s
@@ -1372,11 +1473,18 @@ fn vec_pairwise_sum(start: i32, count: i32) -> i32 {
 
 // vec_offset_alloc(start, count, k): allocate new vec with each element
 // offset by k. Allocating mirror of vec_offset_inplace.
+// Restart 54 A7: per-element i64 intermediate + INT32 saturation.
 fn vec_offset_alloc(start: i32, count: i32, k: i32) -> i32 {
     let s: i32 = __arena_len();
     let mut i: i32 = 0;
+    let hi: i64 = 2147483647_i64;
+    let lo: i64 = (0_i64 - 2147483647_i64) - 1_i64;
+    let kk: i64 = k as i64;
     while i < count {
-        __arena_push(__arena_get(start + i) + k);
+        let mut v: i64 = (__arena_get(start + i) as i64) + kk;
+        if v > hi { v = hi; }
+        else { if v < lo { v = lo; } };
+        __arena_push(v as i32);
         i = i + 1;
     }
     s

@@ -437,6 +437,9 @@ fn ti1d_relu(x_start: i32, y_start: i32, n: i32) -> i32 {
 }
 
 // Element-wise add: z[i] = x[i] + y[i]. Returns 0.
+// Restart 54 A2: per-element i64 intermediate + INT32 saturation.
+// Sibling sweep of restart 53 A5 (ti1d_axpy / *_scalar) extended to
+// the binary integer Hadamard ops the family missed.
 fn ti1d_add(x_start: i32, y_start: i32, z_start: i32, n: i32) -> i32 {
     if n <= 0 { 0 }
     else { if t1d_slice_ok(x_start, n) == 0 { t2d_error() }
@@ -444,9 +447,13 @@ fn ti1d_add(x_start: i32, y_start: i32, z_start: i32, n: i32) -> i32 {
     else { if t1d_slice_ok(z_start, n) == 0 { t2d_error() }
     else {
     let mut i: i32 = 0;
+    let hi: i64 = 2147483647_i64;
+    let lo: i64 = (0_i64 - 2147483647_i64) - 1_i64;
     while i < n {
-        __arena_set(z_start + i,
-                    __arena_get(x_start + i) + __arena_get(y_start + i));
+        let mut v: i64 = (__arena_get(x_start + i) as i64) + (__arena_get(y_start + i) as i64);
+        if v > hi { v = hi; }
+        else { if v < lo { v = lo; } };
+        __arena_set(z_start + i, v as i32);
         i = i + 1;
     }
     0
@@ -455,6 +462,7 @@ fn ti1d_add(x_start: i32, y_start: i32, z_start: i32, n: i32) -> i32 {
 
 // Integer element-wise subtraction: z[i] = x[i] - y[i].
 // Companion to ti1d_add. z must be pre-allocated.
+// Restart 54 A2: per-element i64 intermediate + INT32 saturation.
 fn ti1d_sub(x_start: i32, y_start: i32, z_start: i32, n: i32) -> i32 {
     if n <= 0 { 0 }
     else { if t1d_slice_ok(x_start, n) == 0 { t2d_error() }
@@ -462,9 +470,13 @@ fn ti1d_sub(x_start: i32, y_start: i32, z_start: i32, n: i32) -> i32 {
     else { if t1d_slice_ok(z_start, n) == 0 { t2d_error() }
     else {
     let mut i: i32 = 0;
+    let hi: i64 = 2147483647_i64;
+    let lo: i64 = (0_i64 - 2147483647_i64) - 1_i64;
     while i < n {
-        __arena_set(z_start + i,
-                    __arena_get(x_start + i) - __arena_get(y_start + i));
+        let mut v: i64 = (__arena_get(x_start + i) as i64) - (__arena_get(y_start + i) as i64);
+        if v > hi { v = hi; }
+        else { if v < lo { v = lo; } };
+        __arena_set(z_start + i, v as i32);
         i = i + 1;
     }
     0
@@ -473,6 +485,8 @@ fn ti1d_sub(x_start: i32, y_start: i32, z_start: i32, n: i32) -> i32 {
 
 // Integer element-wise multiplication (Hadamard): z[i] = x[i] * y[i].
 // For inner product use ti1d_dot.
+// Restart 54 A2: per-element i64 intermediate + INT32 saturation —
+// a single 46341 × 46341 multiply otherwise silently wraps.
 fn ti1d_mul(x_start: i32, y_start: i32, z_start: i32, n: i32) -> i32 {
     if n <= 0 { 0 }
     else { if t1d_slice_ok(x_start, n) == 0 { t2d_error() }
@@ -480,9 +494,13 @@ fn ti1d_mul(x_start: i32, y_start: i32, z_start: i32, n: i32) -> i32 {
     else { if t1d_slice_ok(z_start, n) == 0 { t2d_error() }
     else {
     let mut i: i32 = 0;
+    let hi: i64 = 2147483647_i64;
+    let lo: i64 = (0_i64 - 2147483647_i64) - 1_i64;
     while i < n {
-        __arena_set(z_start + i,
-                    __arena_get(x_start + i) * __arena_get(y_start + i));
+        let mut v: i64 = (__arena_get(x_start + i) as i64) * (__arena_get(y_start + i) as i64);
+        if v > hi { v = hi; }
+        else { if v < lo { v = lo; } };
+        __arena_set(z_start + i, v as i32);
         i = i + 1;
     }
     0

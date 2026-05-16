@@ -18,9 +18,9 @@ rebuild the compiler reproducibly.
 
 This is an early in-development language. Stage 35 is currently in audit
 cleanup, and clean gates remain `0/3` in the Stage 35 progress ledger. Restart
-53 fix verification collected 2,511 live `helixc/tests` pytest tests (restart
-51 reconciled to 2,497; restart 52 added 0 net tests; restart 53 added 14 new
-saturation/NaN-fail-closed canaries). Run `python -m pytest helixc/tests
+54 fix verification collected 2,522 live `helixc/tests` pytest tests (see
+Increments 70-73 in the progress ledger for the per-restart canary chain since
+restart 50). Run `python -m pytest helixc/tests
 --collect-only -q -p no:cacheprovider` for the current count.
 
 Working today:

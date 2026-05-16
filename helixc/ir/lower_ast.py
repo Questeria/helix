@@ -844,7 +844,18 @@ class Lowerer:
             raise NotImplementedError(
                 f"unresolved generic type {ty.base}<...> reached IR "
                 f"lowering; run struct monomorphization first")
-        return tir.TIRScalar("?")
+        if isinstance(ty, A.TyFn):
+            return tir.TIRScalar("u64")
+        # Restart 54 B2: loud-fail on unknown TyNode subclass instead of
+        # returning a TIRScalar("?") sentinel. Sibling of restart 47 B1
+        # which installed the same loud-fail discipline on
+        # _resolve_monomorphized_struct_type — that comment cites this
+        # site as the next target. A future TyNode subclass would
+        # otherwise silently lower to "?" and codegen sizing routines
+        # would silently fall past every branch.
+        raise NotImplementedError(
+            f"unsupported TyNode subclass {type(ty).__name__} in IR "
+            f"lowering: {ty!r}")
 
     def _lower_dim(self, expr: A.Expr) -> tir.Dim:
         if isinstance(expr, A.IntLit):

@@ -5000,6 +5000,49 @@ def test_stage35_restart51_const_fold_blocks_have_reraise_guard():
     )
 
 
+def test_stage35_restart54_check_help_lists_wad_flag():
+    """Restart 54 B1: check.py --help must enumerate -Wad alongside
+    -Wdeprecated in the -W<flag> example. The parser accepts -Wad and
+    -Wad=error promotes AD warnings to rc=1, but the banner previously
+    omitted it; users had no way to discover the documented behaviour."""
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.check", "--help"],
+        cwd=proj_root,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "-Wad" in proc.stdout, (
+        "check.py --help must list -Wad (restart 54 B1): "
+        + proc.stdout
+    )
+
+
+def test_stage35_restart54_lower_type_loud_fails_on_unknown_tynode():
+    """Restart 54 B2: _lower_type loud-fails (raises NotImplementedError)
+    for an unknown TyNode subclass instead of silently returning
+    TIRScalar('?'). Mirrors the restart-47 B1 discipline already applied
+    to _resolve_monomorphized_struct_type. Source-text canary so the
+    discipline is preserved across future refactors."""
+    import inspect
+    from helixc.ir import lower_ast as la_mod
+    src = inspect.getsource(la_mod.Lowerer._lower_type)
+    assert "raise NotImplementedError" in src, (
+        "_lower_type must raise NotImplementedError on unknown TyNode "
+        "(restart 54 B2)"
+    )
+    assert "unsupported TyNode" in src, (
+        "_lower_type loud-fail message must mention 'unsupported TyNode' "
+        "(restart 54 B2)"
+    )
+    assert 'return tir.TIRScalar("?")' not in src, (
+        "_lower_type must not return the TIRScalar('?') sentinel "
+        "anymore (restart 54 B2)"
+    )
+
+
 if __name__ == "__main__":
     import pytest
     raise SystemExit(pytest.main([__file__, "-v"]))

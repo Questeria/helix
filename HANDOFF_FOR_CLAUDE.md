@@ -4,7 +4,7 @@
 **Repo**: `C:\Projects\Kovostov-Native`  
 **Remote**: `https://github.com/Questeria/helix.git`  
 **Branch**: `main`  
-**Handoff written after**: Stage 35 restart 53 (commit will land alongside this handoff)
+**Handoff written after**: Stage 35 restart 54 (commit will land alongside this handoff)
 
 This handoff is for Claude to continue the Helix Stage 35 audit campaign.
 Treat live git state as truth if it differs from this file.
@@ -13,18 +13,18 @@ Treat live git state as truth if it differs from this file.
 
 Stage 35 is still in audit cleanup. Clean gates remain `0/3`.
 
-The latest completed fix sweep is restart 53:
+The latest completed fix sweep is restart 54:
 
-- Commit: pinned by the latest `git log -1 --oneline` (see `Fix Stage 35
-  fifty-third restart findings`)
+- Commit: pinned by the latest `git log -1 --oneline`
 - Status at handoff creation: clean working tree, `main` aligned with
   `origin/main`
-- Progress ledger: `docs/stage35-progress-2026-05-15.md` (see Increment 72
-  for restart 53; 71 for restart 52; 70 for restart 51; 69 for restart 50;
-  68 for restart 49; 67 for restart 48; 66 for restart 47; 65 for restart 46)
-- Current-facing status files now say restart 53 and 2,511 collected tests
-  (live count after restart 53 added 14 canaries on top of restart 51's
-  reconciled 2,497; restart 52 added 0 net tests)
+- Progress ledger: `docs/stage35-progress-2026-05-15.md` (see Increment 73
+  for restart 54; 72 for restart 53; 71 for restart 52; 70 for restart 51;
+  69 for restart 50; 68 for restart 49; 67 for restart 48; 66 for restart 47;
+  65 for restart 46)
+- Current-facing status files now say restart 54 and 2,522 collected tests
+  (live count after restart 54 added 11 canaries on top of restart 53's
+  2,511; see Increments 70-73 in the ledger for the per-restart canary chain)
 
 Restart 51 ran a fresh 3-lane read-only audit on top of restart 50's HEAD
 plus picked up the restart-50-deferred C8 carry-forward. Result: 12
@@ -52,9 +52,65 @@ Lane C wrote the missing restart 52 lane docs + Increment 71 + Increment
 72 + reconciled 11 surfaces to "restart 53" + fixed the HANDOFF protocol
 numbers. Fix sweep closed all 15. See Increments 71 + 72 in the ledger.
 
-## Restart 53 → Restart 54 deferred findings
+## Restart 54 → Restart 55 deferred findings
 
-(none — restart 54 starts from a clean carry-forward)
+(none — restart 55 starts from a clean carry-forward)
+
+## What Restart 54 Fixed
+
+Restart 54 ran a fresh 3-lane read-only audit on top of restart 53 HEAD
+(`c4cb7a3`). Result: 11 findings (4 Lane A HIGH + 2 Lane A MEDIUM + 1
+Lane A LOW + 0 Lane B HIGH + 1 Lane B MEDIUM + 1 Lane B LOW + 0 Lane C
+HIGH + 0 Lane C MEDIUM + 2 Lane C LOW).
+
+Lane A findings (i64-saturation siblings — campaign's dominant family):
+
+- A1 HIGH: `autodiff_reverse.hx` reverse-mode AD tape was the missed
+  consumer of the restart 51/52/53 saturation discipline. Both forward
+  record (`rev_add`/`rev_sub`/`rev_mul`/`rev_neg`) and backward adjoint
+  accumulation (`rev_backward` kind=1/2/3/4) lifted to i64 + INT32
+  saturation. The mul branch was double-wrapping silently.
+- A2 HIGH: `tensor.hx` `ti1d_mul` Hadamard product (also `ti1d_add` and
+  `ti1d_sub`) per-element i64 + INT32 saturation.
+- A3 HIGH: `iterators.hx` `vec_zip_mul` Hadamard product per-element
+  saturation. Sibling of vec_dot (restart 53 A1).
+- A4 HIGH: `iterators.hx` `vec_window_sum` rolling accumulator + per-
+  output saturation. Worse than other window helpers because a wrap
+  propagates via subtraction into every subsequent output. Also
+  saturated `vec_sum_in_range`.
+- A5 MEDIUM: `iterators.hx` `vec_l1_distance` and `vec_l2_squared_distance`
+  i64 accumulator + INT32 saturation. Sibling of vec_sum_squares
+  (already saturated).
+- A6 MEDIUM: `nn.hx` `lin_reg_grad_w`/`lin_reg_grad_b`/`sgd_step_scalar`
+  i64 intermediates + INT32 saturation. Scalar mirrors of the array
+  helpers that restart 53 A7 saturated.
+- A7 LOW: `iterators.hx` cluster sweep — `vec_zip_add`, `vec_zip_sub`,
+  `vec_map_add_scalar`, `vec_map_mul_scalar`, `vec_scale_inplace`,
+  `vec_offset_inplace`, `vec_pairwise_diff`, `vec_pairwise_sum`,
+  `vec_offset_alloc`, `vec_fold_op` per-element saturation.
+
+Lane B findings:
+
+- B1 MEDIUM: `check.py:43-44` `--help` `-W<flag>` example line gained
+  `-Wad` / `-Wad=error` enumeration, matching backend banners. Closes
+  parser-vs-banner drift on a behaviour-honoured flag.
+- B2 LOW: `helixc/ir/lower_ast.py:847` `_lower_type` loud-fails
+  (NotImplementedError) on unknown TyNode subclass instead of returning
+  `tir.TIRScalar("?")` sentinel. Added `A.TyFn` case lowering to u64
+  closure-pointer placeholder. Sibling of restart 47 B1 discipline.
+
+Lane C findings:
+
+- C1 LOW: `HELIX_REFERENCE.md:1153` + `code_samples.md:8` roadmap-
+  snippets attribution re-stamped from "Stage 35 restart 50 lane C
+  audit" to "Stage 35 restart 54 lane C audit".
+- C2 LOW: README + 6 sibling surfaces narrative compression replaced
+  with drift-proof "see Increments 70-73 in the progress ledger for
+  the per-restart canary chain since restart 50" — sidesteps the
+  +N-canaries chain each restart.
+
+Fix sweep closed all 11. Regression coverage added (11 canaries: 9 in
+`test_codegen.py`, 2 in `test_cli.py`). Live test count: 2,511 → 2,522.
 
 ## What Restart 51 Fixed
 
@@ -402,17 +458,17 @@ fresh confirmation before restart 47, rerun it alone with a longer timeout:
 python -m pytest helixc/tests/test_codegen.py -q -k "stage35 or agi or hashmap or tensor"
 ```
 
-## Restart 54 Protocol (bug-family audit, refined from restart 53)
+## Restart 55 Protocol (bug-family audit, refined from restart 54)
 
-**IMPORTANT**: restart 53 closed all 15 freshly-discovered findings
-plus the bookkeeping gap left by restart 52. There are NO carry-forward
-findings into restart 54. Restart 54 MUST run a fresh 3-lane audit
-(read-only). The campaign run-rate: restarts 46/47/48/49/50/51/52/53
-closed 12, 17, 13, 11, 17, 12, 3, 15 findings respectively (no clean
-monotonic decrease yet; the restart 52 dip was followed by a restart-53
-rebound because restart 52 left bookkeeping unfinished). The first
-restart where the audit returns 0 findings on the same HEAD becomes
-clean gate 1/3.
+**IMPORTANT**: restart 54 closed all 11 freshly-discovered findings.
+There are NO carry-forward findings into restart 55. Restart 55 MUST
+run a fresh 3-lane audit (read-only). The campaign run-rate: restarts
+46/47/48/49/50/51/52/53/54 closed 12, 17, 13, 11, 17, 12, 3, 15, 11
+findings respectively (no clean monotonic decrease yet; the restart-54
+dip from 15 to 11 happened because the i64-saturation family is finally
+being exhausted across stdlib — reverse-mode AD was the deepest missed
+consumer). The first restart where the audit returns 0 findings on the
+same HEAD becomes clean gate 1/3.
 
 The bug-family audit pattern from restart 46 (12 findings) and restart 47
 (17 findings) worked well — each restart pulls more sibling issues into the

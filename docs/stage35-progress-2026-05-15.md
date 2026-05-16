@@ -4065,3 +4065,123 @@ docs / ledger / canaries. The campaign protocol is now to verify
 each restart commit ALSO writes the ledger increment + lane docs +
 canaries before pushing — partial commits drag forward into the next
 restart and inflate its scope.
+
+
+## Increment 73 — Fifty-Fourth Clean-Gate Restart Fix Sweep (2026-05-16)
+
+Restart 54 ran a fresh 3-lane read-only audit on top of restart 53
+HEAD (`c4cb7a3`). Result: 11 findings total (4 Lane A HIGH + 2 Lane A
+MEDIUM + 1 Lane A LOW + 0 Lane B HIGH + 1 Lane B MEDIUM + 1 Lane B
+LOW + 0 Lane C HIGH + 0 Lane C MEDIUM + 2 Lane C LOW). The Lane A
+family was again "missed siblings in the i64-saturation sweep" — the
+deepest miss was the reverse-mode autodiff tape itself (forward
+record + backward adjoint accumulator), which silently corrupted
+every user-facing gradient once intermediates exceeded i32 magnitude.
+
+Fix sweep closed all 11 findings:
+
+Lane A (4 HIGH + 2 MEDIUM + 1 LOW):
+
+- A1 HIGH: `autodiff_reverse.hx` — both forward record (`rev_add`,
+  `rev_sub`, `rev_mul`, `rev_neg`) and backward adjoint accumulator
+  (`rev_backward` kind=1/2/3/4) lifted to i64 + INT32 saturation. The
+  mul branch was the critical site (adj_i * v_b multiply could wrap,
+  then the add wrapped again — double silent corruption).
+- A2 HIGH: `tensor.hx` — `ti1d_mul` Hadamard product, plus its `ti1d_add`
+  and `ti1d_sub` companions, per-element i64 + INT32 saturation.
+- A3 HIGH: `iterators.hx` — `vec_zip_mul` Hadamard product, per-element
+  saturation. Sibling of vec_dot/vec_dot_pure (restart 53 A1) extended
+  to the element-wise product.
+- A4 HIGH: `iterators.hx` — `vec_window_sum` i64 rolling accumulator
+  + per-output INT32 saturation; also `vec_sum_in_range`. The window
+  pattern was worse than other accumulators because a mid-window wrap
+  propagates via subtraction into every subsequent output slot.
+- A5 MEDIUM: `iterators.hx` — `vec_l1_distance` and
+  `vec_l2_squared_distance` i64 accumulator + INT32 saturation.
+  Sibling of vec_sum_squares (already saturated by restart 53 A2).
+- A6 MEDIUM: `nn.hx` — `lin_reg_grad_w`, `lin_reg_grad_b`,
+  `sgd_step_scalar` i64 intermediates + INT32 saturation. Scalar
+  mirrors of `sgd_step_array` (restart 53 A7).
+- A7 LOW: `iterators.hx` cluster sweep — `vec_zip_add`, `vec_zip_sub`,
+  `vec_map_add_scalar`, `vec_map_mul_scalar`, `vec_scale_inplace`,
+  `vec_offset_inplace`, `vec_pairwise_diff`, `vec_pairwise_sum`,
+  `vec_offset_alloc`, `vec_fold_op` (op=0 add / op=1 mul) per-element
+  saturation. Per-element ops where the caller observes the wrap on
+  next read, but fixing the family as one sweep is cheaper than
+  patching each site individually next restart.
+
+Lane B (1 MEDIUM + 1 LOW):
+
+- B1 MEDIUM: `helixc/check.py:43-44` — `--help` `-W<flag>` example
+  line extended from `(e.g. -Wdeprecated, -Wdeprecated=error)` to
+  `(e.g. -Wad, -Wad=error, -Wdeprecated, -Wdeprecated=error)`,
+  matching the backend banner contracts. Closes parser-vs-banner
+  drift on a behaviour-honoured flag.
+- B2 LOW: `helixc/ir/lower_ast.py:847` — `_lower_type` loud-fails
+  (raises `NotImplementedError`) on unknown TyNode subclass instead
+  of returning `tir.TIRScalar("?")` sentinel. Added `A.TyFn` case
+  lowering to `TIRScalar("u64")` (closure-pointer placeholder).
+  Mirrors the restart 47 B1 discipline already applied to
+  `_resolve_monomorphized_struct_type`.
+
+Lane C (2 LOW):
+
+- C1 LOW: `helix_website/HELIX_REFERENCE.md:1153` and
+  `helix_website/code_samples.md:8` roadmap-snippets attribution
+  re-stamped from "Stage 35 restart 50 lane C audit" to "Stage 35
+  restart 54 lane C audit" (the list itself is still factually
+  correct against `python -m helixc.check`).
+- C2 LOW: README.md + 6 sibling surfaces narrative compression
+  replaced with drift-proof "see Increments 70-73 in the progress
+  ledger for the per-restart canary chain since restart 50" — the
+  previous "restart 51 reconciled to 2,497" wording elided the +10-
+  canaries detail and would need to keep being rewritten each restart.
+
+Regression coverage added (11 cases: 9 in `test_codegen.py`, 2 in
+`test_cli.py`):
+
+- A1: `test_stage35_restart54_rev_mul_forward_saturates_on_i32_overflow`,
+  `test_stage35_restart54_rev_backward_mul_adjoint_saturates_on_i32_overflow`
+- A2: `test_stage35_restart54_ti1d_mul_hadamard_saturates_on_i32_overflow`
+- A3: `test_stage35_restart54_vec_zip_mul_saturates_on_i32_overflow`
+- A4: `test_stage35_restart54_vec_window_sum_saturates_on_i32_overflow`
+- A5: `test_stage35_restart54_vec_l2_squared_distance_saturates`
+- A6: `test_stage35_restart54_lin_reg_grad_w_saturates_on_i32_overflow`,
+  `test_stage35_restart54_sgd_step_scalar_saturates_on_i32_overflow`
+- A7: `test_stage35_restart54_iterators_arithmetic_helpers_saturate_on_i32_overflow`
+  (family canary exercising vec_zip_add/sub, vec_offset_alloc/inplace,
+  vec_scale_inplace, vec_pairwise_sum/diff, vec_sum_in_range, vec_fold_op)
+- B1: `test_stage35_restart54_check_help_lists_wad_flag`
+- B2: `test_stage35_restart54_lower_type_loud_fails_on_unknown_tynode`
+  (source-text canary: confirms `raise NotImplementedError` and
+  `unsupported TyNode` are present and `return tir.TIRScalar("?")`
+  is not).
+
+Verification:
+
+- `python -m py_compile helixc/check.py helixc/backend/x86_64.py
+  helixc/backend/ptx.py helixc/frontend/autodiff_cli.py
+  helixc/ir/lower_ast.py helixc/ir/passes/const_fold.py
+  helixc/tests/test_cli.py helixc/tests/test_codegen.py
+  helixc/tests/test_ptx.py`
+  - Result: passed.
+- Per-file stdlib parser sweep
+  - Result: parsed 16 files.
+- Restart 54 new regression canaries (9 codegen + 2 cli = 11)
+  - Result: 11 passed.
+- `python -m pytest helixc/tests --collect-only -q`
+  - Result: 2,522 tests collected (was 2,511 + 11 new canaries).
+
+Clean-gate status:
+
+- Stage 35 clean gates remain `0/3`.
+- Restart 54 is a fix sweep, not a clean gate.
+- Next step is restart 55 as another fresh Stage 35 clean gate from
+  the newest pushed HEAD.
+
+Restart 54 process note: Lane A's audit subagent ran first and
+committed the lane-A + lane-C report docs (commit `2ca12d0`) before
+the slower Lane B subagent finished. Lane B's report was added by
+the orchestrator afterwards. Future restarts should serialize the
+lane-doc commit until all three lanes have returned to avoid the
+"partial commits" pattern restart 53 already called out.
