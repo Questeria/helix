@@ -229,7 +229,11 @@ fn adam_f32_step(w_start: i32, g_start: i32, m_start: i32, v_start: i32,
         __arena_set(m_start + i, __bits_of_f32(next_m));
         __arena_set(v_start + i, __bits_of_f32(next_v));
         let raw_denom = __sqrt(next_v) + eps;
-        if raw_denom <= 0.0_f32 {
+        // Restart 50 A2: also fail-closed on NaN (raw_denom != raw_denom),
+        // matching the softmax_layer + dense_classifier_sgd_step_f32
+        // idiom from restart 48 A2. A NaN eps from the caller would
+        // otherwise poison every weight w[i] in the batch with NaN.
+        if (raw_denom <= 0.0_f32) || (raw_denom != raw_denom) {
             __arena_set(w_start + i, __bits_of_f32(w_i));
         }
         else {
@@ -575,7 +579,11 @@ fn layer_norm_f32(x_start: i32, y_start: i32, n: i32, eps: f32) -> i32 {
         // 0 * Inf = NaN. Fail-closed: write 0 to every output slot, which
         // is the mathematically correct centered output for a constant
         // input (x - mean = 0 for all j).
-        if denom <= 0.0_f32 {
+        // Restart 50 A2: also fail-closed on NaN (denom != denom). A NaN
+        // input (eps or any x[i]) would otherwise poison every output
+        // y[j] with NaN. Matches the softmax_layer + adam_f32_step NaN
+        // discipline.
+        if (denom <= 0.0_f32) || (denom != denom) {
             let mut j: i32 = 0;
             while j < n {
                 __arena_set(y_start + j, __bits_of_f32(0.0_f32));

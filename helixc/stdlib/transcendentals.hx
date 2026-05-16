@@ -501,7 +501,10 @@ fn __always_accept_f64(h: i32, v: f64) -> i32 {
 @pure fn __adam_step(m: f32, v: f32, eps: f32) -> f32 {
     let safe_v = if v < 0.0_f32 { 0.0_f32 } else { v };
     let raw_denom = __sqrt(safe_v) + eps;
-    if raw_denom <= 0.0_f32 { 0.0_f32 } else { m / raw_denom }
+    // Restart 50 A2: also fail-closed on NaN (raw_denom != raw_denom),
+    // matching the in-arena adam_f32_step + softmax_layer idiom.
+    if (raw_denom <= 0.0_f32) || (raw_denom != raw_denom) { 0.0_f32 }
+    else { m / raw_denom }
 }
 
 // =========================================================================

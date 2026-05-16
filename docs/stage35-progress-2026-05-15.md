@@ -3631,3 +3631,112 @@ audit-and-fix cycles. Use this pattern when the prior restart left a
 well-documented deferred list AND the deferred items have no overlap
 with active development. If the prior restart's deferred list is empty,
 restart N+1 must run a fresh 3-lane audit.
+
+## Increment 69 - Fiftieth Clean-Gate Restart Fix Sweep
+
+Restart 50 began from pushed commit `f0ab654` (handoff for restart 50).
+Per the restart-49 handoff: the deferred backlog was empty, so restart 50
+ran a fresh 3-lane read-only audit dispatch. Result: 17 findings (3 HIGH
++ 5 MEDIUM + 9 LOW) across the three lanes.
+
+Lane A (4 LOW fixes):
+
+- A1: `string_from_int(INT32_MIN)` previously silently produced only the
+  byte `'-'` (rc=1). Hard-coded the 11-byte output `"-2147483648"` so the
+  contract "writes the printable decimal of n" holds across the full i32
+  domain.
+- A2: NaN-eps consistency. `adam_f32_step`, `__adam_step`, and
+  `layer_norm_f32` now ALSO fail-closed on `raw_denom != raw_denom` (NaN
+  check), matching the softmax_layer + dense_classifier_sgd_step_f32
+  idiom from restart 48. A NaN eps no longer poisons every weight/output.
+- A3: `ti1d_prod` switched to i64 accumulator with INT32 saturation so a
+  product that would silently i32-wrap (e.g. 32 elements of value 2 →
+  2^32 → 0) now returns INT32_MAX. Mirrors `hashmap_sum_values` precedent.
+- A4: `hashmap_load_factor_x100` numerator promoted to i64 (was: `size *
+  100` could silently overflow i32 for caps > ~21M). Sibling of
+  `hashmap_avg_value_x100` which was already i64-promoted.
+
+Lane B (1 MEDIUM + 2 LOW; 1 LOW B4 deferred as documented-prior):
+
+- B1 MEDIUM: `autodiff_cli --as-function` no longer hardcodes `f32` for
+  param and return types. Reads `target.params[i].ty` and
+  `target.return_ty` via a `_format_ty` helper that unwraps `D<T>` and
+  falls back to `f32` only for non-printable types. Closes the
+  type-correctness gap on the QUICKSTART round-trip example for any
+  non-f32 source.
+- B2 LOW: `helixc/ir/passes/const_fold.py:355-365` `is_const` `except
+  Exception` narrowed to `(ValueError, TypeError, OverflowError)`.
+  Sibling of restart 47 B1 / 48 B2-B3 / 49 B4 loud-fail-discipline sweep.
+- B3 LOW: `helixc/frontend/presburger.py:281-283` dead `(...) if False
+  else (...)` outer ternary simplified to the actual computed
+  `rest * -1 if c == 1 else rest`.
+
+Lane C (3 HIGH + 4 MEDIUM; 1 LOW C8 deferred to restart 51):
+
+- C1 HIGH: HELIX_REFERENCE.md:59 "23+ silent-corruption bugs were found
+  and fixed" reframed as "Dozens of silent-corruption defects have been
+  found and fixed (live count grows with each Stage 35 restart; see
+  Increments 50-68+)". Sibling that restart 49 closed at line 1548 but
+  missed at line 59.
+- C2 HIGH: `docs/lang/agi-features.md:290` "Constant folding + DCE" row
+  in the Roadmap (remaining work) table — const-fold/CSE/DCE/FDCE are
+  shipped Stage 17-18 passes per README/QUICKSTART/stats_and_facts and
+  HELIX_REFERENCE. Removed the row with an inline note.
+- C3 HIGH: `HANDOFF_FOR_CLAUDE.md` Restart 50 Protocol section's stale
+  "restart 47 / 48 / 49" / "4ba725f" references rewritten to be
+  restart-N-agnostic ("the next restart's audit").
+- C4 HIGH: `docs/lang/trap-ids.md` header reframed: trap-ID set is
+  authoritative, per-trap line refs drift on every commit — auditors
+  should `grep -n "trap NNNNN" helixc/frontend/` rather than trust the
+  doc's line numbers. Last-updated stamp switched to ledger-anchored.
+- C5 MEDIUM: HELIX_REFERENCE.md Code Samples Gallery preamble now lists
+  the 6 known-roadmap snippets (#7, #8, #12, #13, #14, #18, #19) with
+  explicit "design target — not yet shipped" framing so a website team
+  doesn't ship parse-failing snippets as copy-paste-ready.
+- C6 MEDIUM: `helix_website/code_samples.md` preamble extended with the
+  same roadmap-snippet list (sibling of C5).
+- C7 MEDIUM: `docs/lang/tutorial.md:6` "Every example here parses,
+  type-checks, and compiles" weakened to "Most examples here are
+  fragment-level — for the loop / array / assignment samples in steps 5
+  and 6, wrap them in `fn main() -> i32 { ... }` to parse end-to-end".
+- C7 MEDIUM (continued): `scripts/run_all_tests.sh:48` echo line changed
+  from "pytest (stage31 sharded gate):" to "pytest (current sharded
+  gate; historical stage31 log names):" so the actual output matches
+  the QUICKSTART promise.
+
+Regression coverage added (10 cases):
+
+- `helixc/tests/test_codegen.py`: 4 new tests (string_from_int INT32_MIN,
+  adam NaN-eps, layer_norm NaN-eps, ti1d_prod overflow saturation).
+- `helixc/tests/test_cli.py`: 3 new tests (autodiff_cli --as-function
+  f64-type preservation, const_fold is_const narrowing source-text,
+  presburger no-dead-if-false source-text).
+
+Verification:
+
+- `python -m py_compile helixc/check.py helixc/backend/x86_64.py helixc/backend/ptx.py helixc/frontend/autodiff_cli.py helixc/frontend/presburger.py helixc/ir/lower_ast.py helixc/ir/passes/const_fold.py helixc/tests/test_cli.py helixc/tests/test_codegen.py`
+  - Result: passed.
+- Per-file stdlib parser sweep
+  - Result: parsed 16 files.
+- Restart 50 new regression canaries (Lane A x4, Lane B x3)
+  - Result: 7 passed.
+- `python -m pytest helixc/tests --collect-only -q`
+  - Result: 2,489 tests collected (was 2,479 + 10 net).
+- `git diff --check`
+  - Result: passed.
+
+Clean-gate status:
+
+- Stage 35 clean gates remain `0/3`.
+- Restart 50 is a fix sweep, not a clean gate.
+- Next step is restart 51 as another fresh Stage 35 clean gate from the
+  newest pushed HEAD.
+
+Restart 50 process note: the audit surface continues to thin. Restarts
+46-49 closed 12, 17, 13, 11 findings; restart 50 found 17 again — about
+half from a previously-unswept Lane C content surface (HELIX_REFERENCE
+Standard Library section listing fictitious modules), about half from
+new sibling sweeps (NaN-eps inconsistency, ti1d_prod overflow, hashmap
+load-factor i32 wrap). The fresh-audit-vs-deferred-only alternation
+pattern from Increment 68 continues to scale well — fresh audits surface
+new families, deferred-only sweeps clean up the backlog efficiently.

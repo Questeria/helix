@@ -598,14 +598,26 @@ fn tf2d_matvec(w_start: i32, w_rows: i32, w_cols: i32,
 }
 
 // Integer-tensor product.
+// Restart 50 A3: i64 accumulator + INT32 saturation so a product that
+// would silently wrap an i32 (e.g. 32 elements of value 2 → 2^32 → 0
+// previously) now returns INT32_MAX / INT32_MIN. Mirrors the
+// `hashmap_sum_values` saturating-i64 precedent. Callers needing the
+// exact i64 product should accumulate themselves.
 @pure fn ti1d_prod(start: i32, n: i32) -> i32 {
     if n <= 0 { 1 }
     else { if t1d_slice_ok(start, n) == 0 { 1 }
     else {
         let mut i: i32 = 0;
-        let mut p: i32 = 1;
-        while i < n { p = p * __arena_get(start + i); i = i + 1; }
-        p
+        let mut p: i64 = 1_i64;
+        let lo: i64 = 0_i64 - 2147483647_i64 - 1_i64;
+        let hi: i64 = 2147483647_i64;
+        while i < n {
+            p = p * (__arena_get(start + i) as i64);
+            if p > hi { p = hi; }
+            else { if p < lo { p = lo; } };
+            i = i + 1;
+        }
+        p as i32
     }}
 }
 

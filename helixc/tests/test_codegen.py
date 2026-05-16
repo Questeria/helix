@@ -20258,6 +20258,82 @@ def test_stage35_tanh_layer_does_not_nan_at_saturation_boundary():
     assert code == 42, f"expected 42, got {code}"
 
 
+def test_stage35_string_from_int_int32_min_writes_full_sentinel():
+    src = """
+    fn main() -> i32 {
+        let start = __arena_len();
+        let n = string_from_int(0 - 2147483647 - 1);
+        if n == 11 { 42 } else { 7 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42 (11 bytes), got {code}"
+
+
+def test_stage35_adam_f32_step_nan_eps_fail_closed():
+    src = """
+    fn main() -> i32 {
+        let w = t1d_new(4);
+        let g = t1d_new(4);
+        let m = t1d_new(4);
+        let v = t1d_new(4);
+        let mut i: i32 = 0;
+        while i < 4 {
+            tf1d_set(w, i, 100.0_f32);
+            tf1d_set(g, i, 0.0_f32);
+            tf1d_set(m, i, 1.0_f32);
+            tf1d_set(v, i, 1.0_f32);
+            i = i + 1;
+        }
+        let nan_eps = __f32_from_bits(2143289344);
+        adam_f32_step(w, g, m, v, 0.01_f32, 0.9_f32, 0.999_f32, nan_eps, 4);
+        let w0 = tf1d_get(w, 0);
+        let w3 = tf1d_get(w, 3);
+        if (w0 == w0) { if (w3 == w3) {
+            if (w0 as i32) == 100 { if (w3 as i32) == 100 { 42 } else { 7 } } else { 7 }
+        } else { 7 } } else { 7 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stage35_layer_norm_f32_nan_eps_fail_closed():
+    src = """
+    fn main() -> i32 {
+        let x = t1d_new(4);
+        tf1d_set(x, 0, 1.0_f32);
+        tf1d_set(x, 1, 2.0_f32);
+        tf1d_set(x, 2, 3.0_f32);
+        tf1d_set(x, 3, 4.0_f32);
+        let y = t1d_new(4);
+        let nan_eps = __f32_from_bits(2143289344);
+        layer_norm_f32(x, y, 4, nan_eps);
+        let y0 = tf1d_get(y, 0);
+        let y3 = tf1d_get(y, 3);
+        if (y0 == y0) { if (y3 == y3) {
+            if (y0 as i32) == 0 { if (y3 as i32) == 0 { 42 } else { 7 } } else { 7 }
+        } else { 7 } } else { 7 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stage35_ti1d_prod_saturates_on_i32_overflow():
+    src = """
+    fn main() -> i32 {
+        let v = t1d_new(32);
+        let mut i: i32 = 0;
+        while i < 32 { ti1d_set(v, i, 2); i = i + 1; }
+        let p = ti1d_prod(v, 32);
+        if p == 2147483647 { 42 } else { 7 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
 def main():
     # Recognise both the legacy `_SkipTest` exception and pytest's
     # `Skipped` outcome class so tests can use either to signal a skip

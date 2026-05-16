@@ -5,6 +5,22 @@ draft, not a live-valid sample suite. Before publishing a snippet as
 copy/paste-ready, run it through the current `python -m helixc.check` path or
 mark it clearly as roadmap syntax.
 
+**Known roadmap snippets** (verified by Stage 35 restart 50 lane C audit
+against the live `python -m helixc.check` path; these do not yet parse and
+are design targets, not copy-paste-ready):
+
+- #9 Structs basic and #10 Structs nested — positional `Pt { 6, 7 }`
+  construction is not supported by the current parser; use the named form
+  `Pt { x: 6, y: 7 }` instead.
+- #15 Generic functions, #16 Traits, #17 Bounded generic — generic-fn
+  `fn id<T>` syntax, trait bodies with `self` parameters, and bounded
+  generics `fn cmp<T: Eq>(...)` are all roadmap.
+- #18 Closures — `let c = |x| x + a;` is roadmap; `|x|` is not parsed as
+  an expression today.
+
+A future website pass should either replace these with parsing equivalents
+or render them with a clear "design target — not yet shipped" annotation.
+
 Each sample shows: source code · expected output · feature demonstrated.
 
 ---

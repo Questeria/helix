@@ -1,6 +1,15 @@
 # Helix Trap ID Registry
 
-**Last updated**: 2026-05-14 (Stage 33 bootstrap metadata — autotune trap IDs are collision-free and aux payloads are specific)
+**Last updated**: regenerated alongside Stage 35 audit cleanup (see
+`docs/stage35-progress-2026-05-15.md` for the latest restart). The trap
+*ID set* is authoritative; the per-trap **line references** in the tables
+below drift on every commit that touches `helixc/frontend/` and should
+be re-verified via `grep -n "trap NNNNN" helixc/frontend/` /
+`grep -n "TRAP_<NAME>" helixc/` rather than trusted blindly. If you find
+a line ref that no longer matches, prefer regenerating via grep over
+patching individual numbers — the IDs themselves are stable, the line
+numbers are not.
+
 **Convention**: Each runtime trap has a numeric ID. The ID is encoded into `eax` immediately before a `ud2` instruction (SIGILL on x86_64), or surfaced as a structured `HelixCompileError` at compile time. Tools and tests cross-reference traps by ID.
 
 ## Two ID namespaces

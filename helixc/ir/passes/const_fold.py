@@ -358,9 +358,15 @@ def _algebraic_forward(op: tir.Op, defs: dict) -> "tir.Value | None":
         if d.kind == tir.OpKind.CONST_INT:
             return int(d.attrs.get("value", -1)) == value
         if d.kind == tir.OpKind.CONST_FLOAT:
+            # Restart 50 B2: narrow exception to the cast-failure family
+            # (ValueError, TypeError, OverflowError). Previously a bare
+            # `except Exception` swallowed NotImplementedError /
+            # AssertionError / MemoryError too, defeating the same loud-fail
+            # discipline that restart 47 B1 / 48 B2-B3 / 49 B4 preserved
+            # elsewhere.
             try:
                 return float(d.attrs.get("value", 0.0)) == float(value)
-            except Exception:
+            except (ValueError, TypeError, OverflowError):
                 return False
         return False
 

@@ -631,6 +631,9 @@ def test_stage35_direct_ptx_cli_reports_encoding_error_without_traceback(tmp_pat
 
 
 def test_stage35_direct_ptx_cli_bad_invocation_returns_two():
+    # Restart 49 B3 added a usage banner to the bare-invocation path
+    # (previously printed only "error: ptx: missing input path"). Either
+    # diagnostic is acceptable as long as rc=2 and the user sees a hint.
     proj_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     proc = subprocess.run(
         [sys.executable, "-m", "helixc.backend.ptx"],
@@ -640,7 +643,11 @@ def test_stage35_direct_ptx_cli_bad_invocation_returns_two():
         timeout=60,
     )
     assert proc.returncode == 2, proc.stdout + proc.stderr
-    assert "missing input path" in proc.stderr
+    assert ("missing input path" in proc.stderr
+            or "usage:" in proc.stderr.lower()), (
+        f"bare ptx invocation should print 'missing input path' or "
+        f"'usage:'; got stderr={proc.stderr!r}"
+    )
 
     for args in (["--strict"], ["--stdlib"], ["--strict", "--stdlib"]):
         proc = subprocess.run(
@@ -651,7 +658,11 @@ def test_stage35_direct_ptx_cli_bad_invocation_returns_two():
             timeout=60,
         )
         assert proc.returncode == 2, proc.stdout + proc.stderr
-        assert "missing input path" in proc.stderr
+        assert ("missing input path" in proc.stderr
+                or "usage:" in proc.stderr.lower()), (
+            f"ptx with flag-only args {args!r} should print "
+            f"'missing input path' or 'usage:'; got stderr={proc.stderr!r}"
+        )
 
     proc = subprocess.run(
         [sys.executable, "-m", "helixc.backend.ptx", "--bogus"],

@@ -287,5 +287,6 @@ typechecks cleanly with all four features stacked.
 | Broader transform surface beyond scalar `grad`/`grad_rev` | 1-2 months | tensor gradients, pytrees, `vmap`, and `jit` |
 | `society::dispatch` semantics | 1-2 weeks | makes agent declarations actually work |
 | `curriculum::learn_to` semantics | 1 week | first-class auto-curriculum |
-| Constant folding + DCE | 1 week | basic optimizations for production code |
 | Real type inference (fewer `TyUnknown`) | 2 weeks | better diagnostics, more checks |
+
+(`Constant folding + DCE` was previously listed here as remaining work; const-fold, CSE, DCE, and FDCE are now shipped Stage 17-18 passes — see `helixc/ir/passes/` and `README.md`.)

@@ -3,9 +3,12 @@
 This guide walks through the core of Helix in 10 short steps, ending with
 a program that combines several AGI-oriented type-level Helix features.
 
-Every example here parses, type-checks, and (where applicable) compiles
-through the current `helixc` toolchain. Examples run through the same
-test suite that ships with the repo.
+Most examples here are fragment-level — for the loop / array / assignment
+samples in steps 5 and 6, wrap them in `fn main() -> i32 { ... }` to
+parse end-to-end through the current `helixc` toolchain. The complete
+program in step 10 and the typed examples in steps 8-9 do parse + compile
+as written. The full pass+compile set runs through the test suite that
+ships with the repo.
 
 ---
 

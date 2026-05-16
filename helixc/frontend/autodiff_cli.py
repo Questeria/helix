@@ -139,15 +139,31 @@ def main():
         sys.exit(1)
 
     if emit_function:
-        # Emit a complete Helix function definition: fn <name>__grad(...) -> ... {
-        #     <expr>
-        # }
-        # Use the same parameter list as the source (minus D wrappers, since
-        # the gradient takes plain floats).
+        # Restart 50 B1: preserve source param types and return type instead
+        # of hardcoding f32. The previous hardcode produced type-wrong
+        # `fn loss__grad(x: f32) -> f32` for an `fn loss(x: f64) -> f64`
+        # source, breaking the QUICKSTART round-trip example for any
+        # non-f32 source. Format the type from the AST node if it has a
+        # `name` attribute; fall back to f32 only for D<T>-wrapped or
+        # otherwise non-printable types.
+        def _format_ty(ty) -> str:
+            # TyName, TyScalar, TyPrim, etc. typically expose `.name`.
+            name = getattr(ty, "name", None)
+            if isinstance(name, str) and name:
+                return name
+            # D<T> wrappers (TyGeneric base="D", args=[T]) unwrap to inner.
+            base = getattr(ty, "base", None)
+            args = getattr(ty, "args", None)
+            base_name = getattr(base, "name", None)
+            if base_name == "D" and args and len(args) == 1:
+                return _format_ty(args[0])
+            # Fallback: keep f32 (legacy behavior) so output stays
+            # parseable rather than emitting `?` or a repr() string.
+            return "f32"
         params_str = ", ".join(
-            f"{p.name}: f32" for p in target.params
+            f"{p.name}: {_format_ty(p.ty)}" for p in target.params
         )
-        ret_str = "f32"
+        ret_str = _format_ty(target.return_ty) if getattr(target, "return_ty", None) is not None else "f32"
         print(f"fn {fn_name}__grad({params_str}) -> {ret_str} {{")
         print(f"    {fmt(deriv)}")
         print(f"}}")

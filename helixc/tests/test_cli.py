@@ -4818,6 +4818,93 @@ def test_stage35_lower_ast_structural_hash_narrowed_to_lookup_errors():
     )
 
 
+# ---- Restart 50 B1: loud-fail re-raise discipline at strict-effect-check
+# wrapper sites in check.py (matches restart 48 B2/B3 + restart 49 B4).
+#
+# SCOPE NOTE (restart 50 finding): the validate_kernel_tile_lowering
+# + lower_to_tile + emit_ptx + compile_module_to_elf wrappers were
+# intentionally NOT narrowed. Those sites raise NotImplementedError as
+# a user-facing "unsupported op" signal (e.g. "Tile IR lowering does
+# not support TIR op elem.div"), and the no-compiler-bug-tagline UX is
+# pinned by the test_stage35_emit_ptx_reports_tile_lowering_error_without
+# _bug_label + test_stage35_*_rejects_dead_unsupported_kernel_op
+# trio. Only the strict-effect-check + --emit-ptx full-effect wrappers
+# (which wrap grad_pass / lower / effect_check_module — none of which
+# emit user-facing NotImplementedError) get narrowed. ----
+
+def test_stage35_check_py_loud_fail_around_strict_effect_wrappers():
+    """check.py must re-raise (NotImplementedError, AssertionError,
+    KeyboardInterrupt, SystemExit, MemoryError) before the four
+    `except Exception` blocks that wrap the strict-effect-check trio
+    (lines 949/971/1011 — `_compute_strict_effects`) and the --emit-ptx
+    full-effect path (line 1653).
+
+    Restart 50 B1 sibling sweep of restart 48 B2's loud-fail discipline.
+    Source-text invariant — at least 4 narrowed handlers expected. The
+    needle is intentionally short to tolerate split-line wrapping."""
+    import inspect
+    import helixc.check
+    src = inspect.getsource(helixc.check)
+    needle = "except (NotImplementedError, AssertionError"
+    count = src.count(needle)
+    assert count >= 4, (
+        f"helixc.check should have at least 4 narrowed loud-fail handlers "
+        f"around strict-effect-check + --emit-ptx full-effect wrappers; "
+        f"found {count} occurrences. Restart 50 narrowed 4 of these."
+    )
+
+
+# ---- Restart 50 B1: autodiff_cli --as-function preserves source types ----
+
+def test_stage35_autodiff_cli_as_function_preserves_f64_types(tmp_path):
+    """`--as-function` must declare param/ret types matching the source fn,
+    not hardcode f32. Restart 50 B1 fix."""
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    src = tmp_path / "loss64.hx"
+    src.write_text("fn loss(x: f64) -> f64 { x * x }\n", encoding="utf-8")
+    result = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         str(src), "loss", "--as-function"],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "x: f64" in result.stdout, (
+        f"--as-function must preserve f64 param type; got stdout={result.stdout!r}"
+    )
+    assert "-> f64" in result.stdout, (
+        f"--as-function must preserve f64 return type; got stdout={result.stdout!r}"
+    )
+
+
+# ---- Restart 50 B2: const_fold.is_const narrows exception scope ----
+
+def test_stage35_const_fold_is_const_narrowed_to_cast_failures():
+    """is_const's bare `except Exception` was narrowed to
+    `(ValueError, TypeError, OverflowError)` so loud-fail signals propagate."""
+    import inspect
+    from helixc.ir.passes import const_fold
+    src = inspect.getsource(const_fold)
+    idx = src.find("def is_const(d, value: int | float)")
+    assert idx >= 0, "is_const definition not found in const_fold.py"
+    window = src[idx:idx + 1000]
+    assert "except (ValueError, TypeError, OverflowError)" in window, (
+        f"is_const should narrow to (ValueError, TypeError, OverflowError)"
+    )
+
+
+# ---- Restart 50 B3: presburger dead-coded `if False else` removed ----
+
+def test_stage35_presburger_no_dead_if_false_else():
+    """presburger.py had a dead `(...)  if False else (...)` outer ternary.
+    Restart 50 B3 removed it."""
+    import inspect
+    from helixc.frontend import presburger
+    src = inspect.getsource(presburger)
+    assert " if False else " not in src, (
+        "presburger.py should not contain `if False else` dead-code patterns"
+    )
+
+
 if __name__ == "__main__":
     import pytest
     raise SystemExit(pytest.main([__file__, "-v"]))

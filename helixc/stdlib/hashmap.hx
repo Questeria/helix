@@ -406,10 +406,19 @@ fn hashmap_min_value(start: i32, cap: i32) -> i32 {
 // hashmap_load_factor_x100(start, cap): @pure. Returns size * 100 / cap
 // — load factor as a percentage. Useful for resize-decision heuristics
 // (e.g. "rebuild if load > 75").
+//
+// Restart 50 A4: i64 numerator. For large caps (cap > ~21M) the i32
+// product `size * 100` would silently overflow to a wrapped negative
+// before division, returning a bogus load factor. The i64 promotion
+// matches `hashmap_avg_value_x100`'s already-i64 pattern. Output is
+// still i32 (load factor in 0..100 fits trivially).
 @pure
 fn hashmap_load_factor_x100(start: i32, cap: i32) -> i32 {
     if cap == 0 { 0 }
-    else { hashmap_size(start, cap) * 100 / cap }
+    else {
+        let num: i64 = (hashmap_size(start, cap) as i64) * 100_i64;
+        (num / (cap as i64)) as i32
+    }
 }
 
 // hashmap_count_above_threshold(start, cap, threshold): @pure. Count

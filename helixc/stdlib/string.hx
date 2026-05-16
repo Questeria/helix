@@ -89,7 +89,26 @@ fn string_starts_with(s: i32, sn: i32, p: i32, pn: i32) -> i32 {
 }
 
 fn string_from_int(n: i32) -> i32 {
-    if n == 0 {
+    // Restart 50 A1: INT32_MIN special case. `x = 0 - x` would wrap
+    // back to INT32_MIN for n == -2147483648, the digit-count loop
+    // would terminate immediately (count = 0), and the function would
+    // return rc=1 with only the byte '-' written. Hard-code the 11
+    // bytes for "-2147483648" so the contract "writes the printable
+    // decimal of n" holds for the entire i32 domain.
+    if n == 0 - 2147483647 - 1 {
+        __arena_push(45);   // '-'
+        __arena_push(50);   // '2'
+        __arena_push(49);   // '1'
+        __arena_push(52);   // '4'
+        __arena_push(55);   // '7'
+        __arena_push(52);   // '4'
+        __arena_push(56);   // '8'
+        __arena_push(51);   // '3'
+        __arena_push(54);   // '6'
+        __arena_push(52);   // '4'
+        __arena_push(56);   // '8'
+        11
+    } else { if n == 0 {
         __arena_push(48);
         1
     } else {
@@ -122,7 +141,7 @@ fn string_from_int(n: i32) -> i32 {
             j = j + 1;
         }
         if neg == 1 { count + 1 } else { count }
-    }
+    } }
 }
 
 @pure

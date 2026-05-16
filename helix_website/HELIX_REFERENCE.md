@@ -56,7 +56,7 @@
 
 ### 1. No silent corruption
 
-Every place where the compiler could silently produce wrong code traps with a unique trap-id (convention: `AST_TAG * 1000 + sub_id`). When a compile-time invariant fails, the produced binary contains a `ud2` instruction (SIGILL) with the trap-id encoded — clear signal vs. silent garbage. 23+ silent-corruption bugs were found and fixed during development; their repo-local audit docs include reproducers and status, and a future `/audits` website page should expose them publicly.
+Every place where the compiler could silently produce wrong code traps with a unique trap-id (convention: `AST_TAG * 1000 + sub_id`). When a compile-time invariant fails, the produced binary contains a `ud2` instruction (SIGILL) with the trap-id encoded — clear signal vs. silent garbage. Dozens of silent-corruption defects have been found and fixed during development (live count grows with each Stage 35 restart; see `docs/stage35-progress-2026-05-15.md` Increments 50-68+ for the open-ended ledger). Repo-local audit docs include reproducers and status; a future `/audits` website page should expose them publicly.
 
 ### 2. Growing from raw binary
 
@@ -507,7 +507,7 @@ Phase-0 stores cell *values* (not full ASTs). Phase-1 will support full AST cell
 
 ## Standard Library
 
-The Helix standard library lives in `helixc/stdlib/` and is written in Helix itself (no `unsafe`, no FFI for core operations). As of Stage 35 restart 49 fix verification the library has 16 modules with ~455 bare `fn` declarations (644 including `@attribute`-prefixed declarations). The list below names every module; each line points at the actual `.hx` file.
+The Helix standard library lives in `helixc/stdlib/` and is written in Helix itself (no `unsafe`, no FFI for core operations). As of Stage 35 restart 50 fix verification the library has 16 modules with 455 bare `fn` declarations and 436 additional `@`-attributed declarations (`@pure`, `@kernel`, `@deprecated`, etc.) — 891 declarations total. The list below names every module; each line points at the actual `.hx` file. Per-module counts are bare-fn only (matches the 455 grand total); to see the bare + `@`-decl breakdown per module, run the `Discoverability` snippet at the end of this section.
 
 ### Numerics & IEEE 754
 
@@ -516,32 +516,32 @@ The Helix standard library lives in `helixc/stdlib/` and is written in Helix its
 
 ### Tensors & tiles
 
-- `tensor.hx` — typed-handle 1D/2D tensor primitives: `t1d_new`/`t2d_new`, `tf1d_*` / `ti1d_*` (set/get/sum/max/min/mean/scale/dot/axpby/...), `t1d_capacity_ok`/`t2d_shape_ok`, `arena_span_in_tensor_payload`. ~113 functions.
+- `tensor.hx` — typed-handle 1D/2D tensor primitives: `t1d_new`/`t2d_new`, `tf1d_*` / `ti1d_*` (set/get/sum/max/min/mean/scale/dot/axpby/...), `t1d_capacity_ok`/`t2d_shape_ok`, `arena_span_in_tensor_payload`. 80 bare fn (+58 @-attributed).
 
 ### Neural networks (production)
 
-- `nn.hx` — high-level NN helpers (~75 functions): activation layers (`sigmoid_layer`/`tanh_layer`/`relu_layer`/`softplus_layer`/`silu_layer`/`gelu_layer`/`modern_activation_layers`), losses (`mse_loss_f32`/`mae_loss_f32`/`bce_loss_*`/`huber_loss_f32`/`count_correct`), optimizers (`sgd_f32_step`, `sgd_f32_step_decay_clip`, `momentum_step`, `adam_f32_step`), regularization (`clip_grad_norm_f32`, `add_weight_decay_grad_f32`, `dropout_f32`), normalization (`layer_norm_f32`), classification (`argmax_rows_f32`, `softmax_layer`, `softmax_rows_f32`, `dense_classifier_sgd_step_f32`, plus dense / activation backprop helpers).
+- `nn.hx` — high-level NN helpers (44 bare fn +14 @-attributed): activation layers (`sigmoid_layer`/`tanh_layer`/`relu_layer`/`softplus_layer`/`silu_layer`/`gelu_layer`/`modern_activation_layers`), losses (`mse_loss_f32`/`mae_loss_f32`/`bce_loss_*`/`huber_loss_f32`/`count_correct`), optimizers (`sgd_f32_step`, `sgd_f32_step_decay_clip`, `momentum_step`, `adam_f32_step`), regularization (`clip_grad_norm_f32`, `add_weight_decay_grad_f32`, `dropout_f32`), normalization (`layer_norm_f32`), classification (`argmax_rows_f32`, `softmax_layer`, `softmax_rows_f32`, `dense_classifier_sgd_step_f32`, plus dense / activation backprop helpers).
 
 ### Autodiff
 
-- `autodiff.hx` — symbolic forward-mode derivative helpers (`d_add/sub/mul/div/neg/sqrt/sq/scale/log/recip/sin/cos/relu/abs/...`), each fail-closed at the analytical singularity (restart 47-48 hardening).
-- `autodiff_reverse.hx` — reverse-mode tape (`rev_tape_new`, `rev_push`, `rev_leaf`, `rev_add/sub/mul/neg`, `rev_value_at`, `rev_alloc_adjoints`, `rev_seed`, `rev_backward`, `rev_grad`). Tape and adjoint validators (`rev_tape_valid`, `rev_adj_cap`) include the full forge-guard sweep from restart 45-47. ~35 functions.
+- `autodiff.hx` — symbolic forward-mode derivative helpers (`d_add/sub/mul/div/neg/sqrt/sq/scale/log/recip/sin/cos/relu/abs/...`), each fail-closed at the analytical singularity (restart 47-48 hardening). 0 bare fn (every helper is `@pure`-attributed; 40 @-attributed total).
+- `autodiff_reverse.hx` — reverse-mode tape (`rev_tape_new`, `rev_push`, `rev_leaf`, `rev_add/sub/mul/neg`, `rev_value_at`, `rev_alloc_adjoints`, `rev_seed`, `rev_backward`, `rev_grad`). Tape and adjoint validators (`rev_tape_valid`, `rev_adj_cap`) include the full forge-guard sweep from restart 45-47. 23 bare fn (+25 @-attributed).
 
 ### AGI primitives (used by `helixc/examples/self_improving_agent.hx`)
 
-- `agi_match.hx` — pattern matching + tree-node + bindings primitives. Includes `tree_node_*`, `bindings_*`, `bindings_rewind` (restart-44 shrink-cannot-resurrect), and shallow/deep unification scaffolding. ~31 functions.
-- `agi_memory.hx` — working memory (`wm_*`) and episodic memory (`ep_*`) typed handles with magic + footer + tensor-payload-forge guards. ~27 functions.
-- `agi_search.hx` — BFS frontier (`bfs_*`), visited-set (`visited_*`), priority queue (`pq_*`), beam/A*/hill-climb/attention helpers. ~40 functions.
-- `agi_world.hx` — world-model tables (`wmt_*`) and world-memory lines (`wml_*`). ~19 functions.
+- `agi_match.hx` — pattern matching + tree-node + bindings primitives. Includes `tree_node_*`, `bindings_*`, `bindings_rewind` (restart-44 shrink-cannot-resurrect), and shallow/deep unification scaffolding. 21 bare fn (+26 @-attributed).
+- `agi_memory.hx` — working memory (`wm_*`) and episodic memory (`ep_*`) typed handles with magic + footer + tensor-payload-forge guards. 14 bare fn (+21 @-attributed).
+- `agi_search.hx` — BFS frontier (`bfs_*`), visited-set (`visited_*`), priority queue (`pq_*`), beam/A*/hill-climb/attention helpers. 17 bare fn (+26 @-attributed).
+- `agi_world.hx` — world-model tables (`wmt_*`) and world-memory lines (`wml_*`). 12 bare fn (+16 @-attributed).
 
 ### Collections (shipped — not "planned")
 
-- `vec.hx` — caller-trust `Vec<i32>`-style sequences. ~13 functions.
-- `hashmap.hx` — typed-handle hashmap with magic + footer + tensor-payload-forge guard (restart 45). ~41 functions.
-- `string.hx` — byte-string helpers (`string_from_int`, `string_len`, ...). ~55 functions.
-- `iterators.hx` — iterator combinators and method-chain-style helpers. ~112 functions.
-- `option.hx` — `enum Option<T> { None, Some(T) }` + `option_min`/`option_sum`/`option_eq`/`option_or_one`. ~5 functions.
-- `result.hx` — `Result<T, E>` companion to Option. ~7 functions.
+- `vec.hx` — caller-trust `Vec<i32>`-style sequences. 13 bare fn (+10 @-attributed).
+- `hashmap.hx` — typed-handle hashmap with magic + footer + tensor-payload-forge guard (restart 45). 38 bare fn (+34 @-attributed).
+- `string.hx` — byte-string helpers (`string_from_int`, `string_len`, ...). 55 bare fn (+41 @-attributed).
+- `iterators.hx` — iterator combinators and method-chain-style helpers. 112 bare fn (+47 @-attributed).
+- `option.hx` — `enum Option<T> { None, Some(T) }` + `option_min`/`option_sum`/`option_eq`/`option_or_one`. 11 bare fn (+12 @-attributed).
+- `result.hx` — `Result<T, E>` companion to Option. 7 bare fn (+8 @-attributed).
 
 ### Discoverability
 
@@ -958,7 +958,7 @@ Kovostov-Native/
 │   │   ├── tensor.hx          # 1D/2D tensor primitives
 │   │   ├── transcendentals.hx # __exp/__log/__sin/__cos/__sqrt/__sigmoid/__tanh + scalar optim steps
 │   │   └── vec.hx             # caller-trust Vec<i32>-style sequences
-│   ├── tests/          # 2,479 tests collected in restart 49 fix verification
+│   ├── tests/          # 2,489 tests collected in restart 50 fix verification
 │   │   ├── test_codegen.py
 │   │   ├── test_parser.py
 │   │   ├── test_match.py
@@ -1149,6 +1149,27 @@ The Kovostov AGI project (which Helix is the foundation for) commits to training
 Treat these as website draft snippets. Promote a snippet to copy/paste-ready
 only after it passes the current `python -m helixc.check` path; otherwise mark
 it as roadmap syntax.
+
+**Known roadmap snippets** (verified by Stage 35 restart 50 lane C audit
+against the live `python -m helixc.check` path; these do not yet parse or
+typecheck and should be treated as design targets, not copy-paste-ready):
+
+- #7 Structs and #8 Nested structs — positional struct construction
+  (`Pt { 6, 7 }`) is not supported by the current parser; use the named
+  form `Pt { x: 6, y: 7 }` instead.
+- #12 Generic functions — `fn id<T>(x: T) -> T` is roadmap; current parser
+  expects `(` after `fn id`, not `<`.
+- #13 Traits — `trait Eq { fn eq(self, other: Self) -> i32; }` is roadmap;
+  the parser does not accept bare `self` parameters.
+- #14 Closures — `let c = |x| x + a;` is roadmap; `|x|` is not parsed as an
+  expression today.
+- #18 Tile matmul — the live stdlib name is `ti2d_matmul` / `tf2d_matmul`,
+  not `tile_matmul`; the snippet remains the design target.
+- #19 Reflection — the live builtins are lowercase `quote` / `splice`;
+  capitalized `Quote` / `Splice` is roadmap.
+
+A future website pass should either replace these with parsing equivalents
+or render them with a clear "design target — not yet shipped" annotation.
 
 ### #1 — Hello, 42 (the canonical first program)
 
@@ -1543,7 +1564,7 @@ Or: a single character `λ` in monospace inside a hex bracket `[λ]`. Clean, sho
 
 - **299 bytes** — current hex0 binary size
 - **Python-hosted helixc** — current production compiler implementation
-- **2,479 live tests collected** — restart 49 fix verification; rerun scoped pytest collection before publishing
+- **2,489 live tests collected** — restart 50 fix verification; rerun scoped pytest collection before publishing
 - **Approach A roadmap (30 numbered stages)** — historical bootstrap-port sequencing; current live design doc (`docs/HELIX_V1_FINAL_FEATURES.md`) references stage numbers up to Stage 65 (35 distinct stages enumerated; not a strict consecutive sequence).
 - **Dozens of silent-corruption defects (live count grows with each Stage 35 restart; see `docs/stage35-progress-2026-05-15.md` Increments 50-67+ for the open-ended ledger)** — found and disclosed during development
 - **restart-gated audit campaign** — multi-agent code review cycles continue until three clean gates pass

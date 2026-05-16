@@ -278,9 +278,14 @@ class Solver:
                 # eq_expr = c*v + rest = 0  =>  v = -rest/c
                 rest_coefs = tuple((vv, cc) for vv, cc in eq_expr.coefs if vv != v)
                 rest = LinExpr(rest_coefs, eq_expr.const)
-                substitution = -rest * (1 // c if c == 1 else -1) if False else (
-                    rest * -1 if c == 1 else rest
-                )
+                # Restart 50 B3: simplified — was previously
+                # `(-rest * (1 // c if c == 1 else -1)) if False else
+                # (rest * -1 if c == 1 else rest)` which had a dead
+                # `if False else` outer ternary (only the right branch
+                # ever ran). Eliminating it makes the actual computed
+                # value obvious: for c == 1 negate rest; for c == -1
+                # keep rest (since v = -rest / c = -rest / -1 = rest).
+                substitution = rest * -1 if c == 1 else rest
                 # If cur has v with coefficient k, replace v with substitution
                 k = cur.coef_of(v)
                 if k != 0:

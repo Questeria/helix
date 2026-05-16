@@ -45,7 +45,7 @@ ensure_python_with_pytest() {
     return 0
 }
 
-echo "pytest (stage31 sharded gate):"
+echo "pytest (current sharded gate; historical stage31 log names):"
 SHARD_ARGS=()
 if [[ -n "$SHARDS" ]]; then
     SHARD_ARGS=(--shards "$SHARDS")

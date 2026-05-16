@@ -946,6 +946,9 @@ def _proof_strict_effect_warning_diagnostics(
         strict_prog = _drop_unreachable_diff_signature_fns(prog)
         grad_pass(strict_prog)
         mod = lower(strict_prog)
+    except (NotImplementedError, AssertionError, KeyboardInterrupt,
+            SystemExit, MemoryError):
+        raise
     except Exception as e:
         msg = (
             f"strict-effect-check: ERROR\n"
@@ -968,6 +971,9 @@ def _proof_strict_effect_warning_diagnostics(
         msg = f"helixc: const-fold error: {fe}"
         print(msg, file=sys.stderr)
         return [], 1, [{"phase": "const-fold", "message": msg}]
+    except (NotImplementedError, AssertionError, KeyboardInterrupt,
+            SystemExit, MemoryError):
+        raise
     except Exception as e:
         msg = (
             f"strict-effect-check: ERROR\n"
@@ -1008,6 +1014,9 @@ def _proof_strict_effect_warning_diagnostics(
             )
             return records, 1, []
         return records, 0, []
+    except (NotImplementedError, AssertionError, KeyboardInterrupt,
+            SystemExit, MemoryError):
+        raise
     except Exception as e:
         msg = (
             f"strict-effect-check: ERROR\n"
@@ -1650,6 +1659,9 @@ def _main_inner(argv: list[str] | None,
                         ptx_full_mod)
                 ptx_full_eff_errs = effect_check_module(
                     ptx_full_mod, only_functions=ptx_full_scope)
+            except (NotImplementedError, AssertionError, KeyboardInterrupt,
+                    SystemExit, MemoryError):
+                raise
             except Exception as e:
                 print(
                     f"helixc: PTX validation error: "

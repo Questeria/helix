@@ -14,7 +14,7 @@ reveals which features actually matter.
 - Verifier-gated reflective-cell scaffold (64 mutable cells, real verifier
   function calls with SysV ABI; real runtime AST reflection remains future work)
 - f32/f64 reflection cells (splice_f / splice_f64 / modify_f / modify_f64)
-- 6 dogfood programs/tests running real gradient descent + a self-improving-agent flagship that composes them (see `helixc/examples/dogfood_*.hx` and `helixc/examples/self_improving_agent.hx`)
+- 5 dogfood programs/tests running real gradient descent + a self-improving-agent flagship that composes them (6 programs total: 5 dogfood + 1 flagship; see `helixc/examples/dogfood_*.hx` and `helixc/examples/self_improving_agent.hx`)
 - Stdlib for transcendentals auto-included
 - Stage 35 clean-gate status is tracked in docs/stage35-progress-2026-05-15.md
 
