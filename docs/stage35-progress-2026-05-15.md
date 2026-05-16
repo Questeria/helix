@@ -1852,3 +1852,68 @@ Clean-gate status:
 - Stage 35 clean gates remain `0/3`.
 - Next step is restart 30 as another fresh Stage 35 clean gate from the newest
   committed fix sweep.
+
+## Increment 49 - Thirtieth Clean-Gate Restart Fix Sweep
+
+Restart 30 began from commit `b3f7796` with restart-29 pushed to `origin/main`.
+A support check first exposed a one-line stdlib guard type regression, which was
+fixed before the fresh audit lanes were launched. All three audit lanes then
+found remaining blockers, so the gate did not count as clean and Stage 35
+remains at `0/3` clean gates.
+
+Fixes landed in this increment:
+
+- `grad_rev_all` now reports failed reflection writes instead of returning
+  success when `modify_f` / `modify_f64` rejects an invalid base handle.
+- `grad`, `grad_rev`, and `grad_rev_all` now reject non-floating loss return
+  types before generating derivative functions.
+- Tensor 1D helpers now consistently use slice-aware validation, allowing valid
+  interior slices while preventing reducers/accessors from reading footers or
+  adjacent arena allocations.
+- NN classifier, argmax/accuracy/CE, and metric helpers now check bias, input,
+  output, and target buffers before reads or writes.
+- Working/episodic memory helpers gained bounded object validation, and
+  episodic accessors now reject negative indices.
+- Reverse-AD adjoint guards now include a digest of the tape payload snapshot,
+  so post-allocation tape mutation invalidates the backward pass.
+- The direct x86 backend now rejects unknown flags and converts missing input,
+  duplicate impl, output, chmod, and codegen failures into clean diagnostics.
+- Continuation docs now reflect that restart 29 is closed, restart 30 found and
+  fixed issues, and the live collection count is 2,339 tests.
+
+Focused verification:
+
+- Per-file stdlib parser sweep across `helixc/stdlib/*.hx`
+  - Result: parsed 16 files.
+- `python -m py_compile helixc\frontend\grad_pass.py helixc\backend\x86_64.py helixc\tests\test_codegen.py helixc\tests\test_cli.py`
+  - Result: passed.
+- `python -m pytest helixc\tests\test_codegen.py -q -k "stage35_grad_rev_all_reports_failed_reflection_write or stage35_grad_rejects_nonfloating_loss_return or stage35_grad_rev_all_rejects_nonfloating_loss_return or stage35_tf1d_add_accepts_valid_interior_slices or stage35_tensor_reducers_do_not_read_footers or stage35_dense_classifier_rejects_short_bias_vector or stage35_nn_classifier_helpers_reject_short_outputs_and_targets or stage35_nn_metrics_reject_short_inputs or stage35_episodic_accessors_reject_negative_indices or stage35_revad_backward_rejects_tape_value_mutated_after_adjoints"`
+  - Result: 10 passed, 870 deselected.
+- `python -m pytest helixc\tests\test_cli.py -q -k "direct_x86_rejects_unknown_flags or direct_x86_missing_input or direct_x86_duplicate_impl or direct_x86_missing_output_dir"`
+  - Result: 4 passed, 178 deselected.
+- `python -m pytest helixc\tests\test_codegen.py -q -k "t1d or tf1d or ti1d or dense_classifier or argmax_rows or accuracy_count or ce_loss_batch or mae_loss or count_correct or revad or grad_rev_all"`
+  - Result: 104 passed, 776 deselected.
+- `python -m pytest helixc\tests\test_cli.py -q -k "stage35 or wad or deprecated or direct_x86"`
+  - Result: 39 passed, 143 deselected.
+- `python -m pytest helixc\tests\test_autodiff.py helixc\tests\test_autodiff_reverse.py helixc\tests\test_transcendentals.py -q`
+  - Result: 103 passed.
+- `python -m pytest helixc\tests\test_ptx.py -q -k "stage35 or direct_ptx or wad or deprecated"`
+  - Result: 40 passed, 36 deselected.
+- `python -m pytest helixc\tests\test_reflection.py helixc\tests\test_effect_check.py -q`
+  - Result: 50 passed.
+- `python -m pytest helixc\tests --collect-only -q -p no:cacheprovider`
+  - Result: 2,339 tests collected.
+- `git diff --check`
+  - Result: passed.
+- Full `python -m pytest helixc\tests\test_codegen.py -q`
+  - Result: timed out after 20 minutes with no useful partial output; stale
+    pytest process was stopped.
+- Four-way collected `test_codegen.py` chunk run
+  - Result: timed out after 15 minutes per chunk in this environment; no
+    chunk-specific failure was surfaced, and no stale pytest process remained.
+
+Clean-gate status:
+
+- Stage 35 clean gates remain `0/3`.
+- Next step is to commit restart 30, then begin restart 31 as another fresh
+  Stage 35 clean gate from the newest committed fix sweep.

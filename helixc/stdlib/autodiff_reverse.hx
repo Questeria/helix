@@ -60,8 +60,25 @@
 @pure fn rev_tape_footer_with_adj(cap: i32, adj_start: i32) -> i32 {
     rev_tape_footer(cap) - adj_start - 17
 }
+@pure fn rev_tape_digest(tape: i32, cnt: i32) -> i32 {
+    if tape <= 0 { 0 }
+    else { if cnt < 0 { 0 }
+    else {
+        let mut i: i32 = 0;
+        let mut acc: i32 = 911;
+        while i < cnt {
+            let off = tape + 3 + i * 4;
+            acc = acc * 31 + __arena_get(off);
+            acc = acc * 31 + __arena_get(off + 1);
+            acc = acc * 31 + __arena_get(off + 2);
+            acc = acc * 31 + __arena_get(off + 3);
+            i = i + 1;
+        }
+        acc
+    }}
+}
 @pure fn rev_adj_guard(owner: i32, cap: i32, cnt: i32, adj_start: i32) -> i32 {
-    rev_tape_footer_with_adj(cap, adj_start) - owner - cnt - 31
+    rev_tape_footer_with_adj(cap, adj_start) - owner - cnt - rev_tape_digest(owner, cnt) - 31
 }
 
 fn rev_tape_new(cap: i32) -> i32 {

@@ -127,7 +127,7 @@ fn t1d_new(n: i32) -> i32 {
                     };
                     };
                     };
-                } else { 0 } }
+                } else { ok = ok; } }
             };
             base = base - 1;
         }
@@ -219,7 +219,7 @@ fn t2d_new(rows: i32, cols: i32) -> i32 {
 
 fn t1d_set_i32_bits(start: i32, i: i32, bits: i32) -> i32 {
     if i < 0 { t2d_error() }
-    else { if t1d_capacity_ok(start, i + 1) == 0 { t2d_error() }
+    else { if t1d_slice_ok(start, i + 1) == 0 { t2d_error() }
     else {
         __arena_set(start + i, bits);
         0
@@ -228,7 +228,7 @@ fn t1d_set_i32_bits(start: i32, i: i32, bits: i32) -> i32 {
 
 fn t1d_get_i32_bits(start: i32, i: i32) -> i32 {
     if i < 0 { 0 }
-    else { if t1d_capacity_ok(start, i + 1) == 0 { 0 }
+    else { if t1d_slice_ok(start, i + 1) == 0 { 0 }
     else { __arena_get(start + i) } }
 }
 
@@ -237,13 +237,13 @@ fn t1d_get_i32_bits(start: i32, i: i32) -> i32 {
 // codegen primitive.
 @pure fn ti1d_get(start: i32, i: i32) -> i32 {
     if i < 0 { 0 }
-    else { if t1d_capacity_ok(start, i + 1) == 0 { 0 }
+    else { if t1d_slice_ok(start, i + 1) == 0 { 0 }
     else { __arena_get(start + i) } }
 }
 
 fn ti1d_set(start: i32, i: i32, x: i32) -> i32 {
     if i < 0 { t2d_error() }
-    else { if t1d_capacity_ok(start, i + 1) == 0 { t2d_error() }
+    else { if t1d_slice_ok(start, i + 1) == 0 { t2d_error() }
     else {
         __arena_set(start + i, x);
         x
@@ -252,7 +252,7 @@ fn ti1d_set(start: i32, i: i32, x: i32) -> i32 {
 
 @pure fn ti1d_sum(start: i32, n: i32) -> i32 {
     if n <= 0 { 0 }
-    else { if t1d_capacity_ok(start, n) == 0 { 0 }
+    else { if t1d_slice_ok(start, n) == 0 { 0 }
     else {
     let mut i: i32 = 0;
     let mut total: i32 = 0;
@@ -266,8 +266,8 @@ fn ti1d_set(start: i32, i: i32, x: i32) -> i32 {
 
 @pure fn ti1d_dot(a_start: i32, b_start: i32, n: i32) -> i32 {
     if n <= 0 { 0 }
-    else { if t1d_capacity_ok(a_start, n) == 0 { 0 }
-    else { if t1d_capacity_ok(b_start, n) == 0 { 0 }
+    else { if t1d_slice_ok(a_start, n) == 0 { 0 }
+    else { if t1d_slice_ok(b_start, n) == 0 { 0 }
     else {
     let mut i: i32 = 0;
     let mut total: i32 = 0;
@@ -281,8 +281,8 @@ fn ti1d_set(start: i32, i: i32, x: i32) -> i32 {
 
 fn ti1d_axpy(y_start: i32, a: i32, x_start: i32, n: i32) -> i32 {
     if n <= 0 { 0 }
-    else { if t1d_capacity_ok(y_start, n) == 0 { t2d_error() }
-    else { if t1d_capacity_ok(x_start, n) == 0 { t2d_error() }
+    else { if t1d_slice_ok(y_start, n) == 0 { t2d_error() }
+    else { if t1d_slice_ok(x_start, n) == 0 { t2d_error() }
     else {
     let mut i: i32 = 0;
     while i < n {
@@ -340,8 +340,8 @@ fn ti2d_matvec(w_start: i32, w_rows: i32, w_cols: i32,
 // Element-wise: y[i] = relu(x[i]) for i in [0, n). Integer relu.
 fn ti1d_relu(x_start: i32, y_start: i32, n: i32) -> i32 {
     if n <= 0 { 0 }
-    else { if t1d_capacity_ok(x_start, n) == 0 { t2d_error() }
-    else { if t1d_capacity_ok(y_start, n) == 0 { t2d_error() }
+    else { if t1d_slice_ok(x_start, n) == 0 { t2d_error() }
+    else { if t1d_slice_ok(y_start, n) == 0 { t2d_error() }
     else {
     let mut i: i32 = 0;
     while i < n {
@@ -357,9 +357,9 @@ fn ti1d_relu(x_start: i32, y_start: i32, n: i32) -> i32 {
 // Element-wise add: z[i] = x[i] + y[i]. Returns 0.
 fn ti1d_add(x_start: i32, y_start: i32, z_start: i32, n: i32) -> i32 {
     if n <= 0 { 0 }
-    else { if t1d_capacity_ok(x_start, n) == 0 { t2d_error() }
-    else { if t1d_capacity_ok(y_start, n) == 0 { t2d_error() }
-    else { if t1d_capacity_ok(z_start, n) == 0 { t2d_error() }
+    else { if t1d_slice_ok(x_start, n) == 0 { t2d_error() }
+    else { if t1d_slice_ok(y_start, n) == 0 { t2d_error() }
+    else { if t1d_slice_ok(z_start, n) == 0 { t2d_error() }
     else {
     let mut i: i32 = 0;
     while i < n {
@@ -375,9 +375,9 @@ fn ti1d_add(x_start: i32, y_start: i32, z_start: i32, n: i32) -> i32 {
 // Companion to ti1d_add. z must be pre-allocated.
 fn ti1d_sub(x_start: i32, y_start: i32, z_start: i32, n: i32) -> i32 {
     if n <= 0 { 0 }
-    else { if t1d_capacity_ok(x_start, n) == 0 { t2d_error() }
-    else { if t1d_capacity_ok(y_start, n) == 0 { t2d_error() }
-    else { if t1d_capacity_ok(z_start, n) == 0 { t2d_error() }
+    else { if t1d_slice_ok(x_start, n) == 0 { t2d_error() }
+    else { if t1d_slice_ok(y_start, n) == 0 { t2d_error() }
+    else { if t1d_slice_ok(z_start, n) == 0 { t2d_error() }
     else {
     let mut i: i32 = 0;
     while i < n {
@@ -393,9 +393,9 @@ fn ti1d_sub(x_start: i32, y_start: i32, z_start: i32, n: i32) -> i32 {
 // For inner product use ti1d_dot.
 fn ti1d_mul(x_start: i32, y_start: i32, z_start: i32, n: i32) -> i32 {
     if n <= 0 { 0 }
-    else { if t1d_capacity_ok(x_start, n) == 0 { t2d_error() }
-    else { if t1d_capacity_ok(y_start, n) == 0 { t2d_error() }
-    else { if t1d_capacity_ok(z_start, n) == 0 { t2d_error() }
+    else { if t1d_slice_ok(x_start, n) == 0 { t2d_error() }
+    else { if t1d_slice_ok(y_start, n) == 0 { t2d_error() }
+    else { if t1d_slice_ok(z_start, n) == 0 { t2d_error() }
     else {
     let mut i: i32 = 0;
     while i < n {
@@ -417,7 +417,7 @@ fn ti1d_mul(x_start: i32, y_start: i32, z_start: i32, n: i32) -> i32 {
 
 fn tf1d_set(start: i32, i: i32, x: f32) -> i32 {
     if i < 0 { t2d_error() }
-    else { if t1d_capacity_ok(start, i + 1) == 0 { t2d_error() }
+    else { if t1d_slice_ok(start, i + 1) == 0 { t2d_error() }
     else {
         __arena_set(start + i, __bits_of_f32(x));
         0
@@ -426,14 +426,14 @@ fn tf1d_set(start: i32, i: i32, x: f32) -> i32 {
 
 @pure fn tf1d_get(start: i32, i: i32) -> f32 {
     if i < 0 { 0.0_f32 }
-    else { if t1d_capacity_ok(start, i + 1) == 0 { 0.0_f32 }
+    else { if t1d_slice_ok(start, i + 1) == 0 { 0.0_f32 }
     else { __f32_from_bits(__arena_get(start + i)) } }
 }
 
 @pure
 fn tf1d_sum(start: i32, n: i32) -> f32 {
     if n <= 0 { 0.0_f32 }
-    else { if t1d_capacity_ok(start, n) == 0 { 0.0_f32 }
+    else { if t1d_slice_ok(start, n) == 0 { 0.0_f32 }
     else {
     let mut i: i32 = 0;
     let mut total: f32 = 0.0_f32;
@@ -448,8 +448,8 @@ fn tf1d_sum(start: i32, n: i32) -> f32 {
 @pure
 fn tf1d_dot(a_start: i32, b_start: i32, n: i32) -> f32 {
     if n <= 0 { 0.0_f32 }
-    else { if t1d_capacity_ok(a_start, n) == 0 { 0.0_f32 }
-    else { if t1d_capacity_ok(b_start, n) == 0 { 0.0_f32 }
+    else { if t1d_slice_ok(a_start, n) == 0 { 0.0_f32 }
+    else { if t1d_slice_ok(b_start, n) == 0 { 0.0_f32 }
     else {
     let mut i: i32 = 0;
     let mut total: f32 = 0.0_f32;
@@ -465,8 +465,8 @@ fn tf1d_dot(a_start: i32, b_start: i32, n: i32) -> f32 {
 
 fn tf1d_axpy(y_start: i32, a: f32, x_start: i32, n: i32) -> i32 {
     if n <= 0 { 0 }
-    else { if t1d_capacity_ok(y_start, n) == 0 { t2d_error() }
-    else { if t1d_capacity_ok(x_start, n) == 0 { t2d_error() }
+    else { if t1d_slice_ok(y_start, n) == 0 { t2d_error() }
+    else { if t1d_slice_ok(x_start, n) == 0 { t2d_error() }
     else {
     let mut i: i32 = 0;
     while i < n {
@@ -481,8 +481,8 @@ fn tf1d_axpy(y_start: i32, a: f32, x_start: i32, n: i32) -> i32 {
 
 fn tf1d_relu(x_start: i32, y_start: i32, n: i32) -> i32 {
     if n <= 0 { 0 }
-    else { if t1d_capacity_ok(x_start, n) == 0 { t2d_error() }
-    else { if t1d_capacity_ok(y_start, n) == 0 { t2d_error() }
+    else { if t1d_slice_ok(x_start, n) == 0 { t2d_error() }
+    else { if t1d_slice_ok(y_start, n) == 0 { t2d_error() }
     else {
     let mut i: i32 = 0;
     while i < n {
@@ -546,17 +546,19 @@ fn tf2d_matvec(w_start: i32, w_rows: i32, w_cols: i32,
 // Integer-tensor product.
 @pure fn ti1d_prod(start: i32, n: i32) -> i32 {
     if n <= 0 { 1 }
+    else { if t1d_slice_ok(start, n) == 0 { 1 }
     else {
         let mut i: i32 = 0;
         let mut p: i32 = 1;
         while i < n { p = p * __arena_get(start + i); i = i + 1; }
         p
-    }
+    }}
 }
 
 // Integer-tensor min.
 @pure fn ti1d_min(start: i32, n: i32) -> i32 {
     if n <= 0 { 0 }
+    else { if t1d_slice_ok(start, n) == 0 { 0 }
     else {
         let mut best = __arena_get(start);
         let mut i: i32 = 1;
@@ -566,12 +568,13 @@ fn tf2d_matvec(w_start: i32, w_rows: i32, w_cols: i32,
             i = i + 1;
         }
         best
-    }
+    }}
 }
 
 // Integer-tensor max (companion to ti1d_min).
 @pure fn ti1d_max(start: i32, n: i32) -> i32 {
     if n <= 0 { 0 }
+    else { if t1d_slice_ok(start, n) == 0 { 0 }
     else {
         let mut best = __arena_get(start);
         let mut i: i32 = 1;
@@ -581,13 +584,14 @@ fn tf2d_matvec(w_start: i32, w_rows: i32, w_cols: i32,
             i = i + 1;
         }
         best
-    }
+    }}
 }
 
 // Integer-tensor argmin (returns index of smallest element).
 // Companion to ti1d_argmax. n == 0 returns -1.
 @pure fn ti1d_argmin(start: i32, n: i32) -> i32 {
     if n <= 0 { 0 - 1 }
+    else { if t1d_slice_ok(start, n) == 0 { 0 - 1 }
     else {
         let mut best = __arena_get(start);
         let mut best_idx: i32 = 0;
@@ -598,12 +602,13 @@ fn tf2d_matvec(w_start: i32, w_rows: i32, w_cols: i32,
             i = i + 1;
         }
         best_idx
-    }
+    }}
 }
 
 // Integer-tensor argmax (returns index of largest element).
 @pure fn ti1d_argmax(start: i32, n: i32) -> i32 {
     if n <= 0 { 0 - 1 }
+    else { if t1d_slice_ok(start, n) == 0 { 0 - 1 }
     else {
         let mut best_idx: i32 = 0;
         let mut best_val = __arena_get(start);
@@ -614,7 +619,7 @@ fn tf2d_matvec(w_start: i32, w_rows: i32, w_cols: i32,
             i = i + 1;
         }
         best_idx
-    }
+    }}
 }
 
 // Tensor zeros: allocate n slots already initialized to 0.
@@ -668,8 +673,8 @@ fn ti2d_matmul(a_start: i32, a_rows: i32, a_cols: i32,
 // we expose copy as the explicit form.)
 fn ti1d_copy(src: i32, dst: i32, n: i32) -> i32 {
     if n <= 0 { 0 }
-    else { if t1d_capacity_ok(src, n) == 0 { t2d_error() }
-    else { if t1d_capacity_ok(dst, n) == 0 { t2d_error() }
+    else { if t1d_slice_ok(src, n) == 0 { t2d_error() }
+    else { if t1d_slice_ok(dst, n) == 0 { t2d_error() }
     else {
     let mut i: i32 = 0;
     while i < n {
@@ -683,8 +688,8 @@ fn ti1d_copy(src: i32, dst: i32, n: i32) -> i32 {
 // Broadcasting: y[i] = x[i] + scalar (element-wise add of scalar to vec).
 fn ti1d_add_scalar(x_start: i32, scalar: i32, y_start: i32, n: i32) -> i32 {
     if n <= 0 { 0 }
-    else { if t1d_capacity_ok(x_start, n) == 0 { t2d_error() }
-    else { if t1d_capacity_ok(y_start, n) == 0 { t2d_error() }
+    else { if t1d_slice_ok(x_start, n) == 0 { t2d_error() }
+    else { if t1d_slice_ok(y_start, n) == 0 { t2d_error() }
     else {
     let mut i: i32 = 0;
     while i < n {
@@ -697,8 +702,8 @@ fn ti1d_add_scalar(x_start: i32, scalar: i32, y_start: i32, n: i32) -> i32 {
 
 fn ti1d_mul_scalar(x_start: i32, scalar: i32, y_start: i32, n: i32) -> i32 {
     if n <= 0 { 0 }
-    else { if t1d_capacity_ok(x_start, n) == 0 { t2d_error() }
-    else { if t1d_capacity_ok(y_start, n) == 0 { t2d_error() }
+    else { if t1d_slice_ok(x_start, n) == 0 { t2d_error() }
+    else { if t1d_slice_ok(y_start, n) == 0 { t2d_error() }
     else {
     let mut i: i32 = 0;
     while i < n {
@@ -761,9 +766,9 @@ fn ti1d_mul_scalar(x_start: i32, scalar: i32, y_start: i32, n: i32) -> i32 {
 // f32 element-wise: z[i] = x[i] + y[i].
 fn tf1d_add(x_start: i32, y_start: i32, z_start: i32, n: i32) -> i32 {
     if n <= 0 { 0 }
-    else { if t1d_capacity_ok(x_start, n) == 0 { t2d_error() }
-    else { if t1d_capacity_ok(y_start, n) == 0 { t2d_error() }
-    else { if t1d_capacity_ok(z_start, n) == 0 { t2d_error() }
+    else { if t1d_slice_ok(x_start, n) == 0 { t2d_error() }
+    else { if t1d_slice_ok(y_start, n) == 0 { t2d_error() }
+    else { if t1d_slice_ok(z_start, n) == 0 { t2d_error() }
     else {
     let mut i: i32 = 0;
     while i < n {
@@ -778,9 +783,9 @@ fn tf1d_add(x_start: i32, y_start: i32, z_start: i32, n: i32) -> i32 {
 
 fn tf1d_sub(x_start: i32, y_start: i32, z_start: i32, n: i32) -> i32 {
     if n <= 0 { 0 }
-    else { if t1d_capacity_ok(x_start, n) == 0 { t2d_error() }
-    else { if t1d_capacity_ok(y_start, n) == 0 { t2d_error() }
-    else { if t1d_capacity_ok(z_start, n) == 0 { t2d_error() }
+    else { if t1d_slice_ok(x_start, n) == 0 { t2d_error() }
+    else { if t1d_slice_ok(y_start, n) == 0 { t2d_error() }
+    else { if t1d_slice_ok(z_start, n) == 0 { t2d_error() }
     else {
     let mut i: i32 = 0;
     while i < n {
@@ -795,9 +800,9 @@ fn tf1d_sub(x_start: i32, y_start: i32, z_start: i32, n: i32) -> i32 {
 
 fn tf1d_mul(x_start: i32, y_start: i32, z_start: i32, n: i32) -> i32 {
     if n <= 0 { 0 }
-    else { if t1d_capacity_ok(x_start, n) == 0 { t2d_error() }
-    else { if t1d_capacity_ok(y_start, n) == 0 { t2d_error() }
-    else { if t1d_capacity_ok(z_start, n) == 0 { t2d_error() }
+    else { if t1d_slice_ok(x_start, n) == 0 { t2d_error() }
+    else { if t1d_slice_ok(y_start, n) == 0 { t2d_error() }
+    else { if t1d_slice_ok(z_start, n) == 0 { t2d_error() }
     else {
     let mut i: i32 = 0;
     while i < n {
@@ -813,8 +818,8 @@ fn tf1d_mul(x_start: i32, y_start: i32, z_start: i32, n: i32) -> i32 {
 // f32 broadcasting: y[i] = x[i] + scalar.
 fn tf1d_add_scalar(x_start: i32, scalar: f32, y_start: i32, n: i32) -> i32 {
     if n <= 0 { 0 }
-    else { if t1d_capacity_ok(x_start, n) == 0 { t2d_error() }
-    else { if t1d_capacity_ok(y_start, n) == 0 { t2d_error() }
+    else { if t1d_slice_ok(x_start, n) == 0 { t2d_error() }
+    else { if t1d_slice_ok(y_start, n) == 0 { t2d_error() }
     else {
     let mut i: i32 = 0;
     while i < n {
@@ -828,8 +833,8 @@ fn tf1d_add_scalar(x_start: i32, scalar: f32, y_start: i32, n: i32) -> i32 {
 
 fn tf1d_mul_scalar(x_start: i32, scalar: f32, y_start: i32, n: i32) -> i32 {
     if n <= 0 { 0 }
-    else { if t1d_capacity_ok(x_start, n) == 0 { t2d_error() }
-    else { if t1d_capacity_ok(y_start, n) == 0 { t2d_error() }
+    else { if t1d_slice_ok(x_start, n) == 0 { t2d_error() }
+    else { if t1d_slice_ok(y_start, n) == 0 { t2d_error() }
     else {
     let mut i: i32 = 0;
     while i < n {
@@ -922,8 +927,8 @@ fn ti2d_transpose(src: i32, rows: i32, cols: i32, dst: i32) -> i32 {
 // dst with t1d_new(n) or shares with x for in-place).
 fn ti1d_clamp(x_start: i32, lo: i32, hi: i32, dst: i32, n: i32) -> i32 {
     if n <= 0 { 0 }
-    else { if t1d_capacity_ok(x_start, n) == 0 { t2d_error() }
-    else { if t1d_capacity_ok(dst, n) == 0 { t2d_error() }
+    else { if t1d_slice_ok(x_start, n) == 0 { t2d_error() }
+    else { if t1d_slice_ok(dst, n) == 0 { t2d_error() }
     else {
     let mut i: i32 = 0;
     while i < n {
@@ -938,6 +943,9 @@ fn ti1d_clamp(x_start: i32, lo: i32, hi: i32, dst: i32, n: i32) -> i32 {
 
 // ti1d_l1_norm(x, n): L1 norm = sum of |x[i]|. @pure (read-only).
 @pure fn ti1d_l1_norm(start: i32, n: i32) -> i32 {
+    if n <= 0 { 0 }
+    else { if t1d_slice_ok(start, n) == 0 { 0 }
+    else {
     let mut i: i32 = 0;
     let mut total: i32 = 0;
     while i < n {
@@ -947,12 +955,16 @@ fn ti1d_clamp(x_start: i32, lo: i32, hi: i32, dst: i32, n: i32) -> i32 {
         i = i + 1;
     }
     total
+    }}
 }
 
 // ti1d_l2_norm_sq(x, n): squared L2 norm = sum(x[i]^2). Mirrors
 // ti1d_dot(x, x, n). Distinct fn for clarity at call sites and
 // future overflow-safe variants. @pure.
 @pure fn ti1d_l2_norm_sq(start: i32, n: i32) -> i32 {
+    if n <= 0 { 0 }
+    else { if t1d_slice_ok(start, n) == 0 { 0 }
+    else {
     let mut i: i32 = 0;
     let mut total: i32 = 0;
     while i < n {
@@ -961,11 +973,16 @@ fn ti1d_clamp(x_start: i32, lo: i32, hi: i32, dst: i32, n: i32) -> i32 {
         i = i + 1;
     }
     total
+    }}
 }
 
 // ti1d_eq_count(a, b, n): count of indices i where a[i] == b[i].
 // Returns an integer in [0, n]. Useful for accuracy/agreement metrics.
 @pure fn ti1d_eq_count(a_start: i32, b_start: i32, n: i32) -> i32 {
+    if n <= 0 { 0 }
+    else { if t1d_slice_ok(a_start, n) == 0 { 0 }
+    else { if t1d_slice_ok(b_start, n) == 0 { 0 }
+    else {
     let mut i: i32 = 0;
     let mut total: i32 = 0;
     while i < n {
@@ -975,6 +992,7 @@ fn ti1d_clamp(x_start: i32, lo: i32, hi: i32, dst: i32, n: i32) -> i32 {
         i = i + 1;
     }
     total
+    }}}
 }
 
 // tf1d_l2_norm_sq(x, n): squared L2 norm = sum(x[i]^2). f32 mirror of
@@ -987,6 +1005,9 @@ fn tf1d_l2_norm_sq(start: i32, n: i32) -> f32 {
 // Reads each f32, computes absolute value via SSE fabs (sign-bit clear),
 // accumulates. Loop is the bf32 form so float promotion is implicit.
 fn tf1d_l1_norm(start: i32, n: i32) -> f32 {
+    if n <= 0 { 0.0_f32 }
+    else { if t1d_slice_ok(start, n) == 0 { 0.0_f32 }
+    else {
     let mut i: i32 = 0;
     let mut total: f32 = 0.0_f32;
     while i < n {
@@ -996,6 +1017,7 @@ fn tf1d_l1_norm(start: i32, n: i32) -> f32 {
         i = i + 1;
     }
     total
+    }}
 }
 
 // tf2d_transpose(src, rows, cols, dst): out-of-place transpose for f32
@@ -1025,8 +1047,8 @@ fn tf2d_transpose(src: i32, rows: i32, cols: i32, dst: i32) -> i32 {
 // f32 mirror of ti1d_clamp.
 fn tf1d_clamp(x_start: i32, lo: f32, hi: f32, dst: i32, n: i32) -> i32 {
     if n <= 0 { 0 }
-    else { if t1d_capacity_ok(x_start, n) == 0 { t2d_error() }
-    else { if t1d_capacity_ok(dst, n) == 0 { t2d_error() }
+    else { if t1d_slice_ok(x_start, n) == 0 { t2d_error() }
+    else { if t1d_slice_ok(dst, n) == 0 { t2d_error() }
     else {
     let mut i: i32 = 0;
     while i < n {
@@ -1062,7 +1084,7 @@ fn tf1d_clamp(x_start: i32, lo: f32, hi: f32, dst: i32, n: i32) -> i32 {
 fn tf1d_running_sum(start: i32, n: i32) -> i32 {
     let s = t1d_new(n);
     if n <= 0 { s }
-    else { if t1d_capacity_ok(start, n) == 0 { s }
+    else { if t1d_slice_ok(start, n) == 0 { s }
     else {
         let mut acc: f32 = 0.0_f32;
         let mut i: i32 = 0;
@@ -1080,8 +1102,8 @@ fn tf1d_running_sum(start: i32, n: i32) -> i32 {
 // in-place).
 fn tf1d_negate(x_start: i32, dst: i32, n: i32) -> i32 {
     if n <= 0 { 0 }
-    else { if t1d_capacity_ok(x_start, n) == 0 { t2d_error() }
-    else { if t1d_capacity_ok(dst, n) == 0 { t2d_error() }
+    else { if t1d_slice_ok(x_start, n) == 0 { t2d_error() }
+    else { if t1d_slice_ok(dst, n) == 0 { t2d_error() }
     else {
     let mut i: i32 = 0;
     while i < n {
@@ -1097,7 +1119,7 @@ fn tf1d_negate(x_start: i32, dst: i32, n: i32) -> i32 {
 // scalar in place. Mirror of vec_offset_inplace for f32.
 fn tf1d_scale_inplace(start: i32, n: i32, scalar: f32) -> i32 {
     if n <= 0 { start }
-    else { if t1d_capacity_ok(start, n) == 0 { t2d_error() }
+    else { if t1d_slice_ok(start, n) == 0 { t2d_error() }
     else {
     let mut i: i32 = 0;
     while i < n {
@@ -1150,6 +1172,9 @@ fn tf2d_scale_inplace(start: i32, rows: i32, cols: i32, scalar: f32) -> i32 {
 // 0.0 for empty input.
 @pure
 fn tf1d_max_abs(start: i32, n: i32) -> f32 {
+    if n <= 0 { 0.0_f32 }
+    else { if t1d_slice_ok(start, n) == 0 { 0.0_f32 }
+    else {
     let mut i: i32 = 0;
     let mut best: f32 = 0.0_f32;
     while i < n {
@@ -1159,14 +1184,15 @@ fn tf1d_max_abs(start: i32, n: i32) -> f32 {
         i = i + 1;
     }
     best
+    }}
 }
 
 // tf1d_axpby(x, y, a, b, n): in-place compute y[i] = a*x[i] + b*y[i].
 // BLAS-style level-1 op. Caller mutates y in place.
 fn tf1d_axpby(x_start: i32, y_start: i32, a: f32, b: f32, n: i32) -> i32 {
     if n <= 0 { 0 }
-    else { if t1d_capacity_ok(x_start, n) == 0 { t2d_error() }
-    else { if t1d_capacity_ok(y_start, n) == 0 { t2d_error() }
+    else { if t1d_slice_ok(x_start, n) == 0 { t2d_error() }
+    else { if t1d_slice_ok(y_start, n) == 0 { t2d_error() }
     else {
     let mut i: i32 = 0;
     while i < n {
@@ -1227,7 +1253,7 @@ fn tf1d_argmax_in_range(start: i32, n: i32, lo: i32, hi: i32) -> i32 {
     else { if lo < 0 { 0 - 1 }
     else { if hi > n { 0 - 1 }
     else { if hi <= lo { 0 - 1 }
-    else { if t1d_capacity_ok(start, hi) == 0 { 0 - 1 }
+    else { if t1d_slice_ok(start, hi) == 0 { 0 - 1 }
     else {
         let mut i: i32 = lo + 1;
         let mut best_idx: i32 = lo;
@@ -1249,7 +1275,7 @@ fn tf1d_sum_in_range(start: i32, n: i32, lo: i32, hi: i32) -> f32 {
     else { if lo < 0 { 0.0_f32 }
     else { if hi > n { 0.0_f32 }
     else { if hi <= lo { 0.0_f32 }
-    else { if t1d_capacity_ok(start, hi) == 0 { 0.0_f32 }
+    else { if t1d_slice_ok(start, hi) == 0 { 0.0_f32 }
     else {
     let mut i: i32 = lo;
     let mut total: f32 = 0.0_f32;
@@ -1466,6 +1492,9 @@ fn tf2d_max_abs(start: i32, rows: i32, cols: i32) -> f32 {
 // tf1d_count_above(start, n, threshold): @pure. Count elements > threshold.
 @pure
 fn tf1d_count_above(start: i32, n: i32, threshold: f32) -> i32 {
+    if n <= 0 { 0 }
+    else { if t1d_slice_ok(start, n) == 0 { 0 }
+    else {
     let mut i: i32 = 0;
     let mut total: i32 = 0;
     while i < n {
@@ -1474,11 +1503,15 @@ fn tf1d_count_above(start: i32, n: i32, threshold: f32) -> i32 {
         i = i + 1;
     }
     total
+    }}
 }
 
 // tf1d_count_below(start, n, threshold): @pure. Companion.
 @pure
 fn tf1d_count_below(start: i32, n: i32, threshold: f32) -> i32 {
+    if n <= 0 { 0 }
+    else { if t1d_slice_ok(start, n) == 0 { 0 }
+    else {
     let mut i: i32 = 0;
     let mut total: i32 = 0;
     while i < n {
@@ -1487,11 +1520,15 @@ fn tf1d_count_below(start: i32, n: i32, threshold: f32) -> i32 {
         i = i + 1;
     }
     total
+    }}
 }
 
 // tf1d_count_eq_zero(start, n): @pure. Count elements equal to 0.0_f32.
 @pure
 fn tf1d_count_eq_zero(start: i32, n: i32) -> i32 {
+    if n <= 0 { 0 }
+    else { if t1d_slice_ok(start, n) == 0 { 0 }
+    else {
     let mut i: i32 = 0;
     let mut total: i32 = 0;
     let zero_bits = 0;
@@ -1500,6 +1537,7 @@ fn tf1d_count_eq_zero(start: i32, n: i32) -> i32 {
         i = i + 1;
     }
     total
+    }}
 }
 
 // tf1d_is_empty(start, n): @pure. 1 if n <= 0.
@@ -1511,6 +1549,9 @@ fn tf1d_is_empty(start: i32, n: i32) -> i32 {
 // ti1d_count_above(start, n, threshold): @pure. Count int elements > threshold.
 @pure
 fn ti1d_count_above(start: i32, n: i32, threshold: i32) -> i32 {
+    if n <= 0 { 0 }
+    else { if t1d_slice_ok(start, n) == 0 { 0 }
+    else {
     let mut i: i32 = 0;
     let mut total: i32 = 0;
     while i < n {
@@ -1518,11 +1559,15 @@ fn ti1d_count_above(start: i32, n: i32, threshold: i32) -> i32 {
         i = i + 1;
     }
     total
+    }}
 }
 
 // ti1d_count_below(start, n, threshold): @pure. Companion.
 @pure
 fn ti1d_count_below(start: i32, n: i32, threshold: i32) -> i32 {
+    if n <= 0 { 0 }
+    else { if t1d_slice_ok(start, n) == 0 { 0 }
+    else {
     let mut i: i32 = 0;
     let mut total: i32 = 0;
     while i < n {
@@ -1530,11 +1575,15 @@ fn ti1d_count_below(start: i32, n: i32, threshold: i32) -> i32 {
         i = i + 1;
     }
     total
+    }}
 }
 
 // ti1d_max_abs(start, n): @pure. Max of |x[i]| for ints. 0 if empty.
 @pure
 fn ti1d_max_abs(start: i32, n: i32) -> i32 {
+    if n <= 0 { 0 }
+    else { if t1d_slice_ok(start, n) == 0 { 0 }
+    else {
     let mut i: i32 = 0;
     let mut best: i32 = 0;
     while i < n {
@@ -1544,6 +1593,7 @@ fn ti1d_max_abs(start: i32, n: i32) -> i32 {
         i = i + 1;
     }
     best
+    }}
 }
 
 // ti1d_is_empty(start, n): @pure. 1 if n <= 0.
@@ -1555,30 +1605,41 @@ fn ti1d_is_empty(start: i32, n: i32) -> i32 {
 // tf1d_first(start, n): @pure. f32 v[0]. 0.0_f32 if empty.
 @pure
 fn tf1d_first(start: i32, n: i32) -> f32 {
-    if n <= 0 { 0.0_f32 } else { __f32_from_bits(__arena_get(start)) }
+    if n <= 0 { 0.0_f32 }
+    else { if t1d_slice_ok(start, 1) == 0 { 0.0_f32 }
+    else { __f32_from_bits(__arena_get(start)) } }
 }
 
 // tf1d_last(start, n): @pure. f32 v[n-1]. 0.0_f32 if empty.
 @pure
 fn tf1d_last(start: i32, n: i32) -> f32 {
-    if n <= 0 { 0.0_f32 } else { __f32_from_bits(__arena_get(start + n - 1)) }
+    if n <= 0 { 0.0_f32 }
+    else { if t1d_slice_ok(start, n) == 0 { 0.0_f32 }
+    else { __f32_from_bits(__arena_get(start + n - 1)) } }
 }
 
 // ti1d_first(start, n): @pure. v[0] or 0 if empty.
 @pure
 fn ti1d_first(start: i32, n: i32) -> i32 {
-    if n <= 0 { 0 } else { __arena_get(start) }
+    if n <= 0 { 0 }
+    else { if t1d_slice_ok(start, 1) == 0 { 0 }
+    else { __arena_get(start) } }
 }
 
 // ti1d_last(start, n): @pure. v[n-1] or 0 if empty.
 @pure
 fn ti1d_last(start: i32, n: i32) -> i32 {
-    if n <= 0 { 0 } else { __arena_get(start + n - 1) }
+    if n <= 0 { 0 }
+    else { if t1d_slice_ok(start, n) == 0 { 0 }
+    else { __arena_get(start + n - 1) } }
 }
 
 // ti1d_count_eq(start, n, target): @pure. Count of v[i] == target.
 @pure
 fn ti1d_count_eq(start: i32, n: i32, target: i32) -> i32 {
+    if n <= 0 { 0 }
+    else { if t1d_slice_ok(start, n) == 0 { 0 }
+    else {
     let mut i: i32 = 0;
     let mut total: i32 = 0;
     while i < n {
@@ -1586,6 +1647,7 @@ fn ti1d_count_eq(start: i32, n: i32, target: i32) -> i32 {
         i = i + 1;
     }
     total
+    }}
 }
 
 // ti1d_count_pos(start, n): @pure. Count of strictly positive elements.
@@ -1604,7 +1666,7 @@ fn ti1d_count_neg(start: i32, n: i32) -> i32 {
 fn ti1d_clone_alloc(start: i32, n: i32) -> i32 {
     let s = t1d_new(n);
     if n <= 0 { s }
-    else { if t1d_capacity_ok(start, n) == 0 { s }
+    else { if t1d_slice_ok(start, n) == 0 { s }
     else {
     let mut i: i32 = 0;
     while i < n {

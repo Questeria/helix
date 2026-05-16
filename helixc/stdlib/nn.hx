@@ -705,12 +705,16 @@ fn softmax_ce_grad_f32(probs_start: i32, target_start: i32,
 fn dense_classifier_sgd_step_f32(w_start: i32, b_start: i32, x_start: i32,
                                  target: i32, scratch_start: i32,
                                  shape_start: i32, lr: f32) -> i32 {
+    if t1d_slice_ok(shape_start, 2) == 0 { 35001 }
+    else {
     let classes = __arena_get(shape_start);
     let in_dim = __arena_get(shape_start + 1);
     if classes <= 0 { 35001 }
     else { if in_dim <= 0 { 35001 }
     else { if t2d_len(classes, in_dim) == 0 { 35001 }
     else { if t2d_shape_ok(w_start, classes, in_dim) == 0 { 35001 }
+    else { if t1d_slice_ok(b_start, classes) == 0 { 35001 }
+    else { if t1d_slice_ok(x_start, in_dim) == 0 { 35001 }
     else {
         if target < 0 { 35001 }
         else { if target >= classes { 35001 }
@@ -777,7 +781,8 @@ fn dense_classifier_sgd_step_f32(w_start: i32, b_start: i32, x_start: i32,
             }
             0
         }}
-    }}}}
+    }}}}}}
+    }
 }
 
 // BCE.
@@ -791,12 +796,13 @@ fn bce_loss_scalar(p: f32, t: f32) -> f32 {
 fn ce_loss(p_start: i32, target_idx: i32, cols: i32) -> f32 {
     if target_idx < 0 { 1000000.0_f32 }
     else { if target_idx >= cols { 1000000.0_f32 }
+    else { if t1d_slice_ok(p_start, cols) == 0 { 1000000.0_f32 }
     else {
         let p = __f32_from_bits(__arena_get(p_start + target_idx));
         let eps = 0.0001_f32;
         let pc = __max(__min(p, 1.0_f32 - eps), eps);
         0.0_f32 - __log_stable(pc)
-    }}
+    }}}
 }
 
 // For a row-major logits matrix (rows x cols), write each row's argmax class
@@ -807,6 +813,7 @@ fn argmax_rows_f32(logits_start: i32, rows: i32, cols: i32,
     else { if cols <= 0 { 0 }
     else { if t2d_len(rows, cols) == 0 { t2d_error() }
     else { if t2d_shape_ok(logits_start, rows, cols) == 0 { t2d_error() }
+    else { if t1d_slice_ok(out_start, rows) == 0 { t2d_error() }
     else {
         let mut r: i32 = 0;
         while r < rows {
@@ -826,7 +833,7 @@ fn argmax_rows_f32(logits_start: i32, rows: i32, cols: i32,
             r = r + 1;
         }
         0
-    }}}}
+    }}}}}
 }
 
 @pure
@@ -836,6 +843,7 @@ fn accuracy_count_from_logits_f32(logits_start: i32, target_start: i32,
     else { if cols <= 0 { 0 }
     else { if t2d_len(rows, cols) == 0 { t2d_error() }
     else { if t2d_shape_ok(logits_start, rows, cols) == 0 { t2d_error() }
+    else { if t1d_slice_ok(target_start, rows) == 0 { t2d_error() }
     else {
         let mut r: i32 = 0;
         let mut hits: i32 = 0;
@@ -858,7 +866,7 @@ fn accuracy_count_from_logits_f32(logits_start: i32, target_start: i32,
             r = r + 1;
         }
         hits
-    }}}}
+    }}}}}
 }
 
 @pure
@@ -868,6 +876,7 @@ fn ce_loss_batch_f32(probs_start: i32, target_start: i32,
     else { if cols <= 0 { 0.0_f32 }
     else { if t2d_len(rows, cols) == 0 { 1000000.0_f32 }
     else { if t2d_shape_ok(probs_start, rows, cols) == 0 { 1000000.0_f32 }
+    else { if t1d_slice_ok(target_start, rows) == 0 { 1000000.0_f32 }
     else {
         let mut r: i32 = 0;
         let mut total: f32 = 0.0_f32;
@@ -890,7 +899,7 @@ fn ce_loss_batch_f32(probs_start: i32, target_start: i32,
         }
         if invalid == 1 { 1000000.0_f32 }
         else { total / (rows as f32) }
-    }}}}
+    }}}}}
 }
 
 // argmin: index of smallest element. Companion to argmax.
@@ -898,6 +907,7 @@ fn ce_loss_batch_f32(probs_start: i32, target_start: i32,
 @pure
 fn argmin(x_start: i32, n: i32) -> i32 {
     if n <= 0 { 0 - 1 }
+    else { if t1d_slice_ok(x_start, n) == 0 { 0 - 1 }
     else {
         let mut best_idx: i32 = 0;
         let mut best_val: i32 = __arena_get(x_start);
@@ -911,13 +921,17 @@ fn argmin(x_start: i32, n: i32) -> i32 {
             i = i + 1;
         }
         best_idx
-    }
+    }}
 }
 
 // MAE (sum of absolute differences) on integer tensors.
 // Sibling of mse_loss; cheaper since no multiplication and no overflow risk.
 @pure
 fn mae_loss(y_start: i32, t_start: i32, n: i32) -> i32 {
+    if n <= 0 { 0 }
+    else { if t1d_slice_ok(y_start, n) == 0 { 0 }
+    else { if t1d_slice_ok(t_start, n) == 0 { 0 }
+    else {
     let mut i: i32 = 0;
     let mut total: i32 = 0;
     while i < n {
@@ -927,12 +941,15 @@ fn mae_loss(y_start: i32, t_start: i32, n: i32) -> i32 {
         i = i + 1;
     }
     total
+    }}}
 }
 
 // MAE on f32 tensors (mean absolute error, returns 0.0 on empty).
 @pure
 fn mae_loss_f32(y_start: i32, t_start: i32, n: i32) -> f32 {
     if n <= 0 { 0.0_f32 }
+    else { if t1d_slice_ok(y_start, n) == 0 { 0.0_f32 }
+    else { if t1d_slice_ok(t_start, n) == 0 { 0.0_f32 }
     else {
         let mut i: i32 = 0;
         let mut total: f32 = 0.0_f32;
@@ -943,7 +960,7 @@ fn mae_loss_f32(y_start: i32, t_start: i32, n: i32) -> f32 {
             i = i + 1;
         }
         total / (n as f32)
-    }
+    }}}
 }
 
 // Count of positions where prediction matches target. Useful for batch
@@ -951,6 +968,10 @@ fn mae_loss_f32(y_start: i32, t_start: i32, n: i32) -> f32 {
 // target[i] is the integer class label.
 @pure
 fn count_correct(pred_start: i32, target_start: i32, n: i32) -> i32 {
+    if n <= 0 { 0 }
+    else { if t1d_slice_ok(pred_start, n) == 0 { 0 }
+    else { if t1d_slice_ok(target_start, n) == 0 { 0 }
+    else {
     let mut i: i32 = 0;
     let mut hits: i32 = 0;
     while i < n {
@@ -960,4 +981,5 @@ fn count_correct(pred_start: i32, target_start: i32, n: i32) -> i32 {
         i = i + 1;
     }
     hits
+    }}}
 }

@@ -1589,6 +1589,92 @@ def test_stage35_direct_x86_drains_ad_warnings_on_type_error(tmp_path):
     assert "ERROR" in proc.stderr
 
 
+def test_stage35_direct_x86_rejects_unknown_flags_without_writing(tmp_path):
+    src_path = tmp_path / "ok.hx"
+    out_path = tmp_path / "ok.bin"
+    src_path.write_text("fn main() -> i32 { 42 }\n", encoding="utf-8")
+    proc = subprocess.run(
+        [
+            sys.executable, "-m", "helixc.backend.x86_64",
+            str(src_path), str(out_path), "--strcit",
+        ],
+        cwd=os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert proc.returncode == 2, proc.stdout + proc.stderr
+    assert not out_path.exists()
+    assert "unknown flag" in proc.stderr
+    assert "Traceback" not in proc.stderr
+
+
+def test_stage35_direct_x86_missing_input_reports_clean_error(tmp_path):
+    missing = tmp_path / "missing.hx"
+    out_path = tmp_path / "missing.bin"
+    proc = subprocess.run(
+        [
+            sys.executable, "-m", "helixc.backend.x86_64",
+            str(missing), str(out_path),
+        ],
+        cwd=os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    assert not out_path.exists()
+    assert "error: input:" in proc.stderr
+    assert "Traceback" not in proc.stderr
+
+
+def test_stage35_direct_x86_duplicate_impl_reports_clean_error(tmp_path):
+    src_path = tmp_path / "dup_impl.hx"
+    out_path = tmp_path / "dup_impl.bin"
+    src_path.write_text(
+        "struct Foo { x: i32 }\n"
+        "struct Bar { y: i32 }\n"
+        "impl Foo { fn area(self: Foo) -> i32 { self.x } }\n"
+        "impl Bar { fn area(self: Bar) -> i32 { self.y } }\n"
+        "fn main() -> i32 { 0 }\n",
+        encoding="utf-8",
+    )
+    proc = subprocess.run(
+        [
+            sys.executable, "-m", "helixc.backend.x86_64",
+            str(src_path), str(out_path), "--no-stdlib",
+        ],
+        cwd=os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    assert not out_path.exists()
+    assert "duplicate method" in proc.stderr
+    assert "Traceback" not in proc.stderr
+
+
+def test_stage35_direct_x86_missing_output_dir_reports_clean_error(tmp_path):
+    src_path = tmp_path / "ok_out.hx"
+    out_path = tmp_path / "missing_dir" / "out.bin"
+    src_path.write_text("fn main() -> i32 { 42 }\n", encoding="utf-8")
+    proc = subprocess.run(
+        [
+            sys.executable, "-m", "helixc.backend.x86_64",
+            str(src_path), str(out_path), "--no-stdlib",
+        ],
+        cwd=os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    assert not out_path.exists()
+    assert "error: output:" in proc.stderr
+    assert "Traceback" not in proc.stderr
+
+
 def test_ad_drain_subprocess_default(tmp_path):
     """C2-1: end-to-end subprocess test — the dominant user invocation
     `python -m helixc.check loss.hx` surfaces B13 warnings on stderr."""

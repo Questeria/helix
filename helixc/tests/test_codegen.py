@@ -7542,6 +7542,39 @@ def test_grad_rev_all_writes_f64_constant_gradient_to_f64_cell():
     assert code == 2, f"expected 2, got {code}"
 
 
+def test_stage35_grad_rev_all_reports_failed_reflection_write():
+    src = """
+    fn loss(x: f64) -> f64 { x * x }
+    fn main() -> i32 {
+        let status = grad_rev_all(loss)(3.0_f64, 0 - 1);
+        if status == (0 - 1) { 42 } else { 7 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stage35_grad_rejects_nonfloating_loss_return():
+    import pytest
+    src = """
+    fn loss(x: f32) -> i32 { x as i32 }
+    fn probe(x: f32) -> i32 { grad(loss)(x) }
+    fn main() -> i32 { 42 }
+    """
+    with pytest.raises(NotImplementedError, match="non-floating return"):
+        compile_and_run(src)
+
+
+def test_stage35_grad_rev_all_rejects_nonfloating_loss_return():
+    import pytest
+    src = """
+    fn loss(x: f64) -> i32 { x as i32 }
+    fn main() -> i32 { grad_rev_all(loss)(3.0_f64, 0) }
+    """
+    with pytest.raises(NotImplementedError, match="non-floating return"):
+        compile_and_run(src)
+
+
 def test_grad_rejects_scalar_target_when_sibling_aggregate_param_exists():
     import pytest
     src = """
@@ -9054,6 +9087,22 @@ def test_agi_ep_chronological_read():
     assert code == 66, f"expected 66 (11+22+33), got {code}"
 
 
+def test_stage35_episodic_accessors_reject_negative_indices():
+    src = """
+    fn main() -> i32 {
+        let ep = ep_new();
+        ep_record(ep, 7, 99);
+        let payload = ep_payload_at(ep, 0 - 1);
+        let kind = ep_kind_at(ep, 0 - 1);
+        if payload == (0 - 1) {
+            if kind == (0 - 1) { 42 } else { 7 }
+        } else { 7 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
 def test_agi_wm_store_and_load():
     """Phase 4 step 1: working memory key-value store. Store 3 keys,
     retrieve one. Demonstrates the AGI's short-term scratchpad."""
@@ -9404,6 +9453,26 @@ def test_nn_ce_loss_batch_f32_invalid_label_not_averaged_down():
     assert code == 42, f"expected 42, got {code}"
 
 
+def test_stage35_nn_classifier_helpers_reject_short_outputs_and_targets():
+    src = """
+    fn main() -> i32 {
+        let logits = tf2d_zeros(2, 2);
+        let out = t1d_new(1);
+        let target = t1d_new(1);
+        let s1 = argmax_rows_f32(logits, 2, 2, out);
+        let s2 = accuracy_count_from_logits_f32(logits, target, 2, 2);
+        let loss = ce_loss_batch_f32(logits, target, 2, 2);
+        if s1 == 35001 {
+            if s2 == 35001 {
+                if loss > 999999.0_f32 { 42 } else { 7 }
+            } else { 7 }
+        } else { 7 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
 def test_nn_ce_loss_clamps_probability_above_one():
     src = """
     fn main() -> i32 {
@@ -9545,6 +9614,28 @@ def test_nn_dense_classifier_sgd_step_f32_rejects_invalid_shape():
         __arena_set(shape + 1, 2);
         dense_classifier_sgd_step_f32(
             w, b, x, 0, scratch, shape, 1.0_f32) - 34959
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stage35_dense_classifier_rejects_short_bias_vector():
+    src = """
+    fn main() -> i32 {
+        let w = tf2d_zeros(2, 2);
+        let b = t1d_new(1);
+        let x = t1d_new(2);
+        let shape = t1d_new(2);
+        __arena_set(shape, 2);
+        __arena_set(shape + 1, 2);
+        let guard = t1d_new(1);
+        ti1d_set(guard, 0, 123);
+        let status = dense_classifier_sgd_step_f32(
+            w, b, x, 0, 0, shape, 1.0_f32);
+        if status == 35001 {
+            if ti1d_get(guard, 0) == 123 { 42 } else { 7 }
+        } else { 7 }
     }
     """
     code = compile_and_run(src)
@@ -10380,6 +10471,27 @@ def test_nn_count_correct():
     assert code == 3, f"expected 3, got {code}"
 
 
+def test_stage35_nn_metrics_reject_short_inputs():
+    src = """
+    fn main() -> i32 {
+        let a = t1d_new(1);
+        let b = t1d_new(1);
+        ti1d_set(a, 0, 7);
+        ti1d_set(b, 0, 7);
+        let mae_i = mae_loss(a, b, 2);
+        let ok_i = count_correct(a, b, 2);
+        let mae_f = mae_loss_f32(a, b, 2);
+        if mae_i == 0 {
+            if ok_i == 0 {
+                if mae_f == 0.0_f32 { 42 } else { 7 }
+            } else { 7 }
+        } else { 7 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
 def test_tensor_1d_dot():
     """Phase 2.2: 1D integer-tensor dot product. [1,2,3] . [10,20,30] = 140."""
     src = """
@@ -11092,6 +11204,26 @@ def test_revad_backward_rejects_forged_immediate_adjoint_slice():
     assert code == 42, f"expected 42, got {code}"
 
 
+def test_stage35_revad_backward_rejects_tape_value_mutated_after_adjoints():
+    src = """
+    fn main() -> i32 {
+        let tape = rev_tape_new(4);
+        let x = rev_leaf(tape, 5);
+        let y = rev_leaf(tape, 7);
+        let f = rev_mul(tape, x, y);
+        let adj = rev_alloc_adjoints(tape);
+        rev_seed(adj, f, 1);
+        __arena_set(tape + 3 + y * 4 + 3, 9);
+        let status = rev_backward(tape, adj);
+        if status == (0 - 1) {
+            if rev_grad(adj, x) == 0 { 42 } else { 7 }
+        } else { 7 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
 def test_revad_alloc_adjoints_rejects_interleaved_arena_allocation():
     src = """
     fn main() -> i32 {
@@ -11497,6 +11629,49 @@ def test_tf1d_add_rejects_short_output_buffer():
         if status == 35001 {
             if (tf1d_get(z, 0) as i32) == 42 {
                 if ti1d_get(guard, 0) == 7 { 42 } else { 8 }
+            } else { 7 }
+        } else { 7 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stage35_tf1d_add_accepts_valid_interior_slices():
+    src = """
+    fn main() -> i32 {
+        let a = t1d_new(3);
+        tf1d_set(a, 0, 1.0_f32);
+        tf1d_set(a, 1, 2.0_f32);
+        tf1d_set(a, 2, 3.0_f32);
+        let b = t1d_new(3);
+        tf1d_set(b, 0, 10.0_f32);
+        tf1d_set(b, 1, 20.0_f32);
+        tf1d_set(b, 2, 30.0_f32);
+        let z = t1d_new(3);
+        let status = tf1d_add(a + 1, b + 1, z + 1, 2);
+        let total = tf1d_get(z, 1) + tf1d_get(z, 2);
+        if status == 0 {
+            if (total as i32) == 55 { 42 } else { 7 }
+        } else { 7 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stage35_tensor_reducers_do_not_read_footers():
+    src = """
+    fn main() -> i32 {
+        let x = t1d_new(1);
+        ti1d_set(x, 0, 5);
+        let footer = t1d_footer(1);
+        let count = ti1d_count_eq(x, 2, footer);
+        let prod = ti1d_prod(x, 2);
+        let last = ti1d_last(x, 2);
+        if count == 0 {
+            if prod == 1 {
+                if last == 0 { 42 } else { 7 }
             } else { 7 }
         } else { 7 }
     }

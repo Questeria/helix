@@ -2,8 +2,8 @@
 
 **Historical snapshot date**: 2026-05-12
 **Historical snapshot HEAD**: `a2e7fc4` (Stage 30 cycle-5 prep: document M2 trade-off)
-**Current-status warning**: this file is a historical handoff, not the current repo state. As of 2026-05-16, continue from the Stage 35 progress ledger and the live git HEAD instead.
-**Current continuation pointer**: Stage 35 audit cleanup; run `git log -1 --oneline` and `docs/stage35-progress-2026-05-15.md` for the newest truth.
+**Current-status warning**: this file is a historical handoff, not the current repo state. As of 2026-05-16, continue from the Stage 35 progress ledger, live git HEAD, and `git status --short` instead.
+**Current continuation pointer**: Stage 35 audit cleanup; restart 29 is closed at `b3f7796`, restart 30 found/fixed additional issues, and clean gates remain `0/3`. Run `git log -1 --oneline`, `git status --short`, and `docs/stage35-progress-2026-05-15.md` for the newest truth.
 **Project**: `C:\Projects\Kovostov-Native\` — Helix language self-hosting compiler
 
 User backed up the entire folder before this handoff in case of issues.
@@ -22,9 +22,10 @@ Build Kovostov-Native: open-source AGI bootstrapped from raw binary, with own la
 
 ---
 
-## HISTORICAL STATE — STAGE 29 FULLY COMPLETE
+## HISTORICAL STATE — STAGE 29 SNAPSHOT
 
-The Helix self-host loop WORKS:
+At this historical snapshot, the Stage 29 experimental self-host loop was
+recorded as working:
 - Python compiles bootstrap source → K1 binary
 - K1 compiles bootstrap source → K2 binary  
 - K2 compiles arbitrary Helix programs → K3 binary
@@ -54,7 +55,7 @@ C:\Projects\Kovostov-Native\
 └── docs\                         # Audit findings, design docs
 ```
 
-The "bootstrap" Helix files (lexer.hx + parser.hx + kovc.hx) constitute the self-hosting compiler. The Python helixc/ files (helixc/frontend/, helixc/ir/, helixc/backend/) compile the bootstrap. Once K1 is built, K1 can compile arbitrary Helix programs (including itself).
+In this historical snapshot, the "bootstrap" Helix files (lexer.hx + parser.hx + kovc.hx) were the experimental self-hosting compiler source. In the current repo, production development still runs through the Python-hosted `helixc/` compiler until a reproducible self-hosted compiler is shipped.
 
 ---
 

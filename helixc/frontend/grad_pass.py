@@ -560,7 +560,7 @@ def _generate_grad_rev_all_fn(fn: A.FnDecl,
     """
     if not fn.params:
         return None
-    _reject_unsupported_grad_params(fn, "grad_rev_all")
+    _reject_unsupported_grad_signature(fn, "grad_rev_all")
     span = fn.span
     var_names = [p.name for p in fn.params]
 
@@ -569,10 +569,17 @@ def _generate_grad_rev_all_fn(fn: A.FnDecl,
 
     # Build the body: for each param, let g_i = <gradient_expr>, then
     # modify_f(base + i, g_i, __always_accept).
-    body_stmts: list[A.Stmt] = []
+    body_stmts: list[A.Stmt] = [
+        A.Let(
+            span=span, name="__status", is_mut=True,
+            ty=A.TyName(span=span, name="i32"),
+            value=A.IntLit(span=span, value=0),
+        )
+    ]
     base_name = "__base"
     for i, p_name in enumerate(var_names):
         g_var = f"__g_{i}"
+        ok_var = f"__ok_{i}"
         ty_name = _ty_name(fn.params[i].ty)
         grad_expr = all_grads[p_name]
         if ty_name in ("f32", "f64"):
@@ -595,12 +602,44 @@ def _generate_grad_rev_all_fn(fn: A.FnDecl,
                   A.Name(span=span, name=g_var),
                   A.Name(span=span, name=verifier_name)],
         )
-        body_stmts.append(A.ExprStmt(span=span, expr=call))
+        body_stmts.append(A.Let(
+            span=span, name=ok_var, ty=None, value=call, is_mut=False,
+        ))
+        body_stmts.append(A.ExprStmt(
+            span=span,
+            expr=A.If(
+                span=span,
+                cond=A.Binary(
+                    span=span, op="==",
+                    left=A.Name(span=span, name=ok_var),
+                    right=A.IntLit(span=span, value=0),
+                ),
+                then=A.Block(
+                    span=span,
+                    stmts=[
+                        A.ExprStmt(
+                            span=span,
+                            expr=A.Assign(
+                                span=span,
+                                target=A.Name(span=span, name="__status"),
+                                op="=",
+                                value=A.Binary(
+                                    span=span, op="-",
+                                    left=A.IntLit(span=span, value=0),
+                                    right=A.IntLit(span=span, value=1),
+                                ),
+                            ),
+                        )
+                    ],
+                    final_expr=None,
+                ),
+                else_=None,
+            ),
+        ))
 
-    # Final expression: 0 (success).
     new_body = A.Block(
         span=span, stmts=body_stmts,
-        final_expr=A.IntLit(span=span, value=0),
+        final_expr=A.Name(span=span, name="__status"),
     )
 
     # Params: preserve original scalar types; do not silently narrow f64 to f32.
@@ -646,7 +685,8 @@ def _generate_grad_fn(fn: A.FnDecl, param_idx: int = 0,
         return None
     if param_idx < 0 or param_idx >= len(fn.params):
         return None
-    _reject_unsupported_grad_params(fn, "grad_rev" if mode == "reverse" else "grad")
+    _reject_unsupported_grad_signature(
+        fn, "grad_rev" if mode == "reverse" else "grad")
     var = fn.params[param_idx].name
 
     # Lazy per-FnDecl cache. Keyed by (mode, all-param-names tuple) so we
@@ -701,7 +741,7 @@ def _generate_grad_fn(fn: A.FnDecl, param_idx: int = 0,
     )
 
 
-def _reject_unsupported_grad_params(fn: A.FnDecl, surface: str) -> None:
+def _reject_unsupported_grad_signature(fn: A.FnDecl, surface: str) -> None:
     """Fail closed on aggregate parameters until pytree leaves reach grad_pass."""
     unsupported: list[str] = []
     for p in fn.params:
@@ -716,3 +756,14 @@ def _reject_unsupported_grad_params(fn: A.FnDecl, surface: str) -> None:
             f"unsupported parameter(s): {joined}; flatten pytree leaves or "
             "cast non-floating inputs before grad_pass"
         )
+    ret_name = _ty_name(fn.return_ty)
+    if ret_name not in _SCALAR_GRAD_TYPES:
+        raise NotImplementedError(
+            f"{surface} non-floating return type unsupported; "
+            "supports only f32/f64 scalar loss outputs today; "
+            f"got {ret_name or 'unknown'}"
+        )
+
+
+def _reject_unsupported_grad_params(fn: A.FnDecl, surface: str) -> None:
+    _reject_unsupported_grad_signature(fn, surface)

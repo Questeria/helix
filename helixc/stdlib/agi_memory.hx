@@ -32,6 +32,19 @@ type DistanceMeters = f64 where self >= 0.0;
 
 @pure fn wm_capacity() -> i32 { 16 }
 
+@pure fn wm_slot_count() -> i32 { 2 + wm_capacity() * 3 }
+
+@pure fn wm_ok(start: i32) -> i32 {
+    if start < 0 { 0 }
+    else { if start > 2147483647 - wm_slot_count() { 0 }
+    else { if start + wm_slot_count() > __arena_len() { 0 }
+    else {
+        let count = __arena_get(start);
+        if count < 0 { 0 }
+        else { if count > wm_capacity() { 0 } else { 1 } }
+    }}}
+}
+
 fn wm_new() -> i32 {
     let start = __arena_len();
     __arena_push(0);   // size
@@ -48,19 +61,24 @@ fn wm_new() -> i32 {
 }
 
 @pure fn wm_size(start: i32) -> i32 {
-    __arena_get(start)
+    if wm_ok(start) == 0 { 0 } else { __arena_get(start) }
 }
 
 fn wm_clear(start: i32) -> i32 {
+    if wm_ok(start) == 0 { 0 - 1 }
+    else {
     __arena_set(start, 0);
     __arena_set(start + 1, 0);
     0
+    }
 }
 
 // Internal helper: linear scan for a key. Returns slot offset (2..2+cap*3
 // stepping by 3) or -1 if not found.
 @pure
 fn wm_find(start: i32, key: i32) -> i32 {
+    if wm_ok(start) == 0 { 0 - 1 }
+    else {
     let mut i: i32 = 0;
     let count = __arena_get(start);
     let mut found: i32 = 0 - 1;
@@ -72,11 +90,14 @@ fn wm_find(start: i32, key: i32) -> i32 {
         i = i + 1;
     }
     found
+    }
 }
 
 // Internal helper: find LRU slot offset.
 @pure
 fn wm_lru_slot(start: i32) -> i32 {
+    if wm_ok(start) == 0 { 0 - 1 }
+    else {
     let cap = wm_capacity();
     let mut i: i32 = 0;
     let mut best_off: i32 = start + 2;
@@ -91,11 +112,14 @@ fn wm_lru_slot(start: i32) -> i32 {
         i = i + 1;
     }
     best_off
+    }
 }
 
 // Store key/value. If key already present, update in place (refreshing
 // recency). If full, evict the LRU entry. Returns the new size.
 fn wm_store(start: i32, key: i32, val: i32) -> i32 {
+    if wm_ok(start) == 0 { 0 - 1 }
+    else {
     let new_tick = __arena_get(start + 1) + 1;
     __arena_set(start + 1, new_tick);
     let existing = wm_find(start, key);
@@ -121,10 +145,13 @@ fn wm_store(start: i32, key: i32, val: i32) -> i32 {
             cap
         }
     }
+    }
 }
 
 // Load value for key; refresh recency. Returns -1 if absent.
 fn wm_load(start: i32, key: i32) -> i32 {
+    if wm_ok(start) == 0 { 0 - 1 }
+    else {
     let off = wm_find(start, key);
     if off < 0 { 0 - 1 }
     else {
@@ -132,6 +159,7 @@ fn wm_load(start: i32, key: i32) -> i32 {
         __arena_set(start + 1, new_tick);
         __arena_set(off + 2, new_tick);
         __arena_get(off + 1)
+    }
     }
 }
 
@@ -152,6 +180,24 @@ fn wm_load(start: i32, key: i32) -> i32 {
 
 @pure fn ep_capacity() -> i32 { 64 }
 
+@pure fn ep_slot_count() -> i32 { 3 + ep_capacity() * 3 }
+
+@pure fn ep_ok(start: i32) -> i32 {
+    if start < 0 { 0 }
+    else { if start > 2147483647 - ep_slot_count() { 0 }
+    else { if start + ep_slot_count() > __arena_len() { 0 }
+    else {
+        let head = __arena_get(start);
+        let cnt = __arena_get(start + 1);
+        let tick = __arena_get(start + 2);
+        if head < 0 { 0 }
+        else { if head >= ep_capacity() { 0 }
+        else { if cnt < 0 { 0 }
+        else { if cnt > ep_capacity() { 0 }
+        else { if tick < 0 { 0 } else { 1 } } } } }
+    }}}
+}
+
 fn ep_new() -> i32 {
     let start = __arena_len();
     __arena_push(0);   // head
@@ -169,15 +215,17 @@ fn ep_new() -> i32 {
 }
 
 @pure fn ep_count(start: i32) -> i32 {
-    __arena_get(start + 1)
+    if ep_ok(start) == 0 { 0 } else { __arena_get(start + 1) }
 }
 
 @pure fn ep_tick(start: i32) -> i32 {
-    __arena_get(start + 2)
+    if ep_ok(start) == 0 { 0 } else { __arena_get(start + 2) }
 }
 
 // Append an event (kind, payload). Returns new tick.
 fn ep_record(start: i32, kind: i32, payload: i32) -> i32 {
+    if ep_ok(start) == 0 { 0 - 1 }
+    else {
     let cap = ep_capacity();
     let head = __arena_get(start);
     let new_tick = __arena_get(start + 2) + 1;
@@ -193,15 +241,19 @@ fn ep_record(start: i32, kind: i32, payload: i32) -> i32 {
         __arena_set(start + 1, cnt + 1);
     }
     new_tick
+    }
 }
 
 // Read i'th event payload (chronological; 0 = oldest still in buffer).
 // Returns -1 if i >= count.
 @pure
 fn ep_payload_at(start: i32, i: i32) -> i32 {
+    if ep_ok(start) == 0 { 0 - 1 }
+    else {
     let cap = ep_capacity();
     let cnt = __arena_get(start + 1);
-    if i >= cnt { 0 - 1 }
+    if i < 0 { 0 - 1 }
+    else { if i >= cnt { 0 - 1 }
     else {
         let head = __arena_get(start);
         let pos = if cnt < cap {
@@ -211,6 +263,7 @@ fn ep_payload_at(start: i32, i: i32) -> i32 {
         };
         let off = start + 3 + pos * 3;
         __arena_get(off + 2)
+    }}
     }
 }
 
@@ -218,6 +271,8 @@ fn ep_payload_at(start: i32, i: i32) -> i32 {
 // payload, or -1 if no event of that kind in the buffer.
 @pure
 fn ep_recent_kind(start: i32, kind: i32) -> i32 {
+    if ep_ok(start) == 0 { 0 - 1 }
+    else {
     let cap = ep_capacity();
     let cnt = __arena_get(start + 1);
     let head = __arena_get(start);
@@ -236,6 +291,7 @@ fn ep_recent_kind(start: i32, kind: i32) -> i32 {
         i = i + 1;
     }
     found
+    }
 }
 
 // =========================================================================
@@ -245,8 +301,11 @@ fn ep_recent_kind(start: i32, kind: i32) -> i32 {
 // 1 if key is present in WM, 0 otherwise. @pure (no recency refresh).
 @pure
 fn wm_has(start: i32, key: i32) -> i32 {
+    if wm_ok(start) == 0 { 0 }
+    else {
     let off = wm_find(start, key);
     if off < 0 { 0 } else { 1 }
+    }
 }
 
 // Read value for key without refreshing recency. Returns -1 if absent.
@@ -254,17 +313,23 @@ fn wm_has(start: i32, key: i32) -> i32 {
 // a read is needed and the read should not disturb eviction order.
 @pure
 fn wm_peek(start: i32, key: i32) -> i32 {
+    if wm_ok(start) == 0 { 0 - 1 }
+    else {
     let off = wm_find(start, key);
     if off < 0 { 0 - 1 } else { __arena_get(off + 1) }
+    }
 }
 
 // Sibling of ep_payload_at: read i'th event kind in chronological order
 // (0 = oldest still in buffer). Returns -1 if i >= count.
 @pure
 fn ep_kind_at(start: i32, i: i32) -> i32 {
+    if ep_ok(start) == 0 { 0 - 1 }
+    else {
     let cap = ep_capacity();
     let cnt = __arena_get(start + 1);
-    if i >= cnt { 0 - 1 }
+    if i < 0 { 0 - 1 }
+    else { if i >= cnt { 0 - 1 }
     else {
         let head = __arena_get(start);
         let pos = if cnt < cap {
@@ -274,12 +339,15 @@ fn ep_kind_at(start: i32, i: i32) -> i32 {
         };
         let off = start + 3 + pos * 3;
         __arena_get(off + 1)
+    }}
     }
 }
 
 // Count events of a given kind in the buffer.
 @pure
 fn ep_count_kind(start: i32, kind: i32) -> i32 {
+    if ep_ok(start) == 0 { 0 }
+    else {
     let cap = ep_capacity();
     let cnt = __arena_get(start + 1);
     let head = __arena_get(start);
@@ -296,4 +364,5 @@ fn ep_count_kind(start: i32, kind: i32) -> i32 {
         i = i + 1;
     }
     count
+    }
 }

@@ -3859,7 +3859,7 @@ if __name__ == "__main__":
     from ..frontend.monomorphize import monomorphize_safe
     from ..frontend.struct_mono import monomorphize_structs
     from ..frontend.flatten_modules import flatten_modules, FlattenError
-    from ..frontend.flatten_impls import flatten_impls
+    from ..frontend.flatten_impls import flatten_impls, DuplicateMethodError
     from ..ir.lower_ast import lower
     from ..ir.passes.const_fold import fold_module, FoldError
     from ..ir.passes.dce import dce_module
@@ -3977,6 +3977,9 @@ if __name__ == "__main__":
                 print(f"error: unknown warning policy {arg}", file=sys.stderr)
                 sys.exit(2)
             warning_policies[name] = val
+        elif arg not in ("--strict", "--no-opt", "--no-stdlib"):
+            print(f"error: unknown flag {arg}", file=sys.stderr)
+            sys.exit(2)
 
     def _drain_cli_ad_warnings() -> int:
         ad_warnings = take_diff_warnings()
@@ -3996,8 +3999,12 @@ if __name__ == "__main__":
         if drain_rc != 0:
             sys.exit(drain_rc)
         sys.exit(code)
-    with open(sys.argv[1]) as f:
-        src = f.read()
+    try:
+        with open(sys.argv[1], encoding="utf-8") as f:
+            src = f.read()
+    except OSError as e:
+        print(f"error: input: {e}", file=sys.stderr)
+        sys.exit(1)
     # Auto-include stdlib by default. The fdce / dce passes drop unused
     # stdlib fns so the binary cost is zero. Pass --no-stdlib to compile
     # without it (only useful for stdlib internals or custom-runtime tests).
@@ -4020,7 +4027,11 @@ if __name__ == "__main__":
         sys.exit(1)
     if mod_count > 0:
         print(f"mod: {mod_count} item(s) lifted from block modules", file=sys.stderr)
-    impl_count = flatten_impls(prog)
+    try:
+        impl_count = flatten_impls(prog)
+    except DuplicateMethodError as e:
+        print(f"error: impl: {e}", file=sys.stderr)
+        sys.exit(1)
     if impl_count > 0:
         print(f"impl: {impl_count} method(s) lifted from impl blocks", file=sys.stderr)
     # Audit 28.8 A3/B1 — parametric-struct mono must run BEFORE fn mono
@@ -4214,9 +4225,21 @@ if __name__ == "__main__":
     if _drain_cli_ad_warnings() != 0:
         sys.exit(1)
 
-    elf = compile_module_to_elf(mod)
-    with open(sys.argv[2], "wb") as f:
-        f.write(elf)
+    try:
+        elf = compile_module_to_elf(mod)
+    except Exception as e:
+        print(f"error: codegen: {e}", file=sys.stderr)
+        sys.exit(1)
+    try:
+        with open(sys.argv[2], "wb") as f:
+            f.write(elf)
+    except OSError as e:
+        print(f"error: output: {e}", file=sys.stderr)
+        sys.exit(1)
     import os
-    os.chmod(sys.argv[2], 0o755)
+    try:
+        os.chmod(sys.argv[2], 0o755)
+    except OSError as e:
+        print(f"error: chmod: {e}", file=sys.stderr)
+        sys.exit(1)
     print(f"Wrote {sys.argv[2]} ({len(elf)} bytes)")

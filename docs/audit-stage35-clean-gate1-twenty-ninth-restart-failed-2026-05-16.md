@@ -94,5 +94,7 @@ Status: findings present.
 
 ## Next Step
 
-Commit the restart-29 fix sweep, then begin restart 30 from the new HEAD as
-another clean-gate attempt.
+Restart 29 was committed and pushed as `b3f7796`. Restart 30 has since begun
+and found additional issues, so use
+`docs/audit-stage35-clean-gate1-thirtieth-restart-failed-2026-05-16.md` and
+`docs/stage35-progress-2026-05-15.md` for current continuation state.
