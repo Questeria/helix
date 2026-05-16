@@ -355,15 +355,22 @@ fn vec_argmax(start: i32, count: i32) -> i32 {
     }
 }
 
+// Restart 53 A1: i64 accumulator + INT32 saturation. Sibling of restart
+// 51 A3 (ti1d_dot) and restart 52 A1 (ti2d_matmul/matvec) — extends the
+// i32-overflow family fix to the iterators.hx vec_dot.
 @pure
 fn vec_dot(a: i32, b: i32, count: i32) -> i32 {
     let mut i: i32 = 0;
-    let mut acc: i32 = 0;
+    let mut acc: i64 = 0_i64;
+    let hi: i64 = 2147483647_i64;
+    let lo: i64 = (0_i64 - 2147483647_i64) - 1_i64;
     while i < count {
-        acc = acc + __arena_get(a + i) * __arena_get(b + i);
+        acc = acc + (__arena_get(a + i) as i64) * (__arena_get(b + i) as i64);
+        if acc > hi { acc = hi; }
+        else { if acc < lo { acc = lo; } };
         i = i + 1;
     }
-    acc
+    acc as i32
 }
 
 fn vec_zip_min(a: i32, b: i32, count: i32) -> i32 {
@@ -401,15 +408,19 @@ fn vec_abs_sum(start: i32, count: i32) -> i32 {
     acc
 }
 
+// Restart 53 A2: i64 accumulator + INT32 saturation. Single |v|>=46341
+// makes v*v exceed INT32_MAX. Sibling of restart 51 A5 (ti1d_l2_norm_sq).
 fn vec_sum_squares(start: i32, count: i32) -> i32 {
     let mut i: i32 = 0;
-    let mut acc: i32 = 0;
+    let mut acc: i64 = 0_i64;
+    let hi: i64 = 2147483647_i64;
     while i < count {
-        let v = __arena_get(start + i);
+        let v: i64 = __arena_get(start + i) as i64;
         acc = acc + v * v;
+        if acc > hi { acc = hi; };
         i = i + 1;
     }
-    acc
+    acc as i32
 }
 
 fn vec_clamp_inplace(start: i32, count: i32, lo: i32, hi: i32) -> i32 {

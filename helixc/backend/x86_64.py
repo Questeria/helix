@@ -4380,8 +4380,18 @@ if __name__ == "__main__":
 
     try:
         elf = compile_module_to_elf(mod)
+    # Restart 53 B1: re-raise loud-fail signals so NotImplementedError /
+    # AssertionError / MemoryError surface with class name + traceback
+    # instead of being aliased into a generic "error: codegen: ..." line.
+    # Sibling of restart 51 B3 (which fixed the same shape in check.py's
+    # artifact-emit paths) — the direct backend driver was missed.
+    except (NotImplementedError, AssertionError, KeyboardInterrupt,
+            SystemExit, MemoryError):
+        raise
     except Exception as e:
-        print(f"error: codegen: {e}", file=sys.stderr)
+        print(f"error: codegen: {type(e).__name__}: {e}", file=sys.stderr)
+        print("error: this is a compiler bug — please file an issue.",
+              file=sys.stderr)
         sys.exit(1)
     try:
         _atomic_write_output(sys.argv[2], elf, 0o755)
