@@ -8227,13 +8227,17 @@ def test_stage35_wmt_rejects_invalid_tables_and_bounds():
         let wmt = wmt_new(1, 1);
         let oob_set = wmt_set(wmt, 1, 0, 99);
         let oob_predict = wmt_predict(wmt, 1, 0);
+        let invalid_next_set = wmt_set(wmt, 0, 0, 99);
+        let invalid_next_predict = wmt_predict(wmt, 0, 0);
         if bad == (0 - 1) {
         if bad_set == (0 - 1) {
         if bad_predict == (0 - 1) {
         if oob_set == (0 - 1) {
         if oob_predict == (0 - 1) {
+        if invalid_next_set == (0 - 1) {
+        if invalid_next_predict == (0 - 1) {
         if ti1d_get(guard, 0) == 42 { 42 } else { 7 }
-        } else { 7 }} else { 7 }} else { 7 }} else { 7 }} else { 7 }
+        } else { 7 }} else { 7 }} else { 7 }} else { 7 }} else { 7 }} else { 7 }} else { 7 }
     }
     """
     code = compile_and_run(src)
@@ -8251,6 +8255,25 @@ def test_agi_wml_predict():
     """
     code = compile_and_run(src)
     assert code == 21, f"expected 21, got {code}"
+
+
+def test_stage35_wml_rejects_forged_linear_model():
+    src = """
+    fn main() -> i32 {
+        let fake = t1d_new(3);
+        ti1d_set(fake, 0, 2);
+        ti1d_set(fake, 1, 3);
+        ti1d_set(fake, 2, 10);
+        let forged = wml_predict(fake, 4, 1);
+        let wml = wml_new(2, 3, 10);
+        let valid = wml_predict(wml, 4, 1);
+        if forged == (0 - 1) {
+        if valid == 21 { 42 } else { 7 }
+        } else { 7 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
 
 
 def test_agi_wm_prediction_error():
@@ -8314,12 +8337,12 @@ def test_agi_wmt_predict_or():
     src = """
     fn main() -> i32 {
         let wmt = wmt_new(2, 2);
-        wmt_set(wmt, 0, 0, 7);
-        wmt_predict_or(wmt, 0, 0, 99) + wmt_predict_or(wmt, 1, 1, 35)
+        wmt_set(wmt, 0, 0, 1);
+        wmt_predict_or(wmt, 0, 0, 99) + wmt_predict_or(wmt, 1, 1, 41)
     }
     """
     code = compile_and_run(src)
-    assert code == 42, f"expected 42 (7 + 35), got {code}"
+    assert code == 42, f"expected 42 (1 + 41), got {code}"
 
 
 def test_agi_wmt_count_set():
@@ -12884,6 +12907,41 @@ def test_stdlib_hashmap_collision_probing():
     """
     code = compile_and_run(src)
     assert code == 42, f"expected 42 (10+20+12), got {code}"
+
+
+def test_stage35_hashmap_rejects_forged_and_mismatched_handles():
+    src = """
+    fn main() -> i32 {
+        let fake = t1d_new(3);
+        ti1d_set(fake, 0, 0);
+        ti1d_set(fake, 1, 7);
+        ti1d_set(fake, 2, 42);
+        let forged_put = hashmap_put(fake, 1, 7, 99);
+        let forged_get = hashmap_get(fake, 1, 7, 123);
+        let forged_inc = hashmap_increment(fake, 1, 7, 1);
+        let forged_swap = hashmap_swap(fake, 1, 7, 99);
+        let forged_clear = hashmap_clear(fake, 1);
+        let guard = ti1d_get(fake, 2);
+
+        let m = hashmap_new(2);
+        let mismatch = hashmap_put(m, 3, 1, 99);
+        let ok_put = hashmap_put(m, 2, 1, 42);
+        let ok_get = hashmap_get(m, 2, 1, 0);
+
+        if forged_put == (0 - 1) {
+        if forged_get == 123 {
+        if forged_inc == (0 - 1) {
+        if forged_swap == (0 - 1) {
+        if forged_clear == (0 - 1) {
+        if guard == 42 {
+        if mismatch == (0 - 1) {
+        if ok_put == 1 {
+        if ok_get == 42 { 42 } else { 7 }
+        } else { 7 }} else { 7 }} else { 7 }} else { 7 }} else { 7 }} else { 7 }} else { 7 }} else { 7 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
 
 
 def test_stdlib_string_push_get():

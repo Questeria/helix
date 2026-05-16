@@ -2206,5 +2206,71 @@ Verification:
 Clean-gate status:
 
 - Stage 35 clean gates remain `0/3`.
-- After this restart-34 fix sweep lands, begin restart 35 as another fresh
-  Stage 35 clean-gate attempt from the newest pushed HEAD.
+- Restart 34 is closed at pushed commit `fcfc20e`.
+- Restart 35 began from `fcfc20e`; the fresh audit found more fixable issues,
+  so the gate still does not count as clean.
+
+## Increment 54 - Thirty-Fifth Clean-Gate Restart Fix Sweep
+
+Restart 35 began from pushed commit `fcfc20e` with restart-34 closed. Baseline
+support checks were clean before the audit lanes:
+
+- `python -m pytest helixc\tests --collect-only -q`
+  - Result: 2,372 tests collected at the `fcfc20e` baseline.
+
+The fresh restart-35 audit was not clean. Findings:
+
+- `hashmap_*` helpers accepted forged arena handles and mismatched capacities,
+  allowing writes through non-hashmap slices.
+- `wmt_set` accepted impossible next states outside the declared state range.
+- `wml_predict` treated any three-slot arena slice as a valid linear world
+  model.
+- `helixc.check --emit-asm` and `helixc.check -o` reported a missing `main`
+  function as an internal compiler bug instead of a user-facing codegen error.
+- Current docs and website facts still pointed at restart 34 as the newest
+  action.
+
+Fixes in this increment:
+
+- Added hashmap magic/header/footer validation while preserving the public
+  `(start, cap)` carry-pair API.
+- Guarded hashmap reads, writes, aggregations, and capacity helpers against
+  forged handles and mismatched capacities.
+- Rejected invalid table next states in `wmt_set`.
+- Added magic/footer validation for `wml_new` / `wml_predict`.
+- Routed missing-main x86 artifact failures to `helixc: codegen error` without
+  the compiler-bug tagline.
+- Updated public docs, handoff text, and website facts to restart 35 and the
+  live 2,376-test collection.
+
+Verification:
+
+- `python -m py_compile helixc\check.py helixc\tests\test_cli.py helixc\tests\test_codegen.py`
+  - Result: passed.
+- Per-file stdlib parser sweep across `helixc/stdlib/*.hx`
+  - Result: parsed 16 files.
+- `python -m pytest helixc\tests\test_codegen.py -q -k "stage35_hashmap_rejects_forged or stage35_wmt_rejects_invalid or stage35_wml_rejects_forged or agi_wml_predict or agi_wmt_predict or agi_wmt_predict_or or stdlib_hashmap_put_get_round_trip or stdlib_hashmap_collision_probing"`
+  - Result: 8 passed, 889 deselected.
+- `python -m pytest helixc\tests\test_cli.py -q -k "missing_main_is_user_codegen_error or main_emit_asm_traps_backend_error or main_o_traps_backend_error"`
+  - Result: 4 passed, 196 deselected.
+- `python -m pytest helixc\tests\test_codegen.py -q -k "hashmap or agi_ or wmt or wml or wm_prediction or tensor or revad or agi_memory or bfs or visited or pq or astar or attention or unify"`
+  - Result: 152 passed, 745 deselected.
+- `python -m pytest helixc\tests\test_cli.py -q -k "stage35 or emit_ast or emit_ir or emit_asm or emit_ptx or output or direct_x86 or missing_main"`
+  - Result: 75 passed, 125 deselected.
+- `python -m pytest helixc\tests\test_ptx.py -q -k "stage35 or direct_ptx or wad or deprecated"`
+  - Result: 42 passed, 36 deselected.
+- `python -m pytest helixc\tests\test_codegen.py -q -k "stage35"`
+  - Result: 44 passed, 853 deselected.
+- `python -m pytest helixc\tests\test_cli.py -q -k "stage35"`
+  - Result: 55 passed, 145 deselected.
+- `python -m pytest helixc\tests\test_ptx.py -q -k "stage35"`
+  - Result: 26 passed, 52 deselected.
+- `python -m pytest helixc\tests --collect-only -q`
+  - Result: 2,376 tests collected.
+- `git diff --check`
+  - Result: passed.
+
+Clean-gate status:
+
+- Stage 35 clean gates remain `0/3`.
+- Restart 35 is a fix sweep, not a clean gate.

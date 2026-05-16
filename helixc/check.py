@@ -458,6 +458,22 @@ def _atomic_write_bytes(path: str, data: bytes) -> None:
         raise
 
 
+def _report_x86_codegen_exception(e: Exception) -> int:
+    msg = str(e)
+    if isinstance(e, ValueError) and msg.startswith("module has no function "):
+        print(f"helixc: codegen error: {msg}", file=sys.stderr)
+    else:
+        print(
+            f"helixc: internal error: {type(e).__name__}: {e}",
+            file=sys.stderr,
+        )
+        print(
+            "helixc: this is a compiler bug - please file an issue.",
+            file=sys.stderr,
+        )
+    return 1
+
+
 # ----------------------------------------------------------------------
 # Main dispatch
 # ----------------------------------------------------------------------
@@ -1709,6 +1725,7 @@ def _main_inner(argv: list[str] | None,
         try:
             elf = compile_module_to_elf(mod)
         except Exception as e:
+            return _report_x86_codegen_exception(e)
             print(
                 f"helixc: internal error: {type(e).__name__}: {e}",
                 file=sys.stderr,
@@ -1755,6 +1772,7 @@ def _main_inner(argv: list[str] | None,
         try:
             elf = compile_module_to_elf(mod)
         except Exception as e:
+            return _report_x86_codegen_exception(e)
             print(
                 f"helixc: internal error: {type(e).__name__}: {e}",
                 file=sys.stderr,

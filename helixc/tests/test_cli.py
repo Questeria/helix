@@ -1092,6 +1092,21 @@ def test_main_emit_asm_traps_backend_error(monkeypatch, capsys, tmp_path):
     assert "Traceback (most recent call last)" not in cap.err
 
 
+def test_stage35_emit_asm_missing_main_is_user_codegen_error(capsys, tmp_path):
+    src_path = str(tmp_path / "helper_only.hx")
+    with open(src_path, "w") as f:
+        f.write("fn helper() -> i32 { 1 }\n")
+
+    rc = main([src_path, "--emit-asm", "--no-stdlib"])
+    cap = capsys.readouterr()
+    assert rc == 1
+    assert "codegen error" in cap.err
+    assert "module has no function 'main'" in cap.err
+    assert "compiler bug" not in cap.err
+    assert "Traceback (most recent call last)" not in cap.err
+    assert cap.out == ""
+
+
 def test_main_o_traps_backend_error(monkeypatch, capsys, tmp_path):
     """Audit 28.8 A9: -o path wraps the backend call in try/except so
     internal compiler bugs surface as clean diagnostics."""
@@ -1113,6 +1128,22 @@ def test_main_o_traps_backend_error(monkeypatch, capsys, tmp_path):
     assert "internal error" in cap.err
     assert "ValueError" in cap.err
     # The output file should NOT have been created.
+    assert not os.path.exists(out_path)
+
+
+def test_stage35_output_binary_missing_main_is_user_codegen_error(capsys, tmp_path):
+    src_path = str(tmp_path / "helper_only.hx")
+    out_path = str(tmp_path / "out.bin")
+    with open(src_path, "w") as f:
+        f.write("fn helper() -> i32 { 1 }\n")
+
+    rc = main([src_path, "-o", out_path, "--no-stdlib"])
+    cap = capsys.readouterr()
+    assert rc == 1
+    assert "codegen error" in cap.err
+    assert "module has no function 'main'" in cap.err
+    assert "compiler bug" not in cap.err
+    assert "Traceback (most recent call last)" not in cap.err
     assert not os.path.exists(out_path)
 
 

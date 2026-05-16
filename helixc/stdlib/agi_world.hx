@@ -95,10 +95,12 @@ fn wmt_new(num_states: i32, num_actions: i32) -> i32 {
 fn wmt_set(wmt: i32, state: i32, action: i32, next_state: i32) -> i32 {
     let off = wmt_offset(wmt, state, action);
     if off < 0 { 0 - 1 }
+    else { if next_state < 0 { 0 - 1 }
+    else { if next_state >= __arena_get(wmt) { 0 - 1 }
     else {
         __arena_set(off, next_state);
         0
-    }
+    } } }
 }
 
 @pure
@@ -109,17 +111,33 @@ fn wmt_predict(wmt: i32, state: i32, action: i32) -> i32 {
 
 // ---- Linear scalar world model ---------------------------------------
 
+@pure fn wml_magic() -> i32 { 6007001 }
+
+@pure fn wml_footer() -> i32 { 0 - wml_magic() - 3 }
+
 fn wml_new(coef_state: i32, coef_action: i32, bias: i32) -> i32 {
+    __arena_push(wml_magic());
     let start = __arena_len();
     __arena_push(coef_state);
     __arena_push(coef_action);
     __arena_push(bias);
+    __arena_push(wml_footer());
     start
 }
 
 @pure
+fn wml_ok(wml: i32) -> i32 {
+    if wml <= 0 { 0 }
+    else { if __arena_get(wml - 1) != wml_magic() { 0 }
+    else { if wml + 3 >= __arena_len() { 0 }
+    else { if __arena_get(wml + 3) != wml_footer() { 0 }
+    else { 1 } } } }
+}
+
+@pure
 fn wml_predict(wml: i32, state: i32, action: i32) -> i32 {
-    __arena_get(wml) * state + __arena_get(wml + 1) * action + __arena_get(wml + 2)
+    if wml_ok(wml) == 0 { 0 - 1 }
+    else { __arena_get(wml) * state + __arena_get(wml + 1) * action + __arena_get(wml + 2) }
 }
 
 // ---- Self-supervised learning aid ------------------------------------
