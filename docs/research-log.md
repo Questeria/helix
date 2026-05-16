@@ -336,7 +336,7 @@ This compiles to Linux ELF that produces the correct exit code, with NO external
 ### Next session priorities
 - Function calls with array params/returns (matmul as a reusable function)
 - f32 floats (xmm regs + SSE instructions) — required for ML
-- Print syscall for richer observability (currently only exit codes)
+- Print syscall for richer observability (at this snapshot, only exit codes)
 - Real Tile IR matmul tiling rules
 - PTX kernel codegen
 - CUDA Driver API binding to launch on RTX 3070 / 5090

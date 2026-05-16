@@ -46,7 +46,7 @@ Parser + AST already support `match`, `if`-guards, `PatLit | PatBind | PatWildca
 - **Test:** `helixc/tests/test_match.py::test_match_int_literal_runs` — emit, run, assert exit code matches selected arm.
 
 ### 7. Match in autodiff: passthrough scrutinee, propagate gradients to selected arm (M) [done ea75ff6]
-- **File:** `helixc/frontend/autodiff.py` and `autodiff_reverse.py` — currently neither handles `A.Match`. Forward mode: differentiate the chosen arm; reverse mode: route the cotangent into the arm body.
+- **File:** `helixc/frontend/autodiff.py` and `autodiff_reverse.py` — at the time of this historical ticket, neither handled `A.Match`. Forward mode: differentiate the chosen arm; reverse mode: route the cotangent into the arm body.
 - **Test:** `helixc/tests/test_autodiff.py::test_grad_through_match` — `f(x) = match cond { true => 2*x, false => 3*x }` should yield `2` or `3` depending on cond.
 
 ---
@@ -146,7 +146,7 @@ When Tier A through Tier D above are mostly green, regenerate this file from the
 Generated 2026-05-04 evening after the enum-payload + struct-flatten + tuple-field epic landed (commits `a39a9aa`..`3a83a38`). This historical wave focused on (1) **closing the self-host gap** — payload pattern-extraction and struct-by-value were the two features then blocking a real `helixc-bootstrap` in HBS — (2) **paying down latent bugs** surfaced when struct/enum codegen landed, and (3) **tightening UX** so dogfood programs stopped hitting "unsupported" papercuts. Its old green-test growth target was a 2026-05-04 projection, not a current test count.
 
 ### 21. Payload pattern extraction in match arms (M) [done f5fa4a7]
-Today `Maybe::Some(x) => body` parses but the parser **discards the payload binders** (parser.py:1040-1060: "Skip the payload args for now") and lowers the whole arm as a tag-only `PatLit`. So users must write `match m[0] { 1 => m[1], _ => 0 }` — defeats the abstraction. Fix in three places:
+At the time of this historical ticket, `Maybe::Some(x) => body` parsed but the parser **discarded the payload binders** (parser.py:1040-1060: "Skip the payload args for now") and lowered the whole arm as a tag-only `PatLit`. Users had to write `match m[0] { 1 => m[1], _ => 0 }`, defeating the abstraction. The planned fix touched three places:
 - **Files:** `helixc/frontend/ast_nodes.py` add `class PatEnum(Pattern): enum_name: str, variant: str, binders: list[Pattern]`. `helixc/frontend/parser.py::_parse_pattern_atom` (~line 1040) — replace the "skip payload" branch with a real `_parse_pattern()` loop that collects sub-patterns. `helixc/frontend/match_lower.py::_pattern_test` add a `PatEnum` arm: emit `__scrut[0] == variant_idx` test and per-binder `let bi = __scrut[i+1]` lets injected before the body.
 - **Test:** `helixc/tests/test_match.py::test_match_extracts_enum_payload` — `enum Maybe { None, Some(i32) } fn main() -> i32 { let m = Maybe::Some(42); match m { Maybe::Some(x) => x, Maybe::None => 0 } }` should exit 42, not require manual `m[1]`.
 
@@ -161,7 +161,7 @@ Today `Maybe::Some(x) => body` parses but the parser **discards the payload bind
 - **Test:** `helixc/tests/test_codegen.py::test_inline_tuple_field_access` — `fn main() -> i32 { (10, 32, 0).0 + (10, 32, 0).1 }` should exit 42.
 
 ### 24. `print_int(i32)` builtin for diagnostic output (S)
-Today `print_str` only emits a literal — there's no way to print a runtime i32 from Helix code, which makes the dogfood programs print-statement-debug impossible. Add `print_int(n: i32)` that emits a `PRINT` op tagged `_kind="print_int"`. Backend formats decimal via repeated divide-by-10 into a 12-byte buffer + write(1, buf, len).
+At the time of this historical ticket, `print_str` only emitted a literal and runtime i32 printing was missing from Helix code. The planned fix added `print_int(n: i32)` that emits a `PRINT` op tagged `_kind="print_int"`, with backend decimal formatting via repeated divide-by-10 into a 12-byte buffer + write(1, buf, len).
 - **Files:** `helixc/frontend/typecheck.py` — add `"print_int"` to `_BUILTIN_NAMES` plus a Call handler returning `i32`. `helixc/ir/lower_ast.py::_lower_expr(A.Call)` add an intercept similar to `print_str`. `helixc/backend/x86_64.py` — emit a small int→ASCII routine inline (or a single emitted helper labelled `__print_int`).
 - **Test:** `helixc/tests/test_strings_io.py::test_print_int_decimal_output` — capture stdout from `fn main() -> i32 { print_int(2026); 0 }`, assert it contains `b"2026"`.
 
@@ -171,12 +171,12 @@ The current "skip payload" branch (parser.py:1052-1060) advances `self.i` based 
 - **Test:** `helixc/tests/test_parser.py::test_pattern_payload_handles_nested_parens` — `Foo::Bar((1, 2), 3)` should parse to a PatEnum (after #21) or skip cleanly (before #21) without dropping or eating the `=>`.
 
 ### 26. Static int-literal overflow check (S)
-Today `let x: i32 = 5_000_000_000;` silently truncates because `IntLit.value` is a Python int and lowering does `const_int(value & 0xFFFFFFFF)` (or similar). Add a typecheck-time bounds check: for any `IntLit` whose contextual type is fixed-width (`i8/i16/i32/i64/u8/...`), assert the value fits in that width's signed/unsigned range, else error with did-you-mean ("use `i64`?").
+At the time of this historical ticket, `let x: i32 = 5_000_000_000;` silently truncated because `IntLit.value` was a Python int and lowering did `const_int(value & 0xFFFFFFFF)` (or similar). The planned fix added a typecheck-time bounds check: for any `IntLit` whose contextual type is fixed-width (`i8/i16/i32/i64/u8/...`), assert the value fits in that width's signed/unsigned range, else error with did-you-mean ("use `i64`?").
 - **File:** `helixc/frontend/typecheck.py` — add `_check_int_lit_fits(lit, ty)`. Call it from `Let` (typed), `FnDecl` parameter defaults if any, and `Cast`.
 - **Test:** `helixc/tests/test_typecheck.py::test_int_literal_overflow_errors` — `let x: i32 = 5000000000;` errors with "value 5000000000 does not fit in i32".
 
 ### 27. Const-fold for division/modulo by literal one (S)
-`x / 1 = x` and `x % 1 = 0` aren't currently folded. The const-fold pass already handles `x*1`, `x+0`, etc. (Tier C #15). Mirror those rules.
+At the time of this historical ticket, `x / 1 = x` and `x % 1 = 0` were not folded. The const-fold pass already handled `x*1`, `x+0`, etc. (Tier C #15). The planned fix mirrored those rules.
 - **File:** find the const-fold table (grep `"x \\* 1"` in `helixc/ir/`); add `(DIV, x, 1) -> x` and `(MOD, x, 1) -> 0`.
 - **Test:** `helixc/tests/test_const_fold.py::test_x_div_one_folds`, `::test_x_mod_one_folds_to_zero`.
 

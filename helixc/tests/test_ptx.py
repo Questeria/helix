@@ -373,6 +373,31 @@ def test_stage35_direct_ptx_cli_ignores_host_helper_with_unsupported_tile_op():
     assert "elem.div" not in proc.stderr
 
 
+def test_stage35_direct_ptx_cli_ignores_host_ad_function():
+    src = """
+    fn loss(x: D<f64>, y: D<i32>) -> D<f64> { x + y }
+    @kernel fn k() { let i = thread_idx(); }
+    """
+    proc = run_ptx_cli(src)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert ".visible .entry k" in proc.stdout
+    assert "ad:" in proc.stderr
+    assert "unresolved generic type D" not in proc.stderr
+
+
+def test_stage35_direct_ptx_cli_drains_ad_warnings_on_error():
+    src = """
+    fn loss(x: D<f64>, y: D<i32>) -> D<f64> { x + y }
+    @kernel fn k() { let bad: i32 = true; }
+    """
+    proc = run_ptx_cli(src)
+    assert proc.returncode != 0, proc.stdout + proc.stderr
+    assert proc.stdout == ""
+    assert "error:" in proc.stderr
+    assert "ad:" in proc.stderr
+    assert "AD002" in proc.stderr or "24200" in proc.stderr
+
+
 def test_stage35_direct_ptx_cli_rejects_unwind_attr():
     proc = run_ptx_cli("@unwind @kernel fn k() { let i = thread_idx(); }\n")
     assert proc.returncode != 0, proc.stdout + proc.stderr

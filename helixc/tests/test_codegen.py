@@ -11049,6 +11049,34 @@ def test_negative_length_integer_min_max_return_empty_sentinel():
     assert code == 42, f"expected 42, got {code}"
 
 
+def test_stage35_public_2d_helpers_have_overflow_guards():
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    with open(os.path.join(root, "stdlib", "tensor.hx"), encoding="utf-8") as f:
+        tensor_src = f.read()
+    with open(os.path.join(root, "stdlib", "nn.hx"), encoding="utf-8") as f:
+        nn_src = f.read()
+
+    tensor_needles = [
+        "t2d_len(w_rows, w_cols) == 0",
+        "t2d_len(a_rows, a_cols) == 0",
+        "t2d_len(a_cols, b_cols) == 0",
+        "t2d_len(a_rows, b_cols) == 0",
+        "t2d_len(rows, cols) == 0",
+        "t1d_new(t2d_alloc_len(n, n))",
+        "t2d_len(n, n) == 0",
+    ]
+    for needle in tensor_needles:
+        assert needle in tensor_src
+
+    nn_needles = [
+        "t2d_len(w_rows, w_cols) == 0",
+        "t2d_len(rows, cols) == 0",
+        "t2d_len(classes, in_dim) == 0",
+    ]
+    for needle in nn_needles:
+        assert needle in nn_src
+
+
 def test_negative_2d_shape_helpers_treat_shape_as_empty():
     src = """
     fn main() -> i32 {

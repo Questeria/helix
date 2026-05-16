@@ -125,6 +125,7 @@ fn ti2d_matvec(w_start: i32, w_rows: i32, w_cols: i32,
                x_start: i32, y_start: i32) -> i32 {
     if w_rows <= 0 { 0 }
     else { if w_cols <= 0 { 0 }
+    else { if t2d_len(w_rows, w_cols) == 0 { 0 }
     else {
     let mut r: i32 = 0;
     while r < w_rows {
@@ -138,7 +139,7 @@ fn ti2d_matvec(w_start: i32, w_rows: i32, w_cols: i32,
         r = r + 1;
     }
     0
-    }}
+    }}}
 }
 
 // Element-wise: y[i] = relu(x[i]) for i in [0, n). Integer relu.
@@ -265,6 +266,7 @@ fn tf2d_matvec(w_start: i32, w_rows: i32, w_cols: i32,
                x_start: i32, y_start: i32) -> i32 {
     if w_rows <= 0 { 0 }
     else { if w_cols <= 0 { 0 }
+    else { if t2d_len(w_rows, w_cols) == 0 { 0 }
     else {
     let mut r: i32 = 0;
     while r < w_rows {
@@ -280,7 +282,7 @@ fn tf2d_matvec(w_start: i32, w_rows: i32, w_cols: i32,
         r = r + 1;
     }
     0
-    }}
+    }}}
 }
 
 // =========================================================================
@@ -385,6 +387,9 @@ fn ti2d_matmul(a_start: i32, a_rows: i32, a_cols: i32,
     if a_rows <= 0 { 0 }
     else { if a_cols <= 0 { 0 }
     else { if b_cols <= 0 { 0 }
+    else { if t2d_len(a_rows, a_cols) == 0 { 0 }
+    else { if t2d_len(a_cols, b_cols) == 0 { 0 }
+    else { if t2d_len(a_rows, b_cols) == 0 { 0 }
     else {
     let mut r: i32 = 0;
     while r < a_rows {
@@ -404,7 +409,7 @@ fn ti2d_matmul(a_start: i32, a_rows: i32, a_cols: i32,
         r = r + 1;
     }
     0
-    }}}
+    }}}}}}
 }
 
 // Reshape: copy n elements from src to dst. (For row-major tensors a
@@ -549,6 +554,9 @@ fn tf2d_matmul(a_start: i32, a_rows: i32, a_cols: i32,
     if a_rows <= 0 { 0 }
     else { if a_cols <= 0 { 0 }
     else { if b_cols <= 0 { 0 }
+    else { if t2d_len(a_rows, a_cols) == 0 { 0 }
+    else { if t2d_len(a_cols, b_cols) == 0 { 0 }
+    else { if t2d_len(a_rows, b_cols) == 0 { 0 }
     else {
     let mut r: i32 = 0;
     while r < a_rows {
@@ -568,7 +576,7 @@ fn tf2d_matmul(a_start: i32, a_rows: i32, a_cols: i32,
         r = r + 1;
     }
     0
-    }}}
+    }}}}}}
 }
 
 
@@ -593,6 +601,10 @@ fn tf1d_ones(n: i32) -> i32 {
 // major, where the new rows are the old columns). Caller pre-allocates
 // dst with t1d_new(rows*cols). Out-of-place; src untouched.
 fn ti2d_transpose(src: i32, rows: i32, cols: i32, dst: i32) -> i32 {
+    if rows <= 0 { 0 }
+    else { if cols <= 0 { 0 }
+    else { if t2d_len(rows, cols) == 0 { 0 }
+    else {
     let mut r: i32 = 0;
     while r < rows {
         let mut c: i32 = 0;
@@ -603,6 +615,7 @@ fn ti2d_transpose(src: i32, rows: i32, cols: i32, dst: i32) -> i32 {
         r = r + 1;
     }
     0
+    }}}
 }
 
 // ti1d_clamp(x, lo, hi, dst, n): elementwise clamp each x[i] into
@@ -685,6 +698,10 @@ fn tf1d_l1_norm(start: i32, n: i32) -> f32 {
 // tensors. f32 mirror of ti2d_transpose. Caller pre-allocates dst with
 // t1d_new(rows*cols).
 fn tf2d_transpose(src: i32, rows: i32, cols: i32, dst: i32) -> i32 {
+    if rows <= 0 { 0 }
+    else { if cols <= 0 { 0 }
+    else { if t2d_len(rows, cols) == 0 { 0 }
+    else {
     let mut r: i32 = 0;
     while r < rows {
         let mut c: i32 = 0;
@@ -695,6 +712,7 @@ fn tf2d_transpose(src: i32, rows: i32, cols: i32, dst: i32) -> i32 {
         r = r + 1;
     }
     0
+    }}}
 }
 
 // tf1d_clamp(x, lo, hi, dst, n): elementwise clamp each x[i] into [lo, hi].
@@ -894,6 +912,7 @@ fn tf1d_sum_in_range(start: i32, n: i32, lo: i32, hi: i32) -> f32 {
 fn tf2d_row_sum(start: i32, rows: i32, cols: i32, dst: i32) -> i32 {
     if rows <= 0 { 0 }
     else { if cols <= 0 { 0 }
+    else { if t2d_len(rows, cols) == 0 { 0 }
     else {
     let mut r: i32 = 0;
     while r < rows {
@@ -907,7 +926,7 @@ fn tf2d_row_sum(start: i32, rows: i32, cols: i32, dst: i32) -> i32 {
         r = r + 1;
     }
     0
-    }}
+    }}}
 }
 
 // tf2d_col_sum(start, rows, cols, dst): for each col c, write
@@ -915,6 +934,7 @@ fn tf2d_row_sum(start: i32, rows: i32, cols: i32, dst: i32) -> i32 {
 fn tf2d_col_sum(start: i32, rows: i32, cols: i32, dst: i32) -> i32 {
     if rows <= 0 { 0 }
     else { if cols <= 0 { 0 }
+    else { if t2d_len(rows, cols) == 0 { 0 }
     else {
     let mut c: i32 = 0;
     while c < cols {
@@ -928,7 +948,7 @@ fn tf2d_col_sum(start: i32, rows: i32, cols: i32, dst: i32) -> i32 {
         c = c + 1;
     }
     0
-    }}
+    }}}
 }
 
 // tf1d_arange(start_val, n): allocate a new f32 vec of length n with
@@ -987,19 +1007,22 @@ fn tf2d_diag(m: i32, rows: i32, cols: i32, dst: i32) -> i32 {
 // tf2d_eye(n): allocate a new n*n identity matrix (1.0 on diagonal,
 // 0.0 elsewhere). Returns the new start index.
 fn tf2d_eye(n: i32) -> i32 {
-    let s: i32 = __arena_len();
-    let one_bits = __bits_of_f32(1.0_f32);
-    let mut r: i32 = 0;
-    while r < n {
-        let mut c: i32 = 0;
-        while c < n {
-            if r == c { __arena_push(one_bits); }
-            else { __arena_push(0); };
-            c = c + 1;
+    let s = t1d_new(t2d_alloc_len(n, n));
+    if n <= 0 { s }
+    else { if t2d_len(n, n) == 0 { s }
+    else {
+        let one_bits = __bits_of_f32(1.0_f32);
+        let mut r: i32 = 0;
+        while r < n {
+            let mut c: i32 = 0;
+            while c < n {
+                if r == c { __arena_set(s + r * n + c, one_bits); };
+                c = c + 1;
+            }
+            r = r + 1;
         }
-        r = r + 1;
-    }
-    s
+        s
+    }}
 }
 
 // tf2d_trace(m, rows, cols): @pure. Sum of diagonal elements of a square

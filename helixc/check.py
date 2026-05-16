@@ -55,6 +55,7 @@ License: Apache 2.0
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import hashlib
 import sys
@@ -72,6 +73,57 @@ from .frontend import diagnostics as diag
 
 
 PROOF_SCHEMA = "helix.proof_obligations.v0"
+
+
+def _called_fn_names(value: object) -> set[str]:
+    names: set[str] = set()
+    seen: set[int] = set()
+
+    def visit(node: object) -> None:
+        if node is None or isinstance(node, (str, int, float, bool)):
+            return
+        if isinstance(node, (list, tuple)):
+            for item in node:
+                visit(item)
+            return
+        oid = id(node)
+        if oid in seen:
+            return
+        seen.add(oid)
+        if isinstance(node, A.Call) and isinstance(node.callee, A.Name):
+            names.add(node.callee.name)
+        if dataclasses.is_dataclass(node):
+            for field in dataclasses.fields(node):
+                visit(getattr(node, field.name))
+
+    visit(value)
+    return names
+
+
+def _kernel_reachable_program(prog: A.Program) -> A.Program:
+    fn_by_name = {
+        it.name: it for it in prog.items if isinstance(it, A.FnDecl)
+    }
+    keep: set[str] = {
+        it.name for it in prog.items
+        if isinstance(it, A.FnDecl) and "kernel" in it.attrs
+    }
+    queue = list(keep)
+    while queue:
+        fn = fn_by_name.get(queue.pop())
+        if fn is None:
+            continue
+        for callee in _called_fn_names(fn.body):
+            if callee in fn_by_name and callee not in keep:
+                keep.add(callee)
+                queue.append(callee)
+    return A.Program(
+        module=prog.module,
+        items=[
+            it for it in prog.items
+            if not isinstance(it, A.FnDecl) or it.name in keep
+        ],
+    )
 
 
 # ----------------------------------------------------------------------
@@ -1334,8 +1386,11 @@ def _main_inner(argv: list[str] | None,
         # We import lazily so check.py's start-up cost stays low for
         # programs that don't use grad().
         from .frontend.grad_pass import grad_pass
-        grad_pass(prog)
-        mod = lower(prog)
+        lower_prog = prog
+        if "--emit-ptx" in a.flags and "--strict" not in a.flags:
+            lower_prog = _kernel_reachable_program(prog)
+        grad_pass(lower_prog)
+        mod = lower(lower_prog)
         pre_opt_effect_scope = None
         if include_stdlib:
             pre_opt_effect_scope = diagnostic_function_names(mod)

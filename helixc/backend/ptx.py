@@ -626,7 +626,11 @@ def emit_ptx(tile_module: ti.TileModule, target: str = DEFAULT_TARGET) -> str:
 # CLI
 # ============================================================================
 if __name__ == "__main__":
+    import atexit
+    import dataclasses
     import sys
+    from ..frontend import ast_nodes as A
+    from ..frontend.autodiff import take_diff_warnings
     from ..frontend.lexer import LexError
     from ..frontend.parser import parse, ParseError, STDLIB_STRICT_ENV
     from ..frontend.typecheck import typecheck
@@ -649,6 +653,67 @@ if __name__ == "__main__":
         report_diagnostics as report_effect_diagnostics,
     )
     from ..ir.tile_ir import lower_to_tile
+
+    take_diff_warnings()
+
+    def _drain_cli_ad_warnings() -> None:
+        ad_warnings = take_diff_warnings()
+        if not ad_warnings:
+            return
+        print(f"   ad:        {len(ad_warnings)} warning(s)", file=sys.stderr)
+        for warning in ad_warnings:
+            print(f"     helixc: {warning}", file=sys.stderr)
+
+    atexit.register(_drain_cli_ad_warnings)
+
+    def _called_fn_names(value: object) -> set[str]:
+        names: set[str] = set()
+        seen: set[int] = set()
+
+        def visit(node: object) -> None:
+            if node is None or isinstance(node, (str, int, float, bool)):
+                return
+            if isinstance(node, (list, tuple)):
+                for item in node:
+                    visit(item)
+                return
+            oid = id(node)
+            if oid in seen:
+                return
+            seen.add(oid)
+            if isinstance(node, A.Call) and isinstance(node.callee, A.Name):
+                names.add(node.callee.name)
+            if dataclasses.is_dataclass(node):
+                for field in dataclasses.fields(node):
+                    visit(getattr(node, field.name))
+
+        visit(value)
+        return names
+
+    def _kernel_reachable_program(prog: A.Program) -> A.Program:
+        fn_by_name = {
+            it.name: it for it in prog.items if isinstance(it, A.FnDecl)
+        }
+        keep: set[str] = {
+            it.name for it in prog.items
+            if isinstance(it, A.FnDecl) and "kernel" in it.attrs
+        }
+        queue = list(keep)
+        while queue:
+            fn = fn_by_name.get(queue.pop())
+            if fn is None:
+                continue
+            for callee in _called_fn_names(fn.body):
+                if callee in fn_by_name and callee not in keep:
+                    keep.add(callee)
+                    queue.append(callee)
+        return A.Program(
+            module=prog.module,
+            items=[
+                it for it in prog.items
+                if not isinstance(it, A.FnDecl) or it.name in keep
+            ],
+        )
 
     cli_args = sys.argv[1:]
     if not cli_args:
@@ -754,8 +819,9 @@ if __name__ == "__main__":
     if had_validation_error:
         sys.exit(1)
     try:
-        grad_pass(prog)
-        tir_mod = lower(prog)
+        kernel_prog = prog if strict else _kernel_reachable_program(prog)
+        grad_pass(kernel_prog)
+        tir_mod = lower(kernel_prog)
         pre_effect_scope = None
         if include_stdlib:
             pre_effect_scope = diagnostic_function_names(tir_mod)

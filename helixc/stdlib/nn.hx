@@ -21,6 +21,7 @@ fn dense_layer_forward(w_start: i32, w_rows: i32, w_cols: i32,
                        x_start: i32, b_start: i32, y_start: i32) -> i32 {
     if w_rows <= 0 { 0 }
     else { if w_cols <= 0 { 0 }
+    else { if t2d_len(w_rows, w_cols) == 0 { 0 }
     else {
     ti2d_matvec(w_start, w_rows, w_cols, x_start, y_start);
     let mut r: i32 = 0;
@@ -30,7 +31,7 @@ fn dense_layer_forward(w_start: i32, w_rows: i32, w_cols: i32,
         r = r + 1;
     }
     0
-    }}
+    }}}
 }
 
 // Element-wise relu in-place: y[i] = max(0, x[i]). Returns 0.
@@ -246,6 +247,7 @@ fn dense_layer_f32_forward(w_start: i32, w_rows: i32, w_cols: i32,
                            x_start: i32, b_start: i32, y_start: i32) -> i32 {
     if w_rows <= 0 { 0 }
     else { if w_cols <= 0 { 0 }
+    else { if t2d_len(w_rows, w_cols) == 0 { 0 }
     else {
     tf2d_matvec(w_start, w_rows, w_cols, x_start, y_start);
     let mut r: i32 = 0;
@@ -256,13 +258,17 @@ fn dense_layer_f32_forward(w_start: i32, w_rows: i32, w_cols: i32,
         r = r + 1;
     }
     0
-    }}
+    }}}
 }
 
 // Dense layer backward helpers for y = W @ x + b.
 // grad_w[r, c] = grad_y[r] * x[c]
 fn dense_layer_f32_grad_w(dy_start: i32, x_start: i32,
                           grad_w_start: i32, rows: i32, cols: i32) -> i32 {
+    if rows <= 0 { 0 }
+    else { if cols <= 0 { 0 }
+    else { if t2d_len(rows, cols) == 0 { 0 }
+    else {
     let mut r: i32 = 0;
     while r < rows {
         let dy = __f32_from_bits(__arena_get(dy_start + r));
@@ -275,6 +281,7 @@ fn dense_layer_f32_grad_w(dy_start: i32, x_start: i32,
         r = r + 1;
     }
     0
+    }}}
 }
 
 fn dense_layer_f32_grad_b(dy_start: i32, grad_b_start: i32, rows: i32) -> i32 {
@@ -291,6 +298,7 @@ fn dense_layer_f32_grad_x(w_start: i32, dy_start: i32,
                           grad_x_start: i32, rows: i32, cols: i32) -> i32 {
     if rows <= 0 { 0 }
     else { if cols <= 0 { 0 }
+    else { if t2d_len(rows, cols) == 0 { 0 }
     else {
     let mut c: i32 = 0;
     while c < cols {
@@ -306,7 +314,7 @@ fn dense_layer_f32_grad_x(w_start: i32, dy_start: i32,
         c = c + 1;
     }
     0
-    }}
+    }}}
 }
 
 // Leaky ReLU.
@@ -526,6 +534,7 @@ fn softmax_rows_f32(logits_start: i32, probs_start: i32,
                     rows: i32, cols: i32) -> i32 {
     if rows <= 0 { 0 }
     else { if cols <= 0 { 0 }
+    else { if t2d_len(rows, cols) == 0 { 0 }
     else {
         let mut r: i32 = 0;
         while r < rows {
@@ -535,13 +544,14 @@ fn softmax_rows_f32(logits_start: i32, probs_start: i32,
             r = r + 1;
         }
         0
-    }}
+    }}}
 }
 
 fn softmax_ce_grad_f32(probs_start: i32, target_start: i32,
                        grad_start: i32, rows: i32, cols: i32) -> i32 {
     if rows <= 0 { 0 }
     else { if cols <= 0 { 0 }
+    else { if t2d_len(rows, cols) == 0 { 35001 }
     else {
         let mut r: i32 = 0;
         while r < rows {
@@ -575,7 +585,7 @@ fn softmax_ce_grad_f32(probs_start: i32, target_start: i32,
             }
             0
         }
-    }}
+    }}}
 }
 
 fn dense_classifier_sgd_step_f32(w_start: i32, b_start: i32, x_start: i32,
@@ -585,6 +595,7 @@ fn dense_classifier_sgd_step_f32(w_start: i32, b_start: i32, x_start: i32,
     let in_dim = __arena_get(shape_start + 1);
     if classes <= 0 { 35001 }
     else { if in_dim <= 0 { 35001 }
+    else { if t2d_len(classes, in_dim) == 0 { 35001 }
     else {
         if target < 0 { 35001 }
         else { if target >= classes { 35001 }
@@ -651,7 +662,7 @@ fn dense_classifier_sgd_step_f32(w_start: i32, b_start: i32, x_start: i32,
             }
             0
         }}
-    }}
+    }}}
 }
 
 // BCE.
@@ -683,6 +694,7 @@ fn argmax_rows_f32(logits_start: i32, rows: i32, cols: i32,
                    out_start: i32) -> i32 {
     if rows <= 0 { 0 }
     else { if cols <= 0 { 0 }
+    else { if t2d_len(rows, cols) == 0 { 0 }
     else {
         let mut r: i32 = 0;
         while r < rows {
@@ -702,7 +714,7 @@ fn argmax_rows_f32(logits_start: i32, rows: i32, cols: i32,
             r = r + 1;
         }
         0
-    }}
+    }}}
 }
 
 @pure
@@ -710,6 +722,7 @@ fn accuracy_count_from_logits_f32(logits_start: i32, target_start: i32,
                                   rows: i32, cols: i32) -> i32 {
     if rows <= 0 { 0 }
     else { if cols <= 0 { 0 }
+    else { if t2d_len(rows, cols) == 0 { 0 }
     else {
         let mut r: i32 = 0;
         let mut hits: i32 = 0;
@@ -732,7 +745,7 @@ fn accuracy_count_from_logits_f32(logits_start: i32, target_start: i32,
             r = r + 1;
         }
         hits
-    }}
+    }}}
 }
 
 @pure
@@ -740,6 +753,7 @@ fn ce_loss_batch_f32(probs_start: i32, target_start: i32,
                      rows: i32, cols: i32) -> f32 {
     if rows <= 0 { 0.0_f32 }
     else { if cols <= 0 { 0.0_f32 }
+    else { if t2d_len(rows, cols) == 0 { 1000000.0_f32 }
     else {
         let mut r: i32 = 0;
         let mut total: f32 = 0.0_f32;
@@ -762,7 +776,7 @@ fn ce_loss_batch_f32(probs_start: i32, target_start: i32,
         }
         if invalid == 1 { 1000000.0_f32 }
         else { total / (rows as f32) }
-    }}
+    }}}
 }
 
 // argmin: index of smallest element. Companion to argmax.

@@ -1209,6 +1209,50 @@ Focused verification:
   - Result: 4 passed.
 - Docs scan for stale IO, competitor-exclusivity, clean-gate, and work-queue
   projection wording
+  - Result: the initial regex found no matches, but the restart 17 docs lane
+    later found additional historical IO/work-queue wording. That follow-up is
+    fixed in Increment 36.
+
+Clean-gate status:
+
+- Stage 35 clean gates remain `0/3`.
+- Next step is another fresh Stage 35 clean gate on this fixed commit.
+
+## Increment 36 - Seventeenth Clean-Gate Restart Fix Sweep
+
+The widened restart 17 audit protocol reported whole issue families instead of
+stopping at the first bug. It found 2D shape-overflow gaps in tensor/NN helpers,
+PTX artifact isolation gaps, and additional historical documentation wording.
+The gate did not count as clean and remains at `0/3`.
+
+Fixes landed in this increment:
+
+- Public 2D tensor helpers now gate positive shapes through `t2d_len` before
+  row-major loops or offset math. Covered families include matvec, matmul,
+  transpose, row/column sum, and `tf2d_eye`.
+- NN helpers now apply the same 2D overflow guard before dense, softmax,
+  classifier, argmax, accuracy, and batch CE row-major work.
+- `helixc.check --emit-ptx` and direct `helixc.backend.ptx` now filter to the
+  kernel AST before lowering, so unrelated host AD functions do not block a
+  clean PTX artifact.
+- Direct `helixc.backend.ptx` now drains AD warnings to stderr on exit.
+- Historical research/work-queue docs now phrase old IO and landed-ticket
+  claims as snapshot wording, and this progress note acknowledges the restart
+  17 follow-up docs finding.
+
+Focused verification:
+
+- Per-file stdlib parser sweep across `STDLIB_FILES`
+  - Result: parsed 16 stdlib files.
+- `python -m py_compile helixc\check.py helixc\backend\ptx.py`
+  - Result: passed.
+- `python -m pytest helixc\tests\test_codegen.py -k "stage35_public_2d_helpers_have_overflow_guards or tensor_2d_matvec or tensor_ti2d_matmul or negative_ti2d_matmul_shapes_do_not_write_outputs or negative_2d_matvec_shapes_do_not_write_outputs or negative_dense_layer_shapes_do_not_write_outputs or nn_dense_classifier_sgd_step_f32 or nn_softmax_rows_f32 or nn_argmax_rows_f32 or nn_accuracy_count_from_logits_f32 or nn_ce_loss_batch_f32 or stdlib_tf2d_eye or stdlib_tf2d_row_sum or stdlib_tf2d_col_sum or negative_tf2d_row_col_sum_shapes_do_not_write_outputs or stdlib_tf2d_transpose" -q`
+  - Result: 24 passed.
+- `python -m pytest helixc\tests\test_cli.py -k "emit_ptx" -q`
+  - Result: 17 passed.
+- `python -m pytest helixc\tests\test_ptx.py -q`
+  - Result: 70 passed.
+- Docs scan for stale historical IO/work-queue wording in current research docs
   - Result: no matches.
 
 Clean-gate status:
