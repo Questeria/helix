@@ -399,11 +399,11 @@ export const STUB_BOOTSTRAP_CHAIN: BootstrapStage[] = [
   },
   {
     name: 'kovc',
-    title: 'kovc — self-hosted Helix',
+    title: 'kovc — self-host target',
     sizeBytes: 50000,
     sourceLanguage: 'Helix',
-    capability: 'Self-hosting Helix compiler. Compiles itself byte-identically.',
-    compiles: 'itself',
+    capability: 'Target Helix compiler in Helix; not the shipped production compiler yet.',
+    compiles: 'future self-host',
   },
 ];
 

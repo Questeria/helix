@@ -35,7 +35,7 @@
 
 - "A language stack growing from a 299-byte audited bootstrap root."
 - "Systems performance, math notation, autodiff in the language."
-- "The language that compiles itself — designed for machine learning, built from raw binary."
+- "A language stack growing toward self-hosted machine learning, built from raw binary."
 - "Helix: from one audited machine-code root toward a self-hosting ML compiler."
 
 ### Three-pillar pitch (use as feature triplet)
@@ -891,7 +891,7 @@ The trust root of Helix is **299 bytes of hand-encoded x86-64 machine code**: `h
                     └─────────────────┘  (in Helix itself)
 ```
 
-Total bytes you must trust: **120**. Everything else is auditable, reproducible, and compiles deterministically from the previous stage.
+Current bootstrap root to audit: **299 bytes**. Later self-hosting steps remain roadmap targets until the Helix compiler can compile itself reproducibly.
 
 This is in the spirit of [Bootstrappable Builds](https://bootstrappable.org) and [GNU Mes](https://www.gnu.org/software/mes/), but built from scratch for an ML-focused language.
 
@@ -904,7 +904,7 @@ This is in the spirit of [Bootstrappable Builds](https://bootstrappable.org) and
 ```
 Kovostov-Native/
 ├── stage0/             # hex0, hex1, M0, M1, M2-Planet
-│   ├── hex0/           # 120-byte hand-encoded bootstrap
+│   ├── hex0/           # 299-byte audited bootstrap root
 │   ├── hex1/
 │   └── ...
 ├── helixc/             # the Helix compiler
@@ -1047,7 +1047,7 @@ The Kovostov AGI project (which Helix is the foundation for) commits to training
 
 ### Reproducibility
 
-- The compiler is deterministic: same source → byte-identical binary.
+- Deterministic rebuilds are a verification target for the compiler and bootstrap chain.
 - The bootstrap chain is reproducible: anyone can rebuild from `hex0` and verify.
 - All training data manifests are public and content-addressed.
 
@@ -1351,7 +1351,7 @@ fn main() -> i32 {
 |------|---------|
 | **kovc** | The Helix compiler binary (named after Kovostov). |
 | **kovc.hx** | The Helix source file that, when compiled by kovc, produces kovc. (Self-hosting.) |
-| **hex0** | The 120-byte hand-encoded x86-64 program at the root of the bootstrap chain. |
+| **hex0** | The 299-byte hand-encoded x86-64 program at the root of the bootstrap chain. |
 | **HBS** | Helix Bootstrap Subset — the minimal language subset that kovc.hx itself uses. Documented in `docs/lang/hbs.md`. |
 | **AST tag** | An i32 numeric ID for an AST node kind. 100+ tags total. |
 | **Trap-id** | A unique numeric ID embedded after a `ud2` instruction; `AST_TAG * 1000 + sub_id`. |

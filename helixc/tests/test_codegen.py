@@ -11057,12 +11057,13 @@ def test_stage35_public_2d_helpers_have_overflow_guards():
         nn_src = f.read()
 
     tensor_needles = [
+        "__arena_get(start - 2)",
         "t2d_len(w_rows, w_cols) == 0",
         "t2d_len(a_rows, a_cols) == 0",
         "t2d_len(a_cols, b_cols) == 0",
         "t2d_len(a_rows, b_cols) == 0",
         "t2d_len(rows, cols) == 0",
-        "t1d_new(t2d_alloc_len(n, n))",
+        "t2d_new(n, n)",
         "t2d_len(n, n) == 0",
     ]
     for needle in tensor_needles:
@@ -11138,6 +11139,29 @@ def test_stage35_2d_accessors_reject_out_of_row_offsets():
             tf2d_set(mf, 1, 0, 1, 99.0_f32);
             if (tf1d_get(mf, 1) as i32) == 42 {
             if (tf2d_get(mf, 1, 0, 1) as i32) == 0 { 42 } else { 7 }
+            } else { 7 }
+        } else { 7 }} else { 7 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stage35_2d_accessors_reject_row_oob_offsets():
+    src = """
+    fn main() -> i32 {
+        let m = ti2d_new(1, 1);
+        let guard = t1d_new(1);
+        __arena_set(guard, 42);
+        ti2d_set(m, 1, 1, 0, 99);
+        if __arena_get(guard) == 42 {
+        if ti2d_get(m, 1, 1, 0) == 0 {
+            let mf = tf2d_zeros(1, 1);
+            let fguard = t1d_new(1);
+            tf1d_set(fguard, 0, 42.0_f32);
+            tf2d_set(mf, 1, 1, 0, 99.0_f32);
+            if (tf1d_get(fguard, 0) as i32) == 42 {
+            if (tf2d_get(mf, 1, 1, 0) as i32) == 0 { 42 } else { 7 }
             } else { 7 }
         } else { 7 }} else { 7 }
     }

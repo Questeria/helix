@@ -1,7 +1,6 @@
 # Kovostov-Native — Plan
 
-**Status**: Phase 0 (bootstrap chain). Created 2026-05-03.
-**This document is living.** Updated as the work teaches us what's wrong with it. See `decisions/` for dated rationales.
+**Status**: Historical planning snapshot created 2026-05-03. Current project status lives in `README.md`, `docs/ROADMAP.md`, and the latest Stage progress ledger. This file is useful for original intent, not as current status.
 
 ---
 
@@ -15,7 +14,7 @@
 
 ## Vision
 
-Kovostov is the first flagship artificial-general-intelligence system built layer-by-layer from raw binary, with every layer auditable. The bootstrap chain produces Helix and `helixc`, a self-hosted language/compiler stack targeting x86-64 + NVIDIA PTX directly.
+Kovostov is the first flagship artificial-general-intelligence system built layer-by-layer from raw binary, with every layer auditable. The bootstrap chain targets Helix and `helixc`, with a future self-hosted language/compiler stack targeting x86-64 + NVIDIA PTX directly.
 
 Helix itself is broader than Kovostov. Its purpose is to become a dominant open language for AGI development and for any science, medicine, engineering, mathematics, or industrial system that benefits from auditable computation, explicit provenance, and aggressive uncertainty reduction. The language is designed for AI to read and write; AI systems written in Helix run on the Helix runtime; those systems eventually rewrite and extend themselves under verifier gates.
 
@@ -27,14 +26,14 @@ Helix itself is broader than Kovostov. Its purpose is to become a dominant open 
 | Language | **Helix** (`.hx`) | typed AGI and high-certainty computing language |
 | Compiler | **`helixc`** | Helix → x86-64 + PTX |
 | Runtime | **`helixrt`** | loads compiled kernels, manages devices |
-| Bootstrap chain | hex0 → hex1 → M0 → M1 → M2 → C-subset → helixc-bootstrap → helixc (self-hosted) | stage0 lineage |
+| Bootstrap chain | hex0 → hex1 → M0 → M1 → M2 → C-subset → helixc-bootstrap → helixc self-host target | stage0 lineage |
 
-## The bootstrap chain (Phase 0–1)
+## Historical Bootstrap-Chain Plan
 
 Modeled on stage0 / Live Bootstrap / GNU Mes. Each stage source is in plain text; each stage *binary* is produced by the previous stage. A tiny seed at the bottom is hand-encoded.
 
 ```
-hex0 seed (~200 bytes hand-encoded)
+hex0 seed (currently 299 bytes hand-encoded)
    reads: hex characters; writes: bytes
    ↓ hand-encoded; verified by objdump and nasm cross-check
 hex1 (~600 bytes, in hex0 input format)
@@ -52,7 +51,7 @@ M2-Planet (port; ~few hundred KB, in M1 input format)
 helixc-bootstrap (in M2 C-subset, ~5–10 kLOC)
    accepts: the bootstrap subset of Helix
    ↓
-helixc (in Helix, self-hosted)
+helixc self-host target (in Helix)
    accepts: full Helix
 ```
 
@@ -96,7 +95,7 @@ Tile IR (explicit tiles, memory spaces, async ops, layouts)
 
 ## Phase roadmap
 
-### Phase 0 — Stage0 bootstrap chain (months 1–6)
+### Historical Stage0 Bootstrap-Chain Plan (months 1-6)
 - hex0 seed (hand-encoded)
 - hex1 → M0 → M1 → M2-Planet
 - helixc-bootstrap in C-subset

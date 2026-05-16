@@ -1389,6 +1389,24 @@ def _main_inner(argv: list[str] | None,
         # We import lazily so check.py's start-up cost stays low for
         # programs that don't use grad().
         from .frontend.grad_pass import grad_pass
+        strict_full_eff_errs = []
+        if "--emit-ptx" in a.flags and "--strict" in a.flags:
+            try:
+                strict_full_mod = lower(prog)
+                strict_full_scope = None
+                if include_stdlib:
+                    strict_full_scope = diagnostic_function_names(
+                        strict_full_mod)
+                strict_full_eff_errs = effect_check_module(
+                    strict_full_mod, only_functions=strict_full_scope)
+            except Exception as e:
+                if "unresolved generic type D" not in str(e):
+                    print(
+                        f"helixc: strict validation error: "
+                        f"{type(e).__name__}: {e}",
+                        file=sys.stderr,
+                    )
+                    return 1
         lower_prog = prog
         if "--emit-ptx" in a.flags:
             lower_prog = _kernel_reachable_program(prog)
@@ -1479,7 +1497,10 @@ def _main_inner(argv: list[str] | None,
         # so check.py and x86_64.py share one printing implementation.
         post_opt_eff_errs = effect_check_module(
             mod, only_functions=effect_scope)
-        eff_errs = list(pre_opt_eff_errs)
+        eff_errs = list(strict_full_eff_errs)
+        for err in pre_opt_eff_errs:
+            if err not in eff_errs:
+                eff_errs.append(err)
         seen_eff_errs = set(eff_errs)
         for err in post_opt_eff_errs:
             if err not in seen_eff_errs:

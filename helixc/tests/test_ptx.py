@@ -385,6 +385,32 @@ def test_stage35_direct_ptx_cli_ignores_host_ad_function():
     assert "unresolved generic type D" not in proc.stderr
 
 
+def test_stage35_direct_ptx_cli_strict_ignores_host_ad_function():
+    src = """
+    fn loss(x: D<f64>, y: D<i32>) -> D<f64> { x + y }
+    @kernel fn k() { let i = thread_idx(); }
+    """
+    proc = run_ptx_cli(src, "--strict")
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert ".visible .entry k" in proc.stdout
+    assert "ad:" in proc.stderr
+    assert "unresolved generic type D" not in proc.stderr
+    assert "compiler bug" not in proc.stderr
+
+
+def test_stage35_direct_ptx_cli_wad_error_keeps_stdout_empty():
+    src = """
+    fn loss(x: D<f64>, y: D<i32>) -> D<f64> { x + y }
+    @kernel fn k() { let i = thread_idx(); }
+    """
+    proc = run_ptx_cli(src, "-Wad=error")
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    assert proc.stdout == ""
+    assert "ad:" in proc.stderr
+    assert "ERROR" in proc.stderr
+    assert "AD002" in proc.stderr or "24200" in proc.stderr
+
+
 def test_stage35_direct_ptx_cli_drains_ad_warnings_on_error():
     src = """
     fn loss(x: D<f64>, y: D<i32>) -> D<f64> { x + y }

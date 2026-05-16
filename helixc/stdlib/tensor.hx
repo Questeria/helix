@@ -53,17 +53,42 @@
     else { if rows > 2147483647 / cols { 1 } else { rows * cols } } }
 }
 
+@pure fn t2d_magic() -> i32 { 2002001 }
+
+@pure fn t2d_new(rows: i32, cols: i32) -> i32 {
+    let n = t2d_len(rows, cols);
+    if n <= 0 {
+        t1d_new(t2d_alloc_len(rows, cols))
+    } else {
+        let start = __arena_len();
+        __arena_push(t2d_magic());
+        __arena_push(rows);
+        __arena_push(cols);
+        let mut i: i32 = 0;
+        while i < n {
+            __arena_push(0);
+            i = i + 1;
+        }
+        start + 3
+    }
+}
+
 @pure fn t2d_offset(start: i32, cols: i32, i: i32, j: i32) -> i32 {
     if start < 0 { 0 - 1 }
+    else { if start < 3 { 0 - 1 } else {
+    let rows = __arena_get(start - 2);
+    if __arena_get(start - 3) != t2d_magic() { 0 - 1 }
+    else { if __arena_get(start - 1) != cols { 0 - 1 }
     else { if cols <= 0 { 0 - 1 }
+    else { if rows <= 0 { 0 - 1 }
     else { if i < 0 { 0 - 1 }
+    else { if i >= rows { 0 - 1 }
     else { if j < 0 { 0 - 1 }
     else { if j >= cols { 0 - 1 }
-    else { if i > (2147483647 - j) / cols { 0 - 1 }
-    else {
+    else { if i > (2147483647 - j) / cols { 0 - 1 } else {
         let linear = i * cols + j;
         if linear > 2147483647 - start { 0 - 1 } else { start + linear }
-    }}}}}}
+    }}}}}}}}}}}
 }
 
 fn t1d_set_i32_bits(start: i32, i: i32, bits: i32) -> i32 {
@@ -120,8 +145,7 @@ fn ti1d_axpy(y_start: i32, a: i32, x_start: i32, n: i32) -> i32 {
 
 // 2D row-major access: M[i,j] lives at slot start + i*cols + j.
 @pure fn ti2d_new(rows: i32, cols: i32) -> i32 {
-    let n = t2d_alloc_len(rows, cols);
-    t1d_new(n)
+    t2d_new(rows, cols)
 }
 
 fn ti2d_set(start: i32, cols: i32, i: i32, j: i32, x: i32) -> i32 {
@@ -1029,7 +1053,7 @@ fn tf2d_diag(m: i32, rows: i32, cols: i32, dst: i32) -> i32 {
 // tf2d_eye(n): allocate a new n*n identity matrix (1.0 on diagonal,
 // 0.0 elsewhere). Returns the new start index.
 fn tf2d_eye(n: i32) -> i32 {
-    let s = t1d_new(t2d_alloc_len(n, n));
+    let s = t2d_new(n, n);
     if n <= 0 { s }
     else { if t2d_len(n, n) == 0 { s }
     else {
@@ -1094,13 +1118,13 @@ fn tf2d_norm_frobenius_sq(start: i32, rows: i32, cols: i32) -> f32 {
 // tf2d_zeros(rows, cols): allocate a new rows*cols matrix filled with 0.0_f32.
 @pure
 fn tf2d_zeros(rows: i32, cols: i32) -> i32 {
-    t1d_new(t2d_alloc_len(rows, cols))
+    t2d_new(rows, cols)
 }
 
 // tf2d_ones(rows, cols): allocate a new rows*cols matrix filled with 1.0_f32.
 fn tf2d_ones(rows: i32, cols: i32) -> i32 {
-    let n = t2d_alloc_len(rows, cols);
-    let s = t1d_new(n);
+    let n = t2d_len(rows, cols);
+    let s = t2d_new(rows, cols);
     let one_bits = __bits_of_f32(1.0_f32);
     let mut i: i32 = 0;
     while i < n {

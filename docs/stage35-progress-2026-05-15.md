@@ -1349,6 +1349,57 @@ Clean-gate status:
 - Stage 35 clean gates remain `0/3`.
 - Next step is another fresh Stage 35 clean gate on this fixed commit.
 
+## Increment 39 - Twentieth Clean-Gate Restart Fix Sweep
+
+Restart 20 began from commit `b776d2a` with green smoke checks and supporting
+regression slices, but all three audit lanes found remaining issues. The gate
+did not count as clean and remains at `0/3`.
+
+Fixes landed in this increment:
+
+- 2D tensors now carry lightweight row/column metadata through `t2d_new`, so
+  direct `ti2d_*` and `tf2d_*` accessors can reject row-index out-of-bounds
+  accesses instead of clobbering later arena allocations.
+- `helixc.check --emit-ptx --strict` now validates full-program effects before
+  kernel filtering, while keeping PTX artifact lowering restricted to
+  kernel-reachable code.
+- Direct `helixc.backend.ptx --strict` now mirrors the public CLI path for
+  host-only AD helpers, and direct PTX now supports `-Wad=error`.
+- Public docs, website draft docs, API contracts, and the historical plan
+  snapshot were cleaned so old 120-byte, shipped self-hosting, `3000+` test,
+  and absolute comparison claims do not remain on public status surfaces.
+
+Focused verification:
+
+- Per-file stdlib parser sweep across `helixc/stdlib/*.hx`
+  - Result: parsed 16 stdlib files.
+- `python -m py_compile helixc\check.py helixc\backend\ptx.py`
+  - Result: passed.
+- `python -m pytest helixc/tests/test_codegen.py -k "stage35_2d_accessors or public_2d_helpers" -q`
+  - Result: 5 passed.
+- `python -m pytest helixc/tests/test_cli.py -k "stage35_emit_ptx" -q`
+  - Result: 11 passed.
+- `python -m pytest helixc/tests/test_ptx.py -k "stage35_direct_ptx_cli" -q`
+  - Result: 20 passed.
+- `python -m pytest helixc/tests/test_codegen.py -k "t1d or t2d or ti2d or tf2d or tensor or stage35_2d" -q`
+  - Result: 45 passed.
+- `python -m pytest helixc/tests/test_cli.py -q`
+  - Result: 156 passed.
+- `python -m pytest helixc/tests/test_ptx.py -q`
+  - Result: 72 passed.
+- `python -m pytest helixc/tests/test_autodiff_reverse.py -q`
+  - Result: 29 passed.
+- `python -m pytest helixc/tests --collect-only -q -p no:cacheprovider`
+  - Result: 2,258 tests collected.
+- Public-doc stale claim scan for old status/test/self-hosting/120-byte/3000+
+  phrases
+  - Result: no matches.
+
+Clean-gate status:
+
+- Stage 35 clean gates remain `0/3`.
+- Next step is another fresh Stage 35 clean gate on this fixed commit.
+
 ## Next Work
 
 Likely follow-up slices:

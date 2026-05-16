@@ -654,15 +654,20 @@ if __name__ == "__main__":
     )
     from ..ir.tile_ir import lower_to_tile
 
+    ad_policy = "warn"
     take_diff_warnings()
 
-    def _drain_cli_ad_warnings() -> None:
+    def _drain_cli_ad_warnings() -> int:
         ad_warnings = take_diff_warnings()
         if not ad_warnings:
-            return
-        print(f"   ad:        {len(ad_warnings)} warning(s)", file=sys.stderr)
+            return 0
+        label = "ERROR" if ad_policy == "error" else "warning"
+        print(f"   ad:        {len(ad_warnings)} {label}(s)", file=sys.stderr)
         for warning in ad_warnings:
             print(f"     helixc: {warning}", file=sys.stderr)
+        if ad_policy == "error":
+            return 1
+        return 0
 
     atexit.register(_drain_cli_ad_warnings)
 
@@ -719,7 +724,7 @@ if __name__ == "__main__":
     if not cli_args:
         print("error: ptx: missing input path", file=sys.stderr)
         sys.exit(2)
-    allowed_flags = {"--strict", "--stdlib", "--no-stdlib"}
+    allowed_flags = {"--strict", "--stdlib", "--no-stdlib", "-Wad=error"}
     flags = {a for a in cli_args if a.startswith("-")}
     unknown_flags = sorted(flags - allowed_flags)
     if unknown_flags:
@@ -727,6 +732,7 @@ if __name__ == "__main__":
             print(f"error: ptx: unknown flag {flag}", file=sys.stderr)
         sys.exit(2)
     strict = "--strict" in flags
+    ad_policy = "error" if "-Wad=error" in flags else "warn"
     include_stdlib = "--no-stdlib" not in flags
     paths = [a for a in cli_args if not a.startswith("-")]
     if not paths:
@@ -819,7 +825,20 @@ if __name__ == "__main__":
     if had_validation_error:
         sys.exit(1)
     try:
-        kernel_prog = prog if strict else _kernel_reachable_program(prog)
+        strict_full_eff = []
+        if strict:
+            try:
+                strict_mod = lower(prog)
+                strict_scope = None
+                if include_stdlib:
+                    strict_scope = diagnostic_function_names(strict_mod)
+                strict_full_eff = effect_check_module(
+                    strict_mod, only_functions=strict_scope)
+            except Exception as e:
+                if "unresolved generic type D" not in str(e):
+                    print(f"error: ptx: strict validation: {e}", file=sys.stderr)
+                    sys.exit(1)
+        kernel_prog = _kernel_reachable_program(prog)
         grad_pass(kernel_prog)
         tir_mod = lower(kernel_prog)
         pre_effect_scope = None
@@ -834,7 +853,10 @@ if __name__ == "__main__":
             post_effect_scope = diagnostic_function_names(tir_mod)
         post_eff = effect_check_module(
             tir_mod, only_functions=post_effect_scope)
-        eff_errs = list(pre_eff)
+        eff_errs = list(strict_full_eff)
+        for err in pre_eff:
+            if err not in eff_errs:
+                eff_errs.append(err)
         seen_eff_errs = set(eff_errs)
         for err in post_eff:
             if err not in seen_eff_errs:
@@ -856,7 +878,11 @@ if __name__ == "__main__":
             next_block_id=tir_mod.next_block_id,
         )
         tile_mod = lower_to_tile(kernel_mod)
-        print(emit_ptx(tile_mod))
+        ptx = emit_ptx(tile_mod)
+        ad_rc = _drain_cli_ad_warnings()
+        if ad_rc != 0:
+            sys.exit(ad_rc)
+        print(ptx)
     except Exception as e:
         print(f"error: ptx: {e}", file=sys.stderr)
         sys.exit(1)

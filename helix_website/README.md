@@ -4,7 +4,7 @@ This directory holds the public website for the Helix programming language.
 
 ## Source of truth
 
-**`HELIX_REFERENCE.md`** is the canonical specification for everything the website must convey. It's written as if Helix is fully complete and shipped. Use it for:
+**`HELIX_REFERENCE.md`** is a website design/reference draft, not the source of truth for current shipped capability. Check root `README.md`, `docs/stage35-progress-2026-05-15.md`, and `stats_and_facts.md` before publishing copy. Use the reference draft for:
 
 - All marketing copy
 - Feature pages and explainers
@@ -76,7 +76,7 @@ Recommendation: try #3 for broadest appeal, keep hex-byte motif from #1 as a rec
 
 ## Distinctive must-haves
 
-1. **Byte counter** at the top: "Built from 120 bytes" — animated.
+1. **Byte counter** at the top: "Built from 299 bytes" — animated.
 2. **Bootstrap chain** as an interactive explorer.
 3. **Compilation animation** as a recurring motif.
 4. **Hex byte viewer** for produced binaries.
@@ -87,5 +87,5 @@ Recommendation: try #3 for broadest appeal, keep hex-byte motif from #1 as a rec
 
 - Logo: simple `λ` in hex bracket `[λ]` or double-helix + hex trail
 - Code samples: 20 in the gallery section of HELIX_REFERENCE.md
-- Bootstrap chain stages: 7 nodes with byte counts (120, 700, 3K, 8K, 30K, 80K, 50K)
-- Number-stat block: 23 bugs, 3000+ tests, 9 audits, 12 types, 100+ AST tags
+- Bootstrap chain stages: use the current 299-byte hex0 root, then mark later byte counts as target/approximate where they are not live artifacts.
+- Number-stat block: use `stats_and_facts.md`; do not hardcode stale test totals or shipped self-hosting claims.
