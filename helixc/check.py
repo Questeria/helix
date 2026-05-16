@@ -402,6 +402,13 @@ def _drain_ad_warnings(a: "CliArgs") -> int:
     return rc
 
 
+def _abort_if_ad_error_before_artifact(a: "CliArgs") -> int:
+    """Promote `-Wad=error` before printing clean markers or artifacts."""
+    if a.warnings.get("ad", "warn") != "error":
+        return 0
+    return _drain_ad_warnings(a)
+
+
 def _emit_env_error(msg: str) -> None:
     """Audit 28.8 cycle 9 C8-2: print a user-environment error with a
     single `helixc:` prefix. Strips an already-present `helixc:` prefix
@@ -1419,6 +1426,9 @@ def _main_inner(argv: list[str] | None,
     # backend driver — so any compile that produces a binary goes
     # through it. Cycle 26 documents the trade-off explicitly.
     if "--check-only" in a.flags:
+        ad_rc = _abort_if_ad_error_before_artifact(a)
+        if ad_rc != 0:
+            return ad_rc
         diag_out("-- clean (check-only)")
         return 0
 
@@ -1608,6 +1618,9 @@ def _main_inner(argv: list[str] | None,
         # universal — see `_drain_ad_warnings` and the `main` wrapper.
 
     if "--emit-ir" in a.flags:
+        ad_rc = _abort_if_ad_error_before_artifact(a)
+        if ad_rc != 0:
+            return ad_rc
         print("   ir:")
         for fn in mod.functions.values():
             print(f"     fn {fn.name}:")
@@ -1702,6 +1715,9 @@ def _main_inner(argv: list[str] | None,
             # FFI's job. Surface them for user visibility.
             print(f"   libs:     {', '.join(a.libs)}")
 
+    ad_rc = _abort_if_ad_error_before_artifact(a)
+    if ad_rc != 0:
+        return ad_rc
     print("-- clean")
     return 0
 

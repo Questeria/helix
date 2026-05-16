@@ -3878,6 +3878,7 @@ if __name__ == "__main__":
     from ..frontend.panic_pass import validate_panic_args, validate_unwind
     from ..frontend.unsafe_pass import check_unsafe_ops
     from ..frontend.autotune import validate_autotune_prog
+    from ..frontend.deprecated_pass import emit_warnings as emit_deprecated_warnings
     from ..frontend.hash_cons import hash_cons
 
     def _called_fn_names(value: object) -> set[str]:
@@ -3972,10 +3973,23 @@ if __name__ == "__main__":
                 name, val = body.split("=", 1)
             else:
                 name, val = body, "warn"
-            if name != "ad" or val not in ("warn", "error"):
+            if name not in ("ad", "deprecated") or val not in ("warn", "error"):
                 print(f"error: unknown warning policy {arg}", file=sys.stderr)
                 sys.exit(2)
             warning_policies[name] = val
+
+    def _drain_cli_ad_warnings() -> int:
+        ad_warnings = take_diff_warnings()
+        if not ad_warnings:
+            return 0
+        ad_policy = warning_policies.get("ad", "warn")
+        label = "ERROR" if ad_policy == "error" else "warning"
+        print(f"   ad:        {len(ad_warnings)} {label}(s)", file=sys.stderr)
+        for warning in ad_warnings:
+            print(f"     helixc: {warning}", file=sys.stderr)
+        if ad_policy == "error":
+            return 1
+        return 0
     with open(sys.argv[1]) as f:
         src = f.read()
     # Auto-include stdlib by default. The fdce / dce passes drop unused
@@ -4037,6 +4051,7 @@ if __name__ == "__main__":
             print(f"error: {e}", file=sys.stderr)
         print(f"\n{len(type_errors)} type error(s); aborting before codegen.",
               file=sys.stderr)
+        _drain_cli_ad_warnings()
         sys.exit(1)
     grad_count = grad_pass(prog)
     if grad_count > 0:
@@ -4065,6 +4080,19 @@ if __name__ == "__main__":
         if strict:
             print(f"\n{len(tot_fails)} totality failure(s); --strict aborts.",
                   file=sys.stderr)
+            sys.exit(1)
+
+    deprecated_policy = warning_policies.get("deprecated", "warn")
+    deprecated_warnings = emit_deprecated_warnings(prog)
+    if deprecated_warnings:
+        label = "ERROR" if deprecated_policy == "error" else "warning"
+        print(
+            f"   deprecated: {len(deprecated_warnings)} {label}(s)",
+            file=sys.stderr,
+        )
+        for warning in deprecated_warnings:
+            print(f"     {warning}", file=sys.stderr)
+        if deprecated_policy == "error":
             sys.exit(1)
 
     trace_diags = validate_trace_attrs(prog)
@@ -4177,15 +4205,8 @@ if __name__ == "__main__":
               file=sys.stderr)
         sys.exit(1)
 
-    ad_warnings = take_diff_warnings()
-    if ad_warnings:
-        ad_policy = warning_policies.get("ad", "warn")
-        label = "ERROR" if ad_policy == "error" else "warning"
-        print(f"   ad:        {len(ad_warnings)} {label}(s)", file=sys.stderr)
-        for warning in ad_warnings:
-            print(f"     helixc: {warning}", file=sys.stderr)
-        if ad_policy == "error":
-            sys.exit(1)
+    if _drain_cli_ad_warnings() != 0:
+        sys.exit(1)
 
     elf = compile_module_to_elf(mod)
     with open(sys.argv[2], "wb") as f:

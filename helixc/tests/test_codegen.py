@@ -10040,6 +10040,33 @@ def test_dense_layer_f32_grad_x_rejects_empty_output_buffer():
     assert code == 42, f"expected 42, got {code}"
 
 
+def test_dense_layer_f32_grad_x_rejects_short_output_buffer():
+    src = """
+    fn main() -> i32 {
+        let w = tf2d_zeros(2, 2);
+        tf1d_set(w, 0, 1.0_f32);
+        tf1d_set(w, 1, 2.0_f32);
+        tf1d_set(w, 2, 3.0_f32);
+        tf1d_set(w, 3, 4.0_f32);
+        let dy = t1d_new(2);
+        tf1d_set(dy, 0, 5.0_f32);
+        tf1d_set(dy, 1, 7.0_f32);
+        let gx = t1d_new(1);
+        tf1d_set(gx, 0, 42.0_f32);
+        let guard = t1d_new(1);
+        tf1d_set(guard, 0, 7.0_f32);
+        let status = dense_layer_f32_grad_x(w, dy, gx, 2, 2);
+        if status == 35001 {
+            if (tf1d_get(gx, 0) as i32) == 42 {
+                if (tf1d_get(guard, 0) as i32) == 7 { 42 } else { 9 }
+            } else { 8 }
+        } else { 7 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
 def test_negative_dense_layer_f32_grad_x_shape_does_not_write_outputs():
     src = """
     fn main() -> i32 {
@@ -10073,6 +10100,31 @@ def test_nn_mse_loss_f32_grad():
         let dy = t1d_new(2);
         mse_loss_f32_grad(y, t, dy, 2);
         (tf1d_sum(dy, 2) as i32) * 7
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_mse_loss_f32_grad_rejects_short_output_buffer():
+    src = """
+    fn main() -> i32 {
+        let y = t1d_new(2);
+        tf1d_set(y, 0, 3.0_f32);
+        tf1d_set(y, 1, 5.0_f32);
+        let t = t1d_new(2);
+        tf1d_set(t, 0, 1.0_f32);
+        tf1d_set(t, 1, 1.0_f32);
+        let dy = t1d_new(1);
+        tf1d_set(dy, 0, 42.0_f32);
+        let guard = t1d_new(1);
+        tf1d_set(guard, 0, 7.0_f32);
+        let status = mse_loss_f32_grad(y, t, dy, 2);
+        if status == 35001 {
+            if (tf1d_get(dy, 0) as i32) == 42 {
+                if (tf1d_get(guard, 0) as i32) == 7 { 42 } else { 9 }
+            } else { 8 }
+        } else { 7 }
     }
     """
     code = compile_and_run(src)
@@ -10986,6 +11038,48 @@ def test_revad_backward_rejects_spoofed_foreign_adjoint_buffer():
     assert code == 42, f"expected 42, got {code}"
 
 
+def test_revad_backward_rejects_consistently_forged_adjoint_slice():
+    src = """
+    fn main() -> i32 {
+        let tape = rev_tape_new(4);
+        let x = rev_leaf(tape, 5);
+        let y = rev_leaf(tape, 7);
+        let f = rev_add(tape, x, y);
+        let real_adj = rev_alloc_adjoints(tape);
+        rev_seed(real_adj, f, 1);
+        let fake = t1d_new(4);
+        __arena_set(fake - 4, tape);
+        __arena_set(fake - 3, 4);
+        __arena_set(fake - 2, 3);
+        __arena_set(fake - 1, 0 - 4 - 1);
+        __arena_set(fake + 4, 0 - 4 - 1);
+        __arena_set(fake + f, 1);
+        __arena_set(tape + 2, fake);
+        let status = rev_backward(tape, fake);
+        if status == (0 - 1) { 42 } else { 7 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_revad_alloc_adjoints_rejects_interleaved_arena_allocation():
+    src = """
+    fn main() -> i32 {
+        let tape = rev_tape_new(2);
+        let x = rev_leaf(tape, 5);
+        let other = t1d_new(1);
+        ti1d_set(other, 0, 42);
+        let adj = rev_alloc_adjoints(tape);
+        if adj == (0 - 1) {
+            if ti1d_get(other, 0) == 42 { 42 } else { 7 }
+        } else { 7 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
 def test_revad_backward_rejects_self_referential_operand_before_mutation():
     src = """
     fn main() -> i32 {
@@ -11311,6 +11405,70 @@ def test_negative_t1d_new_does_not_alias_next_allocation():
         let status = ti1d_set(bad, 0, 99);
         if status == 35001 {
             if ti1d_get(guard, 0) == 42 { 42 } else { 7 }
+        } else { 7 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_t1d_setters_reject_negative_indices():
+    src = """
+    fn main() -> i32 {
+        let x = t1d_new(1);
+        ti1d_set(x, 0, 42);
+        let status_i = ti1d_set(x, 0 - 1, 99);
+        let status_f = tf1d_set(x, 0 - 1, 9.0_f32);
+        if status_i == 35001 {
+            if status_f == 35001 {
+                if ti1d_get(x, 0) == 42 { 42 } else { 8 }
+            } else { 7 }
+        } else { 7 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_t1d_setters_reject_positive_oob_even_after_later_allocations():
+    src = """
+    fn main() -> i32 {
+        let x = t1d_new(1);
+        ti1d_set(x, 0, 42);
+        let guard = t1d_new(3);
+        ti1d_set(guard, 0, 7);
+        ti1d_set(guard, 1, 8);
+        ti1d_set(guard, 2, 9);
+        let status = ti1d_set(x, 2, 99);
+        if status == 35001 {
+            if ti1d_get(x, 0) == 42 {
+                if ti1d_sum(guard, 3) == 24 { 42 } else { 8 }
+            } else { 7 }
+        } else { 7 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_tf1d_add_rejects_short_output_buffer():
+    src = """
+    fn main() -> i32 {
+        let a = t1d_new(2);
+        tf1d_set(a, 0, 1.0_f32);
+        tf1d_set(a, 1, 2.0_f32);
+        let b = t1d_new(2);
+        tf1d_set(b, 0, 3.0_f32);
+        tf1d_set(b, 1, 4.0_f32);
+        let z = t1d_new(1);
+        tf1d_set(z, 0, 42.0_f32);
+        let guard = t1d_new(1);
+        ti1d_set(guard, 0, 7);
+        let status = tf1d_add(a, b, z, 2);
+        if status == 35001 {
+            if (tf1d_get(z, 0) as i32) == 42 {
+                if ti1d_get(guard, 0) == 7 { 42 } else { 8 }
+            } else { 7 }
         } else { 7 }
     }
     """
@@ -18378,6 +18536,7 @@ def test_stage35_compile_module_to_elf_requires_pre_dce_kernel_validation():
     from helixc.ir.passes.cse import cse_module as _cse
     from helixc.ir.passes.dce import dce_module as _dce
     from helixc.ir.passes.fdce import fdce_module as _fdce
+    from helixc.backend.ptx import validate_kernel_tile_lowering as _validate_ptx
     from helixc.backend.x86_64 import compile_module_to_elf as _emit
     import pytest
     src = """
@@ -18392,6 +18551,8 @@ def test_stage35_compile_module_to_elf_requires_pre_dce_kernel_validation():
     _grad(prog)
     mod = _lower(prog)
     _fold(mod); _cse(mod); _dce(mod); _fdce(mod)
+    with pytest.raises(RuntimeError, match="before DCE"):
+        _validate_ptx(mod)
     with pytest.raises(RuntimeError, match="kernel PTX validation"):
         _emit(mod)
 

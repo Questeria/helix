@@ -83,6 +83,9 @@ SIDE_EFFECT_KINDS = {
 
 def dce_module(module: tir.Module) -> int:
     """Run DCE on every function. Returns total ops removed."""
+    if any(fn.attrs.get("kernel") for fn in module.functions.values()) \
+            and not getattr(module, "_helix_kernel_tile_validated", False):
+        setattr(module, "_helix_kernel_tile_validation_blocked_by_dce", True)
     total = 0
     for fn in module.functions.values():
         total += dce_function(fn)

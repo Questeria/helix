@@ -1736,3 +1736,60 @@ Clean-gate status:
 - Stage 35 clean gates remain `0/3`.
 - Next step is restart 28 as another fresh Stage 35 clean gate from the newest
   committed fix sweep.
+
+## Increment 47 - Twenty-Eighth Clean-Gate Restart Fix Sweep
+
+Restart 28 began from commit `3830869` with green support checks. The first
+audit launch hit the agent thread limit, so stale completed agents were closed
+and the audit was relaunched. All three relaunched lanes found remaining
+blockers, so the gate did not count as clean and Stage 35 remains at `0/3`
+clean gates.
+
+Fixes landed in this increment:
+
+- Public and handoff docs now avoid overclaiming the current bootstrap state:
+  self-hosting and fully reproducible bootstrap parity remain roadmap targets,
+  while the current production compiler is still Python-hosted `helixc`.
+- `-Wad=error` now drains before `--emit-ir`, default clean stdout, and
+  `--check-only` clean stdout so no artifact-like output appears before an AD
+  warning is promoted to an error.
+- The direct x86 backend now honors both `ad` and `deprecated` warning policies,
+  drains AD warnings on typecheck failures, and promotes deprecated warnings
+  before artifact writes.
+- PTX tile validation now fails closed if DCE/FDCE has already touched an
+  unvalidated kernel module, preserving the pre-DCE validation requirement for
+  embedded kernel PTX.
+- 1D tensors now have checked header/footer metadata while keeping the existing
+  data-start handle API. Negative indices, positive OOB writes after later
+  allocations, short f32 gradient buffers, and short f32 vector outputs fail
+  closed.
+- Reverse-AD adjoints now require immediate post-tape allocation and validate
+  that layout invariant, closing the consistently forged adjoint metadata gap.
+- Public/status docs now reflect restart 28 and 2,316 collected tests.
+
+Focused verification:
+
+- Per-file stdlib parser sweep across `helixc/stdlib/*.hx`
+  - Result: parsed 16 files.
+- `python -m py_compile helixc\frontend\autodiff.py helixc\frontend\autodiff_reverse.py helixc\check.py helixc\backend\ptx.py helixc\backend\x86_64.py helixc\ir\passes\dce.py helixc\ir\passes\fdce.py`
+  - Result: passed.
+- `python -m pytest helixc/tests/test_codegen.py -q -k "t1d or tf1d or ti1d or dense_layer_f32_grad or mse_loss_f32_grad"`
+  - Result: 56 passed, 809 deselected.
+- `python -m pytest helixc/tests/test_codegen.py -q -k "revad"`
+  - Result: 30 passed, 835 deselected.
+- `python -m pytest helixc/tests/test_cli.py -q -k "stage35 or wad or deprecated"`
+  - Result: 31 passed, 143 deselected.
+- `python -m pytest helixc/tests/test_codegen.py -q -k "stage35_compile_module_to_elf_requires_pre_dce_kernel_validation or ptx_in_binary or kernel_ptx"`
+  - Result: 5 passed, 860 deselected.
+- `python -m pytest helixc/tests/test_codegen.py -q -k "t1d or t2d or ti2d or tf2d or tensor or stage35_2d or nn_ or dense_layer or softmax_rows_f32 or softmax_ce_grad_f32 or argmax_rows_f32 or accuracy_count_from_logits_f32 or ce_loss_batch_f32 or bce or gelu or revad or grad_rejects_allocator_let or side_effecting_final_assignment or negative_t1d_new or compile_module_to_elf_requires_pre_dce_kernel_validation or mse_loss_f32_grad or wad"`
+  - Result: 145 passed, 720 deselected.
+- `python -m pytest helixc/tests/test_transcendentals.py helixc/tests/test_autodiff.py helixc/tests/test_autodiff_reverse.py helixc/tests/test_cli.py helixc/tests/test_ptx.py helixc/tests/test_effect_check.py -q`
+  - Result: 387 passed.
+- `python -m pytest helixc/tests --collect-only -q -p no:cacheprovider`
+  - Result: 2,316 tests collected.
+
+Clean-gate status:
+
+- Stage 35 clean gates remain `0/3`.
+- Next step is restart 29 as another fresh Stage 35 clean gate from the newest
+  committed fix sweep.

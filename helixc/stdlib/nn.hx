@@ -231,6 +231,9 @@ fn mse_loss_f32(y_start: i32, t_start: i32, n: i32) -> f32 {
 fn mse_loss_f32_grad(y_start: i32, t_start: i32,
                      dy_start: i32, n: i32) -> i32 {
     if n <= 0 { 0 }
+    else { if t1d_capacity_ok(y_start, n) == 0 { t2d_error() }
+    else { if t1d_capacity_ok(t_start, n) == 0 { t2d_error() }
+    else { if t1d_capacity_ok(dy_start, n) == 0 { t2d_error() }
     else {
         let scale = 2.0_f32 / (n as f32);
         let mut i: i32 = 0;
@@ -241,7 +244,7 @@ fn mse_loss_f32_grad(y_start: i32, t_start: i32,
             i = i + 1;
         }
         0
-    }
+    }}}}
 }
 
 fn dense_layer_f32_forward(w_start: i32, w_rows: i32, w_cols: i32,

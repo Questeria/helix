@@ -640,6 +640,10 @@ def validate_kernel_tile_lowering(module: tir.Module) -> None:
     if not kernel_mod.functions:
         return
     ti.lower_to_tile(kernel_mod)
+    if getattr(module, "_helix_kernel_tile_validation_blocked_by_dce", False):
+        raise RuntimeError(
+            "kernel tile validation must run before DCE/FDCE"
+        )
     setattr(module, "_helix_kernel_tile_validated", True)
 
 

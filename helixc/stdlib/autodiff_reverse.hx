@@ -24,6 +24,9 @@
 //   adj_start - 2: logical count snapshotted at allocation
 //   adj_start - 1: guard = -cap - 1
 //   adj_start + cap: footer guard = -cap - 1
+// Adjoint arrays must be allocated immediately after their tape. That
+// layout invariant prevents a forged arena slice from masquerading as a
+// tape-owned adjoint buffer by copying the public metadata fields.
 //
 // API:
 //   rev_tape_new(cap)               -> i32   allocate tape, return start
@@ -202,12 +205,25 @@ fn rev_value_at(tape: i32, idx: i32) -> i32 {
     else { __arena_get(tape + 3 + idx * 4 + 3) }
 }
 
+@pure
+fn rev_expected_adj_start(tape: i32) -> i32 {
+    if rev_tape_valid(tape) == 0 { 0 - 1 }
+    else {
+        let cap = __arena_get(tape + 1);
+        if cap > (2147483647 - tape - 8) / 4 { 0 - 1 }
+        else { tape + 3 + cap * 4 + 5 }
+    }
+}
+
 fn rev_alloc_adjoints(tape: i32) -> i32 {
     if rev_tape_valid(tape) == 0 { 0 - 1 }
     else {
         let cap = __arena_get(tape + 1);
         let cnt = __arena_get(tape);
-        let header = __arena_len();
+        let expected = rev_expected_adj_start(tape);
+        if expected < 0 { 0 - 1 }
+        else { if __arena_len() != expected - 4 { 0 - 1 }
+        else {
         __arena_push(tape);
         __arena_push(cap);
         __arena_push(cnt);
@@ -221,23 +237,30 @@ fn rev_alloc_adjoints(tape: i32) -> i32 {
         }
         __arena_push(0 - cap - 1);
         start
+        }}
     }
 }
 
 @pure
 fn rev_adj_cap(adj_start: i32) -> i32 {
     if adj_start < 4 { 0 - 1 } else {
+    let owner = __arena_get(adj_start - 4);
     let cap = __arena_get(adj_start - 3);
     let cnt = __arena_get(adj_start - 2);
     let guard = __arena_get(adj_start - 1);
-    if cap < 0 { 0 - 1 }
+    if rev_tape_valid(owner) == 0 { 0 - 1 }
+    else { if rev_expected_adj_start(owner) != adj_start { 0 - 1 }
+    else { if __arena_get(owner + 2) != adj_start { 0 - 1 }
+    else { if cap < 0 { 0 - 1 }
     else { if cnt < 0 { 0 - 1 }
     else { if cnt > cap { 0 - 1 }
+    else { if cap != __arena_get(owner + 1) { 0 - 1 }
     else {
     let footer = __arena_get(adj_start + cap);
     if guard == (0 - cap - 1) {
         if footer == (0 - cap - 1) { cap } else { 0 - 1 }
-    } else { 0 - 1 } }}}}
+    } else { 0 - 1 } }}}}}}}
+}
 }
 
 @pure

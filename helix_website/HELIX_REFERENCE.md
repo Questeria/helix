@@ -955,7 +955,7 @@ Kovostov-Native/
 │   │   ├── nn.hx
 │   │   ├── option.hx
 │   │   └── autodiff.hx
-│   ├── tests/          # 2,304 tests collected in restart 27 fix verification
+│   ├── tests/          # 2,316 tests collected in restart 28 fix verification
 │   │   ├── test_codegen.py
 │   │   ├── test_parser.py
 │   │   ├── test_match.py
@@ -974,7 +974,9 @@ Kovostov-Native/
 
 ### Why a Python reference + a Helix self-host?
 
-The Python implementation (`helixc/frontend/...`) is the *executable specification*. It runs the test suite, produces reference outputs, and is used to bootstrap the initial `kovc-bootstrap` binary.
+The Python implementation (`helixc/frontend/...`) is the current executable
+specification. It runs the test suite and produces reference outputs while the
+Helix bootstrap chain is still being built.
 
 The Python-hosted `helixc` is currently the production compiler. The Helix self-host (`helixc/bootstrap/kovc.hx`) is the bootstrap target: once it can compile itself and user programs reproducibly, Python can become a reference implementation instead of the main compiler.
 
@@ -1437,12 +1439,12 @@ Or: a single character `λ` in monospace inside a hex bracket `[λ]`. Clean, sho
 │  Helix.dev                          Docs · Playground · GH  │
 ├─────────────────────────────────────────────────────────────┤
 │                                                             │
-│   A compiler that builds itself                             │
-│   from 299 bytes of hex.                                    │
+│   A compiler being built toward self-hosting                 │
+│   from a 299-byte audited root.                              │
 │                                                             │
 │   The open-source ML language with autodiff,                │
-│   tile types, and GPU codegen — all built                   │
-│   on a fully reproducible bootstrap.                        │
+│   tile types, and GPU-oriented codegen — with                │
+│   reproducible self-hosting as the bootstrap target.         │
 │                                                             │
 │   [ Try it in your browser ]   [ Read the docs ]            │
 │                                                             │
@@ -1519,7 +1521,7 @@ Or: a single character `λ` in monospace inside a hex bracket `[λ]`. Clean, sho
 
 - **299 bytes** — current hex0 binary size
 - **Python-hosted helixc** — current production compiler implementation
-- **2,304 live tests collected** — restart 27 fix verification; rerun scoped pytest collection before publishing
+- **2,316 live tests collected** — restart 28 fix verification; rerun scoped pytest collection before publishing
 - **30+ stages** — Approach A roadmap
 - **23 silent-corruption bugs** — found and disclosed during development
 - **9 audit passes** — multi-agent code review cycles

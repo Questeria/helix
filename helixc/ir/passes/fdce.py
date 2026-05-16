@@ -108,6 +108,9 @@ def diagnostic_function_names(
 def fdce_module(module: tir.Module, entry_fn: str = "main") -> int:
     """Remove unreachable functions from `module`. Returns the count of
     functions dropped."""
+    if any(fn.attrs.get("kernel") for fn in module.functions.values()) \
+            and not getattr(module, "_helix_kernel_tile_validated", False):
+        setattr(module, "_helix_kernel_tile_validation_blocked_by_dce", True)
     if entry_fn not in module.functions:
         return 0
 

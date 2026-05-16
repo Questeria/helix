@@ -1340,6 +1340,72 @@ def test_stage35_wad_error_emit_asm_does_not_print_artifact(tmp_path):
     assert "ERROR" in proc.stdout or "ERROR" in proc.stderr
 
 
+def test_stage35_wad_error_emit_ir_does_not_print_artifact(tmp_path):
+    src_path = tmp_path / "loss_ad_warning_ir.hx"
+    src_path.write_text(
+        "fn loss(x: D<f64>, y: D<i32>) -> D<f64> { x + y }\n"
+        "fn main() -> i32 { 0 }\n",
+        encoding="utf-8",
+    )
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    proc = subprocess.run(
+        [
+            sys.executable, "-m", "helixc.check", str(src_path),
+            "--emit-ir", "--no-stdlib", "-Wad=error",
+        ],
+        cwd=proj_root,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    assert "ir:" not in proc.stdout
+    assert "ERROR" in proc.stdout or "ERROR" in proc.stderr
+
+
+def test_stage35_wad_error_default_does_not_print_clean(tmp_path):
+    src_path = tmp_path / "loss_ad_warning_default.hx"
+    src_path.write_text(
+        "fn loss(x: D<f64>, y: D<i32>) -> D<f64> { x + y }\n"
+        "fn main() -> i32 { 0 }\n",
+        encoding="utf-8",
+    )
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.check", str(src_path), "--no-stdlib", "-Wad=error"],
+        cwd=os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    assert "-- clean" not in proc.stdout
+    assert "-- clean" not in proc.stderr
+    assert "ERROR" in proc.stdout or "ERROR" in proc.stderr
+
+
+def test_stage35_wad_error_check_only_does_not_print_clean(tmp_path):
+    src_path = tmp_path / "loss_ad_warning_check_only.hx"
+    src_path.write_text(
+        "fn loss(x: D<f64>, y: D<i32>) -> D<f64> { x + y }\n"
+        "fn main() -> i32 { 0 }\n",
+        encoding="utf-8",
+    )
+    proc = subprocess.run(
+        [
+            sys.executable, "-m", "helixc.check", str(src_path),
+            "--check-only", "--no-stdlib", "-Wad=error",
+        ],
+        cwd=os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    assert "-- clean" not in proc.stdout
+    assert "-- clean" not in proc.stderr
+    assert "ERROR" in proc.stdout or "ERROR" in proc.stderr
+
+
 def test_stage35_direct_x86_honors_wad_error_before_writing(tmp_path):
     src_path = tmp_path / "loss_ad_warning_direct.hx"
     out_path = tmp_path / "direct.bin"
@@ -1362,6 +1428,57 @@ def test_stage35_direct_x86_honors_wad_error_before_writing(tmp_path):
     assert proc.returncode == 1, proc.stdout + proc.stderr
     assert not out_path.exists()
     assert "Wrote" not in proc.stdout
+    assert "ERROR" in proc.stderr
+
+
+def test_stage35_direct_x86_honors_deprecated_error_before_writing(tmp_path):
+    src_path = tmp_path / "deprecated_direct.hx"
+    out_path = tmp_path / "deprecated.bin"
+    src_path.write_text(
+        "@deprecated fn old() -> i32 { 0 }\n"
+        "fn main() -> i32 { old() }\n",
+        encoding="utf-8",
+    )
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    proc = subprocess.run(
+        [
+            sys.executable, "-m", "helixc.backend.x86_64",
+            str(src_path), str(out_path), "--no-stdlib", "-Wdeprecated=error",
+        ],
+        cwd=proj_root,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    assert not out_path.exists()
+    assert "deprecated:" in proc.stderr
+    assert "ERROR" in proc.stderr
+
+
+def test_stage35_direct_x86_drains_ad_warnings_on_type_error(tmp_path):
+    src_path = tmp_path / "ad_warning_type_error_direct.hx"
+    out_path = tmp_path / "type_error.bin"
+    src_path.write_text(
+        "fn loss(x: D<f64>, y: D<i32>) -> D<f64> { x + y }\n"
+        "fn main() -> i32 { let x: i32 = true; 0 }\n",
+        encoding="utf-8",
+    )
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    proc = subprocess.run(
+        [
+            sys.executable, "-m", "helixc.backend.x86_64",
+            str(src_path), str(out_path), "--no-stdlib", "-Wad=error",
+        ],
+        cwd=proj_root,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    assert not out_path.exists()
+    assert "type error" in proc.stderr
+    assert "ad:" in proc.stderr
     assert "ERROR" in proc.stderr
 
 

@@ -18,7 +18,7 @@ rebuild the compiler reproducibly.
 
 This is an early in-development language. Stage 35 is currently in audit
 cleanup, and clean gates remain `0/3` in the Stage 35 progress ledger. Restart
-27 fix verification collected 2,304 live `helixc/tests` pytest tests; run
+28 fix verification collected 2,316 live `helixc/tests` pytest tests; run
 `python -m pytest helixc/tests --collect-only -q -p no:cacheprovider` for the
 current count.
 
@@ -136,10 +136,12 @@ hand-tune.
 bash scripts/run_all_tests.sh
 ```
 
-You should see something like:
+The gate infrastructure still uses historical `stage31` log names, but it is
+the current full-suite smoke gate used during Stage 35 audit cleanup. You
+should see something like:
 
 ```
-pytest (stage31 sharded gate):
+pytest (current sharded gate; historical stage31 log names):
 pytest-no-codegen: rc=0 log=.stage31-logs/pytest-no-codegen.log
 pytest-codegen-shard-1-of-4: rc=0 log=.stage31-logs/pytest-codegen-shard-1-of-4.log
 pytest-codegen-shard-2-of-4: rc=0 log=.stage31-logs/pytest-codegen-shard-2-of-4.log
