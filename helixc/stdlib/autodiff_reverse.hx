@@ -83,8 +83,12 @@ fn rev_tape_new(cap: i32) -> i32 {
     start
 }
 
-@pure fn rev_count(tape: i32) -> i32 { __arena_get(tape) }
-@pure fn rev_cap(tape: i32) -> i32 { __arena_get(tape + 1) }
+@pure fn rev_count(tape: i32) -> i32 {
+    if rev_tape_valid(tape) == 0 { 0 } else { __arena_get(tape) }
+}
+@pure fn rev_cap(tape: i32) -> i32 {
+    if rev_tape_valid(tape) == 0 { 0 - 1 } else { __arena_get(tape + 1) }
+}
 
 @pure
 fn rev_tape_valid(tape: i32) -> i32 {

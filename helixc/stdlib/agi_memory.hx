@@ -46,8 +46,10 @@ type DistanceMeters = f64 where self >= 0.0;
     else { if __arena_get(start + wm_slot_count()) != wm_footer() { 0 }
     else {
         let count = __arena_get(start);
+        let tick = __arena_get(start + 1);
         if count < 0 { 0 }
-        else { if count > wm_capacity() { 0 } else { 1 } }
+        else { if count > wm_capacity() { 0 }
+        else { if tick < 0 { 0 } else { 1 } } }
     }}}}}
 }
 
@@ -128,6 +130,8 @@ fn wm_lru_slot(start: i32) -> i32 {
 fn wm_store(start: i32, key: i32, val: i32) -> i32 {
     if wm_ok(start) == 0 { 0 - 1 }
     else {
+    if __arena_get(start + 1) >= 2147483647 { 0 - 1 }
+    else {
     let new_tick = __arena_get(start + 1) + 1;
     __arena_set(start + 1, new_tick);
     let existing = wm_find(start, key);
@@ -154,6 +158,7 @@ fn wm_store(start: i32, key: i32, val: i32) -> i32 {
         }
     }
     }
+    }
 }
 
 // Load value for key; refresh recency. Returns -1 if absent.
@@ -163,10 +168,13 @@ fn wm_load(start: i32, key: i32) -> i32 {
     let off = wm_find(start, key);
     if off < 0 { 0 - 1 }
     else {
+        if __arena_get(start + 1) >= 2147483647 { 0 - 1 }
+        else {
         let new_tick = __arena_get(start + 1) + 1;
         __arena_set(start + 1, new_tick);
         __arena_set(off + 2, new_tick);
         __arena_get(off + 1)
+        }
     }
     }
 }
@@ -244,6 +252,8 @@ fn ep_record(start: i32, kind: i32, payload: i32) -> i32 {
     else {
     let cap = ep_capacity();
     let head = __arena_get(start);
+    if __arena_get(start + 2) >= 2147483647 { 0 - 1 }
+    else {
     let new_tick = __arena_get(start + 2) + 1;
     __arena_set(start + 2, new_tick);
     let off = start + 3 + head * 3;
@@ -257,6 +267,7 @@ fn ep_record(start: i32, kind: i32, payload: i32) -> i32 {
         __arena_set(start + 1, cnt + 1);
     }
     new_tick
+    }
     }
 }
 

@@ -1298,6 +1298,7 @@ fn tf2d_row_sum(start: i32, rows: i32, cols: i32, dst: i32) -> i32 {
     else { if cols <= 0 { 0 }
     else { if t2d_len(rows, cols) == 0 { t2d_error() }
     else { if t2d_shape_ok(start, rows, cols) == 0 { t2d_error() }
+    else { if t1d_slice_ok(dst, rows) == 0 { t2d_error() }
     else {
     let mut r: i32 = 0;
     while r < rows {
@@ -1311,7 +1312,7 @@ fn tf2d_row_sum(start: i32, rows: i32, cols: i32, dst: i32) -> i32 {
         r = r + 1;
     }
     0
-    }}}}
+    }}}}}
 }
 
 // tf2d_col_sum(start, rows, cols, dst): for each col c, write
@@ -1321,6 +1322,7 @@ fn tf2d_col_sum(start: i32, rows: i32, cols: i32, dst: i32) -> i32 {
     else { if cols <= 0 { 0 }
     else { if t2d_len(rows, cols) == 0 { t2d_error() }
     else { if t2d_shape_ok(start, rows, cols) == 0 { t2d_error() }
+    else { if t1d_slice_ok(dst, cols) == 0 { t2d_error() }
     else {
     let mut c: i32 = 0;
     while c < cols {
@@ -1334,7 +1336,7 @@ fn tf2d_col_sum(start: i32, rows: i32, cols: i32, dst: i32) -> i32 {
         c = c + 1;
     }
     0
-    }}}}
+    }}}}}
 }
 
 // tf1d_arange(start_val, n): allocate a new f32 vec of length n with
@@ -1382,6 +1384,7 @@ fn tf2d_diag(m: i32, rows: i32, cols: i32, dst: i32) -> i32 {
     else { if rows != cols { 0 }
     else { if t2d_len(rows, cols) == 0 { t2d_error() }
     else { if t2d_shape_ok(m, rows, cols) == 0 { t2d_error() }
+    else { if t1d_slice_ok(dst, rows) == 0 { t2d_error() }
     else {
     let n = rows;
     let mut i: i32 = 0;
@@ -1390,7 +1393,7 @@ fn tf2d_diag(m: i32, rows: i32, cols: i32, dst: i32) -> i32 {
         i = i + 1;
     }
     0
-    }}}}}
+    }}}}}}
 }
 
 // tf2d_eye(n): allocate a new n*n identity matrix (1.0 on diagonal,

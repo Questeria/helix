@@ -58,6 +58,13 @@ def test_parse_args_output_missing():
     assert errs
 
 
+def test_stage35_parse_args_output_rejects_flag_value():
+    a, errs = parse_args(["foo.hx", "-o", "--no-stdlib"])
+    assert errs
+    assert a.output is None
+    assert "--no-stdlib" in a.flags
+
+
 def test_parse_args_lib_separate():
     a, errs = parse_args(["-l", "m", "-l", "c", "foo.hx"])
     assert not errs
@@ -1000,6 +1007,10 @@ def test_main_emit_ast(capsys):
         assert rc == 0
         cap = capsys.readouterr()
         assert "fn main" in cap.out
+        assert "-- helixc-check:" not in cap.out
+        assert "parse:" not in cap.out
+        assert "-- helixc-check:" in cap.err
+        assert "parse:" in cap.err
     finally:
         os.remove(p)
 
@@ -1443,6 +1454,28 @@ def test_stage35_wad_warn_emit_ir_keeps_warning_summary_off_stdout(tmp_path):
     assert "ad:" in proc.stderr
 
 
+def test_stage35_emit_ir_with_output_is_error(tmp_path, capsys):
+    src_path = tmp_path / "emit_ir_output.hx"
+    out_path = tmp_path / "emit_ir_output.bin"
+    src_path.write_text("fn main() -> i32 { 42 }\n", encoding="utf-8")
+    rc = main([str(src_path), "--emit-ir", "-o", str(out_path), "--no-stdlib"])
+    captured = capsys.readouterr()
+    assert rc == 2
+    assert not out_path.exists()
+    assert "cannot be combined with -o" in captured.err
+
+
+def test_stage35_output_flag_value_rejected_without_writing(tmp_path, capsys, monkeypatch):
+    src_path = tmp_path / "flag_output.hx"
+    src_path.write_text("fn main() -> i32 { 42 }\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    rc = main([str(src_path), "-o", "--no-stdlib"])
+    captured = capsys.readouterr()
+    assert rc == 2
+    assert not (tmp_path / "--no-stdlib").exists()
+    assert "-o requires an output path" in captured.err
+
+
 def test_stage35_deprecated_warn_emit_asm_keeps_warning_summary_off_stdout(tmp_path):
     src_path = tmp_path / "deprecated_asm_warn.hx"
     src_path.write_text(
@@ -1655,6 +1688,32 @@ def test_stage35_direct_x86_rejects_unknown_flags_without_writing(tmp_path):
     assert proc.returncode == 2, proc.stdout + proc.stderr
     assert not out_path.exists()
     assert "unknown flag" in proc.stderr
+    assert "Traceback" not in proc.stderr
+
+
+def test_stage35_direct_x86_rejects_flag_shaped_output(tmp_path):
+    src_path = tmp_path / "flag_output_x86.hx"
+    src_path.write_text("fn main() -> i32 { 42 }\n", encoding="utf-8")
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    env = os.environ.copy()
+    env["PYTHONPATH"] = (
+        proj_root if not env.get("PYTHONPATH")
+        else proj_root + os.pathsep + env["PYTHONPATH"]
+    )
+    proc = subprocess.run(
+        [
+            sys.executable, "-m", "helixc.backend.x86_64",
+            str(src_path), "--no-stdlib",
+        ],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert proc.returncode == 2, proc.stdout + proc.stderr
+    assert not (tmp_path / "--no-stdlib").exists()
+    assert "output path cannot be a flag" in proc.stderr
     assert "Traceback" not in proc.stderr
 
 

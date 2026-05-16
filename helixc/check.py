@@ -245,6 +245,9 @@ def parse_args(argv: list[str]) -> tuple[CliArgs, list[str]]:
             if i + 1 >= n:
                 errors.append("-o requires an argument")
                 i += 1
+            elif argv[i + 1].startswith("-"):
+                errors.append(f"-o requires an output path, got flag: {argv[i + 1]}")
+                i += 1
             else:
                 a.output = argv[i + 1]
                 i += 2
@@ -382,6 +385,7 @@ def _drain_ad_warnings_to_records(
         or "--emit-ptx" in a.flags
         or "--emit-ir" in a.flags
         or "--emit-asm" in a.flags
+        or "--emit-ast" in a.flags
     )
     stream = sys.stderr if artifact_stdout or ad_policy == "error" else sys.stdout
     print(f"   ad:        {len(ad_warnings)} {label}(s)", file=stream)
@@ -974,6 +978,16 @@ def _main_inner(argv: list[str] | None,
             for e in errs:
                 print(f"helixc: {e}", file=sys.stderr)
         return 2
+    if a.output is not None and selected_stdout_modes:
+        messages = [
+            f"helixc: {selected_stdout_modes[0]} writes to stdout and cannot be combined with -o"
+        ]
+        if proof_mode:
+            _emit_proof_invocation_error(a, messages)
+        else:
+            for msg in messages:
+                print(msg, file=sys.stderr)
+        return 2
     if a.path is None:
         if proof_mode:
             _emit_proof_invocation_error(a, ["helixc: source path required"])
@@ -1029,6 +1043,7 @@ def _main_inner(argv: list[str] | None,
         "--emit-ptx" in a.flags
         or "--emit-ir" in a.flags
         or "--emit-asm" in a.flags
+        or "--emit-ast" in a.flags
     )
     warning_error_mode = any(policy == "error" for policy in a.warnings.values())
 

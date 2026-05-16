@@ -1916,8 +1916,8 @@ Clean-gate status:
 
 - Stage 35 clean gates remain `0/3`.
 - Restart 30 was committed and pushed as `9efee28`.
-- Restart 31 has begun from `9efee28` with green support checks; continue the
-  active restart-31 audit/fix loop from the live git state.
+- Restart 31 later began from `9efee28` and was committed as `fb9400d`; this
+  entry is historical, so use the newest increment and live git state.
 
 ## Increment 50 - Thirty-First Clean-Gate Restart Fix Sweep
 
@@ -1984,5 +1984,59 @@ Focused verification:
 Clean-gate status:
 
 - Stage 35 clean gates remain `0/3`.
-- Next step is to commit and push this restart-31 fix sweep, then begin
-  restart 32 as another fresh Stage 35 clean gate from the newest pushed HEAD.
+- Restart 31 was committed and pushed as `fb9400d`.
+- Restart 32 began from `fb9400d` and found additional issues, so continue from
+  the next increment and live git state.
+
+## Increment 51 - Thirty-Second Clean-Gate Restart Fix Sweep
+
+Restart 32 began from commit `fb9400d` with restart-31 pushed to `origin/main`.
+Support checks were green, then three fresh audit lanes found remaining
+runtime, CLI, and docs blockers. The gate did not count as clean and Stage 35
+remains at `0/3` clean gates.
+
+Fixes landed in this increment:
+
+- 2D f32 output helpers now validate destination slices before writing.
+- Reverse-AD metadata accessors now fail closed on forged tape handles.
+- Working-memory validation now rejects negative ticks, and working/episodic
+  mutators reject max-int ticks before incrementing.
+- `helixc.check -o` and direct x86 now reject flag-shaped output paths instead
+  of writing files named like flags.
+- stdout emit modes now reject `-o` instead of silently ignoring it.
+- `--emit-ast` now keeps diagnostics on stderr so stdout is artifact-only.
+- Continuation docs now record restart 31 as committed/pushed and restart 32 as
+  the current failed fix sweep.
+
+Focused verification:
+
+- Per-file stdlib parser sweep across `helixc/stdlib/*.hx`
+  - Result: parsed 16 files.
+- `python -m py_compile helixc\check.py helixc\backend\x86_64.py helixc\tests\test_cli.py helixc\tests\test_codegen.py`
+  - Result: passed.
+- `python -m pytest helixc\tests\test_codegen.py -q -k "tf2d_output_helpers_reject_short_destinations or revad_metadata_accessors_reject_fake_tape or agi_memory_rejects_corrupt_and_overflow_ticks"`
+  - Result: 3 passed, 884 deselected.
+- `python -m pytest helixc\tests\test_cli.py -q -k "parse_args_output_rejects_flag_value or emit_ir_with_output_is_error or output_flag_value_rejected_without_writing or direct_x86_rejects_flag_shaped_output or main_emit_ast"`
+  - Result: 5 passed, 185 deselected.
+- `python -m pytest helixc\tests\test_codegen.py -q -k "tf2d or t2d or tensor or revad or agi_memory"`
+  - Result: 78 passed, 809 deselected.
+- `python -m pytest helixc\tests\test_cli.py -q -k "stage35 or emit_ast or emit_ir or emit_asm or emit_ptx or output or direct_x86"`
+  - Result: 65 passed, 125 deselected.
+- `python -m pytest helixc\tests\test_ptx.py -q -k "stage35 or direct_ptx or wad or deprecated"`
+  - Result: 40 passed, 36 deselected.
+- `python -m pytest helixc\tests\test_codegen.py -q -k "stage35"`
+  - Result: 34 passed, 853 deselected.
+- `python -m pytest helixc\tests\test_cli.py -q -k "stage35"`
+  - Result: 45 passed, 145 deselected.
+- `python -m pytest helixc\tests\test_ptx.py -q -k "stage35"`
+  - Result: 24 passed, 52 deselected.
+- `python -m pytest helixc\tests --collect-only -q`
+  - Result: 2,354 tests collected.
+- `git diff --check`
+  - Result: passed.
+
+Clean-gate status:
+
+- Stage 35 clean gates remain `0/3`.
+- Next step is to commit and push this restart-32 fix sweep, then begin
+  restart 33 as another fresh Stage 35 clean gate from the newest pushed HEAD.

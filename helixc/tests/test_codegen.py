@@ -11821,6 +11821,74 @@ def test_stage35_agi_memory_rejects_forged_tensor_objects():
     assert code == 42, f"expected 42, got {code}"
 
 
+def test_stage35_revad_metadata_accessors_reject_fake_tape():
+    src = """
+    fn main() -> i32 {
+        let fake = t1d_new(2);
+        __arena_set(fake, 99);
+        __arena_set(fake + 1, 77);
+        if rev_count(fake) == 0 {
+        if rev_cap(fake) == (0 - 1) { 42 } else { 7 }
+        } else { 7 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stage35_agi_memory_rejects_corrupt_and_overflow_ticks():
+    src = """
+    fn main() -> i32 {
+        let bad_wm = wm_new();
+        __arena_set(bad_wm + 1, 0 - 5);
+        let bad_status = wm_store(bad_wm, 1, 2);
+        let full_wm = wm_new();
+        wm_store(full_wm, 1, 2);
+        __arena_set(full_wm + 1, 2147483647);
+        let store_status = wm_store(full_wm, 2, 3);
+        let load_status = wm_load(full_wm, 1);
+        let ep = ep_new();
+        __arena_set(ep + 2, 2147483647);
+        let ep_status = ep_record(ep, 1, 2);
+        if wm_ok(bad_wm) == 0 {
+        if bad_status == (0 - 1) {
+        if store_status == (0 - 1) {
+        if load_status == (0 - 1) {
+        if wm_ok(full_wm) == 1 {
+        if __arena_get(full_wm + 1) == 2147483647 {
+        if ep_status == (0 - 1) {
+        if ep_ok(ep) == 1 {
+        if __arena_get(ep + 2) == 2147483647 { 42 } else { 7 }
+        } else { 7 }} else { 7 }} else { 7 }} else { 7 }} else { 7 }} else { 7 }} else { 7 }} else { 7 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stage35_tf2d_output_helpers_reject_short_destinations():
+    src = """
+    fn main() -> i32 {
+        let m = tf2d_ones(2, 2);
+        let row_dst = t1d_new(1);
+        let col_dst = t1d_new(1);
+        let diag_dst = t1d_new(1);
+        let row_status = tf2d_row_sum(m, 2, 2, row_dst);
+        let col_status = tf2d_col_sum(m, 2, 2, col_dst);
+        let diag_status = tf2d_diag(m, 2, 2, diag_dst);
+        if row_status == t2d_error() {
+        if col_status == t2d_error() {
+        if diag_status == t2d_error() {
+        if t1d_slice_ok(row_dst, 1) == 1 {
+        if t1d_slice_ok(col_dst, 1) == 1 {
+        if t1d_slice_ok(diag_dst, 1) == 1 { 42 } else { 7 }
+        } else { 7 }} else { 7 }} else { 7 }} else { 7 }} else { 7 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
 def test_stage35_2d_accessors_reject_negative_offsets():
     src = """
     fn main() -> i32 {

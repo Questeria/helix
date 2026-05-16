@@ -101,7 +101,6 @@ Status: findings present.
 
 ## Next Step
 
-Commit and push this restart-31 fix sweep, then begin restart 32 as another
-fresh Stage 35 clean-gate attempt from the newest pushed HEAD. Keep using
-targeted and wide slices unless the environment can support the full monolithic
-`test_codegen.py` run with a much longer timeout.
+Restart 31 was committed and pushed as `fb9400d`. Restart 32 began from that
+pushed HEAD and found additional issues, so continue from the Stage 35 progress
+ledger and live git state rather than this historical next-step note.
