@@ -531,6 +531,12 @@ fn tf1d_set(start: i32, i: i32, x: f32) -> i32 {
 }
 
 @pure
+// Restart 57 A1: NaN-skip discipline. A single NaN slot would otherwise
+// poison the entire sum (NaN + anything = NaN). Matches the
+// softmax_layer / layer_norm_f32 / clip_grad_norm_f32 / adam_f32_step
+// NaN-fail-closed precedent — distinguish "garbage in one slot" from
+// "garbage in every output". Same pattern applied across tf1d_dot,
+// tf1d_l1_norm, tf1d_max_abs, tf1d_sum_in_range.
 fn tf1d_sum(start: i32, n: i32) -> f32 {
     if n <= 0 { 0.0_f32 }
     else { if t1d_slice_ok(start, n) == 0 { 0.0_f32 }
@@ -538,7 +544,8 @@ fn tf1d_sum(start: i32, n: i32) -> f32 {
     let mut i: i32 = 0;
     let mut total: f32 = 0.0_f32;
     while i < n {
-        total = total + __f32_from_bits(__arena_get(start + i));
+        let v = __f32_from_bits(__arena_get(start + i));
+        if v == v { total = total + v; };
         i = i + 1;
     }
     total
@@ -1731,6 +1738,10 @@ fn ti1d_count_below(start: i32, n: i32, threshold: i32) -> i32 {
 }
 
 // ti1d_max_abs(start, n): @pure. Max of |x[i]| for ints. 0 if empty.
+// Restart 57 A3: INT32_MIN special-case. 0 - INT32_MIN wraps back to
+// INT32_MIN; the `av > best` test (best starts at 0) is false, so the
+// function silently returns 0 instead of the correct INT32_MAX
+// saturation. Same family as restart 51 A5 (vec_negate_inplace).
 @pure
 fn ti1d_max_abs(start: i32, n: i32) -> i32 {
     if n <= 0 { 0 }
@@ -1740,7 +1751,8 @@ fn ti1d_max_abs(start: i32, n: i32) -> i32 {
     let mut best: i32 = 0;
     while i < n {
         let v = __arena_get(start + i);
-        let av = if v < 0 { 0 - v } else { v };
+        let av = if v == ((0 - 2147483647) - 1) { 2147483647 }
+                 else { if v < 0 { 0 - v } else { v } };
         if av > best { best = av; }
         i = i + 1;
     }

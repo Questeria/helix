@@ -595,13 +595,17 @@ fn vec_l2_squared_distance(a: i32, b: i32, count: i32) -> i32 {
     acc as i32
 }
 
+// Restart 57 A3 (sibling of ti1d_max_abs): INT32_MIN special-case so
+// the abs step saturates to INT32_MAX instead of silently wrapping to
+// INT32_MIN (then failing the `av > best` test with best=0).
 @pure
 fn vec_max_abs(start: i32, count: i32) -> i32 {
     let mut i: i32 = 0;
     let mut best: i32 = 0;
     while i < count {
         let v = __arena_get(start + i);
-        let av = if v < 0 { 0 - v } else { v };
+        let av = if v == ((0 - 2147483647) - 1) { 2147483647 }
+                 else { if v < 0 { 0 - v } else { v } };
         if av > best { best = av; }
         i = i + 1;
     }
