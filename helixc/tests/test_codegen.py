@@ -21177,12 +21177,12 @@ def test_stage35_restart58_tf2d_matvec_nan_skip_per_cell():
     src = """
     fn main() -> i32 {
         // 2x2 W with W[0,1] = NaN, x = [1, 1]
-        let w = t1d_new(4);
-        tf1d_set(w, 0, 10.0_f32);
+        let w = ti2d_new(2, 2);
+        tf2d_set(w, 2, 0, 0, 10.0_f32);
         let nan_bits = 2143289344;
-        tf1d_set(w, 1, __f32_from_bits(nan_bits));
-        tf1d_set(w, 2, 3.0_f32);
-        tf1d_set(w, 3, 4.0_f32);
+        tf2d_set(w, 2, 0, 1, __f32_from_bits(nan_bits));
+        tf2d_set(w, 2, 1, 0, 3.0_f32);
+        tf2d_set(w, 2, 1, 1, 4.0_f32);
         let x = t1d_new(2);
         tf1d_set(x, 0, 1.0_f32);
         tf1d_set(x, 1, 1.0_f32);
@@ -21208,14 +21208,14 @@ def test_stage35_restart58_tf2d_row_sum_nan_skip():
     src = """
     fn main() -> i32 {
         // 2x3 M with M[0,1] = NaN
-        let m = t1d_new(6);
-        tf1d_set(m, 0, 10.0_f32);
+        let m = ti2d_new(2, 3);
+        tf2d_set(m, 3, 0, 0, 10.0_f32);
         let nan_bits = 2143289344;
-        tf1d_set(m, 1, __f32_from_bits(nan_bits));
-        tf1d_set(m, 2, 32.0_f32);
-        tf1d_set(m, 3, 1.0_f32);
-        tf1d_set(m, 4, 2.0_f32);
-        tf1d_set(m, 5, 39.0_f32);
+        tf2d_set(m, 3, 0, 1, __f32_from_bits(nan_bits));
+        tf2d_set(m, 3, 0, 2, 32.0_f32);
+        tf2d_set(m, 3, 1, 0, 1.0_f32);
+        tf2d_set(m, 3, 1, 1, 2.0_f32);
+        tf2d_set(m, 3, 1, 2, 39.0_f32);
         let dst = t1d_new(2);
         tf2d_row_sum(m, 2, 3, dst);
         let r0 = tf1d_get(dst, 0);
