@@ -4,7 +4,7 @@
 **Repo**: `C:\Projects\Kovostov-Native`  
 **Remote**: `https://github.com/Questeria/helix.git`  
 **Branch**: `main`  
-**Handoff written after**: `4ba725f Fix Stage 35 forty-seventh restart findings`
+**Handoff written after**: `5ee0362 Fix Stage 35 forty-eighth restart findings`
 
 This handoff is for Claude to continue the Helix Stage 35 audit campaign.
 Treat live git state as truth if it differs from this file.
@@ -13,18 +13,100 @@ Treat live git state as truth if it differs from this file.
 
 Stage 35 is still in audit cleanup. Clean gates remain `0/3`.
 
-The latest completed fix sweep is restart 47:
+The latest completed fix sweep is restart 48:
 
-- Commit: `4ba725f Fix Stage 35 forty-seventh restart findings`
+- Commit: `5ee0362 Fix Stage 35 forty-eighth restart findings`
 - Status at handoff creation: clean working tree, `main` aligned with
   `origin/main`
-- Progress ledger: `docs/stage35-progress-2026-05-15.md` (see Increment 66
-  for the restart 47 findings, fixes, and verification slate; Increment 65
-  for restart 46)
-- Current-facing status files now say restart 47 and 2,459 collected tests
+- Progress ledger: `docs/stage35-progress-2026-05-15.md` (see Increment 67
+  for restart 48; 66 for restart 47; 65 for restart 46)
+- Current-facing status files now say restart 48 and 2,466 collected tests
 
-Restart 47 was a fix sweep, not a clean gate. The next action is restart 48,
+Restart 48 was a fix sweep, not a clean gate. The next action is restart 49,
 using the bug-family audit protocol below.
+
+## Restart 48 → Restart 49 deferred findings
+
+Restart 48's Lane B and Lane C audits surfaced additional issues that were
+intentionally deferred to keep the restart-48 fix sweep tight. Restart 49
+should pick these up first; they are NOT optional, they are documented audit
+findings that must close before any clean gate.
+
+Lane B deferred:
+
+- autodiff_cli exit codes are inverted vs the other three CLIs: usage
+  errors return 1 (should be 2 per the check/x86/ptx convention) and
+  differentiate runtime failures return 2 (should be 1).
+- `-h`/`--help` missing on `helixc.backend.x86_64`, `helixc.backend.ptx`,
+  and `helixc.frontend.autodiff_cli`. `helixc.check` is the only CLI with
+  proper help. ptx has no usage banner at all.
+- `helixc.backend.x86_64` usage banner does not mention `-l`/`--no-color`/
+  `--color`/`--hash`/`--hash-cons` (added in restart 47 B4).
+- `helixc/ir/lower_ast.py:3082-3086` has a `try: structural_hash(...)`
+  with a bare `except Exception` that swallows `NotImplementedError` from
+  the cycle-14/15 loud-fail discipline in `ast_hash.py`. Sibling of
+  restart 47 B1's narrowing in `_resolve_monomorphized_struct_type`.
+
+Lane C deferred (per Increment 67 C4-C8):
+
+- `docs/HELIX_V1_FINAL_FEATURES.md` line 3 status line uses obsolete
+  Stage 31-34 numbering that contradicts `docs/ROADMAP.md`. Add a
+  numbering-disclaimer sentence pointing to ROADMAP as authoritative.
+- `docs/ROADMAP.md` line 17 says "5 dogfood programs" but the live set is
+  6 (`dogfood_01..05` + `self_improving_agent.hx`).
+- Date stamps in `docs/ROADMAP.md` line 8 ("2026-05-15"),
+  `docs/HELIX_V1_FINAL_FEATURES.md` line 3 ("as of 2026-05-15"),
+  `docs/HELIX_PURPOSE.md` line 4 ("2026-05-13") are one+ day stale.
+  Either bump to today or use ledger-anchored phrasing like README.
+- `helix_website/HELIX_REFERENCE.md` lines 956-962 Compiler-Architecture
+  stdlib list mirrors C1's drift in a different physical site (6 wrong
+  files; should be the full 16). Apply the same rewrite pattern Increment
+  67 applied to lines 508-567.
+- HELIX_REFERENCE.md "23+ silent-corruption bugs (and counting)" wording
+  is technically open-ended but understates the live count by ~10x after
+  restart 46-48 disclosed 41 more findings. Replace with a non-numeric
+  "dozens of silent-corruption defects" phrasing.
+- `HANDOFF_FOR_CHATGPT.md` line 17 has a historical-block license-triple
+  claim that uses the bare wording. Soften to match the other surfaces.
+
+## What Restart 48 Fixed
+
+Restart 48 closed 6 of the 13 audit findings (1 HIGH + 5 MEDIUM); 7 LOW
+findings were deferred (see "Restart 48 → Restart 49 deferred findings"
+above):
+
+Lane A — Runtime / stdlib safety:
+
+1. `d_div_v` and `d_div_dx` (autodiff.hx) now fail-closed at `b_v == 0`.
+2. `softmax_layer` (nn.hx) writes the maximum-entropy distribution (1/n
+   to every slot) when `sum_e <= 0` or `sum_e` is NaN.
+3. `tanh_layer` (nn.hx) delegates to `__tanh` instead of inlining
+   `__exp(2*xi) / (e2x+1)`, so the |x| > 20 saturation short-circuit
+   protects against NaN at the boundary.
+
+Lane B — Compiler / backend / CLI:
+
+4. `helixc.check` now accepts `--no-opt` as a `-O0` synonym (closes the
+   restart-47 reverse-direction parity gap).
+5. `helixc.backend.ptx` outer `except Exception` handlers narrowed to
+   re-raise `NotImplementedError`/`AssertionError`/`KeyboardInterrupt`/
+   `SystemExit`/`MemoryError` first.
+6. `helixc.frontend.autodiff_cli` `_parse_or_exit` and `differentiate`
+   wrappers narrowed the same way.
+
+Lane C — Docs / status / release:
+
+7. `helix_website/HELIX_REFERENCE.md` Standard Library section rewritten
+   against `ls helixc/stdlib/*.hx`: all 16 actual modules, grouped by
+   purpose (Numerics & IEEE 754, Tensors & tiles, Neural networks,
+   Autodiff, AGI primitives, Collections), with per-module function
+   counts and a discoverability one-liner.
+8. HELIX_REFERENCE.md Stats block refined: "design doc references stage
+   numbers up to Stage 65 (35 distinct stages enumerated; not a strict
+   consecutive sequence)" replaces the looser "65+ stages" claim.
+9. `helix_website/README.md` `/learn` softened from "10-lesson interactive
+   tutorial" to "Planned beginner tutorial sequence (no shipped content
+   yet)".
 
 ## What Restart 47 Fixed
 
@@ -203,7 +285,7 @@ fresh confirmation before restart 47, rerun it alone with a longer timeout:
 python -m pytest helixc/tests/test_codegen.py -q -k "stage35 or agi or hashmap or tensor"
 ```
 
-## Restart 48 Protocol (bug-family audit, refined from restart 47)
+## Restart 49 Protocol (bug-family audit, refined from restart 48)
 
 The bug-family audit pattern from restart 46 (12 findings) and restart 47
 (17 findings) worked well — each restart pulls more sibling issues into the
