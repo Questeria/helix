@@ -207,6 +207,150 @@ fn main() -> i32 {
         f"expected trap 24100, got {[str(e) for e in errs]}"
 
 
+# Stage 36 Increment 3 — boolean-algebra completeness.
+
+
+def test_stage36_inc3_combinators_are_builtins():
+    """xor_logic, implies_logic, eq_logic, if_logic, to_logic_bool
+    are registered as builtins."""
+    tc = TypeChecker(parse("fn main() -> i32 { 0 }"))
+    for name in ("xor_logic", "implies_logic", "eq_logic",
+                 "if_logic", "to_logic_bool"):
+        assert name in tc._BUILTIN_NAMES, \
+            f"{name} not registered as builtin"
+
+
+def test_stage36_inc3_xor_truth_table():
+    """xor_logic on 0/1 truth values: 0 XOR 0 = 0, 0 XOR 1 = 1,
+    1 XOR 0 = 1, 1 XOR 1 = 0."""
+    for a, b, want in [(0, 0, 0), (0, 1, 1), (1, 0, 1), (1, 1, 0)]:
+        src = f"""
+fn main() -> i32 {{
+    unwrap_logic(xor_logic(prove({a}, 0), prove({b}, 0)))
+}}
+"""
+        prog = parse(src, include_stdlib=True)
+        assert typecheck(prog) == []
+        elf = compile_module_to_elf(lower(prog))
+        rc = _run_elf(elf)
+        assert rc == want, f"xor_logic({a},{b}) -> {rc}, expected {want}"
+
+
+def test_stage36_inc3_implies_truth_table():
+    """implies_logic: 0->0=1, 0->1=1, 1->0=0, 1->1=1."""
+    for a, b, want in [(0, 0, 1), (0, 1, 1), (1, 0, 0), (1, 1, 1)]:
+        src = f"""
+fn main() -> i32 {{
+    unwrap_logic(implies_logic(prove({a}, 0), prove({b}, 0)))
+}}
+"""
+        prog = parse(src, include_stdlib=True)
+        assert typecheck(prog) == []
+        elf = compile_module_to_elf(lower(prog))
+        rc = _run_elf(elf)
+        assert rc == want, f"implies({a},{b}) -> {rc}, expected {want}"
+
+
+def test_stage36_inc3_eq_truth_table():
+    """eq_logic: 0==0 = 1, 0==1 = 0, 1==0 = 0, 1==1 = 1."""
+    for a, b, want in [(0, 0, 1), (0, 1, 0), (1, 0, 0), (1, 1, 1)]:
+        src = f"""
+fn main() -> i32 {{
+    unwrap_logic(eq_logic(prove({a}, 0), prove({b}, 0)))
+}}
+"""
+        prog = parse(src, include_stdlib=True)
+        assert typecheck(prog) == []
+        elf = compile_module_to_elf(lower(prog))
+        rc = _run_elf(elf)
+        assert rc == want, f"eq_logic({a},{b}) -> {rc}, expected {want}"
+
+
+def test_stage36_inc3_if_logic_selects_then_branch():
+    """if_logic(1, then_v, else_v) returns then_v."""
+    src = """
+fn main() -> i32 {
+    unwrap_logic(if_logic(prove(1, 0), prove(42, 0), prove(7, 0)))
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    assert typecheck(prog) == []
+    elf = compile_module_to_elf(lower(prog))
+    rc = _run_elf(elf)
+    assert rc == 42
+
+
+def test_stage36_inc3_if_logic_selects_else_branch():
+    """if_logic(0, then_v, else_v) returns else_v."""
+    src = """
+fn main() -> i32 {
+    unwrap_logic(if_logic(prove(0, 0), prove(42, 0), prove(7, 0)))
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    assert typecheck(prog) == []
+    elf = compile_module_to_elf(lower(prog))
+    rc = _run_elf(elf)
+    assert rc == 7
+
+
+def test_stage36_inc3_to_logic_bool_lifts():
+    """to_logic_bool(x) lifts a bare i32 into Logic<i32>."""
+    src = "fn main() -> i32 { unwrap_logic(to_logic_bool(1)) }"
+    prog = parse(src, include_stdlib=True)
+    assert typecheck(prog) == []
+    elf = compile_module_to_elf(lower(prog))
+    rc = _run_elf(elf)
+    assert rc == 1
+
+
+def test_stage36_inc3_de_morgan_law():
+    """De Morgan's law: NOT(a AND b) == OR(NOT a, NOT b). If true,
+    eq_logic(lhs, rhs) is 1, so output is 1*42 = 42. Verifies a
+    real theorem of boolean algebra computed entirely over
+    provenance-typed values."""
+    src = """
+fn main() -> i32 {
+    let a = prove(1, 0);
+    let b = prove(0, 0);
+    let lhs = not_logic(and_logic(a, b));
+    let rhs = or_logic(not_logic(a), not_logic(b));
+    unwrap_logic(eq_logic(lhs, rhs)) * 42
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    assert typecheck(prog) == []
+    elf = compile_module_to_elf(lower(prog))
+    rc = _run_elf(elf)
+    assert rc == 42
+
+
+def test_stage36_inc3_xor_rejects_bare_value():
+    """xor_logic with a bare i32 fires trap 24100."""
+    src = """
+fn main() -> i32 {
+    unwrap_logic(xor_logic(prove(1, 0), 0))
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    errs = typecheck(prog)
+    assert any("24100" in str(e) for e in errs), \
+        f"expected trap 24100, got {[str(e) for e in errs]}"
+
+
+def test_stage36_inc3_if_logic_rejects_bare_cond():
+    """if_logic with a bare i32 cond fires trap 24100."""
+    src = """
+fn main() -> i32 {
+    unwrap_logic(if_logic(1, prove(42, 0), prove(7, 0)))
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    errs = typecheck(prog)
+    assert any("24100" in str(e) for e in errs), \
+        f"expected trap 24100, got {[str(e) for e in errs]}"
+
+
 if __name__ == "__main__":
     import pytest
     raise SystemExit(pytest.main([__file__, "-v"]))

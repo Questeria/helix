@@ -153,7 +153,44 @@ unwrap_logic(r) * 42  // exits 42
 This is the first running Helix program that does propositional
 reasoning with provenance-typed truth values.
 
-## Increment 3 - True Two-Parent Provenance (planned)
+## Increment 3 - Boolean-Algebra Completeness (SHIPPED, 2026-05-16)
+
+Goal: extend the AND/OR/NOT core with the rest of propositional
+logic so user code can express arbitrary boolean expressions over
+provenance-typed truth values.
+
+What landed:
+
+- `xor_logic(a, b: Logic<i32>) -> Logic<i32>` — lowered to BIT_XOR.
+- `implies_logic(a, b: Logic<i32>) -> Logic<i32>` = OR(NOT a, b),
+  lowered to BIT_OR(1-a, b).
+- `eq_logic(a, b: Logic<i32>) -> Logic<i32>` = NOT XOR, lowered to
+  1 - BIT_XOR(a, b).
+- `if_logic(cond, then_v, else_v: Logic<T>) -> Logic<T>` —
+  provenance-typed ternary. Lowered to CMP_NE + SELECT.
+- `to_logic_bool(x: i32) -> Logic<i32>` — convenience lift; identity
+  at IR.
+
+All 5 register in `_BUILTIN_NAMES` and enforce trap 24100 on bare-T
+arguments. 21 tests pass in test_stage36_provenance.py (Increment
+1's 3 + Increment 2's 8 + Increment 3's 10).
+
+Highlight: **De Morgan's law verified at runtime over provenance-
+typed values**:
+
+```rust
+let a = prove(1, 0);
+let b = prove(0, 0);
+let lhs = not_logic(and_logic(a, b));
+let rhs = or_logic(not_logic(a), not_logic(b));
+unwrap_logic(eq_logic(lhs, rhs)) * 42  // exits 42
+```
+
+This is the first running Helix program that verifies a theorem of
+classical propositional logic with the operands carrying typed
+provenance. Boolean algebra is now feature-complete on Logic<i32>.
+
+## Increment 4 - True Two-Parent Provenance (planned)
 
 Goal: replace the single-tag i32 provenance with a real two-parent
 provenance lattice. derive/and_logic/or_logic should track BOTH

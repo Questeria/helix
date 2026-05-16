@@ -1868,6 +1868,72 @@ class Lowerer:
                 return self.builder.emit(
                     tir.OpKind.SUB, one, a,
                     result_ty=tir.TIRScalar("i32"))
+            # Stage 36 Increment 3: boolean-algebra completeness.
+            # xor_logic(a, b) → BIT_XOR(a, b).
+            if (isinstance(expr.callee, A.Name)
+                    and expr.callee.name == "xor_logic"
+                    and len(expr.args) == 2):
+                a = self._lower_expr(expr.args[0])
+                b = self._lower_expr(expr.args[1])
+                if a is None or b is None:
+                    return a or b
+                return self.builder.emit(
+                    tir.OpKind.BIT_XOR, a, b,
+                    result_ty=tir.TIRScalar("i32"))
+            # implies_logic(a, b) = OR(NOT a, b) → BIT_OR(1-a, b).
+            if (isinstance(expr.callee, A.Name)
+                    and expr.callee.name == "implies_logic"
+                    and len(expr.args) == 2):
+                a = self._lower_expr(expr.args[0])
+                b = self._lower_expr(expr.args[1])
+                if a is None or b is None:
+                    return a or b
+                one = self.builder.const_int(1)
+                not_a = self.builder.emit(
+                    tir.OpKind.SUB, one, a,
+                    result_ty=tir.TIRScalar("i32"))
+                return self.builder.emit(
+                    tir.OpKind.BIT_OR, not_a, b,
+                    result_ty=tir.TIRScalar("i32"))
+            # eq_logic(a, b) = NOT XOR(a, b) → 1 - BIT_XOR(a, b).
+            if (isinstance(expr.callee, A.Name)
+                    and expr.callee.name == "eq_logic"
+                    and len(expr.args) == 2):
+                a = self._lower_expr(expr.args[0])
+                b = self._lower_expr(expr.args[1])
+                if a is None or b is None:
+                    return a or b
+                xor = self.builder.emit(
+                    tir.OpKind.BIT_XOR, a, b,
+                    result_ty=tir.TIRScalar("i32"))
+                one = self.builder.const_int(1)
+                return self.builder.emit(
+                    tir.OpKind.SUB, one, xor,
+                    result_ty=tir.TIRScalar("i32"))
+            # if_logic(cond, then_v, else_v) → SELECT(cond_nonzero,
+            # then_v, else_v). For Phase-0 we use CMP_NE against 0
+            # then SELECT.
+            if (isinstance(expr.callee, A.Name)
+                    and expr.callee.name == "if_logic"
+                    and len(expr.args) == 3):
+                c = self._lower_expr(expr.args[0])
+                t = self._lower_expr(expr.args[1])
+                e = self._lower_expr(expr.args[2])
+                if c is None or t is None or e is None:
+                    return t or e
+                zero = self.builder.const_int(0)
+                cond_nz = self.builder.emit(
+                    tir.OpKind.CMP_NE, c, zero,
+                    result_ty=tir.TIRScalar("i32"))
+                return self.builder.emit(
+                    tir.OpKind.SELECT, cond_nz, t, e,
+                    result_ty=tir.TIRScalar("i32"))
+            # to_logic_bool(x) → x (identity; Logic<T> wrapper has no
+            # runtime representation in Phase-0).
+            if (isinstance(expr.callee, A.Name)
+                    and expr.callee.name == "to_logic_bool"
+                    and len(expr.args) == 1):
+                return self._lower_expr(expr.args[0])
             # Stage 16.5: "literal".as_ptr() — emit STR_PTR op that resolves
             # to a `lea rax, [rip + sym]` of the literal's bytes. The result
             # is a u64 raw pointer suitable for FFI calls.

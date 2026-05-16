@@ -1841,6 +1841,9 @@ class TypeChecker:
         "prove", "unwrap_logic",
         # Stage 36 Increment 2 — provenance-composing combinators.
         "derive", "and_logic", "or_logic", "not_logic",
+        # Stage 36 Increment 3 — boolean-algebra completeness.
+        "xor_logic", "implies_logic", "eq_logic", "if_logic",
+        "to_logic_bool",
         "consolidate", "recall", "learn_to",
         "grad", "grad_rev", "grad_rev_all",
         "quote", "splice", "splice_f", "splice_f64",
@@ -2783,6 +2786,54 @@ class TypeChecker:
                         ))
                     if isinstance(arg_tys[0], TyLogic):
                         return arg_tys[0]
+                    return TyLogic(inner=TyPrim("i32"))
+                # Stage 36 Increment 3: boolean-algebra completeness.
+                # xor_logic, implies_logic, eq_logic are all derived
+                # operators on Logic<i32> truth values.
+                if bn in ("xor_logic", "implies_logic", "eq_logic") \
+                        and len(arg_tys) == 2:
+                    for i, t in enumerate(arg_tys):
+                        if not isinstance(t, TyLogic):
+                            self.errors.append(TypeError_(
+                                f"{bn}(a, b): arg {'ab'[i]} must be "
+                                f"Logic<i32>, got {self._fmt(t)} [trap 24100]",
+                                expr.span,
+                            ))
+                    if (isinstance(arg_tys[0], TyLogic)
+                            and isinstance(arg_tys[1], TyLogic)):
+                        return arg_tys[0]
+                    return TyLogic(inner=TyPrim("i32"))
+                # if_logic(cond: Logic<i32>, then_val: Logic<T>,
+                #          else_val: Logic<T>) -> Logic<T> — provenance-
+                # typed ternary. Returns then_val when cond's value is
+                # nonzero, else else_val. All three inputs must be
+                # Logic-wrapped.
+                if bn == "if_logic" and len(arg_tys) == 3:
+                    for i, t in enumerate(arg_tys):
+                        if not isinstance(t, TyLogic):
+                            self.errors.append(TypeError_(
+                                f"if_logic(cond, then_v, else_v): arg "
+                                f"{['cond', 'then_v', 'else_v'][i]} must "
+                                f"be Logic<...>, got {self._fmt(t)} "
+                                f"[trap 24100]",
+                                expr.span,
+                            ))
+                    if isinstance(arg_tys[1], TyLogic):
+                        return arg_tys[1]
+                    if isinstance(arg_tys[2], TyLogic):
+                        return arg_tys[2]
+                    return TyLogic(inner=TyPrim("i32"))
+                # to_logic_bool(x: i32) -> Logic<i32> — convenience: lift
+                # a bare 0/1 truth value into Logic<i32> with provenance
+                # tag 0 (anonymous). Equivalent to `prove(x, 0)`; named
+                # for clarity at boolean-algebra entry points.
+                if bn == "to_logic_bool" and len(arg_tys) == 1:
+                    if not self._is_int_scalar(arg_tys[0]):
+                        self.errors.append(TypeError_(
+                            f"to_logic_bool(x): arg must be i32, got "
+                            f"{self._fmt(arg_tys[0])}",
+                            expr.span,
+                        ))
                     return TyLogic(inner=TyPrim("i32"))
                 if bn == "consolidate" and len(arg_tys) == 1:
                     # Episodic -> Semantic
