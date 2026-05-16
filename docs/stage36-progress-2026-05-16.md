@@ -190,11 +190,64 @@ This is the first running Helix program that verifies a theorem of
 classical propositional logic with the operands carrying typed
 provenance. Boolean algebra is now feature-complete on Logic<i32>.
 
-## Increment 4 - True Two-Parent Provenance (planned)
+## Increment 4 - D<Logic<T>> End-to-End Runnable (SHIPPED, 2026-05-16)
 
-Goal: replace the single-tag i32 provenance with a real two-parent
-provenance lattice. derive/and_logic/or_logic should track BOTH
-parent sources, not just the first.
+Goal: make the strategic D<Logic<T>> type composition actually
+runnable end-to-end. Stage 24 shipped the typecheck-level TyDiff
+and TyLogic types and the binop-propagation rule that composes
+`D<Logic<T>> + Logic<T>` → `D<Logic<T>>`, but attach/detach were
+never wired through IR lowering. Any program using them failed with
+"unknown function 'attach' in IR lowering". This Increment closes
+that gap.
+
+What landed:
+
+- `helixc/ir/lower_ast.py` — `attach(T) -> D<T>` and `detach(D<T>) -> T`
+  now lower as identity (Phase-0: D<T> is representationally
+  identical to T at runtime, matching the same convention used for
+  Logic<T> in Increment 1).
+
+This is a 2-line code change but unblocks the entire D<Logic<T>>
+strategic composition. Four end-to-end runnable patterns verified:
+
+1. `D<i32>` round-trip via `attach`/`detach` — exits 42.
+2. `D<Logic<i32>> = attach(prove(42, 99))` — exits 42.
+3. Boolean compute on D<Logic<i32>> via detach + and_logic +
+   or_logic — exits 42.
+4. Derive-as-rule: two `D<Logic<i32>>` parents combine via `derive`
+   into a `D<Logic<i32>>` conclusion — exits 42.
+
+Pattern (4) is the foundational shape of a differentiable
+production-rule fire — the building block for differentiable
+Datalog (the Scallop/Lobster pattern that's the Tier 3 #10
+strategic differentiator).
+
+Tests: 25 pass in test_stage36_provenance.py (Inc 1's 3 + Inc 2's 8
++ Inc 3's 10 + Inc 4's 4 new). Self-host gate: PASS.
+
+### What's still missing for a "real" provenance lattice
+
+The remaining gap before the strategic moat is fully claimed:
+
+1. **Real two-parent provenance** — currently `derive(a, b)` keeps
+   only `a`'s source tag. The lattice/semiring upgrade requires
+   either (a) packed-i64 provenance per-value, or (b) a side-table
+   arena. Either path needs an ABI / representation change that's
+   bigger than Phase-0's identity-lowering approach.
+2. **AD gradient flow through Logic ops** — `grad(f)` over
+   `f: Logic<i32> -> Logic<i32>` needs the AD passes to register
+   chain rules for and_logic/or_logic/not_logic. This is genuinely
+   bigger than the typecheck-level work above and is the right
+   target for Stage 36 Increment 5.
+3. **Pretty-printing / debug observation of provenance** — currently
+   provenance is invisible at runtime since Logic<T> = T. Once the
+   representation upgrades (item 1), `print_provenance(l)` becomes
+   trivially useful.
+
+Increment 4 is the right stopping point for this autonomous batch:
+the strategic D<Logic<T>> composition runs, the Stage 24 scaffolding
+is no longer dead, and the path to real provenance + AD is clearly
+mapped.
 
 Sketch:
 

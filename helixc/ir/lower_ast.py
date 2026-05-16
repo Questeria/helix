@@ -1806,6 +1806,21 @@ class Lowerer:
                 f"unsupported unary operator {expr.op!r} reached lowering"
             )
         if isinstance(expr, A.Call):
+            # Stage 36 Increment 4: D<T> wrapper made runnable.
+            # Stage 24 defined attach(T) -> D<T> and detach(D<T>) -> T as
+            # typecheck-only — programs using them failed to lower with
+            # "unknown function 'attach'". The D<T> wrapper is
+            # representationally identical to T at IR level (Phase-0:
+            # same single-tag convention as Logic<T>), so wiring both
+            # as identity unblocks D<Logic<T>> compositions for free.
+            if (isinstance(expr.callee, A.Name)
+                    and expr.callee.name == "attach"
+                    and len(expr.args) == 1):
+                return self._lower_expr(expr.args[0])
+            if (isinstance(expr.callee, A.Name)
+                    and expr.callee.name == "detach"
+                    and len(expr.args) == 1):
+                return self._lower_expr(expr.args[0])
             # Stage 36 Increment 1: provenance-typed primitives.
             # prove(value, source) lowers to value (Phase-0: the Logic<T>
             # wrapper has zero runtime overhead; provenance lives purely

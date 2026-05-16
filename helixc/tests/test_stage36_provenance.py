@@ -351,6 +351,90 @@ fn main() -> i32 {
         f"expected trap 24100, got {[str(e) for e in errs]}"
 
 
+# Stage 36 Increment 4 — D<Logic<T>> composition runs end-to-end.
+#
+# Stage 24 shipped TyDiff (the D<T> type) at typecheck level but
+# attach/detach were never wired through IR lowering, so any program
+# using them failed with "unknown function 'attach'". Increment 4
+# wires both as identity at IR (matching Logic<T>'s zero-overhead
+# Phase-0 convention), which unblocks the strategic D<Logic<T>>
+# composition that the Stage 24 design called out.
+
+
+def test_stage36_inc4_d_i32_roundtrip():
+    """D<i32> via attach + detach round-trips. Verifies the
+    Stage 24 D<T> type is now actually runnable, not just a
+    typecheck annotation."""
+    src = """
+fn main() -> i32 {
+    let d: D<i32> = attach(42);
+    detach(d)
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    assert typecheck(prog) == []
+    elf = compile_module_to_elf(lower(prog))
+    rc = _run_elf(elf)
+    assert rc == 42
+
+
+def test_stage36_inc4_d_logic_attach_prove_compose():
+    """D<Logic<i32>> = attach(prove(42, 99)) — the strategic
+    composition. unwrap_logic(detach(...)) recovers 42."""
+    src = """
+fn main() -> i32 {
+    let dl: D<Logic<i32>> = attach(prove(42, 99));
+    unwrap_logic(detach(dl))
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    assert typecheck(prog) == []
+    elf = compile_module_to_elf(lower(prog))
+    rc = _run_elf(elf)
+    assert rc == 42
+
+
+def test_stage36_inc4_d_logic_boolean_compute():
+    """D<Logic<i32>> values can be detached, boolean-combined, and
+    reused — full provenance + diff type-tracking through a real
+    boolean computation. 1 OR 0 = 1; result 1 * 42 = 42 (with the
+    AND result 0 added)."""
+    src = """
+fn main() -> i32 {
+    let a: D<Logic<i32>> = attach(prove(1, 0));
+    let b: D<Logic<i32>> = attach(prove(0, 0));
+    let and_result: Logic<i32> = and_logic(detach(a), detach(b));
+    let or_result: Logic<i32> = or_logic(detach(a), detach(b));
+    unwrap_logic(and_result) + unwrap_logic(or_result) * 42
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    assert typecheck(prog) == []
+    elf = compile_module_to_elf(lower(prog))
+    rc = _run_elf(elf)
+    assert rc == 42
+
+
+def test_stage36_inc4_derive_as_rule():
+    """Derive-as-rule pattern: two D<Logic<i32>> 'facts' combine via
+    derive() to produce a third 'conclusion' D<Logic<i32>>. This is
+    the foundational shape of a differentiable production-rule fire."""
+    src = """
+fn main() -> i32 {
+    let parent1: D<Logic<i32>> = attach(prove(1, 100));
+    let parent2: D<Logic<i32>> = attach(prove(1, 200));
+    let conclusion: Logic<i32> = derive(detach(parent1), detach(parent2));
+    let r: D<Logic<i32>> = attach(conclusion);
+    unwrap_logic(detach(r)) * 42
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    assert typecheck(prog) == []
+    elf = compile_module_to_elf(lower(prog))
+    rc = _run_elf(elf)
+    assert rc == 42
+
+
 if __name__ == "__main__":
     import pytest
     raise SystemExit(pytest.main([__file__, "-v"]))
