@@ -44,6 +44,7 @@ type DistanceMeters = f64 where self >= 0.0;
     else { if start > 2147483647 - wm_slot_count() { 0 }
     else { if start + wm_slot_count() >= __arena_len() { 0 }
     else { if __arena_get(start + wm_slot_count()) != wm_footer() { 0 }
+    else { if arena_span_in_tensor_payload(start - 1, wm_slot_count() + 2) != 0 { 0 }
     else {
         let count = __arena_get(start);
         let tick = __arena_get(start + 1);
@@ -61,7 +62,7 @@ type DistanceMeters = f64 where self >= 0.0;
             }
             ok
         } } }
-    }}}}}
+    }}}}}}
 }
 
 fn wm_new() -> i32 {
@@ -219,6 +220,7 @@ fn wm_load(start: i32, key: i32) -> i32 {
     else { if start > 2147483647 - ep_slot_count() { 0 }
     else { if start + ep_slot_count() >= __arena_len() { 0 }
     else { if __arena_get(start + ep_slot_count()) != ep_footer() { 0 }
+    else { if arena_span_in_tensor_payload(start - 1, ep_slot_count() + 2) != 0 { 0 }
     else {
         let head = __arena_get(start);
         let cnt = __arena_get(start + 1);
@@ -239,7 +241,7 @@ fn wm_load(start: i32, key: i32) -> i32 {
             }
             ok
         } } } } }
-    }}}}}
+    }}}}}}
 }
 
 fn ep_new() -> i32 {

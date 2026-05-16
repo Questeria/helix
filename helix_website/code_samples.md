@@ -1,6 +1,9 @@
-# Helix Code Samples — Ready for Website
+# Helix Code Samples — Website Draft
 
-30 code samples, each self-contained, each demonstrating a specific feature. Use these directly on the website (Features page, Learn tutorial, Playground examples).
+30 code samples, each demonstrating a specific feature. This is a website design
+draft, not a live-valid sample suite. Before publishing a snippet as
+copy/paste-ready, run it through the current `python -m helixc.check` path or
+mark it clearly as roadmap syntax.
 
 Each sample shows: source code · expected output · feature demonstrated.
 

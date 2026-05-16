@@ -4025,6 +4025,10 @@ if __name__ == "__main__":
                     pass
             raise
 
+    def _remove_stale_output(path: str) -> None:
+        if os.path.exists(path):
+            os.remove(path)
+
     def _drain_cli_ad_warnings() -> int:
         ad_warnings = take_diff_warnings()
         if not ad_warnings:
@@ -4043,6 +4047,11 @@ if __name__ == "__main__":
         if drain_rc != 0:
             sys.exit(drain_rc)
         sys.exit(code)
+    try:
+        _remove_stale_output(sys.argv[2])
+    except OSError as e:
+        print(f"error: output: cannot clear stale output: {e}", file=sys.stderr)
+        sys.exit(1)
     try:
         with open(sys.argv[1], encoding="utf-8") as f:
             src = f.read()

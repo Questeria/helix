@@ -12338,13 +12338,69 @@ def test_stage35_nn_argmax_rejects_short_input():
 def test_stage35_agi_memory_rejects_forged_tensor_objects():
     src = """
     fn main() -> i32 {
-        let fake_wm = t1d_new(wm_slot_count());
-        let fake_ep = t1d_new(ep_slot_count());
-        let wm_status = wm_store(fake_wm, 11, 22);
-        let ep_status = ep_record(fake_ep, 3, 44);
+        let fake_wm = t1d_new(wm_slot_count() + 2);
+        ti1d_set(fake_wm, 0, wm_magic());
+        ti1d_set(fake_wm, 1, 0);
+        ti1d_set(fake_wm, 2, 0);
+        ti1d_set(fake_wm, wm_slot_count() + 1, wm_footer());
+        let wm_status = wm_store(fake_wm + 1, 11, 22);
+
+        let fake_ep = t1d_new(ep_slot_count() + 2);
+        ti1d_set(fake_ep, 0, ep_magic());
+        ti1d_set(fake_ep, 1, 0);
+        ti1d_set(fake_ep, 2, 0);
+        ti1d_set(fake_ep, 3, 0);
+        ti1d_set(fake_ep, ep_slot_count() + 1, ep_footer());
+        let ep_status = ep_record(fake_ep + 1, 3, 44);
+
         if wm_status == (0 - 1) {
         if ep_status == (0 - 1) { 42 } else { 7 }
         } else { 7 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stage35_safe_tensor_payloads_cannot_forge_planning_handles():
+    src = """
+    fn main() -> i32 {
+        let fake_bfs = t1d_new(bfs_slot_count() + 2);
+        ti1d_set(fake_bfs, 0, bfs_magic());
+        ti1d_set(fake_bfs, 1, 0);
+        ti1d_set(fake_bfs, 2, 0);
+        ti1d_set(fake_bfs, 3, 0);
+        ti1d_set(fake_bfs, bfs_slot_count() + 1, bfs_footer());
+        let bfs_status = bfs_enqueue(fake_bfs + 1, 99);
+
+        let fake_visited = t1d_new(visited_slot_count() + 2);
+        ti1d_set(fake_visited, 0, visited_magic());
+        ti1d_set(fake_visited, 1, 0);
+        ti1d_set(fake_visited, visited_slot_count() + 1, visited_footer());
+        let visited_status = visited_mark(fake_visited + 1, 7);
+
+        let fake_pq = t1d_new(pq_slot_count() + 2);
+        ti1d_set(fake_pq, 0, pq_magic());
+        ti1d_set(fake_pq, 1, 0);
+        ti1d_set(fake_pq, 2, pq_capacity());
+        ti1d_set(fake_pq, pq_slot_count() + 1, pq_footer());
+        let pq_status = pq_insert(fake_pq + 1, 1, 1);
+
+        let cap = 1;
+        let data_len = hashmap_data_len(cap);
+        let fake_map = t1d_new(data_len + 3);
+        ti1d_set(fake_map, 0, hashmap_magic());
+        ti1d_set(fake_map, 1, cap);
+        ti1d_set(fake_map, data_len + 2, hashmap_footer(cap));
+        let map_put = hashmap_put(fake_map + 2, cap, 7, 99);
+        let map_get = hashmap_get(fake_map + 2, cap, 7, 123);
+
+        if bfs_status == (0 - 1) {
+        if visited_status == (0 - 1) {
+        if pq_status == (0 - 1) {
+        if map_put == (0 - 1) {
+        if map_get == 123 { 42 } else { 7 }
+        } else { 7 }} else { 7 }} else { 7 }} else { 7 }
     }
     """
     code = compile_and_run(src)

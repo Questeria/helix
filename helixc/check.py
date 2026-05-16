@@ -467,6 +467,11 @@ def _atomic_write_bytes(path: str, data: bytes, mode: int | None = None) -> None
         raise
 
 
+def _remove_stale_output(path: str) -> None:
+    if os.path.exists(path):
+        os.remove(path)
+
+
 def _same_filesystem_path(left: str, right: str) -> bool:
     left_path = os.path.normcase(os.path.realpath(os.path.abspath(left)))
     right_path = os.path.normcase(os.path.realpath(os.path.abspath(right)))
@@ -1060,7 +1065,21 @@ def _main_inner(argv: list[str] | None,
             for msg in messages:
                 print(msg, file=sys.stderr)
         return 2
+    artifact_output_requested = (
+        a.output is not None
+        and not selected_stdout_modes
+        and "--check-only" not in a.flags
+    )
     if a.path is None:
+        if artifact_output_requested:
+            try:
+                _remove_stale_output(a.output)
+            except OSError as e:
+                print(
+                    f"helixc: cannot clear stale output {a.output!r}: {e}",
+                    file=sys.stderr,
+                )
+                return 1
         if proof_mode:
             _emit_proof_invocation_error(a, ["helixc: source path required"])
             return 2
@@ -1070,6 +1089,21 @@ def _main_inner(argv: list[str] | None,
         _print_help()
         return 2
     path = a.path
+    if a.output is not None and _same_filesystem_path(path, a.output):
+        print(
+            "helixc: output path must differ from input source path",
+            file=sys.stderr,
+        )
+        return 2
+    if artifact_output_requested:
+        try:
+            _remove_stale_output(a.output)
+        except OSError as e:
+            print(
+                f"helixc: cannot clear stale output {a.output!r}: {e}",
+                file=sys.stderr,
+            )
+            return 1
     if not os.path.exists(path):
         if proof_mode:
             _emit_proof_invocation_error(
@@ -1078,12 +1112,6 @@ def _main_inner(argv: list[str] | None,
             )
             return 2
         print(f"helixc: file not found: {path}", file=sys.stderr)
-        return 2
-    if a.output is not None and _same_filesystem_path(path, a.output):
-        print(
-            "helixc: output path must differ from input source path",
-            file=sys.stderr,
-        )
         return 2
 
     try:

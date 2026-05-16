@@ -46,8 +46,10 @@ fn bfs_queue_new() -> i32 {
     let cap = bfs_capacity();
     if q <= 0 { 0 }
     else { if __arena_get(q - 1) != bfs_magic() { 0 }
+    else { if q > 2147483647 - bfs_slot_count() { 0 }
     else { if q + bfs_slot_count() >= __arena_len() { 0 }
     else { if __arena_get(q + bfs_slot_count()) != bfs_footer() { 0 }
+    else { if arena_span_in_tensor_payload(q - 1, bfs_slot_count() + 2) != 0 { 0 }
     else {
         let head = __arena_get(q);
         let tail = __arena_get(q + 1);
@@ -58,7 +60,7 @@ fn bfs_queue_new() -> i32 {
         else { if tail >= cap { 0 }
         else { if cnt < 0 { 0 }
         else { if cnt > cap { 0 } else { 1 } } } } } }
-    }}}}
+    }}}}}}
 }
 
 fn bfs_enqueue(q: i32, state: i32) -> i32 {
@@ -130,13 +132,15 @@ fn visited_new() -> i32 {
     let cap = visited_capacity();
     if v <= 0 { 0 }
     else { if __arena_get(v - 1) != visited_magic() { 0 }
+    else { if v > 2147483647 - visited_slot_count() { 0 }
     else { if v + visited_slot_count() >= __arena_len() { 0 }
     else { if __arena_get(v + visited_slot_count()) != visited_footer() { 0 }
+    else { if arena_span_in_tensor_payload(v - 1, visited_slot_count() + 2) != 0 { 0 }
     else {
         let cnt = __arena_get(v);
         if cnt < 0 { 0 }
         else { if cnt > cap { 0 } else { 1 } }
-    }}}}
+    }}}}}}
 }
 
 // Returns 1 if marked, 0 if already present.
@@ -261,15 +265,17 @@ fn pq_new() -> i32 {
     let cap = pq_capacity();
     if q <= 0 { 0 }
     else { if __arena_get(q - 1) != pq_magic() { 0 }
+    else { if q > 2147483647 - pq_slot_count() { 0 }
     else { if q + pq_slot_count() >= __arena_len() { 0 }
     else { if __arena_get(q + pq_slot_count()) != pq_footer() { 0 }
+    else { if arena_span_in_tensor_payload(q - 1, pq_slot_count() + 2) != 0 { 0 }
     else {
         let cnt = __arena_get(q);
         let stored_cap = __arena_get(q + 1);
         if stored_cap != cap { 0 }
         else { if cnt < 0 { 0 }
         else { if cnt > cap { 0 } else { 1 } } }
-    }}}}
+    }}}}}}
 }
 
 @pure fn pq_size(q: i32) -> i32 {

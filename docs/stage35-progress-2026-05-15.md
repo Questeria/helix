@@ -2974,3 +2974,99 @@ Clean-gate status:
 - Restart 44 is a fix sweep, not a clean gate.
 - Next step is restart 45 as another fresh Stage 35 clean gate from the newest
   pushed HEAD.
+
+## Increment 64 - Forty-Fifth Clean-Gate Restart Fix Sweep
+
+Restart 45 began from pushed commit `1d39d8e` after restart 44. Baseline support
+checks:
+
+- `git status --short --branch`
+  - Result: clean at `1d39d8e`.
+- `python -m py_compile helixc\check.py helixc\backend\x86_64.py helixc\tests\test_cli.py helixc\tests\test_codegen.py`
+  - Result: passed after the fix sweep.
+- Per-file stdlib parser sweep across `helixc/stdlib/*.hx`
+  - Result: parsed 16 files.
+- `python -m pytest helixc\tests\test_cli.py -q -k "stage35"`
+  - Result: 63 passed, 145 deselected.
+- `python -m pytest helixc\tests\test_ptx.py -q -k "stage35"`
+  - Result: 26 passed, 52 deselected.
+- `python -m pytest helixc\tests --collect-only -q`
+  - Result: 2,409 tests collected.
+
+Restart 45 audit findings:
+
+- Runtime lane found that safe tensor payloads could still forge several
+  non-tensor AGI handles by placing valid-looking metadata inside the tensor
+  data span. Affected validators included world-memory handles, episodic-memory
+  handles, BFS queues, visited sets, priority queues, and hashmaps.
+- CLI/backend artifact lane found that failed `helixc.check -o` and direct
+  `helixc.backend.x86_64` invocations could leave an older valid output binary
+  at the requested path after the new compile failed.
+- Docs/status lane found current-facing website samples and reference wording
+  that overclaimed copy-paste readiness or presented future self-hosted `kovc`
+  commands as if they were the current shipped user CLI.
+- Docs/status lane also noted that the restart trail needed a current closure
+  entry naming the pushed restart-44 base before the next restart.
+
+Fixes in this increment:
+
+- Added `arena_span_in_tensor_payload` rejection to world-memory,
+  episodic-memory, BFS-queue, visited-set, priority-queue, and hashmap
+  validators so tensor data cannot masquerade as those object families.
+- Added overflow-aware span checks around the new validator guards.
+- Added stale-output cleanup for artifact-producing `helixc.check -o` failures
+  and direct x86-64 backend CLI failures, after validation of invalid output
+  modes but before source read/compile pipeline failures.
+- Added regressions that forge valid-looking handles inside safe tensor
+  payloads and prove the mutating APIs reject them.
+- Added regressions that prove failed output-producing CLI paths remove old
+  artifacts instead of leaving stale success binaries behind.
+- Reworded website code samples as design drafts until each snippet is checked
+  with the live compiler, and updated the reference/quickstart language to use
+  `python -m helixc.check` as the current CLI while keeping self-hosted `kovc`
+  as a roadmap target.
+- Updated current-facing status surfaces from restart 44 / 2,406 tests to
+  restart 45 / 2,409 tests.
+
+Verification:
+
+- Per-file stdlib parser sweep across `helixc/stdlib/*.hx`
+  - Result: parsed 16 files.
+- `python -m py_compile helixc\check.py helixc\backend\x86_64.py helixc\tests\test_cli.py helixc\tests\test_codegen.py`
+  - Result: passed.
+- `python -m pytest helixc\tests\test_codegen.py -q -k "agi_memory_rejects_forged_tensor_objects or safe_tensor_payloads_cannot_forge_planning_handles or safe_tensor_payloads_cannot_forge_typed_handles or hashmap_rejects_forged"`
+  - Result: 4 passed, 918 deselected.
+- `python -m pytest helixc\tests\test_cli.py -q -k "failure_removes_prior_artifact or atomic_replace_failure_removes_existing or missing_input_reports_clean_error or check_output_rejects_source_as_output"`
+  - Result: 5 passed, 203 deselected.
+- `python -m pytest helixc\tests\test_cli.py -q -k "stage35"`
+  - Result: 63 passed, 145 deselected.
+- `python -m pytest helixc\tests\test_ptx.py -q -k "stage35"`
+  - Result: 26 passed, 52 deselected.
+- `python -m pytest helixc\tests\test_codegen.py -q -k "stage35 or agi or hashmap or tensor"`
+  - Result: 176 passed, 746 deselected.
+- `python -m pytest helixc\tests\test_cli.py -q`
+  - Result: 208 passed.
+- `python -m pytest helixc\tests\test_ptx.py -q`
+  - Result: 78 passed.
+- `python -m pytest helixc\tests --collect-only -q`
+  - Result: 2,409 tests collected.
+- `git diff --check`
+  - Result: passed.
+
+Clean-gate status:
+
+- Stage 35 clean gates remain `0/3`.
+- Restart 45 is a fix sweep, not a clean gate.
+- Next step is restart 46 as another fresh Stage 35 clean gate from the newest
+  pushed HEAD.
+
+Restart 46 process optimization:
+
+- Audit lanes should report bug families, not just the first issue they find.
+- Each finding should include the sibling sweep that was performed, likely
+  adjacent sites, and the strongest targeted regression needed to prove the
+  whole class.
+- Full gates should run after a clustered fix sweep is stable; exact canaries
+  and family slices should run first.
+- Read-only next-stage research may run in parallel with tests, but write
+  ownership stays scoped to the current fix sweep until commit.

@@ -1201,7 +1201,7 @@ def test_main_o_handles_oserror_on_write(monkeypatch, capsys, tmp_path):
     assert not os.path.exists(out_path)
 
 
-def test_stage35_check_output_atomic_replace_failure_keeps_existing(
+def test_stage35_check_output_atomic_replace_failure_removes_existing(
     monkeypatch, capsys, tmp_path
 ):
     from helixc import check as _check
@@ -1221,7 +1221,7 @@ def test_stage35_check_output_atomic_replace_failure_keeps_existing(
     assert rc == 1
     assert "cannot write output" in cap.err
     assert "synthetic replace denied" in cap.err
-    assert out_path.read_bytes() == b"OLD"
+    assert not out_path.exists()
     assert list(tmp_path.glob(".atomic_replace.bin.*.tmp")) == []
 
 
@@ -1259,6 +1259,36 @@ def test_stage35_check_output_rejects_source_as_output(capsys, tmp_path):
     assert rc == 2
     assert "output path must differ from input source path" in cap.err
     assert src_path.read_text(encoding="utf-8") == source
+
+
+def test_stage35_check_output_failure_removes_prior_artifact(capsys, tmp_path):
+    good = tmp_path / "good.hx"
+    bad = tmp_path / "bad.hx"
+    missing = tmp_path / "missing.hx"
+    out_path = tmp_path / "stale.bin"
+    good.write_text("fn main() -> i32 { 0 }\n", encoding="utf-8")
+    bad.write_text(
+        "fn main() -> i32 { let mut x: i64 = 1_i64; x = 2_i32; 0 }\n",
+        encoding="utf-8",
+    )
+
+    rc_good = main([str(good), "-o", str(out_path), "--no-stdlib"])
+    capsys.readouterr()
+    assert rc_good == 0
+    assert out_path.exists()
+
+    rc_bad = main([str(bad), "-o", str(out_path), "--no-stdlib"])
+    captured_bad = capsys.readouterr()
+    assert rc_bad == 1
+    assert "typecheck:" in captured_bad.out
+    assert not out_path.exists()
+
+    out_path.write_bytes(b"OLD")
+    rc_missing = main([str(missing), "-o", str(out_path), "--no-stdlib"])
+    captured_missing = capsys.readouterr()
+    assert rc_missing == 2
+    assert "file not found" in captured_missing.err
+    assert not out_path.exists()
 
 
 def _count_op_kinds(mod):
@@ -2000,6 +2030,61 @@ def test_stage35_direct_x86_missing_input_reports_clean_error(tmp_path):
     assert not out_path.exists()
     assert "error: input:" in proc.stderr
     assert "Traceback" not in proc.stderr
+
+
+def test_stage35_direct_x86_failure_removes_prior_artifact(tmp_path):
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    good = tmp_path / "good_direct.hx"
+    bad = tmp_path / "bad_direct.hx"
+    missing = tmp_path / "missing_direct.hx"
+    out_path = tmp_path / "stale_direct.bin"
+    good.write_text("fn main() -> i32 { 0 }\n", encoding="utf-8")
+    bad.write_text(
+        "fn main() -> i32 { let mut x: i64 = 1_i64; x = 2_i32; 0 }\n",
+        encoding="utf-8",
+    )
+
+    good_proc = subprocess.run(
+        [
+            sys.executable, "-m", "helixc.backend.x86_64",
+            str(good), str(out_path), "--no-stdlib",
+        ],
+        cwd=proj_root,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert good_proc.returncode == 0, good_proc.stdout + good_proc.stderr
+    assert out_path.exists()
+
+    bad_proc = subprocess.run(
+        [
+            sys.executable, "-m", "helixc.backend.x86_64",
+            str(bad), str(out_path), "--no-stdlib",
+        ],
+        cwd=proj_root,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert bad_proc.returncode == 1, bad_proc.stdout + bad_proc.stderr
+    assert "type error" in bad_proc.stderr
+    assert not out_path.exists()
+
+    out_path.write_bytes(b"OLD")
+    missing_proc = subprocess.run(
+        [
+            sys.executable, "-m", "helixc.backend.x86_64",
+            str(missing), str(out_path), "--no-stdlib",
+        ],
+        cwd=proj_root,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert missing_proc.returncode == 2, missing_proc.stdout + missing_proc.stderr
+    assert "error: input:" in missing_proc.stderr
+    assert not out_path.exists()
 
 
 def test_stage35_direct_x86_invalid_utf8_reports_clean_error(tmp_path):

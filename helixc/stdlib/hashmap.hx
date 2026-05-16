@@ -58,9 +58,10 @@ fn hashmap_ok(start: i32, cap: i32) -> i32 {
     else { if __arena_get(start - 2) != hashmap_magic() { 0 }
     else { if __arena_get(start - 1) != cap { 0 }
     else { if data_len > 2147483647 - start { 0 }
+    else { if data_len > 2147483647 - 3 { 0 }
     else { if start + data_len >= __arena_len() { 0 }
     else { if __arena_get(start + data_len) != hashmap_footer(cap) { 0 }
-    else { 1 } } } } } } }
+    else { if arena_span_in_tensor_payload(start - 2, data_len + 3) != 0 { 0 } else { 1 } } } } } } } } }
 }
 
 @pure

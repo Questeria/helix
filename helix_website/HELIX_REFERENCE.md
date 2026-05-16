@@ -97,7 +97,7 @@ Functions are checked for structural recursion at compile time. Non-terminating 
 fn main() -> i32 { 42 }
 ```
 
-That's it. Compile with `kovc hello.hx` and you get a 4KB ELF binary that returns 42 from `main`. No `import std`. No `printf`. Just the value.
+That's it. The live compiler path is currently `python -m helixc.check hello.hx -o hello.bin`; `kovc` is reserved for the self-hosted/bootstrap compiler target. The produced Linux ELF returns 42 from `main`. No `import std`. No `printf`. Just the value.
 
 ### A real program
 
@@ -192,7 +192,7 @@ Quote Splice modify verifier
 ```rust
 // Line comment
 /* Block comment */
-/// Doc comment (auto-extracted by `kovc --doc`)
+/// Doc comment (auto-extracted by `python -m helixc.check --doc`)
 ```
 
 ### Type system
@@ -955,7 +955,7 @@ Kovostov-Native/
 │   │   ├── nn.hx
 │   │   ├── option.hx
 │   │   └── autodiff.hx
-│   ├── tests/          # 2,406 tests collected in restart 44 fix verification
+│   ├── tests/          # 2,409 tests collected in restart 45 fix verification
 │   │   ├── test_codegen.py
 │   │   ├── test_parser.py
 │   │   ├── test_match.py
@@ -993,10 +993,10 @@ findings.
 
 ## Tooling & CLI
 
-### `kovc` — the compiler driver
+### Live compiler driver
 
 ```
-kovc <source.hx> [options]
+python -m helixc.check <source.hx> [options]
 
 Options:
   -o <file>             Output binary path (default: a.out)
@@ -1014,17 +1014,23 @@ Options:
   --doc                 Extract /// doc comments to markdown
 ```
 
-### `kovc check` — fast typechecker
+The self-hosted `kovc`/Helix-native compiler remains a bootstrap target, not the
+current user-facing executable in this checkout.
 
-For editor integrations: parses and typechecks without emitting code.
+### Live check mode
 
-### `kovc fmt` — code formatter (Phase-1)
+For editor integrations today: `python -m helixc.check <source.hx> --check-only`
+parses and typechecks without emitting code.
 
-### `kovc test` — test runner (Phase-1)
+### Future `kovc fmt` — code formatter (Phase-1)
+
+### Future `kovc test` — test runner (Phase-1)
 
 ### Helix Language Server (Phase-1)
 
-LSP server providing diagnostics, hover, go-to-definition, completion. Built on top of `kovc check`.
+LSP server providing diagnostics, hover, go-to-definition, completion. The live
+prototype should build on `python -m helixc.check --check-only`; `kovc check`
+is a self-hosted tooling target.
 
 ### Diagnostics
 
@@ -1126,7 +1132,9 @@ The Kovostov AGI project (which Helix is the foundation for) commits to training
 
 ## Code Samples Gallery
 
-Use these directly on the website. Each is small, self-contained, and demonstrates a feature.
+Treat these as website draft snippets. Promote a snippet to copy/paste-ready
+only after it passes the current `python -m helixc.check` path; otherwise mark
+it as roadmap syntax.
 
 ### #1 — Hello, 42 (the canonical first program)
 
@@ -1369,8 +1377,8 @@ fn main() -> i32 {
 
 | Term | Meaning |
 |------|---------|
-| **kovc** | The Helix compiler binary (named after Kovostov). |
-| **kovc.hx** | The Helix source file that, when compiled by kovc, produces kovc. (Self-hosting.) |
+| **kovc** | Future self-hosted Helix compiler binary name; current production path is Python-hosted `helixc`. |
+| **kovc.hx** | Helix self-host target source; it is not the shipped production compiler yet. |
 | **hex0** | The 299-byte hand-encoded x86-64 program at the root of the bootstrap chain. |
 | **HBS** | Helix Bootstrap Subset — the minimal language subset that kovc.hx itself uses. Documented in `docs/lang/hbs.md`. |
 | **AST tag** | An i32 numeric ID for an AST node kind. 100+ tags total. |
@@ -1521,7 +1529,7 @@ Or: a single character `λ` in monospace inside a hex bracket `[λ]`. Clean, sho
 
 - **299 bytes** — current hex0 binary size
 - **Python-hosted helixc** — current production compiler implementation
-- **2,406 live tests collected** — restart 44 fix verification; rerun scoped pytest collection before publishing
+- **2,409 live tests collected** — restart 45 fix verification; rerun scoped pytest collection before publishing
 - **30+ stages** — Approach A roadmap
 - **23 silent-corruption bugs** — found and disclosed during development
 - **restart-gated audit campaign** — multi-agent code review cycles continue until three clean gates pass
