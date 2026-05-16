@@ -16,15 +16,15 @@ rebuild the compiler reproducibly.
 
 ## Build status
 
-This is an early in-development language. Stage 35 is currently in audit
-cleanup, and clean gates remain `0/3` in the Stage 35 progress ledger. The
-restart 62 combined audit-and-fix collected 2,556+ live `helixc/tests`
-pytest tests (see Increments 70 onward in the progress ledger for the
-per-restart canary chain since restart 50; restarts 55 / 56 / 58 / 59 / 61
-landed source fixes without paired full bookkeeping, restarts 57 /
-58-catch-up / 60 / 62 filled the bookkeeping debt retroactively). Run
-`python -m pytest helixc/tests --collect-only -q -p no:cacheprovider` for
-the current count.
+This is an early in-development language. **Stage 35 is CLOSED** (3/3
+clean gates, achieved at restart 65 — Increment 82 in the Stage 35
+progress ledger). Restart 65 collected **2,556+ live `helixc/tests`
+pytest tests** (see Increments 70 onward in the progress ledger for
+the per-restart canary chain since restart 50; Increments 80 + 81 + 82
+are the three consecutive clean-gate records that closed Stage 35).
+Stage 36 opens next. Run
+`python -m pytest helixc/tests --collect-only -q -p no:cacheprovider`
+for the live count.
 
 Working today:
 

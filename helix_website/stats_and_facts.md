@@ -5,15 +5,15 @@ snapshot, not a permanent claim; rerun the listed commands before publishing.
 
 ## Current Snapshot
 
-Snapshot date: 2026-05-16. The restart 62 combined audit-and-fix (Increments 78 + 79) is the latest recorded Stage 35 bookkeeping checkpoint in this file; use live `git log -1 --oneline` before publishing.
+Snapshot date: 2026-05-16. **Stage 35 CLOSED at restart 65** (Increment 82 — three consecutive all-clean fresh audits on top of substantive HEAD `e441173`). Use live `git log -1 --oneline` before publishing.
 
 | Stat | Value | Where it comes from |
 |------|-------|---------------------|
 | **hex0 binary size** | 299 bytes | `stage0/hex0/hex0.bin` |
 | **Total bootstrap bytes you must initially audit** | 299 | The hand-encoded hex0 root |
-| **pytest tests collected** | 2,556+ | `python -m pytest helixc/tests --collect-only -q` during the restart 62 combined audit-and-fix (see Increments 70 onward in the progress ledger for the per-restart canary chain since restart 50; restarts 55 / 56 / 58 / 59 / 61 landed source fixes without paired full bookkeeping, restarts 57 / 58-catch-up / 60 / 62 filled the bookkeeping debt with retroactive canaries) |
-| **Clean audit gates** | 0/3 | `docs/stage35-progress-2026-05-15.md` |
-| **Current stage** | Stage 35 audit cleanup | Stage 35 progress ledger |
+| **pytest tests collected** | 2,556+ | `python -m pytest helixc/tests --collect-only -q` at restart 65 (Stage 35 closure). See Increments 70 onward in the progress ledger for the per-restart canary chain since restart 50; Increments 80 + 81 + 82 are the three consecutive clean-gate records that closed Stage 35. |
+| **Clean audit gates** | **3/3 — Stage 35 CLOSED** | `docs/stage35-progress-2026-05-15.md` Increment 82 |
+| **Current stage** | Stage 35 CLOSED; Stage 36 opens next | Stage 35 progress ledger Increment 82 |
 | **Backend targets with tests** | x86-64 ELF, PTX text emission | `helixc/backend/` and tests |
 | **Optimization passes** | const-fold, CSE, DCE, FDCE, hash-cons | `helixc/ir/passes/` and frontend hash-cons |
 | **License** | Apache 2.0 (in `LICENSE`); CC-BY 4.0 and CC0 are stated policy, not yet file-resident | source / docs / future weights |

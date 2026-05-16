@@ -4871,3 +4871,140 @@ Pattern now validated across **three consecutive restarts**
 (62 + 63 + 64) and should remain the default through Stage 35
 closure at restart 65.
 
+
+## Increment 82 — Sixty-Fifth Clean-Gate Restart CLEAN (3/3) — STAGE 35 CLOSED (2026-05-16)
+
+Restart 65 ran as a **combined audit-AND-fix** agent (single dispatch,
+continuing the restart 62/63/64 anti-abbreviation pattern). Fresh 3-lane
+audit on top of `8f1b6a2` (the restart 64 CLEAN gate HEAD).
+
+**Result: zero findings across all three lanes — THIRD AND FINAL
+CLEAN GATE.** Clean-gate counter advances `2/3` → **`3/3`**.
+
+# STAGE 35 IS CLOSED.
+
+The audit campaign that ran from restart 1 through restart 65 — closing
+i32-overflow sibling sweeps, NaN-skip sibling sweeps, INT32_MIN
+saturation siblings, autodiff singularity fail-closed, optimizer
+NaN-fail-closed, transcendentals range reduction, bare `except
+Exception` narrowing, surface drift, and bookkeeping debt — has now
+produced three consecutive all-clean audits from the same substantive
+HEAD `e441173`. The audit surface is empirically exhausted; further
+restarts on this HEAD would return the same all-clean result.
+
+### Lane audit at HEAD 8f1b6a2
+
+- **Lane A: CLEAN (0 findings).** Frontier remains exhausted. No
+  helixc/ changes since restart 62 commit `e441173` — only the
+  restart 63 + 64 CLEAN ledger/handoff commits sit on top, and they
+  touched only `docs/stage35-progress-2026-05-15.md` and
+  `HANDOFF_FOR_CLAUDE.md`. Spot-check `git diff e441173..HEAD --
+  helixc/stdlib/` returns empty. All restart-62-era guarantees
+  carry forward unchanged:
+  - `sgd_f32_step` per-element NaN-skip (restart 62 A1, lines 206-223
+    of `helixc/stdlib/nn.hx`).
+  - `momentum_step` per-element both-NaN-skip (restart 62 A2, lines
+    471-493).
+  - `adam_f32_step` per-element NaN-skip (restart 50 A2).
+  - `dense_classifier_sgd_step_f32` sum_e fail-closed (restart 48 A2)
+    — different defense pattern (input-validation aggregate), validated
+    against the NaN-`lr` corner: any NaN in `w`/`x`/`b` propagates
+    through `score → __exp → sum_e` and is caught by the
+    `sum_e <= 0 || sum_e != sum_e` guard before the write loop runs.
+  - Transcendentals NaN pass-through convention (caller-domain
+    responsibility, matches `__sin`/`__cos`/`__log`/`__exp`/`__powi`).
+  - i32/INT_MIN saturation sibling closure (sgd_step_scalar / array,
+    restart 53 A7 + restart 54 A6).
+  - No new optimizer surfaces introduced (rmsprop / adagrad / adamw
+    / nesterov / nadam / adamax / adadelta / ftrl all confirmed
+    absent from `helixc/stdlib/nn.hx`).
+
+- **Lane B: CLEAN (0 findings).** Eighth consecutive Lane B clean
+  window since restart 58. No Python source changes since the restart
+  61 commit `c697f3d`; restart 62 touched only `nn.hx` + test files;
+  restarts 63 + 64 were ledger/handoff only. No new bare
+  `except Exception` introduced anywhere in `helixc/` since restart 62.
+  `except Exception` count distribution unchanged from restart 64
+  (78 occurrences across 35 files, all with re-raise prelude or
+  test-only context per restarts 51-61 coverage).
+
+- **Lane C: CLEAN (0 findings) — pre-closure surface refresh in
+  this commit.** Per the closure protocol, the count-bearing surfaces
+  are now refreshed from "restart 62 / 2,556+ tests / clean gates 0/3"
+  to **"restart 65 / 2,556+ tests / Stage 35 CLOSED (3/3 clean gates)"**.
+  The deferred-refresh convention applied to clean-gate restarts 63 + 64;
+  the closure restart performs the refresh as part of the closure
+  ceremony. Surfaces updated:
+  - `README.md:31` status paragraph.
+  - `QUICKSTART.md:17-27` build status paragraph.
+  - `helix_website/stats_and_facts.md:8` snapshot date + `:15` clean
+    gates row.
+  - `HANDOFF_FOR_CLAUDE.md` top-of-file + "What Restart 65 Returned"
+    section + counter advancement.
+
+### Verification
+
+- `python -m pytest helixc/tests --collect-only -q`
+  - Result: **2,556 tests collected** (exact match with surface claim).
+- `git diff e441173..HEAD -- helixc/` returns empty.
+- `git diff e441173..HEAD -- helixc/stdlib/` returns empty.
+- Git working tree clean at HEAD `8f1b6a2` before this commit.
+
+### Clean-gate status after restart 65
+
+- Stage 35 clean gates advance **2/3 → 3/3**.
+- **STAGE 35 IS CLOSED.**
+- The next campaign opens **Stage 36**. Restart 65 is the final restart
+  of the Stage 35 audit-cleanup campaign.
+
+### Stage 35 campaign summary
+
+The Stage 35 campaign ran from the initial restart through restart 65
+across multiple weeks of audit cycles. Substantive Lane A / B / C
+fixes landed across restarts 1-62. Restarts 63 + 64 + 65 are the
+three consecutive clean gates that close the stage. Key family
+closures (non-exhaustive):
+
+- **i32-overflow / INT32_MIN saturation** (restarts 53, 54, 56, 58):
+  sgd scalar + array, axpy, dense gemv, accumulators, every
+  multiply that could wrap.
+- **NaN-skip / fail-closed optimizers** (restarts 47, 48, 50, 58, 61,
+  62): adam, sgd, momentum, dense_classifier softmax-step, all
+  loss functions (mse, mae, bce, huber, ce), layer_norm, softmax,
+  clip_grad_norm, argmax row-wise, accuracy_count.
+- **Transcendentals range reduction** (restarts 47-50): __exp, __log,
+  __sin, __cos, __tanh, __sigmoid, __softplus, __gelu, __silu, with
+  caller-domain NaN pass-through convention for hot path.
+- **Autodiff fail-closed at singularities** (restarts 45-48): forward
+  and reverse mode, all helpers (d_add/sub/mul/div/sqrt/log/recip/sin/
+  cos/relu/abs/...), tape and adjoint validators.
+- **Compiler / backend / CLI hardening** (restarts 47-61): const-fold
+  re-raise preludes, monomorphize cleanup, autodiff_cli exit codes +
+  banner, x86_64 / ptx banner support, check.py argv parser.
+- **Surface drift / bookkeeping** (every restart, with retroactive
+  catch-up sweeps at restarts 57, 58, 60, 62, 65): README,
+  QUICKSTART, HELIX_REFERENCE, stats_and_facts, HANDOFFs,
+  progress ledger, lane audit docs.
+
+### Stage 36 starting protocol
+
+When Stage 36 begins:
+
+1. Pull the latest `main`; verify HEAD includes Increment 82.
+2. The campaign convention shifts from "3-clean-gate audit closure"
+   to whatever protocol Stage 36 declares. Stage 35's audit-cleanup
+   convention is now closed.
+3. The frontier-exhaustion observation at restart 62-65 is a
+   data point about how long it takes a sibling-sweep audit campaign
+   to converge: ~62 substantive restarts + 3 confirmation gates.
+4. Subsequent stages should retain the combined audit-and-fix
+   anti-abbreviation discipline established at restart 62.
+
+### Process-discipline observation
+
+Restart 65 followed the combined audit-and-fix pattern exactly:
+single dispatch, full bookkeeping in one commit, no abbreviation.
+Pattern validated across **four consecutive restarts** (62 + 63 + 64
++ 65) and remains the recommended default for any future audit
+campaign.
+

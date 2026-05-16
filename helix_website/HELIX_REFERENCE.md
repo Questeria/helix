@@ -56,7 +56,7 @@
 
 ### 1. No silent corruption
 
-Every place where the compiler could silently produce wrong code traps with a unique trap-id (convention: `AST_TAG * 1000 + sub_id`). When a compile-time invariant fails, the produced binary contains a `ud2` instruction (SIGILL) with the trap-id encoded — clear signal vs. silent garbage. Dozens of silent-corruption defects have been found and fixed during development (live count grows with each Stage 35 restart; see `docs/stage35-progress-2026-05-15.md` Increments 50 onward for the open-ended ledger). Repo-local audit docs include reproducers and status; a future `/audits` website page should expose them publicly.
+Every place where the compiler could silently produce wrong code traps with a unique trap-id (convention: `AST_TAG * 1000 + sub_id`). When a compile-time invariant fails, the produced binary contains a `ud2` instruction (SIGILL) with the trap-id encoded — clear signal vs. silent garbage. Dozens of silent-corruption defects have been found and fixed during development (Stage 35 campaign ran restarts 1-65 closing the audit frontier; see `docs/stage35-progress-2026-05-15.md` Increments 50 onward for the per-restart ledger and Increment 82 for the Stage 35 closure record). Repo-local audit docs include reproducers and status; a future `/audits` website page should expose them publicly.
 
 ### 2. Growing from raw binary
 
@@ -958,7 +958,7 @@ Kovostov-Native/
 │   │   ├── tensor.hx          # 1D/2D tensor primitives
 │   │   ├── transcendentals.hx # __exp/__log/__sin/__cos/__sqrt/__sigmoid/__tanh + scalar optim steps
 │   │   └── vec.hx             # caller-trust Vec<i32>-style sequences
-│   ├── tests/          # 2,556+ tests collected (live count grows with each Stage 35 audit cycle; see `docs/stage35-progress-2026-05-15.md`)
+│   ├── tests/          # 2,556+ tests collected at restart 65 (Stage 35 CLOSED 3/3; live count grows with subsequent stages — see `docs/stage35-progress-2026-05-15.md` Increment 82)
 │   │   ├── test_codegen.py
 │   │   ├── test_parser.py
 │   │   ├── test_match.py
@@ -988,9 +988,10 @@ The Python-hosted `helixc` is currently the production compiler. The Helix self-
 Each stage of Helix goes through multi-agent audit cycles. Current Stage 35 uses restart-specific audit lanes for stdlib/runtime safety, CLI/backend artifacts, and docs/status honesty; older specialist names such as code-reviewer, silent-failure-hunter, and type-design-analyzer are historical examples, not a fixed every-commit roster. Findings are tracked in `docs/audit-stage4-followup.md` style — each finding has a unique ID, severity, reproducer, status, and resolution commit.
 
 Stage 30 historically used **5 consecutive clean audits** with zero new
-findings. Stage 35 uses a faster **3-clean-gate** policy after each fix sweep;
-the current Stage 35 ledger remains `0/3` until a fresh restart produces no new
-findings.
+findings. Stage 35 used a faster **3-clean-gate** policy after each fix sweep;
+**Stage 35 CLOSED at restart 65** with a 3/3 clean-gate record (Increment 82
+in the progress ledger; three consecutive all-clean fresh audits on top of
+substantive HEAD `e441173`).
 
 ---
 
@@ -1565,10 +1566,10 @@ Or: a single character `λ` in monospace inside a hex bracket `[λ]`. Clean, sho
 
 - **299 bytes** — current hex0 binary size
 - **Python-hosted helixc** — current production compiler implementation
-- **2,556+ live tests collected** — restart 62 combined audit-and-fix (see Increments 70 onward in the progress ledger for the per-restart canary chain since restart 50; restarts 55/56/58/59/61 landed source fixes without paired full bookkeeping, restarts 57 / 58-catch-up / 60 / 62 filled the bookkeeping debt retroactively); rerun scoped pytest collection before publishing
+- **2,556+ live tests collected** — restart 65 (Stage 35 CLOSED 3/3; see Increments 70 onward in the progress ledger for the per-restart canary chain since restart 50; Increments 80 + 81 + 82 are the three consecutive clean-gate records that closed Stage 35); rerun scoped pytest collection before publishing
 - **Approach A roadmap (30 numbered stages)** — historical bootstrap-port sequencing; current live design doc (`docs/HELIX_V1_FINAL_FEATURES.md`) references stage numbers up to Stage 65 (35 distinct stages enumerated; not a strict consecutive sequence).
-- **Dozens of silent-corruption defects (live count grows with each Stage 35 restart; see `docs/stage35-progress-2026-05-15.md` Increments 50 onward for the open-ended ledger)** — found and disclosed during development
-- **restart-gated audit campaign** — multi-agent code review cycles continue until three clean gates pass
+- **Dozens of silent-corruption defects (Stage 35 campaign ran restarts 1-65 closing the audit frontier; see `docs/stage35-progress-2026-05-15.md` Increments 50 onward for the per-restart ledger)** — found and disclosed during development
+- **restart-gated audit campaign** — multi-agent code review cycles continue until three consecutive clean gates pass (Stage 35 achieved 3/3 at restart 65)
 - **Target bootstrap chain: 0 external toolchain dependencies once complete** — current production path still uses Python 3.10+ and Linux/WSL for ELFs
 - **self-hosting target** — not shipped yet
 - **100+ AST tags** — language richness

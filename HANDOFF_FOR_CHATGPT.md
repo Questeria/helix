@@ -3,7 +3,7 @@
 **Historical snapshot date**: 2026-05-12
 **Historical snapshot HEAD**: `a2e7fc4` (Stage 30 cycle-5 prep: document M2 trade-off)
 **Current-status warning**: this file is a historical handoff, not the current repo state. As of 2026-05-16, continue from the Stage 35 progress ledger, live git HEAD, and `git status --short` instead.
-**Current continuation pointer**: Stage 35 audit cleanup. Continue from the newest pushed HEAD shown by `git log -1 --oneline`, not from any older fixed hash in this historical handoff. The restart 62 combined audit-and-fix (Increments 78 + 79) is the latest recorded bookkeeping checkpoint in this file; clean gates remain `0/3`, and live `helixc/tests` collection is 2,556+ (see Increments 70 onward in the progress ledger for the per-restart canary chain since restart 50; restarts 55 / 56 / 58 / 59 / 61 landed source fixes without paired full bookkeeping, restarts 57 / 58-catch-up / 60 / 62 filled the bookkeeping debt retroactively). Run `git status --short` and tail `docs/stage35-progress-2026-05-15.md` for the newest truth.
+**Current continuation pointer**: **Stage 35 CLOSED (3/3 clean gates at restart 65).** Stage 36 opens next. Continue from the newest pushed HEAD shown by `git log -1 --oneline`, not from any older fixed hash in this historical handoff. The Stage 35 closure record is Increment 82 in `docs/stage35-progress-2026-05-15.md`; live `helixc/tests` collection at closure is 2,556+ (see Increments 70 onward in the progress ledger for the per-restart canary chain since restart 50; Increments 80 + 81 + 82 are the three consecutive clean-gate records that closed Stage 35). Run `git status --short` and tail `docs/stage35-progress-2026-05-15.md` for the newest truth.
 **Project**: `C:\Projects\Kovostov-Native\` — Helix language self-hosting compiler
 
 User backed up the entire folder before this handoff in case of issues.
@@ -18,7 +18,7 @@ Build Kovostov-Native: open-source AGI bootstrapped from raw binary, with own la
 - Public training data only
 - Deadline 2027-12-31
 
-**Historical snapshot phase**: Phase 0 (self-hosting compiler) — Stage 29 self-host milestone had just landed at the time of this snapshot. The current repo has advanced to Stage 35 audit cleanup.
+**Historical snapshot phase**: Phase 0 (self-hosting compiler) — Stage 29 self-host milestone had just landed at the time of this snapshot. The current repo has advanced to **Stage 35 CLOSED** (3/3 clean gates at restart 65); Stage 36 opens next.
 
 ---
 
@@ -228,7 +228,7 @@ older 5-clean-audit count as historical context; Stage 35 currently requires
 
 Per user's audit protocol:
 - **ZERO HIGH/MEDIUM/LOW issues** per cycle for CLEAN declaration
-- Heavy gate must be GREEN before declaring clean. Historical snapshot had 670+ tests; the restart 62 combined audit-and-fix collected 2,556+ live `helixc/tests` tests (see Increments 70 onward in the progress ledger for the per-restart canary chain since restart 50; restarts 55 / 56 / 58 / 59 / 61 landed source fixes without paired full bookkeeping, restarts 57 / 58-catch-up / 60 / 62 filled the bookkeeping debt retroactively), so refresh with `python -m pytest helixc/tests --collect-only -q`.
+- Heavy gate must be GREEN before declaring clean. Historical snapshot had 670+ tests; restart 65 (Stage 35 closure) collected 2,556+ live `helixc/tests` tests (see Increments 70 onward in the progress ledger for the per-restart canary chain since restart 50; Increments 80 + 81 + 82 are the three consecutive clean-gate records that closed Stage 35), so refresh with `python -m pytest helixc/tests --collect-only -q`.
 - 3 CONSECUTIVE clean cycles on the SAME HEAD to declare stage done
 - If issues found: apply fix-sweep, re-test, dispatch next cycle
 
