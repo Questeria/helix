@@ -4,7 +4,7 @@
 **Repo**: `C:\Projects\Kovostov-Native`  
 **Remote**: `https://github.com/Questeria/helix.git`  
 **Branch**: `main`  
-**Handoff written after**: `5ee0362 Fix Stage 35 forty-eighth restart findings`
+**Handoff written after**: `6c555a4 Fix Stage 35 forty-ninth restart findings`
 
 This handoff is for Claude to continue the Helix Stage 35 audit campaign.
 Treat live git state as truth if it differs from this file.
@@ -13,61 +13,69 @@ Treat live git state as truth if it differs from this file.
 
 Stage 35 is still in audit cleanup. Clean gates remain `0/3`.
 
-The latest completed fix sweep is restart 48:
+The latest completed fix sweep is restart 49:
 
-- Commit: `5ee0362 Fix Stage 35 forty-eighth restart findings`
+- Commit: `6c555a4 Fix Stage 35 forty-ninth restart findings`
 - Status at handoff creation: clean working tree, `main` aligned with
   `origin/main`
-- Progress ledger: `docs/stage35-progress-2026-05-15.md` (see Increment 67
-  for restart 48; 66 for restart 47; 65 for restart 46)
-- Current-facing status files now say restart 48 and 2,466 collected tests
+- Progress ledger: `docs/stage35-progress-2026-05-15.md` (see Increment 68
+  for restart 49; 67 for restart 48; 66 for restart 47; 65 for restart 46)
+- Current-facing status files now say restart 49 and 2,479 collected tests
 
-Restart 48 was a fix sweep, not a clean gate. The next action is restart 49,
-using the bug-family audit protocol below.
+Restart 49 was a fix sweep that closed the entire restart-48 deferred
+backlog plus one new B4 finding (lower_ast structural_hash narrowing). The
+deferred list is now empty. The next action is restart 50, which MUST run a
+fresh 3-lane audit (no deferred items to pick up).
 
-## Restart 48 → Restart 49 deferred findings
+## What Restart 49 Fixed
 
-Restart 48's Lane B and Lane C audits surfaced additional issues that were
-intentionally deferred to keep the restart-48 fix sweep tight. Restart 49
-should pick these up first; they are NOT optional, they are documented audit
-findings that must close before any clean gate.
+Restart 49 was a deferred-only fix sweep — no fresh 3-lane audit dispatch.
+It closed all 7 of the Lane B + Lane C items that restart 48 explicitly
+deferred (per Increment 67), plus one new finding (B4) caught while reading
+adjacent code:
 
-Lane B deferred:
+Lane B (4 fixes):
 
-- autodiff_cli exit codes are inverted vs the other three CLIs: usage
-  errors return 1 (should be 2 per the check/x86/ptx convention) and
-  differentiate runtime failures return 2 (should be 1).
-- `-h`/`--help` missing on `helixc.backend.x86_64`, `helixc.backend.ptx`,
-  and `helixc.frontend.autodiff_cli`. `helixc.check` is the only CLI with
-  proper help. ptx has no usage banner at all.
-- `helixc.backend.x86_64` usage banner does not mention `-l`/`--no-color`/
-  `--color`/`--hash`/`--hash-cons` (added in restart 47 B4).
-- `helixc/ir/lower_ast.py:3082-3086` has a `try: structural_hash(...)`
-  with a bare `except Exception` that swallows `NotImplementedError` from
-  the cycle-14/15 loud-fail discipline in `ast_hash.py`. Sibling of
-  restart 47 B1's narrowing in `_resolve_monomorphized_struct_type`.
+1. `autodiff_cli` exit codes now match the check/x86/ptx convention:
+   bad invocation → rc=2, source/parse error → rc=1, internal/runtime
+   error → rc=1. Previously: bad invocation rc=1 (wrong), parse error
+   rc=2 (wrong), differentiate failure rc=2 (wrong).
+2. `-h` / `--help` works on every CLI (`helixc.check`,
+   `helixc.backend.x86_64`, `helixc.backend.ptx`,
+   `helixc.frontend.autodiff_cli`). All four print a banner to stdout and
+   exit 0. Previously only `helixc.check` had proper help support.
+3. `helixc.backend.x86_64` and `helixc.backend.ptx` banners now enumerate
+   every accepted flag: `-O0..-O3`, `--no-opt`, `-Wad=`, `-Wdeprecated=`,
+   `-l <libname>`, `--no-color`, `--color`, `--hash`, `--hash-cons`.
+   `helixc.backend.ptx` also gained a usage banner on bare invocation
+   (was: only `error: ptx: missing input path`).
+4. `helixc/ir/lower_ast.py:3082-3086` narrowed `except Exception` around
+   `structural_hash(expr.inner)` to
+   `except (KeyError, AttributeError, TypeError, ValueError)` so
+   `NotImplementedError` from `ast_hash`'s loud-fail discipline
+   propagates instead of aliasing distinct quote bodies to the same
+   `_pretty` fallback string. Mirror of restart 47 B1 + restart 48 B2/B3.
 
-Lane C deferred (per Increment 67 C4-C8):
+Lane C (6 fixes):
 
-- `docs/HELIX_V1_FINAL_FEATURES.md` line 3 status line uses obsolete
-  Stage 31-34 numbering that contradicts `docs/ROADMAP.md`. Add a
-  numbering-disclaimer sentence pointing to ROADMAP as authoritative.
-- `docs/ROADMAP.md` line 17 says "5 dogfood programs" but the live set is
-  6 (`dogfood_01..05` + `self_improving_agent.hx`).
-- Date stamps in `docs/ROADMAP.md` line 8 ("2026-05-15"),
-  `docs/HELIX_V1_FINAL_FEATURES.md` line 3 ("as of 2026-05-15"),
-  `docs/HELIX_PURPOSE.md` line 4 ("2026-05-13") are one+ day stale.
-  Either bump to today or use ledger-anchored phrasing like README.
-- `helix_website/HELIX_REFERENCE.md` lines 956-962 Compiler-Architecture
-  stdlib list mirrors C1's drift in a different physical site (6 wrong
-  files; should be the full 16). Apply the same rewrite pattern Increment
-  67 applied to lines 508-567.
-- HELIX_REFERENCE.md "23+ silent-corruption bugs (and counting)" wording
-  is technically open-ended but understates the live count by ~10x after
-  restart 46-48 disclosed 41 more findings. Replace with a non-numeric
-  "dozens of silent-corruption defects" phrasing.
-- `HANDOFF_FOR_CHATGPT.md` line 17 has a historical-block license-triple
-  claim that uses the bare wording. Soften to match the other surfaces.
+5. `docs/HELIX_V1_FINAL_FEATURES.md` line 3 status sentence rewritten to
+   disclaim its planning-era Stage 31-34 numbering and point at
+   `docs/ROADMAP.md` as authoritative.
+6. `docs/ROADMAP.md` line 17 corrected from "5 dogfood programs" to
+   "6 dogfood programs + self-improving-agent flagship".
+7. Date stamps in `docs/ROADMAP.md`, `docs/HELIX_V1_FINAL_FEATURES.md`,
+   `docs/HELIX_PURPOSE.md` switched to ledger-anchored phrasings.
+8. `helix_website/HELIX_REFERENCE.md` Compiler-Architecture stdlib list
+   (lines 956-962) rewritten with all 16 actual modules + per-module tags.
+9. HELIX_REFERENCE.md "23+ silent-corruption bugs (and counting)" reframed
+   as "Dozens of silent-corruption defects (live count grows with each
+   restart; see Increments 50-67+)" so the headline doesn't understate.
+10. `HANDOFF_FOR_CHATGPT.md` line 17 historical-block license-triple
+    softened to match current-facing surfaces.
+
+Regression coverage added in `helixc/tests/test_cli.py` (13 cases): 2 for
+B1 exit codes, 8 parametrized for B2 -h/--help (4 CLIs × 2 flags), 2 for
+B3 banner content, 1 for B4 source-text invariant.
 
 ## What Restart 48 Fixed
 
@@ -285,7 +293,14 @@ fresh confirmation before restart 47, rerun it alone with a longer timeout:
 python -m pytest helixc/tests/test_codegen.py -q -k "stage35 or agi or hashmap or tensor"
 ```
 
-## Restart 49 Protocol (bug-family audit, refined from restart 48)
+## Restart 50 Protocol (bug-family audit, refined from restart 49)
+
+**IMPORTANT**: restart 49 closed the entire restart-48 deferred backlog.
+There are NO carry-forward findings. Restart 50 MUST run a fresh 3-lane
+audit (read-only). The bar continues to rise — restarts 46/47/48/49 each
+closed 12, 17, 13, 11 findings respectively, so 4 consecutive restarts have
+each found more issues than the prior. The first restart where the audit
+returns 0 findings on the same HEAD becomes clean gate 1/3.
 
 The bug-family audit pattern from restart 46 (12 findings) and restart 47
 (17 findings) worked well — each restart pulls more sibling issues into the
