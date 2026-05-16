@@ -308,6 +308,31 @@ def test_stage35_emit_ptx_ignores_host_ad_function(tmp_path):
     assert "unresolved generic type D" not in proc.stderr
 
 
+def test_stage35_emit_ptx_wad_error_does_not_emit_artifact(tmp_path):
+    src_path = tmp_path / "host_ad_kernel_error.hx"
+    src_path.write_text(
+        "fn loss(x: D<f64>, y: D<i32>) -> D<f64> { x + y }\n"
+        "@kernel fn k() { let i = thread_idx(); }\n",
+        encoding="utf-8",
+    )
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    proc = subprocess.run(
+        [
+            sys.executable, "-m", "helixc.check", str(src_path),
+            "--emit-ptx", "-Wad=error",
+        ],
+        cwd=proj_root,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    assert proc.stdout == ""
+    assert "ad:" in proc.stderr
+    assert "ERROR" in proc.stderr
+    assert "AD002" in proc.stderr or "24200" in proc.stderr
+
+
 def test_c119_emit_ptx_rejects_no_kernel_modules(capsys):
     src = write_src("fn helper(x: i32) -> i32 { x + 1 }\n")
     try:

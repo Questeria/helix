@@ -1260,6 +1260,51 @@ Clean-gate status:
 - Stage 35 clean gates remain `0/3`.
 - Next step is another fresh Stage 35 clean gate on this fixed commit.
 
+## Increment 37 - Eighteenth Clean-Gate Restart Fix Sweep
+
+Restart 18 began from commit `017c873` with green smoke checks and broader
+supporting verification, but the audit lanes found one remaining
+artifact-isolation edge and one direct 2D accessor overflow sibling issue. The
+gate did not count as clean and remains at `0/3`.
+
+Fixes landed in this increment:
+
+- `helixc.check --emit-ptx` now drains AD warnings before printing PTX. Normal
+  warning policy still leaves the PTX artifact on stdout and sends diagnostics
+  to stderr, while `-Wad=error` exits before printing any PTX artifact.
+- A subprocess regression now locks the `--emit-ptx -Wad=error` behavior so
+  failed AD-warning promotions cannot leak a valid-looking PTX module.
+- Direct `ti2d_set/get` and `tf2d_set/get` now route through a checked
+  `t2d_offset` helper, rejecting negative, out-of-row, multiplication-overflow,
+  and final-addition-overflow offsets instead of aliasing unrelated arena slots.
+- Behavioral regressions now prove overflowing, negative, and out-of-row direct
+  2D accessor offsets do not write before/over the target tensor and return
+  empty values.
+
+Focused verification:
+
+- `python -m pytest helixc\tests\test_cli.py -k "emit_ptx" -q`
+  - Result: 18 passed.
+- `python -m pytest helixc\tests\test_ptx.py -q`
+  - Result: 70 passed.
+- `python -m pytest helixc\tests\test_autodiff_reverse.py -q`
+  - Result: 29 passed.
+- `python -m pytest helixc\tests\test_codegen.py -k "stage35_2d_accessors_reject_overflow_offsets or stage35_2d_accessors_reject_negative_offsets or stage35_2d_accessors_reject_out_of_row_offsets or stage35_public_2d_helpers_have_overflow_guards" -q`
+  - Result: 4 passed.
+- `python -m pytest helixc\tests\test_codegen.py -k "tf2d or ti2d or dense_layer or softmax_rows_f32 or softmax_ce_grad_f32 or argmax_rows_f32 or accuracy_count_from_logits_f32 or ce_loss_batch_f32" -q`
+  - Result: 37 passed.
+- `python -m pytest helixc\tests\test_cli.py helixc\tests\test_ptx.py -q`
+  - Result: 222 passed.
+- Per-file stdlib parser sweep across `helixc/stdlib/*.hx`
+  - Result: parsed 16 stdlib files.
+- `python -m py_compile helixc\check.py`
+  - Result: passed.
+
+Clean-gate status:
+
+- Stage 35 clean gates remain `0/3`.
+- Next step is another fresh Stage 35 clean gate on this fixed commit.
+
 ## Next Work
 
 Likely follow-up slices:

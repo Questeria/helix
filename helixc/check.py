@@ -1550,6 +1550,9 @@ def _main_inner(argv: list[str] | None,
             )
             tile_mod = lower_to_tile(kernel_mod)
             ptx = emit_ptx(tile_mod)
+            ad_rc = _drain_ad_warnings(a)
+            if ad_rc != 0:
+                return ad_rc
             print(ptx)
         except Exception as e:
             print(f"   ptx: backend error: {e}", file=sys.stderr)

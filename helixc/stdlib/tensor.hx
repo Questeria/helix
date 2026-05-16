@@ -53,6 +53,19 @@
     else { if rows > 2147483647 / cols { 1 } else { rows * cols } } }
 }
 
+@pure fn t2d_offset(start: i32, cols: i32, i: i32, j: i32) -> i32 {
+    if start < 0 { 0 - 1 }
+    else { if cols <= 0 { 0 - 1 }
+    else { if i < 0 { 0 - 1 }
+    else { if j < 0 { 0 - 1 }
+    else { if j >= cols { 0 - 1 }
+    else { if i > (2147483647 - j) / cols { 0 - 1 }
+    else {
+        let linear = i * cols + j;
+        if linear > 2147483647 - start { 0 - 1 } else { start + linear }
+    }}}}}}
+}
+
 fn t1d_set_i32_bits(start: i32, i: i32, bits: i32) -> i32 {
     __arena_set(start + i, bits);
     0
@@ -112,12 +125,17 @@ fn ti1d_axpy(y_start: i32, a: i32, x_start: i32, n: i32) -> i32 {
 }
 
 fn ti2d_set(start: i32, cols: i32, i: i32, j: i32, x: i32) -> i32 {
-    __arena_set(start + i * cols + j, x);
-    x
+    let off = t2d_offset(start, cols, i, j);
+    if off < 0 { x }
+    else {
+        __arena_set(off, x);
+        x
+    }
 }
 
 @pure fn ti2d_get(start: i32, cols: i32, i: i32, j: i32) -> i32 {
-    __arena_get(start + i * cols + j)
+    let off = t2d_offset(start, cols, i, j);
+    if off < 0 { 0 } else { __arena_get(off) }
 }
 
 // y = W @ x. W is rows*cols, x is cols, y is rows.
@@ -254,11 +272,15 @@ fn tf1d_relu(x_start: i32, y_start: i32, n: i32) -> i32 {
 
 @pure
 fn tf2d_get(start: i32, cols: i32, i: i32, j: i32) -> f32 {
-    __f32_from_bits(__arena_get(start + i * cols + j))
+    let off = t2d_offset(start, cols, i, j);
+    if off < 0 { 0.0_f32 } else { __f32_from_bits(__arena_get(off)) }
 }
 
 fn tf2d_set(start: i32, cols: i32, i: i32, j: i32, x: f32) -> i32 {
-    __arena_set(start + i * cols + j, __bits_of_f32(x));
+    let off = t2d_offset(start, cols, i, j);
+    if off >= 0 {
+        __arena_set(off, __bits_of_f32(x));
+    }
     0
 }
 

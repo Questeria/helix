@@ -11077,6 +11077,75 @@ def test_stage35_public_2d_helpers_have_overflow_guards():
         assert needle in nn_src
 
 
+def test_stage35_2d_accessors_reject_overflow_offsets():
+    src = """
+    fn main() -> i32 {
+        let m = t1d_new(1);
+        __arena_set(m, 42);
+        ti2d_set(m, 65536, 65536, 0, 99);
+        if __arena_get(m) == 42 {
+        if ti2d_get(m, 65536, 65536, 0) == 0 {
+            let mf = t1d_new(1);
+            tf1d_set(mf, 0, 42.0_f32);
+            tf2d_set(mf, 65536, 65536, 0, 99.0_f32);
+            if (tf1d_get(mf, 0) as i32) == 42 {
+            if (tf2d_get(mf, 65536, 65536, 0) as i32) == 0 { 42 } else { 7 }
+            } else { 7 }
+        } else { 7 }} else { 7 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stage35_2d_accessors_reject_negative_offsets():
+    src = """
+    fn main() -> i32 {
+        let guard = t1d_new(1);
+        __arena_set(guard, 42);
+        let m = t1d_new(1);
+        __arena_set(m, 7);
+        ti2d_set(m, 1, 0 - 1, 0, 99);
+        if __arena_get(guard) == 42 {
+        if ti2d_get(m, 1, 0 - 1, 0) == 0 {
+            let fguard = t1d_new(1);
+            tf1d_set(fguard, 0, 42.0_f32);
+            let mf = t1d_new(1);
+            tf1d_set(mf, 0, 7.0_f32);
+            tf2d_set(mf, 1, 0 - 1, 0, 99.0_f32);
+            if (tf1d_get(fguard, 0) as i32) == 42 {
+            if (tf2d_get(mf, 1, 0 - 1, 0) as i32) == 0 { 42 } else { 7 }
+            } else { 7 }
+        } else { 7 }} else { 7 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stage35_2d_accessors_reject_out_of_row_offsets():
+    src = """
+    fn main() -> i32 {
+        let m = t1d_new(2);
+        __arena_set(m, 7);
+        __arena_set(m + 1, 42);
+        ti2d_set(m, 1, 0, 1, 99);
+        if __arena_get(m + 1) == 42 {
+        if ti2d_get(m, 1, 0, 1) == 0 {
+            let mf = t1d_new(2);
+            tf1d_set(mf, 0, 7.0_f32);
+            tf1d_set(mf, 1, 42.0_f32);
+            tf2d_set(mf, 1, 0, 1, 99.0_f32);
+            if (tf1d_get(mf, 1) as i32) == 42 {
+            if (tf2d_get(mf, 1, 0, 1) as i32) == 0 { 42 } else { 7 }
+            } else { 7 }
+        } else { 7 }} else { 7 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
 def test_negative_2d_shape_helpers_treat_shape_as_empty():
     src = """
     fn main() -> i32 {
