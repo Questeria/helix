@@ -958,7 +958,7 @@ Kovostov-Native/
 │   │   ├── tensor.hx          # 1D/2D tensor primitives
 │   │   ├── transcendentals.hx # __exp/__log/__sin/__cos/__sqrt/__sigmoid/__tanh + scalar optim steps
 │   │   └── vec.hx             # caller-trust Vec<i32>-style sequences
-│   ├── tests/          # 2,522 tests collected in restart 54 fix verification
+│   ├── tests/          # 2,527 tests collected in restart 57 catch-up sweep
 │   │   ├── test_codegen.py
 │   │   ├── test_parser.py
 │   │   ├── test_match.py
@@ -1150,8 +1150,8 @@ Treat these as website draft snippets. Promote a snippet to copy/paste-ready
 only after it passes the current `python -m helixc.check` path; otherwise mark
 it as roadmap syntax.
 
-**Known roadmap snippets** (re-verified by Stage 35 restart 54 lane C
-audit against the live `python -m helixc.check` path; these do not yet
+**Known roadmap snippets** (re-verified by Stage 35 restart 57 catch-up
+sweep against the live `python -m helixc.check` path; these do not yet
 parse or typecheck and should be treated as design targets, not
 copy-paste-ready):
 
@@ -1565,7 +1565,7 @@ Or: a single character `λ` in monospace inside a hex bracket `[λ]`. Clean, sho
 
 - **299 bytes** — current hex0 binary size
 - **Python-hosted helixc** — current production compiler implementation
-- **2,522 live tests collected** — restart 54 fix verification (see Increments 70-73 in the progress ledger for the per-restart canary chain since restart 50); rerun scoped pytest collection before publishing
+- **2,527 live tests collected** — restart 57 catch-up sweep (see Increments 70-76 in the progress ledger for the per-restart canary chain since restart 50; restart 55/56 landed source fixes without paired canaries, restart 57 catch-up sweep added the 5 retroactive canaries); rerun scoped pytest collection before publishing
 - **Approach A roadmap (30 numbered stages)** — historical bootstrap-port sequencing; current live design doc (`docs/HELIX_V1_FINAL_FEATURES.md`) references stage numbers up to Stage 65 (35 distinct stages enumerated; not a strict consecutive sequence).
 - **Dozens of silent-corruption defects (live count grows with each Stage 35 restart; see `docs/stage35-progress-2026-05-15.md` Increments 50 onward for the open-ended ledger)** — found and disclosed during development
 - **restart-gated audit campaign** — multi-agent code review cycles continue until three clean gates pass

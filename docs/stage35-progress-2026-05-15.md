@@ -4185,3 +4185,180 @@ the slower Lane B subagent finished. Lane B's report was added by
 the orchestrator afterwards. Future restarts should serialize the
 lane-doc commit until all three lanes have returned to avoid the
 "partial commits" pattern restart 53 already called out.
+
+
+## Increment 74 — Fifty-Fifth Clean-Gate Restart Fix Sweep (2026-05-16)
+
+Restart 55 ran a fresh 3-lane read-only audit on top of restart 54
+HEAD (`e34b4d6`). Result: 1 finding total (1 Lane A HIGH; Lane B
+clean; Lane C clean). The Lane A finding was a transcendentals
+range-reduction gap discovered while reviewing `__exp`'s neighbor
+helpers in the wake of restart 54's reverse-AD saturation sweep.
+
+Fix sweep closed the 1 finding:
+
+Lane A (1 HIGH):
+
+- A1 HIGH: `helixc/stdlib/transcendentals.hx` — `__sin`, `__cos`,
+  `__sin_f64`, `__cos_f64` all gained explicit `[-π, π]`-style
+  range reduction before the 4-term Taylor series. The Taylor
+  approximation is only accurate for `|x| < π/2 ≈ 1.57`; without
+  reduction any caller passing |x| > 2π (e.g. accumulated phase in
+  a signal-processing loop) got nonsense outputs that silently
+  propagated into downstream numerics. Mirrors the `__exp`
+  range-reduction discipline already present in the same file. The
+  reduction is implemented as
+  `k = round(x / 2π); xr = x - k * 2π`
+  with the `round` step using the `(+0.5 / -0.5) -> i32` cast trick
+  to stay arena-pure (no extern math calls). The f64 mirror uses
+  the higher-precision `6.283185307179586_f64` constant.
+
+Lane B (clean — no findings):
+
+- All families re-verified clean against restart 54 HEAD.
+
+Lane C (clean — no findings):
+
+- Surfaces still bear restart 54 labels (handoff updated as part of
+  this fix sweep, separately).
+
+NB: restart 55 commit `218ffd0` ("Fix Stage 35 fifty-sixth restart
+findings" — title +1 drift from the actual restart number) landed
+the A1 source fix but did NOT add the regression canary, the lane
+audit docs, or this Increment 74 entry. This Increment 74 closes
+that bookkeeping gap as part of restart 57's catch-up sweep (see
+Increment 76 for the rolled-up canary additions).
+
+
+## Increment 75 — Fifty-Sixth Clean-Gate Restart Fix Sweep (2026-05-16)
+
+Restart 56 ran a fresh 3-lane read-only audit on top of restart 55
+HEAD (`218ffd0`). Result: 3 findings total (2 Lane A HIGH + 1 Lane
+A MEDIUM; Lane B clean; Lane C clean). The Lane A family was
+"missed siblings of restart 51 A5 (vec_negate_inplace INT32_MIN
+sweep)" plus a NaN-poison vector in the float tensor reductions.
+
+Fix sweep closed all 3 findings:
+
+Lane A (2 HIGH + 1 MEDIUM):
+
+- A1 HIGH: `helixc/stdlib/tensor.hx` `tf1d_sum` NaN-skip
+  discipline. A single NaN slot would otherwise poison the entire
+  sum (NaN + anything = NaN), so any downstream consumer that
+  reads `tf1d_sum` would silently get NaN out for a single bad
+  input. Mirrors the `softmax_layer` / `layer_norm_f32` /
+  `clip_grad_norm_f32` / `adam_f32_step` NaN-fail-closed
+  precedents — distinguishes "garbage in one slot" from "garbage
+  in every output". The fix uses the `if v == v` idiom (NaN is
+  the only value not equal to itself).
+- A2 HIGH: `helixc/stdlib/tensor.hx` `ti1d_max_abs` INT32_MIN
+  special-case. `0 - INT32_MIN` wraps back to INT32_MIN; the
+  `av > best` test (best starts at 0) is false, so the function
+  silently returned 0 instead of the correct INT32_MAX saturation.
+  Family-sibling of restart 51 A5 (`vec_negate_inplace`).
+- A3 MEDIUM: `helixc/stdlib/iterators.hx` `vec_max_abs` — the
+  iterators.hx companion of A2 with the same INT32_MIN wrap bug
+  and the same fix.
+
+Lane B (clean — no findings):
+
+- All families re-verified clean against restart 55 HEAD.
+
+Lane C (clean — no findings):
+
+- Surfaces still bear restart 54 labels (handoff updated as part
+  of this fix sweep, separately).
+
+NB: restart 56 commit `278d46a` ("Fix Stage 35 fifty-seventh
+restart findings" — title +1 drift, same as restart 55) landed
+all three source fixes but did NOT add the regression canaries,
+the lane audit docs, or this Increment 75 entry. The `tf1d_sum`
+comment also claimed "Same pattern applied across tf1d_dot,
+tf1d_l1_norm, tf1d_max_abs, tf1d_sum_in_range" but the sibling
+sweep was not actually applied to those four functions —
+restart 57's catch-up sweep either applies the sibling sweep or
+trims the comment to match (see Increment 76).
+
+
+## Increment 76 — Fifty-Seventh Clean-Gate Restart Catch-up Sweep (2026-05-16)
+
+Restart 57 was a bookkeeping-and-catch-up sweep on top of restart
+56 HEAD (`278d46a`). No fresh 3-lane audit was dispatched — the
+restart focused on closing the bookkeeping debt accumulated by
+restarts 55 and 56 (both of which landed source fixes without
+canaries, lane docs, or ledger entries), plus fixing one stale
+comment that overclaimed a NaN-skip sibling sweep.
+
+Catch-up work:
+
+1. Wrote ledger Increments 74 + 75 + 76 retroactively covering
+   restarts 55, 56, and 57 (above).
+2. Wrote audit lane stub docs for restarts 55 + 56 + 57 at
+   `docs/audit-stage35-restart55-{laneA,laneB,laneC}.md` etc.
+3. Added regression canaries for restart 55 A1 (sin/cos f32 + f64
+   range reduction) and restart 56 A1 / A2 / A3 (tf1d_sum NaN-
+   skip, ti1d_max_abs INT32_MIN, vec_max_abs INT32_MIN). All
+   five canaries land in `helixc/tests/test_codegen.py`.
+4. Resolved the stale `tf1d_sum` comment in
+   `helixc/stdlib/tensor.hx`: removed the "Same pattern applied
+   across tf1d_dot, tf1d_l1_norm, tf1d_max_abs, tf1d_sum_in_range"
+   sentence because the sibling sweep was not actually performed.
+   Future restarts should pick up `tf1d_dot` / `tf1d_l1_norm` /
+   `tf1d_max_abs` (note: this is the f32 max-abs; the i32 variant
+   `ti1d_max_abs` was already covered) / `tf1d_sum_in_range`
+   NaN-skip discipline as a follow-up audit family. Logged for
+   restart 58's Lane A run.
+5. Updated `HANDOFF_FOR_CLAUDE.md` to reflect restart 57 state,
+   the catch-up rationale, the live test count, and the
+   restart 58 starting protocol.
+6. Refreshed `helix_website/stats_and_facts.md` and
+   `helix_website/HELIX_REFERENCE.md` restart / test-count
+   labels.
+
+Regression coverage added (5 cases, all in `test_codegen.py`):
+
+- restart 55 A1: `test_stage35_restart55_sin_range_reduces_at_large_angle`,
+  `test_stage35_restart55_cos_range_reduces_at_large_angle`,
+  `test_stage35_restart55_sin_f64_range_reduces_at_large_angle`
+- restart 56 A1: `test_stage35_restart56_tf1d_sum_nan_skip_fails_closed`
+- restart 56 A2/A3: `test_stage35_restart56_max_abs_saturates_on_int32_min`
+  (family canary exercising both `ti1d_max_abs` and `vec_max_abs`)
+
+Verification:
+
+- `python -m py_compile helixc/check.py helixc/backend/x86_64.py
+  helixc/backend/ptx.py helixc/frontend/autodiff_cli.py
+  helixc/ir/lower_ast.py helixc/ir/passes/const_fold.py
+  helixc/tests/test_cli.py helixc/tests/test_codegen.py
+  helixc/tests/test_ptx.py`
+  - Result: passed.
+- Per-file stdlib parser sweep
+  - Result: parsed 16 files.
+- Restart 55 + 56 new regression canaries (5)
+  - Result: 5 passed.
+- `python -m pytest helixc/tests --collect-only -q`
+  - Result: 2,527 tests collected (was 2,522 + 5 new canaries).
+
+Clean-gate status:
+
+- Stage 35 clean gates remain `0/3`.
+- Restart 55 produced 1 finding (non-zero) — gate stays 0/3.
+- Restart 56 produced 3 findings (non-zero) — gate stays 0/3.
+- Restart 57 is a catch-up sweep, not a clean gate.
+- Next step is restart 58 as another fresh Stage 35 clean gate
+  from the newest pushed HEAD, with the tf1d_dot / tf1d_l1_norm
+  / tf1d_max_abs / tf1d_sum_in_range NaN-skip family explicitly
+  on the Lane A audit checklist (carried over from restart 56's
+  overclaiming comment).
+
+Restart 57 process note: two consecutive restarts (55 and 56)
+landed without paired bookkeeping — same anti-pattern as restart
+52 commit `c584b0b`. The hardening rule from Increment 71
+("verify each restart commit ALSO writes the ledger increment +
+lane docs + canaries before pushing") needs reinforcement. The
+scheduled-task fire that produced restarts 55/56 appears to have
+been an abbreviated execution path that skipped the bookkeeping
+step. Restart 58 onward must include the bookkeeping in the same
+commit as the source fix, OR explicitly defer to a "catch-up
+sweep" labeled as such (like restart 57 here) so the gap is
+visible in the ledger.

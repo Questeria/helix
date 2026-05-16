@@ -5,8 +5,8 @@ draft, not a live-valid sample suite. Before publishing a snippet as
 copy/paste-ready, run it through the current `python -m helixc.check` path or
 mark it clearly as roadmap syntax.
 
-**Known roadmap snippets** (re-verified by Stage 35 restart 54 lane C
-audit against the live `python -m helixc.check` path; these do not yet
+**Known roadmap snippets** (re-verified by Stage 35 restart 57 catch-up
+sweep against the live `python -m helixc.check` path; these do not yet
 parse and are design targets, not copy-paste-ready):
 
 - #9 Structs basic and #10 Structs nested — positional `Pt { 6, 7 }`

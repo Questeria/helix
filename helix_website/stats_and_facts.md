@@ -11,7 +11,7 @@ Snapshot date: 2026-05-16. Restart 53 is the latest recorded Stage 35 fix verifi
 |------|-------|---------------------|
 | **hex0 binary size** | 299 bytes | `stage0/hex0/hex0.bin` |
 | **Total bootstrap bytes you must initially audit** | 299 | The hand-encoded hex0 root |
-| **pytest tests collected** | 2,522 | `python -m pytest helixc/tests --collect-only -q` during restart 54 fix verification (see Increments 70-73 in the progress ledger for the per-restart canary chain since restart 50) |
+| **pytest tests collected** | 2,527 | `python -m pytest helixc/tests --collect-only -q` during restart 57 catch-up sweep (see Increments 70-76 in the progress ledger for the per-restart canary chain since restart 50; restart 55 added 0 new canaries but found 1 transcendentals range-reduction bug, restart 56 added 0 new canaries but found 3 INT32_MIN / NaN bugs, restart 57 catch-up sweep added the 5 retroactive canaries covering both restarts) |
 | **Clean audit gates** | 0/3 | `docs/stage35-progress-2026-05-15.md` |
 | **Current stage** | Stage 35 audit cleanup | Stage 35 progress ledger |
 | **Backend targets with tests** | x86-64 ELF, PTX text emission | `helixc/backend/` and tests |

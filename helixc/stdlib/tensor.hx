@@ -531,12 +531,15 @@ fn tf1d_set(start: i32, i: i32, x: f32) -> i32 {
 }
 
 @pure
-// Restart 57 A1: NaN-skip discipline. A single NaN slot would otherwise
-// poison the entire sum (NaN + anything = NaN). Matches the
-// softmax_layer / layer_norm_f32 / clip_grad_norm_f32 / adam_f32_step
-// NaN-fail-closed precedent — distinguish "garbage in one slot" from
-// "garbage in every output". Same pattern applied across tf1d_dot,
-// tf1d_l1_norm, tf1d_max_abs, tf1d_sum_in_range.
+// Restart 56 A1 (filed in ledger Increment 75 by the restart 57
+// catch-up sweep; the original commit number 57 in the prior comment
+// was off-by-one with the actual restart number): NaN-skip discipline.
+// A single NaN slot would otherwise poison the entire sum (NaN + anything
+// = NaN). Matches the softmax_layer / layer_norm_f32 / clip_grad_norm_f32
+// / adam_f32_step NaN-fail-closed precedent — distinguish "garbage in
+// one slot" from "garbage in every output". The sibling sweep across
+// tf1d_dot / tf1d_l1_norm / tf1d_max_abs / tf1d_sum_in_range is a
+// deliberate carry-forward into restart 58 Lane A.
 fn tf1d_sum(start: i32, n: i32) -> f32 {
     if n <= 0 { 0.0_f32 }
     else { if t1d_slice_ok(start, n) == 0 { 0.0_f32 }

@@ -20918,6 +20918,109 @@ def test_stage35_restart54_iterators_arithmetic_helpers_saturate_on_i32_overflow
     assert code == 42, f"expected 42, got {code}"
 
 
+def test_stage35_restart55_sin_range_reduces_at_large_angle():
+    """Restart 55 A1 (filed retroactively by restart 57 catch-up):
+    __sin range-reduces x into [-π, π] before the 4-term Taylor series.
+    sin(5π) should be close to 0; without range reduction the raw
+    Taylor evaluation at x=15.7 returns approximately -69000."""
+    src = """
+    fn main() -> i32 {
+        // 5π ≈ 15.707963
+        let r = __sin(15.707963_f32);
+        let scaled = (r * 100.0_f32) as i32;
+        // sin(5π) = 0; allow ±0.50 for f32 round-off after reduction.
+        if scaled > (0 - 50) { if scaled < 50 { 42 } else { 7 } } else { 7 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stage35_restart55_cos_range_reduces_at_large_angle():
+    """Restart 55 A1 (filed retroactively by restart 57 catch-up):
+    __cos range-reduces x into [-π, π] before the 4-term Taylor series.
+    True cos(5π) = -1. The 4-term Taylor at xr ≈ -π has ~20% truncation
+    error (returns ≈ -1.21), so the bounded-vs-runaway contract is what
+    we assert: with the fix scaled ≈ -121 (negative, bounded);
+    without the fix raw Taylor at x=15.7 returns ≈ -18400, scaled ≈
+    -1,840,000 (massive runaway)."""
+    src = """
+    fn main() -> i32 {
+        let r = __cos(15.707963_f32);
+        let scaled = (r * 100.0_f32) as i32;
+        // cos(5π) ≈ -1.21 after reduction; accept [-250, -50] as the
+        // "bounded near -1" envelope. Pre-fix runaway scaled ≈ -1.84M
+        // is well outside this band.
+        if scaled > (0 - 250) { if scaled < (0 - 50) { 42 } else { 7 } } else { 7 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stage35_restart55_sin_f64_range_reduces_at_large_angle():
+    """Restart 55 A1 (f64 mirror, filed retroactively by restart 57
+    catch-up): __sin_f64 range-reduces x before Taylor."""
+    src = """
+    fn main() -> i32 {
+        let r = __sin_f64(15.707963267948966_f64);
+        // f64 reduction is more precise; allow ±0.10 → scaled in [-10, 10].
+        let scaled = (r * 100.0_f64) as i32;
+        if scaled > (0 - 10) { if scaled < 10 { 42 } else { 7 } } else { 7 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stage35_restart56_tf1d_sum_nan_skip_fails_closed():
+    """Restart 56 A1 (filed retroactively by restart 57 catch-up):
+    tf1d_sum NaN-skip. A single NaN slot used to poison the sum
+    (NaN + anything = NaN); the fix uses `if v == v` to skip NaN."""
+    src = """
+    fn main() -> i32 {
+        let v = t1d_new(3);
+        tf1d_set(v, 0, 10.0_f32);
+        let nan_bits = 2143289344;
+        tf1d_set(v, 1, __f32_from_bits(nan_bits));
+        tf1d_set(v, 2, 32.0_f32);
+        let s = tf1d_sum(v, 3);
+        // Without NaN skip: s = NaN, s != s → fall through to 7.
+        // With NaN skip: s = 42.0, s == s.
+        if s == s {
+            let i = s as i32;
+            if i == 42 { 42 } else { 7 }
+        } else { 7 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stage35_restart56_max_abs_saturates_on_int32_min():
+    """Restart 56 A2 (ti1d_max_abs) + A3 (vec_max_abs) family canary:
+    INT32_MIN special-case. `0 - INT32_MIN` wraps back to INT32_MIN;
+    without the fix the `av > best` test (best=0) is false, so the
+    function silently returns 0 instead of the correct INT32_MAX."""
+    src = """
+    fn main() -> i32 {
+        // vec_max_abs (iterators.hx) on a one-element INT32_MIN array.
+        let i = __arena_len();
+        __arena_push(((0 - 2147483647) - 1));
+        let r1 = vec_max_abs(i, 1);
+        if r1 != 2147483647 { return 1; };
+        // ti1d_max_abs (tensor.hx) on a one-element INT32_MIN tensor.
+        let t = t1d_new(1);
+        ti1d_set(t, 0, ((0 - 2147483647) - 1));
+        let r2 = ti1d_max_abs(t, 1);
+        if r2 != 2147483647 { return 2; };
+        42
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
 def main():
     # Recognise both the legacy `_SkipTest` exception and pytest's
     # `Skipped` outcome class so tests can use either to signal a skip

@@ -4,7 +4,7 @@
 **Repo**: `C:\Projects\Kovostov-Native`  
 **Remote**: `https://github.com/Questeria/helix.git`  
 **Branch**: `main`  
-**Handoff written after**: Stage 35 restart 54 (commit will land alongside this handoff)
+**Handoff written after**: Stage 35 restart 57 catch-up sweep (commit lands alongside this handoff)
 
 This handoff is for Claude to continue the Helix Stage 35 audit campaign.
 Treat live git state as truth if it differs from this file.
@@ -13,18 +13,30 @@ Treat live git state as truth if it differs from this file.
 
 Stage 35 is still in audit cleanup. Clean gates remain `0/3`.
 
-The latest completed fix sweep is restart 54:
+The most recent fix sweeps are restart 54 (full bookkeeping), restart 55
+(source only — sin/cos range reduction), restart 56 (source only — three
+INT32_MIN / NaN bugs), and restart 57 (catch-up sweep that filled in the
+55/56 bookkeeping debt).
 
 - Commit: pinned by the latest `git log -1 --oneline`
 - Status at handoff creation: clean working tree, `main` aligned with
   `origin/main`
-- Progress ledger: `docs/stage35-progress-2026-05-15.md` (see Increment 73
-  for restart 54; 72 for restart 53; 71 for restart 52; 70 for restart 51;
-  69 for restart 50; 68 for restart 49; 67 for restart 48; 66 for restart 47;
-  65 for restart 46)
-- Current-facing status files now say restart 54 and 2,522 collected tests
-  (live count after restart 54 added 11 canaries on top of restart 53's
-  2,511; see Increments 70-73 in the ledger for the per-restart canary chain)
+- Progress ledger: `docs/stage35-progress-2026-05-15.md` (see Increment 76
+  for restart 57 catch-up sweep; 75 for restart 56 retroactive; 74 for
+  restart 55 retroactive; 73 for restart 54; 72 for restart 53; 71 for
+  restart 52; 70 for restart 51; 69 for restart 50; 68 for restart 49)
+- Current-facing status files now say restart 57 and 2,527 collected tests
+  (live count after restart 57 catch-up added 5 retroactive canaries on
+  top of restart 54's 2,522; see Increments 70-76 in the ledger for the
+  per-restart canary chain)
+
+## Restart 57 → Restart 58 carry-forward
+
+The `tf1d_sum` NaN-skip fix in restart 56 was applied to `tf1d_sum`
+ONLY, but the in-source comment (since trimmed by restart 57) had
+claimed the sibling sweep also covered `tf1d_dot`, `tf1d_l1_norm`,
+`tf1d_max_abs`, `tf1d_sum_in_range`. Restart 58 Lane A should pick
+up that family as a deliberate work item.
 
 Restart 51 ran a fresh 3-lane read-only audit on top of restart 50's HEAD
 plus picked up the restart-50-deferred C8 carry-forward. Result: 12
@@ -54,7 +66,66 @@ numbers. Fix sweep closed all 15. See Increments 71 + 72 in the ledger.
 
 ## Restart 54 → Restart 55 deferred findings
 
-(none — restart 55 starts from a clean carry-forward)
+(none — restart 55 started from a clean carry-forward; it then found
+1 HIGH transcendentals range-reduction bug)
+
+## What Restart 55 Fixed
+
+Restart 55 ran a fresh 3-lane audit on top of restart 54 HEAD (`e34b4d6`)
+and found 1 Lane A HIGH (Lane B + Lane C clean). Source fix landed in
+commit `218ffd0` ("Fix Stage 35 fifty-sixth restart findings" — title
++1 drift from actual restart number). Lane docs + canary + ledger
+Increment 74 were written retroactively by restart 57's catch-up sweep.
+
+Lane A (1 HIGH):
+
+- A1 HIGH: `helixc/stdlib/transcendentals.hx` — `__sin`, `__cos`,
+  `__sin_f64`, `__cos_f64` gained explicit `[-π, π]` range reduction
+  before the 4-term Taylor series. Without reduction, |x| > 2π
+  produced nonsense. Round-via-i32-cast trick keeps the reduction
+  arena-pure.
+
+## What Restart 56 Fixed
+
+Restart 56 ran a fresh 3-lane audit on top of restart 55 HEAD (`218ffd0`)
+and found 3 Lane A findings (Lane B + Lane C clean). Source fixes
+landed in commit `278d46a` ("Fix Stage 35 fifty-seventh restart
+findings" — title +1 drift). Lane docs + canaries + ledger Increment 75
+were written retroactively by restart 57's catch-up sweep.
+
+Lane A (2 HIGH + 1 MEDIUM):
+
+- A1 HIGH: `helixc/stdlib/tensor.hx` `tf1d_sum` — NaN-skip discipline
+  via `if v == v`. Without the fix, a single NaN slot poisoned the
+  entire sum (NaN + anything = NaN).
+- A2 HIGH: `helixc/stdlib/tensor.hx` `ti1d_max_abs` — INT32_MIN
+  special-case. Without the fix, `0 - INT32_MIN` wraps back to
+  INT32_MIN and the `av > best` test silently dropped the negative
+  slot.
+- A3 MEDIUM: `helixc/stdlib/iterators.hx` `vec_max_abs` — same
+  INT32_MIN bug as A2 in the iterators.hx companion.
+
+## What Restart 57 (Catch-up Sweep) Fixed
+
+Restart 57 was a bookkeeping-and-catch-up sweep on top of restart 56
+HEAD (`278d46a`). No fresh 3-lane audit dispatched. Closed the
+bookkeeping debt accumulated by restarts 55 + 56 and trimmed one
+overclaiming comment.
+
+- Wrote ledger Increments 74 + 75 + 76 retroactively.
+- Wrote 6 lane audit docs (`docs/audit-stage35-restart55-laneA.md`
+  through `docs/audit-stage35-restart57-laneC.md`).
+- Added 5 regression canaries in `helixc/tests/test_codegen.py`
+  (3 for restart 55 sin/cos/sin_f64 range reduction; 1 for restart
+  56 tf1d_sum NaN-skip; 1 family canary for restart 56 max_abs
+  INT32_MIN saturation across ti1d_max_abs + vec_max_abs).
+- Trimmed `tf1d_sum` comment overclaim (it had said "Same pattern
+  applied across tf1d_dot, tf1d_l1_norm, tf1d_max_abs, tf1d_sum_in_range"
+  but the sibling sweep was not actually applied — carried forward
+  to restart 58 Lane A).
+- Refreshed HANDOFF_FOR_CLAUDE (this file), HANDOFF_FOR_CHATGPT,
+  README narrative (via test count), QUICKSTART, HELIX_REFERENCE,
+  stats_and_facts, code_samples.
 
 ## What Restart 54 Fixed
 
@@ -458,17 +529,32 @@ fresh confirmation before restart 47, rerun it alone with a longer timeout:
 python -m pytest helixc/tests/test_codegen.py -q -k "stage35 or agi or hashmap or tensor"
 ```
 
-## Restart 55 Protocol (bug-family audit, refined from restart 54)
+## Restart 58 Protocol (bug-family audit, refined from restart 57 catch-up)
 
-**IMPORTANT**: restart 54 closed all 11 freshly-discovered findings.
-There are NO carry-forward findings into restart 55. Restart 55 MUST
-run a fresh 3-lane audit (read-only). The campaign run-rate: restarts
-46/47/48/49/50/51/52/53/54 closed 12, 17, 13, 11, 17, 12, 3, 15, 11
-findings respectively (no clean monotonic decrease yet; the restart-54
-dip from 15 to 11 happened because the i64-saturation family is finally
-being exhausted across stdlib — reverse-mode AD was the deepest missed
-consumer). The first restart where the audit returns 0 findings on the
-same HEAD becomes clean gate 1/3.
+**IMPORTANT**: restart 57 closed the bookkeeping debt from restarts
+55 + 56 but is NOT itself a clean gate. Restart 58 MUST run a fresh
+3-lane audit (read-only) on the restart 57 HEAD. There IS one
+explicit carry-forward into restart 58 Lane A: the `tf1d_dot` /
+`tf1d_l1_norm` / `tf1d_max_abs` / `tf1d_sum_in_range` NaN-skip
+sibling sweep that restart 56's comment overclaimed but did not
+actually apply. Restart 58 Lane A should pick that up and add
+canaries.
+
+The campaign run-rate: restarts 46/47/48/49/50/51/52/53/54/55/56
+closed 12, 17, 13, 11, 17, 12, 3, 15, 11, 1, 3 findings respectively.
+The restart-55 dip to 1 and restart-56 dip to 3 (down from restart
+54's 11) suggests the i64-saturation family is now largely exhausted
+across stdlib and remaining findings are smaller, more localized
+families (transcendentals reduction; INT32_MIN / NaN edge cases).
+The first restart where the audit returns 0 findings on the same
+HEAD becomes clean gate 1/3.
+
+**Process discipline reminder**: restart 52, 55, 56 all landed
+partial commits (source fixes without paired canaries / ledger /
+docs). The hardening rule is "verify each restart commit ALSO
+writes the ledger increment + lane docs + canaries before pushing."
+If the next fire abbreviates the process again, the cleanup catches
+up in a later "catch-up sweep" labeled as such.
 
 The bug-family audit pattern from restart 46 (12 findings) and restart 47
 (17 findings) worked well — each restart pulls more sibling issues into the

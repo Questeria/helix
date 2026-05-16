@@ -228,7 +228,7 @@ older 5-clean-audit count as historical context; Stage 35 currently requires
 
 Per user's audit protocol:
 - **ZERO HIGH/MEDIUM/LOW issues** per cycle for CLEAN declaration
-- Heavy gate must be GREEN before declaring clean. Historical snapshot had 670+ tests; Stage 35 restart 54 fix verification collected 2,522 live `helixc/tests` tests (see Increments 70-73 in the progress ledger for the per-restart canary chain since restart 50), so refresh with `python -m pytest helixc/tests --collect-only -q`.
+- Heavy gate must be GREEN before declaring clean. Historical snapshot had 670+ tests; Stage 35 restart 57 catch-up sweep collected 2,527 live `helixc/tests` tests (see Increments 70-76 in the progress ledger for the per-restart canary chain since restart 50; restart 55 + 56 landed source fixes without paired canaries, restart 57 catch-up added the 5 retroactive canaries), so refresh with `python -m pytest helixc/tests --collect-only -q`.
 - 3 CONSECUTIVE clean cycles on the SAME HEAD to declare stage done
 - If issues found: apply fix-sweep, re-test, dispatch next cycle
 
