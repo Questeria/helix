@@ -644,6 +644,7 @@ if __name__ == "__main__":
     from ..frontend.autotune import validate_autotune_prog
     from ..frontend.grad_pass import grad_pass
     from ..frontend.totality import check_totality
+    from ..frontend.deprecated_pass import emit_warnings as emit_deprecated_warnings
     from ..ir.lower_ast import lower
     from ..ir.passes.const_fold import fold_module
     from ..ir.passes.cse import cse_module
@@ -720,19 +721,92 @@ if __name__ == "__main__":
             ],
         )
 
+    def _ty_mentions_diff(ty: object) -> bool:
+        if ty is None:
+            return False
+        if isinstance(ty, A.TyGeneric) and ty.base == "D":
+            return True
+        if dataclasses.is_dataclass(ty):
+            for field in dataclasses.fields(ty):
+                if _ty_mentions_diff(getattr(ty, field.name)):
+                    return True
+        if isinstance(ty, (list, tuple)):
+            return any(_ty_mentions_diff(item) for item in ty)
+        return False
+
+    def _fn_mentions_diff_signature(fn: A.FnDecl) -> bool:
+        if _ty_mentions_diff(fn.return_ty):
+            return True
+        return any(_ty_mentions_diff(p.ty) for p in fn.params)
+
+    def _reachable_function_names(prog: A.Program) -> set[str]:
+        fn_by_name = {
+            it.name: it for it in prog.items if isinstance(it, A.FnDecl)
+        }
+        keep: set[str] = {
+            it.name for it in prog.items
+            if isinstance(it, A.FnDecl)
+            and (it.name == "main" or "kernel" in it.attrs)
+        }
+        queue = list(keep)
+        while queue:
+            fn = fn_by_name.get(queue.pop())
+            if fn is None:
+                continue
+            for callee in _called_fn_names(fn.body):
+                if callee in fn_by_name and callee not in keep:
+                    keep.add(callee)
+                    queue.append(callee)
+        return keep
+
+    def _drop_unreachable_diff_signature_fns(prog: A.Program) -> A.Program:
+        reachable = _reachable_function_names(prog)
+        return A.Program(
+            module=prog.module,
+            items=[
+                it for it in prog.items
+                if (not isinstance(it, A.FnDecl)
+                    or not _fn_mentions_diff_signature(it)
+                    or it.name in reachable)
+            ],
+        )
+
     cli_args = sys.argv[1:]
     if not cli_args:
         print("error: ptx: missing input path", file=sys.stderr)
         sys.exit(2)
-    allowed_flags = {"--strict", "--stdlib", "--no-stdlib", "-Wad=error"}
+    allowed_flags = {"--strict", "--stdlib", "--no-stdlib"}
+    warning_policies: dict[str, str] = {}
+    known_warning_names = {"ad", "deprecated"}
     flags = {a for a in cli_args if a.startswith("-")}
-    unknown_flags = sorted(flags - allowed_flags)
+    unknown_flags: list[str] = []
+    for flag in sorted(flags):
+        if flag in allowed_flags:
+            continue
+        if flag.startswith("-W"):
+            body = flag[2:]
+            if "=" in body:
+                name, val = body.split("=", 1)
+                if name not in known_warning_names:
+                    unknown_flags.append(flag)
+                    continue
+                if val not in ("warn", "error"):
+                    unknown_flags.append(flag)
+                    continue
+                warning_policies[name] = val
+            else:
+                if body not in known_warning_names:
+                    unknown_flags.append(flag)
+                    continue
+                warning_policies[body] = "warn"
+            continue
+        unknown_flags.append(flag)
     if unknown_flags:
         for flag in unknown_flags:
             print(f"error: ptx: unknown flag {flag}", file=sys.stderr)
         sys.exit(2)
     strict = "--strict" in flags
-    ad_policy = "error" if "-Wad=error" in flags else "warn"
+    ad_policy = warning_policies.get("ad", "warn")
     include_stdlib = "--no-stdlib" not in flags
     paths = [a for a in cli_args if not a.startswith("-")]
     if not paths:
@@ -810,6 +884,18 @@ if __name__ == "__main__":
                 file=sys.stderr,
             )
             sys.exit(1)
+    deprecated_policy = warning_policies.get("deprecated", "warn")
+    deprecated_warnings = emit_deprecated_warnings(prog)
+    if deprecated_warnings:
+        label = "ERROR" if deprecated_policy == "error" else "warning"
+        print(
+            f"   deprecated: {len(deprecated_warnings)} {label}(s)",
+            file=sys.stderr,
+        )
+        for warning in deprecated_warnings:
+            print(f"     {warning}", file=sys.stderr)
+        if deprecated_policy == "error":
+            sys.exit(1)
     validation_groups = [
         ("trace", validate_trace_attrs(prog)),
         ("panic", validate_panic_args(prog)),
@@ -828,16 +914,15 @@ if __name__ == "__main__":
         strict_full_eff = []
         if strict:
             try:
-                strict_mod = lower(prog)
+                strict_mod = lower(_drop_unreachable_diff_signature_fns(prog))
                 strict_scope = None
                 if include_stdlib:
                     strict_scope = diagnostic_function_names(strict_mod)
                 strict_full_eff = effect_check_module(
                     strict_mod, only_functions=strict_scope)
             except Exception as e:
-                if "unresolved generic type D" not in str(e):
-                    print(f"error: ptx: strict validation: {e}", file=sys.stderr)
-                    sys.exit(1)
+                print(f"error: ptx: strict validation: {e}", file=sys.stderr)
+                sys.exit(1)
         kernel_prog = _kernel_reachable_program(prog)
         grad_pass(kernel_prog)
         tir_mod = lower(kernel_prog)

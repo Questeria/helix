@@ -3845,7 +3845,9 @@ def compile_module_to_elf(module: tir.Module, entry_fn: str = "main") -> bytes:
 
 
 if __name__ == "__main__":
+    import dataclasses
     import sys
+    from ..frontend import ast_nodes as A
     from ..frontend.lexer import LexError
     from ..frontend.parser import parse, ParseError
     from ..frontend.typecheck import typecheck
@@ -3873,6 +3875,80 @@ if __name__ == "__main__":
     from ..frontend.unsafe_pass import check_unsafe_ops
     from ..frontend.autotune import validate_autotune_prog
     from ..frontend.hash_cons import hash_cons
+
+    def _called_fn_names(value: object) -> set[str]:
+        names: set[str] = set()
+        seen: set[int] = set()
+
+        def visit(node: object) -> None:
+            if node is None or isinstance(node, (str, int, float, bool)):
+                return
+            if isinstance(node, (list, tuple)):
+                for item in node:
+                    visit(item)
+                return
+            oid = id(node)
+            if oid in seen:
+                return
+            seen.add(oid)
+            if isinstance(node, A.Call) and isinstance(node.callee, A.Name):
+                names.add(node.callee.name)
+            if dataclasses.is_dataclass(node):
+                for field in dataclasses.fields(node):
+                    visit(getattr(node, field.name))
+
+        visit(value)
+        return names
+
+    def _ty_mentions_diff(ty: object) -> bool:
+        if ty is None:
+            return False
+        if isinstance(ty, A.TyGeneric) and ty.base == "D":
+            return True
+        if dataclasses.is_dataclass(ty):
+            for field in dataclasses.fields(ty):
+                if _ty_mentions_diff(getattr(ty, field.name)):
+                    return True
+        if isinstance(ty, (list, tuple)):
+            return any(_ty_mentions_diff(item) for item in ty)
+        return False
+
+    def _fn_mentions_diff_signature(fn: A.FnDecl) -> bool:
+        if _ty_mentions_diff(fn.return_ty):
+            return True
+        return any(_ty_mentions_diff(p.ty) for p in fn.params)
+
+    def _reachable_function_names(prog: A.Program) -> set[str]:
+        fn_by_name = {
+            it.name: it for it in prog.items if isinstance(it, A.FnDecl)
+        }
+        keep: set[str] = {
+            it.name for it in prog.items
+            if isinstance(it, A.FnDecl)
+            and (it.name == "main" or "kernel" in it.attrs)
+        }
+        queue = list(keep)
+        while queue:
+            fn = fn_by_name.get(queue.pop())
+            if fn is None:
+                continue
+            for callee in _called_fn_names(fn.body):
+                if callee in fn_by_name and callee not in keep:
+                    keep.add(callee)
+                    queue.append(callee)
+        return keep
+
+    def _drop_unreachable_diff_signature_fns(prog: A.Program) -> A.Program:
+        reachable = _reachable_function_names(prog)
+        return A.Program(
+            module=prog.module,
+            items=[
+                it for it in prog.items
+                if (not isinstance(it, A.FnDecl)
+                    or not _fn_mentions_diff_signature(it)
+                    or it.name in reachable)
+            ],
+        )
 
     if len(sys.argv) < 3:
         print("usage: python -m helixc.backend.x86_64 <input.hx> <output.bin> "
@@ -4002,6 +4078,7 @@ if __name__ == "__main__":
             print(f"error: autotune: {d}", file=sys.stderr)
         sys.exit(1)
 
+    prog = _drop_unreachable_diff_signature_fns(prog)
     mod = lower(prog)
     pre_opt_effect_scope = None
     if not no_stdlib:

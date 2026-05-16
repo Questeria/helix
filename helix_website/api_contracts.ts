@@ -253,6 +253,10 @@ export interface BootstrapStage {
   title: string;
   /** Binary size in bytes */
   sizeBytes: number;
+  /** Whether this stage is a live artifact or a roadmap target */
+  status: 'live' | 'target';
+  /** Whether sizeBytes is measured from an artifact or an estimated target */
+  sizeKind: 'actual' | 'estimate';
   /** Source language (e.g. "x86-64 hex", "M0 macro asm", "ANSI C", "Helix") */
   sourceLanguage: string;
   /** What this stage can do */
@@ -353,6 +357,8 @@ export const STUB_BOOTSTRAP_CHAIN: BootstrapStage[] = [
     name: 'hex0',
     title: 'hex0 — the trust root',
     sizeBytes: 299,
+    status: 'live',
+    sizeKind: 'actual',
     sourceLanguage: 'hand-encoded x86-64 hex',
     capability: 'Reads hex digits from stdin, writes byte values to stdout. That\'s it.',
     compiles: 'hex1',
@@ -361,6 +367,8 @@ export const STUB_BOOTSTRAP_CHAIN: BootstrapStage[] = [
     name: 'hex1',
     title: 'hex1 — labels and references',
     sizeBytes: 700,
+    status: 'target',
+    sizeKind: 'estimate',
     sourceLanguage: 'hex0 (with labels)',
     capability: 'Adds named labels and forward/back references to hex0 syntax.',
     compiles: 'M0',
@@ -369,6 +377,8 @@ export const STUB_BOOTSTRAP_CHAIN: BootstrapStage[] = [
     name: 'M0',
     title: 'M0 — minimal macro assembler',
     sizeBytes: 3000,
+    status: 'target',
+    sizeKind: 'estimate',
     sourceLanguage: 'hex1',
     capability: 'Macro definitions and substitution.',
     compiles: 'M1',
@@ -377,6 +387,8 @@ export const STUB_BOOTSTRAP_CHAIN: BootstrapStage[] = [
     name: 'M1',
     title: 'M1 — full macro assembler',
     sizeBytes: 8000,
+    status: 'target',
+    sizeKind: 'estimate',
     sourceLanguage: 'M0',
     capability: 'Directives, conditionals, includes.',
     compiles: 'M2-Planet',
@@ -385,6 +397,8 @@ export const STUB_BOOTSTRAP_CHAIN: BootstrapStage[] = [
     name: 'M2-Planet',
     title: 'M2-Planet — ANSI C compiler',
     sizeBytes: 30000,
+    status: 'target',
+    sizeKind: 'estimate',
     sourceLanguage: 'M1',
     capability: 'Compiles a useful subset of ANSI C.',
     compiles: 'kovc-bootstrap',
@@ -393,6 +407,8 @@ export const STUB_BOOTSTRAP_CHAIN: BootstrapStage[] = [
     name: 'kovc-bootstrap',
     title: 'kovc-bootstrap — Helix in C',
     sizeBytes: 80000,
+    status: 'target',
+    sizeKind: 'estimate',
     sourceLanguage: 'ANSI C',
     capability: 'Initial Helix compiler, written in C, compiled by M2-Planet.',
     compiles: 'kovc',
@@ -401,6 +417,8 @@ export const STUB_BOOTSTRAP_CHAIN: BootstrapStage[] = [
     name: 'kovc',
     title: 'kovc — self-host target',
     sizeBytes: 50000,
+    status: 'target',
+    sizeKind: 'estimate',
     sourceLanguage: 'Helix',
     capability: 'Target Helix compiler in Helix; not the shipped production compiler yet.',
     compiles: 'future self-host',

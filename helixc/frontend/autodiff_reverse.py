@@ -264,6 +264,103 @@ def _propagate(node: A.Expr, adj: A.Expr, acc: dict[str, list[A.Expr]]) -> None:
                               callee=A.Name(span=node.span, name=fn),
                               args=[arg])
 
+            def flit(v: float, suffix: str | None = None) -> A.FloatLit:
+                return A.FloatLit(span=node.span, value=v, type_suffix=suffix)
+
+            if name == "__log_stable":
+                cond = A.Binary(span=node.span, op="<=",
+                                left=copy.deepcopy(u), right=flit(0.0))
+                recip = A.Binary(span=node.span, op="/",
+                                 left=flit(1.0), right=copy.deepcopy(u))
+                deriv = A.If(
+                    span=node.span,
+                    cond=cond,
+                    then=A.Block(span=node.span, stmts=[], final_expr=flit(0.0)),
+                    else_=A.Block(span=node.span, stmts=[], final_expr=recip),
+                )
+                new_adj = A.Binary(span=node.span, op="*", left=adj,
+                                   right=deriv)
+                _propagate(u, new_adj, acc)
+                return
+            if name == "__exp_f64":
+                new_adj = A.Binary(span=node.span, op="*", left=adj,
+                                   right=call1("__exp_f64", u))
+                _propagate(u, new_adj, acc)
+                return
+            if name == "__log_f64":
+                recip = A.Binary(span=node.span, op="/",
+                                 left=flit(1.0, "f64"), right=u)
+                new_adj = A.Binary(span=node.span, op="*", left=adj,
+                                   right=recip)
+                _propagate(u, new_adj, acc)
+                return
+            if name == "__sin_f64":
+                new_adj = A.Binary(span=node.span, op="*", left=adj,
+                                   right=call1("__cos_f64", u))
+                _propagate(u, new_adj, acc)
+                return
+            if name == "__cos_f64":
+                neg_sin = A.Unary(span=node.span, op="-",
+                                  operand=call1("__sin_f64", u))
+                new_adj = A.Binary(span=node.span, op="*", left=adj,
+                                   right=neg_sin)
+                _propagate(u, new_adj, acc)
+                return
+            if name == "__sqrt_f64":
+                sqrt_u = call1("__sqrt_f64", u)
+                denom = A.Binary(span=node.span, op="*",
+                                 left=flit(2.0, "f64"), right=sqrt_u)
+                recip = A.Binary(span=node.span, op="/",
+                                 left=flit(1.0, "f64"), right=denom)
+                new_adj = A.Binary(span=node.span, op="*", left=adj,
+                                   right=recip)
+                _propagate(u, new_adj, acc)
+                return
+            if name == "__relu_f64":
+                cond = A.Binary(span=node.span, op=">", left=u,
+                                right=flit(0.0, "f64"))
+                gated = A.If(span=node.span, cond=cond,
+                             then=A.Block(span=node.span, stmts=[],
+                                          final_expr=flit(1.0, "f64")),
+                             else_=A.Block(span=node.span, stmts=[],
+                                           final_expr=flit(0.0, "f64")))
+                new_adj = A.Binary(span=node.span, op="*", left=adj,
+                                   right=gated)
+                _propagate(u, new_adj, acc)
+                return
+            if name == "__sigmoid_f64":
+                s1 = call1("__sigmoid_f64", copy.deepcopy(u))
+                s2 = call1("__sigmoid_f64", copy.deepcopy(u))
+                one_minus = A.Binary(span=node.span, op="-",
+                                     left=flit(1.0, "f64"), right=s2)
+                deriv = A.Binary(span=node.span, op="*", left=s1,
+                                 right=one_minus)
+                new_adj = A.Binary(span=node.span, op="*", left=adj,
+                                   right=deriv)
+                _propagate(u, new_adj, acc)
+                return
+            if name == "__abs_f64":
+                cond_pos = A.Binary(span=node.span, op=">",
+                                    left=copy.deepcopy(u),
+                                    right=flit(0.0, "f64"))
+                cond_neg = A.Binary(span=node.span, op="<",
+                                    left=copy.deepcopy(u),
+                                    right=flit(0.0, "f64"))
+                inner_else = A.If(span=node.span, cond=cond_neg,
+                                  then=A.Block(span=node.span, stmts=[],
+                                               final_expr=flit(-1.0, "f64")),
+                                  else_=A.Block(span=node.span, stmts=[],
+                                                final_expr=flit(0.0, "f64")))
+                deriv = A.If(span=node.span, cond=cond_pos,
+                             then=A.Block(span=node.span, stmts=[],
+                                          final_expr=flit(1.0, "f64")),
+                             else_=A.Block(span=node.span, stmts=[],
+                                           final_expr=inner_else))
+                new_adj = A.Binary(span=node.span, op="*", left=adj,
+                                   right=deriv)
+                _propagate(u, new_adj, acc)
+                return
+
             if name == "__exp":
                 # adj_u = adj * exp(u)
                 new_adj = A.Binary(span=node.span, op="*", left=adj,

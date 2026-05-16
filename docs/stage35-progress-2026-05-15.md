@@ -1456,3 +1456,48 @@ Likely follow-up slices:
 
 - Run another fresh Stage 35 clean gate from the newest fixed commit.
 - Keep PTX/tile/autotune expansion behind focused tests until the CPU AI/ML substrate is stronger.
+
+## Increment 41 - Twenty-Second Clean-Gate Restart Fix Sweep
+
+Restart 22 began from commit `c6dfb53` with green smoke/support checks, but
+all three audit lanes found remaining Stage 35 issues. The gate did not count
+as clean and Stage 35 remains at `0/3` clean gates.
+
+Fixes landed in this increment:
+
+- Strengthened 2D tensor metadata with an allocation footer and extent checks so
+  forged/truncated matrix headers fail closed.
+- Changed status-returning 2D and NN helpers to return `35001` on metadata
+  mismatch or overflow instead of reporting success with stale output buffers.
+- Hardened `rev_backward` so its tape must match its adjoint buffer and tape
+  operands must only reference earlier entries.
+- Added analytic forward and reverse AD rules for `__log_stable` plus f64
+  exp/log/sin/cos/sqrt/relu/sigmoid/abs helpers.
+- Fixed strict PTX and embedded-binary validation so unreachable differentiable
+  helpers do not hide reachable host effect errors.
+- Aligned direct PTX CLI warning policy with `helixc.check`, including
+  `-Wad=warn`, `-Wad=error`, `-Wdeprecated`, and deprecated-warning emission.
+- Updated public docs and website API contracts so live bootstrap facts are not
+  mixed with target/roadmap byte counts.
+
+Focused verification:
+
+- Per-file stdlib parser sweep across `helixc/stdlib/*.hx`
+  - Result: parsed 16 stdlib files.
+- `python -m py_compile helixc\frontend\autodiff.py helixc\frontend\autodiff_reverse.py helixc\check.py helixc\backend\ptx.py helixc\backend\x86_64.py`
+  - Result: passed.
+- `python -m pytest helixc/tests/test_transcendentals.py helixc/tests/test_autodiff.py helixc/tests/test_autodiff_reverse.py -q`
+  - Result: 101 passed.
+- `python -m pytest helixc/tests/test_codegen.py -k "t1d or t2d or ti2d or tf2d or tensor or stage35_2d or nn_ or dense_layer or softmax_rows_f32 or softmax_ce_grad_f32 or argmax_rows_f32 or accuracy_count_from_logits_f32 or ce_loss_batch_f32 or bce or gelu or revad" -q`
+  - Result: 125 passed.
+- `python -m pytest helixc/tests/test_cli.py -q`
+  - Result: 159 passed.
+- `python -m pytest helixc/tests/test_ptx.py -q`
+  - Result: 75 passed.
+- `python -m pytest helixc/tests --collect-only -q -p no:cacheprovider`
+  - Result: 2,277 tests collected.
+
+Clean-gate status:
+
+- Stage 35 clean gates remain `0/3`.
+- Next step is another fresh Stage 35 clean gate on this fixed commit.

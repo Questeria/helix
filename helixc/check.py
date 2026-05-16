@@ -126,6 +126,67 @@ def _kernel_reachable_program(prog: A.Program) -> A.Program:
     )
 
 
+def _ty_mentions_diff(ty: object) -> bool:
+    if ty is None:
+        return False
+    if isinstance(ty, A.TyGeneric) and ty.base == "D":
+        return True
+    if dataclasses.is_dataclass(ty):
+        for field in dataclasses.fields(ty):
+            if _ty_mentions_diff(getattr(ty, field.name)):
+                return True
+    if isinstance(ty, (list, tuple)):
+        return any(_ty_mentions_diff(item) for item in ty)
+    return False
+
+
+def _fn_mentions_diff_signature(fn: A.FnDecl) -> bool:
+    if _ty_mentions_diff(fn.return_ty):
+        return True
+    return any(_ty_mentions_diff(p.ty) for p in fn.params)
+
+
+def _reachable_function_names(prog: A.Program) -> set[str]:
+    fn_by_name = {
+        it.name: it for it in prog.items if isinstance(it, A.FnDecl)
+    }
+    keep: set[str] = {
+        it.name for it in prog.items
+        if isinstance(it, A.FnDecl)
+        and (it.name == "main" or "kernel" in it.attrs)
+    }
+    queue = list(keep)
+    while queue:
+        fn = fn_by_name.get(queue.pop())
+        if fn is None:
+            continue
+        for callee in _called_fn_names(fn.body):
+            if callee in fn_by_name and callee not in keep:
+                keep.add(callee)
+                queue.append(callee)
+    return keep
+
+
+def _drop_unreachable_diff_signature_fns(prog: A.Program) -> A.Program:
+    """Drop dead D<T>-signature helpers before host/PTX lowering.
+
+    Source-level AD helpers can be valid, typechecked declarations but not
+    directly lowerable to host/Tile IR. If they are dead relative to main and
+    kernels, they must not prevent strict checks or binary emission for the
+    actually emitted program.
+    """
+    reachable = _reachable_function_names(prog)
+    return A.Program(
+        module=prog.module,
+        items=[
+            it for it in prog.items
+            if (not isinstance(it, A.FnDecl)
+                or not _fn_mentions_diff_signature(it)
+                or it.name in reachable)
+        ],
+    )
+
+
 # ----------------------------------------------------------------------
 # Argument parsing
 # ----------------------------------------------------------------------
@@ -1392,7 +1453,8 @@ def _main_inner(argv: list[str] | None,
         strict_full_eff_errs = []
         if "--emit-ptx" in a.flags and "--strict" in a.flags:
             try:
-                strict_full_mod = lower(prog)
+                strict_full_mod = lower(
+                    _drop_unreachable_diff_signature_fns(prog))
                 strict_full_scope = None
                 if include_stdlib:
                     strict_full_scope = diagnostic_function_names(
@@ -1400,16 +1462,17 @@ def _main_inner(argv: list[str] | None,
                 strict_full_eff_errs = effect_check_module(
                     strict_full_mod, only_functions=strict_full_scope)
             except Exception as e:
-                if "unresolved generic type D" not in str(e):
-                    print(
-                        f"helixc: strict validation error: "
-                        f"{type(e).__name__}: {e}",
-                        file=sys.stderr,
-                    )
-                    return 1
+                print(
+                    f"helixc: strict validation error: "
+                    f"{type(e).__name__}: {e}",
+                    file=sys.stderr,
+                )
+                return 1
         lower_prog = prog
         if "--emit-ptx" in a.flags:
             lower_prog = _kernel_reachable_program(prog)
+        elif a.output is not None:
+            lower_prog = _drop_unreachable_diff_signature_fns(prog)
         grad_pass(lower_prog)
         mod = lower(lower_prog)
         pre_opt_effect_scope = None

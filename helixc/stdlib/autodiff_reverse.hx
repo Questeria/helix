@@ -230,6 +230,7 @@ fn rev_backward(tape: i32, adj_start: i32) -> i32 {
     else { if cnt > cap { 0 - 1 }
     else { if adj_cap < 0 { 0 - 1 }
     else { if cnt > adj_cap { 0 - 1 }
+    else { if __arena_get(tape + 2) != adj_start { 0 - 1 }
     else {
     let mut check_i: i32 = cnt - 1;
     let mut status: i32 = 0;
@@ -243,15 +244,22 @@ fn rev_backward(tape: i32, adj_start: i32) -> i32 {
                 status = 0;
             } else { if check_kind == 1 {
                 if rev_valid_index(tape, check_in1) == 0 { status = 0 - 1; }
-                else { if rev_valid_index(tape, check_in2) == 0 { status = 0 - 1; } }
+                else { if rev_valid_index(tape, check_in2) == 0 { status = 0 - 1; }
+                else { if check_in1 >= check_i { status = 0 - 1; }
+                else { if check_in2 >= check_i { status = 0 - 1; } } } }
             } else { if check_kind == 2 {
                 if rev_valid_index(tape, check_in1) == 0 { status = 0 - 1; }
-                else { if rev_valid_index(tape, check_in2) == 0 { status = 0 - 1; } }
+                else { if rev_valid_index(tape, check_in2) == 0 { status = 0 - 1; }
+                else { if check_in1 >= check_i { status = 0 - 1; }
+                else { if check_in2 >= check_i { status = 0 - 1; } } } }
             } else { if check_kind == 3 {
                 if rev_valid_index(tape, check_in1) == 0 { status = 0 - 1; }
-                else { if rev_valid_index(tape, check_in2) == 0 { status = 0 - 1; } }
+                else { if rev_valid_index(tape, check_in2) == 0 { status = 0 - 1; }
+                else { if check_in1 >= check_i { status = 0 - 1; }
+                else { if check_in2 >= check_i { status = 0 - 1; } } } }
             } else { if check_kind == 4 {
                 if rev_valid_index(tape, check_in1) == 0 { status = 0 - 1; }
+                else { if check_in1 >= check_i { status = 0 - 1; } }
             } else {
                 status = 0 - 1;
             }}}}};
@@ -303,5 +311,5 @@ fn rev_backward(tape: i32, adj_start: i32) -> i32 {
         i = i - 1;
     }
     status
-    }}}}
+    }}}}}
 }

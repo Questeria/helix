@@ -207,7 +207,9 @@ Quote Splice modify verifier
 | 10  | `i8` | 8 | -128 to 127 | 4-byte slot, sign-extended |
 | 11  | `i16` | 16 | -32768 to 32767 | 4-byte slot, sign-extended |
 
-bf16 is included for ML use cases (gradient compute on Blackwell tensor cores).
+bf16 is recognized for ML-oriented source compatibility and roadmap work.
+Full bf16 arithmetic lowering, Blackwell tensor-core integration, and numeric
+parity across backends are target capabilities, not shipped Stage 35 behavior.
 
 #### Aggregate types
 
@@ -656,11 +658,16 @@ let v: f32 = c.get(0, 0);   // 0.0
 
 #### Type parameters
 
-- **Dtype**: `f32`, `f64`, `bf16`, `i32`
+- **Dtype**: `f32`, `f64`, `i32` for the covered live paths; `bf16` is a
+  recognized target surface under active backend work.
 - **Shape**: `[rows, cols]` — compile-time integer tuple
-- **Memspace**: `REG` (registers/stack), `SMEM` (shared memory), `HBM` (global memory), `TMEM` (Blackwell tensor memory)
+- **Memspace**: `REG` (registers/stack) is the covered live path. `SMEM`
+  (shared memory), `HBM` (global memory), and `TMEM` (Blackwell tensor memory)
+  are target design surfaces for later PTX/GPU stages.
 
-Phase-0 supports REG only; HBM/SMEM/TMEM activate with the PTX backend.
+Phase-0 supports REG only. The current PTX backend emits text for covered
+kernels, but GPU execution and non-REG memory-space behavior are not shipped
+capabilities yet.
 
 ### Operations
 
@@ -942,7 +949,7 @@ Kovostov-Native/
 │   │   ├── nn.hx
 │   │   ├── option.hx
 │   │   └── autodiff.hx
-│   ├── tests/          # 2,264 tests collected in restart 21 fix verification
+│   ├── tests/          # 2,277 tests collected in restart 22 fix verification
 │   │   ├── test_codegen.py
 │   │   ├── test_parser.py
 │   │   ├── test_match.py
@@ -969,7 +976,10 @@ The Python-hosted `helixc` is currently the production compiler. The Helix self-
 
 Each stage of Helix went through multi-agent audit cycles. Three specialist agents (code-reviewer, silent-failure-hunter, type-design-analyzer) review every commit. Findings are tracked in `docs/audit-stage4-followup.md` style — each finding has a unique ID, severity, reproducer, status, and resolution commit.
 
-The final shipping gate (Stage 30) requires **5 consecutive clean audits** with zero new findings.
+Stage 30 historically used **5 consecutive clean audits** with zero new
+findings. Stage 35 uses a faster **3-clean-gate** policy after each fix sweep;
+the current Stage 35 ledger remains `0/3` until a fresh restart produces no new
+findings.
 
 ---
 
@@ -1048,7 +1058,9 @@ The Kovostov AGI project (which Helix is the foundation for) commits to training
 ### Reproducibility
 
 - Deterministic rebuilds are a verification target for the compiler and bootstrap chain.
-- The bootstrap chain is reproducible: anyone can rebuild from `hex0` and verify.
+- The live `hex0` bootstrap root is byte-auditable today. Rebuilding the full
+  compiler from `hex0` is a reproducibility target until the later bootstrap
+  links are implemented and verified.
 - All training data manifests are public and content-addressed.
 
 ### Governance
@@ -1501,7 +1513,7 @@ Or: a single character `λ` in monospace inside a hex bracket `[λ]`. Clean, sho
 
 - **299 bytes** — current hex0 binary size
 - **Python-hosted helixc** — current production compiler implementation
-- **2,264 live tests collected** — restart 21 fix verification; rerun scoped pytest collection before publishing
+- **2,277 live tests collected** — restart 22 fix verification; rerun scoped pytest collection before publishing
 - **30+ stages** — Approach A roadmap
 - **23 silent-corruption bugs** — found and disclosed during development
 - **9 audit passes** — multi-agent code review cycles

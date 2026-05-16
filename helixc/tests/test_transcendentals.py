@@ -287,6 +287,50 @@ def test_grad_rev_all_through_bce():
     assert compile_and_run(src) == 42
 
 
+def test_forward_grad_through_log_stable_large_input():
+    src = """
+    @pure fn loss(x: f32) -> f32 { __log_stable(x) }
+    fn main() -> i32 {
+        let g = grad(loss)(100.0);
+        ((g * 4200.0) as i32)
+    }
+    """
+    assert compile_and_run(src) == 42
+
+
+def test_grad_rev_through_log_stable_large_input():
+    src = """
+    @pure fn loss(x: f32) -> f32 { __log_stable(x) }
+    fn main() -> i32 {
+        let g = grad_rev(loss)(100.0);
+        ((g * 4200.0) as i32)
+    }
+    """
+    assert compile_and_run(src) == 42
+
+
+def test_forward_grad_through_sqrt_f64():
+    src = """
+    @pure fn loss(x: f64) -> f64 { __sqrt_f64(x) }
+    fn main() -> i32 {
+        let g = grad(loss)(4.0_f64);
+        ((g * 168.0_f64) as i32)
+    }
+    """
+    assert compile_and_run(src) == 42
+
+
+def test_grad_rev_through_sqrt_f64():
+    src = """
+    @pure fn loss(x: f64) -> f64 { __sqrt_f64(x) }
+    fn main() -> i32 {
+        let g = grad_rev(loss)(4.0_f64);
+        ((g * 168.0_f64) as i32)
+    }
+    """
+    assert compile_and_run(src) == 42
+
+
 def test_grad_through_abs_positive():
     # d(abs(x)) at x=5 = 1; +41 = 42
     src = """

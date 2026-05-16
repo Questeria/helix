@@ -21,8 +21,8 @@ fn dense_layer_forward(w_start: i32, w_rows: i32, w_cols: i32,
                        x_start: i32, b_start: i32, y_start: i32) -> i32 {
     if w_rows <= 0 { 0 }
     else { if w_cols <= 0 { 0 }
-    else { if t2d_len(w_rows, w_cols) == 0 { 0 }
-    else { if t2d_shape_ok(w_start, w_rows, w_cols) == 0 { 0 }
+    else { if t2d_len(w_rows, w_cols) == 0 { t2d_error() }
+    else { if t2d_shape_ok(w_start, w_rows, w_cols) == 0 { t2d_error() }
     else {
     ti2d_matvec(w_start, w_rows, w_cols, x_start, y_start);
     let mut r: i32 = 0;
@@ -248,8 +248,8 @@ fn dense_layer_f32_forward(w_start: i32, w_rows: i32, w_cols: i32,
                            x_start: i32, b_start: i32, y_start: i32) -> i32 {
     if w_rows <= 0 { 0 }
     else { if w_cols <= 0 { 0 }
-    else { if t2d_len(w_rows, w_cols) == 0 { 0 }
-    else { if t2d_shape_ok(w_start, w_rows, w_cols) == 0 { 0 }
+    else { if t2d_len(w_rows, w_cols) == 0 { t2d_error() }
+    else { if t2d_shape_ok(w_start, w_rows, w_cols) == 0 { t2d_error() }
     else {
     tf2d_matvec(w_start, w_rows, w_cols, x_start, y_start);
     let mut r: i32 = 0;
@@ -269,8 +269,8 @@ fn dense_layer_f32_grad_w(dy_start: i32, x_start: i32,
                           grad_w_start: i32, rows: i32, cols: i32) -> i32 {
     if rows <= 0 { 0 }
     else { if cols <= 0 { 0 }
-    else { if t2d_len(rows, cols) == 0 { 0 }
-    else { if t2d_shape_ok(grad_w_start, rows, cols) == 0 { 0 }
+    else { if t2d_len(rows, cols) == 0 { t2d_error() }
+    else { if t2d_shape_ok(grad_w_start, rows, cols) == 0 { t2d_error() }
     else {
     let mut r: i32 = 0;
     while r < rows {
@@ -301,8 +301,8 @@ fn dense_layer_f32_grad_x(w_start: i32, dy_start: i32,
                           grad_x_start: i32, rows: i32, cols: i32) -> i32 {
     if rows <= 0 { 0 }
     else { if cols <= 0 { 0 }
-    else { if t2d_len(rows, cols) == 0 { 0 }
-    else { if t2d_shape_ok(w_start, rows, cols) == 0 { 0 }
+    else { if t2d_len(rows, cols) == 0 { t2d_error() }
+    else { if t2d_shape_ok(w_start, rows, cols) == 0 { t2d_error() }
     else {
     let mut c: i32 = 0;
     while c < cols {
@@ -538,9 +538,9 @@ fn softmax_rows_f32(logits_start: i32, probs_start: i32,
                     rows: i32, cols: i32) -> i32 {
     if rows <= 0 { 0 }
     else { if cols <= 0 { 0 }
-    else { if t2d_len(rows, cols) == 0 { 0 }
-    else { if t2d_shape_ok(logits_start, rows, cols) == 0 { 0 }
-    else { if t2d_shape_ok(probs_start, rows, cols) == 0 { 0 }
+    else { if t2d_len(rows, cols) == 0 { t2d_error() }
+    else { if t2d_shape_ok(logits_start, rows, cols) == 0 { t2d_error() }
+    else { if t2d_shape_ok(probs_start, rows, cols) == 0 { t2d_error() }
     else {
         let mut r: i32 = 0;
         while r < rows {
@@ -699,8 +699,8 @@ fn argmax_rows_f32(logits_start: i32, rows: i32, cols: i32,
                    out_start: i32) -> i32 {
     if rows <= 0 { 0 }
     else { if cols <= 0 { 0 }
-    else { if t2d_len(rows, cols) == 0 { 0 }
-    else { if t2d_shape_ok(logits_start, rows, cols) == 0 { 0 }
+    else { if t2d_len(rows, cols) == 0 { t2d_error() }
+    else { if t2d_shape_ok(logits_start, rows, cols) == 0 { t2d_error() }
     else {
         let mut r: i32 = 0;
         while r < rows {
@@ -728,8 +728,8 @@ fn accuracy_count_from_logits_f32(logits_start: i32, target_start: i32,
                                   rows: i32, cols: i32) -> i32 {
     if rows <= 0 { 0 }
     else { if cols <= 0 { 0 }
-    else { if t2d_len(rows, cols) == 0 { 0 }
-    else { if t2d_shape_ok(logits_start, rows, cols) == 0 { 0 }
+    else { if t2d_len(rows, cols) == 0 { t2d_error() }
+    else { if t2d_shape_ok(logits_start, rows, cols) == 0 { t2d_error() }
     else {
         let mut r: i32 = 0;
         let mut hits: i32 = 0;

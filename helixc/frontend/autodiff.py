@@ -341,11 +341,17 @@ def _inline_user_calls(expr: A.Expr, fn_table: dict[str, "A.FnDecl"],
     TRANSCENDENTALS = {"__exp", "__log", "__sin", "__cos", "__sqrt",
                        "__relu", "__sigmoid", "__tanh", "__softplus",
                        "__silu", "__abs", "__gelu", "__powi", "__bce",
+                       "__log_stable",
+                       "__exp_f64", "__log_f64", "__sin_f64", "__cos_f64",
+                       "__sqrt_f64", "__relu_f64", "__sigmoid_f64",
+                       "__abs_f64",
                        # min/max/clamp aren't differentiable at switch
                        # points; leave opaque so the AD surface can reject
                        # missing chain rules instead of inlining conditionals.
                        "__min", "__max", "__clamp",
-                       "__min_i32", "__max_i32", "__clamp_i32"}
+                       "__min_i32", "__max_i32", "__clamp_i32",
+                       "__min_f64", "__max_f64", "__clamp_f64",
+                       "__sign", "__sign_f64"}
     visiting = visiting or frozenset()
 
     def go(e: A.Expr) -> A.Expr:
@@ -956,6 +962,74 @@ def _diff_call_chain_rule(call: A.Call, var: str,
 
     def call1(fn: str, arg: A.Expr) -> A.Expr:
         return A.Call(span=span, callee=A.Name(span=span, name=fn), args=[arg])
+
+    def flit(v: float, suffix: str | None = None) -> A.FloatLit:
+        return A.FloatLit(span=span, value=v, type_suffix=suffix)
+
+    if name == "__log_stable":
+        # __log_stable returns a fixed sentinel for x <= 0, so its local
+        # derivative is 0 on that branch and 1/x on the positive branch.
+        cond = A.Binary(span=span, op="<=", left=_copy.deepcopy(u),
+                        right=flit(0.0))
+        recip = A.Binary(span=span, op="/",
+                         left=flit(1.0), right=_copy.deepcopy(u))
+        gated = A.If(
+            span=span,
+            cond=cond,
+            then=A.Block(span=span, stmts=[], final_expr=flit(0.0)),
+            else_=A.Block(span=span, stmts=[], final_expr=recip),
+        )
+        return mul(gated, du)
+    if name == "__exp_f64":
+        return mul(call1("__exp_f64", u), du)
+    if name == "__log_f64":
+        recip = A.Binary(span=span, op="/",
+                         left=flit(1.0, "f64"), right=u)
+        return mul(recip, du)
+    if name == "__sin_f64":
+        return mul(call1("__cos_f64", u), du)
+    if name == "__cos_f64":
+        neg_sin = A.Unary(span=span, op="-", operand=call1("__sin_f64", u))
+        return mul(neg_sin, du)
+    if name == "__sqrt_f64":
+        sqrt_u = call1("__sqrt_f64", u)
+        denom = A.Binary(span=span, op="*",
+                         left=flit(2.0, "f64"), right=sqrt_u)
+        recip = A.Binary(span=span, op="/",
+                         left=flit(1.0, "f64"), right=denom)
+        return mul(recip, du)
+    if name == "__relu_f64":
+        cond = A.Binary(span=span, op=">", left=u, right=flit(0.0, "f64"))
+        gated = A.If(span=span, cond=cond,
+                     then=A.Block(span=span, stmts=[],
+                                  final_expr=flit(1.0, "f64")),
+                     else_=A.Block(span=span, stmts=[],
+                                   final_expr=flit(0.0, "f64")))
+        return mul(gated, du)
+    if name == "__sigmoid_f64":
+        s1 = call1("__sigmoid_f64", _copy.deepcopy(u))
+        s2 = call1("__sigmoid_f64", _copy.deepcopy(u))
+        one_minus = A.Binary(span=span, op="-",
+                             left=flit(1.0, "f64"), right=s1)
+        return mul(mul(s2, one_minus), du)
+    if name == "__abs_f64":
+        u_copy = _copy.deepcopy(u)
+        zero = flit(0.0, "f64")
+        cond_pos = A.Binary(span=span, op=">", left=u_copy,
+                            right=flit(0.0, "f64"))
+        cond_neg = A.Binary(span=span, op="<", left=_copy.deepcopy(u),
+                            right=flit(0.0, "f64"))
+        inner_else = A.If(span=span, cond=cond_neg,
+                          then=A.Block(span=span, stmts=[],
+                                       final_expr=flit(-1.0, "f64")),
+                          else_=A.Block(span=span, stmts=[],
+                                        final_expr=zero))
+        gated = A.If(span=span, cond=cond_pos,
+                     then=A.Block(span=span, stmts=[],
+                                  final_expr=flit(1.0, "f64")),
+                     else_=A.Block(span=span, stmts=[],
+                                   final_expr=inner_else))
+        return mul(gated, du)
 
     if name == "__exp":
         # d(exp(u))/dx = exp(u) * du/dx

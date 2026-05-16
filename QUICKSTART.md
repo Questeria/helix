@@ -8,14 +8,17 @@ This is the fastest path from a fresh checkout to a running Helix program.
 - **WSL2 + Linux** on Windows, or any Linux (for running the produced ELFs)
 - (Optional) `nasm` / `as` for cross-checking emitted machine code
 
-No other dependencies. Helix bootstraps from a 299-byte hand-encoded
-ELF (`stage0/hex0/hex0.bin`) and builds itself up.
+No other dependencies for the current Python-hosted `helixc` compiler. The
+repository also contains the live 299-byte hand-encoded ELF
+(`stage0/hex0/hex0.bin`) that serves as the audited bootstrap floor; the later
+bootstrap links and self-hosted compiler remain roadmap targets until they can
+rebuild the compiler reproducibly.
 
 ## Build status
 
 This is an early in-development language. Stage 35 is currently in audit
 cleanup, and clean gates remain `0/3` in the Stage 35 progress ledger. Restart
-21 fix verification collected 2,264 live `helixc/tests` pytest tests; run
+22 fix verification collected 2,277 live `helixc/tests` pytest tests; run
 `python -m pytest helixc/tests --collect-only -q -p no:cacheprovider` for the
 current count.
 

@@ -10921,6 +10921,46 @@ def test_revad_backward_prevalidates_before_adj_mutation():
     assert code == 42, f"expected 42, got {code}"
 
 
+def test_revad_backward_rejects_foreign_adjoint_buffer():
+    src = """
+    fn main() -> i32 {
+        let tape1 = rev_tape_new(4);
+        let x1 = rev_leaf(tape1, 5);
+        let tape2 = rev_tape_new(4);
+        let x2 = rev_leaf(tape2, 7);
+        let adj2 = rev_alloc_adjoints(tape2);
+        rev_seed(adj2, x2, 1);
+        let status = rev_backward(tape1, adj2);
+        if status == (0 - 1) {
+        if rev_grad(adj2, x2) == 1 { 42 } else { 7 }
+        } else { 7 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_revad_backward_rejects_self_referential_operand_before_mutation():
+    src = """
+    fn main() -> i32 {
+        let tape = rev_tape_new(6);
+        let x = rev_leaf(tape, 5);
+        let y = rev_leaf(tape, 7);
+        let f = rev_add(tape, x, y);
+        __arena_set(tape + 3 + f * 4 + 1, f);
+        let adj = rev_alloc_adjoints(tape);
+        rev_seed(adj, f, 1);
+        let status = rev_backward(tape, adj);
+        if status == (0 - 1) {
+        if rev_grad(adj, x) == 0 {
+        if rev_grad(adj, y) == 0 { 42 } else { 7 }
+        } else { 7 }} else { 7 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
 def test_revad_seed_rejects_invalid_index_without_corrupting_tape():
     src = """
     fn main() -> i32 {
@@ -11200,16 +11240,42 @@ def test_stage35_2d_helpers_reject_shape_metadata_mismatch():
         let guard = tf1d_zeros(1);
         tf1d_set(guard, 0, 40.0_f32);
         let dst = tf1d_zeros(1);
-        tf2d_row_sum(m, 1, 2, dst);
+        let row_status = tf2d_row_sum(m, 1, 2, dst);
+        if row_status == 35001 {
         if (tf1d_get(dst, 0) as i32) == 0 {
         if (tf1d_get(guard, 0) as i32) == 40 {
             let a = tf2d_zeros(1, 1);
             let b = tf2d_zeros(1, 1);
             let c = tf2d_zeros(1, 1);
             tf2d_set(c, 1, 0, 0, 7.0_f32);
-            tf2d_matmul(a, 1, 2, b, 1, c);
+            let mm_status = tf2d_matmul(a, 1, 2, b, 1, c);
+            if mm_status == 35001 {
             if (tf2d_get(c, 1, 0, 0) as i32) == 7 { 42 } else { 6 }
-        } else { 5 }} else { 4 }
+            } else { 6 }
+        } else { 5 }} else { 4 }} else { 3 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stage35_2d_helpers_reject_forged_truncated_metadata():
+    src = """
+    fn main() -> i32 {
+        let header = __arena_len();
+        __arena_push(t2d_magic());
+        __arena_push(1);
+        __arena_push(2);
+        __arena_push(__bits_of_f32(2.0_f32));
+        let fake = header + 3;
+        let guard = tf1d_zeros(1);
+        tf1d_set(guard, 0, 40.0_f32);
+        let dst = tf1d_zeros(1);
+        let status = tf2d_row_sum(fake, 1, 2, dst);
+        if status == 35001 {
+        if (tf1d_get(dst, 0) as i32) == 0 {
+        if (tf1d_get(guard, 0) as i32) == 40 { 42 } else { 7 }
+        } else { 7 }} else { 7 }
     }
     """
     code = compile_and_run(src)

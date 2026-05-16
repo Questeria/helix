@@ -392,6 +392,32 @@ def test_stage35_emit_ptx_strict_rejects_host_only_effect_violation(tmp_path):
     assert "compiler bug" not in proc.stderr
 
 
+def test_stage35_emit_ptx_strict_rejects_host_effect_with_dead_ad_helper(tmp_path):
+    src_path = tmp_path / "strict_host_effect_dead_ad_kernel.hx"
+    src_path.write_text(
+        "fn loss(x: D<f64>) -> D<f64> { x }\n"
+        "@pure fn host() -> i32 { print_int(1); 0 }\n"
+        "@kernel fn k() { let i = thread_idx(); }\n",
+        encoding="utf-8",
+    )
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    proc = subprocess.run(
+        [
+            sys.executable, "-m", "helixc.check", str(src_path),
+            "--emit-ptx", "--strict", "--no-stdlib",
+        ],
+        cwd=proj_root,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    assert proc.stdout == ""
+    assert "--strict aborts" in proc.stderr
+    assert "19001" in proc.stderr
+    assert "unresolved generic type D" not in proc.stderr
+
+
 def test_stage35_emit_ptx_strict_wad_error_keeps_stdout_empty(tmp_path):
     src_path = tmp_path / "strict_host_ad_kernel_error.hx"
     src_path.write_text(
@@ -418,6 +444,58 @@ def test_stage35_emit_ptx_strict_wad_error_keeps_stdout_empty(tmp_path):
     assert "unresolved generic type D" not in proc.stderr
     assert "internal error" not in proc.stderr
     assert "compiler bug" not in proc.stderr
+
+
+def test_stage35_check_output_ignores_dead_ad_helper_for_embedded_ptx(tmp_path):
+    src_path = tmp_path / "embedded_ptx_dead_ad.hx"
+    out_path = tmp_path / "embedded_ptx_dead_ad.bin"
+    src_path.write_text(
+        "fn loss(x: D<f64>) -> D<f64> { x }\n"
+        "@kernel fn k() { let i = thread_idx(); }\n"
+        "fn main() -> i32 { 42 }\n",
+        encoding="utf-8",
+    )
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    proc = subprocess.run(
+        [
+            sys.executable, "-m", "helixc.check", str(src_path),
+            "-o", str(out_path), "--no-stdlib",
+        ],
+        cwd=proj_root,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert out_path.exists()
+    assert "unresolved generic type D" not in proc.stderr
+    assert "compiler bug" not in proc.stderr
+
+
+def test_stage35_direct_x86_output_ignores_dead_ad_helper_for_embedded_ptx(tmp_path):
+    src_path = tmp_path / "direct_x86_embedded_ptx_dead_ad.hx"
+    out_path = tmp_path / "direct_x86_embedded_ptx_dead_ad.bin"
+    src_path.write_text(
+        "fn loss(x: D<f64>) -> D<f64> { x }\n"
+        "@kernel fn k() { let i = thread_idx(); }\n"
+        "fn main() -> i32 { 42 }\n",
+        encoding="utf-8",
+    )
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    proc = subprocess.run(
+        [
+            sys.executable, "-m", "helixc.backend.x86_64",
+            str(src_path), str(out_path), "--no-stdlib",
+        ],
+        cwd=proj_root,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert out_path.exists()
+    assert "unresolved generic type D" not in proc.stderr
+    assert "Traceback" not in proc.stderr
 
 
 def test_c119_emit_ptx_rejects_no_kernel_modules(capsys):

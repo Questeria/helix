@@ -398,6 +398,20 @@ def test_stage35_direct_ptx_cli_strict_ignores_host_ad_function():
     assert "compiler bug" not in proc.stderr
 
 
+def test_stage35_direct_ptx_cli_strict_rejects_host_effect_with_dead_ad_helper():
+    src = """
+    fn loss(x: D<f64>) -> D<f64> { x }
+    @pure fn host() -> i32 { print_int(1); 0 }
+    @kernel fn k() { let i = thread_idx(); }
+    """
+    proc = run_ptx_cli(src, "--strict", "--no-stdlib")
+    assert proc.returncode != 0, proc.stdout + proc.stderr
+    assert proc.stdout == ""
+    assert "--strict aborts" in proc.stderr
+    assert "19001" in proc.stderr
+    assert "unresolved generic type D" not in proc.stderr
+
+
 def test_stage35_direct_ptx_cli_wad_error_keeps_stdout_empty():
     src = """
     fn loss(x: D<f64>, y: D<i32>) -> D<f64> { x + y }
@@ -409,6 +423,34 @@ def test_stage35_direct_ptx_cli_wad_error_keeps_stdout_empty():
     assert "ad:" in proc.stderr
     assert "ERROR" in proc.stderr
     assert "AD002" in proc.stderr or "24200" in proc.stderr
+
+
+def test_stage35_direct_ptx_cli_accepts_wad_warn_policy():
+    src = """
+    fn loss(x: D<f64>, y: D<i32>) -> D<f64> { x + y }
+    @kernel fn k() { let i = thread_idx(); }
+    """
+    proc = run_ptx_cli(src, "-Wad=warn")
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert ".visible .entry k" in proc.stdout
+    assert "ad:" in proc.stderr
+
+
+def test_stage35_direct_ptx_cli_deprecated_warning_policy():
+    src = """
+    @deprecated fn old() -> i32 { 0 }
+    fn host() -> i32 { old() }
+    @kernel fn k() { let i = thread_idx(); }
+    """
+    proc = run_ptx_cli(src)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert ".visible .entry k" in proc.stdout
+    assert "deprecated:" in proc.stderr
+    err_proc = run_ptx_cli(src, "-Wdeprecated=error")
+    assert err_proc.returncode != 0, err_proc.stdout + err_proc.stderr
+    assert err_proc.stdout == ""
+    assert "deprecated:" in err_proc.stderr
+    assert "ERROR" in err_proc.stderr
 
 
 def test_stage35_direct_ptx_cli_drains_ad_warnings_on_error():
