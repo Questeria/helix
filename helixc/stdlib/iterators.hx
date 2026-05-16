@@ -222,8 +222,15 @@ fn vec_map_abs(start: i32, count: i32) -> i32 {
     let s: i32 = __arena_len();
     let mut i: i32 = 0;
     while i < count {
+        // Restart 58 A2 (Increment 77 catch-up sweep): saturate INT32_MIN
+        // to INT32_MAX. -INT32_MIN can't be represented as i32 and would
+        // silently wrap back to INT32_MIN, breaking the |x| >= 0
+        // postcondition. Direct sibling of vec_map_neg / vec_negate_inplace
+        // (restart 51 A5) and ti1d_max_abs / vec_max_abs (restart 56 A2/A3).
         let v = __arena_get(start + i);
-        if v < 0 { __arena_push(0 - v); } else { __arena_push(v); }
+        let av = if v == ((0 - 2147483647) - 1) { 2147483647 }
+                 else { if v < 0 { 0 - v } else { v } };
+        __arena_push(av);
         i = i + 1;
     }
     s

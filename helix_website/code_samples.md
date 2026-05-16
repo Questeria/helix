@@ -5,9 +5,10 @@ draft, not a live-valid sample suite. Before publishing a snippet as
 copy/paste-ready, run it through the current `python -m helixc.check` path or
 mark it clearly as roadmap syntax.
 
-**Known roadmap snippets** (re-verified by Stage 35 restart 57 catch-up
-sweep against the live `python -m helixc.check` path; these do not yet
-parse and are design targets, not copy-paste-ready):
+**Known roadmap snippets** (last verified during a Stage 35 audit lane C
+sweep — see the `docs/audit-stage35-restart*-laneC.md` series for the
+most recent verification; these do not yet parse and are design targets,
+not copy-paste-ready):
 
 - #9 Structs basic and #10 Structs nested — positional `Pt { 6, 7 }`
   construction is not supported by the current parser; use the named form

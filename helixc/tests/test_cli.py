@@ -5043,6 +5043,130 @@ def test_stage35_restart54_lower_type_loud_fails_on_unknown_tynode():
     )
 
 
+# === Restart 58 catch-up sweep Lane C canaries (Increment 77) ============
+
+def _proj_root():
+    return os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+
+def test_stage35_readme_status_paragraph_advanced_past_restart_56():
+    """C1 canary: README.md status paragraph must not regress to a
+    restart number <= 56. The restart 58 catch-up sweep advanced it past
+    restart 57; future cycles must keep the number monotonically
+    non-decreasing."""
+    import re
+    from pathlib import Path
+    text = (Path(_proj_root()) / "README.md").read_text(encoding="utf-8")
+    for line in text.splitlines():
+        if ("is the latest recorded" in line
+            and "in this status text" in line
+            and "restart" in line):
+            m = re.search(r"restart (\d+)", line, re.IGNORECASE)
+            assert m is not None, f"no restart number in: {line!r}"
+            n = int(m.group(1))
+            assert n >= 57, (
+                f"README status paragraph stuck at restart {n} "
+                f"(must be >= 57 since restart 58 catch-up sweep)"
+            )
+            return
+    raise AssertionError(
+        "README.md no longer has the 'is the latest recorded ... in this "
+        "status text' marker line — drop with care"
+    )
+
+
+def test_stage35_handoff_chatgpt_header_and_strict_criterion_agree_on_count():
+    """C2 canary: HANDOFF_FOR_CHATGPT.md line-6 header and line-231-ish
+    STRICT CRITERION block must agree on the live test count. The two
+    sites previously drifted because the restart-57 catch-up sweep
+    advanced the body but missed the header."""
+    import re
+    from pathlib import Path
+    text = (Path(_proj_root()) / "HANDOFF_FOR_CHATGPT.md").read_text(encoding="utf-8")
+    header_match = re.search(
+        r"Current continuation pointer.*?live `helixc/tests` collection is ([\d,+]+)",
+        text, re.DOTALL,
+    )
+    strict_match = re.search(
+        r"collected ([\d,+]+) live `helixc/tests`", text,
+    )
+    assert header_match is not None, "header continuation-pointer count missing"
+    assert strict_match is not None, "STRICT CRITERION count line missing"
+    # Normalise: strip commas and trailing '+' for comparison.
+    def _norm(s):
+        return s.replace(",", "").rstrip("+")
+    assert _norm(header_match.group(1)) == _norm(strict_match.group(1)), (
+        f"HANDOFF_FOR_CHATGPT.md internal disagreement: "
+        f"header says {header_match.group(1)}, "
+        f"STRICT CRITERION says {strict_match.group(1)}"
+    )
+
+
+def test_stage35_stats_facts_header_advanced_past_restart_56():
+    """C3 canary: stats_and_facts.md snapshot-prose header must not
+    regress to a restart number <= 56. Internal-consistency canary
+    catches drift between the prose header and the table-row test count
+    citation."""
+    import re
+    from pathlib import Path
+    text = (Path(_proj_root()) / "helix_website" / "stats_and_facts.md").read_text(encoding="utf-8")
+    # Match the snapshot-prose header that names the latest restart number.
+    m = re.search(
+        r"[Rr]estart (\d+).*?(?:latest recorded|catch-up sweep).*?Stage 35",
+        text,
+    )
+    assert m is not None, (
+        "stats_and_facts.md snapshot-prose header no longer names a "
+        "restart number — drop with care"
+    )
+    n = int(m.group(1))
+    assert n >= 57, (
+        f"stats_and_facts.md snapshot-prose header stuck at restart {n} "
+        f"(must be >= 57 since restart 58 catch-up sweep)"
+    )
+
+
+def test_stage35_restart58_handoff_documents_what_restart_58_fixed():
+    """C5 canary: HANDOFF_FOR_CLAUDE.md must contain a 'What Restart 58
+    [...] Fixed' section once the restart 58 catch-up sweep lands. Catches
+    the abbreviated-source-only-commit anti-pattern that occurred on
+    restarts 52, 55, 56, and 58."""
+    from pathlib import Path
+    text = (Path(_proj_root()) / "HANDOFF_FOR_CLAUDE.md").read_text(encoding="utf-8")
+    assert (
+        "## What Restart 58 Fixed" in text
+        or "## What Restart 58 (Catch-up Sweep) Fixed" in text
+    ), (
+        "HANDOFF_FOR_CLAUDE.md missing 'What Restart 58 Fixed' section — "
+        "restart 58 bookkeeping debt not closed"
+    )
+
+
+def test_stage35_restart58_ledger_has_increment_77():
+    """C5 canary: progress ledger must have Increment 77 once restart 58's
+    catch-up sweep lands. Catches the abbreviated-commit anti-pattern."""
+    from pathlib import Path
+    text = (Path(_proj_root()) / "docs" / "stage35-progress-2026-05-15.md").read_text(encoding="utf-8")
+    assert "## Increment 77" in text, (
+        "progress ledger missing Increment 77 — restart 58 source commit "
+        "shipped without paired bookkeeping; either land Increment 77 "
+        "inline or write an explicit 'Restart 59 catch-up sweep' Increment"
+    )
+
+
+def test_stage35_restart58_lane_audit_docs_exist():
+    """C5 canary: docs/audit-stage35-restart58-{laneA,laneB,laneC}.md
+    must exist after the restart 58 catch-up sweep."""
+    from pathlib import Path
+    docs = Path(_proj_root()) / "docs"
+    for lane in ("laneA", "laneB", "laneC"):
+        p = docs / f"audit-stage35-restart58-{lane}.md"
+        assert p.exists(), (
+            f"missing {p.name} — restart 58 lane audit doc not written "
+            f"as part of catch-up sweep"
+        )
+
+
 if __name__ == "__main__":
     import pytest
     raise SystemExit(pytest.main([__file__, "-v"]))

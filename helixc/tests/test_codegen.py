@@ -21021,6 +21021,272 @@ def test_stage35_restart56_max_abs_saturates_on_int32_min():
     assert code == 42, f"expected 42, got {code}"
 
 
+# === Restart 58 catch-up sweep (Increment 77) ============================
+# Restart 58 commit c8398d3 landed source fixes for 3 of the 4 carry-
+# forward NaN-skip siblings (tf1d_dot, tf1d_l1_norm, tf1d_max_abs) but
+# shipped without canaries, ledger entry, or lane docs. The restart 58
+# catch-up sweep (Increment 77) fills that bookkeeping debt AND extends
+# the NaN-skip / INT32_MIN-saturation discipline to a broader sibling
+# family discovered by the lane A audit on c8398d3 (findings A1-A7).
+
+# Retroactive canaries pinning the c8398d3 source-only fixes:
+
+def test_stage35_restart58_tf1d_dot_nan_skip_fails_closed():
+    """Retroactive canary for c8398d3 (restart 58 source-only): tf1d_dot
+    NaN-skip on per-element product. Single NaN slot in either input
+    used to poison the entire dot product (NaN + anything = NaN)."""
+    src = """
+    fn main() -> i32 {
+        let a = t1d_new(3);
+        let b = t1d_new(3);
+        tf1d_set(a, 0, 1.0_f32);
+        let nan_bits = 2143289344;
+        tf1d_set(a, 1, __f32_from_bits(nan_bits));
+        tf1d_set(a, 2, 3.0_f32);
+        tf1d_set(b, 0, 4.0_f32);
+        tf1d_set(b, 1, 5.0_f32);
+        tf1d_set(b, 2, 6.0_f32);
+        let d = tf1d_dot(a, b, 3);
+        // With NaN skip: d = 1*4 + 3*6 = 22, finite.
+        if d == d {
+            let i = d as i32;
+            if i == 22 { 42 } else { 7 }
+        } else { 7 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stage35_restart58_tf1d_l1_norm_nan_skip_fails_closed():
+    """Retroactive canary for c8398d3 (restart 58 source-only):
+    tf1d_l1_norm NaN-skip."""
+    src = """
+    fn main() -> i32 {
+        let v = t1d_new(3);
+        tf1d_set(v, 0, 0.0_f32 - 10.0_f32);
+        let nan_bits = 2143289344;
+        tf1d_set(v, 1, __f32_from_bits(nan_bits));
+        tf1d_set(v, 2, 32.0_f32);
+        let s = tf1d_l1_norm(v, 3);
+        // With NaN skip: s = |-10| + |32| = 42.
+        if s == s {
+            let i = s as i32;
+            if i == 42 { 42 } else { 7 }
+        } else { 7 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stage35_restart58_tf1d_max_abs_nan_skip_fails_closed():
+    """Retroactive canary for c8398d3 (restart 58 source-only):
+    tf1d_max_abs NaN-skip discipline."""
+    src = """
+    fn main() -> i32 {
+        let v = t1d_new(3);
+        tf1d_set(v, 0, 10.0_f32);
+        let nan_bits = 2143289344;
+        tf1d_set(v, 1, __f32_from_bits(nan_bits));
+        tf1d_set(v, 2, 0.0_f32 - 42.0_f32);
+        let m = tf1d_max_abs(v, 3);
+        // With NaN skip: m = max(10, 42) = 42.
+        if m == m {
+            let i = m as i32;
+            if i == 42 { 42 } else { 7 }
+        } else { 7 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+# New canaries for the restart 58 catch-up sweep (Increment 77) A1-A7:
+
+def test_stage35_restart58_tf1d_sum_in_range_nan_skip_fails_closed():
+    """A1: tf1d_sum_in_range NaN-skip (missed carry-forward sibling from
+    restart 57). Same family as tf1d_sum / tf1d_dot."""
+    src = """
+    fn main() -> i32 {
+        let v = t1d_new(4);
+        tf1d_set(v, 0, 1.0_f32);
+        let nan_bits = 2143289344;
+        tf1d_set(v, 1, __f32_from_bits(nan_bits));
+        tf1d_set(v, 2, 5.0_f32);
+        tf1d_set(v, 3, 36.0_f32);
+        let s = tf1d_sum_in_range(v, 4, 0, 4);
+        // With NaN skip: s = 1 + 5 + 36 = 42.
+        if s == s {
+            let i = s as i32;
+            if i == 42 { 42 } else { 7 }
+        } else { 7 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stage35_restart58_vec_map_abs_saturates_on_int32_min():
+    """A2: vec_map_abs INT32_MIN special-case. Without the fix, abs of
+    INT32_MIN wraps back to INT32_MIN (negative), breaking the |x| >= 0
+    postcondition. Direct sibling of vec_map_neg / vec_negate_inplace
+    (restart 51 A5) and ti1d_max_abs / vec_max_abs (restart 56 A2/A3)."""
+    src = """
+    fn main() -> i32 {
+        let i = __arena_len();
+        __arena_push(((0 - 2147483647) - 1));
+        let r_start = vec_map_abs(i, 1);
+        let r = __arena_get(r_start);
+        if r != 2147483647 { return 1; };
+        42
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stage35_restart58_tf1d_dot_with_offset_nan_skip_fails_closed():
+    """A3: tf1d_dot_with_offset NaN-skip — offset twin of tf1d_dot."""
+    src = """
+    fn main() -> i32 {
+        let a = t1d_new(3);
+        let b = t1d_new(3);
+        tf1d_set(a, 0, 1.0_f32);
+        let nan_bits = 2143289344;
+        tf1d_set(a, 1, __f32_from_bits(nan_bits));
+        tf1d_set(a, 2, 3.0_f32);
+        tf1d_set(b, 0, 4.0_f32);
+        tf1d_set(b, 1, 5.0_f32);
+        tf1d_set(b, 2, 6.0_f32);
+        let d = tf1d_dot_with_offset(a, 0, b, 0, 3);
+        // With NaN skip: d = 1*4 + 3*6 = 22.
+        if d == d {
+            let i = d as i32;
+            if i == 22 { 42 } else { 7 }
+        } else { 7 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stage35_restart58_tf2d_matvec_nan_skip_per_cell():
+    """A4: tf2d_matvec NaN-skip per cell. One NaN in W[r,c] only
+    degrades row r's partial sum, doesn't poison the whole output."""
+    src = """
+    fn main() -> i32 {
+        // 2x2 W with W[0,1] = NaN, x = [1, 1]
+        let w = t1d_new(4);
+        tf1d_set(w, 0, 10.0_f32);
+        let nan_bits = 2143289344;
+        tf1d_set(w, 1, __f32_from_bits(nan_bits));
+        tf1d_set(w, 2, 3.0_f32);
+        tf1d_set(w, 3, 4.0_f32);
+        let x = t1d_new(2);
+        tf1d_set(x, 0, 1.0_f32);
+        tf1d_set(x, 1, 1.0_f32);
+        let y = t1d_new(2);
+        tf2d_matvec(w, 2, 2, x, y);
+        // With NaN skip: y[0] = 10 + 0 = 10 (NaN skipped), y[1] = 3 + 4 = 7.
+        let y0 = tf1d_get(y, 0);
+        let y1 = tf1d_get(y, 1);
+        if y0 != y0 { return 1; };  // y0 must NOT be NaN
+        if y1 != y1 { return 2; };
+        let i0 = y0 as i32;
+        let i1 = y1 as i32;
+        if i0 == 10 { if i1 == 7 { 42 } else { 3 } } else { 4 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stage35_restart58_tf2d_row_sum_nan_skip():
+    """A5: tf2d_row_sum NaN-skip per cell. Companion canary for
+    tf2d_col_sum and tf2d_trace (same idiom)."""
+    src = """
+    fn main() -> i32 {
+        // 2x3 M with M[0,1] = NaN
+        let m = t1d_new(6);
+        tf1d_set(m, 0, 10.0_f32);
+        let nan_bits = 2143289344;
+        tf1d_set(m, 1, __f32_from_bits(nan_bits));
+        tf1d_set(m, 2, 32.0_f32);
+        tf1d_set(m, 3, 1.0_f32);
+        tf1d_set(m, 4, 2.0_f32);
+        tf1d_set(m, 5, 39.0_f32);
+        let dst = t1d_new(2);
+        tf2d_row_sum(m, 2, 3, dst);
+        let r0 = tf1d_get(dst, 0);
+        let r1 = tf1d_get(dst, 1);
+        // With NaN skip: r0 = 10 + 32 = 42, r1 = 1 + 2 + 39 = 42.
+        if r0 != r0 { return 1; };
+        if r1 != r1 { return 2; };
+        let i0 = r0 as i32;
+        let i1 = r1 as i32;
+        if i0 == 42 { if i1 == 42 { 42 } else { 3 } } else { 4 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stage35_restart58_mse_loss_f32_nan_skip():
+    """A6: mse_loss_f32 NaN-skip on per-element squared error. Companion
+    canary for mae_loss_f32 (same idiom). Divisor stays at n per the
+    tf1d_sum precedent."""
+    src = """
+    fn main() -> i32 {
+        // y = [4, NaN, 4], t = [0, 0, 0] -> per-elem squared diff = [16, NaN, 16]
+        let y = t1d_new(3);
+        let t = t1d_new(3);
+        tf1d_set(y, 0, 4.0_f32);
+        let nan_bits = 2143289344;
+        tf1d_set(y, 1, __f32_from_bits(nan_bits));
+        tf1d_set(y, 2, 4.0_f32);
+        tf1d_set(t, 0, 0.0_f32);
+        tf1d_set(t, 1, 0.0_f32);
+        tf1d_set(t, 2, 0.0_f32);
+        let loss = mse_loss_f32(y, t, 3);
+        // With NaN skip: total = 32, divisor = 3 (i.e. mse = ~10.67).
+        // The key assertion is loss is finite.
+        if loss != loss { return 1; };  // must not be NaN
+        // Verify loss > 10 and < 11 (i.e. ~32/3).
+        if loss < 10.0_f32 { return 2; };
+        if loss > 11.0_f32 { return 3; };
+        42
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stage35_restart58_tf1d_argmax_skips_nan_at_index_0():
+    """A7: tf1d_argmax NaN-at-index-0 robustness. With bare init the
+    function would lock best_val = NaN and return index 0; with the fix
+    it adopts the first non-NaN slot. Companion canary for tf1d_max /
+    tf1d_min / tf1d_argmin / tf1d_argmax_in_range / argmax_rows_f32."""
+    src = """
+    fn main() -> i32 {
+        let v = t1d_new(3);
+        let nan_bits = 2143289344;
+        tf1d_set(v, 0, __f32_from_bits(nan_bits));
+        tf1d_set(v, 1, 50.0_f32);
+        tf1d_set(v, 2, 3.0_f32);
+        let idx = tf1d_argmax(v, 3);
+        if idx != 1 { return 1; };
+        let m = tf1d_max(v, 3);
+        if m != m { return 2; };  // must not be NaN
+        let i = m as i32;
+        if i != 50 { return 3; };
+        42
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
 def main():
     # Recognise both the legacy `_SkipTest` exception and pytest's
     # `Skipped` outcome class so tests can use either to signal a skip

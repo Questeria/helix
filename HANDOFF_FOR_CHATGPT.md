@@ -3,7 +3,7 @@
 **Historical snapshot date**: 2026-05-12
 **Historical snapshot HEAD**: `a2e7fc4` (Stage 30 cycle-5 prep: document M2 trade-off)
 **Current-status warning**: this file is a historical handoff, not the current repo state. As of 2026-05-16, continue from the Stage 35 progress ledger, live git HEAD, and `git status --short` instead.
-**Current continuation pointer**: Stage 35 audit cleanup. Continue from the newest pushed HEAD shown by `git log -1 --oneline`, not from any older fixed hash in this historical handoff. Restart 54 is the latest recorded fix sweep in this file; clean gates remain `0/3`, and live `helixc/tests` collection is 2,522 (see Increments 70-73 in the progress ledger for the per-restart canary chain since restart 50). Run `git status --short` and tail `docs/stage35-progress-2026-05-15.md` for the newest truth.
+**Current continuation pointer**: Stage 35 audit cleanup. Continue from the newest pushed HEAD shown by `git log -1 --oneline`, not from any older fixed hash in this historical handoff. The restart 58 catch-up sweep (Increment 77) is the latest recorded bookkeeping checkpoint in this file; clean gates remain `0/3`, and live `helixc/tests` collection is 2,530+ (see Increments 70 onward in the progress ledger for the per-restart canary chain since restart 50; restart 55 + 56 + 58 landed source fixes without paired canaries, restarts 57 and 58-catch-up filled the bookkeeping debt retroactively). Run `git status --short` and tail `docs/stage35-progress-2026-05-15.md` for the newest truth.
 **Project**: `C:\Projects\Kovostov-Native\` — Helix language self-hosting compiler
 
 User backed up the entire folder before this handoff in case of issues.
@@ -228,7 +228,7 @@ older 5-clean-audit count as historical context; Stage 35 currently requires
 
 Per user's audit protocol:
 - **ZERO HIGH/MEDIUM/LOW issues** per cycle for CLEAN declaration
-- Heavy gate must be GREEN before declaring clean. Historical snapshot had 670+ tests; Stage 35 restart 57 catch-up sweep collected 2,527 live `helixc/tests` tests (see Increments 70-76 in the progress ledger for the per-restart canary chain since restart 50; restart 55 + 56 landed source fixes without paired canaries, restart 57 catch-up added the 5 retroactive canaries), so refresh with `python -m pytest helixc/tests --collect-only -q`.
+- Heavy gate must be GREEN before declaring clean. Historical snapshot had 670+ tests; the restart 58 catch-up sweep collected 2,530+ live `helixc/tests` tests (see Increments 70 onward in the progress ledger for the per-restart canary chain since restart 50; restart 55 + 56 + 58 landed source fixes without paired canaries, restarts 57 and 58-catch-up filled the bookkeeping debt retroactively), so refresh with `python -m pytest helixc/tests --collect-only -q`.
 - 3 CONSECUTIVE clean cycles on the SAME HEAD to declare stage done
 - If issues found: apply fix-sweep, re-test, dispatch next cycle
 

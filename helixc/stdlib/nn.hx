@@ -301,6 +301,10 @@ fn adam_f32_step(w_start: i32, g_start: i32, m_start: i32, v_start: i32,
 }
 
 // MSE on f32 tensors.
+// Restart 58 A6 (Increment 77 catch-up sweep): NaN-skip on per-element
+// squared error. One bad slot no longer poisons the entire batch loss.
+// Divisor stays at `n` (matches the tf1d_sum convention; per-batch
+// scaling preferred over dynamic non-NaN count for simplicity).
 @pure
 fn mse_loss_f32(y_start: i32, t_start: i32, n: i32) -> f32 {
     if n <= 0 { 0.0_f32 }
@@ -313,7 +317,8 @@ fn mse_loss_f32(y_start: i32, t_start: i32, n: i32) -> f32 {
             let yv = __f32_from_bits(__arena_get(y_start + i));
             let tv = __f32_from_bits(__arena_get(t_start + i));
             let d = yv - tv;
-            total = total + d * d;
+            let pe = d * d;
+            if pe == pe { total = total + pe; };
             i = i + 1;
         }
         total / (n as f32)
@@ -925,6 +930,8 @@ fn ce_loss(p_start: i32, target_idx: i32, cols: i32) -> f32 {
 
 // For a row-major logits matrix (rows x cols), write each row's argmax class
 // index to out_start[row].
+// Restart 58 A7 (Increment 77 catch-up sweep): NaN-at-col-0 robustness.
+// Same idiom as tf1d_argmax — adopt the first non-NaN slot.
 fn argmax_rows_f32(logits_start: i32, rows: i32, cols: i32,
                    out_start: i32) -> i32 {
     if rows <= 0 { 0 }
@@ -937,13 +944,21 @@ fn argmax_rows_f32(logits_start: i32, rows: i32, cols: i32,
         while r < rows {
             let row_start = logits_start + r * cols;
             let mut best_idx: i32 = 0;
-            let mut best_val: f32 = __f32_from_bits(__arena_get(row_start));
-            let mut c: i32 = 1;
+            let mut best_val: f32 = 0.0_f32;
+            let mut seen: i32 = 0;
+            let mut c: i32 = 0;
             while c < cols {
                 let v = __f32_from_bits(__arena_get(row_start + c));
-                if v > best_val {
-                    best_val = v;
-                    best_idx = c;
+                if v == v {
+                    if seen == 0 {
+                        best_val = v;
+                        best_idx = c;
+                        seen = 1;
+                    }
+                    else { if v > best_val {
+                        best_val = v;
+                        best_idx = c;
+                    }; };
                 };
                 c = c + 1;
             }
@@ -1069,6 +1084,8 @@ fn mae_loss(y_start: i32, t_start: i32, n: i32) -> i32 {
 }
 
 // MAE on f32 tensors (mean absolute error, returns 0.0 on empty).
+// Restart 58 A6 (Increment 77 catch-up sweep): NaN-skip on per-element
+// abs error. Same divisor convention as mse_loss_f32.
 @pure
 fn mae_loss_f32(y_start: i32, t_start: i32, n: i32) -> f32 {
     if n <= 0 { 0.0_f32 }
@@ -1080,7 +1097,8 @@ fn mae_loss_f32(y_start: i32, t_start: i32, n: i32) -> f32 {
         while i < n {
             let yv = __f32_from_bits(__arena_get(y_start + i));
             let tv = __f32_from_bits(__arena_get(t_start + i));
-            total = total + __abs(yv - tv);
+            let ae = __abs(yv - tv);
+            if ae == ae { total = total + ae; };
             i = i + 1;
         }
         total / (n as f32)

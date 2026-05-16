@@ -624,6 +624,10 @@ fn tf2d_set(start: i32, cols: i32, i: i32, j: i32, x: f32) -> i32 {
     }
 }
 
+// Restart 58 A4 (Increment 77 catch-up sweep): NaN-skip on per-cell
+// product. Without it, one NaN slot in w (or x) poisons the entire
+// matvec output row (or every output cell). Matches the tf1d_dot
+// NaN-skip pattern.
 fn tf2d_matvec(w_start: i32, w_rows: i32, w_cols: i32,
                x_start: i32, y_start: i32) -> i32 {
     if w_rows <= 0 { 0 }
@@ -640,7 +644,8 @@ fn tf2d_matvec(w_start: i32, w_rows: i32, w_cols: i32,
         while c < w_cols {
             let wv = __f32_from_bits(__arena_get(w_start + r * w_cols + c));
             let xv = __f32_from_bits(__arena_get(x_start + c));
-            acc = acc + wv * xv;
+            let prod = wv * xv;
+            if prod == prod { acc = acc + prod; };
             c = c + 1;
         }
         __arena_set(y_start + r, __bits_of_f32(acc));
@@ -871,15 +876,24 @@ fn ti1d_mul_scalar(x_start: i32, scalar: i32, y_start: i32, n: i32) -> i32 {
     else { tf1d_sum(start, n) / (n as f32) }
 }
 
+// Restart 58 A7 (Increment 77 catch-up sweep): NaN-at-index-0 robustness.
+// Bare-init `best = arena_get(start)` would freeze the result at NaN if
+// the first slot is NaN (IEEE-754 `v > NaN` is false). Initialize with
+// `seen = 0` sentinel and adopt the first non-NaN slot as the running
+// best. All-NaN input returns 0.0 (existing convention for empty input).
 @pure fn tf1d_max(start: i32, n: i32) -> f32 {
     if n <= 0 { 0.0_f32 }
     else { if t1d_slice_ok(start, n) == 0 { 0.0_f32 }
     else {
-        let mut best = __f32_from_bits(__arena_get(start));
-        let mut i: i32 = 1;
+        let mut best: f32 = 0.0_f32;
+        let mut seen: i32 = 0;
+        let mut i: i32 = 0;
         while i < n {
             let v = __f32_from_bits(__arena_get(start + i));
-            if v > best { best = v; }
+            if v == v {
+                if seen == 0 { best = v; seen = 1; }
+                else { if v > best { best = v; }; };
+            };
             i = i + 1;
         }
         best
@@ -890,11 +904,15 @@ fn ti1d_mul_scalar(x_start: i32, scalar: i32, y_start: i32, n: i32) -> i32 {
     if n <= 0 { 0.0_f32 }
     else { if t1d_slice_ok(start, n) == 0 { 0.0_f32 }
     else {
-        let mut best = __f32_from_bits(__arena_get(start));
-        let mut i: i32 = 1;
+        let mut best: f32 = 0.0_f32;
+        let mut seen: i32 = 0;
+        let mut i: i32 = 0;
         while i < n {
             let v = __f32_from_bits(__arena_get(start + i));
-            if v < best { best = v; }
+            if v == v {
+                if seen == 0 { best = v; seen = 1; }
+                else { if v < best { best = v; }; };
+            };
             i = i + 1;
         }
         best
@@ -906,11 +924,15 @@ fn ti1d_mul_scalar(x_start: i32, scalar: i32, y_start: i32, n: i32) -> i32 {
     else { if t1d_slice_ok(start, n) == 0 { 0 - 1 }
     else {
         let mut best_idx: i32 = 0;
-        let mut best_val = __f32_from_bits(__arena_get(start));
-        let mut i: i32 = 1;
+        let mut best_val: f32 = 0.0_f32;
+        let mut seen: i32 = 0;
+        let mut i: i32 = 0;
         while i < n {
             let v = __f32_from_bits(__arena_get(start + i));
-            if v > best_val { best_val = v; best_idx = i; }
+            if v == v {
+                if seen == 0 { best_val = v; best_idx = i; seen = 1; }
+                else { if v > best_val { best_val = v; best_idx = i; }; };
+            };
             i = i + 1;
         }
         best_idx
@@ -1002,6 +1024,8 @@ fn tf1d_mul_scalar(x_start: i32, scalar: f32, y_start: i32, n: i32) -> i32 {
 
 // 2D row-major f32 matmul: C = A @ B.
 //   A is (a_rows x a_cols), B is (a_cols x b_cols), C is (a_rows x b_cols).
+// Restart 58 A4 (Increment 77 catch-up sweep): NaN-skip per-cell, same
+// pattern as tf2d_matvec.
 fn tf2d_matmul(a_start: i32, a_rows: i32, a_cols: i32,
                b_start: i32, b_cols: i32, c_start: i32) -> i32 {
     if a_rows <= 0 { 0 }
@@ -1023,7 +1047,8 @@ fn tf2d_matmul(a_start: i32, a_rows: i32, a_cols: i32,
             while k < a_cols {
                 let av = __f32_from_bits(__arena_get(a_start + r * a_cols + k));
                 let bv = __f32_from_bits(__arena_get(b_start + k * b_cols + c));
-                acc = acc + av * bv;
+                let prod = av * bv;
+                if prod == prod { acc = acc + prod; };
                 k = k + 1;
             }
             __arena_set(c_start + r * b_cols + c, __bits_of_f32(acc));
@@ -1228,16 +1253,22 @@ fn tf1d_clamp(x_start: i32, lo: f32, hi: f32, dst: i32, n: i32) -> i32 {
 
 // tf1d_argmin(start, n): @pure. Index of the smallest f32 element.
 // Returns -1 if n == 0.
+// Restart 58 A7 (Increment 77 catch-up sweep): NaN-at-index-0 robustness.
+// Same idiom as tf1d_argmax.
 @pure fn tf1d_argmin(start: i32, n: i32) -> i32 {
     if n <= 0 { 0 - 1 }
     else { if t1d_slice_ok(start, n) == 0 { 0 - 1 }
     else {
-        let mut i: i32 = 1;
         let mut best_idx: i32 = 0;
-        let mut best: f32 = __f32_from_bits(__arena_get(start));
+        let mut best: f32 = 0.0_f32;
+        let mut seen: i32 = 0;
+        let mut i: i32 = 0;
         while i < n {
             let v = __f32_from_bits(__arena_get(start + i));
-            if v < best { best = v; best_idx = i; }
+            if v == v {
+                if seen == 0 { best = v; best_idx = i; seen = 1; }
+                else { if v < best { best = v; best_idx = i; }; };
+            };
             i = i + 1;
         }
         best_idx
@@ -1419,6 +1450,9 @@ fn tf2d_mul(a: i32, b: i32, c: i32, rows: i32, cols: i32) -> i32 {
 
 // tf1d_argmax_in_range(start, n, lo, hi): @pure. Index of largest f32
 // in x[lo..hi). Returns -1 if bounds are invalid.
+// Restart 58 A7 (Increment 77 catch-up sweep): NaN-at-lo robustness.
+// Same idiom as tf1d_argmax — adopt the first non-NaN slot instead of
+// bare-init at index lo.
 @pure
 fn tf1d_argmax_in_range(start: i32, n: i32, lo: i32, hi: i32) -> i32 {
     if n < 0 { 0 - 1 }
@@ -1427,12 +1461,16 @@ fn tf1d_argmax_in_range(start: i32, n: i32, lo: i32, hi: i32) -> i32 {
     else { if hi <= lo { 0 - 1 }
     else { if t1d_slice_ok(start, hi) == 0 { 0 - 1 }
     else {
-        let mut i: i32 = lo + 1;
         let mut best_idx: i32 = lo;
-        let mut best: f32 = __f32_from_bits(__arena_get(start + lo));
+        let mut best: f32 = 0.0_f32;
+        let mut seen: i32 = 0;
+        let mut i: i32 = lo;
         while i < hi {
             let v = __f32_from_bits(__arena_get(start + i));
-            if v > best { best = v; best_idx = i; }
+            if v == v {
+                if seen == 0 { best = v; best_idx = i; seen = 1; }
+                else { if v > best { best = v; best_idx = i; }; };
+            };
             i = i + 1;
         }
         best_idx
@@ -1441,6 +1479,9 @@ fn tf1d_argmax_in_range(start: i32, n: i32, lo: i32, hi: i32) -> i32 {
 
 // tf1d_sum_in_range(start, n, lo, hi): @pure. Sum of x[lo..hi). 0.0 if
 // bounds are invalid. Useful for partial accumulators.
+// Restart 58 A1 (missed carry-forward sibling — landed in Increment 77
+// catch-up sweep): NaN-skip via `if v == v`. Same family as tf1d_sum /
+// tf1d_dot / tf1d_l1_norm / tf1d_max_abs.
 @pure
 fn tf1d_sum_in_range(start: i32, n: i32, lo: i32, hi: i32) -> f32 {
     if n < 0 { 0.0_f32 }
@@ -1452,7 +1493,8 @@ fn tf1d_sum_in_range(start: i32, n: i32, lo: i32, hi: i32) -> f32 {
     let mut i: i32 = lo;
     let mut total: f32 = 0.0_f32;
     while i < hi {
-        total = total + __f32_from_bits(__arena_get(start + i));
+        let v = __f32_from_bits(__arena_get(start + i));
+        if v == v { total = total + v; };
         i = i + 1;
     }
     total
@@ -1461,6 +1503,9 @@ fn tf1d_sum_in_range(start: i32, n: i32, lo: i32, hi: i32) -> f32 {
 
 // tf2d_row_sum(start, rows, cols, dst): for each row r, write
 // sum(M[r, *]) to dst[r]. dst pre-allocated by caller (size = rows).
+// Restart 58 A5 (Increment 77 catch-up sweep): NaN-skip per-cell so a
+// single NaN slot poisons only that row's partial sum, not every output.
+// Matches the tf1d_sum NaN-skip pattern.
 fn tf2d_row_sum(start: i32, rows: i32, cols: i32, dst: i32) -> i32 {
     if rows <= 0 { 0 }
     else { if cols <= 0 { 0 }
@@ -1473,7 +1518,8 @@ fn tf2d_row_sum(start: i32, rows: i32, cols: i32, dst: i32) -> i32 {
         let mut c: i32 = 0;
         let mut acc: f32 = 0.0_f32;
         while c < cols {
-            acc = acc + __f32_from_bits(__arena_get(start + r * cols + c));
+            let v = __f32_from_bits(__arena_get(start + r * cols + c));
+            if v == v { acc = acc + v; };
             c = c + 1;
         }
         __arena_set(dst + r, __bits_of_f32(acc));
@@ -1497,7 +1543,8 @@ fn tf2d_col_sum(start: i32, rows: i32, cols: i32, dst: i32) -> i32 {
         let mut r: i32 = 0;
         let mut acc: f32 = 0.0_f32;
         while r < rows {
-            acc = acc + __f32_from_bits(__arena_get(start + r * cols + c));
+            let v = __f32_from_bits(__arena_get(start + r * cols + c));
+            if v == v { acc = acc + v; };
             r = r + 1;
         }
         __arena_set(dst + c, __bits_of_f32(acc));
@@ -1524,6 +1571,8 @@ fn tf1d_arange(start_val: f32, n: i32) -> i32 {
 
 // tf1d_dot_with_offset(a, a_off, b, b_off, n): dot product over slices
 // a[a_off..a_off+n] and b[b_off..b_off+n]. @pure.
+// Restart 58 A3 (Increment 77 catch-up sweep): NaN-skip on per-element
+// product. Mirrors the tf1d_dot fix.
 @pure
 fn tf1d_dot_with_offset(a: i32, a_off: i32, b: i32, b_off: i32, n: i32) -> f32 {
     if a_off < 0 { 0.0_f32 }
@@ -1537,7 +1586,8 @@ fn tf1d_dot_with_offset(a: i32, a_off: i32, b: i32, b_off: i32, n: i32) -> f32 {
     while i < n {
         let av = __f32_from_bits(__arena_get(a + a_off + i));
         let bv = __f32_from_bits(__arena_get(b + b_off + i));
-        total = total + av * bv;
+        let prod = av * bv;
+        if prod == prod { total = total + prod; };
         i = i + 1;
     }
     total
@@ -1587,6 +1637,8 @@ fn tf2d_eye(n: i32) -> i32 {
 
 // tf2d_trace(m, rows, cols): @pure. Sum of diagonal elements of a square
 // matrix. Rectangular or empty shapes return 0.0.
+// Restart 58 A5 (Increment 77 catch-up sweep): NaN-skip on diagonal
+// element accumulation. Mirrors tf1d_sum / tf2d_row_sum.
 @pure
 fn tf2d_trace(m: i32, rows: i32, cols: i32) -> f32 {
     if rows <= 0 { 0.0_f32 }
@@ -1599,7 +1651,8 @@ fn tf2d_trace(m: i32, rows: i32, cols: i32) -> f32 {
     let mut i: i32 = 0;
     let mut total: f32 = 0.0_f32;
     while i < n {
-        total = total + __f32_from_bits(__arena_get(m + i * n + i));
+        let v = __f32_from_bits(__arena_get(m + i * n + i));
+        if v == v { total = total + v; };
         i = i + 1;
     }
     total
