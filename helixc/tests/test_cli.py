@@ -5167,6 +5167,129 @@ def test_stage35_restart58_lane_audit_docs_exist():
         )
 
 
+# Restart 61 big-batch sweep canaries (Increment 78):
+
+
+def test_stage35_restart61_check_rejects_duplicate_dash_o(tmp_path):
+    """Restart 61 B3 (Family 5 — bookkeeping): check.py must reject a
+    second -o flag instead of silently overwriting the first. Pre-fix,
+    `helixc foo.hx -o a.bin -o b.bin` would set a.output = b.bin and
+    produce only b.bin with no warning — surprising for any build
+    system that passed two -o flags by mistake."""
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    src = tmp_path / "ok.hx"
+    src.write_text("fn main() -> i32 { 42 }\n", encoding="utf-8")
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.check",
+         str(src), "-o", str(tmp_path / "a.bin"), "-o", str(tmp_path / "b.bin")],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode != 0, (
+        f"check should reject duplicate -o, got rc={proc.returncode}, "
+        f"stderr={proc.stderr!r}"
+    )
+    assert "-o" in proc.stderr and "more than once" in proc.stderr, (
+        f"diagnostic should mention duplicate -o; stderr={proc.stderr!r}"
+    )
+
+
+def test_stage35_restart61_check_rejects_empty_dash_o(tmp_path):
+    """Restart 61 B3 (Family 5 — bookkeeping): check.py must reject an
+    empty -o argument up front instead of letting an empty string
+    propagate to the atomic-write layer where it produces a confusing
+    OSError on the implicit empty path."""
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    src = tmp_path / "ok.hx"
+    src.write_text("fn main() -> i32 { 42 }\n", encoding="utf-8")
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.check", str(src), "-o", ""],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode != 0, (
+        f"check should reject empty -o, got rc={proc.returncode}, "
+        f"stderr={proc.stderr!r}"
+    )
+    assert "-o" in proc.stderr and "non-empty" in proc.stderr, (
+        f"diagnostic should mention non-empty -o; stderr={proc.stderr!r}"
+    )
+
+
+def test_stage35_restart61_examples_run_help_flag_works():
+    """Restart 61 B4 (Family 5 — bookkeeping): helixc.examples.run must
+    accept -h / --help and print a usage banner. Pre-fix, the runner
+    had no help discoverability — users had to read the module
+    docstring."""
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    for flag in ("-h", "--help"):
+        proc = subprocess.run(
+            [sys.executable, "-m", "helixc.examples.run", flag],
+            cwd=proj_root, capture_output=True, text=True, timeout=30,
+        )
+        assert proc.returncode == 0, (
+            f"helixc.examples.run {flag} should exit 0, got "
+            f"rc={proc.returncode}, stderr={proc.stderr!r}"
+        )
+        out_lower = proc.stdout.lower()
+        assert "usage:" in out_lower, (
+            f"{flag} should print a usage banner; stdout={proc.stdout!r}"
+        )
+        # The banner must mention --list to make the alternative paths
+        # discoverable.
+        assert "--list" in proc.stdout, (
+            f"{flag} banner should mention --list; stdout={proc.stdout!r}"
+        )
+
+
+def test_stage35_restart61_diagnostics_isatty_narrowed_to_stream_failures():
+    """Restart 61 B1 (Family 4 — loud-fail discipline):
+    diagnostics._should_color's isatty() guard must narrow to
+    (AttributeError, OSError, ValueError) instead of bare `except
+    Exception`. Pre-fix, a stream subclass that raised
+    NotImplementedError from isatty would be silently coerced to
+    "no color" rather than surfacing the loud-fail signal. Mirrors
+    restart 47 B1 narrowing pattern."""
+    import inspect
+    from helixc.frontend import diagnostics
+    src = inspect.getsource(diagnostics)
+    # Find the isatty() try block and confirm the surrounding lines have
+    # both the loud-fail re-raise AND the narrowed-handler tuple.
+    idx = src.find("return bool(isatty())")
+    assert idx >= 0, "isatty() call site not found in diagnostics.py"
+    window = src[idx:idx + 600]
+    assert "except (NotImplementedError, AssertionError" in window, (
+        f"diagnostics isatty guard should re-raise loud-fail signals; "
+        f"window: {window[:400]!r}"
+    )
+    assert "except (AttributeError, OSError, ValueError)" in window, (
+        f"diagnostics isatty guard should narrow to stream-failure "
+        f"exceptions; window: {window[:400]!r}"
+    )
+
+
+def test_stage35_restart61_monomorphize_structural_hash_dead_try_removed():
+    """Restart 61 B2 (Family 5 — bookkeeping): monomorphize._mangle_expr
+    must not have a dead `try/except (...): raise` block around
+    structural_hash. The handler caught (TypeError, AttributeError,
+    NotImplementedError) only to immediately re-raise without
+    decoration — a no-op that implied safety it did not provide."""
+    import inspect
+    from helixc.frontend import monomorphize
+    src = inspect.getsource(monomorphize)
+    # The function should now call structural_hash unguarded.
+    idx = src.find("h = structural_hash(e)")
+    assert idx >= 0, "structural_hash call site not found in monomorphize.py"
+    # The 200 chars after the call must NOT contain the dead
+    # `except (TypeError, AttributeError, NotImplementedError):` immediately
+    # followed by `raise`. (The narrow tuple still legitimately appears in
+    # other handlers; we check the no-op shape specifically.)
+    window = src[idx:idx + 400]
+    bad = "except (TypeError, AttributeError, NotImplementedError):"
+    assert bad not in window, (
+        f"dead try/except (...): raise block still present around "
+        f"structural_hash; window: {window!r}"
+    )
+
+
 if __name__ == "__main__":
     import pytest
     raise SystemExit(pytest.main([__file__, "-v"]))

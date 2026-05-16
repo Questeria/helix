@@ -71,9 +71,18 @@ def use_color(stream=None) -> bool:
     isatty = getattr(stream, "isatty", None)
     if isatty is None:
         return False
+    # Restart 61 B1: preserve loud-fail discipline. Pre-fix bare
+    # `except Exception` swallowed NotImplementedError / AssertionError
+    # from stream subclasses that legitimately want to propagate. Narrow
+    # to (AttributeError, OSError, ValueError) which are the actual
+    # isatty failure modes (closed stream, non-tty stream object,
+    # missing fileno). Mirrors the restart 47 B1 narrowing pattern.
     try:
         return bool(isatty())
-    except Exception:
+    except (NotImplementedError, AssertionError, KeyboardInterrupt,
+            SystemExit, MemoryError):
+        raise
+    except (AttributeError, OSError, ValueError):
         return False
 
 

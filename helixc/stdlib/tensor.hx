@@ -1278,6 +1278,10 @@ fn tf1d_clamp(x_start: i32, lo: f32, hi: f32, dst: i32, n: i32) -> i32 {
 // tf1d_running_sum(start, n): allocate a new vec where r[i] = sum
 // over x[0..=i]. Like vec_cumsum but for f32. r[0] = x[0]. Useful
 // for prefix-sum queries.
+// Restart 61 A1: NaN-skip on per-element accumulation. Same family as
+// tf1d_sum / tf1d_dot / tf1d_l1_norm / tf1d_max_abs / tf1d_sum_in_range
+// (restart 57 + 58). Without this, a single NaN slot poisons every
+// subsequent prefix sum, breaking partial-accumulator semantics.
 fn tf1d_running_sum(start: i32, n: i32) -> i32 {
     let s = t1d_new(n);
     if n <= 0 { s }
@@ -1286,7 +1290,8 @@ fn tf1d_running_sum(start: i32, n: i32) -> i32 {
         let mut acc: f32 = 0.0_f32;
         let mut i: i32 = 0;
         while i < n {
-            acc = acc + __f32_from_bits(__arena_get(start + i));
+            let v = __f32_from_bits(__arena_get(start + i));
+            if v == v { acc = acc + v; };
             __arena_set(s + i, __bits_of_f32(acc));
             i = i + 1;
         }

@@ -147,8 +147,26 @@ def _list() -> None:
         print(f"  {key:14s} {info['title']}")
 
 
+def _help() -> None:
+    """Restart 61 B4: print usage / help. Pre-fix, the runner had no
+    `-h` / `--help` discoverability — users had to read the module
+    docstring to learn about `--list` or the per-demo short names."""
+    print("Usage:")
+    print("    python -m helixc.examples.run                # run all demos")
+    print("    python -m helixc.examples.run <demo>...      # run one or more demos")
+    print("    python -m helixc.examples.run --list         # list demo short names")
+    print("    python -m helixc.examples.run -l             # alias for --list")
+    print("    python -m helixc.examples.run -h | --help    # this message")
+    print()
+    print("Demos:")
+    _list()
+
+
 def main(argv: Optional[list[str]] = None) -> int:
     args = list(argv if argv is not None else sys.argv[1:])
+    if "-h" in args or "--help" in args:
+        _help()
+        return 0
     if "--list" in args or "-l" in args:
         _list()
         return 0

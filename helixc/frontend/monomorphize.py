@@ -93,17 +93,15 @@ def _mangle_shape_expr(e) -> str:
     """
     if e is None:
         return "none"
-    # Delegate to the canonical structural_hash. Wrap in a defensive
-    # guard so a hash-pass-internal NotImplementedError surfaces as
-    # a build-time error here rather than as an opaque crash deep in
-    # the codegen pipeline.
-    try:
-        h = structural_hash(e)
-    except (TypeError, AttributeError, NotImplementedError):
-        # Re-raise with caller context — the structural_hash
-        # catch-all message is informative on its own; we add the
-        # mangle-site as breadcrumb.
-        raise
+    # Restart 61 B2: remove dead `try/except (...): raise` block. The
+    # previous handler caught (TypeError, AttributeError,
+    # NotImplementedError) only to immediately re-raise without
+    # decoration — a no-op. The handler claimed it added "mangle-site
+    # as breadcrumb" but never modified the exception. Let the
+    # structural_hash exceptions propagate directly; the call site is
+    # already visible in the traceback. Eliminates dead code that
+    # implies safety it does not provide.
+    h = structural_hash(e)
     return "h" + h[:12]
 
 

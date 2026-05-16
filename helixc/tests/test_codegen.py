@@ -21287,6 +21287,99 @@ def test_stage35_restart58_tf1d_argmax_skips_nan_at_index_0():
     assert code == 42, f"expected 42, got {code}"
 
 
+# Restart 61 big-batch sweep canaries (Increment 78):
+
+def test_stage35_restart61_tf1d_running_sum_nan_skip_fails_closed():
+    """Restart 61 A1 (Family 2 — f32 reduction NaN-skip): tf1d_running_sum
+    NaN-skip on per-element accumulation. Pre-fix, one NaN slot would
+    poison every subsequent prefix sum (NaN + anything = NaN), so the
+    entire tail of the cumulative sum became NaN. Same family as
+    tf1d_sum (restart 57 A1), tf1d_sum_in_range (restart 58 A1),
+    tf2d_row_sum / tf2d_col_sum (restart 58 A5)."""
+    src = """
+    fn main() -> i32 {
+        let v = t1d_new(4);
+        tf1d_set(v, 0, 1.0_f32);
+        let nan_bits = 2143289344;
+        tf1d_set(v, 1, __f32_from_bits(nan_bits));
+        tf1d_set(v, 2, 5.0_f32);
+        tf1d_set(v, 3, 36.0_f32);
+        let r = tf1d_running_sum(v, 4);
+        // With NaN skip: r = [1, 1, 6, 42]. Without it: r = [1, NaN, NaN, NaN].
+        let r3 = tf1d_get(r, 3);
+        if r3 != r3 { return 1; };  // must NOT be NaN
+        let i3 = r3 as i32;
+        if i3 != 42 { return 2; };
+        // Verify mid-poison freedom: r[2] = 1 + 5 = 6.
+        let r2 = tf1d_get(r, 2);
+        if r2 != r2 { return 3; };
+        let i2 = r2 as i32;
+        if i2 != 6 { return 4; };
+        42
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stage35_restart61_accuracy_count_from_logits_f32_nan_at_col_0():
+    """Restart 61 A2 (Family 2 — NaN-at-index-0 robustness):
+    accuracy_count_from_logits_f32 NaN-skip on bare-init. Pre-fix, a
+    row whose col 0 holds NaN would freeze best_val = NaN; IEEE-754
+    `v > NaN` is always false, so the row's argmax stayed at 0 even
+    when later cols held the true maxima. Same idiom as tf1d_argmax /
+    argmax_rows_f32 (restart 58 A7)."""
+    src = """
+    fn main() -> i32 {
+        // 2 rows x 3 cols logits. Row 0: [NaN, 7, 3] -> argmax should be 1.
+        // Row 1: [5, 9, 2] -> argmax should be 1.
+        let nan_bits = 2143289344;
+        let logits = ti2d_new(2, 3);
+        tf2d_set(logits, 3, 0, 0, __f32_from_bits(nan_bits));
+        tf2d_set(logits, 3, 0, 1, 7.0_f32);
+        tf2d_set(logits, 3, 0, 2, 3.0_f32);
+        tf2d_set(logits, 3, 1, 0, 5.0_f32);
+        tf2d_set(logits, 3, 1, 1, 9.0_f32);
+        tf2d_set(logits, 3, 1, 2, 2.0_f32);
+        // Targets: [1, 1] -> both should match argmax = 1 -> hits = 2.
+        let targets = t1d_new(2);
+        __arena_set(targets, 1);
+        __arena_set(targets + 1, 1);
+        let hits = accuracy_count_from_logits_f32(logits, targets, 2, 3);
+        // With NaN skip: hits = 2 (both rows match). Without: hits = 1
+        // (row 0 returns argmax = 0, target = 1, miss).
+        if hits != 2 { return hits; };
+        42
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stage35_restart61_abs_i32_saturates_int32_min():
+    """Restart 61 A3 (Family 3 — INT32_MIN abs saturate): __abs_i32(INT32_MIN)
+    must now return INT32_MAX, not silently wrap back to INT32_MIN.
+    Same family as vec_negate_inplace / vec_map_neg (restart 51 A5),
+    ti1d_max_abs / vec_max_abs (restart 56 A2/A3), vec_map_abs (restart 58 A2).
+    Pre-fix, __abs_i32 was the canonical abs helper with documented UB on
+    INT32_MIN; the fix makes it total for all i32 inputs."""
+    src = """
+    fn main() -> i32 {
+        let int32_min = (0 - 2147483647) - 1;
+        let r = __abs_i32(int32_min);
+        if r != 2147483647 { return 1; };
+        // Spot-check ordinary cases didn't regress.
+        if __abs_i32(0) != 0 { return 2; };
+        if __abs_i32(7) != 7 { return 3; };
+        if __abs_i32(0 - 7) != 7 { return 4; };
+        if __abs_i32(2147483647) != 2147483647 { return 5; };
+        42
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
 def main():
     # Recognise both the legacy `_SkipTest` exception and pytest's
     # `Skipped` outcome class so tests can use either to signal a skip

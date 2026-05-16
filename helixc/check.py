@@ -261,6 +261,22 @@ def parse_args(argv: list[str]) -> tuple[CliArgs, list[str]]:
             elif argv[i + 1].startswith("-"):
                 errors.append(f"-o requires an output path, got flag: {argv[i + 1]}")
                 i += 1
+            elif argv[i + 1] == "":
+                # Restart 61 B3: reject empty -o argument. Pre-fix, an
+                # empty path silently set a.output = "" which later
+                # produced confusing OSError diagnostics on the
+                # subsequent atomic write rather than a clean
+                # invocation-time error.
+                errors.append("-o requires a non-empty output path")
+                i += 2
+            elif a.output is not None:
+                # Restart 61 B3: reject duplicate -o. Pre-fix, the
+                # second -o silently overwrote the first with no
+                # warning — surprising behaviour for any user wiring
+                # check.py into a build system that passed two -o
+                # flags by mistake.
+                errors.append(f"-o specified more than once (already set to {a.output!r})")
+                i += 2
             else:
                 a.output = argv[i + 1]
                 i += 2

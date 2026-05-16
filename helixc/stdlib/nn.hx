@@ -969,6 +969,12 @@ fn argmax_rows_f32(logits_start: i32, rows: i32, cols: i32,
     }}}}}
 }
 
+// Restart 61 A2: NaN-at-col-0 robustness. Same idiom as tf1d_argmax /
+// argmax_rows_f32 — adopt the first non-NaN slot with the `seen = 0`
+// sentinel. Without this, a row whose col 0 is NaN would freeze
+// best_val = NaN (per IEEE-754 `v > NaN` is always false), causing the
+// row's argmax to silently stay at index 0 regardless of any later
+// numeric maxima.
 @pure
 fn accuracy_count_from_logits_f32(logits_start: i32, target_start: i32,
                                   rows: i32, cols: i32) -> i32 {
@@ -983,13 +989,21 @@ fn accuracy_count_from_logits_f32(logits_start: i32, target_start: i32,
         while r < rows {
             let row_start = logits_start + r * cols;
             let mut best_idx: i32 = 0;
-            let mut best_val: f32 = __f32_from_bits(__arena_get(row_start));
-            let mut c: i32 = 1;
+            let mut best_val: f32 = 0.0_f32;
+            let mut seen: i32 = 0;
+            let mut c: i32 = 0;
             while c < cols {
                 let v = __f32_from_bits(__arena_get(row_start + c));
-                if v > best_val {
-                    best_val = v;
-                    best_idx = c;
+                if v == v {
+                    if seen == 0 {
+                        best_val = v;
+                        best_idx = c;
+                        seen = 1;
+                    }
+                    else { if v > best_val {
+                        best_val = v;
+                        best_idx = c;
+                    }; };
                 };
                 c = c + 1;
             }

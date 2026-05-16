@@ -577,12 +577,17 @@ fn __always_accept_f64(h: i32, v: f64) -> i32 {
     if x < lo { lo } else { if x > hi { hi } else { x } }
 }
 
-// Integer absolute value. Mirror of __abs (f32) on the i32 side. For
-// x = INT32_MIN (-2^31) this is undefined behaviour: -INT32_MIN can't be
-// represented as i32 and overflow wraps back to INT32_MIN; callers that
-// need a defined result there should clamp first.
+// Integer absolute value. Mirror of __abs (f32) on the i32 side.
+// Restart 61 A3: saturate INT32_MIN to INT32_MAX. Pre-fix, x = INT32_MIN
+// silently wrapped back to INT32_MIN because -INT32_MIN is not
+// representable as i32; that broke the |x| >= 0 postcondition for the
+// canonical abs helper. Same family as vec_negate_inplace /
+// vec_map_neg (restart 51 A5), ti1d_max_abs / vec_max_abs (restart 56
+// A2/A3), and vec_map_abs (restart 58 A2). Now defined for all i32
+// inputs.
 @pure fn __abs_i32(x: i32) -> i32 {
-    if x < 0 { 0 - x } else { x }
+    if x == ((0 - 2147483647) - 1) { 2147483647 }
+    else { if x < 0 { 0 - x } else { x } }
 }
 
 // Integer sign (-1 / 0 / +1). Mirror of __sign (f32) on the i32 side.
