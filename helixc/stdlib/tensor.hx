@@ -176,6 +176,52 @@ fn t2d_new(rows: i32, cols: i32) -> i32 {
     }
 }
 
+@pure fn arena_span_in_tensor_payload(span_start: i32, span_len: i32) -> i32 {
+    if span_start < 0 { 0 }
+    else { if span_len <= 0 { 0 }
+    else { if span_start > 2147483647 - span_len { 0 }
+    else {
+        let span_end = span_start + span_len;
+        let mut base = span_start;
+        let mut found = 0;
+        while base >= 3 {
+            if found == 0 {
+                let magic = __arena_get(base - 3);
+                if magic == t1d_magic() {
+                    let len = __arena_get(base - 2);
+                    let guard = __arena_get(base - 1);
+                    if len >= 0 {
+                    if guard == t1d_footer(len) {
+                    if base + len < __arena_len() {
+                    if __arena_get(base + len) == t1d_footer(len) {
+                    if span_start >= base {
+                    if span_end <= base + len { found = 1; };
+                    };
+                    };
+                    };
+                    };
+                    };
+                } else { if magic == t2d_magic() {
+                    let rows = __arena_get(base - 2);
+                    let cols = __arena_get(base - 1);
+                    let len2 = t2d_len(rows, cols);
+                    if len2 > 0 {
+                    if base + len2 < __arena_len() {
+                    if __arena_get(base + len2) == t2d_footer(rows, cols) {
+                    if span_start >= base {
+                    if span_end <= base + len2 { found = 1; };
+                    };
+                    };
+                    };
+                    };
+                } else { found = found; } }
+            };
+            base = base - 1;
+        }
+        found
+    } } }
+}
+
 @pure fn t2d_offset(start: i32, cols: i32, i: i32, j: i32) -> i32 {
     if start < 0 { 0 - 1 }
     else { if start < 3 { 0 - 1 } else {
@@ -206,7 +252,9 @@ fn t2d_new(rows: i32, cols: i32) -> i32 {
         if n > 2147483647 - start { 0 }
         else { if start + n >= __arena_len() { 0 }
         else { if __arena_get(start + n) != t2d_footer(rows, cols) { 0 }
-        else { 1 } } }
+        else { if n > 2147483647 - 4 { 0 }
+        else { if arena_span_in_tensor_payload(start - 3, n + 4) != 0 { 0 }
+        else { 1 } } } } }
     }}}}}
 }
 

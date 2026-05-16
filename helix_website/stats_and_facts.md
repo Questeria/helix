@@ -5,13 +5,13 @@ snapshot, not a permanent claim; rerun the listed commands before publishing.
 
 ## Current Snapshot
 
-Snapshot date: 2026-05-16. Restart 42 is the latest recorded Stage 35 fix verification in this file; use live `git log -1 --oneline` before publishing.
+Snapshot date: 2026-05-16. Restart 43 is the latest recorded Stage 35 fix verification in this file; use live `git log -1 --oneline` before publishing.
 
 | Stat | Value | Where it comes from |
 |------|-------|---------------------|
 | **hex0 binary size** | 299 bytes | `stage0/hex0/hex0.bin` |
 | **Total bootstrap bytes you must initially audit** | 299 | The hand-encoded hex0 root |
-| **pytest tests collected** | 2,404 | `python -m pytest helixc/tests --collect-only -q` during restart 42 fix verification |
+| **pytest tests collected** | 2,405 | `python -m pytest helixc/tests --collect-only -q` during restart 43 fix verification |
 | **Clean audit gates** | 0/3 | `docs/stage35-progress-2026-05-15.md` |
 | **Current stage** | Stage 35 audit cleanup | Stage 35 progress ledger |
 | **Backend targets with tests** | x86-64 ELF, PTX text emission | `helixc/backend/` and tests |

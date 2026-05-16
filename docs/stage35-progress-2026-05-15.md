@@ -2825,3 +2825,79 @@ Clean-gate status:
 - Restart 42 is a fix sweep, not a clean gate.
 - Next step is restart 43 as another fresh Stage 35 clean gate from the newest
   pushed HEAD.
+
+## Increment 62 - Forty-Third Clean-Gate Restart Fix Sweep
+
+Restart 43 began from pushed commit `d704448` after restart 42. Baseline support
+checks:
+
+- `git status --short --branch`
+  - Result: clean at `d704448`.
+- `python -m py_compile helixc\tests\test_codegen.py`
+  - Result: passed.
+- Per-file stdlib parser sweep across `helixc/stdlib/*.hx`
+  - Result: parsed 16 files.
+- `python -m pytest helixc\tests\test_cli.py -q -k "stage35"`
+  - Result: 61 passed, 145 deselected.
+- `python -m pytest helixc\tests\test_ptx.py -q -k "stage35"`
+  - Result: 26 passed, 52 deselected.
+- `python -m pytest helixc\tests\test_codegen.py -q -k "stage35 or agi or hashmap or tensor"`
+  - Result: 173 passed, 746 deselected.
+
+Restart 43 audit findings:
+
+- Safe tensor payloads could still forge tree nodes, binding tables, world-model
+  transition tables, world-model learner objects, and 2D tensor handles by
+  writing the public magic/footer sentinels through `ti1d_set`.
+- The website reference still implied a fixed specialist roster reviewed every
+  commit, which no longer matched the restart-specific Stage 35 lane protocol.
+- CLI/backend artifact lane was clean.
+
+Fixes in this increment:
+
+- Added `arena_span_in_tensor_payload` so validators can reject object spans
+  that live inside safe `t1d` or `t2d` payload memory.
+- Hardened tree-node, binding-table, world-model transition-table,
+  world-model learner, and 2D tensor validators against safe tensor payload
+  impersonation.
+- Added a regression that forges each affected object family through only safe
+  tensor writes and proves each validator/API rejects the fake handle.
+- Updated website audit-cycle wording to describe Stage 35's current lanes
+  honestly.
+
+Honest scope note:
+
+- This closes the safe tensor-write forged-handle class. Raw `__arena_push` and
+  `__arena_set` remain low-level arena primitives; a future typed-handle or
+  allocation-provenance stage should make that unsafe boundary explicit instead
+  of relying only on public magic/footer values.
+
+Verification:
+
+- `python -m py_compile helixc\tests\test_codegen.py`
+  - Result: passed.
+- Per-file stdlib parser sweep across `helixc/stdlib/*.hx`
+  - Result: parsed 16 files.
+- `python -m pytest helixc\tests\test_codegen.py -q -k "safe_tensor_payloads_cannot_forge_typed_handles or tree_helpers_reject_forged or bindings_reject_forged"`
+  - Result: 3 passed, 917 deselected.
+- `python -m pytest helixc\tests\test_codegen.py -q -k "stage35 or agi or hashmap or tensor"`
+  - Result: 174 passed, 746 deselected.
+- `python -m pytest helixc\tests\test_cli.py -q -k "stage35"`
+  - Result: 61 passed, 145 deselected.
+- `python -m pytest helixc\tests\test_ptx.py -q -k "stage35"`
+  - Result: 26 passed, 52 deselected.
+- `python -m pytest helixc\tests\test_cli.py -q`
+  - Result: 206 passed.
+- `python -m pytest helixc\tests\test_ptx.py -q`
+  - Result: 78 passed.
+- `python -m pytest helixc\tests --collect-only -q`
+  - Result: 2,405 tests collected.
+- `git diff --check`
+  - Result: passed.
+
+Clean-gate status:
+
+- Stage 35 clean gates remain `0/3`.
+- Restart 43 is a fix sweep, not a clean gate.
+- Next step is restart 44 as another fresh Stage 35 clean gate from the newest
+  pushed HEAD.

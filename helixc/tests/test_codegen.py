@@ -9077,6 +9077,67 @@ def test_stage35_bindings_reject_forged_in_bounds_handles():
     assert code == 42, f"expected 42, got {code}"
 
 
+def test_stage35_safe_tensor_payloads_cannot_forge_typed_handles():
+    src = """
+    fn main() -> i32 {
+        let tree_fake = t1d_new(6);
+        ti1d_set(tree_fake, 0, tree_node_magic());
+        ti1d_set(tree_fake, 1, 99);
+        ti1d_set(tree_fake, 2, 12);
+        ti1d_set(tree_fake, 3, 13);
+        ti1d_set(tree_fake, 4, 14);
+        ti1d_set(tree_fake, 5, tree_node_footer());
+        let forged_tree = tree_eq_shallow(tree_fake + 1, tree_fake + 1);
+
+        let bind_fake = t1d_new(67);
+        ti1d_set(bind_fake, 0, bindings_magic());
+        ti1d_set(bind_fake, 1, 1);
+        ti1d_set(bind_fake, 2, 9);
+        ti1d_set(bind_fake, 3, 42);
+        ti1d_set(bind_fake, 66, bindings_footer());
+        let forged_bind = bindings_get(bind_fake + 1, 9);
+        let forged_rewind = bindings_rewind(bind_fake + 1, 0);
+
+        let wmt_fake = t1d_new(5);
+        ti1d_set(wmt_fake, 0, wmt_magic());
+        ti1d_set(wmt_fake, 1, 2);
+        ti1d_set(wmt_fake, 2, 1);
+        ti1d_set(wmt_fake, 3, 1);
+        ti1d_set(wmt_fake, 4, wmt_footer(2, 1));
+        let forged_wmt = wmt_predict(wmt_fake + 1, 0, 0);
+
+        let wml_fake = t1d_new(5);
+        ti1d_set(wml_fake, 0, wml_magic());
+        ti1d_set(wml_fake, 1, 2);
+        ti1d_set(wml_fake, 2, 3);
+        ti1d_set(wml_fake, 3, 10);
+        ti1d_set(wml_fake, 4, wml_footer());
+        let forged_wml = wml_predict(wml_fake + 1, 4, 1);
+
+        let t2d_fake = t1d_new(6);
+        ti1d_set(t2d_fake, 0, t2d_magic());
+        ti1d_set(t2d_fake, 1, 1);
+        ti1d_set(t2d_fake, 2, 2);
+        ti1d_set(t2d_fake, 3, 7);
+        ti1d_set(t2d_fake, 4, 8);
+        ti1d_set(t2d_fake, 5, t2d_footer(1, 2));
+        let forged_t2d = t2d_shape_ok(t2d_fake + 3, 1, 2);
+
+        let mut ok = 1;
+        if forged_tree != 0 { ok = 0; };
+        if forged_bind != (0 - 1) { ok = 0; };
+        if forged_rewind != (0 - 1) { ok = 0; };
+        if ti1d_get(bind_fake, 1) != 1 { ok = 0; };
+        if forged_wmt != (0 - 1) { ok = 0; };
+        if forged_wml != (0 - 1) { ok = 0; };
+        if forged_t2d != 0 { ok = 0; };
+        if ok == 1 { 42 } else { 7 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
 def test_agi_beam_search_top_k():
     """Phase 4 perfection: beam_top_k selects highest-scoring candidates.
     candidates [3, 1, 2, 4]; scores indexed by id: s[1]=8, s[2]=2, s[3]=4, s[4]=6.

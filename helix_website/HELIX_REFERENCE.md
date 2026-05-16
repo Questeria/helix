@@ -955,7 +955,7 @@ Kovostov-Native/
 │   │   ├── nn.hx
 │   │   ├── option.hx
 │   │   └── autodiff.hx
-│   ├── tests/          # 2,404 tests collected in restart 42 fix verification
+│   ├── tests/          # 2,405 tests collected in restart 43 fix verification
 │   │   ├── test_codegen.py
 │   │   ├── test_parser.py
 │   │   ├── test_match.py
@@ -982,7 +982,7 @@ The Python-hosted `helixc` is currently the production compiler. The Helix self-
 
 ### Audit cycles
 
-Each stage of Helix went through multi-agent audit cycles. Three specialist agents (code-reviewer, silent-failure-hunter, type-design-analyzer) review every commit. Findings are tracked in `docs/audit-stage4-followup.md` style — each finding has a unique ID, severity, reproducer, status, and resolution commit.
+Each stage of Helix goes through multi-agent audit cycles. Current Stage 35 uses restart-specific audit lanes for stdlib/runtime safety, CLI/backend artifacts, and docs/status honesty; older specialist names such as code-reviewer, silent-failure-hunter, and type-design-analyzer are historical examples, not a fixed every-commit roster. Findings are tracked in `docs/audit-stage4-followup.md` style — each finding has a unique ID, severity, reproducer, status, and resolution commit.
 
 Stage 30 historically used **5 consecutive clean audits** with zero new
 findings. Stage 35 uses a faster **3-clean-gate** policy after each fix sweep;
@@ -1521,7 +1521,7 @@ Or: a single character `λ` in monospace inside a hex bracket `[λ]`. Clean, sho
 
 - **299 bytes** — current hex0 binary size
 - **Python-hosted helixc** — current production compiler implementation
-- **2,404 live tests collected** — restart 42 fix verification; rerun scoped pytest collection before publishing
+- **2,405 live tests collected** — restart 43 fix verification; rerun scoped pytest collection before publishing
 - **30+ stages** — Approach A roadmap
 - **23 silent-corruption bugs** — found and disclosed during development
 - **restart-gated audit campaign** — multi-agent code review cycles continue until three clean gates pass

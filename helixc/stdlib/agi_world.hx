@@ -75,7 +75,9 @@ fn wmt_new(num_states: i32, num_actions: i32) -> i32 {
         else { if total > 2147483647 - wmt - 2 { 0 }
         else { if wmt + 2 + total >= __arena_len() { 0 }
         else { if __arena_get(wmt + 2 + total) != wmt_footer(num_states, num_actions) { 0 }
-        else { 1 } } } }
+        else { if total > 2147483647 - 4 { 0 }
+        else { if arena_span_in_tensor_payload(wmt - 1, total + 4) != 0 { 0 }
+        else { 1 } } } } } }
     }}
 }
 
@@ -136,7 +138,7 @@ fn wml_ok(wml: i32) -> i32 {
     else { if __arena_get(wml - 1) != wml_magic() { 0 }
     else { if wml + 3 >= __arena_len() { 0 }
     else { if __arena_get(wml + 3) != wml_footer() { 0 }
-    else { 1 } } } }
+    else { if arena_span_in_tensor_payload(wml - 1, 5) != 0 { 0 } else { 1 } } } } }
 }
 
 @pure

@@ -41,7 +41,8 @@ fn tree_node_ok(off: i32) -> i32 {
     else { if off > 2147483647 - 4 { 0 }
     else { if off + 4 >= __arena_len() { 0 }
     else { if __arena_get(off - 1) != tree_node_magic() { 0 }
-    else { if __arena_get(off + 4) != tree_node_footer() { 0 } else { 1 } } } } }
+    else { if __arena_get(off + 4) != tree_node_footer() { 0 }
+    else { if arena_span_in_tensor_payload(off - 1, 6) != 0 { 0 } else { 1 } } } } } }
 }
 
 @pure fn tree_invalid_value() -> i32 { (0 - 2147483647) - 1 }
@@ -249,7 +250,8 @@ fn bindings_storage_ok(b: i32) -> i32 {
     else { if b > 2147483647 - 65 { 0 }
     else { if b + 65 >= __arena_len() { 0 }
     else { if __arena_get(b - 1) != bindings_magic() { 0 }
-    else { if __arena_get(b + 65) != bindings_footer() { 0 } else { 1 } } } } }
+    else { if __arena_get(b + 65) != bindings_footer() { 0 }
+    else { if arena_span_in_tensor_payload(b - 1, 67) != 0 { 0 } else { 1 } } } } } }
 }
 
 @pure
