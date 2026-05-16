@@ -41,6 +41,23 @@ _DIFF_CACHE_HITS = [0]
 _DIFF_CACHE_MISSES = [0]
 
 
+# Builtins with known pure behavior in the AD surface. Some have analytic
+# chain rules; opaque min/max/clamp/sign variants remain non-inlined so missing
+# differentiability cannot be hidden behind conditional bodies.
+AD_KNOWN_PURE_CALLS = {
+    "__exp", "__log", "__sin", "__cos", "__sqrt",
+    "__relu", "__sigmoid", "__tanh", "__softplus",
+    "__silu", "__abs", "__gelu", "__powi", "__bce",
+    "__log_stable",
+    "__exp_f64", "__log_f64", "__sin_f64", "__cos_f64",
+    "__sqrt_f64", "__relu_f64", "__sigmoid_f64", "__abs_f64",
+    "__min", "__max", "__clamp",
+    "__min_i32", "__max_i32", "__clamp_i32",
+    "__min_f64", "__max_f64", "__clamp_f64",
+    "__sign", "__sign_f64",
+}
+
+
 # Audit 28.8 B5: trap 85001 — AD assumed 0 derivative for an unhandled
 # expression kind. Both forward (_diff) and reverse (_propagate) used
 # to fall through to "return 0" / "no contribution" for any unmatched
@@ -284,14 +301,7 @@ def _is_inferably_pure(fn: "A.FnDecl",
             for a in e.args:
                 if not is_pure_expr(a):
                     return False
-            # Known-pure transcendental builtins (their analytic chain rules
-            # are wired into _diff_call_chain_rule).
-            TRANSCENDENTALS = {"__exp", "__log", "__sin", "__cos", "__sqrt",
-                               "__relu", "__sigmoid", "__tanh", "__softplus",
-                               "__silu", "__abs", "__gelu", "__powi",
-                               "__min", "__max", "__clamp",
-                               "__min_i32", "__max_i32", "__clamp_i32"}
-            if cname in TRANSCENDENTALS:
+            if cname in AD_KNOWN_PURE_CALLS:
                 return True
             # User fn — recursively check.
             if cname in fn_table:
@@ -338,20 +348,7 @@ def _inline_user_calls(expr: A.Expr, fn_table: dict[str, "A.FnDecl"],
     # engine to differentiate through their (potentially conditional)
     # bodies instead of using the closed-form derivative — producing
     # silently-wrong gradients when the body uses if/while.
-    TRANSCENDENTALS = {"__exp", "__log", "__sin", "__cos", "__sqrt",
-                       "__relu", "__sigmoid", "__tanh", "__softplus",
-                       "__silu", "__abs", "__gelu", "__powi", "__bce",
-                       "__log_stable",
-                       "__exp_f64", "__log_f64", "__sin_f64", "__cos_f64",
-                       "__sqrt_f64", "__relu_f64", "__sigmoid_f64",
-                       "__abs_f64",
-                       # min/max/clamp aren't differentiable at switch
-                       # points; leave opaque so the AD surface can reject
-                       # missing chain rules instead of inlining conditionals.
-                       "__min", "__max", "__clamp",
-                       "__min_i32", "__max_i32", "__clamp_i32",
-                       "__min_f64", "__max_f64", "__clamp_f64",
-                       "__sign", "__sign_f64"}
+    TRANSCENDENTALS = AD_KNOWN_PURE_CALLS
     visiting = visiting or frozenset()
 
     def go(e: A.Expr) -> A.Expr:

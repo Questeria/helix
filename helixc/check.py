@@ -1471,7 +1471,7 @@ def _main_inner(argv: list[str] | None,
         lower_prog = prog
         if "--emit-ptx" in a.flags:
             lower_prog = _kernel_reachable_program(prog)
-        elif a.output is not None:
+        else:
             lower_prog = _drop_unreachable_diff_signature_fns(prog)
         grad_pass(lower_prog)
         mod = lower(lower_prog)

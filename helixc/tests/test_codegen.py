@@ -10961,6 +10961,27 @@ def test_revad_backward_rejects_self_referential_operand_before_mutation():
     assert code == 42, f"expected 42, got {code}"
 
 
+def test_revad_backward_rejects_forged_leaf_with_operands():
+    src = """
+    fn main() -> i32 {
+        let tape = rev_tape_new(6);
+        let x = rev_leaf(tape, 5);
+        let y = rev_leaf(tape, 7);
+        let f = rev_add(tape, x, y);
+        __arena_set(tape + 3 + f * 4, rev_kind_leaf());
+        let adj = rev_alloc_adjoints(tape);
+        rev_seed(adj, f, 1);
+        let status = rev_backward(tape, adj);
+        if status == (0 - 1) {
+        if rev_grad(adj, x) == 0 {
+        if rev_grad(adj, y) == 0 { 42 } else { 7 }
+        } else { 7 }} else { 7 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
 def test_revad_seed_rejects_invalid_index_without_corrupting_tape():
     src = """
     fn main() -> i32 {

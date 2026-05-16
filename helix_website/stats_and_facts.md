@@ -5,13 +5,13 @@ snapshot, not a permanent claim; rerun the listed commands before publishing.
 
 ## Current Snapshot
 
-Snapshot date: 2026-05-15, Stage 35 restart 22 fix verification.
+Snapshot date: 2026-05-15, Stage 35 restart 23 fix verification.
 
 | Stat | Value | Where it comes from |
 |------|-------|---------------------|
 | **hex0 binary size** | 299 bytes | `stage0/hex0/hex0.bin` |
 | **Total bootstrap bytes you must initially audit** | 299 | The hand-encoded hex0 root |
-| **pytest tests collected** | 2,277 | `python -m pytest helixc/tests --collect-only -q -p no:cacheprovider` during restart 22 fix verification |
+| **pytest tests collected** | 2,282 | `python -m pytest helixc/tests --collect-only -q -p no:cacheprovider` during restart 23 fix verification |
 | **Clean audit gates** | 0/3 | `docs/stage35-progress-2026-05-15.md` |
 | **Current stage** | Stage 35 audit cleanup | Stage 35 progress ledger |
 | **Backend targets with tests** | x86-64 ELF, PTX text emission | `helixc/backend/` and tests |

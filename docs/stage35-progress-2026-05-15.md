@@ -872,6 +872,47 @@ Clean-gate status:
 - Stage 35 clean gates remain `0/3`.
 - Next step is another fresh Stage 35 clean gate on this fixed commit.
 
+## Increment 42 - Twenty-Third Clean-Gate Restart Fix Sweep
+
+Restart 23 began from commit `01f3d46` with green smoke/support checks. The
+first audit batch timed out after five minutes, so it was closed and replaced
+with a tighter scoped audit batch. The replacement lanes found blockers, so the
+gate did not count as clean and Stage 35 remains at `0/3` clean gates.
+
+Fixes landed in this increment:
+
+- Shared the AD-known builtin set between inferred purity and builtin inlining
+  skips so helper functions using `__log_stable` and f64 math helpers are
+  treated consistently.
+- Hardened reverse-AD tape validation so leaf records must keep both operand
+  slots as `-1`, closing a forged-leaf gradient-drop path.
+- Pruned unreachable differentiable-signature helpers for every host-lowering
+  path in `helixc.check`, including `--emit-asm` and bare `--strict`.
+- Updated bootstrap/status docs so target bootstrap links are not described as
+  live and the pause handoff points at restart 23.
+
+Focused verification:
+
+- Per-file stdlib parser sweep across `helixc/stdlib/*.hx`
+  - Result: parsed 16 stdlib files.
+- `python -m py_compile helixc\frontend\autodiff.py helixc\frontend\autodiff_reverse.py helixc\check.py helixc\backend\ptx.py helixc\backend\x86_64.py`
+  - Result: passed.
+- `python -m pytest helixc/tests/test_transcendentals.py helixc/tests/test_autodiff.py helixc/tests/test_autodiff_reverse.py -q`
+  - Result: 103 passed.
+- `python -m pytest helixc/tests/test_codegen.py -k "t1d or t2d or ti2d or tf2d or tensor or stage35_2d or nn_ or dense_layer or softmax_rows_f32 or softmax_ce_grad_f32 or argmax_rows_f32 or accuracy_count_from_logits_f32 or ce_loss_batch_f32 or bce or gelu or revad" -q`
+  - Result: 126 passed.
+- `python -m pytest helixc/tests/test_cli.py -q`
+  - Result: 161 passed.
+- `python -m pytest helixc/tests/test_ptx.py -q`
+  - Result: 75 passed.
+- `python -m pytest helixc/tests --collect-only -q -p no:cacheprovider`
+  - Result: 2,282 tests collected.
+
+Clean-gate status:
+
+- Stage 35 clean gates remain `0/3`.
+- Next step is another fresh Stage 35 clean gate on this fixed commit.
+
 ## Increment 28 - Ninth Clean-Gate Restart Fix Sweep
 
 The next fresh Stage 35 audit restart found one reverse-AD metadata integrity

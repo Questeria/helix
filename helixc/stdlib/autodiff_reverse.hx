@@ -241,7 +241,8 @@ fn rev_backward(tape: i32, adj_start: i32) -> i32 {
             let check_in1 = __arena_get(check_off + 1);
             let check_in2 = __arena_get(check_off + 2);
             if check_kind == 0 {
-                status = 0;
+                if check_in1 != (0 - 1) { status = 0 - 1; }
+                else { if check_in2 != (0 - 1) { status = 0 - 1; } }
             } else { if check_kind == 1 {
                 if rev_valid_index(tape, check_in1) == 0 { status = 0 - 1; }
                 else { if rev_valid_index(tape, check_in2) == 0 { status = 0 - 1; }

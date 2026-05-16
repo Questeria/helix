@@ -331,6 +331,30 @@ def test_grad_rev_through_sqrt_f64():
     assert compile_and_run(src) == 42
 
 
+def test_forward_grad_infers_pure_helper_with_log_stable():
+    src = """
+    fn helper(x: f32) -> f32 { __log_stable(x) }
+    @pure fn loss(x: f32) -> f32 { helper(x) }
+    fn main() -> i32 {
+        let g = grad(loss)(100.0);
+        ((g * 4200.0) as i32)
+    }
+    """
+    assert compile_and_run(src) == 42
+
+
+def test_grad_rev_infers_pure_helper_with_sqrt_f64():
+    src = """
+    fn helper(x: f64) -> f64 { __sqrt_f64(x) }
+    @pure fn loss(x: f64) -> f64 { helper(x) }
+    fn main() -> i32 {
+        let g = grad_rev(loss)(4.0_f64);
+        ((g * 168.0_f64) as i32)
+    }
+    """
+    assert compile_and_run(src) == 42
+
+
 def test_grad_through_abs_positive():
     # d(abs(x)) at x=5 = 1; +41 = 42
     src = """

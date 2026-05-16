@@ -15,9 +15,10 @@ Restart 21 final commit: `c6dfb53 Fix Stage 35 twenty-first restart findings`
 Current status:
 
 - Restart 21 is closed.
-- The latest active work is restart 22, which began from `c6dfb53`.
+- Restart 22 is closed by commit `01f3d46`.
+- The latest active work is restart 23, which began from `01f3d46`.
 - Any future continuation should follow `docs/stage35-progress-2026-05-15.md`
-  and the newest restart-22 audit/fix documents instead of the stale pre-reboot
+  and the newest restart-23 audit/fix documents instead of the stale pre-reboot
   checklist this file replaced.
 
 What restart 21 closed:

@@ -58,13 +58,19 @@
 
 Every place where the compiler could silently produce wrong code traps with a unique trap-id (convention: `AST_TAG * 1000 + sub_id`). When a compile-time invariant fails, the produced binary contains a `ud2` instruction (SIGILL) with the trap-id encoded — clear signal vs. silent garbage. 23+ silent-corruption bugs were found and fixed during development; all have public reproducer + status entries on `/audits`.
 
-### 2. Bootstrapped from raw binary
+### 2. Growing from raw binary
 
-The Helix toolchain has zero external dependencies. The chain is:
+The live Helix bootstrap floor is the 299-byte `hex0` artifact. The current
+production compiler remains Python-hosted `helixc`; the zero-external-toolchain
+story applies to the target bootstrap chain once later links are implemented
+and verified. The target chain is:
 
 Target chain: `hex0` (299 bytes, hand-built) → `hex1` → `M0` → `M1` → `M2-Planet` → `kovc-bootstrap` → self-hosted Helix compiler.
 
-Each link compiles the next. You can audit every byte. No assembler, no linker, no Cargo. `libc` is optional — only needed when user code uses FFI.
+The design goal is that each link compiles the next and can be byte-audited
+from `hex0`. Today, only the `hex0` root is live and measured; later links are
+roadmap targets. `libc` is optional for user programs and is only needed when
+code uses FFI.
 
 ### 3. ML-first language design
 
@@ -949,7 +955,7 @@ Kovostov-Native/
 │   │   ├── nn.hx
 │   │   ├── option.hx
 │   │   └── autodiff.hx
-│   ├── tests/          # 2,277 tests collected in restart 22 fix verification
+│   ├── tests/          # 2,282 tests collected in restart 23 fix verification
 │   │   ├── test_codegen.py
 │   │   ├── test_parser.py
 │   │   ├── test_match.py
@@ -1513,7 +1519,7 @@ Or: a single character `λ` in monospace inside a hex bracket `[λ]`. Clean, sho
 
 - **299 bytes** — current hex0 binary size
 - **Python-hosted helixc** — current production compiler implementation
-- **2,277 live tests collected** — restart 22 fix verification; rerun scoped pytest collection before publishing
+- **2,282 live tests collected** — restart 23 fix verification; rerun scoped pytest collection before publishing
 - **30+ stages** — Approach A roadmap
 - **23 silent-corruption bugs** — found and disclosed during development
 - **9 audit passes** — multi-agent code review cycles

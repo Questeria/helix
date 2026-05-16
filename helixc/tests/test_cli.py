@@ -498,6 +498,54 @@ def test_stage35_direct_x86_output_ignores_dead_ad_helper_for_embedded_ptx(tmp_p
     assert "Traceback" not in proc.stderr
 
 
+def test_stage35_emit_asm_ignores_dead_ad_helper(tmp_path):
+    src_path = tmp_path / "emit_asm_dead_ad.hx"
+    src_path.write_text(
+        "fn loss(x: D<f64>) -> D<f64> { x }\n"
+        "@kernel fn k() { let i = thread_idx(); }\n"
+        "fn main() -> i32 { 42 }\n",
+        encoding="utf-8",
+    )
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    proc = subprocess.run(
+        [
+            sys.executable, "-m", "helixc.check", str(src_path),
+            "--emit-asm", "--no-stdlib",
+        ],
+        cwd=proj_root,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "unresolved generic type D" not in proc.stderr
+    assert "compiler bug" not in proc.stderr
+
+
+def test_stage35_strict_host_check_ignores_dead_ad_helper(tmp_path):
+    src_path = tmp_path / "strict_host_dead_ad.hx"
+    src_path.write_text(
+        "fn loss(x: D<f64>) -> D<f64> { x }\n"
+        "@kernel fn k() { let i = thread_idx(); }\n"
+        "fn main() -> i32 { 42 }\n",
+        encoding="utf-8",
+    )
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    proc = subprocess.run(
+        [
+            sys.executable, "-m", "helixc.check", str(src_path),
+            "--strict", "--no-stdlib",
+        ],
+        cwd=proj_root,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "unresolved generic type D" not in proc.stderr
+    assert "compiler bug" not in proc.stderr
+
+
 def test_c119_emit_ptx_rejects_no_kernel_modules(capsys):
     src = write_src("fn helper(x: i32) -> i32 { x + 1 }\n")
     try:
