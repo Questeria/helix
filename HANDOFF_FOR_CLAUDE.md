@@ -5,7 +5,8 @@
 **Remote**: `https://github.com/Questeria/helix.git`  
 **Branch**: `main`  
 **Handoff written after**: Stage 35 restart 65 CLEAN — **STAGE 35 CLOSED (3/3 clean gates)**
-(Increment 82; lands alongside this handoff)
+(Increment 82); post-closure full-codebase audit + HIGH-finding fixes
+applied in Increment 84 (2026-05-16).
 
 This handoff is for Claude to begin Stage 36. Stage 35 is now CLOSED.
 Treat live git state as truth if it differs from this file.
@@ -84,6 +85,46 @@ Next: **Stage 36** opens. The Stage 35 audit-cleanup campaign is
 archived. The combined audit-and-fix anti-abbreviation discipline
 established at restart 62 should remain the default for any future
 audit campaign.
+
+## Post-Closure Full-Codebase Audit (Increment 84, 2026-05-16)
+
+Per the user direction "do full audit cycles on all the work we have
+done so far", three parallel post-closure audit lanes ran on top of
+the closure catch-up commit `8177350`. Stage 35 remains CLOSED;
+this audit is **Stage 36 prep**, not a clean-gate reset.
+
+**HIGH findings applied (Increment 84):**
+
+- `docs/ROADMAP.md` Current-state header + Stage 35 section advanced
+  from "audit cleanup" to "CLOSED 2026-05-16 at restart 65".
+- `docs/HELIX_V1_FINAL_FEATURES.md` Part 5 sequencing plan + Status
+  advanced from "0/3 clean gates" to "Stage 35 CLOSED; Stage 36 opens".
+- `scripts/stage33_selfhost_gate.py` re-run — PASS (G2..G4 byte-
+  identical sha `a6f1ee44...`; smoke programs literal/call/loop/
+  metadata_attrs all exit 42; validate ok). The Stage 35 stdlib
+  changes did not break the self-host cascade.
+- 4 broken examples fixed:
+  - `helixc/examples/hello.hx` — `add_kernel` returns `()` (was
+    returning `tile<bf16, [N], reg>` which the strengthened @kernel
+    typecheck rejects).
+  - `helixc/examples/hbs_sample_enum_struct.hx` — `Shape.kind` field
+    tightened from `i32` to `Kind` to match match-arm usage.
+  - `helixc/examples/hbs_integration_calculator.hx` — `dispatch_or`
+    parameter type tightened from `i32` to `Op`.
+  - `helixc/examples/hbs_reference_500loc.hx` — `vm_eval` / `vm_unary`
+    parameter types tightened from `i32` to `Op`.
+
+The 3 hbs_* fixes reflect a strengthened typechecker that previously
+allowed implicit enum→i32 conversion; the right repair is to tighten
+the user-side type annotations to the actual enum, not to weaken the
+checker.
+
+**MEDIUM / LOW findings deferred** to Stage 36 backlog: stale
+"post-Stage-30" references in HELIX_PURPOSE.md and HELIX_FINAL_PRODUCT
+_RESEARCH.md; stale codegen shard timings; split test_codegen.py
+(21,504 lines); delete `_probe_stage29_*.py`; promote Stage 36
+starting protocol out of the progress ledger; reconcile three docs
+that disagree on Stage 36 first deliverable.
 
 ## What Restart 64 Returned (CLEAN — gate 2/3)
 

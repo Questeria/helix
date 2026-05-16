@@ -5075,3 +5075,89 @@ slice as a mandatory pre-commit gate.
 Stage 35 closure status: **CLOSED at restart 65 (3/3 clean gates)**
 remains in effect. Stage 36 opens next.
 
+## Increment 84 — Post-Closure Full-Codebase Audit + Findings Application (2026-05-16)
+
+Per user direction "After you fully finish stage 35 I want you to do
+full audit cycles on all the work we have done so far", three parallel
+post-closure audit lanes ran against HEAD `8177350` (the closure
+catch-up commit from Increment 83). Stage 35 remains CLOSED (3/3
+clean gates); this Increment does **not** reset the counter. It
+documents the audit findings and their resolution as Stage 36 prep.
+
+### Lanes dispatched
+
+1. **Code Correctness lane** (stdlib + IR + backend bug families):
+   3 LOW findings only. Reported: tf1d_axpy NaN behavior is by-design
+   IEEE 754; self-host cascade re-verification recommended; non-magic-
+   bearing handles are documented design choice. No fixes required.
+
+2. **Integration + Regression lane** (example programs + cross-system
+   gates): 2 HIGH + 2 MEDIUM + 3 LOW findings.
+   - HIGH H1: 4 example files broken
+     (`helixc/examples/hello.hx` @kernel return-type error,
+     `hbs_sample_enum_struct.hx`, `hbs_integration_calculator.hx`,
+     `hbs_reference_500loc.hx` — implicit enum→i32 conversion errors).
+   - HIGH H2: 10-gen self-host cascade not re-verified since stdlib
+     changes (last run 2026-05-14).
+
+3. **Docs + Architecture lane** (surface drift + architecture
+   coherence): 2 HIGH + 4 MEDIUM + 7 LOW findings.
+   - HIGH H1: `docs/ROADMAP.md` Current-state header stale
+     ("Stage 35 audit cleanup" — should read "Stage 35 CLOSED").
+   - HIGH H2: `docs/HELIX_V1_FINAL_FEATURES.md` Part 5 sequencing plan
+     + Status section still claim "Clean-gate status — 0/3".
+
+### Fixes applied in this Increment
+
+All 4 HIGH findings resolved:
+
+- `docs/ROADMAP.md` — Current-state header now reads "Stage 35 CLOSED
+  2026-05-16 at restart 65"; Stage 35 section header carries a Status
+  line pointing at Increment 82 closure narrative.
+- `docs/HELIX_V1_FINAL_FEATURES.md` — Part 5 sequencing plan +
+  closing Status section updated to "Stage 35 CLOSED 2026-05-16 at
+  restart 65 (3/3 clean gates); Stage 36 opens next".
+- `scripts/stage33_selfhost_gate.py` — re-ran successfully. Cascade
+  PASS (G2..G4 byte-identical, sha
+  `a6f1ee44eb4418ba296954528d05564f5a37627dc38bb350b2308675d86b8986`,
+  smoke literal/call/loop/metadata_attrs all exit 42, validate ok).
+  Stdlib changes through Stage 35 closure did not break the self-host
+  cascade.
+- `helixc/examples/hello.hx` — `add_kernel` now returns `()` to match
+  the strengthened @kernel typecheck (was returning a tile).
+- `helixc/examples/hbs_sample_enum_struct.hx` — `Shape.kind` field
+  type tightened from `i32` to `Kind` (matches match-arm usage).
+- `helixc/examples/hbs_integration_calculator.hx` — `dispatch_or`
+  parameter type tightened from `i32` to `Op`.
+- `helixc/examples/hbs_reference_500loc.hx` — `vm_eval` / `vm_unary`
+  parameter types tightened from `i32` to `Op`.
+
+The 3 hbs_* fixes reflect a strengthened typechecker that previously
+allowed implicit enum→i32 conversion; the right repair is to tighten
+the user-side type annotations to the actual enum, not to weaken the
+checker.
+
+### MEDIUM / LOW findings deferred to Stage 36 backlog
+
+- (MEDIUM) Stale "post-Stage-30" references in HELIX_PURPOSE.md and
+  HELIX_FINAL_PRODUCT_RESEARCH.md.
+- (LOW) Stale codegen shard timings; split test_codegen.py
+  (21,504 lines); delete `_probe_stage29_*.py`.
+- (MEDIUM) Promote Stage 36 starting protocol out of the progress
+  ledger to a discoverable docs location.
+- (MEDIUM) Reconcile three docs that disagree on Stage 36 first
+  deliverable (provenance-typed primitives vs refinement types vs
+  capability tokens).
+
+### Verification
+
+- `python -m helixc.check helixc/examples/hello.hx` — clean.
+- `python -m helixc.check helixc/examples/hbs_sample_enum_struct.hx` — clean.
+- `python -m helixc.check helixc/examples/hbs_integration_calculator.hx` — clean.
+- `python -m helixc.check helixc/examples/hbs_reference_500loc.hx` — clean.
+- `python scripts/stage33_selfhost_gate.py` — PASS, validate ok.
+- Full pytest run scheduled before commit.
+
+Stage 35 closure status: **CLOSED at restart 65 (3/3 clean gates)**
+remains in effect. Stage 36 opens next.
+

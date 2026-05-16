@@ -40,8 +40,9 @@ where N % 16 == 0, M % 16 == 0, P % 16 == 0,
 fn add_kernel[N: size](
     a: tile<bf16, [N], reg>,
     b: tile<bf16, [N], reg>,
-) -> tile<bf16, [N], reg> {
-    a
+) {
+    // @kernel functions must return () for PTX emission. This is a
+    // parse + typecheck exercise; the body is a no-op.
 }
 
 struct Point {

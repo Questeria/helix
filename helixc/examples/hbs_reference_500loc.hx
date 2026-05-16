@@ -231,8 +231,8 @@ fn pair_diff(p: Pair) -> i32 {
 // ============================================================================
 
 @total
-fn vm_eval(op: i32, a: i32, b: i32) -> i32 {
-    // Pure-i32 dispatcher: applies a single binary opcode.
+fn vm_eval(op: Op, a: i32, b: i32) -> i32 {
+    // Enum-dispatch: applies a single binary opcode.
     match op {
         Op::Add => a + b,
         Op::Sub => a - b,
@@ -245,7 +245,7 @@ fn vm_eval(op: i32, a: i32, b: i32) -> i32 {
 }
 
 @total
-fn vm_unary(op: i32, x: i32) -> i32 {
+fn vm_unary(op: Op, x: i32) -> i32 {
     match op {
         Op::Neg => 0 - x,
         Op::NoOp => x,
@@ -360,10 +360,10 @@ fn main() -> i32 {
     let g28_42 = gcd(28, 42);              // 14
 
     // 2. VM dispatch: compute 10 + 20 = 30, then 30 * 3 = 90, then 90 - 25 = 65
-    let r1 = vm_eval(Op::Add, 10, 20);     // 30
-    let r2 = vm_eval(Op::Mul, r1, 3);      // 90
-    let r3 = vm_eval(Op::Sub, r2, 25);     // 65
-    let r_neg = vm_unary(Op::Neg, 7);      // -7
+    let r1 = vm_eval(Op::Add, 10, 20);          // 30
+    let r2 = vm_eval(Op::Mul, r1, 3);           // 90
+    let r3 = vm_eval(Op::Sub, r2, 25);          // 65
+    let r_neg = vm_unary(Op::Neg, 7);           // -7
 
     // 3. Coords + struct pass-by-value
     let c1 = Coord { x: 3, y: 4 };

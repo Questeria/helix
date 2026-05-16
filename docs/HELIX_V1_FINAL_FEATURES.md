@@ -415,10 +415,10 @@ For modular AGI architecture composition.
 
 ```
 CURRENT (May 2026):
-  Stage 35 — AI/ML Capability Push
-  Clean-gate status — 0/3 clean Stage 35 audit gates after the latest
-                      restart findings; see docs/stage35-progress-2026-05-15.md.
-  Stage 36 — Strategic AGI features follows after Stage 35 closes.
+  Stage 35 — AI/ML Capability Push: CLOSED 2026-05-16 at restart 65
+                      (3/3 clean gates; see Stage 35 progress ledger
+                      Increment 82 in docs/stage35-progress-2026-05-15.md).
+  Stage 36 — Strategic AGI features opens next.
 
 PHASE 1 (Stages 31-37, written in Python helixc → ported through bootstrap):
   Stage 31 — Refinement types + SMT bridge (foundation for everything else)
@@ -493,9 +493,11 @@ PHASE 3 (Stages 47+, written IN HELIX):
 
 ## Status
 
-**Active**: Stage 35 — AI/ML Capability Push audit cleanup.
+**Active**: Stage 36 — Strategic AGI Features (just opened — Stage 35 CLOSED 2026-05-16 at restart 65 with 3/3 clean gates).
 
-**Next major milestone**: Stage 35 closeout after 3 clean gates, then Stage 36 — Strategic AGI features.
+**Just completed**: Stage 35 — AI/ML Capability Push, closed at restart 65 via 3 consecutive clean audit gates. See Stage 35 progress ledger Increment 82 (`docs/stage35-progress-2026-05-15.md`) for the closure narrative.
+
+**Next major milestone**: Stage 36 first deliverable selection (provenance-typed primitives, refinement types, or capability tokens — three docs still disagree on starting point; choice should be promoted to a discoverable location and the Stage 36 starting protocol promoted out of the progress ledger).
 
 **Then**: Stage 37+ sequencing for continuous execution, tiered memory, theorem-prover integration, and the longer v1 roadmap.
 

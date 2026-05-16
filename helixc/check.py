@@ -958,14 +958,24 @@ def _proof_strict_effect_warning_diagnostics(
     )
     from .frontend.grad_pass import grad_pass
 
+    # Restart 65 post-closure audit Increment 84 fix: in proof mode the
+    # caller explicitly wants every error recorded as a JSON
+    # pipeline_error entry, not crashed as an internal compiler bug.
+    # NotImplementedError can arise here when upstream hard-validation
+    # (panic_pass, trace_pass, etc) already recorded an error that left
+    # the program in an unlowerable state — lower() then trips over the
+    # invalid call site (`unknown function 'panic'`). Downgrading
+    # NotImplementedError to a strict-effect-check pipeline_error
+    # preserves the "stays JSON" contract while keeping AssertionError
+    # and other system-level signals as hard re-raises.
     try:
         strict_prog = _drop_unreachable_diff_signature_fns(prog)
         grad_pass(strict_prog)
         mod = lower(strict_prog)
-    except (NotImplementedError, AssertionError, KeyboardInterrupt,
+    except (AssertionError, KeyboardInterrupt,
             SystemExit, MemoryError):
         raise
-    except Exception as e:
+    except (NotImplementedError, Exception) as e:
         msg = (
             f"strict-effect-check: ERROR\n"
             f"     {type(e).__name__}: {e}"
@@ -987,10 +997,10 @@ def _proof_strict_effect_warning_diagnostics(
         msg = f"helixc: const-fold error: {fe}"
         print(msg, file=sys.stderr)
         return [], 1, [{"phase": "const-fold", "message": msg}]
-    except (NotImplementedError, AssertionError, KeyboardInterrupt,
+    except (AssertionError, KeyboardInterrupt,
             SystemExit, MemoryError):
         raise
-    except Exception as e:
+    except (NotImplementedError, Exception) as e:
         msg = (
             f"strict-effect-check: ERROR\n"
             f"     {type(e).__name__}: {e}"
@@ -1030,10 +1040,10 @@ def _proof_strict_effect_warning_diagnostics(
             )
             return records, 1, []
         return records, 0, []
-    except (NotImplementedError, AssertionError, KeyboardInterrupt,
+    except (AssertionError, KeyboardInterrupt,
             SystemExit, MemoryError):
         raise
-    except Exception as e:
+    except (NotImplementedError, Exception) as e:
         msg = (
             f"strict-effect-check: ERROR\n"
             f"     {type(e).__name__}: {e}"

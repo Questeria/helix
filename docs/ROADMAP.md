@@ -5,7 +5,7 @@ deep-research passes (2026-05-04). It's a forward-looking plan; not
 everything here will land, and priorities will shift as dogfooding
 reveals which features actually matter.
 
-## Current state (Stage 35 audit cleanup; see `docs/stage35-progress-2026-05-15.md` for the latest restart and test count)
+## Current state (Stage 35 CLOSED 2026-05-16 at restart 65; see `docs/stage35-progress-2026-05-15.md` Increment 82 for the closure narrative; Stage 36 opens next)
 
 - Working from-scratch x86-64 ELF compiler
 - Forward + reverse-mode symbolic AD with chain rules for __exp, __log,
@@ -16,7 +16,7 @@ reveals which features actually matter.
 - f32/f64 reflection cells (splice_f / splice_f64 / modify_f / modify_f64)
 - 5 dogfood programs/tests running real gradient descent + a self-improving-agent flagship that composes them (6 programs total: 5 dogfood + 1 flagship; see `helixc/examples/dogfood_*.hx` and `helixc/examples/self_improving_agent.hx`)
 - Stdlib for transcendentals auto-included
-- Stage 35 clean-gate status is tracked in docs/stage35-progress-2026-05-15.md
+- Stage 35 status: CLOSED 2026-05-16 at restart 65 (3/3 clean audit gates; full ledger in docs/stage35-progress-2026-05-15.md)
 
 ## Tier 1 — must-have next (do first)
 
@@ -201,6 +201,10 @@ language, not only a fast language.
 Relative work: large.
 
 ### Stage 35 - AI/ML Capability Push
+
+Status: CLOSED 2026-05-16 at restart 65 (3/3 clean gates; see Stage 35
+progress ledger Increment 82 in docs/stage35-progress-2026-05-15.md for
+the closure narrative).
 
 Purpose: unlock more real model-training code in Helix.
 

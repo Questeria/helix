@@ -167,7 +167,7 @@ fn count_letters_in_helix() -> i32 {
 // --- Match exhaustiveness (or-pattern + wildcard) ---
 
 @total
-fn dispatch_or(op: i32) -> i32 {
+fn dispatch_or(op: Op) -> i32 {
     match op {
         Op::Add | Op::Sub => 1,
         Op::Mul | _ => 2,

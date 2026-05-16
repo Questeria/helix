@@ -14,7 +14,7 @@
 enum Kind { Circle, Square, Rectangle }
 
 struct Shape {
-    kind: i32,
+    kind: Kind,
     a: i32,
     b: i32,
 }
