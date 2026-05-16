@@ -5053,10 +5053,14 @@ def test_stage35_readme_status_paragraph_advanced_past_restart_56():
     """C1 canary: README.md status paragraph must not regress to a
     restart number <= 56. The restart 58 catch-up sweep advanced it past
     restart 57; future cycles must keep the number monotonically
-    non-decreasing."""
+    non-decreasing. Restart 65 closed Stage 35 and rewrote the marker
+    phrase; the canary now accepts either the historical
+    'is the latest recorded ... in this status text' marker OR the
+    Stage 35 closure phrase as evidence of forward progression."""
     import re
     from pathlib import Path
     text = (Path(_proj_root()) / "README.md").read_text(encoding="utf-8")
+    # Path 1 — historical marker (pre-closure pattern).
     for line in text.splitlines():
         if ("is the latest recorded" in line
             and "in this status text" in line
@@ -5069,9 +5073,22 @@ def test_stage35_readme_status_paragraph_advanced_past_restart_56():
                 f"(must be >= 57 since restart 58 catch-up sweep)"
             )
             return
+    # Path 2 — Stage 35 closure marker (post-restart-65 pattern). The
+    # closure phrase carries its own restart number that must be >= 65.
+    closure = re.search(
+        r"Stage 35 CLOSED.*?restart (\d+)", text, re.IGNORECASE | re.DOTALL,
+    )
+    if closure is not None:
+        n = int(closure.group(1))
+        assert n >= 65, (
+            f"README closure marker names restart {n} (must be >= 65 "
+            f"since Stage 35 closed at restart 65)"
+        )
+        return
     raise AssertionError(
-        "README.md no longer has the 'is the latest recorded ... in this "
-        "status text' marker line — drop with care"
+        "README.md no longer has either the 'is the latest recorded ... in "
+        "this status text' marker line or the 'Stage 35 CLOSED ... restart N' "
+        "closure marker — drop with care"
     )
 
 
@@ -5083,8 +5100,10 @@ def test_stage35_handoff_chatgpt_header_and_strict_criterion_agree_on_count():
     import re
     from pathlib import Path
     text = (Path(_proj_root()) / "HANDOFF_FOR_CHATGPT.md").read_text(encoding="utf-8")
+    # Allow optional qualifier between "collection" and "is" (e.g. the
+    # post-closure "collection at closure is 2,556+" phrasing).
     header_match = re.search(
-        r"Current continuation pointer.*?live `helixc/tests` collection is ([\d,+]+)",
+        r"Current continuation pointer.*?live `helixc/tests` collection\s+(?:[a-z\s]{1,30}\s+)?is\s+([\d,+]+)",
         text, re.DOTALL,
     )
     strict_match = re.search(
@@ -5106,23 +5125,39 @@ def test_stage35_stats_facts_header_advanced_past_restart_56():
     """C3 canary: stats_and_facts.md snapshot-prose header must not
     regress to a restart number <= 56. Internal-consistency canary
     catches drift between the prose header and the table-row test count
-    citation."""
+    citation. Restart 65 closed Stage 35 with a new marker phrase; the
+    canary now also accepts 'Stage 35 CLOSED at restart N' as evidence
+    of forward progression."""
     import re
     from pathlib import Path
     text = (Path(_proj_root()) / "helix_website" / "stats_and_facts.md").read_text(encoding="utf-8")
-    # Match the snapshot-prose header that names the latest restart number.
+    # Path 1 — historical marker (pre-closure pattern).
     m = re.search(
         r"[Rr]estart (\d+).*?(?:latest recorded|catch-up sweep).*?Stage 35",
         text,
     )
-    assert m is not None, (
-        "stats_and_facts.md snapshot-prose header no longer names a "
-        "restart number — drop with care"
+    if m is not None:
+        n = int(m.group(1))
+        assert n >= 57, (
+            f"stats_and_facts.md snapshot-prose header stuck at restart {n} "
+            f"(must be >= 57 since restart 58 catch-up sweep)"
+        )
+        return
+    # Path 2 — Stage 35 closure marker (post-restart-65 pattern).
+    closure = re.search(
+        r"Stage 35 CLOSED at restart (\d+)", text,
     )
-    n = int(m.group(1))
-    assert n >= 57, (
-        f"stats_and_facts.md snapshot-prose header stuck at restart {n} "
-        f"(must be >= 57 since restart 58 catch-up sweep)"
+    if closure is not None:
+        n = int(closure.group(1))
+        assert n >= 65, (
+            f"stats_and_facts.md closure marker names restart {n} (must be "
+            f">= 65 since Stage 35 closed at restart 65)"
+        )
+        return
+    raise AssertionError(
+        "stats_and_facts.md snapshot-prose header no longer names a "
+        "restart number via either the pre-closure marker or the "
+        "'Stage 35 CLOSED at restart N' closure marker — drop with care"
     )
 
 
@@ -5322,9 +5357,11 @@ def test_stage35_restart62_lane_audit_docs_exist():
 
 def test_stage35_restart62_surfaces_advanced_past_restart_58_catch_up():
     """Restart 62 C3 (Lane C — surface drift): the eight current-facing
-    surfaces must no longer say 'restart 58 catch-up sweep' / '2,530+'
-    — should reference restart 62 / 2,553+. Sibling of
-    `test_stage35_readme_status_paragraph_advanced_past_restart_56`."""
+    surfaces must reference a restart number >= 62 as the current
+    checkpoint (was: pin literal 'restart 62'; relaxed at restart 65
+    closure since the closure refresh moves the pin forward). Sibling
+    of `test_stage35_readme_status_paragraph_advanced_past_restart_56`."""
+    import re
     from pathlib import Path
     root = Path(__file__).resolve().parents[2]
     for rel in ("README.md", "QUICKSTART.md",
@@ -5335,16 +5372,21 @@ def test_stage35_restart62_surfaces_advanced_past_restart_58_catch_up():
         if not p.exists():
             continue
         txt = p.read_text(encoding="utf-8")
-        # Must NOT have stale "restart 58 catch-up sweep collected
-        # 2,530+" or similar — historical mentions in HANDOFF_FOR_CLAUDE
-        # "What Restart 58 Fixed" sections are still allowed.
-        # Must reference restart 62 somewhere as the current checkpoint.
         if rel in ("README.md", "QUICKSTART.md",
                    "HANDOFF_FOR_CHATGPT.md",
                    "helix_website/HELIX_REFERENCE.md",
                    "helix_website/stats_and_facts.md"):
-            assert "restart 62" in txt.lower(), (
-                f"{rel} does not reference restart 62 as the current checkpoint"
+            # Any "restart N" mention with N >= 62 counts as a valid
+            # forward-checkpoint reference. The Stage 35 closure phrase
+            # ("Stage 35 CLOSED") also satisfies (closure happened at
+            # restart 65 >= 62).
+            numbers = [int(m) for m in re.findall(r"restart (\d+)", txt.lower())]
+            forward_ok = any(n >= 62 for n in numbers)
+            closure_ok = "stage 35 closed" in txt.lower()
+            assert forward_ok or closure_ok, (
+                f"{rel} does not reference any restart >= 62 nor the "
+                f"Stage 35 closure phrase as the current checkpoint "
+                f"(seen restart numbers: {sorted(set(numbers))})"
             )
 
 

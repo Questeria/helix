@@ -5008,3 +5008,70 @@ Pattern validated across **four consecutive restarts** (62 + 63 + 64
 + 65) and remains the recommended default for any future audit
 campaign.
 
+
+## Increment 83 — Post-Closure Canary Catch-Up (2026-05-16)
+
+Catch-up commit on top of `b8cafe7` (the Stage 35 closure commit).
+Stage 35 remains CLOSED (3/3 clean gates); this Increment does **not**
+reset the counter. It documents a Lane B miss inside the closure
+commit itself: the surface refresh rewrote the marker phrases that
+four prior canaries pinned, but the closure commit did not update
+those canaries in the same commit.
+
+### Defect surfaced
+
+Four `helixc/tests/test_cli.py` canaries failed against HEAD `b8cafe7`:
+
+- `test_stage35_readme_status_paragraph_advanced_past_restart_56` —
+  pinned the literal phrase "is the latest recorded ... in this status
+  text" that the closure rewrote to "Stage 35 CLOSED (3/3 clean gates)".
+- `test_stage35_handoff_chatgpt_header_and_strict_criterion_agree_on_count`
+  — regex `live `helixc/tests` collection is ([\d,+]+)` did not match
+  the new closure phrasing "live `helixc/tests` collection at closure
+  is 2,556+".
+- `test_stage35_stats_facts_header_advanced_past_restart_56` — pinned
+  the literal markers "latest recorded" or "catch-up sweep" that the
+  closure rewrote to "Stage 35 CLOSED at restart 65".
+- `test_stage35_restart62_surfaces_advanced_past_restart_58_catch_up`
+  — pinned the literal string "restart 62" in 5 surfaces; closure
+  refresh advanced them to "restart 65".
+
+All four are surface-drift canaries written by earlier restarts (58,
+62) to enforce monotonic forward progression. Their **intent** —
+"don't regress backward" — was satisfied by the closure; their
+**implementation** pinned specific historical phrases that the closure
+removed.
+
+### Fix
+
+Each of the four canaries updated to accept either the historical
+pre-closure marker OR the Stage 35 closure phrase. Monotonic forward
+progression bounds were tightened where appropriate (closure-path
+canaries now require restart number >= 65).
+
+The closure commit `b8cafe7` itself is left untouched as the
+historical Stage 35 closure record; this catch-up commit sits on top.
+
+### Verification
+
+- `python -m pytest helixc/tests/test_cli.py -q -k "stage35_readme_status_paragraph_advanced_past_restart_56 or stage35_handoff_chatgpt_header_and_strict_criterion_agree_on_count or stage35_stats_facts_header_advanced_past_restart_56 or stage35_restart62_surfaces_advanced_past_restart_58_catch_up"`
+  - Result: 4 passed.
+- `python -m pytest helixc/tests/test_cli.py -q -k stage35`
+  - Result: 145 passed.
+- `python -m pytest helixc/tests/test_codegen.py -q -k stage35`
+  - Result: 134 passed.
+- `python -m pytest helixc/tests --collect-only -q`
+  - Result: 2,556 tests collected (unchanged from closure).
+
+### Process-discipline lesson
+
+The closure-commit audit ran a `git diff` + spot-check on surfaces but
+did NOT run the `test_cli.py -k stage35` slice. A complete combined
+audit-and-fix must run the canary slice on the final pre-commit
+working tree to catch this exact class of "I broke my own pin"
+regression. Future audit-and-fix dispatches should add the canary
+slice as a mandatory pre-commit gate.
+
+Stage 35 closure status: **CLOSED at restart 65 (3/3 clean gates)**
+remains in effect. Stage 36 opens next.
+
