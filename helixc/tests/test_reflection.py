@@ -187,6 +187,18 @@ def test_dogfood_04_xor_relu_perceptron():
     assert compile_and_run(src) == 42
 
 
+def test_dogfood_06_provenance_datalog():
+    # Stage 36 Increment 4 dogfood: Datalog-shaped propositional
+    # reasoning over provenance-typed truth values. Verifies the
+    # grandparent rule fires AND the tautology (P OR NOT P) holds
+    # for both P=0 and P=1. Exit 42 on success.
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    p = os.path.join(proj_root, "helixc", "examples", "dogfood_06_provenance_datalog.hx")
+    with open(p) as f:
+        src = f.read()
+    assert compile_and_run(src) == 42
+
+
 def test_self_improving_agent_example():
     # Compiles and runs helixc/examples/self_improving_agent.hx — the
     # example covering reverse-mode AD, reflection, verifier gating, and

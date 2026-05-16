@@ -61,6 +61,11 @@ DEMOS: dict[str, dict] = {
         "title": "Helix differentiates Helix (compile-time AD + runtime SGD)",
         "expects": "exit code 43-44  (= w*100 mod 256 after 50 SGD steps; w -> 3)",
     },
+    "provenance": {
+        "file": "dogfood_06_provenance_datalog.hx",
+        "title": "Datalog-shaped reasoning over Logic<i32> (Stage 36 Inc 4)",
+        "expects": "exit code 42  (grandparent rule fires + tautology holds for both P)",
+    },
 }
 
 
