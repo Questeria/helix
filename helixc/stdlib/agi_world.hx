@@ -167,9 +167,9 @@ fn wm_prediction_error_sq(predicted: i32, actual: i32) -> i32 {
 
 @pure
 fn wmt_rollout(wmt: i32, start_state: i32, action_seq_start: i32, steps: i32) -> i32 {
-    if steps < 0 { start_state }
-    else { if wmt_ok(wmt) == 0 { start_state }
-    else { if t1d_slice_ok(action_seq_start, steps) == 0 { start_state }
+    if steps < 0 { 0 - 1 }
+    else { if wmt_ok(wmt) == 0 { 0 - 1 }
+    else { if t1d_slice_ok(action_seq_start, steps) == 0 { 0 - 1 }
     else { if start_state < 0 { 0 - 1 }
     else { if start_state >= __arena_get(wmt) { 0 - 1 }
     else {

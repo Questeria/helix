@@ -613,7 +613,12 @@ fn hashmap_max_key_with_value(start: i32, cap: i32, target: i32) -> i32 {
 fn hashmap_avg_value_x100(start: i32, cap: i32) -> i32 {
     let n = hashmap_size(start, cap);
     if n == 0 { 0 }
-    else { hashmap_sum_values(start, cap) * 100 / n }
+    else {
+        let scaled: i64 = (hashmap_sum_values(start, cap) as i64) * 100_i64 / (n as i64);
+        if scaled > 2147483647_i64 { 2147483647 }
+        else { if scaled < ((0_i64 - 2147483647_i64) - 1_i64) { (0 - 2147483647) - 1 }
+        else { scaled as i32 } }
+    }
 }
 
 // hashmap_is_empty(start, cap): @pure. 1 if map has no entries.

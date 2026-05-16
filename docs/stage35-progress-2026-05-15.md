@@ -2348,3 +2348,76 @@ Clean-gate status:
 
 - Stage 35 clean gates remain `0/3`.
 - Restart 36 is a fix sweep, not a clean gate.
+- Restart 36 was committed and pushed as `0734ebf`.
+- Restart 37 began from `0734ebf`; the fresh audit found more fixable issues,
+  so the gate still does not count as clean.
+
+## Increment 56 - Thirty-Seventh Clean-Gate Restart Fix Sweep
+
+Restart 37 began from pushed commit `0734ebf` with restart-36 closed. Baseline
+support checks were green:
+
+- `python -m py_compile helixc\check.py helixc\backend\x86_64.py helixc\backend\ptx.py helixc\tests\test_cli.py helixc\tests\test_codegen.py helixc\tests\test_ptx.py`
+  - Result: passed.
+- Per-file stdlib parser sweep across `helixc/stdlib/*.hx`
+  - Result: parsed 16 files.
+- `python -m pytest helixc\tests\test_cli.py -q -k "stage35 or emit_ast or emit_ir or emit_asm or emit_ptx or output or direct_x86 or missing_main"`
+  - Result: 76 passed, 125 deselected.
+- `python -m pytest helixc\tests\test_codegen.py -q -k "hashmap or agi_ or wmt or wml or wm_prediction or tensor or revad or agi_memory or bfs or visited or pq or astar or attention or unify"`
+  - Result: 154 passed, 745 deselected.
+- `python -m pytest helixc\tests\test_ptx.py -q -k "stage35 or direct_ptx or wad or deprecated"`
+  - Result: 42 passed, 36 deselected.
+- `python -m pytest helixc\tests --collect-only -q`
+  - Result: 2,379 tests collected at the `0734ebf` baseline.
+
+The fresh restart-37 audit was not clean. Findings:
+
+- `wmt_rollout` failed open for forged world-model handles and short action
+  buffers by returning the starting state.
+- `hashmap_avg_value_x100` could overflow in `sum * 100` before dividing even
+  when the mathematically correct scaled average still fit in `i32`.
+- Current docs still used exact active-restart wording that became stale after
+  each commit.
+- The CLI/backend/PTX lane was clean.
+
+Fixes in this increment:
+
+- Made `wmt_rollout` return `-1` for negative steps, invalid model handles,
+  invalid action slices, and invalid start states.
+- Reworked `hashmap_avg_value_x100` to compute the scaled average through
+  `i64`, with saturation back to the `i32` return range.
+- Added regressions for forged/short rollout inputs and large-but-valid scaled
+  hashmap averages.
+- Reworded current-facing status and handoff surfaces to point continuations at
+  live `git log -1 --oneline` plus the ledger tail, reducing exact-hash status
+  churn between restarts.
+
+Verification:
+
+- `python -m py_compile helixc\tests\test_codegen.py`
+  - Result: passed.
+- Per-file stdlib parser sweep across `helixc/stdlib/*.hx`
+  - Result: parsed 16 files.
+- `python -m pytest helixc\tests\test_codegen.py -q -k "wmt_rollout_rejects_forged or wmt_rollout_rejects_invalid or hashmap_avg_value_x100_avoids or stdlib_hashmap_avg_value_x100 or agi_wmt_rollout"`
+  - Result: 5 passed, 896 deselected.
+- `python -m pytest helixc\tests\test_codegen.py -q -k "hashmap or agi_ or wmt or wml or wm_prediction or tensor or revad or agi_memory or bfs or visited or pq or astar or attention or unify"`
+  - Result: 156 passed, 745 deselected.
+- `python -m pytest helixc\tests\test_cli.py -q -k "stage35 or emit_ast or emit_ir or emit_asm or emit_ptx or output or direct_x86 or missing_main"`
+  - Result: 76 passed, 125 deselected.
+- `python -m pytest helixc\tests\test_ptx.py -q -k "stage35 or direct_ptx or wad or deprecated"`
+  - Result: 42 passed, 36 deselected.
+- `python -m pytest helixc\tests\test_codegen.py -q -k "stage35"`
+  - Result: 48 passed, 853 deselected.
+- `python -m pytest helixc\tests\test_cli.py -q -k "stage35"`
+  - Result: 56 passed, 145 deselected.
+- `python -m pytest helixc\tests\test_ptx.py -q -k "stage35"`
+  - Result: 26 passed, 52 deselected.
+- `python -m pytest helixc\tests --collect-only -q`
+  - Result: 2,381 tests collected.
+- `git diff --check`
+  - Result: passed.
+
+Clean-gate status:
+
+- Stage 35 clean gates remain `0/3`.
+- Restart 37 is a fix sweep, not a clean gate.

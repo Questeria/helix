@@ -8325,6 +8325,29 @@ def test_stage35_wmt_rollout_rejects_invalid_start_state():
     assert code == 42, f"expected 42, got {code}"
 
 
+def test_stage35_wmt_rollout_rejects_forged_and_short_inputs():
+    src = """
+    fn main() -> i32 {
+        let fake = t1d_new(3);
+        let short_actions = t1d_new(1);
+        ti1d_set(short_actions, 0, 0);
+        let forged_model = wmt_rollout(fake, 1, short_actions, 1);
+
+        let wmt = wmt_new(2, 1);
+        wmt_set(wmt, 0, 0, 1);
+        let short = wmt_rollout(wmt, 0, short_actions, 2);
+        let negative_steps = wmt_rollout(wmt, 0, short_actions, 0 - 1);
+
+        if forged_model == (0 - 1) {
+        if short == (0 - 1) {
+        if negative_steps == (0 - 1) { 42 } else { 7 }
+        } else { 7 }} else { 7 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
 def test_agi_wm_prediction_error_sq():
     """Squared error: (predicted - actual)^2."""
     src = """
@@ -19021,6 +19044,20 @@ def test_stdlib_hashmap_avg_value_x100():
         let m = hashmap_new(8);
         hashmap_put(m, 8, 1, 42);
         hashmap_avg_value_x100(m, 8) / 100
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stage35_hashmap_avg_value_x100_avoids_predivide_overflow():
+    src = """
+    fn main() -> i32 {
+        let m = hashmap_new(4);
+        hashmap_put(m, 4, 1, 21474836);
+        hashmap_put(m, 4, 2, 21474836);
+        let avg = hashmap_avg_value_x100(m, 4);
+        if avg == 2147483600 { 42 } else { 7 }
     }
     """
     code = compile_and_run(src)
