@@ -507,7 +507,7 @@ Phase-0 stores cell *values* (not full ASTs). Phase-1 will support full AST cell
 
 ## Standard Library
 
-The Helix standard library lives in `helixc/stdlib/` and is written in Helix itself (no `unsafe`, no FFI for core operations). As of Stage 35 restart 52 fix verification the library has 16 modules with 455 bare `fn` declarations and 437 additional `@`-attributed declarations (`@pure`, `@kernel`, `@deprecated`, etc.) — 892 declarations total. The list below names every module; each line points at the actual `.hx` file. Per-module counts are bare-fn only (matches the 455 grand total); to see the bare + `@`-decl breakdown per module, run the `Discoverability` snippet at the end of this section.
+The Helix standard library lives in `helixc/stdlib/` and is written in Helix itself (no `unsafe`, no FFI for core operations). As of Stage 35 restart 53 fix verification the library has 16 modules with 455 bare `fn` declarations and 437 additional `@`-attributed declarations (`@pure`, `@kernel`, `@deprecated`, etc.) — 892 declarations total. The list below names every module; each line points at the actual `.hx` file. Per-module counts are bare-fn only (matches the 455 grand total); to see the bare + `@`-decl breakdown per module, run the `Discoverability` snippet at the end of this section.
 
 ### Numerics & IEEE 754
 
@@ -958,7 +958,7 @@ Kovostov-Native/
 │   │   ├── tensor.hx          # 1D/2D tensor primitives
 │   │   ├── transcendentals.hx # __exp/__log/__sin/__cos/__sqrt/__sigmoid/__tanh + scalar optim steps
 │   │   └── vec.hx             # caller-trust Vec<i32>-style sequences
-│   ├── tests/          # 2,497 tests collected in restart 51 fix verification
+│   ├── tests/          # 2,511 tests collected in restart 53 fix verification
 │   │   ├── test_codegen.py
 │   │   ├── test_parser.py
 │   │   ├── test_match.py
@@ -1564,7 +1564,7 @@ Or: a single character `λ` in monospace inside a hex bracket `[λ]`. Clean, sho
 
 - **299 bytes** — current hex0 binary size
 - **Python-hosted helixc** — current production compiler implementation
-- **2,497 live tests collected** — restart 51 fix verification (restart 50 ledger forecast 2,489; restart 51 reconciled to actual); rerun scoped pytest collection before publishing
+- **2,511 live tests collected** — restart 53 fix verification (restart 51 reconciled to 2,497; restart 52 added 0 net tests; restart 53 added 14 saturation/NaN-fail-closed canaries); rerun scoped pytest collection before publishing
 - **Approach A roadmap (30 numbered stages)** — historical bootstrap-port sequencing; current live design doc (`docs/HELIX_V1_FINAL_FEATURES.md`) references stage numbers up to Stage 65 (35 distinct stages enumerated; not a strict consecutive sequence).
 - **Dozens of silent-corruption defects (live count grows with each Stage 35 restart; see `docs/stage35-progress-2026-05-15.md` Increments 50 onward for the open-ended ledger)** — found and disclosed during development
 - **restart-gated audit campaign** — multi-agent code review cycles continue until three clean gates pass

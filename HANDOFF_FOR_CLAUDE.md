@@ -4,7 +4,7 @@
 **Repo**: `C:\Projects\Kovostov-Native`  
 **Remote**: `https://github.com/Questeria/helix.git`  
 **Branch**: `main`  
-**Handoff written after**: Stage 35 restart 51 (commit will land alongside this handoff)
+**Handoff written after**: Stage 35 restart 53 (commit will land alongside this handoff)
 
 This handoff is for Claude to continue the Helix Stage 35 audit campaign.
 Treat live git state as truth if it differs from this file.
@@ -13,31 +13,48 @@ Treat live git state as truth if it differs from this file.
 
 Stage 35 is still in audit cleanup. Clean gates remain `0/3`.
 
-The latest completed fix sweep is restart 51:
+The latest completed fix sweep is restart 53:
 
 - Commit: pinned by the latest `git log -1 --oneline` (see `Fix Stage 35
-  fifty-first restart findings`)
+  fifty-third restart findings`)
 - Status at handoff creation: clean working tree, `main` aligned with
   `origin/main`
-- Progress ledger: `docs/stage35-progress-2026-05-15.md` (see Increment 70
-  for restart 51; 69 for restart 50; 68 for restart 49; 67 for restart 48;
-  66 for restart 47; 65 for restart 46)
-- Current-facing status files now say restart 51 and 2,497 collected tests
-  (live count after restart 51 reconciliation; restart 50 ledger forecast
-  2,489 which was off by 2 from the live 2,487 at HEAD `7b945fa` before
-  restart 51 added 10 new canaries → 2,497)
+- Progress ledger: `docs/stage35-progress-2026-05-15.md` (see Increment 72
+  for restart 53; 71 for restart 52; 70 for restart 51; 69 for restart 50;
+  68 for restart 49; 67 for restart 48; 66 for restart 47; 65 for restart 46)
+- Current-facing status files now say restart 53 and 2,511 collected tests
+  (live count after restart 53 added 14 canaries on top of restart 51's
+  reconciled 2,497; restart 52 added 0 net tests)
 
 Restart 51 ran a fresh 3-lane read-only audit on top of restart 50's HEAD
 plus picked up the restart-50-deferred C8 carry-forward. Result: 12
 findings (4 HIGH + 5 MEDIUM + 3 LOW) plus a sibling B4 const_fold sweep
 discovered during the fix sweep itself. Fix sweep closed all 12 plus
-the C8 carry-forward; **no items deferred to restart 52.** See
-`docs/stage35-progress-2026-05-15.md` Increment 70 for the authoritative
-breakdown.
+the C8 carry-forward; no items deferred to restart 52.
 
-## Restart 51 → Restart 52 deferred findings
+Restart 52 ran a fresh 3-lane read-only audit on top of restart 51 HEAD.
+Result: 3 findings (1 Lane A HIGH + 0 Lane B + 1 Lane C MEDIUM + 1 Lane C
+LOW). The Lane A finding was the missed 2D sibling of restart 51 A3
+(`ti1d_dot` saturation): `ti2d_matvec` and `ti2d_matmul` lifted to i64 +
+saturation. Commit `c584b0b` landed the runtime fix but did NOT add the
+regression canaries, lane audit docs, or Increment 71 ledger entry —
+restart 53 picked up that bookkeeping.
 
-(none — restart 52 starts from a clean carry-forward)
+Restart 53 ran a fresh 3-lane read-only audit on top of restart 52 HEAD
+(`c584b0b`). Result: 15 findings (4 Lane A HIGH + 3 Lane A MEDIUM + 1
+Lane A LOW + 1 Lane B MEDIUM + 1 Lane B LOW + 5 Lane C HIGH). The Lane A
+findings were missed siblings in the i64-saturation sweep (vec_dot,
+vec_sum/product family, attention_dot, ti1d_axpy/add_scalar/mul_scalar,
+dense_layer bias-add, sgd_step_array) plus an attention_softmax_f32
+NaN-fail-closed gap. Lane B added a re-raise guard sibling on the
+backend driver and an explanatory comment on validate_kernel_tile_lowering.
+Lane C wrote the missing restart 52 lane docs + Increment 71 + Increment
+72 + reconciled 11 surfaces to "restart 53" + fixed the HANDOFF protocol
+numbers. Fix sweep closed all 15. See Increments 71 + 72 in the ledger.
+
+## Restart 53 → Restart 54 deferred findings
+
+(none — restart 54 starts from a clean carry-forward)
 
 ## What Restart 51 Fixed
 
@@ -385,15 +402,17 @@ fresh confirmation before restart 47, rerun it alone with a longer timeout:
 python -m pytest helixc/tests/test_codegen.py -q -k "stage35 or agi or hashmap or tensor"
 ```
 
-## Restart 52 Protocol (bug-family audit, refined from restart 51)
+## Restart 54 Protocol (bug-family audit, refined from restart 53)
 
-**IMPORTANT**: restart 51 closed the entire restart-50 deferred backlog
-(C8) plus all 15 freshly-discovered findings. There are NO carry-forward
-findings into restart 52. Restart 52 MUST run a fresh 3-lane audit
-(read-only). The campaign run-rate: restarts 46/47/48/49/50/51 closed
-12, 17, 13, 11, 17, 15 findings respectively (peak at restart 47/50, no
-clean monotonic decrease yet). The first restart where the audit returns
-0 findings on the same HEAD becomes clean gate 1/3.
+**IMPORTANT**: restart 53 closed all 15 freshly-discovered findings
+plus the bookkeeping gap left by restart 52. There are NO carry-forward
+findings into restart 54. Restart 54 MUST run a fresh 3-lane audit
+(read-only). The campaign run-rate: restarts 46/47/48/49/50/51/52/53
+closed 12, 17, 13, 11, 17, 12, 3, 15 findings respectively (no clean
+monotonic decrease yet; the restart 52 dip was followed by a restart-53
+rebound because restart 52 left bookkeeping unfinished). The first
+restart where the audit returns 0 findings on the same HEAD becomes
+clean gate 1/3.
 
 The bug-family audit pattern from restart 46 (12 findings) and restart 47
 (17 findings) worked well — each restart pulls more sibling issues into the
