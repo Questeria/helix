@@ -2,8 +2,10 @@
 
 **Status**: living purpose statement.
 **Date**: 2026-05-13 (purpose-statement first-written date; this is policy
-doctrine, not a status snapshot — for current Stage 35 status see
-`README.md` and `docs/stage35-progress-2026-05-15.md`).
+doctrine, not a status snapshot — for current stage status see
+`README.md` and the live progress ledger
+(`docs/stage36-progress-2026-05-16.md` as of 2026-05-16; Stage 35
+CLOSED at restart 65).
 
 Helix is not an internal language for Kovostov only. Kovostov is the first
 flagship system built on Helix; Helix itself is meant to become a dominant open
