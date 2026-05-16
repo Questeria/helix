@@ -42,6 +42,7 @@ License: Apache 2.0
 from __future__ import annotations
 
 import copy
+import dataclasses
 from typing import Optional
 
 from . import ast_nodes as A
@@ -504,13 +505,37 @@ def _pattern_shadowed_names(pat: A.Pattern, candidates: set[str]) -> set[str]:
 
 
 def _expr_depends_on_param(expr: A.Expr, candidates: set[str]) -> bool:
-    path = _field_path(expr)
-    if path is not None:
+    seen: set[int] = set()
+
+    def related(path: str) -> bool:
         return any(
             path == c or path.startswith(c + ".") or c.startswith(path + ".")
             for c in candidates
         )
-    return False
+
+    def visit(value: object) -> bool:
+        if value is None or isinstance(value, (str, int, float, bool)):
+            return False
+        if isinstance(value, (list, tuple)):
+            return any(visit(v) for v in value)
+
+        oid = id(value)
+        if oid in seen:
+            return False
+        seen.add(oid)
+
+        if isinstance(value, A.Expr):
+            path = _field_path(value)
+            if path is not None and related(path):
+                return True
+
+        if dataclasses.is_dataclass(value):
+            for field in dataclasses.fields(value):
+                if visit(getattr(value, field.name)):
+                    return True
+        return False
+
+    return visit(expr)
 
 
 def _pattern_binds_any(pat: A.Pattern) -> bool:

@@ -264,7 +264,10 @@ def _drain_ad_warnings_to_records(
         return [], 0
     ad_policy = a.warnings.get("ad", "warn")
     label = "ERROR" if ad_policy == "error" else "warning"
-    stream = sys.stderr if "--emit-proof-obligations" in a.flags else sys.stdout
+    artifact_stdout = (
+        "--emit-proof-obligations" in a.flags or "--emit-ptx" in a.flags
+    )
+    stream = sys.stderr if artifact_stdout else sys.stdout
     print(f"   ad:        {len(ad_warnings)} {label}(s)", file=stream)
     records = []
     for w in ad_warnings:

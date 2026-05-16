@@ -1180,6 +1180,42 @@ Clean-gate status:
 - Stage 35 clean gates remain `0/3`.
 - Next step is another fresh Stage 35 clean gate on this fixed commit.
 
+## Increment 35 - Sixteenth Clean-Gate Restart Fix Sweep
+
+The next fresh Stage 35 audit restart found a shallow reverse-AD match
+dependency guard, one remaining `--emit-ptx` AD-warning stdout leak, and stale
+roadmap wording about IO. The gate did not count as clean and remains at `0/3`.
+
+Fixes landed in this increment:
+
+- Reverse-mode AD now recursively checks compound scrutinees before allowing
+  match pattern bindings, covering scalar and field-path expressions such as
+  `x + 1.0` and `m.w + 1.0`.
+- The final AD-warning drain now routes its summary to stderr when
+  `--emit-ptx` reserves stdout for PTX artifacts.
+- `docs/ROADMAP.md` now says basic diagnostic stdout and narrow file builtins
+  exist, while richer capability-typed dataset/checkpoint IO remains Stage 35
+  work.
+
+Focused verification:
+
+- `python -m py_compile helixc\check.py helixc\frontend\autodiff_reverse.py`
+  - Result: passed.
+- `python -m pytest helixc\tests\test_autodiff_reverse.py -q`
+  - Result: 29 passed.
+- `python -m pytest helixc\tests\test_cli.py -k "emit_ptx" -q`
+  - Result: 16 passed.
+- `python -m pytest helixc\tests\test_codegen.py -k "overflow_t2d_len_and_alloc_do_not_alias_next_slot or overrange_tf1d_range_helpers_do_not_read_after_end or rectangular_tf2d_diag_trace_do_not_read_after_matrix or overflow_tf2d_diag_trace_do_not_read_after_matrix" -q`
+  - Result: 4 passed.
+- Docs scan for stale IO, competitor-exclusivity, clean-gate, and work-queue
+  projection wording
+  - Result: no matches.
+
+Clean-gate status:
+
+- Stage 35 clean gates remain `0/3`.
+- Next step is another fresh Stage 35 clean gate on this fixed commit.
+
 ## Next Work
 
 Likely follow-up slices:

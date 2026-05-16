@@ -177,6 +177,31 @@ def test_stage35_match_bind_alias_of_scrutinee_fails_closed():
         differentiate_reverse(body, ["x"])
 
 
+def test_stage35_match_bind_alias_of_compound_scrutinee_fails_closed():
+    body = _body_of("""
+    fn f(x: f32) -> f32 {
+        match x + 1.0 {
+            y => y * y
+        }
+    }
+    """)
+    with pytest.raises(NotImplementedError, match="match pattern bindings"):
+        differentiate_reverse(body, ["x"])
+
+
+def test_stage35_match_bind_alias_of_compound_field_scrutinee_fails_closed():
+    body = _body_of("""
+    struct Model { w: f32 }
+    fn f(m: Model) -> f32 {
+        match m.w + 1.0 {
+            y => y * y
+        }
+    }
+    """)
+    with pytest.raises(NotImplementedError, match="match pattern bindings"):
+        differentiate_reverse(body, ["m.w"])
+
+
 def test_stage35_match_pattern_shadow_covers_field_leaves():
     body = _body_of("""
     struct Model { w: f32 }

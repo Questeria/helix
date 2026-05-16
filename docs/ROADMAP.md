@@ -38,9 +38,11 @@ These are blockers for any real ML training, in priority order.
    the full dict and emit the gradient as a function returning multiple
    values (via output array).
 
-4. **Strings + file I/O** with capability-typed `@effect(io.read_file)`.
-   Without these, programs only output exit codes — no model can train
-   end-to-end. **2-3 weeks.**
+4. **Richer strings + file I/O** with capability-typed
+   `@effect(io.read_file)`. Basic literal/string diagnostic IO (`print_str`,
+   `print_int`) and narrow file builtins exist; Stage 35 still needs the
+   capability-typed dataset/checkpoint workflows and broader string/file APIs
+   required for end-to-end model training. **2-3 weeks.**
 
 5. **Stack-passed overflow args.** SysV ABI's xmm0..xmm7 covers the
    first 8 float params; the 9th must be passed on the stack. Hit
