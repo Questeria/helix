@@ -4518,3 +4518,177 @@ Restart 58 was the fourth abbreviated restart in the campaign (after
 The catch-up labelling convention is working as a fallback (Increment
 77 here, Increment 76 for 55/56), but the underlying anti-pattern
 recurrence is the real signal.
+
+
+## Increment 78 — Sixty-First Clean-Gate Restart Fix Sweep (2026-05-16)
+
+Retroactive ledger entry for restart 61 (commit `c697f3d` — "Fix Stage
+35 sixty-first restart findings"). Restart 61 was a big-batch family
+sweep on top of restart 60's HEAD that closed 6 sibling-class sites
+across 5 fix families. The commit body was well-detailed (unlike the
+abbreviated restart 59/60 source-only commits), but the ledger
+Increment + lane docs + surface refresh were skipped — softer
+abbreviation than the empty-commit-body restarts but still produces
+drift.
+
+This Increment is written retroactively in restart 62 alongside lane
+docs `docs/audit-stage35-restart61-laneA.md` / `laneB.md` / `laneC.md`.
+
+### Restart 61 findings (fresh 3-lane audit on commit `05b712d`)
+
+**Lane A (2 HIGH + 1 MEDIUM, all closed):**
+
+- A1 HIGH `tf1d_running_sum` (tensor.hx) — NaN-skip on per-element
+  accumulation. Sibling of tf1d_sum (r57) / tf1d_sum_in_range (r58 A1)
+  / tf2d_row_sum (r58 A5).
+- A2 HIGH `accuracy_count_from_logits_f32` (nn.hx) — NaN-at-col-0
+  robustness via `seen = 0` sentinel. Sibling of tf1d_argmax /
+  argmax_rows_f32 (r58 A7).
+- A3 MEDIUM `__abs_i32` (transcendentals.hx) — INT32_MIN saturate to
+  INT32_MAX. Sibling of vec_negate_inplace / vec_map_neg (r51 A5),
+  ti1d_max_abs / vec_max_abs (r56 A2/A3), vec_map_abs (r58 A2).
+
+**Lane B (1 MEDIUM + 3 LOW, all closed):**
+
+- B1 MEDIUM `diagnostics.py _should_color` — narrow bare
+  `except Exception` to `(AttributeError, OSError, ValueError)` with the
+  re-raise prelude. Mirror of restart 47 B1.
+- B2 LOW `check.py` argv parser — reject duplicate `-o` flags and
+  empty `-o` arguments (both rc=2).
+- B3 LOW `examples/run.py` — add `-h` / `--help` flag with usage banner.
+- B4 LOW `monomorphize.py _mangle_expr` — remove dead
+  `try/except: raise` block around structural_hash (no-op that implied
+  safety it did not provide).
+
+**Lane C (0 in c697f3d, 5 carried forward to restart 62):**
+
+- C1-C5 carried forward — see Increment 79.
+
+### Restart 61 canaries added (8 in `c697f3d`)
+
+- test_codegen.py (3):
+  - `test_stage35_restart61_tf1d_running_sum_nan_skip_fails_closed`
+  - `test_stage35_restart61_accuracy_count_from_logits_f32_nan_at_col_0`
+  - `test_stage35_restart61_abs_i32_saturates_int32_min`
+- test_cli.py (5):
+  - `test_stage35_restart61_check_rejects_duplicate_dash_o`
+  - `test_stage35_restart61_check_rejects_empty_dash_o`
+  - `test_stage35_restart61_examples_run_help_flag_works`
+  - `test_stage35_restart61_diagnostics_isatty_narrowed_to_stream_failures`
+  - `test_stage35_restart61_monomorphize_structural_hash_dead_try_removed`
+
+### Clean-gate status after restart 61
+
+- Restart 61 produced 7 findings (non-zero) — gate stays 0/3.
+
+### Process-discipline note
+
+Restart 61 is the **fifth abbreviated restart** in the campaign (after
+52, 55, 56, 58). The abbreviation here is softer (commit body
+detailed) but the ledger Increment + lane docs + surface refresh debt
+still required a catch-up commit. Restart 62 closes that debt.
+
+
+## Increment 79 — Sixty-Second Clean-Gate Restart Combined Audit-and-Fix (2026-05-16)
+
+Restart 62 ran as a **combined audit-AND-fix** agent (single dispatch,
+no separate read-only / fix-apply lanes). Closes the restart 61
+bookkeeping debt (Increment 78 above + lane docs +
+surface refresh) AND a fresh 3-lane audit on top of `c697f3d`.
+
+### Lane audit at HEAD c697f3d
+
+- Lane A: **2 MEDIUM = 2 findings** (Family 2 — optimizer NaN-fail-closed).
+- Lane B: **CLEAN** (fifth consecutive Lane B clean window since
+  restart 58 — campaign approaching exhaustion on this lane).
+- Lane C: **3 HIGH + 2 MEDIUM = 5 findings** (mostly the restart 61
+  bookkeeping debt).
+
+Reports live in:
+
+- `docs/audit-stage35-restart62-laneA.md`
+- `docs/audit-stage35-restart62-laneB.md`
+- `docs/audit-stage35-restart62-laneC.md`
+- `docs/audit-stage35-restart61-laneA.md` (retroactive)
+- `docs/audit-stage35-restart61-laneB.md` (retroactive)
+- `docs/audit-stage35-restart61-laneC.md` (retroactive)
+
+### Lane A fix sweep (2 findings)
+
+- **A1 MEDIUM**: `helixc/stdlib/nn.hx sgd_f32_step` — per-element
+  NaN-fail-closed. Pre-fix, a NaN gradient overwrote the corresponding
+  weight with NaN, propagating into every subsequent forward pass.
+  Sibling of restart 50 A2 adam_f32_step.
+- **A2 MEDIUM**: `helixc/stdlib/nn.hx momentum_step` — per-element
+  NaN-fail-closed for BOTH the velocity buffer and the weight. Pre-fix,
+  a NaN gradient permanently latched into v (which carries forward
+  across steps), corrupting momentum SGD irrecoverably. Sibling of
+  restart 50 A2 adam_f32_step + restart 62 A1 sgd_f32_step.
+
+### Lane C fix sweep (5 findings)
+
+- **C1 HIGH**: Ledger Increment 78 missing for restart 61 — closed by
+  Increment 78 above.
+- **C2 HIGH**: Lane audit docs missing for restart 61 — closed by
+  retroactive `restart61-laneA/B/C.md` written in this commit.
+- **C3 HIGH**: Eight current-facing surfaces stale at "restart 58
+  catch-up sweep / 2,530+" — advanced to "restart 62 / 2,556+ tests".
+- **C4 MEDIUM**: HANDOFF_FOR_CLAUDE.md restart history truncated at
+  58 — added "What Restart 61 Fixed" + "What Restart 62 Fixed"
+  sections.
+- **C5 MEDIUM**: Restart 59 + 60 commit bodies empty — documented as a
+  process-discipline observation; cannot retroactively rewrite git
+  history.
+
+### Surface refresh (8 surfaces)
+
+- `README.md` (×2)
+- `QUICKSTART.md`
+- `HANDOFF_FOR_CHATGPT.md` (×2)
+- `HANDOFF_FOR_CLAUDE.md` (full restart 61 + 62 sections + status header)
+- `helix_website/HELIX_REFERENCE.md` (×3)
+- `helix_website/stats_and_facts.md` (×2)
+
+### Regression canaries added (2 in `test_codegen.py`)
+
+- `test_stage35_restart62_sgd_f32_step_nan_fails_closed`
+- `test_stage35_restart62_momentum_step_nan_fails_closed`
+
+Live test count after restart 62: 2,551 (pre-restart-62 collected) + 5
+(2 restart 62 stdlib canaries + 3 restart 62 CLI surface canaries) =
+2,556. Verify with `python -m pytest helixc/tests --collect-only -q`.
+
+### Verification
+
+- `python -m py_compile helixc/check.py helixc/backend/x86_64.py
+  helixc/backend/ptx.py helixc/frontend/autodiff_cli.py
+  helixc/ir/lower_ast.py helixc/ir/passes/const_fold.py
+  helixc/tests/test_cli.py helixc/tests/test_codegen.py
+  helixc/tests/test_ptx.py`
+  - Result: passed.
+- Per-file stdlib parser sweep
+  - Result: parsed 16 files.
+- Restart 62 new canaries (2)
+  - Result: 2 passed.
+- Adam / sgd / momentum regression
+  - Result: 22 passed (no regression).
+
+### Clean-gate status after restart 62
+
+- Stage 35 clean gates remain **0/3**.
+- Restart 62 produced 2 Lane A + 5 Lane C findings (non-zero) — gate
+  stays 0/3.
+- Restart 63 starts from this HEAD as another fresh Stage 35 clean
+  gate attempt.
+
+### Process-discipline observation (campaign-wide)
+
+The campaign has now had **five abbreviated restarts** out of fifteen
+since restart 46 (~33% miss rate): 52, 55, 56, 58, 59 + 60 + 61 (a
+softer abbreviation cluster — 59/60 had empty commit bodies, 61 had a
+detailed body but skipped Lane C bookkeeping). The combined
+audit-and-fix orchestration used in restart 62 — single agent doing
+read + analyze + apply + commit — sidesteps the dispatch
+abbreviation entirely. Recommend restart 63 onward use the same
+combined pattern when running under scheduled-task fire conditions.
+

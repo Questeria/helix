@@ -198,6 +198,11 @@ fn lin_reg_grad_b(w: i32, b: i32, x: i32, target: i32) -> i32 {
 }
 
 // f32 SGD step over an array: w[i] = w[i] - lr * g[i].
+// Restart 62 A1: per-element NaN-fail-closed. Sibling of restart 50 A2
+// adam_f32_step. Pre-fix, a NaN gradient slot (or NaN lr) would
+// overwrite the corresponding weight with NaN, propagating into every
+// subsequent forward pass. Now we leave w[i] untouched if the new
+// value is NaN — matching the adam fail-closed convention.
 fn sgd_f32_step(w_start: i32, g_start: i32, lr: f32, n: i32) -> i32 {
     if n <= 0 { 0 }
     else { if t1d_slice_ok(w_start, n) == 0 { t2d_error() }
@@ -207,7 +212,10 @@ fn sgd_f32_step(w_start: i32, g_start: i32, lr: f32, n: i32) -> i32 {
     while i < n {
         let w_i = __f32_from_bits(__arena_get(w_start + i));
         let g_i = __f32_from_bits(__arena_get(g_start + i));
-        __arena_set(w_start + i, __bits_of_f32(w_i - lr * g_i));
+        let new_w = w_i - lr * g_i;
+        if new_w == new_w {
+            __arena_set(w_start + i, __bits_of_f32(new_w));
+        };
         i = i + 1;
     }
     0
@@ -453,6 +461,13 @@ fn leaky_relu_layer(x_start: i32, alpha: f32, y_start: i32, n: i32) -> i32 {
 }
 
 // Momentum SGD.
+// Restart 62 A2: per-element NaN-fail-closed. Sibling of restart 50 A2
+// adam_f32_step and restart 62 A1 sgd_f32_step. Pre-fix, a NaN gradient
+// poisoned both the velocity buffer and the weights silently — and
+// because velocity carries forward across steps, a single NaN gradient
+// permanently corrupted the optimizer state. Now we leave v[i] and w[i]
+// untouched if either new value is NaN, matching the adam fail-closed
+// convention.
 fn momentum_step(w_start: i32, v_start: i32, g_start: i32,
                  beta: f32, lr: f32, n: i32) -> i32 {
     if n <= 0 { 0 }
@@ -466,8 +481,11 @@ fn momentum_step(w_start: i32, v_start: i32, g_start: i32,
         let v_i = __f32_from_bits(__arena_get(v_start + i));
         let g_i = __f32_from_bits(__arena_get(g_start + i));
         let new_v = beta * v_i + g_i;
-        __arena_set(v_start + i, __bits_of_f32(new_v));
-        __arena_set(w_start + i, __bits_of_f32(w_i - lr * new_v));
+        let new_w = w_i - lr * new_v;
+        if (new_v == new_v) && (new_w == new_w) {
+            __arena_set(v_start + i, __bits_of_f32(new_v));
+            __arena_set(w_start + i, __bits_of_f32(new_w));
+        };
         i = i + 1;
     }
     0

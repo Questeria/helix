@@ -4,8 +4,8 @@
 **Repo**: `C:\Projects\Kovostov-Native`  
 **Remote**: `https://github.com/Questeria/helix.git`  
 **Branch**: `main`  
-**Handoff written after**: Stage 35 restart 58 catch-up sweep
-(Increment 77; lands alongside this handoff)
+**Handoff written after**: Stage 35 restart 62 combined audit-and-fix
+(Increments 78 + 79; lands alongside this handoff)
 
 This handoff is for Claude to continue the Helix Stage 35 audit campaign.
 Treat live git state as truth if it differs from this file.
@@ -14,26 +14,112 @@ Treat live git state as truth if it differs from this file.
 
 Stage 35 is still in audit cleanup. Clean gates remain `0/3`.
 
-The most recent fix sweeps are restart 54 (full bookkeeping), restart 55
-(source only — sin/cos range reduction), restart 56 (source only — three
-INT32_MIN / NaN bugs), restart 57 (catch-up sweep that filled in the
-55/56 bookkeeping debt), restart 58 (source only — three of four carry-
-forward NaN-skip siblings), and the restart 58 catch-up sweep
-(Increment 77 — filled in 58's bookkeeping debt AND closed 7 Lane A +
-7 Lane C findings from a fresh audit on top of restart 58's HEAD).
+The most recent fix sweeps are restart 58 catch-up sweep (Increment 77
+— closed restart 58's bookkeeping debt + landed 7 Lane A + 7 Lane C
+findings from a fresh audit on top of c8398d3), restart 59 (source-
+only catch-up for restart 58's Increment 77 commit), restart 60
+(bookkeeping for restart 59 — wrote Increment 77 in the ledger +
+restart 58 lane C doc), restart 61 (big-batch fresh sweep on top of
+restart 60 closing 6 sibling-class sites across 5 families with 8
+canaries), and restart 62 combined audit-and-fix (Increments 78 + 79
+— retroactive ledger + lane docs for restart 61 PLUS 2 Lane A
+optimizer NaN-fail-closed fixes from a fresh audit on top of c697f3d).
 
 - Commit: pinned by the latest `git log -1 --oneline`
 - Status at handoff creation: clean working tree, `main` aligned with
   `origin/main`
-- Progress ledger: `docs/stage35-progress-2026-05-15.md` (see Increment 77
-  for the restart 58 catch-up sweep; 76 for restart 57 catch-up sweep;
-  75 for restart 56 retroactive; 74 for restart 55 retroactive; 73 for
-  restart 54; 72 for restart 53; 71 for restart 52; 70 for restart 51;
-  69 for restart 50; 68 for restart 49)
-- Current-facing status files now say "restart 58 catch-up sweep" and
-  2,530+ collected tests (live count after restart 58 catch-up added 10
-  test_codegen.py canaries + 6 test_cli.py canaries; see Increments 70
-  onward in the ledger for the per-restart canary chain)
+- Progress ledger: `docs/stage35-progress-2026-05-15.md` (see Increment
+  79 for the restart 62 combined audit-and-fix; 78 for restart 61
+  retroactive; 77 for restart 58 catch-up sweep; 76 for restart 57
+  catch-up sweep; 75 for restart 56 retroactive; 74 for restart 55
+  retroactive; 73 for restart 54; 72 for restart 53; 71 for restart 52;
+  70 for restart 51; 69 for restart 50; 68 for restart 49)
+- Current-facing status files now say "restart 62 combined audit-and-fix"
+  and 2,556+ collected tests (live count after restart 62: 2,551
+  pre-restart-62 + 2 restart 62 canaries; see Increments 70 onward in
+  the ledger for the per-restart canary chain)
+
+## What Restart 62 Fixed (Combined Audit-and-Fix)
+
+Restart 62 ran as a **combined audit-AND-fix** agent (single dispatch,
+no separate read-only / fix-apply lanes — the abbreviation-prone path
+of restarts 52, 55, 56, 58, 59 was sidestepped by design). Increments
+78 + 79 in the ledger.
+
+Lane A (2 MEDIUM — Family 2 optimizer NaN-fail-closed):
+
+- **A1 MEDIUM**: `helixc/stdlib/nn.hx sgd_f32_step` — per-element
+  NaN-fail-closed. Pre-fix, a NaN gradient overwrote every weight
+  with NaN, propagating into every subsequent forward pass. Sibling
+  of restart 50 A2 `adam_f32_step`.
+- **A2 MEDIUM**: `helixc/stdlib/nn.hx momentum_step` — per-element
+  NaN-fail-closed for BOTH v[i] and w[i]. Velocity carries forward
+  across steps, so a single NaN gradient pre-fix latched into v
+  permanently. Sibling of restart 50 A2 + restart 62 A1.
+
+Lane B: CLEAN (fifth consecutive Lane B clean window since restart 58).
+
+Lane C (3 HIGH + 2 MEDIUM — mostly restart 61 bookkeeping debt):
+
+- **C1 HIGH**: Ledger Increment 78 missing for restart 61 — closed
+  retroactively.
+- **C2 HIGH**: Lane audit docs missing for restart 61 — closed
+  retroactively (laneA + laneB + laneC).
+- **C3 HIGH**: Eight surfaces stale at "restart 58 catch-up / 2,530+"
+  — advanced to "restart 62 / 2,556+ tests".
+- **C4 MEDIUM**: HANDOFF_FOR_CLAUDE.md restart history truncated at 58
+  — added "What Restart 61/62 Fixed" sections.
+- **C5 MEDIUM**: Restarts 59 + 60 commit bodies empty — documented as
+  process-discipline observation in Increment 79.
+
+Regression canaries added (2 in `test_codegen.py` + 3 in `test_cli.py`):
+`test_stage35_restart62_sgd_f32_step_nan_fails_closed`,
+`test_stage35_restart62_momentum_step_nan_fails_closed`,
+`test_stage35_restart62_ledger_has_increment_79`,
+`test_stage35_restart62_lane_audit_docs_exist`,
+`test_stage35_restart62_surfaces_advanced_past_restart_58_catch_up`.
+
+Live test count after restart 62: 2,551 → 2,556.
+
+## What Restart 61 Fixed
+
+Restart 61 was a big-batch family sweep on top of restart 60 HEAD that
+closed 6 sibling-class sites across 5 fix families in one increment.
+The commit (c697f3d, "Fix Stage 35 sixty-first restart findings") had
+a well-detailed body but skipped the ledger Increment + lane docs +
+surface refresh — softer abbreviation than 59/60 (which had empty
+commit bodies) but still produced drift. Restart 62 closed that debt
+in Increments 78 + 79.
+
+Family 2 — f32 NaN-skip discipline (2 sites):
+
+- A1 HIGH: `tensor.hx tf1d_running_sum` — NaN-skip on per-element
+  prefix-sum. Pre-fix, one NaN slot poisoned every subsequent slot.
+- A2 HIGH: `nn.hx accuracy_count_from_logits_f32` — NaN-at-col-0 via
+  `seen = 0` sentinel. IEEE-754 `v > NaN` is always false, so the
+  bare-init pre-fix froze the row's argmax at index 0.
+
+Family 3 — INT32_MIN abs saturate (1 site):
+
+- A3 MEDIUM: `transcendentals.hx __abs_i32` — saturate INT32_MIN to
+  INT32_MAX. The canonical abs helper is now total for all i32 inputs.
+
+Family 4 — loud-fail discipline (1 site):
+
+- B1 MEDIUM: `diagnostics.py _should_color` — narrow bare
+  `except Exception` to `(AttributeError, OSError, ValueError)` after
+  the standard re-raise prelude. Mirrors restart 47 B1.
+
+Family 5 — small bookkeeping (3 sites):
+
+- B2 LOW: `check.py` argv parser — reject duplicate `-o` flags and
+  empty `-o` arguments (both rc=2).
+- B3 LOW: `examples/run.py` — add `-h` / `--help` flag with usage banner.
+- B4 LOW: `monomorphize.py _mangle_expr` — remove dead
+  `try/except: raise` block around `structural_hash`.
+
+Regression coverage added (8 canaries: 3 in test_codegen.py, 5 in
+test_cli.py).
 
 ## What Restart 58 (Catch-up Sweep) Fixed
 
@@ -582,36 +668,38 @@ fresh confirmation before restart 47, rerun it alone with a longer timeout:
 python -m pytest helixc/tests/test_codegen.py -q -k "stage35 or agi or hashmap or tensor"
 ```
 
-## Restart 59 Protocol (bug-family audit, refined from restart 58 catch-up)
+## Restart 63 Protocol (combined audit-and-fix, refined from restart 62)
 
-**IMPORTANT**: the restart 58 catch-up sweep (Increment 77) closed the
-bookkeeping debt from restart 58's abbreviated source-only commit AND
-landed 7 Lane A + 7 Lane C source/doc fixes from a fresh audit on top
-of c8398d3. It is NOT itself a clean gate. Restart 59 MUST run a fresh
-3-lane audit (read-only) on the post-Increment-77 HEAD.
+**IMPORTANT**: restart 62 ran as a **combined audit-AND-fix** agent in
+one dispatch (sidestepping the abbreviation-prone separate read-only /
+fix-apply dispatch pattern that produced restarts 52, 55, 56, 58, 59).
+Restart 62 closed the restart 61 bookkeeping debt PLUS landed 2 Lane A
+optimizer NaN-fail-closed fixes from a fresh audit on top of c697f3d.
+It is NOT itself a clean gate. Restart 63 MUST run a fresh 3-lane
+audit on the post-Increment-79 HEAD.
 
-No explicit carry-forward family logged into restart 59 Lane A — the
-restart 58 catch-up sweep closed the `tf1d_sum_in_range` carry-forward
-and broadly extended the NaN-skip discipline to 2D reductions, the loss
-helpers, the offset dot product, and the bare-init NaN-at-index-0
-idiom. Lane A run should still spot-check for NEW reduction surfaces
-introduced since c8398d3 and verify the `seen = 0` sentinel pattern
-didn't introduce regressions in the existing `tf1d_argmax*` consumers.
+No explicit carry-forward family logged into restart 63 Lane A —
+restart 62 closed both `sgd_f32_step` and `momentum_step` NaN-fail-
+closed gaps. Lane A run should spot-check any NEW optimizer surfaces
+introduced since c697f3d and verify the `if new_w == new_w` pattern
+hasn't regressed the existing adam / sgd / momentum tests (22
+regression tests verified passing).
 
 The campaign run-rate (findings closed per restart):
-46/47/48/49/50/51/52/53/54/55/56/57/58 → 12, 17, 13, 11, 17, 12, 3, 15,
-11, 1, 3, 0 (catch-up), 14 (3 source-only + 11 catch-up). The
-restart-55 dip to 1 was misleading; restart 58 catch-up's 14 reset the
-expectation that "few findings remain" — the NaN-skip family extension
-to 2D + losses + bare-init was a productive new surface. The first
-restart where the audit returns 0 findings on the same HEAD becomes
-clean gate 1/3.
+46-62 → 12, 17, 13, 11, 17, 12, 3, 15, 11, 1, 3, 0 (catch-up), 14 (3
+source-only + 11 catch-up), 0 (source-only abbreviated), 0
+(bookkeeping for 59), 7, 7 (5 retroactive + 2 fresh). The first
+restart where the fresh audit returns 0 findings on the same HEAD
+becomes clean gate 1/3.
 
-### Process-discipline rule (REINFORCED — Increment 77)
+### Process-discipline rule (REINFORCED — Increment 79)
 
-Four out of thirteen restarts in this campaign (52, 55, 56, 58) have
-abbreviated to source-only commits without paired bookkeeping. Restart
-59 onward MUST:
+Five out of fifteen restarts in the campaign (52, 55, 56, 58, 59) have
+abbreviated to source-only commits with empty commit bodies. Restart
+61 added a sixth softer abbreviation (detailed commit body but no
+ledger/lane-docs/surface-refresh). Restart 62's combined audit-and-fix
+pattern sidesteps the issue at the dispatch level. Restart 63 onward
+MUST either:
 
 1. Land the bookkeeping (ledger Increment + lane docs + canaries +
    surface refresh) in the **same commit** as the source fix, OR

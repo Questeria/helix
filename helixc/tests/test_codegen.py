@@ -21380,6 +21380,82 @@ def test_stage35_restart61_abs_i32_saturates_int32_min():
     assert code == 42, f"expected 42, got {code}"
 
 
+# Restart 62 audit canaries (Increment 78):
+
+def test_stage35_restart62_sgd_f32_step_nan_fails_closed():
+    """Restart 62 A1 (Family 2 — optimizer NaN-fail-closed): sgd_f32_step
+    must leave w[i] untouched if `w[i] - lr * g[i]` is NaN. Pre-fix, a
+    NaN gradient (or NaN lr) overwrote the corresponding weight with
+    NaN, propagating into every subsequent forward pass and corrupting
+    the entire model. Sibling of restart 50 A2 adam_f32_step + restart
+    62 A2 momentum_step."""
+    src = """
+    fn main() -> i32 {
+        // 3-weight vector with 1 NaN gradient slot in the middle.
+        let w = t1d_new(3);
+        tf1d_set(w, 0, 1.0_f32);
+        tf1d_set(w, 1, 2.0_f32);
+        tf1d_set(w, 2, 3.0_f32);
+        let g = t1d_new(3);
+        tf1d_set(g, 0, 0.1_f32);
+        let nan_bits = 2143289344;
+        tf1d_set(g, 1, __f32_from_bits(nan_bits));
+        tf1d_set(g, 2, 0.3_f32);
+        sgd_f32_step(w, g, 1.0_f32, 3);
+        // w[0] = 1.0 - 1.0*0.1 = 0.9 -> as i32 -> 0
+        // w[1] = preserved at 2.0 (NaN protection) -> as i32 -> 2
+        // w[2] = 3.0 - 1.0*0.3 = 2.7 -> as i32 -> 2
+        let w1 = tf1d_get(w, 1);
+        if w1 != w1 { return 1; };  // must NOT be NaN
+        let i1 = w1 as i32;
+        if i1 != 2 { return 2; };
+        42
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stage35_restart62_momentum_step_nan_fails_closed():
+    """Restart 62 A2 (Family 2 — optimizer NaN-fail-closed): momentum_step
+    must leave w[i] AND v[i] untouched if either new value is NaN.
+    Pre-fix, a NaN gradient permanently corrupted the velocity buffer
+    (carries forward across steps), making momentum SGD unrecoverable
+    from a single NaN. Sibling of restart 50 A2 adam_f32_step +
+    restart 62 A1 sgd_f32_step."""
+    src = """
+    fn main() -> i32 {
+        let w = t1d_new(3);
+        tf1d_set(w, 0, 1.0_f32);
+        tf1d_set(w, 1, 2.0_f32);
+        tf1d_set(w, 2, 3.0_f32);
+        let v = t1d_new(3);
+        tf1d_set(v, 0, 0.0_f32);
+        tf1d_set(v, 1, 5.0_f32);
+        tf1d_set(v, 2, 0.0_f32);
+        let g = t1d_new(3);
+        tf1d_set(g, 0, 0.1_f32);
+        let nan_bits = 2143289344;
+        tf1d_set(g, 1, __f32_from_bits(nan_bits));
+        tf1d_set(g, 2, 0.3_f32);
+        momentum_step(w, v, g, 0.9_f32, 1.0_f32, 3);
+        // For slot 1: new_v = 0.9*5 + NaN = NaN -> both v[1] and w[1]
+        // preserved.
+        let w1 = tf1d_get(w, 1);
+        if w1 != w1 { return 1; };
+        let i_w1 = w1 as i32;
+        if i_w1 != 2 { return 2; };
+        let v1 = tf1d_get(v, 1);
+        if v1 != v1 { return 3; };
+        let i_v1 = v1 as i32;
+        if i_v1 != 5 { return 4; };
+        42
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
 def main():
     # Recognise both the legacy `_SkipTest` exception and pytest's
     # `Skipped` outcome class so tests can use either to signal a skip

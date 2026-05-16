@@ -5290,6 +5290,64 @@ def test_stage35_restart61_monomorphize_structural_hash_dead_try_removed():
     )
 
 
+# Restart 62 audit canaries (Increment 79):
+
+def test_stage35_restart62_ledger_has_increment_79():
+    """Restart 62 C1 (Lane C — bookkeeping): the Stage 35 progress
+    ledger must contain Increment 79 for the restart 62 combined
+    audit-and-fix. Sibling of restart 58 catch-up canary
+    `test_stage35_restart58_ledger_has_increment_77`."""
+    from pathlib import Path
+    ledger = Path(__file__).resolve().parents[2] / "docs" / "stage35-progress-2026-05-15.md"
+    txt = ledger.read_text(encoding="utf-8")
+    assert "## Increment 78 — Sixty-First Clean-Gate" in txt, (
+        "Increment 78 (restart 61 retroactive) missing"
+    )
+    assert "## Increment 79 — Sixty-Second Clean-Gate" in txt, (
+        "Increment 79 (restart 62 combined audit-and-fix) missing"
+    )
+
+
+def test_stage35_restart62_lane_audit_docs_exist():
+    """Restart 62 C2 (Lane C — bookkeeping): restart 61 + restart 62
+    lane audit docs must exist. Sibling of
+    `test_stage35_restart58_lane_audit_docs_exist`."""
+    from pathlib import Path
+    docs = Path(__file__).resolve().parents[2] / "docs"
+    for restart in ("restart61", "restart62"):
+        for lane in ("laneA", "laneB", "laneC"):
+            p = docs / f"audit-stage35-{restart}-{lane}.md"
+            assert p.exists(), f"missing {p}"
+
+
+def test_stage35_restart62_surfaces_advanced_past_restart_58_catch_up():
+    """Restart 62 C3 (Lane C — surface drift): the eight current-facing
+    surfaces must no longer say 'restart 58 catch-up sweep' / '2,530+'
+    — should reference restart 62 / 2,553+. Sibling of
+    `test_stage35_readme_status_paragraph_advanced_past_restart_56`."""
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[2]
+    for rel in ("README.md", "QUICKSTART.md",
+                "HANDOFF_FOR_CHATGPT.md", "HANDOFF_FOR_CLAUDE.md",
+                "helix_website/HELIX_REFERENCE.md",
+                "helix_website/stats_and_facts.md"):
+        p = root / rel
+        if not p.exists():
+            continue
+        txt = p.read_text(encoding="utf-8")
+        # Must NOT have stale "restart 58 catch-up sweep collected
+        # 2,530+" or similar — historical mentions in HANDOFF_FOR_CLAUDE
+        # "What Restart 58 Fixed" sections are still allowed.
+        # Must reference restart 62 somewhere as the current checkpoint.
+        if rel in ("README.md", "QUICKSTART.md",
+                   "HANDOFF_FOR_CHATGPT.md",
+                   "helix_website/HELIX_REFERENCE.md",
+                   "helix_website/stats_and_facts.md"):
+            assert "restart 62" in txt.lower(), (
+                f"{rel} does not reference restart 62 as the current checkpoint"
+            )
+
+
 if __name__ == "__main__":
     import pytest
     raise SystemExit(pytest.main([__file__, "-v"]))

@@ -5,13 +5,13 @@ snapshot, not a permanent claim; rerun the listed commands before publishing.
 
 ## Current Snapshot
 
-Snapshot date: 2026-05-16. The restart 58 catch-up sweep (Increment 77) is the latest recorded Stage 35 bookkeeping checkpoint in this file; use live `git log -1 --oneline` before publishing.
+Snapshot date: 2026-05-16. The restart 62 combined audit-and-fix (Increments 78 + 79) is the latest recorded Stage 35 bookkeeping checkpoint in this file; use live `git log -1 --oneline` before publishing.
 
 | Stat | Value | Where it comes from |
 |------|-------|---------------------|
 | **hex0 binary size** | 299 bytes | `stage0/hex0/hex0.bin` |
 | **Total bootstrap bytes you must initially audit** | 299 | The hand-encoded hex0 root |
-| **pytest tests collected** | 2,530+ | `python -m pytest helixc/tests --collect-only -q` during the restart 58 catch-up sweep (see Increments 70 onward in the progress ledger for the per-restart canary chain since restart 50; restart 55 + 56 + 58 landed source fixes without paired canaries, restarts 57 and 58-catch-up filled the bookkeeping debt with retroactive canaries) |
+| **pytest tests collected** | 2,556+ | `python -m pytest helixc/tests --collect-only -q` during the restart 62 combined audit-and-fix (see Increments 70 onward in the progress ledger for the per-restart canary chain since restart 50; restarts 55 / 56 / 58 / 59 / 61 landed source fixes without paired full bookkeeping, restarts 57 / 58-catch-up / 60 / 62 filled the bookkeeping debt with retroactive canaries) |
 | **Clean audit gates** | 0/3 | `docs/stage35-progress-2026-05-15.md` |
 | **Current stage** | Stage 35 audit cleanup | Stage 35 progress ledger |
 | **Backend targets with tests** | x86-64 ELF, PTX text emission | `helixc/backend/` and tests |

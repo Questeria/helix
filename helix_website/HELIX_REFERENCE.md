@@ -507,7 +507,7 @@ Phase-0 stores cell *values* (not full ASTs). Phase-1 will support full AST cell
 
 ## Standard Library
 
-The Helix standard library lives in `helixc/stdlib/` and is written in Helix itself (no `unsafe`, no FFI for core operations). As of Stage 35 restart 53 fix verification the library has 16 modules with 455 bare `fn` declarations and 437 additional `@`-attributed declarations (`@pure`, `@kernel`, `@deprecated`, etc.) — 892 declarations total. The list below names every module; each line points at the actual `.hx` file. Per-module counts are bare-fn only (matches the 455 grand total); to see the bare + `@`-decl breakdown per module, run the `Discoverability` snippet at the end of this section.
+The Helix standard library lives in `helixc/stdlib/` and is written in Helix itself (no `unsafe`, no FFI for core operations). The library has 16 modules; per-module bare-fn counts grow as audits add helpers — for live numbers run the `Discoverability` snippet at the end of this section. The list below names every module; each line points at the actual `.hx` file.
 
 ### Numerics & IEEE 754
 
@@ -958,7 +958,7 @@ Kovostov-Native/
 │   │   ├── tensor.hx          # 1D/2D tensor primitives
 │   │   ├── transcendentals.hx # __exp/__log/__sin/__cos/__sqrt/__sigmoid/__tanh + scalar optim steps
 │   │   └── vec.hx             # caller-trust Vec<i32>-style sequences
-│   ├── tests/          # 2,530+ tests collected (live count grows with each Stage 35 audit cycle; see `docs/stage35-progress-2026-05-15.md`)
+│   ├── tests/          # 2,556+ tests collected (live count grows with each Stage 35 audit cycle; see `docs/stage35-progress-2026-05-15.md`)
 │   │   ├── test_codegen.py
 │   │   ├── test_parser.py
 │   │   ├── test_match.py
@@ -1565,7 +1565,7 @@ Or: a single character `λ` in monospace inside a hex bracket `[λ]`. Clean, sho
 
 - **299 bytes** — current hex0 binary size
 - **Python-hosted helixc** — current production compiler implementation
-- **2,530+ live tests collected** — restart 58 catch-up sweep (see Increments 70 onward in the progress ledger for the per-restart canary chain since restart 50; restart 55/56/58 landed source fixes without paired canaries, restarts 57 and 58-catch-up filled the bookkeeping debt retroactively); rerun scoped pytest collection before publishing
+- **2,556+ live tests collected** — restart 62 combined audit-and-fix (see Increments 70 onward in the progress ledger for the per-restart canary chain since restart 50; restarts 55/56/58/59/61 landed source fixes without paired full bookkeeping, restarts 57 / 58-catch-up / 60 / 62 filled the bookkeeping debt retroactively); rerun scoped pytest collection before publishing
 - **Approach A roadmap (30 numbered stages)** — historical bootstrap-port sequencing; current live design doc (`docs/HELIX_V1_FINAL_FEATURES.md`) references stage numbers up to Stage 65 (35 distinct stages enumerated; not a strict consecutive sequence).
 - **Dozens of silent-corruption defects (live count grows with each Stage 35 restart; see `docs/stage35-progress-2026-05-15.md` Increments 50 onward for the open-ended ledger)** — found and disclosed during development
 - **restart-gated audit campaign** — multi-agent code review cycles continue until three clean gates pass

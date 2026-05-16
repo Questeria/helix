@@ -18,11 +18,11 @@ rebuild the compiler reproducibly.
 
 This is an early in-development language. Stage 35 is currently in audit
 cleanup, and clean gates remain `0/3` in the Stage 35 progress ledger. The
-restart 58 catch-up sweep collected 2,530+ live `helixc/tests` pytest tests
-(see Increments 70 onward in the progress ledger for the per-restart canary
-chain since restart 50; restart 55 + 56 + 58 landed source fixes without
-paired canaries, restarts 57 and 58-catch-up filled the bookkeeping debt
-retroactively). Run
+restart 62 combined audit-and-fix collected 2,556+ live `helixc/tests`
+pytest tests (see Increments 70 onward in the progress ledger for the
+per-restart canary chain since restart 50; restarts 55 / 56 / 58 / 59 / 61
+landed source fixes without paired full bookkeeping, restarts 57 /
+58-catch-up / 60 / 62 filled the bookkeeping debt retroactively). Run
 `python -m pytest helixc/tests --collect-only -q -p no:cacheprovider` for
 the current count.
 
