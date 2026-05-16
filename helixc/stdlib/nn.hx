@@ -556,7 +556,8 @@ fn layer_norm_f32(x_start: i32, y_start: i32, n: i32, eps: f32) -> i32 {
             i = i + 1;
         }
         var = var / (n as f32);
-        let inv_std = 1.0_f32 / __sqrt(var + eps);
+        let safe_eps = if eps < 0.0_f32 { 0.0_f32 } else { eps };
+        let inv_std = 1.0_f32 / __sqrt(var + safe_eps);
         let mut j: i32 = 0;
         while j < n {
             let xj = __f32_from_bits(__arena_get(x_start + j));

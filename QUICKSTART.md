@@ -18,7 +18,7 @@ rebuild the compiler reproducibly.
 
 This is an early in-development language. Stage 35 is currently in audit
 cleanup, and clean gates remain `0/3` in the Stage 35 progress ledger. Restart
-45 fix verification collected 2,409 live `helixc/tests` pytest tests; run
+46 fix verification collected 2,437 live `helixc/tests` pytest tests; run
 `python -m pytest helixc/tests --collect-only -q -p no:cacheprovider` for the
 current count.
 
@@ -198,4 +198,4 @@ See `docs/lang/agi-features.md` for the deep dive.
 
 ## License
 
-Apache 2.0 (code), CC-BY 4.0 (docs), CC0 (model weights when produced).
+Apache 2.0 (code, in `LICENSE`); CC-BY 4.0 (docs, stated policy); CC0 (model weights when produced, stated policy).

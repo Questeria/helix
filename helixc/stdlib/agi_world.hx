@@ -136,9 +136,10 @@ fn wml_new(coef_state: i32, coef_action: i32, bias: i32) -> i32 {
 fn wml_ok(wml: i32) -> i32 {
     if wml <= 0 { 0 }
     else { if __arena_get(wml - 1) != wml_magic() { 0 }
+    else { if wml > 2147483647 - 3 { 0 }
     else { if wml + 3 >= __arena_len() { 0 }
     else { if __arena_get(wml + 3) != wml_footer() { 0 }
-    else { if arena_span_in_tensor_payload(wml - 1, 5) != 0 { 0 } else { 1 } } } } }
+    else { if arena_span_in_tensor_payload(wml - 1, 5) != 0 { 0 } else { 1 } } } } } }
 }
 
 @pure

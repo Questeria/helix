@@ -3070,3 +3070,168 @@ Restart 46 process optimization:
   and family slices should run first.
 - Read-only next-stage research may run in parallel with tests, but write
   ownership stays scoped to the current fix sweep until commit.
+
+## Increment 65 - Forty-Sixth Clean-Gate Restart Fix Sweep
+
+Restart 46 began from pushed commit `5a99b6f` (the handoff doc commit after
+restart 45's `2f37a16` fix sweep) using the bug-family audit protocol described
+in the restart 46 process optimization above. Three parallel audit lanes were
+dispatched, each instructed to report multiple findings grouped by bug family
+with sibling sweeps and adjacent-safe sites.
+
+Baseline support checks:
+
+- `git status --short --branch`
+  - Result: clean at `5a99b6f`.
+- `python -m py_compile helixc/check.py helixc/backend/x86_64.py helixc/backend/ptx.py helixc/tests/test_cli.py helixc/tests/test_codegen.py helixc/tests/test_ptx.py`
+  - Result: passed.
+- Per-file stdlib parser sweep across `helixc/stdlib/*.hx`
+  - Result: parsed 16 files.
+- `python -m pytest helixc/tests/test_cli.py -q -k "stage35"`
+  - Result: 63 passed, 145 deselected.
+- `python -m pytest helixc/tests/test_ptx.py -q -k "stage35"`
+  - Result: 26 passed, 52 deselected.
+- `python -m pytest helixc/tests --collect-only -q`
+  - Result: 2,409 tests collected.
+
+Restart 46 audit findings (12 total, grouped by lane and bug family):
+
+Lane A - Runtime/safety (5 findings):
+
+- A1 HIGH: `rev_tape_valid` and `rev_adj_cap` in `autodiff_reverse.hx` lacked
+  `arena_span_in_tensor_payload` rejection. A safe tensor payload could forge a
+  reverse-AD tape handle (extending the restart-45 sweep on wm/ep/bfs/visited
+  /pq/hashmap to the two remaining typed handles in the AD layer).
+- A2 HIGH: `tree_node_magic()` in `agi_match.hx` and `hashmap_magic()` in
+  `hashmap.hx` both returned `7007001`. A real hashmap could be read as a
+  tree_node and vice-versa because the magic check fires before structural
+  disambiguation.
+- A3 MEDIUM: `wml_ok` in `agi_world.hx` lacked the family-pattern overflow
+  guard (`if wml > 2147483647 - 3 { 0 }`) before its `wml + 3 >= __arena_len()`
+  bounds check.
+- A4 MEDIUM: `layer_norm_f32` in `nn.hx` did not clamp negative `eps`, so a
+  hostile or buggy caller could make `sqrt(var + eps) = 0` and propagate
+  `Inf`/`NaN` into the output. Matches the `clip_grad_norm_f32` negative-clamp
+  precedent.
+- A5 LOW: reverse-AD propagation rules call `__sigmoid` / `__tanh` /
+  `__silu` / `__gelu` multiple times per rule to avoid AST aliasing under
+  `_resolve_let_aliases` mutation. Deliberate trade-off, not a correctness
+  bug. Deferred to a future perf pass.
+
+Lane B - Compiler/backend/CLI (5 findings):
+
+- B1 MEDIUM: Multiple bad-invocation early-return paths in `helixc.check`
+  (lines 1023-1107) and `helixc.backend.x86_64` (lines 3963-4002) did not
+  clean a stale prior binary at the `-o` path before exiting. Restart-45 fixed
+  this for compile-failure and missing-source paths; restart-46 closes the
+  remaining 8 + 7 bad-invocation paths.
+- B2 MEDIUM: `helixc.check` accepts `-O0/-O1/-O2/-O3`; `helixc.backend.x86_64`
+  and `helixc.backend.ptx` did not. `helixc.backend.x86_64` accepts `--no-opt`;
+  `helixc.backend.ptx` did not. Closes the backend flag-parity gap.
+- B3 LOW: `helixc.backend.x86_64` usage banner mentioned `[-Wad=warn|error]`
+  only; the actual policy parser also accepts `-Wdeprecated=warn|error`. Drift
+  between banner and behavior.
+- B4 LOW: `_atomic_write_bytes` (in `helixc.check`) and `_atomic_write_output`
+  (in `helixc.backend.x86_64`) caught `OSError` only. A `KeyboardInterrupt`,
+  `MemoryError`, or other interruption mid-write left a leaked
+  `.<base>.<rand>.tmp` file in the output directory.
+- B5 LOW: `helixc/examples/run.py` wrote the demo binary with a plain
+  `open(out, "wb")` + chmod pattern, no atomic-write helper, no failure
+  cleanup. Drift from the canonical `_atomic_write_bytes` pattern.
+
+Lane C - Docs / status / release (4 findings + 1 informational):
+
+- C1 MEDIUM: `helix_website/README.md` line 11 still described code samples as
+  "30 ready-to-use snippets", contradicting the restart-45 reworded
+  draft-vs-validated framing in `helix_website/code_samples.md` and
+  `helix_website/HELIX_REFERENCE.md`.
+- C2 LOW: `helix_website/HELIX_REFERENCE.md` lines 1533 and 1540 and
+  `helix_website/README.md` line 30 cited "30+ stages" / "39 stages" from the
+  legacy Approach A roadmap when the current live roadmap extends through
+  Stage 65+ in `docs/HELIX_V1_FINAL_FEATURES.md`.
+- C3 LOW: `README.md` line 16, `QUICKSTART.md` line 201,
+  `helix_website/HELIX_REFERENCE.md` line 43 and 85-87, and
+  `helix_website/stats_and_facts.md` line 19 presented the
+  Apache 2.0 + CC-BY 4.0 + CC0 triple as if all three were already in the
+  repository's `LICENSE` file. Only Apache 2.0 is file-resident; the other
+  two are stated policy.
+- C4 LOW: `helix_website/HELIX_REFERENCE.md` line 1534 said "23
+  silent-corruption bugs" as a closed figure when the same file's line 59
+  already uses the open-ended "23+ silent-corruption bugs" wording.
+- C5 informational: when restart 46 closes, eight current-facing surfaces need
+  to update from "restart 45 / 2,409" to "restart 46 / new count". Sweep list
+  recorded in the audit report.
+
+Fixes in this increment:
+
+- Added `arena_span_in_tensor_payload` rejection plus overflow-aware span
+  arithmetic to `rev_tape_valid` (both adj-allocated and pre-alloc branches)
+  and to `rev_adj_cap`.
+- Changed `tree_node_magic` to `7107001` so the two object families no longer
+  share a magic header value.
+- Added the family-pattern `if wml > 2147483647 - 3 { 0 }` overflow guard to
+  `wml_ok`.
+- Clamped `eps` to `max(eps, 0.0_f32)` in `layer_norm_f32` to keep the
+  normalization output finite for hostile inputs.
+- Wrapped each bad-invocation `return 2` / `sys.exit(2)` path in `check.py`
+  and `helixc/backend/x86_64.py` with a stale-output cleanup call, scoped to
+  cases where the source-vs-output argument shape is well-formed (so we never
+  delete the user's source).
+- Added `-O0/-O1/-O2/-O3` to the accepted-flag set in `helixc.backend.x86_64`
+  (where `-O0` aliases to `--no-opt`) and added `--no-opt` plus
+  `-O0/-O1/-O2/-O3` to the `allowed_flags` set in `helixc.backend.ptx`.
+- Added `-Wdeprecated=warn|error` to the `helixc.backend.x86_64` usage banner.
+- Changed both atomic-write helpers' tmp-file cleanup to catch `BaseException`
+  so a `KeyboardInterrupt` or `MemoryError` mid-write still removes the
+  temporary artifact.
+- Rewrote `helixc/examples/run.py` binary write to the canonical
+  `tempfile.mkstemp` + chmod + `os.replace` + on-failure-cleanup pattern.
+- Updated `helix_website/README.md`, `helix_website/HELIX_REFERENCE.md`,
+  `README.md`, `QUICKSTART.md`, and `helix_website/stats_and_facts.md` per
+  C1-C4.
+- Added regression coverage in `helixc/tests/test_codegen.py` (4 new tests:
+  forge-rev-tape, magic-constants-unique, wml-ok overflow-aware, layer-norm
+  negative-eps) and in `helixc/tests/test_cli.py` (24 new parametrized cases
+  across B1-B5, including a wrong-cleanup-on-flag-input regression that was
+  caught and fixed mid-restart).
+- Updated current-facing status surfaces from restart 45 / 2,409 tests to
+  restart 46 / 2,437 tests across README, QUICKSTART, both HANDOFF files (the
+  Claude-facing handoff is updated separately in a follow-up commit),
+  helix_website/stats_and_facts.md, and helix_website/HELIX_REFERENCE.md.
+
+Verification:
+
+- `python -m py_compile helixc/check.py helixc/backend/x86_64.py helixc/backend/ptx.py helixc/examples/run.py helixc/tests/test_cli.py helixc/tests/test_codegen.py`
+  - Result: passed.
+- Per-file stdlib parser sweep across `helixc/stdlib/*.hx`
+  - Result: parsed 16 files.
+- `python -m pytest helixc/tests/test_codegen.py -q -k "stage35_safe_tensor_payloads_cannot_forge_rev_tape or stage35_stdlib_magic_constants_unique or stage35_wml_ok_overflow_aware or stage35_layer_norm_f32_clamps_negative_eps"`
+  - Result: 4 passed, 922 deselected.
+- `python -m pytest helixc/tests/test_cli.py -q -k "stage35_check_bad_invocation or stage35_x86_bad_invocation or stage35_x86_backend_accepts_opt or stage35_ptx_backend_accepts_opt or stage35_x86_usage_mentions_deprecated or stage35_atomic_write_cleans_tmp or stage35_examples_run_uses_atomic"`
+  - Result: 24 passed, 208 deselected.
+- `python -m pytest helixc/tests/test_cli.py -q -k "stage35"`
+  - Result: 87 passed (after fixing a mid-restart regression in the
+    bad-invocation cleanup helper).
+- `python -m pytest helixc/tests/test_ptx.py -q -k "stage35"`
+  - Result: 26 passed, 52 deselected.
+- `python -m pytest helixc/tests --collect-only -q`
+  - Result: 2,437 tests collected.
+- `git diff --check`
+  - Result: passed.
+
+Clean-gate status:
+
+- Stage 35 clean gates remain `0/3`.
+- Restart 46 is a fix sweep, not a clean gate.
+- Next step is restart 47 as another fresh Stage 35 clean gate from the newest
+  pushed HEAD.
+
+Restart 46 mid-sweep regression note: the first iteration of the
+`_bad_invocation_cleanup_output` helper in `helixc/backend/x86_64.py` deleted
+`sys.argv[2]` even when `sys.argv[1]` was a flag-shaped argument, which broke
+`test_stage35_direct_x86_rejects_flag_shaped_input_before_output` by removing
+the user's source file. The fix tightens the helper to only clean output when
+BOTH `sys.argv[1]` and `sys.argv[2]` look like real file paths and they
+normalize-differ. Recorded here as a process note: the bug-family audit
+protocol surfaced the issue immediately on the post-fix CLI Stage 35 slice,
+which is exactly the safety net it was designed to provide.

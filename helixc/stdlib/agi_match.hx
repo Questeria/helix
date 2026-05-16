@@ -21,7 +21,7 @@
 //
 // License: Apache 2.0
 
-@pure fn tree_node_magic() -> i32 { 7007001 }
+@pure fn tree_node_magic() -> i32 { 7107001 }
 @pure fn tree_node_footer() -> i32 { 0 - tree_node_magic() - 4 }
 
 fn tree_node_new(tag: i32, p1: i32, p2: i32, p3: i32) -> i32 {

@@ -85,9 +85,31 @@ def _build_and_run(src_path: str, timeout: int = 120) -> tuple[str, int]:
     os.makedirs(out_dir, exist_ok=True)
     h = hashlib.sha256(elf).hexdigest()[:12]
     out_path = os.path.join(out_dir, f"demo_{h}.bin")
-    with open(out_path, "wb") as f:
-        f.write(elf)
-    os.chmod(out_path, 0o755)
+    # Restart 46 B5: write atomically (temp file + replace + cleanup on
+    # failure) so a partial write or interruption never leaves a
+    # half-written binary at out_path. Mirrors the canonical
+    # _atomic_write_bytes pattern in helixc.check.
+    import tempfile
+    directory = os.path.dirname(os.path.abspath(out_path)) or "."
+    base = os.path.basename(out_path)
+    tmp_path = ""
+    try:
+        fd, tmp_path = tempfile.mkstemp(
+            prefix=f".{base}.",
+            suffix=".tmp",
+            dir=directory,
+        )
+        with os.fdopen(fd, "wb") as f:
+            f.write(elf)
+        os.chmod(tmp_path, 0o755)
+        os.replace(tmp_path, out_path)
+    except BaseException:
+        if tmp_path:
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
+        raise
     rel = os.path.relpath(out_path, proj).replace("\\", "/")
     wsl_path = f"/mnt/c/Projects/Kovostov-Native/{rel}"
     result = subprocess.run(

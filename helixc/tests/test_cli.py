@@ -4358,6 +4358,165 @@ def test_c29_r3_real_hello_world_example_compiles(capsys):
     assert "compiler bug" not in captured.err
 
 
+# ---- Restart 46 B1: stale-output cleanup on bad-invocation paths ----
+
+CHECK_BAD_INVOCATIONS = [
+    ["--bogus-flag"],
+    ["--stdlib", "--no-stdlib"],
+    ["--check-only"],
+    ["--emit-ir"],
+    ["--emit-asm"],
+    ["--emit-ptx"],
+    ["--emit-proof-obligations"],
+    ["-Wbogus=error"],
+]
+
+
+@pytest.mark.parametrize("extra", CHECK_BAD_INVOCATIONS)
+def test_stage35_check_bad_invocation_clears_prior_output(tmp_path, extra):
+    good = tmp_path / "good.hx"
+    out_path = tmp_path / "stale.bin"
+    good.write_text("fn main() -> i32 { 0 }\n", encoding="utf-8")
+    rc = main([str(good), "-o", str(out_path), "--no-stdlib"])
+    assert rc == 0
+    assert out_path.exists()
+    rc2 = main(extra + [str(good), "-o", str(out_path), "--no-stdlib"])
+    assert rc2 != 0
+    assert not out_path.exists(), (
+        f"bad invocation {extra} left stale binary at {out_path}"
+    )
+
+
+X86_BAD_INVOCATIONS = [
+    ["--bogus-flag"],
+    ["--stdlib", "--no-stdlib"],
+    ["-Wbogus=error"],
+]
+
+
+@pytest.mark.parametrize("extra", X86_BAD_INVOCATIONS)
+def test_stage35_x86_bad_invocation_clears_prior_output(tmp_path, extra):
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    good = tmp_path / "good_direct.hx"
+    out_path = tmp_path / "stale_direct.bin"
+    good.write_text("fn main() -> i32 { 0 }\n", encoding="utf-8")
+    ok = subprocess.run(
+        [sys.executable, "-m", "helixc.backend.x86_64",
+         str(good), str(out_path), "--no-stdlib"],
+        cwd=proj_root, capture_output=True, text=True, timeout=120,
+    )
+    assert ok.returncode == 0
+    assert out_path.exists()
+    bad = subprocess.run(
+        [sys.executable, "-m", "helixc.backend.x86_64",
+         str(good), str(out_path), "--no-stdlib", *extra],
+        cwd=proj_root, capture_output=True, text=True, timeout=120,
+    )
+    assert bad.returncode != 0
+    assert not out_path.exists(), (
+        f"x86 bad invocation {extra} left stale binary at {out_path}"
+    )
+
+
+# ---- Restart 46 B2: backend flag parity (-O0/-O1/-O2/-O3, --no-opt for PTX) ----
+
+@pytest.mark.parametrize("flag", ["-O0", "-O1", "-O2", "-O3"])
+def test_stage35_x86_backend_accepts_opt_level_flags(tmp_path, flag):
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    src = tmp_path / "opt_parity.hx"
+    out = tmp_path / "opt_parity.bin"
+    src.write_text("fn main() -> i32 { 0 }\n", encoding="utf-8")
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.backend.x86_64",
+         str(src), str(out), "--no-stdlib", flag],
+        cwd=proj_root, capture_output=True, text=True, timeout=120,
+    )
+    assert "unknown flag" not in proc.stderr, (
+        f"x86 backend rejects {flag}: {proc.stderr!r}"
+    )
+    assert proc.returncode in (0, 1), (
+        f"x86 backend rc={proc.returncode} stderr={proc.stderr!r}"
+    )
+
+
+@pytest.mark.parametrize("flag", ["-O0", "-O1", "-O2", "-O3", "--no-opt"])
+def test_stage35_ptx_backend_accepts_opt_flags(tmp_path, flag):
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    src = tmp_path / "opt_parity_ptx.hx"
+    src.write_text("@kernel fn k(p: ptr<f32>) -> () { return; }\n", encoding="utf-8")
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.backend.ptx", str(src), flag],
+        cwd=proj_root, capture_output=True, text=True, timeout=120,
+    )
+    assert "unknown flag" not in proc.stderr, (
+        f"ptx backend rejects {flag}: {proc.stderr!r}"
+    )
+
+
+# ---- Restart 46 B3: x86 usage banner mentions all supported -W classes ----
+
+def test_stage35_x86_usage_mentions_deprecated_warning_class():
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.backend.x86_64"],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 2
+    assert "-Wad" in proc.stderr
+    assert "-Wdeprecated" in proc.stderr, (
+        f"x86 usage banner omits supported -Wdeprecated policy: {proc.stderr!r}"
+    )
+
+
+# ---- Restart 46 B4: atomic-write tmp cleanup on non-OSError exceptions ----
+
+def test_stage35_atomic_write_cleans_tmp_on_keyboard_interrupt(tmp_path):
+    from unittest import mock
+    from helixc.check import _atomic_write_bytes
+    out_path = tmp_path / "out.bin"
+    def raise_kb(*a, **kw):
+        raise KeyboardInterrupt
+    with mock.patch.object(os, "replace", side_effect=raise_kb):
+        with pytest.raises(KeyboardInterrupt):
+            _atomic_write_bytes(str(out_path), b"hello", mode=0o755)
+    leftover = list(tmp_path.glob(".out.bin.*.tmp"))
+    assert leftover == [], f"tmp leaked on KeyboardInterrupt: {leftover}"
+
+
+def test_stage35_atomic_write_cleans_tmp_on_memory_error(tmp_path):
+    from unittest import mock
+    from helixc.check import _atomic_write_bytes
+    out_path = tmp_path / "out.bin"
+    def raise_mem(*a, **kw):
+        raise MemoryError
+    with mock.patch.object(os, "replace", side_effect=raise_mem):
+        with pytest.raises(MemoryError):
+            _atomic_write_bytes(str(out_path), b"hello", mode=0o755)
+    leftover = list(tmp_path.glob(".out.bin.*.tmp"))
+    assert leftover == [], f"tmp leaked on MemoryError: {leftover}"
+
+
+# ---- Restart 46 B5: examples/run.py uses atomic-write pattern ----
+
+def test_stage35_examples_run_uses_atomic_write_pattern():
+    import ast
+    import pathlib
+    src = pathlib.Path(__file__).resolve().parents[1] / "examples" / "run.py"
+    tree = ast.parse(src.read_text(encoding="utf-8"))
+    raw_opens = [
+        n for n in ast.walk(tree)
+        if isinstance(n, ast.Call)
+        and isinstance(n.func, ast.Name) and n.func.id == "open"
+        and len(n.args) >= 2
+        and isinstance(n.args[1], ast.Constant)
+        and "b" in n.args[1].value and "w" in n.args[1].value
+    ]
+    assert raw_opens == [], (
+        f"examples/run.py writes binary output non-atomically at lines "
+        f"{[n.lineno for n in raw_opens]}"
+    )
+
+
 if __name__ == "__main__":
     import pytest
     raise SystemExit(pytest.main([__file__, "-v"]))

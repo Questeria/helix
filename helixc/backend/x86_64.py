@@ -3956,9 +3956,44 @@ if __name__ == "__main__":
             ],
         )
 
+    # Restart 46 B1: clear any stale prior binary at the requested output
+    # path before exiting a bad-invocation path. Without this, a previous
+    # successful compile leaves a binary at the target path while the
+    # current bad invocation reports an error; callers can mistake the
+    # leftover artifact for a successful build of the current invocation.
+    #
+    # Only safe when:
+    # - sys.argv[1] is a non-flag (i.e. a real input source path)
+    # - sys.argv[2] is a non-flag (i.e. a real output path)
+    # - the two normalized paths differ (else we'd delete the user's source)
+    # If sys.argv[1] is a flag, sys.argv[2] is whatever the user passed but
+    # we can't be sure it's the output, so we skip cleanup entirely.
+    def _bad_invocation_cleanup_output() -> None:
+        if len(sys.argv) < 3:
+            return
+        src_arg = sys.argv[1]
+        out = sys.argv[2]
+        if not src_arg or src_arg.startswith("-"):
+            return
+        if not out or out.startswith("-"):
+            return
+        try:
+            src_norm = os.path.normcase(os.path.realpath(os.path.abspath(src_arg)))
+            out_norm = os.path.normcase(os.path.realpath(os.path.abspath(out)))
+            if src_norm == out_norm:
+                return
+        except OSError:
+            return
+        try:
+            if os.path.exists(out):
+                os.remove(out)
+        except OSError:
+            pass
+
     if len(sys.argv) < 3:
         print("usage: python -m helixc.backend.x86_64 <input.hx> <output.bin> "
-              "[--strict] [--no-opt] [--stdlib] [--no-stdlib] [-Wad=warn|error]",
+              "[--strict] [--no-opt] [-O0|-O1|-O2|-O3] [--stdlib] [--no-stdlib] "
+              "[-Wad=warn|error] [-Wdeprecated=warn|error]",
               file=sys.stderr)
         sys.exit(2)
     if sys.argv[1].startswith("-"):
@@ -3979,12 +4014,20 @@ if __name__ == "__main__":
     from ..frontend.autodiff import take_diff_warnings
     take_diff_warnings()
     strict = "--strict" in sys.argv
-    no_opt = "--no-opt" in sys.argv
+    # Restart 46 B2: accept -O0/-O1/-O2/-O3 for flag parity with helixc.check.
+    # -O0 maps to the existing --no-opt path; -O1/-O2/-O3 currently keep the
+    # default optimization pipeline (fold + cse + dce + fdce) since the x86
+    # backend does not yet stage opt levels beyond on/off. Treating them as
+    # accepted (not "unknown flag") closes the parity gap so users can pass
+    # the same flags they pass to helixc.check.
+    no_opt = "--no-opt" in sys.argv or "-O0" in sys.argv
     no_stdlib = "--no-stdlib" in sys.argv
     if "--stdlib" in sys.argv and "--no-stdlib" in sys.argv:
         print("error: conflicting stdlib flags: choose --stdlib or --no-stdlib",
               file=sys.stderr)
+        _bad_invocation_cleanup_output()
         sys.exit(2)
+    _opt_flag_set = {"-O0", "-O1", "-O2", "-O3"}
     warning_policies: dict[str, str] = {}
     for arg in sys.argv[3:]:
         if arg.startswith("-W"):
@@ -3995,13 +4038,22 @@ if __name__ == "__main__":
                 name, val = body, "warn"
             if name not in ("ad", "deprecated") or val not in ("warn", "error"):
                 print(f"error: unknown warning policy {arg}", file=sys.stderr)
+                _bad_invocation_cleanup_output()
                 sys.exit(2)
             warning_policies[name] = val
+        elif arg in _opt_flag_set:
+            continue
         elif arg not in ("--strict", "--no-opt", "--stdlib", "--no-stdlib"):
             print(f"error: unknown flag {arg}", file=sys.stderr)
+            _bad_invocation_cleanup_output()
             sys.exit(2)
 
     def _atomic_write_output(path: str, data: bytes, mode: int) -> None:
+        # Restart 46 B4: catch BaseException (not just OSError) so a
+        # KeyboardInterrupt, MemoryError, or any other interruption
+        # mid-write still removes the temp file. Previously the broader
+        # interruption left a `.<base>.<rand>.tmp` file in the output
+        # directory.
         import os
         import tempfile
         directory = os.path.dirname(os.path.abspath(path)) or "."
@@ -4017,7 +4069,7 @@ if __name__ == "__main__":
                 f.write(data)
             os.chmod(tmp_path, mode)
             os.replace(tmp_path, path)
-        except OSError:
+        except BaseException:
             if tmp_path:
                 try:
                     os.remove(tmp_path)

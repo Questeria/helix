@@ -444,6 +444,10 @@ def _emit_env_error(msg: str) -> None:
 
 
 def _atomic_write_bytes(path: str, data: bytes, mode: int | None = None) -> None:
+    # Restart 46 B4: catch BaseException (not just OSError) so a
+    # KeyboardInterrupt, MemoryError, or any other interruption mid-write
+    # still removes the temp file. Previously the broader interruption
+    # left a `.<base>.<rand>.tmp` file in the output directory.
     directory = os.path.dirname(os.path.abspath(path)) or "."
     base = os.path.basename(path)
     tmp_path = ""
@@ -458,7 +462,7 @@ def _atomic_write_bytes(path: str, data: bytes, mode: int | None = None) -> None
         if mode is not None:
             os.chmod(tmp_path, mode)
         os.replace(tmp_path, path)
-    except OSError:
+    except BaseException:
         if tmp_path:
             try:
                 os.remove(tmp_path)
@@ -1015,6 +1019,34 @@ def _main_inner(argv: list[str] | None,
     if "--help" in a.flags:
         _print_help()
         return 0
+
+    # Restart 46 B1: clear any stale prior binary at the requested -o path
+    # before exiting a bad-invocation path. Without this, a previous
+    # successful compile leaves a binary at the target path while the
+    # current bad invocation reports an error — callers (CI, tests, users)
+    # can mistake the leftover artifact for a successful build of the
+    # current invocation.
+    #
+    # Only safe when the output path is set AND does not match the source
+    # path (so we never delete the user's source file). The source==output
+    # mismatch is itself caught and reported at a later return path.
+    def _cleanup_bad_invocation_output() -> None:
+        out = getattr(a, "output", None)
+        if out is None:
+            return
+        src_path = getattr(a, "path", None)
+        if src_path is not None and _same_filesystem_path(src_path, out):
+            return
+        try:
+            _remove_stale_output(out)
+        except OSError:
+            # Best-effort cleanup. The bad-invocation diagnostic is the
+            # primary signal; failure to clear stale output here must not
+            # mask it. The subsequent compile that would actually need the
+            # path clean will re-attempt cleanup with proper error
+            # reporting (see the artifact_output_requested block).
+            pass
+
     stdout_modes = {
         "--emit-ast", "--emit-ir", "--emit-asm", "--emit-ptx",
         "--emit-proof-obligations", "--doc",
@@ -1033,6 +1065,7 @@ def _main_inner(argv: list[str] | None,
         else:
             for msg in messages:
                 print(msg, file=sys.stderr)
+        _cleanup_bad_invocation_output()
         return 2
     if errs:
         if proof_mode:
@@ -1043,6 +1076,7 @@ def _main_inner(argv: list[str] | None,
         else:
             for e in errs:
                 print(f"helixc: {e}", file=sys.stderr)
+        _cleanup_bad_invocation_output()
         return 2
     if a.output is not None and selected_stdout_modes:
         messages = [
@@ -1053,6 +1087,7 @@ def _main_inner(argv: list[str] | None,
         else:
             for msg in messages:
                 print(msg, file=sys.stderr)
+        _cleanup_bad_invocation_output()
         return 2
     if "--check-only" in a.flags and (selected_stdout_modes or a.output is not None):
         target = selected_stdout_modes[0] if selected_stdout_modes else "-o"
@@ -1064,6 +1099,7 @@ def _main_inner(argv: list[str] | None,
         else:
             for msg in messages:
                 print(msg, file=sys.stderr)
+        _cleanup_bad_invocation_output()
         return 2
     artifact_output_requested = (
         a.output is not None

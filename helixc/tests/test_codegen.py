@@ -19990,6 +19990,82 @@ def test_stage35_embedded_ptx_ignores_host_helper_with_unsupported_tile_op():
     assert "elem.div" not in ptx
 
 
+def test_stage35_safe_tensor_payloads_cannot_forge_rev_tape():
+    # Forged-handle guard analogous to the restart-45 sweep.
+    src = """
+    fn main() -> i32 {
+        let fake = t1d_new(5);
+        ti1d_set(fake, 0, rev_tape_magic());
+        ti1d_set(fake, 1, 0);
+        ti1d_set(fake, 2, 0);
+        ti1d_set(fake, 3, 0 - 1);
+        ti1d_set(fake, 4, rev_tape_footer(0));
+        let tape = fake + 1;
+        if rev_count(tape) == 0 {
+        if rev_cap(tape) == (0 - 1) { 42 } else { 7 }
+        } else { 7 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stage35_stdlib_magic_constants_unique():
+    # Whole-class regression: every `_magic() -> i32 { N }` declaration in
+    # helixc/stdlib/*.hx must return a distinct integer.
+    import os, re
+    stdlib_dir = os.path.join(os.path.dirname(__file__), "..", "stdlib")
+    pat = re.compile(r"fn\s+(\w*_magic)\s*\(\s*\)\s*->\s*i32\s*\{\s*(-?\d+)\s*\}")
+    seen: dict[int, str] = {}
+    for name in sorted(os.listdir(stdlib_dir)):
+        if not name.endswith(".hx"):
+            continue
+        with open(os.path.join(stdlib_dir, name), encoding="utf-8") as f:
+            for fn_name, lit in pat.findall(f.read()):
+                value = int(lit)
+                if value in seen:
+                    raise AssertionError(
+                        f"{fn_name} in {name} reuses magic {value} "
+                        f"already claimed by {seen[value]}"
+                    )
+                seen[value] = f"{fn_name} ({name})"
+    assert len(seen) >= 10, f"expected to find many magic getters, found {len(seen)}"
+
+
+def test_stage35_wml_ok_overflow_aware():
+    src = """
+    fn main() -> i32 {
+        if wml_ok(2147483647) == 0 {
+        if wml_ok(2147483646) == 0 {
+        if wml_ok(2147483645) == 0 { 42 } else { 7 }
+        } else { 7 }
+        } else { 7 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stage35_layer_norm_f32_clamps_negative_eps():
+    # Negative eps would cause sqrt(var + eps) to produce 0 (since
+    # __sqrt clamps to 0 for non-positive input), then division-by-zero
+    # writes Inf/NaN into y. The helper now clamps eps to 0 so the
+    # output stays deterministic. Same precedent as clip_grad_norm_f32
+    # with negative max_norm.
+    src = """
+    fn main() -> i32 {
+        let x = t1d_new(2);
+        tf1d_set(x, 0, 1.0_f32);
+        tf1d_set(x, 1, 3.0_f32);
+        let y = t1d_new(2);
+        layer_norm_f32(x, y, 2, 0.0_f32 - 1.0_f32);
+        ((tf1d_sum(y, 2) as i32) + ((tf1d_max_abs(y, 2) * 10.0_f32) as i32)) + 32
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
 def main():
     # Recognise both the legacy `_SkipTest` exception and pytest's
     # `Skipped` outcome class so tests can use either to signal a skip

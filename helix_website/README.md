@@ -8,7 +8,7 @@ This directory holds the public website for the Helix programming language.
 
 - All marketing copy
 - Feature pages and explainers
-- Code samples (30 ready-to-use snippets in `code_samples.md`)
+- Code samples (30 draft snippets in `code_samples.md` — promote to copy/paste-ready only after each passes `python -m helixc.check`)
 - Roadmap and stage descriptions
 - Comparison tables
 - Visual identity direction
@@ -27,7 +27,7 @@ A modern marketing + documentation website for Helix. Suggested pages (full deta
 - `/tiles` — Tile/matmul visualization
 - `/reflection` — Quote/Splice/modify demo
 - `/spec` — Language reference
-- `/roadmap` — Stage tracker (39 stages)
+- `/roadmap` — Stage tracker (Approach A's 30 historical stages + the current 65+ live stages in `HELIX_V1_FINAL_FEATURES.md`)
 - `/audits` — Future public page exposing repo-local audit findings
 - `/compare` — Helix vs Rust/Mojo/Triton/Python
 - `/contribute` — Get involved

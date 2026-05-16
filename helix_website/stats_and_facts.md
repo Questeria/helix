@@ -5,18 +5,18 @@ snapshot, not a permanent claim; rerun the listed commands before publishing.
 
 ## Current Snapshot
 
-Snapshot date: 2026-05-16. Restart 45 is the latest recorded Stage 35 fix verification in this file; use live `git log -1 --oneline` before publishing.
+Snapshot date: 2026-05-16. Restart 46 is the latest recorded Stage 35 fix verification in this file; use live `git log -1 --oneline` before publishing.
 
 | Stat | Value | Where it comes from |
 |------|-------|---------------------|
 | **hex0 binary size** | 299 bytes | `stage0/hex0/hex0.bin` |
 | **Total bootstrap bytes you must initially audit** | 299 | The hand-encoded hex0 root |
-| **pytest tests collected** | 2,409 | `python -m pytest helixc/tests --collect-only -q` during restart 45 fix verification |
+| **pytest tests collected** | 2,437 | `python -m pytest helixc/tests --collect-only -q` during restart 46 fix verification |
 | **Clean audit gates** | 0/3 | `docs/stage35-progress-2026-05-15.md` |
 | **Current stage** | Stage 35 audit cleanup | Stage 35 progress ledger |
 | **Backend targets with tests** | x86-64 ELF, PTX text emission | `helixc/backend/` and tests |
 | **Optimization passes** | const-fold, CSE, DCE, FDCE, hash-cons | `helixc/ir/passes/` and frontend hash-cons |
-| **License** | Apache 2.0 / CC-BY 4.0 / CC0 | source / docs / future weights |
+| **License** | Apache 2.0 (in `LICENSE`); CC-BY 4.0 and CC0 are stated policy, not yet file-resident | source / docs / future weights |
 
 ## Important Honesty Notes
 

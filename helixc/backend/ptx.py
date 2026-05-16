@@ -801,7 +801,15 @@ if __name__ == "__main__":
     if not cli_args:
         print("error: ptx: missing input path", file=sys.stderr)
         sys.exit(2)
-    allowed_flags = {"--strict", "--stdlib", "--no-stdlib"}
+    # Restart 46 B2: accept --no-opt and -O0/-O1/-O2/-O3 for flag parity
+    # with helixc.check and helixc.backend.x86_64. The PTX text emitter
+    # currently always runs fold + cse with no per-level staging, so these
+    # flags are accepted as a no-op; the goal is to close the parity gap
+    # so users can pass the same flags they pass to helixc.check.
+    allowed_flags = {
+        "--strict", "--stdlib", "--no-stdlib",
+        "--no-opt", "-O0", "-O1", "-O2", "-O3",
+    }
     warning_policies: dict[str, str] = {}
     known_warning_names = {"ad", "deprecated"}
     flags: set[str] = set()

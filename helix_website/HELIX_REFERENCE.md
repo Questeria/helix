@@ -40,7 +40,7 @@
 
 ### Three-pillar pitch (use as feature triplet)
 
-🔓 **Open-source weights, data, and code.** Apache 2.0 source · CC-BY 4.0 docs · CC0 model weights. Public training data only.
+🔓 **Open-source weights, data, and code.** Apache 2.0 source (in `LICENSE`) · CC-BY 4.0 docs (stated policy) · CC0 model weights when produced (stated policy). Public training data only.
 
 ⚙️ **Bootstrapped from raw binary.** The verified hex0 bootstrap root is 299 bytes. The long-term chain is designed to climb from that root toward a self-hosted Helix compiler; today the production compiler is still Python-hosted `helixc`.
 
@@ -82,9 +82,9 @@ Functions are checked for structural recursion at compile time. Non-terminating 
 
 ### 5. Open by commitment
 
-- **Code**: Apache 2.0 (you can use it commercially)
-- **Documentation**: CC-BY 4.0
-- **Model weights**: CC0 (public domain)
+- **Code**: Apache 2.0 (file-resident in `LICENSE`; you can use it commercially)
+- **Documentation**: CC-BY 4.0 (stated policy, not yet file-resident)
+- **Model weights**: CC0 (public domain; stated policy for weights when produced)
 - **Training data**: only data with explicit public-use rights
 
 ---
@@ -955,7 +955,7 @@ Kovostov-Native/
 │   │   ├── nn.hx
 │   │   ├── option.hx
 │   │   └── autodiff.hx
-│   ├── tests/          # 2,409 tests collected in restart 45 fix verification
+│   ├── tests/          # 2,437 tests collected in restart 46 fix verification
 │   │   ├── test_codegen.py
 │   │   ├── test_parser.py
 │   │   ├── test_match.py
@@ -1529,15 +1529,15 @@ Or: a single character `λ` in monospace inside a hex bracket `[λ]`. Clean, sho
 
 - **299 bytes** — current hex0 binary size
 - **Python-hosted helixc** — current production compiler implementation
-- **2,409 live tests collected** — restart 45 fix verification; rerun scoped pytest collection before publishing
-- **30+ stages** — Approach A roadmap
-- **23 silent-corruption bugs** — found and disclosed during development
+- **2,437 live tests collected** — restart 46 fix verification; rerun scoped pytest collection before publishing
+- **Approach A roadmap (30 numbered stages)** — historical bootstrap-port sequencing; current live sequencing extends through Stage 65+ in `docs/HELIX_V1_FINAL_FEATURES.md`.
+- **23+ silent-corruption bugs (and counting; live audit ledger in `docs/stage35-progress-2026-05-15.md`)** — found and disclosed during development
 - **restart-gated audit campaign** — multi-agent code review cycles continue until three clean gates pass
 - **Target bootstrap chain: 0 external toolchain dependencies once complete** — current production path still uses Python 3.10+ and Linux/WSL for ELFs
 - **self-hosting target** — not shipped yet
 - **100+ AST tags** — language richness
 - **12 numeric types** — i32/i64/u8-u64/i8-i16/f32/f64/bf16
-- **39 stages + amendments** — full Approach A scope
+- **Live roadmap scope: 65+ stages across Phase 1/2/3** (`docs/HELIX_V1_FINAL_FEATURES.md`); Approach A legacy roadmap was 30 stages + amendments.
 
 (Use these for "by-the-numbers" sections, infographics, and copy.)
 

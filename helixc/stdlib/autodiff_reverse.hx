@@ -107,12 +107,18 @@ fn rev_tape_valid(tape: i32) -> i32 {
             else {
                 let adj_start = __arena_get(tape + 2);
                 if adj_start == (0 - 1) {
-                    if __arena_get(footer) != rev_tape_footer(cap) { 0 } else { 1 }
+                    if __arena_get(footer) != rev_tape_footer(cap) { 0 }
+                    else { if cap > (2147483647 - 5) / 4 { 0 }
+                    else { if tape > 2147483647 - (5 + cap * 4) { 0 }
+                    else { if arena_span_in_tensor_payload(tape - 1, 5 + cap * 4) != 0 { 0 } else { 1 } } } }
                 } else { if adj_start < 0 { 0 }
                 else {
                     let expected_adj = tape + 3 + cap * 4 + 5;
                     if adj_start != expected_adj { 0 }
-                    else { if __arena_get(footer) != rev_tape_footer_with_adj(cap, adj_start) { 0 } else { 1 } }
+                    else { if __arena_get(footer) != rev_tape_footer_with_adj(cap, adj_start) { 0 }
+                    else { if cap > (2147483647 - 5) / 4 { 0 }
+                    else { if tape > 2147483647 - (5 + cap * 4) { 0 }
+                    else { if arena_span_in_tensor_payload(tape - 1, 5 + cap * 4) != 0 { 0 } else { 1 } } } } }
                 }}
             }
         }}}}
@@ -305,15 +311,21 @@ fn rev_adj_cap(adj_start: i32) -> i32 {
                         let snapshot_footer = snapshot_start + snapshot_total;
                         if snapshot_footer < __arena_len() {
                         if __arena_get(snapshot_footer) == rev_snapshot_footer(owner, cap, cnt, adj_start) {
-                            let mut snap_i: i32 = 0;
-                            let mut snap_ok: i32 = 1;
-                            while snap_i < snapshot_total {
-                                if __arena_get(snapshot_start + snap_i) != __arena_get(owner + 3 + snap_i) {
-                                    snap_ok = 0;
+                            let adj_span_len = 6 + cap + snapshot_total;
+                            if adj_span_len > 0 {
+                            if adj_start >= 4 {
+                            if adj_start - 4 <= 2147483647 - adj_span_len {
+                            if arena_span_in_tensor_payload(adj_start - 4, adj_span_len) == 0 {
+                                let mut snap_i: i32 = 0;
+                                let mut snap_ok: i32 = 1;
+                                while snap_i < snapshot_total {
+                                    if __arena_get(snapshot_start + snap_i) != __arena_get(owner + 3 + snap_i) {
+                                        snap_ok = 0;
+                                    }
+                                    snap_i = snap_i + 1;
                                 }
-                                snap_i = snap_i + 1;
-                            }
-                            if snap_ok != 0 { result = cap; }
+                                if snap_ok != 0 { result = cap; }
+                            }}}}
                         }}
                     }
                 }}
