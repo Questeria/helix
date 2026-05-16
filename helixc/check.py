@@ -380,7 +380,7 @@ def _drain_ad_warnings_to_records(
     artifact_stdout = (
         "--emit-proof-obligations" in a.flags or "--emit-ptx" in a.flags
     )
-    stream = sys.stderr if artifact_stdout else sys.stdout
+    stream = sys.stderr if artifact_stdout or ad_policy == "error" else sys.stdout
     print(f"   ad:        {len(ad_warnings)} {label}(s)", file=stream)
     records = []
     for w in ad_warnings:
@@ -1023,21 +1023,22 @@ def _main_inner(argv: list[str] | None,
         return 0
 
     artifact_stdout_mode = "--emit-ptx" in a.flags
+    warning_error_mode = any(policy == "error" for policy in a.warnings.values())
 
     def info(msg: str) -> None:
         print(
             msg,
-            file=sys.stderr if proof_mode or artifact_stdout_mode else sys.stdout,
+            file=sys.stderr if proof_mode or artifact_stdout_mode or warning_error_mode else sys.stdout,
         )
 
-    diagnostic_stream = sys.stderr if artifact_stdout_mode else sys.stdout
+    diagnostic_stream = sys.stderr if artifact_stdout_mode or warning_error_mode else sys.stdout
 
     def diag_out(msg: str = "") -> None:
         print(msg, file=diagnostic_stream)
 
     print(
         f"-- helixc-check: {path}",
-        file=sys.stderr if proof_mode or artifact_stdout_mode else sys.stdout,
+        file=sys.stderr if proof_mode or artifact_stdout_mode or warning_error_mode else sys.stdout,
     )
     # Audit 28.8 cycle 2 C2-1: register CliArgs so the outer wrapper
     # can drain AD warnings on ANY return below (including error paths).

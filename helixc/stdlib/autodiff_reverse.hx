@@ -22,8 +22,8 @@
 //   adj_start - 4: owner tape start
 //   adj_start - 3: cap
 //   adj_start - 2: logical count snapshotted at allocation
-//   adj_start - 1: guard = -cap - 1
-//   adj_start + cap: footer guard = -cap - 1
+//   adj_start - 1: guard = rev_adj_guard(owner, cap, cnt, adj_start)
+//   adj_start + cap: footer guard = same guard
 // Adjoint arrays must be allocated immediately after their tape. That
 // layout invariant prevents a forged arena slice from masquerading as a
 // tape-owned adjoint buffer by copying the public metadata fields.
@@ -57,6 +57,12 @@
 @pure fn rev_kind_neg() -> i32 { 4 }
 @pure fn rev_tape_magic() -> i32 { 3003001 }
 @pure fn rev_tape_footer(cap: i32) -> i32 { 0 - rev_tape_magic() - cap - 1 }
+@pure fn rev_tape_footer_with_adj(cap: i32, adj_start: i32) -> i32 {
+    rev_tape_footer(cap) - adj_start - 17
+}
+@pure fn rev_adj_guard(owner: i32, cap: i32, cnt: i32, adj_start: i32) -> i32 {
+    rev_tape_footer_with_adj(cap, adj_start) - owner - cnt - 31
+}
 
 fn rev_tape_new(cap: i32) -> i32 {
     __arena_push(rev_tape_magic());
@@ -91,7 +97,16 @@ fn rev_tape_valid(tape: i32) -> i32 {
         else {
             let footer = tape + 3 + cap * 4;
             if footer >= __arena_len() { 0 }
-            else { if __arena_get(footer) != rev_tape_footer(cap) { 0 } else { 1 } }
+            else {
+                let adj_start = __arena_get(tape + 2);
+                if adj_start < 0 {
+                    if __arena_get(footer) != rev_tape_footer(cap) { 0 } else { 1 }
+                } else {
+                    let expected_adj = tape + 3 + cap * 4 + 5;
+                    if adj_start != expected_adj { 0 }
+                    else { if __arena_get(footer) != rev_tape_footer_with_adj(cap, adj_start) { 0 } else { 1 } }
+                }
+            }
         }}}}
     }}
 }
@@ -227,7 +242,7 @@ fn rev_alloc_adjoints(tape: i32) -> i32 {
         __arena_push(tape);
         __arena_push(cap);
         __arena_push(cnt);
-        __arena_push(0 - cap - 1);
+        __arena_push(rev_adj_guard(tape, cap, cnt, expected));
         let start = __arena_len();
         __arena_set(tape + 2, start);
         let mut i: i32 = 0;
@@ -235,7 +250,8 @@ fn rev_alloc_adjoints(tape: i32) -> i32 {
             __arena_push(0);
             i = i + 1;
         }
-        __arena_push(0 - cap - 1);
+        __arena_push(rev_adj_guard(tape, cap, cnt, start));
+        __arena_set(tape + 3 + cap * 4, rev_tape_footer_with_adj(cap, start));
         start
         }}
     }
@@ -257,8 +273,9 @@ fn rev_adj_cap(adj_start: i32) -> i32 {
     else { if cap != __arena_get(owner + 1) { 0 - 1 }
     else {
     let footer = __arena_get(adj_start + cap);
-    if guard == (0 - cap - 1) {
-        if footer == (0 - cap - 1) { cap } else { 0 - 1 }
+    let expected_guard = rev_adj_guard(owner, cap, cnt, adj_start);
+    if guard == expected_guard {
+        if footer == expected_guard { cap } else { 0 - 1 }
     } else { 0 - 1 } }}}}}}}
 }
 }

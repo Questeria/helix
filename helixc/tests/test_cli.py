@@ -758,6 +758,57 @@ def test_stage35_direct_x86_rejects_dead_unsupported_kernel_op(tmp_path):
     assert not out_path.exists()
 
 
+def test_stage35_output_binary_rejects_kernel_helper_call_without_internal_error(tmp_path):
+    src_path = tmp_path / "kernel_helper_call.hx"
+    out_path = tmp_path / "kernel_helper_call.bin"
+    src_path.write_text(
+        "fn helper(x: i32) -> i32 { x / 2 }\n"
+        "@kernel fn k() { let i = thread_idx(); let z = helper(i); }\n"
+        "fn main() -> i32 { 0 }\n",
+        encoding="utf-8",
+    )
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.check", str(src_path),
+         "-o", str(out_path), "--no-stdlib"],
+        cwd=proj_root,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    assert "PTX validation error" in proc.stderr or "error: ptx:" in proc.stderr
+    assert "internal error" not in proc.stderr
+    assert "compiler bug" not in proc.stderr
+    assert "Traceback" not in proc.stderr
+    assert not out_path.exists()
+
+
+def test_stage35_direct_x86_rejects_kernel_helper_call_without_traceback(tmp_path):
+    src_path = tmp_path / "direct_kernel_helper_call.hx"
+    out_path = tmp_path / "direct_kernel_helper_call.bin"
+    src_path.write_text(
+        "fn helper(x: i32) -> i32 { x / 2 }\n"
+        "@kernel fn k() { let i = thread_idx(); let z = helper(i); }\n"
+        "fn main() -> i32 { 0 }\n",
+        encoding="utf-8",
+    )
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.backend.x86_64",
+         str(src_path), str(out_path), "--no-stdlib"],
+        cwd=proj_root,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    assert "error: ptx:" in proc.stderr
+    assert "Traceback" not in proc.stderr
+    assert "internal error" not in proc.stderr
+    assert not out_path.exists()
+
+
 def test_c119_emit_ptx_rejects_non_unit_kernel_returns(capsys):
     src = write_src("@kernel fn k() -> i32 { 42 }\n")
     try:
@@ -1313,8 +1364,9 @@ def test_stage35_wad_error_output_binary_does_not_write_artifact(tmp_path):
     )
     assert proc.returncode == 1, proc.stdout + proc.stderr
     assert not out_path.exists()
+    assert proc.stdout == ""
     assert "codegen:   OK" not in proc.stdout
-    assert "ERROR" in proc.stdout or "ERROR" in proc.stderr
+    assert "ERROR" in proc.stderr
 
 
 def test_stage35_wad_error_emit_asm_does_not_print_artifact(tmp_path):
@@ -1336,8 +1388,9 @@ def test_stage35_wad_error_emit_asm_does_not_print_artifact(tmp_path):
         timeout=120,
     )
     assert proc.returncode == 1, proc.stdout + proc.stderr
+    assert proc.stdout == ""
     assert "asm:" not in proc.stdout
-    assert "ERROR" in proc.stdout or "ERROR" in proc.stderr
+    assert "ERROR" in proc.stderr
 
 
 def test_stage35_wad_error_emit_ir_does_not_print_artifact(tmp_path):
@@ -1359,8 +1412,9 @@ def test_stage35_wad_error_emit_ir_does_not_print_artifact(tmp_path):
         timeout=120,
     )
     assert proc.returncode == 1, proc.stdout + proc.stderr
+    assert proc.stdout == ""
     assert "ir:" not in proc.stdout
-    assert "ERROR" in proc.stdout or "ERROR" in proc.stderr
+    assert "ERROR" in proc.stderr
 
 
 def test_stage35_wad_error_default_does_not_print_clean(tmp_path):
@@ -1378,9 +1432,10 @@ def test_stage35_wad_error_default_does_not_print_clean(tmp_path):
         timeout=120,
     )
     assert proc.returncode == 1, proc.stdout + proc.stderr
+    assert proc.stdout == ""
     assert "-- clean" not in proc.stdout
     assert "-- clean" not in proc.stderr
-    assert "ERROR" in proc.stdout or "ERROR" in proc.stderr
+    assert "ERROR" in proc.stderr
 
 
 def test_stage35_wad_error_check_only_does_not_print_clean(tmp_path):
@@ -1401,9 +1456,33 @@ def test_stage35_wad_error_check_only_does_not_print_clean(tmp_path):
         timeout=120,
     )
     assert proc.returncode == 1, proc.stdout + proc.stderr
+    assert proc.stdout == ""
     assert "-- clean" not in proc.stdout
     assert "-- clean" not in proc.stderr
-    assert "ERROR" in proc.stdout or "ERROR" in proc.stderr
+    assert "ERROR" in proc.stderr
+
+
+def test_stage35_deprecated_error_default_keeps_stdout_empty(tmp_path):
+    src_path = tmp_path / "deprecated_default.hx"
+    src_path.write_text(
+        "@deprecated fn old() -> i32 { 0 }\n"
+        "fn main() -> i32 { old() }\n",
+        encoding="utf-8",
+    )
+    proc = subprocess.run(
+        [
+            sys.executable, "-m", "helixc.check", str(src_path),
+            "--no-stdlib", "-Wdeprecated=error",
+        ],
+        cwd=os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    assert proc.stdout == ""
+    assert "deprecated:" in proc.stderr
+    assert "ERROR" in proc.stderr
 
 
 def test_stage35_direct_x86_honors_wad_error_before_writing(tmp_path):
@@ -1453,6 +1532,34 @@ def test_stage35_direct_x86_honors_deprecated_error_before_writing(tmp_path):
     assert proc.returncode == 1, proc.stdout + proc.stderr
     assert not out_path.exists()
     assert "deprecated:" in proc.stderr
+    assert "ERROR" in proc.stderr
+
+
+def test_stage35_direct_x86_drains_ad_warnings_on_deprecated_error(tmp_path):
+    src_path = tmp_path / "deprecated_ad_direct.hx"
+    out_path = tmp_path / "deprecated_ad.bin"
+    src_path.write_text(
+        "fn loss(x: D<f64>, y: D<i32>) -> D<f64> { x + y }\n"
+        "@deprecated fn old() -> i32 { 0 }\n"
+        "fn main() -> i32 { old() }\n",
+        encoding="utf-8",
+    )
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    proc = subprocess.run(
+        [
+            sys.executable, "-m", "helixc.backend.x86_64",
+            str(src_path), str(out_path), "--no-stdlib",
+            "-Wdeprecated=error", "-Wad=error",
+        ],
+        cwd=proj_root,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    assert not out_path.exists()
+    assert "deprecated:" in proc.stderr
+    assert "ad:" in proc.stderr
     assert "ERROR" in proc.stderr
 
 

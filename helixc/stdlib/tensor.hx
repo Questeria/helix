@@ -79,6 +79,62 @@ fn t1d_new(n: i32) -> i32 {
     }}}}
 }
 
+@pure fn t1d_range_ok(start: i32, off: i32, n: i32) -> i32 {
+    if off < 0 { 0 }
+    else { if n < 0 { 0 }
+    else { if n == 0 { 1 }
+    else { if off > 2147483647 - n { 0 }
+    else { t1d_capacity_ok(start, off + n) } } } }
+}
+
+@pure fn t1d_slice_ok(start: i32, n: i32) -> i32 {
+    if t1d_capacity_ok(start, n) != 0 { 1 }
+    else { if start < 0 { 0 }
+    else { if n < 0 { 0 }
+    else { if n == 0 { 1 }
+    else { if start > 2147483647 - n { 0 }
+    else {
+        let end = start + n;
+        let mut base = start - 1;
+        let mut ok = 0;
+        while base >= 3 {
+            if ok == 0 {
+                let magic = __arena_get(base - 3);
+                if magic == t1d_magic() {
+                    let len = __arena_get(base - 2);
+                    let guard = __arena_get(base - 1);
+                    if len >= 0 {
+                    if guard == t1d_footer(len) {
+                    if base + len < __arena_len() {
+                    if __arena_get(base + len) == t1d_footer(len) {
+                    if start >= base {
+                    if end <= base + len { ok = 1; };
+                    };
+                    };
+                    };
+                    };
+                    };
+                } else { if magic == t2d_magic() {
+                    let rows = __arena_get(base - 2);
+                    let cols = __arena_get(base - 1);
+                    let len2 = t2d_len(rows, cols);
+                    if len2 > 0 {
+                    if base + len2 < __arena_len() {
+                    if __arena_get(base + len2) == t2d_footer(rows, cols) {
+                    if start >= base {
+                    if end <= base + len2 { ok = 1; };
+                    };
+                    };
+                    };
+                    };
+                } else { 0 } }
+            };
+            base = base - 1;
+        }
+        ok
+    }}}}}
+}
+
 @pure fn t2d_len(rows: i32, cols: i32) -> i32 {
     if rows <= 0 { 0 }
     else { if cols <= 0 { 0 }
@@ -1167,9 +1223,11 @@ fn tf2d_mul(a: i32, b: i32, c: i32, rows: i32, cols: i32) -> i32 {
 // in x[lo..hi). Returns -1 if bounds are invalid.
 @pure
 fn tf1d_argmax_in_range(start: i32, n: i32, lo: i32, hi: i32) -> i32 {
-    if lo < 0 { 0 - 1 }
+    if n < 0 { 0 - 1 }
+    else { if lo < 0 { 0 - 1 }
     else { if hi > n { 0 - 1 }
     else { if hi <= lo { 0 - 1 }
+    else { if t1d_capacity_ok(start, hi) == 0 { 0 - 1 }
     else {
         let mut i: i32 = lo + 1;
         let mut best_idx: i32 = lo;
@@ -1180,16 +1238,18 @@ fn tf1d_argmax_in_range(start: i32, n: i32, lo: i32, hi: i32) -> i32 {
             i = i + 1;
         }
         best_idx
-    }}}
+    }}}}}
 }
 
 // tf1d_sum_in_range(start, n, lo, hi): @pure. Sum of x[lo..hi). 0.0 if
 // bounds are invalid. Useful for partial accumulators.
 @pure
 fn tf1d_sum_in_range(start: i32, n: i32, lo: i32, hi: i32) -> f32 {
-    if lo < 0 { 0.0_f32 }
+    if n < 0 { 0.0_f32 }
+    else { if lo < 0 { 0.0_f32 }
     else { if hi > n { 0.0_f32 }
     else { if hi <= lo { 0.0_f32 }
+    else { if t1d_capacity_ok(start, hi) == 0 { 0.0_f32 }
     else {
     let mut i: i32 = lo;
     let mut total: f32 = 0.0_f32;
@@ -1198,7 +1258,7 @@ fn tf1d_sum_in_range(start: i32, n: i32, lo: i32, hi: i32) -> f32 {
         i = i + 1;
     }
     total
-    }}}
+    }}}}}
 }
 
 // tf2d_row_sum(start, rows, cols, dst): for each row r, write
@@ -1269,6 +1329,8 @@ fn tf1d_dot_with_offset(a: i32, a_off: i32, b: i32, b_off: i32, n: i32) -> f32 {
     if a_off < 0 { 0.0_f32 }
     else { if b_off < 0 { 0.0_f32 }
     else { if n <= 0 { 0.0_f32 }
+    else { if t1d_range_ok(a, a_off, n) == 0 { 0.0_f32 }
+    else { if t1d_range_ok(b, b_off, n) == 0 { 0.0_f32 }
     else {
     let mut i: i32 = 0;
     let mut total: f32 = 0.0_f32;
@@ -1279,7 +1341,7 @@ fn tf1d_dot_with_offset(a: i32, a_off: i32, b: i32, b_off: i32, n: i32) -> f32 {
         i = i + 1;
     }
     total
-    }}}
+    }}}}}
 }
 
 // tf2d_diag(m, rows, cols, dst): for a square matrix M, extract the diagonal
@@ -1347,6 +1409,11 @@ fn tf2d_trace(m: i32, rows: i32, cols: i32) -> f32 {
 // t * (b[i] - a[i]). Useful for numerical interpolation between two
 // vectors. dst pre-allocated (n slots).
 fn tf1d_lerp(a: i32, b: i32, t: f32, dst: i32, n: i32) -> i32 {
+    if n <= 0 { 0 }
+    else { if t1d_slice_ok(a, n) == 0 { t2d_error() }
+    else { if t1d_slice_ok(b, n) == 0 { t2d_error() }
+    else { if t1d_slice_ok(dst, n) == 0 { t2d_error() }
+    else {
     let mut i: i32 = 0;
     while i < n {
         let av = __f32_from_bits(__arena_get(a + i));
@@ -1356,6 +1423,7 @@ fn tf1d_lerp(a: i32, b: i32, t: f32, dst: i32, n: i32) -> i32 {
         i = i + 1;
     }
     0
+    }}}}
 }
 
 // tf2d_norm_frobenius_sq(start, rows, cols): @pure. Squared Frobenius

@@ -74,7 +74,7 @@ code uses FFI.
 
 ### 3. ML-first language design
 
-Helix is designed for the kind of code ML researchers actually write: numerical kernels, autodiff-friendly functions, tile-based linear algebra. Forward and reverse-mode autodiff are language features, not library calls. Tiles and tensors are types in the type system. The PTX backend emits GPU kernels alongside x86.
+Helix is designed for the kind of code ML researchers actually write: numerical kernels, autodiff-friendly functions, tile-based linear algebra. Forward and reverse-mode autodiff are language features, not library calls. Tiles and tensors are types in the type system. The PTX backend currently emits PTX text for a covered phase-0 kernel subset alongside x86 host artifacts; shipped GPU execution remains future work.
 
 ### 4. Total by default
 
@@ -955,7 +955,7 @@ Kovostov-Native/
 │   │   ├── nn.hx
 │   │   ├── option.hx
 │   │   └── autodiff.hx
-│   ├── tests/          # 2,316 tests collected in restart 28 fix verification
+│   ├── tests/          # 2,325 tests collected in restart 29 fix verification
 │   │   ├── test_codegen.py
 │   │   ├── test_parser.py
 │   │   ├── test_match.py
@@ -1088,7 +1088,7 @@ The Kovostov AGI project (which Helix is the foundation for) commits to training
 |-----------|-------|------|
 | Bootstrap | Live 299-byte `hex0` root; full chain target | Requires LLVM, GCC |
 | Autodiff | Built-in | External crate (`burn`, `dfdx`) |
-| GPU | PTX backend in language | External (`cudarc`, etc.) |
+| GPU | Phase-0 PTX text backend in compiler | External (`cudarc`, etc.) |
 | Memory model | Region/arena (Phase-0) | Borrow checker |
 | Macros | Reflection (Quote/Splice) | `macro_rules!` + proc macros |
 | Compile time | <1s for 10K LOC | 30s+ |
@@ -1521,7 +1521,7 @@ Or: a single character `λ` in monospace inside a hex bracket `[λ]`. Clean, sho
 
 - **299 bytes** — current hex0 binary size
 - **Python-hosted helixc** — current production compiler implementation
-- **2,316 live tests collected** — restart 28 fix verification; rerun scoped pytest collection before publishing
+- **2,325 live tests collected** — restart 29 fix verification; rerun scoped pytest collection before publishing
 - **30+ stages** — Approach A roadmap
 - **23 silent-corruption bugs** — found and disclosed during development
 - **9 audit passes** — multi-agent code review cycles

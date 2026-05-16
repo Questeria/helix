@@ -23,6 +23,9 @@ fn dense_layer_forward(w_start: i32, w_rows: i32, w_cols: i32,
     else { if w_cols <= 0 { 0 }
     else { if t2d_len(w_rows, w_cols) == 0 { t2d_error() }
     else { if t2d_shape_ok(w_start, w_rows, w_cols) == 0 { t2d_error() }
+    else { if t1d_slice_ok(x_start, w_cols) == 0 { t2d_error() }
+    else { if t1d_slice_ok(b_start, w_rows) == 0 { t2d_error() }
+    else { if t1d_slice_ok(y_start, w_rows) == 0 { t2d_error() }
     else {
     ti2d_matvec(w_start, w_rows, w_cols, x_start, y_start);
     let mut r: i32 = 0;
@@ -32,7 +35,7 @@ fn dense_layer_forward(w_start: i32, w_rows: i32, w_cols: i32,
         r = r + 1;
     }
     0
-    }}}}
+    }}}}}}}
 }
 
 // Element-wise relu in-place: y[i] = max(0, x[i]). Returns 0.
@@ -63,6 +66,10 @@ fn argmax(x_start: i32, n: i32) -> i32 {
 // Sum of squared differences: sum((y[i] - t[i])^2). Lower = closer.
 @pure
 fn mse_loss(y_start: i32, t_start: i32, n: i32) -> i32 {
+    if n <= 0 { 0 }
+    else { if t1d_slice_ok(y_start, n) == 0 { 0 }
+    else { if t1d_slice_ok(t_start, n) == 0 { 0 }
+    else {
     let mut i: i32 = 0;
     let mut total: i32 = 0;
     while i < n {
@@ -71,6 +78,7 @@ fn mse_loss(y_start: i32, t_start: i32, n: i32) -> i32 {
         i = i + 1;
     }
     total
+    }}}
 }
 
 // Composed NN layers should be called by the user — Phase 0 SysV ABI
@@ -98,6 +106,10 @@ fn sgd_step_scalar(w: i32, g: i32, lr: i32) -> i32 {
 //   w[i] = w[i] - lr * grad[i] for i in [0, n)
 // Returns 0.
 fn sgd_step_array(w_start: i32, g_start: i32, lr: i32, n: i32) -> i32 {
+    if n <= 0 { 0 }
+    else { if t1d_slice_ok(w_start, n) == 0 { t2d_error() }
+    else { if t1d_slice_ok(g_start, n) == 0 { t2d_error() }
+    else {
     let mut i: i32 = 0;
     while i < n {
         let w = __arena_get(w_start + i);
@@ -106,6 +118,7 @@ fn sgd_step_array(w_start: i32, g_start: i32, lr: i32, n: i32) -> i32 {
         i = i + 1;
     }
     0
+    }}}
 }
 
 // Linear-regression gradient w.r.t. weight w in y_pred = w*x + b:
@@ -131,6 +144,10 @@ fn lin_reg_grad_b(w: i32, b: i32, x: i32, target: i32) -> i32 {
 
 // f32 SGD step over an array: w[i] = w[i] - lr * g[i].
 fn sgd_f32_step(w_start: i32, g_start: i32, lr: f32, n: i32) -> i32 {
+    if n <= 0 { 0 }
+    else { if t1d_slice_ok(w_start, n) == 0 { t2d_error() }
+    else { if t1d_slice_ok(g_start, n) == 0 { t2d_error() }
+    else {
     let mut i: i32 = 0;
     while i < n {
         let w_i = __f32_from_bits(__arena_get(w_start + i));
@@ -139,12 +156,14 @@ fn sgd_f32_step(w_start: i32, g_start: i32, lr: f32, n: i32) -> i32 {
         i = i + 1;
     }
     0
+    }}}
 }
 
 // Clip an f32 gradient vector in place if its L2 norm is above max_norm.
 // Returns 0; g_start is mutated only when clipping is needed.
 fn clip_grad_norm_f32(g_start: i32, max_norm: f32, n: i32) -> i32 {
     if n <= 0 { 0 }
+    else { if t1d_slice_ok(g_start, n) == 0 { t2d_error() }
     else {
         let norm_sq = tf1d_l2_norm_sq(g_start, n);
         if norm_sq <= 0.0_f32 { 0 }
@@ -157,7 +176,7 @@ fn clip_grad_norm_f32(g_start: i32, max_norm: f32, n: i32) -> i32 {
             };
             0
         }
-    }
+    }}
 }
 
 // Add L2 weight-decay contribution to an f32 gradient vector:
@@ -185,6 +204,12 @@ fn sgd_f32_step_decay_clip(w_start: i32, g_start: i32, lr: f32,
 // w[i] = w[i] - lr*m[i]/(sqrt(v[i]) + eps)
 fn adam_f32_step(w_start: i32, g_start: i32, m_start: i32, v_start: i32,
                  lr: f32, beta1: f32, beta2: f32, eps: f32, n: i32) -> i32 {
+    if n <= 0 { 0 }
+    else { if t1d_slice_ok(w_start, n) == 0 { t2d_error() }
+    else { if t1d_slice_ok(g_start, n) == 0 { t2d_error() }
+    else { if t1d_slice_ok(m_start, n) == 0 { t2d_error() }
+    else { if t1d_slice_ok(v_start, n) == 0 { t2d_error() }
+    else {
     let mut i: i32 = 0;
     while i < n {
         let w_i = __f32_from_bits(__arena_get(w_start + i));
@@ -206,12 +231,15 @@ fn adam_f32_step(w_start: i32, g_start: i32, m_start: i32, v_start: i32,
         i = i + 1;
     }
     0
+    }}}}}
 }
 
 // MSE on f32 tensors.
 @pure
 fn mse_loss_f32(y_start: i32, t_start: i32, n: i32) -> f32 {
     if n <= 0 { 0.0_f32 }
+    else { if t1d_slice_ok(y_start, n) == 0 { 0.0_f32 }
+    else { if t1d_slice_ok(t_start, n) == 0 { 0.0_f32 }
     else {
         let mut i: i32 = 0;
         let mut total: f32 = 0.0_f32;
@@ -223,7 +251,7 @@ fn mse_loss_f32(y_start: i32, t_start: i32, n: i32) -> f32 {
             i = i + 1;
         }
         total / (n as f32)
-    }
+    }}}
 }
 
 // Gradient of mean squared error with respect to y:
@@ -231,9 +259,9 @@ fn mse_loss_f32(y_start: i32, t_start: i32, n: i32) -> f32 {
 fn mse_loss_f32_grad(y_start: i32, t_start: i32,
                      dy_start: i32, n: i32) -> i32 {
     if n <= 0 { 0 }
-    else { if t1d_capacity_ok(y_start, n) == 0 { t2d_error() }
-    else { if t1d_capacity_ok(t_start, n) == 0 { t2d_error() }
-    else { if t1d_capacity_ok(dy_start, n) == 0 { t2d_error() }
+    else { if t1d_slice_ok(y_start, n) == 0 { t2d_error() }
+    else { if t1d_slice_ok(t_start, n) == 0 { t2d_error() }
+    else { if t1d_slice_ok(dy_start, n) == 0 { t2d_error() }
     else {
         let scale = 2.0_f32 / (n as f32);
         let mut i: i32 = 0;
@@ -253,6 +281,9 @@ fn dense_layer_f32_forward(w_start: i32, w_rows: i32, w_cols: i32,
     else { if w_cols <= 0 { 0 }
     else { if t2d_len(w_rows, w_cols) == 0 { t2d_error() }
     else { if t2d_shape_ok(w_start, w_rows, w_cols) == 0 { t2d_error() }
+    else { if t1d_slice_ok(x_start, w_cols) == 0 { t2d_error() }
+    else { if t1d_slice_ok(b_start, w_rows) == 0 { t2d_error() }
+    else { if t1d_slice_ok(y_start, w_rows) == 0 { t2d_error() }
     else {
     tf2d_matvec(w_start, w_rows, w_cols, x_start, y_start);
     let mut r: i32 = 0;
@@ -263,7 +294,7 @@ fn dense_layer_f32_forward(w_start: i32, w_rows: i32, w_cols: i32,
         r = r + 1;
     }
     0
-    }}}}
+    }}}}}}}
 }
 
 // Dense layer backward helpers for y = W @ x + b.
@@ -274,8 +305,8 @@ fn dense_layer_f32_grad_w(dy_start: i32, x_start: i32,
     else { if cols <= 0 { 0 }
     else { if t2d_len(rows, cols) == 0 { t2d_error() }
     else { if t2d_shape_ok(grad_w_start, rows, cols) == 0 { t2d_error() }
-    else { if t1d_capacity_ok(dy_start, rows) == 0 { t2d_error() }
-    else { if t1d_capacity_ok(x_start, cols) == 0 { t2d_error() }
+    else { if t1d_slice_ok(dy_start, rows) == 0 { t2d_error() }
+    else { if t1d_slice_ok(x_start, cols) == 0 { t2d_error() }
     else {
     let mut r: i32 = 0;
     while r < rows {
@@ -294,8 +325,8 @@ fn dense_layer_f32_grad_w(dy_start: i32, x_start: i32,
 
 fn dense_layer_f32_grad_b(dy_start: i32, grad_b_start: i32, rows: i32) -> i32 {
     if rows <= 0 { 0 }
-    else { if t1d_capacity_ok(dy_start, rows) == 0 { t2d_error() }
-    else { if t1d_capacity_ok(grad_b_start, rows) == 0 { t2d_error() }
+    else { if t1d_slice_ok(dy_start, rows) == 0 { t2d_error() }
+    else { if t1d_slice_ok(grad_b_start, rows) == 0 { t2d_error() }
     else {
     let mut r: i32 = 0;
     while r < rows {
@@ -313,8 +344,8 @@ fn dense_layer_f32_grad_x(w_start: i32, dy_start: i32,
     else { if cols <= 0 { 0 }
     else { if t2d_len(rows, cols) == 0 { t2d_error() }
     else { if t2d_shape_ok(w_start, rows, cols) == 0 { t2d_error() }
-    else { if t1d_capacity_ok(dy_start, rows) == 0 { t2d_error() }
-    else { if t1d_capacity_ok(grad_x_start, cols) == 0 { t2d_error() }
+    else { if t1d_slice_ok(dy_start, rows) == 0 { t2d_error() }
+    else { if t1d_slice_ok(grad_x_start, cols) == 0 { t2d_error() }
     else {
     let mut c: i32 = 0;
     while c < cols {
@@ -335,6 +366,10 @@ fn dense_layer_f32_grad_x(w_start: i32, dy_start: i32,
 
 // Leaky ReLU.
 fn leaky_relu_layer(x_start: i32, alpha: f32, y_start: i32, n: i32) -> i32 {
+    if n <= 0 { 0 }
+    else { if t1d_slice_ok(x_start, n) == 0 { t2d_error() }
+    else { if t1d_slice_ok(y_start, n) == 0 { t2d_error() }
+    else {
     let mut i: i32 = 0;
     while i < n {
         let xi = __f32_from_bits(__arena_get(x_start + i));
@@ -343,11 +378,17 @@ fn leaky_relu_layer(x_start: i32, alpha: f32, y_start: i32, n: i32) -> i32 {
         i = i + 1;
     }
     0
+    }}}
 }
 
 // Momentum SGD.
 fn momentum_step(w_start: i32, v_start: i32, g_start: i32,
                  beta: f32, lr: f32, n: i32) -> i32 {
+    if n <= 0 { 0 }
+    else { if t1d_slice_ok(w_start, n) == 0 { t2d_error() }
+    else { if t1d_slice_ok(v_start, n) == 0 { t2d_error() }
+    else { if t1d_slice_ok(g_start, n) == 0 { t2d_error() }
+    else {
     let mut i: i32 = 0;
     while i < n {
         let w_i = __f32_from_bits(__arena_get(w_start + i));
@@ -359,10 +400,15 @@ fn momentum_step(w_start: i32, v_start: i32, g_start: i32,
         i = i + 1;
     }
     0
+    }}}}
 }
 
 // tanh layer (uses __exp).
 fn tanh_layer(x_start: i32, y_start: i32, n: i32) -> i32 {
+    if n <= 0 { 0 }
+    else { if t1d_slice_ok(x_start, n) == 0 { t2d_error() }
+    else { if t1d_slice_ok(y_start, n) == 0 { t2d_error() }
+    else {
     let mut i: i32 = 0;
     while i < n {
         let xi = __f32_from_bits(__arena_get(x_start + i));
@@ -372,10 +418,15 @@ fn tanh_layer(x_start: i32, y_start: i32, n: i32) -> i32 {
         i = i + 1;
     }
     0
+    }}}
 }
 
 // sigmoid layer (uses __sigmoid).
 fn sigmoid_layer(x_start: i32, y_start: i32, n: i32) -> i32 {
+    if n <= 0 { 0 }
+    else { if t1d_slice_ok(x_start, n) == 0 { t2d_error() }
+    else { if t1d_slice_ok(y_start, n) == 0 { t2d_error() }
+    else {
     let mut i: i32 = 0;
     while i < n {
         let xi = __f32_from_bits(__arena_get(x_start + i));
@@ -384,9 +435,14 @@ fn sigmoid_layer(x_start: i32, y_start: i32, n: i32) -> i32 {
         i = i + 1;
     }
     0
+    }}}
 }
 
 fn softplus_layer(x_start: i32, y_start: i32, n: i32) -> i32 {
+    if n <= 0 { 0 }
+    else { if t1d_slice_ok(x_start, n) == 0 { t2d_error() }
+    else { if t1d_slice_ok(y_start, n) == 0 { t2d_error() }
+    else {
     let mut i: i32 = 0;
     while i < n {
         let xi = __f32_from_bits(__arena_get(x_start + i));
@@ -394,9 +450,14 @@ fn softplus_layer(x_start: i32, y_start: i32, n: i32) -> i32 {
         i = i + 1;
     }
     0
+    }}}
 }
 
 fn silu_layer(x_start: i32, y_start: i32, n: i32) -> i32 {
+    if n <= 0 { 0 }
+    else { if t1d_slice_ok(x_start, n) == 0 { t2d_error() }
+    else { if t1d_slice_ok(y_start, n) == 0 { t2d_error() }
+    else {
     let mut i: i32 = 0;
     while i < n {
         let xi = __f32_from_bits(__arena_get(x_start + i));
@@ -404,9 +465,14 @@ fn silu_layer(x_start: i32, y_start: i32, n: i32) -> i32 {
         i = i + 1;
     }
     0
+    }}}
 }
 
 fn gelu_layer(x_start: i32, y_start: i32, n: i32) -> i32 {
+    if n <= 0 { 0 }
+    else { if t1d_slice_ok(x_start, n) == 0 { t2d_error() }
+    else { if t1d_slice_ok(y_start, n) == 0 { t2d_error() }
+    else {
     let mut i: i32 = 0;
     while i < n {
         let xi = __f32_from_bits(__arena_get(x_start + i));
@@ -414,10 +480,16 @@ fn gelu_layer(x_start: i32, y_start: i32, n: i32) -> i32 {
         i = i + 1;
     }
     0
+    }}}
 }
 
 fn relu_layer_f32_backward(x_start: i32, dy_start: i32,
                            dx_start: i32, n: i32) -> i32 {
+    if n <= 0 { 0 }
+    else { if t1d_slice_ok(x_start, n) == 0 { t2d_error() }
+    else { if t1d_slice_ok(dy_start, n) == 0 { t2d_error() }
+    else { if t1d_slice_ok(dx_start, n) == 0 { t2d_error() }
+    else {
     let mut i: i32 = 0;
     while i < n {
         let x = __f32_from_bits(__arena_get(x_start + i));
@@ -427,10 +499,16 @@ fn relu_layer_f32_backward(x_start: i32, dy_start: i32,
         i = i + 1;
     }
     0
+    }}}}
 }
 
 fn sigmoid_layer_backward(y_start: i32, dy_start: i32,
                           dx_start: i32, n: i32) -> i32 {
+    if n <= 0 { 0 }
+    else { if t1d_slice_ok(y_start, n) == 0 { t2d_error() }
+    else { if t1d_slice_ok(dy_start, n) == 0 { t2d_error() }
+    else { if t1d_slice_ok(dx_start, n) == 0 { t2d_error() }
+    else {
     let mut i: i32 = 0;
     while i < n {
         let y = __f32_from_bits(__arena_get(y_start + i));
@@ -439,10 +517,16 @@ fn sigmoid_layer_backward(y_start: i32, dy_start: i32,
         i = i + 1;
     }
     0
+    }}}}
 }
 
 fn tanh_layer_backward(y_start: i32, dy_start: i32,
                        dx_start: i32, n: i32) -> i32 {
+    if n <= 0 { 0 }
+    else { if t1d_slice_ok(y_start, n) == 0 { t2d_error() }
+    else { if t1d_slice_ok(dy_start, n) == 0 { t2d_error() }
+    else { if t1d_slice_ok(dx_start, n) == 0 { t2d_error() }
+    else {
     let mut i: i32 = 0;
     while i < n {
         let y = __f32_from_bits(__arena_get(y_start + i));
@@ -451,12 +535,15 @@ fn tanh_layer_backward(y_start: i32, dy_start: i32,
         i = i + 1;
     }
     0
+    }}}}
 }
 
 // Layer normalization over one f32 vector.
 // y[i] = (x[i] - mean(x)) / sqrt(variance(x) + eps)
 fn layer_norm_f32(x_start: i32, y_start: i32, n: i32, eps: f32) -> i32 {
-    if n == 0 { 0 }
+    if n <= 0 { 0 }
+    else { if t1d_slice_ok(x_start, n) == 0 { t2d_error() }
+    else { if t1d_slice_ok(y_start, n) == 0 { t2d_error() }
     else {
         let mean = tf1d_mean(x_start, n);
         let mut i: i32 = 0;
@@ -475,8 +562,8 @@ fn layer_norm_f32(x_start: i32, y_start: i32, n: i32, eps: f32) -> i32 {
             __arena_set(y_start + j, __bits_of_f32((xj - mean) * inv_std));
             j = j + 1;
         }
-        0
-    }
+    0
+    }}}
 }
 
 // Inverted dropout for f32 vectors. During training, each element is kept with
@@ -484,7 +571,10 @@ fn layer_norm_f32(x_start: i32, y_start: i32, n: i32, eps: f32) -> i32 {
 // Returns the final deterministic RNG state.
 fn dropout_f32(x_start: i32, y_start: i32, n: i32,
                keep_prob: f32, seed: i32) -> i32 {
-    if keep_prob <= 0.0_f32 {
+    if n <= 0 { seed }
+    else { if t1d_slice_ok(x_start, n) == 0 { t2d_error() }
+    else { if t1d_slice_ok(y_start, n) == 0 { t2d_error() }
+    else { if keep_prob <= 0.0_f32 {
         let mut i: i32 = 0;
         while i < n {
             __arena_set(y_start + i, __bits_of_f32(0.0_f32));
@@ -519,12 +609,15 @@ fn dropout_f32(x_start: i32, y_start: i32, n: i32,
             state
         }
     }
+    }}}
 }
 
 // Softmax (max-subtract, uses __exp + tf1d_max).
 fn softmax_layer(x_start: i32, y_start: i32, n: i32) -> i32 {
     if n < 0 { 35001 }
     else { if n == 0 { 0 }
+    else { if t1d_slice_ok(x_start, n) == 0 { t2d_error() }
+    else { if t1d_slice_ok(y_start, n) == 0 { t2d_error() }
     else {
         let max_v = tf1d_max(x_start, n);
         let mut i: i32 = 0;
@@ -543,7 +636,7 @@ fn softmax_layer(x_start: i32, y_start: i32, n: i32) -> i32 {
             j = j + 1;
         }
         0
-    }}
+    }}}}
 }
 
 fn softmax_rows_f32(logits_start: i32, probs_start: i32,
@@ -572,6 +665,7 @@ fn softmax_ce_grad_f32(probs_start: i32, target_start: i32,
     else { if t2d_len(rows, cols) == 0 { 35001 }
     else { if t2d_shape_ok(probs_start, rows, cols) == 0 { 35001 }
     else { if t2d_shape_ok(grad_start, rows, cols) == 0 { 35001 }
+    else { if t1d_slice_ok(target_start, rows) == 0 { 35001 }
     else {
         let mut r: i32 = 0;
         while r < rows {
@@ -605,7 +699,7 @@ fn softmax_ce_grad_f32(probs_start: i32, target_start: i32,
             }
             0
         }
-    }}}}}
+    }}}}}}
 }
 
 fn dense_classifier_sgd_step_f32(w_start: i32, b_start: i32, x_start: i32,

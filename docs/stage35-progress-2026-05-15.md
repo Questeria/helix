@@ -1793,3 +1793,62 @@ Clean-gate status:
 - Stage 35 clean gates remain `0/3`.
 - Next step is restart 29 as another fresh Stage 35 clean gate from the newest
   committed fix sweep.
+
+## Increment 48 - Twenty-Ninth Clean-Gate Restart Fix Sweep
+
+Restart 29 began from commit `585ae84` with green support checks. All three
+fresh audit lanes found remaining blockers, so the gate did not count as clean
+and Stage 35 remains at `0/3` clean gates.
+
+Fixes landed in this increment:
+
+- Tensor range helpers now reject positive out-of-bounds slices and inflated
+  logical lengths.
+- `tf1d_lerp` and NN f32 vector writers now reject short output buffers while
+  still allowing valid interior sub-slices through the new `t1d_slice_ok`
+  helper.
+- Reverse-AD adjoint metadata now binds the tape footer and adjoint guards to
+  owner, cap, count, and actual adjoint start, closing the immediate post-tape
+  forged-slice path.
+- Warning-as-error CLI paths now keep progress and diagnostic summaries off
+  stdout and on stderr.
+- Direct x86 early validation exits now drain pending AD warnings before exit.
+- PTX validation now runs PTX emission before setting the kernel tile validation
+  marker.
+- Historical handoff/status docs now identify themselves as historical, point
+  restart 29 at `585ae84`, and narrow current PTX/bootstrap claims.
+
+Focused verification:
+
+- Per-file stdlib parser sweep for `tensor.hx`, `nn.hx`, and
+  `autodiff_reverse.hx`
+  - Result: passed.
+- `python -m py_compile helixc\check.py helixc\backend\ptx.py helixc\backend\x86_64.py helixc\tests\test_cli.py helixc\tests\test_codegen.py`
+  - Result: passed.
+- `python -m pytest helixc\tests\test_codegen.py -q -k "tf1d_dot_with_offset or tf1d_range_helpers or tf1d_lerp_rejects_short_output or gelu_layer_rejects_short_output or forged_immediate_adjoint_slice"`
+  - Result: 9 passed, 861 deselected.
+- `python -m pytest helixc\tests\test_cli.py -q -k "kernel_helper_call or wad_error_output_binary or wad_error_emit_asm or wad_error_emit_ir or wad_error_default or wad_error_check_only or deprecated_error_default or direct_x86_drains_ad_warnings_on_deprecated_error"`
+  - Result: 9 passed, 169 deselected.
+- `python -m pytest helixc\tests\test_codegen.py -q -k "tf1d_dot_with_offset or tf1d_range_helpers or tf1d_lerp or gelu_layer or revad"`
+  - Result: 40 passed, 830 deselected.
+- `python -m pytest helixc\tests\test_cli.py -q -k "stage35 or wad or deprecated"`
+  - Result: 35 passed, 143 deselected.
+- `python -m pytest helixc\tests\test_ptx.py -q -k "stage35 or direct_ptx or wad or deprecated"`
+  - Result: 40 passed, 36 deselected.
+- `python -m pytest helixc\tests\test_transcendentals.py helixc\tests\test_autodiff.py helixc\tests\test_autodiff_reverse.py helixc\tests\test_cli.py helixc\tests\test_ptx.py helixc\tests\test_effect_check.py -q`
+  - Result: 391 passed.
+- `python -m pytest helixc\tests\test_codegen.py -q -k "t1d or t2d or ti2d or tf1d or tf2d or tensor or stage35_2d or nn_ or dense_layer or softmax_rows_f32 or softmax_ce_grad_f32 or argmax_rows_f32 or accuracy_count_from_logits_f32 or ce_loss_batch_f32 or bce or gelu or mse_loss_f32_grad"`
+  - Initial result: two over-strict sub-slice guard regressions.
+  - Final result after `t1d_slice_ok`: 142 passed, 728 deselected.
+- `python -m pytest helixc\tests\test_codegen.py -q -k "revad or grad_rejects_allocator_let or side_effecting_final_assignment or negative_t1d_new or compile_module_to_elf_requires_pre_dce_kernel_validation or ptx_in_binary or kernel_ptx or wad"`
+  - Result: 40 passed, 830 deselected.
+- `python -m pytest helixc\tests --collect-only -q -p no:cacheprovider`
+  - Result: 2,325 tests collected.
+- `git diff --check`
+  - Result: passed.
+
+Clean-gate status:
+
+- Stage 35 clean gates remain `0/3`.
+- Next step is restart 30 as another fresh Stage 35 clean gate from the newest
+  committed fix sweep.

@@ -3990,6 +3990,12 @@ if __name__ == "__main__":
         if ad_policy == "error":
             return 1
         return 0
+
+    def _exit_after_ad_drain(code: int = 1) -> None:
+        drain_rc = _drain_cli_ad_warnings()
+        if drain_rc != 0:
+            sys.exit(drain_rc)
+        sys.exit(code)
     with open(sys.argv[1]) as f:
         src = f.read()
     # Auto-include stdlib by default. The fdce / dce passes drop unused
@@ -4080,7 +4086,7 @@ if __name__ == "__main__":
         if strict:
             print(f"\n{len(tot_fails)} totality failure(s); --strict aborts.",
                   file=sys.stderr)
-            sys.exit(1)
+            _exit_after_ad_drain(1)
 
     deprecated_policy = warning_policies.get("deprecated", "warn")
     deprecated_warnings = emit_deprecated_warnings(prog)
@@ -4093,13 +4099,13 @@ if __name__ == "__main__":
         for warning in deprecated_warnings:
             print(f"     {warning}", file=sys.stderr)
         if deprecated_policy == "error":
-            sys.exit(1)
+            _exit_after_ad_drain(1)
 
     trace_diags = validate_trace_attrs(prog)
     if trace_diags:
         for d in trace_diags:
             print(f"error: trace: {d}", file=sys.stderr)
-        sys.exit(1)
+        _exit_after_ad_drain(1)
 
     panic_diags = validate_panic_args(prog)
     unwind_diags = validate_unwind(prog)
@@ -4110,19 +4116,19 @@ if __name__ == "__main__":
         for d in unwind_diags:
             print(f"error: unwind: {d}", file=sys.stderr)
     if panic_diags or unwind_diags:
-        sys.exit(1)
+        _exit_after_ad_drain(1)
 
     unsafe_diags = check_unsafe_ops(prog)
     if unsafe_diags:
         for d in unsafe_diags:
             print(f"error: unsafe: {d}", file=sys.stderr)
-        sys.exit(1)
+        _exit_after_ad_drain(1)
 
     autotune_diags = validate_autotune_prog(prog)
     if autotune_diags:
         for d in autotune_diags:
             print(f"error: autotune: {d}", file=sys.stderr)
-        sys.exit(1)
+        _exit_after_ad_drain(1)
 
     prog = _drop_unreachable_diff_signature_fns(prog)
     mod = lower(prog)
@@ -4154,7 +4160,7 @@ if __name__ == "__main__":
                     validate_kernel_tile_lowering(mod)
                 except Exception as e:
                     print(f"error: ptx: {e}", file=sys.stderr)
-                    sys.exit(1)
+                    _exit_after_ad_drain(1)
             removed = dce_module(mod)
             if removed > 0:
                 print(f"dce: {removed} ops removed", file=sys.stderr)
@@ -4163,7 +4169,7 @@ if __name__ == "__main__":
                 print(f"fdce: {f_removed} unused fn(s) removed", file=sys.stderr)
         except FoldError as fe:
             print(f"helixc: const-fold error: {fe}", file=sys.stderr)
-            sys.exit(1)
+            _exit_after_ad_drain(1)
     else:
         if any(fn.attrs.get("kernel") for fn in mod.functions.values()):
             from .ptx import validate_kernel_tile_lowering
@@ -4171,7 +4177,7 @@ if __name__ == "__main__":
                 validate_kernel_tile_lowering(mod)
             except Exception as e:
                 print(f"error: ptx: {e}", file=sys.stderr)
-                sys.exit(1)
+                _exit_after_ad_drain(1)
 
     # Stage 19 — IR-level effect check. Runs AFTER all optimization passes
     effect_scope = None
@@ -4203,7 +4209,7 @@ if __name__ == "__main__":
     if hard_count > 0 and strict:
         print(f"\n{hard_count} effect-check warning(s); --strict aborts.",
               file=sys.stderr)
-        sys.exit(1)
+        _exit_after_ad_drain(1)
 
     if _drain_cli_ad_warnings() != 0:
         sys.exit(1)

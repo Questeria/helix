@@ -12,7 +12,7 @@ The purpose of Helix is to remove uncertainty wherever software can honestly rem
 
 ## Hard constraints
 
-1. **Raw binary as the starting point.** No assembler, no compiler, no toolchain dependency for the language. The bootstrap chain begins with hand-encoded bytes that the user can audit one byte at a time. Existing tools (nasm, objdump) are used only for *audit/verification*, never to produce shipped artifacts.
+1. **Raw binary as the starting point.** The target bootstrap chain begins with hand-encoded bytes that the user can audit one byte at a time. The production compiler is currently Python-hosted `helixc` until the self-hosted Helix compiler replaces it; existing tools (nasm, objdump) are used only for *audit/verification*, never to produce shipped artifacts.
 2. **Open source, end-to-end.** All code (compiler, runtime, model architecture, training scripts), all weights, all training data references, and all documentation are public under permissive licenses. Apache 2.0 for code; CC-BY 4.0 for documentation; CC0 / public-domain for trained model weights to maximize freedom of use.
 3. **Public training data only.** No proprietary datasets, no Claude/GPT/Gemini outputs as training data. Corpora drawn from FineWeb-Edu, SlimPajama, The Stack v2, Wikipedia, public math (Lean mathlib, ProofPile), public code, public ARC-AGI-3 puzzles.
 4. **Eventual AGI.** The end goal is an artificial general intelligence — a system that exhibits sample-efficient learning, continual learning without catastrophic forgetting, compositional generalization, causal reasoning, and recursive self-improvement under verifier gates. This is a multi-year direction, not a release date.
@@ -28,7 +28,7 @@ The purpose of Helix is to remove uncertainty wherever software can honestly rem
 
 ## Status (2026-05-15)
 
-**Current stage: Stage 35 audit cleanup.** Clean gates remain `0/3` as of the latest Stage 35 progress ledger, and the exact test count changes as each audit adds regressions. Restart 28 fix verification collected 2,316 live `helixc/tests` pytest tests; run `python -m pytest helixc/tests --collect-only -q -p no:cacheprovider` for the current count.
+**Current stage: Stage 35 audit cleanup.** Clean gates remain `0/3` as of the latest Stage 35 progress ledger, and the exact test count changes as each audit adds regressions. Restart 29 fix verification collected 2,325 live `helixc/tests` pytest tests; run `python -m pytest helixc/tests --collect-only -q -p no:cacheprovider` for the current count.
 
 The production compiler path is still the Python-hosted `helixc` implementation. A Helix self-hosted compiler remains the target of the bootstrap roadmap, not a shipped replacement for Python yet.
 

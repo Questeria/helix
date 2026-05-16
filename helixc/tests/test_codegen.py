@@ -11063,6 +11063,35 @@ def test_revad_backward_rejects_consistently_forged_adjoint_slice():
     assert code == 42, f"expected 42, got {code}"
 
 
+def test_revad_backward_rejects_forged_immediate_adjoint_slice():
+    src = """
+    fn main() -> i32 {
+        let tape = rev_tape_new(4);
+        let x = rev_leaf(tape, 5);
+        let y = rev_leaf(tape, 7);
+        let f = rev_add(tape, x, y);
+        __arena_push(tape);
+        __arena_push(4);
+        __arena_push(3);
+        __arena_push(0 - 4 - 1);
+        let fake = __arena_len();
+        __arena_push(0);
+        __arena_push(0);
+        __arena_push(0);
+        __arena_push(0);
+        __arena_push(0 - 4 - 1);
+        __arena_set(tape + 2, fake);
+        let seed_status = rev_seed(fake, f, 1);
+        let back_status = rev_backward(tape, fake);
+        if seed_status == (0 - 1) {
+        if back_status == (0 - 1) { 42 } else { 7 }
+        } else { 7 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
 def test_revad_alloc_adjoints_rejects_interleaved_arena_allocation():
     src = """
     fn main() -> i32 {
@@ -16072,6 +16101,39 @@ def test_stdlib_tf1d_lerp():
     assert code == 42, f"expected 42, got {code}"
 
 
+def test_stage35_tf1d_lerp_rejects_short_output():
+    src = """
+    fn main() -> i32 {
+        let a = t1d_new(2);
+        let b = t1d_new(2);
+        let dst = t1d_new(1);
+        tf1d_set(a, 0, 2.0_f32);
+        tf1d_set(a, 1, 4.0_f32);
+        tf1d_set(b, 0, 6.0_f32);
+        tf1d_set(b, 1, 8.0_f32);
+        let status = tf1d_lerp(a, b, 0.5_f32, dst, 2);
+        if status == 35001 { 42 } else { 7 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stage35_gelu_layer_rejects_short_output():
+    src = """
+    fn main() -> i32 {
+        let x = t1d_new(2);
+        let y = t1d_new(1);
+        tf1d_set(x, 0, 1.0_f32);
+        tf1d_set(x, 1, 2.0_f32);
+        let status = gelu_layer(x, y, 2);
+        if status == 35001 { 42 } else { 7 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
 def test_stdlib_string_pad_center():
     """Push 'AB' (2 bytes); pad_center(' ', 5) -> ' AB  ' (1 left, 2 right);
     first byte ' '(32) plus second 'A'(65) = 97; -55=42."""
@@ -16307,6 +16369,40 @@ def test_negative_tf1d_dot_with_offset_does_not_read_before_start():
             if (tf1d_dot_with_offset(a, 0, b, 0 - 1, 1) as i32) == 0 {
                 if (tf1d_dot_with_offset(a, 0, b, 0, 0 - 1) as i32) == 0 { 42 } else { 7 }
             } else { 7 }
+        } else { 7 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stage35_tf1d_dot_with_offset_rejects_positive_oob():
+    src = """
+    fn main() -> i32 {
+        let a = t1d_new(2);
+        let b = t1d_new(2);
+        tf1d_set(a, 0, 3.0_f32);
+        tf1d_set(a, 1, 5.0_f32);
+        tf1d_set(b, 0, 7.0_f32);
+        tf1d_set(b, 1, 11.0_f32);
+        let dot = tf1d_dot_with_offset(a, 1, b, 0, 2);
+        if (dot as i32) == 0 { 42 } else { 7 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stage35_tf1d_range_helpers_reject_inflated_n():
+    src = """
+    fn main() -> i32 {
+        let x = t1d_new(2);
+        tf1d_set(x, 0, 4.0_f32);
+        tf1d_set(x, 1, 9.0_f32);
+        let idx = tf1d_argmax_in_range(x, 100, 0, 3);
+        let total = tf1d_sum_in_range(x, 100, 0, 3);
+        if idx == (0 - 1) {
+        if (total as i32) == 0 { 42 } else { 7 }
         } else { 7 }
     }
     """

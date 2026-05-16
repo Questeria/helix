@@ -1,7 +1,9 @@
 # Helix Project Handoff for ChatGPT
 
-**Date**: 2026-05-12
-**Last working HEAD**: `a2e7fc4` (Stage 30 cycle-5 prep: document M2 trade-off)
+**Historical snapshot date**: 2026-05-12
+**Historical snapshot HEAD**: `a2e7fc4` (Stage 30 cycle-5 prep: document M2 trade-off)
+**Current-status warning**: this file is a historical handoff, not the current repo state. As of 2026-05-16, continue from the Stage 35 progress ledger and the live git HEAD instead.
+**Current continuation pointer**: Stage 35 audit cleanup; run `git log -1 --oneline` and `docs/stage35-progress-2026-05-15.md` for the newest truth.
 **Project**: `C:\Projects\Kovostov-Native\` — Helix language self-hosting compiler
 
 User backed up the entire folder before this handoff in case of issues.
@@ -16,11 +18,11 @@ Build Kovostov-Native: open-source AGI bootstrapped from raw binary, with own la
 - Public training data only
 - Deadline 2027-12-31
 
-**Current Phase**: Phase 0 (self-hosting compiler) — **JUST ACHIEVED STAGE 29 SELF-HOST MILESTONE!**
+**Historical snapshot phase**: Phase 0 (self-hosting compiler) — Stage 29 self-host milestone had just landed at the time of this snapshot. The current repo has advanced to Stage 35 audit cleanup.
 
 ---
 
-## CURRENT STATE — STAGE 29 FULLY COMPLETE 🎉
+## HISTORICAL STATE — STAGE 29 FULLY COMPLETE
 
 The Helix self-host loop WORKS:
 - Python compiles bootstrap source → K1 binary
@@ -48,7 +50,7 @@ C:\Projects\Kovostov-Native\
 │   │   ├── kovc.hx               # ~6600 lines, codegen (x86_64 emit)
 │   │   └── evaluator.hx          # 200 lines, AST eval (Stage 3)
 │   └── tests\
-│       └── test_codegen.py       # 14000+ lines, 670+ tests
+│       └── test_codegen.py       # historical: 14000+ lines, 670+ tests; current suite is larger
 └── docs\                         # Audit findings, design docs
 ```
 
@@ -56,7 +58,7 @@ The "bootstrap" Helix files (lexer.hx + parser.hx + kovc.hx) constitute the self
 
 ---
 
-## STAGES TIMELINE (status as of HEAD a2e7fc4)
+## HISTORICAL STAGES TIMELINE (status as of HEAD a2e7fc4)
 
 | Stage | Description | Status |
 |-------|-------------|--------|
@@ -70,9 +72,9 @@ The "bootstrap" Helix files (lexer.hx + parser.hx + kovc.hx) constitute the self
 | 28.13.3 | `?` operator | DEFERRED (needs Result type) |
 | 28.13.4 | let-else | DEFERRED (needs Option type) |
 | 28.13.5 | render_caret error rendering | PENDING |
-| **29**  | **Byte-identical self-host** | **FULLY COMPLETE ✓** |
-| 30    | 5 clean audits on self-host | IN PROGRESS (cycle 5 next) |
-| 31+   | Phase 1 Layer-0 features | PENDING |
+| **29**  | **Byte-identical self-host** | **FULLY COMPLETE in this snapshot** |
+| 30    | 5 clean audits on self-host | Historical next step in this snapshot; no longer current |
+| 31+   | Phase 1 Layer-0 features | Historical future in this snapshot; current repo is Stage 35 |
 
 ---
 
@@ -128,9 +130,9 @@ Both require substantial parser refactoring. Deferred to Phase 1 ergonomics pass
 
 ---
 
-## NEXT STEPS (in priority order)
+## HISTORICAL NEXT STEPS FROM 2026-05-12
 
-1. **Dispatch Stage 30 cycle-5 audits** (silent-failure pulse completed CLEAN before usage limit; type-design + code-review pending). HEAD a2e7fc4 has M2 documented as accepted trade-off.
+1. Historical: dispatch Stage 30 cycle-5 audits (silent-failure pulse completed CLEAN before usage limit; type-design + code-review pending). HEAD `a2e7fc4` had M2 documented as accepted trade-off.
 
 2. **If cycle-5 reaches CLEAN**: 3/5 clean cycles → continue cycle-6, cycle-7
 
@@ -205,7 +207,7 @@ Major milestones:
 - Stage 28.11 full closure (4 increments × 5 clean cycles each)
 - Stage 28.13.1 + 28.13.2 named struct-lit
 - **Stage 29 FULLY COMPLETE** (5 fix commits → self-host loop works)
-- Stage 30 cycles 1-5 in progress
+- Historical snapshot: Stage 30 cycles 1-5 were in progress at the time
 
 ---
 
@@ -222,7 +224,7 @@ Continue autonomously per these directives.
 
 Per user's audit protocol:
 - **ZERO HIGH/MEDIUM/LOW issues** per cycle for CLEAN declaration
-- Heavy gate (all 670+ tests) must be GREEN before declaring clean
+- Heavy gate must be GREEN before declaring clean. Historical snapshot had 670+ tests; Stage 35 restart 29 collected 2,325 tests, so refresh with `python -m pytest helixc/tests --collect-only -q -p no:cacheprovider`.
 - 5 CONSECUTIVE clean cycles on the SAME HEAD to declare stage done
 - If issues found: apply fix-sweep, re-test, dispatch next cycle
 
@@ -242,6 +244,6 @@ The Kovostov framework auto-loads when Claude Code launches with cwd in `C:\Proj
 
 ## GOOD LUCK!
 
-Helix is in great shape — Stage 29 self-host is a HUGE milestone (first ever fully functional self-compiling Helix). The remaining Stage 30 work is incremental polish. Phase 1 features (Refinement, Confidence, Effect, Deadlines, Continuous, Memory, Theorem) await after v0.1 ships.
+Historical closing note: Stage 29 self-host was the major milestone captured by this file. Do not treat the old Stage 30 note here as current; current continuation belongs in the Stage 35 progress ledger.
 
 Key insight from this session: cycle-3 introduced the sentinel-vs-return pattern (Stage 29 H1), cycle-2 fixed the missing return wiring, cycle-3 added regression tests, cycle-4 surfaced the persistent M2 trade-off, cycle-5 started before Claude's usage limit hit.
