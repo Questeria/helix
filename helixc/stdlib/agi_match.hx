@@ -69,6 +69,9 @@ fn tree_hash_shallow(off: i32) -> i32 {
 // O(n*m) but fine for Phase-4 working-memory-sized comparisons.
 @pure
 fn bag_similarity(a_start: i32, a_n: i32, b_start: i32, b_n: i32) -> i32 {
+    if t1d_slice_ok(a_start, a_n) == 0 { 0 }
+    else { if t1d_slice_ok(b_start, b_n) == 0 { 0 }
+    else {
     let mut shared: i32 = 0;
     let mut i: i32 = 0;
     while i < a_n {
@@ -85,6 +88,7 @@ fn bag_similarity(a_start: i32, a_n: i32, b_start: i32, b_n: i32) -> i32 {
         i = i + 1;
     }
     shared
+    }}
 }
 
 // Asymmetric bag difference: count of a-positions whose value does NOT
@@ -92,6 +96,9 @@ fn bag_similarity(a_start: i32, a_n: i32, b_start: i32, b_n: i32) -> i32 {
 // invariant: bag_similarity(a, b) + bag_difference(a, b) == a_n.
 @pure
 fn bag_difference(a_start: i32, a_n: i32, b_start: i32, b_n: i32) -> i32 {
+    if t1d_slice_ok(a_start, a_n) == 0 { 0 }
+    else { if t1d_slice_ok(b_start, b_n) == 0 { 0 }
+    else {
     let mut diff: i32 = 0;
     let mut i: i32 = 0;
     while i < a_n {
@@ -108,6 +115,7 @@ fn bag_difference(a_start: i32, a_n: i32, b_start: i32, b_n: i32) -> i32 {
         i = i + 1;
     }
     diff
+    }}
 }
 
 // Count of distinct values in a bag (multiset). [1,2,2,3,1] -> 3.
@@ -116,6 +124,8 @@ fn bag_difference(a_start: i32, a_n: i32, b_start: i32, b_n: i32) -> i32 {
 // it in the array). Empty array -> 0.
 @pure
 fn bag_count_unique(a_start: i32, a_n: i32) -> i32 {
+    if t1d_slice_ok(a_start, a_n) == 0 { 0 }
+    else {
     let mut uniq: i32 = 0;
     let mut i: i32 = 0;
     while i < a_n {
@@ -132,6 +142,7 @@ fn bag_count_unique(a_start: i32, a_n: i32) -> i32 {
         i = i + 1;
     }
     uniq
+    }
 }
 
 // Levenshtein-like sequence similarity for AGI string-of-tokens matching.
@@ -139,15 +150,20 @@ fn bag_count_unique(a_start: i32, a_n: i32) -> i32 {
 // Both sequences must be the same length n.
 @pure
 fn sequence_match(a_start: i32, b_start: i32, n: i32) -> i32 {
+    if n <= 0 { 0 }
+    else { if t1d_slice_ok(a_start, n) == 0 { 0 }
+    else { if t1d_slice_ok(b_start, n) == 0 { 0 }
+    else {
     let mut i: i32 = 0;
-    let mut hits: i32 = 0;
+    let mut total: i32 = 0;
     while i < n {
         if __arena_get(a_start + i) == __arena_get(b_start + i) {
-            hits = hits + 1;
+            total = total + 1;
         }
         i = i + 1;
     }
-    hits
+    total
+    }}}
 }
 
 // =========================================================================

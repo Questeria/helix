@@ -362,15 +362,17 @@ fn hashmap_sum_values(start: i32, cap: i32) -> i32 {
     if hashmap_ok(start, cap) == 0 { 0 }
     else {
     let mut i: i32 = 0;
-    let mut total: i32 = 0;
+    let mut total: i64 = 0_i64;
     while i < cap {
         let base = start + i * 3;
         if __arena_get(base) == 1 {
-            total = total + __arena_get(base + 2);
+            total = total + (__arena_get(base + 2) as i64);
         };
         i = i + 1;
     }
-    total
+    if total > 2147483647_i64 { 2147483647 }
+    else { if total < ((0_i64 - 2147483647_i64) - 1_i64) { (0 - 2147483647) - 1 }
+    else { total as i32 } }
     }
 }
 

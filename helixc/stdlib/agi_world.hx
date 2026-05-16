@@ -106,7 +106,12 @@ fn wmt_set(wmt: i32, state: i32, action: i32, next_state: i32) -> i32 {
 @pure
 fn wmt_predict(wmt: i32, state: i32, action: i32) -> i32 {
     let off = wmt_offset(wmt, state, action);
-    if off < 0 { 0 - 1 } else { __arena_get(off) }
+    if off < 0 { 0 - 1 }
+    else {
+        let nxt = __arena_get(off);
+        if nxt < 0 { 0 - 1 }
+        else { if nxt >= __arena_get(wmt) { 0 - 1 } else { nxt } }
+    }
 }
 
 // ---- Linear scalar world model ---------------------------------------
@@ -187,8 +192,13 @@ fn wmt_rollout(wmt: i32, start_state: i32, action_seq_start: i32, steps: i32) ->
                     s = 0 - 1;
                     i = steps;
                 } else {
-                    s = nxt;
-                    i = i + 1;
+                    if nxt >= __arena_get(wmt) {
+                        s = 0 - 1;
+                        i = steps;
+                    } else {
+                        s = nxt;
+                        i = i + 1;
+                    };
                 };
             };
         }
@@ -202,7 +212,9 @@ fn wmt_rollout(wmt: i32, start_state: i32, action_seq_start: i32, steps: i32) ->
 fn wmt_predict_or(wmt: i32, state: i32, action: i32, default_v: i32) -> i32 {
     let off = wmt_offset(wmt, state, action);
     let nxt = if off < 0 { 0 - 1 } else { __arena_get(off) };
-    if nxt < 0 { default_v } else { nxt }
+    if off < 0 { 0 - 1 }
+    else { if nxt < 0 { default_v }
+    else { if nxt >= __arena_get(wmt) { 0 - 1 } else { nxt } } }
 }
 
 @pure
@@ -224,6 +236,10 @@ fn wmt_count_set(wmt: i32) -> i32 {
 
 @pure
 fn wmt_is_self_loop(wmt: i32, state: i32, action: i32) -> i32 {
-    let nxt = wmt_predict(wmt, state, action);
-    if nxt == state { 1 } else { 0 }
+    let off = wmt_offset(wmt, state, action);
+    if off < 0 { 0 }
+    else {
+        let nxt = wmt_predict(wmt, state, action);
+        if nxt == state { 1 } else { 0 }
+    }
 }

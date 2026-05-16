@@ -92,6 +92,7 @@ fn t1d_new(n: i32) -> i32 {
     else { if start < 0 { 0 }
     else { if n < 0 { 0 }
     else { if n == 0 { 1 }
+    else { if start >= __arena_len() { 0 }
     else { if start > 2147483647 - n { 0 }
     else {
         let end = start + n;
@@ -132,7 +133,7 @@ fn t1d_new(n: i32) -> i32 {
             base = base - 1;
         }
         ok
-    }}}}}
+    }}}}}}
 }
 
 @pure fn t2d_len(rows: i32, cols: i32) -> i32 {

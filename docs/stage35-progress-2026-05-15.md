@@ -2500,3 +2500,96 @@ Clean-gate status:
 - Restart 38 is a fix sweep, not a clean gate.
 - Next step is restart 39 as another fresh Stage 35 clean gate from the newest
   pushed HEAD.
+
+## Increment 58 - Thirty-Ninth Clean-Gate Restart Fix Sweep
+
+Restart 39 began from pushed commit `258b7a6` with restart-38 closed. Baseline
+support checks were green:
+
+- `python -m py_compile helixc\check.py helixc\backend\x86_64.py helixc\backend\ptx.py helixc\tests\test_cli.py helixc\tests\test_codegen.py helixc\tests\test_ptx.py`
+  - Result: passed.
+- Per-file stdlib parser sweep across `helixc/stdlib/*.hx`
+  - Result: parsed 16 files.
+- `python -m pytest helixc\tests\test_codegen.py -q -k "stage35 or agi or hashmap or tensor"`
+  - Result: 158 passed, 746 deselected at the restart-39 baseline support check.
+- `python -m pytest helixc\tests\test_cli.py -q -k "stage35"`
+  - Result: 58 passed, 145 deselected at the restart-39 baseline support check.
+- `python -m pytest helixc\tests\test_ptx.py -q -k "stage35"`
+  - Result: 26 passed, 52 deselected at the restart-39 baseline support check.
+- `python -m pytest helixc\tests --collect-only -q`
+  - Result: 2,386 tests collected at the `258b7a6` baseline.
+
+The fresh restart-39 audit was not clean. Findings:
+
+- Direct x86 still accepted a flag-shaped input position. If a real file named
+  `--no-stdlib` existed, `python -m helixc.backend.x86_64 --no-stdlib victim.hx`
+  could treat the flag-file as source and overwrite `victim.hx`.
+- Direct x86 returned exit code `1` for bad invocation / input-environment
+  failures where `helixc.check` and direct PTX use bad-invocation code `2`.
+- `wmt_predict_or` and `wmt_is_self_loop` failed open on invalid lookups, and
+  table-backed world-model reads could accept corrupted next states outside
+  the declared state range.
+- `t1d_slice_ok` could spend a huge amount of time scanning backward from a
+  forged positive start instead of first checking the arena length.
+- AGI match raw-buffer helpers accepted forged out-of-bounds buffers as
+  zero-filled data.
+- Public `hashmap_sum_values` still accumulated in `i32`, so large maps could
+  wrap even though `hashmap_avg_value_x100` had been hardened.
+- Website code samples claimed 20 samples while the file contains 30.
+
+Fixes in this increment:
+
+- Direct x86 now rejects flag-shaped input paths before reading or writing,
+  and bad input/environment exits use code `2`.
+- Table-backed world-model prediction helpers now fail closed on invalid
+  lookups and corrupted next states; rollout also rejects corrupted next-state
+  cells.
+- `t1d_slice_ok` rejects starts beyond the current arena length before entering
+  the backward scan.
+- `bag_similarity`, `bag_difference`, `bag_count_unique`, and
+  `sequence_match` require valid `t1d` slices before reading.
+- `hashmap_sum_values` now accumulates in `i64` and saturates into the `i32`
+  return range.
+- `sequence_match` was normalized to the same shape as `ti1d_eq_count` after
+  verification exposed a direct-x86 stdlib hash-cons collision between
+  alpha-equivalent blocks.
+- The website code sample count now says 30.
+- Added regressions for the direct-x86 flag-input overwrite class, WMT invalid
+  / corrupted states, huge forged tensor starts, forged AGI match buffers, and
+  hashmap sum saturation.
+
+Verification:
+
+- `python -m py_compile helixc\backend\x86_64.py helixc\tests\test_cli.py helixc\tests\test_codegen.py`
+  - Result: passed.
+- Per-file stdlib parser sweep across `helixc/stdlib/*.hx`
+  - Result: parsed 16 files.
+- `python -m pytest helixc\tests\test_cli.py -q -k "flag_shaped_input or missing_input_reports_clean_error or invalid_utf8_reports_clean_error or missing_strict_stdlib_reports_clean_error or source_as_output"`
+  - Result: 6 passed, 198 deselected.
+- `python -m pytest helixc\tests\test_codegen.py -q -k "wmt_predictors_reject_invalid_and_corrupt_states or t1d_slice_ok_rejects_huge_forged_start_fast or agi_match_helpers_reject_forged_slices or hashmap_sum_values_saturates_on_overflow"`
+  - Result: 4 passed, 904 deselected.
+- `python -m pytest helixc\tests\test_cli.py::test_stage35_direct_x86_accepts_stdlib_compat_flag -q`
+  - Result: 1 passed.
+- `python -m pytest helixc\tests\test_codegen.py -q -k "sequence_match or agi_match_helpers_reject_forged_slices"`
+  - Result: 2 passed, 906 deselected.
+- `python -m pytest helixc\tests\test_codegen.py -q -k "stage35 or agi or hashmap or tensor"`
+  - Result: 162 passed, 746 deselected.
+- `python -m pytest helixc\tests\test_cli.py -q -k "stage35"`
+  - Result: 59 passed, 145 deselected.
+- `python -m pytest helixc\tests\test_ptx.py -q -k "stage35"`
+  - Result: 26 passed, 52 deselected.
+- `python -m pytest helixc\tests\test_cli.py -q`
+  - Result: 204 passed.
+- `python -m pytest helixc\tests\test_ptx.py -q`
+  - Result: 78 passed.
+- `python -m pytest helixc\tests --collect-only -q`
+  - Result: 2,391 tests collected.
+- `git diff --check`
+  - Result: passed.
+
+Clean-gate status:
+
+- Stage 35 clean gates remain `0/3`.
+- Restart 39 is a fix sweep, not a clean gate.
+- Next step is restart 40 as another fresh Stage 35 clean gate from the newest
+  pushed HEAD.

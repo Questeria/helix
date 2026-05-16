@@ -3960,7 +3960,11 @@ if __name__ == "__main__":
         print("usage: python -m helixc.backend.x86_64 <input.hx> <output.bin> "
               "[--strict] [--no-opt] [--stdlib] [--no-stdlib] [-Wad=warn|error]",
               file=sys.stderr)
-        sys.exit(1)
+        sys.exit(2)
+    if sys.argv[1].startswith("-"):
+        print(f"error: input: input path cannot be a flag: {sys.argv[1]}",
+              file=sys.stderr)
+        sys.exit(2)
     if sys.argv[2].startswith("-"):
         print(f"error: output: output path cannot be a flag: {sys.argv[2]}",
               file=sys.stderr)
@@ -4044,10 +4048,10 @@ if __name__ == "__main__":
             src = f.read()
     except OSError as e:
         print(f"error: input: {e}", file=sys.stderr)
-        sys.exit(1)
+        sys.exit(2)
     except UnicodeDecodeError as e:
         print(f"error: input: encoding error reading source: {e}", file=sys.stderr)
-        sys.exit(1)
+        sys.exit(2)
     # Auto-include stdlib by default. The fdce / dce passes drop unused
     # stdlib fns so the binary cost is zero. Pass --no-stdlib to compile
     # without it (only useful for stdlib internals or custom-runtime tests).
@@ -4067,7 +4071,7 @@ if __name__ == "__main__":
         if not msg:
             msg = "stdlib file missing"
         print(f"error: stdlib: {msg}", file=sys.stderr)
-        sys.exit(1)
+        sys.exit(2)
     try:
         mod_count = flatten_modules(prog)
     except FlattenError as e:

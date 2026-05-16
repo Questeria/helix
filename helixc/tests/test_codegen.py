@@ -8408,6 +8408,31 @@ def test_agi_wmt_predict_or():
     assert code == 42, f"expected 42 (1 + 41), got {code}"
 
 
+def test_stage35_wmt_predictors_reject_invalid_and_corrupt_states():
+    src = """
+    fn main() -> i32 {
+        let wmt = wmt_new(2, 1);
+        wmt_set(wmt, 0, 0, 1);
+        let invalid_default = wmt_predict_or(wmt, 0, 99, 42);
+        let invalid_self = wmt_is_self_loop(wmt, 0 - 1, 0);
+        __arena_set(wmt + 2, 99);
+        let corrupt_predict = wmt_predict(wmt, 0, 0);
+        let corrupt_or = wmt_predict_or(wmt, 0, 0, 42);
+        let actions = t1d_new(1);
+        ti1d_set(actions, 0, 0);
+        let corrupt_rollout = wmt_rollout(wmt, 0, actions, 1);
+        if invalid_default == (0 - 1) {
+        if invalid_self == 0 {
+        if corrupt_predict == (0 - 1) {
+        if corrupt_or == (0 - 1) {
+        if corrupt_rollout == (0 - 1) { 42 } else { 7 }
+        } else { 7 }} else { 7 }} else { 7 }} else { 7 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
 def test_agi_wmt_count_set():
     """Count explicit transitions in the table."""
     src = """
@@ -8496,6 +8521,36 @@ def test_agi_sequence_match():
     """
     code = compile_and_run(src)
     assert code == 2, f"expected 2 (positions 0 and 2 match), got {code}"
+
+
+def test_stage35_t1d_slice_ok_rejects_huge_forged_start_fast():
+    src = """
+    fn main() -> i32 {
+        if t1d_slice_ok(2147483646, 1) == 0 { 42 } else { 7 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stage35_agi_match_helpers_reject_forged_slices():
+    src = """
+    fn main() -> i32 {
+        let valid = t1d_new(1);
+        ti1d_set(valid, 0, 7);
+        let sim = bag_similarity(2147483000, 1, 2147483001, 1);
+        let diff = bag_difference(2147483000, 1, valid, 1);
+        let uniq = bag_count_unique(2147483000, 1);
+        let seq = sequence_match(2147483000, 2147483001, 1);
+        if sim == 0 {
+        if diff == 0 {
+        if uniq == 0 {
+        if seq == 0 { 42 } else { 7 }
+        } else { 7 }} else { 7 }} else { 7 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
 
 
 def test_ieee754_pos_2_0():
@@ -17412,6 +17467,29 @@ def test_stdlib_hashmap_sum_values():
         hashmap_put(m, 8, 2, 15);
         hashmap_put(m, 8, 3, 17);
         hashmap_sum_values(m, 8)
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stage35_hashmap_sum_values_saturates_on_overflow():
+    src = """
+    fn main() -> i32 {
+        let high = hashmap_new(8);
+        hashmap_put(high, 8, 1, 2147483647);
+        hashmap_put(high, 8, 2, 2147483647);
+        let pos = hashmap_sum_values(high, 8);
+
+        let low = (0 - 2147483647) - 1;
+        let neg = hashmap_new(8);
+        hashmap_put(neg, 8, 1, low);
+        hashmap_put(neg, 8, 2, low);
+        let neg_sum = hashmap_sum_values(neg, 8);
+
+        if pos == 2147483647 {
+        if neg_sum == low { 42 } else { 7 }
+        } else { 7 }
     }
     """
     code = compile_and_run(src)

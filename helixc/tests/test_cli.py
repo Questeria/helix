@@ -1924,6 +1924,36 @@ def test_stage35_direct_x86_rejects_source_as_output(tmp_path):
     assert "Traceback" not in proc.stderr
 
 
+def test_stage35_direct_x86_rejects_flag_shaped_input_before_output(tmp_path):
+    flag_src = tmp_path / "--no-stdlib"
+    flag_src.write_text("fn main() -> i32 { 42 }\n", encoding="utf-8")
+    victim = tmp_path / "victim.hx"
+    source = "fn main() -> i32 { 7 }\n"
+    victim.write_text(source, encoding="utf-8")
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    env = os.environ.copy()
+    env["PYTHONPATH"] = (
+        proj_root if not env.get("PYTHONPATH")
+        else proj_root + os.pathsep + env["PYTHONPATH"]
+    )
+    proc = subprocess.run(
+        [
+            sys.executable, "-m", "helixc.backend.x86_64",
+            "--no-stdlib", str(victim),
+        ],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert proc.returncode == 2, proc.stdout + proc.stderr
+    assert victim.read_text(encoding="utf-8") == source
+    assert flag_src.read_text(encoding="utf-8") == "fn main() -> i32 { 42 }\n"
+    assert "input path cannot be a flag" in proc.stderr
+    assert "Traceback" not in proc.stderr
+
+
 def test_stage35_direct_x86_missing_input_reports_clean_error(tmp_path):
     missing = tmp_path / "missing.hx"
     out_path = tmp_path / "missing.bin"
@@ -1937,7 +1967,7 @@ def test_stage35_direct_x86_missing_input_reports_clean_error(tmp_path):
         text=True,
         timeout=120,
     )
-    assert proc.returncode == 1, proc.stdout + proc.stderr
+    assert proc.returncode == 2, proc.stdout + proc.stderr
     assert not out_path.exists()
     assert "error: input:" in proc.stderr
     assert "Traceback" not in proc.stderr
@@ -1957,7 +1987,7 @@ def test_stage35_direct_x86_invalid_utf8_reports_clean_error(tmp_path):
         text=True,
         timeout=120,
     )
-    assert proc.returncode == 1, proc.stdout + proc.stderr
+    assert proc.returncode == 2, proc.stdout + proc.stderr
     assert not out_path.exists()
     assert "encoding error reading source" in proc.stderr
     assert "Traceback" not in proc.stderr
@@ -1982,7 +2012,7 @@ def test_stage35_direct_x86_missing_strict_stdlib_reports_clean_error(
         runpy.run_module("helixc.backend.x86_64", run_name="__main__")
 
     captured = capsys.readouterr()
-    assert exc.value.code == 1
+    assert exc.value.code == 2
     assert not out_path.exists()
     assert "error: stdlib:" in captured.err
     assert "stdlib file missing" in captured.err

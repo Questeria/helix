@@ -1,6 +1,6 @@
 # Helix Code Samples — Ready for Website
 
-20 code samples, each self-contained, each demonstrating a specific feature. Use these directly on the website (Features page, Learn tutorial, Playground examples).
+30 code samples, each self-contained, each demonstrating a specific feature. Use these directly on the website (Features page, Learn tutorial, Playground examples).
 
 Each sample shows: source code · expected output · feature demonstrated.
 
