@@ -485,3 +485,81 @@ Sketch:
 This is the bridge to Increment 4 (AD through Logic<T>), which will
 treat the provenance pair as a gradient path: `D<Logic<T>>` carries
 both the gradient AND the evidence trail simultaneously.
+
+## Increment 9 (Audit) - Post-Increment-8 Three-Lane Audit (2026-05-16)
+
+Per the post-closure-audit pattern established at Stage 35 Increment
+84, a 3-lane audit ran on top of HEAD `a451591` (Increment 8) — but
+this time *during* Stage 36, not at closure. All three lanes (silent-
+failure, type-design, code-review) ran in parallel as read-only
+subagents covering only the Stage-36 frontier (`git diff b8cafe7..HEAD`).
+
+Reports landed in `docs/`:
+- `audit-stage36-postinc8-silent-failures.md` — 3 HIGH + 2 MEDIUM + 2 LOW
+- `audit-stage36-postinc8-type-design.md` — 2 HIGH + 4 MEDIUM + 2 LOW
+- `audit-stage36-postinc8-codereview.md` — 0 HIGH + 3 MEDIUM + 1 LOW
+  (chain-rule math and dogfood SGD math verified correct)
+
+### Combined HIGH findings (5 total, 3 unique architectural concerns)
+
+1. **`parent_left_at` / `parent_right_at` have NO bounds check**
+   (silent-failure A1, conf 95). Forged-handle bypass. Same family
+   as restart 45-47 AGI typed-handle sweep.
+2. **`register_derivation` handle has no missing-vs-zero
+   discriminator** (silent-failure A2, conf 85). Reading
+   `parent_left_at(0)` cannot distinguish "no parent recorded" from
+   "parent recorded as source-id 0".
+3. **Fuzzy ops produce nonsense gradients on out-of-[0,1] inputs**
+   (silent-failure A3, conf 90). No NaN-fail-closed, no clamp.
+4. **`Logic<T>` is type-erased: `TyLogic` ignores inner type**
+   (type-design A1, conf 95). `fuzzy_and(Logic<i32>, Logic<i32>)`
+   silently passes the f32 typecheck, lowers to MUL with f32 result.
+5. **`register_derivation` two-arena-push pair is not atomic**
+   (type-design A2, conf 88). Shared arena cursor with struct
+   lowering / MatchDispatch can interleave.
+
+### Why not autonomously applied
+
+All 5 HIGH findings cross into **architectural decisions** that
+should not be made autonomously (per the documented Stage 29
+hard-gate spirit):
+
+- HIGH 1: bounds-check could trap or return sentinel — design choice.
+- HIGH 2: arena-sentinel vs tagged-handle — representation change.
+- HIGH 3: clamp vs trap on out-of-range — defines fuzzy semantics.
+- HIGH 4: enforcing `TyLogic.inner` changes which programs typecheck.
+- HIGH 5: fused `ARENA_PUSH_PAIR` opcode is a new IR primitive.
+
+These are exactly the kind of "representation change" the original
+Stage 36 plan flagged as Increment 9+ work:
+
+> "Auto-registration of derivations ... Needs IR-level per-Logic<T>
+> handle slots (representation change)."
+
+### Recommended user-approval menu for Increment 9
+
+Pick one or more:
+
+- **9-a (safety quick win)**: bounds-check `parent_*_at` (trap 36500).
+  Pure defense; doesn't change semantics for valid handles.
+- **9-b (representation upgrade)**: redesign Logic<T> runtime
+  representation to `{value, prov}` pair as sketched above, which
+  closes HIGH 2 + HIGH 5 simultaneously and enables auto-registration.
+- **9-c (fuzzy semantics)**: choose clamp vs trap for out-of-[0,1]
+  fuzzy inputs.
+- **9-d (type tightening)**: enforce `TyLogic.inner` in fuzzy and
+  boolean op typecheck signatures. May break user code that relies
+  on the current loose typing.
+
+The MEDIUM/LOW findings are deferrable to a separate Stage 36 audit
+catch-up sweep once 9-a-d is decided.
+
+### Self-host gate
+
+PASS at HEAD `a451591` (G2..G4 byte-identical sha
+`a6f1ee44eb4418ba296954528d05564f5a37627dc38bb350b2308675d86b8986`;
+all smoke programs exit 42).
+
+### Tests at audit time
+
+`python -m pytest helixc/tests/test_stage36_provenance.py -q` → **48 passed**.
