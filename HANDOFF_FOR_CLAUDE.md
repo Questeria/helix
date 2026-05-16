@@ -4,7 +4,7 @@
 **Repo**: `C:\Projects\Kovostov-Native`  
 **Remote**: `https://github.com/Questeria/helix.git`  
 **Branch**: `main`  
-**Handoff written after**: `6c555a4 Fix Stage 35 forty-ninth restart findings`
+**Handoff written after**: `9ab2ffe Fix Stage 35 fiftieth restart findings`
 
 This handoff is for Claude to continue the Helix Stage 35 audit campaign.
 Treat live git state as truth if it differs from this file.
@@ -13,19 +13,59 @@ Treat live git state as truth if it differs from this file.
 
 Stage 35 is still in audit cleanup. Clean gates remain `0/3`.
 
-The latest completed fix sweep is restart 49:
+The latest completed fix sweep is restart 50:
 
-- Commit: `6c555a4 Fix Stage 35 forty-ninth restart findings`
+- Commit: `9ab2ffe Fix Stage 35 fiftieth restart findings`
 - Status at handoff creation: clean working tree, `main` aligned with
   `origin/main`
-- Progress ledger: `docs/stage35-progress-2026-05-15.md` (see Increment 68
-  for restart 49; 67 for restart 48; 66 for restart 47; 65 for restart 46)
-- Current-facing status files now say restart 49 and 2,479 collected tests
+- Progress ledger: `docs/stage35-progress-2026-05-15.md` (see Increment 69
+  for restart 50; 68 for restart 49; 67 for restart 48; 66 for restart 47;
+  65 for restart 46)
+- Current-facing status files now say restart 50 and 2,489 collected tests
 
-Restart 49 was a fix sweep that closed the entire restart-48 deferred
-backlog plus one new B4 finding (lower_ast structural_hash narrowing). The
-deferred list is now empty. The next action is restart 50, which MUST run a
-fresh 3-lane audit (no deferred items to pick up).
+Restart 50 was a fresh-audit fix sweep that closed 16 of 17 findings (1
+LOW C8 about per-module fn-count convention deferred to restart 51). The
+deferred-list-from-50 has 1 item. The next action is restart 51, which
+should pick up C8 plus run a fresh 3-lane audit on remaining surface.
+
+## Restart 50 → Restart 51 deferred findings
+
+- C8 (LOW): `helix_website/HELIX_REFERENCE.md` per-module stdlib fn
+  counts use bare-`fn` convention while the headline says "(644 including
+  @-prefixed)". The per-module callouts ("~113 functions", "~75
+  functions", etc.) don't track either bare or bare+@-decl cleanly —
+  numbers look stale-historical. Restart 51 should standardize per-module
+  callouts to live `grep -c '^fn '` output and explicitly say "(bare `fn`
+  count)".
+
+## What Restart 50 Fixed
+
+Restart 50 ran a fresh 3-lane read-only audit (no deferred backlog from
+restart 49). Result: 17 findings (3 HIGH + 5 MEDIUM + 9 LOW). The fix
+sweep closed 16 of 17; 1 LOW (C8 per-module fn-count convention)
+deferred to restart 51 (see "Restart 50 → Restart 51 deferred findings"
+above).
+
+Lane A (4 LOW): `string_from_int(INT32_MIN)` writes the full sentinel;
+adam/layer_norm now NaN-fail-closed in addition to negative-fail-closed;
+`ti1d_prod` i64+saturate; `hashmap_load_factor_x100` numerator i64.
+
+Lane B (1 MEDIUM + 2 LOW + 1 deferred-prior): `autodiff_cli --as-function`
+preserves source param/return types (was: hardcoded f32); `const_fold`
+`is_const` exception narrowed to cast-failure family; `presburger` dead
+`if False else` simplified; `hash_cons` SHA-256 fallback documented-prior
+(no fix).
+
+Lane C (3 HIGH + 4 MEDIUM): HELIX_REFERENCE.md:59 "23+" sibling reframed
+(closes restart-49 miss); agi-features.md remaining-work row for const-
+fold+DCE removed (those are shipped); HANDOFF_FOR_CLAUDE Protocol section
+de-staled; trap-ids.md header pinned to ledger anchor with grep guidance;
+HELIX_REFERENCE + code_samples Gallery preambles list known-roadmap
+snippets; tutorial.md fragment-level disclaimer; `scripts/run_all_tests.sh`
+echo line matches QUICKSTART promise.
+
+Regression coverage added (10 cases): 4 in test_codegen.py (Lane A), 3 in
+test_cli.py (Lane B).
 
 ## What Restart 49 Fixed
 
@@ -297,10 +337,11 @@ python -m pytest helixc/tests/test_codegen.py -q -k "stage35 or agi or hashmap o
 
 **IMPORTANT**: restart 49 closed the entire restart-48 deferred backlog.
 There are NO carry-forward findings. Restart 50 MUST run a fresh 3-lane
-audit (read-only). The bar continues to rise — restarts 46/47/48/49 each
-closed 12, 17, 13, 11 findings respectively, so 4 consecutive restarts have
-each found more issues than the prior. The first restart where the audit
-returns 0 findings on the same HEAD becomes clean gate 1/3.
+audit (read-only). The campaign has settled into a high-throughput run-rate:
+restarts 46/47/48/49 each closed 12, 17, 13, 11 findings respectively (peak
+at restart 47, decreasing thereafter but not yet trending to zero). The
+first restart where the audit returns 0 findings on the same HEAD becomes
+clean gate 1/3.
 
 The bug-family audit pattern from restart 46 (12 findings) and restart 47
 (17 findings) worked well — each restart pulls more sibling issues into the
@@ -355,24 +396,23 @@ Use three lanes (read-only; fixes apply in a separate sweep):
     HELIX_REFERENCE.md fictitious-flag list and bootstrap-chain diagram.
     Sweep any new website material added since.
   - test counts and restart numbers (sweep the eight surfaces listed in
-    Increment 65; this restart's count is 2,459 / restart 47)
+    Increment 65; current count after the latest restart is in the
+    progress ledger tail and in `helix_website/stats_and_facts.md`)
   - website claims — verify after the eighth surface sweep is done
   - handoff and progress-ledger consistency
-  - license / open-source claims — restart 46 + 47 swept everything
+  - license / open-source claims — restart 46 + 47 + 48 + 49 swept
     softer. Verify no new triple-license claims appeared.
-  - tool flag completeness — restart 47 rewrote HELIX_REFERENCE.md against
-    `helixc/check.py`'s `--help`. If any new check.py flags were added,
-    re-sync.
+  - tool flag completeness — restart 47 + 49 rewrote HELIX_REFERENCE.md
+    + QUICKSTART.md against `helixc/check.py`'s `--help`. If any new
+    check.py flags were added, re-sync.
 
-If restart 48's audit returns 0 findings across all three lanes on the same
-HEAD (`4ba725f` or its newest descendant), the clean-gate counter advances
-to `1/3`. Restart 49 then starts from that same HEAD; restart 50 if 49 is
-also clean; three consecutive clean gates close Stage 35.
+If the next restart's audit returns 0 findings across all three lanes on
+the same HEAD as the current handoff, the clean-gate counter advances to
+`1/3`. The restart after that starts from the same HEAD; the third
+consecutive clean gate closes Stage 35.
 
-If all three lanes are clean on the same HEAD and support checks pass, restart
-47 becomes clean gate `1/3`. If any lane finds an issue, fix the whole bug
-family, add canaries, run verification, commit, push, and restart the clean
-counter from `0/3`.
+If any lane finds an issue, fix the whole bug family, add canaries, run
+verification, commit, push, and restart the clean counter from `0/3`.
 
 ## Suggested First Commands
 
