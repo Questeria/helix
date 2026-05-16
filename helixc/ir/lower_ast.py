@@ -1806,6 +1806,20 @@ class Lowerer:
                 f"unsupported unary operator {expr.op!r} reached lowering"
             )
         if isinstance(expr, A.Call):
+            # Stage 36 Increment 1: provenance-typed primitives.
+            # prove(value, source) lowers to value (Phase-0: the Logic<T>
+            # wrapper has zero runtime overhead; provenance lives purely
+            # at type level). unwrap_logic(l) lowers to l (identity).
+            # Both calls are typecheck-recognized boundary markers; once
+            # typecheck passes, the IR-level value is just the inner T.
+            if (isinstance(expr.callee, A.Name)
+                    and expr.callee.name == "prove"
+                    and len(expr.args) == 2):
+                return self._lower_expr(expr.args[0])
+            if (isinstance(expr.callee, A.Name)
+                    and expr.callee.name == "unwrap_logic"
+                    and len(expr.args) == 1):
+                return self._lower_expr(expr.args[0])
             # Stage 16.5: "literal".as_ptr() — emit STR_PTR op that resolves
             # to a `lea rax, [rip + sym]` of the literal's bytes. The result
             # is a u64 raw pointer suitable for FFI calls.

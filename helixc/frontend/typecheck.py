@@ -1836,7 +1836,10 @@ class TypeChecker:
     # only meaningful as Call callees and shouldn't fire "unbound" when
     # referenced bare.
     _BUILTIN_NAMES = frozenset({
-        "detach", "attach", "consolidate", "recall", "learn_to",
+        "detach", "attach",
+        # Stage 36 Increment 1 — provenance-typed primitives.
+        "prove", "unwrap_logic",
+        "consolidate", "recall", "learn_to",
         "grad", "grad_rev", "grad_rev_all",
         "quote", "splice", "splice_f", "splice_f64",
         "modify", "modify_f", "modify_f64",
@@ -2681,6 +2684,39 @@ class TypeChecker:
                     if isinstance(arg_tys[0], TyDiff):
                         return arg_tys[0]
                     return TyDiff(inner=arg_tys[0])
+                # Stage 36 Increment 1: provenance-typed primitives.
+                # prove(value: T, source: i32) -> Logic<T> — wraps a
+                # bare value with a provenance tag (an i32 identifier
+                # into a user-managed source table). The Logic<T>
+                # wrapper is representationally identical to T at the
+                # IR level in Phase-0; provenance lives purely in the
+                # type system (lattice/semiring upgrade is reserved
+                # for later increments).
+                if bn == "prove" and len(arg_tys) == 2:
+                    if not self._is_int_scalar(arg_tys[1]):
+                        self.errors.append(TypeError_(
+                            f"prove(value, source): source must be i32, "
+                            f"got {self._fmt(arg_tys[1])}",
+                            expr.span,
+                        ))
+                    inner = arg_tys[0]
+                    if isinstance(inner, TyLogic):
+                        return inner
+                    return TyLogic(inner=inner)
+                # unwrap_logic(l: Logic<T>) -> T — strips the Logic
+                # wrapper. Provenance information is discarded; this
+                # is the only legal way to escape the Logic<T> trap-
+                # 24100 boundary check, so callers explicitly
+                # acknowledge they are abandoning the evidence trail.
+                if bn == "unwrap_logic" and len(arg_tys) == 1:
+                    if isinstance(arg_tys[0], TyLogic):
+                        return arg_tys[0].inner
+                    self.errors.append(TypeError_(
+                        f"unwrap_logic() requires Logic<T>, got "
+                        f"{self._fmt(arg_tys[0])}",
+                        expr.span,
+                    ))
+                    return arg_tys[0]
                 if bn == "consolidate" and len(arg_tys) == 1:
                     # Episodic -> Semantic
                     if isinstance(arg_tys[0], TyMemTier) and arg_tys[0].tier == "episodic":

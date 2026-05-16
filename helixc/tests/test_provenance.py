@@ -266,6 +266,168 @@ def test_trap_24001_belongs_to_ast_mod():
     assert AST_MOD_TAG * 1000 + AST_MOD_SUB_ID == 24001
 
 
+def test_prove_wraps_bare_value_as_logic():
+    """Stage 36 Increment 1: prove(v, src) typechecks v: T → Logic<T>.
+    Observed via fn return type — body `prove(v, src)` must satisfy a
+    declared `Logic<i32>` return without trap-24100 or coercion error."""
+    src = """
+fn make_logic() -> Logic<i32> {
+    let v: i32 = 5;
+    prove(v, 7)
+}
+"""
+    prog = parse(src)
+    errs = typecheck(prog)
+    assert errs == [], f"unexpected errors: {[str(e) for e in errs]}"
+
+
+def test_prove_return_inferred_as_logic_t():
+    """Confirm via the typechecker that the result of `prove(v, src)`
+    matches Logic<i32> by passing it to a Logic<i32>-typed param."""
+    src = """
+fn takes_logic(l: Logic<i32>) -> i32 { unwrap_logic(l) }
+fn user_main() -> i32 {
+    let v: i32 = 5;
+    takes_logic(prove(v, 7))
+}
+"""
+    prog = parse(src)
+    errs = typecheck(prog)
+    assert errs == [], f"unexpected errors: {[str(e) for e in errs]}"
+
+
+def test_prove_rejects_non_int_source_tag():
+    """prove() second arg must be an int scalar (the source tag)."""
+    src = """
+fn user_main() -> i32 {
+    let v: i32 = 5;
+    let bad_src: f64 = 1.0;
+    let l = prove(v, bad_src);
+    0
+}
+"""
+    prog = parse(src)
+    errs = typecheck(prog)
+    assert any("prove(value, source)" in str(e) and "i32" in str(e)
+               for e in errs), \
+        f"expected source-must-be-i32 diagnostic, got: " \
+        f"{[str(e) for e in errs]}"
+
+
+def test_prove_on_already_logic_is_idempotent():
+    """prove(l, src) where l is already Logic<T> stays Logic<T> (not
+    Logic<Logic<T>>) — verified by passing through a Logic<i32> param.
+    If prove() nested wrappers, the boundary check (trap-24100) would
+    reject the call."""
+    src = """
+fn takes_logic(l: Logic<i32>) -> i32 { unwrap_logic(l) }
+fn user_main() -> i32 {
+    let v: i32 = 5;
+    let l1 = prove(v, 1);
+    takes_logic(prove(l1, 2))
+}
+"""
+    prog = parse(src)
+    errs = typecheck(prog)
+    assert errs == [], \
+        f"prove() should be idempotent on Logic<T>; got: " \
+        f"{[str(e) for e in errs]}"
+
+
+def test_unwrap_logic_strips_to_inner():
+    """unwrap_logic(Logic<T>) returns T — observed via fn return type
+    of i32 with body `unwrap_logic(prove(v, src))`."""
+    src = """
+fn strip() -> i32 {
+    let v: i32 = 5;
+    unwrap_logic(prove(v, 0))
+}
+"""
+    prog = parse(src)
+    errs = typecheck(prog)
+    assert errs == [], f"unexpected errors: {[str(e) for e in errs]}"
+
+
+def test_unwrap_logic_rejects_non_logic_arg():
+    """unwrap_logic(plain T) raises a typecheck error (catches the
+    accidental-strip-when-already-stripped bug)."""
+    src = """
+fn user_main() -> i32 {
+    let v: i32 = 5;
+    let r = unwrap_logic(v);
+    0
+}
+"""
+    prog = parse(src)
+    errs = typecheck(prog)
+    assert any("unwrap_logic" in str(e) and "Logic<T>" in str(e)
+               for e in errs), \
+        f"expected requires-Logic<T> diagnostic, got: " \
+        f"{[str(e) for e in errs]}"
+
+
+def test_prove_unwrap_roundtrip_passes_logic_boundary():
+    """End-to-end: prove() satisfies the trap-24100 Logic boundary check
+    when the result is then passed to a Logic<i32>-typed parameter."""
+    src = """
+fn takes_logic(l: Logic<i32>) -> i32 { unwrap_logic(l) }
+fn user_main() -> i32 {
+    let v: i32 = 5;
+    takes_logic(prove(v, 42))
+}
+"""
+    prog = parse(src)
+    errs = typecheck(prog)
+    assert errs == [], \
+        f"prove()'s result should satisfy Logic<i32> param without " \
+        f"trap-24100; got: {[str(e) for e in errs]}"
+
+
+def test_prove_unwrap_lower_to_identity():
+    """Stage 36 Increment 1: prove(v, src) and unwrap_logic(l) lower
+    to identity in the IR (Phase-0: Logic<T> has zero runtime overhead;
+    provenance lives purely at the type level). Verifies that a
+    user_main computing 5 + 3 via prove/unwrap_logic produces the same
+    IR op-kind sequence as one computing 5 + 3 directly — no extra ops
+    introduced by the provenance markers."""
+    from helixc.ir.lower_ast import lower
+
+    src_direct = """
+fn user_main() -> i32 {
+    let a: i32 = 5;
+    let b: i32 = 3;
+    a + b
+}
+"""
+    src_marked = """
+fn user_main() -> i32 {
+    let a: i32 = 5;
+    let b: i32 = 3;
+    let la = prove(a, 1);
+    unwrap_logic(la) + b
+}
+"""
+    for src in (src_direct, src_marked):
+        errs = typecheck(parse(src))
+        assert errs == [], f"typecheck errors: {[str(e) for e in errs]}"
+
+    direct_mod = lower(parse(src_direct))
+    marked_mod = lower(parse(src_marked))
+
+    def _user_main_op_kinds(mod):
+        fn = mod.functions["user_main"]
+        return [op.kind.name
+                for block in fn.blocks
+                for op in block.ops]
+
+    direct_ops = _user_main_op_kinds(direct_mod)
+    marked_ops = _user_main_op_kinds(marked_mod)
+    assert direct_ops == marked_ops, (
+        f"prove/unwrap_logic should lower to identity, but op sequences "
+        f"differ:\n  direct: {direct_ops}\n  marked: {marked_ops}"
+    )
+
+
 if __name__ == "__main__":
     import pytest
     raise SystemExit(pytest.main([__file__, "-v"]))
