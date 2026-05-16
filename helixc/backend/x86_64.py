@@ -28,6 +28,7 @@ License: Apache 2.0
 
 from __future__ import annotations
 
+import os
 import struct
 from dataclasses import dataclass, field
 from typing import Optional
@@ -3962,6 +3963,13 @@ if __name__ == "__main__":
         sys.exit(1)
     if sys.argv[2].startswith("-"):
         print(f"error: output: output path cannot be a flag: {sys.argv[2]}",
+              file=sys.stderr)
+        sys.exit(2)
+    if (
+        os.path.normcase(os.path.realpath(os.path.abspath(sys.argv[1])))
+        == os.path.normcase(os.path.realpath(os.path.abspath(sys.argv[2])))
+    ):
+        print("error: output: output path must differ from input source path",
               file=sys.stderr)
         sys.exit(2)
     from ..frontend.autodiff import take_diff_warnings

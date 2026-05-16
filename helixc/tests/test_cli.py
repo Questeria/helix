@@ -1219,6 +1219,19 @@ def test_stage35_check_output_chmod_failure_removes_temp(
     assert list(tmp_path.glob(".chmod_failure.bin.*.tmp")) == []
 
 
+def test_stage35_check_output_rejects_source_as_output(capsys, tmp_path):
+    src_path = tmp_path / "same_source.hx"
+    source = "fn main() -> i32 { 42 }\n"
+    src_path.write_text(source, encoding="utf-8")
+
+    rc = main([str(src_path), "-o", str(src_path), "--no-stdlib"])
+    cap = capsys.readouterr()
+
+    assert rc == 2
+    assert "output path must differ from input source path" in cap.err
+    assert src_path.read_text(encoding="utf-8") == source
+
+
 def _count_op_kinds(mod):
     """Helper: total number of ops per kind across all functions."""
     from collections import Counter
@@ -1887,6 +1900,27 @@ def test_stage35_direct_x86_rejects_flag_shaped_output(tmp_path):
     assert proc.returncode == 2, proc.stdout + proc.stderr
     assert not (tmp_path / "--no-stdlib").exists()
     assert "output path cannot be a flag" in proc.stderr
+    assert "Traceback" not in proc.stderr
+
+
+def test_stage35_direct_x86_rejects_source_as_output(tmp_path):
+    src_path = tmp_path / "same_source_x86.hx"
+    source = "fn main() -> i32 { 42 }\n"
+    src_path.write_text(source, encoding="utf-8")
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    proc = subprocess.run(
+        [
+            sys.executable, "-m", "helixc.backend.x86_64",
+            str(src_path), str(src_path), "--no-stdlib",
+        ],
+        cwd=proj_root,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert proc.returncode == 2, proc.stdout + proc.stderr
+    assert src_path.read_text(encoding="utf-8") == source
+    assert "output path must differ from input source path" in proc.stderr
     assert "Traceback" not in proc.stderr
 
 

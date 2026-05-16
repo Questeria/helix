@@ -8348,6 +8348,28 @@ def test_stage35_wmt_rollout_rejects_forged_and_short_inputs():
     assert code == 42, f"expected 42, got {code}"
 
 
+def test_stage35_wmt_rollout_rejects_invalid_action_and_unset_transition():
+    src = """
+    fn main() -> i32 {
+        let wmt = wmt_new(3, 2);
+        wmt_set(wmt, 0, 0, 1);
+        let actions = t1d_new(1);
+        ti1d_set(actions, 0, 99);
+        let invalid_high = wmt_rollout(wmt, 0, actions, 1);
+        ti1d_set(actions, 0, 0 - 1);
+        let invalid_negative = wmt_rollout(wmt, 0, actions, 1);
+        ti1d_set(actions, 0, 1);
+        let unset = wmt_rollout(wmt, 0, actions, 1);
+        if invalid_high == (0 - 1) {
+        if invalid_negative == (0 - 1) {
+        if unset == (0 - 1) { 42 } else { 7 }
+        } else { 7 }} else { 7 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
 def test_agi_wm_prediction_error_sq():
     """Squared error: (predicted - actual)^2."""
     src = """
@@ -19058,6 +19080,35 @@ def test_stage35_hashmap_avg_value_x100_avoids_predivide_overflow():
         hashmap_put(m, 4, 2, 21474836);
         let avg = hashmap_avg_value_x100(m, 4);
         if avg == 2147483600 { 42 } else { 7 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stage35_hashmap_avg_value_x100_sums_in_i64_before_scaling():
+    src = """
+    fn main() -> i32 {
+        let m = hashmap_new(8);
+        hashmap_put(m, 8, 1, 2147483647);
+        hashmap_put(m, 8, 2, 2147483647);
+        let avg = hashmap_avg_value_x100(m, 8);
+        if avg == 2147483647 { 42 } else { 7 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stage35_hashmap_avg_value_x100_negative_sum_saturates():
+    src = """
+    fn main() -> i32 {
+        let m = hashmap_new(8);
+        hashmap_put(m, 8, 1, 0 - 2147483647);
+        hashmap_put(m, 8, 2, 0 - 2147483647);
+        let low = (0 - 2147483647) - 1;
+        let avg = hashmap_avg_value_x100(m, 8);
+        if avg == low { 42 } else { 7 }
     }
     """
     code = compile_and_run(src)

@@ -2421,3 +2421,82 @@ Clean-gate status:
 
 - Stage 35 clean gates remain `0/3`.
 - Restart 37 is a fix sweep, not a clean gate.
+
+## Increment 57 - Thirty-Eighth Clean-Gate Restart Fix Sweep
+
+Restart 38 began from pushed commit `40e64ca` with restart-37 closed. Baseline
+support checks were green:
+
+- `python -m py_compile helixc\check.py helixc\backend\x86_64.py helixc\backend\ptx.py helixc\tests\test_cli.py helixc\tests\test_codegen.py helixc\tests\test_ptx.py`
+  - Result: passed.
+- Per-file stdlib parser sweep across `helixc/stdlib/*.hx`
+  - Result: parsed 16 files.
+- `python -m pytest helixc\tests\test_cli.py -q -k "stage35 or emit_ast or emit_ir or emit_asm or emit_ptx or output or direct_x86 or missing_main"`
+  - Result: 76 passed, 125 deselected at the restart-38 baseline support check.
+- `python -m pytest helixc\tests\test_codegen.py -q -k "hashmap or agi_ or wmt or wml or wm_prediction or tensor or revad or agi_memory or bfs or visited or pq or astar or attention or unify"`
+  - Result: 156 passed, 745 deselected at the restart-38 baseline support check.
+- `python -m pytest helixc\tests\test_ptx.py -q -k "stage35 or direct_ptx or wad or deprecated"`
+  - Result: 42 passed, 36 deselected at the restart-38 baseline support check.
+- `python -m pytest helixc\tests --collect-only -q`
+  - Result: 2,381 tests collected at the `40e64ca` baseline.
+
+The fresh restart-38 audit was not clean. Findings:
+
+- `wmt_rollout` still failed open for invalid action values and unset
+  transitions by keeping the previous state instead of returning `-1`.
+- `hashmap_avg_value_x100` widened after calling `hashmap_sum_values`, but
+  `hashmap_sum_values` itself accumulated in `i32`, so multi-entry overflow
+  could still corrupt the scaled average before saturation.
+- `helixc.check -o` and direct `python -m helixc.backend.x86_64` allowed the
+  source file to also be the output path, so a successful compile could replace
+  `.hx` source text with ELF bytes.
+- The docs/status lane was clean.
+
+Fixes in this increment:
+
+- Made `wmt_rollout` fail closed with `-1` when a rollout step has an invalid
+  action or an unset transition.
+- Reworked `hashmap_avg_value_x100` to sum occupied bucket values in `i64`
+  before scaling and saturating back into the `i32` return range.
+- Added output path guards to both `helixc.check -o` and the direct x86 backend
+  CLI so the compiler rejects source-as-output before writing any artifact.
+- Added regressions for invalid/unset rollout steps, positive and negative
+  pre-scale hashmap average overflow, and both source-as-output CLI paths.
+- Updated current-facing status docs and website facts to the restart-38 test
+  count.
+
+Verification:
+
+- `python -m py_compile helixc\check.py helixc\backend\x86_64.py helixc\tests\test_cli.py helixc\tests\test_codegen.py`
+  - Result: passed.
+- `python -m pytest helixc\tests\test_cli.py -q -k "source_as_output or chmod_failure or flag_shaped_output"`
+  - Result: 5 passed, 198 deselected.
+- `python -m pytest helixc\tests\test_codegen.py -q -k "wmt_rollout_rejects_invalid_action_and_unset_transition or hashmap_avg_value_x100_sums_in_i64_before_scaling or hashmap_avg_value_x100_negative_sum_saturates or hashmap_avg_value_x100_avoids_predivide_overflow"`
+  - Result: 4 passed, 900 deselected.
+- `python -m pytest helixc\tests\test_codegen.py -q -k "stage35 or agi or hashmap or tensor"`
+  - Result: 158 passed, 746 deselected.
+- `python -m pytest helixc\tests\test_cli.py -q -k "stage35"`
+  - Result: 58 passed, 145 deselected.
+- `python -m pytest helixc\tests\test_ptx.py -q -k "stage35"`
+  - Result: 26 passed, 52 deselected.
+- `python -m pytest helixc\tests\test_cli.py -q`
+  - Result: 203 passed.
+- `python -m pytest helixc\tests\test_ptx.py -q`
+  - Result: 78 passed.
+- Per-file stdlib parser sweep across `helixc/stdlib/*.hx`
+  - Result: parsed 16 files.
+- `python -m pytest helixc\tests --collect-only -q`
+  - Result: 2,386 tests collected.
+- `python -m pytest --collect-only -q`
+  - Result: not used as gate evidence because the unscoped command collected
+    the read-only Stage 30 snapshot and hit duplicate-module import mismatch
+    errors. Scoped live-suite collection above is the meaningful count.
+- `git diff --check`
+  - Result: passed.
+
+Clean-gate status:
+
+- Stage 35 clean gates remain `0/3`.
+- Restart 38 is a fix sweep, not a clean gate.
+- Next step is restart 39 as another fresh Stage 35 clean gate from the newest
+  pushed HEAD.

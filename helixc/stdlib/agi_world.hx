@@ -178,9 +178,19 @@ fn wmt_rollout(wmt: i32, start_state: i32, action_seq_start: i32, steps: i32) ->
         while i < steps {
             let a = __arena_get(action_seq_start + i);
             let off = wmt_offset(wmt, s, a);
-            let nxt = if off < 0 { 0 - 1 } else { __arena_get(off) };
-            s = if nxt < 0 { s } else { nxt };
-            i = i + 1;
+            if off < 0 {
+                s = 0 - 1;
+                i = steps;
+            } else {
+                let nxt = __arena_get(off);
+                if nxt < 0 {
+                    s = 0 - 1;
+                    i = steps;
+                } else {
+                    s = nxt;
+                    i = i + 1;
+                };
+            };
         }
         s
     } } }}}

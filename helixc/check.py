@@ -460,6 +460,12 @@ def _atomic_write_bytes(path: str, data: bytes, mode: int | None = None) -> None
         raise
 
 
+def _same_filesystem_path(left: str, right: str) -> bool:
+    left_path = os.path.normcase(os.path.realpath(os.path.abspath(left)))
+    right_path = os.path.normcase(os.path.realpath(os.path.abspath(right)))
+    return left_path == right_path
+
+
 def _report_x86_codegen_exception(e: Exception) -> int:
     msg = str(e)
     if isinstance(e, ValueError) and msg.startswith("module has no function "):
@@ -1065,6 +1071,12 @@ def _main_inner(argv: list[str] | None,
             )
             return 2
         print(f"helixc: file not found: {path}", file=sys.stderr)
+        return 2
+    if a.output is not None and _same_filesystem_path(path, a.output):
+        print(
+            "helixc: output path must differ from input source path",
+            file=sys.stderr,
+        )
         return 2
 
     try:
