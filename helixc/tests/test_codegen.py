@@ -11084,6 +11084,25 @@ def test_revad_backward_rejects_tape_grown_after_adjoints_allocated():
     assert code == 42, f"expected 42, got {code}"
 
 
+def test_revad_backward_rejects_tape_shrunk_after_adjoints_allocated():
+    src = """
+    fn main() -> i32 {
+        let tape = rev_tape_new(4);
+        let x = rev_leaf(tape, 5);
+        let y = rev_leaf(tape, 7);
+        let adj = rev_alloc_adjoints(tape);
+        rev_seed(adj, y, 99);
+        __arena_set(tape, 1);
+        let status = rev_backward(tape, adj);
+        if status == (0 - 1) {
+            if rev_grad(adj, y) == 99 { 42 } else { 7 }
+        } else { 7 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
 def test_revad_seed_rejects_corrupt_adj_cap_metadata_without_guard_write():
     src = """
     fn main() -> i32 {
@@ -11166,6 +11185,17 @@ def test_grad_rejects_allocator_let_in_differentiated_body():
     """
     with pytest.raises(NotImplementedError, match="cannot erase side-effecting let"):
         compile_and_run(src)
+
+
+def test_stage35_tensor_allocators_are_not_marked_pure():
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    with open(os.path.join(root, "stdlib", "tensor.hx"), encoding="utf-8") as f:
+        tensor_src = f.read()
+    for name in (
+        "t1d_new", "t2d_new", "ti2d_new", "ti1d_zeros",
+        "tf1d_zeros", "tf2d_zeros",
+    ):
+        assert f"@pure\nfn {name}" not in tensor_src
 
 
 def test_negative_length_tensor_nn_helpers_return_empty_values():

@@ -1188,7 +1188,6 @@ fn tf2d_norm_frobenius_sq(start: i32, rows: i32, cols: i32) -> f32 {
 }
 
 // tf2d_zeros(rows, cols): allocate a new rows*cols matrix filled with 0.0_f32.
-@pure
 fn tf2d_zeros(rows: i32, cols: i32) -> i32 {
     t2d_new(rows, cols)
 }

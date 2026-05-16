@@ -280,7 +280,7 @@ fn rev_backward(tape: i32, adj_start: i32) -> i32 {
     if cnt < 0 { 0 - 1 }
     else { if cnt > cap { 0 - 1 }
     else { if adj_cap < 0 { 0 - 1 }
-    else { if adj_cnt < cnt { 0 - 1 }
+    else { if adj_cnt != cnt { 0 - 1 }
     else { if cnt > adj_cap { 0 - 1 }
     else { if __arena_get(tape + 2) != adj_start { 0 - 1 }
     else {

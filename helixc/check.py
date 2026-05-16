@@ -847,8 +847,9 @@ def _proof_strict_effect_warning_diagnostics(
     from .frontend.grad_pass import grad_pass
 
     try:
-        grad_pass(prog)
-        mod = lower(prog)
+        strict_prog = _drop_unreachable_diff_signature_fns(prog)
+        grad_pass(strict_prog)
+        mod = lower(strict_prog)
     except Exception as e:
         msg = (
             f"strict-effect-check: ERROR\n"

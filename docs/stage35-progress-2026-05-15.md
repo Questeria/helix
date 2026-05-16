@@ -1632,3 +1632,52 @@ Clean-gate status:
 - Stage 35 clean gates remain `0/3`.
 - Next step is restart 26 as another fresh Stage 35 clean gate from the newest
   committed fix sweep.
+
+## Increment 45 - Twenty-Sixth Clean-Gate Restart Fix Sweep
+
+Restart 26 began from commit `45bf6ff` with green smoke/support checks. All
+three audit lanes eventually returned useful findings, so the gate did not
+count as clean and Stage 35 remains at `0/3` clean gates.
+
+Fixes landed in this increment:
+
+- `tf2d_zeros` is no longer marked `@pure`, matching the allocation behavior of
+  the tensor allocator family.
+- `rev_backward` now rejects tapes whose logical count changed in either
+  direction after adjoint allocation, closing the remaining shrunk-tape
+  validation gap.
+- Strict proof-obligation effect diagnostics now prune unreachable
+  differentiable-signature helpers before running AD/lowering, matching the
+  normal output paths for dead `D<T>` helpers.
+- The pause handoff now points to restart 26 as current history, and public docs
+  no longer describe live bootstrap state as fully self-hosted.
+- Public/status docs now reflect restart 26 and 2,294 collected tests.
+
+Focused verification:
+
+- Per-file stdlib parser sweep across `helixc/stdlib/*.hx`
+  - Result: parsed stdlib files.
+- `python -m py_compile helixc\check.py`
+  - Result: passed.
+- `python -m pytest helixc/tests/test_codegen.py -k "revad_backward_rejects_tape_shrunk_after_adjoints_allocated or stage35_tensor_allocators_are_not_marked_pure or revad_backward_rejects_tape_grown_after_adjoints_allocated" -q`
+  - Result: 3 passed, 849 deselected.
+- `python -m pytest helixc/tests/test_cli.py -k "stage35_emit_proof_obligations_strict_ignores_dead_ad_helper or stage31_emit_proof_obligations_classifies_strict_effect_error or stage31_emit_proof_obligations_strict_effect_pass_failure_stays_json" -q`
+  - Result: 3 passed, 162 deselected.
+- `python -m pytest helixc/tests/test_transcendentals.py helixc/tests/test_autodiff.py helixc/tests/test_autodiff_reverse.py -q`
+  - Result: 103 passed.
+- `python -m pytest helixc/tests/test_codegen.py -k "t1d or t2d or ti2d or tf2d or tensor or stage35_2d or nn_ or dense_layer or softmax_rows_f32 or softmax_ce_grad_f32 or argmax_rows_f32 or accuracy_count_from_logits_f32 or ce_loss_batch_f32 or bce or gelu or revad or grad_rejects_allocator_let or stage35_tensor_allocators_are_not_marked_pure" -q`
+  - Result: 133 passed, 719 deselected.
+- `python -m pytest helixc/tests/test_cli.py -q`
+  - Result: 165 passed.
+- `python -m pytest helixc/tests/test_ptx.py -q`
+  - Result: 76 passed.
+- `python -m pytest helixc/tests/test_effect_check.py -q`
+  - Result: 34 passed.
+- `python -m pytest helixc/tests --collect-only -q -p no:cacheprovider`
+  - Result: 2,294 tests collected.
+
+Clean-gate status:
+
+- Stage 35 clean gates remain `0/3`.
+- Next step is restart 27 as another fresh Stage 35 clean gate from the newest
+  committed fix sweep.

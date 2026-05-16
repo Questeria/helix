@@ -2735,6 +2735,31 @@ def test_stage31_emit_proof_obligations_classifies_ad_warning_error(
     assert "ad:" in captured.err
 
 
+def test_stage35_emit_proof_obligations_strict_ignores_dead_ad_helper(
+    capsys, tmp_path,
+):
+    src_path = str(tmp_path / "proof_strict_dead_ad_helper.hx")
+    with open(src_path, "w") as f:
+        f.write(
+            "fn loss(x: D<f64>) -> D<f64> { x }\n"
+            "fn main() -> i32 { 0 }\n"
+        )
+    rc = main([
+        src_path, "--emit-proof-obligations", "--no-stdlib", "--strict",
+    ])
+    captured = capsys.readouterr()
+    assert rc == 0, captured.out + captured.err
+    artifact = json.loads(captured.out)
+    assert artifact["summary"]["typecheck_errors"] == 0
+    assert artifact["summary"]["pipeline_errors"] == 0
+    assert not any(
+        e.get("phase") == "strict-effect-check"
+        for e in artifact.get("pipeline_errors", [])
+    )
+    assert "unresolved generic type D" not in captured.err
+    assert "unresolved generic type D" not in captured.out
+
+
 def test_stage31_emit_proof_obligations_classifies_deprecated_error(
     capsys, tmp_path,
 ):
