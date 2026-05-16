@@ -3888,3 +3888,180 @@ re-raise guards) that conflicted with the existing
 test_stage35_emit_ptx_reports_tile_lowering_error_without_bug_label
 test contract. Future restarts should expect this divergence and
 treat the bot's outputs as candidate fixes to verify, not authoritative.
+
+
+## Increment 71 — Fifty-Second Clean-Gate Restart Fix Sweep (2026-05-16)
+
+Restart 52 ran a fresh 3-lane read-only audit on top of restart 51 HEAD
+(`a4ad9a0`). Result: 3 findings total (1 Lane A HIGH + 0 Lane B + 1 Lane
+C MEDIUM + 1 Lane C LOW). The Lane A finding was the missed 2D sibling
+of restart 51 A3 (`ti1d_dot` saturation). Lane B was fully clean.
+
+Fix sweep closed all 3 findings:
+
+Lane A (1 HIGH):
+
+- A1 HIGH: `ti2d_matvec` and `ti2d_matmul` (`helixc/stdlib/tensor.hx`)
+  lift the inner accumulator to i64 with INT32 saturation per output
+  cell. Sibling sweep of restart 51 A3 — the 2D matrix paths were
+  missed when the 1D `ti1d_dot` got the saturation fix.
+
+Lane B (0 findings — clean):
+
+- All families clean. Stale-artifact cleanup, partial-write atomicity,
+  backend flag parity, silent-fallback exceptions, help/banner
+  completeness, bootstrap parser drift, exit-code convention — all
+  swept clean.
+
+Lane C (1 MEDIUM + 1 LOW):
+
+- C1 MEDIUM: forecast-string typo cluster across 4 surfaces (HANDOFF
+  ChatGPT x2, QUICKSTART, stats_and_facts.md, HELIX_REFERENCE.md L510)
+  bumped historical "restart 50 forecast 2,489" to "2,497" in places
+  that should remain historical.
+- C2 LOW: HELIX_REFERENCE.md L510 per-module @-attributed counts
+  re-verified against live stdlib (still 16 modules, no new helpers).
+
+NB: restart 52 commit `c584b0b` ("Fix Stage 35 fifty-second restart
+findings") landed the A1 fix and four doc edits directly, but did NOT
+add the regression canary, the lane audit docs, or the Increment 71
+ledger entry. This Increment 71 closes that bookkeeping gap as part
+of restart 53.
+
+
+## Increment 72 — Fifty-Third Clean-Gate Restart Fix Sweep (2026-05-16)
+
+Restart 53 ran a fresh 3-lane read-only audit on top of restart 52
+HEAD (`c584b0b`). Result: 15 findings total (4 Lane A HIGH + 3 Lane A
+MEDIUM + 1 Lane A LOW + 0 Lane B HIGH + 1 Lane B MEDIUM + 1 Lane B
+LOW + 5 Lane C HIGH). The Lane A family was "missed siblings in the
+i64-saturation sweep": every integer accumulator the restart 51/52
+pattern was supposed to harden but did not reach.
+
+Fix sweep closed all findings:
+
+Lane A (4 HIGH + 3 MEDIUM + 1 LOW):
+
+- A1 HIGH: `vec_dot` and `vec_dot_pure` in `iterators.hx` lifted to
+  i64 + INT32 saturation. Sibling of restart 51 A3 / restart 52 A1
+  extended to the iterators.hx vec_dot family.
+- A2 HIGH: `vec_abs_sum`, `vec_cumsum`, `vec_mean`, `vec_sum_pure`
+  in `iterators.hx` lifted to i64 + INT32 saturation. (`vec_sum_squares`
+  was already saturated by an earlier sweep.) `vec_cumsum` saturates
+  per pushed slot; `vec_mean` saturates the partial sum before the
+  integer division so the mean is monotonic in the input magnitudes.
+- A3 HIGH: `vec_sum` and `vec_product` in `vec.hx` lifted to i64 +
+  INT32 saturation. Sibling of `ti1d_sum` (restart 51 A2) and
+  `ti1d_prod` (restart 50 A3); the vec.hx companion was missed in
+  those sweeps.
+- A4 HIGH: `attention_dot` in `agi_search.hx` rewritten with i64 dot
+  + per-cell i64 weighted accumulator + i64 total_w, each saturated
+  to INT32. The original three independent i32 accumulators wrapped
+  silently. The normalize step is now fail-closed when total_w is 0.
+- A5 MEDIUM: `ti1d_axpy`, `ti1d_add_scalar`, `ti1d_mul_scalar` in
+  `tensor.hx` use per-element i64 intermediates + INT32 saturation
+  on write.
+- A6 MEDIUM: `dense_layer_forward` in `nn.hx` bias-add uses i64
+  intermediate + INT32 saturation so the saturation guarantee from
+  `ti2d_matvec` (restart 52 A1) is preserved through the dense-layer
+  output.
+- A7 MEDIUM: `sgd_step_array` in `nn.hx` lifts the per-element
+  weight update to i64 + INT32 saturation. Sibling of A5.
+- A8 LOW: `attention_softmax_f32` in `agi_search.hx` NaN-fail-closed
+  sweep on output. A single NaN/Inf in vals_start used to poison the
+  corresponding out_start slot; matches the layer_norm_f32 /
+  softmax_layer precedent.
+
+Lane B (1 MEDIUM + 1 LOW):
+
+- B1 MEDIUM: `backend/x86_64.py` direct backend driver
+  `compile_module_to_elf` call (line ~4381) gained the
+  `(NotImplementedError, AssertionError, KeyboardInterrupt,
+  SystemExit, MemoryError): raise` guard before the catch-all
+  `except Exception`. Sibling of restart 51 B2/B3 (check.py codegen
+  re-raise). NB: this fix may have been applied by the auto-fix bot
+  during the audit window — the source already had the guard when
+  the orchestrator opened it.
+- B2 LOW: `backend/x86_64.py` `validate_kernel_tile_lowering` blocks
+  (lines ~4321 and ~4338) gained the explanatory comment that
+  `check.py:1719` already carries ("NIE is the user-facing signal
+  for unsupported tile ops; do NOT add a re-raise guard").
+  Comment-only fix; no behavior change.
+
+Lane C (5 HIGH):
+
+- C1 HIGH: restart 52 commit `c584b0b` did not write Increment 71;
+  this commit adds it (above) so the campaign ledger reflects
+  reality.
+- C2 HIGH: 11 of 14 current-facing surfaces still said "restart 51
+  is the latest landed sweep" after restart 52. Updated to "restart
+  52" in: README.md x2, QUICKSTART.md, HANDOFF_FOR_CLAUDE.md x4,
+  HANDOFF_FOR_CHATGPT.md x2, stats_and_facts.md x2, HELIX_REFERENCE
+  x2. (Line 510 of HELIX_REFERENCE.md already said restart 52.)
+- C3 HIGH: HANDOFF_FOR_CLAUDE.md "Restart 52 Protocol" paragraph
+  (line ~388) said restart 51 closed "15 freshly-discovered findings"
+  and the campaign run-rate "12, 17, 13, 11, 17, 15". Reconciled
+  with corrected restart 51 numbers from Increment 70: "12" findings
+  and run-rate "12, 17, 13, 11, 17, 12". Section header bumped to
+  "Restart 53 Protocol".
+- C4 HIGH: missing audit lane report docs for restart 52. Created
+  `docs/audit-stage35-restart52-laneA.md`, `-laneB.md`, `-laneC.md`.
+- C5 HIGH: restart 52 runtime fix landed without a regression canary.
+  Added `test_stage35_restart52_ti2d_matvec_saturates_on_i32_overflow`
+  and `test_stage35_restart52_ti2d_matmul_saturates_on_i32_overflow`
+  to `test_codegen.py`.
+
+Regression coverage added (14 cases, all in `test_codegen.py`):
+
+- restart 52 A1: `ti2d_matvec`, `ti2d_matmul` saturation (2 tests).
+- restart 53 A1: `vec_dot`, `vec_dot_pure` saturation (2 tests).
+- restart 53 A2: `vec_cumsum` per-slot saturation, `vec_mean`
+  saturate-then-divide (2 tests).
+- restart 53 A3: `vec_sum` and `vec_product` (vec.hx) saturation
+  (2 tests).
+- restart 53 A5: `ti1d_axpy`, `ti1d_mul_scalar` saturation (2 tests).
+- restart 53 A6: `dense_layer_forward` bias preserves saturation
+  (1 test).
+- restart 53 A7: `sgd_step_array` saturation (1 test).
+- restart 53 A4: `attention_dot` saturation (1 test).
+- restart 53 A8: `attention_softmax_f32` NaN fail-closed (1 test).
+
+Verification:
+
+- `python -m py_compile helixc/check.py helixc/backend/x86_64.py
+  helixc/backend/ptx.py helixc/frontend/autodiff_cli.py
+  helixc/ir/lower_ast.py helixc/ir/passes/const_fold.py
+  helixc/tests/test_cli.py helixc/tests/test_codegen.py
+  helixc/tests/test_ptx.py`
+  - Result: passed.
+- Per-file stdlib parser sweep
+  - Result: parsed 16 files.
+- Restart 52 + 53 new regression canaries (Lane A x12 + A1 carry x2)
+  - Result: 14 passed.
+- `python -m pytest helixc/tests/test_codegen.py -q -k "stage35 or
+  tensor or matvec or matmul or attention or dense_layer or sgd or
+  cumsum or vec_sum or vec_product or vec_dot or vec_mean or vec_abs
+  or axpy or scalar"`
+  - Result: 169 passed.
+- `python -m pytest helixc/tests/test_cli.py helixc/tests/test_ptx.py
+  -q -k "stage35"`
+  - Result: 155 passed.
+- `python -m pytest helixc/tests --collect-only -q`
+  - Result: 2,511 tests collected (was 2,497 + 14 new canaries).
+- `git diff --check`
+  - Result: passed.
+
+Clean-gate status:
+
+- Stage 35 clean gates remain `0/3`.
+- Restart 53 is a fix sweep, not a clean gate.
+- Next step is restart 54 as another fresh Stage 35 clean gate from
+  the newest pushed HEAD.
+
+Restart 53 process note: this restart bundled Increment 71 (restart
+52 bookkeeping) and Increment 72 (restart 53 fix sweep) because the
+restart 52 commit landed a runtime fix without the surrounding lane
+docs / ledger / canaries. The campaign protocol is now to verify
+each restart commit ALSO writes the ledger increment + lane docs +
+canaries before pushing — partial commits drag forward into the next
+restart and inflate its scope.

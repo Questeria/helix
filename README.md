@@ -28,7 +28,7 @@ The purpose of Helix is to remove uncertainty wherever software can honestly rem
 
 ## Status (2026-05-16)
 
-**Current stage: Stage 35 audit cleanup.** Clean gates remain `0/3` as of the latest Stage 35 progress ledger, and the exact test count changes as each audit adds regressions. Continue from the newest pushed `git log -1 --oneline` and the tail of `docs/stage35-progress-2026-05-15.md`; restart 51 is the latest recorded fix sweep in this status text. Restart 51 fix verification collected 2,497 live `helixc/tests` pytest tests (live count after the restart-50 forecast-vs-actual reconciliation); run `python -m pytest helixc/tests --collect-only -q` for the current count.
+**Current stage: Stage 35 audit cleanup.** Clean gates remain `0/3` as of the latest Stage 35 progress ledger, and the exact test count changes as each audit adds regressions. Continue from the newest pushed `git log -1 --oneline` and the tail of `docs/stage35-progress-2026-05-15.md`; restart 53 is the latest recorded fix sweep in this status text. Restart 53 fix verification collected 2,511 live `helixc/tests` pytest tests (restart 51 reconciled to 2,497, restart 52 added 0 net tests, restart 53 added 14 saturation/NaN-fail-closed canaries); run `python -m pytest helixc/tests --collect-only -q` for the current count.
 
 The production compiler path is still the Python-hosted `helixc` implementation. A Helix self-hosted compiler remains the target of the bootstrap roadmap, not a shipped replacement for Python yet.
 
@@ -41,7 +41,7 @@ What works today:
 - **Verifier-gated reflection runtime**: 64 mutable cells in the binary's writable region. `quote`/`splice_f`/`modify_f` actually call your verifier function before committing
 - **IR-level effect verification**: @pure functions transitively prohibited from effectful code
 - 8 unique compile-time AGI type-system features (Presburger shapes, D<T>, memory tiers, agents, etc.)
-- Stdlib in `helixc/stdlib/*.hx` (16 modules, ~455 functions as of Stage 35 restart 51): math + range-reduced transcendentals, modern activations (sigmoid/tanh/silu/gelu/softplus/relu), losses (mse/mae/bce/huber), PRNG, optimizer steps, reverse-AD, AGI search/match/memory/world primitives, hashmap, tensor/iterator/vec/string/result helpers. AD chain rules wired for all activations.
+- Stdlib in `helixc/stdlib/*.hx` (16 modules, ~455 functions as of Stage 35 restart 53): math + range-reduced transcendentals, modern activations (sigmoid/tanh/silu/gelu/softplus/relu), losses (mse/mae/bce/huber), PRNG, optimizer steps, reverse-AD, AGI search/match/memory/world primitives, hashmap, tensor/iterator/vec/string/result helpers. AD chain rules wired for all activations.
 - I/O: `print_str`, `write_file`, `read_file_int` via raw syscalls
 - 6 programs total (5 dogfood + 1 self-improving-agent flagship) running real ML in Helix-emitted binaries:
   - 1-param gradient descent
