@@ -257,8 +257,6 @@ def _is_inferably_pure(fn: "A.FnDecl",
     # visiting-set in _inline_user_calls will block re-inlining anyway).
     if fn.name in visiting:
         return True
-    if "pure" in fn.attrs:
-        return True
     new_visiting = visiting | {fn.name}
 
     def is_pure_expr(e) -> bool:
@@ -368,8 +366,7 @@ def _inline_user_calls(expr: A.Expr, fn_table: dict[str, "A.FnDecl"],
                 # Stage 13: inline if @pure OR inferably pure (arithmetic/
                 # pure-call chain). Other fns may have effects whose
                 # differentiation is unsound — leave as opaque call.
-                if ("pure" not in fn.attrs
-                        and not _is_inferably_pure(fn, fn_table)):
+                if not _is_inferably_pure(fn, fn_table):
                     return A.Call(span=e.span, callee=new_callee, args=new_args)
                 if len(fn.params) != len(new_args):
                     return A.Call(span=e.span, callee=new_callee, args=new_args)
@@ -515,6 +512,86 @@ def _is_reassigned_after(stmts: list, name: str, start_idx: int) -> bool:
     return False
 
 
+def _is_ad_erasable_expr(expr: A.Expr | None) -> bool:
+    """True when dropping or inlining an expression cannot hide effects.
+
+    `_inline_lets` erases let statements whose names are not part of the final
+    differentiated expression. That is only sound for expressions made from
+    literals, names, arithmetic, conditionals, blocks, and AD-known pure
+    builtins. Unknown calls and allocator-style helpers must survive as errors,
+    not disappear before the differentiator sees them.
+    """
+    if expr is None:
+        return True
+    if isinstance(expr, (A.IntLit, A.FloatLit, A.BoolLit, A.StrLit, A.CharLit)):
+        return True
+    if isinstance(expr, (A.Name, A.Path, A.Continue, A.TileLit)):
+        return True
+    if isinstance(expr, A.Unary):
+        return _is_ad_erasable_expr(expr.operand)
+    if isinstance(expr, A.Binary):
+        return (_is_ad_erasable_expr(expr.left)
+                and _is_ad_erasable_expr(expr.right))
+    if isinstance(expr, A.Cast):
+        return _is_ad_erasable_expr(expr.value)
+    if isinstance(expr, A.Call):
+        if not isinstance(expr.callee, A.Name):
+            return False
+        if expr.callee.name not in AD_KNOWN_PURE_CALLS:
+            return False
+        return all(_is_ad_erasable_expr(a) for a in expr.args)
+    if isinstance(expr, A.If):
+        return (_is_ad_erasable_expr(expr.cond)
+                and _is_ad_erasable_expr(expr.then)
+                and _is_ad_erasable_expr(expr.else_))
+    if isinstance(expr, A.Match):
+        if not _is_ad_erasable_expr(expr.scrutinee):
+            return False
+        for arm in expr.arms:
+            if not _is_ad_erasable_expr(arm.guard):
+                return False
+            if not _is_ad_erasable_expr(arm.body):
+                return False
+        return True
+    if isinstance(expr, A.ArrayLit):
+        return all(_is_ad_erasable_expr(e) for e in expr.elems)
+    if isinstance(expr, A.TupleLit):
+        return all(_is_ad_erasable_expr(e) for e in expr.elems)
+    if isinstance(expr, A.StructLit):
+        return all(_is_ad_erasable_expr(v) for _, v in expr.fields)
+    if isinstance(expr, A.Range):
+        return (_is_ad_erasable_expr(expr.start)
+                and _is_ad_erasable_expr(expr.end))
+    if isinstance(expr, A.Field):
+        return _is_ad_erasable_expr(expr.obj)
+    if isinstance(expr, A.Index):
+        return (_is_ad_erasable_expr(expr.callee)
+                and all(_is_ad_erasable_expr(i) for i in expr.indices))
+    if isinstance(expr, A.Block):
+        for stmt in expr.stmts:
+            if isinstance(stmt, A.Let):
+                if not _is_ad_erasable_expr(stmt.value):
+                    return False
+            elif isinstance(stmt, A.ConstStmt):
+                if not _is_ad_erasable_expr(stmt.value):
+                    return False
+            elif isinstance(stmt, A.ExprStmt):
+                if not _is_ad_erasable_expr(stmt.expr):
+                    return False
+            else:
+                return False
+        return _is_ad_erasable_expr(expr.final_expr)
+    return False
+
+
+def _raise_if_ad_erases_effect(expr: A.Expr | None, context: str) -> None:
+    if not _is_ad_erasable_expr(expr):
+        raise NotImplementedError(
+            f"forward-mode AD cannot erase side-effecting {context}; "
+            "move allocation/effects outside the differentiated function"
+        )
+
+
 def _inline_lets(expr: A.Expr | None, env: dict[str, A.Expr]) -> A.Expr | None:
     """Walk expr, replacing references to let-bound names with the bound
     expression. Used to flatten blocks before differentiation."""
@@ -548,11 +625,15 @@ def _inline_lets(expr: A.Expr | None, env: dict[str, A.Expr]) -> A.Expr | None:
             if (isinstance(stmt, A.Let) and stmt.value is not None
                     and (not stmt.is_mut
                          or not _is_reassigned_after(expr.stmts, stmt.name, expr.stmts.index(stmt)))):
+                _raise_if_ad_erases_effect(stmt.value, f"let {stmt.name!r}")
                 local_env[stmt.name] = _inline_lets(stmt.value, local_env)
             # ExprStmt: ignore (no derivative meaning)
             # ConstStmt: similar to Let (immutable by construction)
             elif isinstance(stmt, A.ConstStmt):
+                _raise_if_ad_erases_effect(stmt.value, f"const {stmt.name!r}")
                 local_env[stmt.name] = _inline_lets(stmt.value, local_env)
+            elif isinstance(stmt, A.ExprStmt):
+                _raise_if_ad_erases_effect(stmt.expr, "expression statement")
         if expr.final_expr is not None:
             return _inline_lets(expr.final_expr, local_env)
         # Audit 28.8 cycle 2 (deferred observation #18): pre-fix this

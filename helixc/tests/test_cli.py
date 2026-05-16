@@ -673,6 +673,69 @@ def test_stage35_emit_ptx_reports_tile_lowering_error_without_bug_label(capsys):
     assert ".visible .entry" not in captured.out
 
 
+def test_stage35_emit_ptx_non_strict_reports_host_effect_warning(capsys):
+    src = write_src(
+        "@pure fn host() -> i32 { print_int(1); 0 }\n"
+        "@kernel fn k() { let i = thread_idx(); }\n"
+    )
+    try:
+        rc = main([src, "--emit-ptx", "--no-stdlib"])
+        captured = capsys.readouterr()
+    finally:
+        if os.path.exists(src):
+            os.remove(src)
+    assert rc == 0, captured.out + captured.err
+    assert ".visible .entry k" in captured.out
+    assert "warning: effect-check:" in captured.err
+    assert "19001" in captured.err
+
+
+def test_stage35_output_binary_rejects_dead_unsupported_kernel_op(tmp_path):
+    src_path = tmp_path / "dead_kernel_div.hx"
+    out_path = tmp_path / "dead_kernel_div.bin"
+    src_path.write_text(
+        "@kernel fn k() { let i = thread_idx(); let dead = i / 2; }\n"
+        "fn main() -> i32 { 0 }\n",
+        encoding="utf-8",
+    )
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.check", str(src_path),
+         "-o", str(out_path), "--no-stdlib"],
+        cwd=proj_root,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    assert "Tile IR lowering does not support TIR op elem.div" in proc.stderr
+    assert "compiler bug" not in proc.stderr
+    assert not out_path.exists()
+
+
+def test_stage35_direct_x86_rejects_dead_unsupported_kernel_op(tmp_path):
+    src_path = tmp_path / "direct_dead_kernel_div.hx"
+    out_path = tmp_path / "direct_dead_kernel_div.bin"
+    src_path.write_text(
+        "@kernel fn k() { let i = thread_idx(); let dead = i / 2; }\n"
+        "fn main() -> i32 { 0 }\n",
+        encoding="utf-8",
+    )
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.backend.x86_64",
+         str(src_path), str(out_path), "--no-stdlib"],
+        cwd=proj_root,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    assert "Tile IR lowering does not support TIR op elem.div" in proc.stderr
+    assert "Traceback" not in proc.stderr
+    assert not out_path.exists()
+
+
 def test_c119_emit_ptx_rejects_non_unit_kernel_returns(capsys):
     src = write_src("@kernel fn k() -> i32 { 42 }\n")
     try:

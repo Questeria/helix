@@ -11136,6 +11136,38 @@ def test_revad_seed_rejects_corrupt_adj_guard_metadata():
     assert code == 42, f"expected 42, got {code}"
 
 
+def test_revad_rejects_forged_t1d_tape_without_guard_write():
+    src = """
+    fn main() -> i32 {
+        let fake = t1d_new(3);
+        __arena_set(fake, 0);
+        __arena_set(fake + 1, 1);
+        __arena_set(fake + 2, 777);
+        let adj = rev_alloc_adjoints(fake);
+        let pushed = rev_leaf(fake, 99);
+        if adj == (0 - 1) {
+        if pushed == (0 - 1) {
+        if __arena_get(fake + 2) == 777 { 42 } else { 7 }
+        } else { 7 }} else { 7 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_grad_rejects_allocator_let_in_differentiated_body():
+    import pytest
+    src = """
+    @pure fn loss(x: f32) -> f32 {
+        let p = t2d_new(1, 1);
+        x * x
+    }
+    fn main() -> i32 { grad(loss)(3.0) as i32 }
+    """
+    with pytest.raises(NotImplementedError, match="cannot erase side-effecting let"):
+        compile_and_run(src)
+
+
 def test_negative_length_tensor_nn_helpers_return_empty_values():
     src = """
     fn main() -> i32 {

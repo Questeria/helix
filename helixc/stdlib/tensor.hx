@@ -31,7 +31,7 @@
 //
 // License: Apache 2.0
 
-@pure fn t1d_new(n: i32) -> i32 {
+fn t1d_new(n: i32) -> i32 {
     let start = __arena_len();
     let mut i: i32 = 0;
     while i < n {
@@ -61,7 +61,7 @@
 
 @pure fn t2d_error() -> i32 { 35001 }
 
-@pure fn t2d_new(rows: i32, cols: i32) -> i32 {
+fn t2d_new(rows: i32, cols: i32) -> i32 {
     let n = t2d_len(rows, cols);
     if n <= 0 {
         t1d_new(t2d_alloc_len(rows, cols))
@@ -175,7 +175,7 @@ fn ti1d_axpy(y_start: i32, a: i32, x_start: i32, n: i32) -> i32 {
 }
 
 // 2D row-major access: M[i,j] lives at slot start + i*cols + j.
-@pure fn ti2d_new(rows: i32, cols: i32) -> i32 {
+fn ti2d_new(rows: i32, cols: i32) -> i32 {
     t2d_new(rows, cols)
 }
 
@@ -449,7 +449,7 @@ fn tf2d_matvec(w_start: i32, w_rows: i32, w_cols: i32,
 }
 
 // Tensor zeros: allocate n slots already initialized to 0.
-@pure fn ti1d_zeros(n: i32) -> i32 { t1d_new(n) }
+fn ti1d_zeros(n: i32) -> i32 { t1d_new(n) }
 
 // Tensor ones: allocate n slots and fill with 1.
 fn ti1d_ones(n: i32) -> i32 {
@@ -667,7 +667,7 @@ fn tf2d_matmul(a_start: i32, a_rows: i32, a_cols: i32,
 
 // f32-tensor zeros: allocate n slots; arena push 0 leaves the bit
 // pattern as IEEE +0.0 which is exactly what we want.
-@pure fn tf1d_zeros(n: i32) -> i32 { t1d_new(n) }
+fn tf1d_zeros(n: i32) -> i32 { t1d_new(n) }
 
 // f32-tensor ones: allocate n slots and fill with bits-of(1.0_f32).
 fn tf1d_ones(n: i32) -> i32 {

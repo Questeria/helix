@@ -412,6 +412,18 @@ def test_stage35_direct_ptx_cli_strict_rejects_host_effect_with_dead_ad_helper()
     assert "unresolved generic type D" not in proc.stderr
 
 
+def test_stage35_direct_ptx_cli_non_strict_reports_host_effect_warning():
+    src = """
+    @pure fn host() -> i32 { print_int(1); 0 }
+    @kernel fn k() { let i = thread_idx(); }
+    """
+    proc = run_ptx_cli(src, "--no-stdlib")
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert ".visible .entry k" in proc.stdout
+    assert "warning: effect-check:" in proc.stderr
+    assert "19001" in proc.stderr
+
+
 def test_stage35_direct_ptx_cli_wad_error_keeps_stdout_empty():
     src = """
     fn loss(x: D<f64>, y: D<i32>) -> D<f64> { x + y }

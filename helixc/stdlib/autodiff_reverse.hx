@@ -16,6 +16,8 @@
 //   slot 0: count     (number of ops on tape)
 //   slot 1: cap       (max ops)
 //   slot 2: adj_start (arena index of adjoint array, allocated by rev_alloc_adjoints)
+//   slot -1: magic    (guards against forged t1d buffers)
+//   slot 3 + cap*4: footer guard derived from cap
 // Adjoint metadata:
 //   adj_start - 3: cap
 //   adj_start - 2: logical count snapshotted at allocation
@@ -49,8 +51,11 @@
 @pure fn rev_kind_sub() -> i32 { 2 }
 @pure fn rev_kind_mul() -> i32 { 3 }
 @pure fn rev_kind_neg() -> i32 { 4 }
+@pure fn rev_tape_magic() -> i32 { 3003001 }
+@pure fn rev_tape_footer(cap: i32) -> i32 { 0 - rev_tape_magic() - cap - 1 }
 
 fn rev_tape_new(cap: i32) -> i32 {
+    __arena_push(rev_tape_magic());
     let start = __arena_len();
     let safe_cap = if cap < 0 { 0 } else { cap };
     __arena_push(0);     // count
@@ -61,6 +66,7 @@ fn rev_tape_new(cap: i32) -> i32 {
         __arena_push(0); __arena_push(0); __arena_push(0); __arena_push(0);
         i = i + 1;
     }
+    __arena_push(rev_tape_footer(safe_cap));
     start
 }
 
@@ -68,12 +74,34 @@ fn rev_tape_new(cap: i32) -> i32 {
 @pure fn rev_cap(tape: i32) -> i32 { __arena_get(tape + 1) }
 
 @pure
+fn rev_tape_valid(tape: i32) -> i32 {
+    if tape <= 0 { 0 }
+    else { if __arena_get(tape - 1) != rev_tape_magic() { 0 }
+    else {
+        let cnt = __arena_get(tape);
+        let cap = __arena_get(tape + 1);
+        if cnt < 0 { 0 }
+        else { if cap < 0 { 0 }
+        else { if cnt > cap { 0 }
+        else { if cap > (2147483647 - tape - 3) / 4 { 0 }
+        else {
+            let footer = tape + 3 + cap * 4;
+            if footer >= __arena_len() { 0 }
+            else { if __arena_get(footer) != rev_tape_footer(cap) { 0 } else { 1 } }
+        }}}}
+    }}
+}
+
+@pure
 fn rev_valid_index(tape: i32, idx: i32) -> i32 {
-    let cnt = __arena_get(tape);
-    let cap = __arena_get(tape + 1);
-    if idx < 0 { 0 }
-    else { if idx >= cnt { 0 }
-    else { if idx >= cap { 0 } else { 1 } } }
+    if rev_tape_valid(tape) == 0 { 0 }
+    else {
+        let cnt = __arena_get(tape);
+        let cap = __arena_get(tape + 1);
+        if idx < 0 { 0 }
+        else { if idx >= cnt { 0 }
+        else { if idx >= cap { 0 } else { 1 } } }
+    }
 }
 
 @pure
@@ -96,28 +124,33 @@ fn rev_in2_at(tape: i32, idx: i32) -> i32 {
 
 @pure
 fn rev_is_empty(tape: i32) -> i32 {
-    if __arena_get(tape) == 0 { 1 } else { 0 }
+    if rev_tape_valid(tape) == 0 { 0 }
+    else { if __arena_get(tape) == 0 { 1 } else { 0 } }
 }
 
 @pure
 fn rev_remaining(tape: i32) -> i32 {
-    __arena_get(tape + 1) - __arena_get(tape)
+    if rev_tape_valid(tape) == 0 { 0 - 1 }
+    else { __arena_get(tape + 1) - __arena_get(tape) }
 }
 
 fn rev_push(tape: i32, kind: i32, in1: i32, in2: i32, value: i32) -> i32 {
-    let cnt = __arena_get(tape);
-    let cap = __arena_get(tape + 1);
-    if cnt < 0 { 0 - 1 }
-    else { if cnt >= cap { 0 - 1 }
+    if rev_tape_valid(tape) == 0 { 0 - 1 }
     else {
-        let off = tape + 3 + cnt * 4;
-        __arena_set(off, kind);
-        __arena_set(off + 1, in1);
-        __arena_set(off + 2, in2);
-        __arena_set(off + 3, value);
-        __arena_set(tape, cnt + 1);
-        cnt
-    }}
+        let cnt = __arena_get(tape);
+        let cap = __arena_get(tape + 1);
+        if cnt < 0 { 0 - 1 }
+        else { if cnt >= cap { 0 - 1 }
+        else {
+            let off = tape + 3 + cnt * 4;
+            __arena_set(off, kind);
+            __arena_set(off + 1, in1);
+            __arena_set(off + 2, in2);
+            __arena_set(off + 3, value);
+            __arena_set(tape, cnt + 1);
+            cnt
+        }}
+    }
 }
 
 fn rev_leaf(tape: i32, value: i32) -> i32 {
@@ -169,21 +202,24 @@ fn rev_value_at(tape: i32, idx: i32) -> i32 {
 }
 
 fn rev_alloc_adjoints(tape: i32) -> i32 {
-    let cap = __arena_get(tape + 1);
-    let cnt = __arena_get(tape);
-    let header = __arena_len();
-    __arena_push(cap);
-    __arena_push(cnt);
-    __arena_push(0 - cap - 1);
-    let start = __arena_len();
-    __arena_set(tape + 2, start);
-    let mut i: i32 = 0;
-    while i < cap {
-        __arena_push(0);
-        i = i + 1;
+    if rev_tape_valid(tape) == 0 { 0 - 1 }
+    else {
+        let cap = __arena_get(tape + 1);
+        let cnt = __arena_get(tape);
+        let header = __arena_len();
+        __arena_push(cap);
+        __arena_push(cnt);
+        __arena_push(0 - cap - 1);
+        let start = __arena_len();
+        __arena_set(tape + 2, start);
+        let mut i: i32 = 0;
+        while i < cap {
+            __arena_push(0);
+            i = i + 1;
+        }
+        __arena_push(0 - cap - 1);
+        start
     }
-    __arena_push(0 - cap - 1);
-    start
 }
 
 @pure
@@ -235,6 +271,8 @@ fn rev_grad(adj_start: i32, idx: i32) -> i32 {
 //   K = mul:   adj[a] += adj[i] * value(b); adj[b] += adj[i] * value(a)
 //   K = neg:   adj[a] -= adj[i]
 fn rev_backward(tape: i32, adj_start: i32) -> i32 {
+    if rev_tape_valid(tape) == 0 { 0 - 1 }
+    else {
     let cnt = __arena_get(tape);
     let cap = __arena_get(tape + 1);
     let adj_cap = rev_adj_cap(adj_start);
@@ -326,5 +364,5 @@ fn rev_backward(tape: i32, adj_start: i32) -> i32 {
         i = i - 1;
     }
     status
-    }}}}}}
+    }}}}}}}
 }

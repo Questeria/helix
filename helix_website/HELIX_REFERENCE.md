@@ -901,7 +901,7 @@ The trust root of Helix is **299 bytes of hand-encoded x86-64 machine code**: `h
                              ▼
                     ┌─────────────────┐
                     │  helixc         │  current Python-hosted compiler
-                    └─────────────────┘  (in Helix itself)
+                    └─────────────────┘  (Helix self-host remains target)
 ```
 
 Current bootstrap root to audit: **299 bytes**. Later self-hosting steps remain roadmap targets until the Helix compiler can compile itself reproducibly.
@@ -955,7 +955,7 @@ Kovostov-Native/
 │   │   ├── nn.hx
 │   │   ├── option.hx
 │   │   └── autodiff.hx
-│   ├── tests/          # 2,285 tests collected in restart 24 fix verification
+│   ├── tests/          # 2,291 tests collected in restart 25 fix verification
 │   │   ├── test_codegen.py
 │   │   ├── test_parser.py
 │   │   ├── test_match.py
@@ -1519,7 +1519,7 @@ Or: a single character `λ` in monospace inside a hex bracket `[λ]`. Clean, sho
 
 - **299 bytes** — current hex0 binary size
 - **Python-hosted helixc** — current production compiler implementation
-- **2,285 live tests collected** — restart 24 fix verification; rerun scoped pytest collection before publishing
+- **2,291 live tests collected** — restart 25 fix verification; rerun scoped pytest collection before publishing
 - **30+ stages** — Approach A roadmap
 - **23 silent-corruption bugs** — found and disclosed during development
 - **9 audit passes** — multi-agent code review cycles

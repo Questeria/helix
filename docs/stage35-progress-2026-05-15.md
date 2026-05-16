@@ -1584,4 +1584,51 @@ Focused verification:
 Clean-gate status:
 
 - Stage 35 clean gates remain `0/3`.
-- Next step is commit, then another fresh Stage 35 clean gate.
+- Next step is restart 25, a fresh Stage 35 clean-gate audit from commit
+  `8f56b5b`.
+
+## Increment 44 - Twenty-Fifth Clean-Gate Restart Fix Sweep
+
+Restart 25 began from commit `8f56b5b` with green smoke/support checks. All
+three audit lanes found remaining Stage 35 issues, so the gate did not count as
+clean and Stage 35 remains at `0/3` clean gates.
+
+Fixes landed in this increment:
+
+- Reverse-AD tapes now carry magic/footer validation, and tape-mutating APIs
+  reject forged or truncated arena buffers before writing.
+- Tensor allocation helpers are no longer marked `@pure`.
+- AD helper inlining now inspects function bodies instead of blindly trusting
+  explicit `@pure`, and let-flattening refuses to erase allocation/effecting
+  expressions while still allowing pure containers such as `match`.
+- PTX kernel tile lowering is validated before host DCE/FDCE can erase
+  unsupported kernel operations in binary-emission paths.
+- Non-strict PTX modes now report full-program effect warnings while still
+  emitting kernel PTX.
+- Public/status docs now reflect restart 25, 2,291 collected tests, and the
+  current Python-hosted compiler boundary.
+
+Focused verification:
+
+- Per-file stdlib parser sweep across `helixc/stdlib/*.hx`
+  - Result: parsed 16 stdlib files.
+- `python -m py_compile helixc\frontend\autodiff.py helixc\check.py helixc\backend\ptx.py helixc\backend\x86_64.py`
+  - Result: passed.
+- `python -m pytest helixc/tests/test_transcendentals.py helixc/tests/test_autodiff.py helixc/tests/test_autodiff_reverse.py -q`
+  - Result: 103 passed.
+- `python -m pytest helixc/tests/test_codegen.py -k "t1d or t2d or ti2d or tf2d or tensor or stage35_2d or nn_ or dense_layer or softmax_rows_f32 or softmax_ce_grad_f32 or argmax_rows_f32 or accuracy_count_from_logits_f32 or ce_loss_batch_f32 or bce or gelu or revad or grad_rejects_allocator_let" -q`
+  - Result: 131 passed.
+- `python -m pytest helixc/tests/test_cli.py -q`
+  - Result: 164 passed.
+- `python -m pytest helixc/tests/test_ptx.py -q`
+  - Result: 76 passed.
+- `python -m pytest helixc/tests/test_effect_check.py -q`
+  - Result: 34 passed.
+- `python -m pytest helixc/tests --collect-only -q -p no:cacheprovider`
+  - Result: 2,291 tests collected.
+
+Clean-gate status:
+
+- Stage 35 clean gates remain `0/3`.
+- Next step is restart 26 as another fresh Stage 35 clean gate from the newest
+  committed fix sweep.

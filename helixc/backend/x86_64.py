@@ -4102,6 +4102,13 @@ if __name__ == "__main__":
             cse_count = cse_module(mod)
             if cse_count > 0:
                 print(f"cse: {cse_count} duplicate ops merged", file=sys.stderr)
+            if any(fn.attrs.get("kernel") for fn in mod.functions.values()):
+                from .ptx import validate_kernel_tile_lowering
+                try:
+                    validate_kernel_tile_lowering(mod)
+                except Exception as e:
+                    print(f"error: ptx: {e}", file=sys.stderr)
+                    sys.exit(1)
             removed = dce_module(mod)
             if removed > 0:
                 print(f"dce: {removed} ops removed", file=sys.stderr)
@@ -4111,6 +4118,14 @@ if __name__ == "__main__":
         except FoldError as fe:
             print(f"helixc: const-fold error: {fe}", file=sys.stderr)
             sys.exit(1)
+    else:
+        if any(fn.attrs.get("kernel") for fn in mod.functions.values()):
+            from .ptx import validate_kernel_tile_lowering
+            try:
+                validate_kernel_tile_lowering(mod)
+            except Exception as e:
+                print(f"error: ptx: {e}", file=sys.stderr)
+                sys.exit(1)
 
     # Stage 19 — IR-level effect check. Runs AFTER all optimization passes
     effect_scope = None

@@ -622,6 +622,26 @@ def emit_ptx(tile_module: ti.TileModule, target: str = DEFAULT_TARGET) -> str:
     return PtxEmitter(target).emit_module(tile_module)
 
 
+def kernel_only_module(module: tir.Module) -> tir.Module:
+    """Return a TIR module containing only PTX-emitted kernel functions."""
+    return type(module)(
+        functions={
+            name: fn for name, fn in module.functions.items()
+            if fn.attrs.get("kernel")
+        },
+        next_value_id=module.next_value_id,
+        next_block_id=module.next_block_id,
+    )
+
+
+def validate_kernel_tile_lowering(module: tir.Module) -> None:
+    """Fail before host DCE can hide unsupported operations inside kernels."""
+    kernel_mod = kernel_only_module(module)
+    if not kernel_mod.functions:
+        return
+    ti.lower_to_tile(kernel_mod)
+
+
 # ============================================================================
 # CLI
 # ============================================================================
@@ -911,18 +931,17 @@ if __name__ == "__main__":
     if had_validation_error:
         sys.exit(1)
     try:
-        strict_full_eff = []
-        if strict:
-            try:
-                strict_mod = lower(_drop_unreachable_diff_signature_fns(prog))
-                strict_scope = None
-                if include_stdlib:
-                    strict_scope = diagnostic_function_names(strict_mod)
-                strict_full_eff = effect_check_module(
-                    strict_mod, only_functions=strict_scope)
-            except Exception as e:
-                print(f"error: ptx: strict validation: {e}", file=sys.stderr)
-                sys.exit(1)
+        full_eff = []
+        try:
+            full_mod = lower(_drop_unreachable_diff_signature_fns(prog))
+            full_scope = None
+            if include_stdlib:
+                full_scope = diagnostic_function_names(full_mod)
+            full_eff = effect_check_module(
+                full_mod, only_functions=full_scope)
+        except Exception as e:
+            print(f"error: ptx: validation: {e}", file=sys.stderr)
+            sys.exit(1)
         kernel_prog = _kernel_reachable_program(prog)
         grad_pass(kernel_prog)
         tir_mod = lower(kernel_prog)
@@ -938,7 +957,7 @@ if __name__ == "__main__":
             post_effect_scope = diagnostic_function_names(tir_mod)
         post_eff = effect_check_module(
             tir_mod, only_functions=post_effect_scope)
-        eff_errs = list(strict_full_eff)
+        eff_errs = list(full_eff)
         for err in pre_eff:
             if err not in eff_errs:
                 eff_errs.append(err)
@@ -954,14 +973,7 @@ if __name__ == "__main__":
                 file=sys.stderr,
             )
             sys.exit(1)
-        kernel_mod = type(tir_mod)(
-            functions={
-                name: fn for name, fn in tir_mod.functions.items()
-                if fn.attrs.get("kernel")
-            },
-            next_value_id=tir_mod.next_value_id,
-            next_block_id=tir_mod.next_block_id,
-        )
+        kernel_mod = kernel_only_module(tir_mod)
         tile_mod = lower_to_tile(kernel_mod)
         ptx = emit_ptx(tile_mod)
         ad_rc = _drain_cli_ad_warnings()

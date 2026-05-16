@@ -1450,20 +1450,20 @@ def _main_inner(argv: list[str] | None,
         # We import lazily so check.py's start-up cost stays low for
         # programs that don't use grad().
         from .frontend.grad_pass import grad_pass
-        strict_full_eff_errs = []
-        if "--emit-ptx" in a.flags and "--strict" in a.flags:
+        ptx_full_eff_errs = []
+        if "--emit-ptx" in a.flags:
             try:
-                strict_full_mod = lower(
+                ptx_full_mod = lower(
                     _drop_unreachable_diff_signature_fns(prog))
-                strict_full_scope = None
+                ptx_full_scope = None
                 if include_stdlib:
-                    strict_full_scope = diagnostic_function_names(
-                        strict_full_mod)
-                strict_full_eff_errs = effect_check_module(
-                    strict_full_mod, only_functions=strict_full_scope)
+                    ptx_full_scope = diagnostic_function_names(
+                        ptx_full_mod)
+                ptx_full_eff_errs = effect_check_module(
+                    ptx_full_mod, only_functions=ptx_full_scope)
             except Exception as e:
                 print(
-                    f"helixc: strict validation error: "
+                    f"helixc: PTX validation error: "
                     f"{type(e).__name__}: {e}",
                     file=sys.stderr,
                 )
@@ -1510,6 +1510,16 @@ def _main_inner(argv: list[str] | None,
             if a.opt_level >= 1:
                 fold_module(mod)
                 cse_module(mod)
+                if any(fn.attrs.get("kernel") for fn in mod.functions.values()):
+                    from .backend.ptx import validate_kernel_tile_lowering
+                    try:
+                        validate_kernel_tile_lowering(mod)
+                    except Exception as e:
+                        print(
+                            f"helixc: PTX validation error: {e}",
+                            file=sys.stderr,
+                        )
+                        return 1
                 if not emit_ptx:
                     dce_module(mod)
                     fdce_module(mod)
@@ -1527,6 +1537,17 @@ def _main_inner(argv: list[str] | None,
                 file=sys.stderr,
             )
             return 1
+        if a.opt_level == 0 and not emit_ptx \
+                and any(fn.attrs.get("kernel") for fn in mod.functions.values()):
+            from .backend.ptx import validate_kernel_tile_lowering
+            try:
+                validate_kernel_tile_lowering(mod)
+            except Exception as e:
+                print(
+                    f"helixc: PTX validation error: {e}",
+                    file=sys.stderr,
+                )
+                return 1
 
         # Stage 28.9 cycle 24 → cycle 26 → cycle 28 evolution: effect-
         # Strict mode must not fail on unused auto-bundled stdlib fns when
@@ -1560,7 +1581,7 @@ def _main_inner(argv: list[str] | None,
         # so check.py and x86_64.py share one printing implementation.
         post_opt_eff_errs = effect_check_module(
             mod, only_functions=effect_scope)
-        eff_errs = list(strict_full_eff_errs)
+        eff_errs = list(ptx_full_eff_errs)
         for err in pre_opt_eff_errs:
             if err not in eff_errs:
                 eff_errs.append(err)
@@ -1625,16 +1646,9 @@ def _main_inner(argv: list[str] | None,
 
     if "--emit-ptx" in a.flags:
         from .ir.tile_ir import lower_to_tile
-        from .backend.ptx import emit_ptx
+        from .backend.ptx import emit_ptx, kernel_only_module
         try:
-            kernel_mod = type(mod)(
-                functions={
-                    name: fn for name, fn in mod.functions.items()
-                    if fn.attrs.get("kernel")
-                },
-                next_value_id=mod.next_value_id,
-                next_block_id=mod.next_block_id,
-            )
+            kernel_mod = kernel_only_module(mod)
             tile_mod = lower_to_tile(kernel_mod)
             ptx = emit_ptx(tile_mod)
             ad_rc = _drain_ad_warnings(a)
