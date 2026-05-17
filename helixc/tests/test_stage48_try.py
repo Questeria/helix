@@ -295,3 +295,114 @@ fn main() -> i32 {
     assert try_errs, \
         f"`Err(...)?` must reject with provenance diag, " \
         f"got {[str(e) for e in try_errs]}"
+
+
+# ============================================================
+# Stage 48 Inc 4 closure gate-2 silent-failure F1+M5 regressions
+# ============================================================
+
+
+def test_stage48_closure_gate2_f1_inner_block_shadow_no_provenance_leak():
+    """Gate-2 F1 fix (HIGH): pre-fix, an inner-block `let r:
+    Result<i32, i32> = Ok(5)` overwrote the OUTER `r='err'`
+    provenance entry in the flat dict. After the inner block
+    exited, the outer `r?` no longer saw 'err' provenance and
+    silently extracted the Err payload as Ok (exit code 99
+    verified end-to-end in the audit reproducer).
+
+    Post-fix, _check_block snapshots the provenance map at
+    entry and restores at exit. Inner-block shadows can't bleed
+    outer provenance."""
+    src = """
+fn helper() -> Result<i32, i32> {
+    let r: Result<i32, i32> = Err(99);
+    let dummy: i32 = {
+        let r: Result<i32, i32> = Ok(5);
+        unwrap_ok(r)
+    };
+    let v: i32 = r?;
+    Ok(v)
+}
+fn main() -> i32 {
+    unwrap_ok(helper())
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    errs = typecheck(prog)
+    # The outer `r?` MUST reject with the Err-provenance
+    # diagnostic. Pre-fix this would typecheck clean and compile
+    # to exit 99.
+    try_errs = [e for e in errs
+                if "?" in str(e) and "constructed via Err" in str(e)]
+    assert try_errs, \
+        f"inner-block shadow must not leak outer Err " \
+        f"provenance, got errors: {[str(e) for e in errs]}"
+
+
+def test_stage48_closure_gate2_m5_cross_fn_no_provenance_carry():
+    """Gate-2 M5 fix (MEDIUM/false-reject): pre-fix, fn A's
+    `let r = Ok(7)` set the provenance dict to {r: 'ok'} and
+    the entry survived into fn B. fn B's parameter named `r`
+    inherited the stale 'ok' provenance, so `unwrap_err(r)`
+    on B's parameter FALSELY rejected as 'Ok-constructed'.
+
+    Post-fix, _check_fn clears the provenance map at function
+    entry. Per-fn locals must not leak across the fn boundary."""
+    src = """
+fn maker() -> Result<i32, i32> {
+    let r: Result<i32, i32> = Ok(7);
+    Ok(unwrap_ok(r))
+}
+fn taker(r: Result<i32, i32>) -> i32 {
+    unwrap_err(r)
+}
+fn main() -> i32 {
+    taker(Err(33))
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    errs = typecheck(prog)
+    # taker(r) has a parameter `r` with NO statically-known
+    # provenance. unwrap_err on it MUST typecheck cleanly
+    # (the runtime panic for actual Ok at this position is a
+    # Phase-0 F1 limitation, but the static check should not
+    # false-reject on a parameter).
+    err_strs = [str(e) for e in errs]
+    assert not any("constructed via Ok" in s for s in err_strs), \
+        f"cross-fn provenance carry must not false-reject " \
+        f"parameter `r`, got: {err_strs}"
+
+
+def test_stage48_closure_gate2_f5_member_access_documented_as_phase0_defect():
+    """Gate-2 F5 (HIGH but DEFERRED): `let p: Pair = Pair {
+    a: Err(99), b: 1 }; p.a?` typechecks clean and silently
+    extracts the Err payload at runtime (exit code 99 verified).
+
+    Same defect class as F1 dynamic-Err `?` from the gate-1
+    audit: aggregate-field access is fundamentally a dynamic
+    operand from the per-name provenance map's perspective.
+    Stage 49+ runtime tag eliminates the entire class.
+
+    This test asserts the current (Phase-0) behavior: typecheck
+    PASSES. When Stage 49 lands the runtime tag, this test
+    will need to be updated (the `?` will then early-return the
+    Err naturally — no static rejection needed)."""
+    src = """
+struct Pair { a: Result<i32, i32>, b: i32 }
+fn helper() -> Result<i32, i32> {
+    let p: Pair = Pair { a: Err(99), b: 1 };
+    let v: i32 = p.a?;
+    Ok(v)
+}
+fn main() -> i32 {
+    unwrap_ok(helper())
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    errs = typecheck(prog)
+    # Phase-0 limitation: typechecks clean. Documented as F5.
+    assert errs == [], \
+        f"F5 deferred: member-access operand to `?` should " \
+        f"typecheck clean in Phase-0 (silent miscompile is a " \
+        f"known Phase-0 defect — Stage 49+ runtime tag fixes " \
+        f"the entire class). Got: {[str(e) for e in errs]}"

@@ -593,9 +593,21 @@ class TypeChecker:
         # overrides the inferred TyUnknown sides at the bind site,
         # defeating the gate-1 F4 hint-based check. This map
         # preserves the provenance independently so unwrap_ok /
-        # unwrap_err can detect the wrong-arm case for typed-let
-        # bindings. Cleared in check() to survive re-entrancy.
-        # Stage 48+ runtime tag replaces this Phase-0 mechanism.
+        # unwrap_err / __try can detect the wrong-arm case for
+        # typed-let bindings.
+        #
+        # Stage 48 closure gate-2 silent-failure F1+M5 fix:
+        # additionally cleared at function entry (M5: stale cross-fn
+        # carry was falsely flagging a parameter named `r` in fn B
+        # because fn A had set `r='ok'` earlier in the same check()
+        # run) and snapshot-restored across _check_block (F1: inner-
+        # block shadow `let r: Result = Ok(5)` was overwriting the
+        # outer Err provenance, so the post-block `r?` silently
+        # extracted the outer's Err payload as Ok — verified end-
+        # to-end at exit code 99).
+        # Stage 49+ runtime tag replaces the Phase-0 use of this map;
+        # the map itself stays (compile-time provenance still gives
+        # better diagnostics for statically-constructed Result).
         self._result_constructor_provenance: dict[str, str] = {}
         self._seen_unknown_type_names: set[str] = set()
         # Stage 40 closure gate-2 code-review MEDIUM-1 fix (conf
@@ -2235,6 +2247,14 @@ class TypeChecker:
         sig = self.functions.get(fn.name)
         if sig is None:
             return
+        # Stage 48 closure gate-2 silent-failure M5 fix: clear the
+        # Result-constructor provenance map at function entry. Pre-
+        # fix, a let-binding `let r = Ok(7)` in fn A left `r='ok'`
+        # in the dict; fn B's parameter ALSO named `r` then
+        # inherited the stale 'ok' provenance, falsely rejecting
+        # `unwrap_err(r)` on B's parameter as "Ok-constructed".
+        # Per-fn locals must not leak across the fn boundary.
+        self._result_constructor_provenance = {}
         error_start = len(self.errors)
         completed = False
         kernel_hbm_indexables = (
@@ -2341,6 +2361,20 @@ class TypeChecker:
     ) -> Type:
         inner = Scope(parent=scope)
         self._push_local_const_scope()
+        # Stage 48 closure gate-2 silent-failure F1 fix: snapshot the
+        # Result-constructor provenance map at block entry and
+        # restore at exit. Pre-fix, an inner-block `let r:
+        # Result<i32,i32> = Ok(5)` overwrote the outer Err-
+        # constructed `r`'s provenance to 'ok', so a post-block
+        # `r?` silently extracted the outer Err payload as Ok —
+        # verified end-to-end (exit code 99 in the audit probe).
+        # Snapshot-restore is the minimal sound fix: inner-block
+        # mutations don't leak to outer scope. Trade-off: an inner-
+        # block `r = Ok(5)` (assign, not let) followed by an outer
+        # `r?` would false-reject — but the assign-arm already
+        # clears provenance, and false-reject is safe vs the silent
+        # miscompile this guards.
+        saved_provenance = dict(self._result_constructor_provenance)
         try:
             for stmt in block.stmts:
                 self._check_stmt(stmt, inner)
@@ -2375,6 +2409,7 @@ class TypeChecker:
             return TyUnit()
         finally:
             self._pop_local_const_scope()
+            self._result_constructor_provenance = saved_provenance
 
     def _check_stmt(self, stmt: A.Stmt, scope: Scope) -> None:
         if isinstance(stmt, A.Let):
@@ -4464,8 +4499,18 @@ class TypeChecker:
                         return TyUnknown(hint="try")
                     operand_ty = arg_tys[0]
                     if not isinstance(operand_ty, TyResult):
+                        # Stage 48 closure gate-2 code-review M1
+                        # polish: name the operand when it's an
+                        # A.Name so the user gets `x?` not just
+                        # the position in the source.
+                        operand_label = (
+                            f" on {expr.args[0].name!r}"
+                            if isinstance(expr.args[0], A.Name)
+                            else ""
+                        )
                         self.errors.append(TypeError_(
-                            f"`?` requires a Result<T, E> operand, got "
+                            f"`?`{operand_label} requires a "
+                            f"Result<T, E> operand, got "
                             f"{self._fmt(operand_ty)}",
                             expr.span,
                             hint="`?` propagates the Err arm of a "

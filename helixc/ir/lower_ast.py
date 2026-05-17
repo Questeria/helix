@@ -863,6 +863,14 @@ class Lowerer:
             # because `?` only makes sense in a Result-returning
             # function, which forces Result into the fn signature.
             if ty.base == "Result" and len(ty.args) == 2:
+                # STAGE49_TODO: when the runtime Ok/Err tag lands,
+                # replace this identity-lowering with a 2-slot
+                # aggregate (tag i32 + payload of max(sizeof(T),
+                # sizeof(E))). The change ripples to fn-return
+                # SysV layout, Ok/Err constructor lowering, and
+                # the unwrap_*/is_*/map_*/__try arms. See
+                # docs/stage49-plan-2026-05-17.md for the full
+                # increment map.
                 return self._lower_type(ty.args[0])
             # Stage 48 closure gate-1 LOW: future 2-parameter
             # wrapper families needing the same type-position
@@ -2086,6 +2094,10 @@ class Lowerer:
                         # taken only when the operand is known
                         # at compile time to be Ok-shape.
                         "Ok", "Err", "unwrap_ok", "unwrap_err",
+                        # STAGE49_TODO: __try splits out of this
+                        # tuple when the runtime Ok/Err tag lands;
+                        # it then becomes a real conditional-branch
+                        # arm (early-return if Err).
                         "__try")
                     and len(expr.args) == 1):
                 return self._lower_expr(expr.args[0])
