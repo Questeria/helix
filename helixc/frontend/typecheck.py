@@ -252,6 +252,19 @@ class TyFrame(Type):
 
 
 @dataclass(frozen=True)
+class TyTemporal(Type):
+    """Stage 39 — a value tagged with a temporal kind: Past /
+    Present / Future / Eternal. Real-world AGI reasoning needs to
+    track WHEN a fact was true. 'The robot saw a cat at coordinate
+    X' only matters if we know whether that was 5 seconds ago or
+    5 days ago. Cross-temporal transitions (to_past, forecast,
+    recall_past, actualize) move values between kinds — Stage 39
+    Inc 2."""
+    kind: str        # "past", "present", "future", "eternal"
+    inner: Type
+
+
+@dataclass(frozen=True)
 class TySkill(Type):
     """Skill<F> — a learned procedure with a known difficulty. Produced by
     `learn_to`; called like a function. The runtime maintains a registry
@@ -1105,6 +1118,17 @@ class TypeChecker:
             if ty.base in frame_map and len(ty.args) == 1:
                 return TyFrame(frame=frame_map[ty.base],
                                inner=self._resolve_type(ty.args[0], scope))
+            # Stage 39 Inc 1 — temporal wrappers: Past<T> / Present<T> /
+            # Future<T> / Eternal<T>. Mirrors TyFrame / TyMemTier.
+            temporal_map = {
+                "Past": "past",
+                "Present": "present",
+                "Future": "future",
+                "Eternal": "eternal",
+            }
+            if ty.base in temporal_map and len(ty.args) == 1:
+                return TyTemporal(kind=temporal_map[ty.base],
+                                  inner=self._resolve_type(ty.args[0], scope))
             # Stage 28 — user-defined parametric struct (Audit 28.8 A3/B1).
             # If `ty.base` is a known generic struct AND the arity matches,
             # resolve `Pt<i32>` -> `TyStruct("Pt__i32")` so distinct
@@ -1889,6 +1913,11 @@ class TypeChecker:
         "world_to_robot", "robot_to_world",
         "robot_to_camera", "camera_to_robot",
         "world_to_camera", "camera_to_world",
+        # Stage 39 Inc 1 — temporal constructors + eliminators.
+        "into_past", "into_present", "into_future", "into_eternal",
+        "from_past", "from_present", "from_future", "from_eternal",
+        # Stage 39 Inc 2 — temporal transitions.
+        "to_past", "forecast", "recall_past", "actualize",
         "grad", "grad_rev", "grad_rev_all",
         "quote", "splice", "splice_f", "splice_f64",
         "modify", "modify_f", "modify_f64",
@@ -3256,6 +3285,81 @@ class TypeChecker:
                     self.errors.append(TypeError_(
                         f"{bn}() requires "
                         f"{src_frame.capitalize()}Frame<T>, got "
+                        f"{self._fmt(arg_tys[0])}",
+                        expr.span,
+                    ))
+                    return TyUnknown(hint=bn)
+                # Stage 39 Inc 1 — temporal constructors + eliminators.
+                # 4 temporal kinds (past/present/future/eternal) each get
+                # an into_* constructor (T -> KindName<T>) and a from_*
+                # eliminator (KindName<T> -> T). Mirrors Stage 37/38
+                # tier+frame pattern. All lower to identity at IR (Phase-0:
+                # temporal kind lives at type level, zero runtime overhead).
+                _temporal_intro = {
+                    "into_past":    "past",
+                    "into_present": "present",
+                    "into_future":  "future",
+                    "into_eternal": "eternal",
+                }
+                if bn in _temporal_intro:
+                    if len(arg_tys) != 1:
+                        self.errors.append(TypeError_(
+                            f"{bn}() takes 1 argument, got {len(arg_tys)}",
+                            expr.span,
+                        ))
+                        return TyUnknown(hint=bn)
+                    return TyTemporal(kind=_temporal_intro[bn],
+                                      inner=arg_tys[0])
+                _temporal_elim = {
+                    "from_past":    "past",
+                    "from_present": "present",
+                    "from_future":  "future",
+                    "from_eternal": "eternal",
+                }
+                if bn in _temporal_elim:
+                    if len(arg_tys) != 1:
+                        self.errors.append(TypeError_(
+                            f"{bn}() takes 1 argument, got {len(arg_tys)}",
+                            expr.span,
+                        ))
+                        return TyUnknown(hint=bn)
+                    want = _temporal_elim[bn]
+                    if (isinstance(arg_tys[0], TyTemporal)
+                            and arg_tys[0].kind == want):
+                        return arg_tys[0].inner
+                    self.errors.append(TypeError_(
+                        f"{bn}() requires "
+                        f"{want.capitalize()}<T>, got "
+                        f"{self._fmt(arg_tys[0])}",
+                        expr.span,
+                    ))
+                    return TyUnknown(hint=bn)
+                # Stage 39 Inc 2 — cross-temporal transitions. 4 directions:
+                # to_past (present->past), forecast (present->future),
+                # recall_past (past->present), actualize (future->present).
+                # Eternal doesn't transition (it's timeless). All lower as
+                # identity at IR — Phase-0 transitions track intent only.
+                _temporal_transitions = {
+                    "to_past":     ("present", "past"),
+                    "forecast":    ("present", "future"),
+                    "recall_past": ("past",    "present"),
+                    "actualize":   ("future",  "present"),
+                }
+                if bn in _temporal_transitions:
+                    if len(arg_tys) != 1:
+                        self.errors.append(TypeError_(
+                            f"{bn}() takes 1 argument, got {len(arg_tys)}",
+                            expr.span,
+                        ))
+                        return TyUnknown(hint=bn)
+                    src_kind, dst_kind = _temporal_transitions[bn]
+                    if (isinstance(arg_tys[0], TyTemporal)
+                            and arg_tys[0].kind == src_kind):
+                        return TyTemporal(kind=dst_kind,
+                                          inner=arg_tys[0].inner)
+                    self.errors.append(TypeError_(
+                        f"{bn}() requires "
+                        f"{src_kind.capitalize()}<T>, got "
                         f"{self._fmt(arg_tys[0])}",
                         expr.span,
                     ))
@@ -6751,6 +6855,10 @@ class TypeChecker:
             cap = {"world": "WorldFrame", "robot": "RobotFrame",
                    "camera": "CameraFrame"}
             return f"{cap.get(t.frame, t.frame)}<{self._fmt(t.inner)}>"
+        if isinstance(t, TyTemporal):
+            cap = {"past": "Past", "present": "Present",
+                   "future": "Future", "eternal": "Eternal"}
+            return f"{cap.get(t.kind, t.kind)}<{self._fmt(t.inner)}>"
         if isinstance(t, TySkill):
             tag = f' "{t.task}"' if t.task else ""
             return f"Skill<{self._fmt(t.inner)}{tag}>"

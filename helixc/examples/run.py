@@ -91,6 +91,11 @@ DEMOS: dict[str, dict] = {
         "title": "Spatial-frame lifecycle reasoner (Stage 38 Inc 3)",
         "expects": "exit code 42  (3 observations cycle through WorldFrame->RobotFrame->CameraFrame->WorldFrame)",
     },
+    "temporal": {
+        "file": "dogfood_12_temporal_lifecycle.hx",
+        "title": "Temporal-kind lifecycle reasoner (Stage 39 Inc 3)",
+        "expects": "exit code 42  (3 observations cycle through Present->Future->Present->Past + recall_past + Eternal sanity)",
+    },
 }
 
 

@@ -1997,7 +1997,19 @@ class Lowerer:
                         # transform math is Phase-1+).
                         "world_to_robot", "robot_to_world",
                         "robot_to_camera", "camera_to_robot",
-                        "world_to_camera", "camera_to_world")
+                        "world_to_camera", "camera_to_world",
+                        # Stage 39 Inc 1 — temporal constructors +
+                        # eliminators lower as identity. Phase-0:
+                        # temporal kind lives at the type system level
+                        # — zero runtime overhead. Mirrors Stage 37/38.
+                        "into_past", "into_present",
+                        "into_future", "into_eternal",
+                        "from_past", "from_present",
+                        "from_future", "from_eternal",
+                        # Stage 39 Inc 2 — cross-temporal transitions.
+                        # Also identity at Phase-0; intent-only.
+                        "to_past", "forecast",
+                        "recall_past", "actualize")
                     and len(expr.args) == 1):
                 return self._lower_expr(expr.args[0])
             # Stage 36 Increment 5: real two-parent provenance via

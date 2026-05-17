@@ -94,6 +94,17 @@ AD_KNOWN_PURE_CALLS = {
     "world_to_robot", "robot_to_world",
     "robot_to_camera", "camera_to_robot",
     "world_to_camera", "camera_to_world",
+    # Stage 39 Inc 1 + Inc 2 — temporal identity-lowerings (4 kinds
+    # × intro/elim = 8, plus 4 cross-kind transitions = 12). All
+    # Phase-0 pure-identity at IR (see lower_ast.py). Same let-
+    # erasability rationale as Stage 37/38: prevent the misleading
+    # "cannot erase side-effecting let" trap on an unused
+    # `let _ = into_past(x);` inside grad/grad_rev. When/if Phase-1
+    # introduces real per-tick temporal-id arena mutation, the
+    # removal pattern mirrors the Inc 11 H1 register_derivation fix.
+    "into_past", "into_present", "into_future", "into_eternal",
+    "from_past", "from_present", "from_future", "from_eternal",
+    "to_past", "forecast", "recall_past", "actualize",
     # Stage 36 Increment 9 post-Inc-8 audit C2 LOW fix: register the
     # boolean-algebra builtins as AD-pure. They're all integer-valued
     # (so the AD derivative is 0 for differentiable use cases), but
@@ -164,6 +175,15 @@ _FRAME_IDENTITY_AD_NAMES = frozenset({
     "world_to_robot", "robot_to_world",
     "robot_to_camera", "camera_to_robot",
     "world_to_camera", "camera_to_world",
+    # Stage 39 Inc 1 + Inc 2 — temporal wrappers share the same
+    # identity chain rule. Same Phase-0 wrapper-shift semantics as
+    # Stage 38 frames: `d(into_past(u))/dx = du/dx`. Reusing the
+    # frame-identity arm avoids a parallel set + duplicate test
+    # surface; the only structural difference is the wrapper tag,
+    # which the AD pass never inspects.
+    "into_past", "into_present", "into_future", "into_eternal",
+    "from_past", "from_present", "from_future", "from_eternal",
+    "to_past", "forecast", "recall_past", "actualize",
 })
 
 
