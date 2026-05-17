@@ -66,6 +66,21 @@ AD_KNOWN_PURE_CALLS = {
     "fuzzy_and", "fuzzy_or", "fuzzy_not",
     # Stage 36 Increment 8: fuzzy XOR + implication.
     "fuzzy_xor", "fuzzy_implies",
+    # Stage 37 Inc 4 — tiered memory identity-lowerings registered as
+    # AD-pure (closes Stage 37 closure gate-1 LOW finding). At Phase-0
+    # the TyMemTier wrappers and cross-tier transitions are pure
+    # identity at IR (see lower_ast.py:1977-1990) — they don't mutate
+    # state, don't call effectful runtime hooks, just pass the inner
+    # value through. The let-inlining AD-erasability check needs them
+    # here to avoid the misleading "cannot erase side-effecting let"
+    # diagnostic when an unused `let _ = into_working(x);` appears
+    # inside a grad/grad_rev body. When/if Phase-1 introduces real
+    # tier-id arena mutation (planned Stage 37 Inc 5), removal will
+    # mirror the Inc 11 H1 fix that removed register_derivation from
+    # this set once it gained ARENA_PUSH_PAIR side effects.
+    "into_working", "into_episodic", "into_semantic", "into_procedural",
+    "unwrap_working", "unwrap_episodic", "unwrap_semantic", "unwrap_procedural",
+    "consolidate", "recall",
     # Stage 36 Increment 9 post-Inc-8 audit C2 LOW fix: register the
     # boolean-algebra builtins as AD-pure. They're all integer-valued
     # (so the AD derivative is 0 for differentiable use cases), but
