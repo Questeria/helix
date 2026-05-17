@@ -1980,13 +1980,18 @@ class Lowerer:
             # lives purely at the type system level — mirrors the
             # Stage 36 Logic<T> attach/detach pattern). Phase-1+ work
             # will add tier-id arena side-tables for runtime tracking.
+            # Stage 38 Inc 1 adds spatial-frame constructors +
+            # eliminators to this identity-lowering arm. Same Phase-0
+            # zero-overhead pattern as Stage 37 tier ops.
             if (isinstance(expr.callee, A.Name)
                     and expr.callee.name in (
                         "into_working", "into_episodic",
                         "into_semantic", "into_procedural",
                         "unwrap_working", "unwrap_episodic",
                         "unwrap_semantic", "unwrap_procedural",
-                        "consolidate", "recall")
+                        "consolidate", "recall",
+                        "into_world", "into_robot", "into_camera",
+                        "from_world", "from_robot", "from_camera")
                     and len(expr.args) == 1):
                 return self._lower_expr(expr.args[0])
             # Stage 36 Increment 5: real two-parent provenance via

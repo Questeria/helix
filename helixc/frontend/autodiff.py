@@ -81,6 +81,12 @@ AD_KNOWN_PURE_CALLS = {
     "into_working", "into_episodic", "into_semantic", "into_procedural",
     "unwrap_working", "unwrap_episodic", "unwrap_semantic", "unwrap_procedural",
     "consolidate", "recall",
+    # Stage 38 Inc 1 — spatial-frame identity-lowerings.
+    # Same Phase-0 zero-overhead pattern as Stage 37 tier ops.
+    # Added preemptively so the Stage 37 closure gate-1 LOW
+    # finding (S37-CLEAN1-001) doesn't recur for frames.
+    "into_world", "into_robot", "into_camera",
+    "from_world", "from_robot", "from_camera",
     # Stage 36 Increment 9 post-Inc-8 audit C2 LOW fix: register the
     # boolean-algebra builtins as AD-pure. They're all integer-valued
     # (so the AD derivative is 0 for differentiable use cases), but

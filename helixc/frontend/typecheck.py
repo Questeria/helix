@@ -239,6 +239,19 @@ class TyMemTier(Type):
 
 
 @dataclass(frozen=True)
+class TyFrame(Type):
+    """Stage 38 — a value tagged with a spatial reference frame:
+    WorldFrame / RobotFrame / CameraFrame. Real-world AGI workloads
+    (robotics, vision, navigation) need to track WHICH frame a
+    coordinate is expressed in — a camera's `(0.5, 0.3, 1.2)` means
+    nothing without knowing it's CameraFrame vs WorldFrame vs
+    RobotFrame. Cross-frame operations require explicit transforms
+    (to_world, to_robot, to_camera — Stage 38 Inc 2)."""
+    frame: str       # "world", "robot", "camera"
+    inner: Type
+
+
+@dataclass(frozen=True)
 class TySkill(Type):
     """Skill<F> — a learned procedure with a known difficulty. Produced by
     `learn_to`; called like a function. The runtime maintains a registry
@@ -1081,6 +1094,17 @@ class TypeChecker:
             if ty.base in tier_map and len(ty.args) == 1:
                 return TyMemTier(tier=tier_map[ty.base],
                                  inner=self._resolve_type(ty.args[0], scope))
+            # Stage 38 Inc 1 — spatial-frame wrappers: WorldFrame<T>,
+            # RobotFrame<T>, CameraFrame<T>. Mirrors the TyMemTier
+            # pattern above.
+            frame_map = {
+                "WorldFrame": "world",
+                "RobotFrame": "robot",
+                "CameraFrame": "camera",
+            }
+            if ty.base in frame_map and len(ty.args) == 1:
+                return TyFrame(frame=frame_map[ty.base],
+                               inner=self._resolve_type(ty.args[0], scope))
             # Stage 28 — user-defined parametric struct (Audit 28.8 A3/B1).
             # If `ty.base` is a known generic struct AND the arity matches,
             # resolve `Pt<i32>` -> `TyStruct("Pt__i32")` so distinct
@@ -1858,6 +1882,9 @@ class TypeChecker:
         # Stage 37 Inc 1 — tiered memory constructors + eliminators.
         "into_working", "into_episodic", "into_semantic", "into_procedural",
         "unwrap_working", "unwrap_episodic", "unwrap_semantic", "unwrap_procedural",
+        # Stage 38 Inc 1 — spatial-frame constructors + eliminators.
+        "into_world", "into_robot", "into_camera",
+        "from_world", "from_robot", "from_camera",
         "grad", "grad_rev", "grad_rev_all",
         "quote", "splice", "splice_f", "splice_f64",
         "modify", "modify_f", "modify_f64",
@@ -2919,11 +2946,11 @@ class TypeChecker:
                 if bn == "to_logic_bool" and len(arg_tys) == 1:
                     if not (isinstance(arg_tys[0], TyPrim)
                             and arg_tys[0].name == "i32"):
+                        hint = self._strict_i32_truncation_hint(
+                            arg_tys[0], "pre-Inc-9", "BIT_AND ops")
                         self.errors.append(TypeError_(
                             f"to_logic_bool(x): arg must be exactly i32, got "
-                            f"{self._fmt(arg_tys[0])} (pre-Inc-9 also "
-                            f"accepted i64/u32/u64 but those silently "
-                            f"truncated in downstream BIT_AND ops)",
+                            f"{self._fmt(arg_tys[0])}{hint}",
                             expr.span,
                         ))
                     return TyLogic(inner=TyPrim("i32"))
@@ -2942,12 +2969,12 @@ class TypeChecker:
                     # above and the Inc 9 B4 fix on `to_logic_bool`.
                     for i, t in enumerate(arg_tys):
                         if not (isinstance(t, TyPrim) and t.name == "i32"):
+                            hint = self._strict_i32_truncation_hint(
+                                t, "pre-Inc-11", "arena push ops")
                             self.errors.append(TypeError_(
                                 f"register_derivation(left, right): arg "
                                 f"{'12'[i]} must be exactly i32 source id, "
-                                f"got {self._fmt(t)} (pre-Inc-11 also "
-                                f"accepted i64/u32/u64 but those silently "
-                                f"truncated in downstream arena push ops)",
+                                f"got {self._fmt(t)}{hint}",
                                 expr.span,
                             ))
                     return TyPrim("i32")
@@ -2962,12 +2989,12 @@ class TypeChecker:
                     # fix). Family is now uniformly strict-i32.
                     if not (isinstance(arg_tys[0], TyPrim)
                             and arg_tys[0].name == "i32"):
+                        hint = self._strict_i32_truncation_hint(
+                            arg_tys[0], "pre-Inc-15", "arena read")
                         self.errors.append(TypeError_(
                             f"{bn}(idx): arg must be exactly i32 "
                             f"derivation handle, got "
-                            f"{self._fmt(arg_tys[0])} (pre-Inc-15 also "
-                            f"accepted i64/u32/u64 but those silently "
-                            f"truncated in downstream arena read)",
+                            f"{self._fmt(arg_tys[0])}{hint}",
                             expr.span,
                         ))
                     return TyPrim("i32")
@@ -2980,12 +3007,12 @@ class TypeChecker:
                 if bn == "register_derivation3" and len(arg_tys) == 3:
                     for i, t in enumerate(arg_tys):
                         if not (isinstance(t, TyPrim) and t.name == "i32"):
+                            hint = self._strict_i32_truncation_hint(
+                                t, "pre-Inc-14", "arena push ops")
                             self.errors.append(TypeError_(
                                 f"register_derivation3(left, middle, right): "
                                 f"arg {'123'[i]} must be exactly i32 source "
-                                f"id, got {self._fmt(t)} (Inc 11 C1 family: "
-                                f"i64/u32/u64 would silently truncate in "
-                                f"downstream arena push ops)",
+                                f"id, got {self._fmt(t)}{hint}",
                                 expr.span,
                             ))
                     return TyPrim("i32")
@@ -3008,33 +3035,53 @@ class TypeChecker:
                 # — too large for this audit-fix increment. See audit
                 # docs/audit-stage36-postinc14-silent-failures.md#H1.
                 if bn == "parent_at" and len(arg_tys) == 2:
+                    # Stage 37 post-closure M2 fix (gate-3 type-design
+                    # audit, conf 70): parent_at was the only member of
+                    # the strict-i32 family without the family-standard
+                    # "pre-Inc-N also accepted i64/u32/u64 but silently
+                    # truncated" remediation hint. Use the same gated
+                    # helper as the rest of the family. Pre-Inc-14 the
+                    # generic `parent_at` did not exist; using the
+                    # `pre-Inc-14` label keeps the timeline accurate.
+                    arg_types_ok = True
                     for i, t in enumerate(arg_tys):
                         if not (isinstance(t, TyPrim) and t.name == "i32"):
+                            arg_types_ok = False
+                            hint = self._strict_i32_truncation_hint(
+                                t, "pre-Inc-14", "arena read")
                             self.errors.append(TypeError_(
                                 f"parent_at(handle, slot): arg "
                                 f"{'12'[i]} must be exactly i32, "
-                                f"got {self._fmt(t)}",
+                                f"got {self._fmt(t)}{hint}",
                                 expr.span,
                             ))
                     # Inc 15 static slot-literal bounds check.
-                    slot_node = expr.args[1]
-                    slot_literal_value: Optional[int] = None
-                    if isinstance(slot_node, A.IntLit):
-                        slot_literal_value = slot_node.value
-                    elif (isinstance(slot_node, A.Unary)
-                            and slot_node.op == "-"
-                            and isinstance(slot_node.operand, A.IntLit)):
-                        slot_literal_value = -slot_node.operand.value
-                    if (slot_literal_value is not None
-                            and not (0 <= slot_literal_value <= 2)):
-                        self.errors.append(TypeError_(
-                            f"parent_at(handle, slot): literal slot "
-                            f"{slot_literal_value} is out of range "
-                            f"[0, 2] (max arity is 3 from "
-                            f"register_derivation3). Inc 15 "
-                            f"silent-failure H1 closure.",
-                            expr.span,
-                        ))
+                    # Stage 37 post-closure M2 fix (gate-3 type-design
+                    # audit secondary smell): skip the slot-bounds error
+                    # when arg types already failed — otherwise a caller
+                    # who passes both wrong-typed args AND an out-of-
+                    # range literal slot gets 3 errors when 2 suffice
+                    # (the slot value is moot when the call can't
+                    # typecheck). Gate on arg_types_ok.
+                    if arg_types_ok:
+                        slot_node = expr.args[1]
+                        slot_literal_value: Optional[int] = None
+                        if isinstance(slot_node, A.IntLit):
+                            slot_literal_value = slot_node.value
+                        elif (isinstance(slot_node, A.Unary)
+                                and slot_node.op == "-"
+                                and isinstance(slot_node.operand, A.IntLit)):
+                            slot_literal_value = -slot_node.operand.value
+                        if (slot_literal_value is not None
+                                and not (0 <= slot_literal_value <= 2)):
+                            self.errors.append(TypeError_(
+                                f"parent_at(handle, slot): literal slot "
+                                f"{slot_literal_value} is out of range "
+                                f"[0, 2] (max arity is 3 from "
+                                f"register_derivation3). Inc 15 "
+                                f"silent-failure H1 closure.",
+                                expr.span,
+                            ))
                     return TyPrim("i32")
                 # Stage 36 Increment 6: fuzzy logic operators over
                 # Logic<f32>. Truth values live in [0, 1]; operators
@@ -3119,6 +3166,37 @@ class TypeChecker:
                     self.errors.append(TypeError_(
                         f"{bn}() requires "
                         f"{want.capitalize()}Mem<T>, got "
+                        f"{self._fmt(arg_tys[0])}",
+                        expr.span,
+                    ))
+                    return TyUnknown(hint=bn)
+                # Stage 38 Inc 1 — spatial-frame constructors + eliminators.
+                # 3 reference frames (world/robot/camera) each get an
+                # into_* constructor (T -> FrameName<T>) and a from_*
+                # eliminator (FrameName<T> -> T). Mirrors the Stage 37
+                # tier pattern. All lower to identity at IR (Phase-0:
+                # frame lives at type level, zero runtime overhead).
+                _frame_intro = {
+                    "into_world": "world",
+                    "into_robot": "robot",
+                    "into_camera": "camera",
+                }
+                if bn in _frame_intro and len(arg_tys) == 1:
+                    return TyFrame(frame=_frame_intro[bn],
+                                   inner=arg_tys[0])
+                _frame_elim = {
+                    "from_world": "world",
+                    "from_robot": "robot",
+                    "from_camera": "camera",
+                }
+                if bn in _frame_elim and len(arg_tys) == 1:
+                    want = _frame_elim[bn]
+                    if (isinstance(arg_tys[0], TyFrame)
+                            and arg_tys[0].frame == want):
+                        return arg_tys[0].inner
+                    self.errors.append(TypeError_(
+                        f"{bn}() requires "
+                        f"{want.capitalize()}Frame<T>, got "
                         f"{self._fmt(arg_tys[0])}",
                         expr.span,
                     ))
@@ -6071,6 +6149,22 @@ class TypeChecker:
         t = self._erase_refinement(t)
         return isinstance(t, TyPrim) and t.name in self._NUMERIC_INT_PRIMS
 
+    def _strict_i32_truncation_hint(
+        self, t: "Type", pre_inc_label: str, downstream_op: str,
+    ) -> str:
+        # Stage 37 post-closure L1 fix (Stage 36 gate-3 type-design audit,
+        # conf 75): the family-standard "pre-Inc-N also accepted i64/u32/
+        # u64 but those silently truncated" parenthetical is only TRUE
+        # when the rejected type is itself a wider integer. For non-int
+        # categories (Logic<i32>, struct, function, etc.) pre-fix would
+        # have rejected the call too — claiming a truncation history
+        # misleads the user. Gate the hint on _is_int_scalar so non-int
+        # rejections get the bare "must be exactly i32" message.
+        if not self._is_int_scalar(t):
+            return ""
+        return (f" ({pre_inc_label} also accepted i64/u32/u64 but those "
+                f"silently truncated in downstream {downstream_op})")
+
     def _is_float_scalar(self, t: Type) -> bool:
         t = self._erase_refinement(t)
         return isinstance(t, TyPrim) and t.name in self._NUMERIC_FLOAT_PRIMS
@@ -6569,6 +6663,10 @@ class TypeChecker:
             cap = {"working": "WorkingMem", "episodic": "EpisodicMem",
                    "semantic": "SemanticMem", "procedural": "ProceduralMem"}
             return f"{cap.get(t.tier, t.tier)}<{self._fmt(t.inner)}>"
+        if isinstance(t, TyFrame):
+            cap = {"world": "WorldFrame", "robot": "RobotFrame",
+                   "camera": "CameraFrame"}
+            return f"{cap.get(t.frame, t.frame)}<{self._fmt(t.inner)}>"
         if isinstance(t, TySkill):
             tag = f' "{t.task}"' if t.task else ""
             return f"Skill<{self._fmt(t.inner)}{tag}>"
