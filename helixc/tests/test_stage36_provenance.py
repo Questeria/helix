@@ -2594,6 +2594,47 @@ fn main() -> i32 {
         "parent_at with dynamic slot 0 must return parent_left_at value"
 
 
+def test_stage36_clean_gate1_parent_at_dynamic_slot_three_returns_sentinel():
+    """Stage 36 closure clean-gate-1 A1 HIGH fix: parent_at with a
+    dynamic slot >= 3 returns -1 sentinel (was silently reading
+    sibling-record data pre-fix). Mirrors the static typecheck
+    rejection of literal slot >= 3."""
+    src = """
+fn main() -> i32 {
+    let h = register_derivation(11, 22);
+    let big_slot: i32 = 3;
+    let v: i32 = parent_at(h, big_slot);
+    // v must be -1 (Inc 9 A1 + clean-gate-1 A1 sentinel).
+    if v == 0 - 1 { 42 } else { 0 }
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    assert typecheck(prog) == [], \
+        f"dynamic slot must compile, got: {[str(e) for e in typecheck(prog)]}"
+    elf = compile_module_to_elf(lower(prog))
+    assert _run_elf(elf) == 42, \
+        "parent_at with dynamic slot=3 must return -1 sentinel (A1 HIGH fix)"
+
+
+def test_stage36_clean_gate1_parent_at_dynamic_slot_huge_returns_sentinel():
+    """Same A1 HIGH fix: even a huge dynamic slot returns -1
+    sentinel (the runtime upper guard short-circuits before
+    _safe_arena_get even sees the eff_idx)."""
+    src = """
+fn main() -> i32 {
+    let h = register_derivation(11, 22);
+    let huge: i32 = 99999;
+    let v: i32 = parent_at(h, huge);
+    if v == 0 - 1 { 42 } else { 0 }
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    assert typecheck(prog) == []
+    elf = compile_module_to_elf(lower(prog))
+    assert _run_elf(elf) == 42, \
+        "parent_at with dynamic slot=99999 must return -1 sentinel"
+
+
 if __name__ == "__main__":
     import pytest
     raise SystemExit(pytest.main([__file__, "-v"]))
