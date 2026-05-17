@@ -611,3 +611,102 @@ discriminator, silent-failure A3 fuzzy-op clamp, type-design A2
 arena-push atomicity) remain deferred for user approval — these
 ARE genuine representation changes (new IR opcode, arena
 side-table redesign, fuzzy semantics decision).
+
+### Inc 9 fix-sweep continuation (post-31810c3)
+
+Four additional non-architectural findings closed after the
+type-design A1 fix:
+
+- **B1 MEDIUM** (code-review, conf 82): `derive(a, b)` lowering
+  now evaluates `a` then `b` (source order) instead of `b` then
+  `a`. Side-effecting calls like `derive(log("a"), log("b"))`
+  now print in source order. Return value unchanged.
+  (Commit `a9753ad`.)
+- **B2 MEDIUM** (code-review, conf 88): added bilateral d/db
+  chain-rule coverage for the four 2-arg fuzzy ops
+  (`fuzzy_and` / `fuzzy_or` / `fuzzy_xor` / `fuzzy_implies`).
+  All existing tests fixed the second arg as a literal and
+  differentiated only against the first; a transpose bug in
+  fuzzy_or (1-b vs 1-a) or fuzzy_implies (-1+b vs a) would
+  have slipped through. The new tests confirm both forward
+  and reverse-mode chain rules transpose correctly.
+  (Commit `61b50b2`.)
+- **B4 MEDIUM** (type-design, conf 82): `to_logic_bool` now
+  strict-rejects non-i32 inputs. Pre-fix, `_is_int_scalar`
+  accepted i32/i64/u32/u64 but unconditionally returned
+  `Logic<i32>` — passing i64 silently truncated to 32 bits via
+  downstream BIT_AND. Post-fix: explicit `TyPrim("i32")`
+  check with a diagnostic that names the silent-truncate risk.
+  (Commit `9442842`.)
+- **C1 LOW** (type-design, conf 60): `unwrap_logic` typecheck
+  error now returns `TyUnknown(hint="unwrap_logic")` instead
+  of the (non-Logic) input type, matching the codebase
+  convention of suppressing cascading type-inference errors
+  after a builtin failure. (Commit `9442842`.)
+
+Then, in a separate commit, the silent-failure A2 finding was
+re-classified from architectural to mechanical and closed:
+
+- **A2 HIGH** (silent-failure, conf 85): `register_derivation`
+  now returns 1-based handles (push_index + 1). Handle 0 is the
+  reserved "null derivation" sentinel and `parent_left_at(0)` /
+  `parent_right_at(0)` both return -1 via the existing A1
+  bounds-check (since 0 - 1 = -1 fails the `>= 0` check).
+  Symmetrically, the accessors subtract 1 from the user-visible
+  handle before arena lookup, recovering the original push index.
+  Pre-fix: storing handles in a struct field defaulted to 0 was
+  indistinguishable from a valid derivation at arena index 0 —
+  silent provenance corruption. 4 new regression tests pin the
+  invariant (first-handle-is-1, handle-0-returns-null even when
+  arena index 0 holds data, valid-handles-still-round-trip,
+  two-derivations-stay-independent).
+  (Commit `8411cf2`.)
+
+Tests after Inc 9 fix-sweep (final state, post-8411cf2):
+**68 passed** in `test_stage36_provenance.py` (22 new across
+A1-bounds, B1-source-order, B2-d/db, A1-inner-type, B4-i32-strict,
+C1-recovery, A2-null-handle).
+
+Self-host gate: PASS (G2..G4 byte-identical sha
+`a6f1ee44eb4418ba296954528d05564f5a37627dc38bb350b2308675d86b8986`,
+all smoke programs exit 42, validate ok).
+
+### Why the silent-failure A2 fix applied autonomously
+
+The audit doc framed A2 as "Architectural: representation choice
+between arena sentinel and tagged handle". The 1-based-handle
+fix is the minimal-surface representation choice — it doesn't
+require a new IR opcode, doesn't change the arena layout, and
+doesn't break any existing test. The competing tagged-handle
+design (e.g., a separate validity bit) would have been an actual
+representation change. The 1-based offset is closer in spirit to
+"bounds check with extra slot" (extending A1) than to a new
+arena schema.
+
+### Remaining Inc 9 architectural items (still awaiting user input)
+
+These three HIGH findings need user direction because each
+materially changes program semantics or introduces new IR
+surface:
+
+- **A3** (silent-failure): fuzzy ops produce nonsense gradients
+  on out-of-[0,1] inputs. Choice: clamp inputs to [0,1] before
+  the chain rule (silent defense, may mask user bugs), trap on
+  out-of-range (loud-fail, matches NaN-fail-closed discipline),
+  or document garbage-in/garbage-out (matches the existing
+  NaN-eps handling convention for `layer_norm`).
+- **B2 derive() drops second parent** (semantic, conf 88):
+  Phase-0 keeps `a`'s value and discards `b`. The fix is to
+  auto-register a two-parent derivation via the now-available
+  `register_derivation` arena side-table — but this changes
+  `derive()` from a typecheck-only marker into a runtime side
+  effect, which is a user-visible behaviour change.
+- **A2 type-design — `register_derivation` two-arena-push pair
+  is not atomic** (conf 88). Shared arena cursor with struct
+  lowering and MatchDispatch can interleave. Proper fix is a
+  new fused `ARENA_PUSH_PAIR` IR opcode — genuine IR primitive
+  expansion.
+
+The MEDIUM/LOW audit findings are deferrable to a separate
+Stage 36 audit catch-up sweep once A3 / B2 / type-design A2
+are decided.
