@@ -5,7 +5,7 @@ deep-research passes (2026-05-04). It's a forward-looking plan; not
 everything here will land, and priorities will shift as dogfooding
 reveals which features actually matter.
 
-## Current state (Stage 35 CLOSED 2026-05-16 at restart 65; Stage 36 CLOSED 2026-05-16 at Inc 16; Stage 37 CLOSED 2026-05-16 at Inc 4; Stage 38 CLOSED 2026-05-17 at Inc 4; Stage 39 CLOSED 2026-05-17 at Inc 4; Stage 40 CLOSED 2026-05-17 at Inc 4; Stage 41 CLOSED 2026-05-17 at Inc 4; Stage 42 CLOSED 2026-05-17 at Inc 2 — AGI quintet cohesion demonstrated via dogfood_15_agi_planning_loop.hx exercising a 4-deep wrapper stack end-to-end; Stage 43 opens next. See `docs/stage42-progress-2026-05-17.md` for Stage 42 closure narrative)
+## Current state (Stage 35 CLOSED 2026-05-16 at restart 65; Stage 36 CLOSED 2026-05-16 at Inc 16; Stage 37 CLOSED 2026-05-16 at Inc 4; Stage 38 CLOSED 2026-05-17 at Inc 4; Stage 39 CLOSED 2026-05-17 at Inc 4; Stage 40 CLOSED 2026-05-17 at Inc 4; Stage 41 CLOSED 2026-05-17 at Inc 4; Stage 42 CLOSED 2026-05-17 at Inc 2; Stage 43 CLOSED 2026-05-17 at Inc 2 — deferred-items cleanup sweep across Stages 36-42 (Items 2/3/4 done: AD-set rename, F5 arity arms, M1 double-wrap rejection with direction-aware hints across all 5 wrapper families; Item 1 aggregate-rename deferred to Stage 44+); Stage 44 opens next. See `docs/stage43-progress-2026-05-17.md` for Stage 43 closure narrative)
 
 - Working from-scratch x86-64 ELF compiler
 - Forward + reverse-mode symbolic AD with chain rules for __exp, __log,

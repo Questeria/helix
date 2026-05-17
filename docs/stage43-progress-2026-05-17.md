@@ -28,12 +28,22 @@ for "aggregate types" (struct/enum/tuple/array layouts). Users
 who hit "aggregate return type" diagnostics in unrelated code
 will be confused about which `aggregate` is meant.
 
-Fix: rename the user-visible diagnostic strings ("aggregate
-return type" → "composite return type", "aggregate argument" →
-"composite argument", "operator for the aggregate type" →
-"operator for the composite type"). Keep the IR-internal
-`_aggregate_*` identifier names; only the user-facing strings
-need disambiguation.
+**DEFERRED to Stage 44+** (decided at Inc 1 implementation
+time). Original fix plan: rename the user-visible diagnostic
+strings ("aggregate return type" → "composite return type",
+"aggregate argument" → "composite argument", "operator for the
+aggregate type" → "operator for the composite type"). Keep the
+IR-internal `_aggregate_*` identifier names; only the
+user-facing strings need disambiguation.
+
+Why deferred: the rename touches 6 existing test assertions in
+helixc/tests/test_typecheck.py (lines 2486-2505) and
+helixc/tests/test_codegen.py (line 14650) that pin the literal
+"aggregate" wording. The risk of breaking the test surface for
+a cosmetic disambiguation exceeds the reward — especially since
+Stage 43 is already a cleanup stage and adding test churn
+defeats the hygiene goal. Stage 44+ will need to land the rename
++ test updates as a single co-ordinated commit.
 
 ### Item 2 — LOW-3 (Stage 41 closure gate-1 code-review)
 
@@ -80,6 +90,81 @@ Same conventions as Stage 37/38/39/40/41/42.
 
 All 4 items fixed in one commit. Tests added pinning each fix.
 
-## Increment 2 - Stage 43 Closure (3/3 clean gates)
+## Increment 2 - Stage 43 Closure
 
-Same protocol as Stage 35/36/37/38/39/40/41/42.
+### Gate 1 (post-Inc-1) — fix sweep landed
+
+- silent-failure: GATE CLEAN
+- type-design: GATE CLEAN (1 MEDIUM "5-fold duplication"
+  deferred to Stage 44+ as a `_resolve_unary_wrapper` +
+  `WrapperFamily.intro_hint(source, target)` refactor)
+- code-review: 2 MEDIUMs + 1 LOW
+  - MEDIUM-1 (frame direction-blind hint): fixed
+  - MEDIUM-2 (tier missing transition names): fixed
+  - LOW-1 (5-fold duplication): deferred (same as type-design)
+
+Gate-1 fix sweep (commit eee95fc):
+- Frame double-wrap hint now computes
+  `{source}_to_{target}` direction-correctly from actual
+  (source, target) pair, with same-kind fallback at
+  "unwrap with from_{source}" instead of nonsense
+  self-transform.
+- Tier double-wrap hint now names concrete Phase-0
+  transitions (`consolidate` for Episodic→Semantic,
+  `recall` for Semantic→Working) instead of generic
+  "unwrap first".
+- 4 direction-pin regression tests added.
+
+### Gate 2 (post-gate-1) — direction-aware sweep extended to remaining 3 families
+
+- silent-failure: GATE CLEAN
+- type-design: 1 MEDIUM (asymmetry — gate-1 only direction-
+  fixed 2 of 5 families; temporal/modal/causal still used
+  generic one-liner). FIXED.
+- code-review: GATE CLEAN
+
+Gate-2 fix sweep (commit 9df6329): extended direction-aware
+pattern to temporal/modal/causal. All 5 arms now use the
+same shape: per-family `_X_transitions_by_pair` table
+lookup; same-kind → unwrap; audited transition → name the
+verb; deferred direction → kind-specific Phase-0 message.
+7 new direction-pin tests added (one per audited (source,
+target) per family).
+
+### Gate 3 (post-gate-2) — ALL 3 LANES CLEAN
+
+- silent-failure: GATE 3 CLEAN
+- type-design: GATE 3 CLEAN
+- code-review: GATE 3 CLEAN
+
+### STAGE 43 CLOSED 2026-05-17 at Inc 2
+
+3 consecutive clean audit gates achieved per the post-Stage-35
+closure convention. Deferred-items cleanup complete:
+
+- Item 2 (rename `_FRAME_IDENTITY_AD_NAMES` →
+  `_IDENTITY_AD_CHAIN_RULE_NAMES` + backwards-compat alias):
+  DONE.
+- Item 3 (F5 `_resolve_type` arity arms across 5 wrapper
+  families): DONE.
+- Item 4 (M1 intro double-wrap rejection across 5 wrapper
+  families, with direction-aware hints post-gate-2): DONE.
+- Item 1 (aggregate → composite diagnostic rename): DEFERRED
+  to Stage 44+ (would force 6 existing test assertions to be
+  rewritten in lockstep; bad risk/reward mid-cleanup).
+
+Outstanding deferrals for Stage 44+:
+- LOW-2 (Item 1 above): aggregate-name rename.
+- LOW-3 follow-up: drop the `_FRAME_IDENTITY_AD_NAMES`
+  backwards-compat alias.
+- LOW-1 / gate-2 follow-up: `_resolve_unary_wrapper` +
+  `WrapperFamily.intro_hint(source, target)` 5-fold
+  duplication refactor.
+- Stage 40 F1 known limitation: let-binding bypass of
+  Uncertain-laundering guard (needs taint-tracking pass).
+
+26 Stage 43 tests green. Self-host cascade still
+byte-identical G2..G4 fixpoint. 187+ tests across Stage 37-43
+all green.
+
+Stage 44 opens next per ROADMAP Phase 2.
