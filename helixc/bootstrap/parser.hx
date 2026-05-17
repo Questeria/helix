@@ -5609,9 +5609,17 @@ fn set_param_n(sb: i32, v: i32) -> i32 { __arena_set(sb + 88, v); 0 }
 fn param_array_name_s(sb: i32, idx: i32) -> i32 { __arena_get(sb + 90 + idx * 2) }
 fn param_array_name_l(sb: i32, idx: i32) -> i32 { __arena_get(sb + 91 + idx * 2) }
 fn set_param_array_name(sb: i32, idx: i32, s: i32, l: i32) -> i32 {
+    // Stage 50 gate-1 F1 defensive: clamp idx to [0, 8); silent
+    // no-op on out-of-bounds rather than corrupting adjacent
+    // bucket-head slots (sb+106+ if idx >= 8). Stage 51's
+    // grouping loop is the first caller passing arbitrary idx.
+    if idx < 0 { 0 }
+    else { if idx >= 8 { 0 }
+    else {
     __arena_set(sb + 90 + idx * 2, s);
     __arena_set(sb + 91 + idx * 2, l);
     0
+    } }
 }
 
 fn bucket_array_head(sb: i32, idx: i32) -> i32 { __arena_get(sb + 106 + idx) }
@@ -5641,6 +5649,12 @@ fn bucket_array_reset(sb: i32, n: i32) -> i32 {
 // overflow: cap at 32 per bucket, same as the single-bucket version).
 // Caller must ensure 0 <= idx < param_n.
 fn bucket_array_append(sb: i32, idx: i32, expr_idx: i32) -> i32 {
+    // Stage 50 gate-1 F1 defensive: bounds-guard idx against the
+    // 8-bucket capacity. Trap 89002 on out-of-bounds rather than
+    // silently corrupting adjacent bucket-count slots.
+    if idx < 0 { mk_node(99, 89002, 0, 0) }
+    else { if idx >= param_n_slot(sb) { mk_node(99, 89002, 0, 0) }
+    else {
     let cnt = bucket_array_count(sb, idx);
     if cnt >= 32 {
         mk_node(99, 89001, 0, 0)
@@ -5661,6 +5675,7 @@ fn bucket_array_append(sb: i32, idx: i32, expr_idx: i32) -> i32 {
         set_bucket_array_count(sb, idx, cnt + 1);
         cell
     }
+    } }
 }
 
 // Sum bucket idx into a single expression (chain of binary +).
@@ -5688,7 +5703,14 @@ fn bucket_array_sum(sb: i32, idx: i32) -> i32 {
 
 // Linear scan over param-name array. Returns 0..n-1 if a match exists,
 // or -1 if none. Used by propagate_adj_multi at every AST_VAR node.
+//
+// Stage 50 gate-1 F6 defensive: empty AST_VAR name (var_l == 0) is
+// not a real identifier (lexer rejects 0-length names) but byte_eq
+// returns 1 for empty-vs-empty, so an unused param slot (initialized
+// to (0, 0)) could falsely match. Early-return -1 on var_l == 0.
 fn param_idx_of(sb: i32, var_s: i32, var_l: i32) -> i32 {
+    if var_l == 0 { 0 - 1 }
+    else {
     let n = param_n_slot(sb);
     let mut i: i32 = 0;
     let mut found: i32 = 0 - 1;
@@ -5701,6 +5723,7 @@ fn param_idx_of(sb: i32, var_s: i32, var_l: i32) -> i32 {
         i = i + 1;
     }
     found
+    }
 }
 
 // Recursive multi-bucket adjoint propagator. Walks node, deposits each
