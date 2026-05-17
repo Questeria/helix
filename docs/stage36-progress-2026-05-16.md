@@ -1099,3 +1099,99 @@ Next candidate increments from the "What's left in Stage 36
    many learnable weights.
 5. JAX-style pytrees — needed for real-shape rule systems but
    touches the type system.
+
+## Increment 13 - Provenance debug/observation stdlib (this commit)
+
+Goal: close the documented Phase-1 gap from the "What's left" menu
+above — provide user-facing observation helpers over the Inc 5/9
+arena side-table without requiring any IR / codegen change.
+
+What landed:
+
+- New stdlib file `helixc/stdlib/provenance.hx` with four helpers:
+  - `has_evidence(handle: i32) -> i32` — returns 1 iff `handle >= 1`
+    AND `parent_left_at(handle) != -1`. Uses both the Inc 9 A2
+    1-based-handle invariant and the Inc 9 A1 bounds-check sentinel
+    to give a single yes/no "is this provenance recoverable?" answer.
+  - `evidence_left(handle) -> i32` — readability alias for
+    `parent_left_at(handle)`. Pure.
+  - `evidence_right(handle) -> i32` — readability alias for
+    `parent_right_at(handle)`. Pure.
+  - `trace_evidence(handle) -> i32` — prints
+    `"h=<handle> L=<left> R=<right>\n"` to stdout, returns
+    `has_evidence(handle)`. Side-effecting (calls `print_str` +
+    `print_int`), so deliberately NOT `@pure`.
+- `helixc/frontend/parser.py` `STDLIB_FILES` — appended
+  `"provenance.hx"` so the new helpers are auto-merged whenever
+  `include_stdlib=True`. The function-DCE pass drops them when
+  unused, so the cost for non-users is zero.
+
+Why a stdlib `.hx` file rather than typecheck-recognized builtins:
+the four helpers compose existing primitives (`parent_*_at`,
+`print_int`, `print_str`) with no new typecheck rules, no new IR
+ops, and no new codegen. The same pattern is used elsewhere in the
+tree (e.g. `string.hx`, `result.hx`, `vec.hx`). It also means the
+helpers themselves are visible Helix source — users can read what
+`trace_evidence` actually does without leaving their editor.
+
+Phase-0 reminder embedded in the stdlib doc-comment: `Logic<T> = T`
+at runtime, so there is NO Logic-value-level provenance to print;
+the only runtime-observable provenance is the arena side-table
+populated by `register_derivation` / `derive` (Inc 9 B2). Users who
+want per-Logic-value provenance need to thread the handle returned
+by `register_derivation` themselves — auto-registration remains
+deferred as the documented architectural item from Inc 9.
+
+10 new end-to-end runtime tests in
+`helixc/tests/test_stage36_provenance.py`:
+
+- `test_stage36_inc13_has_evidence_null_handle_returns_zero` —
+  pins the null-sentinel contract (handle 0 → 0).
+- `test_stage36_inc13_has_evidence_unrecorded_handle_returns_zero` —
+  pins the OOB fallthrough (handle 999999 → 0 via Inc 9 A1
+  bounds-check sentinel).
+- `test_stage36_inc13_has_evidence_valid_handle_returns_one` —
+  pins the happy path (after `register_derivation(11, 22)`,
+  handle returns 1). Exit code uses the multiplied form
+  (`42 * has_evidence(h)`) so a regression to 0 fails closed at 0,
+  not at 42.
+- `test_stage36_inc13_evidence_left_alias_matches_parent_left_at` —
+  pins the alias identity (11 + 31 = 42).
+- `test_stage36_inc13_evidence_right_alias_matches_parent_right_at` —
+  pins the alias identity (22 + 20 = 42).
+- `test_stage36_inc13_trace_evidence_returns_validity_flag_valid` —
+  pins that the print side effects don't clobber the return
+  register (`42 * trace_evidence(h)` exits 42).
+- `test_stage36_inc13_trace_evidence_returns_zero_for_null_handle` —
+  pins the null-handle return-value contract (0).
+- `test_stage36_inc13_trace_evidence_stdout_format` — captures
+  stdout and asserts byte-exact `"h=1 L=11 R=22\n"` for a single
+  `register_derivation(11, 22)`.
+- `test_stage36_inc13_trace_evidence_independent_handles_dont_collide` —
+  two `register_derivation` calls + two `trace_evidence` calls
+  produce byte-exact `"h=1 L=7 R=8\nh=3 L=9 R=10\n"`. Pins the
+  ARENA_PUSH_PAIR-advances-by-2 invariant from Inc 9.
+- `test_stage36_inc13_helpers_visible_in_stdlib` — pins the
+  `STDLIB_FILES` registration: all four helpers must surface as
+  `FnDecl` items when `include_stdlib=True`.
+
+Tests: 10/10 pass in 32.92s (the new tests, in isolation).
+
+### Why no audit dispatch this increment
+
+Inc 13 adds ~60 lines of stdlib Helix source + one entry in
+`STDLIB_FILES`. There is no new typecheck rule, no new IR
+opcode, no new codegen path, no new AD chain rule. The
+attack surface is "does the stdlib file parse + does the
+function-DCE pass drop it when unused", both of which are
+exercised by the existing post-merge regression sweep (typecheck
++ codegen + the Stage 35 stdlib-merge tests). A 3-lane audit
+on a pure-Helix stdlib file would re-find what the merge tests
+already check.
+
+### Inc 13 status
+
+Phase-1 cosmetic primitive shipped. The "What's left" menu item
+#2 is closed. Next natural increment is item #3 (multi-parent
+N-tag arena entries) which builds on the Inc 9 ARENA_PUSH_PAIR
+opcode — modest IR extension, not a representation change.

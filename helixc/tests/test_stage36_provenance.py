@@ -1805,6 +1805,202 @@ def test_stage36_inc12_let_erasable_unused_and_logic_still_compiles():
         f"expected 1.0 for d(x)/dx, got {derivs['x'].value}"
 
 
+# ---------------------------------------------------------------------------
+# Stage 36 Inc 13 — provenance debug/observation stdlib (helixc/stdlib/provenance.hx).
+#
+# Inc 13 ships four stdlib helpers wrapping the Inc 5/9 arena side-table:
+#   - has_evidence(h)    -> 1 iff h is valid and parent_left_at(h) != -1
+#   - evidence_left(h)   -> parent_left_at(h)  (readability alias)
+#   - evidence_right(h)  -> parent_right_at(h) (readability alias)
+#   - trace_evidence(h)  -> prints "h=<h> L=<l> R=<r>\n", returns has_evidence(h)
+# ---------------------------------------------------------------------------
+
+
+def _run_elf_capture(elf: bytes) -> tuple[int, bytes]:
+    """Compile + run via WSL, return (returncode, stdout_bytes)."""
+    with tempfile.NamedTemporaryFile(suffix=".bin", delete=False) as f:
+        f.write(elf)
+        bin_path = f.name
+    try:
+        os.chmod(bin_path, 0o755)
+        abs_p = bin_path.replace("\\", "/").replace("C:", "/mnt/c")
+        r = subprocess.run(
+            ["wsl", "--", "bash", "-c", f"chmod +x {abs_p} && {abs_p}"],
+            capture_output=True, timeout=30,
+        )
+        return r.returncode, r.stdout
+    finally:
+        try:
+            os.unlink(bin_path)
+        except OSError:
+            pass
+
+
+def test_stage36_inc13_has_evidence_null_handle_returns_zero():
+    """has_evidence(0) == 0 (handle 0 is the reserved null sentinel
+    per the Inc 9 A2 fix). Exit code = 42 + 0*999 = 42 confirms."""
+    src = """
+fn main() -> i32 {
+    42 + has_evidence(0) * 999
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    assert typecheck(prog) == []
+    elf = compile_module_to_elf(lower(prog))
+    rc = _run_elf_capture(elf)[0]
+    assert rc == 42, f"expected 42, got {rc}"
+
+
+def test_stage36_inc13_has_evidence_unrecorded_handle_returns_zero():
+    """has_evidence(h) on an out-of-range handle returns 0 because
+    parent_left_at(h) hits the Inc 9 A1 bounds-check sentinel."""
+    src = """
+fn main() -> i32 {
+    42 + has_evidence(999999) * 999
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    assert typecheck(prog) == []
+    elf = compile_module_to_elf(lower(prog))
+    rc = _run_elf_capture(elf)[0]
+    assert rc == 42, f"expected 42, got {rc}"
+
+
+def test_stage36_inc13_has_evidence_valid_handle_returns_one():
+    """After register_derivation(11, 22) returns handle h >= 1,
+    has_evidence(h) must be 1 (parents recoverable). Exit code uses
+    the multiplied form to FAIL CLOSED if has_evidence returns 0."""
+    src = """
+fn main() -> i32 {
+    let h = register_derivation(11, 22);
+    42 * has_evidence(h)
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    assert typecheck(prog) == []
+    elf = compile_module_to_elf(lower(prog))
+    rc = _run_elf_capture(elf)[0]
+    assert rc == 42, f"expected 42 (handle valid + multiplied form), got {rc}"
+
+
+def test_stage36_inc13_evidence_left_alias_matches_parent_left_at():
+    """evidence_left(h) is a pure readability alias for parent_left_at(h).
+    register_derivation(11, 22) → evidence_left should return 11."""
+    src = """
+fn main() -> i32 {
+    let h = register_derivation(11, 22);
+    evidence_left(h) + 31
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    assert typecheck(prog) == []
+    elf = compile_module_to_elf(lower(prog))
+    rc = _run_elf_capture(elf)[0]
+    assert rc == 42, f"expected 11+31=42, got {rc}"
+
+
+def test_stage36_inc13_evidence_right_alias_matches_parent_right_at():
+    """evidence_right(h) is a pure readability alias for parent_right_at(h).
+    register_derivation(11, 22) → evidence_right should return 22."""
+    src = """
+fn main() -> i32 {
+    let h = register_derivation(11, 22);
+    evidence_right(h) + 20
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    assert typecheck(prog) == []
+    elf = compile_module_to_elf(lower(prog))
+    rc = _run_elf_capture(elf)[0]
+    assert rc == 42, f"expected 22+20=42, got {rc}"
+
+
+def test_stage36_inc13_trace_evidence_returns_validity_flag_valid():
+    """trace_evidence(h) on a valid handle returns 1 (same as
+    has_evidence). The 42 in the exit code confirms the print_*
+    side effects don't clobber the return register."""
+    src = """
+fn main() -> i32 {
+    let h = register_derivation(11, 22);
+    42 * trace_evidence(h)
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    assert typecheck(prog) == []
+    elf = compile_module_to_elf(lower(prog))
+    rc, _stdout = _run_elf_capture(elf)
+    assert rc == 42, f"expected 42, got {rc}"
+
+
+def test_stage36_inc13_trace_evidence_returns_zero_for_null_handle():
+    """trace_evidence(0) prints "h=0 L=-1 R=-1\\n" and returns 0."""
+    src = """
+fn main() -> i32 {
+    42 + trace_evidence(0) * 999
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    assert typecheck(prog) == []
+    elf = compile_module_to_elf(lower(prog))
+    rc, _stdout = _run_elf_capture(elf)
+    assert rc == 42, f"expected 42 + 0*999 = 42, got {rc}"
+
+
+def test_stage36_inc13_trace_evidence_stdout_format():
+    """Capture stdout: trace_evidence(h) after register_derivation(11, 22)
+    emits "h=1 L=11 R=22\\n" (handle is 1-based per Inc 9 A2)."""
+    src = """
+fn main() -> i32 {
+    let h = register_derivation(11, 22);
+    trace_evidence(h);
+    42
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    assert typecheck(prog) == []
+    elf = compile_module_to_elf(lower(prog))
+    rc, stdout = _run_elf_capture(elf)
+    assert rc == 42, f"expected 42, got {rc}"
+    # The first register_derivation pushes 2 entries at arena indices
+    # 0 and 1, so the user-visible 1-based handle is 1.
+    assert stdout == b"h=1 L=11 R=22\n", \
+        f"stdout mismatch: got {stdout!r}"
+
+
+def test_stage36_inc13_trace_evidence_independent_handles_dont_collide():
+    """Two register_derivation calls produce independent handles
+    (h2 = h1 + 2 since each pushes 2 arena entries via ARENA_PUSH_PAIR
+    per Inc 9 A2). Tracing both produces two well-formed lines."""
+    src = """
+fn main() -> i32 {
+    let h1 = register_derivation(7, 8);
+    let h2 = register_derivation(9, 10);
+    trace_evidence(h1);
+    trace_evidence(h2);
+    42
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    assert typecheck(prog) == []
+    elf = compile_module_to_elf(lower(prog))
+    rc, stdout = _run_elf_capture(elf)
+    assert rc == 42, f"expected 42, got {rc}"
+    assert stdout == b"h=1 L=7 R=8\nh=3 L=9 R=10\n", \
+        f"stdout mismatch: got {stdout!r}"
+
+
+def test_stage36_inc13_helpers_visible_in_stdlib():
+    """The four helpers must be FnDecls in the merged program when
+    include_stdlib=True. Pins the Inc 13 STDLIB_FILES registration."""
+    import helixc.frontend.ast_nodes as A
+    prog = parse("fn main() -> i32 { 0 }", include_stdlib=True)
+    fn_names = {it.name for it in prog.items if isinstance(it, A.FnDecl)}
+    for name in ("has_evidence", "evidence_left", "evidence_right",
+                 "trace_evidence"):
+        assert name in fn_names, \
+            f"stdlib helper {name!r} missing from merged program"
+
+
 if __name__ == "__main__":
     import pytest
     raise SystemExit(pytest.main([__file__, "-v"]))

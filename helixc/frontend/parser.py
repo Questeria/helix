@@ -1523,6 +1523,10 @@ STDLIB_FILES: list[str] = [
     "hashmap.hx", "string.hx", "iterators.hx", "autodiff.hx",
     "autodiff_reverse.hx", "tensor.hx", "nn.hx", "agi_memory.hx",
     "agi_search.hx", "agi_match.hx", "agi_world.hx", "ieee754.hx",
+    # Stage 36 Inc 13: provenance debug/observation helpers
+    # (trace_evidence, has_evidence, evidence_left, evidence_right)
+    # over the Inc 5/9 arena side-table.
+    "provenance.hx",
 ]
 
 
