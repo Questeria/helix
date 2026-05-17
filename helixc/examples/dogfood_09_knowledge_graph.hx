@@ -30,7 +30,7 @@
 //   - gp_ac unwraps to exactly 1 (R1 fired)
 //   - gp_ad unwraps to exactly 1 (R2 fired)
 //   - h_ac == 1 (1-based handle for slot 0)
-//   - h_ad == 2 (1-based handle for slot 1)
+//   - h_ad == 3 (1-based handle for slot 2; slot 1 is h_ac's right-parent)
 //   - all four parent_*_at lookups return the expected source IDs
 // Any single regression collapses the product to 0; exit 42 requires
 // every invariant to pass.

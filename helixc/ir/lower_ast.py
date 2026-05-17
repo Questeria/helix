@@ -2182,8 +2182,22 @@ class Lowerer:
                 slot_valid = self.builder.emit(
                     tir.OpKind.CMP_GE, slot, zero,
                     result_ty=tir.TIRScalar("i32"))
+                # Stage 36 clean-gate-1 audit A1 fix (HIGH): mirror the
+                # static-typecheck literal-slot upper bound at runtime.
+                # Pre-fix, dynamic `slot > 2` silently read sibling-
+                # record data via the unchecked-upper path. The typecheck
+                # rejects literal slot >= 3; this runtime guard catches
+                # the dynamic case. (The full cross-record fix needs
+                # per-handle arity word — deferred to Inc 16.)
+                three = self.builder.const_int(3)
+                slot_lt_3 = self.builder.emit(
+                    tir.OpKind.CMP_LT, slot, three,
+                    result_ty=tir.TIRScalar("i32"))
+                slot_ok = self.builder.emit(
+                    tir.OpKind.BIT_AND, slot_valid, slot_lt_3,
+                    result_ty=tir.TIRScalar("i32"))
                 guards_pass = self.builder.emit(
-                    tir.OpKind.BIT_AND, handle_valid, slot_valid,
+                    tir.OpKind.BIT_AND, handle_valid, slot_ok,
                     result_ty=tir.TIRScalar("i32"))
                 base_idx = self.builder.emit(
                     tir.OpKind.SUB, handle, one,
@@ -2271,7 +2285,11 @@ class Lowerer:
                     and len(expr.args) == 1):
                 a = self._lower_expr(expr.args[0])
                 if a is None:
-                    return a
+                    # Stage 36 clean-gate-1 audit B1 fix (LOW): grep
+                    # symmetry with the Inc 13 return-None convention
+                    # used by parent_*_at and the other 2-arg builtin
+                    # arms. Functionally identical (a is None already).
+                    return None
                 a = _clamp_unit_f32(a)
                 # fuzzy_not(a) = 1.0 - a
                 one = self.builder.const_float(1.0, dtype="f32")
