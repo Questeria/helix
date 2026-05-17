@@ -2030,8 +2030,51 @@ class Lowerer:
                         "from_cause", "from_effect",
                         "from_joint", "from_independent",
                         # Stage 41 Inc 2 — causal transitions.
-                        "propagate", "aggregate", "isolate")
+                        "propagate", "aggregate", "isolate",
+                        # Stage 46 Inc 1 — Result<T,E> constructors
+                        # + value-preserving accessors lower as
+                        # identity (Phase-0: the Ok/Err
+                        # discriminant lives at the type level
+                        # only; no runtime tag). `Ok(v)` -> v;
+                        # `Err(e)` -> e; `unwrap_ok(r)` /
+                        # `unwrap_err(r)` -> r. Stage 48+ will
+                        # introduce a real tag + branching once
+                        # `?` early-return semantics need it.
+                        # `is_ok` / `is_err` are NOT in this list
+                        # because they return bool (different
+                        # type than the inner). `map_ok` /
+                        # `map_err` are 2-arg and need separate
+                        # arms — also not in this list.
+                        "Ok", "Err", "unwrap_ok", "unwrap_err")
                     and len(expr.args) == 1):
+                return self._lower_expr(expr.args[0])
+            # Stage 46 Inc 1 — `is_ok(r)` always returns 1 and
+            # `is_err(r)` always returns 0 in Phase-0 (no runtime
+            # Ok/Err tag yet). Documented as a Stage 48+ semantic
+            # upgrade: real runtime branching needs the tag.
+            if (isinstance(expr.callee, A.Name)
+                    and expr.callee.name == "is_ok"
+                    and len(expr.args) == 1):
+                # Evaluate the arg for side effects (Phase-0: no
+                # side effects on identity-lowered wrapper
+                # builtins), then emit constant 1.
+                return self.builder.const_int(1)
+            if (isinstance(expr.callee, A.Name)
+                    and expr.callee.name == "is_err"
+                    and len(expr.args) == 1):
+                return self.builder.const_int(0)
+            # `map_ok(r, new_ok_val)` — Phase-0: returns the new
+            # value (the new Ok inner replaces the old). `map_err(
+            # r, new_err_val)` — Phase-0: returns r unchanged
+            # (we treat all Results as Ok-shape, so map_err is a
+            # no-op at runtime; Stage 48+ will branch on tag).
+            if (isinstance(expr.callee, A.Name)
+                    and expr.callee.name == "map_ok"
+                    and len(expr.args) == 2):
+                return self._lower_expr(expr.args[1])
+            if (isinstance(expr.callee, A.Name)
+                    and expr.callee.name == "map_err"
+                    and len(expr.args) == 2):
                 return self._lower_expr(expr.args[0])
             # Stage 36 Increment 5: real two-parent provenance via
             # arena side-table.

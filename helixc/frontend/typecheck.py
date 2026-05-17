@@ -301,6 +301,32 @@ class TyCausal(Type):
 
 
 @dataclass(frozen=True)
+class TyResult(Type):
+    """Stage 46 — `Result<T, E>` two-parameter wrapper for
+    error handling. Real programs need a way to say "this
+    function either succeeds with a T, or fails with an E"
+    without crashing on the failure case. Helix's first
+    two-parameter wrapper family.
+
+    Phase-0: identity-lowered at IR (the Ok/Err discriminant
+    lives at the type system level only — no runtime tag).
+    Stage 47+ will add the `?` operator (parser change) and
+    Stage 48+ a real runtime tag once `?` early-return
+    semantics need it.
+
+    Built-in surface: `Ok(v)` / `Err(e)` constructors;
+    `unwrap_ok` / `unwrap_err` accessors (panic on wrong
+    variant); `is_ok` / `is_err` queries; `map_ok(r, f)` /
+    `map_err(r, f)` combinators.
+
+    Composes with the Stage 37-41 AGI semantic-type quintet
+    naturally: `Result<Known<i32>, ParseError>` is a fact
+    we either directly observed or failed to parse."""
+    ok_ty: Type      # the success-variant inner type
+    err_ty: Type     # the failure-variant inner type
+
+
+@dataclass(frozen=True)
 class TySkill(Type):
     """Skill<F> — a learned procedure with a known difficulty. Produced by
     `learn_to`; called like a function. The runtime maintains a registry
@@ -1274,6 +1300,20 @@ class TypeChecker:
                     return TyUnknown(hint=ty.base)
                 return TyCausal(kind=causal_map[ty.base],
                                 inner=self._resolve_type(ty.args[0], scope))
+            # Stage 46 Inc 1 — Result<T, E>: first two-parameter
+            # wrapper family. Tier 4 #14 ROADMAP item.
+            if ty.base == "Result":
+                if len(ty.args) != 2:
+                    self.errors.append(TypeError_(
+                        f"Result<T, E> takes 2 type arguments, "
+                        f"got {len(ty.args)}",
+                        ty.span,
+                    ))
+                    return TyUnknown(hint=ty.base)
+                return TyResult(
+                    ok_ty=self._resolve_type(ty.args[0], scope),
+                    err_ty=self._resolve_type(ty.args[1], scope),
+                )
             # Stage 28 — user-defined parametric struct (Audit 28.8 A3/B1).
             # If `ty.base` is a known generic struct AND the arity matches,
             # resolve `Pt<i32>` -> `TyStruct("Pt__i32")` so distinct
@@ -2073,6 +2113,13 @@ class TypeChecker:
         "from_cause", "from_effect", "from_joint", "from_independent",
         # Stage 41 Inc 2 — causal transitions.
         "propagate", "aggregate", "isolate",
+        # Stage 46 Inc 1 — Result<T, E> constructors + accessors +
+        # combinators. Two-parameter wrapper family; Phase-0
+        # identity-lowered. `?` operator is Stage 47+ work.
+        "Ok", "Err",
+        "unwrap_ok", "unwrap_err",
+        "is_ok", "is_err",
+        "map_ok", "map_err",
         "grad", "grad_rev", "grad_rev_all",
         "quote", "splice", "splice_f", "splice_f64",
         "modify", "modify_f", "modify_f64",
@@ -4153,6 +4200,102 @@ class TypeChecker:
                         expr.span,
                     ))
                     return TyUnknown(hint=bn)
+                # Stage 46 Inc 1 — Result<T, E> constructors,
+                # accessors, queries, combinators. Phase-0:
+                # identity-lowered at IR. The Ok/Err discriminant
+                # lives at the type system level only. Real
+                # runtime tag is Stage 48+ work when `?` early-
+                # return semantics need it.
+                #
+                # Ok(v) and Err(e) need the OTHER variant's type
+                # to be inferred from context. Phase-0 inference
+                # is shallow: we use TyUnknown for the unspecified
+                # side, letting downstream usage constrain it. A
+                # full bidirectional inference pass is future work.
+                if bn == "Ok":
+                    if len(arg_tys) != 1:
+                        self.errors.append(TypeError_(
+                            f"Ok() takes 1 argument, got {len(arg_tys)}",
+                            expr.span,
+                        ))
+                        return TyUnknown(hint=bn)
+                    return TyResult(
+                        ok_ty=arg_tys[0],
+                        err_ty=TyUnknown(hint="Err inferred"),
+                    )
+                if bn == "Err":
+                    if len(arg_tys) != 1:
+                        self.errors.append(TypeError_(
+                            f"Err() takes 1 argument, got {len(arg_tys)}",
+                            expr.span,
+                        ))
+                        return TyUnknown(hint=bn)
+                    return TyResult(
+                        ok_ty=TyUnknown(hint="Ok inferred"),
+                        err_ty=arg_tys[0],
+                    )
+                if bn in ("unwrap_ok", "unwrap_err"):
+                    if len(arg_tys) != 1:
+                        self.errors.append(TypeError_(
+                            f"{bn}() takes 1 argument, got {len(arg_tys)}",
+                            expr.span,
+                        ))
+                        return TyUnknown(hint=bn)
+                    if not isinstance(arg_tys[0], TyResult):
+                        self.errors.append(TypeError_(
+                            f"{bn}() requires Result<T, E>, got "
+                            f"{self._fmt(arg_tys[0])}",
+                            expr.span,
+                        ))
+                        return TyUnknown(hint=bn)
+                    return (arg_tys[0].ok_ty if bn == "unwrap_ok"
+                            else arg_tys[0].err_ty)
+                if bn in ("is_ok", "is_err"):
+                    if len(arg_tys) != 1:
+                        self.errors.append(TypeError_(
+                            f"{bn}() takes 1 argument, got {len(arg_tys)}",
+                            expr.span,
+                        ))
+                        return TyUnknown(hint=bn)
+                    if not isinstance(arg_tys[0], TyResult):
+                        self.errors.append(TypeError_(
+                            f"{bn}() requires Result<T, E>, got "
+                            f"{self._fmt(arg_tys[0])}",
+                            expr.span,
+                        ))
+                        return TyUnknown(hint=bn)
+                    return TyPrim("bool")
+                if bn in ("map_ok", "map_err"):
+                    # 2-arg form: map_ok(r: Result<T,E>, new_ok: U)
+                    # produces Result<U, E>. Phase-0 shape; full
+                    # higher-order f-call is Stage 47+ when
+                    # closures land. The user supplies the new
+                    # ok/err value directly as the second arg.
+                    if len(arg_tys) != 2:
+                        self.errors.append(TypeError_(
+                            f"{bn}() takes 2 arguments (Result, "
+                            f"new_value), got {len(arg_tys)}",
+                            expr.span,
+                        ))
+                        return TyUnknown(hint=bn)
+                    if not isinstance(arg_tys[0], TyResult):
+                        self.errors.append(TypeError_(
+                            f"{bn}() requires first arg "
+                            f"Result<T, E>, got "
+                            f"{self._fmt(arg_tys[0])}",
+                            expr.span,
+                        ))
+                        return TyUnknown(hint=bn)
+                    if bn == "map_ok":
+                        return TyResult(
+                            ok_ty=arg_tys[1],
+                            err_ty=arg_tys[0].err_ty,
+                        )
+                    else:  # map_err
+                        return TyResult(
+                            ok_ty=arg_tys[0].ok_ty,
+                            err_ty=arg_tys[1],
+                        )
                 if bn == "consolidate" and len(arg_tys) == 1:
                     # Episodic -> Semantic
                     if isinstance(arg_tys[0], TyMemTier) and arg_tys[0].tier == "episodic":
@@ -5599,6 +5742,13 @@ class TypeChecker:
                 TyDiff, TyLogic, TyQuote,
         )):
             return self._contains_unknown_type(ty.inner)
+        # Stage 46 Inc 1 — TyResult walks BOTH inners. First
+        # two-parameter wrapper family. The Ok and Err sides each
+        # carry an independent type that could buried-contain a
+        # TyUnknown.
+        if isinstance(ty, TyResult):
+            return (self._contains_unknown_type(ty.ok_ty)
+                    or self._contains_unknown_type(ty.err_ty))
         return False
 
     def _refinement_proof_carried(
@@ -5672,6 +5822,12 @@ class TypeChecker:
             return (target.kind == value_ty.kind
                     and self._refinement_shape_exact(
                         value_ty.inner, target.inner))
+        # Stage 46 Inc 1: TyResult two-inner parallel arm.
+        if isinstance(target, TyResult) and isinstance(value_ty, TyResult):
+            return (self._refinement_shape_exact(
+                        value_ty.ok_ty, target.ok_ty)
+                    and self._refinement_shape_exact(
+                        value_ty.err_ty, target.err_ty))
         if isinstance(target, TyTensor) and isinstance(value_ty, TyTensor):
             return (len(target.shape) == len(value_ty.shape)
                     and self._refinement_shape_exact(
@@ -6344,6 +6500,11 @@ class TypeChecker:
         if isinstance(a, TyCausal) and isinstance(b, TyCausal):
             return (a.kind == b.kind
                     and self._refinement_shape_exact(a.inner, b.inner))
+        # Stage 46 Inc 1: TyResult two-inner parallel arm.
+        if isinstance(a, TyResult) and isinstance(b, TyResult):
+            return (self._refinement_shape_exact(a.ok_ty, b.ok_ty)
+                    and self._refinement_shape_exact(
+                        a.err_ty, b.err_ty))
         if isinstance(a, TyTensor) and isinstance(b, TyTensor):
             return (len(a.shape) == len(b.shape)
                     and self._refinement_shape_exact(a.dtype, b.dtype)
@@ -6399,6 +6560,12 @@ class TypeChecker:
         # Stage 41 Inc 1: TyCausal preemptive parallel arm.
         if isinstance(ty, TyCausal):
             return TyCausal(ty.kind, self._erase_refinement(ty.inner))
+        # Stage 46 Inc 1: TyResult two-inner parallel arm.
+        if isinstance(ty, TyResult):
+            return TyResult(
+                self._erase_refinement(ty.ok_ty),
+                self._erase_refinement(ty.err_ty),
+            )
         if isinstance(ty, TyTensor):
             return TyTensor(
                 self._erase_refinement(ty.dtype), ty.shape, ty.device,
@@ -6523,6 +6690,13 @@ class TypeChecker:
         # Stage 41 Inc 1: TyCausal preemptive parallel arm.
         if isinstance(ty, TyCausal):
             return self._contains_refinement(ty.inner, _seen_structs)
+        # Stage 46 Inc 1: TyResult — refinement in either side
+        # counts (the inner Ok side and the Err side are
+        # symmetrically reachable).
+        if isinstance(ty, TyResult):
+            return (self._contains_refinement(ty.ok_ty, _seen_structs)
+                    or self._contains_refinement(
+                        ty.err_ty, _seen_structs))
         if isinstance(ty, TyTensor):
             return (self._contains_refinement(ty.dtype, _seen_structs)
                     or any(self._contains_refinement(s, _seen_structs)
@@ -6543,9 +6717,11 @@ class TypeChecker:
         # check for temporal-wrapped values across branches.
         # Stage 40 Inc 1: TyModal added preemptively (same rationale).
         # Stage 41 Inc 1: TyCausal added preemptively (same rationale).
+        # Stage 46 Inc 1: TyResult added — both inners are refinement
+        # containers (Ok and Err sides each carry a refineable type).
         return isinstance(ty, (
             TyArray, TyTuple, TyRef, TyPtr, TyFn, TyDiff, TyLogic, TyQuote,
-            TyMemTier, TyFrame, TyTemporal, TyModal, TyCausal,
+            TyMemTier, TyFrame, TyTemporal, TyModal, TyCausal, TyResult,
             TyTensor, TyTile,
         ))
 
@@ -6580,6 +6756,10 @@ class TypeChecker:
         # Stage 41 Inc 1: TyCausal preemptive parallel arm.
         if isinstance(ty, TyCausal):
             return self._contains_refined_function(ty.inner)
+        # Stage 46 Inc 1: TyResult two-inner arm.
+        if isinstance(ty, TyResult):
+            return (self._contains_refined_function(ty.ok_ty)
+                    or self._contains_refined_function(ty.err_ty))
         if isinstance(ty, TyTensor):
             return (self._contains_refined_function(ty.dtype)
                     or any(self._contains_refined_function(s)
@@ -7586,6 +7766,13 @@ class TypeChecker:
             return a.kind == b.kind and self._compatible(a.inner, b.inner)
         if isinstance(a, TyCausal) or isinstance(b, TyCausal):
             return False
+        # Stage 46 Inc 1: TyResult two-inner arm. Both Ok and Err
+        # sides must be compatible; reject mixed wrapper pairs.
+        if isinstance(a, TyResult) and isinstance(b, TyResult):
+            return (self._compatible(a.ok_ty, b.ok_ty)
+                    and self._compatible(a.err_ty, b.err_ty))
+        if isinstance(a, TyResult) or isinstance(b, TyResult):
+            return False
         # Audit 28.8 cycle 2 B:C3: Quote<T> ~ Quote<U> iff T ~ U.
         # Reject Quote<T> ~ T (raw value passed where Quote expected)
         # — that was the silent acceptance path pre-fix.
@@ -7764,6 +7951,9 @@ class TypeChecker:
             cap = {"cause": "Cause", "effect": "Effect",
                    "joint": "Joint", "independent": "Independent"}
             return f"{cap.get(t.kind, t.kind)}<{self._fmt(t.inner)}>"
+        if isinstance(t, TyResult):
+            return (f"Result<{self._fmt(t.ok_ty)}, "
+                    f"{self._fmt(t.err_ty)}>")
         if isinstance(t, TySkill):
             tag = f' "{t.task}"' if t.task else ""
             return f"Skill<{self._fmt(t.inner)}{tag}>"

@@ -111,6 +111,11 @@ DEMOS: dict[str, dict] = {
         "title": "AGI quintet cohesion: planning-loop with 4-deep wrapper stack (Stage 42 Inc 1)",
         "expects": "exit code 42  (3 observations cycle Known<Present<WorldFrame<i32>>> -> ... -> Believed<Future<WorldFrame<Effect<i32>>>> -> unwrap; all 4 wrapper layers identity-lower without value drift)",
     },
+    "result": {
+        "file": "dogfood_16_result_basic.hx",
+        "title": "Result<T,E> basic round-trip (Stage 46 Inc 3)",
+        "expects": "exit code 42  (3 safe_double via Ok/map_ok/unwrap_ok + Result<Known<i32>, i32> cross-stack composition)",
+    },
 }
 
 
