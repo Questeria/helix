@@ -5,7 +5,66 @@ deep-research passes (2026-05-04). It's a forward-looking plan; not
 everything here will land, and priorities will shift as dogfooding
 reveals which features actually matter.
 
-## Current state (Stage 35-43 CLOSED 2026-05-16 to 2026-05-17 — AGI semantic-type quintet + cohesion + deferred-cleanup. Stage 44 CLOSED 2026-05-17 at Inc 4 — Tier 1 #5 stack-passed overflow float args shipped end-to-end (9th+ float arg now correctly passes via SysV stack for both CALL and FFI_CALL with f32/f64 payloads, mixed int+float overflow rejects cleanly before rsp mutation, named SYSV_STACK_ARG_* constants, alignment + accounting tripwire asserts; first Tier-1 ML blocker closed); Stage 45 opens next. See `docs/stage44-progress-2026-05-17.md` for Stage 44 closure narrative)
+## Current state (Stages 35-45 CLOSED 2026-05-16 to 2026-05-17)
+
+Burst summary (11 stages closed in <48h, all via the
+3-clean-gate protocol):
+
+- **Stage 35** — AI/ML capability push (restart 65 closure).
+- **Stage 36** — Strategic AGI features: Tier 3 #10
+  provenance-typed neuro-symbolic primitives shipped
+  end-to-end (Logic<T>, fuzzy_and/or/not/xor/implies,
+  ARENA_PUSH_PAIR/TRIPLE IR opcodes, provenance.hx stdlib,
+  4 dogfood programs).
+- **Stages 37-41** — AGI semantic-type quintet:
+  - Stage 37: memory tier (WorkingMem/EpisodicMem/SemanticMem/
+    ProceduralMem).
+  - Stage 38: spatial frames (WorldFrame/RobotFrame/CameraFrame
+    + 6 cross-frame transforms).
+  - Stage 39: temporal kinds (Past/Present/Future/Eternal +
+    4 transitions).
+  - Stage 40: modal/epistemic (Known/Believed/Goal/Uncertain
+    + 2 audited upgrades confirm/act_on; F1 cross-modal
+    laundering guard catches AI-safety category mistakes).
+  - Stage 41: causal/intent (Cause/Effect/Joint/Independent
+    + 3 transitions propagate/aggregate/isolate).
+  All 5 families compose orthogonally at the type level
+  (e.g. `Known<Past<Cause<f32>>>` = "directly observed past
+  cause"), zero runtime cost (Phase-0 identity-lowered).
+- **Stage 42** — quintet cohesion proven via dogfood_15 (4-deep
+  wrapper stack: `Known<Present<WorldFrame<Cause<i32>>>` →
+  `Believed<Future<WorldFrame<Effect<i32>>>`).
+- **Stage 43** — deferred-items cleanup (AD-set rename, F5
+  arity arms, M1 double-wrap rejection with direction-aware
+  hints across all 5 families).
+- **Stage 44** — Tier 1 #5 stack-passed overflow float args
+  (9+ float args now pass via SysV stack for both CALL and
+  FFI_CALL; first Tier-1 ML blocker closed).
+- **Stage 45** — ROADMAP status drift refresh + Stage 46+
+  sequencing (this commit).
+
+15 dogfood programs total. Self-host cascade still
+byte-identical G2..G4 fixpoint throughout the entire burst.
+
+## Next-stage sequencing (post-Stage-45)
+
+Concrete deliverables for the next 5 stages, each sized to
+single-stage scope:
+
+- **Stage 46** (proposed): Bootstrap `grad_rev_all` N-walk
+  → single-walk port. Closes the bootstrap side of Tier 1
+  #3. 1 stage.
+- **Stage 47** (proposed): Tier 1 #2 follow-through — extend
+  AD across user-defined function calls coverage. 1-2 stages.
+- **Stage 48** (proposed): Tier 4 #14 Result<T,E> + `?`
+  operator Inc 1 (typecheck only). 1 stage.
+- **Stage 49** (proposed): Tier 4 #14 Inc 2 (parser + IR
+  lowering for `?` early-return). 1 stage.
+- **Stage 50** (proposed): Stage 40 F1 let-binding bypass —
+  taint-tracking pass for Uncertain-origin propagation.
+  1-2 stages.
+
+Re-evaluate sequence at Stage 48 based on what shipped.
 
 - Working from-scratch x86-64 ELF compiler
 - Forward + reverse-mode symbolic AD with chain rules for __exp, __log,
@@ -31,12 +90,15 @@ These are blockers for any real ML training, in priority order.
    producing a zero-gradient surrogate. Remaining work is broader
    chain-rule registration and richer helper coverage. **In progress.**
 
-3. **Multi-output reverse-mode AD.** Currently `grad_rev(f, n)` runs a
-   separate AD pass per parameter index. For real models with thousands
-   of parameters this is N× too expensive. The reverse-mode engine
-   already collects per-parameter buckets — extend the API to return
-   the full dict and emit the gradient as a function returning multiple
-   values (via output array).
+3. **Multi-output reverse-mode AD.** ✅ DONE (Python-side) —
+   `differentiate_reverse(expr, param_names)` in
+   `helixc/frontend/autodiff_reverse.py` produces a
+   `dict[param_name -> gradient_expr]` in ONE walk via per-param
+   bucket accumulation. `grad_rev_all(f)(p1, p2, base)` is wired
+   end-to-end and used by `dogfood_05_binary_classifier.hx` etc.
+   **Bootstrap-side TODO**: `helixc/bootstrap/parser.hx:5402`
+   still does N-walks (one per param). A future stage will
+   port the single-walk algorithm to the in-Helix compiler.
 
 4. **Richer strings + file I/O** with capability-typed
    `@effect(io.read_file)`. Basic literal/string diagnostic IO (`print_str`,
