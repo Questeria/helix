@@ -570,6 +570,21 @@ _INT_PRIM_NAMES = frozenset({
 
 
 # ============================================================================
+# Stage 52 closure gate-2 type-design F3 fix: module-level constant
+# for the modal-eliminator → kind mapping. Pre-fix this dict was
+# duplicated at 3 callsites (Let-stmt populate, Assign-stmt populate,
+# into_X consult-guard membership check). A future 5th modal kind
+# (e.g. a hypothetical `Suspected<T>` between Believed and Uncertain)
+# would have required touching all 3 sites. Hoisting kills the
+# divergence risk.
+_MODAL_ELIM_TO_KIND: dict[str, str] = {
+    "from_known":     "known",
+    "from_believed":  "believed",
+    "from_goal":      "goal",
+    "from_uncertain": "uncertain",
+}
+
+
 class TypeChecker:
     def __init__(self, prog: A.Program):
         self.prog = prog
@@ -2837,18 +2852,15 @@ class TypeChecker:
             # Populate when value is `Call(from_X, ...)` for any
             # of the 4 modal eliminators. Pop on any other RHS
             # (mirrors the Result-provenance discipline at gate-3).
-            _modal_elim_to_kind = {
-                "from_known":     "known",
-                "from_believed":  "believed",
-                "from_goal":      "goal",
-                "from_uncertain": "uncertain",
-            }
+            # Uses the module-level _MODAL_ELIM_TO_KIND constant
+            # (gate-2 type-design F3 fix — was previously a local
+            # dict duplicated at 3 sites).
             if (stmt.value is not None
                     and isinstance(stmt.value, A.Call)
                     and isinstance(stmt.value.callee, A.Name)
-                    and stmt.value.callee.name in _modal_elim_to_kind):
+                    and stmt.value.callee.name in _MODAL_ELIM_TO_KIND):
                 self._modal_origin_provenance[stmt.name] = (
-                    _modal_elim_to_kind[stmt.value.callee.name]
+                    _MODAL_ELIM_TO_KIND[stmt.value.callee.name]
                 )
             else:
                 # Pop any stale modal-origin entry. Same defect
@@ -5232,9 +5244,28 @@ class TypeChecker:
             return self._check_block(expr, scope)
         if isinstance(expr, A.If):
             self._check_expr(expr.cond, scope)
+            # Stage 52 closure gate-2 silent-failure HIGH-A fix:
+            # mirror match-arm parallel-union for the if/else
+            # branches. Pre-fix, `if cond { r = from_uncertain(u);
+            # } else { r = from_known(k); }; into_known(r)`
+            # silently passed because the then-branch mutated
+            # the dict, then the else-branch's Assign-arm
+            # POPULATE overwrote with 'known' (last write wins),
+            # so the post-if dict claimed 'known' and into_known
+            # consult found a matching kind.
+            #
+            # Same algorithm as match-arm (line 5275+): snapshot
+            # pre-if, restore between branches, union arm-results
+            # via the multi-kind drop semantics (HIGH-C fix).
+            modal_origin_pre_if = dict(self._modal_origin_provenance)
+            branch_results: list[dict[str, str]] = []
             t = self._check_block(expr.then, scope)
+            branch_results.append(dict(self._modal_origin_provenance))
             branch_tys = [t]
             if expr.else_ is not None:
+                # Restore pre-if state before else.
+                self._modal_origin_provenance = dict(
+                    modal_origin_pre_if)
                 if isinstance(expr.else_, A.Block):
                     e = self._check_block(expr.else_, scope)
                 else:
@@ -5244,12 +5275,34 @@ class TypeChecker:
                     # cannot leak provenance mutations past the
                     # if-expr boundary.
                     e = self._check_expr_in_block_scope(expr.else_, scope)
+                branch_results.append(dict(self._modal_origin_provenance))
                 branch_tys.append(e)
                 if not self._compatible(t, e):
                     self.errors.append(TypeError_(
                         f"if/else branches differ: {self._fmt(t)} vs {self._fmt(e)}",
                         expr.span,
                     ))
+            else:
+                # No-else branch: implicit no-op arm result == pre-if.
+                # If then-branch installed new taint, conservative
+                # union: pre-if (no taint) ∪ then-taint → name has
+                # 1-kind, propagate. If then-branch changed an
+                # existing taint kind, conflict → drop (HIGH-C
+                # multi-kind semantics).
+                branch_results.append(dict(modal_origin_pre_if))
+            # Union arm results with the multi-kind drop semantics
+            # (HIGH-C parity with match-arm union below).
+            observed_kinds: dict[str, set[str]] = {}
+            for name, kind in modal_origin_pre_if.items():
+                observed_kinds.setdefault(name, set()).add(kind)
+            for arm_result in branch_results:
+                for name, kind in arm_result.items():
+                    observed_kinds.setdefault(name, set()).add(kind)
+            unioned_if: dict[str, str] = {}
+            for name, kinds in observed_kinds.items():
+                if len(kinds) == 1:
+                    unioned_if[name] = next(iter(kinds))
+            self._modal_origin_provenance = unioned_if
             return self._join_branch_types(branch_tys, expr.span)
         if isinstance(expr, A.Match):
             scrut_ty = self._check_expr(expr.scrutinee, scope)
@@ -5312,20 +5365,39 @@ class TypeChecker:
             # conservatively take the FIRST arm's kind (matches
             # "any taint propagates" semantics; refining to
             # "multi-kind sum" needs a richer dict value).
-            unioned_modal_origin: dict[str, str] = dict(
-                modal_origin_pre_match)
+            # Stage 52 closure gate-2 silent-failure HIGH-C fix
+            # (silent-launder when arm overwrites pre-match kind):
+            # "first wins" silently drops the conflicting kind
+            # information. Pre-fix, `let r = from_known(k); match
+            # _ => { r = from_uncertain(u); } end; into_known(r)`
+            # passed because the arm's 'uncertain' was discarded
+            # in favor of pre-match's 'known'. Post-fix: any name
+            # whose kind differs across arms (or differs between
+            # any arm and pre-match) DROPS from the unioned dict
+            # — the static claim is invalidated; the consult at
+            # into_X falls back to no-static-claim (joins the
+            # dynamic/no-taint path which Stage 53 helper-fn taint
+            # will cover).
+            unioned_modal_origin: dict[str, str] = {}
+            # Collect all (name → set of observed kinds) across
+            # pre-match + each arm-result. Names with a single
+            # consistent kind across all observations keep that
+            # kind; names with multi-kind divergence drop out.
+            observed_kinds: dict[str, set[str]] = {}
+            for name, kind in modal_origin_pre_match.items():
+                observed_kinds.setdefault(name, set()).add(kind)
             for arm_result in modal_origin_arm_results:
                 for name, kind in arm_result.items():
-                    if name not in unioned_modal_origin:
-                        # New taint from this arm — propagate.
-                        unioned_modal_origin[name] = kind
-                    # If name already in pre-match state (or set
-                    # by a prior arm), keep the existing kind.
-                    # TODO(stage52-inc4): refine to multi-kind
-                    # union (e.g. arm1 sets 'uncertain', arm2
-                    # sets 'known' — currently keeps 'uncertain';
-                    # a richer "taint of any of {U, K}" diagnostic
-                    # would be more honest).
+                    observed_kinds.setdefault(name, set()).add(kind)
+            for name, kinds in observed_kinds.items():
+                if len(kinds) == 1:
+                    unioned_modal_origin[name] = next(iter(kinds))
+                # else: multi-kind divergence → drop (no static
+                # claim). TODO(stage52-inc4): consider a richer
+                # `Union[str, frozenset[str]]` dict shape that
+                # carries the conflict for a "could be any of
+                # {U, K}" diagnostic. For now the safe behaviour
+                # is to drop the static claim.
             self._modal_origin_provenance = unioned_modal_origin
             self._check_match_exhaustive(expr, scrut_ty)
             if not arm_tys:
@@ -5424,31 +5496,28 @@ class TypeChecker:
             #   taint via Assign IS a real launder vector and must
             #   install the entry.
             #
-            # TODO(stage52-inc2): the populate is structural-syntactic
-            # (must be a direct `Call(Name(from_X), ...)`). RHS of
-            # `A.If` / `A.Block` / `A.Match` that YIELDS a from_X
-            # value is gate-1 silent-failure HIGH-2 — deferred to
-            # Inc 2 (requires a `_yields_from_call(expr) -> str|None`
-            # recursive helper that walks all terminal branches).
+            # TODO(stage52-inc4): the populate is structural-
+            # syntactic (must be a direct `Call(Name(from_X), ...)`).
+            # RHS of `A.If` / `A.Block` / `A.Match` that YIELDS a
+            # from_X value is gate-1 silent-failure HIGH-2 —
+            # requires a `_yields_from_call(expr) -> str|None`
+            # recursive helper that walks all terminal branches.
+            # (Renamed from stage52-inc2 per gate-2 type-design F8.)
             if (expr.op == "="
                     and isinstance(expr.target, A.Name)):
-                _modal_elim_to_kind_assign = {
-                    "from_known":     "known",
-                    "from_believed":  "believed",
-                    "from_goal":      "goal",
-                    "from_uncertain": "uncertain",
-                }
                 if (isinstance(expr.value, A.Call)
                         and isinstance(expr.value.callee, A.Name)
                         and expr.value.callee.name
-                            in _modal_elim_to_kind_assign):
+                            in _MODAL_ELIM_TO_KIND):
                     # POPULATE (or overwrite existing) — taint
                     # installs unconditionally on from_X(...) RHS,
                     # closing the HIGH-1 + HIGH-3 silent-launder
                     # via match-arm / loop-body assignment.
+                    # Uses the module-level _MODAL_ELIM_TO_KIND
+                    # constant (gate-2 type-design F3 fix).
                     self._modal_origin_provenance[
                         expr.target.name] = (
-                        _modal_elim_to_kind_assign[
+                        _MODAL_ELIM_TO_KIND[
                             expr.value.callee.name]
                     )
                 elif expr.target.name in self._modal_origin_provenance:
