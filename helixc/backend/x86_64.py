@@ -265,6 +265,31 @@ class Asm:
             self.b.emit(0x48, 0x89, 0x85)
             self.b.emit_bytes(struct.pack("<i", disp))
 
+    # Stage 44 Inc 1: stores via [rsp + disp] for SysV stack-passed
+    # overflow arguments. The 9th+ float arg goes on the stack (the
+    # first 8 use xmm0..xmm7). We allocate aligned stack space
+    # below the call, store args via integer bit-blit (avoids
+    # touching xmm regs which are still being filled with reg args),
+    # then call. After call, restore rsp.
+    def mov_mem_rsp_rax(self, disp: int) -> None:
+        # 48 89 44 24 disp8 / 48 89 84 24 disp32
+        # ModRM mod=01 reg=000 rm=100 (SIB) + SIB 0x24 (scale=0,
+        # index=100=none, base=100=rsp) + disp8.
+        if -128 <= disp <= 127:
+            self.b.emit(0x48, 0x89, 0x44, 0x24, disp & 0xFF)
+        else:
+            self.b.emit(0x48, 0x89, 0x84, 0x24)
+            self.b.emit_bytes(struct.pack("<i", disp))
+
+    def mov_mem_rsp_eax(self, disp: int) -> None:
+        # 89 44 24 disp8 / 89 84 24 disp32 (32-bit store; for f32
+        # overflow args — only 4 bytes of payload to preserve).
+        if -128 <= disp <= 127:
+            self.b.emit(0x89, 0x44, 0x24, disp & 0xFF)
+        else:
+            self.b.emit(0x89, 0x84, 0x24)
+            self.b.emit_bytes(struct.pack("<i", disp))
+
     def mov_rcx_mem_rbp(self, disp: int) -> None:
         if -128 <= disp <= 127:
             self.b.emit(0x48, 0x8B, 0x4D, disp & 0xFF)
@@ -1050,11 +1075,30 @@ class FnCompiler:
         ]
         int_idx = 0
         xmm_idx = 0
+        # Stage 44 Inc 2: callee-side stack-passed float param
+        # support. The 9th+ float param is delivered by the caller
+        # at [rbp+16], [rbp+24], ... (above saved rbp + return
+        # address). The callee loads each into a temporary xmm reg
+        # (xmm0 since the reg-pass for this param won't fire — it
+        # consumed only xmm0..xmm7) and stores to the local frame
+        # slot. Mirrors the caller-side Inc 1 work.
+        stack_param_idx = 0
         for p in self.fn.params:
             slot = self._slot_of(p)
             if self._is_float_type(p.ty):
                 if xmm_idx >= 8:
-                    raise NotImplementedError("v0.1 supports up to 8 float params")
+                    # Overflow: load from caller stack frame.
+                    stack_disp = 16 + stack_param_idx * 8
+                    if self._is_f64_type(p.ty):
+                        # mov xmm0, [rbp + stack_disp]
+                        self.asm._movsd_load_xmmN(0, stack_disp)
+                        self.asm._movsd_store_xmmN(0, slot)
+                    else:
+                        self.asm._movss_load_xmmN(0, stack_disp)
+                        self.asm._movss_store_xmmN(0, slot)
+                    stack_param_idx += 1
+                    xmm_idx += 1
+                    continue
                 if self._is_f64_type(p.ty):
                     self.asm._movsd_store_xmmN(xmm_idx, slot)
                 else:
@@ -2385,15 +2429,68 @@ class FnCompiler:
             ]
             # SysV ABI splits args by class: int → INT_REGS, float → xmm0..xmm7.
             # Each class has its own counter.
+            # Stage 44 Inc 1: pre-pass to count overflow float args
+            # (xmm8+). The 9th+ float arg goes on the stack at
+            # [rsp+0], [rsp+8], ... in the order they appear in
+            # the call. Caller allocates a 16-byte-aligned stack
+            # region BEFORE the arg-shuffle pass, stores overflow
+            # args via integer bit-blit (avoids contaminating
+            # xmm0..xmm7 which the reg-pass is filling), then the
+            # CALL fires and post-call rsp is restored.
+            #
+            # Note: int overflow (>6 int args) is NOT implemented
+            # yet; the catchall below still raises for that case.
+            # Only float overflow is wired here per ROADMAP Tier 1
+            # #5 (the XOR perceptron dogfood hit this surface).
+            _float_count = sum(
+                1 for a in op.operands if self._is_float_type(a.ty)
+            )
+            overflow_float_count = max(0, _float_count - 8)
+            # 16-byte alignment: SysV requires rsp to be 16-aligned
+            # immediately BEFORE the CALL instruction. The function
+            # prologue's `sub rsp, frame_size` has already 16-aligned
+            # rsp (Helix's frame_size invariant); subtracting another
+            # 16-multiple preserves alignment.
+            stack_alloc = ((overflow_float_count * 8 + 15) // 16) * 16
+            if stack_alloc > 0:
+                self.asm.sub_rsp_imm32(stack_alloc)
+                # Pre-pass: bit-blit each overflow float arg into
+                # [rsp + 8*overflow_idx] via rax/eax. The integer
+                # path is safe because nothing has touched xmm0..7
+                # yet, but more importantly it avoids needing a
+                # scratch xmm reg outside the SysV arg-reg set
+                # (xmm8..xmm15 require a different ModRM encoding
+                # we don't have helpers for yet).
+                _xmm_seen = 0
+                _overflow_idx = 0
+                for arg in op.operands:
+                    if not self._is_float_type(arg.ty):
+                        continue
+                    if _xmm_seen < 8:
+                        _xmm_seen += 1
+                        continue
+                    arg_slot = self._slot_of(arg)
+                    if self._is_f64_type(arg.ty):
+                        # 8-byte payload — full rax copy.
+                        self.asm.mov_rax_mem_rbp(arg_slot)
+                        self.asm.mov_mem_rsp_rax(_overflow_idx * 8)
+                    else:
+                        # 4-byte payload — eax copy. Don't trust
+                        # bytes above the f32 in the source slot;
+                        # use the narrow store so we don't leak
+                        # adjacent stack bytes into the call frame.
+                        self.asm.mov_eax_mem_rbp(arg_slot)
+                        self.asm.mov_mem_rsp_eax(_overflow_idx * 8)
+                    _overflow_idx += 1
             int_idx = 0
             xmm_idx = 0
             for arg in op.operands:
                 arg_slot = self._slot_of(arg)
                 if self._is_float_type(arg.ty):
                     if xmm_idx >= 8:
-                        raise NotImplementedError(
-                            "v0.1 supports up to 8 float args via xmm0..xmm7"
-                        )
+                        # Already shoved to [rsp+...] above. Skip.
+                        xmm_idx += 1  # increment for accounting only
+                        continue
                     if self._is_f64_type(arg.ty):
                         self.asm._movsd_load_xmmN(xmm_idx, arg_slot)
                     else:
@@ -2419,6 +2516,12 @@ class FnCompiler:
                         INT_REGS[int_idx](arg_slot)
                     int_idx += 1
             self.asm.call_rel32(str(target))
+            # Stage 44 Inc 1: restore rsp after stack-passed
+            # overflow args. SysV is caller-cleanup ABI for stack
+            # args (callee leaves them in place). The amount must
+            # match the pre-call `sub rsp, stack_alloc` exactly.
+            if stack_alloc > 0:
+                self.asm.add_rsp_imm32(stack_alloc)
             if op.results:
                 res_slot = self._slot_of(op.results[0])
                 # SysV: float return in xmm0, int return in eax/rax.
