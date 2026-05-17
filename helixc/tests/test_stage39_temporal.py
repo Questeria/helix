@@ -630,3 +630,42 @@ def test_stage39_h3_erase_refinement_walks_temporal():
     assert isinstance(erased.inner, TyPrim), \
         f"erase should strip TyRefined under TyTemporal, got " \
         f"{type(erased.inner).__name__}"
+
+
+# ============================================================
+# Stage 39 closure gate-2 F6 follow-up: extend F2 wrapper-walk to
+# all single-inner wrappers (TyDiff / TyLogic / TyQuote) — the F2
+# sweep stopped short of these three, so `D<Unknown>` / `Logic<?>`
+# / `Quote<?>` silently bypassed struct-monomorphization short-
+# circuit. Same Stage 37/38/inherited silent-failure class.
+# ============================================================
+
+
+def test_stage39_f6_contains_unknown_walks_diff_wrapper():
+    from helixc.frontend.typecheck import (
+        TypeChecker, TyDiff, TyUnknown,
+    )
+    tc = TypeChecker(parse("fn main() -> i32 { 0 }"))
+    wrapped = TyDiff(TyUnknown(hint="probe"))
+    assert tc._contains_unknown_type(wrapped), \
+        "TyUnknown buried under TyDiff must be detected"
+
+
+def test_stage39_f6_contains_unknown_walks_logic_wrapper():
+    from helixc.frontend.typecheck import (
+        TypeChecker, TyLogic, TyUnknown,
+    )
+    tc = TypeChecker(parse("fn main() -> i32 { 0 }"))
+    wrapped = TyLogic(TyUnknown(hint="probe"), "bool")
+    assert tc._contains_unknown_type(wrapped), \
+        "TyUnknown buried under TyLogic must be detected"
+
+
+def test_stage39_f6_contains_unknown_walks_quote_wrapper():
+    from helixc.frontend.typecheck import (
+        TypeChecker, TyQuote, TyUnknown,
+    )
+    tc = TypeChecker(parse("fn main() -> i32 { 0 }"))
+    wrapped = TyQuote(TyUnknown(hint="probe"))
+    assert tc._contains_unknown_type(wrapped), \
+        "TyUnknown buried under TyQuote must be detected"

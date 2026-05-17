@@ -4795,13 +4795,19 @@ class TypeChecker:
             return (self._contains_unknown_type(ty.dtype)
                     or any(self._contains_unknown_type(s)
                            for s in ty.shape))
-        # Stage 39 closure gate-1 silent-failure F2 fix: wrapper types
-        # (TyMemTier / TyFrame / TyTemporal) must walk to their inner
-        # so a TyUnknown buried under any wrapper still short-circuits
-        # downstream struct monomorphization. Pre-fix the wrapped
-        # case silently returned False — a Stage-37/38 hole Stage 39
-        # would have inherited and widened.
-        if isinstance(ty, (TyMemTier, TyFrame, TyTemporal)):
+        # Stage 39 closure gate-1 silent-failure F2 fix + gate-2 F6
+        # extension: ALL single-inner wrapper types must walk to
+        # their inner so a TyUnknown buried under any wrapper still
+        # short-circuits downstream struct monomorphization. Pre-F2
+        # the wrapped case silently returned False — a Stage-37/38
+        # hole Stage 39 would have inherited and widened. Gate 2 F6
+        # MEDIUM finding: the F2 sweep stopped short of TyDiff /
+        # TyLogic / TyQuote which are also single-inner wrappers
+        # with the same silent-failure mode; folded in here.
+        if isinstance(ty, (
+                TyMemTier, TyFrame, TyTemporal,
+                TyDiff, TyLogic, TyQuote,
+        )):
             return self._contains_unknown_type(ty.inner)
         return False
 
