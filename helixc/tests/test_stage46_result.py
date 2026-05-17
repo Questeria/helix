@@ -315,6 +315,39 @@ fn main() -> i32 {
         f"got {[str(e) for e in errs]}"
 
 
+def test_stage46_gate3_codereview_f1_no_cross_function_provenance_leak():
+    """Gate-3 code-review CRITICAL G3-F1 follow-up: the
+    `_result_constructor_provenance` map was process-global
+    (keyed by bare name, no scope), so a `let r = Ok(7)` in
+    fn A would leak the "ok" provenance into fn B's `let r =
+    opaque_returning_err()`, falsely rejecting B's
+    unwrap_err. Post-fix: any non-direct-constructor let
+    pops the entry, so each function starts clean."""
+    src = """
+@pure
+fn make_err() -> Result<i32, i32> { Err(13) }
+
+@pure
+fn first() -> i32 {
+    let r: Result<i32, i32> = Ok(7);
+    unwrap_ok(r)
+}
+
+fn main() -> i32 {
+    let r: Result<i32, i32> = make_err();
+    unwrap_err(r)
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    errs = typecheck(prog)
+    # The make_err() RHS is a fn call (not direct Ok/Err),
+    # so the prior "ok" provenance from first() must NOT leak
+    # into main(). main's unwrap_err must be accepted.
+    assert errs == [], \
+        f"cross-function provenance leak must be cleared, " \
+        f"got {[str(e) for e in errs]}"
+
+
 def test_stage46_gate3_f2_map_ok_propagates_provenance():
     """G3-F2: `let r0 = Ok(7); let r = map_ok(r0, 999);
     unwrap_err(r)` — pre-fix the typecheck slipped through

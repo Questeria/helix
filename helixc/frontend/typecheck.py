@@ -2456,6 +2456,27 @@ class TypeChecker:
                     self._result_constructor_provenance[
                         stmt.value.args[0].name]
                 )
+            else:
+                # Stage 46 closure gate-3 code-review CRITICAL
+                # G3-F1 follow-up fix: any let with this name
+                # whose RHS is NOT a direct Ok/Err or
+                # map_ok/map_err call must POP any prior
+                # provenance entry. Pre-fix, the map was keyed
+                # by bare name with no scope qualification, so
+                # a `let r` in fn B inherited stale "ok"
+                # provenance from a `let r = Ok(7)` in fn A
+                # (the entries are never cleared on
+                # function-body entry/exit). Verified false-
+                # positive: `fn first() { let r = Ok(7); ... }`
+                # followed by `fn main() { let r =
+                # opaque_returning_err(); unwrap_err(r) }`
+                # incorrectly rejected the main's unwrap_err
+                # as "constructed via Ok()". Post-fix, the
+                # opaque-RHS let pops the stale entry. A
+                # proper scope-stack lift is Stage 47+ work;
+                # this dict-pop is the minimal sound fix.
+                self._result_constructor_provenance.pop(
+                    stmt.name, None)
             self._define_local_const_scalar(stmt.name, None)
             if (stmt.value is not None
                     and self._expr_has_unrepresentable_typed_const_scalar(
