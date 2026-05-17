@@ -500,3 +500,133 @@ def test_stage39_ad_pure_registration():
                  "to_past", "forecast", "recall_past", "actualize"):
         assert name in AD_KNOWN_PURE_CALLS, \
             f"{name} must be AD-pure for let-erasability"
+
+
+# ============================================================
+# Stage 39 closure gate-1 M2/M3/F2 coverage backfills.
+# (H1/H3/L1 batch landed in the gate-1 fix-sweep commit; this
+# follow-up batch closes the remaining audit findings before
+# advancing to gate-2.)
+# ============================================================
+
+
+def test_stage39_inc2_all_12_transition_wrong_source_combinations():
+    """M2 backfill: 4 transitions × 3 wrong sources = 12 combinations
+    all fire a diagnostic naming the required source kind. Mirrors
+    the Stage 38 6×2=12 transform-wrong-source matrix."""
+    transitions = [
+        ("to_past",     "present", "Present"),
+        ("forecast",    "present", "Present"),
+        ("recall_past", "past",    "Past"),
+        ("actualize",   "future",  "Future"),
+    ]
+    kinds = ["past", "present", "future", "eternal"]
+    for fn, req_kind, want_label in transitions:
+        for wrong_kind in kinds:
+            if wrong_kind == req_kind:
+                continue
+            src = f"""
+fn main() -> i32 {{
+    let x: {wrong_kind.capitalize()}<i32> = into_{wrong_kind}(7);
+    from_past({fn}(x))
+}}
+"""
+            prog = parse(src, include_stdlib=True)
+            errs = typecheck(prog)
+            assert any(want_label in str(e) and fn in str(e)
+                       for e in errs), \
+                f"{fn}({wrong_kind.capitalize()}<i32>) should reject " \
+                f"with {want_label!r}, got {[str(e) for e in errs]}"
+
+
+def test_stage39_inc1_zero_args_into_diagnostic():
+    """M3 backfill: zero-arg into_* fires a diagnostic."""
+    src = "fn main() -> i32 { from_past(into_past()) }"
+    prog = parse(src, include_stdlib=True)
+    errs = typecheck(prog)
+    assert any("into_past" in str(e) and "1 argument" in str(e)
+               for e in errs)
+
+
+def test_stage39_inc1_zero_args_from_diagnostic():
+    """M3 backfill: zero-arg from_* fires a diagnostic."""
+    src = "fn main() -> i32 { from_present() }"
+    prog = parse(src, include_stdlib=True)
+    errs = typecheck(prog)
+    assert any("from_present" in str(e) and "1 argument" in str(e)
+               for e in errs)
+
+
+def test_stage39_inc2_wrong_arity_transition_two_args_diagnostic():
+    """M3 backfill: two-arg transition fires a diagnostic."""
+    src = """
+fn main() -> i32 {
+    let p: Present<i32> = into_present(1);
+    from_future(forecast(p, 7))
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    errs = typecheck(prog)
+    assert any("forecast" in str(e) and "1 argument" in str(e)
+               for e in errs)
+
+
+def test_stage39_inc2_zero_arity_transition_diagnostic():
+    """M3 backfill: zero-arg transition fires a diagnostic."""
+    src = "fn main() -> i32 { from_past(to_past()) }"
+    prog = parse(src, include_stdlib=True)
+    errs = typecheck(prog)
+    assert any("to_past" in str(e) and "1 argument" in str(e)
+               for e in errs)
+
+
+def test_stage39_f2_contains_unknown_walks_temporal_wrapper():
+    """F2 backfill: TyUnknown buried under TyTemporal must be
+    detected — pre-fix the wrapper case silently returned False."""
+    from helixc.frontend.typecheck import (
+        TypeChecker, TyTemporal, TyUnknown,
+    )
+    tc = TypeChecker(parse("fn main() -> i32 { 0 }"))
+    wrapped = TyTemporal("past", TyUnknown(hint="probe"))
+    assert tc._contains_unknown_type(wrapped), \
+        "TyUnknown buried under TyTemporal must be detected"
+
+
+def test_stage39_f2_contains_unknown_walks_frame_wrapper():
+    """F2 backfill (Stage 37/38 retroactive coverage): TyUnknown
+    under TyFrame must also be detected after the same 3-way fix."""
+    from helixc.frontend.typecheck import (
+        TypeChecker, TyFrame, TyUnknown,
+    )
+    tc = TypeChecker(parse("fn main() -> i32 { 0 }"))
+    wrapped = TyFrame("world", TyUnknown(hint="probe"))
+    assert tc._contains_unknown_type(wrapped), \
+        "TyUnknown buried under TyFrame must be detected"
+
+
+def test_stage39_f2_contains_unknown_walks_memtier_wrapper():
+    """F2 backfill (Stage 37 retroactive coverage)."""
+    from helixc.frontend.typecheck import (
+        TypeChecker, TyMemTier, TyUnknown,
+    )
+    tc = TypeChecker(parse("fn main() -> i32 { 0 }"))
+    wrapped = TyMemTier("working", TyUnknown(hint="probe"))
+    assert tc._contains_unknown_type(wrapped), \
+        "TyUnknown buried under TyMemTier must be detected"
+
+
+def test_stage39_h3_erase_refinement_walks_temporal():
+    """H3 backfill: `_erase_refinement(TyTemporal(past, TyRefined(...)))`
+    walks into the inner and strips — pre-H3 the fall-through
+    preserved the refinement, producing inconsistent post-join state."""
+    from helixc.frontend.typecheck import (
+        TypeChecker, TyTemporal, TyRefined, TyPrim,
+    )
+    tc = TypeChecker(parse("fn main() -> i32 { 0 }"))
+    refined = TyRefined("PosI32", TyPrim("i32"), ())
+    wrapped = TyTemporal("past", refined)
+    erased = tc._erase_refinement(wrapped)
+    assert isinstance(erased, TyTemporal)
+    assert isinstance(erased.inner, TyPrim), \
+        f"erase should strip TyRefined under TyTemporal, got " \
+        f"{type(erased.inner).__name__}"
