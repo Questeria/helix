@@ -95,8 +95,7 @@ Re-sequenced after Stage 46-47 closed:
   IR lowering). 4-gate audit cascade with 9 fixed + 13
   deferred to Stage 49. Cascading-defect rhythm matched
   Stage 46; final 3-lane verification CLEAN.
-- **Stage 49** (in flight — Inc 1-4 + Inc 1.5 SHIPPED, Inc 5
-  closure audits in progress 2026-05-17): Tier 4 #14 Inc 3 —
+- **Stage 49** ✅ DONE 2026-05-17 — Tier 4 #14 Inc 3
   runtime Ok/Err tag. UNLOCKED the 4 previously-rejected
   builtins (is_ok, is_err, map_err, unwrap-wrong-arm) AND
   eliminated the whole Phase-0 Result-defect equivalence class
@@ -105,8 +104,14 @@ Re-sequenced after Stage 46-47 closed:
   branch IR arm with packed-i64 RESULT_PACK/RESULT_TAG/
   RESULT_PAYLOAD opcodes; unwrap_ok/unwrap_err carry a runtime
   tag-check that panics on wrong-arm; Stage 48's typecheck
-  guards retained as defense-in-depth. Largest-payoff stage
-  in the immediate queue.
+  guards retained as defense-in-depth. 4-gate audit cascade
+  (gates 1+2+3+4) caught 5 HIGHs total, all fixed inline; gate-4
+  verification CLEAN. 48 Stage 49 tests + 78 Stage 46+48
+  unchanged. Self-host cascade preserved. dogfood_16 + dogfood_17
+  still exit 42.
+- **Stage 50** (next): bootstrap `grad_rev_all` single-walk port
+  (Tier 1 #3 close — Python side already done in Stage 36; this
+  ports the same algorithm to the in-Helix bootstrap compiler).
 - **Stage 50** (proposed): Bootstrap `grad_rev_all` N-walk
   → single-walk port. Closes bootstrap side of Tier 1 #3.
   1 stage.
