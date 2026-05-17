@@ -699,12 +699,30 @@ class TypeChecker:
         #   4. populated at Let-stmt when value is `Call(from_X, ...)`
         #   5. popped at Let-stmt opaque RHS / Assign-stmt invalidation
         #
-        # Stage 52 Inc 1 ships the basic flat-dict + per-fn clear.
-        # Block-scope discipline (snapshot/restore + let-set + assign-
-        # set mirroring Stage 48 gate-3 G3-F1 + gate-4 G4-F2) is
-        # deferred to Inc 2 if cascading-defect rhythm surfaces a
-        # block-shadow / assign-then-shadow defect class.
+        # Stage 52 Inc 1 ships basic dict + per-fn clear. Stage 52
+        # closure gate-1 silent-failure HIGH-1/3/5 + type-design F1e
+        # forced Inc 2 to ship simultaneously (per gate-1 F8 — the
+        # cascading-defect rhythm caught the deferred defects in
+        # the same audit they were deferred from).
+        #
+        # Inc 2 lifts: (a) Assign-arm POPULATE on from_X(...) RHS
+        # (HIGH-1+3); (b) block-scope snapshot/restore with let-set
+        # parallel (F1e); (c) inner-let shadow vs inner-Assign
+        # propagation distinguished via the let-set semantics
+        # mirroring Stage 48 gate-3 — INVERTED for modal-origin:
+        # inner-Assign to outer name PROPAGATES the new taint
+        # (because the AI-safety invariant says any from_X
+        # introduction must surface), whereas Result-provenance
+        # DROPS on inner-Assign (because the assign invalidates
+        # the static Ok/Err claim).
         self._modal_origin_provenance: dict[str, str] = {}
+        # Stage 52 gate-1 F1e / Inc 2: parallel stack tracking
+        # names introduced via let in each open block. Used at
+        # block-exit restore to distinguish inner-shadow lets
+        # (drop their entry, restore outer's if present) from
+        # inner-Assign mutations of outer names (preserve the
+        # mutation — taint propagates upward).
+        self._modal_origin_let_block_scopes: list[set[str]] = []
         self._seen_unknown_type_names: set[str] = set()
         # Stage 40 closure gate-2 code-review MEDIUM-1 fix (conf
         # 88): explicit init so re-running check() on the same
@@ -761,6 +779,7 @@ class TypeChecker:
         self._result_assigns_block_scopes = []
         # Stage 52 Inc 1: clear modal-origin taint map per check().
         self._modal_origin_provenance = {}
+        self._modal_origin_let_block_scopes = []
         self._recursive_enum_names: set[str] = set()
         self._type_alias_cache = {}
         self._local_const_scalar_scopes = []
@@ -2387,6 +2406,7 @@ class TypeChecker:
         # provenance) — without this clear, fn A's `let r =
         # from_uncertain(u)` would taint `r` in fn B's parameter list.
         self._modal_origin_provenance = {}
+        self._modal_origin_let_block_scopes = []
         error_start = len(self.errors)
         completed = False
         kernel_hbm_indexables = (
@@ -2524,6 +2544,16 @@ class TypeChecker:
         saved_provenance = dict(self._result_constructor_provenance)
         self._result_let_block_scopes.append(set())
         self._result_assigns_block_scopes.append(set())
+        # Stage 52 closure gate-1 F1e + HIGH-1/3 fix: scope-aware
+        # snapshot + let-set tracking for _modal_origin_provenance.
+        # Distinguishes inner-LET shadows (drop their taint at
+        # exit, restore outer's if present) from inner-Assign
+        # mutations of outer names (preserve the new taint —
+        # AI-safety semantics say from_X introductions must
+        # surface, INVERTED from Result-provenance which DROPS
+        # on inner-Assign).
+        saved_modal_origin = dict(self._modal_origin_provenance)
+        self._modal_origin_let_block_scopes.append(set())
         try:
             for stmt in block.stmts:
                 self._check_stmt(stmt, inner)
@@ -2594,6 +2624,29 @@ class TypeChecker:
                 self._result_constructor_provenance = saved_provenance
                 for n in mutated_outer_names:
                     self._result_constructor_provenance.pop(n, None)
+                # Stage 52 gate-1 F1e + HIGH-1/3 restore:
+                # selective restore preserving inner-Assign
+                # mutations while dropping inner-LET shadow taint.
+                # For each name in current dict:
+                #   - If introduced via inner-let: drop the inner
+                #     entry. If the outer had a taint for that
+                #     name, restore it from saved.
+                #   - Else (untouched OR inner-Assign mutation):
+                #     keep the current value (propagate taint).
+                inner_modal_lets = (
+                    self._modal_origin_let_block_scopes.pop()
+                    if self._modal_origin_let_block_scopes
+                    else set()
+                )
+                for name in list(
+                        self._modal_origin_provenance.keys()):
+                    if name in inner_modal_lets:
+                        if name in saved_modal_origin:
+                            self._modal_origin_provenance[name] = (
+                                saved_modal_origin[name]
+                            )
+                        else:
+                            del self._modal_origin_provenance[name]
 
     def _check_expr_in_block_scope(
         self, expr: A.Expr, scope: Scope
@@ -2617,6 +2670,12 @@ class TypeChecker:
         saved_provenance = dict(self._result_constructor_provenance)
         self._result_let_block_scopes.append(set())
         self._result_assigns_block_scopes.append(set())
+        # Stage 52 gate-1 F1e + HIGH-1/3 parity at expression-arm.
+        # Same scope-aware semantics as _check_block: inner-let
+        # shadows pop (restore outer if present); inner-Assign
+        # mutations propagate upward (AI-safety: taint MUST surface).
+        saved_modal_origin = dict(self._modal_origin_provenance)
+        self._modal_origin_let_block_scopes.append(set())
         try:
             return self._check_expr(expr, scope)
         finally:
@@ -2636,6 +2695,22 @@ class TypeChecker:
             self._result_constructor_provenance = saved_provenance
             for n in mutated_outer_names:
                 self._result_constructor_provenance.pop(n, None)
+            # Scope-aware modal-origin restore at expression-arm
+            # site, mirroring the _check_block logic.
+            inner_modal_lets = (
+                self._modal_origin_let_block_scopes.pop()
+                if self._modal_origin_let_block_scopes
+                else set()
+            )
+            for name in list(
+                    self._modal_origin_provenance.keys()):
+                if name in inner_modal_lets:
+                    if name in saved_modal_origin:
+                        self._modal_origin_provenance[name] = (
+                            saved_modal_origin[name]
+                        )
+                    else:
+                        del self._modal_origin_provenance[name]
 
     def _check_stmt(self, stmt: A.Stmt, scope: Scope) -> None:
         if isinstance(stmt, A.Let):
@@ -2784,6 +2859,15 @@ class TypeChecker:
                 # clear handles the cross-fn case; this pop
                 # handles intra-fn re-binding.
                 self._modal_origin_provenance.pop(stmt.name, None)
+            # Stage 52 gate-1 F1e: record this let-introduction in
+            # the current block's modal-origin let-set so block-
+            # exit restore can distinguish inner-shadow (drop) from
+            # inner-Assign (propagate). Tracks ALL lets regardless
+            # of whether they install taint — a non-tainting
+            # `let r = 42` STILL shadows any outer taint of r and
+            # must restore outer's taint after the block ends.
+            if self._modal_origin_let_block_scopes:
+                self._modal_origin_let_block_scopes[-1].add(stmt.name)
             self._define_local_const_scalar(stmt.name, None)
             if (stmt.value is not None
                     and self._expr_has_unrepresentable_typed_const_scalar(
@@ -4165,23 +4249,24 @@ class TypeChecker:
                     # many AI safety failures" claim. Closes the
                     # direct form.
                     #
-                    # KNOWN LIMITATION (code-review gate-1 H1, conf
-                    # 95): this guard only matches the inline form.
-                    # Trivially bypassable via let-binding
-                    # (`let r = from_uncertain(u); into_known(r)`)
-                    # or helper-fn indirection. A semantic taint-
-                    # tracking pass that propagates Uncertain-origin
-                    # through bindings + function calls would be a
-                    # Phase-0 expansion of significant scope and is
-                    # deferred to a future stage. The syntactic
-                    # guard is the first line of defense — it makes
-                    # the laundering pattern non-trivial to write
-                    # rather than impossible, and a future
-                    # taint-tracking stage would compose with it
-                    # additively. Defensive: explicit args bounds
-                    # check (gate-1 M1, conf 82) — pre-fix this
-                    # block accessed expr.args[0] without re-
-                    # asserting the structural precondition.
+                    # PARTIAL CLOSURE (Stage 52 Inc 1, commit c274059):
+                    # let-binding bypass is closed by the new
+                    # _modal_origin_provenance consult at the Name-
+                    # operand branch below. The inline form (this
+                    # arm) catches `into_X(from_Y(v))` directly;
+                    # the let-binding form is now caught via the
+                    # taint-tracking dict.
+                    #
+                    # STILL DEFERRED to Stage 52 Inc 2+ /
+                    # Stage 53: helper-fn indirection
+                    # (`fn launder(x: i32) -> Known<i32> { into_known(x) }`
+                    # called with a from_X result) requires inter-
+                    # procedural taint propagation, a different
+                    # defect class than let-bypass.
+                    # Defensive: explicit args bounds check
+                    # (gate-1 M1, conf 82) — pre-fix this block
+                    # accessed expr.args[0] without re-asserting
+                    # the structural precondition.
                     target_kind = _modal_intro[bn]
                     # Stage 40 closure gate-2 type-design F1 fix
                     # (HIGH conf 90): extend gate-1's Uncertain-
@@ -4351,11 +4436,8 @@ class TypeChecker:
                                 f"via let-binding bypass — "
                                 f"{expr.args[0].name!r} was bound "
                                 f"to from_{source_kind}(...). "
-                                f"Stage 52 Inc 1 taint-tracking "
-                                f"catches this; the launder "
-                                f"semantics are the same as the "
-                                f"inline `into_X(from_Y(v))` "
-                                f"form.",
+                                f"Same launder semantics as the "
+                                f"inline `into_X(from_Y(v))` form.",
                                 expr.span,
                                 hint=hint,
                             ))
@@ -5277,6 +5359,57 @@ class TypeChecker:
                     )
                 else:
                     self._result_constructor_provenance.pop(
+                        expr.target.name, None)
+            # Stage 52 closure gate-1 CRITICAL C1 + silent-failure
+            # HIGH-1 + HIGH-3 fix: Assign-arm symmetric POP+POPULATE
+            # for _modal_origin_provenance.
+            #
+            # C1 (POP on opaque RHS): `let mut r = from_uncertain(u);
+            #   r = some_known_call(); into_known(r)` — clear stale
+            #   taint on Assign-to-non-from_X.
+            # HIGH-1+3 (POPULATE on from_X(...) RHS): `let mut r:
+            #   i32 = 0; match b { true => { r = from_uncertain(u); }
+            #   ... }; into_known(r)` — Assign-to-from_X must INSTALL
+            #   taint, not just clear existing. Pre-HIGH-1 fix the
+            #   populate only fired when the name was ALREADY tainted
+            #   (Stage 46 G3-F1 pattern). For modal-origin, fresh
+            #   taint via Assign IS a real launder vector and must
+            #   install the entry.
+            #
+            # TODO(stage52-inc2): the populate is structural-syntactic
+            # (must be a direct `Call(Name(from_X), ...)`). RHS of
+            # `A.If` / `A.Block` / `A.Match` that YIELDS a from_X
+            # value is gate-1 silent-failure HIGH-2 — deferred to
+            # Inc 2 (requires a `_yields_from_call(expr) -> str|None`
+            # recursive helper that walks all terminal branches).
+            if (expr.op == "="
+                    and isinstance(expr.target, A.Name)):
+                _modal_elim_to_kind_assign = {
+                    "from_known":     "known",
+                    "from_believed":  "believed",
+                    "from_goal":      "goal",
+                    "from_uncertain": "uncertain",
+                }
+                if (isinstance(expr.value, A.Call)
+                        and isinstance(expr.value.callee, A.Name)
+                        and expr.value.callee.name
+                            in _modal_elim_to_kind_assign):
+                    # POPULATE (or overwrite existing) — taint
+                    # installs unconditionally on from_X(...) RHS,
+                    # closing the HIGH-1 + HIGH-3 silent-launder
+                    # via match-arm / loop-body assignment.
+                    self._modal_origin_provenance[
+                        expr.target.name] = (
+                        _modal_elim_to_kind_assign[
+                            expr.value.callee.name]
+                    )
+                elif expr.target.name in self._modal_origin_provenance:
+                    # POP on opaque RHS — clear stale taint when the
+                    # assigned value's modal origin is no longer
+                    # statically determinable. Only fires when there
+                    # WAS a prior taint to clear (avoids polluting
+                    # the dict with names that were never tainted).
+                    self._modal_origin_provenance.pop(
                         expr.target.name, None)
             if expr.op != "=":
                 op = {
