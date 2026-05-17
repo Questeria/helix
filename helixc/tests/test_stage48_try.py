@@ -268,14 +268,22 @@ fn main() -> i32 {
 # ============================================================
 
 
-def test_stage48_closure_gate1_f2_err_constructed_question_rejects():
-    """Gate-1 F2 fix (HIGH): `r?` on `let r: Result<i32, i32>
-    = Err(99)` silently extracted the Err payload as Ok in
-    Phase-0 (no runtime tag, identity-lowered). Stage 49+
-    will add real propagation — but Phase-0 must REJECT to
-    avoid silent miscompilation. Same defect class as Stage
-    46 G2-F1's unwrap_ok-on-typed-Err. Mirrors the constructor-
-    provenance check at unwrap_ok/unwrap_err."""
+def test_stage48_closure_gate1_f2_err_constructed_question_lifted_by_stage49_inc4():
+    """Gate-1 F2 (HIGH, Stage 48): `r?` on
+    `let r: Result<i32, i32> = Err(99)` was rejected at
+    typecheck pre-Stage-49 because Phase-0 had no real `?`
+    propagation. The reject avoided a silent Err-as-Ok
+    miscompile (the operand's static provenance was 'err' but
+    the identity-lowering would extract the Err payload as if
+    it were Ok).
+
+    Stage 49 Inc 4 LIFTED this reject. `?` now has real runtime
+    semantics: COND_BR on RESULT_TAG, RETURN-the-packed-Err if
+    tag == 1, fall-through-and-extract-payload if tag == 0.
+
+    Post-Inc-4 the original source typechecks clean AND runs
+    correctly: helper returns Err(99) up the call stack, main
+    sees Err and exits with the unwrap_err payload."""
     src = """
 fn helper() -> Result<i32, i32> {
     let r: Result<i32, i32> = Err(99);
@@ -283,18 +291,16 @@ fn helper() -> Result<i32, i32> {
     Ok(v)
 }
 fn main() -> i32 {
-    unwrap_ok(helper())
+    unwrap_err(helper())
 }
 """
     prog = parse(src, include_stdlib=True)
-    errs = typecheck(prog)
-    # Stage 48 gate-1 F2: must reject with a `?`-specific
-    # diagnostic mentioning the constructor provenance.
-    try_errs = [e for e in errs
-                if "?" in str(e) and "constructed via Err" in str(e)]
-    assert try_errs, \
-        f"`Err(...)?` must reject with provenance diag, " \
-        f"got {[str(e) for e in try_errs]}"
+    assert typecheck(prog) == [], \
+        f"Err(...)? must typecheck post-Stage-49-Inc-4, got " \
+        f"{[str(e) for e in typecheck(prog)]}"
+    elf = compile_module_to_elf(lower(prog))
+    # helper's `?` propagates Err(99); main extracts 99.
+    assert _run_elf(elf) == 99
 
 
 # ============================================================
@@ -303,16 +309,23 @@ fn main() -> i32 {
 
 
 def test_stage48_closure_gate2_f1_inner_block_shadow_no_provenance_leak():
-    """Gate-2 F1 fix (HIGH): pre-fix, an inner-block `let r:
+    """Gate-2 F1 (HIGH, Stage 48): pre-fix, an inner-block `let r:
     Result<i32, i32> = Ok(5)` overwrote the OUTER `r='err'`
     provenance entry in the flat dict. After the inner block
     exited, the outer `r?` no longer saw 'err' provenance and
     silently extracted the Err payload as Ok (exit code 99
     verified end-to-end in the audit reproducer).
 
-    Post-fix, _check_block snapshots the provenance map at
-    entry and restores at exit. Inner-block shadows can't bleed
-    outer provenance."""
+    The Stage 48 gate-2 fix snapshot-restored the provenance map
+    across _check_block — preserved the static `err` claim and
+    typecheck-rejected the post-block `r?`.
+
+    Stage 49 Inc 4 LIFTED the original reject (real `?` is now
+    sound), so the post-block `r?` now typechecks AND runs
+    correctly: Inc 4 emits COND_BR → RETURN-Err. The scope-
+    aware snapshot-restore from gate-2 still matters for the
+    OTHER static-provenance consumers (unwrap_ok / unwrap_err)
+    that still rely on the dict for wrong-arm detection."""
     src = """
 fn helper() -> Result<i32, i32> {
     let r: Result<i32, i32> = Err(99);
@@ -324,19 +337,18 @@ fn helper() -> Result<i32, i32> {
     Ok(v)
 }
 fn main() -> i32 {
-    unwrap_ok(helper())
+    unwrap_err(helper())
 }
 """
     prog = parse(src, include_stdlib=True)
     errs = typecheck(prog)
-    # The outer `r?` MUST reject with the Err-provenance
-    # diagnostic. Pre-fix this would typecheck clean and compile
-    # to exit 99.
-    try_errs = [e for e in errs
-                if "?" in str(e) and "constructed via Err" in str(e)]
-    assert try_errs, \
-        f"inner-block shadow must not leak outer Err " \
-        f"provenance, got errors: {[str(e) for e in errs]}"
+    # Post-Stage-49-Inc-4: typecheck clean. The runtime `?`
+    # propagates Err(99) up; main extracts 99.
+    assert errs == [], \
+        f"post-Inc-4 the source must typecheck clean, got " \
+        f"{[str(e) for e in errs]}"
+    elf = compile_module_to_elf(lower(prog))
+    assert _run_elf(elf) == 99
 
 
 def test_stage48_closure_gate2_m5_cross_fn_no_provenance_carry():

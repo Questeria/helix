@@ -596,3 +596,143 @@ fn main() -> i32 {
     errs = typecheck(prog)
     assert any("takes 2 arguments" in str(e) for e in errs), \
         f"map_err with wrong arity must reject, got: {[str(e) for e in errs]}"
+
+
+# ============================================================
+# Inc 4 — real `?` early-return branch IR
+# ============================================================
+
+
+def test_stage49_inc4_question_on_ok_falls_through_to_payload():
+    """? on an Ok-tagged Result extracts the payload and continues
+    in the caller. The COND_BR takes the false (ok) edge. Same
+    runtime behavior as Inc 1's identity-lower placeholder, so
+    dogfood_17 still exits 42 — confirmed below in the dogfood
+    regression."""
+    src = """
+fn helper() -> Result<i32, i32> {
+    let r: Result<i32, i32> = Ok(42);
+    let v: i32 = r?;
+    Ok(v)
+}
+fn main() -> i32 { unwrap_ok(helper()) }
+"""
+    prog = parse(src, include_stdlib=True)
+    assert typecheck(prog) == []
+    elf = compile_module_to_elf(lower(prog))
+    assert _run_elf(elf) == 42
+
+
+def test_stage49_inc4_question_on_err_propagates_up():
+    """The defining feature of Inc 4: `?` on an Err-tagged Result
+    early-returns the Err from the enclosing fn. Pre-Inc-4 this
+    fell through to RESULT_PAYLOAD and extracted the Err payload
+    as if it were Ok (the F1-dynamic Phase-0 limitation). Post-
+    Inc-4 the COND_BR takes the true (err) edge, RETURN emits
+    the original packed Err, and the caller sees Err(99)."""
+    src = """
+fn maybe_fail() -> Result<i32, i32> {
+    Err(99)
+}
+fn helper() -> Result<i32, i32> {
+    let v: i32 = maybe_fail()?;
+    Ok(v + 100)
+}
+fn main() -> i32 {
+    unwrap_err(helper())
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    assert typecheck(prog) == []
+    elf = compile_module_to_elf(lower(prog))
+    # ? on Err(99) propagates -> helper returns Err(99).
+    # unwrap_err extracts 99.
+    assert _run_elf(elf) == 99
+
+
+def test_stage49_inc4_question_propagates_through_chained_calls():
+    """Chained `?` across multiple Result-returning fns. If any
+    intermediate fn returns Err, the propagation chain terminates
+    and the deepest non-Err caller observes the Err. Pre-Inc-4
+    this was just sequential payload extraction; post-Inc-4 the
+    error short-circuits."""
+    src = """
+fn level3() -> Result<i32, i32> { Err(7) }
+fn level2() -> Result<i32, i32> {
+    let v: i32 = level3()?;
+    Ok(v + 1)
+}
+fn level1() -> Result<i32, i32> {
+    let v: i32 = level2()?;
+    Ok(v + 10)
+}
+fn main() -> i32 {
+    unwrap_err(level1())
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    assert typecheck(prog) == []
+    elf = compile_module_to_elf(lower(prog))
+    # level3 -> Err(7); level2's `?` propagates -> Err(7);
+    # level1's `?` propagates -> Err(7). main's unwrap_err = 7.
+    assert _run_elf(elf) == 7
+
+
+def test_stage49_inc4_question_does_not_run_post_q_code_on_err():
+    """The `?` early-return MUST skip code after `?` if the operand
+    was Err. Pre-Inc-4 the lowering extracted the payload and
+    continued, so post-`?` code ran (silent miscompile). Post-
+    Inc-4 the COND_BR jumps over the rest of the block.
+
+    Test via a side effect: helper's `?` on Err MUST NOT execute
+    the `Ok(99)` final-expression. The caller observes Err."""
+    src = """
+fn helper() -> Result<i32, i32> {
+    let r: Result<i32, i32> = Err(50);
+    let v: i32 = r?;
+    Ok(99)
+}
+fn main() -> i32 {
+    unwrap_err(helper())
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    assert typecheck(prog) == []
+    elf = compile_module_to_elf(lower(prog))
+    # If `?` propagated correctly, main sees Err(50) -> 50.
+    # If post-`?` code ran (pre-fix bug), Ok(99) would shadow
+    # and main would see Ok via unwrap_err (panic / undefined).
+    assert _run_elf(elf) == 50
+
+
+def test_stage49_inc4_question_arithmetic_around_still_works_on_ok():
+    """`r? + 2` on Ok(40) still yields 42 (Inc 4 preserves Inc 1
+    arithmetic composition for the Ok-fall-through path)."""
+    src = """
+fn helper() -> Result<i32, i32> {
+    let r: Result<i32, i32> = Ok(40);
+    let v: i32 = r? + 2;
+    Ok(v)
+}
+fn main() -> i32 { unwrap_ok(helper()) }
+"""
+    prog = parse(src, include_stdlib=True)
+    assert typecheck(prog) == []
+    elf = compile_module_to_elf(lower(prog))
+    assert _run_elf(elf) == 42
+
+
+def test_stage49_inc4_dogfood_17_still_exits_42():
+    """dogfood_17_try_operator.hx (Stage 48 demo) compiles all-Ok
+    paths via safe_div(20,4) then safe_div(5,1). Both succeed, so
+    `?` falls through both times. Post-Inc-4 the lowering inserts
+    COND_BRs but the false (ok) edge is always taken at runtime.
+    End-to-end exit code 42 unchanged."""
+    proj = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = open(os.path.join(
+        proj, "helixc/examples/dogfood_17_try_operator.hx")).read()
+    prog = parse(src, include_stdlib=True)
+    assert typecheck(prog) == []
+    elf = compile_module_to_elf(lower(prog))
+    assert _run_elf(elf) == 42

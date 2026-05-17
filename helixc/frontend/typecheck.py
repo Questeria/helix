@@ -4752,25 +4752,15 @@ class TypeChecker:
                     # `Ok` provenance is benign: `?` on a known-Ok
                     # value is identity, which is the correct
                     # Phase-0 behavior.
-                    if (isinstance(expr.args[0], A.Name)
-                            and expr.args[0].name
-                                in self._result_constructor_provenance
-                            and self._result_constructor_provenance[
-                                expr.args[0].name] == "err"):
-                        self.errors.append(TypeError_(
-                            f"`?` applied to "
-                            f"{expr.args[0].name!r}, which was "
-                            f"constructed via Err() — Phase-0 has "
-                            f"no runtime Ok/Err tag yet, so this "
-                            f"would silently extract the Err "
-                            f"payload as Ok. Stage 49+ adds the "
-                            f"real propagation branch.",
-                            expr.span,
-                            hint="for now, return Err(...) directly "
-                            "from this function, or wait for the "
-                            "runtime tag in Stage 49+",
-                        ))
-                        return TyUnknown(hint="try")
+                    # Stage 49 Inc 4 LIFTED this gate-1 F2 reject:
+                    # `?` on a statically-Err-constructed Result is
+                    # now sound at runtime — the COND_BR + RETURN
+                    # propagates the Err from the enclosing fn. The
+                    # previously-required Phase-0 reject is removed.
+                    # (Static-provenance bookkeeping at this site
+                    # would only be needed if we wanted to const-
+                    # fold the `?` to an unconditional return, which
+                    # is a future optimizer pass concern.)
                     # Stage 48 closure gate-1 silent-failure F1
                     # acknowledgement (HIGH, partial fix): for
                     # operands whose Result variant is NOT

@@ -2076,15 +2076,57 @@ class Lowerer:
                     tir.OpKind.RESULT_PACK, tag, payload,
                     result_ty=tir.TIRScalar("i64"))
             if (isinstance(expr.callee, A.Name)
-                    and expr.callee.name in ("unwrap_ok", "unwrap_err",
-                                              "__try")
+                    and expr.callee.name in ("unwrap_ok", "unwrap_err")
                     and len(expr.args) == 1):
                 packed = self._lower_expr(expr.args[0])
                 if packed is None:
                     return None
-                # Inc 1: payload extract only (no tag check yet — see
-                # comment block above). Inc 4 will replace __try with
-                # a real conditional-branch propagation.
+                # Inc 1: payload extract only — runtime tag-check on
+                # wrong-arm (Stage 49 Inc 1.5 / later) still pending,
+                # so unwrap_ok / unwrap_err currently extract the
+                # low-32 payload without verifying the tag matches.
+                # Static-provenance checks at typecheck already block
+                # the most common wrong-arm cases.
+                return self.builder.emit(
+                    tir.OpKind.RESULT_PAYLOAD, packed,
+                    result_ty=tir.TIRScalar("i32"))
+            # Stage 49 Inc 4: `?` (parsed as __try) becomes a real
+            # conditional early-return. If the operand is Err
+            # (tag == 1), return the entire packed Result up the
+            # call stack — the enclosing fn must return Result<U, E2>
+            # with E2 compatible with the operand's E1 (already
+            # validated by the Stage 48 typecheck arm). If the
+            # operand is Ok (tag == 0), extract the payload and
+            # continue with the user's code in the ok-fall-through
+            # block.
+            if (isinstance(expr.callee, A.Name)
+                    and expr.callee.name == "__try"
+                    and len(expr.args) == 1):
+                packed = self._lower_expr(expr.args[0])
+                if packed is None:
+                    return None
+                tag = self.builder.emit(
+                    tir.OpKind.RESULT_TAG, packed,
+                    result_ty=tir.TIRScalar("i32"))
+                one = self.builder.const_int(1, "i32")
+                is_err_cond = self.builder.emit(
+                    tir.OpKind.CMP_EQ, tag, one,
+                    result_ty=tir.TIRScalar("bool"))
+                err_blk = self.builder.append_block()
+                ok_blk = self.builder.append_block()
+                self.builder.emit(
+                    tir.OpKind.COND_BR, is_err_cond,
+                    attrs={"true_block": err_blk.id,
+                           "false_block": ok_blk.id})
+                # Err arm: return the packed Result from the
+                # enclosing fn. The return value matches the fn's
+                # signature (i64 packed Result).
+                self.builder.switch_to(err_blk)
+                self.builder.emit(tir.OpKind.RETURN, packed)
+                # Ok arm: extract the payload (i32). Subsequent
+                # lowering for code following `r?` runs in this
+                # block, which is the natural fall-through.
+                self.builder.switch_to(ok_blk)
                 return self.builder.emit(
                     tir.OpKind.RESULT_PAYLOAD, packed,
                     result_ty=tir.TIRScalar("i32"))
