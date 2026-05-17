@@ -5791,6 +5791,31 @@ fn differentiate_reverse_all(sb: i32, expr_idx: i32) -> i32 {
     0
 }
 
+// Stage 50 Inc 2 — production-path bridge: one-param convenience wrapper
+// that uses the new bucket_array infrastructure (n=1) and returns the
+// derivative AST. Drop-in replacement for `differentiate_reverse_one`
+// at the parse_program-end grad_rev_pass caller site (parser.hx ~6293).
+//
+// Algorithmically identical to differentiate_reverse_one for the n=1
+// case: same DFS via propagate_adj_multi (which mirrors propagate_adj's
+// shape exactly), same deposit order (single-bucket path always hits
+// idx=0), same sum_bucket-equivalent reduction via bucket_array_sum(0).
+//
+// Why this bridge: it tests the new infrastructure with real production
+// code BEFORE Inc 3 introduces actual grouping (where multiple params
+// share one walk). If self-host cascade G3..G4 remains byte-identical
+// after this swap, we've validated that bucket_array_* is a correctness-
+// equivalent replacement for the single-bucket helpers. Inc 3 then
+// confidently extends to true n>1 single-walk.
+fn differentiate_reverse_one_via_array(
+    sb: i32, expr_idx: i32, var_s: i32, var_l: i32
+) -> i32 {
+    bucket_array_reset(sb, 1);
+    set_param_array_name(sb, 0, var_s, var_l);
+    differentiate_reverse_all(sb, expr_idx);
+    bucket_array_sum(sb, 0)
+}
+
 // Bottom-up algebraic simplifier for the differentiate output. Folds
 // 0+x=x, x+0=x, x-0=x, 0-x=-x, 0*x=0, 1*x=x, x*1=x, -(-x)=x, -0=0,
 // and constant-folds two literal-zero / literal-one operands into a
@@ -6290,7 +6315,12 @@ fn grad_rev_pass(sb: i32, head: i32) -> i32 {
                 let deriv_raw = if have_param == 1 {
                     if valid_field == 1 {
                         if ckpt_ok == 1 {
-                            differentiate_reverse_one(sb, body_to_diff, var_s, var_l)
+                            // Stage 50 Inc 2: swap to the new
+                            // bucket_array path. Equivalent output for
+                            // n=1; preserves self-host G3..G4 byte-
+                            // identity. Inc 3 will introduce true
+                            // grouping (single walk for multi-param).
+                            differentiate_reverse_one_via_array(sb, body_to_diff, var_s, var_l)
                         } else {
                             body_to_diff
                         }
