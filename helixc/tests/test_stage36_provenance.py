@@ -888,6 +888,103 @@ fn main() -> i32 {
     assert rc == 42, f"expected sentinel on idx 0 empty arena, got {rc}"
 
 
+# Stage 36 Increment 9 audit B2 fix: add reverse-mode ∂/∂b coverage
+# for every 2-arg fuzzy op. The pre-existing tests fix the second arg
+# as a literal and differentiate only against the first parameter; a
+# transpose bug (e.g., flipping a_arg/b_arg in fuzzy_or chain rule)
+# wouldn't be caught. These tests differentiate against the SECOND
+# argument explicitly so any asymmetry-bug surfaces.
+
+
+def test_stage36_inc9_grad_rev_fuzzy_and_db():
+    """∂/∂b fuzzy_and(a, b) = a. At a=0.3, gradient = 0.3.
+    loss(x) = fuzzy_and(prove(0.3, 0), prove(x, 0)); grad at any x = 0.3."""
+    src = """
+fn loss(x: f32) -> f32 {
+    unwrap_logic(fuzzy_and(prove(0.3_f32, 0), prove(x, 0)))
+}
+fn main() -> i32 {
+    let g: f32 = grad_rev(loss)(0.7_f32);
+    // g should be 0.3; 0.3*100=30, 30+12 = 42
+    let g_int: i32 = (g * 100.0_f32 + 0.5_f32) as i32;
+    g_int + 12
+}
+"""
+    assert _stage36_inc6_pipeline(src) == 42
+
+
+def test_stage36_inc9_grad_rev_fuzzy_or_db():
+    """∂/∂b fuzzy_or(a, b) = 1 - a. At a=0.6, gradient = 0.4.
+    loss(x) = fuzzy_or(prove(0.6, 0), prove(x, 0))."""
+    src = """
+fn loss(x: f32) -> f32 {
+    unwrap_logic(fuzzy_or(prove(0.6_f32, 0), prove(x, 0)))
+}
+fn main() -> i32 {
+    let g: f32 = grad_rev(loss)(0.2_f32);
+    let g_int: i32 = (g * 100.0_f32 + 0.5_f32) as i32;
+    // g should be 0.4 -> g_int = 40, +2 = 42
+    g_int + 2
+}
+"""
+    assert _stage36_inc6_pipeline(src) == 42
+
+
+def test_stage36_inc9_grad_rev_fuzzy_xor_db():
+    """∂/∂b fuzzy_xor(a, b) = 1 - 2*a. At a=0.3, gradient = 0.4.
+    Verifies the b-side asymmetry of the XOR chain rule."""
+    src = """
+fn loss(x: f32) -> f32 {
+    unwrap_logic(fuzzy_xor(prove(0.3_f32, 0), prove(x, 0)))
+}
+fn main() -> i32 {
+    let g: f32 = grad_rev(loss)(0.5_f32);
+    let g_int: i32 = (g * 100.0_f32 + 0.5_f32) as i32;
+    g_int + 2
+}
+"""
+    assert _stage36_inc6_pipeline(src) == 42
+
+
+def test_stage36_inc9_grad_rev_fuzzy_implies_db():
+    """∂/∂b fuzzy_implies(a, b) = a. At a=0.42, gradient = 0.42.
+    The chain-rule formula is asymmetric (-1+b vs a) so a transpose
+    bug WOULD show up here as wrong gradient sign or magnitude."""
+    src = """
+fn loss(x: f32) -> f32 {
+    unwrap_logic(fuzzy_implies(prove(0.42_f32, 0), prove(x, 0)))
+}
+fn main() -> i32 {
+    let g: f32 = grad_rev(loss)(0.7_f32);
+    let g_int: i32 = (g * 100.0_f32 + 0.5_f32) as i32;
+    // g should be 0.42 -> g_int = 42; +0 = 42
+    g_int
+}
+"""
+    assert _stage36_inc6_pipeline(src) == 42
+
+
+def test_stage36_inc9_derive_evaluates_args_in_source_order():
+    """Stage 36 Inc 9 audit B1 (code-review) fix: `derive(a, b)`
+    now lowers `a` before `b`. Hard to observe directly without
+    side-effecting calls (which Logic-typed args don't have), so
+    this test verifies that the lowering still returns the
+    correct value (a's value) — a regression sanity check rather
+    than an evaluation-order assertion."""
+    src = """
+fn main() -> i32 {
+    let a: Logic<i32> = prove(42, 100);
+    let b: Logic<i32> = prove(99, 200);
+    unwrap_logic(derive(a, b))
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    assert typecheck(prog) == []
+    elf = compile_module_to_elf(lower(prog))
+    rc = _run_elf(elf)
+    assert rc == 42, f"derive(a, b) should return a's value, got {rc}"
+
+
 if __name__ == "__main__":
     import pytest
     raise SystemExit(pytest.main([__file__, "-v"]))

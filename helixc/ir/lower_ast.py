@@ -1843,11 +1843,18 @@ class Lowerer:
             if (isinstance(expr.callee, A.Name)
                     and expr.callee.name == "derive"
                     and len(expr.args) == 2):
-                # Evaluate b for side effects but return a's value.
-                # In practice both are pure Logic<T> values; the second
-                # lower keeps a uniform AST traversal pattern.
+                # Stage 36 Inc 9 audit B1 (code-review) fix: evaluate
+                # args in source order (a then b), not the previous
+                # b-then-a ordering. Helix expressions can have
+                # observable side effects (io::println etc.), so
+                # `derive(log("a"), log("b"))` must print "a" before
+                # "b". The derive() return value is still a's lowered
+                # value (Phase-0 single-tag provenance); b is
+                # evaluated for AST-traversal-uniformity and for any
+                # side effects.
+                a_v = self._lower_expr(expr.args[0])
                 self._lower_expr(expr.args[1])
-                return self._lower_expr(expr.args[0])
+                return a_v
             if (isinstance(expr.callee, A.Name)
                     and expr.callee.name == "and_logic"
                     and len(expr.args) == 2):
