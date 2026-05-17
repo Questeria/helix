@@ -4445,11 +4445,14 @@ class TypeChecker:
                                 f"{source_kind.capitalize()}<T> "
                                 f"into "
                                 f"{target_kind.capitalize()}<T> "
-                                f"via let-binding bypass — "
-                                f"{expr.args[0].name!r} was bound "
-                                f"to from_{source_kind}(...). "
-                                f"Same launder semantics as the "
-                                f"inline `into_X(from_Y(v))` form.",
+                                f"via taint-tracking — "
+                                f"{expr.args[0].name!r} carries "
+                                f"a tracked from_{source_kind}(...) "
+                                f"origin from a let-binding, "
+                                f"Assign-stmt, match-arm, "
+                                f"if-branch, or while-body. Same "
+                                f"launder semantics as the inline "
+                                f"`into_X(from_Y(v))` form.",
                                 expr.span,
                                 hint=hint,
                             ))

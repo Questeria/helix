@@ -149,16 +149,12 @@ Re-sequenced after Stage 46-47 closed:
   -> Known<i32> { into_known(x) }` called with a from_X(...)
   result. Requires inter-procedural analysis (taint flows
   through fn boundaries). Closes Stage 40 H1 in full.
-- **Stage 50** (proposed): Bootstrap `grad_rev_all` N-walk
-  → single-walk port. Closes bootstrap side of Tier 1 #3.
-  1 stage.
-- **Stage 51** (proposed): Tier 1 #2 follow-through — extend
-  AD across user-defined function calls coverage. 1-2 stages.
-- **Stage 52** (proposed): Stage 40 F1 let-binding bypass —
-  taint-tracking pass for Uncertain-origin propagation.
-  1-2 stages.
+(Gate-2 code-review M2: stale `(proposed)` entries for Stages 50,
+51, 52 removed — they were superseded by the SHIPPED / ABORTED
+entries above. Stages 50, 51, 52 now live under their actual
+status in the "Next-stage sequencing" block earlier in this file.)
 
-Re-evaluate at Stage 50.
+Re-evaluate at the next stage close.
 
 Re-evaluated post-Stage-48: Stage 49 promoted to highest-
 payoff next pick (eliminates the entire Phase-0 Result

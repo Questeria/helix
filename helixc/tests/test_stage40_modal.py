@@ -917,10 +917,13 @@ fn main() -> i32 {
         f"Stage 52 Inc 1: let-binding bypass of F1 must now be " \
         f"caught with a launder diagnostic naming Uncertain → " \
         f"Known. Got: {[str(e) for e in errs]}"
-    # Diagnostic should mention 'let-binding bypass' to distinguish
+    # Diagnostic should mention 'taint-tracking' to distinguish
     # from the inline-form (which has its own diagnostic shape).
-    assert any("let-binding bypass" in str(e) for e in launder_errs), \
-        f"diagnostic must distinguish let-binding bypass from " \
+    # Gate-2 code-review H1 fix: was 'let-binding bypass' which
+    # mis-attributed the source for match-arm/Assign/while/if
+    # paths. New wording covers all five entry points.
+    assert any("taint-tracking" in str(e) for e in launder_errs), \
+        f"diagnostic must distinguish taint-tracking path from " \
         f"inline form, got: {[str(e) for e in launder_errs]}"
 
 
