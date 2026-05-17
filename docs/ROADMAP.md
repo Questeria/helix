@@ -5,7 +5,7 @@ deep-research passes (2026-05-04). It's a forward-looking plan; not
 everything here will land, and priorities will shift as dogfooding
 reveals which features actually matter.
 
-## Current state (Stage 35 CLOSED 2026-05-16 at restart 65; Stage 36 CLOSED 2026-05-16 at Inc 16; Stage 37 CLOSED 2026-05-16 at Inc 4 — tiered memory shipped end-to-end; Stage 38 opens next. See `docs/stage37-progress-2026-05-16.md` Increment 4 for Stage 37 closure narrative)
+## Current state (Stage 35 CLOSED 2026-05-16 at restart 65; Stage 36 CLOSED 2026-05-16 at Inc 16; Stage 37 CLOSED 2026-05-16 at Inc 4; Stage 38 CLOSED 2026-05-17 at Inc 4 — spatial-frame types shipped; Stage 39 opens next. See `docs/stage38-progress-2026-05-16.md` Increment 4 for Stage 38 closure narrative)
 
 - Working from-scratch x86-64 ELF compiler
 - Forward + reverse-mode symbolic AD with chain rules for __exp, __log,

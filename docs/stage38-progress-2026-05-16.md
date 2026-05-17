@@ -211,3 +211,50 @@ features needed (generic structs with kind constraints, refinement
 types over frame tags) aren't all shipped yet. Phase-0 ships the
 Python-side scaffolding; the migration to `.hx` is a Phase 2
 finalization task once generics mature.
+
+## Increment 4 — STAGE 38 CLOSURE (3/3 clean gates)
+
+Per the user direction "3 clean audits at the end of each stage
+before moving on" + "full autonomy until everything is finished",
+Stage 38 closes via the same 3-clean-gate convention as Stage 35,
+36, and 37.
+
+### Closure timeline
+
+| Gate | Result | Findings | Resolution |
+|------|--------|----------|------------|
+| 1 | CLEAN | 0 findings — preemptive AD_KNOWN_PURE_CALLS registration paid off | Counter 0/3 → 1/3 |
+| 2 | NOT CLEAN | 1 LOW (TyFrame missing from 5 refinement helper arms where TyMemTier participates — pure mechanical parity gap) | Parallel autonomous loops added TyFrame to all 5 arms + _fmt + _is_refinement_container; counter 1/3 → 2/3 after re-audit |
+| 3 (final) | CLEAN | 0 findings; 14/14 Stage 38 tests pass; cross-frame mismatches fire correctly for all 6 from_X and 12 transform wrong-source pairs | Counter 2/3 → 3/3. **STAGE 38 CLOSURE-READY** |
+
+### Stage 38 final scorecard
+
+- **Increments shipped**: Inc 0 (convention) + Inc 1 (TyFrame + 6
+  intro/elim builtins) + Inc 2 (6 cross-frame transforms) + Inc 3
+  (spatial-frame lifecycle dogfood) + Inc 4 (closure).
+- **Audit findings closed**: 1/1 (1 LOW, pre-applied by parallel
+  loop before gate-2 re-audit was needed).
+- **Tests**: 14 in `helixc/tests/test_stage38_frames.py` + 1
+  dogfood-runtime test in `test_reflection.py`.
+- **Self-host gate**: PASS at every Stage 38 commit.
+- **Total Stage 38 surface area**: 12 new typecheck-recognized
+  builtins (3 frames × 2 intro/elim + 6 pairwise transforms), 0
+  new IR opcodes (all 12 lower as identity), 0 new stdlib files,
+  1 new dogfood program.
+
+### Strategic significance
+
+Stage 38's first deliverable is **spatial reference frames**:
+WorldFrame / RobotFrame / CameraFrame, with typechecker-enforced
+cross-frame boundary checks. Real-world AGI workloads (robotics,
+vision, AR/VR, autonomous vehicles) need to track WHICH frame a
+coordinate is in. Stage 38 makes the frame part of the static type
+system; the typechecker catches cross-frame mistakes at compile
+time rather than crashes in production.
+
+The Phase-0 implementation lowers frames as identity (zero runtime
+overhead). Phase-1+ work will add actual transformation matrix math
+for cross-frame transforms.
+
+**STAGE 38 IS CLOSED.** Stage 38 is also the first ROADMAP Phase 2
+stage. Stage 39 (Temporal types) opens next.
