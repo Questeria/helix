@@ -2020,7 +2020,17 @@ class Lowerer:
                         "from_goal", "from_uncertain",
                         # Stage 40 Inc 2 — modal transitions
                         # (epistemic upgrades).
-                        "confirm", "act_on")
+                        "confirm", "act_on",
+                        # Stage 41 Inc 1 — causal/intent
+                        # constructors + eliminators lower as
+                        # identity (Phase-0: causal kind lives
+                        # at the type system level only).
+                        "into_cause", "into_effect",
+                        "into_joint", "into_independent",
+                        "from_cause", "from_effect",
+                        "from_joint", "from_independent",
+                        # Stage 41 Inc 2 — causal transitions.
+                        "propagate", "aggregate", "isolate")
                     and len(expr.args) == 1):
                 return self._lower_expr(expr.args[0])
             # Stage 36 Increment 5: real two-parent provenance via

@@ -113,6 +113,13 @@ AD_KNOWN_PURE_CALLS = {
     "into_known", "into_believed", "into_goal", "into_uncertain",
     "from_known", "from_believed", "from_goal", "from_uncertain",
     "confirm", "act_on",
+    # Stage 41 Inc 1 + Inc 2 — causal/intent identity-lowerings
+    # (4 kinds × intro/elim = 8 + 3 transitions = 11). Phase-0
+    # pure-identity at IR. Composes with the 4-stack quartet —
+    # `Known<Cause<f32>>` differentiates same as raw f32.
+    "into_cause", "into_effect", "into_joint", "into_independent",
+    "from_cause", "from_effect", "from_joint", "from_independent",
+    "propagate", "aggregate", "isolate",
     # Stage 36 Increment 9 post-Inc-8 audit C2 LOW fix: register the
     # boolean-algebra builtins as AD-pure. They're all integer-valued
     # (so the AD derivative is 0 for differentiable use cases), but
@@ -203,6 +210,12 @@ _FRAME_IDENTITY_AD_NAMES = frozenset({
     "into_known", "into_believed", "into_goal", "into_uncertain",
     "from_known", "from_believed", "from_goal", "from_uncertain",
     "confirm", "act_on",
+    # Stage 41 Inc 1 + Inc 2 — causal/intent kinds: 4 intro + 4
+    # elim + 3 transitions = 11 names. Same identity chain rule
+    # as the prior 4 wrapper families.
+    "into_cause", "into_effect", "into_joint", "into_independent",
+    "from_cause", "from_effect", "from_joint", "from_independent",
+    "propagate", "aggregate", "isolate",
 })
 
 

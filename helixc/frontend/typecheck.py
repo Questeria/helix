@@ -281,6 +281,26 @@ class TyModal(Type):
 
 
 @dataclass(frozen=True)
+class TyCausal(Type):
+    """Stage 41 — a value tagged with a causal/intent kind:
+    Cause / Effect / Joint / Independent. Real-world AGI reasoning
+    needs to track WHY something is true beyond observation. The
+    robot reaching position X is a Cause if it triggers a
+    downstream plan revision, an Effect if it followed from some
+    upstream decision, a Joint observation if multiple causes
+    contributed, or Independent if causally isolated. AGI that
+    mis-attributes causation makes systematically wrong decisions
+    about which knob to turn next. Cross-causal transitions
+    (`propagate`: Cause -> Effect when applied; `aggregate`:
+    Effect -> Joint when multiple causes contribute; `isolate`:
+    Joint -> Independent when no upstream actually matters) —
+    Stage 41 Inc 2. Composes orthogonally with the 4-stack
+    AGI quartet completed at Stage 40."""
+    kind: str        # "cause", "effect", "joint", "independent"
+    inner: Type
+
+
+@dataclass(frozen=True)
 class TySkill(Type):
     """Skill<F> — a learned procedure with a known difficulty. Produced by
     `learn_to`; called like a function. The runtime maintains a registry
@@ -1209,6 +1229,17 @@ class TypeChecker:
             if ty.base in modal_map and len(ty.args) == 1:
                 return TyModal(kind=modal_map[ty.base],
                                inner=self._resolve_type(ty.args[0], scope))
+            # Stage 41 Inc 1 — causal wrappers: Cause<T> / Effect<T> /
+            # Joint<T> / Independent<T>. Mirrors TyModal.
+            causal_map = {
+                "Cause":       "cause",
+                "Effect":      "effect",
+                "Joint":       "joint",
+                "Independent": "independent",
+            }
+            if ty.base in causal_map and len(ty.args) == 1:
+                return TyCausal(kind=causal_map[ty.base],
+                                inner=self._resolve_type(ty.args[0], scope))
             # Stage 28 — user-defined parametric struct (Audit 28.8 A3/B1).
             # If `ty.base` is a known generic struct AND the arity matches,
             # resolve `Pt<i32>` -> `TyStruct("Pt__i32")` so distinct
@@ -2003,6 +2034,11 @@ class TypeChecker:
         "from_known", "from_believed", "from_goal", "from_uncertain",
         # Stage 40 Inc 2 — modal transitions (epistemic upgrades).
         "confirm", "act_on",
+        # Stage 41 Inc 1 — causal constructors + eliminators.
+        "into_cause", "into_effect", "into_joint", "into_independent",
+        "from_cause", "from_effect", "from_joint", "from_independent",
+        # Stage 41 Inc 2 — causal transitions.
+        "propagate", "aggregate", "isolate",
         "grad", "grad_rev", "grad_rev_all",
         "quote", "splice", "splice_f", "splice_f64",
         "modify", "modify_f", "modify_f64",
@@ -3552,6 +3588,35 @@ class TypeChecker:
                         ("goal", "known"):
                             "use `act_on(g)` — the audited "
                             "Goal -> Known epistemic upgrade",
+                        # Stage 40 closure gate-3 silent-failure LOW
+                        # fix: restore the sharper Uncertain-source
+                        # framing the gate-1 F1 had — Uncertain
+                        # upgrades are not just "no transition yet",
+                        # they're "the AI-safety property of Stage 40
+                        # says you cannot do this without an outside
+                        # observation". The generic "request a
+                        # future-stage spec" fallback misled
+                        # contributors about Stage 40's actual
+                        # semantics. Phase-0 deliberately ships NO
+                        # Uncertain -> X transitions; this is by
+                        # design, not a product limitation.
+                        ("uncertain", "known"):
+                            "resolve uncertainty via outside "
+                            "observation BEFORE the value enters "
+                            "the type system as Known; an unwrap-"
+                            "rewrap is not an observation and "
+                            "cannot manufacture epistemic "
+                            "certainty",
+                        ("uncertain", "believed"):
+                            "form the belief via inference from "
+                            "non-Uncertain facts; Uncertain values "
+                            "gate info-gathering actions, they do "
+                            "not seed beliefs by themselves",
+                        ("uncertain", "goal"):
+                            "the planner sets a Goal independently "
+                            "of any Uncertain<T>; an unwrap-rewrap "
+                            "implies the goal came from uncertainty, "
+                            "which is a category mistake",
                     }
                     # Stage 40 closure gate-2 M1 fix (MEDIUM conf
                     # 85): only fire the laundering diagnostic when
@@ -3561,12 +3626,34 @@ class TypeChecker:
                     # F1 "launders" message would be semantically
                     # false (no value was ever wrapped) and would
                     # mislead the user away from the real bug.
+                    #
+                    # Stage 40 closure gate-3 HIGH cross-confirmed
+                    # fix (type-design H1 conf 86 + code-review
+                    # MEDIUM-1 conf 82): the F1 guard inspects the
+                    # INNER call's syntactic name without checking
+                    # `_shadowed_builtin_names`. When a user shadows
+                    # `from_X`, the H2 shadow diagnostic fires AT
+                    # the fn-decl site AND the launder guard fires
+                    # on top — violating H2's "1 + 0 noise"
+                    # invariant. Skip the launder check when the
+                    # inner callee name has been shadowed (the H2
+                    # cascade-suppression already fires for the
+                    # bare-name dispatch path; the launder guard
+                    # has to mirror that discipline).
+                    inner_is_shadowed = (
+                        len(expr.args) >= 1
+                        and isinstance(expr.args[0], A.Call)
+                        and isinstance(expr.args[0].callee, A.Name)
+                        and expr.args[0].callee.name
+                            in self._shadowed_builtin_names
+                    )
                     if (len(expr.args) >= 1
                             and isinstance(expr.args[0], A.Call)
                             and isinstance(expr.args[0].callee, A.Name)
                             and expr.args[0].callee.name
                                 in _modal_elim_kind
-                            and not isinstance(arg_tys[0], TyUnknown)):
+                            and not isinstance(arg_tys[0], TyUnknown)
+                            and not inner_is_shadowed):
                         source_kind = _modal_elim_kind[
                             expr.args[0].callee.name]
                         if source_kind != target_kind:
@@ -3647,6 +3734,124 @@ class TypeChecker:
                             and arg_tys[0].kind == src_kind):
                         return TyModal(kind=dst_kind,
                                        inner=arg_tys[0].inner)
+                    self.errors.append(TypeError_(
+                        f"{bn}() requires "
+                        f"{src_kind.capitalize()}<T>, got "
+                        f"{self._fmt(arg_tys[0])}",
+                        expr.span,
+                    ))
+                    return TyUnknown(hint=bn)
+                # Stage 41 Inc 1 — causal constructors + eliminators.
+                _causal_intro = {
+                    "into_cause":       "cause",
+                    "into_effect":      "effect",
+                    "into_joint":       "joint",
+                    "into_independent": "independent",
+                }
+                _causal_elim_kind = {
+                    "from_cause":       "cause",
+                    "from_effect":      "effect",
+                    "from_joint":       "joint",
+                    "from_independent": "independent",
+                }
+                _causal_upgrade_hint = {
+                    ("cause", "effect"):
+                        "use `propagate(c)` — the audited "
+                        "Cause -> Effect causal transition",
+                    ("effect", "joint"):
+                        "use `aggregate(e)` — the audited "
+                        "Effect -> Joint causal aggregation",
+                    ("joint", "independent"):
+                        "use `isolate(j)` — the audited "
+                        "Joint -> Independent causal collapse",
+                }
+                if bn in _causal_intro:
+                    if len(arg_tys) != 1:
+                        self.errors.append(TypeError_(
+                            f"{bn}() takes 1 argument, got {len(arg_tys)}",
+                            expr.span,
+                        ))
+                        return TyUnknown(hint=bn)
+                    target_kind = _causal_intro[bn]
+                    # Stage 40 F1 lesson applied preemptively:
+                    # reject direct cross-causal laundering
+                    # (`into_X(from_Y(v))` with X != Y), with
+                    # kind-specific hint pointing at the audited
+                    # transition or noting Phase-0 deferral.
+                    if (len(expr.args) >= 1
+                            and isinstance(expr.args[0], A.Call)
+                            and isinstance(expr.args[0].callee, A.Name)
+                            and expr.args[0].callee.name
+                                in _causal_elim_kind
+                            and not isinstance(arg_tys[0], TyUnknown)):
+                        source_kind = _causal_elim_kind[
+                            expr.args[0].callee.name]
+                        if source_kind != target_kind:
+                            upgrade_hint = _causal_upgrade_hint.get(
+                                (source_kind, target_kind))
+                            if upgrade_hint:
+                                hint = upgrade_hint
+                            else:
+                                hint = (
+                                    "Phase-0 has no "
+                                    f"{source_kind.capitalize()} "
+                                    f"-> {target_kind.capitalize()} "
+                                    "transition; if this direction "
+                                    "is semantically meaningful, "
+                                    "request a future-stage spec "
+                                    "and keep the value in its "
+                                    "current causal kind until then"
+                                )
+                            self.errors.append(TypeError_(
+                                f"{bn}(from_{source_kind}(...)) "
+                                f"launders a "
+                                f"{source_kind.capitalize()}<T> "
+                                f"into "
+                                f"{target_kind.capitalize()}<T> "
+                                f"with no causal-transition "
+                                f"audit.",
+                                expr.span,
+                                hint=hint,
+                            ))
+                            return TyUnknown(hint=bn)
+                    return TyCausal(kind=target_kind,
+                                    inner=arg_tys[0])
+                if bn in _causal_elim_kind:
+                    if len(arg_tys) != 1:
+                        self.errors.append(TypeError_(
+                            f"{bn}() takes 1 argument, got {len(arg_tys)}",
+                            expr.span,
+                        ))
+                        return TyUnknown(hint=bn)
+                    want = _causal_elim_kind[bn]
+                    if (isinstance(arg_tys[0], TyCausal)
+                            and arg_tys[0].kind == want):
+                        return arg_tys[0].inner
+                    self.errors.append(TypeError_(
+                        f"{bn}() requires "
+                        f"{want.capitalize()}<T>, got "
+                        f"{self._fmt(arg_tys[0])}",
+                        expr.span,
+                    ))
+                    return TyUnknown(hint=bn)
+                # Stage 41 Inc 2 — causal transitions.
+                _causal_transitions = {
+                    "propagate": ("cause",  "effect"),
+                    "aggregate": ("effect", "joint"),
+                    "isolate":   ("joint",  "independent"),
+                }
+                if bn in _causal_transitions:
+                    if len(arg_tys) != 1:
+                        self.errors.append(TypeError_(
+                            f"{bn}() takes 1 argument, got {len(arg_tys)}",
+                            expr.span,
+                        ))
+                        return TyUnknown(hint=bn)
+                    src_kind, dst_kind = _causal_transitions[bn]
+                    if (isinstance(arg_tys[0], TyCausal)
+                            and arg_tys[0].kind == src_kind):
+                        return TyCausal(kind=dst_kind,
+                                        inner=arg_tys[0].inner)
                     self.errors.append(TypeError_(
                         f"{bn}() requires "
                         f"{src_kind.capitalize()}<T>, got "
@@ -5096,7 +5301,7 @@ class TypeChecker:
         # TyModal added preemptively to close the H1/F2/F6 lesson
         # before audit time.
         if isinstance(ty, (
-                TyMemTier, TyFrame, TyTemporal, TyModal,
+                TyMemTier, TyFrame, TyTemporal, TyModal, TyCausal,
                 TyDiff, TyLogic, TyQuote,
         )):
             return self._contains_unknown_type(ty.inner)
@@ -5161,8 +5366,15 @@ class TypeChecker:
             return (target.kind == value_ty.kind
                     and self._refinement_shape_exact(
                         value_ty.inner, target.inner))
-        # Stage 40 Inc 1: TyModal preemptive parallel arm.
+        # Stage 40 Inc 1: TyModal preemptive parallel arm
+        # (also covers _refinement_proof_carried arm — both call
+        # sites share the same recursive pattern).
         if isinstance(target, TyModal) and isinstance(value_ty, TyModal):
+            return (target.kind == value_ty.kind
+                    and self._refinement_shape_exact(
+                        value_ty.inner, target.inner))
+        # Stage 41 Inc 1: TyCausal preemptive parallel arm.
+        if isinstance(target, TyCausal) and isinstance(value_ty, TyCausal):
             return (target.kind == value_ty.kind
                     and self._refinement_shape_exact(
                         value_ty.inner, target.inner))
@@ -5834,6 +6046,10 @@ class TypeChecker:
         if isinstance(a, TyModal) and isinstance(b, TyModal):
             return (a.kind == b.kind
                     and self._refinement_shape_exact(a.inner, b.inner))
+        # Stage 41 Inc 1: TyCausal preemptive parallel arm.
+        if isinstance(a, TyCausal) and isinstance(b, TyCausal):
+            return (a.kind == b.kind
+                    and self._refinement_shape_exact(a.inner, b.inner))
         if isinstance(a, TyTensor) and isinstance(b, TyTensor):
             return (len(a.shape) == len(b.shape)
                     and self._refinement_shape_exact(a.dtype, b.dtype)
@@ -5886,6 +6102,9 @@ class TypeChecker:
         # Stage 40 Inc 1: TyModal preemptive parallel arm.
         if isinstance(ty, TyModal):
             return TyModal(ty.kind, self._erase_refinement(ty.inner))
+        # Stage 41 Inc 1: TyCausal preemptive parallel arm.
+        if isinstance(ty, TyCausal):
+            return TyCausal(ty.kind, self._erase_refinement(ty.inner))
         if isinstance(ty, TyTensor):
             return TyTensor(
                 self._erase_refinement(ty.dtype), ty.shape, ty.device,
@@ -6007,6 +6226,9 @@ class TypeChecker:
         # Stage 40 Inc 1: TyModal preemptive parallel arm.
         if isinstance(ty, TyModal):
             return self._contains_refinement(ty.inner, _seen_structs)
+        # Stage 41 Inc 1: TyCausal preemptive parallel arm.
+        if isinstance(ty, TyCausal):
+            return self._contains_refinement(ty.inner, _seen_structs)
         if isinstance(ty, TyTensor):
             return (self._contains_refinement(ty.dtype, _seen_structs)
                     or any(self._contains_refinement(s, _seen_structs)
@@ -6026,9 +6248,11 @@ class TypeChecker:
         # `_join_branch_types` correctly fires the refinement-shape
         # check for temporal-wrapped values across branches.
         # Stage 40 Inc 1: TyModal added preemptively (same rationale).
+        # Stage 41 Inc 1: TyCausal added preemptively (same rationale).
         return isinstance(ty, (
             TyArray, TyTuple, TyRef, TyPtr, TyFn, TyDiff, TyLogic, TyQuote,
-            TyMemTier, TyFrame, TyTemporal, TyModal, TyTensor, TyTile,
+            TyMemTier, TyFrame, TyTemporal, TyModal, TyCausal,
+            TyTensor, TyTile,
         ))
 
     def _contains_refined_function(self, ty: Type) -> bool:
@@ -6058,6 +6282,9 @@ class TypeChecker:
             return self._contains_refined_function(ty.inner)
         # Stage 40 Inc 1: TyModal preemptive parallel arm.
         if isinstance(ty, TyModal):
+            return self._contains_refined_function(ty.inner)
+        # Stage 41 Inc 1: TyCausal preemptive parallel arm.
+        if isinstance(ty, TyCausal):
             return self._contains_refined_function(ty.inner)
         if isinstance(ty, TyTensor):
             return (self._contains_refined_function(ty.dtype)
@@ -7060,6 +7287,11 @@ class TypeChecker:
             return a.kind == b.kind and self._compatible(a.inner, b.inner)
         if isinstance(a, TyModal) or isinstance(b, TyModal):
             return False
+        # Stage 41 Inc 1: TyCausal preemptive parallel arm.
+        if isinstance(a, TyCausal) and isinstance(b, TyCausal):
+            return a.kind == b.kind and self._compatible(a.inner, b.inner)
+        if isinstance(a, TyCausal) or isinstance(b, TyCausal):
+            return False
         # Audit 28.8 cycle 2 B:C3: Quote<T> ~ Quote<U> iff T ~ U.
         # Reject Quote<T> ~ T (raw value passed where Quote expected)
         # — that was the silent acceptance path pre-fix.
@@ -7233,6 +7465,10 @@ class TypeChecker:
         if isinstance(t, TyModal):
             cap = {"known": "Known", "believed": "Believed",
                    "goal": "Goal", "uncertain": "Uncertain"}
+            return f"{cap.get(t.kind, t.kind)}<{self._fmt(t.inner)}>"
+        if isinstance(t, TyCausal):
+            cap = {"cause": "Cause", "effect": "Effect",
+                   "joint": "Joint", "independent": "Independent"}
             return f"{cap.get(t.kind, t.kind)}<{self._fmt(t.inner)}>"
         if isinstance(t, TySkill):
             tag = f' "{t.task}"' if t.task else ""

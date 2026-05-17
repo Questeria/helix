@@ -101,6 +101,11 @@ DEMOS: dict[str, dict] = {
         "title": "Modal/epistemic lifecycle reasoner (Stage 40 Inc 3)",
         "expects": "exit code 42  (3 goals achieved + 3 beliefs confirmed + Uncertain sanity + Known<Past<i32>> cross-stage composition)",
     },
+    "causal": {
+        "file": "dogfood_14_causal_lifecycle.hx",
+        "title": "Causal/intent lifecycle reasoner (Stage 41 Inc 3)",
+        "expects": "exit code 42  (3 propositions cycle Cause->Effect->Joint->Independent + Known<Cause<i32>> 5-stack composition)",
+    },
 }
 
 
