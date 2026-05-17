@@ -143,6 +143,98 @@ def test_stage38_inc1_all_6_pair_combinations():
             f"{expected_want!r}, got {[str(e) for e in errs]}"
 
 
+# Stage 38 Inc 2 — cross-frame transforms (6 pairwise directions).
+# All lower to identity at IR; the wrapper-shift tracks intent only.
+
+
+def test_stage38_inc2_builtins_registered():
+    """All 6 new cross-frame transform builtins are in _BUILTIN_NAMES."""
+    tc = TypeChecker(parse("fn main() -> i32 { 0 }"))
+    for name in ("world_to_robot", "robot_to_world",
+                 "robot_to_camera", "camera_to_robot",
+                 "world_to_camera", "camera_to_world"):
+        assert name in tc._BUILTIN_NAMES, \
+            f"{name} not registered as builtin"
+
+
+def test_stage38_inc2_world_to_robot_round_trip_runs():
+    """world_to_robot then back via from_robot yields the original
+    payload (Phase-0: identity-lowered)."""
+    src = """
+fn main() -> i32 {
+    let w: WorldFrame<i32> = into_world(42);
+    let r: RobotFrame<i32> = world_to_robot(w);
+    from_robot(r)
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    assert typecheck(prog) == [], \
+        f"unexpected errors: {[str(e) for e in typecheck(prog)]}"
+    elf = compile_module_to_elf(lower(prog))
+    assert _run_elf(elf) == 42
+
+
+def test_stage38_inc2_world_camera_chain_round_trips():
+    """Chain WorldFrame → CameraFrame → RobotFrame → WorldFrame
+    via 3 cross-frame transforms; identity payload survives."""
+    src = """
+fn main() -> i32 {
+    let w0: WorldFrame<i32> = into_world(42);
+    let c: CameraFrame<i32> = world_to_camera(w0);
+    let r: RobotFrame<i32> = camera_to_robot(c);
+    let w1: WorldFrame<i32> = robot_to_world(r);
+    from_world(w1)
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    assert typecheck(prog) == []
+    elf = compile_module_to_elf(lower(prog))
+    assert _run_elf(elf) == 42
+
+
+def test_stage38_inc2_world_to_robot_rejects_robot_input():
+    """world_to_robot requires WorldFrame input; RobotFrame must fail
+    typecheck."""
+    src = """
+fn main() -> i32 {
+    let r: RobotFrame<i32> = into_robot(42);
+    let r2: RobotFrame<i32> = world_to_robot(r);
+    from_robot(r2)
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    errs = typecheck(prog)
+    assert any("WorldFrame" in str(e) and "world_to_robot" in str(e)
+               for e in errs), \
+        f"expected world_to_robot WorldFrame error, got {[str(e) for e in errs]}"
+
+
+def test_stage38_inc2_all_6_transforms_reject_wrong_source():
+    """Each cross-frame transform rejects the 2 wrong source frames."""
+    cases = [
+        ("world_to_robot",  "into_robot",  "WorldFrame"),
+        ("world_to_robot",  "into_camera", "WorldFrame"),
+        ("robot_to_world",  "into_world",  "RobotFrame"),
+        ("robot_to_world",  "into_camera", "RobotFrame"),
+        ("robot_to_camera", "into_world",  "RobotFrame"),
+        ("robot_to_camera", "into_camera", "RobotFrame"),
+        ("camera_to_robot", "into_world",  "CameraFrame"),
+        ("camera_to_robot", "into_robot",  "CameraFrame"),
+        ("world_to_camera", "into_robot",  "WorldFrame"),
+        ("world_to_camera", "into_camera", "WorldFrame"),
+        ("camera_to_world", "into_world",  "CameraFrame"),
+        ("camera_to_world", "into_robot",  "CameraFrame"),
+    ]
+    for transform, wrong_into, expected_want in cases:
+        src = f"fn main() -> i32 {{ from_world({transform}({wrong_into}(42))) }}"
+        prog = parse(src, include_stdlib=True)
+        errs = typecheck(prog)
+        assert any(expected_want in str(e) and transform in str(e)
+                   for e in errs), \
+            f"{transform}({wrong_into}(42)) should reject with " \
+            f"{expected_want!r} naming {transform}, got {[str(e) for e in errs]}"
+
+
 if __name__ == "__main__":
     import pytest
     raise SystemExit(pytest.main([__file__, "-v"]))

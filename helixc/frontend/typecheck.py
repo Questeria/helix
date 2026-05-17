@@ -1885,6 +1885,10 @@ class TypeChecker:
         # Stage 38 Inc 1 — spatial-frame constructors + eliminators.
         "into_world", "into_robot", "into_camera",
         "from_world", "from_robot", "from_camera",
+        # Stage 38 Inc 2 — cross-frame transforms.
+        "world_to_robot", "robot_to_world",
+        "robot_to_camera", "camera_to_robot",
+        "world_to_camera", "camera_to_world",
         "grad", "grad_rev", "grad_rev_all",
         "quote", "splice", "splice_f", "splice_f64",
         "modify", "modify_f", "modify_f64",
@@ -3197,6 +3201,34 @@ class TypeChecker:
                     self.errors.append(TypeError_(
                         f"{bn}() requires "
                         f"{want.capitalize()}Frame<T>, got "
+                        f"{self._fmt(arg_tys[0])}",
+                        expr.span,
+                    ))
+                    return TyUnknown(hint=bn)
+                # Stage 38 Inc 2 — cross-frame transform builtins. All 6
+                # pairwise directions (3 frames × 2 directions per pair).
+                # Lower as identity at IR (Phase-0: actual transformation
+                # math is Phase-1+; the wrapper-shift tracks intent only).
+                # The typechecker enforces the input is in the SOURCE
+                # frame and the output is in the TARGET frame so cross-
+                # frame mistakes are caught at compile time.
+                _frame_transforms = {
+                    "world_to_robot":   ("world",  "robot"),
+                    "robot_to_world":   ("robot",  "world"),
+                    "robot_to_camera":  ("robot",  "camera"),
+                    "camera_to_robot":  ("camera", "robot"),
+                    "world_to_camera":  ("world",  "camera"),
+                    "camera_to_world":  ("camera", "world"),
+                }
+                if bn in _frame_transforms and len(arg_tys) == 1:
+                    src_frame, dst_frame = _frame_transforms[bn]
+                    if (isinstance(arg_tys[0], TyFrame)
+                            and arg_tys[0].frame == src_frame):
+                        return TyFrame(frame=dst_frame,
+                                       inner=arg_tys[0].inner)
+                    self.errors.append(TypeError_(
+                        f"{bn}() requires "
+                        f"{src_frame.capitalize()}Frame<T>, got "
                         f"{self._fmt(arg_tys[0])}",
                         expr.span,
                     ))

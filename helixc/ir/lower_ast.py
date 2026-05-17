@@ -1991,7 +1991,13 @@ class Lowerer:
                         "unwrap_semantic", "unwrap_procedural",
                         "consolidate", "recall",
                         "into_world", "into_robot", "into_camera",
-                        "from_world", "from_robot", "from_camera")
+                        "from_world", "from_robot", "from_camera",
+                        # Stage 38 Inc 2 — cross-frame transforms
+                        # also lower as identity (Phase-0: actual
+                        # transform math is Phase-1+).
+                        "world_to_robot", "robot_to_world",
+                        "robot_to_camera", "camera_to_robot",
+                        "world_to_camera", "camera_to_world")
                     and len(expr.args) == 1):
                 return self._lower_expr(expr.args[0])
             # Stage 36 Increment 5: real two-parent provenance via

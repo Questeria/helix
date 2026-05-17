@@ -61,15 +61,45 @@ Scope:
 - All 6 added to AD_KNOWN_PURE_CALLS for grad/grad_rev let-erasure
   compatibility (no Phase-1 surprise like Stage 37 closure gate-1)
 
-## Increment 2+ — Planned Sequence
+## Increment 2 — Cross-Frame Transforms (LANDED)
 
-- **Inc 2**: Cross-frame transform builtins:
-  - `to_robot(w: WorldFrame<T>) -> RobotFrame<T>` (world → robot)
-  - `to_world(r: RobotFrame<T>) -> WorldFrame<T>` (robot → world)
-  - `to_camera(r: RobotFrame<T>) -> CameraFrame<T>` (robot → camera)
-  - `to_robot_from_camera(c: CameraFrame<T>) -> RobotFrame<T>`
-  - All lower as identity (Phase-0: actual transformation math is
-    Phase-1+; the wrapper only tracks intent)
+Six pairwise cross-frame transform builtins (every src→dst direction
+between the 3 frames). Naming pivot from the planned spec: shipped as
+the symmetric `{src}_to_{dst}` pattern instead of the original 4
+asymmetric names (`to_robot`, `to_world`, `to_camera`,
+`to_robot_from_camera`). The pivot gives a complete pairwise basis
+(6 = 3 × 2 directions) and removes the special-cased asymmetric
+camera↔world hop that the original plan would have required composing
+through robot.
+
+Shipped builtins:
+- `world_to_robot(w: WorldFrame<T>) -> RobotFrame<T>`
+- `robot_to_world(r: RobotFrame<T>) -> WorldFrame<T>`
+- `robot_to_camera(r: RobotFrame<T>) -> CameraFrame<T>`
+- `camera_to_robot(c: CameraFrame<T>) -> RobotFrame<T>`
+- `world_to_camera(w: WorldFrame<T>) -> CameraFrame<T>`
+- `camera_to_world(c: CameraFrame<T>) -> WorldFrame<T>`
+
+All 6 lower as identity at IR (Phase-0: actual transform math is
+Phase-1+; the wrapper-shift tracks intent only). All 6 added to
+`AD_KNOWN_PURE_CALLS` for grad/grad_rev let-erasure compatibility
+(matches Inc 1 prophylactic to avoid the Stage 37 closure gate-1
+finding). All 6 typecheck-enforced: passing the wrong source frame
+fires a diagnostic naming the transform and the required frame.
+
+Test coverage (5 new tests, 13 total in `test_stage38_frames.py`):
+- `test_stage38_inc2_builtins_registered` — all 6 in `_BUILTIN_NAMES`.
+- `test_stage38_inc2_world_to_robot_round_trip_runs` — identity
+  payload survives `into_world → world_to_robot → from_robot`.
+- `test_stage38_inc2_world_camera_chain_round_trips` — 4-hop chain
+  WorldFrame → CameraFrame → RobotFrame → WorldFrame.
+- `test_stage38_inc2_world_to_robot_rejects_robot_input` — happy
+  path of the diagnostic.
+- `test_stage38_inc2_all_6_transforms_reject_wrong_source` — full
+  12-case wrong-source matrix (each transform × 2 wrong sources).
+
+## Increment 3+ — Planned Sequence
+
 - **Inc 3**: Dogfood — `dogfood_11_spatial_frames.hx` showing a
   point that flows WorldFrame → RobotFrame → CameraFrame and back.
 - **Inc 4-6**: Closure audit gate sequence (3-clean-gate).

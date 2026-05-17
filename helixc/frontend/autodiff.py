@@ -87,6 +87,11 @@ AD_KNOWN_PURE_CALLS = {
     # finding (S37-CLEAN1-001) doesn't recur for frames.
     "into_world", "into_robot", "into_camera",
     "from_world", "from_robot", "from_camera",
+    # Stage 38 Inc 2 — cross-frame transforms (all 6 pairwise
+    # directions). Also identity-lowered; preemptively AD-pure.
+    "world_to_robot", "robot_to_world",
+    "robot_to_camera", "camera_to_robot",
+    "world_to_camera", "camera_to_world",
     # Stage 36 Increment 9 post-Inc-8 audit C2 LOW fix: register the
     # boolean-algebra builtins as AD-pure. They're all integer-valued
     # (so the AD derivative is 0 for differentiable use cases), but
