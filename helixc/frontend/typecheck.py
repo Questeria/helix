@@ -3371,14 +3371,38 @@ class TypeChecker:
                     # `WorkingMem<WorkingMem<i32>>` was silently
                     # accepted (gate-1 M1 across all 5 wrapper
                     # families). Closes the symmetric pattern.
+                    # Stage 43 closure gate-1 MEDIUM fix: name the
+                    # tier transitions explicitly (consolidate /
+                    # recall / learn_to) to give tier users parity
+                    # with the frame/temporal/modal/causal hints.
                     if isinstance(arg_tys[0], TyMemTier):
+                        target_tier = _tier_intro_elim[bn]
+                        source_tier = arg_tys[0].tier
+                        if source_tier == "episodic" and target_tier == "semantic":
+                            transition_hint = (
+                                "use `consolidate(m)` — the audited "
+                                "Episodic -> Semantic transition"
+                            )
+                        elif source_tier == "semantic" and target_tier == "working":
+                            transition_hint = (
+                                "use `recall(m)` — the audited "
+                                "Semantic -> Working transition"
+                            )
+                        else:
+                            transition_hint = (
+                                "Phase-0 tier transitions: "
+                                "`consolidate(EpisodicMem<T>) "
+                                "-> SemanticMem<T>` and "
+                                "`recall(SemanticMem<T>) -> "
+                                "WorkingMem<T>`; for other "
+                                "directions, unwrap with "
+                                f"unwrap_{source_tier} first"
+                            )
                         self.errors.append(TypeError_(
                             f"{bn}() received an already-wrapped "
                             f"{self._fmt(arg_tys[0])}; intro "
                             f"builtins are not idempotent — "
-                            f"double-wrapping changes the type's "
-                            f"semantic meaning. If you mean to "
-                            f"re-tag, unwrap first.",
+                            f"{transition_hint}.",
                             expr.span,
                         ))
                         return TyUnknown(hint=bn)
@@ -3426,16 +3450,33 @@ class TypeChecker:
                     # Stage 43 Inc 1 M1 fix: reject already-wrapped
                     # frame value. `into_world(WorldFrame<i32>)` ->
                     # `WorldFrame<WorldFrame<i32>>` silently accepted
-                    # pre-fix. Use a cross-frame transform if you want
-                    # to change frames, not into_X(into_X(...)).
+                    # pre-fix.
+                    # Stage 43 closure gate-1 MEDIUM fix: compute the
+                    # direction-correct transition for the actual
+                    # (source, target) frame pair rather than hard-
+                    # coding `world_to_robot` (which goes the wrong
+                    # direction half the time).
                     if isinstance(arg_tys[0], TyFrame):
+                        target_frame = _frame_intro[bn]
+                        source_frame = arg_tys[0].frame
+                        if source_frame == target_frame:
+                            transition_hint = (
+                                f"unwrap with from_{source_frame} "
+                                f"first if you really want to "
+                                f"re-tag the value"
+                            )
+                        else:
+                            transition_hint = (
+                                f"use `{source_frame}_to_"
+                                f"{target_frame}` — the "
+                                f"direction-correct cross-frame "
+                                f"transform for this pair"
+                            )
                         self.errors.append(TypeError_(
                             f"{bn}() received an already-wrapped "
                             f"{self._fmt(arg_tys[0])}; intro "
-                            f"builtins are not idempotent — use a "
-                            f"cross-frame transform (e.g. "
-                            f"world_to_robot) to change frames, or "
-                            f"unwrap first.",
+                            f"builtins are not idempotent — "
+                            f"{transition_hint}.",
                             expr.span,
                         ))
                         return TyUnknown(hint=bn)

@@ -200,3 +200,97 @@ fn main() -> i32 {
     errs = typecheck(prog)
     assert errs == [], \
         f"from_X(into_X(v)) is not double-wrap; got {[str(e) for e in errs]}"
+
+
+# ============================================================
+# Stage 43 closure gate-1 MEDIUM backfills:
+# - Frame double-wrap hint must be direction-correct.
+# - Tier double-wrap hint must name concrete transitions.
+# ============================================================
+
+
+def test_stage43_gate1_frame_double_wrap_hint_is_direction_correct():
+    """`into_world(RobotFrame<i32>)` must suggest `robot_to_world`,
+    not `world_to_robot` (the wrong-direction hard-coded example
+    pre-fix)."""
+    src = """
+fn main() -> i32 {
+    let r: RobotFrame<i32> = into_robot(7);
+    from_world(into_world(r));
+    0
+}
+"""
+    prog = parse(src, include_stdlib=False)
+    errs = typecheck(prog)
+    matching = [str(e) for e in errs
+                if "not idempotent" in str(e) and "into_world" in str(e)]
+    assert matching, f"expected into_world double-wrap diag, got {[str(e) for e in errs]}"
+    err_text = matching[0]
+    assert "robot_to_world" in err_text, \
+        f"frame double-wrap hint must name the direction-correct " \
+        f"transition `robot_to_world` for (robot -> world); got " \
+        f"{err_text!r}"
+
+
+def test_stage43_gate1_frame_double_wrap_same_kind_hint_says_unwrap():
+    """`into_world(WorldFrame<i32>)` (same source + target) has no
+    legitimate transition — the hint must point at unwrap, not
+    at a non-existent self-transform like `world_to_world`."""
+    src = """
+fn main() -> i32 {
+    let w: WorldFrame<i32> = into_world(7);
+    from_world(into_world(w));
+    0
+}
+"""
+    prog = parse(src, include_stdlib=False)
+    errs = typecheck(prog)
+    matching = [str(e) for e in errs
+                if "not idempotent" in str(e) and "into_world" in str(e)]
+    assert matching
+    err_text = matching[0]
+    assert "world_to_world" not in err_text, \
+        f"must not suggest nonsense self-transition; got {err_text!r}"
+    assert "from_world" in err_text or "unwrap" in err_text, \
+        f"same-kind hint must point at unwrap; got {err_text!r}"
+
+
+def test_stage43_gate1_tier_double_wrap_episodic_to_semantic_hint():
+    """`into_semantic(EpisodicMem<i32>)` must suggest `consolidate`,
+    the audited Episodic -> Semantic transition."""
+    src = """
+fn main() -> i32 {
+    let e: EpisodicMem<i32> = into_episodic(7);
+    unwrap_semantic(into_semantic(e));
+    0
+}
+"""
+    prog = parse(src, include_stdlib=False)
+    errs = typecheck(prog)
+    matching = [str(e) for e in errs
+                if "not idempotent" in str(e) and "into_semantic" in str(e)]
+    assert matching
+    err_text = matching[0]
+    assert "consolidate" in err_text, \
+        f"tier double-wrap Episodic -> Semantic must suggest " \
+        f"`consolidate`; got {err_text!r}"
+
+
+def test_stage43_gate1_tier_double_wrap_semantic_to_working_hint():
+    """`into_working(SemanticMem<i32>)` must suggest `recall`."""
+    src = """
+fn main() -> i32 {
+    let s: SemanticMem<i32> = into_semantic(7);
+    unwrap_working(into_working(s));
+    0
+}
+"""
+    prog = parse(src, include_stdlib=False)
+    errs = typecheck(prog)
+    matching = [str(e) for e in errs
+                if "not idempotent" in str(e) and "into_working" in str(e)]
+    assert matching
+    err_text = matching[0]
+    assert "recall" in err_text, \
+        f"tier double-wrap Semantic -> Working must suggest " \
+        f"`recall`; got {err_text!r}"
