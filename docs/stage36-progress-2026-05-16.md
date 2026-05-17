@@ -760,3 +760,102 @@ gap, not breaks one.
 
 The Inc 9 architectural HIGH backlog is now empty. MEDIUM/LOW audit
 findings remain deferrable to a separate Stage 36 catch-up sweep.
+
+### Inc 9 catch-up sweep — 5 deferred MEDIUM/LOW closed (2026-05-16T21:30Z)
+
+Per the user blanket-autonomy grant ("Do whatever you feel is best,
+you are fully autonomous and have any approval I needs"), the five
+deferred MEDIUM/LOW findings from the post-Inc-8 audit have been
+closed in one catch-up commit. The Stage 36 Inc 9 audit now has zero
+open items across all three lanes.
+
+- **silent-failure B1 MEDIUM** (conf 70): the 11 `_lower_expr`
+  sites in `helixc/ir/lower_ast.py` that used the
+  `if a is None or b is None: return a or b` idiom were silently
+  substituting one operand's SSA value for the binary result when
+  the other side failed to lower. A downstream caller would then
+  dereference a value that was never an arena index (e.g.
+  `register_derivation(broken_l, ok_r)` would return ok_r's SSA
+  value as the "handle", and `parent_left_at(handle)` would walk
+  off the arena edge). All 11 sites now `return None`, so the
+  None propagates up through the lowerer cleanly. Sites touched:
+  and_logic, or_logic, xor_logic, implies_logic, eq_logic,
+  if_logic (3-arg `return t or e`), register_derivation
+  (`return l or r`), fuzzy_and, fuzzy_or, fuzzy_xor,
+  fuzzy_implies. (Same commit.)
+
+- **type-design B1 MEDIUM** (conf 80): `prove(value: T, src: i32)`
+  pre-fix silently flattened `prove(Logic<T>, src)` to the input
+  Logic<T>, dropping the new source tag — a programmer who
+  wrapped twice to record additional evidence lost it. Post-fix,
+  prove() rejects nested Logic with a diagnostic naming the
+  Phase-0 single-tag invariant and pointing at
+  `unwrap_logic(...)` as the workaround. The pre-existing test
+  `test_prove_on_already_logic_is_idempotent` was updated to
+  pin the new rejection (the prior "idempotent" framing was the
+  silent bug, not the contract). 1 new positive-control test in
+  `test_stage36_provenance.py`.
+
+- **type-design B3 MEDIUM** (conf 65): the forward-mode AD
+  chain rule for `prove(value, source)` silently dropped the
+  second arg from the derivative; `prove(x, x)` would compute
+  `d/dx prove(x, x) = 1.0` with no diagnostic, even though the
+  user might have expected the second `x` to contribute. Both
+  `helixc/frontend/autodiff.py` (forward) and
+  `helixc/frontend/autodiff_reverse.py` (reverse) now require
+  `prove`'s source-tag arg to be an `IntLit` in differentiated
+  code; non-literal source tags raise `NotImplementedError`
+  with a message pointing at `register_derivation` for dynamic
+  tags. All in-repo `prove()` calls already use IntLit, so this
+  rejection adds no friction. 2 new regression tests +
+  1 negative-control test (`grad_rev` with literal src still
+  works, returns 1.0 as expected).
+
+- **type-design C2 LOW** (conf 55): `derive`'s typecheck
+  recovery path pre-fix returned `TyLogic(inner=arg_tys[0])` when
+  the first arg was non-Logic — wrapping a non-Logic input into
+  `Logic<NonLogic>` and masking the inner-type mismatch in
+  chained calls. Post-fix, the recovery returns
+  `TyUnknown(hint="derive")` (matching the C1 fix on
+  `unwrap_logic`), keeping the error local. 1 new regression
+  test verifying the error stays at the derive call site and
+  does not cascade into a misleading "Logic<i32>" downstream.
+
+- **code-review B3 MEDIUM** (conf 80): added two
+  finite-difference cross-check tests — `(loss(x+h) - loss(x-h))
+  / 2h` computed in-Helix and compared to `grad_rev(loss)(x)`.
+  Pre-fix, all Stage 36 AD tests compared against analytic
+  expected values only; a chain-rule transpose bug that happened
+  to match the analytic constant at one probe point would have
+  slipped through. The two new tests probe fuzzy_and (constant
+  coefficient 0.5) and fuzzy_implies (non-trivial coefficient
+  -1 + b = -0.7 at b=0.3). FD and AD must agree within 1e-3.
+
+### Inc 9 catch-up tests at commit time
+
+- `python -m pytest helixc/tests/test_provenance.py
+  helixc/tests/test_stage36_provenance.py -q` → **109 passed**
+  (88 pre-catch-up + 7 new catch-up + 14 typecheck-side tests).
+- `python -m pytest helixc/tests/test_autodiff.py
+  helixc/tests/test_autodiff_reverse.py -q` → **69 passed** (no
+  regressions to forward/reverse AD).
+- `python -m pytest helixc/tests/test_typecheck.py -q` →
+  **276 passed** (no regressions to general typechecking).
+- `python -m pytest helixc/tests/test_codegen.py -q
+  -k "stage36 or fuzzy or logic or provenance or arena"` →
+  **26 passed, 961 deselected** (no regression on the touched
+  families).
+
+Self-host gate: PASS (G2..G4 byte-identical sha
+`a6f1ee44eb4418ba296954528d05564f5a37627dc38bb350b2308675d86b8986`
+— same sha as pre-Inc-9-catch-up; the fixes are typecheck-only
+and AD-only, with zero codegen impact).
+
+### Inc 9 status
+
+The Inc 9 architectural HIGH backlog AND the deferred MEDIUM/LOW
+audit findings are now both closed. Stage 36 Inc 9 is COMPLETE.
+Next: pick the next Increment from the "What's left in Stage 36
+(Increment 9+)" menu above — top candidate is auto-registration
+of derivations (combinators auto-write arena entries) since it
+builds directly on the ARENA_PUSH_PAIR opcode that just landed.
