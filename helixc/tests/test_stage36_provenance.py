@@ -1186,6 +1186,97 @@ fn main() -> i32 {
     assert rc == 50, f"expected 10 + 40, got {rc}"
 
 
+# Stage 36 Inc 9 audit A3 (silent-failure HIGH) fix: fuzzy_* inputs
+# clamped to [0, 1] at IR lowering. Pre-fix, out-of-range inputs
+# silently produced nonsense (fuzzy_or(2.0, -1.0) = 3.0). Post-fix,
+# inputs are clamped before the algebraic form so values stay sane.
+
+
+def test_stage36_inc9_fuzzy_and_in_range_unchanged():
+    """Regression: fuzzy_and(0.5, 0.8) still = 0.4 after the
+    clamp wrapper added by A3."""
+    src = """
+fn main() -> i32 {
+    let v: f32 = unwrap_logic(fuzzy_and(prove(0.5_f32, 0), prove(0.8_f32, 0)));
+    if v > 0.39_f32 { if v < 0.41_f32 { 42 } else { 0 } } else { 0 }
+}
+"""
+    assert _stage36_inc6_pipeline(src) == 42
+
+
+def test_stage36_inc9_fuzzy_and_high_input_clamped():
+    """fuzzy_and(2.0, 0.5): pre-fix = 1.0; post-fix clamps 2.0 to
+    1.0 so result = 0.5."""
+    src = """
+fn main() -> i32 {
+    let v: f32 = unwrap_logic(fuzzy_and(prove(2.0_f32, 0), prove(0.5_f32, 0)));
+    if v > 0.49_f32 { if v < 0.51_f32 { 42 } else { 0 } } else { 0 }
+}
+"""
+    assert _stage36_inc6_pipeline(src) == 42
+
+
+def test_stage36_inc9_fuzzy_and_negative_input_clamped():
+    """fuzzy_and(-1.0, 0.5): pre-fix = -0.5; post-fix clamps -1.0
+    to 0.0 so result = 0.0."""
+    src = """
+fn main() -> i32 {
+    let v: f32 = unwrap_logic(fuzzy_and(prove(0.0_f32 - 1.0_f32, 0), prove(0.5_f32, 0)));
+    if v < 0.01_f32 { if v > 0.0_f32 - 0.01_f32 { 42 } else { 0 } } else { 0 }
+}
+"""
+    assert _stage36_inc6_pipeline(src) == 42
+
+
+def test_stage36_inc9_fuzzy_or_high_input_clamped():
+    """fuzzy_or(0.5, 1.5): pre-fix = 0.5 + 1.5 - 0.75 = 1.25;
+    post-fix clamps 1.5 to 1.0 so result = 0.5 + 1.0 - 0.5 = 1.0."""
+    src = """
+fn main() -> i32 {
+    let v: f32 = unwrap_logic(fuzzy_or(prove(0.5_f32, 0), prove(1.5_f32, 0)));
+    if v > 0.99_f32 { if v < 1.01_f32 { 42 } else { 0 } } else { 0 }
+}
+"""
+    assert _stage36_inc6_pipeline(src) == 42
+
+
+def test_stage36_inc9_fuzzy_not_high_input_clamped():
+    """fuzzy_not(2.0): pre-fix = -1.0; post-fix clamps 2.0 to 1.0
+    so result = 0.0."""
+    src = """
+fn main() -> i32 {
+    let v: f32 = unwrap_logic(fuzzy_not(prove(2.0_f32, 0)));
+    if v < 0.01_f32 { 42 } else { 0 }
+}
+"""
+    assert _stage36_inc6_pipeline(src) == 42
+
+
+def test_stage36_inc9_fuzzy_xor_inputs_clamped():
+    """fuzzy_xor(2.0, -1.0): pre-fix = nonsense (1.0 + -1.0 -
+    2*-2 = 4.0); post-fix clamps both to (1.0, 0.0) so result =
+    1.0 + 0.0 - 0 = 1.0."""
+    src = """
+fn main() -> i32 {
+    let v: f32 = unwrap_logic(fuzzy_xor(prove(2.0_f32, 0), prove(0.0_f32 - 1.0_f32, 0)));
+    if v > 0.99_f32 { if v < 1.01_f32 { 42 } else { 0 } } else { 0 }
+}
+"""
+    assert _stage36_inc6_pipeline(src) == 42
+
+
+def test_stage36_inc9_fuzzy_implies_inputs_clamped():
+    """fuzzy_implies(2.0, -1.0): pre-fix = 1 - 2 + 2*-1 = -3;
+    post-fix clamps to (1.0, 0.0) so result = 1 - 1 + 0 = 0."""
+    src = """
+fn main() -> i32 {
+    let v: f32 = unwrap_logic(fuzzy_implies(prove(2.0_f32, 0), prove(0.0_f32 - 1.0_f32, 0)));
+    if v < 0.01_f32 { if v > 0.0_f32 - 0.01_f32 { 42 } else { 0 } } else { 0 }
+}
+"""
+    assert _stage36_inc6_pipeline(src) == 42
+
+
 if __name__ == "__main__":
     import pytest
     raise SystemExit(pytest.main([__file__, "-v"]))

@@ -2089,6 +2089,39 @@ class Lowerer:
                     tir.OpKind.SUB, idx, one,
                     result_ty=tir.TIRScalar("i32"))
                 return _safe_arena_get(base_idx, 1)
+            # Stage 36 Inc 9 A3 (silent-failure HIGH) fix: clamp
+            # fuzzy_* inputs to [0, 1] at IR lowering. Pre-fix, an
+            # out-of-range input (e.g., a=2.0 from optimizer drift)
+            # silently produced fuzzy_or = 3.0 with gradient 2.0 — no
+            # diagnostic, optimizer diverges silently. Post-fix, each
+            # input is clamped to [0, 1] before the algebraic form via
+            # SELECT + CMP_GE/CMP_LE.
+            # The AD chain rules still operate at the AST level and
+            # see the unclamped formula — for in-range inputs (the
+            # common case) gradients are unchanged; for out-of-range
+            # inputs the chain rule gives the unclamped derivative,
+            # which is mathematically useful for SGD to steer inputs
+            # back into [0, 1]. (Strict mathematical-fuzzy semantics
+            # would emit a 0 gradient inside the clamp region; the
+            # Phase-0 tradeoff prefers the "useful for SGD recovery"
+            # behaviour.)
+            def _clamp_unit_f32(x):
+                """Clamp x to [0.0, 1.0] using SELECT + CMP."""
+                zero_f = self.builder.const_float(0.0, dtype="f32")
+                one_f = self.builder.const_float(1.0, dtype="f32")
+                ge_zero = self.builder.emit(
+                    tir.OpKind.CMP_GE, x, zero_f,
+                    result_ty=tir.TIRScalar("i32"))
+                low_clamped = self.builder.emit(
+                    tir.OpKind.SELECT, ge_zero, x, zero_f,
+                    result_ty=tir.TIRScalar("f32"))
+                le_one = self.builder.emit(
+                    tir.OpKind.CMP_LE, low_clamped, one_f,
+                    result_ty=tir.TIRScalar("i32"))
+                return self.builder.emit(
+                    tir.OpKind.SELECT, le_one, low_clamped, one_f,
+                    result_ty=tir.TIRScalar("f32"))
+
             # Stage 36 Increment 6: fuzzy logic operators over
             # Logic<f32>. Product semantics for AND, probabilistic OR.
             # All three lower to MUL/ADD/SUB so the existing AD chain
@@ -2100,6 +2133,8 @@ class Lowerer:
                 b = self._lower_expr(expr.args[1])
                 if a is None or b is None:
                     return a or b
+                a = _clamp_unit_f32(a)
+                b = _clamp_unit_f32(b)
                 # fuzzy_and(a, b) = a * b
                 return self.builder.emit(
                     tir.OpKind.MUL, a, b,
@@ -2111,6 +2146,8 @@ class Lowerer:
                 b = self._lower_expr(expr.args[1])
                 if a is None or b is None:
                     return a or b
+                a = _clamp_unit_f32(a)
+                b = _clamp_unit_f32(b)
                 # fuzzy_or(a, b) = a + b - a*b (probabilistic sum)
                 sum_ab = self.builder.emit(
                     tir.OpKind.ADD, a, b,
@@ -2127,6 +2164,7 @@ class Lowerer:
                 a = self._lower_expr(expr.args[0])
                 if a is None:
                     return a
+                a = _clamp_unit_f32(a)
                 # fuzzy_not(a) = 1.0 - a
                 one = self.builder.const_float(1.0, dtype="f32")
                 return self.builder.emit(
@@ -2141,6 +2179,8 @@ class Lowerer:
                 b = self._lower_expr(expr.args[1])
                 if a is None or b is None:
                     return a or b
+                a = _clamp_unit_f32(a)
+                b = _clamp_unit_f32(b)
                 sum_ab = self.builder.emit(
                     tir.OpKind.ADD, a, b,
                     result_ty=tir.TIRScalar("f32"))
@@ -2162,6 +2202,8 @@ class Lowerer:
                 b = self._lower_expr(expr.args[1])
                 if a is None or b is None:
                     return a or b
+                a = _clamp_unit_f32(a)
+                b = _clamp_unit_f32(b)
                 one = self.builder.const_float(1.0, dtype="f32")
                 one_minus_a = self.builder.emit(
                     tir.OpKind.SUB, one, a,
