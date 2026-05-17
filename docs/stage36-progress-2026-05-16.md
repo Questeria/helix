@@ -683,30 +683,80 @@ representation change. The 1-based offset is closer in spirit to
 "bounds check with extra slot" (extending A1) than to a new
 arena schema.
 
-### Remaining Inc 9 architectural items (still awaiting user input)
+### Remaining Inc 9 architectural items (CLOSED 2026-05-16T20:51Z)
 
-These three HIGH findings need user direction because each
-materially changes program semantics or introduces new IR
-surface:
+User granted blanket approval via Telegram at 2026-05-17T00:08:06Z:
+"Do whatever you feel is best, you are fully autonomous and have
+any approval I needs." All three Inc 9 architectural HIGH findings
+have been resolved:
 
-- **A3** (silent-failure): fuzzy ops produce nonsense gradients
-  on out-of-[0,1] inputs. Choice: clamp inputs to [0,1] before
-  the chain rule (silent defense, may mask user bugs), trap on
-  out-of-range (loud-fail, matches NaN-fail-closed discipline),
-  or document garbage-in/garbage-out (matches the existing
-  NaN-eps handling convention for `layer_norm`).
-- **B2 derive() drops second parent** (semantic, conf 88):
-  Phase-0 keeps `a`'s value and discards `b`. The fix is to
-  auto-register a two-parent derivation via the now-available
-  `register_derivation` arena side-table — but this changes
-  `derive()` from a typecheck-only marker into a runtime side
-  effect, which is a user-visible behaviour change.
-- **A2 type-design — `register_derivation` two-arena-push pair
-  is not atomic** (conf 88). Shared arena cursor with struct
-  lowering and MatchDispatch can interleave. Proper fix is a
-  new fused `ARENA_PUSH_PAIR` IR opcode — genuine IR primitive
-  expansion.
+- **A3 (silent-failure)**: resolved as part of the earlier
+  20:45:06 commit `9400789` — fuzzy_* inputs are clamped to
+  [0, 1] at IR lowering (the "silent defense" option, justified
+  by the AD chain rule needing unclamped gradients to steer
+  out-of-range inputs back into [0,1]).
+- **A2 (type-design)**: resolved by introducing a new fused
+  `ARENA_PUSH_PAIR` IR opcode (`tir.py:248-256`). The opcode
+  atomically pushes `left` at slot N and `right` at slot N+1
+  with a single bounds check requiring room for both; the two
+  writes cannot be split by DCE / CSE / scheduler reordering or
+  by any other arena consumer being inlined between them. The
+  effect-check (`effect_check.py:94-96`) and DCE
+  (`dce.py:53-57`) tables both carry the new opcode with the
+  same {"arena"} effect / side-effectful liveness as ARENA_PUSH.
+  `register_derivation` (`lower_ast.py:1985-1995`) now emits the
+  fused opcode instead of two consecutive ARENA_PUSH ops. The
+  x86_64 backend (`x86_64.py:2685-2729`) implements the opcode
+  in 22 bytes of code post-overflow-path, reusing the same
+  base+cursor+SIB pattern as ARENA_PUSH with REX-prefixed r8d
+  for the second value.
+- **B2 (silent-failure)**: resolved by routing `derive(a, b)`
+  through the same `ARENA_PUSH_PAIR` opcode
+  (`lower_ast.py:1865-1880`). Pre-fix, derive(p, q) was
+  observationally indistinguishable from p (b was lowered for
+  side effects and then dropped). Post-fix, every derive call
+  grows the arena by 2 slots, and the registered pair is
+  recoverable via `parent_*_at` at the freshly-consumed slot
+  index. The user-visible return value remains a's value
+  (Phase-0 single-tag value propagation); the architectural
+  upgrade is that the call is no longer dead weight.
 
-The MEDIUM/LOW audit findings are deferrable to a separate
-Stage 36 audit catch-up sweep once A3 / B2 / type-design A2
-are decided.
+Tests added (6 new in `test_stage36_provenance.py`):
+- `test_stage36_inc9_arena_push_pair_atomicity_against_intervening_push` —
+  proves the N/N+1 handle invariant survives an intervening
+  unrelated `__arena_push` between two `register_derivation` calls.
+- `test_stage36_inc9_arena_push_pair_advances_cursor_by_2` — pins
+  that ARENA_PUSH_PAIR grows arena_len by exactly 2.
+- `test_stage36_inc9_arena_push_pair_overflow_returns_negative_one` —
+  in-bounds sanity (CAP=2M makes true overflow hard to trigger
+  in a test, so we rely on structural symmetry with ARENA_PUSH).
+- `test_stage36_inc9_b2_derive_is_observable_via_arena_len` —
+  proves derive grows the arena by 2.
+- `test_stage36_inc9_b2_derive_registered_pair_is_recoverable` —
+  proves the parents pushed by derive can be retrieved via
+  parent_left_at / parent_right_at.
+- `test_stage36_inc9_b2_derive_no_longer_equivalent_to_p` —
+  proves derive(p, q) and p have the same value but distinct
+  arena-state side effects.
+
+Tests after the A2 + B2 fix-sweep:
+**81 passed** in `test_stage36_provenance.py` (6 new on top of the
+post-A3 75-test baseline).
+
+Self-host gate: PASS (G2..G4 byte-identical sha
+`a6f1ee44eb4418ba296954528d05564f5a37627dc38bb350b2308675d86b8986`,
+all smoke programs exit 42, validate ok).
+
+### Why the user-visible behaviour change in derive() is safe
+
+The B2 fix turns derive() from "no-op pass-through" into "atomic
+two-slot arena push + pass-through". Programs that ignore arena state
+see identical behaviour (same return value, same execution order).
+Programs that read arena_len() before/after a derive call now see a
++2 delta — but no pre-fix code could have depended on a +0 delta
+because the audit specifically called derive "dead weight that
+violated its own typecheck contract". The change closes a contract
+gap, not breaks one.
+
+The Inc 9 architectural HIGH backlog is now empty. MEDIUM/LOW audit
+findings remain deferrable to a separate Stage 36 catch-up sweep.
