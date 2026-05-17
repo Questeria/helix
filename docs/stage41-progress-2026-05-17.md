@@ -105,3 +105,82 @@ level.
 ## Increment 4 - Stage 41 Closure (3/3 clean gates)
 
 Same protocol as Stage 35/36/37/38/39/40.
+
+### Gate 1 (post-Inc-3) — fix sweep landed
+
+3 audit lanes spawned. De-duped findings:
+- **F1 inner_is_shadowed parity (HIGH)** — flagged by all 3
+  lanes (silent-failure F1, type-design F1, code-review M1).
+  The Stage 40 closure gate-3 H1 amendment (skip F1 launder
+  guard when inner from_X is user-shadowed) was missed when
+  copying the guard forward to Stage 41. Without it, shadowing
+  `from_cause` + writing `into_effect(from_cause(c))` produced
+  1 shadow + 1 arg-mismatch + 1 spurious launder = 3 errors
+  (modal version produced 2).
+- **Safety-anchored hints (LOW)** — 6 reverse causal
+  directions (effect->cause, joint->cause, independent->cause,
+  independent->joint, independent->effect, joint->effect) need
+  kind-specific framing instead of the generic "Phase-0 has no
+  X -> Y transition" fallback that misleadingly suggests a
+  future feature when the direction is semantically incoherent.
+- **Dogfood witness strength (LOW-1)** — cross-stack probe
+  used input 1 (degenerate); changed to 7 so identity-laundering
+  bugs that mapped any input to 1 wouldn't silently pass.
+
+Gate-1 fix sweep (commit 246c33f):
+- F1 inner_is_shadowed predicate added at causal site, mirrors
+  modal site verbatim.
+- 6 safety-anchored hints added to `_causal_upgrade_hint`.
+- Dogfood cs probe uses 7 (non-degenerate).
+- 1 regression test pinning F1 parity.
+
+Deferred (multi-stage refactors, all LOW, explicitly out of
+scope mid-stage):
+- LOW-2: rename "aggregate return type" diagnostic strings to
+  disambiguate from the new `aggregate` builtin (~14 sites).
+- LOW-3: rename `_FRAME_IDENTITY_AD_NAMES` to
+  `_IDENTITY_AD_CHAIN_RULE_NAMES` (set now covers 5 wrapper
+  families, only 12 of 45 entries are frames). Multi-stage
+  rename with import lockstep.
+
+### Gate 2 (post-gate-1) — ALL 3 LANES CLEAN
+
+- **silent-failure**: GATE CLEAN. Verified F1 parity fix at
+  line 3828-3841 mirrors modal site line 3643-3656 verbatim.
+  Safety-anchored hints correctly applied. Dogfood cs probe
+  consistent (7 at both production + assertion).
+- **type-design**: GATE CLEAN. TyCausal coverage at 9 TyModal
+  sites verified parallel. 12-combo cross-causal matrix
+  covers all upgrade/downgrade directions.
+- **code-review**: GATE CLEAN. 23 tests pass. Working tree
+  clean at 246c33f. Deferrals documented.
+
+### Gate 3 (post-gate-2) — ALL 3 LANES CLEAN
+
+- **silent-failure**: GATE 3 CLEAN. All TyCausal coverage
+  present; F1 verbatim parity with modal including
+  `inner_is_shadowed`. 4 of 12 cross-causal directions
+  fall through to generic "Phase-0 has no transition"
+  hint — acceptable per gate-1 LOW rubric (only obviously
+  incoherent directions need safety-anchored framing).
+- **type-design**: GATE 3 CLEAN. Full parity scan across 8
+  helpers + AD + IR identity arm shows no asymmetry.
+- **code-review**: GATE 3 CLEAN. 23/23 tests pass. Demo
+  exits 42. No findings at confidence >= 80.
+
+### STAGE 41 CLOSED 2026-05-17 at Inc 4 (3/3 clean audit gates)
+
+5-stack AGI semantic-type quintet complete:
+
+- Stage 37 — memory tier:   WHERE a fact lives.
+- Stage 38 — spatial frame: WHICH coordinate system.
+- Stage 39 — temporal kind: WHEN it was true.
+- Stage 40 — modal kind:    WHY we accept it.
+- Stage 41 — causal kind:   WHY it is true / what it causes.
+
+All five families compose orthogonally at the type level
+(e.g. `Known<Past<Cause<f32>>>` = "I directly observed that
+this past fact was a cause"). 14 dogfood programs total (was
+13). Self-host cascade still byte-identical G2..G4 fixpoint.
+
+Stage 42 opens next per ROADMAP Phase 2.
