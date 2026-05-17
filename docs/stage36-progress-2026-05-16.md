@@ -977,3 +977,125 @@ Two findings deferred from this Inc 11 sweep:
   (same sha as pre-Inc-11 — confirms typecheck + AD changes have
   zero codegen impact).
 - `_bootstrap_cache/` cleared before final gate run.
+
+## Increment 12 catch-up - test coverage for integer-Logic AD guard
+
+History note: this entry was written by a different parallel
+autonomous loop than the one that landed `a76b954` ("Inc 11
+reframe") + `4742128` ("Inc 12: reverse-mode AD integer-Logic
+guard"). The two loops independently converged on the same
+mechanical fix for Inc 11 type-design B2 (silent-zero AD on
+integer-valued boolean Logic ops): introduce
+`AD_INTEGER_VALUED_LOGIC` + `_raise_integer_logic_in_ad` in
+`autodiff.py`, gate forward `_diff_call_chain_rule` on it, and
+mirror the gate in reverse-mode `_propagate`. The parallel loop
+won the commit race and the source-code edits are now at HEAD
+exactly as this loop had drafted them — but with **zero new
+tests**.
+
+This catch-up adds the regression coverage that the
+parallel-loop Inc 11 + Inc 12 commits omitted.
+
+### What landed in the parallel-loop commits
+
+- `a76b954` (Inc 11 reframe): new `AD_INTEGER_VALUED_LOGIC`
+  frozenset (8 integer Logic ops), `_LOGIC_FUZZY_HINTS` dict,
+  `_raise_integer_logic_in_ad(name, mode)` helper, early guard
+  at the top of `_diff_call_chain_rule`. Forward mode fails
+  loud with a fuzzy_* hint instead of falling through to the
+  Stage-35 generic opaque-call NotImplementedError.
+- `4742128` (Inc 12): mirror guard at the top of the `A.Call`
+  arm of `_propagate` in `autodiff_reverse.py`. Imports
+  `AD_INTEGER_VALUED_LOGIC` + `_raise_integer_logic_in_ad` from
+  `autodiff`. Reverse mode now matches forward.
+- Integer Logic ops REMAIN in `AD_KNOWN_PURE_CALLS` so an unused
+  `let _u = and_logic(p, q);` inside a `grad`/`grad_rev` body
+  still passes the let-erasability check — the trap fires only
+  when AD actually tries to differentiate THROUGH the call. This
+  preserves the Inc 9 C2 LOW intent ("boolean Logic combinators
+  don't trip the side-effect trap for unused bindings") while
+  closing Inc 11 B2's diagnostic-quality gap.
+
+### Why the Inc 11 finding's framing was slightly off
+
+Inc 11's B2 finding said the ops "silently return zero". In fact,
+post-Stage-35 they already raised the opaque-call
+`NotImplementedError` (no chain-rule arm matched them). The
+actual gap was that the diagnostic message didn't distinguish
+"integer-valued boolean logic — use fuzzy_*" from "totally
+unknown opaque call — write your own chain rule". A user
+reaching for `and_logic` while wanting a gradient was told to
+"add a chain rule or inline a differentiable helper" when the
+correct guidance is "switch to fuzzy_and." The Inc 11 reframe +
+Inc 12 fixed the diagnostic surface, not the underlying control
+flow.
+
+### Tests added by this catch-up
+
+`helixc/tests/test_stage36_provenance.py` gains 6 tests:
+
+- `test_stage36_inc12_grad_forward_rejects_integer_and_logic` —
+  forward-mode `differentiate(and_logic(x, prove(1, 0)), "x")`
+  raises with `and_logic.*integer-valued.*fuzzy_and`.
+- `test_stage36_inc12_grad_reverse_rejects_integer_or_logic` —
+  reverse-mode twin, `or_logic` with `fuzzy_or` hint.
+- `test_stage36_inc12_grad_reverse_rejects_if_logic_general_hint`
+  — `if_logic` has no 1:1 fuzzy twin; the diagnostic falls
+  through to the general guidance string rather than naming a
+  nonexistent `fuzzy_if`.
+- `test_stage36_inc12_grad_reverse_to_logic_bool_general_hint` —
+  same as above for `to_logic_bool` (discrete, no twin).
+- `test_stage36_inc12_grad_fuzzy_and_unchanged_negative_control`
+  — end-to-end pipeline: `grad_rev(loss)(0.4)` where `loss =
+  fuzzy_and(prove(x, 0), prove(0.5, 0))` still returns 0.5
+  exactly. Pins that the new guard only refuses integer Logic
+  ops, not their fuzzy twins.
+- `test_stage36_inc12_let_erasable_unused_and_logic_still_compiles`
+  — regression guard: `let _u = and_logic(p, q); x` inside a
+  differentiated body still let-erases cleanly (the trap fires
+  only when AD differentiates THROUGH the call, not on the
+  unused-let path). `d/dx(x) = 1.0` returns successfully.
+
+### Inc 12 catch-up verification
+
+- `python -m pytest helixc/tests/test_stage36_provenance.py -q
+  -k "inc12"` → **6 passed in 4s** (the new tests, in isolation).
+- `python -m pytest helixc/tests/test_provenance.py
+  helixc/tests/test_stage36_provenance.py
+  helixc/tests/test_reflection.py::test_dogfood_09_knowledge_graph
+  helixc/tests/test_autodiff.py helixc/tests/test_autodiff_reverse.py
+  helixc/tests/test_typecheck.py -q` → **461 passed in 262s**
+  (455 from the pre-`a76b954` Inc 11 baseline + 6 new). No
+  regressions.
+- `python scripts/stage33_selfhost_gate.py` → **PASS** G2..G4
+  byte-identical sha
+  `a6f1ee44eb4418ba296954528d05564f5a37627dc38bb350b2308675d86b8986`
+  — **same sha as pre-Inc-12** (Inc 11 baseline), confirming AD
+  diagnostic changes have zero codegen impact.
+- `_bootstrap_cache/` cleared before final gate run.
+
+### Inc 12 status
+
+Inc 11 B2 MEDIUM deferral CLOSED at `a76b954` + `4742128`. This
+catch-up commit adds the test pin that the parallel-loop Inc 11
++ Inc 12 commits omitted. Inc 11 A1 HIGH (`Handle<Derivation>`
+nominal newtype) remains deferred as a Phase-0 limitation
+needing nominal-type-system support Helix does not have — that
+one is architectural and stays on the backlog until user
+approval.
+
+Next candidate increments from the "What's left in Stage 36
+(Increment 9+)" menu:
+
+1. (DONE — Inc 9 ARENA_PUSH_PAIR + Inc 9 B2 derive-arena-side-table)
+   Auto-registration of derivations as a representation change is
+   still architectural — needs user approval.
+2. Print / debug observation primitives (`print_provenance`,
+   `trace_evidence`) — Phase-1 cosmetic, self-contained, builds
+   on existing `parent_*_at` + `print_int`/`print_str`.
+3. Multi-parent provenance (N-tag generalization) — modest IR
+   extension on top of the Inc 9 ARENA_PUSH_PAIR opcode.
+4. Multi-output reverse-mode AD — perf win for rule systems with
+   many learnable weights.
+5. JAX-style pytrees — needed for real-shape rule systems but
+   touches the type system.

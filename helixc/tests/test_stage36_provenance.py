@@ -1661,6 +1661,150 @@ fn main() -> i32 {
     assert _stage36_inc6_pipeline(src) == 42
 
 
+# ---------------------------------------------------------------------
+# Stage 36 Increment 12 — close Inc 11 type-design B2 MEDIUM deferral.
+#
+# Integer-valued boolean Logic ops (and_logic/or_logic/not_logic/...)
+# remain in AD_KNOWN_PURE_CALLS so let-inlining of unused bindings
+# does not trap, but a *differentiated* call site has no chain rule
+# and pre-fix silently returned a zero derivative. Inc 12 makes both
+# `differentiate` (forward) and `differentiate_reverse` raise
+# NotImplementedError with a hint pointing at the fuzzy_* twin.
+# ---------------------------------------------------------------------
+
+def test_stage36_inc12_grad_forward_rejects_integer_and_logic():
+    """Forward-mode AD on `and_logic(x, prove(1, 0))` raises with a
+    message pointing at fuzzy_and. Pre-Inc-12 this silently returned
+    a zero derivative (let-inliner saw and_logic as AD-pure, no
+    chain-rule arm matched, fell through to the opaque-call raise —
+    but only because Stage 35 made unknown calls fail closed; the
+    deferred B2 fix is to fail closed with a *helpful* message that
+    distinguishes "integer-valued boolean logic" from "totally
+    unknown opaque call" so the user knows to reach for fuzzy_and)."""
+    import pytest
+    import helixc.frontend.ast_nodes as A
+    from helixc.frontend.autodiff import differentiate
+
+    span = A.Span(line=1, col=1)
+    call = A.Call(span=span,
+                  callee=A.Name(span=span, name="and_logic"),
+                  args=[A.Name(span=span, name="x"),
+                        A.Call(span=span,
+                               callee=A.Name(span=span, name="prove"),
+                               args=[A.IntLit(span=span, value=1),
+                                     A.IntLit(span=span, value=0)])])
+    with pytest.raises(NotImplementedError,
+                       match=r"and_logic.*integer-valued.*fuzzy_and"):
+        differentiate(call, "x")
+
+
+def test_stage36_inc12_grad_reverse_rejects_integer_or_logic():
+    """Reverse-mode AD twin: `or_logic` in a differentiated path
+    raises with the fuzzy_or hint."""
+    import pytest
+    import helixc.frontend.ast_nodes as A
+    from helixc.frontend.autodiff_reverse import differentiate_reverse
+
+    span = A.Span(line=1, col=1)
+    call = A.Call(span=span,
+                  callee=A.Name(span=span, name="or_logic"),
+                  args=[A.Name(span=span, name="x"),
+                        A.Name(span=span, name="y")])
+    with pytest.raises(NotImplementedError,
+                       match=r"or_logic.*integer-valued.*fuzzy_or"):
+        differentiate_reverse(call, ["x"])
+
+
+def test_stage36_inc12_grad_reverse_rejects_if_logic_general_hint():
+    """`if_logic` has no 1:1 fuzzy twin (the runtime branch is
+    discrete); the diagnostic should fall through to the general
+    guidance string rather than naming a nonexistent `fuzzy_if`."""
+    import pytest
+    import helixc.frontend.ast_nodes as A
+    from helixc.frontend.autodiff_reverse import differentiate_reverse
+
+    span = A.Span(line=1, col=1)
+    call = A.Call(span=span,
+                  callee=A.Name(span=span, name="if_logic"),
+                  args=[A.Name(span=span, name="c"),
+                        A.Name(span=span, name="t"),
+                        A.Name(span=span, name="e")])
+    with pytest.raises(NotImplementedError,
+                       match=r"if_logic.*no differentiable fuzzy twin"):
+        differentiate_reverse(call, ["t"])
+
+
+def test_stage36_inc12_grad_reverse_to_logic_bool_general_hint():
+    """`to_logic_bool` (i32 -> Logic<i32>) is discrete; the general
+    fuzzy guidance applies."""
+    import pytest
+    import helixc.frontend.ast_nodes as A
+    from helixc.frontend.autodiff_reverse import differentiate_reverse
+
+    span = A.Span(line=1, col=1)
+    call = A.Call(span=span,
+                  callee=A.Name(span=span, name="to_logic_bool"),
+                  args=[A.Name(span=span, name="x")])
+    with pytest.raises(NotImplementedError,
+                       match=r"to_logic_bool.*no differentiable fuzzy twin"):
+        differentiate_reverse(call, ["x"])
+
+
+def test_stage36_inc12_grad_fuzzy_and_unchanged_negative_control():
+    """Positive control: the recommended replacement `fuzzy_and` MUST
+    still differentiate. d/dx [fuzzy_and(x, 0.5)] = 0.5 at x=0.4. End-
+    to-end pipeline so the simplify / lower / runtime path is exercised
+    too — mirrors the Inc 9 catch-up B3 negative-control."""
+    src = """
+fn loss(x: f32) -> f32 {
+    unwrap_logic(fuzzy_and(prove(x, 0), prove(0.5_f32, 0)))
+}
+fn main() -> i32 {
+    let g: f32 = grad_rev(loss)(0.4_f32);
+    if g > 0.49_f32 { if g < 0.51_f32 { 42 } else { 0 } } else { 0 }
+}
+"""
+    assert _stage36_inc6_pipeline(src) == 42
+
+
+def test_stage36_inc12_let_erasable_unused_and_logic_still_compiles():
+    """Regression guard: the Inc 9 C2 + Inc 12 design says the
+    integer Logic ops remain AD-pure so `let _unused = and_logic(...)`
+    inside a grad/grad_rev body — where the value is NEVER consumed
+    by the differentiated expression — does NOT trap on let-erasure.
+    The trap fires only when AD actually tries to differentiate
+    THROUGH the call. This test pins the let-inlining permission by
+    feeding a body that uses `and_logic` only inside a side branch
+    that the differentiation target never references (so _inline_lets
+    can drop it cleanly)."""
+    import helixc.frontend.ast_nodes as A
+    from helixc.frontend.autodiff_reverse import differentiate_reverse
+
+    # body: let _u = and_logic(p, q); x  -> derivative of `x` wrt x is 1.
+    # The `let _u = and_logic(...)` is unused; if and_logic were
+    # rejected at let-erasure, this would raise. We want it to succeed
+    # and return d/dx (x) = 1.
+    span = A.Span(line=1, col=1)
+    body = A.Block(
+        span=span,
+        stmts=[
+            A.Let(span=span, name="_u", ty=None,
+                  value=A.Call(span=span,
+                               callee=A.Name(span=span, name="and_logic"),
+                               args=[A.Name(span=span, name="p"),
+                                     A.Name(span=span, name="q")]),
+                  is_mut=False)
+        ],
+        final_expr=A.Name(span=span, name="x"))
+    derivs = differentiate_reverse(body, ["x"])
+    assert "x" in derivs
+    # The simplifier should reduce d(x)/dx to a `1.0` literal.
+    assert isinstance(derivs["x"], A.FloatLit), \
+        f"expected FloatLit for d(x)/dx, got {type(derivs['x']).__name__}"
+    assert derivs["x"].value == 1.0, \
+        f"expected 1.0 for d(x)/dx, got {derivs['x'].value}"
+
+
 if __name__ == "__main__":
     import pytest
     raise SystemExit(pytest.main([__file__, "-v"]))
