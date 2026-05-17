@@ -5254,6 +5254,24 @@ class TypeChecker:
         if isinstance(expr, A.Match):
             scrut_ty = self._check_expr(expr.scrutinee, scope)
             arm_tys: list[Type] = []
+            # Stage 52 Inc 3 — match-arm modal-origin UNION
+            # semantics (gate-1 silent-failure HIGH-1 fix). Each
+            # arm body may install OR clear modal-origin taint via
+            # the Assign-arm; sequential processing (Inc 2's
+            # default) lets arm N+1 pop arm N's installed taint,
+            # producing silent launders. Correct semantics is
+            # PARALLEL UNION: at compile time we don't know which
+            # arm runs, so any name that ANY arm taints is
+            # conservatively post-match-tainted (taint surfaces).
+            #
+            # Implementation: snapshot the modal-origin dict before
+            # each arm. After each arm, collect that arm's resulting
+            # modal-origin state. Restore to pre-arm snapshot before
+            # next arm. After all arms: union all arm-result dicts
+            # into the post-match modal-origin state (any taint in
+            # any arm propagates).
+            modal_origin_pre_match = dict(self._modal_origin_provenance)
+            modal_origin_arm_results: list[dict[str, str]] = []
             for arm in expr.arms:
                 inner = Scope(parent=scope)
                 self._bind_pattern(arm.pattern, scrut_ty, inner)
@@ -5269,6 +5287,10 @@ class TypeChecker:
                             f"match guard must be bool, got {self._fmt(g_ty)}",
                             arm.span,
                         ))
+                # Stage 52 Inc 3 — snapshot modal-origin before arm
+                # so each arm starts from the pre-match state.
+                self._modal_origin_provenance = dict(
+                    modal_origin_pre_match)
                 # Gate-5 G4-F1/H2 fix: bare-expression arm bodies
                 # (e.g. `pat => r = Err(99)`) bypass _check_block.
                 # The Assign-arm mutates the provenance dict in
@@ -5279,6 +5301,32 @@ class TypeChecker:
                 # G4-F1 reproducer exit 99).
                 arm_tys.append(
                     self._check_expr_in_block_scope(arm.body, inner))
+                # Save this arm's resulting modal-origin state.
+                modal_origin_arm_results.append(
+                    dict(self._modal_origin_provenance))
+            # Stage 52 Inc 3 — UNION arm results. For each name,
+            # if ANY arm installed taint of kind K, the post-match
+            # value is conservatively tainted with K. If two arms
+            # install different kinds (e.g. one Uncertain, one
+            # Known), the post-match value could be either —
+            # conservatively take the FIRST arm's kind (matches
+            # "any taint propagates" semantics; refining to
+            # "multi-kind sum" needs a richer dict value).
+            unioned_modal_origin: dict[str, str] = dict(
+                modal_origin_pre_match)
+            for arm_result in modal_origin_arm_results:
+                for name, kind in arm_result.items():
+                    if name not in unioned_modal_origin:
+                        # New taint from this arm — propagate.
+                        unioned_modal_origin[name] = kind
+                    # If name already in pre-match state (or set
+                    # by a prior arm), keep the existing kind.
+                    # TODO(stage52-inc4): refine to multi-kind
+                    # union (e.g. arm1 sets 'uncertain', arm2
+                    # sets 'known' — currently keeps 'uncertain';
+                    # a richer "taint of any of {U, K}" diagnostic
+                    # would be more honest).
+            self._modal_origin_provenance = unioned_modal_origin
             self._check_match_exhaustive(expr, scrut_ty)
             if not arm_tys:
                 return TyUnit()
