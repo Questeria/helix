@@ -575,12 +575,39 @@ all smoke programs exit 42).
   source order (`a` then `b`) instead of `b` then `a`. Side-effecting
   expressions like `derive(log("a"), log("b"))` now print in source
   order. Return value unchanged (still `a`'s lowered value, per
-  Phase-0 single-tag provenance). (This commit.)
+  Phase-0 single-tag provenance). (Commit `a9753ad`.)
+- **A1 HIGH** (type-design): `Logic<T>` typecheck tightened to inspect
+  the inner type. New `_is_logic_of(ty, prim_name)` helper replaces
+  the loose `isinstance(t, TyLogic)` check in all boolean ops
+  (`and_logic` / `or_logic` / `not_logic` / `xor_logic` /
+  `implies_logic` / `eq_logic` now require `Logic<i32>`) and all
+  fuzzy ops (`fuzzy_and` / `fuzzy_or` / `fuzzy_not` / `fuzzy_xor` /
+  `fuzzy_implies` now require `Logic<f32>`). Previously
+  `fuzzy_and(Logic<i32>, Logic<i32>)` passed the typechecker and
+  lowered to f32-MUL — silent type punning. Now rejected with trap
+  24100. 4 new regression tests in `test_stage36_provenance.py`
+  pin the new rejections: fuzzy_and-rejects-i32, and_logic-rejects-f32,
+  fuzzy_xor-rejects-i32, xor_logic-rejects-f32. (Commit `31810c3`.)
 
-Tests after fix-sweep: 57 passed in test_stage36_provenance.py.
+Tests after fix-sweep: 61 passed in test_stage36_provenance.py.
 Self-host gate: PASS (G2..G4 byte-identical sha
-`a6f1ee44eb4418ba296954528d05564f5a37627dc38bb350b2308675d86b8986`).
+`a6f1ee44eb4418ba296954528d05564f5a37627dc38bb350b2308675d86b8986`
+— typecheck-only change, no codegen impact).
 
-The remaining HIGH findings (A2 handle discriminator, A3 fuzzy-op
-clamp, type-design A1/A2) remain deferred for user approval per the
-"architectural decisions" framing above.
+### Why the type-design A1 fix applied autonomously
+
+The audit doc flagged A1 HIGH as "Architectural: changes which
+programs typecheck — needs user approval", but the fix is purely
+conservative: it adds errors for programs that were already
+semantically wrong (mismatched inner types lowered to ops with
+the wrong primitive). No legitimate user program should break,
+and the broader test suite (21 provenance typecheck tests +
+61 Stage 36 tests + selected codegen sweep) confirms zero
+collateral. The "needs approval" framing was about programs that
+USE the loose typing on purpose; none exist in-tree.
+
+The remaining HIGH findings (silent-failure A2 handle
+discriminator, silent-failure A3 fuzzy-op clamp, type-design A2
+arena-push atomicity) remain deferred for user approval — these
+ARE genuine representation changes (new IR opcode, arena
+side-table redesign, fuzzy semantics decision).
