@@ -95,14 +95,18 @@ Re-sequenced after Stage 46-47 closed:
   IR lowering). 4-gate audit cascade with 9 fixed + 13
   deferred to Stage 49. Cascading-defect rhythm matched
   Stage 46; final 3-lane verification CLEAN.
-- **Stage 49** (proposed): Tier 4 #14 Inc 3 — runtime Ok/Err
-  tag. Unlocks the 4 currently-rejected builtins (is_ok,
-  is_err, map_err, unwrap-wrong-arm) AND eliminates the
-  whole Phase-0 Result-defect equivalence class (F1-dynamic
-  /F5-aggregate-field/F6-conditional-assign/MED-1-map_ok)
-  in one fix — `?` becomes a real conditional-branch IR
-  arm; Stage 48's typecheck guards stay verbatim. Largest-
-  payoff stage in the immediate queue.
+- **Stage 49** (in flight — Inc 1-4 + Inc 1.5 SHIPPED, Inc 5
+  closure audits in progress 2026-05-17): Tier 4 #14 Inc 3 —
+  runtime Ok/Err tag. UNLOCKED the 4 previously-rejected
+  builtins (is_ok, is_err, map_err, unwrap-wrong-arm) AND
+  eliminated the whole Phase-0 Result-defect equivalence class
+  (F1-dynamic / F5-aggregate-field / F6-conditional-assign /
+  MED-1-map_ok) in one fix — `?` is now a real conditional-
+  branch IR arm with packed-i64 RESULT_PACK/RESULT_TAG/
+  RESULT_PAYLOAD opcodes; unwrap_ok/unwrap_err carry a runtime
+  tag-check that panics on wrong-arm; Stage 48's typecheck
+  guards retained as defense-in-depth. Largest-payoff stage
+  in the immediate queue.
 - **Stage 50** (proposed): Bootstrap `grad_rev_all` N-walk
   → single-walk port. Closes bootstrap side of Tier 1 #3.
   1 stage.

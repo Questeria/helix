@@ -314,11 +314,12 @@ the prior gates missed plus one type-design HIGH:
   pattern that works fine via expression-lowerer wrapper-arms).
   RESOLUTION: narrowed (revert the broad rejection); pin the
   Phase-0 limit via dedicated test
-  `test_stage48_closure_gate5_g4h1_result_of_wrapper_in_fn_signature_raises_at_ir`
-  asserting typecheck-clean + IR-lowering raises
-  NotImplementedError, mirroring the F5 deferral pattern. Stage
-  49's runtime tag + wrapper type-position arms lift this in
-  one fix.
+  `test_stage48_closure_gate5_g4h1_result_of_wrapper_in_fn_signature_lowers_clean_post_stage49_inc1`
+  (renamed post-Inc-1 from `..._raises_at_ir`) asserting
+  typecheck-clean + IR-lowering succeeds. Stage 49 Inc 1's
+  Result-arm short-circuit-to-i64 lifted this limit; the test
+  was inverted in commit `47d8f66` and renamed in the gate-2
+  closure cycle (code-review CR1-L2).
 
 Updated Stage 48 audit budget: **6 gates** (1+2+3+verification+
 4+5), 30+ findings across 3 lanes, 13 FIXED inline (including 2
@@ -336,25 +337,36 @@ gate-2, +G3-F1a/b/c+operand-name gate-3, +gate-4/5 G4-F1+G4-F2
 G2..G4 byte-identical preserved. dogfood_16 + dogfood_17 still
 exit 42.
 
-### Phase-0 vs Stage 49+ semantic upgrade
+### Phase-0 vs Stage 49+ semantic upgrade (LIFTED — see stage49 plan)
 
-Once Stage 49 adds the runtime Ok/Err tag, `__try(r)` lowering
-becomes:
+Stage 49 Inc 1 + Inc 4 (2026-05-17) added the runtime Ok/Err
+tag and made `__try(r)` lower to a real conditional-branch IR
+arm:
 
 ```
 if is_err(r) {
-    return r;  // early-return up the call stack
+    return r;  // early-return up the call stack via RETURN
 }
 // fall through: extract Ok inner and continue
 unwrap_ok(r)
 ```
 
-The Stage 48 typecheck guards (1)-(4) above will all still
-apply; only the IR lowering changes.
+The Stage 48 typecheck guards (1)-(4) above are all retained
+verbatim; only the IR lowering changed. See
+`docs/stage49-plan-2026-05-17.md` for the Inc-by-Inc landing
+record.
 
 ### Out of scope (Stage 49+)
 
-- Real runtime Ok/Err tag (IR opcode for discriminated union).
-- The runtime `?` early-return branch.
-- Auto-promotion to panic at top-level if Result is unhandled.
-- `?` for Option<T> (Phase-0 has no Option type yet).
+Stage 49 update (2026-05-17): the first two bullets SHIPPED in
+Stage 49 Inc 1 + Inc 4; see
+`docs/stage49-plan-2026-05-17.md`. The remaining bullets stay
+Stage 50+ scope.
+
+- ~~Real runtime Ok/Err tag (IR opcode for discriminated union)~~
+  — SHIPPED in Stage 49 Inc 1 (commits a08f21a, db26e1c).
+- ~~The runtime `?` early-return branch~~ — SHIPPED in Stage 49
+  Inc 4 (commit 47d8f66).
+- Auto-promotion to panic at top-level if Result is unhandled
+  (Stage 50+).
+- `?` for Option<T> (Phase-0 has no Option type yet; Stage 50+).

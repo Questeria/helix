@@ -641,19 +641,25 @@ class TypeChecker:
         # become a debug-only lint at most). Sites 2-6 + C1-C3 +
         # H1 all collapse when site 4's dict goes away.
         #
-        # TODO(stage49-inc1.5): the SPECIFIC trigger for retirement
-        # is the runtime tag-check addition to unwrap_ok / unwrap_err
-        # (panic-on-wrong-arm). Once that lands, consumer site C1
-        # becomes redundant (runtime tag covers it). C2 (__try) is
-        # already redundant post-Inc-4 — kept only for completeness;
-        # the typecheck reject was lifted in commit 47d8f66. C3
-        # (Assign-arm prov pop) is still useful for the few
-        # static-fold paths. Retirement plan: when Inc 1.5 lands,
-        # delete the C1 static-prov reject and audit whether the
-        # mutation-site stewardship (sites 2-6) can collapse to a
-        # simpler flat-dict-per-fn shape.
-        # Gate-1 type-design M3 polish: this TODO is the explicit
-        # retirement-trigger marker requested by the audit.
+        # Stage 49 Inc 1.5 + closure gate-2 type-design G2-MH1
+        # decision: the runtime tag-check on unwrap_ok / unwrap_err
+        # (Inc 1.5, commit db26e1c) is now live and is the SOLE
+        # soundness layer — `unwrap_<X>(Y-tagged)` panics at runtime
+        # with deterministic TRAP_RESULT_WRONG_UNWRAP. The C1 static-
+        # provenance reject at typecheck.py:4595-4625 is KEPT as a
+        # defense-in-depth quality-of-life diagnostic: earlier
+        # source-line diagnosis is friendlier than waiting for the
+        # runtime panic. C2 (__try Err-provenance reject) WAS lifted
+        # in Inc 4 (commit 47d8f66) since `?` is a propagator (not
+        # an eliminator); the asymmetry between eliminator-side
+        # (kept) and propagator-side (lifted) is intentional —
+        # propagating an Err is never wrong, extracting from it is.
+        # C3 (Assign-arm prov pop) is still useful for the few
+        # static-fold paths. The full retirement of the mutation-
+        # site stewardship (sites 2-6 collapsing to a flat-dict-
+        # per-fn) is deferred to Stage 50+ when more Phase-0
+        # surface lifts and the dict has more consumer sites to
+        # collapse.
         self._result_constructor_provenance: dict[str, str] = {}
         # Gate-3 G3-F1 fix: parallel stack tracking which names
         # were INTRODUCED-via-let in each open block. Used at
@@ -1411,24 +1417,21 @@ class TypeChecker:
                     return TyUnknown(hint=ty.base)
                 ok_ty = self._resolve_type(ty.args[0], scope)
                 err_ty = self._resolve_type(ty.args[1], scope)
-                # Stage 48 closure gate-5 type-design G4-H1
-                # acknowledgement (deferred, audit Option 3):
-                # `Result<Known<...>, E>` in a FUNCTION-RETURN
-                # type position raises NotImplementedError at
-                # IR lowering because _lower_type's Result-arm
-                # identity-recurses into the Stage 37-41 wrapper-
-                # quintet which has no type-position arm. The
-                # parallel agent's overly-broad reject at let-
-                # binding position broke an existing Stage 46
-                # test that proves let-RHS-position composition
-                # works (the wrapper is unwrapped through
-                # expression-position arms, never reaching
-                # _lower_type's type-position dispatch). Pinning
-                # test for the fn-return-type-position failure
-                # is in tests; for let-binding usage Result-of-
-                # wrapper continues to work.
-                # TODO(stage49): runtime Ok/Err tag + wrapper
-                # type-position arms eliminate the asymmetry.
+                # Stage 49 Inc 1 LIFT (commit a08f21a):
+                # _lower_type's Result-arm no longer recurses into
+                # Ok/Err inner types — it short-circuits to
+                # TIRScalar("i64") for the packed-tag representation.
+                # The Stage 48 G4-H1 asymmetry (Result<Known<...>, E>
+                # in fn-return-type position raised NotImplementedError
+                # at IR lowering) is therefore CLOSED at the IR layer;
+                # the pin test
+                # `test_stage48_closure_gate5_g4h1_..._lowers_clean_post_stage49_inc1`
+                # asserts typecheck-clean + IR-lowered. Stage 49
+                # closure gate-2 G2-H1 added a payload-width reject
+                # (i32 only for Stage 49 — see _reject_non_i32_result_payload).
+                # Result<wrapper<i32>, i32> still works because the
+                # wrapper strips to i32 at the construction-site
+                # check (Phase-0 identity-lowered wrappers).
                 return TyResult(ok_ty=ok_ty, err_ty=err_ty)
             # Stage 28 — user-defined parametric struct (Audit 28.8 A3/B1).
             # If `ty.base` is a known generic struct AND the arity matches,

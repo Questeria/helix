@@ -630,7 +630,7 @@ fn main() -> i32 { unwrap_ok(helper()) }
         f"got: {err_strs}"
 
 
-def test_stage48_closure_gate5_g4h1_result_of_wrapper_in_fn_signature_raises_at_ir():
+def test_stage48_closure_gate5_g4h1_result_of_wrapper_in_fn_signature_lowers_clean_post_stage49_inc1():
     """Gate-5 G4-H1 (audit Option 3 — LIFTED at Stage 49 Inc 1):
     Result whose Ok or Err side is a Stage 37-41 wrapper-quintet
     in a FUNCTION SIGNATURE position used to raise

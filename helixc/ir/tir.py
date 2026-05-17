@@ -326,14 +326,31 @@ class OpKind(Enum):
     # All three ops are pure-functional, side-effect-free, and elidable by
     # DCE if their result is unused.
     #
-    # Tag-value reservation policy (Stage 49 gate-1 type-design M2):
+    # Tag-value reservation policy (Stage 49 gate-1 type-design M2,
+    # SCOPE expanded by gate-2 closure type-design G2-L3):
     # tag 0 = Ok, tag 1 = Err are reserved EXCLUSIVELY for Result<T, E>.
-    # Future discriminated-union families (e.g. Option<T> in Stage 50+)
-    # MUST get their own opcode family (e.g. OPTION_PACK / OPTION_TAG /
-    # OPTION_PAYLOAD with their own tag-value convention) — DO NOT reuse
-    # RESULT_TAG to query an Option discriminator, even if the natural
-    # value (None = 0, Some = 1) happens to collide. Sharing the opcode
-    # family would let is_ok-on-Option typecheck silently.
+    # The policy generalizes: ANY new discriminated-union family
+    # (Option<T>, Either<L, R>, user-defined enum-with-payloads,
+    # Result3<A, B, C> for ternary, future pattern-match dispatch
+    # lowerings, etc.) MUST get its own opcode family with its own
+    # tag-value convention — DO NOT reuse RESULT_PACK / RESULT_TAG /
+    # RESULT_PAYLOAD for any non-Result discriminator, even if the
+    # natural values (e.g. None = 0, Some = 1) happen to collide.
+    # Sharing the opcode family would let is_ok-on-Option typecheck
+    # silently.
+    #
+    # Payload-width reservation policy (Stage 49 gate-1 type-design M1):
+    # the (tag i32, payload i32) -> i64 encoding EMBEDS the i32 payload
+    # assumption into the SysV ABI (Result-returning fn returns full
+    # packed i64 in rax). Wider payloads — Result<i64, ...>,
+    # Result<f64, ...>, Result<*T, ...> with TyPtr-sized inners — would
+    # silently truncate at RESULT_PACK / RESULT_PAYLOAD codegen. Stage
+    # 49 closure gate-2 G2-H1 added a typecheck-side reject (see
+    # `_reject_non_i32_result_payload` in typecheck.py). Widening to
+    # native-sized payloads is Stage 50+ work and requires either an
+    # ABI break ({rax: tag, rdx: payload} split or struct-by-reference
+    # return) or a new opcode family (e.g. RESULT_PACK_WIDE with
+    # {tag, ok_payload, err_payload} slot triples).
     RESULT_PACK = "result.pack"        # operands: (tag i32, payload i32) -> result: packed i64
     RESULT_TAG = "result.tag"          # operand: packed i64 -> result: tag i32
     RESULT_PAYLOAD = "result.payload"  # operand: packed i64 -> result: payload i32

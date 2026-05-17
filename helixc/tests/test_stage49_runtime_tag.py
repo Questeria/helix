@@ -951,6 +951,30 @@ fn main() -> i32 {
         f"Ok(f64) must reject with G2-H1 diag, got: {err_strs}"
 
 
+def test_stage49_gate2_g2h1_result_f32_payload_rejected():
+    """Gate-2 silent-failure LOW-3 follow-up: explicit f32 case.
+    Pre-fix `Result<f32, i32>` typecheck-passed but the IR-side
+    32-bit float payload would round-trip through the i32 slot
+    only by bit-reinterpretation, which the lowering doesn't do.
+    Post-fix the G2-H1 typecheck reject covers f32 alongside i64
+    and f64. Pinning it explicitly here closes the LOW-3
+    recommendation to add a canonical f32-reject test."""
+    src = """
+fn main() -> i32 {
+    let r: Result<f32, i32> = Ok(3.14_f32);
+    0
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    errs = typecheck(prog)
+    err_strs = " ".join(str(e) for e in errs)
+    assert "Ok() payload type f32" in err_strs, \
+        f"Ok(f32) must reject with G2-H1 diag, got: {err_strs}"
+    assert "Stage 49 packed-i64" in err_strs, \
+        f"Reject diagnostic must mention the Stage 49 payload " \
+        f"representation, got: {err_strs}"
+
+
 def test_stage49_gate2_g2h1_result_known_i32_still_works():
     """Sanity: wrapper-around-i32 must still work. `Known<i32>` is
     identity-lowered at expression position, so the payload is
@@ -971,3 +995,74 @@ fn main() -> i32 {
         f"{[str(e) for e in errs]}"
     elf = compile_module_to_elf(lower(prog))
     assert _run_elf(elf) == 42
+
+
+# ============================================================
+# Gate-2 silent-failure SF1-F1: __try Err arm emits TRACE_EXIT
+# for @trace fns (mirrors A.Return C2-2 fix)
+# ============================================================
+
+
+def test_stage49_gate2_sf1f1_try_err_arm_emits_trace_exit_in_traced_fn():
+    """Gate-2 silent-failure SF1-F1: pre-fix the `?` Err
+    propagation site emitted RETURN without a preceding
+    TRACE_EXIT. For @trace'd fns that propagate Err via `?`,
+    the trace stream lost an EXIT entry (unbalanced ENTRY/EXIT
+    pair). Invisible at Phase-0 (backend stubs trace ops) but
+    would corrupt the buffer once Stage 30 runtime exists.
+    Same defect class as Audit 28.8 cycle 2 C2-2 (`A.Return`
+    arm). Post-fix every block ending in RETURN inside a
+    @trace'd fn has a TRACE_EXIT as the immediately-preceding
+    op."""
+    src = """
+@trace
+fn helper(r: Result<i32, i32>) -> Result<i32, i32> {
+    let v: i32 = r?;
+    Ok(v + 1)
+}
+fn main() -> i32 {
+    0
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    assert typecheck(prog) == []
+    mod = lower(prog)
+    helper = mod.functions["helper"]
+    for blk in helper.blocks:
+        if not blk.ops:
+            continue
+        last = blk.ops[-1]
+        if last.kind != tir.OpKind.RETURN:
+            continue
+        prev = blk.ops[-2] if len(blk.ops) >= 2 else None
+        assert prev is not None and prev.kind == tir.OpKind.TRACE_EXIT, (
+            f"@trace fn 'helper': block id={blk.id} ends in RETURN "
+            f"but is not preceded by TRACE_EXIT — SF1-F1 regression. "
+            f"Last two ops: "
+            f"{prev.kind if prev else None} / {last.kind}"
+        )
+
+
+def test_stage49_gate2_sf1f1_untraced_fn_with_try_still_no_trace_exit():
+    """Sanity sibling: non-@trace fns must NOT gain TRACE_EXIT.
+    The fix is gated on `_is_fn_traced`, so untraced fns must
+    emit RETURN alone (matches pre-Stage-49 codegen)."""
+    src = """
+fn helper(r: Result<i32, i32>) -> Result<i32, i32> {
+    let v: i32 = r?;
+    Ok(v + 1)
+}
+fn main() -> i32 {
+    0
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    assert typecheck(prog) == []
+    mod = lower(prog)
+    helper = mod.functions["helper"]
+    trace_exits = [op for blk in helper.blocks for op in blk.ops
+                   if op.kind == tir.OpKind.TRACE_EXIT]
+    assert trace_exits == [], (
+        f"untraced fn 'helper' must have zero TRACE_EXIT ops, "
+        f"got {len(trace_exits)}"
+    )

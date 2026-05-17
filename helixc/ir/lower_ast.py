@@ -2290,9 +2290,14 @@ class Lowerer:
                         # with packed-i64 representation. `Ok`, `Err`,
                         # `unwrap_ok`, `unwrap_err`, and `__try` are
                         # all handled by that arm now. `is_ok` /
-                        # `is_err` / `map_err` remain typecheck-
-                        # rejected (Stage 46 F1/F2) until Inc 2/3
-                        # of Stage 49 wire their lowering.
+                        # `is_err` / `map_ok` / `map_err` are also
+                        # handled by dedicated arms above (Stage 49
+                        # Inc 2 wired is_ok/is_err to RESULT_TAG +
+                        # CMP_EQ; Inc 3 wired map_ok/map_err to a
+                        # RESULT_TAG-driven SELECT on packed-i64).
+                        # Closure gate-2 type-design G2-M2 comment
+                        # refresh — the pre-fix comment said Inc 2/3
+                        # "would" lift the rejections; they did.
                         )
                     and len(expr.args) == 1):
                 return self._lower_expr(expr.args[0])
