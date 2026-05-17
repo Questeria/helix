@@ -5,9 +5,9 @@ deep-research passes (2026-05-04). It's a forward-looking plan; not
 everything here will land, and priorities will shift as dogfooding
 reveals which features actually matter.
 
-## Current state (Stages 35-45 CLOSED 2026-05-16 to 2026-05-17)
+## Current state (Stages 35-48 CLOSED 2026-05-16 to 2026-05-17)
 
-Burst summary (11 stages closed in <48h, all via the
+Burst summary (14 stages closed in <48h, all via the
 3-clean-gate protocol):
 
 - **Stage 35** — AI/ML capability push (restart 65 closure).
@@ -59,9 +59,25 @@ Burst summary (11 stages closed in <48h, all via the
   alias (3-stage grace period elapsed), refresh ROADMAP
   "Current state" to include Stage 46, re-sequence Stage
   48-50 picks.
+- **Stage 48** — Tier 4 #14 Inc 2 `?` propagation operator
+  (parser desugar `expr?` → `__try(expr)` + typecheck
+  enclosing-fn return-type check + IR identity-lowering
+  matching Phase-0 Ok-shape stance). 18 stage tests + 27
+  Stage 46 tests = 45 Result-family tests green. Cumulative
+  4-gate audit cycle (gate-1 F2 typed-let Err provenance
+  HIGH, gate-2 F1 inner-block shadow HIGH + M5 cross-fn
+  carry FIX, gate-3 G3-F1a/b/c outer-name-mutation 3-vehicle
+  cascade HIGH, gate-3 verification 3/3 CLEAN) — Stage 46's
+  cascading-defect rhythm repeated; same convergence on a
+  sound design. Stage 49 runtime tag will eliminate the
+  F1-dynamic / F5-aggregate / F6-assign / MED-1-map_ok
+  Phase-0 known-defect equivalence class with one fix.
+  Result<T,E> in fn-signature positions now lowers to T
+  (the Ok inner) — prerequisite for `?` to compile.
 
-15 dogfood programs total. Self-host cascade still
-byte-identical G2..G4 fixpoint throughout the entire burst.
+16 dogfood programs total (dogfood_17_try_operator added).
+Self-host cascade still byte-identical G2..G4 fixpoint
+throughout the entire burst.
 
 ## Next-stage sequencing (post-Stage-45)
 
@@ -74,14 +90,19 @@ Re-sequenced after Stage 46-47 closed:
 - **Stage 47** ✅ DONE — slim consolidation: dropped Stage
   43 deferred `_FRAME_IDENTITY_AD_NAMES` alias + ROADMAP
   refresh.
-- **Stage 48** (proposed): Tier 4 #14 Inc 2 — `?` operator
-  parser change + IR lowering for early-return on Err. 1-2
-  stages. Inc 2 itself unblocks the most-common error-
-  handling idiom in real Helix programs.
+- **Stage 48** ✅ DONE — Tier 4 #14 Inc 2 `?` propagation
+  operator (parser desugar + typecheck + Phase-0 identity
+  IR lowering). 4-gate audit cascade with 9 fixed + 13
+  deferred to Stage 49. Cascading-defect rhythm matched
+  Stage 46; final 3-lane verification CLEAN.
 - **Stage 49** (proposed): Tier 4 #14 Inc 3 — runtime Ok/Err
   tag. Unlocks the 4 currently-rejected builtins (is_ok,
-  is_err, map_err, unwrap-wrong-arm). Stage 50+ work
-  depends on this.
+  is_err, map_err, unwrap-wrong-arm) AND eliminates the
+  whole Phase-0 Result-defect equivalence class (F1-dynamic
+  /F5-aggregate-field/F6-conditional-assign/MED-1-map_ok)
+  in one fix — `?` becomes a real conditional-branch IR
+  arm; Stage 48's typecheck guards stay verbatim. Largest-
+  payoff stage in the immediate queue.
 - **Stage 50** (proposed): Bootstrap `grad_rev_all` N-walk
   → single-walk port. Closes bootstrap side of Tier 1 #3.
   1 stage.
@@ -93,7 +114,9 @@ Re-sequenced after Stage 46-47 closed:
 
 Re-evaluate at Stage 50.
 
-Re-evaluate sequence at Stage 48 based on what shipped.
+Re-evaluated post-Stage-48: Stage 49 promoted to highest-
+payoff next pick (eliminates the entire Phase-0 Result
+known-defect equivalence class in one runtime-tag fix).
 
 - Working from-scratch x86-64 ELF compiler
 - Forward + reverse-mode symbolic AD with chain rules for __exp, __log,

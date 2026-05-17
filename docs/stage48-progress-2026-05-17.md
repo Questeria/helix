@@ -236,8 +236,45 @@ Stage 48 test count: 11 → 14 (gate-2 +F1, +M5, +F5) → 18
 (gate-3 +G3-F1a, +G3-F1b, +G3-F1c, +operand-name-diag).
 Stage 46+48 combined: 45 tests pass. Self-host cascade still
 3/3 byte-identical. dogfood_16 + dogfood_17 still exit 42.
-Gate-4 verification audits next: re-run all 3 lanes against
-the gate-3 patch to confirm no new defect class.
+
+### Gate-3 final audit cycle (this CLOSE commit)
+
+Re-spawned all 3 audit lanes against the c32dfbb HEAD to
+confirm no new defect class introduced by the gate-2+gate-3
+fix sweep. Findings → `docs/audit-stage48-inc4-gate3-{silent-
+failures,type-design,codereview}.md`.
+
+**Verdict: 3/3 GATE-3 CLEAN — Stage 48 CLOSED at Inc 4.**
+
+- **Silent-failure**: 0 HIGH/CRITICAL. 1 MEDIUM (MED-1:
+  `let r = map_ok(Err(7), 999); r?` — same Phase-0 defect
+  class as F1-dynamic/F5/F6, fixed by Stage 49 runtime tag)
+  + 1 LOW (Result inside TyTuple/TyArray identity-lowering).
+  Both deferred to Stage 49. while/for/loop body coverage,
+  compound if/else-if chains, user-callable `__try`, tuple-
+  destructuring let, and Helix-has-no-closure: all explicitly
+  cleared by trace.
+- **Type-design**: 0 HIGH/MEDIUM. 2 LOW (Result fn-signature
+  size-asymmetry test pin; if-merge join not yet a 3-state
+  semilattice — sound, missed-detection only) + 2 OBS (the
+  TyResult two-inner symmetry is correctly applied at all
+  8 helper sites; wrapper-composition `Known<Result<T,E>>`
+  works at type level). All deferred to Stage 49 or
+  Phase-1 backlog.
+- **Code-review**: 0 CRITICAL/HIGH/MEDIUM. 2 LOW (no parser-
+  level test for `(if c {} else {})?`; M5 banner location).
+  Notable verification: `STAGE49_TODO:` → `TODO(stage49)`
+  rename from gate-3 CR-L1 is complete; operand-name
+  interpolation degrades cleanly for non-Name operands;
+  diagnostic strings consistently use `` `?` `` not
+  `__try`; provenance-map declaration documents all
+  consumers.
+
+Cumulative Stage 48 audit budget: 4 gates (1+2+3+verification),
+22 findings across 3 lanes, 9 FIXED inline, 13 deferred to
+Stage 49 or Phase-1. Same cascading-defect rhythm Stage 46
+hit (gate-2 F1 created the gate-3 G3-F1 mirror). Patches
+converged on a sound design.
 
 ### Phase-0 vs Stage 49+ semantic upgrade
 
