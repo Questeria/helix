@@ -232,8 +232,107 @@ fn main() -> i32 {
 }
 """
     prog = parse(src, include_stdlib=True)
+    assert typecheck(prog) == []
+
+
+# ============================================================
+# Stage 46 closure gate-3 silent-failure backfills:
+# G3-F1: mutable reassignment must invalidate stale provenance.
+# G3-F2: map_ok / map_err must propagate provenance from their
+#        Name source argument.
+# ============================================================
+
+
+def test_stage46_gate3_f1_mutable_reassignment_clears_stale_provenance():
+    """G3-F1: `let mut r: Result<i32, i32> = Ok(7); r = Err(99);
+    unwrap_ok(r)` — pre-fix silently returned the Err value as
+    if it were Ok. Post-fix: reassignment to Err(...) overwrites
+    the provenance, so unwrap_ok(r) is now caught."""
+    src = """
+fn main() -> i32 {
+    let mut r: Result<i32, i32> = Ok(7);
+    r = Err(99);
+    unwrap_ok(r)
+}
+"""
+    prog = parse(src, include_stdlib=True)
     errs = typecheck(prog)
-    assert errs == []
+    assert any("constructed via Err" in str(e) for e in errs), \
+        f"reassign Ok->Err must invalidate provenance, got " \
+        f"{[str(e) for e in errs]}"
+
+
+def test_stage46_gate3_f1_mutable_reassignment_reverse_direction():
+    """Reverse: Err -> Ok reassignment."""
+    src = """
+fn main() -> i32 {
+    let mut r: Result<i32, i32> = Err(13);
+    r = Ok(77);
+    unwrap_err(r)
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    errs = typecheck(prog)
+    assert any("constructed via Ok" in str(e) for e in errs)
+
+
+def test_stage46_gate3_f1_correct_arm_after_reassign_works():
+    """Sanity: a reassignment + correct-arm unwrap must NOT
+    error. Confirms G3-F1 fix preserves valid usage."""
+    src = """
+fn main() -> i32 {
+    let mut r: Result<i32, i32> = Ok(7);
+    r = Err(99);
+    unwrap_err(r)
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    assert typecheck(prog) == []
+
+
+def test_stage46_gate3_f1_non_constructor_reassign_pops_provenance():
+    """`r = some_fn()` should POP the provenance map entry
+    (since we can't statically know the new variant), letting
+    subsequent unwrap_ok/unwrap_err pass through the TyResult
+    check without the wrong-arm reject. Without the pop,
+    the stale "ok" provenance from the original let would
+    fire a false-positive reject."""
+    src = """
+fn opaque() -> Result<i32, i32> { Err(0) }
+fn main() -> i32 {
+    let mut r: Result<i32, i32> = Ok(7);
+    r = opaque();
+    unwrap_err(r)
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    errs = typecheck(prog)
+    # The opaque function returns Err; unwrap_err is the right
+    # arm. Pre-fix: false-positive reject from stale "ok"
+    # provenance. Post-fix: no error.
+    assert errs == [], \
+        f"non-constructor reassign must clear stale provenance, " \
+        f"got {[str(e) for e in errs]}"
+
+
+def test_stage46_gate3_f2_map_ok_propagates_provenance():
+    """G3-F2: `let r0 = Ok(7); let r = map_ok(r0, 999);
+    unwrap_err(r)` — pre-fix the typecheck slipped through
+    because the let-RHS matcher only handled direct Ok/Err.
+    Post-fix: map_ok propagates the source arm's provenance
+    so wrong-arm calls on the result are still caught."""
+    src = """
+fn main() -> i32 {
+    let r0: Result<i32, i32> = Ok(7);
+    let r: Result<i32, i32> = map_ok(r0, 999);
+    unwrap_err(r)
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    errs = typecheck(prog)
+    assert any("constructed via Ok" in str(e) for e in errs), \
+        f"map_ok must propagate Ok provenance, got " \
+        f"{[str(e) for e in errs]}"
 
 
 def test_stage46_unwrap_ok_rejects_non_result():

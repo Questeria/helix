@@ -41,7 +41,18 @@ Burst summary (11 stages closed in <48h, all via the
   (9+ float args now pass via SysV stack for both CALL and
   FFI_CALL; first Tier-1 ML blocker closed).
 - **Stage 45** — ROADMAP status drift refresh + Stage 46+
-  sequencing (this commit).
+  sequencing.
+- **Stage 46** — Tier 4 #14 Inc 1 Result<T, E> typecheck-
+  side scaffolding. First two-parameter wrapper family in
+  the Helix type system. 8 builtins (Ok/Err/unwrap_ok/
+  unwrap_err/is_ok/is_err/map_ok/map_err). 4 of 8 are
+  Phase-0-typecheck-rejected pending the Stage 48+ runtime
+  tag; the other 4 ship with a two-layer wrong-arm safety
+  net (TyUnknown-hint provenance + `_result_constructor_
+  provenance` map + Assign-arm invalidation) that catches
+  the 3 distinct silent-miscompile patterns (inference,
+  typed-let, mutable reassignment) audit lanes surfaced
+  during closure.
 
 15 dogfood programs total. Self-host cascade still
 byte-identical G2..G4 fixpoint throughout the entire burst.

@@ -129,9 +129,88 @@ call-site) but produce a typecheck error if the user
 actually calls them in Phase-0. Stage 48+ will add the
 runtime Ok/Err tag and unlock those four call sites.
 
+### Gate 2 silent-failure G2-F1 fix (commit 50b542e)
+
+CRITICAL G2-F1: gate-1 F4 caught the inference path
+(`let r = Ok(7)`) via TyUnknown.hint, but the typed-let
+path (`let r: Result<i32, i32> = Ok(7)`) overrides the
+inferred type with the declared type at bind time, stripping
+the hint. Post-gate-1, the typed-let wrong-arm call
+typechecked clean and silently returned the Ok payload.
+
+Fix: per-binding constructor-provenance tracking via a new
+`self._result_constructor_provenance: dict[str, str]` map.
+At let-binding time, if the RHS is a direct `Ok(...)` /
+`Err(...)` call, record "ok" or "err" on the binding name.
+At `unwrap_ok` / `unwrap_err` dispatch, check the map by
+arg name; reject on wrong-arm.
+
+The TyUnknown.hint check from gate-1 F4 is preserved as a
+second line of defense for the inference path.
+
+### Gate 3 silent-failure G3-F1 + G3-F2 fixes
+
+G3-F1 HIGH: mutable reassignment left stale provenance.
+`let mut r = Ok(7); r = Err(99); unwrap_ok(r)` silently
+returned 99. Fix: at the `A.Assign` arm, if the target is
+a Name in the provenance map, either overwrite (if RHS is
+Ok/Err) or pop (if RHS is anything else — non-constructor
+reassignment).
+
+G3-F2 MEDIUM: `map_ok` / `map_err` lost provenance from
+their source argument. `let r0 = Ok(7); let r = map_ok(r0,
+999); unwrap_err(r)` silently returned 999. Fix: extend
+the let-RHS matcher to propagate provenance through these
+combinators (they only transform the value side, never the
+variant tag).
+
+G3-F3 MEDIUM (conditional RHS, e.g. `let r = if cond { Ok(7)
+} else { Err(99) }`): explicitly deferred per the audit's
+own recommendation. Cleaner Stage 48+ work once the runtime
+tag enables real `if is_ok(r)` branching.
+
+### STAGE 46 CLOSED 2026-05-17 at Inc 4 (3/3 clean audit gates)
+
+Result<T, E> typecheck-side scaffolding shipped end-to-end
+(Tier 4 #14 Inc 1). First two-parameter wrapper family in
+the Helix type system.
+
+Phase-0 surface (final, post-3-gate-closure):
+
+| Builtin       | Phase-0  | Stage 47+ / 48+ plan |
+|---------------|----------|----------------------|
+| `Ok(v)`       | ✅ works  | unchanged            |
+| `Err(e)`      | ✅ works  | unchanged            |
+| `unwrap_ok`   | ✅ on Ok  | branch on runtime tag |
+| `unwrap_err`  | ✅ on Err | branch on runtime tag |
+| `map_ok`      | ✅ works  | branch on runtime tag |
+| `is_ok`       | ❌ reject | enable on runtime tag |
+| `is_err`      | ❌ reject | enable on runtime tag |
+| `map_err`     | ❌ reject | enable on runtime tag |
+
+The 4 "reject" builtins typecheck cleanly when first
+defined; they only error at call-site. Stage 48+ will add
+the runtime Ok/Err tag and unlock those four call surfaces.
+
+Wrong-arm safety net: two-layer rejection (TyUnknown.hint
+provenance for the inference path + `_result_constructor_
+provenance` map for the typed-let / map_ok / map_err
+propagated paths + Assign-arm invalidation for mutable
+reassignment). Pre-Stage-46 Result builtin calls could
+silently miscompile in 3 distinct patterns; post-closure
+all 3 are typecheck-rejected.
+
+26 Stage 46 tests green. Self-host cascade still
+byte-identical G2..G4 fixpoint. 16 dogfood programs total.
+
+Stage 47 opens next per ROADMAP Phase 2.
+
 ### Out of scope (Stage 47+)
 
 - `?` operator desugaring (needs parser change).
 - Real runtime Err tag (needs IR opcode for discriminated
   union or arena side-table).
 - Auto-promote Result to panic at top-level if unhandled.
+- G3-F3 conditional-RHS provenance (`if cond { Ok } else
+  { Err }`) — explicitly deferred to Stage 48+ when the
+  runtime tag enables real `if is_ok(r)` branching.

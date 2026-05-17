@@ -2429,6 +2429,33 @@ class TypeChecker:
                     "ok" if stmt.value.callee.name == "Ok"
                     else "err"
                 )
+            # Stage 46 closure gate-3 silent-failure G3-F2 fix:
+            # propagate provenance through map_ok / map_err
+            # whose first arg is a Name with known provenance.
+            # Pre-fix, `let r0 = Ok(7); let r = map_ok(r0, 999);
+            # unwrap_err(r)` typechecked clean because the
+            # let-RHS matcher only handled direct Ok/Err. map_ok
+            # always returns an Ok-shape Result; map_err always
+            # returns an Err-shape Result. Both preserve the
+            # source arm's provenance (they only TRANSFORM the
+            # matching inner value, not the variant tag).
+            elif (stmt.value is not None
+                    and isinstance(stmt.value, A.Call)
+                    and isinstance(stmt.value.callee, A.Name)
+                    and stmt.value.callee.name in ("map_ok",
+                                                   "map_err")
+                    and len(stmt.value.args) >= 1
+                    and isinstance(stmt.value.args[0], A.Name)
+                    and stmt.value.args[0].name
+                        in self._result_constructor_provenance):
+                # map_ok / map_err do not change the variant
+                # tag — they only rebuild the value side. So
+                # the new binding inherits the source's
+                # provenance.
+                self._result_constructor_provenance[stmt.name] = (
+                    self._result_constructor_provenance[
+                        stmt.value.args[0].name]
+                )
             self._define_local_const_scalar(stmt.name, None)
             if (stmt.value is not None
                     and self._expr_has_unrepresentable_typed_const_scalar(
@@ -4705,6 +4732,35 @@ class TypeChecker:
             r = self._check_expr(expr.value, scope)
             target_ty = self._check_expr(expr.target, scope)
             self._check_assignment_target(expr, scope)
+            # Stage 46 closure gate-3 silent-failure G3-F1 fix:
+            # invalidate Result constructor provenance on
+            # mutable reassignment. Pre-fix, `let mut r:
+            # Result<i32, i32> = Ok(7); r = Err(99);
+            # unwrap_ok(r)` typechecked clean because the
+            # provenance map still held "ok" from the original
+            # let. Same defect class as the gate-2 typed-let
+            # case; this one was exposed by the gate-3 mutable-
+            # reassignment probe. The fix: when the assign
+            # target is a bare Name and the RHS is a direct
+            # Ok(...)/Err(...) call, overwrite the provenance;
+            # otherwise pop the entry so a non-constructor
+            # reassignment clears the stale provenance rather
+            # than silently keeping it.
+            if (expr.op == "="
+                    and isinstance(expr.target, A.Name)
+                    and expr.target.name
+                        in self._result_constructor_provenance):
+                if (isinstance(expr.value, A.Call)
+                        and isinstance(expr.value.callee, A.Name)
+                        and expr.value.callee.name in ("Ok", "Err")):
+                    self._result_constructor_provenance[
+                        expr.target.name] = (
+                        "ok" if expr.value.callee.name == "Ok"
+                        else "err"
+                    )
+                else:
+                    self._result_constructor_provenance.pop(
+                        expr.target.name, None)
             if expr.op != "=":
                 op = {
                     "+=": "+",
