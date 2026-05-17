@@ -2170,20 +2170,49 @@ class Lowerer:
                         )
                     and len(expr.args) == 1):
                 return self._lower_expr(expr.args[0])
-            # Stage 46 closure gate-1 silent-failure F1/F2 fix:
-            # is_ok / is_err / map_err are now typecheck-rejected
-            # in Phase-0 (no runtime tag yet). They cannot reach
-            # the IR lowering. If they did (bug), the IR pass
-            # should not silently miscompile — let the unknown-op
-            # catchall raise.
+            # Stage 49 Inc 2 lifted the is_ok / is_err typecheck
+            # reject (handled in the dedicated arm above). Inc 3
+            # lifts the map_err reject and ALSO upgrades map_ok
+            # from a Phase-0 thread-through to a proper packed-i64
+            # Result transform.
             #
-            # map_ok IS allowed (the new Ok-side value is just
-            # threaded through Phase-0, which is semantically
-            # correct since the runtime treats all Results as Ok).
+            # map_ok(r, new_v):
+            #   if Ok(r):  Ok(new_v)  = RESULT_PACK(0, new_v)
+            #   else:      r          unchanged (Err passes through)
+            # map_err(r, new_e):
+            #   if Err(r): Err(new_e) = RESULT_PACK(1, new_e)
+            #   else:      r          unchanged (Ok passes through)
+            #
+            # Both use SELECT on the tag-equality comparison; the
+            # SELECT then chooses between the freshly-packed
+            # replacement and the original packed i64.
             if (isinstance(expr.callee, A.Name)
-                    and expr.callee.name == "map_ok"
+                    and expr.callee.name in ("map_ok", "map_err")
                     and len(expr.args) == 2):
-                return self._lower_expr(expr.args[1])
+                r_packed = self._lower_expr(expr.args[0])
+                new_val = self._lower_expr(expr.args[1])
+                if r_packed is None or new_val is None:
+                    return None
+                tag = self.builder.emit(
+                    tir.OpKind.RESULT_TAG, r_packed,
+                    result_ty=tir.TIRScalar("i32"))
+                # For map_ok: replace when tag == 0 (Ok side).
+                # For map_err: replace when tag == 1 (Err side).
+                # Build the replacement packed-i64 with the matching
+                # tag value (0 for Ok-side, 1 for Err-side).
+                replace_tag_value = (
+                    0 if expr.callee.name == "map_ok" else 1)
+                replace_tag = self.builder.const_int(
+                    replace_tag_value, "i32")
+                cond = self.builder.emit(
+                    tir.OpKind.CMP_EQ, tag, replace_tag,
+                    result_ty=tir.TIRScalar("bool"))
+                new_packed = self.builder.emit(
+                    tir.OpKind.RESULT_PACK, replace_tag, new_val,
+                    result_ty=tir.TIRScalar("i64"))
+                return self.builder.emit(
+                    tir.OpKind.SELECT, cond, new_packed, r_packed,
+                    result_ty=tir.TIRScalar("i64"))
             # Stage 36 Increment 5: real two-parent provenance via
             # arena side-table.
             #

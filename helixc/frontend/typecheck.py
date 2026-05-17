@@ -4831,15 +4831,15 @@ class TypeChecker:
                         err_ty=arg_tys[0].err_ty,
                     )
                 if bn == "map_err":
-                    # Stage 46 closure gate-1 silent-failure
-                    # Finding 2 fix (HIGH): pre-fix, `map_err(r,
-                    # new_err)` lowered to `args[0]` (the original
-                    # Result), so `unwrap_err(map_err(r, 999))` on
-                    # an Ok(5) returned 5, not 999. The user's
-                    # stated intent (replace the err-side) was
-                    # silently discarded. Reject at typecheck
-                    # until the Stage 48+ runtime tag lands so
-                    # there's a real er-side to replace.
+                    # Stage 49 Inc 3: map_err(r, new_err) now has
+                    # real runtime semantics. Lowers to a SELECT on
+                    # the tag: if tag==1 (Err), return RESULT_PACK(
+                    # 1, new_err); else pass r through unchanged.
+                    # Pre-Stage-49 it was typecheck-rejected (Stage
+                    # 46 closure gate-1 F2 fix — pre-fix map_err
+                    # silently discarded the intent because there
+                    # was no runtime Err side to replace). Inc 3
+                    # lifts the rejection.
                     if len(arg_tys) != 2:
                         self.errors.append(TypeError_(
                             f"map_err() takes 2 arguments (Result, "
@@ -4855,20 +4855,10 @@ class TypeChecker:
                             expr.span,
                         ))
                         return TyUnknown(hint=bn)
-                    self.errors.append(TypeError_(
-                        "map_err() has no runtime semantics in "
-                        "Phase-0 (no Ok/Err tag yet — Stage 48+). "
-                        "Pre-Stage-48 the runtime treats every "
-                        "Result as Ok-shape, so map_err is a "
-                        "silent no-op; reject at typecheck rather "
-                        "than miscompile.",
-                        expr.span,
-                        hint="for now, propagate the Err shape "
-                        "explicitly via Err(new_err) at the "
-                        "call-site, or wait for the runtime tag "
-                        "in Stage 48+",
-                    ))
-                    return TyUnknown(hint=bn)
+                    return TyResult(
+                        ok_ty=arg_tys[0].ok_ty,
+                        err_ty=arg_tys[1],
+                    )
                 if bn == "consolidate" and len(arg_tys) == 1:
                     # Episodic -> Semantic
                     if isinstance(arg_tys[0], TyMemTier) and arg_tys[0].tier == "episodic":

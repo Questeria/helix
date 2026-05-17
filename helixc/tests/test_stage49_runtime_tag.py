@@ -459,3 +459,140 @@ fn main() -> i32 {
     errs = typecheck(prog)
     assert any("takes 1 argument" in str(e) for e in errs), \
         f"is_ok with wrong arity must reject, got: {[str(e) for e in errs]}"
+
+
+# ============================================================
+# Inc 3 — enable map_err + upgrade map_ok to proper packed
+# Result transform via SELECT on the runtime tag
+# ============================================================
+
+
+def test_stage49_inc3_map_err_on_err_replaces_payload():
+    """map_err(Err(99), 5) returns Err(5) — the Err payload is
+    replaced. unwrap_err extracts the new payload (5).
+
+    Pre-Stage-49 map_err was typecheck-rejected because no runtime
+    Err side existed to replace. Inc 3 lifts the rejection and
+    lowers map_err to a SELECT-on-tag: if Err, repack with
+    new_err; otherwise pass r through unchanged."""
+    src = """
+fn main() -> i32 {
+    let r: Result<i32, i32> = Err(99);
+    unwrap_err(map_err(r, 5))
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    assert typecheck(prog) == [], \
+        f"map_err must typecheck post-Inc-3, got: " \
+        f"{[str(e) for e in typecheck(prog)]}"
+    elf = compile_module_to_elf(lower(prog))
+    assert _run_elf(elf) == 5
+
+
+def test_stage49_inc3_map_err_on_ok_passes_through_unchanged():
+    """map_err on an Ok value must NOT replace the Ok payload —
+    the Ok side passes through unchanged. unwrap_ok still
+    extracts the original 42."""
+    src = """
+fn main() -> i32 {
+    let r: Result<i32, i32> = Ok(42);
+    unwrap_ok(map_err(r, 999))
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    assert typecheck(prog) == []
+    elf = compile_module_to_elf(lower(prog))
+    assert _run_elf(elf) == 42
+
+
+def test_stage49_inc3_map_ok_on_ok_replaces_payload():
+    """Inc 3 also upgrades map_ok to a proper packed Result
+    transform. Pre-Inc-3 map_ok lowered to just args[1] (an i32,
+    not a packed Result) — fragile but happened to test-pass
+    via accidental RESULT_PAYLOAD truncation. Post-Inc-3:
+    map_ok(Ok(7), 99) returns proper Ok(99) packed-i64."""
+    src = """
+fn main() -> i32 {
+    let r: Result<i32, i32> = Ok(7);
+    unwrap_ok(map_ok(r, 99))
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    assert typecheck(prog) == []
+    elf = compile_module_to_elf(lower(prog))
+    assert _run_elf(elf) == 99
+
+
+def test_stage49_inc3_map_ok_on_err_passes_through_unchanged():
+    """map_ok on an Err value must NOT replace the Err payload —
+    the Err side passes through unchanged. Verified via unwrap_err
+    extracting the original Err payload."""
+    src = """
+fn main() -> i32 {
+    let r: Result<i32, i32> = Err(33);
+    unwrap_err(map_ok(r, 99))
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    assert typecheck(prog) == []
+    elf = compile_module_to_elf(lower(prog))
+    assert _run_elf(elf) == 33
+
+
+def test_stage49_inc3_map_err_preserves_is_err_status():
+    """After map_err(Err(...), ...), is_err should still be true.
+    Tests the tag bit is preserved through the SELECT lowering."""
+    src = """
+fn main() -> i32 {
+    let r: Result<i32, i32> = Err(99);
+    let r2: Result<i32, i32> = map_err(r, 5);
+    if is_err(r2) { 1 } else { 0 }
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    assert typecheck(prog) == []
+    elf = compile_module_to_elf(lower(prog))
+    assert _run_elf(elf) == 1
+
+
+def test_stage49_inc3_map_ok_preserves_is_ok_status():
+    """After map_ok(Ok(...), ...), is_ok should still be true."""
+    src = """
+fn main() -> i32 {
+    let r: Result<i32, i32> = Ok(7);
+    let r2: Result<i32, i32> = map_ok(r, 99);
+    if is_ok(r2) { 1 } else { 0 }
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    assert typecheck(prog) == []
+    elf = compile_module_to_elf(lower(prog))
+    assert _run_elf(elf) == 1
+
+
+def test_stage49_inc3_map_err_non_result_first_arg_rejects():
+    """Negative test: map_err's first arg must be Result."""
+    src = """
+fn main() -> i32 {
+    let x: i32 = 7;
+    unwrap_ok(map_err(x, 99))
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    errs = typecheck(prog)
+    assert any("requires first arg Result" in str(e) for e in errs), \
+        f"map_err with non-Result must reject, got: {[str(e) for e in errs]}"
+
+
+def test_stage49_inc3_map_err_arity_mismatch_rejects():
+    """Negative test: map_err takes exactly 2 arguments."""
+    src = """
+fn main() -> i32 {
+    let r: Result<i32, i32> = Err(99);
+    unwrap_err(map_err(r))
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    errs = typecheck(prog)
+    assert any("takes 2 arguments" in str(e) for e in errs), \
+        f"map_err with wrong arity must reject, got: {[str(e) for e in errs]}"

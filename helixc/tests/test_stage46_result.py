@@ -131,20 +131,35 @@ fn main() -> i32 {
     assert _run_elf(elf) == 99
 
 
-def test_stage46_gate1_f2_map_err_rejects_in_phase_0():
-    """HIGH gate-1 fix: pre-fix `map_err(r, 999)` silently
-    returned the original Result, so `unwrap_err(map_err(r,
-    999))` on Ok(5) returned 5 instead of 999. Post-fix:
-    typecheck rejects until Stage 48+ runtime tag lands."""
+def test_stage46_gate1_f2_map_err_lifted_by_stage49_inc3():
+    """Stage 46 gate-1 F2 originally rejected map_err because
+    Phase-0 had no runtime Err side to replace (pre-fix
+    `map_err(Ok(5), 999)` silently returned the original Ok). Stage
+    49 Inc 3 LIFTED the rejection: map_err now lowers to
+    SELECT(is_err(r), RESULT_PACK(1, new_err), r) on the packed-
+    i64 representation.
+
+    Post-Inc-3 this typechecks AND correctly transforms the
+    Err side. The original silent-miscompile sequence (map_err
+    on Ok then unwrap_err) is no longer silently-wrong — Ok
+    passes through and unwrap_err on it would be the wrong-arm
+    case (caught statically by Stage 46 G2-F1 provenance check
+    until the runtime tag-check arrives, then by the runtime
+    panic)."""
     src = """
 fn main() -> i32 {
-    let r: Result<i32, i32> = Ok(5);
+    let r: Result<i32, i32> = Err(5);
     unwrap_err(map_err(r, 999))
 }
 """
     prog = parse(src, include_stdlib=True)
-    errs = typecheck(prog)
-    assert any("map_err" in str(e) for e in errs)
+    assert typecheck(prog) == [], \
+        f"map_err must typecheck post-Stage-49-Inc-3, got " \
+        f"{[str(e) for e in typecheck(prog)]}"
+    elf = compile_module_to_elf(lower(prog))
+    # map_err(Err(5), 999) -> Err(999); unwrap_err extracts 999.
+    # POSIX exit codes are mod 256: 999 & 0xFF = 231.
+    assert _run_elf(elf) == (999 & 0xFF)
 
 
 def test_stage46_gate1_f4_unwrap_err_on_ok_inferred_rejects():
