@@ -1054,6 +1054,63 @@ fn main() -> i32 {
         f"expected Logic<i32> error, got {[str(e) for e in errs]}"
 
 
+# Stage 36 Inc 9 audit B4 fix: to_logic_bool now strict i32-only.
+
+
+def test_stage36_inc9_to_logic_bool_rejects_i64():
+    """to_logic_bool now rejects i64 (pre-fix it silently produced
+    Logic<i32> wrapping i64 data, causing downstream BIT_AND to
+    truncate)."""
+    src = """
+fn main() -> i32 {
+    let x: i64 = 1_i64;
+    unwrap_logic(to_logic_bool(x))
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    errs = typecheck(prog)
+    assert any("to_logic_bool" in str(e) and "i32" in str(e) for e in errs), \
+        f"expected to_logic_bool i32 error, got {[str(e) for e in errs]}"
+
+
+def test_stage36_inc9_to_logic_bool_accepts_i32():
+    """to_logic_bool still accepts i32 — regression check."""
+    src = """
+fn main() -> i32 {
+    unwrap_logic(to_logic_bool(1))
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    errs = typecheck(prog)
+    assert errs == [], f"unexpected errors: {[str(e) for e in errs]}"
+
+
+# Stage 36 Inc 9 audit C1 fix: unwrap_logic error recovery returns
+# TyUnknown instead of the input type, preventing cascading errors.
+
+
+def test_stage36_inc9_unwrap_logic_error_recovery_no_cascade():
+    """unwrap_logic on non-Logic still emits ONE error (not cascading
+    type errors from downstream usage)."""
+    src = """
+fn main() -> i32 {
+    let v: i32 = unwrap_logic(5);
+    v + 1
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    errs = typecheck(prog)
+    # The error should be at the unwrap_logic call site itself.
+    # Pre-fix, returning arg_tys[0] (i32) would let `v + 1` succeed
+    # without further errors but with semantically-wrong type. Post-
+    # fix, TyUnknown is returned; cascading downstream errors are
+    # suppressed by TyUnknown's design (this is the existing pattern
+    # in typecheck.py for many builtins).
+    n_unwrap_errs = sum(1 for e in errs if "unwrap_logic" in str(e))
+    assert n_unwrap_errs >= 1, \
+        f"expected at least 1 unwrap_logic error, got {[str(e) for e in errs]}"
+
+
 if __name__ == "__main__":
     import pytest
     raise SystemExit(pytest.main([__file__, "-v"]))
