@@ -1201,3 +1201,171 @@ fn main() -> i32 {
     assert not any("launder" in str(e) for e in errs), \
         f"cross-fn parameter taint must not leak, got: " \
         f"{[str(e) for e in errs]}"
+
+
+# ============================================================
+# Stage 52 closure gate-3 regression pins (cascading-defect:
+# gate-2 wave produced 5 new HIGHs). Each test below pins one
+# fix path so a future refactor catches breakage.
+# ============================================================
+
+
+def test_stage52_gate3_new_high_1_inner_let_shadow_restores_outer_taint():
+    """NEW-HIGH-1: outer `let r = from_uncertain(u)` taints r.
+    An inner block with a non-tainted `let r: i32 = 7` shadow
+    POPs r from the modal-origin dict (the inner let's Let-stmt
+    POP path). At block exit, the OUTER taint must be RESTORED.
+
+    Pre-fix: restore loop iterated current.keys(), but r was
+    no longer in current.keys() (popped by inner-let). Outer
+    taint was lost. Subsequent into_known(r) SILENTLY PASSED
+    — a category-error launder went undetected.
+
+    Post-fix: restore loop iterates inner_modal_lets (which
+    has r), checks saved_modal_origin (which has r→uncertain),
+    restores. into_known(r) now correctly fires."""
+    src = """
+fn main() -> i32 {
+    let u: Uncertain<i32> = into_uncertain(1);
+    let r: i32 = from_uncertain(u);
+    let dummy: i32 = {
+        let r: i32 = 7;
+        r + 1
+    };
+    let k: Known<i32> = into_known(r);
+    from_known(k) + dummy
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    errs = typecheck(prog)
+    assert any("launder" in str(e) and "Uncertain" in str(e)
+               and "Known" in str(e) for e in errs), \
+        f"outer-taint-after-inner-shadow launder must fire " \
+        f"(NEW-HIGH-1 silent miscompile regression), got: " \
+        f"{[str(e) for e in errs]}"
+
+
+def test_stage52_gate3_new_high_2_if_else_both_branches_clear_drops_claim():
+    """NEW-HIGH-2: if-else where BOTH branches reassign without
+    installing modal taint must DROP the pre-if static claim.
+
+    Pre-fix: pre-if had r→uncertain. Both arms cleared (no
+    'r' entry in arm-results). Pre-fix union saw only
+    pre-if's uncertain in observed_kinds — single kind →
+    propagated r→uncertain. Post-if into_known(r) FALSELY
+    fired the launder diagnostic for a path that at runtime
+    always reassigns r to a non-tainted value.
+
+    Post-fix: branch_assigns tracks per-branch assignments;
+    cleared_names drops names assigned without installing
+    taint. r dropped from union → consult falls through to
+    no-static-claim → no fire (Phase-0 dynamic territory)."""
+    src = """
+fn main() -> i32 {
+    let u: Uncertain<i32> = into_uncertain(1);
+    let r: i32 = from_uncertain(u);
+    let mut r2: i32 = r;
+    if true { r2 = 5; } else { r2 = 7; };
+    let k: Known<i32> = into_known(r2);
+    from_known(k)
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    errs = typecheck(prog)
+    launder_errs = [e for e in errs if "launder" in str(e)]
+    assert launder_errs == [], \
+        f"both-arms-cleared if-else must DROP static claim " \
+        f"(NEW-HIGH-2 false-positive regression), got: " \
+        f"{[str(e) for e in errs]}"
+
+
+def test_stage52_gate3_new_high_3_if_then_no_else_clear_drops_claim():
+    """NEW-HIGH-3: if-then with no-else where the then-branch
+    reassigns without modal taint must DROP the pre-if claim.
+
+    Symmetric with NEW-HIGH-2 but exercises the no-else
+    implicit-pre-match-snapshot path. Pre-fix's implicit
+    else-branch copy of pre-if's r→uncertain caused observed_
+    kinds={uncertain} → false-positive launder. Post-fix:
+    branch_assigns[0] has 'r' (then assigned), branch_results
+    [0] has no 'r' (then cleared) → cleared_names={r} → drop."""
+    src = """
+fn main() -> i32 {
+    let u: Uncertain<i32> = into_uncertain(1);
+    let r: i32 = from_uncertain(u);
+    let mut r2: i32 = r;
+    if true { r2 = 5; };
+    let k: Known<i32> = into_known(r2);
+    from_known(k)
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    errs = typecheck(prog)
+    launder_errs = [e for e in errs if "launder" in str(e)]
+    assert launder_errs == [], \
+        f"no-else if-then cleared must DROP static claim " \
+        f"(NEW-HIGH-3 false-positive regression), got: " \
+        f"{[str(e) for e in errs]}"
+
+
+def test_stage52_gate3_new_high_4_match_arm_clear_drops_claim():
+    """NEW-HIGH-4: match-arm union must also DROP the pre-match
+    static claim when any arm reassigns without installing
+    modal taint. Symmetric with NEW-HIGH-2/3 for A.If.
+
+    Pre-fix: pre-match r→uncertain. Arm 1 cleared (r=5),
+    arm 2 kept (no Assign). Pre-fix union observed_kinds=
+    {uncertain (pre-match), uncertain (arm 2 result)} →
+    single kind → propagated r→uncertain → false-positive
+    launder. Post-fix: arm_assigns[0] has 'r' (arm 1
+    assigned), arm_results[0] has no 'r' (arm 1 cleared)
+    → cleared_names_match={r} → drop."""
+    src = """
+fn main() -> i32 {
+    let u: Uncertain<i32> = into_uncertain(1);
+    let r: i32 = from_uncertain(u);
+    let mut r2: i32 = r;
+    match true { true => { r2 = 5; }, false => {} };
+    let k: Known<i32> = into_known(r2);
+    from_known(k)
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    errs = typecheck(prog)
+    launder_errs = [e for e in errs if "launder" in str(e)]
+    assert launder_errs == [], \
+        f"match-arm cleared must DROP static claim " \
+        f"(NEW-HIGH-4 false-positive regression), got: " \
+        f"{[str(e) for e in errs]}"
+
+
+def test_stage52_gate3_new_high_5_real_launder_still_fires_with_drop_path():
+    """NEW-HIGH-5 (meta): after the cleared-branch drop fix,
+    REAL launders must STILL fire. This is the dual of
+    NEW-HIGH-2/3/4 — verify the drop semantics doesn't
+    over-broadly suppress legitimate launder diagnostics.
+
+    Setup: if-then-only where the then-branch INSTALLS taint
+    (not clears). Pre-if's r is untainted; then's r=from_X(u)
+    installs uncertain. Union: only then has r→uncertain →
+    propagate. into_known(r) MUST fire (real launder).
+
+    This pins the invariant that the cleared-branch drop only
+    fires when an assignment lacks modal-installation — it
+    must NOT drop when an arm installs taint."""
+    src = """
+fn main() -> i32 {
+    let u: Uncertain<i32> = into_uncertain(1);
+    let mut r: i32 = 0;
+    if true { r = from_uncertain(u); };
+    let k: Known<i32> = into_known(r);
+    from_known(k)
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    errs = typecheck(prog)
+    assert any("launder" in str(e) and "Uncertain" in str(e)
+               and "Known" in str(e) for e in errs), \
+        f"real launder via if-then taint install MUST fire " \
+        f"(NEW-HIGH-5 over-broad-drop regression), got: " \
+        f"{[str(e) for e in errs]}"

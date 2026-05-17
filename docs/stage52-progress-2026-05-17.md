@@ -123,3 +123,35 @@ defect rhythm to surface 1-2 HIGHs in the new Inc 2+3 code.
   Assign; Result drops on Assign).
 - Audit cascading-defect rhythm continues: Stage 52 gate-1
   alone caught 1 CRITICAL + 5 HIGH that Inc 1 missed.
+
+### Gate-3 cascading-defect surface (2026-05-17 mid-afternoon)
+
+Gate-3 audit returned 5 NEW HIGH on the gate-2 if-else +
+multi-kind code:
+
+- **NEW-HIGH-1** (silent miscompile): inner-let-shadow with
+  non-tainted i32 outer let — restore loop iterated
+  current.keys(), but the inner let's POP had already
+  removed the name. Saved outer taint was never restored.
+  Fixed: iterate `inner_modal_lets` directly and restore
+  from `saved_modal_origin` per-name.
+- **NEW-HIGH-2/3** (false positive): A.If union saw pre-if
+  taint + arm results, no concept of "branch assigned
+  without installing taint". Both-arms-clear or no-else +
+  then-clear cases falsely propagated pre-if taint.
+  Fixed: added `_modal_origin_assigns_block_scopes` parallel
+  stack; A.If captures `branch_assigns[i]` per branch;
+  union loop drops names where `name in assigns AND name
+  not in arm_result`.
+- **NEW-HIGH-4** (false positive): symmetric A.Match
+  cleared-arm fix — same `cleared_names_match` drop logic.
+- **NEW-HIGH-5** (meta): the gate-3 fixes must NOT over-
+  broadly suppress real launders. Pinned dual-test
+  (`...real_launder_still_fires_with_drop_path`): if-then
+  where then-branch INSTALLS taint must still fire — the
+  cleared-name drop only triggers on assigns that don't
+  install taint.
+
+All 5 NEW-HIGH have post-fix regression pins in
+`test_stage40_modal.py` (5 tests, ~70 total Stage 40 now).
+Stage 40 modal sweep 65→70 passing post-pins.

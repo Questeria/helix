@@ -738,6 +738,26 @@ class TypeChecker:
         # inner-Assign mutations of outer names (preserve the
         # mutation — taint propagates upward).
         self._modal_origin_let_block_scopes: list[set[str]] = []
+        # Stage 52 closure gate-3 NEW-HIGH-2/3/4 fix: parallel
+        # stack tracking names ASSIGNED-TO in each open block
+        # (regardless of whether the Assign installed taint).
+        # Mirrors `_result_assigns_block_scopes` (Stage 48 G4-F2).
+        # Used by if-else/match union to detect "branch overwrote
+        # the name with a non-modal value" — that should drop
+        # the pre-state's taint claim (otherwise the union over-
+        # claims taint that the runtime might never carry).
+        # Pre-fix, `if cond { r = from_unc(u); } else { r = 7; }`
+        # then `into_known(r)` falsely fired because the else
+        # arm's `r = 7` didn't appear in observed_kinds at all
+        # (only the then-arm's 'uncertain' did).
+        self._modal_origin_assigns_block_scopes: list[set[str]] = []
+        # Stage 52 closure gate-3 NEW-HIGH-2/3/4 fix: captures the
+        # most-recently-popped modal-assigns set from _check_block
+        # or _check_expr_in_block_scope. Used by if-else / match
+        # union sites to detect "branch reassigned name without
+        # installing modal taint" — those names drop from the
+        # unioned static claim.
+        self._last_modal_assigns_popped: set[str] = set()
         self._seen_unknown_type_names: set[str] = set()
         # Stage 40 closure gate-2 code-review MEDIUM-1 fix (conf
         # 88): explicit init so re-running check() on the same
@@ -795,6 +815,7 @@ class TypeChecker:
         # Stage 52 Inc 1: clear modal-origin taint map per check().
         self._modal_origin_provenance = {}
         self._modal_origin_let_block_scopes = []
+        self._modal_origin_assigns_block_scopes = []
         self._recursive_enum_names: set[str] = set()
         self._type_alias_cache = {}
         self._local_const_scalar_scopes = []
@@ -2422,6 +2443,7 @@ class TypeChecker:
         # from_uncertain(u)` would taint `r` in fn B's parameter list.
         self._modal_origin_provenance = {}
         self._modal_origin_let_block_scopes = []
+        self._modal_origin_assigns_block_scopes = []
         error_start = len(self.errors)
         completed = False
         kernel_hbm_indexables = (
@@ -2569,6 +2591,7 @@ class TypeChecker:
         # on inner-Assign).
         saved_modal_origin = dict(self._modal_origin_provenance)
         self._modal_origin_let_block_scopes.append(set())
+        self._modal_origin_assigns_block_scopes.append(set())
         try:
             for stmt in block.stmts:
                 self._check_stmt(stmt, inner)
@@ -2653,15 +2676,36 @@ class TypeChecker:
                     if self._modal_origin_let_block_scopes
                     else set()
                 )
-                for name in list(
-                        self._modal_origin_provenance.keys()):
-                    if name in inner_modal_lets:
-                        if name in saved_modal_origin:
-                            self._modal_origin_provenance[name] = (
-                                saved_modal_origin[name]
-                            )
-                        else:
-                            del self._modal_origin_provenance[name]
+                # Pop the assigns-set + stash for caller's union
+                # site (NEW-HIGH-2/3/4 fix). _check_block doesn't
+                # use the assigns-set directly; the if-else /
+                # match union sites read self._last_modal_assigns_
+                # popped after each branch returns.
+                self._last_modal_assigns_popped = (
+                    self._modal_origin_assigns_block_scopes.pop()
+                    if self._modal_origin_assigns_block_scopes
+                    else set()
+                )
+                # Stage 52 closure gate-3 NEW-HIGH-1 fix: iterate
+                # the inner_modal_lets set, NOT the current dict's
+                # keys. Pre-fix, an inner-let-shadow `let r: i32 =
+                # 7;` triggered the Let-stmt POP (line ~2873) which
+                # removed `r` from the dict — so at restore time
+                # `r` was no longer in current.keys() and the
+                # saved outer taint was never restored. Net effect:
+                # `let r = from_uncertain(u); { let r: i32 = 7; };
+                # into_known(r)` silently passed (outer r's taint
+                # was lost when the inner shadow popped it).
+                # Post-fix: iterate inner_modal_lets directly and
+                # restore each from saved if present, else drop.
+                for name in inner_modal_lets:
+                    if name in saved_modal_origin:
+                        self._modal_origin_provenance[name] = (
+                            saved_modal_origin[name]
+                        )
+                    else:
+                        self._modal_origin_provenance.pop(
+                            name, None)
 
     def _check_expr_in_block_scope(
         self, expr: A.Expr, scope: Scope
@@ -2691,6 +2735,7 @@ class TypeChecker:
         # mutations propagate upward (AI-safety: taint MUST surface).
         saved_modal_origin = dict(self._modal_origin_provenance)
         self._modal_origin_let_block_scopes.append(set())
+        self._modal_origin_assigns_block_scopes.append(set())
         try:
             return self._check_expr(expr, scope)
         finally:
@@ -2711,21 +2756,29 @@ class TypeChecker:
             for n in mutated_outer_names:
                 self._result_constructor_provenance.pop(n, None)
             # Scope-aware modal-origin restore at expression-arm
-            # site, mirroring the _check_block logic.
+            # site, mirroring the _check_block logic — gate-3
+            # NEW-HIGH-1 fix: iterate inner_modal_lets, not the
+            # current dict's keys (inner-let-shadow on same name
+            # POPS from dict before this restore runs).
             inner_modal_lets = (
                 self._modal_origin_let_block_scopes.pop()
                 if self._modal_origin_let_block_scopes
                 else set()
             )
-            for name in list(
-                    self._modal_origin_provenance.keys()):
-                if name in inner_modal_lets:
-                    if name in saved_modal_origin:
-                        self._modal_origin_provenance[name] = (
-                            saved_modal_origin[name]
-                        )
-                    else:
-                        del self._modal_origin_provenance[name]
+            # Pop the assigns-set + stash for caller's union
+            # site (NEW-HIGH-2/3/4 fix). Parallel to _check_block.
+            self._last_modal_assigns_popped = (
+                self._modal_origin_assigns_block_scopes.pop()
+                if self._modal_origin_assigns_block_scopes
+                else set()
+            )
+            for name in inner_modal_lets:
+                if name in saved_modal_origin:
+                    self._modal_origin_provenance[name] = (
+                        saved_modal_origin[name]
+                    )
+                else:
+                    self._modal_origin_provenance.pop(name, None)
 
     def _check_stmt(self, stmt: A.Stmt, scope: Scope) -> None:
         if isinstance(stmt, A.Let):
@@ -5262,8 +5315,10 @@ class TypeChecker:
             # via the multi-kind drop semantics (HIGH-C fix).
             modal_origin_pre_if = dict(self._modal_origin_provenance)
             branch_results: list[dict[str, str]] = []
+            branch_assigns: list[set[str]] = []
             t = self._check_block(expr.then, scope)
             branch_results.append(dict(self._modal_origin_provenance))
+            branch_assigns.append(set(self._last_modal_assigns_popped))
             branch_tys = [t]
             if expr.else_ is not None:
                 # Restore pre-if state before else.
@@ -5279,6 +5334,7 @@ class TypeChecker:
                     # if-expr boundary.
                     e = self._check_expr_in_block_scope(expr.else_, scope)
                 branch_results.append(dict(self._modal_origin_provenance))
+                branch_assigns.append(set(self._last_modal_assigns_popped))
                 branch_tys.append(e)
                 if not self._compatible(t, e):
                     self.errors.append(TypeError_(
@@ -5286,23 +5342,37 @@ class TypeChecker:
                         expr.span,
                     ))
             else:
-                # No-else branch: implicit no-op arm result == pre-if.
-                # If then-branch installed new taint, conservative
-                # union: pre-if (no taint) ∪ then-taint → name has
-                # 1-kind, propagate. If then-branch changed an
-                # existing taint kind, conflict → drop (HIGH-C
-                # multi-kind semantics).
+                # No-else branch: implicit no-op arm result == pre-if,
+                # with no assigns (the branch didn't execute).
                 branch_results.append(dict(modal_origin_pre_if))
-            # Union arm results with the multi-kind drop semantics
-            # (HIGH-C parity with match-arm union below).
+                branch_assigns.append(set())
+            # Stage 52 closure gate-3 NEW-HIGH-2/3/4 fix: union with
+            # the "branch reassigned without modal taint" drop. For
+            # each name observed across pre-if + arm-results,
+            # collect its observed kinds. Then for any name that
+            # ANY branch reassigned (in branch_assigns[i]) but
+            # which is NOT in that branch's arm_result (i.e. the
+            # branch's reassignment didn't install modal taint),
+            # drop the name from the union. Else apply the
+            # multi-kind-drop rule.
             observed_kinds: dict[str, set[str]] = {}
             for name, kind in modal_origin_pre_if.items():
                 observed_kinds.setdefault(name, set()).add(kind)
             for arm_result in branch_results:
                 for name, kind in arm_result.items():
                     observed_kinds.setdefault(name, set()).add(kind)
+            # Names a branch ASSIGNED but where its arm-result has
+            # NO taint entry → that branch cleared the taint.
+            # Drop those names from the union.
+            cleared_names: set[str] = set()
+            for i, assigns in enumerate(branch_assigns):
+                for name in assigns:
+                    if name not in branch_results[i]:
+                        cleared_names.add(name)
             unioned_if: dict[str, str] = {}
             for name, kinds in observed_kinds.items():
+                if name in cleared_names:
+                    continue  # branch cleared → drop static claim
                 if len(kinds) == 1:
                     unioned_if[name] = next(iter(kinds))
             self._modal_origin_provenance = unioned_if
@@ -5328,6 +5398,7 @@ class TypeChecker:
             # any arm propagates).
             modal_origin_pre_match = dict(self._modal_origin_provenance)
             modal_origin_arm_results: list[dict[str, str]] = []
+            arm_assigns: list[set[str]] = []
             for arm in expr.arms:
                 inner = Scope(parent=scope)
                 self._bind_pattern(arm.pattern, scrut_ty, inner)
@@ -5360,6 +5431,11 @@ class TypeChecker:
                 # Save this arm's resulting modal-origin state.
                 modal_origin_arm_results.append(
                     dict(self._modal_origin_provenance))
+                # Stage 52 closure gate-3 NEW-HIGH-4 fix: capture
+                # the assigns-set the arm popped (names this arm
+                # reassigned, whether or not the Assign installed
+                # modal kind). Symmetric with the A.If fix.
+                arm_assigns.append(set(self._last_modal_assigns_popped))
             # Stage 52 Inc 3 — UNION arm results. For each name,
             # if ANY arm installed taint of kind K, the post-match
             # value is conservatively tainted with K. If two arms
@@ -5381,6 +5457,16 @@ class TypeChecker:
             # into_X falls back to no-static-claim (joins the
             # dynamic/no-taint path which Stage 53 helper-fn taint
             # will cover).
+            # Stage 52 closure gate-3 NEW-HIGH-4 fix: also drop
+            # any name an arm REASSIGNED without installing taint
+            # (the assignment cleared the pre-match kind). Mirrors
+            # A.If's branch-cleared drop. Without this, `let r =
+            # from_uncertain(u); match cond { true => {} false =>
+            # r = 0 }; into_known(r)` silently passes because the
+            # union sees pre-match 'uncertain' + arm-true 'uncer-
+            # tain' = single kind 'uncertain', but arm-false clear-
+            # ed it; the union should drop because at runtime
+            # arm-false's path makes r untainted.
             unioned_modal_origin: dict[str, str] = {}
             # Collect all (name → set of observed kinds) across
             # pre-match + each arm-result. Names with a single
@@ -5392,7 +5478,17 @@ class TypeChecker:
             for arm_result in modal_origin_arm_results:
                 for name, kind in arm_result.items():
                     observed_kinds.setdefault(name, set()).add(kind)
+            # Names an arm ASSIGNED but where its arm-result has
+            # NO taint entry → that arm cleared the taint. Drop
+            # those names from the union (gate-3 NEW-HIGH-4 fix).
+            cleared_names_match: set[str] = set()
+            for i, assigns in enumerate(arm_assigns):
+                for name in assigns:
+                    if name not in modal_origin_arm_results[i]:
+                        cleared_names_match.add(name)
             for name, kinds in observed_kinds.items():
+                if name in cleared_names_match:
+                    continue  # arm cleared → drop static claim
                 if len(kinds) == 1:
                     unioned_modal_origin[name] = next(iter(kinds))
                 # else: multi-kind divergence → drop (no static
@@ -5508,6 +5604,17 @@ class TypeChecker:
             # (Renamed from stage52-inc2 per gate-2 type-design F8.)
             if (expr.op == "="
                     and isinstance(expr.target, A.Name)):
+                # Stage 52 closure gate-3 NEW-HIGH-2/3/4 fix:
+                # record this Assign in the assigns-set
+                # regardless of whether the RHS installs taint.
+                # Union sites (if-else, match) use this to detect
+                # "branch overwrote name with non-modal value"
+                # which should drop the pre-state's static claim
+                # (else the union over-claims taint that the
+                # runtime might never carry).
+                if self._modal_origin_assigns_block_scopes:
+                    self._modal_origin_assigns_block_scopes[-1].add(
+                        expr.target.name)
                 if (isinstance(expr.value, A.Call)
                         and isinstance(expr.value.callee, A.Name)
                         and expr.value.callee.name
