@@ -92,6 +92,66 @@ AD_KNOWN_PURE_CALLS = {
 }
 
 
+# Stage 36 Inc 12 — close Inc 11 type-design B2 MEDIUM deferral.
+#
+# These builtins are integer-valued boolean Logic ops. They are
+# kept in AD_KNOWN_PURE_CALLS so let-inlining doesn't trap on an
+# unused `let _ = and_logic(...)` inside a grad/grad_rev body,
+# but a *differentiated* call site has no meaningful chain rule
+# (the derivative of integer truth-table arithmetic is 0 almost
+# everywhere and undefined at the step). Pre-Inc-12 such a call
+# silently produced a zero derivative; user code intending
+# `fuzzy_and` (which IS differentiable) got a vacuous gradient
+# with no diagnostic.
+#
+# Post-Inc-12 both forward `_diff_call_chain_rule` and reverse
+# `_propagate` consult this set BEFORE the chain-rule arms and
+# raise NotImplementedError with a message pointing at the fuzzy
+# alternative — same fail-closed discipline as the Inc 9 B3 fix
+# for `prove(x, x)` and the Stage 35 opaque-call NotImplementedError.
+AD_INTEGER_VALUED_LOGIC = frozenset({
+    "and_logic", "or_logic", "not_logic",
+    "xor_logic", "implies_logic", "eq_logic", "if_logic",
+    "to_logic_bool",
+})
+
+
+# Mapping from integer-valued Logic op to its closest fuzzy
+# (differentiable) replacement, surfaced in the NotImplementedError
+# message. Ops without a 1:1 fuzzy twin (eq_logic / if_logic /
+# to_logic_bool) point at the general guidance.
+_LOGIC_FUZZY_HINTS = {
+    "and_logic": "fuzzy_and",
+    "or_logic": "fuzzy_or",
+    "not_logic": "fuzzy_not",
+    "xor_logic": "fuzzy_xor",
+    "implies_logic": "fuzzy_implies",
+}
+
+
+def _raise_integer_logic_in_ad(callee_name: str, mode: str) -> None:
+    """Stage 36 Inc 12: refuse to silently zero through an integer
+    boolean Logic op in differentiated code. `mode` is 'forward' or
+    'reverse' for diagnostic provenance."""
+    hint = _LOGIC_FUZZY_HINTS.get(callee_name)
+    if hint:
+        suggestion = (
+            f"use {hint!r} (continuous fuzzy-logic relaxation) if a "
+            "gradient is needed; otherwise hoist this call outside the "
+            "differentiated function"
+        )
+    else:
+        suggestion = (
+            "this op has no differentiable fuzzy twin; replace it with "
+            "fuzzy_and / fuzzy_or / fuzzy_not composition or hoist the "
+            "call outside the differentiated function"
+        )
+    raise NotImplementedError(
+        f"{mode}-mode AD: {callee_name!r} is integer-valued boolean "
+        f"logic and has no chain rule; {suggestion}"
+    )
+
+
 # Audit 28.8 B5: trap 85001 — AD assumed 0 derivative for an unhandled
 # expression kind. Both forward (_diff) and reverse (_propagate) used
 # to fall through to "return 0" / "no contribution" for any unmatched
@@ -999,6 +1059,12 @@ def _diff_call_chain_rule(call: A.Call, var: str,
     Returns None if the callee isn't a recognised transcendental."""
     if not isinstance(call.callee, A.Name):
         return None
+    # Stage 36 Inc 12 — close Inc 11 type-design B2 MEDIUM deferral.
+    # Integer-valued boolean Logic ops have no meaningful chain rule;
+    # pre-fix they silently produced a zero derivative. Fail loud
+    # before any chain-rule arm runs.
+    if call.callee.name in AD_INTEGER_VALUED_LOGIC:
+        _raise_integer_logic_in_ad(call.callee.name, "forward")
     # Handle __powi(x, n) separately: 2-arg with n literal int.
     # d(x^n)/dx = n * x^(n-1) * dx/dvar.
     if call.callee.name == "__powi" and len(call.args) == 2:
