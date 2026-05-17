@@ -597,27 +597,49 @@ class TypeChecker:
         # determinable wrong-arm cases.
         #
         # Stewardship sites (search for `_result_constructor_provenance`):
-        #   1. declaration (here)
-        #   2. cleared at check() entry (per check() invocation)
-        #   3. cleared at _check_fn entry (per fn — gate-2 M5 fix)
-        #   4. snapshot + mutate-aware restore across _check_block
-        #      (gate-2 F1 + gate-3 G3-F1 fixes; uses the parallel
-        #      _result_let_block_scopes set-stack to distinguish
-        #      inner-let shadows from inner-assign outer mutations)
-        #   5. Let-stmt populates the prov dict AND records the
-        #      name in the current block's let-set; pops on
-        #      opaque RHS; propagates through map_ok / map_err
-        #   6. Assign-stmt pops (mutation invalidates static
-        #      provenance)
+        #   Mutation sites (WRITE to the dict — keep in lockstep):
+        #     1. declaration (here)
+        #     2. cleared at check() entry (per check() invocation)
+        #     3. cleared at _check_fn entry (per fn — gate-2 M5 fix)
+        #     4. snapshot + mutate-aware restore across _check_block
+        #        (gate-2 F1 + gate-3 G3-F1 + gate-5 G4-F2 fixes;
+        #        uses the parallel _result_let_block_scopes AND
+        #        _result_assigns_block_scopes set-stacks to
+        #        distinguish inner-let shadows from inner-assign
+        #        outer mutations, including ASSIGN-then-LET-shadow
+        #        on the same name).
+        #     5. Let-stmt populates the prov dict AND records the
+        #        name in the current block's let-set; pops on
+        #        opaque RHS; propagates through map_ok / map_err
+        #     6. Assign-stmt pops/overwrites AND records the name
+        #        in the current block's assigns-set
+        #
+        #   Consumer (read) sites — these READ the dict to make
+        #   typecheck decisions and must be migrated in lockstep
+        #   when the dict's shape changes (gate-4 G4-M2 stewardship):
+        #     C1. unwrap_ok / unwrap_err static-provenance reject
+        #         (search `if bn in ("unwrap_ok", "unwrap_err"):`
+        #         in _check_expr)
+        #     C2. __try (`?`) static-provenance reject — gate-1 F2
+        #         fix (search `bn == "__try"`)
+        #     C3. Assign-arm consults before mutating
+        #         (in the A.Assign arm of _check_expr)
+        #
+        #   Scope-restore helper:
+        #     H1. _check_expr_in_block_scope wraps expression-form
+        #         arm bodies (match-arm body, if-else expr branch,
+        #         match-guard) that bypass _check_block — gate-5
+        #         G4-F1/H2 fix.
         #
         # Lineage: see Stage 46 + Stage 48 closure ledgers in
         # docs/stage{46,48}-progress-2026-05-17.md for the
         # silent-miscompile patterns each rule guards.
         #
-        # Stage 49+ runtime tag replaces the Phase-0 use of this
-        # map; the map itself stays (compile-time provenance
-        # still gives better diagnostics for statically-
-        # constructed Result).
+        # TODO(stage49): the runtime Ok/Err tag obsoletes most of
+        # the Phase-0 static-provenance machinery (the snapshot/
+        # restore, the assigns-stack, and the wrong-arm rejections
+        # become a debug-only lint at most). Sites 2-6 + C1-C3 +
+        # H1 all collapse when site 4's dict goes away.
         self._result_constructor_provenance: dict[str, str] = {}
         # Gate-3 G3-F1 fix: parallel stack tracking which names
         # were INTRODUCED-via-let in each open block. Used at
@@ -625,7 +647,18 @@ class TypeChecker:
         # changed the dict" (restore outer) from "inner assign
         # to outer name changed the dict" (drop outer's stale
         # entry — the value is now mutated and dynamic).
+        # TODO(stage49): collapses when site-4 prov dict is removed.
         self._result_let_block_scopes: list[set[str]] = []
+        # Gate-5 G4-F2 fix: parallel stack tracking which names
+        # were ASSIGNED-TO in each open block. Closes the
+        # ASSIGN-then-LET-shadow hole that gate-3's let-set
+        # alone could not detect (the let-shadow added the name
+        # to inner_lets, which then masked the prior assign's
+        # mutation at restore — outer's stale 'ok' survived).
+        # At restore, any saved name in this set is dropped from
+        # the restored map regardless of let-set membership.
+        # TODO(stage49): collapses when site-4 prov dict is removed.
+        self._result_assigns_block_scopes: list[set[str]] = []
         self._seen_unknown_type_names: set[str] = set()
         # Stage 40 closure gate-2 code-review MEDIUM-1 fix (conf
         # 88): explicit init so re-running check() on the same
@@ -673,8 +706,13 @@ class TypeChecker:
         # starts fresh.
         self._shadowed_builtin_names = set()
         # Stage 46 closure gate-2 G2-F1: clear Result constructor
-        # provenance on each check().
+        # provenance on each check(). Gate-5 G4-M1 parity: also
+        # clear the parallel scope stacks so a check()-reuse from
+        # an LSP/REPL/test harness can't leak stale frames if a
+        # prior _check_block raised between push and pop.
         self._result_constructor_provenance = {}
+        self._result_let_block_scopes = []
+        self._result_assigns_block_scopes = []
         self._recursive_enum_names: set[str] = set()
         self._type_alias_cache = {}
         self._local_const_scalar_scopes = []
@@ -1357,10 +1395,27 @@ class TypeChecker:
                         ty.span,
                     ))
                     return TyUnknown(hint=ty.base)
-                return TyResult(
-                    ok_ty=self._resolve_type(ty.args[0], scope),
-                    err_ty=self._resolve_type(ty.args[1], scope),
-                )
+                ok_ty = self._resolve_type(ty.args[0], scope)
+                err_ty = self._resolve_type(ty.args[1], scope)
+                # Stage 48 closure gate-5 type-design G4-H1
+                # acknowledgement (deferred, audit Option 3):
+                # `Result<Known<...>, E>` in a FUNCTION-RETURN
+                # type position raises NotImplementedError at
+                # IR lowering because _lower_type's Result-arm
+                # identity-recurses into the Stage 37-41 wrapper-
+                # quintet which has no type-position arm. The
+                # parallel agent's overly-broad reject at let-
+                # binding position broke an existing Stage 46
+                # test that proves let-RHS-position composition
+                # works (the wrapper is unwrapped through
+                # expression-position arms, never reaching
+                # _lower_type's type-position dispatch). Pinning
+                # test for the fn-return-type-position failure
+                # is in tests; for let-binding usage Result-of-
+                # wrapper continues to work.
+                # TODO(stage49): runtime Ok/Err tag + wrapper
+                # type-position arms eliminate the asymmetry.
+                return TyResult(ok_ty=ok_ty, err_ty=err_ty)
             # Stage 28 — user-defined parametric struct (Audit 28.8 A3/B1).
             # If `ty.base` is a known generic struct AND the arity matches,
             # resolve `Pt<i32>` -> `TyStruct("Pt__i32")` so distinct
@@ -2271,7 +2326,17 @@ class TypeChecker:
         # inherited the stale 'ok' provenance, falsely rejecting
         # `unwrap_err(r)` on B's parameter as "Ok-constructed".
         # Per-fn locals must not leak across the fn boundary.
+        #
+        # Gate-5 G4-M1 parity: also clear the parallel scope
+        # stacks. Push/pop balance within a single fn body's
+        # _check_block makes this defense-in-depth (a fn body is
+        # always A.Block, so push/pop balance is preserved by the
+        # try/finally), but a generic exception escaping
+        # _check_block between push and pop would leak frames into
+        # the next fn without the explicit reset.
         self._result_constructor_provenance = {}
+        self._result_let_block_scopes = []
+        self._result_assigns_block_scopes = []
         error_start = len(self.errors)
         completed = False
         kernel_hbm_indexables = (
@@ -2397,8 +2462,18 @@ class TypeChecker:
         # dynamic Phase-0 limitation: typecheck-clean, runtime
         # still wrong without Stage 49 runtime tag, but no false
         # static 'Ok-constructed' claim).
+        #
+        # Stage 48 closure gate-5 silent-failure G4-F2 fix: gate-3's
+        # let-set alone produced a per-name not per-event mask.
+        # A block that ASSIGNS to outer `r` and THEN shadow-LETs
+        # a new `r` would put `r` in inner_lets, masking the
+        # prior assign's mutation at restore. The parallel
+        # assigns-set populated by the Assign-arm makes the mask
+        # per-event: any saved name in inner_assigns is treated
+        # as mutated regardless of let-shadow membership.
         saved_provenance = dict(self._result_constructor_provenance)
         self._result_let_block_scopes.append(set())
+        self._result_assigns_block_scopes.append(set())
         try:
             for stmt in block.stmts:
                 self._check_stmt(stmt, inner)
@@ -2439,27 +2514,78 @@ class TypeChecker:
             try:
                 self._pop_local_const_scope()
             finally:
-                # Gate-3 G3-F1 fix (scope-aware): the inner-let
-                # names recorded by this block are inner-only
-                # shadows — they don't affect outer state. Names
-                # in the saved map whose current value differs AND
-                # are NOT inner-let-introduced were mutated by an
-                # inner assign (or map_ok/map_err) targeting the
-                # outer name — drop them so the post-block code
-                # sees the dynamic mutation (joins F1-dynamic
-                # Phase-0 limitation, not a false static claim).
+                # Gate-3 G3-F1 + Gate-5 G4-F2 scope-aware restore:
+                # the inner-let names recorded by this block are
+                # inner-only shadows — they don't affect outer
+                # state. The inner-assign names record the actual
+                # mutation events (the per-event mask that closes
+                # the G4-F2 ASSIGN-then-LET-shadow hole). Names
+                # in the saved map are dropped if:
+                #   (a) they were inner-assigned at any point
+                #       (per-event mask), OR
+                #   (b) their current value differs from saved
+                #       AND they were NOT inner-let-introduced
+                #       (the gate-3 G3-F1 detection path).
+                # Both cases drop to F1-dynamic Phase-0 territory
+                # (no false static claim).
                 inner_lets = (self._result_let_block_scopes.pop()
                               if self._result_let_block_scopes
                               else set())
+                inner_assigns = (self._result_assigns_block_scopes.pop()
+                                 if self._result_assigns_block_scopes
+                                 else set())
                 mutated_outer_names = {
                     n for n in saved_provenance
-                    if (n not in inner_lets
-                        and self._result_constructor_provenance.get(n)
-                        != saved_provenance.get(n))
+                    if (n in inner_assigns
+                        or (n not in inner_lets
+                            and self._result_constructor_provenance.get(n)
+                            != saved_provenance.get(n)))
                 }
                 self._result_constructor_provenance = saved_provenance
                 for n in mutated_outer_names:
                     self._result_constructor_provenance.pop(n, None)
+
+    def _check_expr_in_block_scope(
+        self, expr: A.Expr, scope: Scope
+    ) -> Type:
+        """Stage 48 closure gate-5 silent-failure G4-F1 / type-design
+        G4-H2 fix: wrap _check_expr with the same provenance
+        snapshot/restore that _check_block applies. Used at sites
+        where an expression-form arm body bypasses _check_block:
+        match-arm body, if/else expression-form arm, match-guard.
+
+        Without this wrapper, an Assign inside such an arm
+        permanently mutates the outer provenance dict — branching
+        control flow is silently unmodeled. Block-form arms hit
+        _check_block directly and get the same protection.
+
+        Mirrors the gate-3 G3-F1 + gate-5 G4-F2 scope-aware
+        restore semantics exactly: inner-let shadows leave outer
+        provenance untouched; inner-assign mutations of outer
+        names (including ASSIGN-then-LET-shadow on the same name)
+        drop the outer's stale entry."""
+        saved_provenance = dict(self._result_constructor_provenance)
+        self._result_let_block_scopes.append(set())
+        self._result_assigns_block_scopes.append(set())
+        try:
+            return self._check_expr(expr, scope)
+        finally:
+            inner_lets = (self._result_let_block_scopes.pop()
+                          if self._result_let_block_scopes
+                          else set())
+            inner_assigns = (self._result_assigns_block_scopes.pop()
+                             if self._result_assigns_block_scopes
+                             else set())
+            mutated_outer_names = {
+                n for n in saved_provenance
+                if (n in inner_assigns
+                    or (n not in inner_lets
+                        and self._result_constructor_provenance.get(n)
+                        != saved_provenance.get(n)))
+            }
+            self._result_constructor_provenance = saved_provenance
+            for n in mutated_outer_names:
+                self._result_constructor_provenance.pop(n, None)
 
     def _check_stmt(self, stmt: A.Stmt, scope: Scope) -> None:
         if isinstance(stmt, A.Let):
@@ -4531,15 +4657,16 @@ class TypeChecker:
                     #    and at runtime (Stage 49+ once branching is
                     #    live) the propagated Err would have the
                     #    WRONG TYPE wrt the function's signature.
-                    # 5. Constructor-provenance: `Ok(7)?` is a
-                    #    degenerate identity; `Err(7)?` is an
-                    #    unconditional early-return. Neither is a
-                    #    Phase-0 bug per se (no runtime tag → both
-                    #    fall through to the Ok-extract path
-                    #    identically). We allow both without a
-                    #    diagnostic here; a dedicated lint can flag
-                    #    them in a follow-up stage if dogfooding
-                    #    surfaces them as real user mistakes.
+                    # 5. Constructor-provenance: `Ok(7)?` is
+                    #    benign (Phase-0 identity); `Err(7)?` is
+                    #    REJECTED via the gate-1 F2 diagnostic
+                    #    when the operand is an A.Name with known
+                    #    "err" provenance (see code at the
+                    #    `_result_constructor_provenance` consult
+                    #    below — search "gate-1 silent-failure F2
+                    #    fix"). The non-Name and dynamic-Err cases
+                    #    remain F1-class deferred (Stage 49 runtime
+                    #    tag fixes the whole class).
                     # 6. Result type = the operand's Ok inner.
                     #    Caveat: a freshly-constructed `Err(7)?`
                     #    yields a Result whose ok_ty is the
@@ -4941,7 +5068,12 @@ class TypeChecker:
                 if isinstance(expr.else_, A.Block):
                     e = self._check_block(expr.else_, scope)
                 else:
-                    e = self._check_expr(expr.else_, scope)
+                    # Gate-5 G4-F1/H2 fix: expression-form else
+                    # arm bypasses _check_block. Wrap with the
+                    # snapshot/restore helper so an Assign inside
+                    # cannot leak provenance mutations past the
+                    # if-expr boundary.
+                    e = self._check_expr_in_block_scope(expr.else_, scope)
                 branch_tys.append(e)
                 if not self._compatible(t, e):
                     self.errors.append(TypeError_(
@@ -4956,14 +5088,27 @@ class TypeChecker:
                 inner = Scope(parent=scope)
                 self._bind_pattern(arm.pattern, scrut_ty, inner)
                 if arm.guard is not None:
-                    g_ty = self._check_expr(arm.guard, inner)
+                    # Gate-5 G4-M3 fix: guard expression bypasses
+                    # _check_block. Wrap to prevent any Assign
+                    # inside the guard from leaking provenance
+                    # mutations into the surrounding scope.
+                    g_ty = self._check_expr_in_block_scope(arm.guard, inner)
                     if not (isinstance(g_ty, TyPrim) and g_ty.name == "bool") \
                             and not isinstance(g_ty, TyUnknown):
                         self.errors.append(TypeError_(
                             f"match guard must be bool, got {self._fmt(g_ty)}",
                             arm.span,
                         ))
-                arm_tys.append(self._check_expr(arm.body, inner))
+                # Gate-5 G4-F1/H2 fix: bare-expression arm bodies
+                # (e.g. `pat => r = Err(99)`) bypass _check_block.
+                # The Assign-arm mutates the provenance dict in
+                # _check_expr directly; without snapshot/restore
+                # the last arm's mutation "wins" silently and a
+                # post-match `?` accepts under stale provenance,
+                # producing a silent runtime miscompile (gate-4
+                # G4-F1 reproducer exit 99).
+                arm_tys.append(
+                    self._check_expr_in_block_scope(arm.body, inner))
             self._check_match_exhaustive(expr, scrut_ty)
             if not arm_tys:
                 return TyUnit()
@@ -5018,6 +5163,18 @@ class TypeChecker:
             # otherwise pop the entry so a non-constructor
             # reassignment clears the stale provenance rather
             # than silently keeping it.
+            # Gate-5 G4-F2 fix: record the assign event regardless
+            # of whether the target name is currently tracked in
+            # the prov dict. The restore filter at _check_block /
+            # _check_expr_in_block_scope intersects with the saved
+            # snapshot, so non-Result names are harmless. The
+            # per-event mask closes the ASSIGN-then-LET-shadow
+            # hole gate-3's let-set alone could not detect.
+            if (expr.op == "="
+                    and isinstance(expr.target, A.Name)
+                    and self._result_assigns_block_scopes):
+                self._result_assigns_block_scopes[-1].add(
+                    expr.target.name)
             if (expr.op == "="
                     and isinstance(expr.target, A.Name)
                     and expr.target.name

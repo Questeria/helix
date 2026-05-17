@@ -541,3 +541,182 @@ fn helper() -> Result<i32, i32> {
     diag_str = " ".join(str(e) for e in errs)
     assert "on 'x'" in diag_str, \
         f"diagnostic must name the operand `x`, got: {diag_str}"
+
+
+# ============================================================
+# Stage 48 Inc 4 closure gate-5 fix sweep — verifies the
+# fixes for G4-F1 (match-arm bare-Assign scope leak), G4-F2
+# (ASSIGN-then-LET-shadow on same name), G4-H1 (Result<wrapper,
+# _> typecheck-side rejection), G4-H2 (expression-form if-else
+# arm scope leak), and G4-M3 (match-guard scope leak).
+# ============================================================
+
+
+def test_stage48_closure_gate5_g4f1_match_arm_bare_assign_no_stale_claim():
+    """Gate-5 G4-F1: match-arm bare-expression bodies bypass
+    _check_block. Pre-fix the Assign-arm mutated the provenance
+    dict directly; the last arm's mutation would "win" silently
+    and a post-match `?` accepted under stale provenance. Post-
+    fix (the `_check_expr_in_block_scope` helper wrapping arm.body),
+    the inner-block ASSIGN cases drop to F1-dynamic Phase-0
+    territory — typecheck-clean (no false 'ok' claim), runtime
+    exit 99 acknowledged as F1 deferral.
+
+    The audit verified exit 99 on the reproducer; this test pins
+    the typecheck-side discipline (no false static accept of a
+    post-match `?` that follows arm-body Assign mutations)."""
+    src = """
+fn helper(x: i32) -> Result<i32, i32> {
+    let mut r: Result<i32, i32> = Ok(7);
+    match x {
+        0 => r = Err(99),
+        _ => r = Ok(7),
+    };
+    let v: i32 = r?;
+    Ok(v)
+}
+fn main() -> i32 { unwrap_ok(helper(0)) }
+"""
+    prog = parse(src, include_stdlib=True)
+    errs = typecheck(prog)
+    err_strs = [str(e) for e in errs]
+    assert not any("constructed via Ok" in s for s in err_strs), \
+        f"match-arm bare Assign must drop stale 'ok' provenance, " \
+        f"got: {err_strs}"
+
+
+def test_stage48_closure_gate5_g4f2_assign_then_let_shadow_no_stale_claim():
+    """Gate-5 G4-F2: ASSIGN-then-LET-shadow on the same name.
+    Pre-fix the let-shadow added the name to inner_lets, which
+    then masked the prior Assign's mutation at restore — outer's
+    stale 'ok' survived and a post-block `?` accepted under it,
+    producing a silent runtime exit 99.
+
+    Post-fix (parallel `_result_assigns_block_scopes` per-event
+    mask): the assign event is recorded regardless of subsequent
+    let-shadow. At restore, the saved-name-in-assigns branch fires
+    first and drops the stale outer entry. Test pins the absence
+    of the false static `constructed via Ok` claim."""
+    src = """
+fn helper() -> Result<i32, i32> {
+    let mut r: Result<i32, i32> = Ok(11);
+    {
+        r = Err(99);
+        let r: Result<i32, i32> = Ok(5);
+        let _x: i32 = unwrap_ok(r);
+    };
+    let v: i32 = r?;
+    Ok(v)
+}
+fn main() -> i32 { unwrap_ok(helper()) }
+"""
+    prog = parse(src, include_stdlib=True)
+    errs = typecheck(prog)
+    err_strs = [str(e) for e in errs]
+    assert not any("constructed via Ok" in s for s in err_strs), \
+        f"ASSIGN-then-LET-shadow must drop stale 'ok' provenance, " \
+        f"got: {err_strs}"
+
+
+def test_stage48_closure_gate5_g4h1_result_of_wrapper_in_fn_signature_raises_at_ir():
+    """Gate-5 G4-H1 (audit Option 3 — DEFERRED): Result whose
+    Ok or Err side is a Stage 37-41 wrapper-quintet in a FUNCTION
+    SIGNATURE position typechecks clean BUT raises
+    NotImplementedError at IR lowering, because _lower_type's
+    Result-arm identity-recurses into the wrapper which has no
+    type-position arm.
+
+    The parallel-agent's initial gate-5 fix rejected this at
+    typecheck broadly, but that broke an existing Stage 46 test
+    + the dogfood_16 cross_stack_result probe (both use
+    Result<Known<i32>, i32> in LET-BINDING position where the
+    expression-lowerer arms handle the wrapper unwrapping
+    correctly). The reject was narrowed away; this test pins
+    the actual Phase-0 limitation site (fn-signature only) so a
+    future regression surfaces the right delta when Stage 49
+    lifts it.
+
+    TODO(stage49): runtime Ok/Err tag + wrapper type-position
+    arms make this case work; flip the test to assert clean
+    compilation + correct runtime behavior."""
+    import pytest as _pytest
+
+    # Ok-side wrapper in fn-return-type position
+    src_ok = """
+fn ret_known() -> Result<Known<i32>, i32> {
+    let k: Known<i32> = into_known(42);
+    Ok(k)
+}
+fn main() -> i32 { 0 }
+"""
+    prog = parse(src_ok, include_stdlib=True)
+    # Typecheck is intentionally clean — the limitation is at IR.
+    assert typecheck(prog) == [], \
+        "Result<Known<...>, ...> in fn-signature should typecheck " \
+        "clean post-narrowing (the IR-lowering limit is pinned " \
+        "separately below)."
+    # IR lowering raises NotImplementedError when fn-return-type
+    # contains a wrapper-quintet that _lower_type can't recurse.
+    with _pytest.raises(NotImplementedError):
+        lower(prog)
+
+
+def test_stage48_closure_gate5_g4h2_if_else_expr_form_no_scope_leak():
+    """Gate-5 G4-H2 (medium-high): expression-form if/else arms
+    bypass _check_block. Pre-fix an Assign inside an expression-
+    form else branch permanently mutated the outer provenance
+    dict, producing either a false-reject or a silent miscompile
+    depending on which arm assigned. Post-fix (the helper wraps
+    expression-form else), the if-expr is a scope vehicle and the
+    outer dict is restored after the branches.
+
+    This test exercises the cleaner shape: an if-then-else where
+    one arm assigns to a sentinel and the other doesn't. The
+    post-if `?` must NOT see a false 'ok' claim from the unmodified
+    arm."""
+    src = """
+fn helper(b: bool) -> Result<i32, i32> {
+    let mut r: Result<i32, i32> = Ok(13);
+    if b { r = Err(99); } else { r = Ok(7) };
+    let v: i32 = r?;
+    Ok(v)
+}
+fn main() -> i32 { unwrap_ok(helper(true)) }
+"""
+    prog = parse(src, include_stdlib=True)
+    errs = typecheck(prog)
+    err_strs = [str(e) for e in errs]
+    assert not any("constructed via Ok" in s for s in err_strs), \
+        f"if-else expression-form arms must not leave stale 'ok' " \
+        f"claim, got: {err_strs}"
+
+
+def test_stage48_closure_gate5_lifecycle_clears_at_check_entry():
+    """Gate-5 G4-M1: `_result_let_block_scopes` and the new
+    `_result_assigns_block_scopes` are cleared at `check()` entry
+    (parallel to `_result_constructor_provenance`). Verifies the
+    defense-in-depth: a TypeChecker instance whose prior check()
+    invocation got an exception escape mid-_check_block would
+    leak frames into the next check() without the explicit reset.
+
+    Test pattern: re-run check() on the same TypeChecker instance
+    twice after manually pre-poisoning the stacks. Post-fix the
+    stacks come back empty."""
+    src = """
+fn main() -> i32 { 0 }
+"""
+    prog = parse(src, include_stdlib=True)
+    tc = TypeChecker(prog)
+    # Pre-poison
+    tc._result_let_block_scopes = [{"poison"}, {"poison2"}]
+    tc._result_assigns_block_scopes = [{"poison"}]
+    tc._result_constructor_provenance = {"poison": "ok"}
+    tc.check()
+    assert tc._result_let_block_scopes == [], \
+        f"let-block scopes must reset at check() entry, " \
+        f"got: {tc._result_let_block_scopes}"
+    assert tc._result_assigns_block_scopes == [], \
+        f"assigns-block scopes must reset at check() entry, " \
+        f"got: {tc._result_assigns_block_scopes}"
+    # The prov dict also clears (already gate-2 M5):
+    assert "poison" not in tc._result_constructor_provenance

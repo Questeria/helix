@@ -237,14 +237,18 @@ Stage 48 test count: 11 → 14 (gate-2 +F1, +M5, +F5) → 18
 Stage 46+48 combined: 45 tests pass. Self-host cascade still
 3/3 byte-identical. dogfood_16 + dogfood_17 still exit 42.
 
-### Gate-3 final audit cycle (this CLOSE commit)
+### Gate-3 verification audit cycle (Stage 48 CLOSED commit 7eaba56)
 
-Re-spawned all 3 audit lanes against the c32dfbb HEAD to
-confirm no new defect class introduced by the gate-2+gate-3
-fix sweep. Findings → `docs/audit-stage48-inc4-gate3-{silent-
-failures,type-design,codereview}.md`.
+Re-spawned all 3 audit lanes to confirm no new defect class
+introduced by the gate-2+gate-3 fix sweep. The first verification
+read findings → `docs/audit-stage48-inc4-gate3-{silent-failures,
+type-design,codereview}.md`.
 
-**Verdict: 3/3 GATE-3 CLEAN — Stage 48 CLOSED at Inc 4.**
+**Initial verdict: 3/3 GATE-3 CLEAN — Stage 48 declared CLOSED.**
+
+(See "Gate-4/5 cascade" below for the follow-up audit pass that
+caught two more HIGHs against the gate-3 head, and the subsequent
+narrowing that landed in commit 3415727→ next-commit.)
 
 - **Silent-failure**: 0 HIGH/CRITICAL. 1 MEDIUM (MED-1:
   `let r = map_ok(Err(7), 999); r?` — same Phase-0 defect
@@ -275,6 +279,62 @@ Cumulative Stage 48 audit budget: 4 gates (1+2+3+verification),
 Stage 49 or Phase-1. Same cascading-defect rhythm Stage 46
 hit (gate-2 F1 created the gate-3 G3-F1 mirror). Patches
 converged on a sound design.
+
+### Gate-4/5 follow-up cascade (post-close audits)
+
+After the initial 3/3 CLEAN closure declaration, a
+post-close gate-4 silent-failure audit (cron-fired against
+HEAD=3415727) discovered TWO additional HIGH silent miscompiles
+the prior gates missed plus one type-design HIGH:
+
+- **G4-F1 HIGH** (match-arm bare-Assign body bypasses scope
+  restore): `match b { true => { r = Err(99); }, false => {} }`
+  (and bare-block, if-then variants) silently miscompiled to
+  exit 99 — assign-arm mutated provenance but no scope-restore
+  ran for expression-form arm bodies. FIXED via new helper
+  `_check_expr_in_block_scope` wrapping match-arm / if-else
+  expression-form arm bodies with the same snapshot-restore
+  discipline as `_check_block`.
+- **G4-F2 HIGH** (ASSIGN-then-LET-shadow on same name): gate-3's
+  per-name `_result_let_block_scopes` set could not detect a
+  pre-shadow outer-assign — the inner let-shadow's dict write
+  masked the prior mutation, stale 'ok' survived restore, exit
+  50 verified end-to-end. FIXED via parallel
+  `_result_assigns_block_scopes` set-stack populated at every
+  Assign event; at restore, names in this set drop from the
+  restored map unconditionally (per-event mask).
+- **G4-H1 HIGH→DEFERRED** (Result-of-wrapper-quintet asymmetry):
+  `Result<Known<i32>, i32>` in fn-RETURN-type position passes
+  typecheck but raises NotImplementedError at IR lowering
+  because `_lower_type`'s Result-arm identity-recurses into a
+  wrapper-quintet without type-position arms. The initial
+  attempted fix REJECTED at typecheck broadly, but that broke
+  an existing Stage 46 test + the dogfood_16 `cross_stack_result`
+  let-binding probe (both of which use the let-binding-position
+  pattern that works fine via expression-lowerer wrapper-arms).
+  RESOLUTION: narrowed (revert the broad rejection); pin the
+  Phase-0 limit via dedicated test
+  `test_stage48_closure_gate5_g4h1_result_of_wrapper_in_fn_signature_raises_at_ir`
+  asserting typecheck-clean + IR-lowering raises
+  NotImplementedError, mirroring the F5 deferral pattern. Stage
+  49's runtime tag + wrapper type-position arms lift this in
+  one fix.
+
+Updated Stage 48 audit budget: **6 gates** (1+2+3+verification+
+4+5), 30+ findings across 3 lanes, 13 FIXED inline (including 2
+new HIGH silent miscompiles in gate-4/5), 17+ deferred to Stage
+49 or Phase-1. The cascading-defect rhythm is the audit
+infrastructure's job — every closure cycle catches a defect
+class the prior fix didn't think of. Final state IS sound: all
+documented defects are deferred-to-Stage-49 known-limits in the
+F1-dynamic equivalence class that the runtime Ok/Err tag
+eliminates wholesale.
+
+Final test count: Stage 48: 21 tests (Inc 1+2+3 base 11, +F1+M5+F5
+gate-2, +G3-F1a/b/c+operand-name gate-3, +gate-4/5 G4-F1+G4-F2
++G4-H1 pin). Stage 46+48 combined: 50 tests. Self-host cascade
+G2..G4 byte-identical preserved. dogfood_16 + dogfood_17 still
+exit 42.
 
 ### Phase-0 vs Stage 49+ semantic upgrade
 
