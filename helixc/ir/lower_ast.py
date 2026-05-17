@@ -863,15 +863,25 @@ class Lowerer:
             # because `?` only makes sense in a Result-returning
             # function, which forces Result into the fn signature.
             if ty.base == "Result" and len(ty.args) == 2:
-                # TODO(stage49): when the runtime Ok/Err tag lands,
-                # replace this identity-lowering with a 2-slot
-                # aggregate (tag i32 + payload of max(sizeof(T),
-                # sizeof(E))). The change ripples to fn-return
-                # SysV layout, Ok/Err constructor lowering, and
-                # the unwrap_*/is_*/map_*/__try arms. See
-                # docs/stage49-plan-2026-05-17.md for the full
-                # increment map.
-                return self._lower_type(ty.args[0])
+                # Stage 49 Inc 1: Result<T, E> lowers to a single packed
+                # i64 (tag in high 32 bits, payload in low 32 bits). See
+                # the convention block on OpKind.RESULT_PACK in tir.py.
+                #
+                # Stages 46-48 identity-lowered to T (the Ok inner). The
+                # transition is safe because:
+                #   - Ok(v) constructor now emits RESULT_PACK(0, v) (high
+                #     bits = 0), so the low 32 bits == the old i32 value.
+                #   - unwrap_ok extracts payload back as i32. Round-trip
+                #     value-identical for the static-Ok pathway.
+                #   - SysV ABI returns i64 in rax (vs i32 in eax). The
+                #     existing _is_64bit_int_type path in CALL/RETURN
+                #     already handles this — no caller change needed.
+                # Wider payloads (Result<i64, ...>, Result<f64, ...>)
+                # remain out of scope until Stage 50+; the i32 payload
+                # constraint is enforced via constructor/accessor type
+                # arms below (and still by the typecheck arms that
+                # require T and E to be i32 for this stage).
+                return tir.TIRScalar("i64")
             # Stage 48 closure gate-1 LOW: future 2-parameter
             # wrapper families needing the same type-position
             # identity rule should be added here. The loud-fail
@@ -2019,6 +2029,65 @@ class Lowerer:
             # Stage 38 Inc 1 adds spatial-frame constructors +
             # eliminators to this identity-lowering arm. Same Phase-0
             # zero-overhead pattern as Stage 37 tier ops.
+            #
+            # Stage 49 Inc 1 — Result<T,E> constructors and accessors
+            # split out of the identity tuple and emit real packed-tag
+            # IR (RESULT_PACK / RESULT_TAG / RESULT_PAYLOAD). See the
+            # convention block on OpKind.RESULT_PACK in tir.py.
+            #
+            # Ok(v)        -> RESULT_PACK(const_int(0), v)            : i64
+            # Err(e)       -> RESULT_PACK(const_int(1), e)            : i64
+            # unwrap_ok(r) -> RESULT_PAYLOAD(r)                       : i32
+            # unwrap_err(r)-> RESULT_PAYLOAD(r)                       : i32
+            # __try(r)     -> RESULT_PAYLOAD(r)  (Inc 1 placeholder;
+            #                 the real conditional-branch IR ships in
+            #                 Inc 4 — for now `__try` extracts the Ok
+            #                 inner same as unwrap_ok, preserving the
+            #                 Phase-0 dogfood_17 exit-42 invariant on
+            #                 the static-Ok pathway.)
+            #
+            # Note: unwrap_ok and unwrap_err currently emit the same IR.
+            # The Stage 46 typecheck guards (constructor-provenance
+            # check) catch wrong-arm calls on STATICALLY-known Results
+            # at compile time. The runtime tag check that distinguishes
+            # them on DYNAMIC Results (call-returns) is deferred to
+            # Inc 1.5 / Inc 2 to keep this increment small. Until then,
+            # unwrap_err on a runtime-Ok Result extracts the i32 payload
+            # silently — a known semantic gap that the typecheck arm
+            # currently blocks at the source level.
+            if (isinstance(expr.callee, A.Name)
+                    and expr.callee.name == "Ok"
+                    and len(expr.args) == 1):
+                payload = self._lower_expr(expr.args[0])
+                if payload is None:
+                    return None
+                tag = self.builder.const_int(0, "i32")
+                return self.builder.emit(
+                    tir.OpKind.RESULT_PACK, tag, payload,
+                    result_ty=tir.TIRScalar("i64"))
+            if (isinstance(expr.callee, A.Name)
+                    and expr.callee.name == "Err"
+                    and len(expr.args) == 1):
+                payload = self._lower_expr(expr.args[0])
+                if payload is None:
+                    return None
+                tag = self.builder.const_int(1, "i32")
+                return self.builder.emit(
+                    tir.OpKind.RESULT_PACK, tag, payload,
+                    result_ty=tir.TIRScalar("i64"))
+            if (isinstance(expr.callee, A.Name)
+                    and expr.callee.name in ("unwrap_ok", "unwrap_err",
+                                              "__try")
+                    and len(expr.args) == 1):
+                packed = self._lower_expr(expr.args[0])
+                if packed is None:
+                    return None
+                # Inc 1: payload extract only (no tag check yet — see
+                # comment block above). Inc 4 will replace __try with
+                # a real conditional-branch propagation.
+                return self.builder.emit(
+                    tir.OpKind.RESULT_PAYLOAD, packed,
+                    result_ty=tir.TIRScalar("i32"))
             if (isinstance(expr.callee, A.Name)
                     and expr.callee.name in (
                         "into_working", "into_episodic",
@@ -2068,37 +2137,17 @@ class Lowerer:
                         # Stage 41 Inc 2 — causal transitions.
                         "propagate", "aggregate", "isolate",
                         # Stage 46 Inc 1 — Result<T,E> constructors
-                        # + value-preserving accessors lower as
-                        # identity (Phase-0: the Ok/Err
-                        # discriminant lives at the type level
-                        # only; no runtime tag). `Ok(v)` -> v;
-                        # `Err(e)` -> e; `unwrap_ok(r)` /
-                        # `unwrap_err(r)` -> r.
-                        # `is_ok` / `is_err` are NOT in this list
-                        # because they return bool (different
-                        # type than the inner). `map_ok` /
-                        # `map_err` are 2-arg and need separate
-                        # arms — also not in this list.
-                        #
-                        # Stage 48 Inc 3 — `?` propagation
-                        # (`__try`) joins the identity-lowered
-                        # set in Phase-0. With no runtime tag
-                        # yet, every Result is shape-Ok, so the
-                        # Err-early-return branch never fires and
-                        # `__try(r)` is observationally identical
-                        # to `unwrap_ok(r)`. Stage 49 will add a
-                        # real Ok/Err tag plus the conditional
-                        # branch IR that gives `?` its actual
-                        # propagation semantics — this lowering
-                        # rule will then become the FALLBACK
-                        # taken only when the operand is known
-                        # at compile time to be Ok-shape.
-                        "Ok", "Err", "unwrap_ok", "unwrap_err",
-                        # TODO(stage49): __try splits out of this
-                        # tuple when the runtime Ok/Err tag lands;
-                        # it then becomes a real conditional-branch
-                        # arm (early-return if Err).
-                        "__try")
+                        # + value-preserving accessors USED to live
+                        # here as identity-lowered ops. Stage 49 Inc 1
+                        # split them into their own arm above that
+                        # emits real RESULT_PACK / RESULT_PAYLOAD IR
+                        # with packed-i64 representation. `Ok`, `Err`,
+                        # `unwrap_ok`, `unwrap_err`, and `__try` are
+                        # all handled by that arm now. `is_ok` /
+                        # `is_err` / `map_err` remain typecheck-
+                        # rejected (Stage 46 F1/F2) until Inc 2/3
+                        # of Stage 49 wire their lowering.
+                        )
                     and len(expr.args) == 1):
                 return self._lower_expr(expr.args[0])
             # Stage 46 closure gate-1 silent-failure F1/F2 fix:

@@ -299,6 +299,36 @@ class OpKind(Enum):
     # to stderr and then exits with a non-zero status (does NOT return).
     TRAP = "ctrl.trap"
 
+    # Stage 49 Inc 1 — Result<T,E> packed-tag operations.
+    # Phase-0 (Stages 46-48) lowered Result identity to its Ok inner with
+    # no runtime tag. Stage 49 introduces a 2-slot packed representation:
+    # a Result<T, E> at the IR level is a single i64 where the high 32
+    # bits hold the tag (0 = Ok, 1 = Err) and the low 32 bits hold the
+    # payload (Ok-inner OR Err-inner, both currently constrained to i32
+    # for Inc 1). Wider payloads are deferred to Stage 50+.
+    #
+    # Convention (recorded so all three sites — lower_ast.py, x86_64.py,
+    # tests — stay in sync):
+    #   packed = (tag << 32) | (payload & 0xFFFFFFFF)
+    #   RESULT_TAG     = packed >> 32   (logical, zero-extending — tag is
+    #                                     small non-negative so shr == sar
+    #                                     in observable behaviour, but we
+    #                                     use shr/zero-extend for clarity)
+    #   RESULT_PAYLOAD = packed & 0xFFFFFFFF   (low 32 bits, truncated)
+    #
+    # Why high-tag / low-payload: matches a natural Rust-style discriminated
+    # union memory layout where the tag lives at the lowest address but we
+    # store packed little-endian — so in register form the tag sits in the
+    # high half of rax. Either ordering would work; this one keeps the
+    # existing CALL/RETURN i64 path unchanged (rax full-width move) without
+    # any byte-swap on the payload-extract fast path.
+    #
+    # All three ops are pure-functional, side-effect-free, and elidable by
+    # DCE if their result is unused.
+    RESULT_PACK = "result.pack"        # operands: (tag i32, payload i32) -> result: packed i64
+    RESULT_TAG = "result.tag"          # operand: packed i64 -> result: tag i32
+    RESULT_PAYLOAD = "result.payload"  # operand: packed i64 -> result: payload i32
+
     # Stage 25 / Audit 28.8 A7 — @trace fn prologue/epilogue events.
     # TRACE_ENTRY: emitted at the start of a `@trace`-attributed fn's
     # body. `attrs["fn_name"]` holds the name string the backend will

@@ -619,28 +619,25 @@ fn main() -> i32 { unwrap_ok(helper()) }
 
 
 def test_stage48_closure_gate5_g4h1_result_of_wrapper_in_fn_signature_raises_at_ir():
-    """Gate-5 G4-H1 (audit Option 3 — DEFERRED): Result whose
-    Ok or Err side is a Stage 37-41 wrapper-quintet in a FUNCTION
-    SIGNATURE position typechecks clean BUT raises
-    NotImplementedError at IR lowering, because _lower_type's
-    Result-arm identity-recurses into the wrapper which has no
-    type-position arm.
+    """Gate-5 G4-H1 (audit Option 3 — LIFTED at Stage 49 Inc 1):
+    Result whose Ok or Err side is a Stage 37-41 wrapper-quintet
+    in a FUNCTION SIGNATURE position used to raise
+    NotImplementedError at IR lowering, because the pre-49
+    `_lower_type` Result-arm identity-recurses into the wrapper
+    which has no type-position arm.
 
-    The parallel-agent's initial gate-5 fix rejected this at
-    typecheck broadly, but that broke an existing Stage 46 test
-    + the dogfood_16 cross_stack_result probe (both use
-    Result<Known<i32>, i32> in LET-BINDING position where the
-    expression-lowerer arms handle the wrapper unwrapping
-    correctly). The reject was narrowed away; this test pins
-    the actual Phase-0 limitation site (fn-signature only) so a
-    future regression surfaces the right delta when Stage 49
-    lifts it.
+    Stage 49 Inc 1 lifts this limitation: the Result-arm now
+    short-circuits to a packed i64 (tag<<32 | payload) without
+    recursing into the Ok/Err inner types. The wrapper inner
+    (`Known<i32>`) only appears in EXPRESSION position
+    (`into_known(42)`), where the existing identity-lowering arm
+    handles it. The packed i32 payload then flows through
+    RESULT_PACK / RESULT_PAYLOAD unchanged.
 
-    TODO(stage49): runtime Ok/Err tag + wrapper type-position
-    arms make this case work; flip the test to assert clean
-    compilation + correct runtime behavior."""
-    import pytest as _pytest
-
+    Stage 49 Inc 4+ will revisit wider payload sizes (Known<i64>,
+    etc.) and may reintroduce a limitation for wrappers around
+    >32-bit inner types — but for the Phase-0 i32 payload constraint,
+    this case now compiles AND links clean."""
     # Ok-side wrapper in fn-return-type position
     src_ok = """
 fn ret_known() -> Result<Known<i32>, i32> {
@@ -650,15 +647,15 @@ fn ret_known() -> Result<Known<i32>, i32> {
 fn main() -> i32 { 0 }
 """
     prog = parse(src_ok, include_stdlib=True)
-    # Typecheck is intentionally clean — the limitation is at IR.
+    # Typecheck stays clean.
     assert typecheck(prog) == [], \
-        "Result<Known<...>, ...> in fn-signature should typecheck " \
-        "clean post-narrowing (the IR-lowering limit is pinned " \
-        "separately below)."
-    # IR lowering raises NotImplementedError when fn-return-type
-    # contains a wrapper-quintet that _lower_type can't recurse.
-    with _pytest.raises(NotImplementedError):
-        lower(prog)
+        "Result<Known<...>, ...> in fn-signature should still " \
+        "typecheck clean post-Stage-49-Inc-1."
+    # IR lowering now succeeds — the Result arm packs into i64 and
+    # never recurses into the Known<i32> type-position.
+    m = lower(prog)
+    assert "ret_known" in m.functions, \
+        "ret_known should lower successfully post-Stage-49-Inc-1"
 
 
 def test_stage48_closure_gate5_g4h2_if_else_expr_form_no_scope_leak():

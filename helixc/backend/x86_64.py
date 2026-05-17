@@ -927,6 +927,18 @@ class Asm:
     def shl_rax_cl(self) -> None:  self.b.emit(0x48, 0xD3, 0xE0)
     def sar_rax_cl(self) -> None:  self.b.emit(0x48, 0xD3, 0xF8)
     def shr_rax_cl(self) -> None:  self.b.emit(0x48, 0xD3, 0xE8)
+    # 64-bit immediate-count shift forms. Stage 49 Inc 1 uses these for
+    # the fixed `<< 32` / `>> 32` halves of the Result pack/extract
+    # sequence — encoding the immediate avoids a scratch rcx setup that
+    # the CL-form shifts require.
+    def shl_rax_imm8(self, imm: int) -> None:  self.b.emit(0x48, 0xC1, 0xE0, imm & 0xFF)
+    def shr_rax_imm8(self, imm: int) -> None:  self.b.emit(0x48, 0xC1, 0xE8, imm & 0xFF)
+    # mov eax, eax: 32-bit register-to-register move. Because the
+    # destination is a 32-bit GPR, the CPU automatically zeroes the
+    # upper 32 bits of rax. Equivalent to `rax &= 0xFFFFFFFF` for one
+    # encoded byte less than `and rax, 0xFFFFFFFF`. Stage 49 Inc 1 uses
+    # this to extract the low-32 payload from a packed Result i64.
+    def mov_eax_eax(self) -> None:  self.b.emit(0x89, 0xC0)
     # Bitwise unary NOT (~): one's complement.
     def not_eax(self) -> None:  self.b.emit(0xF7, 0xD0)
     def not_rax(self) -> None:  self.b.emit(0x48, 0xF7, 0xD0)
@@ -2176,6 +2188,52 @@ class FnCompiler:
                 self.asm.mov_eax_mem_rbp(slot)
                 self.asm.not_eax()
                 self.asm.mov_mem_rbp_eax(res_slot)
+            return
+        # Stage 49 Inc 1 — Result<T,E> packed-tag ops.
+        # Convention (mirrors the block on OpKind.RESULT_PACK in tir.py):
+        #     packed = (tag << 32) | (payload & 0xFFFFFFFF)
+        #     tag    = packed >> 32   (logical, zero-extending)
+        #     payload= packed & 0xFFFFFFFF
+        # Tag is always 0 or 1 in Inc 1 so signed vs unsigned shift
+        # is observably equivalent; we use the logical (zero-extending)
+        # form for clarity.
+        if op.kind == tir.OpKind.RESULT_PACK:
+            tag_slot = self._slot_of(op.operands[0])
+            payload_slot = self._slot_of(op.operands[1])
+            res_slot = self._slot_of(op.results[0])
+            # Load tag (i32) into rax, then shift left 32 to move it
+            # into the high half. `mov eax, [rbp+tag_slot]` auto-zero-
+            # extends so the upper 32 bits start clean before the shl.
+            self.asm.mov_eax_mem_rbp(tag_slot)
+            self.asm.shl_rax_imm8(32)
+            # Load payload (i32) into ecx with zero-extension into rcx
+            # via the standard 32-bit-dest auto-zero-extend rule.
+            self.asm.mov_ecx_mem_rbp(payload_slot)
+            # The mov ecx, [rbp+...] already zero-extended rcx (top 32
+            # bits are 0). OR the full 64-bit registers to combine the
+            # tag (high half of rax) with the payload (low half of rcx).
+            self.asm.or_rax_rcx()
+            self.asm.mov_mem_rbp_rax(res_slot)
+            return
+        if op.kind == tir.OpKind.RESULT_TAG:
+            packed_slot = self._slot_of(op.operands[0])
+            res_slot = self._slot_of(op.results[0])
+            self.asm.mov_rax_mem_rbp(packed_slot)
+            # Logical right shift by 32 zero-extends the top half down
+            # into the low half. Tag is now in eax; high half of rax
+            # is 0. Store the low 32 bits to the i32 result slot.
+            self.asm.shr_rax_imm8(32)
+            self.asm.mov_mem_rbp_eax(res_slot)
+            return
+        if op.kind == tir.OpKind.RESULT_PAYLOAD:
+            packed_slot = self._slot_of(op.operands[0])
+            res_slot = self._slot_of(op.results[0])
+            # The payload occupies the low 32 bits of the packed i64.
+            # `mov eax, [rbp+packed_slot]` loads exactly those 4 bytes
+            # and auto-zero-extends rax to be tidy. Store the low 32
+            # to the i32 result slot.
+            self.asm.mov_eax_mem_rbp(packed_slot)
+            self.asm.mov_mem_rbp_eax(res_slot)
             return
         if op.kind == tir.OpKind.NEG:
             slot = self._slot_of(op.operands[0])
