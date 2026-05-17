@@ -116,6 +116,11 @@ DEMOS: dict[str, dict] = {
         "title": "Result<T,E> basic round-trip (Stage 46 Inc 3)",
         "expects": "exit code 42  (3 safe_double via Ok/map_ok/unwrap_ok + Result<Known<i32>, i32> cross-stack composition)",
     },
+    "try": {
+        "file": "dogfood_17_try_operator.hx",
+        "title": "? propagation operator over Result<T,E> (Stage 48 Inc 3)",
+        "expects": "exit code 42  (chained safe_div via ? operator: 20/4=5, 5/1=5, 5+37=42; Phase-0 identity-lowered)",
+    },
 }
 
 

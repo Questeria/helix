@@ -2129,11 +2129,19 @@ class TypeChecker:
         "propagate", "aggregate", "isolate",
         # Stage 46 Inc 1 — Result<T, E> constructors + accessors +
         # combinators. Two-parameter wrapper family; Phase-0
-        # identity-lowered. `?` operator is Stage 47+ work.
+        # identity-lowered.
         "Ok", "Err",
         "unwrap_ok", "unwrap_err",
         "is_ok", "is_err",
         "map_ok", "map_err",
+        # Stage 48 Inc 1 — `?` propagation operator. Parser desugars
+        # `expr?` to `__try(expr)`. Reserved internal builtin (the
+        # leading double-underscore is the convention for synthesizable-
+        # only names — users cannot write `__try(...)` directly because
+        # the lexer accepts it but typecheck additionally enforces
+        # the enclosing-fn-return-type constraint, which has no
+        # meaning at top level).
+        "__try",
         "grad", "grad_rev", "grad_rev_all",
         "quote", "splice", "splice_f", "splice_f64",
         "modify", "modify_f", "modify_f64",
@@ -4408,6 +4416,92 @@ class TypeChecker:
                             ))
                             return TyUnknown(hint=bn)
                         return inner.ok_ty
+                if bn == "__try":
+                    # Stage 48 Inc 2 — `?` propagation operator (parser
+                    # desugars `expr?` to `__try(expr)`). Validation:
+                    #
+                    # 1. Arity: exactly one operand.
+                    # 2. Operand must be Result<T, E1>.
+                    # 3. Enclosing fn return type must be Result<U, E2>
+                    #    — `?` cannot propagate up to a non-Result
+                    #    return type. (This is the spec-defining
+                    #    constraint for the operator.)
+                    # 4. E1 must be compatible with E2 (the Err type
+                    #    that `?` propagates must fit the function's
+                    #    own Err slot). This is the silent-miscompile
+                    #    failure mode if the audit lane skipped here:
+                    #    `expr?` would compile, look like it works,
+                    #    and at runtime (Stage 49+ once branching is
+                    #    live) the propagated Err would have the
+                    #    WRONG TYPE wrt the function's signature.
+                    # 5. Constructor-provenance: `Ok(7)?` is a
+                    #    degenerate identity; `Err(7)?` is an
+                    #    unconditional early-return. Neither is a
+                    #    Phase-0 bug per se (no runtime tag → both
+                    #    fall through to the Ok-extract path
+                    #    identically). We allow both without a
+                    #    diagnostic here; a dedicated lint can flag
+                    #    them in a follow-up stage if dogfooding
+                    #    surfaces them as real user mistakes.
+                    # 6. Result type = the operand's Ok inner.
+                    #    Caveat: a freshly-constructed `Err(7)?`
+                    #    yields a Result whose ok_ty is the
+                    #    Stage-46 placeholder TyUnknown(hint="Ok
+                    #    inferred"). That propagates through the
+                    #    rest of typecheck as universally
+                    #    compatible (Stage 46 inference policy),
+                    #    which is the correct Phase-0 behaviour
+                    #    pre-runtime-tag.
+                    if len(arg_tys) != 1:
+                        self.errors.append(TypeError_(
+                            f"`?` takes 1 operand, got {len(arg_tys)}",
+                            expr.span,
+                        ))
+                        return TyUnknown(hint="try")
+                    operand_ty = arg_tys[0]
+                    if not isinstance(operand_ty, TyResult):
+                        self.errors.append(TypeError_(
+                            f"`?` requires a Result<T, E> operand, got "
+                            f"{self._fmt(operand_ty)}",
+                            expr.span,
+                            hint="`?` propagates the Err arm of a "
+                            "Result; the operand must itself be "
+                            "Result-typed",
+                        ))
+                        return TyUnknown(hint="try")
+                    ret_ty = self._current_return_ty
+                    if not isinstance(ret_ty, TyResult):
+                        self.errors.append(TypeError_(
+                            f"`?` used in function "
+                            f"{self._current_fn_name!r} whose return "
+                            f"type is {self._fmt(ret_ty)}, not "
+                            f"Result<T, E>",
+                            expr.span,
+                            hint="change the function's return type "
+                            "to Result<T, E>, or extract the Ok "
+                            "value with unwrap_ok() instead of `?`",
+                        ))
+                        return TyUnknown(hint="try")
+                    # Err-compat: the operand's Err must fit the
+                    # function's Err slot. TyUnknown on either side
+                    # (e.g. `Err(7)` with no annotation produces
+                    # err_ty inferred-from-arg, ok_ty TyUnknown) is
+                    # universally compatible per Stage 46 inference
+                    # policy.
+                    if not self._compatible(operand_ty.err_ty,
+                                            ret_ty.err_ty):
+                        self.errors.append(TypeError_(
+                            f"`?` Err-type mismatch: operand has "
+                            f"Err={self._fmt(operand_ty.err_ty)}, "
+                            f"function {self._current_fn_name!r} "
+                            f"returns Result with "
+                            f"Err={self._fmt(ret_ty.err_ty)}",
+                            expr.span,
+                            hint="the Err type propagated by `?` "
+                            "must match the function's own Err type",
+                        ))
+                        return TyUnknown(hint="try")
+                    return operand_ty.ok_ty
                 if bn in ("is_ok", "is_err"):
                     if len(arg_tys) != 1:
                         self.errors.append(TypeError_(

@@ -841,6 +841,29 @@ class Lowerer:
             # is preserved on the AST for diagnostics but unused at IR level.
             return tir.TIRScalar("u64")
         if isinstance(ty, A.TyGeneric):
+            # Stage 48 — Result<T, E> in a position that reaches IR
+            # (fn return type, let-binding type) lowers to T (the
+            # Ok inner). Phase-0 has no runtime Ok/Err tag, so a
+            # Result is observationally identical to its Ok inner.
+            # Stage 49 will add the runtime tag and supersede this
+            # rule with a 2-slot aggregate (tag word + payload)
+            # lowering.
+            #
+            # Same identity-lowering treatment as the constructors /
+            # accessors / `__try` in the expression lowerer above.
+            #
+            # Only Result is handled here; the Stage 37-41 wrapper
+            # quintet (Known/Past/WorldFrame/Cause/WorkingMem etc.)
+            # is explicitly *not* extended in this stage — those
+            # families have historically been handled by struct-mono
+            # turning them into named structs before IR, and only
+            # surface in let-RHS expression positions where the
+            # expression-lowerer arms handle them. Result is the
+            # first family that NEEDS this type-position rule
+            # because `?` only makes sense in a Result-returning
+            # function, which forces Result into the fn signature.
+            if ty.base == "Result" and len(ty.args) == 2:
+                return self._lower_type(ty.args[0])
             raise NotImplementedError(
                 f"unresolved generic type {ty.base}<...> reached IR "
                 f"lowering; run struct monomorphization first")
@@ -2037,15 +2060,28 @@ class Lowerer:
                         # discriminant lives at the type level
                         # only; no runtime tag). `Ok(v)` -> v;
                         # `Err(e)` -> e; `unwrap_ok(r)` /
-                        # `unwrap_err(r)` -> r. Stage 48+ will
-                        # introduce a real tag + branching once
-                        # `?` early-return semantics need it.
+                        # `unwrap_err(r)` -> r.
                         # `is_ok` / `is_err` are NOT in this list
                         # because they return bool (different
                         # type than the inner). `map_ok` /
                         # `map_err` are 2-arg and need separate
                         # arms — also not in this list.
-                        "Ok", "Err", "unwrap_ok", "unwrap_err")
+                        #
+                        # Stage 48 Inc 3 — `?` propagation
+                        # (`__try`) joins the identity-lowered
+                        # set in Phase-0. With no runtime tag
+                        # yet, every Result is shape-Ok, so the
+                        # Err-early-return branch never fires and
+                        # `__try(r)` is observationally identical
+                        # to `unwrap_ok(r)`. Stage 49 will add a
+                        # real Ok/Err tag plus the conditional
+                        # branch IR that gives `?` its actual
+                        # propagation semantics — this lowering
+                        # rule will then become the FALLBACK
+                        # taken only when the operand is known
+                        # at compile time to be Ok-shape.
+                        "Ok", "Err", "unwrap_ok", "unwrap_err",
+                        "__try")
                     and len(expr.args) == 1):
                 return self._lower_expr(expr.args[0])
             # Stage 46 closure gate-1 silent-failure F1/F2 fix:

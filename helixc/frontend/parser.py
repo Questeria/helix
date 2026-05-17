@@ -1057,6 +1057,22 @@ class Parser:
                         indices.append(self._parse_expr())
                 self._eat(T.RBRACK)
                 expr = ast.Index(span=expr.span, callee=expr, indices=indices)
+            elif self._at(T.QUESTION):
+                # Stage 48 Inc 1 — `expr?` propagation operator.
+                # Desugars to a call to the reserved builtin `__try`,
+                # which the typechecker validates against the enclosing
+                # function's return type. Reusing the existing Call AST
+                # node avoids needing a dedicated Try node (and the
+                # ~10 pass-handler additions that would require — every
+                # pass already handles Call). The `__try` builtin
+                # cannot be written by the user directly (double-
+                # underscore-prefixed names are reserved internals);
+                # the only way it appears in the AST is via this
+                # desugaring.
+                q_tok = self._peek()
+                self.i += 1
+                callee = ast.Name(span=self._span_of(q_tok), name="__try")
+                expr = ast.Call(span=expr.span, callee=callee, args=[expr])
             elif self._at(T.COLONCOLON):
                 # path or turbofish: foo::bar OR foo::<T>(args)
                 self.i += 1
