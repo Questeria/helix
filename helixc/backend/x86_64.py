@@ -2682,6 +2682,50 @@ class FnCompiler:
             # store_result:
             self.asm.mov_mem_rbp_eax(res_slot)
             return
+        if op.kind == tir.OpKind.ARENA_PUSH_PAIR:
+            # Stage 36 Inc 9 type-design A2 fix: atomic two-slot push.
+            # Pushes left at slot (cursor+1) and right at (cursor+2) with
+            # a single bounds check that requires room for BOTH. Returns
+            # the old cursor (= slot index of left). Overflow when
+            # cursor + 1 >= CAP (i.e., cursor > CAP - 2): both writes
+            # skipped, result = -1. Cursor only advances on success.
+            buf = self.asm.b
+            left_slot = self._slot_of(op.operands[0])
+            right_slot = self._slot_of(op.operands[1])
+            res_slot = self._slot_of(op.results[0])
+            # Materialize both operands into edx (left) and r8d (right)
+            # before any arithmetic on cursor so cursor live-range is
+            # contained.
+            self.asm.mov_eax_mem_rbp(left_slot)   # eax = left
+            buf.emit(0x89, 0xC2)                  # mov edx, eax
+            self.asm.mov_eax_mem_rbp(right_slot)  # eax = right
+            buf.emit(0x41, 0x89, 0xC0)            # mov r8d, eax
+            # Load arena base + cursor.
+            self.asm.lea_rax_rip_rel("__helix_arena_base")
+            buf.emit(0x8B, 0x08)                  # mov ecx, [rax]
+            # Bounds check: cursor < CAP - 1 means cursor + 2 <= CAP,
+            # i.e., both target slots ((cursor+1)*4 and (cursor+2)*4)
+            # land inside the (CAP+1)-slot data section.
+            buf.emit(0x81, 0xF9)                  # cmp ecx, CAP - 1
+            buf.emit_bytes(struct.pack("<I", HELIX_ARENA_CAP - 1))
+            buf.emit(0x72, 0x07)                  # jb in_bounds (+7)
+            # Overflow path: mov eax, -1 (5 bytes); jmp store_result (2 bytes).
+            self.asm.mov_eax_imm32(0xFFFFFFFF)    # eax = -1
+            buf.emit(0xEB, 0x13)                  # jmp store_result (+19 over in_bounds)
+            # in_bounds:
+            # write left at base + (cursor+1)*4
+            buf.emit(0x89, 0x54, 0x88, 0x04)      # mov [rax + rcx*4 + 4], edx
+            # write right at base + (cursor+2)*4 (REX.R=1 for r8d source)
+            buf.emit(0x44, 0x89, 0x44, 0x88, 0x08)  # mov [rax + rcx*4 + 8], r8d
+            # Advance cursor by 2 and store back.
+            buf.emit(0x83, 0xC1, 0x02)            # add ecx, 2
+            buf.emit(0x89, 0x08)                  # mov [rax], ecx
+            # Result: old cursor (= ecx - 2 after the increment).
+            buf.emit(0x83, 0xE9, 0x02)            # sub ecx, 2
+            buf.emit(0x89, 0xC8)                  # mov eax, ecx
+            # store_result:
+            self.asm.mov_mem_rbp_eax(res_slot)
+            return
         if op.kind == tir.OpKind.ARENA_GET:
             # Return arena[idx + 1] (slot 0 is cursor). Out-of-bounds
             # (negative when interpreted unsigned, or >= CAP) returns 0

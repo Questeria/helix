@@ -245,6 +245,15 @@ class OpKind(Enum):
     ARENA_GET = "arena.get"      # operand: index (i32) → result: value
     ARENA_SET = "arena.set"      # operands: index, value → no result
     ARENA_LEN = "arena.len"      # no operand → result: current length
+    # Stage 36 Inc 9 type-design A2 fix: atomic two-value push. Pushes
+    # `left` at the current cursor slot and `right` at cursor+1 in a
+    # single IR op so DCE / CSE / scheduler reordering cannot split the
+    # pair. Bounds check verifies BOTH slots fit; on overflow neither is
+    # written and the result is -1. Result: the slot index of `left`
+    # (i.e. the old cursor). Used by register_derivation to keep the
+    # "left at N, right at N+1" handle invariant intact under any
+    # concurrent arena consumer (struct lowering, MatchDispatch, ...).
+    ARENA_PUSH_PAIR = "arena.push_pair"  # operands: left, right → result: slot index of left
 
     # String operations on string literals. Self-host needs byte access to
     # source code; for v0.1 only literal strings are supported (no runtime

@@ -1836,24 +1836,42 @@ class Lowerer:
                     and len(expr.args) == 1):
                 return self._lower_expr(expr.args[0])
             # Stage 36 Increment 2: provenance-composing combinators.
-            # derive(a, b) lowers to a (Phase-0: provenance is single-tag,
-            # so the derived value carries the value + provenance of the
-            # first parent). and_logic / or_logic lower to bitwise i32
-            # min/max on 0/1 truth values. not_logic flips 0<->1.
+            # derive(a, b) returns a's value but ALSO registers the
+            # two-parent relationship in the arena side-table so the
+            # call is observable (audit B2 fix). and_logic / or_logic
+            # lower to bitwise i32 min/max on 0/1 truth values.
+            # not_logic flips 0<->1.
             if (isinstance(expr.callee, A.Name)
                     and expr.callee.name == "derive"
                     and len(expr.args) == 2):
                 # Stage 36 Inc 9 audit B1 (code-review) fix: evaluate
-                # args in source order (a then b), not the previous
-                # b-then-a ordering. Helix expressions can have
-                # observable side effects (io::println etc.), so
-                # `derive(log("a"), log("b"))` must print "a" before
-                # "b". The derive() return value is still a's lowered
-                # value (Phase-0 single-tag provenance); b is
-                # evaluated for AST-traversal-uniformity and for any
-                # side effects.
+                # args in source order (a then b). Helix expressions
+                # can have observable side effects (io::println etc.),
+                # so `derive(log("a"), log("b"))` must print "a"
+                # before "b".
+                #
+                # Stage 36 Inc 9 silent-failure B2 fix: pre-fix the
+                # lowering was `_lower(a); _lower(b); return a` — b's
+                # value was dropped entirely, making derive(p, q) and
+                # p observationally indistinguishable (the combinator
+                # was dead weight that violated its own typecheck
+                # contract). Now derive routes its two parents through
+                # the atomic ARENA_PUSH_PAIR side-table the same way
+                # register_derivation does, so the call has an
+                # observable effect (arena_len() grows by 2, and the
+                # parent_*_at lookups at the freshly returned slot
+                # index recover both parents). The user-visible return
+                # value remains a's value (Phase-0 single-tag value
+                # propagation); the registration handle is dropped on
+                # the floor because derive's contract returns Logic<T>,
+                # not a registry handle. Code that wants the handle
+                # should call register_derivation directly.
                 a_v = self._lower_expr(expr.args[0])
-                self._lower_expr(expr.args[1])
+                b_v = self._lower_expr(expr.args[1])
+                if a_v is not None and b_v is not None:
+                    self.builder.emit(
+                        tir.OpKind.ARENA_PUSH_PAIR, a_v, b_v,
+                        result_ty=tir.TIRScalar("i32"))
                 return a_v
             if (isinstance(expr.callee, A.Name)
                     and expr.callee.name == "and_logic"
@@ -1969,6 +1987,17 @@ class Lowerer:
             # "no derivation" (parent_left_at(0) returns -1 via the
             # existing bounds-check fix from A1, since 0 - 1 = -1
             # fails the >= 0 check).
+            #
+            # Stage 36 Inc 9 type-design A2 fix: the two pushes are
+            # now emitted as a single ARENA_PUSH_PAIR op. Prior
+            # implementation used two consecutive ARENA_PUSH ops with
+            # no data dependency between them — any IR pass that
+            # reorders side-effectful ops, or any other arena consumer
+            # scheduled in between (struct lowering, MatchDispatch,
+            # inlined-arg ARENA_PUSH), would have broken the
+            # "left at N, right at N+1" handle invariant. The fused
+            # opcode is atomic at IR level: DCE/CSE/scheduler cannot
+            # split it.
             if (isinstance(expr.callee, A.Name)
                     and expr.callee.name == "register_derivation"
                     and len(expr.args) == 2):
@@ -1977,10 +2006,7 @@ class Lowerer:
                 if l is None or r is None:
                     return l or r
                 push_idx = self.builder.emit(
-                    tir.OpKind.ARENA_PUSH, l,
-                    result_ty=tir.TIRScalar("i32"))
-                self.builder.emit(
-                    tir.OpKind.ARENA_PUSH, r,
+                    tir.OpKind.ARENA_PUSH_PAIR, l, r,
                     result_ty=tir.TIRScalar("i32"))
                 # Return push_idx + 1 so handles are 1-based; 0 means
                 # "null". parent_*_at subtracts 1 before lookup.

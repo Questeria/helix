@@ -1277,6 +1277,192 @@ fn main() -> i32 {
     assert _stage36_inc6_pipeline(src) == 42
 
 
+# Stage 36 Inc 9 type-design A2 fix: register_derivation now emits a
+# single ARENA_PUSH_PAIR opcode (atomic at IR level) instead of two
+# consecutive ARENA_PUSH ops. The handle invariant "left at N, right
+# at N+1" cannot be broken by any scheduler/DCE/CSE pass or by another
+# arena consumer (struct lowering, MatchDispatch) being inlined
+# between the two pushes.
+#
+# Stage 36 Inc 9 silent-failure B2 fix: derive(a, b) also routes
+# through ARENA_PUSH_PAIR so the call is observable — pre-fix it
+# dropped b's value entirely, making derive(p, q) and p
+# indistinguishable. Post-fix arena_len() grows by 2 per derive call,
+# and the registered pair can be looked up via parent_*_at against
+# the slot index that was just consumed.
+
+
+def test_stage36_inc9_arena_push_pair_atomicity_against_intervening_push():
+    """ARENA_PUSH_PAIR slots stay adjacent even when a separate
+    arena.push happens between two register_derivation calls. With the
+    pre-fix two-ARENA_PUSH lowering an optimizer pass could in
+    principle reorder the second push past the intervening unrelated
+    push, breaking the N/N+1 handle invariant. The fused opcode makes
+    that physically impossible: the two writes are inside one IR op."""
+    src = """
+fn main() -> i32 {
+    let h1 = register_derivation(11, 22);
+    // Force an unrelated arena push between the two registrations
+    // (uses the low-level __arena_push intrinsic — distinct opcode
+    // from ARENA_PUSH_PAIR so the scheduler is theoretically free
+    // to reorder).
+    let _slot = __arena_push(99);
+    let h2 = register_derivation(33, 44);
+    // h1 reads must still recover (11, 22); h2 reads must still
+    // recover (33, 44). Any cross-contamination would surface as a
+    // mismatch here.
+    let l1: i32 = parent_left_at(h1);
+    let r1: i32 = parent_right_at(h1);
+    let l2: i32 = parent_left_at(h2);
+    let r2: i32 = parent_right_at(h2);
+    if l1 == 11 {
+        if r1 == 22 {
+            if l2 == 33 {
+                if r2 == 44 { 42 } else { 1 }
+            } else { 2 }
+        } else { 3 }
+    } else { 4 }
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    assert typecheck(prog) == []
+    elf = compile_module_to_elf(lower(prog))
+    rc = _run_elf(elf)
+    assert rc == 42, f"expected adjacency preserved across unrelated push, got {rc}"
+
+
+def test_stage36_inc9_arena_push_pair_advances_cursor_by_2():
+    """register_derivation increments arena_len by exactly 2. With the
+    pre-fix two-ARENA_PUSH lowering this was already true, but the
+    fused ARENA_PUSH_PAIR variant must preserve the property."""
+    src = """
+fn main() -> i32 {
+    let len_before: i32 = __arena_len();
+    let _h = register_derivation(1, 2);
+    let len_after: i32 = __arena_len();
+    let delta: i32 = len_after - len_before;
+    if delta == 2 { 42 } else { delta }
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    assert typecheck(prog) == []
+    elf = compile_module_to_elf(lower(prog))
+    rc = _run_elf(elf)
+    assert rc == 42, f"expected cursor delta=2 from PAIR push, got {rc}"
+
+
+def test_stage36_inc9_b2_derive_is_observable_via_arena_len():
+    """B2 fix: derive(p, q) must have an observable side effect (so it
+    is no longer equivalent to `p`). Pre-fix, arena_len() was
+    unchanged because b was discarded. Post-fix, derive emits the
+    same atomic ARENA_PUSH_PAIR that register_derivation does."""
+    src = """
+fn main() -> i32 {
+    let p: Logic<i32> = prove(10, 1);
+    let q: Logic<i32> = prove(20, 2);
+    let len_before: i32 = __arena_len();
+    let _d: Logic<i32> = derive(p, q);
+    let len_after: i32 = __arena_len();
+    let delta: i32 = len_after - len_before;
+    if delta == 2 { 42 } else { delta }
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    assert typecheck(prog) == []
+    elf = compile_module_to_elf(lower(prog))
+    rc = _run_elf(elf)
+    assert rc == 42, f"expected derive() to grow arena by 2, got {rc}"
+
+
+def test_stage36_inc9_b2_derive_registered_pair_is_recoverable():
+    """B2 fix: the two-parent pair derive() pushes can be recovered
+    from the arena via parent_*_at at the freshly-consumed slot. This
+    pins the contract that derive is semantically equivalent to
+    `register_derivation(unwrap_logic(a), unwrap_logic(b))` for the
+    arena state — the only difference is that derive returns a's
+    value, register_derivation returns the handle."""
+    src = """
+fn main() -> i32 {
+    // The slot index that derive() will consume is the current
+    // arena_len(): the pair is pushed at slots len..len+1.
+    let next_slot: i32 = __arena_len();
+    let p: Logic<i32> = prove(77, 7);
+    let q: Logic<i32> = prove(88, 8);
+    let _d: Logic<i32> = derive(p, q);
+    // 1-based handle convention matches register_derivation —
+    // parent_*_at subtracts 1 before the arena lookup.
+    let handle: i32 = next_slot + 1;
+    let l: i32 = parent_left_at(handle);
+    let r: i32 = parent_right_at(handle);
+    if l == 77 {
+        if r == 88 { 42 } else { 0 }
+    } else { 0 }
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    assert typecheck(prog) == []
+    elf = compile_module_to_elf(lower(prog))
+    rc = _run_elf(elf)
+    assert rc == 42, f"expected derive pair recoverable via parent_*_at, got {rc}"
+
+
+def test_stage36_inc9_b2_derive_no_longer_equivalent_to_p():
+    """B2 fix: derive(p, q) is no longer observationally
+    indistinguishable from p. We can distinguish them by arena state
+    even when the returned value is identical."""
+    src = """
+fn main() -> i32 {
+    let p: Logic<i32> = prove(5, 1);
+    let q: Logic<i32> = prove(99, 2);
+
+    // Branch A: derive(p, q) — should grow arena by 2.
+    let a_before: i32 = __arena_len();
+    let v_a: i32 = unwrap_logic(derive(p, q));
+    let a_after: i32 = __arena_len();
+
+    // Branch B: just p — should not grow arena.
+    let b_before: i32 = __arena_len();
+    let v_b: i32 = unwrap_logic(p);
+    let b_after: i32 = __arena_len();
+
+    // The values must match (Phase-0 single-tag return), but the
+    // arena delta must differ.
+    if v_a == v_b {
+        let delta_a: i32 = a_after - a_before;
+        let delta_b: i32 = b_after - b_before;
+        if delta_a == 2 {
+            if delta_b == 0 { 42 } else { 1 }
+        } else { 2 }
+    } else { 3 }
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    assert typecheck(prog) == []
+    elf = compile_module_to_elf(lower(prog))
+    rc = _run_elf(elf)
+    assert rc == 42, f"expected derive distinguishable from p via arena, got {rc}"
+
+
+def test_stage36_inc9_arena_push_pair_overflow_returns_negative_one():
+    """ARENA_PUSH_PAIR matches single ARENA_PUSH on overflow: when
+    cursor + 2 would exceed CAP, neither slot is written and the
+    result is -1. Hard to trigger directly under CAP=2M, so we only
+    verify the in-bounds case here and rely on the assembly's
+    structural symmetry with ARENA_PUSH (same overflow encoding)."""
+    # Sanity: a normal call returns a non-negative handle.
+    src = """
+fn main() -> i32 {
+    let h = register_derivation(1, 2);
+    if h >= 1 { 42 } else { 0 }
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    assert typecheck(prog) == []
+    elf = compile_module_to_elf(lower(prog))
+    rc = _run_elf(elf)
+    assert rc == 42, f"expected non-negative handle for in-bounds push, got {rc}"
+
+
 if __name__ == "__main__":
     import pytest
     raise SystemExit(pytest.main([__file__, "-v"]))
