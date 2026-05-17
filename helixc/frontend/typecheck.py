@@ -3558,18 +3558,48 @@ class TypeChecker:
                             expr.span,
                         ))
                         return TyUnknown(hint=bn)
-                    # Stage 43 Inc 1 M1 fix: reject already-wrapped
-                    # temporal value. Use a transition (to_past,
-                    # forecast, recall_past, actualize) to change
-                    # temporal kind instead of into_X(into_Y(...)).
+                    # Stage 43 Inc 1 M1 fix + Stage 43 closure gate-2
+                    # MEDIUM: direction-aware temporal transition
+                    # hint. Same pattern as frame/tier arms post-gate-1.
                     if isinstance(arg_tys[0], TyTemporal):
+                        target_kind = _temporal_intro[bn]
+                        source_kind = arg_tys[0].kind
+                        # Audited temporal transitions (Stage 39 Inc 2):
+                        _temp_transitions_by_pair = {
+                            ("present", "past"):     "to_past",
+                            ("present", "future"):   "forecast",
+                            ("past",    "present"):  "recall_past",
+                            ("future",  "present"):  "actualize",
+                        }
+                        if source_kind == target_kind:
+                            transition_hint = (
+                                f"unwrap with from_{source_kind} "
+                                f"first if you really want to "
+                                f"re-tag the value"
+                            )
+                        elif (source_kind, target_kind) in _temp_transitions_by_pair:
+                            tname = _temp_transitions_by_pair[
+                                (source_kind, target_kind)]
+                            transition_hint = (
+                                f"use `{tname}(...)` — the audited "
+                                f"{source_kind.capitalize()} -> "
+                                f"{target_kind.capitalize()} "
+                                f"temporal transition"
+                            )
+                        else:
+                            transition_hint = (
+                                f"Phase-0 has no "
+                                f"{source_kind.capitalize()} -> "
+                                f"{target_kind.capitalize()} "
+                                f"temporal transition; unwrap with "
+                                f"from_{source_kind} first if you "
+                                f"need to re-tag"
+                            )
                         self.errors.append(TypeError_(
                             f"{bn}() received an already-wrapped "
                             f"{self._fmt(arg_tys[0])}; intro "
-                            f"builtins are not idempotent — use a "
-                            f"temporal transition (to_past, "
-                            f"forecast, recall_past, actualize) to "
-                            f"change kind, or unwrap first.",
+                            f"builtins are not idempotent — "
+                            f"{transition_hint}.",
                             expr.span,
                         ))
                         return TyUnknown(hint=bn)
@@ -3649,17 +3679,46 @@ class TypeChecker:
                             expr.span,
                         ))
                         return TyUnknown(hint=bn)
-                    # Stage 43 Inc 1 M1 fix: reject already-wrapped
-                    # modal value. Use a modal transition (confirm,
-                    # act_on) or unwrap first.
+                    # Stage 43 Inc 1 M1 fix + gate-2 MEDIUM:
+                    # direction-aware modal transition hint.
                     if isinstance(arg_tys[0], TyModal):
+                        target_kind = _modal_intro[bn]
+                        source_kind = arg_tys[0].kind
+                        # Audited modal transitions (Stage 40 Inc 2):
+                        _modal_transitions_by_pair = {
+                            ("believed", "known"): "confirm",
+                            ("goal",     "known"): "act_on",
+                        }
+                        if source_kind == target_kind:
+                            mt_hint = (
+                                f"unwrap with from_{source_kind} "
+                                f"first if you really want to "
+                                f"re-tag"
+                            )
+                        elif (source_kind, target_kind) in _modal_transitions_by_pair:
+                            tname = _modal_transitions_by_pair[
+                                (source_kind, target_kind)]
+                            mt_hint = (
+                                f"use `{tname}(...)` — the audited "
+                                f"{source_kind.capitalize()} -> "
+                                f"{target_kind.capitalize()} "
+                                f"epistemic upgrade"
+                            )
+                        else:
+                            mt_hint = (
+                                f"Phase-0 has no audited "
+                                f"{source_kind.capitalize()} -> "
+                                f"{target_kind.capitalize()} "
+                                f"modal transition; downgrades and "
+                                f"sideways shifts are semantically "
+                                f"incoherent or deferred (see "
+                                f"stage40 progress doc)"
+                            )
                         self.errors.append(TypeError_(
                             f"{bn}() received an already-wrapped "
                             f"{self._fmt(arg_tys[0])}; intro "
-                            f"builtins are not idempotent — use a "
-                            f"modal transition (confirm, act_on) "
-                            f"to change epistemic kind, or unwrap "
-                            f"first.",
+                            f"builtins are not idempotent — "
+                            f"{mt_hint}.",
                             expr.span,
                         ))
                         return TyUnknown(hint=bn)
@@ -3945,18 +4004,47 @@ class TypeChecker:
                             expr.span,
                         ))
                         return TyUnknown(hint=bn)
-                    # Stage 43 Inc 1 M1 fix: reject already-wrapped
-                    # causal value. Use a causal transition
-                    # (propagate, aggregate, isolate) to change
-                    # causal kind, or unwrap first.
+                    # Stage 43 Inc 1 M1 fix + gate-2 MEDIUM:
+                    # direction-aware causal transition hint.
                     if isinstance(arg_tys[0], TyCausal):
+                        target_kind = _causal_intro[bn]
+                        source_kind = arg_tys[0].kind
+                        # Audited causal transitions (Stage 41 Inc 2):
+                        _causal_transitions_by_pair = {
+                            ("cause",  "effect"):      "propagate",
+                            ("effect", "joint"):       "aggregate",
+                            ("joint",  "independent"): "isolate",
+                        }
+                        if source_kind == target_kind:
+                            ct_hint = (
+                                f"unwrap with from_{source_kind} "
+                                f"first if you really want to "
+                                f"re-tag"
+                            )
+                        elif (source_kind, target_kind) in _causal_transitions_by_pair:
+                            tname = _causal_transitions_by_pair[
+                                (source_kind, target_kind)]
+                            ct_hint = (
+                                f"use `{tname}(...)` — the audited "
+                                f"{source_kind.capitalize()} -> "
+                                f"{target_kind.capitalize()} "
+                                f"causal transition"
+                            )
+                        else:
+                            ct_hint = (
+                                f"Phase-0 has no audited "
+                                f"{source_kind.capitalize()} -> "
+                                f"{target_kind.capitalize()} "
+                                f"causal transition; reverse and "
+                                f"skip-step directions are semantically "
+                                f"incoherent or deferred (see "
+                                f"stage41 progress doc)"
+                            )
                         self.errors.append(TypeError_(
                             f"{bn}() received an already-wrapped "
                             f"{self._fmt(arg_tys[0])}; intro "
-                            f"builtins are not idempotent — use a "
-                            f"causal transition (propagate, "
-                            f"aggregate, isolate) to change kind, "
-                            f"or unwrap first.",
+                            f"builtins are not idempotent — "
+                            f"{ct_hint}.",
                             expr.span,
                         ))
                         return TyUnknown(hint=bn)

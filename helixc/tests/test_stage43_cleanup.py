@@ -294,3 +294,151 @@ fn main() -> i32 {
     assert "recall" in err_text, \
         f"tier double-wrap Semantic -> Working must suggest " \
         f"`recall`; got {err_text!r}"
+
+
+# ============================================================
+# Stage 43 closure gate-2 MEDIUM backfills: direction-aware
+# hints for the remaining 3 wrapper families (temporal / modal /
+# causal). Gate-1 only direction-fixed frame + tier; gate-2
+# audit flagged the asymmetry across all 5 families.
+# ============================================================
+
+
+def test_stage43_gate2_temporal_double_wrap_direction_aware_present_to_past():
+    """`into_past(Present<i32>)` must suggest `to_past`."""
+    src = """
+fn main() -> i32 {
+    let p: Present<i32> = into_present(7);
+    from_past(into_past(p));
+    0
+}
+"""
+    prog = parse(src, include_stdlib=False)
+    errs = typecheck(prog)
+    matching = [str(e) for e in errs
+                if "not idempotent" in str(e) and "into_past" in str(e)]
+    assert matching
+    err_text = matching[0]
+    assert "to_past" in err_text, \
+        f"temporal double-wrap Present -> Past must suggest " \
+        f"`to_past`; got {err_text!r}"
+
+
+def test_stage43_gate2_temporal_double_wrap_direction_aware_past_to_present():
+    """`into_present(Past<i32>)` must suggest `recall_past`."""
+    src = """
+fn main() -> i32 {
+    let p: Past<i32> = into_past(7);
+    from_present(into_present(p));
+    0
+}
+"""
+    prog = parse(src, include_stdlib=False)
+    errs = typecheck(prog)
+    matching = [str(e) for e in errs
+                if "not idempotent" in str(e) and "into_present" in str(e)]
+    assert matching
+    err_text = matching[0]
+    assert "recall_past" in err_text, \
+        f"temporal double-wrap Past -> Present must suggest " \
+        f"`recall_past`; got {err_text!r}"
+
+
+def test_stage43_gate2_modal_double_wrap_direction_aware_believed_to_known():
+    """`into_known(Believed<i32>)` must suggest `confirm`."""
+    src = """
+fn main() -> i32 {
+    let b: Believed<i32> = into_believed(7);
+    from_known(into_known(b));
+    0
+}
+"""
+    prog = parse(src, include_stdlib=False)
+    errs = typecheck(prog)
+    matching = [str(e) for e in errs
+                if "not idempotent" in str(e) and "into_known" in str(e)]
+    assert matching
+    err_text = matching[0]
+    assert "confirm" in err_text, \
+        f"modal double-wrap Believed -> Known must suggest " \
+        f"`confirm`; got {err_text!r}"
+
+
+def test_stage43_gate2_modal_double_wrap_direction_aware_goal_to_known():
+    """`into_known(Goal<i32>)` must suggest `act_on`."""
+    src = """
+fn main() -> i32 {
+    let g: Goal<i32> = into_goal(7);
+    from_known(into_known(g));
+    0
+}
+"""
+    prog = parse(src, include_stdlib=False)
+    errs = typecheck(prog)
+    matching = [str(e) for e in errs
+                if "not idempotent" in str(e) and "into_known" in str(e)]
+    assert matching
+    err_text = matching[0]
+    assert "act_on" in err_text, \
+        f"modal double-wrap Goal -> Known must suggest " \
+        f"`act_on`; got {err_text!r}"
+
+
+def test_stage43_gate2_causal_double_wrap_direction_aware_cause_to_effect():
+    """`into_effect(Cause<i32>)` must suggest `propagate`."""
+    src = """
+fn main() -> i32 {
+    let c: Cause<i32> = into_cause(7);
+    from_effect(into_effect(c));
+    0
+}
+"""
+    prog = parse(src, include_stdlib=False)
+    errs = typecheck(prog)
+    matching = [str(e) for e in errs
+                if "not idempotent" in str(e) and "into_effect" in str(e)]
+    assert matching
+    err_text = matching[0]
+    assert "propagate" in err_text, \
+        f"causal double-wrap Cause -> Effect must suggest " \
+        f"`propagate`; got {err_text!r}"
+
+
+def test_stage43_gate2_causal_double_wrap_direction_aware_effect_to_joint():
+    """`into_joint(Effect<i32>)` must suggest `aggregate`."""
+    src = """
+fn main() -> i32 {
+    let e: Effect<i32> = into_effect(7);
+    from_joint(into_joint(e));
+    0
+}
+"""
+    prog = parse(src, include_stdlib=False)
+    errs = typecheck(prog)
+    matching = [str(e) for e in errs
+                if "not idempotent" in str(e) and "into_joint" in str(e)]
+    assert matching
+    err_text = matching[0]
+    assert "aggregate" in err_text, \
+        f"causal double-wrap Effect -> Joint must suggest " \
+        f"`aggregate`; got {err_text!r}"
+
+
+def test_stage43_gate2_causal_double_wrap_direction_aware_joint_to_independent():
+    """`into_independent(Joint<i32>)` must suggest `isolate`."""
+    src = """
+fn main() -> i32 {
+    let j: Joint<i32> = into_joint(7);
+    from_independent(into_independent(j));
+    0
+}
+"""
+    prog = parse(src, include_stdlib=False)
+    errs = typecheck(prog)
+    matching = [str(e) for e in errs
+                if "not idempotent" in str(e) and "into_independent" in str(e)]
+    assert matching
+    err_text = matching[0]
+    assert "isolate" in err_text, \
+        f"causal double-wrap Joint -> Independent must suggest " \
+        f"`isolate`; got {err_text!r}"
