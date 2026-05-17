@@ -6414,10 +6414,26 @@ class TypeChecker:
         # Accept i32 (the supported payload width).
         if isinstance(stripped, TyPrim) and stripped.name == "i32":
             return
-        # Accept nested Result (identity-recurses to i64 packed).
-        if isinstance(stripped, TyResult):
-            return
-        # Reject everything else with a clear diagnostic.
+        # Stage 49 closure gate-4 fix (CRITICAL SF4-C1/SF4-C2 +
+        # TD1-C2/TD4-C3 — cross-lane convergence on one root):
+        # the gate-2 helper originally whitelisted TyResult here
+        # under the reasoning "identity-recurses to i64 packed".
+        # That reasoning was wrong: `_lower_type(Result<T,E>)`
+        # returns `TIRScalar("i64")`, but the RESULT_PACK
+        # opcode's payload operand is a 32-bit read at the
+        # backend (helixc/backend/x86_64.py:2200). So
+        # `Ok(Err(99))` would silently truncate the inner
+        # Result's high-32 bits — destroying its tag — and
+        # `map_ok(r, make_inner())` where make_inner returns
+        # Result inherited the same bug via G3-H1's wider-
+        # payload reject helper. Gate-4 silent-failure + type-
+        # design lanes independently reproduced exit 200 vs
+        # expected 100 on `Ok(Err(99))` and exit 88 vs 77 on
+        # `map_ok(Ok(1), Err(99))`. Removing the whitelist
+        # closes both miscompiles in one stroke and re-routes
+        # nested Result through the canonical diagnostic.
+        # Reject everything else (including nested TyResult)
+        # with a clear diagnostic.
         self.errors.append(TypeError_(
             f"{side}() payload type {self._fmt(ty)} is not "
             f"supported by the Stage 49 packed-i64 Result "

@@ -1066,6 +1066,63 @@ fn main() -> i32 {
 
 
 # ============================================================
+# Gate-4 silent-failure SF4-C1 / SF4-C2 + type-design TD1-C2 /
+# TD4-C3 — cross-lane CRITICAL convergence on nested Result
+# silent miscompile (single root: whitelist of TyResult in
+# _reject_non_i32_result_payload helper).
+# ============================================================
+
+
+def test_stage49_gate4_sf4c1_nested_result_payload_rejected():
+    """Gate-4 SF4-C1 / TD1-C2 fix (CRITICAL): pre-fix,
+    `Ok(Err(99))` typechecked clean (the gate-2 helper
+    whitelisted TyResult under the wrong assumption that
+    identity-recursion preserves the inner) and the backend
+    silently truncated the inner Result's high-32 bits
+    (including its Err tag), so `unwrap_err(unwrap_ok(...))`
+    returned 200 instead of 100. Post-fix: typecheck rejects
+    nested Result with the same wider-payload diagnostic as
+    the i64/f64/f32 cases."""
+    src = """
+fn main() -> i32 {
+    let outer: Result<Result<i32, i32>, i32> =
+        Ok(Err(99));
+    unwrap_err(unwrap_ok(outer))
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    errs = typecheck(prog)
+    err_strs = [str(e) for e in errs]
+    assert any("not supported" in s and "Result" in s
+               for s in err_strs), \
+        f"nested Result payload must reject with the " \
+        f"wider-payload diagnostic, got: {err_strs}"
+
+
+def test_stage49_gate4_sf4c2_map_ok_of_result_value_rejected():
+    """Gate-4 SF4-C2 / TD4-C3 fix (CRITICAL): same root as
+    SF4-C1. `map_ok(Ok(1), Err(99))` typechecked clean (G3-H1
+    routed through the same buggy helper) and the backend
+    silently truncated the inner Result's high-32 bits.
+    Returned 88 instead of 77. Post-fix: rejected."""
+    src = """
+fn main() -> i32 {
+    let r: Result<i32, i32> = Ok(1);
+    let mapped: Result<Result<i32, i32>, i32> =
+        map_ok(r, Err(99));
+    unwrap_err(unwrap_ok(mapped))
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    errs = typecheck(prog)
+    err_strs = [str(e) for e in errs]
+    assert any("not supported" in s and "Result" in s
+               for s in err_strs), \
+        f"map_ok with Result new_value must reject with the " \
+        f"wider-payload diagnostic, got: {err_strs}"
+
+
+# ============================================================
 # Gate-2 silent-failure SF1-F1: __try Err arm emits TRACE_EXIT
 # for @trace fns (mirrors A.Return C2-2 fix)
 # ============================================================
