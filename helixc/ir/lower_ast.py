@@ -2150,6 +2150,20 @@ class Lowerer:
             # two-parent handles it reads into whatever happens to live
             # at slot N+2, which may be another derivation's slot or
             # the OOB sentinel.
+            #
+            # Stage 36 Inc 15 (silent-failure H1 partial closure):
+            # - Static reject literal `slot < 0` or `slot > 2` lives at
+            #   typecheck (typecheck.py:parent_at clause).
+            # - Runtime guard for `handle <= 0` (null sentinel) returns
+            #   -1 directly, defeating the audit's hidden-error #3
+            #   (parent_at(0, 1) silently reading arena[0]).
+            # - Runtime guard for dynamic `slot < 0` returns -1 directly,
+            #   defeating the audit's hidden-error #2 (negative slot
+            #   shifting eff_idx back into a previous record).
+            # TODO(stage36-inc16-arity-in-handle): the remaining
+            # cross-record hazard (slot >= arity-of(handle)) requires
+            # a per-record arity word in the arena layout. See audit
+            # docs/audit-stage36-postinc14-silent-failures.md#H1.
             if (isinstance(expr.callee, A.Name)
                     and expr.callee.name == "parent_at"
                     and len(expr.args) == 2):
@@ -2157,14 +2171,32 @@ class Lowerer:
                 slot = self._lower_expr(expr.args[1])
                 if handle is None or slot is None:
                     return None
+                zero = self.builder.const_int(0)
                 one = self.builder.const_int(1)
+                neg_one = self.builder.const_int(-1)
+                # Inc 15 guard 1: handle <= 0 → -1.
+                handle_valid = self.builder.emit(
+                    tir.OpKind.CMP_GT, handle, zero,
+                    result_ty=tir.TIRScalar("i32"))
+                # Inc 15 guard 2: slot < 0 → -1.
+                slot_valid = self.builder.emit(
+                    tir.OpKind.CMP_GE, slot, zero,
+                    result_ty=tir.TIRScalar("i32"))
+                guards_pass = self.builder.emit(
+                    tir.OpKind.BIT_AND, handle_valid, slot_valid,
+                    result_ty=tir.TIRScalar("i32"))
                 base_idx = self.builder.emit(
                     tir.OpKind.SUB, handle, one,
                     result_ty=tir.TIRScalar("i32"))
                 eff_idx = self.builder.emit(
                     tir.OpKind.ADD, base_idx, slot,
                     result_ty=tir.TIRScalar("i32"))
-                return _safe_arena_get(eff_idx, 0)
+                raw_read = _safe_arena_get(eff_idx, 0)
+                # If guards fail, return -1; else return the (already
+                # bounds-checked) arena read.
+                return self.builder.emit(
+                    tir.OpKind.SELECT, guards_pass, raw_read, neg_one,
+                    result_ty=tir.TIRScalar("i32"))
             # Stage 36 Inc 9 A3 (silent-failure HIGH) fix: clamp
             # fuzzy_* inputs to [0, 1] at IR lowering. Pre-fix, an
             # out-of-range input (e.g., a=2.0 from optimizer drift)

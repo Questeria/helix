@@ -1525,7 +1525,9 @@ STDLIB_FILES: list[str] = [
     "agi_search.hx", "agi_match.hx", "agi_world.hx", "ieee754.hx",
     # Stage 36 Inc 13: provenance debug/observation helpers
     # (trace_evidence, has_evidence, evidence_left, evidence_right)
-    # over the Inc 5/9 arena side-table.
+    # over the Inc 5/9 arena side-table. Inc 15 extended with
+    # evidence_middle, evidence_third, trace_evidence3 for the
+    # 3-parent register_derivation3 handles from Inc 14.
     "provenance.hx",
 ]
 

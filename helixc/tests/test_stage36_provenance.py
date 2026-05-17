@@ -1812,7 +1812,14 @@ def test_stage36_inc12_let_erasable_unused_and_logic_still_compiles():
 #   - has_evidence(h)    -> 1 iff h is valid and parent_left_at(h) != -1
 #   - evidence_left(h)   -> parent_left_at(h)  (readability alias)
 #   - evidence_right(h)  -> parent_right_at(h) (readability alias)
-#   - trace_evidence(h)  -> prints "h=<h> L=<l> R=<r>\n", returns has_evidence(h)
+#   - trace_evidence(h)  -> prints "h=<h> slot0=<l> slot1=<r>\n", returns has_evidence(h)
+#                           (Inc 15: relabelled from "L= R=" to honest
+#                           "slot0= slot1=" wording so 3-parent handles
+#                           aren't silently mislabelled.)
+# Inc 15 adds three more helpers for 3-parent handles:
+#   - evidence_middle(h) -> parent_at(h, 1)  (alias)
+#   - evidence_third(h)  -> parent_at(h, 2)  (right value for 3-parent)
+#   - trace_evidence3(h) -> prints "h=<h> slot0=<l> slot1=<m> slot2=<r>\n"
 # ---------------------------------------------------------------------------
 
 
@@ -1933,7 +1940,8 @@ fn main() -> i32 {
 
 
 def test_stage36_inc13_trace_evidence_returns_zero_for_null_handle():
-    """trace_evidence(0) prints "h=0 L=-1 R=-1\\n" and returns 0."""
+    """trace_evidence(0) prints "h=0 slot0=-1 slot1=-1\\n" and returns 0
+    (Inc 15: relabelled from "L= R=")."""
     src = """
 fn main() -> i32 {
     42 + trace_evidence(0) * 999
@@ -1948,7 +1956,10 @@ fn main() -> i32 {
 
 def test_stage36_inc13_trace_evidence_stdout_format():
     """Capture stdout: trace_evidence(h) after register_derivation(11, 22)
-    emits "h=1 L=11 R=22\\n" (handle is 1-based per Inc 9 A2)."""
+    emits "h=1 slot0=11 slot1=22\\n" (handle is 1-based per Inc 9 A2).
+    Inc 15: relabelled from "L=11 R=22" to honest "slot0= slot1="
+    wording so 3-parent handles aren't silently mislabelled by the same
+    diagnostic helper."""
     src = """
 fn main() -> i32 {
     let h = register_derivation(11, 22);
@@ -1963,7 +1974,7 @@ fn main() -> i32 {
     assert rc == 42, f"expected 42, got {rc}"
     # The first register_derivation pushes 2 entries at arena indices
     # 0 and 1, so the user-visible 1-based handle is 1.
-    assert stdout == b"h=1 L=11 R=22\n", \
+    assert stdout == b"h=1 slot0=11 slot1=22\n", \
         f"stdout mismatch: got {stdout!r}"
 
 
@@ -1985,7 +1996,7 @@ fn main() -> i32 {
     elf = compile_module_to_elf(lower(prog))
     rc, stdout = _run_elf_capture(elf)
     assert rc == 42, f"expected 42, got {rc}"
-    assert stdout == b"h=1 L=7 R=8\nh=3 L=9 R=10\n", \
+    assert stdout == b"h=1 slot0=7 slot1=8\nh=3 slot0=9 slot1=10\n", \
         f"stdout mismatch: got {stdout!r}"
 
 
@@ -1995,8 +2006,12 @@ def test_stage36_inc13_helpers_visible_in_stdlib():
     import helixc.frontend.ast_nodes as A
     prog = parse("fn main() -> i32 { 0 }", include_stdlib=True)
     fn_names = {it.name for it in prog.items if isinstance(it, A.FnDecl)}
+    # Inc 13 originals + Inc 15 extensions (evidence_middle,
+    # evidence_third, trace_evidence3 for 3-parent register_derivation3
+    # handles).
     for name in ("has_evidence", "evidence_left", "evidence_right",
-                 "trace_evidence"):
+                 "trace_evidence",
+                 "evidence_middle", "evidence_third", "trace_evidence3"):
         assert name in fn_names, \
             f"stdlib helper {name!r} missing from merged program"
 
@@ -2207,11 +2222,15 @@ fn main() -> i32 {
     assert _run_elf(elf) == 42, "null handle (0) must return -1 sentinel"
 
 
-def test_stage36_inc14_parent_at_oob_slot_returns_negative_one():
-    """parent_at(h, very_large_slot) returns -1 via bounds check. Pins
-    the OOB-fallthrough invariant: even if the user passes a slot far
-    larger than the arity, the read returns sentinel rather than
-    walking off the arena edge."""
+def test_stage36_inc14_parent_at_oob_literal_slot_typecheck_rejected():
+    """parent_at(h, literal_slot) with literal slot outside [0, 2] is a
+    TYPECHECK error per Inc 15 silent-failure H1 closure. Pre-Inc-15
+    this slipped through and the runtime bounds-check in _safe_arena_get
+    returned -1; the static rejection is tighter because it can't
+    bypass the cross-record hazard (slot=2 on 2-parent handle reads
+    next record). Inc 15 covers the literal path; runtime guards cover
+    handle<=0 and slot<0; the cross-record hazard for slot in {0,1,2}
+    is the deferred Inc 16 arity-word work."""
     src = """
 fn main() -> i32 {
     let h = register_derivation3(1, 2, 3);
@@ -2220,9 +2239,10 @@ fn main() -> i32 {
 }
 """
     prog = parse(src)
-    assert typecheck(prog) == []
-    elf = compile_module_to_elf(lower(prog))
-    assert _run_elf(elf) == 42, "OOB slot must return -1 sentinel"
+    errs = typecheck(prog)
+    assert any("parent_at" in str(e) and "literal slot 999999" in str(e)
+               for e in errs), \
+        f"expected literal-OOB-slot typecheck error, got {errs}"
 
 
 def test_stage36_inc14_register_derivation3_typecheck_rejects_i64():
@@ -2267,7 +2287,18 @@ def test_stage36_inc14_register_derivation3_arena_overflow_returns_zero_handle()
     parent_at calls on the null handle return -1 via Inc 9 A1.
     Structural test: we can't easily fill a 2M-slot arena, so this
     confirms the pure structural symmetry — the contract follows from
-    sharing the ADD-1 wrapping with register_derivation."""
+    sharing the ADD-1 wrapping with register_derivation.
+
+    TODO(stage36-inc16-arena-cursor-set): the actual overflow path
+    (the `mov eax, -1 / jmp +24` sequence at backend/x86_64.py for
+    ARENA_PUSH_TRIPLE — and the parallel sequence for ARENA_PUSH_PAIR)
+    is NOT exercised by any test in this suite. Inc 15 code-review L1
+    re-flagged this. A direct exercise needs a `__arena_set_cursor`
+    test-only helper (or a Python-level IR driver) to position the
+    cursor near CAP without running 2M+ pushes. Defer until the test
+    harness exists; the in-bounds tests do byte-exact-exercise the
+    rest of the layout, so the risk is limited to a future regression
+    that mis-sizes the +24 displacement or the eax write."""
     # If overflow ever does fire, the test would observe handle == 0.
     # In bounds (the common case) it reads back as a positive handle.
     src = """
@@ -2303,6 +2334,264 @@ def test_stage36_inc14_arena_push_triple_is_in_dce_side_effect_set():
     from helixc.ir.passes.dce import SIDE_EFFECT_KINDS
     assert tir.OpKind.ARENA_PUSH_TRIPLE in SIDE_EFFECT_KINDS, \
         "ARENA_PUSH_TRIPLE must be in DCE side-effect set to survive unused-result DCE"
+
+
+# ----------------------------------------------------------------------
+# Stage 36 Increment 15 — audit-fix sweep (post-Inc-14 audits).
+#
+# Closes:
+#   - Silent-failure H1 (partial): static reject literal slot < 0 or
+#     > 2 at typecheck, runtime guards for handle<=0 and dynamic slot<0
+#     at lowering. Cross-record hazard for slot in {0,1,2} is the
+#     deferred Inc 16 arity-word work (TODO markers in place).
+#   - Silent-failure M1: provenance.hx evidence_middle + evidence_third
+#     + trace_evidence3 added; trace_evidence stdout relabelled from
+#     "L= R=" to honest "slot0= slot1=" wording (the rename canaries
+#     live alongside the original tests above).
+#   - Type-design M1: parent_left_at + parent_right_at now strict-i32
+#     to match the rest of the family (register_derivation Inc 11,
+#     register_derivation3 + parent_at Inc 14).
+#   - Code-review L2: AD-erasability negative control for
+#     register_derivation3.
+#   - Code-review L3: has_evidence comment tightened (no new test —
+#     doc-only change).
+#   - Code-review L1: TODO marker for ARENA_PUSH_TRIPLE overflow test
+#     (no test infrastructure yet for cursor-near-overflow setup).
+# ----------------------------------------------------------------------
+
+
+def test_stage36_inc15_parent_left_at_typecheck_rejects_i64():
+    """parent_left_at must reject i64 handle (Inc 15 type-design M1
+    family closure: matches the strictness already enforced by
+    register_derivation / register_derivation3 / parent_at)."""
+    src = """
+fn main() -> i32 {
+    let h: i64 = 1;
+    parent_left_at(h)
+}
+"""
+    prog = parse(src)
+    errs = typecheck(prog)
+    assert any("parent_left_at" in str(e) and "must be exactly i32" in str(e)
+               for e in errs), \
+        f"expected parent_left_at strict-i32 error, got {errs}"
+
+
+def test_stage36_inc15_parent_right_at_typecheck_rejects_i64():
+    """Sibling of parent_left_at: parent_right_at must reject i64
+    handle. Inc 15 type-design M1 family closure."""
+    src = """
+fn main() -> i32 {
+    let h: i64 = 1;
+    parent_right_at(h)
+}
+"""
+    prog = parse(src)
+    errs = typecheck(prog)
+    assert any("parent_right_at" in str(e) and "must be exactly i32" in str(e)
+               for e in errs), \
+        f"expected parent_right_at strict-i32 error, got {errs}"
+
+
+def test_stage36_inc15_parent_at_typecheck_rejects_negative_literal_slot():
+    """Inc 15 silent-failure H1 (partial): literal slot < 0 is a
+    typecheck error. Pre-fix this slipped through and was the audit's
+    hidden-error #2 (negative slot shifts eff_idx back into a previous
+    derivation's record)."""
+    src = """
+fn main() -> i32 {
+    let h = register_derivation(11, 22);
+    parent_at(h, -1)
+}
+"""
+    prog = parse(src)
+    errs = typecheck(prog)
+    assert any("parent_at" in str(e) and "literal slot -1" in str(e)
+               for e in errs), \
+        f"expected literal-negative-slot typecheck error, got {errs}"
+
+
+def test_stage36_inc15_parent_at_typecheck_rejects_literal_slot_three():
+    """Inc 15 silent-failure H1 (partial): literal slot > 2 is a
+    typecheck error. Max arity is 3 (register_derivation3), so slot 3+
+    is provably out of range for any current register call."""
+    src = """
+fn main() -> i32 {
+    let h = register_derivation3(1, 2, 3);
+    parent_at(h, 3)
+}
+"""
+    prog = parse(src)
+    errs = typecheck(prog)
+    assert any("parent_at" in str(e) and "literal slot 3" in str(e)
+               for e in errs), \
+        f"expected literal-slot-3 typecheck error, got {errs}"
+
+
+def test_stage36_inc15_parent_at_null_handle_returns_neg_one_runtime():
+    """Inc 15 silent-failure H1 (partial, runtime guard): parent_at on
+    a null handle (handle == 0) returns -1 directly, defeating the
+    audit's hidden-error #3 (parent_at(0, 1) pre-Inc-15 silently read
+    arena[0], the first registered derivation's left value)."""
+    src = """
+fn main() -> i32 {
+    let _h = register_derivation(11, 22);
+    // null-handle access — must return -1, NOT arena[0] (which is 11).
+    let v = parent_at(0, 1);
+    // v == -1 → 42 - 0 = 42; v == 11 → 42 - 12*99 = -1146.
+    42 - (v + 1) * 99
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    assert typecheck(prog) == []
+    elf = compile_module_to_elf(lower(prog))
+    assert _run_elf(elf) == 42, \
+        "parent_at(0, slot) must return -1 regardless of arena contents"
+
+
+def test_stage36_inc15_parent_at_dynamic_negative_slot_returns_neg_one_runtime():
+    """Inc 15 silent-failure H1 (partial, runtime guard): parent_at
+    with a dynamic (non-literal) slot < 0 returns -1, defeating the
+    audit's hidden-error #2 for the dynamic case (the typecheck slot
+    bound only catches literals; dynamic negatives need the runtime
+    guard)."""
+    src = """
+fn main() -> i32 {
+    let _h1 = register_derivation(11, 22);
+    let h2 = register_derivation(33, 44);
+    // Dynamic slot from a runtime value. Slot = -1 must produce -1,
+    // NOT 22 (which is arena[h2-1+(-1)] = arena[1] from h1).
+    let slot = 0 - 1;
+    let v = parent_at(h2, slot);
+    // v == -1 → 42 - 0 = 42; v == 22 → 42 - 23*99 = -2235.
+    42 - (v + 1) * 99
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    assert typecheck(prog) == []
+    elf = compile_module_to_elf(lower(prog))
+    assert _run_elf(elf) == 42, \
+        "parent_at(h, dynamic_negative_slot) must return -1"
+
+
+def test_stage36_inc15_register_derivation3_ad_erasure_fails_closed_reverse():
+    """Inc 15 code-review L2: register_derivation3 is omitted from
+    AD_KNOWN_PURE_CALLS by design (mirrors register_derivation post-
+    Inc-9 B2), so a `let _h = register_derivation3(...)` inside a
+    grad_rev body must NotImplementedError rather than silently
+    dropping the side-effecting arena push. Pre-Inc-15 there was no
+    explicit test pinning this for the 3-arg variant — Inc 14 added
+    register_derivation3 without an AD-erasure negative control.
+
+    Mirrors the existing `let_erasable_unused_and_logic_still_compiles`
+    test pattern at line 1770 but in the FAIL direction (and_logic IS
+    AD-pure; register_derivation3 is NOT)."""
+    import helixc.frontend.ast_nodes as A
+    from helixc.frontend.autodiff_reverse import differentiate_reverse
+
+    # body: let _h = register_derivation3(1, 2, 3); x
+    # The let-binding is unused, but register_derivation3 has a
+    # side-effecting ARENA_PUSH_TRIPLE, so the inliner's
+    # _raise_if_ad_erases_effect must trap.
+    span = A.Span(line=1, col=1)
+    body = A.Block(
+        span=span,
+        stmts=[
+            A.Let(
+                span=span, name="_h", ty=None,
+                value=A.Call(
+                    span=span,
+                    callee=A.Name(span=span, name="register_derivation3"),
+                    args=[A.IntLit(span=span, value=1),
+                          A.IntLit(span=span, value=2),
+                          A.IntLit(span=span, value=3)]),
+                is_mut=False),
+        ],
+        final_expr=A.Name(span=span, name="x"))
+    import pytest
+    with pytest.raises(NotImplementedError):
+        differentiate_reverse(body, ["x"])
+
+
+def test_stage36_inc15_evidence_middle_returns_slot1():
+    """Inc 15 silent-failure M1: evidence_middle is the honest alias
+    for slot[1]. On a 3-parent register_derivation3 handle, this
+    returns the MIDDLE value (which is what callers typically want
+    when they know the handle is 3-parent — `evidence_right` returns
+    the same slot[1] but its name silently lies about which value
+    it is for 3-parent handles)."""
+    src = """
+fn main() -> i32 {
+    let h = register_derivation3(7, 11, 13);
+    // evidence_middle(h) == 11; 11*4 - 2 = 42.
+    evidence_middle(h) * 4 - 2
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    assert typecheck(prog) == []
+    elf = compile_module_to_elf(lower(prog))
+    assert _run_elf(elf) == 42, \
+        "evidence_middle must return slot[1] = 11 for a 3-parent handle"
+
+
+def test_stage36_inc15_evidence_third_returns_slot2_for_3parent_handle():
+    """Inc 15 silent-failure M1: evidence_third(h) returns slot[2],
+    which is the right value of a 3-parent register_derivation3
+    handle. (For a 2-parent handle this is undefined cross-record
+    read — see TODO stage36-inc16-arity-in-handle.)"""
+    src = """
+fn main() -> i32 {
+    let h = register_derivation3(7, 11, 13);
+    // evidence_third(h) == 13; 13*3 + 3 = 42.
+    evidence_third(h) * 3 + 3
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    assert typecheck(prog) == []
+    elf = compile_module_to_elf(lower(prog))
+    assert _run_elf(elf) == 42, \
+        "evidence_third must return slot[2] = 13 for a 3-parent handle"
+
+
+def test_stage36_inc15_trace_evidence3_stdout_format():
+    """Inc 15 silent-failure M1: trace_evidence3 prints all three
+    slots in honest slot-positional notation."""
+    src = """
+fn main() -> i32 {
+    let h = register_derivation3(7, 11, 13);
+    trace_evidence3(h);
+    42
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    assert typecheck(prog) == []
+    elf = compile_module_to_elf(lower(prog))
+    rc, stdout = _run_elf_capture(elf)
+    assert rc == 42, f"expected 42, got {rc}"
+    assert stdout == b"h=1 slot0=7 slot1=11 slot2=13\n", \
+        f"trace_evidence3 stdout mismatch: got {stdout!r}"
+
+
+def test_stage36_inc15_parent_at_dynamic_slot_zero_still_compiles():
+    """Inc 15 negative-control: the typecheck slot bound rejects only
+    LITERAL out-of-range slots, not dynamic ones. A dynamic slot of 0
+    (or 1 or 2) must still compile cleanly so the parent_at primitive
+    remains usable in loop bodies."""
+    src = """
+fn main() -> i32 {
+    let h = register_derivation(11, 22);
+    let i = 0;
+    let v = parent_at(h, i);
+    // v should be 11; 11*4 - 2 = 42.
+    v * 4 - 2
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    assert typecheck(prog) == [], \
+        "dynamic slot must still compile (only literal OOB rejected)"
+    elf = compile_module_to_elf(lower(prog))
+    assert _run_elf(elf) == 42, \
+        "parent_at with dynamic slot 0 must return parent_left_at value"
 
 
 if __name__ == "__main__":

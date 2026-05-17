@@ -2950,10 +2950,21 @@ class TypeChecker:
                     return TyPrim("i32")
                 if bn in ("parent_left_at", "parent_right_at") \
                         and len(arg_tys) == 1:
-                    if not self._is_int_scalar(arg_tys[0]):
+                    # Stage 36 Inc 15 (type-design M1): tighten to strict
+                    # i32 to match register_derivation (Inc 11 C1),
+                    # register_derivation3 + parent_at (Inc 14). Pre-fix
+                    # the loose _is_int_scalar accepted i64/u32/u64 which
+                    # then silently truncated in the downstream arena
+                    # read (same bug class as the Inc 11 C1 register-side
+                    # fix). Family is now uniformly strict-i32.
+                    if not (isinstance(arg_tys[0], TyPrim)
+                            and arg_tys[0].name == "i32"):
                         self.errors.append(TypeError_(
-                            f"{bn}(idx): arg must be i32 derivation handle, "
-                            f"got {self._fmt(arg_tys[0])}",
+                            f"{bn}(idx): arg must be exactly i32 "
+                            f"derivation handle, got "
+                            f"{self._fmt(arg_tys[0])} (pre-Inc-15 also "
+                            f"accepted i64/u32/u64 but those silently "
+                            f"truncated in downstream arena read)",
                             expr.span,
                         ))
                     return TyPrim("i32")
@@ -2978,10 +2989,21 @@ class TypeChecker:
                 # Stage 36 Inc 14: generic indexed parent accessor.
                 # parent_at(handle: i32, slot: i32) -> i32 reads the
                 # arena slot at (handle - 1 + slot), with the same Inc 9
-                # A1 bounds-check sentinel (-1 on OOB). The user is
-                # responsible for passing a `slot` within the arity of
-                # the original register_derivation* call (Phase-0
-                # limitation: arity is not tracked in the handle).
+                # A1 bounds-check sentinel (-1 on OOB).
+                #
+                # Stage 36 Inc 15 (silent-failure H1, partial closure):
+                # statically reject literal `slot < 0` or `slot > 2`.
+                # Max arity is 3 (register_derivation3); a literal
+                # outside [0, 2] is provably unreachable for any current
+                # register_derivation* call. Dynamic slots still flow
+                # through; the runtime guard at lower_ast.py covers
+                # `handle <= 0` + dynamic `slot < 0` paths.
+                # TODO(stage36-inc16-arity-in-handle): the remaining
+                # cross-record hazard (literal slot=2 on a 2-parent
+                # handle silently reads the next record's left value)
+                # requires a per-record arity word in the arena layout
+                # — too large for this audit-fix increment. See audit
+                # docs/audit-stage36-postinc14-silent-failures.md#H1.
                 if bn == "parent_at" and len(arg_tys) == 2:
                     for i, t in enumerate(arg_tys):
                         if not (isinstance(t, TyPrim) and t.name == "i32"):
@@ -2991,6 +3013,25 @@ class TypeChecker:
                                 f"got {self._fmt(t)}",
                                 expr.span,
                             ))
+                    # Inc 15 static slot-literal bounds check.
+                    slot_node = expr.args[1]
+                    slot_literal_value: Optional[int] = None
+                    if isinstance(slot_node, A.IntLit):
+                        slot_literal_value = slot_node.value
+                    elif (isinstance(slot_node, A.Unary)
+                            and slot_node.op == "-"
+                            and isinstance(slot_node.operand, A.IntLit)):
+                        slot_literal_value = -slot_node.operand.value
+                    if (slot_literal_value is not None
+                            and not (0 <= slot_literal_value <= 2)):
+                        self.errors.append(TypeError_(
+                            f"parent_at(handle, slot): literal slot "
+                            f"{slot_literal_value} is out of range "
+                            f"[0, 2] (max arity is 3 from "
+                            f"register_derivation3). Inc 15 "
+                            f"silent-failure H1 closure.",
+                            expr.span,
+                        ))
                     return TyPrim("i32")
                 # Stage 36 Increment 6: fuzzy logic operators over
                 # Logic<f32>. Truth values live in [0, 1]; operators
