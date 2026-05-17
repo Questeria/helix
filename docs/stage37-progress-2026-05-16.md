@@ -94,3 +94,72 @@ ROADMAP depends on. Without tiered memory, the language can express
 remembered" or "this value is procedural skill" — those distinctions
 matter for AGI workloads where memory tiers control consolidation
 timing, decay, retrieval, and learning-rate-by-tier.
+
+## Increment 4 — STAGE 37 CLOSURE (3/3 clean gates) (2026-05-16)
+
+Per the user direction "Do not forget 3 clean audits at the end of
+each stage before moving on" + "you have permission to do whatever
+you feel is best and move on to any next stages until everything is
+finished" (full autonomy), Stage 37 closes via the same 3-clean-gate
+convention used by Stage 35 (restart 65) and Stage 36 (Inc 16).
+
+### Closure timeline
+
+| Gate | Result | Findings | Fix-sweep commit |
+|------|--------|----------|------------------|
+| 1 (initial) | NOT CLEAN | 1 LOW (S37-CLEAN1-001: tier builtins absent from AD_KNOWN_PURE_CALLS) | ab54524 (10 tier names added) |
+| 1 (re-audit) | CLEAN | 0 new findings; prior LOW verified closed | — |
+| 2 | CLEAN | 0 findings | — |
+| 3 (final) | CLEAN | 0 findings; cosmetic dogfood line-count comment noted as <80 confidence threshold | — |
+
+**Counter advances**: 0/3 → 1/3 (after gate-1 fix-sweep) → 2/3 → 3/3.
+
+### Stage 37 final scorecard
+
+- **Increments shipped**: Inc 0 (convention) + Inc 1 (constructors +
+  eliminators + cross-tier wiring) + Inc 2 (lifecycle dogfood) +
+  Inc 3 (cross-tier mismatch coverage) + Inc 4 (closure).
+- **Audit cycles**: 1 (closure gate sequence) — Stage 37 surface was
+  small (~50 lines of typecheck + lowering) so the per-increment
+  audit overhead Stage 36 required was unnecessary; closure gates
+  served as the only formal audit pass.
+- **Audit findings closed**: 1/1 (1 LOW).
+- **Tests**: 23 in `helixc/tests/test_stage37_memory.py` + 1
+  dogfood-runtime test in `test_reflection.py`.
+- **Self-host gate**: PASS at every Stage 37 commit.
+- **Total Stage 37 surface area**: 8 new typecheck-recognized
+  builtins, 0 new IR opcodes (all 10 tier builtins lower as
+  identity — matches Stage 36's Logic<T> attach/detach pattern),
+  0 new stdlib files, 1 new dogfood program (memory-tier lifecycle).
+
+### Strategic significance
+
+Stage 37's first deliverable was the **AGI-shaped memory
+architecture**: Working / Episodic / Semantic / Procedural memory
+types with cross-tier consolidation and recall transitions. This
+maps directly to the human-memory model used in cognitive science
+(working memory = active focus, episodic = autobiographical events,
+semantic = abstract knowledge, procedural = motor/skill memory).
+
+A Helix program can now express:
+- "this value belongs in working memory" (into_working)
+- "this value should be remembered as an event" (into_episodic)
+- "this event should consolidate into long-term knowledge"
+  (consolidate)
+- "I need to recall this knowledge for active use" (recall)
+- All cross-tier transitions enforced by the typechecker (12
+  wrong-pair tests prove the boundary checks)
+
+The Phase-0 implementation lowers tiers as identity (zero runtime
+overhead). Phase-1+ work will add tier-id arena side-tables for
+runtime tracking, consolidation timing, decay semantics, and
+retrieval-by-tier.
+
+**STAGE 37 IS CLOSED.** Stage 37 feature families NOT yet shipped
+(carryforward to Inc 5+ or new stages): continuous execution,
+theorem-prover integration, tier-id arena side-table, real
+consolidation/decay timing semantics.
+
+The next stage opens next. Per ROADMAP Phase 2 (Stages 38-46
+written IN HELIX), Stage 38 is "Spatial types + frames" — the
+first stage to be implemented in Helix-itself rather than Python.
