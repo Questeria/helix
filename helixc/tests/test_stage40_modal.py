@@ -996,3 +996,208 @@ def test_stage40_gate2_medium1_typechecker_reentrancy_no_stale_shadows():
     assert errs2 == [], \
         f"fresh TypeChecker must not inherit shadow state, got " \
         f"{[str(e) for e in errs2]}"
+
+
+# ============================================================
+# Stage 52 closure gate-2 code-review M1 fix: regression pins
+# for Inc 2+3 paths (each was only shell-probed during closure
+# — now properly pinned so a future refactor catches breakage)
+# ============================================================
+
+
+def test_stage52_inc2_high3_while_loop_assign_caught():
+    """HIGH-3: `while ... { r = from_uncertain(u); } into_known(r)`
+    must fire the launder diagnostic. Inc 2 added Assign-arm
+    POPULATE; this pins it."""
+    src = """
+fn main() -> i32 {
+    let u: Uncertain<i32> = into_uncertain(1);
+    let mut r: i32 = 0;
+    let mut i: i32 = 0;
+    while i < 1 { r = from_uncertain(u); i = i + 1; };
+    let k: Known<i32> = into_known(r);
+    from_known(k)
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    errs = typecheck(prog)
+    assert any("launder" in str(e) and "Uncertain" in str(e)
+               and "Known" in str(e) for e in errs), \
+        f"while-loop Assign launder must fire, got: " \
+        f"{[str(e) for e in errs]}"
+
+
+def test_stage52_inc2_f1e_inner_let_shadow_does_not_leak():
+    """F1e: outer `let r: i32 = 0; { let r = from_uncertain(u); }
+    let _ = into_known(r);` — outer r is i32, never tainted.
+    Inner let-shadow installs taint that must NOT leak out."""
+    src = """
+fn main() -> i32 {
+    let u: Uncertain<i32> = into_uncertain(1);
+    let r: i32 = 5;
+    let dummy: i32 = {
+        let r: i32 = from_uncertain(u);
+        r + 1
+    };
+    let k: Known<i32> = into_known(r);
+    from_known(k) + dummy
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    errs = typecheck(prog)
+    # Outer `r` was never tainted; into_known(r) must NOT fire.
+    assert not any("launder" in str(e) for e in errs), \
+        f"outer untainted r must not trigger launder, got: " \
+        f"{[str(e) for e in errs]}"
+
+
+def test_stage52_inc3_match_arm_parallel_union_caught():
+    """HIGH-1: match-arm Assign launder caught via parallel-union.
+    Pre-Inc-3, arm 2's `r = 0` popped arm 1's installed taint
+    (sequential override). Post-fix, parallel-union snapshots
+    pre-match, restores between arms, unions arm-results."""
+    src = """
+fn main() -> i32 {
+    let u: Uncertain<i32> = into_uncertain(1);
+    let mut r: i32 = 0;
+    match true { true => { r = from_uncertain(u); }, false => { r = 0; } };
+    let k: Known<i32> = into_known(r);
+    from_known(k)
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    errs = typecheck(prog)
+    assert any("launder" in str(e) and "Uncertain" in str(e)
+               and "Known" in str(e) for e in errs), \
+        f"match-arm Assign launder must fire, got: " \
+        f"{[str(e) for e in errs]}"
+
+
+def test_stage52_gate2_high_c_multi_kind_drop_on_conflict():
+    """HIGH-C: when 2 arms install different modal kinds for the
+    same name, drop the static claim (the static claim is
+    invalidated; consult falls through to no-taint). Pre-fix,
+    "first wins" silently picked one arm's kind, falsely passing
+    into_X for the other kind.
+
+    Post-fix, drop-on-conflict means into_X(r) doesn't fire on
+    the conflict case (the safe-conservative behavior). True
+    multi-kind diagnostic is deferred to Inc 4."""
+    src = """
+fn main() -> i32 {
+    let u: Uncertain<i32> = into_uncertain(1);
+    let kw: Known<i32> = into_known(1);
+    let mut r: i32 = 0;
+    match true { true => { r = from_uncertain(u); }, false => { r = from_known(kw); } };
+    // r has conflicting taint (uncertain in true-arm, known in false-arm).
+    // Post-fix: drop-on-conflict. into_known(r) must NOT fire false claim.
+    let k2: Known<i32> = into_known(r);
+    from_known(k2)
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    errs = typecheck(prog)
+    # The "first wins" pre-fix would have silently passed (kind matched).
+    # The drop-on-conflict post-fix correctly drops the static claim and
+    # the consult silently passes too (no static claim, defers to runtime).
+    # The KEY invariant: no FALSE Uncertain→Known diagnostic for what's
+    # actually a Known→Known (in the false-arm).
+    launder_errs = [e for e in errs if "launder" in str(e)]
+    # Today no diagnostic fires (drop-on-conflict). When Inc 4 lands
+    # multi-kind union, this assertion will flip to assert the launder
+    # fires with "could be Uncertain OR Known" framing.
+    assert launder_errs == [], \
+        f"post-fix drop-on-conflict must not fire false launder, " \
+        f"got: {[str(e) for e in errs]}"
+
+
+def test_stage52_gate2_high_a_if_else_parallel_union_drop():
+    """HIGH-A: if-else launder via different-kind branches must
+    drop the static claim (same semantics as match-arm union)."""
+    src = """
+fn main() -> i32 {
+    let u: Uncertain<i32> = into_uncertain(1);
+    let kw: Known<i32> = into_known(1);
+    let mut r: i32 = 0;
+    if true { r = from_uncertain(u); } else { r = from_known(kw); };
+    let k2: Known<i32> = into_known(r);
+    from_known(k2)
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    errs = typecheck(prog)
+    launder_errs = [e for e in errs if "launder" in str(e)]
+    # Same drop-on-conflict semantics as match.
+    assert launder_errs == [], \
+        f"post-fix drop-on-conflict on if-else must not fire " \
+        f"false launder, got: {[str(e) for e in errs]}"
+
+
+def test_stage52_gate2_h1_diagnostic_says_taint_tracking_not_let_bypass():
+    """H1: post-fix diagnostic says 'via taint-tracking' (covers
+    let / Assign / match / if / while paths), not the misleading
+    'via let-binding bypass'."""
+    src = """
+fn main() -> i32 {
+    let u: Uncertain<i32> = into_uncertain(1);
+    let mut r: i32 = 0;
+    while true { r = from_uncertain(u); };
+    let k: Known<i32> = into_known(r);
+    from_known(k)
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    errs = typecheck(prog)
+    launder_errs = [e for e in errs if "launder" in str(e)]
+    assert launder_errs, \
+        f"while-loop launder must fire, got: {[str(e) for e in errs]}"
+    # H1 wording check: new format mentions "taint-tracking"
+    assert any("taint-tracking" in str(e) for e in launder_errs), \
+        f"diagnostic must say 'via taint-tracking' (not the old " \
+        f"misleading 'via let-binding bypass'), got: " \
+        f"{[str(e) for e in launder_errs]}"
+
+
+def test_stage52_legitimate_same_kind_round_trip_does_not_fire():
+    """Negative: legitimate `let r = from_known(k); into_known(r)`
+    must NOT fire — source kind == target kind, no launder."""
+    src = """
+fn main() -> i32 {
+    let kw: Known<i32> = into_known(42);
+    let r: i32 = from_known(kw);
+    let k2: Known<i32> = into_known(r);
+    from_known(k2)
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    errs = typecheck(prog)
+    assert not any("launder" in str(e) for e in errs), \
+        f"same-kind round-trip must not fire launder, got: " \
+        f"{[str(e) for e in errs]}"
+
+
+def test_stage52_cross_fn_taint_does_not_leak():
+    """gate-2 M5-equivalent: fn A's `let r = from_uncertain(u)`
+    must not taint fn B's parameter `r`. _check_fn entry clear
+    handles this; pin the regression."""
+    src = """
+fn maker() -> i32 {
+    let u: Uncertain<i32> = into_uncertain(1);
+    from_uncertain(u)
+}
+fn taker(r: i32) -> i32 {
+    // r is a fresh parameter; cross-fn taint must NOT carry
+    // over. into_known(r) here should NOT fire.
+    let k: Known<i32> = into_known(r);
+    from_known(k)
+}
+fn main() -> i32 {
+    taker(maker())
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    errs = typecheck(prog)
+    # taker's `r` parameter is fresh — no taint leakage from maker.
+    assert not any("launder" in str(e) for e in errs), \
+        f"cross-fn parameter taint must not leak, got: " \
+        f"{[str(e) for e in errs]}"
