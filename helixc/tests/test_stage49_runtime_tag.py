@@ -339,3 +339,123 @@ fn main() -> i32 {
     assert typecheck(prog) == []
     elf = compile_module_to_elf(lower(prog))
     assert _run_elf(elf) == 42
+
+
+# ============================================================
+# Inc 2 — enable is_ok / is_err via runtime tag
+# ============================================================
+
+
+def test_stage49_inc2_is_ok_on_ok_construct_typechecks_and_returns_true():
+    """is_ok(Ok(...)) now typechecks (Inc 2 lifted the Stage 46
+    F1 typecheck reject) and at runtime returns 1 because the
+    packed-i64 tag is 0 (Ok). Pre-Inc-2 the typecheck rejected
+    with a 'no runtime tag' diagnostic."""
+    src = """
+fn main() -> i32 {
+    let r: Result<i32, i32> = Ok(42);
+    if is_ok(r) { 1 } else { 0 }
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    assert typecheck(prog) == [], \
+        f"is_ok must typecheck post-Inc-2, got: {[str(e) for e in typecheck(prog)]}"
+    elf = compile_module_to_elf(lower(prog))
+    assert _run_elf(elf) == 1
+
+
+def test_stage49_inc2_is_ok_on_err_construct_returns_false():
+    """is_ok(Err(...)) at runtime returns 0 because the packed
+    tag is 1 (Err). Verified via the tag-check lowering."""
+    src = """
+fn main() -> i32 {
+    let r: Result<i32, i32> = Err(99);
+    if is_ok(r) { 1 } else { 0 }
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    assert typecheck(prog) == []
+    elf = compile_module_to_elf(lower(prog))
+    assert _run_elf(elf) == 0
+
+
+def test_stage49_inc2_is_err_on_ok_construct_returns_false():
+    """is_err(Ok(...)) returns 0. Symmetric companion to is_ok."""
+    src = """
+fn main() -> i32 {
+    let r: Result<i32, i32> = Ok(42);
+    if is_err(r) { 1 } else { 0 }
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    assert typecheck(prog) == []
+    elf = compile_module_to_elf(lower(prog))
+    assert _run_elf(elf) == 0
+
+
+def test_stage49_inc2_is_err_on_err_construct_returns_true():
+    """is_err(Err(...)) returns 1. Symmetric companion to is_ok."""
+    src = """
+fn main() -> i32 {
+    let r: Result<i32, i32> = Err(99);
+    if is_err(r) { 1 } else { 0 }
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    assert typecheck(prog) == []
+    elf = compile_module_to_elf(lower(prog))
+    assert _run_elf(elf) == 1
+
+
+def test_stage49_inc2_is_ok_on_dynamic_result_via_call():
+    """is_ok on a Result returned by a fn call — the dynamic case
+    that was the original motivator for the runtime tag (per the
+    Stage 46 F1 closure ledger). Pre-Inc-2 this was unrepresentable
+    because no runtime tag existed; post-Inc-2 it works."""
+    src = """
+fn safe_div(a: i32, b: i32) -> Result<i32, i32> {
+    if b == 0 { Err(b) } else { Ok(a / b) }
+}
+fn main() -> i32 {
+    let good: Result<i32, i32> = safe_div(10, 2);
+    let bad: Result<i32, i32> = safe_div(10, 0);
+    let g: i32 = if is_ok(good) { 1 } else { 0 };
+    let b: i32 = if is_err(bad) { 1 } else { 0 };
+    g + b
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    assert typecheck(prog) == []
+    elf = compile_module_to_elf(lower(prog))
+    # is_ok(good)=1 + is_err(bad)=1 = 2.
+    assert _run_elf(elf) == 2
+
+
+def test_stage49_inc2_non_result_operand_still_rejected():
+    """is_ok(<non-Result>) must still typecheck-reject. Pre-Inc-2
+    rejected for `requires Result<T, E>` reason; post-Inc-2 also
+    rejected, same diagnostic."""
+    src = """
+fn main() -> i32 {
+    let x: i32 = 7;
+    if is_ok(x) { 1 } else { 0 }
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    errs = typecheck(prog)
+    assert any("requires Result" in str(e) for e in errs), \
+        f"is_ok on non-Result must reject, got: {[str(e) for e in errs]}"
+
+
+def test_stage49_inc2_arity_mismatch_still_rejected():
+    """is_ok() with the wrong arity remains rejected."""
+    src = """
+fn main() -> i32 {
+    let r: Result<i32, i32> = Ok(7);
+    if is_ok(r, 99) { 1 } else { 0 }
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    errs = typecheck(prog)
+    assert any("takes 1 argument" in str(e) for e in errs), \
+        f"is_ok with wrong arity must reject, got: {[str(e) for e in errs]}"

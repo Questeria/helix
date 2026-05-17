@@ -2088,6 +2088,26 @@ class Lowerer:
                 return self.builder.emit(
                     tir.OpKind.RESULT_PAYLOAD, packed,
                     result_ty=tir.TIRScalar("i32"))
+            # Stage 49 Inc 2 — is_ok / is_err lower to a tag
+            # extract + compare-equal against the expected tag
+            # constant. is_ok(r) iff RESULT_TAG(r) == 0;
+            # is_err(r) iff RESULT_TAG(r) == 1. Returns a bool
+            # (lowered as i32 0/1 in TIR per Helix's existing
+            # bool convention).
+            if (isinstance(expr.callee, A.Name)
+                    and expr.callee.name in ("is_ok", "is_err")
+                    and len(expr.args) == 1):
+                packed = self._lower_expr(expr.args[0])
+                if packed is None:
+                    return None
+                tag = self.builder.emit(
+                    tir.OpKind.RESULT_TAG, packed,
+                    result_ty=tir.TIRScalar("i32"))
+                expected_tag = self.builder.const_int(
+                    0 if expr.callee.name == "is_ok" else 1, "i32")
+                return self.builder.emit(
+                    tir.OpKind.CMP_EQ, tag, expected_tag,
+                    result_ty=tir.TIRScalar("bool"))
             if (isinstance(expr.callee, A.Name)
                     and expr.callee.name in (
                         "into_working", "into_episodic",

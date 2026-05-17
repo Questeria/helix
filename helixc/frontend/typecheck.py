@@ -4787,6 +4787,15 @@ class TypeChecker:
                     # types as a soft warning. Stage 49+ work.
                     return operand_ty.ok_ty
                 if bn in ("is_ok", "is_err"):
+                    # Stage 49 Inc 2: is_ok / is_err now have real
+                    # runtime semantics via the RESULT_TAG opcode
+                    # introduced in Inc 1. They consult the high-32
+                    # bits of the packed-i64 Result representation:
+                    # is_ok(r) iff tag == 0, is_err(r) iff tag == 1.
+                    # Pre-Stage-49 they were typecheck-rejected per
+                    # Stage 46 closure gate-1 F1 fix (silent wrong-
+                    # branch miscompilation risk without a runtime
+                    # tag). Inc 2 lifts the rejection.
                     if len(arg_tys) != 1:
                         self.errors.append(TypeError_(
                             f"{bn}() takes 1 argument, got {len(arg_tys)}",
@@ -4800,66 +4809,7 @@ class TypeChecker:
                             expr.span,
                         ))
                         return TyUnknown(hint=bn)
-                    # Stage 46 closure gate-1 silent-failure Finding
-                    # 1 fix (CRITICAL): is_ok / is_err produce a
-                    # silent wrong-branch miscompilation in Phase-0
-                    # because no runtime tag exists yet. Pre-fix
-                    # they always returned 1 / 0, meaning `if
-                    # is_err(r) { panic(...) }` ALWAYS took the
-                    # else branch regardless of whether r was
-                    # actually Err. Post-fix, the typechecker
-                    # refuses to compile these calls until the
-                    # Stage 48+ runtime tag lands. The constructor
-                    # provenance (Ok/Err inferred) IS recoverable
-                    # at compile time for literally-constructed
-                    # values — emit a constant-fold-style hint
-                    # pointing the user at that path if they need
-                    # it today.
-                    inner = arg_tys[0]
-                    if (isinstance(inner.err_ty, TyUnknown)
-                            and inner.err_ty.hint == "Err inferred"):
-                        # Statically known Ok-construction.
-                        is_ok_const = "true" if bn == "is_ok" else "false"
-                        self.errors.append(TypeError_(
-                            f"{bn}() has no runtime semantics in "
-                            f"Phase-0 (no Ok/Err tag yet — "
-                            f"Stage 48+). The operand was "
-                            f"constructed via Ok() so {bn}() "
-                            f"is statically {is_ok_const}; you "
-                            f"can replace this call with the "
-                            f"literal.",
-                            expr.span,
-                        ))
-                        return TyUnknown(hint=bn)
-                    if (isinstance(inner.ok_ty, TyUnknown)
-                            and inner.ok_ty.hint == "Ok inferred"):
-                        # Statically known Err-construction.
-                        is_ok_const = "false" if bn == "is_ok" else "true"
-                        self.errors.append(TypeError_(
-                            f"{bn}() has no runtime semantics in "
-                            f"Phase-0 (no Ok/Err tag yet — "
-                            f"Stage 48+). The operand was "
-                            f"constructed via Err() so {bn}() "
-                            f"is statically {is_ok_const}; you "
-                            f"can replace this call with the "
-                            f"literal.",
-                            expr.span,
-                        ))
-                        return TyUnknown(hint=bn)
-                    # General case: no static provenance.
-                    self.errors.append(TypeError_(
-                        f"{bn}() requires a runtime Ok/Err tag "
-                        f"which Phase-0 does not yet implement. "
-                        f"Stage 48+ will add the tag and enable "
-                        f"this builtin.",
-                        expr.span,
-                        hint="for now, keep the Ok / Err "
-                        "discrimination at the call-site (e.g. "
-                        "two separate functions returning "
-                        "different variants), or wait for the "
-                        "runtime tag in Stage 48+",
-                    ))
-                    return TyUnknown(hint=bn)
+                    return TyPrim("bool")
                 if bn == "map_ok":
                     if len(arg_tys) != 2:
                         self.errors.append(TypeError_(

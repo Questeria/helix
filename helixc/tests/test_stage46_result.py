@@ -72,12 +72,19 @@ fn main() -> i32 {
     assert _run_elf(elf) == 13
 
 
-def test_stage46_gate1_f1_is_ok_rejects_in_phase_0():
-    """CRITICAL gate-1 fix: pre-fix is_ok always returned 1
-    silently miscompiling any `if is_err(r) { panic(...) }` —
-    the user thought they had error handling; the compiled
-    code ALWAYS took the else branch. Post-fix: typecheck
-    rejects until Stage 48+ runtime tag lands."""
+def test_stage46_gate1_f1_is_ok_lifted_by_stage49_inc2():
+    """Stage 46 gate-1 F1 originally rejected is_ok / is_err at
+    typecheck because Phase-0 had no runtime Ok/Err tag (pre-fix
+    is_ok always returned 1, silently miscompiling any `if
+    is_err(r) { panic(...) }`). Stage 49 Inc 2 LIFTED the
+    rejection: is_ok now lowers to RESULT_TAG(r) == 0 against
+    the packed-i64 representation introduced in Stage 49 Inc 1.
+
+    Post-Inc-2 this typechecks AND runs correctly. The runtime
+    behavior is now sound (full coverage in Stage 49 Inc 2 tests
+    in test_stage49_runtime_tag.py). This Stage 46 test is kept
+    as the audit-trail anchor for the F1 lineage; the polarity
+    flips from 'reject' to 'works'."""
     src = """
 fn main() -> i32 {
     let r: Result<i32, i32> = Ok(7);
@@ -85,16 +92,17 @@ fn main() -> i32 {
 }
 """
     prog = parse(src, include_stdlib=True)
-    errs = typecheck(prog)
-    assert any("is_ok" in str(e)
-               and ("no runtime semantics" in str(e)
-                    or "statically" in str(e)
-                    or "Phase-0" in str(e)
-                    or "Stage 48" in str(e)) for e in errs), \
-        f"is_ok must typecheck-reject in Phase-0, got {[str(e) for e in errs]}"
+    assert typecheck(prog) == [], \
+        f"is_ok must typecheck post-Stage-49-Inc-2, got " \
+        f"{[str(e) for e in typecheck(prog)]}"
+    elf = compile_module_to_elf(lower(prog))
+    assert _run_elf(elf) == 1, "is_ok(Ok(7)) must be true (=1)"
 
 
-def test_stage46_gate1_f1_is_err_rejects_in_phase_0():
+def test_stage46_gate1_f1_is_err_lifted_by_stage49_inc2():
+    """Symmetric to the is_ok F1 lift. Pre-Inc-2 typecheck-
+    rejected; post-Inc-2 typechecks cleanly and is_err(Ok(7))
+    returns false (=0)."""
     src = """
 fn main() -> i32 {
     let r: Result<i32, i32> = Ok(7);
@@ -102,8 +110,11 @@ fn main() -> i32 {
 }
 """
     prog = parse(src, include_stdlib=True)
-    errs = typecheck(prog)
-    assert any("is_err" in str(e) for e in errs)
+    assert typecheck(prog) == [], \
+        f"is_err must typecheck post-Stage-49-Inc-2, got " \
+        f"{[str(e) for e in typecheck(prog)]}"
+    elf = compile_module_to_elf(lower(prog))
+    assert _run_elf(elf) == 0, "is_err(Ok(7)) must be false (=0)"
 
 
 def test_stage46_map_ok_replaces_inner():
