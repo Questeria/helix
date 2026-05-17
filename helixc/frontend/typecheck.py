@@ -2712,8 +2712,26 @@ class TypeChecker:
                             expr.span,
                         ))
                     inner = arg_tys[0]
+                    # Stage 36 Inc 9 catch-up — type-design B1 fix:
+                    # reject prove(Logic<T>, src) instead of silently
+                    # flattening to the input Logic<T>. The pre-fix
+                    # `if isinstance(inner, TyLogic): return inner`
+                    # dropped the new source tag — a programmer who
+                    # wrapped twice to record additional evidence lost
+                    # it. Phase-0 representation is single-tag, so
+                    # wrap-and-keep-both would require an ABI change;
+                    # the conservative Phase-0 fix is to reject so the
+                    # user knows to unwrap_logic(...) first.
                     if isinstance(inner, TyLogic):
-                        return inner
+                        self.errors.append(TypeError_(
+                            f"prove(value, source): value is already "
+                            f"Logic<...> ({self._fmt(inner)}); call "
+                            f"unwrap_logic(...) first if re-proving "
+                            f"with a new source tag (Phase-0 single-"
+                            f"tag provenance cannot stack)",
+                            expr.span,
+                        ))
+                        return TyUnknown(hint="prove")
                     return TyLogic(inner=inner)
                 # unwrap_logic(l: Logic<T>) -> T — strips the Logic
                 # wrapper. Provenance information is discarded; this
@@ -2756,7 +2774,13 @@ class TypeChecker:
                         ))
                     if isinstance(arg_tys[0], TyLogic):
                         return arg_tys[0]
-                    return TyLogic(inner=arg_tys[0])
+                    # Stage 36 Inc 9 catch-up — type-design C2 fix:
+                    # pre-fix recovery returned TyLogic(inner=arg_tys[0])
+                    # which wrapped a non-Logic input into Logic<NonLogic>,
+                    # masking the inner-type mismatch in chained calls.
+                    # TyUnknown keeps the error local to derive's call
+                    # site (matches the C1 fix on unwrap_logic).
+                    return TyUnknown(hint="derive")
                 # Stage 36 Inc 9 audit A1 HIGH (type-design lane) fix:
                 # tighten boolean ops to require Logic<i32> inner. The
                 # pre-fix isinstance(t, TyLogic) check accepted any

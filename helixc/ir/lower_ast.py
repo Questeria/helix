@@ -1879,7 +1879,7 @@ class Lowerer:
                 a = self._lower_expr(expr.args[0])
                 b = self._lower_expr(expr.args[1])
                 if a is None or b is None:
-                    return a or b
+                    return None
                 # AND on 0/1 truth values: bitwise AND (preserves
                 # 0/1 semantics correctly for boolean inputs).
                 return self.builder.emit(
@@ -1891,7 +1891,7 @@ class Lowerer:
                 a = self._lower_expr(expr.args[0])
                 b = self._lower_expr(expr.args[1])
                 if a is None or b is None:
-                    return a or b
+                    return None
                 # OR on 0/1 truth values: bitwise OR (preserves 0/1
                 # semantics correctly for boolean inputs).
                 return self.builder.emit(
@@ -1916,7 +1916,7 @@ class Lowerer:
                 a = self._lower_expr(expr.args[0])
                 b = self._lower_expr(expr.args[1])
                 if a is None or b is None:
-                    return a or b
+                    return None
                 return self.builder.emit(
                     tir.OpKind.BIT_XOR, a, b,
                     result_ty=tir.TIRScalar("i32"))
@@ -1927,7 +1927,7 @@ class Lowerer:
                 a = self._lower_expr(expr.args[0])
                 b = self._lower_expr(expr.args[1])
                 if a is None or b is None:
-                    return a or b
+                    return None
                 one = self.builder.const_int(1)
                 not_a = self.builder.emit(
                     tir.OpKind.SUB, one, a,
@@ -1942,7 +1942,7 @@ class Lowerer:
                 a = self._lower_expr(expr.args[0])
                 b = self._lower_expr(expr.args[1])
                 if a is None or b is None:
-                    return a or b
+                    return None
                 xor = self.builder.emit(
                     tir.OpKind.BIT_XOR, a, b,
                     result_ty=tir.TIRScalar("i32"))
@@ -1960,7 +1960,7 @@ class Lowerer:
                 t = self._lower_expr(expr.args[1])
                 e = self._lower_expr(expr.args[2])
                 if c is None or t is None or e is None:
-                    return t or e
+                    return None
                 zero = self.builder.const_int(0)
                 cond_nz = self.builder.emit(
                     tir.OpKind.CMP_NE, c, zero,
@@ -2004,7 +2004,7 @@ class Lowerer:
                 l = self._lower_expr(expr.args[0])
                 r = self._lower_expr(expr.args[1])
                 if l is None or r is None:
-                    return l or r
+                    return None
                 push_idx = self.builder.emit(
                     tir.OpKind.ARENA_PUSH_PAIR, l, r,
                     result_ty=tir.TIRScalar("i32"))
@@ -2158,7 +2158,7 @@ class Lowerer:
                 a = self._lower_expr(expr.args[0])
                 b = self._lower_expr(expr.args[1])
                 if a is None or b is None:
-                    return a or b
+                    return None
                 a = _clamp_unit_f32(a)
                 b = _clamp_unit_f32(b)
                 # fuzzy_and(a, b) = a * b
@@ -2171,7 +2171,7 @@ class Lowerer:
                 a = self._lower_expr(expr.args[0])
                 b = self._lower_expr(expr.args[1])
                 if a is None or b is None:
-                    return a or b
+                    return None
                 a = _clamp_unit_f32(a)
                 b = _clamp_unit_f32(b)
                 # fuzzy_or(a, b) = a + b - a*b (probabilistic sum)
@@ -2204,7 +2204,7 @@ class Lowerer:
                 a = self._lower_expr(expr.args[0])
                 b = self._lower_expr(expr.args[1])
                 if a is None or b is None:
-                    return a or b
+                    return None
                 a = _clamp_unit_f32(a)
                 b = _clamp_unit_f32(b)
                 sum_ab = self.builder.emit(
@@ -2227,7 +2227,7 @@ class Lowerer:
                 a = self._lower_expr(expr.args[0])
                 b = self._lower_expr(expr.args[1])
                 if a is None or b is None:
-                    return a or b
+                    return None
                 a = _clamp_unit_f32(a)
                 b = _clamp_unit_f32(b)
                 one = self.builder.const_float(1.0, dtype="f32")

@@ -315,10 +315,14 @@ fn user_main() -> i32 {
 
 
 def test_prove_on_already_logic_is_idempotent():
-    """prove(l, src) where l is already Logic<T> stays Logic<T> (not
-    Logic<Logic<T>>) — verified by passing through a Logic<i32> param.
-    If prove() nested wrappers, the boundary check (trap-24100) would
-    reject the call."""
+    """prove(l, src) where l is already Logic<T> is REJECTED at
+    typecheck (Stage 36 Inc 9 catch-up — type-design B1 fix). Pre-fix,
+    the wrapper silently flattened to the input Logic<T>, dropping the
+    new source tag — a programmer who wrapped twice to record
+    additional evidence lost it. Phase-0 single-tag representation
+    cannot stack sources; the user must `unwrap_logic` first if
+    re-proving with a new source tag.
+    """
     src = """
 fn takes_logic(l: Logic<i32>) -> i32 { unwrap_logic(l) }
 fn user_main() -> i32 {
@@ -329,9 +333,10 @@ fn user_main() -> i32 {
 """
     prog = parse(src)
     errs = typecheck(prog)
-    assert errs == [], \
-        f"prove() should be idempotent on Logic<T>; got: " \
-        f"{[str(e) for e in errs]}"
+    assert any("already" in str(e) and "Logic" in str(e)
+               and "unwrap_logic" in str(e) for e in errs), \
+        "expected prove(Logic<T>, src) rejection diagnostic " \
+        f"mentioning unwrap_logic, got: {[str(e) for e in errs]}"
 
 
 def test_unwrap_logic_strips_to_inner():

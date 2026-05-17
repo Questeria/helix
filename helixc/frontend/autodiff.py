@@ -1121,7 +1121,23 @@ def _diff_call_chain_rule(call: A.Call, var: str,
     # prove(value, source) is a 2-arg identity wrapper. The source tag
     # is non-differentiable so the chain rule is identity on the first
     # arg.
+    #
+    # Stage 36 Inc 9 catch-up — type-design B3 fix: guard against a
+    # differentiable source-tag expression. Pre-fix, `prove(x, x)`
+    # silently returned `_diff(x, var)` — the second `x` (the source
+    # tag) was dropped from the chain rule with no diagnostic. Now we
+    # require the source-tag to be a literal integer; runtime-loaded
+    # source IDs need to flow through `register_derivation` so the
+    # autodiff path stays provably non-aliased with differentiable vars.
     if call.callee.name == "prove" and len(call.args) == 2:
+        if not isinstance(call.args[1], A.IntLit):
+            raise NotImplementedError(
+                "autodiff: prove(value, source): source must be an "
+                "integer literal in differentiated code (got "
+                f"{type(call.args[1]).__name__}); use "
+                "register_derivation for dynamic source tags so AD "
+                "can statically see the tag is non-differentiable"
+            )
         return _diff(call.args[0], var)
     if len(call.args) != 1:
         return None

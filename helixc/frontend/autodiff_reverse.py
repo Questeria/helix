@@ -560,8 +560,24 @@ def _propagate(node: A.Expr, adj: A.Expr, acc: dict[str, list[A.Expr]]) -> None:
         # is therefore identity: adj of the result equals adj of the
         # first (value) argument; the provenance tag (second arg of
         # prove) is non-differentiable and doesn't get an update.
+        #
+        # Stage 36 Inc 9 catch-up — type-design B3 fix (reverse-mode
+        # twin of the forward-mode guard in autodiff.py): require the
+        # source tag of `prove` to be an integer literal in
+        # differentiated code so AD can statically see the second arg
+        # is non-aliased with the diff target.
         if isinstance(node.callee, A.Name) and node.callee.name in (
                 "prove", "unwrap_logic", "attach", "detach"):
+            if (node.callee.name == "prove"
+                    and len(node.args) == 2
+                    and not isinstance(node.args[1], A.IntLit)):
+                raise NotImplementedError(
+                    "autodiff (reverse): prove(value, source): source "
+                    "must be an integer literal in differentiated code "
+                    f"(got {type(node.args[1]).__name__}); use "
+                    "register_derivation for dynamic source tags so AD "
+                    "can statically see the tag is non-differentiable"
+                )
             if node.args:
                 _propagate(node.args[0], adj, acc)
             return
