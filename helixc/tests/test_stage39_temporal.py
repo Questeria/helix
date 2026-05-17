@@ -347,6 +347,113 @@ fn main() -> i32 {{
         assert errs, f"{fn}(Eternal<i32>) should reject but didn't"
 
 
+# Stage 39 closure gate-1 L1 fix: explicit per-transition rejection of
+# Eternal-as-source. Confirms the diagnostic mentions the expected
+# required-source kind for each transition (so a future refactor that
+# accidentally adds an Eternal->X transition would have to revisit
+# these tests and intentionally relax them).
+
+
+def test_stage39_inc2_to_past_rejects_eternal_with_present_diag():
+    src = """
+fn main() -> i32 {
+    let e: Eternal<i32> = into_eternal(42);
+    from_past(to_past(e))
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    errs = typecheck(prog)
+    assert any("Present" in str(e) and "to_past" in str(e)
+               for e in errs), \
+        f"to_past(Eternal) must fail with a Present-required diag, " \
+        f"got {[str(e) for e in errs]}"
+
+
+def test_stage39_inc2_forecast_rejects_eternal_with_present_diag():
+    src = """
+fn main() -> i32 {
+    let e: Eternal<i32> = into_eternal(42);
+    from_future(forecast(e))
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    errs = typecheck(prog)
+    assert any("Present" in str(e) and "forecast" in str(e)
+               for e in errs)
+
+
+def test_stage39_inc2_recall_past_rejects_eternal_with_past_diag():
+    src = """
+fn main() -> i32 {
+    let e: Eternal<i32> = into_eternal(42);
+    from_present(recall_past(e))
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    errs = typecheck(prog)
+    assert any("Past" in str(e) and "recall_past" in str(e)
+               for e in errs)
+
+
+def test_stage39_inc2_actualize_rejects_eternal_with_future_diag():
+    src = """
+fn main() -> i32 {
+    let e: Eternal<i32> = into_eternal(42);
+    from_present(actualize(e))
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    errs = typecheck(prog)
+    assert any("Future" in str(e) and "actualize" in str(e)
+               for e in errs)
+
+
+# Stage 39 closure gate-1 H1/H2/H3 backfill tests: confirm TyTemporal
+# parallels TyFrame in the refinement-traversal surfaces. These would
+# have caught the symmetry gaps the type-design auditor flagged.
+
+
+def test_stage39_h1_temporal_compatible_rejects_raw_inner():
+    """`_compatible(Past<i32>, i32)` must reject — otherwise the
+    eliminator's type-level intent is bypassed at call boundaries."""
+    src = """
+fn unwrap(x: i32) -> i32 { x }
+fn main() -> i32 {
+    let p: Past<i32> = into_past(42);
+    unwrap(p)
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    errs = typecheck(prog)
+    assert errs, "Past<i32> must not be _compatible with raw i32"
+
+
+def test_stage39_h1_temporal_compatible_rejects_cross_kind():
+    """`_compatible(Past<i32>, Present<i32>)` must reject."""
+    src = """
+fn take_present(p: Present<i32>) -> i32 { from_present(p) }
+fn main() -> i32 {
+    let was: Past<i32> = into_past(42);
+    take_present(was)
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    errs = typecheck(prog)
+    assert errs, "Past<i32> must not be _compatible with Present<i32>"
+
+
+def test_stage39_h3_temporal_in_refinement_container_set():
+    """TyTemporal must be in `_is_refinement_container` so the join
+    logic at `_join_branch_types` correctly fires the refinement-
+    shape check on temporal-wrapped values."""
+    from helixc.frontend.typecheck import (
+        TypeChecker, TyTemporal, TyPrim,
+    )
+    tc = TypeChecker(parse("fn main() -> i32 { 0 }"))
+    assert tc._is_refinement_container(TyTemporal("past", TyPrim("i32"))), \
+        "TyTemporal must be in the refinement-container set"
+
+
 # ============================================================
 # Inc 1 + 2 — IR identity-lowering invariant
 # ============================================================

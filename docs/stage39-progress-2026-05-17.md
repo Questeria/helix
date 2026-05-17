@@ -64,3 +64,37 @@ flow Present → Future (forecast) → Present (actualize) → Past
 ## Increment 4 - Stage 39 Closure (3/3 clean gates)
 
 Same protocol as Stage 35/36/37/38.
+
+### Inc 1+2 implementation summary
+
+- `helixc/frontend/typecheck.py`:
+  - `TyTemporal(kind, inner)` dataclass mirrors `TyFrame`.
+  - 12 new builtins registered in `_BUILTIN_NAMES`:
+    intro `into_{past,present,future,eternal}`, elim
+    `from_{past,present,future,eternal}`, transitions
+    `to_past`, `forecast`, `recall_past`, `actualize`.
+  - 3 typecheck arms (`_temporal_intro`, `_temporal_elim`,
+    `_temporal_transitions`) — wrong-arity and wrong-kind
+    diagnostics fail-closed.
+  - `_resolve_type` recognizes `Past<T>` / `Present<T>` /
+    `Future<T>` / `Eternal<T>` in annotation positions.
+  - `_fmt` arm prints `Past<T>` / `Present<T>` / etc.
+- `helixc/ir/lower_ast.py`: 12 names appended to the unified
+  identity-lowering arm (same arm as Stage 37 + Stage 38).
+- `helixc/frontend/autodiff.py`: 12 names added to
+  `AD_KNOWN_PURE_CALLS` and to `_FRAME_IDENTITY_AD_NAMES`
+  (chain-rule is identity, same as frame wrappers).
+- `helixc/tests/test_stage39_temporal.py`: 25 tests across
+  Inc 1 + Inc 2 + invariants. All 25 green.
+- `helixc/examples/dogfood_12_temporal_lifecycle.hx` +
+  `helixc/examples/run.py` registration: exits 42 on the
+  Present→Future→Present→Past lifecycle plus a recall_past
+  side-check and an Eternal intro/elim sanity check.
+
+### Gate cadence
+
+Gate count is governed by the post-Stage-38 convention:
+combined audit-and-fix per increment, 3 consecutive clean
+audit gates close the stage. Self-host gate green before
+every commit. No Stage 39 audit findings actionable at
+Gate 1 → carry forward to Gate 2 / Gate 3.

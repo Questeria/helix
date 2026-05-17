@@ -239,6 +239,20 @@ def test_dogfood_11_spatial_frames():
     assert compile_and_run(src) == 42
 
 
+def test_dogfood_12_temporal_lifecycle():
+    # Stage 39 Increment 3 dogfood: temporal-type lifecycle reasoner.
+    # 3 observations flow through Present -> Future (forecast) ->
+    # Present (actualize) -> Past (to_past) -> unwrap, plus a
+    # recall_past side-check and an Eternal intro/elim sanity check.
+    # Exit 42 iff every wrapper transition preserves the inner value
+    # AND the sum of unwrapped observations equals 42.
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    p = os.path.join(proj_root, "helixc", "examples", "dogfood_12_temporal_lifecycle.hx")
+    with open(p) as f:
+        src = f.read()
+    assert compile_and_run(src) == 42
+
+
 def test_dogfood_10_memory_tiers():
     # Stage 37 Increment 2 dogfood: memory-tier lifecycle reasoner.
     # 3 observations flow through working -> episodic -> consolidate

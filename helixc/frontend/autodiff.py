@@ -175,12 +175,14 @@ _FRAME_IDENTITY_AD_NAMES = frozenset({
     "world_to_robot", "robot_to_world",
     "robot_to_camera", "camera_to_robot",
     "world_to_camera", "camera_to_world",
-    # Stage 39 Inc 1 + Inc 2 — temporal wrappers share the same
-    # identity chain rule. Same Phase-0 wrapper-shift semantics as
-    # Stage 38 frames: `d(into_past(u))/dx = du/dx`. Reusing the
-    # frame-identity arm avoids a parallel set + duplicate test
-    # surface; the only structural difference is the wrapper tag,
-    # which the AD pass never inspects.
+    # Stage 39 Inc 1 + Inc 2 — temporal kinds share the same identity
+    # chain rule as frames: `d(into_past(u))/dx = du/dx`. Phase-0
+    # wrapper-shift semantics; the only structural difference from
+    # frames is the wrapper tag, which the AD pass never inspects.
+    # Reusing the frame-identity arm avoids a parallel set + duplicate
+    # test surface. (Stage 39 closure gate-1 silent-failure F4 fix:
+    # do NOT call this block "Stage 38 frames" — that's the wrong
+    # stage label and breaks grep-by-stage audits.)
     "into_past", "into_present", "into_future", "into_eternal",
     "from_past", "from_present", "from_future", "from_eternal",
     "to_past", "forecast", "recall_past", "actualize",

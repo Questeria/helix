@@ -4795,6 +4795,14 @@ class TypeChecker:
             return (self._contains_unknown_type(ty.dtype)
                     or any(self._contains_unknown_type(s)
                            for s in ty.shape))
+        # Stage 39 closure gate-1 silent-failure F2 fix: wrapper types
+        # (TyMemTier / TyFrame / TyTemporal) must walk to their inner
+        # so a TyUnknown buried under any wrapper still short-circuits
+        # downstream struct monomorphization. Pre-fix the wrapped
+        # case silently returned False — a Stage-37/38 hole Stage 39
+        # would have inherited and widened.
+        if isinstance(ty, (TyMemTier, TyFrame, TyTemporal)):
+            return self._contains_unknown_type(ty.inner)
         return False
 
     def _refinement_proof_carried(
@@ -4847,6 +4855,13 @@ class TypeChecker:
         # frame wrapper are visible to the refinement-shape check.
         if isinstance(target, TyFrame) and isinstance(value_ty, TyFrame):
             return (target.frame == value_ty.frame
+                    and self._refinement_shape_exact(
+                        value_ty.inner, target.inner))
+        # Stage 39 closure gate-1 type-design H2 fix: TyTemporal needs
+        # parallel walk so refinements under a temporal wrapper are
+        # visible to the refinement-shape check. Mirrors TyFrame.
+        if isinstance(target, TyTemporal) and isinstance(value_ty, TyTemporal):
+            return (target.kind == value_ty.kind
                     and self._refinement_shape_exact(
                         value_ty.inner, target.inner))
         if isinstance(target, TyTensor) and isinstance(value_ty, TyTensor):
@@ -5507,6 +5522,12 @@ class TypeChecker:
         if isinstance(a, TyFrame) and isinstance(b, TyFrame):
             return (a.frame == b.frame
                     and self._refinement_shape_exact(a.inner, b.inner))
+        # Stage 39 closure gate-1 type-design H2 fix: parallel arm for
+        # TyTemporal — refinements under temporal wrappers must be
+        # shape-visible at branch boundaries / join sites.
+        if isinstance(a, TyTemporal) and isinstance(b, TyTemporal):
+            return (a.kind == b.kind
+                    and self._refinement_shape_exact(a.inner, b.inner))
         if isinstance(a, TyTensor) and isinstance(b, TyTensor):
             return (len(a.shape) == len(b.shape)
                     and self._refinement_shape_exact(a.dtype, b.dtype)
@@ -5551,6 +5572,11 @@ class TypeChecker:
             return TyMemTier(ty.tier, self._erase_refinement(ty.inner))
         if isinstance(ty, TyFrame):
             return TyFrame(ty.frame, self._erase_refinement(ty.inner))
+        # Stage 39 closure gate-1 type-design H3: parallel TyTemporal
+        # arm so erase walks into the inner type (otherwise refined
+        # inners survive erasure and produce inconsistent diagnostics).
+        if isinstance(ty, TyTemporal):
+            return TyTemporal(ty.kind, self._erase_refinement(ty.inner))
         if isinstance(ty, TyTensor):
             return TyTensor(
                 self._erase_refinement(ty.dtype), ty.shape, ty.device,
@@ -5663,6 +5689,12 @@ class TypeChecker:
             return self._contains_refinement(ty.inner, _seen_structs)
         if isinstance(ty, TyFrame):
             return self._contains_refinement(ty.inner, _seen_structs)
+        # Stage 39 closure gate-1 type-design H3: TyTemporal wrappers
+        # must be transparent to refinement detection (otherwise
+        # `Past<{x: f32 | x.is_finite()}>` reports False and
+        # `_join_branch_types` silently drops the refinement).
+        if isinstance(ty, TyTemporal):
+            return self._contains_refinement(ty.inner, _seen_structs)
         if isinstance(ty, TyTensor):
             return (self._contains_refinement(ty.dtype, _seen_structs)
                     or any(self._contains_refinement(s, _seen_structs)
@@ -5678,9 +5710,12 @@ class TypeChecker:
         return False
 
     def _is_refinement_container(self, ty: Type) -> bool:
+        # Stage 39 closure gate-1 type-design H3: include TyTemporal so
+        # `_join_branch_types` correctly fires the refinement-shape
+        # check for temporal-wrapped values across branches.
         return isinstance(ty, (
             TyArray, TyTuple, TyRef, TyPtr, TyFn, TyDiff, TyLogic, TyQuote,
-            TyMemTier, TyFrame, TyTensor, TyTile,
+            TyMemTier, TyFrame, TyTemporal, TyTensor, TyTile,
         ))
 
     def _contains_refined_function(self, ty: Type) -> bool:
@@ -5703,6 +5738,10 @@ class TypeChecker:
         if isinstance(ty, TyMemTier):
             return self._contains_refined_function(ty.inner)
         if isinstance(ty, TyFrame):
+            return self._contains_refined_function(ty.inner)
+        # Stage 39 closure gate-1 type-design H3: TyTemporal walks
+        # to inner for the refined-function check too.
+        if isinstance(ty, TyTemporal):
             return self._contains_refined_function(ty.inner)
         if isinstance(ty, TyTensor):
             return (self._contains_refined_function(ty.dtype)
@@ -6688,6 +6727,15 @@ class TypeChecker:
         if isinstance(a, TyFrame) and isinstance(b, TyFrame):
             return a.frame == b.frame and self._compatible(a.inner, b.inner)
         if isinstance(a, TyFrame) or isinstance(b, TyFrame):
+            return False
+        # Stage 39 closure gate-1 type-design H1: TyTemporal needs the
+        # parallel arm — same `a == b` dataclass-equality risk for
+        # refined / generic / shape-symbolic inners. `Past<i32>` vs
+        # raw `i32` must be rejected (no silent unwrap on the
+        # `_compatible` path the way `from_past` enforces it).
+        if isinstance(a, TyTemporal) and isinstance(b, TyTemporal):
+            return a.kind == b.kind and self._compatible(a.inner, b.inner)
+        if isinstance(a, TyTemporal) or isinstance(b, TyTemporal):
             return False
         # Audit 28.8 cycle 2 B:C3: Quote<T> ~ Quote<U> iff T ~ U.
         # Reject Quote<T> ~ T (raw value passed where Quote expected)
