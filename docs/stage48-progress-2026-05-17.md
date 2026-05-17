@@ -171,13 +171,73 @@ Code-review lane: CLEAN with 6 findings (0 CRITICAL / 1 HIGH /
 - **L2 LOW** (`_compatible` inline-comment redundancy):
   deferred; comment is helpful in-place.
 
+### Gate-3 results (this commit)
+
+Pattern repeating: gate-3 silent-failure caught a NEW HIGH
+silent miscompile that gate-2's fix accidentally created. The
+cascading-defect rhythm is now Stage 48's 4th instance (gate-1
+F2, gate-2 F1, gate-2 M5, gate-3 G3-F1) and mirrors Stage 46's
+4 escalating audit findings. Audits are doing their job;
+patches are converging on a sound design.
+
+- **G3-F1 HIGH** (inner-block ASSIGN to outer Result name +
+  post-block `?`): the gate-2 snapshot-restore solved the inner-
+  LET case but introduced an inner-ASSIGN mirror. `let mut r =
+  Ok(7); { r = Err(99); } let v = r?;` — assign-arm popped `r`
+  inside the inner block, restore put back the stale `r='ok'`,
+  post-block `r?` accepted silently. 3 reproducers (anonymous
+  block, if-then arm, match arm) all verified exit 99.
+  FIXED with scope-aware tracking: parallel set-stack
+  `_result_let_block_scopes` records names introduced via let
+  inside each open block. At restore: names that were inner-let-
+  introduced (shadows) leave the outer dict alone; names that
+  exist in the saved snapshot AND were inner-assign-mutated
+  (current dict differs and NOT in inner-lets) drop from the
+  restored map → falls into F1-dynamic Phase-0 territory
+  (typecheck-clean, runtime exit 99 remains as a Phase-0 known
+  defect, fixed by Stage 49 runtime tag).
+- **G3-F2 MEDIUM** (cascade of G3-F1 through nested blocks):
+  addressed by same fix (each level's restore composes).
+- **G3-F3 LOW** (exception-safety in finally): FIXED — nested
+  try ensures the provenance restore always runs even if
+  `_pop_local_const_scope` raises.
+
+Type-design lane: 5 findings (0 HIGH / 3 MEDIUM Stage 49-prep
+/ 2 LOW polish).
+- **T-M1 MEDIUM** (scope-stack pattern divergence): deferred
+  to Stage 49 — the fix from G3-F1 partially closes this by
+  introducing the parallel set-stack.
+- **T-M2 MEDIUM** (O(N·M) snapshot cost): same M1 conversion
+  addresses incidentally.
+- **T-M3 MEDIUM** (5-site stewardship without centralizing
+  helper): partially addressed by the expanded comment block
+  at the provenance map declaration listing all 6 sites
+  explicitly.
+- **T-L1 LOW** (comment lineage churn): expanded comment block
+  is the right home — closure-ledger pointer added.
+- **T-L2 LOW** (F5 test STAGE49 inline marker): applied.
+
+Code-review lane: 5 findings (0 CRITICAL / 0 HIGH / 3 MEDIUM /
+2 LOW).
+- **CR-M1 MEDIUM** (pop-before-restore exception-safety):
+  FIXED — nested try/finally.
+- **CR-M2 MEDIUM** (no positive test for operand-name diag):
+  FIXED — new test `test_stage48_question_diagnostic_names_operand`.
+- **CR-M3 MEDIUM** (M5 test order-sensitive on fn declaration
+  order): documented with banner comment near the test.
+- **CR-L1 LOW** (`STAGE49_TODO:` convention diverges from
+  pre-existing `TODO(stageN):`): FIXED — all 4 sites renamed.
+- **CR-L2 LOW** (cross-gate F-tag namespace reuse): documented
+  in this ledger — F-tags reset per gate.
+
 ### Test summary
 
-Stage 48 test count: 11 → 14 (added F1, M5, F5 regression
-tests). Stage 46+48 combined: 41 tests pass. Full helixc
-suite: 626 passed + 1 pre-existing unrelated failure
-(`test_grad_rejects_opaque_call_in_loss`). Self-host cascade
-G2..G4 byte-identical. dogfood_17 still exits 42.
+Stage 48 test count: 11 → 14 (gate-2 +F1, +M5, +F5) → 18
+(gate-3 +G3-F1a, +G3-F1b, +G3-F1c, +operand-name-diag).
+Stage 46+48 combined: 45 tests pass. Self-host cascade still
+3/3 byte-identical. dogfood_16 + dogfood_17 still exit 42.
+Gate-4 verification audits next: re-run all 3 lanes against
+the gate-3 patch to confirm no new defect class.
 
 ### Phase-0 vs Stage 49+ semantic upgrade
 

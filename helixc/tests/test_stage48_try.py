@@ -401,8 +401,143 @@ fn main() -> i32 {
     prog = parse(src, include_stdlib=True)
     errs = typecheck(prog)
     # Phase-0 limitation: typechecks clean. Documented as F5.
+    # TODO(stage49): when the runtime Ok/Err tag lands, this
+    # test's polarity FLIPS — change `assert errs == []` to
+    # compile + run the ELF and `assert _run_elf(elf) == 99`
+    # (the natural Err early-return through `?`). DO NOT delete
+    # the test; the F5 reproducer is the canonical regression
+    # anchor for aggregate-field provenance behaviour. Mirror
+    # the TODO(stage49) markers already in lower_ast.py:866 and
+    # lower_ast.py:2097.
     assert errs == [], \
         f"F5 deferred: member-access operand to `?` should " \
         f"typecheck clean in Phase-0 (silent miscompile is a " \
         f"known Phase-0 defect — Stage 49+ runtime tag fixes " \
         f"the entire class). Got: {[str(e) for e in errs]}"
+
+
+# ============================================================
+# Stage 48 Inc 4 closure gate-3 silent-failure G3-F1
+# (inner-block ASSIGN to outer Result name + post-block `?`)
+# ============================================================
+
+# Order-sensitive note on M5 test above (per gate-3 code-review M3):
+# the cross-fn carry test requires `maker` to be checked BEFORE
+# `taker` so the stale provenance from maker pollutes taker's
+# parameter check. The source order is intentional; do not
+# reorder fn declarations.
+
+
+def test_stage48_closure_gate3_g3f1a_inner_block_assign_no_stale_ok_claim():
+    """Gate-3 G3-F1 fix: gate-2's snapshot-restore solved the
+    inner-block LET shadow but introduced an inner-block ASSIGN
+    mirror. `let mut r = Ok(7); { r = Err(99); } let v = r?;`
+    pre-fix: in-block assign-arm correctly popped 'r' from the
+    dict, then the restore put back the stale 'ok' provenance.
+    Post-block `r?` then DID NOT REJECT (silent miscompile
+    at runtime: exit 99).
+
+    Post-fix: the restore detects outer-name mutation (current
+    dict differs from saved snapshot) and DROPS the mutated
+    name. Result: typecheck clean (no static provenance →
+    F1-dynamic Phase-0 limitation territory), no false static
+    'Ok-constructed' claim. Runtime exit 99 remains a Phase-0
+    known defect (F6 deferred — joins F1-dynamic, fixed by
+    Stage 49 runtime tag).
+
+    The test asserts the post-fix typecheck behaviour: NO
+    diagnostic claiming the operand is statically Ok-constructed
+    (the pre-fix bug surfaced as the absence of any rejection,
+    so we assert positively that the diagnostic that WOULD
+    indicate the stale claim is not present)."""
+    src = """
+fn helper() -> Result<i32, i32> {
+    let mut r: Result<i32, i32> = Ok(7);
+    { r = Err(99); }
+    let v: i32 = r?;
+    Ok(v)
+}
+fn main() -> i32 { unwrap_ok(helper()) }
+"""
+    prog = parse(src, include_stdlib=True)
+    errs = typecheck(prog)
+    err_strs = [str(e) for e in errs]
+    # Post-fix: no static "Ok-constructed" claim on r.
+    assert not any("constructed via Ok" in s for s in err_strs), \
+        f"inner-block assign must drop stale 'ok' provenance, " \
+        f"got: {err_strs}"
+
+
+def test_stage48_closure_gate3_g3f1b_if_then_assign_no_stale_ok_claim():
+    """Gate-3 G3-F1 mirror in if-then arm. Same defect class
+    as G3-F1a, different scope vehicle. Pre-fix: silent miscompile
+    via stale 'ok' restoration. Post-fix: F1-dynamic territory."""
+    src = """
+fn helper(cond: bool) -> Result<i32, i32> {
+    let mut r: Result<i32, i32> = Ok(7);
+    if cond { r = Err(99); } else { }
+    let v: i32 = r?;
+    Ok(v)
+}
+fn main() -> i32 { unwrap_ok(helper(true)) }
+"""
+    prog = parse(src, include_stdlib=True)
+    errs = typecheck(prog)
+    err_strs = [str(e) for e in errs]
+    assert not any("constructed via Ok" in s for s in err_strs), \
+        f"if-then-arm assign must drop stale 'ok' provenance, " \
+        f"got: {err_strs}"
+
+
+def test_stage48_closure_gate3_g3f1c_match_arm_assign_no_stale_ok_claim():
+    """Gate-3 G3-F1 mirror in match arm. Same defect class as
+    G3-F1a + G3-F1b, third scope vehicle. Pre-fix: silent
+    miscompile. Post-fix: F1-dynamic territory."""
+    src = """
+fn helper(b: bool) -> Result<i32, i32> {
+    let mut r: Result<i32, i32> = Ok(7);
+    match b {
+        true => { r = Err(99); },
+        false => { },
+    }
+    let v: i32 = r?;
+    Ok(v)
+}
+fn main() -> i32 { unwrap_ok(helper(true)) }
+"""
+    prog = parse(src, include_stdlib=True)
+    errs = typecheck(prog)
+    err_strs = [str(e) for e in errs]
+    assert not any("constructed via Ok" in s for s in err_strs), \
+        f"match-arm assign must drop stale 'ok' provenance, " \
+        f"got: {err_strs}"
+
+
+# ============================================================
+# Stage 48 Inc 4 closure gate-3 code-review M2 polish:
+# tighten the non-Result operand diagnostic regression test
+# ============================================================
+
+
+def test_stage48_question_diagnostic_names_operand():
+    """Gate-3 code-review M2: the gate-2 M1 polish added the
+    operand name to the non-Result-operand diagnostic. The pre-
+    existing `test_stage48_rejects_non_result_operand` only
+    asserted the strings '?' and 'Result' are present — a
+    future refactor that strips the `f" on {expr.args[0].name!r}"`
+    interpolation would silently revert the polish and that
+    test would still pass. This test pins the operand-name
+    inclusion."""
+    src = """
+fn helper() -> Result<i32, i32> {
+    let x: i32 = 7;
+    let v: i32 = x?;
+    Ok(v)
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    errs = typecheck(prog)
+    assert errs, "non-Result operand `?` must produce diagnostic"
+    diag_str = " ".join(str(e) for e in errs)
+    assert "on 'x'" in diag_str, \
+        f"diagnostic must name the operand `x`, got: {diag_str}"

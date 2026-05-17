@@ -863,7 +863,7 @@ class Lowerer:
             # because `?` only makes sense in a Result-returning
             # function, which forces Result into the fn signature.
             if ty.base == "Result" and len(ty.args) == 2:
-                # STAGE49_TODO: when the runtime Ok/Err tag lands,
+                # TODO(stage49): when the runtime Ok/Err tag lands,
                 # replace this identity-lowering with a 2-slot
                 # aggregate (tag i32 + payload of max(sizeof(T),
                 # sizeof(E))). The change ripples to fn-return
@@ -2094,7 +2094,7 @@ class Lowerer:
                         # taken only when the operand is known
                         # at compile time to be Ok-shape.
                         "Ok", "Err", "unwrap_ok", "unwrap_err",
-                        # STAGE49_TODO: __try splits out of this
+                        # TODO(stage49): __try splits out of this
                         # tuple when the runtime Ok/Err tag lands;
                         # it then becomes a real conditional-branch
                         # arm (early-return if Err).

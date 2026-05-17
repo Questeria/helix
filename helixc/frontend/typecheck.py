@@ -586,29 +586,46 @@ class TypeChecker:
         # here so re-running check() on the same instance doesn't carry
         # stale entries that would silence real new errors.
         self._seen_unbound: set[str] = set()
-        # Stage 46 closure gate-2 silent-failure G2-F1 fix: track
-        # the constructor provenance (Ok vs Err) of Result-typed
-        # let bindings. When a user writes
-        # `let r: Result<i32, i32> = Ok(7)`, the type annotation
-        # overrides the inferred TyUnknown sides at the bind site,
-        # defeating the gate-1 F4 hint-based check. This map
-        # preserves the provenance independently so unwrap_ok /
-        # unwrap_err / __try can detect the wrong-arm case for
-        # typed-let bindings.
+        # Result-constructor provenance map (Stage 46 G2-F1
+        # origin; Stage 48 gate-2 F1+M5 + gate-3 G3-F1 extensions).
         #
-        # Stage 48 closure gate-2 silent-failure F1+M5 fix:
-        # additionally cleared at function entry (M5: stale cross-fn
-        # carry was falsely flagging a parameter named `r` in fn B
-        # because fn A had set `r='ok'` earlier in the same check()
-        # run) and snapshot-restored across _check_block (F1: inner-
-        # block shadow `let r: Result = Ok(5)` was overwriting the
-        # outer Err provenance, so the post-block `r?` silently
-        # extracted the outer's Err payload as Ok — verified end-
-        # to-end at exit code 99).
-        # Stage 49+ runtime tag replaces the Phase-0 use of this map;
-        # the map itself stays (compile-time provenance still gives
-        # better diagnostics for statically-constructed Result).
+        # Invariant: this dict mirrors the names in scope inside
+        # the CURRENT function's body, restored across block
+        # boundaries (with scope-aware mutate-vs-shadow disambig)
+        # and cleared across function boundaries. Used by
+        # unwrap_ok / unwrap_err / __try to detect statically
+        # determinable wrong-arm cases.
+        #
+        # Stewardship sites (search for `_result_constructor_provenance`):
+        #   1. declaration (here)
+        #   2. cleared at check() entry (per check() invocation)
+        #   3. cleared at _check_fn entry (per fn — gate-2 M5 fix)
+        #   4. snapshot + mutate-aware restore across _check_block
+        #      (gate-2 F1 + gate-3 G3-F1 fixes; uses the parallel
+        #      _result_let_block_scopes set-stack to distinguish
+        #      inner-let shadows from inner-assign outer mutations)
+        #   5. Let-stmt populates the prov dict AND records the
+        #      name in the current block's let-set; pops on
+        #      opaque RHS; propagates through map_ok / map_err
+        #   6. Assign-stmt pops (mutation invalidates static
+        #      provenance)
+        #
+        # Lineage: see Stage 46 + Stage 48 closure ledgers in
+        # docs/stage{46,48}-progress-2026-05-17.md for the
+        # silent-miscompile patterns each rule guards.
+        #
+        # Stage 49+ runtime tag replaces the Phase-0 use of this
+        # map; the map itself stays (compile-time provenance
+        # still gives better diagnostics for statically-
+        # constructed Result).
         self._result_constructor_provenance: dict[str, str] = {}
+        # Gate-3 G3-F1 fix: parallel stack tracking which names
+        # were INTRODUCED-via-let in each open block. Used at
+        # _check_block exit to distinguish "inner-shadow let
+        # changed the dict" (restore outer) from "inner assign
+        # to outer name changed the dict" (drop outer's stale
+        # entry — the value is now mutated and dynamic).
+        self._result_let_block_scopes: list[set[str]] = []
         self._seen_unknown_type_names: set[str] = set()
         # Stage 40 closure gate-2 code-review MEDIUM-1 fix (conf
         # 88): explicit init so re-running check() on the same
@@ -2363,18 +2380,25 @@ class TypeChecker:
         self._push_local_const_scope()
         # Stage 48 closure gate-2 silent-failure F1 fix: snapshot the
         # Result-constructor provenance map at block entry and
-        # restore at exit. Pre-fix, an inner-block `let r:
-        # Result<i32,i32> = Ok(5)` overwrote the outer Err-
-        # constructed `r`'s provenance to 'ok', so a post-block
-        # `r?` silently extracted the outer Err payload as Ok —
-        # verified end-to-end (exit code 99 in the audit probe).
-        # Snapshot-restore is the minimal sound fix: inner-block
-        # mutations don't leak to outer scope. Trade-off: an inner-
-        # block `r = Ok(5)` (assign, not let) followed by an outer
-        # `r?` would false-reject — but the assign-arm already
-        # clears provenance, and false-reject is safe vs the silent
-        # miscompile this guards.
+        # restore at exit. Inner-block `let r: Result = Ok(5)`
+        # shadow no longer overwrites the outer Err-constructed
+        # `r`'s provenance.
+        #
+        # Stage 48 closure gate-3 silent-failure G3-F1 fix: at
+        # restore, scope-disambiguate WHO caused any post-block
+        # diff between saved and current. Inner-LET shadows
+        # (introduced via let inside the block) are popped from
+        # the restored map — the outer scope is unchanged. Names
+        # that were in the saved map AND whose current value
+        # differs from saved AND were NOT inner-let-introduced
+        # were mutated by an inner ASSIGN (or map_ok/map_err)
+        # to the outer name — drop them from the restored map
+        # so the dynamic mutation is honoured (joins the F1-
+        # dynamic Phase-0 limitation: typecheck-clean, runtime
+        # still wrong without Stage 49 runtime tag, but no false
+        # static 'Ok-constructed' claim).
         saved_provenance = dict(self._result_constructor_provenance)
+        self._result_let_block_scopes.append(set())
         try:
             for stmt in block.stmts:
                 self._check_stmt(stmt, inner)
@@ -2408,8 +2432,34 @@ class TypeChecker:
                 return final_ty
             return TyUnit()
         finally:
-            self._pop_local_const_scope()
-            self._result_constructor_provenance = saved_provenance
+            # Gate-3 code-review M1: pop-then-restore would skip
+            # the provenance restore if `_pop_local_const_scope`
+            # raised (push/pop imbalance). Nested try ensures the
+            # provenance restore is always-must-run.
+            try:
+                self._pop_local_const_scope()
+            finally:
+                # Gate-3 G3-F1 fix (scope-aware): the inner-let
+                # names recorded by this block are inner-only
+                # shadows — they don't affect outer state. Names
+                # in the saved map whose current value differs AND
+                # are NOT inner-let-introduced were mutated by an
+                # inner assign (or map_ok/map_err) targeting the
+                # outer name — drop them so the post-block code
+                # sees the dynamic mutation (joins F1-dynamic
+                # Phase-0 limitation, not a false static claim).
+                inner_lets = (self._result_let_block_scopes.pop()
+                              if self._result_let_block_scopes
+                              else set())
+                mutated_outer_names = {
+                    n for n in saved_provenance
+                    if (n not in inner_lets
+                        and self._result_constructor_provenance.get(n)
+                        != saved_provenance.get(n))
+                }
+                self._result_constructor_provenance = saved_provenance
+                for n in mutated_outer_names:
+                    self._result_constructor_provenance.pop(n, None)
 
     def _check_stmt(self, stmt: A.Stmt, scope: Scope) -> None:
         if isinstance(stmt, A.Let):
@@ -2458,6 +2508,14 @@ class TypeChecker:
                         and len(self.errors) != stmt_error_start):
                     bind_ty = self._erase_refinement(value_ty)
                 scope.define(stmt.name, bind_ty, is_mut=stmt.is_mut)
+            # Stage 48 closure gate-3 G3-F1 fix: record this let-
+            # binding in the current block's let-set so the
+            # _check_block exit can distinguish inner-let shadows
+            # (don't touch outer provenance on restore) from
+            # inner-assign mutations of outer names (drop the
+            # stale outer provenance on restore).
+            if self._result_let_block_scopes:
+                self._result_let_block_scopes[-1].add(stmt.name)
             # Stage 46 closure gate-2 silent-failure G2-F1 fix:
             # if the let RHS is a direct Ok(...) / Err(...) call,
             # record the constructor provenance on the binding so
