@@ -130,6 +130,25 @@ Re-sequenced after Stage 46-47 closed:
   algorithm together once the cascade can tolerate source
   changes. Estimated 2-3 stages depending on how the
   fragility's root cause splits.
+- **Stage 52** (in flight 2026-05-17, Inc 1+2+3 SHIPPED, Inc 4
+  closure audits in progress): modal-origin taint-tracking
+  pass closing the Stage 40 closure gate-1 H1 known limitation
+  ("let-binding bypass of F1 syntactic guard"). Inc 1 (commit
+  c274059) added `_modal_origin_provenance` dict + Let-stmt
+  populate at `from_X(...)` RHS + into_Y consult. Inc 2 (commit
+  2925121) added Assign-arm POPULATE on from_X RHS + scope-
+  stack discipline via `_modal_origin_let_block_scopes`
+  (closes while-loop Assign + inner-let shadow false-positive).
+  Inc 3 (commit c9d8915) added match-arm parallel-union
+  semantics (closes match-arm-pop-overrides-arm-1 silent
+  launder). Three launder paths closed (let-binding, while/for
+  Assign, match-arm). Helper-fn indirection deferred to Stage 53
+  (different defect class — inter-procedural taint).
+- **Stage 53** (next): helper-fn indirection taint propagation.
+  The LAST remaining laundering bypass — `fn launder(x: i32)
+  -> Known<i32> { into_known(x) }` called with a from_X(...)
+  result. Requires inter-procedural analysis (taint flows
+  through fn boundaries). Closes Stage 40 H1 in full.
 - **Stage 50** (proposed): Bootstrap `grad_rev_all` N-walk
   → single-walk port. Closes bootstrap side of Tier 1 #3.
   1 stage.
