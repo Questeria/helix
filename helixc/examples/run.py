@@ -86,6 +86,11 @@ DEMOS: dict[str, dict] = {
         "title": "Memory-tier lifecycle reasoner (Stage 37 Inc 2)",
         "expects": "exit code 42  (3 observations cycle through working->episodic->semantic->working + procedural sanity)",
     },
+    "frames": {
+        "file": "dogfood_11_spatial_frames.hx",
+        "title": "Spatial-frame lifecycle reasoner (Stage 38 Inc 3)",
+        "expects": "exit code 42  (3 observations cycle through WorldFrame->RobotFrame->CameraFrame->WorldFrame)",
+    },
 }
 
 

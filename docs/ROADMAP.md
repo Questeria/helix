@@ -14,7 +14,7 @@ reveals which features actually matter.
 - Verifier-gated reflective-cell scaffold (64 mutable cells, real verifier
   function calls with SysV ABI; real runtime AST reflection remains future work)
 - f32/f64 reflection cells (splice_f / splice_f64 / modify_f / modify_f64)
-- 10 dogfood programs/tests running real gradient descent + provenance-typed Datalog + SGD-learns-a-fuzzy-rule + two-param fuzzy-rule learning + knowledge-graph reasoner with provenance recovery + memory-tier lifecycle reasoner + a self-improving-agent flagship that composes them (11 programs total: 10 dogfood + 1 flagship; see `helixc/examples/dogfood_*.hx` and `helixc/examples/self_improving_agent.hx`. The newest, `dogfood_10_memory_tiers.hx`, demonstrates Stage 37 Increment 2 — working→episodic→consolidate→semantic→recall lifecycle)
+- 11 dogfood programs/tests running real gradient descent + provenance-typed Datalog + SGD-learns-a-fuzzy-rule + two-param fuzzy-rule learning + knowledge-graph reasoner with provenance recovery + memory-tier lifecycle reasoner + spatial-frame lifecycle reasoner + a self-improving-agent flagship that composes them (12 programs total: 11 dogfood + 1 flagship; see `helixc/examples/dogfood_*.hx` and `helixc/examples/self_improving_agent.hx`. The newest, `dogfood_11_spatial_frames.hx`, demonstrates Stage 38 Increment 3 — WorldFrame→RobotFrame→CameraFrame→WorldFrame lifecycle)
 - Stdlib for transcendentals auto-included
 - Stage 35 status: CLOSED 2026-05-16 at restart 65 (3/3 clean audit gates; full ledger in docs/stage35-progress-2026-05-15.md)
 

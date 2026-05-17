@@ -226,6 +226,19 @@ def test_dogfood_08_two_param_fuzzy_rule():
     assert compile_and_run(src) == 42
 
 
+def test_dogfood_11_spatial_frames():
+    # Stage 38 Increment 3 dogfood: spatial-frame lifecycle reasoner.
+    # 3 observations cycle through WorldFrame -> RobotFrame ->
+    # CameraFrame -> WorldFrame via Stage 38 Inc 2 cross-frame
+    # transforms. Exit 42 iff each obs round-trips AND the sum
+    # equals 42 (10+14+18).
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    p = os.path.join(proj_root, "helixc", "examples", "dogfood_11_spatial_frames.hx")
+    with open(p) as f:
+        src = f.read()
+    assert compile_and_run(src) == 42
+
+
 def test_dogfood_10_memory_tiers():
     # Stage 37 Increment 2 dogfood: memory-tier lifecycle reasoner.
     # 3 observations flow through working -> episodic -> consolidate
