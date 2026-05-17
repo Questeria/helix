@@ -472,17 +472,17 @@ def test_stage40_ad_pure_registration():
 
 
 def test_stage40_frame_identity_ad_registration():
-    """All 10 modal builtins are in _FRAME_IDENTITY_AD_NAMES — the
+    """All 10 modal builtins are in _IDENTITY_AD_CHAIN_RULE_NAMES — the
     forward + reverse AD passes treat them as identity chain rules
     so `grad(into_known(u))/dx = du/dx`. Mirrors Stage 38/39
     preemptive registration; closes the Stage 38 post-Inc-3 F2
     lesson before audit time."""
-    from helixc.frontend.autodiff import _FRAME_IDENTITY_AD_NAMES
+    from helixc.frontend.autodiff import _IDENTITY_AD_CHAIN_RULE_NAMES
     for name in ("into_known", "into_believed", "into_goal", "into_uncertain",
                  "from_known", "from_believed", "from_goal", "from_uncertain",
                  "confirm", "act_on"):
-        assert name in _FRAME_IDENTITY_AD_NAMES, \
-            f"{name} must be in _FRAME_IDENTITY_AD_NAMES"
+        assert name in _IDENTITY_AD_CHAIN_RULE_NAMES, \
+            f"{name} must be in _IDENTITY_AD_CHAIN_RULE_NAMES"
 
 
 # ============================================================

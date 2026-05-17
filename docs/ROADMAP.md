@@ -47,33 +47,51 @@ Burst summary (11 stages closed in <48h, all via the
   the Helix type system. 8 builtins (Ok/Err/unwrap_ok/
   unwrap_err/is_ok/is_err/map_ok/map_err). 4 of 8 are
   Phase-0-typecheck-rejected pending the Stage 48+ runtime
-  tag; the other 4 ship with a two-layer wrong-arm safety
+  tag; the other 4 ship with a 3-layer wrong-arm safety
   net (TyUnknown-hint provenance + `_result_constructor_
-  provenance` map + Assign-arm invalidation) that catches
-  the 3 distinct silent-miscompile patterns (inference,
-  typed-let, mutable reassignment) audit lanes surfaced
-  during closure.
+  provenance` map + Assign-arm invalidation + non-
+  constructor-RHS pop) that catches the 4 distinct silent-
+  miscompile patterns (inference, typed-let, mutable
+  reassignment, cross-function name leak) audit lanes
+  surfaced across the 3-gate closure.
+- **Stage 47** — slim consolidation: drop the Stage 43
+  deferred `_FRAME_IDENTITY_AD_NAMES` backwards-compat
+  alias (3-stage grace period elapsed), refresh ROADMAP
+  "Current state" to include Stage 46, re-sequence Stage
+  48-50 picks.
 
 15 dogfood programs total. Self-host cascade still
 byte-identical G2..G4 fixpoint throughout the entire burst.
 
 ## Next-stage sequencing (post-Stage-45)
 
-Concrete deliverables for the next 5 stages, each sized to
-single-stage scope:
+Re-sequenced after Stage 46-47 closed:
 
-- **Stage 46** (proposed): Bootstrap `grad_rev_all` N-walk
-  → single-walk port. Closes the bootstrap side of Tier 1
-  #3. 1 stage.
-- **Stage 47** (proposed): Tier 1 #2 follow-through — extend
+- **Stage 46** ✅ DONE — Tier 4 #14 Inc 1 Result<T,E>
+  typecheck-side scaffolding (3-gate closure caught 4
+  silent-miscompile patterns; 3-layer wrong-arm safety net
+  shipped).
+- **Stage 47** ✅ DONE — slim consolidation: dropped Stage
+  43 deferred `_FRAME_IDENTITY_AD_NAMES` alias + ROADMAP
+  refresh.
+- **Stage 48** (proposed): Tier 4 #14 Inc 2 — `?` operator
+  parser change + IR lowering for early-return on Err. 1-2
+  stages. Inc 2 itself unblocks the most-common error-
+  handling idiom in real Helix programs.
+- **Stage 49** (proposed): Tier 4 #14 Inc 3 — runtime Ok/Err
+  tag. Unlocks the 4 currently-rejected builtins (is_ok,
+  is_err, map_err, unwrap-wrong-arm). Stage 50+ work
+  depends on this.
+- **Stage 50** (proposed): Bootstrap `grad_rev_all` N-walk
+  → single-walk port. Closes bootstrap side of Tier 1 #3.
+  1 stage.
+- **Stage 51** (proposed): Tier 1 #2 follow-through — extend
   AD across user-defined function calls coverage. 1-2 stages.
-- **Stage 48** (proposed): Tier 4 #14 Result<T,E> + `?`
-  operator Inc 1 (typecheck only). 1 stage.
-- **Stage 49** (proposed): Tier 4 #14 Inc 2 (parser + IR
-  lowering for `?` early-return). 1 stage.
-- **Stage 50** (proposed): Stage 40 F1 let-binding bypass —
+- **Stage 52** (proposed): Stage 40 F1 let-binding bypass —
   taint-tracking pass for Uncertain-origin propagation.
   1-2 stages.
+
+Re-evaluate at Stage 50.
 
 Re-evaluate sequence at Stage 48 based on what shipped.
 

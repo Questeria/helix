@@ -39,14 +39,17 @@ def test_stage43_item2_new_name_is_exported():
         f"{len(_IDENTITY_AD_CHAIN_RULE_NAMES)}"
 
 
-def test_stage43_item2_old_name_still_aliased():
-    """The old `_FRAME_IDENTITY_AD_NAMES` name must remain as a
-    backwards-compat alias for one stage. Drop at Stage 44+."""
-    from helixc.frontend.autodiff import (
-        _FRAME_IDENTITY_AD_NAMES, _IDENTITY_AD_CHAIN_RULE_NAMES,
-    )
-    assert _FRAME_IDENTITY_AD_NAMES is _IDENTITY_AD_CHAIN_RULE_NAMES, \
-        "old name must alias the new name (same object), not a copy"
+def test_stage47_old_name_alias_dropped():
+    """Stage 47 drop: the backwards-compat alias
+    `_FRAME_IDENTITY_AD_NAMES` was retained at Stage 43 LOW-3
+    "drop at Stage 44 or beyond" for one stage of grace
+    period. Three stages have elapsed (44, 45, 46); the alias
+    is now dropped. This test inverts the gate-1 assertion
+    to confirm the drop landed."""
+    import helixc.frontend.autodiff as ad
+    assert not hasattr(ad, "_FRAME_IDENTITY_AD_NAMES"), \
+        "Stage 47 dropped the backwards-compat alias; if you " \
+        "see this fail, the alias is unexpectedly back."
 
 
 def test_stage43_item2_autodiff_reverse_imports_new_name():

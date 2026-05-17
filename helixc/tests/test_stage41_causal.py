@@ -287,13 +287,13 @@ def test_stage41_ad_pure_registration():
 
 
 def test_stage41_ad_identity_chain_rule_registration():
-    from helixc.frontend.autodiff import _FRAME_IDENTITY_AD_NAMES
+    from helixc.frontend.autodiff import _IDENTITY_AD_CHAIN_RULE_NAMES
     for name in ("into_cause", "into_effect", "into_joint",
                  "into_independent",
                  "from_cause", "from_effect", "from_joint",
                  "from_independent",
                  "propagate", "aggregate", "isolate"):
-        assert name in _FRAME_IDENTITY_AD_NAMES, \
+        assert name in _IDENTITY_AD_CHAIN_RULE_NAMES, \
             f"{name} must be identity-AD-chain-rule"
 
 

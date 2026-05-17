@@ -187,8 +187,7 @@ AD_INTEGER_VALUED_LOGIC = frozenset({
 # Stage 43 Inc 1 LOW-3 fix: renamed from `_FRAME_IDENTITY_AD_NAMES`
 # to reflect that the set now covers all 5 wrapper families
 # (frame + temporal + modal + causal — only 12 of 45 entries are
-# actual frames). The old name remains as a backwards-compat
-# alias for one stage (Stage 44 will drop the alias).
+# actual frames). Stage 47 dropped the backwards-compat alias.
 _IDENTITY_AD_CHAIN_RULE_NAMES = frozenset({
     "into_world", "into_robot", "into_camera",
     "from_world", "from_robot", "from_camera",
@@ -223,10 +222,11 @@ _IDENTITY_AD_CHAIN_RULE_NAMES = frozenset({
     "propagate", "aggregate", "isolate",
 })
 
-# Stage 43 Inc 1 LOW-3 fix: one-stage backwards-compat alias for
-# any external importer that still references the old name. Drop
-# this alias at Stage 44 or beyond.
-_FRAME_IDENTITY_AD_NAMES = _IDENTITY_AD_CHAIN_RULE_NAMES
+# Stage 47: dropped the `_FRAME_IDENTITY_AD_NAMES` backwards-
+# compat alias (Stage 43 Inc 1 LOW-3 deferral). Three stages
+# of grace period elapsed (44, 45, 46); all internal use sites
+# now reference `_IDENTITY_AD_CHAIN_RULE_NAMES` directly. Any
+# external importer must do the rename.
 
 
 # Mapping from integer-valued Logic op to its closest fuzzy
