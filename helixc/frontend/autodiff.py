@@ -67,16 +67,28 @@ AD_KNOWN_PURE_CALLS = {
     # Stage 36 Increment 8: fuzzy XOR + implication.
     "fuzzy_xor", "fuzzy_implies",
     # Stage 36 Increment 9 post-Inc-8 audit C2 LOW fix: register the
-    # boolean-algebra + arena-provenance builtins as AD-pure. They're
-    # all integer-valued (so the AD derivative is 0 for differentiable
-    # use cases), but the let-inlining AD-erasability check (line 515
-    # _is_ad_erasable_expr) needs them in this set to avoid the
-    # "cannot erase side-effecting let" trap when a function
-    # transitively calls them inside a grad/grad_rev path.
-    "derive", "and_logic", "or_logic", "not_logic",
+    # boolean-algebra builtins as AD-pure. They're all integer-valued
+    # (so the AD derivative is 0 for differentiable use cases), but
+    # the let-inlining AD-erasability check (_is_ad_erasable_expr)
+    # needs them in this set to avoid the "cannot erase side-effecting
+    # let" trap when a function transitively calls them in a
+    # grad/grad_rev path.
+    "and_logic", "or_logic", "not_logic",
     "xor_logic", "implies_logic", "eq_logic", "if_logic",
     "to_logic_bool",
-    "register_derivation", "parent_left_at", "parent_right_at",
+    # parent_*_at are pure arena READS — no mutation, safe to erase
+    # if the result is unused inside a differentiated function.
+    "parent_left_at", "parent_right_at",
+    # NOTE: `derive` and `register_derivation` were briefly listed
+    # here by the Inc 9 C2 LOW fix, but the Inc 9 B2 fix (commit
+    # 707deff) made both functions perform an ARENA_PUSH_PAIR side
+    # effect. Stage 36 Inc 11 post-Inc-10 silent-failure H1 + type-
+    # design B3 fix: removed from the pure set so that an unused
+    # `let _h = register_derivation(p, q);` inside grad/grad_rev no
+    # longer gets silently erased by `_inline_lets`. Calling them in
+    # a differentiated function now correctly raises
+    # NotImplementedError("AD cannot erase side-effecting ...") —
+    # the user must hoist the call outside the differentiator.
 }
 
 

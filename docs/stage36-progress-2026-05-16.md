@@ -859,3 +859,121 @@ Next: pick the next Increment from the "What's left in Stage 36
 (Increment 9+)" menu above — top candidate is auto-registration
 of derivations (combinators auto-write arena entries) since it
 builds directly on the ARENA_PUSH_PAIR opcode that just landed.
+
+## Increment 10 - Knowledge-graph reasoner dogfood (commit 821592f)
+
+Landed as the first dogfood that exercises the Inc 9 audit-clean
+primitives in a small Datalog-shaped chained-rule + evidence-trail
+scenario. 70-line program `helixc/examples/dogfood_09_knowledge_graph.hx`
+wired into `test_reflection.py::test_dogfood_09_knowledge_graph` and
+`examples/run.py` as the 'kgraph' demo. ROADMAP advanced 8 -> 9
+dogfoods.
+
+## Increment 10 fix - Dogfood witness strengthening (commit 9d78805)
+
+A parallel autonomous loop landed `9d78805` ("Stage 36 Inc 10 fix:
+correct dogfood_09 handle expectations (1, 3 not 1, 2)") between
+Inc 10 and the Inc 11 audit dispatch. That commit independently
+strengthened `dogfood_09_knowledge_graph.hx` from the original
+`count * 21 * ev_ok` witness into 8 independent per-invariant
+binary checks (matching the post-Inc-10 silent-failure M1 +
+code-review C1/C2 findings) and corrected the expected handle math
+(h_ad = 3 not 2, since ARENA_PUSH_PAIR pushes 2 entries per
+register_derivation call).
+
+This Inc 11 sweep therefore does NOT re-address M1 / code-review
+C1+C2 — those landed in 9d78805.
+
+## Increment 11 - Post-Inc-10 audit + fix-sweep (this commit)
+
+3-lane post-Inc-10 audit dispatched (silent-failure, type-design,
+code-review) covering Inc 10 + the Inc 9 catch-up commits a9753ad
+through e1ca1f9. Findings:
+
+- silent-failure: 1 HIGH + 1 MEDIUM + 1 LOW
+  (`docs/audit-stage36-postinc10-silent-failures.md`)
+- type-design: 1 HIGH + 3 MEDIUM + 2 LOW
+  (`docs/audit-stage36-postinc10-type-design.md`)
+- code-review: CLEAN + 2 LOW
+  (`docs/audit-stage36-postinc10-codereview.md`)
+
+Cross-lane overlap noted: silent-failure H1 = type-design B3 (both
+about `derive` / `register_derivation` left in `AD_KNOWN_PURE_CALLS`
+after the Inc 9 B2 fix made them arena-mutating).
+
+### Fixes applied in this Inc 11 sweep
+
+- **silent-failure H1 / type-design B3 (HIGH)** — removed `derive`
+  and `register_derivation` from `AD_KNOWN_PURE_CALLS` in
+  `helixc/frontend/autodiff.py:64-80`. Both perform an
+  `ARENA_PUSH_PAIR` side effect (added by Inc 9 B2 commit `707deff`)
+  and so cannot be silently erased by `_inline_lets`. An unused
+  `let _h = register_derivation(p, q);` inside a `grad`/`grad_rev`
+  body now correctly raises `NotImplementedError("AD cannot erase
+  side-effecting ...")` — the user must hoist the call outside the
+  differentiator. `parent_left_at` / `parent_right_at` retained in
+  the pure set (arena reads, no mutation).
+
+- **type-design B1 (MEDIUM)** — `if_logic(cond, then_v, else_v)`
+  typecheck in `helixc/frontend/typecheck.py:2849-2890`. Pre-fix
+  accepted mismatched inner types between then_v and else_v and
+  silently picked then_v's type as the result; cond was not pinned
+  to `Logic<i32>`. Post-fix: cond strictness check + inner-type
+  equality check, both emitting trap 24100 diagnostics naming the
+  mismatched types.
+
+- **type-design C1 (LOW)** — `register_derivation(left, right)` in
+  `typecheck.py:2922-2940`. Tightened both args from `_is_int_scalar`
+  (accepts i32/i64/u32/u64) to strict i32 — same family as the
+  Inc 9 B4 fix on `to_logic_bool`. Pre-fix, passing `i64` source IDs
+  silently truncated in downstream arena push ops.
+
+- **type-design C2 (LOW)** — `prove(value, source)` in
+  `typecheck.py:2707-2735`. Tightened `source` from `_is_int_scalar`
+  to strict i32, same mechanical extension.
+
+- **silent-failure L1 (LOW)** — `parent_left_at` / `parent_right_at`
+  lowering in `helixc/ir/lower_ast.py:2096-2117`. Style cleanup: the
+  None-propagation arm previously read `if idx is None: return idx`
+  (semantically identical but breaks grep symmetry with the
+  Inc 9 B1 canonical `return None`). Now consistent with B1 sweep.
+
+- (silent-failure M1 + code-review C1 + C2 already addressed by the
+  parallel-loop commit `9d78805` — see preceding section.)
+
+### Deferrals
+
+Two findings deferred from this Inc 11 sweep:
+
+- **type-design A1 (HIGH)** — `register_derivation` returns bare
+  `i32` which is aliasable to the source-ID i32 type. A nominal
+  `Handle<Derivation>` newtype would close it but requires nominal-
+  type-system support which Helix does not currently have. Deferred
+  as a Phase-0 limitation (consistent with the `provenance:
+  Optional[str]` deferral on TyLogic). The Inc 11 M1 dogfood-witness
+  strengthening reduces the practical impact: any 0-based-handle
+  regression now exits 0, so accidental source-ID/handle confusion
+  in user code surfaces as a hard test failure rather than a silent
+  miscompile.
+
+- **type-design B2 (MEDIUM)** — blanket Logic-op registration in
+  `AD_KNOWN_PURE_CALLS` makes `grad_rev` silently return zero for
+  `and_logic`/`or_logic`/etc. (since they're integer-valued). A
+  proper fix needs a new diagnostic (something like
+  `_DIFF_WARNINGS.append("integer-valued op in differentiated
+  path")` analogous to `TRAP_AD_ASSUMED_ZERO`) which is a larger
+  scope than this sweep. Documented for future increment.
+
+### Inc 11 verification
+
+- `python -m pytest helixc/tests/test_provenance.py
+  helixc/tests/test_stage36_provenance.py
+  helixc/tests/test_reflection.py::test_dogfood_09_knowledge_graph
+  helixc/tests/test_autodiff.py helixc/tests/test_autodiff_reverse.py
+  helixc/tests/test_typecheck.py -q` → **455 passed** in 264s.
+- `python scripts/stage33_selfhost_gate.py` → **PASS** G2..G4
+  byte-identical sha
+  `a6f1ee44eb4418ba296954528d05564f5a37627dc38bb350b2308675d86b8986`
+  (same sha as pre-Inc-11 — confirms typecheck + AD changes have
+  zero codegen impact).
+- `_bootstrap_cache/` cleared before final gate run.

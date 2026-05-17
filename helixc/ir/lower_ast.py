@@ -2098,7 +2098,7 @@ class Lowerer:
                     and len(expr.args) == 1):
                 idx = self._lower_expr(expr.args[0])
                 if idx is None:
-                    return idx
+                    return None
                 one = self.builder.const_int(1)
                 base_idx = self.builder.emit(
                     tir.OpKind.SUB, idx, one,
@@ -2109,7 +2109,7 @@ class Lowerer:
                     and len(expr.args) == 1):
                 idx = self._lower_expr(expr.args[0])
                 if idx is None:
-                    return idx
+                    return None
                 one = self.builder.const_int(1)
                 base_idx = self.builder.emit(
                     tir.OpKind.SUB, idx, one,

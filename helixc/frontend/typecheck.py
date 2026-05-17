@@ -2705,10 +2705,20 @@ class TypeChecker:
                 # type system (lattice/semiring upgrade is reserved
                 # for later increments).
                 if bn == "prove" and len(arg_tys) == 2:
-                    if not self._is_int_scalar(arg_tys[1]):
+                    # Stage 36 Inc 11 post-Inc-10 audit C2 LOW fix:
+                    # tighten source-tag arg from `_is_int_scalar`
+                    # (which accepts i32/i64/u32/u64) to strict i32 —
+                    # same family as the Inc 9 B4 fix on `to_logic_bool`.
+                    # Pre-fix, prove(v, x_i64) silently passed; the
+                    # downstream BIT_AND in source-tag handling would
+                    # drop the upper 32 bits.
+                    if not (isinstance(arg_tys[1], TyPrim)
+                            and arg_tys[1].name == "i32"):
                         self.errors.append(TypeError_(
-                            f"prove(value, source): source must be i32, "
-                            f"got {self._fmt(arg_tys[1])}",
+                            f"prove(value, source): source must be exactly "
+                            f"i32, got {self._fmt(arg_tys[1])} (pre-Inc-11 "
+                            f"also accepted i64/u32/u64 but those silently "
+                            f"truncated in downstream BIT_AND ops)",
                             expr.span,
                         ))
                     inner = arg_tys[0]
@@ -2850,7 +2860,11 @@ class TypeChecker:
                 #          else_val: Logic<T>) -> Logic<T> — provenance-
                 # typed ternary. Returns then_val when cond's value is
                 # nonzero, else else_val. All three inputs must be
-                # Logic-wrapped.
+                # Logic-wrapped; cond must be Logic<i32>; then_val and
+                # else_val must share the same inner type (Stage 36
+                # Inc 11 post-Inc-10 audit B1 fix — pre-fix accepted
+                # mismatched inner types and silently picked then_val's
+                # type, type-punning the result).
                 if bn == "if_logic" and len(arg_tys) == 3:
                     for i, t in enumerate(arg_tys):
                         if not isinstance(t, TyLogic):
@@ -2861,6 +2875,26 @@ class TypeChecker:
                                 f"[trap 24100]",
                                 expr.span,
                             ))
+                    if not _is_logic_of(arg_tys[0], "i32"):
+                        self.errors.append(TypeError_(
+                            f"if_logic(cond, then_v, else_v): cond must "
+                            f"be Logic<i32>, got {self._fmt(arg_tys[0])} "
+                            f"[trap 24100]",
+                            expr.span,
+                        ))
+                    if (isinstance(arg_tys[1], TyLogic)
+                            and isinstance(arg_tys[2], TyLogic)
+                            and arg_tys[1].inner is not None
+                            and arg_tys[2].inner is not None
+                            and self._fmt(arg_tys[1].inner)
+                                != self._fmt(arg_tys[2].inner)):
+                        self.errors.append(TypeError_(
+                            f"if_logic(cond, then_v, else_v): then and "
+                            f"else inner types must match, got "
+                            f"{self._fmt(arg_tys[1])} vs "
+                            f"{self._fmt(arg_tys[2])} [trap 24100]",
+                            expr.span,
+                        ))
                     if isinstance(arg_tys[1], TyLogic):
                         return arg_tys[1]
                     if isinstance(arg_tys[2], TyLogic):
@@ -2896,12 +2930,18 @@ class TypeChecker:
                 # (idx)` to recover the source IDs. This is genuine
                 # two-parent tracking without an ABI change.
                 if bn == "register_derivation" and len(arg_tys) == 2:
+                    # Stage 36 Inc 11 post-Inc-10 audit C1 LOW fix:
+                    # tighten both source-id args from `_is_int_scalar`
+                    # to strict i32 — same family as the C2 prove() fix
+                    # above and the Inc 9 B4 fix on `to_logic_bool`.
                     for i, t in enumerate(arg_tys):
-                        if not self._is_int_scalar(t):
+                        if not (isinstance(t, TyPrim) and t.name == "i32"):
                             self.errors.append(TypeError_(
                                 f"register_derivation(left, right): arg "
-                                f"{'12'[i]} must be i32 source id, got "
-                                f"{self._fmt(t)}",
+                                f"{'12'[i]} must be exactly i32 source id, "
+                                f"got {self._fmt(t)} (pre-Inc-11 also "
+                                f"accepted i64/u32/u64 but those silently "
+                                f"truncated in downstream arena push ops)",
                                 expr.span,
                             ))
                     return TyPrim("i32")
