@@ -5,7 +5,7 @@ deep-research passes (2026-05-04). It's a forward-looking plan; not
 everything here will land, and priorities will shift as dogfooding
 reveals which features actually matter.
 
-## Current state (Stage 35 CLOSED 2026-05-16 at restart 65; Stage 36 CLOSED 2026-05-16 at Inc 16; Stage 37 CLOSED 2026-05-16 at Inc 4; Stage 38 CLOSED 2026-05-17 at Inc 4; Stage 39 CLOSED 2026-05-17 at Inc 4; Stage 40 CLOSED 2026-05-17 at Inc 4; Stage 41 CLOSED 2026-05-17 at Inc 4; Stage 42 CLOSED 2026-05-17 at Inc 2; Stage 43 CLOSED 2026-05-17 at Inc 2 — deferred-items cleanup sweep across Stages 36-42 (Items 2/3/4 done: AD-set rename, F5 arity arms, M1 double-wrap rejection with direction-aware hints across all 5 wrapper families; Item 1 aggregate-rename deferred to Stage 44+); Stage 44 opens next. See `docs/stage43-progress-2026-05-17.md` for Stage 43 closure narrative)
+## Current state (Stage 35-43 CLOSED 2026-05-16 to 2026-05-17 — AGI semantic-type quintet + cohesion + deferred-cleanup. Stage 44 CLOSED 2026-05-17 at Inc 4 — Tier 1 #5 stack-passed overflow float args shipped end-to-end (9th+ float arg now correctly passes via SysV stack for both CALL and FFI_CALL with f32/f64 payloads, mixed int+float overflow rejects cleanly before rsp mutation, named SYSV_STACK_ARG_* constants, alignment + accounting tripwire asserts; first Tier-1 ML blocker closed); Stage 45 opens next. See `docs/stage44-progress-2026-05-17.md` for Stage 44 closure narrative)
 
 - Working from-scratch x86-64 ELF compiler
 - Forward + reverse-mode symbolic AD with chain rules for __exp, __log,
@@ -44,9 +44,13 @@ These are blockers for any real ML training, in priority order.
    capability-typed dataset/checkpoint workflows and broader string/file APIs
    required for end-to-end model training. **2-3 weeks.**
 
-5. **Stack-passed overflow args.** SysV ABI's xmm0..xmm7 covers the
-   first 8 float params; the 9th must be passed on the stack. Hit
-   during XOR perceptron dogfooding. **1 week.**
+5. **Stack-passed overflow args.** ✅ DONE 2026-05-17 (Stage 44).
+   SysV ABI's xmm0..xmm7 covers the first 8 float params; the 9th
+   now correctly passes on the stack for both internal CALL and
+   FFI_CALL. f32 (4-byte) and f64 (8-byte) payloads both wired.
+   Mixed int+float overflow rejects cleanly before rsp mutation.
+   Int overflow (>6 ints) deferred — same infrastructure shape if
+   a future stage needs it.
 
 ## Tier 2 — high value (do after Tier 1)
 

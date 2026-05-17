@@ -69,9 +69,67 @@ implementation.
 
 All 7 green on the first end-to-end probe.
 
-## Increment 4 - Stage 44 Closure (3/3 clean gates)
+## Increment 4 - Stage 44 Closure
 
-Same protocol as Stage 35/36/37/38/39/40/41/42/43.
+### Gate 1 (post-Inc-3) — 5 silent-failure + 2 type-design fixes
+
+Gate-1 audits returned across 3 lanes:
+- silent-failure (5 findings): F1 HIGH FFI_CALL parity, F2
+  HIGH mixed int+float guard, F3 MEDIUM store-loop asserts,
+  F4 MEDIUM alignment tripwire, F5 LOW sub-byte float doc.
+  All actionable fixed.
+- type-design (2 MEDIUM + 2 LOW): module-level SYSV_*
+  constants extracted; xmm_idx dual meaning documented;
+  cosmetic LOW deferred.
+- code-review: GATE CLEAN (1 LOW dead-store stylistic
+  below threshold).
+
+Gate-1 fix sweep (commit 2da92b3):
+- FFI_CALL now mirrors CALL for 9+ float args (parity).
+- Mixed int+float overflow rejects BEFORE any sub_rsp
+  (front-load guard).
+- `assert _overflow_idx == overflow_float_count` tripwire
+  after store loop.
+- `assert stack_alloc % SYSV_STACK_ALIGNMENT == 0`
+  tripwire before sub_rsp.
+- Module-level `SYSV_STACK_ARG_BASE` / `STRIDE` /
+  `ALIGNMENT` named constants replace the hard-coded
+  16/8 magic numbers across all 3 sites (caller CALL,
+  caller FFI_CALL, callee prologue).
+- 3 new backfill tests pinning FFI_CALL 9-float compile,
+  mixed-overflow clean-rejection, and SYSV_* constant
+  public API.
+
+10 Stage 44 tests now green (was 7 pre-gate-1).
+
+### Gate 2 (post-gate-1) — ALL 3 LANES CLEAN
+
+- silent-failure: GATE 2 CLEAN
+- type-design: GATE 2 CLEAN
+- code-review: GATE 2 CLEAN
+
+### Gate 3 (post-gate-2) — ALL 3 LANES CLEAN
+
+- silent-failure: GATE 3 CLEAN (3 LOW doc-polish items
+  noted below threshold)
+- type-design: GATE 3 CLEAN
+- code-review: GATE 3 CLEAN
+
+### STAGE 44 CLOSED 2026-05-17 at Inc 4 (3/3 clean audit gates)
+
+3 consecutive clean audit gates achieved. ROADMAP Tier 1 #5
+(stack-passed overflow float args) shipped end-to-end:
+- 9th+ float args correctly pass via the SysV stack convention
+  for both internal CALL and FFI_CALL.
+- f32 (4-byte) and f64 (8-byte) payloads both correct.
+- Caller-side stack allocation 16-aligned and tripwire-asserted.
+- Callee-side prologue loads from [rbp + SYSV_STACK_ARG_BASE
+  + idx * SYSV_STACK_ARG_STRIDE] correctly.
+- Mixed int+float overflow rejects cleanly before any rsp
+  mutation.
+
+10 Stage 44 tests + 627+ tests across the codegen surface all
+green. Self-host cascade still byte-identical G2..G4 fixpoint.
 
 ### Known limitations / future work
 
@@ -88,3 +146,12 @@ Same protocol as Stage 35/36/37/38/39/40/41/42/43.
 - **xmm8..xmm15** are unused in SysV arg-passing; not a
   Stage-44 concern, but available scratch regs for future
   passes.
+- **Gate-3 LOW polish items** (deferred):
+  - FFI_CALL accounting assert lacks descriptive message
+    (CALL twin has one).
+  - FFI_CALL skip-arm dual-meaning comment missing (CALL
+    twin has one).
+  - Callee prologue xmm0 scratch register undocumented
+    invariant.
+
+Stage 45 opens next per ROADMAP Phase 2.
