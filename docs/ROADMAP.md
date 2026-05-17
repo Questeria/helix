@@ -5,7 +5,7 @@ deep-research passes (2026-05-04). It's a forward-looking plan; not
 everything here will land, and priorities will shift as dogfooding
 reveals which features actually matter.
 
-## Current state (Stage 35 CLOSED 2026-05-16 at restart 65; Stage 36 CLOSED 2026-05-16 at Inc 16; Stage 37 CLOSED 2026-05-16 at Inc 4; Stage 38 CLOSED 2026-05-17 at Inc 4; Stage 39 CLOSED 2026-05-17 at Inc 4; Stage 40 CLOSED 2026-05-17 at Inc 4; Stage 41 CLOSED 2026-05-17 at Inc 4 — causal/intent types shipped (Cause/Effect/Joint/Independent with 8 intro/elim + 3 transitions propagate/aggregate/isolate), completing the AGI semantic-type quintet (memory/spatial/temporal/modal/causal); Stage 42 opens next. See `docs/stage41-progress-2026-05-17.md` Increment 4 for Stage 41 closure narrative)
+## Current state (Stage 35 CLOSED 2026-05-16 at restart 65; Stage 36 CLOSED 2026-05-16 at Inc 16; Stage 37 CLOSED 2026-05-16 at Inc 4; Stage 38 CLOSED 2026-05-17 at Inc 4; Stage 39 CLOSED 2026-05-17 at Inc 4; Stage 40 CLOSED 2026-05-17 at Inc 4; Stage 41 CLOSED 2026-05-17 at Inc 4; Stage 42 CLOSED 2026-05-17 at Inc 2 — AGI quintet cohesion demonstrated via dogfood_15_agi_planning_loop.hx exercising a 4-deep wrapper stack end-to-end; Stage 43 opens next. See `docs/stage42-progress-2026-05-17.md` for Stage 42 closure narrative)
 
 - Working from-scratch x86-64 ELF compiler
 - Forward + reverse-mode symbolic AD with chain rules for __exp, __log,
@@ -14,7 +14,7 @@ reveals which features actually matter.
 - Verifier-gated reflective-cell scaffold (64 mutable cells, real verifier
   function calls with SysV ABI; real runtime AST reflection remains future work)
 - f32/f64 reflection cells (splice_f / splice_f64 / modify_f / modify_f64)
-- 14 dogfood programs/tests running real gradient descent + provenance-typed Datalog + SGD-learns-a-fuzzy-rule + two-param fuzzy-rule learning + knowledge-graph reasoner with provenance recovery + memory-tier lifecycle reasoner + spatial-frame lifecycle reasoner + temporal-kind lifecycle reasoner + modal/epistemic lifecycle reasoner + causal/intent lifecycle reasoner + a self-improving-agent flagship that composes them (15 programs total: 14 dogfood + 1 flagship; see `helixc/examples/dogfood_*.hx` and `helixc/examples/self_improving_agent.hx`. The newest, `dogfood_14_causal_lifecycle.hx`, demonstrates Stage 41 Increment 3 — Cause→Effect (propagate) → Joint (aggregate) → Independent (isolate) + Known<Cause<i32>> 5-stack composition)
+- 15 dogfood programs/tests running real gradient descent + provenance-typed Datalog + SGD-learns-a-fuzzy-rule + two-param fuzzy-rule learning + knowledge-graph reasoner with provenance recovery + memory-tier lifecycle reasoner + spatial-frame lifecycle reasoner + temporal-kind lifecycle reasoner + modal/epistemic lifecycle reasoner + causal/intent lifecycle reasoner + AGI quintet cohesion planning-loop + a self-improving-agent flagship that composes them (16 programs total: 15 dogfood + 1 flagship; see `helixc/examples/dogfood_*.hx` and `helixc/examples/self_improving_agent.hx`. The newest, `dogfood_15_agi_planning_loop.hx`, demonstrates Stage 42 Increment 1 — a robot perception-plan cycle carrying values through 4-deep wrapper stacks `Known<Present<WorldFrame<Cause<i32>>>>` → `Believed<Future<WorldFrame<Effect<i32>>>>` end-to-end)
 - Stdlib for transcendentals auto-included
 - Stage 35 status: CLOSED 2026-05-16 at restart 65 (3/3 clean audit gates; full ledger in docs/stage35-progress-2026-05-15.md)
 

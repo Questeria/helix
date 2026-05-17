@@ -46,6 +46,35 @@ families simultaneously:
 Witness pattern matches Stage 37-41 dogfoods (product of binary
 witnesses × sum gate exits 42).
 
-## Increment 2 - Stage 42 Closure (3/3 clean gates)
+## Increment 2 - Stage 42 Closure
 
-Same protocol as Stage 35/36/37/38/39/40/41.
+Stage 42 is a SLIM stage: no new type primitives or compiler-side
+changes. Only a dogfood + ledger + run.py registration. The
+compiler-side invariants Stages 37-41 audit lanes already certified
+are inherited; the audit surface for Stage 42 is the dogfood +
+its self-host gate green-ness.
+
+Closure criteria:
+- Dogfood compiles + exits 42 (verified via
+  `python -m helixc.examples.run planning`).
+- 4-deep wrapper stack composition works
+  (`Known<Future<WorldFrame<Effect<i32>>>>` and
+  `Known<Present<WorldFrame<Cause<i32>>>>` typecheck and
+  identity-lower).
+- Witness collapse-resistant (3 binary witnesses × sum-equals-42).
+- Self-host cascade green (byte-identical G2..G4 fixpoint
+  preserved — confirmed in the post-Inc-1 self-host gate).
+
+### STAGE 42 CLOSED 2026-05-17 at Inc 2
+
+The AGI quintet built across Stages 37-41 is now demonstrated
+end-to-end in a single AGI planning-loop scenario. The robot
+perception-plan cycle carries values through 4-deep wrapper
+stacks (`Known<Present<WorldFrame<Cause<i32>>>>` →
+`Believed<Future<WorldFrame<Effect<i32>>>>`) and round-trips
+the inner i32 exactly. No representational drift, no runtime
+overhead, no category mistakes possible at compile time.
+
+15 dogfood programs total now (was 14).
+
+Stage 43 opens next per ROADMAP Phase 2.
