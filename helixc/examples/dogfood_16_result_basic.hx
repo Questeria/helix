@@ -15,10 +15,11 @@
 //   5. Composition with Stage 37-41 wrappers: a Known<i32>
 //      inside a Result<Known<i32>, i32> round-trips correctly.
 //
-// Exit code 42 iff THREE independent Result-based computations
-// all produce the expected value. Witness is collapse-
-// resistant: any wrong-arm at Ok/Err/unwrap/map collapses the
-// product to 0.
+// Exit code 42 iff FOUR independent Result-based witnesses
+// (3 safe_double + 1 cross-stack `Known<Cause<i32>>`
+// composition) all produce the expected values. Witness is
+// collapse-resistant: any wrong-arm at Ok/unwrap/map collapses
+// the product to 0.
 
 @pure
 fn safe_double(x: i32) -> i32 {

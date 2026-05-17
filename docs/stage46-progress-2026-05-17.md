@@ -81,6 +81,54 @@ to demonstrate the type system catches mismatches.
 
 Same protocol as Stage 35-45.
 
+### Gate 1 silent-failure fix sweep (commit b4ff52b)
+
+Gate-1 audits found 1 CRITICAL + 2 HIGH + 1 MEDIUM
+silent-failure findings. Initial Phase-0 design naively
+stubbed runtime behavior — `is_ok` always returned 1,
+`is_err` always returned 0, `map_err` was a runtime no-op.
+The audit caught that these stubs silently miscompile any
+real error-handling code: `if is_err(r) { panic("err") }`
+ALWAYS took the else branch regardless of whether r was
+actually Err.
+
+The correct Phase-0 stance is to TYPECHECK-REJECT these
+operations rather than silently lower them to misleading
+defaults:
+
+- **is_ok / is_err** — reject with kind-specific message.
+  When operand has statically-determinable provenance
+  (Ok or Err constructor), the error also says "is
+  statically true/false; you can replace this call with
+  the literal".
+- **map_err** — reject with "no runtime semantics in
+  Phase-0" hint pointing at explicit `Err(new_err)` at
+  the call-site instead.
+- **unwrap_err on Ok-inferred Result** — reject with
+  "constructed via Ok() — this is an unconditional
+  runtime panic" diag.
+- **unwrap_ok on Err-inferred Result** — symmetric
+  reject.
+
+Surface table (post-gate-1):
+
+| Builtin       | Phase-0 status | Stage 48+ plan |
+|---------------|---------------|----------------|
+| `Ok(v)`       | ✅ works       | unchanged      |
+| `Err(e)`      | ✅ works       | unchanged      |
+| `unwrap_ok`   | ✅ on Ok       | branch on tag  |
+| `unwrap_err`  | ✅ on Err      | branch on tag  |
+| `map_ok`      | ✅ works       | branch on tag  |
+| `is_ok`       | ❌ rejected    | returns bool   |
+| `is_err`      | ❌ rejected    | returns bool   |
+| `map_err`     | ❌ rejected    | branch on tag  |
+
+The 4 "rejected" surface elements work at the type system
+level (Result<T,E> typechecks; the rejections happen at
+call-site) but produce a typecheck error if the user
+actually calls them in Phase-0. Stage 48+ will add the
+runtime Ok/Err tag and unlock those four call sites.
+
 ### Out of scope (Stage 47+)
 
 - `?` operator desugaring (needs parser change).
