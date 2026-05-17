@@ -2048,34 +2048,20 @@ class Lowerer:
                         "Ok", "Err", "unwrap_ok", "unwrap_err")
                     and len(expr.args) == 1):
                 return self._lower_expr(expr.args[0])
-            # Stage 46 Inc 1 — `is_ok(r)` always returns 1 and
-            # `is_err(r)` always returns 0 in Phase-0 (no runtime
-            # Ok/Err tag yet). Documented as a Stage 48+ semantic
-            # upgrade: real runtime branching needs the tag.
-            if (isinstance(expr.callee, A.Name)
-                    and expr.callee.name == "is_ok"
-                    and len(expr.args) == 1):
-                # Evaluate the arg for side effects (Phase-0: no
-                # side effects on identity-lowered wrapper
-                # builtins), then emit constant 1.
-                return self.builder.const_int(1)
-            if (isinstance(expr.callee, A.Name)
-                    and expr.callee.name == "is_err"
-                    and len(expr.args) == 1):
-                return self.builder.const_int(0)
-            # `map_ok(r, new_ok_val)` — Phase-0: returns the new
-            # value (the new Ok inner replaces the old). `map_err(
-            # r, new_err_val)` — Phase-0: returns r unchanged
-            # (we treat all Results as Ok-shape, so map_err is a
-            # no-op at runtime; Stage 48+ will branch on tag).
+            # Stage 46 closure gate-1 silent-failure F1/F2 fix:
+            # is_ok / is_err / map_err are now typecheck-rejected
+            # in Phase-0 (no runtime tag yet). They cannot reach
+            # the IR lowering. If they did (bug), the IR pass
+            # should not silently miscompile — let the unknown-op
+            # catchall raise.
+            #
+            # map_ok IS allowed (the new Ok-side value is just
+            # threaded through Phase-0, which is semantically
+            # correct since the runtime treats all Results as Ok).
             if (isinstance(expr.callee, A.Name)
                     and expr.callee.name == "map_ok"
                     and len(expr.args) == 2):
                 return self._lower_expr(expr.args[1])
-            if (isinstance(expr.callee, A.Name)
-                    and expr.callee.name == "map_err"
-                    and len(expr.args) == 2):
-                return self._lower_expr(expr.args[0])
             # Stage 36 Increment 5: real two-parent provenance via
             # arena side-table.
             #

@@ -4248,8 +4248,46 @@ class TypeChecker:
                             expr.span,
                         ))
                         return TyUnknown(hint=bn)
-                    return (arg_tys[0].ok_ty if bn == "unwrap_ok"
-                            else arg_tys[0].err_ty)
+                    # Stage 46 closure gate-1 silent-failure
+                    # Finding 4 fix (MEDIUM): if the operand is an
+                    # inference-determined Ok-constructed value
+                    # (err_ty is TyUnknown with hint "Err inferred"),
+                    # `unwrap_err` is a known runtime panic. Same
+                    # for `unwrap_ok` on an Err-constructed value.
+                    # Reject at typecheck rather than letting the
+                    # TyUnknown-universally-compatible cascade
+                    # silently accept the misuse.
+                    inner = arg_tys[0]
+                    if bn == "unwrap_err":
+                        err = inner.err_ty
+                        if (isinstance(err, TyUnknown)
+                                and err.hint == "Err inferred"):
+                            self.errors.append(TypeError_(
+                                "unwrap_err() called on a Result "
+                                "constructed via Ok() — the Err "
+                                "side was never set, so this is "
+                                "an unconditional runtime panic.",
+                                expr.span,
+                                hint="use is_ok / unwrap_ok / "
+                                "or remove the unwrap_err",
+                            ))
+                            return TyUnknown(hint=bn)
+                        return inner.err_ty
+                    else:  # unwrap_ok
+                        ok = inner.ok_ty
+                        if (isinstance(ok, TyUnknown)
+                                and ok.hint == "Ok inferred"):
+                            self.errors.append(TypeError_(
+                                "unwrap_ok() called on a Result "
+                                "constructed via Err() — the Ok "
+                                "side was never set, so this is "
+                                "an unconditional runtime panic.",
+                                expr.span,
+                                hint="use is_err / unwrap_err / "
+                                "or remove the unwrap_ok",
+                            ))
+                            return TyUnknown(hint=bn)
+                        return inner.ok_ty
                 if bn in ("is_ok", "is_err"):
                     if len(arg_tys) != 1:
                         self.errors.append(TypeError_(
@@ -4264,38 +4302,125 @@ class TypeChecker:
                             expr.span,
                         ))
                         return TyUnknown(hint=bn)
-                    return TyPrim("bool")
-                if bn in ("map_ok", "map_err"):
-                    # 2-arg form: map_ok(r: Result<T,E>, new_ok: U)
-                    # produces Result<U, E>. Phase-0 shape; full
-                    # higher-order f-call is Stage 47+ when
-                    # closures land. The user supplies the new
-                    # ok/err value directly as the second arg.
+                    # Stage 46 closure gate-1 silent-failure Finding
+                    # 1 fix (CRITICAL): is_ok / is_err produce a
+                    # silent wrong-branch miscompilation in Phase-0
+                    # because no runtime tag exists yet. Pre-fix
+                    # they always returned 1 / 0, meaning `if
+                    # is_err(r) { panic(...) }` ALWAYS took the
+                    # else branch regardless of whether r was
+                    # actually Err. Post-fix, the typechecker
+                    # refuses to compile these calls until the
+                    # Stage 48+ runtime tag lands. The constructor
+                    # provenance (Ok/Err inferred) IS recoverable
+                    # at compile time for literally-constructed
+                    # values — emit a constant-fold-style hint
+                    # pointing the user at that path if they need
+                    # it today.
+                    inner = arg_tys[0]
+                    if (isinstance(inner.err_ty, TyUnknown)
+                            and inner.err_ty.hint == "Err inferred"):
+                        # Statically known Ok-construction.
+                        is_ok_const = "true" if bn == "is_ok" else "false"
+                        self.errors.append(TypeError_(
+                            f"{bn}() has no runtime semantics in "
+                            f"Phase-0 (no Ok/Err tag yet — "
+                            f"Stage 48+). The operand was "
+                            f"constructed via Ok() so {bn}() "
+                            f"is statically {is_ok_const}; you "
+                            f"can replace this call with the "
+                            f"literal.",
+                            expr.span,
+                        ))
+                        return TyUnknown(hint=bn)
+                    if (isinstance(inner.ok_ty, TyUnknown)
+                            and inner.ok_ty.hint == "Ok inferred"):
+                        # Statically known Err-construction.
+                        is_ok_const = "false" if bn == "is_ok" else "true"
+                        self.errors.append(TypeError_(
+                            f"{bn}() has no runtime semantics in "
+                            f"Phase-0 (no Ok/Err tag yet — "
+                            f"Stage 48+). The operand was "
+                            f"constructed via Err() so {bn}() "
+                            f"is statically {is_ok_const}; you "
+                            f"can replace this call with the "
+                            f"literal.",
+                            expr.span,
+                        ))
+                        return TyUnknown(hint=bn)
+                    # General case: no static provenance.
+                    self.errors.append(TypeError_(
+                        f"{bn}() requires a runtime Ok/Err tag "
+                        f"which Phase-0 does not yet implement. "
+                        f"Stage 48+ will add the tag and enable "
+                        f"this builtin.",
+                        expr.span,
+                        hint="for now, keep the Ok / Err "
+                        "discrimination at the call-site (e.g. "
+                        "two separate functions returning "
+                        "different variants), or wait for the "
+                        "runtime tag in Stage 48+",
+                    ))
+                    return TyUnknown(hint=bn)
+                if bn == "map_ok":
                     if len(arg_tys) != 2:
                         self.errors.append(TypeError_(
-                            f"{bn}() takes 2 arguments (Result, "
+                            f"map_ok() takes 2 arguments (Result, "
                             f"new_value), got {len(arg_tys)}",
                             expr.span,
                         ))
                         return TyUnknown(hint=bn)
                     if not isinstance(arg_tys[0], TyResult):
                         self.errors.append(TypeError_(
-                            f"{bn}() requires first arg "
+                            f"map_ok() requires first arg "
                             f"Result<T, E>, got "
                             f"{self._fmt(arg_tys[0])}",
                             expr.span,
                         ))
                         return TyUnknown(hint=bn)
-                    if bn == "map_ok":
-                        return TyResult(
-                            ok_ty=arg_tys[1],
-                            err_ty=arg_tys[0].err_ty,
-                        )
-                    else:  # map_err
-                        return TyResult(
-                            ok_ty=arg_tys[0].ok_ty,
-                            err_ty=arg_tys[1],
-                        )
+                    return TyResult(
+                        ok_ty=arg_tys[1],
+                        err_ty=arg_tys[0].err_ty,
+                    )
+                if bn == "map_err":
+                    # Stage 46 closure gate-1 silent-failure
+                    # Finding 2 fix (HIGH): pre-fix, `map_err(r,
+                    # new_err)` lowered to `args[0]` (the original
+                    # Result), so `unwrap_err(map_err(r, 999))` on
+                    # an Ok(5) returned 5, not 999. The user's
+                    # stated intent (replace the err-side) was
+                    # silently discarded. Reject at typecheck
+                    # until the Stage 48+ runtime tag lands so
+                    # there's a real er-side to replace.
+                    if len(arg_tys) != 2:
+                        self.errors.append(TypeError_(
+                            f"map_err() takes 2 arguments (Result, "
+                            f"new_value), got {len(arg_tys)}",
+                            expr.span,
+                        ))
+                        return TyUnknown(hint=bn)
+                    if not isinstance(arg_tys[0], TyResult):
+                        self.errors.append(TypeError_(
+                            f"map_err() requires first arg "
+                            f"Result<T, E>, got "
+                            f"{self._fmt(arg_tys[0])}",
+                            expr.span,
+                        ))
+                        return TyUnknown(hint=bn)
+                    self.errors.append(TypeError_(
+                        "map_err() has no runtime semantics in "
+                        "Phase-0 (no Ok/Err tag yet — Stage 48+). "
+                        "Pre-Stage-48 the runtime treats every "
+                        "Result as Ok-shape, so map_err is a "
+                        "silent no-op; reject at typecheck rather "
+                        "than miscompile.",
+                        expr.span,
+                        hint="for now, propagate the Err shape "
+                        "explicitly via Err(new_err) at the "
+                        "call-site, or wait for the runtime tag "
+                        "in Stage 48+",
+                    ))
+                    return TyUnknown(hint=bn)
                 if bn == "consolidate" and len(arg_tys) == 1:
                     # Episodic -> Semantic
                     if isinstance(arg_tys[0], TyMemTier) and arg_tys[0].tier == "episodic":

@@ -72,8 +72,12 @@ fn main() -> i32 {
     assert _run_elf(elf) == 13
 
 
-def test_stage46_is_ok_returns_one_in_phase_0():
-    """Phase-0: is_ok always returns 1 (no runtime tag yet)."""
+def test_stage46_gate1_f1_is_ok_rejects_in_phase_0():
+    """CRITICAL gate-1 fix: pre-fix is_ok always returned 1
+    silently miscompiling any `if is_err(r) { panic(...) }` —
+    the user thought they had error handling; the compiled
+    code ALWAYS took the else branch. Post-fix: typecheck
+    rejects until Stage 48+ runtime tag lands."""
     src = """
 fn main() -> i32 {
     let r: Result<i32, i32> = Ok(7);
@@ -81,13 +85,16 @@ fn main() -> i32 {
 }
 """
     prog = parse(src, include_stdlib=True)
-    assert typecheck(prog) == []
-    elf = compile_module_to_elf(lower(prog))
-    assert _run_elf(elf) == 1
+    errs = typecheck(prog)
+    assert any("is_ok" in str(e)
+               and ("no runtime semantics" in str(e)
+                    or "statically" in str(e)
+                    or "Phase-0" in str(e)
+                    or "Stage 48" in str(e)) for e in errs), \
+        f"is_ok must typecheck-reject in Phase-0, got {[str(e) for e in errs]}"
 
 
-def test_stage46_is_err_returns_zero_in_phase_0():
-    """Phase-0: is_err always returns 0 (no runtime tag yet)."""
+def test_stage46_gate1_f1_is_err_rejects_in_phase_0():
     src = """
 fn main() -> i32 {
     let r: Result<i32, i32> = Ok(7);
@@ -95,9 +102,8 @@ fn main() -> i32 {
 }
 """
     prog = parse(src, include_stdlib=True)
-    assert typecheck(prog) == []
-    elf = compile_module_to_elf(lower(prog))
-    assert _run_elf(elf) == 0
+    errs = typecheck(prog)
+    assert any("is_err" in str(e) for e in errs)
 
 
 def test_stage46_map_ok_replaces_inner():
@@ -112,6 +118,51 @@ fn main() -> i32 {
     assert typecheck(prog) == []
     elf = compile_module_to_elf(lower(prog))
     assert _run_elf(elf) == 99
+
+
+def test_stage46_gate1_f2_map_err_rejects_in_phase_0():
+    """HIGH gate-1 fix: pre-fix `map_err(r, 999)` silently
+    returned the original Result, so `unwrap_err(map_err(r,
+    999))` on Ok(5) returned 5 instead of 999. Post-fix:
+    typecheck rejects until Stage 48+ runtime tag lands."""
+    src = """
+fn main() -> i32 {
+    let r: Result<i32, i32> = Ok(5);
+    unwrap_err(map_err(r, 999))
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    errs = typecheck(prog)
+    assert any("map_err" in str(e) for e in errs)
+
+
+def test_stage46_gate1_f4_unwrap_err_on_ok_inferred_rejects():
+    """MEDIUM gate-1 fix: `let r = Ok(7); unwrap_err(r)` was
+    silently accepted because Ok(v) sets err_ty to TyUnknown
+    (universally compatible). Post-fix: detect the
+    'Err inferred' provenance and reject."""
+    src = """
+fn main() -> i32 {
+    let r = Ok(7);
+    unwrap_err(r)
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    errs = typecheck(prog)
+    assert any("constructed via Ok" in str(e) for e in errs), \
+        f"unwrap_err on Ok-constructed must reject, got {[str(e) for e in errs]}"
+
+
+def test_stage46_gate1_f4_unwrap_ok_on_err_inferred_rejects():
+    src = """
+fn main() -> i32 {
+    let r = Err(13);
+    unwrap_ok(r)
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    errs = typecheck(prog)
+    assert any("constructed via Err" in str(e) for e in errs)
 
 
 def test_stage46_unwrap_ok_rejects_non_result():
