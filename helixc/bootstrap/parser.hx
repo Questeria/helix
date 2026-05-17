@@ -6312,14 +6312,22 @@ fn grad_rev_pass(sb: i32, head: i32) -> i32 {
                 // the trap-90001 marker — skip differentiation/simplify
                 // so the trap node propagates unchanged to the synthesized
                 // gradient fn body.
+                //
+                // Stage 50 Inc 2: swap to the new bucket_array path. The
+                // n=1 wrapper preserves byte-identical self-host (verified).
+                //
+                // Stage 50 Inc 3 NOTE: true grouping (one walk per run of
+                // same-loss entries) is deferred. The n=1 wrapper is
+                // algorithmically equivalent to the old N-walk path and
+                // exercises the new infrastructure in production. Real
+                // single-walk benefit (one walk for N consecutive entries
+                // sharing a loss_name) requires a 2-pass refactor of this
+                // loop that's tracked as Stage 51 work — keeping Stage 50
+                // scoped to "infrastructure swap + plan-doc + closure" so
+                // the cascading-defect rhythm has a tight surface.
                 let deriv_raw = if have_param == 1 {
                     if valid_field == 1 {
                         if ckpt_ok == 1 {
-                            // Stage 50 Inc 2: swap to the new
-                            // bucket_array path. Equivalent output for
-                            // n=1; preserves self-host G3..G4 byte-
-                            // identity. Inc 3 will introduce true
-                            // grouping (single walk for multi-param).
                             differentiate_reverse_one_via_array(sb, body_to_diff, var_s, var_l)
                         } else {
                             body_to_diff
