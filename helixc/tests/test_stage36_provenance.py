@@ -2635,6 +2635,101 @@ fn main() -> i32 {
         "parent_at with dynamic slot=99999 must return -1 sentinel"
 
 
+def test_stage37_postclosure_stage36_gate3_parent_right_at_null_handle_returns_sentinel():
+    """Stage 37 post-closure (retroactive Stage 36 closure gate-3 H1
+    fix; "Inc 4" name collides with the concurrent Stage 37 closure
+    commit ab54524/843169b, so named explicitly): the closure gate-3
+    type-design audit (H1, conf 95) found that parent_right_at(0)
+    silently leaked arena[0] because _safe_arena_get bounds-checks
+    eff_idx (= 0-1+1 = 0, in-bounds when any registration has
+    happened) rather than the original handle. Inc 15's uniform
+    handle<=0 guard was applied only to parent_at; parent_right_at
+    perpetuated the silent-leak. This post-closure sweep closes the
+    gap by mirroring the Inc 15 SELECT-on-invalid pattern."""
+    src = """
+fn main() -> i32 {
+    let _h = register_derivation(11, 22);
+    // null-handle access — must return -1, NOT arena[0] (= 11).
+    let v = parent_right_at(0);
+    // v == -1 → 42 - 0 = 42; v == 11 → 42 - 12*99 = -1146.
+    42 - (v + 1) * 99
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    assert typecheck(prog) == []
+    elf = compile_module_to_elf(lower(prog))
+    assert _run_elf(elf) == 42, \
+        "parent_right_at(0) must return -1 regardless of arena contents (H1 fix)"
+
+
+def test_stage37_postclosure_stage36_gate3_parent_left_at_null_handle_returns_sentinel_explicit():
+    """Stage 37 post-closure (Stage 36 closure gate-3 H1 family-symmetry):
+    pre-fix, parent_left_at(0) was accidentally safe (SUB-1 with offset
+    0 produced eff_idx = -1 which failed the _safe_arena_get bounds
+    check). Post-fix adds an explicit handle<=0 guard for family
+    symmetry — the invariant is now grep-able in lower_ast.py rather
+    than dependent on coincidental interaction between SUB-1 and the
+    bounds check. This canary pins the explicit-guard behavior."""
+    src = """
+fn main() -> i32 {
+    let _h = register_derivation(11, 22);
+    let v = parent_left_at(0);
+    // Before AND after the explicit guard, this must be -1.
+    if v == 0 - 1 { 42 } else { 0 }
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    assert typecheck(prog) == []
+    elf = compile_module_to_elf(lower(prog))
+    assert _run_elf(elf) == 42, \
+        "parent_left_at(0) must return -1 (explicit guard, family symmetry)"
+
+
+def test_stage37_postclosure_stage36_gate3_evidence_right_null_handle_returns_sentinel():
+    """Stage 37 post-closure (Stage 36 closure gate-3 L2 — subsumed by
+    H1 fix): the audit noted that the stdlib alias evidence_right(0)
+    inherits parent_right_at's silent-leak. The H1 fix at the lowering
+    layer transitively fixes the alias. This canary asserts
+    evidence_right(0) returns -1 even when the arena is populated."""
+    src = """
+fn main() -> i32 {
+    let _h = register_derivation(11, 22);
+    let v = evidence_right(0);
+    if v == 0 - 1 { 42 } else { 0 }
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    assert typecheck(prog) == []
+    elf = compile_module_to_elf(lower(prog))
+    assert _run_elf(elf) == 42, \
+        "evidence_right(0) inherits H1 fix transitively"
+
+
+def test_stage37_postclosure_stage36_gate3_has_evidence_false_negative_on_neg_one_source_id():
+    """Stage 37 post-closure (Stage 36 closure gate-3 M1, doc-only
+    fix): pin the DOCUMENTED false-negative behaviour of has_evidence.
+    If a caller legitimately stores -1 as a source ID, slot[0]
+    collides with the Inc 9 A1 OOB sentinel and has_evidence returns
+    0 even for a fully valid handle. This is a Phase-0 trade-off
+    (Stage 36 Inc 16 per-record arity word will close it). This
+    canary pins the current behaviour so a future predicate change
+    is noticed; the doc in provenance.hx now warns callers explicitly."""
+    src = """
+fn main() -> i32 {
+    // Legitimate user data: source id == -1 (sentinel for "no upstream").
+    let h = register_derivation(0 - 1, 22);
+    // h is a valid handle but has_evidence returns 0 (documented
+    // false-negative). 42 iff the false-negative still holds.
+    if has_evidence(h) == 0 { 42 } else { 0 }
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    assert typecheck(prog) == []
+    elf = compile_module_to_elf(lower(prog))
+    assert _run_elf(elf) == 42, \
+        "has_evidence false-negative on -1 source-id is a documented Phase-0 limitation"
+
+
 if __name__ == "__main__":
     import pytest
     raise SystemExit(pytest.main([__file__, "-v"]))

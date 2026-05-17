@@ -163,3 +163,75 @@ consolidation/decay timing semantics.
 The next stage opens next. Per ROADMAP Phase 2 (Stages 38-46
 written IN HELIX), Stage 38 is "Spatial types + frames" — the
 first stage to be implemented in Helix-itself rather than Python.
+
+## Post-closure correction — Stage 36 closure gate-3 H1 + M1 fix sweep (2026-05-16)
+
+While Stage 36 and Stage 37 were both declared CLOSED, a fresh
+3-lane audit of the cumulative Inc 15 + gate-1 + gate-2 helixc/
+diff (run after the closure commits) re-discovered the same H1
+finding the gate-3 type-design audit had already recorded but the
+closure ceremony nevertheless declared CLEAN. The H1 is a real,
+reproducible correctness regression that was missed at closure.
+
+**H1 (HIGH, conf 95)** — `parent_right_at(0)` silently leaked
+`arena[0]` instead of returning the -1 sentinel, because
+`_safe_arena_get` bounds-checked the final `eff_idx` (= 0-1+1 = 0,
+in-bounds whenever any registration had happened) rather than the
+original handle. Inc 15's uniform `handle <= 0` guard was applied
+only to `parent_at`; `parent_right_at` (and accidentally-safe
+`parent_left_at`) perpetuated the silent-leak.
+
+**Fix** (in `helixc/ir/lower_ast.py:2134-2178`): added the same
+CMP_GT-against-zero + SELECT-on-invalid guard that Inc 15 wrote
+for `parent_at`, applied to both `parent_left_at` (explicit family
+symmetry — its prior safety was accidental, dependent on coincidental
+interaction between SUB-1 and the bounds check) and
+`parent_right_at` (the actually-buggy case). Five extra TIR ops per
+callsite. No public-API change. The stdlib alias
+`evidence_right(0)` inherits the fix transitively.
+
+**M1 (MEDIUM, conf 80, doc-only)** — `has_evidence` doc explicitly
+warned about false positives (a slot value that happens to be
+non-(-1) for any reason) but was silent about the symmetric
+false-negative: a caller who legitimately stores -1 as a source ID
+collides with the Inc 9 A1 OOB sentinel and gets `has_evidence(h) ==
+0` for a fully valid handle. Doc-only fix in
+`helixc/stdlib/provenance.hx:30-45` extends the contract block
+with the second-failure-mode paragraph. The underlying ambiguity is
+the deferred Stage 36 Inc 16 per-record arity work.
+
+**Tests** (in `helixc/tests/test_stage36_provenance.py`): added 4
+new `test_stage37_postclosure_stage36_gate3_*` canaries:
+- `parent_right_at_null_handle_returns_sentinel` (H1 fix)
+- `parent_left_at_null_handle_returns_sentinel_explicit` (family symmetry)
+- `evidence_right_null_handle_returns_sentinel` (alias H1 transitivity)
+- `has_evidence_false_negative_on_neg_one_source_id` (M1 pinned behaviour)
+
+Naming note: the original draft used `stage37_inc4_*` but the
+concurrent process committed `843169b` "Stage 37 CLOSED at Inc 4"
+during the audit run, so the canaries were renamed to
+`stage37_postclosure_stage36_gate3_*` to avoid the increment-number
+collision.
+
+**Verification:**
+- `test_stage36_provenance.py`: **137 passed** (was 133; 4 new canaries).
+- Self-host gate: **PASS** (G2..G4 byte-identical sha
+  `a6f1ee44eb4418ba296954528d05564f5a37627dc38bb350b2308675d86b8986`
+  — identical to pre-fix sha, confirming `kovc.hx` does not use
+  `parent_*_at` primitives so the IR-lowering change does not
+  propagate into the self-hosted compiler binary).
+- All 4 smoke programs exit 42; validate ok.
+
+**Open from the gate-3 audit (deferred, do not block):**
+- M2 (parent_at typecheck error format divergence + over-reporting):
+  cosmetic; defer to next audit cycle.
+- L1 (strict-i32 remediation hint misfires on non-int categories):
+  cosmetic; defer.
+
+**Closure-gate hygiene retrospective**: the concurrent gate-3
+ceremony committed the type-design audit doc (which contained the
+H1 finding) as a side-commit (`5d71f9d`) but treated the closure as
+CLEAN. The post-closure sweep applies the audit's recommended fix
+mechanically. Future closure ceremonies should not declare CLEAN
+when any committed audit doc has a HIGH finding open against the
+closure HEAD.

@@ -37,6 +37,16 @@
 // concrete handle from a register call", you also need the contextual
 // knowledge that nothing else has written to that arena slot. Pure:
 // only reads arena state.
+//
+// Stage 37 post-closure correction (Stage 36 closure gate-3 M1):
+// SECOND failure
+// mode (false-negative): if the caller legitimately stores -1 as a
+// source ID (e.g., a sentinel for "no upstream"), slot[0] collides
+// with the Inc 9 A1 OOB sentinel and `has_evidence` returns 0 even
+// for a fully valid handle. Until the deferred Inc 16 per-record
+// arity word lands, callers should avoid -1 as a source ID or use
+// direct parent_at/parent_*_at with their own validity tag. See
+// docs/audit-stage36-closure-gate3-type-design.md#M1.
 @pure
 fn has_evidence(handle: i32) -> i32 {
     if handle <= 0 { 0 }

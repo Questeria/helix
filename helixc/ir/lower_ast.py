@@ -2131,28 +2131,57 @@ class Lowerer:
             # Handle 0 (null sentinel) effectively becomes arena index
             # -1 which falls through to the -1 OOB sentinel via the
             # bounds-check from A1.
+            # Stage 37 post-closure correction (retroactive Stage 36
+            # closure gate-3 fix; "Inc 4" name collides with the
+            # concurrent Stage 37 closure commit, so named explicitly):
+            # the closure gate-3 type-design audit (H1, conf 95) found that
+            # parent_right_at(0) silently leaked arena[0] because the
+            # _safe_arena_get bounds check fires on eff_idx (= 0-1+1 = 0,
+            # in-bounds) rather than on the original handle. Inc 15's
+            # uniform `handle <= 0 → -1` guard was applied only to
+            # parent_at; parent_right_at perpetuated the silent-leak.
+            # Apply the same SELECT-on-invalid guard here, and to
+            # parent_left_at for explicit family symmetry (its current
+            # safety is accidental — SUB-1 with offset 0 lands on
+            # negative eff_idx that _safe_arena_get clamps to -1).
             if (isinstance(expr.callee, A.Name)
                     and expr.callee.name == "parent_left_at"
                     and len(expr.args) == 1):
                 idx = self._lower_expr(expr.args[0])
                 if idx is None:
                     return None
+                zero = self.builder.const_int(0)
                 one = self.builder.const_int(1)
+                neg_one = self.builder.const_int(-1)
+                handle_valid = self.builder.emit(
+                    tir.OpKind.CMP_GT, idx, zero,
+                    result_ty=tir.TIRScalar("i32"))
                 base_idx = self.builder.emit(
                     tir.OpKind.SUB, idx, one,
                     result_ty=tir.TIRScalar("i32"))
-                return _safe_arena_get(base_idx, 0)
+                raw_read = _safe_arena_get(base_idx, 0)
+                return self.builder.emit(
+                    tir.OpKind.SELECT, handle_valid, raw_read, neg_one,
+                    result_ty=tir.TIRScalar("i32"))
             if (isinstance(expr.callee, A.Name)
                     and expr.callee.name == "parent_right_at"
                     and len(expr.args) == 1):
                 idx = self._lower_expr(expr.args[0])
                 if idx is None:
                     return None
+                zero = self.builder.const_int(0)
                 one = self.builder.const_int(1)
+                neg_one = self.builder.const_int(-1)
+                handle_valid = self.builder.emit(
+                    tir.OpKind.CMP_GT, idx, zero,
+                    result_ty=tir.TIRScalar("i32"))
                 base_idx = self.builder.emit(
                     tir.OpKind.SUB, idx, one,
                     result_ty=tir.TIRScalar("i32"))
-                return _safe_arena_get(base_idx, 1)
+                raw_read = _safe_arena_get(base_idx, 1)
+                return self.builder.emit(
+                    tir.OpKind.SELECT, handle_valid, raw_read, neg_one,
+                    result_ty=tir.TIRScalar("i32"))
             # Stage 36 Inc 14: generic indexed parent accessor.
             # parent_at(handle, slot) reads arena slot (handle-1+slot)
             # with the same bounds-check sentinel as parent_*_at. The
