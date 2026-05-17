@@ -106,6 +106,11 @@ DEMOS: dict[str, dict] = {
         "title": "Causal/intent lifecycle reasoner (Stage 41 Inc 3)",
         "expects": "exit code 42  (3 propositions cycle Cause->Effect->Joint->Independent + Known<Cause<i32>> 5-stack composition)",
     },
+    "planning": {
+        "file": "dogfood_15_agi_planning_loop.hx",
+        "title": "AGI quintet cohesion: planning-loop with 4-deep wrapper stack (Stage 42 Inc 1)",
+        "expects": "exit code 42  (3 observations cycle Known<Present<WorldFrame<i32>>> -> ... -> Believed<Future<WorldFrame<Effect<i32>>>> -> unwrap; all 4 wrapper layers identity-lower without value drift)",
+    },
 }
 
 
