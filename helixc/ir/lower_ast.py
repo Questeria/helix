@@ -1974,6 +1974,21 @@ class Lowerer:
                     and expr.callee.name == "to_logic_bool"
                     and len(expr.args) == 1):
                 return self._lower_expr(expr.args[0])
+            # Stage 37 Inc 1: tiered memory constructors + eliminators
+            # + cross-tier transitions. All lower as identity (Phase-0:
+            # TyMemTier wrapper has no runtime representation; tier
+            # lives purely at the type system level — mirrors the
+            # Stage 36 Logic<T> attach/detach pattern). Phase-1+ work
+            # will add tier-id arena side-tables for runtime tracking.
+            if (isinstance(expr.callee, A.Name)
+                    and expr.callee.name in (
+                        "into_working", "into_episodic",
+                        "into_semantic", "into_procedural",
+                        "unwrap_working", "unwrap_episodic",
+                        "unwrap_semantic", "unwrap_procedural",
+                        "consolidate", "recall")
+                    and len(expr.args) == 1):
+                return self._lower_expr(expr.args[0])
             # Stage 36 Increment 5: real two-parent provenance via
             # arena side-table.
             #

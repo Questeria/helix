@@ -1855,6 +1855,9 @@ class TypeChecker:
         # Stage 36 Increment 8 — fuzzy algebra completeness.
         "fuzzy_xor", "fuzzy_implies",
         "consolidate", "recall", "learn_to",
+        # Stage 37 Inc 1 — tiered memory constructors + eliminators.
+        "into_working", "into_episodic", "into_semantic", "into_procedural",
+        "unwrap_working", "unwrap_episodic", "unwrap_semantic", "unwrap_procedural",
         "grad", "grad_rev", "grad_rev_all",
         "quote", "splice", "splice_f", "splice_f64",
         "modify", "modify_f", "modify_f64",
@@ -3084,6 +3087,42 @@ class TypeChecker:
                             and _is_logic_of(arg_tys[1], "f32")):
                         return arg_tys[0]
                     return TyLogic(inner=TyPrim("f32"))
+                # Stage 37 Inc 1 — tiered memory constructors + eliminators.
+                # 4 memory tiers (working/episodic/semantic/procedural)
+                # each get an `into_*` constructor (T -> TierMem<T>) and
+                # an `unwrap_*` eliminator (TierMem<T> -> T). All lower
+                # to identity at IR (Phase-0: zero runtime overhead,
+                # tier lives purely in the type system — mirrors the
+                # Stage 36 Inc 1 Logic<T>/prove pattern). The existing
+                # consolidate/recall cross-tier transitions stay
+                # unchanged.
+                _tier_intro_elim = {
+                    "into_working": "working",
+                    "into_episodic": "episodic",
+                    "into_semantic": "semantic",
+                    "into_procedural": "procedural",
+                }
+                if bn in _tier_intro_elim and len(arg_tys) == 1:
+                    return TyMemTier(tier=_tier_intro_elim[bn],
+                                     inner=arg_tys[0])
+                _tier_unwrap = {
+                    "unwrap_working": "working",
+                    "unwrap_episodic": "episodic",
+                    "unwrap_semantic": "semantic",
+                    "unwrap_procedural": "procedural",
+                }
+                if bn in _tier_unwrap and len(arg_tys) == 1:
+                    want = _tier_unwrap[bn]
+                    if (isinstance(arg_tys[0], TyMemTier)
+                            and arg_tys[0].tier == want):
+                        return arg_tys[0].inner
+                    self.errors.append(TypeError_(
+                        f"{bn}() requires "
+                        f"{want.capitalize()}Mem<T>, got "
+                        f"{self._fmt(arg_tys[0])}",
+                        expr.span,
+                    ))
+                    return TyUnknown(hint=bn)
                 if bn == "consolidate" and len(arg_tys) == 1:
                     # Episodic -> Semantic
                     if isinstance(arg_tys[0], TyMemTier) and arg_tys[0].tier == "episodic":
