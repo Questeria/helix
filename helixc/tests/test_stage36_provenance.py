@@ -817,6 +817,77 @@ fn main() -> i32 {
     assert _stage36_inc6_pipeline(src) == 42
 
 
+# Stage 36 Increment 9 — post-Inc-8 audit fix.
+# A1 HIGH: parent_left_at / parent_right_at bounds-check.
+# Pre-fix: bare ARENA_GET returned arbitrary memory on forged handles.
+# Post-fix: returns -1 sentinel on out-of-range (negative, beyond
+# arena_len). Mirrors the restart 45-47 forge-guard pattern.
+
+
+def test_stage36_inc9_parent_at_valid_handle_recovers_data():
+    """Valid handle from register_derivation still returns the
+    correct parent source IDs."""
+    src = """
+fn main() -> i32 {
+    let h = register_derivation(100, 200);
+    parent_left_at(h) + parent_right_at(h)
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    assert typecheck(prog) == []
+    elf = compile_module_to_elf(lower(prog))
+    rc = _run_elf(elf)
+    assert rc == 44, f"expected 44 (300 mod 256), got {rc}"
+
+
+def test_stage36_inc9_parent_left_at_negative_returns_sentinel():
+    """parent_left_at(-1) returns -1 (OOB sentinel), not arbitrary
+    memory."""
+    src = """
+fn main() -> i32 {
+    let v: i32 = parent_left_at(0 - 1);
+    if v == 0 - 1 { 42 } else { 0 }
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    assert typecheck(prog) == []
+    elf = compile_module_to_elf(lower(prog))
+    rc = _run_elf(elf)
+    assert rc == 42, f"expected sentinel -1 detection, got {rc}"
+
+
+def test_stage36_inc9_parent_right_at_huge_returns_sentinel():
+    """parent_right_at(99999) returns -1 sentinel even for a handle
+    far beyond arena_len."""
+    src = """
+fn main() -> i32 {
+    let v: i32 = parent_right_at(99999);
+    if v == 0 - 1 { 42 } else { 0 }
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    assert typecheck(prog) == []
+    elf = compile_module_to_elf(lower(prog))
+    rc = _run_elf(elf)
+    assert rc == 42, f"expected sentinel -1, got {rc}"
+
+
+def test_stage36_inc9_parent_at_idx_zero_empty_arena_sentinel():
+    """parent_left_at(0) on a process with empty arena returns -1
+    sentinel — no read past arena_len."""
+    src = """
+fn main() -> i32 {
+    let v: i32 = parent_left_at(0);
+    if v == 0 - 1 { 42 } else { 0 }
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    assert typecheck(prog) == []
+    elf = compile_module_to_elf(lower(prog))
+    rc = _run_elf(elf)
+    assert rc == 42, f"expected sentinel on idx 0 empty arena, got {rc}"
+
+
 if __name__ == "__main__":
     import pytest
     raise SystemExit(pytest.main([__file__, "-v"]))

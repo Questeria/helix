@@ -1971,30 +1971,94 @@ class Lowerer:
                     tir.OpKind.ARENA_PUSH, r,
                     result_ty=tir.TIRScalar("i32"))
                 return handle
-            # parent_left_at(idx) → __arena_get(idx)
+            # Stage 36 Increment 9 post-Inc-8 audit A1 HIGH fix:
+            # parent_left_at(idx) and parent_right_at(idx) previously
+            # lowered to bare ARENA_GET with no bounds check. A user
+            # passing an arbitrary i32 (negative, zero before any
+            # register_derivation, or > arena_len) silently returned
+            # whatever bit pattern the arena held — the exact forged-
+            # handle pattern swept clean in restart 45-47 for AGI
+            # typed handles. Now: read returns -1 sentinel on
+            # out-of-range, with the underlying ARENA_GET using a
+            # clamped index so no out-of-bounds memory access occurs
+            # under any user input.
+            def _safe_arena_get(idx_v, offset: int):
+                """Emit a bounds-checked ARENA_GET. Returns -1 if
+                (idx + offset) is outside [0, arena_len). Uses only
+                CMP_* + SELECT + arithmetic — MINIMUM/MAXIMUM are
+                tensor-shaped ops that don't work as i32 scalars."""
+                arena_len = self.builder.emit(
+                    tir.OpKind.ARENA_LEN,
+                    result_ty=tir.TIRScalar("i32"))
+                if offset != 0:
+                    off_v = self.builder.const_int(offset)
+                    eff_idx = self.builder.emit(
+                        tir.OpKind.ADD, idx_v, off_v,
+                        result_ty=tir.TIRScalar("i32"))
+                else:
+                    eff_idx = idx_v
+                zero = self.builder.const_int(0)
+                one = self.builder.const_int(1)
+                # in_bounds = (eff_idx >= 0) AND (eff_idx < arena_len)
+                ge_zero = self.builder.emit(
+                    tir.OpKind.CMP_GE, eff_idx, zero,
+                    result_ty=tir.TIRScalar("i32"))
+                lt_len = self.builder.emit(
+                    tir.OpKind.CMP_LT, eff_idx, arena_len,
+                    result_ty=tir.TIRScalar("i32"))
+                in_bounds = self.builder.emit(
+                    tir.OpKind.BIT_AND, ge_zero, lt_len,
+                    result_ty=tir.TIRScalar("i32"))
+                # safe_idx = clamp(eff_idx, 0, max(arena_len - 1, 0))
+                # via SELECT: the speculative ARENA_GET reads from a
+                # never-OOB index; SELECT then gates the result on
+                # in_bounds and returns -1 if out of range.
+                len_minus_1 = self.builder.emit(
+                    tir.OpKind.SUB, arena_len, one,
+                    result_ty=tir.TIRScalar("i32"))
+                len_pos = self.builder.emit(
+                    tir.OpKind.CMP_GE, len_minus_1, zero,
+                    result_ty=tir.TIRScalar("i32"))
+                hi_clamp = self.builder.emit(
+                    tir.OpKind.SELECT, len_pos, len_minus_1, zero,
+                    result_ty=tir.TIRScalar("i32"))
+                # clamp eff_idx down to hi_clamp if too high
+                idx_le_hi = self.builder.emit(
+                    tir.OpKind.CMP_LE, eff_idx, hi_clamp,
+                    result_ty=tir.TIRScalar("i32"))
+                clamped_hi = self.builder.emit(
+                    tir.OpKind.SELECT, idx_le_hi, eff_idx, hi_clamp,
+                    result_ty=tir.TIRScalar("i32"))
+                # clamp up to 0 if negative
+                clamped_ge_zero = self.builder.emit(
+                    tir.OpKind.CMP_GE, clamped_hi, zero,
+                    result_ty=tir.TIRScalar("i32"))
+                safe_idx = self.builder.emit(
+                    tir.OpKind.SELECT, clamped_ge_zero, clamped_hi, zero,
+                    result_ty=tir.TIRScalar("i32"))
+                val = self.builder.emit(
+                    tir.OpKind.ARENA_GET, safe_idx,
+                    result_ty=tir.TIRScalar("i32"))
+                # Sentinel -1 on out-of-range; otherwise the value.
+                neg_one = self.builder.const_int(-1)
+                return self.builder.emit(
+                    tir.OpKind.SELECT, in_bounds, val, neg_one,
+                    result_ty=tir.TIRScalar("i32"))
+
             if (isinstance(expr.callee, A.Name)
                     and expr.callee.name == "parent_left_at"
                     and len(expr.args) == 1):
                 idx = self._lower_expr(expr.args[0])
                 if idx is None:
                     return idx
-                return self.builder.emit(
-                    tir.OpKind.ARENA_GET, idx,
-                    result_ty=tir.TIRScalar("i32"))
-            # parent_right_at(idx) → __arena_get(idx + 1)
+                return _safe_arena_get(idx, 0)
             if (isinstance(expr.callee, A.Name)
                     and expr.callee.name == "parent_right_at"
                     and len(expr.args) == 1):
                 idx = self._lower_expr(expr.args[0])
                 if idx is None:
                     return idx
-                one = self.builder.const_int(1)
-                idx_plus_1 = self.builder.emit(
-                    tir.OpKind.ADD, idx, one,
-                    result_ty=tir.TIRScalar("i32"))
-                return self.builder.emit(
-                    tir.OpKind.ARENA_GET, idx_plus_1,
-                    result_ty=tir.TIRScalar("i32"))
+                return _safe_arena_get(idx, 1)
             # Stage 36 Increment 6: fuzzy logic operators over
             # Logic<f32>. Product semantics for AND, probabilistic OR.
             # All three lower to MUL/ADD/SUB so the existing AD chain

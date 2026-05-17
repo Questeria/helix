@@ -66,6 +66,17 @@ AD_KNOWN_PURE_CALLS = {
     "fuzzy_and", "fuzzy_or", "fuzzy_not",
     # Stage 36 Increment 8: fuzzy XOR + implication.
     "fuzzy_xor", "fuzzy_implies",
+    # Stage 36 Increment 9 post-Inc-8 audit C2 LOW fix: register the
+    # boolean-algebra + arena-provenance builtins as AD-pure. They're
+    # all integer-valued (so the AD derivative is 0 for differentiable
+    # use cases), but the let-inlining AD-erasability check (line 515
+    # _is_ad_erasable_expr) needs them in this set to avoid the
+    # "cannot erase side-effecting let" trap when a function
+    # transitively calls them inside a grad/grad_rev path.
+    "derive", "and_logic", "or_logic", "not_logic",
+    "xor_logic", "implies_logic", "eq_logic", "if_logic",
+    "to_logic_bool",
+    "register_derivation", "parent_left_at", "parent_right_at",
 }
 
 
