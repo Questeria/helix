@@ -133,3 +133,60 @@ dogfoods (product of binary witnesses × sum gates exit 42).
 ## Increment 4 - Stage 40 Closure (3/3 clean gates)
 
 Same protocol as Stage 35/36/37/38/39.
+
+### Gate-1 fix sweep (commit `e8fb593`)
+
+- **F1 (HIGH conf 90)** — block direct `into_X(from_uncertain(u))`
+  Uncertain-laundering. Without this guard, the entire epistemic
+  discipline can be bypassed by an unwrap-rewrap and the
+  AI-safety motivation for Stage 40 evaporates.
+- **F2 (MEDIUM conf 90)** — reject user functions whose name
+  shadows a reserved builtin. Stage 36-40 inherited the silent
+  dead-coding; Stage 40 makes it acute (`confirm` / `act_on` are
+  generic verbs likely to collide with user planning code).
+
+10 regression tests pin both fixes.
+
+### Gate-2 fix sweep (post-audit)
+
+Three specialist auditors (silent-failure-hunter,
+type-design-analyzer, code-reviewer) returned 2 HIGH + 2 MEDIUM
++ 5 LOW + 7 OBS against the gate-1 surface. Fix sweep:
+
+- **HIGH silent-failure (cross-modal launder asymmetry)** —
+  generalize the gate-1 Uncertain-only guard to ALL cross-modal
+  `into_X(from_Y(v))` where X != Y. Phase-0 has only `confirm`
+  (Believed -> Known) and `act_on` (Goal -> Known) as audited
+  upgrade paths; everything else is rejected with a kind-specific
+  hint pointing at the legitimate transition (or noting deferral
+  when none exists). 6 new regression tests including a 12-combo
+  cross-modal matrix.
+- **HIGH type-design (named-binding bypass)** — the F1 guard is
+  syntactic; let-binding decomposes the inline pattern and slips
+  through. Documented as a Phase-0 known limitation (taint-
+  tracking is a future-stage spec); test pins the limitation so
+  a future stage can flip the assertion to confirm closure.
+- **MEDIUM code-review (F2 cascade)** — pre-fix, a shadowed
+  builtin name produced 1 shadow error + N call-site builtin
+  errors per use. Track shadowed names in `_shadowed_builtin_names`
+  and skip builtin dispatch for those names at call sites; the
+  user sees one diagnostic, not a noise cascade.
+- **MEDIUM code-review (F1 false-positive on TyUnknown)** — the
+  F1 launder guard now requires `arg_tys[0]` to be a real type,
+  not TyUnknown. Prevents the structurally-false "launders" message
+  when the inner `from_X` itself failed.
+
+### Known limitations (documented for Phase-1 follow-up)
+
+- **F1 syntactic-only**: let-binding (`let r = from_X(v); into_Y(r)`)
+  and helper-fn indirection bypass the F1 guard. Phase-1 task: add
+  a taint-tracking pass that propagates Uncertain-origin (and
+  cross-modal origin) through bindings and call boundaries.
+- **TyVar-defer gap** (pre-existing, all 4 wrapper families):
+  `fn id[T](p: Known<T>) -> Known<T> { p }` called with concrete
+  `Known<i32>` doesn't currently typecheck. Symmetric across
+  Stage 37/38/39/40 — not a Stage 40 regression. Phase-1 task.
+- **`_FRAME_IDENTITY_AD_NAMES` docstring drift**: the name now
+  covers 34 entries (12 frames + 12 temporals + 10 modals).
+  Cosmetic rename to `_IDENTITY_WRAPPER_AD_NAMES` deferred so
+  Stage 40 doesn't churn a Stage-38-era invariant name.

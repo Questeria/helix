@@ -719,3 +719,230 @@ fn main() -> i32 { confirm(0) }
             or "confirm" in err_text), \
         f"shadow diagnostic must hint at reserved-name pattern, " \
         f"got: {err_text}"
+
+
+# ============================================================
+# Stage 40 closure gate-2 F1 backfill: cross-modal laundering.
+# Generalizes the gate-1 Uncertain-only guard to all
+# `into_X(from_Y(...))` pairs where X != Y.
+# ============================================================
+
+
+def test_stage40_gate2_f1_blocks_believed_to_known_laundering():
+    """`into_known(from_believed(b))` must reject — Phase-0 has
+    `confirm` as the audited Believed -> Known transition."""
+    src = """
+fn main() -> i32 {
+    let b: Believed<i32> = into_believed(42);
+    from_known(into_known(from_believed(b)))
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    errs = typecheck(prog)
+    assert any("launders" in str(e) and "confirm" in str(e)
+               for e in errs), \
+        f"into_known(from_believed(b)) must reject with `confirm` " \
+        f"hint, got {[str(e) for e in errs]}"
+
+
+def test_stage40_gate2_f1_blocks_goal_to_known_laundering():
+    """`into_known(from_goal(g))` must reject — Phase-0 has `act_on`
+    as the audited Goal -> Known transition."""
+    src = """
+fn main() -> i32 {
+    let g: Goal<i32> = into_goal(42);
+    from_known(into_known(from_goal(g)))
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    errs = typecheck(prog)
+    assert any("launders" in str(e) and "act_on" in str(e)
+               for e in errs)
+
+
+def test_stage40_gate2_f1_blocks_known_to_believed_downgrade():
+    """`into_believed(from_known(k))` is an epistemic downgrade.
+    Phase-0 deliberately defers downgrades; typechecker enforces."""
+    src = """
+fn main() -> i32 {
+    let k: Known<i32> = into_known(42);
+    from_believed(into_believed(from_known(k)))
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    errs = typecheck(prog)
+    assert any("launders" in str(e) and "no Known -> Believed" in str(e)
+               for e in errs)
+
+
+def test_stage40_gate2_f1_blocks_known_to_uncertain_laundering():
+    src = """
+fn main() -> i32 {
+    let k: Known<i32> = into_known(42);
+    from_uncertain(into_uncertain(from_known(k)))
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    errs = typecheck(prog)
+    assert any("launders" in str(e) for e in errs)
+
+
+def test_stage40_gate2_f1_allows_all_4_self_rewraps():
+    """`into_X(from_X(v))` is benign (same kind in, same kind out);
+    no laundering. All 4 kinds tested."""
+    for kind in ("known", "believed", "goal", "uncertain"):
+        src = f"""
+fn main() -> i32 {{
+    let x: {kind.capitalize()}<i32> = into_{kind}(42);
+    from_{kind}(into_{kind}(from_{kind}(x)))
+}}
+"""
+        prog = parse(src, include_stdlib=True)
+        errs = typecheck(prog)
+        assert errs == [], \
+            f"{kind}->{kind} self-rewrap must not error, got " \
+            f"{[str(e) for e in errs]}"
+
+
+def test_stage40_gate2_f1_all_12_cross_modal_combinations_reject():
+    """4 modal kinds × 3 wrong sources = 12 cross-modal laundering
+    combinations — all must reject."""
+    kinds = ["known", "believed", "goal", "uncertain"]
+    for target in kinds:
+        for source in kinds:
+            if source == target:
+                continue
+            src = f"""
+fn main() -> i32 {{
+    let s: {source.capitalize()}<i32> = into_{source}(7);
+    from_{target}(into_{target}(from_{source}(s)))
+}}
+"""
+            prog = parse(src, include_stdlib=True)
+            errs = typecheck(prog)
+            assert any("launders" in str(e) for e in errs), \
+                f"into_{target}(from_{source}(...)) must reject, " \
+                f"got {[str(e) for e in errs]}"
+
+
+# ============================================================
+# Stage 40 closure gate-2 H2 + M1 + audit-trail backfills.
+# ============================================================
+
+
+def test_stage40_gate2_h2_shadowing_emits_one_diagnostic_not_three():
+    """H2 backfill: pre-fix, a user fn that shadows a builtin
+    fired 1 shadow error AT THE FN-DECL + 1 builtin per-call-site
+    wrong-type error per call. Post-fix only the shadow error
+    fires; call-sites fall through to user-fn dispatch."""
+    src = """
+fn confirm(x: i32) -> i32 { x * 2 }
+fn main() -> i32 { confirm(21) }
+"""
+    prog = parse(src, include_stdlib=True)
+    errs = typecheck(prog)
+    shadow_errs = [e for e in errs
+                   if "shadows a reserved builtin" in str(e)]
+    builtin_errs = [e for e in errs
+                    if "requires Believed" in str(e)
+                    or "requires Goal" in str(e)
+                    or "requires Known" in str(e)
+                    or "requires Uncertain" in str(e)]
+    assert len(shadow_errs) == 1, \
+        f"expected 1 shadow error, got {len(shadow_errs)}: " \
+        f"{[str(e) for e in shadow_errs]}"
+    assert len(builtin_errs) == 0, \
+        f"expected 0 builtin per-call-site false-positives " \
+        f"after H2 fix, got {len(builtin_errs)}: " \
+        f"{[str(e) for e in builtin_errs]}"
+
+
+def test_stage40_gate2_m1_no_false_laundering_when_inner_malformed():
+    """M1 backfill: when the inner `from_X(...)` rejects its arg
+    (wrong-kind input), F1 must NOT also fire the laundering
+    diagnostic — no value was ever wrapped, so "launders" would
+    mislead the user away from the real bug."""
+    src = """
+fn main() -> i32 {
+    let k: Known<i32> = into_known(42);
+    from_known(into_known(from_uncertain(k)))
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    errs = typecheck(prog)
+    inner_errs = [e for e in errs
+                  if "from_uncertain" in str(e)
+                  and "Uncertain" in str(e)]
+    launder_errs = [e for e in errs
+                    if "launders" in str(e)]
+    assert len(inner_errs) >= 1, \
+        "inner from_uncertain(Known<i32>) must diagnose: got " \
+        f"{[str(e) for e in errs]}"
+    assert len(launder_errs) == 0, \
+        f"M1 fix: F1 must not fire when inner is TyUnknown; got " \
+        f"{[str(e) for e in launder_errs]}"
+
+
+def test_stage40_f1_known_limitation_let_bypass():
+    """Documents the F1 syntactic-guard limitation: let-binding
+    decomposes the inline pattern and bypasses the guard. Phase-0
+    known limitation; a Stage-41+ taint-tracking pass would close
+    this by propagating Uncertain-origin through bindings. This
+    test PINS the limitation so a future stage can flip the
+    assertion to confirm closure."""
+    src = """
+fn main() -> i32 {
+    let u: Uncertain<i32> = into_uncertain(42);
+    let raw: i32 = from_uncertain(u);
+    let k: Known<i32> = into_known(raw);
+    from_known(k)
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    errs = typecheck(prog)
+    assert errs == [], \
+        "F1 limitation: let-binding currently bypasses the " \
+        "syntactic guard. Documented Phase-0 known limit; flip " \
+        "this assertion when taint-tracking lands in a future " \
+        "stage."
+
+
+def test_stage40_gate2_medium1_typechecker_reentrancy_no_stale_shadows():
+    """MEDIUM-1 backfill: re-running a TypeChecker instance must
+    not carry stale `_shadowed_builtin_names` entries from a
+    previous program. Pre-fix, lazy hasattr init left the set
+    populated across check() invocations, false-suppressing
+    builtin dispatch for non-shadowed callsites in the second
+    program. Post-fix, __init__ + check() both clear the set."""
+    from helixc.frontend.typecheck import TypeChecker
+
+    # First program: shadows `confirm`.
+    prog1 = parse(
+        "fn confirm(x: i32) -> i32 { x }\n"
+        "fn main() -> i32 { confirm(0) }",
+        include_stdlib=False,
+    )
+    tc1 = TypeChecker(prog1)
+    errs1 = tc1.check()
+    assert any("shadows a reserved builtin" in str(e)
+               and "confirm" in str(e) for e in errs1)
+    assert "confirm" in tc1._shadowed_builtin_names
+
+    # Second program with a fresh TypeChecker: does NOT shadow
+    # confirm; the builtin should dispatch normally.
+    prog2 = parse(
+        "fn main() -> i32 {\n"
+        "    let b: Believed<i32> = into_believed(7);\n"
+        "    let k: Known<i32> = confirm(b);\n"
+        "    from_known(k)\n"
+        "}",
+        include_stdlib=False,
+    )
+    tc2 = TypeChecker(prog2)
+    errs2 = tc2.check()
+    # A fresh TypeChecker starts with an empty shadow set.
+    assert "confirm" not in tc2._shadowed_builtin_names
+    # And the builtin `confirm` dispatches normally — no errors.
+    assert errs2 == [], \
+        f"fresh TypeChecker must not inherit shadow state, got " \
+        f"{[str(e) for e in errs2]}"

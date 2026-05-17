@@ -541,6 +541,14 @@ class TypeChecker:
         # stale entries that would silence real new errors.
         self._seen_unbound: set[str] = set()
         self._seen_unknown_type_names: set[str] = set()
+        # Stage 40 closure gate-2 code-review MEDIUM-1 fix (conf
+        # 88): explicit init so re-running check() on the same
+        # TypeChecker instance (LSP / REPL / test harness reuse)
+        # doesn't carry stale shadow names that would suppress
+        # builtin dispatch for non-shadowed callsites in the
+        # second run. Mirrors the cascade-suppression set
+        # discipline at lines 542-550.
+        self._shadowed_builtin_names: set[str] = set()
         self._resolving_type_aliases: set[str] = set()
         self._type_alias_cache: dict[str, Type] = {}
         self._const_scalar_values: dict[str, int | float] = {}
@@ -574,6 +582,10 @@ class TypeChecker:
         self._invalid_refined_return_functions = set()
         self._unrepresentable_scalar_return_functions = set()
         self._unrepresentable_const_scalar_names = set()
+        # Stage 40 closure gate-2 MEDIUM-1: clear shadowed
+        # builtin names on each check() so a second invocation
+        # starts fresh.
+        self._shadowed_builtin_names = set()
         self._recursive_enum_names: set[str] = set()
         self._type_alias_cache = {}
         self._local_const_scalar_scopes = []
@@ -919,9 +931,21 @@ class TypeChecker:
                 f"into_*, from_*, confirm, act_on, forecast, "
                 f"world_to_robot); pick a different name",
             ))
+            # Stage 40 closure gate-2 H2 fix (HIGH conf 92):
+            # the "diagnostic alone gates the typecheck pass"
+            # claim in the original F2 comment was empirically
+            # false — call sites still hit the builtin arm,
+            # producing N additional false errors that
+            # misrepresent the bug. Track shadowed names so the
+            # call-dispatch path skips the builtin arms and falls
+            # through to user-fn lookup. The fn-decl shadow
+            # error is the ONLY one the user sees. The set is
+            # initialized in __init__ + cleared in check() per
+            # the cascade-suppression-set discipline at lines
+            # 542-560 (gate-2 MEDIUM-1 re-entrancy fix).
+            self._shadowed_builtin_names.add(fn.name)
             # Continue registration so downstream code doesn't
-            # crash on a missing FunctionSig; the diagnostic alone
-            # gates the typecheck pass.
+            # crash on a missing FunctionSig.
         # Build the generic-bindings scope
         gen_scope = Scope()
         for g in fn.generics:
@@ -2815,6 +2839,14 @@ class TypeChecker:
             # Built-in functions for type-level transitions
             if isinstance(expr.callee, A.Name):
                 bn = expr.callee.name
+                # Stage 40 closure gate-2 H2 fix: if the bare name
+                # has been shadowed by a user fn, suppress builtin
+                # dispatch entirely so the call site falls through
+                # to user-fn lookup. The user sees the ONE shadow
+                # diagnostic at the fn-decl site (not 1 shadow + N
+                # noisy false-positive builtin errors per call).
+                if bn in self._shadowed_builtin_names:
+                    bn = "<<shadowed_builtin_skip>>"
                 if bn == "detach" and len(arg_tys) == 1:
                     if isinstance(arg_tys[0], TyDiff):
                         return arg_tys[0].inner
@@ -3472,29 +3504,85 @@ class TypeChecker:
                     # block accessed expr.args[0] without re-
                     # asserting the structural precondition.
                     target_kind = _modal_intro[bn]
-                    if (target_kind in ("known", "believed", "goal")
-                            and len(expr.args) >= 1
+                    # Stage 40 closure gate-2 type-design F1 fix
+                    # (HIGH conf 90): extend gate-1's Uncertain-
+                    # only guard to ALL cross-modal direct
+                    # laundering. The audit found `into_known(
+                    # from_believed(b))` and `into_known(
+                    # from_goal(g))` were still uncatchable post-
+                    # gate-1 — but Phase-0 has only `confirm`
+                    # (Believed -> Known) and `act_on` (Goal ->
+                    # Known) as audited upgrade paths. The
+                    # asymmetry left the "category mistake at
+                    # compile time" thesis materially incomplete.
+                    # Generalize: any `into_X(from_Y(v))` where
+                    # X != Y is rejected with a kind-specific
+                    # hint pointing at the legitimate transition
+                    # (or noting the deferral when none exists).
+                    # KNOWN LIMITATION (carried from gate-1 H1):
+                    # this guard is syntactic. Let-binding
+                    # bypass (`let r = from_Y(v); into_X(r)`)
+                    # and helper-fn indirection are documented
+                    # as Phase-0 known limits requiring future
+                    # taint-tracking spec.
+                    _modal_elim_kind = {
+                        "from_known":     "known",
+                        "from_believed":  "believed",
+                        "from_goal":      "goal",
+                        "from_uncertain": "uncertain",
+                    }
+                    _modal_upgrade_hint = {
+                        ("believed", "known"):
+                            "use `confirm(b)` — the audited "
+                            "Believed -> Known epistemic upgrade",
+                        ("goal", "known"):
+                            "use `act_on(g)` — the audited "
+                            "Goal -> Known epistemic upgrade",
+                    }
+                    # Stage 40 closure gate-2 M1 fix (MEDIUM conf
+                    # 85): only fire the laundering diagnostic when
+                    # the inner from_X(...) actually returned a
+                    # successfully-typed value. If the inner already
+                    # produced its own diagnostic (TyUnknown), the
+                    # F1 "launders" message would be semantically
+                    # false (no value was ever wrapped) and would
+                    # mislead the user away from the real bug.
+                    if (len(expr.args) >= 1
                             and isinstance(expr.args[0], A.Call)
                             and isinstance(expr.args[0].callee, A.Name)
                             and expr.args[0].callee.name
-                                == "from_uncertain"):
-                        self.errors.append(TypeError_(
-                            f"{bn}(from_uncertain(...)) launders an "
-                            f"Uncertain<T> into "
-                            f"{target_kind.capitalize()}<T> with no "
-                            f"epistemic-upgrade audit. Stage 40 has no "
-                            f"Uncertain -> {target_kind.capitalize()} "
-                            f"transition; if the source has been "
-                            f"observed and is now certain, the upgrade "
-                            f"must come from an outside observation, "
-                            f"not from a wrapper-strip + rewrap.",
-                            expr.span,
-                            hint="resolve uncertainty before the "
-                            "value enters the type system, OR keep "
-                            "the value Uncertain<T> until a future "
-                            "Stage-40+ transition is added",
-                        ))
-                        return TyUnknown(hint=bn)
+                                in _modal_elim_kind
+                            and not isinstance(arg_tys[0], TyUnknown)):
+                        source_kind = _modal_elim_kind[
+                            expr.args[0].callee.name]
+                        if source_kind != target_kind:
+                            upgrade_hint = _modal_upgrade_hint.get(
+                                (source_kind, target_kind))
+                            if upgrade_hint:
+                                hint = upgrade_hint
+                            else:
+                                hint = (
+                                    "Phase-0 has no "
+                                    f"{source_kind.capitalize()} "
+                                    f"-> {target_kind.capitalize()} "
+                                    "transition; if this direction "
+                                    "is semantically meaningful, "
+                                    "request a future-stage spec "
+                                    "and keep the value in its "
+                                    "current modal kind until then"
+                                )
+                            self.errors.append(TypeError_(
+                                f"{bn}(from_{source_kind}(...)) "
+                                f"launders a "
+                                f"{source_kind.capitalize()}<T> "
+                                f"into "
+                                f"{target_kind.capitalize()}<T> "
+                                f"with no epistemic-upgrade "
+                                f"audit.",
+                                expr.span,
+                                hint=hint,
+                            ))
+                            return TyUnknown(hint=bn)
                     return TyModal(kind=_modal_intro[bn],
                                    inner=arg_tys[0])
                 _modal_elim = {
