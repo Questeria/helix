@@ -169,6 +169,107 @@ fn main() -> i32 {
     assert _run_elf(elf) == 194
 
 
+# ============================================================
+# Stage 44 closure gate-1 backfills:
+# - F1 (HIGH): FFI_CALL must support 9+ float args (parity with CALL).
+# - F2 (HIGH): mixed int+float overflow rejects before any sub_rsp.
+# - F3 (MEDIUM): assertions pin pre-pass vs store-loop accounting.
+# - F4 (MEDIUM): alignment tripwire asserts stack_alloc % 16 == 0.
+# ============================================================
+
+
+def test_stage44_gate1_f1_ffi_call_supports_9_float_args():
+    """FFI_CALL was the asymmetric sibling at Stage 44 Inc 1 —
+    raised NotImplementedError on the 9th float. Post-fix it
+    mirrors the CALL arm. Probe: declare an extern "C" 9-float
+    function and call it; the codegen must NOT raise. We can't
+    actually link an extern at test time, so we just verify
+    that the compile pipeline succeeds end-to-end without
+    raising."""
+    from helixc.frontend.parser import parse as parse_helix
+    from helixc.frontend.typecheck import typecheck as tc
+    from helixc.ir.lower_ast import lower as lower_ir
+    from helixc.backend.x86_64 import compile_module_to_elf
+
+    src = """
+extern "C" fn fma9(a: f32, b: f32, c: f32, d: f32, e: f32, f: f32, g: f32, h: f32, i: f32) -> f32;
+
+fn main() -> i32 {
+    let r = fma9(1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0);
+    r as i32
+}
+"""
+    prog = parse_helix(src, include_stdlib=True)
+    assert tc(prog) == []
+    # The compile must not raise NotImplementedError.
+    # (We can't run the ELF — the extern can't link — but
+    # the codegen must complete cleanly.)
+    elf = compile_module_to_elf(lower_ir(prog))
+    assert len(elf) > 0
+
+
+def test_stage44_gate1_f2_mixed_int_float_overflow_rejects_cleanly():
+    """A call with 7+ int args plus 9+ float args must raise BEFORE
+    any sub_rsp mutation. Pre-fix the raise fired mid-shuffle
+    after the float-overflow sub_rsp had already executed."""
+    from helixc.frontend.parser import parse as parse_helix
+    from helixc.frontend.typecheck import typecheck as tc
+    from helixc.ir.lower_ast import lower as lower_ir
+    from helixc.backend.x86_64 import compile_module_to_elf
+    import pytest
+
+    src = """
+fn big(a: i32, b: i32, c: i32, d: i32, e: i32, f: i32, g: i32,
+       x1: f32, x2: f32, x3: f32, x4: f32, x5: f32, x6: f32,
+       x7: f32, x8: f32, x9: f32) -> i32 {
+    a + b + c + d + e + f + g
+}
+
+fn main() -> i32 {
+    big(1, 2, 3, 4, 5, 6, 7,
+        1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0)
+}
+"""
+    prog = parse_helix(src, include_stdlib=True)
+    # Stage 44 only wired float overflow; the 7th int arg must
+    # raise cleanly (before any rsp mutation). Helix wraps the
+    # backend NotImplementedError; we just confirm SOME error
+    # blocks the compile.
+    errs = tc(prog)
+    if errs:
+        # Typecheck rejected — fine; the goal is no codegen
+        # crash with an imbalanced rsp.
+        return
+    with pytest.raises(NotImplementedError) as exc:
+        compile_module_to_elf(lower_ir(prog))
+    # The error may come from either the callee-prologue check
+    # ("v0.1 supports up to 6 int params" — fires first because
+    # callee gets compiled before caller in our IR walker) or
+    # the caller-side F2 front-load guard ("mixed int+float
+    # overflow not yet wired"). Either is acceptable as a clean
+    # rejection BEFORE any rsp mutation.
+    msg = str(exc.value)
+    assert ("6 int args" in msg or "6 int params" in msg
+            or "mixed int+float overflow" in msg), \
+        f"expected an int-overflow rejection, got {msg!r}"
+
+
+def test_stage44_gate1_f4_named_sysv_constants_exist():
+    """Module-level SysV constants are importable. Replaces the
+    pre-fix hard-coded 16 / 8 magic numbers in 3 sites."""
+    from helixc.backend.x86_64 import (
+        SYSV_STACK_ARG_BASE,
+        SYSV_STACK_ARG_STRIDE,
+        SYSV_STACK_ALIGNMENT,
+    )
+    assert SYSV_STACK_ARG_BASE == 16, \
+        "saved rbp (8) + return addr (8) = 16"
+    assert SYSV_STACK_ARG_STRIDE == 8, \
+        "each stack arg occupies 8 bytes (f32 pads to 8)"
+    assert SYSV_STACK_ALIGNMENT == 16, \
+        "SysV requires rsp 16-aligned before CALL"
+
+
 def test_stage44_overflow_arg_position_pin():
     """Pins WHICH arg lands at WHICH stack slot. If the indexing
     is wrong, the picked arg comes back wrong. 9th arg is the

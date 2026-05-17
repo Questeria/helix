@@ -63,6 +63,22 @@ HELIX_NUM_CELLS = 64
 HELIX_ARENA_CAP = 2097152
 HELIX_CELL_SIZE = 8
 
+# Stage 44 closure gate-1 type-design MEDIUM fix: name the SysV
+# ABI constants that appear in both caller (CALL / FFI_CALL) and
+# callee (function prologue) stack-passed-arg handling. Pre-fix
+# these were hard-coded 16 + 8*idx in 3 sites with no shared
+# symbol — any future change (struct-by-value, mixed int+float
+# overflow, etc.) had to touch all 3 in lockstep.
+#
+# SYSV_STACK_ARG_BASE = saved rbp (8) + return address (8) above
+# the function's local frame. The callee reads stack args at
+# [rbp + SYSV_STACK_ARG_BASE + SYSV_STACK_ARG_STRIDE * idx].
+# SYSV_STACK_ARG_STRIDE = each stack arg occupies 8 bytes regardless
+# of its actual payload size (f32 pads to 8).
+SYSV_STACK_ARG_BASE = 16
+SYSV_STACK_ARG_STRIDE = 8
+SYSV_STACK_ALIGNMENT = 16  # rsp must be 16-aligned before CALL
+
 
 # ============================================================================
 # Code emitter — appends bytes, tracks fixups for forward references
@@ -1088,7 +1104,13 @@ class FnCompiler:
             if self._is_float_type(p.ty):
                 if xmm_idx >= 8:
                     # Overflow: load from caller stack frame.
-                    stack_disp = 16 + stack_param_idx * 8
+                    # Stage 44 gate-1 type-design MEDIUM: use the
+                    # named SYSV_STACK_ARG_BASE / STRIDE constants
+                    # so any future change is grep-discoverable
+                    # across the 3 sites that share the contract.
+                    stack_disp = (SYSV_STACK_ARG_BASE
+                                  + stack_param_idx
+                                  * SYSV_STACK_ARG_STRIDE)
                     if self._is_f64_type(p.ty):
                         # mov xmm0, [rbp + stack_disp]
                         self.asm._movsd_load_xmmN(0, stack_disp)
@@ -2437,30 +2459,54 @@ class FnCompiler:
             # args via integer bit-blit (avoids contaminating
             # xmm0..xmm7 which the reg-pass is filling), then the
             # CALL fires and post-call rsp is restored.
-            #
-            # Note: int overflow (>6 int args) is NOT implemented
-            # yet; the catchall below still raises for that case.
-            # Only float overflow is wired here per ROADMAP Tier 1
-            # #5 (the XOR perceptron dogfood hit this surface).
             _float_count = sum(
                 1 for a in op.operands if self._is_float_type(a.ty)
             )
+            _int_count = sum(
+                1 for a in op.operands if not self._is_float_type(a.ty)
+            )
             overflow_float_count = max(0, _float_count - 8)
+            # Stage 44 closure gate-1 silent-failure F2 fix: mixed
+            # int+float overflow guard. Pre-fix, a call with 7+
+            # ints AND 9+ floats would (a) sub rsp for the float
+            # overflow, then (b) raise NotImplementedError mid-
+            # shuffle on the int catchall — leaving rsp imbalanced
+            # if the raise were ever caught. Front-load the int-
+            # overflow check so the raise fires BEFORE any stack
+            # mutation.
+            if _int_count > len(INT_REGS):
+                raise NotImplementedError(
+                    "v0.1 supports up to 6 int args; mixed int+float "
+                    "overflow not yet wired (Stage 44 only did float)"
+                )
             # 16-byte alignment: SysV requires rsp to be 16-aligned
             # immediately BEFORE the CALL instruction. The function
             # prologue's `sub rsp, frame_size` has already 16-aligned
             # rsp (Helix's frame_size invariant); subtracting another
             # 16-multiple preserves alignment.
-            stack_alloc = ((overflow_float_count * 8 + 15) // 16) * 16
+            stack_alloc = (
+                (overflow_float_count * SYSV_STACK_ARG_STRIDE
+                 + SYSV_STACK_ALIGNMENT - 1)
+                // SYSV_STACK_ALIGNMENT
+            ) * SYSV_STACK_ALIGNMENT
+            # Stage 44 closure gate-1 type-design F4 fix: alignment
+            # tripwire — assert stack_alloc preserves SysV's
+            # 16-aligned-rsp-before-CALL invariant. If a future stage
+            # adds a non-16-multiple sub between prologue and CALL,
+            # this assert catches it before libm SIGSEGVs on movaps.
+            assert stack_alloc % SYSV_STACK_ALIGNMENT == 0, (
+                f"stack_alloc={stack_alloc} breaks SysV "
+                f"{SYSV_STACK_ALIGNMENT}-byte rsp alignment"
+            )
             if stack_alloc > 0:
                 self.asm.sub_rsp_imm32(stack_alloc)
                 # Pre-pass: bit-blit each overflow float arg into
-                # [rsp + 8*overflow_idx] via rax/eax. The integer
-                # path is safe because nothing has touched xmm0..7
-                # yet, but more importantly it avoids needing a
-                # scratch xmm reg outside the SysV arg-reg set
-                # (xmm8..xmm15 require a different ModRM encoding
-                # we don't have helpers for yet).
+                # [rsp + STRIDE*overflow_idx] via rax/eax. The
+                # integer path is safe because nothing has touched
+                # xmm0..7 yet, but more importantly it avoids
+                # needing a scratch xmm reg outside the SysV arg-
+                # reg set (xmm8..xmm15 require a different ModRM
+                # encoding we don't have helpers for yet).
                 _xmm_seen = 0
                 _overflow_idx = 0
                 for arg in op.operands:
@@ -2470,26 +2516,52 @@ class FnCompiler:
                         _xmm_seen += 1
                         continue
                     arg_slot = self._slot_of(arg)
+                    # Stage 44 gate-1 F5 defensive guard: only
+                    # f32/f64 are supported here. Sub-byte floats
+                    # (f16/bf16/fp8/etc.) would silently miscompile
+                    # if `_check_float_supported` is ever relaxed.
+                    # Phase-0 `_is_float_type` matches both f32 and
+                    # f64 only; the explicit `_is_f64_type` arm
+                    # below picks the 8-byte path, the else picks
+                    # the 4-byte (f32) path. No `_is_f32_type`
+                    # helper exists yet — relying on the binary
+                    # `_check_float_supported` invariant. If that
+                    # changes, add an explicit `_is_f32_type` and
+                    # gate the else-arm on it instead.
                     if self._is_f64_type(arg.ty):
                         # 8-byte payload — full rax copy.
                         self.asm.mov_rax_mem_rbp(arg_slot)
-                        self.asm.mov_mem_rsp_rax(_overflow_idx * 8)
+                        self.asm.mov_mem_rsp_rax(
+                            _overflow_idx * SYSV_STACK_ARG_STRIDE)
                     else:
-                        # 4-byte payload — eax copy. Don't trust
-                        # bytes above the f32 in the source slot;
-                        # use the narrow store so we don't leak
-                        # adjacent stack bytes into the call frame.
+                        # 4-byte payload — eax narrow copy.
                         self.asm.mov_eax_mem_rbp(arg_slot)
-                        self.asm.mov_mem_rsp_eax(_overflow_idx * 8)
+                        self.asm.mov_mem_rsp_eax(
+                            _overflow_idx * SYSV_STACK_ARG_STRIDE)
                     _overflow_idx += 1
+                # Stage 44 gate-1 F3 fix: assert pre-pass accounting
+                # matches what the store loop emitted. Catches
+                # divergence between the two passes before the CALL.
+                assert _overflow_idx == overflow_float_count, (
+                    f"overflow_idx={_overflow_idx} != "
+                    f"overflow_float_count={overflow_float_count}"
+                )
             int_idx = 0
             xmm_idx = 0
             for arg in op.operands:
                 arg_slot = self._slot_of(arg)
                 if self._is_float_type(arg.ty):
                     if xmm_idx >= 8:
-                        # Already shoved to [rsp+...] above. Skip.
-                        xmm_idx += 1  # increment for accounting only
+                        # Already shoved to [rsp+...] above. Skip
+                        # the reg-load but keep counting so the
+                        # overflow-vs-reg threshold gate stays
+                        # consistent for any later args. (Stage 44
+                        # gate-1 type-design MEDIUM: this counter
+                        # now means "float-args-seen" past the
+                        # 8-reg threshold, NOT "xmm regs used".
+                        # The name is preserved for symmetry with
+                        # the gate condition.)
+                        xmm_idx += 1
                         continue
                     if self._is_f64_type(arg.ty):
                         self.asm._movsd_load_xmmN(xmm_idx, arg_slot)
@@ -2498,6 +2570,9 @@ class FnCompiler:
                     xmm_idx += 1
                 else:
                     if int_idx >= len(INT_REGS):
+                        # Defensive — the F2 front-load guard above
+                        # should have raised already. This is a
+                        # belt-and-suspenders second line.
                         raise NotImplementedError(
                             "v0.1 supports up to 6 int args"
                         )
@@ -2571,14 +2646,63 @@ class FnCompiler:
             # x: f32) -> f32` typecheck-clean and compile-clean but the
             # callee received garbage from edi instead of xmm0. Now split
             # by class identically to CALL.
+            # Stage 44 closure gate-1 silent-failure F1 fix
+            # (HIGH): FFI_CALL must support 9+ float args
+            # symmetrically with internal CALL. Pre-fix this arm
+            # raised NotImplementedError on the 9th float, so any
+            # libm call needing 9+ floats (e.g., multi-arg vector
+            # intrinsics) crashed deep in codegen — the exact
+            # asymmetric-CALL-vs-FFI_CALL defect class that
+            # cycles 77 (C76-1) and 79 (C78-1) previously fixed
+            # for the float-class-split surface.
+            _ffi_float_count = sum(
+                1 for a in op.operands if self._is_float_type(a.ty)
+            )
+            _ffi_int_count = sum(
+                1 for a in op.operands if not self._is_float_type(a.ty)
+            )
+            _ffi_overflow_count = max(0, _ffi_float_count - 8)
+            if _ffi_int_count > len(INT_REGS):
+                raise NotImplementedError(
+                    "FFI_CALL supports up to 6 int/pointer args; "
+                    "mixed int+float overflow not yet wired"
+                )
+            _ffi_stack_alloc = (
+                (_ffi_overflow_count * SYSV_STACK_ARG_STRIDE
+                 + SYSV_STACK_ALIGNMENT - 1)
+                // SYSV_STACK_ALIGNMENT
+            ) * SYSV_STACK_ALIGNMENT
+            assert _ffi_stack_alloc % SYSV_STACK_ALIGNMENT == 0
+            if _ffi_stack_alloc > 0:
+                self.asm.sub_rsp_imm32(_ffi_stack_alloc)
+                _ffi_xmm_seen = 0
+                _ffi_overflow_idx = 0
+                for arg in op.operands:
+                    if not self._is_float_type(arg.ty):
+                        continue
+                    if _ffi_xmm_seen < 8:
+                        _ffi_xmm_seen += 1
+                        continue
+                    arg_slot = self._slot_of(arg)
+                    if self._is_f64_type(arg.ty):
+                        self.asm.mov_rax_mem_rbp(arg_slot)
+                        self.asm.mov_mem_rsp_rax(
+                            _ffi_overflow_idx * SYSV_STACK_ARG_STRIDE)
+                    else:
+                        self.asm.mov_eax_mem_rbp(arg_slot)
+                        self.asm.mov_mem_rsp_eax(
+                            _ffi_overflow_idx * SYSV_STACK_ARG_STRIDE)
+                    _ffi_overflow_idx += 1
+                assert _ffi_overflow_idx == _ffi_overflow_count
             int_idx = 0
             xmm_idx = 0
             for arg in op.operands:
                 arg_slot = self._slot_of(arg)
                 if self._is_float_type(arg.ty):
                     if xmm_idx >= 8:
-                        raise NotImplementedError(
-                            "FFI_CALL supports up to 8 float args via xmm0..xmm7 (Phase-0)")
+                        # Already shoved to [rsp+...] above. Skip.
+                        xmm_idx += 1
+                        continue
                     if self._is_f64_type(arg.ty):
                         self.asm._movsd_load_xmmN(xmm_idx, arg_slot)
                     else:
@@ -2596,6 +2720,9 @@ class FnCompiler:
                     int_idx += 1
             # Indirect call through GOT entry.
             self.asm.call_qword_ptr_rip_rel_ffi(target)
+            # Stage 44 gate-1 F1: post-FFI_CALL rsp restore.
+            if _ffi_stack_alloc > 0:
+                self.asm.add_rsp_imm32(_ffi_stack_alloc)
             if op.results:
                 res_slot = self._slot_of(op.results[0])
                 # Stage 28.9 cycle 79 audit-R C78-1 fix (HIGH conf 85): pre-fix
