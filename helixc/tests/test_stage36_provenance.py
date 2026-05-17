@@ -2730,6 +2730,102 @@ fn main() -> i32 {
         "has_evidence false-negative on -1 source-id is a documented Phase-0 limitation"
 
 
+def test_stage37_postclosure_parent_at_error_includes_family_remediation_hint():
+    """Stage 37 post-closure M2 fix (Stage 36 gate-3 type-design audit,
+    conf 70): parent_at was the only member of the strict-i32 family
+    without the "pre-Inc-N also accepted i64/u32/u64" remediation
+    parenthetical. Passing i64 must now produce the family-standard
+    hint so users know the input would have compiled (with silent
+    truncation) pre-strict."""
+    src = """
+fn main() -> i32 {
+    let h: i64 = 1;
+    parent_at(h, 0)
+}
+"""
+    prog = parse(src)
+    errs = typecheck(prog)
+    msgs = [str(e) for e in errs]
+    assert any("parent_at" in m and "must be exactly i32" in m
+               and "pre-Inc-14" in m and "silently truncated" in m
+               for m in msgs), \
+        f"parent_at i64 rejection must carry the family-standard remediation hint, got {msgs}"
+
+
+def test_stage37_postclosure_parent_at_skip_slot_bounds_when_args_mistyped():
+    """Stage 37 post-closure M2 fix (gate-3 type-design audit secondary
+    smell): when arg types already fail to typecheck, the literal-slot
+    bounds error is moot (the call can't typecheck anyway). Pre-fix the
+    dual-failure case produced 3 errors (2 arg-type + 1 slot-bounds);
+    post-fix it produces 2 (the arg-type errors only). The slot-bounds
+    error is preserved when arg types are OK (verified by the existing
+    Inc 15 negative-literal-slot test)."""
+    src = """
+fn main() -> i32 {
+    let h: i64 = 1;
+    parent_at(h, 99)
+}
+"""
+    prog = parse(src)
+    errs = typecheck(prog)
+    msgs = [str(e) for e in errs]
+    arg_errs = [m for m in msgs if "must be exactly i32" in m]
+    slot_errs = [m for m in msgs if "literal slot" in m and "out of range" in m]
+    assert len(arg_errs) == 1, \
+        f"expected exactly one strict-i32 arg-type error, got {arg_errs}"
+    assert len(slot_errs) == 0, \
+        f"slot-bounds error must be suppressed when arg types fail, got {slot_errs}"
+
+
+def test_stage37_postclosure_strict_i32_hint_suppressed_for_non_int_categories():
+    """Stage 37 post-closure L1 fix (gate-3 type-design audit, conf 75):
+    the "pre-Inc-N also accepted i64/u32/u64" hint is only true for
+    wider integer types. For Logic<i32> (or any non-int category) the
+    hint lies — pre-strict already rejected non-ints. Verify the hint
+    is suppressed for Logic<i32> on parent_left_at, parent_right_at,
+    register_derivation, register_derivation3, parent_at, and
+    to_logic_bool."""
+    src = """
+fn main() -> i32 {
+    let b: Logic<i32> = to_logic_bool(1);
+    let v = parent_left_at(b);
+    v
+}
+"""
+    prog = parse(src)
+    errs = typecheck(prog)
+    msgs = [str(e) for e in errs]
+    parent_msgs = [m for m in msgs
+                   if "parent_left_at" in m and "must be exactly i32" in m]
+    assert len(parent_msgs) == 1, \
+        f"expected exactly one parent_left_at strict-i32 error, got {parent_msgs}"
+    assert "silently truncated" not in parent_msgs[0], \
+        f"non-int (Logic<i32>) rejection must NOT carry truncation hint, got {parent_msgs[0]!r}"
+    assert "pre-Inc-15" not in parent_msgs[0], \
+        f"non-int (Logic<i32>) rejection must NOT name a pre-strict era, got {parent_msgs[0]!r}"
+
+
+def test_stage37_postclosure_strict_i32_hint_preserved_for_wider_int():
+    """Stage 37 post-closure L1 regression guard: the truncation hint
+    must STILL be present for i64 (the type where the hint is true and
+    useful). This pins that the L1 gating change didn't accidentally
+    suppress the hint for the case it was originally written for."""
+    src = """
+fn main() -> i32 {
+    let h: i64 = 1;
+    parent_left_at(h)
+}
+"""
+    prog = parse(src)
+    errs = typecheck(prog)
+    msgs = [str(e) for e in errs]
+    matching = [m for m in msgs
+                if "parent_left_at" in m and "must be exactly i32" in m
+                and "pre-Inc-15" in m and "silently truncated" in m]
+    assert len(matching) == 1, \
+        f"i64 rejection must STILL carry the pre-Inc-15 truncation hint, got {msgs}"
+
+
 if __name__ == "__main__":
     import pytest
     raise SystemExit(pytest.main([__file__, "-v"]))
