@@ -559,3 +559,163 @@ fn main() -> i32 {
     assert any("Known" in str(e) for e in errs), \
         f"Believed<Past<i32>> unwrapped as Known should reject, " \
         f"got {[str(e) for e in errs]}"
+
+
+# ============================================================
+# Stage 40 Inc 4 closure gate-1 fix-sweep regression tests.
+# F1 (HIGH conf 90): `into_X(from_uncertain(...))` for any
+# upgrade target X in {Known, Believed, Goal} must be rejected.
+# Otherwise the entire epistemic-upgrade discipline is bypassed
+# by a trivial unwrap-rewrap idiom and the AI-safety motivation
+# for Stage 40 evaporates. F2 (MEDIUM conf 90): a user fn with
+# the same name as a reserved builtin is silently dead-coded
+# (typecheck dispatches builtin arm first) — Stage 40 makes
+# this acute because `confirm` and `act_on` are generic verbs
+# likely to collide with planner / state-machine code.
+# ============================================================
+
+
+def test_stage40_gate1_f1_rejects_uncertain_to_known_laundering():
+    src = """
+fn main() -> i32 {
+    let u: Uncertain<i32> = into_uncertain(42);
+    let k: Known<i32> = into_known(from_uncertain(u));
+    from_known(k)
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    errs = typecheck(prog)
+    assert any("launders" in str(e) and "Uncertain" in str(e)
+               and "Known" in str(e) for e in errs), \
+        f"Uncertain->Known laundering must be rejected, got " \
+        f"{[str(e) for e in errs]}"
+
+
+def test_stage40_gate1_f1_rejects_uncertain_to_believed_laundering():
+    src = """
+fn main() -> i32 {
+    let u: Uncertain<i32> = into_uncertain(42);
+    let b: Believed<i32> = into_believed(from_uncertain(u));
+    from_believed(b)
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    errs = typecheck(prog)
+    assert any("launders" in str(e) and "Believed" in str(e)
+               for e in errs)
+
+
+def test_stage40_gate1_f1_rejects_uncertain_to_goal_laundering():
+    src = """
+fn main() -> i32 {
+    let u: Uncertain<i32> = into_uncertain(42);
+    let g: Goal<i32> = into_goal(from_uncertain(u));
+    from_goal(g)
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    errs = typecheck(prog)
+    assert any("launders" in str(e) and "Goal" in str(e)
+               for e in errs)
+
+
+def test_stage40_gate1_f1_allows_uncertain_self_rewrap():
+    """The F1 guard only triggers on upgrade-target rewraps; a
+    `into_uncertain(from_uncertain(u))` (kind-preserving) round
+    trip is benign and must remain allowed."""
+    src = """
+fn main() -> i32 {
+    let u: Uncertain<i32> = into_uncertain(42);
+    let u2: Uncertain<i32> = into_uncertain(from_uncertain(u));
+    from_uncertain(u2)
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    errs = typecheck(prog)
+    assert errs == [], \
+        f"Uncertain->Uncertain self-rewrap should be allowed, " \
+        f"got {[str(e) for e in errs]}"
+
+
+def test_stage40_gate1_f1_allows_known_self_rewrap():
+    """Same-kind rewraps for the non-Uncertain kinds also stay
+    allowed (the F1 guard is specifically about laundering AWAY
+    from Uncertain)."""
+    src = """
+fn main() -> i32 {
+    let k: Known<i32> = into_known(42);
+    let k2: Known<i32> = into_known(from_known(k));
+    from_known(k2)
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    assert typecheck(prog) == []
+
+
+def test_stage40_gate1_f2_rejects_user_fn_named_confirm():
+    src = """
+fn confirm(x: i32) -> i32 { x * 2 }
+fn main() -> i32 { confirm(21) }
+"""
+    prog = parse(src, include_stdlib=True)
+    errs = typecheck(prog)
+    assert any("confirm" in str(e) and "shadows a reserved builtin"
+               in str(e) for e in errs), \
+        f"user fn 'confirm' must be rejected as builtin shadow, " \
+        f"got {[str(e) for e in errs]}"
+
+
+def test_stage40_gate1_f2_rejects_user_fn_named_act_on():
+    src = """
+fn act_on(x: i32) -> i32 { x + 1 }
+fn main() -> i32 { act_on(41) }
+"""
+    prog = parse(src, include_stdlib=True)
+    errs = typecheck(prog)
+    assert any("act_on" in str(e) and "shadows a reserved builtin"
+               in str(e) for e in errs)
+
+
+def test_stage40_gate1_f2_rejects_user_fn_named_into_known():
+    """The shadow guard covers all 10 Stage 40 modal builtins,
+    not just the two short-named transition verbs."""
+    src = """
+fn into_known(x: i32) -> i32 { x }
+fn main() -> i32 { into_known(42) }
+"""
+    prog = parse(src, include_stdlib=True)
+    errs = typecheck(prog)
+    assert any("into_known" in str(e) and "shadows a reserved builtin"
+               in str(e) for e in errs)
+
+
+def test_stage40_gate1_f2_allows_unrelated_user_fn_names():
+    """The shadow guard must NOT mass-reject every user fn; only
+    those whose name actually appears in _BUILTIN_NAMES."""
+    src = """
+fn double(x: i32) -> i32 { x * 2 }
+fn make_known(raw: i32) -> Known<i32> { into_known(raw) }
+fn main() -> i32 { from_known(make_known(double(21))) }
+"""
+    prog = parse(src, include_stdlib=True)
+    assert typecheck(prog) == []
+
+
+def test_stage40_gate1_f2_shadow_diagnostic_includes_rename_hint():
+    """The diagnostic must include a hint pointing the user at the
+    reserved-name list so the rename is obvious. Without the hint,
+    a user hitting this error has no fast path to resolution."""
+    src = """
+fn confirm(x: i32) -> i32 { x }
+fn main() -> i32 { confirm(0) }
+"""
+    prog = parse(src, include_stdlib=True)
+    errs = typecheck(prog)
+    shadow_errs = [e for e in errs
+                   if "shadows a reserved builtin" in str(e)]
+    assert shadow_errs, "expected shadow diagnostic"
+    err_text = str(shadow_errs[0])
+    assert ("into_*" in err_text or "from_*" in err_text
+            or "confirm" in err_text), \
+        f"shadow diagnostic must hint at reserved-name pattern, " \
+        f"got: {err_text}"

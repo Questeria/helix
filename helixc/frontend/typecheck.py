@@ -893,6 +893,35 @@ class TypeChecker:
             return
 
     def _register_fn(self, fn: A.FnDecl) -> None:
+        # Stage 40 closure gate-1 silent-failure F2 fix (MEDIUM
+        # conf 90): refuse to silently shadow a reserved builtin
+        # name. Pre-fix, `fn confirm(x: i32) -> i32 { x * 2 }` was
+        # silently dead-coded — typecheck dispatched the builtin
+        # arm before the user-fn lookup, so the user got
+        # "confirm() requires Believed<T>, got i32" with no
+        # shadowing hint. Stage 39 F3 (deferred at gate-1) becomes
+        # urgent at Stage 40 because `confirm` and `act_on` are
+        # extremely-generic names likely to collide with user
+        # planning / state-machine code. Closes Stage 36-40 holes
+        # in one arm; same fail-closed discipline as the other
+        # gate-1 / gate-2 fixes.
+        if fn.name in self._BUILTIN_NAMES:
+            self.errors.append(TypeError_(
+                f"function {fn.name!r} shadows a reserved builtin "
+                f"name; rename the function to avoid silent "
+                f"dispatch dead-coding (the typechecker resolves "
+                f"the builtin first, so the user definition is "
+                f"unreachable from any call site that uses the "
+                f"bare name)",
+                fn.span,
+                hint=f"reserved builtins include modal/temporal/"
+                f"frame/tier intro+elim+transition verbs (e.g. "
+                f"into_*, from_*, confirm, act_on, forecast, "
+                f"world_to_robot); pick a different name",
+            ))
+            # Continue registration so downstream code doesn't
+            # crash on a missing FunctionSig; the diagnostic alone
+            # gates the typecheck pass.
         # Build the generic-bindings scope
         gen_scope = Scope()
         for g in fn.generics:
@@ -3414,6 +3443,56 @@ class TypeChecker:
                         self.errors.append(TypeError_(
                             f"{bn}() takes 1 argument, got {len(arg_tys)}",
                             expr.span,
+                        ))
+                        return TyUnknown(hint=bn)
+                    # Stage 40 closure gate-1 silent-failure F1 fix
+                    # (HIGH): block the direct syntactic Uncertain-
+                    # laundering pattern `into_X(from_uncertain(u))`.
+                    # An agent could unwrap-rewrap an Uncertain value
+                    # into a Known fact with no diagnostic, vacating
+                    # Stage 40's "category mistake at the heart of
+                    # many AI safety failures" claim. Closes the
+                    # direct form.
+                    #
+                    # KNOWN LIMITATION (code-review gate-1 H1, conf
+                    # 95): this guard only matches the inline form.
+                    # Trivially bypassable via let-binding
+                    # (`let r = from_uncertain(u); into_known(r)`)
+                    # or helper-fn indirection. A semantic taint-
+                    # tracking pass that propagates Uncertain-origin
+                    # through bindings + function calls would be a
+                    # Phase-0 expansion of significant scope and is
+                    # deferred to a future stage. The syntactic
+                    # guard is the first line of defense — it makes
+                    # the laundering pattern non-trivial to write
+                    # rather than impossible, and a future
+                    # taint-tracking stage would compose with it
+                    # additively. Defensive: explicit args bounds
+                    # check (gate-1 M1, conf 82) — pre-fix this
+                    # block accessed expr.args[0] without re-
+                    # asserting the structural precondition.
+                    target_kind = _modal_intro[bn]
+                    if (target_kind in ("known", "believed", "goal")
+                            and len(expr.args) >= 1
+                            and isinstance(expr.args[0], A.Call)
+                            and isinstance(expr.args[0].callee, A.Name)
+                            and expr.args[0].callee.name
+                                == "from_uncertain"):
+                        self.errors.append(TypeError_(
+                            f"{bn}(from_uncertain(...)) launders an "
+                            f"Uncertain<T> into "
+                            f"{target_kind.capitalize()}<T> with no "
+                            f"epistemic-upgrade audit. Stage 40 has no "
+                            f"Uncertain -> {target_kind.capitalize()} "
+                            f"transition; if the source has been "
+                            f"observed and is now certain, the upgrade "
+                            f"must come from an outside observation, "
+                            f"not from a wrapper-strip + rewrap.",
+                            expr.span,
+                            hint="resolve uncertainty before the "
+                            "value enters the type system, OR keep "
+                            "the value Uncertain<T> until a future "
+                            "Stage-40+ transition is added",
                         ))
                         return TyUnknown(hint=bn)
                     return TyModal(kind=_modal_intro[bn],
