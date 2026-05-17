@@ -76,6 +76,11 @@ DEMOS: dict[str, dict] = {
         "title": "Two-param SGD learns a fuzzy_or(fuzzy_and(...)) rule (Stage 36 Inc 8)",
         "expects": "exit code 42  (w1→0.9, w2→0.7 via indexed grad_rev across multi-arg loss)",
     },
+    "kgraph": {
+        "file": "dogfood_09_knowledge_graph.hx",
+        "title": "Knowledge-graph reasoner with provenance recovery (Stage 36 Inc 10)",
+        "expects": "exit code 42  (3 facts + 2 chained grandparent rules + parent_*_at provenance recovery)",
+    },
 }
 
 

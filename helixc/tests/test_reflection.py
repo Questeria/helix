@@ -226,6 +226,20 @@ def test_dogfood_08_two_param_fuzzy_rule():
     assert compile_and_run(src) == 42
 
 
+def test_dogfood_09_knowledge_graph():
+    # Stage 36 Increment 10 dogfood: chained-rule knowledge graph.
+    # 3 facts (parent edges) + 2 grandparent rules + provenance
+    # recovery via parent_left_at / parent_right_at. Exercises the
+    # Inc 9 audit-clean primitives in a small AGI-shaped scenario.
+    # Exit 42 iff both grandparent rules fire AND the evidence
+    # handles correctly recover the parent source IDs.
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    p = os.path.join(proj_root, "helixc", "examples", "dogfood_09_knowledge_graph.hx")
+    with open(p) as f:
+        src = f.read()
+    assert compile_and_run(src) == 42
+
+
 def test_self_improving_agent_example():
     # Compiles and runs helixc/examples/self_improving_agent.hx — the
     # example covering reverse-mode AD, reflection, verifier gating, and
