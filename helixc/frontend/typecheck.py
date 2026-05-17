@@ -1187,57 +1187,91 @@ class TypeChecker:
             if ty.base == "Quote" and len(ty.args) == 1:
                 return TyQuote(inner=self._resolve_type(ty.args[0], scope))
             # Memory-tier wrappers: WorkingMem<T>, EpisodicMem<T>, etc.
+            # Stage 43 Inc 1 F5 fix: explicit arity diagnostic so
+            # `WorkingMem<>` / `WorkingMem<i32, i32>` emit "X<T>
+            # takes 1 type argument, got N" instead of the
+            # misleading "unknown type 'WorkingMem'" fall-through.
             tier_map = {
                 "WorkingMem": "working",
                 "EpisodicMem": "episodic",
                 "SemanticMem": "semantic",
                 "ProceduralMem": "procedural",
             }
-            if ty.base in tier_map and len(ty.args) == 1:
+            if ty.base in tier_map:
+                if len(ty.args) != 1:
+                    self.errors.append(TypeError_(
+                        f"{ty.base}<T> takes 1 type argument, "
+                        f"got {len(ty.args)}",
+                        ty.span,
+                    ))
+                    return TyUnknown(hint=ty.base)
                 return TyMemTier(tier=tier_map[ty.base],
                                  inner=self._resolve_type(ty.args[0], scope))
-            # Stage 38 Inc 1 — spatial-frame wrappers: WorldFrame<T>,
-            # RobotFrame<T>, CameraFrame<T>. Mirrors the TyMemTier
-            # pattern above.
+            # Stage 38 Inc 1 — spatial-frame wrappers. F5 arity arm.
             frame_map = {
                 "WorldFrame": "world",
                 "RobotFrame": "robot",
                 "CameraFrame": "camera",
             }
-            if ty.base in frame_map and len(ty.args) == 1:
+            if ty.base in frame_map:
+                if len(ty.args) != 1:
+                    self.errors.append(TypeError_(
+                        f"{ty.base}<T> takes 1 type argument, "
+                        f"got {len(ty.args)}",
+                        ty.span,
+                    ))
+                    return TyUnknown(hint=ty.base)
                 return TyFrame(frame=frame_map[ty.base],
                                inner=self._resolve_type(ty.args[0], scope))
-            # Stage 39 Inc 1 — temporal wrappers: Past<T> / Present<T> /
-            # Future<T> / Eternal<T>. Mirrors TyFrame / TyMemTier.
+            # Stage 39 Inc 1 — temporal wrappers. F5 arity arm.
             temporal_map = {
                 "Past": "past",
                 "Present": "present",
                 "Future": "future",
                 "Eternal": "eternal",
             }
-            if ty.base in temporal_map and len(ty.args) == 1:
+            if ty.base in temporal_map:
+                if len(ty.args) != 1:
+                    self.errors.append(TypeError_(
+                        f"{ty.base}<T> takes 1 type argument, "
+                        f"got {len(ty.args)}",
+                        ty.span,
+                    ))
+                    return TyUnknown(hint=ty.base)
                 return TyTemporal(kind=temporal_map[ty.base],
                                   inner=self._resolve_type(ty.args[0], scope))
-            # Stage 40 Inc 1 — modal/epistemic wrappers: Known<T> /
-            # Believed<T> / Goal<T> / Uncertain<T>. Mirrors TyTemporal.
+            # Stage 40 Inc 1 — modal wrappers. F5 arity arm.
             modal_map = {
                 "Known":     "known",
                 "Believed":  "believed",
                 "Goal":      "goal",
                 "Uncertain": "uncertain",
             }
-            if ty.base in modal_map and len(ty.args) == 1:
+            if ty.base in modal_map:
+                if len(ty.args) != 1:
+                    self.errors.append(TypeError_(
+                        f"{ty.base}<T> takes 1 type argument, "
+                        f"got {len(ty.args)}",
+                        ty.span,
+                    ))
+                    return TyUnknown(hint=ty.base)
                 return TyModal(kind=modal_map[ty.base],
                                inner=self._resolve_type(ty.args[0], scope))
-            # Stage 41 Inc 1 — causal wrappers: Cause<T> / Effect<T> /
-            # Joint<T> / Independent<T>. Mirrors TyModal.
+            # Stage 41 Inc 1 — causal wrappers. F5 arity arm.
             causal_map = {
                 "Cause":       "cause",
                 "Effect":      "effect",
                 "Joint":       "joint",
                 "Independent": "independent",
             }
-            if ty.base in causal_map and len(ty.args) == 1:
+            if ty.base in causal_map:
+                if len(ty.args) != 1:
+                    self.errors.append(TypeError_(
+                        f"{ty.base}<T> takes 1 type argument, "
+                        f"got {len(ty.args)}",
+                        ty.span,
+                    ))
+                    return TyUnknown(hint=ty.base)
                 return TyCausal(kind=causal_map[ty.base],
                                 inner=self._resolve_type(ty.args[0], scope))
             # Stage 28 — user-defined parametric struct (Audit 28.8 A3/B1).
@@ -3332,6 +3366,22 @@ class TypeChecker:
                     "into_procedural": "procedural",
                 }
                 if bn in _tier_intro_elim and len(arg_tys) == 1:
+                    # Stage 43 Inc 1 M1 fix: reject already-wrapped
+                    # tier value. `into_working(WorkingMem<i32>)` ->
+                    # `WorkingMem<WorkingMem<i32>>` was silently
+                    # accepted (gate-1 M1 across all 5 wrapper
+                    # families). Closes the symmetric pattern.
+                    if isinstance(arg_tys[0], TyMemTier):
+                        self.errors.append(TypeError_(
+                            f"{bn}() received an already-wrapped "
+                            f"{self._fmt(arg_tys[0])}; intro "
+                            f"builtins are not idempotent — "
+                            f"double-wrapping changes the type's "
+                            f"semantic meaning. If you mean to "
+                            f"re-tag, unwrap first.",
+                            expr.span,
+                        ))
+                        return TyUnknown(hint=bn)
                     return TyMemTier(tier=_tier_intro_elim[bn],
                                      inner=arg_tys[0])
                 _tier_unwrap = {
@@ -3370,6 +3420,22 @@ class TypeChecker:
                     if len(arg_tys) != 1:
                         self.errors.append(TypeError_(
                             f"{bn}() takes 1 argument, got {len(arg_tys)}",
+                            expr.span,
+                        ))
+                        return TyUnknown(hint=bn)
+                    # Stage 43 Inc 1 M1 fix: reject already-wrapped
+                    # frame value. `into_world(WorldFrame<i32>)` ->
+                    # `WorldFrame<WorldFrame<i32>>` silently accepted
+                    # pre-fix. Use a cross-frame transform if you want
+                    # to change frames, not into_X(into_X(...)).
+                    if isinstance(arg_tys[0], TyFrame):
+                        self.errors.append(TypeError_(
+                            f"{bn}() received an already-wrapped "
+                            f"{self._fmt(arg_tys[0])}; intro "
+                            f"builtins are not idempotent — use a "
+                            f"cross-frame transform (e.g. "
+                            f"world_to_robot) to change frames, or "
+                            f"unwrap first.",
                             expr.span,
                         ))
                         return TyUnknown(hint=bn)
@@ -3451,6 +3517,21 @@ class TypeChecker:
                             expr.span,
                         ))
                         return TyUnknown(hint=bn)
+                    # Stage 43 Inc 1 M1 fix: reject already-wrapped
+                    # temporal value. Use a transition (to_past,
+                    # forecast, recall_past, actualize) to change
+                    # temporal kind instead of into_X(into_Y(...)).
+                    if isinstance(arg_tys[0], TyTemporal):
+                        self.errors.append(TypeError_(
+                            f"{bn}() received an already-wrapped "
+                            f"{self._fmt(arg_tys[0])}; intro "
+                            f"builtins are not idempotent — use a "
+                            f"temporal transition (to_past, "
+                            f"forecast, recall_past, actualize) to "
+                            f"change kind, or unwrap first.",
+                            expr.span,
+                        ))
+                        return TyUnknown(hint=bn)
                     return TyTemporal(kind=_temporal_intro[bn],
                                       inner=arg_tys[0])
                 _temporal_elim = {
@@ -3524,6 +3605,20 @@ class TypeChecker:
                     if len(arg_tys) != 1:
                         self.errors.append(TypeError_(
                             f"{bn}() takes 1 argument, got {len(arg_tys)}",
+                            expr.span,
+                        ))
+                        return TyUnknown(hint=bn)
+                    # Stage 43 Inc 1 M1 fix: reject already-wrapped
+                    # modal value. Use a modal transition (confirm,
+                    # act_on) or unwrap first.
+                    if isinstance(arg_tys[0], TyModal):
+                        self.errors.append(TypeError_(
+                            f"{bn}() received an already-wrapped "
+                            f"{self._fmt(arg_tys[0])}; intro "
+                            f"builtins are not idempotent — use a "
+                            f"modal transition (confirm, act_on) "
+                            f"to change epistemic kind, or unwrap "
+                            f"first.",
                             expr.span,
                         ))
                         return TyUnknown(hint=bn)
@@ -3806,6 +3901,21 @@ class TypeChecker:
                     if len(arg_tys) != 1:
                         self.errors.append(TypeError_(
                             f"{bn}() takes 1 argument, got {len(arg_tys)}",
+                            expr.span,
+                        ))
+                        return TyUnknown(hint=bn)
+                    # Stage 43 Inc 1 M1 fix: reject already-wrapped
+                    # causal value. Use a causal transition
+                    # (propagate, aggregate, isolate) to change
+                    # causal kind, or unwrap first.
+                    if isinstance(arg_tys[0], TyCausal):
+                        self.errors.append(TypeError_(
+                            f"{bn}() received an already-wrapped "
+                            f"{self._fmt(arg_tys[0])}; intro "
+                            f"builtins are not idempotent — use a "
+                            f"causal transition (propagate, "
+                            f"aggregate, isolate) to change kind, "
+                            f"or unwrap first.",
                             expr.span,
                         ))
                         return TyUnknown(hint=bn)

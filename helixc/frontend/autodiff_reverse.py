@@ -50,7 +50,7 @@ from .autodiff import (
     _inline_lets, _simplify, _inline_user_calls, _ad_warn,
     NUMERIC_FOR_AD,
     AD_INTEGER_VALUED_LOGIC, _raise_integer_logic_in_ad,
-    _FRAME_IDENTITY_AD_NAMES,
+    _IDENTITY_AD_CHAIN_RULE_NAMES,
 )
 
 
@@ -681,7 +681,7 @@ def _propagate(node: A.Expr, adj: A.Expr, acc: dict[str, list[A.Expr]]) -> None:
         # identity wrappers — adjoint flows through unchanged on the
         # single arg. Mirrors the forward arm in autodiff.py.
         if (isinstance(node.callee, A.Name)
-                and node.callee.name in _FRAME_IDENTITY_AD_NAMES
+                and node.callee.name in _IDENTITY_AD_CHAIN_RULE_NAMES
                 and len(node.args) == 1):
             _propagate(node.args[0], adj, acc)
             return

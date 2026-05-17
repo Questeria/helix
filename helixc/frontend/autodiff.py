@@ -86,7 +86,7 @@ AD_KNOWN_PURE_CALLS = {
     # _is_ad_erasable_expr). Stage 38 post-Inc-3 silent-failure F2 fix
     # additionally installs identity chain rules for the same 12 names
     # in both forward (_diff_call_chain_rule) and reverse (_propagate)
-    # via _FRAME_IDENTITY_AD_NAMES — so `grad(use_frame)` now flows
+    # via _IDENTITY_AD_CHAIN_RULE_NAMES — so `grad(use_frame)` now flows
     # gradients through the wrapper rather than raising the opaque-call
     # catchall.
     "into_world", "into_robot", "into_camera",
@@ -184,7 +184,12 @@ AD_INTEGER_VALUED_LOGIC = frozenset({
 # the AD-pure registration's implied "frame ops are differentiable"
 # contract. Tier ops (Stage 37) still raise; a future increment may
 # backfill the same arm there once the symmetric question is settled.
-_FRAME_IDENTITY_AD_NAMES = frozenset({
+# Stage 43 Inc 1 LOW-3 fix: renamed from `_FRAME_IDENTITY_AD_NAMES`
+# to reflect that the set now covers all 5 wrapper families
+# (frame + temporal + modal + causal — only 12 of 45 entries are
+# actual frames). The old name remains as a backwards-compat
+# alias for one stage (Stage 44 will drop the alias).
+_IDENTITY_AD_CHAIN_RULE_NAMES = frozenset({
     "into_world", "into_robot", "into_camera",
     "from_world", "from_robot", "from_camera",
     "world_to_robot", "robot_to_world",
@@ -217,6 +222,11 @@ _FRAME_IDENTITY_AD_NAMES = frozenset({
     "from_cause", "from_effect", "from_joint", "from_independent",
     "propagate", "aggregate", "isolate",
 })
+
+# Stage 43 Inc 1 LOW-3 fix: one-stage backwards-compat alias for
+# any external importer that still references the old name. Drop
+# this alias at Stage 44 or beyond.
+_FRAME_IDENTITY_AD_NAMES = _IDENTITY_AD_CHAIN_RULE_NAMES
 
 
 # Mapping from integer-valued Logic op to its closest fuzzy
@@ -1322,7 +1332,9 @@ def _diff_call_chain_rule(call: A.Call, var: str,
         return _diff(call.args[0], var)
     # Stage 38 post-Inc-3 silent-failure F2 fix (MEDIUM): frame
     # identity wrappers — chain rule is identity on the single arg.
-    if (call.callee.name in _FRAME_IDENTITY_AD_NAMES
+    # Stage 43 LOW-3 rename: now covers all 5 wrapper families
+    # (frame + temporal + modal + causal); set name updated.
+    if (call.callee.name in _IDENTITY_AD_CHAIN_RULE_NAMES
             and len(call.args) == 1):
         return _diff(call.args[0], var)
     if len(call.args) != 1:
