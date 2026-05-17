@@ -975,6 +975,74 @@ fn main() -> i32 {
         f"representation, got: {err_strs}"
 
 
+# ============================================================
+# Gate-3 G3-H1: map_ok / map_err must also reject wider payloads
+# (G2-H1 coverage gap — bypass via map_* constructor)
+# ============================================================
+
+
+def test_stage49_gate3_g3h1_map_ok_wider_payload_rejected():
+    """Gate-3 G3-H1: pre-fix `map_ok(r, 9999999999_i64)` typecheck-
+    passed because G2-H1 only fired at the Ok/Err constructors,
+    NOT at map_ok/map_err arms which build a fresh TyResult from
+    the caller-provided new_value. The i64 then silently
+    truncated to i32 at IR lowering — same defect class as G2-H1,
+    different entry point. Post-fix map_ok also calls
+    _reject_non_i32_result_payload on the new_value type."""
+    src = """
+fn id_i64(x: i64) -> i64 { x }
+fn main() -> i32 {
+    let r: Result<i32, i32> = Ok(7);
+    let r2: Result<i64, i32> = map_ok(r, id_i64(9999999999));
+    0
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    errs = typecheck(prog)
+    err_strs = " ".join(str(e) for e in errs)
+    assert "not supported by the Stage 49 packed-i64" in err_strs, \
+        f"map_ok with i64 new_value must reject, got: {err_strs}"
+    assert "map_ok new_value" in err_strs, \
+        f"diagnostic must name the map_ok side, got: {err_strs}"
+
+
+def test_stage49_gate3_g3h1_map_err_wider_payload_rejected():
+    """Gate-3 G3-H1 symmetric companion for map_err. Pre-fix
+    `map_err(r, 9999999999_i64)` silently truncated the i64
+    new_err to i32. Post-fix typecheck rejects with the same
+    G2-H1-style diagnostic naming the map_err side."""
+    src = """
+fn id_i64(x: i64) -> i64 { x }
+fn main() -> i32 {
+    let r: Result<i32, i32> = Err(7);
+    let r2: Result<i32, i64> = map_err(r, id_i64(9999999999));
+    0
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    errs = typecheck(prog)
+    err_strs = " ".join(str(e) for e in errs)
+    assert "not supported by the Stage 49 packed-i64" in err_strs, \
+        f"map_err with i64 new_value must reject, got: {err_strs}"
+    assert "map_err new_value" in err_strs, \
+        f"diagnostic must name the map_err side, got: {err_strs}"
+
+
+def test_stage49_gate3_g3h1_map_ok_i32_new_value_still_works():
+    """Sanity: map_ok with an i32 new_value still works post-fix.
+    Pins the happy-path so the G3-H1 reject doesn't over-fire."""
+    src = """
+fn main() -> i32 {
+    let r: Result<i32, i32> = Ok(7);
+    unwrap_ok(map_ok(r, 42))
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    assert typecheck(prog) == []
+    elf = compile_module_to_elf(lower(prog))
+    assert _run_elf(elf) == 42
+
+
 def test_stage49_gate2_g2h1_result_known_i32_still_works():
     """Sanity: wrapper-around-i32 must still work. `Known<i32>` is
     identity-lowered at expression position, so the payload is

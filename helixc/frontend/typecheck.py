@@ -4852,6 +4852,15 @@ class TypeChecker:
                             expr.span,
                         ))
                         return TyUnknown(hint=bn)
+                    # Stage 49 closure gate-3 G3-H1 fix: map_ok
+                    # constructs a fresh TyResult whose Ok side
+                    # is the caller-provided new_value's type.
+                    # Without this check, `map_ok(r, 9999_i64)`
+                    # typecheck-passed but the new_value silently
+                    # truncated to i32 at IR lowering. Same defect
+                    # class as G2-H1 at Ok/Err constructors.
+                    self._reject_non_i32_result_payload(
+                        arg_tys[1], expr.span, side="map_ok new_value")
                     return TyResult(
                         ok_ty=arg_tys[1],
                         err_ty=arg_tys[0].err_ty,
@@ -4881,6 +4890,13 @@ class TypeChecker:
                             expr.span,
                         ))
                         return TyUnknown(hint=bn)
+                    # Stage 49 closure gate-3 G3-H1 fix (Err side):
+                    # symmetric companion to map_ok above. Without
+                    # this check, `map_err(r, 9999_i64)` typecheck-
+                    # passed but silently truncated the new_err
+                    # to i32 at IR lowering.
+                    self._reject_non_i32_result_payload(
+                        arg_tys[1], expr.span, side="map_err new_value")
                     return TyResult(
                         ok_ty=arg_tys[0].ok_ty,
                         err_ty=arg_tys[1],
