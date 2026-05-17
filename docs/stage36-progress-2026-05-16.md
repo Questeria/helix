@@ -563,3 +563,24 @@ all smoke programs exit 42).
 ### Tests at audit time
 
 `python -m pytest helixc/tests/test_stage36_provenance.py -q` → **48 passed**.
+
+### Inc 9 fix-sweep (post-audit, applied 2026-05-16)
+
+- **A1 HIGH** (silent-failure): bounds-checked `parent_left_at` /
+  `parent_right_at` via SELECT + CMP_GE/CMP_LE; out-of-range reads
+  return -1 sentinel. (Commit `0e548f0`.)
+- **C2 LOW** (code-review): Inc 2/3/5 boolean-algebra builtins
+  registered in `AD_KNOWN_PURE_CALLS`. (Commit `0e548f0`.)
+- **B1 MEDIUM** (code-review): `derive(a, b)` now evaluates args in
+  source order (`a` then `b`) instead of `b` then `a`. Side-effecting
+  expressions like `derive(log("a"), log("b"))` now print in source
+  order. Return value unchanged (still `a`'s lowered value, per
+  Phase-0 single-tag provenance). (This commit.)
+
+Tests after fix-sweep: 57 passed in test_stage36_provenance.py.
+Self-host gate: PASS (G2..G4 byte-identical sha
+`a6f1ee44eb4418ba296954528d05564f5a37627dc38bb350b2308675d86b8986`).
+
+The remaining HIGH findings (A2 handle discriminator, A3 fuzzy-op
+clamp, type-design A1/A2) remain deferred for user approval per the
+"architectural decisions" framing above.
