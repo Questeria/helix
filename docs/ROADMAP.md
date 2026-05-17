@@ -5,7 +5,7 @@ deep-research passes (2026-05-04). It's a forward-looking plan; not
 everything here will land, and priorities will shift as dogfooding
 reveals which features actually matter.
 
-## Current state (Stage 35 CLOSED 2026-05-16 at restart 65; see `docs/stage35-progress-2026-05-15.md` Increment 82 for the closure narrative; Stage 36 opens next)
+## Current state (Stage 35 CLOSED 2026-05-16 at restart 65; Stage 36 CLOSED 2026-05-16 at Inc 16; Stage 37 opens next. See `docs/stage36-progress-2026-05-16.md` Increment 16 for Stage 36 closure narrative)
 
 - Working from-scratch x86-64 ELF compiler
 - Forward + reverse-mode symbolic AD with chain rules for __exp, __log,
@@ -223,6 +223,17 @@ Importance: highest for practical AI usefulness.
 Relative work: very large.
 
 ### Stage 36 - Strategic AGI Features
+
+Status: CLOSED 2026-05-16 at Inc 16 (3/3 clean gates; see Stage 36
+progress ledger Increment 16 in docs/stage36-progress-2026-05-16.md
+for the closure narrative). First deliverable was the Tier 3 #10
+provenance-typed neuro-symbolic primitives — shipped end-to-end with
+4 dogfood programs, 5 audit cycles (22/23 actionable findings closed),
+2 new IR opcodes (ARENA_PUSH_PAIR, ARENA_PUSH_TRIPLE), 1 new stdlib
+file (provenance.hx), and self-host gate green throughout. The
+remaining Stage 36 feature families (trace-based introspection,
+verifier-gated self-modification, memory/knowledge types) carry
+forward as Inc 17+ work.
 
 Purpose: build the features that make Helix meaningfully different from normal
 ML languages.

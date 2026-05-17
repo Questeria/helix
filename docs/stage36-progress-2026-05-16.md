@@ -1501,3 +1501,56 @@ they compose existing primitives). No new IR opcodes.
    missing from Stage 36" (auto-registration via derive, Logic<f64>
    precision variant, multi-output reverse-mode AD, JAX-style
    pytrees).
+
+## Increment 16 — STAGE 36 CLOSURE (3/3 clean gates) (2026-05-16)
+
+Per user direction "Do not forget 3 clean audits at the end of each
+stage before moving on", Stage 36 closes via the same 3-clean-gate
+convention that closed Stage 35 at restart 65.
+
+### Closure timeline
+
+| Gate | Result | Findings | Fix-sweep commit |
+|------|--------|----------|------------------|
+| 1 (initial) | NOT CLEAN | 1 HIGH (A1 parent_at dynamic upper bound) + 1 MEDIUM (A2 cross-record hazard, deferred) + 2 LOW (B1 fuzzy_not return-None, L1 dogfood_09 stale comment) | e2d5bba (A1 + B1 + L1 applied) |
+| 1 (re-audit) | CLEAN | 0 new findings; A1/B1/L1 verified closed | — |
+| 2 | CLEAN | 0 findings; informational coverage gap noted (dynamic slot >= 3 test) | 97dbfbc (2 regression tests added) |
+| 3 | CLEAN | 0 findings; coverage gap noted as Inc 17 task (if_logic mismatched inner types) | — (closure-ready) |
+
+**Counter advances**: 0/3 → 1/3 → 2/3 → 3/3.
+
+### Stage 36 final scorecard
+
+- **Increments shipped**: Inc 1 through Inc 15 + Inc 16 (closure) = 16 increments total.
+- **Audit cycles run**: 5 (post-Inc-8, post-Inc-10, post-Inc-13, post-Inc-14, post-Inc-15 closure gates 1-3).
+- **Audit findings closed**: 22/23 actionable findings. 1 deferred (cross-record arity hazard — needs Inc 17 per-handle arity word).
+- **Architecturally deferred** (carry-forward): nominal `TyDerivationHandle` wrapper (Inc 11 A1 HIGH), Logic<f64> precision variant, multi-output reverse-mode AD, JAX-style pytrees.
+- **Tests**: 153 in `helixc/tests/test_stage36_provenance.py` + 21 in `test_provenance.py` + 4 dogfood-runtime tests in `test_reflection.py`.
+- **Self-host gate**: PASS at every increment commit (G2..G4 byte-identical sha `a6f1ee44...`, smoke literal/call/loop/metadata_attrs all exit 42, validate ok).
+- **Total Stage 36 surface area**: 28+ new typecheck-recognized builtins, 2 new IR opcodes (`ARENA_PUSH_PAIR`, `ARENA_PUSH_TRIPLE`), 1 new stdlib file (`provenance.hx` with 7 helpers), 4 dogfood programs (06 Datalog, 07 SGD, 08 multi-param SGD, 09 knowledge graph).
+- **Mathematical correctness**: AD chain rules (forward + reverse) for all 5 fuzzy operators verified correct by hand against analytic formulas in the Inc 9 + Inc 12 + clean-gate-3 audits. Codegen byte arithmetic for both new IR opcodes verified byte-exact.
+
+### Strategic significance
+
+Stage 36's deliverable was the **Tier 3 #10 strategic differentiator**:
+provenance-typed neuro-symbolic primitives. This is now production-
+quality: end-to-end runnable, demonstrated via 4 dogfoods covering
+distinct compositions (Datalog inference, single-param SGD, multi-
+param SGD with chained fuzzy rules, knowledge-graph reasoning with
+evidence-trail recovery), audit-hardened across 5 cycles, mathematically
+verified, self-hosting-cascade-green throughout.
+
+A Helix program can now compose:
+- Provenance-tagged values (`prove(v, src) -> Logic<T>`)
+- Full propositional algebra (10 boolean ops on Logic<i32>)
+- Differentiable fuzzy logic (5 ops on Logic<f32> with AD chain rules
+  in both forward and reverse mode)
+- 2-parent and 3-parent provenance arena side-tables with atomic pushes
+- Generic N-arity evidence accessor (parent_at)
+- Debug observation (has_evidence, evidence_left/middle/right/third,
+  trace_evidence, trace_evidence3)
+- AD-safe boundary enforcement (integer-Logic ops fail loud in
+  grad/grad_rev paths)
+
+**STAGE 36 IS CLOSED.** Stage 37 opens next (continuous execution,
+tiered memory, theorem-prover integration per the ROADMAP).
