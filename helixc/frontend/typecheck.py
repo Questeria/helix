@@ -586,6 +586,17 @@ class TypeChecker:
         # here so re-running check() on the same instance doesn't carry
         # stale entries that would silence real new errors.
         self._seen_unbound: set[str] = set()
+        # Stage 46 closure gate-2 silent-failure G2-F1 fix: track
+        # the constructor provenance (Ok vs Err) of Result-typed
+        # let bindings. When a user writes
+        # `let r: Result<i32, i32> = Ok(7)`, the type annotation
+        # overrides the inferred TyUnknown sides at the bind site,
+        # defeating the gate-1 F4 hint-based check. This map
+        # preserves the provenance independently so unwrap_ok /
+        # unwrap_err can detect the wrong-arm case for typed-let
+        # bindings. Cleared in check() to survive re-entrancy.
+        # Stage 48+ runtime tag replaces this Phase-0 mechanism.
+        self._result_constructor_provenance: dict[str, str] = {}
         self._seen_unknown_type_names: set[str] = set()
         # Stage 40 closure gate-2 code-review MEDIUM-1 fix (conf
         # 88): explicit init so re-running check() on the same
@@ -632,6 +643,9 @@ class TypeChecker:
         # builtin names on each check() so a second invocation
         # starts fresh.
         self._shadowed_builtin_names = set()
+        # Stage 46 closure gate-2 G2-F1: clear Result constructor
+        # provenance on each check().
+        self._result_constructor_provenance = {}
         self._recursive_enum_names: set[str] = set()
         self._type_alias_cache = {}
         self._local_const_scalar_scopes = []
@@ -2397,6 +2411,24 @@ class TypeChecker:
                         and len(self.errors) != stmt_error_start):
                     bind_ty = self._erase_refinement(value_ty)
                 scope.define(stmt.name, bind_ty, is_mut=stmt.is_mut)
+            # Stage 46 closure gate-2 silent-failure G2-F1 fix:
+            # if the let RHS is a direct Ok(...) / Err(...) call,
+            # record the constructor provenance on the binding so
+            # unwrap_ok/unwrap_err can detect the wrong-arm case
+            # even when the declared type annotation strips the
+            # TyUnknown hint that gate-1 F4 relied on. Only direct
+            # constructor calls qualify; complex RHS expressions
+            # (e.g. `map_ok(r, 99)`, a fn call returning Result)
+            # don't get tracked — they'll have the existing F4
+            # behavior or pass through.
+            if (stmt.value is not None
+                    and isinstance(stmt.value, A.Call)
+                    and isinstance(stmt.value.callee, A.Name)
+                    and stmt.value.callee.name in ("Ok", "Err")):
+                self._result_constructor_provenance[stmt.name] = (
+                    "ok" if stmt.value.callee.name == "Ok"
+                    else "err"
+                )
             self._define_local_const_scalar(stmt.name, None)
             if (stmt.value is not None
                     and self._expr_has_unrepresentable_typed_const_scalar(
@@ -4257,7 +4289,47 @@ class TypeChecker:
                     # Reject at typecheck rather than letting the
                     # TyUnknown-universally-compatible cascade
                     # silently accept the misuse.
+                    #
+                    # Stage 46 closure gate-2 silent-failure G2-F1
+                    # fix: the F4 check covers the inference path
+                    # (`let r = Ok(7)`) but NOT the typed-let path
+                    # (`let r: Result<i32, i32> = Ok(7)`) because
+                    # the declared type annotation overrides the
+                    # TyUnknown hint at bind time. The
+                    # `_result_constructor_provenance` map records
+                    # the original constructor side independently
+                    # so typed-let wrong-arm calls are also caught.
                     inner = arg_tys[0]
+                    # First check: explicit name-bound provenance.
+                    if (isinstance(expr.args[0], A.Name)
+                            and expr.args[0].name
+                                in self._result_constructor_provenance):
+                        prov = self._result_constructor_provenance[
+                            expr.args[0].name]
+                        if bn == "unwrap_err" and prov == "ok":
+                            self.errors.append(TypeError_(
+                                f"unwrap_err() called on "
+                                f"{expr.args[0].name!r}, which was "
+                                f"constructed via Ok() — the Err "
+                                f"side was never set, so this is "
+                                f"an unconditional runtime panic.",
+                                expr.span,
+                                hint="use is_ok / unwrap_ok / "
+                                "or remove the unwrap_err",
+                            ))
+                            return TyUnknown(hint=bn)
+                        if bn == "unwrap_ok" and prov == "err":
+                            self.errors.append(TypeError_(
+                                f"unwrap_ok() called on "
+                                f"{expr.args[0].name!r}, which was "
+                                f"constructed via Err() — the Ok "
+                                f"side was never set, so this is "
+                                f"an unconditional runtime panic.",
+                                expr.span,
+                                hint="use is_err / unwrap_err / "
+                                "or remove the unwrap_ok",
+                            ))
+                            return TyUnknown(hint=bn)
                     if bn == "unwrap_err":
                         err = inner.err_ty
                         if (isinstance(err, TyUnknown)

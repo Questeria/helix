@@ -165,6 +165,77 @@ fn main() -> i32 {
     assert any("constructed via Err" in str(e) for e in errs)
 
 
+# ============================================================
+# Stage 46 closure gate-2 silent-failure G2-F1 backfill: the
+# typed-let path (`let r: Result<i32, i32> = Ok(7)`) was not
+# covered by gate-1 F4 because the declared type annotation
+# strips the TyUnknown hint that F4 keyed on. Gate-2 fix:
+# `_result_constructor_provenance` map records the constructor
+# side independently of the type-system metadata so typed-let
+# wrong-arm calls are also caught.
+# ============================================================
+
+
+def test_stage46_gate2_unwrap_err_on_typed_ok_rejects():
+    """G2-F1: typed-let `let r: Result<i32, i32> = Ok(7);
+    unwrap_err(r)` — pre-gate-2 this silently returned 7 (the
+    Ok-side payload). Post-fix: reject with name-bound
+    constructor provenance."""
+    src = """
+fn main() -> i32 {
+    let r: Result<i32, i32> = Ok(7);
+    unwrap_err(r)
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    errs = typecheck(prog)
+    assert any("'r'" in str(e) and "constructed via Ok" in str(e)
+               for e in errs), \
+        f"typed-let Ok unwrap_err must reject, got " \
+        f"{[str(e) for e in errs]}"
+
+
+def test_stage46_gate2_unwrap_ok_on_typed_err_rejects():
+    src = """
+fn main() -> i32 {
+    let r: Result<i32, i32> = Err(13);
+    unwrap_ok(r)
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    errs = typecheck(prog)
+    assert any("'r'" in str(e) and "constructed via Err" in str(e)
+               for e in errs)
+
+
+def test_stage46_gate2_correct_arm_on_typed_let_still_works():
+    """Sanity: typed-let with correct unwrap_ok-after-Ok must
+    NOT be rejected. Same surface as dogfood_16."""
+    src = """
+fn main() -> i32 {
+    let r: Result<i32, i32> = Ok(7);
+    unwrap_ok(r)
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    errs = typecheck(prog)
+    assert errs == [], \
+        f"correct-arm unwrap_ok on typed-let Ok must not error, " \
+        f"got {[str(e) for e in errs]}"
+
+
+def test_stage46_gate2_correct_arm_typed_let_err_unwrap_err_works():
+    src = """
+fn main() -> i32 {
+    let r: Result<i32, i32> = Err(13);
+    unwrap_err(r)
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    errs = typecheck(prog)
+    assert errs == []
+
+
 def test_stage46_unwrap_ok_rejects_non_result():
     """unwrap_ok requires Result<T, E>; a bare i32 must reject."""
     src = "fn main() -> i32 { unwrap_ok(42) }"
