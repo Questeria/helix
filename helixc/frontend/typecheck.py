@@ -2788,7 +2788,21 @@ class TypeChecker:
                     and len(expr.args) == 0):
                 return TyPtr(inner=TyPrim("u8"), is_mut=False)
             if (isinstance(expr.callee, A.Name)
-                    and expr.callee.name in self._GPU_INDEX_BUILTINS):
+                    and expr.callee.name in self._GPU_INDEX_BUILTINS
+                    # Stage 40 closure gate-3 type-design F1 fix
+                    # (HIGH conf 88): mirror the H2 dispatch
+                    # suppression at the modal/temporal/frame/tier
+                    # site (line 2848). Without this check, the
+                    # early GPU-index dispatch silently shadowed
+                    # the user fn even when _register_fn had
+                    # already flagged it — pre-fix, `fn thread_idx`
+                    # produced 1 shadow error + N noisy "only
+                    # allowed inside @kernel" errors per call. H2
+                    # invariant applied uniformly: if shadowed,
+                    # skip builtin dispatch and fall through to
+                    # user-fn lookup.
+                    and expr.callee.name
+                        not in self._shadowed_builtin_names):
                 bn = expr.callee.name
                 arg_tys = [self._check_expr(a, scope) for a in expr.args]
                 if arg_tys:

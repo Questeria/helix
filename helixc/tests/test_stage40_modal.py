@@ -907,6 +907,36 @@ fn main() -> i32 {
         "stage."
 
 
+def test_stage40_gate3_f1_shadow_suppression_includes_gpu_index_dispatch():
+    """Gate-3 type-design F1 backfill: H2 dispatch suppression must
+    apply uniformly across ALL early-fire builtin dispatch sites,
+    not just the modal/temporal/frame/tier family. Pre-fix, the
+    GPU-index dispatch (thread_idx / block_idx / block_dim and
+    their _x/_y/_z variants) silently shadowed the user fn even
+    when _register_fn had flagged it. Post-fix, the shadow
+    diagnostic is the ONLY error (no "only allowed inside
+    @kernel" cascade per call site)."""
+    src = """
+fn thread_idx() -> i32 { 7 }
+fn main() -> i32 { thread_idx() }
+"""
+    prog = parse(src, include_stdlib=True)
+    errs = typecheck(prog)
+    shadow_errs = [e for e in errs
+                   if "shadows a reserved builtin" in str(e)]
+    kernel_cascade_errs = [
+        e for e in errs
+        if "only allowed inside @kernel" in str(e)
+    ]
+    assert len(shadow_errs) == 1, \
+        f"expected 1 shadow error for fn thread_idx, got " \
+        f"{len(shadow_errs)}: {[str(e) for e in shadow_errs]}"
+    assert len(kernel_cascade_errs) == 0, \
+        f"expected 0 kernel-cascade errors after gate-3 F1 fix, " \
+        f"got {len(kernel_cascade_errs)}: " \
+        f"{[str(e) for e in kernel_cascade_errs]}"
+
+
 def test_stage40_gate2_medium1_typechecker_reentrancy_no_stale_shadows():
     """MEDIUM-1 backfill: re-running a TypeChecker instance must
     not carry stale `_shadowed_builtin_names` entries from a
