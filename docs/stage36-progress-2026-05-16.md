@@ -1338,3 +1338,84 @@ Inc-14 + post-Inc-13 3-lane audit is the right next step.
 (multi-output reverse-mode AD — perf win for rule systems with
 many learnable weights) and #5 (JAX-style pytrees — needed for
 real-shape rule systems but touches the type system).
+
+## Post-Inc-14 3-lane audit (2026-05-16)
+
+Combined post-Inc-13 + post-Inc-14 audit. Three lanes ran in
+parallel against `HEAD~3..HEAD` (Inc 12 catch-up + Inc 13 + Inc
+14). Reports in `docs/audit-stage36-postinc14-*.md`.
+
+**Result: NOT CLEAN — 1 HIGH, 2 MEDIUM, 3 LOW across lanes.**
+
+### Findings to address (active)
+
+- **M1 silent-failures (conf 88)** — `evidence_right` and
+  `trace_evidence` in `helixc/stdlib/provenance.hx` were written
+  Inc 13 against the two-parent contract. Inc 14 added
+  `register_derivation3`, and the helpers were not updated.
+  `evidence_right(triple_handle)` calls `parent_right_at` which
+  reads slot 1 — that's the MIDDLE of a triple, not the RIGHT.
+  Real correctness bug for any user combining the Inc 13 debug
+  helpers with the Inc 14 three-parent API. Fix: either rename
+  helpers to `pair_evidence_*` (explicit arity) or rewrite to
+  use `parent_at(h, 1)` / `parent_at(h, 2)` with an arity
+  parameter.
+- **M1 type-design (conf 80)** — strictness asymmetry across
+  builtin family. `register_derivation`, `register_derivation3`,
+  `parent_at` all enforce strict `TyPrim("i32")`. Legacy
+  `parent_left_at` / `parent_right_at` still use the loose
+  `_is_int_scalar` predicate, so `parent_left_at(some_i64)`
+  compiles cleanly and silently truncates. Fix: ~6 lines in
+  `helixc/frontend/typecheck.py` tightening the parent_*_at
+  arms to match the Inc 11 C1 family discipline.
+
+### Findings deferred (architectural)
+
+- **H1 silent-failures (conf 90)** — `parent_at(handle, slot)`
+  has no arity check, so `parent_at(two_parent_h, 2)` silently
+  reads the next record's left slot, and `parent_at(h, -1)`
+  shifts into a previous record. Inc 14's own ledger documents
+  this as a Phase-0 limitation (arity not tracked in handle).
+  Deferral matches L1 type-design's recommendation: add a
+  grep-able `# TODO(stage37-arity-in-handle)` marker now, defer
+  the handle-tagging redesign to Phase 1 / Stage 37.
+- **L1-L3 type-design** — architectural smells: parent_at vs
+  parent_left_at lowering paths (consolidate when next accessor
+  lands), ARENA_PUSH_TRIPLE-as-clone-of-PAIR (refactor to
+  parametric ARENA_PUSH_N if a 4-parent variant ever ships).
+- **L1-L3 code-review** — coverage tightening (negative
+  control for register_derivation3 AD-erasability, runtime
+  test for ARENA_PUSH_TRIPLE actual overflow path,
+  `has_evidence` doc-comment precision).
+
+### Aborted Inc 15 work (stashed, do not lose)
+
+A prior session started an Inc 15 implementation that
+introduced a nominal `TyDerivationHandle` type to address the
+M1 type-design finding (handle / source-id alias hazard). The
+working-tree edits to `helixc/frontend/typecheck.py`,
+`helixc/stdlib/provenance.hx`, and `helixc/ir/lower_ast.py`
+(adding `unhandle` lowering) broke 16 tests in
+`test_stage36_provenance.py` because the nominal type:
+- can't be `print_int`'d (broke `trace_evidence` stdout-format
+  tests)
+- can't participate in `0 - 1` sentinel comparisons (broke
+  `has_evidence` legacy form)
+- changes the typecheck error message format (broke
+  `test_*_typecheck_rejects_i64_handle` expectations)
+
+The work was stashed (`git stash list` entries 0 + 1) to
+preserve the design effort. Next session should either:
+(a) complete Inc 15 by updating the 16 affected tests to the
+new nominal contract, or (b) discard the nominal-type approach
+and address M1-type-design with a smaller in-place strictness
+fix on `parent_left_at`/`parent_right_at`.
+
+### Audit cycle status
+
+This is the first post-Inc-14 audit. Combined-audit-and-fix
+discipline per Stage 36 Inc 0 conventions: each MVP increment
+closes when a single combined audit returns clean. Inc 14 does
+NOT close yet — the M1 silent-failures (helpers lie for triple
+handles) is a real correctness bug that should be fixed in
+Inc 15.
