@@ -141,52 +141,79 @@ checker.
   Touches every Stage 1-35 codegen test; deserves its own scoped
   commit campaign, not a Stage 36 prep sweep.
 
-## Stage 36 Increments 1-5 SHIPPED (2026-05-16)
+## Stage 36 Increments 1-12 SHIPPED (2026-05-16)
 
 User-approved 2026-05-16: Stage 36 first deliverable is
 **provenance-typed neuro-symbolic primitives** (ROADMAP Tier 3 #10
-strategic differentiator vs JAX/Mojo/Triton). Five increments
-shipped in this session plus one dogfood program:
+strategic differentiator vs JAX/Mojo/Triton). Twelve increments
+shipped in this session plus three dogfood programs and three
+audit cycles closing 19/20 findings:
 
 | # | Commit | What landed |
 |---|--------|-------------|
 | 1 | 9e9b421 | `prove(value, source) -> Logic<T>` + `unwrap_logic(l) -> T` builtins. Logic<T> wrapper lowers to identity at IR (Phase-0 zero-overhead). |
 | 2 | c142ce0 | `derive(a, b)`, `and_logic`, `or_logic`, `not_logic`. Boolean ops on Logic<i32> via BIT_AND / BIT_OR / 1-a. |
 | 3 | fb36c51 | `xor_logic`, `implies_logic`, `eq_logic`, `if_logic`, `to_logic_bool`. Boolean algebra feature-complete. De Morgan's law verified end-to-end at runtime. |
-| 4 | de0b60b | `attach` + `detach` wired through IR as identity, unblocking `D<Logic<T>>` strategic composition end-to-end. 4 patterns runnable (D<i32>, D<Logic<i32>>, D<Logic> boolean compute, derive-as-rule). |
-| dogfood | 8784976 | `helixc/examples/dogfood_06_provenance_datalog.hx` — Datalog-shaped reasoning: grandparent rule + tautology check over Logic<i32>. ROADMAP advanced from 5 to 6 dogfood programs. Wired into `examples/run.py` as the `provenance` demo. |
-| 5 | 60c7b4a | Real two-parent provenance via arena side-table: `register_derivation(L, R)`, `parent_left_at(h)`, `parent_right_at(h)`. Lowers to ARENA_PUSH + ARENA_GET. Same program can prove a conclusion AND recover the evidence trail. |
+| 4 | de0b60b | `attach` + `detach` wired through IR as identity, unblocking `D<Logic<T>>` strategic composition end-to-end. |
+| dogfood 6 | 8784976 | `dogfood_06_provenance_datalog.hx` — Datalog-shaped reasoning: grandparent rule + tautology check. |
+| 5 | 60c7b4a | Real two-parent provenance via arena side-table: `register_derivation(L, R)`, `parent_left_at(h)`, `parent_right_at(h)`. |
+| 6 | 2a05132 | Fuzzy logic: `fuzzy_and/or/not` on Logic<f32> + AD chain rules in both forward and reverse mode. |
+| 7 | a7cb41c | `dogfood_07_provenance_sgd.hx` — first Helix program that learns a fuzzy-logic weight via SGD-through-propositional-logic. |
+| 8 | a451591 | `fuzzy_xor` + `fuzzy_implies` + `dogfood_08_two_param_fuzzy_rule.hx` (multi-param SGD over fuzzy rule). |
+| 9 | (audit cycle, 13 findings) | Inc 9 fix-sweep across 0e548f0 + 31810c3 + 9442842 + 8411cf2 + 9400789 + 61b50b2 + 707deff + e1ca1f9. Closed: bounds-check, 1-based handles, fuzzy clamp, AD-pure ergonomics, source-order, ∂/∂b coverage, inner-type strictness, to_logic_bool i32-strict, unwrap_logic recovery, ARENA_PUSH_PAIR atomic op, derive() now observable, prove flatten rejection, prove src strict-i32, lowerer return-None. |
+| dogfood 9 | 821592f + 9d78805 | `dogfood_09_knowledge_graph.hx` — chained-rule reasoner + parent_*_at evidence recovery + 8-invariant witness. |
+| 11 | (audit cycle, 5 findings) | 5c83860 + a76b954 — post-Inc-10 audit: derive/register_derivation removed from AD-pure set (Inc 9 C2 regressed Inc 9 B2), prove + register_derivation strict-i32, if_logic inner-type matching, parent_*_at None consistency. |
+| 12 | 4742128 + abef645 | Reverse-mode AD now rejects integer-valued boolean Logic ops in grad_rev paths (mirrors Inc 11 forward-mode guard). 6 new regression tests + 2 negative controls. |
 
 **Stage 36 progress ledger**: `docs/stage36-progress-2026-05-16.md`
-documents all 5 increments + Increment 6 plan (AD chain rules
-through Logic ops, genuinely larger work).
+documents all 12 increments. Three audit cycles also documented at
+`docs/audit-stage36-postinc8-*.md` (Inc 9) and
+`docs/audit-stage36-postinc10-*.md` (Inc 11).
 
-**Tests**: 31 passing in `helixc/tests/test_stage36_provenance.py`,
-8 typecheck-level tests in `helixc/tests/test_provenance.py`,
-1 dogfood runtime test in `helixc/tests/test_reflection.py`.
+**Tests**: 94 passing in `helixc/tests/test_stage36_provenance.py`
+(plus 21 in `test_provenance.py`, 3 dogfood-runtime tests in
+`test_reflection.py`). 502 total across the broader CLI+IR+
+provenance+Stage36+reflection+unsafe slice.
 
 **Self-host gate**: PASS at every increment commit (G2..G4 byte-
 identical, smoke programs all exit 42, validate ok).
 
-**Total Stage 36 surface area** (16 new typecheck-recognized
+**Total Stage 36 surface area** (23+ new typecheck-recognized
 builtins): prove, unwrap_logic, derive, and_logic, or_logic,
 not_logic, xor_logic, implies_logic, eq_logic, if_logic,
 to_logic_bool, register_derivation, parent_left_at, parent_right_at,
-plus the now-runnable attach + detach from Stage 24.
+fuzzy_and, fuzzy_or, fuzzy_not, fuzzy_xor, fuzzy_implies, plus the
+now-runnable attach + detach from Stage 24. New IR opcode
+`ARENA_PUSH_PAIR` for atomic provenance side-table writes.
+
+**Audit-fix scorecard across 3 cycles**: 19/20 findings closed.
+
+| Cycle | HIGH | MEDIUM | LOW | Total | Closed |
+|---|---|---|---|---|---|
+| Inc 9 (post-Inc-8) | 5 | 5 | 3 | 13 | 13/13 ✅ |
+| Inc 11 (post-Inc-10) | 2 | 2 | 2 | 6 | 5/6 (1 deferred) |
+| Inc 12 (Inc 11 B2 closure) | 0 | 1 | 0 | 1 | 1/1 ✅ |
 
 ### What's still missing from Stage 36
 
-1. **AD gradient flow through Logic ops** (Increment 6, planned).
-   `grad(loss)(...)` over `loss: Logic<f32> -> Logic<f32>` needs
-   chain rules registered for and_logic/or_logic/not_logic via
-   sigmoid-relaxation. Touches `helixc/frontend/grad_pass.py` and
-   `helixc/stdlib/autodiff_reverse.hx`. Genuinely larger than 1-5.
-2. **Auto-registration of derivations**. Today user code calls
-   `register_derivation` explicitly; combinators (`and_logic`,
-   `or_logic`) don't auto-record. Auto-registration would need
-   IR-level per-Logic<T> handle slots — a representation change.
-3. **Pretty-printing / debug observation** — print_provenance(l),
-   trace_evidence(l, depth) — useful but Phase-1 cosmetics.
+1. **Nominal handle wrapper type** (Inc 11 type-design A1 HIGH,
+   deferred). `register_derivation` returns bare `i32` which can be
+   silently aliased to source IDs (themselves `i32`). Fix needs a
+   new `TyDerivationHandle` TyPrim subclass so `parent_*_at` only
+   accepts handles and source IDs can't be passed by mistake.
+   Genuinely architectural.
+2. **Auto-registration via derive**. Inc 9 B2 made `derive(a, b)`
+   observable (ARENA_PUSH_PAIR), but the user-visible Logic<T>
+   value still doesn't carry the handle. A future increment could
+   thread an implicit handle through Logic<T> at runtime.
+3. **Logic<f64> precision variant** — `fuzzy_*` ops currently lock
+   to Logic<f32>. Extending to Logic<f64> would let user code do
+   scientific-grade fuzzy logic.
+4. **Multi-output reverse-mode AD** (Stage 35 backlog). Currently
+   `grad_rev(loss, k)` runs a separate pass per parameter index;
+   N× too expensive for rule systems with many learnable weights.
+5. **JAX-style pytrees** — `grad(loss)(model)` over a nested struct
+   of provenance-typed values. Required for real-shape rule systems.
 
 ## What Restart 64 Returned (CLEAN — gate 2/3)
 
