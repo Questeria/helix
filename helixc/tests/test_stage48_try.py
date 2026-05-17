@@ -268,11 +268,14 @@ fn main() -> i32 {
 # ============================================================
 
 
-def test_stage48_err_constructed_question_allowed():
-    """`Err(7)?` is degenerate (unconditional propagation in
-    Stage 49+; identity in Phase-0), but it's not a Phase-0
-    BUG — Stage 48 does not reject it. A dedicated lint can
-    catch it later if dogfooding surfaces it."""
+def test_stage48_closure_gate1_f2_err_constructed_question_rejects():
+    """Gate-1 F2 fix (HIGH): `r?` on `let r: Result<i32, i32>
+    = Err(99)` silently extracted the Err payload as Ok in
+    Phase-0 (no runtime tag, identity-lowered). Stage 49+
+    will add real propagation — but Phase-0 must REJECT to
+    avoid silent miscompilation. Same defect class as Stage
+    46 G2-F1's unwrap_ok-on-typed-Err. Mirrors the constructor-
+    provenance check at unwrap_ok/unwrap_err."""
     src = """
 fn helper() -> Result<i32, i32> {
     let r: Result<i32, i32> = Err(99);
@@ -284,15 +287,11 @@ fn main() -> i32 {
 }
 """
     prog = parse(src, include_stdlib=True)
-    # Stage 46 gate-2 catches unwrap_ok-on-typed-Err via the
-    # `_result_constructor_provenance` map. The `?` operator
-    # explicitly does NOT trigger that check — propagation is
-    # exactly the operator's purpose. Verify typecheck stays
-    # clean (the rest of the program is well-formed).
     errs = typecheck(prog)
-    # Filter out any provenance errors from OTHER calls; the
-    # only allowed pattern is "no errors mention `r? `".
-    try_errs = [e for e in errs if "?" in str(e)]
-    assert try_errs == [], \
-        f"`Err(...)?` must not raise a `?`-specific diagnostic, " \
+    # Stage 48 gate-1 F2: must reject with a `?`-specific
+    # diagnostic mentioning the constructor provenance.
+    try_errs = [e for e in errs
+                if "?" in str(e) and "constructed via Err" in str(e)]
+    assert try_errs, \
+        f"`Err(...)?` must reject with provenance diag, " \
         f"got {[str(e) for e in try_errs]}"

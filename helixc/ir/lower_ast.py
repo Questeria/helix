@@ -864,6 +864,11 @@ class Lowerer:
             # function, which forces Result into the fn signature.
             if ty.base == "Result" and len(ty.args) == 2:
                 return self._lower_type(ty.args[0])
+            # Stage 48 closure gate-1 LOW: future 2-parameter
+            # wrapper families needing the same type-position
+            # identity rule should be added here. The loud-fail
+            # raise below is the right discipline for families
+            # that escape struct-mono without an explicit arm.
             raise NotImplementedError(
                 f"unresolved generic type {ty.base}<...> reached IR "
                 f"lowering; run struct monomorphization first")

@@ -989,7 +989,11 @@ class TypeChecker:
                 hint=f"reserved builtins include modal/temporal/"
                 f"frame/tier intro+elim+transition verbs (e.g. "
                 f"into_*, from_*, confirm, act_on, forecast, "
-                f"world_to_robot); pick a different name",
+                f"world_to_robot), Result accessors (Ok, Err, "
+                f"unwrap_ok, etc.), and reserved internal "
+                f"builtins with a double-underscore prefix "
+                f"(e.g. __try, __arena_push); pick a different "
+                f"name",
             ))
             # Stage 40 closure gate-2 H2 fix (HIGH conf 92):
             # the "diagnostic alone gates the typecheck pass"
@@ -4488,6 +4492,10 @@ class TypeChecker:
                     # err_ty inferred-from-arg, ok_ty TyUnknown) is
                     # universally compatible per Stage 46 inference
                     # policy.
+                    # Stage 48 closure gate-1 LOW: `_compatible` is
+                    # symmetric in Phase-0; the argument-order here
+                    # would become meaningful once subtyping lands.
+                    # Today both directions yield the same answer.
                     if not self._compatible(operand_ty.err_ty,
                                             ret_ty.err_ty):
                         self.errors.append(TypeError_(
@@ -4501,6 +4509,52 @@ class TypeChecker:
                             "must match the function's own Err type",
                         ))
                         return TyUnknown(hint="try")
+                    # Stage 48 closure gate-1 silent-failure F2 fix
+                    # (HIGH): the `?` arm must consult
+                    # `_result_constructor_provenance` exactly as
+                    # `unwrap_ok` / `unwrap_err` do. Pre-fix,
+                    # `let r: Result<i32, i32> = Err(99); r?`
+                    # silently extracted the Err payload as if it
+                    # were Ok (no runtime tag yet, identity-lowered).
+                    # Post-fix: when the operand is a Name with
+                    # known "err" provenance, reject — this is a
+                    # statically-determinable wrong-arm case.
+                    # `Ok` provenance is benign: `?` on a known-Ok
+                    # value is identity, which is the correct
+                    # Phase-0 behavior.
+                    if (isinstance(expr.args[0], A.Name)
+                            and expr.args[0].name
+                                in self._result_constructor_provenance
+                            and self._result_constructor_provenance[
+                                expr.args[0].name] == "err"):
+                        self.errors.append(TypeError_(
+                            f"`?` applied to "
+                            f"{expr.args[0].name!r}, which was "
+                            f"constructed via Err() — Phase-0 has "
+                            f"no runtime Ok/Err tag yet, so this "
+                            f"would silently extract the Err "
+                            f"payload as Ok. Stage 49+ adds the "
+                            f"real propagation branch.",
+                            expr.span,
+                            hint="for now, return Err(...) directly "
+                            "from this function, or wait for the "
+                            "runtime tag in Stage 49+",
+                        ))
+                        return TyUnknown(hint="try")
+                    # Stage 48 closure gate-1 silent-failure F1
+                    # acknowledgement (HIGH, partial fix): for
+                    # operands whose Result variant is NOT
+                    # statically determinable (fn-call returns,
+                    # if-branches), Phase-0 identity-lowering can
+                    # silently extract an Err payload as Ok if the
+                    # call returned Err at runtime. This is a
+                    # known Phase-0 limitation that the Stage 49+
+                    # runtime tag will eliminate. We don't reject
+                    # these cases (would block legitimate `?`
+                    # usage); we document them inline. A future
+                    # static-analysis pass could flag function-
+                    # call operands with "may-return-Err" return
+                    # types as a soft warning. Stage 49+ work.
                     return operand_ty.ok_ty
                 if bn in ("is_ok", "is_err"):
                     if len(arg_tys) != 1:
