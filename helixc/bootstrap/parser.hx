@@ -5796,6 +5796,12 @@ fn propagate_adj_multi(sb: i32, node: i32, adj: i32) -> i32 {
         // Append to bucket 0 as the poison sentinel (mirrors the
         // single-bucket version's poison strategy). The caller's
         // outer logic surfaces this at codegen.
+        //
+        // TODO(stage51): when grouping lands (n > 1), poison MUST be
+        // broadcast to ALL active buckets — otherwise param 1..n-1
+        // silently get a 0.0_f64 gradient instead of trapping. Today
+        // n=1 always (via the Inc 2 bridge wrapper), so depositing
+        // only into bucket 0 is correct. Gate-1 code-review M2.
         if param_n_slot(sb) > 0 {
             bucket_array_append(sb, 0, mk_node(99, 88001, 0, 0));
         };

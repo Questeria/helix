@@ -109,9 +109,31 @@ Re-sequenced after Stage 46-47 closed:
   verification CLEAN. 48 Stage 49 tests + 78 Stage 46+48
   unchanged. Self-host cascade preserved. dogfood_16 + dogfood_17
   still exit 42.
-- **Stage 50** (next): bootstrap `grad_rev_all` single-walk port
-  (Tier 1 #3 close — Python side already done in Stage 36; this
-  ports the same algorithm to the in-Helix bootstrap compiler).
+- **Stage 50** (in flight 2026-05-17, Inc 1+2 SHIPPED, Inc 4
+  closure audits in progress): bootstrap `grad_rev_all`
+  infrastructure swap. Inc 1 (commit f4e94fc) added the multi-
+  bucket scratch infrastructure to parser.hx (param_n / param_
+  array / bucket_array_head/count/append/sum / param_idx_of /
+  propagate_adj_multi / differentiate_reverse_all). Inc 2
+  (commit 76b7735) swapped the production caller to the new
+  bucket_array path via the n=1 bridge wrapper
+  `differentiate_reverse_one_via_array`. Self-host cascade
+  G3..G4 byte-identical preserved. dogfood_05 binary_classifier
+  (uses grad_rev_all with 2 params) still exits 42; dogfood
+  graddescent (1-param) still exits 43.
+  Inc 3 (true grouping — one walk per consecutive same-loss
+  pending entry run) was DEFERRED to Stage 51 after scope
+  analysis — the 2-pass loop refactor is ~150 lines with subtle
+  deposit-order requirements that would consume multiple
+  cascading-defect closure cycles on Stage 50's single-stage
+  budget. Splitting makes the audit surface tight.
+- **Stage 51** (next, picks up Stage 50 Inc 3 deferral):
+  algorithmic switch — true single-walk grouping in the
+  grad_rev_all caller loop. With Inc 1+2's infrastructure
+  battle-tested, Stage 51's delta is the loop refactor itself.
+  Tier 1 #3 multi-output reverse-mode AD finally closes
+  end-to-end (Python side at Stage 36; bootstrap algorithmic
+  side at Stage 51).
 - **Stage 50** (proposed): Bootstrap `grad_rev_all` N-walk
   → single-walk port. Closes bootstrap side of Tier 1 #3.
   1 stage.
