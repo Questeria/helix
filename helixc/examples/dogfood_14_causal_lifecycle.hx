@@ -60,12 +60,15 @@ fn main() -> i32 {
     let p2: i32 = causal_lifecycle(14);
     let p3: i32 = causal_lifecycle(18);
 
-    let cs: i32 = cross_stack_known_cause(1);
+    // gate-1 LOW-1 fix: non-degenerate value (7) so an identity-
+    // laundering bug that mapped any input to 1 wouldn't silently
+    // pass the cross-stack probe.
+    let cs: i32 = cross_stack_known_cause(7);
 
     let p1_ok: i32 = if p1 == 10 { 1 } else { 0 };
     let p2_ok: i32 = if p2 == 14 { 1 } else { 0 };
     let p3_ok: i32 = if p3 == 18 { 1 } else { 0 };
-    let cs_ok: i32 = if cs == 1  { 1 } else { 0 };
+    let cs_ok: i32 = if cs == 7  { 1 } else { 0 };
 
     let all_ok: i32 = p1_ok * p2_ok * p3_ok * cs_ok;
     all_ok * (p1 + p2 + p3)

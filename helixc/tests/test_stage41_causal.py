@@ -351,3 +351,40 @@ fn main() -> i32 {
     assert typecheck(prog) == []
     elf = compile_module_to_elf(lower(prog))
     assert _run_elf(elf) == 42
+
+
+# ============================================================
+# Stage 41 closure gate-1 backfill tests:
+# F1 inner-is-shadowed parity (HIGH from silent-failure + type-
+# design lanes) — the cross-causal F1 guard must skip when the
+# inner from_X is a user-shadowed function. Mirrors the Stage 40
+# closure gate-3 H1 amendment.
+# ============================================================
+
+
+def test_stage41_gate1_f1_inner_is_shadowed_suppresses_launder_cascade():
+    """Pre-fix: shadowing `from_cause` and writing
+    `into_effect(from_cause(c))` produced 1 shadow + 1 arg-mismatch
+    + 1 spurious launder diagnostic (3 errors). Post-fix: the F1
+    launder check observes that the inner is shadowed and skips,
+    preserving the H2 "1 + 0 noise" invariant. The shadow error
+    is the ONE the user sees."""
+    src = """
+fn from_cause(x: i32) -> i32 { x }
+fn main() -> i32 {
+    let c: i32 = 42;
+    into_effect(from_cause(c));
+    0
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    errs = typecheck(prog)
+    shadow_errs = [e for e in errs
+                   if "shadows a reserved builtin" in str(e)]
+    launder_errs = [e for e in errs if "launders" in str(e)]
+    assert len(shadow_errs) == 1, \
+        f"expected exactly 1 shadow error, got {len(shadow_errs)}: " \
+        f"{[str(e) for e in shadow_errs]}"
+    assert len(launder_errs) == 0, \
+        f"F1 must not fire when inner is shadowed; got " \
+        f"{[str(e) for e in launder_errs]}"

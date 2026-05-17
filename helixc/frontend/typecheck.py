@@ -3764,6 +3764,43 @@ class TypeChecker:
                     ("joint", "independent"):
                         "use `isolate(j)` — the audited "
                         "Joint -> Independent causal collapse",
+                    # Stage 41 closure gate-1 LOW fix: safety-
+                    # anchored framing for the obviously-
+                    # incoherent reverse directions (an effect
+                    # does not retroactively become its own
+                    # cause). Stage 40 gate-3 LOW lesson applied:
+                    # generic "Phase-0 has no transition" framing
+                    # mis-suggests a future feature when the
+                    # direction is semantically nonsensical.
+                    ("effect", "cause"):
+                        "an effect does not retroactively become "
+                        "its own cause; if you mean to identify "
+                        "the upstream cause, recover it from the "
+                        "same provenance source rather than "
+                        "unwrap-rewrap the downstream value",
+                    ("joint", "cause"):
+                        "a joint observation is downstream of "
+                        "multiple causes; promoting it back to "
+                        "Cause<T> conflates aggregation with "
+                        "origination — re-derive the cause from "
+                        "the original provenance",
+                    ("independent", "cause"):
+                        "an Independent<T> value has been shown "
+                        "to have NO upstream; treating it as a "
+                        "Cause<T> contradicts that experimental "
+                        "finding",
+                    ("independent", "joint"):
+                        "Independent<T> means the experiment "
+                        "collapsed the multi-cause dependency; "
+                        "re-promoting to Joint<T> would require "
+                        "fresh evidence of dependency, not "
+                        "unwrap-rewrap",
+                    ("independent", "effect"):
+                        "an Independent<T> value's upstream is "
+                        "by construction empty; calling it an "
+                        "Effect<T> claims a downstream-of-"
+                        "something relationship that was just "
+                        "experimentally falsified",
                 }
                 if bn in _causal_intro:
                     if len(arg_tys) != 1:
@@ -3778,12 +3815,30 @@ class TypeChecker:
                     # (`into_X(from_Y(v))` with X != Y), with
                     # kind-specific hint pointing at the audited
                     # transition or noting Phase-0 deferral.
+                    # Stage 41 closure gate-1 type-design F1
+                    # PARITY FIX: mirror the Stage 40 closure
+                    # gate-3 H1 amendment to the cross-modal
+                    # guard. The `inner_is_shadowed` cascade-
+                    # suppression check must also fire here so
+                    # `into_effect(from_cause(v))` where `from_cause`
+                    # is user-shadowed doesn't produce 1 shadow +
+                    # 1 launder noise. Mirror the modal guard
+                    # at line 3643-3656 verbatim for the causal
+                    # surface.
+                    inner_is_shadowed = (
+                        len(expr.args) >= 1
+                        and isinstance(expr.args[0], A.Call)
+                        and isinstance(expr.args[0].callee, A.Name)
+                        and expr.args[0].callee.name
+                            in self._shadowed_builtin_names
+                    )
                     if (len(expr.args) >= 1
                             and isinstance(expr.args[0], A.Call)
                             and isinstance(expr.args[0].callee, A.Name)
                             and expr.args[0].callee.name
                                 in _causal_elim_kind
-                            and not isinstance(arg_tys[0], TyUnknown)):
+                            and not isinstance(arg_tys[0], TyUnknown)
+                            and not inner_is_shadowed):
                         source_kind = _causal_elim_kind[
                             expr.args[0].callee.name]
                         if source_kind != target_kind:
