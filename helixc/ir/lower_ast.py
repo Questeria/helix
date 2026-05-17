@@ -1958,9 +1958,17 @@ class Lowerer:
                 return self._lower_expr(expr.args[0])
             # Stage 36 Increment 5: real two-parent provenance via
             # arena side-table.
-            # register_derivation(l, r) emits two ARENA_PUSH ops and
-            # returns the arena index of the FIRST one (the user keeps
-            # this as the derivation handle).
+            #
+            # Stage 36 Inc 9 audit A2 (silent-failure lane) fix:
+            # register_derivation now returns (arena_index + 1) so
+            # handle 0 is reserved as the "null derivation" sentinel.
+            # Pre-fix, if a user stored handles in a side array
+            # initialized to 0, reading back 0 was indistinguishable
+            # from "derivation that happens to live at arena index 0"
+            # — silent corruption. Post-fix, handle 0 always means
+            # "no derivation" (parent_left_at(0) returns -1 via the
+            # existing bounds-check fix from A1, since 0 - 1 = -1
+            # fails the >= 0 check).
             if (isinstance(expr.callee, A.Name)
                     and expr.callee.name == "register_derivation"
                     and len(expr.args) == 2):
@@ -1968,16 +1976,18 @@ class Lowerer:
                 r = self._lower_expr(expr.args[1])
                 if l is None or r is None:
                     return l or r
-                # ARENA_PUSH returns the index where the value was pushed.
-                # The handle is the index of `l` (the first push). The
-                # second push for `r` lands at handle+1.
-                handle = self.builder.emit(
+                push_idx = self.builder.emit(
                     tir.OpKind.ARENA_PUSH, l,
                     result_ty=tir.TIRScalar("i32"))
                 self.builder.emit(
                     tir.OpKind.ARENA_PUSH, r,
                     result_ty=tir.TIRScalar("i32"))
-                return handle
+                # Return push_idx + 1 so handles are 1-based; 0 means
+                # "null". parent_*_at subtracts 1 before lookup.
+                one = self.builder.const_int(1)
+                return self.builder.emit(
+                    tir.OpKind.ADD, push_idx, one,
+                    result_ty=tir.TIRScalar("i32"))
             # Stage 36 Increment 9 post-Inc-8 audit A1 HIGH fix:
             # parent_left_at(idx) and parent_right_at(idx) previously
             # lowered to bare ARENA_GET with no bounds check. A user
@@ -2052,20 +2062,33 @@ class Lowerer:
                     tir.OpKind.SELECT, in_bounds, val, neg_one,
                     result_ty=tir.TIRScalar("i32"))
 
+            # Stage 36 Inc 9 audit A2 fix: parent_*_at subtract 1
+            # from the user-visible 1-based handle before arena lookup.
+            # Handle 0 (null sentinel) effectively becomes arena index
+            # -1 which falls through to the -1 OOB sentinel via the
+            # bounds-check from A1.
             if (isinstance(expr.callee, A.Name)
                     and expr.callee.name == "parent_left_at"
                     and len(expr.args) == 1):
                 idx = self._lower_expr(expr.args[0])
                 if idx is None:
                     return idx
-                return _safe_arena_get(idx, 0)
+                one = self.builder.const_int(1)
+                base_idx = self.builder.emit(
+                    tir.OpKind.SUB, idx, one,
+                    result_ty=tir.TIRScalar("i32"))
+                return _safe_arena_get(base_idx, 0)
             if (isinstance(expr.callee, A.Name)
                     and expr.callee.name == "parent_right_at"
                     and len(expr.args) == 1):
                 idx = self._lower_expr(expr.args[0])
                 if idx is None:
                     return idx
-                return _safe_arena_get(idx, 1)
+                one = self.builder.const_int(1)
+                base_idx = self.builder.emit(
+                    tir.OpKind.SUB, idx, one,
+                    result_ty=tir.TIRScalar("i32"))
+                return _safe_arena_get(base_idx, 1)
             # Stage 36 Increment 6: fuzzy logic operators over
             # Logic<f32>. Product semantics for AND, probabilistic OR.
             # All three lower to MUL/ADD/SUB so the existing AD chain

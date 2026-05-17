@@ -1111,6 +1111,81 @@ fn main() -> i32 {
         f"expected at least 1 unwrap_logic error, got {[str(e) for e in errs]}"
 
 
+# Stage 36 Inc 9 audit A2 (silent-failure lane) fix: register_derivation
+# returns 1-based handles so handle 0 is reserved as the "null
+# derivation" sentinel. Pre-fix, a default-zero handle stored in a
+# side array was indistinguishable from "derivation at arena index 0".
+
+
+def test_stage36_inc9_handle_is_one_based():
+    """First register_derivation returns handle 1 (not 0)."""
+    src = """
+fn main() -> i32 {
+    register_derivation(50, 60)
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    assert typecheck(prog) == []
+    elf = compile_module_to_elf(lower(prog))
+    rc = _run_elf(elf)
+    assert rc == 1, f"expected first handle = 1, got {rc}"
+
+
+def test_stage36_inc9_null_handle_zero_returns_sentinel():
+    """parent_left_at(0) on a HANDLE-0 input (the null-derivation
+    sentinel) returns -1 even if arena index 0 has valid content
+    (i.e., from struct lowering or another arena user)."""
+    src = """
+fn main() -> i32 {
+    // Push some content to arena index 0 via another path to
+    // simulate a non-empty arena where handle 0 must still be null.
+    let other = register_derivation(7, 8);
+    // other = 1 (1-based). parent_left_at(0) is the null-sentinel
+    // read — must return -1 even though arena index 0 holds 7.
+    let v: i32 = parent_left_at(0);
+    if v == 0 - 1 { 42 } else { 0 }
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    assert typecheck(prog) == []
+    elf = compile_module_to_elf(lower(prog))
+    rc = _run_elf(elf)
+    assert rc == 42, f"expected null-handle sentinel for handle 0, got {rc}"
+
+
+def test_stage36_inc9_handle_round_trip_still_works():
+    """Valid handle from register_derivation still recovers the
+    correct parent source IDs through the 1-based offset."""
+    src = """
+fn main() -> i32 {
+    let h = register_derivation(100, 200);
+    parent_left_at(h) + parent_right_at(h)
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    assert typecheck(prog) == []
+    elf = compile_module_to_elf(lower(prog))
+    rc = _run_elf(elf)
+    assert rc == 44, f"expected 300 mod 256 = 44, got {rc}"
+
+
+def test_stage36_inc9_two_handles_remain_independent():
+    """Two register_derivation calls produce distinct 1-based handles
+    (h1=1, h2=3) and reads from each don't cross-contaminate."""
+    src = """
+fn main() -> i32 {
+    let h1 = register_derivation(10, 20);
+    let h2 = register_derivation(30, 40);
+    parent_left_at(h1) + parent_right_at(h2)
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    assert typecheck(prog) == []
+    elf = compile_module_to_elf(lower(prog))
+    rc = _run_elf(elf)
+    assert rc == 50, f"expected 10 + 40, got {rc}"
+
+
 if __name__ == "__main__":
     import pytest
     raise SystemExit(pytest.main([__file__, "-v"]))
