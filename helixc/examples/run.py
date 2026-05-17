@@ -81,6 +81,11 @@ DEMOS: dict[str, dict] = {
         "title": "Knowledge-graph reasoner with provenance recovery (Stage 36 Inc 10)",
         "expects": "exit code 42  (3 facts + 2 chained grandparent rules + parent_*_at provenance recovery)",
     },
+    "memtiers": {
+        "file": "dogfood_10_memory_tiers.hx",
+        "title": "Memory-tier lifecycle reasoner (Stage 37 Inc 2)",
+        "expects": "exit code 42  (3 observations cycle through working->episodic->semantic->working + procedural sanity)",
+    },
 }
 
 

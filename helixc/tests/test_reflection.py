@@ -226,6 +226,19 @@ def test_dogfood_08_two_param_fuzzy_rule():
     assert compile_and_run(src) == 42
 
 
+def test_dogfood_10_memory_tiers():
+    # Stage 37 Increment 2 dogfood: memory-tier lifecycle reasoner.
+    # 3 observations flow through working -> episodic -> consolidate
+    # -> semantic -> recall -> working; procedural tier sanity check
+    # also exercised. Exit 42 iff all 4 binary witnesses pass AND
+    # the sum of recalled observations equals 42 (10 + 14 + 18).
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    p = os.path.join(proj_root, "helixc", "examples", "dogfood_10_memory_tiers.hx")
+    with open(p) as f:
+        src = f.read()
+    assert compile_and_run(src) == 42
+
+
 def test_dogfood_09_knowledge_graph():
     # Stage 36 Increment 10 dogfood: chained-rule knowledge graph.
     # 3 facts (parent edges) + 2 grandparent rules + provenance
