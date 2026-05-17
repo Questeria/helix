@@ -2747,7 +2747,7 @@ fn main() -> i32 {
     errs = typecheck(prog)
     msgs = [str(e) for e in errs]
     assert any("parent_at" in m and "must be exactly i32" in m
-               and "pre-Inc-14" in m and "silently truncated" in m
+               and "pre-Inc-15" in m and "silently truncated" in m
                for m in msgs), \
         f"parent_at i64 rejection must carry the family-standard remediation hint, got {msgs}"
 

@@ -3044,15 +3044,21 @@ class TypeChecker:
                     # the strict-i32 family without the family-standard
                     # "pre-Inc-N also accepted i64/u32/u64 but silently
                     # truncated" remediation hint. Use the same gated
-                    # helper as the rest of the family. Pre-Inc-14 the
-                    # generic `parent_at` did not exist; using the
-                    # `pre-Inc-14` label keeps the timeline accurate.
+                    # helper as the rest of the family.
+                    #
+                    # Stage 38 post-Inc-3 CR-003 fix (LOW, conf 82):
+                    # parent_at was introduced in Inc 14 using the loose
+                    # `_is_int_scalar` predicate, then tightened to
+                    # strict i32 in Inc 15. So the era during which it
+                    # silently truncated wider integers is exactly Inc
+                    # 14, and the strict-enforcement boundary is Inc
+                    # 15 — `pre-Inc-15` is the accurate hint label.
                     arg_types_ok = True
                     for i, t in enumerate(arg_tys):
                         if not (isinstance(t, TyPrim) and t.name == "i32"):
                             arg_types_ok = False
                             hint = self._strict_i32_truncation_hint(
-                                t, "pre-Inc-14", "arena read")
+                                t, "pre-Inc-15", "arena read")
                             self.errors.append(TypeError_(
                                 f"parent_at(handle, slot): arg "
                                 f"{'12'[i]} must be exactly i32, "
@@ -3185,7 +3191,16 @@ class TypeChecker:
                     "into_robot": "robot",
                     "into_camera": "camera",
                 }
-                if bn in _frame_intro and len(arg_tys) == 1:
+                # Stage 38 post-Inc-3 silent-failure F1 fix (HIGH, conf 95):
+                # gate on name FIRST, then arity, so wrong-arity calls emit
+                # a diagnostic instead of falling through to TyUnknown.
+                if bn in _frame_intro:
+                    if len(arg_tys) != 1:
+                        self.errors.append(TypeError_(
+                            f"{bn}() takes 1 argument, got {len(arg_tys)}",
+                            expr.span,
+                        ))
+                        return TyUnknown(hint=bn)
                     return TyFrame(frame=_frame_intro[bn],
                                    inner=arg_tys[0])
                 _frame_elim = {
@@ -3193,7 +3208,13 @@ class TypeChecker:
                     "from_robot": "robot",
                     "from_camera": "camera",
                 }
-                if bn in _frame_elim and len(arg_tys) == 1:
+                if bn in _frame_elim:
+                    if len(arg_tys) != 1:
+                        self.errors.append(TypeError_(
+                            f"{bn}() takes 1 argument, got {len(arg_tys)}",
+                            expr.span,
+                        ))
+                        return TyUnknown(hint=bn)
                     want = _frame_elim[bn]
                     if (isinstance(arg_tys[0], TyFrame)
                             and arg_tys[0].frame == want):
@@ -3220,7 +3241,13 @@ class TypeChecker:
                     "world_to_camera":  ("world",  "camera"),
                     "camera_to_world":  ("camera", "world"),
                 }
-                if bn in _frame_transforms and len(arg_tys) == 1:
+                if bn in _frame_transforms:
+                    if len(arg_tys) != 1:
+                        self.errors.append(TypeError_(
+                            f"{bn}() takes 1 argument, got {len(arg_tys)}",
+                            expr.span,
+                        ))
+                        return TyUnknown(hint=bn)
                     src_frame, dst_frame = _frame_transforms[bn]
                     if (isinstance(arg_tys[0], TyFrame)
                             and arg_tys[0].frame == src_frame):
@@ -4711,6 +4738,13 @@ class TypeChecker:
             return (target.tier == value_ty.tier
                     and self._refinement_shape_exact(
                         value_ty.inner, target.inner))
+        # Stage 38 post-Inc-3 type-design H2 fix (HIGH, conf 88):
+        # TyFrame must walk to its inner type so refinements under a
+        # frame wrapper are visible to the refinement-shape check.
+        if isinstance(target, TyFrame) and isinstance(value_ty, TyFrame):
+            return (target.frame == value_ty.frame
+                    and self._refinement_shape_exact(
+                        value_ty.inner, target.inner))
         if isinstance(target, TyTensor) and isinstance(value_ty, TyTensor):
             return (len(target.shape) == len(value_ty.shape)
                     and self._refinement_shape_exact(
@@ -5366,6 +5400,9 @@ class TypeChecker:
         if isinstance(a, TyMemTier) and isinstance(b, TyMemTier):
             return (a.tier == b.tier
                     and self._refinement_shape_exact(a.inner, b.inner))
+        if isinstance(a, TyFrame) and isinstance(b, TyFrame):
+            return (a.frame == b.frame
+                    and self._refinement_shape_exact(a.inner, b.inner))
         if isinstance(a, TyTensor) and isinstance(b, TyTensor):
             return (len(a.shape) == len(b.shape)
                     and self._refinement_shape_exact(a.dtype, b.dtype)
@@ -5408,6 +5445,8 @@ class TypeChecker:
             return TyQuote(self._erase_refinement(ty.inner))
         if isinstance(ty, TyMemTier):
             return TyMemTier(ty.tier, self._erase_refinement(ty.inner))
+        if isinstance(ty, TyFrame):
+            return TyFrame(ty.frame, self._erase_refinement(ty.inner))
         if isinstance(ty, TyTensor):
             return TyTensor(
                 self._erase_refinement(ty.dtype), ty.shape, ty.device,
@@ -5518,6 +5557,8 @@ class TypeChecker:
             return self._contains_refinement(ty.inner, _seen_structs)
         if isinstance(ty, TyMemTier):
             return self._contains_refinement(ty.inner, _seen_structs)
+        if isinstance(ty, TyFrame):
+            return self._contains_refinement(ty.inner, _seen_structs)
         if isinstance(ty, TyTensor):
             return (self._contains_refinement(ty.dtype, _seen_structs)
                     or any(self._contains_refinement(s, _seen_structs)
@@ -5535,7 +5576,7 @@ class TypeChecker:
     def _is_refinement_container(self, ty: Type) -> bool:
         return isinstance(ty, (
             TyArray, TyTuple, TyRef, TyPtr, TyFn, TyDiff, TyLogic, TyQuote,
-            TyMemTier, TyTensor, TyTile,
+            TyMemTier, TyFrame, TyTensor, TyTile,
         ))
 
     def _contains_refined_function(self, ty: Type) -> bool:
@@ -5556,6 +5597,8 @@ class TypeChecker:
         if isinstance(ty, TyQuote):
             return self._contains_refined_function(ty.inner)
         if isinstance(ty, TyMemTier):
+            return self._contains_refined_function(ty.inner)
+        if isinstance(ty, TyFrame):
             return self._contains_refined_function(ty.inner)
         if isinstance(ty, TyTensor):
             return (self._contains_refined_function(ty.dtype)
@@ -6532,6 +6575,15 @@ class TypeChecker:
         if isinstance(a, TyMemTier) and isinstance(b, TyMemTier):
             return a.tier == b.tier and self._compatible(a.inner, b.inner)
         if isinstance(a, TyMemTier) or isinstance(b, TyMemTier):
+            return False
+        # Stage 38 post-Inc-3 type-design H1 fix (HIGH, conf 90):
+        # TyFrame wrapper arm. Cross-frame inputs are caught by the
+        # dataclass-equality fallthrough, but refined/generic/shape-
+        # symbolic inners need the explicit recursive `_compatible`
+        # delegation that every other wrapper has. Mirrors TyMemTier.
+        if isinstance(a, TyFrame) and isinstance(b, TyFrame):
+            return a.frame == b.frame and self._compatible(a.inner, b.inner)
+        if isinstance(a, TyFrame) or isinstance(b, TyFrame):
             return False
         # Audit 28.8 cycle 2 B:C3: Quote<T> ~ Quote<U> iff T ~ U.
         # Reject Quote<T> ~ T (raw value passed where Quote expected)

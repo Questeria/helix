@@ -235,6 +235,207 @@ def test_stage38_inc2_all_6_transforms_reject_wrong_source():
             f"{expected_want!r} naming {transform}, got {[str(e) for e in errs]}"
 
 
+# Stage 38 post-Inc-3 audit fix-sweep canaries.
+# Three HIGH fixes (type-design H1+H2, silent-failure F1) + 1 f32
+# coverage (code-review CR-002).
+
+
+def test_stage38_postinc3_into_world_wrong_arity_zero_args_diagnoses():
+    """Silent-failure F1 (HIGH, conf 95): wrong-arity calls must emit
+    a diagnostic, not silently typecheck to TyUnknown and blow up at
+    IR lowering. Zero args."""
+    src = "fn main() -> i32 { from_world(into_world()) }"
+    prog = parse(src, include_stdlib=True)
+    errs = typecheck(prog)
+    msgs = [str(e) for e in errs]
+    assert any("into_world" in m and "takes 1 argument" in m for m in msgs), \
+        f"into_world() zero-args must diagnose, got {msgs}"
+
+
+def test_stage38_postinc3_world_to_robot_wrong_arity_two_args_diagnoses():
+    """Silent-failure F1 (HIGH, conf 95): cross-frame transforms also
+    catch the wrong-arity case (originally fell through to TyUnknown)."""
+    src = """
+fn main() -> i32 {
+    let w: WorldFrame<i32> = into_world(42);
+    from_robot(world_to_robot(w, w))
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    errs = typecheck(prog)
+    msgs = [str(e) for e in errs]
+    assert any("world_to_robot" in m and "takes 1 argument" in m
+               for m in msgs), \
+        f"world_to_robot(w, w) must diagnose 2-arg call, got {msgs}"
+
+
+def test_stage38_postinc3_from_camera_wrong_arity_zero_args_diagnoses():
+    """Silent-failure F1 (HIGH, conf 95): eliminators too."""
+    src = "fn main() -> i32 { from_camera() }"
+    prog = parse(src, include_stdlib=True)
+    errs = typecheck(prog)
+    msgs = [str(e) for e in errs]
+    assert any("from_camera" in m and "takes 1 argument" in m
+               for m in msgs), \
+        f"from_camera() must diagnose, got {msgs}"
+
+
+def test_stage38_postinc3_frame_param_rejects_bare_inner():
+    """Type-design H1 (HIGH, conf 90): TyFrame in _compatible
+    correctly rejects bare-i32 where WorldFrame<i32> expected."""
+    src = """
+fn takes_world(w: WorldFrame<i32>) -> i32 { from_world(w) }
+fn main() -> i32 { takes_world(42) }
+"""
+    prog = parse(src, include_stdlib=True)
+    errs = typecheck(prog)
+    assert errs != [], \
+        "takes_world(42) — bare i32 passed where WorldFrame<i32> expected — must fail typecheck"
+
+
+def test_stage38_postinc3_frame_param_rejects_cross_frame():
+    """Type-design H1 (HIGH, conf 90): TyFrame in _compatible
+    correctly rejects RobotFrame<i32> where WorldFrame<i32>
+    expected at the call boundary."""
+    src = """
+fn takes_world(w: WorldFrame<i32>) -> i32 { from_world(w) }
+fn main() -> i32 {
+    let r: RobotFrame<i32> = into_robot(42);
+    takes_world(r)
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    errs = typecheck(prog)
+    assert errs != [], \
+        "takes_world(robot_frame) must fail typecheck (cross-frame at call boundary)"
+
+
+def test_stage38_postinc3_frame_param_same_frame_compatible():
+    """Type-design H1 (HIGH, conf 90): TyFrame in _compatible permits
+    matching-frame matching-inner at the call boundary (positive
+    control for the rejection tests above).
+
+    Typecheck-only: compiling a `WorldFrame<i32>` function-parameter
+    signature to ELF would require a TyGeneric arm in
+    `_lower_type` — the same gap exists for Stage 37 tier params
+    (no compile-to-ELF test exercises `fn(w: WorkingMem<i32>)`). That
+    arm is Stage 39+ work, not Stage 38 closure-gate work."""
+    src = """
+fn takes_world(w: WorldFrame<i32>) -> i32 { from_world(w) }
+fn main() -> i32 {
+    let w: WorldFrame<i32> = into_world(42);
+    takes_world(w)
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    assert typecheck(prog) == [], \
+        f"matching WorldFrame<i32> must typecheck, got {[str(e) for e in typecheck(prog)]}"
+
+
+def test_stage38_postinc3_is_refinement_container_includes_tyframe():
+    """Type-design H2 (HIGH, conf 88): TyFrame in
+    _is_refinement_container — refinements under a frame wrapper
+    are now visible to the refinement-container predicate."""
+    from helixc.frontend.typecheck import TyFrame, TyPrim
+    tc = TypeChecker(parse("fn main() -> i32 { 0 }"))
+    assert tc._is_refinement_container(TyFrame("world", TyPrim("i32"))), \
+        "TyFrame must be a refinement container (H2 fix)"
+
+
+def test_stage38_postinc3_f32_inner_propagates_through_transforms():
+    """Code-review CR-002 (MEDIUM, conf 85): zero f32 coverage was
+    flagged. This pins that WorldFrame<f32> round-trips through a
+    cross-frame transform chain and back."""
+    src = """
+fn main() -> i32 {
+    let wf: WorldFrame<f32> = into_world(1.5);
+    let cf: CameraFrame<f32> = world_to_camera(wf);
+    let rf: RobotFrame<f32> = camera_to_robot(cf);
+    let wf2: WorldFrame<f32> = robot_to_world(rf);
+    let v: f32 = from_world(wf2);
+    let cmp: i32 = if v == 1.5 { 42 } else { 0 };
+    cmp
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    assert typecheck(prog) == [], \
+        f"WorldFrame<f32> chain must typecheck, got {[str(e) for e in typecheck(prog)]}"
+    elf = compile_module_to_elf(lower(prog))
+    assert _run_elf(elf) == 42
+
+
+# Stage 38 post-Inc-3 additional canaries — F2 chain-rule + deeper H2.
+
+
+def test_stage38_postinc3_forward_ad_through_frame_identity():
+    """Silent-failure F2 (MEDIUM, conf 90): grad through frame ops must
+    return the inner derivative, not raise opaque-call NotImplementedError.
+    Pre-fix the call hit autodiff.py:1058 ('forward-mode AD does not
+    support opaque call into_world')."""
+    from helixc.frontend import ast_nodes as A
+    from helixc.frontend.autodiff import differentiate, fmt
+    src = "fn _f(x: f32) -> f32 { from_world(into_world(x)) }"
+    prog = parse(src, include_stdlib=True)
+    fn = next(it for it in prog.items if isinstance(it, A.FnDecl))
+    body = fn.body.final_expr
+    assert body is not None
+    deriv = differentiate(body, "x")
+    assert fmt(deriv) == "1", \
+        f"d(from_world(into_world(x)))/dx must be 1, got {fmt(deriv)}"
+
+
+def test_stage38_postinc3_forward_ad_through_cross_frame_chain():
+    """F2: cross-frame transforms also identity-AD; constant survives."""
+    from helixc.frontend import ast_nodes as A
+    from helixc.frontend.autodiff import differentiate, fmt
+    src = ("fn _f(x: f32) -> f32 { "
+           "from_robot(world_to_robot(into_world(x))) * 2.0 }")
+    prog = parse(src, include_stdlib=True)
+    fn = next(it for it in prog.items if isinstance(it, A.FnDecl))
+    body = fn.body.final_expr
+    assert body is not None
+    deriv = differentiate(body, "x")
+    out = fmt(deriv)
+    assert "2" in out, \
+        f"d(2*from_robot(world_to_robot(into_world(x))))/dx must contain 2, got {out}"
+
+
+def test_stage38_postinc3_reverse_ad_through_frame_identity():
+    """F2 reverse arm: adjoint must flow through frame wrapper."""
+    from helixc.frontend import ast_nodes as A
+    from helixc.frontend.autodiff import fmt
+    from helixc.frontend.autodiff_reverse import differentiate_reverse
+    src = "fn f(x: f32) -> f32 { from_world(into_world(x)) }"
+    prog = parse(src, include_stdlib=True)
+    fn = next(it for it in prog.items if isinstance(it, A.FnDecl))
+    grads = differentiate_reverse(fn.body, ["x"])
+    assert fmt(grads["x"]) == "1", \
+        f"grad_rev(from_world(into_world(x)))['x'] must be 1, got {fmt(grads['x'])}"
+
+
+def test_stage38_postinc3_refined_inner_frame_param_typechecks():
+    """Type-design H2 deeper coverage: a function parameter typed as
+    WorldFrame<Probability> must accept a WorldFrame<Probability>
+    argument. Pre-fix _refinement_shape_exact missed the TyFrame arm,
+    so refined-inner frame parameters became uncallable."""
+    src = """
+type Probability = f64 where 0.0 <= self <= 1.0;
+
+fn takes_world_prob(w: WorldFrame<Probability>) -> WorldFrame<Probability> { w }
+
+fn main() -> i32 {
+    let p: Probability = 0.5_f64;
+    let w: WorldFrame<Probability> = into_world(p);
+    let _ = takes_world_prob(w);
+    0
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    errs = typecheck(prog)
+    assert errs == [], \
+        f"refined-inner frame param must typecheck post-H2, got {[str(e) for e in errs]}"
+
+
 if __name__ == "__main__":
     import pytest
     raise SystemExit(pytest.main([__file__, "-v"]))

@@ -81,14 +81,16 @@ AD_KNOWN_PURE_CALLS = {
     "into_working", "into_episodic", "into_semantic", "into_procedural",
     "unwrap_working", "unwrap_episodic", "unwrap_semantic", "unwrap_procedural",
     "consolidate", "recall",
-    # Stage 38 Inc 1 — spatial-frame identity-lowerings.
-    # Same Phase-0 zero-overhead pattern as Stage 37 tier ops.
-    # Added preemptively so the Stage 37 closure gate-1 LOW
-    # finding (S37-CLEAN1-001) doesn't recur for frames.
+    # Stage 38 Inc 1 + Inc 2 — spatial-frame identity-lowerings.
+    # AD_KNOWN_PURE_CALLS governs let-erasability (see
+    # _is_ad_erasable_expr). Stage 38 post-Inc-3 silent-failure F2 fix
+    # additionally installs identity chain rules for the same 12 names
+    # in both forward (_diff_call_chain_rule) and reverse (_propagate)
+    # via _FRAME_IDENTITY_AD_NAMES — so `grad(use_frame)` now flows
+    # gradients through the wrapper rather than raising the opaque-call
+    # catchall.
     "into_world", "into_robot", "into_camera",
     "from_world", "from_robot", "from_camera",
-    # Stage 38 Inc 2 — cross-frame transforms (all 6 pairwise
-    # directions). Also identity-lowered; preemptively AD-pure.
     "world_to_robot", "robot_to_world",
     "robot_to_camera", "camera_to_robot",
     "world_to_camera", "camera_to_world",
@@ -143,6 +145,25 @@ AD_INTEGER_VALUED_LOGIC = frozenset({
     "and_logic", "or_logic", "not_logic",
     "xor_logic", "implies_logic", "eq_logic", "if_logic",
     "to_logic_bool",
+})
+
+
+# Stage 38 post-Inc-3 silent-failure F2 fix (MEDIUM, conf 90):
+# the 12 frame builtins are identity-lowered at IR (the wrapper is
+# a compile-time tag; the runtime value passes through unchanged).
+# The chain rule for an identity wrapper IS identity:
+# `d(into_world(u))/dx = du/dx`. Pre-fix the opaque-call catchall at
+# autodiff.py:1058 / autodiff_reverse.py:683 raised
+# NotImplementedError on any `grad(use_frame)` site, contradicting
+# the AD-pure registration's implied "frame ops are differentiable"
+# contract. Tier ops (Stage 37) still raise; a future increment may
+# backfill the same arm there once the symmetric question is settled.
+_FRAME_IDENTITY_AD_NAMES = frozenset({
+    "into_world", "into_robot", "into_camera",
+    "from_world", "from_robot", "from_camera",
+    "world_to_robot", "robot_to_world",
+    "robot_to_camera", "camera_to_robot",
+    "world_to_camera", "camera_to_world",
 })
 
 
@@ -1246,6 +1267,11 @@ def _diff_call_chain_rule(call: A.Call, var: str,
                 "register_derivation for dynamic source tags so AD "
                 "can statically see the tag is non-differentiable"
             )
+        return _diff(call.args[0], var)
+    # Stage 38 post-Inc-3 silent-failure F2 fix (MEDIUM): frame
+    # identity wrappers — chain rule is identity on the single arg.
+    if (call.callee.name in _FRAME_IDENTITY_AD_NAMES
+            and len(call.args) == 1):
         return _diff(call.args[0], var)
     if len(call.args) != 1:
         return None
