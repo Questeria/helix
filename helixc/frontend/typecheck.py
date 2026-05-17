@@ -2752,62 +2752,69 @@ class TypeChecker:
                     if isinstance(arg_tys[0], TyLogic):
                         return arg_tys[0]
                     return TyLogic(inner=arg_tys[0])
+                # Stage 36 Inc 9 audit A1 HIGH (type-design lane) fix:
+                # tighten boolean ops to require Logic<i32> inner. The
+                # pre-fix isinstance(t, TyLogic) check accepted any
+                # Logic<T>, then unconditionally lowered to BIT_AND/OR
+                # which is wrong for non-i32 operands. The fuzzy-op
+                # block below got the symmetric fix (require Logic<f32>).
+                def _is_logic_of(ty, prim_name):
+                    return (isinstance(ty, TyLogic)
+                            and isinstance(ty.inner, TyPrim)
+                            and ty.inner.name == prim_name)
+
                 # and_logic(a: Logic<i32>, b: Logic<i32>) -> Logic<i32>
-                # — boolean AND on provenance-tagged truth values. The
-                # result is the integer min (0/1 truth value); provenance
-                # is taken from `a` in Phase-0.
+                # — boolean AND on provenance-tagged truth values.
                 if bn == "and_logic" and len(arg_tys) == 2:
                     for i, t in enumerate(arg_tys):
-                        if not isinstance(t, TyLogic):
+                        if not _is_logic_of(t, "i32"):
                             self.errors.append(TypeError_(
                                 f"and_logic(a, b): arg {'ab'[i]} must be "
                                 f"Logic<i32>, got {self._fmt(t)} [trap 24100]",
                                 expr.span,
                             ))
-                    if (isinstance(arg_tys[0], TyLogic)
-                            and isinstance(arg_tys[1], TyLogic)):
+                    if (_is_logic_of(arg_tys[0], "i32")
+                            and _is_logic_of(arg_tys[1], "i32")):
                         return arg_tys[0]
                     return TyLogic(inner=TyPrim("i32"))
                 # or_logic(a: Logic<i32>, b: Logic<i32>) -> Logic<i32>
-                # — boolean OR on provenance-tagged truth values.
                 if bn == "or_logic" and len(arg_tys) == 2:
                     for i, t in enumerate(arg_tys):
-                        if not isinstance(t, TyLogic):
+                        if not _is_logic_of(t, "i32"):
                             self.errors.append(TypeError_(
                                 f"or_logic(a, b): arg {'ab'[i]} must be "
                                 f"Logic<i32>, got {self._fmt(t)} [trap 24100]",
                                 expr.span,
                             ))
-                    if (isinstance(arg_tys[0], TyLogic)
-                            and isinstance(arg_tys[1], TyLogic)):
+                    if (_is_logic_of(arg_tys[0], "i32")
+                            and _is_logic_of(arg_tys[1], "i32")):
                         return arg_tys[0]
                     return TyLogic(inner=TyPrim("i32"))
-                # not_logic(a: Logic<i32>) -> Logic<i32> — boolean NOT,
-                # provenance preserved (single-parent).
+                # not_logic(a: Logic<i32>) -> Logic<i32>
                 if bn == "not_logic" and len(arg_tys) == 1:
-                    if not isinstance(arg_tys[0], TyLogic):
+                    if not _is_logic_of(arg_tys[0], "i32"):
                         self.errors.append(TypeError_(
                             f"not_logic(a): arg must be Logic<i32>, got "
                             f"{self._fmt(arg_tys[0])} [trap 24100]",
                             expr.span,
                         ))
-                    if isinstance(arg_tys[0], TyLogic):
+                    if _is_logic_of(arg_tys[0], "i32"):
                         return arg_tys[0]
                     return TyLogic(inner=TyPrim("i32"))
                 # Stage 36 Increment 3: boolean-algebra completeness.
-                # xor_logic, implies_logic, eq_logic are all derived
-                # operators on Logic<i32> truth values.
+                # xor_logic / implies_logic / eq_logic all require
+                # Logic<i32> (consistent with and/or/not above).
                 if bn in ("xor_logic", "implies_logic", "eq_logic") \
                         and len(arg_tys) == 2:
                     for i, t in enumerate(arg_tys):
-                        if not isinstance(t, TyLogic):
+                        if not _is_logic_of(t, "i32"):
                             self.errors.append(TypeError_(
                                 f"{bn}(a, b): arg {'ab'[i]} must be "
                                 f"Logic<i32>, got {self._fmt(t)} [trap 24100]",
                                 expr.span,
                             ))
-                    if (isinstance(arg_tys[0], TyLogic)
-                            and isinstance(arg_tys[1], TyLogic)):
+                    if (_is_logic_of(arg_tys[0], "i32")
+                            and _is_logic_of(arg_tys[1], "i32")):
                         return arg_tys[0]
                     return TyLogic(inner=TyPrim("i32"))
                 # if_logic(cond: Logic<i32>, then_val: Logic<T>,
@@ -2879,25 +2886,25 @@ class TypeChecker:
                 # symbolic AD without overhauling the AD passes.
                 if bn in ("fuzzy_and", "fuzzy_or") and len(arg_tys) == 2:
                     for i, t in enumerate(arg_tys):
-                        if not isinstance(t, TyLogic):
+                        if not _is_logic_of(t, "f32"):
                             self.errors.append(TypeError_(
                                 f"{bn}(a, b): arg {'ab'[i]} must be "
                                 f"Logic<f32>, got {self._fmt(t)} "
                                 f"[trap 24100]",
                                 expr.span,
                             ))
-                    if (isinstance(arg_tys[0], TyLogic)
-                            and isinstance(arg_tys[1], TyLogic)):
+                    if (_is_logic_of(arg_tys[0], "f32")
+                            and _is_logic_of(arg_tys[1], "f32")):
                         return arg_tys[0]
                     return TyLogic(inner=TyPrim("f32"))
                 if bn == "fuzzy_not" and len(arg_tys) == 1:
-                    if not isinstance(arg_tys[0], TyLogic):
+                    if not _is_logic_of(arg_tys[0], "f32"):
                         self.errors.append(TypeError_(
                             f"fuzzy_not(a): arg must be Logic<f32>, got "
                             f"{self._fmt(arg_tys[0])} [trap 24100]",
                             expr.span,
                         ))
-                    if isinstance(arg_tys[0], TyLogic):
+                    if _is_logic_of(arg_tys[0], "f32"):
                         return arg_tys[0]
                     return TyLogic(inner=TyPrim("f32"))
                 # Stage 36 Increment 8: round out the fuzzy algebra.
@@ -2909,15 +2916,15 @@ class TypeChecker:
                 if bn in ("fuzzy_xor", "fuzzy_implies") \
                         and len(arg_tys) == 2:
                     for i, t in enumerate(arg_tys):
-                        if not isinstance(t, TyLogic):
+                        if not _is_logic_of(t, "f32"):
                             self.errors.append(TypeError_(
                                 f"{bn}(a, b): arg {'ab'[i]} must be "
                                 f"Logic<f32>, got {self._fmt(t)} "
                                 f"[trap 24100]",
                                 expr.span,
                             ))
-                    if (isinstance(arg_tys[0], TyLogic)
-                            and isinstance(arg_tys[1], TyLogic)):
+                    if (_is_logic_of(arg_tys[0], "f32")
+                            and _is_logic_of(arg_tys[1], "f32")):
                         return arg_tys[0]
                     return TyLogic(inner=TyPrim("f32"))
                 if bn == "consolidate" and len(arg_tys) == 1:

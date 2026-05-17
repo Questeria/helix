@@ -985,6 +985,75 @@ fn main() -> i32 {
     assert rc == 42, f"derive(a, b) should return a's value, got {rc}"
 
 
+# Stage 36 Inc 9 audit A1 (type-design lane) fix: tighten boolean
+# and fuzzy ops to inspect the Logic<T> inner type. Pre-fix accepted
+# any Logic<T>, then lowered to ops semantically wrong for the
+# inner type (e.g., fuzzy_and on Logic<i32> lowered to f32 MUL).
+
+
+def test_stage36_inc9_fuzzy_and_rejects_logic_i32():
+    """fuzzy_and requires Logic<f32>; Logic<i32> input is a
+    trap-24100 boundary violation per Inc 9 type-design A1 fix."""
+    src = """
+fn main() -> i32 {
+    let a: Logic<i32> = prove(1, 0);
+    let b: Logic<i32> = prove(1, 0);
+    unwrap_logic(fuzzy_and(a, b))
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    errs = typecheck(prog)
+    assert any("Logic<f32>" in str(e) and "24100" in str(e) for e in errs), \
+        f"expected Logic<f32> + trap 24100 error, got {[str(e) for e in errs]}"
+
+
+def test_stage36_inc9_and_logic_rejects_logic_f32():
+    """and_logic requires Logic<i32>; Logic<f32> input is a
+    trap-24100 boundary violation per Inc 9 type-design A1 fix."""
+    src = """
+fn main() -> i32 {
+    let a: Logic<f32> = prove(1.0_f32, 0);
+    let b: Logic<f32> = prove(1.0_f32, 0);
+    unwrap_logic(and_logic(a, b))
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    errs = typecheck(prog)
+    assert any("Logic<i32>" in str(e) and "24100" in str(e) for e in errs), \
+        f"expected Logic<i32> + trap 24100 error, got {[str(e) for e in errs]}"
+
+
+def test_stage36_inc9_fuzzy_xor_rejects_logic_i32():
+    """fuzzy_xor (Inc 8) also requires Logic<f32> after the Inc 9
+    type-design A1 fix."""
+    src = """
+fn main() -> i32 {
+    let a: Logic<i32> = prove(1, 0);
+    let b: Logic<i32> = prove(1, 0);
+    unwrap_logic(fuzzy_xor(a, b))
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    errs = typecheck(prog)
+    assert any("Logic<f32>" in str(e) for e in errs), \
+        f"expected Logic<f32> error, got {[str(e) for e in errs]}"
+
+
+def test_stage36_inc9_xor_logic_rejects_logic_f32():
+    """xor_logic requires Logic<i32>; Logic<f32> is now rejected."""
+    src = """
+fn main() -> i32 {
+    let a: Logic<f32> = prove(1.0_f32, 0);
+    let b: Logic<f32> = prove(1.0_f32, 0);
+    unwrap_logic(xor_logic(a, b))
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    errs = typecheck(prog)
+    assert any("Logic<i32>" in str(e) for e in errs), \
+        f"expected Logic<i32> error, got {[str(e) for e in errs]}"
+
+
 if __name__ == "__main__":
     import pytest
     raise SystemExit(pytest.main([__file__, "-v"]))
