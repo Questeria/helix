@@ -883,13 +883,21 @@ fn main() -> i32 {
         f"{[str(e) for e in launder_errs]}"
 
 
-def test_stage40_f1_known_limitation_let_bypass():
-    """Documents the F1 syntactic-guard limitation: let-binding
-    decomposes the inline pattern and bypasses the guard. Phase-0
-    known limitation; a Stage-41+ taint-tracking pass would close
-    this by propagating Uncertain-origin through bindings. This
-    test PINS the limitation so a future stage can flip the
-    assertion to confirm closure."""
+def test_stage40_f1_let_bypass_closed_by_stage52_taint_tracking():
+    """Stage 40 closure gate-1 H1 had documented the F1 syntactic-
+    guard limitation as "let-binding decomposes the inline pattern
+    and bypasses the guard. Phase-0 known limitation; a Stage-41+
+    taint-tracking pass would close this by propagating Uncertain-
+    origin through bindings."
+
+    Stage 52 Inc 1 CLOSED that limitation. The new
+    `_modal_origin_provenance` map (parallel to Stage 46's
+    `_result_constructor_provenance`) records when a var is bound
+    to a `from_X(...)` call. The F1 launder guard at `into_Y(...)`
+    sites consults the map at the Name operand branch. The
+    let-binding bypass now produces a diagnostic naming the
+    laundering pattern + the legitimate epistemic-upgrade hint
+    (same structure as the inline-form diagnostic)."""
     src = """
 fn main() -> i32 {
     let u: Uncertain<i32> = into_uncertain(42);
@@ -900,11 +908,20 @@ fn main() -> i32 {
 """
     prog = parse(src, include_stdlib=True)
     errs = typecheck(prog)
-    assert errs == [], \
-        "F1 limitation: let-binding currently bypasses the " \
-        "syntactic guard. Documented Phase-0 known limit; flip " \
-        "this assertion when taint-tracking lands in a future " \
-        "stage."
+    launder_errs = [
+        e for e in errs
+        if "launders" in str(e) and "Uncertain" in str(e)
+        and "Known" in str(e)
+    ]
+    assert launder_errs, \
+        f"Stage 52 Inc 1: let-binding bypass of F1 must now be " \
+        f"caught with a launder diagnostic naming Uncertain → " \
+        f"Known. Got: {[str(e) for e in errs]}"
+    # Diagnostic should mention 'let-binding bypass' to distinguish
+    # from the inline-form (which has its own diagnostic shape).
+    assert any("let-binding bypass" in str(e) for e in launder_errs), \
+        f"diagnostic must distinguish let-binding bypass from " \
+        f"inline form, got: {[str(e) for e in launder_errs]}"
 
 
 def test_stage40_gate3_f1_shadow_suppression_includes_gpu_index_dispatch():

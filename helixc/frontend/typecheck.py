@@ -679,6 +679,32 @@ class TypeChecker:
         # the restored map regardless of let-set membership.
         # TODO(stage49): collapses when site-4 prov dict is removed.
         self._result_assigns_block_scopes: list[set[str]] = []
+        # Stage 52 Inc 1 — modal-origin taint-tracking dict.
+        # Maps: var_name → modal-kind string ('known'|'believed'|'goal'|
+        # 'uncertain') when the var was bound to a `from_X(...)` call.
+        # Consulted by the F1 cross-modal launder guard at the
+        # `into_Y(...)` arm to catch the let-binding bypass:
+        #   `let r = from_uncertain(u); into_known(r)`
+        # — pre-fix this slipped the syntactic guard because
+        # `into_known`'s arg was a Name, not a `Call(from_X, ...)`.
+        # Post-fix the guard ALSO consults this map.
+        #
+        # Closes the Stage 40 closure gate-1 H1 documented limitation
+        # ("let-binding bypass — Phase-1 task: taint-tracking pass").
+        #
+        # Lifecycle (mirrors _result_constructor_provenance):
+        #   1. declaration (here)
+        #   2. cleared at check() entry
+        #   3. cleared at _check_fn entry
+        #   4. populated at Let-stmt when value is `Call(from_X, ...)`
+        #   5. popped at Let-stmt opaque RHS / Assign-stmt invalidation
+        #
+        # Stage 52 Inc 1 ships the basic flat-dict + per-fn clear.
+        # Block-scope discipline (snapshot/restore + let-set + assign-
+        # set mirroring Stage 48 gate-3 G3-F1 + gate-4 G4-F2) is
+        # deferred to Inc 2 if cascading-defect rhythm surfaces a
+        # block-shadow / assign-then-shadow defect class.
+        self._modal_origin_provenance: dict[str, str] = {}
         self._seen_unknown_type_names: set[str] = set()
         # Stage 40 closure gate-2 code-review MEDIUM-1 fix (conf
         # 88): explicit init so re-running check() on the same
@@ -733,6 +759,8 @@ class TypeChecker:
         self._result_constructor_provenance = {}
         self._result_let_block_scopes = []
         self._result_assigns_block_scopes = []
+        # Stage 52 Inc 1: clear modal-origin taint map per check().
+        self._modal_origin_provenance = {}
         self._recursive_enum_names: set[str] = set()
         self._type_alias_cache = {}
         self._local_const_scalar_scopes = []
@@ -2354,6 +2382,11 @@ class TypeChecker:
         self._result_constructor_provenance = {}
         self._result_let_block_scopes = []
         self._result_assigns_block_scopes = []
+        # Stage 52 Inc 1: clear modal-origin taint map per fn entry.
+        # Same defect class as Stage 48 gate-2 M5 (cross-fn stale
+        # provenance) — without this clear, fn A's `let r =
+        # from_uncertain(u)` would taint `r` in fn B's parameter list.
+        self._modal_origin_provenance = {}
         error_start = len(self.errors)
         completed = False
         kernel_hbm_indexables = (
@@ -2725,6 +2758,32 @@ class TypeChecker:
                 # this dict-pop is the minimal sound fix.
                 self._result_constructor_provenance.pop(
                     stmt.name, None)
+            # Stage 52 Inc 1 — modal-origin taint tracking.
+            # Populate when value is `Call(from_X, ...)` for any
+            # of the 4 modal eliminators. Pop on any other RHS
+            # (mirrors the Result-provenance discipline at gate-3).
+            _modal_elim_to_kind = {
+                "from_known":     "known",
+                "from_believed":  "believed",
+                "from_goal":      "goal",
+                "from_uncertain": "uncertain",
+            }
+            if (stmt.value is not None
+                    and isinstance(stmt.value, A.Call)
+                    and isinstance(stmt.value.callee, A.Name)
+                    and stmt.value.callee.name in _modal_elim_to_kind):
+                self._modal_origin_provenance[stmt.name] = (
+                    _modal_elim_to_kind[stmt.value.callee.name]
+                )
+            else:
+                # Pop any stale modal-origin entry. Same defect
+                # class avoidance as the Result-provenance pop
+                # above: without this, fn A's `let r =
+                # from_uncertain(u)` would taint `r` in any
+                # subsequent fn's parameter list. _check_fn entry
+                # clear handles the cross-fn case; this pop
+                # handles intra-fn re-binding.
+                self._modal_origin_provenance.pop(stmt.name, None)
             self._define_local_const_scalar(stmt.name, None)
             if (stmt.value is not None
                     and self._expr_has_unrepresentable_typed_const_scalar(
@@ -4250,6 +4309,53 @@ class TypeChecker:
                                 f"{target_kind.capitalize()}<T> "
                                 f"with no epistemic-upgrade "
                                 f"audit.",
+                                expr.span,
+                                hint=hint,
+                            ))
+                            return TyUnknown(hint=bn)
+                    # Stage 52 Inc 1 — let-binding taint-tracking.
+                    # Catches the let-binding bypass of the F1
+                    # guard that Stage 40 documented as a known
+                    # limit: `let r = from_uncertain(u); into_known(r)`
+                    # was syntactically valid (arg is Name not Call)
+                    # and silently slipped. Post-fix, consult the
+                    # modal-origin map at the Name operand site.
+                    if (len(expr.args) >= 1
+                            and isinstance(expr.args[0], A.Name)
+                            and expr.args[0].name
+                                in self._modal_origin_provenance):
+                        source_kind = self._modal_origin_provenance[
+                            expr.args[0].name]
+                        if source_kind != target_kind:
+                            upgrade_hint = _modal_upgrade_hint.get(
+                                (source_kind, target_kind))
+                            if upgrade_hint:
+                                hint = upgrade_hint
+                            else:
+                                hint = (
+                                    "Phase-0 has no "
+                                    f"{source_kind.capitalize()} "
+                                    f"-> {target_kind.capitalize()} "
+                                    "transition; if this direction "
+                                    "is semantically meaningful, "
+                                    "request a future-stage spec "
+                                    "and keep the value in its "
+                                    "current modal kind until then"
+                                )
+                            self.errors.append(TypeError_(
+                                f"{bn}({expr.args[0].name!r}) "
+                                f"launders a "
+                                f"{source_kind.capitalize()}<T> "
+                                f"into "
+                                f"{target_kind.capitalize()}<T> "
+                                f"via let-binding bypass — "
+                                f"{expr.args[0].name!r} was bound "
+                                f"to from_{source_kind}(...). "
+                                f"Stage 52 Inc 1 taint-tracking "
+                                f"catches this; the launder "
+                                f"semantics are the same as the "
+                                f"inline `into_X(from_Y(v))` "
+                                f"form.",
                                 expr.span,
                                 hint=hint,
                             ))
