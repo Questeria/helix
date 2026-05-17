@@ -1195,3 +1195,146 @@ Phase-1 cosmetic primitive shipped. The "What's left" menu item
 #2 is closed. Next natural increment is item #3 (multi-parent
 N-tag arena entries) which builds on the Inc 9 ARENA_PUSH_PAIR
 opcode — modest IR extension, not a representation change.
+
+## Increment 14 - Three-parent provenance via ARENA_PUSH_TRIPLE (this commit)
+
+Goal: close the "What's left" menu item #3 — extend the two-parent
+arena side-table (Inc 9 ARENA_PUSH_PAIR + register_derivation) to a
+three-parent variant. This is the smallest representative N-tag
+generalization, big enough to validate the design and small enough
+to ship as a single increment.
+
+What landed:
+
+- **New IR opcode `ARENA_PUSH_TRIPLE`** (`helixc/ir/tir.py:259-264`)
+  — atomic three-slot push parallel to ARENA_PUSH_PAIR. Pushes left
+  at slot (cursor+1), middle at (cursor+2), right at (cursor+3) with
+  a single bounds check requiring room for all three. On overflow
+  none are written and the result is -1. Cursor advances by 3 on
+  success.
+- **Effect/DCE registration** (`helixc/ir/passes/effect_check.py:97-99`,
+  `helixc/ir/passes/dce.py:59-62`) — opcode carries `{"arena"}` effect
+  label and lives in `SIDE_EFFECT_KINDS` so DCE preserves the three
+  writes when the returned slot index is unused.
+- **x86_64 backend** (`helixc/backend/x86_64.py:2729-2779`) — 31-byte
+  in-bounds-path implementation using edx / r8d / r9d (REX.R for the
+  high registers) and the existing arena-base + cursor pattern.
+  Overflow path: `mov eax, -1; jmp store_result` (7 bytes) sentinel.
+- **Typecheck builtins** (`helixc/frontend/typecheck.py:1852-1854,
+  2960-2999`):
+  - `register_derivation3(left, middle, right: i32) -> i32` — emits
+    ARENA_PUSH_TRIPLE, returns a 1-based handle (same Inc 9 A2
+    invariant as register_derivation). Strict i32 on all three
+    args per Inc 11 C1 family discipline.
+  - `parent_at(handle: i32, slot: i32) -> i32` — generic indexed
+    accessor. Reads arena slot (handle - 1 + slot) via the same
+    Inc 9 A1 bounds-checked _safe_arena_get path; out-of-range
+    reads return the -1 sentinel.
+- **lower_ast wiring** (`helixc/ir/lower_ast.py:2017-2039,
+  2119-2147`) — three-arg lowering for register_derivation3 (emits
+  ARENA_PUSH_TRIPLE + ADD 1), and two-arg generic dynamic-offset
+  lowering for parent_at (SUB 1 from handle, ADD slot, then
+  _safe_arena_get).
+- **AD purity registration** (`helixc/frontend/autodiff.py:81-85`) —
+  `parent_at` joins parent_left_at / parent_right_at in
+  AD_KNOWN_PURE_CALLS. `register_derivation3` is deliberately NOT
+  added (arena-mutating, same discipline as register_derivation).
+
+16 new end-to-end runtime tests in `test_stage36_provenance.py`:
+
+- `test_stage36_inc14_register_derivation3_returns_one_based_handle` —
+  pins the handle = 1 invariant for the first call. Exit multiplies
+  by the handle so a regression to 0 fails closed at 0.
+- `test_stage36_inc14_parent_at_slot_0_recovers_left` — slot-0 contract.
+- `test_stage36_inc14_parent_at_slot_1_recovers_middle` — slot-1
+  contract (the new capability over the two-parent variant; the
+  middle parent must not collide with the slot the two-parent
+  variant reserves for the right parent).
+- `test_stage36_inc14_parent_at_slot_2_recovers_right` — slot-2
+  contract.
+- `test_stage36_inc14_three_parents_all_recoverable` — all three
+  readable from one handle; the sum check catches any slot-shuffling
+  regression.
+- `test_stage36_inc14_register_derivation3_advances_arena_by_3` —
+  cursor +3 per call; h2 = h1 + 3.
+- `test_stage36_inc14_independent_triples_stay_independent` —
+  two register_derivation3 calls write disjoint regions; reads on
+  h1 don't see h2's data.
+- `test_stage36_inc14_arena_push_triple_atomic_against_intervening_push`
+  — mirror of the Inc 9 ARENA_PUSH_PAIR atomicity test: an unrelated
+  __arena_push between two register_derivation3 calls cannot split
+  either triple.
+- `test_stage36_inc14_parent_at_on_two_parent_handle_back_compat` —
+  parent_at(h, 0) == parent_left_at(h) AND parent_at(h, 1) ==
+  parent_right_at(h) for a register_derivation (two-parent) handle.
+  The generic accessor must agree with the legacy accessors on the
+  slots they share.
+- `test_stage36_inc14_parent_at_null_handle_returns_negative_one` —
+  parent_at(0, slot) returns -1 via the Inc 9 A1 bounds-check
+  sentinel.
+- `test_stage36_inc14_parent_at_oob_slot_returns_negative_one` —
+  parent_at(h, very_large_slot) returns -1.
+- `test_stage36_inc14_register_derivation3_typecheck_rejects_i64`
+  + `test_stage36_inc14_parent_at_typecheck_rejects_i64_handle` —
+  strict i32 typecheck regression pins.
+- `test_stage36_inc14_register_derivation3_arena_overflow_returns_zero_handle`
+  — in-bounds positive control; in overflow path the ADD-1 wraps -1
+  to 0 (null sentinel), same fail-closed contract as
+  register_derivation.
+- `test_stage36_inc14_arena_push_triple_is_in_effect_table` +
+  `test_stage36_inc14_arena_push_triple_is_in_dce_side_effect_set`
+  — structural pins on the OP_EFFECTS / SIDE_EFFECT_KINDS tables so
+  any future regression that misclassifies the opcode as pure
+  surfaces immediately.
+
+### Phase-0 limitation that remains
+
+Arity is not tracked in the handle. The user is responsible for
+calling parent_at with a slot < arity-of-the-original-register call.
+parent_at on a two-parent handle with slot >= 2 reads into whatever
+happens to live next in the arena (which may be another derivation's
+slot, or the OOB sentinel). A nominal Handle<2> / Handle<3> newtype
+would close it but requires nominal-type-system support that Helix
+doesn't have today — same architectural deferral as Inc 11 A1.
+
+### Why no audit dispatch this increment
+
+Inc 14 adds one new IR opcode that's a structural clone of an
+existing one (ARENA_PUSH_PAIR) plus two new typecheck builtins that
+mirror existing ones (register_derivation, parent_*_at). The
+behavior is exercised by 16 new tests covering happy path, atomicity,
+back-compat, typecheck strictness, and the sentinel contracts. The
+post-Inc-13 audit cycle has not yet fired on Inc 13 either (Inc 13
+explicitly opted out as a pure-stdlib change). A combined post-
+Inc-14 + post-Inc-13 3-lane audit is the right next step.
+
+### Inc 14 verification
+
+- `python -m pytest helixc/tests/test_stage36_provenance.py
+  helixc/tests/test_provenance.py helixc/tests/test_effect_check.py
+  -q` → **175 passed** in 294s (16 new Inc 14 tests, no regressions
+  on the 75 Inc 13 baseline + 81 from Inc 5-12 + 3 typecheck +
+  effect-check structural tests).
+- `python -m pytest helixc/tests/test_autodiff.py
+  helixc/tests/test_autodiff_reverse.py helixc/tests/test_typecheck.py
+  -q` → **345 passed** in 16s. No regressions to AD or general
+  typechecking.
+- `python -m pytest helixc/tests/test_reflection.py -q -k dogfood_09`
+  → **1 passed** in 4s (knowledge-graph dogfood still runs).
+- `python -m pytest helixc/tests/test_codegen.py -q -k arena` →
+  **23 passed** in 81s. The new ARENA_PUSH_TRIPLE opcode does not
+  perturb the existing arena codegen tests.
+- `python scripts/stage33_selfhost_gate.py` → **PASS** G2..G4
+  byte-identical sha
+  `a6f1ee44eb4418ba296954528d05564f5a37627dc38bb350b2308675d86b8986`
+  (same sha as pre-Inc-14). The new opcode is unreachable from the
+  bootstrap path (which doesn't use register_derivation3), so the
+  bootstrap binary is bit-identical.
+- `_bootstrap_cache/` cleared before final gate run.
+
+### Inc 14 status
+
+"What's left" menu item #3 closed. The remaining items are #4
+(multi-output reverse-mode AD — perf win for rule systems with
+many learnable weights) and #5 (JAX-style pytrees — needed for
+real-shape rule systems but touches the type system).

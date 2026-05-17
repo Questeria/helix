@@ -2014,6 +2014,29 @@ class Lowerer:
                 return self.builder.emit(
                     tir.OpKind.ADD, push_idx, one,
                     result_ty=tir.TIRScalar("i32"))
+            # Stage 36 Inc 14: three-parent provenance. Same shape as
+            # register_derivation but lowers to the atomic three-slot
+            # ARENA_PUSH_TRIPLE. The handle is the (1-based) slot index
+            # of the left value; middle lives at handle+1-1+1=handle+1
+            # (i.e., the slot reachable via parent_at(handle, 1)).
+            # ARENA_PUSH_TRIPLE returns -1 on arena overflow; in that
+            # case push_idx + 1 = 0 = the null-handle sentinel — same
+            # fail-closed contract that ARENA_PUSH_PAIR already gives.
+            if (isinstance(expr.callee, A.Name)
+                    and expr.callee.name == "register_derivation3"
+                    and len(expr.args) == 3):
+                l = self._lower_expr(expr.args[0])
+                m = self._lower_expr(expr.args[1])
+                r = self._lower_expr(expr.args[2])
+                if l is None or m is None or r is None:
+                    return None
+                push_idx = self.builder.emit(
+                    tir.OpKind.ARENA_PUSH_TRIPLE, l, m, r,
+                    result_ty=tir.TIRScalar("i32"))
+                one = self.builder.const_int(1)
+                return self.builder.emit(
+                    tir.OpKind.ADD, push_idx, one,
+                    result_ty=tir.TIRScalar("i32"))
             # Stage 36 Increment 9 post-Inc-8 audit A1 HIGH fix:
             # parent_left_at(idx) and parent_right_at(idx) previously
             # lowered to bare ARENA_GET with no bounds check. A user
@@ -2115,6 +2138,33 @@ class Lowerer:
                     tir.OpKind.SUB, idx, one,
                     result_ty=tir.TIRScalar("i32"))
                 return _safe_arena_get(base_idx, 1)
+            # Stage 36 Inc 14: generic indexed parent accessor.
+            # parent_at(handle, slot) reads arena slot (handle-1+slot)
+            # with the same bounds-check sentinel as parent_*_at. The
+            # `slot` operand is dynamic (an i32 value, not a literal),
+            # so the +offset is computed via ADD rather than baked into
+            # the displacement. parent_at(h, 0) ≡ parent_left_at(h);
+            # parent_at(h, 1) ≡ parent_right_at(h). parent_at(h, 2) is
+            # only meaningful for handles registered via
+            # register_derivation3 (the three-parent variant); for
+            # two-parent handles it reads into whatever happens to live
+            # at slot N+2, which may be another derivation's slot or
+            # the OOB sentinel.
+            if (isinstance(expr.callee, A.Name)
+                    and expr.callee.name == "parent_at"
+                    and len(expr.args) == 2):
+                handle = self._lower_expr(expr.args[0])
+                slot = self._lower_expr(expr.args[1])
+                if handle is None or slot is None:
+                    return None
+                one = self.builder.const_int(1)
+                base_idx = self.builder.emit(
+                    tir.OpKind.SUB, handle, one,
+                    result_ty=tir.TIRScalar("i32"))
+                eff_idx = self.builder.emit(
+                    tir.OpKind.ADD, base_idx, slot,
+                    result_ty=tir.TIRScalar("i32"))
+                return _safe_arena_get(eff_idx, 0)
             # Stage 36 Inc 9 A3 (silent-failure HIGH) fix: clamp
             # fuzzy_* inputs to [0, 1] at IR lowering. Pre-fix, an
             # out-of-range input (e.g., a=2.0 from optimizer drift)

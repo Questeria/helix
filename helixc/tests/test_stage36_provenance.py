@@ -2001,6 +2001,310 @@ def test_stage36_inc13_helpers_visible_in_stdlib():
             f"stdlib helper {name!r} missing from merged program"
 
 
+# ----------------------------------------------------------------------
+# Stage 36 Increment 14 — three-parent provenance via ARENA_PUSH_TRIPLE.
+#
+# Inc 14 extends the two-parent ARENA_PUSH_PAIR (from Inc 9 A2) to a
+# fused three-slot ARENA_PUSH_TRIPLE opcode plus the higher-level
+# `register_derivation3(l, m, r)` typecheck builtin. A generic indexed
+# accessor `parent_at(handle, slot)` reads any pushed slot. These tests
+# pin the contract:
+#   - register_derivation3 returns a 1-based handle, same as
+#     register_derivation (Inc 9 A2 invariant).
+#   - parent_at(h, 0/1/2) recovers left/middle/right.
+#   - The arena cursor advances by 3 per call.
+#   - The triple is atomic against intervening pushes.
+#   - parent_at on a two-parent handle still works at slot 0/1
+#     (back-compat with the Inc 9 register_derivation contract).
+# ----------------------------------------------------------------------
+
+
+def test_stage36_inc14_register_derivation3_returns_one_based_handle():
+    """First register_derivation3 call returns handle = 1, matching the
+    Inc 9 A2 1-based-handle invariant. Exit code multiplies by handle
+    so a regression to 0 (the null sentinel) fails closed at 0."""
+    src = """
+fn main() -> i32 {
+    let h = register_derivation3(11, 22, 33);
+    42 * h
+}
+"""
+    prog = parse(src)
+    assert typecheck(prog) == []
+    elf = compile_module_to_elf(lower(prog))
+    assert _run_elf(elf) == 42, "expected 42 * 1 = 42"
+
+
+def test_stage36_inc14_parent_at_slot_0_recovers_left():
+    """parent_at(h, 0) == left source ID. Pins the slot-0 contract."""
+    src = """
+fn main() -> i32 {
+    let h = register_derivation3(7, 99, 99);
+    parent_at(h, 0) * 6
+}
+"""
+    prog = parse(src)
+    assert typecheck(prog) == []
+    elf = compile_module_to_elf(lower(prog))
+    assert _run_elf(elf) == 42, "expected 7 * 6 = 42"
+
+
+def test_stage36_inc14_parent_at_slot_1_recovers_middle():
+    """parent_at(h, 1) == middle source ID. Pins the slot-1 contract
+    (this is what register_derivation3 adds over the two-parent variant
+    — for a two-parent handle, slot 1 would be the right value)."""
+    src = """
+fn main() -> i32 {
+    let h = register_derivation3(99, 21, 99);
+    parent_at(h, 1) * 2
+}
+"""
+    prog = parse(src)
+    assert typecheck(prog) == []
+    elf = compile_module_to_elf(lower(prog))
+    assert _run_elf(elf) == 42, "expected 21 * 2 = 42"
+
+
+def test_stage36_inc14_parent_at_slot_2_recovers_right():
+    """parent_at(h, 2) == right source ID. Pins the slot-2 contract
+    (only meaningful for three-parent handles)."""
+    src = """
+fn main() -> i32 {
+    let h = register_derivation3(99, 99, 42);
+    parent_at(h, 2)
+}
+"""
+    prog = parse(src)
+    assert typecheck(prog) == []
+    elf = compile_module_to_elf(lower(prog))
+    assert _run_elf(elf) == 42, "expected 42"
+
+
+def test_stage36_inc14_three_parents_all_recoverable():
+    """All three parents readable from a single handle. Sum check
+    catches any slot-shuffling regression."""
+    src = """
+fn main() -> i32 {
+    let h = register_derivation3(10, 14, 18);
+    parent_at(h, 0) + parent_at(h, 1) + parent_at(h, 2)
+}
+"""
+    prog = parse(src)
+    assert typecheck(prog) == []
+    elf = compile_module_to_elf(lower(prog))
+    assert _run_elf(elf) == 42, "expected 10 + 14 + 18 = 42"
+
+
+def test_stage36_inc14_register_derivation3_advances_arena_by_3():
+    """The cursor must advance by exactly 3 per call (one slot per
+    parent). h2 = h1 + 3 since each register_derivation3 pushes 3
+    arena entries. Pins the ARENA_PUSH_TRIPLE-advances-by-3 invariant."""
+    src = """
+fn main() -> i32 {
+    let h1 = register_derivation3(1, 2, 3);
+    let h2 = register_derivation3(4, 5, 6);
+    // h1 = 1 (push_idx 0 + 1), h2 = 4 (push_idx 3 + 1). 4 - 1 = 3.
+    (h2 - h1) * 14
+}
+"""
+    prog = parse(src)
+    assert typecheck(prog) == []
+    elf = compile_module_to_elf(lower(prog))
+    assert _run_elf(elf) == 42, "expected (4 - 1) * 14 = 42"
+
+
+def test_stage36_inc14_independent_triples_stay_independent():
+    """Two register_derivation3 calls write to disjoint slot regions;
+    reads on h1 don't see h2's data. Exit checks all six values
+    distinctly via a weighted sum that would fail closed on any
+    slot-aliasing bug."""
+    src = """
+fn main() -> i32 {
+    let h1 = register_derivation3(1, 2, 3);
+    let h2 = register_derivation3(4, 5, 6);
+    let a = parent_at(h1, 0);
+    let b = parent_at(h1, 1);
+    let c = parent_at(h1, 2);
+    let d = parent_at(h2, 0);
+    let e = parent_at(h2, 1);
+    let f = parent_at(h2, 2);
+    // 1+2+3+4+5+6 = 21; expected sum * 2 = 42.
+    (a + b + c + d + e + f) * 2
+}
+"""
+    prog = parse(src)
+    assert typecheck(prog) == []
+    elf = compile_module_to_elf(lower(prog))
+    assert _run_elf(elf) == 42, "expected (1+2+3+4+5+6) * 2 = 42"
+
+
+def test_stage36_inc14_arena_push_triple_atomic_against_intervening_push():
+    """The triple's three slots stay adjacent even when an unrelated
+    __arena_push happens between two register_derivation3 calls. Mirror
+    of the Inc 9 ARENA_PUSH_PAIR atomicity test."""
+    src = """
+fn main() -> i32 {
+    let h1 = register_derivation3(11, 12, 13);
+    let _ = __arena_push(99999);
+    let h2 = register_derivation3(21, 22, 23);
+    let a = parent_at(h1, 0);
+    let b = parent_at(h1, 1);
+    let c = parent_at(h1, 2);
+    let d = parent_at(h2, 0);
+    let e = parent_at(h2, 1);
+    let f = parent_at(h2, 2);
+    // Each triple's slots must still match its register call inputs.
+    // (11+12+13) + (21+22+23) = 36 + 66 = 102. Exit code is checked
+    // strictly — any slot shift would change the sum.
+    let ok1 = (a + b + c) - 36;
+    let ok2 = (d + e + f) - 66;
+    42 - (ok1 + ok2) * 99
+}
+"""
+    prog = parse(src)
+    assert typecheck(prog) == []
+    elf = compile_module_to_elf(lower(prog))
+    assert _run_elf(elf) == 42, \
+        "expected 42 (both triples atomic across intervening __arena_push)"
+
+
+def test_stage36_inc14_parent_at_on_two_parent_handle_back_compat():
+    """parent_at(h, 0) == parent_left_at(h) and parent_at(h, 1) ==
+    parent_right_at(h) for a handle returned by the original
+    register_derivation. Back-compat invariant — the generic accessor
+    must agree with the legacy accessors on the slots they share."""
+    src = """
+fn main() -> i32 {
+    let h = register_derivation(17, 25);
+    let lhs0 = parent_at(h, 0);
+    let rhs0 = parent_left_at(h);
+    let lhs1 = parent_at(h, 1);
+    let rhs1 = parent_right_at(h);
+    // Both pairs must agree. Build a value that's 42 iff they match.
+    let ok = (lhs0 - rhs0) + (lhs1 - rhs1);
+    42 - ok * 99
+}
+"""
+    prog = parse(src)
+    assert typecheck(prog) == []
+    elf = compile_module_to_elf(lower(prog))
+    assert _run_elf(elf) == 42, "parent_at must agree with parent_*_at on two-parent handles"
+
+
+def test_stage36_inc14_parent_at_null_handle_returns_negative_one():
+    """parent_at(0, slot) for any slot returns -1 via the Inc 9 A1
+    bounds-check sentinel: handle 0 - 1 = -1 fails the >= 0 check."""
+    src = """
+fn main() -> i32 {
+    let v = parent_at(0, 1);
+    // v should be -1. 42 - (-1 + 1) * 99 = 42.
+    42 - (v + 1) * 99
+}
+"""
+    prog = parse(src)
+    assert typecheck(prog) == []
+    elf = compile_module_to_elf(lower(prog))
+    assert _run_elf(elf) == 42, "null handle (0) must return -1 sentinel"
+
+
+def test_stage36_inc14_parent_at_oob_slot_returns_negative_one():
+    """parent_at(h, very_large_slot) returns -1 via bounds check. Pins
+    the OOB-fallthrough invariant: even if the user passes a slot far
+    larger than the arity, the read returns sentinel rather than
+    walking off the arena edge."""
+    src = """
+fn main() -> i32 {
+    let h = register_derivation3(1, 2, 3);
+    let v = parent_at(h, 999999);
+    42 - (v + 1) * 99
+}
+"""
+    prog = parse(src)
+    assert typecheck(prog) == []
+    elf = compile_module_to_elf(lower(prog))
+    assert _run_elf(elf) == 42, "OOB slot must return -1 sentinel"
+
+
+def test_stage36_inc14_register_derivation3_typecheck_rejects_i64():
+    """register_derivation3 must reject non-i32 args (Inc 11 C1
+    family). Pre-fix, accepting i64 would silently truncate in the
+    downstream arena push ops."""
+    src = """
+fn main() -> i32 {
+    let big: i64 = 99;
+    let h = register_derivation3(big, 2, 3);
+    h
+}
+"""
+    prog = parse(src)
+    errs = typecheck(prog)
+    assert any("register_derivation3" in str(e) and "must be exactly i32" in str(e)
+               for e in errs), \
+        f"expected register_derivation3 i32 strictness error, got {errs}"
+
+
+def test_stage36_inc14_parent_at_typecheck_rejects_i64_handle():
+    """parent_at(handle, slot) rejects i64 handle — same strictness as
+    register_derivation* (no silent truncation)."""
+    src = """
+fn main() -> i32 {
+    let h: i64 = 1;
+    let v = parent_at(h, 0);
+    v
+}
+"""
+    prog = parse(src)
+    errs = typecheck(prog)
+    assert any("parent_at" in str(e) and "must be exactly i32" in str(e)
+               for e in errs), \
+        f"expected parent_at i32 strictness error, got {errs}"
+
+
+def test_stage36_inc14_register_derivation3_arena_overflow_returns_zero_handle():
+    """When the arena cursor is too high for three more slots,
+    ARENA_PUSH_TRIPLE returns -1 (overflow sentinel) and the
+    1-based-handle ADD turns that into 0 (null sentinel). Subsequent
+    parent_at calls on the null handle return -1 via Inc 9 A1.
+    Structural test: we can't easily fill a 2M-slot arena, so this
+    confirms the pure structural symmetry — the contract follows from
+    sharing the ADD-1 wrapping with register_derivation."""
+    # If overflow ever does fire, the test would observe handle == 0.
+    # In bounds (the common case) it reads back as a positive handle.
+    src = """
+fn main() -> i32 {
+    let h = register_derivation3(7, 8, 9);
+    // h must be at least 1 (non-null); using has_evidence to confirm.
+    42 * has_evidence(h)
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    assert typecheck(prog) == []
+    elf = compile_module_to_elf(lower(prog))
+    assert _run_elf(elf) == 42, "in-bounds register_derivation3 must yield a recoverable handle"
+
+
+def test_stage36_inc14_arena_push_triple_is_in_effect_table():
+    """The new opcode must carry the {"arena"} effect label so the
+    effect-check pass treats it like ARENA_PUSH / ARENA_PUSH_PAIR."""
+    from helixc.ir import tir
+    from helixc.ir.passes.effect_check import OP_EFFECTS
+    assert tir.OpKind.ARENA_PUSH_TRIPLE in OP_EFFECTS, \
+        "ARENA_PUSH_TRIPLE missing from OP_EFFECTS — would be misclassified as pure"
+    assert "arena" in OP_EFFECTS[tir.OpKind.ARENA_PUSH_TRIPLE], \
+        "ARENA_PUSH_TRIPLE effect domain must include 'arena'"
+
+
+def test_stage36_inc14_arena_push_triple_is_in_dce_side_effect_set():
+    """DCE must treat ARENA_PUSH_TRIPLE as side-effectful even when
+    the result slot index is unused — otherwise an unused
+    `let _h = register_derivation3(...);` would erase the arena writes
+    and silently break downstream parent_at reads."""
+    from helixc.ir import tir
+    from helixc.ir.passes.dce import SIDE_EFFECT_KINDS
+    assert tir.OpKind.ARENA_PUSH_TRIPLE in SIDE_EFFECT_KINDS, \
+        "ARENA_PUSH_TRIPLE must be in DCE side-effect set to survive unused-result DCE"
+
+
 if __name__ == "__main__":
     import pytest
     raise SystemExit(pytest.main([__file__, "-v"]))

@@ -254,6 +254,13 @@ class OpKind(Enum):
     # "left at N, right at N+1" handle invariant intact under any
     # concurrent arena consumer (struct lowering, MatchDispatch, ...).
     ARENA_PUSH_PAIR = "arena.push_pair"  # operands: left, right → result: slot index of left
+    # Stage 36 Inc 14: ternary fused-push extension. Parallels
+    # ARENA_PUSH_PAIR but for three slots (left at N, middle at N+1,
+    # right at N+2). Used by register_derivation3 to record a three-
+    # parent derivation atomically. Bounds check requires room for all
+    # three; on overflow none are written and the result is -1. Result:
+    # the slot index of `left` (the old cursor).
+    ARENA_PUSH_TRIPLE = "arena.push_triple"  # operands: left, middle, right → result: slot index of left
 
     # String operations on string literals. Self-host needs byte access to
     # source code; for v0.1 only literal strings are supported (no runtime

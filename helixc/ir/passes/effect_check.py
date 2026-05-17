@@ -94,6 +94,9 @@ OP_EFFECTS: dict[tir.OpKind, frozenset[str]] = {
     # Stage 36 Inc 9 type-design A2: atomic-pair sibling of ARENA_PUSH —
     # same effect domain, different cardinality.
     tir.OpKind.ARENA_PUSH_PAIR: frozenset({"arena"}),
+    # Stage 36 Inc 14: atomic-triple sibling of ARENA_PUSH_PAIR —
+    # same effect domain, three slots instead of two.
+    tir.OpKind.ARENA_PUSH_TRIPLE: frozenset({"arena"}),
     # Audit 28.8 cycle 22 C22-2/C22-4/C22-5 (LOW, defense in depth):
     # explicit effect labels for ops that are gated-unreachable from
     # @pure today, so any future regression surfaces immediately.

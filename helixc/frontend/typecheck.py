@@ -1847,6 +1847,9 @@ class TypeChecker:
         # Stage 36 Increment 5 — real two-parent provenance via arena
         # side-table.
         "register_derivation", "parent_left_at", "parent_right_at",
+        # Stage 36 Increment 14 — three-parent provenance via atomic
+        # ARENA_PUSH_TRIPLE + generic indexed accessor.
+        "register_derivation3", "parent_at",
         # Stage 36 Increment 6 — fuzzy logic over Logic<f32> for AD.
         "fuzzy_and", "fuzzy_or", "fuzzy_not",
         # Stage 36 Increment 8 — fuzzy algebra completeness.
@@ -2953,6 +2956,41 @@ class TypeChecker:
                             f"got {self._fmt(arg_tys[0])}",
                             expr.span,
                         ))
+                    return TyPrim("i32")
+                # Stage 36 Inc 14: three-parent provenance.
+                # register_derivation3(left, middle, right: i32) -> i32
+                # writes the triple atomically via ARENA_PUSH_TRIPLE and
+                # returns a 1-based handle (Inc 9 A2 invariant). The
+                # left slot is the handle's base; middle lives at slot+1,
+                # right at slot+2.
+                if bn == "register_derivation3" and len(arg_tys) == 3:
+                    for i, t in enumerate(arg_tys):
+                        if not (isinstance(t, TyPrim) and t.name == "i32"):
+                            self.errors.append(TypeError_(
+                                f"register_derivation3(left, middle, right): "
+                                f"arg {'123'[i]} must be exactly i32 source "
+                                f"id, got {self._fmt(t)} (Inc 11 C1 family: "
+                                f"i64/u32/u64 would silently truncate in "
+                                f"downstream arena push ops)",
+                                expr.span,
+                            ))
+                    return TyPrim("i32")
+                # Stage 36 Inc 14: generic indexed parent accessor.
+                # parent_at(handle: i32, slot: i32) -> i32 reads the
+                # arena slot at (handle - 1 + slot), with the same Inc 9
+                # A1 bounds-check sentinel (-1 on OOB). The user is
+                # responsible for passing a `slot` within the arity of
+                # the original register_derivation* call (Phase-0
+                # limitation: arity is not tracked in the handle).
+                if bn == "parent_at" and len(arg_tys) == 2:
+                    for i, t in enumerate(arg_tys):
+                        if not (isinstance(t, TyPrim) and t.name == "i32"):
+                            self.errors.append(TypeError_(
+                                f"parent_at(handle, slot): arg "
+                                f"{'12'[i]} must be exactly i32, "
+                                f"got {self._fmt(t)}",
+                                expr.span,
+                            ))
                     return TyPrim("i32")
                 # Stage 36 Increment 6: fuzzy logic operators over
                 # Logic<f32>. Truth values live in [0, 1]; operators

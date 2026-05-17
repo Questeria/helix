@@ -79,6 +79,10 @@ AD_KNOWN_PURE_CALLS = {
     # parent_*_at are pure arena READS — no mutation, safe to erase
     # if the result is unused inside a differentiated function.
     "parent_left_at", "parent_right_at",
+    # Stage 36 Inc 14: parent_at is the generic indexed accessor
+    # (parent_at(handle, slot)). Same pure-read semantics as
+    # parent_left_at/parent_right_at.
+    "parent_at",
     # NOTE: `derive` and `register_derivation` were briefly listed
     # here by the Inc 9 C2 LOW fix, but the Inc 9 B2 fix (commit
     # 707deff) made both functions perform an ARENA_PUSH_PAIR side

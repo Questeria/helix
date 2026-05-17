@@ -56,6 +56,10 @@ SIDE_EFFECT_KINDS = {
     # Even if the returned slot index is unused, the two writes must
     # still execute so downstream parent_*_at reads see the values.
     tir.OpKind.ARENA_PUSH_PAIR,
+    # Stage 36 Inc 14: atomic-triple sibling of ARENA_PUSH_PAIR — same
+    # rationale (three writes must execute even when the result slot
+    # index is unused).
+    tir.OpKind.ARENA_PUSH_TRIPLE,
     # Stage 16 — HBM tile stores are observable side effects (the write
     # is what kernel launchers care about). Loads + thread_idx are pure
     # functions of their inputs (operands + the implicit %tid.x), so
