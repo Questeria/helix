@@ -141,7 +141,7 @@ checker.
   Touches every Stage 1-35 codegen test; deserves its own scoped
   commit campaign, not a Stage 36 prep sweep.
 
-## Stage 36 Increments 1-12 SHIPPED (2026-05-16)
+## Stage 36 Increments 1-15 SHIPPED (2026-05-16)
 
 User-approved 2026-05-16: Stage 36 first deliverable is
 **provenance-typed neuro-symbolic primitives** (ROADMAP Tier 3 #10
@@ -164,35 +164,46 @@ audit cycles closing 19/20 findings:
 | dogfood 9 | 821592f + 9d78805 | `dogfood_09_knowledge_graph.hx` — chained-rule reasoner + parent_*_at evidence recovery + 8-invariant witness. |
 | 11 | (audit cycle, 5 findings) | 5c83860 + a76b954 — post-Inc-10 audit: derive/register_derivation removed from AD-pure set (Inc 9 C2 regressed Inc 9 B2), prove + register_derivation strict-i32, if_logic inner-type matching, parent_*_at None consistency. |
 | 12 | 4742128 + abef645 | Reverse-mode AD now rejects integer-valued boolean Logic ops in grad_rev paths (mirrors Inc 11 forward-mode guard). 6 new regression tests + 2 negative controls. |
+| 13 | 6894348 | provenance.hx stdlib: has_evidence / evidence_left / evidence_right / trace_evidence helpers wrapping the Inc 5/9 arena side-table. |
+| 14 | e7c3552 | Three-parent provenance: register_derivation3 + parent_at builtins + ARENA_PUSH_TRIPLE atomic opcode. 16 new tests pinning codegen, atomicity, AD purity, effect-table classification. |
+| 14 audit | 78b127b | post-Inc-14 3-lane audit: 1H + 2M + 3L findings (silent-failure H1 parent_at cross-record, silent-failure M1 provenance.hx triple-handle lies, type-design M1 strictness asymmetry, code-review L1/L2/L3). |
+| 15 | (this commit) | Inc 14-audit fix-sweep: 5/6 findings closed. parent_at gains static literal-slot-bounds + runtime null-handle + dynamic-negative-slot guards (silent-failure H1 partial). provenance.hx gains evidence_middle / evidence_third / trace_evidence3 + honest "slot0= slot1=" stdout labels (silent-failure M1). parent_left_at / parent_right_at tightened to strict-i32 (type-design M1). AD-erasability negative control for register_derivation3 (code-review L2). has_evidence comment tightened (code-review L3). ARENA_PUSH_TRIPLE overflow-test deferred with TODO (code-review L1, awaits `__arena_set_cursor` infrastructure). 11 new tests + 5 existing tests updated for new labels. |
 
 **Stage 36 progress ledger**: `docs/stage36-progress-2026-05-16.md`
-documents all 12 increments. Three audit cycles also documented at
-`docs/audit-stage36-postinc8-*.md` (Inc 9) and
-`docs/audit-stage36-postinc10-*.md` (Inc 11).
+documents all 15 increments. Four audit cycles also documented at
+`docs/audit-stage36-postinc8-*.md` (Inc 9),
+`docs/audit-stage36-postinc10-*.md` (Inc 11), and
+`docs/audit-stage36-postinc14-*.md` (Inc 15 fix-sweep target).
 
-**Tests**: 94 passing in `helixc/tests/test_stage36_provenance.py`
-(plus 21 in `test_provenance.py`, 3 dogfood-runtime tests in
-`test_reflection.py`). 502 total across the broader CLI+IR+
-provenance+Stage36+reflection+unsafe slice.
+**Tests**: 131 passing in `helixc/tests/test_stage36_provenance.py`
+post-Inc-15 (was 121 pre-Inc-15, 94 pre-Inc-13). 2,699 total tests
+across the suite (up from 2,556 at Stage 35 closure; Stage 36
+added 143 across Inc 1-15).
 
 **Self-host gate**: PASS at every increment commit (G2..G4 byte-
 identical, smoke programs all exit 42, validate ok).
 
-**Total Stage 36 surface area** (23+ new typecheck-recognized
-builtins): prove, unwrap_logic, derive, and_logic, or_logic,
-not_logic, xor_logic, implies_logic, eq_logic, if_logic,
-to_logic_bool, register_derivation, parent_left_at, parent_right_at,
-fuzzy_and, fuzzy_or, fuzzy_not, fuzzy_xor, fuzzy_implies, plus the
-now-runnable attach + detach from Stage 24. New IR opcode
-`ARENA_PUSH_PAIR` for atomic provenance side-table writes.
+**Total Stage 36 surface area** (26 typecheck-recognized builtins
+after Inc 14, no new builtins in Inc 15): prove, unwrap_logic,
+derive, and_logic, or_logic, not_logic, xor_logic, implies_logic,
+eq_logic, if_logic, to_logic_bool, register_derivation,
+parent_left_at, parent_right_at, register_derivation3 (Inc 14),
+parent_at (Inc 14), fuzzy_and, fuzzy_or, fuzzy_not, fuzzy_xor,
+fuzzy_implies, plus the now-runnable attach + detach from Stage 24.
+IR opcodes: `ARENA_PUSH_PAIR` + `ARENA_PUSH_TRIPLE` (Inc 14) for
+atomic 2-/3-parent provenance side-table writes. Stdlib helpers in
+`provenance.hx`: has_evidence, evidence_left, evidence_right,
+evidence_middle (Inc 15), evidence_third (Inc 15), trace_evidence,
+trace_evidence3 (Inc 15).
 
-**Audit-fix scorecard across 3 cycles**: 19/20 findings closed.
+**Audit-fix scorecard across 4 cycles**: 24/26 findings closed.
 
 | Cycle | HIGH | MEDIUM | LOW | Total | Closed |
 |---|---|---|---|---|---|
 | Inc 9 (post-Inc-8) | 5 | 5 | 3 | 13 | 13/13 ✅ |
 | Inc 11 (post-Inc-10) | 2 | 2 | 2 | 6 | 5/6 (1 deferred) |
 | Inc 12 (Inc 11 B2 closure) | 0 | 1 | 0 | 1 | 1/1 ✅ |
+| Inc 15 (post-Inc-14) | 1 | 2 | 3 | 6 | 5/6 (silent-failure H1 partial, code-review L1 deferred — both depend on per-record arity-word architecture, planned Inc 16) |
 
 ### What's still missing from Stage 36
 

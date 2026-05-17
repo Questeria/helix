@@ -1419,3 +1419,85 @@ closes when a single combined audit returns clean. Inc 14 does
 NOT close yet — the M1 silent-failures (helpers lie for triple
 handles) is a real correctness bug that should be fixed in
 Inc 15.
+
+## Increment 15 - Post-Inc-14 audit-fix sweep (2026-05-16)
+
+Closes 5 of 6 findings from the post-Inc-14 3-lane audit
+(`docs/audit-stage36-postinc14-{codereview,silent-failures,type-design}.md`).
+**Approach option (b)** from the aborted-Inc-15 note above: smaller
+in-place strictness + runtime-guard fixes, not the nominal
+`TyDerivationHandle` redesign. The nominal-type approach broke 16
+existing tests by changing the print-int and i32-sentinel contract;
+option (b) preserves the existing handle-as-i32 ABI and addresses
+the audit findings surgically.
+
+**Findings closed (5/6):**
+
+| Lane | Finding | Closure |
+|---|---|---|
+| silent-failure H1 (HIGH, conf 90) | `parent_at(h, slot)` cross-record / negative-slot / null-handle reads | **PARTIAL**: typecheck rejects literal `slot < 0` or `slot > 2`; runtime guards `handle <= 0` and dynamic `slot < 0` to -1 via SELECT. The remaining cross-record hazard for `slot in {0,1,2}` is the deferred Inc 16 arity-word work (TODO markers at `lower_ast.py:parent_at` + `typecheck.py:parent_at`). |
+| silent-failure M1 (MEDIUM, conf 88) | `provenance.hx` helpers silently mis-read 3-parent records | **DONE**: added `evidence_middle(h) = parent_at(h, 1)` + `evidence_third(h) = parent_at(h, 2)` + `trace_evidence3(h)` printing all 3 slots. Relabelled `trace_evidence` stdout from "L= R=" to honest "slot0= slot1=" wording so the diagnostic doesn't lie for 3-parent handles. `evidence_right` left as-is with tightened doc explaining its 2-parent honesty. |
+| type-design M1 (MEDIUM, conf 80) | `parent_left_at` / `parent_right_at` loose `_is_int_scalar` while register/parent_at strict-i32 | **DONE**: tightened both to strict `TyPrim("i32")` matching the rest of the family. |
+| code-review L2 (LOW, conf 82) | No AD-erasability negative control for `register_derivation3` | **DONE**: added 1 test that constructs a Block with `let _h = register_derivation3(1,2,3); x` and asserts `differentiate_reverse(body, ["x"])` raises `NotImplementedError`. Mirrors the existing Inc 12 let-erasable positive control in the FAIL direction. |
+| code-review L3 (LOW, conf 80) | `has_evidence` comment overstates the guarantee | **DONE**: rewrote the comment to say "NECESSARY-BUT-NOT-SUFFICIENT predicate for the handle to refer to a real register_derivation* call". |
+| code-review L1 (LOW, conf 85) | No runtime test for ARENA_PUSH_TRIPLE overflow path | **DEFERRED** with TODO marker on the existing structural-symmetry test (`test_stage36_inc14_register_derivation3_arena_overflow_returns_zero_handle`). Needs a `__arena_set_cursor` test-only helper to position cursor near CAP without 2M+ pushes. Tracked as `TODO(stage36-inc16-arena-cursor-set)`. |
+
+**Commits / files touched in Inc 15:**
+
+- `helixc/frontend/typecheck.py` — parent_left_at + parent_right_at strict-i32; parent_at literal slot bounds [0, 2].
+- `helixc/ir/lower_ast.py` — parent_at runtime guards (CMP_GT handle 0, CMP_GE slot 0, BIT_AND, SELECT to -1).
+- `helixc/stdlib/provenance.hx` — added `evidence_middle`, `evidence_third`, `trace_evidence3`; rewrote `has_evidence` doc; updated `trace_evidence` stdout labels.
+- `helixc/frontend/parser.py` — STDLIB_FILES comment refreshed to mention new helpers.
+- `helixc/tests/test_stage36_provenance.py` —
+  - 3 existing trace_evidence-format tests updated for "slot0=/slot1=" labelling.
+  - 1 existing OOB-slot test converted to typecheck-error expectation (was runtime sentinel).
+  - 1 existing helpers-visible-in-stdlib test expanded to cover the 3 new helpers.
+  - 1 existing ARENA_PUSH_TRIPLE overflow test gained the Inc 15 TODO marker.
+  - 10 new Inc 15 canaries:
+    `test_stage36_inc15_parent_left_at_typecheck_rejects_i64`,
+    `test_stage36_inc15_parent_right_at_typecheck_rejects_i64`,
+    `test_stage36_inc15_parent_at_typecheck_rejects_negative_literal_slot`,
+    `test_stage36_inc15_parent_at_typecheck_rejects_literal_slot_three`,
+    `test_stage36_inc15_parent_at_null_handle_returns_neg_one_runtime`,
+    `test_stage36_inc15_parent_at_dynamic_negative_slot_returns_neg_one_runtime`,
+    `test_stage36_inc15_register_derivation3_ad_erasure_fails_closed_reverse`,
+    `test_stage36_inc15_evidence_middle_returns_slot1`,
+    `test_stage36_inc15_evidence_third_returns_slot2_for_3parent_handle`,
+    `test_stage36_inc15_trace_evidence3_stdout_format`,
+    `test_stage36_inc15_parent_at_dynamic_slot_zero_still_compiles`.
+
+**Verification at Inc 15:**
+
+- `test_stage36_provenance.py`: 131 passed (was 121 pre-Inc-15).
+- `test_provenance.py` + `test_reflection.py`: 41 passed.
+- `test_autodiff.py` + `test_autodiff_reverse.py` + `test_cli.py`: 359 passed.
+- Self-host gate (`scripts/stage33_selfhost_gate.py`): PASS. G2..G4 byte-identical sha `a6f1ee44...`; all 4 smoke programs exit 42; validate ok.
+- Full test count: 2,699 tests collected (up from 2,556 at Stage 35 closure; Inc 1-15 added 143 tests across the Stage 36 surface).
+
+**Total Stage 36 surface area after Inc 15** (26 typecheck-recognized
+builtins, was 23 pre-Inc-15): the Inc 14 set + `evidence_middle`,
+`evidence_third`, `trace_evidence3` from stdlib (not new builtins;
+they compose existing primitives). No new IR opcodes.
+
+**Stage 36 increment count after Inc 15**: 15 increments (Inc 1-14 + this).
+
+### Open Stage 36 backlog after Inc 15
+
+1. **Per-record arity word** (`stage36-inc16-arity-in-handle`): the
+   architectural fix for silent-failure H1 + L1 (type-design). Adds
+   1 arity slot to each ARENA_PUSH_PAIR / ARENA_PUSH_TRIPLE record.
+   Lets `parent_at` enforce `slot < arity_of(handle)` and return -1
+   on violation. Also unblocks `evidence_right` honesty on 3-parent
+   handles (currently returns slot[1] which is MIDDLE not RIGHT for
+   register_derivation3). Worth doing before any 4-parent variant
+   (Inc 17?) lands.
+2. **`__arena_set_cursor` test helper** (`stage36-inc16-arena-cursor-set`):
+   unblocks the deferred ARENA_PUSH_TRIPLE / ARENA_PUSH_PAIR overflow-
+   path tests (code-review L1, post-Inc-14 + post-Inc-10).
+3. **Nominal `TyDerivationHandle` wrapper type** (Inc 11 A1 HIGH,
+   stashed in prior aborted Inc 15). Genuinely architectural; needs
+   a print-int / sentinel-i32 ABI design pass first.
+4. **Carry-over from pre-Inc-15** items 2-5 in HANDOFF "What's still
+   missing from Stage 36" (auto-registration via derive, Logic<f64>
+   precision variant, multi-output reverse-mode AD, JAX-style
+   pytrees).
