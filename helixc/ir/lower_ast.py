@@ -2009,7 +2009,18 @@ class Lowerer:
                         # Stage 39 Inc 2 — cross-temporal transitions.
                         # Also identity at Phase-0; intent-only.
                         "to_past", "forecast",
-                        "recall_past", "actualize")
+                        "recall_past", "actualize",
+                        # Stage 40 Inc 1 — modal/epistemic
+                        # constructors + eliminators lower as
+                        # identity (Phase-0: modal kind lives at
+                        # the type system level only).
+                        "into_known", "into_believed",
+                        "into_goal", "into_uncertain",
+                        "from_known", "from_believed",
+                        "from_goal", "from_uncertain",
+                        # Stage 40 Inc 2 — modal transitions
+                        # (epistemic upgrades).
+                        "confirm", "act_on")
                     and len(expr.args) == 1):
                 return self._lower_expr(expr.args[0])
             # Stage 36 Increment 5: real two-parent provenance via

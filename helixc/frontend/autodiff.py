@@ -105,6 +105,14 @@ AD_KNOWN_PURE_CALLS = {
     "into_past", "into_present", "into_future", "into_eternal",
     "from_past", "from_present", "from_future", "from_eternal",
     "to_past", "forecast", "recall_past", "actualize",
+    # Stage 40 Inc 1 + Inc 2 — modal/epistemic identity-lowerings
+    # (4 kinds × intro/elim = 8 + 2 transitions = 10). Phase-0
+    # pure-identity at IR. Modal kinds compose with temporal kinds
+    # at the type level: `Known<Past<f32>>` differentiates same as
+    # raw `f32` through chained identity wrappers.
+    "into_known", "into_believed", "into_goal", "into_uncertain",
+    "from_known", "from_believed", "from_goal", "from_uncertain",
+    "confirm", "act_on",
     # Stage 36 Increment 9 post-Inc-8 audit C2 LOW fix: register the
     # boolean-algebra builtins as AD-pure. They're all integer-valued
     # (so the AD derivative is 0 for differentiable use cases), but
@@ -186,6 +194,15 @@ _FRAME_IDENTITY_AD_NAMES = frozenset({
     "into_past", "into_present", "into_future", "into_eternal",
     "from_past", "from_present", "from_future", "from_eternal",
     "to_past", "forecast", "recall_past", "actualize",
+    # Stage 40 Inc 1 + Inc 2 — modal/epistemic kinds share the same
+    # identity chain rule as frames/temporals: the wrapper tag is
+    # opaque to AD; gradient flows through the single inner arg. Added
+    # preemptively (Stage 39 lesson F4: do not relabel the block on a
+    # later stage's behalf; keep the stage tag accurate so grep-by-
+    # stage audits work). Covers 4 intro + 4 elim + 2 transitions.
+    "into_known", "into_believed", "into_goal", "into_uncertain",
+    "from_known", "from_believed", "from_goal", "from_uncertain",
+    "confirm", "act_on",
 })
 
 

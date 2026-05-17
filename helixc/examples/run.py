@@ -96,6 +96,11 @@ DEMOS: dict[str, dict] = {
         "title": "Temporal-kind lifecycle reasoner (Stage 39 Inc 3)",
         "expects": "exit code 42  (3 observations cycle through Present->Future->Present->Past + recall_past + Eternal sanity)",
     },
+    "modal": {
+        "file": "dogfood_13_modal_lifecycle.hx",
+        "title": "Modal/epistemic lifecycle reasoner (Stage 40 Inc 3)",
+        "expects": "exit code 42  (3 goals achieved + 3 beliefs confirmed + Uncertain sanity + Known<Past<i32>> cross-stage composition)",
+    },
 }
 
 

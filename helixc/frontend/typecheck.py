@@ -265,6 +265,22 @@ class TyTemporal(Type):
 
 
 @dataclass(frozen=True)
+class TyModal(Type):
+    """Stage 40 — a value tagged with a modal/epistemic kind:
+    Known / Believed / Goal / Uncertain. Real-world AGI reasoning
+    needs to track WHY it accepts a proposition. Treating a goal
+    as a known fact (category mistake at the heart of many AI
+    safety failures) is caught at compile time. Cross-modal
+    transitions (`confirm`: Believed -> Known when observed;
+    `act_on`: Goal -> Known when achieved) — Stage 40 Inc 2.
+    Composes with TyTemporal: `Known<Past<i32>>` = "I directly
+    observed this past fact" vs `Believed<Past<i32>>` = "I
+    inferred this past fact"."""
+    kind: str        # "known", "believed", "goal", "uncertain"
+    inner: Type
+
+
+@dataclass(frozen=True)
 class TySkill(Type):
     """Skill<F> — a learned procedure with a known difficulty. Produced by
     `learn_to`; called like a function. The runtime maintains a registry
@@ -1129,6 +1145,17 @@ class TypeChecker:
             if ty.base in temporal_map and len(ty.args) == 1:
                 return TyTemporal(kind=temporal_map[ty.base],
                                   inner=self._resolve_type(ty.args[0], scope))
+            # Stage 40 Inc 1 — modal/epistemic wrappers: Known<T> /
+            # Believed<T> / Goal<T> / Uncertain<T>. Mirrors TyTemporal.
+            modal_map = {
+                "Known":     "known",
+                "Believed":  "believed",
+                "Goal":      "goal",
+                "Uncertain": "uncertain",
+            }
+            if ty.base in modal_map and len(ty.args) == 1:
+                return TyModal(kind=modal_map[ty.base],
+                               inner=self._resolve_type(ty.args[0], scope))
             # Stage 28 — user-defined parametric struct (Audit 28.8 A3/B1).
             # If `ty.base` is a known generic struct AND the arity matches,
             # resolve `Pt<i32>` -> `TyStruct("Pt__i32")` so distinct
@@ -1918,6 +1945,11 @@ class TypeChecker:
         "from_past", "from_present", "from_future", "from_eternal",
         # Stage 39 Inc 2 — temporal transitions.
         "to_past", "forecast", "recall_past", "actualize",
+        # Stage 40 Inc 1 — modal constructors + eliminators.
+        "into_known", "into_believed", "into_goal", "into_uncertain",
+        "from_known", "from_believed", "from_goal", "from_uncertain",
+        # Stage 40 Inc 2 — modal transitions (epistemic upgrades).
+        "confirm", "act_on",
         "grad", "grad_rev", "grad_rev_all",
         "quote", "splice", "splice_f", "splice_f64",
         "modify", "modify_f", "modify_f64",
@@ -3364,6 +3396,83 @@ class TypeChecker:
                         expr.span,
                     ))
                     return TyUnknown(hint=bn)
+                # Stage 40 Inc 1 — modal constructors + eliminators.
+                # 4 modal kinds (known/believed/goal/uncertain) each
+                # get an into_* constructor (T -> KindName<T>) and a
+                # from_* eliminator (KindName<T> -> T). Mirrors Stage
+                # 37/38/39 patterns. All lower to identity at IR
+                # (Phase-0: modal kind lives at the type system level
+                # — zero runtime overhead).
+                _modal_intro = {
+                    "into_known":     "known",
+                    "into_believed":  "believed",
+                    "into_goal":      "goal",
+                    "into_uncertain": "uncertain",
+                }
+                if bn in _modal_intro:
+                    if len(arg_tys) != 1:
+                        self.errors.append(TypeError_(
+                            f"{bn}() takes 1 argument, got {len(arg_tys)}",
+                            expr.span,
+                        ))
+                        return TyUnknown(hint=bn)
+                    return TyModal(kind=_modal_intro[bn],
+                                   inner=arg_tys[0])
+                _modal_elim = {
+                    "from_known":     "known",
+                    "from_believed":  "believed",
+                    "from_goal":      "goal",
+                    "from_uncertain": "uncertain",
+                }
+                if bn in _modal_elim:
+                    if len(arg_tys) != 1:
+                        self.errors.append(TypeError_(
+                            f"{bn}() takes 1 argument, got {len(arg_tys)}",
+                            expr.span,
+                        ))
+                        return TyUnknown(hint=bn)
+                    want = _modal_elim[bn]
+                    if (isinstance(arg_tys[0], TyModal)
+                            and arg_tys[0].kind == want):
+                        return arg_tys[0].inner
+                    self.errors.append(TypeError_(
+                        f"{bn}() requires "
+                        f"{want.capitalize()}<T>, got "
+                        f"{self._fmt(arg_tys[0])}",
+                        expr.span,
+                    ))
+                    return TyUnknown(hint=bn)
+                # Stage 40 Inc 2 — modal transitions (epistemic
+                # upgrades). 2 deliberate directions:
+                #   confirm: Believed -> Known (an inferred belief
+                #     becomes a known fact when directly observed).
+                #   act_on:  Goal -> Known (the agent achieves a
+                #     goal; what was desired is now observed-true).
+                # Downgrades + Goal->Believed + Uncertain->any are
+                # deferred (see stage40 progress doc rationale).
+                _modal_transitions = {
+                    "confirm": ("believed", "known"),
+                    "act_on":  ("goal",     "known"),
+                }
+                if bn in _modal_transitions:
+                    if len(arg_tys) != 1:
+                        self.errors.append(TypeError_(
+                            f"{bn}() takes 1 argument, got {len(arg_tys)}",
+                            expr.span,
+                        ))
+                        return TyUnknown(hint=bn)
+                    src_kind, dst_kind = _modal_transitions[bn]
+                    if (isinstance(arg_tys[0], TyModal)
+                            and arg_tys[0].kind == src_kind):
+                        return TyModal(kind=dst_kind,
+                                       inner=arg_tys[0].inner)
+                    self.errors.append(TypeError_(
+                        f"{bn}() requires "
+                        f"{src_kind.capitalize()}<T>, got "
+                        f"{self._fmt(arg_tys[0])}",
+                        expr.span,
+                    ))
+                    return TyUnknown(hint=bn)
                 if bn == "consolidate" and len(arg_tys) == 1:
                     # Episodic -> Semantic
                     if isinstance(arg_tys[0], TyMemTier) and arg_tys[0].tier == "episodic":
@@ -4796,16 +4905,17 @@ class TypeChecker:
                     or any(self._contains_unknown_type(s)
                            for s in ty.shape))
         # Stage 39 closure gate-1 silent-failure F2 fix + gate-2 F6
-        # extension: ALL single-inner wrapper types must walk to
-        # their inner so a TyUnknown buried under any wrapper still
-        # short-circuits downstream struct monomorphization. Pre-F2
-        # the wrapped case silently returned False — a Stage-37/38
-        # hole Stage 39 would have inherited and widened. Gate 2 F6
-        # MEDIUM finding: the F2 sweep stopped short of TyDiff /
-        # TyLogic / TyQuote which are also single-inner wrappers
-        # with the same silent-failure mode; folded in here.
+        # extension + Stage 40 Inc 1 preemptive TyModal: ALL single-
+        # inner wrapper types must walk to their inner so a TyUnknown
+        # buried under any wrapper still short-circuits downstream
+        # struct monomorphization. Pre-F2 the wrapped case silently
+        # returned False — a Stage-37/38 hole Stage 39 would have
+        # inherited and widened. Gate 2 F6: the F2 sweep stopped short
+        # of TyDiff / TyLogic / TyQuote; folded in. Stage 40 Inc 1:
+        # TyModal added preemptively to close the H1/F2/F6 lesson
+        # before audit time.
         if isinstance(ty, (
-                TyMemTier, TyFrame, TyTemporal,
+                TyMemTier, TyFrame, TyTemporal, TyModal,
                 TyDiff, TyLogic, TyQuote,
         )):
             return self._contains_unknown_type(ty.inner)
@@ -4867,6 +4977,11 @@ class TypeChecker:
         # parallel walk so refinements under a temporal wrapper are
         # visible to the refinement-shape check. Mirrors TyFrame.
         if isinstance(target, TyTemporal) and isinstance(value_ty, TyTemporal):
+            return (target.kind == value_ty.kind
+                    and self._refinement_shape_exact(
+                        value_ty.inner, target.inner))
+        # Stage 40 Inc 1: TyModal preemptive parallel arm.
+        if isinstance(target, TyModal) and isinstance(value_ty, TyModal):
             return (target.kind == value_ty.kind
                     and self._refinement_shape_exact(
                         value_ty.inner, target.inner))
@@ -5534,6 +5649,10 @@ class TypeChecker:
         if isinstance(a, TyTemporal) and isinstance(b, TyTemporal):
             return (a.kind == b.kind
                     and self._refinement_shape_exact(a.inner, b.inner))
+        # Stage 40 Inc 1: TyModal preemptive parallel arm.
+        if isinstance(a, TyModal) and isinstance(b, TyModal):
+            return (a.kind == b.kind
+                    and self._refinement_shape_exact(a.inner, b.inner))
         if isinstance(a, TyTensor) and isinstance(b, TyTensor):
             return (len(a.shape) == len(b.shape)
                     and self._refinement_shape_exact(a.dtype, b.dtype)
@@ -5583,6 +5702,9 @@ class TypeChecker:
         # inners survive erasure and produce inconsistent diagnostics).
         if isinstance(ty, TyTemporal):
             return TyTemporal(ty.kind, self._erase_refinement(ty.inner))
+        # Stage 40 Inc 1: TyModal preemptive parallel arm.
+        if isinstance(ty, TyModal):
+            return TyModal(ty.kind, self._erase_refinement(ty.inner))
         if isinstance(ty, TyTensor):
             return TyTensor(
                 self._erase_refinement(ty.dtype), ty.shape, ty.device,
@@ -5701,6 +5823,9 @@ class TypeChecker:
         # `_join_branch_types` silently drops the refinement).
         if isinstance(ty, TyTemporal):
             return self._contains_refinement(ty.inner, _seen_structs)
+        # Stage 40 Inc 1: TyModal preemptive parallel arm.
+        if isinstance(ty, TyModal):
+            return self._contains_refinement(ty.inner, _seen_structs)
         if isinstance(ty, TyTensor):
             return (self._contains_refinement(ty.dtype, _seen_structs)
                     or any(self._contains_refinement(s, _seen_structs)
@@ -5719,9 +5844,10 @@ class TypeChecker:
         # Stage 39 closure gate-1 type-design H3: include TyTemporal so
         # `_join_branch_types` correctly fires the refinement-shape
         # check for temporal-wrapped values across branches.
+        # Stage 40 Inc 1: TyModal added preemptively (same rationale).
         return isinstance(ty, (
             TyArray, TyTuple, TyRef, TyPtr, TyFn, TyDiff, TyLogic, TyQuote,
-            TyMemTier, TyFrame, TyTemporal, TyTensor, TyTile,
+            TyMemTier, TyFrame, TyTemporal, TyModal, TyTensor, TyTile,
         ))
 
     def _contains_refined_function(self, ty: Type) -> bool:
@@ -5748,6 +5874,9 @@ class TypeChecker:
         # Stage 39 closure gate-1 type-design H3: TyTemporal walks
         # to inner for the refined-function check too.
         if isinstance(ty, TyTemporal):
+            return self._contains_refined_function(ty.inner)
+        # Stage 40 Inc 1: TyModal preemptive parallel arm.
+        if isinstance(ty, TyModal):
             return self._contains_refined_function(ty.inner)
         if isinstance(ty, TyTensor):
             return (self._contains_refined_function(ty.dtype)
@@ -6743,6 +6872,13 @@ class TypeChecker:
             return a.kind == b.kind and self._compatible(a.inner, b.inner)
         if isinstance(a, TyTemporal) or isinstance(b, TyTemporal):
             return False
+        # Stage 40 Inc 1: TyModal preemptive parallel arm (same H1
+        # rationale — `Known<i32>` must not be silently compatible
+        # with raw i32 / cross-kind Modal).
+        if isinstance(a, TyModal) and isinstance(b, TyModal):
+            return a.kind == b.kind and self._compatible(a.inner, b.inner)
+        if isinstance(a, TyModal) or isinstance(b, TyModal):
+            return False
         # Audit 28.8 cycle 2 B:C3: Quote<T> ~ Quote<U> iff T ~ U.
         # Reject Quote<T> ~ T (raw value passed where Quote expected)
         # — that was the silent acceptance path pre-fix.
@@ -6912,6 +7048,10 @@ class TypeChecker:
         if isinstance(t, TyTemporal):
             cap = {"past": "Past", "present": "Present",
                    "future": "Future", "eternal": "Eternal"}
+            return f"{cap.get(t.kind, t.kind)}<{self._fmt(t.inner)}>"
+        if isinstance(t, TyModal):
+            cap = {"known": "Known", "believed": "Believed",
+                   "goal": "Goal", "uncertain": "Uncertain"}
             return f"{cap.get(t.kind, t.kind)}<{self._fmt(t.inner)}>"
         if isinstance(t, TySkill):
             tag = f' "{t.task}"' if t.task else ""
