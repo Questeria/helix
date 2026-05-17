@@ -736,3 +736,133 @@ def test_stage49_inc4_dogfood_17_still_exits_42():
     assert typecheck(prog) == []
     elf = compile_module_to_elf(lower(prog))
     assert _run_elf(elf) == 42
+
+
+# ============================================================
+# Inc 1.5 — runtime wrong-arm tag-check on unwrap_ok / unwrap_err
+# (gate-1 silent-failure F1 + F2 fix)
+# ============================================================
+
+
+def _run_elf_full(elf: bytes) -> tuple[int, str]:
+    """Run + return (returncode, stderr_text). Used for panic-path
+    tests where we need to observe the panic message + the non-
+    clean exit."""
+    with tempfile.NamedTemporaryFile(suffix=".bin", delete=False) as f:
+        f.write(elf)
+        bin_path = f.name
+    try:
+        os.chmod(bin_path, 0o755)
+        abs_p = bin_path.replace("\\", "/").replace("C:", "/mnt/c")
+        r = subprocess.run(
+            ["wsl", "--", "bash", "-c",
+             f"chmod +x {abs_p} && exec {abs_p}"],
+            capture_output=True, timeout=30,
+        )
+        return r.returncode, r.stderr.decode("utf-8", "replace")
+    finally:
+        try:
+            os.unlink(bin_path)
+        except OSError:
+            pass
+
+
+def test_stage49_inc1_5_unwrap_ok_on_dynamic_err_panics():
+    """Gate-1 silent-failure F1: pre-Inc-1.5 `unwrap_ok(make_err())`
+    where make_err() returns Err(99) silently extracted the Err
+    payload (99) as if it were Ok — HIGH silent miscompile.
+
+    Post-Inc-1.5 the unwrap_ok lowering emits a runtime
+    RESULT_TAG check + COND_BR to a TRAP block. On mismatch the
+    process prints `panic[28503]: unwrap_ok called on an Err-
+    tagged Result` to stderr and sys_exit's. The user-visible
+    signal: NON-CLEAN process termination (no longer the silent
+    99 exit code) AND a panic diagnostic on stderr.
+
+    Note: the WSL bridge can report the post-syscall exit code
+    as 4294967295 (uint32 -1) for signaled processes rather than
+    the Linux 128+signum or sys_exit byte value. The safety
+    property is that the process does NOT exit with 99 (the
+    wrong-arm payload), and the panic message reaches stderr.
+    Future portability work may normalize the exit code."""
+    src = """
+fn make_err() -> Result<i32, i32> { Err(99) }
+fn main() -> i32 {
+    unwrap_ok(make_err())
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    assert typecheck(prog) == []
+    elf = compile_module_to_elf(lower(prog))
+    returncode, stderr = _run_elf_full(elf)
+    assert returncode != 99, \
+        f"silent-miscompile regression: got the wrong-arm payload " \
+        f"as exit code (returncode={returncode!r}, stderr={stderr!r})"
+    assert "unwrap_ok called on an Err-tagged Result" in stderr, \
+        f"panic message must reach stderr, got: {stderr!r}"
+
+
+def test_stage49_inc1_5_unwrap_err_on_dynamic_ok_panics():
+    """Symmetric companion to the unwrap_ok F1 fix. Pre-fix
+    `unwrap_err(make_ok())` silently extracted Ok payload (7);
+    post-fix panics with `unwrap_err called on an Ok-tagged
+    Result` on stderr."""
+    src = """
+fn make_ok() -> Result<i32, i32> { Ok(7) }
+fn main() -> i32 {
+    unwrap_err(make_ok())
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    assert typecheck(prog) == []
+    elf = compile_module_to_elf(lower(prog))
+    returncode, stderr = _run_elf_full(elf)
+    assert returncode != 7, \
+        f"silent-miscompile regression: got the wrong-arm payload " \
+        f"as exit code (returncode={returncode!r}, stderr={stderr!r})"
+    assert "unwrap_err called on an Ok-tagged Result" in stderr, \
+        f"panic message must reach stderr, got: {stderr!r}"
+
+
+def test_stage49_inc1_5_unwrap_ok_compose_through_map_err_panics():
+    """Gate-1 silent-failure F2: composition `unwrap_ok(map_err(
+    Err(1), 99))` propagated the Err through map_err's SELECT and
+    THEN silently extracted via unwrap_ok — payload 99 leaked as
+    Ok. Post-Inc-1.5 the runtime tag-check catches the dynamic-
+    operand case at unwrap_ok and panics."""
+    src = """
+fn main() -> i32 {
+    let r: Result<i32, i32> = Err(1);
+    unwrap_ok(map_err(r, 99))
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    assert typecheck(prog) == []
+    elf = compile_module_to_elf(lower(prog))
+    returncode, stderr = _run_elf_full(elf)
+    assert returncode != 99, \
+        f"compose-through-map_err silent-miscompile regression: " \
+        f"returncode={returncode!r}, stderr={stderr!r}"
+    assert "unwrap_ok called on an Err-tagged Result" in stderr, \
+        f"panic message must reach stderr, got: {stderr!r}"
+
+
+def test_stage49_inc1_5_unwrap_ok_on_correct_arm_still_works():
+    """Sanity: the runtime tag-check must NOT break the
+    correct-arm case. unwrap_ok(Ok(42)) must still return 42
+    cleanly, no panic, no spurious stderr."""
+    src = """
+fn main() -> i32 {
+    let r: Result<i32, i32> = Ok(42);
+    unwrap_ok(r)
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    assert typecheck(prog) == []
+    elf = compile_module_to_elf(lower(prog))
+    returncode, stderr = _run_elf_full(elf)
+    assert returncode == 42, \
+        f"correct-arm unwrap_ok regression: returncode={returncode!r}, " \
+        f"stderr={stderr!r}"
+    assert "panic" not in stderr.lower(), \
+        f"correct-arm path must not panic, got: {stderr!r}"

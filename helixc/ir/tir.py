@@ -325,6 +325,15 @@ class OpKind(Enum):
     #
     # All three ops are pure-functional, side-effect-free, and elidable by
     # DCE if their result is unused.
+    #
+    # Tag-value reservation policy (Stage 49 gate-1 type-design M2):
+    # tag 0 = Ok, tag 1 = Err are reserved EXCLUSIVELY for Result<T, E>.
+    # Future discriminated-union families (e.g. Option<T> in Stage 50+)
+    # MUST get their own opcode family (e.g. OPTION_PACK / OPTION_TAG /
+    # OPTION_PAYLOAD with their own tag-value convention) — DO NOT reuse
+    # RESULT_TAG to query an Option discriminator, even if the natural
+    # value (None = 0, Some = 1) happens to collide. Sharing the opcode
+    # family would let is_ok-on-Option typecheck silently.
     RESULT_PACK = "result.pack"        # operands: (tag i32, payload i32) -> result: packed i64
     RESULT_TAG = "result.tag"          # operand: packed i64 -> result: tag i32
     RESULT_PAYLOAD = "result.payload"  # operand: packed i64 -> result: payload i32

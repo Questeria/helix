@@ -35,6 +35,11 @@ from .ast_walker import ASTVisitor
 
 TRAP_PANIC_INVOKED = 28501
 TRAP_UNWIND_NOT_SUPPORTED = 28502
+# Stage 49 closure Inc 1.5: runtime tag-check on unwrap_ok / unwrap_err.
+# Fires when the dynamic Result has the wrong arm for the called eliminator
+# (e.g. unwrap_ok on an Err-tagged Result). Closes the gate-1 silent-failure
+# Finding 1 (wrong-arm extract) + Finding 2 (compose-through-map_* wrong-arm).
+TRAP_RESULT_WRONG_UNWRAP = 28503
 
 
 # Stage 28.8.2: panic_pass walker migrated to ASTVisitor base class.

@@ -2081,12 +2081,65 @@ class Lowerer:
                 packed = self._lower_expr(expr.args[0])
                 if packed is None:
                     return None
-                # Inc 1: payload extract only — runtime tag-check on
-                # wrong-arm (Stage 49 Inc 1.5 / later) still pending,
-                # so unwrap_ok / unwrap_err currently extract the
-                # low-32 payload without verifying the tag matches.
-                # Static-provenance checks at typecheck already block
-                # the most common wrong-arm cases.
+                # Stage 49 closure Inc 1.5: runtime wrong-arm tag-check.
+                # Pre-fix unwrap_ok / unwrap_err emitted only
+                # RESULT_PAYLOAD, silently extracting the low 32 bits
+                # regardless of the tag — this leaked the Err payload as
+                # Ok when the dynamic Result was actually Err (gate-1
+                # silent-failure F1 + composition F2 with map_*).
+                # Post-fix: emit RESULT_TAG, compare against the
+                # expected tag (0 for unwrap_ok, 1 for unwrap_err),
+                # COND_BR to a TRAP block on mismatch; otherwise
+                # fall through and extract the payload.
+                from ..frontend.panic_pass import (
+                    TRAP_RESULT_WRONG_UNWRAP,
+                )
+                is_unwrap_ok = expr.callee.name == "unwrap_ok"
+                expected_tag_value = 0 if is_unwrap_ok else 1
+                tag = self.builder.emit(
+                    tir.OpKind.RESULT_TAG, packed,
+                    result_ty=tir.TIRScalar("i32"))
+                expected = self.builder.const_int(
+                    expected_tag_value, "i32")
+                mismatch = self.builder.emit(
+                    tir.OpKind.CMP_NE, tag, expected,
+                    result_ty=tir.TIRScalar("bool"))
+                panic_blk = self.builder.append_block()
+                ok_blk = self.builder.append_block()
+                self.builder.emit(
+                    tir.OpKind.COND_BR, mismatch,
+                    attrs={"true_block": panic_blk.id,
+                           "false_block": ok_blk.id})
+                # Panic block: dynamic wrong-arm — emit a TRAP with
+                # a deterministic message naming the failed
+                # eliminator. The TRAP op terminates the block via
+                # sys_exit; execution never reaches the post-TRAP
+                # payload-extract.
+                self.builder.switch_to(panic_blk)
+                panic_text = (
+                    "unwrap_ok called on an Err-tagged Result"
+                    if is_unwrap_ok
+                    else "unwrap_err called on an Ok-tagged Result"
+                )
+                self.builder.emit(
+                    tir.OpKind.TRAP,
+                    result_ty=tir.TIRScalar("i32"),
+                    attrs={"text": panic_text,
+                           "trap_id": TRAP_RESULT_WRONG_UNWRAP})
+                # Synthetic BR to ok_blk so the block is properly
+                # terminated for the IR validator + codegen layout.
+                # At runtime this BR is unreachable: TRAP performs
+                # sys_exit, which doesn't return. The BR exists only
+                # to give panic_blk a well-formed terminator, which
+                # avoids stray fall-through into the ok_blk machine
+                # code if the TRAP's sys_exit ever returns (it
+                # shouldn't, but the IR is now defensively sound).
+                sentinel_zero = self.builder.const_int(0, "i32")
+                self.builder.emit(
+                    tir.OpKind.BR, sentinel_zero,
+                    attrs={"target_block": ok_blk.id})
+                # Ok block: tag matches — extract the payload.
+                self.builder.switch_to(ok_blk)
                 return self.builder.emit(
                     tir.OpKind.RESULT_PAYLOAD, packed,
                     result_ty=tir.TIRScalar("i32"))
@@ -2099,6 +2152,15 @@ class Lowerer:
             # operand is Ok (tag == 0), extract the payload and
             # continue with the user's code in the ok-fall-through
             # block.
+            #
+            # Gate-1 type-design L1 polish: each `?` allocates a
+            # fresh err_blk/ok_blk pair via append_block(), so
+            # multiple `?` operators in the same expression (e.g.
+            # `f()? + g()?`) do not alias control flow — each `?`
+            # gets its own COND_BR + RETURN + payload-extract
+            # triple. The ok_blk becomes the "current block" for
+            # subsequent lowering, so post-`?` code naturally
+            # threads through.
             if (isinstance(expr.callee, A.Name)
                     and expr.callee.name == "__try"
                     and len(expr.args) == 1):
@@ -2238,12 +2300,15 @@ class Lowerer:
                 tag = self.builder.emit(
                     tir.OpKind.RESULT_TAG, r_packed,
                     result_ty=tir.TIRScalar("i32"))
-                # For map_ok: replace when tag == 0 (Ok side).
-                # For map_err: replace when tag == 1 (Err side).
-                # Build the replacement packed-i64 with the matching
-                # tag value (0 for Ok-side, 1 for Err-side).
-                replace_tag_value = (
-                    0 if expr.callee.name == "map_ok" else 1)
+                # Stage 49 gate-1 type-design L2 polish: explicit
+                # local for readability; the SELECT operand order
+                # is (cond, true_value, false_value) so the
+                # replacement (new_packed) goes in the TRUE arm
+                # which fires when (tag == replace_tag_value) —
+                # for map_ok that's tag==0 (Ok side), for map_err
+                # that's tag==1 (Err side).
+                is_map_ok = expr.callee.name == "map_ok"
+                replace_tag_value = 0 if is_map_ok else 1
                 replace_tag = self.builder.const_int(
                     replace_tag_value, "i32")
                 cond = self.builder.emit(

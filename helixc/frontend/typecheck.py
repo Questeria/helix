@@ -640,6 +640,20 @@ class TypeChecker:
         # restore, the assigns-stack, and the wrong-arm rejections
         # become a debug-only lint at most). Sites 2-6 + C1-C3 +
         # H1 all collapse when site 4's dict goes away.
+        #
+        # TODO(stage49-inc1.5): the SPECIFIC trigger for retirement
+        # is the runtime tag-check addition to unwrap_ok / unwrap_err
+        # (panic-on-wrong-arm). Once that lands, consumer site C1
+        # becomes redundant (runtime tag covers it). C2 (__try) is
+        # already redundant post-Inc-4 — kept only for completeness;
+        # the typecheck reject was lifted in commit 47d8f66. C3
+        # (Assign-arm prov pop) is still useful for the few
+        # static-fold paths. Retirement plan: when Inc 1.5 lands,
+        # delete the C1 static-prov reject and audit whether the
+        # mutation-site stewardship (sites 2-6) can collapse to a
+        # simpler flat-dict-per-fn shape.
+        # Gate-1 type-design M3 polish: this TODO is the explicit
+        # retirement-trigger marker requested by the audit.
         self._result_constructor_provenance: dict[str, str] = {}
         # Gate-3 G3-F1 fix: parallel stack tracking which names
         # were INTRODUCED-via-let in each open block. Used at
