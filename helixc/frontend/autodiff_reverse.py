@@ -49,6 +49,7 @@ from . import ast_nodes as A
 from .autodiff import (
     _inline_lets, _simplify, _inline_user_calls, _ad_warn,
     NUMERIC_FOR_AD,
+    AD_INTEGER_VALUED_LOGIC, _raise_integer_logic_in_ad,
 )
 
 
@@ -187,6 +188,15 @@ def _propagate(node: A.Expr, adj: A.Expr, acc: dict[str, list[A.Expr]]) -> None:
             _propagate(node.final_expr, adj, acc)
         return
     if isinstance(node, A.Call):
+        # Stage 36 Inc 12 — close Inc 11 type-design B2 MEDIUM deferral.
+        # Integer-valued boolean Logic ops are AD-pure (so let-inlining
+        # doesn't trap) but have no chain rule; pre-fix they silently
+        # produced a zero adjoint contribution. Mirror the forward-mode
+        # guard in autodiff._diff_call_chain_rule: fail loud before any
+        # chain-rule arm runs.
+        if (isinstance(node.callee, A.Name)
+                and node.callee.name in AD_INTEGER_VALUED_LOGIC):
+            _raise_integer_logic_in_ad(node.callee.name, "reverse")
         # __powi(x, n) where n is a literal int: adj_x = adj * n * x^(n-1).
         if (isinstance(node.callee, A.Name) and node.callee.name == "__powi"
                 and len(node.args) == 2 and isinstance(node.args[1], A.IntLit)):
