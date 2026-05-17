@@ -16,6 +16,7 @@ from helixc.frontend.panic_pass import (
     find_unwind_attrs,
     validate_unwind,
     TRAP_PANIC_INVOKED,
+    TRAP_RESULT_WRONG_UNWRAP,
     TRAP_UNWIND_NOT_SUPPORTED,
 )
 
@@ -139,6 +140,11 @@ def test_validate_unwind_clean():
 def test_trap_ids():
     assert TRAP_PANIC_INVOKED == 28501
     assert TRAP_UNWIND_NOT_SUPPORTED == 28502
+    # Stage 49 closure gate-2 code-review M2 fix: add the new
+    # Inc 1.5 wrong-arm unwrap trap-id to the registry sentinel
+    # so a future maintainer who re-uses 28503 gets a test failure
+    # rather than a silent constant collision.
+    assert TRAP_RESULT_WRONG_UNWRAP == 28503
 
 
 # ----------------------------------------------------------------------

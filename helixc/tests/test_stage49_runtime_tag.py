@@ -866,3 +866,108 @@ fn main() -> i32 {
         f"stderr={stderr!r}"
     assert "panic" not in stderr.lower(), \
         f"correct-arm path must not panic, got: {stderr!r}"
+
+
+# ============================================================
+# Gate-1 code-review M4: chained map_ok / map_err composition
+# pins the SELECT-of-SELECT semantics
+# ============================================================
+
+
+def test_stage49_inc3_map_chain_preserves_tag_through_select_of_select():
+    """Gate-1 code-review M4: pins the SELECT-of-SELECT semantics
+    for chained `map_err(map_ok(r, x), y)` (and the symmetric
+    `map_ok(map_err(r, x), y)`). Pre-this-test, both map_*
+    lowerings used SELECT on tag-equality independently; a future
+    refactor that swaps SELECT operand order would silently break
+    one of these directions without breaking the existing
+    single-map tests. This test catches that regression class."""
+    # Direction 1: Ok(5) → map_err passes through (Ok stays) → map_ok replaces inner with 42 → unwrap_ok = 42.
+    src_ok_path = """
+fn main() -> i32 {
+    let r: Result<i32, i32> = Ok(5);
+    unwrap_ok(map_ok(map_err(r, 999), 42))
+}
+"""
+    prog = parse(src_ok_path, include_stdlib=True)
+    assert typecheck(prog) == []
+    elf = compile_module_to_elf(lower(prog))
+    assert _run_elf(elf) == 42
+
+    # Direction 2: Err(7) → map_ok passes through (Err stays) → map_err replaces inner with 42 → unwrap_err = 42.
+    src_err_path = """
+fn main() -> i32 {
+    let r: Result<i32, i32> = Err(7);
+    unwrap_err(map_err(map_ok(r, 99), 42))
+}
+"""
+    prog = parse(src_err_path, include_stdlib=True)
+    assert typecheck(prog) == []
+    elf = compile_module_to_elf(lower(prog))
+    assert _run_elf(elf) == 42
+
+
+# ============================================================
+# Gate-2 type-design G2-H1: wider-payload typecheck reject
+# ============================================================
+
+
+def test_stage49_gate2_g2h1_result_i64_payload_rejected():
+    """Gate-2 type-design G2-H1: pre-fix `Result<i64, i32>` (or
+    `Result<*, i64>`) typecheck-passed but silently truncated the
+    high 32 bits of the i64 at IR lowering (RESULT_PACK with a
+    32-bit payload slot). The lower_ast comment falsely claimed
+    typecheck enforced i32 — now true. Post-fix typecheck rejects
+    with a diagnostic naming the side + the offending type +
+    pointing at the Stage 50+ widening plan."""
+    src = """
+fn id_i64(x: i64) -> i64 { x }
+fn main() -> i32 {
+    let big: i64 = id_i64(5000000000);
+    let r: Result<i64, i32> = Ok(big);
+    0
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    errs = typecheck(prog)
+    err_strs = " ".join(str(e) for e in errs)
+    assert "not supported by the Stage 49 packed-i64" in err_strs, \
+        f"Ok(i64) must reject with G2-H1 diag, got: {err_strs}"
+
+
+def test_stage49_gate2_g2h1_result_f64_payload_rejected():
+    """Symmetric to i64: Result<f64, i32> must reject at typecheck."""
+    src = """
+fn main() -> i32 {
+    let r: Result<f64, i32> = Ok(3.14_f64);
+    0
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    errs = typecheck(prog)
+    err_strs = " ".join(str(e) for e in errs)
+    assert ("Stage 49 packed-i64" in err_strs
+            or "Ok() payload type f64" in err_strs), \
+        f"Ok(f64) must reject with G2-H1 diag, got: {err_strs}"
+
+
+def test_stage49_gate2_g2h1_result_known_i32_still_works():
+    """Sanity: wrapper-around-i32 must still work. `Known<i32>` is
+    identity-lowered at expression position, so the payload is
+    still i32 at packing time. The G2-H1 reject helper strips
+    wrapper layers before checking the inner."""
+    src = """
+fn main() -> i32 {
+    let k: Known<i32> = into_known(42);
+    let r: Result<Known<i32>, i32> = Ok(k);
+    from_known(unwrap_ok(r))
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    errs = typecheck(prog)
+    assert errs == [], \
+        f"Result<Known<i32>, i32> must typecheck clean " \
+        f"(wrapper-stripping in G2-H1 helper), got: " \
+        f"{[str(e) for e in errs]}"
+    elf = compile_module_to_elf(lower(prog))
+    assert _run_elf(elf) == 42

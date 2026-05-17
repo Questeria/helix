@@ -933,12 +933,6 @@ class Asm:
     # the CL-form shifts require.
     def shl_rax_imm8(self, imm: int) -> None:  self.b.emit(0x48, 0xC1, 0xE0, imm & 0xFF)
     def shr_rax_imm8(self, imm: int) -> None:  self.b.emit(0x48, 0xC1, 0xE8, imm & 0xFF)
-    # mov eax, eax: 32-bit register-to-register move. Because the
-    # destination is a 32-bit GPR, the CPU automatically zeroes the
-    # upper 32 bits of rax. Equivalent to `rax &= 0xFFFFFFFF` for one
-    # encoded byte less than `and rax, 0xFFFFFFFF`. Stage 49 Inc 1 uses
-    # this to extract the low-32 payload from a packed Result i64.
-    def mov_eax_eax(self) -> None:  self.b.emit(0x89, 0xC0)
     # Bitwise unary NOT (~): one's complement.
     def not_eax(self) -> None:  self.b.emit(0xF7, 0xD0)
     def not_rax(self) -> None:  self.b.emit(0x48, 0xF7, 0xD0)

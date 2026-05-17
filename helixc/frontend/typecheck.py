@@ -4544,6 +4544,15 @@ class TypeChecker:
                             expr.span,
                         ))
                         return TyUnknown(hint=bn)
+                    # Stage 49 closure gate-2 type-design G2-H1 fix:
+                    # reject non-i32 payload. The Stage 49 Inc 1
+                    # packed-i64 representation uses a 32-bit
+                    # payload slot; wider types (i64, f32, f64,
+                    # struct) would silently truncate at lowering.
+                    # Stage 50+ will widen the representation
+                    # (per docs/stage49-plan-2026-05-17.md:164-171).
+                    self._reject_non_i32_result_payload(
+                        arg_tys[0], expr.span, side="Ok")
                     return TyResult(
                         ok_ty=arg_tys[0],
                         err_ty=TyUnknown(hint="Err inferred"),
@@ -4555,6 +4564,9 @@ class TypeChecker:
                             expr.span,
                         ))
                         return TyUnknown(hint=bn)
+                    # Stage 49 closure gate-2 G2-H1 (Err side).
+                    self._reject_non_i32_result_payload(
+                        arg_tys[0], expr.span, side="Err")
                     return TyResult(
                         ok_ty=TyUnknown(hint="Ok inferred"),
                         err_ty=arg_tys[0],
@@ -4691,8 +4703,15 @@ class TypeChecker:
                     #    which is the correct Phase-0 behaviour
                     #    pre-runtime-tag.
                     if len(arg_tys) != 1:
+                        # Stage 49 closure gate-1 code-review L1 polish:
+                        # vocab aligned with is_ok/is_err/map_* arity
+                        # diagnostics ("argument" not "operand") for
+                        # consistency. Pre-fix `?` said "1 operand"
+                        # while sibling builtins said "1 argument" —
+                        # confusing for users since the underlying
+                        # arity-mismatch class is identical.
                         self.errors.append(TypeError_(
-                            f"`?` takes 1 operand, got {len(arg_tys)}",
+                            f"`?` takes 1 argument, got {len(arg_tys)}",
                             expr.span,
                         ))
                         return TyUnknown(hint="try")
@@ -6327,6 +6346,69 @@ class TypeChecker:
                     span,
                 )
             return
+
+    def _reject_non_i32_result_payload(
+        self, ty: Type, span, *, side: str,
+    ) -> None:
+        """Stage 49 closure gate-2 type-design G2-H1 fix: the
+        Inc 1 packed-i64 Result representation uses a 32-bit
+        payload slot. Non-i32 payloads (i64, f32, f64, struct,
+        etc.) silently truncate at IR lowering. Until Stage 50+
+        widens the representation, reject at typecheck with a
+        clear diagnostic naming the side and the offending type.
+
+        Permits: TyPrim('i32'), TyUnknown (inferred from the
+        sibling side; the gate-1 G2-F1 mechanism still keeps
+        provenance), and TyResult itself (allows nested
+        Result-of-Result via the existing identity-lowering
+        until Stage 50+ widens).
+        """
+        # Permissive: TyUnknown comes from the sibling side's
+        # constructor (Err inferred / Ok inferred) — let it pass.
+        if isinstance(ty, TyUnknown):
+            return
+        # The Stage 37-41 wrapper-quintet types currently lower
+        # as identity in expression position (the constructor
+        # call e.g. into_known() routes through the identity
+        # arm in lower_ast). The inner type is what matters
+        # for the packed payload — recurse one level.
+        from . import typecheck as _self_mod  # avoid re-import noise
+        # Strip wrapper layers; Phase-0 they're identity-lowered.
+        stripped = ty
+        for _ in range(8):  # guard against pathological nesting
+            if isinstance(stripped, TyModal):
+                stripped = stripped.inner
+            elif isinstance(stripped, TyTemporal):
+                stripped = stripped.inner
+            elif isinstance(stripped, TyCausal):
+                stripped = stripped.inner
+            elif isinstance(stripped, TyFrame):
+                stripped = stripped.inner
+            elif isinstance(stripped, TyMemTier):
+                stripped = stripped.inner
+            elif isinstance(stripped, TyLogic):
+                stripped = stripped.inner
+            else:
+                break
+        if isinstance(stripped, TyUnknown):
+            return
+        # Accept i32 (the supported payload width).
+        if isinstance(stripped, TyPrim) and stripped.name == "i32":
+            return
+        # Accept nested Result (identity-recurses to i64 packed).
+        if isinstance(stripped, TyResult):
+            return
+        # Reject everything else with a clear diagnostic.
+        self.errors.append(TypeError_(
+            f"{side}() payload type {self._fmt(ty)} is not "
+            f"supported by the Stage 49 packed-i64 Result "
+            f"representation; only i32 payloads work today",
+            span,
+            hint="Stage 50+ widens the payload representation; "
+            "for now, use Result<i32, i32> or wrap a wider "
+            "value in a small i32 handle. See "
+            "docs/stage49-plan-2026-05-17.md:164-171.",
+        ))
 
     def _contains_unknown_type(self, ty: Type) -> bool:
         if isinstance(ty, TyUnknown):

@@ -2046,15 +2046,18 @@ class Lowerer:
             #                 Phase-0 dogfood_17 exit-42 invariant on
             #                 the static-Ok pathway.)
             #
-            # Note: unwrap_ok and unwrap_err currently emit the same IR.
-            # The Stage 46 typecheck guards (constructor-provenance
-            # check) catch wrong-arm calls on STATICALLY-known Results
-            # at compile time. The runtime tag check that distinguishes
-            # them on DYNAMIC Results (call-returns) is deferred to
-            # Inc 1.5 / Inc 2 to keep this increment small. Until then,
-            # unwrap_err on a runtime-Ok Result extracts the i32 payload
-            # silently — a known semantic gap that the typecheck arm
-            # currently blocks at the source level.
+            # Note: unwrap_ok and unwrap_err emit the same i32 payload
+            # extract, but Stage 49 Inc 1.5 (commit db26e1c) added a
+            # runtime tag-check that distinguishes them on DYNAMIC
+            # Results (call-returns). The IR shape is now:
+            #   RESULT_TAG → CMP_NE → COND_BR → panic_blk (TRAP) | ok_blk
+            #   ok_blk: RESULT_PAYLOAD → i32
+            # The TRAP fires `panic[28503]: unwrap_<X> called on a
+            # <Y>-tagged Result` on stderr and sys_exit's. The Stage
+            # 46 typecheck guards (constructor-provenance check) still
+            # catch STATICALLY-known wrong-arm calls at compile time;
+            # the runtime tag-check covers the DYNAMIC case the static
+            # provenance can't see.
             if (isinstance(expr.callee, A.Name)
                     and expr.callee.name == "Ok"
                     and len(expr.args) == 1):
@@ -2126,18 +2129,22 @@ class Lowerer:
                     result_ty=tir.TIRScalar("i32"),
                     attrs={"text": panic_text,
                            "trap_id": TRAP_RESULT_WRONG_UNWRAP})
-                # Synthetic BR to ok_blk so the block is properly
-                # terminated for the IR validator + codegen layout.
-                # At runtime this BR is unreachable: TRAP performs
-                # sys_exit, which doesn't return. The BR exists only
-                # to give panic_blk a well-formed terminator, which
-                # avoids stray fall-through into the ok_blk machine
-                # code if the TRAP's sys_exit ever returns (it
-                # shouldn't, but the IR is now defensively sound).
-                sentinel_zero = self.builder.const_int(0, "i32")
-                self.builder.emit(
-                    tir.OpKind.BR, sentinel_zero,
-                    attrs={"target_block": ok_blk.id})
+                # Gate-2 code-review H1 + type-design G2-M2 fix:
+                # the prior synthetic `BR sentinel_zero -> ok_blk`
+                # was a "defense-in-depth" that backfired — if any
+                # future pass eliminated the TRAP (DCE, branch-fold,
+                # TRAP-codegen regression), control would fall
+                # through to RESULT_PAYLOAD in ok_blk, RE-OPENING
+                # the silent-miscompile path Inc 1.5 closed.
+                # Removed the BR entirely: TRAP is treated as an
+                # implicit terminator (matches the existing panic()
+                # call site at lower_ast.py:~2792, which also emits
+                # TRAP alone with no follow-up BR). The codegen's
+                # ud2 belt-and-braces after sys_exit (x86_64.py
+                # ~3756) is the runtime fallback. Any future TRAP
+                # regression now traps loudly via ud2 SIGILL rather
+                # than silently falling through to wrong-arm
+                # payload extract.
                 # Ok block: tag matches — extract the payload.
                 self.builder.switch_to(ok_blk)
                 return self.builder.emit(
@@ -2184,6 +2191,21 @@ class Lowerer:
                 # enclosing fn. The return value matches the fn's
                 # signature (i64 packed Result).
                 self.builder.switch_to(err_blk)
+                # Gate-2 silent-failure SF1-F1 fix: mirror the
+                # A.Return arm's C2-2 TRACE_EXIT emission so a
+                # @trace'd fn using `?` produces balanced
+                # ENTRY/EXIT pairs. Pre-fix the explicit early
+                # RETURN from `?` Err-propagation bypassed the
+                # A.Return code path and the trace stream lost
+                # an EXIT — invisible today (backend stubs the
+                # ops) but would corrupt the buffer once Stage 30
+                # runtime lands. Same defect class as the C2-2
+                # fix at A.Return below (lower_ast.py:~3725).
+                if self._is_fn_traced:
+                    self.builder.emit(
+                        tir.OpKind.TRACE_EXIT, packed,
+                        attrs={"fn_name": self._current_fn_name or "<unknown>"},
+                    )
                 self.builder.emit(tir.OpKind.RETURN, packed)
                 # Ok arm: extract the payload (i32). Subsequent
                 # lowering for code following `r?` runs in this
