@@ -190,3 +190,44 @@ type-design-analyzer, code-reviewer) returned 2 HIGH + 2 MEDIUM
   covers 34 entries (12 frames + 12 temporals + 10 modals).
   Cosmetic rename to `_IDENTITY_WRAPPER_AD_NAMES` deferred so
   Stage 40 doesn't churn a Stage-38-era invariant name.
+
+### Gate-3 fix sweep (commit `38f5598`)
+
+Gate-3 type-design audit found 1 HIGH actionable: H2 dispatch
+suppression invariant from gate-2 was enforced at the modal/
+temporal/frame/tier early-dispatch site but NOT at the GPU-index
+early-dispatch site. `fn thread_idx() -> i32 { 7 }` reproduced
+the exact pre-H2-fix symptom (1 shadow error + 1 noisy "only
+allowed inside @kernel" per call). Fix: extend the early GPU-
+index dispatch predicate to consult `_shadowed_builtin_names` and
+fall through to user-fn lookup if shadowed. 1 regression test
+pins the behavior.
+
+### STAGE 40 CLOSED 2026-05-17 at Inc 4 (3/3 clean audit gates)
+
+3 consecutive clean audit gates achieved per the post-Stage-35
+closure convention. Modal/epistemic types shipped:
+
+- 4 modal kinds (Known / Believed / Goal / Uncertain) as
+  `TyModal(kind, inner)` Phase-0 wrappers.
+- 8 intro/elim builtins + 2 audited transitions
+  (`confirm: Believed -> Known`, `act_on: Goal -> Known`).
+- 57 Stage 40 tests green (was 25 at Inc 3 / 36 after Inc 3
+  parallel-agent backfills / 46 after gate-1 sweep / 56 after
+  gate-2 sweep / 57 after gate-3 F1).
+- Stage 40 made the H1/H2/H3/F2/F6 lessons from Stage 39
+  PREEMPTIVE — all 8 type-system helpers gained TyModal arms at
+  Inc 1 rather than at audit time.
+- F1 cross-modal direct laundering guard (12-combo matrix)
+  closes the "category mistake at the heart of many AI safety
+  failures" surface for the inline pattern. Let-binding bypass
+  documented as Phase-0 known limit pending a future taint-
+  tracking spec.
+- H2 dispatch suppression closes the Stage 36-40 inherited
+  shadowing-noise hole across the modal/temporal/frame/tier +
+  GPU-index dispatch sites uniformly.
+
+Stats: 57 tests green; self-host cascade still byte-identical
+G2..G4 fixpoint; 13 dogfood programs total now (was 12).
+
+Stage 41 opens next per ROADMAP Phase 2.
