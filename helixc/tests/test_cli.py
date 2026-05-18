@@ -5869,6 +5869,7 @@ def test_stage59_autodiff_cli_help_mentions_polish_flags():
         "--list-fns-by-attr",
         "--fn-callgraph", "--fn-callers", "--fn-callgraph-all",
         "--fn-leaves", "--fn-roots",
+        "--fn-recursive", "--fn-cycles",
         "--check-program-hash",
         "--check-program-hash-from-file",
         "--check-program-signature-hash",
@@ -7247,6 +7248,76 @@ def test_stage59_list_fns_by_attr_missing_attr(tmp_path):
     proc = subprocess.run(
         [sys.executable, "-m", "helixc.frontend.autodiff_cli",
          "--list-fns-by-attr", str(src), "phantom_attr"],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0
+    assert proc.stdout == ""
+
+
+def test_stage59_fn_recursive(tmp_path):
+    """Stage 59 follow-on / Tier 4 #13 polish: --fn-recursive detects
+    direct self-calls."""
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "r.hx"
+    src.write_text(
+        "fn factorial(n: i32) -> i32 {\n"
+        "    if n <= 1 { 1 } else { n * factorial(n - 1) }\n"
+        "}\n"
+        "fn not_recursive(x: i32) -> i32 { x + 1 }\n",
+        encoding="utf-8",
+    )
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--fn-recursive", str(src)],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0
+    lines = [l for l in proc.stdout.splitlines() if l]
+    assert lines == ["factorial"]
+
+
+def test_stage59_fn_cycles_mutual_recursion(tmp_path):
+    """Stage 59 follow-on / Tier 4 #13 polish: --fn-cycles detects
+    mutual-recursion cycles (size >= 2) via Tarjan's SCC."""
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "c.hx"
+    src.write_text(
+        "fn is_even(n: i32) -> bool {\n"
+        "    if n == 0 { true } else { is_odd(n - 1) }\n"
+        "}\n"
+        "fn is_odd(n: i32) -> bool {\n"
+        "    if n == 0 { false } else { is_even(n - 1) }\n"
+        "}\n"
+        "fn no_recursion(x: i32) -> i32 { x + 1 }\n",
+        encoding="utf-8",
+    )
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--fn-cycles", str(src)],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0
+    out = proc.stdout
+    # Canonical form: rotated to start at alphabetically-smallest.
+    assert "is_even -> is_odd -> is_even" in out
+
+
+def test_stage59_fn_cycles_no_cycles(tmp_path):
+    """Stage 59 follow-on: --fn-cycles prints nothing on acyclic graph."""
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "ac.hx"
+    src.write_text(
+        "fn a() -> i32 { b() }\n"
+        "fn b() -> i32 { c() }\n"
+        "fn c() -> i32 { 42 }\n",
+        encoding="utf-8",
+    )
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--fn-cycles", str(src)],
         cwd=proj_root, capture_output=True, text=True, timeout=30,
     )
     assert proc.returncode == 0
