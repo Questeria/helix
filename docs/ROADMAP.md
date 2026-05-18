@@ -303,6 +303,26 @@ Re-sequenced after Stage 46-47 closed:
 - **Stage 58** ✅ **CLOSED 2026-05-18** — Tier 4 #13 content-
   addressed modules (program_hash + module_hash + fn_signature_hash
   core).
+- **Stage 74 SHIPPED 2026-05-18** — Diagnostic UX: clean `_fmt`
+  prettifiers for the 6 new Tier-S/A wrappers (Stages 68-73):
+  - Pre-fix: `TyTaint(label='confidential', inner=TyPrim(name=
+    'f32'))` (verbose dataclass-ctor repr fallback).
+  - Post-fix: `Confidential<f32>` (Helix-source alias form).
+  - All 6 new wrappers: TyConf→`Conf<T>`/`HighConf<T>`/`LowConf<T>`/
+    `Precise<T>`. TyTaint→`Public<T>`/`Internal<T>`/`Confidential<T>`/
+    `Secret<T>`. TyDP→`TinyPrivate<T>`/`Private<T>`/`LoosePrivate<T>`
+    or `DP(eps=...)<T>` for non-preset. TyQuant→`Q4<T>`/`Q8<T>`/
+    `Q16<T>`. TyDomain→`InDist<T>`/`OutDist<T>`/`UnkDist<T>`.
+    TyRobust→`TinyRobust<T>`/`Robust<T>`/`LooseRobust<T>` or
+    `Robust(eps=...)<T>` for non-preset.
+  - Layered wrappers compose cleanly:
+    `Confidential<Private<Conf<Robust<Q8<f32>>>>>` is the readable
+    surface for the full-stack representation.
+  - 2 new tests (per-wrapper + layered composition); 365 typecheck
+    + 431 regression GREEN.
+  - Updated 3 Stage 70/73 Inc 2 tests to look for the cleaner
+    eps= / alias-name patterns instead of `TyDP`/`TyRobust` repr.
+
 - **Stage 73 SUBSTANTIALLY COMPLETE 2026-05-18** — Tier-A #3
   Adversarial robustness types delivered as a usable feature
   across Inc 1-3:

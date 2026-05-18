@@ -11022,6 +11022,43 @@ class TypeChecker:
             cap = {"cause": "Cause", "effect": "Effect",
                    "joint": "Joint", "independent": "Independent"}
             return f"{cap.get(t.kind, t.kind)}<{self._fmt(t.inner)}>"
+        # Stage 74 — clean prettifiers for the new Tier-S/A wrappers
+        # (Stages 68-73). Without these, _fmt falls through to repr()
+        # and diagnostics show the verbose dataclass-ctor form,
+        # e.g., `TyTaint(label='confidential', inner=TyPrim(name='f32'))`
+        # instead of the readable `Confidential<f32>`.
+        if isinstance(t, TyConf):
+            cap = {"high": "HighConf", "med": "Conf",
+                   "low": "LowConf", "precise": "Precise"}
+            return f"{cap.get(t.level, t.level)}<{self._fmt(t.inner)}>"
+        if isinstance(t, TyTaint):
+            cap = {"public": "Public", "internal": "Internal",
+                   "confidential": "Confidential", "secret": "Secret"}
+            return f"{cap.get(t.label, t.label)}<{self._fmt(t.inner)}>"
+        if isinstance(t, TyDP):
+            # eps-tagged for clarity ("Private(eps=1.0)<f32>")
+            cap_map = {"0.1": "TinyPrivate", "1.0": "Private",
+                       "10.0": "LoosePrivate"}
+            cap = cap_map.get(t.epsilon)
+            if cap is not None:
+                return f"{cap}<{self._fmt(t.inner)}>"
+            return f"DP(eps={t.epsilon})<{self._fmt(t.inner)}>"
+        if isinstance(t, TyQuant):
+            cap_map = {4: "Q4", 8: "Q8", 16: "Q16"}
+            cap = cap_map.get(t.bits)
+            if cap is not None:
+                return f"{cap}<{self._fmt(t.inner)}>"
+            return f"Q{t.bits}<{self._fmt(t.inner)}>"
+        if isinstance(t, TyDomain):
+            cap = {"in": "InDist", "out": "OutDist", "unknown": "UnkDist"}
+            return f"{cap.get(t.status, t.status)}<{self._fmt(t.inner)}>"
+        if isinstance(t, TyRobust):
+            cap_map = {"0.01": "TinyRobust", "0.03": "Robust",
+                       "0.1": "LooseRobust"}
+            cap = cap_map.get(t.eps)
+            if cap is not None:
+                return f"{cap}<{self._fmt(t.inner)}>"
+            return f"Robust(eps={t.eps})<{self._fmt(t.inner)}>"
         if isinstance(t, TyResult):
             return (f"Result<{self._fmt(t.ok_ty)}, "
                     f"{self._fmt(t.err_ty)}>")

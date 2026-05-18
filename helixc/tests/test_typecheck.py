@@ -4689,6 +4689,71 @@ def test_stage68_inc1_confidence_high_low_precise_aliases():
         assert t.level == lvl
 
 
+def test_stage74_fmt_prettifies_tier_sa_wrappers():
+    """Stage 74 — `_fmt` renders each Tier-S/A wrapper using its
+    Helix-source alias rather than the verbose Python ctor form.
+    Pre-Stage-74: `TyTaint(label='confidential', inner=TyPrim(name=
+    'f32'))`. Post-Stage-74: `Confidential<f32>`."""
+    from helixc.frontend.typecheck import (
+        TypeChecker, TyConf, TyTaint, TyDP, TyQuant, TyDomain,
+        TyRobust, TyPrim,
+    )
+
+    # Build a fresh TypeChecker so we can call _fmt on it directly.
+    tc = TypeChecker.__new__(TypeChecker)
+    f32 = TyPrim("f32")
+
+    # Conf
+    assert tc._fmt(TyConf(level="med", inner=f32)) == "Conf<f32>"
+    assert tc._fmt(TyConf(level="high", inner=f32)) == "HighConf<f32>"
+    assert tc._fmt(TyConf(level="low", inner=f32)) == "LowConf<f32>"
+    assert tc._fmt(TyConf(level="precise", inner=f32)) == "Precise<f32>"
+
+    # Taint
+    assert tc._fmt(TyTaint(label="public", inner=f32)) == "Public<f32>"
+    assert tc._fmt(TyTaint(label="confidential", inner=f32)) == "Confidential<f32>"
+    assert tc._fmt(TyTaint(label="secret", inner=f32)) == "Secret<f32>"
+
+    # DP — known presets
+    assert tc._fmt(TyDP(epsilon="1.0", inner=f32)) == "Private<f32>"
+    assert tc._fmt(TyDP(epsilon="0.1", inner=f32)) == "TinyPrivate<f32>"
+    # DP — non-preset eps falls back to DP(eps=...)
+    assert tc._fmt(TyDP(epsilon="3.5", inner=f32)) == "DP(eps=3.5)<f32>"
+
+    # Quant
+    assert tc._fmt(TyQuant(bits=8, inner=f32)) == "Q8<f32>"
+    assert tc._fmt(TyQuant(bits=4, inner=f32)) == "Q4<f32>"
+
+    # Domain
+    assert tc._fmt(TyDomain(status="in", inner=f32)) == "InDist<f32>"
+    assert tc._fmt(TyDomain(status="out", inner=f32)) == "OutDist<f32>"
+
+    # Robust
+    assert tc._fmt(TyRobust(eps="0.03", inner=f32)) == "Robust<f32>"
+    assert tc._fmt(TyRobust(eps="0.01", inner=f32)) == "TinyRobust<f32>"
+    # non-preset eps
+    assert tc._fmt(TyRobust(eps="0.5", inner=f32)) == "Robust(eps=0.5)<f32>"
+
+
+def test_stage74_fmt_layered_wrappers_compose_cleanly():
+    """Stage 74 — layered wrappers compose to a readable string.
+    `Confidential<Private<Conf<Robust<Q8<f32>>>>>` renders cleanly."""
+    from helixc.frontend.typecheck import (
+        TypeChecker, TyConf, TyTaint, TyDP, TyQuant,
+        TyRobust, TyPrim,
+    )
+
+    tc = TypeChecker.__new__(TypeChecker)
+    f32 = TyPrim("f32")
+    stack = TyTaint(label="confidential",
+                    inner=TyDP(epsilon="1.0",
+                               inner=TyConf(level="med",
+                                            inner=TyRobust(eps="0.03",
+                                                           inner=TyQuant(bits=8, inner=f32)))))
+    assert tc._fmt(stack) == \
+        "Confidential<Private<Conf<Robust<Q8<f32>>>>>"
+
+
 def test_stage73_inc1_robust_type_recognition():
     from helixc.frontend.typecheck import TypeChecker
     from helixc.frontend.parser import parse
@@ -4778,8 +4843,10 @@ def test_stage73_inc2_robust_eps_sum_exceeds_declared_diagnosed():
     tc = TypeChecker(prog)
     errors = tc.check()
     # Expect a return-type mismatch (eps=0.06 vs declared 0.03).
+    # After Stage 74 _fmt prettifier, format uses Robust(eps=...)
+    # or the alias.
     budget_errs = [str(e) for e in errors
-                   if "TyRobust" in str(e) or "eps=" in str(e)]
+                   if "eps=" in str(e) or "Robust" in str(e)]
     assert len(budget_errs) >= 1, errors
 
 
@@ -5222,14 +5289,11 @@ def test_stage70_inc2_dp_epsilon_sum_exceeds_declared_budget_diagnosed():
     tc = TypeChecker(prog)
     errors = tc.check()
     # Expect a return-type mismatch surfacing the epsilon overrun.
+    # After Stage 74 _fmt prettifier, the diagnostic uses DP(eps=2.0)
+    # syntax or the alias name.
     budget_errs = [str(e) for e in errors
                    if "return type" in str(e).lower()
-                   and "epsilon" in str(e).lower()]
-    # The exact wording isn't guaranteed yet; broaden to look for
-    # ANY diagnostic that mentions a TyDP mismatch.
-    if not budget_errs:
-        budget_errs = [str(e) for e in errors
-                       if "TyDP" in str(e) or "epsilon=" in str(e)]
+                   and ("eps=" in str(e) or "Private" in str(e))]
     assert len(budget_errs) >= 1, (
         f"expected budget-overrun diagnostic from sum exceeding "
         f"declared Private<f32>; got: {[str(e) for e in errors]}")
@@ -5260,8 +5324,11 @@ def test_stage70_inc2_dp_fits_within_loose_budget():
     errors = tc.check()
     # Expect a return-type mismatch (1.1 ≠ 10.0). This proves the
     # epsilon sum propagation fired (not silently collapsed).
+    # After Stage 74 _fmt prettifier, format uses DP(eps=...)
+    # or the LoosePrivate alias.
     mismatch_errs = [str(e) for e in errors
-                     if "TyDP" in str(e) or "epsilon=" in str(e)]
+                     if "eps=" in str(e)
+                     or "Private" in str(e)]
     assert len(mismatch_errs) >= 1, (
         f"expected eps-sum mismatch (1.1 vs 10.0); got: "
         f"{[str(e) for e in errors]}")
