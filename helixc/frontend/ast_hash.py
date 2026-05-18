@@ -500,6 +500,25 @@ def _hash_into(h: "hashlib._Hash", node: Any,
         for seg in node.path:
             _emit(h, "PathSeg", seg)
         return
+    # Stage 59 follow-on: StructDecl arm — needed by program_hash /
+    # program_signature_hash to include struct definitions in the
+    # whole-program hash. A struct's identity is the name + ordered
+    # fields (name + type per field). Field order matters because it
+    # affects memory layout / ABI.
+    if isinstance(node, A.StructDecl):
+        _emit(h, "StructDecl", node.name,
+              tuple(sorted(node.attrs)) if hasattr(node, "attrs") else ())
+        # Generic params (if any) via the same span-strip canonicalizer
+        # used by FnDecl.
+        if hasattr(node, "generics"):
+            _emit(h, "StructGenericsCount", len(node.generics))
+            for g in node.generics:
+                _emit(h, "StructGeneric", g.name, g.kind)
+        # Fields in declaration order; each field is name + type.
+        _emit(h, "FieldCount", len(node.fields))
+        for f in node.fields:
+            _emit(h, "Field", f.name, _ty_repr(f.ty))
+        return
     # Loud-fail catchall — matches the cycle-14/15 NotImplementedError
     # discipline in match_lower._collect_binds and _pattern_test_expr.
     # Any future AST subclass that lands without an explicit hash arm
@@ -694,6 +713,46 @@ def program_hash(prog: "A.Program") -> str:
     for it in prog.items:
         item_h = structural_hash(it) if _is_hashable_item(it) else "<opaque>"
         _emit(h, "Item", type(it).__name__, item_h)
+    return h.hexdigest()
+
+
+def program_signature_hash(prog: "A.Program") -> str:
+    """Stage 59 follow-on / Tier 4 #13 polish — ABI-level hash of a
+    Program: covers fn SIGNATURES + struct DEFINITIONS but NOT fn
+    BODIES.
+
+    Two programs with the same public surface (callers of either
+    program would behave identically AS LONG AS the body changes are
+    semantically equivalent) hash identically here.
+
+    Distinguishing from program_hash:
+    - program_hash: every byte of structural content matters
+    - program_signature_hash: only the public/exported surface
+
+    Specifically:
+    - FnDecl: fn_signature_hash (name + param types + return type
+      + effect attrs); body ignored
+    - StructDecl: full structural_hash (struct definitions ARE part
+      of the ABI — adding/removing/reordering fields breaks callers)
+    - Other items: structural_hash (conservatively included)
+
+    Use cases:
+    - ABI compat check between two versions of a library: same
+      program_signature_hash ⇒ caller-observable surface unchanged
+    - Public-surface stability gate: assert program_signature_hash
+      hasn't drifted across releases
+    - Allow internal refactors to land without bumping a 'public
+      contract' hash version
+    """
+    h = hashlib.sha256()
+    _emit(h, "ProgramSig")
+    for it in prog.items:
+        if isinstance(it, A.FnDecl):
+            _emit(h, "FnSig", fn_signature_hash(it))
+        elif _is_hashable_item(it):
+            _emit(h, "Item", type(it).__name__, structural_hash(it))
+        else:
+            _emit(h, "Item", type(it).__name__, "<opaque>")
     return h.hexdigest()
 
 

@@ -337,6 +337,54 @@ def test_stage58_program_hash_alpha_equivalent_helpers():
     assert h1 == h2, "alpha-equivalent helpers hashed differently"
 
 
+def test_stage59_program_signature_hash_body_change_invariant():
+    """Stage 59 follow-on / Tier 4 #13 polish: program_signature_hash
+    is invariant to body-only changes (signatures unchanged)."""
+    from helixc.frontend.parser import parse
+    from helixc.frontend.ast_hash import program_signature_hash
+    a = parse("fn add(x: i32, y: i32) -> i32 { x + y }")
+    b = parse("fn add(x: i32, y: i32) -> i32 { y + x + 0 }")  # body diff
+    assert program_signature_hash(a) == program_signature_hash(b)
+
+
+def test_stage59_program_signature_hash_sig_change_differs():
+    """Stage 59 follow-on: program_signature_hash flips when a fn's
+    signature changes (param type, return type, fn name, count)."""
+    from helixc.frontend.parser import parse
+    from helixc.frontend.ast_hash import program_signature_hash
+    base = parse("fn neg(x: i32) -> i32 { 0 - x }")
+    diff_param = parse("fn neg(x: f32) -> i32 { 0 - (x as i32) }")
+    diff_return = parse("fn neg(x: i32) -> f32 { 0.0 - (x as f32) }")
+    diff_name = parse("fn negate(x: i32) -> i32 { 0 - x }")
+    h = program_signature_hash(base)
+    assert h != program_signature_hash(diff_param)
+    assert h != program_signature_hash(diff_return)
+    assert h != program_signature_hash(diff_name)
+
+
+def test_stage59_program_signature_hash_struct_change_differs():
+    """Stage 59 follow-on: struct definitions are part of the ABI,
+    so adding/removing/reordering fields changes the hash."""
+    from helixc.frontend.parser import parse
+    from helixc.frontend.ast_hash import program_signature_hash
+    base = parse("struct P { x: i32, y: i32 }")
+    diff_add = parse("struct P { x: i32, y: i32, z: i32 }")
+    diff_ty = parse("struct P { x: i32, y: f32 }")
+    h = program_signature_hash(base)
+    assert h != program_signature_hash(diff_add)
+    assert h != program_signature_hash(diff_ty)
+
+
+def test_stage59_program_signature_hash_alpha_equivalent_params():
+    """Stage 59 follow-on: param-name rename is alpha-equivalent at
+    the signature level (renaming x → y doesn't change ABI)."""
+    from helixc.frontend.parser import parse
+    from helixc.frontend.ast_hash import program_signature_hash
+    a = parse("fn f(x: i32) -> i32 { x }")
+    b = parse("fn f(y: i32) -> i32 { y }")
+    assert program_signature_hash(a) == program_signature_hash(b)
+
+
 def test_stage59_module_hash_nested_modblock_works():
     """Stage 59 follow-on / Tier 4 #13 polish: module_hash recurses
     into nested ModBlocks without crashing. Pre-fix, _hash_into had no
