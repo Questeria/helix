@@ -71,6 +71,8 @@ Introspection (Stage 28.9 + Stage 58 + Stage 59 polish):
         Print leaf-path / type / diff-classification for a struct.
     --list-pytrees <file.hx>
         Inventory: leaf-count + diff/non-diff summary per struct.
+    --list-pytrees-json <file.hx>
+        Same as --list-pytrees but machine-readable JSON output.
     --pytree-leaf-paths <file.hx> <struct_name>
         Print just the leaf paths (one per line, sorted) for scripting.
     --validate-pytrees <file.hx>
@@ -768,6 +770,46 @@ def _pytree_leaf_paths(path: str, struct_name: str) -> int:
         return 1
     for leaf in sorted(leaves, key=lambda l: l.path):
         print(leaf.path)
+    return 0
+
+
+def _list_pytrees_json(path: str) -> int:
+    """Stage 59 follow-on / Tier 2 #7 polish: --list-pytrees in
+    machine-readable JSON form.
+
+    Output schema:
+      {
+        "<struct_name>": {
+          "status": "OK" | "REJECTED",
+          "leaves": N, "diff": K, "non_diff": M,  (OK case)
+          OR
+          "reason": "<diagnostic>",               (REJECTED case)
+        }
+      }
+    """
+    import json
+    from .pytree import flatten_pytree
+    src = _read_source(path)
+    prog = _parse_or_exit(src, path)
+    struct_decls = {it.name: it for it in prog.items
+                    if isinstance(it, A.StructDecl)}
+    result: dict = {}
+    for name in sorted(struct_decls.keys()):
+        try:
+            leaves = flatten_pytree(struct_decls[name], struct_decls)
+            diff = sum(1 for l in leaves if l.is_diff)
+            result[name] = {
+                "status": "OK",
+                "leaves": len(leaves),
+                "diff": diff,
+                "non_diff": len(leaves) - diff,
+            }
+        except ValueError as e:
+            result[name] = {
+                "status": "REJECTED",
+                "reason": str(e).split("(trap")[0].strip(),
+            }
+    print(json.dumps(result, sort_keys=True, indent=2))
     return 0
 
 
@@ -1819,6 +1861,13 @@ def main():
                   file=sys.stderr)
             sys.exit(2)
         sys.exit(_list_pytrees(args[0]))
+
+    if "--list-pytrees-json" in flags:
+        if len(args) < 1:
+            print("usage: --list-pytrees-json <file.hx>",
+                  file=sys.stderr)
+            sys.exit(2)
+        sys.exit(_list_pytrees_json(args[0]))
 
     if "--pytree-leaf-paths" in flags:
         if len(args) < 2:

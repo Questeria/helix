@@ -5846,7 +5846,8 @@ def test_stage59_autodiff_cli_help_mentions_polish_flags():
         "--check-program-signature-hash-from-file",
         "--list-modules", "--list-modules-json",
         "--module-hash", "--pytree-shape",
-        "--list-pytrees", "--pytree-leaf-paths",
+        "--list-pytrees", "--list-pytrees-json",
+        "--pytree-leaf-paths",
         "--validate-pytrees", "--validate-pytrees-json",
         "--autotune-summary", "--autotune-budget",
         "--validate-autotune", "--validate-autotune-json",
@@ -7246,6 +7247,32 @@ def test_stage59_list_fn_attrs_basic(tmp_path):
     assert "traced_neg: trace" in out
     assert "plain: (no attrs)" in out
     assert "both: pure trace" in out  # sorted alphabetically
+
+
+def test_stage59_list_pytrees_json(tmp_path):
+    """Stage 59 follow-on / Tier 2 #7 polish: --list-pytrees-json
+    outputs per-struct OK/REJECTED status as JSON."""
+    import json
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "inv.hx"
+    src.write_text(
+        "struct GoodFlat { w: D<f32>, b: D<f32> }\n"
+        "struct BadHasInt { w: D<f32>, label: i32 }\n",
+        encoding="utf-8",
+    )
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--list-pytrees-json", str(src)],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0
+    result = json.loads(proc.stdout)
+    assert result["GoodFlat"]["status"] == "OK"
+    assert result["GoodFlat"]["leaves"] == 2
+    assert result["GoodFlat"]["diff"] == 2
+    assert result["BadHasInt"]["status"] == "REJECTED"
+    assert "non-differentiable" in result["BadHasInt"]["reason"]
 
 
 def test_stage59_list_pytrees_inventory(tmp_path):
