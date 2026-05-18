@@ -206,7 +206,8 @@ def _flatten_one(
             new_items.append(A.StructDecl(
                 span=sub.span, name=new_name, generics=sub.generics,
                 fields=_rewrite_params(sub.fields, type_aliases),
-                is_pub=sub.is_pub))
+                is_pub=sub.is_pub,
+                attrs=list(getattr(sub, "attrs", None) or [])))
             n += 1
         elif isinstance(sub, A.EnumDecl):
             new_name = base + "__" + sub.name
@@ -337,6 +338,7 @@ def _rewrite_item_decls(item: A.Item, aliases: dict[str, str]) -> A.Item:
             span=item.span, name=item.name, generics=item.generics,
             fields=_rewrite_params(item.fields, type_aliases),
             is_pub=item.is_pub,
+            attrs=list(getattr(item, "attrs", None) or []),
         )
     if isinstance(item, A.EnumDecl):
         type_aliases = _aliases_without_generics(aliases, item.generics)

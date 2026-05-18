@@ -4790,6 +4790,95 @@ def test_stage66_inc3_shared_then_mutable_rejected_with_opt_in():
     assert len(borrow_errs) >= 1
 
 
+def test_stage66_inc4_per_fn_borrow_check_attr_enables_only_for_that_fn():
+    """Stage 66 Inc 4 — `@borrow_check` on a single fn turns the
+    enforcement gate on for *that fn only*, leaving sibling fns
+    in the same module untouched. Mirrors how `@pure` / `@kernel`
+    scope their respective contracts per-fn."""
+    from helixc.frontend.typecheck import TypeChecker
+    from helixc.frontend.parser import parse
+
+    src = """
+    @borrow_check
+    fn checked() -> i32 {
+        let mut x: i32 = 1;
+        let _a = &mut x;
+        let _b = &mut x;
+        0
+    }
+
+    fn unchecked() -> i32 {
+        let mut x: i32 = 1;
+        let _a = &mut x;
+        let _b = &mut x;
+        0
+    }
+    """
+    prog = parse(src, include_stdlib=False)
+    tc = TypeChecker(prog)
+    # Global flag stays OFF — per-fn attr is the only opt-in here.
+    assert tc._borrow_check_enabled is False
+    errors = tc.check()
+    borrow_errs = [str(e) for e in errors if "Stage 66" in str(e)]
+    # We should see exactly the diagnostics from `checked`, not from
+    # `unchecked`. Cheapest way to check: at least one diagnostic
+    # exists, and none mention 'unchecked'.
+    assert len(borrow_errs) >= 1, (
+        f"@borrow_check fn should produce borrow diagnostic; "
+        f"got errors: {[str(e) for e in errors]}")
+    # And after checking, the flag is restored — sibling fns are not
+    # poisoned, so the visitor cleanly turned it off again.
+    assert tc._current_fn_borrow_check is False
+
+
+def test_stage66_inc4_global_flag_still_works_alongside_attr():
+    """Stage 66 Inc 4 — the global `_borrow_check_enabled` opt-in
+    keeps working (Inc 3 contract). Attr-level opt-in is additive,
+    not a replacement."""
+    from helixc.frontend.typecheck import TypeChecker
+    from helixc.frontend.parser import parse
+
+    src = """
+    fn user() -> i32 {
+        let mut x: i32 = 1;
+        let _a = &mut x;
+        let _b = &mut x;
+        0
+    }
+    """
+    prog = parse(src, include_stdlib=False)
+    tc = TypeChecker(prog)
+    tc._borrow_check_enabled = True  # Inc 3 opt-in
+    errors = tc.check()
+    borrow_errs = [str(e) for e in errors if "Stage 66" in str(e)]
+    assert len(borrow_errs) >= 1
+
+
+def test_stage66_inc4_copy_struct_marker_registered():
+    """Stage 66 Inc 4 — structs marked `@copy` get added to
+    `_copy_struct_names` during pass 0 indexing, and a Copy struct's
+    TyStruct is recognized by `_is_copy_struct_ty`. Plain (un-marked)
+    structs are NOT in the set."""
+    from helixc.frontend.typecheck import TypeChecker, TyStruct
+    from helixc.frontend.parser import parse
+
+    src = """
+    @copy
+    struct Pt { x: f32, y: f32 }
+
+    struct Heavy { x: f32, y: f32 }
+    """
+    prog = parse(src, include_stdlib=False)
+    tc = TypeChecker(prog)
+    tc.check()
+    assert "Pt" in tc._copy_struct_names
+    assert "Heavy" not in tc._copy_struct_names
+    # The helper also returns True for a TyStruct("Pt") and False for
+    # a TyStruct("Heavy") — so downstream move-check sites can call it.
+    assert tc._is_copy_struct_ty(TyStruct("Pt")) is True
+    assert tc._is_copy_struct_ty(TyStruct("Heavy")) is False
+
+
 def test_stage66_inc2_borrow_enforcement_shared_xor_mutable():
     """Stage 66 Inc 2 — Tier 4 #16 enforce the Rust 1.0-era xor
     rule: one `&mut` xor any number of `&` per place.

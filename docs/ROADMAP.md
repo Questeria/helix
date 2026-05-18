@@ -329,6 +329,26 @@ Re-sequenced after Stage 46-47 closed:
     (exit code 42 iff training ran end-to-end + checkpoint
     round-trip succeeded).
 
+- **Stage 66 Inc 4 SHIPPED 2026-05-18** — Tier 4 #16 per-fn
+  `@borrow_check` attribute + `@copy` struct marker:
+  - `_current_fn_borrow_check` flag pushed/popped in `_check_fn`
+    prologue/epilogue from `"borrow_check" in fn.attrs`. The
+    enforcement gate is now `_borrow_check_enabled OR _current_
+    fn_borrow_check`, so one `@borrow_check` fn opts in without
+    poisoning the rest of the module.
+  - `StructDecl.attrs: list[str]` field added (default `[]` via
+    `__post_init__`). Parser threads attrs into `_parse_struct_decl`.
+    `flatten_modules._rewrite_item` + `struct_mono` preserve attrs.
+  - `_copy_struct_names: set[str]` populated in pass-0 indexing for
+    structs marked `@copy`. `_is_copy_struct_ty(TyStruct(...))`
+    helper added — Inc 5 will consult it before invalidating
+    source bindings at move sites.
+  - 4 new tests (3 typecheck + 1 parser); 308 typecheck + 66 parser
+    + 223 self-host GREEN.
+  - Inc 5 plan: wire `check_move` at consumption sites (pass-by-
+    value, return, `let _ = expr`), block-exit reconciliation
+    across if/match arms, explicit `move x` keyword. CLOSES Stage 66.
+
 - **Stage 66 Inc 3 SHIPPED 2026-05-18** — Tier 4 #16 typecheck-
   time borrow enforcement (xor rule wired):
   - TypeChecker.`_borrow_check_enabled` opt-in flag (default

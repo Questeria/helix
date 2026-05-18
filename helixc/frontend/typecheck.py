@@ -1073,15 +1073,37 @@ class TypeChecker:
         # Stage 66 Inc 3 — opt-in borrow-checker enforcement.
         # Default False to preserve existing-test compatibility;
         # tests / callers flip to True to exercise the Rust-1.0-era
-        # xor rule. Inc 4 may upgrade to opt-in via @borrow_check
-        # fn-level attribute or a CLI --borrow-check flag.
+        # xor rule.
         self._borrow_check_enabled: bool = False
+        # Stage 66 Inc 4 — per-fn @borrow_check opt-in. Set in the
+        # `_check_fn` prologue from `"borrow_check" in fn.attrs` and
+        # restored in the finally block, so one annotated fn does NOT
+        # poison the rest of the module. The enforcement gate is the
+        # OR of the global flag and this per-fn flag.
+        self._current_fn_borrow_check: bool = False
+        # Stage 66 Inc 4 — struct names marked `@copy`. Populated in
+        # check() pass-0 while indexing StructDecls. Types whose root
+        # is a Copy struct bypass move-semantics tracking, so passing
+        # them by value or assigning them does NOT invalidate the source
+        # binding (mirrors Rust's `#[derive(Copy)]`).
+        self._copy_struct_names: set[str] = set()
 
     def _borrow_enforcement_enabled(self) -> bool:
-        """Stage 66 Inc 3 — gate for the borrow-check enforcement
-        at &/&mut sites. Currently a simple bool; future Inc 4
-        will check per-fn @borrow_check attribute."""
-        return self._borrow_check_enabled
+        """Stage 66 Inc 3/4 — gate for the borrow-check enforcement
+        at &/&mut sites. Inc 4 broadens the check to also fire when
+        the *current* fn carries `@borrow_check`."""
+        return self._borrow_check_enabled or self._current_fn_borrow_check
+
+    def _is_copy_struct_ty(self, ty: object) -> bool:
+        """Stage 66 Inc 4 — true if `ty` is a nominal struct (possibly
+        wrapped by trivial typedef/generic projections) whose decl was
+        marked `@copy`. Used to suppress move-semantics tracking for
+        Copy types. Conservative: anything we cannot statically pin to
+        a Copy struct returns False (the strict default)."""
+        # Local import to avoid the cyclic dependency on the type alg.
+        if isinstance(ty, TyStruct):
+            return ty.name in self._copy_struct_names
+        return False
 
     # ---- entry point ----
     def check(self) -> list[TypeError_]:
@@ -1134,6 +1156,12 @@ class TypeChecker:
                 if self._define_type_namespace_name(
                         item.name, "struct", item.span):
                     self._struct_decls[item.name] = item
+                    # Stage 66 Inc 4 — record `@copy` opt-in so the
+                    # borrow checker knows to treat assignments /
+                    # pass-by-value of this struct as duplications,
+                    # not moves.
+                    if "copy" in (getattr(item, "attrs", None) or []):
+                        self._copy_struct_names.add(item.name)
             elif isinstance(item, A.EnumDecl):
                 if self._define_type_namespace_name(
                         item.name, "enum", item.span):
@@ -3096,12 +3124,15 @@ class TypeChecker:
         prev_is_kernel = self._current_is_kernel
         prev_hbm_tile_indexables = self._current_hbm_tile_indexables
         prev_return_ty = self._current_return_ty
+        # Stage 66 Inc 4 — push per-fn borrow-check opt-in.
+        prev_fn_borrow_check = self._current_fn_borrow_check
         self._current_pure = sig.is_pure
         self._current_effects = sig.effects
         self._current_fn_name = sig.name
         self._current_is_kernel = "kernel" in fn.attrs
         self._current_hbm_tile_indexables = set(kernel_hbm_indexables)
         self._current_return_ty = sig.ret
+        self._current_fn_borrow_check = "borrow_check" in fn.attrs
         try:
             self._check_fn_body(fn, sig)
             completed = True
@@ -3112,6 +3143,7 @@ class TypeChecker:
             self._current_is_kernel = prev_is_kernel
             self._current_hbm_tile_indexables = prev_hbm_tile_indexables
             self._current_return_ty = prev_return_ty
+            self._current_fn_borrow_check = prev_fn_borrow_check
         if (completed
                 and self._contains_refinement(sig.ret)
                 and len(self.errors) != error_start):

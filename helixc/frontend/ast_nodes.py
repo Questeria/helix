@@ -487,6 +487,16 @@ class StructDecl(Item):
     generics: list[GenericParam]
     fields: list[FnParam]       # reuse FnParam shape: name+ty
     is_pub: bool = False
+    # Stage 66 Inc 4: struct-level attributes. `@copy` opts a struct
+    # into Copy semantics (assignments duplicate instead of moving), so
+    # the borrow checker doesn't flag re-use after assignment / pass-by-value.
+    # Default empty list keeps every existing call site (and every
+    # existing test that constructs StructDecl positionally) source-compatible.
+    attrs: list[str] = None  # type: ignore[assignment]
+
+    def __post_init__(self) -> None:
+        if self.attrs is None:
+            self.attrs = []
 
 
 @dataclass

@@ -83,6 +83,21 @@ def test_fn_with_attr():
     assert "kernel" in fn.attrs
 
 
+def test_struct_with_attr_stage66_inc4():
+    """Stage 66 Inc 4 — `@copy` (and other attrs) on a struct decl
+    parse cleanly and populate `StructDecl.attrs`. Empty case stays
+    `[]` so existing tests are unaffected."""
+    p = parse("@copy struct Pt { x: f32, y: f32 }")
+    s = p.items[0]
+    assert s.__class__.__name__ == "StructDecl"
+    assert "copy" in s.attrs
+
+    # plain struct with no attrs
+    p2 = parse("struct Heavy { x: f32, y: f32 }")
+    s2 = p2.items[0]
+    assert s2.attrs == []
+
+
 def test_fn_with_pub():
     p = parse("pub fn foo() {}")
     fn = p.items[0]

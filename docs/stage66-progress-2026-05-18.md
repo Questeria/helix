@@ -92,6 +92,56 @@ The scaffolding lets the project ship a `helixc/check.py --borrow-
 check` opt-in flag in a future Inc that runs the enforcement on
 top of the existing typecheck pass.
 
+## Inc 2 SHIPPED (later same day)
+
+`BorrowState.check_borrow_shared`, `check_borrow_mutable`, and
+`check_move` are no longer stubs — they enforce the Rust 1.0-era
+xor rule per place. Tests added: `test_stage66_inc2_*` (5 unit-
+level tests). Closure: full typecheck regression GREEN; self-host
+gate 223/223 GREEN.
+
+## Inc 3 SHIPPED (later same day)
+
+`_borrow_check_enabled` global flag + `_borrow_enforcement_enabled()`
+gate added to `TypeChecker`. Wired at `&` / `&mut` Unary expr sites
+(typecheck.py ~line 3878). When opt-in, double-`&mut` produces a
+"Stage 66 borrow checker — xor rule violated" diagnostic.
+Tests added: `test_stage66_inc3_*` (3 e2e tests). Closure: full
+typecheck regression GREEN; self-host gate 223/223 GREEN.
+
+## Inc 4 SHIPPED (later same day)
+
+Per-fn `@borrow_check` attribute + `@copy` struct marker added.
+- `_current_fn_borrow_check` flag pushed/popped in `_check_fn`
+  prologue/epilogue; `"borrow_check" in fn.attrs` sets it.
+- `_borrow_enforcement_enabled()` is now the OR of the global flag
+  and the per-fn flag — so one annotated fn opts in without
+  poisoning the rest of the module.
+- `StructDecl.attrs: list[str]` field added (default `[]` via
+  `__post_init__`). Parser threads attrs into `_parse_struct_decl`.
+  `flatten_modules._rewrite_item` + `struct_mono` preserve attrs.
+- `_copy_struct_names: set[str]` populated in pass-0 indexing for
+  structs marked `@copy`. `_is_copy_struct_ty(TyStruct(...))`
+  returns True for Copy structs — ready for Inc 5 move-wiring to
+  consult before invalidating the source binding.
+Tests added: `test_stage66_inc4_per_fn_borrow_check_attr_enables_only_for_that_fn`,
+`test_stage66_inc4_global_flag_still_works_alongside_attr`,
+`test_stage66_inc4_copy_struct_marker_registered`. Closure: full
+typecheck regression GREEN (308/308); self-host gate 223/223 GREEN.
+
+## Inc 5 plan (CLOSES Stage 66)
+
+- Wire `check_move` at consumption sites: pass-by-value calls, RHS
+  of `let _ = move_target;`, `return move_target;`. Skip the move
+  invalidation if `_is_copy_struct_ty(ty)` returns True.
+- Block-exit reconciliation across if/match arms: union of borrow
+  states; if one arm moves and the other doesn't, diagnose at the
+  join point.
+- Explicit `move x` syntax recognized at expression position; emits
+  the same diagnostic class as implicit move when xor would be
+  violated.
+- Stage 66 CLOSED after Inc 5 passes the 3-clean-gate.
+
 ## Next stage
 
 **Stage 67 opens immediately**: end-to-end ML demo (1 week,

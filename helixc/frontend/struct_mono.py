@@ -331,6 +331,7 @@ def instantiate(decl: A.StructDecl, ty_args: list[A.TyNode]
         generics=[],
         fields=new_fields,
         is_pub=decl.is_pub,
+        attrs=list(getattr(decl, "attrs", None) or []),
     )
 
 

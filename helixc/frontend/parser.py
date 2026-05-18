@@ -157,7 +157,7 @@ class Parser:
         if t.kind == T.KW_FN:
             return self._parse_fn_decl(is_pub, attrs)
         if t.kind == T.KW_STRUCT:
-            return self._parse_struct_decl(is_pub)
+            return self._parse_struct_decl(is_pub, attrs)
         if t.kind == T.KW_ENUM:
             return self._parse_enum_decl(is_pub)
         if t.kind == T.KW_TYPE:
@@ -526,7 +526,9 @@ class Parser:
         return out
 
     # ---- struct / enum / type / use / const ----
-    def _parse_struct_decl(self, is_pub: bool) -> ast.StructDecl:
+    def _parse_struct_decl(
+        self, is_pub: bool, attrs: Optional[list[str]] = None
+    ) -> ast.StructDecl:
         kw = self._eat(T.KW_STRUCT)
         name = self._eat(T.IDENT).value
         generics = self._parse_generic_params()
@@ -542,7 +544,8 @@ class Parser:
                 break
         self._eat(T.RBRACE)
         return ast.StructDecl(span=self._span_of(kw), name=name,
-                              generics=generics, fields=fields, is_pub=is_pub)
+                              generics=generics, fields=fields,
+                              is_pub=is_pub, attrs=list(attrs or []))
 
     def _parse_enum_decl(self, is_pub: bool) -> ast.EnumDecl:
         kw = self._eat(T.KW_ENUM)
