@@ -5872,7 +5872,7 @@ def test_stage59_autodiff_cli_help_mentions_polish_flags():
         "--fn-reachable-from", "--fn-reachable-to",
         "--fn-leaves", "--fn-roots",
         "--fn-recursive", "--fn-cycles",
-        "--fn-call-stats",
+        "--fn-call-stats", "--fn-callgraph-depth",
         "--check-program-hash",
         "--check-program-hash-from-file",
         "--check-program-signature-hash",
@@ -7373,6 +7373,59 @@ def test_stage59_fn_roots(tmp_path):
     # util has 2 callers → not root; entry_a, entry_b, truly_dead
     # never called locally → roots.
     assert lines == ["entry_a", "entry_b", "truly_dead"]
+
+
+def test_stage59_fn_callgraph_depth(tmp_path):
+    """Stage 59 follow-on / Tier 4 #13 polish: --fn-callgraph-depth
+    computes max acyclic stack depth from an entry fn."""
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "d.hx"
+    src.write_text(
+        "fn z() -> i32 { 42 }\n"
+        "fn c() -> i32 { z() }\n"
+        "fn b() -> i32 { c() }\n"
+        "fn a() -> i32 { b() }\n"
+        "fn leaf() -> i32 { 0 }\n",
+        encoding="utf-8",
+    )
+    # a → b → c → z → (leaf): 4 frames deep
+    proc_a = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--fn-callgraph-depth", str(src), "a"],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc_a.returncode == 0
+    assert proc_a.stdout.strip() == "4"
+    # leaf has no callees: 1 frame
+    proc_leaf = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--fn-callgraph-depth", str(src), "leaf"],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc_leaf.returncode == 0
+    assert proc_leaf.stdout.strip() == "1"
+
+
+def test_stage59_fn_callgraph_depth_cycle_clipped(tmp_path):
+    """Stage 59 follow-on: a cycle is clipped at first re-entry —
+    mutual recursion doesn't produce infinite depth."""
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "cyc.hx"
+    src.write_text(
+        "fn a() -> i32 { b() }\n"
+        "fn b() -> i32 { a() }\n",
+        encoding="utf-8",
+    )
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--fn-callgraph-depth", str(src), "a"],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0
+    # a → b → (a clipped): 2 frames
+    assert proc.stdout.strip() == "2"
 
 
 def test_stage59_fn_call_stats(tmp_path):
