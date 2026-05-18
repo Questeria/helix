@@ -5901,6 +5901,7 @@ def test_stage59_autodiff_cli_help_mentions_polish_flags():
         "--has-flag", "--has-flag-json",
         "--flag-groups", "--flag-groups-json",
         "--flag-doc", "--flag-doc-json",
+        "--cli-summary-json",
         "--list-fn-attrs", "--list-fn-attrs-json",
         "--list-fns-by-attr", "--list-fns-by-attr-json",
         "--fn-callgraph", "--fn-callers",
@@ -7563,6 +7564,35 @@ def test_stage59_agent_methods_json(tmp_path):
         {"name": "propose", "params": ["i32"], "return_ty": "i32"},
         {"name": "evaluate", "params": ["i32", "i32"], "return_ty": "i32"},
     ]}
+
+
+def test_stage59_cli_summary_json():
+    """Stage 59 follow-on / Tier 4 #13 polish: --cli-summary-json
+    emits consolidated CLI metadata in a single fetch — n_flags,
+    n_groups, n_with_json_twin, flags, groups, json_twins,
+    text_only."""
+    import json
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--cli-summary-json"],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0
+    result = json.loads(proc.stdout)
+    for key in ("n_flags", "n_groups", "n_with_json_twin",
+                 "flags", "groups", "json_twins", "text_only"):
+        assert key in result
+    # Consistency checks: counts match list sizes.
+    assert result["n_flags"] == len(result["flags"])
+    assert result["n_groups"] == len(result["groups"])
+    assert result["n_with_json_twin"] == len(result["json_twins"])
+    # Substantial flag count.
+    assert result["n_flags"] > 100
+    # Major groups present.
+    for g in ("fn", "list", "check", "validate"):
+        assert g in result["groups"]
 
 
 def test_stage59_flag_doc_found():

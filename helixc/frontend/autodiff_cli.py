@@ -70,6 +70,11 @@ Introspection (Stage 28.9 + Stage 58 + Stage 59 polish):
     --flag-doc-json <flag_name>
         Same as --flag-doc but JSON
         {flag, usage, description, found}.
+    --cli-summary-json
+        Single-query consolidated CLI metadata. JSON with
+        {n_flags, n_groups, n_with_json_twin, flags, groups,
+        json_twins, text_only}. Tooling-friendly one-fetch surface
+        model.
     --autotune-budget-json <file.hx> <max_total>
         Same as --autotune-budget but JSON
         {within_budget, total_variants, budget, per_fn}.
@@ -6505,6 +6510,54 @@ def _diff_program_hash(path_a: str, path_b: str) -> int:
     return 1
 
 
+def _cli_summary_json() -> int:
+    """Stage 59 follow-on / Tier 4 #13 polish: single-query
+    consolidated CLI metadata. Combines --list-all-flags-json +
+    --flag-groups-json into one fetch, so tooling can build a full
+    CLI surface model in a single subprocess call.
+
+    Output schema:
+      {"n_flags": N,
+       "n_groups": N,
+       "n_with_json_twin": N,
+       "flags": [...],
+       "groups": {"<group>": [...]},
+       "json_twins": [...],
+       "text_only": [...]}
+    """
+    import json
+    import re
+    import os
+    here = os.path.abspath(__file__)
+    with open(here, "r", encoding="utf-8") as f:
+        src = f.read()
+    flags = sorted(set(re.findall(
+        r'^    if "(--[a-z-]+)" in (?:flags|sys\.argv\[1:\]):',
+        src, re.MULTILINE)))
+    flag_set = set(flags)
+    json_twins = sorted(f for f in flags if f.endswith("-json"))
+    text_only = sorted(
+        f for f in flags
+        if not f.endswith("-json") and (f + "-json") not in flag_set
+    )
+    groups: dict[str, list[str]] = {}
+    for fl in flags:
+        head = fl[2:].split("-", 1)[0]
+        groups.setdefault(head, []).append(fl)
+    for g in groups:
+        groups[g] = sorted(groups[g])
+    print(json.dumps({
+        "n_flags": len(flags),
+        "n_groups": len(groups),
+        "n_with_json_twin": len(json_twins),
+        "flags": flags,
+        "groups": groups,
+        "json_twins": json_twins,
+        "text_only": text_only,
+    }, sort_keys=True, indent=2))
+    return 0
+
+
 def _flag_doc(flag_name: str) -> int:
     """Stage 59 follow-on / Tier 4 #13 polish: print the docstring
     excerpt for a single CLI flag (parsed from autodiff_cli's own
@@ -6852,6 +6905,9 @@ def main():
 
     if "--flag-groups-json" in flags:
         sys.exit(_flag_groups_json())
+
+    if "--cli-summary-json" in flags:
+        sys.exit(_cli_summary_json())
 
     # --has-flag / --has-flag-json take a flag-name positional that
     # itself usually starts with '--', so the standard args/flags
