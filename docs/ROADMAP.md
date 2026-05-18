@@ -303,6 +303,48 @@ Re-sequenced after Stage 46-47 closed:
 - **Stage 58** ✅ **CLOSED 2026-05-18** — Tier 4 #13 content-
   addressed modules (program_hash + module_hash + fn_signature_hash
   core).
+- **Stage 99 SHIPPED 2026-05-18** — RE-AUDIT verdict: 17 stages
+  re-flip from 🟡 to ✅ FULLY CLOSED.
+  - 3 combined-batch audits dispatched in parallel against post-
+    Stages-94-98 code. Verdicts:
+    - **Audit A (silent-failure-hunter)**: PASS_RE_AUDIT
+      p_pass=0.93, confidence HIGH. All 4 HIGH + 2 MEDIUM Stage
+      93 findings verified fixed. Zero new silent miscompiles
+      introduced.
+    - **Audit B (type-design-analyzer)**: PASS_WITH_RESIDUAL
+      p_pass=0.74, MEDIUM. Specific fixes clean; original design-
+      debt items 1,2,4,5,6,7 remain (refactor-class items moved
+      to Stage 100+).
+    - **Audit C (code-reviewer)**: RE-CLOSED p_pass=0.91, HIGH.
+      All 5 fix stages individually RE-CLOSED. 2 follow-up nits
+      (hoist closure-local tables to module-level + 1 stale
+      comment) tracked for Stage 100.
+  - **17 stages re-marked FULLY CLOSED** (was 🟡 awaiting re-
+    audit): Stage 66, Stages 68-73, 75, 76, 78-83, 86, 88, 92.
+  - **Combined-burst closure-status totals after Stage 99**:
+    - ✅ FULLY AUDIT-CLEAN: 25 stages (8 prior + 17 newly re-
+      closed)
+    - 🔵 DEFERRED to v1.1: 1 (Stage 64 Inc 3-5)
+    - ⏭️ Meta stages (audits + fix commits): 8 (Stages 91, 93,
+      94-99)
+    - ⚪ Pre-burst stages (not re-audited this session): ~66
+  - **Stage 100 backlog** (design-debt follow-up from Audit B):
+    - Hoist _WRAPPER_CTOR_TABLE / _ALL_WRAPPER_REBUILDERS /
+      _WRAPPER_STRIP_TABLE from _check_expr closure to module-
+      level constants
+    - Extend _is_copy_struct_ty to walk through wrappers
+    - Extend typed-hole expected-type plumbing to let-RHS / fn-
+      return / struct-field-init / match-arm positions
+    - Reject multi-arg @property at typecheck OR extend runner to
+      cartesian-product (one of the two)
+    - Fix stale "absolute outermost" comments referring to TyTaint
+      and TyEnclave (they're no longer outermost after Stages 79,
+      80, 83 layered above them)
+    - Add @property roundtrip fns to safety.hx for the 5 wrappers
+      currently missing them (DP, Quant, Domain, Robust, Energy)
+    - Refactor Stage 92 inline _snapshot_chain to use Stage 95's
+      Scope methods (eliminate ~8 lines of duplication)
+
 - **Stage 98 SHIPPED 2026-05-18** — MEDIUM polish bundle: closes
   Stage 93 audit's 2 remaining MEDIUM findings.
   - **Fix A: safety.hx TyAttribution helpers (Stage 83 gap)**.
