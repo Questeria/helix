@@ -69,6 +69,8 @@ Introspection (Stage 28.9 + Stage 58 + Stage 59 polish):
         Max acyclic stack depth from entry_fn (cycles clipped).
     --fn-callgraph-depth-all <file.hx>
         Whole-program {fn: depth} JSON profile for stack-risk ranking.
+    --fn-topo-sort <file.hx>
+        Topological sort: leaves first, then their dependents.
     --fn-leaves <file.hx>
         List 'leaf' fns (those that call no other fn) — sorted, one per line.
     --fn-roots <file.hx>
@@ -1583,6 +1585,102 @@ def _fn_roots(path: str) -> int:
     return 0
 
 
+def _fn_topo_sort(path: str) -> int:
+    """Stage 59 follow-on / Tier 4 #13 polish: topological sort of the
+    callgraph. Output fns in leaves-first order — every fn appears
+    AFTER all of its callees.
+
+    One fn per line. Cycles are broken by SCC condensation: each SCC
+    is emitted as a contiguous block (alphabetically sorted within
+    the SCC), and the blocks themselves are topologically ordered.
+
+    Use cases:
+    - 'What order should I read this codebase?' — leaves are the
+      simplest building blocks; later fns compose earlier ones
+    - Inlining order: inline leaves into callers, then propagate
+    - Bottom-up proof construction: prove termination/correctness
+      starting at leaves, build up to entry points
+
+    Output for typical cases: a permutation of all fn names such that
+    if A calls B (directly), then B appears before A.
+    """
+    from .ast_walker import iter_fn_decls
+    src = _read_source(path)
+    prog = _parse_or_exit(src, path)
+
+    all_fns = list(iter_fn_decls(prog))
+    all_names = {fn.name for fn in all_fns}
+    graph: dict[str, set] = {}
+    for fn in all_fns:
+        callees: set = set()
+
+        def _walk(n) -> None:
+            if n is None:
+                return
+            if isinstance(n, A.Call):
+                if isinstance(n.callee, A.Name):
+                    callees.add(n.callee.name)
+                elif (isinstance(n.callee, A.Path)
+                      and n.callee.segments):
+                    callees.add(n.callee.segments[-1])
+            if hasattr(n, "__dataclass_fields__"):
+                for f in n.__dataclass_fields__:
+                    v = getattr(n, f)
+                    if isinstance(v, list):
+                        for x in v:
+                            _walk(x)
+                    elif isinstance(v, tuple):
+                        for x in v:
+                            _walk(x)
+                    else:
+                        _walk(v)
+
+        if fn.body is not None:
+            _walk(fn.body)
+        graph[fn.name] = {c for c in callees if c in all_names}
+
+    # Tarjan SCC → produces SCCs in reverse topo order (sinks first).
+    index_counter = [0]
+    stack: list[str] = []
+    on_stack: set = set()
+    index: dict[str, int] = {}
+    lowlink: dict[str, int] = {}
+    sccs: list[list[str]] = []
+
+    def _strongconnect(v: str) -> None:
+        index[v] = index_counter[0]
+        lowlink[v] = index_counter[0]
+        index_counter[0] += 1
+        stack.append(v)
+        on_stack.add(v)
+        for w in graph.get(v, set()):
+            if w not in index:
+                _strongconnect(w)
+                lowlink[v] = min(lowlink[v], lowlink[w])
+            elif w in on_stack:
+                lowlink[v] = min(lowlink[v], index[w])
+        if lowlink[v] == index[v]:
+            scc: list[str] = []
+            while True:
+                w = stack.pop()
+                on_stack.discard(w)
+                scc.append(w)
+                if w == v:
+                    break
+            sccs.append(scc)
+
+    for v in sorted(graph.keys()):
+        if v not in index:
+            _strongconnect(v)
+
+    # sccs comes out in reverse-topo (sinks first). That's what we
+    # want: leaves first. Within each SCC, sort alphabetically.
+    for scc in sccs:
+        for name in sorted(scc):
+            print(name)
+    return 0
+
+
 def _fn_callgraph_depth_all(path: str) -> int:
     """Stage 59 follow-on / Tier 4 #13 polish: whole-program stack-
     depth profile as JSON. For every fn, compute the max acyclic
@@ -2724,6 +2822,13 @@ def main():
                   file=sys.stderr)
             sys.exit(2)
         sys.exit(_fn_callgraph_depth_all(args[0]))
+
+    if "--fn-topo-sort" in flags:
+        if len(args) < 1:
+            print("usage: --fn-topo-sort <file.hx>",
+                  file=sys.stderr)
+            sys.exit(2)
+        sys.exit(_fn_topo_sort(args[0]))
 
     if "--fn-leaves" in flags:
         if len(args) < 1:
