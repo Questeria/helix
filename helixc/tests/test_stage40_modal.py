@@ -1975,6 +1975,58 @@ fn main() -> i32 {
         f"{[str(e) for e in errs]}"
 
 
+def test_stage53_inc2_assign_stmt_via_user_fn_fires():
+    """Stage 53 Inc 2: Assign-stmt where RHS is a user-fn call
+    returning a modal kind. The Inc 1 launder check at user-fn
+    call site applies regardless of where the call appears,
+    so this fires automatically — pinning the behavior."""
+    src = """
+fn launder(x: i32) -> Known<i32> { into_known(x) }
+fn main() -> i32 {
+    let u: Uncertain<i32> = into_uncertain(1);
+    let r: i32 = from_uncertain(u);
+    let mut k: Known<i32> = into_known(0);
+    k = launder(r);
+    from_known(k)
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    errs = typecheck(prog)
+    assert any("launder" in str(e) and "Uncertain" in str(e)
+               and "Known" in str(e)
+               and "helper-fn indirection" in str(e)
+               for e in errs), \
+        f"Assign-stmt with user-fn-RHS modal-launder MUST FIRE " \
+        f"(Stage 53 Inc 2 regression), got: " \
+        f"{[str(e) for e in errs]}"
+
+
+def test_stage53_inc2_match_scrutinee_user_fn_fires():
+    """Stage 53 Inc 2: match scrutinee is Call(user_fn, ...)
+    where user_fn returns a modal kind, with a tainted arg.
+    The Inc 1 launder check fires at the scrutinee Call before
+    the PatBind taint copy even runs."""
+    src = """
+fn launder(x: i32) -> Known<i32> { into_known(x) }
+fn main() -> i32 {
+    let u: Uncertain<i32> = into_uncertain(1);
+    let r: i32 = from_uncertain(u);
+    let out: i32 = match launder(r) {
+        x => from_known(into_known(x))
+    };
+    out
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    errs = typecheck(prog)
+    assert any("launder" in str(e) and "Uncertain" in str(e)
+               and "Known" in str(e) and "launder" in str(e)
+               for e in errs), \
+        f"Match scrutinee Call(user_fn, tainted) MUST FIRE " \
+        f"(Stage 53 Inc 2 regression), got: " \
+        f"{[str(e) for e in errs]}"
+
+
 def test_stage53_inc1_mutual_recursion_via_modal_fns():
     """Stage 53 Inc 1 edge case: mutual recursion across modal-
     typed fns. even_wrap and odd_wrap both return Known<i32> and
