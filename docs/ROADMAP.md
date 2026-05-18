@@ -303,6 +303,46 @@ Re-sequenced after Stage 46-47 closed:
 - **Stage 58** ✅ **CLOSED 2026-05-18** — Tier 4 #13 content-
   addressed modules (program_hash + module_hash + fn_signature_hash
   core).
+- **Stage 92 SHIPPED 2026-05-18** — Inc 5d fixes for Stage 66's 2
+  HIGH-severity silent miscompiles (Stage 91 audit closure):
+  - **Fix 1 (HIGH-#1)**: loop-body borrow reconciliation. New
+    helper `_check_loop_body_with_borrow_reconciliation` wraps
+    the existing `_check_loop_body_with_modal_union`: snapshots
+    scope.borrows.state (walking the scope chain to capture
+    outer-defined places) before the body, runs the body, then
+    compares exit vs entry per place. If any place ended in a
+    strictly-worse state (rank MOVED > MUTABLE > SHARED > FREE)
+    than entry, emit "loop body ends with X in state moved but
+    entered in state free; next iteration would observe an
+    unsound starting state". Reset to entry to suppress cascade
+    errors. Wired into A.For / A.While / A.Loop dispatch sites.
+    Only fires under @borrow_check / global opt-in (mirrors the
+    rest of Stage 66's gating).
+  - **Fix 2 (HIGH-#2)**: attribute whitelist + Levenshtein
+    suggest. New `_KNOWN_FN_ATTRS` (16 entries: pure, kernel,
+    grad, jvp, vjp, vmap, autotune, effect, io, network,
+    modify_self, rng, time, fs, deprecated, since, total, partial,
+    borrow_check, property, inline, __stdlib, verifier) and
+    `_KNOWN_STRUCT_ATTRS` (1: copy). New `_validate_known_attrs`
+    method emits "unknown attribute @X on fn 'Y' ... did you
+    mean @Z?" with Levenshtein-distance-based suggestion (≤ 3
+    edits for short attrs; ceil(len/2) otherwise). Wired into
+    `_check_fn` prologue + pass-0 struct indexing. Parser-derived
+    `<base>:<arg>` forms (e.g. `effect:io`, `autotune:K=V`) are
+    handled by splitting at `:` and validating the base only.
+  - **Cascade defect fixed inline**: discovered `@verifier`
+    attribute used by `__always_accept` in stdlib
+    (transcendentals.hx:335); added to whitelist with comment
+    explaining it marks fns as verifier callbacks for the
+    modify() AGI primitive.
+  - **Stage 66 RE-CLOSURE pending Batch 1 re-audit**. The Inc 5d
+    fixes are tested (5 new tests passing) and address the
+    audit-reported HIGH issues, but per the protocol the formal
+    closure requires re-running silent-failure-hunter against the
+    fixed code. Next stage will dispatch the re-audit.
+  - 5 new tests; 411 typecheck + 477 broader regression GREEN +
+    6 dogfood GREEN.
+
 - **Stage 66 DOWNGRADED to SUBSTANTIALLY COMPLETE 2026-05-18** —
   formal 3-clean-gate audit batch (Stage 91 closure-audit pass)
   surfaced 2 HIGH-severity silent miscompiles that the regression

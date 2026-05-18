@@ -1531,6 +1531,10 @@ class TypeChecker:
                     # not moves.
                     if "copy" in (getattr(item, "attrs", None) or []):
                         self._copy_struct_names.add(item.name)
+                    # Stage 92 (Inc 5d) — validate struct attrs too.
+                    self._validate_known_attrs(
+                        getattr(item, "attrs", None) or [],
+                        item.span, item.name, "struct")
             elif isinstance(item, A.EnumDecl):
                 if self._define_type_namespace_name(
                         item.name, "enum", item.span):
@@ -3806,6 +3810,12 @@ class TypeChecker:
         self._current_hbm_tile_indexables = set(kernel_hbm_indexables)
         self._current_return_ty = sig.ret
         self._current_fn_borrow_check = "borrow_check" in fn.attrs
+        # Stage 92 (Inc 5d) — validate fn.attrs against the known
+        # whitelist BEFORE the rest of the prologue runs, so typoed
+        # attrs surface as a diagnostic alongside the (now-False)
+        # safety flags they were meant to enable.
+        self._validate_known_attrs(
+            fn.attrs, fn.span, fn.name, "fn")
         # Stage 77 — register @property fn for the future test runner.
         # Validate the contract: return type must be bool.
         if "property" in fn.attrs:
@@ -4132,6 +4142,96 @@ class TypeChecker:
         # depth — the next _check_block call overwrites it anyway,
         # but ordering invariants benefit from explicit reset.)
         self._last_modal_assigns_popped = set()
+
+    def _check_loop_body_with_borrow_reconciliation(
+        self, body: A.Block, scope: Scope, loop_span: A.Span
+    ) -> None:
+        """Stage 92 (Inc 5d / Stage 91 audit HIGH-#1 fix).
+
+        Wraps `_check_loop_body_with_modal_union` (which handles
+        Stage 52 modal-origin tracking) with borrow-state
+        reconciliation: snapshot scope.borrows.state before the
+        body, run the body, then for every place that ended the
+        body in a strictly-worse state than entry (rank MOVED > FREE)
+        emit a "loop-body would re-use moved value on next
+        iteration" diagnostic.
+
+        Why this matters: a loop body `for i in 0..10 { let _ =
+        consume(s); }` (where consume is implicit-move per Stage 66
+        Inc 5b) moves s on iteration 1; iteration 2 starts with s
+        already MOVED but the typechecker pre-Stage-92 saw the
+        body once with s = FREE on entry. Audit batch 1 (Stage 91)
+        reproduced this as a HIGH-severity silent miscompile.
+
+        Phase-0 fix: emit the diagnostic + RESET state to entry so
+        downstream code in the same fn sees s as FREE (avoids
+        cascade errors that would confuse the developer).
+
+        Only fires under @borrow_check / global opt-in (mirrors the
+        rest of Stage 66's gating). If the gate is off, behaves
+        identically to the pre-Stage-92 modal-only union — no UX
+        change for non-opt-in code."""
+        # If borrow-check isn't enabled, just delegate to the modal
+        # union check — keeps existing semantics for opt-out code.
+        if not self._borrow_enforcement_enabled():
+            self._check_loop_body_with_modal_union(body, scope)
+            return
+        # Snapshot ALL places visible from this scope via chain
+        # walk, not just scope.borrows.state. A place defined in
+        # an outer scope but mutated in the body via chain-routing
+        # would land on outer.borrows.state — the snapshot needs
+        # to see those too. Walk the chain.
+        def _snapshot_chain(s):
+            states = {}
+            cur = s
+            while cur is not None:
+                for place, state in cur.borrows.state.items():
+                    states.setdefault(place, state)
+                cur = cur.parent
+            return states
+        entry_state = _snapshot_chain(scope)
+        # Run the body via the existing modal-union helper (which
+        # also runs _check_block under the hood).
+        self._check_loop_body_with_modal_union(body, scope)
+        exit_state = _snapshot_chain(scope)
+        # Rank ordering (mirrors A.If reconciliation).
+        _rank = {
+            BORROW_FREE: 0,
+            BORROW_SHARED: 1,
+            BORROW_MUTABLE: 2,
+            BORROW_MOVED: 3,
+        }
+        # For each place that ended worse than entry, diagnose +
+        # reset. The "worse" check uses _rank — exit > entry means
+        # the iteration-2 starting state is unsound.
+        for place, exit_st in exit_state.items():
+            entry_st = entry_state.get(place, BORROW_FREE)
+            if _rank.get(exit_st, 0) > _rank.get(entry_st, 0):
+                # Find the defining scope to update its tracker.
+                def _find_defining(s, target_place):
+                    cur = s
+                    while cur is not None:
+                        if target_place in cur.borrows.state:
+                            return cur
+                        cur = cur.parent
+                    return s
+                defining = _find_defining(scope, place)
+                self.errors.append(TypeError_(
+                    f"loop body ends with {place!r} in state "
+                    f"{exit_st!r} but entered in state {entry_st!r}; "
+                    f"next iteration would observe an unsound "
+                    f"starting state (Stage 92 / Stage 91 audit "
+                    f"HIGH-#1 fix — pre-Stage-92, loop bodies had "
+                    f"no borrow-state reconciliation so double-move "
+                    f"in a loop body silently passed)",
+                    loop_span,
+                    hint="move/borrow patterns must be balanced "
+                         "within the loop body, OR move the "
+                         "consume/move out of the loop",
+                ))
+                # Reset state to entry to avoid cascade errors in
+                # post-loop code.
+                defining.borrows.state[place] = entry_st
 
     def _check_expr_in_block_scope(
         self, expr: A.Expr, scope: Scope
@@ -8169,14 +8269,20 @@ class TypeChecker:
             # only when we can't determine a concrete element type.
             loop_var_ty = iter_ty if iter_ty is not None else TyPrim("i64")
             inner.define(expr.var_name, loop_var_ty)
-            self._check_loop_body_with_modal_union(expr.body, inner)
+            # Stage 92 (Inc 5d) — borrow-state loop reconciliation
+            # MUST wrap the modal-only check or loop-body double-moves
+            # silently pass (audit batch 1 HIGH-#1).
+            self._check_loop_body_with_borrow_reconciliation(
+                expr.body, inner, expr.span)
             return TyUnit()
         if isinstance(expr, A.While):
             self._check_expr(expr.cond, scope)
-            self._check_loop_body_with_modal_union(expr.body, scope)
+            self._check_loop_body_with_borrow_reconciliation(
+                expr.body, scope, expr.span)
             return TyUnit()
         if isinstance(expr, A.Loop):
-            self._check_loop_body_with_modal_union(expr.body, scope)
+            self._check_loop_body_with_borrow_reconciliation(
+                expr.body, scope, expr.span)
             return TyUnit()
         if isinstance(expr, A.Range):
             if expr.start is not None:
@@ -11802,6 +11908,99 @@ class TypeChecker:
         ("TyDeadline",       "__miss_deadline",      "__wrap_deadline"),
         ("TyAttribution",    "__attribute_verified", "__wrap_attr"),
     ]
+
+    # Stage 92 (Inc 5d, fix HIGH-#2 from Stage 91 audit batch 1) —
+    # known-attribute whitelist. Pre-Stage-92, the parser accepted
+    # any ident-shaped attribute and silently discarded unknowns —
+    # so a typo `@borrowcheck` (missing underscore) silently disabled
+    # Stage 66 borrow enforcement without any developer signal. Stage
+    # 92 validates every parsed attribute against this whitelist and
+    # emits a "unknown attribute @X (did you mean @Y?)" diagnostic
+    # with a Levenshtein suggestion. Closes the audit's HIGH-#2
+    # silent-failure-against-safety-attributes class.
+    _KNOWN_FN_ATTRS: frozenset = frozenset({
+        # Stage 4-16 core fn attributes.
+        "pure", "kernel", "grad", "jvp", "vjp", "vmap",
+        # Stage 27 autotune.
+        "autotune",
+        # Stage 28.6 effect-system + capability tokens.
+        "effect", "io", "network", "modify_self", "rng", "time", "fs",
+        # Stage 28.7 deprecation + version.
+        "deprecated", "since",
+        # Stage 49+ totality classification.
+        "total", "partial",
+        # Stage 66 Inc 4 borrow-checker per-fn opt-in.
+        "borrow_check",
+        # Stage 77 property-based testing scaffolding.
+        "property",
+        # Stage 16.5 inline-only.
+        "inline",
+        # Stage parser-injected stdlib marker (line 1701).
+        "__stdlib",
+        # Reflection / verifier-gated cell-write marker. Used by
+        # the stdlib's __always_accept (transcendentals.hx:335) to
+        # mark fn as a verifier callback for the
+        # modify(target, transformation, verifier) AGI primitive.
+        "verifier",
+    })
+    _KNOWN_STRUCT_ATTRS: frozenset = frozenset({
+        # Stage 66 Inc 4 Copy marker.
+        "copy",
+    })
+
+    def _validate_known_attrs(self, attrs: list[str], span: A.Span,
+                              owner_name: str, kind: str) -> None:
+        """Stage 92 (Inc 5d / Stage 91 audit fix). Validates each attr
+        against the kind-appropriate whitelist (_KNOWN_FN_ATTRS for
+        fn, _KNOWN_STRUCT_ATTRS for struct). Emits "unknown attribute
+        @X (did you mean @Y?)" for misses, with Levenshtein-suggest
+        from the whitelist. Silently accepts parser-derived
+        `<base>:<arg>` forms (e.g. `effect:io`, `autotune:KEY=v`,
+        `deprecated:msg`) when `<base>` is in the whitelist."""
+        whitelist = (self._KNOWN_FN_ATTRS if kind == "fn"
+                     else self._KNOWN_STRUCT_ATTRS)
+        for attr in attrs:
+            # Parser-derived sub-attrs use `base:payload`. Validate
+            # the base; the payload itself is structural data.
+            base = attr.split(":", 1)[0] if ":" in attr else attr
+            if base in whitelist:
+                continue
+            # Compute the closest known whitelist entry by Levenshtein
+            # for a "did you mean?" hint.
+            def _leven(a: str, b: str) -> int:
+                if a == b:
+                    return 0
+                if not a or not b:
+                    return max(len(a), len(b))
+                # Two-row dynamic programming.
+                prev = list(range(len(b) + 1))
+                for i, ca in enumerate(a, 1):
+                    cur = [i] + [0] * len(b)
+                    for j, cb in enumerate(b, 1):
+                        cur[j] = min(
+                            prev[j] + 1,
+                            cur[j - 1] + 1,
+                            prev[j - 1] + (0 if ca == cb else 1),
+                        )
+                    prev = cur
+                return prev[-1]
+            candidates = sorted(
+                whitelist,
+                key=lambda w: (_leven(base, w), w))
+            # Only suggest if the edit distance is reasonable
+            # (≤ 3 for short attrs; ≤ ceil(len/2) otherwise).
+            best = candidates[0] if candidates else None
+            max_dist = max(3, (len(base) + 1) // 2)
+            hint = None
+            if best is not None and _leven(base, best) <= max_dist:
+                hint = f"did you mean @{best}?"
+            self.errors.append(TypeError_(
+                f"unknown attribute @{base} on {kind} {owner_name!r} "
+                f"(Stage 92 / Stage 91 audit fix — typoed safety "
+                f"attributes used to silently disable enforcement)",
+                span,
+                hint=hint,
+            ))
 
     def _wrapper_mismatch_hint(self, expected, actual) -> Optional[str]:
         """If the (expected, actual) pair is a Tier-S/A wrapper-vs-bare

@@ -4974,6 +4974,131 @@ def test_stage83_wrap_attr_constructor():
     assert len(type_errs) == 0, type_errs
 
 
+def test_stage92_unknown_attr_emits_diagnostic_with_levenshtein_hint():
+    """Stage 92 (Inc 5d / Stage 91 audit HIGH-#2 fix) — typo
+    `@borrowcheck` (missing underscore) now produces a "unknown
+    attribute" diagnostic with a "did you mean @borrow_check?"
+    hint. Pre-fix, the typo silently disabled enforcement."""
+    from helixc.frontend.typecheck import typecheck
+    from helixc.frontend.parser import parse
+
+    src = """
+    @borrowcheck
+    fn user() -> i32 { 0 }
+    fn main() -> i32 { 0 }
+    """
+    prog = parse(src, include_stdlib=False)
+    errors = typecheck(prog)
+    unknown_errs = [e for e in errors
+                    if "unknown attribute" in str(e)
+                    and "@borrowcheck" in str(e)]
+    assert len(unknown_errs) >= 1, errors
+    err = unknown_errs[0]
+    assert err.hint is not None, f"no hint on {err}"
+    assert "@borrow_check" in err.hint, err.hint
+
+
+def test_stage92_unknown_struct_attr_emits_diagnostic():
+    """Stage 92 — typo `@Copy` (wrong case) on struct produces
+    "unknown attribute" diagnostic with "did you mean @copy?"
+    hint."""
+    from helixc.frontend.typecheck import typecheck
+    from helixc.frontend.parser import parse
+
+    src = """
+    @Copy
+    struct Pt { x: f32, y: f32 }
+    fn main() -> i32 { 0 }
+    """
+    prog = parse(src, include_stdlib=False)
+    errors = typecheck(prog)
+    unknown_errs = [e for e in errors
+                    if "unknown attribute" in str(e)
+                    and "@Copy" in str(e)]
+    assert len(unknown_errs) >= 1, errors
+
+
+def test_stage92_known_fn_attrs_accepted_silently():
+    """Stage 92 — known fn attrs (pure, kernel, borrow_check,
+    property, etc.) do NOT trigger the unknown-attribute diagnostic."""
+    from helixc.frontend.typecheck import typecheck
+    from helixc.frontend.parser import parse
+
+    src = """
+    @pure
+    fn p() -> i32 { 0 }
+
+    @borrow_check
+    fn b() -> i32 { 0 }
+
+    @property
+    @pure
+    fn r(x: i32) -> bool { true }
+
+    fn main() -> i32 { 0 }
+    """
+    prog = parse(src, include_stdlib=False)
+    errors = typecheck(prog)
+    unknown_errs = [e for e in errors
+                    if "unknown attribute" in str(e)]
+    assert len(unknown_errs) == 0, unknown_errs
+
+
+def test_stage92_loop_body_double_move_now_diagnosed():
+    """Stage 92 (Inc 5d / Stage 91 audit HIGH-#1 fix) — `for { let _
+    = __move(s); }` now emits "loop body ends with ... in state
+    moved" diagnostic. Pre-fix, this silently passed despite being
+    a runtime double-move on iteration 2+."""
+    from helixc.frontend.typecheck import TypeChecker
+    from helixc.frontend.parser import parse
+
+    src = """
+    @borrow_check
+    fn user() -> i32 {
+        let mut x: i32 = 1;
+        let mut i: i32 = 0;
+        while i < 3 {
+            let _ = __move(x);
+            i = i + 1;
+        }
+        0
+    }
+    """
+    prog = parse(src, include_stdlib=False)
+    tc = TypeChecker(prog)
+    errors = tc.check()
+    loop_errs = [str(e) for e in errors
+                 if "loop body ends" in str(e)
+                 and "moved" in str(e).lower()]
+    assert len(loop_errs) >= 1, errors
+
+
+def test_stage92_loop_body_balanced_borrows_pass():
+    """Stage 92 — a loop body whose entry and exit borrow states
+    match does NOT trigger the diagnostic. Validates that the
+    Stage 92 check is precise (no false positives on well-formed
+    loops)."""
+    from helixc.frontend.typecheck import TypeChecker
+    from helixc.frontend.parser import parse
+
+    src = """
+    @borrow_check
+    fn user() -> i32 {
+        let mut i: i32 = 0;
+        while i < 3 {
+            i = i + 1;
+        }
+        0
+    }
+    """
+    prog = parse(src, include_stdlib=False)
+    tc = TypeChecker(prog)
+    errors = tc.check()
+    loop_errs = [str(e) for e in errors
+                 if "loop body ends" in str(e)]
+    assert len(loop_errs) == 0, loop_errs
+
+
 def test_stage90_typed_hole_at_call_arg_reports_expected_type():
     """Stage 90 / Stage 89 Inc 2 — `_` at a fn-call-arg position now
     gets a type-aware "expected i32 here" diagnostic alongside the
