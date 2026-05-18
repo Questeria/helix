@@ -329,6 +329,23 @@ Re-sequenced after Stage 46-47 closed:
     (exit code 42 iff training ran end-to-end + checkpoint
     round-trip succeeded).
 
+- **Stage 66 Inc 3 SHIPPED 2026-05-18** — Tier 4 #16 typecheck-
+  time borrow enforcement (xor rule wired):
+  - TypeChecker.`_borrow_check_enabled` opt-in flag (default
+    False to preserve existing tests).
+  - When enabled, `&` / `&mut` Unary expressions in typecheck
+    call into `Scope.borrows.check_borrow_shared/mutable` and
+    emit a span-pointing TypeError with the current borrow state
+    on violation.
+  - Pattern caught: `let mut x; let _a = &mut x; let _b = &mut x;`
+    → Stage 66 borrow checker xor-rule diagnostic.
+  - Pattern caught: `let mut x; let _a = &x; let _b = &mut x;`
+    → same diagnostic (SHARED + MUTABLE not allowed).
+  - 3 new tests; 305 typecheck + 223 self-host GREEN.
+  - Inc 4 plan: `@borrow_check` fn-level attribute (per-fn opt-in)
+    + Copy marker (`@copy` struct attr); Inc 5 explicit `move`
+    keyword + block-exit reconciliation across branches.
+
 - **Stage 66 Inc 2 SHIPPED 2026-05-18** — Tier 4 #16 borrow
   enforcement (xor rule + move detection):
   - `BorrowState.check_borrow_shared/mutable/move` now actually

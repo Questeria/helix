@@ -4707,6 +4707,89 @@ def test_stage68_inc1_confidence_takes_exactly_one_arg():
         f"expected Conf-arity error, got errors: {errors}")
 
 
+def test_stage66_inc3_typecheck_borrow_xor_violation_detected():
+    """Stage 66 Inc 3 — typecheck-time borrow enforcement at
+    `&`/`&mut` sites. When opt-in `_borrow_check_enabled = True`,
+    a `let mut x = ...; let _a = &mut x; let _b = &mut x;` pattern
+    produces a borrow-checker diagnostic.
+
+    Default (opt-out): existing tests not affected — they continue
+    to see only the Stage 31 'not lowerable yet' message."""
+    from helixc.frontend.typecheck import TypeChecker
+    from helixc.frontend.parser import parse
+
+    src = """
+    fn user() -> i32 {
+        let mut x: i32 = 1;
+        let _a = &mut x;
+        let _b = &mut x;
+        0
+    }
+    """
+    prog = parse(src, include_stdlib=False)
+    tc = TypeChecker(prog)
+    tc._borrow_check_enabled = True  # opt-in
+    errors = tc.check()
+    # The second &mut should trigger the xor-rule diagnostic.
+    borrow_errs = [e for e in errors
+                   if "xor rule violated" in str(e)
+                   or "Stage 66 borrow checker" in str(e)]
+    assert len(borrow_errs) >= 1, (
+        f"expected Stage 66 borrow-check diagnostic; got errors: "
+        f"{[str(e) for e in errors]}")
+
+
+def test_stage66_inc3_default_off_preserves_existing_behaviour():
+    """Stage 66 Inc 3: with the default (opt-out) borrow-check
+    disabled, double-&mut typechecks identically to pre-Stage-66
+    (only the Stage 31 'not lowerable yet' message; no xor error)."""
+    from helixc.frontend.typecheck import TypeChecker
+    from helixc.frontend.parser import parse
+
+    src = """
+    fn user() -> i32 {
+        let mut x: i32 = 1;
+        let _a = &mut x;
+        let _b = &mut x;
+        0
+    }
+    """
+    prog = parse(src, include_stdlib=False)
+    tc = TypeChecker(prog)
+    # _borrow_check_enabled defaults to False.
+    errors = tc.check()
+    # No Stage 66 diagnostic should appear.
+    borrow_errs = [e for e in errors
+                   if "xor rule violated" in str(e)
+                   or "Stage 66" in str(e)]
+    assert len(borrow_errs) == 0, (
+        f"expected NO Stage 66 diagnostic with opt-out; got: "
+        f"{[str(e) for e in errors]}")
+
+
+def test_stage66_inc3_shared_then_mutable_rejected_with_opt_in():
+    """Stage 66 Inc 3: `let a = &x; let b = &mut x;` rejected when
+    opt-in (xor rule: SHARED + MUTABLE not allowed)."""
+    from helixc.frontend.typecheck import TypeChecker
+    from helixc.frontend.parser import parse
+
+    src = """
+    fn user() -> i32 {
+        let mut x: i32 = 1;
+        let _a = &x;
+        let _b = &mut x;
+        0
+    }
+    """
+    prog = parse(src, include_stdlib=False)
+    tc = TypeChecker(prog)
+    tc._borrow_check_enabled = True
+    errors = tc.check()
+    borrow_errs = [e for e in errors
+                   if "Stage 66" in str(e)]
+    assert len(borrow_errs) >= 1
+
+
 def test_stage66_inc2_borrow_enforcement_shared_xor_mutable():
     """Stage 66 Inc 2 — Tier 4 #16 enforce the Rust 1.0-era xor
     rule: one `&mut` xor any number of `&` per place.

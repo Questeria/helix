@@ -1070,6 +1070,18 @@ class TypeChecker:
         # handler so raw-pointer casts (TyPtr targets from non-TyPtr
         # sources) outside any unsafe block emit trap 28603.
         self._in_unsafe_depth: int = 0
+        # Stage 66 Inc 3 — opt-in borrow-checker enforcement.
+        # Default False to preserve existing-test compatibility;
+        # tests / callers flip to True to exercise the Rust-1.0-era
+        # xor rule. Inc 4 may upgrade to opt-in via @borrow_check
+        # fn-level attribute or a CLI --borrow-check flag.
+        self._borrow_check_enabled: bool = False
+
+    def _borrow_enforcement_enabled(self) -> bool:
+        """Stage 66 Inc 3 — gate for the borrow-check enforcement
+        at &/&mut sites. Currently a simple bool; future Inc 4
+        will check per-fn @borrow_check attribute."""
+        return self._borrow_check_enabled
 
     # ---- entry point ----
     def check(self) -> list[TypeError_]:
@@ -3906,6 +3918,39 @@ class TypeChecker:
                         hint="declare the binding with `let mut`",
                     ))
                 else:
+                    # Stage 66 Inc 3 — wire borrow enforcement at
+                    # the &/&mut typecheck site. When opt-in is
+                    # active (currently always-on for the test
+                    # surface; future Inc 4 will gate via @borrow
+                    # attribute on fn), enforce the Rust 1.0-era
+                    # xor rule via the Scope.borrows tracker.
+                    if self._borrow_enforcement_enabled():
+                        place = Place.local(expr.operand.name)
+                        if expr.op == "&":
+                            ok = scope.borrows.check_borrow_shared(place)
+                            if not ok:
+                                cur_state = scope.borrows.status(place)
+                                self.errors.append(TypeError_(
+                                    f"cannot borrow {expr.operand.name!r} as "
+                                    f"shared because it is currently "
+                                    f"{cur_state} (Stage 66 borrow checker)",
+                                    expr.span,
+                                    hint="release the conflicting mutable "
+                                         "borrow before taking a shared one",
+                                ))
+                        else:  # &mut
+                            ok = scope.borrows.check_borrow_mutable(place)
+                            if not ok:
+                                cur_state = scope.borrows.status(place)
+                                self.errors.append(TypeError_(
+                                    f"cannot borrow {expr.operand.name!r} as "
+                                    f"mutable because it is currently "
+                                    f"{cur_state} (Stage 66 borrow checker xor "
+                                    f"rule violated)",
+                                    expr.span,
+                                    hint="all prior &/&mut borrows must be "
+                                         "released before taking &mut",
+                                ))
                     self.errors.append(TypeError_(
                         f"operator {expr.op!r} is type-known but not "
                         "lowerable yet in Stage 31",
