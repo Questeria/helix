@@ -75,6 +75,12 @@ Introspection (Stage 28.9 + Stage 58 + Stage 59 polish):
         {n_flags, n_groups, n_with_json_twin, flags, groups,
         json_twins, text_only}. Tooling-friendly one-fetch surface
         model.
+    --flag-arity <flag_name>
+        Print the number of positional arguments a flag accepts
+        (parsed from the help docstring usage line). One integer.
+    --flag-arity-json <flag_name>
+        Same as --flag-arity but JSON
+        {flag, arity, placeholders, found}.
     --autotune-budget-json <file.hx> <max_total>
         Same as --autotune-budget but JSON
         {within_budget, total_variants, budget, per_fn}.
@@ -6510,6 +6516,73 @@ def _diff_program_hash(path_a: str, path_b: str) -> int:
     return 1
 
 
+def _flag_arity(flag_name: str) -> int:
+    """Stage 59 follow-on / Tier 4 #13 polish: report how many
+    positional arguments a CLI flag takes. Reads the help docstring's
+    usage line to count placeholders like `<file.hx>` or `<fn_name>`.
+
+    Output: a single integer (the arity).
+
+    Use case: tooling that wants to invoke flags programmatically
+    needs to know whether to pass 0, 1, 2, or 3 positional args.
+
+    Exit 0 on found; 1 if flag has no help entry.
+    """
+    import re
+    if not flag_name.startswith("--"):
+        flag_name = "--" + flag_name
+    doc = __doc__ or ""
+    for line in doc.splitlines():
+        stripped = line.strip()
+        if stripped.startswith(flag_name + " ") or stripped == flag_name:
+            if line.startswith("    " + flag_name):
+                # Count `<...>` placeholders on the usage line.
+                arity = len(re.findall(r"<[^>]+>", stripped))
+                print(arity)
+                return 0
+    print(f"error: autodiff_cli: no help entry for {flag_name!r}",
+          file=sys.stderr)
+    return 1
+
+
+def _flag_arity_json(flag_name: str) -> int:
+    """Stage 59 follow-on / Tier 4 #13 polish: --flag-arity in
+    machine-readable JSON form.
+
+    Output schema:
+      {"flag": "<flag>",
+       "arity": N,
+       "placeholders": ["<name1>", "<name2>", ...],
+       "found": bool}
+
+    rc=0 on found; 1 on not found.
+    """
+    import json
+    import re
+    if not flag_name.startswith("--"):
+        flag_name = "--" + flag_name
+    doc = __doc__ or ""
+    for line in doc.splitlines():
+        stripped = line.strip()
+        if stripped.startswith(flag_name + " ") or stripped == flag_name:
+            if line.startswith("    " + flag_name):
+                placeholders = re.findall(r"<[^>]+>", stripped)
+                print(json.dumps({
+                    "flag": flag_name,
+                    "arity": len(placeholders),
+                    "placeholders": placeholders,
+                    "found": True,
+                }, sort_keys=True, indent=2))
+                return 0
+    print(json.dumps({
+        "flag": flag_name,
+        "arity": -1,
+        "placeholders": [],
+        "found": False,
+    }, sort_keys=True, indent=2))
+    return 1
+
+
 def _cli_summary_json() -> int:
     """Stage 59 follow-on / Tier 4 #13 polish: single-query
     consolidated CLI metadata. Combines --list-all-flags-json +
@@ -6893,26 +6966,12 @@ def main():
     args = [a for a in sys.argv[1:] if not a.startswith("--")]
     flags = {a for a in sys.argv[1:] if a.startswith("--")}
 
-    # CLI introspection flags (no file args required).
-    if "--list-all-flags" in flags:
-        sys.exit(_list_all_flags())
-
-    if "--list-all-flags-json" in flags:
-        sys.exit(_list_all_flags_json())
-
-    if "--flag-groups" in flags:
-        sys.exit(_flag_groups())
-
-    if "--flag-groups-json" in flags:
-        sys.exit(_flag_groups_json())
-
-    if "--cli-summary-json" in flags:
-        sys.exit(_cli_summary_json())
-
-    # --has-flag / --has-flag-json take a flag-name positional that
-    # itself usually starts with '--', so the standard args/flags
-    # partition doesn't apply. Parse from sys.argv directly: take the
-    # token immediately after the introspector flag.
+    # Argv-direct introspection flags take precedence: they accept a
+    # positional flag-name (which itself starts with '--'), and the
+    # standard args/flags partition can't tell positional-flag from
+    # operator-flag. Parse from sys.argv directly. These MUST come
+    # before any standalone introspection check that could shadow them
+    # (e.g., --list-all-flags before --flag-arity).
     if "--has-flag" in sys.argv[1:]:
         try:
             idx = sys.argv.index("--has-flag")
@@ -6948,6 +7007,40 @@ def main():
             print("usage: --flag-doc-json <flag_name>", file=sys.stderr)
             sys.exit(2)
         sys.exit(_flag_doc_json(target))
+
+    if "--flag-arity" in sys.argv[1:]:
+        try:
+            idx = sys.argv.index("--flag-arity")
+            target = sys.argv[idx + 1]
+        except (ValueError, IndexError):
+            print("usage: --flag-arity <flag_name>", file=sys.stderr)
+            sys.exit(2)
+        sys.exit(_flag_arity(target))
+
+    if "--flag-arity-json" in sys.argv[1:]:
+        try:
+            idx = sys.argv.index("--flag-arity-json")
+            target = sys.argv[idx + 1]
+        except (ValueError, IndexError):
+            print("usage: --flag-arity-json <flag_name>", file=sys.stderr)
+            sys.exit(2)
+        sys.exit(_flag_arity_json(target))
+
+    # Standalone CLI introspection flags (no positional args).
+    if "--list-all-flags" in flags:
+        sys.exit(_list_all_flags())
+
+    if "--list-all-flags-json" in flags:
+        sys.exit(_list_all_flags_json())
+
+    if "--flag-groups" in flags:
+        sys.exit(_flag_groups())
+
+    if "--flag-groups-json" in flags:
+        sys.exit(_flag_groups_json())
+
+    if "--cli-summary-json" in flags:
+        sys.exit(_cli_summary_json())
 
     if "--dump-ast-hashes" in flags:
         if len(args) < 1:

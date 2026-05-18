@@ -5902,6 +5902,7 @@ def test_stage59_autodiff_cli_help_mentions_polish_flags():
         "--flag-groups", "--flag-groups-json",
         "--flag-doc", "--flag-doc-json",
         "--cli-summary-json",
+        "--flag-arity", "--flag-arity-json",
         "--list-fn-attrs", "--list-fn-attrs-json",
         "--list-fns-by-attr", "--list-fns-by-attr-json",
         "--fn-callgraph", "--fn-callers",
@@ -7564,6 +7565,75 @@ def test_stage59_agent_methods_json(tmp_path):
         {"name": "propose", "params": ["i32"], "return_ty": "i32"},
         {"name": "evaluate", "params": ["i32", "i32"], "return_ty": "i32"},
     ]}
+
+
+def test_stage59_flag_arity_text():
+    """Stage 59 follow-on / Tier 4 #13 polish: --flag-arity prints
+    a single integer for the positional argument count."""
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    # 1-arg flag.
+    proc1 = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--flag-arity", "--program-hash"],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc1.returncode == 0
+    assert proc1.stdout.strip() == "1"
+    # 3-arg flag.
+    proc3 = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--flag-arity", "--fn-call-path"],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc3.returncode == 0
+    assert proc3.stdout.strip() == "3"
+    # 0-arg flag (the standalone introspection ones).
+    proc0 = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--flag-arity", "--list-all-flags"],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc0.returncode == 0
+    assert proc0.stdout.strip() == "0"
+
+
+def test_stage59_flag_arity_json():
+    """Stage 59 follow-on / Tier 4 #13 polish: --flag-arity-json
+    emits {flag, arity, placeholders, found}."""
+    import json
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--flag-arity-json", "--diff-program-hash"],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0
+    result = json.loads(proc.stdout)
+    assert result == {
+        "flag": "--diff-program-hash",
+        "arity": 2,
+        "placeholders": ["<a.hx>", "<b.hx>"],
+        "found": True,
+    }
+
+
+def test_stage59_flag_arity_json_missing():
+    """Stage 59 follow-on / Tier 4 #13 polish: --flag-arity-json
+    emits found=false + arity=-1 + rc=1 for unknown flags."""
+    import json
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--flag-arity-json", "--nope"],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 1
+    result = json.loads(proc.stdout)
+    assert result["found"] is False
+    assert result["arity"] == -1
 
 
 def test_stage59_cli_summary_json():
