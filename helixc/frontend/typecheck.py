@@ -329,6 +329,39 @@ class TyConf(Type):
 
 
 @dataclass(frozen=True)
+class TyQuant(Type):
+    """Stage 71 — quantization-aware type (Tier-A #2). A value tagged
+    with the bit-width its precision has been quantized to. Critical
+    for ML inference deployment on edge / mobile / accelerator
+    hardware that can't run full f32.
+
+    Phase-0 representation: bits stored as int (4/8/16). Three preset
+    aliases ship in Inc 1:
+    - `Q4<T>`   → 4 bits  (aggressive quantization)
+    - `Q8<T>`   → 8 bits  (typical INT8)
+    - `Q16<T>`  → 16 bits (fp16/bf16 territory)
+
+    Compositional rule: when two Q-tagged values combine in a binop,
+    the result inherits the SMALLER bit width (the binop's precision
+    is bounded by the most-aggressively-quantized operand). So
+    `Q4<f32> + Q8<f32>` yields `Q4<f32>` (worst-case precision).
+    If only one side is Q-tagged, the result inherits that bit
+    width (untagged side is assumed full-precision).
+
+    Use case: model inference on hardware accelerators (INT8 NPU,
+    INT4 weights), quantization-aware training, mixed-precision
+    pipelines. Composes with the rest of the Tier-S/A stack:
+    `Confidential<Private<Q8<f32>>>` = "a confidential, private,
+    INT8-quantized measurement".
+
+    Inc 1 ships data type + parser/resolver; Inc 2 will add
+    propagation algebra; Inc 3 will add `__upcast_quant(x)` opt-out
+    builtin (acknowledges precision restoration)."""
+    bits: int        # 4, 8, 16 (typical quantization widths)
+    inner: Type
+
+
+@dataclass(frozen=True)
 class TyDP(Type):
     """Stage 70 — differential-privacy budget type (Tier-S #3).
     A value tagged with its differential-privacy epsilon budget,
@@ -1947,6 +1980,25 @@ class TypeChecker:
                     return TyUnknown(hint=ty.base)
                 return TyConf(level=conf_map[ty.base],
                                inner=self._resolve_type(ty.args[0], scope))
+            # Stage 71 Inc 1 — quantization-aware preset bit widths.
+            # F5 arity arm. Single-arg wrapper; quantization widths
+            # are namespaced as Q4/Q8/Q16 to keep parser surface
+            # simple (avoids needing numeric type args).
+            quant_map = {
+                "Q4":   4,
+                "Q8":   8,
+                "Q16":  16,
+            }
+            if ty.base in quant_map:
+                if len(ty.args) != 1:
+                    self.errors.append(TypeError_(
+                        f"{ty.base}<T> takes 1 type argument, "
+                        f"got {len(ty.args)}",
+                        ty.span,
+                    ))
+                    return TyUnknown(hint=ty.base)
+                return TyQuant(bits=quant_map[ty.base],
+                               inner=self._resolve_type(ty.args[0], scope))
             # Stage 70 Inc 1 — differential-privacy preset budgets.
             # F5 arity arm. Preset epsilon strings keep the parser
             # surface single-arg-wrapper-shaped.
@@ -2914,6 +2966,11 @@ class TypeChecker:
         # privacy budget at this point. Same audit-grep pattern as
         # __declassify.
         "__exhaust_dp",
+        # Stage 71 Inc 3 — quantization opt-out. `__upcast_quant(x)`
+        # strips a TyQuant wrapper, acknowledging the user has
+        # restored full precision at this point (e.g. dequantize step
+        # before a precision-sensitive op).
+        "__upcast_quant",
         "__strlen", "__strbyte", "__streq", "__strlit_to_arena",
         "__hash_i32",
         # Stage 55 Inc 1 — runtime string builtins. Operate on
@@ -4268,11 +4325,12 @@ class TypeChecker:
             r_is_diff = isinstance(r, TyDiff)
 
             # Extract the innermost type beneath any TyDiff/TyLogic/
-            # TyConf/TyTaint/TyDP wrappers, treating any layering
-            # uniformly.
+            # TyConf/TyTaint/TyDP/TyQuant wrappers, treating any
+            # layering uniformly.
             # Stage 68 Inc 2 — TyConf added to the unwrap chain.
             # Stage 69 Inc 2 — TyTaint added too.
             # Stage 70 Inc 2 — TyDP added too.
+            # Stage 71 Inc 2 — TyQuant added too.
             def _unwrap(t: Type) -> Type:
                 if isinstance(t, TyDiff):
                     return _unwrap(t.inner)
@@ -4283,6 +4341,8 @@ class TypeChecker:
                 if isinstance(t, TyTaint):
                     return _unwrap(t.inner)
                 if isinstance(t, TyDP):
+                    return _unwrap(t.inner)
+                if isinstance(t, TyQuant):
                     return _unwrap(t.inner)
                 return t
 
@@ -4359,10 +4419,36 @@ class TypeChecker:
             l_is_dp = l_dp_eps is not None
             r_is_dp = r_dp_eps is not None
 
+            # Stage 71 Inc 2 — detect TyQuant in any layered position.
+            # Composition rule: the SMALLER bit count wins (worst-case
+            # precision dominates). Mirrors the most-restrictive-wins
+            # pattern of TyTaint but for the OPPOSITE direction
+            # (smaller bits = MORE restricted precision).
+            def _find_quant_bits(t: Type) -> Optional[int]:
+                if isinstance(t, TyQuant):
+                    return t.bits
+                if isinstance(t, TyDiff):
+                    return _find_quant_bits(t.inner)
+                if isinstance(t, TyLogic):
+                    return _find_quant_bits(t.inner)
+                if isinstance(t, TyConf):
+                    return _find_quant_bits(t.inner)
+                if isinstance(t, TyTaint):
+                    return _find_quant_bits(t.inner)
+                if isinstance(t, TyDP):
+                    return _find_quant_bits(t.inner)
+                return None
+
+            l_quant_bits = _find_quant_bits(l)
+            r_quant_bits = _find_quant_bits(r)
+            l_is_quant = l_quant_bits is not None
+            r_is_quant = r_quant_bits is not None
+
             if (l_is_logic or r_is_logic or l_is_diff or r_is_diff
                     or l_is_conf or r_is_conf
                     or l_is_taint or r_is_taint
-                    or l_is_dp or r_is_dp):
+                    or l_is_dp or r_is_dp
+                    or l_is_quant or r_is_quant):
                 # Audit 28.8 B13 (trap AD002 / 24200): TyDiff binop
                 # with mixed inner types previously silently coerced
                 # the right operand to the left's inner type. The
@@ -4532,6 +4618,19 @@ class TypeChecker:
                     chosen = max(
                         levels, key=lambda lv: _level_rank.get(lv, 0))
                     wrapped = TyConf(level=chosen, inner=wrapped)
+                # Stage 71 Inc 2 — TyQuant innermost-after-D/Logic.
+                # Wraps the result whenever either operand is
+                # quantization-tagged. Composition rule: SMALLER
+                # bit count wins (most-aggressively-quantized
+                # operand dominates the result's precision).
+                if l_is_quant or r_is_quant:
+                    bits_list = []
+                    if l_quant_bits is not None:
+                        bits_list.append(l_quant_bits)
+                    if r_quant_bits is not None:
+                        bits_list.append(r_quant_bits)
+                    chosen_bits = min(bits_list)
+                    wrapped = TyQuant(bits=chosen_bits, inner=wrapped)
                 # Stage 70 Inc 2 — TyDP layered between Conf and Taint.
                 # Differential-privacy composition rule: EPSILON-SUM
                 # (sequential composition theorem). Phase-0 stores
@@ -4748,6 +4847,33 @@ class TypeChecker:
                             return TyLogic(inner=_strip_dp(t.inner))
                         return t
                     return _strip_dp(arg_ty)
+                # Stage 71 Inc 3 — quantization opt-out builtin.
+                # `__upcast_quant(x)` strips the TyQuant wrapper,
+                # marking an explicit precision-restoration point
+                # (e.g. dequantize before a precision-sensitive op).
+                # An external audit pass can grep for `__upcast_quant`
+                # to catch precision regressions. Identity on non-Quant
+                # inputs; preserves other wrappers.
+                if bn == "__upcast_quant" and len(arg_tys) == 1:
+                    arg_ty = arg_tys[0]
+                    def _strip_quant(t):
+                        if isinstance(t, TyQuant):
+                            return t.inner
+                        if isinstance(t, TyTaint):
+                            return TyTaint(label=t.label,
+                                           inner=_strip_quant(t.inner))
+                        if isinstance(t, TyDP):
+                            return TyDP(epsilon=t.epsilon,
+                                        inner=_strip_quant(t.inner))
+                        if isinstance(t, TyConf):
+                            return TyConf(level=t.level,
+                                          inner=_strip_quant(t.inner))
+                        if isinstance(t, TyDiff):
+                            return TyDiff(inner=_strip_quant(t.inner))
+                        if isinstance(t, TyLogic):
+                            return TyLogic(inner=_strip_quant(t.inner))
+                        return t
+                    return _strip_quant(arg_ty)
                 if (bn == "__move" and len(arg_tys) == 1
                         and isinstance(expr.args[0], A.Name)):
                     if self._borrow_enforcement_enabled():

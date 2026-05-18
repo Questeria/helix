@@ -4689,6 +4689,149 @@ def test_stage68_inc1_confidence_high_low_precise_aliases():
         assert t.level == lvl
 
 
+def test_stage71_inc1_quant_type_recognition():
+    """Stage 71 Inc 1 — TyQuant scaffolding. Q4/Q8/Q16 aliases
+    resolve to TyQuant with the corresponding bit width."""
+    from helixc.frontend.typecheck import (
+        TypeChecker, TyQuant, TyPrim,
+    )
+    from helixc.frontend.parser import parse
+
+    src = """
+    fn user(a: Q8<f32>, b: Q4<f32>) -> f32 {
+        0.0
+    }
+    fn main() -> i32 { 0 }
+    """
+    prog = parse(src, include_stdlib=False)
+    tc = TypeChecker(prog)
+    errors = tc.check()
+    arity_errs = [str(e) for e in errors
+                  if "takes 1 type argument" in str(e)
+                  and ("Q4" in str(e) or "Q8" in str(e))]
+    assert len(arity_errs) == 0, (
+        f"unexpected arity error: {arity_errs}")
+
+
+def test_stage71_inc1_three_quant_aliases_resolve_to_distinct_bits():
+    from helixc.frontend.typecheck import TypeChecker
+    from helixc.frontend.parser import parse
+
+    src = """
+    fn a(x: Q4<i32>) -> i32 { 0 }
+    fn b(x: Q8<i32>) -> i32 { 0 }
+    fn c(x: Q16<i32>) -> i32 { 0 }
+    fn main() -> i32 { 0 }
+    """
+    prog = parse(src, include_stdlib=False)
+    tc = TypeChecker(prog)
+    errors = tc.check()
+    name_errs = [str(e) for e in errors
+                 if any(n in str(e) for n in ["Q4", "Q8", "Q16"])
+                 and ("takes 1 type argument" in str(e)
+                      or "unbound" in str(e))]
+    assert len(name_errs) == 0, name_errs
+
+
+def test_stage71_inc1_quant_takes_exactly_one_arg():
+    from helixc.frontend.typecheck import typecheck
+    from helixc.frontend.parser import parse
+
+    src = """
+    fn bad(x: Q8<f32, i32>) -> i32 { 0 }
+    fn main() -> i32 { 42 }
+    """
+    prog = parse(src, include_stdlib=False)
+    errors = typecheck(prog)
+    arity_errors = [e for e in errors if "Q8" in str(e)
+                    and "takes 1 type argument" in str(e)]
+    assert len(arity_errors) > 0, errors
+
+
+def test_stage71_inc2_quant_smaller_bits_dominate_binop():
+    """Stage 71 Inc 2 — `Q4<f32> + Q8<f32>` yields Q4<f32>
+    (most-aggressive quantization wins)."""
+    from helixc.frontend.typecheck import TypeChecker
+    from helixc.frontend.parser import parse
+
+    src = """
+    fn user(a: Q4<f32>, b: Q8<f32>) -> Q4<f32> {
+        a + b
+    }
+    fn main() -> i32 { 0 }
+    """
+    prog = parse(src, include_stdlib=False)
+    tc = TypeChecker(prog)
+    errors = tc.check()
+    type_errs = [str(e) for e in errors
+                 if "return" in str(e).lower()
+                 or "Q4" in str(e) or "Q8" in str(e)]
+    assert len(type_errs) == 0, (
+        f"expected Q4 + Q8 -> Q4; got: {type_errs}")
+
+
+def test_stage71_inc2_quant_propagates_when_only_one_side_tagged():
+    """Stage 71 Inc 2 — `Q8<f32> + f32` yields Q8<f32>."""
+    from helixc.frontend.typecheck import TypeChecker
+    from helixc.frontend.parser import parse
+
+    src = """
+    fn user(a: Q8<f32>, b: f32) -> Q8<f32> {
+        a + b
+    }
+    fn main() -> i32 { 0 }
+    """
+    prog = parse(src, include_stdlib=False)
+    tc = TypeChecker(prog)
+    errors = tc.check()
+    type_errs = [str(e) for e in errors
+                 if "return" in str(e).lower()
+                 or "Q8" in str(e)]
+    assert len(type_errs) == 0, (
+        f"expected Q8 + f32 -> Q8; got: {type_errs}")
+
+
+def test_stage71_inc3_upcast_quant_strips_outer_quant():
+    """Stage 71 Inc 3 — `__upcast_quant(x)` strips Q wrapper."""
+    from helixc.frontend.typecheck import TypeChecker
+    from helixc.frontend.parser import parse
+
+    src = """
+    fn user(x: Q8<f32>) -> f32 {
+        __upcast_quant(x)
+    }
+    fn main() -> i32 { 0 }
+    """
+    prog = parse(src, include_stdlib=False)
+    tc = TypeChecker(prog)
+    errors = tc.check()
+    type_errs = [str(e) for e in errors
+                 if "return" in str(e).lower()
+                 or "Q8" in str(e)]
+    assert len(type_errs) == 0, (
+        f"expected Q8 -> f32 via __upcast_quant; got: {type_errs}")
+
+
+def test_stage71_inc3_upcast_quant_identity_on_non_quant():
+    from helixc.frontend.typecheck import TypeChecker
+    from helixc.frontend.parser import parse
+
+    src = """
+    fn user(x: f32) -> f32 {
+        __upcast_quant(x)
+    }
+    fn main() -> i32 { 0 }
+    """
+    prog = parse(src, include_stdlib=False)
+    tc = TypeChecker(prog)
+    errors = tc.check()
+    type_errs = [str(e) for e in errors
+                 if "return" in str(e).lower()
+                 or "Quant" in str(e) or "upcast" in str(e)]
+    assert len(type_errs) == 0, (
+        f"f32 -> f32 identity; got: {type_errs}")
+
+
 def test_stage70_inc3_exhaust_dp_strips_outer_dp():
     """Stage 70 Inc 3 — `__exhaust_dp(x)` strips the TyDP wrapper.
     A `Private<f32>` becomes `f32`."""

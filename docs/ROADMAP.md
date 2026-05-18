@@ -303,6 +303,26 @@ Re-sequenced after Stage 46-47 closed:
 - **Stage 58** ✅ **CLOSED 2026-05-18** — Tier 4 #13 content-
   addressed modules (program_hash + module_hash + fn_signature_hash
   core).
+- **Stage 71 SUBSTANTIALLY COMPLETE 2026-05-18** — Tier-A #2
+  Quantization-aware types delivered as a usable feature across
+  Inc 1-3:
+  - Inc 1: TyQuant(bits, inner) + 3 presets (Q4=4 / Q8=8 / Q16=16
+    bits).
+  - Inc 2: smallest-bits-wins propagation (`Q4<f32> + Q8<f32>` →
+    `Q4<f32>` — most-aggressive quantization dominates).
+  - Inc 3: `__upcast_quant(x)` opt-out builtin (e.g. dequantize
+    before precision-sensitive op).
+  - Layering: TyQuant is the INNERMOST of the new Tier-S/A
+    wrappers (above TyDiff/TyLogic but below TyConf/TyDP/TyTaint).
+    Reason: quantization is a representation-level property, while
+    Conf/DP/Taint are semantic/regulatory properties — semantic
+    wrappers should appear OUTSIDE the representation wrappers.
+    Canonical full stack:
+    `Confidential<Private<Conf<Q8<D<Logic<T>>>>>>`.
+  - Use case: ML inference on hardware accelerators (INT8 NPU,
+    INT4 weights), quantization-aware training pipelines.
+  - 7 new tests; 349 typecheck + 415 regression GREEN.
+
 - **Stage 70 SUBSTANTIALLY COMPLETE 2026-05-18** — Tier-S #3
   Differential privacy types delivered as a usable feature across
   Inc 1-3:
