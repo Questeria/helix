@@ -54,6 +54,16 @@ class DuplicateMethodError(Exception):
         self.span = span
 
 
+def _has_overload_attr(fn: A.FnDecl) -> bool:
+    """Stage 65 Inc 2 — recognize the opt-in `@overload` attribute
+    on an impl-block method. Authoritative spelling is `overload`;
+    `dispatch` is accepted as a synonym for the alternative naming
+    style. Both are stored as bare strings in `fn.attrs`."""
+    if not hasattr(fn, "attrs") or not fn.attrs:
+        return False
+    return "overload" in fn.attrs or "dispatch" in fn.attrs
+
+
 def flatten_impls(prog: A.Program) -> int:
     """Lift impl-block methods to top level. Rewrite x.method(args) calls.
     Returns count of methods lifted.
@@ -81,6 +91,10 @@ def flatten_impls(prog: A.Program) -> int:
     method_to_targets: dict[str, list[str]] = {}
     # Track first-registration span for diagnostic continuity.
     method_first_span: dict[str, A.Span] = {}
+    # Stage 65 Inc 2 — opt-in @overload marker: remembers whether
+    # the FIRST registration of each method name carried @overload.
+    # Subsequent registrations also need @overload to be allowed.
+    method_first_overload: dict[str, bool] = {}
     for item in prog.items:
         if isinstance(item, A.ImplBlock):
             for m in item.methods:
@@ -97,22 +111,37 @@ def flatten_impls(prog: A.Program) -> int:
                 if item.target not in targets:
                     if len(targets) == 0:
                         method_first_span[m.name] = m.span
+                        method_first_overload[m.name] = (
+                            _has_overload_attr(m))
                         targets.append(item.target)
                     else:
-                        # Stage 65 Inc 1 — multi-target registration
-                        # tracking is in place, but call-site dispatch
-                        # by receiver type is deferred to Inc 2 (needs
-                        # typecheck integration). For now, preserve
-                        # the Audit 28.8 B11 fail-closed at registration:
-                        # second target raises DuplicateMethodError.
-                        # Inc 2 will opt into multi-dispatch via an
-                        # @overload-like attribute on the impl block.
-                        raise DuplicateMethodError(
-                            method=m.name,
-                            first_target=targets[0],
-                            second_target=item.target,
-                            span=m.span,
-                        )
+                        # Stage 65 Inc 2 — opt-in @overload attribute
+                        # allows multi-target registration. Both the
+                        # FIRST and CURRENT method must carry @overload
+                        # (or any prefix synonym recognized by
+                        # _has_overload_attr) for the registration to
+                        # succeed. If either lacks it, fall back to
+                        # Stage 65 Inc 1's fail-closed semantics:
+                        # raise DuplicateMethodError at registration.
+                        first_overload = method_first_overload.get(
+                            m.name, False)
+                        curr_overload = _has_overload_attr(m)
+                        if first_overload and curr_overload:
+                            # Opt-in path: allow the registration.
+                            # Call-site dispatch still uses
+                            # _resolve_method_target, which raises if
+                            # multiple targets are registered AND
+                            # type-driven dispatch (Inc 3) isn't yet
+                            # available. Inc 3 will land the actual
+                            # selection logic.
+                            targets.append(item.target)
+                        else:
+                            raise DuplicateMethodError(
+                                method=m.name,
+                                first_target=targets[0],
+                                second_target=item.target,
+                                span=m.span,
+                            )
                 # Same-target re-declaration (impl X { fn f() } twice)
                 # is a separate concern handled by typecheck's duplicate
                 # fn-name check; here we just don't double-register.

@@ -345,6 +345,17 @@ Re-sequenced after Stage 46-47 closed:
   - Inc 2 will wire enforcement at &/&mut sites; Inc 3 block-
     exit reconciliation; Inc 4 Copy marker; Inc 5 `move` keyword.
 
+- **Stage 65 Inc 2 SHIPPED 2026-05-18** — Tier 4 #17 multi-
+  dispatch opt-in attribute:
+  - `@overload` attribute on impl-block methods now allows multi-
+    target registration. Both methods must opt in symmetrically.
+  - `@dispatch` accepted as synonym.
+  - Fail-closed default preserved: without `@overload` on both,
+    DuplicateMethodError still raises (Audit 28.8 B11).
+  - Call-site dispatch still raises if multi-target — Inc 3 will
+    add type-driven dispatch on the opt-in path.
+  - 3 new tests; 8/8 impl-block test suite + 223 self-host GREEN.
+
 - **Stage 65 Inc 1 SHIPPED 2026-05-18** — Tier 4 #17 multiple
   dispatch scaffolding (see `docs/stage65-progress-2026-05-18.md`):
   - Refactored flatten_impls registration: `dict[str, str]` →

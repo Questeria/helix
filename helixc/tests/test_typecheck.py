@@ -4008,6 +4008,150 @@ def test_flatten_impls_rejects_same_name_methods():
     assert ex.value.trap_id == 74002
 
 
+def test_stage65_inc2_overload_attr_allows_multi_target_registration():
+    """Stage 65 Inc 2 — Tier 4 #17 multi-dispatch opt-in.
+    When BOTH same-named methods carry `@overload`, the second
+    registration is allowed (multi-target list grows) instead of
+    raising DuplicateMethodError. Call-site dispatch still raises
+    if it can't pick a single target (Inc 3 will add type-driven
+    dispatch on the opt-in path).
+
+    Without @overload on both methods, the Stage 65 Inc 1 fail-
+    closed semantics apply: second registration raises."""
+    from helixc.frontend.flatten_impls import (
+        flatten_impls, DuplicateMethodError,
+    )
+    from helixc.frontend import ast_nodes as A
+
+    span = A.Span(0, 0)
+
+    def make_struct(name: str) -> A.StructDecl:
+        return A.StructDecl(
+            span=span, name=name, generics=[],
+            fields=[A.FnParam(span=span, name="x",
+                              ty=A.TyName(span=span, name="f32"),
+                              is_mut=False)],
+            is_pub=False,
+        )
+
+    def make_method(target: str, attrs: list[str]) -> A.FnDecl:
+        return A.FnDecl(
+            span=span, name="area", generics=[],
+            params=[A.FnParam(span=span, name="self",
+                              ty=A.TyName(span=span, name=target),
+                              is_mut=False)],
+            return_ty=A.TyName(span=span, name="f32"),
+            where_clauses=[],
+            body=A.Block(span=span, stmts=[],
+                         final_expr=A.FloatLit(
+                             span=span, value=0.0,
+                             type_suffix="f32")),
+            attrs=attrs, is_pub=False,
+        )
+
+    # Path 1: both @overload → registration succeeds (Inc 2 path).
+    pt = make_struct("Pt")
+    line = make_struct("Line")
+    impl_pt = A.ImplBlock(span=span, target="Pt",
+                           methods=[make_method("Pt", ["overload"])],
+                           trait_name=None)
+    impl_line = A.ImplBlock(span=span, target="Line",
+                             methods=[make_method("Line", ["overload"])],
+                             trait_name=None)
+    prog = A.Program(module=None,
+                     items=[pt, line, impl_pt, impl_line])
+    # Should NOT raise — both methods opt in via @overload.
+    n_lifted = flatten_impls(prog)
+    assert n_lifted == 2
+    lifted_names = sorted(it.name for it in prog.items
+                          if hasattr(it, "name") and hasattr(it, "params"))
+    # Both lifted as Pt__area and Line__area.
+    assert "Pt__area" in lifted_names
+    assert "Line__area" in lifted_names
+
+
+def test_stage65_inc2_overload_synonym_dispatch():
+    """Stage 65 Inc 2: @dispatch is accepted as a synonym for
+    @overload (alternative spelling, same opt-in semantic)."""
+    from helixc.frontend.flatten_impls import (
+        flatten_impls, _has_overload_attr,
+    )
+    from helixc.frontend import ast_nodes as A
+
+    span = A.Span(0, 0)
+
+    def make_method(target: str, attrs: list[str]) -> A.FnDecl:
+        return A.FnDecl(
+            span=span, name="area", generics=[],
+            params=[A.FnParam(span=span, name="self",
+                              ty=A.TyName(span=span, name=target),
+                              is_mut=False)],
+            return_ty=A.TyName(span=span, name="f32"),
+            where_clauses=[],
+            body=A.Block(span=span, stmts=[],
+                         final_expr=A.FloatLit(
+                             span=span, value=0.0,
+                             type_suffix="f32")),
+            attrs=attrs, is_pub=False,
+        )
+
+    # Helper recognizes both spellings.
+    assert _has_overload_attr(make_method("X", ["overload"]))
+    assert _has_overload_attr(make_method("X", ["dispatch"]))
+    assert not _has_overload_attr(make_method("X", []))
+    assert not _has_overload_attr(make_method("X", ["pure"]))
+
+
+def test_stage65_inc2_partial_overload_still_rejects():
+    """Stage 65 Inc 2: when only ONE method has @overload and
+    the OTHER doesn't, registration still rejects. Symmetry
+    is required — both opt in or neither."""
+    from helixc.frontend.flatten_impls import (
+        flatten_impls, DuplicateMethodError,
+    )
+    from helixc.frontend import ast_nodes as A
+    import pytest as _pt
+
+    span = A.Span(0, 0)
+
+    def make_struct(name: str) -> A.StructDecl:
+        return A.StructDecl(
+            span=span, name=name, generics=[],
+            fields=[A.FnParam(span=span, name="x",
+                              ty=A.TyName(span=span, name="f32"),
+                              is_mut=False)],
+            is_pub=False,
+        )
+
+    def make_method(target: str, attrs: list[str]) -> A.FnDecl:
+        return A.FnDecl(
+            span=span, name="area", generics=[],
+            params=[A.FnParam(span=span, name="self",
+                              ty=A.TyName(span=span, name=target),
+                              is_mut=False)],
+            return_ty=A.TyName(span=span, name="f32"),
+            where_clauses=[],
+            body=A.Block(span=span, stmts=[],
+                         final_expr=A.FloatLit(
+                             span=span, value=0.0,
+                             type_suffix="f32")),
+            attrs=attrs, is_pub=False,
+        )
+
+    # First has @overload, second does NOT → reject.
+    impl_pt = A.ImplBlock(span=span, target="Pt",
+                           methods=[make_method("Pt", ["overload"])],
+                           trait_name=None)
+    impl_line = A.ImplBlock(span=span, target="Line",
+                             methods=[make_method("Line", [])],
+                             trait_name=None)
+    prog = A.Program(module=None,
+                     items=[make_struct("Pt"), make_struct("Line"),
+                            impl_pt, impl_line])
+    with _pt.raises(DuplicateMethodError):
+        flatten_impls(prog)
+
+
 def test_stage68_inc1_confidence_type_recognition():
     """Stage 68 Inc 1 — Tier-S #1 (Layer-0 from V1_FINAL_FEATURES):
     confidence-typed values. `Confidence<T>` / `Conf<T>` /
