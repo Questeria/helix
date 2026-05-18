@@ -57,6 +57,8 @@ Introspection (Stage 28.9 + Stage 58 + Stage 59 polish):
         Same as --list-enums but JSON with variant names included.
     --list-type-aliases <file.hx>
         Enumerate top-level TypeAlias decls as '<name> = <ty>' lines.
+    --list-type-aliases-json <file.hx>
+        Same as --list-type-aliases but machine-readable JSON output.
     --enum-variants <file.hx> <enum_name>
         Print per-variant lines for an enum (with payload types if any).
     --enum-variants-json <file.hx> <enum_name>
@@ -3948,6 +3950,45 @@ def _enum_variants(path: str, enum_name: str) -> int:
     return 1
 
 
+def _list_type_aliases_json(path: str) -> int:
+    """Stage 59 follow-on / Tier 4 #13 polish: --list-type-aliases in
+    machine-readable JSON form.
+
+    Output schema:
+      {"type_aliases": [{"name": "<name>", "target": "<ty>"}, ...]}
+    Declaration order preserved.
+    """
+    import json
+    src = _read_source(path)
+    prog = _parse_or_exit(src, path)
+
+    def _format_ty(ty) -> str:
+        name = getattr(ty, "name", None)
+        if name:
+            return name
+        base = getattr(ty, "base", None)
+        args = getattr(ty, "args", None)
+        base_str = base if isinstance(base, str) else (
+            getattr(base, "name", None) if base else None
+        )
+        if base_str and args:
+            args_strs = []
+            for a in args:
+                an = getattr(a, "name", None)
+                args_strs.append(an if an else repr(a))
+            return f"{base_str}<{', '.join(args_strs)}>"
+        return repr(ty)
+
+    aliases = [
+        {"name": it.name, "target": _format_ty(it.target)}
+        for it in prog.items
+        if isinstance(it, A.TypeAlias)
+    ]
+    print(json.dumps({"type_aliases": aliases},
+                      sort_keys=True, indent=2))
+    return 0
+
+
 def _list_type_aliases(path: str) -> int:
     """Stage 59 follow-on / Tier 4 #13 polish: enumerate top-level
     TypeAlias decls in a file.
@@ -4430,6 +4471,13 @@ def main():
                   file=sys.stderr)
             sys.exit(2)
         sys.exit(_list_type_aliases(args[0]))
+
+    if "--list-type-aliases-json" in flags:
+        if len(args) < 1:
+            print("usage: --list-type-aliases-json <file.hx>",
+                  file=sys.stderr)
+            sys.exit(2)
+        sys.exit(_list_type_aliases_json(args[0]))
 
     if "--enum-variants" in flags:
         if len(args) < 2:
