@@ -67,6 +67,8 @@ Introspection (Stage 28.9 + Stage 58 + Stage 59 polish):
         Print method signatures of an agent (params + return ty).
     --agent-methods-json <file.hx> <agent_name>
         Same as --agent-methods but machine-readable JSON output.
+    --type-alias-target <file.hx> <alias_name>
+        Print the target type of a TypeAlias.
     --enum-variants <file.hx> <enum_name>
         Print per-variant lines for an enum (with payload types if any).
     --enum-variants-json <file.hx> <enum_name>
@@ -4070,6 +4072,48 @@ def _agent_methods_json(path: str, agent_name: str) -> int:
     return 1
 
 
+def _type_alias_target(path: str, alias_name: str) -> int:
+    """Stage 59 follow-on / Tier 4 #13 polish: per-TypeAlias target
+    introspection. Print the target type a TypeAlias resolves to.
+
+    Output: a single line with the formatted target type (e.g.,
+    'i32' or 'D<f32>').
+
+    Per-item introspection family now spans 5 Item subclasses
+    (struct-fields, const-value, enum-variants, agent-methods,
+    type-alias-target).
+
+    Exit 0 success; 1 if alias_name not found.
+    """
+    src = _read_source(path)
+    prog = _parse_or_exit(src, path)
+
+    def _format_ty(ty) -> str:
+        name = getattr(ty, "name", None)
+        if name:
+            return name
+        base = getattr(ty, "base", None)
+        args = getattr(ty, "args", None)
+        base_str = base if isinstance(base, str) else (
+            getattr(base, "name", None) if base else None
+        )
+        if base_str and args:
+            args_strs = []
+            for a in args:
+                an = getattr(a, "name", None)
+                args_strs.append(an if an else repr(a))
+            return f"{base_str}<{', '.join(args_strs)}>"
+        return repr(ty)
+
+    for it in prog.items:
+        if isinstance(it, A.TypeAlias) and it.name == alias_name:
+            print(_format_ty(it.target))
+            return 0
+    print(f"error: autodiff_cli: type alias {alias_name!r} not found in {path}",
+          file=sys.stderr)
+    return 1
+
+
 def _agent_methods(path: str, agent_name: str) -> int:
     """Stage 59 follow-on / Tier 4 #13 polish: per-agent method
     signature inspection.
@@ -4644,6 +4688,13 @@ def main():
                   file=sys.stderr)
             sys.exit(2)
         sys.exit(_agent_methods_json(args[0], args[1]))
+
+    if "--type-alias-target" in flags:
+        if len(args) < 2:
+            print("usage: --type-alias-target <file.hx> <alias_name>",
+                  file=sys.stderr)
+            sys.exit(2)
+        sys.exit(_type_alias_target(args[0], args[1]))
 
     if "--list-type-aliases-json" in flags:
         if len(args) < 1:

@@ -5874,6 +5874,7 @@ def test_stage59_autodiff_cli_help_mentions_polish_flags():
         "--list-type-aliases", "--list-type-aliases-json",
         "--list-agents", "--list-agents-json",
         "--agent-methods", "--agent-methods-json",
+        "--type-alias-target",
         "--list-fn-attrs", "--list-fn-attrs-json",
         "--list-fns-by-attr", "--list-fns-by-attr-json",
         "--fn-callgraph", "--fn-callers",
@@ -7536,6 +7537,41 @@ def test_stage59_agent_methods_json(tmp_path):
         {"name": "propose", "params": ["i32"], "return_ty": "i32"},
         {"name": "evaluate", "params": ["i32", "i32"], "return_ty": "i32"},
     ]}
+
+
+def test_stage59_type_alias_target(tmp_path):
+    """Stage 59 follow-on / Tier 4 #13 polish: --type-alias-target
+    prints the target type of a TypeAlias."""
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "tat.hx"
+    src.write_text(
+        "type Bytes = i64;\n"
+        "type Score = i32;\n",
+        encoding="utf-8",
+    )
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--type-alias-target", str(src), "Bytes"],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0
+    assert proc.stdout.strip() == "i64"
+
+
+def test_stage59_type_alias_target_not_found(tmp_path):
+    """Stage 59 follow-on: unknown alias → rc=1 + stderr."""
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "x.hx"
+    src.write_text("type T = i32;\n", encoding="utf-8")
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--type-alias-target", str(src), "phantom"],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 1
+    assert "not found" in proc.stderr
 
 
 def test_stage59_agent_methods(tmp_path):
