@@ -316,20 +316,22 @@ These are blockers for any real ML training, in priority order.
    to-end 2026-05-18.
 
 4. **Richer strings + file I/O** with capability-typed
-   `@effect(io.read_file)`. **STAGE 55 SUBSTANTIALLY DONE 2026-05-18**
-   — 4 of 7 increments shipped (capability typing + runtime string
-   primitives + parser). Inc 3 (dyn-path file I/O, backend syscall
-   rewrite) + Inc 6+7 (CSV/MNIST/checkpoint stdlib) deferred to
-   fresh session. Plan at `docs/stage55-plan-2026-05-18.md`.
+   `@effect(io.read_file)`. **STAGE 55 5/7 DONE 2026-05-18** —
+   capability typing + runtime string primitives + parser +
+   csv/mnist stdlib all shipped. Inc 3 (dyn-path file I/O,
+   backend syscall rewrite) + Inc 7 (checkpoint stdlib, depends
+   on Inc 3) deferred. Plan at `docs/stage55-plan-2026-05-18.md`.
    - Inc 1 ✅ (fbe7fef): `__str_byte_at` / `__str_find_byte` /
-     `__str_eq_arena` — operate on arena-backed (start, len) strings.
-   - Inc 2 ✅ (e52d525): `__parse_i32` — decimal integer parser.
+     `__str_eq_arena`.
+   - Inc 2 ✅ (e52d525): `__parse_i32`.
    - Inc 4 ✅ (234aeb2): granular `@effect(io.read_file/write_file/
-     print)` labels with wildcard parent subsumption (`io` covers
-     all sub-labels; siblings don't subsume each other; sub-labels
-     don't subsume parents).
-   - Inc 5 ✅ (89c5cd0): `__str_from_i32` + `__str_concat_arena`
-     — runtime string formatting + concatenation.
+     print)` labels with wildcard parent subsumption.
+   - Inc 5 ✅ (89c5cd0): `__str_from_i32` + `__str_concat_arena`.
+   - Inc 6 ✅ (2a7147e): `helixc/stdlib/csv.hx` (line/field
+     iteration via chained __str_find_byte, 4-chunk cap 1024 byte
+     max line) + `helixc/stdlib/mnist.hx` (IDX-format header
+     parser, big-endian dim decode, body bounds check). Pure
+     Helix source built on Inc 1-5 primitives, cascade-safe.
 
 5. **Stack-passed overflow args.** ✅ DONE 2026-05-17 (Stage 44).
    SysV ABI's xmm0..xmm7 covers the first 8 float params; the 9th
