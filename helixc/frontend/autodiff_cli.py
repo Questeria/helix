@@ -37,6 +37,9 @@ Introspection (Stage 28.9 + Stage 58 + Stage 59 polish):
         Compare two programs: prints SAME or DIFFER + per-fn breakdown.
     --changed-fns <a.hx> <b.hx>
         List fns whose body hash differs between two files.
+    --changed-fns-json <a.hx> <b.hx>
+        Same as --changed-fns but JSON with added/removed/modified
+        and full 64-hex hashes.
     --fn-sig-hash <file.hx> <fn_name>
         Print the signature-only hash (ABI-affecting fields only).
     --fn-signature <file.hx> <fn_name>
@@ -4932,6 +4935,54 @@ def _fn_sig_hash(path: str, fn_name: str) -> int:
     return 1
 
 
+def _changed_fns_json(path_a: str, path_b: str) -> int:
+    """Stage 59 follow-on / Tier 4 #13 polish: --changed-fns in
+    machine-readable JSON form.
+
+    Output schema:
+      {"added":   [{"name": "<name>", "hash": "<64hex>"}, ...],
+       "removed": [{"name": "<name>", "hash": "<64hex>"}, ...],
+       "modified":[{"name": "<name>",
+                     "old_hash": "<64hex>",
+                     "new_hash": "<64hex>"}, ...],
+       "n_changed": N}
+
+    Unlike the text form (which uses 12-hex short hashes for human
+    readability), the JSON variant uses FULL 64-hex hashes for
+    storage / comparison consumption.
+
+    Exit 0 if no changes; 1 if at least one fn changed (matches
+    text-form rc semantics).
+    """
+    import json
+    from .ast_hash import structural_hash
+    src_a = _read_source(path_a)
+    src_b = _read_source(path_b)
+    prog_a = _parse_or_exit(src_a, path_a)
+    prog_b = _parse_or_exit(src_b, path_b)
+    a_fns = {it.name: structural_hash(it) for it in prog_a.items
+             if isinstance(it, A.FnDecl)}
+    b_fns = {it.name: structural_hash(it) for it in prog_b.items
+             if isinstance(it, A.FnDecl)}
+    a_names = set(a_fns.keys())
+    b_names = set(b_fns.keys())
+    added = [{"name": n, "hash": b_fns[n]}
+             for n in sorted(b_names - a_names)]
+    removed = [{"name": n, "hash": a_fns[n]}
+               for n in sorted(a_names - b_names)]
+    modified = [
+        {"name": n, "old_hash": a_fns[n], "new_hash": b_fns[n]}
+        for n in sorted(a_names & b_names)
+        if a_fns[n] != b_fns[n]
+    ]
+    n_changed = len(added) + len(removed) + len(modified)
+    print(json.dumps(
+        {"added": added, "removed": removed,
+         "modified": modified, "n_changed": n_changed},
+        sort_keys=True, indent=2))
+    return 0 if n_changed == 0 else 1
+
+
 def _changed_fns(path_a: str, path_b: str) -> int:
     """Stage 59 follow-on / Tier 4 #13 polish: list FnDecls that
     changed between two source files at the AST-hash level.
@@ -5137,6 +5188,13 @@ def main():
                   file=sys.stderr)
             sys.exit(2)
         sys.exit(_changed_fns(args[0], args[1]))
+
+    if "--changed-fns-json" in flags:
+        if len(args) < 2:
+            print("usage: --changed-fns-json <a.hx> <b.hx>",
+                  file=sys.stderr)
+            sys.exit(2)
+        sys.exit(_changed_fns_json(args[0], args[1]))
 
     if "--fn-sig-hash" in flags:
         if len(args) < 2:

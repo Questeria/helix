@@ -5880,6 +5880,7 @@ def test_stage59_autodiff_cli_help_mentions_polish_flags():
         "--fn-signature", "--fn-signature-json",
         "--module-stats", "--module-stats-json",
         "--module-hash-json", "--validate-trace-attrs-json",
+        "--changed-fns-json",
         "--list-fn-attrs", "--list-fn-attrs-json",
         "--list-fns-by-attr", "--list-fns-by-attr-json",
         "--fn-callgraph", "--fn-callers",
@@ -7542,6 +7543,66 @@ def test_stage59_agent_methods_json(tmp_path):
         {"name": "propose", "params": ["i32"], "return_ty": "i32"},
         {"name": "evaluate", "params": ["i32", "i32"], "return_ty": "i32"},
     ]}
+
+
+def test_stage59_changed_fns_json(tmp_path):
+    """Stage 59 follow-on / Tier 4 #13 polish: --changed-fns-json
+    emits {added, removed, modified, n_changed} with full 64-hex
+    hashes."""
+    import json
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    a = tmp_path / "a.hx"
+    b = tmp_path / "b.hx"
+    a.write_text(
+        "fn foo() -> i32 { 1 }\n"
+        "fn baz() -> i32 { 5 }\n",
+        encoding="utf-8",
+    )
+    b.write_text(
+        "fn foo() -> i32 { 2 }\n"
+        "fn bar() -> i32 { 3 }\n",
+        encoding="utf-8",
+    )
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--changed-fns-json", str(a), str(b)],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 1  # 3 changes → rc=1
+    result = json.loads(proc.stdout)
+    assert result["n_changed"] == 3
+    assert [x["name"] for x in result["added"]] == ["bar"]
+    assert [x["name"] for x in result["removed"]] == ["baz"]
+    assert [x["name"] for x in result["modified"]] == ["foo"]
+    # Full 64-hex (not short).
+    assert len(result["added"][0]["hash"]) == 64
+    assert len(result["removed"][0]["hash"]) == 64
+    assert len(result["modified"][0]["old_hash"]) == 64
+    assert len(result["modified"][0]["new_hash"]) == 64
+
+
+def test_stage59_changed_fns_json_clean_rc0(tmp_path):
+    """Stage 59 follow-on / Tier 4 #13 polish: --changed-fns-json
+    emits n_changed=0 + rc=0 on identical files."""
+    import json
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = "fn foo() -> i32 { 1 }\n"
+    a = tmp_path / "a.hx"
+    b = tmp_path / "b.hx"
+    a.write_text(src, encoding="utf-8")
+    b.write_text(src, encoding="utf-8")
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--changed-fns-json", str(a), str(b)],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0
+    result = json.loads(proc.stdout)
+    assert result == {
+        "added": [], "removed": [], "modified": [], "n_changed": 0,
+    }
 
 
 def test_stage59_module_hash_json(tmp_path):
