@@ -2473,6 +2473,37 @@ fn main() -> i32 {
         f"{[str(e) for e in errs]}"
 
 
+def test_stage53_inc3_helper_body_internal_launder_already_caught():
+    """Stage 53 Inc 3 (DEFERRED but confirmed already-handled):
+    Helper body-internal launder patterns (basic into_X(from_Y(u)),
+    let-aliased, match-arm yielded, cast-of-tainted) all FIRE
+    correctly via the intra-fn Stage 52 surface (each fn body
+    checked individually). No additional Inc 3 implementation
+    needed — the comprehensive Stage 52 recursive helper
+    (`_modal_origin_of_expr` with 11 wrapper-AST kinds) covers
+    all the helper-body cases that Stage 53 Inc 3 was scoped to.
+
+    This pin documents the design decision: Stage 53 Inc 3 is
+    a no-op deferral because Stage 52's intra-fn surface is
+    already comprehensive. Stage 53 is therefore effectively
+    CLOSED at Inc 1+2."""
+    src = """
+fn helper(x: i32) -> Known<i32> {
+    let u: Uncertain<i32> = into_uncertain(1);
+    let r: i32 = from_uncertain(u);
+    into_known(r)
+}
+fn main() -> i32 { from_known(helper(0)) }
+"""
+    prog = parse(src, include_stdlib=True)
+    errs = typecheck(prog)
+    assert any("launder" in str(e) and "Uncertain" in str(e)
+               and "Known" in str(e) for e in errs), \
+        f"helper body-internal launder MUST FIRE via intra-fn " \
+        f"Stage 52 surface (Stage 53 Inc 3 already-covered " \
+        f"regression), got: {[str(e) for e in errs]}"
+
+
 def test_stage53_inc2_match_scrutinee_user_fn_fires():
     """Stage 53 Inc 2: match scrutinee is Call(user_fn, ...)
     where user_fn returns a modal kind, with a tainted arg.
