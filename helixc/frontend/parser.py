@@ -1634,6 +1634,10 @@ STDLIB_FILES: list[str] = [
     # on the Stage 60 dyn file I/O builtins (read_file_to_arena_dyn,
     # write_file_to_arena_dyn, etc.). Pure Helix; cascade-safe.
     "checkpoint.hx",
+    # Stage 78: Tier-S/A wrapper helpers (Stages 68-76 wrappers
+    # exposed as ergonomic @pure helper fns + 2 @property fns).
+    # Pure Helix; identity-erased at IR / codegen.
+    "safety.hx",
 ]
 
 

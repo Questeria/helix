@@ -4754,6 +4754,65 @@ def test_stage74_fmt_layered_wrappers_compose_cleanly():
         "Confidential<Private<Conf<Robust<Q8<f32>>>>>"
 
 
+def test_stage78_safety_stdlib_loads_with_property_fns():
+    """Stage 78 — `helixc/stdlib/safety.hx` parses + typechecks
+    cleanly alongside the rest of the stdlib, and its 2 @property
+    fns are registered in _property_fn_names."""
+    from helixc.frontend.parser import parse
+    from helixc.frontend.typecheck import TypeChecker
+
+    # Parse with stdlib enabled (which now includes safety.hx).
+    src = """
+    fn main() -> i32 { 0 }
+    """
+    prog = parse(src, include_stdlib=True)
+    tc = TypeChecker(prog)
+    errors = tc.check()
+    # No errors from safety.hx (sanity check; clean stdlib).
+    assert errors == [], (
+        f"safety.hx + stdlib should typecheck clean; got: "
+        f"{[str(e) for e in errors[:5]]}")
+    # Both property fns registered.
+    assert "safety_conf_roundtrip_is_identity" in tc._property_fn_names
+    assert "safety_taint_roundtrip_is_identity" in tc._property_fn_names
+
+
+def test_stage78_safety_stdlib_exposes_all_seven_wrapper_helpers():
+    """Stage 78 — each of the 7 Tier-S/A wrappers (Stages 68-76)
+    has a corresponding `as_*`/`wrap_*` and `strip_*`/`exhaust_*`/
+    `declassify_*` helper in safety.hx. Smoke check by parsing
+    and confirming each helper's name appears in the fn list."""
+    from helixc.frontend.parser import parse
+
+    src = """
+    fn main() -> i32 { 0 }
+    """
+    prog = parse(src, include_stdlib=True)
+    fn_names = {item.name for item in prog.items
+                if hasattr(item, "name")}
+    # All 7 wrappers have an "as/wrap" + "strip/exhaust/declassify/
+    # assert/widen" helper in safety.hx.
+    expected = {
+        # Conf
+        "as_conf", "strip_conf_f32",
+        # Taint
+        "classify_f32", "declassify_f32",
+        # DP
+        "as_private_f32", "exhaust_private_f32",
+        # Quant
+        "quantize_f32", "dequantize_f32",
+        # Domain
+        "tag_in_dist_f32", "assert_in_dist_f32",
+        # Robust
+        "assert_robust_f32", "widen_robust_f32",
+        # Energy
+        "measure_energy_f32", "exhaust_energy_f32",
+    }
+    missing = expected - fn_names
+    assert not missing, (
+        f"safety.hx missing helpers: {missing}")
+
+
 def test_stage77_property_fn_registered_with_bool_return():
     """Stage 77 Inc 1 — `@property fn name(args) -> bool { ... }`
     typechecks and is recorded in `_property_fn_names` for an

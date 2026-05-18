@@ -303,6 +303,27 @@ Re-sequenced after Stage 46-47 closed:
 - **Stage 58** ✅ **CLOSED 2026-05-18** — Tier 4 #13 content-
   addressed modules (program_hash + module_hash + fn_signature_hash
   core).
+- **Stage 78 SHIPPED 2026-05-18** — `helixc/stdlib/safety.hx`
+  — pure-Helix wrapper helpers for all 7 Tier-S/A types:
+  - 14 ergonomic helper fns covering all 7 wrappers (as_conf,
+    strip_conf_f32, classify_f32, declassify_f32, as_private_f32,
+    exhaust_private_f32, quantize_f32, dequantize_f32,
+    tag_in_dist_f32, assert_in_dist_f32, assert_robust_f32,
+    widen_robust_f32, measure_energy_f32, exhaust_energy_f32).
+  - 2 `@property` fns exercising Stage 77 scaffolding
+    (safety_conf_roundtrip_is_identity,
+    safety_taint_roundtrip_is_identity). Register cleanly in
+    `_property_fn_names` for a future Inc 2 runner.
+  - All helpers `@pure`; identity-erased at IR / codegen so zero
+    runtime overhead. Validates the Stages 68-77 stack works in
+    real stdlib code (parsed alongside every user program with
+    include_stdlib=True).
+  - Registered in `STDLIB_FILES` between `checkpoint.hx` and the
+    list terminator. Cascade-safe — no compiler changes; only the
+    one-line list addition.
+  - 2 new tests; 569 typecheck/parser/IR/pytree/selfhost +
+    4 dogfood codegen regression GREEN.
+
 - **Stage 77 Inc 1 SHIPPED 2026-05-18** — Tier-B property-based
   testing scaffolding:
   - `@property` fn attribute recognized via the existing
