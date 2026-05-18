@@ -94,6 +94,40 @@ def trace_equiv(a: TraceBuffer, b: TraceBuffer) -> bool:
     return True
 
 
+def trace_equiv_modulo(a: TraceBuffer, b: TraceBuffer,
+                         ignore_fns: set = None,
+                         ignore_ops: set = None) -> bool:
+    """Stage 59 follow-on / Tier 3 #11 polish — trace_equiv with a
+    skip-list. Two traces are equivalent IF, after dropping events
+    whose fn_name is in `ignore_fns` OR whose op_kind is in
+    `ignore_ops`, the remaining events sequence-match.
+
+    Use cases:
+    - Compare reference vs candidate traces while ignoring debug-print
+      ops that one variant emits but the other doesn't.
+    - Skip housekeeping fns (allocator, gc) when verifying core
+      computation equivalence.
+    - Treat traces as equivalent if they differ only in instrumented
+      observers added by a profiling build.
+
+    Empty ignore sets default to None and behave as trace_equiv.
+    """
+    ignore_fns = ignore_fns or set()
+    ignore_ops = ignore_ops or set()
+
+    def keep(ev: TraceEvent) -> bool:
+        return ev.fn_name not in ignore_fns and ev.op_kind not in ignore_ops
+
+    a_filt = [ev for ev in a.events if keep(ev)]
+    b_filt = [ev for ev in b.events if keep(ev)]
+    if len(a_filt) != len(b_filt):
+        return False
+    for x, y in zip(a_filt, b_filt):
+        if x != y:
+            return False
+    return True
+
+
 def trace_filter_by_fn(buf: TraceBuffer, fn_name: str) -> TraceBuffer:
     """Stage 59 follow-on / Tier 3 #11 polish — convenience shortcut for
     `trace_filter(buf, lambda e: e.fn_name == fn_name)`. Common case

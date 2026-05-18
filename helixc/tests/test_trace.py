@@ -509,6 +509,66 @@ def test_stage59_trace_op_counts_entry_exit_balance():
     assert counts.get("entry", 0) == counts.get("exit", 0) == 2
 
 
+def test_stage59_trace_equiv_modulo_no_ignore_matches_trace_equiv():
+    """Stage 59 follow-on / Tier 3 #11 polish: with no ignore sets,
+    trace_equiv_modulo behaves identically to trace_equiv."""
+    from helixc.frontend.trace_pass import trace_equiv, trace_equiv_modulo
+    a = TraceBuffer(events=[
+        TraceEvent("entry", "f", ()),
+        TraceEvent("exit", "f", (1,)),
+    ])
+    b = TraceBuffer(events=[
+        TraceEvent("entry", "f", ()),
+        TraceEvent("exit", "f", (1,)),
+    ])
+    c = TraceBuffer(events=[
+        TraceEvent("entry", "f", ()),
+        TraceEvent("exit", "f", (2,)),  # differs
+    ])
+    assert trace_equiv_modulo(a, b) == trace_equiv(a, b) == True
+    assert trace_equiv_modulo(a, c) == trace_equiv(a, c) == False
+
+
+def test_stage59_trace_equiv_modulo_ignores_fn():
+    """Stage 59 follow-on: with ignore_fns, events for those fns are
+    dropped before comparison — so a trace with extra debug-print
+    calls is equivalent to one without."""
+    from helixc.frontend.trace_pass import trace_equiv_modulo
+    core = TraceBuffer(events=[
+        TraceEvent("entry", "compute", ()),
+        TraceEvent("exit", "compute", (42,)),
+    ])
+    with_debug = TraceBuffer(events=[
+        TraceEvent("entry", "compute", ()),
+        TraceEvent("op", "debug_print", ("hello",)),
+        TraceEvent("exit", "compute", (42,)),
+    ])
+    assert trace_equiv_modulo(core, with_debug,
+                              ignore_fns={"debug_print"})
+    # Without the ignore, they differ.
+    assert not trace_equiv_modulo(core, with_debug)
+
+
+def test_stage59_trace_equiv_modulo_ignores_op_kind():
+    """Stage 59 follow-on: ignore_ops drops events whose op_kind
+    matches — e.g., skip 'op' instrumentation events to compare only
+    entry/exit pairs."""
+    from helixc.frontend.trace_pass import trace_equiv_modulo
+    raw = TraceBuffer(events=[
+        TraceEvent("entry", "f", ()),
+        TraceEvent("op", "f", ("add",), result=1),
+        TraceEvent("op", "f", ("mul",), result=2),
+        TraceEvent("exit", "f", (2,)),
+    ])
+    skeleton = TraceBuffer(events=[
+        TraceEvent("entry", "f", ()),
+        TraceEvent("exit", "f", (2,)),
+    ])
+    assert trace_equiv_modulo(raw, skeleton, ignore_ops={"op"})
+    # Without ignore, they differ.
+    assert not trace_equiv_modulo(raw, skeleton)
+
+
 def test_stage59_trace_fn_counts_histogram():
     """Stage 59 follow-on / Tier 3 #11 polish: trace_fn_counts returns
     a {fn_name: count} histogram across all events."""
