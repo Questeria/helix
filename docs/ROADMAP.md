@@ -303,6 +303,32 @@ Re-sequenced after Stage 46-47 closed:
 - **Stage 58** ✅ **CLOSED 2026-05-18** — Tier 4 #13 content-
   addressed modules (program_hash + module_hash + fn_signature_hash
   core).
+- **Stage 90 SHIPPED 2026-05-18 + Stage 89 NOW FULLY CLOSED** —
+  Typed-hole expected-type context at call sites (Stage 89 Inc 2):
+  - When the call site detects an arg with type
+    `TyUnknown(hint="typed_hole")`, emit a new "typed hole at
+    call to '<fn>' arg '<param>': expected <type> here" diagnostic
+    showing the expected type from the param signature.
+  - The Stage 87 _fmt prettifier means the expected type renders
+    cleanly even for layered wrappers — e.g., `Confidential<Conf<
+    Q8<f32>>>` shows in the diagnostic, not the raw dataclass repr.
+  - The regular "arg X expects Y, got Z" cascade error is
+    suppressed at the typed-hole arg position via `continue` in
+    the `_check_call_basic` loop. Without this, the user would
+    see 3 diagnostics for one hole (Stage 89 Inc 1 generic + Inc 2
+    type-aware + generic cascade). Now just 2 (both informative).
+  - **AI-completion UX win**: a tool reading the diagnostic stream
+    sees `expected i32 here (Stage 90 / Stage 89 Inc 2)` and can
+    fill in a value of the right type without needing to read
+    other parts of the codebase.
+  - **Stage 89 NOW FULLY CLOSED** (was PARTIAL after Inc 1):
+    typed holes work end-to-end with type-aware diagnostics at the
+    primary call-arg use case. Other contexts (let-RHS with type
+    annotation, fn return) would benefit from the same treatment
+    in a future Inc 3 but are not blocking v1.0 since the cascade
+    mismatch already surfaces the expected type indirectly.
+  - 3 new tests; 406 typecheck + 472 regression GREEN.
+
 - **Stage 89 Inc 1 SHIPPED 2026-05-18** — Tier-B typed holes
   (V1_FINAL_FEATURES Tier-B #1: holes / typed `_` for AI-assisted
   development):

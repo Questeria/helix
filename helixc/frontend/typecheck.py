@@ -2808,6 +2808,24 @@ class TypeChecker:
         # Collect provenance violations across params for B:C10 batching.
         prov_violations: list[tuple[str, Type, Type, str]] = []
         for ((pname, pty), aty, arg_expr) in zip(sig.params, arg_tys, call.args):
+            # Stage 90 / Stage 89 Inc 2 — typed-hole expected-type
+            # diagnostic. When the arg is a `_` (which `_check_expr`
+            # already reported as a typed hole with TyUnknown(hint=
+            # "typed_hole")), augment with the EXPECTED type at this
+            # position so AI completion tools / human readers can fill
+            # the hole correctly. Skips the regular mismatch report
+            # below since TyUnknown matches anything.
+            if (isinstance(aty, TyUnknown)
+                    and getattr(aty, "hint", "") == "typed_hole"):
+                self.errors.append(TypeError_(
+                    f"typed hole at call to {sig.name!r} arg {pname!r}: "
+                    f"expected {self._fmt(pty)} here (Stage 90 / Stage "
+                    f"89 Inc 2)",
+                    call.span,
+                    hint=f"AI-completion: fill the hole with an "
+                         f"expression of type {self._fmt(pty)}",
+                ))
+                continue
             # For primitives, require an exact name match (i32 vs f32 etc.)
             if isinstance(pty, TyPrim) and isinstance(aty, TyPrim):
                 if pty.name != aty.name:

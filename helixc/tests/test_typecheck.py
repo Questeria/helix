@@ -4974,6 +4974,84 @@ def test_stage83_wrap_attr_constructor():
     assert len(type_errs) == 0, type_errs
 
 
+def test_stage90_typed_hole_at_call_arg_reports_expected_type():
+    """Stage 90 / Stage 89 Inc 2 — `_` at a fn-call-arg position now
+    gets a type-aware "expected i32 here" diagnostic alongside the
+    generic Inc 1 hole report. AI completion tools can read the
+    expected type and fill the hole correctly."""
+    from helixc.frontend.typecheck import typecheck
+    from helixc.frontend.parser import parse
+
+    src = """
+    fn add(a: i32, b: i32) -> i32 { a + b }
+    fn user() -> i32 {
+        add(1, _)
+    }
+    fn main() -> i32 { 0 }
+    """
+    prog = parse(src, include_stdlib=False)
+    errors = typecheck(prog)
+    # Both diagnostics should fire: the Inc 1 generic + the Inc 2
+    # type-aware.
+    inc1 = [e for e in errors
+            if "typed hole `_` at expression position" in str(e)]
+    inc2 = [e for e in errors
+            if "typed hole at call to 'add' arg 'b'" in str(e)
+            and "expected i32 here" in str(e)]
+    assert len(inc1) >= 1, f"missing Inc 1 hole; got: {errors}"
+    assert len(inc2) >= 1, f"missing Inc 2 type-aware hole; got: {errors}"
+
+
+def test_stage90_typed_hole_at_call_arg_reports_wrapper_type():
+    """Stage 90 — when the hole is at a position expecting a Tier-S/A
+    wrapper, the diagnostic reports the full wrapper type cleanly
+    (via the Stage 74 _fmt prettifier)."""
+    from helixc.frontend.typecheck import typecheck
+    from helixc.frontend.parser import parse
+
+    src = """
+    fn consume(x: Confidential<f32>) -> i32 { 0 }
+    fn user() -> i32 {
+        consume(_)
+    }
+    fn main() -> i32 { 0 }
+    """
+    prog = parse(src, include_stdlib=False)
+    errors = typecheck(prog)
+    inc2 = [e for e in errors
+            if "typed hole at call to 'consume' arg 'x'" in str(e)
+            and "Confidential<f32>" in str(e)]
+    assert len(inc2) >= 1, (
+        f"expected wrapper-type hole report; got: "
+        f"{[str(e) for e in errors]}")
+
+
+def test_stage90_typed_hole_skips_cascade_mismatch_error():
+    """Stage 90 — when arg is a typed hole, the regular
+    "expects X, got Y" cascade error is suppressed (the type-
+    aware Inc 2 diagnostic replaces it). Otherwise the user would
+    see 3 diagnostics for one hole (Inc 1 + Inc 2 + cascade)."""
+    from helixc.frontend.typecheck import typecheck
+    from helixc.frontend.parser import parse
+
+    src = """
+    fn add(a: i32, b: i32) -> i32 { a + b }
+    fn user() -> i32 {
+        add(_, _)
+    }
+    fn main() -> i32 { 0 }
+    """
+    prog = parse(src, include_stdlib=False)
+    errors = typecheck(prog)
+    # No "expects i32, got" cascade errors (those are what Stage 90
+    # suppresses via the `continue` in _check_call_basic).
+    cascade_errs = [e for e in errors
+                    if "expects i32, got" in str(e)
+                    and "typed_hole" in str(e)]
+    assert len(cascade_errs) == 0, (
+        f"cascade errors should be suppressed; got: {cascade_errs}")
+
+
 def test_stage89_typed_hole_emits_specific_diagnostic():
     """Stage 89 Inc 1 — `_` in expression position emits a "typed
     hole" diagnostic with a hint about Inc 2 follow-up work."""
