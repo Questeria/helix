@@ -1627,6 +1627,10 @@ STDLIB_FILES: list[str] = [
     # string primitives (__str_byte_at, __str_find_byte, __parse_i32).
     # No compiler changes; cascade-safe.
     "csv.hx", "mnist.hx",
+    # Stage 61 (Tier 1 #4 Inc 7): checkpoint save/load stdlib built
+    # on the Stage 60 dyn file I/O builtins (read_file_to_arena_dyn,
+    # write_file_to_arena_dyn, etc.). Pure Helix; cascade-safe.
+    "checkpoint.hx",
 ]
 
 

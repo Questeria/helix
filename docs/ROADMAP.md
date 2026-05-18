@@ -303,6 +303,19 @@ Re-sequenced after Stage 46-47 closed:
 - **Stage 58** ✅ **CLOSED 2026-05-18** — Tier 4 #13 content-
   addressed modules (program_hash + module_hash + fn_signature_hash
   core).
+- **Stage 61** ✅ **CLOSED 2026-05-18** — Tier 1 #4 Inc 7
+  checkpoint stdlib (see `docs/stage61-progress-2026-05-18.md`):
+  - `helixc/stdlib/checkpoint.hx` shipped with 4 @pure helpers
+    (checkpoint_save_raw, checkpoint_load_raw,
+    checkpoint_header_size, checkpoint_verify_magic)
+  - Pure Helix code built on Stage 60's 4 dyn file I/O builtins;
+    no compiler changes; cascade-safe.
+  - Registered in `STDLIB_FILES` for auto-inclusion via
+    `parse(src, include_stdlib=True)`.
+  - test_strings_io.py 17/17 (2 new round-trip tests).
+  - **Tier 1 #4 (string/file IO + capability typing) NOW FULLY
+    COMPLETE: Inc 1-7 all shipped end-to-end.**
+
 - **Stage 60** ✅ **CLOSED 2026-05-18** — Tier 1 #4 Inc 3
   dynamic-path file I/O (see `docs/stage60-progress-2026-05-18.md`):
   - 4 dyn builtins shipped end-to-end (read_file_to_arena_dyn,

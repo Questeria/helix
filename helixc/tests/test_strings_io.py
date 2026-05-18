@@ -303,6 +303,53 @@ def test_stage60_inc4_write_file_dyn_round_trips():
     assert content == b"aliased", f"got {content!r}"
 
 
+def test_stage61_checkpoint_save_load_raw_round_trips(tmp_path):
+    """Stage 61: checkpoint_save_raw + checkpoint_load_raw stdlib
+    helpers work end-to-end. Helix saves arena bytes to a runtime
+    path, then reads them back, then returns the read byte count."""
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    out_dir = os.path.join(proj_root, "helixc", "tests", "_tmp")
+    os.makedirs(out_dir, exist_ok=True)
+    ckpt_file = os.path.join(out_dir, "stage61_checkpoint_raw.bin")
+    if os.path.exists(ckpt_file):
+        os.remove(ckpt_file)
+    wsl_path = _win_to_wsl(ckpt_file)
+    src = f"""
+    fn main() -> i32 {{
+        let p = __strlit_to_arena("{wsl_path}");
+        let pl = __strlen("{wsl_path}");
+        let d = __strlit_to_arena("training_state");
+        let dl = __strlen("training_state");
+        // Save: write 14 bytes to the runtime path.
+        let n_saved = checkpoint_save_raw(p, pl, d, dl);
+        if n_saved != 14 {{ return 0; }}
+        // Reload the same path to verify the file is on disk.
+        let n_loaded = checkpoint_load_raw(p, pl);
+        n_loaded
+    }}
+    """
+    rc, out, err = _build_and_run(src)
+    # File contains 14 bytes "training_state".
+    assert rc == 14, f"expected rc=14, got rc={rc} err={err!r}"
+    # Verify content on disk.
+    with open(ckpt_file, "rb") as f:
+        assert f.read() == b"training_state"
+
+
+def test_stage61_checkpoint_header_size_pure():
+    """Stage 61: checkpoint_header_size() is a pure constant
+    accessible at compile time."""
+    src = """
+    fn main() -> i32 {
+        let h = checkpoint_header_size();
+        if h == 12 { 42 } else { 99 }
+    }
+    """
+    rc, out, err = _build_and_run(src)
+    assert rc == 42, f"got rc={rc} err={err!r}"
+
+
 def test_stage60_inc1_all_four_dyn_builtins_typecheck():
     """Stage 60 Inc 1: all 4 dyn variants (read_file_to_arena_dyn,
     write_file_to_arena_dyn, read_file_int_dyn, write_file_dyn)
