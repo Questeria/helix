@@ -1483,3 +1483,205 @@ fn main() -> i32 {
         f"Known on pre-Uncertain is currently silent (drop-on- " \
         f"conflict). Inc 4 multi-kind diagnostic is the proper " \
         f"fix. Got: {[str(e) for e in errs]}"
+
+
+# ============================================================
+# Stage 52 closure gate-5 regression pins
+# ============================================================
+
+
+# ============================================================
+# Stage 52 closure gate-6 regression pins (3 NEW CRITICAL +
+# 1 bonus Assign-alias variant)
+# ============================================================
+
+
+def test_stage52_gate6_critical_1_call_form_scrutinee_propagates_taint():
+    """Gate-6 CRITICAL-1: `match from_uncertain(u) { x => into_known(x) }`
+    silently passed because PatBind taint copy gated on Name-only
+    scrutinee. Direct AI-safety bypass via inline Call scrutinee
+    — exactly the dogfood_13 modal-lifecycle pattern.
+    Post-fix: unified _modal_origin_of_expr helper recognizes
+    Call(from_X, ...) and copies the source kind to bound name."""
+    src = """
+fn main() -> i32 {
+    let u: Uncertain<i32> = into_uncertain(1);
+    let out: i32 = match from_uncertain(u) {
+        x => from_known(into_known(x))
+    };
+    out
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    errs = typecheck(prog)
+    assert any("launder" in str(e) and "Uncertain" in str(e)
+               and "Known" in str(e) and "'x'" in str(e)
+               for e in errs), \
+        f"Call-form scrutinee taint must propagate to PatBind " \
+        f"(gate-6 CRITICAL-1 regression), got: " \
+        f"{[str(e) for e in errs]}"
+
+
+def test_stage52_gate6_critical_2_let_alias_propagates_taint():
+    """Gate-6 CRITICAL-2: `let r = from_X(v); let s = r;
+    into_Y(s)` silently passed because Let-stmt populate only
+    handled direct `Call(from_X, ...)` RHS — name-alias on the
+    RHS pop'd the destination instead of copying taint.
+    Trivial 2-line laundering vector; worse than gate-1 HIGH-2
+    because no fancy match/if/while needed.
+    Post-fix: Let-stmt RHS goes through unified
+    _modal_origin_of_expr which handles A.Name lookup."""
+    src = """
+fn main() -> i32 {
+    let u: Uncertain<i32> = into_uncertain(1);
+    let r: i32 = from_uncertain(u);
+    let s: i32 = r;
+    from_known(into_known(s))
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    errs = typecheck(prog)
+    assert any("launder" in str(e) and "Uncertain" in str(e)
+               and "Known" in str(e) and "'s'" in str(e)
+               for e in errs), \
+        f"let-alias must propagate taint (gate-6 CRITICAL-2 " \
+        f"regression), got: {[str(e) for e in errs]}"
+
+
+def test_stage52_gate6_critical_2_assign_alias_propagates_taint():
+    """Gate-6 CRITICAL-2 variant: same defect via Assign instead
+    of Let. `let mut s = 0; s = r;` where r is tainted must
+    install taint on s. Post-fix: Assign RHS goes through
+    unified _modal_origin_of_expr."""
+    src = """
+fn main() -> i32 {
+    let u: Uncertain<i32> = into_uncertain(1);
+    let r: i32 = from_uncertain(u);
+    let mut s: i32 = 0;
+    s = r;
+    from_known(into_known(s))
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    errs = typecheck(prog)
+    assert any("launder" in str(e) and "Uncertain" in str(e)
+               and "Known" in str(e) and "'s'" in str(e)
+               for e in errs), \
+        f"Assign-alias must propagate taint (gate-6 CRITICAL-2 " \
+        f"variant regression), got: {[str(e) for e in errs]}"
+
+
+def test_stage52_gate6_critical_3_pator_of_patbind_propagates_taint():
+    """Gate-6 CRITICAL-3: PatOr arms where each alt is a PatBind
+    of the SAME name (every alt aliases the entire scrutinee)
+    must inherit scrutinee taint. Pre-fix the PatBind copy only
+    handled top-level PatBind, missing PatOr-of-PatBind which is
+    the natural fan-in pattern.
+    Post-fix: detect PatOr where every alt is PatBind of one
+    name; treat as top-level PatBind for taint-copy."""
+    src = """
+fn main() -> i32 {
+    let u: Uncertain<i32> = into_uncertain(1);
+    let r: i32 = from_uncertain(u);
+    let out: i32 = match r {
+        x | x => from_known(into_known(x)),
+        _ => 0
+    };
+    out
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    errs = typecheck(prog)
+    assert any("launder" in str(e) and "Uncertain" in str(e)
+               and "Known" in str(e) and "'x'" in str(e)
+               for e in errs), \
+        f"PatOr-of-same-PatBind must propagate taint " \
+        f"(gate-6 CRITICAL-3 regression), got: " \
+        f"{[str(e) for e in errs]}"
+
+
+def test_stage52_gate6_real_let_alias_to_same_kind_does_not_fire():
+    """Negative pin: legitimate same-kind name-alias must NOT
+    fire (`let r = from_known(k); let s = r; into_known(s)` is
+    a legal pass-through, not a launder). Mirrors the existing
+    same-kind round-trip pin."""
+    src = """
+fn main() -> i32 {
+    let kw: Known<i32> = into_known(42);
+    let r: i32 = from_known(kw);
+    let s: i32 = r;
+    let k2: Known<i32> = into_known(s);
+    from_known(k2)
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    errs = typecheck(prog)
+    assert not any("launder" in str(e) for e in errs), \
+        f"same-kind alias must not fire launder " \
+        f"(gate-6 negative regression), got: " \
+        f"{[str(e) for e in errs]}"
+
+
+def test_stage52_gate6_type_design_f1_no_residual_local_dict():
+    """Gate-6 type-design F1: the launder-guard site at typecheck.py
+    used to hold a 4th local copy of the elim→kind map under name
+    `_modal_elim_kind`, contradicting the gate-2 F3 hoisting
+    invariant. Post-fix: only one `_MODAL_ELIM_TO_KIND` reference
+    exists (the module constant). This test pins the invariant by
+    grepping the typecheck.py source for any residual local."""
+    import re
+    from pathlib import Path
+    src = Path(
+        "helixc/frontend/typecheck.py").read_text(encoding="utf-8")
+    # Should have ONE _MODAL_ELIM_TO_KIND definition (the module
+    # constant) and NO _modal_elim_kind = {...} local definitions.
+    assert "_modal_elim_kind" not in src, \
+        "Residual local `_modal_elim_kind` dict still present — " \
+        "violates gate-2 F3 hoisting invariant (single source of " \
+        "truth for elim→kind mapping). Use _MODAL_ELIM_TO_KIND."
+    # Module constant present.
+    assert "_MODAL_ELIM_TO_KIND" in src, \
+        "Module-level _MODAL_ELIM_TO_KIND constant missing — " \
+        "gate-2 F3 fix regressed."
+
+
+def test_stage52_gate5_high_1_patbind_taint_propagation_in_guard():
+    """Gate-5 HIGH-1: PatBind taint propagation MUST run BEFORE
+    the guard expression, not after. Pre-gate-5 the order was:
+      (1) _bind_pattern
+      (2) guard check        ← guard reads dict BEFORE step 4 wrote taint
+      (3) snapshot pre-match
+      (4) PatBind taint copy
+      (5) arm body
+
+    A guard expression that calls a modal eliminator on the bound
+    name (e.g. `match r { x if into_known(x) > 0 => 1, _ => 0 }`)
+    consulted _modal_origin_provenance['x'] at step 2, found NO
+    entry, fell through silently — direct AI-safety bypass via the
+    guard slot.
+
+    Post-fix order:
+      (1) _bind_pattern
+      (2) snapshot pre-match
+      (3) PatBind taint copy
+      (4) guard check        ← now sees taint
+      (5) arm body"""
+    src = """
+fn main() -> i32 {
+    let u: Uncertain<i32> = into_uncertain(1);
+    let r: i32 = from_uncertain(u);
+    let out: i32 = match r {
+        x if from_known(into_known(x)) > 0 => 1,
+        _ => 0
+    };
+    out
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    errs = typecheck(prog)
+    assert any("launder" in str(e) and "Uncertain" in str(e)
+               and "Known" in str(e) and "'x'" in str(e)
+               for e in errs), \
+        f"PatBind taint must fire inside guard expression " \
+        f"(gate-5 HIGH-1 silent miscompile regression), got: " \
+        f"{[str(e) for e in errs]}"

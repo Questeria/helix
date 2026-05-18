@@ -2415,6 +2415,40 @@ class TypeChecker:
         # Other forms: skip for v0.1
 
     # ---- function body checking ----
+
+    def _modal_origin_of_expr(self, expr: A.Expr) -> Optional[str]:
+        """Stage 52 closure gate-6 unified helper for the 3 CRITICAL
+        silent-failure findings (Call-form scrutinee + name-alias
+        let/Assign + PatOr binders). Returns the modal-origin kind
+        ('known'/'believed'/'goal'/'uncertain') of an expression if
+        it can be statically determined, else None.
+
+        Cases handled:
+        - Name lookup in `_modal_origin_provenance` (covers let-alias
+          `let s = r;` where r is tainted — CRITICAL-2).
+        - Direct `Call(Name(from_X), ...)` for any modal eliminator
+          (covers `match from_uncertain(u) { x => ... }` scrutinee
+          — CRITICAL-1, and reuses the same map as Let/Assign
+          populate sites for invariant unity).
+
+        Returning None means "no static modal-origin claim" — the
+        F1 launder consult falls through to the Phase-0 dynamic
+        territory (no fire), which is correct: the helper is the
+        SINGLE source of truth that prior split logic missed.
+
+        Used by:
+        - Let-stmt populate (~line 2911)
+        - Assign-stmt populate (~line 5660)
+        - Match scrutinee for PatBind taint propagation (~line 5442)
+        """
+        if isinstance(expr, A.Name):
+            return self._modal_origin_provenance.get(expr.name)
+        if (isinstance(expr, A.Call)
+                and isinstance(expr.callee, A.Name)
+                and expr.callee.name in _MODAL_ELIM_TO_KIND):
+            return _MODAL_ELIM_TO_KIND[expr.callee.name]
+        return None
+
     def _check_fn(self, fn: A.FnDecl) -> None:
         sig = self.functions.get(fn.name)
         if sig is None:
@@ -2767,10 +2801,27 @@ class TypeChecker:
             )
             # Pop the assigns-set + stash for caller's union
             # site (NEW-HIGH-2/3/4 fix). Parallel to _check_block.
-            self._last_modal_assigns_popped = (
+            # Stage 52 closure gate-6 latent-bug fix (surfaced by
+            # gate-6 CRITICAL-2 let-alias fix): when the wrapped
+            # expr is itself a Block (e.g. `arm => { r = ...; }`),
+            # the inner _check_block already pushed AND popped its
+            # own scope, leaving `_last_modal_assigns_popped` set
+            # to the inner's contribution. Naive overwrite here
+            # would CLOBBER that signal with the outer (empty)
+            # scope. UNION semantics preserves the inner-block
+            # assigns so the caller's match/if union loop sees
+            # the full picture. Gate-3 NEW-HIGH-4's test never
+            # exercised the drop path pre-gate-6 because the let-
+            # alias silently broke; gate-6 surfaced this latent
+            # double-pop bug.
+            inner_assigns_signal = set(self._last_modal_assigns_popped)
+            outer_assigns_scope = (
                 self._modal_origin_assigns_block_scopes.pop()
                 if self._modal_origin_assigns_block_scopes
                 else set()
+            )
+            self._last_modal_assigns_popped = (
+                outer_assigns_scope | inner_assigns_signal
             )
             for name in inner_modal_lets:
                 if name in saved_modal_origin:
@@ -2905,16 +2956,19 @@ class TypeChecker:
             # Populate when value is `Call(from_X, ...)` for any
             # of the 4 modal eliminators. Pop on any other RHS
             # (mirrors the Result-provenance discipline at gate-3).
-            # Uses the module-level _MODAL_ELIM_TO_KIND constant
-            # (gate-2 type-design F3 fix — was previously a local
-            # dict duplicated at 3 sites).
-            if (stmt.value is not None
-                    and isinstance(stmt.value, A.Call)
-                    and isinstance(stmt.value.callee, A.Name)
-                    and stmt.value.callee.name in _MODAL_ELIM_TO_KIND):
-                self._modal_origin_provenance[stmt.name] = (
-                    _MODAL_ELIM_TO_KIND[stmt.value.callee.name]
-                )
+            # Stage 52 closure gate-6 CRITICAL-2 fix: also populate
+            # when RHS is a Name carrying tracked modal-origin
+            # taint (`let s = r;` where r is already tainted).
+            # Pre-fix this aliasing silently dropped the taint —
+            # a 2-line laundering vector. Unified via
+            # _modal_origin_of_expr to keep all 3 install sites
+            # (Let/Assign/PatBind) in sync.
+            let_rhs_kind = (
+                self._modal_origin_of_expr(stmt.value)
+                if stmt.value is not None else None
+            )
+            if let_rhs_kind is not None:
+                self._modal_origin_provenance[stmt.name] = let_rhs_kind
             else:
                 # Pop any stale modal-origin entry. Same defect
                 # class avoidance as the Result-provenance pop
@@ -4354,12 +4408,15 @@ class TypeChecker:
                     # and helper-fn indirection are documented
                     # as Phase-0 known limits requiring future
                     # taint-tracking spec.
-                    _modal_elim_kind = {
-                        "from_known":     "known",
-                        "from_believed":  "believed",
-                        "from_goal":      "goal",
-                        "from_uncertain": "uncertain",
-                    }
+                    # Stage 52 closure gate-6 type-design F1 fix:
+                    # eliminate the residual local dict that contradicts
+                    # the gate-2 F3 hoisting invariant. Pre-fix, this
+                    # site held a 4th identical copy of the elim→kind
+                    # map under a different name (`_MODAL_ELIM_TO_KIND`),
+                    # recreating exactly the divergence-risk class the
+                    # F3 fix was meant to prevent. Use the module-level
+                    # _MODAL_ELIM_TO_KIND (the gate-2 F3 single source
+                    # of truth) instead.
                     _modal_upgrade_hint = {
                         ("believed", "known"):
                             "use `confirm(b)` — the audited "
@@ -4430,10 +4487,10 @@ class TypeChecker:
                             and isinstance(expr.args[0], A.Call)
                             and isinstance(expr.args[0].callee, A.Name)
                             and expr.args[0].callee.name
-                                in _modal_elim_kind
+                                in _MODAL_ELIM_TO_KIND
                             and not isinstance(arg_tys[0], TyUnknown)
                             and not inner_is_shadowed):
-                        source_kind = _modal_elim_kind[
+                        source_kind = _MODAL_ELIM_TO_KIND[
                             expr.args[0].callee.name]
                         if source_kind != target_kind:
                             upgrade_hint = _modal_upgrade_hint.get(
@@ -5361,13 +5418,24 @@ class TypeChecker:
             for arm_result in branch_results:
                 for name, kind in arm_result.items():
                     observed_kinds.setdefault(name, set()).add(kind)
-            # Names a branch ASSIGNED but where its arm-result has
-            # NO taint entry → that branch cleared the taint.
-            # Drop those names from the union.
+            # Stage 52 closure gate-6 latent-bug post-fix: only
+            # mark a name as cleared if NO branch INSTALLED taint
+            # for it. If some branch installs and others clear,
+            # the installing branch may run at runtime → propagate
+            # conservatively (FIRE rather than DROP). Pre-this-fix
+            # the cleared-on-any-clearing logic was too aggressive,
+            # silently dropping real-launder scenarios like Inc 3
+            # (arm 1 installs uncertain, arm 2 clears).
+            installed_names: set[str] = set()
+            for i, assigns in enumerate(branch_assigns):
+                for name in assigns:
+                    if name in branch_results[i]:
+                        installed_names.add(name)
             cleared_names: set[str] = set()
             for i, assigns in enumerate(branch_assigns):
                 for name in assigns:
-                    if name not in branch_results[i]:
+                    if (name not in branch_results[i]
+                            and name not in installed_names):
                         cleared_names.add(name)
             unioned_if: dict[str, str] = {}
             for name, kinds in observed_kinds.items():
@@ -5402,6 +5470,55 @@ class TypeChecker:
             for arm in expr.arms:
                 inner = Scope(parent=scope)
                 self._bind_pattern(arm.pattern, scrut_ty, inner)
+                # Stage 52 Inc 3 — snapshot modal-origin before arm
+                # so each arm starts from the pre-match state.
+                # Stage 52 closure gate-5 HIGH-1 fix: hoisted ABOVE
+                # the guard check so the guard sees the pre-match
+                # snapshot (not the previous arm's mutated dict).
+                self._modal_origin_provenance = dict(
+                    modal_origin_pre_match)
+                # Stage 52 closure gate-4 HIGH-1 fix: propagate
+                # scrutinee modal-origin taint to the pattern's
+                # binding name. Pre-fix, `let r = from_uncertain(u);
+                # match r { x => into_known(x) }` silently passed
+                # because `x` was bound via `_bind_pattern` (which
+                # only writes to the value scope) and never received
+                # r's taint. Stage 52 closure gate-5 HIGH-1 fix:
+                # hoisted ABOVE the guard check (so guards see the
+                # taint). Stage 52 closure gate-6 CRITICAL-1 + 3
+                # fix: unified taint-source via _modal_origin_of_expr
+                # (handles Call-form scrutinee like `match
+                # from_uncertain(u) { x => ... }`), AND PatOr-of-
+                # PatBind support (handles `match r { (x | x) =>
+                # ...}` and `E::A(x) | E::B(x)` enum fan-in
+                # patterns).
+                #
+                # Top-level PatBind: copy scrutinee kind to bound
+                # name. PatOr where every alt is a PatBind with the
+                # SAME name: same copy (the name is bound in every
+                # alt to the whole scrutinee). PatVariant payload
+                # binds intentionally skipped — Phase-0 has no
+                # modal-typed enum/tuple field; revisit in Inc-N
+                # when that arrives.
+                scrut_kind = self._modal_origin_of_expr(expr.scrutinee)
+                if scrut_kind is not None:
+                    bind_names_to_taint: set[str] = set()
+                    if isinstance(arm.pattern, A.PatBind):
+                        bind_names_to_taint.add(arm.pattern.name)
+                    elif isinstance(arm.pattern, A.PatOr):
+                        # PatOr-of-PatBind: every alt must be a
+                        # PatBind of the same name to safely
+                        # propagate (otherwise some alts decompose
+                        # — defer those).
+                        all_binds = [
+                            alt for alt in arm.pattern.alts
+                            if isinstance(alt, A.PatBind)
+                        ]
+                        if (len(all_binds) == len(arm.pattern.alts)
+                                and len({b.name for b in all_binds}) == 1):
+                            bind_names_to_taint.add(all_binds[0].name)
+                    for bname in bind_names_to_taint:
+                        self._modal_origin_provenance[bname] = scrut_kind
                 if arm.guard is not None:
                     # Gate-5 G4-M3 fix: guard expression bypasses
                     # _check_block. Wrap to prevent any Assign
@@ -5414,33 +5531,6 @@ class TypeChecker:
                             f"match guard must be bool, got {self._fmt(g_ty)}",
                             arm.span,
                         ))
-                # Stage 52 Inc 3 — snapshot modal-origin before arm
-                # so each arm starts from the pre-match state.
-                self._modal_origin_provenance = dict(
-                    modal_origin_pre_match)
-                # Stage 52 closure gate-4 HIGH-1 fix: propagate
-                # scrutinee modal-origin taint to the pattern's
-                # binding name. Pre-fix, `let r = from_uncertain(u);
-                # match r { x => into_known(x) }` silently passed
-                # because `x` was bound via `_bind_pattern` (which
-                # only writes to the value scope) and never received
-                # r's taint. The launder consult site read no entry
-                # for x → fall through → silent miscompile.
-                # Post-fix: when scrutinee is a Name with a tracked
-                # modal-origin AND the pattern is a top-level
-                # PatBind, copy the taint to the bound name.
-                # Placed INSIDE the snapshot region (gate-4 MEDIUM
-                # placement constraint) so the binding doesn't
-                # leak past the arm boundary.
-                if (isinstance(expr.scrutinee, A.Name)
-                        and expr.scrutinee.name
-                            in self._modal_origin_provenance
-                        and isinstance(arm.pattern, A.PatBind)):
-                    self._modal_origin_provenance[
-                        arm.pattern.name
-                    ] = self._modal_origin_provenance[
-                        expr.scrutinee.name
-                    ]
                 # Gate-5 G4-F1/H2 fix: bare-expression arm bodies
                 # (e.g. `pat => r = Err(99)`) bypass _check_block.
                 # The Assign-arm mutates the provenance dict in
@@ -5501,13 +5591,24 @@ class TypeChecker:
             for arm_result in modal_origin_arm_results:
                 for name, kind in arm_result.items():
                     observed_kinds.setdefault(name, set()).add(kind)
-            # Names an arm ASSIGNED but where its arm-result has
-            # NO taint entry → that arm cleared the taint. Drop
-            # those names from the union (gate-3 NEW-HIGH-4 fix).
+            # Stage 52 closure gate-6 latent-bug post-fix: only
+            # mark a name as cleared if NO arm INSTALLED taint
+            # for it. Symmetric with A.If's installed_names guard:
+            # if some arm installs and others clear, runtime may
+            # run the installer → propagate (FIRE) rather than
+            # drop. Pre-this-fix, cleared-on-any-clearing was too
+            # aggressive and silently dropped real-launder Inc 3
+            # scenarios (arm 1 installs uncertain, arm 2 clears).
+            installed_names_match: set[str] = set()
+            for i, assigns in enumerate(arm_assigns):
+                for name in assigns:
+                    if name in modal_origin_arm_results[i]:
+                        installed_names_match.add(name)
             cleared_names_match: set[str] = set()
             for i, assigns in enumerate(arm_assigns):
                 for name in assigns:
-                    if name not in modal_origin_arm_results[i]:
+                    if (name not in modal_origin_arm_results[i]
+                            and name not in installed_names_match):
                         cleared_names_match.add(name)
             for name, kinds in observed_kinds.items():
                 if name in cleared_names_match:
@@ -5638,21 +5739,19 @@ class TypeChecker:
                 if self._modal_origin_assigns_block_scopes:
                     self._modal_origin_assigns_block_scopes[-1].add(
                         expr.target.name)
-                if (isinstance(expr.value, A.Call)
-                        and isinstance(expr.value.callee, A.Name)
-                        and expr.value.callee.name
-                            in _MODAL_ELIM_TO_KIND):
+                # Stage 52 closure gate-6 CRITICAL-2 fix: unified
+                # taint-source lookup via _modal_origin_of_expr.
+                # Handles both direct from_X(...) RHS (Inc 2 path)
+                # AND name-alias RHS (gate-6 fix: `r = s;` where
+                # s is tainted now installs taint on r). Pop on
+                # opaque RHS unchanged.
+                assign_rhs_kind = self._modal_origin_of_expr(expr.value)
+                if assign_rhs_kind is not None:
                     # POPULATE (or overwrite existing) — taint
-                    # installs unconditionally on from_X(...) RHS,
-                    # closing the HIGH-1 + HIGH-3 silent-launder
-                    # via match-arm / loop-body assignment.
-                    # Uses the module-level _MODAL_ELIM_TO_KIND
-                    # constant (gate-2 type-design F3 fix).
+                    # installs unconditionally on from_X(...) RHS
+                    # or name-alias of a tainted source.
                     self._modal_origin_provenance[
-                        expr.target.name] = (
-                        _MODAL_ELIM_TO_KIND[
-                            expr.value.callee.name]
-                    )
+                        expr.target.name] = assign_rhs_kind
                 elif expr.target.name in self._modal_origin_provenance:
                     # POP on opaque RHS — clear stale taint when the
                     # assigned value's modal origin is no longer

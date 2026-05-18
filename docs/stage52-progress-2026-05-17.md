@@ -77,13 +77,16 @@ Inc 3 implements PARALLEL UNION semantics:
 
 ### Inc 4 — Closure audits + ship
 
-Gate-2 audit sweep launched (3 lanes). Expecting cascading-
-defect rhythm to surface 1-2 HIGHs in the new Inc 2+3 code.
+**Note: see gate-N closure sections below for current state**
+(this section captures the initial Inc 4 plan; gates 2-6 have
+since landed many cascading-defect fixes — read the gate-N
+appendix subsections for the live picture).
 
-## Verification (post-Inc-3)
+## Verification (post-gate-6)
 
-- 57/57 Stage 40 modal tests pass (1 polarity flip from Inc 1
-  + the rest unchanged)
+- 80/80 Stage 40 modal tests pass (was 57 at Inc 3; +23
+  regression pins added across gates 2-6, covering each
+  closure-round fix path)
 - Self-host cascade re-verified live: PASS G2..G11 byte-
   identical sha=`a6f1ee44`, smoke 4/4 PASS
 - dogfood_16 + dogfood_17 still exit 42
@@ -91,7 +94,19 @@ defect rhythm to surface 1-2 HIGHs in the new Inc 2+3 code.
 - HIGH-3 while-loop Assign: caught (Inc 2)
 - HIGH-1 match-arm parallel: caught (Inc 3)
 - F1e false-positive (inner-let shadow leak): closed (Inc 2)
-- Negative test (untainted match): correctly silent
+- Gate-3 NEW-HIGH-1/2/3/4/5: closed (restore-domain + A.If
+  cleared-branch + A.Match cleared-arm + meta over-broad
+  drop guard)
+- Gate-4 HIGH-1: PatBind taint propagation (scrutinee Name);
+  CRITICAL-1: documented Phase-0 limitation (loop-body
+  multi-kind, same as if-no-else; deferred Inc 4 multi-kind
+  diagnostic)
+- Gate-5 HIGH-1: PatBind taint copy hoisted ABOVE guard
+- Gate-6 CRITICAL-1/2/3: unified `_modal_origin_of_expr`
+  helper closes 3 distinct silent miscompiles (Call-form
+  scrutinee + let/Assign name-alias + PatOr-of-PatBind)
+  via single source-of-truth; F1 dup dict removed
+- Negative test (untainted match, same-kind alias): silent
 
 ## Deferred (Stage 52 Inc 4 / Stage 53)
 
@@ -189,3 +204,26 @@ Gate-4 audit returned 1 CRITICAL + 1 HIGH:
 
 Stage 40 sweep 70→73 passing post-pins (1 closable HIGH +
 2 Phase-0 limitation pins).
+
+### Gate-5 closure (2026-05-17 evening)
+
+Gate-5 audit returned 1 HIGH + 1 MEDIUM:
+
+- **HIGH-1 (silent miscompile)** — PatBind taint propagation
+  ran AFTER guard check, not before. A guard expression that
+  called a modal eliminator on the bound name (e.g. `match r
+  { x if into_known(x) > 0 => 1, _ => 0 }`) consulted
+  `_modal_origin_provenance['x']` BEFORE the PatBind copy
+  installed taint, so the launder consult found NO entry and
+  silently passed. Direct AI-safety bypass via the guard slot.
+  Same defect class as gate-4 HIGH-1 but routed differently.
+  Fixed: hoisted the snapshot + PatBind taint copy to BEFORE
+  the guard check. Order now: bind → snapshot → PatBind taint
+  → guard → arm body.
+- **MEDIUM-1** — non-top-level PatBind (PatTuple/PatVariant/
+  PatOr sub-binds) intentionally skipped (sub-binds receive
+  value fragments, not whole scrutinee). Phase-0 has no
+  modal-typed tuple/struct fields. Documented in code comment
+  to prevent a future contributor from "fixing" it incorrectly.
+
+Stage 40 sweep 73→74 passing post-gate-5-pin.
