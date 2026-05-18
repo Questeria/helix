@@ -33,6 +33,10 @@ Introspection (Stage 28.9 + Stage 58 + Stage 59 polish):
         {match, expected, actual_full, actual_short}.
     --check-program-signature-hash-json <file.hx> <expected_hex>
         Same as --check-program-signature-hash but JSON.
+    --check-program-hash-from-file-json <file.hx> <expected_file>
+        Same as --check-program-hash-from-file but JSON output.
+    --check-program-signature-hash-from-file-json <file.hx> <expected_file>
+        Same as --check-program-signature-hash-from-file but JSON.
     --hash-dump-short <file.hx>
         Same as --hash-dump but with 12-hex short hashes (compact logs).
     --diff-trace <a.json> <b.json>
@@ -881,6 +885,52 @@ def _check_program_signature_hash(path: str, expected: str) -> int:
     print(f"  expected: {expected}")
     print(f"  actual:   {short_hash(actual)} ({actual})")
     return 1
+
+
+def _check_program_hash_from_file_json(path: str, expected_file: str) -> int:
+    """Stage 59 follow-on / Tier 4 #13 polish: --check-program-hash-
+    from-file in machine-readable JSON form. Reads the expected hash
+    from a pinned-artifact file, then defers to the JSON check helper.
+
+    Exit codes:
+      0 — match
+      1 — mismatch (JSON object emitted)
+      2 — bad arg (parse failure, missing expected_file, etc.)
+    """
+    try:
+        with open(expected_file, "r", encoding="utf-8") as f:
+            lines = [l.strip() for l in f if l.strip()]
+    except OSError as e:
+        print(f"error: autodiff_cli: {e}", file=sys.stderr)
+        return 2
+    if not lines:
+        print(f"error: autodiff_cli: {expected_file!r} contains no hash",
+              file=sys.stderr)
+        return 2
+    return _check_program_hash_json(path, lines[0])
+
+
+def _check_program_signature_hash_from_file_json(
+        path: str, expected_file: str) -> int:
+    """Stage 59 follow-on / Tier 4 #13 polish: --check-program-
+    signature-hash-from-file in machine-readable JSON form.
+
+    Exit codes:
+      0 — match
+      1 — mismatch (JSON object emitted)
+      2 — bad arg
+    """
+    try:
+        with open(expected_file, "r", encoding="utf-8") as f:
+            lines = [l.strip() for l in f if l.strip()]
+    except OSError as e:
+        print(f"error: autodiff_cli: {e}", file=sys.stderr)
+        return 2
+    if not lines:
+        print(f"error: autodiff_cli: {expected_file!r} contains no hash",
+              file=sys.stderr)
+        return 2
+    return _check_program_signature_hash_json(path, lines[0])
 
 
 def _check_program_hash_from_file(path: str, expected_file: str) -> int:
@@ -6984,6 +7034,13 @@ def main():
             sys.exit(2)
         sys.exit(_check_program_hash_from_file(args[0], args[1]))
 
+    if "--check-program-hash-from-file-json" in flags:
+        if len(args) < 2:
+            print("usage: --check-program-hash-from-file-json <file.hx> "
+                  "<expected_hash_file>", file=sys.stderr)
+            sys.exit(2)
+        sys.exit(_check_program_hash_from_file_json(args[0], args[1]))
+
     if "--check-program-signature-hash" in flags:
         if len(args) < 2:
             print("usage: --check-program-signature-hash <file.hx> "
@@ -7004,6 +7061,14 @@ def main():
                   "<file.hx> <expected_hash_file>", file=sys.stderr)
             sys.exit(2)
         sys.exit(_check_program_signature_hash_from_file(
+            args[0], args[1]))
+
+    if "--check-program-signature-hash-from-file-json" in flags:
+        if len(args) < 2:
+            print("usage: --check-program-signature-hash-from-file-json "
+                  "<file.hx> <expected_hash_file>", file=sys.stderr)
+            sys.exit(2)
+        sys.exit(_check_program_signature_hash_from_file_json(
             args[0], args[1]))
 
     if "--list-modules" in flags:
