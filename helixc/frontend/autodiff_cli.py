@@ -77,6 +77,19 @@ def _dump_ast_hashes(path: str) -> int:
     return 0
 
 
+def _print_program_hash(path: str) -> int:
+    """Stage 58 / Tier 4 #13 CLI exposure: print the content-addressed
+    program_hash of the parsed program. Span-independent + alpha-
+    equivalence-aware. Use case: detect whether a source file's
+    semantic content has changed between commits (vs. whitespace/
+    comment-only diffs)."""
+    from .ast_hash import program_hash
+    src = _read_source(path)
+    prog = _parse_or_exit(src, path)
+    print(program_hash(prog))
+    return 0
+
+
 def main():
     # Restart 49 B2: accept -h / --help → print docstring to stdout, exit 0
     # (matches check.py UX convention).
@@ -108,6 +121,12 @@ def main():
             # Restart 49 B1: bad-invocation rc=2.
             sys.exit(2)
         sys.exit(_dump_ast_hashes(args[0]))
+
+    if "--program-hash" in flags:
+        if len(args) < 1:
+            print("usage: --program-hash <file.hx>", file=sys.stderr)
+            sys.exit(2)
+        sys.exit(_print_program_hash(args[0]))
 
     if len(sys.argv) < 3 or len(args) < 2:
         print(__doc__.strip(), file=sys.stderr)
