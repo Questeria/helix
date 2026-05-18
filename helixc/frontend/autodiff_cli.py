@@ -59,6 +59,8 @@ Introspection (Stage 28.9 + Stage 58 + Stage 59 polish):
         Enumerate all fns with their attribute list (@pure, @trace, etc).
     --fn-callgraph <file.hx> <fn_name>
         Print fn names directly called from inside <fn_name>'s body.
+    --fn-body-stats <file.hx> <fn_name>
+        Per-fn body AST-node counts (calls/binops/ifs/loops/matches).
     --fn-callers <file.hx> <fn_name>
         Inverse: print fns that DIRECTLY call <fn_name> (refactor planning).
     --fn-callgraph-all <file.hx>
@@ -3037,6 +3039,74 @@ def _fn_callers(path: str, target_name: str) -> int:
     return 0
 
 
+def _fn_body_stats(path: str, fn_name: str) -> int:
+    """Stage 59 follow-on / Tier 4 #13 polish: per-fn body-size metrics.
+    Counts AST nodes by category as a complexity proxy.
+
+    Output: one stat per line in `key=value` form:
+        ast_nodes=N      (total node count via dataclass-walk)
+        calls=N          (total A.Call nodes in body)
+        binops=N         (total A.Binary nodes)
+        ifs=N            (total A.If nodes)
+        loops=N          (total A.For + A.While + A.Loop nodes)
+        matches=N        (total A.Match nodes)
+
+    Use cases:
+    - Identify fns that may need refactoring (high node count)
+    - Track per-fn complexity drift across releases
+    - Pair with --fn-callgraph-depth for complexity profile
+    """
+    src = _read_source(path)
+    prog = _parse_or_exit(src, path)
+    target = None
+    for it in prog.items:
+        if isinstance(it, A.FnDecl) and it.name == fn_name:
+            target = it
+            break
+    if target is None:
+        print(f"error: autodiff_cli: fn {fn_name!r} not found in {path}",
+              file=sys.stderr)
+        return 1
+
+    counts = {
+        "ast_nodes": 0, "calls": 0, "binops": 0,
+        "ifs": 0, "loops": 0, "matches": 0,
+    }
+
+    def _walk(node) -> None:
+        if node is None:
+            return
+        if hasattr(node, "__dataclass_fields__"):
+            counts["ast_nodes"] += 1
+            if isinstance(node, A.Call):
+                counts["calls"] += 1
+            elif isinstance(node, A.Binary):
+                counts["binops"] += 1
+            elif isinstance(node, A.If):
+                counts["ifs"] += 1
+            elif isinstance(node, (A.For, A.While, A.Loop)):
+                counts["loops"] += 1
+            elif isinstance(node, A.Match):
+                counts["matches"] += 1
+            for f in node.__dataclass_fields__:
+                v = getattr(node, f)
+                if isinstance(v, list):
+                    for x in v:
+                        _walk(x)
+                elif isinstance(v, tuple):
+                    for x in v:
+                        _walk(x)
+                else:
+                    _walk(v)
+
+    if target.body is not None:
+        _walk(target.body)
+
+    for k in ("ast_nodes", "calls", "binops", "ifs", "loops", "matches"):
+        print(f"{k}={counts[k]}")
+    return 0
+
+
 def _fn_callgraph(path: str, fn_name: str) -> int:
     """Stage 59 follow-on / Tier 4 #13 polish: static call-graph
     introspection for one fn. Print fn names called from inside
@@ -3685,6 +3755,13 @@ def main():
                   file=sys.stderr)
             sys.exit(2)
         sys.exit(_fn_callgraph(args[0], args[1]))
+
+    if "--fn-body-stats" in flags:
+        if len(args) < 2:
+            print("usage: --fn-body-stats <file.hx> <fn_name>",
+                  file=sys.stderr)
+            sys.exit(2)
+        sys.exit(_fn_body_stats(args[0], args[1]))
 
     if "--fn-callers" in flags:
         if len(args) < 2:

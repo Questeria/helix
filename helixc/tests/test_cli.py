@@ -5868,7 +5868,7 @@ def test_stage59_autodiff_cli_help_mentions_polish_flags():
         "--struct-fields", "--struct-fields-json",
         "--list-fn-attrs", "--list-fn-attrs-json",
         "--list-fns-by-attr", "--list-fns-by-attr-json",
-        "--fn-callgraph", "--fn-callers",
+        "--fn-callgraph", "--fn-callers", "--fn-body-stats",
         "--fn-callgraph-all", "--fn-callers-all",
         "--fn-reachable-from", "--fn-reachable-to",
         "--fn-leaves", "--fn-roots",
@@ -8239,6 +8239,49 @@ def test_stage59_fn_callers_unknown_target_no_error(tmp_path):
     )
     assert proc.returncode == 0
     assert proc.stdout == ""
+
+
+def test_stage59_fn_body_stats(tmp_path):
+    """Stage 59 follow-on / Tier 4 #13 polish: --fn-body-stats prints
+    AST node counts per category as key=value lines."""
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "b.hx"
+    src.write_text(
+        "fn fib(n: i32) -> i32 {\n"
+        "    if n <= 1 { n } else { fib(n - 1) + fib(n - 2) }\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--fn-body-stats", str(src), "fib"],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0
+    out = proc.stdout
+    # fib body has: 1 if, 2 calls (recursive), 1+ binop (n - 1, n - 2, +)
+    assert "ast_nodes=" in out
+    assert "calls=2" in out
+    assert "ifs=1" in out
+    assert "binops=" in out
+    assert "loops=0" in out
+    assert "matches=0" in out
+
+
+def test_stage59_fn_body_stats_not_found(tmp_path):
+    """Stage 59 follow-on: unknown fn exits 1."""
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "x.hx"
+    src.write_text("fn real() -> i32 { 0 }\n", encoding="utf-8")
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--fn-body-stats", str(src), "phantom"],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 1
+    assert "not found" in proc.stderr
 
 
 def test_stage59_fn_callgraph_direct_callees(tmp_path):
