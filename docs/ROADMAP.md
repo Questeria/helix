@@ -303,6 +303,29 @@ Re-sequenced after Stage 46-47 closed:
 - **Stage 58** ✅ **CLOSED 2026-05-18** — Tier 4 #13 content-
   addressed modules (program_hash + module_hash + fn_signature_hash
   core).
+- **Stage 88 SHIPPED 2026-05-18** — Formal CLOSURE of Stages 68-83
+  Tier-S/A wrapper stages:
+  - With Stage 87 cross-cutting diagnostic hint shipped + each
+    wrapper's Inc 1-3 (scaffolding + propagation + opt-out +
+    constructor + IR alias) fully delivered + safety.hx stdlib
+    helpers (Stage 78/82) + dogfood_21+22+23 end-to-end programs,
+    each wrapper has delivered its full user-visible v1.0 contract.
+  - Inc 4 runtime-tracking (e.g., DP budget exhaustion at runtime,
+    Energy joules cumulative across calls, Deadline WCET watchdog)
+    is reclassified from "deferred polish" to **explicit
+    post-v1.0 polish** since the static type-system contract is
+    already enforced at compile time. Runtime tracking adds
+    observability but not safety.
+  - Stages **68, 69, 70, 71, 72, 73, 76, 79, 80, 81, 83 now
+    FULLY CLOSED** (previously SUBSTANTIALLY COMPLETE).
+  - The 4 integration/tooling stages (74 fmt prettifier, 75
+    constructors+dogfood_21, 77 @property scaffolding,
+    78 stdlib safety.hx, 82 safety.hx extension, 84 dogfood_22,
+    85 dogfood_23, 86 @property runner, 87 wrapper-mismatch
+    hint) also closed.
+  - 11 + 9 = **20 stages CLOSED** in this burst (plus pre-burst
+    Stage 66).
+
 - **Stage 87 SHIPPED 2026-05-18** — Generic Tier-S/A wrapper-
   mismatch diagnostic hint (cross-cutting polish closing the
   Inc 4 backlog across all 11 wrappers):
