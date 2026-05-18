@@ -30,9 +30,10 @@ from helixc.runners.property_runner import (  # noqa: E402
 )
 
 
-def test_stage86_discovery_finds_all_five_stdlib_properties():
-    """Stage 86 — discovery half finds the 5 @property fns shipped
-    in safety.hx (Stages 78 + 82) when the stdlib is auto-included."""
+def test_stage86_discovery_finds_all_six_stdlib_properties():
+    """Stage 86 + Stage 98 — discovery half finds the 6 @property
+    fns shipped in safety.hx (5 from Stages 78+82, 1 from Stage 98
+    closing the audit-identified Attribution gap)."""
     from helixc.frontend.parser import parse
     src = _build_stdlib_only_src()
     prog = parse(src, include_stdlib=True)
@@ -44,6 +45,7 @@ def test_stage86_discovery_finds_all_five_stdlib_properties():
         "safety_enclave_roundtrip_is_identity",
         "safety_cfact_roundtrip_is_identity",
         "safety_deadline_roundtrip_is_identity",
+        "safety_attribution_roundtrip_is_identity",  # Stage 98
     }
     missing = expected - names
     assert not missing, f"missing stdlib @property fns: {missing}"
@@ -136,7 +138,11 @@ def test_stage86_runner_end_to_end_on_trivial_property():
     fn always_true(x: i32) -> bool { true }
     fn main() -> i32 { 0 }
     """
-    p, f, log = run_properties(src, verbose=False)
+    # Stage 98 (Stage 93 audit MEDIUM fix) — include_stdlib=False
+    # isolates the test's own property from the 6 stdlib safety.hx
+    # @property fns that would otherwise also run (5 × 7 f32 inputs
+    # = 35 extra passes, breaking the p==7 assertion).
+    p, f, log = run_properties(src, verbose=False, include_stdlib=False)
     assert f == 0, f"trivial property should have 0 failures; log={log}"
     # The i32 input table has 7 entries; runner should hit all 7.
     assert p == 7, f"expected 7 passes (i32 table size); got {p}"

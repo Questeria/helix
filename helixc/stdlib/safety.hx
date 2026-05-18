@@ -153,6 +153,20 @@ fn miss_deadline_f32(x: Deadline<f32>) -> f32 {
 }
 
 // ============================================================
+// Model/data attribution (Attribution, Stage 83).
+// ============================================================
+
+@pure
+fn attribute_unknown_f32(x: f32) -> FromUnknown<f32> {
+    __wrap_attr(x)
+}
+
+@pure
+fn verify_attribution_f32(x: FromUnknown<f32>) -> f32 {
+    __attribute_verified(x)
+}
+
+// ============================================================
 // Property-based test (Stage 77 @property scaffolding).
 // ============================================================
 
@@ -196,5 +210,19 @@ fn safety_cfact_roundtrip_is_identity(x: f32) -> bool {
 fn safety_deadline_roundtrip_is_identity(x: f32) -> bool {
     let wrapped = within_deadline_f32(x);
     let unwrapped = miss_deadline_f32(wrapped);
+    unwrapped == x
+}
+
+// Stage 98 (Stage 93 audit MEDIUM fix) — TyAttribution roundtrip
+// property. Pre-Stage-98, Stage 83 added the Attribution wrapper
+// + opt-out but never extended safety.hx with the helper +
+// roundtrip — the audit flagged this as inconsistent with the
+// per-wrapper template Stages 78/82 established for the other 10
+// wrappers.
+@property
+@pure
+fn safety_attribution_roundtrip_is_identity(x: f32) -> bool {
+    let wrapped = attribute_unknown_f32(x);
+    let unwrapped = verify_attribution_f32(wrapped);
     unwrapped == x
 }

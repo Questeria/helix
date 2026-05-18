@@ -303,6 +303,41 @@ Re-sequenced after Stage 46-47 closed:
 - **Stage 58** ✅ **CLOSED 2026-05-18** — Tier 4 #13 content-
   addressed modules (program_hash + module_hash + fn_signature_hash
   core).
+- **Stage 98 SHIPPED 2026-05-18** — MEDIUM polish bundle: closes
+  Stage 93 audit's 2 remaining MEDIUM findings.
+  - **Fix A: safety.hx TyAttribution helpers (Stage 83 gap)**.
+    Stage 83 added the Attribution wrapper + opt-out in Stage 83
+    but never extended safety.hx with the helper + roundtrip
+    @property fn (Stages 78 + 82 had set the per-wrapper template
+    for the other 10 wrappers, and the audit flagged Stage 83 as
+    the lone outlier). Stage 98 adds:
+    - `attribute_unknown_f32(x: f32) -> FromUnknown<f32>` (calls
+      `__wrap_attr`)
+    - `verify_attribution_f32(x: FromUnknown<f32>) -> f32` (calls
+      `__attribute_verified`)
+    - `@property safety_attribution_roundtrip_is_identity(x: f32)
+      -> bool` (round-trip identity assertion)
+    safety.hx now has 22 helpers (11 wrappers × 2) + 6 @property
+    fns total. Stage 78 + Stage 82 counter-tests updated.
+  - **Fix B: test_property_runner include_stdlib parameter**.
+    The Stage 86 test `test_stage86_runner_end_to_end_on_trivial_
+    property` asserted `p == 7` but observed `p == 42` because
+    `run_properties` always included the 6 stdlib @property fns
+    (6 × 7 f32 inputs = 42) when discovering. Pre-fix: test was
+    silently failing. Stage 98 adds `include_stdlib: bool = True`
+    parameter to `run_properties()` (default True for backward
+    compat); the failing test now passes `include_stdlib=False`
+    to isolate its own `always_true` property and the `p == 7`
+    assertion holds. Validated: 1/1 end-to-end test now PASSES
+    (was 1/1 FAILING pre-Stage-98).
+  - All 4 HIGH + 2 MEDIUM Stage 93 audit findings now closed.
+    Stage 99 re-audit next.
+  - 3 tests updated (Stage 78 helper-count, Stage 82 property-
+    count, Stage 86 discovery-count) + 1 test added (Stage 98
+    attribution roundtrip via the new stdlib helper). 494
+    typecheck/selfhost/IR/runner-unit GREEN + 1 end-to-end runner
+    GREEN.
+
 - **Stage 97 SHIPPED 2026-05-18** — HIGH-#2 fix: `_strip_X` chain
   completion via single registry-driven helper (Stage 93 audit
   finding):

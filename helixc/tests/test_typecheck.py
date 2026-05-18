@@ -4777,11 +4777,10 @@ def test_stage78_safety_stdlib_loads_with_property_fns():
     assert "safety_taint_roundtrip_is_identity" in tc._property_fn_names
 
 
-def test_stage78_safety_stdlib_exposes_all_ten_wrapper_helpers():
-    """Stage 78 + 82 — each of the 10 Tier-S/A wrappers (Stages
-    68-81) has a corresponding constructor + opt-out helper in
-    safety.hx. Smoke check by parsing and confirming each helper's
-    name appears in the fn list."""
+def test_stage78_safety_stdlib_exposes_all_eleven_wrapper_helpers():
+    """Stage 78 + 82 + 98 — each of the 11 Tier-S/A wrappers
+    (Stages 68-83) has a constructor + opt-out helper in safety.hx.
+    Stage 98 closed the Attribution gap the Stage 93 audit flagged."""
     from helixc.frontend.parser import parse
 
     src = """
@@ -4811,6 +4810,8 @@ def test_stage78_safety_stdlib_exposes_all_ten_wrapper_helpers():
         "as_counterfactual_f32", "realize_counterfactual_f32",
         # Deadline (Stage 81)
         "within_deadline_f32", "miss_deadline_f32",
+        # Attribution (Stage 83 / Stage 98 audit fix)
+        "attribute_unknown_f32", "verify_attribution_f32",
     }
     missing = expected - fn_names
     assert not missing, (
@@ -5672,10 +5673,10 @@ def test_stage87_wrapper_mismatch_no_hint_when_unrelated_types():
     assert hint is None
 
 
-def test_stage82_safety_stdlib_all_five_property_fns_registered():
-    """Stage 82 — safety.hx now ships 5 @property fns (2 from
-    Stage 78 + 3 new for Stages 79-81 wrappers). All should
-    register cleanly in `_property_fn_names`."""
+def test_stage82_safety_stdlib_all_six_property_fns_registered():
+    """Stage 82 + Stage 98 — safety.hx ships 6 @property fns
+    (2 from Stage 78, 3 from Stage 82, 1 from Stage 98 closing
+    the audit-identified TyAttribution gap)."""
     from helixc.frontend.parser import parse
     from helixc.frontend.typecheck import TypeChecker
 
@@ -5689,11 +5690,12 @@ def test_stage82_safety_stdlib_all_five_property_fns_registered():
         f"safety.hx + stdlib should typecheck clean; got: "
         f"{[str(e) for e in errors[:5]]}")
     expected = {
-        "safety_conf_roundtrip_is_identity",   # Stage 78
-        "safety_taint_roundtrip_is_identity",  # Stage 78
-        "safety_enclave_roundtrip_is_identity",   # Stage 82
-        "safety_cfact_roundtrip_is_identity",     # Stage 82
-        "safety_deadline_roundtrip_is_identity",  # Stage 82
+        "safety_conf_roundtrip_is_identity",          # Stage 78
+        "safety_taint_roundtrip_is_identity",         # Stage 78
+        "safety_enclave_roundtrip_is_identity",       # Stage 82
+        "safety_cfact_roundtrip_is_identity",         # Stage 82
+        "safety_deadline_roundtrip_is_identity",      # Stage 82
+        "safety_attribution_roundtrip_is_identity",   # Stage 98
     }
     missing = expected - tc._property_fn_names
     assert not missing, (

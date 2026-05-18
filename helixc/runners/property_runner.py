@@ -120,17 +120,29 @@ def _stringify_ty(ty) -> str:
     return "?"
 
 
-def run_properties(src: str, verbose: bool = True) -> tuple[int, int, list[str]]:
+def run_properties(
+    src: str,
+    verbose: bool = True,
+    include_stdlib: bool = True,
+) -> tuple[int, int, list[str]]:
     """Discover + run all @property fns in `src`.
 
     Returns (pass_count, fail_count, fail_log) where fail_log is a
     list of human-readable failure strings.
+
+    Stage 98 (Stage 93 audit MEDIUM fix) — `include_stdlib` parameter
+    added so callers can isolate the properties defined in `src`
+    from the 6 stdlib safety.hx properties (which would otherwise
+    automatically run alongside any input program). Default True
+    preserves backward compatibility with the original Stage 86
+    runner behavior. Set False to run ONLY the src-defined
+    properties (used by test_stage86 to count expected passes).
     """
     # Lazy-import compile_and_run so this module is usable for
     # discovery-only flows on systems without WSL set up.
     from helixc.tests.test_codegen import compile_and_run  # noqa: E402
 
-    prog = parse(src, include_stdlib=True)
+    prog = parse(src, include_stdlib=include_stdlib)
     tc = TypeChecker(prog)
     errors = tc.check()
     if errors:
