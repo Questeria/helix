@@ -337,6 +337,36 @@ def test_stage58_program_hash_alpha_equivalent_helpers():
     assert h1 == h2, "alpha-equivalent helpers hashed differently"
 
 
+def test_stage59_program_hash_dump_short_uses_12_hex():
+    """Stage 59 follow-on / Tier 4 #13 polish: program_hash_dump_short
+    returns the same structure as program_hash_dump but with 12-hex
+    short hashes throughout."""
+    from helixc.frontend.parser import parse
+    from helixc.frontend.ast_hash import program_hash_dump_short
+    prog = parse(
+        "fn f(x: i32) -> i32 { x + 1 }\n"
+        "struct S { a: i32 }\n"
+    )
+    dump = program_hash_dump_short(prog)
+    assert len(dump["program_hash"]) == 12
+    assert len(dump["program_signature_hash"]) == 12
+    assert len(dump["fns"]["f"]["body_hash"]) == 12
+    assert len(dump["fns"]["f"]["sig_hash"]) == 12
+    assert len(dump["structs"]["S"]) == 12
+
+
+def test_stage59_program_hash_dump_short_consistent_with_full():
+    """Stage 59 follow-on: short hashes are 12-char prefixes of the
+    full hashes."""
+    from helixc.frontend.parser import parse
+    from helixc.frontend.ast_hash import program_hash_dump, program_hash_dump_short
+    prog = parse("fn f(x: i32) -> i32 { x + 1 }")
+    full = program_hash_dump(prog)
+    short = program_hash_dump_short(prog)
+    assert short["program_hash"] == full["program_hash"][:12]
+    assert short["fns"]["f"]["body_hash"] == full["fns"]["f"]["body_hash"][:12]
+
+
 def test_stage59_program_hash_dump_structure():
     """Stage 59 follow-on / Tier 4 #13 polish: program_hash_dump
     returns a dict with the expected top-level keys + per-item

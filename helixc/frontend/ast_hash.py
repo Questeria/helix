@@ -716,6 +716,36 @@ def program_hash(prog: "A.Program") -> str:
     return h.hexdigest()
 
 
+def program_hash_dump_short(prog: "A.Program") -> dict:
+    """Stage 59 follow-on / Tier 4 #13 polish — same shape as
+    program_hash_dump but with 12-hex short hashes everywhere
+    (suitable for human-readable inspection / compact log artifacts).
+
+    Use when you don't need the full 64-hex cryptographic strength —
+    e.g., a daily-rotated CI artifact for which 12 hex (48 bits) is
+    sufficient collision resistance vs the same-day previous build.
+
+    For canonical proof-strength artifacts, prefer program_hash_dump.
+    """
+    full = program_hash_dump(prog)
+    short_fns = {
+        name: {"body_hash": short_hash(d["body_hash"]),
+               "sig_hash": short_hash(d["sig_hash"])}
+        for name, d in full["fns"].items()
+    }
+    short_structs = {name: short_hash(h)
+                     for name, h in full["structs"].items()}
+    short_modules = {name: short_hash(h)
+                     for name, h in full["modules"].items()}
+    return {
+        "program_hash": short_hash(full["program_hash"]),
+        "program_signature_hash": short_hash(full["program_signature_hash"]),
+        "fns": short_fns,
+        "structs": short_structs,
+        "modules": short_modules,
+    }
+
+
 def program_hash_dump(prog: "A.Program") -> dict:
     """Stage 59 follow-on / Tier 4 #13 polish — comprehensive hash
     dump for a program. Returns a dict suitable for JSON
