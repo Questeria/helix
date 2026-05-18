@@ -885,3 +885,52 @@ fn string_count_digit(start: i32, len: i32) -> i32 {
     }
     total
 }
+
+// Stage 55 Inc 2b — string_to_f64(start, len): @pure decimal-string
+// to f64 parser. Composes existing __parse_i32 + bit-cast intrinsics.
+//
+// Accepts: optional leading '-', integer part (digits), optional '.',
+// fractional part (digits). Examples:
+//   "3.14" -> 3.14
+//   "42"   -> 42.0
+//   "-1.5" -> -1.5
+//   "0.001" -> 0.001
+//
+// Non-digit bytes outside the optional sign or single '.' are treated
+// as end-of-number (whatever was parsed up to that point is returned).
+// Phase-0 limitations: no exponent notation (1e10), no NaN/Inf strings.
+// Caller wraps with their own validation if those are needed.
+@pure
+fn string_to_f64(start: i32, len: i32) -> f64 {
+    if len == 0 { 0.0_f64 }
+    else {
+        let first = __arena_get(start);
+        let neg = if first == 45 { 1 } else { 0 };
+        let body_start = if neg == 1 { start + 1 } else { start };
+        let body_len = if neg == 1 { len - 1 } else { len };
+        // Find decimal point within body.
+        let dot_off = __str_find_byte(body_start, body_len, 46);
+        let int_len = if dot_off < 0 { body_len } else { dot_off };
+        let int_part = __parse_i32(body_start, int_len);
+        let mut value: f64 = (int_part as f64);
+        if dot_off >= 0 {
+            let frac_start = body_start + dot_off + 1;
+            let frac_len = body_len - dot_off - 1;
+            if frac_len > 0 {
+                let frac_int = __parse_i32(frac_start, frac_len);
+                // Compute 10^frac_len as f64. Cap at 18 digits (f64
+                // precision limit; beyond that, fractional bits drop
+                // off anyway).
+                let mut divisor: f64 = 1.0_f64;
+                let mut i: i32 = 0;
+                let cap = if frac_len > 18 { 18 } else { frac_len };
+                while i < cap {
+                    divisor = divisor * 10.0_f64;
+                    i = i + 1;
+                }
+                value = value + (frac_int as f64) / divisor;
+            }
+        }
+        if neg == 1 { 0.0_f64 - value } else { value }
+    }
+}

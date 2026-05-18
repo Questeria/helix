@@ -15238,6 +15238,49 @@ def test_stage55_inc5_str_from_i32_zero():
     assert code == 1, f"expected len=1 for n=0, got {code}"
 
 
+def test_stage55_inc2b_string_to_f64_integer():
+    """Stage 55 Inc 2b: string_to_f64 parses pure-integer string."""
+    src = """
+    fn main() -> i32 {
+        let s = __strlit_to_arena("42");
+        let v = string_to_f64(s, 2);
+        // v should be 42.0 → cast to i32 = 42
+        v as i32
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stage55_inc2b_string_to_f64_decimal():
+    """Stage 55 Inc 2b: string_to_f64 parses decimal fraction."""
+    src = """
+    fn main() -> i32 {
+        let s = __strlit_to_arena("3.14");
+        let v = string_to_f64(s, 4);
+        // v ≈ 3.14 → 100*v ≈ 314.something → cast to i32 = 313 or 314
+        let x = (v * 100.0_f64) as i32;
+        if x == 313 { 42 } else { if x == 314 { 42 } else { x } }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42 (3.14*100 cast as i32), got {code}"
+
+
+def test_stage55_inc2b_string_to_f64_negative():
+    """Stage 55 Inc 2b: string_to_f64 handles leading minus."""
+    src = """
+    fn main() -> i32 {
+        let s = __strlit_to_arena("-5.0");
+        let v = string_to_f64(s, 4);
+        // v == -5.0 → (v + 47.0) as i32 == 42
+        ((v + 47.0_f64) as i32)
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
 def test_stage55_inc6_csv_line_count_basic():
     """Stage 55 Inc 6: csv.hx stdlib counts lines in an arena-backed
     CSV blob. Verifies csv_count_lines composes csv_next_line_offset
