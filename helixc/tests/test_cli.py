@@ -4584,6 +4584,113 @@ def test_stage35_autodiff_cli_handles_parse_error_cleanly(tmp_path):
     )
 
 
+# Stage 58 / Tier 4 #13 — content-addressed module CLI flags
+# (program_hash, --program-hash, --diff-program-hash, --changed-fns)
+
+def test_stage58_program_hash_cli_prints_hash(tmp_path):
+    """Stage 58 / Tier 4 #13: --program-hash prints 64-char hex
+    SHA-256 of the parsed program. Deterministic across runs."""
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "p.hx"
+    src.write_text("fn main() -> i32 { 42 }\n", encoding="utf-8")
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--program-hash", str(src)],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0
+    hash_line = proc.stdout.strip()
+    assert len(hash_line) == 64, \
+        f"expected 64-char hex hash, got {len(hash_line)}: {hash_line!r}"
+    # Determinism: second invocation produces same hash.
+    proc2 = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--program-hash", str(src)],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc2.stdout.strip() == hash_line, "non-deterministic"
+
+
+def test_stage58_diff_program_hash_match_exit0(tmp_path):
+    """Stage 58: --diff-program-hash exits 0 + prints MATCH for
+    formatter-only diff (span-independent + alpha-equivalent)."""
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    a = tmp_path / "a.hx"
+    a.write_text("fn main() -> i32 { 42 }\n", encoding="utf-8")
+    b = tmp_path / "b.hx"
+    b.write_text("\n\nfn main() -> i32 {\n    42\n}\n", encoding="utf-8")
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--diff-program-hash", str(a), str(b)],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0
+    assert proc.stdout.startswith("MATCH "), \
+        f"expected MATCH for formatter-only diff: {proc.stdout!r}"
+
+
+def test_stage58_diff_program_hash_differ_exit1(tmp_path):
+    """Stage 58: --diff-program-hash exits 1 + prints DIFFER for
+    semantic change."""
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    a = tmp_path / "a.hx"
+    a.write_text("fn main() -> i32 { 42 }\n", encoding="utf-8")
+    b = tmp_path / "b.hx"
+    b.write_text("fn main() -> i32 { 43 }\n", encoding="utf-8")
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--diff-program-hash", str(a), str(b)],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 1
+    assert proc.stdout.startswith("DIFFER"), \
+        f"expected DIFFER for semantic diff: {proc.stdout!r}"
+
+
+def test_stage58_changed_fns_lists_diffs(tmp_path):
+    """Stage 58: --changed-fns lists per-fn diff (+/-/~) and exits 1
+    when changes exist, 0 when no changes."""
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    a = tmp_path / "a.hx"
+    a.write_text(
+        "fn foo() -> i32 { 1 }\n"
+        "fn bar() -> i32 { 2 }\n"
+        "fn baz() -> i32 { 3 }\n",
+        encoding="utf-8",
+    )
+    b = tmp_path / "b.hx"
+    b.write_text(
+        "fn foo() -> i32 { 1 }\n"
+        "fn bar() -> i32 { 99 }\n"
+        "fn qux() -> i32 { 4 }\n",
+        encoding="utf-8",
+    )
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--changed-fns", str(a), str(b)],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 1
+    out = proc.stdout
+    assert "+qux" in out, f"missing add line: {out!r}"
+    assert "-baz" in out, f"missing remove line: {out!r}"
+    assert "~bar" in out, f"missing change line: {out!r}"
+    assert "foo" not in out, f"unchanged foo should not appear: {out!r}"
+    # Same-file diff → exit 0
+    proc_same = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--changed-fns", str(a), str(a)],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc_same.returncode == 0
+    assert proc_same.stdout.strip() == "", \
+        f"expected empty output for same-file diff: {proc_same.stdout!r}"
+
+
 # ---- Restart 47 B4: backend flag parity (-l, --no-color, --hash, --hash-cons) ----
 
 @pytest.mark.parametrize("flag,extra_args", [
