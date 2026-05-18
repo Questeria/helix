@@ -15238,6 +15238,40 @@ def test_stage55_inc5_str_from_i32_zero():
     assert code == 1, f"expected len=1 for n=0, got {code}"
 
 
+def test_stage55_inc6_csv_line_count_basic():
+    """Stage 55 Inc 6: csv.hx stdlib counts lines in an arena-backed
+    CSV blob. Verifies csv_count_lines composes csv_next_line_offset
+    + csv_line_len via Inc 1 primitives end-to-end."""
+    src = """
+    fn main() -> i32 {
+        // 3 lines: "1,2", "3,4", "5,6"
+        let blob = __strlit_to_arena("1,2");
+        __arena_push(10);
+        __strlit_to_arena("3,4");
+        __arena_push(10);
+        __strlit_to_arena("5,6");
+        // 3 lines + 2 newlines = 11 bytes
+        csv_count_lines(blob, 11)
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 3, f"expected 3 lines, got {code}"
+
+
+def test_stage55_inc6_csv_parse_field_i32():
+    """Stage 55 Inc 6: csv_parse_field_i32 parses an i32 field
+    starting at a given offset within a line."""
+    src = """
+    fn main() -> i32 {
+        let line = __strlit_to_arena("42,7,99");
+        // line[0..2] = "42" → 42
+        csv_parse_field_i32(line, 7, 0)
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
 def test_stage57_inc1_grad_rev_all_struct_param_no_rejection():
     """Stage 57 Inc 1 — Tier 2 #7 pytrees: grad_rev_all on a struct
     parameter no longer hard-rejects at the signature check. The

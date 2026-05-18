@@ -1557,6 +1557,11 @@ STDLIB_FILES: list[str] = [
     # evidence_middle, evidence_third, trace_evidence3 for the
     # 3-parent register_derivation3 handles from Inc 14.
     "provenance.hx",
+    # Stage 55 Inc 6: pure-Helix stdlib for CSV (line/field iteration)
+    # and MNIST IDX-format header parsing. Built on Inc 1-5 runtime
+    # string primitives (__str_byte_at, __str_find_byte, __parse_i32).
+    # No compiler changes; cascade-safe.
+    "csv.hx", "mnist.hx",
 ]
 
 
