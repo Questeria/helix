@@ -5886,6 +5886,7 @@ def test_stage59_autodiff_cli_help_mentions_polish_flags():
         "--fn-reachable-from-json", "--fn-reachable-to-json",
         "--fn-leaves-json", "--fn-roots-json",
         "--fn-recursive-json", "--fn-cycles-json",
+        "--fn-topo-sort-json", "--fn-isolated-json",
         "--list-fn-attrs", "--list-fn-attrs-json",
         "--list-fns-by-attr", "--list-fns-by-attr-json",
         "--fn-callgraph", "--fn-callers",
@@ -7548,6 +7549,58 @@ def test_stage59_agent_methods_json(tmp_path):
         {"name": "propose", "params": ["i32"], "return_ty": "i32"},
         {"name": "evaluate", "params": ["i32", "i32"], "return_ty": "i32"},
     ]}
+
+
+def test_stage59_fn_topo_sort_json(tmp_path):
+    """Stage 59 follow-on / Tier 4 #13 polish: --fn-topo-sort-json
+    emits {order, n} in leaves-first order."""
+    import json
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "ftsj.hx"
+    src.write_text(
+        "fn leaf() -> i32 { 1 }\n"
+        "fn mid() -> i32 { leaf() }\n"
+        "fn top() -> i32 { mid() }\n",
+        encoding="utf-8",
+    )
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--fn-topo-sort-json", str(src)],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0
+    result = json.loads(proc.stdout)
+    assert result["n"] == 3
+    # leaf must come before mid which must come before top.
+    order = result["order"]
+    assert order.index("leaf") < order.index("mid")
+    assert order.index("mid") < order.index("top")
+
+
+def test_stage59_fn_isolated_json(tmp_path):
+    """Stage 59 follow-on / Tier 4 #13 polish: --fn-isolated-json
+    emits {isolated, n_isolated} — fns with no callers AND no callees."""
+    import json
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "fij.hx"
+    src.write_text(
+        "fn lone() -> i32 { 42 }\n"
+        "fn leaf() -> i32 { 1 }\n"
+        "fn caller() -> i32 { leaf() }\n",
+        encoding="utf-8",
+    )
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--fn-isolated-json", str(src)],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0
+    result = json.loads(proc.stdout)
+    # 'lone' has no callers and no callees; caller has callee leaf;
+    # leaf has caller. Only 'lone' is isolated.
+    assert result == {"isolated": ["lone"], "n_isolated": 1}
 
 
 def test_stage59_fn_recursive_json(tmp_path):

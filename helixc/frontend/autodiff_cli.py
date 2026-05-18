@@ -144,6 +144,10 @@ Introspection (Stage 28.9 + Stage 58 + Stage 59 polish):
     --fn-cycles-json <file.hx>
         Same as --fn-cycles but JSON {cycles: [[...], ...],
         n_cycles}.
+    --fn-topo-sort-json <file.hx>
+        Same as --fn-topo-sort but JSON {order: [...], n}.
+    --fn-isolated-json <file.hx>
+        Same as --fn-isolated but JSON {isolated, n_isolated}.
     --fn-body-stats <file.hx> <fn_name>
         Per-fn body AST-node counts (calls/binops/ifs/loops/matches).
     --fn-body-stats-json <file.hx> <fn_name>
@@ -2868,6 +2872,63 @@ def _fn_call_path(path: str, from_fn: str, to_fn: str) -> int:
     return 0
 
 
+def _fn_isolated_json(path: str) -> int:
+    """Stage 59 follow-on / Tier 4 #13 polish: --fn-isolated in
+    machine-readable JSON form.
+
+    Output schema:
+      {"isolated": ["<f1>", "<f2>", ...], "n_isolated": N}
+    Names alphabetically sorted (matches text form).
+    """
+    import json
+    from .ast_walker import iter_fn_decls
+    src = _read_source(path)
+    prog = _parse_or_exit(src, path)
+
+    all_fns = list(iter_fn_decls(prog))
+    all_names = {fn.name for fn in all_fns}
+    fan_out: dict[str, set] = {fn.name: set() for fn in all_fns}
+    fan_in: dict[str, set] = {fn.name: set() for fn in all_fns}
+
+    def _collect(node, from_fn: str) -> None:
+        if node is None:
+            return
+        if isinstance(node, A.Call):
+            tgt = None
+            if isinstance(node.callee, A.Name):
+                tgt = node.callee.name
+            elif (isinstance(node.callee, A.Path)
+                  and node.callee.segments):
+                tgt = node.callee.segments[-1]
+            if tgt is not None and tgt in all_names:
+                fan_out[from_fn].add(tgt)
+                fan_in[tgt].add(from_fn)
+        if hasattr(node, "__dataclass_fields__"):
+            for f in node.__dataclass_fields__:
+                v = getattr(node, f)
+                if isinstance(v, list):
+                    for x in v:
+                        _collect(x, from_fn)
+                elif isinstance(v, tuple):
+                    for x in v:
+                        _collect(x, from_fn)
+                else:
+                    _collect(v, from_fn)
+
+    for fn in all_fns:
+        if fn.body is not None:
+            _collect(fn.body, fn.name)
+
+    isolated = sorted(
+        name for name in all_names
+        if not fan_in[name] and not fan_out[name]
+    )
+    print(json.dumps(
+        {"isolated": isolated, "n_isolated": len(isolated)},
+        sort_keys=True, indent=2))
+    return 0
+
+
 def _fn_isolated(path: str) -> int:
     """Stage 59 follow-on / Tier 4 #13 polish: list 'isolated' fns —
     fns with NO callers AND NO callees in the local callgraph (truly
@@ -2929,6 +2990,94 @@ def _fn_isolated(path: str) -> int:
     )
     for name in isolated:
         print(name)
+    return 0
+
+
+def _fn_topo_sort_json(path: str) -> int:
+    """Stage 59 follow-on / Tier 4 #13 polish: --fn-topo-sort in
+    machine-readable JSON form.
+
+    Output schema:
+      {"order": ["<f1>", "<f2>", ...], "n": N}
+    Leaves-first order: each fn appears AFTER all its callees.
+    Cycles (SCCs) are emitted as contiguous blocks, alphabetically
+    sorted within each SCC.
+    """
+    import json
+    from .ast_walker import iter_fn_decls
+    src = _read_source(path)
+    prog = _parse_or_exit(src, path)
+    all_fns = list(iter_fn_decls(prog))
+    all_names = {fn.name for fn in all_fns}
+    graph: dict[str, set] = {}
+    for fn in all_fns:
+        callees: set = set()
+
+        def _walk(n) -> None:
+            if n is None:
+                return
+            if isinstance(n, A.Call):
+                if isinstance(n.callee, A.Name):
+                    callees.add(n.callee.name)
+                elif (isinstance(n.callee, A.Path)
+                      and n.callee.segments):
+                    callees.add(n.callee.segments[-1])
+            if hasattr(n, "__dataclass_fields__"):
+                for f in n.__dataclass_fields__:
+                    v = getattr(n, f)
+                    if isinstance(v, list):
+                        for x in v:
+                            _walk(x)
+                    elif isinstance(v, tuple):
+                        for x in v:
+                            _walk(x)
+                    else:
+                        _walk(v)
+
+        if fn.body is not None:
+            _walk(fn.body)
+        graph[fn.name] = {c for c in callees if c in all_names}
+
+    index_counter = [0]
+    stack: list[str] = []
+    on_stack: set = set()
+    index: dict[str, int] = {}
+    lowlink: dict[str, int] = {}
+    sccs: list[list[str]] = []
+
+    def _strongconnect(v: str) -> None:
+        index[v] = index_counter[0]
+        lowlink[v] = index_counter[0]
+        index_counter[0] += 1
+        stack.append(v)
+        on_stack.add(v)
+        for w in graph.get(v, set()):
+            if w not in index:
+                _strongconnect(w)
+                lowlink[v] = min(lowlink[v], lowlink[w])
+            elif w in on_stack:
+                lowlink[v] = min(lowlink[v], index[w])
+        if lowlink[v] == index[v]:
+            scc: list[str] = []
+            while True:
+                w = stack.pop()
+                on_stack.discard(w)
+                scc.append(w)
+                if w == v:
+                    break
+            sccs.append(scc)
+
+    for v in sorted(graph.keys()):
+        if v not in index:
+            _strongconnect(v)
+
+    order: list[str] = []
+    for scc in sccs:
+        for name in sorted(scc):
+            order.append(name)
+    print(json.dumps(
+        {"order": order, "n": len(order)},
+        sort_keys=True, indent=2))
     return 0
 
 
@@ -6164,11 +6313,25 @@ def main():
             sys.exit(2)
         sys.exit(_fn_topo_sort(args[0]))
 
+    if "--fn-topo-sort-json" in flags:
+        if len(args) < 1:
+            print("usage: --fn-topo-sort-json <file.hx>",
+                  file=sys.stderr)
+            sys.exit(2)
+        sys.exit(_fn_topo_sort_json(args[0]))
+
     if "--fn-isolated" in flags:
         if len(args) < 1:
             print("usage: --fn-isolated <file.hx>", file=sys.stderr)
             sys.exit(2)
         sys.exit(_fn_isolated(args[0]))
+
+    if "--fn-isolated-json" in flags:
+        if len(args) < 1:
+            print("usage: --fn-isolated-json <file.hx>",
+                  file=sys.stderr)
+            sys.exit(2)
+        sys.exit(_fn_isolated_json(args[0]))
 
     if "--fn-call-path" in flags:
         if len(args) < 3:
