@@ -5881,6 +5881,7 @@ def test_stage59_autodiff_cli_help_mentions_polish_flags():
         "--module-stats", "--module-stats-json",
         "--module-hash-json", "--validate-trace-attrs-json",
         "--changed-fns-json", "--diff-program-hash-json",
+        "--dump-ast-hashes-json",
         "--list-fn-attrs", "--list-fn-attrs-json",
         "--list-fns-by-attr", "--list-fns-by-attr-json",
         "--fn-callgraph", "--fn-callers",
@@ -7543,6 +7544,30 @@ def test_stage59_agent_methods_json(tmp_path):
         {"name": "propose", "params": ["i32"], "return_ty": "i32"},
         {"name": "evaluate", "params": ["i32", "i32"], "return_ty": "i32"},
     ]}
+
+
+def test_stage59_dump_ast_hashes_json(tmp_path):
+    """Stage 59 follow-on / Tier 4 #13 polish: --dump-ast-hashes-json
+    emits {fn_name: 64hex} dict (full hashes, not short)."""
+    import json
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "dah.hx"
+    src.write_text(
+        "fn foo() -> i32 { 1 }\n"
+        "fn bar() -> i32 { 2 }\n",
+        encoding="utf-8",
+    )
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--dump-ast-hashes-json", str(src)],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0
+    result = json.loads(proc.stdout)
+    assert set(result.keys()) == {"foo", "bar"}
+    assert all(len(v) == 64 for v in result.values())
+    assert result["foo"] != result["bar"]
 
 
 def test_stage59_diff_program_hash_json_match(tmp_path):

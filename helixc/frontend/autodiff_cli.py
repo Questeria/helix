@@ -10,6 +10,8 @@ Primary usage:
 Introspection (Stage 28.9 + Stage 58 + Stage 59 polish):
     --dump-ast-hashes <file.hx>
         Print `<fn_name> : <12-char hex hash>` for every fn.
+    --dump-ast-hashes-json <file.hx>
+        Same as --dump-ast-hashes but JSON {fn_name: 64hex} dict.
     --ast-stats <file.hx>
         High-level program stats: fn/struct/module/attr counts.
     --ast-stats-json <file.hx>
@@ -370,6 +372,29 @@ def _dump_ast_hashes(path: str) -> int:
     for it in prog.items:
         if isinstance(it, A.FnDecl):
             print(f"{it.name} : {short_hash(structural_hash(it))}")
+    return 0
+
+
+def _dump_ast_hashes_json(path: str) -> int:
+    """Stage 59 follow-on / Tier 4 #13 polish: --dump-ast-hashes in
+    machine-readable JSON form.
+
+    Output schema:
+      {"<fn_name>": "<64hex>", ...}
+
+    Like --list-fns-json this uses FULL 64-hex hashes (not short_hash).
+    Differs from --list-fns-json in that the values are just the body
+    hash (no sig_hash), matching the structural-hash-only semantics of
+    the text form.
+    """
+    import json
+    src = _read_source(path)
+    prog = _parse_or_exit(src, path)
+    result = {
+        it.name: structural_hash(it)
+        for it in prog.items if isinstance(it, A.FnDecl)
+    }
+    print(json.dumps(result, sort_keys=True, indent=2))
     return 0
 
 
@@ -5149,6 +5174,13 @@ def main():
             # Restart 49 B1: bad-invocation rc=2.
             sys.exit(2)
         sys.exit(_dump_ast_hashes(args[0]))
+
+    if "--dump-ast-hashes-json" in flags:
+        if len(args) < 1:
+            print("usage: --dump-ast-hashes-json <file.hx>",
+                  file=sys.stderr)
+            sys.exit(2)
+        sys.exit(_dump_ast_hashes_json(args[0]))
 
     if "--ast-stats" in flags:
         if len(args) < 1:
