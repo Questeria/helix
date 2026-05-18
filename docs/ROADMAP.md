@@ -303,6 +303,22 @@ Re-sequenced after Stage 46-47 closed:
 - **Stage 58** ✅ **CLOSED 2026-05-18** — Tier 4 #13 content-
   addressed modules (program_hash + module_hash + fn_signature_hash
   core).
+- **Stage 66 Inc 1 SHIPPED 2026-05-18** — Tier 4 #16 borrow
+  checker scaffolding (see `docs/stage66-progress-2026-05-18.md`):
+  - **Architectural decision (made autonomously, user can
+    override)**: Rust 1.0-era simple borrow model (one `&mut`
+    xor any number of `&`, fn-call boundary as lifetime end,
+    no NLL, no lifetimes-as-parameters).
+  - New `Place` dataclass (frozen, hashable): identifies a
+    borrow/move target. Constructors for local / field / index.
+  - New `BorrowState` container with 4 status constants
+    (FREE/SHARED/MUTABLE/MOVED) and stub check methods.
+  - `Scope.borrows: BorrowState` field auto-initialized;
+    `Scope.define()` registers a Free place for new locals.
+  - **User-visible behavior unchanged**; all checks return True.
+  - Inc 2 will wire enforcement at &/&mut sites; Inc 3 block-
+    exit reconciliation; Inc 4 Copy marker; Inc 5 `move` keyword.
+
 - **Stage 65 Inc 1 SHIPPED 2026-05-18** — Tier 4 #17 multiple
   dispatch scaffolding (see `docs/stage65-progress-2026-05-18.md`):
   - Refactored flatten_impls registration: `dict[str, str]` →

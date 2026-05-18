@@ -523,11 +523,97 @@ PRIMITIVES = {
 }
 
 
+# Stage 66 Inc 1 — Tier 4 #16 borrow checker scaffolding.
+# Place identifies a borrow/move target (a local, a struct field,
+# or an array index). Inc 1 ships the data type only; Inc 2 will
+# wire enforcement at &/&mut sites; Inc 3 will add block-exit
+# union; Inc 4 will add Copy marker; Inc 5 will add the `move`
+# keyword + diagnostic with span-pointing "first borrowed here /
+# second borrow here" hints.
+@dataclass(frozen=True)
+class Place:
+    """A borrow/move-trackable location. Phase-0 covers locals,
+    struct fields (one level), and constant array indices.
+    Future Incs may add more cases.
+
+    Variants encoded as a tuple:
+      ("local", name)              — a bare variable
+      ("field", parent_place, str) — `parent.field_name`
+      ("index", parent_place, int) — `parent[const_int]`
+    """
+    parts: tuple
+
+    @classmethod
+    def local(cls, name: str) -> "Place":
+        return cls(parts=("local", name))
+
+    @classmethod
+    def field(cls, parent: "Place", field_name: str) -> "Place":
+        return cls(parts=("field", parent.parts, field_name))
+
+    @classmethod
+    def index(cls, parent: "Place", idx: int) -> "Place":
+        return cls(parts=("index", parent.parts, idx))
+
+
+# Stage 66 Inc 1 — borrow state tracked per Place. Encoded so
+# enforcement can be added cleanly in Inc 2-3.
+#   Shared(count): N outstanding `&` borrows (any number allowed)
+#   Mutable:        exactly one outstanding `&mut`
+#   Moved:          value has been moved out; further use rejected
+#   Free:           no outstanding borrows (default after place is
+#                    defined or after all borrows go out of scope)
+BORROW_FREE = "free"
+BORROW_SHARED = "shared"
+BORROW_MUTABLE = "mutable"
+BORROW_MOVED = "moved"
+
+
+@dataclass
+class BorrowState:
+    """Stage 66 Inc 1 — per-scope borrow tracker. Inc 1 ships the
+    container only; Inc 2 will wire the `check_borrow_shared`,
+    `check_borrow_mutable`, and `check_move` enforcement APIs.
+    Inc 3 will wire block-exit reconciliation across branches."""
+    state: dict[Place, str] = field(default_factory=dict)
+    shared_counts: dict[Place, int] = field(default_factory=dict)
+
+    def define(self, place: Place) -> None:
+        """Stage 66 Inc 1 — initialize a place as Free (no borrows)."""
+        self.state[place] = BORROW_FREE
+        self.shared_counts.pop(place, None)
+
+    def status(self, place: Place) -> str:
+        """Stage 66 Inc 1 — query the current borrow status of a
+        place. Returns BORROW_FREE if not tracked."""
+        return self.state.get(place, BORROW_FREE)
+
+    def check_borrow_shared(self, place: Place) -> bool:
+        """Stage 66 Inc 1 — STUB: returns True (always allow).
+        Inc 2 will enforce: ok if state in {FREE, SHARED}; reject
+        if MUTABLE or MOVED."""
+        return True
+
+    def check_borrow_mutable(self, place: Place) -> bool:
+        """Stage 66 Inc 1 — STUB: returns True (always allow).
+        Inc 2 will enforce: ok only if state == FREE."""
+        return True
+
+    def check_move(self, place: Place) -> bool:
+        """Stage 66 Inc 1 — STUB: returns True (always allow).
+        Inc 2 will enforce: ok only if state == FREE."""
+        return True
+
+
 @dataclass
 class Scope:
     parent: Optional["Scope"] = None
     locals: dict[str, Type] = field(default_factory=dict)
     mutables: set[str] = field(default_factory=set)
+    # Stage 66 Inc 1 — per-scope borrow state. Inc 2-5 will wire
+    # enforcement at expression sites; Inc 1 just establishes the
+    # tracker so subsequent Incs have a place to attach.
+    borrows: BorrowState = field(default_factory=BorrowState)
 
     def lookup(self, name: str) -> Optional[Type]:
         if name in self.locals:
@@ -549,6 +635,8 @@ class Scope:
             self.mutables.add(name)
         else:
             self.mutables.discard(name)
+        # Stage 66 Inc 1 — initialize borrow state for the new place.
+        self.borrows.define(Place.local(name))
 
 
 @dataclass

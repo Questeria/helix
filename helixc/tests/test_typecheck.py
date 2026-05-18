@@ -4008,6 +4008,59 @@ def test_flatten_impls_rejects_same_name_methods():
     assert ex.value.trap_id == 74002
 
 
+def test_stage66_inc1_borrow_checker_scaffolding():
+    """Stage 66 Inc 1 — Tier 4 #16 borrow checker scaffolding.
+
+    Inc 1 ships the data types only; no enforcement yet. Inc 2-5
+    will wire enforcement at expression sites + block-exit
+    reconciliation + Copy-marker + `move` keyword.
+
+    This pin verifies the data structures are in place:
+    - Place class with .local / .field / .index constructors
+    - BorrowState container with status / check_borrow_shared /
+      check_borrow_mutable / check_move methods (all stubs in
+      Inc 1; returning True / FREE)
+    - Scope.borrows field auto-initialized
+    - Scope.define() registers a Free place for the new local
+    """
+    from helixc.frontend.typecheck import (
+        Place, BorrowState, BORROW_FREE, BORROW_SHARED,
+        BORROW_MUTABLE, BORROW_MOVED, Scope, TyPrim,
+    )
+
+    # Place constructors compose:
+    p_local = Place.local("x")
+    p_field = Place.field(p_local, "y")
+    p_index = Place.index(p_local, 3)
+    assert p_local.parts == ("local", "x")
+    assert p_field.parts == ("field", ("local", "x"), "y")
+    assert p_index.parts == ("index", ("local", "x"), 3)
+    # Place is hashable + equal-by-value (frozen dataclass).
+    assert Place.local("x") == Place.local("x")
+    assert hash(Place.local("x")) == hash(Place.local("x"))
+
+    # BorrowState container:
+    bs = BorrowState()
+    assert bs.status(p_local) == BORROW_FREE  # default
+    bs.define(p_local)
+    assert bs.status(p_local) == BORROW_FREE
+    # Inc 1 stubs: all checks return True (no enforcement).
+    assert bs.check_borrow_shared(p_local) is True
+    assert bs.check_borrow_mutable(p_local) is True
+    assert bs.check_move(p_local) is True
+
+    # Status constants are distinct strings.
+    assert len({BORROW_FREE, BORROW_SHARED, BORROW_MUTABLE,
+                 BORROW_MOVED}) == 4
+
+    # Scope auto-initializes a BorrowState.
+    scope = Scope()
+    assert isinstance(scope.borrows, BorrowState)
+    # Scope.define registers a Free place for the new local.
+    scope.define("v", TyPrim("i32"), is_mut=False)
+    assert scope.borrows.status(Place.local("v")) == BORROW_FREE
+
+
 def test_stage65_inc1_multi_target_dispatch_scaffolding():
     """Stage 65 Inc 1 — Tier 4 #17 multiple dispatch scaffolding.
     The flatten_impls internal data structure is now
