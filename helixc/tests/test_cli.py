@@ -5869,7 +5869,7 @@ def test_stage59_autodiff_cli_help_mentions_polish_flags():
         "--list-fns-by-attr",
         "--fn-callgraph", "--fn-callers",
         "--fn-callgraph-all", "--fn-callers-all",
-        "--fn-reachable-from",
+        "--fn-reachable-from", "--fn-reachable-to",
         "--fn-leaves", "--fn-roots",
         "--fn-recursive", "--fn-cycles",
         "--check-program-hash",
@@ -7372,6 +7372,52 @@ def test_stage59_fn_roots(tmp_path):
     # util has 2 callers → not root; entry_a, entry_b, truly_dead
     # never called locally → roots.
     assert lines == ["entry_a", "entry_b", "truly_dead"]
+
+
+def test_stage59_fn_reachable_to_inverse_transitive(tmp_path):
+    """Stage 59 follow-on / Tier 4 #13 polish: --fn-reachable-to does
+    BFS over the REVERSED callgraph: who can reach target?"""
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "r.hx"
+    src.write_text(
+        "fn z() -> i32 { 42 }\n"
+        "fn c() -> i32 { z() }\n"
+        "fn b() -> i32 { c() }\n"
+        "fn a() -> i32 { b() }\n"
+        "fn dead() -> i32 { 0 }\n",
+        encoding="utf-8",
+    )
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--fn-reachable-to", str(src), "z"],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0
+    lines = [l for l in proc.stdout.splitlines() if l]
+    # a → b → c → z chain; all 4 can reach z. dead cannot.
+    assert lines == ["a", "b", "c", "z"]
+
+
+def test_stage59_fn_reachable_to_isolated(tmp_path):
+    """Stage 59 follow-on: a target with no callers returns just
+    itself."""
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "iso.hx"
+    src.write_text(
+        "fn isolated() -> i32 { 0 }\n"
+        "fn other() -> i32 { 1 }\n",
+        encoding="utf-8",
+    )
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--fn-reachable-to", str(src), "isolated"],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0
+    lines = [l for l in proc.stdout.splitlines() if l]
+    assert lines == ["isolated"]
 
 
 def test_stage59_fn_reachable_from_transitive(tmp_path):

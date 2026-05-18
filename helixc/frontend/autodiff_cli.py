@@ -61,6 +61,8 @@ Introspection (Stage 28.9 + Stage 58 + Stage 59 polish):
         Whole-program INVERSE callgraph as JSON {fn: [callers...]}.
     --fn-reachable-from <file.hx> <entry_fn>
         Transitive closure: BFS over callgraph from entry_fn (dead-code).
+    --fn-reachable-to <file.hx> <target_fn>
+        Inverse transitive closure: who can reach target_fn (impact zone).
     --fn-leaves <file.hx>
         List 'leaf' fns (those that call no other fn) — sorted, one per line.
     --fn-roots <file.hx>
@@ -1575,6 +1577,83 @@ def _fn_roots(path: str) -> int:
     return 0
 
 
+def _fn_reachable_to(path: str, target_name: str) -> int:
+    """Stage 59 follow-on / Tier 4 #13 polish: inverse transitive
+    callgraph closure. Print all fns that can transitively reach
+    `target_name` via some call chain (BFS over the reversed
+    callgraph).
+
+    Output: one fn per line, sorted alphabetically. Includes
+    `target_name` itself.
+
+    Inverse of --fn-reachable-from. Pair use cases:
+    - 'Who depends on fn X?' transitively (impact zone of a
+      signature change at any caller-depth)
+    - Find all fns whose behavior changes if X changes
+    - Test-coverage planning: any fn in this set's tests must
+      exercise X's behavior
+
+    Exit 0 on success, 1 if target_name not found.
+    """
+    from .ast_walker import iter_fn_decls
+    src = _read_source(path)
+    prog = _parse_or_exit(src, path)
+
+    all_fns = list(iter_fn_decls(prog))
+    all_names = {fn.name for fn in all_fns}
+    if target_name not in all_names:
+        print(f"error: autodiff_cli: fn {target_name!r} not found in {path}",
+              file=sys.stderr)
+        return 1
+
+    # Build inverse adjacency: target_fn -> set of callers (local only).
+    callers: dict[str, set] = {fn.name: set() for fn in all_fns}
+
+    def _collect_calls(node, from_fn: str) -> None:
+        if node is None:
+            return
+        if isinstance(node, A.Call):
+            tgt = None
+            if isinstance(node.callee, A.Name):
+                tgt = node.callee.name
+            elif (isinstance(node.callee, A.Path)
+                  and node.callee.segments):
+                tgt = node.callee.segments[-1]
+            if tgt is not None and tgt in all_names:
+                callers[tgt].add(from_fn)
+        if hasattr(node, "__dataclass_fields__"):
+            for f in node.__dataclass_fields__:
+                v = getattr(node, f)
+                if isinstance(v, list):
+                    for x in v:
+                        _collect_calls(x, from_fn)
+                elif isinstance(v, tuple):
+                    for x in v:
+                        _collect_calls(x, from_fn)
+                else:
+                    _collect_calls(v, from_fn)
+
+    for fn in all_fns:
+        if fn.body is not None:
+            _collect_calls(fn.body, fn.name)
+
+    # BFS in the reverse direction from target.
+    reachable: set = {target_name}
+    frontier: list = [target_name]
+    while frontier:
+        next_frontier: list = []
+        for v in frontier:
+            for w in callers.get(v, set()):
+                if w not in reachable:
+                    reachable.add(w)
+                    next_frontier.append(w)
+        frontier = next_frontier
+
+    for name in sorted(reachable):
+        print(name)
+    return 0
+
+
 def _fn_reachable_from(path: str, entry_name: str) -> int:
     """Stage 59 follow-on / Tier 4 #13 polish: transitive callgraph
     closure from an entry-point fn. BFS over the local callgraph
@@ -2389,6 +2468,13 @@ def main():
                   file=sys.stderr)
             sys.exit(2)
         sys.exit(_fn_reachable_from(args[0], args[1]))
+
+    if "--fn-reachable-to" in flags:
+        if len(args) < 2:
+            print("usage: --fn-reachable-to <file.hx> <target_fn>",
+                  file=sys.stderr)
+            sys.exit(2)
+        sys.exit(_fn_reachable_to(args[0], args[1]))
 
     if "--fn-leaves" in flags:
         if len(args) < 1:
