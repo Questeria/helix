@@ -5907,6 +5907,7 @@ def test_stage59_autodiff_cli_help_mentions_polish_flags():
         "--validate-help-docstring-json",
         "--validate-json-parity",
         "--validate-json-parity-json",
+        "--ast-node-counts", "--ast-node-counts-json",
         "--list-fn-attrs", "--list-fn-attrs-json",
         "--list-fns-by-attr", "--list-fns-by-attr-json",
         "--fn-callgraph", "--fn-callers",
@@ -7569,6 +7570,58 @@ def test_stage59_agent_methods_json(tmp_path):
         {"name": "propose", "params": ["i32"], "return_ty": "i32"},
         {"name": "evaluate", "params": ["i32", "i32"], "return_ty": "i32"},
     ]}
+
+
+def test_stage59_ast_node_counts_text(tmp_path):
+    """Stage 59 follow-on / Tier 4 #13 polish: --ast-node-counts
+    prints per-class node counts sorted by frequency."""
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "anc.hx"
+    src.write_text(
+        "fn foo() -> i32 { 1 + 2 }\n"
+        "fn bar() -> i32 { 3 + 4 }\n",
+        encoding="utf-8",
+    )
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--ast-node-counts", str(src)],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0
+    out = proc.stdout
+    # FnDecl appears 2 times (2 fns).
+    assert "FnDecl: 2" in out
+    # Binary appears at least 2 times (one + per fn).
+    assert "Binary:" in out
+
+
+def test_stage59_ast_node_counts_json(tmp_path):
+    """Stage 59 follow-on / Tier 4 #13 polish: --ast-node-counts-json
+    emits {counts, total_nodes, n_classes}."""
+    import json
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "ancj.hx"
+    src.write_text(
+        "fn foo() -> i32 { 1 + 2 }\n",
+        encoding="utf-8",
+    )
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--ast-node-counts-json", str(src)],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0
+    result = json.loads(proc.stdout)
+    for key in ("counts", "total_nodes", "n_classes"):
+        assert key in result
+    # Single fn → FnDecl count is 1.
+    assert result["counts"].get("FnDecl") == 1
+    # n_classes matches counts size.
+    assert result["n_classes"] == len(result["counts"])
+    # total_nodes is the sum.
+    assert result["total_nodes"] == sum(result["counts"].values())
 
 
 def test_stage59_validate_json_parity_text():

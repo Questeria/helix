@@ -16,6 +16,12 @@ Introspection (Stage 28.9 + Stage 58 + Stage 59 polish):
         High-level program stats: fn/struct/module/attr counts.
     --ast-stats-json <file.hx>
         Same as --ast-stats but machine-readable JSON output.
+    --ast-node-counts <file.hx>
+        Count every AST node class in the parsed program (finer-
+        grained than --ast-stats). Sorted descending by frequency.
+    --ast-node-counts-json <file.hx>
+        Same as --ast-node-counts but JSON
+        {counts, total_nodes, n_classes}.
     --program-hash <file.hx>
         Print the whole-program structural hash (64 hex).
     --program-signature-hash <file.hx>
@@ -422,6 +428,96 @@ def _ast_stats_json(path: str) -> int:
         "total_attrs": sum(len(f.attrs) for f in fns),
     }
     print(json.dumps(result, sort_keys=True, indent=2))
+    return 0
+
+
+def _ast_node_counts(path: str) -> int:
+    """Stage 59 follow-on / Tier 4 #13 polish: count every AST node
+    class used in the parsed program. Finer-grained than --ast-stats
+    (which only covers fn/struct/module + a few attribute markers).
+
+    Output: one line per AST class as '<class_name>: N', sorted
+    descending by count (most-used first).
+
+    Use case:
+    - Identify which language features the codebase actually uses
+    - Detect feature drift between commits (e.g., new Match nodes
+      appearing means pattern destructuring is being adopted)
+    - Inform compiler optimization priorities (most-frequent nodes
+      first)
+
+    Exit 0 always (no failure mode beyond parse).
+    """
+    src = _read_source(path)
+    prog = _parse_or_exit(src, path)
+
+    counts: dict[str, int] = {}
+
+    def _walk(node) -> None:
+        if node is None:
+            return
+        if hasattr(node, "__dataclass_fields__"):
+            cls = type(node).__name__
+            counts[cls] = counts.get(cls, 0) + 1
+            for f in node.__dataclass_fields__:
+                v = getattr(node, f)
+                if isinstance(v, list):
+                    for x in v:
+                        _walk(x)
+                elif isinstance(v, tuple):
+                    for x in v:
+                        _walk(x)
+                else:
+                    _walk(v)
+
+    for it in prog.items:
+        _walk(it)
+
+    for cls in sorted(counts, key=lambda c: (-counts[c], c)):
+        print(f"{cls}: {counts[cls]}")
+    return 0
+
+
+def _ast_node_counts_json(path: str) -> int:
+    """Stage 59 follow-on / Tier 4 #13 polish: --ast-node-counts in
+    machine-readable JSON form.
+
+    Output schema:
+      {"counts": {"<class_name>": N, ...},
+       "total_nodes": N,
+       "n_classes": N}
+    """
+    import json
+    src = _read_source(path)
+    prog = _parse_or_exit(src, path)
+
+    counts: dict[str, int] = {}
+
+    def _walk(node) -> None:
+        if node is None:
+            return
+        if hasattr(node, "__dataclass_fields__"):
+            cls = type(node).__name__
+            counts[cls] = counts.get(cls, 0) + 1
+            for f in node.__dataclass_fields__:
+                v = getattr(node, f)
+                if isinstance(v, list):
+                    for x in v:
+                        _walk(x)
+                elif isinstance(v, tuple):
+                    for x in v:
+                        _walk(x)
+                else:
+                    _walk(v)
+
+    for it in prog.items:
+        _walk(it)
+
+    print(json.dumps({
+        "counts": counts,
+        "total_nodes": sum(counts.values()),
+        "n_classes": len(counts),
+    }, sort_keys=True, indent=2))
     return 0
 
 
@@ -7253,6 +7349,20 @@ def main():
             print("usage: --ast-stats <file.hx>", file=sys.stderr)
             sys.exit(2)
         sys.exit(_ast_stats(args[0]))
+
+    if "--ast-node-counts" in flags:
+        if len(args) < 1:
+            print("usage: --ast-node-counts <file.hx>",
+                  file=sys.stderr)
+            sys.exit(2)
+        sys.exit(_ast_node_counts(args[0]))
+
+    if "--ast-node-counts-json" in flags:
+        if len(args) < 1:
+            print("usage: --ast-node-counts-json <file.hx>",
+                  file=sys.stderr)
+            sys.exit(2)
+        sys.exit(_ast_node_counts_json(args[0]))
 
     if "--ast-stats-json" in flags:
         if len(args) < 1:
