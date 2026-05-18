@@ -51,6 +51,8 @@ Introspection (Stage 28.9 + Stage 58 + Stage 59 polish):
         Same as --list-uses but JSON output with raw segments.
     --list-consts <file.hx>
         Enumerate top-level ConstDecls as '<name>: <ty>' lines.
+    --list-enums <file.hx>
+        Enumerate top-level EnumDecls as '<name> variants=N' lines.
     --list-consts-json <file.hx>
         Same as --list-consts but machine-readable JSON output.
     --const-value <file.hx> <const_name>
@@ -3820,6 +3822,24 @@ def _const_value(path: str, const_name: str) -> int:
     return 1
 
 
+def _list_enums(path: str) -> int:
+    """Stage 59 follow-on / Tier 4 #13 polish: enumerate top-level
+    EnumDecls in a file.
+
+    Output: one line per enum as '<name> variants=N' (declaration
+    order; not sorted — declaration order affects ABI).
+
+    Extends the top-level item enumeration set to cover EnumDecl
+    (joining FnDecl/StructDecl/ModBlock/UseDecl/ConstDecl).
+    """
+    src = _read_source(path)
+    prog = _parse_or_exit(src, path)
+    for it in prog.items:
+        if isinstance(it, A.EnumDecl):
+            print(f"{it.name} variants={len(it.variants)}")
+    return 0
+
+
 def _list_consts(path: str) -> int:
     """Stage 59 follow-on / Tier 4 #13 polish: enumerate top-level
     ConstDecls in a file.
@@ -4238,6 +4258,12 @@ def main():
             print("usage: --list-consts <file.hx>", file=sys.stderr)
             sys.exit(2)
         sys.exit(_list_consts(args[0]))
+
+    if "--list-enums" in flags:
+        if len(args) < 1:
+            print("usage: --list-enums <file.hx>", file=sys.stderr)
+            sys.exit(2)
+        sys.exit(_list_enums(args[0]))
 
     if "--list-consts-json" in flags:
         if len(args) < 1:

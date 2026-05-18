@@ -5869,6 +5869,7 @@ def test_stage59_autodiff_cli_help_mentions_polish_flags():
         "--list-uses", "--list-uses-json",
         "--list-consts", "--list-consts-json",
         "--const-value", "--const-value-json",
+        "--list-enums",
         "--list-fn-attrs", "--list-fn-attrs-json",
         "--list-fns-by-attr", "--list-fns-by-attr-json",
         "--fn-callgraph", "--fn-callers",
@@ -7479,6 +7480,27 @@ def test_stage59_list_consts_json(tmp_path):
         {"name": "MAX_BUF", "ty": "i32"},
         {"name": "PI", "ty": "f64"},
     ]}
+
+
+def test_stage59_list_enums(tmp_path):
+    """Stage 59 follow-on / Tier 4 #13 polish: --list-enums enumerates
+    top-level EnumDecls with variant count in declaration order."""
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "e.hx"
+    src.write_text(
+        "enum Color { Red, Green, Blue }\n"
+        "enum Shape { Circle, Square, Triangle, Hex }\n",
+        encoding="utf-8",
+    )
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--list-enums", str(src)],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0
+    lines = [l for l in proc.stdout.splitlines() if l]
+    assert lines == ["Color variants=3", "Shape variants=4"]
 
 
 def test_stage59_list_consts(tmp_path):
