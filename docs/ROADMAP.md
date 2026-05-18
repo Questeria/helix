@@ -109,27 +109,29 @@ Re-sequenced after Stage 46-47 closed:
   verification CLEAN. 48 Stage 49 tests + 78 Stage 46+48
   unchanged. Self-host cascade preserved. dogfood_16 + dogfood_17
   still exit 42.
-- **Stage 50** (ABORTED 2026-05-17): bootstrap `grad_rev_all`
-  infrastructure swap. Inc 1 (commit f4e94fc) + Inc 2 (commit
-  76b7735) added multi-bucket helpers and swapped the production
-  caller, but gate-1 silent-failure audit caught a HIGH cascade-
-  break: `scripts/selfhost_cascade.py` fails at G2 with SIGILL
-  (exit 132). Bisection showed the regression isn't algorithmic
-  in the new helpers — adding even 2 trivial `__probe_a/b` fns
-  to Stage 49 HEAD reproduces the SIGILL. Hidden coupling between
-  bootstrap source-size and the Python seed compiler. The smaller
-  `test_selfhost_cascade.py` unit tests passed because they stub
-  the report formatter rather than running the real cascade —
-  a coverage gap the Stage 49 baseline didn't surface. Stage 50
-  reverted in commit [next] (parser.hx restored to a410b67).
-  Closure docs + audit findings retained as historical record
-  (docs/stage50-plan-2026-05-17.md + audit-stage50-*.md).
-- **Stage 50 follow-up** (replaces both Stage 50 and Stage 51):
-  root-cause the seed-compiler source-size fragility FIRST,
-  then port the multi-bucket infrastructure + single-walk
-  algorithm together once the cascade can tolerate source
-  changes. Estimated 2-3 stages depending on how the
-  fragility's root cause splits.
+- **Stage 50** ✅ **RESURRECTED 2026-05-17** (commit a35e628):
+  bootstrap `grad_rev_all` multi-bucket infrastructure swap.
+  Inc 1 (f4e94fc) + Inc 2 (76b7735) originally aborted at
+  f678aa3 due to G2 cascade-break with SIGILL rc=132. Root
+  cause found via Exp C (after Exp A ruled out H4 buffer
+  overflow + Exp B ruled out H1 stack overflow): bootstrap
+  codegen `fn_table` capacity overflow. Stage 50 Inc 1+2 added
+  16 new fns to parser.hx, pushing total to 527, exceeding
+  cap 512. The CRITICAL consequence: `main` itself — being
+  the LAST declared fn via the cascade driver — was among
+  the overflow casualties; its CALL site got patched with
+  `ud2 + 3 nops` (unresolved-CALL stub) → entry-point SIGILL.
+  5-line fix in kovc.hx: bumped cap 512→1024. Cascade verified
+  GREEN: G2..G11 byte-identical, smoke 4/4 PASS, Stage 52
+  modal tests still 116/116 PASS.
+- **Stage 51** (next, picks up Stage 50 Inc 3 deferral):
+  algorithmic switch — true single-walk grouping in the
+  grad_rev_all caller loop. With Stage 50's Inc 1+2 multi-
+  bucket infrastructure now restored + cascade-stable,
+  Stage 51's delta is the loop refactor itself (~150 lines
+  per the original plan). Tier 1 #3 (multi-output reverse-
+  mode AD) finally closes end-to-end (Python side at Stage
+  36; bootstrap algorithmic side at Stage 51).
 - **Stage 52** ✅ **CLOSED 2026-05-17** (gates 1-16 + Inc 1-13
   + Stage 53 Inc 1+2 shipped, 22+ launder paths caught via 11
   wrapper-AST kinds, 3-clean-gate closure protocol satisfied
