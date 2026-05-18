@@ -345,6 +345,18 @@ Re-sequenced after Stage 46-47 closed:
   - Inc 2 will wire enforcement at &/&mut sites; Inc 3 block-
     exit reconciliation; Inc 4 Copy marker; Inc 5 `move` keyword.
 
+- **Stage 65 Inc 4 SHIPPED 2026-05-18** — Tier 4 #17 dispatch
+  via let-binding type annotations:
+  - New `_collect_let_type_hints(stmts, out)` walks fn body
+    collecting `let NAME: TYNAME = ...` bindings.
+  - Module-level `_LET_HINTS` populated per-fn-body in
+    `_rewrite_method_calls`; also seeded from fn param types.
+  - `_receiver_static_type_hint` extended to consult let_hints
+    for bare Name receivers.
+  - Pattern works: `let p: Pt = ...; p.area()` → `Pt__area(p)`.
+  - 4 new tests; 12/12 Stage 65 tests + 223 self-host GREEN.
+  - Inc 5 will add specificity rule + autotune integration.
+
 - **Stage 65 Inc 3 SHIPPED 2026-05-18** — Tier 4 #17 type-driven
   dispatch via syntactic hints:
   - New `_receiver_static_type_hint(receiver)` helper extracts a

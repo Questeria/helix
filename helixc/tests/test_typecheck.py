@@ -4008,6 +4008,160 @@ def test_flatten_impls_rejects_same_name_methods():
     assert ex.value.trap_id == 74002
 
 
+def test_stage65_inc4_dispatch_via_let_binding_type_hint():
+    """Stage 65 Inc 4 — Tier 4 #17 multi-dispatch via let-binding
+    type annotation. When the receiver is a bare Name and the
+    enclosing fn has a `let NAME: TYNAME = ...` binding (or a
+    matching fn param), the resolver uses the declared type to
+    pick the multi-dispatch target.
+
+    Pattern:
+        let p: Pt = ...;
+        p.area();          // dispatches to Pt__area via let hint
+    """
+    from helixc.frontend.flatten_impls import _resolve_method_target
+    from helixc.frontend import ast_nodes as A
+
+    span = A.Span(0, 0)
+    m2t = {"area": ["Pt", "Line"]}
+    let_hints = {"p": "Pt", "ln": "Line"}
+
+    # Bare-Name receiver with let-hint.
+    p_name = A.Name(span=span, name="p", generics=[])
+    target = _resolve_method_target(
+        "area", m2t, span,
+        receiver=p_name, let_hints=let_hints)
+    assert target == "Pt"
+
+    ln_name = A.Name(span=span, name="ln", generics=[])
+    target = _resolve_method_target(
+        "area", m2t, span,
+        receiver=ln_name, let_hints=let_hints)
+    assert target == "Line"
+
+
+def test_stage65_inc4_dispatch_falls_back_when_let_hint_missing():
+    """Stage 65 Inc 4: bare Name receiver with NO let-hint still
+    raises DuplicateMethodError (fail-closed preserved)."""
+    from helixc.frontend.flatten_impls import (
+        _resolve_method_target, DuplicateMethodError,
+    )
+    from helixc.frontend import ast_nodes as A
+    import pytest as _pt
+
+    span = A.Span(0, 0)
+    m2t = {"area": ["Pt", "Line"]}
+    # No hint for "unknown_var".
+    let_hints = {"p": "Pt"}
+    unknown = A.Name(span=span, name="unknown_var", generics=[])
+    with _pt.raises(DuplicateMethodError):
+        _resolve_method_target(
+            "area", m2t, span,
+            receiver=unknown, let_hints=let_hints)
+
+
+def test_stage65_inc4_collect_let_type_hints_walks_simple_lets():
+    """Stage 65 Inc 4: _collect_let_type_hints picks up simple
+    `let NAME: TYNAME = ...` bindings."""
+    from helixc.frontend.flatten_impls import _collect_let_type_hints
+    from helixc.frontend import ast_nodes as A
+
+    span = A.Span(0, 0)
+    stmts = [
+        A.Let(span=span, name="a", is_mut=False,
+              ty=A.TyName(span=span, name="Pt"),
+              value=A.IntLit(span=span, value=0)),
+        A.Let(span=span, name="b", is_mut=True,
+              ty=A.TyName(span=span, name="Line"),
+              value=A.IntLit(span=span, value=0)),
+        # Untyped let — should NOT contribute.
+        A.Let(span=span, name="c", is_mut=False, ty=None,
+              value=A.IntLit(span=span, value=42)),
+    ]
+    out: dict[str, str] = {}
+    _collect_let_type_hints(stmts, out)
+    assert out == {"a": "Pt", "b": "Line"}
+
+
+def test_stage65_inc4_end_to_end_let_typed_dispatch():
+    """Stage 65 Inc 4 end-to-end: flatten_impls correctly rewrites
+    `p.area()` to `Pt__area(p)` when there's a `let p: Pt = ...`
+    binding earlier in the same fn body."""
+    from helixc.frontend.flatten_impls import flatten_impls
+    from helixc.frontend import ast_nodes as A
+
+    span = A.Span(0, 0)
+
+    def mk_struct(name):
+        return A.StructDecl(
+            span=span, name=name, generics=[],
+            fields=[A.FnParam(span=span, name="x",
+                              ty=A.TyName(span=span, name="f32"),
+                              is_mut=False)],
+            is_pub=False,
+        )
+
+    def mk_method(target):
+        return A.FnDecl(
+            span=span, name="area", generics=[],
+            params=[A.FnParam(span=span, name="self",
+                              ty=A.TyName(span=span, name=target),
+                              is_mut=False)],
+            return_ty=A.TyName(span=span, name="f32"),
+            where_clauses=[],
+            body=A.Block(span=span, stmts=[],
+                         final_expr=A.FloatLit(
+                             span=span, value=1.0,
+                             type_suffix="f32")),
+            attrs=["overload"], is_pub=False,
+        )
+
+    # let p: Pt = Pt { x: 1.0 }; p.area()
+    let_stmt = A.Let(
+        span=span, name="p", is_mut=False,
+        ty=A.TyName(span=span, name="Pt"),
+        value=A.StructLit(span=span, name="Pt",
+                           fields=[("x", A.FloatLit(
+                               span=span, value=1.0,
+                               type_suffix="f32"))]),
+    )
+    method_call = A.Call(
+        span=span,
+        callee=A.Field(
+            span=span,
+            obj=A.Name(span=span, name="p", generics=[]),
+            name="area"),
+        args=[],
+    )
+    caller = A.FnDecl(
+        span=span, name="user", generics=[],
+        params=[],
+        return_ty=A.TyName(span=span, name="f32"),
+        where_clauses=[],
+        body=A.Block(span=span, stmts=[let_stmt],
+                     final_expr=method_call),
+        attrs=[], is_pub=False,
+    )
+    prog = A.Program(module=None,
+                     items=[mk_struct("Pt"), mk_struct("Line"),
+                            A.ImplBlock(span=span, target="Pt",
+                                         methods=[mk_method("Pt")],
+                                         trait_name=None),
+                            A.ImplBlock(span=span, target="Line",
+                                         methods=[mk_method("Line")],
+                                         trait_name=None),
+                            caller])
+    n = flatten_impls(prog)
+    assert n == 2
+    # Verify p.area() rewrote to Pt__area(p).
+    caller_after = next(it for it in prog.items
+                        if hasattr(it, "name") and it.name == "user")
+    final = caller_after.body.final_expr
+    assert isinstance(final, A.Call)
+    assert isinstance(final.callee, A.Name)
+    assert final.callee.name == "Pt__area"
+
+
 def test_stage65_inc3_dispatch_via_structlit_receiver():
     """Stage 65 Inc 3 — Tier 4 #17 type-driven multi-dispatch via
     syntactic hint. When a method-call receiver is a StructLit

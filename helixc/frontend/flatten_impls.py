@@ -158,6 +158,10 @@ def flatten_impls(prog: A.Program) -> int:
 # (used by DuplicateMethodError diagnostic). Set by flatten_impls
 # before walking and cleared after.
 _FIRST_SPAN: "dict[str, A.Span]" = {}
+# Stage 65 Inc 4 — module-level let-binding type hints. Built
+# per-fn-body in _rewrite_method_calls and read by
+# _resolve_method_target via the receiver-hint helper.
+_LET_HINTS: "dict[str, str]" = {}
 
 
 def _rewrite_method_calls(prog: A.Program,
@@ -165,28 +169,58 @@ def _rewrite_method_calls(prog: A.Program,
                             first_span: "dict[str, A.Span] | None" = None
                             ) -> None:
     # Stage 65 Inc 1 — multi-target dispatch scaffolding.
-    global _FIRST_SPAN
+    global _FIRST_SPAN, _LET_HINTS
     _FIRST_SPAN = first_span or {}
     try:
         for item in prog.items:
             if isinstance(item, A.FnDecl):
+                # Stage 65 Inc 4 — collect let-binding type hints
+                # from the fn body before walking it. Also seed
+                # from fn params (param type is a hint for usages
+                # of the param name).
+                _LET_HINTS = {}
+                for p in item.params:
+                    if isinstance(p.ty, A.TyName):
+                        _LET_HINTS[p.name] = p.ty.name
+                if isinstance(item.body, A.Block):
+                    _collect_let_type_hints(
+                        item.body.stmts, _LET_HINTS)
                 item.body = _rewrite_expr(item.body, m2t)
+        _LET_HINTS = {}
     finally:
         _FIRST_SPAN = {}
+        _LET_HINTS = {}
 
 
-def _receiver_static_type_hint(receiver: A.Expr) -> "str | None":
-    """Stage 65 Inc 3 — extract a static type name from a receiver
-    expression where the syntactic shape unambiguously fixes the
-    type. Handles:
+def _collect_let_type_hints(stmt_list: "list[A.Stmt]",
+                              out: "dict[str, str]") -> None:
+    """Stage 65 Inc 4 — walk a list of statements collecting
+    `let NAME: TYNAME = ...` bindings into out (name → type-name).
+    Only handles explicit type annotations of the simple `TyName`
+    form (not generic / nested / inferred). This is the cheapest
+    pre-typecheck type-hint source for bare-Name receivers, and
+    covers the common pattern `let p: Pt = ...; p.area()`.
+    """
+    for st in stmt_list:
+        if isinstance(st, A.Let) and st.ty is not None:
+            if isinstance(st.ty, A.TyName):
+                out[st.name] = st.ty.name
 
-    - StructLit:  `Pt { x: 1 }.method()` → "Pt"
-    - Cast:        `(x as Pt).method()`   → "Pt" (for TyName casts)
+
+def _receiver_static_type_hint(
+        receiver: A.Expr,
+        let_hints: "dict[str, str] | None" = None) -> "str | None":
+    """Stage 65 Inc 3-4 — extract a static type name from a receiver
+    expression. Handles:
+
+    - StructLit:  `Pt { x: 1 }.method()` → "Pt"           (Inc 3)
+    - Cast:        `(x as Pt).method()`   → "Pt"           (Inc 3)
+    - Name:        `p.method()` with `let p: Pt = ...`     (Inc 4)
+      uses the let_hints map built by _collect_let_type_hints
 
     Returns None for expressions where the type can't be inferred
-    syntactically (Name, Field, Call, ...) — those fall back to
-    fail-closed DuplicateMethodError until typecheck-integrated
-    dispatch ships (Inc 4+).
+    (Field, Call, complex expressions). Inc 5 will run a real
+    typecheck-integrated pass for these.
     """
     if isinstance(receiver, A.StructLit):
         return receiver.name
@@ -194,13 +228,16 @@ def _receiver_static_type_hint(receiver: A.Expr) -> "str | None":
         target_ty = receiver.target_ty
         if isinstance(target_ty, A.TyName):
             return target_ty.name
+    if isinstance(receiver, A.Name) and let_hints is not None:
+        return let_hints.get(receiver.name)
     return None
 
 
 def _resolve_method_target(method_name: str,
                             m2t: "dict[str, list[str]]",
                             call_span: A.Span,
-                            receiver: "A.Expr | None" = None) -> str:
+                            receiver: "A.Expr | None" = None,
+                            let_hints: "dict[str, str] | None" = None) -> str:
     """Stage 65 Inc 1 — pick the single target for a method-call
     rewrite. Raises DuplicateMethodError when ambiguous.
 
@@ -223,9 +260,10 @@ def _resolve_method_target(method_name: str,
     if len(targets) == 1:
         return targets[0]
     if len(targets) >= 2:
-        # Stage 65 Inc 3 — type-driven dispatch via syntactic hint.
+        # Stage 65 Inc 3-4 — type-driven dispatch via syntactic
+        # hint or let-binding type annotation.
         if receiver is not None:
-            hint = _receiver_static_type_hint(receiver)
+            hint = _receiver_static_type_hint(receiver, let_hints)
             if hint is not None and hint in targets:
                 return hint
         sp = _FIRST_SPAN.get(method_name, call_span)
@@ -243,12 +281,13 @@ def _rewrite_expr(e: A.Expr, m2t: "dict[str, list[str]]") -> A.Expr:
         new_args = [_rewrite_expr(a, m2t) for a in e.args]
         # Method-call: Call(callee=Field(obj, name), args)
         if isinstance(e.callee, A.Field) and e.callee.name in m2t:
-            # Stage 65 Inc 3 — pass the (un-rewritten) receiver to
-            # the resolver so syntactic type hints (StructLit /
-            # Cast target) can drive multi-target dispatch.
+            # Stage 65 Inc 3-4 — pass the (un-rewritten) receiver +
+            # let-binding hints to the resolver so syntactic +
+            # let-typed-binding cases can drive multi-target dispatch.
             target = _resolve_method_target(
                 e.callee.name, m2t, e.span,
-                receiver=e.callee.obj)
+                receiver=e.callee.obj,
+                let_hints=_LET_HINTS)
             new_callee = A.Name(span=e.callee.span,
                                 name=target + "__" + e.callee.name,
                                 generics=[])
