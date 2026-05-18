@@ -1393,6 +1393,155 @@ def test_stage54_gate5_reverse_mode_min_max_warns_on_both_args_dep():
     )
 
 
+def test_stage54_inc3b_bounded_recursive_unrolling():
+    """Stage 54 Inc 3b: directly-recursive helpers with literal-
+    counter args now unroll up to max_unroll=3 times, exposing
+    the gradient structure to AD passes. Pre-fix, recursive call
+    was left opaque (failed-closed in AD).
+
+    With max_unroll=3: the inliner expands `power(x, 3)` by doing
+    1 initial inline + 3 recursive unrolls = 4 inline operations.
+    The 4th unroll attempt (counter would go 0→-1) is BLOCKED;
+    that residual call is left opaque. AD then sees a deeply-
+    expanded body where the if-cascade can be constant-folded by
+    `simplify` to pick the base case at the right depth.
+
+    Pre-Inc-3b: the FIRST recursive call (`power(x, n-1)`) would
+    be left opaque immediately — no expansion at all. The
+    if-cascade never builds, AD fails closed.
+
+    Test invariant: after inlining, the AST contains at most ONE
+    residual `power` call (the one blocked by max_unroll cap),
+    AND the body contains AT LEAST 3 `x *` multiplications
+    (one per successful unroll)."""
+    from helixc.frontend.autodiff import _inline_user_calls
+
+    src = '''
+fn power(x: f64, n: i32) -> f64 {
+    if n == 0 { 1.0 } else { x * power(x, n - 1) }
+}
+fn caller(x: f64) -> f64 {
+    power(x, 3)
+}
+'''
+    prog = parse(src)
+    fn_table = {it.name: it for it in prog.items
+                if isinstance(it, A.FnDecl)}
+    caller_fn = fn_table["caller"]
+    body_expr = caller_fn.body.final_expr
+    assert body_expr is not None
+    inlined = _inline_user_calls(body_expr, fn_table)
+
+    found_power = []
+    mul_by_x = []
+    def walk(e):
+        if e is None: return
+        if isinstance(e, A.Call) and isinstance(e.callee, A.Name):
+            if e.callee.name == "power":
+                found_power.append(e)
+        if isinstance(e, A.Binary) and e.op == "*":
+            # Count x * <anything> multiplications (the unroll
+            # signature is each level adds `x * ...`).
+            if (isinstance(e.left, A.Name) and e.left.name == "x"):
+                mul_by_x.append(e)
+        for attr in ("left", "right", "operand", "value", "expr",
+                     "cond", "then", "else_", "body", "final_expr",
+                     "callee", "obj", "target", "scrutinee",
+                     "iter_expr", "start", "end"):
+            sub = getattr(e, attr, None)
+            if isinstance(sub, A.Expr):
+                walk(sub)
+        for attr in ("args", "elems", "indices", "stmts"):
+            sublist = getattr(e, attr, None)
+            if isinstance(sublist, list):
+                for s in sublist:
+                    if isinstance(s, A.Expr):
+                        walk(s)
+                    else:
+                        for sa in ("value", "expr"):
+                            v = getattr(s, sa, None)
+                            if isinstance(v, A.Expr):
+                                walk(v)
+    walk(inlined)
+    # max_unroll=3 → 3 successful unrolls → 3 `x * ...` patterns.
+    assert len(mul_by_x) >= 3, (
+        f"Stage 54 Inc 3b: expected at least 3 `x * ...` "
+        f"multiplications after unrolling power(x, 3) with "
+        f"max_unroll=3; got {len(mul_by_x)}. Inlined: "
+        f"{type(inlined).__name__}"
+    )
+    # Exactly 1 residual `power` call (the blocked 4th unroll).
+    assert len(found_power) == 1, (
+        f"Stage 54 Inc 3b: expected exactly 1 residual power "
+        f"call (the blocked 4th unroll at max_unroll=3); got "
+        f"{len(found_power)} residuals."
+    )
+
+
+def test_stage54_inc3b_unrolling_respects_max_unroll_cap():
+    """Stage 54 Inc 3b: a recursive call that exhausts max_unroll
+    levels without hitting a base case leaves the call as opaque
+    (subsequent unroll attempts blocked). Verifies the cap is
+    actually enforced — without it, an infinite recursion would
+    expand exponentially.
+
+    Note: this test exercises the GUARD, not termination — Inc 3b
+    intentionally never proves termination, just bounds expansion."""
+    from helixc.frontend.autodiff import _inline_user_calls
+
+    # Infinite recursion (no base case). Should hit max_unroll
+    # cap at 3 levels then leave outermost remaining as opaque.
+    src = '''
+fn infinite(x: f64, n: i32) -> f64 {
+    x + infinite(x, n - 1)
+}
+fn caller(x: f64) -> f64 {
+    infinite(x, 5)
+}
+'''
+    prog = parse(src)
+    fn_table = {it.name: it for it in prog.items
+                if isinstance(it, A.FnDecl)}
+    caller_fn = fn_table["caller"]
+    body_expr = caller_fn.body.final_expr
+    assert body_expr is not None
+    # Should NOT loop forever — bounded by max_unroll.
+    # If it does loop, the test will timeout (or recursion-limit-error).
+    inlined = _inline_user_calls(body_expr, fn_table)
+    # At least one residual `infinite` call should remain after cap.
+    found_infinite = []
+    def walk(e):
+        if e is None: return
+        if isinstance(e, A.Call) and isinstance(e.callee, A.Name):
+            if e.callee.name == "infinite":
+                found_infinite.append(e)
+        for attr in ("left", "right", "operand", "value", "expr",
+                     "cond", "then", "else_", "body", "final_expr",
+                     "callee"):
+            sub = getattr(e, attr, None)
+            if isinstance(sub, A.Expr):
+                walk(sub)
+        for attr in ("args", "stmts"):
+            sublist = getattr(e, attr, None)
+            if isinstance(sublist, list):
+                for s in sublist:
+                    if isinstance(s, A.Expr):
+                        walk(s)
+                    else:
+                        for sa in ("value", "expr"):
+                            v = getattr(s, sa, None)
+                            if isinstance(v, A.Expr):
+                                walk(v)
+    walk(inlined)
+    # At max_unroll=3 (default), the 4th recursive call is
+    # left as opaque. Confirms the cap holds.
+    assert len(found_infinite) >= 1, (
+        f"Stage 54 Inc 3b: infinite recursion should hit "
+        f"max_unroll cap and leave residual call opaque; "
+        f"got {len(found_infinite)} residual calls."
+    )
+
+
 def test_stage54_inc3a_loop_body_descent_inlines_pure_helper():
     """Stage 54 Inc 3a: `_inline_user_calls.go()` walker now
     descends into A.For/A.While/A.Loop bodies. Pre-fix, loop

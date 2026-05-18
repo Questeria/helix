@@ -523,7 +523,9 @@ def _is_inferably_pure(fn: "A.FnDecl",
 
 def _inline_user_calls(expr: A.Expr, fn_table: dict[str, "A.FnDecl"],
                         depth: int = 0, max_depth: int = 4,
-                        visiting: frozenset[str] | None = None) -> A.Expr:
+                        visiting: frozenset[str] | None = None,
+                        unroll_counts: dict[str, int] | None = None,
+                        max_unroll: int = 3) -> A.Expr:
     """Walk `expr` and replace each Call(Name(f), args) where f is a known
     inlinable function in `fn_table` with a deepcopy of f's body, with each
     parameter substituted by the corresponding argument expression.
@@ -545,6 +547,16 @@ def _inline_user_calls(expr: A.Expr, fn_table: dict[str, "A.FnDecl"],
       - Functions not in fn_table (treated as opaque external).
       - Extern declarations and bodyless functions (left opaque; AD engines
         must handle or reject the call explicitly).
+
+    Stage 54 Inc 3b — bounded recursive unrolling:
+      For functions in `visiting` (would otherwise be left opaque),
+      check `unroll_counts.get(fn_name, 0) < max_unroll`. If so,
+      AND the recursive call args are literal-reducible
+      (`_args_are_unroll_safe`), allow ONE more inline pass
+      with the counter incremented. Enables `power(x, 3)`-style
+      recursive helpers with literal counter to unroll into
+      `x * x * x` at compile time, exposing the gradient.
+      max_unroll=3 caps exponential growth at 3 levels per fn.
     """
     import copy as _copy
 
@@ -555,15 +567,62 @@ def _inline_user_calls(expr: A.Expr, fn_table: dict[str, "A.FnDecl"],
     # silently-wrong gradients when the body uses if/while.
     TRANSCENDENTALS = AD_KNOWN_PURE_CALLS
     visiting = visiting or frozenset()
+    unroll_counts = unroll_counts if unroll_counts is not None else {}
+
+    def _is_literal_only(e: A.Expr) -> bool:
+        """Recursively check if `e` has NO Name leaves (i.e., constant-
+        folds to a literal). IntLit/FloatLit/BoolLit/StrLit/CharLit
+        are literals; Binary/Unary/Cast of literal-only children are
+        literal-only. Anything else (Name, Call, Block, etc.) breaks
+        the chain — return False."""
+        if e is None:
+            return False
+        if isinstance(e, (A.IntLit, A.FloatLit, A.BoolLit,
+                          A.StrLit, A.CharLit)):
+            return True
+        if isinstance(e, A.Binary):
+            return (_is_literal_only(e.left)
+                    and _is_literal_only(e.right))
+        if isinstance(e, A.Unary):
+            return _is_literal_only(e.operand)
+        if isinstance(e, A.Cast):
+            return _is_literal_only(e.value)
+        return False
+
+    def _args_are_unroll_safe(args: list[A.Expr]) -> bool:
+        """Stage 54 Inc 3b: a recursive call is unroll-safe if AT LEAST
+        ONE arg is literal-only (constant-folds with no Name leaves) —
+        the assumption being that one of the literal-args drives
+        recursion termination (e.g., the counter in `power(x, 3)`).
+        Conservative: false positives only mean we unroll a non-
+        terminating recursion up to max_unroll levels (bounded
+        anyway), then leave opaque."""
+        for a in args:
+            if _is_literal_only(a):
+                return True
+        return False
 
     def go(e: A.Expr) -> A.Expr:
         if isinstance(e, A.Call):
             new_callee = go(e.callee)
             new_args = [go(a) for a in e.args]
+            # Stage 54 Inc 3b bounded recursive unrolling: when callee
+            # IS in visiting (would otherwise leave opaque), check
+            # unroll_counts and args; allow one more inline pass.
+            is_recursive_unroll = False
             if (isinstance(new_callee, A.Name)
                     and new_callee.name in fn_table
                     and new_callee.name not in TRANSCENDENTALS
-                    and new_callee.name not in visiting
+                    and new_callee.name in visiting
+                    and unroll_counts.get(new_callee.name, 0) < max_unroll
+                    and _args_are_unroll_safe(new_args)
+                    and depth < max_depth):
+                is_recursive_unroll = True
+            if (isinstance(new_callee, A.Name)
+                    and new_callee.name in fn_table
+                    and new_callee.name not in TRANSCENDENTALS
+                    and (new_callee.name not in visiting
+                         or is_recursive_unroll)
                     and depth < max_depth):
                 fn = fn_table[new_callee.name]
                 if (getattr(fn, "is_extern", False)
@@ -585,10 +644,17 @@ def _inline_user_calls(expr: A.Expr, fn_table: dict[str, "A.FnDecl"],
                 substituted = _substitute_names(body_copy, substitutions)
                 # Recursively inline within the substituted body. Add this
                 # function to the visiting set so any recursive (direct or
-                # mutual) call back to it is treated as opaque.
+                # mutual) call back to it is treated as opaque (or
+                # unrolled if Inc 3b's _args_are_unroll_safe + max_unroll
+                # guards allow it).
+                next_unroll = dict(unroll_counts)
+                if is_recursive_unroll:
+                    next_unroll[new_callee.name] = (
+                        next_unroll.get(new_callee.name, 0) + 1)
                 return _inline_user_calls(substituted, fn_table, depth + 1,
                                            max_depth,
-                                           visiting | {new_callee.name})
+                                           visiting | {new_callee.name},
+                                           next_unroll, max_unroll)
             return A.Call(span=e.span, callee=new_callee, args=new_args)
         if isinstance(e, A.Binary):
             return A.Binary(span=e.span, op=e.op, left=go(e.left), right=go(e.right))
