@@ -4790,6 +4790,110 @@ def test_stage66_inc3_shared_then_mutable_rejected_with_opt_in():
     assert len(borrow_errs) >= 1
 
 
+def test_stage66_inc5c_if_arms_diverge_on_move_diagnosed():
+    """Stage 66 Inc 5c — if one arm moves a place and the other
+    doesn't, the post-if state is unsoundly indeterminate. Emit
+    a Stage 66 divergence diagnostic at the if expression's span."""
+    from helixc.frontend.typecheck import TypeChecker
+    from helixc.frontend.parser import parse
+
+    src = """
+    struct Heavy { x: i32, y: i32 }
+    fn consume(s: Heavy) -> i32 { s.x }
+
+    @borrow_check
+    fn user(cond: bool) -> i32 {
+        let s = Heavy { x: 1, y: 2 };
+        if cond {
+            let _ = consume(s);
+            0
+        } else {
+            0
+        };
+        0
+    }
+    """
+    prog = parse(src, include_stdlib=False)
+    tc = TypeChecker(prog)
+    errors = tc.check()
+    diverge_errs = [str(e) for e in errors
+                    if "Stage 66" in str(e) and "diverges" in str(e)]
+    assert len(diverge_errs) >= 1, (
+        f"expected divergence diagnostic; got: "
+        f"{[str(e) for e in errors]}")
+
+
+def test_stage66_inc5c_if_arms_agree_on_move_ok():
+    """Stage 66 Inc 5c — if BOTH arms move the same place, the post-if
+    state is uniformly MOVED — no divergence diagnostic. The post-if
+    `&s` would still be rejected (uniformly MOVED), but the if itself
+    typechecks cleanly."""
+    from helixc.frontend.typecheck import TypeChecker
+    from helixc.frontend.parser import parse
+
+    src = """
+    struct Heavy { x: i32, y: i32 }
+    fn consume(s: Heavy) -> i32 { s.x }
+
+    @borrow_check
+    fn user(cond: bool) -> i32 {
+        let s = Heavy { x: 1, y: 2 };
+        if cond {
+            let _ = consume(s);
+            0
+        } else {
+            let _ = consume(s);
+            0
+        };
+        0
+    }
+    """
+    prog = parse(src, include_stdlib=False)
+    tc = TypeChecker(prog)
+    errors = tc.check()
+    diverge_errs = [str(e) for e in errors
+                    if "Stage 66" in str(e) and "diverges" in str(e)]
+    assert len(diverge_errs) == 0, (
+        f"both arms moved — no divergence expected; got: "
+        f"{diverge_errs}")
+
+
+def test_stage66_inc5c_post_if_borrow_rejected_when_uniformly_moved():
+    """Stage 66 Inc 5c — when both arms uniformly MOVE a place, the
+    post-if borrow state is MOVED. A subsequent `&s` is rejected by
+    the Inc 3 wiring."""
+    from helixc.frontend.typecheck import TypeChecker
+    from helixc.frontend.parser import parse
+
+    src = """
+    struct Heavy { x: i32, y: i32 }
+    fn consume(s: Heavy) -> i32 { s.x }
+
+    @borrow_check
+    fn user(cond: bool) -> i32 {
+        let s = Heavy { x: 1, y: 2 };
+        if cond {
+            let _ = consume(s);
+            0
+        } else {
+            let _ = consume(s);
+            0
+        };
+        let _b = &s;
+        0
+    }
+    """
+    prog = parse(src, include_stdlib=False)
+    tc = TypeChecker(prog)
+    errors = tc.check()
+    moved_errs = [str(e) for e in errors
+                  if "Stage 66" in str(e) and "moved" in str(e).lower()
+                  and "diverges" not in str(e)]
+    assert len(moved_errs) >= 1, (
+        f"expected use-after-move diagnostic on post-if &s; got: "
+        f"{[str(e) for e in errors]}")
+
+
 def test_stage66_inc5b_implicit_move_at_pass_by_value_then_borrow_rejected():
     """Stage 66 Inc 5b — passing a non-Copy struct by value is an
     implicit move. Subsequent `&s` is rejected."""

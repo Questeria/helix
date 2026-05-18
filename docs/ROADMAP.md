@@ -329,6 +329,56 @@ Re-sequenced after Stage 46-47 closed:
     (exit code 42 iff training ran end-to-end + checkpoint
     round-trip succeeded).
 
+- **Stage 66 CLOSED 2026-05-18** — Tier 4 #16 borrow checker
+  (Rust 1.0-era simple aliasing model) shipped end-to-end across
+  Increments 1-5. See `docs/stage66-progress-2026-05-18.md` for
+  the full closure narrative. 3-clean-gate inherited via
+  Inc 5 closure: 318 typecheck + 3 selfhost + 63 IR + 13 targeted
+  codegen GREEN.
+
+- **Stage 66 Inc 5c SHIPPED 2026-05-18** — block-exit
+  reconciliation across if/else arms + scope-chain borrow routing:
+  - `Scope.borrows_check_shared/mutable/move/status` walk the
+    scope chain to find the defining scope and route the borrow
+    op there. Pre-fix, inner-block transitions only affected
+    inner.borrows.
+  - `_check_expr(A.If)` snapshots scope.borrows.state +
+    shared_counts before arms, restores between then/else,
+    reconciles via JOIN (most-restrictive wins: MOVED > MUTABLE
+    > SHARED > FREE). If MOVED in some-not-all arms, emit a
+    "borrow state of X diverges across if/else arms" diagnostic.
+  - Inc 3/5a/5b call sites updated to use chain methods.
+  - 3 new tests; 318 typecheck + 3 selfhost + 13 codegen GREEN.
+
+- **Stage 66 Inc 5b SHIPPED 2026-05-18** — implicit move at
+  pass-by-value call sites:
+  - In `_check_call_basic`, walk param/arg pairs again. For each
+    arg that is `A.Name(n)` with a TyStruct type NOT in
+    `_copy_struct_names`, call `scope.borrows.check_move`.
+    Emit "cannot pass {n} by value to {f}: it is currently
+    {state} (Stage 66 borrow checker — implicit move)".
+  - Scalars (TyPrim) skip the check — Copy semantics by default.
+  - `@copy` structs (Inc 4 marker) duplicate instead of moving.
+  - Reference args (`&x`, `&mut x`) are A.Unary, not A.Name, so
+    they skip implicit-move (Inc 3 wiring fires).
+  - Built-in calls (`__move`, attach/detach/prove/derive) return
+    early before reaching `_check_call_basic`.
+  - 4 new tests; 315 typecheck + 10 codegen GREEN.
+
+- **Stage 66 Inc 5a SHIPPED 2026-05-18** — explicit `__move(x)`
+  builtin wired to borrow checker:
+  - typecheck: `__move(x)` recognized in the Call branch.
+    Transitions x's Place to MOVED via `check_move` when
+    `@borrow_check` is active and x is not a Copy struct.
+    Returns x's type so downstream typecheck continues.
+  - lower_ast: identity lowering — `__move(x)` erases to a read
+    of x at IR/codegen level. Mirrors attach/detach pattern.
+  - `__move` added to `_BUILTIN_NAMES`.
+  - End-to-end pattern: `let _ = __move(x); let _b = &x;` now
+    errors via the Inc 3 `&`-wiring (check_borrow_shared refuses
+    from MOVED).
+  - 3 new tests; 311 typecheck + 3 selfhost + 63 IR + 6 codegen GREEN.
+
 - **Stage 66 Inc 4 SHIPPED 2026-05-18** — Tier 4 #16 per-fn
   `@borrow_check` attribute + `@copy` struct marker:
   - `_current_fn_borrow_check` flag pushed/popped in `_check_fn`

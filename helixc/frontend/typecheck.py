@@ -712,6 +712,40 @@ class Scope:
         # Stage 66 Inc 1 — initialize borrow state for the new place.
         self.borrows.define(Place.local(name))
 
+    # Stage 66 Inc 5c — borrow checks that walk the scope chain to
+    # find the scope where the place was originally defined, then
+    # operate on THAT scope's borrows. Without this, a check fired
+    # inside an inner block (e.g., an `if` arm) would route to the
+    # inner block's borrows, leaving the parent scope unchanged. The
+    # join-point reconciliation in `_check_expr(A.If)` snapshots the
+    # parent scope's borrows; only via chain routing does the snapshot
+    # see arm-level transitions. If the name is unbound (not in any
+    # scope), we fall back to the current scope's borrows so the
+    # behavior matches the pre-Inc-5c contract.
+    def _find_defining_scope(self, name: str) -> "Scope":
+        s: Optional["Scope"] = self
+        while s is not None:
+            if name in s.locals:
+                return s
+            s = s.parent
+        return self
+
+    def borrows_check_shared(self, name: str) -> bool:
+        ds = self._find_defining_scope(name)
+        return ds.borrows.check_borrow_shared(Place.local(name))
+
+    def borrows_check_mutable(self, name: str) -> bool:
+        ds = self._find_defining_scope(name)
+        return ds.borrows.check_borrow_mutable(Place.local(name))
+
+    def borrows_check_move(self, name: str) -> bool:
+        ds = self._find_defining_scope(name)
+        return ds.borrows.check_move(Place.local(name))
+
+    def borrows_status(self, name: str) -> str:
+        ds = self._find_defining_scope(name)
+        return ds.borrows.status(Place.local(name))
+
 
 @dataclass
 class FunctionSig:
@@ -2365,10 +2399,13 @@ class TypeChecker:
                 if (isinstance(arg_expr, A.Name)
                         and isinstance(aty, TyStruct)
                         and not self._is_copy_struct_ty(aty)):
-                    place = Place.local(arg_expr.name)
-                    ok = scope.borrows.check_move(place)
+                    # Stage 66 Inc 5c — route through scope chain so
+                    # an implicit-move at a call inside an inner
+                    # block (e.g. if arm) marks the defining scope's
+                    # borrows for the join-point reconciliation.
+                    ok = scope.borrows_check_move(arg_expr.name)
                     if not ok:
-                        cur_state = scope.borrows.status(place)
+                        cur_state = scope.borrows_status(arg_expr.name)
                         self.errors.append(TypeError_(
                             f"cannot pass {arg_expr.name!r} by value to "
                             f"{sig.name!r}: it is currently {cur_state} "
@@ -3987,13 +4024,19 @@ class TypeChecker:
                     # attribute on fn), enforce the Rust 1.0-era
                     # xor rule via the Scope.borrows tracker.
                     if self._borrow_enforcement_enabled():
-                        place = Place.local(expr.operand.name)
+                        # Stage 66 Inc 5c — route through the scope
+                        # chain so a check inside an inner block (e.g.
+                        # an if arm) affects the scope where the place
+                        # was originally defined. Required for the
+                        # block-exit reconciliation to see arm-level
+                        # transitions.
+                        name = expr.operand.name
                         if expr.op == "&":
-                            ok = scope.borrows.check_borrow_shared(place)
+                            ok = scope.borrows_check_shared(name)
                             if not ok:
-                                cur_state = scope.borrows.status(place)
+                                cur_state = scope.borrows_status(name)
                                 self.errors.append(TypeError_(
-                                    f"cannot borrow {expr.operand.name!r} as "
+                                    f"cannot borrow {name!r} as "
                                     f"shared because it is currently "
                                     f"{cur_state} (Stage 66 borrow checker)",
                                     expr.span,
@@ -4001,11 +4044,11 @@ class TypeChecker:
                                          "borrow before taking a shared one",
                                 ))
                         else:  # &mut
-                            ok = scope.borrows.check_borrow_mutable(place)
+                            ok = scope.borrows_check_mutable(name)
                             if not ok:
-                                cur_state = scope.borrows.status(place)
+                                cur_state = scope.borrows_status(name)
                                 self.errors.append(TypeError_(
-                                    f"cannot borrow {expr.operand.name!r} as "
+                                    f"cannot borrow {name!r} as "
                                     f"mutable because it is currently "
                                     f"{cur_state} (Stage 66 borrow checker xor "
                                     f"rule violated)",
@@ -4377,10 +4420,14 @@ class TypeChecker:
                     if self._borrow_enforcement_enabled():
                         if not self._is_copy_struct_ty(arg_tys[0]):
                             operand_name = expr.args[0].name
-                            place = Place.local(operand_name)
-                            ok = scope.borrows.check_move(place)
+                            # Stage 66 Inc 5c — route through scope
+                            # chain so a __move() inside an inner
+                            # block affects the defining scope's
+                            # borrows.
+                            ok = scope.borrows_check_move(operand_name)
                             if not ok:
-                                cur_state = scope.borrows.status(place)
+                                cur_state = scope.borrows_status(
+                                    operand_name)
                                 self.errors.append(TypeError_(
                                     f"cannot move {operand_name!r} because "
                                     f"it is currently {cur_state} "
@@ -6207,16 +6254,26 @@ class TypeChecker:
             # pre-if, restore between branches, union arm-results
             # via the multi-kind drop semantics (HIGH-C fix).
             modal_origin_pre_if = dict(self._modal_origin_provenance)
+            # Stage 66 Inc 5c — snapshot borrow state before checking
+            # arms so we can reconcile across the join point. Used
+            # only when borrow enforcement is active for the fn.
+            borrows_pre_if_state = dict(scope.borrows.state)
+            borrows_pre_if_counts = dict(scope.borrows.shared_counts)
             branch_results: list[dict[str, str]] = []
             branch_assigns: list[set[str]] = []
+            branch_borrow_states: list[dict] = []
             t = self._check_block(expr.then, scope)
             branch_results.append(dict(self._modal_origin_provenance))
             branch_assigns.append(set(self._last_modal_assigns_popped))
+            branch_borrow_states.append(dict(scope.borrows.state))
             branch_tys = [t]
             if expr.else_ is not None:
                 # Restore pre-if state before else.
                 self._modal_origin_provenance = dict(
                     modal_origin_pre_if)
+                # Stage 66 Inc 5c — restore borrow state too.
+                scope.borrows.state = dict(borrows_pre_if_state)
+                scope.borrows.shared_counts = dict(borrows_pre_if_counts)
                 if isinstance(expr.else_, A.Block):
                     e = self._check_block(expr.else_, scope)
                 else:
@@ -6228,6 +6285,7 @@ class TypeChecker:
                     e = self._check_expr_in_block_scope(expr.else_, scope)
                 branch_results.append(dict(self._modal_origin_provenance))
                 branch_assigns.append(set(self._last_modal_assigns_popped))
+                branch_borrow_states.append(dict(scope.borrows.state))
                 branch_tys.append(e)
                 if not self._compatible(t, e):
                     self.errors.append(TypeError_(
@@ -6239,6 +6297,9 @@ class TypeChecker:
                 # with no assigns (the branch didn't execute).
                 branch_results.append(dict(modal_origin_pre_if))
                 branch_assigns.append(set())
+                # Stage 66 Inc 5c — implicit no-op arm keeps pre-if
+                # borrow state.
+                branch_borrow_states.append(dict(borrows_pre_if_state))
             # Stage 52 closure gate-3 NEW-HIGH-2/3/4 fix: union with
             # the "branch reassigned without modal taint" drop. For
             # each name observed across pre-if + arm-results,
@@ -6304,6 +6365,66 @@ class TypeChecker:
                 if len(kinds) == 1:
                     unioned_if[name] = next(iter(kinds))
             self._modal_origin_provenance = unioned_if
+            # Stage 66 Inc 5c — borrow-state reconciliation across
+            # arms. For each place touched by any arm, compute the
+            # JOIN: most-restrictive state wins (MOVED > MUTABLE >
+            # SHARED > FREE). If a place is MOVED in some arms but
+            # not others, emit a divergence diagnostic — the post-if
+            # state cannot be soundly used. Apply unioned state to
+            # scope.borrows so downstream code in the parent scope
+            # sees the conservative state.
+            if self._borrow_enforcement_enabled():
+                # Rank ordering: higher value = more restrictive.
+                _rank = {
+                    BORROW_FREE: 0,
+                    BORROW_SHARED: 1,
+                    BORROW_MUTABLE: 2,
+                    BORROW_MOVED: 3,
+                }
+                all_places: set = set()
+                for bs in branch_borrow_states:
+                    all_places.update(bs.keys())
+                all_places.update(borrows_pre_if_state.keys())
+                unioned_borrows: dict = {}
+                for place in all_places:
+                    states_in_arms: list[str] = []
+                    for bs in branch_borrow_states:
+                        states_in_arms.append(
+                            bs.get(place,
+                                   borrows_pre_if_state.get(
+                                       place, BORROW_FREE)))
+                    # Most-restrictive wins.
+                    join_state = max(
+                        states_in_arms, key=lambda s: _rank.get(s, 0))
+                    unioned_borrows[place] = join_state
+                    # Divergence diagnostic: if MOVED in some but not
+                    # all arms, the post-if state is unsoundly used.
+                    if (join_state == BORROW_MOVED
+                            and not all(
+                                s == BORROW_MOVED
+                                for s in states_in_arms)):
+                        self.errors.append(TypeError_(
+                            f"borrow state of {place!r} diverges "
+                            f"across if/else arms: states = "
+                            f"{states_in_arms} (Stage 66 borrow "
+                            f"checker — one arm moves, the other "
+                            f"keeps; post-if state is unsoundly "
+                            f"indeterminate)",
+                            expr.span,
+                            hint="move in both arms or neither; "
+                                 "use `__move(x)` in the no-move "
+                                 "arm explicitly to align",
+                        ))
+                scope.borrows.state = unioned_borrows
+                # Reset shared counts conservatively to the pre-if
+                # snapshot for places that ended up non-SHARED, else
+                # collapse to 1 (we can't reconstruct counts soundly).
+                new_counts: dict = {}
+                for place, st in unioned_borrows.items():
+                    if st == BORROW_SHARED:
+                        new_counts[place] = max(
+                            borrows_pre_if_counts.get(place, 0), 1)
+                scope.borrows.shared_counts = new_counts
             return self._join_branch_types(branch_tys, expr.span)
         if isinstance(expr, A.Match):
             scrut_ty = self._check_expr(expr.scrutinee, scope)

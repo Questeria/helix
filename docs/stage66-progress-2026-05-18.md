@@ -129,18 +129,80 @@ Tests added: `test_stage66_inc4_per_fn_borrow_check_attr_enables_only_for_that_f
 `test_stage66_inc4_copy_struct_marker_registered`. Closure: full
 typecheck regression GREEN (308/308); self-host gate 223/223 GREEN.
 
-## Inc 5 plan (CLOSES Stage 66)
+## Inc 5a SHIPPED (later same day)
 
-- Wire `check_move` at consumption sites: pass-by-value calls, RHS
-  of `let _ = move_target;`, `return move_target;`. Skip the move
-  invalidation if `_is_copy_struct_ty(ty)` returns True.
-- Block-exit reconciliation across if/match arms: union of borrow
-  states; if one arm moves and the other doesn't, diagnose at the
-  join point.
-- Explicit `move x` syntax recognized at expression position; emits
-  the same diagnostic class as implicit move when xor would be
-  violated.
-- Stage 66 CLOSED after Inc 5 passes the 3-clean-gate.
+Explicit `__move(x)` builtin recognized in typecheck (alongside
+attach/detach/prove/derive) and identity-lowered to a read of x in
+the IR. When `@borrow_check` is active and x is not a `@copy`
+struct, the call transitions x's Place to MOVED via the scope
+chain. Subsequent `&x` / `&mut x` then rejected by Inc 3 wiring.
+Tests added: `test_stage66_inc5a_*` (3). Closure: 311 typecheck
++ 3 selfhost + 63 IR + 6 codegen GREEN.
+
+## Inc 5b SHIPPED (later same day)
+
+Implicit move detection at pass-by-value call sites — for every
+`A.Name` arg passed to a user fn with a non-Copy struct type
+under `@borrow_check`, the call transitions the place to MOVED.
+Scalars + `@copy` structs + reference args skip the check.
+Tests added: `test_stage66_inc5b_*` (4). Closure: 315 typecheck
++ 3 selfhost + 63 IR + 7 codegen GREEN.
+
+## Inc 5c SHIPPED (later same day) — CLOSES Stage 66
+
+Block-exit reconciliation across if/else arms + scope-chain
+borrow routing:
+
+- `Scope.borrows_check_shared/mutable/move/status` added —
+  walk the scope chain to find the scope where the place was
+  *originally defined* and route the operation there. Pre-fix,
+  a check fired inside an inner block (e.g. if arm) affected
+  only the inner scope's borrows, leaving the parent scope
+  unaware of the transition.
+
+- `_check_expr(A.If)` now snapshots `scope.borrows.state` +
+  `shared_counts` before the arms, restores between then/else,
+  and after both arms reconciles via JOIN:
+  - For each place touched by any arm, the most-restrictive
+    state wins (rank: MOVED=3 > MUTABLE=2 > SHARED=1 > FREE=0).
+  - If the join state is MOVED but NOT all arms moved, emit a
+    "borrow state of X diverges across if/else arms" diagnostic
+    at the if expression's span.
+  - Shared counts collapse to 1 for joined SHARED places (we
+    cannot reconstruct counts soundly across arm divergence).
+  - Apply unioned state to `scope.borrows` so the post-if code
+    sees the conservative join.
+
+- The no-else `if cond { ... }` form has an implicit identity
+  arm that inherits the pre-if state — so a then-arm move
+  produces a divergence diagnostic (since the implicit arm
+  doesn't move).
+
+- Inc 3 / 5a / 5b call sites updated to use the chain methods.
+
+Tests added: `test_stage66_inc5c_*` (3):
+- if_arms_diverge_on_move_diagnosed
+- if_arms_agree_on_move_ok
+- post_if_borrow_rejected_when_uniformly_moved
+
+Closure: 318 typecheck + 3 selfhost + 63 IR + 13 codegen GREEN.
+
+## Stage 66 CLOSED
+
+All 5 increments shipped on 2026-05-18:
+- Inc 1: Scaffolding (Place, BorrowState, Scope.borrows)
+- Inc 2: Enforcement primitives (check_borrow_*, check_move)
+- Inc 3: typecheck wiring at &/&mut sites + opt-in gate
+- Inc 4: @borrow_check fn attr + @copy struct marker
+- Inc 5: Move semantics (5a: explicit __move; 5b: implicit at
+  pass-by-value; 5c: block-exit reconciliation + scope-chain)
+
+Tier 4 #16 — borrow checker (Rust 1.0-era simple aliasing model)
+— is shipped. Future polish (NLL, lifetime parameters, match-arm
+reconciliation, escape analysis) can be added in later stages.
+
+Total test additions across Stage 66: 20 tests.
+Self-host gate: 3/3 GREEN at every commit.
 
 ## Next stage
 
