@@ -108,6 +108,215 @@ def test_stage64_inc2_tile_zeros_rejects_unsupported_dtype():
         em.emit_op(op)
 
 
+# ============================================================================
+# Stage 64 Inc 3 — TILE_ADD / TILE_SUB / TILE_MUL elementwise on
+# register-tiles (speculative parallel work; Inc 3 is BACKEND ONLY,
+# no frontend trigger path yet).
+# ============================================================================
+def _build_two_zero_tiles(em, dtype: str, length: int):
+    """Helper: build two TILE_ZEROS tiles of the same dtype + length,
+    emit them via `em`, and return (lhs_val, rhs_val) ready for an
+    elementwise op."""
+    lhs = ti.TileValue(0, tir.TIRTileTy(
+        tir.TIRScalar(dtype), (tir.DimConst(length),), "REG"
+    ))
+    rhs = ti.TileValue(1, tir.TIRTileTy(
+        tir.TIRScalar(dtype), (tir.DimConst(length),), "REG"
+    ))
+    em.emit_op(ti.TileOp(ti.TileOpKind.TILE_ZEROS, [], [lhs],
+                         attrs={"dtype": dtype, "length": length}))
+    em.emit_op(ti.TileOp(ti.TileOpKind.TILE_ZEROS, [], [rhs],
+                         attrs={"dtype": dtype, "length": length}))
+    return lhs, rhs
+
+
+def test_stage64_inc3_tile_add_emits_f32_register_adds():
+    """Stage 64 Inc 3 — TILE_ADD on two length-4 f32 register-tiles
+    emits 4 `add.f32` lines elementwise, with the result mapped to
+    a fresh contiguous %f base register."""
+    from helixc.backend.ptx import PtxEmitter
+    em = PtxEmitter()
+    lhs, rhs = _build_two_zero_tiles(em, "f32", 4)
+    out = ti.TileValue(2, tir.TIRTileTy(
+        tir.TIRScalar("f32"), (tir.DimConst(4),), "REG"
+    ))
+    pre_text_len = len(em.buf.getvalue().splitlines())
+    em.emit_op(ti.TileOp(ti.TileOpKind.TILE_ADD, [lhs, rhs], [out]))
+    new_lines = em.buf.getvalue().splitlines()[pre_text_len:]
+    add_lines = [ln for ln in new_lines if "add.f32" in ln]
+    assert len(add_lines) == 4, em.buf.getvalue()
+    # Each line should reference three %f registers.
+    for ln in add_lines:
+        assert ln.count("%f") == 3, ln
+    # Result mapped to a %f base register.
+    assert out.id in em.reg_map
+    assert em.reg_map[out.id].startswith("%f"), em.reg_map[out.id]
+
+
+def test_stage64_inc3_tile_sub_emits_f32_register_subs():
+    """Stage 64 Inc 3 — TILE_SUB on two length-3 f32 tiles emits
+    3 `sub.f32` lines."""
+    from helixc.backend.ptx import PtxEmitter
+    em = PtxEmitter()
+    lhs, rhs = _build_two_zero_tiles(em, "f32", 3)
+    out = ti.TileValue(2, tir.TIRTileTy(
+        tir.TIRScalar("f32"), (tir.DimConst(3),), "REG"
+    ))
+    pre_text_len = len(em.buf.getvalue().splitlines())
+    em.emit_op(ti.TileOp(ti.TileOpKind.TILE_SUB, [lhs, rhs], [out]))
+    new_lines = em.buf.getvalue().splitlines()[pre_text_len:]
+    sub_lines = [ln for ln in new_lines if "sub.f32" in ln]
+    assert len(sub_lines) == 3, em.buf.getvalue()
+    for ln in sub_lines:
+        assert ln.count("%f") == 3, ln
+
+
+def test_stage64_inc3_tile_mul_emits_f32_register_muls():
+    """Stage 64 Inc 3 — TILE_MUL on two length-2 f32 tiles emits
+    2 `mul.f32` lines."""
+    from helixc.backend.ptx import PtxEmitter
+    em = PtxEmitter()
+    lhs, rhs = _build_two_zero_tiles(em, "f32", 2)
+    out = ti.TileValue(2, tir.TIRTileTy(
+        tir.TIRScalar("f32"), (tir.DimConst(2),), "REG"
+    ))
+    pre_text_len = len(em.buf.getvalue().splitlines())
+    em.emit_op(ti.TileOp(ti.TileOpKind.TILE_MUL, [lhs, rhs], [out]))
+    new_lines = em.buf.getvalue().splitlines()[pre_text_len:]
+    mul_lines = [ln for ln in new_lines if "mul.f32" in ln]
+    assert len(mul_lines) == 2, em.buf.getvalue()
+    for ln in mul_lines:
+        assert ln.count("%f") == 3, ln
+
+
+def test_stage64_inc3_tile_add_emits_i32_register_adds():
+    """Stage 64 Inc 3 — TILE_ADD on two length-3 i32 tiles emits
+    3 `add.s32` lines on %r registers."""
+    from helixc.backend.ptx import PtxEmitter
+    em = PtxEmitter()
+    lhs, rhs = _build_two_zero_tiles(em, "i32", 3)
+    out = ti.TileValue(2, tir.TIRTileTy(
+        tir.TIRScalar("i32"), (tir.DimConst(3),), "REG"
+    ))
+    pre_text_len = len(em.buf.getvalue().splitlines())
+    em.emit_op(ti.TileOp(ti.TileOpKind.TILE_ADD, [lhs, rhs], [out]))
+    new_lines = em.buf.getvalue().splitlines()[pre_text_len:]
+    add_lines = [ln for ln in new_lines if "add.s32" in ln]
+    assert len(add_lines) == 3, em.buf.getvalue()
+    for ln in add_lines:
+        assert ln.count("%r") == 3, ln
+    assert em.reg_map[out.id].startswith("%r"), em.reg_map[out.id]
+
+
+def test_stage64_inc3_tile_mul_emits_i32_register_muls_lo_s32():
+    """Stage 64 Inc 3 — TILE_MUL on i32 tiles uses `mul.lo.s32`
+    (low-32-bit signed multiply), matching SCALAR_MUL i32 idiom."""
+    from helixc.backend.ptx import PtxEmitter
+    em = PtxEmitter()
+    lhs, rhs = _build_two_zero_tiles(em, "i32", 2)
+    out = ti.TileValue(2, tir.TIRTileTy(
+        tir.TIRScalar("i32"), (tir.DimConst(2),), "REG"
+    ))
+    pre_text_len = len(em.buf.getvalue().splitlines())
+    em.emit_op(ti.TileOp(ti.TileOpKind.TILE_MUL, [lhs, rhs], [out]))
+    new_lines = em.buf.getvalue().splitlines()[pre_text_len:]
+    mul_lines = [ln for ln in new_lines if "mul.lo.s32" in ln]
+    assert len(mul_lines) == 2, em.buf.getvalue()
+
+
+def test_stage64_inc3_tile_add_rejects_mismatched_dtypes():
+    """Stage 64 Inc 3 — TILE_ADD with f32 lhs + i32 rhs fails
+    closed with a clear dtype-mismatch message."""
+    from helixc.backend.ptx import PtxEmitter
+    em = PtxEmitter()
+    lhs = ti.TileValue(0, tir.TIRTileTy(
+        tir.TIRScalar("f32"), (tir.DimConst(2),), "REG"
+    ))
+    rhs = ti.TileValue(1, tir.TIRTileTy(
+        tir.TIRScalar("i32"), (tir.DimConst(2),), "REG"
+    ))
+    em.emit_op(ti.TileOp(ti.TileOpKind.TILE_ZEROS, [], [lhs],
+                         attrs={"dtype": "f32", "length": 2}))
+    em.emit_op(ti.TileOp(ti.TileOpKind.TILE_ZEROS, [], [rhs],
+                         attrs={"dtype": "i32", "length": 2}))
+    out = ti.TileValue(2, tir.TIRTileTy(
+        tir.TIRScalar("f32"), (tir.DimConst(2),), "REG"
+    ))
+    import pytest as _pt
+    with _pt.raises(RuntimeError, match="requires matching dtypes"):
+        em.emit_op(ti.TileOp(ti.TileOpKind.TILE_ADD, [lhs, rhs], [out]))
+
+
+def test_stage64_inc3_tile_add_rejects_missing_register():
+    """Stage 64 Inc 3 — TILE_ADD where lhs or rhs has never been
+    lowered (no entry in reg_map) fails closed with a clear
+    'no PTX register' message."""
+    from helixc.backend.ptx import PtxEmitter
+    em = PtxEmitter()
+    lhs = ti.TileValue(0, tir.TIRTileTy(
+        tir.TIRScalar("f32"), (tir.DimConst(2),), "REG"
+    ))
+    rhs = ti.TileValue(1, tir.TIRTileTy(
+        tir.TIRScalar("f32"), (tir.DimConst(2),), "REG"
+    ))
+    # Only lhs is lowered; rhs has no reg_map entry.
+    em.emit_op(ti.TileOp(ti.TileOpKind.TILE_ZEROS, [], [lhs],
+                         attrs={"dtype": "f32", "length": 2}))
+    out = ti.TileValue(2, tir.TIRTileTy(
+        tir.TIRScalar("f32"), (tir.DimConst(2),), "REG"
+    ))
+    import pytest as _pt
+    with _pt.raises(RuntimeError, match="rhs has no PTX register"):
+        em.emit_op(ti.TileOp(ti.TileOpKind.TILE_ADD, [lhs, rhs], [out]))
+
+
+def test_stage64_inc3_tile_add_rejects_unsupported_dtype():
+    """Stage 64 Inc 3 — TILE_ADD on bf16 tiles fails closed with
+    a clear 'Inc 4+ will extend' message (matches Inc 2 dtype
+    scope policy)."""
+    from helixc.backend.ptx import PtxEmitter
+    em = PtxEmitter()
+    # Manually construct bf16 tiles + manually populate reg_map so
+    # the dtype check is what trips, not the missing-register check.
+    lhs = ti.TileValue(0, tir.TIRTileTy(
+        tir.TIRScalar("bf16"), (tir.DimConst(2),), "REG"
+    ))
+    rhs = ti.TileValue(1, tir.TIRTileTy(
+        tir.TIRScalar("bf16"), (tir.DimConst(2),), "REG"
+    ))
+    em.reg_map[lhs.id] = "%h0"
+    em.reg_map[rhs.id] = "%h2"
+    out = ti.TileValue(2, tir.TIRTileTy(
+        tir.TIRScalar("bf16"), (tir.DimConst(2),), "REG"
+    ))
+    import pytest as _pt
+    with _pt.raises(RuntimeError, match="Inc 4\\+ will extend"):
+        em.emit_op(ti.TileOp(ti.TileOpKind.TILE_ADD, [lhs, rhs], [out]))
+
+
+def test_stage64_inc3_tile_add_rejects_mismatched_lengths():
+    """Stage 64 Inc 3 — TILE_ADD with operands of different
+    lengths fails closed with a clear length-mismatch message."""
+    from helixc.backend.ptx import PtxEmitter
+    em = PtxEmitter()
+    lhs = ti.TileValue(0, tir.TIRTileTy(
+        tir.TIRScalar("f32"), (tir.DimConst(2),), "REG"
+    ))
+    rhs = ti.TileValue(1, tir.TIRTileTy(
+        tir.TIRScalar("f32"), (tir.DimConst(3),), "REG"
+    ))
+    em.emit_op(ti.TileOp(ti.TileOpKind.TILE_ZEROS, [], [lhs],
+                         attrs={"dtype": "f32", "length": 2}))
+    em.emit_op(ti.TileOp(ti.TileOpKind.TILE_ZEROS, [], [rhs],
+                         attrs={"dtype": "f32", "length": 3}))
+    out = ti.TileValue(2, tir.TIRTileTy(
+        tir.TIRScalar("f32"), (tir.DimConst(2),), "REG"
+    ))
+    import pytest as _pt
+    with _pt.raises(RuntimeError, match="requires matching lengths"):
+        em.emit_op(ti.TileOp(ti.TileOpKind.TILE_ADD, [lhs, rhs], [out]))
+
+
 def test_c118_direct_ptx_cli_aborts_on_type_errors():
     proc = run_ptx_cli("@kernel fn k() { let mut b: bool = true; b += false; }\n")
     assert proc.returncode != 0, proc.stdout + proc.stderr

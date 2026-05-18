@@ -629,6 +629,142 @@ class PtxEmitter:
             if op.results:
                 self.reg_map[op.results[0].id] = base_reg
             return
+        # Stage 64 Inc 3 — TILE_ADD / TILE_SUB / TILE_MUL: elementwise
+        # binary ops on register-tiles. Both operands must be lowered
+        # register-tiles (e.g. results of TILE_ZEROS) of the same
+        # dtype + length. For length N, emit N elementwise PTX
+        # instructions (`add.f32`, `sub.f32`, `mul.f32` for f32;
+        # `add.s32`, `sub.s32`, `mul.lo.s32` for i32) iterating over
+        # consecutive registers from each operand's base. The result
+        # is allocated as N fresh consecutive registers; the result
+        # TileValue maps to the new base register.
+        #
+        # Phase-0 / speculative-parallel-Inc-3 scope: f32 + i32 only
+        # (mirrors Inc 2's TILE_ZEROS scope). Other dtypes fail
+        # closed with a clear "Inc 4+ will extend" message. No SMEM
+        # round-trip — purely register-resident. No user-code path
+        # triggers these ops yet (that's Inc 4+ frontend work);
+        # tests instantiate ops directly.
+        if op.kind in (ti.TileOpKind.TILE_ADD,
+                       ti.TileOpKind.TILE_SUB,
+                       ti.TileOpKind.TILE_MUL):
+            kind_name = op.kind.name  # "TILE_ADD" / "TILE_SUB" / "TILE_MUL"
+            self._require_operand_count(op, 2, kind_name)
+            self._require_result_count(op, 1, kind_name)
+            lhs_val = op.operands[0]
+            rhs_val = op.operands[1]
+            # Both operands must be register-tiles. Read dtype +
+            # length from the TileValue's TIRTileTy.
+            if not isinstance(lhs_val.ty, tir.TIRTileTy):
+                raise RuntimeError(
+                    f"{kind_name} lhs is not a tile type")
+            if not isinstance(rhs_val.ty, tir.TIRTileTy):
+                raise RuntimeError(
+                    f"{kind_name} rhs is not a tile type")
+            lhs_dtype = lhs_val.ty.dtype.name
+            rhs_dtype = rhs_val.ty.dtype.name
+            if lhs_dtype != rhs_dtype:
+                raise RuntimeError(
+                    f"{kind_name} requires matching dtypes; "
+                    f"got lhs={lhs_dtype} rhs={rhs_dtype}")
+            dtype = lhs_dtype
+            if dtype not in ("f32", "i32"):
+                raise RuntimeError(
+                    f"{kind_name} Phase-0: only f32 / i32 supported; "
+                    f"got {dtype!r} (Inc 4+ will extend)")
+            # Length must match between operands. Each operand is a
+            # 1-D tile; shape is (DimConst(N),). Allow only
+            # statically-known DimConst lengths in Phase-0.
+            def _tile_length(val: ti.TileValue, role: str) -> int:
+                shape = val.ty.shape
+                if len(shape) != 1:
+                    raise RuntimeError(
+                        f"{kind_name} {role} must be 1-D tile; "
+                        f"got {len(shape)}-D")
+                dim = shape[0]
+                if not isinstance(dim, tir.DimConst):
+                    raise RuntimeError(
+                        f"{kind_name} {role} requires static "
+                        f"DimConst length; got {dim!r}")
+                return dim.value
+            lhs_len = _tile_length(lhs_val, "lhs")
+            rhs_len = _tile_length(rhs_val, "rhs")
+            if lhs_len != rhs_len:
+                raise RuntimeError(
+                    f"{kind_name} requires matching lengths; "
+                    f"got lhs={lhs_len} rhs={rhs_len}")
+            length = lhs_len
+            if length <= 0:
+                raise RuntimeError(
+                    f"{kind_name} requires positive length; "
+                    f"got {length}")
+            # Both operands must be in reg_map (lowered already).
+            lhs_base = self.reg_map.get(lhs_val.id)
+            if lhs_base is None:
+                raise RuntimeError(
+                    f"{kind_name} lhs has no PTX register; "
+                    "operand must be a lowered register-tile")
+            rhs_base = self.reg_map.get(rhs_val.id)
+            if rhs_base is None:
+                raise RuntimeError(
+                    f"{kind_name} rhs has no PTX register; "
+                    "operand must be a lowered register-tile")
+            # Validate register class matches dtype expectation.
+            expected_prefix = "%f" if dtype == "f32" else "%r"
+            self._require_reg_class(lhs_base, expected_prefix,
+                                    f"{kind_name} lhs")
+            self._require_reg_class(rhs_base, expected_prefix,
+                                    f"{kind_name} rhs")
+            # Parse the base index from each register name; operand
+            # registers were allocated contiguously by the producing
+            # op (e.g. Inc 2's TILE_ZEROS calls _new_reg() N times in
+            # sequence), so element i lives at base + i.
+            def _base_idx(reg: str, role: str) -> int:
+                # reg looks like "%f5" or "%r12" — strip the prefix.
+                stripped = reg.lstrip("%")
+                # Trim alpha prefix ("f"/"r"/"rd"/"h"/"p").
+                i = 0
+                while i < len(stripped) and not stripped[i].isdigit():
+                    i += 1
+                try:
+                    return int(stripped[i:])
+                except ValueError:
+                    raise RuntimeError(
+                        f"{kind_name} {role} register {reg!r} has "
+                        "no parseable numeric index")
+            lhs_idx0 = _base_idx(lhs_base, "lhs")
+            rhs_idx0 = _base_idx(rhs_base, "rhs")
+            # Choose the PTX mnemonic per (kind, dtype).
+            if dtype == "f32":
+                mnemonic = {
+                    ti.TileOpKind.TILE_ADD: "add.f32",
+                    ti.TileOpKind.TILE_SUB: "sub.f32",
+                    ti.TileOpKind.TILE_MUL: "mul.f32",
+                }[op.kind]
+                result_prefix = "f"
+            else:  # i32
+                mnemonic = {
+                    ti.TileOpKind.TILE_ADD: "add.s32",
+                    ti.TileOpKind.TILE_SUB: "sub.s32",
+                    # PTX i32 mul keeps the low 32 bits.
+                    ti.TileOpKind.TILE_MUL: "mul.lo.s32",
+                }[op.kind]
+                result_prefix = "r"
+            # Allocate N contiguous result registers; emit one
+            # elementwise op per index.
+            result_base = None
+            prefix_char = expected_prefix.lstrip("%")
+            for i in range(length):
+                rdst = self._new_reg(result_prefix)
+                if result_base is None:
+                    result_base = rdst
+                lhs_reg = f"%{prefix_char}{lhs_idx0 + i}"
+                rhs_reg = f"%{prefix_char}{rhs_idx0 + i}"
+                self._line(
+                    f"    {mnemonic} {rdst}, {lhs_reg}, {rhs_reg};")
+            if op.results:
+                self.reg_map[op.results[0].id] = result_base
+            return
         raise RuntimeError(
             f"unsupported PTX op {op.kind.value}; "
             "add lowering before emitting PTX"
