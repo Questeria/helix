@@ -51,6 +51,7 @@ from .autodiff import (
     NUMERIC_FOR_AD,
     AD_INTEGER_VALUED_LOGIC, _raise_integer_logic_in_ad,
     _IDENTITY_AD_CHAIN_RULE_NAMES,
+    _name_appears_in,
 )
 
 
@@ -733,6 +734,25 @@ def _propagate(node: A.Expr, adj: A.Expr, acc: dict[str, list[A.Expr]]) -> None:
             suffix = "f64" if name.endswith("_f64") else None
             zero_lit = A.FloatLit(
                 span=node.span, value=0.0, type_suffix=suffix)
+            # Stage 54 gate-3 MEDIUM-3 forward/reverse parity:
+            # warn when any tracked param appears in lo/hi
+            # (its dlo/dhi contributions are silently dropped).
+            # Mirror of the forward fix in
+            # `_stage54_clamp_chain_rule`. acc is the dict of
+            # params-with-adjoint-accumulators, so its keys
+            # are exactly the tracked params.
+            for tracked in acc.keys():
+                if (_name_appears_in(lo_arg, tracked)
+                        or _name_appears_in(hi_arg, tracked)):
+                    _ad_warn(
+                        node,
+                        f"__clamp dlo/dhi w.r.t. "
+                        f"'{tracked}' silently dropped — "
+                        f"gradient is incomplete (reverse "
+                        f"mode). Treat lo/hi as constants "
+                        f"or detach them from the "
+                        f"differentiation graph.",
+                    )
             lo_ok = A.Binary(span=node.span, op="<=",
                              left=copy.deepcopy(lo_arg),
                              right=copy.deepcopy(x_arg))

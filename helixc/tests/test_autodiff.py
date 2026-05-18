@@ -1155,6 +1155,105 @@ def test_stage54_gate2_clamp_warns_when_var_in_lo_or_hi():
         f"in lo/hi; got: {msgs2}"
 
 
+def test_stage54_gate3_name_appears_in_handles_structlit_and_match():
+    """Stage 54 gate-3 HIGH-1+HIGH-2: `_name_appears_in` now
+    correctly walks StructLit.fields (special shape: list of
+    (str, Expr) tuples) and Match.arms (list[MatchArm], not
+    Expr). Pre-fix, the generic list walker iterated tuples /
+    MatchArm objects and `isinstance(x, A.Expr)` returned False,
+    silently skipping the fields. This meant
+    `__clamp(x, Point{x: weight}.x, 1.0)` or
+    `__clamp(x, match k { 0 => weight, _ => 0.0 }, 1.0)` would
+    evade the MEDIUM-5 warn from `_stage54_clamp_chain_rule`."""
+    from helixc.frontend.autodiff import _name_appears_in
+    span = type("Span", (), {"line": 0, "col": 0})()
+    w = A.Name(span=span, name="w", generics=[])
+
+    # StructLit containing 'w' in a field
+    struct_expr = A.StructLit(span=span, name="Point",
+                               fields=[("x", w), ("y",
+                                A.IntLit(span=span, value=0))])
+    assert _name_appears_in(struct_expr, "w"), \
+        "gate-3 HIGH-1: StructLit.fields must be walked"
+
+    # Match containing 'w' in an arm body
+    arm = A.MatchArm(span=span, pattern=A.PatWildcard(span=span),
+                      guard=None, body=w)
+    match_expr = A.Match(
+        span=span,
+        scrutinee=A.IntLit(span=span, value=0),
+        arms=[arm],
+    )
+    assert _name_appears_in(match_expr, "w"), \
+        "gate-3 HIGH-2: Match.arms must be walked"
+
+    # Negative control: name not present
+    struct_negative = A.StructLit(span=span, name="Point",
+                                   fields=[("x", A.IntLit(span=span,
+                                                            value=1))])
+    assert not _name_appears_in(struct_negative, "w")
+
+
+def test_stage54_gate3_clamp_warns_via_structlit_param():
+    """Stage 54 gate-3 HIGH-1 end-to-end: `_stage54_clamp_chain_rule`
+    now warns even when the var-reference is nested inside a
+    StructLit.fields[i][1] position (pre-fix this was a silent
+    evade of the MEDIUM-5 warn)."""
+    from helixc.frontend.autodiff import (
+        _diff_call_chain_rule, take_diff_warnings,
+    )
+    span = type("Span", (), {"line": 0, "col": 0})()
+    # __clamp(x, Field(StructLit(Point, {x: w}), "x"), 1.0)
+    w = A.Name(span=span, name="w", generics=[])
+    struct = A.StructLit(span=span, name="Point",
+                          fields=[("x", w)])
+    lo = A.Field(span=span, obj=struct, name="x")
+    call = A.Call(
+        span=span,
+        callee=A.Name(span=span, name="__clamp", generics=[]),
+        args=[A.Name(span=span, name="x", generics=[]),
+              lo, A.FloatLit(span=span, value=1.0)],
+    )
+    take_diff_warnings()  # drain
+    _diff_call_chain_rule(call, "w", span)
+    msgs = take_diff_warnings()
+    assert any("clamp" in m.lower() and ("dlo" in m or "dhi" in m
+                                          or "drop" in m.lower())
+               for m in msgs), \
+        f"gate-3 HIGH-1: clamp warn should fire for w nested " \
+        f"inside StructLit; got: {msgs}"
+
+
+def test_stage54_gate3_reverse_mode_clamp_warns_too():
+    """Stage 54 gate-3 MEDIUM-3 forward/reverse parity:
+    reverse-mode `_propagate` __clamp arm now emits `_ad_warn`
+    when any tracked param appears in lo/hi. Mirror of forward
+    fix. Pre-fix, reverse silently dropped dlo/dhi with zero
+    diagnostic — silent-failure ban violation per CLAUDE.md."""
+    from helixc.frontend.autodiff_reverse import differentiate_reverse
+    from helixc.frontend.autodiff import take_diff_warnings
+
+    src = (
+        "fn loss(x: f64, w: f64) -> f64 { "
+        "  __clamp(x, w * 0.1, w * 0.9) "
+        "}"
+    )
+    prog = parse(src)
+    loss = [it for it in prog.items
+            if isinstance(it, A.FnDecl) and it.name == "loss"][0]
+    body = loss.body.final_expr
+    take_diff_warnings()  # drain
+    # Differentiate w.r.t. 'w' — appears in lo and hi
+    differentiate_reverse(body, ["w"])
+    msgs = take_diff_warnings()
+    assert any("clamp" in m.lower() and ("dlo" in m or "dhi" in m
+                                          or "drop" in m.lower())
+               and "reverse" in m.lower()
+               for m in msgs), \
+        f"gate-3 MEDIUM-3: reverse-mode __clamp should warn " \
+        f"about dropped dlo/dhi w.r.t. w; got: {msgs}"
+
+
 def test_stage54_inc3a_loop_body_descent_inlines_pure_helper():
     """Stage 54 Inc 3a: `_inline_user_calls.go()` walker now
     descends into A.For/A.While/A.Loop bodies. Pre-fix, loop

@@ -1420,6 +1420,27 @@ def _name_appears_in(expr: A.Expr, name: str) -> bool:
             for s in sublist:
                 if isinstance(s, A.Expr) and _name_appears_in(s, name):
                     return True
+    # Stage 54 gate-3 HIGH-1 fix: StructLit.fields is a special
+    # shape (list[tuple[str, Expr]]) — pre-fix, the generic list
+    # walker iterated tuples and isinstance(tuple, A.Expr) was
+    # False so all fields were silently skipped. The
+    # `__clamp(x, Point{x: w}.x, 1.0)` case evaded the MEDIUM-5
+    # warn from `_stage54_clamp_chain_rule`.
+    if isinstance(expr, A.StructLit):
+        for (_field_name, v) in expr.fields:
+            if isinstance(v, A.Expr) and _name_appears_in(v, name):
+                return True
+    # Stage 54 gate-3 HIGH-2 fix: Match.arms is list[MatchArm]
+    # (not Expr), so the generic list walker skipped it. Same
+    # silent-evade-warn defect class as StructLit.fields above.
+    if isinstance(expr, A.Match):
+        for arm in expr.arms:
+            if (arm.guard is not None
+                    and _name_appears_in(arm.guard, name)):
+                return True
+            if (isinstance(arm.body, A.Expr)
+                    and _name_appears_in(arm.body, name)):
+                return True
     # Block stmts: walk Let.value, ConstStmt.value, ExprStmt.expr
     stmts = getattr(expr, "stmts", None)
     if isinstance(stmts, list):
