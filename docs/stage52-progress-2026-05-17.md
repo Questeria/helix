@@ -379,3 +379,67 @@ overflow recurrence) DEFINITIVELY RULED OUT. Top hypothesis
 H1 (stack overflow from fixed 1024-byte Helix codegen prologue)
 remains; Exp B (`ulimit -s unlimited`) is the next step for the
 Stage 50 retry attempt.
+
+## Inc 8–12 + gates 11–14 follow-on (2026-05-17 late evening)
+
+After the Inc 7 closure point above, the cascading-defect rhythm
+continued for 5 more increments + 4 more gates. Each Inc shipped
+caught the next defect class:
+
+- **Inc 8 (e9d3d6d, gate-11 silent-failure HIGH-1)**: A.UnsafeBlock
+  arm in recursive `_modal_origin_of_expr`. Inc 6's helper handled
+  Block/If/Match but missed UnsafeBlock — `into_known(unsafe {
+  from_uncertain(u) })` silently passed.
+- **Inc 9 (006df58, gate-12 type-design HIGH)**: F2 partial
+  application of ModalKind Literal alias — Inc 8 retyped only
+  `_MODAL_ELIM_TO_KIND`, leaving `_modal_origin_provenance`,
+  `_fn_modal_return_kind`, helper return, and 4 locals still
+  raw `str`. Inc 9 propagated ModalKind to all 7 sites + added
+  runtime assertion at `_register_fn` populate (boundary guard
+  for AST `TyModal.kind`).
+- **Inc 10 (40a791d, gate-12 silent-failure CRITICAL-1)**: A.Cast
+  arm. `into_known(from_uncertain(u) as i32)` silently passed —
+  the 3-character `as T` annotation bypassed all category-error
+  audits. Same defect class as Inc 8 (UnsafeBlock).
+- **Inc 11 (9ab8123, proactive cascade-break)**: scanned all 32
+  A.Expr nodes for wrapper-class gaps. Found A.Unary + A.Binary;
+  closed both in same commit BEFORE gate-13 had to find them.
+  Binary's value-merge semantics (one-sided propagate vs
+  control-flow drop) intentionally DIFFERS from If/Match — see
+  the long comment at the Binary arm for the 3-domain
+  distinction (expression-tree merge vs control-flow vs
+  statement-scope name-map).
+- **Inc 12 (a8a7777, gate-13 silent-failure CRITICAL-1)**:
+  **deeper defect class** — scope-lifetime mismatch. The
+  recursive helper recursing to Block.final_expr would consult
+  `_modal_origin_provenance` AFTER `_check_block` had popped
+  the inner scope, so inner-let-bound Names returned None.
+  Fix: `_block_modal_kind: dict[int, Optional[ModalKind]]`
+  cache populated at block-exit (while scope live). Consulted
+  by A.Block arm + `_modal_origin_of_expr_block_tail`.
+  7 reproducer variants all FIRE post-fix.
+- **Inc 12 polish (32df46e, gate-14 type-design HIGH-1 theoretical)**:
+  defensive cache write in `_check_expr_in_block_scope` (HIGH
+  was theoretical — all 4 audit-recommended reproducers verified
+  FIRE; defensive belt-and-suspenders applied for future safety).
+- **Gate-14 CLEAN on all 3 lanes**: silent-failure 0 HIGH+,
+  type-design 0 HIGH+ (HIGH was theoretical), code-review
+  0 HIGH+ (2 IMPORTANT doc-drift fixed below). **1 of 3 fresh
+  consecutive clean gates achieved.**
+
+Stage 52 surface now covers **22+ launder paths** via **9
+wrapper-AST kinds** in the recursive helper (Name, Call, Block,
+UnsafeBlock, Cast, Unary, Binary, If, Match). Plus the scope-
+cache fix in Inc 12 ensures inner-let-bound Names survive
+the block-exit pop boundary.
+
+Tests: 113 passing (was 100 at Inc 7 closure; +13 across Inc 8/10/11/12 pins).
+
+## Stage 52 closure path forward
+
+Per the 3-clean-gate protocol:
+- Gate-14 CLEAN ✓ (1 of 3)
+- Gate-15 + gate-16: need both CLEAN to declare STAGE 52 CLOSED.
+
+If gate-15 or gate-16 find new defects, the cascade resumes;
+otherwise this is the final stretch.

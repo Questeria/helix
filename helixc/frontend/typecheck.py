@@ -800,6 +800,26 @@ class TypeChecker:
         # from "not yet visited / never populated". Using .get() would
         # silently conflate the two and re-create the gate-13 silent-
         # failure class (per gate-14 type-design MEDIUM-1 finding).
+        #
+        # Cache lifetime invariants (gate-14 silent-failure MEDIUM-1/2/3
+        # documentation):
+        # - Pass-2 fixed-point loop re-runs `_check_fn` multiple times;
+        #   each iteration re-writes the cache entries for blocks it
+        #   visits (last-write-wins). Safe because depth-first AST
+        #   traversal ensures inner blocks are re-cached BEFORE outer
+        #   launder consults read them within the SAME iteration.
+        # - Cache assumes AST-preserving passes only (no clone/rebuild
+        #   of A.Block nodes between cache population and consult).
+        #   Current monomorphization/struct_mono/flatten_impls passes
+        #   are AST-preserving for typecheck input. A future rebuild-
+        #   aware re-typecheck phase would need a separate cache or
+        #   different key strategy (e.g., span+stmt-hash).
+        # - `_check_expr_in_block_scope` has its OWN snapshot/restore;
+        #   if a future caller queries the recursive helper AFTER that
+        #   wrapper's finally clause runs, the inner-scope taint would
+        #   be gone. Today no such caller exists, but the defensive
+        #   cache write in `_check_expr_in_block_scope` (for A.Block-
+        #   form wrapped exprs) provides belt-and-suspenders.
         self._block_modal_kind: dict[int, Optional[ModalKind]] = {}
         # Stage 52 gate-1 F1e / Inc 2: parallel stack tracking
         # names introduced via let in each open block. Used at
@@ -2522,6 +2542,17 @@ class TypeChecker:
         let/Assign + PatOr binders). Returns the modal-origin kind
         ('known'/'believed'/'goal'/'uncertain') of an expression if
         it can be statically determined, else None.
+
+        Cache invariant (Stage 52 Inc 12 / gate-13 silent-failure
+        CRITICAL-1 fix): the A.Block arm consults the
+        `_block_modal_kind` cache FIRST, populated by `_check_block`
+        at block-exit while the inner scope is still live.
+        Required because `_modal_origin_of_expr` runs at launder-
+        check sites AFTER `_check_expr(BlockExpr)` has returned —
+        by then `_check_block`'s finally-clause has popped the
+        inner scope and any inner-Let-bound Name has lost its
+        `_modal_origin_provenance` entry. Without the cache, all
+        Block-with-inner-Let-tail reproducers would silently pass.
 
         Cases handled (gate-13 type-design F-Inc11-2 fix: enumerate
         all 9 wrapper-AST arms; was stale through Inc 6/8/10/11):

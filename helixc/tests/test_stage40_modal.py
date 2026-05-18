@@ -1800,6 +1800,74 @@ def test_stage52_gate7_type_design_high_1_last_assigns_cleared_per_fn():
 # ============================================================
 
 
+def test_stage52_inc12_cast_of_block_with_inner_let_fires():
+    """Stage 52 Inc 12 companion (gate-14 code-review sub-80):
+    `into_X((Block-with-inner-let) as i32)`. The cache lookup
+    composes with Cast — Block populated cache, Cast arm recurses
+    to value (Block), Block arm hits cache."""
+    src = """
+fn main() -> i32 {
+    let u: Uncertain<i32> = into_uncertain(1);
+    let k: Known<i32> = into_known(({
+        let x: i32 = from_uncertain(u);
+        x
+    }) as i32);
+    from_known(k)
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    errs = typecheck(prog)
+    assert any("launder" in str(e) and "Uncertain" in str(e)
+               and "Known" in str(e) for e in errs), \
+        f"cast-of-block-with-let MUST FIRE (Stage 52 Inc 12 " \
+        f"companion), got: {[str(e) for e in errs]}"
+
+
+def test_stage52_inc12_unary_of_block_with_inner_let_fires():
+    """Stage 52 Inc 12 companion: `into_X(-(Block-with-inner-let))`.
+    Unary arm composes with Block arm via cache."""
+    src = """
+fn main() -> i32 {
+    let u: Uncertain<i32> = into_uncertain(1);
+    let k: Known<i32> = into_known(-({
+        let x: i32 = from_uncertain(u);
+        x
+    }));
+    from_known(k)
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    errs = typecheck(prog)
+    assert any("launder" in str(e) and "Uncertain" in str(e)
+               and "Known" in str(e) for e in errs), \
+        f"unary-of-block-with-let MUST FIRE (Stage 52 Inc 12 " \
+        f"companion), got: {[str(e) for e in errs]}"
+
+
+def test_stage52_inc12_match_arm_block_with_inner_let_fires():
+    """Stage 52 Inc 12 companion: match-arm with Block-body
+    containing inner let. Match arm recurses through Block via
+    cache."""
+    src = """
+fn main() -> i32 {
+    let u: Uncertain<i32> = into_uncertain(1);
+    let k: Known<i32> = into_known(match 0 {
+        _ => {
+            let x: i32 = from_uncertain(u);
+            x
+        }
+    });
+    from_known(k)
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    errs = typecheck(prog)
+    assert any("launder" in str(e) and "Uncertain" in str(e)
+               and "Known" in str(e) for e in errs), \
+        f"match-arm-block-with-let MUST FIRE (Stage 52 Inc 12 " \
+        f"companion), got: {[str(e) for e in errs]}"
+
+
 def test_stage52_inc12_block_with_inner_let_fires():
     """Stage 52 Inc 12 / gate-13 silent-failure CRITICAL-1:
     `into_known({ let x = from_X(u); x })` MUST FIRE. The Block's
