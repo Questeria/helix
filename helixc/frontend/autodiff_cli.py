@@ -200,6 +200,43 @@ def _autotune_summary(path: str) -> int:
     return 0
 
 
+def _autotune_budget(path: str, max_total: str) -> int:
+    """Stage 59 follow-on / Tier 2 #8 polish: assertion-style budget
+    check for total autotune variant count.
+
+    Computes `sum(autotune_expansion_summary(prog).values())` and
+    compares to `max_total` (parsed as int). If the total is at or
+    below the budget, exits 0 silently. If above, exits 1 with a
+    diagnostic showing the per-fn breakdown.
+
+    Exit codes:
+      0 — total within budget (silent)
+      1 — total exceeds budget (prints breakdown)
+      2 — bad arg (parse failure, non-int budget, etc.)
+
+    Use case: CI gate. A repo-wide pre-commit hook can assert
+    `--autotune-budget kernels.hx 256` so accidental autotune-list
+    blow-ups can't merge silently.
+    """
+    try:
+        budget = int(max_total)
+    except ValueError:
+        print(f"error: autotune_cli: max_total {max_total!r} is not an int",
+              file=sys.stderr)
+        return 2
+    from .autotune_expand import autotune_expansion_summary
+    src = _read_source(path)
+    prog = _parse_or_exit(src, path)
+    summary = autotune_expansion_summary(prog)
+    total = sum(summary.values())
+    if total <= budget:
+        return 0
+    print(f"autotune variant count {total} exceeds budget {budget}")
+    for fn_name in sorted(summary.keys()):
+        print(f"  {fn_name} variants={summary[fn_name]}")
+    return 1
+
+
 def _module_hash_cli(path: str, mod_name: str) -> int:
     """Stage 59 follow-on / Tier 4 #13 polish: print the module_hash
     of a specific module by name. For nested modules, accept dotted
@@ -457,6 +494,13 @@ def main():
                   file=sys.stderr)
             sys.exit(2)
         sys.exit(_autotune_summary(args[0]))
+
+    if "--autotune-budget" in flags:
+        if len(args) < 2:
+            print("usage: --autotune-budget <file.hx> <max_total>",
+                  file=sys.stderr)
+            sys.exit(2)
+        sys.exit(_autotune_budget(args[0], args[1]))
 
     if len(sys.argv) < 3 or len(args) < 2:
         print(__doc__.strip(), file=sys.stderr)

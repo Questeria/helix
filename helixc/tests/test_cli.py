@@ -5818,6 +5818,65 @@ def test_stage59_autotune_summary_empty_program(tmp_path):
     assert lines == ["total variants=0"]
 
 
+def test_stage59_autotune_budget_within_exits_0(tmp_path):
+    """Stage 59 follow-on / Tier 2 #8 polish: --autotune-budget
+    exits 0 silently when total variants are within budget."""
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "small.hx"
+    src.write_text(
+        "@autotune(B: [16, 32])\n"
+        "@kernel\n"
+        "fn k(x: i32) -> i32 { x + B }\n",
+        encoding="utf-8",
+    )
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--autotune-budget", str(src), "10"],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0
+    assert proc.stdout == ""
+
+
+def test_stage59_autotune_budget_over_exits_1(tmp_path):
+    """Stage 59 follow-on: --autotune-budget exits 1 with breakdown
+    when total exceeds budget."""
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "big.hx"
+    src.write_text(
+        "@autotune(B: [16, 32, 64, 128])\n"
+        "@kernel\n"
+        "fn k(x: i32) -> i32 { x + B }\n",
+        encoding="utf-8",
+    )
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--autotune-budget", str(src), "2"],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 1
+    assert "exceeds budget" in proc.stdout
+    assert "k variants=4" in proc.stdout
+
+
+def test_stage59_autotune_budget_bad_int_exits_2(tmp_path):
+    """Stage 59 follow-on: --autotune-budget with non-int budget arg
+    exits 2 (bad invocation)."""
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "any.hx"
+    src.write_text("fn x() -> i32 { 0 }\n", encoding="utf-8")
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--autotune-budget", str(src), "notanint"],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 2
+    assert "not an int" in proc.stderr
+
+
 def test_stage59_module_hash_dotted_nested_name(tmp_path):
     """Stage 59 follow-on: --module-hash accepts dotted names for
     nested modules."""
