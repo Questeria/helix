@@ -5878,6 +5878,7 @@ def test_stage59_autodiff_cli_help_mentions_polish_flags():
         "--list-impls", "--list-impls-json",
         "--impl-methods", "--impl-methods-json",
         "--fn-signature", "--fn-signature-json",
+        "--module-stats", "--module-stats-json",
         "--list-fn-attrs", "--list-fn-attrs-json",
         "--list-fns-by-attr", "--list-fns-by-attr-json",
         "--fn-callgraph", "--fn-callers",
@@ -7540,6 +7541,81 @@ def test_stage59_agent_methods_json(tmp_path):
         {"name": "propose", "params": ["i32"], "return_ty": "i32"},
         {"name": "evaluate", "params": ["i32", "i32"], "return_ty": "i32"},
     ]}
+
+
+def test_stage59_module_stats_text(tmp_path):
+    """Stage 59 follow-on / Tier 4 #13 polish: --module-stats prints
+    item counts for the named module (one line per non-zero kind)."""
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "ms.hx"
+    src.write_text(
+        "mod foo {\n"
+        "    fn a() -> i32 { 1 }\n"
+        "    fn b() -> i32 { 2 }\n"
+        "    struct P { x: i32 }\n"
+        "    const K: i32 = 5;\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--module-stats", str(src), "foo"],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0
+    lines = sorted(l for l in proc.stdout.strip().splitlines() if l)
+    assert lines == ["consts: 1", "fns: 2", "structs: 1"]
+
+
+def test_stage59_module_stats_json(tmp_path):
+    """Stage 59 follow-on / Tier 4 #13 polish: --module-stats-json
+    emits all 9 keys (zeros included) + name."""
+    import json
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "msj.hx"
+    src.write_text(
+        "mod bar {\n"
+        "    fn x() -> i32 { 1 }\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--module-stats-json", str(src), "bar"],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0
+    result = json.loads(proc.stdout)
+    assert result == {
+        "name": "bar",
+        "fns": 1,
+        "structs": 0,
+        "enums": 0,
+        "type_aliases": 0,
+        "uses": 0,
+        "consts": 0,
+        "agents": 0,
+        "impls": 0,
+        "modules": 0,
+    }
+
+
+def test_stage59_module_stats_missing_rc1(tmp_path):
+    """Stage 59 follow-on / Tier 4 #13 polish: --module-stats exits 1
+    when module not found."""
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "ms_miss.hx"
+    src.write_text("fn root() -> i32 { 0 }\n", encoding="utf-8")
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--module-stats", str(src), "nope"],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 1
+    assert "not found" in proc.stderr
 
 
 def test_stage59_fn_signature_text(tmp_path):

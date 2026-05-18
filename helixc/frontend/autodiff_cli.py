@@ -104,6 +104,11 @@ Introspection (Stage 28.9 + Stage 58 + Stage 59 polish):
         Same as --list-structs but machine-readable JSON output.
     --list-modules-json <file.hx>
         Same as --list-modules but machine-readable JSON output.
+    --module-stats <file.hx> <mod_name>
+        Per-ModBlock item-count introspection (fns/structs/enums/
+        etc. nested inside a named module). Dotted names supported.
+    --module-stats-json <file.hx> <mod_name>
+        Same as --module-stats but JSON with all 9 keys (zeros incl.).
     --parse-only <file.hx>
         Lightest CI gate: exit 0 if source parses cleanly, 1 on error.
     --list-fn-attrs <file.hx>
@@ -1456,6 +1461,121 @@ def _autotune_budget(path: str, max_total: str) -> int:
     for fn_name in sorted(summary.keys()):
         print(f"  {fn_name} variants={summary[fn_name]}")
     return 1
+
+
+def _module_stats(path: str, mod_name: str) -> int:
+    """Stage 59 follow-on / Tier 4 #13 polish: per-ModBlock item-count
+    introspection. Print counts of nested fns / structs / enums /
+    type-aliases / uses / consts / agents / impls / sub-modules within
+    a named module.
+
+    Output: one line per non-zero category as '<kind>: N' (alphabetic
+    order). Empty module → no output.
+
+    Per-item introspection family extends to 8 Item subclasses:
+    struct-fields, const-value, enum-variants, agent-methods,
+    type-alias-target, impl-methods, fn-signature, module-stats.
+
+    For nested modules, accept dotted names (e.g., 'outer.inner').
+
+    Exit 0 success, 1 if mod_name not found.
+    """
+    src = _read_source(path)
+    prog = _parse_or_exit(src, path)
+
+    def _find(items, target: str, prefix: str = ""):
+        for it in items:
+            if isinstance(it, A.ModBlock):
+                full = it.name if not prefix else f"{prefix}.{it.name}"
+                if full == target:
+                    return it
+                found = _find(it.items, target, full)
+                if found is not None:
+                    return found
+            elif isinstance(it, A.ModuleDecl):
+                full = ".".join(it.path)
+                if prefix:
+                    full = f"{prefix}.{full}"
+                if full == target:
+                    return it
+        return None
+
+    mod = _find(prog.items, mod_name)
+    if mod is None:
+        print(f"error: autodiff_cli: module {mod_name!r} not found "
+              f"in {path}", file=sys.stderr)
+        return 1
+    # ModuleDecl is a header-only declaration; no items to count.
+    items = getattr(mod, "items", None) or []
+    counts: dict[str, int] = {
+        "fns": sum(1 for it in items if isinstance(it, A.FnDecl)),
+        "structs": sum(1 for it in items if isinstance(it, A.StructDecl)),
+        "enums": sum(1 for it in items if isinstance(it, A.EnumDecl)),
+        "type_aliases": sum(1 for it in items if isinstance(it, A.TypeAlias)),
+        "uses": sum(1 for it in items if isinstance(it, A.UseDecl)),
+        "consts": sum(1 for it in items if isinstance(it, A.ConstDecl)),
+        "agents": sum(1 for it in items if isinstance(it, A.AgentDecl)),
+        "impls": sum(1 for it in items if isinstance(it, A.ImplBlock)),
+        "modules": sum(1 for it in items if isinstance(it, A.ModBlock)),
+    }
+    for kind in sorted(counts):
+        if counts[kind] > 0:
+            print(f"{kind}: {counts[kind]}")
+    return 0
+
+
+def _module_stats_json(path: str, mod_name: str) -> int:
+    """Stage 59 follow-on / Tier 4 #13 polish: --module-stats in
+    machine-readable JSON form.
+
+    Output schema:
+      {"name": "<mod_name>",
+       "fns": N, "structs": N, "enums": N, "type_aliases": N,
+       "uses": N, "consts": N, "agents": N, "impls": N,
+       "modules": N}
+    All 9 keys always present (zeros included).
+    """
+    import json
+    src = _read_source(path)
+    prog = _parse_or_exit(src, path)
+
+    def _find(items, target: str, prefix: str = ""):
+        for it in items:
+            if isinstance(it, A.ModBlock):
+                full = it.name if not prefix else f"{prefix}.{it.name}"
+                if full == target:
+                    return it
+                found = _find(it.items, target, full)
+                if found is not None:
+                    return found
+            elif isinstance(it, A.ModuleDecl):
+                full = ".".join(it.path)
+                if prefix:
+                    full = f"{prefix}.{full}"
+                if full == target:
+                    return it
+        return None
+
+    mod = _find(prog.items, mod_name)
+    if mod is None:
+        print(f"error: autodiff_cli: module {mod_name!r} not found "
+              f"in {path}", file=sys.stderr)
+        return 1
+    items = getattr(mod, "items", None) or []
+    result = {
+        "name": mod_name,
+        "fns": sum(1 for it in items if isinstance(it, A.FnDecl)),
+        "structs": sum(1 for it in items if isinstance(it, A.StructDecl)),
+        "enums": sum(1 for it in items if isinstance(it, A.EnumDecl)),
+        "type_aliases": sum(1 for it in items if isinstance(it, A.TypeAlias)),
+        "uses": sum(1 for it in items if isinstance(it, A.UseDecl)),
+        "consts": sum(1 for it in items if isinstance(it, A.ConstDecl)),
+        "agents": sum(1 for it in items if isinstance(it, A.AgentDecl)),
+        "impls": sum(1 for it in items if isinstance(it, A.ImplBlock)),
+        "modules": sum(1 for it in items if isinstance(it, A.ModBlock)),
+    }
+    print(json.dumps(result, sort_keys=True, indent=2))
+    return 0
 
 
 def _module_hash_cli(path: str, mod_name: str) -> int:
@@ -5424,6 +5544,20 @@ def main():
                   file=sys.stderr)
             sys.exit(2)
         sys.exit(_module_hash_cli(args[0], args[1]))
+
+    if "--module-stats" in flags:
+        if len(args) < 2:
+            print("usage: --module-stats <file.hx> <module_name>",
+                  file=sys.stderr)
+            sys.exit(2)
+        sys.exit(_module_stats(args[0], args[1]))
+
+    if "--module-stats-json" in flags:
+        if len(args) < 2:
+            print("usage: --module-stats-json <file.hx> <module_name>",
+                  file=sys.stderr)
+            sys.exit(2)
+        sys.exit(_module_stats_json(args[0], args[1]))
 
     if "--autotune-summary" in flags:
         if len(args) < 1:
