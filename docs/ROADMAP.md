@@ -400,7 +400,14 @@ These are blockers for any real ML training, in priority order.
 ## Tier 4 — table-stakes infrastructure
 
 13. **Module system** with content-addressed packages (modules
-    referenced by AST hash). **2 weeks.**
+    referenced by AST hash). ✅ CORE DONE 2026-05-18 (Stage 58
+    commit abb7a89). `module_hash(decl) -> str` and
+    `program_hash(prog) -> str` in `helixc/frontend/ast_hash.py`
+    aggregate the existing `structural_hash` (Stage 28.9) machinery
+    over ModuleDecl items / Program top-level items. Span-
+    independent + alpha-equivalence-aware. Future wiring into
+    compilation cache (helixc/check.py) for build-system-level
+    content addressing is a separate stage.
 
 14. **Result<T,E> + ? operator.** Error handling beyond panic. **1
     week.**
