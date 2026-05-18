@@ -371,6 +371,44 @@ def tree_hash(leaves_by_path: dict) -> str:
     return h.hexdigest()
 
 
+def tree_size(leaves_by_path: dict) -> int:
+    """Stage 59 follow-on / Tier 2 #7 polish — JAX-style tree_size.
+
+    Number of leaves in the pytree (one int per leaf). Equivalent to
+    `len(tree_leaves(d))` but allocates nothing.
+
+    Use case: parameter count, "is this layer empty?" sanity checks,
+    O(1) shape signature for printing.
+    """
+    return len(leaves_by_path)
+
+
+def tree_diff(a_leaves: dict, b_leaves: dict, eq_fn=None) -> list[str]:
+    """Stage 59 follow-on / Tier 2 #7 polish — companion to tree_equal.
+
+    Returns the sorted list of paths where two pytrees differ. A path
+    appears in the result if EITHER:
+      - It is in exactly one of (a_leaves, b_leaves), OR
+      - It is in both but eq_fn(a[path], b[path]) is False.
+
+    Empty list ⇔ tree_equal(a, b, eq_fn) == True.
+
+    `eq_fn` defaults to `==`. Pass an approximate-equality predicate
+    (e.g., `lambda a, b: abs(a-b) < 1e-9`) for float tolerance.
+
+    Use case: AGI verifier reporting a minimal witness when two
+    pytrees disagree — print exactly the paths that diverged rather
+    than re-dumping both trees.
+    """
+    if eq_fn is None:
+        eq_fn = lambda x, y: x == y
+    diffs = set(a_leaves.keys()) ^ set(b_leaves.keys())
+    for path in set(a_leaves.keys()) & set(b_leaves.keys()):
+        if not eq_fn(a_leaves[path], b_leaves[path]):
+            diffs.add(path)
+    return sorted(diffs)
+
+
 def tree_leaves(leaves_by_path: dict) -> list:
     """Stage 59 follow-on / Tier 2 #7 polish — JAX-style tree_leaves.
 

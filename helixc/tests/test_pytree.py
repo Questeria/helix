@@ -605,6 +605,45 @@ def test_tree_reduce_deterministic_order():
     assert seq == "123"
 
 
+def test_tree_size_counts_leaves():
+    """Stage 59 follow-on / Tier 2 #7 polish: tree_size returns the
+    number of leaves (len of the dict, but spelled clearly)."""
+    from helixc.frontend.pytree import tree_size
+    assert tree_size({}) == 0
+    assert tree_size({"w": 1.0}) == 1
+    assert tree_size({"w1": 1.0, "w2": 2.0, "b": 0.0}) == 3
+
+
+def test_tree_diff_empty_when_equal():
+    """Stage 59 follow-on: tree_diff returns [] iff trees are equal."""
+    from helixc.frontend.pytree import tree_diff, tree_equal
+    a = {"w": 1.0, "b": 0.0}
+    b = {"w": 1.0, "b": 0.0}
+    assert tree_diff(a, b) == []
+    assert tree_equal(a, b)
+
+
+def test_tree_diff_reports_differing_paths():
+    """Stage 59 follow-on: tree_diff returns sorted paths where leaves
+    diverge (in value) or where a path is in only one tree."""
+    from helixc.frontend.pytree import tree_diff
+    a = {"w": 1.0, "b": 0.0, "only_a": 9.0}
+    b = {"w": 2.0, "b": 0.0, "only_b": 9.0}
+    # 'w' differs in value, 'only_a' missing in b, 'only_b' missing in a
+    assert tree_diff(a, b) == ["only_a", "only_b", "w"]
+
+
+def test_tree_diff_with_approx_eq_fn():
+    """Stage 59 follow-on: custom eq_fn enables float-tolerance diff —
+    leaves within tolerance are considered equal."""
+    from helixc.frontend.pytree import tree_diff
+    a = {"w": 1.0, "b": 0.5}
+    b = {"w": 1.0 + 1e-12, "b": 0.6}
+    approx = lambda x, y: abs(x - y) < 1e-9
+    # 'w' equal under approx, 'b' diverges (|0.5-0.6|=0.1 > 1e-9)
+    assert tree_diff(a, b, eq_fn=approx) == ["b"]
+
+
 def test_tree_hash_deterministic():
     """Stage 59 follow-on / Tier 2 #7 polish: tree_hash returns the
     same SHA-256 for the same leaves dict, across calls."""
