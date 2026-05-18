@@ -780,6 +780,19 @@ class TypeChecker:
         # indirection), which was the Stage 40 H1 "different defect
         # class" deferred from Stage 52.
         self._fn_modal_return_kind: dict[str, ModalKind] = {}
+        # Stage 52 Inc 12 / gate-13 silent-failure CRITICAL-1 fix:
+        # cache the modal kind of each Block's final_expr at block-
+        # exit time (while the block's scope is still live). Without
+        # this, `into_known({ let x = from_X(u); x })` silently
+        # passed: by the time the recursive `_modal_origin_of_expr`
+        # consult ran in the launder check, `_check_block` had
+        # already popped the inner let-scope, so the Name("x")
+        # lookup returned None.
+        # Keyed by id(A.Block) — Python AST nodes are immutable so
+        # id() is stable across passes. The cache is per-check()
+        # (cleared in check() init) since AST identities are unique
+        # within a typecheck run.
+        self._block_modal_kind: dict[int, Optional[ModalKind]] = {}
         # Stage 52 gate-1 F1e / Inc 2: parallel stack tracking
         # names introduced via let in each open block. Used at
         # block-exit restore to distinguish inner-shadow lets
@@ -871,6 +884,9 @@ class TypeChecker:
         # Stage 53 Inc 1: parallel clear for re-entrancy safety
         # (LSP/REPL). Repopulated by _register_fn during Pass 1.
         self._fn_modal_return_kind = {}
+        # Stage 52 Inc 12: per-check() clear of the block-modal-kind
+        # cache (AST identities unique within a typecheck run).
+        self._block_modal_kind = {}
         self._recursive_enum_names: set[str] = set()
         self._type_alias_cache = {}
         self._local_const_scalar_scopes = []
@@ -2577,6 +2593,13 @@ class TypeChecker:
         # territory, same conservative semantics as gate-3 multi-
         # kind divergence drop).
         if isinstance(expr, A.Block):
+            # Stage 52 Inc 12 / gate-13 silent-failure CRITICAL-1
+            # fix: check the block-modal-kind cache first. The cache
+            # was populated by `_check_block` while the inner scope
+            # was still live; reading provenance now (post-pop) would
+            # miss inner-let-bound Name lookups.
+            if id(expr) in self._block_modal_kind:
+                return self._block_modal_kind[id(expr)]
             if expr.final_expr is not None:
                 return self._modal_origin_of_expr(expr.final_expr)
             return None
@@ -2676,7 +2699,16 @@ class TypeChecker:
     ) -> Optional[ModalKind]:
         """Helper for the recursive yield-from-modal detection in
         `_modal_origin_of_expr`. Returns the modal kind of a block's
-        tail expression if statically determinable."""
+        tail expression if statically determinable.
+
+        Stage 52 Inc 12 / gate-13 silent-failure CRITICAL-1 fix:
+        consult `_block_modal_kind` cache first. Without this,
+        if-arm Block bodies (`if cond { let x = from_X(u); x } ...`)
+        would bypass the A.Block arm's cache lookup and try to
+        consult `_modal_origin_provenance` post-scope-pop — silent
+        miscompile."""
+        if id(block) in self._block_modal_kind:
+            return self._block_modal_kind[id(block)]
         if block.final_expr is not None:
             return self._modal_origin_of_expr(block.final_expr)
         return None
@@ -2870,6 +2902,17 @@ class TypeChecker:
                 self._check_stmt(stmt, inner)
             if block.final_expr is not None:
                 final_ty = self._check_expr(block.final_expr, inner)
+                # Stage 52 Inc 12 / gate-13 silent-failure CRITICAL-1
+                # fix: cache the block's final-expr modal kind WHILE
+                # the inner scope is still live. The recursive
+                # `_modal_origin_of_expr` consult at the launder check
+                # runs AFTER `_check_expr(BlockExpr)` returns — by then
+                # the scope has been popped and any inner-Let-bound
+                # Name has lost its `_modal_origin_provenance` entry.
+                # Caching at this point captures the live state.
+                self._block_modal_kind[id(block)] = (
+                    self._modal_origin_of_expr(block.final_expr)
+                )
                 if (expected_final_ty is not None
                         and final_context is not None
                         and self._compatible(final_ty, expected_final_ty)

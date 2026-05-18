@@ -40,7 +40,7 @@ CHECK 2 — Stage 40 modal test sweep (the Stage 52 work)
 ============================================================
 python -m pytest helixc/tests/test_stage40_modal.py --tb=line
 
-EXPECT: 100+ tests, ALL pass. If any test_stage52_* or
+EXPECT: 113+ tests, ALL pass. If any test_stage52_* or
 test_stage53_* test fails, copy the assertion message.
 
 ============================================================
@@ -138,8 +138,8 @@ through.
 
 - **CHECK 1** — the self-host cascade verifies the compiler can compile
   itself, twice, byte-identical. If this breaks, the rest is suspect.
-- **CHECK 2** — runs the 100+ modal-origin tests we've been hardening
-  across gates 1-10 of Stage 52 + Stage 53 Inc 1+2. Every "ATTACK"
+- **CHECK 2** — runs the 113+ modal-origin tests we've been hardening
+  across gates 1-13 of Stage 52 + Stage 53 Inc 1+2. Every "ATTACK"
   in CHECK 3 has a
   corresponding regression pin here.
 - **CHECK 3** — the AGI epistemic-safety property in action. Each

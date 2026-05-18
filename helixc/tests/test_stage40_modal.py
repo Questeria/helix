@@ -1800,6 +1800,104 @@ def test_stage52_gate7_type_design_high_1_last_assigns_cleared_per_fn():
 # ============================================================
 
 
+def test_stage52_inc12_block_with_inner_let_fires():
+    """Stage 52 Inc 12 / gate-13 silent-failure CRITICAL-1:
+    `into_known({ let x = from_X(u); x })` MUST FIRE. The Block's
+    final-expr is a Name to an inner-Let-bound variable; by the
+    time the launder check recursed via `_modal_origin_of_expr`,
+    `_check_block` had popped the inner scope and the Name lookup
+    returned None.
+
+    Fix: cache block's final-expr modal kind at block-exit time
+    (while scope still live), keyed by id(Block). The recursive
+    helper's A.Block arm consults the cache first."""
+    src = """
+fn main() -> i32 {
+    let u: Uncertain<i32> = into_uncertain(1);
+    let k: Known<i32> = into_known({
+        let x: i32 = from_uncertain(u);
+        x
+    });
+    from_known(k)
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    errs = typecheck(prog)
+    assert any("launder" in str(e) and "Uncertain" in str(e)
+               and "Known" in str(e) for e in errs), \
+        f"block-with-inner-let-tail MUST FIRE (Stage 52 Inc 12 / " \
+        f"gate-13 CRITICAL-1), got: {[str(e) for e in errs]}"
+
+
+def test_stage52_inc12_unsafe_block_with_inner_let_fires():
+    """Stage 52 Inc 12 companion: same defect via UnsafeBlock."""
+    src = """
+fn main() -> i32 {
+    let u: Uncertain<i32> = into_uncertain(1);
+    let k: Known<i32> = into_known(unsafe {
+        let x: i32 = from_uncertain(u);
+        x
+    });
+    from_known(k)
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    errs = typecheck(prog)
+    assert any("launder" in str(e) and "Uncertain" in str(e)
+               and "Known" in str(e) for e in errs), \
+        f"unsafe-block-with-inner-let MUST FIRE (Stage 52 Inc 12 " \
+        f"companion), got: {[str(e) for e in errs]}"
+
+
+def test_stage52_inc12_if_arm_with_inner_let_fires():
+    """Stage 52 Inc 12 companion: same defect via If-arm Block
+    body. `_modal_origin_of_expr_block_tail` also needs to
+    consult the cache (not just `_modal_origin_of_expr`)."""
+    src = """
+fn main() -> i32 {
+    let u: Uncertain<i32> = into_uncertain(1);
+    let k: Known<i32> = into_known(if true {
+        let x: i32 = from_uncertain(u);
+        x
+    } else {
+        let y: i32 = from_uncertain(u);
+        y
+    });
+    from_known(k)
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    errs = typecheck(prog)
+    assert any("launder" in str(e) and "Uncertain" in str(e)
+               and "Known" in str(e) for e in errs), \
+        f"if-arm-with-inner-let MUST FIRE (Stage 52 Inc 12 " \
+        f"companion), got: {[str(e) for e in errs]}"
+
+
+def test_stage52_inc12_outer_let_aliases_block_with_inner_let_fires():
+    """Stage 52 Inc 12 companion: outer let-stmt RHS is a Block
+    with inner Let. The Let-stmt populate also consults
+    _modal_origin_of_expr AFTER _check_expr popped the inner
+    scope — needs the cache."""
+    src = """
+fn main() -> i32 {
+    let u: Uncertain<i32> = into_uncertain(1);
+    let v: i32 = {
+        let x: i32 = from_uncertain(u);
+        x
+    };
+    let k: Known<i32> = into_known(v);
+    from_known(k)
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    errs = typecheck(prog)
+    assert any("launder" in str(e) and "Uncertain" in str(e)
+               and "Known" in str(e) for e in errs), \
+        f"outer-let-aliases-block MUST FIRE (Stage 52 Inc 12 " \
+        f"companion), got: {[str(e) for e in errs]}"
+
+
 def test_stage52_inc11_unary_yield_in_into_known_fires():
     """Stage 52 Inc 11 / proactive cascade-break: Unary expression
     wrapping a modal-tainted value preserves the modal-origin —

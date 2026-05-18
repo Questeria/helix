@@ -130,10 +130,19 @@ Re-sequenced after Stage 46-47 closed:
   algorithm together once the cascade can tolerate source
   changes. Estimated 2-3 stages depending on how the
   fragility's root cause splits.
-- **Stage 52** (in flight 2026-05-17, gates 1-10 + Inc 1-7
-  shipped, awaiting 3-clean-gate confirmation): modal-origin
+- **Stage 52** (in flight 2026-05-17, gates 1-13 + Inc 1-12
+  shipped, 21+ launder paths caught via 9 wrapper-AST kinds,
+  awaiting 3-clean-gate closure confirmation): modal-origin
   taint-tracking pass closing the Stage 40 closure gate-1 H1
   known limitation ("let-binding bypass of F1 syntactic guard").
+  Inc 8 (e9d3d6d) UnsafeBlock arm; Inc 9 (006df58) F2 Literal
+  propagation + ModalKind runtime guard at _register_fn; Inc 10
+  (40a791d) Cast arm; Inc 11 (9ab8123) Unary + Binary arms
+  (proactive cascade-break — scanned all 32 A.Expr nodes for
+  wrapper-class gaps); Inc 12 (this commit) cache-at-block-exit
+  for inner-let-bound Name lookup after scope pop. Wrapper-AST
+  coverage table now: Name, Call, Block, UnsafeBlock, Cast,
+  Unary, Binary, If, Match.
   Inc 1 (c274059), Inc 2 (2925121), Inc 3 (c9d8915) shipped the
   initial three launder paths (let-binding, while/for Assign,
   match-arm). Inc 5 (1fbebe2) shipped loop body union. Inc 6
