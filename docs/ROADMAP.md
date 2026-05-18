@@ -303,6 +303,30 @@ Re-sequenced after Stage 46-47 closed:
 - **Stage 58** ✅ **CLOSED 2026-05-18** — Tier 4 #13 content-
   addressed modules (program_hash + module_hash + fn_signature_hash
   core).
+- **Stage 87 SHIPPED 2026-05-18** — Generic Tier-S/A wrapper-
+  mismatch diagnostic hint (cross-cutting polish closing the
+  Inc 4 backlog across all 11 wrappers):
+  - New `_wrapper_mismatch_hint(expected, actual)` helper on
+    TypeChecker walks a single table of 11 (wrapper_cls, opt_out,
+    constructor) entries (Stages 68-83 wrappers) and returns a
+    targeted hint when one side is the bare inner type of the
+    other. Two cases handled:
+    - actual = `Wrapped<T>`, expected = `T`  → suggest
+      `__opt_out(x)` (e.g., `__lift_conf`, `__declassify`)
+    - actual = `T`, expected = `Wrapped<T>` → suggest
+      `__wrap_X(x)` (Stage 75 constructor)
+  - Wired into `_check_call_basic` at the call-arg-mismatch site.
+    Pre-fix, users got the bare "expects Conf<f32>, got f32" with
+    no suggested fix. Post-fix, the diagnostic includes
+    `hint="pass __wrap_conf(x) to add the wrapper, or change the
+    param type to f32"`.
+  - **Cross-cutting closure**: closes a slice of the Inc 4
+    diagnostic polish for ALL 11 wrapper stages (68, 69, 70, 71,
+    72, 73, 76, 79, 80, 81, 83) in a single commit. Each wrapper
+    now has actionable error messages without per-wrapper code
+    duplication.
+  - 4 new tests; 400 typecheck + 532 regression GREEN.
+
 - **Stage 86 SHIPPED 2026-05-18** — Stage 77 Inc 2: Python-side
   `@property` test runner (`helixc/runners/property_runner.py`):
   - First runnable property-test infrastructure for Helix. Takes

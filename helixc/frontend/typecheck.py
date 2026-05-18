@@ -2852,10 +2852,15 @@ class TypeChecker:
                   and self._logic_provenance_violation_kind(pty, aty)
                       is None
                   and not self._compatible(pty, aty)):
+                # Stage 87 — enrich with Tier-S/A wrapper-mismatch
+                # hint when applicable (suggests __lift_conf /
+                # __declassify / __wrap_conf etc.).
+                hint = self._wrapper_mismatch_hint(pty, aty)
                 self.errors.append(TypeError_(
                     f"call to {sig.name!r}: arg {pname!r} expects "
                     f"{self._fmt(pty)}, got {self._fmt(aty)}",
                     call.span,
+                    hint=hint,
                 ))
             # Audit 28.8 B2: provenance boundary check (trap 24100).
             # Collect (don't emit yet) so B:C10 batching can apply.
@@ -11735,6 +11740,63 @@ class TypeChecker:
         if isinstance(t, TySize):
             return t.name
         return self._fmt(t)
+
+    # Stage 87 — wrapper-mismatch hint generator. Used by
+    # _check_call_basic + _check_fn_body to enrich the generic
+    # "expects X, got Y" diagnostic with a specific opt-out /
+    # constructor-builtin suggestion when one side is a Tier-S/A
+    # wrapper and the other is the bare inner type (or a less-
+    # wrapped version of it). Returns None if no wrapper mismatch
+    # pattern is detected — caller emits the generic error only.
+    _WRAPPER_HINT_TABLE = [
+        # (wrapper_cls_name, opt_out_builtin, constructor_builtin)
+        ("TyConf",           "__lift_conf",          "__wrap_conf"),
+        ("TyTaint",          "__declassify",         "__wrap_taint"),
+        ("TyDP",             "__exhaust_dp",         "__wrap_dp"),
+        ("TyQuant",          "__upcast_quant",       "__wrap_quant"),
+        ("TyDomain",         "__assert_in_dist",     "__wrap_domain"),
+        ("TyRobust",         "__widen_robustness",   "__wrap_robust"),
+        ("TyEnergy",         "__exhaust_energy",     "__wrap_energy"),
+        ("TyEnclave",        "__exit_enclave",       "__wrap_enclave"),
+        ("TyCounterfactual", "__as_actual",          "__wrap_cfact"),
+        ("TyDeadline",       "__miss_deadline",      "__wrap_deadline"),
+        ("TyAttribution",    "__attribute_verified", "__wrap_attr"),
+    ]
+
+    def _wrapper_mismatch_hint(self, expected, actual) -> Optional[str]:
+        """If the (expected, actual) pair is a Tier-S/A wrapper-vs-bare
+        mismatch with the SAME unwrapped inner type, return a hint
+        suggesting the right opt-out or constructor builtin. Otherwise
+        return None.
+
+        Cases handled:
+          1. expected = T, actual = Wrapped<T>  →
+             "pass __opt_out(x) to strip the wrapper"
+          2. expected = Wrapped<T>, actual = T  →
+             "pass __wrap(x) to add the wrapper"
+        """
+        # Cheap structural check — if either has no inner, no match.
+        def _strip_one(t):
+            return getattr(t, "inner", None)
+        def _kind(t):
+            return type(t).__name__
+        for (cls_name, opt_out, constructor) in self._WRAPPER_HINT_TABLE:
+            # actual wraps expected?
+            if (_kind(actual) == cls_name
+                    and _strip_one(actual) is not None
+                    and _strip_one(actual) == expected):
+                return (f"the actual value is wrapped in "
+                        f"{self._fmt(actual)}; pass {opt_out}(x) "
+                        f"to strip the wrapper, or change the param "
+                        f"type to {self._fmt(actual)}")
+            # expected wraps actual?
+            if (_kind(expected) == cls_name
+                    and _strip_one(expected) is not None
+                    and _strip_one(expected) == actual):
+                return (f"the param expects {self._fmt(expected)}; "
+                        f"pass {constructor}(x) to add the wrapper, "
+                        f"or change the param type to {self._fmt(actual)}")
+        return None
 
     def _fmt(self, t: Type) -> str:
         if isinstance(t, TyPrim): return t.name

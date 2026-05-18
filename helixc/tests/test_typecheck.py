@@ -4974,6 +4974,82 @@ def test_stage83_wrap_attr_constructor():
     assert len(type_errs) == 0, type_errs
 
 
+def test_stage87_wrapper_mismatch_hint_suggests_opt_out_when_arg_wrapped():
+    """Stage 87 — when a fn expects bare `f32` but the caller passes
+    `Conf<f32>`, the diagnostic includes a hint suggesting
+    `__lift_conf(x)` (or changing the param type to Conf<f32>)."""
+    from helixc.frontend.typecheck import TypeChecker
+    from helixc.frontend.parser import parse
+
+    src = """
+    fn consume(x: f32) -> i32 { 0 }
+    fn caller(c: Conf<f32>) -> i32 {
+        consume(c)
+    }
+    fn main() -> i32 { 0 }
+    """
+    prog = parse(src, include_stdlib=False)
+    tc = TypeChecker(prog)
+    errors = tc.check()
+    # Find the call-arg-mismatch error and verify it has a hint.
+    matches = [e for e in errors
+               if "consume" in str(e) and "Conf<f32>" in str(e)]
+    assert len(matches) >= 1, errors
+    err = matches[0]
+    # The hint attribute should mention __lift_conf.
+    assert err.hint is not None, f"no hint on {err}"
+    assert "__lift_conf" in err.hint, err.hint
+
+
+def test_stage87_wrapper_mismatch_hint_suggests_constructor_when_arg_bare():
+    """Stage 87 — when a fn expects `Confidential<f32>` but the caller
+    passes bare `f32`, the diagnostic hint suggests `__wrap_taint(x)`."""
+    from helixc.frontend.typecheck import TypeChecker
+    from helixc.frontend.parser import parse
+
+    src = """
+    fn consume(x: Confidential<f32>) -> i32 { 0 }
+    fn caller(raw: f32) -> i32 {
+        consume(raw)
+    }
+    fn main() -> i32 { 0 }
+    """
+    prog = parse(src, include_stdlib=False)
+    tc = TypeChecker(prog)
+    errors = tc.check()
+    matches = [e for e in errors
+               if "consume" in str(e) and "Confidential<f32>" in str(e)]
+    assert len(matches) >= 1, errors
+    err = matches[0]
+    assert err.hint is not None, f"no hint on {err}"
+    assert "__wrap_taint" in err.hint, err.hint
+
+
+def test_stage87_wrapper_mismatch_hint_covers_all_eleven_wrappers():
+    """Stage 87 — the wrapper-hint table covers all 11 Tier-S/A
+    wrappers from Stages 68-83. Verifies the table is complete."""
+    from helixc.frontend.typecheck import TypeChecker
+    tc = TypeChecker.__new__(TypeChecker)
+    cls_names = {entry[0] for entry in tc._WRAPPER_HINT_TABLE}
+    expected = {
+        "TyConf", "TyTaint", "TyDP", "TyQuant", "TyDomain",
+        "TyRobust", "TyEnergy", "TyEnclave", "TyCounterfactual",
+        "TyDeadline", "TyAttribution",
+    }
+    missing = expected - cls_names
+    assert not missing, f"wrapper hint table missing: {missing}"
+
+
+def test_stage87_wrapper_mismatch_no_hint_when_unrelated_types():
+    """Stage 87 — the hint generator returns None for unrelated
+    type pairs (no spurious hints)."""
+    from helixc.frontend.typecheck import TypeChecker, TyPrim
+    tc = TypeChecker.__new__(TypeChecker)
+    # f32 vs i32 — both bare primitives, neither wraps the other.
+    hint = tc._wrapper_mismatch_hint(TyPrim("f32"), TyPrim("i32"))
+    assert hint is None
+
+
 def test_stage82_safety_stdlib_all_five_property_fns_registered():
     """Stage 82 — safety.hx now ships 5 @property fns (2 from
     Stage 78 + 3 new for Stages 79-81 wrappers). All should
