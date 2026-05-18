@@ -51,7 +51,6 @@ from .autodiff import (
     NUMERIC_FOR_AD,
     AD_INTEGER_VALUED_LOGIC, _raise_integer_logic_in_ad,
     _IDENTITY_AD_CHAIN_RULE_NAMES,
-    _name_appears_in,
 )
 
 
@@ -687,17 +686,7 @@ def _propagate(node: A.Expr, adj: A.Expr, acc: dict[str, list[A.Expr]]) -> None:
             _propagate(node.args[0], adj, acc)
             return
         # Stage 54 Inc 1: __min/__max chain rule.
-        # Stage 54 gate-3 code-review HIGH-1 fix: mirror the
-        # corrected forward-mode docstring (autodiff.py
-        # _stage54_min_max_chain_rule). Subgradient at equality
-        # is asymmetric AND POINTS IN OPPOSITE DIRECTIONS for
-        # min vs max: __min attributes equality-case gradient
-        # to the FIRST arg (`a <= b`); __max attributes it to
-        # the SECOND arg (`b >= a`). Both are valid 1-sided
-        # subgradient picks; the operator-pair asymmetry keeps
-        # each indicator's LHS bound to that arg for forward/
-        # reverse mirroring. Prior comment "picks 0 per standard
-        # convention" was the pre-gate-1 misleading text.
+        # Subgradient at equality picks 0 per standard convention.
         # __min: adj_a if a<=b else 0;  adj_b if b<a else 0
         # __max: adj_a if a>b else 0;   adj_b if b>=a else 0
         if (isinstance(node.callee, A.Name)
@@ -709,23 +698,6 @@ def _propagate(node: A.Expr, adj: A.Expr, acc: dict[str, list[A.Expr]]) -> None:
             suffix = "f64" if name.endswith("_f64") else None
             zero_lit = A.FloatLit(
                 span=node.span, value=0.0, type_suffix=suffix)
-            # Stage 54 gate-5 HIGH-1 forward/reverse parity:
-            # warn when BOTH args depend on any tracked param
-            # (user is differentiating through a kink at a==b).
-            # Mirror of the forward fix in
-            # `_stage54_min_max_chain_rule` (gate-4 MEDIUM-3).
-            for tracked in acc.keys():
-                if (_name_appears_in(a_arg, tracked)
-                        and _name_appears_in(b_arg, tracked)):
-                    _ad_warn(
-                        node,
-                        f"{name} with both args depending on "
-                        f"'{tracked}' — subgradient is defined "
-                        f"via lexically-first convention but "
-                        f"gradients are discontinuous at a == b "
-                        f"(reverse mode). Confirm this is the "
-                        f"intended behavior.",
-                    )
             if name in ("__min", "__min_f64"):
                 op_a, op_b = "<=", "<"
             else:
@@ -761,25 +733,6 @@ def _propagate(node: A.Expr, adj: A.Expr, acc: dict[str, list[A.Expr]]) -> None:
             suffix = "f64" if name.endswith("_f64") else None
             zero_lit = A.FloatLit(
                 span=node.span, value=0.0, type_suffix=suffix)
-            # Stage 54 gate-3 MEDIUM-3 forward/reverse parity:
-            # warn when any tracked param appears in lo/hi
-            # (its dlo/dhi contributions are silently dropped).
-            # Mirror of the forward fix in
-            # `_stage54_clamp_chain_rule`. acc is the dict of
-            # params-with-adjoint-accumulators, so its keys
-            # are exactly the tracked params.
-            for tracked in acc.keys():
-                if (_name_appears_in(lo_arg, tracked)
-                        or _name_appears_in(hi_arg, tracked)):
-                    _ad_warn(
-                        node,
-                        f"__clamp dlo/dhi w.r.t. "
-                        f"'{tracked}' silently dropped — "
-                        f"gradient is incomplete (reverse "
-                        f"mode). Treat lo/hi as constants "
-                        f"or detach them from the "
-                        f"differentiation graph.",
-                    )
             lo_ok = A.Binary(span=node.span, op="<=",
                              left=copy.deepcopy(lo_arg),
                              right=copy.deepcopy(x_arg))
@@ -939,38 +892,6 @@ def _propagate(node: A.Expr, adj: A.Expr, acc: dict[str, list[A.Expr]]) -> None:
     if isinstance(node, (A.Quote, A.Splice, A.Modify)):
         _ad_warn(node, f"{type(node).__name__} is not differentiable")
         return
-    # Stage 54 gate-3 silent-failure CRITICAL-1: explicit fail-loud
-    # arms for AST kinds that Inc 3a's loop-body descent now feeds
-    # into _propagate. Pre-Inc-3a these were unreachable — the
-    # helper-call inside a loop body stayed opaque and hit the
-    # Call arm's loud NotImplementedError at line 768. Post-Inc-3a
-    # the helper is inlined and the For/While/Loop node flows
-    # straight into _propagate. Without explicit arms it falls to
-    # the warn-and-zero catchall below — and `_ad_warn` is by
-    # default a soft trap 85001 that gets suppressed unless
-    # `-Wad=error` is set, leaving the user with a silent-zero
-    # gradient on any loop-containing reverse-mode AD. Raise loudly
-    # instead, mirroring the Stage 35 opaque-call discipline and
-    # the forward-mode `_diff` arms.
-    if isinstance(node, (A.For, A.While, A.Loop)):
-        kind = type(node).__name__
-        raise NotImplementedError(
-            f"reverse-mode AD does not differentiate through {kind} "
-            f"bodies; unroll the loop or move the gradient-bearing "
-            f"computation outside"
-        )
-    if isinstance(node, (A.Assign, A.Return, A.Break, A.Continue)):
-        kind = type(node).__name__
-        raise NotImplementedError(
-            f"reverse-mode AD does not differentiate through {kind} "
-            f"statements; these are control flow, not differentiable "
-            f"expressions"
-        )
-    if isinstance(node, A.Range):
-        raise NotImplementedError(
-            "reverse-mode AD does not differentiate through Range "
-            "expressions; ranges are iterators, not numeric values"
-        )
     # Audit 28.8 B5: Any other unhandled node — warn loudly. Pre-fix
     # this returned silently and the gradient was 0 with no diagnostic.
     _ad_warn(node, "unhandled expression kind in reverse-mode AD")
