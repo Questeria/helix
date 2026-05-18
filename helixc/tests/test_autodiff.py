@@ -1357,6 +1357,42 @@ def test_stage54_gate4_min_max_warns_on_both_args_dep():
         f"depends on var; got: {msgs2}"
 
 
+def test_stage54_gate5_reverse_mode_min_max_warns_on_both_args_dep():
+    """Stage 54 gate-5 HIGH-1 forward/reverse parity:
+    reverse-mode `_propagate` __min/__max arm now warns when
+    BOTH args depend on any tracked param (kink crossing risk
+    at a==b). Mirror of forward fix from gate-4 MEDIUM-3.
+
+    Pre-fix, reverse silently produced the subgradient with no
+    diagnostic — silent-failure ban violation per CLAUDE.md
+    (forward had the warn; reverse was asymmetric)."""
+    from helixc.frontend.autodiff_reverse import differentiate_reverse
+    from helixc.frontend.autodiff import take_diff_warnings
+
+    src = (
+        "fn loss(x: f64) -> f64 { "
+        "  __min(x, x * 0.5) "
+        "}"
+    )
+    prog = parse(src)
+    loss = [it for it in prog.items
+            if isinstance(it, A.FnDecl) and it.name == "loss"][0]
+    body = loss.body.final_expr
+    take_diff_warnings()  # drain
+    # Differentiate w.r.t. 'x' — appears in both args
+    differentiate_reverse(body, ["x"])
+    msgs = take_diff_warnings()
+    assert any(
+        "min" in m.lower() and "reverse" in m.lower()
+        and ("kink" in m.lower() or "discontinuous" in m.lower()
+             or "both" in m.lower())
+        for m in msgs
+    ), (
+        f"gate-5 HIGH-1: reverse-mode __min should warn when "
+        f"both args depend on tracked param; got: {msgs}"
+    )
+
+
 def test_stage54_inc3a_loop_body_descent_inlines_pure_helper():
     """Stage 54 Inc 3a: `_inline_user_calls.go()` walker now
     descends into A.For/A.While/A.Loop bodies. Pre-fix, loop
