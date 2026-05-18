@@ -5872,7 +5872,7 @@ def test_stage59_autodiff_cli_help_mentions_polish_flags():
         "--list-enums", "--list-enums-json",
         "--enum-variants", "--enum-variants-json",
         "--list-type-aliases", "--list-type-aliases-json",
-        "--list-agents",
+        "--list-agents", "--list-agents-json",
         "--list-fn-attrs", "--list-fn-attrs-json",
         "--list-fns-by-attr", "--list-fns-by-attr-json",
         "--fn-callgraph", "--fn-callers",
@@ -7508,6 +7508,34 @@ def test_stage59_list_type_aliases_json(tmp_path):
         {"name": "Bytes", "target": "i64"},
         {"name": "Score", "target": "i32"},
     ]}
+
+
+def test_stage59_list_agents_json(tmp_path):
+    """Stage 59 follow-on / Tier 4 #13 polish: --list-agents-json emits
+    JSON with method counts AND method_names lists."""
+    import json
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "aj.hx"
+    src.write_text(
+        "agent Planner {\n"
+        "    fn propose(s: i32) -> i32;\n"
+        "    fn evaluate(s: i32) -> i32;\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--list-agents-json", str(src)],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0
+    result = json.loads(proc.stdout)
+    assert result == {"agents": [{
+        "name": "Planner",
+        "methods": 2,
+        "method_names": ["propose", "evaluate"],
+    }]}
 
 
 def test_stage59_list_agents(tmp_path):

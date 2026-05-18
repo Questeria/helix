@@ -61,6 +61,8 @@ Introspection (Stage 28.9 + Stage 58 + Stage 59 polish):
         Same as --list-type-aliases but machine-readable JSON output.
     --list-agents <file.hx>
         Enumerate top-level AgentDecls as '<name> methods=N' lines.
+    --list-agents-json <file.hx>
+        Same as --list-agents but JSON with method names included.
     --enum-variants <file.hx> <enum_name>
         Print per-variant lines for an enum (with payload types if any).
     --enum-variants-json <file.hx> <enum_name>
@@ -3991,6 +3993,30 @@ def _list_type_aliases_json(path: str) -> int:
     return 0
 
 
+def _list_agents_json(path: str) -> int:
+    """Stage 59 follow-on / Tier 4 #13 polish: --list-agents in
+    machine-readable JSON form.
+
+    Output schema:
+      {"agents": [{"name": "<name>", "methods": N,
+                    "method_names": ["<m1>", ...]}, ...]}
+    Declaration order preserved.
+    """
+    import json
+    src = _read_source(path)
+    prog = _parse_or_exit(src, path)
+    agents: list[dict] = []
+    for it in prog.items:
+        if isinstance(it, A.AgentDecl):
+            agents.append({
+                "name": it.name,
+                "methods": len(it.methods),
+                "method_names": [m.name for m in it.methods],
+            })
+    print(json.dumps({"agents": agents}, sort_keys=True, indent=2))
+    return 0
+
+
 def _list_agents(path: str) -> int:
     """Stage 59 follow-on / Tier 4 #13 polish: enumerate top-level
     AgentDecls (cognitive-architecture method bundles) in a file.
@@ -4494,6 +4520,13 @@ def main():
             print("usage: --list-agents <file.hx>", file=sys.stderr)
             sys.exit(2)
         sys.exit(_list_agents(args[0]))
+
+    if "--list-agents-json" in flags:
+        if len(args) < 1:
+            print("usage: --list-agents-json <file.hx>",
+                  file=sys.stderr)
+            sys.exit(2)
+        sys.exit(_list_agents_json(args[0]))
 
     if "--list-type-aliases-json" in flags:
         if len(args) < 1:
