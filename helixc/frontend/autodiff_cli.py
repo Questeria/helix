@@ -59,6 +59,8 @@ Introspection (Stage 28.9 + Stage 58 + Stage 59 polish):
         Enumerate top-level TypeAlias decls as '<name> = <ty>' lines.
     --list-type-aliases-json <file.hx>
         Same as --list-type-aliases but machine-readable JSON output.
+    --list-agents <file.hx>
+        Enumerate top-level AgentDecls as '<name> methods=N' lines.
     --enum-variants <file.hx> <enum_name>
         Print per-variant lines for an enum (with payload types if any).
     --enum-variants-json <file.hx> <enum_name>
@@ -3989,6 +3991,21 @@ def _list_type_aliases_json(path: str) -> int:
     return 0
 
 
+def _list_agents(path: str) -> int:
+    """Stage 59 follow-on / Tier 4 #13 polish: enumerate top-level
+    AgentDecls (cognitive-architecture method bundles) in a file.
+
+    Output: one line per agent as '<name> methods=N' (declaration
+    order). Empty file → no output.
+    """
+    src = _read_source(path)
+    prog = _parse_or_exit(src, path)
+    for it in prog.items:
+        if isinstance(it, A.AgentDecl):
+            print(f"{it.name} methods={len(it.methods)}")
+    return 0
+
+
 def _list_type_aliases(path: str) -> int:
     """Stage 59 follow-on / Tier 4 #13 polish: enumerate top-level
     TypeAlias decls in a file.
@@ -4471,6 +4488,12 @@ def main():
                   file=sys.stderr)
             sys.exit(2)
         sys.exit(_list_type_aliases(args[0]))
+
+    if "--list-agents" in flags:
+        if len(args) < 1:
+            print("usage: --list-agents <file.hx>", file=sys.stderr)
+            sys.exit(2)
+        sys.exit(_list_agents(args[0]))
 
     if "--list-type-aliases-json" in flags:
         if len(args) < 1:
