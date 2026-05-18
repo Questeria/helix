@@ -449,5 +449,80 @@ def test_stage59_trace_diff_different_lengths():
     assert diff == (1, None, b.events[1])
 
 
+def test_stage59_trace_hash_deterministic():
+    """Stage 59 follow-on / Tier 3 #11 polish: trace_hash returns the
+    same hex SHA-256 for the same event sequence across calls."""
+    from helixc.frontend.trace_pass import trace_hash
+    buf = TraceBuffer(events=[
+        TraceEvent("entry", "f", (1, 2)),
+        TraceEvent("op", "f", ("add",), result=3),
+        TraceEvent("exit", "f", (3,)),
+    ])
+    h1 = trace_hash(buf)
+    h2 = trace_hash(buf)
+    assert h1 == h2
+    assert len(h1) == 64
+    assert all(c in "0123456789abcdef" for c in h1)
+
+
+def test_stage59_trace_hash_equiv_implies_equal_hash():
+    """Stage 59 follow-on: trace_equiv(a, b) == True ⇒ trace_hash(a)
+    == trace_hash(b). The hash is a sound cheap pre-check for
+    equivalence (contrapositive: different hash ⇒ not equivalent)."""
+    from helixc.frontend.trace_pass import trace_hash, trace_equiv
+    a = TraceBuffer(events=[
+        TraceEvent("entry", "g", ()),
+        TraceEvent("exit", "g", (42,)),
+    ])
+    b = TraceBuffer(events=[
+        TraceEvent("entry", "g", ()),
+        TraceEvent("exit", "g", (42,)),
+    ])
+    assert trace_equiv(a, b)
+    assert trace_hash(a) == trace_hash(b)
+
+
+def test_stage59_trace_hash_different_events_differ():
+    """Stage 59 follow-on: any divergence in event sequence produces
+    a different hash — basic content-addressing invariant."""
+    from helixc.frontend.trace_pass import trace_hash
+    base = TraceBuffer(events=[TraceEvent("entry", "f", (1,))])
+    # Different operand
+    diff_operand = TraceBuffer(events=[TraceEvent("entry", "f", (2,))])
+    # Different fn name
+    diff_fn = TraceBuffer(events=[TraceEvent("entry", "g", (1,))])
+    # Different op kind
+    diff_kind = TraceBuffer(events=[TraceEvent("exit", "f", (1,))])
+    # Different result
+    diff_result = TraceBuffer(events=[TraceEvent("entry", "f", (1,), result=99)])
+    # Different order (two events)
+    order_a = TraceBuffer(events=[
+        TraceEvent("entry", "f", ()),
+        TraceEvent("exit", "f", (0,)),
+    ])
+    order_b = TraceBuffer(events=[
+        TraceEvent("exit", "f", (0,)),
+        TraceEvent("entry", "f", ()),
+    ])
+    h_base = trace_hash(base)
+    assert h_base != trace_hash(diff_operand)
+    assert h_base != trace_hash(diff_fn)
+    assert h_base != trace_hash(diff_kind)
+    assert h_base != trace_hash(diff_result)
+    assert trace_hash(order_a) != trace_hash(order_b)
+
+
+def test_stage59_trace_hash_empty_is_valid():
+    """Stage 59 follow-on: empty trace produces a valid hash too
+    (useful sentinel for 'no events recorded yet')."""
+    from helixc.frontend.trace_pass import trace_hash
+    empty = TraceBuffer()
+    h = trace_hash(empty)
+    assert len(h) == 64
+    # sha256 of empty bytes is well-known constant
+    import hashlib
+    assert h == hashlib.sha256().hexdigest()
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-v"]))

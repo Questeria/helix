@@ -187,6 +187,43 @@ def trace_diff(a: TraceBuffer, b: TraceBuffer) -> Optional[tuple]:
     return None  # equal
 
 
+def trace_hash(buf: TraceBuffer) -> str:
+    """Stage 59 follow-on / Tier 3 #11 polish — content-addressable
+    hash of a trace buffer.
+
+    Computes SHA-256 over the canonicalized event sequence:
+      op_kind|fn_name|operands|result; ...
+    Two traces with identical event sequences hash identically;
+    any divergence (different op, different operand, different
+    order) produces a different hash.
+
+    Pairs with tree_hash for end-to-end content addressing:
+    `(tree_hash(params), trace_hash(buf))` uniquely identifies
+    a (param-snapshot, execution-trace) pair. Used by:
+    - Verifier cache: skip re-checking a (params, trace) pair we've
+      seen before.
+    - Reproducibility: log trace_hash per epoch to audit-trail the
+      exact execution path.
+    - trace_equiv fast path: if trace_hash differs, trace_equiv is
+      necessarily False (cheap pre-check before full O(n) compare).
+
+    Returns the hex SHA-256 (64 chars). Empty trace produces a valid
+    hash too (sha256 of empty bytes — useful as a sentinel).
+    """
+    import hashlib
+    h = hashlib.sha256()
+    for ev in buf.events:
+        h.update(ev.op_kind.encode("utf-8"))
+        h.update(b"|")
+        h.update(ev.fn_name.encode("utf-8"))
+        h.update(b"|")
+        h.update(repr(ev.operands).encode("utf-8"))
+        h.update(b"|")
+        h.update(repr(ev.result).encode("utf-8"))
+        h.update(b";")
+    return h.hexdigest()
+
+
 def traced_fn_names(prog: A.Program) -> list[str]:
     """List of fn names that carry `@trace` anywhere in the program.
 
