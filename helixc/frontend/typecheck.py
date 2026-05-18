@@ -2852,6 +2852,10 @@ class TypeChecker:
         # acknowledging the user has exited the uncertainty regime
         # at that point. Mirrors `unwrap_logic`'s discard contract.
         "__lift_conf",
+        # Stage 69 Inc 3 — information-flow opt-out. `__declassify(x)`
+        # strips a TyTaint wrapper. Marks an explicit declassification
+        # point that an external audit pass can grep for.
+        "__declassify",
         "__strlen", "__strbyte", "__streq", "__strlit_to_arena",
         "__hash_i32",
         # Stage 55 Inc 1 — runtime string builtins. Operate on
@@ -4580,12 +4584,36 @@ class TypeChecker:
                     def _strip_conf(t):
                         if isinstance(t, TyConf):
                             return t.inner
+                        if isinstance(t, TyTaint):
+                            return TyTaint(label=t.label,
+                                           inner=_strip_conf(t.inner))
                         if isinstance(t, TyDiff):
                             return TyDiff(inner=_strip_conf(t.inner))
                         if isinstance(t, TyLogic):
                             return TyLogic(inner=_strip_conf(t.inner))
                         return t
                     return _strip_conf(arg_ty)
+                # Stage 69 Inc 3 — information-flow opt-out builtin.
+                # `__declassify(x)` strips a TyTaint wrapper,
+                # acknowledging the user is consciously declassifying
+                # the value (and an external audit pass can grep
+                # call sites to enforce the compliance contract).
+                # Identity on non-Taint inputs so the call is safe
+                # to use defensively. Preserves inner Conf/D/Logic.
+                if bn == "__declassify" and len(arg_tys) == 1:
+                    arg_ty = arg_tys[0]
+                    def _strip_taint(t):
+                        if isinstance(t, TyTaint):
+                            return t.inner
+                        if isinstance(t, TyConf):
+                            return TyConf(level=t.level,
+                                          inner=_strip_taint(t.inner))
+                        if isinstance(t, TyDiff):
+                            return TyDiff(inner=_strip_taint(t.inner))
+                        if isinstance(t, TyLogic):
+                            return TyLogic(inner=_strip_taint(t.inner))
+                        return t
+                    return _strip_taint(arg_ty)
                 if (bn == "__move" and len(arg_tys) == 1
                         and isinstance(expr.args[0], A.Name)):
                     if self._borrow_enforcement_enabled():

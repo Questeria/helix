@@ -1889,6 +1889,15 @@ class Lowerer:
                     and expr.callee.name == "__lift_conf"
                     and len(expr.args) == 1):
                 return self._lower_expr(expr.args[0])
+            # Stage 69 Inc 3 — information-flow opt-out builtin.
+            # `__declassify(x)` is a typecheck-only marker that
+            # strips the TyTaint wrapper. An external audit pass can
+            # grep the source for call sites to enforce compliance.
+            # Identity at IR / codegen.
+            if (isinstance(expr.callee, A.Name)
+                    and expr.callee.name == "__declassify"
+                    and len(expr.args) == 1):
+                return self._lower_expr(expr.args[0])
             # Stage 36 Increment 1: provenance-typed primitives.
             # prove(value, source) lowers to value (Phase-0: the Logic<T>
             # wrapper has zero runtime overhead; provenance lives purely

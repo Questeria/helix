@@ -4689,6 +4689,75 @@ def test_stage68_inc1_confidence_high_low_precise_aliases():
         assert t.level == lvl
 
 
+def test_stage69_inc3_declassify_strips_outer_taint():
+    """Stage 69 Inc 3 — `__declassify(x)` strips the Taint wrapper.
+    A `Confidential<f32>` becomes `f32`."""
+    from helixc.frontend.typecheck import TypeChecker
+    from helixc.frontend.parser import parse
+
+    src = """
+    fn user(x: Confidential<f32>) -> f32 {
+        __declassify(x)
+    }
+    fn main() -> i32 { 0 }
+    """
+    prog = parse(src, include_stdlib=False)
+    tc = TypeChecker(prog)
+    errors = tc.check()
+    type_errs = [str(e) for e in errors
+                 if "return" in str(e).lower()
+                 or "Confidential" in str(e) or "Taint" in str(e)]
+    assert len(type_errs) == 0, (
+        f"expected Confidential<f32> -> f32 via __declassify; got: "
+        f"{type_errs}")
+
+
+def test_stage69_inc3_declassify_preserves_inner_conf():
+    """Stage 69 Inc 3 — `__declassify(Confidential<Conf<f32>>)`
+    strips ONLY the outer Taint and keeps the inner Conf wrapper."""
+    from helixc.frontend.typecheck import TypeChecker
+    from helixc.frontend.parser import parse
+
+    src = """
+    fn user(x: Confidential<Conf<f32>>) -> Conf<f32> {
+        __declassify(x)
+    }
+    fn main() -> i32 { 0 }
+    """
+    prog = parse(src, include_stdlib=False)
+    tc = TypeChecker(prog)
+    errors = tc.check()
+    type_errs = [str(e) for e in errors
+                 if "return" in str(e).lower()
+                 or "Confidential" in str(e) or "Conf" in str(e)]
+    assert len(type_errs) == 0, (
+        f"expected Confidential<Conf<f32>> -> Conf<f32>; got: "
+        f"{type_errs}")
+
+
+def test_stage69_inc3_declassify_identity_on_non_taint():
+    """Stage 69 Inc 3 — `__declassify(f32)` is identity, safe to
+    use defensively at any call site."""
+    from helixc.frontend.typecheck import TypeChecker
+    from helixc.frontend.parser import parse
+
+    src = """
+    fn user(x: f32) -> f32 {
+        __declassify(x)
+    }
+    fn main() -> i32 { 0 }
+    """
+    prog = parse(src, include_stdlib=False)
+    tc = TypeChecker(prog)
+    errors = tc.check()
+    type_errs = [str(e) for e in errors
+                 if "return" in str(e).lower()
+                 or "Taint" in str(e) or "declassify" in str(e)]
+    assert len(type_errs) == 0, (
+        f"expected f32 -> f32 identity via __declassify; got: "
+        f"{type_errs}")
+
+
 def test_stage69_inc2_taint_propagates_through_binary_add():
     """Stage 69 Inc 2 — propagation algebra. `Public<f32> + f32`
     yields `Public<f32>` (most-restrictive-wins; rank: public=0

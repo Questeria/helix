@@ -303,6 +303,55 @@ Re-sequenced after Stage 46-47 closed:
 - **Stage 58** ✅ **CLOSED 2026-05-18** — Tier 4 #13 content-
   addressed modules (program_hash + module_hash + fn_signature_hash
   core).
+- **Stage 69 SUBSTANTIALLY COMPLETE 2026-05-18** — Tier-S #2
+  Information flow / privacy types delivered as a usable feature
+  across Inc 1-3:
+  - Inc 1: TyTaint data type + 4 type aliases (Public/Internal/
+    Confidential/Secret).
+  - Inc 2: propagation algebra through binary ops
+    (most-restrictive-wins rank-wise; Confidential<T> dominates
+    Public<T> in a binop).
+  - Inc 3: `__declassify(x)` opt-out builtin (strips outer Taint).
+  - Layering convention extended: TyTaint outermost, then TyConf,
+    then TyDiff, then TyLogic. Confidential<Conf<D<Logic<T>>>>
+    is canonical.
+  - End-to-end user experience: annotate `Confidential<f32>` in
+    signatures, arithmetic propagates Taint, escape via
+    `__declassify(x)` at audit-trail boundaries (an external
+    audit pass can grep for `__declassify` to enforce compliance).
+  - Inc 4 (flow-aware diagnostics at assignment / return sites
+    for non-monotonic flows like Confidential → Public sinks)
+    deferred to future polish.
+
+- **Stage 69 Inc 3 SHIPPED 2026-05-18** — info-flow opt-out
+  builtin `__declassify`:
+  - typecheck: `_strip_taint` helper walks the wrapper chain to
+    remove the Taint layer while preserving inner Conf/D/Logic.
+  - lower_ast: identity lowering (mirrors __lift_conf).
+  - `__declassify` added to `_BUILTIN_NAMES`.
+  - Companion edit to `_strip_conf` (Inc 2 __lift_conf): also
+    walks through TyTaint when stripping Conf, so the helpers
+    handle layered wrappers uniformly.
+  - 3 new tests; 333 typecheck + 399 regression GREEN.
+
+- **Stage 69 Inc 2 SHIPPED 2026-05-18** — info-flow propagation
+  algebra:
+  - `_unwrap` and `_find_taint_label` walk the wrapper chain.
+  - Wrapped-binop gate fires when either side carries Taint.
+  - TyTaint wraps the absolute outermost layer (above TyConf).
+  - Label resolution: MOST-RESTRICTIVE-WINS (rank: public=0 <
+    internal=1 < confidential=2 < secret=3).
+  - 3 new tests; 330 typecheck + 462 regression GREEN.
+
+- **Stage 69 Inc 1 SHIPPED 2026-05-18** — Tier-S #2 information-
+  flow / privacy types scaffolding:
+  - New TyTaint(label, inner) frozen dataclass.
+  - Parser/resolver recognizes 4 aliases (Public/Internal/
+    Confidential/Secret).
+  - F5 arity arm; aliases chosen to NOT collide with TyConf
+    (`Confidence` ≠ `Confidential`).
+  - 3 new tests; 327 typecheck + 3 selfhost GREEN.
+
 - **Stage 68 SUBSTANTIALLY COMPLETE 2026-05-18** — Tier-S #1
   Confidence types delivered as a usable feature across Inc 1-3:
   - Inc 1: TyConf data type + 5 type aliases (Confidence/Conf/
