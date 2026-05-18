@@ -5841,7 +5841,8 @@ def test_stage59_autodiff_cli_help_mentions_polish_flags():
         "--list-pytrees", "--pytree-leaf-paths", "--validate-pytrees",
         "--autotune-summary", "--autotune-budget", "--validate-autotune",
         "--hash-dump", "--diff-hash-dump", "--hash-dump-short",
-        "--diff-trace", "--validate-trace-attrs", "--validate-all",
+        "--diff-trace", "--validate-trace-attrs",
+        "--validate-all", "--validate-all-json",
     ):
         assert flag in out, (
             f"help text missing {flag!r}: docstring needs to be "
@@ -5999,6 +6000,60 @@ def test_stage59_pytree_shape_non_diff_field_rejected(tmp_path):
     assert "non-differentiable" in proc.stderr or "26002" in proc.stderr
     # Verify no traceback leaked.
     assert "Traceback" not in proc.stderr
+
+
+def test_stage59_validate_all_json_clean(tmp_path):
+    """Stage 59 follow-on / Tier 4 #13 polish: --validate-all-json
+    outputs valid JSON with the expected schema on a clean file."""
+    import json
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "clean.hx"
+    src.write_text(
+        "struct M { w: D<f32> }\n"
+        "@autotune(B: [16, 32])\n"
+        "@kernel\n"
+        "fn k(x: i32) -> i32 { x + B }\n",
+        encoding="utf-8",
+    )
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--validate-all-json", str(src)],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0
+    result = json.loads(proc.stdout)
+    assert set(result.keys()) == {"pytrees", "autotune", "trace-attrs", "total"}
+    assert result["pytrees"]["status"] == "OK"
+    assert result["autotune"]["status"] == "OK"
+    assert result["trace-attrs"]["status"] == "OK"
+    assert result["total"]["validators"] == 3
+    assert result["total"]["ok"] == 3
+    assert result["total"]["fail"] == 0
+
+
+def test_stage59_validate_all_json_with_failures(tmp_path):
+    """Stage 59 follow-on: --validate-all-json includes diagnostics
+    in the JSON output when validators fail."""
+    import json
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "mixed.hx"
+    src.write_text(
+        "struct Bad { w: D<f32>, label: i32 }\n",
+        encoding="utf-8",
+    )
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--validate-all-json", str(src)],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 1
+    result = json.loads(proc.stdout)
+    assert result["pytrees"]["status"] == "FAIL"
+    assert len(result["pytrees"]["diags"]) >= 1
+    assert "Bad" in result["pytrees"]["diags"][0]
+    assert result["total"]["fail"] == 1
 
 
 def test_stage59_validate_all_clean_exits_0(tmp_path):

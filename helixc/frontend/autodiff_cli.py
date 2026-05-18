@@ -55,6 +55,8 @@ Introspection (Stage 28.9 + Stage 58 + Stage 59 polish):
         CI gate: validate @trace usage; rejects @trace on extern fns.
     --validate-all <file.hx>
         Run all 3 validators (pytrees + autotune + trace-attrs) in one shot.
+    --validate-all-json <file.hx>
+        Same as --validate-all but machine-readable JSON output.
     --autotune-budget <file.hx> <max_total>
         CI gate: exit 0 if total variants <= budget, 1 if over.
 
@@ -557,6 +559,61 @@ def _pytree_shape(path: str, struct_name: str) -> int:
     return 0
 
 
+def _validate_all_json(path: str) -> int:
+    """Stage 59 follow-on / Tier 4 #13 polish: --validate-all output
+    as machine-readable JSON.
+
+    Output schema:
+      {
+        "pytrees":     {"status": "OK"|"FAIL", "diags": [...]},
+        "autotune":    {"status": "OK"|"FAIL", "diags": [...]},
+        "trace-attrs": {"status": "OK"|"FAIL", "diags": [...]},
+        "total": {"validators": 3, "ok": K, "fail": M}
+      }
+
+    Exit 0 if all pass, 1 if any fails — same as --validate-all but
+    JSON output for CI integration (downstream tools can parse the
+    structured result instead of regex-matching the human format).
+    """
+    import json
+    from .pytree import validate_pytree
+    from .autotune import validate_autotune_prog
+    from .trace_pass import validate_trace_attrs
+
+    src = _read_source(path)
+    prog = _parse_or_exit(src, path)
+
+    struct_decls = {it.name: it for it in prog.items
+                    if isinstance(it, A.StructDecl)}
+    pytree_diags: list[str] = []
+    for name in sorted(struct_decls.keys()):
+        for msg in validate_pytree(struct_decls[name], struct_decls):
+            pytree_diags.append(f"{name}: {msg}")
+
+    autotune_diags = validate_autotune_prog(prog)
+    trace_diags = validate_trace_attrs(prog)
+
+    def _entry(diags: list[str]) -> dict:
+        return {
+            "status": "OK" if not diags else "FAIL",
+            "diags": diags,
+        }
+
+    result = {
+        "pytrees": _entry(pytree_diags),
+        "autotune": _entry(autotune_diags),
+        "trace-attrs": _entry(trace_diags),
+    }
+    fail_count = sum(1 for e in result.values() if e["status"] == "FAIL")
+    result["total"] = {
+        "validators": 3,
+        "ok": 3 - fail_count,
+        "fail": fail_count,
+    }
+    print(json.dumps(result, sort_keys=True, indent=2))
+    return 1 if fail_count else 0
+
+
 def _validate_all(path: str) -> int:
     """Stage 59 follow-on / Tier 4 #13 polish: run every Phase-0
     validator in one shot.
@@ -1056,6 +1113,13 @@ def main():
                   file=sys.stderr)
             sys.exit(2)
         sys.exit(_validate_all(args[0]))
+
+    if "--validate-all-json" in flags:
+        if len(args) < 1:
+            print("usage: --validate-all-json <file.hx>",
+                  file=sys.stderr)
+            sys.exit(2)
+        sys.exit(_validate_all_json(args[0]))
 
     if "--autotune-budget" in flags:
         if len(args) < 2:
