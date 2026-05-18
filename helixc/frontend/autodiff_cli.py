@@ -51,6 +51,8 @@ Introspection (Stage 28.9 + Stage 58 + Stage 59 polish):
         Same as --list-uses but JSON output with raw segments.
     --list-consts <file.hx>
         Enumerate top-level ConstDecls as '<name>: <ty>' lines.
+    --list-consts-json <file.hx>
+        Same as --list-consts but machine-readable JSON output.
     --struct-fields <file.hx> <struct_name>
         Print '<name>: <ty>' per field (declaration order, not sorted).
     --struct-fields-json <file.hx> <struct_name>
@@ -3678,6 +3680,44 @@ def _list_uses_json(path: str) -> int:
     return 0
 
 
+def _list_consts_json(path: str) -> int:
+    """Stage 59 follow-on / Tier 4 #13 polish: --list-consts in
+    machine-readable JSON form.
+
+    Output schema:
+      {"consts": [{"name": "<name>", "ty": "<ty_string>"}, ...]}
+    Declaration order preserved.
+    """
+    import json
+    src = _read_source(path)
+    prog = _parse_or_exit(src, path)
+
+    def _format_ty(ty) -> str:
+        name = getattr(ty, "name", None)
+        if name:
+            return name
+        base = getattr(ty, "base", None)
+        args = getattr(ty, "args", None)
+        base_str = base if isinstance(base, str) else (
+            getattr(base, "name", None) if base else None
+        )
+        if base_str and args:
+            args_strs = []
+            for a in args:
+                an = getattr(a, "name", None)
+                args_strs.append(an if an else repr(a))
+            return f"{base_str}<{', '.join(args_strs)}>"
+        return repr(ty)
+
+    consts = [
+        {"name": it.name, "ty": _format_ty(it.ty)}
+        for it in prog.items
+        if isinstance(it, A.ConstDecl)
+    ]
+    print(json.dumps({"consts": consts}, sort_keys=True, indent=2))
+    return 0
+
+
 def _list_consts(path: str) -> int:
     """Stage 59 follow-on / Tier 4 #13 polish: enumerate top-level
     ConstDecls in a file.
@@ -4096,6 +4136,13 @@ def main():
             print("usage: --list-consts <file.hx>", file=sys.stderr)
             sys.exit(2)
         sys.exit(_list_consts(args[0]))
+
+    if "--list-consts-json" in flags:
+        if len(args) < 1:
+            print("usage: --list-consts-json <file.hx>",
+                  file=sys.stderr)
+            sys.exit(2)
+        sys.exit(_list_consts_json(args[0]))
 
     if "--list-uses-json" in flags:
         if len(args) < 1:

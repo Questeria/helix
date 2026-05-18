@@ -5866,7 +5866,8 @@ def test_stage59_autodiff_cli_help_mentions_polish_flags():
         "--list-fns", "--list-fns-json",
         "--list-structs", "--list-structs-json",
         "--struct-fields", "--struct-fields-json",
-        "--list-uses", "--list-uses-json", "--list-consts",
+        "--list-uses", "--list-uses-json",
+        "--list-consts", "--list-consts-json",
         "--list-fn-attrs", "--list-fn-attrs-json",
         "--list-fns-by-attr", "--list-fns-by-attr-json",
         "--fn-callgraph", "--fn-callers",
@@ -7377,6 +7378,31 @@ def test_stage59_list_uses_json(tmp_path):
     assert result == {"uses": [
         {"path": "foo.bar.baz", "segments": ["foo", "bar", "baz"]},
         {"path": "std.result", "segments": ["std", "result"]},
+    ]}
+
+
+def test_stage59_list_consts_json(tmp_path):
+    """Stage 59 follow-on / Tier 4 #13 polish: --list-consts-json
+    emits {consts: [{name, ty}]} in declaration order."""
+    import json
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "cj.hx"
+    src.write_text(
+        "const MAX_BUF: i32 = 4096;\n"
+        "const PI: f64 = 3;\n",
+        encoding="utf-8",
+    )
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--list-consts-json", str(src)],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0
+    result = json.loads(proc.stdout)
+    assert result == {"consts": [
+        {"name": "MAX_BUF", "ty": "i32"},
+        {"name": "PI", "ty": "f64"},
     ]}
 
 
