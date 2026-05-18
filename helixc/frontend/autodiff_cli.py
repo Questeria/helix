@@ -90,6 +90,40 @@ def _print_program_hash(path: str) -> int:
     return 0
 
 
+def _check_program_hash(path: str, expected: str) -> int:
+    """Stage 59 follow-on / Tier 4 #13 polish: assertion-style hash
+    check for CI / git pre-commit hooks.
+
+    Computes program_hash(parse(path)) and compares to the
+    `expected` argument. Accepts either the full 64-hex or the
+    12-hex short form (compares prefix-match).
+
+    Exit codes:
+      0 — match (silent)
+      1 — mismatch (prints expected vs actual)
+      2 — bad arg (parse failure, unreachable file, etc.)
+
+    Use case: in a CI script, ensure a critical-file's semantic
+    content hasn't drifted unexpectedly. Pre-commit hook example:
+      python -m helixc.frontend.autodiff_cli --check-program-hash \\
+          stdlib/result.hx 0d03c61f9975 || {
+              echo "stdlib/result.hx drifted"; exit 1;
+          }
+    """
+    from .ast_hash import program_hash, short_hash
+    src = _read_source(path)
+    prog = _parse_or_exit(src, path)
+    actual = program_hash(prog)
+    if actual == expected:
+        return 0
+    if len(expected) == 12 and short_hash(actual) == expected:
+        return 0
+    print(f"hash mismatch")
+    print(f"  expected: {expected}")
+    print(f"  actual:   {short_hash(actual)} ({actual})")
+    return 1
+
+
 def _list_fns(path: str) -> int:
     """Stage 59 follow-on / Tier 4 #13 polish: enumerate all FnDecls
     in a source file with their signature + body hashes side by side.
@@ -281,6 +315,13 @@ def main():
                   file=sys.stderr)
             sys.exit(2)
         sys.exit(_list_fns(args[0]))
+
+    if "--check-program-hash" in flags:
+        if len(args) < 2:
+            print("usage: --check-program-hash <file.hx> "
+                  "<expected_hex_hash>", file=sys.stderr)
+            sys.exit(2)
+        sys.exit(_check_program_hash(args[0], args[1]))
 
     if len(sys.argv) < 3 or len(args) < 2:
         print(__doc__.strip(), file=sys.stderr)
