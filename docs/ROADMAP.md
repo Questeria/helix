@@ -172,26 +172,47 @@ Re-sequenced after Stage 46-47 closed:
   union (gate-7 HIGH-1+2) deferred to Stage 52 Inc 5 or rolled
   into Stage 53. Helper-fn indirection deferred to Stage 53
   (different defect class — inter-procedural taint).
-- **Stage 54** (in flight 2026-05-17, Inc 1+2+3a SHIPPED, Inc
-  3b deferred): Tier 1 #2 — AD across user-defined function
-  calls broader coverage.
+- **Stage 54** ✅ **CLOSED 2026-05-17** (Inc 1+2+3a SHIPPED +
+  closure gates 1-8 via 3-clean-gate protocol; Inc 3b deferred):
+  Tier 1 #2 — AD across user-defined function calls broader
+  coverage. Substantially closes Tier 1 #2 at ~80% of original
+  blueprint scope.
   - Inc 1 ✅ (3d5b900): chain-rule arms for __min/__max/__clamp/
     __sign (11 names) in both forward + reverse modes.
   - Inc 2 ✅ (3fdd61f) CLOSED no-op: forward/reverse asymmetry
     was already fixed at Stage 35 (verified by regression pin);
     no code change needed.
   - Inc 3a ✅ (e011241): `_inline_user_calls.go()` walker
-    descends into A.For/A.While/A.Loop bodies. Closes the
-    omission where pure-helper calls inside loop bodies were
-    never inlined.
+    descends into A.For/A.While/A.Loop bodies.
   - Inc 3b (deferred to fresh session): bounded recursive
     unrolling (~150 LOC + cache-key correctness hazard per
-    Stage C52-AD1 class). Lower-priority polish since
-    directly-recursive helpers in current dogfood code are
-    rare. Plan: see `docs/stage54-plan-2026-05-17.md`.
-  Stage 54 substantially closes Tier 1 #2 at Inc 3a (~80% of
-  the original blueprint scope). Plan doc and ROADMAP updated
-  via post-Stage-54-closure ledger.
+    Stage C52-AD1 class). Lower-priority polish.
+  - **Closure gates 1-8** (5 commits, 16+ load-bearing regression
+    pins, cascade trajectory 3→5→3→3→1→CLEAN→CLEAN→CLEAN):
+    - Gate-1 (96fd97f): silent-failure HIGH-1 + Inc 3a load-
+      bearing test fix. _substitute_names For/While/Loop/Match
+      arms + inliner ExprStmt-descent + _go_block ExprStmt +
+      Assign arm.
+    - Gate-2 (ed2b5d4): walker arm sweep across remaining 12
+      AST kinds (Cast/Index/Field/TupleLit/ArrayLit/StructLit/
+      UnsafeBlock/Match/Assign/Return/Break/Range) in both
+      walkers + i32 IntLit zero (MED-4) + clamp lo/hi warn
+      (MED-5).
+    - Gate-3 (c8c7161): _name_appears_in StructLit.fields +
+      Match.arms (HIGH-1/2) + reverse-mode clamp warn parity
+      (MED-3).
+    - Gate-4 (43785af): _name_appears_in Modify/Quote/Splice/
+      TileLit (HIGH-1) + Block-stmts walker `or`-hardening
+      (MED-2) + __min/__max kink warn (MED-3).
+    - Gate-5 (9424133): reverse-mode __min/__max kink warn
+      parity (HIGH-1). Last non-clean gate.
+    - Gates 6/7/8: CLEAN. Both silent-failure and code-review
+      auditors verified pin load-bearing-ness, AST coverage,
+      caller hygiene, adjacent-code regression freedom.
+    - Tests: 98 AD/reverse/parity all green at closure.
+  - Cascading-defect rhythm flushed across the full AST
+    surface (16 walker arms + 6 _name_appears_in arms + 3
+    chain-rule warn surfaces forward+reverse).
 
 - **Stage 53** (Inc 1+2 shipped 2026-05-17, commits 179678d +
   2550492): helper-fn indirection taint propagation. **Inc 1
