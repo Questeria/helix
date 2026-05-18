@@ -171,6 +171,52 @@ def _list_modules(path: str) -> int:
     return 0
 
 
+def _pytree_shape(path: str, struct_name: str) -> int:
+    """Stage 59 follow-on / Tier 2 #7 polish: print the pytree shape
+    of a struct — one line per leaf showing path + type + diff/non-diff
+    classification.
+
+    Output format per leaf (one line):
+      `<path> ty=<ty_name> diff=<True|False>`
+    Sorted by leaf path. Trailing summary line: `total leaves=N
+    diff=K non_diff=M`.
+
+    Use case:
+    - Verify a struct is correctly shaped for gradient computation
+      (all gradient-eligible leaves marked diff=True).
+    - Pre-flight check before calling grad_rev_all on a struct param.
+    - Generate a manifest of trainable params for a model serializer.
+
+    Exit 0 on success, 1 if struct_name not found in the source file.
+    """
+    from .pytree import flatten_pytree
+    src = _read_source(path)
+    prog = _parse_or_exit(src, path)
+    struct_decls = {it.name: it for it in prog.items
+                    if isinstance(it, A.StructDecl)}
+    if struct_name not in struct_decls:
+        print(f"error: autodiff_cli: struct {struct_name!r} not found in {path}",
+              file=sys.stderr)
+        return 1
+    try:
+        leaves = flatten_pytree(struct_decls[struct_name], struct_decls)
+    except ValueError as e:
+        # Pytree rejects non-diff or cyclic structs (trap 26002/26003).
+        # Surface the error as a CLI diagnostic rather than a traceback.
+        print(f"error: autodiff_cli: pytree shape rejected for "
+              f"{struct_name!r}: {e}", file=sys.stderr)
+        return 1
+    leaves_sorted = sorted(leaves, key=lambda l: l.path)
+    diff_count = 0
+    for leaf in leaves_sorted:
+        print(f"{leaf.path} ty={leaf.ty_name} diff={leaf.is_diff}")
+        if leaf.is_diff:
+            diff_count += 1
+    print(f"total leaves={len(leaves)} diff={diff_count} "
+          f"non_diff={len(leaves) - diff_count}")
+    return 0
+
+
 def _autotune_summary(path: str) -> int:
     """Stage 59 follow-on / Tier 2 #8 polish: print the autotune
     variant-count summary for a source file.
@@ -501,6 +547,13 @@ def main():
                   file=sys.stderr)
             sys.exit(2)
         sys.exit(_autotune_budget(args[0], args[1]))
+
+    if "--pytree-shape" in flags:
+        if len(args) < 2:
+            print("usage: --pytree-shape <file.hx> <struct_name>",
+                  file=sys.stderr)
+            sys.exit(2)
+        sys.exit(_pytree_shape(args[0], args[1]))
 
     if len(sys.argv) < 3 or len(args) < 2:
         print(__doc__.strip(), file=sys.stderr)

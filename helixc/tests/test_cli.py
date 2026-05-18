@@ -5877,6 +5877,100 @@ def test_stage59_autotune_budget_bad_int_exits_2(tmp_path):
     assert "not an int" in proc.stderr
 
 
+def test_stage59_pytree_shape_flat_struct(tmp_path):
+    """Stage 59 follow-on / Tier 2 #7 polish: --pytree-shape prints
+    one line per leaf for a flat all-diff struct, plus a summary."""
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "model.hx"
+    src.write_text(
+        "struct Model {\n"
+        "    w1: D<f32>,\n"
+        "    w2: D<f32>,\n"
+        "    b: D<f32>\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--pytree-shape", str(src), "Model"],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0, proc.stderr
+    out = proc.stdout
+    assert "b ty=f32 diff=True" in out
+    assert "w1 ty=f32 diff=True" in out
+    assert "w2 ty=f32 diff=True" in out
+    assert "total leaves=3 diff=3 non_diff=0" in out
+
+
+def test_stage59_pytree_shape_nested(tmp_path):
+    """Stage 59 follow-on: --pytree-shape walks into nested structs
+    with dot-joined leaf paths."""
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "nested.hx"
+    src.write_text(
+        "struct Inner { w: D<f32> }\n"
+        "struct Outer {\n"
+        "    inner: Inner,\n"
+        "    bias: D<f64>\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--pytree-shape", str(src), "Outer"],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0, proc.stderr
+    out = proc.stdout
+    assert "inner.w ty=f32" in out
+    assert "bias ty=f64" in out
+    assert "total leaves=2" in out
+
+
+def test_stage59_pytree_shape_struct_not_found(tmp_path):
+    """Stage 59 follow-on: --pytree-shape with unknown struct name
+    exits 1 with stderr diagnostic."""
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "x.hx"
+    src.write_text("struct Real { w: D<f32> }\n", encoding="utf-8")
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--pytree-shape", str(src), "Phantom"],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 1
+    assert "not found" in proc.stderr
+
+
+def test_stage59_pytree_shape_non_diff_field_rejected(tmp_path):
+    """Stage 59 follow-on: --pytree-shape surfaces the trap-26002
+    non-diff-leaf rejection as a clean stderr diagnostic, not a
+    traceback. Exit 1."""
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "bad.hx"
+    src.write_text(
+        "struct Bad {\n"
+        "    w: D<f32>,\n"
+        "    label: i32\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--pytree-shape", str(src), "Bad"],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 1
+    assert "non-differentiable" in proc.stderr or "26002" in proc.stderr
+    # Verify no traceback leaked.
+    assert "Traceback" not in proc.stderr
+
+
 def test_stage59_module_hash_dotted_nested_name(tmp_path):
     """Stage 59 follow-on: --module-hash accepts dotted names for
     nested modules."""
