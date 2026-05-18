@@ -4974,6 +4974,103 @@ def test_stage83_wrap_attr_constructor():
     assert len(type_errs) == 0, type_errs
 
 
+def test_stage96_wrap_dp_double_wrap_now_rejected():
+    """Stage 96 (Stage 93 audit HIGH-#1 fix) — __wrap_dp(__wrap_dp(x))
+    now produces an idempotency diagnostic instead of silently
+    yielding Private<Private<f32>> (which breaks DP privacy
+    composition)."""
+    from helixc.frontend.typecheck import typecheck
+    from helixc.frontend.parser import parse
+
+    src = """
+    fn user(x: f32) -> Private<f32> {
+        __wrap_dp(__wrap_dp(x))
+    }
+    fn main() -> i32 { 0 }
+    """
+    prog = parse(src, include_stdlib=False)
+    errors = typecheck(prog)
+    idem_errs = [str(e) for e in errors
+                 if "intro builtins are not idempotent" in str(e)
+                 and "__wrap_dp" in str(e)]
+    assert len(idem_errs) >= 1, errors
+
+
+def test_stage96_wrap_conf_double_wrap_rejected():
+    """Stage 96 — same idempotency rejection for __wrap_conf."""
+    from helixc.frontend.typecheck import typecheck
+    from helixc.frontend.parser import parse
+
+    src = """
+    fn user(x: f32) -> Conf<f32> {
+        __wrap_conf(__wrap_conf(x))
+    }
+    fn main() -> i32 { 0 }
+    """
+    prog = parse(src, include_stdlib=False)
+    errors = typecheck(prog)
+    idem_errs = [str(e) for e in errors
+                 if "intro builtins are not idempotent" in str(e)
+                 and "__wrap_conf" in str(e)]
+    assert len(idem_errs) >= 1, errors
+
+
+def test_stage96_wrap_single_application_still_works():
+    """Stage 96 — single application of __wrap_X is the normal,
+    no-error path. Idempotency rejection only fires on double-wrap."""
+    from helixc.frontend.typecheck import typecheck
+    from helixc.frontend.parser import parse
+
+    src = """
+    fn user(x: f32) -> Private<f32> {
+        __wrap_dp(x)
+    }
+    fn main() -> i32 { 0 }
+    """
+    prog = parse(src, include_stdlib=False)
+    errors = typecheck(prog)
+    idem_errs = [str(e) for e in errors
+                 if "intro builtins are not idempotent" in str(e)]
+    assert len(idem_errs) == 0, idem_errs
+
+
+def test_stage96_all_eleven_wrap_builtins_reject_double_wrap():
+    """Stage 96 — all 11 __wrap_X constructors share the same
+    idempotency rejection (via the table-driven dispatch)."""
+    from helixc.frontend.typecheck import typecheck
+    from helixc.frontend.parser import parse
+
+    # Test that each wrapper rejects double-wrap. Each line of src
+    # has its own fn so the diagnostics are independent.
+    pairs = [
+        ("__wrap_conf",     "Conf"),
+        ("__wrap_taint",    "Confidential"),
+        ("__wrap_dp",       "Private"),
+        ("__wrap_quant",    "Q8"),
+        ("__wrap_domain",   "InDist"),
+        ("__wrap_robust",   "Robust"),
+        ("__wrap_energy",   "Energy"),
+        ("__wrap_enclave",  "InEnclaveSGX"),
+        ("__wrap_cfact",    "Counterfactual"),
+        ("__wrap_deadline", "Deadline"),
+        ("__wrap_attr",     "FromUnknown"),
+    ]
+    for (ctor, alias) in pairs:
+        src = f"""
+        fn user(x: f32) -> {alias}<f32> {{
+            {ctor}({ctor}(x))
+        }}
+        fn main() -> i32 {{ 0 }}
+        """
+        prog = parse(src, include_stdlib=False)
+        errors = typecheck(prog)
+        idem_errs = [str(e) for e in errors
+                     if "intro builtins are not idempotent" in str(e)
+                     and ctor in str(e)]
+        assert len(idem_errs) >= 1, (
+            f"{ctor} should reject double-wrap; got: {errors}")
+
+
 def test_stage95_nested_if_outer_scope_move_now_detected():
     """Stage 95 (Stage 93 audit HIGH-#4 fix) — `{ if cond {
     __move(s) } }` where s is in fn body. Pre-Stage-95, A.If

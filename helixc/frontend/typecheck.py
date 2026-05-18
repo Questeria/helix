@@ -5760,35 +5760,55 @@ class TypeChecker:
                 # &/&mut wiring (check_borrow_* refuse from MOVED).
                 # Skipped if x's type is a `@copy` struct (Inc 4).
                 # Stage 75 — Tier-S/A wrapper constructor builtins.
-                # Each adds the appropriate wrapper at the outermost
-                # layer of the arg's type. Default tier choices are
-                # documented in the BUILTIN_NAMES comment block above.
-                # These are typecheck-only; IR lowering is identity.
-                if bn == "__wrap_conf" and len(arg_tys) == 1:
-                    return TyConf(level="med", inner=arg_tys[0])
-                if bn == "__wrap_taint" and len(arg_tys) == 1:
-                    return TyTaint(label="confidential", inner=arg_tys[0])
-                if bn == "__wrap_dp" and len(arg_tys) == 1:
-                    return TyDP(epsilon="1.0", inner=arg_tys[0])
-                if bn == "__wrap_quant" and len(arg_tys) == 1:
-                    return TyQuant(bits=8, inner=arg_tys[0])
-                if bn == "__wrap_domain" and len(arg_tys) == 1:
-                    return TyDomain(status="in", inner=arg_tys[0])
-                if bn == "__wrap_robust" and len(arg_tys) == 1:
-                    return TyRobust(eps="0.03", inner=arg_tys[0])
-                if bn == "__wrap_energy" and len(arg_tys) == 1:
-                    return TyEnergy(budget="1.0", inner=arg_tys[0])
-                if bn == "__wrap_enclave" and len(arg_tys) == 1:
-                    return TyEnclave(enclave="sgx", inner=arg_tys[0])
-                if bn == "__wrap_cfact" and len(arg_tys) == 1:
-                    return TyCounterfactual(mode="counterfactual",
-                                            inner=arg_tys[0])
-                if bn == "__wrap_deadline" and len(arg_tys) == 1:
-                    return TyDeadline(deadline_us="1000.0",
-                                      inner=arg_tys[0])
-                if bn == "__wrap_attr" and len(arg_tys) == 1:
-                    return TyAttribution(source="unknown",
-                                         inner=arg_tys[0])
+                # Stage 96 (Stage 93 audit HIGH-#1 fix) — added
+                # idempotency rejection: passing an already-X-wrapped
+                # value to __wrap_X is an error. Pre-Stage-96,
+                # __wrap_dp(__wrap_dp(x)) silently produced
+                # Private<Private<f32>> with eps=1.0 outer and
+                # eps=1.0 inner — broke DP privacy composition
+                # (should be Private<f32> eps=2.0 via the binop sum
+                # propagation). Same anti-pattern Stage 43 Inc 1 M1
+                # explicitly fixed for Tier 3 intro builtins.
+                #
+                # _WRAPPER_CTOR_TABLE drives both this and the Stage
+                # 87 wrapper-mismatch hint — single source of truth.
+                # Each entry: (builtin_name, wrapper_cls, default_kwargs).
+                _WRAPPER_CTOR_TABLE = [
+                    ("__wrap_conf",     TyConf,           {"level": "med"}),
+                    ("__wrap_taint",    TyTaint,          {"label": "confidential"}),
+                    ("__wrap_dp",       TyDP,             {"epsilon": "1.0"}),
+                    ("__wrap_quant",    TyQuant,          {"bits": 8}),
+                    ("__wrap_domain",   TyDomain,         {"status": "in"}),
+                    ("__wrap_robust",   TyRobust,         {"eps": "0.03"}),
+                    ("__wrap_energy",   TyEnergy,         {"budget": "1.0"}),
+                    ("__wrap_enclave",  TyEnclave,        {"enclave": "sgx"}),
+                    ("__wrap_cfact",    TyCounterfactual, {"mode": "counterfactual"}),
+                    ("__wrap_deadline", TyDeadline,       {"deadline_us": "1000.0"}),
+                    ("__wrap_attr",     TyAttribution,    {"source": "unknown"}),
+                ]
+                for (ctor_name, wrapper_cls, defaults) in _WRAPPER_CTOR_TABLE:
+                    if bn == ctor_name and len(arg_tys) == 1:
+                        arg_ty = arg_tys[0]
+                        if isinstance(arg_ty, wrapper_cls):
+                            self.errors.append(TypeError_(
+                                f"{ctor_name}({self._fmt(arg_ty)}): "
+                                f"received an already-wrapped value; "
+                                f"intro builtins are not idempotent "
+                                f"(Stage 96 / Stage 93 audit HIGH-#1 "
+                                f"fix — pre-Stage-96, double-wrap "
+                                f"silently broke composition semantics, "
+                                f"e.g. __wrap_dp(__wrap_dp(x)) yielded "
+                                f"Private<Private<f32>> not Private<f32>"
+                                f" eps=2.0)",
+                                expr.span,
+                                hint=f"pass the inner value directly, "
+                                     f"or use the binop propagation "
+                                     f"(e.g. `a + b` where both are "
+                                     f"{wrapper_cls.__name__}-wrapped) "
+                                     f"to combine wrappers correctly",
+                            ))
+                            return TyUnknown(hint=ctor_name)
+                        return wrapper_cls(**defaults, inner=arg_ty)
                 # Stage 68 Inc 3 — confidence-tag opt-out builtin.
                 # `__lift_conf(x)` returns the inner type of a TyConf
                 # value, acknowledging the user is exiting the

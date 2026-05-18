@@ -303,6 +303,32 @@ Re-sequenced after Stage 46-47 closed:
 - **Stage 58** ✅ **CLOSED 2026-05-18** — Tier 4 #13 content-
   addressed modules (program_hash + module_hash + fn_signature_hash
   core).
+- **Stage 96 SHIPPED 2026-05-18** — HIGH-#1 fix: `__wrap_X`
+  constructor idempotency rejection (Stage 93 audit finding):
+  - Refactored 11 individual `if bn == "__wrap_X"` arms (lines
+    5767-5791) into a single `_WRAPPER_CTOR_TABLE`-driven dispatch
+    loop. Table is the single source of truth for (ctor_name,
+    wrapper_cls, default_kwargs) per wrapper.
+  - Each constructor now checks `isinstance(arg_ty, wrapper_cls)`
+    BEFORE wrapping. If already-wrapped, emits diagnostic:
+    "__wrap_X(Wrapped<f32>): received an already-wrapped value;
+    intro builtins are not idempotent (Stage 96 / Stage 93 audit
+    HIGH-#1 fix — pre-Stage-96, double-wrap silently broke
+    composition semantics, e.g. __wrap_dp(__wrap_dp(x)) yielded
+    Private<Private<f32>> not Private<f32> eps=2.0)" with hint
+    "use binop propagation (a + b) to combine wrappers correctly".
+  - Returns `TyUnknown(hint=ctor_name)` on rejection so downstream
+    cascade errors are suppressed.
+  - Mirrors Stage 43 Inc 1 M1 pattern for Tier 3 intro builtins
+    (`_tier_intro_elim` at typecheck.py:6540+).
+  - Same anti-pattern source: Stage 75 added the 11 constructors
+    in a burst without per-constructor idempotency check; Stage
+    93 audit (silent-failure-hunter) reproduced the silent
+    double-wrap and reported HIGH-#1.
+  - 4 new tests including a parametric-style test that asserts
+    ALL 11 constructors reject double-wrap. 419 typecheck + 485
+    broader regression + 6 dogfood GREEN.
+
 - **Stage 95 SHIPPED 2026-05-18** — HIGH-#4 fix: scope-chain
   borrow reconciliation for A.If + A.Match arms (Stage 93 audit
   finding):
