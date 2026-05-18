@@ -47,6 +47,8 @@ Introspection (Stage 28.9 + Stage 58 + Stage 59 polish):
         Enumerate all structs with field count + content hash.
     --list-uses <file.hx>
         Enumerate `use` decls (imports) as dot-joined paths.
+    --list-uses-json <file.hx>
+        Same as --list-uses but JSON output with raw segments.
     --struct-fields <file.hx> <struct_name>
         Print '<name>: <ty>' per field (declaration order, not sorted).
     --struct-fields-json <file.hx> <struct_name>
@@ -3647,6 +3649,33 @@ def _struct_fields(path: str, struct_name: str) -> int:
     return 1
 
 
+def _list_uses_json(path: str) -> int:
+    """Stage 59 follow-on / Tier 4 #13 polish: --list-uses in machine-
+    readable JSON form.
+
+    Output schema:
+      {"uses": [
+        {"path": "<dotted>", "segments": ["<seg1>", "<seg2>", ...]},
+        ...
+      ]}
+    Sorted alphabetically by dotted path. Includes both the joined
+    path and the raw segments list for tooling flexibility.
+    """
+    import json
+    src = _read_source(path)
+    prog = _parse_or_exit(src, path)
+    items: list[dict] = []
+    for it in prog.items:
+        if isinstance(it, A.UseDecl):
+            items.append({
+                "path": ".".join(it.path),
+                "segments": list(it.path),
+            })
+    items.sort(key=lambda d: d["path"])
+    print(json.dumps({"uses": items}, sort_keys=True, indent=2))
+    return 0
+
+
 def _list_uses(path: str) -> int:
     """Stage 59 follow-on / Tier 4 #13 polish: enumerate `use` decls
     (imports) in a file.
@@ -4021,6 +4050,12 @@ def main():
             print("usage: --list-uses <file.hx>", file=sys.stderr)
             sys.exit(2)
         sys.exit(_list_uses(args[0]))
+
+    if "--list-uses-json" in flags:
+        if len(args) < 1:
+            print("usage: --list-uses-json <file.hx>", file=sys.stderr)
+            sys.exit(2)
+        sys.exit(_list_uses_json(args[0]))
 
     if "--struct-fields" in flags:
         if len(args) < 2:
