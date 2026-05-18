@@ -120,9 +120,9 @@ Re-sequenced after Stage 46-47 closed:
   verification CLEAN. 48 Stage 49 tests + 78 Stage 46+48
   unchanged. Self-host cascade preserved. dogfood_16 + dogfood_17
   still exit 42.
-- **Stage 50** ✅ **RESURRECTED 2026-05-17** + closure
-  gate-1/2 audited (commit a35e628; formal CLOSED pending
-  Stage 51 multi-param test coverage):
+- **Stage 50** ✅ **CLOSED 2026-05-18** (RESURRECTED a35e628 +
+  gate-1/2 audited 6feb675 + formally closed at Stage 51 Inc 2
+  e4bee39 when n>1 paths became production-exercised):
   bootstrap `grad_rev_all` multi-bucket infrastructure swap.
   Inc 1 (f4e94fc) + Inc 2 (76b7735) originally aborted at
   f678aa3 due to G2 cascade-break with SIGILL rc=132. Root
@@ -137,23 +137,25 @@ Re-sequenced after Stage 46-47 closed:
   5-line fix in kovc.hx: bumped cap 512→1024. Cascade verified
   GREEN: G2..G11 byte-identical, smoke 4/4 PASS, Stage 52
   modal tests still 116/116 PASS.
-- **Stage 51** (Inc 1 ✅ SHIPPED 2026-05-17 commit 9927361;
-  Inc 2 deferred to fresh session):
+- **Stage 51** ✅ **CLOSED 2026-05-18** (Inc 1 + Inc 2 SHIPPED;
+  Tier 1 #3 bootstrap-side end-to-end DONE):
   - Inc 1 ✅ (9927361): grad_rev_pass run-detection scaffold.
     Outer loop walks runs of consecutive entries sharing the
     same loss_name. Inner loop processes each entry
-    individually (Inc 1 fallback to Stage 50 Inc 2 bridge).
-    Cascade verified: G2..G4 byte-identical sha=7a35f8e8.
-    Smoke 4/4 PASS. 102 Python AD tests still pass.
-  - Inc 2 (deferred to fresh session): true single-walk via
-    `differentiate_reverse_all` over `param_array` when
-    run_size>1 AND all entries pass validation. Per saved
-    plan `docs/stage51-plan-2026-05-17.md`. Algorithmic
-    risk: deposit-order correctness + per-param simplify.
-    Saved for clean-context careful implementation.
-  - When Inc 2 ships, Tier 1 #3 (multi-output reverse-mode
-    AD) finally closes end-to-end + Stage 50 formally
-    closes (n>1 paths exercised at last).
+    individually as Stage 50 Inc 2 bridge fallback. Cascade
+    verified: G2..G4 byte-identical sha=7a35f8e8.
+  - Inc 2 ✅ (e4bee39): multi-bucket fast path. When run_size
+    is 2..8 AND all entries pass validation AND loss_fn is
+    found AND ckpt_ok, processes the whole run via ONE
+    `differentiate_reverse_all` walk + N `bucket_array_sum`
+    extractions. Falls back to Inc 1 per-entry for n=1 OR
+    n>8 OR any validation failure (so per-entry traps fire
+    correctly per-entry rather than poisoning the whole
+    run). Cascade verified: G2..G4 byte-identical sha=
+    5a3bf021. 1089 Python AD/reverse/parity/codegen tests
+    all green. Tier 1 #3 (multi-output reverse-mode AD)
+    now closes end-to-end (Python side at Stage 36;
+    bootstrap algorithmic side at Stage 51 Inc 2).
 - **Stage 52** ✅ **CLOSED 2026-05-17** (gates 1-16 + Inc 1-13
   + Stage 53 Inc 1+2 shipped, 22+ launder paths caught via 11
   wrapper-AST kinds, 3-clean-gate closure protocol satisfied
@@ -294,20 +296,20 @@ These are blockers for any real ML training, in priority order.
    per cache-key correctness hazard. ~80% of original
    blueprint shipped.
 
-3. **Multi-output reverse-mode AD.** ✅ DONE (Python-side) +
-   bootstrap-side IN PROGRESS (Stage 51).
+3. **Multi-output reverse-mode AD.** ✅ DONE end-to-end
+   (Python side + bootstrap side both shipped).
    `differentiate_reverse(expr, param_names)` in
    `helixc/frontend/autodiff_reverse.py` produces a
    `dict[param_name -> gradient_expr]` in ONE walk via per-param
    bucket accumulation. `grad_rev_all(f)(p1, p2, base)` is wired
    end-to-end and used by `dogfood_05_binary_classifier.hx` etc.
-   **Bootstrap-side**: Stage 50 (RESURRECTED 2026-05-17)
-   restored multi-bucket infrastructure (kovc.hx fn_table cap
-   bumped 512→1024). Stage 51 Inc 1 (SHIPPED 9927361) shipped
-   run-detection scaffold in grad_rev_pass. Stage 51 Inc 2
-   (deferred to fresh session) will activate true single-walk
-   via `differentiate_reverse_all`. Closing this finalizes
-   the bootstrap-side equivalent.
+   **Bootstrap-side**: Stage 50 (a35e628) restored multi-bucket
+   infrastructure (kovc.hx fn_table cap 512→1024). Stage 51
+   Inc 1 (9927361) shipped run-detection scaffold + Inc 2
+   (e4bee39) activated true single-walk via
+   `differentiate_reverse_all` over `param_array` for runs of
+   2..8 consecutive same-loss entries. Tier 1 #3 closes end-
+   to-end 2026-05-18.
 
 4. **Richer strings + file I/O** with capability-typed
    `@effect(io.read_file)`. Basic literal/string diagnostic IO (`print_str`,
