@@ -6227,8 +6227,43 @@ fn grad_rev_pass(sb: i32, head: i32) -> i32 {
         }
         let base = gr_rev_pending_base(sb);
         let mut gri: i32 = 0;
+        // Stage 51 Inc 1: outer loop now walks runs of consecutive
+        // entries sharing the same loss_name. Inc 1 ships the
+        // run-detection scaffold but always processes entries one-
+        // at-a-time inside the run (falling through to the existing
+        // per-entry single-bucket Inc 2 bridge). Cascade byte-
+        // identity preserved because the per-entry behavior is
+        // unchanged — only the loop structure changed.
+        // Inc 2 (future) flips to true single-walk via
+        // differentiate_reverse_all(sb, body) over the param_array
+        // when all entries in the run pass per-entry validation.
         while gri < count {
-            let entry = base + gri * 5;
+            // PHASE 1: detect run length (consecutive entries
+            // sharing the same loss_name as gri).
+            let run_loss_s = __arena_get(base + gri * 5);
+            let run_loss_l = __arena_get(base + gri * 5 + 1);
+            let mut run_end: i32 = gri + 1;
+            let mut run_keep: i32 = 1;
+            while run_keep == 1 {
+                if run_end >= count {
+                    run_keep = 0;
+                } else {
+                    let cand_s = __arena_get(base + run_end * 5);
+                    let cand_l = __arena_get(base + run_end * 5 + 1);
+                    if byte_eq(cand_s, cand_l, run_loss_s, run_loss_l) == 1 {
+                        run_end = run_end + 1;
+                    } else {
+                        run_keep = 0;
+                    };
+                };
+            }
+            // PHASE 2: process each entry in the run individually
+            // (Inc 1 fallback — Inc 2 will replace this with
+            // true single-walk when run_size > 1 and all entries
+            // pass validation).
+            let mut ri: i32 = gri;
+            while ri < run_end {
+            let entry = base + ri * 5;
             let loss_s = __arena_get(entry);
             let loss_l = __arena_get(entry + 1);
             let field_s = __arena_get(entry + 2);
@@ -6361,7 +6396,9 @@ fn grad_rev_pass(sb: i32, head: i32) -> i32 {
                 __arena_set(tail + 2, new_list_node);
                 tail = new_list_node;
             };
-            gri = gri + 1;
+            ri = ri + 1;
+            }
+            gri = run_end;
         }
         0
     }
