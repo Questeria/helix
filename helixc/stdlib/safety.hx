@@ -226,3 +226,56 @@ fn safety_attribution_roundtrip_is_identity(x: f32) -> bool {
     let unwrapped = verify_attribution_f32(wrapped);
     unwrapped == x
 }
+
+// Stage 104 — close the per-wrapper roundtrip-property coverage gap
+// for the remaining 5 Tier-S/A wrappers. Pre-Stage-104, only 6 of 11
+// wrappers had a `@property safety_X_roundtrip_is_identity` fn
+// (Conf + Taint from Stage 78, Enclave + Cfact + Deadline from
+// Stage 82, Attribution from Stage 98). DP / Quant / Domain /
+// Robust / Energy were missing — the per-wrapper template was
+// inconsistent at the stdlib level. Stage 104 closes that gap
+// so all 11 wrappers carry the same per-wrapper safety contract:
+// (a) `as_X_f32` constructor helper, (b) `strip_X_f32` opt-out
+// helper, (c) `@property safety_X_roundtrip_is_identity` round-
+// trip identity assertion. All wrappers are identity-erased at
+// IR / codegen, so each roundtrip must hold for every input.
+
+@property
+@pure
+fn safety_dp_roundtrip_is_identity(x: f32) -> bool {
+    let wrapped = as_private_f32(x);
+    let unwrapped = exhaust_private_f32(wrapped);
+    unwrapped == x
+}
+
+@property
+@pure
+fn safety_quant_roundtrip_is_identity(x: f32) -> bool {
+    let wrapped = quantize_f32(x);
+    let unwrapped = dequantize_f32(wrapped);
+    unwrapped == x
+}
+
+@property
+@pure
+fn safety_domain_roundtrip_is_identity(x: f32) -> bool {
+    let wrapped = tag_in_dist_f32(x);
+    let unwrapped = assert_in_dist_f32(wrapped);
+    unwrapped == x
+}
+
+@property
+@pure
+fn safety_robust_roundtrip_is_identity(x: f32) -> bool {
+    let wrapped = assert_robust_f32(x);
+    let unwrapped = widen_robust_f32(wrapped);
+    unwrapped == x
+}
+
+@property
+@pure
+fn safety_energy_roundtrip_is_identity(x: f32) -> bool {
+    let wrapped = measure_energy_f32(x);
+    let unwrapped = exhaust_energy_f32(wrapped);
+    unwrapped == x
+}

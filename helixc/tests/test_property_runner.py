@@ -30,22 +30,30 @@ from helixc.runners.property_runner import (  # noqa: E402
 )
 
 
-def test_stage86_discovery_finds_all_six_stdlib_properties():
-    """Stage 86 + Stage 98 — discovery half finds the 6 @property
-    fns shipped in safety.hx (5 from Stages 78+82, 1 from Stage 98
-    closing the audit-identified Attribution gap)."""
+def test_stage86_discovery_finds_all_eleven_stdlib_properties():
+    """Stage 86 + Stage 98 + Stage 104 — discovery half finds the 11
+    @property fns shipped in safety.hx (one per Tier-S/A wrapper).
+    History: 2 from Stage 78 (Conf, Taint), 3 from Stage 82 (Enclave,
+    Cfact, Deadline), 1 from Stage 98 (Attribution closing the audit-
+    identified gap), 5 from Stage 104 (DP, Quant, Domain, Robust,
+    Energy closing the per-wrapper roundtrip-property gap)."""
     from helixc.frontend.parser import parse
     src = _build_stdlib_only_src()
     prog = parse(src, include_stdlib=True)
     props = _discover_properties(prog)
     names = {name for name, _args in props}
     expected = {
-        "safety_conf_roundtrip_is_identity",
-        "safety_taint_roundtrip_is_identity",
-        "safety_enclave_roundtrip_is_identity",
-        "safety_cfact_roundtrip_is_identity",
-        "safety_deadline_roundtrip_is_identity",
-        "safety_attribution_roundtrip_is_identity",  # Stage 98
+        "safety_conf_roundtrip_is_identity",          # Stage 78
+        "safety_taint_roundtrip_is_identity",         # Stage 78
+        "safety_enclave_roundtrip_is_identity",       # Stage 82
+        "safety_cfact_roundtrip_is_identity",         # Stage 82
+        "safety_deadline_roundtrip_is_identity",      # Stage 82
+        "safety_attribution_roundtrip_is_identity",   # Stage 98
+        "safety_dp_roundtrip_is_identity",            # Stage 104
+        "safety_quant_roundtrip_is_identity",         # Stage 104
+        "safety_domain_roundtrip_is_identity",        # Stage 104
+        "safety_robust_roundtrip_is_identity",        # Stage 104
+        "safety_energy_roundtrip_is_identity",        # Stage 104
     }
     missing = expected - names
     assert not missing, f"missing stdlib @property fns: {missing}"

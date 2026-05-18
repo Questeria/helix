@@ -303,6 +303,39 @@ Re-sequenced after Stage 46-47 closed:
 - **Stage 58** ✅ **CLOSED 2026-05-18** — Tier 4 #13 content-
   addressed modules (program_hash + module_hash + fn_signature_hash
   core).
+- **Stage 104 SHIPPED 2026-05-18** — safety.hx per-wrapper @property
+  coverage gap closed: 5 missing roundtrips for DP/Quant/Domain/
+  Robust/Energy added.
+  - **Pre-Stage-104**: 6 of 11 wrappers had a paired `safety_X_
+    roundtrip_is_identity` @property fn (Conf + Taint from
+    Stage 78, Enclave + Cfact + Deadline from Stage 82, Attribution
+    from Stage 98). DP, Quant, Domain, Robust, Energy had the
+    `as_X / strip_X` helpers but not the roundtrip — inconsistent
+    with the per-wrapper template Stages 78/82/98 established.
+  - **Post-Stage-104**: all 11 wrappers carry the full per-wrapper
+    template: (a) `as_X_f32` constructor, (b) `strip_X_f32` opt-out,
+    (c) `@property safety_X_roundtrip_is_identity`. safety.hx now
+    ships **22 helpers (11 × 2) + 11 @property roundtrips** (one
+    per wrapper).
+  - End-to-end runner coverage: each new @property gets 7 f32 input
+    inputs from the Stage 86 runner table (35 new assertions if all
+    are exercised end-to-end via WSL).
+  - 1 new gap-detector test (`test_stage104_safety_stdlib_per_
+    wrapper_property_coverage`) catches future drift if a NEW
+    wrapper lands without its paired roundtrip @property.
+    test_stage82 + test_stage86 discovery tests updated from "6
+    @property fns" to "11 @property fns". **446 typecheck +
+    property_runner pins GREEN** (up from 445).
+  - **7 of 7 Stage 100+ backlog items now closed**. Stage 100
+    + Stage 101 (refactor/correctness) + Stage 102 (typed-hole
+    plumbing) + Stage 103 (multi-arg @property reject) + Stage 104
+    (safety.hx coverage) collectively close the entire Stage 100+
+    design-debt backlog inherited from the Stage 93 audit.
+  - **v1.0 critical path now 4 stages out**: Stage 105 (cherry-
+    pick Stage 64 Inc 3 from parallel worktree), Stage 106 (Stage
+    64 Inc 4 TILE_MATMUL via wmma), Stage 107 (Stage 64 Inc 5
+    tile-IR opt passes), Stage 108 (v1.0 release stop).
+
 - **Stage 103 SHIPPED 2026-05-18** — Multi-arg + 0-arg @property
   rejected at typecheck time.
   - **Pre-Stage-103**: `@property fn p(a: i32, b: i32) -> bool` was

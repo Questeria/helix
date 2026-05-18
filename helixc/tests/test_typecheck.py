@@ -5993,10 +5993,13 @@ def test_stage87_wrapper_mismatch_no_hint_when_unrelated_types():
     assert hint is None
 
 
-def test_stage82_safety_stdlib_all_six_property_fns_registered():
-    """Stage 82 + Stage 98 — safety.hx ships 6 @property fns
-    (2 from Stage 78, 3 from Stage 82, 1 from Stage 98 closing
-    the audit-identified TyAttribution gap)."""
+def test_stage82_safety_stdlib_all_eleven_property_fns_registered():
+    """Stage 82 + Stage 98 + Stage 104 — safety.hx now ships 11
+    @property fns (one per Tier-S/A wrapper). History: 2 from
+    Stage 78, 3 from Stage 82, 1 from Stage 98 closing TyAttribution
+    gap, 5 from Stage 104 closing the DP/Quant/Domain/Robust/
+    Energy gap. After Stage 104 the per-wrapper-roundtrip-property
+    template is consistent across all 11 wrappers."""
     from helixc.frontend.parser import parse
     from helixc.frontend.typecheck import TypeChecker
 
@@ -6016,10 +6019,51 @@ def test_stage82_safety_stdlib_all_six_property_fns_registered():
         "safety_cfact_roundtrip_is_identity",         # Stage 82
         "safety_deadline_roundtrip_is_identity",      # Stage 82
         "safety_attribution_roundtrip_is_identity",   # Stage 98
+        "safety_dp_roundtrip_is_identity",            # Stage 104
+        "safety_quant_roundtrip_is_identity",         # Stage 104
+        "safety_domain_roundtrip_is_identity",        # Stage 104
+        "safety_robust_roundtrip_is_identity",        # Stage 104
+        "safety_energy_roundtrip_is_identity",        # Stage 104
     }
     missing = expected - tc._property_fn_names
     assert not missing, (
         f"safety.hx missing @property fns: {missing}")
+
+
+def test_stage104_safety_stdlib_per_wrapper_property_coverage():
+    """Stage 104 — verify the per-wrapper @property coverage is now
+    EXACTLY parallel to the 11 Tier-S/A wrappers shipped in Stages
+    68-83. Each wrapper must have a `safety_<short>_roundtrip_is_
+    identity` @property fn. Pre-Stage-104, 6 of 11 wrappers had
+    coverage; post-Stage-104, all 11 do.
+
+    Catches future drift if a new wrapper is added without its
+    paired @property roundtrip — same kind of audit-found
+    inconsistency Stage 98 closed for Attribution and Stage 104
+    closed for the remaining 5."""
+    from helixc.frontend.parser import parse
+    from helixc.frontend.typecheck import TypeChecker
+
+    prog = parse("fn main() -> i32 { 0 }\n", include_stdlib=True)
+    tc = TypeChecker(prog)
+    tc.check()
+    # Each of the 11 wrappers must have a safety_<short>_roundtrip
+    # @property fn. The short names match the per-wrapper helper
+    # naming convention established in Stage 78.
+    wrappers = [
+        "conf", "taint", "dp", "quant", "domain",
+        "robust", "energy", "enclave", "cfact", "deadline",
+        "attribution",
+    ]
+    missing = []
+    for short in wrappers:
+        name = f"safety_{short}_roundtrip_is_identity"
+        if name not in tc._property_fn_names:
+            missing.append(name)
+    assert not missing, (
+        f"Stage 104 per-wrapper @property coverage gap: missing "
+        f"{missing}. Each of the 11 Tier-S/A wrappers must have a "
+        f"paired roundtrip-identity @property fn in safety.hx.")
 
 
 def test_stage81_inc1_deadline_type_recognition():
