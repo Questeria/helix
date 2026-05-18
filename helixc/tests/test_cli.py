@@ -5866,6 +5866,7 @@ def test_stage59_autodiff_cli_help_mentions_polish_flags():
         "--list-fns", "--list-fns-json",
         "--list-structs", "--list-structs-json",
         "--struct-fields", "--struct-fields-json",
+        "--list-uses",
         "--list-fn-attrs", "--list-fn-attrs-json",
         "--list-fns-by-attr", "--list-fns-by-attr-json",
         "--fn-callgraph", "--fn-callers",
@@ -7351,6 +7352,45 @@ def test_stage59_struct_fields_not_found(tmp_path):
     )
     assert proc.returncode == 1
     assert "not found" in proc.stderr
+
+
+def test_stage59_list_uses(tmp_path):
+    """Stage 59 follow-on / Tier 4 #13 polish: --list-uses enumerates
+    `use` decls as dot-joined paths, sorted alphabetically."""
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "u.hx"
+    src.write_text(
+        "use std::result;\n"
+        "use stdlib::csv;\n"
+        "use foo::bar::baz;\n"
+        "fn main() -> i32 { 0 }\n",
+        encoding="utf-8",
+    )
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--list-uses", str(src)],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0
+    lines = [l for l in proc.stdout.splitlines() if l]
+    # Sorted alphabetically.
+    assert lines == ["foo.bar.baz", "std.result", "stdlib.csv"]
+
+
+def test_stage59_list_uses_empty(tmp_path):
+    """Stage 59 follow-on: file with no `use` decls → empty output."""
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "x.hx"
+    src.write_text("fn main() -> i32 { 0 }\n", encoding="utf-8")
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--list-uses", str(src)],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0
+    assert proc.stdout == ""
 
 
 def test_stage59_list_structs_basic(tmp_path):

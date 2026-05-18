@@ -45,6 +45,8 @@ Introspection (Stage 28.9 + Stage 58 + Stage 59 polish):
         Same as --list-fns but machine-readable JSON (full 64-hex hashes).
     --list-structs <file.hx>
         Enumerate all structs with field count + content hash.
+    --list-uses <file.hx>
+        Enumerate `use` decls (imports) as dot-joined paths.
     --struct-fields <file.hx> <struct_name>
         Print '<name>: <ty>' per field (declaration order, not sorted).
     --struct-fields-json <file.hx> <struct_name>
@@ -3645,6 +3647,29 @@ def _struct_fields(path: str, struct_name: str) -> int:
     return 1
 
 
+def _list_uses(path: str) -> int:
+    """Stage 59 follow-on / Tier 4 #13 polish: enumerate `use` decls
+    (imports) in a file.
+
+    Output: one line per use-decl as dot-joined path segments:
+        '<seg1>.<seg2>....<segN>'
+    Sorted alphabetically for stable diff-friendly output.
+
+    Use case: dependency inventory — what does this file depend on?
+    Companion to --fn-callgraph (intra-file deps) and --list-modules
+    (intra-file definitions); this covers cross-file references.
+    """
+    src = _read_source(path)
+    prog = _parse_or_exit(src, path)
+    uses: list[str] = []
+    for it in prog.items:
+        if isinstance(it, A.UseDecl):
+            uses.append(".".join(it.path))
+    for u in sorted(uses):
+        print(u)
+    return 0
+
+
 def _list_structs(path: str) -> int:
     """Stage 59 follow-on / Tier 4 #13 polish: enumerate all top-level
     StructDecls in a source file with their structural-hash + field
@@ -3990,6 +4015,12 @@ def main():
                   file=sys.stderr)
             sys.exit(2)
         sys.exit(_list_structs(args[0]))
+
+    if "--list-uses" in flags:
+        if len(args) < 1:
+            print("usage: --list-uses <file.hx>", file=sys.stderr)
+            sys.exit(2)
+        sys.exit(_list_uses(args[0]))
 
     if "--struct-fields" in flags:
         if len(args) < 2:
