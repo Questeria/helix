@@ -213,27 +213,39 @@ def test_stage60_inc2_read_file_to_arena_dyn_round_trips():
     assert rc == 10, f"expected rc=10 (bytes read), got rc={rc} err={err!r}"
 
 
-def test_stage60_inc1_write_file_to_arena_dyn_surface_lowers():
-    """Stage 60 Inc 1: write_file_to_arena_dyn surface exists."""
-    src = """
-    fn main() -> i32 {
-        let p = __strlit_to_arena("/tmp/dyn_w.bin");
-        let pl = __strlen("/tmp/dyn_w.bin");
-        let d = __strlit_to_arena("hi");
-        let dl = __strlen("hi");
-        let n = write_file_to_arena_dyn(p, pl, d, dl);
-        42
-    }
+def test_stage60_inc3_write_file_to_arena_dyn_round_trips():
+    """Stage 60 Inc 3: write_file_to_arena_dyn opens a runtime-built
+    path, writes arena bytes via per-byte sys_write loop, returns
+    count. End-to-end round-trip via WSL: write file from Helix,
+    read back from Python."""
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    out_dir = os.path.join(proj_root, "helixc", "tests", "_tmp")
+    os.makedirs(out_dir, exist_ok=True)
+    test_file = os.path.join(out_dir, "stage60_inc3_dyn_write.txt")
+    # Ensure file doesn't exist from prior run.
+    if os.path.exists(test_file):
+        os.remove(test_file)
+    wsl_path = _win_to_wsl(test_file)
+    src = f"""
+    fn main() -> i32 {{
+        let path_start = __strlit_to_arena("{wsl_path}");
+        let path_len = __strlen("{wsl_path}");
+        let data_start = __strlit_to_arena("hello\\n");
+        let data_len = __strlen("hello\\n");
+        let n_written = write_file_to_arena_dyn(path_start, path_len,
+                                                  data_start, data_len);
+        n_written
+    }}
     """
-    prog = parse(src, include_stdlib=True)
-    grad_pass(prog)
-    mod = lower(prog)
-    fdce_module(mod)
-    try:
-        compile_module_to_elf(mod)
-        assert False, "expected NotImplementedError from Inc 1 stub"
-    except NotImplementedError as e:
-        assert "write_file_to_arena_dyn" in str(e)
+    rc, out, err = _build_and_run(src)
+    # 6 bytes written ("hello\n").
+    assert rc == 6, f"expected rc=6 (bytes written), got rc={rc} err={err!r}"
+    # Verify the file was actually created with the right content.
+    assert os.path.exists(test_file), f"file not created at {test_file}"
+    with open(test_file, "rb") as f:
+        content = f.read()
+    assert content == b"hello\n", f"got {content!r}"
 
 
 def test_stage60_inc1_all_four_dyn_builtins_typecheck():

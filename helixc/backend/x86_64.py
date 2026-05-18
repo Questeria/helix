@@ -3761,13 +3761,205 @@ class FnCompiler:
                     self.asm.mov_mem_rbp_eax(res_slot)
                 return
 
-            # The remaining 3 dyn variants are deferred to Inc 3
-            # (still erroring deterministically for fail-closed safety).
-            if kind in ("write_file_to_arena_dyn",
-                         "read_file_int_dyn",
-                         "write_file_dyn"):
+            # Stage 60 Inc 3 — write_file_to_arena_dyn(path_start,
+            # path_len, data_start, n_bytes) -> i32.
+            # Mirrors Inc 2's path-copy preamble; reuses static
+            # variant's sys_write per-byte loop body.
+            if kind == "write_file_to_arena_dyn":
+                PATH_MAX = 0x1000  # 4 KB path scratch
+
+                path_start_slot = self._slot_of(op.operands[0])
+                path_len_slot = self._slot_of(op.operands[1])
+                data_start_slot = self._slot_of(op.operands[2])
+                n_bytes_slot = self._slot_of(op.operands[3])
+
+                buf = self.asm.b
+                # Save callee-saved regs we'll use as state carriers.
+                buf.emit(0x53)                            # push rbx
+                buf.emit(0x41, 0x54)                      # push r12
+                buf.emit(0x41, 0x55)                      # push r13
+                buf.emit(0x41, 0x56)                      # push r14
+
+                # Frame: PATH_MAX path scratch + 1 byte write buf + 8 fd.
+                # Total = PATH_MAX + 16 (rounded up for alignment).
+                FRAME = PATH_MAX + 16
+                buf.emit(0x48, 0x81, 0xEC)
+                buf.emit_bytes(struct.pack("<I", FRAME))
+
+                # ---- Copy path bytes from arena to path_scratch ----
+                # path_scratch starts at rsp+0.
+                # r9 = path_len (limit), r10 = path_start, r11 = i.
+                self.asm.mov_eax_mem_rbp(path_len_slot)
+                buf.emit(0x49, 0x89, 0xC1)                # mov r9, rax
+                buf.emit(0x49, 0x81, 0xF9)                # cmp r9, PATH_MAX-1
+                buf.emit_bytes(struct.pack("<I", PATH_MAX - 1))
+                buf.emit(0x76, 0x02)                      # jbe ok
+                buf.emit(0x0F, 0x0B)                      # ud2
+
+                self.asm.mov_eax_mem_rbp(path_start_slot)
+                buf.emit(0x49, 0x89, 0xC2)                # mov r10, rax
+                buf.emit(0x4D, 0x31, 0xDB)                # xor r11, r11
+
+                # path_copy_loop:
+                pcl_start = buf.offset()
+                buf.emit(0x4D, 0x39, 0xCB)                # cmp r11, r9
+                buf.emit(0x7D, 0x00)                      # jge done (ph)
+                pcl_jge_off = buf.offset() - 1
+                pcl_jge_after = buf.offset()
+                # ecx = path_start + i
+                buf.emit(0x44, 0x89, 0xD1)                # mov ecx, r10d
+                buf.emit(0x44, 0x01, 0xD9)                # add ecx, r11d
+                self.asm.lea_rax_rip_rel("__helix_arena_base")
+                # eax = [rax + rcx*4 + 4]
+                buf.emit(0x8B, 0x44, 0x88, 0x04)
+                # path_scratch is at rsp+0, so [rsp+r11] = al
+                buf.emit(0x42, 0x88, 0x04, 0x1C)          # mov [rsp+r11], al
+                buf.emit(0x49, 0xFF, 0xC3)                # inc r11
+                buf.emit(0xEB, 0x00)                      # jmp loop
+                pcl_jmp_off = buf.offset() - 1
+                pcl_jmp_after = buf.offset()
+                pcl_back = pcl_start - pcl_jmp_after
+                if not (-128 <= pcl_back <= 127):
+                    raise ValueError(
+                        "write_dyn path-copy loop disp out of rel8")
+                buf.bytes_[pcl_jmp_off] = pcl_back & 0xFF
+                pcl_done = buf.offset()
+                pcl_fwd = pcl_done - pcl_jge_after
+                if not (-128 <= pcl_fwd <= 127):
+                    raise ValueError(
+                        "write_dyn path-copy jge disp out of rel8")
+                buf.bytes_[pcl_jge_off] = pcl_fwd & 0xFF
+
+                # Null-terminate path_scratch[r9] = 0.
+                buf.emit(0x42, 0xC6, 0x04, 0x0C, 0x00)    # mov byte [rsp+r9], 0
+
+                # ---- sys_open(path, O_WRONLY|O_CREAT|O_TRUNC, 0644) ----
+                # rdi = lea [rsp] (path_scratch start)
+                buf.emit(0x48, 0x89, 0xE7)                # mov rdi, rsp
+                self.asm.mov_esi_imm32(0x241)             # flags
+                self.asm.mov_edx_imm32(0x1A4)             # mode 0644
+                self.asm.mov_eax_imm32(2)                 # sys_open
+                self.asm.syscall()
+                # Save fd at [rsp+PATH_MAX+8].
+                buf.emit(0x48, 0x89, 0x84, 0x24)          # mov [rsp+disp32], rax
+                buf.emit_bytes(struct.pack("<I", PATH_MAX + 8))
+
+                # If fd < 0, skip to error path.
+                buf.emit(0x48, 0x85, 0xC0)                # test rax, rax
+                buf.emit(0x7C, 0x00)                      # jl err (ph)
+                err_jmp_off = buf.offset() - 1
+
+                # Initialize write-loop state.
+                # r12d = data_start, r13d = n_bytes, r14d = counter.
+                self.asm.mov_eax_mem_rbp(data_start_slot)
+                buf.emit(0x41, 0x89, 0xC4)                # mov r12d, eax
+                self.asm.mov_eax_mem_rbp(n_bytes_slot)
+                buf.emit(0x41, 0x89, 0xC5)                # mov r13d, eax
+                buf.emit(0x45, 0x31, 0xF6)                # xor r14d, r14d
+
+                # write_loop:
+                wl_start = buf.offset()
+                buf.emit(0x45, 0x39, 0xEE)                # cmp r14d, r13d
+                buf.emit(0x7D, 0x00)                      # jge done (ph)
+                wl_jge_off = buf.offset() - 1
+                wl_jge_after = buf.offset()
+
+                # idx = data_start + counter
+                buf.emit(0x44, 0x89, 0xE1)                # mov ecx, r12d
+                buf.emit(0x44, 0x01, 0xF1)                # add ecx, r14d
+                buf.emit(0x81, 0xF9)                      # cmp ecx, HELIX_ARENA_CAP
+                buf.emit_bytes(struct.pack("<I", HELIX_ARENA_CAP))
+                buf.emit(0x73, 0x00)                      # jae done (ph)
+                wl_jae_off = buf.offset() - 1
+                wl_jae_after = buf.offset()
+
+                # eax = arena[rcx]
+                self.asm.lea_rax_rip_rel("__helix_arena_base")
+                buf.emit(0x8B, 0x44, 0x88, 0x04)          # mov eax, [rax+rcx*4+4]
+                # write byte buf is at [rsp+PATH_MAX]
+                buf.emit(0x88, 0x84, 0x24)                # mov [rsp+disp32], al
+                buf.emit_bytes(struct.pack("<I", PATH_MAX))
+
+                # sys_write(fd, &byte, 1)
+                buf.emit(0x48, 0x8B, 0xBC, 0x24)          # mov rdi, [rsp+disp32]
+                buf.emit_bytes(struct.pack("<I", PATH_MAX + 8))
+                buf.emit(0x48, 0x8D, 0xB4, 0x24)          # lea rsi, [rsp+disp32]
+                buf.emit_bytes(struct.pack("<I", PATH_MAX))
+                self.asm.mov_edx_imm32(1)
+                self.asm.mov_eax_imm32(1)                 # sys_write
+                self.asm.syscall()
+
+                buf.emit(0x41, 0xFF, 0xC6)                # inc r14d
+                buf.emit(0xEB, 0x00)                      # jmp wl_start (ph)
+                wl_back_off = buf.offset() - 1
+                wl_back_after = buf.offset()
+                wl_back = wl_start - wl_back_after
+                if not (-128 <= wl_back <= 127):
+                    raise ValueError(
+                        "write_dyn write loop disp out of rel8")
+                buf.bytes_[wl_back_off] = wl_back & 0xFF
+
+                # done:
+                wl_done = buf.offset()
+                fwd1 = wl_done - wl_jge_after
+                fwd2 = wl_done - wl_jae_after
+                if not (-128 <= fwd1 <= 127):
+                    raise ValueError(
+                        "write_dyn jge disp out of rel8")
+                if not (-128 <= fwd2 <= 127):
+                    raise ValueError(
+                        "write_dyn jae disp out of rel8")
+                buf.bytes_[wl_jge_off] = fwd1 & 0xFF
+                buf.bytes_[wl_jae_off] = fwd2 & 0xFF
+
+                # close(fd)
+                buf.emit(0x48, 0x8B, 0xBC, 0x24)          # mov rdi, [rsp+disp32]
+                buf.emit_bytes(struct.pack("<I", PATH_MAX + 8))
+                self.asm.mov_eax_imm32(3)                 # sys_close
+                self.asm.syscall()
+
+                # eax = r14d (count)
+                buf.emit(0x44, 0x89, 0xF0)
+                # Skip error path.
+                buf.emit(0xEB, 0x00)
+                skip_err_off = buf.offset() - 1
+                skip_err_after = buf.offset()
+
+                # err: open failed; return 0.
+                err_addr = buf.offset()
+                err_disp = err_addr - (err_jmp_off + 1)
+                if not (-128 <= err_disp <= 127):
+                    raise ValueError(
+                        "write_dyn err jmp disp out of rel8")
+                buf.bytes_[err_jmp_off] = err_disp & 0xFF
+                self.asm.mov_eax_imm32(0)
+
+                # epilogue
+                ep_addr = buf.offset()
+                skip_disp = ep_addr - skip_err_after
+                if not (-128 <= skip_disp <= 127):
+                    raise ValueError(
+                        "write_dyn skip-err disp out of rel8")
+                buf.bytes_[skip_err_off] = skip_disp & 0xFF
+
+                # Tear down stack + restore callee-saved.
+                buf.emit(0x48, 0x81, 0xC4)                # add rsp, FRAME
+                buf.emit_bytes(struct.pack("<I", FRAME))
+                buf.emit(0x41, 0x5E)                      # pop r14
+                buf.emit(0x41, 0x5D)                      # pop r13
+                buf.emit(0x41, 0x5C)                      # pop r12
+                buf.emit(0x5B)                            # pop rbx
+
+                if op.results:
+                    res_slot = self._slot_of(op.results[0])
+                    self.asm.mov_mem_rbp_eax(res_slot)
+                return
+
+            # Remaining 2 dyn variants deferred to Inc 4
+            # (still fail-closed).
+            if kind in ("read_file_int_dyn", "write_file_dyn"):
                 raise NotImplementedError(
-                    f"Stage 60 Inc 3+: {kind} backend pending; "
+                    f"Stage 60 Inc 4+: {kind} backend pending; "
                     f"surface lowers cleanly. Use static variant "
                     f"or wait for next Inc.")
 
