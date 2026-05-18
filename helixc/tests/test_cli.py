@@ -5883,6 +5883,7 @@ def test_stage59_autodiff_cli_help_mentions_polish_flags():
         "--changed-fns-json", "--diff-program-hash-json",
         "--dump-ast-hashes-json", "--fn-callgraph-json",
         "--fn-callers-json",
+        "--fn-reachable-from-json", "--fn-reachable-to-json",
         "--list-fn-attrs", "--list-fn-attrs-json",
         "--list-fns-by-attr", "--list-fns-by-attr-json",
         "--fn-callgraph", "--fn-callers",
@@ -7545,6 +7546,65 @@ def test_stage59_agent_methods_json(tmp_path):
         {"name": "propose", "params": ["i32"], "return_ty": "i32"},
         {"name": "evaluate", "params": ["i32", "i32"], "return_ty": "i32"},
     ]}
+
+
+def test_stage59_fn_reachable_from_json(tmp_path):
+    """Stage 59 follow-on / Tier 4 #13 polish: --fn-reachable-from-json
+    emits {entry, reachable, n_reachable} with transitive closure."""
+    import json
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "frfj.hx"
+    src.write_text(
+        "fn leaf() -> i32 { 1 }\n"
+        "fn mid() -> i32 { leaf() }\n"
+        "fn main() -> i32 { mid() }\n"
+        "fn dead() -> i32 { 99 }\n",
+        encoding="utf-8",
+    )
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--fn-reachable-from-json", str(src), "main"],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0
+    result = json.loads(proc.stdout)
+    # 'dead' is NOT in the transitive closure of main.
+    assert result == {
+        "entry": "main",
+        "reachable": ["leaf", "main", "mid"],
+        "n_reachable": 3,
+    }
+
+
+def test_stage59_fn_reachable_to_json(tmp_path):
+    """Stage 59 follow-on / Tier 4 #13 polish: --fn-reachable-to-json
+    emits {target, reachable, n_reachable} with reverse transitive
+    closure (callers + callers-of-callers + ... + target)."""
+    import json
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "frtj.hx"
+    src.write_text(
+        "fn leaf() -> i32 { 1 }\n"
+        "fn mid() -> i32 { leaf() }\n"
+        "fn main() -> i32 { mid() }\n"
+        "fn unrelated() -> i32 { 5 }\n",
+        encoding="utf-8",
+    )
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--fn-reachable-to-json", str(src), "leaf"],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0
+    result = json.loads(proc.stdout)
+    # leaf is reached from main → mid → leaf, plus leaf itself.
+    assert result == {
+        "target": "leaf",
+        "reachable": ["leaf", "main", "mid"],
+        "n_reachable": 3,
+    }
 
 
 def test_stage59_fn_callers_json(tmp_path):

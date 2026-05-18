@@ -131,6 +131,10 @@ Introspection (Stage 28.9 + Stage 58 + Stage 59 polish):
         Same as --fn-callgraph but JSON {caller, callees: [...]}.
     --fn-callers-json <file.hx> <fn_name>
         Same as --fn-callers but JSON {target, callers: [...]}.
+    --fn-reachable-from-json <file.hx> <entry_fn>
+        Same as --fn-reachable-from but JSON {entry, reachable, n}.
+    --fn-reachable-to-json <file.hx> <target_fn>
+        Same as --fn-reachable-to but JSON {target, reachable, n}.
     --fn-body-stats <file.hx> <fn_name>
         Per-fn body AST-node counts (calls/binops/ifs/loops/matches).
     --fn-body-stats-json <file.hx> <fn_name>
@@ -2986,6 +2990,77 @@ def _fn_call_stats(path: str) -> int:
     return 0
 
 
+def _fn_reachable_to_json(path: str, target_name: str) -> int:
+    """Stage 59 follow-on / Tier 4 #13 polish: --fn-reachable-to in
+    machine-readable JSON form.
+
+    Output schema:
+      {"target": "<fn_name>",
+       "reachable": ["<f1>", "<f2>", ...],
+       "n_reachable": N}
+    Includes target_name in the reachable list (matches text form).
+
+    Exit 0 on success, 1 if target_name not found.
+    """
+    import json
+    from .ast_walker import iter_fn_decls
+    src = _read_source(path)
+    prog = _parse_or_exit(src, path)
+    all_fns = list(iter_fn_decls(prog))
+    all_names = {fn.name for fn in all_fns}
+    if target_name not in all_names:
+        print(f"error: autodiff_cli: fn {target_name!r} not found in {path}",
+              file=sys.stderr)
+        return 1
+
+    callers: dict[str, set] = {fn.name: set() for fn in all_fns}
+
+    def _collect_calls(node, from_fn: str) -> None:
+        if node is None:
+            return
+        if isinstance(node, A.Call):
+            tgt = None
+            if isinstance(node.callee, A.Name):
+                tgt = node.callee.name
+            elif (isinstance(node.callee, A.Path)
+                  and node.callee.segments):
+                tgt = node.callee.segments[-1]
+            if tgt is not None and tgt in all_names:
+                callers[tgt].add(from_fn)
+        if hasattr(node, "__dataclass_fields__"):
+            for f in node.__dataclass_fields__:
+                v = getattr(node, f)
+                if isinstance(v, list):
+                    for x in v:
+                        _collect_calls(x, from_fn)
+                elif isinstance(v, tuple):
+                    for x in v:
+                        _collect_calls(x, from_fn)
+                else:
+                    _collect_calls(v, from_fn)
+
+    for fn in all_fns:
+        if fn.body is not None:
+            _collect_calls(fn.body, fn.name)
+
+    reachable: set = {target_name}
+    frontier: list = [target_name]
+    while frontier:
+        next_frontier: list = []
+        for v in frontier:
+            for w in callers.get(v, set()):
+                if w not in reachable:
+                    reachable.add(w)
+                    next_frontier.append(w)
+        frontier = next_frontier
+    sorted_reachable = sorted(reachable)
+    print(json.dumps(
+        {"target": target_name, "reachable": sorted_reachable,
+         "n_reachable": len(sorted_reachable)},
+        sort_keys=True, indent=2))
+    return 0
+
+
 def _fn_reachable_to(path: str, target_name: str) -> int:
     """Stage 59 follow-on / Tier 4 #13 polish: inverse transitive
     callgraph closure. Print all fns that can transitively reach
@@ -3060,6 +3135,76 @@ def _fn_reachable_to(path: str, target_name: str) -> int:
 
     for name in sorted(reachable):
         print(name)
+    return 0
+
+
+def _fn_reachable_from_json(path: str, entry_name: str) -> int:
+    """Stage 59 follow-on / Tier 4 #13 polish: --fn-reachable-from in
+    machine-readable JSON form.
+
+    Output schema:
+      {"entry": "<fn_name>",
+       "reachable": ["<f1>", "<f2>", ...],
+       "n_reachable": N}
+    Includes entry_name in the reachable list (matches text form).
+
+    Exit 0 on success, 1 if entry_name not found.
+    """
+    import json
+    from .ast_walker import iter_fn_decls
+    src = _read_source(path)
+    prog = _parse_or_exit(src, path)
+    all_fns = list(iter_fn_decls(prog))
+    all_names = {fn.name for fn in all_fns}
+    if entry_name not in all_names:
+        print(f"error: autodiff_cli: fn {entry_name!r} not found in {path}",
+              file=sys.stderr)
+        return 1
+
+    graph: dict[str, set] = {}
+    for fn in all_fns:
+        callees: set = set()
+
+        def _walk(n) -> None:
+            if n is None:
+                return
+            if isinstance(n, A.Call):
+                if isinstance(n.callee, A.Name):
+                    callees.add(n.callee.name)
+                elif (isinstance(n.callee, A.Path)
+                      and n.callee.segments):
+                    callees.add(n.callee.segments[-1])
+            if hasattr(n, "__dataclass_fields__"):
+                for f in n.__dataclass_fields__:
+                    v = getattr(n, f)
+                    if isinstance(v, list):
+                        for x in v:
+                            _walk(x)
+                    elif isinstance(v, tuple):
+                        for x in v:
+                            _walk(x)
+                    else:
+                        _walk(v)
+
+        if fn.body is not None:
+            _walk(fn.body)
+        graph[fn.name] = {c for c in callees if c in all_names}
+
+    reachable: set = {entry_name}
+    frontier: list = [entry_name]
+    while frontier:
+        next_frontier: list = []
+        for v in frontier:
+            for w in graph.get(v, set()):
+                if w not in reachable:
+                    reachable.add(w)
+                    next_frontier.append(w)
+        frontier = next_frontier
+    sorted_reachable = sorted(reachable)
+    print(json.dumps(
+        {"entry": entry_name, "reachable": sorted_reachable,
+         "n_reachable": len(sorted_reachable)},
+        sort_keys=True, indent=2))
     return 0
 
 
@@ -5710,12 +5855,26 @@ def main():
             sys.exit(2)
         sys.exit(_fn_reachable_from(args[0], args[1]))
 
+    if "--fn-reachable-from-json" in flags:
+        if len(args) < 2:
+            print("usage: --fn-reachable-from-json <file.hx> <entry_fn>",
+                  file=sys.stderr)
+            sys.exit(2)
+        sys.exit(_fn_reachable_from_json(args[0], args[1]))
+
     if "--fn-reachable-to" in flags:
         if len(args) < 2:
             print("usage: --fn-reachable-to <file.hx> <target_fn>",
                   file=sys.stderr)
             sys.exit(2)
         sys.exit(_fn_reachable_to(args[0], args[1]))
+
+    if "--fn-reachable-to-json" in flags:
+        if len(args) < 2:
+            print("usage: --fn-reachable-to-json <file.hx> <target_fn>",
+                  file=sys.stderr)
+            sys.exit(2)
+        sys.exit(_fn_reachable_to_json(args[0], args[1]))
 
     if "--fn-call-stats" in flags:
         if len(args) < 1:
