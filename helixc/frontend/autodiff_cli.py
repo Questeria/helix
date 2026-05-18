@@ -10,6 +10,8 @@ Primary usage:
 Introspection (Stage 28.9 + Stage 58 + Stage 59 polish):
     --dump-ast-hashes <file.hx>
         Print `<fn_name> : <12-char hex hash>` for every fn.
+    --ast-stats <file.hx>
+        High-level program stats: fn/struct/module/attr counts.
     --program-hash <file.hx>
         Print the whole-program structural hash (64 hex).
     --program-signature-hash <file.hx>
@@ -127,6 +129,49 @@ def _parse_or_exit(src: str, path: str):
         # rc=2; runtime/internal errors are rc=1.
         print(f"error: autodiff_cli: parse: {path}: {e}", file=sys.stderr)
         sys.exit(1)
+
+
+def _ast_stats(path: str) -> int:
+    """Stage 59 follow-on / Tier 4 #13 polish: high-level program
+    structural stats — useful for repo-wide complexity inventories.
+
+    Output (one per line):
+      fns=N
+      structs=N
+      modules=N
+      autotune_fns=N (subset of fns with @autotune)
+      kernel_fns=N (subset of fns with @kernel)
+      pure_fns=N (subset of fns with @pure)
+      traced_fns=N (subset of fns with @trace)
+      total_attrs=N (sum of attr-counts across all fns)
+
+    Use case:
+    - Repo-wide complexity tracking (stat-by-stat across releases)
+    - Identify which files have grown disproportionately
+    - Sanity-check expected counts after a refactor
+    """
+    from .ast_walker import iter_fn_decls
+    from .autotune import has_autotune, has_kernel
+    from .trace_pass import is_traced
+    src = _read_source(path)
+    prog = _parse_or_exit(src, path)
+    fns = list(iter_fn_decls(prog))
+    structs = [it for it in prog.items if isinstance(it, A.StructDecl)]
+    modules = [it for it in prog.items if isinstance(it, A.ModBlock)]
+    autotune_count = sum(1 for f in fns if has_autotune(f))
+    kernel_count = sum(1 for f in fns if has_kernel(f))
+    pure_count = sum(1 for f in fns if "pure" in f.attrs)
+    traced_count = sum(1 for f in fns if is_traced(f))
+    total_attrs = sum(len(f.attrs) for f in fns)
+    print(f"fns={len(fns)}")
+    print(f"structs={len(structs)}")
+    print(f"modules={len(modules)}")
+    print(f"autotune_fns={autotune_count}")
+    print(f"kernel_fns={kernel_count}")
+    print(f"pure_fns={pure_count}")
+    print(f"traced_fns={traced_count}")
+    print(f"total_attrs={total_attrs}")
+    return 0
 
 
 def _dump_ast_hashes(path: str) -> int:
@@ -1187,6 +1232,12 @@ def main():
             # Restart 49 B1: bad-invocation rc=2.
             sys.exit(2)
         sys.exit(_dump_ast_hashes(args[0]))
+
+    if "--ast-stats" in flags:
+        if len(args) < 1:
+            print("usage: --ast-stats <file.hx>", file=sys.stderr)
+            sys.exit(2)
+        sys.exit(_ast_stats(args[0]))
 
     if "--program-hash" in flags:
         if len(args) < 1:

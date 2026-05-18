@@ -5833,7 +5833,8 @@ def test_stage59_autodiff_cli_help_mentions_polish_flags():
     assert proc.returncode == 2
     out = proc.stderr
     for flag in (
-        "--dump-ast-hashes", "--program-hash", "--program-signature-hash",
+        "--dump-ast-hashes", "--ast-stats",
+        "--program-hash", "--program-signature-hash",
         "--diff-program-hash", "--changed-fns", "--fn-sig-hash",
         "--list-fns", "--list-fn-attrs", "--check-program-hash",
         "--check-program-signature-hash",
@@ -6811,6 +6812,38 @@ def test_stage59_program_signature_hash_sig_change_differs(tmp_path):
         cwd=proj_root, capture_output=True, text=True, timeout=30,
     )
     assert proc_a.stdout.strip() != proc_b.stdout.strip()
+
+
+def test_stage59_ast_stats_basic(tmp_path):
+    """Stage 59 follow-on / Tier 4 #13 polish: --ast-stats prints
+    high-level structural counts (fns/structs/modules/attr-tagged
+    subsets)."""
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "mix.hx"
+    src.write_text(
+        "struct M { w: D<f32> }\n"
+        "@autotune(B: [16, 32])\n"
+        "@kernel\n"
+        "fn k(x: i32) -> i32 { x + B }\n"
+        "@pure\nfn p(x: i32) -> i32 { x }\n"
+        "@trace\nfn t(x: i32) -> i32 { x + 1 }\n"
+        "fn plain(x: i32) -> i32 { x }\n",
+        encoding="utf-8",
+    )
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--ast-stats", str(src)],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0
+    out = proc.stdout
+    assert "fns=4" in out
+    assert "structs=1" in out
+    assert "autotune_fns=1" in out
+    assert "kernel_fns=1" in out
+    assert "pure_fns=1" in out
+    assert "traced_fns=1" in out
 
 
 def test_stage59_list_fn_attrs_basic(tmp_path):
