@@ -5866,7 +5866,8 @@ def test_stage59_autodiff_cli_help_mentions_polish_flags():
         "--list-fns", "--list-fns-json",
         "--list-structs", "--list-structs-json",
         "--list-fn-attrs", "--list-fn-attrs-json",
-        "--list-fns-by-attr", "--fn-callgraph", "--fn-callers",
+        "--list-fns-by-attr",
+        "--fn-callgraph", "--fn-callers", "--fn-callgraph-all",
         "--check-program-hash",
         "--check-program-hash-from-file",
         "--check-program-signature-hash",
@@ -7249,6 +7250,33 @@ def test_stage59_list_fns_by_attr_missing_attr(tmp_path):
     )
     assert proc.returncode == 0
     assert proc.stdout == ""
+
+
+def test_stage59_fn_callgraph_all_whole_program(tmp_path):
+    """Stage 59 follow-on / Tier 4 #13 polish: --fn-callgraph-all
+    emits whole-program callgraph as JSON {fn: [callees]}."""
+    import json
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "cg.hx"
+    src.write_text(
+        "fn h1(x: i32) -> i32 { x + 1 }\n"
+        "fn h2(y: i32) -> i32 { y * 2 }\n"
+        "fn main_fn(n: i32) -> i32 { h1(h2(n)) }\n"
+        "fn leaf(z: i32) -> i32 { z }\n",
+        encoding="utf-8",
+    )
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--fn-callgraph-all", str(src)],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0
+    result = json.loads(proc.stdout)
+    assert result == {
+        "h1": [], "h2": [], "leaf": [],
+        "main_fn": ["h1", "h2"],
+    }
 
 
 def test_stage59_fn_callers_inverse_lookup(tmp_path):

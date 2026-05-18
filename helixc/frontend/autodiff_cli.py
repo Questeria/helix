@@ -55,6 +55,8 @@ Introspection (Stage 28.9 + Stage 58 + Stage 59 polish):
         Print fn names directly called from inside <fn_name>'s body.
     --fn-callers <file.hx> <fn_name>
         Inverse: print fns that DIRECTLY call <fn_name> (refactor planning).
+    --fn-callgraph-all <file.hx>
+        Whole-program callgraph as JSON {fn: [callees...]} for tooling.
     --list-fn-attrs-json <file.hx>
         Same as --list-fn-attrs but machine-readable JSON output.
     --list-fns-by-attr <file.hx> <attr>
@@ -1292,6 +1294,58 @@ def _list_fn_attrs_json(path: str) -> int:
     return 0
 
 
+def _fn_callgraph_all(path: str) -> int:
+    """Stage 59 follow-on / Tier 4 #13 polish: whole-program call
+    graph as JSON. Output:
+      {
+        "<fn_name>": ["<callee1>", "<callee2>", ...],  # sorted, deduped
+        ...
+      }
+
+    For every fn in the file, list its direct callees. Companion to
+    --fn-callgraph (single-fn) and --fn-callers (inverse single-fn).
+
+    Use case: feed into a graph-viz tool, compute strongly-connected
+    components, find cycles, identify leaf fns, dead-code analysis.
+    """
+    import json
+    from .ast_walker import iter_fn_decls
+    src = _read_source(path)
+    prog = _parse_or_exit(src, path)
+
+    result: dict = {}
+
+    def _collect_callees(node, into: set) -> None:
+        if node is None:
+            return
+        if isinstance(node, A.Call):
+            if isinstance(node.callee, A.Name):
+                into.add(node.callee.name)
+            elif (isinstance(node.callee, A.Path)
+                  and node.callee.segments):
+                into.add(node.callee.segments[-1])
+        if hasattr(node, "__dataclass_fields__"):
+            for f in node.__dataclass_fields__:
+                v = getattr(node, f)
+                if isinstance(v, list):
+                    for x in v:
+                        _collect_callees(x, into)
+                elif isinstance(v, tuple):
+                    for x in v:
+                        _collect_callees(x, into)
+                else:
+                    _collect_callees(v, into)
+
+    for fn in iter_fn_decls(prog):
+        callees: set[str] = set()
+        if fn.body is not None:
+            _collect_callees(fn.body, callees)
+        result[fn.name] = sorted(callees)
+
+    print(json.dumps(result, sort_keys=True, indent=2))
+    return 0
+
+
 def _fn_callers(path: str, target_name: str) -> int:
     """Stage 59 follow-on / Tier 4 #13 polish: inverse call-graph
     introspection. Print fn names that DIRECTLY call `target_name`
@@ -1895,6 +1949,13 @@ def main():
                   file=sys.stderr)
             sys.exit(2)
         sys.exit(_fn_callers(args[0], args[1]))
+
+    if "--fn-callgraph-all" in flags:
+        if len(args) < 1:
+            print("usage: --fn-callgraph-all <file.hx>",
+                  file=sys.stderr)
+            sys.exit(2)
+        sys.exit(_fn_callgraph_all(args[0]))
 
     if "--list-fn-attrs-json" in flags:
         if len(args) < 1:
