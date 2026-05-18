@@ -303,6 +303,27 @@ Re-sequenced after Stage 46-47 closed:
 - **Stage 58** ✅ **CLOSED 2026-05-18** — Tier 4 #13 content-
   addressed modules (program_hash + module_hash + fn_signature_hash
   core).
+- **Stage 72 SUBSTANTIALLY COMPLETE 2026-05-18** — Tier-A #4
+  Out-of-distribution / domain types delivered as a usable
+  feature across Inc 1-3:
+  - Inc 1: TyDomain(status, inner) + 3 aliases (InDist/OutDist/
+    UnkDist mapping to "in"/"out"/"unknown").
+  - Inc 2: worst-case-wins propagation (rank in=0 < unknown=1 <
+    out=2). Once OOD contaminates, the result is OOD.
+  - Inc 3: `__assert_in_dist(x)` opt-out builtin.
+  - Layered ABOVE TyQuant in the wrapper stack. Domain is a
+    semantic safety property, so it wraps the representation
+    properties.
+  - Canonical full stack now:
+    `Confidential<Private<Conf<OutDist<Q8<D<Logic<T>>>>>>>` =
+    "a confidential, DP-budgeted, somewhat-uncertain, out-of-
+    distribution, INT8-quantized, differentiable, provenance-
+    tagged value".
+  - Use case: ML model output validation, dataset drift detection,
+    pre-classification gating. Critical AGI safety — classifiers
+    silently extrapolate past their training domain otherwise.
+  - 7 new tests; 356 typecheck + 359 regression GREEN.
+
 - **Stage 71 SUBSTANTIALLY COMPLETE 2026-05-18** — Tier-A #2
   Quantization-aware types delivered as a usable feature across
   Inc 1-3:

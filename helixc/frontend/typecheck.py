@@ -329,6 +329,39 @@ class TyConf(Type):
 
 
 @dataclass(frozen=True)
+class TyDomain(Type):
+    """Stage 72 — out-of-distribution / data-domain type (Tier-A #4).
+    A value tagged with whether it falls within the distribution
+    the downstream model was trained on. Critical for AGI safety:
+    classifiers silently extrapolate past their training domain
+    unless the type system flags it.
+
+    Phase-0 representation: status stored as string label.
+    - "in"      → in-distribution (safe to feed to model)
+    - "out"     → out-of-distribution (model output untrustworthy)
+    - "unknown" → unverified (treat as untrusted by default)
+
+    Three aliases ship in Inc 1:
+    - `InDist<T>`   → status "in"
+    - `OutDist<T>`  → status "out"
+    - `UnkDist<T>`  → status "unknown"
+
+    Compositional rule: WORST-CASE-WINS via rank (in=0 < unknown=1
+    < out=2). So `InDist<T> + OutDist<T>` yields `OutDist<T>` —
+    once an OOD value contaminates a computation, the result is OOD.
+    `InDist<T> + UnkDist<T>` yields `UnkDist<T>` — unverified
+    contamination propagates.
+
+    Use case: ML model output validation, dataset drift detection,
+    pre-classification gating. Composes with rest of Tier-S/A stack.
+
+    Inc 1 ships scaffolding; Inc 2 propagation; Inc 3
+    `__assert_in_dist(x)` opt-out builtin (audit-trail point)."""
+    status: str      # "in", "out", "unknown"
+    inner: Type
+
+
+@dataclass(frozen=True)
 class TyQuant(Type):
     """Stage 71 — quantization-aware type (Tier-A #2). A value tagged
     with the bit-width its precision has been quantized to. Critical
@@ -1980,6 +2013,23 @@ class TypeChecker:
                     return TyUnknown(hint=ty.base)
                 return TyConf(level=conf_map[ty.base],
                                inner=self._resolve_type(ty.args[0], scope))
+            # Stage 72 Inc 1 — out-of-distribution / domain status.
+            # F5 arity arm.
+            domain_map = {
+                "InDist":  "in",
+                "OutDist": "out",
+                "UnkDist": "unknown",
+            }
+            if ty.base in domain_map:
+                if len(ty.args) != 1:
+                    self.errors.append(TypeError_(
+                        f"{ty.base}<T> takes 1 type argument, "
+                        f"got {len(ty.args)}",
+                        ty.span,
+                    ))
+                    return TyUnknown(hint=ty.base)
+                return TyDomain(status=domain_map[ty.base],
+                                inner=self._resolve_type(ty.args[0], scope))
             # Stage 71 Inc 1 — quantization-aware preset bit widths.
             # F5 arity arm. Single-arg wrapper; quantization widths
             # are namespaced as Q4/Q8/Q16 to keep parser surface
@@ -2971,6 +3021,10 @@ class TypeChecker:
         # restored full precision at this point (e.g. dequantize step
         # before a precision-sensitive op).
         "__upcast_quant",
+        # Stage 72 Inc 3 — domain opt-out. `__assert_in_dist(x)` strips
+        # a TyDomain wrapper, asserting the user has verified the value
+        # is in-distribution (audit trail point for the OOD contract).
+        "__assert_in_dist",
         "__strlen", "__strbyte", "__streq", "__strlit_to_arena",
         "__hash_i32",
         # Stage 55 Inc 1 — runtime string builtins. Operate on
@@ -4344,6 +4398,8 @@ class TypeChecker:
                     return _unwrap(t.inner)
                 if isinstance(t, TyQuant):
                     return _unwrap(t.inner)
+                if isinstance(t, TyDomain):
+                    return _unwrap(t.inner)
                 return t
 
             l_is_logic = isinstance(l, TyLogic) or (
@@ -4444,11 +4500,37 @@ class TypeChecker:
             l_is_quant = l_quant_bits is not None
             r_is_quant = r_quant_bits is not None
 
+            # Stage 72 Inc 2 — detect TyDomain in any layered position.
+            # Composition: WORST-CASE-WINS via rank (in=0 < unknown=1
+            # < out=2). Once OOD contaminates, the result is OOD.
+            def _find_domain_status(t: Type) -> Optional[str]:
+                if isinstance(t, TyDomain):
+                    return t.status
+                if isinstance(t, TyDiff):
+                    return _find_domain_status(t.inner)
+                if isinstance(t, TyLogic):
+                    return _find_domain_status(t.inner)
+                if isinstance(t, TyConf):
+                    return _find_domain_status(t.inner)
+                if isinstance(t, TyTaint):
+                    return _find_domain_status(t.inner)
+                if isinstance(t, TyDP):
+                    return _find_domain_status(t.inner)
+                if isinstance(t, TyQuant):
+                    return _find_domain_status(t.inner)
+                return None
+
+            l_domain_status = _find_domain_status(l)
+            r_domain_status = _find_domain_status(r)
+            l_is_domain = l_domain_status is not None
+            r_is_domain = r_domain_status is not None
+
             if (l_is_logic or r_is_logic or l_is_diff or r_is_diff
                     or l_is_conf or r_is_conf
                     or l_is_taint or r_is_taint
                     or l_is_dp or r_is_dp
-                    or l_is_quant or r_is_quant):
+                    or l_is_quant or r_is_quant
+                    or l_is_domain or r_is_domain):
                 # Audit 28.8 B13 (trap AD002 / 24200): TyDiff binop
                 # with mixed inner types previously silently coerced
                 # the right operand to the left's inner type. The
@@ -4631,6 +4713,24 @@ class TypeChecker:
                         bits_list.append(r_quant_bits)
                     chosen_bits = min(bits_list)
                     wrapped = TyQuant(bits=chosen_bits, inner=wrapped)
+                # Stage 72 Inc 2 — TyDomain layered above TyQuant.
+                # Composition: WORST-CASE-WINS via rank
+                # (in=0 < unknown=1 < out=2).
+                if l_is_domain or r_is_domain:
+                    _domain_rank = {
+                        "in":      0,
+                        "unknown": 1,
+                        "out":     2,
+                    }
+                    statuses = []
+                    if l_domain_status is not None:
+                        statuses.append(l_domain_status)
+                    if r_domain_status is not None:
+                        statuses.append(r_domain_status)
+                    chosen_status = max(
+                        statuses,
+                        key=lambda s: _domain_rank.get(s, 0))
+                    wrapped = TyDomain(status=chosen_status, inner=wrapped)
                 # Stage 70 Inc 2 — TyDP layered between Conf and Taint.
                 # Differential-privacy composition rule: EPSILON-SUM
                 # (sequential composition theorem). Phase-0 stores
@@ -4859,6 +4959,9 @@ class TypeChecker:
                     def _strip_quant(t):
                         if isinstance(t, TyQuant):
                             return t.inner
+                        if isinstance(t, TyDomain):
+                            return TyDomain(status=t.status,
+                                            inner=_strip_quant(t.inner))
                         if isinstance(t, TyTaint):
                             return TyTaint(label=t.label,
                                            inner=_strip_quant(t.inner))
@@ -4874,6 +4977,35 @@ class TypeChecker:
                             return TyLogic(inner=_strip_quant(t.inner))
                         return t
                     return _strip_quant(arg_ty)
+                # Stage 72 Inc 3 — domain-status opt-out builtin.
+                # `__assert_in_dist(x)` strips the TyDomain wrapper,
+                # marking an explicit in-distribution assertion. An
+                # external audit pass can grep for `__assert_in_dist`
+                # to verify the OOD contract. Identity on non-Domain
+                # inputs; preserves other wrappers.
+                if bn == "__assert_in_dist" and len(arg_tys) == 1:
+                    arg_ty = arg_tys[0]
+                    def _strip_domain(t):
+                        if isinstance(t, TyDomain):
+                            return t.inner
+                        if isinstance(t, TyTaint):
+                            return TyTaint(label=t.label,
+                                           inner=_strip_domain(t.inner))
+                        if isinstance(t, TyDP):
+                            return TyDP(epsilon=t.epsilon,
+                                        inner=_strip_domain(t.inner))
+                        if isinstance(t, TyConf):
+                            return TyConf(level=t.level,
+                                          inner=_strip_domain(t.inner))
+                        if isinstance(t, TyQuant):
+                            return TyQuant(bits=t.bits,
+                                           inner=_strip_domain(t.inner))
+                        if isinstance(t, TyDiff):
+                            return TyDiff(inner=_strip_domain(t.inner))
+                        if isinstance(t, TyLogic):
+                            return TyLogic(inner=_strip_domain(t.inner))
+                        return t
+                    return _strip_domain(arg_ty)
                 if (bn == "__move" and len(arg_tys) == 1
                         and isinstance(expr.args[0], A.Name)):
                     if self._borrow_enforcement_enabled():

@@ -1911,6 +1911,12 @@ class Lowerer:
                     and expr.callee.name == "__upcast_quant"
                     and len(expr.args) == 1):
                 return self._lower_expr(expr.args[0])
+            # Stage 72 Inc 3 — domain-status opt-out builtin.
+            # `__assert_in_dist(x)` strips TyDomain. Identity at IR.
+            if (isinstance(expr.callee, A.Name)
+                    and expr.callee.name == "__assert_in_dist"
+                    and len(expr.args) == 1):
+                return self._lower_expr(expr.args[0])
             # Stage 36 Increment 1: provenance-typed primitives.
             # prove(value, source) lowers to value (Phase-0: the Logic<T>
             # wrapper has zero runtime overhead; provenance lives purely

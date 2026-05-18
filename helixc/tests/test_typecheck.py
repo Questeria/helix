@@ -4689,6 +4689,153 @@ def test_stage68_inc1_confidence_high_low_precise_aliases():
         assert t.level == lvl
 
 
+def test_stage72_inc1_domain_type_recognition():
+    """Stage 72 Inc 1 — TyDomain scaffolding. InDist/OutDist/UnkDist
+    parse cleanly."""
+    from helixc.frontend.typecheck import TypeChecker
+    from helixc.frontend.parser import parse
+
+    src = """
+    fn user(a: InDist<f32>, b: OutDist<f32>) -> f32 {
+        0.0
+    }
+    fn main() -> i32 { 0 }
+    """
+    prog = parse(src, include_stdlib=False)
+    tc = TypeChecker(prog)
+    errors = tc.check()
+    arity_errs = [str(e) for e in errors
+                  if "takes 1 type argument" in str(e)
+                  and ("InDist" in str(e) or "OutDist" in str(e))]
+    assert len(arity_errs) == 0, arity_errs
+
+
+def test_stage72_inc1_three_domain_aliases_resolve():
+    from helixc.frontend.typecheck import TypeChecker
+    from helixc.frontend.parser import parse
+
+    src = """
+    fn a(x: InDist<i32>) -> i32 { 0 }
+    fn b(x: OutDist<i32>) -> i32 { 0 }
+    fn c(x: UnkDist<i32>) -> i32 { 0 }
+    fn main() -> i32 { 0 }
+    """
+    prog = parse(src, include_stdlib=False)
+    tc = TypeChecker(prog)
+    errors = tc.check()
+    name_errs = [str(e) for e in errors
+                 if any(n in str(e)
+                        for n in ["InDist", "OutDist", "UnkDist"])
+                 and ("takes 1 type argument" in str(e)
+                      or "unbound" in str(e))]
+    assert len(name_errs) == 0, name_errs
+
+
+def test_stage72_inc1_domain_takes_exactly_one_arg():
+    from helixc.frontend.typecheck import typecheck
+    from helixc.frontend.parser import parse
+
+    src = """
+    fn bad(x: InDist<f32, i32>) -> i32 { 0 }
+    fn main() -> i32 { 42 }
+    """
+    prog = parse(src, include_stdlib=False)
+    errors = typecheck(prog)
+    arity_errors = [e for e in errors if "InDist" in str(e)
+                    and "takes 1 type argument" in str(e)]
+    assert len(arity_errors) > 0
+
+
+def test_stage72_inc2_out_dominates_in_in_binop():
+    """Stage 72 Inc 2 — `InDist<f32> + OutDist<f32>` yields
+    OutDist<f32> (worst-case wins; once OOD contaminates,
+    propagates)."""
+    from helixc.frontend.typecheck import TypeChecker
+    from helixc.frontend.parser import parse
+
+    src = """
+    fn user(a: InDist<f32>, b: OutDist<f32>) -> OutDist<f32> {
+        a + b
+    }
+    fn main() -> i32 { 0 }
+    """
+    prog = parse(src, include_stdlib=False)
+    tc = TypeChecker(prog)
+    errors = tc.check()
+    type_errs = [str(e) for e in errors
+                 if "return" in str(e).lower()
+                 or "InDist" in str(e) or "OutDist" in str(e)]
+    assert len(type_errs) == 0, type_errs
+
+
+def test_stage72_inc2_unknown_dominates_in_but_not_out():
+    """Stage 72 Inc 2 — UnkDist sits between In and Out. So
+    `InDist + UnkDist = UnkDist`, but `OutDist + UnkDist = OutDist`."""
+    from helixc.frontend.typecheck import TypeChecker
+    from helixc.frontend.parser import parse
+
+    src1 = """
+    fn user(a: InDist<f32>, b: UnkDist<f32>) -> UnkDist<f32> {
+        a + b
+    }
+    fn main() -> i32 { 0 }
+    """
+    src2 = """
+    fn user(a: OutDist<f32>, b: UnkDist<f32>) -> OutDist<f32> {
+        a + b
+    }
+    fn main() -> i32 { 0 }
+    """
+    for src in (src1, src2):
+        prog = parse(src, include_stdlib=False)
+        tc = TypeChecker(prog)
+        errors = tc.check()
+        type_errs = [str(e) for e in errors
+                     if "return" in str(e).lower()
+                     or "InDist" in str(e) or "OutDist" in str(e)
+                     or "UnkDist" in str(e)]
+        assert len(type_errs) == 0, (
+            f"src={src!r} errs={type_errs}")
+
+
+def test_stage72_inc3_assert_in_dist_strips_outer_domain():
+    from helixc.frontend.typecheck import TypeChecker
+    from helixc.frontend.parser import parse
+
+    src = """
+    fn user(x: OutDist<f32>) -> f32 {
+        __assert_in_dist(x)
+    }
+    fn main() -> i32 { 0 }
+    """
+    prog = parse(src, include_stdlib=False)
+    tc = TypeChecker(prog)
+    errors = tc.check()
+    type_errs = [str(e) for e in errors
+                 if "return" in str(e).lower()
+                 or "OutDist" in str(e)]
+    assert len(type_errs) == 0, type_errs
+
+
+def test_stage72_inc3_assert_in_dist_identity_on_non_domain():
+    from helixc.frontend.typecheck import TypeChecker
+    from helixc.frontend.parser import parse
+
+    src = """
+    fn user(x: f32) -> f32 {
+        __assert_in_dist(x)
+    }
+    fn main() -> i32 { 0 }
+    """
+    prog = parse(src, include_stdlib=False)
+    tc = TypeChecker(prog)
+    errors = tc.check()
+    type_errs = [str(e) for e in errors
+                 if "return" in str(e).lower()
+                 or "Domain" in str(e) or "in_dist" in str(e)]
+    assert len(type_errs) == 0, type_errs
+
+
 def test_stage71_inc1_quant_type_recognition():
     """Stage 71 Inc 1 — TyQuant scaffolding. Q4/Q8/Q16 aliases
     resolve to TyQuant with the corresponding bit width."""
