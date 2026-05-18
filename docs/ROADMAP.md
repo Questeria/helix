@@ -126,14 +126,23 @@ Re-sequenced after Stage 46-47 closed:
   5-line fix in kovc.hx: bumped cap 512→1024. Cascade verified
   GREEN: G2..G11 byte-identical, smoke 4/4 PASS, Stage 52
   modal tests still 116/116 PASS.
-- **Stage 51** (next, picks up Stage 50 Inc 3 deferral):
-  algorithmic switch — true single-walk grouping in the
-  grad_rev_all caller loop. With Stage 50's Inc 1+2 multi-
-  bucket infrastructure now restored + cascade-stable,
-  Stage 51's delta is the loop refactor itself (~150 lines
-  per the original plan). Tier 1 #3 (multi-output reverse-
-  mode AD) finally closes end-to-end (Python side at Stage
-  36; bootstrap algorithmic side at Stage 51).
+- **Stage 51** (Inc 1 ✅ SHIPPED 2026-05-17 commit 9927361;
+  Inc 2 deferred to fresh session):
+  - Inc 1 ✅ (9927361): grad_rev_pass run-detection scaffold.
+    Outer loop walks runs of consecutive entries sharing the
+    same loss_name. Inner loop processes each entry
+    individually (Inc 1 fallback to Stage 50 Inc 2 bridge).
+    Cascade verified: G2..G4 byte-identical sha=7a35f8e8.
+    Smoke 4/4 PASS. 102 Python AD tests still pass.
+  - Inc 2 (deferred to fresh session): true single-walk via
+    `differentiate_reverse_all` over `param_array` when
+    run_size>1 AND all entries pass validation. Per saved
+    plan `docs/stage51-plan-2026-05-17.md`. Algorithmic
+    risk: deposit-order correctness + per-param simplify.
+    Saved for clean-context careful implementation.
+  - When Inc 2 ships, Tier 1 #3 (multi-output reverse-mode
+    AD) finally closes end-to-end + Stage 50 formally
+    closes (n>1 paths exercised at last).
 - **Stage 52** ✅ **CLOSED 2026-05-17** (gates 1-16 + Inc 1-13
   + Stage 53 Inc 1+2 shipped, 22+ launder paths caught via 11
   wrapper-AST kinds, 3-clean-gate closure protocol satisfied
