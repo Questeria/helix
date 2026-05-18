@@ -5683,6 +5683,116 @@ def test_stage35_restart62_surfaces_advanced_past_restart_58_catch_up():
             )
 
 
+def test_stage59_list_modules_basic(tmp_path):
+    """Stage 59 follow-on / Tier 4 #13 polish: --list-modules
+    enumerates top-level ModBlocks with their content hash."""
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "mods.hx"
+    src.write_text(
+        "mod alpha { fn a() -> i32 { 1 } }\n"
+        "mod beta { fn b() -> i32 { 2 } }\n",
+        encoding="utf-8",
+    )
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--list-modules", str(src)],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0, proc.stderr
+    lines = [l for l in proc.stdout.splitlines() if l.strip()]
+    # Sorted alphabetically.
+    assert len(lines) == 2
+    assert lines[0].startswith("alpha hash=")
+    assert lines[1].startswith("beta hash=")
+    # Each hash is 12 hex chars (short_hash).
+    for line in lines:
+        h = line.split("hash=")[1]
+        assert len(h) == 12, f"expected 12-char short hash, got {h!r}"
+        assert all(c in "0123456789abcdef" for c in h)
+
+
+def test_stage59_list_modules_nested(tmp_path):
+    """Stage 59 follow-on: --list-modules walks into nested ModBlocks
+    and prints dotted names for inner modules."""
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "nested.hx"
+    src.write_text(
+        "mod outer {\n"
+        "    fn h() -> i32 { 1 }\n"
+        "    mod inner { fn i() -> i32 { 2 } }\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--list-modules", str(src)],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0, proc.stderr
+    out = proc.stdout
+    assert "outer hash=" in out
+    assert "outer.inner hash=" in out
+
+
+def test_stage59_module_hash_returns_full_hex(tmp_path):
+    """Stage 59 follow-on / Tier 4 #13 polish: --module-hash prints
+    the full 64-hex SHA-256 of the named module."""
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "single.hx"
+    src.write_text("mod m1 { fn f() -> i32 { 7 } }\n", encoding="utf-8")
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--module-hash", str(src), "m1"],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0, proc.stderr
+    h = proc.stdout.strip()
+    assert len(h) == 64
+    assert all(c in "0123456789abcdef" for c in h)
+
+
+def test_stage59_module_hash_not_found_exits_1(tmp_path):
+    """Stage 59 follow-on: --module-hash with unknown module name
+    exits 1 with error on stderr."""
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "empty.hx"
+    src.write_text("mod present { fn x() -> i32 { 0 } }\n",
+                    encoding="utf-8")
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--module-hash", str(src), "absent"],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 1
+    assert "not found" in proc.stderr
+
+
+def test_stage59_module_hash_dotted_nested_name(tmp_path):
+    """Stage 59 follow-on: --module-hash accepts dotted names for
+    nested modules."""
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "nested2.hx"
+    src.write_text(
+        "mod outer {\n"
+        "    mod inner { fn f() -> i32 { 42 } }\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--module-hash", str(src), "outer.inner"],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0, proc.stderr
+    h = proc.stdout.strip()
+    assert len(h) == 64
+
+
 if __name__ == "__main__":
     import pytest
     raise SystemExit(pytest.main([__file__, "-v"]))

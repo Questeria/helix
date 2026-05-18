@@ -7513,8 +7513,17 @@ def test_grad_rev_rejects_aggregate_param_until_pytree_bridge_is_wired():
         compile_and_run(src)
 
 
-def test_grad_rev_all_rejects_aggregate_param_until_pytree_bridge_is_wired():
-    import pytest
+def test_grad_rev_all_accepts_aggregate_param_via_pytree_bridge():
+    """Stage 57 / Tier 2 #7: the pytree bridge is now wired — struct
+    params flow through grad_rev_all without the historical
+    'aggregate not supported' rejection. This test was previously
+    named `..._rejects_aggregate_param_until_pytree_bridge_is_wired`
+    and used `pytest.raises(NotImplementedError)` as a regression
+    guard for that limitation. Now that Stage 57 (grad_pass.py
+    pytree-flattenable struct params with _CURRENT_STRUCT_DECLS
+    module-level state) is live, the rejection has been lifted and
+    this test asserts the positive case: compilation succeeds and
+    `main` returns 42."""
     src = """
     struct Model { w: f32 }
     fn loss(m: Model, x: f32) -> f32 { m.w * x }
@@ -7523,8 +7532,8 @@ def test_grad_rev_all_rejects_aggregate_param_until_pytree_bridge_is_wired():
     }
     fn main() -> i32 { 42 }
     """
-    with pytest.raises(NotImplementedError, match="grad_rev_all.*aggregate"):
-        compile_and_run(src)
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
 
 
 def test_grad_rev_all_writes_f64_gradient_to_f64_cell():

@@ -484,6 +484,22 @@ def _hash_into(h: "hashlib._Hash", node: Any,
             _hash_into(h, s, binders)
         _hash_into(h, node.memspace, binders)
         return
+    # Stage 59 follow-on: ModBlock arm — needed by module_hash so it
+    # can recurse into nested modules. Hashes the name + items
+    # recursively (a ModBlock's identity is determined by its name
+    # plus its declarative content).
+    if isinstance(node, A.ModBlock):
+        _emit(h, "ModBlock", node.name)
+        for it in node.items:
+            _hash_into(h, it, binders)
+        return
+    # Stage 59 follow-on: ModuleDecl arm — header-syntax `module
+    # path::to::name`. Identity is the path segments only (no body).
+    if isinstance(node, A.ModuleDecl):
+        _emit(h, "ModuleDecl")
+        for seg in node.path:
+            _emit(h, "PathSeg", seg)
+        return
     # Loud-fail catchall — matches the cycle-14/15 NotImplementedError
     # discipline in match_lower._collect_binds and _pattern_test_expr.
     # Any future AST subclass that lands without an explicit hash arm

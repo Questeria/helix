@@ -124,6 +124,91 @@ def _check_program_hash(path: str, expected: str) -> int:
     return 1
 
 
+def _list_modules(path: str) -> int:
+    """Stage 59 follow-on / Tier 4 #13 polish: enumerate ModBlock
+    (and ModuleDecl) entries in a source file with their content
+    hashes.
+
+    Output format per module (one line):
+      `<name> hash=<12hex>`
+
+    For nested ModBlocks, also includes inner modules recursively
+    with dotted names (e.g., `outer.inner hash=...`).
+
+    Use case:
+    - Inventory the modules in a multi-module file
+    - Pre-compute hash table for incremental rebuilds at module
+      granularity
+    - Detect when a specific submodule changed between commits
+
+    Exit 0 always (no failure mode beyond parse error).
+    """
+    from .ast_hash import module_hash, short_hash
+    src = _read_source(path)
+    prog = _parse_or_exit(src, path)
+
+    rows: list[tuple[str, str]] = []
+
+    def _walk_modules(items, prefix: str = "") -> None:
+        for it in items:
+            if isinstance(it, A.ModBlock):
+                full = f"{prefix}{it.name}" if not prefix else f"{prefix}.{it.name}"
+                rows.append((full, short_hash(module_hash(it))))
+                # Recurse into nested ModBlocks.
+                _walk_modules(it.items, full)
+            elif isinstance(it, A.ModuleDecl):
+                # Header-syntax `module path::to::name` — dot-join path.
+                full = ".".join(it.path)
+                if prefix:
+                    full = f"{prefix}.{full}"
+                rows.append((full, short_hash(module_hash(it))))
+
+    _walk_modules(prog.items)
+
+    # Sort alphabetically by module name for stable output.
+    for name, h in sorted(rows, key=lambda r: r[0]):
+        print(f"{name} hash={h}")
+    return 0
+
+
+def _module_hash_cli(path: str, mod_name: str) -> int:
+    """Stage 59 follow-on / Tier 4 #13 polish: print the module_hash
+    of a specific module by name. For nested modules, accept dotted
+    names (e.g., `outer.inner`).
+
+    Returns exit 0 on success, 1 if the module name is not found in
+    the source file.
+    """
+    from .ast_hash import module_hash
+    src = _read_source(path)
+    prog = _parse_or_exit(src, path)
+
+    def _find(items, target: str, prefix: str = ""):
+        for it in items:
+            if isinstance(it, A.ModBlock):
+                full = f"{prefix}{it.name}" if not prefix else f"{prefix}.{it.name}"
+                if full == target:
+                    return it
+                found = _find(it.items, target, full)
+                if found is not None:
+                    return found
+            elif isinstance(it, A.ModuleDecl):
+                full = ".".join(it.path)
+                if prefix:
+                    full = f"{prefix}.{full}"
+                if full == target:
+                    return it
+        return None
+
+    mod = _find(prog.items, mod_name)
+    if mod is None:
+        print(f"error: autodiff_cli: module {mod_name!r} not found in {path}",
+              file=sys.stderr)
+        return 1
+    print(module_hash(mod))
+    return 0
+
+
 def _list_fns(path: str) -> int:
     """Stage 59 follow-on / Tier 4 #13 polish: enumerate all FnDecls
     in a source file with their signature + body hashes side by side.
@@ -322,6 +407,20 @@ def main():
                   "<expected_hex_hash>", file=sys.stderr)
             sys.exit(2)
         sys.exit(_check_program_hash(args[0], args[1]))
+
+    if "--list-modules" in flags:
+        if len(args) < 1:
+            print("usage: --list-modules <file.hx>",
+                  file=sys.stderr)
+            sys.exit(2)
+        sys.exit(_list_modules(args[0]))
+
+    if "--module-hash" in flags:
+        if len(args) < 2:
+            print("usage: --module-hash <file.hx> <module_name>",
+                  file=sys.stderr)
+            sys.exit(2)
+        sys.exit(_module_hash_cli(args[0], args[1]))
 
     if len(sys.argv) < 3 or len(args) < 2:
         print(__doc__.strip(), file=sys.stderr)

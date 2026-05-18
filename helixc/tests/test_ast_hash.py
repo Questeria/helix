@@ -337,6 +337,46 @@ def test_stage58_program_hash_alpha_equivalent_helpers():
     assert h1 == h2, "alpha-equivalent helpers hashed differently"
 
 
+def test_stage59_module_hash_nested_modblock_works():
+    """Stage 59 follow-on / Tier 4 #13 polish: module_hash recurses
+    into nested ModBlocks without crashing. Pre-fix, _hash_into had no
+    ModBlock arm and crashed on the inner module with
+    NotImplementedError. Regression pin."""
+    from helixc.frontend.parser import parse
+    from helixc.frontend.ast_hash import module_hash
+    from helixc.frontend import ast_nodes as A
+    src = (
+        "mod outer {\n"
+        "    fn h() -> i32 { 1 }\n"
+        "    mod inner { fn i() -> i32 { 2 } }\n"
+        "}\n"
+    )
+    prog = parse(src)
+    outer = next(it for it in prog.items
+                 if isinstance(it, A.ModBlock) and it.name == "outer")
+    # Must not raise:
+    h = module_hash(outer)
+    assert len(h) == 64
+    assert all(c in "0123456789abcdef" for c in h)
+
+
+def test_stage59_module_hash_nested_differs_from_flat():
+    """Stage 59 follow-on: nesting changes the module hash — a module
+    containing only a function hashes differently from a module
+    containing the same function via an inner module wrapper."""
+    from helixc.frontend.parser import parse
+    from helixc.frontend.ast_hash import module_hash
+    from helixc.frontend import ast_nodes as A
+
+    flat = parse("mod m { fn f() -> i32 { 7 } }\n")
+    nested = parse("mod m { mod n { fn f() -> i32 { 7 } } }\n")
+    m_flat = next(it for it in flat.items
+                   if isinstance(it, A.ModBlock) and it.name == "m")
+    m_nested = next(it for it in nested.items
+                     if isinstance(it, A.ModBlock) and it.name == "m")
+    assert module_hash(m_flat) != module_hash(m_nested)
+
+
 def main():
     tests = [(name, fn) for name, fn in globals().items()
              if name.startswith("test_") and callable(fn)]
