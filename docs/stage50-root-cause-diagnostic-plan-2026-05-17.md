@@ -47,6 +47,20 @@ out first since it's a 5-minute check.
 `print(f"source bytes: {len(source.encode())}")`. If under 1 MB,
 rule out H4.
 
+**Exp A RESULT (2026-05-17 evening, autonomous run during Stage 52
+gate-9 wait)**: Combined bootstrap source = **732,396 bytes**.
+parser.hx alone = 369,764 chars; lexer.hx = 27,643; kovc.hx =
+333,304. Even with Stage 50 Inc 1+2 changes adding ~5-10 KB,
+total stays well under 1 MB.
+
+**H4 (SIGILL buffer overflow recurrence) DEFINITIVELY RULED OUT.**
+
+Stage 50 retry should proceed directly to Exp B (`ulimit -s
+unlimited` then run G2 manually). If H1 confirmed, the permanent
+fix is per-fn stack-frame sizing change at kovc.hx codegen
+(`emit_prologue` — currently hardcoded sub rsp, 0x400; should
+compute actual let-slot count and round to 16-byte alignment).
+
 **Exp B (15 min)**: In WSL, `ulimit -s unlimited` then invoke
 the G2 binary manually. If it stops segfaulting, **H1 confirmed**.
 Cheapest permanent fix: add a `sys_prlimit64` call at binary
