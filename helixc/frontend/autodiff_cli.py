@@ -79,6 +79,8 @@ Introspection (Stage 28.9 + Stage 58 + Stage 59 polish):
         Edge-count distance from <from_fn> to <to_fn> (-1 if no path).
     --fn-distance-matrix <file.hx>
         Whole-program pairwise shortest-path distances as JSON.
+    --fn-callgraph-summary <file.hx>
+        High-level structural overview JSON (counts/depth/diameter/SCCs).
     --fn-leaves <file.hx>
         List 'leaf' fns (those that call no other fn) — sorted, one per line.
     --fn-roots <file.hx>
@@ -1590,6 +1592,172 @@ def _fn_roots(path: str) -> int:
     roots = sorted(all_fn_names - called_names)
     for name in roots:
         print(name)
+    return 0
+
+
+def _fn_callgraph_summary(path: str) -> int:
+    """Stage 59 follow-on / Tier 4 #13 polish: high-level structural
+    overview of the callgraph as JSON. One read gives the whole shape.
+
+    Output schema:
+      {
+        "fns": <int>,           # total fn count
+        "edges": <int>,          # total directed call edges
+        "leaves": <int>,         # fns with no callees
+        "roots": <int>,          # fns with no callers
+        "isolated": <int>,       # fns with neither (leaves ∩ roots)
+        "recursive": <int>,      # fns with direct self-calls
+        "sccs_nontrivial": <int>, # mutual-recursion cycles (size>=2)
+        "max_depth": <int>,      # longest acyclic chain (any entry)
+        "diameter": <int>,       # max pairwise distance (0 if disconnected)
+      }
+
+    Pure summary derivation from primitives already shipped. Companion
+    to --ast-stats but specifically for the callgraph structure.
+
+    Use case: code-health dashboard input — one number per metric per
+    file, easy to track over time.
+    """
+    import json
+    from collections import deque
+    from .ast_walker import iter_fn_decls
+    src = _read_source(path)
+    prog = _parse_or_exit(src, path)
+
+    all_fns = list(iter_fn_decls(prog))
+    all_names = {fn.name for fn in all_fns}
+
+    # Build adjacency (including self-loops for recursive count).
+    graph_self: dict[str, set] = {}
+    for fn in all_fns:
+        callees: set = set()
+
+        def _walk(n) -> None:
+            if n is None:
+                return
+            if isinstance(n, A.Call):
+                if isinstance(n.callee, A.Name):
+                    callees.add(n.callee.name)
+                elif (isinstance(n.callee, A.Path)
+                      and n.callee.segments):
+                    callees.add(n.callee.segments[-1])
+            if hasattr(n, "__dataclass_fields__"):
+                for f in n.__dataclass_fields__:
+                    v = getattr(n, f)
+                    if isinstance(v, list):
+                        for x in v:
+                            _walk(x)
+                    elif isinstance(v, tuple):
+                        for x in v:
+                            _walk(x)
+                    else:
+                        _walk(v)
+
+        if fn.body is not None:
+            _walk(fn.body)
+        graph_self[fn.name] = {c for c in callees if c in all_names}
+
+    # graph_no_self for non-recursive analysis (cycles / topology).
+    graph: dict[str, set] = {n: (s - {n}) for n, s in graph_self.items()}
+
+    # Counts.
+    edges = sum(len(s) for s in graph_self.values())
+    leaves = sum(1 for n in all_names if not graph_self[n])
+    in_count: dict[str, int] = {n: 0 for n in all_names}
+    for n, callees in graph_self.items():
+        for c in callees:
+            if c != n:  # don't count self-edge as in-edge
+                in_count[c] += 1
+    roots = sum(1 for n in all_names if in_count[n] == 0)
+    isolated = sum(1 for n in all_names
+                   if in_count[n] == 0 and not graph_self[n])
+    recursive = sum(1 for n in all_names if n in graph_self[n])
+
+    # Tarjan SCC for mutual cycles.
+    sccs_nontrivial = 0
+    index_counter = [0]
+    stack: list = []
+    on_stack: set = set()
+    index_d: dict = {}
+    lowlink: dict = {}
+
+    def _scc(v: str) -> None:
+        nonlocal sccs_nontrivial
+        index_d[v] = index_counter[0]
+        lowlink[v] = index_counter[0]
+        index_counter[0] += 1
+        stack.append(v)
+        on_stack.add(v)
+        for w in graph.get(v, set()):
+            if w not in index_d:
+                _scc(w)
+                lowlink[v] = min(lowlink[v], lowlink[w])
+            elif w in on_stack:
+                lowlink[v] = min(lowlink[v], index_d[w])
+        if lowlink[v] == index_d[v]:
+            comp: list = []
+            while True:
+                w = stack.pop()
+                on_stack.discard(w)
+                comp.append(w)
+                if w == v:
+                    break
+            if len(comp) >= 2:
+                sccs_nontrivial += 1
+
+    for v in sorted(graph.keys()):
+        if v not in index_d:
+            _scc(v)
+
+    # Max depth (longest acyclic chain over any entry).
+    def _depth(start: str) -> int:
+        seen: set = set()
+
+        def _go(v: str) -> int:
+            if v in seen:
+                return 0
+            seen.add(v)
+            try:
+                children = graph.get(v, set()) - seen
+                if not children:
+                    return 1
+                return 1 + max((_go(c) for c in children), default=0)
+            finally:
+                seen.discard(v)
+
+        return _go(start)
+
+    max_depth = max((_depth(n) for n in all_names), default=0)
+
+    # Diameter via BFS from each node.
+    def _bfs_max(start: str) -> int:
+        dist: dict = {start: 0}
+        queue = deque([start])
+        m = 0
+        while queue:
+            v = queue.popleft()
+            for w in graph.get(v, set()):
+                if w not in dist:
+                    dist[w] = dist[v] + 1
+                    queue.append(w)
+                    if dist[w] > m:
+                        m = dist[w]
+        return m
+
+    diameter = max((_bfs_max(n) for n in all_names), default=0)
+
+    summary = {
+        "fns": len(all_names),
+        "edges": edges,
+        "leaves": leaves,
+        "roots": roots,
+        "isolated": isolated,
+        "recursive": recursive,
+        "sccs_nontrivial": sccs_nontrivial,
+        "max_depth": max_depth,
+        "diameter": diameter,
+    }
+    print(json.dumps(summary, sort_keys=True, indent=2))
     return 0
 
 
@@ -3187,6 +3355,13 @@ def main():
                   file=sys.stderr)
             sys.exit(2)
         sys.exit(_fn_distance_matrix(args[0]))
+
+    if "--fn-callgraph-summary" in flags:
+        if len(args) < 1:
+            print("usage: --fn-callgraph-summary <file.hx>",
+                  file=sys.stderr)
+            sys.exit(2)
+        sys.exit(_fn_callgraph_summary(args[0]))
 
     if "--fn-leaves" in flags:
         if len(args) < 1:

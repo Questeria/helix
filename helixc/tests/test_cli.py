@@ -5876,6 +5876,7 @@ def test_stage59_autodiff_cli_help_mentions_polish_flags():
         "--fn-callgraph-depth-all", "--fn-topo-sort",
         "--fn-isolated", "--fn-call-path",
         "--fn-distance", "--fn-distance-matrix",
+        "--fn-callgraph-summary",
         "--check-program-hash",
         "--check-program-hash-from-file",
         "--check-program-signature-hash",
@@ -7376,6 +7377,75 @@ def test_stage59_fn_roots(tmp_path):
     # util has 2 callers → not root; entry_a, entry_b, truly_dead
     # never called locally → roots.
     assert lines == ["entry_a", "entry_b", "truly_dead"]
+
+
+def test_stage59_fn_callgraph_summary(tmp_path):
+    """Stage 59 follow-on / Tier 4 #13 polish: --fn-callgraph-summary
+    emits high-level structural overview as JSON."""
+    import json
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "s.hx"
+    src.write_text(
+        "fn z() -> i32 { 42 }\n"
+        "fn c() -> i32 { z() }\n"
+        "fn b() -> i32 { c() }\n"
+        "fn a() -> i32 { b() }\n"
+        "fn dead() -> i32 { 0 }\n",
+        encoding="utf-8",
+    )
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--fn-callgraph-summary", str(src)],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0
+    s = json.loads(proc.stdout)
+    expected_keys = {
+        "fns", "edges", "leaves", "roots", "isolated",
+        "recursive", "sccs_nontrivial", "max_depth", "diameter",
+    }
+    assert set(s.keys()) == expected_keys
+    # Linear 4-chain a→b→c→z + isolated 'dead'.
+    assert s["fns"] == 5
+    assert s["edges"] == 3
+    assert s["leaves"] == 2   # z, dead
+    assert s["roots"] == 2    # a, dead
+    assert s["isolated"] == 1 # dead
+    assert s["recursive"] == 0
+    assert s["sccs_nontrivial"] == 0
+    assert s["max_depth"] == 4
+    assert s["diameter"] == 3
+
+
+def test_stage59_fn_callgraph_summary_with_recursion(tmp_path):
+    """Stage 59 follow-on: --fn-callgraph-summary correctly detects
+    recursive fns (self-call) and SCCs (mutual recursion)."""
+    import json
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "rec.hx"
+    src.write_text(
+        "fn factorial(n: i32) -> i32 {\n"
+        "    if n <= 1 { 1 } else { n * factorial(n - 1) }\n"
+        "}\n"
+        "fn is_even(n: i32) -> bool {\n"
+        "    if n == 0 { true } else { is_odd(n - 1) }\n"
+        "}\n"
+        "fn is_odd(n: i32) -> bool {\n"
+        "    if n == 0 { false } else { is_even(n - 1) }\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--fn-callgraph-summary", str(src)],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0
+    s = json.loads(proc.stdout)
+    assert s["recursive"] == 1       # factorial
+    assert s["sccs_nontrivial"] == 1 # is_even <-> is_odd
 
 
 def test_stage59_fn_distance_matrix(tmp_path):
