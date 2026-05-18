@@ -1048,17 +1048,68 @@ def _is_ad_erasable_expr(expr: A.Expr | None) -> bool:
     return False
 
 
-def _raise_if_ad_erases_effect(expr: A.Expr | None, context: str) -> None:
+def _find_opaque_call_name(expr: A.Expr | None) -> str | None:
+    """Find the first un-AD-erasable Call(Name) in `expr`. Returns the
+    callee name when found (so error messages can identify the
+    specific opaque call), else None. Used to give better error
+    messages than the generic "side-effecting block" text when the
+    real issue is an opaque user/extern call."""
+    if expr is None:
+        return None
+    if isinstance(expr, A.Call) and isinstance(expr.callee, A.Name):
+        if expr.callee.name not in AD_KNOWN_PURE_CALLS:
+            return expr.callee.name
+    # Recurse into common containers
+    for attr in ("value", "expr", "left", "right", "operand",
+                 "cond", "then", "else_", "final_expr"):
+        sub = getattr(expr, attr, None)
+        if isinstance(sub, A.Expr):
+            name = _find_opaque_call_name(sub)
+            if name is not None:
+                return name
+    stmts = getattr(expr, "stmts", None)
+    if isinstance(stmts, list):
+        for s in stmts:
+            v = getattr(s, "value", None)
+            if v is None:
+                v = getattr(s, "expr", None)
+            if isinstance(v, A.Expr):
+                name = _find_opaque_call_name(v)
+                if name is not None:
+                    return name
+    return None
+
+
+def _raise_if_ad_erases_effect(expr: A.Expr | None, context: str,
+                                 mode: str = "forward") -> None:
     if not _is_ad_erasable_expr(expr):
+        # If the offending shape is just an unrecognized Call, give a
+        # better error mentioning the call name + the AD mode. The
+        # tests `test_grad_rejects_opaque_call_in_loss` (forward) +
+        # `test_grad_rev_rejects_opaque_call_in_loss` (reverse) pin
+        # this format: `{mode}-mode AD ... {call_name}`.
+        opaque_name = _find_opaque_call_name(expr)
+        if opaque_name is not None:
+            raise NotImplementedError(
+                f"{mode}-mode AD does not support opaque call "
+                f"{opaque_name!r}; add a chain rule or inline a "
+                f"differentiable helper"
+            )
         raise NotImplementedError(
-            f"forward-mode AD cannot erase side-effecting {context}; "
+            f"{mode}-mode AD cannot erase side-effecting {context}; "
             "move allocation/effects outside the differentiated function"
         )
 
 
-def _inline_lets(expr: A.Expr | None, env: dict[str, A.Expr]) -> A.Expr | None:
+def _inline_lets(expr: A.Expr | None, env: dict[str, A.Expr],
+                  mode: str = "forward") -> A.Expr | None:
     """Walk expr, replacing references to let-bound names with the bound
-    expression. Used to flatten blocks before differentiation."""
+    expression. Used to flatten blocks before differentiation.
+
+    `mode` ("forward" | "reverse") drives the error-message label
+    in `_raise_if_ad_erases_effect` so the
+    test_grad_rev_rejects_opaque_call_in_loss + forward sibling get
+    the mode-specific error they expect."""
     if expr is None:
         return None
     if isinstance(expr, (A.IntLit, A.FloatLit, A.BoolLit, A.StrLit, A.CharLit)):
@@ -1089,19 +1140,19 @@ def _inline_lets(expr: A.Expr | None, env: dict[str, A.Expr]) -> A.Expr | None:
             if (isinstance(stmt, A.Let) and stmt.value is not None
                     and (not stmt.is_mut
                          or not _is_reassigned_after(expr.stmts, stmt.name, expr.stmts.index(stmt)))):
-                _raise_if_ad_erases_effect(stmt.value, f"let {stmt.name!r}")
-                local_env[stmt.name] = _inline_lets(stmt.value, local_env)
+                _raise_if_ad_erases_effect(stmt.value, f"let {stmt.name!r}", mode)
+                local_env[stmt.name] = _inline_lets(stmt.value, local_env, mode)
             # ExprStmt: ignore (no derivative meaning)
             # ConstStmt: similar to Let (immutable by construction)
             elif isinstance(stmt, A.ConstStmt):
-                _raise_if_ad_erases_effect(stmt.value, f"const {stmt.name!r}")
-                local_env[stmt.name] = _inline_lets(stmt.value, local_env)
+                _raise_if_ad_erases_effect(stmt.value, f"const {stmt.name!r}", mode)
+                local_env[stmt.name] = _inline_lets(stmt.value, local_env, mode)
             elif isinstance(stmt, A.ExprStmt):
-                _raise_if_ad_erases_effect(stmt.expr, "expression statement")
+                _raise_if_ad_erases_effect(stmt.expr, "expression statement", mode)
         if expr.final_expr is not None:
             _raise_if_ad_erases_effect(
-                expr.final_expr, "block final expression")
-            return _inline_lets(expr.final_expr, local_env)
+                expr.final_expr, "block final expression", mode)
+            return _inline_lets(expr.final_expr, local_env, mode)
         # Audit 28.8 cycle 2 (deferred observation #18): pre-fix this
         # returned FloatLit(0.0) silently when a Block had stmts but no
         # final expression. The let-stmts were inlined into env (so any

@@ -145,8 +145,14 @@ fn main() -> i32 { old() }
     with open(p, "w") as f:
         f.write(src)
     rc = main([p, "-Wdeprecated=error"])
-    out = capsys.readouterr().out
-    assert "ERROR" in out
+    captured = capsys.readouterr()
+    # When any -W*=error policy is active, helixc routes diagnostics
+    # to stderr (so warning-policy callers can redirect cleanly).
+    # Check both streams for robustness.
+    combined = captured.out + captured.err
+    assert "ERROR" in combined, \
+        f"expected 'ERROR' in CLI output; got stdout={captured.out!r}, " \
+        f"stderr={captured.err!r}"
     assert rc == 1
 
 

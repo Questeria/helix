@@ -66,7 +66,7 @@ def differentiate_reverse(expr: A.Expr, param_names: list[str],
     so the gradient propagates through them."""
     if fn_table:
         expr = _inline_user_calls(expr, fn_table)
-    flat = _inline_lets(expr, {})
+    flat = _inline_lets(expr, {}, mode="reverse")
     if flat is None:
         return {p: A.FloatLit(span=expr.span, value=0.0) for p in param_names}
 

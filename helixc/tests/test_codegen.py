@@ -44,8 +44,15 @@ def _win_to_wsl(win_path: str) -> str:
 def compile_and_run(src: str, optimize: bool = True) -> int:
     """Compile Helix source to ELF, run via WSL, return exit code.
 
-    Pipeline: parse -> grad_pass -> lower -> [opt] -> codegen -> ELF.
+    Pipeline: parse -> grad_pass -> lower -> validate_kernel_tile ->
+    [opt] -> codegen -> ELF.
     optimize=True (default): runs const-fold + CSE + DCE + fdce before codegen.
+
+    Stage 16 PTX validation guard: kernel-containing modules must
+    pass tile-lowering validation BEFORE optimization (DCE could
+    otherwise hide unsupported ops) AND before x86 embedding (the
+    backend asserts `_helix_kernel_tile_validated`). Calls validation
+    unconditionally — no-op for kernel-free modules.
     """
     prog = parse(src, include_stdlib=True)
     flatten_modules(prog)
@@ -53,6 +60,8 @@ def compile_and_run(src: str, optimize: bool = True) -> int:
     monomorphize(prog)
     grad_pass(prog)
     mod = lower(prog)
+    from helixc.backend.ptx import validate_kernel_tile_lowering
+    validate_kernel_tile_lowering(mod)
     if optimize:
         fold_module(mod)
         cse_module(mod)
