@@ -45,6 +45,8 @@ Introspection (Stage 28.9 + Stage 58 + Stage 59 polish):
         Inventory: leaf-count + diff/non-diff summary per struct.
     --pytree-leaf-paths <file.hx> <struct_name>
         Print just the leaf paths (one per line, sorted) for scripting.
+    --validate-pytrees <file.hx>
+        CI gate: validate every struct as a pytree; exit 1 if any fail.
     --autotune-summary <file.hx>
         Print {fn variants=N} for @autotune @kernel fns + total.
     --autotune-budget <file.hx> <max_total>
@@ -397,6 +399,43 @@ def _list_modules(path: str) -> int:
     for name, h in sorted(rows, key=lambda r: r[0]):
         print(f"{name} hash={h}")
     return 0
+
+
+def _validate_pytrees(path: str) -> int:
+    """Stage 59 follow-on / Tier 2 #7 polish: validate every struct
+    in a file as a pytree.
+
+    Output:
+      `OK <name>` for each struct that flattens successfully
+      `FAIL <name>: <diagnostic>` for each that doesn't
+
+    Trailing line: `total structs=N OK=K FAIL=M`.
+
+    Exit 0 if every struct OK, 1 if any FAIL, regardless of count.
+    Use case: CI gate — assert no struct in the file has drifted
+    into a non-flattenable shape.
+    """
+    from .pytree import validate_pytree
+    src = _read_source(path)
+    prog = _parse_or_exit(src, path)
+    struct_decls = {it.name: it for it in prog.items
+                    if isinstance(it, A.StructDecl)}
+    ok_count = 0
+    fail_count = 0
+    for name in sorted(struct_decls.keys()):
+        diags = validate_pytree(struct_decls[name], struct_decls)
+        if not diags:
+            print(f"OK {name}")
+            ok_count += 1
+        else:
+            for diag in diags:
+                # Strip trap-id parenthesis for cleaner output.
+                clean = diag.split("(trap")[0].strip()
+                print(f"FAIL {name}: {clean}")
+            fail_count += 1
+    total = ok_count + fail_count
+    print(f"total structs={total} OK={ok_count} FAIL={fail_count}")
+    return 1 if fail_count else 0
 
 
 def _pytree_leaf_paths(path: str, struct_name: str) -> int:
@@ -917,6 +956,13 @@ def main():
                   file=sys.stderr)
             sys.exit(2)
         sys.exit(_pytree_leaf_paths(args[0], args[1]))
+
+    if "--validate-pytrees" in flags:
+        if len(args) < 1:
+            print("usage: --validate-pytrees <file.hx>",
+                  file=sys.stderr)
+            sys.exit(2)
+        sys.exit(_validate_pytrees(args[0]))
 
     if len(sys.argv) < 3 or len(args) < 2:
         print(__doc__.strip(), file=sys.stderr)

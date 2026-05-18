@@ -5838,7 +5838,7 @@ def test_stage59_autodiff_cli_help_mentions_polish_flags():
         "--list-fns", "--check-program-hash",
         "--check-program-signature-hash",
         "--list-modules", "--module-hash", "--pytree-shape",
-        "--list-pytrees", "--pytree-leaf-paths",
+        "--list-pytrees", "--pytree-leaf-paths", "--validate-pytrees",
         "--autotune-summary", "--autotune-budget",
         "--hash-dump", "--diff-hash-dump", "--hash-dump-short",
         "--diff-trace",
@@ -5999,6 +5999,53 @@ def test_stage59_pytree_shape_non_diff_field_rejected(tmp_path):
     assert "non-differentiable" in proc.stderr or "26002" in proc.stderr
     # Verify no traceback leaked.
     assert "Traceback" not in proc.stderr
+
+
+def test_stage59_validate_pytrees_all_ok_exits_0(tmp_path):
+    """Stage 59 follow-on / Tier 2 #7 polish: --validate-pytrees exits
+    0 when every struct in the file flattens successfully."""
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "good.hx"
+    src.write_text(
+        "struct A { w: D<f32> }\n"
+        "struct B { x: D<f64>, y: D<f64> }\n",
+        encoding="utf-8",
+    )
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--validate-pytrees", str(src)],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0
+    out = proc.stdout
+    assert "OK A" in out
+    assert "OK B" in out
+    assert "total structs=2 OK=2 FAIL=0" in out
+
+
+def test_stage59_validate_pytrees_failure_exits_1(tmp_path):
+    """Stage 59 follow-on: --validate-pytrees exits 1 if any struct
+    fails to flatten."""
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "mixed.hx"
+    src.write_text(
+        "struct Good { w: D<f32> }\n"
+        "struct Bad { w: D<f32>, label: i32 }\n",
+        encoding="utf-8",
+    )
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--validate-pytrees", str(src)],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 1
+    out = proc.stdout
+    assert "OK Good" in out
+    assert "FAIL Bad" in out
+    assert "non-differentiable" in out
+    assert "total structs=2 OK=1 FAIL=1" in out
 
 
 def test_stage59_pytree_leaf_paths_basic(tmp_path):
