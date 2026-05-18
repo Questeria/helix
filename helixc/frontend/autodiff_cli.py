@@ -35,6 +35,9 @@ Introspection (Stage 28.9 + Stage 58 + Stage 59 polish):
         Same as --trace-dump-summary but machine-readable JSON output.
     --diff-program-hash <a.hx> <b.hx>
         Compare two programs: prints SAME or DIFFER + per-fn breakdown.
+    --diff-program-hash-json <a.hx> <b.hx>
+        Same as --diff-program-hash but JSON with match flag, both
+        program + signature hashes, and kind discriminator.
     --changed-fns <a.hx> <b.hx>
         List fns whose body hash differs between two files.
     --changed-fns-json <a.hx> <b.hx>
@@ -5031,6 +5034,51 @@ def _changed_fns(path_a: str, path_b: str) -> int:
     return 0 if changed == 0 else 1
 
 
+def _diff_program_hash_json(path_a: str, path_b: str) -> int:
+    """Stage 59 follow-on / Tier 4 #13 polish: --diff-program-hash in
+    machine-readable JSON form.
+
+    Output schema:
+      {"match": bool,
+       "a_hash": "<64hex>",
+       "b_hash": "<64hex>",
+       "a_sig_hash": "<64hex>",
+       "b_sig_hash": "<64hex>",
+       "kind": "match" | "body-only" | "signature-change"}
+
+    Always includes both program and signature hashes so consumers
+    can do further analysis without re-invocation.
+
+    rc=0 on match, 1 on differ (matches text-form semantics).
+    """
+    import json
+    from .ast_hash import program_hash, program_signature_hash
+    src_a = _read_source(path_a)
+    src_b = _read_source(path_b)
+    prog_a = _parse_or_exit(src_a, path_a)
+    prog_b = _parse_or_exit(src_b, path_b)
+    ha = program_hash(prog_a)
+    hb = program_hash(prog_b)
+    sig_a = program_signature_hash(prog_a)
+    sig_b = program_signature_hash(prog_b)
+    if ha == hb:
+        kind = "match"
+    elif sig_a == sig_b:
+        kind = "body-only"
+    else:
+        kind = "signature-change"
+    result = {
+        "match": ha == hb,
+        "a_hash": ha,
+        "b_hash": hb,
+        "a_sig_hash": sig_a,
+        "b_sig_hash": sig_b,
+        "kind": kind,
+    }
+    print(json.dumps(result, sort_keys=True, indent=2))
+    return 0 if ha == hb else 1
+
+
 def _diff_program_hash(path_a: str, path_b: str) -> int:
     """Stage 59 follow-on / Tier 4 #13 polish: compare program_hash of
     two source files. Prints `MATCH` + exits 0 when semantically
@@ -5181,6 +5229,13 @@ def main():
                   file=sys.stderr)
             sys.exit(2)
         sys.exit(_diff_program_hash(args[0], args[1]))
+
+    if "--diff-program-hash-json" in flags:
+        if len(args) < 2:
+            print("usage: --diff-program-hash-json <a.hx> <b.hx>",
+                  file=sys.stderr)
+            sys.exit(2)
+        sys.exit(_diff_program_hash_json(args[0], args[1]))
 
     if "--changed-fns" in flags:
         if len(args) < 2:

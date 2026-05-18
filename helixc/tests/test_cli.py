@@ -5880,7 +5880,7 @@ def test_stage59_autodiff_cli_help_mentions_polish_flags():
         "--fn-signature", "--fn-signature-json",
         "--module-stats", "--module-stats-json",
         "--module-hash-json", "--validate-trace-attrs-json",
-        "--changed-fns-json",
+        "--changed-fns-json", "--diff-program-hash-json",
         "--list-fn-attrs", "--list-fn-attrs-json",
         "--list-fns-by-attr", "--list-fns-by-attr-json",
         "--fn-callgraph", "--fn-callers",
@@ -7543,6 +7543,78 @@ def test_stage59_agent_methods_json(tmp_path):
         {"name": "propose", "params": ["i32"], "return_ty": "i32"},
         {"name": "evaluate", "params": ["i32", "i32"], "return_ty": "i32"},
     ]}
+
+
+def test_stage59_diff_program_hash_json_match(tmp_path):
+    """Stage 59 follow-on / Tier 4 #13 polish: --diff-program-hash-json
+    emits match=true + kind=match + rc=0 on identical files."""
+    import json
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = "fn foo() -> i32 { 1 }\n"
+    a = tmp_path / "a.hx"
+    b = tmp_path / "b.hx"
+    a.write_text(src, encoding="utf-8")
+    b.write_text(src, encoding="utf-8")
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--diff-program-hash-json", str(a), str(b)],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0
+    result = json.loads(proc.stdout)
+    assert result["match"] is True
+    assert result["kind"] == "match"
+    assert result["a_hash"] == result["b_hash"]
+    assert result["a_sig_hash"] == result["b_sig_hash"]
+    assert len(result["a_hash"]) == 64
+
+
+def test_stage59_diff_program_hash_json_body_only(tmp_path):
+    """Stage 59 follow-on / Tier 4 #13 polish: kind=body-only when
+    signatures match but bodies differ."""
+    import json
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    a = tmp_path / "a.hx"
+    b = tmp_path / "b.hx"
+    a.write_text("fn foo() -> i32 { 1 }\n", encoding="utf-8")
+    b.write_text("fn foo() -> i32 { 2 }\n", encoding="utf-8")
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--diff-program-hash-json", str(a), str(b)],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 1
+    result = json.loads(proc.stdout)
+    assert result["match"] is False
+    assert result["kind"] == "body-only"
+    # Sig hashes match (no signature change).
+    assert result["a_sig_hash"] == result["b_sig_hash"]
+    # Body hashes differ.
+    assert result["a_hash"] != result["b_hash"]
+
+
+def test_stage59_diff_program_hash_json_signature_change(tmp_path):
+    """Stage 59 follow-on / Tier 4 #13 polish: kind=signature-change
+    when signatures differ."""
+    import json
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    a = tmp_path / "a.hx"
+    b = tmp_path / "b.hx"
+    a.write_text("fn foo(x: i32) -> i32 { x }\n", encoding="utf-8")
+    b.write_text("fn foo(x: f32) -> f32 { x }\n", encoding="utf-8")
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--diff-program-hash-json", str(a), str(b)],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 1
+    result = json.loads(proc.stdout)
+    assert result["match"] is False
+    assert result["kind"] == "signature-change"
+    assert result["a_sig_hash"] != result["b_sig_hash"]
 
 
 def test_stage59_changed_fns_json(tmp_path):
