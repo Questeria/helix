@@ -5896,6 +5896,7 @@ def test_stage59_autodiff_cli_help_mentions_polish_flags():
         "--check-program-signature-hash-from-file-json",
         "--program-hash-json", "--program-signature-hash-json",
         "--fn-sig-hash-json",
+        "--parse-only-json", "--autotune-budget-json",
         "--list-fn-attrs", "--list-fn-attrs-json",
         "--list-fns-by-attr", "--list-fns-by-attr-json",
         "--fn-callgraph", "--fn-callers",
@@ -7558,6 +7559,45 @@ def test_stage59_agent_methods_json(tmp_path):
         {"name": "propose", "params": ["i32"], "return_ty": "i32"},
         {"name": "evaluate", "params": ["i32", "i32"], "return_ty": "i32"},
     ]}
+
+
+def test_stage59_parse_only_json(tmp_path):
+    """Stage 59 follow-on / Tier 4 #13 polish: --parse-only-json
+    emits {ok: true, path} on clean parse + rc=0."""
+    import json
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "poj.hx"
+    src.write_text("fn foo() -> i32 { 1 }\n", encoding="utf-8")
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--parse-only-json", str(src)],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0
+    result = json.loads(proc.stdout)
+    assert result["ok"] is True
+    assert result["path"] == str(src)
+
+
+def test_stage59_autotune_budget_json_within(tmp_path):
+    """Stage 59 follow-on / Tier 2 #8 polish: --autotune-budget-json
+    emits within_budget=true + rc=0 when total is at/below budget."""
+    import json
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "abj.hx"
+    src.write_text("fn foo() -> i32 { 1 }\n", encoding="utf-8")
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--autotune-budget-json", str(src), "100"],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0
+    result = json.loads(proc.stdout)
+    assert result["within_budget"] is True
+    assert result["budget"] == 100
+    assert result["total_variants"] <= 100
 
 
 def test_stage59_program_hash_json(tmp_path):

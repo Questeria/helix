@@ -43,6 +43,11 @@ Introspection (Stage 28.9 + Stage 58 + Stage 59 polish):
         Same as --program-signature-hash but JSON.
     --fn-sig-hash-json <file.hx> <fn_name>
         Same as --fn-sig-hash but JSON {name, hash_full, hash_short}.
+    --parse-only-json <file.hx>
+        Same as --parse-only but JSON {ok, path} on success.
+    --autotune-budget-json <file.hx> <max_total>
+        Same as --autotune-budget but JSON
+        {within_budget, total_variants, budget, per_fn}.
     --hash-dump-short <file.hx>
         Same as --hash-dump but with 12-hex short hashes (compact logs).
     --diff-trace <a.json> <b.json>
@@ -1752,6 +1757,41 @@ def _autotune_summary(path: str) -> int:
         total += count
     print(f"total variants={total}")
     return 0
+
+
+def _autotune_budget_json(path: str, max_total: str) -> int:
+    """Stage 59 follow-on / Tier 2 #8 polish: --autotune-budget in
+    machine-readable JSON form.
+
+    Output schema:
+      {"within_budget": bool,
+       "total_variants": N,
+       "budget": N,
+       "per_fn": {"<fn_name>": <variant_count>, ...}}
+
+    rc=0 on within-budget, 1 on over-budget (matches text-form), 2
+    on bad budget arg.
+    """
+    import json
+    try:
+        budget = int(max_total)
+    except ValueError:
+        print(f"error: autotune_cli: max_total {max_total!r} is not an int",
+              file=sys.stderr)
+        return 2
+    from .autotune_expand import autotune_expansion_summary
+    src = _read_source(path)
+    prog = _parse_or_exit(src, path)
+    summary = autotune_expansion_summary(prog)
+    total = sum(summary.values())
+    within = total <= budget
+    print(json.dumps({
+        "within_budget": within,
+        "total_variants": total,
+        "budget": budget,
+        "per_fn": dict(summary),
+    }, sort_keys=True, indent=2))
+    return 0 if within else 1
 
 
 def _autotune_budget(path: str, max_total: str) -> int:
@@ -5011,6 +5051,26 @@ def _parse_only(path: str) -> int:
     return 0
 
 
+def _parse_only_json(path: str) -> int:
+    """Stage 59 follow-on / Tier 4 #13 polish: --parse-only in
+    machine-readable JSON form.
+
+    Output schema:
+      {"ok": bool, "path": "<path>"}
+
+    rc=0 on clean parse. On parse error, the diagnostic goes to
+    stderr (via _parse_or_exit which exits non-zero) — JSON output
+    only emitted in the success path. Mirrors validator JSON pattern.
+    """
+    import json
+    src = _read_source(path)
+    _parse_or_exit(src, path)
+    # If we reach here, parse succeeded.
+    print(json.dumps({"ok": True, "path": path},
+                      sort_keys=True, indent=2))
+    return 0
+
+
 def _list_structs_json(path: str) -> int:
     """Stage 59 follow-on / Tier 4 #13 polish: --list-structs in
     machine-readable JSON form.
@@ -6810,6 +6870,13 @@ def main():
             sys.exit(2)
         sys.exit(_parse_only(args[0]))
 
+    if "--parse-only-json" in flags:
+        if len(args) < 1:
+            print("usage: --parse-only-json <file.hx>",
+                  file=sys.stderr)
+            sys.exit(2)
+        sys.exit(_parse_only_json(args[0]))
+
     if "--list-fn-attrs" in flags:
         if len(args) < 1:
             print("usage: --list-fn-attrs <file.hx>",
@@ -7279,6 +7346,13 @@ def main():
                   file=sys.stderr)
             sys.exit(2)
         sys.exit(_autotune_budget(args[0], args[1]))
+
+    if "--autotune-budget-json" in flags:
+        if len(args) < 2:
+            print("usage: --autotune-budget-json <file.hx> <max_total>",
+                  file=sys.stderr)
+            sys.exit(2)
+        sys.exit(_autotune_budget_json(args[0], args[1]))
 
     if "--pytree-shape" in flags:
         if len(args) < 2:
