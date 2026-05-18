@@ -379,6 +379,28 @@ def trace_fn_counts(buf: TraceBuffer) -> dict:
     return counts
 
 
+def trace_subsequence(buf: TraceBuffer, start: int, end: Optional[int] = None) -> TraceBuffer:
+    """Stage 59 follow-on / Tier 3 #11 polish — extract a slice of
+    events as a new TraceBuffer.
+
+    Equivalent to Python slice semantics:
+      `trace_subsequence(buf, start, end)` ↔ `buf.events[start:end]`
+
+    Wraps the slice in a new TraceBuffer (preserving `cap`), so the
+    result is callable through trace_equiv / trace_hash / trace_filter
+    without unwrapping.
+
+    Use cases:
+    - Zoom in on a specific fn call's entry+exit pair:
+        slice = trace_subsequence(buf, entry_idx, exit_idx + 1)
+    - Discard a warm-up prefix before equivalence-checking
+    - Compare just the 'recent' tail of two traces
+    """
+    out = TraceBuffer(cap=buf.cap)
+    out.events = list(buf.events[start:end])
+    return out
+
+
 def trace_is_balanced(buf: TraceBuffer) -> bool:
     """Stage 59 follow-on / Tier 3 #11 polish — quick predicate for
     'every entry has a matching exit' invariant.

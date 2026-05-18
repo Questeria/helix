@@ -632,6 +632,47 @@ def test_stage59_trace_fn_counts_histogram():
     assert trace_fn_counts(TraceBuffer()) == {}
 
 
+def test_stage59_trace_subsequence_basic():
+    """Stage 59 follow-on / Tier 3 #11 polish: trace_subsequence
+    extracts a slice as a new TraceBuffer (Python slice semantics)."""
+    from helixc.frontend.trace_pass import trace_subsequence
+    buf = TraceBuffer(events=[
+        TraceEvent("entry", "f", ()),
+        TraceEvent("op", "f", ("add",), result=1),
+        TraceEvent("op", "f", ("mul",), result=2),
+        TraceEvent("exit", "f", (2,)),
+    ])
+    # Middle two events
+    sub = trace_subsequence(buf, 1, 3)
+    assert len(sub) == 2
+    assert sub.events[0].op_kind == "op"
+    assert sub.events[1].operands == ("mul",)
+    # Cap preserved
+    assert sub.cap == buf.cap
+
+
+def test_stage59_trace_subsequence_open_end():
+    """Stage 59 follow-on: trace_subsequence with end=None gives
+    suffix from start."""
+    from helixc.frontend.trace_pass import trace_subsequence
+    buf = TraceBuffer(events=[
+        TraceEvent("entry", "f", ()),
+        TraceEvent("exit", "f", (1,)),
+        TraceEvent("entry", "g", ()),
+        TraceEvent("exit", "g", (2,)),
+    ])
+    suffix = trace_subsequence(buf, 2)
+    assert len(suffix) == 2
+    assert suffix.events[0].fn_name == "g"
+
+
+def test_stage59_trace_subsequence_empty():
+    """Stage 59 follow-on: out-of-range slice gives empty buffer."""
+    from helixc.frontend.trace_pass import trace_subsequence
+    buf = TraceBuffer(events=[TraceEvent("entry", "f", ())])
+    assert len(trace_subsequence(buf, 5, 10)) == 0
+
+
 def test_stage59_trace_is_balanced_clean():
     """Stage 59 follow-on: trace_is_balanced returns True when
     entry count == exit count."""
