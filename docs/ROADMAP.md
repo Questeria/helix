@@ -303,6 +303,30 @@ Re-sequenced after Stage 46-47 closed:
 - **Stage 58** ✅ **CLOSED 2026-05-18** — Tier 4 #13 content-
   addressed modules (program_hash + module_hash + fn_signature_hash
   core).
+- **Stage 105 SHIPPED 2026-05-18** — Stage 64 Inc 3 (TILE_ADD/SUB/
+  MUL elementwise in PTX backend) cherry-picked from speculative
+  parallel worktree into main. **Stage 64 Inc 3 now in v1.0.**
+  - Cherry-picked commit `c90c4150` from worktree branch
+    `stage64-inc3-speculative` (`C:\Projects\Kovostov-Native-
+    stage64-inc3`) into main as `e44ae4a`. Cherry-pick was clean
+    (no conflicts) because main hasn't touched ptx.py or test_ptx.py
+    since Stage 99 (parallel worktree was created after Stage 84).
+  - What landed: single-dispatch branch in `helixc/backend/ptx.py`
+    covering TILE_ADD / TILE_SUB / TILE_MUL for register-tile
+    types. Validates both operands are TIRTileTy 1-D + dtypes
+    match + lengths match. Emits N consecutive `add.f32 %fX, %fY,
+    %fZ;` / `sub.f32` / `mul.f32` (or `add.s32` / `sub.s32` /
+    `mul.lo.s32` for i32). Backend-only — no user-code path
+    triggers these ops yet; Inc 4 (TILE_MATMUL via wmma) will
+    wire the frontend → tile-IR → PTX path.
+  - 9 new Stage 64 Inc 3 tests landed via cherry-pick. **96 PTX
+    pins GREEN** (was 87 pre-cherry-pick). Combined regression:
+    437 typecheck + 8 property_runner + 96 PTX + 1 Stage 104 test
+    + ... = **542 pins GREEN**.
+  - **v1.0 critical path now 3 stages out**: Stage 106 (Stage 64
+    Inc 4 TILE_MATMUL via wmma), Stage 107 (Stage 64 Inc 5
+    tile-IR opt passes), Stage 108 (v1.0 release stop).
+
 - **Stage 104 SHIPPED 2026-05-18** — safety.hx per-wrapper @property
   coverage gap closed: 5 missing roundtrips for DP/Quant/Domain/
   Robust/Energy added.
