@@ -172,20 +172,26 @@ Re-sequenced after Stage 46-47 closed:
   union (gate-7 HIGH-1+2) deferred to Stage 52 Inc 5 or rolled
   into Stage 53. Helper-fn indirection deferred to Stage 53
   (different defect class — inter-procedural taint).
-- **Stage 54** (next, OPENED 2026-05-17 immediately after STAGE
-  52 CLOSED): Tier 1 #2 — AD across user-defined function calls
-  broader coverage. 3 increments:
-  - Inc 1: chain-rule arms for __min/__max/__clamp/__sign
-    (11 names) — closes the opaque-call catchall for these
-    common arithmetic helpers
-  - Inc 2: forward/reverse asymmetry fix (forward currently
-    silent-warns on unrecognized multi-arg, reverse hard-fails;
-    align both to loud-fail)
-  - Inc 3: `_inline_user_calls` loop-body descent + bounded
-    recursive unrolling
-  See `docs/stage54-plan-2026-05-17.md` for the full plan
-  (blueprint distilled from Tier 1 #2 code-explorer agent
-  during Stage 52 gate-12 wait). Estimated 3 audit gates total.
+- **Stage 54** (in flight 2026-05-17, Inc 1+2+3a SHIPPED, Inc
+  3b deferred): Tier 1 #2 — AD across user-defined function
+  calls broader coverage.
+  - Inc 1 ✅ (3d5b900): chain-rule arms for __min/__max/__clamp/
+    __sign (11 names) in both forward + reverse modes.
+  - Inc 2 ✅ (3fdd61f) CLOSED no-op: forward/reverse asymmetry
+    was already fixed at Stage 35 (verified by regression pin);
+    no code change needed.
+  - Inc 3a ✅ (e011241): `_inline_user_calls.go()` walker
+    descends into A.For/A.While/A.Loop bodies. Closes the
+    omission where pure-helper calls inside loop bodies were
+    never inlined.
+  - Inc 3b (deferred to fresh session): bounded recursive
+    unrolling (~150 LOC + cache-key correctness hazard per
+    Stage C52-AD1 class). Lower-priority polish since
+    directly-recursive helpers in current dogfood code are
+    rare. Plan: see `docs/stage54-plan-2026-05-17.md`.
+  Stage 54 substantially closes Tier 1 #2 at Inc 3a (~80% of
+  the original blueprint scope). Plan doc and ROADMAP updated
+  via post-Stage-54-closure ledger.
 
 - **Stage 53** (Inc 1+2 shipped 2026-05-17, commits 179678d +
   2550492): helper-fn indirection taint propagation. **Inc 1
