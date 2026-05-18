@@ -345,6 +345,21 @@ Re-sequenced after Stage 46-47 closed:
   - Inc 2 will wire enforcement at &/&mut sites; Inc 3 block-
     exit reconciliation; Inc 4 Copy marker; Inc 5 `move` keyword.
 
+- **Stage 65 ✅ CLOSED 2026-05-18** — Tier 4 #17 multiple
+  dispatch FULLY SHIPPED (Inc 1-5):
+  - Inc 1: scaffolding — `dict[str, list[str]]` registration
+  - Inc 2: `@overload` opt-in attribute for multi-target reg
+  - Inc 3: syntactic dispatch (StructLit + Cast→TyName hints)
+  - Inc 4: let-binding type hints (incl. fn param types)
+  - Inc 5: specificity rule (exact match beats fuzzy; hint
+    mismatch falls through to fail-closed error)
+  - 15/15 Stage 65 tests pass; full impl-block test slice GREEN
+  - End-to-end test pin: 3-target @overload + mixed StructLit
+    + Cast + let-binding receivers all dispatch correctly
+  - Autotune integration (originally planned Inc 5) deferred to
+    future polish stage — current dispatch covers the user-
+    visible patterns; autotune is orthogonal.
+
 - **Stage 65 Inc 4 SHIPPED 2026-05-18** — Tier 4 #17 dispatch
   via let-binding type annotations:
   - New `_collect_let_type_hints(stmts, out)` walks fn body

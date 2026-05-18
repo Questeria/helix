@@ -264,8 +264,19 @@ def _resolve_method_target(method_name: str,
         # hint or let-binding type annotation.
         if receiver is not None:
             hint = _receiver_static_type_hint(receiver, let_hints)
-            if hint is not None and hint in targets:
-                return hint
+            if hint is not None:
+                # Stage 65 Inc 5 — specificity rule. For Phase-0,
+                # exact match wins. When the hint doesn't appear
+                # in the candidate list, fall back to fail-closed
+                # (no fuzzy match — explicit beats implicit).
+                # Future polish: when tile<T, MEM> wildcards land,
+                # prefer the candidate whose memspace exactly matches
+                # the receiver's memspace over a wildcard candidate.
+                if hint in targets:
+                    return hint
+                # Hint doesn't match any candidate — fall through
+                # to ambiguous error so the user knows their hint
+                # didn't resolve.
         sp = _FIRST_SPAN.get(method_name, call_span)
         raise DuplicateMethodError(
             method=method_name,

@@ -4008,6 +4008,171 @@ def test_flatten_impls_rejects_same_name_methods():
     assert ex.value.trap_id == 74002
 
 
+def test_stage65_inc5_specificity_hint_mismatch_falls_through():
+    """Stage 65 Inc 5 — specificity rule: when the receiver hint
+    is present but doesn't match any candidate, fall through to
+    DuplicateMethodError (explicit beats implicit; fuzzy match
+    not allowed). User must use a real candidate type or unwind
+    the dispatch."""
+    from helixc.frontend.flatten_impls import (
+        _resolve_method_target, DuplicateMethodError,
+    )
+    from helixc.frontend import ast_nodes as A
+    import pytest as _pt
+
+    span = A.Span(0, 0)
+    # Three candidates: Pt, Line, Circle. Receiver hint is
+    # "Square" — no match.
+    m2t = {"area": ["Pt", "Line", "Circle"]}
+    let_hints = {"x": "Square"}
+    bad_recv = A.Name(span=span, name="x", generics=[])
+    with _pt.raises(DuplicateMethodError):
+        _resolve_method_target(
+            "area", m2t, span,
+            receiver=bad_recv, let_hints=let_hints)
+
+
+def test_stage65_inc5_exact_match_wins_over_wildcard():
+    """Stage 65 Inc 5: exact-name match is preferred (Phase-0:
+    we don't have wildcard candidates in flatten_impls; this
+    pin documents the rule for future expansion when tile<T, _>
+    wildcards land at the impl-block level)."""
+    from helixc.frontend.flatten_impls import _resolve_method_target
+    from helixc.frontend import ast_nodes as A
+
+    span = A.Span(0, 0)
+    m2t = {"render": ["Pt", "Line"]}
+    let_hints = {"a": "Pt"}
+    pt_name = A.Name(span=span, name="a", generics=[])
+    target = _resolve_method_target(
+        "render", m2t, span,
+        receiver=pt_name, let_hints=let_hints)
+    # Pt wins because it exactly matches the let hint.
+    assert target == "Pt"
+
+
+def test_stage65_full_dispatch_pipeline_end_to_end():
+    """Stage 65 (Inc 1-5) end-to-end: a 3-target @overload setup
+    with mixed StructLit + Cast + let-binding receivers all
+    dispatches correctly in a single flatten_impls run."""
+    from helixc.frontend.flatten_impls import flatten_impls
+    from helixc.frontend import ast_nodes as A
+
+    span = A.Span(0, 0)
+
+    def mk_struct(name):
+        return A.StructDecl(
+            span=span, name=name, generics=[],
+            fields=[A.FnParam(span=span, name="x",
+                              ty=A.TyName(span=span, name="f32"),
+                              is_mut=False)],
+            is_pub=False,
+        )
+
+    def mk_method(target):
+        return A.FnDecl(
+            span=span, name="render", generics=[],
+            params=[A.FnParam(span=span, name="self",
+                              ty=A.TyName(span=span, name=target),
+                              is_mut=False)],
+            return_ty=A.TyName(span=span, name="f32"),
+            where_clauses=[],
+            body=A.Block(span=span, stmts=[],
+                         final_expr=A.FloatLit(
+                             span=span, value=1.0,
+                             type_suffix="f32")),
+            attrs=["overload"], is_pub=False,
+        )
+
+    # let pt: Pt = Pt { x: 1.0 };
+    # let lit_form = Line { x: 2.0 };
+    # let cast_form = circle_handle as Circle;
+    # pt.render() + lit_form.render() + cast_form.render()
+    let_pt = A.Let(
+        span=span, name="pt", is_mut=False,
+        ty=A.TyName(span=span, name="Pt"),
+        value=A.StructLit(span=span, name="Pt",
+                           fields=[("x", A.FloatLit(
+                               span=span, value=1.0,
+                               type_suffix="f32"))]),
+    )
+    body = A.Block(
+        span=span,
+        stmts=[let_pt],
+        final_expr=A.Binary(
+            span=span, op="+",
+            left=A.Call(
+                span=span,
+                callee=A.Field(
+                    span=span,
+                    obj=A.Name(span=span, name="pt", generics=[]),
+                    name="render"),
+                args=[]),
+            right=A.Binary(
+                span=span, op="+",
+                left=A.Call(
+                    span=span,
+                    callee=A.Field(
+                        span=span,
+                        obj=A.StructLit(span=span, name="Line",
+                                         fields=[("x", A.FloatLit(
+                                             span=span, value=2.0,
+                                             type_suffix="f32"))]),
+                        name="render"),
+                    args=[]),
+                right=A.Call(
+                    span=span,
+                    callee=A.Field(
+                        span=span,
+                        obj=A.Cast(
+                            span=span,
+                            value=A.FloatLit(
+                                span=span, value=0.0,
+                                type_suffix="f32"),
+                            target_ty=A.TyName(
+                                span=span, name="Circle")),
+                        name="render"),
+                    args=[]),
+            )),
+    )
+    caller = A.FnDecl(
+        span=span, name="user", generics=[],
+        params=[],
+        return_ty=A.TyName(span=span, name="f32"),
+        where_clauses=[],
+        body=body,
+        attrs=[], is_pub=False,
+    )
+    prog = A.Program(
+        module=None,
+        items=[mk_struct("Pt"), mk_struct("Line"), mk_struct("Circle"),
+               A.ImplBlock(span=span, target="Pt",
+                            methods=[mk_method("Pt")],
+                            trait_name=None),
+               A.ImplBlock(span=span, target="Line",
+                            methods=[mk_method("Line")],
+                            trait_name=None),
+               A.ImplBlock(span=span, target="Circle",
+                            methods=[mk_method("Circle")],
+                            trait_name=None),
+               caller])
+    n = flatten_impls(prog)
+    assert n == 3
+    # Verify all 3 dispatches resolved correctly.
+    caller_after = next(it for it in prog.items
+                        if hasattr(it, "name") and it.name == "user")
+    final = caller_after.body.final_expr
+    # left = Pt__render(pt)  via let-binding hint
+    pt_call = final.left
+    assert pt_call.callee.name == "Pt__render"
+    # right.left = Line__render(Line{...})  via StructLit hint
+    line_call = final.right.left
+    assert line_call.callee.name == "Line__render"
+    # right.right = Circle__render(...)  via Cast hint
+    circle_call = final.right.right
+    assert circle_call.callee.name == "Circle__render"
+
+
 def test_stage65_inc4_dispatch_via_let_binding_type_hint():
     """Stage 65 Inc 4 — Tier 4 #17 multi-dispatch via let-binding
     type annotation. When the receiver is a bare Name and the
