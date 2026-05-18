@@ -343,8 +343,33 @@ Implementation (4 surgical edits + 1 hoist):
    `_MODAL_UPGRADE_HINT` (gate-2 F3 single-source-of-truth).
 
 7 regression pins (5 Inc 1 + 2 Inc 2 verifying Assign + match-
-scrutinee paths). Stage 40 sweep 90→95. Diagnostic message:
+scrutinee paths). Stage 40 sweep 90→95 at Stage 53 Inc 1+2; the
+gate-9 doc fixes + Inc 5 loop body + Inc 6 recursive yield-from-
+modal subsequently added more pins, bringing total to 100+ at
+gate-10 / Inc 7 closure point. Diagnostic message:
 "launders Uncertain<T> into Known<T> via helper-fn indirection".
+
+## Stage 52 Inc 7 follow-on landing (2026-05-17 late evening)
+
+Gate-10 silent-failure caught 1 NEW HIGH: Inc 6's recursive
+`_modal_origin_of_expr` was wired to the user-fn launder check
+(Stage 53) but NOT to the builtin into_X launder check. Inline
+forms `into_known(match scrut { x => from_uncertain(u) })` (or
+inline if/block) silently passed — asymmetric coverage between
+the user-fn site and the builtin site.
+
+Fix (Inc 7): replaced the 2 narrow syntactic guards at the
+builtin into_X check (A.Call + A.Name) with a single unified
+`_modal_origin_of_expr(args[0])` consult. Coverage now symmetric
+across all 5 consult sites (builtin into_X + user-fn call +
+Let-RHS + Assign-RHS + match-scrutinee).
+
+3 new regression pins (inline match/if/block in into_known).
+Diagnostic message form refined: "via yielded modal expression
+(a match/if/block tail with from_X(...))".
+
+Stage 52 surface now catches **17+ distinct modal-launder paths**
+(up from 14 pre-Inc-7).
 
 ## Stage 50 retry: Exp A executed (2026-05-17 evening, commit 10cab73)
 

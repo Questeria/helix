@@ -130,13 +130,16 @@ Re-sequenced after Stage 46-47 closed:
   algorithm together once the cascade can tolerate source
   changes. Estimated 2-3 stages depending on how the
   fragility's root cause splits.
-- **Stage 52** (in flight 2026-05-17, gates 1-7 closed): modal-
-  origin taint-tracking pass closing the Stage 40 closure gate-1
-  H1 known limitation ("let-binding bypass of F1 syntactic
-  guard"). Inc 1 (c274059), Inc 2 (2925121), Inc 3 (c9d8915)
-  shipped the initial three launder paths (let-binding, while/for
-  Assign, match-arm). Closure gates 2-7 (each cascading-defect
-  audit round) added 9 more launder paths closed:
+- **Stage 52** (in flight 2026-05-17, gates 1-10 + Inc 1-7
+  shipped, awaiting 3-clean-gate confirmation): modal-origin
+  taint-tracking pass closing the Stage 40 closure gate-1 H1
+  known limitation ("let-binding bypass of F1 syntactic guard").
+  Inc 1 (c274059), Inc 2 (2925121), Inc 3 (c9d8915) shipped the
+  initial three launder paths (let-binding, while/for Assign,
+  match-arm). Inc 5 (1fbebe2) shipped loop body union. Inc 6
+  (0d133c9) shipped recursive yield-from-modal detection. Inc 7
+  (this gate-10 fix) unified the builtin into_X consult through
+  `_modal_origin_of_expr`, closing 14+ launder paths total via:
   - PatBind taint propagation (gate-4 HIGH-1, ccca046)
   - PatBind hoisted above guard check (gate-5 HIGH-1, fb9ad42)
   - Call-form match scrutinee (gate-6 CRITICAL-1, fb9ad42)

@@ -1794,6 +1794,71 @@ def test_stage52_gate7_type_design_high_1_last_assigns_cleared_per_fn():
 
 
 # ============================================================
+# Stage 52 Inc 7 regression pins (gate-10 HIGH-1: builtin
+# into_X now uses unified _modal_origin_of_expr — closes the
+# Inc 6 asymmetric-coverage gap)
+# ============================================================
+
+
+def test_stage52_inc7_inline_match_in_into_known_fires():
+    """Stage 52 Inc 7 / gate-10 HIGH-1: inline
+    `into_known(match scrut { x => from_uncertain(u) })` MUST
+    FIRE. Pre-fix the builtin into_X check had narrow A.Call
+    and A.Name guards, missing inline match. Post-fix: unified
+    `_modal_origin_of_expr` consult catches it (Inc 6 helper
+    now wired at the builtin site too)."""
+    src = """
+fn main() -> i32 {
+    let u: Uncertain<i32> = into_uncertain(1);
+    let k: Known<i32> = into_known(match 1 { x => from_uncertain(u) });
+    from_known(k)
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    errs = typecheck(prog)
+    assert any("launder" in str(e) and "Uncertain" in str(e)
+               and "Known" in str(e) for e in errs), \
+        f"inline match in into_known MUST FIRE (Stage 52 Inc 7 / " \
+        f"gate-10 HIGH-1), got: {[str(e) for e in errs]}"
+
+
+def test_stage52_inc7_inline_if_in_into_known_fires():
+    """Stage 52 Inc 7 / gate-10 HIGH-1: inline if-else where
+    both branches yield from_X MUST FIRE at the outer into_known."""
+    src = """
+fn main() -> i32 {
+    let u: Uncertain<i32> = into_uncertain(1);
+    let k: Known<i32> = into_known(if true { from_uncertain(u) } else { from_uncertain(u) });
+    from_known(k)
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    errs = typecheck(prog)
+    assert any("launder" in str(e) and "Uncertain" in str(e)
+               and "Known" in str(e) for e in errs), \
+        f"inline if in into_known MUST FIRE (Stage 52 Inc 7 / " \
+        f"gate-10 HIGH-1), got: {[str(e) for e in errs]}"
+
+
+def test_stage52_inc7_inline_block_in_into_known_fires():
+    """Stage 52 Inc 7 / gate-10 HIGH-1: inline block expression
+    yielding from_X MUST FIRE at the outer into_known."""
+    src = """
+fn main() -> i32 {
+    let u: Uncertain<i32> = into_uncertain(1);
+    let k: Known<i32> = into_known({ from_uncertain(u) });
+    from_known(k)
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    errs = typecheck(prog)
+    assert any("launder" in str(e) and "Uncertain" in str(e)
+               and "Known" in str(e) for e in errs), \
+        f"inline block in into_known MUST FIRE (Stage 52 Inc 7 / " \
+        f"gate-10 HIGH-1), got: {[str(e) for e in errs]}"
+
+
+# ============================================================
 # Stage 52 Inc 6 regression pins (gate-2 HIGH-2 / gate-9 O1
 # recursive yield-from-modal detection)
 # ============================================================

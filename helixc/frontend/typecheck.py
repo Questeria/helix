@@ -4643,23 +4643,37 @@ class TypeChecker:
                     # cascade-suppression already fires for the
                     # bare-name dispatch path; the launder guard
                     # has to mirror that discipline).
-                    inner_is_shadowed = (
-                        len(expr.args) >= 1
-                        and isinstance(expr.args[0], A.Call)
-                        and isinstance(expr.args[0].callee, A.Name)
-                        and expr.args[0].callee.name
-                            in self._shadowed_builtin_names
-                    )
+                    # Stage 52 Inc 7 / gate-10 HIGH-1 fix: unified
+                    # source-kind consult via `_modal_origin_of_expr`.
+                    # Pre-fix, the F1 launder check had TWO narrow
+                    # syntactic guards: one for `Call(from_X, ...)`
+                    # (Stage 40 F1) and one for `Name with tracked
+                    # taint` (Stage 52 Inc 1). Inline forms like
+                    # `into_known(match scrut { x => from_X(...) })`
+                    # bypassed both (arg is A.Match, not A.Call or
+                    # A.Name). Inc 6 added recursive helper support
+                    # for Block/If/Match yield-from-modal detection
+                    # but wired it ONLY into the Stage 53 user-fn
+                    # launder check — leaving builtin into_X with the
+                    # narrow guards, producing asymmetric coverage.
+                    # Post-fix: single helper call replaces both
+                    # syntactic checks — coverage symmetric across
+                    # all consult sites (builtin into_X + user-fn
+                    # call + Let-RHS + Assign-RHS + match-scrutinee).
+                    #
+                    # Shadowed builtin safety: helper checks
+                    # `_MODAL_ELIM_TO_KIND` first, so a user fn
+                    # shadowing `from_X` returns the builtin kind
+                    # rather than the user-fn kind. The dedicated
+                    # `_shadowed_builtin_names` skip is no longer
+                    # needed for THIS check (the H2 cascade-suppression
+                    # at the bare-name dispatch path still applies).
                     if (len(expr.args) >= 1
-                            and isinstance(expr.args[0], A.Call)
-                            and isinstance(expr.args[0].callee, A.Name)
-                            and expr.args[0].callee.name
-                                in _MODAL_ELIM_TO_KIND
-                            and not isinstance(arg_tys[0], TyUnknown)
-                            and not inner_is_shadowed):
-                        source_kind = _MODAL_ELIM_TO_KIND[
-                            expr.args[0].callee.name]
-                        if source_kind != target_kind:
+                            and not isinstance(arg_tys[0], TyUnknown)):
+                        source_kind = self._modal_origin_of_expr(
+                            expr.args[0])
+                        if (source_kind is not None
+                                and source_kind != target_kind):
                             upgrade_hint = _MODAL_UPGRADE_HINT.get(
                                 (source_kind, target_kind))
                             if upgrade_hint:
@@ -4675,61 +4689,40 @@ class TypeChecker:
                                     "and keep the value in its "
                                     "current modal kind until then"
                                 )
-                            self.errors.append(TypeError_(
-                                f"{bn}(from_{source_kind}(...)) "
-                                f"launders a "
-                                f"{source_kind.capitalize()}<T> "
-                                f"into "
-                                f"{target_kind.capitalize()}<T> "
-                                f"with no epistemic-upgrade "
-                                f"audit.",
-                                expr.span,
-                                hint=hint,
-                            ))
-                            return TyUnknown(hint=bn)
-                    # Stage 52 Inc 1 — let-binding taint-tracking.
-                    # Catches the let-binding bypass of the F1
-                    # guard that Stage 40 documented as a known
-                    # limit: `let r = from_uncertain(u); into_known(r)`
-                    # was syntactically valid (arg is Name not Call)
-                    # and silently slipped. Post-fix, consult the
-                    # modal-origin map at the Name operand site.
-                    if (len(expr.args) >= 1
-                            and isinstance(expr.args[0], A.Name)
-                            and expr.args[0].name
-                                in self._modal_origin_provenance):
-                        source_kind = self._modal_origin_provenance[
-                            expr.args[0].name]
-                        if source_kind != target_kind:
-                            upgrade_hint = _MODAL_UPGRADE_HINT.get(
-                                (source_kind, target_kind))
-                            if upgrade_hint:
-                                hint = upgrade_hint
+                            # Diagnostic form: name the arg if A.Name
+                            # (preserves "via taint-tracking" framing
+                            # for the Inc 1 path), else show the form.
+                            if isinstance(expr.args[0], A.Name):
+                                arg_repr = f"'{expr.args[0].name}'"
+                                form = (
+                                    f"via taint-tracking — "
+                                    f"{arg_repr} carries a tracked "
+                                    f"from_{source_kind}(...) origin "
+                                    f"from a let-binding, Assign-stmt, "
+                                    f"match-arm, if-branch, while-body, "
+                                    f"or yielded modal expression."
+                                )
+                            elif (isinstance(expr.args[0], A.Call)
+                                  and isinstance(expr.args[0].callee, A.Name)
+                                  and expr.args[0].callee.name
+                                      in _MODAL_ELIM_TO_KIND):
+                                arg_repr = (
+                                    f"from_{source_kind}(...)"
+                                )
+                                form = "with no epistemic-upgrade audit."
                             else:
-                                hint = (
-                                    "Phase-0 has no "
-                                    f"{source_kind.capitalize()} "
-                                    f"-> {target_kind.capitalize()} "
-                                    "transition; if this direction "
-                                    "is semantically meaningful, "
-                                    "request a future-stage spec "
-                                    "and keep the value in its "
-                                    "current modal kind until then"
+                                arg_repr = "..."
+                                form = (
+                                    f"via yielded modal expression "
+                                    f"(a match/if/block tail with "
+                                    f"from_{source_kind}(...))."
                                 )
                             self.errors.append(TypeError_(
-                                f"{bn}({expr.args[0].name!r}) "
-                                f"launders a "
+                                f"{bn}({arg_repr}) launders a "
                                 f"{source_kind.capitalize()}<T> "
                                 f"into "
                                 f"{target_kind.capitalize()}<T> "
-                                f"via taint-tracking — "
-                                f"{expr.args[0].name!r} carries "
-                                f"a tracked from_{source_kind}(...) "
-                                f"origin from a let-binding, "
-                                f"Assign-stmt, match-arm, "
-                                f"if-branch, or while-body. Same "
-                                f"launder semantics as the inline "
-                                f"`into_X(from_Y(v))` form.",
+                                f"{form}",
                                 expr.span,
                                 hint=hint,
                             ))
