@@ -90,6 +90,27 @@ def _print_program_hash(path: str) -> int:
     return 0
 
 
+def _fn_sig_hash(path: str, fn_name: str) -> int:
+    """Stage 59 follow-on / Tier 4 #13 polish: print the signature-only
+    hash of a specific fn. Use case: detect whether a fn's PUBLIC
+    contract changed between commits (callers need recompile) vs
+    body-only refactor (internal-only, no caller impact).
+
+    Returns exit 0 on success, 1 if the fn name is not found in
+    the source file.
+    """
+    from .ast_hash import fn_signature_hash
+    src = _read_source(path)
+    prog = _parse_or_exit(src, path)
+    for it in prog.items:
+        if isinstance(it, A.FnDecl) and it.name == fn_name:
+            print(fn_signature_hash(it))
+            return 0
+    print(f"error: autodiff_cli: fn {fn_name!r} not found in {path}",
+          file=sys.stderr)
+    return 1
+
+
 def _changed_fns(path_a: str, path_b: str) -> int:
     """Stage 59 follow-on / Tier 4 #13 polish: list FnDecls that
     changed between two source files at the AST-hash level.
@@ -215,6 +236,13 @@ def main():
                   file=sys.stderr)
             sys.exit(2)
         sys.exit(_changed_fns(args[0], args[1]))
+
+    if "--fn-sig-hash" in flags:
+        if len(args) < 2:
+            print("usage: --fn-sig-hash <file.hx> <fn_name>",
+                  file=sys.stderr)
+            sys.exit(2)
+        sys.exit(_fn_sig_hash(args[0], args[1]))
 
     if len(sys.argv) < 3 or len(args) < 2:
         print(__doc__.strip(), file=sys.stderr)
