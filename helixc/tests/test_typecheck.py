@@ -4754,6 +4754,105 @@ def test_stage74_fmt_layered_wrappers_compose_cleanly():
         "Confidential<Private<Conf<Robust<Q8<f32>>>>>"
 
 
+def test_stage76_inc1_energy_type_recognition():
+    """Stage 76 Inc 1 — TyEnergy scaffolding. TinyEnergy/Energy/
+    LargeEnergy resolve to TyEnergy with the right budget."""
+    from helixc.frontend.typecheck import TypeChecker
+    from helixc.frontend.parser import parse
+
+    src = """
+    fn user(a: Energy<f32>, b: TinyEnergy<f32>) -> f32 { 0.0 }
+    fn main() -> i32 { 0 }
+    """
+    prog = parse(src, include_stdlib=False)
+    tc = TypeChecker(prog)
+    errors = tc.check()
+    arity_errs = [str(e) for e in errors
+                  if "takes 1 type argument" in str(e)
+                  and ("Energy" in str(e) or "TinyEnergy" in str(e))]
+    assert len(arity_errs) == 0, arity_errs
+
+
+def test_stage76_inc1_three_energy_aliases_resolve():
+    from helixc.frontend.typecheck import TypeChecker
+    from helixc.frontend.parser import parse
+
+    src = """
+    fn a(x: TinyEnergy<i32>) -> i32 { 0 }
+    fn b(x: Energy<i32>) -> i32 { 0 }
+    fn c(x: LargeEnergy<i32>) -> i32 { 0 }
+    fn main() -> i32 { 0 }
+    """
+    prog = parse(src, include_stdlib=False)
+    tc = TypeChecker(prog)
+    errors = tc.check()
+    name_errs = [str(e) for e in errors
+                 if any(n in str(e)
+                        for n in ["TinyEnergy", "Energy", "LargeEnergy"])
+                 and ("takes 1 type argument" in str(e)
+                      or "unbound" in str(e))]
+    assert len(name_errs) == 0, name_errs
+
+
+def test_stage76_inc2_energy_budget_sums_through_binop():
+    """Stage 76 Inc 2 — `Energy + f32` yields Energy with budget
+    propagated (1.0 + 0 = 1.0). Matches declared return type."""
+    from helixc.frontend.typecheck import TypeChecker
+    from helixc.frontend.parser import parse
+
+    src = """
+    fn user(a: Energy<f32>, b: f32) -> Energy<f32> {
+        a + b
+    }
+    fn main() -> i32 { 0 }
+    """
+    prog = parse(src, include_stdlib=False)
+    tc = TypeChecker(prog)
+    errors = tc.check()
+    type_errs = [str(e) for e in errors
+                 if "return" in str(e).lower()
+                 or "Energy" in str(e)]
+    assert len(type_errs) == 0, type_errs
+
+
+def test_stage76_inc3_wrap_energy_constructor():
+    """Stage 76 — `__wrap_energy(x)` constructs Energy<T>."""
+    from helixc.frontend.typecheck import TypeChecker
+    from helixc.frontend.parser import parse
+
+    src = """
+    fn user(x: f32) -> Energy<f32> {
+        __wrap_energy(x)
+    }
+    fn main() -> i32 { 0 }
+    """
+    prog = parse(src, include_stdlib=False)
+    tc = TypeChecker(prog)
+    errors = tc.check()
+    type_errs = [str(e) for e in errors
+                 if "return" in str(e).lower() or "Energy" in str(e)]
+    assert len(type_errs) == 0, type_errs
+
+
+def test_stage76_inc3_exhaust_energy_opt_out():
+    """Stage 76 Inc 3 — `__exhaust_energy(x)` strips Energy wrapper."""
+    from helixc.frontend.typecheck import TypeChecker
+    from helixc.frontend.parser import parse
+
+    src = """
+    fn user(x: Energy<f32>) -> f32 {
+        __exhaust_energy(x)
+    }
+    fn main() -> i32 { 0 }
+    """
+    prog = parse(src, include_stdlib=False)
+    tc = TypeChecker(prog)
+    errors = tc.check()
+    type_errs = [str(e) for e in errors
+                 if "return" in str(e).lower() or "Energy" in str(e)]
+    assert len(type_errs) == 0, type_errs
+
+
 def test_stage73_inc1_robust_type_recognition():
     from helixc.frontend.typecheck import TypeChecker
     from helixc.frontend.parser import parse

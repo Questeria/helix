@@ -329,6 +329,34 @@ class TyConf(Type):
 
 
 @dataclass(frozen=True)
+class TyEnergy(Type):
+    """Stage 76 — energy / power budget type (Tier-A #6). A value
+    tagged with a joule / watt-second budget that has been spent
+    in producing it. Critical for edge AI deployment on
+    battery-powered devices and for green-computing audit trails.
+
+    Phase-0 representation: budget stored as float string (joules).
+    3 preset aliases ship in Inc 1:
+    - `TinyEnergy<T>`  → budget "0.01"  (microcontroller-scale)
+    - `Energy<T>`      → budget "1.0"   (typical edge inference)
+    - `LargeEnergy<T>` → budget "100.0" (datacenter-scale)
+
+    Compositional rule: joules SUM through binary ops (energy
+    accumulates additively through computation). Same pattern
+    as TyDP (eps sum). So `Energy<f32> + Energy<f32>` yields
+    a TyEnergy with budget "2.0" — strict compare catches budget
+    overruns at compile time.
+
+    Use case: edge inference, federated learning, regulated green-
+    AI deployment. Composes with rest of Tier-S/A stack.
+
+    Inc 1 ships scaffolding; Inc 2 propagation; Inc 3
+    `__exhaust_energy(x)` opt-out builtin."""
+    budget: str      # joules, Phase-0 string
+    inner: Type
+
+
+@dataclass(frozen=True)
 class TyRobust(Type):
     """Stage 73 — adversarial-robustness type (Tier-A #3). A value
     tagged with the perturbation budget it is provably robust within.
@@ -2047,6 +2075,23 @@ class TypeChecker:
                     return TyUnknown(hint=ty.base)
                 return TyConf(level=conf_map[ty.base],
                                inner=self._resolve_type(ty.args[0], scope))
+            # Stage 76 Inc 1 — energy / power budget preset budgets.
+            # F5 arity arm.
+            energy_map = {
+                "TinyEnergy":   "0.01",
+                "Energy":       "1.0",
+                "LargeEnergy":  "100.0",
+            }
+            if ty.base in energy_map:
+                if len(ty.args) != 1:
+                    self.errors.append(TypeError_(
+                        f"{ty.base}<T> takes 1 type argument, "
+                        f"got {len(ty.args)}",
+                        ty.span,
+                    ))
+                    return TyUnknown(hint=ty.base)
+                return TyEnergy(budget=energy_map[ty.base],
+                                inner=self._resolve_type(ty.args[0], scope))
             # Stage 73 Inc 1 — adversarial-robustness preset budgets.
             # F5 arity arm. Single-arg wrapper using preset eps
             # strings to keep parser surface simple.
@@ -3082,6 +3127,10 @@ class TypeChecker:
         # budget-exhaustion point (the value is no longer tracked as
         # robust within any bound; downstream code accepts that risk).
         "__widen_robustness",
+        # Stage 76 Inc 3 — energy opt-out. `__exhaust_energy(x)` strips
+        # a TyEnergy wrapper, marking an explicit budget exhaustion
+        # point.
+        "__exhaust_energy",
         # Stage 75 — Tier-S/A wrapper constructor builtins. Inverse of
         # the opt-out builtins: take a plain T (or already-wrapped T),
         # add the appropriate wrapper at the outermost layer. Each
@@ -3095,6 +3144,8 @@ class TypeChecker:
         "__wrap_quant",      # adds Q8<T> (8-bit, typical INT8)
         "__wrap_domain",     # adds InDist<T> (in-distribution default)
         "__wrap_robust",     # adds Robust<T> (eps "0.03", typical)
+        # Stage 76 — TyEnergy constructor.
+        "__wrap_energy",     # adds Energy<T> (budget "1.0", typical edge)
         "__strlen", "__strbyte", "__streq", "__strlit_to_arena",
         "__hash_i32",
         # Stage 55 Inc 1 — runtime string builtins. Operate on
@@ -4472,6 +4523,8 @@ class TypeChecker:
                     return _unwrap(t.inner)
                 if isinstance(t, TyRobust):
                     return _unwrap(t.inner)
+                if isinstance(t, TyEnergy):
+                    return _unwrap(t.inner)
                 return t
 
             l_is_logic = isinstance(l, TyLogic) or (
@@ -4624,13 +4677,42 @@ class TypeChecker:
             l_is_robust = l_robust_eps is not None
             r_is_robust = r_robust_eps is not None
 
+            # Stage 76 Inc 2 — detect TyEnergy. Joules SUM through
+            # arithmetic (energy budget accumulates additively).
+            def _find_energy_budget(t: Type) -> Optional[str]:
+                if isinstance(t, TyEnergy):
+                    return t.budget
+                if isinstance(t, TyDiff):
+                    return _find_energy_budget(t.inner)
+                if isinstance(t, TyLogic):
+                    return _find_energy_budget(t.inner)
+                if isinstance(t, TyConf):
+                    return _find_energy_budget(t.inner)
+                if isinstance(t, TyTaint):
+                    return _find_energy_budget(t.inner)
+                if isinstance(t, TyDP):
+                    return _find_energy_budget(t.inner)
+                if isinstance(t, TyQuant):
+                    return _find_energy_budget(t.inner)
+                if isinstance(t, TyDomain):
+                    return _find_energy_budget(t.inner)
+                if isinstance(t, TyRobust):
+                    return _find_energy_budget(t.inner)
+                return None
+
+            l_energy_budget = _find_energy_budget(l)
+            r_energy_budget = _find_energy_budget(r)
+            l_is_energy = l_energy_budget is not None
+            r_is_energy = r_energy_budget is not None
+
             if (l_is_logic or r_is_logic or l_is_diff or r_is_diff
                     or l_is_conf or r_is_conf
                     or l_is_taint or r_is_taint
                     or l_is_dp or r_is_dp
                     or l_is_quant or r_is_quant
                     or l_is_domain or r_is_domain
-                    or l_is_robust or r_is_robust):
+                    or l_is_robust or r_is_robust
+                    or l_is_energy or r_is_energy):
                 # Audit 28.8 B13 (trap AD002 / 24200): TyDiff binop
                 # with mixed inner types previously silently coerced
                 # the right operand to the left's inner type. The
@@ -4813,6 +4895,18 @@ class TypeChecker:
                         bits_list.append(r_quant_bits)
                     chosen_bits = min(bits_list)
                     wrapped = TyQuant(bits=chosen_bits, inner=wrapped)
+                # Stage 76 Inc 2 — TyEnergy innermost of the new
+                # wrappers (sibling of TyRobust). Budget SUMS.
+                if l_is_energy or r_is_energy:
+                    def _budget_to_float(s: str) -> float:
+                        try:
+                            return float(s)
+                        except ValueError:
+                            return 0.0
+                    total = (_budget_to_float(l_energy_budget or "0.0")
+                             + _budget_to_float(r_energy_budget or "0.0"))
+                    chosen_budget = repr(total)
+                    wrapped = TyEnergy(budget=chosen_budget, inner=wrapped)
                 # Stage 73 Inc 2 — TyRobust layered between TyQuant
                 # and TyDomain. Composition: eps SUMS (perturbations
                 # accumulate additively through addition).
@@ -5006,6 +5100,8 @@ class TypeChecker:
                     return TyDomain(status="in", inner=arg_tys[0])
                 if bn == "__wrap_robust" and len(arg_tys) == 1:
                     return TyRobust(eps="0.03", inner=arg_tys[0])
+                if bn == "__wrap_energy" and len(arg_tys) == 1:
+                    return TyEnergy(budget="1.0", inner=arg_tys[0])
                 # Stage 68 Inc 3 — confidence-tag opt-out builtin.
                 # `__lift_conf(x)` returns the inner type of a TyConf
                 # value, acknowledging the user is exiting the
@@ -5107,6 +5203,37 @@ class TypeChecker:
                             return TyLogic(inner=_strip_quant(t.inner))
                         return t
                     return _strip_quant(arg_ty)
+                # Stage 76 Inc 3 — energy opt-out builtin.
+                # `__exhaust_energy(x)` strips the TyEnergy wrapper.
+                if bn == "__exhaust_energy" and len(arg_tys) == 1:
+                    arg_ty = arg_tys[0]
+                    def _strip_energy(t):
+                        if isinstance(t, TyEnergy):
+                            return t.inner
+                        if isinstance(t, TyDomain):
+                            return TyDomain(status=t.status,
+                                            inner=_strip_energy(t.inner))
+                        if isinstance(t, TyTaint):
+                            return TyTaint(label=t.label,
+                                           inner=_strip_energy(t.inner))
+                        if isinstance(t, TyDP):
+                            return TyDP(epsilon=t.epsilon,
+                                        inner=_strip_energy(t.inner))
+                        if isinstance(t, TyConf):
+                            return TyConf(level=t.level,
+                                          inner=_strip_energy(t.inner))
+                        if isinstance(t, TyQuant):
+                            return TyQuant(bits=t.bits,
+                                           inner=_strip_energy(t.inner))
+                        if isinstance(t, TyRobust):
+                            return TyRobust(eps=t.eps,
+                                            inner=_strip_energy(t.inner))
+                        if isinstance(t, TyDiff):
+                            return TyDiff(inner=_strip_energy(t.inner))
+                        if isinstance(t, TyLogic):
+                            return TyLogic(inner=_strip_energy(t.inner))
+                        return t
+                    return _strip_energy(arg_ty)
                 # Stage 73 Inc 3 — robustness opt-out builtin.
                 # `__widen_robustness(x)` strips the TyRobust wrapper,
                 # acknowledging the user has accepted the perturbation
@@ -11089,6 +11216,13 @@ class TypeChecker:
             if cap is not None:
                 return f"{cap}<{self._fmt(t.inner)}>"
             return f"Robust(eps={t.eps})<{self._fmt(t.inner)}>"
+        if isinstance(t, TyEnergy):
+            cap_map = {"0.01": "TinyEnergy", "1.0": "Energy",
+                       "100.0": "LargeEnergy"}
+            cap = cap_map.get(t.budget)
+            if cap is not None:
+                return f"{cap}<{self._fmt(t.inner)}>"
+            return f"Energy(j={t.budget})<{self._fmt(t.inner)}>"
         if isinstance(t, TyResult):
             return (f"Result<{self._fmt(t.ok_ty)}, "
                     f"{self._fmt(t.err_ty)}>")

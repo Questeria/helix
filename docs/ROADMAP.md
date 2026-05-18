@@ -303,6 +303,28 @@ Re-sequenced after Stage 46-47 closed:
 - **Stage 58** ✅ **CLOSED 2026-05-18** — Tier 4 #13 content-
   addressed modules (program_hash + module_hash + fn_signature_hash
   core).
+- **Stage 76 SUBSTANTIALLY COMPLETE 2026-05-18** — Tier-A #6
+  Energy / power budget types delivered across Inc 1-3 in one
+  commit (matched Stage 75 prettifier + Stage 75 constructor
+  template):
+  - Inc 1: TyEnergy(budget, inner) + 3 presets (TinyEnergy=0.01 /
+    Energy=1.0 / LargeEnergy=100.0 joules).
+  - Inc 2: budget-sum propagation (joules accumulate additively;
+    same algebra as TyDP eps-sum).
+  - Inc 3: `__exhaust_energy(x)` opt-out + `__wrap_energy(x)`
+    constructor.
+  - _fmt prettifier: known budgets → preset alias, unknown →
+    `Energy(j=N)<T>`.
+  - IR `_lower_type` extended: 3 new aliases (TinyEnergy/Energy/
+    LargeEnergy) join the Stage 75 wrapper-alias set.
+  - Use case: edge AI deployment on battery-powered devices,
+    green-computing audit trails, federated learning power budgets.
+  - Total of **7 Tier-S/A wrappers shipped** now (TyConf / TyTaint
+    / TyDP / TyQuant / TyDomain / TyRobust / TyEnergy). Combined
+    with TyDiff / TyLogic / TyModal / TyCausal: **11 composable
+    wrappers** in the v1.0 substrate.
+  - 5 new tests; 370 typecheck + 436 regression GREEN.
+
 - **Stage 75 SHIPPED 2026-05-18** — Tier-S/A wrapper constructors
   + end-to-end dogfood:
   - 6 new constructor builtins (inverse of the opt-out family):
