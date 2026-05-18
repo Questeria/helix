@@ -5867,7 +5867,7 @@ def test_stage59_autodiff_cli_help_mentions_polish_flags():
         "--list-structs", "--list-structs-json",
         "--struct-fields", "--struct-fields-json",
         "--list-fn-attrs", "--list-fn-attrs-json",
-        "--list-fns-by-attr",
+        "--list-fns-by-attr", "--list-fns-by-attr-json",
         "--fn-callgraph", "--fn-callers",
         "--fn-callgraph-all", "--fn-callers-all",
         "--fn-reachable-from", "--fn-reachable-to",
@@ -7426,6 +7426,29 @@ def test_stage59_list_fn_attrs_json(tmp_path):
     assert proc.returncode == 0
     result = json.loads(proc.stdout)
     assert result == {"a": ["pure"], "b": ["trace"], "c": []}
+
+
+def test_stage59_list_fns_by_attr_json(tmp_path):
+    """Stage 59 follow-on / Tier 4 #13 polish: --list-fns-by-attr-json
+    emits {attr, fns} JSON sorted alphabetically."""
+    import json
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "a.hx"
+    src.write_text(
+        "@pure\nfn pure_add(x: i32, y: i32) -> i32 { x + y }\n"
+        "fn plain(x: i32) -> i32 { x }\n"
+        "@pure\n@trace\nfn both(x: i32) -> i32 { x + 1 }\n",
+        encoding="utf-8",
+    )
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--list-fns-by-attr-json", str(src), "pure"],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0
+    result = json.loads(proc.stdout)
+    assert result == {"attr": "pure", "fns": ["both", "pure_add"]}
 
 
 def test_stage59_list_fns_by_attr_basic(tmp_path):

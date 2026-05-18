@@ -103,6 +103,8 @@ Introspection (Stage 28.9 + Stage 58 + Stage 59 polish):
         Same as --list-fn-attrs but machine-readable JSON output.
     --list-fns-by-attr <file.hx> <attr>
         List fns carrying a specific attribute (e.g., 'pure', 'kernel').
+    --list-fns-by-attr-json <file.hx> <attr>
+        Same as --list-fns-by-attr but machine-readable JSON output.
     --check-program-hash <file.hx> <expected_hex>
         Assertion-style CI gate: exit 0 if matches, 1 if drift.
     --check-program-hash-from-file <file.hx> <expected_hash_file>
@@ -1430,6 +1432,27 @@ def _module_hash_cli(path: str, mod_name: str) -> int:
               file=sys.stderr)
         return 1
     print(module_hash(mod))
+    return 0
+
+
+def _list_fns_by_attr_json(path: str, attr: str) -> int:
+    """Stage 59 follow-on / Tier 4 #13 polish: --list-fns-by-attr in
+    machine-readable JSON form.
+
+    Output schema:
+      {"attr": "<attr>", "fns": ["fn1", "fn2", ...]}
+    Sorted alphabetically.
+    """
+    import json
+    from .ast_walker import iter_fn_decls
+    src = _read_source(path)
+    prog = _parse_or_exit(src, path)
+    matching = sorted(
+        f.name for f in iter_fn_decls(prog)
+        if attr in f.attrs
+    )
+    print(json.dumps({"attr": attr, "fns": matching},
+                      sort_keys=True, indent=2))
     return 0
 
 
@@ -3811,6 +3834,13 @@ def main():
                   file=sys.stderr)
             sys.exit(2)
         sys.exit(_list_fns_by_attr(args[0], args[1]))
+
+    if "--list-fns-by-attr-json" in flags:
+        if len(args) < 2:
+            print("usage: --list-fns-by-attr-json <file.hx> <attr>",
+                  file=sys.stderr)
+            sys.exit(2)
+        sys.exit(_list_fns_by_attr_json(args[0], args[1]))
 
     if "--check-program-hash" in flags:
         if len(args) < 2:
