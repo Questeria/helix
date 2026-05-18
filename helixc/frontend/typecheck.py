@@ -2729,6 +2729,8 @@ class TypeChecker:
         "__arena_push", "__arena_get", "__arena_set", "__arena_len",
         # Stage 63 Inc 1 — Tier 3 #11: read trace event counter.
         "__trace_event_count",
+        # Stage 66 Inc 5a — Tier 4 #16 explicit move builtin.
+        "__move",
         "__strlen", "__strbyte", "__streq", "__strlit_to_arena",
         "__hash_i32",
         # Stage 55 Inc 1 — runtime string builtins. Operate on
@@ -4333,6 +4335,35 @@ class TypeChecker:
                     if isinstance(arg_tys[0], TyDiff):
                         return arg_tys[0]
                     return TyDiff(inner=arg_tys[0])
+                # Stage 66 Inc 5a — explicit move builtin. `__move(x)`
+                # transitions x's Place to MOVED in the borrow tracker
+                # (when borrow-check is enabled for the current fn),
+                # then returns x's type so the call typechecks. The
+                # IR lowering identity-erases the call back to a plain
+                # read of x (lower_ast.py). After `__move(x)`, any
+                # subsequent `&x` or `&mut x` is rejected by the Inc 3
+                # &/&mut wiring (check_borrow_* refuse from MOVED).
+                # Skipped if x's type is a `@copy` struct (Inc 4).
+                if (bn == "__move" and len(arg_tys) == 1
+                        and isinstance(expr.args[0], A.Name)):
+                    if self._borrow_enforcement_enabled():
+                        if not self._is_copy_struct_ty(arg_tys[0]):
+                            operand_name = expr.args[0].name
+                            place = Place.local(operand_name)
+                            ok = scope.borrows.check_move(place)
+                            if not ok:
+                                cur_state = scope.borrows.status(place)
+                                self.errors.append(TypeError_(
+                                    f"cannot move {operand_name!r} because "
+                                    f"it is currently {cur_state} "
+                                    f"(Stage 66 borrow checker)",
+                                    expr.span,
+                                    hint="all prior &/&mut borrows must "
+                                         "be released before move; a value "
+                                         "already MOVED cannot be moved "
+                                         "again",
+                                ))
+                    return arg_tys[0]
                 # Stage 36 Increment 1: provenance-typed primitives.
                 # prove(value: T, source: i32) -> Logic<T> — wraps a
                 # bare value with a provenance tag (an i32 identifier

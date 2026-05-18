@@ -1872,6 +1872,14 @@ class Lowerer:
                     and expr.callee.name == "detach"
                     and len(expr.args) == 1):
                 return self._lower_expr(expr.args[0])
+            # Stage 66 Inc 5a — explicit move builtin. `__move(x)` is
+            # a typecheck-only marker that transitions x's Place to
+            # MOVED in the borrow tracker (typecheck.py). At IR /
+            # codegen level it is identity — just lower x.
+            if (isinstance(expr.callee, A.Name)
+                    and expr.callee.name == "__move"
+                    and len(expr.args) == 1):
+                return self._lower_expr(expr.args[0])
             # Stage 36 Increment 1: provenance-typed primitives.
             # prove(value, source) lowers to value (Phase-0: the Logic<T>
             # wrapper has zero runtime overhead; provenance lives purely

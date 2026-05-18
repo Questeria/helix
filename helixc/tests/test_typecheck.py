@@ -4790,6 +4790,85 @@ def test_stage66_inc3_shared_then_mutable_rejected_with_opt_in():
     assert len(borrow_errs) >= 1
 
 
+def test_stage66_inc5a_move_then_shared_borrow_rejected():
+    """Stage 66 Inc 5a — `__move(x)` transitions x to MOVED, and a
+    subsequent `&x` is rejected by the Inc 3 wiring (which calls
+    `check_borrow_shared`, which refuses from MOVED). Closes the
+    explicit-move loop end-to-end at typecheck."""
+    from helixc.frontend.typecheck import TypeChecker
+    from helixc.frontend.parser import parse
+
+    src = """
+    @borrow_check
+    fn user() -> i32 {
+        let mut x: i32 = 1;
+        let _ = __move(x);
+        let _b = &x;
+        0
+    }
+    """
+    prog = parse(src, include_stdlib=False)
+    tc = TypeChecker(prog)
+    errors = tc.check()
+    borrow_errs = [str(e) for e in errors if "Stage 66" in str(e)]
+    # We expect a "cannot borrow ... shared because it is currently
+    # moved" diagnostic from the &x read after the __move.
+    assert any("moved" in e.lower() for e in borrow_errs), (
+        f"expected use-after-move diagnostic; got: {borrow_errs}")
+
+
+def test_stage66_inc5a_double_move_rejected():
+    """Stage 66 Inc 5a — `__move(x)` then `__move(x)` rejected.
+    The second move sees MOVED state and emits a Stage 66 diagnostic
+    pointing at the second call's span."""
+    from helixc.frontend.typecheck import TypeChecker
+    from helixc.frontend.parser import parse
+
+    src = """
+    @borrow_check
+    fn user() -> i32 {
+        let mut x: i32 = 1;
+        let _a = __move(x);
+        let _b = __move(x);
+        0
+    }
+    """
+    prog = parse(src, include_stdlib=False)
+    tc = TypeChecker(prog)
+    errors = tc.check()
+    borrow_errs = [str(e) for e in errors
+                   if "Stage 66" in str(e) and "cannot move" in str(e)]
+    assert len(borrow_errs) >= 1, (
+        f"expected Stage 66 cannot-move diagnostic on second __move; "
+        f"got: {[str(e) for e in errors]}")
+
+
+def test_stage66_inc5a_move_default_off_preserves_behaviour():
+    """Stage 66 Inc 5a — without the per-fn `@borrow_check` opt-in
+    (and global flag off), `__move(x)` is still recognized and
+    typechecks as identity (returns x's type), but the move semantics
+    do NOT fire — so a subsequent `&x` reads the same place freely."""
+    from helixc.frontend.typecheck import TypeChecker
+    from helixc.frontend.parser import parse
+
+    src = """
+    fn user() -> i32 {
+        let mut x: i32 = 1;
+        let _ = __move(x);
+        let _b = &x;
+        0
+    }
+    """
+    prog = parse(src, include_stdlib=False)
+    tc = TypeChecker(prog)
+    errors = tc.check()
+    # No Stage 66 diagnostic — borrow-check is opt-in.
+    borrow_errs = [str(e) for e in errors if "Stage 66" in str(e)]
+    assert len(borrow_errs) == 0, (
+        f"expected NO Stage 66 diagnostic without opt-in; got: "
+        f"{borrow_errs}")
+
+
 def test_stage66_inc4_per_fn_borrow_check_attr_enables_only_for_that_fn():
     """Stage 66 Inc 4 — `@borrow_check` on a single fn turns the
     enforcement gate on for *that fn only*, leaving sibling fns
