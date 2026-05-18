@@ -915,6 +915,24 @@ class Place:
         return cls(parts=("index", parent.parts, idx))
 
 
+def _root_local_name_of_place(place: Place) -> Optional[str]:
+    """Stage 95 (Stage 93 audit HIGH-#4 fix helper) — walk a Place's
+    nested parts tuple to find the root local's name. Returns None
+    if the place doesn't bottom out in a local (defensive — Phase-0
+    construction always does, but a future variant might not)."""
+    parts = place.parts
+    while isinstance(parts, tuple) and len(parts) >= 2:
+        tag = parts[0]
+        if tag == "local":
+            return parts[1] if len(parts) >= 2 else None
+        elif tag in ("field", "index"):
+            # parts[1] is the parent's `parts` tuple
+            parts = parts[1]
+        else:
+            return None
+    return None
+
+
 # Stage 66 Inc 1 — borrow state tracked per Place. Encoded so
 # enforcement can be added cleanly in Inc 2-3.
 #   Shared(count): N outstanding `&` borrows (any number allowed)
@@ -1073,6 +1091,71 @@ class Scope:
     def borrows_status(self, name: str) -> str:
         ds = self._find_defining_scope(name)
         return ds.borrows.status(Place.local(name))
+
+    # Stage 95 (Stage 93 audit HIGH-#4 fix) — chain-walk snapshot
+    # + restore helpers shared across A.If, A.Match, and A.For/While/
+    # Loop reconciliation sites. Pre-Stage-95, A.If used a local
+    # snapshot of `scope.borrows.state` only (immediate scope) and
+    # A.Match had NO reconciliation at all. Both meant that chain-
+    # routed mutations to outer-scope places (from `__move(s)` or
+    # implicit-move inside an arm) silently leaked across arms
+    # without divergence diagnostic — same silent-miscompile class
+    # Stage 92 just fixed for loops. Stage 95 fixes the gap.
+    def borrows_snapshot_chain(self) -> dict:
+        """Return a flat dict {place: state} capturing the borrow
+        state of every place visible from this scope via the
+        defining-scope chain. The inner scope's entry shadows any
+        same-place entry in outer scopes (matches name-shadowing
+        semantics)."""
+        states = {}
+        cur: Optional["Scope"] = self
+        while cur is not None:
+            for place, state in cur.borrows.state.items():
+                states.setdefault(place, state)
+            cur = cur.parent
+        return states
+
+    def borrows_snapshot_counts_chain(self) -> dict:
+        """Companion to `borrows_snapshot_chain`: capture shared_counts
+        per place across the chain. Inner shadow wins."""
+        counts = {}
+        cur: Optional["Scope"] = self
+        while cur is not None:
+            for place, c in cur.borrows.shared_counts.items():
+                counts.setdefault(place, c)
+            cur = cur.parent
+        return counts
+
+    def borrows_apply_chain(
+        self, state_snapshot: dict, counts_snapshot: dict
+    ) -> None:
+        """Restore each place to its snapshot state, writing to the
+        scope WHERE THAT PLACE WAS ORIGINALLY DEFINED (via
+        _find_defining_scope on the place's root name). Used by
+        A.If reconciliation to restore pre-arm state between
+        sibling arms."""
+        # Build name → defining scope cache for places we'll write.
+        for place, state in state_snapshot.items():
+            # Place.parts[0] is the variant tag ('local', 'field',
+            # 'index'); for local, parts[1] is the name. For
+            # field/index, we route to the root local's defining
+            # scope by walking up the parent chain in the place's
+            # tuple representation.
+            root_name = _root_local_name_of_place(place)
+            if root_name is None:
+                # Fallback: write to current scope's borrows.
+                self.borrows.state[place] = state
+                continue
+            ds = self._find_defining_scope(root_name)
+            ds.borrows.state[place] = state
+        # Counts mirror state.
+        for place, c in counts_snapshot.items():
+            root_name = _root_local_name_of_place(place)
+            if root_name is None:
+                self.borrows.shared_counts[place] = c
+                continue
+            ds = self._find_defining_scope(root_name)
+            ds.borrows.shared_counts[place] = c
 
 
 @dataclass
@@ -7897,26 +7980,34 @@ class TypeChecker:
             # pre-if, restore between branches, union arm-results
             # via the multi-kind drop semantics (HIGH-C fix).
             modal_origin_pre_if = dict(self._modal_origin_provenance)
-            # Stage 66 Inc 5c — snapshot borrow state before checking
-            # arms so we can reconcile across the join point. Used
-            # only when borrow enforcement is active for the fn.
-            borrows_pre_if_state = dict(scope.borrows.state)
-            borrows_pre_if_counts = dict(scope.borrows.shared_counts)
+            # Stage 66 Inc 5c + Stage 95 (Stage 93 audit HIGH-#4 fix)
+            # — snapshot borrow state across the scope CHAIN, not
+            # just scope.borrows.state. Pre-Stage-95, this snapshot
+            # only captured the immediate scope; chain-routed
+            # mutations to outer-scope places (from __move(s) or
+            # implicit-move in an arm) leaked across arms with no
+            # divergence diagnostic. Same silent-miscompile class
+            # Stage 92 fixed for loops; Stage 95 fixes for if/match.
+            borrows_pre_if_state = scope.borrows_snapshot_chain()
+            borrows_pre_if_counts = scope.borrows_snapshot_counts_chain()
             branch_results: list[dict[str, str]] = []
             branch_assigns: list[set[str]] = []
             branch_borrow_states: list[dict] = []
             t = self._check_block(expr.then, scope)
             branch_results.append(dict(self._modal_origin_provenance))
             branch_assigns.append(set(self._last_modal_assigns_popped))
-            branch_borrow_states.append(dict(scope.borrows.state))
+            # Stage 95 — capture chain-walk of post-then state.
+            branch_borrow_states.append(scope.borrows_snapshot_chain())
             branch_tys = [t]
             if expr.else_ is not None:
                 # Restore pre-if state before else.
                 self._modal_origin_provenance = dict(
                     modal_origin_pre_if)
-                # Stage 66 Inc 5c — restore borrow state too.
-                scope.borrows.state = dict(borrows_pre_if_state)
-                scope.borrows.shared_counts = dict(borrows_pre_if_counts)
+                # Stage 66 Inc 5c + Stage 95 — restore borrow state
+                # across the chain (each place routed to its
+                # defining scope), not just current scope.
+                scope.borrows_apply_chain(
+                    borrows_pre_if_state, borrows_pre_if_counts)
                 if isinstance(expr.else_, A.Block):
                     e = self._check_block(expr.else_, scope)
                 else:
@@ -7928,7 +8019,7 @@ class TypeChecker:
                     e = self._check_expr_in_block_scope(expr.else_, scope)
                 branch_results.append(dict(self._modal_origin_provenance))
                 branch_assigns.append(set(self._last_modal_assigns_popped))
-                branch_borrow_states.append(dict(scope.borrows.state))
+                branch_borrow_states.append(scope.borrows_snapshot_chain())
                 branch_tys.append(e)
                 if not self._compatible(t, e):
                     self.errors.append(TypeError_(
@@ -8058,16 +8149,18 @@ class TypeChecker:
                                  "use `__move(x)` in the no-move "
                                  "arm explicitly to align",
                         ))
-                scope.borrows.state = unioned_borrows
-                # Reset shared counts conservatively to the pre-if
-                # snapshot for places that ended up non-SHARED, else
-                # collapse to 1 (we can't reconstruct counts soundly).
+                # Stage 95 — apply unioned state across the scope
+                # chain (each place writes to its defining scope),
+                # not just current scope.borrows.state. Pre-Stage-95,
+                # this overwrote scope.borrows.state for outer-defined
+                # places — silently losing the post-if joined state
+                # at the actual defining scope.
                 new_counts: dict = {}
                 for place, st in unioned_borrows.items():
                     if st == BORROW_SHARED:
                         new_counts[place] = max(
                             borrows_pre_if_counts.get(place, 0), 1)
-                scope.borrows.shared_counts = new_counts
+                scope.borrows_apply_chain(unioned_borrows, new_counts)
             return self._join_branch_types(branch_tys, expr.span)
         if isinstance(expr, A.Match):
             scrut_ty = self._check_expr(expr.scrutinee, scope)
@@ -8089,8 +8182,19 @@ class TypeChecker:
             # into the post-match modal-origin state (any taint in
             # any arm propagates).
             modal_origin_pre_match = dict(self._modal_origin_provenance)
+            # Stage 95 (Stage 93 audit HIGH-#4 fix) — snapshot
+            # borrow state across the scope CHAIN before any arm
+            # runs. Pre-Stage-95, A.Match had NO borrow-state
+            # reconciliation at all: a `__move(s)` inside one arm
+            # leaked across siblings + post-match without any
+            # divergence diagnostic. Same silent-miscompile class
+            # Stage 92 fixed for loops + Stage 95 just fixed for
+            # A.If (above).
+            borrows_pre_match_state = scope.borrows_snapshot_chain()
+            borrows_pre_match_counts = scope.borrows_snapshot_counts_chain()
             modal_origin_arm_results: list[dict[str, str]] = []
             arm_assigns: list[set[str]] = []
+            branch_borrow_states_match: list[dict] = []
             for arm in expr.arms:
                 inner = Scope(parent=scope)
                 self._bind_pattern(arm.pattern, scrut_ty, inner)
@@ -8101,6 +8205,14 @@ class TypeChecker:
                 # snapshot (not the previous arm's mutated dict).
                 self._modal_origin_provenance = dict(
                     modal_origin_pre_match)
+                # Stage 95 — restore borrow state before each arm
+                # via the chain helper (each place routed to its
+                # defining scope). Without this, arm N sees arm
+                # N-1's chain-routed mutations.
+                if self._borrow_enforcement_enabled():
+                    scope.borrows_apply_chain(
+                        borrows_pre_match_state,
+                        borrows_pre_match_counts)
                 # Stage 52 closure gate-4 HIGH-1 fix: propagate
                 # scrutinee modal-origin taint to the pattern's
                 # binding name. Pre-fix, `let r = from_uncertain(u);
@@ -8173,6 +8285,10 @@ class TypeChecker:
                 # reassigned, whether or not the Assign installed
                 # modal kind). Symmetric with the A.If fix.
                 arm_assigns.append(set(self._last_modal_assigns_popped))
+                # Stage 95 — capture post-arm borrow state via chain.
+                if self._borrow_enforcement_enabled():
+                    branch_borrow_states_match.append(
+                        scope.borrows_snapshot_chain())
             # Stage 52 Inc 3 — UNION arm results. For each name,
             # if ANY arm installed taint of kind K, the post-match
             # value is conservatively tainted with K. If two arms
@@ -8248,6 +8364,56 @@ class TypeChecker:
                 # {U, K}" diagnostic. For now the safe behaviour
                 # is to drop the static claim.
             self._modal_origin_provenance = unioned_modal_origin
+            # Stage 95 (Stage 93 audit HIGH-#4 fix) — borrow-state
+            # reconciliation across match arms. Mirror of A.If JOIN
+            # at line ~8110: most-restrictive wins (MOVED > MUTABLE
+            # > SHARED > FREE); divergence diagnostic when MOVED in
+            # some-but-not-all arms; apply unioned state via chain.
+            if self._borrow_enforcement_enabled() and branch_borrow_states_match:
+                _rank = {
+                    BORROW_FREE: 0,
+                    BORROW_SHARED: 1,
+                    BORROW_MUTABLE: 2,
+                    BORROW_MOVED: 3,
+                }
+                all_places: set = set()
+                for bs in branch_borrow_states_match:
+                    all_places.update(bs.keys())
+                all_places.update(borrows_pre_match_state.keys())
+                unioned_borrows: dict = {}
+                for place in all_places:
+                    states_in_arms: list[str] = []
+                    for bs in branch_borrow_states_match:
+                        states_in_arms.append(
+                            bs.get(place,
+                                   borrows_pre_match_state.get(
+                                       place, BORROW_FREE)))
+                    join_state = max(
+                        states_in_arms,
+                        key=lambda s: _rank.get(s, 0))
+                    unioned_borrows[place] = join_state
+                    if (join_state == BORROW_MOVED
+                            and not all(s == BORROW_MOVED
+                                        for s in states_in_arms)):
+                        self.errors.append(TypeError_(
+                            f"borrow state of {place!r} diverges "
+                            f"across match arms: states = "
+                            f"{states_in_arms} (Stage 95 / Stage 93 "
+                            f"audit HIGH-#4 fix — pre-Stage-95, "
+                            f"match arms had no borrow-state "
+                            f"reconciliation so move-in-one-arm "
+                            f"silently passed)",
+                            expr.span,
+                            hint="move in every arm or none; use "
+                                 "`__move(x)` in the no-move arms "
+                                 "to align explicitly",
+                        ))
+                new_counts: dict = {}
+                for place, st in unioned_borrows.items():
+                    if st == BORROW_SHARED:
+                        new_counts[place] = max(
+                            borrows_pre_match_counts.get(place, 0), 1)
+                scope.borrows_apply_chain(unioned_borrows, new_counts)
             self._check_match_exhaustive(expr, scrut_ty)
             if not arm_tys:
                 return TyUnit()

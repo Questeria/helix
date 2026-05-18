@@ -4974,6 +4974,92 @@ def test_stage83_wrap_attr_constructor():
     assert len(type_errs) == 0, type_errs
 
 
+def test_stage95_nested_if_outer_scope_move_now_detected():
+    """Stage 95 (Stage 93 audit HIGH-#4 fix) — `{ if cond {
+    __move(s) } }` where s is in fn body. Pre-Stage-95, A.If
+    snapshot was only `scope.borrows.state` (immediate scope),
+    so chain-routed mutations to outer-scope places leaked across
+    arms without divergence diagnostic. Post-Stage-95, the chain-
+    walk snapshot detects it."""
+    from helixc.frontend.typecheck import TypeChecker
+    from helixc.frontend.parser import parse
+
+    src = """
+    @borrow_check
+    fn user(cond: bool) -> i32 {
+        let mut s: i32 = 5;
+        if cond {
+            let _ = __move(s);
+            0
+        } else {
+            0
+        };
+        0
+    }
+    """
+    prog = parse(src, include_stdlib=False)
+    tc = TypeChecker(prog)
+    errors = tc.check()
+    diverge_errs = [str(e) for e in errors
+                    if "Stage 66" in str(e)
+                    and "diverges across if/else arms" in str(e)]
+    assert len(diverge_errs) >= 1, errors
+
+
+def test_stage95_match_arm_move_in_one_arm_now_diagnosed():
+    """Stage 95 — A.Match had NO borrow-state reconciliation pre-
+    Stage-95. A `__move(s)` inside one match arm silently leaked
+    across arms + post-match. Post-Stage-95, the divergence
+    diagnostic fires."""
+    from helixc.frontend.typecheck import TypeChecker
+    from helixc.frontend.parser import parse
+
+    src = """
+    @borrow_check
+    fn user(n: i32) -> i32 {
+        let mut s: i32 = 5;
+        match n {
+            0 => __move(s),
+            _ => 0,
+        };
+        0
+    }
+    """
+    prog = parse(src, include_stdlib=False)
+    tc = TypeChecker(prog)
+    errors = tc.check()
+    diverge_errs = [str(e) for e in errors
+                    if "Stage 95" in str(e)
+                    and "diverges across match arms" in str(e)]
+    assert len(diverge_errs) >= 1, errors
+
+
+def test_stage95_match_arms_uniformly_moved_no_divergence():
+    """Stage 95 — when EVERY match arm moves the same place
+    uniformly, no divergence diagnostic fires."""
+    from helixc.frontend.typecheck import TypeChecker
+    from helixc.frontend.parser import parse
+
+    src = """
+    @borrow_check
+    fn user(n: i32) -> i32 {
+        let mut s: i32 = 5;
+        match n {
+            0 => __move(s),
+            _ => __move(s),
+        };
+        0
+    }
+    """
+    prog = parse(src, include_stdlib=False)
+    tc = TypeChecker(prog)
+    errors = tc.check()
+    diverge_errs = [str(e) for e in errors
+                    if "Stage 95" in str(e)
+                    and "diverges" in str(e)]
+    assert len(diverge_errs) == 0, diverge_errs
+
+
 def test_stage94_known_attrs_overload_dispatch_unwind_trace_accepted():
     """Stage 94 (Stage 93 audit HIGH-#3 fix) — `@overload`,
     `@dispatch`, `@unwind`, `@trace` are real attributes consumed

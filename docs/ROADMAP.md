@@ -303,6 +303,31 @@ Re-sequenced after Stage 46-47 closed:
 - **Stage 58** ✅ **CLOSED 2026-05-18** — Tier 4 #13 content-
   addressed modules (program_hash + module_hash + fn_signature_hash
   core).
+- **Stage 95 SHIPPED 2026-05-18** — HIGH-#4 fix: scope-chain
+  borrow reconciliation for A.If + A.Match arms (Stage 93 audit
+  finding):
+  - Lifted Stage 92's `_snapshot_chain` closure to Scope methods
+    `borrows_snapshot_chain` + `borrows_snapshot_counts_chain` +
+    `borrows_apply_chain`. New module-level helper
+    `_root_local_name_of_place` walks Place's nested parts tuple
+    to find the root local for chain routing.
+  - Wired chain-snapshot into A.If reconciliation (replacing the
+    immediate-scope `dict(scope.borrows.state)` snapshot which
+    missed outer-defined places). Restore-between-arms now uses
+    `borrows_apply_chain` to route each place back to its
+    defining scope. Final JOIN write also uses chain routing.
+  - **Added A.Match borrow-state reconciliation** (was MISSING
+    entirely pre-Stage-95). Mirrors A.If's pattern: snapshot
+    pre-match chain, restore between arms, snapshot post-arm,
+    JOIN with most-restrictive-wins, divergence diagnostic when
+    MOVED in some-but-not-all arms.
+  - **Closes silent-miscompile class** that affected:
+    - `{ if true { __move(s) } }` where s is in outer fn scope
+    - `match c { 0 => __move(s), _ => 0 }` (was 100% silent
+      pre-Stage-95 — match had NO reconciliation at all)
+  - 3 new tests; 415 typecheck + 481 broader regression + 33
+    match-codegen GREEN.
+
 - **Stage 93 audit BATCH 2-5 DOWNGRADES Stages 68-92 closure markers** —
   ran 3 combined-batch audits (silent-failure / type-design /
   code-review) in parallel against the 21 burst stages. Findings:
