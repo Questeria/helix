@@ -4881,6 +4881,99 @@ def test_stage77_plain_fn_not_registered_as_property():
     assert "returns_bool" not in tc._property_fn_names
 
 
+def test_stage83_inc1_attribution_type_recognition():
+    from helixc.frontend.typecheck import TypeChecker
+    from helixc.frontend.parser import parse
+
+    src = """
+    fn user(a: FromVerified<f32>, b: FromGenerated<f32>) -> f32 { 0.0 }
+    fn main() -> i32 { 0 }
+    """
+    prog = parse(src, include_stdlib=False)
+    tc = TypeChecker(prog)
+    errors = tc.check()
+    arity_errs = [str(e) for e in errors
+                  if "takes 1 type argument" in str(e)
+                  and "From" in str(e)]
+    assert len(arity_errs) == 0, arity_errs
+
+
+def test_stage83_inc1_three_attribution_aliases_resolve():
+    from helixc.frontend.typecheck import TypeChecker
+    from helixc.frontend.parser import parse
+
+    src = """
+    fn a(x: FromVerified<i32>) -> i32 { 0 }
+    fn b(x: FromGenerated<i32>) -> i32 { 0 }
+    fn c(x: FromUnknown<i32>) -> i32 { 0 }
+    fn main() -> i32 { 0 }
+    """
+    prog = parse(src, include_stdlib=False)
+    tc = TypeChecker(prog)
+    errors = tc.check()
+    name_errs = [str(e) for e in errors
+                 if "From" in str(e)
+                 and ("takes 1 type argument" in str(e)
+                      or "unbound" in str(e))]
+    assert len(name_errs) == 0, name_errs
+
+
+def test_stage83_inc2_unknown_dominates_verified_in_binop():
+    """Stage 83 Inc 2 — `FromVerified + FromUnknown` yields
+    FromUnknown (untrustworthy-wins)."""
+    from helixc.frontend.typecheck import TypeChecker
+    from helixc.frontend.parser import parse
+
+    src = """
+    fn user(a: FromVerified<f32>, b: FromUnknown<f32>) -> FromUnknown<f32> {
+        a + b
+    }
+    fn main() -> i32 { 0 }
+    """
+    prog = parse(src, include_stdlib=False)
+    tc = TypeChecker(prog)
+    errors = tc.check()
+    type_errs = [str(e) for e in errors
+                 if "return" in str(e).lower() or "From" in str(e)]
+    assert len(type_errs) == 0, type_errs
+
+
+def test_stage83_inc3_attribute_verified_strips_outer():
+    from helixc.frontend.typecheck import TypeChecker
+    from helixc.frontend.parser import parse
+
+    src = """
+    fn user(x: FromUnknown<f32>) -> f32 {
+        __attribute_verified(x)
+    }
+    fn main() -> i32 { 0 }
+    """
+    prog = parse(src, include_stdlib=False)
+    tc = TypeChecker(prog)
+    errors = tc.check()
+    type_errs = [str(e) for e in errors
+                 if "return" in str(e).lower() or "From" in str(e)]
+    assert len(type_errs) == 0, type_errs
+
+
+def test_stage83_wrap_attr_constructor():
+    from helixc.frontend.typecheck import TypeChecker
+    from helixc.frontend.parser import parse
+
+    src = """
+    fn user(x: f32) -> FromUnknown<f32> {
+        __wrap_attr(x)
+    }
+    fn main() -> i32 { 0 }
+    """
+    prog = parse(src, include_stdlib=False)
+    tc = TypeChecker(prog)
+    errors = tc.check()
+    type_errs = [str(e) for e in errors
+                 if "return" in str(e).lower() or "From" in str(e)]
+    assert len(type_errs) == 0, type_errs
+
+
 def test_stage82_safety_stdlib_all_five_property_fns_registered():
     """Stage 82 — safety.hx now ships 5 @property fns (2 from
     Stage 78 + 3 new for Stages 79-81 wrappers). All should

@@ -303,6 +303,28 @@ Re-sequenced after Stage 46-47 closed:
 - **Stage 58** ✅ **CLOSED 2026-05-18** — Tier 4 #13 content-
   addressed modules (program_hash + module_hash + fn_signature_hash
   core).
+- **Stage 83 SUBSTANTIALLY COMPLETE 2026-05-18** — Model/data
+  attribution types for AGI accountability:
+  - Inc 1: TyAttribution(source, inner) + 3 presets
+    (FromVerified="verified" / FromGenerated="generated" /
+    FromUnknown="unknown").
+  - Inc 2: untrustworthy-wins propagation (rank verified=0 <
+    generated=1 < unknown=2). Once provenance is lost in any
+    operand, the result inherits "unknown".
+  - Inc 3: `__attribute_verified(x)` opt-out (audit-grep) +
+    `__wrap_attr(x)` constructor (default "unknown" — most
+    conservative).
+  - Use case: EU AI Act Article 50 compliance (AI-generated
+    content must be labeled), medical AI lineage tracking,
+    copyright attribution for generative outputs, scientific
+    AI dataset provenance.
+  - 5 new tests; 396 typecheck + 399 regression GREEN.
+
+  **11 wrapper milestone**: TyAttribution brings the new
+  Tier-S/A wrapper count to 11. Combined with TyDiff / TyLogic
+  / TyModal / TyCausal: **15 composable type-system wrappers**
+  in the v1.0 substrate.
+
 - **Stage 82 SHIPPED 2026-05-18** — Extend `helixc/stdlib/
   safety.hx` with helpers + property fns for the 3 newest
   wrappers (Stages 79-81):

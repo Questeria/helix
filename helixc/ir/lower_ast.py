@@ -888,6 +888,8 @@ class Lowerer:
                 "Actual", "Counterfactual", "Intervention",
                 # TyDeadline (Stage 81)
                 "TightDeadline", "Deadline", "LooseDeadline",
+                # TyAttribution (Stage 83)
+                "FromVerified", "FromGenerated", "FromUnknown",
             }
             if (ty.base in _STAGE75_WRAPPER_ALIASES
                     and len(ty.args) == 1):
@@ -1961,7 +1963,12 @@ class Lowerer:
                         "__wrap_conf", "__wrap_taint", "__wrap_dp",
                         "__wrap_quant", "__wrap_domain", "__wrap_robust",
                         "__wrap_energy", "__wrap_enclave",
-                        "__wrap_cfact", "__wrap_deadline")
+                        "__wrap_cfact", "__wrap_deadline", "__wrap_attr")
+                    and len(expr.args) == 1):
+                return self._lower_expr(expr.args[0])
+            # Stage 83 Inc 3 — attribution opt-out builtin.
+            if (isinstance(expr.callee, A.Name)
+                    and expr.callee.name == "__attribute_verified"
                     and len(expr.args) == 1):
                 return self._lower_expr(expr.args[0])
             # Stage 81 Inc 3 — deadline opt-out builtin.

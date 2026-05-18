@@ -329,6 +329,39 @@ class TyConf(Type):
 
 
 @dataclass(frozen=True)
+class TyAttribution(Type):
+    """Stage 83 — model/data attribution type. A value tagged with
+    the model + dataset combination that produced it. Critical for
+    AGI accountability and regulatory compliance (EU AI Act,
+    medical AI provenance, copyright attribution for generated
+    content).
+
+    Phase-0 representation: source as string label.
+    3 preset aliases:
+    - `FromUnknown<T>`    → source "unknown" (provenance lost /
+                              not tracked — treat as untrusted)
+    - `FromVerified<T>`   → source "verified" (provenance verified
+                              against a known model+dataset)
+    - `FromGenerated<T>`  → source "generated" (output of a
+                              generative AI model — must be
+                              labeled as AI-generated per
+                              regulatory requirements)
+
+    Compositional rule: untrustworthy-wins via rank verified=0 <
+    generated=1 < unknown=2. Once provenance is unknown anywhere
+    in the computation chain, the result inherits "unknown".
+
+    Use case: regulatory compliance (EU AI Act Article 50 requires
+    AI-generated content be labeled), medical AI lineage tracking,
+    copyright attribution for generative outputs.
+
+    Inc 1 ships scaffolding; Inc 2 propagation; Inc 3
+    `__attribute_verified(x)` opt-out builtin."""
+    source: str      # "unknown", "verified", "generated"
+    inner: Type
+
+
+@dataclass(frozen=True)
 class TyDeadline(Type):
     """Stage 81 — deadline / real-time type (HELIX_V1_FINAL_FEATURES
     Part 2.4 — the obsolete Stage 34 label, properly revived as a
@@ -2181,6 +2214,23 @@ class TypeChecker:
                     return TyUnknown(hint=ty.base)
                 return TyConf(level=conf_map[ty.base],
                                inner=self._resolve_type(ty.args[0], scope))
+            # Stage 83 Inc 1 — model/data attribution sources.
+            # F5 arity arm.
+            attr_map = {
+                "FromVerified":  "verified",
+                "FromGenerated": "generated",
+                "FromUnknown":   "unknown",
+            }
+            if ty.base in attr_map:
+                if len(ty.args) != 1:
+                    self.errors.append(TypeError_(
+                        f"{ty.base}<T> takes 1 type argument, "
+                        f"got {len(ty.args)}",
+                        ty.span,
+                    ))
+                    return TyUnknown(hint=ty.base)
+                return TyAttribution(source=attr_map[ty.base],
+                                     inner=self._resolve_type(ty.args[0], scope))
             # Stage 81 Inc 1 — real-time deadline preset budgets.
             # F5 arity arm. Stored as repr-format floats so the sum
             # propagation in Inc 2 produces comparable strings.
@@ -3302,6 +3352,10 @@ class TypeChecker:
         # strips a TyDeadline wrapper, acknowledging the user has
         # blown the WCET budget (audit-grep).
         "__miss_deadline",
+        # Stage 83 Inc 3 — attribution opt-out. `__attribute_verified(x)`
+        # strips a TyAttribution wrapper, asserting the user has
+        # verified the value's provenance (audit-grep).
+        "__attribute_verified",
         # Stage 75 — Tier-S/A wrapper constructor builtins. Inverse of
         # the opt-out builtins: take a plain T (or already-wrapped T),
         # add the appropriate wrapper at the outermost layer. Each
@@ -3323,6 +3377,8 @@ class TypeChecker:
         "__wrap_cfact",      # adds Counterfactual<T> by default
         # Stage 81 — TyDeadline constructor.
         "__wrap_deadline",   # adds Deadline<T> (1ms default)
+        # Stage 83 — TyAttribution constructor.
+        "__wrap_attr",       # adds FromUnknown<T> (most-conservative default)
         "__strlen", "__strbyte", "__streq", "__strlit_to_arena",
         "__hash_i32",
         # Stage 55 Inc 1 — runtime string builtins. Operate on
@@ -4721,6 +4777,8 @@ class TypeChecker:
                     return _unwrap(t.inner)
                 if isinstance(t, TyDeadline):
                     return _unwrap(t.inner)
+                if isinstance(t, TyAttribution):
+                    return _unwrap(t.inner)
                 return t
 
             l_is_logic = isinstance(l, TyLogic) or (
@@ -4999,6 +5057,42 @@ class TypeChecker:
             l_is_deadline = l_deadline_us is not None
             r_is_deadline = r_deadline_us is not None
 
+            # Stage 83 Inc 2 — TyAttribution. Untrustworthy-wins
+            # via rank verified=0 < generated=1 < unknown=2.
+            def _find_attr_source(t: Type) -> Optional[str]:
+                if isinstance(t, TyAttribution):
+                    return t.source
+                if isinstance(t, TyDiff):
+                    return _find_attr_source(t.inner)
+                if isinstance(t, TyLogic):
+                    return _find_attr_source(t.inner)
+                if isinstance(t, TyConf):
+                    return _find_attr_source(t.inner)
+                if isinstance(t, TyTaint):
+                    return _find_attr_source(t.inner)
+                if isinstance(t, TyDP):
+                    return _find_attr_source(t.inner)
+                if isinstance(t, TyQuant):
+                    return _find_attr_source(t.inner)
+                if isinstance(t, TyDomain):
+                    return _find_attr_source(t.inner)
+                if isinstance(t, TyRobust):
+                    return _find_attr_source(t.inner)
+                if isinstance(t, TyEnergy):
+                    return _find_attr_source(t.inner)
+                if isinstance(t, TyDeadline):
+                    return _find_attr_source(t.inner)
+                if isinstance(t, TyEnclave):
+                    return _find_attr_source(t.inner)
+                if isinstance(t, TyCounterfactual):
+                    return _find_attr_source(t.inner)
+                return None
+
+            l_attr_source = _find_attr_source(l)
+            r_attr_source = _find_attr_source(r)
+            l_is_attr = l_attr_source is not None
+            r_is_attr = r_attr_source is not None
+
             if (l_is_logic or r_is_logic or l_is_diff or r_is_diff
                     or l_is_conf or r_is_conf
                     or l_is_taint or r_is_taint
@@ -5009,7 +5103,8 @@ class TypeChecker:
                     or l_is_energy or r_is_energy
                     or l_is_enclave or r_is_enclave
                     or l_is_cfact or r_is_cfact
-                    or l_is_deadline or r_is_deadline):
+                    or l_is_deadline or r_is_deadline
+                    or l_is_attr or r_is_attr):
                 # Audit 28.8 B13 (trap AD002 / 24200): TyDiff binop
                 # with mixed inner types previously silently coerced
                 # the right operand to the left's inner type. The
@@ -5192,6 +5287,22 @@ class TypeChecker:
                         bits_list.append(r_quant_bits)
                     chosen_bits = min(bits_list)
                     wrapped = TyQuant(bits=chosen_bits, inner=wrapped)
+                # Stage 83 Inc 2 — TyAttribution. Untrustworthy-wins.
+                if l_is_attr or r_is_attr:
+                    _attr_rank = {
+                        "verified":  0,
+                        "generated": 1,
+                        "unknown":   2,
+                    }
+                    sources = []
+                    if l_attr_source is not None:
+                        sources.append(l_attr_source)
+                    if r_attr_source is not None:
+                        sources.append(r_attr_source)
+                    chosen_source = max(
+                        sources, key=lambda s: _attr_rank.get(s, 0))
+                    wrapped = TyAttribution(source=chosen_source,
+                                            inner=wrapped)
                 # Stage 81 Inc 2 — TyDeadline. Sums μs (latency
                 # accumulates additively through computation).
                 # Sibling of TyEnergy in the resource-budget layer.
@@ -5447,6 +5558,9 @@ class TypeChecker:
                 if bn == "__wrap_deadline" and len(arg_tys) == 1:
                     return TyDeadline(deadline_us="1000.0",
                                       inner=arg_tys[0])
+                if bn == "__wrap_attr" and len(arg_tys) == 1:
+                    return TyAttribution(source="unknown",
+                                         inner=arg_tys[0])
                 # Stage 68 Inc 3 — confidence-tag opt-out builtin.
                 # `__lift_conf(x)` returns the inner type of a TyConf
                 # value, acknowledging the user is exiting the
@@ -5548,6 +5662,50 @@ class TypeChecker:
                             return TyLogic(inner=_strip_quant(t.inner))
                         return t
                     return _strip_quant(arg_ty)
+                # Stage 83 Inc 3 — attribution opt-out builtin.
+                # `__attribute_verified(x)` strips TyAttribution,
+                # asserting verified provenance (audit-grep).
+                if bn == "__attribute_verified" and len(arg_tys) == 1:
+                    arg_ty = arg_tys[0]
+                    def _strip_attr(t):
+                        if isinstance(t, TyAttribution):
+                            return t.inner
+                        if isinstance(t, TyDeadline):
+                            return TyDeadline(deadline_us=t.deadline_us,
+                                              inner=_strip_attr(t.inner))
+                        if isinstance(t, TyCounterfactual):
+                            return TyCounterfactual(mode=t.mode,
+                                                    inner=_strip_attr(t.inner))
+                        if isinstance(t, TyEnclave):
+                            return TyEnclave(enclave=t.enclave,
+                                             inner=_strip_attr(t.inner))
+                        if isinstance(t, TyTaint):
+                            return TyTaint(label=t.label,
+                                           inner=_strip_attr(t.inner))
+                        if isinstance(t, TyDP):
+                            return TyDP(epsilon=t.epsilon,
+                                        inner=_strip_attr(t.inner))
+                        if isinstance(t, TyConf):
+                            return TyConf(level=t.level,
+                                          inner=_strip_attr(t.inner))
+                        if isinstance(t, TyDomain):
+                            return TyDomain(status=t.status,
+                                            inner=_strip_attr(t.inner))
+                        if isinstance(t, TyQuant):
+                            return TyQuant(bits=t.bits,
+                                           inner=_strip_attr(t.inner))
+                        if isinstance(t, TyRobust):
+                            return TyRobust(eps=t.eps,
+                                            inner=_strip_attr(t.inner))
+                        if isinstance(t, TyEnergy):
+                            return TyEnergy(budget=t.budget,
+                                            inner=_strip_attr(t.inner))
+                        if isinstance(t, TyDiff):
+                            return TyDiff(inner=_strip_attr(t.inner))
+                        if isinstance(t, TyLogic):
+                            return TyLogic(inner=_strip_attr(t.inner))
+                        return t
+                    return _strip_attr(arg_ty)
                 # Stage 81 Inc 3 — deadline opt-out builtin.
                 # `__miss_deadline(x)` strips TyDeadline.
                 if bn == "__miss_deadline" and len(arg_tys) == 1:
@@ -11703,6 +11861,11 @@ class TypeChecker:
             if cap is not None:
                 return f"{cap}<{self._fmt(t.inner)}>"
             return f"Deadline(us={t.deadline_us})<{self._fmt(t.inner)}>"
+        if isinstance(t, TyAttribution):
+            cap_map = {"verified": "FromVerified",
+                       "generated": "FromGenerated",
+                       "unknown": "FromUnknown"}
+            return f"{cap_map.get(t.source, t.source)}<{self._fmt(t.inner)}>"
         if isinstance(t, TyResult):
             return (f"Result<{self._fmt(t.ok_ty)}, "
                     f"{self._fmt(t.err_ty)}>")
