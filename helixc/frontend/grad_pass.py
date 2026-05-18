@@ -32,6 +32,13 @@ _SCALAR_GRAD_TYPES = frozenset({
     "f32", "f64",
 })
 
+# Stage 57 Inc 1 — Tier 2 #7 pytrees: module-level cache of struct
+# decls in the current program. Set by `grad_pass()` at entry; read
+# by `_generate_grad_rev_all_fn` to flatten struct-typed params.
+# Threaded as global state to avoid signature changes across the
+# recursive walker chain. Cleared at next grad_pass() entry.
+_CURRENT_STRUCT_DECLS: dict = {}
+
 
 def _ty_name(ty: A.TyNode | None) -> str | None:
     if isinstance(ty, A.TyName):
@@ -152,6 +159,16 @@ def grad_pass(prog: A.Program) -> int:
     # AFTER typecheck. _rewrite_in_expr now handles Match nodes natively
     # (recurse into arm bodies). This keeps the AST as Match-form during
     # typecheck so users get correct pattern-style diagnostics.
+    # Stage 57 Inc 1 — Tier 2 #7 pytrees: build struct_decls dict at
+    # pass entry. Used by `_generate_grad_rev_all_fn` to flatten struct-
+    # typed params into their constituent leaves via
+    # `pytree.flatten_pytree_param`. Threaded via module-level state to
+    # avoid signature changes in the recursive walker chain.
+    global _CURRENT_STRUCT_DECLS
+    _CURRENT_STRUCT_DECLS = {
+        it.name: it for it in prog.items
+        if isinstance(it, A.StructDecl)
+    }
     # First: index existing functions by name
     fn_by_name: dict[str, A.FnDecl] = {}
     for item in prog.items:
@@ -338,7 +355,9 @@ def _rewrite_in_expr(expr: A.Expr, fn_by_name: dict[str, A.FnDecl],
                 and isinstance(new_args[0], A.Name)
                 and new_args[0].name in fn_by_name):
             target = fn_by_name[new_args[0].name]
-            grad_fn = _generate_grad_rev_all_fn(target, fn_by_name)
+            grad_fn = _generate_grad_rev_all_fn(
+                target, fn_by_name,
+                struct_decls=_CURRENT_STRUCT_DECLS)
             if grad_fn is not None:
                 if grad_fn.name not in fn_by_name:
                     new_fns.append(grad_fn)
@@ -545,24 +564,57 @@ def _extract_param_idx_from_args(args: list[A.Expr], target: A.FnDecl,
     return idx
 
 
-def _generate_grad_rev_all_fn(fn: A.FnDecl,
-                                fn_table: dict[str, A.FnDecl]) -> A.FnDecl | None:
+def _generate_grad_rev_all_fn(
+    fn: A.FnDecl,
+    fn_table: dict[str, A.FnDecl],
+    struct_decls: dict | None = None,
+) -> A.FnDecl | None:
     """Build `<fn.name>__rgrad_all` — a single function that computes all
     parameter gradients via reverse-mode AD in one source-level pass and
     writes each into a reflection cell.
 
     Generated signature: same params as `fn` plus a trailing `base: i32`
-    cell-base index. Body computes each ∂f/∂param_i, then for each i emits
+    cell-base index. Body computes each ∂f/∂leaf, then for each leaf emits
     `modify_f(base + i, g_i, __always_accept)` to store it.
 
+    Stage 57 Inc 1 — Tier 2 #7 pytrees: when `struct_decls` is provided,
+    each param is flattened to its constituent leaves via
+    `flatten_pytree_param`. Scalar params produce 1 leaf with path =
+    param name; struct params produce N leaves with paths like
+    `"model.w1"`, `"model.w2"`. The `differentiate_reverse` engine
+    already handles dotted field paths (per autodiff_reverse._field_path).
+
     Returns 0 on success. The caller reads the gradients back via
-    splice_f(base + i).
+    splice_f(base + i), where i is the FLAT leaf index (not the
+    original param index).
     """
     if not fn.params:
         return None
-    _reject_unsupported_grad_signature(fn, "grad_rev_all")
+    _reject_unsupported_grad_signature(fn, "grad_rev_all", struct_decls)
     span = fn.span
-    var_names = [p.name for p in fn.params]
+
+    # Stage 57 Inc 1 — expand params into pytree leaves.
+    # Each leaf is (path, ty_name). Scalar params produce one
+    # leaf with path = param name; struct params produce N leaves
+    # with paths like "model.w1".
+    leaves: list[tuple[str, str]] = []
+    if struct_decls is not None:
+        try:
+            from .pytree import flatten_pytree_param
+            for p in fn.params:
+                p_leaves = flatten_pytree_param(p, struct_decls)
+                for leaf in p_leaves:
+                    leaves.append((leaf.path, leaf.ty_name))
+        except Exception:
+            # Fallback to legacy scalar-only path if pytree flattening
+            # fails (defensive; the rejection check above should have
+            # caught this).
+            leaves = [(p.name, _ty_name(p.ty) or "f32")
+                      for p in fn.params]
+    else:
+        leaves = [(p.name, _ty_name(p.ty) or "f32")
+                  for p in fn.params]
+    var_names = [path for (path, _) in leaves]
 
     # Compute all gradients in one analysis pass.
     all_grads = differentiate_reverse(fn.body, var_names, fn_table=fn_table)
@@ -577,10 +629,16 @@ def _generate_grad_rev_all_fn(fn: A.FnDecl,
         )
     ]
     base_name = "__base"
-    for i, p_name in enumerate(var_names):
+    # Stage 57 Inc 1: iterate over LEAVES (not fn.params). For struct
+    # params, each field becomes a separate (path, ty_name) leaf and
+    # writes to its own modify_f cell. Caller reads back via splice_f
+    # with the flat leaf index. Original param index is no longer the
+    # cell offset for struct params — caller must compute offsets via
+    # the flatten_pytree_param order (alphabetical-by-field per the
+    # pytree.py contract).
+    for i, (p_name, ty_name) in enumerate(leaves):
         g_var = f"__g_{i}"
         ok_var = f"__ok_{i}"
-        ty_name = _ty_name(fn.params[i].ty)
         grad_expr = all_grads[p_name]
         if ty_name in ("f32", "f64"):
             grad_expr = _with_float_literal_suffix(grad_expr, ty_name)
@@ -741,18 +799,43 @@ def _generate_grad_fn(fn: A.FnDecl, param_idx: int = 0,
     )
 
 
-def _reject_unsupported_grad_signature(fn: A.FnDecl, surface: str) -> None:
-    """Fail closed on aggregate parameters until pytree leaves reach grad_pass."""
+def _reject_unsupported_grad_signature(
+    fn: A.FnDecl, surface: str,
+    struct_decls: dict | None = None,
+) -> None:
+    """Fail closed on aggregate parameters that can't be pytree-flattened.
+
+    Stage 57 Inc 1 — Tier 2 #7 pytrees: relaxed from "all params must
+    be scalar f32/f64" to "all params must be either scalar OR
+    pytree-flattenable into all-scalar leaves". When `struct_decls`
+    is provided, struct-typed params are flatten-attempted via
+    pytree.flatten_pytree_param. If flattening succeeds and all
+    leaves are f32/f64, the param is allowed.
+    """
     unsupported: list[str] = []
     for p in fn.params:
         ty = p.ty
-        if not isinstance(ty, A.TyName) or ty.name not in _SCALAR_GRAD_TYPES:
-            unsupported.append(p.name)
+        if isinstance(ty, A.TyName) and ty.name in _SCALAR_GRAD_TYPES:
+            continue
+        # Stage 57 Inc 1: try pytree flattening for struct params.
+        if struct_decls is not None:
+            try:
+                from .pytree import flatten_pytree_param
+                leaves = flatten_pytree_param(p, struct_decls)
+                # Accept if all leaves are diff-eligible scalars.
+                if all(leaf.ty_name in _SCALAR_GRAD_TYPES
+                       for leaf in leaves):
+                    continue
+            except (ValueError, Exception):
+                # flatten failed — falls through to rejection below.
+                pass
+        unsupported.append(p.name)
     if unsupported:
         joined = ", ".join(unsupported)
         raise NotImplementedError(
             f"{surface} aggregate/non-floating parameter(s) unsupported; "
-            f"supports only f32/f64 scalar parameter(s) today; "
+            f"supports only f32/f64 scalar or pytree-flattenable struct "
+            f"parameter(s) today; "
             f"unsupported parameter(s): {joined}; flatten pytree leaves or "
             "cast non-floating inputs before grad_pass"
         )

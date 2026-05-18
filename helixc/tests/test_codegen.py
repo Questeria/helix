@@ -15238,6 +15238,39 @@ def test_stage55_inc5_str_from_i32_zero():
     assert code == 1, f"expected len=1 for n=0, got {code}"
 
 
+def test_stage57_inc1_grad_rev_all_struct_param_no_rejection():
+    """Stage 57 Inc 1 — Tier 2 #7 pytrees: grad_rev_all on a struct
+    parameter no longer hard-rejects at the signature check. The
+    struct is flattened via pytree.flatten_pytree_param into its
+    constituent f32/f64 leaves, and grad_rev_all writes each leaf's
+    gradient to a separate modify_f cell.
+
+    Pre-Stage-57: raised "grad_rev_all aggregate/non-floating
+    parameter(s) unsupported".
+
+    This pin runs only grad_pass (not full compile+run); if
+    grad_pass succeeds without raising NotImplementedError, the
+    rejection-lift works at the signature surface."""
+    from helixc.frontend.parser import parse as _parse
+    from helixc.frontend.grad_pass import grad_pass as _grad_pass
+
+    src = """
+    struct Model { w1: f32, w2: f32 }
+    fn loss(m: Model) -> f32 { m.w1 * m.w1 + m.w2 }
+    fn caller() -> i32 {
+        grad_rev_all(loss);
+        0
+    }
+    """
+    prog = _parse(src, include_stdlib=False)
+    # Before Stage 57 Inc 1: this raised NotImplementedError on
+    # the struct-param at _reject_unsupported_grad_signature.
+    # Post-Stage 57 Inc 1: struct_decls threaded + struct param
+    # flattens via pytree → no rejection, generates the rgrad_all
+    # fn with leaf-keyed modify_f cells.
+    _grad_pass(prog)
+
+
 def test_stage55_inc5_str_concat_arena_basic():
     """Stage 55 Inc 5: __str_concat_arena concatenates two
     arena-backed strings into dest, returns total bytes."""
@@ -15258,6 +15291,198 @@ def test_stage55_inc5_str_concat_arena_basic():
     """
     code = compile_and_run(src)
     assert code == 99, f"expected 'c'=99 at concat[2], got {code}"
+
+
+def test_stage55_inc6_csv_line_len_single_line():
+    """Stage 55 Inc 6: csv_line_len returns length up to '\\n'."""
+    src = """
+    fn main() -> i32 {
+        let blob = __strlit_to_arena("ab,cd\\nef,gh\\n");
+        csv_line_len(blob, 12, 0)
+    }
+    """
+    code = compile_and_run(src)
+    # "ab,cd" = 5 bytes before the first '\n' at offset 5
+    assert code == 5, f"expected 5, got {code}"
+
+
+def test_stage55_inc6_csv_next_line_offset_advances():
+    """Stage 55 Inc 6: csv_next_line_offset skips past the newline."""
+    src = """
+    fn main() -> i32 {
+        let blob = __strlit_to_arena("ab,cd\\nef,gh\\n");
+        csv_next_line_offset(blob, 12, 0)
+    }
+    """
+    code = compile_and_run(src)
+    # First line "ab,cd" (5 bytes) + '\n' (1 byte) = next offset 6
+    assert code == 6, f"expected 6, got {code}"
+
+
+def test_stage55_inc6_csv_count_lines_two_lines():
+    """Stage 55 Inc 6: csv_count_lines tallies newline-delimited lines."""
+    src = """
+    fn main() -> i32 {
+        let blob = __strlit_to_arena("ab\\ncd\\n");
+        csv_count_lines(blob, 6)
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 2, f"expected 2, got {code}"
+
+
+def test_stage55_inc6_csv_field_len_two_fields():
+    """Stage 55 Inc 6: csv_field_len returns length up to ','."""
+    src = """
+    fn main() -> i32 {
+        let line = __strlit_to_arena("ab,cd");
+        csv_field_len(line, 5, 0)
+    }
+    """
+    code = compile_and_run(src)
+    # First field "ab" is 2 bytes before the ',' at index 2
+    assert code == 2, f"expected 2, got {code}"
+
+
+def test_stage55_inc6_csv_count_fields_three():
+    """Stage 55 Inc 6: csv_count_fields counts commas+1."""
+    src = """
+    fn main() -> i32 {
+        let line = __strlit_to_arena("a,b,c");
+        csv_count_fields(line, 5)
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 3, f"expected 3, got {code}"
+
+
+def test_stage55_inc6_csv_parse_field_i32_round_trip():
+    """Stage 55 Inc 6: csv_parse_field_i32 composes field_len + __parse_i32."""
+    src = """
+    fn main() -> i32 {
+        let line = __strlit_to_arena("42,99");
+        csv_parse_field_i32(line, 5, 0)
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stage55_inc6_mnist_magic_ok_valid():
+    """Stage 55 Inc 6: mnist_idx_magic_ok returns 1 for valid header."""
+    src = """
+    fn main() -> i32 {
+        // Build IDX header: 00 00 08 01 (u8 dtype, 1 dim) + dim=2 (00 00 00 02)
+        let blob = __arena_len();
+        __arena_push(0);  __arena_push(0);
+        __arena_push(8);  __arena_push(1);
+        __arena_push(0);  __arena_push(0);
+        __arena_push(0);  __arena_push(2);
+        __arena_push(7);  __arena_push(9);  // body: 2 u8 elements
+        mnist_idx_magic_ok(blob, 10)
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 1, f"expected 1 (valid header), got {code}"
+
+
+def test_stage55_inc6_mnist_magic_ok_invalid_padding():
+    """Stage 55 Inc 6: mnist_idx_magic_ok returns 0 when byte 0 != 0."""
+    src = """
+    fn main() -> i32 {
+        let blob = __arena_len();
+        __arena_push(1);  // wrong: should be 0
+        __arena_push(0);
+        __arena_push(8);  __arena_push(1);
+        mnist_idx_magic_ok(blob, 4)
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 0, f"expected 0 (invalid padding), got {code}"
+
+
+def test_stage55_inc6_mnist_dim_decodes_big_endian():
+    """Stage 55 Inc 6: mnist_idx_dim decodes big-endian u32 dimensions."""
+    src = """
+    fn main() -> i32 {
+        // 00 00 0C 01 (i32 dtype, 1 dim) + dim = 0x00000100 = 256
+        let blob = __arena_len();
+        __arena_push(0);  __arena_push(0);
+        __arena_push(12); __arena_push(1);
+        __arena_push(0);  __arena_push(0);
+        __arena_push(1);  __arena_push(0);
+        let d = mnist_idx_dim(blob, 8, 0);
+        d - 256
+    }
+    """
+    code = compile_and_run(src)
+    # dim should be 256; d - 256 = 0
+    assert code == 0, f"expected 0 (dim=256), got {code}"
+
+
+def test_stage55_inc6_mnist_dtype_size_u8():
+    """Stage 55 Inc 6: mnist_idx_dtype_size maps 0x08 (u8) to 1 byte."""
+    src = """
+    fn main() -> i32 {
+        mnist_idx_dtype_size(8)
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 1, f"expected 1 (u8 size), got {code}"
+
+
+def test_stage55_inc6_mnist_validate_matches_body():
+    """Stage 55 Inc 6: mnist_idx_validate returns 1 when body length matches expected."""
+    src = """
+    fn main() -> i32 {
+        // 00 00 08 01 + dim=3 + 3 u8 bytes = header 8 + body 3 = 11 total
+        let blob = __arena_len();
+        __arena_push(0);  __arena_push(0);
+        __arena_push(8);  __arena_push(1);
+        __arena_push(0);  __arena_push(0);
+        __arena_push(0);  __arena_push(3);
+        __arena_push(1);  __arena_push(2);  __arena_push(3);
+        mnist_idx_validate(blob, 11)
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 1, f"expected 1 (validate pass), got {code}"
+
+
+def test_stage55_inc6_mnist_validate_truncated_returns_zero():
+    """Stage 55 Inc 6: mnist_idx_validate fails closed on body-length mismatch."""
+    src = """
+    fn main() -> i32 {
+        // Header claims 5 elements but body has only 2 bytes
+        let blob = __arena_len();
+        __arena_push(0);  __arena_push(0);
+        __arena_push(8);  __arena_push(1);
+        __arena_push(0);  __arena_push(0);
+        __arena_push(0);  __arena_push(5);
+        __arena_push(1);  __arena_push(2);
+        mnist_idx_validate(blob, 10)
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 0, f"expected 0 (truncated), got {code}"
+
+
+def test_stage55_inc6_mnist_u8_at_reads_body_byte():
+    """Stage 55 Inc 6: mnist_idx_u8_at reads i-th body byte past header."""
+    src = """
+    fn main() -> i32 {
+        let blob = __arena_len();
+        __arena_push(0);  __arena_push(0);
+        __arena_push(8);  __arena_push(1);
+        __arena_push(0);  __arena_push(0);
+        __arena_push(0);  __arena_push(3);
+        __arena_push(7);  __arena_push(42);  __arena_push(99);
+        mnist_idx_u8_at(blob, 11, 1)
+    }
+    """
+    code = compile_and_run(src)
+    # Body byte 1 = 42
+    assert code == 42, f"expected 42, got {code}"
 
 
 def test_strbyte_out_of_range_returns_zero():
