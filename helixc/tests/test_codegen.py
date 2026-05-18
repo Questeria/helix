@@ -15274,23 +15274,13 @@ def test_stage59_pat_struct_with_literal_match():
 import pytest as _stage59_pytest
 
 
-@_stage59_pytest.mark.xfail(
-    reason="Stage 59 known limitation: nested PatStruct "
-            "(Outer { inner: Inner { v }, .. }) doesn't yet pass through "
-            "the typecheck/IR lowering pipeline — the synthetic-temp "
-            "let-binding for the inner struct field isn't registered in "
-            "scope for the IR lowerer. Inner-field flat destructuring "
-            "works (test_stage59_pat_struct_basic_destructuring). "
-            "Fix would extend the synthetic-temp scope-registration in "
-            "match_lower or in typecheck's match arm scope builder. "
-            "Deferred to a follow-up stage with proper audit cycle."
-)
-def test_stage59_pat_struct_nested_destructuring_xfail():
-    """Stage 59 / Tier 4 #15 known-defer: nested struct destructuring
-    parses correctly and ast_hash differentiates the patterns, but the
-    full compile-and-run path needs additional scope-registration work
-    in match_lower for the synthetic temp let-binding to be visible to
-    IR lowering. Marked xfail until that fix lands."""
+def test_stage59_pat_struct_nested_typecheck_passes():
+    """Stage 59 / Tier 4 #15 followup: typecheck now binds nested
+    PatStruct field types correctly via `_bind_pattern`'s new
+    PatStruct arm. End-to-end compile-and-run still has an IR-
+    lowering scope issue (see xfail below)."""
+    from helixc.frontend.parser import parse as _parse
+    from helixc.frontend.typecheck import typecheck as _tc
     src = """
     struct Inner { v: i32 }
     struct Outer { inner: Inner, label: i32 }
@@ -15298,6 +15288,36 @@ def test_stage59_pat_struct_nested_destructuring_xfail():
         let o = Outer { inner: Inner { v: 42 }, label: 5 };
         match o {
             Outer { inner: Inner { v }, label } => v - label + 5,
+            _ => 0,
+        }
+    }
+    """
+    prog = _parse(src)
+    errs = _tc(prog)
+    assert errs == [], f"typecheck errors: {errs}"
+
+
+@_stage59_pytest.mark.xfail(
+    reason="Stage 59 followup: IR lowering still rejects '__scrut_1' "
+            "in nested PatStruct case despite typecheck passing. The "
+            "match_lower transform produces a valid let-chain (verified "
+            "by AST inspection) but the IR value_map at the time of "
+            "Name(__scrut_1) resolution doesn't have the binding. Likely "
+            "a Block-scope visibility issue in lower_ast's value_map "
+            "across nested Block.final_expr levels. Deferred to a "
+            "follow-up stage with full audit cycle."
+)
+def test_stage59_pat_struct_nested_destructuring_xfail():
+    """Stage 59 followup deferral: full compile-and-run for nested
+    PatStruct still hits IR-lowering scope issue."""
+    src = """
+    struct Inner { v: i32 }
+    struct Outer { inner: Inner, label: i32 }
+    fn main() -> i32 {
+        let o = Outer { inner: Inner { v: 42 }, label: 5 };
+        match o {
+            Outer { inner: Inner { v }, label } => v - label + 5,
+            _ => 0,
         }
     }
     """

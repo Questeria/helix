@@ -9077,6 +9077,32 @@ class TypeChecker:
                         pat.span,
                     ))
             return
+        if isinstance(pat, A.PatStruct):
+            # Stage 59 / Tier 4 #15 typecheck arm — struct destructuring.
+            # Look up the struct decl by name; for each (fname, sub_pat),
+            # find the matching field type and recursively bind. Wildcard
+            # sub-patterns or short-form PatBind bind the corresponding
+            # field type into scope (so the arm body sees `field_name`
+            # as the field's declared type).
+            struct_decls = getattr(self, "_struct_decls", {})
+            sdecl = struct_decls.get(pat.name)
+            if sdecl is None:
+                # Unknown struct name → conservatively bind sub-patterns
+                # with TyUnknown so we don't cascade false positives.
+                for (_, sub) in pat.fields:
+                    self._bind_pattern(
+                        sub, TyUnknown(hint="pat-struct-unknown-decl"),
+                        scope)
+                return
+            # Build a name → type map from the struct decl.
+            field_ty_map: dict[str, Type] = {}
+            for f in sdecl.fields:
+                field_ty_map[f.name] = self._resolve_type(f.ty, scope)
+            for (fname, sub) in pat.fields:
+                ftype = field_ty_map.get(
+                    fname, TyUnknown(hint=f"pat-struct-missing-field-{fname}"))
+                self._bind_pattern(sub, ftype, scope)
+            return
 
     def _pattern_covers(self, pat: A.Pattern, value) -> bool:
         """Does `pat` definitely match the given concrete `value`?
