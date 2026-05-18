@@ -57,6 +57,8 @@ Introspection (Stage 28.9 + Stage 58 + Stage 59 polish):
         Same as --list-enums but JSON with variant names included.
     --enum-variants <file.hx> <enum_name>
         Print per-variant lines for an enum (with payload types if any).
+    --enum-variants-json <file.hx> <enum_name>
+        Same as --enum-variants but JSON with payload_tys list.
     --list-consts-json <file.hx>
         Same as --list-consts but machine-readable JSON output.
     --const-value <file.hx> <const_name>
@@ -3851,6 +3853,52 @@ def _list_enums_json(path: str) -> int:
     return 0
 
 
+def _enum_variants_json(path: str, enum_name: str) -> int:
+    """Stage 59 follow-on / Tier 4 #13 polish: --enum-variants in
+    machine-readable JSON form.
+
+    Output schema:
+      {"variants": [{"name": "<name>",
+                      "payload_tys": ["<ty1>", "<ty2>", ...]}, ...]}
+    Declaration order preserved. payload_tys is empty list for
+    no-payload variants.
+    """
+    import json
+    src = _read_source(path)
+    prog = _parse_or_exit(src, path)
+
+    def _format_ty(ty) -> str:
+        name = getattr(ty, "name", None)
+        if name:
+            return name
+        base = getattr(ty, "base", None)
+        args = getattr(ty, "args", None)
+        base_str = base if isinstance(base, str) else (
+            getattr(base, "name", None) if base else None
+        )
+        if base_str and args:
+            args_strs = []
+            for a in args:
+                an = getattr(a, "name", None)
+                args_strs.append(an if an else repr(a))
+            return f"{base_str}<{', '.join(args_strs)}>"
+        return repr(ty)
+
+    for it in prog.items:
+        if isinstance(it, A.EnumDecl) and it.name == enum_name:
+            variants = [
+                {"name": v.name,
+                 "payload_tys": [_format_ty(t) for t in v.payload_tys]}
+                for v in it.variants
+            ]
+            print(json.dumps({"variants": variants},
+                              sort_keys=True, indent=2))
+            return 0
+    print(f"error: autodiff_cli: enum {enum_name!r} not found in {path}",
+          file=sys.stderr)
+    return 1
+
+
 def _enum_variants(path: str, enum_name: str) -> int:
     """Stage 59 follow-on / Tier 4 #13 polish: per-enum variant
     inspection. Print variants of a specific enum with payload types.
@@ -4347,6 +4395,13 @@ def main():
                   file=sys.stderr)
             sys.exit(2)
         sys.exit(_enum_variants(args[0], args[1]))
+
+    if "--enum-variants-json" in flags:
+        if len(args) < 2:
+            print("usage: --enum-variants-json <file.hx> <enum_name>",
+                  file=sys.stderr)
+            sys.exit(2)
+        sys.exit(_enum_variants_json(args[0], args[1]))
 
     if "--list-enums-json" in flags:
         if len(args) < 1:

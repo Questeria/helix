@@ -5869,7 +5869,8 @@ def test_stage59_autodiff_cli_help_mentions_polish_flags():
         "--list-uses", "--list-uses-json",
         "--list-consts", "--list-consts-json",
         "--const-value", "--const-value-json",
-        "--list-enums", "--list-enums-json", "--enum-variants",
+        "--list-enums", "--list-enums-json",
+        "--enum-variants", "--enum-variants-json",
         "--list-fn-attrs", "--list-fn-attrs-json",
         "--list-fns-by-attr", "--list-fns-by-attr-json",
         "--fn-callgraph", "--fn-callers",
@@ -7479,6 +7480,31 @@ def test_stage59_list_consts_json(tmp_path):
     assert result == {"consts": [
         {"name": "MAX_BUF", "ty": "i32"},
         {"name": "PI", "ty": "f64"},
+    ]}
+
+
+def test_stage59_enum_variants_json(tmp_path):
+    """Stage 59 follow-on / Tier 4 #13 polish: --enum-variants-json
+    emits JSON {variants: [{name, payload_tys}]}."""
+    import json
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "evj.hx"
+    src.write_text(
+        "enum Shape { Circle(f32), Square(i32, i32), Triangle }\n",
+        encoding="utf-8",
+    )
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--enum-variants-json", str(src), "Shape"],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0
+    result = json.loads(proc.stdout)
+    assert result == {"variants": [
+        {"name": "Circle", "payload_tys": ["f32"]},
+        {"name": "Square", "payload_tys": ["i32", "i32"]},
+        {"name": "Triangle", "payload_tys": []},
     ]}
 
 
