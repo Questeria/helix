@@ -4877,6 +4877,102 @@ def test_stage77_plain_fn_not_registered_as_property():
     assert "returns_bool" not in tc._property_fn_names
 
 
+def test_stage79_inc1_enclave_type_recognition():
+    from helixc.frontend.typecheck import TypeChecker
+    from helixc.frontend.parser import parse
+
+    src = """
+    fn user(a: InEnclaveSGX<f32>, b: InEnclaveTZ<f32>) -> f32 { 0.0 }
+    fn main() -> i32 { 0 }
+    """
+    prog = parse(src, include_stdlib=False)
+    tc = TypeChecker(prog)
+    errors = tc.check()
+    arity_errs = [str(e) for e in errors
+                  if "takes 1 type argument" in str(e)
+                  and ("InEnclave" in str(e))]
+    assert len(arity_errs) == 0, arity_errs
+
+
+def test_stage79_inc1_three_enclave_aliases_resolve():
+    from helixc.frontend.typecheck import TypeChecker
+    from helixc.frontend.parser import parse
+
+    src = """
+    fn a(x: InEnclaveSGX<i32>) -> i32 { 0 }
+    fn b(x: InEnclaveTZ<i32>) -> i32 { 0 }
+    fn c(x: InEnclaveTDX<i32>) -> i32 { 0 }
+    fn main() -> i32 { 0 }
+    """
+    prog = parse(src, include_stdlib=False)
+    tc = TypeChecker(prog)
+    errors = tc.check()
+    name_errs = [str(e) for e in errors
+                 if "InEnclave" in str(e)
+                 and ("takes 1 type argument" in str(e)
+                      or "unbound" in str(e))]
+    assert len(name_errs) == 0, name_errs
+
+
+def test_stage79_inc2_enclave_propagates_through_binop():
+    """Stage 79 Inc 2 — `InEnclaveSGX<f32> + f32` yields
+    InEnclaveSGX<f32> (first-tagged-wins)."""
+    from helixc.frontend.typecheck import TypeChecker
+    from helixc.frontend.parser import parse
+
+    src = """
+    fn user(a: InEnclaveSGX<f32>, b: f32) -> InEnclaveSGX<f32> {
+        a + b
+    }
+    fn main() -> i32 { 0 }
+    """
+    prog = parse(src, include_stdlib=False)
+    tc = TypeChecker(prog)
+    errors = tc.check()
+    type_errs = [str(e) for e in errors
+                 if "return" in str(e).lower()
+                 or "Enclave" in str(e)]
+    assert len(type_errs) == 0, type_errs
+
+
+def test_stage79_inc3_exit_enclave_strips_outer():
+    from helixc.frontend.typecheck import TypeChecker
+    from helixc.frontend.parser import parse
+
+    src = """
+    fn user(x: InEnclaveSGX<f32>) -> f32 {
+        __exit_enclave(x)
+    }
+    fn main() -> i32 { 0 }
+    """
+    prog = parse(src, include_stdlib=False)
+    tc = TypeChecker(prog)
+    errors = tc.check()
+    type_errs = [str(e) for e in errors
+                 if "return" in str(e).lower()
+                 or "Enclave" in str(e)]
+    assert len(type_errs) == 0, type_errs
+
+
+def test_stage79_wrap_enclave_constructor():
+    from helixc.frontend.typecheck import TypeChecker
+    from helixc.frontend.parser import parse
+
+    src = """
+    fn user(x: f32) -> InEnclaveSGX<f32> {
+        __wrap_enclave(x)
+    }
+    fn main() -> i32 { 0 }
+    """
+    prog = parse(src, include_stdlib=False)
+    tc = TypeChecker(prog)
+    errors = tc.check()
+    type_errs = [str(e) for e in errors
+                 if "return" in str(e).lower()
+                 or "Enclave" in str(e)]
+    assert len(type_errs) == 0, type_errs
+
+
 def test_stage76_inc1_energy_type_recognition():
     """Stage 76 Inc 1 — TyEnergy scaffolding. TinyEnergy/Energy/
     LargeEnergy resolve to TyEnergy with the right budget."""

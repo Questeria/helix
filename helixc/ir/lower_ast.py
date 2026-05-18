@@ -882,6 +882,8 @@ class Lowerer:
                 "TinyRobust", "Robust", "LooseRobust",
                 # TyEnergy (Stage 76)
                 "TinyEnergy", "Energy", "LargeEnergy",
+                # TyEnclave (Stage 79)
+                "InEnclaveSGX", "InEnclaveTZ", "InEnclaveTDX",
             }
             if (ty.base in _STAGE75_WRAPPER_ALIASES
                     and len(ty.args) == 1):
@@ -1954,12 +1956,17 @@ class Lowerer:
                     and expr.callee.name in (
                         "__wrap_conf", "__wrap_taint", "__wrap_dp",
                         "__wrap_quant", "__wrap_domain", "__wrap_robust",
-                        "__wrap_energy")
+                        "__wrap_energy", "__wrap_enclave")
                     and len(expr.args) == 1):
                 return self._lower_expr(expr.args[0])
             # Stage 76 Inc 3 — energy opt-out builtin.
             if (isinstance(expr.callee, A.Name)
                     and expr.callee.name == "__exhaust_energy"
+                    and len(expr.args) == 1):
+                return self._lower_expr(expr.args[0])
+            # Stage 79 Inc 3 — enclave opt-out builtin.
+            if (isinstance(expr.callee, A.Name)
+                    and expr.callee.name == "__exit_enclave"
                     and len(expr.args) == 1):
                 return self._lower_expr(expr.args[0])
             # Stage 36 Increment 1: provenance-typed primitives.

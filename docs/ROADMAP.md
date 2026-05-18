@@ -303,6 +303,35 @@ Re-sequenced after Stage 46-47 closed:
 - **Stage 58** ✅ **CLOSED 2026-05-18** — Tier 4 #13 content-
   addressed modules (program_hash + module_hash + fn_signature_hash
   core).
+- **Stage 79 SUBSTANTIALLY COMPLETE 2026-05-18** — Tier-C #8
+  Trusted execution environment (TEE / enclave) types:
+  - Inc 1: TyEnclave(enclave, inner) + 3 presets (InEnclaveSGX=
+    "sgx" Intel SGX / InEnclaveTZ="tz" ARM TrustZone /
+    InEnclaveTDX="tdx" Intel TDX or AMD SEV).
+  - Inc 2: first-tagged-wins propagation (TEE label propagates
+    through arithmetic; future Inc 4 would diagnose mixing
+    different enclaves at the same operation).
+  - Inc 3: `__exit_enclave(x)` opt-out + `__wrap_enclave(x)`
+    constructor (default enclave "sgx").
+  - **TyEnclave is the absolute outermost wrapper** in the
+    canonical Tier-S/A stack — semantically, the enclave boundary
+    constrains everything inside.
+  - Updated canonical full v1.0 wrapper stack to 8 layers
+    (TyEnclave outermost):
+    `InEnclaveSGX<Confidential<Private<Conf<OutDist<Robust<
+    Energy<Q8<D<Logic<T>>>>>>>>>>`
+  - Use case: confidential AI workloads (medical AI, federated
+    learning, regulated finance). Helix guarantees at compile
+    time that values never leave their enclave boundary except
+    through explicit `__exit_enclave` calls (audit-grep contract).
+  - 5 new tests; 380 typecheck + 512 regression GREEN.
+
+  **8 wrapper milestone**: Stage 79 brings the Tier-S/A wrapper
+  count to 8 (TyConf / TyTaint / TyDP / TyQuant / TyDomain /
+  TyRobust / TyEnergy / TyEnclave). Combined with pre-existing
+  TyDiff / TyLogic / TyModal / TyCausal: **12 composable
+  type-system wrappers** in the v1.0 substrate.
+
 - **Stage 78 SHIPPED 2026-05-18** — `helixc/stdlib/safety.hx`
   — pure-Helix wrapper helpers for all 7 Tier-S/A types:
   - 14 ergonomic helper fns covering all 7 wrappers (as_conf,

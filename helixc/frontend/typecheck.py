@@ -329,6 +329,38 @@ class TyConf(Type):
 
 
 @dataclass(frozen=True)
+class TyEnclave(Type):
+    """Stage 79 — trusted execution environment (TEE) type
+    (Tier-C #8 from HELIX_V1_FINAL_FEATURES). A value tagged with
+    the enclave / secure-execution context it must remain inside.
+    Critical for AGI safety: ML inference on secret data that
+    must NOT leak outside an SGX / TrustZone / Confidential VM
+    boundary.
+
+    Phase-0 representation: enclave name stored as string label.
+    3 preset aliases ship in Inc 1:
+    - `InEnclaveSGX<T>`    → enclave "sgx"     (Intel SGX)
+    - `InEnclaveTZ<T>`     → enclave "tz"      (ARM TrustZone)
+    - `InEnclaveTDX<T>`    → enclave "tdx"     (Intel TDX / AMD SEV)
+
+    Compositional rule: when two TEE-tagged values combine, both
+    sides must be in the SAME enclave (mixing enclaves = error
+    at typecheck time). If only one side is tagged, propagate
+    that enclave. Different enclaves combining is a future Inc 4
+    diagnostic — for Inc 1-2 we accept the first enclave seen.
+
+    Use case: confidential AI workloads. Composes with all other
+    Tier-S/A wrappers as the outermost layer (TEE wraps the
+    semantic stack — once inside an enclave, all the wrappers
+    below are intrinsically protected).
+
+    Inc 1 ships scaffolding; Inc 2 propagation; Inc 3 `__exit_enclave
+    (x)` opt-out (with audit-grep contract); Inc 4 mixing diagnostic."""
+    enclave: str     # "sgx", "tz", "tdx" (or future user-defined)
+    inner: Type
+
+
+@dataclass(frozen=True)
 class TyEnergy(Type):
     """Stage 76 — energy / power budget type (Tier-A #6). A value
     tagged with a joule / watt-second budget that has been spent
@@ -2082,6 +2114,23 @@ class TypeChecker:
                     return TyUnknown(hint=ty.base)
                 return TyConf(level=conf_map[ty.base],
                                inner=self._resolve_type(ty.args[0], scope))
+            # Stage 79 Inc 1 — trusted-execution environment names.
+            # F5 arity arm.
+            enclave_map = {
+                "InEnclaveSGX":  "sgx",
+                "InEnclaveTZ":   "tz",
+                "InEnclaveTDX":  "tdx",
+            }
+            if ty.base in enclave_map:
+                if len(ty.args) != 1:
+                    self.errors.append(TypeError_(
+                        f"{ty.base}<T> takes 1 type argument, "
+                        f"got {len(ty.args)}",
+                        ty.span,
+                    ))
+                    return TyUnknown(hint=ty.base)
+                return TyEnclave(enclave=enclave_map[ty.base],
+                                 inner=self._resolve_type(ty.args[0], scope))
             # Stage 76 Inc 1 — energy / power budget preset budgets.
             # F5 arity arm.
             energy_map = {
@@ -3138,6 +3187,11 @@ class TypeChecker:
         # a TyEnergy wrapper, marking an explicit budget exhaustion
         # point.
         "__exhaust_energy",
+        # Stage 79 Inc 3 — enclave opt-out. `__exit_enclave(x)` strips
+        # a TyEnclave wrapper, marking an explicit TEE-boundary exit
+        # (audit-grep contract: this is the only legal way for a
+        # value to leave an enclave's protection scope).
+        "__exit_enclave",
         # Stage 75 — Tier-S/A wrapper constructor builtins. Inverse of
         # the opt-out builtins: take a plain T (or already-wrapped T),
         # add the appropriate wrapper at the outermost layer. Each
@@ -3153,6 +3207,8 @@ class TypeChecker:
         "__wrap_robust",     # adds Robust<T> (eps "0.03", typical)
         # Stage 76 — TyEnergy constructor.
         "__wrap_energy",     # adds Energy<T> (budget "1.0", typical edge)
+        # Stage 79 — TyEnclave constructor.
+        "__wrap_enclave",    # adds InEnclaveSGX<T> by default
         "__strlen", "__strbyte", "__streq", "__strlit_to_arena",
         "__hash_i32",
         # Stage 55 Inc 1 — runtime string builtins. Operate on
@@ -4545,6 +4601,8 @@ class TypeChecker:
                     return _unwrap(t.inner)
                 if isinstance(t, TyEnergy):
                     return _unwrap(t.inner)
+                if isinstance(t, TyEnclave):
+                    return _unwrap(t.inner)
                 return t
 
             l_is_logic = isinstance(l, TyLogic) or (
@@ -4725,6 +4783,37 @@ class TypeChecker:
             l_is_energy = l_energy_budget is not None
             r_is_energy = r_energy_budget is not None
 
+            # Stage 79 Inc 2 — detect TyEnclave in any layered position.
+            # Composition rule: first-tagged-wins (TEE propagates).
+            # Future Inc 4 plan: mixing different enclaves diagnostic.
+            def _find_enclave_name(t: Type) -> Optional[str]:
+                if isinstance(t, TyEnclave):
+                    return t.enclave
+                if isinstance(t, TyDiff):
+                    return _find_enclave_name(t.inner)
+                if isinstance(t, TyLogic):
+                    return _find_enclave_name(t.inner)
+                if isinstance(t, TyConf):
+                    return _find_enclave_name(t.inner)
+                if isinstance(t, TyTaint):
+                    return _find_enclave_name(t.inner)
+                if isinstance(t, TyDP):
+                    return _find_enclave_name(t.inner)
+                if isinstance(t, TyQuant):
+                    return _find_enclave_name(t.inner)
+                if isinstance(t, TyDomain):
+                    return _find_enclave_name(t.inner)
+                if isinstance(t, TyRobust):
+                    return _find_enclave_name(t.inner)
+                if isinstance(t, TyEnergy):
+                    return _find_enclave_name(t.inner)
+                return None
+
+            l_enclave_name = _find_enclave_name(l)
+            r_enclave_name = _find_enclave_name(r)
+            l_is_enclave = l_enclave_name is not None
+            r_is_enclave = r_enclave_name is not None
+
             if (l_is_logic or r_is_logic or l_is_diff or r_is_diff
                     or l_is_conf or r_is_conf
                     or l_is_taint or r_is_taint
@@ -4732,7 +4821,8 @@ class TypeChecker:
                     or l_is_quant or r_is_quant
                     or l_is_domain or r_is_domain
                     or l_is_robust or r_is_robust
-                    or l_is_energy or r_is_energy):
+                    or l_is_energy or r_is_energy
+                    or l_is_enclave or r_is_enclave):
                 # Audit 28.8 B13 (trap AD002 / 24200): TyDiff binop
                 # with mixed inner types previously silently coerced
                 # the right operand to the left's inner type. The
@@ -5001,6 +5091,16 @@ class TypeChecker:
                     chosen_label = max(
                         labels, key=lambda lb: _taint_rank.get(lb, 0))
                     wrapped = TyTaint(label=chosen_label, inner=wrapped)
+                # Stage 79 Inc 2 — TyEnclave is the absolute outermost
+                # wrapper (above TyTaint). Once a value is inside an
+                # enclave, the enclave boundary constrains everything
+                # nested inside. Composition: first-tagged-wins.
+                if l_is_enclave or r_is_enclave:
+                    chosen_enclave = (l_enclave_name
+                                      if l_enclave_name is not None
+                                      else r_enclave_name)
+                    wrapped = TyEnclave(enclave=chosen_enclave,
+                                        inner=wrapped)
                 return wrapped
             # Arithmetic: take the left type (simplified)
             self._check_plain_binary_scalar_compat(l, r, expr.op, expr.span)
@@ -5122,6 +5222,8 @@ class TypeChecker:
                     return TyRobust(eps="0.03", inner=arg_tys[0])
                 if bn == "__wrap_energy" and len(arg_tys) == 1:
                     return TyEnergy(budget="1.0", inner=arg_tys[0])
+                if bn == "__wrap_enclave" and len(arg_tys) == 1:
+                    return TyEnclave(enclave="sgx", inner=arg_tys[0])
                 # Stage 68 Inc 3 — confidence-tag opt-out builtin.
                 # `__lift_conf(x)` returns the inner type of a TyConf
                 # value, acknowledging the user is exiting the
@@ -5223,6 +5325,44 @@ class TypeChecker:
                             return TyLogic(inner=_strip_quant(t.inner))
                         return t
                     return _strip_quant(arg_ty)
+                # Stage 79 Inc 3 — enclave opt-out builtin.
+                # `__exit_enclave(x)` strips the TyEnclave wrapper.
+                # An external audit pass can grep for `__exit_enclave`
+                # call sites to enforce the TEE-boundary contract.
+                # Identity on non-Enclave inputs; preserves all other
+                # wrappers in the chain.
+                if bn == "__exit_enclave" and len(arg_tys) == 1:
+                    arg_ty = arg_tys[0]
+                    def _strip_enclave(t):
+                        if isinstance(t, TyEnclave):
+                            return t.inner
+                        if isinstance(t, TyTaint):
+                            return TyTaint(label=t.label,
+                                           inner=_strip_enclave(t.inner))
+                        if isinstance(t, TyDP):
+                            return TyDP(epsilon=t.epsilon,
+                                        inner=_strip_enclave(t.inner))
+                        if isinstance(t, TyConf):
+                            return TyConf(level=t.level,
+                                          inner=_strip_enclave(t.inner))
+                        if isinstance(t, TyDomain):
+                            return TyDomain(status=t.status,
+                                            inner=_strip_enclave(t.inner))
+                        if isinstance(t, TyQuant):
+                            return TyQuant(bits=t.bits,
+                                           inner=_strip_enclave(t.inner))
+                        if isinstance(t, TyRobust):
+                            return TyRobust(eps=t.eps,
+                                            inner=_strip_enclave(t.inner))
+                        if isinstance(t, TyEnergy):
+                            return TyEnergy(budget=t.budget,
+                                            inner=_strip_enclave(t.inner))
+                        if isinstance(t, TyDiff):
+                            return TyDiff(inner=_strip_enclave(t.inner))
+                        if isinstance(t, TyLogic):
+                            return TyLogic(inner=_strip_enclave(t.inner))
+                        return t
+                    return _strip_enclave(arg_ty)
                 # Stage 76 Inc 3 — energy opt-out builtin.
                 # `__exhaust_energy(x)` strips the TyEnergy wrapper.
                 if bn == "__exhaust_energy" and len(arg_tys) == 1:
@@ -11243,6 +11383,13 @@ class TypeChecker:
             if cap is not None:
                 return f"{cap}<{self._fmt(t.inner)}>"
             return f"Energy(j={t.budget})<{self._fmt(t.inner)}>"
+        if isinstance(t, TyEnclave):
+            cap_map = {"sgx": "InEnclaveSGX", "tz": "InEnclaveTZ",
+                       "tdx": "InEnclaveTDX"}
+            cap = cap_map.get(t.enclave)
+            if cap is not None:
+                return f"{cap}<{self._fmt(t.inner)}>"
+            return f"InEnclave({t.enclave})<{self._fmt(t.inner)}>"
         if isinstance(t, TyResult):
             return (f"Result<{self._fmt(t.ok_ty)}, "
                     f"{self._fmt(t.err_ty)}>")
