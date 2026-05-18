@@ -63,6 +63,8 @@ Introspection (Stage 28.9 + Stage 58 + Stage 59 polish):
         Transitive closure: BFS over callgraph from entry_fn (dead-code).
     --fn-reachable-to <file.hx> <target_fn>
         Inverse transitive closure: who can reach target_fn (impact zone).
+    --fn-call-stats <file.hx>
+        Per-fn fan-in / fan-out as JSON for hotspot identification.
     --fn-leaves <file.hx>
         List 'leaf' fns (those that call no other fn) — sorted, one per line.
     --fn-roots <file.hx>
@@ -1577,6 +1579,73 @@ def _fn_roots(path: str) -> int:
     return 0
 
 
+def _fn_call_stats(path: str) -> int:
+    """Stage 59 follow-on / Tier 4 #13 polish: per-fn call-graph
+    fan-in / fan-out stats as JSON.
+
+    Output schema:
+      {
+        "<fn_name>": {
+          "fan_in": <int>,    # number of distinct local fns that call this
+          "fan_out": <int>,   # number of distinct local fns this calls
+        }
+      }
+
+    Pure summary derivation — same data underlying --fn-callgraph-all
+    and --fn-callers-all, but counted instead of listed.
+
+    Use cases:
+    - Hotspot identification: high fan_in fns are critical paths
+    - Refactor risk assessment: high fan_out fns touch many places
+    - Code-health metrics: track distribution shifts across releases
+    """
+    import json
+    from .ast_walker import iter_fn_decls
+    src = _read_source(path)
+    prog = _parse_or_exit(src, path)
+
+    all_fns = list(iter_fn_decls(prog))
+    all_names = {fn.name for fn in all_fns}
+    fan_in: dict[str, set] = {fn.name: set() for fn in all_fns}
+    fan_out: dict[str, set] = {fn.name: set() for fn in all_fns}
+
+    def _collect(node, from_fn: str) -> None:
+        if node is None:
+            return
+        if isinstance(node, A.Call):
+            tgt = None
+            if isinstance(node.callee, A.Name):
+                tgt = node.callee.name
+            elif (isinstance(node.callee, A.Path)
+                  and node.callee.segments):
+                tgt = node.callee.segments[-1]
+            if tgt is not None and tgt in all_names:
+                fan_out[from_fn].add(tgt)
+                fan_in[tgt].add(from_fn)
+        if hasattr(node, "__dataclass_fields__"):
+            for f in node.__dataclass_fields__:
+                v = getattr(node, f)
+                if isinstance(v, list):
+                    for x in v:
+                        _collect(x, from_fn)
+                elif isinstance(v, tuple):
+                    for x in v:
+                        _collect(x, from_fn)
+                else:
+                    _collect(v, from_fn)
+
+    for fn in all_fns:
+        if fn.body is not None:
+            _collect(fn.body, fn.name)
+
+    result = {
+        name: {"fan_in": len(fan_in[name]), "fan_out": len(fan_out[name])}
+        for name in all_names
+    }
+    print(json.dumps(result, sort_keys=True, indent=2))
+    return 0
+
+
 def _fn_reachable_to(path: str, target_name: str) -> int:
     """Stage 59 follow-on / Tier 4 #13 polish: inverse transitive
     callgraph closure. Print all fns that can transitively reach
@@ -2475,6 +2544,13 @@ def main():
                   file=sys.stderr)
             sys.exit(2)
         sys.exit(_fn_reachable_to(args[0], args[1]))
+
+    if "--fn-call-stats" in flags:
+        if len(args) < 1:
+            print("usage: --fn-call-stats <file.hx>",
+                  file=sys.stderr)
+            sys.exit(2)
+        sys.exit(_fn_call_stats(args[0]))
 
     if "--fn-leaves" in flags:
         if len(args) < 1:

@@ -5872,6 +5872,7 @@ def test_stage59_autodiff_cli_help_mentions_polish_flags():
         "--fn-reachable-from", "--fn-reachable-to",
         "--fn-leaves", "--fn-roots",
         "--fn-recursive", "--fn-cycles",
+        "--fn-call-stats",
         "--check-program-hash",
         "--check-program-hash-from-file",
         "--check-program-signature-hash",
@@ -7372,6 +7373,37 @@ def test_stage59_fn_roots(tmp_path):
     # util has 2 callers → not root; entry_a, entry_b, truly_dead
     # never called locally → roots.
     assert lines == ["entry_a", "entry_b", "truly_dead"]
+
+
+def test_stage59_fn_call_stats(tmp_path):
+    """Stage 59 follow-on / Tier 4 #13 polish: --fn-call-stats emits
+    per-fn {fan_in, fan_out} JSON for hotspot identification."""
+    import json
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "stats.hx"
+    src.write_text(
+        "fn util(x: i32) -> i32 { x + 1 }\n"
+        "fn a(n: i32) -> i32 { util(n) }\n"
+        "fn b(n: i32) -> i32 { util(n) * 2 }\n"
+        "fn c(n: i32) -> i32 { util(a(n)) }\n",
+        encoding="utf-8",
+    )
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--fn-call-stats", str(src)],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0
+    result = json.loads(proc.stdout)
+    # util: called by a, b, c (fan_in=3); calls nothing (fan_out=0)
+    assert result["util"] == {"fan_in": 3, "fan_out": 0}
+    # a: called by c (fan_in=1); calls util (fan_out=1)
+    assert result["a"] == {"fan_in": 1, "fan_out": 1}
+    # b: no callers; calls util
+    assert result["b"] == {"fan_in": 0, "fan_out": 1}
+    # c: no callers; calls util + a (fan_out=2)
+    assert result["c"] == {"fan_in": 0, "fan_out": 2}
 
 
 def test_stage59_fn_reachable_to_inverse_transitive(tmp_path):
