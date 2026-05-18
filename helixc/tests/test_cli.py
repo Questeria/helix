@@ -5841,6 +5841,7 @@ def test_stage59_autodiff_cli_help_mentions_polish_flags():
         "--check-program-hash",
         "--check-program-hash-from-file",
         "--check-program-signature-hash",
+        "--check-program-signature-hash-from-file",
         "--list-modules", "--module-hash", "--pytree-shape",
         "--list-pytrees", "--pytree-leaf-paths",
         "--validate-pytrees", "--validate-pytrees-json",
@@ -6878,6 +6879,55 @@ def test_stage59_ast_stats_basic(tmp_path):
     assert "kernel_fns=1" in out
     assert "pure_fns=1" in out
     assert "traced_fns=1" in out
+
+
+def test_stage59_check_program_signature_hash_from_file_match(tmp_path):
+    """Stage 59 follow-on / Tier 4 #13 polish: symmetric to
+    --check-program-hash-from-file but for the signature hash."""
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "p.hx"
+    src.write_text("fn add(x: i32, y: i32) -> i32 { x + y }\n",
+                    encoding="utf-8")
+    h_proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--program-signature-hash", str(src)],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    pin = tmp_path / "sig-pin.txt"
+    pin.write_text(h_proc.stdout.strip() + "\n", encoding="utf-8")
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--check-program-signature-hash-from-file", str(src), str(pin)],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0
+
+
+def test_stage59_check_program_signature_hash_from_file_body_only_passes(tmp_path):
+    """Stage 59 follow-on: the key invariant — body-only refactor
+    still passes the from-file signature gate."""
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    v1 = tmp_path / "v1.hx"
+    v1.write_text("fn add(x: i32, y: i32) -> i32 { x + y }\n",
+                   encoding="utf-8")
+    v2 = tmp_path / "v2.hx"
+    v2.write_text("fn add(p: i32, q: i32) -> i32 { p + q + 0 }\n",
+                   encoding="utf-8")
+    h_proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--program-signature-hash", str(v1)],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    pin = tmp_path / "pin.txt"
+    pin.write_text(h_proc.stdout.strip(), encoding="utf-8")
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--check-program-signature-hash-from-file", str(v2), str(pin)],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0
 
 
 def test_stage59_check_program_hash_from_file_match(tmp_path):

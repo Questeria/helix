@@ -53,6 +53,8 @@ Introspection (Stage 28.9 + Stage 58 + Stage 59 polish):
         Same as --check-program-hash but reads expected hash from a file.
     --check-program-signature-hash <file.hx> <expected_hex>
         ABI-level CI gate (body-only refactors don't trip it).
+    --check-program-signature-hash-from-file <file.hx> <pin_file>
+        Same as --check-program-signature-hash but reads pin from file.
     --list-modules <file.hx>
         Enumerate ModBlock/ModuleDecl entries (incl. nested) with hashes.
     --module-hash <file.hx> <module_name>
@@ -471,6 +473,36 @@ def _print_program_hash(path: str) -> int:
     prog = _parse_or_exit(src, path)
     print(program_hash(prog))
     return 0
+
+
+def _check_program_signature_hash_from_file(path: str, expected_file: str) -> int:
+    """Stage 59 follow-on / Tier 4 #13 polish: --check-program-signature-hash
+    variant that reads the expected hash from a pinned-artifact file.
+
+    Symmetric with --check-program-hash-from-file. Reads `expected_file`
+    as plain text; the first non-empty stripped line is the expected
+    hash. Supports either full 64-hex or 12-hex short form.
+
+    Use case: CI config stores the pinned signature hash as a project
+    artifact (.helix-sig-hash) committed alongside the source — for
+    'don't break the public API' gates that survive internal refactors.
+
+    Exit codes:
+      0 — match
+      1 — mismatch (prints expected vs actual)
+      2 — bad arg (parse failure, missing expected_file, etc.)
+    """
+    try:
+        with open(expected_file, "r", encoding="utf-8") as f:
+            lines = [l.strip() for l in f if l.strip()]
+    except OSError as e:
+        print(f"error: autodiff_cli: {e}", file=sys.stderr)
+        return 2
+    if not lines:
+        print(f"error: autodiff_cli: {expected_file!r} contains no hash",
+              file=sys.stderr)
+        return 2
+    return _check_program_signature_hash(path, lines[0])
 
 
 def _check_program_signature_hash(path: str, expected: str) -> int:
@@ -1523,6 +1555,14 @@ def main():
                   "<expected_hex_hash>", file=sys.stderr)
             sys.exit(2)
         sys.exit(_check_program_signature_hash(args[0], args[1]))
+
+    if "--check-program-signature-hash-from-file" in flags:
+        if len(args) < 2:
+            print("usage: --check-program-signature-hash-from-file "
+                  "<file.hx> <expected_hash_file>", file=sys.stderr)
+            sys.exit(2)
+        sys.exit(_check_program_signature_hash_from_file(
+            args[0], args[1]))
 
     if "--list-modules" in flags:
         if len(args) < 1:
