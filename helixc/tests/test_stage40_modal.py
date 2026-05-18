@@ -1369,3 +1369,117 @@ fn main() -> i32 {
         f"real launder via if-then taint install MUST fire " \
         f"(NEW-HIGH-5 over-broad-drop regression), got: " \
         f"{[str(e) for e in errs]}"
+
+
+# ============================================================
+# Stage 52 closure gate-4 regression pins
+# ============================================================
+
+
+def test_stage52_gate4_high_1_match_patbind_propagates_scrutinee_taint():
+    """Gate-4 HIGH-1: `let r = from_uncertain(u); match r { x =>
+    into_known(x) }` was silent because PatBind only wrote to
+    the value scope, never to _modal_origin_provenance. x had
+    no entry; launder consult fell through to no-claim → silent
+    miscompile. Direct AI-safety bypass via trivial bind.
+
+    Post-fix: when scrutinee is a Name with tracked modal
+    origin AND the pattern is a top-level PatBind, copy the
+    taint to the bound name (placed INSIDE the snapshot region
+    per gate-4 MEDIUM-2 placement constraint so the binding
+    doesn't leak past the arm boundary)."""
+    src = """
+fn main() -> i32 {
+    let u: Uncertain<i32> = into_uncertain(1);
+    let r: i32 = from_uncertain(u);
+    let kk: i32 = match r { x => from_known(into_known(x)) };
+    kk
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    errs = typecheck(prog)
+    assert any("launder" in str(e) and "Uncertain" in str(e)
+               and "Known" in str(e) and "'x'" in str(e)
+               for e in errs), \
+        f"PatBind-bound x must inherit scrutinee taint " \
+        f"(gate-4 HIGH-1 silent miscompile regression), got: " \
+        f"{[str(e) for e in errs]}"
+
+
+def test_stage52_gate4_critical_1_loop_body_phase0_limitation_documented():
+    """Gate-4 CRITICAL-1 is the SAME Phase-0 limitation that
+    if-no-else has (verified independently): when a loop body
+    INSTALLS a different modal kind than the pre-loop value,
+    the 0-iteration case at runtime leaves the original kind
+    in place, but the static dict shows the new kind. into_X
+    matching the new kind silently passes — but at runtime in
+    the 0-iter case, into_X is applied to a value of the OLD
+    kind (real launder, silent).
+
+    This is NOT closeable by the audit-recommended union fix:
+    union would drop on multi-kind divergence, also silent.
+    The proper fix requires the deferred Inc 4 multi-kind
+    diagnostic ("could be X or Y, neither matches target").
+
+    This test PINS the current behavior so a refactor doesn't
+    accidentally change it without flipping this test (and the
+    Inc 4 fix will).
+
+    Pre-loop: r→Uncertain. Body installs Known. into_known(r):
+    - Current: dict[r]=Known (body's POPULATE), matches target
+      → no fire (silent at 0-iter case, OK at 1+iter case).
+    - Same defect: if-no-else with `r = from_known(kw)` in
+      then-branch + no else. Pre-fix-gate-2 would have fired
+      (over-conservative); post-gate-2 drops-on-conflict, also
+      silent.
+
+    Deferred to Inc 4 multi-kind diagnostic."""
+    src = """
+fn main() -> i32 {
+    let u: Uncertain<i32> = into_uncertain(1);
+    let kw: Known<i32> = into_known(1);
+    let mut r: i32 = from_uncertain(u);
+    let mut i: i32 = 0;
+    while i < 1 { r = from_known(kw); i = i + 1; };
+    let kk: Known<i32> = into_known(r);
+    from_known(kk)
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    errs = typecheck(prog)
+    launder_errs = [e for e in errs if "launder" in str(e)]
+    # Phase-0 limitation: silent today. Inc 4 multi-kind
+    # diagnostic should flip this to FIRE. When Inc 4 lands,
+    # this assertion becomes the post-fix assertion.
+    assert launder_errs == [], \
+        f"Phase-0 limitation: loop-body-installs-Known on " \
+        f"pre-loop-Uncertain is currently silent (same defect " \
+        f"class as if-no-else). Inc 4 multi-kind diagnostic " \
+        f"is the proper fix. If this test fires, update both " \
+        f"this assertion and the parallel if-no-else case. " \
+        f"Got: {[str(e) for e in errs]}"
+
+
+def test_stage52_gate4_critical_1_parallel_if_no_else_same_limitation():
+    """Companion to the loop-body test: pin the if-no-else
+    variant of the same Phase-0 limitation. Same drop-on-
+    conflict semantics. If Inc 4 multi-kind diagnostic lands,
+    flip this AND the loop test in lockstep."""
+    src = """
+fn main() -> i32 {
+    let u: Uncertain<i32> = into_uncertain(1);
+    let kw: Known<i32> = into_known(1);
+    let mut r: i32 = from_uncertain(u);
+    if true { r = from_known(kw); };
+    let kk: Known<i32> = into_known(r);
+    from_known(kk)
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    errs = typecheck(prog)
+    launder_errs = [e for e in errs if "launder" in str(e)]
+    assert launder_errs == [], \
+        f"Phase-0 limitation: if-no-else with then-installs- " \
+        f"Known on pre-Uncertain is currently silent (drop-on- " \
+        f"conflict). Inc 4 multi-kind diagnostic is the proper " \
+        f"fix. Got: {[str(e) for e in errs]}"

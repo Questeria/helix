@@ -5418,6 +5418,29 @@ class TypeChecker:
                 # so each arm starts from the pre-match state.
                 self._modal_origin_provenance = dict(
                     modal_origin_pre_match)
+                # Stage 52 closure gate-4 HIGH-1 fix: propagate
+                # scrutinee modal-origin taint to the pattern's
+                # binding name. Pre-fix, `let r = from_uncertain(u);
+                # match r { x => into_known(x) }` silently passed
+                # because `x` was bound via `_bind_pattern` (which
+                # only writes to the value scope) and never received
+                # r's taint. The launder consult site read no entry
+                # for x → fall through → silent miscompile.
+                # Post-fix: when scrutinee is a Name with a tracked
+                # modal-origin AND the pattern is a top-level
+                # PatBind, copy the taint to the bound name.
+                # Placed INSIDE the snapshot region (gate-4 MEDIUM
+                # placement constraint) so the binding doesn't
+                # leak past the arm boundary.
+                if (isinstance(expr.scrutinee, A.Name)
+                        and expr.scrutinee.name
+                            in self._modal_origin_provenance
+                        and isinstance(arm.pattern, A.PatBind)):
+                    self._modal_origin_provenance[
+                        arm.pattern.name
+                    ] = self._modal_origin_provenance[
+                        expr.scrutinee.name
+                    ]
                 # Gate-5 G4-F1/H2 fix: bare-expression arm bodies
                 # (e.g. `pat => r = Err(99)`) bypass _check_block.
                 # The Assign-arm mutates the provenance dict in

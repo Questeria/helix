@@ -155,3 +155,37 @@ multi-kind code:
 All 5 NEW-HIGH have post-fix regression pins in
 `test_stage40_modal.py` (5 tests, ~70 total Stage 40 now).
 Stage 40 modal sweep 65→70 passing post-pins.
+
+### Gate-4 closure (2026-05-17 evening)
+
+Gate-4 audit returned 1 CRITICAL + 1 HIGH:
+
+- **HIGH-1 (silent miscompile)** — PatBind in match-arm did
+  not propagate scrutinee taint. `let r = from_uncertain(u);
+  match r { x => into_known(x) }` silently passed because the
+  pattern binding only wrote to the value scope, not to
+  `_modal_origin_provenance`. Direct AI-safety bypass via
+  trivial bind.
+  Fixed: in A.Match arm processing (placed INSIDE the snapshot
+  region per gate-4 MEDIUM-2 constraint), when scrutinee is a
+  Name with tracked modal origin AND pattern is a top-level
+  PatBind, copy taint to the bound name.
+- **CRITICAL-1 (Phase-0 limitation, not closeable here)** —
+  loop-body INSTALLs different modal kind than pre-loop. At
+  the 0-iter case at runtime, the original kind persists; the
+  static dict carries the new kind. into_X matching new kind
+  silently passes when the runtime path has the OLD kind.
+  Audit recommended "mirror A.If no-else union semantics" but
+  this is wrong — union would DROP on multi-kind divergence
+  (still silent). Verified independently that A.If no-else
+  has the EXACT same Phase-0 limitation. Drop-on-conflict is
+  the chosen design philosophy (gate-2 HIGH-C); the proper
+  fix is the deferred Inc 4 multi-kind diagnostic ("could be
+  X or Y, neither matches target"). Documented + pinned with
+  current behavior (`test_stage52_gate4_critical_1_loop_body_
+  phase0_limitation_documented` + parallel if-no-else test).
+  When Inc 4 lands the multi-kind diagnostic, BOTH pinned
+  tests must flip in lockstep.
+
+Stage 40 sweep 70→73 passing post-pins (1 closable HIGH +
+2 Phase-0 limitation pins).
