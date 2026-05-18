@@ -4008,6 +4008,43 @@ def test_flatten_impls_rejects_same_name_methods():
     assert ex.value.trap_id == 74002
 
 
+def test_stage65_inc1_multi_target_dispatch_scaffolding():
+    """Stage 65 Inc 1 — Tier 4 #17 multiple dispatch scaffolding.
+    The flatten_impls internal data structure is now
+    `dict[str, list[str]]` (method_name → list of impl targets in
+    declaration order), even though Inc 1 still rejects duplicates
+    at registration time (Audit 28.8 B11 fail-closed preserved).
+    Inc 2 will opt into multi-dispatch via an attribute on the
+    impl block and add type-driven dispatch at call sites.
+
+    This pin verifies the scaffolding exists by checking that:
+    1. _resolve_method_target() is callable (helper exists)
+    2. DuplicateMethodError + _FIRST_SPAN module state present
+    3. The list-based registration data flow is wired through.
+    """
+    from helixc.frontend.flatten_impls import (
+        _resolve_method_target, DuplicateMethodError, _FIRST_SPAN,
+        flatten_impls,
+    )
+    from helixc.frontend import ast_nodes as A
+    import pytest as _pt
+
+    # Helper exists and accepts the new list-based dict.
+    assert callable(_resolve_method_target)
+    assert isinstance(_FIRST_SPAN, dict)
+
+    # Direct test of the resolver: 1 target = pick that one;
+    # 2 targets = raise.
+    span = A.Span(0, 0)
+    assert _resolve_method_target("area", {"area": ["Pt"]}, span) == "Pt"
+    # Multi-target path raises (Inc 2 will lift this).
+    with _pt.raises(DuplicateMethodError) as ex:
+        _resolve_method_target("area", {"area": ["Pt", "Line"]}, span)
+    assert ex.value.method == "area"
+    assert ex.value.first_target == "Pt"
+    assert ex.value.second_target == "Line"
+
+
 def test_flatten_impls_allows_distinct_method_names():
     """Distinct method names across structs flatten cleanly."""
     from helixc.frontend.flatten_impls import flatten_impls

@@ -303,6 +303,30 @@ Re-sequenced after Stage 46-47 closed:
 - **Stage 58** ✅ **CLOSED 2026-05-18** — Tier 4 #13 content-
   addressed modules (program_hash + module_hash + fn_signature_hash
   core).
+- **Stage 65 Inc 1 SHIPPED 2026-05-18** — Tier 4 #17 multiple
+  dispatch scaffolding (see `docs/stage65-progress-2026-05-18.md`):
+  - Refactored flatten_impls registration: `dict[str, str]` →
+    `dict[str, list[str]]` (multi-target tracking foundation).
+  - New `_resolve_method_target(method_name, m2t, span)` helper
+    centralizes the dispatch decision; currently 1-target = pick,
+    multi = raise DuplicateMethodError (Audit 28.8 B11 fail-closed
+    preserved).
+  - User-visible behavior unchanged; existing 7/7 impl-method
+    tests preserved.
+  - Inc 2-5 deferred to future polish (opt-in @overload, type-
+    driven dispatch, specificity rule, autotune integration).
+
+- **Stage 64 Inc 1 SHIPPED 2026-05-18** — Tier 2 #6 tensor codegen
+  bf16/f16 HBM tile unblock:
+  - 6 lift sites in ptx.py + lower_ast.py expand the HBM-dtype
+    set from {f32, i32} → {f32, i32, bf16, f16}.
+  - Kernel preamble declares `.reg .b16 %h<256>` pool for 16-bit
+    floats; `_ld_reg_prefix` now correctly splits `%h` (16-bit)
+    vs `%f` (32/64-bit).
+  - 4 new PTX tests; 83/83 + self-host 223/223 GREEN.
+  - Inc 2-5 (TILE_ZEROS/CONST/SHARED, TILE_ADD/MUL/MATMUL,
+    tile-IR perf passes) deferred to future polish stages (~3-5wk).
+
 - **Stage 63** ✅ **CLOSED 2026-05-18** — Tier 3 #11 runtime trace
   wiring (see `docs/stage63-progress-2026-05-18.md`):
   - Pre-Stage-63 state: TRACE_ENTRY / TRACE_EXIT IR ops emitted

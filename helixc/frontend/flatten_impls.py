@@ -65,10 +65,22 @@ def flatten_impls(prog: A.Program) -> int:
     picked the first-registered target silently — calling `line_var
     .area()` (where Line and Pt both have an `area` method) would
     rewrite to `Pt__area(line_var)`, passing a Line value into a
-    Pt-typed receiver. SEGV or silent wrong data."""
+    Pt-typed receiver. SEGV or silent wrong data.
+
+    Stage 65 Inc 1 — Tier 4 #17 multiple dispatch scaffolding:
+    The registration table is now `dict[str, list[str]]` (method_name
+    → list of impl targets in declaration order). Single-candidate
+    dispatch behaviour is preserved; multi-candidate dispatch still
+    raises DuplicateMethodError at rewrite time (fail-closed). Inc 2
+    will add type-driven dispatch by inspecting the receiver
+    expression's static type and selecting the matching target.
+    """
     methods_lifted = 0
     new_items: list[A.Item] = []
-    method_to_target: dict[str, str] = {}  # method_name -> target type
+    # Stage 65 Inc 1 — multi-target registration.
+    method_to_targets: dict[str, list[str]] = {}
+    # Track first-registration span for diagnostic continuity.
+    method_first_span: dict[str, A.Span] = {}
     for item in prog.items:
         if isinstance(item, A.ImplBlock):
             for m in item.methods:
@@ -81,39 +93,88 @@ def flatten_impls(prog: A.Program) -> int:
                 )
                 new_items.append(lifted)
                 methods_lifted += 1
-                prior_target = method_to_target.get(m.name)
-                if prior_target is None:
-                    method_to_target[m.name] = item.target
-                elif prior_target != item.target:
-                    raise DuplicateMethodError(
-                        method=m.name,
-                        first_target=prior_target,
-                        second_target=item.target,
-                        span=m.span,
-                    )
+                targets = method_to_targets.setdefault(m.name, [])
+                if item.target not in targets:
+                    if len(targets) == 0:
+                        method_first_span[m.name] = m.span
+                        targets.append(item.target)
+                    else:
+                        # Stage 65 Inc 1 — multi-target registration
+                        # tracking is in place, but call-site dispatch
+                        # by receiver type is deferred to Inc 2 (needs
+                        # typecheck integration). For now, preserve
+                        # the Audit 28.8 B11 fail-closed at registration:
+                        # second target raises DuplicateMethodError.
+                        # Inc 2 will opt into multi-dispatch via an
+                        # @overload-like attribute on the impl block.
+                        raise DuplicateMethodError(
+                            method=m.name,
+                            first_target=targets[0],
+                            second_target=item.target,
+                            span=m.span,
+                        )
                 # Same-target re-declaration (impl X { fn f() } twice)
                 # is a separate concern handled by typecheck's duplicate
-                # fn-name check; here we just don't overwrite.
+                # fn-name check; here we just don't double-register.
         else:
             new_items.append(item)
     prog.items = new_items
     if methods_lifted:
-        _rewrite_method_calls(prog, method_to_target)
+        _rewrite_method_calls(prog, method_to_targets,
+                                method_first_span)
     return methods_lifted
 
 
-def _rewrite_method_calls(prog: A.Program, m2t: dict[str, str]) -> None:
-    for item in prog.items:
-        if isinstance(item, A.FnDecl):
-            item.body = _rewrite_expr(item.body, m2t)
+# Stage 65 Inc 1 — module-level state for first-registration span
+# (used by DuplicateMethodError diagnostic). Set by flatten_impls
+# before walking and cleared after.
+_FIRST_SPAN: "dict[str, A.Span]" = {}
 
 
-def _rewrite_expr(e: A.Expr, m2t: dict[str, str]) -> A.Expr:
+def _rewrite_method_calls(prog: A.Program,
+                            m2t: "dict[str, list[str]]",
+                            first_span: "dict[str, A.Span] | None" = None
+                            ) -> None:
+    # Stage 65 Inc 1 — multi-target dispatch scaffolding.
+    global _FIRST_SPAN
+    _FIRST_SPAN = first_span or {}
+    try:
+        for item in prog.items:
+            if isinstance(item, A.FnDecl):
+                item.body = _rewrite_expr(item.body, m2t)
+    finally:
+        _FIRST_SPAN = {}
+
+
+def _resolve_method_target(method_name: str,
+                            m2t: "dict[str, list[str]]",
+                            call_span: A.Span) -> str:
+    """Stage 65 Inc 1 — pick the single target for a method-call
+    rewrite. Raises DuplicateMethodError when ambiguous (multiple
+    targets registered, no type-driven dispatch yet). Inc 2 will
+    add type-driven dispatch by inspecting the receiver's static
+    type."""
+    targets = m2t.get(method_name) or []
+    if len(targets) == 1:
+        return targets[0]
+    if len(targets) >= 2:
+        sp = _FIRST_SPAN.get(method_name, call_span)
+        raise DuplicateMethodError(
+            method=method_name,
+            first_target=targets[0],
+            second_target=targets[1],
+            span=sp,
+        )
+    return ""
+
+
+def _rewrite_expr(e: A.Expr, m2t: "dict[str, list[str]]") -> A.Expr:
     if isinstance(e, A.Call):
         new_args = [_rewrite_expr(a, m2t) for a in e.args]
         # Method-call: Call(callee=Field(obj, name), args)
         if isinstance(e.callee, A.Field) and e.callee.name in m2t:
-            target = m2t[e.callee.name]
+            target = _resolve_method_target(
+                e.callee.name, m2t, e.span)
             new_callee = A.Name(span=e.callee.span,
                                 name=target + "__" + e.callee.name,
                                 generics=[])
