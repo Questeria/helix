@@ -3101,6 +3101,79 @@ class Lowerer:
                     return self.builder.emit(
                         tir.OpKind.SELECT, len_eq, count_eq_i,
                         zero, result_ty=i32)
+                # Stage 55 Inc 2 — parse decimal i32 from arena.
+                # __parse_i32(start, len) → i32. Walks bytes in
+                # [start..start+len), accumulates digit values
+                # using `acc = acc * 10 + (b - '0')` for each
+                # in-range byte where '0' <= b <= '9'. Non-digit
+                # bytes contribute 0 (acc unchanged). Compile-time
+                # unrolled to MAX_PARSE=20 bytes (max i32 has 10
+                # digits + optional sign — 20 leaves headroom).
+                #
+                # Phase-0 limitation: no early-exit on non-digit
+                # means "12,34" parses as 1234 not 12. Caller
+                # should slice to a clean digit-only region using
+                # Inc 1's __str_find_byte before calling.
+                if bn == "__parse_i32" and len(expr.args) == 2:
+                    start = self._lower_expr(expr.args[0]) \
+                        or self.builder.const_int(0)
+                    length = self._lower_expr(expr.args[1]) \
+                        or self.builder.const_int(0)
+                    i32 = tir.TIRScalar("i32")
+                    bool_ty = tir.TIRScalar("bool")
+                    MAX_PARSE = 20
+                    acc = self.builder.const_int(0)
+                    ten = self.builder.const_int(10)
+                    zero_lit = self.builder.const_int(0)
+                    digit_zero = self.builder.const_int(48)  # '0'
+                    digit_nine = self.builder.const_int(57)  # '9'
+                    for i in range(MAX_PARSE):
+                        i_const = self.builder.const_int(i)
+                        in_range = self.builder.emit(
+                            tir.OpKind.CMP_LT, i_const, length,
+                            result_ty=bool_ty)
+                        idx = self.builder.emit(
+                            tir.OpKind.ADD, start, i_const,
+                            result_ty=i32)
+                        b = self.builder.emit(
+                            tir.OpKind.ARENA_GET, idx,
+                            result_ty=i32)
+                        # is_digit_lo = b >= '0' (i.e., '0' <= b)
+                        is_lo = self.builder.emit(
+                            tir.OpKind.CMP_LT, digit_zero,
+                            self.builder.emit(
+                                tir.OpKind.ADD, b,
+                                self.builder.const_int(1),
+                                result_ty=i32),
+                            result_ty=bool_ty)
+                        # is_digit_hi = b <= '9' (i.e., b < '9'+1)
+                        is_hi = self.builder.emit(
+                            tir.OpKind.CMP_LT, b,
+                            self.builder.const_int(58),
+                            result_ty=bool_ty)
+                        # digit_val = b - '0'
+                        digit_val = self.builder.emit(
+                            tir.OpKind.SUB, b, digit_zero,
+                            result_ty=i32)
+                        # new_acc = acc * 10 + digit_val
+                        acc10 = self.builder.emit(
+                            tir.OpKind.MUL, acc, ten,
+                            result_ty=i32)
+                        new_acc = self.builder.emit(
+                            tir.OpKind.ADD, acc10, digit_val,
+                            result_ty=i32)
+                        # Nested SELECT: in_range ? (is_lo ?
+                        #   (is_hi ? new_acc : acc) : acc) : acc
+                        sel_hi = self.builder.emit(
+                            tir.OpKind.SELECT, is_hi, new_acc, acc,
+                            result_ty=i32)
+                        sel_lo = self.builder.emit(
+                            tir.OpKind.SELECT, is_lo, sel_hi, acc,
+                            result_ty=i32)
+                        acc = self.builder.emit(
+                            tir.OpKind.SELECT, in_range, sel_lo, acc,
+                            result_ty=i32)
+                    return acc
                 # String builtins on literals.
                 # __strlen("literal") → compile-time const_int(len).
                 if (bn == "__strlen" and len(expr.args) == 1

@@ -15168,6 +15168,45 @@ def test_stage55_inc1_str_eq_arena_diff_length():
     assert code == 0, f"expected 0 (different lengths), got {code}"
 
 
+def test_stage55_inc2_parse_i32_basic():
+    """Stage 55 Inc 2: __parse_i32 parses decimal digits."""
+    src = """
+    fn main() -> i32 {
+        let s = __strlit_to_arena("42");
+        __parse_i32(s, 2)
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
+def test_stage55_inc2_parse_i32_larger():
+    """Stage 55 Inc 2: __parse_i32 handles multi-digit values
+    within MAX_PARSE=20 cap. Use 8-bit-safe value via modulo."""
+    src = """
+    fn main() -> i32 {
+        let s = __strlit_to_arena("256");
+        let v = __parse_i32(s, 3);
+        v - 256
+    }
+    """
+    code = compile_and_run(src)
+    # v=256, v-256=0 → exit 0
+    assert code == 0, f"expected v=256 (v-256=0), got {code}"
+
+
+def test_stage55_inc2_parse_i32_empty():
+    """Stage 55 Inc 2: __parse_i32 with empty range returns 0."""
+    src = """
+    fn main() -> i32 {
+        let s = __strlit_to_arena("999");
+        __parse_i32(s, 0)
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 0, f"expected 0 for empty range, got {code}"
+
+
 def test_strbyte_out_of_range_returns_zero():
     """__strbyte('abc', 10) is out of range → 0."""
     src = """

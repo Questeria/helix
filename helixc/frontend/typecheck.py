@@ -2471,6 +2471,11 @@ class TypeChecker:
         # arena-backed `(start: i32, len: i32)` byte sequences;
         # complement to the literal-only __str* family above.
         "__str_byte_at", "__str_find_byte", "__str_eq_arena",
+        # Stage 55 Inc 2 — parse decimal integer from arena string.
+        # Returns the accumulated i32 value; non-digit bytes
+        # contribute 0 (caller validates input shape via Inc 1
+        # primitives). parse_f64 deferred to future inc.
+        "__parse_i32",
         # Phase 2.2 step 2 — float-bit reinterpret intrinsics.
         "__bits_of_f32", "__f32_from_bits",
         "__bits_of_f64", "__f64_from_bits",
