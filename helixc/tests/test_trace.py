@@ -509,6 +509,51 @@ def test_stage59_trace_op_counts_entry_exit_balance():
     assert counts.get("entry", 0) == counts.get("exit", 0) == 2
 
 
+def test_stage59_trace_fn_counts_histogram():
+    """Stage 59 follow-on / Tier 3 #11 polish: trace_fn_counts returns
+    a {fn_name: count} histogram across all events."""
+    from helixc.frontend.trace_pass import trace_fn_counts
+    buf = TraceBuffer(events=[
+        TraceEvent("entry", "loss", ()),
+        TraceEvent("exit", "loss", (1.0,)),
+        TraceEvent("entry", "step", ()),
+        TraceEvent("entry", "step", ()),
+        TraceEvent("exit", "step", (0,)),
+        TraceEvent("exit", "step", (1,)),
+    ])
+    assert trace_fn_counts(buf) == {"loss": 2, "step": 4}
+    assert trace_fn_counts(TraceBuffer()) == {}
+
+
+def test_stage59_trace_is_balanced_clean():
+    """Stage 59 follow-on: trace_is_balanced returns True when
+    entry count == exit count."""
+    from helixc.frontend.trace_pass import trace_is_balanced
+    balanced = TraceBuffer(events=[
+        TraceEvent("entry", "f", ()),
+        TraceEvent("entry", "g", ()),
+        TraceEvent("exit", "g", (1,)),
+        TraceEvent("exit", "f", (2,)),
+    ])
+    assert trace_is_balanced(balanced)
+    # Empty trace: 0 == 0, also balanced
+    assert trace_is_balanced(TraceBuffer())
+
+
+def test_stage59_trace_is_balanced_detects_mismatch():
+    """Stage 59 follow-on: trace_is_balanced returns False when
+    entries don't match exits (common defect: fn entered but
+    never returned)."""
+    from helixc.frontend.trace_pass import trace_is_balanced
+    missing_exit = TraceBuffer(events=[
+        TraceEvent("entry", "f", ()),
+        TraceEvent("entry", "g", ()),
+        TraceEvent("exit", "g", (1,)),
+        # No exit for f
+    ])
+    assert not trace_is_balanced(missing_exit)
+
+
 def test_stage59_trace_hash_deterministic():
     """Stage 59 follow-on / Tier 3 #11 polish: trace_hash returns the
     same hex SHA-256 for the same event sequence across calls."""

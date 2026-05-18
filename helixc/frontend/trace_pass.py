@@ -231,6 +231,41 @@ def trace_op_counts(buf: TraceBuffer) -> dict:
     return counts
 
 
+def trace_fn_counts(buf: TraceBuffer) -> dict:
+    """Stage 59 follow-on / Tier 3 #11 polish — histogram of fn_name
+    counts across the trace.
+
+    Returns a dict {fn_name: count}. Companion to trace_op_counts.
+
+    Example:
+        {"loss": 3, "grad_pass": 1, "step": 100}
+
+    Use case: profile which functions dominate the trace, spot
+    unexpected callees (e.g., should grad_pass have been called once
+    but was actually called 5 times?).
+    """
+    counts: dict = {}
+    for ev in buf.events:
+        counts[ev.fn_name] = counts.get(ev.fn_name, 0) + 1
+    return counts
+
+
+def trace_is_balanced(buf: TraceBuffer) -> bool:
+    """Stage 59 follow-on / Tier 3 #11 polish — quick predicate for
+    'every entry has a matching exit' invariant.
+
+    Returns True iff the count of "entry" events equals the count of
+    "exit" events. This is necessary-but-not-sufficient — it doesn't
+    verify fn_name pairing or LIFO order, but it catches the most
+    common defect (a function entered but never exited).
+
+    For a complete LIFO-pairing check, use trace_filter to extract
+    entry/exit pairs and verify nesting.
+    """
+    counts = trace_op_counts(buf)
+    return counts.get("entry", 0) == counts.get("exit", 0)
+
+
 def trace_hash(buf: TraceBuffer) -> str:
     """Stage 59 follow-on / Tier 3 #11 polish — content-addressable
     hash of a trace buffer.
