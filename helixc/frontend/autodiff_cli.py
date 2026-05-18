@@ -27,6 +27,8 @@ Introspection (Stage 28.9 + Stage 58 + Stage 59 polish):
         Same as --hash-dump but with 12-hex short hashes (compact logs).
     --diff-trace <a.json> <b.json>
         Diff two trace_to_canonical_json dumps; prints first divergence.
+    --diff-trace-json <a.json> <b.json>
+        Same as --diff-trace but machine-readable JSON output.
     --trace-dump-summary <file.json>
         High-level stats of a trace dump: counts, balance, short hash.
     --trace-dump-summary-json <file.json>
@@ -440,6 +442,71 @@ def _trace_dump_summary(path: str) -> int:
     print(f"op_kind_counts={dict(sorted(trace_op_counts(buf).items()))}")
     print(f"balanced={trace_is_balanced(buf)}")
     print(f"hash={short_hash(trace_hash(buf))}")
+    return 0
+
+
+def _diff_trace_json(path_a: str, path_b: str) -> int:
+    """Stage 59 follow-on / Tier 3 #11 polish: machine-readable diff
+    between two trace JSON dumps.
+
+    Output schema:
+      {"status": "MATCH" | "DIFFER",
+       "events_a": <int>,
+       "events_b": <int>,
+       "first_divergence": {        // only present if DIFFER
+         "index": <int>,
+         "a": {... event dict ...} or null,
+         "b": {... event dict ...} or null
+       }
+      }
+
+    Exit codes match --diff-trace: 0 for MATCH or for any DIFFER
+    output (so JSON-consuming tooling parses every case uniformly);
+    1 reserved for I/O errors only.
+    """
+    import json
+    from .trace_pass import (
+        trace_from_canonical_json, trace_equiv, trace_diff,
+    )
+    try:
+        with open(path_a, "r", encoding="utf-8") as f:
+            a_json = f.read()
+        with open(path_b, "r", encoding="utf-8") as f:
+            b_json = f.read()
+    except OSError as e:
+        print(f"error: autodiff_cli: {e}", file=sys.stderr)
+        return 1
+    a = trace_from_canonical_json(a_json)
+    b = trace_from_canonical_json(b_json)
+    result: dict = {
+        "events_a": len(a),
+        "events_b": len(b),
+    }
+    if trace_equiv(a, b):
+        result["status"] = "MATCH"
+        print(json.dumps(result, sort_keys=True, indent=2))
+        return 0
+    result["status"] = "DIFFER"
+    diff = trace_diff(a, b)
+    if diff is not None:
+        idx, ea, eb = diff
+
+        def _ev(ev) -> dict:
+            if ev is None:
+                return None
+            return {
+                "op_kind": ev.op_kind,
+                "fn_name": ev.fn_name,
+                "operands": list(ev.operands),
+                "result": ev.result,
+            }
+
+        result["first_divergence"] = {
+            "index": idx,
+            "a": _ev(ea),
+            "b": _ev(eb),
+        }
+    print(json.dumps(result, sort_keys=True, indent=2))
     return 0
 
 
@@ -3305,6 +3372,13 @@ def main():
                   file=sys.stderr)
             sys.exit(2)
         sys.exit(_diff_trace(args[0], args[1]))
+
+    if "--diff-trace-json" in flags:
+        if len(args) < 2:
+            print("usage: --diff-trace-json <a.json> <b.json>",
+                  file=sys.stderr)
+            sys.exit(2)
+        sys.exit(_diff_trace_json(args[0], args[1]))
 
     if "--trace-dump-summary" in flags:
         if len(args) < 1:

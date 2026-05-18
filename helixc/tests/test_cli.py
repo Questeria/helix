@@ -5891,8 +5891,8 @@ def test_stage59_autodiff_cli_help_mentions_polish_flags():
         "--autotune-budget",
         "--validate-autotune", "--validate-autotune-json",
         "--hash-dump", "--diff-hash-dump", "--hash-dump-short",
-        "--diff-trace", "--trace-dump-summary",
-        "--trace-dump-summary-json",
+        "--diff-trace", "--diff-trace-json",
+        "--trace-dump-summary", "--trace-dump-summary-json",
         "--validate-trace-attrs",
         "--list-traced-fns", "--list-traced-fns-json",
         "--validate-all", "--validate-all-json",
@@ -6577,6 +6577,79 @@ def test_stage59_trace_dump_summary(tmp_path):
     assert "op_kind_counts=" in out
     assert "balanced=True" in out
     assert "hash=" in out
+
+
+def test_stage59_diff_trace_json_match(tmp_path):
+    """Stage 59 follow-on / Tier 3 #11 polish: --diff-trace-json emits
+    {status: MATCH, events_a, events_b} when traces equivalent."""
+    import json
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    trace = json.dumps({
+        "cap": 4096,
+        "events": [
+            {"op_kind": "entry", "fn_name": "f", "operands": [1],
+             "result": None},
+            {"op_kind": "exit", "fn_name": "f", "operands": [2],
+             "result": None},
+        ],
+    })
+    a = tmp_path / "a.json"
+    a.write_text(trace, encoding="utf-8")
+    b = tmp_path / "b.json"
+    b.write_text(trace, encoding="utf-8")
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--diff-trace-json", str(a), str(b)],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0
+    result = json.loads(proc.stdout)
+    assert result["status"] == "MATCH"
+    assert result["events_a"] == 2
+    assert result["events_b"] == 2
+    assert "first_divergence" not in result
+
+
+def test_stage59_diff_trace_json_differ(tmp_path):
+    """Stage 59 follow-on: --diff-trace-json emits {status: DIFFER,
+    first_divergence: {index, a, b}} when traces don't match."""
+    import json
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    a = tmp_path / "a.json"
+    a.write_text(json.dumps({
+        "cap": 4096,
+        "events": [
+            {"op_kind": "entry", "fn_name": "f", "operands": [1],
+             "result": None},
+            {"op_kind": "exit", "fn_name": "f", "operands": [2],
+             "result": None},
+        ],
+    }), encoding="utf-8")
+    b = tmp_path / "b.json"
+    b.write_text(json.dumps({
+        "cap": 4096,
+        "events": [
+            {"op_kind": "entry", "fn_name": "f", "operands": [1],
+             "result": None},
+            {"op_kind": "exit", "fn_name": "f", "operands": [999],
+             "result": None},
+        ],
+    }), encoding="utf-8")
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--diff-trace-json", str(a), str(b)],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0
+    result = json.loads(proc.stdout)
+    assert result["status"] == "DIFFER"
+    assert "first_divergence" in result
+    fd = result["first_divergence"]
+    assert fd["index"] == 1
+    assert fd["a"]["operands"] == [2]
+    assert fd["b"]["operands"] == [999]
 
 
 def test_stage59_diff_trace_match(tmp_path):
