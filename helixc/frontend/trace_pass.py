@@ -94,6 +94,39 @@ def trace_equiv(a: TraceBuffer, b: TraceBuffer) -> bool:
     return True
 
 
+def trace_summary(buf: TraceBuffer, max_events: int = 16) -> str:
+    """Stage 59 follow-on / Tier 3 #11 polish — human-readable digest
+    of a TraceBuffer. Lists first `max_events` events as one-line
+    summaries plus a `(... N more)` truncation footer when needed.
+
+    Use case: AGI verifier diagnostic reports — embed `trace_summary`
+    output in the witness-of-mismatch message so the user sees the
+    actual divergent trace structure, not just an opaque "trace
+    mismatch" error.
+
+    Format per event:
+        "[i] {op_kind} {fn_name}({operands}) → {result}"
+    where result is omitted if None.
+    """
+    lines: list[str] = []
+    n = len(buf.events)
+    show = min(n, max_events)
+    for i in range(show):
+        ev = buf.events[i]
+        ops = ", ".join(repr(o) for o in ev.operands)
+        if ev.result is None:
+            lines.append(f"[{i}] {ev.op_kind} {ev.fn_name}({ops})")
+        else:
+            lines.append(
+                f"[{i}] {ev.op_kind} {ev.fn_name}({ops}) → {ev.result}"
+            )
+    if n > show:
+        lines.append(f"(... {n - show} more events)")
+    if not lines:
+        return "<empty trace>"
+    return "\n".join(lines)
+
+
 def trace_diff(a: TraceBuffer, b: TraceBuffer) -> Optional[tuple]:
     """Stage 59 follow-on / Tier 3 #11 polish — find the first divergent
     event between two traces. Useful debug helper when trace_equiv

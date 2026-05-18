@@ -305,6 +305,38 @@ def test_c2_2_early_return_void():
     assert len(exits) == 2
 
 
+def test_stage59_trace_summary_empty():
+    """Stage 59 follow-on: trace_summary on empty buffer returns
+    `<empty trace>`."""
+    from helixc.frontend.trace_pass import trace_summary
+    assert trace_summary(TraceBuffer()) == "<empty trace>"
+
+
+def test_stage59_trace_summary_basic():
+    """Stage 59 follow-on: trace_summary lists events one per line."""
+    from helixc.frontend.trace_pass import trace_summary
+    buf = TraceBuffer(events=[
+        TraceEvent("entry", "f", (1, 2)),
+        TraceEvent("exit", "f", (), result=3),
+    ])
+    out = trace_summary(buf)
+    assert "[0] entry f(1, 2)" in out
+    assert "[1] exit f() → 3" in out
+
+
+def test_stage59_trace_summary_truncates():
+    """Stage 59 follow-on: trace_summary truncates with `... N more`
+    footer when buffer exceeds max_events."""
+    from helixc.frontend.trace_pass import trace_summary
+    events = [TraceEvent("op", "g", (i,)) for i in range(20)]
+    buf = TraceBuffer(events=events)
+    out = trace_summary(buf, max_events=5)
+    assert "[0] op g(0)" in out
+    assert "[4] op g(4)" in out
+    assert "[5]" not in out  # truncated
+    assert "(... 15 more events)" in out
+
+
 def test_stage59_trace_diff_equal_returns_none():
     """Stage 59 follow-on / Tier 3 #11 polish: trace_diff(a, a)
     returns None for identical traces."""
