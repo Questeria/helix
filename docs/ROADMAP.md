@@ -109,7 +109,9 @@ Re-sequenced after Stage 46-47 closed:
   verification CLEAN. 48 Stage 49 tests + 78 Stage 46+48
   unchanged. Self-host cascade preserved. dogfood_16 + dogfood_17
   still exit 42.
-- **Stage 50** ✅ **RESURRECTED 2026-05-17** (commit a35e628):
+- **Stage 50** ✅ **RESURRECTED 2026-05-17** + closure
+  gate-1/2 audited (commit a35e628; formal CLOSED pending
+  Stage 51 multi-param test coverage):
   bootstrap `grad_rev_all` multi-bucket infrastructure swap.
   Inc 1 (f4e94fc) + Inc 2 (76b7735) originally aborted at
   f678aa3 due to G2 cascade-break with SIGILL rc=132. Root
