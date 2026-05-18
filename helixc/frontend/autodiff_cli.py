@@ -28,6 +28,8 @@ Introspection (Stage 28.9 + Stage 58 + Stage 59 polish):
         Print the module hash (accepts dotted names for nested).
     --pytree-shape <file.hx> <struct_name>
         Print leaf-path / type / diff-classification for a struct.
+    --list-pytrees <file.hx>
+        Inventory: leaf-count + diff/non-diff summary per struct.
     --autotune-summary <file.hx>
         Print {fn variants=N} for @autotune @kernel fns + total.
     --autotune-budget <file.hx> <max_total>
@@ -190,6 +192,43 @@ def _list_modules(path: str) -> int:
     # Sort alphabetically by module name for stable output.
     for name, h in sorted(rows, key=lambda r: r[0]):
         print(f"{name} hash={h}")
+    return 0
+
+
+def _list_pytrees(path: str) -> int:
+    """Stage 59 follow-on / Tier 2 #7 polish: enumerate all structs in
+    a file with their pytree leaf count + diff-eligibility summary.
+
+    Output format per struct (one line):
+      `<name> leaves=<N> diff=<K> non_diff=<M>` (when flatten succeeds)
+      `<name> REJECTED <reason>` (when struct has non-diff fields)
+
+    Sorted alphabetically by struct name. Provides an at-a-glance
+    inventory of every struct's gradient-eligibility status without
+    requiring per-struct --pytree-shape invocations.
+
+    Use case:
+    - Repo audit: catch structs that have drifted into non-diff
+      (e.g., added an i32 field that breaks pytree).
+    - Manifest generation for training-script param discovery.
+
+    Exit 0 always.
+    """
+    from .pytree import flatten_pytree
+    src = _read_source(path)
+    prog = _parse_or_exit(src, path)
+    struct_decls = {it.name: it for it in prog.items
+                    if isinstance(it, A.StructDecl)}
+    for name in sorted(struct_decls.keys()):
+        try:
+            leaves = flatten_pytree(struct_decls[name], struct_decls)
+            diff = sum(1 for l in leaves if l.is_diff)
+            print(f"{name} leaves={len(leaves)} diff={diff} "
+                  f"non_diff={len(leaves) - diff}")
+        except ValueError as e:
+            # Strip trap-id from error for cleaner output.
+            reason = str(e).split("(trap")[0].strip()
+            print(f"{name} REJECTED {reason}")
     return 0
 
 
@@ -576,6 +615,13 @@ def main():
                   file=sys.stderr)
             sys.exit(2)
         sys.exit(_pytree_shape(args[0], args[1]))
+
+    if "--list-pytrees" in flags:
+        if len(args) < 1:
+            print("usage: --list-pytrees <file.hx>",
+                  file=sys.stderr)
+            sys.exit(2)
+        sys.exit(_list_pytrees(args[0]))
 
     if len(sys.argv) < 3 or len(args) < 2:
         print(__doc__.strip(), file=sys.stderr)

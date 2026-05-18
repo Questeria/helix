@@ -5836,7 +5836,8 @@ def test_stage59_autodiff_cli_help_mentions_polish_flags():
         "--dump-ast-hashes", "--program-hash", "--diff-program-hash",
         "--changed-fns", "--fn-sig-hash", "--list-fns",
         "--check-program-hash", "--list-modules", "--module-hash",
-        "--pytree-shape", "--autotune-summary", "--autotune-budget",
+        "--pytree-shape", "--list-pytrees",
+        "--autotune-summary", "--autotune-budget",
     ):
         assert flag in out, (
             f"help text missing {flag!r}: docstring needs to be "
@@ -5994,6 +5995,48 @@ def test_stage59_pytree_shape_non_diff_field_rejected(tmp_path):
     assert "non-differentiable" in proc.stderr or "26002" in proc.stderr
     # Verify no traceback leaked.
     assert "Traceback" not in proc.stderr
+
+
+def test_stage59_list_pytrees_inventory(tmp_path):
+    """Stage 59 follow-on / Tier 2 #7 polish: --list-pytrees prints
+    {struct leaves=N diff=K non_diff=M} for each struct, with REJECTED
+    marker for structs that flatten_pytree refuses."""
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "inv.hx"
+    src.write_text(
+        "struct GoodFlat { w: D<f32>, b: D<f32> }\n"
+        "struct GoodNested { inner: GoodFlat, bias: D<f64> }\n"
+        "struct BadHasInt { w: D<f32>, label: i32 }\n",
+        encoding="utf-8",
+    )
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--list-pytrees", str(src)],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0, proc.stderr
+    out = proc.stdout
+    assert "GoodFlat leaves=2 diff=2 non_diff=0" in out
+    assert "GoodNested leaves=3 diff=3 non_diff=0" in out
+    assert "BadHasInt REJECTED" in out
+    assert "non-differentiable" in out
+
+
+def test_stage59_list_pytrees_empty(tmp_path):
+    """Stage 59 follow-on: --list-pytrees on a file with no structs
+    prints nothing (just exit 0)."""
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "no_structs.hx"
+    src.write_text("fn main() -> i32 { 0 }\n", encoding="utf-8")
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--list-pytrees", str(src)],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0
+    assert proc.stdout == ""
 
 
 def test_stage59_module_hash_dotted_nested_name(tmp_path):
