@@ -53,6 +53,8 @@ Introspection (Stage 28.9 + Stage 58 + Stage 59 polish):
         Enumerate top-level ConstDecls as '<name>: <ty>' lines.
     --list-consts-json <file.hx>
         Same as --list-consts but machine-readable JSON output.
+    --const-value <file.hx> <const_name>
+        Print the literal value of a top-level ConstDecl.
     --struct-fields <file.hx> <struct_name>
         Print '<name>: <ty>' per field (declaration order, not sorted).
     --struct-fields-json <file.hx> <struct_name>
@@ -3718,6 +3720,43 @@ def _list_consts_json(path: str) -> int:
     return 0
 
 
+def _const_value(path: str, const_name: str) -> int:
+    """Stage 59 follow-on / Tier 4 #13 polish: print the value
+    expression of a specific top-level ConstDecl.
+
+    Output: a single line showing the printable form of the value
+    expression. For IntLit/FloatLit/StrLit, prints the literal.
+    For more complex expressions, uses `repr(value)` as a fallback.
+
+    Exit 0 success; 1 if const_name not found.
+
+    Use case: quick value lookup. Pair with --list-consts to discover
+    names, then this to inspect specific values.
+    """
+    src = _read_source(path)
+    prog = _parse_or_exit(src, path)
+    for it in prog.items:
+        if isinstance(it, A.ConstDecl) and it.name == const_name:
+            v = it.value
+            # IntLit / FloatLit / StrLit / BoolLit / CharLit fast path.
+            if isinstance(v, A.IntLit):
+                print(v.value)
+            elif isinstance(v, A.FloatLit):
+                print(v.value)
+            elif isinstance(v, A.StrLit):
+                print(repr(v.value))
+            elif isinstance(v, A.BoolLit):
+                print("true" if v.value else "false")
+            elif isinstance(v, A.CharLit):
+                print(repr(v.value))
+            else:
+                print(repr(v))
+            return 0
+    print(f"error: autodiff_cli: const {const_name!r} not found in {path}",
+          file=sys.stderr)
+    return 1
+
+
 def _list_consts(path: str) -> int:
     """Stage 59 follow-on / Tier 4 #13 polish: enumerate top-level
     ConstDecls in a file.
@@ -4143,6 +4182,13 @@ def main():
                   file=sys.stderr)
             sys.exit(2)
         sys.exit(_list_consts_json(args[0]))
+
+    if "--const-value" in flags:
+        if len(args) < 2:
+            print("usage: --const-value <file.hx> <const_name>",
+                  file=sys.stderr)
+            sys.exit(2)
+        sys.exit(_const_value(args[0], args[1]))
 
     if "--list-uses-json" in flags:
         if len(args) < 1:

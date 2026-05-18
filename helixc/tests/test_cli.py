@@ -5867,7 +5867,7 @@ def test_stage59_autodiff_cli_help_mentions_polish_flags():
         "--list-structs", "--list-structs-json",
         "--struct-fields", "--struct-fields-json",
         "--list-uses", "--list-uses-json",
-        "--list-consts", "--list-consts-json",
+        "--list-consts", "--list-consts-json", "--const-value",
         "--list-fn-attrs", "--list-fn-attrs-json",
         "--list-fns-by-attr", "--list-fns-by-attr-json",
         "--fn-callgraph", "--fn-callers",
@@ -7379,6 +7379,50 @@ def test_stage59_list_uses_json(tmp_path):
         {"path": "foo.bar.baz", "segments": ["foo", "bar", "baz"]},
         {"path": "std.result", "segments": ["std", "result"]},
     ]}
+
+
+def test_stage59_const_value(tmp_path):
+    """Stage 59 follow-on / Tier 4 #13 polish: --const-value prints
+    the literal value of a top-level ConstDecl."""
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "cv.hx"
+    src.write_text(
+        "const MAX_BUF: i32 = 4096;\n"
+        "const FLAG: bool = true;\n",
+        encoding="utf-8",
+    )
+    # IntLit
+    proc_i = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--const-value", str(src), "MAX_BUF"],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc_i.returncode == 0
+    assert proc_i.stdout.strip() == "4096"
+    # BoolLit
+    proc_b = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--const-value", str(src), "FLAG"],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc_b.returncode == 0
+    assert proc_b.stdout.strip() == "true"
+
+
+def test_stage59_const_value_not_found(tmp_path):
+    """Stage 59 follow-on: unknown const exits 1 with stderr."""
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "x.hx"
+    src.write_text("const X: i32 = 1;\n", encoding="utf-8")
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--const-value", str(src), "phantom"],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 1
+    assert "not found" in proc.stderr
 
 
 def test_stage59_list_consts_json(tmp_path):
