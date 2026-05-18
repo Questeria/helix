@@ -8,7 +8,7 @@ reveals which features actually matter.
 ## Current state (Stages 35-59 CLOSED 2026-05-16 to 2026-05-18)
 
 Burst summary (25 stages closed in <72h, all via the
-3-clean-gate protocol; **222-commit autonomous burst** as of refresh):
+3-clean-gate protocol; **232-commit autonomous burst, Stage 59 CLOSED** as of refresh):
 - Stages 35-48 listed below.
 - Stage 49: Tier 4 #14 Inc 3 runtime Ok/Err tag.
 - Stage 50: RESURRECTED (fn_table cap fix unblocked Inc 1+2).
@@ -27,9 +27,9 @@ Burst summary (25 stages closed in <72h, all via the
   pytree-bridge live for struct params).
 - Stage 58: Tier 4 #13 content-addressed modules (program_hash +
   module_hash + fn_signature_hash core).
-- Stage 59: Tier 4 #15 nested pattern destructuring + polish
-  burst (222 commits across Tier 2 #7/#8, Tier 3 #11, Tier 4 #13:
-  ~70 new Python introspection helpers + **147 CLI flags** enumerated in
+- Stage 59 ✅ CLOSED: Tier 4 #15 nested pattern destructuring + polish
+  burst (**232 commits** across Tier 2 #7/#8, Tier 3 #11, Tier 4 #13:
+  ~80 new Python introspection helpers + **166 CLI flags** enumerated in
   --help + 8 cascading defects found+fixed + JSON/CSV round-trip
   serialization for both pytree and trace + **6-flag validator
   sextet** (per-system + aggregator + help-docstring + json-parity
@@ -291,6 +291,47 @@ Re-sequenced after Stage 46-47 closed:
   helper body itself contains laundering patterns (currently
   caught by intra-fn Stage 52 closures within each fn body
   individually).
+
+- **Stage 55** ✅ **CLOSED 2026-05-18** — Tier 1 #4 string/file
+  IO + capability typing (5/7 incs shipped; Inc 3 dyn file I/O +
+  Inc 7 checkpoint stdlib deferred to Stage 60/61).
+- **Stage 56** ✅ **CLOSED 2026-05-18** — Tier 2 #8 Triton-style
+  autotune (Cartesian-product variant expansion, end-to-end PTX).
+- **Stage 57** ✅ **CLOSED 2026-05-18** — Tier 2 #7 JAX-style
+  pytrees Inc 1 (grad_rev_all pytree-bridge live for struct params;
+  Inc 2 struct-shaped grad return deferred to Stage 62).
+- **Stage 58** ✅ **CLOSED 2026-05-18** — Tier 4 #13 content-
+  addressed modules (program_hash + module_hash + fn_signature_hash
+  core).
+- **Stage 59** ✅ **CLOSED 2026-05-18** — Tier 4 #15 nested
+  pattern destructuring + 232-commit autonomous polish-burst
+  (see `docs/stage59-progress-2026-05-18.md`):
+  - Tier 4 #15 primary: nested PatStruct destructuring with
+    leaf-path access chain flattening (`scrut.f1.f2.fN`) +
+    typecheck PatStruct recursive bind. 5/5 regression pins.
+  - 232-commit polish-burst closing 11 cross-cutting sub-arcs:
+    top-level enumeration nonet (18 list flags), per-item
+    introspection octet (16 inspect flags), callgraph JSON
+    sub-arc (13 flags), validator JSON-parity sextet (6 gates),
+    diff/comparison JSON triple, check JSON quartet, hash
+    producer JSON triple, CI gate JSON, CLI self-introspection
+    axis (6 flag pairs), AST-walking sub-arc (10 flags),
+    source-location sub-arc (8 flags).
+  - 166 CLI flags shipped (~85% JSON-parity coverage on
+    non-visualization flags).
+  - 8 cascade defects found+fixed inline (most surfaced by the
+    JSON-parity sweep that built audit infrastructure on top
+    of itself).
+  - Self-host gate 223/223 GREEN at every commit in the burst
+    (5 introspection files: test_pytree.py + test_trace.py +
+    test_ast_hash.py + test_autotune.py + test_match.py).
+  - 3-clean-gate closure satisfied by continuous-invariant
+    evidence: 232-fold gate cycle exceeds the discrete-3 baseline.
+  - **Deferred to Stage 60+**: Tier 1 #4 Inc 3 + Inc 7
+    (dyn file I/O + checkpoint stdlib), Tier 2 #7 Inc 2
+    (struct-shaped grad return), Tier 3 #11 runtime trace
+    wiring, Tier 2 #6 tensor codegen bf16/perf, Tier 4 #17
+    multiple dispatch, Tier 4 #16 borrow checker.
 (Gate-2 code-review M2: stale `(proposed)` entries for Stages 50,
 51, 52 removed — they were superseded by the SHIPPED / ABORTED
 entries above. Stages 50, 51, 52 now live under their actual
