@@ -6257,12 +6257,139 @@ fn grad_rev_pass(sb: i32, head: i32) -> i32 {
                     };
                 };
             }
+            let run_size = run_end - gri;
+            // Stage 51 Inc 2: multi-bucket fast path. Try true
+            // single-walk via differentiate_reverse_all when:
+            //   - run_size >= 2 (Inc 1 trivial-fallback for n=1)
+            //   - run_size <= 8 (bucket_array cap; falls back
+            //     if exceeded, mirroring per-bucket cap behavior)
+            //   - loss_fn_idx is found
+            //   - ALL entries pass validation (valid_field +
+            //     have_param + ckpt_ok). Any one invalid entry
+            //     forces fallback so the per-entry trap arms
+            //     (88002 / 88003 / 90001) fire correctly per-
+            //     entry rather than poisoning the whole run.
+            //
+            // The fast path is SAFE because:
+            //   - parser.hx itself doesn't use grad_rev_all with
+            //     multi-params, so self-host cascade byte-identity
+            //     is preserved (the new code path is unreached
+            //     during parser.hx compilation).
+            //   - propagate_adj_multi mirrors propagate_adj's DFS
+            //     shape exactly — bucket-deposit order for any
+            //     single param is identical to the N-walk version.
+            //   - bucket_array_sum produces a chain-of-+ that
+            //     simplify() reduces to the same canonical form
+            //     as the single-bucket sum_bucket.
+            let mut handled: i32 = 0;
+            if run_size >= 2 {
+            if run_size <= 8 {
+                // Look up loss_fn_idx ONCE for the whole run.
+                let mut runw: i32 = head;
+                let mut run_fn_idx: i32 = 0;
+                let mut runfk: i32 = 1;
+                while runfk == 1 {
+                    let rci = __arena_get(runw + 1);
+                    let rcns = __arena_get(rci + 1);
+                    let rcnl = __arena_get(rci + 2);
+                    if byte_eq(run_loss_s, run_loss_l, rcns, rcnl) == 1 {
+                        run_fn_idx = rci;
+                        runfk = 0;
+                    };
+                    if runfk == 1 {
+                        let rnx = __arena_get(runw + 2);
+                        if rnx == 0 { runfk = 0; } else { runw = rnx; };
+                    };
+                }
+                if run_fn_idx > 0 {
+                    let run_loss_body = __arena_get(run_fn_idx + 3);
+                    let run_loss_params = __arena_get(run_fn_idx + 4);
+                    let run_loss_ret_ty = __arena_get(run_fn_idx + 5);
+                    let run_loss_is_ckpt = __arena_get(run_fn_idx + 8);
+                    // Pre-validate all entries in the run.
+                    let mut all_valid: i32 = 1;
+                    let mut vi: i32 = gri;
+                    while vi < run_end {
+                        let ve = base + vi * 5;
+                        let vfs = __arena_get(ve + 2);
+                        let vfl = __arena_get(ve + 3);
+                        if vfl < 2 { all_valid = 0; } else {
+                            let vf0 = __arena_get(vfs);
+                            if vf0 != 100 { all_valid = 0; } else {
+                                let vvs = vfs + 1;
+                                let vvl = vfl - 1;
+                                let mut vhp: i32 = 0;
+                                let mut vpw: i32 = run_loss_params;
+                                while vpw != 0 {
+                                    let vpns = __arena_get(vpw + 1);
+                                    let vpnl = __arena_get(vpw + 2);
+                                    if byte_eq(vpns, vpnl, vvs, vvl) == 1 {
+                                        vhp = 1;
+                                    };
+                                    vpw = __arena_get(vpw + 3);
+                                }
+                                if vhp == 0 { all_valid = 0; };
+                            };
+                        };
+                        vi = vi + 1;
+                    }
+                    if all_valid == 1 {
+                        let run_ckpt_ok = ckpt_callees_pure(
+                            run_loss_body, head, 0);
+                        if run_ckpt_ok == 1 {
+                            // Multi-bucket fast path: one walk,
+                            // N gradient extractions.
+                            bucket_array_reset(sb, run_size);
+                            let mut si: i32 = 0;
+                            while si < run_size {
+                                let se = base + (gri + si) * 5;
+                                let sfs = __arena_get(se + 2);
+                                let sfl = __arena_get(se + 3);
+                                set_param_array_name(
+                                    sb, si, sfs + 1, sfl - 1);
+                                si = si + 1;
+                            }
+                            let run_body_to_diff = inline_user_calls(
+                                run_loss_body, head, 0);
+                            differentiate_reverse_all(
+                                sb, run_body_to_diff);
+                            let mut xi: i32 = 0;
+                            while xi < run_size {
+                                let xe = base + (gri + xi) * 5;
+                                let xms = __arena_get(xe + 4);
+                                let xfl = __arena_get(xe + 3);
+                                let xml = run_loss_l + 7 + xfl;
+                                let xder_raw = bucket_array_sum(sb, xi);
+                                let xder = simplify(xder_raw);
+                                let xclone = mk_node(14, xms, xml, xder);
+                                __arena_push(run_loss_params);
+                                __arena_push(run_loss_ret_ty);
+                                __arena_push(0);
+                                __arena_push(0);
+                                __arena_push(run_loss_is_ckpt);
+                                __arena_push(0); __arena_push(0);
+                                __arena_push(0); __arena_push(0);
+                                __arena_push(0); __arena_push(0);
+                                __arena_push(0); __arena_push(0);
+                                __arena_push(0); __arena_push(0);
+                                let xnln = mk_node(15, xclone, 0, 0);
+                                __arena_set(tail + 2, xnln);
+                                tail = xnln;
+                                xi = xi + 1;
+                            }
+                            handled = 1;
+                        };
+                    };
+                };
+            };
+            };
             // PHASE 2: process each entry in the run individually
-            // (Inc 1 fallback — Inc 2 will replace this with
-            // true single-walk when run_size > 1 and all entries
-            // pass validation).
+            // (Inc 1 fallback — when Inc 2 fast path didn't fire,
+            // or for any single-entry run, or when validation
+            // failed for any entry in a multi-entry run).
             let mut ri: i32 = gri;
             while ri < run_end {
+            if handled == 1 { ri = run_end; } else {
             let entry = base + ri * 5;
             let loss_s = __arena_get(entry);
             let loss_l = __arena_get(entry + 1);
@@ -6397,6 +6524,7 @@ fn grad_rev_pass(sb: i32, head: i32) -> i32 {
                 tail = new_list_node;
             };
             ri = ri + 1;
+            };
             }
             gri = run_end;
         }
