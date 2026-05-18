@@ -406,6 +406,77 @@ def test_tree_map_preserves_nested_shape():
     assert out["inner"]["v"] == 6.0
 
 
+def test_tree_pytree_sgd_step_integration():
+    """Stage 59 follow-on / Tier 2 #7: integration test composing all
+    4 pytree functional primitives in a realistic SGD step.
+
+    Workflow:
+      1. flatten_pytree(model_decl) → declares the leaf structure
+      2. tree_zip(params, grads, p - lr*g) → SGD update
+      3. tree_reduce(new_params, lambda a, p: a + abs(p), 0.0) →
+         L1 parameter norm for convergence check
+      4. tree_equal(old_params, new_params, eq_fn=approx) →
+         did we converge?
+
+    Demonstrates that the Python pytree functional API can drive
+    a complete optimizer step end-to-end, mirroring JAX/Optax."""
+    from helixc.frontend.pytree import (
+        tree_map, tree_reduce, tree_zip, tree_equal,
+        flatten_pytree,
+    )
+    span = A.Span(0, 0)
+    # struct Linear { w: f64, b: f64 } — 2-param linear layer.
+    layer = A.StructDecl(
+        span=span, name="Linear", generics=[], is_pub=False,
+        fields=[
+            A.FnParam(span=span, name="w",
+                       ty=A.TyName(span=span, name="f64"),
+                       is_mut=False),
+            A.FnParam(span=span, name="b",
+                       ty=A.TyName(span=span, name="f64"),
+                       is_mut=False),
+        ],
+    )
+    decls = {"Linear": layer}
+    # Verify the leaf paths
+    leaves = flatten_pytree(layer, decls)
+    leaf_paths = sorted(leaf.path for leaf in leaves)
+    assert leaf_paths == ["b", "w"]
+
+    # Initial params and computed gradients
+    params = {"w": 1.0, "b": 2.0}
+    grads = {"w": 0.5, "b": 0.25}
+    lr = 0.01
+
+    # SGD step via tree_zip
+    new_params = tree_zip(layer, decls, params, grads,
+                           lambda p, g: p - lr * g)
+    # new_params has the nested struct shape
+    assert new_params == {"w": 0.995, "b": 1.9975}
+
+    # L1 norm of new params via tree_reduce
+    l1_norm = tree_reduce(new_params, lambda a, p: a + abs(p), 0.0)
+    assert abs(l1_norm - 2.9925) < 1e-9
+
+    # Convergence check: did params change?
+    converged = tree_equal(params, new_params,
+                            eq_fn=lambda a, b: abs(a - b) < 1e-9)
+    assert not converged  # 1 step shouldn't converge
+
+    # After zero-grad step, params should be unchanged
+    zero_grads = {"w": 0.0, "b": 0.0}
+    same_params = tree_zip(layer, decls, params, zero_grads,
+                             lambda p, g: p - lr * g)
+    converged_after_zero = tree_equal(
+        params, same_params,
+        eq_fn=lambda a, b: abs(a - b) < 1e-9)
+    assert converged_after_zero  # zero grad → no change
+
+    # tree_map demo: scale gradients (e.g., clip-by-scale)
+    scaled_grads = tree_map(layer, decls, grads, lambda g: g * 0.5)
+    assert scaled_grads == {"w": 0.25, "b": 0.125}
+
+
 def test_tree_equal_same_leaves():
     """Stage 59 follow-on: tree_equal returns True for identical leaves."""
     from helixc.frontend.pytree import tree_equal
