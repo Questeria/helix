@@ -51,6 +51,12 @@ Introspection (Stage 28.9 + Stage 58 + Stage 59 polish):
     --list-all-flags-json
         Same as --list-all-flags but JSON with JSON-parity audit
         {flags, n_flags, n_with_json_twin, json_twins, text_only}.
+    --has-flag <flag_name>
+        Silent rc-based existence check (0 if flag is supported,
+        1 if not). Accepts with or without '--' prefix.
+    --has-flag-json <flag_name>
+        Same as --has-flag but JSON
+        {flag, exists, has_json_twin, is_json_twin}.
     --autotune-budget-json <file.hx> <max_total>
         Same as --autotune-budget but JSON
         {within_budget, total_variants, budget, per_fn}.
@@ -6486,6 +6492,70 @@ def _diff_program_hash(path_a: str, path_b: str) -> int:
     return 1
 
 
+def _has_flag(flag_name: str) -> int:
+    """Stage 59 follow-on / Tier 4 #13 polish: tooling-friendly
+    existence check for a CLI flag. Reads autodiff_cli's own source
+    and checks whether the dispatch table contains the flag.
+
+    Output: nothing (silent rc-based check).
+
+    Exit 0 if the flag exists; 1 if it does not.
+
+    Use case: bash conditionals — `if cli --has-flag --fn-cycles-json;
+    then ...`. Avoid grepping --help docstring or parsing
+    --list-all-flags output.
+    """
+    import re
+    import os
+    if not flag_name.startswith("--"):
+        flag_name = "--" + flag_name
+    here = os.path.abspath(__file__)
+    with open(here, "r", encoding="utf-8") as f:
+        src = f.read()
+    flags = set(re.findall(r'if "(--[a-z-]+)" in flags:', src))
+    # Self-introspection: --has-flag itself should report as existing.
+    # The pattern above only catches main()-dispatch flags; check
+    # special cases here.
+    flags.update({"--has-flag", "--help", "-h"})
+    return 0 if flag_name in flags else 1
+
+
+def _has_flag_json(flag_name: str) -> int:
+    """Stage 59 follow-on / Tier 4 #13 polish: --has-flag in
+    machine-readable JSON form.
+
+    Output schema:
+      {"flag": "<flag>",
+       "exists": bool,
+       "has_json_twin": bool,
+       "is_json_twin": bool}
+
+    rc=0 on exists; 1 on not found (matches text-form semantics).
+    """
+    import json
+    import re
+    import os
+    if not flag_name.startswith("--"):
+        flag_name = "--" + flag_name
+    here = os.path.abspath(__file__)
+    with open(here, "r", encoding="utf-8") as f:
+        src = f.read()
+    flags = set(re.findall(r'if "(--[a-z-]+)" in flags:', src))
+    flags.update({"--has-flag", "--has-flag-json", "--help", "-h"})
+    exists = flag_name in flags
+    is_json = flag_name.endswith("-json")
+    has_twin = (
+        (not is_json) and ((flag_name + "-json") in flags)
+    )
+    print(json.dumps({
+        "flag": flag_name,
+        "exists": exists,
+        "has_json_twin": has_twin,
+        "is_json_twin": is_json,
+    }, sort_keys=True, indent=2))
+    return 0 if exists else 1
+
+
 def _list_all_flags() -> int:
     """Stage 59 follow-on / Tier 4 #13 polish: enumerate every CLI flag
     accepted by autodiff_cli. Reads its own source to find dispatch
@@ -6576,6 +6646,28 @@ def main():
 
     if "--list-all-flags-json" in flags:
         sys.exit(_list_all_flags_json())
+
+    # --has-flag / --has-flag-json take a flag-name positional that
+    # itself usually starts with '--', so the standard args/flags
+    # partition doesn't apply. Parse from sys.argv directly: take the
+    # token immediately after the introspector flag.
+    if "--has-flag" in sys.argv[1:]:
+        try:
+            idx = sys.argv.index("--has-flag")
+            target = sys.argv[idx + 1]
+        except (ValueError, IndexError):
+            print("usage: --has-flag <flag_name>", file=sys.stderr)
+            sys.exit(2)
+        sys.exit(_has_flag(target))
+
+    if "--has-flag-json" in sys.argv[1:]:
+        try:
+            idx = sys.argv.index("--has-flag-json")
+            target = sys.argv[idx + 1]
+        except (ValueError, IndexError):
+            print("usage: --has-flag-json <flag_name>", file=sys.stderr)
+            sys.exit(2)
+        sys.exit(_has_flag_json(target))
 
     if "--dump-ast-hashes" in flags:
         if len(args) < 1:

@@ -5898,6 +5898,7 @@ def test_stage59_autodiff_cli_help_mentions_polish_flags():
         "--fn-sig-hash-json",
         "--parse-only-json", "--autotune-budget-json",
         "--list-all-flags", "--list-all-flags-json",
+        "--has-flag", "--has-flag-json",
         "--list-fn-attrs", "--list-fn-attrs-json",
         "--list-fns-by-attr", "--list-fns-by-attr-json",
         "--fn-callgraph", "--fn-callers",
@@ -7560,6 +7561,72 @@ def test_stage59_agent_methods_json(tmp_path):
         {"name": "propose", "params": ["i32"], "return_ty": "i32"},
         {"name": "evaluate", "params": ["i32", "i32"], "return_ty": "i32"},
     ]}
+
+
+def test_stage59_has_flag_exists():
+    """Stage 59 follow-on / Tier 4 #13 polish: --has-flag rc=0 for
+    known flags."""
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--has-flag", "--program-hash"],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0
+
+
+def test_stage59_has_flag_missing():
+    """Stage 59 follow-on / Tier 4 #13 polish: --has-flag rc=1 for
+    unknown flags."""
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--has-flag", "--nope-not-real"],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 1
+
+
+def test_stage59_has_flag_json():
+    """Stage 59 follow-on / Tier 4 #13 polish: --has-flag-json emits
+    {flag, exists, has_json_twin, is_json_twin}."""
+    import json
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    # Known flag with JSON twin.
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--has-flag-json", "--program-hash"],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0
+    result = json.loads(proc.stdout)
+    assert result == {
+        "flag": "--program-hash",
+        "exists": True,
+        "has_json_twin": True,
+        "is_json_twin": False,
+    }
+    # JSON twin flag.
+    proc_twin = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--has-flag-json", "--program-hash-json"],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc_twin.returncode == 0
+    twin_result = json.loads(proc_twin.stdout)
+    assert twin_result["is_json_twin"] is True
+    # Unknown flag.
+    proc_missing = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--has-flag-json", "--nope"],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc_missing.returncode == 1
+    missing_result = json.loads(proc_missing.stdout)
+    assert missing_result["exists"] is False
 
 
 def test_stage59_list_all_flags_text():
