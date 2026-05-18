@@ -5888,7 +5888,7 @@ def test_stage59_autodiff_cli_help_mentions_polish_flags():
         "--fn-recursive-json", "--fn-cycles-json",
         "--fn-topo-sort-json", "--fn-isolated-json",
         "--fn-distance-json", "--fn-call-path-json",
-        "--fn-callgraph-depth-json",
+        "--fn-callgraph-depth-json", "--fn-body-stats-rank-json",
         "--list-fn-attrs", "--list-fn-attrs-json",
         "--list-fns-by-attr", "--list-fns-by-attr-json",
         "--fn-callgraph", "--fn-callers",
@@ -7551,6 +7551,34 @@ def test_stage59_agent_methods_json(tmp_path):
         {"name": "propose", "params": ["i32"], "return_ty": "i32"},
         {"name": "evaluate", "params": ["i32", "i32"], "return_ty": "i32"},
     ]}
+
+
+def test_stage59_fn_body_stats_rank_json(tmp_path):
+    """Stage 59 follow-on / Tier 4 #13 polish: --fn-body-stats-rank-json
+    emits {metric, top_n, ranking: [{name, value}, ...]}."""
+    import json
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "fbsrj.hx"
+    src.write_text(
+        "fn lots() -> i32 { 1 + 2 + 3 + 4 }\n"
+        "fn medium() -> i32 { 1 + 2 }\n"
+        "fn none() -> i32 { 1 }\n",
+        encoding="utf-8",
+    )
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--fn-body-stats-rank-json", str(src), "binops", "2"],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0
+    result = json.loads(proc.stdout)
+    assert result["metric"] == "binops"
+    assert result["top_n"] == 2
+    assert len(result["ranking"]) == 2
+    # 'lots' has 3 binops, 'medium' has 1, 'none' has 0.
+    assert result["ranking"][0] == {"name": "lots", "value": 3}
+    assert result["ranking"][1] == {"name": "medium", "value": 1}
 
 
 def test_stage59_fn_callgraph_depth_json(tmp_path):

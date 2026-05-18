@@ -154,6 +154,9 @@ Introspection (Stage 28.9 + Stage 58 + Stage 59 polish):
         Same as --fn-call-path but JSON {from, to, path, length}.
     --fn-callgraph-depth-json <file.hx> <entry_fn>
         Same as --fn-callgraph-depth but JSON {entry, depth}.
+    --fn-body-stats-rank-json <file.hx> <metric> <top_n>
+        Same as --fn-body-stats-rank but JSON
+        {metric, top_n, ranking: [{name, value}, ...]}.
     --fn-body-stats <file.hx> <fn_name>
         Per-fn body AST-node counts (calls/binops/ifs/loops/matches).
     --fn-body-stats-json <file.hx> <fn_name>
@@ -4187,6 +4190,80 @@ def _fn_callers(path: str, target_name: str) -> int:
     return 0
 
 
+def _fn_body_stats_rank_json(path: str, metric: str, top_n_str: str) -> int:
+    """Stage 59 follow-on / Tier 4 #13 polish: --fn-body-stats-rank in
+    machine-readable JSON form.
+
+    Output schema:
+      {"metric": "<metric>",
+       "top_n": N,
+       "ranking": [{"name": "<fn>", "value": <int>}, ...]}
+    Same sort order as text form (descending value, alphabetic ties).
+
+    Exit 0 on success, 2 on bad metric name or non-int top_n.
+    """
+    import json
+    metrics = {"ast_nodes", "calls", "binops", "ifs", "loops", "matches"}
+    if metric not in metrics:
+        print(f"error: autodiff_cli: unknown metric {metric!r} "
+              f"(valid: {sorted(metrics)})", file=sys.stderr)
+        return 2
+    try:
+        top_n = int(top_n_str)
+    except ValueError:
+        print(f"error: autodiff_cli: top_n {top_n_str!r} not an int",
+              file=sys.stderr)
+        return 2
+
+    from .ast_walker import iter_fn_decls
+    src = _read_source(path)
+    prog = _parse_or_exit(src, path)
+
+    per_fn: list[tuple[str, int]] = []
+    for fn in iter_fn_decls(prog):
+        count = 0
+
+        def _walk(node) -> None:
+            nonlocal count
+            if node is None:
+                return
+            if hasattr(node, "__dataclass_fields__"):
+                if metric == "ast_nodes":
+                    count += 1
+                elif metric == "calls" and isinstance(node, A.Call):
+                    count += 1
+                elif metric == "binops" and isinstance(node, A.Binary):
+                    count += 1
+                elif metric == "ifs" and isinstance(node, A.If):
+                    count += 1
+                elif (metric == "loops"
+                        and isinstance(node, (A.For, A.While, A.Loop))):
+                    count += 1
+                elif metric == "matches" and isinstance(node, A.Match):
+                    count += 1
+                for f in node.__dataclass_fields__:
+                    v = getattr(node, f)
+                    if isinstance(v, list):
+                        for x in v:
+                            _walk(x)
+                    elif isinstance(v, tuple):
+                        for x in v:
+                            _walk(x)
+                    else:
+                        _walk(v)
+
+        if fn.body is not None:
+            _walk(fn.body)
+        per_fn.append((fn.name, count))
+
+    per_fn.sort(key=lambda x: (-x[1], x[0]))
+    ranking = [{"name": n, "value": v} for n, v in per_fn[:top_n]]
+    print(json.dumps(
+        {"metric": metric, "top_n": top_n, "ranking": ranking},
+        sort_keys=True, indent=2))
+    return 0
+
+
 def _fn_body_stats_rank(path: str, metric: str, top_n_str: str) -> int:
     """Stage 59 follow-on / Tier 4 #13 polish: rank top-N fns by a
     specific body-stat metric.
@@ -6488,6 +6565,13 @@ def main():
                   file=sys.stderr)
             sys.exit(2)
         sys.exit(_fn_body_stats_rank(args[0], args[1], args[2]))
+
+    if "--fn-body-stats-rank-json" in flags:
+        if len(args) < 3:
+            print("usage: --fn-body-stats-rank-json <file.hx> <metric> <top_n>",
+                  file=sys.stderr)
+            sys.exit(2)
+        sys.exit(_fn_body_stats_rank_json(args[0], args[1], args[2]))
 
     if "--fn-callers" in flags:
         if len(args) < 2:
