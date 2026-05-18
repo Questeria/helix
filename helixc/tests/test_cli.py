@@ -5840,7 +5840,8 @@ def test_stage59_autodiff_cli_help_mentions_polish_flags():
         "--list-modules", "--module-hash", "--pytree-shape",
         "--list-pytrees", "--pytree-leaf-paths",
         "--validate-pytrees", "--validate-pytrees-json",
-        "--autotune-summary", "--autotune-budget", "--validate-autotune",
+        "--autotune-summary", "--autotune-budget",
+        "--validate-autotune", "--validate-autotune-json",
         "--hash-dump", "--diff-hash-dump", "--hash-dump-short",
         "--diff-trace", "--trace-dump-summary",
         "--validate-trace-attrs", "--list-traced-fns",
@@ -6173,6 +6174,32 @@ def test_stage59_validate_trace_attrs_extern_rejected(tmp_path):
     assert proc.returncode == 1
     assert "extern" in proc.stdout
     assert "libc_printf" in proc.stdout
+
+
+def test_stage59_validate_autotune_json(tmp_path):
+    """Stage 59 follow-on / Tier 2 #8 polish: --validate-autotune-json
+    outputs valid JSON with diags + total + status."""
+    import json
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "bad.hx"
+    src.write_text(
+        "@autotune(BLOCK: [])\n"
+        "@kernel\n"
+        "fn k(x: i32) -> i32 { x + BLOCK }\n",
+        encoding="utf-8",
+    )
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--validate-autotune-json", str(src)],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 1
+    result = json.loads(proc.stdout)
+    assert result["status"] == "FAIL"
+    assert len(result["diags"]) >= 1
+    assert "BLOCK" in result["diags"][0]
+    assert result["total"]["count"] == 1
 
 
 def test_stage59_validate_autotune_clean_exits_0(tmp_path):

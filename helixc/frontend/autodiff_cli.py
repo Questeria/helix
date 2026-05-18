@@ -57,6 +57,8 @@ Introspection (Stage 28.9 + Stage 58 + Stage 59 polish):
         Print {fn variants=N} for @autotune @kernel fns + total.
     --validate-autotune <file.hx>
         CI gate: validate every @autotune attr; exit 1 if any malformed.
+    --validate-autotune-json <file.hx>
+        Same as --validate-autotune but machine-readable JSON output.
     --validate-trace-attrs <file.hx>
         CI gate: validate @trace usage; rejects @trace on extern fns.
     --list-traced-fns <file.hx>
@@ -793,6 +795,31 @@ def _validate_trace_attrs(path: str) -> int:
     return 1
 
 
+def _validate_autotune_json(path: str) -> int:
+    """Stage 59 follow-on / Tier 2 #8 polish: --validate-autotune
+    in machine-readable JSON form.
+
+    Output schema:
+      {
+        "diags": [...],
+        "total": {"count": N},
+        "status": "OK"|"FAIL"
+      }
+    """
+    import json
+    from .autotune import validate_autotune_prog
+    src = _read_source(path)
+    prog = _parse_or_exit(src, path)
+    diags = validate_autotune_prog(prog)
+    result = {
+        "diags": diags,
+        "total": {"count": len(diags)},
+        "status": "OK" if not diags else "FAIL",
+    }
+    print(json.dumps(result, sort_keys=True, indent=2))
+    return 1 if diags else 0
+
+
 def _validate_autotune(path: str) -> int:
     """Stage 59 follow-on / Tier 2 #8 polish: run validate_autotune_prog
     over a file and print all diagnostics. Exit 0 if clean, 1 if any.
@@ -1242,6 +1269,13 @@ def main():
                   file=sys.stderr)
             sys.exit(2)
         sys.exit(_validate_autotune(args[0]))
+
+    if "--validate-autotune-json" in flags:
+        if len(args) < 1:
+            print("usage: --validate-autotune-json <file.hx>",
+                  file=sys.stderr)
+            sys.exit(2)
+        sys.exit(_validate_autotune_json(args[0]))
 
     if "--validate-trace-attrs" in flags:
         if len(args) < 1:
