@@ -2824,6 +2824,73 @@ class TypeChecker:
                         self._modal_origin_provenance.pop(
                             name, None)
 
+    def _check_loop_body_with_modal_union(
+        self, body: A.Block, scope: Scope
+    ) -> None:
+        """Stage 52 closure gate-7 silent-failure HIGH-1+2 fix
+        (Stage 52 Inc 5): apply union semantics to loop body
+        modal-origin tracking. A loop body may execute 0 or N+
+        times at runtime; pre-fix, the body's _check_block alone
+        carried the body's mutation upward, silently dropping the
+        pre-loop taint when the body opaque-cleared a tainted
+        name. The 0-iter runtime path preserves the pre-loop
+        taint, so into_X(name) after the loop should FIRE if the
+        pre-loop kind mismatches the target.
+
+        Semantic shape (mirror of A.If no-else union):
+        - "executes" arm: post-body dict, body assigns
+        - "0-iter" identity arm: pre-loop dict, empty assigns
+        - Apply kept_somewhere / cleared semantics from A.If/A.Match
+          (gate-7 conservative-fire: any preserved taint overrides
+           branch-cleared signal).
+
+        Verified clean cases:
+        - body INSTALLS same kind as pre-loop: propagate (kind match)
+        - body INSTALLS different kind: drop (multi-kind divergence,
+          Phase-0 limit per gate-4 CRITICAL-1)
+        - body CLEARS, pre-loop tainted: FIRE — 0-iter case may leak
+        """
+        modal_origin_pre_loop = dict(self._modal_origin_provenance)
+        self._check_block(body, scope)
+        body_assigns = set(self._last_modal_assigns_popped)
+        body_result = dict(self._modal_origin_provenance)
+        # Union: collect observed kinds across pre-loop + body.
+        observed_kinds: dict[str, set[str]] = {}
+        for name, kind in modal_origin_pre_loop.items():
+            observed_kinds.setdefault(name, set()).add(kind)
+        for name, kind in body_result.items():
+            observed_kinds.setdefault(name, set()).add(kind)
+        # kept_somewhere: names present in EITHER arm result
+        # (pre-loop snapshot = 0-iter identity arm result).
+        kept_somewhere: set[str] = set()
+        kept_somewhere.update(modal_origin_pre_loop.keys())
+        kept_somewhere.update(body_result.keys())
+        # cleared: body assigned name AND body result has no entry
+        # AND no other "arm" preserves it (i.e., pre-loop also doesn't
+        # have it). With pre-loop as identity arm, a name cleared by
+        # body but preserved by pre-loop should NOT drop — it should
+        # propagate because the 0-iter case keeps the taint.
+        cleared_names: set[str] = set()
+        for name in body_assigns:
+            if (name not in body_result
+                    and name not in kept_somewhere):
+                cleared_names.add(name)
+        # Build the unioned dict.
+        unioned_loop: dict[str, str] = {}
+        for name, kinds in observed_kinds.items():
+            if name in cleared_names:
+                continue
+            if len(kinds) == 1:
+                unioned_loop[name] = next(iter(kinds))
+            # Multi-kind divergence drops (Phase-0 limit; Inc 4 would
+            # add the multi-kind diagnostic).
+        self._modal_origin_provenance = unioned_loop
+        # Reset _last_modal_assigns_popped so a subsequent union
+        # site doesn't see this loop's body assigns. (Defense-in-
+        # depth — the next _check_block call overwrites it anyway,
+        # but ordering invariants benefit from explicit reset.)
+        self._last_modal_assigns_popped = set()
+
     def _check_expr_in_block_scope(
         self, expr: A.Expr, scope: Scope
     ) -> Type:
@@ -5779,14 +5846,14 @@ class TypeChecker:
             # only when we can't determine a concrete element type.
             loop_var_ty = iter_ty if iter_ty is not None else TyPrim("i64")
             inner.define(expr.var_name, loop_var_ty)
-            self._check_block(expr.body, inner)
+            self._check_loop_body_with_modal_union(expr.body, inner)
             return TyUnit()
         if isinstance(expr, A.While):
             self._check_expr(expr.cond, scope)
-            self._check_block(expr.body, scope)
+            self._check_loop_body_with_modal_union(expr.body, scope)
             return TyUnit()
         if isinstance(expr, A.Loop):
-            self._check_block(expr.body, scope)
+            self._check_loop_body_with_modal_union(expr.body, scope)
             return TyUnit()
         if isinstance(expr, A.Range):
             if expr.start is not None:

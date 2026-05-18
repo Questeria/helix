@@ -1799,6 +1799,90 @@ def test_stage52_gate7_type_design_high_1_last_assigns_cleared_per_fn():
 # ============================================================
 
 
+# ============================================================
+# Stage 52 Inc 5 regression pins (gate-7 HIGH-1+2 loop body
+# union — the last deferred silent-failure class)
+# ============================================================
+
+
+def test_stage52_inc5_while_body_clear_fires_with_kept_pre_loop_taint():
+    """Stage 52 Inc 5 / gate-7 HIGH-2: while-loop body opaque-
+    clears a pre-loop-tainted name. The 0-iter runtime path
+    preserves the pre-loop taint, so into_X(name) post-loop
+    MUST FIRE.
+
+    Same defect class as if-no-else (gate-7 HIGH-3) but for
+    loop bodies. Fixed via `_check_loop_body_with_modal_union`
+    which applies the kept_somewhere semantics:
+    - "executes" arm = post-body dict + body assigns
+    - "0-iter" identity arm = pre-loop dict + empty assigns
+    - cleared overridden by kept_somewhere → propagate."""
+    src = """
+fn opaque() -> i32 { 7 }
+fn main() -> i32 {
+    let u: Uncertain<i32> = into_uncertain(1);
+    let mut r: i32 = from_uncertain(u);
+    let mut i: i32 = 0;
+    while i < 1 { r = opaque(); i = i + 1; };
+    let k: Known<i32> = into_known(r);
+    from_known(k)
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    errs = typecheck(prog)
+    assert any("launder" in str(e) and "Uncertain" in str(e)
+               and "Known" in str(e) and "'r'" in str(e)
+               for e in errs), \
+        f"while-body opaque-clear with kept pre-loop taint " \
+        f"MUST FIRE (Stage 52 Inc 5 / gate-7 HIGH-2), got: " \
+        f"{[str(e) for e in errs]}"
+
+
+def test_stage52_inc5_for_body_clear_fires_with_kept_pre_loop_taint():
+    """Stage 52 Inc 5 / gate-7 HIGH-1: for-loop body version
+    of the same defect class. Symmetric fix via the same
+    `_check_loop_body_with_modal_union` helper."""
+    src = """
+fn main() -> i32 {
+    let u: Uncertain<i32> = into_uncertain(1);
+    let mut r: i32 = from_uncertain(u);
+    for i in 0..3 { r = 0; };
+    let k: Known<i32> = into_known(r);
+    from_known(k)
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    errs = typecheck(prog)
+    assert any("launder" in str(e) and "Uncertain" in str(e)
+               and "Known" in str(e) and "'r'" in str(e)
+               for e in errs), \
+        f"for-body opaque-clear with kept pre-loop taint MUST " \
+        f"FIRE (Stage 52 Inc 5 / gate-7 HIGH-1), got: " \
+        f"{[str(e) for e in errs]}"
+
+
+def test_stage52_inc5_negative_while_body_no_clear_no_fire():
+    """Stage 52 Inc 5 negative: while body that doesn't touch
+    a tainted name must NOT fire any launder. Only verifies
+    the union doesn't over-fire."""
+    src = """
+fn main() -> i32 {
+    let kw: Known<i32> = into_known(42);
+    let r: i32 = from_known(kw);
+    let mut i: i32 = 0;
+    while i < 1 { i = i + 1; };
+    let k: Known<i32> = into_known(r);
+    from_known(k)
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    errs = typecheck(prog)
+    assert not any("launder" in str(e) for e in errs), \
+        f"Same-kind round-trip through loop must NOT fire " \
+        f"(Stage 52 Inc 5 negative regression), got: " \
+        f"{[str(e) for e in errs]}"
+
+
 def test_stage53_inc1_helper_fn_indirection_fires():
     """Stage 53 Inc 1: `fn launder(x: i32) -> Known<i32> {
     into_known(x) }` called with from_X-tainted arg MUST FIRE.
