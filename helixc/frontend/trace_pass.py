@@ -94,6 +94,26 @@ def trace_equiv(a: TraceBuffer, b: TraceBuffer) -> bool:
     return True
 
 
+def trace_filter(buf: TraceBuffer, predicate) -> TraceBuffer:
+    """Stage 59 follow-on / Tier 3 #11 polish — filter trace events
+    by a caller-supplied predicate. Returns a NEW TraceBuffer
+    containing only events where `predicate(event)` is True.
+
+    Use cases:
+    - Filter to entry/exit pairs of a specific fn: lambda e:
+        e.fn_name == "loss" and e.op_kind in ("entry", "exit")
+    - Discard pure-observer ops, keep side-effecting ones
+    - Slice to a subset before trace_diff for narrower verification
+
+    Preserves the buffer's capacity (a filtered subset still fits).
+    """
+    out = TraceBuffer(cap=buf.cap)
+    for ev in buf.events:
+        if predicate(ev):
+            out.events.append(ev)
+    return out
+
+
 def trace_summary(buf: TraceBuffer, max_events: int = 16) -> str:
     """Stage 59 follow-on / Tier 3 #11 polish — human-readable digest
     of a TraceBuffer. Lists first `max_events` events as one-line

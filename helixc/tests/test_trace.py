@@ -305,6 +305,42 @@ def test_c2_2_early_return_void():
     assert len(exits) == 2
 
 
+def test_stage59_trace_filter_by_op_kind():
+    """Stage 59 follow-on: trace_filter keeps only entry events."""
+    from helixc.frontend.trace_pass import trace_filter
+    buf = TraceBuffer(events=[
+        TraceEvent("entry", "f", (1,)),
+        TraceEvent("exit", "f", (), result=2),
+        TraceEvent("entry", "g", (3,)),
+        TraceEvent("exit", "g", (), result=4),
+    ])
+    only_entries = trace_filter(buf, lambda e: e.op_kind == "entry")
+    assert len(only_entries) == 2
+    assert all(e.op_kind == "entry" for e in only_entries.events)
+
+
+def test_stage59_trace_filter_preserves_cap():
+    """Stage 59 follow-on: trace_filter preserves the buffer's cap
+    so a filtered subset still fits within the original budget."""
+    from helixc.frontend.trace_pass import trace_filter
+    buf = TraceBuffer(cap=42, events=[
+        TraceEvent("entry", "f", ()),
+    ])
+    out = trace_filter(buf, lambda e: True)
+    assert out.cap == 42
+
+
+def test_stage59_trace_filter_empty_result():
+    """Stage 59 follow-on: trace_filter returns empty buffer when
+    no events match."""
+    from helixc.frontend.trace_pass import trace_filter
+    buf = TraceBuffer(events=[
+        TraceEvent("entry", "f", ()),
+    ])
+    out = trace_filter(buf, lambda e: e.fn_name == "nope")
+    assert len(out) == 0
+
+
 def test_stage59_trace_summary_empty():
     """Stage 59 follow-on: trace_summary on empty buffer returns
     `<empty trace>`."""
