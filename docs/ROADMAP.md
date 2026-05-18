@@ -303,6 +303,34 @@ Re-sequenced after Stage 46-47 closed:
 - **Stage 58** ✅ **CLOSED 2026-05-18** — Tier 4 #13 content-
   addressed modules (program_hash + module_hash + fn_signature_hash
   core).
+- **Stage 103 SHIPPED 2026-05-18** — Multi-arg + 0-arg @property
+  rejected at typecheck time.
+  - **Pre-Stage-103**: `@property fn p(a: i32, b: i32) -> bool` was
+    silently SKIPPED by the Stage 86 runner with a per-test log
+    line ("SKIP p: 2-arg property not supported in Phase-0"). User
+    had to RUN the test suite to learn their @property was broken;
+    the @property attribute itself was happily accepted by
+    typecheck.
+  - **Post-Stage-103**: typecheck rejects both bad-arity cases at
+    fn-decl time:
+    - 0-arg: "must take at least 1 arg (a 0-arg property has
+      nothing to vary; use a plain `fn assert_xxx() -> bool` if
+      you want a static assertion)". Permanent rule.
+    - >1-arg: "Phase-0 runner only supports single-arg properties;
+      got N args". Future Inc 3 (cartesian-product) will relax.
+  - Return-type-vs-bool check (Stage 77 original) gets `elif`'d to
+    short-circuit the arity check so users see ONE diagnostic per
+    buggy decl, not two.
+  - The runner's `len(arg_pairs) != 1` skip stays as defense-in-
+    depth (catches the edge case where a multi-arg @property
+    slips through via untypechecked source).
+  - 4 new tests (multi-arg rejected, zero-arg rejected, single-arg
+    still accepted, bad-return takes precedence over arity);
+    **437 typecheck + 8 property_runner = 445 pins GREEN**.
+  - **6 of 7 Stage 100+ backlog items now closed**. Remaining for
+    Stage 104: 5 missing safety.hx @property roundtrips for DP/
+    Quant/Domain/Robust/Energy.
+
 - **Stage 102 SHIPPED 2026-05-18** — Stage 99 audit-residual #3
   fix: typed-hole expected-type plumbing extended to 3 new contexts.
   - Pre-Stage-102, Stage 90 plumbed expected-type only at call-arg

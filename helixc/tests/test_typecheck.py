@@ -5039,6 +5039,107 @@ def test_stage100_wrapper_tables_hoisted_to_class_level():
     assert len(TypeChecker._ALL_WRAPPER_CLS_NAMES) == 13
 
 
+def test_stage103_multi_arg_property_rejected_at_typecheck():
+    """Stage 103 — `@property fn p(a: i32, b: i32) -> bool` is now
+    REJECTED at typecheck time rather than silently SKIPPED by the
+    Stage 86 runner with a per-test log line. Cuts the latency
+    between defining a broken @property and noticing it from
+    'run the test suite' to 'compile the file'."""
+    from helixc.frontend.typecheck import typecheck
+    from helixc.frontend.parser import parse
+
+    src = """
+    @property
+    @pure
+    fn two_arg_prop(a: i32, b: i32) -> bool { true }
+    fn main() -> i32 { 0 }
+    """
+    prog = parse(src, include_stdlib=False)
+    errors = typecheck(prog)
+    matched = [e for e in errors
+               if "@property fn 'two_arg_prop'" in str(e)
+               and "single-arg" in str(e)
+               and "got 2 args" in str(e)
+               and "Stage 103" in str(e)]
+    assert len(matched) >= 1, (
+        f"missing Stage 103 multi-arg rejection; got: "
+        f"{[str(e) for e in errors]}")
+
+
+def test_stage103_zero_arg_property_rejected_at_typecheck():
+    """Stage 103 — `@property fn p() -> bool` is rejected because a
+    0-arg property has nothing to vary; users should write a plain
+    `fn assert_xxx() -> bool` for static assertions. This rule is
+    permanent (unlike the >1 rule, which Inc 3 will relax)."""
+    from helixc.frontend.typecheck import typecheck
+    from helixc.frontend.parser import parse
+
+    src = """
+    @property
+    @pure
+    fn no_arg_prop() -> bool { true }
+    fn main() -> i32 { 0 }
+    """
+    prog = parse(src, include_stdlib=False)
+    errors = typecheck(prog)
+    matched = [e for e in errors
+               if "@property fn 'no_arg_prop'" in str(e)
+               and "at least 1 arg" in str(e)
+               and "Stage 103" in str(e)]
+    assert len(matched) >= 1, (
+        f"missing Stage 103 zero-arg rejection; got: "
+        f"{[str(e) for e in errors]}")
+
+
+def test_stage103_single_arg_property_still_accepted():
+    """Stage 103 — the canonical `@property fn p(x: T) -> bool` form
+    that the Stage 86 runner actually supports remains accepted.
+    Regression check that Stage 103 didn't over-tighten."""
+    from helixc.frontend.typecheck import typecheck
+    from helixc.frontend.parser import parse
+
+    src = """
+    @property
+    @pure
+    fn one_arg_prop(x: i32) -> bool { true }
+    fn main() -> i32 { 0 }
+    """
+    prog = parse(src, include_stdlib=False)
+    errors = typecheck(prog)
+    arity_errs = [e for e in errors if "Stage 103" in str(e)]
+    assert len(arity_errs) == 0, (
+        f"Stage 103 false-positive on canonical single-arg property: "
+        f"{[str(e) for e in arity_errs]}")
+
+
+def test_stage103_bad_return_takes_precedence_over_arity():
+    """Stage 103 — when a @property has BOTH a bad return type AND
+    bad arity, the return-type error fires (and arity check is
+    short-circuited via elif). Avoids double-spam diagnostics on
+    one buggy decl."""
+    from helixc.frontend.typecheck import typecheck
+    from helixc.frontend.parser import parse
+
+    src = """
+    @property
+    @pure
+    fn double_bad_prop(a: i32, b: i32) -> i32 { 0 }
+    fn main() -> i32 { 0 }
+    """
+    prog = parse(src, include_stdlib=False)
+    errors = typecheck(prog)
+    return_errs = [e for e in errors
+                   if "must return bool" in str(e)
+                   and "double_bad_prop" in str(e)]
+    arity_errs = [e for e in errors
+                  if "Stage 103" in str(e)
+                  and "double_bad_prop" in str(e)]
+    assert len(return_errs) >= 1, "missing return-type diagnostic"
+    assert len(arity_errs) == 0, (
+        f"arity error should be short-circuited by return-type elif: "
+        f"{[str(e) for e in arity_errs]}")
+
+
 def test_stage102_typed_hole_at_let_rhs_reports_expected_type():
     """Stage 102 — `let x: i32 = _;` now emits an enriched typed-hole
     diagnostic naming the declared type, mirroring the Stage 90

@@ -3934,6 +3934,38 @@ class TypeChecker:
                     f"based tests can only assert pass/fail)",
                     fn.span,
                 ))
+            # Stage 103 — arity contract for the Stage 86 runner.
+            # Phase-0 input-table only generates inputs for a SINGLE
+            # arg; multi-arg @property fns were silently SKIPPED by
+            # the runner with a per-test "not supported" log line
+            # which buried the issue. Now caught at typecheck time
+            # so the user sees the problem when defining the fn, not
+            # when the runner mysteriously reports 0 passes. 0-arg
+            # @property fns are rejected as meaningless (nothing to
+            # test against). Future Inc 3 (cartesian-product over
+            # multiple args) will relax the >1 rule; the 0-arg rule
+            # is permanent.
+            elif len(sig.params) == 0:
+                self.errors.append(TypeError_(
+                    f"@property fn {sig.name!r}: must take at least 1 "
+                    f"arg (a 0-arg property has nothing to vary; use "
+                    f"a plain `fn assert_xxx() -> bool` if you want a "
+                    f"static assertion) (Stage 103)",
+                    fn.span,
+                    hint="add an input parameter like `fn name(x: T) "
+                         "-> bool` so the Stage 86 runner has something "
+                         "to feed it",
+                ))
+            elif len(sig.params) > 1:
+                self.errors.append(TypeError_(
+                    f"@property fn {sig.name!r}: Phase-0 runner only "
+                    f"supports single-arg properties; got "
+                    f"{len(sig.params)} args (Stage 103)",
+                    fn.span,
+                    hint=f"split into {len(sig.params)} single-arg "
+                         f"properties, or wait for Inc 3 cartesian-"
+                         f"product support over multiple args",
+                ))
             else:
                 self._property_fn_names.add(sig.name)
         try:
