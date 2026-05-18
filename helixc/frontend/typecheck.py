@@ -4149,13 +4149,18 @@ class TypeChecker:
             l_is_diff = isinstance(l, TyDiff)
             r_is_diff = isinstance(r, TyDiff)
 
-            # Extract the innermost type beneath any TyDiff/TyLogic
-            # wrappers, treating TyDiff(TyLogic(T)) and TyLogic(T) and
-            # T uniformly.
+            # Extract the innermost type beneath any TyDiff/TyLogic/
+            # TyConf wrappers, treating Conf<Logic<D<T>>> and any
+            # subset thereof uniformly.
+            # Stage 68 Inc 2 — TyConf added to the unwrap chain so
+            # propagation through arithmetic doesn't accidentally
+            # drop the confidence tag.
             def _unwrap(t: Type) -> Type:
                 if isinstance(t, TyDiff):
                     return _unwrap(t.inner)
                 if isinstance(t, TyLogic):
+                    return _unwrap(t.inner)
+                if isinstance(t, TyConf):
                     return _unwrap(t.inner)
                 return t
 
@@ -4166,7 +4171,30 @@ class TypeChecker:
                 isinstance(r, TyDiff) and isinstance(r.inner, TyLogic)
             )
 
-            if l_is_logic or r_is_logic or l_is_diff or r_is_diff:
+            # Stage 68 Inc 2 — detect TyConf in any layered position.
+            # Supports Conf<T>, Conf<Logic<T>>, Conf<D<T>>, and
+            # layered combinations. The Phase-0 representation only
+            # tracks ONE level per result, so we collapse multi-Conf
+            # operands to the most-uncertain level (rank: low > med
+            # > high > precise; precise is the "exit uncertainty"
+            # opt-out marker — it propagates through but never
+            # wraps a non-precise operand).
+            def _find_conf_level(t: Type) -> Optional[str]:
+                if isinstance(t, TyConf):
+                    return t.level
+                if isinstance(t, TyDiff):
+                    return _find_conf_level(t.inner)
+                if isinstance(t, TyLogic):
+                    return _find_conf_level(t.inner)
+                return None
+
+            l_conf_level = _find_conf_level(l)
+            r_conf_level = _find_conf_level(r)
+            l_is_conf = l_conf_level is not None
+            r_is_conf = r_conf_level is not None
+
+            if (l_is_logic or r_is_logic or l_is_diff or r_is_diff
+                    or l_is_conf or r_is_conf):
                 # Audit 28.8 B13 (trap AD002 / 24200): TyDiff binop
                 # with mixed inner types previously silently coerced
                 # the right operand to the left's inner type. The
@@ -4306,13 +4334,36 @@ class TypeChecker:
                 else:
                     inner = l_inner if not isinstance(l_inner, TyUnknown) \
                         else r_inner
-                # Build the wrapping: Logic first (if any side carries
-                # Logic), then D on the outside (if any side carries D).
+                # Build the wrapping: Logic innermost, then D on top,
+                # then Conf on the outside.
+                # Stage 68 Inc 2 — Conf<...> wraps the outermost so
+                # `Conf<D<Logic<T>>>` is preserved through binary
+                # arithmetic. Level resolution rule: if both operands
+                # are Conf-tagged, take the most-uncertain level
+                # (low > med > high > precise). If only one side is
+                # Conf, that level propagates.
                 wrapped: Type = inner
                 if l_is_logic or r_is_logic:
                     wrapped = TyLogic(inner=wrapped)
                 if l_is_diff or r_is_diff:
                     wrapped = TyDiff(inner=wrapped)
+                if l_is_conf or r_is_conf:
+                    # Rank: 0 = precise (least), 1 = high, 2 = med,
+                    # 3 = low (most uncertain wins).
+                    _level_rank = {
+                        "precise": 0,
+                        "high":    1,
+                        "med":     2,
+                        "low":     3,
+                    }
+                    levels = []
+                    if l_conf_level is not None:
+                        levels.append(l_conf_level)
+                    if r_conf_level is not None:
+                        levels.append(r_conf_level)
+                    chosen = max(
+                        levels, key=lambda lv: _level_rank.get(lv, 0))
+                    wrapped = TyConf(level=chosen, inner=wrapped)
                 return wrapped
             # Arithmetic: take the left type (simplified)
             self._check_plain_binary_scalar_compat(l, r, expr.op, expr.span)

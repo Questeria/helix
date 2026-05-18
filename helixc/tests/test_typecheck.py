@@ -4689,6 +4689,84 @@ def test_stage68_inc1_confidence_high_low_precise_aliases():
         assert t.level == lvl
 
 
+def test_stage68_inc2_conf_propagates_through_binary_add():
+    """Stage 68 Inc 2 — propagation algebra. `Conf<f32> + f32`
+    yields `Conf<f32>` (low conf wins; Phase-0 default level is
+    'med' from the `Conf<...>` alias). Mirrors how TyDiff and
+    TyLogic propagate through binops."""
+    from helixc.frontend.typecheck import (
+        TypeChecker, TyConf, TyPrim,
+    )
+    from helixc.frontend.parser import parse
+
+    src = """
+    fn user(a: Conf<f32>, b: f32) -> Conf<f32> {
+        a + b
+    }
+    fn main() -> i32 { 0 }
+    """
+    prog = parse(src, include_stdlib=False)
+    tc = TypeChecker(prog)
+    errors = tc.check()
+    # No type-mismatch error on return: the propagation should make
+    # `a + b` typecheck as Conf<f32>.
+    type_errs = [e for e in errors
+                 if "return" in str(e) or "Conf" in str(e)]
+    assert len(type_errs) == 0, (
+        f"expected clean typecheck (Conf<f32> + f32 -> Conf<f32>); "
+        f"got: {[str(e) for e in errors]}")
+
+
+def test_stage68_inc2_conf_level_low_dominates_high_in_binop():
+    """Stage 68 Inc 2 — when both operands carry confidence, the
+    most-uncertain level wins (low > med > high > precise). So
+    `LowConf<f32> + HighConf<f32>` yields `LowConf<f32>` semantics."""
+    from helixc.frontend.typecheck import (
+        TypeChecker, TyConf, TyPrim,
+    )
+    from helixc.frontend.parser import parse
+
+    src = """
+    fn user(a: LowConf<f32>, b: HighConf<f32>) -> LowConf<f32> {
+        a + b
+    }
+    fn main() -> i32 { 0 }
+    """
+    prog = parse(src, include_stdlib=False)
+    tc = TypeChecker(prog)
+    errors = tc.check()
+    type_errs = [e for e in errors
+                 if "return" in str(e).lower()
+                 or "Conf" in str(e) or "level" in str(e)]
+    assert len(type_errs) == 0, (
+        f"expected clean typecheck (LowConf + HighConf -> LowConf); "
+        f"got: {[str(e) for e in errors]}")
+
+
+def test_stage68_inc2_plain_arithmetic_unchanged_no_conf_wrap():
+    """Stage 68 Inc 2 — plain f32 + f32 stays f32 (no spurious
+    Conf wrapping)."""
+    from helixc.frontend.typecheck import (
+        TypeChecker, TyConf, TyPrim,
+    )
+    from helixc.frontend.parser import parse
+
+    src = """
+    fn user(a: f32, b: f32) -> f32 {
+        a + b
+    }
+    fn main() -> i32 { 0 }
+    """
+    prog = parse(src, include_stdlib=False)
+    tc = TypeChecker(prog)
+    errors = tc.check()
+    type_errs = [e for e in errors if "return" in str(e).lower()
+                 or "Conf" in str(e)]
+    assert len(type_errs) == 0, (
+        f"plain f32 arithmetic should not gain Conf; got: "
+        f"{[str(e) for e in errors]}")
+
+
 def test_stage68_inc1_confidence_takes_exactly_one_arg():
     """Stage 68 Inc 1: F5 arity arm — Conf<> with wrong arity
     emits a type error (consistent with Modal/Causal wrappers)."""
