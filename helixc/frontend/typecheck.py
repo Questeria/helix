@@ -298,6 +298,37 @@ class TyModal(Type):
 
 
 @dataclass(frozen=True)
+class TyConf(Type):
+    """Stage 68 — confidence-typed value (`Confidence<T>` /
+    `Conf<T>`). A value tagged with a confidence level marker
+    (Phase-0 stores it as a string tier: 'high'/'med'/'low',
+    or 'precise' as an opt-out marker for downstream code that
+    has exited the uncertainty regime).
+
+    The runtime representation is identity-erased to `inner`
+    (matching the Stage 40 TyModal pattern); the type-system
+    layer prevents accidental confidence-laundering at compile
+    time.
+
+    Use case: ML model outputs (`Conf<Logits>` = "logits but
+    you should sanity-check"), sensor reads, learned-vs-axiomatic
+    propagation in the AGI substrate.
+
+    Composes with TyModal: `Conf<Known<i32>>` = "I know this
+    fact but only with medium confidence".
+
+    Inc 1 ships the data type + parser/resolver recognition
+    only; Inc 2 will add propagation algebra (e.g., `Conf<T> + T`
+    = `Conf<T>`), Inc 3 will add `under confidence` control flow,
+    Inc 4 will wire confidence-aware AD (gradient propagation
+    through Conf-tagged tensors), Inc 5 will surface Conf-aware
+    diagnostics.
+    """
+    level: str       # "high", "med", "low", "precise" (= unwrapped)
+    inner: Type
+
+
+@dataclass(frozen=True)
 class TyCausal(Type):
     """Stage 41 — a value tagged with a causal/intent kind:
     Cause / Effect / Joint / Independent. Real-world AGI reasoning
@@ -1711,6 +1742,25 @@ class TypeChecker:
                     ))
                     return TyUnknown(hint=ty.base)
                 return TyModal(kind=modal_map[ty.base],
+                               inner=self._resolve_type(ty.args[0], scope))
+            # Stage 68 Inc 1 — confidence wrapper. F5 arity arm
+            # mirroring the modal pattern.
+            conf_map = {
+                "Confidence":  "med",   # default tier
+                "Conf":        "med",   # short alias
+                "HighConf":    "high",
+                "LowConf":     "low",
+                "Precise":     "precise",
+            }
+            if ty.base in conf_map:
+                if len(ty.args) != 1:
+                    self.errors.append(TypeError_(
+                        f"{ty.base}<T> takes 1 type argument, "
+                        f"got {len(ty.args)}",
+                        ty.span,
+                    ))
+                    return TyUnknown(hint=ty.base)
+                return TyConf(level=conf_map[ty.base],
                                inner=self._resolve_type(ty.args[0], scope))
             # Stage 41 Inc 1 — causal wrappers. F5 arity arm.
             causal_map = {

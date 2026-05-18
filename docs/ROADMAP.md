@@ -303,6 +303,19 @@ Re-sequenced after Stage 46-47 closed:
 - **Stage 58** ✅ **CLOSED 2026-05-18** — Tier 4 #13 content-
   addressed modules (program_hash + module_hash + fn_signature_hash
   core).
+- **Stage 68 Inc 1 SHIPPED 2026-05-18** — Confidence types
+  scaffolding (V1_FINAL_FEATURES Tier-S #1, Layer-0):
+  - New `TyConf(level, inner)` frozen dataclass in typecheck.py.
+  - Parser/resolver recognizes 5 aliases: `Confidence<T>` / `Conf<T>`
+    / `HighConf<T>` / `LowConf<T>` / `Precise<T>`, mapping to
+    level strings `med/med/high/low/precise` (Phase-0 identity-
+    erased; mirrors Stage 40 TyModal pattern).
+  - F5 arity arm (Conf<T,U> errors with arity diagnostic).
+  - 3 new tests; 285 typecheck + 223 self-host GREEN.
+  - Inc 2 will add propagation algebra (e.g., `Conf<T> + T = Conf<T>`);
+    Inc 3 `under confidence` control flow; Inc 4 AD wiring;
+    Inc 5 diagnostics.
+
 - **Stage 67** ✅ **CLOSED 2026-05-18** — end-to-end ML demo:
   - Ships `helixc/examples/dogfood_20_e2e_train_checkpoint.hx`
     — first comprehensive Helix program exercising the Stage

@@ -4008,6 +4008,79 @@ def test_flatten_impls_rejects_same_name_methods():
     assert ex.value.trap_id == 74002
 
 
+def test_stage68_inc1_confidence_type_recognition():
+    """Stage 68 Inc 1 — Tier-S #1 (Layer-0 from V1_FINAL_FEATURES):
+    confidence-typed values. `Confidence<T>` / `Conf<T>` /
+    `HighConf<T>` / `LowConf<T>` / `Precise<T>` recognized at the
+    type-resolution layer. Identity-erased at runtime (Phase-0
+    pattern matching TyModal from Stage 40).
+
+    Inc 1 ships the data type + parser/resolver only; Inc 2 will
+    add propagation algebra; Inc 3 control flow; Inc 4 AD wiring.
+    """
+    from helixc.frontend.typecheck import (
+        TyConf, TyPrim, typecheck,
+    )
+    from helixc.frontend.parser import parse
+
+    # TyConf dataclass exists with .level + .inner fields.
+    c1 = TyConf(level="med", inner=TyPrim("f32"))
+    assert c1.level == "med"
+    assert c1.inner == TyPrim("f32")
+    # Frozen + equal-by-value.
+    assert TyConf(level="med", inner=TyPrim("f32")) == c1
+
+    # Parser/resolver recognizes Conf<T> in type position.
+    # Phase-0: identity-erased at runtime; pure typecheck wiring.
+    src = """
+    fn pass_through(x: Conf<f32>) -> Conf<f32> { x }
+    fn main() -> i32 { 42 }
+    """
+    prog = parse(src, include_stdlib=False)
+    typecheck(prog)  # should not raise
+
+
+def test_stage68_inc1_confidence_high_low_precise_aliases():
+    """Stage 68 Inc 1: HighConf<T> / LowConf<T> / Precise<T>
+    parse as distinct level tags."""
+    from helixc.frontend.typecheck import (
+        TyConf, TyPrim, typecheck,
+    )
+    from helixc.frontend.parser import parse
+
+    src = """
+    fn h(x: HighConf<f32>) -> HighConf<f32> { x }
+    fn l(x: LowConf<i32>) -> LowConf<i32> { x }
+    fn p(x: Precise<f32>) -> Precise<f32> { x }
+    fn main() -> i32 { 42 }
+    """
+    prog = parse(src, include_stdlib=False)
+    typecheck(prog)  # all 3 type aliases resolve
+
+    # Direct construction with each level.
+    for lvl in ("high", "med", "low", "precise"):
+        t = TyConf(level=lvl, inner=TyPrim("f32"))
+        assert t.level == lvl
+
+
+def test_stage68_inc1_confidence_takes_exactly_one_arg():
+    """Stage 68 Inc 1: F5 arity arm — Conf<> with wrong arity
+    emits a type error (consistent with Modal/Causal wrappers)."""
+    from helixc.frontend.typecheck import typecheck
+    from helixc.frontend.parser import parse
+
+    src = """
+    fn bad(x: Conf<f32, i32>) -> i32 { 0 }
+    fn main() -> i32 { 42 }
+    """
+    prog = parse(src, include_stdlib=False)
+    errors = typecheck(prog)
+    # Should have at least 1 error mentioning Conf arity.
+    arity_errors = [e for e in errors if "Conf" in str(e)]
+    assert len(arity_errors) > 0, (
+        f"expected Conf-arity error, got errors: {errors}")
+
+
 def test_stage66_inc1_borrow_checker_scaffolding():
     """Stage 66 Inc 1 — Tier 4 #16 borrow checker scaffolding.
 
