@@ -604,6 +604,19 @@ def _inline_user_calls(expr: A.Expr, fn_table: dict[str, "A.FnDecl"],
                 elif isinstance(s, A.ConstStmt):
                     new_stmts.append(A.ConstStmt(span=s.span, name=s.name,
                                                   ty=s.ty, value=go(s.value)))
+                elif isinstance(s, A.ExprStmt):
+                    # Stage 54 gate-1 silent-failure fix: pre-fix,
+                    # ExprStmt fell to the else branch and was
+                    # appended unchanged. That made Inc 3a's
+                    # For/While/Loop arms in go() unreachable for
+                    # the typical case where a loop is wrapped in
+                    # ExprStmt (the parser emits `while ... { };`
+                    # as ExprStmt(While(...))). Now we recurse into
+                    # the wrapped expr so the walker can reach
+                    # loop bodies AND any helper-calls used at
+                    # statement position (e.g., `pure_helper(x);`).
+                    new_stmts.append(A.ExprStmt(span=s.span,
+                                                  expr=go(s.expr)))
                 else:
                     new_stmts.append(s)
             new_final = go(e.final_expr) if e.final_expr is not None else None
@@ -670,6 +683,18 @@ def _substitute_names(expr: A.Expr, subs: dict[str, A.Expr]) -> A.Expr:
         if isinstance(e, A.Call):
             return A.Call(span=e.span, callee=go(e.callee, env),
                           args=[go(a, env) for a in e.args])
+        if isinstance(e, A.Assign):
+            # Stage 54 gate-1 silent-failure HIGH-1 extended fix:
+            # Assign is an Expr (e.g. `x = y` parsed as
+            # Assign(target=Name(x), op="=", value=Name(y))).
+            # Pre-fix, Assign fell to `return e` so its
+            # target/value children weren't walked, leaving
+            # any param-name on either side un-substituted
+            # after helper inlining. Same defect class as the
+            # For/While/Loop/Match arm gap.
+            return A.Assign(span=e.span, op=e.op,
+                            target=go(e.target, env),
+                            value=go(e.value, env))
         if isinstance(e, A.If):
             new_then = (_go_block(e.then, env) if isinstance(e.then, A.Block)
                         else go(e.then, env))
@@ -680,6 +705,61 @@ def _substitute_names(expr: A.Expr, subs: dict[str, A.Expr]) -> A.Expr:
                         then=new_then, else_=new_else)
         if isinstance(e, A.Block):
             return _go_block(e, env)
+        # Stage 54 closure gate-1 silent-failure HIGH-1 fix
+        # (latent bug exposed by Inc 3a): Loop and Match arms.
+        # Pre-Inc-3a, `_inline_user_calls` never descended into
+        # loop bodies, so helpers called inside loops were left
+        # opaque — never inlined, never substituted, never
+        # triggered this bug. Inc 3a opened the path; now a
+        # helper whose body contains a For/While/Loop/Match
+        # would fail to substitute params inside those forms,
+        # silently producing wrong gradients (or unbound-name
+        # type errors, depending on shadowing).
+        if isinstance(e, A.For):
+            # The loop variable shadows any param substitution
+            # for the same name within the body.
+            inner_env = dict(env)
+            inner_env.pop(e.var_name, None)
+            return A.For(
+                span=e.span, var_name=e.var_name,
+                iter_expr=go(e.iter_expr, env),
+                body=_go_block(e.body, inner_env),
+            )
+        if isinstance(e, A.While):
+            return A.While(
+                span=e.span, cond=go(e.cond, env),
+                body=_go_block(e.body, env),
+            )
+        if isinstance(e, A.Loop):
+            return A.Loop(span=e.span, body=_go_block(e.body, env))
+        if isinstance(e, A.Match):
+            new_arms = []
+            for arm in e.arms:
+                # Pattern bindings shadow incoming substitutions.
+                # Conservative: pop any name that the arm's pattern
+                # might bind. PatBind has .name; deeper destructure
+                # (PatTuple/PatVariant) is Stage 49+ F5-class — not
+                # in scope for AD inlining today.
+                arm_env = dict(env)
+                if isinstance(arm.pattern, A.PatBind):
+                    arm_env.pop(arm.pattern.name, None)
+                new_guard = (
+                    go(arm.guard, arm_env)
+                    if arm.guard is not None else None
+                )
+                new_body = (
+                    _go_block(arm.body, arm_env)
+                    if isinstance(arm.body, A.Block)
+                    else go(arm.body, arm_env)
+                )
+                new_arms.append(A.MatchArm(
+                    span=arm.span, pattern=arm.pattern,
+                    guard=new_guard, body=new_body,
+                ))
+            return A.Match(
+                span=e.span, scrutinee=go(e.scrutinee, env),
+                arms=new_arms,
+            )
         return e
 
     def _go_block(blk: A.Block, env: dict[str, A.Expr]) -> A.Block:
@@ -697,6 +777,18 @@ def _substitute_names(expr: A.Expr, subs: dict[str, A.Expr]) -> A.Expr:
                 local_env.pop(s.name, None)
                 new_stmts.append(A.ConstStmt(span=s.span, name=s.name,
                                               ty=s.ty, value=new_val))
+            elif isinstance(s, A.ExprStmt):
+                # Stage 54 gate-1 silent-failure HIGH-1 extended
+                # fix (parallel to the inliner's Block-stmts
+                # ExprStmt-descent fix): pre-fix, ExprStmt fell
+                # to the else branch and the wrapped expression's
+                # children were never walked. After Inc 3a opened
+                # loop-body inlining, this meant a helper with
+                # `while ... { x = x + p; }` would have its
+                # param-references inside the Assign stay
+                # un-substituted (silently wrong gradient).
+                new_stmts.append(A.ExprStmt(span=s.span,
+                                              expr=go(s.expr, local_env)))
             else:
                 new_stmts.append(s)
         new_final = go(blk.final_expr, local_env) if blk.final_expr is not None else None
@@ -1199,10 +1291,16 @@ def _stage54_min_max_chain_rule(
     call: "A.Call", var: str, span, name: str,
 ) -> "A.Expr":
     """Stage 54 Inc 1: 2-arg chain rule for __min/__max + _f64
-    variants. Subgradient at equality picks 0 (standard convention).
+    variants. Subgradient at equality picks the LEXICALLY-FIRST
+    arg (the asymmetric `<=`/`>=` vs strict `<`/`>` makes the
+    choice deterministic and forward-reverse symmetric).
 
     __min(a, b): df/da = 1 if a <= b else 0; df/db = 1 if b < a else 0
     __max(a, b): df/da = 1 if a >  b else 0; df/db = 1 if b >= a else 0
+
+    At a==b: __min gives da=1, db=0; __max gives da=0, db=1.
+    (Stage 54 closure gate-1 silent-failure Finding 4 docstring
+    fix — prior docstring claimed "picks 0" which was misleading.)
 
     Returns adj_a * da/dvar + adj_b * db/dvar with the two
     indicators inlined as A.If expressions.

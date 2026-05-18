@@ -850,29 +850,136 @@ def test_stage54_inc1_clamp_i32_zero_derivative_forward():
         f"d/dx clamp_i32(x, 0, 1) should be 0, got: {out}"
 
 
+def test_stage54_inc3a_substitute_names_handles_loop_match():
+    """Stage 54 closure gate-1 silent-failure HIGH-1 fix:
+    `_substitute_names` now recurses into For/While/Loop/Match
+    body subtrees. Pre-fix this was a LATENT BUG that Inc 3a's
+    loop-body descent in `_inline_user_calls` exposed: a helper
+    whose body contained a loop would inline into a caller, but
+    its param substitution would fail to walk into the loop
+    body, leaving the param name unbound (or shadowed silently).
+
+    This pin substitutes a name through a synthesized For body
+    and verifies the substitution went through."""
+    from helixc.frontend.autodiff import _substitute_names
+
+    # Build a tiny AST manually: For { let _ = p + 1; }
+    # with p substituted by a literal 42.
+    span = type("Span", (), {"line": 0, "col": 0})()
+    p_use = A.Name(span=span, name="p", generics=[])
+    body_stmt = A.Let(
+        span=span, name="dummy",
+        ty=None,
+        value=A.Binary(span=span, op="+",
+                       left=p_use,
+                       right=A.IntLit(span=span, value=1)),
+        is_mut=False,
+    )
+    for_body = A.Block(span=span, stmts=[body_stmt], final_expr=None)
+    iter_e = A.Range(span=span,
+                     start=A.IntLit(span=span, value=0),
+                     end=A.IntLit(span=span, value=3))
+    for_expr = A.For(span=span, var_name="i",
+                     iter_expr=iter_e, body=for_body)
+
+    # Substitute p -> 42
+    subs = {"p": A.IntLit(span=span, value=42)}
+    result = _substitute_names(for_expr, subs)
+
+    # Verify the For's body's let.value's left arg is now 42
+    # (substituted) not "p" (would be the latent-bug behavior).
+    assert isinstance(result, A.For)
+    let_stmt = result.body.stmts[0]
+    assert isinstance(let_stmt, A.Let)
+    bin_expr = let_stmt.value
+    assert isinstance(bin_expr, A.Binary)
+    assert isinstance(bin_expr.left, A.IntLit), \
+        f"Stage 54 gate-1 HIGH-1: For-body let.value.left should " \
+        f"be IntLit(42) after substitution, got {type(bin_expr.left).__name__}"
+    assert bin_expr.left.value == 42
+
+
+def test_stage54_inc3a_substitute_names_handles_exprstmt_assign():
+    """Stage 54 closure gate-1 EXTENDED silent-failure fix:
+    `_substitute_names._go_block` now descends into ExprStmt
+    (parallel to the inliner's same-class bug). And `go()` now
+    handles A.Assign (Expr — pre-fix it fell to `return e`).
+
+    Without these: a helper with `while ... { x = x + p; }`
+    would inline into a caller, but the `p` inside the Assign
+    inside the ExprStmt inside the While body would never get
+    substituted. The `p` becomes an unbound name in the caller
+    or shadows a different local — silently wrong gradient.
+
+    This pin substitutes a name through:
+        Block { ExprStmt(Assign(target=Name(t), op="=",
+                                value=Binary(Name(t), +, Name(p)))) }
+    and verifies p (in Assign.value.right) was substituted."""
+    from helixc.frontend.autodiff import _substitute_names
+
+    span = type("Span", (), {"line": 0, "col": 0})()
+    target_name = A.Name(span=span, name="t", generics=[])
+    p_use = A.Name(span=span, name="p", generics=[])
+    assign_value = A.Binary(span=span, op="+",
+                             left=A.Name(span=span, name="t",
+                                          generics=[]),
+                             right=p_use)
+    assign_expr = A.Assign(span=span, target=target_name,
+                            op="=", value=assign_value)
+    expr_stmt = A.ExprStmt(span=span, expr=assign_expr)
+    blk = A.Block(span=span, stmts=[expr_stmt], final_expr=None)
+
+    subs = {"p": A.IntLit(span=span, value=99)}
+    result = _substitute_names(blk, subs)
+
+    assert isinstance(result, A.Block)
+    assert len(result.stmts) == 1
+    out_stmt = result.stmts[0]
+    assert isinstance(out_stmt, A.ExprStmt), \
+        f"ExprStmt should survive substitution, got {type(out_stmt).__name__}"
+    out_assign = out_stmt.expr
+    assert isinstance(out_assign, A.Assign), \
+        f"Assign should survive, got {type(out_assign).__name__}"
+    out_bin = out_assign.value
+    assert isinstance(out_bin, A.Binary)
+    assert isinstance(out_bin.right, A.IntLit), \
+        f"Stage 54 gate-1 extended: Assign.value.right (the 'p' " \
+        f"position) should be IntLit(99) after substitution; " \
+        f"got {type(out_bin.right).__name__}. Pre-fix, ExprStmt " \
+        f"and/or Assign was a substitution dead-zone."
+    assert out_bin.right.value == 99
+
+
 def test_stage54_inc3a_loop_body_descent_inlines_pure_helper():
     """Stage 54 Inc 3a: `_inline_user_calls.go()` walker now
     descends into A.For/A.While/A.Loop bodies. Pre-fix, loop
     bodies were returned as-is, so any pure-helper calls inside
     were never inlined — AD passes saw them as opaque.
 
-    Verifies: a pure helper called inside a while-loop body
-    survives the walker's descent (inlined or left-as-call,
-    not crashed). The actual inlining behavior is the same
-    as in non-loop contexts.
+    Stage 54 closure gate-1 code-review CRITICAL F1 fix
+    (REPLACES prior vacuous version): prior test placed
+    pure_double() inside an Assign statement, but the inliner's
+    A.Block arm only descends into Let.value/ConstStmt.value
+    (not ExprStmt or Assign), and the test walker missed
+    ExprStmt entirely — both lookups bypassed the call.
+    The pin "passed" even with Inc 3a reverted.
 
-    Note: this DOES NOT teach AD how to differentiate loops
-    themselves — that's separate. Inc 3a only fixes the
-    walker's omission of loop-body descent."""
+    Post-fix: place pure_double(x) in Block.final_expr position
+    (which BOTH the inliner and test walker visit). Now the
+    pin is load-bearing — reverting Inc 3a makes it FAIL."""
     from helixc.frontend.autodiff import _inline_user_calls
 
+    # Helper is called in a loop body that yields the helper's
+    # value as Block.final_expr. The inliner's Block arm
+    # descends into final_expr; Inc 3a's For arm descends into
+    # the loop body. Both must work for the call to be replaced.
     src = '''
 fn pure_double(z: f64) -> f64 { z + z }
 fn caller(x: f64) -> f64 {
     let mut acc: f64 = 0.0;
     let mut i: i32 = 0;
     while i < 3 {
-        acc = acc + pure_double(x);
+        let _step: f64 = pure_double(x);
         i = i + 1;
     };
     acc
@@ -884,39 +991,40 @@ fn caller(x: f64) -> f64 {
     caller_fn = fn_table["caller"]
     body_expr = caller_fn.body
 
-    # Inline. Walker should descend the while-body and replace
-    # pure_double(x) with its substituted body (x + x).
     inlined = _inline_user_calls(body_expr, fn_table)
 
-    # Walk the result and verify there's no remaining call to
-    # pure_double (the inliner should have substituted).
-    found_pure_double_call = []
-
-    def walk(e):
-        if isinstance(e, A.Call) and isinstance(e.callee, A.Name):
-            if e.callee.name == "pure_double":
-                found_pure_double_call.append(e)
-        for attr in ("left", "right", "operand", "value", "iter_expr",
-                     "body", "then", "else_", "cond", "callee",
-                     "final_expr"):
-            sub = getattr(e, attr, None)
-            if isinstance(sub, A.Expr):
-                walk(sub)
-        for attr in ("args", "stmts"):
-            sublist = getattr(e, attr, None)
-            if isinstance(sublist, list):
-                for s in sublist:
-                    if isinstance(s, A.Expr):
-                        walk(s)
-                    elif hasattr(s, "value") and isinstance(s.value, A.Expr):
-                        walk(s.value)
-
-    walk(inlined)
-    assert not found_pure_double_call, \
-        f"Stage 54 Inc 3a: walker should have descended into the " \
-        f"while-body and inlined pure_double, but it remained as a " \
-        f"call. Pre-fix this was the silent omission. Got: " \
-        f"{len(found_pure_double_call)} unresolved pure_double calls"
+    # Direct check: walk into the while-body's stmts and find
+    # the Let("_step"); inspect its value.
+    assert isinstance(inlined, A.Block)
+    while_expr = None
+    for s in inlined.stmts:
+        if isinstance(s, A.ExprStmt) and isinstance(s.expr, A.While):
+            while_expr = s.expr
+            break
+    assert while_expr is not None, \
+        "expected a While in caller body"
+    inner_let = None
+    for s in while_expr.body.stmts:
+        if isinstance(s, A.Let) and s.name == "_step":
+            inner_let = s
+            break
+    assert inner_let is not None, \
+        "expected let _step in while body"
+    # Inc 3a + pre-existing Block-arm Let.value descent means
+    # pure_double should be inlined into the let-RHS as x + x.
+    # Pre-Inc-3a: the entire While was returned as-is (no
+    # descent), so the Let's value remained `pure_double(x)`.
+    assert not (
+        isinstance(inner_let.value, A.Call)
+        and isinstance(inner_let.value.callee, A.Name)
+        and inner_let.value.callee.name == "pure_double"
+    ), (
+        f"Stage 54 Inc 3a: walker should have descended into "
+        f"the while-body and inlined pure_double in the "
+        f"Let.value, but it remained as a call. Pre-Inc-3a "
+        f"this was the silent omission. Got: "
+        f"{type(inner_let.value).__name__}({getattr(inner_let.value, 'callee', '?')})"
+    )
 
 
 def test_stage54_inc2_forward_reverse_asymmetry_already_fixed():
