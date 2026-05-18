@@ -2589,6 +2589,34 @@ class TypeChecker:
         # the next coverage gap in the wrapper-AST table.
         if isinstance(expr, A.Cast):
             return self._modal_origin_of_expr(expr.value)
+        # Stage 52 Inc 11 / proactive cascade-break: Unary and
+        # Binary wrap modal-tainted values. `-from_uncertain(u)`
+        # and `from_uncertain(u) + 0` preserve modal-origin
+        # semantics — the operation is value-level, the epistemic
+        # status survives. Found during exhaustive AST-wrapper
+        # scan after Inc 10 closed Cast; breaks the cascading-
+        # defect rhythm by closing the next 2 expected gaps in
+        # the same commit (instead of waiting for gate-13/14
+        # to surface them sequentially).
+        #
+        # Unary: single operand → propagate inner kind.
+        # Binary: if both operands have a kind AND they agree,
+        # propagate. If only one has a kind, propagate that kind
+        # (mixed with non-modal preserves the modal claim). If
+        # both differ, return None (multi-kind divergence drop,
+        # matches existing gate-3 / gate-4 / If / Match semantics).
+        if isinstance(expr, A.Unary):
+            return self._modal_origin_of_expr(expr.operand)
+        if isinstance(expr, A.Binary):
+            left_kind = self._modal_origin_of_expr(expr.left)
+            right_kind = self._modal_origin_of_expr(expr.right)
+            if left_kind is None:
+                return right_kind
+            if right_kind is None:
+                return left_kind
+            if left_kind == right_kind:
+                return left_kind
+            return None  # multi-kind divergence → drop
         if isinstance(expr, A.If):
             then_kind = self._modal_origin_of_expr_block_tail(expr.then)
             if expr.else_ is None:

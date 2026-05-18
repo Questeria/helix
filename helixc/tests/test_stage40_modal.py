@@ -1800,6 +1800,66 @@ def test_stage52_gate7_type_design_high_1_last_assigns_cleared_per_fn():
 # ============================================================
 
 
+def test_stage52_inc11_unary_yield_in_into_known_fires():
+    """Stage 52 Inc 11 / proactive cascade-break: Unary expression
+    wrapping a modal-tainted value preserves the modal-origin —
+    `-from_uncertain(u)` is a value-level transformation, the
+    epistemic status survives. Pre-fix, this was silent (Unary
+    wasn't in the recursive helper's wrapper-AST table)."""
+    src = """
+fn main() -> i32 {
+    let u: Uncertain<i32> = into_uncertain(1);
+    let k: Known<i32> = into_known(-from_uncertain(u));
+    from_known(k)
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    errs = typecheck(prog)
+    assert any("launder" in str(e) and "Uncertain" in str(e)
+               and "Known" in str(e) for e in errs), \
+        f"unary-yield-modal MUST FIRE (Stage 52 Inc 11), got: " \
+        f"{[str(e) for e in errs]}"
+
+
+def test_stage52_inc11_binary_yield_in_into_known_fires():
+    """Stage 52 Inc 11 / proactive: Binary expression with one
+    modal-tainted operand and one literal preserves the modal
+    kind (same-kind dominates non-modal)."""
+    src = """
+fn main() -> i32 {
+    let u: Uncertain<i32> = into_uncertain(1);
+    let k: Known<i32> = into_known(from_uncertain(u) + 0);
+    from_known(k)
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    errs = typecheck(prog)
+    assert any("launder" in str(e) and "Uncertain" in str(e)
+               and "Known" in str(e) for e in errs), \
+        f"binary-with-literal-yield-modal MUST FIRE (Stage 52 " \
+        f"Inc 11), got: {[str(e) for e in errs]}"
+
+
+def test_stage52_inc11_negative_binary_mixed_kinds_drops():
+    """Stage 52 Inc 11 negative: Binary with different modal kinds
+    on each operand drops the static claim (multi-kind divergence,
+    matches existing gate-3/gate-4 drop semantics)."""
+    src = """
+fn main() -> i32 {
+    let u: Uncertain<i32> = into_uncertain(1);
+    let kw: Known<i32> = into_known(1);
+    let k2: Known<i32> = into_known(from_uncertain(u) + from_known(kw));
+    from_known(k2)
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    errs = typecheck(prog)
+    launder = [e for e in errs if "launder" in str(e)]
+    assert launder == [], \
+        f"binary with mixed kinds must DROP (Stage 52 Inc 11 " \
+        f"negative), got: {[str(e) for e in errs]}"
+
+
 def test_stage52_inc10_cast_yield_in_into_known_fires():
     """Stage 52 Inc 10 / gate-12 silent-failure CRITICAL-1: cast
     expression `expr as T` preserves modal-origin of `expr` (Cast
