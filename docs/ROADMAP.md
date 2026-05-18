@@ -303,6 +303,25 @@ Re-sequenced after Stage 46-47 closed:
 - **Stage 58** ✅ **CLOSED 2026-05-18** — Tier 4 #13 content-
   addressed modules (program_hash + module_hash + fn_signature_hash
   core).
+- **Stage 89 Inc 1 SHIPPED 2026-05-18** — Tier-B typed holes
+  (V1_FINAL_FEATURES Tier-B #1: holes / typed `_` for AI-assisted
+  development):
+  - When typecheck encounters `_` in expression position (parses
+    as `A.Name("_")`), emits a "typed hole" diagnostic with a
+    span pointer rather than the generic unbound-name suggestion.
+  - Returns TyUnknown(hint="typed_hole") so downstream uses of
+    the hole's value don't cascade with spurious type errors —
+    only the hole itself surfaces.
+  - First Tier-B feature shipped in the burst. Stage 89 Inc 2
+    plan: thread expected-type context through `_check_expr` so
+    the hole diagnostic can report what type is required at the
+    position (the actual UX win for AI-assisted code completion).
+  - Pre-fix, `let x = _;` produced "unbound name '_' — did you
+    mean ...?" with a useless Levenshtein suggestion. Post-fix,
+    it produces "typed hole `_` at expression position — replace
+    with a real expression... (Stage 89 Inc 1)".
+  - 3 new tests; 403 typecheck + 469 regression GREEN.
+
 - **Stage 88 SHIPPED 2026-05-18** — Formal CLOSURE of Stages 68-83
   Tier-S/A wrapper stages:
   - With Stage 87 cross-cutting diagnostic hint shipped + each

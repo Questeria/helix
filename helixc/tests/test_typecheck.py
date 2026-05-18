@@ -4974,6 +4974,86 @@ def test_stage83_wrap_attr_constructor():
     assert len(type_errs) == 0, type_errs
 
 
+def test_stage89_typed_hole_emits_specific_diagnostic():
+    """Stage 89 Inc 1 — `_` in expression position emits a "typed
+    hole" diagnostic with a hint about Inc 2 follow-up work."""
+    from helixc.frontend.typecheck import typecheck
+    from helixc.frontend.parser import parse
+
+    src = """
+    fn user() -> i32 {
+        let x = _;
+        x
+    }
+    fn main() -> i32 { 0 }
+    """
+    prog = parse(src, include_stdlib=False)
+    errors = typecheck(prog)
+    hole_errs = [e for e in errors
+                 if "typed hole" in str(e).lower()
+                 and "Stage 89" in str(e)]
+    assert len(hole_errs) >= 1, (
+        f"expected typed-hole diagnostic; got: "
+        f"{[str(e) for e in errors]}")
+    # And no spurious "did you mean?" suggestion for `_`.
+    suggestion_errs = [e for e in errors
+                       if "did you mean" in str(e).lower()
+                       and "_" in str(e)]
+    assert len(suggestion_errs) == 0, suggestion_errs
+
+
+def test_stage89_typed_hole_in_arg_position_emits_diagnostic():
+    """Stage 89 Inc 1 — `_` as a fn call argument emits the typed-
+    hole diagnostic (caller doesn't have to wait for the call-arg
+    mismatch error to surface)."""
+    from helixc.frontend.typecheck import typecheck
+    from helixc.frontend.parser import parse
+
+    src = """
+    fn add(a: i32, b: i32) -> i32 { a + b }
+    fn user() -> i32 {
+        add(1, _)
+    }
+    fn main() -> i32 { 0 }
+    """
+    prog = parse(src, include_stdlib=False)
+    errors = typecheck(prog)
+    hole_errs = [e for e in errors
+                 if "typed hole" in str(e).lower()
+                 and "Stage 89" in str(e)]
+    assert len(hole_errs) >= 1, errors
+
+
+def test_stage89_typed_hole_returns_unknown_so_cascade_suppressed():
+    """Stage 89 Inc 1 — the hole returns TyUnknown so subsequent
+    uses of the value don't trigger spurious type-mismatch errors
+    (cascade suppression). Only the hole itself should error."""
+    from helixc.frontend.typecheck import typecheck
+    from helixc.frontend.parser import parse
+
+    src = """
+    fn user() -> i32 {
+        let x = _;
+        let y = x + 1;
+        y
+    }
+    fn main() -> i32 { 0 }
+    """
+    prog = parse(src, include_stdlib=False)
+    errors = typecheck(prog)
+    # Exactly one error: the hole itself.
+    hole_errs = [e for e in errors
+                 if "typed hole" in str(e).lower()]
+    assert len(hole_errs) == 1, (
+        f"exactly 1 hole expected; got {len(hole_errs)}: "
+        f"{[str(e) for e in errors]}")
+    # And no `let y` errors related to x being TyUnknown.
+    cascade_errs = [e for e in errors
+                    if "TyUnknown" in str(e)
+                    or "unbound" in str(e)]
+    assert len(cascade_errs) == 0, cascade_errs
+
+
 def test_stage87_wrapper_mismatch_hint_suggests_opt_out_when_arg_wrapped():
     """Stage 87 — when a fn expects bare `f32` but the caller passes
     `Conf<f32>`, the diagnostic includes a hint suggesting

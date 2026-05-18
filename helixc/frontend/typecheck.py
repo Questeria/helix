@@ -4478,6 +4478,28 @@ class TypeChecker:
         if isinstance(expr, A.BoolLit):
             return TyPrim("bool")
         if isinstance(expr, A.Name):
+            # Stage 89 — typed hole: `_` in expression position emits
+            # a "typed hole" diagnostic rather than the generic
+            # unbound-name suggestion. Returns TyUnknown so cascade
+            # errors stay suppressed. Useful for AI-assisted
+            # development per V1_FINAL_FEATURES Tier-B #1: the
+            # compiler flags every `_` placeholder as a hole so the
+            # user (or an LLM helper) doesn't forget to fill them in.
+            # Inc 2 plan: thread expected-type context through
+            # _check_expr so the hole diagnostic can report what
+            # type is required at this position.
+            if expr.name == "_":
+                self.errors.append(TypeError_(
+                    f"typed hole `_` at expression position — replace "
+                    f"with a real expression of the expected type "
+                    f"(Stage 89 Inc 1)",
+                    expr.span,
+                    hint="every `_` placeholder is flagged so it "
+                         "doesn't slip into production; Inc 2 will "
+                         "infer + report the expected type from "
+                         "surrounding context",
+                ))
+                return TyUnknown(hint="typed_hole")
             looked = scope.lookup(expr.name)
             if looked is not None:
                 return looked
