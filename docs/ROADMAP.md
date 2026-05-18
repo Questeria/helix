@@ -8,7 +8,7 @@ reveals which features actually matter.
 ## Current state (Stages 35-59 CLOSED 2026-05-16 to 2026-05-18)
 
 Burst summary (25 stages closed in <72h, all via the
-3-clean-gate protocol; **193-commit autonomous burst** as of refresh):
+3-clean-gate protocol; **222-commit autonomous burst** as of refresh):
 - Stages 35-48 listed below.
 - Stage 49: Tier 4 #14 Inc 3 runtime Ok/Err tag.
 - Stage 50: RESURRECTED (fn_table cap fix unblocked Inc 1+2).
@@ -28,24 +28,33 @@ Burst summary (25 stages closed in <72h, all via the
 - Stage 58: Tier 4 #13 content-addressed modules (program_hash +
   module_hash + fn_signature_hash core).
 - Stage 59: Tier 4 #15 nested pattern destructuring + polish
-  burst (193 commits across Tier 2 #7/#8, Tier 3 #11, Tier 4 #13:
-  ~50 new Python introspection helpers + **99 CLI flags** enumerated in
-  --help + 6 cascading defects found+fixed + JSON/CSV round-trip
-  serialization for both pytree and trace + 5 per-system + 2
-  aggregator validator gates + JSON-parity for every shipped flag
-  + 21-flag call-graph analysis suite across 8 axes (forward/inverse/
-  topology/recursion/metrics/pathfinding/summary/output-format with
-  Graphviz+Mermaid) for refactor planning, dead-code detection,
-  stack-overflow audit, hotspot identification, and visualization
-  + **top-level enumeration nonet** (fns/structs/modules/uses/consts/
-  enums/type-aliases/agents/impls × {text, JSON} = 18 list flags)
-  + **per-item introspection sextet** (struct-fields/const-value/
-  enum-variants/agent-methods/type-alias-target/impl-methods × {text,
-  JSON} = 12 inspect flags) for fine-grained per-Item introspection
-  covering 9 of the Item subclasses end-to-end).
+  burst (222 commits across Tier 2 #7/#8, Tier 3 #11, Tier 4 #13:
+  ~70 new Python introspection helpers + **147 CLI flags** enumerated in
+  --help + 8 cascading defects found+fixed + JSON/CSV round-trip
+  serialization for both pytree and trace + **6-flag validator
+  sextet** (per-system + aggregator + help-docstring + json-parity
+  gates) + JSON-parity for every shipped non-visualization flag
+  (~85% coverage) + 21-flag call-graph analysis suite across 8 axes
+  (forward/inverse/topology/recursion/metrics/pathfinding/summary/
+  output-format with Graphviz+Mermaid) for refactor planning, dead-
+  code detection, stack-overflow audit, hotspot identification, and
+  visualization + **top-level enumeration nonet** (fns/structs/
+  modules/uses/consts/enums/type-aliases/agents/impls × {text, JSON}
+  = 18 list flags) + **per-item introspection octet** (struct-fields/
+  const-value/enum-variants/agent-methods/type-alias-target/impl-
+  methods/fn-signature/module-stats × {text, JSON} = 16 inspect
+  flags) covering 9 of the Item subclasses end-to-end + **callgraph
+  JSON sub-arc** (13 flags: forward/inverse adjacency, transitive
+  reachability, topology, recursion, distance/path/depth) + **CLI
+  self-introspection axis** (6 flag pairs: --list-all-flags + --has-
+  flag + --flag-groups + --flag-doc + --cli-summary-json + --flag-
+  arity — programmatic CLI surface discovery) + diff/comparison
+  JSON-parity triple (program-hash + changed-fns + hash-dump JSON) +
+  check JSON quartet (4 hash-assertion gates) + hash producer JSON
+  triple (program-hash + sig-hash + fn-sig-hash JSON)).
   Final test counts: test_pytree.py 64/64, test_trace.py 52/52,
   test_ast_hash.py 40/40, test_autotune.py 34/34, test_match.py 33/33,
-  test_cli.py 410+ — every impacted area GREEN (self-host gate
+  test_cli.py 460+ — every impacted area GREEN (self-host gate
   223/223 across the 5 introspection files at every commit).
 
 - **Stage 35** — AI/ML capability push (restart 65 closure).
