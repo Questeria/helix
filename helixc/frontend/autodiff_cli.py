@@ -65,6 +65,8 @@ Introspection (Stage 28.9 + Stage 58 + Stage 59 polish):
         Same as --fn-body-stats but machine-readable JSON output.
     --fn-body-stats-all <file.hx>
         Per-fn body-stats for every fn in the file as JSON profile.
+    --fn-body-stats-summary <file.hx>
+        Aggregate body-stats summary (total/max/min/avg per metric).
     --fn-callers <file.hx> <fn_name>
         Inverse: print fns that DIRECTLY call <fn_name> (refactor planning).
     --fn-callgraph-all <file.hx>
@@ -3043,6 +3045,81 @@ def _fn_callers(path: str, target_name: str) -> int:
     return 0
 
 
+def _fn_body_stats_summary(path: str) -> int:
+    """Stage 59 follow-on / Tier 4 #13 polish: aggregate body-stats
+    summary across all fns. For each metric, computes total/max/min/
+    avg.
+
+    Output schema:
+      {
+        "<metric>": {"total": N, "max": N, "min": N, "avg": float},
+        ...
+      }
+    Metrics: ast_nodes, calls, binops, ifs, loops, matches.
+    avg rounded to 2 decimals; empty file gives all zeros.
+
+    Use case: one-read code-health distribution snapshot for tracking
+    complexity drift over time.
+    """
+    import json
+    from .ast_walker import iter_fn_decls
+    src = _read_source(path)
+    prog = _parse_or_exit(src, path)
+
+    metrics = ["ast_nodes", "calls", "binops", "ifs", "loops", "matches"]
+    per_fn: list[dict] = []
+
+    def _stats(fn) -> dict:
+        counts = {k: 0 for k in metrics}
+
+        def _walk(node) -> None:
+            if node is None:
+                return
+            if hasattr(node, "__dataclass_fields__"):
+                counts["ast_nodes"] += 1
+                if isinstance(node, A.Call):
+                    counts["calls"] += 1
+                elif isinstance(node, A.Binary):
+                    counts["binops"] += 1
+                elif isinstance(node, A.If):
+                    counts["ifs"] += 1
+                elif isinstance(node, (A.For, A.While, A.Loop)):
+                    counts["loops"] += 1
+                elif isinstance(node, A.Match):
+                    counts["matches"] += 1
+                for f in node.__dataclass_fields__:
+                    v = getattr(node, f)
+                    if isinstance(v, list):
+                        for x in v:
+                            _walk(x)
+                    elif isinstance(v, tuple):
+                        for x in v:
+                            _walk(x)
+                    else:
+                        _walk(v)
+
+        if fn.body is not None:
+            _walk(fn.body)
+        return counts
+
+    for fn in iter_fn_decls(prog):
+        per_fn.append(_stats(fn))
+
+    n = len(per_fn)
+    summary: dict = {}
+    for m in metrics:
+        values = [f[m] for f in per_fn] or [0]
+        total = sum(values)
+        summary[m] = {
+            "total": total,
+            "max": max(values),
+            "min": min(values),
+            "avg": round(total / n, 2) if n > 0 else 0.0,
+        }
+    print(json.dumps(summary, sort_keys=True, indent=2))
+    return 0
+
+
 def _fn_body_stats_all(path: str) -> int:
     """Stage 59 follow-on / Tier 4 #13 polish: per-fn body-stats for
     every fn in the file as JSON.
@@ -3903,6 +3980,13 @@ def main():
                   file=sys.stderr)
             sys.exit(2)
         sys.exit(_fn_body_stats_all(args[0]))
+
+    if "--fn-body-stats-summary" in flags:
+        if len(args) < 1:
+            print("usage: --fn-body-stats-summary <file.hx>",
+                  file=sys.stderr)
+            sys.exit(2)
+        sys.exit(_fn_body_stats_summary(args[0]))
 
     if "--fn-callers" in flags:
         if len(args) < 2:

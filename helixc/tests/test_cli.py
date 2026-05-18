@@ -5870,7 +5870,7 @@ def test_stage59_autodiff_cli_help_mentions_polish_flags():
         "--list-fns-by-attr", "--list-fns-by-attr-json",
         "--fn-callgraph", "--fn-callers",
         "--fn-body-stats", "--fn-body-stats-json",
-        "--fn-body-stats-all",
+        "--fn-body-stats-all", "--fn-body-stats-summary",
         "--fn-callgraph-all", "--fn-callers-all",
         "--fn-reachable-from", "--fn-reachable-to",
         "--fn-leaves", "--fn-roots",
@@ -8241,6 +8241,40 @@ def test_stage59_fn_callers_unknown_target_no_error(tmp_path):
     )
     assert proc.returncode == 0
     assert proc.stdout == ""
+
+
+def test_stage59_fn_body_stats_summary(tmp_path):
+    """Stage 59 follow-on / Tier 4 #13 polish: --fn-body-stats-summary
+    aggregates per-metric total/max/min/avg across all fns."""
+    import json
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "agg.hx"
+    src.write_text(
+        "fn a() -> i32 { 1 }\n"
+        "fn b(n: i32) -> i32 { a() + n * 2 }\n"
+        "fn c(n: i32) -> i32 { if n > 0 { b(n - 1) } else { 0 } }\n",
+        encoding="utf-8",
+    )
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--fn-body-stats-summary", str(src)],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0
+    s = json.loads(proc.stdout)
+    expected_metrics = {
+        "ast_nodes", "calls", "binops", "ifs", "loops", "matches",
+    }
+    assert set(s.keys()) == expected_metrics
+    # 3 fns: a calls=0, b calls=1, c calls=1 → total 2, max 1, min 0
+    assert s["calls"]["total"] == 2
+    assert s["calls"]["max"] == 1
+    assert s["calls"]["min"] == 0
+    # ifs: only c has 1 → total 1, max 1, min 0
+    assert s["ifs"]["total"] == 1
+    # loops: none → total 0
+    assert s["loops"]["total"] == 0
 
 
 def test_stage59_fn_body_stats_all(tmp_path):
