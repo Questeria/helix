@@ -1166,6 +1166,97 @@ def _diff(expr: A.Expr, var: str) -> A.Expr:
     return A.FloatLit(span=expr.span, value=0.0)
 
 
+def _stage54_min_max_chain_rule(
+    call: "A.Call", var: str, span, name: str,
+) -> "A.Expr":
+    """Stage 54 Inc 1: 2-arg chain rule for __min/__max + _f64
+    variants. Subgradient at equality picks 0 (standard convention).
+
+    __min(a, b): df/da = 1 if a <= b else 0; df/db = 1 if b < a else 0
+    __max(a, b): df/da = 1 if a >  b else 0; df/db = 1 if b >= a else 0
+
+    Returns adj_a * da/dvar + adj_b * db/dvar with the two
+    indicators inlined as A.If expressions.
+    """
+    if len(call.args) != 2:
+        # Wrong arity — fall through to caller's None path so the
+        # downstream type checker emits the right error rather than
+        # AD producing nonsense.
+        return None
+    a = call.args[0]
+    b = call.args[1]
+    da = _diff(a, var)
+    db = _diff(b, var)
+    suffix = "f64" if name.endswith("_f64") else None
+
+    def flit(v: float) -> "A.FloatLit":
+        return A.FloatLit(span=span, value=v, type_suffix=suffix)
+
+    def indicator(left_op: str, left_a: "A.Expr",
+                  right_b: "A.Expr") -> "A.If":
+        """if left_a OP right_b { 1.0 } else { 0.0 }"""
+        return A.If(
+            span=span,
+            cond=A.Binary(span=span, op=left_op,
+                          left=_copy.deepcopy(left_a),
+                          right=_copy.deepcopy(right_b)),
+            then=A.Block(span=span, stmts=[], final_expr=flit(1.0)),
+            else_=A.Block(span=span, stmts=[], final_expr=flit(0.0)),
+        )
+
+    if name in ("__min", "__min_f64"):
+        # df/da = 1 if a <= b else 0
+        # df/db = 1 if b <  a else 0
+        ind_a = indicator("<=", a, b)
+        ind_b = indicator("<", b, a)
+    else:  # __max, __max_f64
+        # df/da = 1 if a >  b else 0
+        # df/db = 1 if b >= a else 0
+        ind_a = indicator(">", a, b)
+        ind_b = indicator(">=", b, a)
+
+    term_a = A.Binary(span=span, op="*", left=ind_a, right=da)
+    term_b = A.Binary(span=span, op="*", left=ind_b, right=db)
+    return A.Binary(span=span, op="+", left=term_a, right=term_b)
+
+
+def _stage54_clamp_chain_rule(
+    call: "A.Call", var: str, span, name: str,
+) -> "A.Expr":
+    """Stage 54 Inc 1: 3-arg chain rule for __clamp + _f64 variant.
+
+    __clamp(x, lo, hi): df/dx = 1 if lo <= x <= hi else 0;
+    lo and hi treated as non-differentiable constants (df/dlo =
+    df/dhi = 0). Returns adj_x * indicator.
+    """
+    if len(call.args) != 3:
+        return None
+    x = call.args[0]
+    lo = call.args[1]
+    hi = call.args[2]
+    dx = _diff(x, var)
+    suffix = "f64" if name.endswith("_f64") else None
+
+    def flit(v: float) -> "A.FloatLit":
+        return A.FloatLit(span=span, value=v, type_suffix=suffix)
+
+    # lo <= x AND x <= hi
+    lo_ok = A.Binary(span=span, op="<=",
+                     left=_copy.deepcopy(lo),
+                     right=_copy.deepcopy(x))
+    hi_ok = A.Binary(span=span, op="<=",
+                     left=_copy.deepcopy(x),
+                     right=_copy.deepcopy(hi))
+    both = A.Binary(span=span, op="&&", left=lo_ok, right=hi_ok)
+    indicator = A.If(
+        span=span,
+        cond=both,
+        then=A.Block(span=span, stmts=[], final_expr=flit(1.0)),
+        else_=A.Block(span=span, stmts=[], final_expr=flit(0.0)),
+    )
+    return A.Binary(span=span, op="*", left=indicator, right=dx)
+
+
 def _diff_call_chain_rule(call: A.Call, var: str,
                           span: A.Span) -> Optional[A.Expr]:
     """Apply the analytic derivative for known transcendental builtins.
@@ -1337,9 +1428,37 @@ def _diff_call_chain_rule(call: A.Call, var: str,
     if (call.callee.name in _IDENTITY_AD_CHAIN_RULE_NAMES
             and len(call.args) == 1):
         return _diff(call.args[0], var)
+    # Stage 54 Inc 1: chain-rule arms for __min/__max/__clamp/__sign
+    # (11 names: 4 base + _i32 + _f64 variants). Previously these
+    # were in AD_KNOWN_PURE_CALLS (let-erasable) but hit the
+    # opaque-call catchall in the chain-rule dispatch — returning
+    # zero+warn in forward mode, raising NotImplementedError in
+    # reverse. Now wired with proper subgradient semantics:
+    # - __min(a, b): adj_a * 1[a<=b] + adj_b * 1[b<a]
+    # - __max(a, b): adj_a * 1[a>b] + adj_b * 1[b>=a]
+    # - __clamp(x, lo, hi): adj_x * 1[lo<=x AND x<=hi]
+    #   (lo/hi treated as non-differentiable constants)
+    # - __sign(x): derivative is 0 (distributional sense)
+    # _i32 variants: derivative is 0 (integer-valued, non-diff)
+    name = call.callee.name
+    if name in ("__min", "__min_f64", "__max", "__max_f64"):
+        return _stage54_min_max_chain_rule(call, var, span, name)
+    if name in ("__clamp", "__clamp_f64"):
+        return _stage54_clamp_chain_rule(call, var, span, name)
+    # _i32 variants of min/max/clamp + all __sign variants:
+    # derivative is 0. Use the suffix of the source-type to
+    # produce a typed-zero of the matching kind.
+    if name in (
+        "__min_i32", "__max_i32", "__clamp_i32",
+        "__sign", "__sign_f64",
+    ):
+        # _f64 returns f64, _i32 returns i32, bare __sign returns
+        # whatever its arg is (f64 by AD convention).
+        suffix = "f64" if name.endswith("_f64") or name == "__sign" else None
+        zero = A.FloatLit(span=span, value=0.0, type_suffix=suffix)
+        return zero
     if len(call.args) != 1:
         return None
-    name = call.callee.name
     u = call.args[0]
     du = _diff(u, var)
 

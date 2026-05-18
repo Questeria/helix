@@ -685,6 +685,82 @@ def _propagate(node: A.Expr, adj: A.Expr, acc: dict[str, list[A.Expr]]) -> None:
                 and len(node.args) == 1):
             _propagate(node.args[0], adj, acc)
             return
+        # Stage 54 Inc 1: __min/__max chain rule.
+        # Subgradient at equality picks 0 per standard convention.
+        # __min: adj_a if a<=b else 0;  adj_b if b<a else 0
+        # __max: adj_a if a>b else 0;   adj_b if b>=a else 0
+        if (isinstance(node.callee, A.Name)
+                and node.callee.name
+                    in ("__min", "__min_f64", "__max", "__max_f64")
+                and len(node.args) == 2):
+            name = node.callee.name
+            a_arg, b_arg = node.args
+            suffix = "f64" if name.endswith("_f64") else None
+            zero_lit = A.FloatLit(
+                span=node.span, value=0.0, type_suffix=suffix)
+            if name in ("__min", "__min_f64"):
+                op_a, op_b = "<=", "<"
+            else:
+                op_a, op_b = ">", ">="
+            cond_a = A.Binary(span=node.span, op=op_a,
+                              left=copy.deepcopy(a_arg),
+                              right=copy.deepcopy(b_arg))
+            cond_b = A.Binary(span=node.span, op=op_b,
+                              left=copy.deepcopy(b_arg),
+                              right=copy.deepcopy(a_arg))
+            adj_a = A.If(
+                span=node.span, cond=cond_a,
+                then=A.Block(span=node.span, stmts=[],
+                             final_expr=copy.deepcopy(adj)),
+                else_=A.Block(span=node.span, stmts=[],
+                              final_expr=copy.deepcopy(zero_lit)))
+            adj_b = A.If(
+                span=node.span, cond=cond_b,
+                then=A.Block(span=node.span, stmts=[],
+                             final_expr=copy.deepcopy(adj)),
+                else_=A.Block(span=node.span, stmts=[],
+                              final_expr=copy.deepcopy(zero_lit)))
+            _propagate(a_arg, adj_a, acc)
+            _propagate(b_arg, adj_b, acc)
+            return
+        # Stage 54 Inc 1: __clamp chain rule.
+        # adj_x * indicator(lo<=x AND x<=hi); lo/hi are non-diff.
+        if (isinstance(node.callee, A.Name)
+                and node.callee.name in ("__clamp", "__clamp_f64")
+                and len(node.args) == 3):
+            name = node.callee.name
+            x_arg, lo_arg, hi_arg = node.args
+            suffix = "f64" if name.endswith("_f64") else None
+            zero_lit = A.FloatLit(
+                span=node.span, value=0.0, type_suffix=suffix)
+            lo_ok = A.Binary(span=node.span, op="<=",
+                             left=copy.deepcopy(lo_arg),
+                             right=copy.deepcopy(x_arg))
+            hi_ok = A.Binary(span=node.span, op="<=",
+                             left=copy.deepcopy(x_arg),
+                             right=copy.deepcopy(hi_arg))
+            both = A.Binary(span=node.span, op="&&",
+                            left=lo_ok, right=hi_ok)
+            adj_x = A.If(
+                span=node.span, cond=both,
+                then=A.Block(span=node.span, stmts=[],
+                             final_expr=copy.deepcopy(adj)),
+                else_=A.Block(span=node.span, stmts=[],
+                              final_expr=copy.deepcopy(zero_lit)))
+            _propagate(x_arg, adj_x, acc)
+            # lo and hi are non-differentiable constants — no
+            # contribution.
+            return
+        # Stage 54 Inc 1: __sign + _i32 variants of min/max/clamp
+        # return 0 derivative (distributional / integer-valued).
+        if (isinstance(node.callee, A.Name)
+                and node.callee.name in (
+                    "__sign", "__sign_f64",
+                    "__min_i32", "__max_i32", "__clamp_i32",
+                )):
+            # Derivative is 0 everywhere — emit no contribution
+            # to any operand.
+            return
         # Audit 28.8 B5: opaque user call — was silently a zero
         # contribution. Reverse-mode now fails closed instead of compiling
         # a zero-gradient surrogate.

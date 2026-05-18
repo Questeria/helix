@@ -793,6 +793,74 @@ def test_c54_ad3_cache_layer_catches_not_implemented_error():
 
 
 # ============================================================================
+# Stage 54 Inc 1: chain-rule arms for __min/__max/__clamp/__sign
+# ============================================================================
+def test_stage54_inc1_min_f64_chain_rule_forward():
+    """d/dx __min_f64(x, 5.0) = if x <= 5.0 then 1.0 else 0.0
+    (b is a constant so db/dx = 0; second term drops to 0)."""
+    out = diff_expr("__min_f64(x, 5.0)", "x")
+    # Forward dispatcher returns indicator_a * dx + indicator_b * db
+    # where db = 0. fmt() may simplify or leave the structure.
+    assert "if" in out and "<=" in out, \
+        f"d/dx min(x, 5) should yield indicator-If, got: {out}"
+
+
+def test_stage54_inc1_max_f64_chain_rule_forward():
+    """d/dx __max_f64(x, 5.0) = if x > 5.0 then 1.0 else 0.0
+    (subgradient at equality picks 0 — strict > for left arg)."""
+    out = diff_expr("__max_f64(x, 5.0)", "x")
+    assert "if" in out and ">" in out, \
+        f"d/dx max(x, 5) should yield indicator-If, got: {out}"
+
+
+def test_stage54_inc1_clamp_f64_chain_rule_forward():
+    """d/dx __clamp_f64(x, 0.0, 1.0) = if (0.0 <= x AND x <= 1.0)
+    then 1.0 else 0.0. lo/hi are non-differentiable constants."""
+    out = diff_expr("__clamp_f64(x, 0.0, 1.0)", "x")
+    assert "if" in out and "&&" in out, \
+        f"d/dx clamp(x, 0, 1) should yield AND-indicator, got: {out}"
+
+
+def test_stage54_inc1_sign_chain_rule_forward():
+    """d/dx __sign(x) = 0 (distributional sense)."""
+    out = diff_expr("__sign(x)", "x")
+    assert out in ("0", "0.0", "0.0_f64"), \
+        f"d/dx sign(x) should be 0, got: {out}"
+
+
+def test_stage54_inc1_min_i32_zero_derivative_forward():
+    """d/dx __min_i32(x, 5) = 0 (integer-valued, non-differentiable
+    for AD purposes)."""
+    out = diff_expr("__min_i32(x, 5)", "x")
+    assert out in ("0", "0.0"), \
+        f"d/dx min_i32(x, 5) should be 0, got: {out}"
+
+
+def test_stage54_inc1_max_i32_zero_derivative_forward():
+    """d/dx __max_i32(x, 5) = 0."""
+    out = diff_expr("__max_i32(x, 5)", "x")
+    assert out in ("0", "0.0"), \
+        f"d/dx max_i32(x, 5) should be 0, got: {out}"
+
+
+def test_stage54_inc1_clamp_i32_zero_derivative_forward():
+    """d/dx __clamp_i32(x, 0, 1) = 0."""
+    out = diff_expr("__clamp_i32(x, 0, 1)", "x")
+    assert out in ("0", "0.0"), \
+        f"d/dx clamp_i32(x, 0, 1) should be 0, got: {out}"
+
+
+def test_stage54_inc1_min_chain_rule_in_composed_expr():
+    """d/dx (__min_f64(x, 5.0) + x) = (if x<=5 then 1 else 0) + 1."""
+    out = diff_expr("__min_f64(x, 5.0) + x", "x")
+    # Just verify it doesn't return zero (which would be the
+    # pre-Stage-54 opaque-call behavior).
+    assert out not in ("0", "0.0"), \
+        f"composed __min should propagate non-zero derivative, " \
+        f"got opaque-zero: {out}"
+
+
+# ============================================================================
 # Test runner
 # ============================================================================
 def main():
