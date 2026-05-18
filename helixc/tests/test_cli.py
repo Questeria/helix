@@ -5882,6 +5882,7 @@ def test_stage59_autodiff_cli_help_mentions_polish_flags():
         "--module-hash-json", "--validate-trace-attrs-json",
         "--changed-fns-json", "--diff-program-hash-json",
         "--dump-ast-hashes-json", "--fn-callgraph-json",
+        "--fn-callers-json",
         "--list-fn-attrs", "--list-fn-attrs-json",
         "--list-fns-by-attr", "--list-fns-by-attr-json",
         "--fn-callgraph", "--fn-callers",
@@ -7544,6 +7545,50 @@ def test_stage59_agent_methods_json(tmp_path):
         {"name": "propose", "params": ["i32"], "return_ty": "i32"},
         {"name": "evaluate", "params": ["i32", "i32"], "return_ty": "i32"},
     ]}
+
+
+def test_stage59_fn_callers_json(tmp_path):
+    """Stage 59 follow-on / Tier 4 #13 polish: --fn-callers-json
+    emits {target, callers: [...]} with callers alphabetically
+    sorted."""
+    import json
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "fcaj.hx"
+    src.write_text(
+        "fn target() -> i32 { 1 }\n"
+        "fn b() -> i32 { target() }\n"
+        "fn a() -> i32 { target() }\n"
+        "fn unrelated() -> i32 { 99 }\n",
+        encoding="utf-8",
+    )
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--fn-callers-json", str(src), "target"],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0
+    result = json.loads(proc.stdout)
+    assert result == {"target": "target", "callers": ["a", "b"]}
+
+
+def test_stage59_fn_callers_json_no_callers(tmp_path):
+    """Stage 59 follow-on / Tier 4 #13 polish: --fn-callers-json
+    emits {target, callers: []} (rc=0) for unknown / unreferenced
+    target (matches text-form semantics: empty is valid)."""
+    import json
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "fcaj_none.hx"
+    src.write_text("fn a() -> i32 { 1 }\n", encoding="utf-8")
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--fn-callers-json", str(src), "nonexistent"],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0
+    result = json.loads(proc.stdout)
+    assert result == {"target": "nonexistent", "callers": []}
 
 
 def test_stage59_fn_callgraph_json(tmp_path):
