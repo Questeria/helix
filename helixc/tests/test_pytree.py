@@ -735,6 +735,31 @@ def test_tree_to_canonical_json_sorted_keys():
     assert s.index('"a"') < s.index('"m"') < s.index('"z"')
 
 
+def test_tree_select_paths_extracts_subset():
+    """Stage 59 follow-on / Tier 2 #7 polish: tree_select_paths returns
+    a new dict with only the entries whose path is in the path list."""
+    from helixc.frontend.pytree import tree_select_paths
+    leaves = {"w1": 1.0, "w2": 2.0, "b": 0.5}
+    sub = tree_select_paths(leaves, ["w1", "b"])
+    assert sub == {"w1": 1.0, "b": 0.5}
+
+
+def test_tree_select_paths_silently_skips_missing():
+    """Stage 59 follow-on: paths not in source dict are silently
+    skipped (use tree_size to detect)."""
+    from helixc.frontend.pytree import tree_select_paths, tree_size
+    leaves = {"w": 1.0}
+    sub = tree_select_paths(leaves, ["w", "missing"])
+    assert sub == {"w": 1.0}
+    assert tree_size(sub) == 1
+
+
+def test_tree_select_paths_empty_list():
+    """Stage 59 follow-on: empty path list returns empty dict."""
+    from helixc.frontend.pytree import tree_select_paths
+    assert tree_select_paths({"w": 1.0}, []) == {}
+
+
 def test_tree_count_matches_predicate():
     """Stage 59 follow-on / Tier 2 #7 polish: tree_count returns the
     number of leaves where predicate(value) is True."""

@@ -549,6 +549,27 @@ def tree_from_canonical_json(s: str) -> dict:
     return json.loads(s)
 
 
+def tree_select_paths(leaves_by_path: dict, paths: list[str]) -> dict:
+    """Stage 59 follow-on / Tier 2 #7 polish — extract a subset of
+    the pytree by an explicit list of paths.
+
+    Returns a new dict with only the (path, value) entries whose path
+    is in `paths`. Paths absent from the source dict are silently
+    skipped (use tree_size on the result to detect that, or set
+    operations on `paths` vs `tree_paths(leaves_by_path)`).
+
+    Complement to tree_filter (predicate over values); this is path-set
+    based instead.
+
+    Use cases:
+    - Extract just the trainable params from a mixed dict
+    - Subset for partial-update of a small group of leaves
+    - Verifier: pull only the leaves a specific test cares about
+    """
+    path_set = set(paths)
+    return {p: v for p, v in leaves_by_path.items() if p in path_set}
+
+
 def tree_count(leaves_by_path: dict, predicate) -> int:
     """Stage 59 follow-on / Tier 2 #7 polish — count leaves matching
     a predicate.
