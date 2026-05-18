@@ -2500,6 +2500,11 @@ class TypeChecker:
         "modify", "modify_f", "modify_f64",
         "print_str", "print_int", "write_file", "read_file_int",
         "read_file_to_arena", "write_file_to_arena",
+        # Stage 60 Inc 1 — dynamic-path file I/O. Path lives in arena
+        # at (start, len) — interoperates with __strlit_to_arena +
+        # __str_concat_arena so runtime-built paths work.
+        "read_file_to_arena_dyn", "write_file_to_arena_dyn",
+        "read_file_int_dyn", "write_file_dyn",
         "__arena_push", "__arena_get", "__arena_set", "__arena_len",
         "__strlen", "__strbyte", "__streq", "__strlit_to_arena",
         "__hash_i32",

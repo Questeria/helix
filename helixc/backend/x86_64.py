@@ -3597,6 +3597,23 @@ class FnCompiler:
                     self.asm.mov_mem_rbp_eax(res_slot)
                 return
 
+            # Stage 60 Inc 1 — dynamic-path file I/O surface. Inc 1
+            # establishes the lowering surface; Inc 2 wires the
+            # x86_64 assembly (arena→stack scratch copy +
+            # null-terminate + syscall + reuse the existing read/write
+            # body). For now, emit a clear "not yet implemented"
+            # error so downstream gates can opt into the surface
+            # without surprising silent miscompiles.
+            if kind in ("read_file_to_arena_dyn",
+                         "write_file_to_arena_dyn",
+                         "read_file_int_dyn",
+                         "write_file_dyn"):
+                raise NotImplementedError(
+                    f"Stage 60 Inc 1: {kind} lowering surface "
+                    f"shipped; Inc 2 will wire x86_64 codegen "
+                    f"(arena→stack path copy + sys_open). Use the "
+                    f"static-path variant for now.")
+
             if kind == "print_int":
                 # Convert i32 -> ASCII decimal and write(1, buf, len).
                 # Strategy: load value into eax, build digits backwards

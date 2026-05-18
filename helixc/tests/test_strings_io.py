@@ -186,6 +186,79 @@ def test_hello_world_example_runs():
     assert "Hello from Helix!" in out
 
 
+def test_stage60_inc1_read_file_to_arena_dyn_lowers_then_codegen_stub_errors():
+    """Stage 60 Inc 1: --read-file-to-arena-dyn lowers cleanly through
+    parser + typecheck + lower_ast, but codegen raises NotImplementedError
+    with a clear "Inc 2 will wire x86_64" message. Establishes the
+    surface contract; Inc 2 will implement the assembly."""
+    src = """
+    fn main() -> i32 {
+        let path_start = __strlit_to_arena("/tmp/dyn_path_test.bin");
+        let path_len = __strlen("/tmp/dyn_path_test.bin");
+        let n_read = read_file_to_arena_dyn(path_start, path_len);
+        42
+    }
+    """
+    prog = parse(src, include_stdlib=True)
+    grad_pass(prog)
+    mod = lower(prog)
+    fdce_module(mod)
+    try:
+        compile_module_to_elf(mod)
+        assert False, "expected NotImplementedError from Inc 1 stub"
+    except NotImplementedError as e:
+        msg = str(e)
+        assert "read_file_to_arena_dyn" in msg
+        assert "Inc 2 will wire" in msg
+
+
+def test_stage60_inc1_write_file_to_arena_dyn_surface_lowers():
+    """Stage 60 Inc 1: write_file_to_arena_dyn surface exists."""
+    src = """
+    fn main() -> i32 {
+        let p = __strlit_to_arena("/tmp/dyn_w.bin");
+        let pl = __strlen("/tmp/dyn_w.bin");
+        let d = __strlit_to_arena("hi");
+        let dl = __strlen("hi");
+        let n = write_file_to_arena_dyn(p, pl, d, dl);
+        42
+    }
+    """
+    prog = parse(src, include_stdlib=True)
+    grad_pass(prog)
+    mod = lower(prog)
+    fdce_module(mod)
+    try:
+        compile_module_to_elf(mod)
+        assert False, "expected NotImplementedError from Inc 1 stub"
+    except NotImplementedError as e:
+        assert "write_file_to_arena_dyn" in str(e)
+
+
+def test_stage60_inc1_all_four_dyn_builtins_typecheck():
+    """Stage 60 Inc 1: all 4 dyn variants (read_file_to_arena_dyn,
+    write_file_to_arena_dyn, read_file_int_dyn, write_file_dyn)
+    typecheck cleanly via the builtin whitelist."""
+    from helixc.frontend.typecheck import typecheck
+    src = """
+    fn main() -> i32 {
+        let p = __strlit_to_arena("/tmp/x");
+        let pl = __strlen("/tmp/x");
+        let d = __strlit_to_arena("y");
+        let dl = __strlen("y");
+        let a = read_file_to_arena_dyn(p, pl);
+        let b = write_file_to_arena_dyn(p, pl, d, dl);
+        let c = read_file_int_dyn(p, pl);
+        let e = write_file_dyn(p, pl, d, dl);
+        42
+    }
+    """
+    prog = parse(src, include_stdlib=True)
+    # Should not raise — all 4 dyn names are now in the builtin
+    # whitelist so they typecheck without "unknown name" diagnostics.
+    typecheck(prog)
+
+
 def main():
     tests = [(name, fn) for name, fn in globals().items()
              if name.startswith("test_") and callable(fn)]

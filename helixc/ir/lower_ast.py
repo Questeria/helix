@@ -3454,6 +3454,71 @@ class Lowerer:
                                           result_ty=tir.TIRScalar("i32"),
                                           attrs={"_kind": "read_file_int",
                                                   "path": expr.args[0].value})
+            # Stage 60 Inc 1 — dynamic-path file I/O. Path bytes live
+            # in arena[path_start..path_start+path_len). Backend copies
+            # them to a stack scratch buffer, null-terminates, then
+            # syscall as usual.
+            #
+            # read_file_to_arena_dyn(path_start, path_len) -> i32
+            if (isinstance(expr.callee, A.Name)
+                    and expr.callee.name == "read_file_to_arena_dyn"
+                    and len(expr.args) == 2):
+                path_start = self._lower_expr(expr.args[0]) \
+                    or self.builder.const_int(0)
+                path_len = self._lower_expr(expr.args[1]) \
+                    or self.builder.const_int(0)
+                return self.builder.emit(
+                    tir.OpKind.PRINT, path_start, path_len,
+                    result_ty=tir.TIRScalar("i32"),
+                    attrs={"_kind": "read_file_to_arena_dyn"})
+            # write_file_to_arena_dyn(path_start, path_len,
+            #                          data_start, n_bytes) -> i32
+            if (isinstance(expr.callee, A.Name)
+                    and expr.callee.name == "write_file_to_arena_dyn"
+                    and len(expr.args) == 4):
+                path_start = self._lower_expr(expr.args[0]) \
+                    or self.builder.const_int(0)
+                path_len = self._lower_expr(expr.args[1]) \
+                    or self.builder.const_int(0)
+                data_start = self._lower_expr(expr.args[2]) \
+                    or self.builder.const_int(0)
+                n_bytes = self._lower_expr(expr.args[3]) \
+                    or self.builder.const_int(0)
+                return self.builder.emit(
+                    tir.OpKind.PRINT, path_start, path_len,
+                    data_start, n_bytes,
+                    result_ty=tir.TIRScalar("i32"),
+                    attrs={"_kind": "write_file_to_arena_dyn"})
+            # read_file_int_dyn(path_start, path_len) -> i32
+            if (isinstance(expr.callee, A.Name)
+                    and expr.callee.name == "read_file_int_dyn"
+                    and len(expr.args) == 2):
+                path_start = self._lower_expr(expr.args[0]) \
+                    or self.builder.const_int(0)
+                path_len = self._lower_expr(expr.args[1]) \
+                    or self.builder.const_int(0)
+                return self.builder.emit(
+                    tir.OpKind.PRINT, path_start, path_len,
+                    result_ty=tir.TIRScalar("i32"),
+                    attrs={"_kind": "read_file_int_dyn"})
+            # write_file_dyn(path_start, path_len,
+            #                 content_start, content_len) -> i32
+            if (isinstance(expr.callee, A.Name)
+                    and expr.callee.name == "write_file_dyn"
+                    and len(expr.args) == 4):
+                path_start = self._lower_expr(expr.args[0]) \
+                    or self.builder.const_int(0)
+                path_len = self._lower_expr(expr.args[1]) \
+                    or self.builder.const_int(0)
+                content_start = self._lower_expr(expr.args[2]) \
+                    or self.builder.const_int(0)
+                content_len = self._lower_expr(expr.args[3]) \
+                    or self.builder.const_int(0)
+                return self.builder.emit(
+                    tir.OpKind.PRINT, path_start, path_len,
+                    content_start, content_len,
+                    result_ty=tir.TIRScalar("i32"),
+                    attrs={"_kind": "write_file_dyn"})
             # Intercept built-in float-cell reflection ops before treating as
             # an ordinary function call.
             if (isinstance(expr.callee, A.Name)
