@@ -41,6 +41,8 @@ Introspection (Stage 28.9 + Stage 58 + Stage 59 polish):
         Enumerate all fns with sig + body hash columns.
     --list-fn-attrs <file.hx>
         Enumerate all fns with their attribute list (@pure, @trace, etc).
+    --list-fns-by-attr <file.hx> <attr>
+        List fns carrying a specific attribute (e.g., 'pure', 'kernel').
     --check-program-hash <file.hx> <expected_hex>
         Assertion-style CI gate: exit 0 if matches, 1 if drift.
     --check-program-signature-hash <file.hx> <expected_hex>
@@ -1070,6 +1072,29 @@ def _module_hash_cli(path: str, mod_name: str) -> int:
     return 0
 
 
+def _list_fns_by_attr(path: str, attr: str) -> int:
+    """Stage 59 follow-on / Tier 4 #13 polish: list fns carrying a
+    specific attribute (e.g., 'pure', 'trace', 'kernel', 'autotune').
+
+    Output: one fn name per line, sorted alphabetically. Walks
+    ModBlock-nested fns via iter_fn_decls.
+
+    Use case: targeted attribute audits.
+      python -m helixc.frontend.autodiff_cli --list-fns-by-attr foo.hx pure
+      python -m helixc.frontend.autodiff_cli --list-fns-by-attr foo.hx kernel
+    """
+    from .ast_walker import iter_fn_decls
+    src = _read_source(path)
+    prog = _parse_or_exit(src, path)
+    matching = sorted(
+        f.name for f in iter_fn_decls(prog)
+        if attr in f.attrs
+    )
+    for name in matching:
+        print(name)
+    return 0
+
+
 def _list_fn_attrs(path: str) -> int:
     """Stage 59 follow-on / Tier 4 #13 polish: enumerate all fns with
     their attribute list.
@@ -1369,6 +1394,13 @@ def main():
                   file=sys.stderr)
             sys.exit(2)
         sys.exit(_list_fn_attrs(args[0]))
+
+    if "--list-fns-by-attr" in flags:
+        if len(args) < 2:
+            print("usage: --list-fns-by-attr <file.hx> <attr>",
+                  file=sys.stderr)
+            sys.exit(2)
+        sys.exit(_list_fns_by_attr(args[0], args[1]))
 
     if "--check-program-hash" in flags:
         if len(args) < 2:

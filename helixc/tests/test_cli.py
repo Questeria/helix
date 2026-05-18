@@ -5836,7 +5836,8 @@ def test_stage59_autodiff_cli_help_mentions_polish_flags():
         "--dump-ast-hashes", "--ast-stats", "--ast-stats-json",
         "--program-hash", "--program-signature-hash",
         "--diff-program-hash", "--changed-fns", "--fn-sig-hash",
-        "--list-fns", "--list-fn-attrs", "--check-program-hash",
+        "--list-fns", "--list-fn-attrs", "--list-fns-by-attr",
+        "--check-program-hash",
         "--check-program-signature-hash",
         "--list-modules", "--module-hash", "--pytree-shape",
         "--list-pytrees", "--pytree-leaf-paths",
@@ -6874,6 +6875,46 @@ def test_stage59_ast_stats_basic(tmp_path):
     assert "kernel_fns=1" in out
     assert "pure_fns=1" in out
     assert "traced_fns=1" in out
+
+
+def test_stage59_list_fns_by_attr_basic(tmp_path):
+    """Stage 59 follow-on / Tier 4 #13 polish: --list-fns-by-attr
+    enumerates fns carrying a specific attribute (sorted)."""
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "a.hx"
+    src.write_text(
+        "@pure\nfn pure_add(x: i32, y: i32) -> i32 { x + y }\n"
+        "@trace\nfn traced_neg(x: i32) -> i32 { 0 - x }\n"
+        "fn plain(x: i32) -> i32 { x }\n"
+        "@pure\n@trace\nfn both(x: i32) -> i32 { x + 1 }\n",
+        encoding="utf-8",
+    )
+    # Pure fns: both, pure_add (sorted alphabetically)
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--list-fns-by-attr", str(src), "pure"],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0
+    lines = [l for l in proc.stdout.splitlines() if l]
+    assert lines == ["both", "pure_add"]
+
+
+def test_stage59_list_fns_by_attr_missing_attr(tmp_path):
+    """Stage 59 follow-on: querying an attribute no fn has returns
+    empty output (rc=0)."""
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "x.hx"
+    src.write_text("fn plain(x: i32) -> i32 { x }\n", encoding="utf-8")
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--list-fns-by-attr", str(src), "phantom_attr"],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0
+    assert proc.stdout == ""
 
 
 def test_stage59_list_fn_attrs_basic(tmp_path):
