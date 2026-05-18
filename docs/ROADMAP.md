@@ -303,6 +303,24 @@ Re-sequenced after Stage 46-47 closed:
 - **Stage 58** ✅ **CLOSED 2026-05-18** — Tier 4 #13 content-
   addressed modules (program_hash + module_hash + fn_signature_hash
   core).
+- **Stage 85 SHIPPED 2026-05-18** — First execution of Stage 77
+  `@property` fns at runtime (`dogfood_23_property_proofs.hx`):
+  - Calls each of the 5 @property fns shipped in `helixc/stdlib/
+    safety.hx` (Stages 78 + 82) with 5 representative f32 inputs
+    each (-100, -1, 0, 1, 100) = 25 total runtime property
+    assertions.
+  - Each property checks a wrap-then-unwrap round-trip preserves
+    the input value bit-for-bit (relies on Phase-0 identity-erasure
+    of all Tier-S/A wrappers at IR / codegen).
+  - Exit code 42 iff all 25 assertions hold; 99 if any failed.
+  - First Helix program to exercise Stage 77 @property scaffolding
+    fns as actual runtime assertions (vs. just being registered in
+    `_property_fn_names` for a future external runner).
+  - Diversifies the burst away from pure type-system additions —
+    Stage 85 is the first non-wrapper, non-stdlib stage since
+    Stage 77.
+  - 1 new codegen test; 1031 codegen + 396 typecheck GREEN.
+
 - **Stage 84 SHIPPED 2026-05-18** — End-to-end full-wrapper-stack
   dogfood (`dogfood_22_full_wrapper_stack.hx`):
   - First Helix program to compile + run using ALL 11 Tier-S/A

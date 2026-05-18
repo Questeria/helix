@@ -15319,6 +15319,24 @@ def test_stage67_dogfood_20_e2e_train_checkpoint_exits_42():
     assert code == 42, f"dogfood_20 should exit 42, got {code}"
 
 
+def test_stage85_dogfood_23_property_proofs_exits_42():
+    """Stage 85 end-to-end: runs each of the 5 @property fns from
+    `helixc/stdlib/safety.hx` (Stages 78 + 82) with 5 representative
+    f32 inputs each = 25 total property-assertions. Failure counter
+    must stay at 0 → exit code 42.
+
+    First Helix program to invoke the Stage 77 @property scaffolding
+    fns as actual runtime assertions (vs. just being registered for
+    a future external runner)."""
+    import os as _os
+    proj = _os.path.dirname(_os.path.dirname(_os.path.dirname(
+        _os.path.abspath(__file__))))
+    src = open(_os.path.join(
+        proj, "helixc/examples/dogfood_23_property_proofs.hx")).read()
+    code = compile_and_run(src)
+    assert code == 42, f"dogfood_23 should exit 42, got {code}"
+
+
 def test_stage84_dogfood_22_full_wrapper_stack_exits_42():
     """Stage 84 end-to-end: exercises ALL 11 Tier-S/A wrappers
     (Stages 68-83) in a single compileable Helix program. Each
