@@ -53,6 +53,8 @@ Introspection (Stage 28.9 + Stage 58 + Stage 59 polish):
         Enumerate top-level ConstDecls as '<name>: <ty>' lines.
     --list-enums <file.hx>
         Enumerate top-level EnumDecls as '<name> variants=N' lines.
+    --list-enums-json <file.hx>
+        Same as --list-enums but JSON with variant names included.
     --list-consts-json <file.hx>
         Same as --list-consts but machine-readable JSON output.
     --const-value <file.hx> <const_name>
@@ -3822,6 +3824,31 @@ def _const_value(path: str, const_name: str) -> int:
     return 1
 
 
+def _list_enums_json(path: str) -> int:
+    """Stage 59 follow-on / Tier 4 #13 polish: --list-enums in
+    machine-readable JSON form.
+
+    Output schema:
+      {"enums": [{"name": "<name>", "variants": N,
+                   "variant_names": ["<v1>", ...]}, ...]}
+    Declaration order preserved.
+    """
+    import json
+    src = _read_source(path)
+    prog = _parse_or_exit(src, path)
+    enums: list[dict] = []
+    for it in prog.items:
+        if isinstance(it, A.EnumDecl):
+            variant_names = [v.name for v in it.variants]
+            enums.append({
+                "name": it.name,
+                "variants": len(it.variants),
+                "variant_names": variant_names,
+            })
+    print(json.dumps({"enums": enums}, sort_keys=True, indent=2))
+    return 0
+
+
 def _list_enums(path: str) -> int:
     """Stage 59 follow-on / Tier 4 #13 polish: enumerate top-level
     EnumDecls in a file.
@@ -4264,6 +4291,12 @@ def main():
             print("usage: --list-enums <file.hx>", file=sys.stderr)
             sys.exit(2)
         sys.exit(_list_enums(args[0]))
+
+    if "--list-enums-json" in flags:
+        if len(args) < 1:
+            print("usage: --list-enums-json <file.hx>", file=sys.stderr)
+            sys.exit(2)
+        sys.exit(_list_enums_json(args[0]))
 
     if "--list-consts-json" in flags:
         if len(args) < 1:

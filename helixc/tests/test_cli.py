@@ -5869,7 +5869,7 @@ def test_stage59_autodiff_cli_help_mentions_polish_flags():
         "--list-uses", "--list-uses-json",
         "--list-consts", "--list-consts-json",
         "--const-value", "--const-value-json",
-        "--list-enums",
+        "--list-enums", "--list-enums-json",
         "--list-fn-attrs", "--list-fn-attrs-json",
         "--list-fns-by-attr", "--list-fns-by-attr-json",
         "--fn-callgraph", "--fn-callers",
@@ -7480,6 +7480,31 @@ def test_stage59_list_consts_json(tmp_path):
         {"name": "MAX_BUF", "ty": "i32"},
         {"name": "PI", "ty": "f64"},
     ]}
+
+
+def test_stage59_list_enums_json(tmp_path):
+    """Stage 59 follow-on / Tier 4 #13 polish: --list-enums-json emits
+    JSON with enum names, variant counts, and variant_names lists."""
+    import json
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "ej.hx"
+    src.write_text(
+        "enum Color { Red, Green, Blue }\n",
+        encoding="utf-8",
+    )
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--list-enums-json", str(src)],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0
+    result = json.loads(proc.stdout)
+    assert result == {"enums": [{
+        "name": "Color",
+        "variants": 3,
+        "variant_names": ["Red", "Green", "Blue"],
+    }]}
 
 
 def test_stage59_list_enums(tmp_path):
