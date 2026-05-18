@@ -329,6 +329,39 @@ class TyConf(Type):
 
 
 @dataclass(frozen=True)
+class TyTaint(Type):
+    """Stage 69 — information-flow / privacy-label type (Tier-S #2).
+    A value tagged with an information-flow label that constrains
+    how it can flow through the program. Phase-0 stores the label
+    as a string: 'public' / 'internal' / 'confidential' /
+    'secret' (least-restrictive to most-restrictive).
+
+    Compositional rule (similar to TyConf): when a Tainted value
+    flows into a binary op, the result inherits the most-restrictive
+    label. So `Public<T> + Confidential<T> = Confidential<T>`.
+
+    Use case: regulated AI (medical / legal / financial) needs
+    provable info-flow guarantees. Refinement types check value
+    invariants; flow types check value ORIGIN. Different axis,
+    both required for safety in real deployments.
+
+    Phase-0 representation is identity-erased to inner (mirrors
+    TyConf / TyModal); the type system layer prevents accidental
+    declassification at compile time.
+
+    Composes with TyConf: `Confidential<Conf<f32>>` = "a
+    confidential measurement we're not fully sure of".
+
+    Inc 1 ships the data type + parser/resolver recognition;
+    Inc 2 will add propagation algebra; Inc 3 will add declassify
+    builtin (`__declassify(x, target_label)` with explicit
+    audit log entry); Inc 4 will wire flow-aware diagnostics
+    at assignment / return sites."""
+    label: str       # "public", "internal", "confidential", "secret"
+    inner: Type
+
+
+@dataclass(frozen=True)
 class TyCausal(Type):
     """Stage 41 — a value tagged with a causal/intent kind:
     Cause / Effect / Joint / Independent. Real-world AGI reasoning
@@ -1878,6 +1911,24 @@ class TypeChecker:
                     ))
                     return TyUnknown(hint=ty.base)
                 return TyConf(level=conf_map[ty.base],
+                               inner=self._resolve_type(ty.args[0], scope))
+            # Stage 69 Inc 1 — information-flow / privacy labels.
+            # F5 arity arm mirroring the modal/conf pattern.
+            taint_map = {
+                "Public":         "public",
+                "Internal":       "internal",
+                "Confidential":   "confidential",
+                "Secret":         "secret",
+            }
+            if ty.base in taint_map:
+                if len(ty.args) != 1:
+                    self.errors.append(TypeError_(
+                        f"{ty.base}<T> takes 1 type argument, "
+                        f"got {len(ty.args)}",
+                        ty.span,
+                    ))
+                    return TyUnknown(hint=ty.base)
+                return TyTaint(label=taint_map[ty.base],
                                inner=self._resolve_type(ty.args[0], scope))
             # Stage 41 Inc 1 — causal wrappers. F5 arity arm.
             causal_map = {

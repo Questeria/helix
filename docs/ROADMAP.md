@@ -303,6 +303,19 @@ Re-sequenced after Stage 46-47 closed:
 - **Stage 58** ✅ **CLOSED 2026-05-18** — Tier 4 #13 content-
   addressed modules (program_hash + module_hash + fn_signature_hash
   core).
+- **Stage 68 SUBSTANTIALLY COMPLETE 2026-05-18** — Tier-S #1
+  Confidence types delivered as a usable feature across Inc 1-3:
+  - Inc 1: TyConf data type + 5 type aliases (Confidence/Conf/
+    HighConf/LowConf/Precise).
+  - Inc 2: propagation algebra through binary ops (low conf wins
+    rank-wise; layering Conf<D<Logic<T>>> canonical).
+  - Inc 3: `__lift_conf(x)` opt-out builtin (strips outer Conf).
+  - End-to-end user experience: annotate Conf<T> in signatures,
+    arithmetic propagates Conf, escape via __lift_conf when
+    crossing API boundaries.
+  - Inc 4 (confidence-aware AD) + Inc 5 (Conf-aware diagnostics)
+    deferred to future polish; not blocking v1.0 user value.
+
 - **Stage 68 Inc 3 SHIPPED 2026-05-18** — Confidence-tag opt-out
   builtin (`__lift_conf`):
   - typecheck: `__lift_conf(x)` returns the inner type of a

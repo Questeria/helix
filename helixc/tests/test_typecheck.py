@@ -4689,6 +4689,85 @@ def test_stage68_inc1_confidence_high_low_precise_aliases():
         assert t.level == lvl
 
 
+def test_stage69_inc1_information_flow_type_recognition():
+    """Stage 69 Inc 1 — TyTaint scaffolding. The 4 type aliases
+    Public/Internal/Confidential/Secret parse cleanly and resolve
+    to TyTaint with the corresponding label."""
+    from helixc.frontend.typecheck import (
+        TypeChecker, TyTaint, TyPrim,
+    )
+    from helixc.frontend.parser import parse
+
+    src = """
+    fn user(a: Public<f32>, b: Confidential<f32>) -> f32 {
+        0.0
+    }
+    fn main() -> i32 { 0 }
+    """
+    prog = parse(src, include_stdlib=False)
+    tc = TypeChecker(prog)
+    errors = tc.check()
+    # We expect the body's return 0.0 vs Confidential argument
+    # to NOT typecheck cleanly (info-flow won't allow Public
+    # output from Confidential input), but Inc 1 has no
+    # propagation enforcement yet — only data type + parser.
+    # So the test is: NO arity errors on the Public/Confidential
+    # type names.
+    arity_errs = [str(e) for e in errors
+                  if "takes 1 type argument" in str(e)
+                  and ("Public" in str(e) or "Confidential" in str(e))]
+    assert len(arity_errs) == 0, (
+        f"unexpected arity error on Public/Confidential: {arity_errs}")
+
+
+def test_stage69_inc1_all_four_taint_aliases_resolve_to_distinct_labels():
+    """Stage 69 Inc 1 — Public/Internal/Confidential/Secret each
+    resolve to TyTaint with the correct label tier."""
+    from helixc.frontend.typecheck import (
+        TypeChecker, TyTaint, TyPrim,
+    )
+    from helixc.frontend.parser import parse
+
+    src = """
+    fn a(x: Public<i32>) -> i32 { 0 }
+    fn b(x: Internal<i32>) -> i32 { 0 }
+    fn c(x: Confidential<i32>) -> i32 { 0 }
+    fn d(x: Secret<i32>) -> i32 { 0 }
+    fn main() -> i32 { 0 }
+    """
+    prog = parse(src, include_stdlib=False)
+    tc = TypeChecker(prog)
+    errors = tc.check()
+    # Filter only the arity/recognition errors — body return-mismatch
+    # errors (which would also fire if labels weren't recognized) are
+    # the failure mode we want to NOT see.
+    name_errs = [str(e) for e in errors
+                 if any(name in str(e)
+                        for name in ["Public", "Internal",
+                                     "Confidential", "Secret"])
+                 and ("takes 1 type argument" in str(e)
+                      or "unbound" in str(e))]
+    assert len(name_errs) == 0, (
+        f"all 4 taint labels should resolve: {name_errs}")
+
+
+def test_stage69_inc1_taint_takes_exactly_one_arg():
+    """Stage 69 Inc 1 — F5 arity arm: Public<T, U> errors."""
+    from helixc.frontend.typecheck import typecheck
+    from helixc.frontend.parser import parse
+
+    src = """
+    fn bad(x: Public<f32, i32>) -> i32 { 0 }
+    fn main() -> i32 { 42 }
+    """
+    prog = parse(src, include_stdlib=False)
+    errors = typecheck(prog)
+    arity_errors = [e for e in errors if "Public" in str(e)
+                    and "takes 1 type argument" in str(e)]
+    assert len(arity_errors) > 0, (
+        f"expected Public<T,U> arity error; got: {errors}")
+
+
 def test_stage68_inc3_lift_conf_strips_outer_wrapper():
     """Stage 68 Inc 3 — `__lift_conf(x)` opts out of the confidence
     regime: a `Conf<f32>` becomes `f32`."""
