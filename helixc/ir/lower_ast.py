@@ -1898,6 +1898,13 @@ class Lowerer:
                     and expr.callee.name == "__declassify"
                     and len(expr.args) == 1):
                 return self._lower_expr(expr.args[0])
+            # Stage 70 Inc 3 — DP-budget opt-out builtin.
+            # `__exhaust_dp(x)` is a typecheck-only marker that strips
+            # the TyDP wrapper. Identity at IR / codegen.
+            if (isinstance(expr.callee, A.Name)
+                    and expr.callee.name == "__exhaust_dp"
+                    and len(expr.args) == 1):
+                return self._lower_expr(expr.args[0])
             # Stage 36 Increment 1: provenance-typed primitives.
             # prove(value, source) lowers to value (Phase-0: the Logic<T>
             # wrapper has zero runtime overhead; provenance lives purely

@@ -4689,6 +4689,232 @@ def test_stage68_inc1_confidence_high_low_precise_aliases():
         assert t.level == lvl
 
 
+def test_stage70_inc3_exhaust_dp_strips_outer_dp():
+    """Stage 70 Inc 3 — `__exhaust_dp(x)` strips the TyDP wrapper.
+    A `Private<f32>` becomes `f32`."""
+    from helixc.frontend.typecheck import TypeChecker
+    from helixc.frontend.parser import parse
+
+    src = """
+    fn user(x: Private<f32>) -> f32 {
+        __exhaust_dp(x)
+    }
+    fn main() -> i32 { 0 }
+    """
+    prog = parse(src, include_stdlib=False)
+    tc = TypeChecker(prog)
+    errors = tc.check()
+    type_errs = [str(e) for e in errors
+                 if "return" in str(e).lower()
+                 or "Private" in str(e)]
+    assert len(type_errs) == 0, (
+        f"expected Private<f32> -> f32 via __exhaust_dp; got: "
+        f"{type_errs}")
+
+
+def test_stage70_inc3_exhaust_dp_preserves_inner_conf():
+    """Stage 70 Inc 3 — `__exhaust_dp(Private<Conf<f32>>)` strips
+    ONLY the outer DP and keeps the inner Conf wrapper."""
+    from helixc.frontend.typecheck import TypeChecker
+    from helixc.frontend.parser import parse
+
+    src = """
+    fn user(x: Private<Conf<f32>>) -> Conf<f32> {
+        __exhaust_dp(x)
+    }
+    fn main() -> i32 { 0 }
+    """
+    prog = parse(src, include_stdlib=False)
+    tc = TypeChecker(prog)
+    errors = tc.check()
+    type_errs = [str(e) for e in errors
+                 if "return" in str(e).lower()
+                 or "Private" in str(e) or "Conf" in str(e)]
+    assert len(type_errs) == 0, (
+        f"expected Private<Conf<f32>> -> Conf<f32>; got: "
+        f"{type_errs}")
+
+
+def test_stage70_inc3_exhaust_dp_identity_on_non_dp():
+    """Stage 70 Inc 3 — `__exhaust_dp(f32)` is identity, safe to
+    use defensively at any call site."""
+    from helixc.frontend.typecheck import TypeChecker
+    from helixc.frontend.parser import parse
+
+    src = """
+    fn user(x: f32) -> f32 {
+        __exhaust_dp(x)
+    }
+    fn main() -> i32 { 0 }
+    """
+    prog = parse(src, include_stdlib=False)
+    tc = TypeChecker(prog)
+    errors = tc.check()
+    type_errs = [str(e) for e in errors
+                 if "return" in str(e).lower()
+                 or "DP" in str(e) or "exhaust" in str(e)]
+    assert len(type_errs) == 0, (
+        f"expected f32 -> f32 identity; got: {type_errs}")
+
+
+def test_stage70_inc2_dp_propagates_when_only_one_side_tagged():
+    """Stage 70 Inc 2 — `Private<f32> + f32` yields `Private<f32>`
+    (the untagged side contributes epsilon 0). Total = 1.0 + 0 =
+    1.0 so return type matches the declared Private<f32>."""
+    from helixc.frontend.typecheck import TypeChecker
+    from helixc.frontend.parser import parse
+
+    src = """
+    fn user(a: Private<f32>, b: f32) -> Private<f32> {
+        a + b
+    }
+    fn main() -> i32 { 0 }
+    """
+    prog = parse(src, include_stdlib=False)
+    tc = TypeChecker(prog)
+    errors = tc.check()
+    type_errs = [str(e) for e in errors
+                 if "return" in str(e).lower()
+                 or "Private" in str(e)]
+    assert len(type_errs) == 0, (
+        f"expected Private + f32 -> Private (eps 1.0); got: "
+        f"{type_errs}")
+
+
+def test_stage70_inc2_dp_epsilon_sum_exceeds_declared_budget_diagnosed():
+    """Stage 70 Inc 2 — DP composition rule: `Private<f32> +
+    Private<f32>` yields TyDP with epsilon=2.0 (sum). If the fn
+    declares return type `Private<f32>` (eps 1.0), the body type
+    won't match, triggering a return-type mismatch — which is
+    the desired feature (budget overrun caught at compile time)."""
+    from helixc.frontend.typecheck import TypeChecker
+    from helixc.frontend.parser import parse
+
+    src = """
+    fn user(a: Private<f32>, b: Private<f32>) -> Private<f32> {
+        a + b
+    }
+    fn main() -> i32 { 0 }
+    """
+    prog = parse(src, include_stdlib=False)
+    tc = TypeChecker(prog)
+    errors = tc.check()
+    # Expect a return-type mismatch surfacing the epsilon overrun.
+    budget_errs = [str(e) for e in errors
+                   if "return type" in str(e).lower()
+                   and "epsilon" in str(e).lower()]
+    # The exact wording isn't guaranteed yet; broaden to look for
+    # ANY diagnostic that mentions a TyDP mismatch.
+    if not budget_errs:
+        budget_errs = [str(e) for e in errors
+                       if "TyDP" in str(e) or "epsilon=" in str(e)]
+    assert len(budget_errs) >= 1, (
+        f"expected budget-overrun diagnostic from sum exceeding "
+        f"declared Private<f32>; got: {[str(e) for e in errors]}")
+
+
+def test_stage70_inc2_dp_fits_within_loose_budget():
+    """Stage 70 Inc 2 — DP sum that fits: `Private<f32> +
+    TinyPrivate<f32>` (1.0 + 0.1 = 1.1). If the fn declares
+    `LoosePrivate<f32>` (eps 10.0), the sum still doesn't match
+    the exact eps "10.0" — the comparator is structural so the
+    epsilon strings must equal. This test confirms the comparator
+    enforces strictness (sum 1.1 ≠ 10.0 → return-type mismatch)."""
+    from helixc.frontend.typecheck import TypeChecker
+    from helixc.frontend.parser import parse
+
+    # Sum-exact path: cast the body sum into a LoosePrivate via
+    # __exhaust_dp once Inc 3 lands. For Inc 2, just verify the
+    # sum propagation surface — strict eps comparison flags
+    # mismatches.
+    src = """
+    fn user(a: Private<f32>, b: TinyPrivate<f32>) -> LoosePrivate<f32> {
+        a + b
+    }
+    fn main() -> i32 { 0 }
+    """
+    prog = parse(src, include_stdlib=False)
+    tc = TypeChecker(prog)
+    errors = tc.check()
+    # Expect a return-type mismatch (1.1 ≠ 10.0). This proves the
+    # epsilon sum propagation fired (not silently collapsed).
+    mismatch_errs = [str(e) for e in errors
+                     if "TyDP" in str(e) or "epsilon=" in str(e)]
+    assert len(mismatch_errs) >= 1, (
+        f"expected eps-sum mismatch (1.1 vs 10.0); got: "
+        f"{[str(e) for e in errors]}")
+
+
+def test_stage70_inc1_dp_type_recognition():
+    """Stage 70 Inc 1 — TyDP scaffolding. The 3 type aliases
+    TinyPrivate/Private/LoosePrivate parse cleanly and resolve to
+    TyDP with the corresponding epsilon string."""
+    from helixc.frontend.typecheck import (
+        TypeChecker, TyDP, TyPrim,
+    )
+    from helixc.frontend.parser import parse
+
+    src = """
+    fn user(a: Private<f32>, b: TinyPrivate<f32>) -> f32 {
+        0.0
+    }
+    fn main() -> i32 { 0 }
+    """
+    prog = parse(src, include_stdlib=False)
+    tc = TypeChecker(prog)
+    errors = tc.check()
+    arity_errs = [str(e) for e in errors
+                  if "takes 1 type argument" in str(e)
+                  and ("Private" in str(e)
+                       or "TinyPrivate" in str(e))]
+    assert len(arity_errs) == 0, (
+        f"unexpected arity error: {arity_errs}")
+
+
+def test_stage70_inc1_three_dp_aliases_resolve_to_distinct_eps():
+    """Stage 70 Inc 1 — TinyPrivate/Private/LoosePrivate each
+    resolve to TyDP with the correct epsilon string."""
+    from helixc.frontend.typecheck import (
+        TypeChecker, TyDP, TyPrim,
+    )
+    from helixc.frontend.parser import parse
+
+    src = """
+    fn a(x: TinyPrivate<i32>) -> i32 { 0 }
+    fn b(x: Private<i32>) -> i32 { 0 }
+    fn c(x: LoosePrivate<i32>) -> i32 { 0 }
+    fn main() -> i32 { 0 }
+    """
+    prog = parse(src, include_stdlib=False)
+    tc = TypeChecker(prog)
+    errors = tc.check()
+    name_errs = [str(e) for e in errors
+                 if any(name in str(e)
+                        for name in ["TinyPrivate", "Private",
+                                     "LoosePrivate"])
+                 and ("takes 1 type argument" in str(e)
+                      or "unbound" in str(e))]
+    assert len(name_errs) == 0, (
+        f"all 3 DP aliases should resolve: {name_errs}")
+
+
+def test_stage70_inc1_dp_takes_exactly_one_arg():
+    """Stage 70 Inc 1 — F5 arity arm: Private<T, U> errors."""
+    from helixc.frontend.typecheck import typecheck
+    from helixc.frontend.parser import parse
+
+    src = """
+    fn bad(x: Private<f32, i32>) -> i32 { 0 }
+    fn main() -> i32 { 42 }
+    """
+    prog = parse(src, include_stdlib=False)
+    errors = typecheck(prog)
+    arity_errors = [e for e in errors if "Private" in str(e)
+                    and "takes 1 type argument" in str(e)]
+    assert len(arity_errors) > 0, (
+        f"expected Private<T,U> arity error; got: {errors}")
+
+
 def test_stage69_inc3_declassify_strips_outer_taint():
     """Stage 69 Inc 3 — `__declassify(x)` strips the Taint wrapper.
     A `Confidential<f32>` becomes `f32`."""

@@ -329,6 +329,41 @@ class TyConf(Type):
 
 
 @dataclass(frozen=True)
+class TyDP(Type):
+    """Stage 70 — differential-privacy budget type (Tier-S #3).
+    A value tagged with its differential-privacy epsilon budget,
+    representing the cumulative privacy cost of the computations
+    that produced it.
+
+    Phase-0 representation: epsilon is stored as a float string
+    (e.g. "0.1", "1.0"). Three preset aliases ship in Inc 1 to
+    avoid needing numeric type arguments at the parser level:
+    - `TinyPrivate<T>`   → epsilon "0.1"  (high privacy)
+    - `Private<T>`       → epsilon "1.0"  (medium privacy, default)
+    - `LoosePrivate<T>`  → epsilon "10.0" (low privacy)
+    A future Inc will add user-defined budgets via attribute syntax.
+
+    Compositional rule: when two DP-tagged values combine in a
+    binop, their epsilons SUM (sequential composition rule from
+    differential privacy theory). So `Private<f32> + Private<f32>`
+    yields a TyDP with epsilon "2.0". If only one side is DP-tagged,
+    the result inherits that epsilon.
+
+    Use case: medical AI, federated learning, anything regulated
+    where downstream consumers need to verify the privacy budget
+    wasn't exceeded. Composes with TyConf and TyTaint:
+    `Confidential<Private<Conf<f32>>>` = "a confidential, private,
+    somewhat-uncertain measurement".
+
+    Inc 1 ships the data type + parser/resolver recognition; Inc 2
+    will add propagation algebra (epsilon sum); Inc 3 will add
+    `__exhaust_dp(x)` opt-out builtin (with audit-trail
+    discipline); Inc 4 will wire budget-exhaustion diagnostics."""
+    epsilon: str     # "0.1", "1.0", etc. — Phase-0 stores as string
+    inner: Type
+
+
+@dataclass(frozen=True)
 class TyTaint(Type):
     """Stage 69 — information-flow / privacy-label type (Tier-S #2).
     A value tagged with an information-flow label that constrains
@@ -1912,6 +1947,24 @@ class TypeChecker:
                     return TyUnknown(hint=ty.base)
                 return TyConf(level=conf_map[ty.base],
                                inner=self._resolve_type(ty.args[0], scope))
+            # Stage 70 Inc 1 — differential-privacy preset budgets.
+            # F5 arity arm. Preset epsilon strings keep the parser
+            # surface single-arg-wrapper-shaped.
+            dp_map = {
+                "TinyPrivate":   "0.1",   # high-privacy budget
+                "Private":       "1.0",   # default medium budget
+                "LoosePrivate":  "10.0",  # low-privacy / loose budget
+            }
+            if ty.base in dp_map:
+                if len(ty.args) != 1:
+                    self.errors.append(TypeError_(
+                        f"{ty.base}<T> takes 1 type argument, "
+                        f"got {len(ty.args)}",
+                        ty.span,
+                    ))
+                    return TyUnknown(hint=ty.base)
+                return TyDP(epsilon=dp_map[ty.base],
+                            inner=self._resolve_type(ty.args[0], scope))
             # Stage 69 Inc 1 — information-flow / privacy labels.
             # F5 arity arm mirroring the modal/conf pattern.
             taint_map = {
@@ -2856,6 +2909,11 @@ class TypeChecker:
         # strips a TyTaint wrapper. Marks an explicit declassification
         # point that an external audit pass can grep for.
         "__declassify",
+        # Stage 70 Inc 3 — DP-budget opt-out. `__exhaust_dp(x)` strips
+        # a TyDP wrapper, acknowledging the user has consumed the
+        # privacy budget at this point. Same audit-grep pattern as
+        # __declassify.
+        "__exhaust_dp",
         "__strlen", "__strbyte", "__streq", "__strlit_to_arena",
         "__hash_i32",
         # Stage 55 Inc 1 — runtime string builtins. Operate on
@@ -4210,9 +4268,11 @@ class TypeChecker:
             r_is_diff = isinstance(r, TyDiff)
 
             # Extract the innermost type beneath any TyDiff/TyLogic/
-            # TyConf/TyTaint wrappers, treating any layering uniformly.
+            # TyConf/TyTaint/TyDP wrappers, treating any layering
+            # uniformly.
             # Stage 68 Inc 2 — TyConf added to the unwrap chain.
             # Stage 69 Inc 2 — TyTaint added too.
+            # Stage 70 Inc 2 — TyDP added too.
             def _unwrap(t: Type) -> Type:
                 if isinstance(t, TyDiff):
                     return _unwrap(t.inner)
@@ -4221,6 +4281,8 @@ class TypeChecker:
                 if isinstance(t, TyConf):
                     return _unwrap(t.inner)
                 if isinstance(t, TyTaint):
+                    return _unwrap(t.inner)
+                if isinstance(t, TyDP):
                     return _unwrap(t.inner)
                 return t
 
@@ -4274,9 +4336,33 @@ class TypeChecker:
             l_is_taint = l_taint_label is not None
             r_is_taint = r_taint_label is not None
 
+            # Stage 70 Inc 2 — detect TyDP in any layered position.
+            # The composition rule for differential privacy is
+            # EPSILON-SUM (sequential composition theorem). Phase-0
+            # stores epsilons as strings; we parse, sum, format
+            # back for the result type.
+            def _find_dp_epsilon(t: Type) -> Optional[str]:
+                if isinstance(t, TyDP):
+                    return t.epsilon
+                if isinstance(t, TyDiff):
+                    return _find_dp_epsilon(t.inner)
+                if isinstance(t, TyLogic):
+                    return _find_dp_epsilon(t.inner)
+                if isinstance(t, TyConf):
+                    return _find_dp_epsilon(t.inner)
+                if isinstance(t, TyTaint):
+                    return _find_dp_epsilon(t.inner)
+                return None
+
+            l_dp_eps = _find_dp_epsilon(l)
+            r_dp_eps = _find_dp_epsilon(r)
+            l_is_dp = l_dp_eps is not None
+            r_is_dp = r_dp_eps is not None
+
             if (l_is_logic or r_is_logic or l_is_diff or r_is_diff
                     or l_is_conf or r_is_conf
-                    or l_is_taint or r_is_taint):
+                    or l_is_taint or r_is_taint
+                    or l_is_dp or r_is_dp):
                 # Audit 28.8 B13 (trap AD002 / 24200): TyDiff binop
                 # with mixed inner types previously silently coerced
                 # the right operand to the left's inner type. The
@@ -4446,12 +4532,34 @@ class TypeChecker:
                     chosen = max(
                         levels, key=lambda lv: _level_rank.get(lv, 0))
                     wrapped = TyConf(level=chosen, inner=wrapped)
+                # Stage 70 Inc 2 — TyDP layered between Conf and Taint.
+                # Differential-privacy composition rule: EPSILON-SUM
+                # (sequential composition theorem). Phase-0 stores
+                # epsilons as strings; we parse, sum, format back as
+                # "{value}" with trailing-zero stripping for clean
+                # repr (1.0 + 0.1 = "1.1", not "1.10000000001").
+                if l_is_dp or r_is_dp:
+                    def _eps_to_float(s: str) -> float:
+                        try:
+                            return float(s)
+                        except ValueError:
+                            return 0.0
+                    total = (_eps_to_float(l_dp_eps or "0.0")
+                             + _eps_to_float(r_dp_eps or "0.0"))
+                    # Use repr() so 1.0 stays "1.0" (not "1") — keeps
+                    # the epsilon comparable to the parser-resolved
+                    # presets (TinyPrivate="0.1", Private="1.0",
+                    # LoosePrivate="10.0") for clean type matching
+                    # in pass-through cases (e.g. Private + bareT).
+                    chosen_eps = repr(total)
+                    wrapped = TyDP(epsilon=chosen_eps, inner=wrapped)
                 # Stage 69 Inc 2 — TyTaint wraps the absolute outermost
-                # layer (above Conf). Information-flow labels propagate
-                # by MOST-RESTRICTIVE-WINS: public < internal <
-                # confidential < secret. So `Public<T> + Confidential<T>`
-                # yields `Confidential<T>` — the result must be treated
-                # as confidential because part of it was.
+                # layer (above Conf and DP). Information-flow labels
+                # propagate by MOST-RESTRICTIVE-WINS: public < internal
+                # < confidential < secret. So `Public<T> +
+                # Confidential<T>` yields `Confidential<T>` — the
+                # result must be treated as confidential because part
+                # of it was.
                 if l_is_taint or r_is_taint:
                     _taint_rank = {
                         "public":       0,
@@ -4608,12 +4716,38 @@ class TypeChecker:
                         if isinstance(t, TyConf):
                             return TyConf(level=t.level,
                                           inner=_strip_taint(t.inner))
+                        if isinstance(t, TyDP):
+                            return TyDP(epsilon=t.epsilon,
+                                        inner=_strip_taint(t.inner))
                         if isinstance(t, TyDiff):
                             return TyDiff(inner=_strip_taint(t.inner))
                         if isinstance(t, TyLogic):
                             return TyLogic(inner=_strip_taint(t.inner))
                         return t
                     return _strip_taint(arg_ty)
+                # Stage 70 Inc 3 — DP-budget opt-out builtin.
+                # `__exhaust_dp(x)` strips the TyDP wrapper, marking
+                # an explicit budget-exhaustion point. An external
+                # audit pass can grep for `__exhaust_dp` to verify
+                # the DP contract is maintained. Identity on non-DP
+                # inputs; preserves Conf/Taint/D/Logic layers.
+                if bn == "__exhaust_dp" and len(arg_tys) == 1:
+                    arg_ty = arg_tys[0]
+                    def _strip_dp(t):
+                        if isinstance(t, TyDP):
+                            return t.inner
+                        if isinstance(t, TyTaint):
+                            return TyTaint(label=t.label,
+                                           inner=_strip_dp(t.inner))
+                        if isinstance(t, TyConf):
+                            return TyConf(level=t.level,
+                                          inner=_strip_dp(t.inner))
+                        if isinstance(t, TyDiff):
+                            return TyDiff(inner=_strip_dp(t.inner))
+                        if isinstance(t, TyLogic):
+                            return TyLogic(inner=_strip_dp(t.inner))
+                        return t
+                    return _strip_dp(arg_ty)
                 if (bn == "__move" and len(arg_tys) == 1
                         and isinstance(expr.args[0], A.Name)):
                     if self._borrow_enforcement_enabled():

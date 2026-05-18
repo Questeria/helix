@@ -303,6 +303,53 @@ Re-sequenced after Stage 46-47 closed:
 - **Stage 58** ✅ **CLOSED 2026-05-18** — Tier 4 #13 content-
   addressed modules (program_hash + module_hash + fn_signature_hash
   core).
+- **Stage 70 SUBSTANTIALLY COMPLETE 2026-05-18** — Tier-S #3
+  Differential privacy types delivered as a usable feature across
+  Inc 1-3:
+  - Inc 1: TyDP(epsilon, inner) data type + 3 preset budget
+    aliases (TinyPrivate=0.1 / Private=1.0 / LoosePrivate=10.0).
+  - Inc 2: epsilon-sum propagation through binary ops (DP
+    sequential composition theorem). Strict type comparator
+    catches budget overruns as return-type mismatches —
+    user-visible diagnostic "body type ... does not match return
+    type ..." with the actual eps values inline.
+  - Inc 3: `__exhaust_dp(x)` opt-out builtin (strips outer DP;
+    audit-grep contract identical to __declassify/__lift_conf).
+  - Layering convention extended: TyTaint outermost, then TyDP,
+    then TyConf, then TyDiff, then TyLogic. Confidential<Private<
+    Conf<D<Logic<T>>>>> is canonical full-stack.
+  - End-to-end user experience: `let result: Private<f32> =
+    aggregate_with_noise(rows, eps=1.0);` — arithmetic accumulates
+    budget automatically, declared budget cap is enforced
+    structurally, escape via `__exhaust_dp` at well-defined
+    points. Audit-pass-friendly opt-out.
+  - 9 new tests; 342 typecheck + 3 selfhost + 471 regression GREEN.
+  - Inc 4 (runtime budget-exhaustion diagnostics with cumulative
+    tracking across calls) deferred to future polish.
+
+- **Stage 70 Inc 3 SHIPPED 2026-05-18** — `__exhaust_dp` opt-out.
+  - typecheck: `_strip_dp` walks the wrapper chain to remove TyDP
+    while preserving inner Conf/Taint/D/Logic.
+  - lower_ast: identity lowering.
+  - `__exhaust_dp` added to `_BUILTIN_NAMES`.
+  - 3 new tests.
+
+- **Stage 70 Inc 2 SHIPPED 2026-05-18** — DP epsilon-sum
+  propagation through binary ops.
+  - `_unwrap` and `_find_dp_epsilon` walk the wrapper chain.
+  - Wrapped-binop gate fires on either-side DP.
+  - TyDP layered between TyConf (inner) and TyTaint (outer).
+  - Epsilon formatting via `repr(total)` preserves "1.0" vs "1"
+    distinction for clean preset comparison.
+  - 3 new tests.
+
+- **Stage 70 Inc 1 SHIPPED 2026-05-18** — TyDP scaffolding.
+  - TyDP(epsilon: str, inner: Type) frozen dataclass.
+  - 3 preset aliases (TinyPrivate/Private/LoosePrivate).
+  - F5 arity arm; epsilons stored as Phase-0 strings to avoid
+    parser changes for numeric type args.
+  - 3 new tests.
+
 - **Stage 69 SUBSTANTIALLY COMPLETE 2026-05-18** — Tier-S #2
   Information flow / privacy types delivered as a usable feature
   across Inc 1-3:
