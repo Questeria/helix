@@ -5885,6 +5885,7 @@ def test_stage59_autodiff_cli_help_mentions_polish_flags():
         "--fn-callers-json",
         "--fn-reachable-from-json", "--fn-reachable-to-json",
         "--fn-leaves-json", "--fn-roots-json",
+        "--fn-recursive-json", "--fn-cycles-json",
         "--list-fn-attrs", "--list-fn-attrs-json",
         "--list-fns-by-attr", "--list-fns-by-attr-json",
         "--fn-callgraph", "--fn-callers",
@@ -7547,6 +7548,55 @@ def test_stage59_agent_methods_json(tmp_path):
         {"name": "propose", "params": ["i32"], "return_ty": "i32"},
         {"name": "evaluate", "params": ["i32", "i32"], "return_ty": "i32"},
     ]}
+
+
+def test_stage59_fn_recursive_json(tmp_path):
+    """Stage 59 follow-on / Tier 4 #13 polish: --fn-recursive-json
+    emits {recursive, n_recursive} with only direct self-recursion."""
+    import json
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "fcrj.hx"
+    src.write_text(
+        "fn fact(n: i32) -> i32 { fact(n) }\n"
+        "fn noop() -> i32 { 1 }\n",
+        encoding="utf-8",
+    )
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--fn-recursive-json", str(src)],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0
+    result = json.loads(proc.stdout)
+    assert result == {"recursive": ["fact"], "n_recursive": 1}
+
+
+def test_stage59_fn_cycles_json(tmp_path):
+    """Stage 59 follow-on / Tier 4 #13 polish: --fn-cycles-json
+    emits {cycles: [[...], ...], n_cycles} with mutual recursion
+    SCCs only (direct self-recursion excluded)."""
+    import json
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "fcyj.hx"
+    src.write_text(
+        "fn a() -> i32 { b() }\n"
+        "fn b() -> i32 { a() }\n"
+        "fn standalone() -> i32 { 1 }\n",
+        encoding="utf-8",
+    )
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--fn-cycles-json", str(src)],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0
+    result = json.loads(proc.stdout)
+    # SCC {a, b}, canonicalized so 'a' comes first.
+    assert result["n_cycles"] == 1
+    assert result["cycles"][0][0] == "a"  # smallest member first
+    assert set(result["cycles"][0]) == {"a", "b"}
 
 
 def test_stage59_fn_leaves_json(tmp_path):

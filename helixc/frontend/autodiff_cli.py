@@ -139,6 +139,11 @@ Introspection (Stage 28.9 + Stage 58 + Stage 59 polish):
         Same as --fn-leaves but JSON {leaves, n_leaves}.
     --fn-roots-json <file.hx>
         Same as --fn-roots but JSON {roots, n_roots}.
+    --fn-recursive-json <file.hx>
+        Same as --fn-recursive but JSON {recursive, n_recursive}.
+    --fn-cycles-json <file.hx>
+        Same as --fn-cycles but JSON {cycles: [[...], ...],
+        n_cycles}.
     --fn-body-stats <file.hx> <fn_name>
         Per-fn body AST-node counts (calls/binops/ifs/loops/matches).
     --fn-body-stats-json <file.hx> <fn_name>
@@ -1792,6 +1797,63 @@ def _list_fn_attrs_json(path: str) -> int:
     return 0
 
 
+def _fn_recursive_json(path: str) -> int:
+    """Stage 59 follow-on / Tier 4 #13 polish: --fn-recursive in
+    machine-readable JSON form.
+
+    Output schema:
+      {"recursive": ["<f1>", "<f2>", ...], "n_recursive": N}
+    Names alphabetically sorted (matches text form).
+    """
+    import json
+    from .ast_walker import iter_fn_decls
+    src = _read_source(path)
+    prog = _parse_or_exit(src, path)
+
+    def _calls_self(fn) -> bool:
+        found = [False]
+        target = fn.name
+
+        def _walk(n) -> None:
+            if found[0] or n is None:
+                return
+            if isinstance(n, A.Call):
+                if (isinstance(n.callee, A.Name)
+                        and n.callee.name == target):
+                    found[0] = True
+                    return
+                if (isinstance(n.callee, A.Path)
+                        and n.callee.segments
+                        and n.callee.segments[-1] == target):
+                    found[0] = True
+                    return
+            if hasattr(n, "__dataclass_fields__"):
+                for f in n.__dataclass_fields__:
+                    v = getattr(n, f)
+                    if isinstance(v, list):
+                        for x in v:
+                            _walk(x)
+                    elif isinstance(v, tuple):
+                        for x in v:
+                            _walk(x)
+                    else:
+                        _walk(v)
+
+        if fn.body is not None:
+            _walk(fn.body)
+        return found[0]
+
+    recursive: list[str] = []
+    for fn in iter_fn_decls(prog):
+        if _calls_self(fn):
+            recursive.append(fn.name)
+    sorted_rec = sorted(recursive)
+    print(json.dumps(
+        {"recursive": sorted_rec, "n_recursive": len(sorted_rec)},
+        sort_keys=True, indent=2))
+    return 0
+
+
 def _fn_recursive(path: str) -> int:
     """Stage 59 follow-on / Tier 4 #13 polish: list fns that DIRECTLY
     recurse (call themselves from their own body).
@@ -1845,6 +1907,100 @@ def _fn_recursive(path: str) -> int:
             recursive.append(fn.name)
     for name in sorted(recursive):
         print(name)
+    return 0
+
+
+def _fn_cycles_json(path: str) -> int:
+    """Stage 59 follow-on / Tier 4 #13 polish: --fn-cycles in
+    machine-readable JSON form.
+
+    Output schema:
+      {"cycles": [["<f1>", "<f2>", ...], ...], "n_cycles": N}
+    Each cycle is a canonicalized list (rotated so alphabetically
+    smallest member is first). Cycles themselves are sorted
+    lexicographically. The closing edge back to cycle[0] is implied
+    by the list structure (not duplicated as in the text form).
+    """
+    import json
+    from .ast_walker import iter_fn_decls
+    src = _read_source(path)
+    prog = _parse_or_exit(src, path)
+
+    graph: dict[str, set[str]] = {}
+    all_fn_names: set[str] = set()
+    for fn in iter_fn_decls(prog):
+        all_fn_names.add(fn.name)
+    for fn in iter_fn_decls(prog):
+        callees: set[str] = set()
+
+        def _walk(n, out: set) -> None:
+            if n is None:
+                return
+            if isinstance(n, A.Call):
+                if isinstance(n.callee, A.Name):
+                    out.add(n.callee.name)
+                elif (isinstance(n.callee, A.Path)
+                      and n.callee.segments):
+                    out.add(n.callee.segments[-1])
+            if hasattr(n, "__dataclass_fields__"):
+                for f in n.__dataclass_fields__:
+                    v = getattr(n, f)
+                    if isinstance(v, list):
+                        for x in v:
+                            _walk(x, out)
+                    elif isinstance(v, tuple):
+                        for x in v:
+                            _walk(x, out)
+                    else:
+                        _walk(v, out)
+
+        if fn.body is not None:
+            _walk(fn.body, callees)
+        graph[fn.name] = {c for c in callees
+                          if c in all_fn_names and c != fn.name}
+
+    index_counter = [0]
+    stack: list[str] = []
+    on_stack: set[str] = set()
+    index: dict[str, int] = {}
+    lowlink: dict[str, int] = {}
+    sccs: list[list[str]] = []
+
+    def _strongconnect(v: str) -> None:
+        index[v] = index_counter[0]
+        lowlink[v] = index_counter[0]
+        index_counter[0] += 1
+        stack.append(v)
+        on_stack.add(v)
+        for w in graph.get(v, set()):
+            if w not in index:
+                _strongconnect(w)
+                lowlink[v] = min(lowlink[v], lowlink[w])
+            elif w in on_stack:
+                lowlink[v] = min(lowlink[v], index[w])
+        if lowlink[v] == index[v]:
+            scc: list[str] = []
+            while True:
+                w = stack.pop()
+                on_stack.discard(w)
+                scc.append(w)
+                if w == v:
+                    break
+            if len(scc) >= 2:
+                sccs.append(scc)
+
+    for v in sorted(graph.keys()):
+        if v not in index:
+            _strongconnect(v)
+
+    def _canonicalize(scc: list[str]) -> list[str]:
+        min_idx = min(range(len(scc)), key=lambda i: scc[i])
+        return scc[min_idx:] + scc[:min_idx]
+
+    canonical = sorted(_canonicalize(s) for s in sccs)
+    print(json.dumps(
+        {"cycles": canonical, "n_cycles": len(canonical)},
+        sort_keys=True, indent=2))
     return 0
 
 
@@ -6086,11 +6242,24 @@ def main():
             sys.exit(2)
         sys.exit(_fn_recursive(args[0]))
 
+    if "--fn-recursive-json" in flags:
+        if len(args) < 1:
+            print("usage: --fn-recursive-json <file.hx>",
+                  file=sys.stderr)
+            sys.exit(2)
+        sys.exit(_fn_recursive_json(args[0]))
+
     if "--fn-cycles" in flags:
         if len(args) < 1:
             print("usage: --fn-cycles <file.hx>", file=sys.stderr)
             sys.exit(2)
         sys.exit(_fn_cycles(args[0]))
+
+    if "--fn-cycles-json" in flags:
+        if len(args) < 1:
+            print("usage: --fn-cycles-json <file.hx>", file=sys.stderr)
+            sys.exit(2)
+        sys.exit(_fn_cycles_json(args[0]))
 
     if "--list-fn-attrs-json" in flags:
         if len(args) < 1:
