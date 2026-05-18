@@ -414,14 +414,41 @@ def tree_to_canonical_json(leaves_by_path: dict) -> str:
     import json
     # Build OrderedDict-shaped output: keys sorted.
     items = [(p, leaves_by_path[p]) for p in sorted(leaves_by_path.keys())]
-    # Use repr for floats to preserve full precision; JSON-encode strings.
+    # JSON-native types (int/float/bool/None/str/list/dict) pass through;
+    # other types fall back to repr() (lossy round-trip — see docstring).
     def _value(v):
-        if isinstance(v, (int, float, bool)) or v is None:
+        if isinstance(v, (int, float, bool, str, list, dict)) or v is None:
             return v
         return repr(v)
     obj = {p: _value(v) for p, v in items}
     # sort_keys=True preserves the canonical order even after dict-build.
     return json.dumps(obj, sort_keys=True, separators=(",", ":"))
+
+
+def tree_from_canonical_json(s: str) -> dict:
+    """Stage 59 follow-on / Tier 2 #7 polish — inverse of
+    tree_to_canonical_json. Parses a JSON object string back to a
+    leaves-by-path dict.
+
+    Round-trip pin (held by test_pytree.py):
+        d == tree_from_canonical_json(tree_to_canonical_json(d))
+        for d with only JSON-native values (int/float/bool/None/str).
+
+    Custom objects that were serialized via repr() (lossy round-trip
+    in to_canonical) come back as strings — the caller is responsible
+    for any deserialization.
+
+    Pairs with tree_to_canonical_json for snapshot save/restore:
+        save: open(path, "w").write(tree_to_canonical_json(params))
+        load: tree_from_canonical_json(open(path).read())
+
+    Use cases:
+    - Restore training params from a checkpoint snapshot
+    - Replay an audited-log parameter dump for reproducibility
+    - Cross-process pytree marshalling
+    """
+    import json
+    return json.loads(s)
 
 
 def tree_count(leaves_by_path: dict, predicate) -> int:

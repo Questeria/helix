@@ -637,6 +637,29 @@ def test_tree_to_canonical_json_valid_json():
     assert parsed == {"w": 1.5, "b": 0.0}
 
 
+def test_tree_canonical_json_round_trips():
+    """Stage 59 follow-on / Tier 2 #7 polish: round-trip pin.
+    tree_from_canonical_json(tree_to_canonical_json(d)) == d for
+    dicts with JSON-native values."""
+    from helixc.frontend.pytree import (
+        tree_to_canonical_json, tree_from_canonical_json,
+    )
+    original = {"w1": 1.5, "w2": -2.25, "b": 0.0, "label": "ok"}
+    serialized = tree_to_canonical_json(original)
+    restored = tree_from_canonical_json(serialized)
+    assert restored == original
+
+
+def test_tree_from_canonical_json_handles_empty():
+    """Stage 59 follow-on: empty pytree round-trips through empty
+    JSON object."""
+    from helixc.frontend.pytree import (
+        tree_to_canonical_json, tree_from_canonical_json,
+    )
+    s = tree_to_canonical_json({})
+    assert tree_from_canonical_json(s) == {}
+
+
 def test_tree_to_canonical_json_sorted_keys():
     """Stage 59 follow-on: output keys appear in sorted order in the
     raw JSON string (not just in the parsed dict)."""
