@@ -1800,6 +1800,49 @@ def test_stage52_gate7_type_design_high_1_last_assigns_cleared_per_fn():
 # ============================================================
 
 
+def test_stage52_inc10_cast_yield_in_into_known_fires():
+    """Stage 52 Inc 10 / gate-12 silent-failure CRITICAL-1: cast
+    expression `expr as T` preserves modal-origin of `expr` (Cast
+    is a value-level reinterpretation, not an epistemic transition).
+    Pre-fix, `into_known(from_uncertain(u) as i32)` silently passed
+    — the 3-character `as T` annotation bypassed all category-error
+    audits. Same defect class as Inc 8 (UnsafeBlock) — missing arm
+    in the recursive `_modal_origin_of_expr` helper."""
+    src = """
+fn main() -> i32 {
+    let u: Uncertain<i32> = into_uncertain(1);
+    let k: Known<i32> = into_known(from_uncertain(u) as i32);
+    from_known(k)
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    errs = typecheck(prog)
+    assert any("launder" in str(e) and "Uncertain" in str(e)
+               and "Known" in str(e) for e in errs), \
+        f"cast yield-from-modal MUST FIRE (Stage 52 Inc 10 / " \
+        f"gate-12 CRITICAL-1), got: {[str(e) for e in errs]}"
+
+
+def test_stage52_inc10_cast_of_tainted_name_fires():
+    """Stage 52 Inc 10 companion: cast of a Name with tracked
+    modal-origin MUST also fire. Confirms the recursive helper
+    composes Cast with the A.Name lookup case."""
+    src = """
+fn main() -> i32 {
+    let u: Uncertain<i32> = into_uncertain(1);
+    let v: i32 = from_uncertain(u);
+    let k: Known<i32> = into_known(v as i32);
+    from_known(k)
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    errs = typecheck(prog)
+    assert any("launder" in str(e) and "Uncertain" in str(e)
+               and "Known" in str(e) for e in errs), \
+        f"cast of tainted Name MUST FIRE (Stage 52 Inc 10 " \
+        f"companion), got: {[str(e) for e in errs]}"
+
+
 def test_stage52_inc8_unsafe_block_yield_in_into_known_fires():
     """Stage 52 Inc 8 / gate-11 silent-failure HIGH-1: `into_X(
     unsafe { from_Y(u) })` MUST FIRE. Pre-fix, the Inc 6 recursive

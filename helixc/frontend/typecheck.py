@@ -2576,6 +2576,19 @@ class TypeChecker:
         # Inc 7's missed AST coverage on UnsafeBlock.
         if isinstance(expr, A.UnsafeBlock):
             return self._modal_origin_of_expr(expr.body)
+        # Stage 52 Inc 10 / gate-12 silent-failure CRITICAL-1 fix:
+        # `expr as T` preserves the modal-origin of expr. Cast is
+        # a value-level reinterpretation, not an epistemic
+        # transition — the inner value's epistemic status survives.
+        # Without this arm, `into_known(from_uncertain(u) as i32)`
+        # silently passed (the 3-character `as T` annotation
+        # bypassed the entire modal-launder audit).
+        # Cascading-defect rhythm: gate-10 caught Inc 6's missed
+        # builtin wiring; gate-11 caught Inc 7's missed UnsafeBlock;
+        # gate-12 catches Inc 8's missed Cast. Each fix surfaces
+        # the next coverage gap in the wrapper-AST table.
+        if isinstance(expr, A.Cast):
+            return self._modal_origin_of_expr(expr.value)
         if isinstance(expr, A.If):
             then_kind = self._modal_origin_of_expr_block_tail(expr.then)
             if expr.else_ is None:
