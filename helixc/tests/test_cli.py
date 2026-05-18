@@ -5837,7 +5837,7 @@ def test_stage59_autodiff_cli_help_mentions_polish_flags():
         "--diff-program-hash", "--changed-fns", "--fn-sig-hash",
         "--list-fns", "--check-program-hash", "--list-modules",
         "--module-hash", "--pytree-shape", "--list-pytrees",
-        "--autotune-summary", "--autotune-budget",
+        "--autotune-summary", "--autotune-budget", "--hash-dump",
     ):
         assert flag in out, (
             f"help text missing {flag!r}: docstring needs to be "
@@ -5995,6 +5995,50 @@ def test_stage59_pytree_shape_non_diff_field_rejected(tmp_path):
     assert "non-differentiable" in proc.stderr or "26002" in proc.stderr
     # Verify no traceback leaked.
     assert "Traceback" not in proc.stderr
+
+
+def test_stage59_hash_dump_returns_valid_json(tmp_path):
+    """Stage 59 follow-on / Tier 4 #13 polish: --hash-dump prints
+    valid JSON with the expected top-level keys."""
+    import json
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "x.hx"
+    src.write_text(
+        "fn f(x: i32) -> i32 { x + 1 }\n"
+        "struct S { a: i32 }\n",
+        encoding="utf-8",
+    )
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--hash-dump", str(src)],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0, proc.stderr
+    dump = json.loads(proc.stdout)
+    assert set(dump.keys()) == {
+        "program_hash", "program_signature_hash",
+        "fns", "structs", "modules",
+    }
+    assert "f" in dump["fns"]
+    assert "S" in dump["structs"]
+
+
+def test_stage59_hash_dump_pretty_printed(tmp_path):
+    """Stage 59 follow-on: --hash-dump output is multi-line JSON
+    (indented) for diff-friendly artifact storage."""
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "y.hx"
+    src.write_text("fn f() -> i32 { 1 }\n", encoding="utf-8")
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--hash-dump", str(src)],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0
+    # Pretty-printed JSON has newlines + 2-space indent.
+    assert "\n  " in proc.stdout  # at least one indented child line
 
 
 def test_stage59_diff_program_hash_body_only_marker(tmp_path):

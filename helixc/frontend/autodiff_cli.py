@@ -14,6 +14,9 @@ Introspection (Stage 28.9 + Stage 58 + Stage 59 polish):
         Print the whole-program structural hash (64 hex).
     --program-signature-hash <file.hx>
         ABI-level hash: covers fn signatures + struct defs, NOT bodies.
+    --hash-dump <file.hx>
+        Comprehensive JSON dump of all hashes (program / fns / structs
+        / modules / signatures) for CI artifact diff-comparison.
     --diff-program-hash <a.hx> <b.hx>
         Compare two programs: prints SAME or DIFFER + per-fn breakdown.
     --changed-fns <a.hx> <b.hx>
@@ -100,6 +103,26 @@ def _dump_ast_hashes(path: str) -> int:
     for it in prog.items:
         if isinstance(it, A.FnDecl):
             print(f"{it.name} : {short_hash(structural_hash(it))}")
+    return 0
+
+
+def _hash_dump(path: str) -> int:
+    """Stage 59 follow-on / Tier 4 #13 polish: print the comprehensive
+    program_hash_dump as pretty-printed JSON.
+
+    Sorted keys + 2-space indent for diff-friendly artifact storage.
+    Wraps program_hash_dump() as a script-friendly entry point.
+
+    Use case: emit a 'hash-dump.json' CI artifact, downstream
+    gates diff it to detect drift at fn/struct/module granularity
+    without per-flag invocations.
+    """
+    import json
+    from .ast_hash import program_hash_dump
+    src = _read_source(path)
+    prog = _parse_or_exit(src, path)
+    dump = program_hash_dump(prog)
+    print(json.dumps(dump, sort_keys=True, indent=2))
     return 0
 
 
@@ -586,6 +609,12 @@ def main():
                   file=sys.stderr)
             sys.exit(2)
         sys.exit(_print_program_signature_hash(args[0]))
+
+    if "--hash-dump" in flags:
+        if len(args) < 1:
+            print("usage: --hash-dump <file.hx>", file=sys.stderr)
+            sys.exit(2)
+        sys.exit(_hash_dump(args[0]))
 
     if "--diff-program-hash" in flags:
         if len(args) < 2:
