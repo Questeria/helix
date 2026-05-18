@@ -43,6 +43,10 @@ Introspection (Stage 28.9 + Stage 58 + Stage 59 polish):
         Same as --list-fns but machine-readable JSON (full 64-hex hashes).
     --list-structs <file.hx>
         Enumerate all structs with field count + content hash.
+    --list-structs-json <file.hx>
+        Same as --list-structs but machine-readable JSON output.
+    --list-modules-json <file.hx>
+        Same as --list-modules but machine-readable JSON output.
     --parse-only <file.hx>
         Lightest CI gate: exit 0 if source parses cleanly, 1 on error.
     --list-fn-attrs <file.hx>
@@ -1263,6 +1267,59 @@ def _parse_only(path: str) -> int:
     return 0
 
 
+def _list_structs_json(path: str) -> int:
+    """Stage 59 follow-on / Tier 4 #13 polish: --list-structs in
+    machine-readable JSON form.
+
+    Output: {struct_name: {fields: N, hash: <64hex>}} sorted.
+    """
+    import json
+    from .ast_hash import structural_hash
+    src = _read_source(path)
+    prog = _parse_or_exit(src, path)
+    structs = sorted(
+        (it for it in prog.items if isinstance(it, A.StructDecl)),
+        key=lambda s: s.name,
+    )
+    result = {
+        s.name: {"fields": len(s.fields), "hash": structural_hash(s)}
+        for s in structs
+    }
+    print(json.dumps(result, sort_keys=True, indent=2))
+    return 0
+
+
+def _list_modules_json(path: str) -> int:
+    """Stage 59 follow-on / Tier 4 #13 polish: --list-modules in
+    machine-readable JSON form.
+
+    Output: {module_name: <64hex>} for all ModBlock/ModuleDecl
+    (including nested via dotted names).
+    """
+    import json
+    from .ast_hash import module_hash
+    src = _read_source(path)
+    prog = _parse_or_exit(src, path)
+
+    result: dict = {}
+
+    def _walk(items, prefix: str = "") -> None:
+        for it in items:
+            if isinstance(it, A.ModBlock):
+                full = f"{prefix}{it.name}" if not prefix else f"{prefix}.{it.name}"
+                result[full] = module_hash(it)
+                _walk(it.items, full)
+            elif isinstance(it, A.ModuleDecl):
+                full = ".".join(it.path)
+                if prefix:
+                    full = f"{prefix}.{full}"
+                result[full] = module_hash(it)
+
+    _walk(prog.items)
+    print(json.dumps(result, sort_keys=True, indent=2))
+    return 0
+
+
 def _list_structs(path: str) -> int:
     """Stage 59 follow-on / Tier 4 #13 polish: enumerate all top-level
     StructDecls in a source file with their structural-hash + field
@@ -1601,6 +1658,20 @@ def main():
                   file=sys.stderr)
             sys.exit(2)
         sys.exit(_list_structs(args[0]))
+
+    if "--list-structs-json" in flags:
+        if len(args) < 1:
+            print("usage: --list-structs-json <file.hx>",
+                  file=sys.stderr)
+            sys.exit(2)
+        sys.exit(_list_structs_json(args[0]))
+
+    if "--list-modules-json" in flags:
+        if len(args) < 1:
+            print("usage: --list-modules-json <file.hx>",
+                  file=sys.stderr)
+            sys.exit(2)
+        sys.exit(_list_modules_json(args[0]))
 
     if "--parse-only" in flags:
         if len(args) < 1:

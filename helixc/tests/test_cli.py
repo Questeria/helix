@@ -5836,14 +5836,16 @@ def test_stage59_autodiff_cli_help_mentions_polish_flags():
         "--dump-ast-hashes", "--ast-stats", "--ast-stats-json",
         "--program-hash", "--program-signature-hash",
         "--diff-program-hash", "--changed-fns", "--fn-sig-hash",
-        "--list-fns", "--list-fns-json", "--list-structs",
+        "--list-fns", "--list-fns-json",
+        "--list-structs", "--list-structs-json",
         "--list-fn-attrs", "--list-fn-attrs-json",
         "--list-fns-by-attr",
         "--check-program-hash",
         "--check-program-hash-from-file",
         "--check-program-signature-hash",
         "--check-program-signature-hash-from-file",
-        "--list-modules", "--module-hash", "--pytree-shape",
+        "--list-modules", "--list-modules-json",
+        "--module-hash", "--pytree-shape",
         "--list-pytrees", "--pytree-leaf-paths",
         "--validate-pytrees", "--validate-pytrees-json",
         "--autotune-summary", "--autotune-budget",
@@ -7046,6 +7048,60 @@ def test_stage59_parse_only_bad_exits_1(tmp_path):
     )
     assert proc.returncode == 1
     assert "parse" in proc.stderr.lower() or "error" in proc.stderr.lower()
+
+
+def test_stage59_list_structs_json(tmp_path):
+    """Stage 59 follow-on / Tier 4 #13 polish: --list-structs-json
+    outputs JSON {name: {fields, hash}}."""
+    import json
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "s.hx"
+    src.write_text(
+        "struct A { x: i32 }\nstruct B { a: i32, b: i32 }\n",
+        encoding="utf-8",
+    )
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--list-structs-json", str(src)],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0
+    result = json.loads(proc.stdout)
+    assert set(result.keys()) == {"A", "B"}
+    assert result["A"]["fields"] == 1
+    assert result["B"]["fields"] == 2
+    assert len(result["A"]["hash"]) == 64
+    assert len(result["B"]["hash"]) == 64
+
+
+def test_stage59_list_modules_json(tmp_path):
+    """Stage 59 follow-on / Tier 4 #13 polish: --list-modules-json
+    outputs JSON {module_name: <64hex>} for nested modules too."""
+    import json
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "m.hx"
+    src.write_text(
+        "mod outer {\n"
+        "    fn h() -> i32 { 1 }\n"
+        "    mod inner { fn i() -> i32 { 2 } }\n"
+        "}\n"
+        "mod other { fn x() -> i32 { 3 } }\n",
+        encoding="utf-8",
+    )
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--list-modules-json", str(src)],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0
+    result = json.loads(proc.stdout)
+    assert "outer" in result
+    assert "outer.inner" in result
+    assert "other" in result
+    for h in result.values():
+        assert len(h) == 64
 
 
 def test_stage59_list_structs_basic(tmp_path):
