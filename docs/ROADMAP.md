@@ -303,6 +303,19 @@ Re-sequenced after Stage 46-47 closed:
 - **Stage 58** ✅ **CLOSED 2026-05-18** — Tier 4 #13 content-
   addressed modules (program_hash + module_hash + fn_signature_hash
   core).
+- **Stage 67** ✅ **CLOSED 2026-05-18** — end-to-end ML demo:
+  - Ships `helixc/examples/dogfood_20_e2e_train_checkpoint.hx`
+    — first comprehensive Helix program exercising the Stage
+    57-62 ML stack as a single end-to-end pipeline.
+  - Pipeline: struct Model → grad_rev_all → named per-leaf
+    accessors (Stage 62) → SGD update → checkpoint_save_raw +
+    checkpoint_load_raw (Stage 60+61) via dyn file I/O.
+  - 2 cascade defects fixed inline (grad_rev_all call surface,
+    AD opaque-call rejection for struct-param helper).
+  - test_stage67_dogfood_20_e2e_train_checkpoint_exits_42 passes
+    (exit code 42 iff training ran end-to-end + checkpoint
+    round-trip succeeded).
+
 - **Stage 66 Inc 1 SHIPPED 2026-05-18** — Tier 4 #16 borrow
   checker scaffolding (see `docs/stage66-progress-2026-05-18.md`):
   - **Architectural decision (made autonomously, user can
