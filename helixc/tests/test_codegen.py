@@ -12044,7 +12044,16 @@ def test_grad_rejects_allocator_let_in_differentiated_body():
     }
     fn main() -> i32 { grad(loss)(3.0) as i32 }
     """
-    with pytest.raises(NotImplementedError, match="cannot erase side-effecting let"):
+    # Stage 54 backlog fix (51e67b8): error message format
+    # widened to identify the offending opaque call by name
+    # when applicable. Both pre- and post-fix wording is
+    # acceptable — the key invariant is that compilation fails
+    # with a NotImplementedError mentioning either the
+    # side-effecting let OR the t2d_new opaque call.
+    with pytest.raises(
+        NotImplementedError,
+        match="cannot erase side-effecting let|opaque call 't2d_new'",
+    ):
         compile_and_run(src)
 
 
