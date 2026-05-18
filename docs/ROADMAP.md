@@ -303,6 +303,33 @@ Re-sequenced after Stage 46-47 closed:
 - **Stage 58** ✅ **CLOSED 2026-05-18** — Tier 4 #13 content-
   addressed modules (program_hash + module_hash + fn_signature_hash
   core).
+- **Stage 86 SHIPPED 2026-05-18** — Stage 77 Inc 2: Python-side
+  `@property` test runner (`helixc/runners/property_runner.py`):
+  - First runnable property-test infrastructure for Helix. Takes
+    a `.hx` file (stdlib auto-included), discovers all `@property`
+    fns via the Stage 77 attribute mechanism, generates per-input
+    synthetic `main()` bodies, compiles + runs via the standard
+    codegen pipeline, aggregates pass/fail counts.
+  - Fixed input tables per primitive type (i32 / i64 / u32 / u64
+    / f32 / f64 / bool) covering negative / zero / positive /
+    high-magnitude representative values (5-7 inputs each). Inc 3
+    plan: cartesian product for multi-arg properties. Inc 4 plan:
+    randomization + Hypothesis-style shrinking.
+  - Single-arg properties supported in Phase-0; multi-arg
+    properties are listed + skipped with explanatory note.
+  - CLI: `python -m helixc.runners.property_runner --file X.hx`
+    or `--stdlib-only` for just safety.hx properties.
+  - Exit code 0 if all pass, 1 if any fail.
+  - **Validation**: invoked end-to-end on a trivial `always_true`
+    fn + stdlib auto-include → 42 property assertions ran via
+    codegen (5 safety.hx properties × 7 f32 inputs + 7 i32
+    inputs for the trivial fn), all PASSED. First Helix
+    `@property` runtime check completed externally to the user
+    program.
+  - 8 new tests (7 fast unit + 1 slow WSL-gated end-to-end);
+    1031 codegen + 462 typecheck/selfhost/IR + 7/7 runner-unit
+    GREEN.
+
 - **Stage 85 SHIPPED 2026-05-18** — First execution of Stage 77
   `@property` fns at runtime (`dogfood_23_property_proofs.hx`):
   - Calls each of the 5 @property fns shipped in `helixc/stdlib/
