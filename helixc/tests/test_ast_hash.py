@@ -337,6 +337,47 @@ def test_stage58_program_hash_alpha_equivalent_helpers():
     assert h1 == h2, "alpha-equivalent helpers hashed differently"
 
 
+def test_stage59_program_hash_dump_structure():
+    """Stage 59 follow-on / Tier 4 #13 polish: program_hash_dump
+    returns a dict with the expected top-level keys + per-item
+    breakdowns."""
+    from helixc.frontend.parser import parse
+    from helixc.frontend.ast_hash import program_hash_dump
+    src = (
+        "fn f(x: i32) -> i32 { x + 1 }\n"
+        "struct S { a: i32, b: i32 }\n"
+        "mod m { fn g() -> i32 { 2 } }\n"
+    )
+    prog = parse(src)
+    dump = program_hash_dump(prog)
+    assert set(dump.keys()) == {
+        "program_hash", "program_signature_hash",
+        "fns", "structs", "modules",
+    }
+    assert len(dump["program_hash"]) == 64
+    assert len(dump["program_signature_hash"]) == 64
+    assert "f" in dump["fns"]
+    assert set(dump["fns"]["f"].keys()) == {"body_hash", "sig_hash"}
+    assert "S" in dump["structs"]
+    assert "m" in dump["modules"]
+
+
+def test_stage59_program_hash_dump_is_json_serializable():
+    """Stage 59 follow-on: program_hash_dump returns a JSON-clean
+    object (no Python-specific types) so it can be stored as a
+    CI artifact."""
+    import json
+    from helixc.frontend.parser import parse
+    from helixc.frontend.ast_hash import program_hash_dump
+    prog = parse("fn f() -> i32 { 42 }")
+    dump = program_hash_dump(prog)
+    # Should serialize without errors.
+    s = json.dumps(dump, sort_keys=True, indent=2)
+    # Round-trip back.
+    restored = json.loads(s)
+    assert restored == dump
+
+
 def test_stage59_program_signature_hash_body_change_invariant():
     """Stage 59 follow-on / Tier 4 #13 polish: program_signature_hash
     is invariant to body-only changes (signatures unchanged)."""

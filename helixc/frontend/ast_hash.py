@@ -716,6 +716,63 @@ def program_hash(prog: "A.Program") -> str:
     return h.hexdigest()
 
 
+def program_hash_dump(prog: "A.Program") -> dict:
+    """Stage 59 follow-on / Tier 4 #13 polish — comprehensive hash
+    dump for a program. Returns a dict suitable for JSON
+    serialization, structured for diff-friendly comparison and
+    artifact storage.
+
+    Structure:
+        {
+            "program_hash": "<64-hex>",
+            "program_signature_hash": "<64-hex>",
+            "fns": {
+                "<name>": {
+                    "body_hash": "<64-hex>",
+                    "sig_hash": "<64-hex>",
+                }
+            },
+            "structs": {
+                "<name>": "<64-hex>"
+            },
+            "modules": {
+                "<name>": "<64-hex>"
+            }
+        }
+
+    Use cases:
+    - Snapshot for CI artifact ('hash-dump.json'): downstream gates
+      diff this single file across PRs to detect drift granularly
+    - Cross-process verifier: compare two compilation-pipeline runs
+      hash-dumps to confirm semantic equivalence
+    - Compact alternative to running 4-5 separate CLI flags
+
+    No new hashes computed beyond program_hash + program_signature_hash
+    + structural_hash per fn/struct/module — purely aggregates
+    existing helpers into a structured object.
+    """
+    result: dict = {
+        "program_hash": program_hash(prog),
+        "program_signature_hash": program_signature_hash(prog),
+        "fns": {},
+        "structs": {},
+        "modules": {},
+    }
+    for it in prog.items:
+        if isinstance(it, A.FnDecl):
+            result["fns"][it.name] = {
+                "body_hash": structural_hash(it),
+                "sig_hash": fn_signature_hash(it),
+            }
+        elif isinstance(it, A.StructDecl):
+            result["structs"][it.name] = structural_hash(it)
+        elif isinstance(it, A.ModBlock):
+            result["modules"][it.name] = module_hash(it)
+        elif isinstance(it, A.ModuleDecl):
+            result["modules"][".".join(it.path)] = module_hash(it)
+    return result
+
+
 def program_signature_hash(prog: "A.Program") -> str:
     """Stage 59 follow-on / Tier 4 #13 polish — ABI-level hash of a
     Program: covers fn SIGNATURES + struct DEFINITIONS but NOT fn
