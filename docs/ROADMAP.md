@@ -316,10 +316,16 @@ These are blockers for any real ML training, in priority order.
    to-end 2026-05-18.
 
 4. **Richer strings + file I/O** with capability-typed
-   `@effect(io.read_file)`. Basic literal/string diagnostic IO (`print_str`,
-   `print_int`) and narrow file builtins exist; Stage 35 still needs the
-   capability-typed dataset/checkpoint workflows and broader string/file APIs
-   required for end-to-end model training. **2-3 weeks.**
+   `@effect(io.read_file)`. **STAGE 55 IN FLIGHT** — runtime string
+   primitives + parser shipped (Inc 1+2+5). Remaining: Inc 3 (dyn-
+   path file I/O, high-risk backend syscall change, deferred to
+   fresh session) + Inc 4 (granular `io.read_file`/`io.write_file`/
+   `io.print` effect labels) + Inc 6+7 (CSV/MNIST/checkpoint stdlib
+   on existing primitives). Plan at `docs/stage55-plan-2026-05-18.md`.
+   - Inc 1 ✅ (fbe7fef): `__str_byte_at` / `__str_find_byte` /
+     `__str_eq_arena` — operate on arena-backed (start, len) strings.
+   - Inc 2 ✅ (e52d525): `__parse_i32` — decimal integer parser.
+   - Inc 5 ✅ (89c5cd0): `__str_from_i32` + `__str_concat_arena`.
 
 5. **Stack-passed overflow args.** ✅ DONE 2026-05-17 (Stage 44).
    SysV ABI's xmm0..xmm7 covers the first 8 float params; the 9th
