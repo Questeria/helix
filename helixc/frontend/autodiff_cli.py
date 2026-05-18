@@ -39,6 +39,8 @@ Introspection (Stage 28.9 + Stage 58 + Stage 59 polish):
         Print the signature-only hash (ABI-affecting fields only).
     --list-fns <file.hx>
         Enumerate all fns with sig + body hash columns.
+    --list-structs <file.hx>
+        Enumerate all structs with field count + content hash.
     --list-fn-attrs <file.hx>
         Enumerate all fns with their attribute list (@pure, @trace, etc).
     --list-fns-by-attr <file.hx> <attr>
@@ -1123,6 +1125,33 @@ def _list_fn_attrs(path: str) -> int:
     return 0
 
 
+def _list_structs(path: str) -> int:
+    """Stage 59 follow-on / Tier 4 #13 polish: enumerate all top-level
+    StructDecls in a source file with their structural-hash + field
+    count.
+
+    Output format per struct (one line):
+      `<name> fields=N hash=<12hex>`
+    Sorted alphabetically by struct name.
+
+    Companion to --list-fns (which does the same for fns). Use for
+    repository struct inventory + drift detection.
+
+    Exit 0 always.
+    """
+    from .ast_hash import structural_hash, short_hash
+    src = _read_source(path)
+    prog = _parse_or_exit(src, path)
+    structs = sorted(
+        (it for it in prog.items if isinstance(it, A.StructDecl)),
+        key=lambda s: s.name,
+    )
+    for s in structs:
+        h = short_hash(structural_hash(s))
+        print(f"{s.name} fields={len(s.fields)} hash={h}")
+    return 0
+
+
 def _list_fns(path: str) -> int:
     """Stage 59 follow-on / Tier 4 #13 polish: enumerate all FnDecls
     in a source file with their signature + body hashes side by side.
@@ -1387,6 +1416,13 @@ def main():
                   file=sys.stderr)
             sys.exit(2)
         sys.exit(_list_fns(args[0]))
+
+    if "--list-structs" in flags:
+        if len(args) < 1:
+            print("usage: --list-structs <file.hx>",
+                  file=sys.stderr)
+            sys.exit(2)
+        sys.exit(_list_structs(args[0]))
 
     if "--list-fn-attrs" in flags:
         if len(args) < 1:

@@ -5836,7 +5836,8 @@ def test_stage59_autodiff_cli_help_mentions_polish_flags():
         "--dump-ast-hashes", "--ast-stats", "--ast-stats-json",
         "--program-hash", "--program-signature-hash",
         "--diff-program-hash", "--changed-fns", "--fn-sig-hash",
-        "--list-fns", "--list-fn-attrs", "--list-fns-by-attr",
+        "--list-fns", "--list-structs",
+        "--list-fn-attrs", "--list-fns-by-attr",
         "--check-program-hash",
         "--check-program-signature-hash",
         "--list-modules", "--module-hash", "--pytree-shape",
@@ -6875,6 +6876,35 @@ def test_stage59_ast_stats_basic(tmp_path):
     assert "kernel_fns=1" in out
     assert "pure_fns=1" in out
     assert "traced_fns=1" in out
+
+
+def test_stage59_list_structs_basic(tmp_path):
+    """Stage 59 follow-on / Tier 4 #13 polish: --list-structs
+    enumerates structs with field count + content hash. Symmetric
+    with --list-fns."""
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "s.hx"
+    src.write_text(
+        "struct Point { x: i32, y: i32 }\n"
+        "struct Color { r: u8 }\n",
+        encoding="utf-8",
+    )
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--list-structs", str(src)],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0
+    out = proc.stdout
+    # Sorted alphabetically: Color, Point
+    lines = [l for l in out.splitlines() if l]
+    assert lines[0].startswith("Color fields=1 hash=")
+    assert lines[1].startswith("Point fields=2 hash=")
+    # Hash is 12 hex chars per line.
+    for line in lines:
+        h = line.split("hash=")[1]
+        assert len(h) == 12
 
 
 def test_stage59_list_fns_by_attr_basic(tmp_path):
