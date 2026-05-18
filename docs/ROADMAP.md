@@ -303,6 +303,71 @@ Re-sequenced after Stage 46-47 closed:
 - **Stage 58** ✅ **CLOSED 2026-05-18** — Tier 4 #13 content-
   addressed modules (program_hash + module_hash + fn_signature_hash
   core).
+- **Stage 93 audit BATCH 2-5 DOWNGRADES Stages 68-92 closure markers** —
+  ran 3 combined-batch audits (silent-failure / type-design /
+  code-review) in parallel against the 21 burst stages. Findings:
+  - **HIGH-#1 (Stage 75 constructor double-wrap)**: `__wrap_dp(
+    __wrap_dp(x))` yields `Private<Private<f32>>` instead of
+    `Private<f32>` with eps=2.0 → DP privacy accounting silently
+    broken. Same anti-pattern Stage 43 Inc 1 M1 fixed for Tier 3
+    intro builtins. Affects all 11 wrappers (Stages 68-83).
+  - **HIGH-#2 (Stage 75 strip-helper chain incompleteness)**: 8
+    of 11 `_strip_X` helpers walk only a subset of the 13-wrapper
+    stack. `__exit_enclave(x: FromUnknown<InEnclaveSGX<f32>>)`
+    returns unchanged (audit-grep compliance contract violated).
+  - **HIGH-#3 (Stage 92 _KNOWN_FN_ATTRS regression)**: whitelist
+    omits `@overload`, `@dispatch` (Stage 65), `@unwind`,
+    `@trace`. Stage 65 multi-dispatch users now hit "unknown
+    attribute @overload". Tests passed only because Stage 65 tests
+    bypass TypeChecker.check().
+  - **HIGH-#4 (Stage 66 Inc 5c if/match chain-walk gap)**: Stage
+    92 fixed the loop-body scope-chain walk but A.If + A.Match
+    arm reconciliation still snapshots only the immediate scope.
+    A `__move(s)` inside `{ if true { ... } }` where s is in fn
+    body produces ZERO Stage 66 errors. Same silent-miscompile
+    class as Stage 91 HIGH-#1 but for branch arms instead of loops.
+  - **MEDIUM**: Stage 86 test `test_stage86_runner_end_to_end_on_
+    trivial_property` asserts p==7 but observes p==42 (stdlib's
+    5 @property fns × 7 inputs add 35 passes). Test bug, not
+    runner bug.
+  - **MEDIUM**: Stage 83 left safety.hx without TyAttribution
+    helpers (5 helpers added for Stages 79-81 in Stage 82 but
+    Stage 83 was missed).
+  - **MEDIUM**: Stage 90 typed-hole expected-type plumbing only
+    covers call-arg position; let-RHS / fn-return / struct-field
+    still emit Stage 89's generic message even though expected
+    type is knowable.
+  - **MEDIUM**: TyAttribution wrap-order doc-vs-code mismatch
+    (docstring says "compliance-axis like Taint, outermost" but
+    wrap-block puts it 6th-from-outermost).
+
+  **Closure markers downgraded** (back to SUBSTANTIALLY COMPLETE
+  pending Stage 94-98 fixes):
+  - Stages 68-83 (11 wrappers): HIGH-#1 + HIGH-#2 affect every
+    wrapper's constructor + strip-helper.
+  - Stage 88 (CLOSURE marker for 68-87): premature given the
+    11-wrapper findings.
+  - Stage 92 (Inc 5d audit closure for Stage 66): re-opens for
+    HIGH-#3 + HIGH-#4.
+
+  **Closure markers that STAND**:
+  - Stage 64 (DEFERRED to v1.1) — Stage 64 Inc 3 speculative
+    parallel agent SHIPPED in isolated worktree
+    `C:\Projects\Kovostov-Native-stage64-inc3` (commit
+    `c90c4150`, 96 PTX + 477 regression GREEN, 9 new Stage 64
+    Inc 3 tests for TILE_ADD/SUB/MUL f32+i32). Available for
+    cherry-pick if v1.1 GPU CI lands ahead of schedule.
+  - Stages 89-90 (typed holes) — partial closure stands; expected-
+    type plumbing for other contexts is Inc 3+ enhancement, not
+    Stage 89 unfinished.
+  - Stage 86 (property runner): runner is solid; test needs fix.
+  - Stage 87 (wrapper-mismatch hint): cross-cutting refactor is
+    clean and well-designed.
+
+  Combined verdict: ESCALATE per stricter-wins protocol. Stage 94
+  fix bundle next (whitelist + chain-walk + constructor idempotency
+  + strip-chain completion + safety.hx TyAttribution + test fix).
+
 - **Stage 64 DEFERRED to v1.1 2026-05-18 (per user directive)** —
   Tier 2 #6 tensor codegen split:
   - Inc 1 SHIPPED (bf16/f16 HBM dtype) + Inc 2 SHIPPED (TILE_ZEROS
