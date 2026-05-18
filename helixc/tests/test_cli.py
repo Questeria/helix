@@ -5869,7 +5869,7 @@ def test_stage59_autodiff_cli_help_mentions_polish_flags():
         "--list-uses", "--list-uses-json",
         "--list-consts", "--list-consts-json",
         "--const-value", "--const-value-json",
-        "--list-enums", "--list-enums-json",
+        "--list-enums", "--list-enums-json", "--enum-variants",
         "--list-fn-attrs", "--list-fn-attrs-json",
         "--list-fns-by-attr", "--list-fns-by-attr-json",
         "--fn-callgraph", "--fn-callers",
@@ -7480,6 +7480,42 @@ def test_stage59_list_consts_json(tmp_path):
         {"name": "MAX_BUF", "ty": "i32"},
         {"name": "PI", "ty": "f64"},
     ]}
+
+
+def test_stage59_enum_variants(tmp_path):
+    """Stage 59 follow-on / Tier 4 #13 polish: --enum-variants prints
+    per-variant lines with payload types in declaration order."""
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "ev.hx"
+    src.write_text(
+        "enum Shape { Circle(f32), Square(i32, i32), Triangle }\n",
+        encoding="utf-8",
+    )
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--enum-variants", str(src), "Shape"],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0
+    lines = [l for l in proc.stdout.splitlines() if l]
+    # Declaration order: Circle, Square, Triangle; payload formatting
+    assert lines == ["Circle(f32)", "Square(i32, i32)", "Triangle"]
+
+
+def test_stage59_enum_variants_not_found(tmp_path):
+    """Stage 59 follow-on: unknown enum → rc=1 + stderr."""
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "x.hx"
+    src.write_text("enum E { A, B }\n", encoding="utf-8")
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--enum-variants", str(src), "phantom"],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 1
+    assert "not found" in proc.stderr
 
 
 def test_stage59_list_enums_json(tmp_path):

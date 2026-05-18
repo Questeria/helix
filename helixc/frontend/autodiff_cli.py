@@ -55,6 +55,8 @@ Introspection (Stage 28.9 + Stage 58 + Stage 59 polish):
         Enumerate top-level EnumDecls as '<name> variants=N' lines.
     --list-enums-json <file.hx>
         Same as --list-enums but JSON with variant names included.
+    --enum-variants <file.hx> <enum_name>
+        Print per-variant lines for an enum (with payload types if any).
     --list-consts-json <file.hx>
         Same as --list-consts but machine-readable JSON output.
     --const-value <file.hx> <const_name>
@@ -3849,6 +3851,53 @@ def _list_enums_json(path: str) -> int:
     return 0
 
 
+def _enum_variants(path: str, enum_name: str) -> int:
+    """Stage 59 follow-on / Tier 4 #13 polish: per-enum variant
+    inspection. Print variants of a specific enum with payload types.
+
+    Output: one line per variant as:
+      '<variant>' if no payload
+      '<variant>(<ty1>, <ty2>, ...)' if tuple payload
+
+    Declaration order preserved (matches enum tag-assignment order
+    used by ABI / encoding).
+
+    Exit 0 success; 1 if enum_name not found.
+    """
+    src = _read_source(path)
+    prog = _parse_or_exit(src, path)
+
+    def _format_ty(ty) -> str:
+        name = getattr(ty, "name", None)
+        if name:
+            return name
+        base = getattr(ty, "base", None)
+        args = getattr(ty, "args", None)
+        base_str = base if isinstance(base, str) else (
+            getattr(base, "name", None) if base else None
+        )
+        if base_str and args:
+            args_strs = []
+            for a in args:
+                an = getattr(a, "name", None)
+                args_strs.append(an if an else repr(a))
+            return f"{base_str}<{', '.join(args_strs)}>"
+        return repr(ty)
+
+    for it in prog.items:
+        if isinstance(it, A.EnumDecl) and it.name == enum_name:
+            for v in it.variants:
+                if v.payload_tys:
+                    tys = ", ".join(_format_ty(t) for t in v.payload_tys)
+                    print(f"{v.name}({tys})")
+                else:
+                    print(v.name)
+            return 0
+    print(f"error: autodiff_cli: enum {enum_name!r} not found in {path}",
+          file=sys.stderr)
+    return 1
+
+
 def _list_enums(path: str) -> int:
     """Stage 59 follow-on / Tier 4 #13 polish: enumerate top-level
     EnumDecls in a file.
@@ -4291,6 +4340,13 @@ def main():
             print("usage: --list-enums <file.hx>", file=sys.stderr)
             sys.exit(2)
         sys.exit(_list_enums(args[0]))
+
+    if "--enum-variants" in flags:
+        if len(args) < 2:
+            print("usage: --enum-variants <file.hx> <enum_name>",
+                  file=sys.stderr)
+            sys.exit(2)
+        sys.exit(_enum_variants(args[0], args[1]))
 
     if "--list-enums-json" in flags:
         if len(args) < 1:
