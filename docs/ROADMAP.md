@@ -5,10 +5,21 @@ deep-research passes (2026-05-04). It's a forward-looking plan; not
 everything here will land, and priorities will shift as dogfooding
 reveals which features actually matter.
 
-## Current state (Stages 35-48 CLOSED 2026-05-16 to 2026-05-17)
+## Current state (Stages 35-54 CLOSED 2026-05-16 to 2026-05-18)
 
-Burst summary (14 stages closed in <48h, all via the
+Burst summary (20 stages closed in <72h, all via the
 3-clean-gate protocol):
+- Stages 35-48 listed below.
+- Stage 49: Tier 4 #14 Inc 3 runtime Ok/Err tag.
+- Stage 50: RESURRECTED (fn_table cap fix unblocked Inc 1+2).
+- Stage 51: Inc 1 SHIPPED (run-detection scaffold), Inc 2
+  deferred to fresh session.
+- Stage 52: modal-origin taint-tracking (16 audit gates;
+  Stage 40 H1 closed).
+- Stage 53: helper-fn modal indirection (Stage 40 H1 closed
+  in full).
+- Stage 54: Tier 1 #2 AD broader coverage (8 closure gates;
+  ~80% of original blueprint shipped).
 
 - **Stage 35** — AI/ML capability push (restart 65 closure).
 - **Stage 36** — Strategic AGI features: Tier 3 #10
