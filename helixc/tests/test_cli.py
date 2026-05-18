@@ -5839,6 +5839,7 @@ def test_stage59_autodiff_cli_help_mentions_polish_flags():
         "--list-fns", "--list-structs",
         "--list-fn-attrs", "--list-fns-by-attr",
         "--check-program-hash",
+        "--check-program-hash-from-file",
         "--check-program-signature-hash",
         "--list-modules", "--module-hash", "--pytree-shape",
         "--list-pytrees", "--pytree-leaf-paths",
@@ -6877,6 +6878,66 @@ def test_stage59_ast_stats_basic(tmp_path):
     assert "kernel_fns=1" in out
     assert "pure_fns=1" in out
     assert "traced_fns=1" in out
+
+
+def test_stage59_check_program_hash_from_file_match(tmp_path):
+    """Stage 59 follow-on / Tier 4 #13 polish: --check-program-hash-from-file
+    exits 0 when the hash in <expected_file> matches the program's
+    computed hash."""
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "p.hx"
+    src.write_text("fn main() -> i32 { 42 }\n", encoding="utf-8")
+    # Compute the hash and write it to a pin file.
+    h_proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--program-hash", str(src)],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    expected = h_proc.stdout.strip()
+    pin = tmp_path / "pin.txt"
+    pin.write_text(expected + "\n", encoding="utf-8")
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--check-program-hash-from-file", str(src), str(pin)],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0
+    assert proc.stdout == ""
+
+
+def test_stage59_check_program_hash_from_file_missing_pin(tmp_path):
+    """Stage 59 follow-on: --check-program-hash-from-file exits 2
+    when the pin file doesn't exist."""
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "p.hx"
+    src.write_text("fn main() -> i32 { 42 }\n", encoding="utf-8")
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--check-program-hash-from-file", str(src),
+         str(tmp_path / "nonexistent.txt")],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 2
+
+
+def test_stage59_check_program_hash_from_file_empty_pin(tmp_path):
+    """Stage 59 follow-on: --check-program-hash-from-file exits 2
+    when the pin file is empty / whitespace-only."""
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "p.hx"
+    src.write_text("fn main() -> i32 { 42 }\n", encoding="utf-8")
+    pin = tmp_path / "empty.txt"
+    pin.write_text("   \n\n\n", encoding="utf-8")
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--check-program-hash-from-file", str(src), str(pin)],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 2
+    assert "no hash" in proc.stderr
 
 
 def test_stage59_parse_only_clean(tmp_path):

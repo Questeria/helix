@@ -49,6 +49,8 @@ Introspection (Stage 28.9 + Stage 58 + Stage 59 polish):
         List fns carrying a specific attribute (e.g., 'pure', 'kernel').
     --check-program-hash <file.hx> <expected_hex>
         Assertion-style CI gate: exit 0 if matches, 1 if drift.
+    --check-program-hash-from-file <file.hx> <expected_hash_file>
+        Same as --check-program-hash but reads expected hash from a file.
     --check-program-signature-hash <file.hx> <expected_hex>
         ABI-level CI gate (body-only refactors don't trip it).
     --list-modules <file.hx>
@@ -499,6 +501,43 @@ def _check_program_signature_hash(path: str, expected: str) -> int:
     print(f"  expected: {expected}")
     print(f"  actual:   {short_hash(actual)} ({actual})")
     return 1
+
+
+def _check_program_hash_from_file(path: str, expected_file: str) -> int:
+    """Stage 59 follow-on / Tier 4 #13 polish: --check-program-hash
+    variant that reads the expected hash from a pinned-artifact file
+    rather than a command-line argument.
+
+    Reads `expected_file` as plain text; the first non-empty stripped
+    line is the expected hash. Supports either the full 64-hex or
+    the 12-hex short form (prefix match).
+
+    Use case: CI config stores the pinned hash as a project artifact
+    (.helix-hash) committed alongside the source. The pre-commit hook
+    becomes:
+      python -m helixc.frontend.autodiff_cli \\
+          --check-program-hash-from-file stdlib/result.hx .helix-hash \\
+        || { echo 'stdlib/result.hx drifted from pin'; exit 1; }
+
+    Cleaner than embedding the 64-hex in a shell script — file is
+    version-controlled, single source of truth.
+
+    Exit codes:
+      0 — match
+      1 — mismatch (prints expected vs actual)
+      2 — bad arg (parse failure, missing expected_file, etc.)
+    """
+    try:
+        with open(expected_file, "r", encoding="utf-8") as f:
+            lines = [l.strip() for l in f if l.strip()]
+    except OSError as e:
+        print(f"error: autodiff_cli: {e}", file=sys.stderr)
+        return 2
+    if not lines:
+        print(f"error: autodiff_cli: {expected_file!r} contains no hash",
+              file=sys.stderr)
+        return 2
+    return _check_program_hash(path, lines[0])
 
 
 def _check_program_hash(path: str, expected: str) -> int:
@@ -1470,6 +1509,13 @@ def main():
                   "<expected_hex_hash>", file=sys.stderr)
             sys.exit(2)
         sys.exit(_check_program_hash(args[0], args[1]))
+
+    if "--check-program-hash-from-file" in flags:
+        if len(args) < 2:
+            print("usage: --check-program-hash-from-file <file.hx> "
+                  "<expected_hash_file>", file=sys.stderr)
+            sys.exit(2)
+        sys.exit(_check_program_hash_from_file(args[0], args[1]))
 
     if "--check-program-signature-hash" in flags:
         if len(args) < 2:
