@@ -5870,6 +5870,7 @@ def test_stage59_autodiff_cli_help_mentions_polish_flags():
         "--list-fns-by-attr", "--list-fns-by-attr-json",
         "--fn-callgraph", "--fn-callers",
         "--fn-body-stats", "--fn-body-stats-json",
+        "--fn-body-stats-all",
         "--fn-callgraph-all", "--fn-callers-all",
         "--fn-reachable-from", "--fn-reachable-to",
         "--fn-leaves", "--fn-roots",
@@ -8240,6 +8241,35 @@ def test_stage59_fn_callers_unknown_target_no_error(tmp_path):
     )
     assert proc.returncode == 0
     assert proc.stdout == ""
+
+
+def test_stage59_fn_body_stats_all(tmp_path):
+    """Stage 59 follow-on / Tier 4 #13 polish: --fn-body-stats-all
+    emits {fn: {stats}} for every fn in the file."""
+    import json
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "all.hx"
+    src.write_text(
+        "fn simple() -> i32 { 42 }\n"
+        "fn fib(n: i32) -> i32 {\n"
+        "    if n <= 1 { n } else { fib(n - 1) + fib(n - 2) }\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--fn-body-stats-all", str(src)],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0
+    result = json.loads(proc.stdout)
+    assert "simple" in result
+    assert "fib" in result
+    assert result["simple"]["calls"] == 0
+    assert result["simple"]["ifs"] == 0
+    assert result["fib"]["calls"] == 2
+    assert result["fib"]["ifs"] == 1
 
 
 def test_stage59_fn_body_stats_json(tmp_path):
