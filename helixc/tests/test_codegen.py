@@ -15271,6 +15271,40 @@ def test_stage59_pat_struct_with_literal_match():
     assert code == 42, f"expected 99-57=42, got {code}"
 
 
+import pytest as _stage59_pytest
+
+
+@_stage59_pytest.mark.xfail(
+    reason="Stage 59 known limitation: nested PatStruct "
+            "(Outer { inner: Inner { v }, .. }) doesn't yet pass through "
+            "the typecheck/IR lowering pipeline — the synthetic-temp "
+            "let-binding for the inner struct field isn't registered in "
+            "scope for the IR lowerer. Inner-field flat destructuring "
+            "works (test_stage59_pat_struct_basic_destructuring). "
+            "Fix would extend the synthetic-temp scope-registration in "
+            "match_lower or in typecheck's match arm scope builder. "
+            "Deferred to a follow-up stage with proper audit cycle."
+)
+def test_stage59_pat_struct_nested_destructuring_xfail():
+    """Stage 59 / Tier 4 #15 known-defer: nested struct destructuring
+    parses correctly and ast_hash differentiates the patterns, but the
+    full compile-and-run path needs additional scope-registration work
+    in match_lower for the synthetic temp let-binding to be visible to
+    IR lowering. Marked xfail until that fix lands."""
+    src = """
+    struct Inner { v: i32 }
+    struct Outer { inner: Inner, label: i32 }
+    fn main() -> i32 {
+        let o = Outer { inner: Inner { v: 42 }, label: 5 };
+        match o {
+            Outer { inner: Inner { v }, label } => v - label + 5,
+        }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42 from nested destructure, got {code}"
+
+
 def test_stage59_pat_struct_ignore_rest():
     """Stage 59 / Tier 4 #15: `Point { .. }` matches any struct
     of type Point regardless of field values."""
