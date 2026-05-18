@@ -605,6 +605,48 @@ def test_tree_reduce_deterministic_order():
     assert seq == "123"
 
 
+def test_tree_paths_matching_returns_sorted_paths():
+    """Stage 59 follow-on / Tier 2 #7 polish: tree_paths_matching
+    returns sorted list of paths whose values match predicate."""
+    from helixc.frontend.pytree import tree_paths_matching
+    leaves = {"w3": 0.0, "w1": 1.0, "w2": -2.0, "b": 0.0}
+    # Zero leaves, sorted alphabetically.
+    assert tree_paths_matching(leaves, lambda v: v == 0.0) == ["b", "w3"]
+    # All leaves.
+    assert tree_paths_matching(leaves, lambda v: True) == ["b", "w1", "w2", "w3"]
+    # No matches.
+    assert tree_paths_matching(leaves, lambda v: False) == []
+
+
+def test_tree_to_canonical_json_deterministic():
+    """Stage 59 follow-on: tree_to_canonical_json produces the same
+    string for the same input regardless of dict insertion order."""
+    from helixc.frontend.pytree import tree_to_canonical_json
+    a = {"w1": 1.0, "w2": 2.0, "b": 0.5}
+    b = {"b": 0.5, "w2": 2.0, "w1": 1.0}
+    assert tree_to_canonical_json(a) == tree_to_canonical_json(b)
+
+
+def test_tree_to_canonical_json_valid_json():
+    """Stage 59 follow-on: output parses back to an equivalent dict."""
+    import json
+    from helixc.frontend.pytree import tree_to_canonical_json
+    leaves = {"w": 1.5, "b": 0.0}
+    s = tree_to_canonical_json(leaves)
+    parsed = json.loads(s)
+    assert parsed == {"w": 1.5, "b": 0.0}
+
+
+def test_tree_to_canonical_json_sorted_keys():
+    """Stage 59 follow-on: output keys appear in sorted order in the
+    raw JSON string (not just in the parsed dict)."""
+    from helixc.frontend.pytree import tree_to_canonical_json
+    leaves = {"z": 1, "a": 2, "m": 3}
+    s = tree_to_canonical_json(leaves)
+    # 'a' must appear before 'm' before 'z' in the raw string.
+    assert s.index('"a"') < s.index('"m"') < s.index('"z"')
+
+
 def test_tree_count_matches_predicate():
     """Stage 59 follow-on / Tier 2 #7 polish: tree_count returns the
     number of leaves where predicate(value) is True."""

@@ -371,6 +371,59 @@ def tree_hash(leaves_by_path: dict) -> str:
     return h.hexdigest()
 
 
+def tree_paths_matching(leaves_by_path: dict, predicate) -> list[str]:
+    """Stage 59 follow-on / Tier 2 #7 polish — return sorted list of
+    PATHS whose leaf value matches a predicate.
+
+    Companion to tree_filter (which returns paths→values). When you
+    only need the paths (e.g., for an error report) and not the
+    values, this avoids constructing the value dict.
+
+    Use cases:
+    - Report which params went NaN: tree_paths_matching(params, isnan)
+    - Find zero-gradient layers: tree_paths_matching(grads, lambda g: g == 0)
+    - Identify which leaves diverged from a reference (paired with
+      tree_diff to get the divergence set; pass through this to filter
+      by value condition like 'magnitude exceeds threshold')
+
+    Sorted output for stable diff-friendly reports.
+    """
+    return sorted(p for p, v in leaves_by_path.items() if predicate(v))
+
+
+def tree_to_canonical_json(leaves_by_path: dict) -> str:
+    """Stage 59 follow-on / Tier 2 #7 polish — serialize a leaves
+    dict to a stable canonical-JSON string.
+
+    Sorted-by-path keys + Python repr() for values (handles floats
+    losslessly via Python's round-trippable repr). Output is a
+    deterministic single-line JSON object so two equal pytrees
+    serialize to byte-identical strings.
+
+    Use cases:
+    - On-disk parameter snapshots (read back via JSON parse + dict)
+    - Reproducibility-trail entries in audit logs
+    - Pair with tree_hash: the hash is over the same canonical
+      sequence, so tree_hash(d) == sha256(tree_to_canonical_json(d))
+      modulo encoding (the hash uses a slightly different separator;
+      this fn produces valid JSON for transport)
+
+    For values that aren't JSON-native (custom objects), the repr
+    is included as a string — round-trip is lossy in that case.
+    """
+    import json
+    # Build OrderedDict-shaped output: keys sorted.
+    items = [(p, leaves_by_path[p]) for p in sorted(leaves_by_path.keys())]
+    # Use repr for floats to preserve full precision; JSON-encode strings.
+    def _value(v):
+        if isinstance(v, (int, float, bool)) or v is None:
+            return v
+        return repr(v)
+    obj = {p: _value(v) for p, v in items}
+    # sort_keys=True preserves the canonical order even after dict-build.
+    return json.dumps(obj, sort_keys=True, separators=(",", ":"))
+
+
 def tree_count(leaves_by_path: dict, predicate) -> int:
     """Stage 59 follow-on / Tier 2 #7 polish — count leaves matching
     a predicate.
