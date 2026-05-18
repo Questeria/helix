@@ -1280,15 +1280,24 @@ fn main() -> i32 {
 
 
 def test_stage52_gate3_new_high_3_if_then_no_else_clear_drops_claim():
-    """NEW-HIGH-3: if-then with no-else where the then-branch
-    reassigns without modal taint must DROP the pre-if claim.
+    """NEW-HIGH-3 (gate-7 SEMANTIC FLIP): if-then with no-else
+    where the then-branch reassigns without modal taint MUST FIRE
+    the launder diagnostic. The no-else implicit identity arm
+    preserves the pre-if taint, so the cond=false runtime path
+    leaks the launder.
 
-    Symmetric with NEW-HIGH-2 but exercises the no-else
-    implicit-pre-match-snapshot path. Pre-fix's implicit
-    else-branch copy of pre-if's r→uncertain caused observed_
-    kinds={uncertain} → false-positive launder. Post-fix:
-    branch_assigns[0] has 'r' (then assigned), branch_results
-    [0] has no 'r' (then cleared) → cleared_names={r} → drop."""
+    Original (gate-3) docstring claimed this should DROP the
+    pre-if claim — that was a design choice ("drop on conflict
+    to avoid false positives") which the gate-7 audit correctly
+    identified as silently missing the cond=false runtime path.
+    Gate-7 fix: `kept_somewhere` set means the no-else's
+    preservation of r2 overrides the then-arm's clear → FIRE.
+
+    Function name kept for git-history traceability; assertion
+    now reflects the post-flip correct semantics.
+
+    See `test_stage52_gate7_high_3_if_no_else_clear_with_kept_
+    identity_arm_fires` for the standalone gate-7 pin form."""
     src = """
 fn main() -> i32 {
     let u: Uncertain<i32> = into_uncertain(1);

@@ -5458,11 +5458,16 @@ class TypeChecker:
             # launders MUST be caught" — missing one is worse than
             # a false positive, so FIRE is the correct choice when
             # an identity arm preserves the taint.
-            installed_names: set[str] = set()
-            for i, assigns in enumerate(branch_assigns):
-                for name in assigns:
-                    if name in branch_results[i]:
-                        installed_names.add(name)
+            # Stage 52 closure gate-8 type-design MEDIUM-1 polish:
+            # the prior code carried both `installed_names` and
+            # `kept_somewhere` checks; installed_names is a strict
+            # subset of kept_somewhere (any name in branch_results[i]
+            # for some i is in the union of branch_results.keys()),
+            # so the `installed_names` check was redundant. Dropped
+            # to make the actual invariant single-source-of-truth:
+            # "a name is cleared iff every branch that touched it
+            # either erased it AND no other branch preserved/installed
+            # it". The kept_somewhere check carries both conditions.
             kept_somewhere: set[str] = set()
             for arm_result in branch_results:
                 kept_somewhere.update(arm_result.keys())
@@ -5470,7 +5475,6 @@ class TypeChecker:
             for i, assigns in enumerate(branch_assigns):
                 for name in assigns:
                     if (name not in branch_results[i]
-                            and name not in installed_names
                             and name not in kept_somewhere):
                         cleared_names.add(name)
             unioned_if: dict[str, str] = {}
@@ -5636,11 +5640,9 @@ class TypeChecker:
             # preserves pre-match state) overrides cleared. Mirror
             # of A.If kept_somewhere. Closes gate-7 silent-failure
             # for the match case (the if-no-else analogue).
-            installed_names_match: set[str] = set()
-            for i, assigns in enumerate(arm_assigns):
-                for name in assigns:
-                    if name in modal_origin_arm_results[i]:
-                        installed_names_match.add(name)
+            # Stage 52 closure gate-8 type-design MEDIUM-1 polish:
+            # dropped redundant installed_names_match check (strict
+            # subset of kept_somewhere_match). Mirror of A.If polish.
             kept_somewhere_match: set[str] = set()
             for arm_result in modal_origin_arm_results:
                 kept_somewhere_match.update(arm_result.keys())
@@ -5648,7 +5650,6 @@ class TypeChecker:
             for i, assigns in enumerate(arm_assigns):
                 for name in assigns:
                     if (name not in modal_origin_arm_results[i]
-                            and name not in installed_names_match
                             and name not in kept_somewhere_match):
                         cleared_names_match.add(name)
             for name, kinds in observed_kinds.items():
