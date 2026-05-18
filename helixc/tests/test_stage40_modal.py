@@ -1301,25 +1301,34 @@ fn main() -> i32 {
 """
     prog = parse(src, include_stdlib=True)
     errs = typecheck(prog)
-    launder_errs = [e for e in errs if "launder" in str(e)]
-    assert launder_errs == [], \
-        f"no-else if-then cleared must DROP static claim " \
-        f"(NEW-HIGH-3 false-positive regression), got: " \
-        f"{[str(e) for e in errs]}"
+    # Stage 52 closure gate-7 silent-failure HIGH-3 SEMANTIC FLIP:
+    # this test originally asserted DROP per the gate-3 design
+    # ("drop on conflict to avoid false positives"). Gate-7 audit
+    # correctly identified this as a SILENT MISCOMPILE in the
+    # cond=false runtime path (where r2 retains its tainted pre-if
+    # value via the no-else implicit identity arm). Post-fix:
+    # the `kept_somewhere` guard means the no-else's preservation
+    # of r2 overrides the then-arm's clear → FIRE catches the
+    # cond=false launder. Aligns with the stage's stated AI-safety
+    # property "category-error launders MUST be caught".
+    assert any("launder" in str(e) and "Uncertain" in str(e)
+               and "Known" in str(e) and "'r2'" in str(e)
+               for e in errs), \
+        f"no-else if-then cleared but identity arm preserves " \
+        f"taint MUST FIRE (gate-7 HIGH-3 / NEW-HIGH-3 semantic " \
+        f"flip), got: {[str(e) for e in errs]}"
 
 
 def test_stage52_gate3_new_high_4_match_arm_clear_drops_claim():
-    """NEW-HIGH-4: match-arm union must also DROP the pre-match
-    static claim when any arm reassigns without installing
-    modal taint. Symmetric with NEW-HIGH-2/3 for A.If.
-
-    Pre-fix: pre-match r→uncertain. Arm 1 cleared (r=5),
-    arm 2 kept (no Assign). Pre-fix union observed_kinds=
-    {uncertain (pre-match), uncertain (arm 2 result)} →
-    single kind → propagated r→uncertain → false-positive
-    launder. Post-fix: arm_assigns[0] has 'r' (arm 1
-    assigned), arm_results[0] has no 'r' (arm 1 cleared)
-    → cleared_names_match={r} → drop."""
+    """Gate-3 NEW-HIGH-4 + gate-7 HIGH-3 SEMANTIC FLIP: match-arm
+    where one arm clears and one arm preserves pre-match taint.
+    Originally asserted DROP per the gate-3 drop-on-conflict
+    design. Gate-7 audit correctly flagged this as a silent
+    miscompile in the false-arm runtime path (where r2 retains
+    its pre-match taint because the no-op arm preserved it).
+    Post-fix: `kept_somewhere_match` guard means the no-op arm's
+    preservation of r2 overrides the true-arm's clear → FIRE
+    catches the false-arm launder."""
     src = """
 fn main() -> i32 {
     let u: Uncertain<i32> = into_uncertain(1);
@@ -1332,11 +1341,12 @@ fn main() -> i32 {
 """
     prog = parse(src, include_stdlib=True)
     errs = typecheck(prog)
-    launder_errs = [e for e in errs if "launder" in str(e)]
-    assert launder_errs == [], \
-        f"match-arm cleared must DROP static claim " \
-        f"(NEW-HIGH-4 false-positive regression), got: " \
-        f"{[str(e) for e in errs]}"
+    assert any("launder" in str(e) and "Uncertain" in str(e)
+               and "Known" in str(e) and "'r2'" in str(e)
+               for e in errs), \
+        f"match-arm cleared but identity arm preserves taint " \
+        f"MUST FIRE (gate-7 HIGH-3 / NEW-HIGH-4 semantic flip), " \
+        f"got: {[str(e) for e in errs]}"
 
 
 def test_stage52_gate3_new_high_5_real_launder_still_fires_with_drop_path():
@@ -1643,6 +1653,135 @@ def test_stage52_gate6_type_design_f1_no_residual_local_dict():
     assert "_MODAL_ELIM_TO_KIND" in src, \
         "Module-level _MODAL_ELIM_TO_KIND constant missing — " \
         "gate-2 F3 fix regressed."
+
+
+# ============================================================
+# Stage 52 closure gate-7 regression pins (silent-failure HIGH-3
+# semantic-flip duals + code-review F2 negative pins)
+# ============================================================
+
+
+def test_stage52_gate7_high_3_if_no_else_clear_with_kept_identity_arm_fires():
+    """Gate-7 silent-failure HIGH-3: `let r = from_X(u); if cond
+    { r = opaque; }; into_X(r)` MUST FIRE. The no-else implicit
+    identity arm preserves r→X in pre-if state; the cond=false
+    runtime path leaves r tainted, and into_X is a launder.
+
+    Pre-fix (the gate-3 design): drop on cleared → silent
+    miscompile in the cond=false path. Post-gate-7 fix:
+    `kept_somewhere` overrides cleared → fire.
+
+    This pin is the STANDALONE form of the NEW-HIGH-3 semantic
+    flip (the original NEW-HIGH-3 test now asserts FIRE with
+    explanatory comment)."""
+    src = """
+fn main() -> i32 {
+    let u: Uncertain<i32> = into_uncertain(7);
+    let mut r: i32 = from_uncertain(u);
+    if true { r = 42; };
+    let k: Known<i32> = into_known(r);
+    from_known(k)
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    errs = typecheck(prog)
+    assert any("launder" in str(e) and "Uncertain" in str(e)
+               and "Known" in str(e) and "'r'" in str(e)
+               for e in errs), \
+        f"if-no-else cleared with identity arm preserving taint " \
+        f"MUST FIRE (gate-7 HIGH-3 regression), got: " \
+        f"{[str(e) for e in errs]}"
+
+
+def test_stage52_gate7_negative_patorof_same_kind_does_not_fire():
+    """Code-review F2 (gate-7): negative pin for the gate-6
+    CRITICAL-3 PatOr-of-PatBind fix — `let k = into_known(...);
+    let r = from_known(k); match r { x | x => into_known(x) }`
+    must NOT fire (Known→Known is a legitimate round trip)."""
+    src = """
+fn main() -> i32 {
+    let kw: Known<i32> = into_known(42);
+    let r: i32 = from_known(kw);
+    let out: i32 = match r {
+        x | x => from_known(into_known(x)),
+        _ => 0
+    };
+    out
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    errs = typecheck(prog)
+    assert not any("launder" in str(e) for e in errs), \
+        f"PatOr-of-PatBind same-kind round-trip must NOT fire " \
+        f"(gate-7 code-review F2 negative pin), got: " \
+        f"{[str(e) for e in errs]}"
+
+
+def test_stage52_gate7_negative_guard_same_kind_does_not_fire():
+    """Code-review F2 (gate-7): negative pin for the gate-5
+    HIGH-1 guard-expression fix — guard reading PatBind taint
+    of MATCHING kind must NOT fire."""
+    src = """
+fn main() -> i32 {
+    let kw: Known<i32> = into_known(42);
+    let r: i32 = from_known(kw);
+    let out: i32 = match r {
+        x if from_known(into_known(x)) > 0 => 1,
+        _ => 0
+    };
+    out
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    errs = typecheck(prog)
+    assert not any("launder" in str(e) for e in errs), \
+        f"Guard with same-kind taint propagation must NOT fire " \
+        f"(gate-7 code-review F2 negative pin), got: " \
+        f"{[str(e) for e in errs]}"
+
+
+def test_stage52_gate7_negative_assign_alias_same_kind_does_not_fire():
+    """Code-review F2 (gate-7): negative pin for the gate-6
+    CRITICAL-2 Assign-alias variant — `s = r;` where r and the
+    final into_X agree on modal kind must NOT fire."""
+    src = """
+fn main() -> i32 {
+    let kw: Known<i32> = into_known(42);
+    let r: i32 = from_known(kw);
+    let mut s: i32 = 0;
+    s = r;
+    let k2: Known<i32> = into_known(s);
+    from_known(k2)
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    errs = typecheck(prog)
+    assert not any("launder" in str(e) for e in errs), \
+        f"Assign-alias same-kind must NOT fire " \
+        f"(gate-7 code-review F2 negative pin), got: " \
+        f"{[str(e) for e in errs]}"
+
+
+def test_stage52_gate7_type_design_high_1_last_assigns_cleared_per_fn():
+    """Gate-7 type-design HIGH-1: `_last_modal_assigns_popped`
+    must be cleared at fn entry (defense-in-depth). Currently
+    masked by the always-precedes-read ordering, but a future
+    edit reordering a union site to read before the next
+    _check_block could silently inherit fn A's last assigns-set.
+
+    This pin grep-checks both `_check_fn` and `check()` for the
+    explicit clear."""
+    from pathlib import Path
+    src = Path(
+        "helixc/frontend/typecheck.py").read_text(encoding="utf-8")
+    # Both per-fn (_check_fn ~line 2480) AND per-invocation
+    # (check() ~line 818) clears must be present.
+    clear_count = src.count("self._last_modal_assigns_popped = set()")
+    assert clear_count >= 2, \
+        f"Expected at least 2 occurrences of " \
+        f"`self._last_modal_assigns_popped = set()` (one in " \
+        f"_check_fn, one in check()), found {clear_count}. " \
+        f"Gate-7 type-design HIGH-1 fix regressed."
 
 
 def test_stage52_gate5_high_1_patbind_taint_propagation_in_guard():

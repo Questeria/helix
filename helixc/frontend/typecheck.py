@@ -816,6 +816,9 @@ class TypeChecker:
         self._modal_origin_provenance = {}
         self._modal_origin_let_block_scopes = []
         self._modal_origin_assigns_block_scopes = []
+        # Stage 52 closure gate-7 type-design HIGH-1: also clear
+        # the covert-return-channel slot (defense-in-depth).
+        self._last_modal_assigns_popped = set()
         self._recursive_enum_names: set[str] = set()
         self._type_alias_cache = {}
         self._local_const_scalar_scopes = []
@@ -2436,10 +2439,16 @@ class TypeChecker:
         territory (no fire), which is correct: the helper is the
         SINGLE source of truth that prior split logic missed.
 
-        Used by:
-        - Let-stmt populate (~line 2911)
-        - Assign-stmt populate (~line 5660)
-        - Match scrutinee for PatBind taint propagation (~line 5442)
+        Used by (token-pinned, gate-7 code-review F3 fix —
+        line numbers were drifting by 50-220 lines through
+        the gate-3→6 closure rounds):
+        - Let-stmt populate: the `let_rhs_kind` install in
+          `_check_stmt`'s A.Let branch.
+        - Assign-stmt populate: the `assign_rhs_kind` install in
+          `_check_expr`'s A.Assign branch.
+        - Match scrutinee for PatBind/PatOr taint propagation:
+          the `scrut_kind` propagation in `_check_expr`'s A.Match
+          branch.
         """
         if isinstance(expr, A.Name):
             return self._modal_origin_provenance.get(expr.name)
@@ -2478,6 +2487,13 @@ class TypeChecker:
         self._modal_origin_provenance = {}
         self._modal_origin_let_block_scopes = []
         self._modal_origin_assigns_block_scopes = []
+        # Stage 52 closure gate-7 type-design HIGH-1 fix: also
+        # clear the covert-return-channel slot. Currently masked
+        # by the always-precedes-read ordering at union sites,
+        # but defense-in-depth — a future edit reordering a union
+        # site to read before the next _check_block call could
+        # silently inherit fn A's last assigns-set.
+        self._last_modal_assigns_popped = set()
         error_start = len(self.errors)
         completed = False
         kernel_hbm_indexables = (
@@ -5422,20 +5438,40 @@ class TypeChecker:
             # mark a name as cleared if NO branch INSTALLED taint
             # for it. If some branch installs and others clear,
             # the installing branch may run at runtime → propagate
-            # conservatively (FIRE rather than DROP). Pre-this-fix
-            # the cleared-on-any-clearing logic was too aggressive,
-            # silently dropping real-launder scenarios like Inc 3
-            # (arm 1 installs uncertain, arm 2 clears).
+            # conservatively (FIRE rather than DROP). Stage 52
+            # closure gate-7 silent-failure HIGH-3 post-fix: ALSO
+            # check `kept_somewhere` — any name preserved in any
+            # arm's result (e.g. the no-else implicit identity arm
+            # preserves pre-if state) should override the cleared
+            # signal. Without this, `let r = from_X(u); if cond {
+            # r = 5; }; into_X(r)` silently passed because the
+            # then-arm cleared and the no-else arm's preservation
+            # didn't count toward "kept" — pre-this-fix, dropping
+            # the static claim silently missed the cond=false
+            # runtime path where r is still tainted.
+            #
+            # Semantic shift: NEW-HIGH-3 and NEW-HIGH-4 prior tests
+            # asserted DROP (drop-on-conflict design); the gate-7
+            # audit correctly identified those as false-positive-
+            # leaning tests that miss real-runtime launders. The
+            # stage's stated AI-safety property is "category-error
+            # launders MUST be caught" — missing one is worse than
+            # a false positive, so FIRE is the correct choice when
+            # an identity arm preserves the taint.
             installed_names: set[str] = set()
             for i, assigns in enumerate(branch_assigns):
                 for name in assigns:
                     if name in branch_results[i]:
                         installed_names.add(name)
+            kept_somewhere: set[str] = set()
+            for arm_result in branch_results:
+                kept_somewhere.update(arm_result.keys())
             cleared_names: set[str] = set()
             for i, assigns in enumerate(branch_assigns):
                 for name in assigns:
                     if (name not in branch_results[i]
-                            and name not in installed_names):
+                            and name not in installed_names
+                            and name not in kept_somewhere):
                         cleared_names.add(name)
             unioned_if: dict[str, str] = {}
             for name, kinds in observed_kinds.items():
@@ -5593,22 +5629,27 @@ class TypeChecker:
                     observed_kinds.setdefault(name, set()).add(kind)
             # Stage 52 closure gate-6 latent-bug post-fix: only
             # mark a name as cleared if NO arm INSTALLED taint
-            # for it. Symmetric with A.If's installed_names guard:
-            # if some arm installs and others clear, runtime may
-            # run the installer → propagate (FIRE) rather than
-            # drop. Pre-this-fix, cleared-on-any-clearing was too
-            # aggressive and silently dropped real-launder Inc 3
-            # scenarios (arm 1 installs uncertain, arm 2 clears).
+            # for it. Symmetric with A.If's installed_names guard.
+            # Stage 52 closure gate-7 HIGH-3 post-fix: ALSO check
+            # `kept_somewhere_match` — any name preserved in any
+            # arm's result (e.g. an empty arm `false => {}` that
+            # preserves pre-match state) overrides cleared. Mirror
+            # of A.If kept_somewhere. Closes gate-7 silent-failure
+            # for the match case (the if-no-else analogue).
             installed_names_match: set[str] = set()
             for i, assigns in enumerate(arm_assigns):
                 for name in assigns:
                     if name in modal_origin_arm_results[i]:
                         installed_names_match.add(name)
+            kept_somewhere_match: set[str] = set()
+            for arm_result in modal_origin_arm_results:
+                kept_somewhere_match.update(arm_result.keys())
             cleared_names_match: set[str] = set()
             for i, assigns in enumerate(arm_assigns):
                 for name in assigns:
                     if (name not in modal_origin_arm_results[i]
-                            and name not in installed_names_match):
+                            and name not in installed_names_match
+                            and name not in kept_somewhere_match):
                         cleared_names_match.add(name)
             for name, kinds in observed_kinds.items():
                 if name in cleared_names_match:
@@ -6960,15 +7001,24 @@ class TypeChecker:
         """Stage 49 closure gate-2 type-design G2-H1 fix: the
         Inc 1 packed-i64 Result representation uses a 32-bit
         payload slot. Non-i32 payloads (i64, f32, f64, struct,
-        etc.) silently truncate at IR lowering. Until Stage 50+
-        widens the representation, reject at typecheck with a
-        clear diagnostic naming the side and the offending type.
+        nested Result, etc.) silently truncate at IR lowering.
+        Until Stage 50+ widens the representation, reject at
+        typecheck with a clear diagnostic naming the side and
+        the offending type.
 
-        Permits: TyPrim('i32'), TyUnknown (inferred from the
-        sibling side; the gate-1 G2-F1 mechanism still keeps
-        provenance), and TyResult itself (allows nested
-        Result-of-Result via the existing identity-lowering
-        until Stage 50+ widens).
+        Stage 49 closure gate-4 silent-failure SF4-C1+C2 fix
+        (commit b4c8434): the prior version of this docstring
+        claimed TyResult was permitted "via the existing
+        identity-lowering." That was WRONG — `_lower_type(Result)`
+        returns TIRScalar('i64'), but RESULT_PACK's payload
+        operand is still a 32-bit `mov ecx`, so nested Result
+        silently dropped the inner Result's tag bit at position
+        32. The TyResult whitelist was deleted; nested Result
+        now correctly falls through to the rejection path.
+
+        Permits: TyPrim('i32') and TyUnknown only (TyUnknown
+        comes from the sibling side's inferred-constructor
+        provenance, kept by the gate-1 G2-F1 mechanism).
         """
         # Permissive: TyUnknown comes from the sibling side's
         # constructor (Err inferred / Ok inferred) — let it pass.

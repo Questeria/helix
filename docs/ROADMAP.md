@@ -130,19 +130,30 @@ Re-sequenced after Stage 46-47 closed:
   algorithm together once the cascade can tolerate source
   changes. Estimated 2-3 stages depending on how the
   fragility's root cause splits.
-- **Stage 52** (in flight 2026-05-17, Inc 1+2+3 SHIPPED, Inc 4
-  closure audits in progress): modal-origin taint-tracking
-  pass closing the Stage 40 closure gate-1 H1 known limitation
-  ("let-binding bypass of F1 syntactic guard"). Inc 1 (commit
-  c274059) added `_modal_origin_provenance` dict + Let-stmt
-  populate at `from_X(...)` RHS + into_Y consult. Inc 2 (commit
-  2925121) added Assign-arm POPULATE on from_X RHS + scope-
-  stack discipline via `_modal_origin_let_block_scopes`
-  (closes while-loop Assign + inner-let shadow false-positive).
-  Inc 3 (commit c9d8915) added match-arm parallel-union
-  semantics (closes match-arm-pop-overrides-arm-1 silent
-  launder). Three launder paths closed (let-binding, while/for
-  Assign, match-arm). Helper-fn indirection deferred to Stage 53
+- **Stage 52** (in flight 2026-05-17, gates 1-7 closed): modal-
+  origin taint-tracking pass closing the Stage 40 closure gate-1
+  H1 known limitation ("let-binding bypass of F1 syntactic
+  guard"). Inc 1 (c274059), Inc 2 (2925121), Inc 3 (c9d8915)
+  shipped the initial three launder paths (let-binding, while/for
+  Assign, match-arm). Closure gates 2-7 (each cascading-defect
+  audit round) added 9 more launder paths closed:
+  - PatBind taint propagation (gate-4 HIGH-1, ccca046)
+  - PatBind hoisted above guard check (gate-5 HIGH-1, fb9ad42)
+  - Call-form match scrutinee (gate-6 CRITICAL-1, fb9ad42)
+  - Name-alias let/Assign (gate-6 CRITICAL-2, fb9ad42)
+  - PatOr-of-same-PatBind (gate-6 CRITICAL-3, fb9ad42)
+  - Cleared-vs-installed refinement in A.If/A.Match union
+    (gate-6 latent-bug fix + gate-7 kept_somewhere extension)
+  - `_last_modal_assigns_popped` defensive clear (gate-7 type-
+    design HIGH-1)
+  - Unified `_modal_origin_of_expr` helper at all 3 install sites
+  - Gate-7 silent-failure HIGH-3: if-no-else / match-arm clear
+    with identity-arm preserved → FIRE (semantic flip from
+    drop-on-conflict to safety-first conservative-fire)
+  See `docs/stage52-progress-2026-05-17.md` gate-N closure
+  subsections for cascading-defect rhythm details. Loop-body
+  union (gate-7 HIGH-1+2) deferred to Stage 52 Inc 5 or rolled
+  into Stage 53. Helper-fn indirection deferred to Stage 53
   (different defect class — inter-procedural taint).
 - **Stage 53** (next): helper-fn indirection taint propagation.
   The LAST remaining laundering bypass — `fn launder(x: i32)
