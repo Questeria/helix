@@ -5908,6 +5908,7 @@ def test_stage59_autodiff_cli_help_mentions_polish_flags():
         "--validate-json-parity",
         "--validate-json-parity-json",
         "--ast-node-counts", "--ast-node-counts-json",
+        "--fn-ast-depth", "--fn-ast-depth-json",
         "--list-fn-attrs", "--list-fn-attrs-json",
         "--list-fns-by-attr", "--list-fns-by-attr-json",
         "--fn-callgraph", "--fn-callers",
@@ -7570,6 +7571,76 @@ def test_stage59_agent_methods_json(tmp_path):
         {"name": "propose", "params": ["i32"], "return_ty": "i32"},
         {"name": "evaluate", "params": ["i32", "i32"], "return_ty": "i32"},
     ]}
+
+
+def test_stage59_fn_ast_depth_text(tmp_path):
+    """Stage 59 follow-on / Tier 4 #13 polish: --fn-ast-depth prints
+    a single integer (deeper code → bigger number)."""
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "fad.hx"
+    src.write_text(
+        "fn shallow(x: i32) -> i32 { x + 1 }\n"
+        "fn deeper(x: i32) -> i32 {\n"
+        "    if x > 0 { if x > 10 { x * 2 } else { x } } else { 0 }\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    proc_shallow = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--fn-ast-depth", str(src), "shallow"],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    proc_deep = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--fn-ast-depth", str(src), "deeper"],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc_shallow.returncode == 0
+    assert proc_deep.returncode == 0
+    shallow_d = int(proc_shallow.stdout.strip())
+    deep_d = int(proc_deep.stdout.strip())
+    # Deeper fn must report a strictly bigger depth.
+    assert deep_d > shallow_d
+
+
+def test_stage59_fn_ast_depth_json(tmp_path):
+    """Stage 59 follow-on / Tier 4 #13 polish: --fn-ast-depth-json
+    emits {name, depth}."""
+    import json
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "fadj.hx"
+    src.write_text(
+        "fn simple() -> i32 { 1 }\n",
+        encoding="utf-8",
+    )
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--fn-ast-depth-json", str(src), "simple"],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0
+    result = json.loads(proc.stdout)
+    assert result["name"] == "simple"
+    assert isinstance(result["depth"], int)
+    assert result["depth"] > 0
+
+
+def test_stage59_fn_ast_depth_missing(tmp_path):
+    """Stage 59 follow-on / Tier 4 #13 polish: --fn-ast-depth rc=1
+    for unknown fn."""
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "fadm.hx"
+    src.write_text("fn foo() -> i32 { 1 }\n", encoding="utf-8")
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--fn-ast-depth", str(src), "nope"],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 1
+    assert "not found" in proc.stderr
 
 
 def test_stage59_ast_node_counts_text(tmp_path):

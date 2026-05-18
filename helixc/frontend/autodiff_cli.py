@@ -22,6 +22,11 @@ Introspection (Stage 28.9 + Stage 58 + Stage 59 polish):
     --ast-node-counts-json <file.hx>
         Same as --ast-node-counts but JSON
         {counts, total_nodes, n_classes}.
+    --fn-ast-depth <file.hx> <fn_name>
+        Maximum AST nesting depth of a fn's body. Higher = more
+        deeply-nested code = often harder to reason about.
+    --fn-ast-depth-json <file.hx> <fn_name>
+        Same as --fn-ast-depth but JSON {name, depth}.
     --program-hash <file.hx>
         Print the whole-program structural hash (64 hex).
     --program-signature-hash <file.hx>
@@ -428,6 +433,112 @@ def _ast_stats_json(path: str) -> int:
         "total_attrs": sum(len(f.attrs) for f in fns),
     }
     print(json.dumps(result, sort_keys=True, indent=2))
+    return 0
+
+
+def _fn_ast_depth(path: str, fn_name: str) -> int:
+    """Stage 59 follow-on / Tier 4 #13 polish: maximum AST nesting
+    depth of a single fn's body. Recursively walks the body counting
+    dataclass-instance nesting levels.
+
+    Output: a single integer. Higher = more deeply-nested code = often
+    harder to reason about.
+
+    Use case: complexity audit. A fn with depth 30 might benefit from
+    extraction; one with depth 3 is typically trivially comprehensible.
+
+    Exit 0 on success, 1 if fn_name not found.
+    """
+    src = _read_source(path)
+    prog = _parse_or_exit(src, path)
+    target = None
+    for it in prog.items:
+        if isinstance(it, A.FnDecl) and it.name == fn_name:
+            target = it
+            break
+    if target is None:
+        print(f"error: autodiff_cli: fn {fn_name!r} not found in {path}",
+              file=sys.stderr)
+        return 1
+
+    def _depth(node) -> int:
+        if node is None:
+            return 0
+        if not hasattr(node, "__dataclass_fields__"):
+            return 0
+        max_child = 0
+        for f in node.__dataclass_fields__:
+            v = getattr(node, f)
+            if isinstance(v, list):
+                for x in v:
+                    d = _depth(x)
+                    if d > max_child:
+                        max_child = d
+            elif isinstance(v, tuple):
+                for x in v:
+                    d = _depth(x)
+                    if d > max_child:
+                        max_child = d
+            else:
+                d = _depth(v)
+                if d > max_child:
+                    max_child = d
+        return 1 + max_child
+
+    d = _depth(target.body) if target.body is not None else 0
+    print(d)
+    return 0
+
+
+def _fn_ast_depth_json(path: str, fn_name: str) -> int:
+    """Stage 59 follow-on / Tier 4 #13 polish: --fn-ast-depth in
+    machine-readable JSON form.
+
+    Output schema:
+      {"name": "<fn_name>", "depth": N}
+
+    Exit 0 on success, 1 if fn_name not found.
+    """
+    import json
+    src = _read_source(path)
+    prog = _parse_or_exit(src, path)
+    target = None
+    for it in prog.items:
+        if isinstance(it, A.FnDecl) and it.name == fn_name:
+            target = it
+            break
+    if target is None:
+        print(f"error: autodiff_cli: fn {fn_name!r} not found in {path}",
+              file=sys.stderr)
+        return 1
+
+    def _depth(node) -> int:
+        if node is None:
+            return 0
+        if not hasattr(node, "__dataclass_fields__"):
+            return 0
+        max_child = 0
+        for f in node.__dataclass_fields__:
+            v = getattr(node, f)
+            if isinstance(v, list):
+                for x in v:
+                    d = _depth(x)
+                    if d > max_child:
+                        max_child = d
+            elif isinstance(v, tuple):
+                for x in v:
+                    d = _depth(x)
+                    if d > max_child:
+                        max_child = d
+            else:
+                d = _depth(v)
+                if d > max_child:
+                    max_child = d
+        return 1 + max_child
+
+    d = _depth(target.body) if target.body is not None else 0
+    print(json.dumps({"name": fn_name, "depth": d},
+                      sort_keys=True, indent=2))
     return 0
 
 
@@ -7363,6 +7474,20 @@ def main():
                   file=sys.stderr)
             sys.exit(2)
         sys.exit(_ast_node_counts_json(args[0]))
+
+    if "--fn-ast-depth" in flags:
+        if len(args) < 2:
+            print("usage: --fn-ast-depth <file.hx> <fn_name>",
+                  file=sys.stderr)
+            sys.exit(2)
+        sys.exit(_fn_ast_depth(args[0], args[1]))
+
+    if "--fn-ast-depth-json" in flags:
+        if len(args) < 2:
+            print("usage: --fn-ast-depth-json <file.hx> <fn_name>",
+                  file=sys.stderr)
+            sys.exit(2)
+        sys.exit(_fn_ast_depth_json(args[0], args[1]))
 
     if "--ast-stats-json" in flags:
         if len(args) < 1:
