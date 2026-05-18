@@ -5910,6 +5910,8 @@ def test_stage59_autodiff_cli_help_mentions_polish_flags():
         "--ast-node-counts", "--ast-node-counts-json",
         "--fn-ast-depth", "--fn-ast-depth-json",
         "--fn-ast-depth-all",
+        "--fn-ast-size", "--fn-ast-size-json",
+        "--fn-ast-size-all",
         "--list-fn-attrs", "--list-fn-attrs-json",
         "--list-fns-by-attr", "--list-fns-by-attr-json",
         "--fn-callgraph", "--fn-callers",
@@ -7572,6 +7574,77 @@ def test_stage59_agent_methods_json(tmp_path):
         {"name": "propose", "params": ["i32"], "return_ty": "i32"},
         {"name": "evaluate", "params": ["i32", "i32"], "return_ty": "i32"},
     ]}
+
+
+def test_stage59_fn_ast_size_text(tmp_path):
+    """Stage 59 follow-on / Tier 4 #13 polish: --fn-ast-size prints
+    total node count (bigger fn = bigger number)."""
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "fas.hx"
+    src.write_text(
+        "fn tiny() -> i32 { 1 }\n"
+        "fn bigger(x: i32) -> i32 { x + 1 + 2 + 3 }\n",
+        encoding="utf-8",
+    )
+    proc_tiny = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--fn-ast-size", str(src), "tiny"],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    proc_bigger = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--fn-ast-size", str(src), "bigger"],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc_tiny.returncode == 0
+    assert proc_bigger.returncode == 0
+    tiny_n = int(proc_tiny.stdout.strip())
+    bigger_n = int(proc_bigger.stdout.strip())
+    assert bigger_n > tiny_n
+
+
+def test_stage59_fn_ast_size_json(tmp_path):
+    """Stage 59 follow-on / Tier 4 #13 polish: --fn-ast-size-json
+    emits {name, size}."""
+    import json
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "fasj.hx"
+    src.write_text("fn foo() -> i32 { 1 }\n", encoding="utf-8")
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--fn-ast-size-json", str(src), "foo"],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0
+    result = json.loads(proc.stdout)
+    assert result["name"] == "foo"
+    assert isinstance(result["size"], int)
+    assert result["size"] > 0
+
+
+def test_stage59_fn_ast_size_all(tmp_path):
+    """Stage 59 follow-on / Tier 4 #13 polish: --fn-ast-size-all
+    emits {fn_name: size_int, ...}."""
+    import json
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "fasa.hx"
+    src.write_text(
+        "fn a() -> i32 { 1 }\n"
+        "fn b() -> i32 { 1 + 2 + 3 + 4 }\n",
+        encoding="utf-8",
+    )
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--fn-ast-size-all", str(src)],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0
+    result = json.loads(proc.stdout)
+    assert set(result.keys()) == {"a", "b"}
+    assert result["b"] > result["a"]
 
 
 def test_stage59_fn_ast_depth_all(tmp_path):

@@ -30,6 +30,14 @@ Introspection (Stage 28.9 + Stage 58 + Stage 59 polish):
     --fn-ast-depth-all <file.hx>
         Whole-program per-fn AST nesting depth as JSON dict
         {fn_name: depth_int}. Companion to --fn-ast-depth (single).
+    --fn-ast-size <file.hx> <fn_name>
+        Total AST node count of a fn's body (alt. complexity metric:
+        size vs --fn-ast-depth's max-nesting).
+    --fn-ast-size-json <file.hx> <fn_name>
+        Same as --fn-ast-size but JSON {name, size}.
+    --fn-ast-size-all <file.hx>
+        Whole-program per-fn AST size profile as JSON dict
+        {fn_name: total_node_count}.
     --program-hash <file.hx>
         Print the whole-program structural hash (64 hex).
     --program-signature-hash <file.hx>
@@ -436,6 +444,138 @@ def _ast_stats_json(path: str) -> int:
         "total_attrs": sum(len(f.attrs) for f in fns),
     }
     print(json.dumps(result, sort_keys=True, indent=2))
+    return 0
+
+
+def _fn_ast_size(path: str, fn_name: str) -> int:
+    """Stage 59 follow-on / Tier 4 #13 polish: total AST node count
+    of a fn's body. Alternative complexity metric to --fn-ast-depth
+    (size = total nodes; depth = max nesting).
+
+    Two fns can have the same depth but very different sizes
+    (e.g., a flat sequence of N statements has depth 2-3 but size
+    proportional to N).
+
+    Output: a single integer.
+
+    Exit 0 on success, 1 if fn_name not found.
+    """
+    src = _read_source(path)
+    prog = _parse_or_exit(src, path)
+    target = None
+    for it in prog.items:
+        if isinstance(it, A.FnDecl) and it.name == fn_name:
+            target = it
+            break
+    if target is None:
+        print(f"error: autodiff_cli: fn {fn_name!r} not found in {path}",
+              file=sys.stderr)
+        return 1
+
+    def _count(node) -> int:
+        if node is None:
+            return 0
+        if not hasattr(node, "__dataclass_fields__"):
+            return 0
+        n = 1
+        for f in node.__dataclass_fields__:
+            v = getattr(node, f)
+            if isinstance(v, list):
+                for x in v:
+                    n += _count(x)
+            elif isinstance(v, tuple):
+                for x in v:
+                    n += _count(x)
+            else:
+                n += _count(v)
+        return n
+
+    print(_count(target.body) if target.body is not None else 0)
+    return 0
+
+
+def _fn_ast_size_json(path: str, fn_name: str) -> int:
+    """Stage 59 follow-on / Tier 4 #13 polish: --fn-ast-size in
+    machine-readable JSON form.
+
+    Output schema:
+      {"name": "<fn_name>", "size": N}
+
+    Exit 0 on success, 1 if fn_name not found.
+    """
+    import json
+    src = _read_source(path)
+    prog = _parse_or_exit(src, path)
+    target = None
+    for it in prog.items:
+        if isinstance(it, A.FnDecl) and it.name == fn_name:
+            target = it
+            break
+    if target is None:
+        print(f"error: autodiff_cli: fn {fn_name!r} not found in {path}",
+              file=sys.stderr)
+        return 1
+
+    def _count(node) -> int:
+        if node is None:
+            return 0
+        if not hasattr(node, "__dataclass_fields__"):
+            return 0
+        n = 1
+        for f in node.__dataclass_fields__:
+            v = getattr(node, f)
+            if isinstance(v, list):
+                for x in v:
+                    n += _count(x)
+            elif isinstance(v, tuple):
+                for x in v:
+                    n += _count(x)
+            else:
+                n += _count(v)
+        return n
+
+    size = _count(target.body) if target.body is not None else 0
+    print(json.dumps({"name": fn_name, "size": size},
+                      sort_keys=True, indent=2))
+    return 0
+
+
+def _fn_ast_size_all(path: str) -> int:
+    """Stage 59 follow-on / Tier 4 #13 polish: whole-program per-fn
+    AST size profile. {fn_name: total_node_count}.
+
+    Companion to --fn-ast-depth-all. Together they characterize the
+    complexity of every fn along two orthogonal axes (depth + size).
+    """
+    import json
+    from .ast_walker import iter_fn_decls
+    src = _read_source(path)
+    prog = _parse_or_exit(src, path)
+
+    def _count(node) -> int:
+        if node is None:
+            return 0
+        if not hasattr(node, "__dataclass_fields__"):
+            return 0
+        n = 1
+        for f in node.__dataclass_fields__:
+            v = getattr(node, f)
+            if isinstance(v, list):
+                for x in v:
+                    n += _count(x)
+            elif isinstance(v, tuple):
+                for x in v:
+                    n += _count(x)
+            else:
+                n += _count(v)
+        return n
+
+    profile: dict[str, int] = {}
+    for fn in iter_fn_decls(prog):
+        profile[fn.name] = (
+            _count(fn.body) if fn.body is not None else 0
+        )
+    print(json.dumps(profile, sort_keys=True, indent=2))
     return 0
 
 
@@ -7548,6 +7688,27 @@ def main():
                   file=sys.stderr)
             sys.exit(2)
         sys.exit(_fn_ast_depth_all(args[0]))
+
+    if "--fn-ast-size" in flags:
+        if len(args) < 2:
+            print("usage: --fn-ast-size <file.hx> <fn_name>",
+                  file=sys.stderr)
+            sys.exit(2)
+        sys.exit(_fn_ast_size(args[0], args[1]))
+
+    if "--fn-ast-size-json" in flags:
+        if len(args) < 2:
+            print("usage: --fn-ast-size-json <file.hx> <fn_name>",
+                  file=sys.stderr)
+            sys.exit(2)
+        sys.exit(_fn_ast_size_json(args[0], args[1]))
+
+    if "--fn-ast-size-all" in flags:
+        if len(args) < 1:
+            print("usage: --fn-ast-size-all <file.hx>",
+                  file=sys.stderr)
+            sys.exit(2)
+        sys.exit(_fn_ast_size_all(args[0]))
 
     if "--ast-stats-json" in flags:
         if len(args) < 1:
