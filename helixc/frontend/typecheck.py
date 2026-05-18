@@ -283,7 +283,16 @@ class TyModal(Type):
     `act_on`: Goal -> Known when achieved) — Stage 40 Inc 2.
     Composes with TyTemporal: `Known<Past<i32>>` = "I directly
     observed this past fact" vs `Believed<Past<i32>>` = "I
-    inferred this past fact"."""
+    inferred this past fact".
+
+    Stage 52 closure gate-15 type-design MEDIUM-3 doc: TyModal
+    is constructed at 4 sites in typecheck.py — `_register_fn`
+    (boundary asserted against ModalKind), and 3 introduction
+    sites that source `kind` from closed literal maps
+    (`modal_map`, `_modal_intro`, `dst_kind` lookup). The
+    `_register_fn` site is the only one taking sig.ret from
+    parser output, hence the only one needing the boundary
+    assertion."""
     kind: str        # "known", "believed", "goal", "uncertain"
     inner: Type
 
@@ -2664,6 +2673,23 @@ class TypeChecker:
         # the next coverage gap in the wrapper-AST table.
         if isinstance(expr, A.Cast):
             return self._modal_origin_of_expr(expr.value)
+        # Stage 52 Inc 13 / gate-15 silent-failure CRITICAL-1 fix:
+        # A.Return and A.Break wrap a value-yielding tail. A Block
+        # whose tail is `return from_uncertain(u);` or `break
+        # from_uncertain(u);` (in loop-as-expr) carries the modal-
+        # tainted value. Missing arms in the helper silently
+        # bypassed the launder check. Cascading-defect rhythm
+        # continues — Inc 11 claimed "exhaustive AST-wrapper scan"
+        # but didn't include Return/Break (they're control-flow
+        # nodes that happen to carry an optional value).
+        if isinstance(expr, A.Return):
+            if expr.value is not None:
+                return self._modal_origin_of_expr(expr.value)
+            return None
+        if isinstance(expr, A.Break):
+            if expr.value is not None:
+                return self._modal_origin_of_expr(expr.value)
+            return None
         # Stage 52 Inc 11 / proactive cascade-break: Unary and
         # Binary wrap modal-tainted values. `-from_uncertain(u)`
         # and `from_uncertain(u) + 0` preserve modal-origin
