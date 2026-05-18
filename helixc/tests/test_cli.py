@@ -5888,6 +5888,7 @@ def test_stage59_autodiff_cli_help_mentions_polish_flags():
         "--fn-recursive-json", "--fn-cycles-json",
         "--fn-topo-sort-json", "--fn-isolated-json",
         "--fn-distance-json", "--fn-call-path-json",
+        "--fn-callgraph-depth-json",
         "--list-fn-attrs", "--list-fn-attrs-json",
         "--list-fns-by-attr", "--list-fns-by-attr-json",
         "--fn-callgraph", "--fn-callers",
@@ -7550,6 +7551,30 @@ def test_stage59_agent_methods_json(tmp_path):
         {"name": "propose", "params": ["i32"], "return_ty": "i32"},
         {"name": "evaluate", "params": ["i32", "i32"], "return_ty": "i32"},
     ]}
+
+
+def test_stage59_fn_callgraph_depth_json(tmp_path):
+    """Stage 59 follow-on / Tier 4 #13 polish: --fn-callgraph-depth-json
+    emits {entry, depth} max acyclic call-stack depth."""
+    import json
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "fcdj.hx"
+    src.write_text(
+        "fn leaf() -> i32 { 1 }\n"
+        "fn mid() -> i32 { leaf() }\n"
+        "fn top() -> i32 { mid() }\n",
+        encoding="utf-8",
+    )
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--fn-callgraph-depth-json", str(src), "top"],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0
+    result = json.loads(proc.stdout)
+    # top → mid → leaf = depth 3.
+    assert result == {"entry": "top", "depth": 3}
 
 
 def test_stage59_fn_distance_json(tmp_path):

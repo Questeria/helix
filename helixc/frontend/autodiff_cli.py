@@ -152,6 +152,8 @@ Introspection (Stage 28.9 + Stage 58 + Stage 59 polish):
         Same as --fn-distance but JSON {from, to, distance}.
     --fn-call-path-json <file.hx> <from_fn> <to_fn>
         Same as --fn-call-path but JSON {from, to, path, length}.
+    --fn-callgraph-depth-json <file.hx> <entry_fn>
+        Same as --fn-callgraph-depth but JSON {entry, depth}.
     --fn-body-stats <file.hx> <fn_name>
         Per-fn body AST-node counts (calls/binops/ifs/loops/matches).
     --fn-body-stats-json <file.hx> <fn_name>
@@ -3439,6 +3441,77 @@ def _fn_callgraph_depth_all(path: str) -> int:
     return 0
 
 
+def _fn_callgraph_depth_json(path: str, entry_name: str) -> int:
+    """Stage 59 follow-on / Tier 4 #13 polish: --fn-callgraph-depth in
+    machine-readable JSON form.
+
+    Output schema:
+      {"entry": "<fn>", "depth": N}
+    Same algorithm as text form: DFS for longest acyclic path,
+    cycles clipped at first re-entry.
+
+    Exit 0 on success, 1 if entry_name not found.
+    """
+    import json
+    from .ast_walker import iter_fn_decls
+    src = _read_source(path)
+    prog = _parse_or_exit(src, path)
+    all_fns = list(iter_fn_decls(prog))
+    all_names = {fn.name for fn in all_fns}
+    if entry_name not in all_names:
+        print(f"error: autodiff_cli: fn {entry_name!r} not found in {path}",
+              file=sys.stderr)
+        return 1
+
+    graph: dict[str, set] = {}
+    for fn in all_fns:
+        callees: set = set()
+
+        def _walk(n) -> None:
+            if n is None:
+                return
+            if isinstance(n, A.Call):
+                if isinstance(n.callee, A.Name):
+                    callees.add(n.callee.name)
+                elif (isinstance(n.callee, A.Path)
+                      and n.callee.segments):
+                    callees.add(n.callee.segments[-1])
+            if hasattr(n, "__dataclass_fields__"):
+                for f in n.__dataclass_fields__:
+                    v = getattr(n, f)
+                    if isinstance(v, list):
+                        for x in v:
+                            _walk(x)
+                    elif isinstance(v, tuple):
+                        for x in v:
+                            _walk(x)
+                    else:
+                        _walk(v)
+
+        if fn.body is not None:
+            _walk(fn.body)
+        graph[fn.name] = {c for c in callees if c in all_names}
+
+    on_stack: set = set()
+
+    def _depth(v: str) -> int:
+        if v in on_stack:
+            return 0
+        on_stack.add(v)
+        try:
+            children = graph.get(v, set()) - on_stack
+            if not children:
+                return 1
+            return 1 + max((_depth(c) for c in children), default=0)
+        finally:
+            on_stack.discard(v)
+
+    print(json.dumps(
+        {"entry": entry_name, "depth": _depth(entry_name)},
+        sort_keys=True, indent=2))
+    return 0
+
+
 def _fn_callgraph_depth(path: str, entry_name: str) -> int:
     """Stage 59 follow-on / Tier 4 #13 polish: max acyclic call-stack
     depth from a fn entry point.
@@ -6485,6 +6558,13 @@ def main():
                   file=sys.stderr)
             sys.exit(2)
         sys.exit(_fn_callgraph_depth(args[0], args[1]))
+
+    if "--fn-callgraph-depth-json" in flags:
+        if len(args) < 2:
+            print("usage: --fn-callgraph-depth-json <file.hx> <entry_fn>",
+                  file=sys.stderr)
+            sys.exit(2)
+        sys.exit(_fn_callgraph_depth_json(args[0], args[1]))
 
     if "--fn-callgraph-depth-all" in flags:
         if len(args) < 1:
