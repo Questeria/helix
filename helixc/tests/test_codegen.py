@@ -15085,6 +15085,89 @@ def test_strbyte_runtime_index():
     assert code == 98, f"expected 98 ('b'), got {code}"
 
 
+def test_stage55_inc1_str_byte_at_basic():
+    """Stage 55 Inc 1: __str_byte_at(start, pos) reads byte at
+    arena[start+pos]. Companion to literal-only __strbyte for
+    runtime arena-backed strings."""
+    src = """
+    fn main() -> i32 {
+        let start = __strlit_to_arena("hello");
+        __str_byte_at(start, 1)
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 101, f"expected 'e'=101, got {code}"
+
+
+def test_stage55_inc1_str_find_byte_present():
+    """Stage 55 Inc 1: __str_find_byte returns first match offset."""
+    src = """
+    fn main() -> i32 {
+        let start = __strlit_to_arena("hello");
+        __str_find_byte(start, 5, 108)
+    }
+    """
+    # 108 = 'l', first occurrence at offset 2 ("he-l-lo")
+    code = compile_and_run(src)
+    assert code == 2, f"expected 2 (first 'l' in 'hello'), got {code}"
+
+
+def test_stage55_inc1_str_find_byte_absent():
+    """Stage 55 Inc 1: __str_find_byte returns -1 when not found.
+    (-1 in i32 → 255 in 8-bit exit code low byte.)"""
+    src = """
+    fn main() -> i32 {
+        let start = __strlit_to_arena("hello");
+        let r = __str_find_byte(start, 5, 122);
+        if r == (0 - 1) { 42 } else { 0 }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, \
+        f"expected 42 (sentinel for not-found), got {code}"
+
+
+def test_stage55_inc1_str_eq_arena_match():
+    """Stage 55 Inc 1: __str_eq_arena returns 1 for equal strings."""
+    src = """
+    fn main() -> i32 {
+        let a = __strlit_to_arena("abc");
+        let b = __strlit_to_arena("abc");
+        __str_eq_arena(a, 3, b, 3)
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 1, f"expected 1 (equal), got {code}"
+
+
+def test_stage55_inc1_str_eq_arena_diff_content():
+    """Stage 55 Inc 1: __str_eq_arena returns 0 for different
+    content (same length)."""
+    src = """
+    fn main() -> i32 {
+        let a = __strlit_to_arena("abc");
+        let b = __strlit_to_arena("abd");
+        __str_eq_arena(a, 3, b, 3)
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 0, f"expected 0 (not equal), got {code}"
+
+
+def test_stage55_inc1_str_eq_arena_diff_length():
+    """Stage 55 Inc 1: __str_eq_arena returns 0 for different
+    lengths."""
+    src = """
+    fn main() -> i32 {
+        let a = __strlit_to_arena("abc");
+        let b = __strlit_to_arena("abcd");
+        __str_eq_arena(a, 3, b, 4)
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 0, f"expected 0 (different lengths), got {code}"
+
+
 def test_strbyte_out_of_range_returns_zero():
     """__strbyte('abc', 10) is out of range → 0."""
     src = """

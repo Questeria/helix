@@ -2966,6 +2966,141 @@ class Lowerer:
                     sum1 = self.builder.emit(tir.OpKind.ADD, quad, lin, result_ty=i32)
                     out = self.builder.emit(tir.OpKind.ADD, sum1, c3, result_ty=i32)
                     return out
+                # Stage 55 Inc 1 — runtime string builtins. All operate
+                # on arena-backed `(start, len)` byte sequences. Lower
+                # to ARENA_GET + arithmetic — no new IR opcode needed,
+                # backend untouched, cascade-safe.
+                if bn == "__str_byte_at" and len(expr.args) == 2:
+                    # __str_byte_at(start, pos) → __arena_get(start + pos).
+                    # No bounds-check (caller's responsibility — matches
+                    # __arena_get policy). Returns the byte value in
+                    # the low 8 bits of an i32.
+                    start = self._lower_expr(expr.args[0]) \
+                        or self.builder.const_int(0)
+                    pos = self._lower_expr(expr.args[1]) \
+                        or self.builder.const_int(0)
+                    i32 = tir.TIRScalar("i32")
+                    idx = self.builder.emit(tir.OpKind.ADD, start, pos,
+                                              result_ty=i32)
+                    return self.builder.emit(
+                        tir.OpKind.ARENA_GET, idx,
+                        result_ty=i32)
+                if bn == "__str_find_byte" and len(expr.args) == 3:
+                    # __str_find_byte(start, len, target) — scan the
+                    # arena region [start..start+len) for the first byte
+                    # equal to `target`. Returns the offset (0..len-1)
+                    # of the match, or -1 if not found.
+                    #
+                    # Phase 0 IR has no general loop primitive at this
+                    # lowering layer (the IR is SSA-flat for codegen).
+                    # Compile-time-unroll to MAX_SCAN=256 — adequate
+                    # for line scans (typical line < 256 bytes in
+                    # CSV/text). Longer strings: caller must chunk.
+                    #
+                    # Implementation: nested SELECTs from the inside
+                    # out — for each i, result = if i<len then (if
+                    # arena[start+i]==target then i else acc) else acc.
+                    start = self._lower_expr(expr.args[0]) \
+                        or self.builder.const_int(0)
+                    length = self._lower_expr(expr.args[1]) \
+                        or self.builder.const_int(0)
+                    target = self._lower_expr(expr.args[2]) \
+                        or self.builder.const_int(0)
+                    i32 = tir.TIRScalar("i32")
+                    bool_ty = tir.TIRScalar("bool")
+                    MAX_SCAN = 256
+                    result = self.builder.const_int(-1)
+                    for i in range(MAX_SCAN - 1, -1, -1):
+                        i_const = self.builder.const_int(i)
+                        in_range = self.builder.emit(
+                            tir.OpKind.CMP_LT, i_const, length,
+                            result_ty=bool_ty)
+                        idx = self.builder.emit(
+                            tir.OpKind.ADD, start, i_const,
+                            result_ty=i32)
+                        b = self.builder.emit(
+                            tir.OpKind.ARENA_GET, idx,
+                            result_ty=i32)
+                        matches = self.builder.emit(
+                            tir.OpKind.CMP_EQ, b, target,
+                            result_ty=bool_ty)
+                        # Nested: if in_range then (if matches then
+                        # i else result) else result
+                        match_branch = self.builder.emit(
+                            tir.OpKind.SELECT, matches, i_const, result,
+                            result_ty=i32)
+                        result = self.builder.emit(
+                            tir.OpKind.SELECT, in_range, match_branch,
+                            result, result_ty=i32)
+                    return result
+                if bn == "__str_eq_arena" and len(expr.args) == 4:
+                    # __str_eq_arena(a_start, a_len, b_start, b_len) —
+                    # byte-by-byte compare; returns 1 if equal, 0 if not.
+                    # Compile-time unrolled to MAX 256 bytes.
+                    #
+                    # Algorithm: accumulator is an i32 counter of
+                    # equal-bytes-where-in-range. Final check: len_eq
+                    # AND counter == a_len.
+                    a_start = self._lower_expr(expr.args[0]) \
+                        or self.builder.const_int(0)
+                    a_len = self._lower_expr(expr.args[1]) \
+                        or self.builder.const_int(0)
+                    b_start = self._lower_expr(expr.args[2]) \
+                        or self.builder.const_int(0)
+                    b_len = self._lower_expr(expr.args[3]) \
+                        or self.builder.const_int(0)
+                    i32 = tir.TIRScalar("i32")
+                    bool_ty = tir.TIRScalar("bool")
+                    MAX_SCAN = 256
+                    # eq_count = number of matching bytes within length.
+                    eq_count = self.builder.const_int(0)
+                    one = self.builder.const_int(1)
+                    zero = self.builder.const_int(0)
+                    for i in range(MAX_SCAN):
+                        i_const = self.builder.const_int(i)
+                        in_range = self.builder.emit(
+                            tir.OpKind.CMP_LT, i_const, a_len,
+                            result_ty=bool_ty)
+                        a_idx = self.builder.emit(
+                            tir.OpKind.ADD, a_start, i_const,
+                            result_ty=i32)
+                        b_idx = self.builder.emit(
+                            tir.OpKind.ADD, b_start, i_const,
+                            result_ty=i32)
+                        a_b = self.builder.emit(
+                            tir.OpKind.ARENA_GET, a_idx,
+                            result_ty=i32)
+                        b_b = self.builder.emit(
+                            tir.OpKind.ARENA_GET, b_idx,
+                            result_ty=i32)
+                        bytes_eq = self.builder.emit(
+                            tir.OpKind.CMP_EQ, a_b, b_b,
+                            result_ty=bool_ty)
+                        # inc = in_range ? (bytes_eq ? 1 : 0) : 0
+                        inner_inc = self.builder.emit(
+                            tir.OpKind.SELECT, bytes_eq, one, zero,
+                            result_ty=i32)
+                        inc = self.builder.emit(
+                            tir.OpKind.SELECT, in_range, inner_inc,
+                            zero, result_ty=i32)
+                        eq_count = self.builder.emit(
+                            tir.OpKind.ADD, eq_count, inc,
+                            result_ty=i32)
+                    # Final: equal iff (a_len == b_len) AND
+                    # (eq_count == a_len).
+                    len_eq = self.builder.emit(
+                        tir.OpKind.CMP_EQ, a_len, b_len,
+                        result_ty=bool_ty)
+                    count_eq = self.builder.emit(
+                        tir.OpKind.CMP_EQ, eq_count, a_len,
+                        result_ty=bool_ty)
+                    # both_eq = (count_eq ? 1 : 0) if len_eq else 0
+                    count_eq_i = self.builder.emit(
+                        tir.OpKind.SELECT, count_eq, one, zero,
+                        result_ty=i32)
+                    return self.builder.emit(
+                        tir.OpKind.SELECT, len_eq, count_eq_i,
+                        zero, result_ty=i32)
                 # String builtins on literals.
                 # __strlen("literal") → compile-time const_int(len).
                 if (bn == "__strlen" and len(expr.args) == 1
