@@ -634,6 +634,30 @@ _MODAL_UPGRADE_HINT: dict[tuple[str, str], str] = {
 }
 
 
+def _expand_effect_wildcards(effects: frozenset[str]) -> frozenset[str]:
+    """Stage 55 Inc 4 — expand parent effect labels to cover all their
+    sub-labels for the call-site subsumption check.
+
+    Convention: dotted effect labels form a tree. A bare parent label
+    (e.g. `io`) implies all `io.*` sub-labels. A sub-label (e.g.
+    `io.read_file`) does NOT imply siblings (`io.write_file`).
+
+    Today only the `io` family has sub-labels. Forward-compatible:
+    other families (`arena`, `ffi`, etc.) can adopt the same pattern
+    without code changes — the expansion is purely declarative.
+    """
+    # Known sub-label families. To add a new wildcard parent, add an
+    # entry here. Format: parent_label -> tuple of sub-labels.
+    _SUB_LABELS: dict[str, tuple[str, ...]] = {
+        "io": ("io.read_file", "io.write_file", "io.print"),
+    }
+    expanded = set(effects)
+    for e in effects:
+        if e in _SUB_LABELS:
+            expanded.update(_SUB_LABELS[e])
+    return frozenset(expanded)
+
+
 class TypeChecker:
     def __init__(self, prog: A.Program):
         self.prog = prog
@@ -2374,7 +2398,9 @@ class TypeChecker:
           effect_check pass — that's the soundness layer; this surface
           check only flags directly-declared effects).
         - A function with declared effects E may only call functions whose
-          effects are a subset of E.
+          effects are a subset of E (with sub-label subsumption: a
+          declared `io` covers `io.read_file` / `io.write_file` /
+          `io.print` etc.).
         - Calls to undeclared functions are not checked here (handled by
           shape-check or treated as opaque).
         """
@@ -2385,8 +2411,18 @@ class TypeChecker:
                 call.span,
             ))
             return
-        # Check effect inclusion: callee's effects must subset caller's
-        missing = sig.effects - self._current_effects
+        # Stage 55 Inc 4 — granular effect subsumption. Expand the
+        # caller's declared effects to include all sub-labels of any
+        # wildcard parent. E.g., declared `{io}` expands to
+        # `{io, io.read_file, io.write_file, io.print, ...}`. Then
+        # `missing = needed - expanded` correctly identifies only
+        # effects neither directly declared nor implied by a parent.
+        # Pre-fix, declaring `@effect(io)` and calling something
+        # marked `@effect(io.read_file)` would falsely report
+        # missing={io.read_file}. Forward-compatible — without
+        # any dotted labels in use, behavior is unchanged.
+        expanded_caller = _expand_effect_wildcards(self._current_effects)
+        missing = sig.effects - expanded_caller
         if missing:
             missing_list = ", ".join(sorted(missing))
             self.errors.append(TypeError_(

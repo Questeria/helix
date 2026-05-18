@@ -314,8 +314,20 @@ class Parser:
                         self.i += 1
                     elif t.kind == T.IDENT:
                         if depth == 1:
-                            arg_idents.append(t.value)
-                        self.i += 1
+                            # Stage 55 Inc 4 — accumulate dotted idents
+                            # so @effect(io.read_file) parses as the
+                            # single sub-label `io.read_file`, not as
+                            # two separate labels `io` and `read_file`.
+                            dotted = t.value
+                            self.i += 1
+                            while (self._peek().kind == T.DOT
+                                    and self._peek(1).kind == T.IDENT):
+                                self.i += 1  # consume DOT
+                                dotted = dotted + "." + self._peek().value
+                                self.i += 1  # consume next IDENT
+                            arg_idents.append(dotted)
+                        else:
+                            self.i += 1
                     else:
                         # Skip non-ident tokens inside the parens
                         self.i += 1

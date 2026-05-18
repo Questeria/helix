@@ -3327,6 +3327,56 @@ def test_effectful_can_call_effectful():
     assert check(src) == []
 
 
+def test_stage55_inc4_dotted_effect_parses_as_single_label():
+    """Stage 55 Inc 4: @effect(io.read_file) parses as the single
+    label `io.read_file`, NOT as two labels `io` + `read_file`."""
+    from helixc.frontend.parser import parse
+    from helixc.frontend import ast_nodes as A
+    src = '@effect(io.read_file) fn foo() -> i32 { 0 }'
+    prog = parse(src)
+    fn = [it for it in prog.items if isinstance(it, A.FnDecl)][0]
+    assert "effect:io.read_file" in fn.attrs, fn.attrs
+    assert "effect:io" not in fn.attrs, fn.attrs
+    assert "effect:read_file" not in fn.attrs, fn.attrs
+
+
+def test_stage55_inc4_io_subsumes_sub_labels():
+    """Stage 55 Inc 4: a caller declaring @effect(io) can call
+    a callee declaring @effect(io.read_file) because `io` is the
+    wildcard parent that subsumes all `io.*` sub-labels."""
+    src = """
+    @effect(io.read_file) fn reads() -> i32 { 0 }
+    @io fn caller() -> i32 { reads() }
+    """
+    assert check(src) == []
+
+
+def test_stage55_inc4_subsibling_does_not_subsume():
+    """Stage 55 Inc 4: a caller declaring @effect(io.read_file)
+    CANNOT call a callee declaring @effect(io.write_file) —
+    sibling sub-labels don't subsume each other."""
+    src = """
+    @effect(io.write_file) fn writes() -> i32 { 0 }
+    @effect(io.read_file) fn caller() -> i32 { writes() }
+    """
+    errs = check(src)
+    assert any("io.write_file" in e for e in errs), \
+        f"expected io.write_file rejection; got: {errs}"
+
+
+def test_stage55_inc4_sub_label_does_not_subsume_parent():
+    """Stage 55 Inc 4: declaring @effect(io.read_file) does NOT
+    cover a callee that requires the broader @effect(io)."""
+    src = """
+    @io fn opaque() -> i32 { 0 }
+    @effect(io.read_file) fn caller() -> i32 { opaque() }
+    """
+    errs = check(src)
+    assert any("io" in e for e in errs), \
+        f"expected io rejection (sub-label doesn't cover parent); " \
+        f"got: {errs}"
+
+
 def test_caller_missing_capability_rejected():
     # io-capable function called from a function without that capability
     src = """
