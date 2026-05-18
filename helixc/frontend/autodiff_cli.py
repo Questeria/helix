@@ -25,6 +25,8 @@ Introspection (Stage 28.9 + Stage 58 + Stage 59 polish):
         Diff two trace_to_canonical_json dumps; prints first divergence.
     --trace-dump-summary <file.json>
         High-level stats of a trace dump: counts, balance, short hash.
+    --trace-dump-summary-json <file.json>
+        Same as --trace-dump-summary but machine-readable JSON output.
     --diff-program-hash <a.hx> <b.hx>
         Compare two programs: prints SAME or DIFFER + per-fn breakdown.
     --changed-fns <a.hx> <b.hx>
@@ -217,6 +219,46 @@ def _hash_dump(path: str) -> int:
     prog = _parse_or_exit(src, path)
     dump = program_hash_dump(prog)
     print(json.dumps(dump, sort_keys=True, indent=2))
+    return 0
+
+
+def _trace_dump_summary_json(path: str) -> int:
+    """Stage 59 follow-on / Tier 3 #11 polish: --trace-dump-summary
+    in machine-readable JSON form.
+
+    Output schema:
+      {
+        "events": N,
+        "fn_counts": {fn: count, ...},
+        "op_kind_counts": {kind: count, ...},
+        "balanced": bool,
+        "hash_short": "<12hex>",
+        "hash_full": "<64hex>"
+      }
+    """
+    import json
+    from .trace_pass import (
+        trace_from_canonical_json, trace_fn_counts, trace_op_counts,
+        trace_is_balanced, trace_hash,
+    )
+    from .ast_hash import short_hash
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            s = f.read()
+    except OSError as e:
+        print(f"error: autodiff_cli: {e}", file=sys.stderr)
+        return 1
+    buf = trace_from_canonical_json(s)
+    h = trace_hash(buf)
+    result = {
+        "events": len(buf),
+        "fn_counts": dict(sorted(trace_fn_counts(buf).items())),
+        "op_kind_counts": dict(sorted(trace_op_counts(buf).items())),
+        "balanced": trace_is_balanced(buf),
+        "hash_short": short_hash(h),
+        "hash_full": h,
+    }
+    print(json.dumps(result, sort_keys=True, indent=2))
     return 0
 
 
@@ -1192,6 +1234,13 @@ def main():
                   file=sys.stderr)
             sys.exit(2)
         sys.exit(_trace_dump_summary(args[0]))
+
+    if "--trace-dump-summary-json" in flags:
+        if len(args) < 1:
+            print("usage: --trace-dump-summary-json <file.json>",
+                  file=sys.stderr)
+            sys.exit(2)
+        sys.exit(_trace_dump_summary_json(args[0]))
 
     if "--diff-program-hash" in flags:
         if len(args) < 2:

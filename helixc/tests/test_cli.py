@@ -5844,6 +5844,7 @@ def test_stage59_autodiff_cli_help_mentions_polish_flags():
         "--validate-autotune", "--validate-autotune-json",
         "--hash-dump", "--diff-hash-dump", "--hash-dump-short",
         "--diff-trace", "--trace-dump-summary",
+        "--trace-dump-summary-json",
         "--validate-trace-attrs", "--list-traced-fns",
         "--validate-all", "--validate-all-json",
     ):
@@ -6441,6 +6442,38 @@ def test_stage59_check_program_signature_hash_sig_change_fails(tmp_path):
     )
     assert proc.returncode == 1
     assert "mismatch" in proc.stdout
+
+
+def test_stage59_trace_dump_summary_json(tmp_path):
+    """Stage 59 follow-on / Tier 3 #11 polish: --trace-dump-summary-json
+    outputs valid JSON with full + short hashes + counts."""
+    import json
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    trace = tmp_path / "t.json"
+    trace.write_text(json.dumps({
+        "cap": 4096,
+        "events": [
+            {"op_kind": "entry", "fn_name": "f", "operands": [],
+             "result": None},
+            {"op_kind": "exit", "fn_name": "f", "operands": [1],
+             "result": None},
+        ],
+    }), encoding="utf-8")
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--trace-dump-summary-json", str(trace)],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0
+    result = json.loads(proc.stdout)
+    assert result["events"] == 2
+    assert result["fn_counts"] == {"f": 2}
+    assert result["balanced"] is True
+    assert len(result["hash_full"]) == 64
+    assert len(result["hash_short"]) == 12
+    # short is prefix of full
+    assert result["hash_full"].startswith(result["hash_short"])
 
 
 def test_stage59_trace_dump_summary(tmp_path):
