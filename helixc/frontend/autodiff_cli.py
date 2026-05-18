@@ -71,6 +71,8 @@ Introspection (Stage 28.9 + Stage 58 + Stage 59 polish):
         Whole-program {fn: depth} JSON profile for stack-risk ranking.
     --fn-topo-sort <file.hx>
         Topological sort: leaves first, then their dependents.
+    --fn-isolated <file.hx>
+        List orphan fns: no callers AND no callees (strongest dead-code).
     --fn-leaves <file.hx>
         List 'leaf' fns (those that call no other fn) — sorted, one per line.
     --fn-roots <file.hx>
@@ -1585,6 +1587,70 @@ def _fn_roots(path: str) -> int:
     return 0
 
 
+def _fn_isolated(path: str) -> int:
+    """Stage 59 follow-on / Tier 4 #13 polish: list 'isolated' fns —
+    fns with NO callers AND NO callees in the local callgraph (truly
+    orphan / standalone in this file).
+
+    Equivalent to: leaves ∩ roots. A fn is isolated if it neither
+    calls any other fn nor is called by any local fn.
+
+    Use cases:
+    - Strongest dead-code candidates (no incoming + no outgoing
+      edges → almost certainly safe to remove unless used via FFI)
+    - Smallest possible refactor units (no transitive impact)
+    - Test-fn discovery (in some conventions, test fns have no
+      callers and are picked up via runtime registration)
+
+    Sorted alphabetically, one per line.
+    """
+    from .ast_walker import iter_fn_decls
+    src = _read_source(path)
+    prog = _parse_or_exit(src, path)
+
+    all_fns = list(iter_fn_decls(prog))
+    all_names = {fn.name for fn in all_fns}
+    fan_out: dict[str, set] = {fn.name: set() for fn in all_fns}
+    fan_in: dict[str, set] = {fn.name: set() for fn in all_fns}
+
+    def _collect(node, from_fn: str) -> None:
+        if node is None:
+            return
+        if isinstance(node, A.Call):
+            tgt = None
+            if isinstance(node.callee, A.Name):
+                tgt = node.callee.name
+            elif (isinstance(node.callee, A.Path)
+                  and node.callee.segments):
+                tgt = node.callee.segments[-1]
+            if tgt is not None and tgt in all_names:
+                fan_out[from_fn].add(tgt)
+                fan_in[tgt].add(from_fn)
+        if hasattr(node, "__dataclass_fields__"):
+            for f in node.__dataclass_fields__:
+                v = getattr(node, f)
+                if isinstance(v, list):
+                    for x in v:
+                        _collect(x, from_fn)
+                elif isinstance(v, tuple):
+                    for x in v:
+                        _collect(x, from_fn)
+                else:
+                    _collect(v, from_fn)
+
+    for fn in all_fns:
+        if fn.body is not None:
+            _collect(fn.body, fn.name)
+
+    isolated = sorted(
+        name for name in all_names
+        if not fan_in[name] and not fan_out[name]
+    )
+    for name in isolated:
+        print(name)
+    return 0
+
+
 def _fn_topo_sort(path: str) -> int:
     """Stage 59 follow-on / Tier 4 #13 polish: topological sort of the
     callgraph. Output fns in leaves-first order — every fn appears
@@ -2829,6 +2895,12 @@ def main():
                   file=sys.stderr)
             sys.exit(2)
         sys.exit(_fn_topo_sort(args[0]))
+
+    if "--fn-isolated" in flags:
+        if len(args) < 1:
+            print("usage: --fn-isolated <file.hx>", file=sys.stderr)
+            sys.exit(2)
+        sys.exit(_fn_isolated(args[0]))
 
     if "--fn-leaves" in flags:
         if len(args) < 1:

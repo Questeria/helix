@@ -5874,6 +5874,7 @@ def test_stage59_autodiff_cli_help_mentions_polish_flags():
         "--fn-recursive", "--fn-cycles",
         "--fn-call-stats", "--fn-callgraph-depth",
         "--fn-callgraph-depth-all", "--fn-topo-sort",
+        "--fn-isolated",
         "--check-program-hash",
         "--check-program-hash-from-file",
         "--check-program-signature-hash",
@@ -7374,6 +7375,31 @@ def test_stage59_fn_roots(tmp_path):
     # util has 2 callers → not root; entry_a, entry_b, truly_dead
     # never called locally → roots.
     assert lines == ["entry_a", "entry_b", "truly_dead"]
+
+
+def test_stage59_fn_isolated(tmp_path):
+    """Stage 59 follow-on / Tier 4 #13 polish: --fn-isolated lists
+    orphan fns (no callers AND no callees in local graph)."""
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "iso.hx"
+    src.write_text(
+        "fn util() -> i32 { 1 }\n"
+        "fn caller() -> i32 { util() }\n"
+        "fn orphan_a() -> i32 { 0 }\n"
+        "fn orphan_b() -> i32 { 0 }\n",
+        encoding="utf-8",
+    )
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--fn-isolated", str(src)],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0
+    lines = [l for l in proc.stdout.splitlines() if l]
+    # util has a caller → not isolated; caller has a callee → not
+    # isolated; orphan_a/b have neither → isolated, sorted.
+    assert lines == ["orphan_a", "orphan_b"]
 
 
 def test_stage59_fn_topo_sort_leaves_first(tmp_path):
