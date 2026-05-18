@@ -5916,6 +5916,8 @@ def test_stage59_autodiff_cli_help_mentions_polish_flags():
         "--fn-ast-summary-json",
         "--fn-loc", "--fn-loc-json",
         "--list-fn-locs", "--list-fn-locs-json",
+        "--struct-loc", "--struct-loc-json",
+        "--list-struct-locs", "--list-struct-locs-json",
         "--list-fn-attrs", "--list-fn-attrs-json",
         "--list-fns-by-attr", "--list-fns-by-attr-json",
         "--fn-callgraph", "--fn-callers",
@@ -7578,6 +7580,68 @@ def test_stage59_agent_methods_json(tmp_path):
         {"name": "propose", "params": ["i32"], "return_ty": "i32"},
         {"name": "evaluate", "params": ["i32", "i32"], "return_ty": "i32"},
     ]}
+
+
+def test_stage59_struct_loc_text(tmp_path):
+    """Stage 59 follow-on / Tier 4 #13 polish: --struct-loc prints
+    '<path>:<line>:<col>' for a known StructDecl."""
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "stloc.hx"
+    src.write_text(
+        "struct Point { x: i32, y: i32 }\n"
+        "struct Pair { a: i32, b: i32 }\n",
+        encoding="utf-8",
+    )
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--struct-loc", str(src), "Pair"],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0
+    assert proc.stdout.strip().endswith(":2:1")
+
+
+def test_stage59_list_struct_locs_json(tmp_path):
+    """Stage 59 follow-on / Tier 4 #13 polish: --list-struct-locs-json
+    emits {file, structs, n_structs}."""
+    import json
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "lslocs.hx"
+    src.write_text(
+        "struct A { x: i32 }\n"
+        "struct B { y: i32 }\n",
+        encoding="utf-8",
+    )
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--list-struct-locs-json", str(src)],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0
+    result = json.loads(proc.stdout)
+    assert result["n_structs"] == 2
+    names = [s["name"] for s in result["structs"]]
+    assert names == ["A", "B"]
+    assert result["structs"][0]["line"] == 1
+    assert result["structs"][1]["line"] == 2
+
+
+def test_stage59_struct_loc_missing(tmp_path):
+    """Stage 59 follow-on / Tier 4 #13 polish: --struct-loc rc=1 for
+    unknown struct."""
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "stlocm.hx"
+    src.write_text("struct Foo { x: i32 }\n", encoding="utf-8")
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--struct-loc", str(src), "Nope"],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 1
+    assert "not found" in proc.stderr
 
 
 def test_stage59_list_fn_locs_text(tmp_path):

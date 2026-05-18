@@ -60,6 +60,17 @@ Introspection (Stage 28.9 + Stage 58 + Stage 59 polish):
     --list-fn-locs-json <file.hx>
         Same as --list-fn-locs but JSON
         {file, fns: [{name, line, col}, ...], n_fns}.
+    --struct-loc <file.hx> <struct_name>
+        Source location of a StructDecl as
+        '<path>:<line>:<col>'. Companion to --fn-loc.
+    --struct-loc-json <file.hx> <struct_name>
+        Same as --struct-loc but JSON
+        {name, file, line, col, found}.
+    --list-struct-locs <file.hx>
+        Whole-program: every struct's source location.
+    --list-struct-locs-json <file.hx>
+        Same as --list-struct-locs but JSON
+        {file, structs: [{name, line, col}, ...], n_structs}.
     --program-hash <file.hx>
         Print the whole-program structural hash (64 hex).
     --program-signature-hash <file.hx>
@@ -466,6 +477,103 @@ def _ast_stats_json(path: str) -> int:
         "total_attrs": sum(len(f.attrs) for f in fns),
     }
     print(json.dumps(result, sort_keys=True, indent=2))
+    return 0
+
+
+def _struct_loc(path: str, struct_name: str) -> int:
+    """Stage 59 follow-on / Tier 4 #13 polish: source location of a
+    StructDecl. Companion to --fn-loc for structs.
+
+    Output: '<file_path>:<line>:<col>'.
+
+    Exit 0 on success, 1 if struct_name not found.
+    """
+    src = _read_source(path)
+    prog = _parse_or_exit(src, path)
+    for it in prog.items:
+        if isinstance(it, A.StructDecl) and it.name == struct_name:
+            sp = getattr(it, "span", None)
+            line = getattr(sp, "line", 0) if sp else 0
+            col = getattr(sp, "col", 0) if sp else 0
+            print(f"{path}:{line}:{col}")
+            return 0
+    print(f"error: autodiff_cli: struct {struct_name!r} not found "
+          f"in {path}", file=sys.stderr)
+    return 1
+
+
+def _struct_loc_json(path: str, struct_name: str) -> int:
+    """Stage 59 follow-on / Tier 4 #13 polish: --struct-loc in JSON.
+
+    Output schema:
+      {"name", "file", "line", "col", "found"}
+
+    Exit 0 on success, 1 if struct_name not found.
+    """
+    import json
+    src = _read_source(path)
+    prog = _parse_or_exit(src, path)
+    for it in prog.items:
+        if isinstance(it, A.StructDecl) and it.name == struct_name:
+            sp = getattr(it, "span", None)
+            line = getattr(sp, "line", 0) if sp else 0
+            col = getattr(sp, "col", 0) if sp else 0
+            print(json.dumps({
+                "name": struct_name, "file": path,
+                "line": line, "col": col, "found": True,
+            }, sort_keys=True, indent=2))
+            return 0
+    print(json.dumps({
+        "name": struct_name, "file": path,
+        "line": 0, "col": 0, "found": False,
+    }, sort_keys=True, indent=2))
+    return 1
+
+
+def _list_struct_locs(path: str) -> int:
+    """Stage 59 follow-on / Tier 4 #13 polish: enumerate every
+    struct's source location. Whole-program companion to --struct-loc.
+
+    Output: '<struct_name>:<line>:<col>' per line (declaration order).
+    """
+    src = _read_source(path)
+    prog = _parse_or_exit(src, path)
+    rows: list[tuple[int, int, str]] = []
+    for it in prog.items:
+        if isinstance(it, A.StructDecl):
+            sp = getattr(it, "span", None)
+            line = getattr(sp, "line", 0) if sp else 0
+            col = getattr(sp, "col", 0) if sp else 0
+            rows.append((line, col, it.name))
+    rows.sort()
+    for line, col, name in rows:
+        print(f"{name}:{line}:{col}")
+    return 0
+
+
+def _list_struct_locs_json(path: str) -> int:
+    """Stage 59 follow-on / Tier 4 #13 polish: --list-struct-locs in
+    machine-readable JSON form.
+
+    Output schema:
+      {"file", "structs": [{name, line, col}, ...], "n_structs"}
+    """
+    import json
+    src = _read_source(path)
+    prog = _parse_or_exit(src, path)
+    structs: list[dict] = []
+    for it in prog.items:
+        if isinstance(it, A.StructDecl):
+            sp = getattr(it, "span", None)
+            line = getattr(sp, "line", 0) if sp else 0
+            col = getattr(sp, "col", 0) if sp else 0
+            structs.append({
+                "name": it.name, "line": line, "col": col,
+            })
+    structs.sort(key=lambda d: (d["line"], d["col"], d["name"]))
+    print(json.dumps({
+        "file": path, "structs": structs, "n_structs": len(structs),
+    }, sort_keys=True, indent=2))
     return 0
 
 
@@ -8077,6 +8185,34 @@ def main():
                   file=sys.stderr)
             sys.exit(2)
         sys.exit(_list_fn_locs_json(args[0]))
+
+    if "--struct-loc" in flags:
+        if len(args) < 2:
+            print("usage: --struct-loc <file.hx> <struct_name>",
+                  file=sys.stderr)
+            sys.exit(2)
+        sys.exit(_struct_loc(args[0], args[1]))
+
+    if "--struct-loc-json" in flags:
+        if len(args) < 2:
+            print("usage: --struct-loc-json <file.hx> <struct_name>",
+                  file=sys.stderr)
+            sys.exit(2)
+        sys.exit(_struct_loc_json(args[0], args[1]))
+
+    if "--list-struct-locs" in flags:
+        if len(args) < 1:
+            print("usage: --list-struct-locs <file.hx>",
+                  file=sys.stderr)
+            sys.exit(2)
+        sys.exit(_list_struct_locs(args[0]))
+
+    if "--list-struct-locs-json" in flags:
+        if len(args) < 1:
+            print("usage: --list-struct-locs-json <file.hx>",
+                  file=sys.stderr)
+            sys.exit(2)
+        sys.exit(_list_struct_locs_json(args[0]))
 
     if "--fn-ast-size-json" in flags:
         if len(args) < 2:
