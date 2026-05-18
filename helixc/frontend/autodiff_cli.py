@@ -148,6 +148,10 @@ Introspection (Stage 28.9 + Stage 58 + Stage 59 polish):
         Same as --fn-topo-sort but JSON {order: [...], n}.
     --fn-isolated-json <file.hx>
         Same as --fn-isolated but JSON {isolated, n_isolated}.
+    --fn-distance-json <file.hx> <from_fn> <to_fn>
+        Same as --fn-distance but JSON {from, to, distance}.
+    --fn-call-path-json <file.hx> <from_fn> <to_fn>
+        Same as --fn-call-path but JSON {from, to, path, length}.
     --fn-body-stats <file.hx> <fn_name>
         Per-fn body AST-node counts (calls/binops/ifs/loops/matches).
     --fn-body-stats-json <file.hx> <fn_name>
@@ -2692,6 +2696,87 @@ def _fn_distance_matrix(path: str) -> int:
     return 0
 
 
+def _fn_distance_json(path: str, from_fn: str, to_fn: str) -> int:
+    """Stage 59 follow-on / Tier 4 #13 polish: --fn-distance in
+    machine-readable JSON form.
+
+    Output schema:
+      {"from": "<fn>", "to": "<fn>", "distance": N}
+    distance = 0 if from==to; -1 if unreachable; >=1 otherwise (edge
+    count of shortest path).
+
+    Exit 0 always on valid args; 1 if either fn not found.
+    """
+    import json
+    from .ast_walker import iter_fn_decls
+    src = _read_source(path)
+    prog = _parse_or_exit(src, path)
+    all_fns = list(iter_fn_decls(prog))
+    all_names = {fn.name for fn in all_fns}
+    for needed in (from_fn, to_fn):
+        if needed not in all_names:
+            print(f"error: autodiff_cli: fn {needed!r} not found in {path}",
+                  file=sys.stderr)
+            return 1
+    if from_fn == to_fn:
+        print(json.dumps(
+            {"from": from_fn, "to": to_fn, "distance": 0},
+            sort_keys=True, indent=2))
+        return 0
+
+    graph: dict[str, set] = {}
+    for fn in all_fns:
+        callees: set = set()
+
+        def _walk(n) -> None:
+            if n is None:
+                return
+            if isinstance(n, A.Call):
+                if isinstance(n.callee, A.Name):
+                    callees.add(n.callee.name)
+                elif (isinstance(n.callee, A.Path)
+                      and n.callee.segments):
+                    callees.add(n.callee.segments[-1])
+            if hasattr(n, "__dataclass_fields__"):
+                for f in n.__dataclass_fields__:
+                    v = getattr(n, f)
+                    if isinstance(v, list):
+                        for x in v:
+                            _walk(x)
+                    elif isinstance(v, tuple):
+                        for x in v:
+                            _walk(x)
+                    else:
+                        _walk(v)
+
+        if fn.body is not None:
+            _walk(fn.body)
+        graph[fn.name] = {c for c in callees if c in all_names}
+
+    visited: set = {from_fn}
+    layer: list = [from_fn]
+    distance = 0
+    while layer:
+        distance += 1
+        next_layer: list = []
+        for v in layer:
+            for w in graph.get(v, set()):
+                if w == to_fn:
+                    print(json.dumps(
+                        {"from": from_fn, "to": to_fn,
+                         "distance": distance},
+                        sort_keys=True, indent=2))
+                    return 0
+                if w not in visited:
+                    visited.add(w)
+                    next_layer.append(w)
+        layer = next_layer
+    print(json.dumps(
+        {"from": from_fn, "to": to_fn, "distance": -1},
+        sort_keys=True, indent=2))
+    return 0
+
+
 def _fn_distance(path: str, from_fn: str, to_fn: str) -> int:
     """Stage 59 follow-on / Tier 4 #13 polish: shortest-path distance
     (edge count) from from_fn to to_fn in the local callgraph. -1
@@ -2769,6 +2854,108 @@ def _fn_distance(path: str, from_fn: str, to_fn: str) -> int:
                     next_layer.append(w)
         layer = next_layer
     print(-1)
+    return 0
+
+
+def _fn_call_path_json(path: str, from_fn: str, to_fn: str) -> int:
+    """Stage 59 follow-on / Tier 4 #13 polish: --fn-call-path in
+    machine-readable JSON form.
+
+    Output schema:
+      {"from": "<fn>", "to": "<fn>",
+       "path": ["<fn>", ...] | null,
+       "length": N}
+    path is null + length=-1 when no path exists; length=0 for
+    from==to (path is [from]).
+
+    Exit 0 always on valid args; 1 if either fn not found.
+    """
+    import json
+    from .ast_walker import iter_fn_decls
+    src = _read_source(path)
+    prog = _parse_or_exit(src, path)
+    all_fns = list(iter_fn_decls(prog))
+    all_names = {fn.name for fn in all_fns}
+    for needed in (from_fn, to_fn):
+        if needed not in all_names:
+            print(f"error: autodiff_cli: fn {needed!r} not found in {path}",
+                  file=sys.stderr)
+            return 1
+
+    if from_fn == to_fn:
+        print(json.dumps(
+            {"from": from_fn, "to": to_fn,
+             "path": [from_fn], "length": 0},
+            sort_keys=True, indent=2))
+        return 0
+
+    graph: dict[str, set] = {}
+    for fn in all_fns:
+        callees: set = set()
+
+        def _walk(n) -> None:
+            if n is None:
+                return
+            if isinstance(n, A.Call):
+                if isinstance(n.callee, A.Name):
+                    callees.add(n.callee.name)
+                elif (isinstance(n.callee, A.Path)
+                      and n.callee.segments):
+                    callees.add(n.callee.segments[-1])
+            if hasattr(n, "__dataclass_fields__"):
+                for f in n.__dataclass_fields__:
+                    v = getattr(n, f)
+                    if isinstance(v, list):
+                        for x in v:
+                            _walk(x)
+                    elif isinstance(v, tuple):
+                        for x in v:
+                            _walk(x)
+                    else:
+                        _walk(v)
+
+        if fn.body is not None:
+            _walk(fn.body)
+        graph[fn.name] = {c for c in callees if c in all_names}
+
+    visited: set = {from_fn}
+    pred: dict[str, str] = {}
+    queue: list = [from_fn]
+    found = False
+    while queue:
+        next_queue: list = []
+        for v in queue:
+            for w in graph.get(v, set()):
+                if w not in visited:
+                    visited.add(w)
+                    pred[w] = v
+                    if w == to_fn:
+                        found = True
+                        break
+                    next_queue.append(w)
+            if found:
+                break
+        if found:
+            break
+        queue = next_queue
+
+    if not found:
+        print(json.dumps(
+            {"from": from_fn, "to": to_fn,
+             "path": None, "length": -1},
+            sort_keys=True, indent=2))
+        return 0
+
+    path_nodes: list = [to_fn]
+    cur = to_fn
+    while cur != from_fn:
+        cur = pred[cur]
+        path_nodes.append(cur)
+    path_nodes.reverse()
+    print(json.dumps(
+        {"from": from_fn, "to": to_fn,
+         "path": path_nodes, "length": len(path_nodes) - 1},
+        sort_keys=True, indent=2))
     return 0
 
 
@@ -6340,12 +6527,26 @@ def main():
             sys.exit(2)
         sys.exit(_fn_call_path(args[0], args[1], args[2]))
 
+    if "--fn-call-path-json" in flags:
+        if len(args) < 3:
+            print("usage: --fn-call-path-json <file.hx> <from_fn> <to_fn>",
+                  file=sys.stderr)
+            sys.exit(2)
+        sys.exit(_fn_call_path_json(args[0], args[1], args[2]))
+
     if "--fn-distance" in flags:
         if len(args) < 3:
             print("usage: --fn-distance <file.hx> <from_fn> <to_fn>",
                   file=sys.stderr)
             sys.exit(2)
         sys.exit(_fn_distance(args[0], args[1], args[2]))
+
+    if "--fn-distance-json" in flags:
+        if len(args) < 3:
+            print("usage: --fn-distance-json <file.hx> <from_fn> <to_fn>",
+                  file=sys.stderr)
+            sys.exit(2)
+        sys.exit(_fn_distance_json(args[0], args[1], args[2]))
 
     if "--fn-distance-matrix" in flags:
         if len(args) < 1:

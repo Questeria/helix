@@ -5887,6 +5887,7 @@ def test_stage59_autodiff_cli_help_mentions_polish_flags():
         "--fn-leaves-json", "--fn-roots-json",
         "--fn-recursive-json", "--fn-cycles-json",
         "--fn-topo-sort-json", "--fn-isolated-json",
+        "--fn-distance-json", "--fn-call-path-json",
         "--list-fn-attrs", "--list-fn-attrs-json",
         "--list-fns-by-attr", "--list-fns-by-attr-json",
         "--fn-callgraph", "--fn-callers",
@@ -7549,6 +7550,101 @@ def test_stage59_agent_methods_json(tmp_path):
         {"name": "propose", "params": ["i32"], "return_ty": "i32"},
         {"name": "evaluate", "params": ["i32", "i32"], "return_ty": "i32"},
     ]}
+
+
+def test_stage59_fn_distance_json(tmp_path):
+    """Stage 59 follow-on / Tier 4 #13 polish: --fn-distance-json
+    emits {from, to, distance} BFS distance."""
+    import json
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "fdj.hx"
+    src.write_text(
+        "fn leaf() -> i32 { 1 }\n"
+        "fn mid() -> i32 { leaf() }\n"
+        "fn top() -> i32 { mid() }\n",
+        encoding="utf-8",
+    )
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--fn-distance-json", str(src), "top", "leaf"],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0
+    result = json.loads(proc.stdout)
+    assert result == {"from": "top", "to": "leaf", "distance": 2}
+
+
+def test_stage59_fn_distance_json_unreachable(tmp_path):
+    """Stage 59 follow-on / Tier 4 #13 polish: distance=-1 when
+    unreachable."""
+    import json
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "fdjur.hx"
+    src.write_text(
+        "fn a() -> i32 { 1 }\n"
+        "fn b() -> i32 { 2 }\n",
+        encoding="utf-8",
+    )
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--fn-distance-json", str(src), "a", "b"],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0
+    result = json.loads(proc.stdout)
+    assert result == {"from": "a", "to": "b", "distance": -1}
+
+
+def test_stage59_fn_call_path_json(tmp_path):
+    """Stage 59 follow-on / Tier 4 #13 polish: --fn-call-path-json
+    emits {from, to, path, length} shortest call chain."""
+    import json
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "fcpj.hx"
+    src.write_text(
+        "fn leaf() -> i32 { 1 }\n"
+        "fn mid() -> i32 { leaf() }\n"
+        "fn top() -> i32 { mid() }\n",
+        encoding="utf-8",
+    )
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--fn-call-path-json", str(src), "top", "leaf"],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0
+    result = json.loads(proc.stdout)
+    assert result == {
+        "from": "top", "to": "leaf",
+        "path": ["top", "mid", "leaf"], "length": 2,
+    }
+
+
+def test_stage59_fn_call_path_json_no_path(tmp_path):
+    """Stage 59 follow-on / Tier 4 #13 polish: path=null + length=-1
+    when no chain exists."""
+    import json
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "fcpjnp.hx"
+    src.write_text(
+        "fn a() -> i32 { 1 }\n"
+        "fn b() -> i32 { 2 }\n",
+        encoding="utf-8",
+    )
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--fn-call-path-json", str(src), "a", "b"],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0
+    result = json.loads(proc.stdout)
+    assert result == {
+        "from": "a", "to": "b", "path": None, "length": -1,
+    }
 
 
 def test_stage59_fn_topo_sort_json(tmp_path):
