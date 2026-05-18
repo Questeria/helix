@@ -299,6 +299,30 @@ def unflatten_pytree(decl, struct_decls: dict,
                       default=default, _visited=set(), depth=0)
 
 
+def tree_map(decl, struct_decls: dict, leaves_by_path: dict,
+              leaf_fn, default=_RAISE_ON_MISSING) -> dict:
+    """Stage 59 follow-on / Tier 2 #7 polish — JAX-style tree_map.
+
+    Apply `leaf_fn(value)` to each leaf of the pytree shaped like
+    `decl` whose values come from `leaves_by_path`. Returns a nested
+    dict mirroring the struct's hierarchy with each leaf transformed.
+
+    Use case: scale all gradients by learning rate, clip by norm,
+    add weight decay, etc., without manually walking the tree.
+
+    Example:
+        # Multiply every weight in a Model gradient by 0.01.
+        scaled = tree_map(Model_decl, struct_decls,
+                          gradients_by_path, lambda g: g * 0.01)
+
+    Composes flatten_pytree + unflatten_pytree machinery without
+    needing the source struct value — the caller already has the
+    leaves keyed by path (typical case: differentiate_reverse output).
+    """
+    mapped = {path: leaf_fn(v) for path, v in leaves_by_path.items()}
+    return unflatten_pytree(decl, struct_decls, mapped, default=default)
+
+
 def _unflatten(decl: A.StructDecl, struct_decls: dict,
                grads: dict, prefix: str, default,
                _visited: set, depth: int = 0) -> dict:

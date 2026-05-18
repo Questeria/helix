@@ -352,5 +352,59 @@ def test_unflatten_pytree_too_deep_traps_26001():
         unflatten_pytree(decls["D1"], decls, {}, default=0.0)
 
 
+def test_tree_map_scales_all_leaves():
+    """Stage 59 follow-on / Tier 2 #7 polish: `tree_map(decl, struct_decls,
+    leaves_by_path, leaf_fn)` applies leaf_fn to each value and
+    rebuilds the nested struct shape."""
+    from helixc.frontend.pytree import tree_map
+    span = A.Span(0, 0)
+    # struct Point { x: f64, y: f64 }
+    point = A.StructDecl(
+        span=span, name="Point", generics=[], is_pub=False,
+        fields=[
+            A.FnParam(span=span, name="x",
+                       ty=A.TyName(span=span, name="f64"),
+                       is_mut=False),
+            A.FnParam(span=span, name="y",
+                       ty=A.TyName(span=span, name="f64"),
+                       is_mut=False),
+        ],
+    )
+    leaves = {"x": 10.0, "y": 20.0}
+    scaled = tree_map(point, {"Point": point}, leaves, lambda v: v * 0.1)
+    assert scaled == {"x": 1.0, "y": 2.0}
+
+
+def test_tree_map_preserves_nested_shape():
+    """Stage 59 follow-on: tree_map round-trips through nested struct."""
+    from helixc.frontend.pytree import tree_map
+    span = A.Span(0, 0)
+    # struct Inner { v: f64 }
+    inner = A.StructDecl(
+        span=span, name="Inner", generics=[], is_pub=False,
+        fields=[A.FnParam(span=span, name="v",
+                          ty=A.TyName(span=span, name="f64"),
+                          is_mut=False)],
+    )
+    # struct Outer { inner: Inner, b: f64 }
+    outer = A.StructDecl(
+        span=span, name="Outer", generics=[], is_pub=False,
+        fields=[
+            A.FnParam(span=span, name="inner",
+                       ty=A.TyName(span=span, name="Inner"),
+                       is_mut=False),
+            A.FnParam(span=span, name="b",
+                       ty=A.TyName(span=span, name="f64"),
+                       is_mut=False),
+        ],
+    )
+    decls = {"Inner": inner, "Outer": outer}
+    leaves = {"inner.v": 5.0, "b": 3.0}
+    out = tree_map(outer, decls, leaves, lambda v: v + 1.0)
+    # Expected: {"inner": {"v": 6.0}, "b": 4.0}
+    assert out["b"] == 4.0
+    assert out["inner"]["v"] == 6.0
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-v"]))
