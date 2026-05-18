@@ -413,15 +413,21 @@ These are blockers for any real ML training, in priority order.
     week.**
 
 15. **Pattern matching with guards + or-patterns + nested
-    destructuring.** ✅ DONE 2026-05-18 (Stage 59 commit bb774ff).
-    Guards + PatOr + PatVariant + PatRange shipped earlier
-    (Stages 28.9 cycles 10-15). Stage 59 added the missing
-    struct destructuring (`PatStruct`) end-to-end: parser
-    handles `Point { x: 1, y }` / `Point { .. }` patterns;
-    `_collect_binds` binds field-access locals; `_pattern_test_expr`
-    builds the AND of sub-field tests; `ast_hash` distinguishes
-    field orderings. Critical for AST-walking inside quote/splice
-    + pytree compositions.
+    destructuring.** ✅ DONE 2026-05-18 (Stages 28.9 cycles 10-15
+    for guards/PatOr/PatVariant/PatRange; Stage 59 commits
+    bb774ff + 0a2c895 + c5ada81 for struct destructuring +
+    nested struct).
+    - Parser handles `Point { x: 1, y }` / `Point { .. }` patterns.
+    - `_collect_binds_with_path` flattens nested struct sub-patterns
+      into leaf-path access chains (`scrut.f1.f2.fN`) — required
+      because Phase-0 IR has no partial-struct value representation.
+    - `_pattern_test_expr` builds the AND of sub-field tests.
+    - `ast_hash` distinguishes field orderings.
+    - typecheck `_bind_pattern` PatStruct arm resolves field types
+      from `_struct_decls` for recursive bind.
+    - Critical for AST-walking inside quote/splice + pytree
+      compositions. 5/5 regression pins green (basic, literal-match,
+      nested-typecheck, nested-end-to-end, ignore-rest).
 
 16. **Borrow checker.** Compile-time aliasing safety. Eliminates an
     entire class of bugs in tile/buffer code. **Months.**
