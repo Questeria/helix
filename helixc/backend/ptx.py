@@ -133,6 +133,11 @@ class PtxEmitter:
         self._line(f"    .reg .b32   %r<{self._REG_POOL_CAP}>;")
         self._line(f"    .reg .b64   %rd<{self._REG_POOL_CAP}>;")
         self._line(f"    .reg .f32   %f<{self._REG_POOL_CAP}>;")
+        # Stage 64 Inc 1 — Tier 2 #6: declare a 16-bit register pool
+        # for bf16 + f16 tile values. PTX uses .b16 as the underlying
+        # register class; values are interpreted as bf16/f16 by the
+        # ld/st suffixes.
+        self._line(f"    .reg .b16   %h<{self._REG_POOL_CAP}>;")
         self._line()
         for blk in fn.blocks:
             self._line(f"BB{blk.id}:")
@@ -252,10 +257,17 @@ class PtxEmitter:
             raise RuntimeError(f"{role} expects exactly {count} operand(s)")
 
     def _require_supported_hbm_dtype(self, dtype: str) -> None:
-        if dtype not in {"f32", "i32"}:
+        # Stage 64 Inc 1 — Tier 2 #6: lift bf16 + f16 from HBM
+        # rejection. 16-bit floats use the `%h` register pool (.b16
+        # register class in PTX) and `.b16` / `.bf16` ld/st suffixes.
+        # Pre-Stage-64: only f32 + i32 were allowed; bf16 was tagged
+        # in _DTYPE_SIZE / _DTYPE_PTX_LOAD but rejected here, blocking
+        # any tile<bf16, ...> HBM round-trip.
+        if dtype not in {"f32", "i32", "bf16", "f16"}:
             raise RuntimeError(
                 f"unsupported PTX HBM tile dtype {dtype}; "
-                "only f32 and i32 HBM tile elements are currently lowered"
+                "only f32, i32, bf16, f16 HBM tile elements "
+                "are currently lowered"
             )
 
     def _require_hbm_dtype_attr(self, op: ti.TileOp) -> str:
@@ -275,9 +287,15 @@ class PtxEmitter:
     def _require_hbm_value_reg(
         self, op: ti.TileOp, operand_index: int, dtype: str, role: str
     ) -> str:
+        # Stage 64 Inc 1 — Tier 2 #6: extend value-reg dispatch for
+        # bf16 + f16. Both 16-bit floats use the `%h` register class
+        # (PTX .b16 register pool) and scalar type `bf16` / `f16` at
+        # the TIR layer.
         value = op.operands[operand_index]
         expected = {"f32": ("f32", "%f"),
-                    "i32": ("i32", "%r")}[dtype]
+                    "i32": ("i32", "%r"),
+                    "bf16": ("bf16", "%h"),
+                    "f16": ("f16", "%h")}[dtype]
         self._require_scalar_type(value, role, {expected[0]})
         reg = self._require_reg(op, operand_index, role)
         self._require_reg_class(reg, expected[1], role)
@@ -286,7 +304,9 @@ class PtxEmitter:
     def _require_hbm_load_result_type(self, op: ti.TileOp, dtype: str) -> None:
         if not op.results:
             return
-        expected = {"f32": "f32", "i32": "i32"}[dtype]
+        # Stage 64 Inc 1: result type mapping for bf16 + f16.
+        expected = {"f32": "f32", "i32": "i32",
+                    "bf16": "bf16", "f16": "f16"}[dtype]
         self._require_scalar_type(op.results[0], "HBM tile load result", {expected})
 
     # ---- ops ----
@@ -606,7 +626,12 @@ class PtxEmitter:
         # Pick a sensible register pool by dtype family.
         # Audit 28.8 cycle 21 C20-1: include isize/usize in the
         # 64-bit register pool ('rd') alongside i64/u64.
-        if dtype in ("f16", "bf16", "f32", "f64"):
+        # Stage 64 Inc 1 — Tier 2 #6: split 16-bit floats (f16/bf16)
+        # to the `%h` pool (.b16 register class in PTX); 32/64-bit
+        # floats keep `%f`. Pre-Stage-64 conflated all float widths.
+        if dtype in ("f16", "bf16"):
+            return "h"
+        if dtype in ("f32", "f64"):
             return "f"
         if dtype in ("i64", "u64", "isize", "usize"):
             return "rd"

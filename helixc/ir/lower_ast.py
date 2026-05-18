@@ -1019,11 +1019,16 @@ class Lowerer:
                     and isinstance(p_ty, A.TyTile)
                     and self._stringify_marker(p_ty.memspace) in ("HBM", "hbm")):
                 # Validate dtype + shape constraints. Phase-0: 1D, dtype known.
+                # Stage 64 Inc 1 — Tier 2 #6: lift bf16 + f16 alongside
+                # f32 + i32. Mirrors the PTX backend's expanded HBM-dtype
+                # set (`ptx.py:_require_supported_hbm_dtype`).
                 dtype_node = p_ty.dtype
                 if not (isinstance(dtype_node, A.TyName)
-                        and dtype_node.name in ("f32", "i32")):
+                        and dtype_node.name in ("f32", "i32",
+                                                   "bf16", "f16")):
                     raise NotImplementedError(
-                        "Stage 16 HBM tile param dtype must be f32/i32; "
+                        "Stage 16 HBM tile param dtype must be "
+                        "f32/i32/bf16/f16; "
                         f"got {dtype_node}")
                 if len(p_ty.shape) != 1:
                     raise NotImplementedError(

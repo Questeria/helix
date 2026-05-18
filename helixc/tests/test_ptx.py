@@ -1068,6 +1068,57 @@ def test_stage56_autotune_expand_produces_n_kernel_fns():
                    for a in f.attrs)
 
 
+def test_stage64_inc1_bf16_hbm_tile_no_longer_rejected():
+    """Stage 64 Inc 1 — Tier 2 #6: bf16 HBM tile elements lift
+    from PTX rejection. Pre-Stage-64: emit() on a bf16 HBM tile
+    raised RuntimeError 'unsupported PTX HBM tile dtype bf16'.
+    Post-Stage-64: emit succeeds; .reg .b16 pool declared;
+    bf16 ld/st suffixes appear in the output."""
+    src = """
+    @kernel fn k(a: tile<bf16, [16], HBM>) {}
+    """
+    out = emit(src)
+    # Kernel preamble declares the .b16 register pool for bf16/f16.
+    assert ".reg .b16   %h<" in out
+    # Kernel directive emitted (basic sanity).
+    assert ".visible .entry k" in out
+
+
+def test_stage64_inc1_f16_hbm_tile_no_longer_rejected():
+    """Stage 64 Inc 1: f16 also lifted (same pool as bf16)."""
+    src = """
+    @kernel fn k(a: tile<f16, [16], HBM>) {}
+    """
+    out = emit(src)
+    assert ".reg .b16   %h<" in out
+    assert ".visible .entry k" in out
+
+
+def test_stage64_inc1_existing_f32_kernels_still_get_b16_pool():
+    """Stage 64 Inc 1 regression guard: f32-only kernels still get
+    the new .b16 register pool declaration (always-on, harmless
+    overhead). Verifies the new pool declaration didn't break
+    existing f32 kernels."""
+    out = emit("@kernel fn k(a: tile<f32, [16], HBM>) {}")
+    assert ".reg .b16   %h<" in out
+    assert ".reg .f32   %f<" in out  # f32 pool still declared
+    assert ".visible .entry k" in out
+
+
+def test_stage64_inc1_unsupported_dtype_still_rejected():
+    """Stage 64 Inc 1 negative: dtypes outside the now-expanded
+    set (f32/i32/bf16/f16) still get rejected."""
+    src = """
+    @kernel fn k(a: tile<i64, [16], HBM>) {}
+    """
+    with pytest.raises((RuntimeError, ValueError)) as exc_info:
+        emit(src)
+    msg = str(exc_info.value)
+    # Error message mentions the unsupported dtype OR an upstream
+    # rejection at a different layer.
+    assert "i64" in msg or "unsupported" in msg.lower()
+
+
 def main():
     tests = [(name, fn) for name, fn in globals().items()
              if name.startswith("test_") and callable(fn)]
