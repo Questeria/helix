@@ -5839,6 +5839,7 @@ def test_stage59_autodiff_cli_help_mentions_polish_flags():
         "--module-hash", "--pytree-shape", "--list-pytrees",
         "--autotune-summary", "--autotune-budget",
         "--hash-dump", "--diff-hash-dump", "--hash-dump-short",
+        "--diff-trace",
     ):
         assert flag in out, (
             f"help text missing {flag!r}: docstring needs to be "
@@ -5996,6 +5997,75 @@ def test_stage59_pytree_shape_non_diff_field_rejected(tmp_path):
     assert "non-differentiable" in proc.stderr or "26002" in proc.stderr
     # Verify no traceback leaked.
     assert "Traceback" not in proc.stderr
+
+
+def test_stage59_diff_trace_match(tmp_path):
+    """Stage 59 follow-on / Tier 3 #11 polish: --diff-trace prints
+    MATCH + exits 0 when two trace JSON dumps are equivalent."""
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    # Inline-create two identical trace dumps via the Python API.
+    import json
+    trace_json = json.dumps({
+        "cap": 4096,
+        "events": [
+            {"op_kind": "entry", "fn_name": "f", "operands": [1],
+             "result": None},
+            {"op_kind": "exit", "fn_name": "f", "operands": [2],
+             "result": None},
+        ],
+    }, sort_keys=True, separators=(",", ":"))
+    a = tmp_path / "a.json"
+    a.write_text(trace_json, encoding="utf-8")
+    b = tmp_path / "b.json"
+    b.write_text(trace_json, encoding="utf-8")
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--diff-trace", str(a), str(b)],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0
+    assert "MATCH" in proc.stdout
+    assert "events=2" in proc.stdout
+
+
+def test_stage59_diff_trace_first_divergence(tmp_path):
+    """Stage 59 follow-on: --diff-trace prints DIFFER + first-divergent
+    event index when traces don't match."""
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    import json
+    a = tmp_path / "a.json"
+    a.write_text(json.dumps({
+        "cap": 4096,
+        "events": [
+            {"op_kind": "entry", "fn_name": "f", "operands": [1],
+             "result": None},
+            {"op_kind": "exit", "fn_name": "f", "operands": [2],
+             "result": None},
+        ],
+    }), encoding="utf-8")
+    b = tmp_path / "b.json"
+    b.write_text(json.dumps({
+        "cap": 4096,
+        "events": [
+            {"op_kind": "entry", "fn_name": "f", "operands": [1],
+             "result": None},
+            {"op_kind": "exit", "fn_name": "f", "operands": [999],
+             "result": None},
+        ],
+    }), encoding="utf-8")
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--diff-trace", str(a), str(b)],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 1
+    assert "DIFFER" in proc.stdout
+    assert "event[1]" in proc.stdout
+    # The divergent operands should appear.
+    assert "2" in proc.stdout
+    assert "999" in proc.stdout
 
 
 def test_stage59_hash_dump_short_uses_12_hex(tmp_path):

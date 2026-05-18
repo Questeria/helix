@@ -21,6 +21,8 @@ Introspection (Stage 28.9 + Stage 58 + Stage 59 polish):
         Granular per-item drift report (added/removed/changed body/sig).
     --hash-dump-short <file.hx>
         Same as --hash-dump but with 12-hex short hashes (compact logs).
+    --diff-trace <a.json> <b.json>
+        Diff two trace_to_canonical_json dumps; prints first divergence.
     --diff-program-hash <a.hx> <b.hx>
         Compare two programs: prints SAME or DIFFER + per-fn breakdown.
     --changed-fns <a.hx> <b.hx>
@@ -192,6 +194,44 @@ def _hash_dump(path: str) -> int:
     dump = program_hash_dump(prog)
     print(json.dumps(dump, sort_keys=True, indent=2))
     return 0
+
+
+def _diff_trace(path_a: str, path_b: str) -> int:
+    """Stage 59 follow-on / Tier 3 #11 polish: diff two trace JSON
+    dump files (as produced by `trace_to_canonical_json`).
+
+    Reads each path as JSON, deserializes via trace_from_canonical_json,
+    and prints:
+      `MATCH` (exit 0) if trace_equiv holds, or
+      `DIFFER` + the first divergent event (exit 1).
+
+    Use case: golden-trace regression — store a trace JSON dump as
+    a CI artifact, then in a later run re-dump and compare to detect
+    runtime-behavior drift even when source-code hashes are identical
+    (e.g., reproducibility audit catches a nondeterministic op).
+    """
+    from .trace_pass import trace_from_canonical_json, trace_equiv, trace_diff
+    try:
+        with open(path_a, "r", encoding="utf-8") as f:
+            a_json = f.read()
+        with open(path_b, "r", encoding="utf-8") as f:
+            b_json = f.read()
+    except OSError as e:
+        print(f"error: autodiff_cli: {e}", file=sys.stderr)
+        return 1
+    a = trace_from_canonical_json(a_json)
+    b = trace_from_canonical_json(b_json)
+    if trace_equiv(a, b):
+        print(f"MATCH (events={len(a)})")
+        return 0
+    print("DIFFER")
+    diff = trace_diff(a, b)
+    if diff is not None:
+        idx, ea, eb = diff
+        print(f"  first divergence at event[{idx}]:")
+        print(f"    a={ea}")
+        print(f"    b={eb}")
+    return 1
 
 
 def _hash_dump_short(path: str) -> int:
@@ -715,6 +755,13 @@ def main():
                   file=sys.stderr)
             sys.exit(2)
         sys.exit(_hash_dump_short(args[0]))
+
+    if "--diff-trace" in flags:
+        if len(args) < 2:
+            print("usage: --diff-trace <a.json> <b.json>",
+                  file=sys.stderr)
+            sys.exit(2)
+        sys.exit(_diff_trace(args[0], args[1]))
 
     if "--diff-program-hash" in flags:
         if len(args) < 2:
