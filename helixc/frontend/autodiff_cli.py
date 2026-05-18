@@ -1,15 +1,37 @@
 """
 helixc/frontend/autodiff_cli.py — print the symbolic derivative of a function.
 
-Usage:
+Primary usage:
     python -m helixc.frontend.autodiff_cli <file.hx> <function_name> [<var_name>]
-    python -m helixc.frontend.autodiff_cli --dump-ast-hashes <file.hx>
+        Prints the symbolic derivative w.r.t. <var_name> (default: first
+        parameter). With --as-function, emits a parseable `fn name__grad(...)`
+        wrapper.
 
-If <var_name> is omitted, differentiates w.r.t. the first parameter.
-
---dump-ast-hashes prints `<fn_name> : <12-char hex hash>` for every top-level
-fn in the file. The hash is the structural (alpha-equivalent) hash of the
-fn AST and is stable across runs.
+Introspection (Stage 28.9 + Stage 58 + Stage 59 polish):
+    --dump-ast-hashes <file.hx>
+        Print `<fn_name> : <12-char hex hash>` for every fn.
+    --program-hash <file.hx>
+        Print the whole-program structural hash (64 hex).
+    --diff-program-hash <a.hx> <b.hx>
+        Compare two programs: prints SAME or DIFFER + per-fn breakdown.
+    --changed-fns <a.hx> <b.hx>
+        List fns whose body hash differs between two files.
+    --fn-sig-hash <file.hx> <fn_name>
+        Print the signature-only hash (ABI-affecting fields only).
+    --list-fns <file.hx>
+        Enumerate all fns with sig + body hash columns.
+    --check-program-hash <file.hx> <expected_hex>
+        Assertion-style CI gate: exit 0 if matches, 1 if drift.
+    --list-modules <file.hx>
+        Enumerate ModBlock/ModuleDecl entries (incl. nested) with hashes.
+    --module-hash <file.hx> <module_name>
+        Print the module hash (accepts dotted names for nested).
+    --pytree-shape <file.hx> <struct_name>
+        Print leaf-path / type / diff-classification for a struct.
+    --autotune-summary <file.hx>
+        Print {fn variants=N} for @autotune @kernel fns + total.
+    --autotune-budget <file.hx> <max_total>
+        CI gate: exit 0 if total variants ≤ budget, 1 if over.
 
 Example:
     $ cat loss.hx

@@ -5818,6 +5818,31 @@ def test_stage59_autotune_summary_empty_program(tmp_path):
     assert lines == ["total variants=0"]
 
 
+def test_stage59_autodiff_cli_help_mentions_polish_flags():
+    """Stage 59 follow-on / Tier 2/3/4 polish: bad-invocation
+    (no args) prints help to stderr that mentions all 12 introspection
+    flags. Regression pin: if a flag is added but the help docstring
+    isn't updated, this catches it."""
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli"],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    # No args → bad invocation → rc=2 + docstring on stderr.
+    assert proc.returncode == 2
+    out = proc.stderr
+    for flag in (
+        "--dump-ast-hashes", "--program-hash", "--diff-program-hash",
+        "--changed-fns", "--fn-sig-hash", "--list-fns",
+        "--check-program-hash", "--list-modules", "--module-hash",
+        "--pytree-shape", "--autotune-summary", "--autotune-budget",
+    ):
+        assert flag in out, (
+            f"help text missing {flag!r}: docstring needs to be "
+            f"updated to mention this flag")
+
+
 def test_stage59_autotune_budget_within_exits_0(tmp_path):
     """Stage 59 follow-on / Tier 2 #8 polish: --autotune-budget
     exits 0 silently when total variants are within budget."""
