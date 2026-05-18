@@ -5905,6 +5905,8 @@ def test_stage59_autodiff_cli_help_mentions_polish_flags():
         "--flag-arity", "--flag-arity-json",
         "--validate-help-docstring",
         "--validate-help-docstring-json",
+        "--validate-json-parity",
+        "--validate-json-parity-json",
         "--list-fn-attrs", "--list-fn-attrs-json",
         "--list-fns-by-attr", "--list-fns-by-attr-json",
         "--fn-callgraph", "--fn-callers",
@@ -7567,6 +7569,45 @@ def test_stage59_agent_methods_json(tmp_path):
         {"name": "propose", "params": ["i32"], "return_ty": "i32"},
         {"name": "evaluate", "params": ["i32", "i32"], "return_ty": "i32"},
     ]}
+
+
+def test_stage59_validate_json_parity_text():
+    """Stage 59 follow-on / Tier 4 #13 polish: --validate-json-parity
+    reports coverage percentage (informational, always rc=0)."""
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--validate-json-parity"],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0
+    out = proc.stdout
+    assert "json_twins:" in out
+    assert "COVERAGE" in out
+
+
+def test_stage59_validate_json_parity_json():
+    """Stage 59 follow-on / Tier 4 #13 polish: --validate-json-parity-json
+    emits the full coverage audit."""
+    import json
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--validate-json-parity-json"],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0
+    result = json.loads(proc.stdout)
+    for key in ("n_flags", "n_json_twins", "n_text_with_twin",
+                 "n_text_only", "coverage_pct", "text_only"):
+        assert key in result
+    # Coverage should be substantial after the JSON-parity sweep.
+    assert result["coverage_pct"] > 80.0
+    # Sanity: text_only is a list and n_text_only matches.
+    assert isinstance(result["text_only"], list)
+    assert len(result["text_only"]) == result["n_text_only"]
 
 
 def test_stage59_validate_help_docstring_text():

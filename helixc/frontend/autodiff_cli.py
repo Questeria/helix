@@ -87,6 +87,13 @@ Introspection (Stage 28.9 + Stage 58 + Stage 59 polish):
     --validate-help-docstring-json
         Same as --validate-help-docstring but JSON
         {ok, n_dispatched, n_documented, missing}.
+    --validate-json-parity
+        Informational: report JSON-parity coverage across text-output
+        flags. Lists text-only flags without JSON twins. Always rc=0.
+    --validate-json-parity-json
+        Same as --validate-json-parity but JSON
+        {n_flags, n_json_twins, n_text_with_twin, n_text_only,
+        coverage_pct, text_only}.
     --autotune-budget-json <file.hx> <max_total>
         Same as --autotune-budget but JSON
         {within_budget, total_variants, budget, per_fn}.
@@ -6522,6 +6529,98 @@ def _diff_program_hash(path_a: str, path_b: str) -> int:
     return 1
 
 
+def _validate_json_parity() -> int:
+    """Stage 59 follow-on / Tier 4 #13 polish: report JSON-parity
+    coverage across all text-output flags. Doesn't fail the build —
+    informational: prints text-only flag counts so tooling can audit
+    progress (some flags are intentionally text-only: visualization,
+    JSON-native, utility).
+
+    Output:
+      'json_twins: N | text_only_with_no_json: N'
+      [per flag in text_only list]
+      'COVERAGE <percentage>%'
+
+    Always exits 0 (informational; coverage gaps are not failures).
+    """
+    import re
+    import os
+    here = os.path.abspath(__file__)
+    with open(here, "r", encoding="utf-8") as f:
+        src = f.read()
+    flags = sorted(set(re.findall(
+        r'^    if "(--[a-z-]+)" in (?:flags|sys\.argv\[1:\]):',
+        src, re.MULTILINE)))
+    flag_set = set(flags)
+    json_twins = [f for f in flags if f.endswith("-json")]
+    text_with_twin = [
+        f for f in flags
+        if (not f.endswith("-json")) and (f + "-json") in flag_set
+    ]
+    text_only = sorted(
+        f for f in flags
+        if (not f.endswith("-json")) and (f + "-json") not in flag_set
+    )
+    n_text = len(text_with_twin) + len(text_only)
+    coverage = (
+        100.0 * len(text_with_twin) / n_text
+        if n_text > 0 else 100.0
+    )
+    print(f"json_twins: {len(json_twins)} | "
+          f"text_only_with_no_json: {len(text_only)}")
+    for f in text_only:
+        print(f"  {f}")
+    print(f"COVERAGE {coverage:.1f}%")
+    return 0
+
+
+def _validate_json_parity_json() -> int:
+    """Stage 59 follow-on / Tier 4 #13 polish: --validate-json-parity
+    in machine-readable JSON form.
+
+    Output schema:
+      {"n_flags": N,
+       "n_json_twins": N,
+       "n_text_with_twin": N,
+       "n_text_only": N,
+       "coverage_pct": <float>,
+       "text_only": ["<flag>", ...]}
+    """
+    import json
+    import re
+    import os
+    here = os.path.abspath(__file__)
+    with open(here, "r", encoding="utf-8") as f:
+        src = f.read()
+    flags = sorted(set(re.findall(
+        r'^    if "(--[a-z-]+)" in (?:flags|sys\.argv\[1:\]):',
+        src, re.MULTILINE)))
+    flag_set = set(flags)
+    json_twins = [f for f in flags if f.endswith("-json")]
+    text_with_twin = [
+        f for f in flags
+        if (not f.endswith("-json")) and (f + "-json") in flag_set
+    ]
+    text_only = sorted(
+        f for f in flags
+        if (not f.endswith("-json")) and (f + "-json") not in flag_set
+    )
+    n_text = len(text_with_twin) + len(text_only)
+    coverage = (
+        100.0 * len(text_with_twin) / n_text
+        if n_text > 0 else 100.0
+    )
+    print(json.dumps({
+        "n_flags": len(flags),
+        "n_json_twins": len(json_twins),
+        "n_text_with_twin": len(text_with_twin),
+        "n_text_only": len(text_only),
+        "coverage_pct": round(coverage, 2),
+        "text_only": text_only,
+    }, sort_keys=True, indent=2))
+    return 0
+
+
 def _validate_help_docstring() -> int:
     """Stage 59 follow-on / Tier 4 #13 polish: consistency-check the
     help docstring against the dispatch table. Every flag that has
@@ -7128,6 +7227,12 @@ def main():
 
     if "--validate-help-docstring-json" in flags:
         sys.exit(_validate_help_docstring_json())
+
+    if "--validate-json-parity" in flags:
+        sys.exit(_validate_json_parity())
+
+    if "--validate-json-parity-json" in flags:
+        sys.exit(_validate_json_parity_json())
 
     if "--dump-ast-hashes" in flags:
         if len(args) < 1:
