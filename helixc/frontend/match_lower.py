@@ -402,6 +402,37 @@ def _build_chain(scrut: str, arms: list[A.MatchArm], span: A.Span) -> A.Expr:
     return A.If(span=span, cond=cond, then=body_block, else_=else_branch)
 
 
+def _collect_binds_with_path(pat: A.Pattern, scrut: str,
+                                path_segs: list[str],
+                                binds: list[A.Let], span: A.Span) -> None:
+    """Stage 59 / Tier 4 #15 helper: walk a PatStruct sub-tree carrying
+    the accumulated field-path. At each PatBind leaf, emit a single
+    `let bind_name = scrut.f1.f2...fN` chain that lowers to the
+    flattened leaf-path access (Phase-0 IR requirement).
+    """
+    # Build the field-access chain scrut.f1.f2.f3 for the current path.
+    expr: A.Expr = A.Name(span=span, name=scrut)
+    for seg in path_segs:
+        expr = A.Field(span=span, obj=expr, name=seg)
+    if isinstance(pat, A.PatBind):
+        binds.append(A.Let(
+            span=span, name=pat.name, is_mut=False, ty=None,
+            value=expr,
+        ))
+        return
+    if isinstance(pat, A.PatStruct):
+        # Recurse into each field, extending the path.
+        for (fname, sub) in pat.fields:
+            _collect_binds_with_path(sub, scrut, path_segs + [fname],
+                                       binds, span)
+        return
+    # Other sub-pattern kinds at field positions (PatLit, PatWildcard,
+    # PatRange) don't bind names — leave them to _pattern_test_expr.
+    if isinstance(pat, (A.PatWildcard, A.PatLit, A.PatRange,
+                          A.PatOr, A.PatVariant, A.PatTuple)):
+        return
+
+
 def _is_total_pattern(pat: A.Pattern) -> bool:
     if isinstance(pat, (A.PatWildcard, A.PatBind)):
         return True
@@ -751,29 +782,18 @@ def _collect_binds(pat: A.Pattern, scrut: str, span: A.Span) -> list[A.Let]:
             binds.extend(b for b in first_binds if b.name in first_names)
     elif isinstance(pat, A.PatStruct):
         # Stage 59 / Tier 4 #15 — struct destructuring pattern.
-        # Each sub-pattern is bound against the corresponding struct
-        # field access `scrut.field_name`. PatBind sub-patterns get
-        # `let bind_name = scrut.field_name`; nested sub-patterns
-        # route through a synthetic temp (mirror of PatVariant/PatTuple).
+        # Phase-0 IR lowerer requires LEAF-path field access (e.g.,
+        # `scrut.outer.inner.v` directly, not `let tmp = scrut.outer.inner;
+        # tmp.v`). Intermediate partial-struct bindings don't exist in
+        # the IR — structs are flattened to scalar arrays at codegen.
+        #
+        # So for nested PatStruct sub-patterns, build the full path
+        # chain inline instead of using a synthetic temp. The recursive
+        # helper `_collect_binds_with_path` walks the pattern tree,
+        # accumulating field-segments, and emits a single
+        # `let bind_name = scrut.f1.f2.f3` per PatBind leaf.
         for (fname, sub) in pat.fields:
-            field_access = A.Field(
-                span=span,
-                obj=A.Name(span=span, name=scrut),
-                name=fname,
-            )
-            if isinstance(sub, A.PatBind):
-                binds.append(A.Let(
-                    span=span, name=sub.name, is_mut=False, ty=None,
-                    value=field_access,
-                ))
-            elif isinstance(sub, (A.PatVariant, A.PatTuple, A.PatOr,
-                                    A.PatStruct)):
-                tmp = _fresh_name(prefix="__sub")
-                binds.append(A.Let(
-                    span=span, name=tmp, is_mut=False, ty=None,
-                    value=field_access,
-                ))
-                binds.extend(_collect_binds(sub, tmp, span))
+            _collect_binds_with_path(sub, scrut, [fname], binds, span)
     elif isinstance(pat, (A.PatWildcard, A.PatLit, A.PatRange)):
         # Leaf patterns that introduce no binders. Explicit branches
         # for clarity + to make the dispatch exhaustive — cycle 15

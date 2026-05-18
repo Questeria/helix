@@ -15271,9 +15271,6 @@ def test_stage59_pat_struct_with_literal_match():
     assert code == 42, f"expected 99-57=42, got {code}"
 
 
-import pytest as _stage59_pytest
-
-
 def test_stage59_pat_struct_nested_typecheck_passes():
     """Stage 59 / Tier 4 #15 followup: typecheck now binds nested
     PatStruct field types correctly via `_bind_pattern`'s new
@@ -15297,19 +15294,21 @@ def test_stage59_pat_struct_nested_typecheck_passes():
     assert errs == [], f"typecheck errors: {errs}"
 
 
-@_stage59_pytest.mark.xfail(
-    reason="Stage 59 followup: IR lowering still rejects '__scrut_1' "
-            "in nested PatStruct case despite typecheck passing. The "
-            "match_lower transform produces a valid let-chain (verified "
-            "by AST inspection) but the IR value_map at the time of "
-            "Name(__scrut_1) resolution doesn't have the binding. Likely "
-            "a Block-scope visibility issue in lower_ast's value_map "
-            "across nested Block.final_expr levels. Deferred to a "
-            "follow-up stage with full audit cycle."
-)
-def test_stage59_pat_struct_nested_destructuring_xfail():
-    """Stage 59 followup deferral: full compile-and-run for nested
-    PatStruct still hits IR-lowering scope issue."""
+def test_stage59_pat_struct_nested_destructuring():
+    """Stage 59 / Tier 4 #15: nested struct destructuring works
+    end-to-end. Root cause of the prior xfail was Phase-0 IR's
+    requirement for leaf-path field access (intermediate partial-
+    struct bindings don't exist in IR — structs flatten to scalar
+    arrays). Fix: `_collect_binds_with_path` accumulates field-
+    segments through nested PatStruct levels and emits a single
+    `let bind_name = scrut.f1.f2...fN` chain per PatBind leaf.
+
+    Pre-fix: synthesized `let __sub_2 = __scrut_1.inner; let v =
+    __sub_2.v;` → IR couldn't bind __sub_2 to the partial Inner
+    struct value. Post-fix: emits `let v = __scrut_1.inner.v;`
+    directly, which the IR field-chain lowerer handles via
+    flat_paths lookup.
+    """
     src = """
     struct Inner { v: i32 }
     struct Outer { inner: Inner, label: i32 }
@@ -15321,6 +15320,7 @@ def test_stage59_pat_struct_nested_destructuring_xfail():
         }
     }
     """
+    # v=42, label=5 → 42 - 5 + 5 = 42
     code = compile_and_run(src)
     assert code == 42, f"expected 42 from nested destructure, got {code}"
 
