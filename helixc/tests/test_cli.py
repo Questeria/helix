@@ -5837,7 +5837,8 @@ def test_stage59_autodiff_cli_help_mentions_polish_flags():
         "--program-hash", "--program-signature-hash",
         "--diff-program-hash", "--changed-fns", "--fn-sig-hash",
         "--list-fns", "--list-structs",
-        "--list-fn-attrs", "--list-fns-by-attr",
+        "--list-fn-attrs", "--list-fn-attrs-json",
+        "--list-fns-by-attr",
         "--check-program-hash",
         "--check-program-hash-from-file",
         "--check-program-signature-hash",
@@ -7050,6 +7051,29 @@ def test_stage59_list_structs_basic(tmp_path):
     for line in lines:
         h = line.split("hash=")[1]
         assert len(h) == 12
+
+
+def test_stage59_list_fn_attrs_json(tmp_path):
+    """Stage 59 follow-on / Tier 4 #13 polish: --list-fn-attrs-json
+    outputs valid JSON with per-fn attribute list (sorted)."""
+    import json
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "a.hx"
+    src.write_text(
+        "@pure\nfn a(x: i32) -> i32 { x }\n"
+        "@trace\nfn b(x: i32) -> i32 { x }\n"
+        "fn c(x: i32) -> i32 { x }\n",
+        encoding="utf-8",
+    )
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--list-fn-attrs-json", str(src)],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0
+    result = json.loads(proc.stdout)
+    assert result == {"a": ["pure"], "b": ["trace"], "c": []}
 
 
 def test_stage59_list_fns_by_attr_basic(tmp_path):

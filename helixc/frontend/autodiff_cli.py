@@ -45,6 +45,8 @@ Introspection (Stage 28.9 + Stage 58 + Stage 59 polish):
         Lightest CI gate: exit 0 if source parses cleanly, 1 on error.
     --list-fn-attrs <file.hx>
         Enumerate all fns with their attribute list (@pure, @trace, etc).
+    --list-fn-attrs-json <file.hx>
+        Same as --list-fn-attrs but machine-readable JSON output.
     --list-fns-by-attr <file.hx> <attr>
         List fns carrying a specific attribute (e.g., 'pure', 'kernel').
     --check-program-hash <file.hx> <expected_hex>
@@ -1170,6 +1172,32 @@ def _list_fns_by_attr(path: str, attr: str) -> int:
     return 0
 
 
+def _list_fn_attrs_json(path: str) -> int:
+    """Stage 59 follow-on / Tier 4 #13 polish: --list-fn-attrs in
+    machine-readable JSON form.
+
+    Output schema:
+      {
+        "<fn_name>": [<attr1>, <attr2>, ...],   # attrs sorted
+        ...
+      }
+
+    Use case: tooling that wants to query 'which fns are @pure?'
+    or compute attribute coverage stats without parsing the human-
+    formatted output.
+    """
+    import json
+    from .ast_walker import iter_fn_decls
+    src = _read_source(path)
+    prog = _parse_or_exit(src, path)
+    result = {
+        fn.name: sorted(fn.attrs)
+        for fn in iter_fn_decls(prog)
+    }
+    print(json.dumps(result, sort_keys=True, indent=2))
+    return 0
+
+
 def _list_fn_attrs(path: str) -> int:
     """Stage 59 follow-on / Tier 4 #13 polish: enumerate all fns with
     their attribute list.
@@ -1527,6 +1555,13 @@ def main():
                   file=sys.stderr)
             sys.exit(2)
         sys.exit(_list_fn_attrs(args[0]))
+
+    if "--list-fn-attrs-json" in flags:
+        if len(args) < 1:
+            print("usage: --list-fn-attrs-json <file.hx>",
+                  file=sys.stderr)
+            sys.exit(2)
+        sys.exit(_list_fn_attrs_json(args[0]))
 
     if "--list-fns-by-attr" in flags:
         if len(args) < 2:
