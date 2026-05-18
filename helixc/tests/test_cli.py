@@ -5894,6 +5894,8 @@ def test_stage59_autodiff_cli_help_mentions_polish_flags():
         "--check-program-signature-hash-json",
         "--check-program-hash-from-file-json",
         "--check-program-signature-hash-from-file-json",
+        "--program-hash-json", "--program-signature-hash-json",
+        "--fn-sig-hash-json",
         "--list-fn-attrs", "--list-fn-attrs-json",
         "--list-fns-by-attr", "--list-fns-by-attr-json",
         "--fn-callgraph", "--fn-callers",
@@ -7556,6 +7558,70 @@ def test_stage59_agent_methods_json(tmp_path):
         {"name": "propose", "params": ["i32"], "return_ty": "i32"},
         {"name": "evaluate", "params": ["i32", "i32"], "return_ty": "i32"},
     ]}
+
+
+def test_stage59_program_hash_json(tmp_path):
+    """Stage 59 follow-on / Tier 4 #13 polish: --program-hash-json emits
+    {hash_full, hash_short}."""
+    import json
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "phj.hx"
+    src.write_text("fn foo() -> i32 { 1 }\n", encoding="utf-8")
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--program-hash-json", str(src)],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0
+    result = json.loads(proc.stdout)
+    assert len(result["hash_full"]) == 64
+    assert len(result["hash_short"]) == 12
+    assert result["hash_full"].startswith(result["hash_short"])
+
+
+def test_stage59_program_signature_hash_json(tmp_path):
+    """Stage 59 follow-on / Tier 4 #13 polish:
+    --program-signature-hash-json emits {hash_full, hash_short}."""
+    import json
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "pshj.hx"
+    src.write_text("fn foo(x: i32) -> i32 { x }\n", encoding="utf-8")
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--program-signature-hash-json", str(src)],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0
+    result = json.loads(proc.stdout)
+    assert len(result["hash_full"]) == 64
+    assert len(result["hash_short"]) == 12
+    assert result["hash_full"].startswith(result["hash_short"])
+
+
+def test_stage59_fn_sig_hash_json(tmp_path):
+    """Stage 59 follow-on / Tier 4 #13 polish: --fn-sig-hash-json emits
+    {name, hash_full, hash_short}."""
+    import json
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "fshj.hx"
+    src.write_text(
+        "fn add(a: i32, b: i32) -> i32 { a }\n",
+        encoding="utf-8",
+    )
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--fn-sig-hash-json", str(src), "add"],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0
+    result = json.loads(proc.stdout)
+    assert result["name"] == "add"
+    assert len(result["hash_full"]) == 64
+    assert len(result["hash_short"]) == 12
+    assert result["hash_full"].startswith(result["hash_short"])
 
 
 def test_stage59_check_program_hash_from_file_json_match(tmp_path):

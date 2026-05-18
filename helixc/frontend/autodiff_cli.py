@@ -37,6 +37,12 @@ Introspection (Stage 28.9 + Stage 58 + Stage 59 polish):
         Same as --check-program-hash-from-file but JSON output.
     --check-program-signature-hash-from-file-json <file.hx> <expected_file>
         Same as --check-program-signature-hash-from-file but JSON.
+    --program-hash-json <file.hx>
+        Same as --program-hash but JSON {hash_full, hash_short}.
+    --program-signature-hash-json <file.hx>
+        Same as --program-signature-hash but JSON.
+    --fn-sig-hash-json <file.hx> <fn_name>
+        Same as --fn-sig-hash but JSON {name, hash_full, hash_short}.
     --hash-dump-short <file.hx>
         Same as --hash-dump but with 12-hex short hashes (compact logs).
     --diff-trace <a.json> <b.json>
@@ -792,6 +798,47 @@ def _hash_dump_short(path: str) -> int:
     prog = _parse_or_exit(src, path)
     dump = program_hash_dump_short(prog)
     print(json.dumps(dump, sort_keys=True, indent=2))
+    return 0
+
+
+def _print_program_hash_json(path: str) -> int:
+    """Stage 59 follow-on / Tier 4 #13 polish: --program-hash in
+    machine-readable JSON form. Symmetric companion to
+    --check-program-hash-json.
+
+    Output schema:
+      {"hash_full": "<64hex>", "hash_short": "<12hex>"}
+
+    Both forms emitted so CI artifacts can pin either granularity
+    without re-invoking.
+    """
+    import json
+    from .ast_hash import program_hash, short_hash
+    src = _read_source(path)
+    prog = _parse_or_exit(src, path)
+    full = program_hash(prog)
+    print(json.dumps(
+        {"hash_full": full, "hash_short": short_hash(full)},
+        sort_keys=True, indent=2))
+    return 0
+
+
+def _print_program_signature_hash_json(path: str) -> int:
+    """Stage 59 follow-on / Tier 4 #13 polish: --program-signature-hash
+    in machine-readable JSON form. Symmetric companion to
+    --check-program-signature-hash-json.
+
+    Output schema:
+      {"hash_full": "<64hex>", "hash_short": "<12hex>"}
+    """
+    import json
+    from .ast_hash import program_signature_hash, short_hash
+    src = _read_source(path)
+    prog = _parse_or_exit(src, path)
+    full = program_signature_hash(prog)
+    print(json.dumps(
+        {"hash_full": full, "hash_short": short_hash(full)},
+        sort_keys=True, indent=2))
     return 0
 
 
@@ -6164,6 +6211,35 @@ def _fn_sig_hash(path: str, fn_name: str) -> int:
     return 1
 
 
+def _fn_sig_hash_json(path: str, fn_name: str) -> int:
+    """Stage 59 follow-on / Tier 4 #13 polish: --fn-sig-hash in
+    machine-readable JSON form. Symmetric companion to the existing
+    --fn-sig-hash text form.
+
+    Output schema:
+      {"name": "<fn_name>",
+       "hash_full": "<64hex>",
+       "hash_short": "<12hex>"}
+
+    Exit 0 on success, 1 if fn_name not found.
+    """
+    import json
+    from .ast_hash import fn_signature_hash, short_hash
+    src = _read_source(path)
+    prog = _parse_or_exit(src, path)
+    for it in prog.items:
+        if isinstance(it, A.FnDecl) and it.name == fn_name:
+            full = fn_signature_hash(it)
+            print(json.dumps(
+                {"name": fn_name, "hash_full": full,
+                 "hash_short": short_hash(full)},
+                sort_keys=True, indent=2))
+            return 0
+    print(f"error: autodiff_cli: fn {fn_name!r} not found in {path}",
+          file=sys.stderr)
+    return 1
+
+
 def _changed_fns_json(path_a: str, path_b: str) -> int:
     """Stage 59 follow-on / Tier 4 #13 polish: --changed-fns in
     machine-readable JSON form.
@@ -6401,12 +6477,26 @@ def main():
             sys.exit(2)
         sys.exit(_print_program_hash(args[0]))
 
+    if "--program-hash-json" in flags:
+        if len(args) < 1:
+            print("usage: --program-hash-json <file.hx>",
+                  file=sys.stderr)
+            sys.exit(2)
+        sys.exit(_print_program_hash_json(args[0]))
+
     if "--program-signature-hash" in flags:
         if len(args) < 1:
             print("usage: --program-signature-hash <file.hx>",
                   file=sys.stderr)
             sys.exit(2)
         sys.exit(_print_program_signature_hash(args[0]))
+
+    if "--program-signature-hash-json" in flags:
+        if len(args) < 1:
+            print("usage: --program-signature-hash-json <file.hx>",
+                  file=sys.stderr)
+            sys.exit(2)
+        sys.exit(_print_program_signature_hash_json(args[0]))
 
     if "--hash-dump" in flags:
         if len(args) < 1:
@@ -6497,6 +6587,13 @@ def main():
                   file=sys.stderr)
             sys.exit(2)
         sys.exit(_fn_sig_hash(args[0], args[1]))
+
+    if "--fn-sig-hash-json" in flags:
+        if len(args) < 2:
+            print("usage: --fn-sig-hash-json <file.hx> <fn_name>",
+                  file=sys.stderr)
+            sys.exit(2)
+        sys.exit(_fn_sig_hash_json(args[0], args[1]))
 
     if "--fn-signature" in flags:
         if len(args) < 2:
