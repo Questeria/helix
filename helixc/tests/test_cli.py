@@ -5850,6 +5850,7 @@ def test_stage59_autodiff_cli_help_mentions_polish_flags():
         "--trace-dump-summary-json",
         "--validate-trace-attrs", "--list-traced-fns",
         "--validate-all", "--validate-all-json",
+        "--parse-only",
     ):
         assert flag in out, (
             f"help text missing {flag!r}: docstring needs to be "
@@ -6876,6 +6877,39 @@ def test_stage59_ast_stats_basic(tmp_path):
     assert "kernel_fns=1" in out
     assert "pure_fns=1" in out
     assert "traced_fns=1" in out
+
+
+def test_stage59_parse_only_clean(tmp_path):
+    """Stage 59 follow-on / Tier 4 #13 polish: --parse-only exits 0
+    silently on a clean parse."""
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "ok.hx"
+    src.write_text("fn f() -> i32 { 42 }\n", encoding="utf-8")
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--parse-only", str(src)],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0
+    assert proc.stdout == ""
+
+
+def test_stage59_parse_only_bad_exits_1(tmp_path):
+    """Stage 59 follow-on: --parse-only exits 1 with diagnostic on
+    parse error (no typecheck involved — pure syntax check)."""
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "bad.hx"
+    # Unclosed brace
+    src.write_text("fn f() -> i32 { 42\n", encoding="utf-8")
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--parse-only", str(src)],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 1
+    assert "parse" in proc.stderr.lower() or "error" in proc.stderr.lower()
 
 
 def test_stage59_list_structs_basic(tmp_path):

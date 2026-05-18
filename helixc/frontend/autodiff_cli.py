@@ -41,6 +41,8 @@ Introspection (Stage 28.9 + Stage 58 + Stage 59 polish):
         Enumerate all fns with sig + body hash columns.
     --list-structs <file.hx>
         Enumerate all structs with field count + content hash.
+    --parse-only <file.hx>
+        Lightest CI gate: exit 0 if source parses cleanly, 1 on error.
     --list-fn-attrs <file.hx>
         Enumerate all fns with their attribute list (@pure, @trace, etc).
     --list-fns-by-attr <file.hx> <attr>
@@ -1125,6 +1127,24 @@ def _list_fn_attrs(path: str) -> int:
     return 0
 
 
+def _parse_only(path: str) -> int:
+    """Stage 59 follow-on / Tier 4 #13 polish: parse-only CI gate.
+
+    Reads the source + invokes `parse(src)`. Exits 0 on clean parse;
+    1 on any parse error (the diagnostic is already emitted by
+    `_parse_or_exit`).
+
+    Lightest possible 'does this file compile?' CI check — skips
+    typecheck, struct mono, AD lowering, etc. Useful when the only
+    question is whether the file is syntactically valid (e.g.,
+    after a mechanical refactor, formatter run, or import-rewrite
+    bot).
+    """
+    src = _read_source(path)
+    _parse_or_exit(src, path)
+    return 0
+
+
 def _list_structs(path: str) -> int:
     """Stage 59 follow-on / Tier 4 #13 polish: enumerate all top-level
     StructDecls in a source file with their structural-hash + field
@@ -1423,6 +1443,12 @@ def main():
                   file=sys.stderr)
             sys.exit(2)
         sys.exit(_list_structs(args[0]))
+
+    if "--parse-only" in flags:
+        if len(args) < 1:
+            print("usage: --parse-only <file.hx>", file=sys.stderr)
+            sys.exit(2)
+        sys.exit(_parse_only(args[0]))
 
     if "--list-fn-attrs" in flags:
         if len(args) < 1:
