@@ -5838,7 +5838,8 @@ def test_stage59_autodiff_cli_help_mentions_polish_flags():
         "--list-fns", "--check-program-hash",
         "--check-program-signature-hash",
         "--list-modules", "--module-hash", "--pytree-shape",
-        "--list-pytrees", "--autotune-summary", "--autotune-budget",
+        "--list-pytrees", "--pytree-leaf-paths",
+        "--autotune-summary", "--autotune-budget",
         "--hash-dump", "--diff-hash-dump", "--hash-dump-short",
         "--diff-trace",
     ):
@@ -5998,6 +5999,49 @@ def test_stage59_pytree_shape_non_diff_field_rejected(tmp_path):
     assert "non-differentiable" in proc.stderr or "26002" in proc.stderr
     # Verify no traceback leaked.
     assert "Traceback" not in proc.stderr
+
+
+def test_stage59_pytree_leaf_paths_basic(tmp_path):
+    """Stage 59 follow-on / Tier 2 #7 polish: --pytree-leaf-paths
+    prints one path per line, sorted alphabetically — pure paths,
+    no types."""
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "m.hx"
+    src.write_text(
+        "struct M { w1: D<f32>, w2: D<f32>, b: D<f64> }\n",
+        encoding="utf-8",
+    )
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--pytree-leaf-paths", str(src), "M"],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0
+    lines = [l for l in proc.stdout.splitlines() if l]
+    assert lines == ["b", "w1", "w2"]
+
+
+def test_stage59_pytree_leaf_paths_nested(tmp_path):
+    """Stage 59 follow-on: --pytree-leaf-paths walks nested structs
+    and emits dot-joined paths."""
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "n.hx"
+    src.write_text(
+        "struct Inner { w: D<f32> }\n"
+        "struct Outer { inner: Inner, b: D<f32> }\n",
+        encoding="utf-8",
+    )
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--pytree-leaf-paths", str(src), "Outer"],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0
+    lines = [l for l in proc.stdout.splitlines() if l]
+    assert "b" in lines
+    assert "inner.w" in lines
 
 
 def test_stage59_check_program_signature_hash_match_exits_0(tmp_path):

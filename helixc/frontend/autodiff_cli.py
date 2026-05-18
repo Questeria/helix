@@ -43,6 +43,8 @@ Introspection (Stage 28.9 + Stage 58 + Stage 59 polish):
         Print leaf-path / type / diff-classification for a struct.
     --list-pytrees <file.hx>
         Inventory: leaf-count + diff/non-diff summary per struct.
+    --pytree-leaf-paths <file.hx> <struct_name>
+        Print just the leaf paths (one per line, sorted) for scripting.
     --autotune-summary <file.hx>
         Print {fn variants=N} for @autotune @kernel fns + total.
     --autotune-budget <file.hx> <max_total>
@@ -394,6 +396,36 @@ def _list_modules(path: str) -> int:
     # Sort alphabetically by module name for stable output.
     for name, h in sorted(rows, key=lambda r: r[0]):
         print(f"{name} hash={h}")
+    return 0
+
+
+def _pytree_leaf_paths(path: str, struct_name: str) -> int:
+    """Stage 59 follow-on / Tier 2 #7 polish: print just the leaf paths
+    of a struct's pytree, one per line — no types, no diff flag.
+
+    Lighter alternative to --pytree-shape when scripts want JUST the
+    paths (e.g., piping through xargs to drive per-leaf operations).
+
+    Sorted alphabetically for deterministic ordering. Exit 0 success,
+    1 if struct not found OR pytree-rejected.
+    """
+    from .pytree import flatten_pytree
+    src = _read_source(path)
+    prog = _parse_or_exit(src, path)
+    struct_decls = {it.name: it for it in prog.items
+                    if isinstance(it, A.StructDecl)}
+    if struct_name not in struct_decls:
+        print(f"error: autodiff_cli: struct {struct_name!r} not found in {path}",
+              file=sys.stderr)
+        return 1
+    try:
+        leaves = flatten_pytree(struct_decls[struct_name], struct_decls)
+    except ValueError as e:
+        print(f"error: autodiff_cli: pytree shape rejected for "
+              f"{struct_name!r}: {e}", file=sys.stderr)
+        return 1
+    for leaf in sorted(leaves, key=lambda l: l.path):
+        print(leaf.path)
     return 0
 
 
@@ -878,6 +910,13 @@ def main():
                   file=sys.stderr)
             sys.exit(2)
         sys.exit(_list_pytrees(args[0]))
+
+    if "--pytree-leaf-paths" in flags:
+        if len(args) < 2:
+            print("usage: --pytree-leaf-paths <file.hx> <struct_name>",
+                  file=sys.stderr)
+            sys.exit(2)
+        sys.exit(_pytree_leaf_paths(args[0], args[1]))
 
     if len(sys.argv) < 3 or len(args) < 2:
         print(__doc__.strip(), file=sys.stderr)
