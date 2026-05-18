@@ -63,6 +63,11 @@ Introspection (Stage 28.9 + Stage 58 + Stage 59 polish):
         Enumerate top-level AgentDecls as '<name> methods=N' lines.
     --list-agents-json <file.hx>
         Same as --list-agents but JSON with method names included.
+    --list-impls <file.hx>
+        Enumerate top-level ImplBlocks as '<target> methods=N' (or
+        '<trait> for <target> methods=N' for trait impls) lines.
+    --list-impls-json <file.hx>
+        Same as --list-impls but JSON with method names included.
     --agent-methods <file.hx> <agent_name>
         Print method signatures of an agent (params + return ty).
     --agent-methods-json <file.hx> <agent_name>
@@ -4074,6 +4079,58 @@ def _agent_methods_json(path: str, agent_name: str) -> int:
     return 1
 
 
+def _list_impls(path: str) -> int:
+    """Stage 59 follow-on / Tier 4 #13 polish: enumerate top-level
+    ImplBlock decls (inherent or trait impls) in a file.
+
+    Output: one line per impl block as
+        '<target> methods=N'              (inherent impl)
+        '<trait> for <target> methods=N'  (trait impl)
+    Declaration order preserved.
+
+    Top-level enumeration octet + 1: fns / structs / modules / uses /
+    consts / enums / type-aliases / agents + impls — closes the
+    Item subclass enumeration to 9 axes.
+    """
+    src = _read_source(path)
+    prog = _parse_or_exit(src, path)
+    for it in prog.items:
+        if isinstance(it, A.ImplBlock):
+            n = len(it.methods)
+            if it.trait_name:
+                print(f"{it.trait_name} for {it.target} methods={n}")
+            else:
+                print(f"{it.target} methods={n}")
+    return 0
+
+
+def _list_impls_json(path: str) -> int:
+    """Stage 59 follow-on / Tier 4 #13 polish: --list-impls in
+    machine-readable JSON form.
+
+    Output schema:
+      {"impls": [{"target": "<name>",
+                   "trait": "<name>" | null,
+                   "methods": N,
+                   "method_names": ["<m1>", ...]}, ...]}
+    Declaration order preserved.
+    """
+    import json
+    src = _read_source(path)
+    prog = _parse_or_exit(src, path)
+    impls: list[dict] = []
+    for it in prog.items:
+        if isinstance(it, A.ImplBlock):
+            impls.append({
+                "target": it.target,
+                "trait": it.trait_name,
+                "methods": len(it.methods),
+                "method_names": [m.name for m in it.methods],
+            })
+    print(json.dumps({"impls": impls}, sort_keys=True, indent=2))
+    return 0
+
+
 def _type_alias_target_json(path: str, alias_name: str) -> int:
     """Stage 59 follow-on / Tier 4 #13 polish: --type-alias-target in
     machine-readable JSON form.
@@ -4728,6 +4785,18 @@ def main():
                   file=sys.stderr)
             sys.exit(2)
         sys.exit(_agent_methods_json(args[0], args[1]))
+
+    if "--list-impls" in flags:
+        if len(args) < 1:
+            print("usage: --list-impls <file.hx>", file=sys.stderr)
+            sys.exit(2)
+        sys.exit(_list_impls(args[0]))
+
+    if "--list-impls-json" in flags:
+        if len(args) < 1:
+            print("usage: --list-impls-json <file.hx>", file=sys.stderr)
+            sys.exit(2)
+        sys.exit(_list_impls_json(args[0]))
 
     if "--type-alias-target" in flags:
         if len(args) < 2:

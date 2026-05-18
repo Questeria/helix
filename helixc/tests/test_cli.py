@@ -5875,6 +5875,7 @@ def test_stage59_autodiff_cli_help_mentions_polish_flags():
         "--list-agents", "--list-agents-json",
         "--agent-methods", "--agent-methods-json",
         "--type-alias-target", "--type-alias-target-json",
+        "--list-impls", "--list-impls-json",
         "--list-fn-attrs", "--list-fn-attrs-json",
         "--list-fns-by-attr", "--list-fns-by-attr-json",
         "--fn-callgraph", "--fn-callers",
@@ -7537,6 +7538,60 @@ def test_stage59_agent_methods_json(tmp_path):
         {"name": "propose", "params": ["i32"], "return_ty": "i32"},
         {"name": "evaluate", "params": ["i32", "i32"], "return_ty": "i32"},
     ]}
+
+
+def test_stage59_list_impls_text(tmp_path):
+    """Stage 59 follow-on / Tier 4 #13 polish: --list-impls
+    enumerates ImplBlock decls; trait impls render as
+    '<trait> for <target>'."""
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "li.hx"
+    src.write_text(
+        "struct Foo { x: i32 }\n"
+        "struct Bar { y: i32 }\n"
+        "impl Foo { fn area(self: Foo) -> i32 { self.x } }\n"
+        "impl Bar { fn area(self: Bar) -> i32 { self.y } }\n",
+        encoding="utf-8",
+    )
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--list-impls", str(src)],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0
+    lines = [l for l in proc.stdout.strip().splitlines() if l]
+    assert lines == ["Foo methods=1", "Bar methods=1"]
+
+
+def test_stage59_list_impls_json(tmp_path):
+    """Stage 59 follow-on / Tier 4 #13 polish: --list-impls-json
+    emits {impls: [{target, trait, methods, method_names}, ...]}."""
+    import json
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "lij.hx"
+    src.write_text(
+        "struct Foo { x: i32 }\n"
+        "impl Foo {\n"
+        "    fn area(self: Foo) -> i32 { self.x }\n"
+        "    fn dbl(self: Foo) -> i32 { self.x }\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--list-impls-json", str(src)],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0
+    result = json.loads(proc.stdout)
+    assert result == {
+        "impls": [
+            {"target": "Foo", "trait": None, "methods": 2,
+             "method_names": ["area", "dbl"]},
+        ]
+    }
 
 
 def test_stage59_type_alias_target_json(tmp_path):
