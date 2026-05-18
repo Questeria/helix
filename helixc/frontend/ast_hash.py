@@ -589,24 +589,39 @@ def short_hash(h: str) -> str:
 # ============================================================================
 # Stage 58 / Tier 4 #13 — content-addressed modules
 # ============================================================================
-def module_hash(decl: "A.ModuleDecl") -> str:
+def module_hash(decl) -> str:
     """Stage 58 / Tier 4 #13 — structural hash of a `mod X { ... }`
-    declaration. The hash covers:
+    block (`A.ModBlock` in the AST). The hash covers:
       - Module name (so two modules with same items hash differently)
       - All items in declaration order (FnDecl/StructDecl/UseDecl/
-        ConstDecl/ImplDecl/TraitDecl/nested ModuleDecl)
+        ConstDecl/ImplDecl/TraitDecl/nested ModBlock)
     Span-independent + insensitive to internal naming via the existing
     `structural_hash` machinery.
+
+    Accepts either A.ModBlock (block-syntax module with items) or
+    A.ModuleDecl (header-syntax `module path::to::name`); the latter
+    hashes its path segments only (no items to traverse).
 
     Use case: content-addressed package references — a `use X::Y` can
     cite the imported module by hash, allowing the compiler to detect
     drift between import declaration and resolved module body.
     """
     h = hashlib.sha256()
-    _emit(h, "ModuleDecl", decl.name)
-    for it in decl.items:
-        item_h = structural_hash(it) if _is_hashable_item(it) else "<opaque>"
-        _emit(h, "Item", type(it).__name__, item_h)
+    if isinstance(decl, A.ModBlock):
+        _emit(h, "ModBlock", decl.name)
+        for it in decl.items:
+            item_h = (structural_hash(it)
+                       if _is_hashable_item(it) else "<opaque>")
+            _emit(h, "Item", type(it).__name__, item_h)
+    elif isinstance(decl, A.ModuleDecl):
+        _emit(h, "ModuleDecl")
+        for seg in decl.path:
+            _emit(h, "PathSeg", seg)
+    else:
+        raise TypeError(
+            f"module_hash: expected ModBlock or ModuleDecl, got "
+            f"{type(decl).__name__}"
+        )
     return h.hexdigest()
 
 

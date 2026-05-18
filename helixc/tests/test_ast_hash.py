@@ -228,6 +228,55 @@ def test_stage58_program_hash_independent_of_span():
     assert h1 == h2, "span/formatting changes affected program_hash"
 
 
+def test_stage58_module_hash_identical_modblocks_match():
+    """Stage 58 / Tier 4 #13: identical ModBlocks produce identical
+    module_hash. Tests the module-level aggregator (sibling of
+    program_hash but scoped to one `mod X { ... }` block)."""
+    from helixc.frontend.parser import parse
+    from helixc.frontend import ast_nodes as A
+    from helixc.frontend.ast_hash import module_hash
+    src = "mod foo { fn bar() -> i32 { 1 } }"
+    prog1 = parse(src)
+    prog2 = parse(src)
+    mod1 = next(it for it in prog1.items
+                if isinstance(it, A.ModBlock))
+    mod2 = next(it for it in prog2.items
+                if isinstance(it, A.ModBlock))
+    assert module_hash(mod1) == module_hash(mod2)
+
+
+def test_stage58_module_hash_different_names_differ():
+    """Stage 58: ModBlocks with same items but different names hash
+    differently (name is part of identity)."""
+    from helixc.frontend.parser import parse
+    from helixc.frontend import ast_nodes as A
+    from helixc.frontend.ast_hash import module_hash
+    src1 = "mod alpha { fn bar() -> i32 { 1 } }"
+    src2 = "mod beta { fn bar() -> i32 { 1 } }"
+    mod1 = next(it for it in parse(src1).items
+                if isinstance(it, A.ModBlock))
+    mod2 = next(it for it in parse(src2).items
+                if isinstance(it, A.ModBlock))
+    assert module_hash(mod1) != module_hash(mod2), \
+        "module name should affect hash"
+
+
+def test_stage58_module_hash_different_item_body_differs():
+    """Stage 58: same ModBlock name but different fn body hashes
+    differently."""
+    from helixc.frontend.parser import parse
+    from helixc.frontend import ast_nodes as A
+    from helixc.frontend.ast_hash import module_hash
+    src1 = "mod m { fn f() -> i32 { 1 } }"
+    src2 = "mod m { fn f() -> i32 { 2 } }"
+    mod1 = next(it for it in parse(src1).items
+                if isinstance(it, A.ModBlock))
+    mod2 = next(it for it in parse(src2).items
+                if isinstance(it, A.ModBlock))
+    assert module_hash(mod1) != module_hash(mod2), \
+        "module item body diff should affect hash"
+
+
 def test_stage58_program_hash_alpha_equivalent_helpers():
     """Stage 58 / Tier 4 #13: programs that differ ONLY in bound-
     variable names hash identically (alpha-equivalence)."""
