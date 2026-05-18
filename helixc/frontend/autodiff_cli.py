@@ -109,6 +109,10 @@ Introspection (Stage 28.9 + Stage 58 + Stage 59 polish):
         etc. nested inside a named module). Dotted names supported.
     --module-stats-json <file.hx> <mod_name>
         Same as --module-stats but JSON with all 9 keys (zeros incl.).
+    --module-hash-json <file.hx> <mod_name>
+        Same as --module-hash but JSON {name, hash} output.
+    --validate-trace-attrs-json <file.hx>
+        Same as --validate-trace-attrs but JSON {ok, violations}.
     --parse-only <file.hx>
         Lightest CI gate: exit 0 if source parses cleanly, 1 on error.
     --list-fn-attrs <file.hx>
@@ -1326,6 +1330,26 @@ def _validate_trace_attrs(path: str) -> int:
     return 1
 
 
+def _validate_trace_attrs_json(path: str) -> int:
+    """Stage 59 follow-on / Tier 3 #11 polish: --validate-trace-attrs
+    in machine-readable JSON form. Completes JSON-parity for all
+    4 per-system validator gates (pytrees, autotune, trace-attrs,
+    all-aggregator).
+
+    Output schema:
+      {"ok": bool, "violations": ["<diag1>", ...]}
+    Exits 0 on clean (ok=true), 1 on rule violation (ok=false).
+    """
+    import json
+    from .trace_pass import validate_trace_attrs
+    src = _read_source(path)
+    prog = _parse_or_exit(src, path)
+    diags = validate_trace_attrs(prog)
+    result = {"ok": not diags, "violations": [str(d) for d in diags]}
+    print(json.dumps(result, sort_keys=True, indent=2))
+    return 0 if not diags else 1
+
+
 def _validate_autotune_json(path: str) -> int:
     """Stage 59 follow-on / Tier 2 #8 polish: --validate-autotune
     in machine-readable JSON form.
@@ -1461,6 +1485,45 @@ def _autotune_budget(path: str, max_total: str) -> int:
     for fn_name in sorted(summary.keys()):
         print(f"  {fn_name} variants={summary[fn_name]}")
     return 1
+
+
+def _module_hash_json_cli(path: str, mod_name: str) -> int:
+    """Stage 59 follow-on / Tier 4 #13 polish: --module-hash in
+    machine-readable JSON form.
+
+    Output schema:
+      {"name": "<mod_name>", "hash": "<64hex>"}
+    """
+    import json
+    from .ast_hash import module_hash
+    src = _read_source(path)
+    prog = _parse_or_exit(src, path)
+
+    def _find(items, target: str, prefix: str = ""):
+        for it in items:
+            if isinstance(it, A.ModBlock):
+                full = it.name if not prefix else f"{prefix}.{it.name}"
+                if full == target:
+                    return it
+                found = _find(it.items, target, full)
+                if found is not None:
+                    return found
+            elif isinstance(it, A.ModuleDecl):
+                full = ".".join(it.path)
+                if prefix:
+                    full = f"{prefix}.{full}"
+                if full == target:
+                    return it
+        return None
+
+    mod = _find(prog.items, mod_name)
+    if mod is None:
+        print(f"error: autodiff_cli: module {mod_name!r} not found in {path}",
+              file=sys.stderr)
+        return 1
+    print(json.dumps({"name": mod_name, "hash": module_hash(mod)},
+                      sort_keys=True, indent=2))
+    return 0
 
 
 def _module_stats(path: str, mod_name: str) -> int:
@@ -5545,6 +5608,13 @@ def main():
             sys.exit(2)
         sys.exit(_module_hash_cli(args[0], args[1]))
 
+    if "--module-hash-json" in flags:
+        if len(args) < 2:
+            print("usage: --module-hash-json <file.hx> <module_name>",
+                  file=sys.stderr)
+            sys.exit(2)
+        sys.exit(_module_hash_json_cli(args[0], args[1]))
+
     if "--module-stats" in flags:
         if len(args) < 2:
             print("usage: --module-stats <file.hx> <module_name>",
@@ -5593,6 +5663,13 @@ def main():
                   file=sys.stderr)
             sys.exit(2)
         sys.exit(_validate_trace_attrs(args[0]))
+
+    if "--validate-trace-attrs-json" in flags:
+        if len(args) < 1:
+            print("usage: --validate-trace-attrs-json <file.hx>",
+                  file=sys.stderr)
+            sys.exit(2)
+        sys.exit(_validate_trace_attrs_json(args[0]))
 
     if "--list-traced-fns" in flags:
         if len(args) < 1:

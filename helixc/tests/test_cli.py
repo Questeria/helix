@@ -5879,6 +5879,7 @@ def test_stage59_autodiff_cli_help_mentions_polish_flags():
         "--impl-methods", "--impl-methods-json",
         "--fn-signature", "--fn-signature-json",
         "--module-stats", "--module-stats-json",
+        "--module-hash-json", "--validate-trace-attrs-json",
         "--list-fn-attrs", "--list-fn-attrs-json",
         "--list-fns-by-attr", "--list-fns-by-attr-json",
         "--fn-callgraph", "--fn-callers",
@@ -7541,6 +7542,112 @@ def test_stage59_agent_methods_json(tmp_path):
         {"name": "propose", "params": ["i32"], "return_ty": "i32"},
         {"name": "evaluate", "params": ["i32", "i32"], "return_ty": "i32"},
     ]}
+
+
+def test_stage59_module_hash_json(tmp_path):
+    """Stage 59 follow-on / Tier 4 #13 polish: --module-hash-json
+    emits {name, hash}; same hash as --module-hash text form."""
+    import json
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "mhj.hx"
+    src.write_text(
+        "mod foo {\n    fn a() -> i32 { 1 }\n}\n",
+        encoding="utf-8",
+    )
+    # Text form.
+    proc_text = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--module-hash", str(src), "foo"],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc_text.returncode == 0
+    text_hash = proc_text.stdout.strip()
+    assert len(text_hash) == 64
+    # JSON form.
+    proc_json = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--module-hash-json", str(src), "foo"],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc_json.returncode == 0
+    result = json.loads(proc_json.stdout)
+    assert result == {"name": "foo", "hash": text_hash}
+
+
+def test_stage59_validate_trace_attrs_json_clean(tmp_path):
+    """Stage 59 follow-on / Tier 3 #11 polish:
+    --validate-trace-attrs-json emits {ok: true, violations: []}
+    + rc=0 on clean."""
+    import json
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "vtaj_ok.hx"
+    src.write_text(
+        '@pure @trace fn f(x: i32) -> i32 { x }\n',
+        encoding="utf-8",
+    )
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--validate-trace-attrs-json", str(src)],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0
+    result = json.loads(proc.stdout)
+    assert result == {"ok": True, "violations": []}
+
+
+def test_stage59_validate_trace_attrs_json_violation(tmp_path):
+    """Stage 59 follow-on / Tier 3 #11 polish:
+    --validate-trace-attrs-json emits {ok: false, violations: [...]}
+    + rc=1 when @trace is on an extern fn."""
+    import json
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "vtaj_bad.hx"
+    src.write_text(
+        '@trace extern "C" fn ext(x: i32) -> i32;\n',
+        encoding="utf-8",
+    )
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--validate-trace-attrs-json", str(src)],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 1
+    result = json.loads(proc.stdout)
+    assert result["ok"] is False
+    assert len(result["violations"]) >= 1
+    assert "extern" in result["violations"][0]
+
+
+def test_stage59_module_hash_handles_all_item_kinds(tmp_path):
+    """Stage 59 follow-on / Tier 4 #13 polish: cascade-defect fix —
+    ast_hash._hash_into now handles ConstDecl/EnumDecl/TypeAlias/
+    UseDecl/AgentDecl/ImplBlock arms inside modules, so
+    --module-hash no longer crashes with NotImplementedError on
+    mixed-content modules."""
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "mhall.hx"
+    src.write_text(
+        "mod foo {\n"
+        "    fn a() -> i32 { 1 }\n"
+        "    struct P { x: i32 }\n"
+        "    const K: i32 = 5;\n"
+        "    enum E { A, B, C }\n"
+        "    type Alias = i32;\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--module-hash", str(src), "foo"],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0, (
+        f"--module-hash failed on mixed-content module: stderr={proc.stderr}")
+    assert len(proc.stdout.strip()) == 64
 
 
 def test_stage59_module_stats_text(tmp_path):

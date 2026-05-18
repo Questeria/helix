@@ -519,6 +519,58 @@ def _hash_into(h: "hashlib._Hash", node: Any,
         for f in node.fields:
             _emit(h, "Field", f.name, _ty_repr(f.ty))
         return
+    # Stage 59 follow-on: ConstDecl arm — module_hash recursion
+    # was failing on modules containing top-level constants because
+    # _hash_into had no ConstDecl arm. Identity = name + ty + value
+    # (literal AST node).
+    if isinstance(node, A.ConstDecl):
+        _emit(h, "ConstDecl", node.name, _ty_repr(node.ty))
+        _hash_into(h, node.value, binders)
+        return
+    # Stage 59 follow-on: EnumDecl arm — identity = name + ordered
+    # variants (name + payload tys). Variant declaration order is
+    # significant (it determines the discriminant value at the
+    # codegen level).
+    if isinstance(node, A.EnumDecl):
+        _emit(h, "EnumDecl", node.name)
+        _emit(h, "EnumVariantCount", len(node.variants))
+        for v in node.variants:
+            _emit(h, "EnumVariant", v.name, len(v.payload_tys))
+            for ty in v.payload_tys:
+                _emit(h, "EnumPayload", _ty_repr(ty))
+        return
+    # Stage 59 follow-on: TypeAlias arm — identity = name + target ty.
+    if isinstance(node, A.TypeAlias):
+        _emit(h, "TypeAlias", node.name, _ty_repr(node.target))
+        return
+    # Stage 59 follow-on: UseDecl arm — identity = path segments.
+    if isinstance(node, A.UseDecl):
+        _emit(h, "UseDecl")
+        for seg in node.path:
+            _emit(h, "UsePathSeg", seg)
+        return
+    # Stage 59 follow-on: AgentDecl arm — identity = name + ordered
+    # methods (each method's name + param tys + return ty).
+    if isinstance(node, A.AgentDecl):
+        _emit(h, "AgentDecl", node.name)
+        _emit(h, "AgentMethodCount", len(node.methods))
+        for m in node.methods:
+            _emit(h, "AgentMethod", m.name)
+            _emit(h, "AgentMethodParamCount", len(m.params))
+            for p in m.params:
+                _emit(h, "AgentMethodParam", p.name, _ty_repr(p.ty))
+            ret_repr = _ty_repr(m.return_ty) if m.return_ty else "()"
+            _emit(h, "AgentMethodReturn", ret_repr)
+        return
+    # Stage 59 follow-on: ImplBlock arm — identity = target + optional
+    # trait + ordered methods (each lifted FnDecl). Trait impls vs
+    # inherent impls hash distinctly because trait_name is included.
+    if isinstance(node, A.ImplBlock):
+        _emit(h, "ImplBlock", node.target, node.trait_name or "")
+        _emit(h, "ImplMethodCount", len(node.methods))
+        for m in node.methods:
+            _hash_into(h, m, binders)
+        return
     # Loud-fail catchall — matches the cycle-14/15 NotImplementedError
     # discipline in match_lower._collect_binds and _pattern_test_expr.
     # Any future AST subclass that lands without an explicit hash arm
