@@ -51,6 +51,8 @@ Introspection (Stage 28.9 + Stage 58 + Stage 59 polish):
         Print just the leaf paths (one per line, sorted) for scripting.
     --validate-pytrees <file.hx>
         CI gate: validate every struct as a pytree; exit 1 if any fail.
+    --validate-pytrees-json <file.hx>
+        Same as --validate-pytrees but machine-readable JSON output.
     --autotune-summary <file.hx>
         Print {fn variants=N} for @autotune @kernel fns + total.
     --validate-autotune <file.hx>
@@ -447,6 +449,47 @@ def _list_modules(path: str) -> int:
     for name, h in sorted(rows, key=lambda r: r[0]):
         print(f"{name} hash={h}")
     return 0
+
+
+def _validate_pytrees_json(path: str) -> int:
+    """Stage 59 follow-on / Tier 2 #7 polish: --validate-pytrees in
+    machine-readable JSON form.
+
+    Output schema:
+      {
+        "structs": {
+          "<name>": {"status": "OK"|"FAIL", "diags": [...]}
+        },
+        "total": {"structs": N, "ok": K, "fail": M}
+      }
+    """
+    import json
+    from .pytree import validate_pytree
+    src = _read_source(path)
+    prog = _parse_or_exit(src, path)
+    struct_decls = {it.name: it for it in prog.items
+                    if isinstance(it, A.StructDecl)}
+    structs: dict = {}
+    ok_count = 0
+    fail_count = 0
+    for name in sorted(struct_decls.keys()):
+        diags = validate_pytree(struct_decls[name], struct_decls)
+        if not diags:
+            structs[name] = {"status": "OK", "diags": []}
+            ok_count += 1
+        else:
+            structs[name] = {"status": "FAIL", "diags": diags}
+            fail_count += 1
+    result = {
+        "structs": structs,
+        "total": {
+            "structs": ok_count + fail_count,
+            "ok": ok_count,
+            "fail": fail_count,
+        },
+    }
+    print(json.dumps(result, sort_keys=True, indent=2))
+    return 1 if fail_count else 0
 
 
 def _validate_pytrees(path: str) -> int:
@@ -1262,6 +1305,13 @@ def main():
                   file=sys.stderr)
             sys.exit(2)
         sys.exit(_validate_pytrees(args[0]))
+
+    if "--validate-pytrees-json" in flags:
+        if len(args) < 1:
+            print("usage: --validate-pytrees-json <file.hx>",
+                  file=sys.stderr)
+            sys.exit(2)
+        sys.exit(_validate_pytrees_json(args[0]))
 
     if len(sys.argv) < 3 or len(args) < 2:
         print(__doc__.strip(), file=sys.stderr)

@@ -5838,7 +5838,8 @@ def test_stage59_autodiff_cli_help_mentions_polish_flags():
         "--list-fns", "--list-fn-attrs", "--check-program-hash",
         "--check-program-signature-hash",
         "--list-modules", "--module-hash", "--pytree-shape",
-        "--list-pytrees", "--pytree-leaf-paths", "--validate-pytrees",
+        "--list-pytrees", "--pytree-leaf-paths",
+        "--validate-pytrees", "--validate-pytrees-json",
         "--autotune-summary", "--autotune-budget", "--validate-autotune",
         "--hash-dump", "--diff-hash-dump", "--hash-dump-short",
         "--diff-trace", "--trace-dump-summary",
@@ -6215,6 +6216,34 @@ def test_stage59_validate_autotune_empty_list_exits_1(tmp_path):
     assert proc.returncode == 1
     assert "BLOCK" in proc.stdout
     assert "empty" in proc.stdout
+
+
+def test_stage59_validate_pytrees_json(tmp_path):
+    """Stage 59 follow-on / Tier 2 #7 polish: --validate-pytrees-json
+    outputs valid JSON with per-struct status + total summary."""
+    import json
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "mixed.hx"
+    src.write_text(
+        "struct Good { w: D<f32> }\n"
+        "struct Bad { w: D<f32>, label: i32 }\n",
+        encoding="utf-8",
+    )
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--validate-pytrees-json", str(src)],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 1
+    result = json.loads(proc.stdout)
+    assert set(result.keys()) == {"structs", "total"}
+    assert result["structs"]["Good"]["status"] == "OK"
+    assert result["structs"]["Bad"]["status"] == "FAIL"
+    assert len(result["structs"]["Bad"]["diags"]) >= 1
+    assert result["total"]["structs"] == 2
+    assert result["total"]["ok"] == 1
+    assert result["total"]["fail"] == 1
 
 
 def test_stage59_validate_pytrees_all_ok_exits_0(tmp_path):
