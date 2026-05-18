@@ -1254,6 +1254,109 @@ def test_stage54_gate3_reverse_mode_clamp_warns_too():
         f"about dropped dlo/dhi w.r.t. w; got: {msgs}"
 
 
+def test_stage54_gate4_name_appears_in_handles_modify_quote_splice_tilelit():
+    """Stage 54 gate-4 HIGH-1: `_name_appears_in` now walks
+    Modify.transformation/verifier, Quote.inner, Splice.inner,
+    TileLit.shape, TileLit.memspace. Pre-fix these AST kinds
+    silently returned False on var-presence check, evading the
+    clamp MEDIUM-5 warn for the
+    `__clamp(x, tile<f32, [w], REG>::zeros(), 1.0)`-style cases."""
+    from helixc.frontend.autodiff import _name_appears_in
+    span = type("Span", (), {"line": 0, "col": 0})()
+    w = lambda: A.Name(span=span, name="w", generics=[])
+
+    # Modify with w in transformation
+    mod = A.Modify(span=span,
+                    target=A.IntLit(span=span, value=0),
+                    transformation=w(),
+                    verifier=A.IntLit(span=span, value=0))
+    assert _name_appears_in(mod, "w"), \
+        "gate-4 HIGH-1: Modify.transformation must be walked"
+
+    # Modify with w in verifier
+    mod2 = A.Modify(span=span,
+                     target=A.IntLit(span=span, value=0),
+                     transformation=A.IntLit(span=span, value=0),
+                     verifier=w())
+    assert _name_appears_in(mod2, "w"), \
+        "gate-4 HIGH-1: Modify.verifier must be walked"
+
+    # Quote.inner
+    q = A.Quote(span=span, inner=w())
+    assert _name_appears_in(q, "w"), \
+        "gate-4 HIGH-1: Quote.inner must be walked"
+
+    # Splice.inner
+    s = A.Splice(span=span, inner=w())
+    assert _name_appears_in(s, "w"), \
+        "gate-4 HIGH-1: Splice.inner must be walked"
+
+    # TileLit.shape (list[Expr])
+    tile = A.TileLit(span=span,
+                      dtype=A.TyName(span=span, name="f32"),
+                      shape=[w()],
+                      memspace=A.Name(span=span, name="REG",
+                                       generics=[]),
+                      init="zeros")
+    assert _name_appears_in(tile, "w"), \
+        "gate-4 HIGH-1: TileLit.shape must be walked"
+
+    # TileLit.memspace
+    tile2 = A.TileLit(span=span,
+                       dtype=A.TyName(span=span, name="f32"),
+                       shape=[A.IntLit(span=span, value=4)],
+                       memspace=w(),
+                       init="zeros")
+    assert _name_appears_in(tile2, "w"), \
+        "gate-4 HIGH-1: TileLit.memspace must be walked"
+
+
+def test_stage54_gate4_min_max_warns_on_both_args_dep():
+    """Stage 54 gate-4 MEDIUM-3 consistency-with-clamp fix:
+    `_stage54_min_max_chain_rule` now emits `_ad_warn` when
+    BOTH args depend on the differentiation variable (user is
+    differentiating through a kink at a==b). Mirrors clamp's
+    MEDIUM-5 lo/hi warn for symmetric behavior."""
+    from helixc.frontend.autodiff import (
+        _diff_call_chain_rule, take_diff_warnings,
+    )
+    span = type("Span", (), {"line": 0, "col": 0})()
+    # __min(x, x * 0.5) — both args depend on x. Must warn.
+    x = lambda: A.Name(span=span, name="x", generics=[])
+    arg_b = A.Binary(span=span, op="*", left=x(),
+                      right=A.FloatLit(span=span, value=0.5))
+    call = A.Call(
+        span=span,
+        callee=A.Name(span=span, name="__min", generics=[]),
+        args=[x(), arg_b],
+    )
+    take_diff_warnings()  # drain
+    _diff_call_chain_rule(call, "x", span)
+    msgs = take_diff_warnings()
+    assert any("min" in m.lower() and ("kink" in m.lower()
+                                         or "discontinuous" in m.lower()
+                                         or "both" in m.lower())
+               for m in msgs), \
+        f"gate-4 MEDIUM-3: __min should warn when both args " \
+        f"depend on var; got: {msgs}"
+
+    # Negative control: only one arg depends on var.
+    take_diff_warnings()
+    call2 = A.Call(
+        span=span,
+        callee=A.Name(span=span, name="__max", generics=[]),
+        args=[x(), A.FloatLit(span=span, value=5.0)],
+    )
+    _diff_call_chain_rule(call2, "x", span)
+    msgs2 = take_diff_warnings()
+    assert not any(
+        ("min" in m.lower() or "max" in m.lower())
+        and ("kink" in m.lower() or "discontinuous" in m.lower())
+        for m in msgs2
+    ), f"gate-4 MEDIUM-3: no kink-warn when only one arg " \
+        f"depends on var; got: {msgs2}"
+
+
 def test_stage54_inc3a_loop_body_descent_inlines_pure_helper():
     """Stage 54 Inc 3a: `_inline_user_calls.go()` walker now
     descends into A.For/A.While/A.Loop bodies. Pre-fix, loop

@@ -1441,13 +1441,39 @@ def _name_appears_in(expr: A.Expr, name: str) -> bool:
             if (isinstance(arm.body, A.Expr)
                     and _name_appears_in(arm.body, name)):
                 return True
-    # Block stmts: walk Let.value, ConstStmt.value, ExprStmt.expr
+    # Stage 54 gate-4 HIGH-1 fix: Modify/Quote/Splice/TileLit
+    # children. Modify has transformation+verifier (not in
+    # generic attr list); Quote/Splice have `inner` (not in
+    # list); TileLit has `shape` (list[Expr], not in
+    # args/elems/indices) and `memspace` (Expr). Same silent-
+    # evade-warn defect class as the StructLit/Match arms above.
+    if isinstance(expr, A.Modify):
+        if (_name_appears_in(expr.transformation, name)
+                or _name_appears_in(expr.verifier, name)):
+            return True
+    if isinstance(expr, (A.Quote, A.Splice)):
+        if _name_appears_in(expr.inner, name):
+            return True
+    if isinstance(expr, A.TileLit):
+        for s in expr.shape:
+            if isinstance(s, A.Expr) and _name_appears_in(s, name):
+                return True
+        if _name_appears_in(expr.memspace, name):
+            return True
+    # Block stmts: walk Let.value, ConstStmt.value, ExprStmt.expr.
+    # Stage 54 gate-4 MEDIUM-2 hardening: use independent gets
+    # rather than `or`-short-circuit to be robust against any
+    # future Expr subclass that overrides __bool__ (today all
+    # dataclasses are truthy, so the bug is latent but the
+    # pattern was fragile).
     stmts = getattr(expr, "stmts", None)
     if isinstance(stmts, list):
         for s in stmts:
-            v = getattr(s, "value", None) or getattr(s, "expr", None)
-            if isinstance(v, A.Expr) and _name_appears_in(v, name):
-                return True
+            for stmt_attr in ("value", "expr"):
+                v = getattr(s, stmt_attr, None)
+                if (v is not None and isinstance(v, A.Expr)
+                        and _name_appears_in(v, name)):
+                    return True
     return False
 
 
@@ -1476,6 +1502,20 @@ def _stage54_min_max_chain_rule(
         return None
     a = call.args[0]
     b = call.args[1]
+    # Stage 54 gate-4 MEDIUM-3 consistency-with-clamp fix: warn
+    # when BOTH args depend on `var` — the user is differentiating
+    # through a kink at the equality point, where the indicator-
+    # based subgradient is mathematically valid but the user
+    # gets no diagnostic that gradients can be discontinuous
+    # near a == b. Mirrors clamp's MEDIUM-5 lo/hi warn.
+    if _name_appears_in(a, var) and _name_appears_in(b, var):
+        _ad_warn(
+            call,
+            f"{name} with both args depending on '{var}' — "
+            f"subgradient is defined via lexically-first "
+            f"convention but gradients are discontinuous at "
+            f"a == b. Confirm this is the intended behavior.",
+        )
     da = _diff(a, var)
     db = _diff(b, var)
     suffix = "f64" if name.endswith("_f64") else None
