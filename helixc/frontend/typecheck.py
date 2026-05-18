@@ -329,6 +329,36 @@ class TyConf(Type):
 
 
 @dataclass(frozen=True)
+class TyDeadline(Type):
+    """Stage 81 — deadline / real-time type (HELIX_V1_FINAL_FEATURES
+    Part 2.4 — the obsolete Stage 34 label, properly revived as a
+    Tier-A wrapper). A value tagged with the WCET (worst-case
+    execution time) budget it took to produce, in microseconds.
+    Critical for hard real-time AGI deployment (robotics, autonomous
+    driving, surgical assistance).
+
+    Phase-0 representation: deadline as float string (microseconds).
+    3 preset aliases:
+    - `TightDeadline<T>`  → "100"    (100 μs — control loop)
+    - `Deadline<T>`       → "1000"   (1 ms — typical real-time)
+    - `LooseDeadline<T>`  → "10000"  (10 ms — soft real-time)
+
+    Composition: deadlines SUM (latency accumulates additively
+    through computation). Same algebra as TyDP eps-sum.
+
+    Use case: hard real-time AGI deployment — proving at compile
+    time that a sense-think-act loop stays within its deadline,
+    that a motor command output is computed within the control
+    period, that a perception fn doesn't blow the frame budget.
+
+    Layered just under TyEnergy (resource budget axis, same logical
+    layer). Inc 1 ships scaffolding; Inc 2 propagation; Inc 3
+    `__miss_deadline(x)` opt-out builtin."""
+    deadline_us: str   # microseconds, Phase-0 string
+    inner: Type
+
+
+@dataclass(frozen=True)
 class TyCounterfactual(Type):
     """Stage 80 — counterfactual-reasoning type (Tier-A #1
     deeper-than-Locus per HELIX_V1_FINAL_FEATURES). A value tagged
@@ -2151,6 +2181,24 @@ class TypeChecker:
                     return TyUnknown(hint=ty.base)
                 return TyConf(level=conf_map[ty.base],
                                inner=self._resolve_type(ty.args[0], scope))
+            # Stage 81 Inc 1 — real-time deadline preset budgets.
+            # F5 arity arm. Stored as repr-format floats so the sum
+            # propagation in Inc 2 produces comparable strings.
+            deadline_map = {
+                "TightDeadline": "100.0",   # 100 μs (control loop)
+                "Deadline":      "1000.0",  # 1 ms (typical real-time)
+                "LooseDeadline": "10000.0", # 10 ms (soft real-time)
+            }
+            if ty.base in deadline_map:
+                if len(ty.args) != 1:
+                    self.errors.append(TypeError_(
+                        f"{ty.base}<T> takes 1 type argument, "
+                        f"got {len(ty.args)}",
+                        ty.span,
+                    ))
+                    return TyUnknown(hint=ty.base)
+                return TyDeadline(deadline_us=deadline_map[ty.base],
+                                  inner=self._resolve_type(ty.args[0], scope))
             # Stage 80 Inc 1 — counterfactual-reasoning modes.
             # F5 arity arm.
             cfact_map = {
@@ -3250,6 +3298,10 @@ class TypeChecker:
         # strips a TyCounterfactual wrapper, marking an explicit
         # what-if-to-real-world transition (audit-grep).
         "__as_actual",
+        # Stage 81 Inc 3 — deadline opt-out. `__miss_deadline(x)`
+        # strips a TyDeadline wrapper, acknowledging the user has
+        # blown the WCET budget (audit-grep).
+        "__miss_deadline",
         # Stage 75 — Tier-S/A wrapper constructor builtins. Inverse of
         # the opt-out builtins: take a plain T (or already-wrapped T),
         # add the appropriate wrapper at the outermost layer. Each
@@ -3269,6 +3321,8 @@ class TypeChecker:
         "__wrap_enclave",    # adds InEnclaveSGX<T> by default
         # Stage 80 — TyCounterfactual constructor.
         "__wrap_cfact",      # adds Counterfactual<T> by default
+        # Stage 81 — TyDeadline constructor.
+        "__wrap_deadline",   # adds Deadline<T> (1ms default)
         "__strlen", "__strbyte", "__streq", "__strlit_to_arena",
         "__hash_i32",
         # Stage 55 Inc 1 — runtime string builtins. Operate on
@@ -4665,6 +4719,8 @@ class TypeChecker:
                     return _unwrap(t.inner)
                 if isinstance(t, TyCounterfactual):
                     return _unwrap(t.inner)
+                if isinstance(t, TyDeadline):
+                    return _unwrap(t.inner)
                 return t
 
             l_is_logic = isinstance(l, TyLogic) or (
@@ -4910,6 +4966,39 @@ class TypeChecker:
             l_is_cfact = l_cfact_mode is not None
             r_is_cfact = r_cfact_mode is not None
 
+            # Stage 81 Inc 2 — TyDeadline. Sums μs latency.
+            def _find_deadline_us(t: Type) -> Optional[str]:
+                if isinstance(t, TyDeadline):
+                    return t.deadline_us
+                if isinstance(t, TyDiff):
+                    return _find_deadline_us(t.inner)
+                if isinstance(t, TyLogic):
+                    return _find_deadline_us(t.inner)
+                if isinstance(t, TyConf):
+                    return _find_deadline_us(t.inner)
+                if isinstance(t, TyTaint):
+                    return _find_deadline_us(t.inner)
+                if isinstance(t, TyDP):
+                    return _find_deadline_us(t.inner)
+                if isinstance(t, TyQuant):
+                    return _find_deadline_us(t.inner)
+                if isinstance(t, TyDomain):
+                    return _find_deadline_us(t.inner)
+                if isinstance(t, TyRobust):
+                    return _find_deadline_us(t.inner)
+                if isinstance(t, TyEnergy):
+                    return _find_deadline_us(t.inner)
+                if isinstance(t, TyEnclave):
+                    return _find_deadline_us(t.inner)
+                if isinstance(t, TyCounterfactual):
+                    return _find_deadline_us(t.inner)
+                return None
+
+            l_deadline_us = _find_deadline_us(l)
+            r_deadline_us = _find_deadline_us(r)
+            l_is_deadline = l_deadline_us is not None
+            r_is_deadline = r_deadline_us is not None
+
             if (l_is_logic or r_is_logic or l_is_diff or r_is_diff
                     or l_is_conf or r_is_conf
                     or l_is_taint or r_is_taint
@@ -4919,7 +5008,8 @@ class TypeChecker:
                     or l_is_robust or r_is_robust
                     or l_is_energy or r_is_energy
                     or l_is_enclave or r_is_enclave
-                    or l_is_cfact or r_is_cfact):
+                    or l_is_cfact or r_is_cfact
+                    or l_is_deadline or r_is_deadline):
                 # Audit 28.8 B13 (trap AD002 / 24200): TyDiff binop
                 # with mixed inner types previously silently coerced
                 # the right operand to the left's inner type. The
@@ -5102,6 +5192,19 @@ class TypeChecker:
                         bits_list.append(r_quant_bits)
                     chosen_bits = min(bits_list)
                     wrapped = TyQuant(bits=chosen_bits, inner=wrapped)
+                # Stage 81 Inc 2 — TyDeadline. Sums μs (latency
+                # accumulates additively through computation).
+                # Sibling of TyEnergy in the resource-budget layer.
+                if l_is_deadline or r_is_deadline:
+                    def _us_to_float(s: str) -> float:
+                        try:
+                            return float(s)
+                        except ValueError:
+                            return 0.0
+                    total = (_us_to_float(l_deadline_us or "0.0")
+                             + _us_to_float(r_deadline_us or "0.0"))
+                    chosen_us = repr(total)
+                    wrapped = TyDeadline(deadline_us=chosen_us, inner=wrapped)
                 # Stage 76 Inc 2 — TyEnergy innermost of the new
                 # wrappers (sibling of TyRobust). Budget SUMS.
                 if l_is_energy or r_is_energy:
@@ -5341,6 +5444,9 @@ class TypeChecker:
                 if bn == "__wrap_cfact" and len(arg_tys) == 1:
                     return TyCounterfactual(mode="counterfactual",
                                             inner=arg_tys[0])
+                if bn == "__wrap_deadline" and len(arg_tys) == 1:
+                    return TyDeadline(deadline_us="1000.0",
+                                      inner=arg_tys[0])
                 # Stage 68 Inc 3 — confidence-tag opt-out builtin.
                 # `__lift_conf(x)` returns the inner type of a TyConf
                 # value, acknowledging the user is exiting the
@@ -5442,6 +5548,46 @@ class TypeChecker:
                             return TyLogic(inner=_strip_quant(t.inner))
                         return t
                     return _strip_quant(arg_ty)
+                # Stage 81 Inc 3 — deadline opt-out builtin.
+                # `__miss_deadline(x)` strips TyDeadline.
+                if bn == "__miss_deadline" and len(arg_tys) == 1:
+                    arg_ty = arg_tys[0]
+                    def _strip_deadline(t):
+                        if isinstance(t, TyDeadline):
+                            return t.inner
+                        if isinstance(t, TyCounterfactual):
+                            return TyCounterfactual(mode=t.mode,
+                                                    inner=_strip_deadline(t.inner))
+                        if isinstance(t, TyEnclave):
+                            return TyEnclave(enclave=t.enclave,
+                                             inner=_strip_deadline(t.inner))
+                        if isinstance(t, TyTaint):
+                            return TyTaint(label=t.label,
+                                           inner=_strip_deadline(t.inner))
+                        if isinstance(t, TyDP):
+                            return TyDP(epsilon=t.epsilon,
+                                        inner=_strip_deadline(t.inner))
+                        if isinstance(t, TyConf):
+                            return TyConf(level=t.level,
+                                          inner=_strip_deadline(t.inner))
+                        if isinstance(t, TyDomain):
+                            return TyDomain(status=t.status,
+                                            inner=_strip_deadline(t.inner))
+                        if isinstance(t, TyQuant):
+                            return TyQuant(bits=t.bits,
+                                           inner=_strip_deadline(t.inner))
+                        if isinstance(t, TyRobust):
+                            return TyRobust(eps=t.eps,
+                                            inner=_strip_deadline(t.inner))
+                        if isinstance(t, TyEnergy):
+                            return TyEnergy(budget=t.budget,
+                                            inner=_strip_deadline(t.inner))
+                        if isinstance(t, TyDiff):
+                            return TyDiff(inner=_strip_deadline(t.inner))
+                        if isinstance(t, TyLogic):
+                            return TyLogic(inner=_strip_deadline(t.inner))
+                        return t
+                    return _strip_deadline(arg_ty)
                 # Stage 80 Inc 3 — counterfactual opt-out builtin.
                 # `__as_actual(x)` strips a TyCounterfactual wrapper,
                 # marking an explicit what-if-to-real-world transition.
@@ -11550,6 +11696,13 @@ class TypeChecker:
                        "counterfactual": "Counterfactual",
                        "intervention": "Intervention"}
             return f"{cap_map.get(t.mode, t.mode)}<{self._fmt(t.inner)}>"
+        if isinstance(t, TyDeadline):
+            cap_map = {"100.0": "TightDeadline", "1000.0": "Deadline",
+                       "10000.0": "LooseDeadline"}
+            cap = cap_map.get(t.deadline_us)
+            if cap is not None:
+                return f"{cap}<{self._fmt(t.inner)}>"
+            return f"Deadline(us={t.deadline_us})<{self._fmt(t.inner)}>"
         if isinstance(t, TyResult):
             return (f"Result<{self._fmt(t.ok_ty)}, "
                     f"{self._fmt(t.err_ty)}>")

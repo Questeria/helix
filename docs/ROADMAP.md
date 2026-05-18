@@ -303,6 +303,29 @@ Re-sequenced after Stage 46-47 closed:
 - **Stage 58** ✅ **CLOSED 2026-05-18** — Tier 4 #13 content-
   addressed modules (program_hash + module_hash + fn_signature_hash
   core).
+- **Stage 81 SUBSTANTIALLY COMPLETE 2026-05-18** — Real-time
+  deadline / WCET types (V1_FINAL_FEATURES Part 2.4, revived
+  as a Tier-A wrapper):
+  - Inc 1: TyDeadline(deadline_us, inner) + 3 presets
+    (TightDeadline=100μs control-loop / Deadline=1ms typical /
+    LooseDeadline=10ms soft-realtime).
+  - Inc 2: μs-sum propagation (latency accumulates additively).
+  - Inc 3: `__miss_deadline(x)` opt-out + `__wrap_deadline(x)`
+    constructor (default 1ms).
+  - Preset strings stored as repr-format floats ("1000.0" not
+    "1000") for clean propagation-vs-preset compare.
+  - Use case: hard real-time AGI deployment (robotics control
+    loops, autonomous-driving perception, surgical assistance).
+    Compile-time guarantees that a sense-think-act loop stays
+    within deadline budget. Composes with TyEnergy for the full
+    edge-AI resource-budget tracking.
+  - 5 new tests; 390 typecheck + 456 regression GREEN.
+
+  **10 wrapper milestone**: TyDeadline brings the new Tier-S/A
+  wrapper count to 10. Combined with pre-existing TyDiff /
+  TyLogic / TyModal / TyCausal: **14 composable type-system
+  wrappers** in v1.0 substrate.
+
 - **Stage 80 SUBSTANTIALLY COMPLETE 2026-05-18** — Tier-A #1
   Counterfactual-reasoning types (deeper-than-Locus per V1
   features doc):

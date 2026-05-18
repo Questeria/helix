@@ -886,6 +886,8 @@ class Lowerer:
                 "InEnclaveSGX", "InEnclaveTZ", "InEnclaveTDX",
                 # TyCounterfactual (Stage 80)
                 "Actual", "Counterfactual", "Intervention",
+                # TyDeadline (Stage 81)
+                "TightDeadline", "Deadline", "LooseDeadline",
             }
             if (ty.base in _STAGE75_WRAPPER_ALIASES
                     and len(ty.args) == 1):
@@ -1959,7 +1961,12 @@ class Lowerer:
                         "__wrap_conf", "__wrap_taint", "__wrap_dp",
                         "__wrap_quant", "__wrap_domain", "__wrap_robust",
                         "__wrap_energy", "__wrap_enclave",
-                        "__wrap_cfact")
+                        "__wrap_cfact", "__wrap_deadline")
+                    and len(expr.args) == 1):
+                return self._lower_expr(expr.args[0])
+            # Stage 81 Inc 3 — deadline opt-out builtin.
+            if (isinstance(expr.callee, A.Name)
+                    and expr.callee.name == "__miss_deadline"
                     and len(expr.args) == 1):
                 return self._lower_expr(expr.args[0])
             # Stage 80 Inc 3 — counterfactual opt-out builtin.
