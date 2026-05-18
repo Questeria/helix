@@ -17,6 +17,8 @@ Introspection (Stage 28.9 + Stage 58 + Stage 59 polish):
     --hash-dump <file.hx>
         Comprehensive JSON dump of all hashes (program / fns / structs
         / modules / signatures) for CI artifact diff-comparison.
+    --diff-hash-dump <a.hx> <b.hx>
+        Granular per-item drift report (added/removed/changed body/sig).
     --diff-program-hash <a.hx> <b.hx>
         Compare two programs: prints SAME or DIFFER + per-fn breakdown.
     --changed-fns <a.hx> <b.hx>
@@ -104,6 +106,70 @@ def _dump_ast_hashes(path: str) -> int:
         if isinstance(it, A.FnDecl):
             print(f"{it.name} : {short_hash(structural_hash(it))}")
     return 0
+
+
+def _diff_hash_dump(path_a: str, path_b: str) -> int:
+    """Stage 59 follow-on / Tier 4 #13 polish: diff two source files
+    at every hash granularity.
+
+    Output sections (only shown when non-empty):
+      `+ added: <name>` for items present in b but not a
+      `- removed: <name>` for items present in a but not b
+      `~ changed body: <name>` for fns whose body hash differs but
+                                 sig hash matches
+      `~ changed sig: <name>` for fns whose signature changed
+      `~ changed struct: <name>` for structs that differ
+      `~ changed module: <name>` for modules that differ
+
+    Exits 0 with `MATCH` if all hashes identical, 1 otherwise.
+    Companion to --diff-program-hash (which is single-line) — this
+    gives granular per-item drift detail for code review.
+    """
+    from .ast_hash import program_hash_dump, short_hash
+    src_a = _read_source(path_a)
+    src_b = _read_source(path_b)
+    prog_a = _parse_or_exit(src_a, path_a)
+    prog_b = _parse_or_exit(src_b, path_b)
+    a = program_hash_dump(prog_a)
+    b = program_hash_dump(prog_b)
+
+    if a == b:
+        print(f"MATCH {short_hash(a['program_hash'])}")
+        return 0
+
+    # Fns
+    a_fns, b_fns = a["fns"], b["fns"]
+    for name in sorted(set(b_fns) - set(a_fns)):
+        print(f"+ added fn: {name}")
+    for name in sorted(set(a_fns) - set(b_fns)):
+        print(f"- removed fn: {name}")
+    for name in sorted(set(a_fns) & set(b_fns)):
+        if a_fns[name] == b_fns[name]:
+            continue
+        if a_fns[name]["sig_hash"] != b_fns[name]["sig_hash"]:
+            print(f"~ changed sig: {name}")
+        else:
+            print(f"~ changed body: {name}")
+
+    # Structs
+    for name in sorted(set(b["structs"]) - set(a["structs"])):
+        print(f"+ added struct: {name}")
+    for name in sorted(set(a["structs"]) - set(b["structs"])):
+        print(f"- removed struct: {name}")
+    for name in sorted(set(a["structs"]) & set(b["structs"])):
+        if a["structs"][name] != b["structs"][name]:
+            print(f"~ changed struct: {name}")
+
+    # Modules
+    for name in sorted(set(b["modules"]) - set(a["modules"])):
+        print(f"+ added module: {name}")
+    for name in sorted(set(a["modules"]) - set(b["modules"])):
+        print(f"- removed module: {name}")
+    for name in sorted(set(a["modules"]) & set(b["modules"])):
+        if a["modules"][name] != b["modules"][name]:
+            print(f"~ changed module: {name}")
+
+    return 1
 
 
 def _hash_dump(path: str) -> int:
@@ -615,6 +681,13 @@ def main():
             print("usage: --hash-dump <file.hx>", file=sys.stderr)
             sys.exit(2)
         sys.exit(_hash_dump(args[0]))
+
+    if "--diff-hash-dump" in flags:
+        if len(args) < 2:
+            print("usage: --diff-hash-dump <a.hx> <b.hx>",
+                  file=sys.stderr)
+            sys.exit(2)
+        sys.exit(_diff_hash_dump(args[0], args[1]))
 
     if "--diff-program-hash" in flags:
         if len(args) < 2:

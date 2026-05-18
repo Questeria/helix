@@ -5837,7 +5837,8 @@ def test_stage59_autodiff_cli_help_mentions_polish_flags():
         "--diff-program-hash", "--changed-fns", "--fn-sig-hash",
         "--list-fns", "--check-program-hash", "--list-modules",
         "--module-hash", "--pytree-shape", "--list-pytrees",
-        "--autotune-summary", "--autotune-budget", "--hash-dump",
+        "--autotune-summary", "--autotune-budget",
+        "--hash-dump", "--diff-hash-dump",
     ):
         assert flag in out, (
             f"help text missing {flag!r}: docstring needs to be "
@@ -5995,6 +5996,78 @@ def test_stage59_pytree_shape_non_diff_field_rejected(tmp_path):
     assert "non-differentiable" in proc.stderr or "26002" in proc.stderr
     # Verify no traceback leaked.
     assert "Traceback" not in proc.stderr
+
+
+def test_stage59_diff_hash_dump_match_exits_0(tmp_path):
+    """Stage 59 follow-on / Tier 4 #13 polish: --diff-hash-dump prints
+    MATCH + exits 0 when programs are semantically identical."""
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    a = tmp_path / "a.hx"
+    a.write_text("fn f(x: i32) -> i32 { x + 1 }\n", encoding="utf-8")
+    b = tmp_path / "b.hx"
+    # Alpha-rename — semantically identical.
+    b.write_text("fn f(y: i32) -> i32 { y + 1 }\n", encoding="utf-8")
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--diff-hash-dump", str(a), str(b)],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0
+    assert "MATCH" in proc.stdout
+
+
+def test_stage59_diff_hash_dump_granular_drift(tmp_path):
+    """Stage 59 follow-on: --diff-hash-dump produces a per-item
+    drift breakdown (added/removed/changed body/changed struct)."""
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    a = tmp_path / "a.hx"
+    a.write_text(
+        "fn add(x: i32, y: i32) -> i32 { x + y }\n"
+        "fn sub(x: i32, y: i32) -> i32 { x - y }\n"
+        "struct Point { x: i32, y: i32 }\n",
+        encoding="utf-8",
+    )
+    b = tmp_path / "b.hx"
+    b.write_text(
+        "fn add(p: i32, q: i32) -> i32 { p + q + 0 }\n"
+        "fn mul(x: i32, y: i32) -> i32 { x * y }\n"
+        "struct Point { x: i32, y: i32, z: i32 }\n",
+        encoding="utf-8",
+    )
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--diff-hash-dump", str(a), str(b)],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 1
+    out = proc.stdout
+    assert "+ added fn: mul" in out
+    assert "- removed fn: sub" in out
+    assert "~ changed body: add" in out
+    assert "~ changed struct: Point" in out
+
+
+def test_stage59_diff_hash_dump_signature_change(tmp_path):
+    """Stage 59 follow-on: --diff-hash-dump reports changed sig (not
+    changed body) when the signature differs."""
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    a = tmp_path / "a.hx"
+    a.write_text("fn f(x: i32) -> i32 { x }\n", encoding="utf-8")
+    b = tmp_path / "b.hx"
+    b.write_text("fn f(x: f32) -> i32 { x as i32 }\n",
+                  encoding="utf-8")
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--diff-hash-dump", str(a), str(b)],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 1
+    assert "~ changed sig: f" in proc.stdout
+    # Should NOT report 'changed body' for f — sig wins.
+    assert "changed body: f" not in proc.stdout
 
 
 def test_stage59_hash_dump_returns_valid_json(tmp_path):
