@@ -135,6 +135,10 @@ Introspection (Stage 28.9 + Stage 58 + Stage 59 polish):
         Same as --fn-reachable-from but JSON {entry, reachable, n}.
     --fn-reachable-to-json <file.hx> <target_fn>
         Same as --fn-reachable-to but JSON {target, reachable, n}.
+    --fn-leaves-json <file.hx>
+        Same as --fn-leaves but JSON {leaves, n_leaves}.
+    --fn-roots-json <file.hx>
+        Same as --fn-roots but JSON {roots, n_roots}.
     --fn-body-stats <file.hx> <fn_name>
         Per-fn body AST-node counts (calls/binops/ifs/loops/matches).
     --fn-body-stats-json <file.hx> <fn_name>
@@ -1947,6 +1951,106 @@ def _fn_cycles(path: str) -> int:
     for cycle in formatted:
         # Format as A -> B -> C -> A
         print(" -> ".join(cycle) + " -> " + cycle[0])
+    return 0
+
+
+def _fn_leaves_json(path: str) -> int:
+    """Stage 59 follow-on / Tier 4 #13 polish: --fn-leaves in
+    machine-readable JSON form.
+
+    Output schema:
+      {"leaves": ["<f1>", "<f2>", ...], "n_leaves": N}
+    Leaves alphabetically sorted (matches text form).
+    """
+    import json
+    from .ast_walker import iter_fn_decls
+    src = _read_source(path)
+    prog = _parse_or_exit(src, path)
+
+    def _has_any_call(node) -> bool:
+        found = [False]
+
+        def _walk(n) -> None:
+            if found[0] or n is None:
+                return
+            if isinstance(n, A.Call):
+                if (isinstance(n.callee, A.Name)
+                        or (isinstance(n.callee, A.Path)
+                            and n.callee.segments)):
+                    found[0] = True
+                    return
+            if hasattr(n, "__dataclass_fields__"):
+                for f in n.__dataclass_fields__:
+                    v = getattr(n, f)
+                    if isinstance(v, list):
+                        for x in v:
+                            _walk(x)
+                    elif isinstance(v, tuple):
+                        for x in v:
+                            _walk(x)
+                    else:
+                        _walk(v)
+
+        _walk(node)
+        return found[0]
+
+    leaves: list[str] = []
+    for fn in iter_fn_decls(prog):
+        if fn.body is None or not _has_any_call(fn.body):
+            leaves.append(fn.name)
+    sorted_leaves = sorted(leaves)
+    print(json.dumps(
+        {"leaves": sorted_leaves, "n_leaves": len(sorted_leaves)},
+        sort_keys=True, indent=2))
+    return 0
+
+
+def _fn_roots_json(path: str) -> int:
+    """Stage 59 follow-on / Tier 4 #13 polish: --fn-roots in
+    machine-readable JSON form.
+
+    Output schema:
+      {"roots": ["<f1>", "<f2>", ...], "n_roots": N}
+    Roots alphabetically sorted (matches text form).
+    """
+    import json
+    from .ast_walker import iter_fn_decls
+    src = _read_source(path)
+    prog = _parse_or_exit(src, path)
+
+    all_fn_names: set[str] = set()
+    called_names: set[str] = set()
+
+    def _collect_calls(node) -> None:
+        if node is None:
+            return
+        if isinstance(node, A.Call):
+            if isinstance(node.callee, A.Name):
+                called_names.add(node.callee.name)
+            elif (isinstance(node.callee, A.Path)
+                  and node.callee.segments):
+                called_names.add(node.callee.segments[-1])
+        if hasattr(node, "__dataclass_fields__"):
+            for f in node.__dataclass_fields__:
+                v = getattr(node, f)
+                if isinstance(v, list):
+                    for x in v:
+                        _collect_calls(x)
+                elif isinstance(v, tuple):
+                    for x in v:
+                        _collect_calls(x)
+                else:
+                    _collect_calls(v)
+
+    for fn in iter_fn_decls(prog):
+        all_fn_names.add(fn.name)
+        if fn.body is not None:
+            _collect_calls(fn.body)
+
+    roots = sorted(all_fn_names - called_names)
+    print(json.dumps(
+        {"roots": roots, "n_roots": len(roots)},
+        sort_keys=True, indent=2))
     return 0
 
 
@@ -5958,11 +6062,23 @@ def main():
             sys.exit(2)
         sys.exit(_fn_leaves(args[0]))
 
+    if "--fn-leaves-json" in flags:
+        if len(args) < 1:
+            print("usage: --fn-leaves-json <file.hx>", file=sys.stderr)
+            sys.exit(2)
+        sys.exit(_fn_leaves_json(args[0]))
+
     if "--fn-roots" in flags:
         if len(args) < 1:
             print("usage: --fn-roots <file.hx>", file=sys.stderr)
             sys.exit(2)
         sys.exit(_fn_roots(args[0]))
+
+    if "--fn-roots-json" in flags:
+        if len(args) < 1:
+            print("usage: --fn-roots-json <file.hx>", file=sys.stderr)
+            sys.exit(2)
+        sys.exit(_fn_roots_json(args[0]))
 
     if "--fn-recursive" in flags:
         if len(args) < 1:

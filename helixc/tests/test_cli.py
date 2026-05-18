@@ -5884,6 +5884,7 @@ def test_stage59_autodiff_cli_help_mentions_polish_flags():
         "--dump-ast-hashes-json", "--fn-callgraph-json",
         "--fn-callers-json",
         "--fn-reachable-from-json", "--fn-reachable-to-json",
+        "--fn-leaves-json", "--fn-roots-json",
         "--list-fn-attrs", "--list-fn-attrs-json",
         "--list-fns-by-attr", "--list-fns-by-attr-json",
         "--fn-callgraph", "--fn-callers",
@@ -7546,6 +7547,59 @@ def test_stage59_agent_methods_json(tmp_path):
         {"name": "propose", "params": ["i32"], "return_ty": "i32"},
         {"name": "evaluate", "params": ["i32", "i32"], "return_ty": "i32"},
     ]}
+
+
+def test_stage59_fn_leaves_json(tmp_path):
+    """Stage 59 follow-on / Tier 4 #13 polish: --fn-leaves-json emits
+    {leaves, n_leaves}."""
+    import json
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "flj.hx"
+    src.write_text(
+        "fn leaf_a() -> i32 { 1 }\n"
+        "fn leaf_b() -> i32 { 2 }\n"
+        "fn calls() -> i32 { leaf_a() + leaf_b() }\n",
+        encoding="utf-8",
+    )
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--fn-leaves-json", str(src)],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0
+    result = json.loads(proc.stdout)
+    assert result == {
+        "leaves": ["leaf_a", "leaf_b"],
+        "n_leaves": 2,
+    }
+
+
+def test_stage59_fn_roots_json(tmp_path):
+    """Stage 59 follow-on / Tier 4 #13 polish: --fn-roots-json emits
+    {roots, n_roots} — fns never called by any local fn."""
+    import json
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "frj.hx"
+    src.write_text(
+        "fn leaf() -> i32 { 1 }\n"
+        "fn main() -> i32 { leaf() }\n"
+        "fn unused() -> i32 { 99 }\n",
+        encoding="utf-8",
+    )
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--fn-roots-json", str(src)],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0
+    result = json.loads(proc.stdout)
+    # main + unused are not called by any other fn; leaf is.
+    assert result == {
+        "roots": ["main", "unused"],
+        "n_roots": 2,
+    }
 
 
 def test_stage59_fn_reachable_from_json(tmp_path):
