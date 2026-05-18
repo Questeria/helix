@@ -620,20 +620,63 @@ class BorrowState:
         return self.state.get(place, BORROW_FREE)
 
     def check_borrow_shared(self, place: Place) -> bool:
-        """Stage 66 Inc 1 — STUB: returns True (always allow).
-        Inc 2 will enforce: ok if state in {FREE, SHARED}; reject
-        if MUTABLE or MOVED."""
+        """Stage 66 Inc 2 — enforce: ok if state in {FREE, SHARED};
+        reject if MUTABLE or MOVED. On success, increment the
+        shared-count and transition state to SHARED.
+        """
+        cur = self.state.get(place, BORROW_FREE)
+        if cur in (BORROW_MUTABLE, BORROW_MOVED):
+            return False
+        # Transition to SHARED + bump count.
+        self.state[place] = BORROW_SHARED
+        self.shared_counts[place] = (
+            self.shared_counts.get(place, 0) + 1)
         return True
 
     def check_borrow_mutable(self, place: Place) -> bool:
-        """Stage 66 Inc 1 — STUB: returns True (always allow).
-        Inc 2 will enforce: ok only if state == FREE."""
+        """Stage 66 Inc 2 — enforce: ok only if state == FREE.
+        On success, transition to MUTABLE.
+        """
+        cur = self.state.get(place, BORROW_FREE)
+        if cur != BORROW_FREE:
+            return False
+        self.state[place] = BORROW_MUTABLE
         return True
 
     def check_move(self, place: Place) -> bool:
-        """Stage 66 Inc 1 — STUB: returns True (always allow).
-        Inc 2 will enforce: ok only if state == FREE."""
+        """Stage 66 Inc 2 — enforce: ok only if state == FREE.
+        On success, transition to MOVED (place is no longer
+        usable).
+        """
+        cur = self.state.get(place, BORROW_FREE)
+        if cur != BORROW_FREE:
+            return False
+        self.state[place] = BORROW_MOVED
+        self.shared_counts.pop(place, None)
         return True
+
+    def release_shared(self, place: Place) -> None:
+        """Stage 66 Inc 2 — release one outstanding shared borrow
+        (called at the end of an expression / block where the
+        borrow goes out of scope). When the count drops to 0,
+        transition back to FREE.
+        """
+        cur_count = self.shared_counts.get(place, 0)
+        if cur_count <= 1:
+            self.shared_counts.pop(place, None)
+            # Only transition back to FREE if we were SHARED.
+            # Don't accidentally un-MOVED or un-MUTABLE.
+            if self.state.get(place) == BORROW_SHARED:
+                self.state[place] = BORROW_FREE
+        else:
+            self.shared_counts[place] = cur_count - 1
+
+    def release_mutable(self, place: Place) -> None:
+        """Stage 66 Inc 2 — release a mutable borrow (called at
+        scope exit). Transitions back to FREE.
+        """
+        if self.state.get(place) == BORROW_MUTABLE:
+            self.state[place] = BORROW_FREE
 
 
 @dataclass

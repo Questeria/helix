@@ -4707,6 +4707,99 @@ def test_stage68_inc1_confidence_takes_exactly_one_arg():
         f"expected Conf-arity error, got errors: {errors}")
 
 
+def test_stage66_inc2_borrow_enforcement_shared_xor_mutable():
+    """Stage 66 Inc 2 — Tier 4 #16 enforce the Rust 1.0-era xor
+    rule: one `&mut` xor any number of `&` per place.
+
+    Inc 1 shipped scaffolding stubs returning True; Inc 2 enforces
+    the actual rules:
+    - check_borrow_shared: ok if FREE or SHARED (transitions to SHARED;
+      bumps count). Rejects MUTABLE / MOVED.
+    - check_borrow_mutable: ok only if FREE (transitions to MUTABLE).
+      Rejects SHARED / MUTABLE / MOVED.
+    - check_move: ok only if FREE (transitions to MOVED).
+    """
+    from helixc.frontend.typecheck import (
+        Place, BorrowState, BORROW_FREE, BORROW_SHARED,
+        BORROW_MUTABLE, BORROW_MOVED,
+    )
+
+    bs = BorrowState()
+    p = Place.local("x")
+    bs.define(p)
+
+    # First shared borrow: ok, transitions FREE → SHARED.
+    assert bs.check_borrow_shared(p) is True
+    assert bs.status(p) == BORROW_SHARED
+    # Second shared borrow: ok, count bumps.
+    assert bs.check_borrow_shared(p) is True
+    # Mutable borrow while SHARED: REJECTED.
+    assert bs.check_borrow_mutable(p) is False
+    # Move while SHARED: REJECTED.
+    assert bs.check_move(p) is False
+    # Release one shared (still SHARED, count > 0 originally).
+    bs.release_shared(p)
+    # Release the last shared → back to FREE.
+    bs.release_shared(p)
+    assert bs.status(p) == BORROW_FREE
+
+    # Now mutable borrow: ok, transitions FREE → MUTABLE.
+    assert bs.check_borrow_mutable(p) is True
+    assert bs.status(p) == BORROW_MUTABLE
+    # Second mutable borrow: REJECTED (xor rule).
+    assert bs.check_borrow_mutable(p) is False
+    # Shared borrow while MUTABLE: REJECTED.
+    assert bs.check_borrow_shared(p) is False
+    # Release mutable → back to FREE.
+    bs.release_mutable(p)
+    assert bs.status(p) == BORROW_FREE
+
+    # Move: ok, transitions FREE → MOVED.
+    assert bs.check_move(p) is True
+    assert bs.status(p) == BORROW_MOVED
+    # All further operations on a MOVED place: REJECTED.
+    assert bs.check_borrow_shared(p) is False
+    assert bs.check_borrow_mutable(p) is False
+    assert bs.check_move(p) is False
+
+
+def test_stage66_inc2_borrow_independent_places_do_not_interfere():
+    """Stage 66 Inc 2: borrows on different Places are independent.
+    `&x` and `&mut y` are both allowed simultaneously."""
+    from helixc.frontend.typecheck import Place, BorrowState
+
+    bs = BorrowState()
+    x = Place.local("x")
+    y = Place.local("y")
+    bs.define(x)
+    bs.define(y)
+
+    assert bs.check_borrow_shared(x) is True
+    assert bs.check_borrow_mutable(y) is True
+    # Different places, no interference.
+
+
+def test_stage66_inc2_field_places_distinct_from_local():
+    """Stage 66 Inc 2: Place.field(parent, "f") is distinct from
+    Place.local("parent") — a `&mut p.f` doesn't block `&p`
+    (or vice versa) at the Place-level granularity (Phase-0;
+    real semantics need a sub-place model, future polish)."""
+    from helixc.frontend.typecheck import Place, BorrowState
+
+    bs = BorrowState()
+    p_local = Place.local("p")
+    p_field = Place.field(p_local, "x")
+    bs.define(p_local)
+    bs.define(p_field)
+    # Independent at Place level — borrowing the whole local
+    # doesn't auto-borrow the field.
+    assert bs.check_borrow_mutable(p_local) is True
+    assert bs.check_borrow_mutable(p_field) is True
+    # (In a real borrow checker, p_local borrow would imply
+    # p_field is also borrowed; Inc 3-5 will add place-hierarchy
+    # propagation. For now, each Place is enforced independently.)
+
+
 def test_stage66_inc1_borrow_checker_scaffolding():
     """Stage 66 Inc 1 — Tier 4 #16 borrow checker scaffolding.
 
@@ -4743,10 +4836,14 @@ def test_stage66_inc1_borrow_checker_scaffolding():
     assert bs.status(p_local) == BORROW_FREE  # default
     bs.define(p_local)
     assert bs.status(p_local) == BORROW_FREE
-    # Inc 1 stubs: all checks return True (no enforcement).
+    # Stage 66 Inc 2 wired real enforcement — shared OK from FREE.
     assert bs.check_borrow_shared(p_local) is True
-    assert bs.check_borrow_mutable(p_local) is True
-    assert bs.check_move(p_local) is True
+    # After shared borrow taken, status is SHARED, not FREE.
+    assert bs.status(p_local) == BORROW_SHARED
+    # Mutable borrow on SHARED place: REJECTED.
+    assert bs.check_borrow_mutable(p_local) is False
+    # Move on SHARED place: REJECTED.
+    assert bs.check_move(p_local) is False
 
     # Status constants are distinct strings.
     assert len({BORROW_FREE, BORROW_SHARED, BORROW_MUTABLE,

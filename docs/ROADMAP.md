@@ -329,6 +329,22 @@ Re-sequenced after Stage 46-47 closed:
     (exit code 42 iff training ran end-to-end + checkpoint
     round-trip succeeded).
 
+- **Stage 66 Inc 2 SHIPPED 2026-05-18** — Tier 4 #16 borrow
+  enforcement (xor rule + move detection):
+  - `BorrowState.check_borrow_shared/mutable/move` now actually
+    enforce state transitions:
+    * shared from FREE/SHARED → SHARED (bump count); REJECT from
+      MUTABLE/MOVED
+    * mutable from FREE → MUTABLE; REJECT from SHARED/MUTABLE/MOVED
+    * move from FREE → MOVED; REJECT from anywhere else
+    * MOVED is terminal — all further checks REJECT
+  - New `release_shared(place)` / `release_mutable(place)` for
+    scope-exit reconciliation (Inc 3 will wire into block exit).
+  - Different Places are independent (`&x` + `&mut y` both allowed).
+  - 3 new tests; 302 typecheck + 223 self-host GREEN.
+  - Inc 3 plan: wire enforcement at typecheck `&`/`&mut` sites
+    + block-exit reconciliation across branches.
+
 - **Stage 66 Inc 1 SHIPPED 2026-05-18** — Tier 4 #16 borrow
   checker scaffolding (see `docs/stage66-progress-2026-05-18.md`):
   - **Architectural decision (made autonomously, user can
