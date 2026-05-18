@@ -884,6 +884,8 @@ class Lowerer:
                 "TinyEnergy", "Energy", "LargeEnergy",
                 # TyEnclave (Stage 79)
                 "InEnclaveSGX", "InEnclaveTZ", "InEnclaveTDX",
+                # TyCounterfactual (Stage 80)
+                "Actual", "Counterfactual", "Intervention",
             }
             if (ty.base in _STAGE75_WRAPPER_ALIASES
                     and len(ty.args) == 1):
@@ -1956,7 +1958,13 @@ class Lowerer:
                     and expr.callee.name in (
                         "__wrap_conf", "__wrap_taint", "__wrap_dp",
                         "__wrap_quant", "__wrap_domain", "__wrap_robust",
-                        "__wrap_energy", "__wrap_enclave")
+                        "__wrap_energy", "__wrap_enclave",
+                        "__wrap_cfact")
+                    and len(expr.args) == 1):
+                return self._lower_expr(expr.args[0])
+            # Stage 80 Inc 3 — counterfactual opt-out builtin.
+            if (isinstance(expr.callee, A.Name)
+                    and expr.callee.name == "__as_actual"
                     and len(expr.args) == 1):
                 return self._lower_expr(expr.args[0])
             # Stage 76 Inc 3 — energy opt-out builtin.

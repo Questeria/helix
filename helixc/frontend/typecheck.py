@@ -329,6 +329,43 @@ class TyConf(Type):
 
 
 @dataclass(frozen=True)
+class TyCounterfactual(Type):
+    """Stage 80 — counterfactual-reasoning type (Tier-A #1
+    deeper-than-Locus per HELIX_V1_FINAL_FEATURES). A value tagged
+    with whether it's an actual observation or a counterfactual
+    ("what would have happened if X were Y"). Critical for AGI
+    causal reasoning: an AGI that confuses actual outcomes with
+    counterfactuals draws systematically wrong conclusions about
+    interventions.
+
+    Phase-0 representation: mode stored as string.
+    - "actual"        → real-world observation
+    - "counterfactual" → what-if simulation result
+    - "intervention"  → result of an active do-intervention
+                        (Pearl-style)
+
+    Three preset aliases ship in Inc 1:
+    - `Actual<T>`         → mode "actual"
+    - `Counterfactual<T>` → mode "counterfactual"
+    - `Intervention<T>`   → mode "intervention"
+
+    Compositional rule: any non-actual mode WINS over actual (you
+    can't combine real-world data with a what-if and call the
+    result real-world). Rank: actual=0 < intervention=1 <
+    counterfactual=2.
+
+    Composes with TyCausal (Stage 41) which is the orthogonal
+    cause/effect/joint/independent axis. Together they cover the
+    full Pearl-causality substrate.
+
+    Inc 1 ships scaffolding; Inc 2 propagation; Inc 3
+    `__as_actual(x)` opt-out (acknowledges treating a what-if
+    as if it were real — audit-grep contract)."""
+    mode: str        # "actual", "counterfactual", "intervention"
+    inner: Type
+
+
+@dataclass(frozen=True)
 class TyEnclave(Type):
     """Stage 79 — trusted execution environment (TEE) type
     (Tier-C #8 from HELIX_V1_FINAL_FEATURES). A value tagged with
@@ -2114,6 +2151,23 @@ class TypeChecker:
                     return TyUnknown(hint=ty.base)
                 return TyConf(level=conf_map[ty.base],
                                inner=self._resolve_type(ty.args[0], scope))
+            # Stage 80 Inc 1 — counterfactual-reasoning modes.
+            # F5 arity arm.
+            cfact_map = {
+                "Actual":         "actual",
+                "Counterfactual": "counterfactual",
+                "Intervention":   "intervention",
+            }
+            if ty.base in cfact_map:
+                if len(ty.args) != 1:
+                    self.errors.append(TypeError_(
+                        f"{ty.base}<T> takes 1 type argument, "
+                        f"got {len(ty.args)}",
+                        ty.span,
+                    ))
+                    return TyUnknown(hint=ty.base)
+                return TyCounterfactual(mode=cfact_map[ty.base],
+                                        inner=self._resolve_type(ty.args[0], scope))
             # Stage 79 Inc 1 — trusted-execution environment names.
             # F5 arity arm.
             enclave_map = {
@@ -3192,6 +3246,10 @@ class TypeChecker:
         # (audit-grep contract: this is the only legal way for a
         # value to leave an enclave's protection scope).
         "__exit_enclave",
+        # Stage 80 Inc 3 — counterfactual opt-out. `__as_actual(x)`
+        # strips a TyCounterfactual wrapper, marking an explicit
+        # what-if-to-real-world transition (audit-grep).
+        "__as_actual",
         # Stage 75 — Tier-S/A wrapper constructor builtins. Inverse of
         # the opt-out builtins: take a plain T (or already-wrapped T),
         # add the appropriate wrapper at the outermost layer. Each
@@ -3209,6 +3267,8 @@ class TypeChecker:
         "__wrap_energy",     # adds Energy<T> (budget "1.0", typical edge)
         # Stage 79 — TyEnclave constructor.
         "__wrap_enclave",    # adds InEnclaveSGX<T> by default
+        # Stage 80 — TyCounterfactual constructor.
+        "__wrap_cfact",      # adds Counterfactual<T> by default
         "__strlen", "__strbyte", "__streq", "__strlit_to_arena",
         "__hash_i32",
         # Stage 55 Inc 1 — runtime string builtins. Operate on
@@ -4603,6 +4663,8 @@ class TypeChecker:
                     return _unwrap(t.inner)
                 if isinstance(t, TyEnclave):
                     return _unwrap(t.inner)
+                if isinstance(t, TyCounterfactual):
+                    return _unwrap(t.inner)
                 return t
 
             l_is_logic = isinstance(l, TyLogic) or (
@@ -4814,6 +4876,40 @@ class TypeChecker:
             l_is_enclave = l_enclave_name is not None
             r_is_enclave = r_enclave_name is not None
 
+            # Stage 80 Inc 2 — TyCounterfactual. Rank: actual=0 <
+            # intervention=1 < counterfactual=2. Non-actual modes
+            # win — once a what-if contaminates, the result is a
+            # what-if.
+            def _find_cfact_mode(t: Type) -> Optional[str]:
+                if isinstance(t, TyCounterfactual):
+                    return t.mode
+                if isinstance(t, TyDiff):
+                    return _find_cfact_mode(t.inner)
+                if isinstance(t, TyLogic):
+                    return _find_cfact_mode(t.inner)
+                if isinstance(t, TyConf):
+                    return _find_cfact_mode(t.inner)
+                if isinstance(t, TyTaint):
+                    return _find_cfact_mode(t.inner)
+                if isinstance(t, TyDP):
+                    return _find_cfact_mode(t.inner)
+                if isinstance(t, TyQuant):
+                    return _find_cfact_mode(t.inner)
+                if isinstance(t, TyDomain):
+                    return _find_cfact_mode(t.inner)
+                if isinstance(t, TyRobust):
+                    return _find_cfact_mode(t.inner)
+                if isinstance(t, TyEnergy):
+                    return _find_cfact_mode(t.inner)
+                if isinstance(t, TyEnclave):
+                    return _find_cfact_mode(t.inner)
+                return None
+
+            l_cfact_mode = _find_cfact_mode(l)
+            r_cfact_mode = _find_cfact_mode(r)
+            l_is_cfact = l_cfact_mode is not None
+            r_is_cfact = r_cfact_mode is not None
+
             if (l_is_logic or r_is_logic or l_is_diff or r_is_diff
                     or l_is_conf or r_is_conf
                     or l_is_taint or r_is_taint
@@ -4822,7 +4918,8 @@ class TypeChecker:
                     or l_is_domain or r_is_domain
                     or l_is_robust or r_is_robust
                     or l_is_energy or r_is_energy
-                    or l_is_enclave or r_is_enclave):
+                    or l_is_enclave or r_is_enclave
+                    or l_is_cfact or r_is_cfact):
                 # Audit 28.8 B13 (trap AD002 / 24200): TyDiff binop
                 # with mixed inner types previously silently coerced
                 # the right operand to the left's inner type. The
@@ -5091,6 +5188,23 @@ class TypeChecker:
                     chosen_label = max(
                         labels, key=lambda lb: _taint_rank.get(lb, 0))
                     wrapped = TyTaint(label=chosen_label, inner=wrapped)
+                # Stage 80 Inc 2 — TyCounterfactual sits between
+                # TyTaint and TyEnclave. Non-actual modes win.
+                if l_is_cfact or r_is_cfact:
+                    _cfact_rank = {
+                        "actual":         0,
+                        "intervention":   1,
+                        "counterfactual": 2,
+                    }
+                    modes = []
+                    if l_cfact_mode is not None:
+                        modes.append(l_cfact_mode)
+                    if r_cfact_mode is not None:
+                        modes.append(r_cfact_mode)
+                    chosen_mode = max(
+                        modes, key=lambda m: _cfact_rank.get(m, 0))
+                    wrapped = TyCounterfactual(mode=chosen_mode,
+                                               inner=wrapped)
                 # Stage 79 Inc 2 — TyEnclave is the absolute outermost
                 # wrapper (above TyTaint). Once a value is inside an
                 # enclave, the enclave boundary constrains everything
@@ -5224,6 +5338,9 @@ class TypeChecker:
                     return TyEnergy(budget="1.0", inner=arg_tys[0])
                 if bn == "__wrap_enclave" and len(arg_tys) == 1:
                     return TyEnclave(enclave="sgx", inner=arg_tys[0])
+                if bn == "__wrap_cfact" and len(arg_tys) == 1:
+                    return TyCounterfactual(mode="counterfactual",
+                                            inner=arg_tys[0])
                 # Stage 68 Inc 3 — confidence-tag opt-out builtin.
                 # `__lift_conf(x)` returns the inner type of a TyConf
                 # value, acknowledging the user is exiting the
@@ -5325,6 +5442,44 @@ class TypeChecker:
                             return TyLogic(inner=_strip_quant(t.inner))
                         return t
                     return _strip_quant(arg_ty)
+                # Stage 80 Inc 3 — counterfactual opt-out builtin.
+                # `__as_actual(x)` strips a TyCounterfactual wrapper,
+                # marking an explicit what-if-to-real-world transition.
+                if bn == "__as_actual" and len(arg_tys) == 1:
+                    arg_ty = arg_tys[0]
+                    def _strip_cfact(t):
+                        if isinstance(t, TyCounterfactual):
+                            return t.inner
+                        if isinstance(t, TyEnclave):
+                            return TyEnclave(enclave=t.enclave,
+                                             inner=_strip_cfact(t.inner))
+                        if isinstance(t, TyTaint):
+                            return TyTaint(label=t.label,
+                                           inner=_strip_cfact(t.inner))
+                        if isinstance(t, TyDP):
+                            return TyDP(epsilon=t.epsilon,
+                                        inner=_strip_cfact(t.inner))
+                        if isinstance(t, TyConf):
+                            return TyConf(level=t.level,
+                                          inner=_strip_cfact(t.inner))
+                        if isinstance(t, TyDomain):
+                            return TyDomain(status=t.status,
+                                            inner=_strip_cfact(t.inner))
+                        if isinstance(t, TyQuant):
+                            return TyQuant(bits=t.bits,
+                                           inner=_strip_cfact(t.inner))
+                        if isinstance(t, TyRobust):
+                            return TyRobust(eps=t.eps,
+                                            inner=_strip_cfact(t.inner))
+                        if isinstance(t, TyEnergy):
+                            return TyEnergy(budget=t.budget,
+                                            inner=_strip_cfact(t.inner))
+                        if isinstance(t, TyDiff):
+                            return TyDiff(inner=_strip_cfact(t.inner))
+                        if isinstance(t, TyLogic):
+                            return TyLogic(inner=_strip_cfact(t.inner))
+                        return t
+                    return _strip_cfact(arg_ty)
                 # Stage 79 Inc 3 — enclave opt-out builtin.
                 # `__exit_enclave(x)` strips the TyEnclave wrapper.
                 # An external audit pass can grep for `__exit_enclave`
@@ -11390,6 +11545,11 @@ class TypeChecker:
             if cap is not None:
                 return f"{cap}<{self._fmt(t.inner)}>"
             return f"InEnclave({t.enclave})<{self._fmt(t.inner)}>"
+        if isinstance(t, TyCounterfactual):
+            cap_map = {"actual": "Actual",
+                       "counterfactual": "Counterfactual",
+                       "intervention": "Intervention"}
+            return f"{cap_map.get(t.mode, t.mode)}<{self._fmt(t.inner)}>"
         if isinstance(t, TyResult):
             return (f"Result<{self._fmt(t.ok_ty)}, "
                     f"{self._fmt(t.err_ty)}>")

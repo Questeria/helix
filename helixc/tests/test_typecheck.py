@@ -4877,6 +4877,102 @@ def test_stage77_plain_fn_not_registered_as_property():
     assert "returns_bool" not in tc._property_fn_names
 
 
+def test_stage80_inc1_cfact_type_recognition():
+    from helixc.frontend.typecheck import TypeChecker
+    from helixc.frontend.parser import parse
+
+    src = """
+    fn user(a: Actual<f32>, b: Counterfactual<f32>) -> f32 { 0.0 }
+    fn main() -> i32 { 0 }
+    """
+    prog = parse(src, include_stdlib=False)
+    tc = TypeChecker(prog)
+    errors = tc.check()
+    arity_errs = [str(e) for e in errors
+                  if "takes 1 type argument" in str(e)
+                  and ("Actual" in str(e) or "Counterfactual" in str(e))]
+    assert len(arity_errs) == 0, arity_errs
+
+
+def test_stage80_inc1_three_cfact_aliases_resolve():
+    from helixc.frontend.typecheck import TypeChecker
+    from helixc.frontend.parser import parse
+
+    src = """
+    fn a(x: Actual<i32>) -> i32 { 0 }
+    fn b(x: Counterfactual<i32>) -> i32 { 0 }
+    fn c(x: Intervention<i32>) -> i32 { 0 }
+    fn main() -> i32 { 0 }
+    """
+    prog = parse(src, include_stdlib=False)
+    tc = TypeChecker(prog)
+    errors = tc.check()
+    name_errs = [str(e) for e in errors
+                 if any(n in str(e) for n in ["Actual", "Counterfactual",
+                                              "Intervention"])
+                 and ("takes 1 type argument" in str(e)
+                      or "unbound" in str(e))]
+    assert len(name_errs) == 0, name_errs
+
+
+def test_stage80_inc2_counterfactual_dominates_actual_in_binop():
+    """Stage 80 Inc 2 — `Actual<f32> + Counterfactual<f32>` yields
+    Counterfactual<f32> (non-actual wins; can't mix what-if with
+    real-world and call result real-world)."""
+    from helixc.frontend.typecheck import TypeChecker
+    from helixc.frontend.parser import parse
+
+    src = """
+    fn user(a: Actual<f32>, b: Counterfactual<f32>) -> Counterfactual<f32> {
+        a + b
+    }
+    fn main() -> i32 { 0 }
+    """
+    prog = parse(src, include_stdlib=False)
+    tc = TypeChecker(prog)
+    errors = tc.check()
+    type_errs = [str(e) for e in errors
+                 if "return" in str(e).lower()
+                 or "Actual" in str(e) or "Counterfactual" in str(e)]
+    assert len(type_errs) == 0, type_errs
+
+
+def test_stage80_inc3_as_actual_strips_outer_cfact():
+    from helixc.frontend.typecheck import TypeChecker
+    from helixc.frontend.parser import parse
+
+    src = """
+    fn user(x: Counterfactual<f32>) -> f32 {
+        __as_actual(x)
+    }
+    fn main() -> i32 { 0 }
+    """
+    prog = parse(src, include_stdlib=False)
+    tc = TypeChecker(prog)
+    errors = tc.check()
+    type_errs = [str(e) for e in errors
+                 if "return" in str(e).lower() or "Counterfactual" in str(e)]
+    assert len(type_errs) == 0, type_errs
+
+
+def test_stage80_wrap_cfact_constructor():
+    from helixc.frontend.typecheck import TypeChecker
+    from helixc.frontend.parser import parse
+
+    src = """
+    fn user(x: f32) -> Counterfactual<f32> {
+        __wrap_cfact(x)
+    }
+    fn main() -> i32 { 0 }
+    """
+    prog = parse(src, include_stdlib=False)
+    tc = TypeChecker(prog)
+    errors = tc.check()
+    type_errs = [str(e) for e in errors
+                 if "return" in str(e).lower() or "Counterfactual" in str(e)]
+    assert len(type_errs) == 0, type_errs
+
+
 def test_stage79_inc1_enclave_type_recognition():
     from helixc.frontend.typecheck import TypeChecker
     from helixc.frontend.parser import parse

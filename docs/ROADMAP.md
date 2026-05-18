@@ -303,6 +303,34 @@ Re-sequenced after Stage 46-47 closed:
 - **Stage 58** ✅ **CLOSED 2026-05-18** — Tier 4 #13 content-
   addressed modules (program_hash + module_hash + fn_signature_hash
   core).
+- **Stage 80 SUBSTANTIALLY COMPLETE 2026-05-18** — Tier-A #1
+  Counterfactual-reasoning types (deeper-than-Locus per V1
+  features doc):
+  - Inc 1: TyCounterfactual(mode, inner) + 3 presets (Actual /
+    Counterfactual / Intervention modes).
+  - Inc 2: non-actual-wins propagation (Actual + Counterfactual
+    = Counterfactual; rank: actual=0 < intervention=1 <
+    counterfactual=2). Once a what-if contaminates the
+    computation, the result is a what-if.
+  - Inc 3: `__as_actual(x)` opt-out (explicit what-if-to-real-
+    world transition; audit-grep contract) + `__wrap_cfact(x)`
+    constructor (defaults to "counterfactual" mode).
+  - Layered between TyTaint (inner) and TyEnclave (outer) —
+    counterfactuals are an epistemic property of the value but
+    don't escape the enclave boundary.
+  - Composes with TyCausal (Stage 41 orthogonal cause/effect/
+    joint/independent axis) for full Pearl-causality substrate.
+  - Use case: AGI counterfactual reasoning ("what would have
+    happened if?"), interventional inference (Pearl-style
+    do-operator), distinguishing observation from simulation
+    in scientific AI.
+  - 5 new tests; 385 typecheck + 451 regression GREEN.
+
+  **9 wrapper milestone**: TyCounterfactual brings the new
+  Tier-S/A wrapper count to 9. Combined with TyDiff / TyLogic /
+  TyModal / TyCausal: **13 composable type-system wrappers**
+  in the v1.0 substrate.
+
 - **Stage 79 SUBSTANTIALLY COMPLETE 2026-05-18** — Tier-C #8
   Trusted execution environment (TEE / enclave) types:
   - Inc 1: TyEnclave(enclave, inner) + 3 presets (InEnclaveSGX=
