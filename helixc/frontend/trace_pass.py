@@ -187,6 +187,50 @@ def trace_diff(a: TraceBuffer, b: TraceBuffer) -> Optional[tuple]:
     return None  # equal
 
 
+def trace_size(buf: TraceBuffer) -> int:
+    """Stage 59 follow-on / Tier 3 #11 polish — number of events in
+    the trace buffer. Equivalent to len(buf) but spelled clearly for
+    parity with the pytree.tree_size helper."""
+    return len(buf.events)
+
+
+def trace_count(buf: TraceBuffer, predicate) -> int:
+    """Stage 59 follow-on / Tier 3 #11 polish — count events matching
+    a predicate. Equivalent to len(trace_filter(buf, predicate))
+    but doesn't allocate a new TraceBuffer.
+
+    Use cases:
+    - How many calls did fn "loss" make?
+        trace_count(buf, lambda e: e.fn_name == "loss")
+    - How many entry events (= number of function invocations)?
+        trace_count(buf, lambda e: e.op_kind == "entry")
+    - How many ops returned a non-None result?
+        trace_count(buf, lambda e: e.result is not None)
+    """
+    return sum(1 for ev in buf.events if predicate(ev))
+
+
+def trace_op_counts(buf: TraceBuffer) -> dict:
+    """Stage 59 follow-on / Tier 3 #11 polish — histogram of op_kind
+    counts across the trace.
+
+    Returns a dict {op_kind: count}. Sorted by op_kind name
+    implicitly via Python 3.7+ dict-insertion-order if iterated
+    after sorted(). Useful summary for trace_summary's header line.
+
+    Example:
+        {"entry": 3, "exit": 3, "op": 17}
+
+    Use case: quick sanity check that entry/exit are balanced (each
+    entry has a matching exit), or to spot unexpectedly many ops in
+    a candidate trace vs reference.
+    """
+    counts: dict = {}
+    for ev in buf.events:
+        counts[ev.op_kind] = counts.get(ev.op_kind, 0) + 1
+    return counts
+
+
 def trace_hash(buf: TraceBuffer) -> str:
     """Stage 59 follow-on / Tier 3 #11 polish — content-addressable
     hash of a trace buffer.

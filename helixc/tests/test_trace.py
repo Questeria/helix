@@ -449,6 +449,66 @@ def test_stage59_trace_diff_different_lengths():
     assert diff == (1, None, b.events[1])
 
 
+def test_stage59_trace_size_counts_events():
+    """Stage 59 follow-on / Tier 3 #11 polish: trace_size returns the
+    number of events (parity with pytree.tree_size)."""
+    from helixc.frontend.trace_pass import trace_size
+    empty = TraceBuffer()
+    assert trace_size(empty) == 0
+    buf = TraceBuffer(events=[
+        TraceEvent("entry", "f", ()),
+        TraceEvent("op", "f", ("add",), result=1),
+        TraceEvent("exit", "f", (1,)),
+    ])
+    assert trace_size(buf) == 3
+
+
+def test_stage59_trace_count_matches_predicate():
+    """Stage 59 follow-on: trace_count returns the number of events
+    where predicate(event) is True."""
+    from helixc.frontend.trace_pass import trace_count
+    buf = TraceBuffer(events=[
+        TraceEvent("entry", "f", ()),
+        TraceEvent("entry", "g", ()),
+        TraceEvent("exit", "g", (2,)),
+        TraceEvent("exit", "f", (1,)),
+    ])
+    assert trace_count(buf, lambda e: e.op_kind == "entry") == 2
+    assert trace_count(buf, lambda e: e.fn_name == "f") == 2
+    assert trace_count(buf, lambda e: True) == 4
+    assert trace_count(buf, lambda e: False) == 0
+
+
+def test_stage59_trace_op_counts_histogram():
+    """Stage 59 follow-on: trace_op_counts returns a {op_kind: count}
+    histogram. Use for entry/exit balance sanity."""
+    from helixc.frontend.trace_pass import trace_op_counts
+    buf = TraceBuffer(events=[
+        TraceEvent("entry", "f", ()),
+        TraceEvent("op", "f", ("add",), result=1),
+        TraceEvent("op", "f", ("mul",), result=2),
+        TraceEvent("exit", "f", (2,)),
+    ])
+    assert trace_op_counts(buf) == {"entry": 1, "op": 2, "exit": 1}
+    # Empty trace → empty histogram
+    assert trace_op_counts(TraceBuffer()) == {}
+
+
+def test_stage59_trace_op_counts_entry_exit_balance():
+    """Stage 59 follow-on: trace_op_counts enables a quick entry/exit
+    balance check (number of entries == number of exits for a clean
+    trace)."""
+    from helixc.frontend.trace_pass import trace_op_counts
+    balanced = TraceBuffer(events=[
+        TraceEvent("entry", "f", ()),
+        TraceEvent("exit", "f", (1,)),
+        TraceEvent("entry", "g", ()),
+        TraceEvent("exit", "g", (2,)),
+    ])
+    counts = trace_op_counts(balanced)
+    assert counts.get("entry", 0) == counts.get("exit", 0) == 2
+
+
 def test_stage59_trace_hash_deterministic():
     """Stage 59 follow-on / Tier 3 #11 polish: trace_hash returns the
     same hex SHA-256 for the same event sequence across calls."""
