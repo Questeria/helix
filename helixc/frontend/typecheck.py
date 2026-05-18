@@ -11942,6 +11942,25 @@ class TypeChecker:
         # mark fn as a verifier callback for the
         # modify(target, transformation, verifier) AGI primitive.
         "verifier",
+        # Stage 94 (Stage 93 audit HIGH-#3 fix): missing whitelist
+        # entries that Stage 92 omitted. Each is consumed by a real
+        # pass:
+        # - @overload / @dispatch: Stage 65 multi-dispatch
+        #   opt-in markers, consumed by flatten_impls.py:64.
+        # - @unwind: panic unwinding marker, consumed by
+        #   panic_pass.py:155.
+        # - @trace: runtime trace instrumentation marker,
+        #   consumed by trace_pass.py:106.
+        # Pre-Stage-94, Stage 92's narrow whitelist caused
+        # "unknown attribute" diagnostics on these legitimate
+        # attributes. Cascade-defect class: future stages
+        # introducing new attribute consumers must also register
+        # here (Stage 99+ refactor: auto-derive via a module-level
+        # FN_ATTR_REGISTRY that each pass writes to).
+        "overload",
+        "dispatch",
+        "unwind",
+        "trace",
     })
     _KNOWN_STRUCT_ATTRS: frozenset = frozenset({
         # Stage 66 Inc 4 Copy marker.

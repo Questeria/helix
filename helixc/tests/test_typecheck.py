@@ -4974,6 +4974,39 @@ def test_stage83_wrap_attr_constructor():
     assert len(type_errs) == 0, type_errs
 
 
+def test_stage94_known_attrs_overload_dispatch_unwind_trace_accepted():
+    """Stage 94 (Stage 93 audit HIGH-#3 fix) — `@overload`,
+    `@dispatch`, `@unwind`, `@trace` are real attributes consumed
+    by flatten_impls.py / panic_pass.py / trace_pass.py. Stage 92's
+    narrow whitelist regressed them. Stage 94 adds them back."""
+    from helixc.frontend.typecheck import typecheck
+    from helixc.frontend.parser import parse
+
+    src = """
+    @overload
+    fn a() -> i32 { 0 }
+
+    @dispatch
+    fn b() -> i32 { 0 }
+
+    @unwind
+    fn c() -> i32 { 0 }
+
+    @trace
+    fn d() -> i32 { 0 }
+
+    fn main() -> i32 { 0 }
+    """
+    prog = parse(src, include_stdlib=False)
+    errors = typecheck(prog)
+    unknown_errs = [str(e) for e in errors
+                    if "unknown attribute" in str(e)
+                    and any(n in str(e)
+                            for n in ["@overload", "@dispatch",
+                                      "@unwind", "@trace"])]
+    assert len(unknown_errs) == 0, unknown_errs
+
+
 def test_stage92_unknown_attr_emits_diagnostic_with_levenshtein_hint():
     """Stage 92 (Inc 5d / Stage 91 audit HIGH-#2 fix) — typo
     `@borrowcheck` (missing underscore) now produces a "unknown
