@@ -5874,7 +5874,8 @@ def test_stage59_autodiff_cli_help_mentions_polish_flags():
         "--fn-recursive", "--fn-cycles",
         "--fn-call-stats", "--fn-callgraph-depth",
         "--fn-callgraph-depth-all", "--fn-topo-sort",
-        "--fn-isolated", "--fn-call-path", "--fn-distance",
+        "--fn-isolated", "--fn-call-path",
+        "--fn-distance", "--fn-distance-matrix",
         "--check-program-hash",
         "--check-program-hash-from-file",
         "--check-program-signature-hash",
@@ -7375,6 +7376,36 @@ def test_stage59_fn_roots(tmp_path):
     # util has 2 callers → not root; entry_a, entry_b, truly_dead
     # never called locally → roots.
     assert lines == ["entry_a", "entry_b", "truly_dead"]
+
+
+def test_stage59_fn_distance_matrix(tmp_path):
+    """Stage 59 follow-on / Tier 4 #13 polish: --fn-distance-matrix
+    emits whole-program pairwise distance JSON {from: {to: dist}}."""
+    import json
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "dm.hx"
+    src.write_text(
+        "fn z() -> i32 { 42 }\n"
+        "fn c() -> i32 { z() }\n"
+        "fn b() -> i32 { c() }\n"
+        "fn a() -> i32 { b() }\n",
+        encoding="utf-8",
+    )
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--fn-distance-matrix", str(src)],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0
+    matrix = json.loads(proc.stdout)
+    # a → {a:0, b:1, c:2, z:3}
+    assert matrix["a"] == {"a": 0, "b": 1, "c": 2, "z": 3}
+    # z → only z=0; all others unreachable (-1)
+    assert matrix["z"] == {"a": -1, "b": -1, "c": -1, "z": 0}
+    # Diagonal: every fn reaches itself with distance 0
+    for name in ("a", "b", "c", "z"):
+        assert matrix[name][name] == 0
 
 
 def test_stage59_fn_distance(tmp_path):

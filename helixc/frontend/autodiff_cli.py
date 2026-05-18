@@ -77,6 +77,8 @@ Introspection (Stage 28.9 + Stage 58 + Stage 59 polish):
         Shortest call chain from <from_fn> to <to_fn> via BFS.
     --fn-distance <file.hx> <from_fn> <to_fn>
         Edge-count distance from <from_fn> to <to_fn> (-1 if no path).
+    --fn-distance-matrix <file.hx>
+        Whole-program pairwise shortest-path distances as JSON.
     --fn-leaves <file.hx>
         List 'leaf' fns (those that call no other fn) — sorted, one per line.
     --fn-roots <file.hx>
@@ -1591,6 +1593,85 @@ def _fn_roots(path: str) -> int:
     return 0
 
 
+def _fn_distance_matrix(path: str) -> int:
+    """Stage 59 follow-on / Tier 4 #13 polish: whole-program pairwise
+    shortest-path distance matrix as JSON.
+
+    Output schema:
+      {
+        "<from_fn>": {"<to_fn>": <distance_int>, ...},
+        ...
+      }
+    where <distance_int> is the edge-count shortest distance (0 for
+    self, -1 for unreachable). All locally-defined fns appear as
+    both outer and inner keys.
+
+    Use cases:
+    - Cluster fns by mutual distance (community detection)
+    - Compute eccentricity (max distance from a fn to anywhere
+      reachable) per fn for tier classification
+    - Pair with --fn-distance for single-pair queries; this is the
+      whole-program JSON profile for batch consumption.
+
+    Complexity: O(V * (V + E)) — N BFSes. Fine for source files up
+    to a few thousand fns.
+    """
+    import json
+    from collections import deque
+    from .ast_walker import iter_fn_decls
+    src = _read_source(path)
+    prog = _parse_or_exit(src, path)
+
+    all_fns = list(iter_fn_decls(prog))
+    all_names = sorted(fn.name for fn in all_fns)
+    graph: dict[str, set] = {}
+    for fn in all_fns:
+        callees: set = set()
+
+        def _walk(n) -> None:
+            if n is None:
+                return
+            if isinstance(n, A.Call):
+                if isinstance(n.callee, A.Name):
+                    callees.add(n.callee.name)
+                elif (isinstance(n.callee, A.Path)
+                      and n.callee.segments):
+                    callees.add(n.callee.segments[-1])
+            if hasattr(n, "__dataclass_fields__"):
+                for f in n.__dataclass_fields__:
+                    v = getattr(n, f)
+                    if isinstance(v, list):
+                        for x in v:
+                            _walk(x)
+                    elif isinstance(v, tuple):
+                        for x in v:
+                            _walk(x)
+                    else:
+                        _walk(v)
+
+        if fn.body is not None:
+            _walk(fn.body)
+        graph[fn.name] = {c for c in callees if c in set(all_names)}
+
+    def _bfs_distances(start: str) -> dict:
+        """Return {target_name: distance} for every reachable target.
+        Unreachable targets get -1; self gets 0."""
+        dist: dict = {n: -1 for n in all_names}
+        dist[start] = 0
+        queue = deque([start])
+        while queue:
+            v = queue.popleft()
+            for w in graph.get(v, set()):
+                if dist[w] == -1:
+                    dist[w] = dist[v] + 1
+                    queue.append(w)
+        return dist
+
+    matrix = {name: _bfs_distances(name) for name in all_names}
+    print(json.dumps(matrix, sort_keys=True, indent=2))
+    return 0
+
+
 def _fn_distance(path: str, from_fn: str, to_fn: str) -> int:
     """Stage 59 follow-on / Tier 4 #13 polish: shortest-path distance
     (edge count) from from_fn to to_fn in the local callgraph. -1
@@ -3099,6 +3180,13 @@ def main():
                   file=sys.stderr)
             sys.exit(2)
         sys.exit(_fn_distance(args[0], args[1], args[2]))
+
+    if "--fn-distance-matrix" in flags:
+        if len(args) < 1:
+            print("usage: --fn-distance-matrix <file.hx>",
+                  file=sys.stderr)
+            sys.exit(2)
+        sys.exit(_fn_distance_matrix(args[0]))
 
     if "--fn-leaves" in flags:
         if len(args) < 1:
