@@ -4650,6 +4650,79 @@ def test_stage58_diff_program_hash_differ_exit1(tmp_path):
         f"expected DIFFER for semantic diff: {proc.stdout!r}"
 
 
+def test_stage59_fn_sig_hash_body_change_same_signature(tmp_path):
+    """Stage 59 follow-on: --fn-sig-hash returns same hash for two
+    versions of a fn differing ONLY in body (signature-equivalent).
+    Tests body-change-invariance + alpha-equivalence of param names."""
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    a = tmp_path / "a.hx"
+    a.write_text("fn add(x: i32, y: i32) -> i32 { x + y }\n",
+                  encoding="utf-8")
+    b = tmp_path / "b.hx"
+    # Different param names + different body, same signature.
+    b.write_text("fn add(p: i32, q: i32) -> i32 { p + q + 0 }\n",
+                  encoding="utf-8")
+    proc_a = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--fn-sig-hash", str(a), "add"],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    proc_b = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--fn-sig-hash", str(b), "add"],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc_a.returncode == 0
+    assert proc_b.returncode == 0
+    assert proc_a.stdout.strip() == proc_b.stdout.strip(), \
+        f"signature hash should be unchanged for body-only diff + " \
+        f"alpha-rename; got a={proc_a.stdout!r} b={proc_b.stdout!r}"
+
+
+def test_stage59_fn_sig_hash_param_type_change_differs(tmp_path):
+    """Stage 59 follow-on: --fn-sig-hash returns different hash when
+    a param's type changes (caller-observable ABI break)."""
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    a = tmp_path / "a.hx"
+    a.write_text("fn neg(x: i32) -> i32 { 0 - x }\n", encoding="utf-8")
+    b = tmp_path / "b.hx"
+    b.write_text("fn neg(x: f32) -> i32 { 0 - (x as i32) }\n",
+                  encoding="utf-8")
+    proc_a = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--fn-sig-hash", str(a), "neg"],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    proc_b = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--fn-sig-hash", str(b), "neg"],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc_a.returncode == 0
+    assert proc_b.returncode == 0
+    assert proc_a.stdout.strip() != proc_b.stdout.strip(), \
+        "param type change should flip signature hash"
+
+
+def test_stage59_fn_sig_hash_missing_fn_exits_1(tmp_path):
+    """Stage 59 follow-on: --fn-sig-hash on a missing fn name exits
+    1 with a clean error (no traceback)."""
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "s.hx"
+    src.write_text("fn foo() -> i32 { 0 }\n", encoding="utf-8")
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--fn-sig-hash", str(src), "nope"],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 1
+    assert "not found" in proc.stderr
+    assert "Traceback" not in proc.stderr
+
+
 def test_stage58_changed_fns_lists_diffs(tmp_path):
     """Stage 58: --changed-fns lists per-fn diff (+/-/~) and exits 1
     when changes exist, 0 when no changes."""
