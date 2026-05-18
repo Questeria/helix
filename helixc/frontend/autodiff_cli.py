@@ -67,6 +67,8 @@ Introspection (Stage 28.9 + Stage 58 + Stage 59 polish):
         Per-fn fan-in / fan-out as JSON for hotspot identification.
     --fn-callgraph-depth <file.hx> <entry_fn>
         Max acyclic stack depth from entry_fn (cycles clipped).
+    --fn-callgraph-depth-all <file.hx>
+        Whole-program {fn: depth} JSON profile for stack-risk ranking.
     --fn-leaves <file.hx>
         List 'leaf' fns (those that call no other fn) — sorted, one per line.
     --fn-roots <file.hx>
@@ -1581,6 +1583,81 @@ def _fn_roots(path: str) -> int:
     return 0
 
 
+def _fn_callgraph_depth_all(path: str) -> int:
+    """Stage 59 follow-on / Tier 4 #13 polish: whole-program stack-
+    depth profile as JSON. For every fn, compute the max acyclic
+    call-stack depth treating that fn as entry.
+
+    Output schema:
+      {"<fn_name>": <depth>, ...}
+
+    Companion to --fn-callgraph-depth (single fn). Use cases:
+    - Rank all fns by depth to find the deepest call chains in
+      the program — stack-overflow risk inventory
+    - Sort fns by depth as a complexity proxy (deep = more callees
+      transitively, harder to reason about)
+    - Track depth distribution across releases as a code-health
+      metric
+    """
+    import json
+    from .ast_walker import iter_fn_decls
+    src = _read_source(path)
+    prog = _parse_or_exit(src, path)
+
+    all_fns = list(iter_fn_decls(prog))
+    all_names = {fn.name for fn in all_fns}
+
+    graph: dict[str, set] = {}
+    for fn in all_fns:
+        callees: set = set()
+
+        def _walk(n) -> None:
+            if n is None:
+                return
+            if isinstance(n, A.Call):
+                if isinstance(n.callee, A.Name):
+                    callees.add(n.callee.name)
+                elif (isinstance(n.callee, A.Path)
+                      and n.callee.segments):
+                    callees.add(n.callee.segments[-1])
+            if hasattr(n, "__dataclass_fields__"):
+                for f in n.__dataclass_fields__:
+                    v = getattr(n, f)
+                    if isinstance(v, list):
+                        for x in v:
+                            _walk(x)
+                    elif isinstance(v, tuple):
+                        for x in v:
+                            _walk(x)
+                    else:
+                        _walk(v)
+
+        if fn.body is not None:
+            _walk(fn.body)
+        graph[fn.name] = {c for c in callees if c in all_names}
+
+    def _depth(start: str) -> int:
+        on_stack: set = set()
+
+        def _go(v: str) -> int:
+            if v in on_stack:
+                return 0
+            on_stack.add(v)
+            try:
+                children = graph.get(v, set()) - on_stack
+                if not children:
+                    return 1
+                return 1 + max((_go(c) for c in children), default=0)
+            finally:
+                on_stack.discard(v)
+
+        return _go(start)
+
+    result = {name: _depth(name) for name in all_names}
+    print(json.dumps(result, sort_keys=True, indent=2))
+    return 0
+
+
 def _fn_callgraph_depth(path: str, entry_name: str) -> int:
     """Stage 59 follow-on / Tier 4 #13 polish: max acyclic call-stack
     depth from a fn entry point.
@@ -2640,6 +2717,13 @@ def main():
                   file=sys.stderr)
             sys.exit(2)
         sys.exit(_fn_callgraph_depth(args[0], args[1]))
+
+    if "--fn-callgraph-depth-all" in flags:
+        if len(args) < 1:
+            print("usage: --fn-callgraph-depth-all <file.hx>",
+                  file=sys.stderr)
+            sys.exit(2)
+        sys.exit(_fn_callgraph_depth_all(args[0]))
 
     if "--fn-leaves" in flags:
         if len(args) < 1:

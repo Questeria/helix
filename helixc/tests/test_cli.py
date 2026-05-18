@@ -5873,6 +5873,7 @@ def test_stage59_autodiff_cli_help_mentions_polish_flags():
         "--fn-leaves", "--fn-roots",
         "--fn-recursive", "--fn-cycles",
         "--fn-call-stats", "--fn-callgraph-depth",
+        "--fn-callgraph-depth-all",
         "--check-program-hash",
         "--check-program-hash-from-file",
         "--check-program-signature-hash",
@@ -7373,6 +7374,31 @@ def test_stage59_fn_roots(tmp_path):
     # util has 2 callers → not root; entry_a, entry_b, truly_dead
     # never called locally → roots.
     assert lines == ["entry_a", "entry_b", "truly_dead"]
+
+
+def test_stage59_fn_callgraph_depth_all(tmp_path):
+    """Stage 59 follow-on / Tier 4 #13 polish: --fn-callgraph-depth-all
+    emits {fn: depth} JSON for every fn in the file."""
+    import json
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "da.hx"
+    src.write_text(
+        "fn z() -> i32 { 42 }\n"
+        "fn c() -> i32 { z() }\n"
+        "fn b() -> i32 { c() }\n"
+        "fn a() -> i32 { b() }\n",
+        encoding="utf-8",
+    )
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--fn-callgraph-depth-all", str(src)],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0
+    result = json.loads(proc.stdout)
+    # Each fn's depth is the longest chain from it down.
+    assert result == {"a": 4, "b": 3, "c": 2, "z": 1}
 
 
 def test_stage59_fn_callgraph_depth(tmp_path):
