@@ -770,7 +770,7 @@ class TypeChecker:
         # introduction must surface), whereas Result-provenance
         # DROPS on inner-Assign (because the assign invalidates
         # the static Ok/Err claim).
-        self._modal_origin_provenance: dict[str, str] = {}
+        self._modal_origin_provenance: dict[str, ModalKind] = {}
         # Stage 53 Inc 1: map user-defined function names → the modal
         # kind of their declared return type (e.g. 'known', 'uncertain').
         # Read-only after Pass 1 (_register_fn). Populated from sig.ret
@@ -779,7 +779,7 @@ class TypeChecker:
         # calls — closes the LAST modal-launder bypass (helper-fn
         # indirection), which was the Stage 40 H1 "different defect
         # class" deferred from Stage 52.
-        self._fn_modal_return_kind: dict[str, str] = {}
+        self._fn_modal_return_kind: dict[str, ModalKind] = {}
         # Stage 52 gate-1 F1e / Inc 2: parallel stack tracking
         # names introduced via let in each open block. Used at
         # block-exit restore to distinguish inner-shadow lets
@@ -1318,7 +1318,21 @@ class TypeChecker:
         # (closes the helper-fn indirection laundering vector).
         # Read-only after Pass 1; no per-fn clear needed.
         if isinstance(sig.ret, TyModal):
-            self._fn_modal_return_kind[fn.name] = sig.ret.kind
+            # Stage 52 closure gate-12 type-design F2-RUNTIME-GUARD
+            # fix: enforce the ModalKind invariant at the parse
+            # boundary. TyModal.kind is `str` in ast_nodes.py, so a
+            # malformed kind string (e.g. from a future parser change
+            # or a hand-constructed AST) could silently propagate into
+            # _fn_modal_return_kind and fail to match any consult.
+            # The assertion turns that into a loud crash at fn-decl
+            # time — better than a silent launder bypass.
+            kind = sig.ret.kind
+            assert kind in ("known", "believed", "goal", "uncertain"), (
+                f"TyModal.kind expected one of "
+                f"{{'known','believed','goal','uncertain'}}, got "
+                f"{kind!r} for fn {fn.name!r}"
+            )
+            self._fn_modal_return_kind[fn.name] = kind  # type: ignore[assignment]
 
     def _compute_recursive_enum_names(self) -> set[str]:
         recursive: set[str] = set()
@@ -2478,7 +2492,7 @@ class TypeChecker:
 
     # ---- function body checking ----
 
-    def _modal_origin_of_expr(self, expr: A.Expr) -> Optional[str]:
+    def _modal_origin_of_expr(self, expr: A.Expr) -> Optional[ModalKind]:
         """Stage 52 closure gate-6 unified helper for the 3 CRITICAL
         silent-failure findings (Call-form scrutinee + name-alias
         let/Assign + PatOr binders). Returns the modal-origin kind
@@ -2574,7 +2588,7 @@ class TypeChecker:
                 return then_kind
             return None
         if isinstance(expr, A.Match):
-            kinds: set[str] = set()
+            kinds: set[ModalKind] = set()
             for arm in expr.arms:
                 if isinstance(arm.body, A.Block):
                     k = self._modal_origin_of_expr_block_tail(arm.body)
@@ -2590,7 +2604,7 @@ class TypeChecker:
 
     def _modal_origin_of_expr_block_tail(
         self, block: A.Block
-    ) -> Optional[str]:
+    ) -> Optional[ModalKind]:
         """Helper for the recursive yield-from-modal detection in
         `_modal_origin_of_expr`. Returns the modal kind of a block's
         tail expression if statically determinable."""
