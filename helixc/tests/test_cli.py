@@ -5841,7 +5841,8 @@ def test_stage59_autodiff_cli_help_mentions_polish_flags():
         "--list-pytrees", "--pytree-leaf-paths", "--validate-pytrees",
         "--autotune-summary", "--autotune-budget", "--validate-autotune",
         "--hash-dump", "--diff-hash-dump", "--hash-dump-short",
-        "--diff-trace", "--validate-trace-attrs",
+        "--diff-trace", "--trace-dump-summary",
+        "--validate-trace-attrs",
         "--validate-all", "--validate-all-json",
     ):
         assert flag in out, (
@@ -6361,6 +6362,36 @@ def test_stage59_check_program_signature_hash_sig_change_fails(tmp_path):
     )
     assert proc.returncode == 1
     assert "mismatch" in proc.stdout
+
+
+def test_stage59_trace_dump_summary(tmp_path):
+    """Stage 59 follow-on / Tier 3 #11 polish: --trace-dump-summary
+    prints high-level stats of a trace JSON dump."""
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    import json
+    trace = tmp_path / "t.json"
+    trace.write_text(json.dumps({
+        "cap": 4096,
+        "events": [
+            {"op_kind": "entry", "fn_name": "f", "operands": [1],
+             "result": None},
+            {"op_kind": "exit", "fn_name": "f", "operands": [2],
+             "result": None},
+        ],
+    }), encoding="utf-8")
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--trace-dump-summary", str(trace)],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0
+    out = proc.stdout
+    assert "events=2" in out
+    assert "fn_counts={'f': 2}" in out
+    assert "op_kind_counts=" in out
+    assert "balanced=True" in out
+    assert "hash=" in out
 
 
 def test_stage59_diff_trace_match(tmp_path):
