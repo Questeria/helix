@@ -352,9 +352,15 @@ These are blockers for any real ML training, in priority order.
    parameter sets. Critical for real model architectures. **2 weeks
    on top of tier-1 #3.**
 
-8. **Triton-style autotune.** `@autotune(BLOCK_M=[16,32,64], ...)` for
-   `@kernel` functions. Compiler emits N variants, runtime picks per
-   shape. Builds on tile codegen. **2 weeks.**
+8. **Triton-style autotune.** ✅ DONE 2026-05-18 (Stage 56 commit
+   4827397). `@autotune(KEY: [v1, v2, ...])` for `@kernel` functions
+   now emits N specialized variants (Cartesian product of param
+   values). Each variant is a deep-copy of the FnDecl with body
+   walked to replace `Name(KEY)` → `IntLit(VAL)` per config.
+   PTX backend emits N `.entry` blocks per autotuned kernel. The
+   pre-existing Stage 27 parse/validation infrastructure
+   (autotune.py:autotune_variants + mangled_variant_name) is now
+   wired end-to-end via the new `autotune_expand.py` pass.
 
 9. **Mojo-style parametric structs.** `Linear[In: size, Out: size, T:
    type]` monomorphized at compile time per shape and dtype. Required
