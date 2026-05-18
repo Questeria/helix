@@ -303,6 +303,25 @@ Re-sequenced after Stage 46-47 closed:
 - **Stage 58** ✅ **CLOSED 2026-05-18** — Tier 4 #13 content-
   addressed modules (program_hash + module_hash + fn_signature_hash
   core).
+- **Stage 77 Inc 1 SHIPPED 2026-05-18** — Tier-B property-based
+  testing scaffolding:
+  - `@property` fn attribute recognized via the existing
+    `_parse_attributes` path (no parser changes needed; just an
+    identifier-shaped attr).
+  - TypeChecker.`_property_fn_names: set[str]` registers each
+    `@property` fn for an external runner to discover.
+  - Validation: `@property fn` must return bool; non-bool
+    returns emit "must return bool (Stage 77 — property-based
+    tests can only assert pass/fail)" diagnostic with hint
+    showing the actual return type.
+  - Inc 1 ships scaffolding ONLY. Inc 2 plan: external
+    `helixc/runners/property_test_runner.py` that scans the
+    registered fns, generates random inputs (Hypothesis-style),
+    and asserts each property returns true.
+  - Use case: QuickCheck-style randomized testing baked into
+    the language (matches the V1_FINAL_FEATURES Tier-B #2 goal).
+  - 3 new tests; 373 typecheck + 376 regression GREEN.
+
 - **Stage 76 SUBSTANTIALLY COMPLETE 2026-05-18** — Tier-A #6
   Energy / power budget types delivered across Inc 1-3 in one
   commit (matched Stage 75 prettifier + Stage 75 constructor

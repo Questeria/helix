@@ -4754,6 +4754,70 @@ def test_stage74_fmt_layered_wrappers_compose_cleanly():
         "Confidential<Private<Conf<Robust<Q8<f32>>>>>"
 
 
+def test_stage77_property_fn_registered_with_bool_return():
+    """Stage 77 Inc 1 — `@property fn name(args) -> bool { ... }`
+    typechecks and is recorded in `_property_fn_names` for an
+    external runner to discover."""
+    from helixc.frontend.typecheck import TypeChecker
+    from helixc.frontend.parser import parse
+
+    src = """
+    @property
+    fn x_is_non_negative(x: i32) -> bool {
+        x >= 0
+    }
+    fn main() -> i32 { 0 }
+    """
+    prog = parse(src, include_stdlib=False)
+    tc = TypeChecker(prog)
+    errors = tc.check()
+    type_errs = [str(e) for e in errors if "property" in str(e).lower()]
+    assert len(type_errs) == 0, type_errs
+    assert "x_is_non_negative" in tc._property_fn_names
+
+
+def test_stage77_property_fn_must_return_bool_diagnostic():
+    """Stage 77 Inc 1 — `@property fn` with non-bool return errors.
+    A property test must be a pass/fail proposition."""
+    from helixc.frontend.typecheck import TypeChecker
+    from helixc.frontend.parser import parse
+
+    src = """
+    @property
+    fn bad_property(x: i32) -> i32 {
+        x
+    }
+    fn main() -> i32 { 0 }
+    """
+    prog = parse(src, include_stdlib=False)
+    tc = TypeChecker(prog)
+    errors = tc.check()
+    must_be_bool = [str(e) for e in errors
+                    if "must return bool" in str(e)
+                    and "@property" in str(e)]
+    assert len(must_be_bool) >= 1, errors
+    # Should NOT be registered (validation failed).
+    assert "bad_property" not in tc._property_fn_names
+
+
+def test_stage77_plain_fn_not_registered_as_property():
+    """Stage 77 Inc 1 — fns without `@property` are NOT added to
+    the property-fn set."""
+    from helixc.frontend.typecheck import TypeChecker
+    from helixc.frontend.parser import parse
+
+    src = """
+    fn returns_bool(x: i32) -> bool {
+        x >= 0
+    }
+    fn main() -> i32 { 0 }
+    """
+    prog = parse(src, include_stdlib=False)
+    tc = TypeChecker(prog)
+    tc.check()
+    assert "returns_bool" not in tc._property_fn_names
+
+
 def test_stage76_inc1_energy_type_recognition():
     """Stage 76 Inc 1 — TyEnergy scaffolding. TinyEnergy/Energy/
     LargeEnergy resolve to TyEnergy with the right budget."""

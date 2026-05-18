@@ -1317,6 +1317,13 @@ class TypeChecker:
         # them by value or assigning them does NOT invalidate the source
         # binding (mirrors Rust's `#[derive(Copy)]`).
         self._copy_struct_names: set[str] = set()
+        # Stage 77 — Tier-B property-based testing scaffolding.
+        # Fns marked `@property` are registered here for future use
+        # by an external property runner that would generate random
+        # inputs and check the fn returns true. Phase-0 stores the
+        # registration only; no runner is wired yet (Inc 2 plan).
+        # @property fns must return bool — validated at check time.
+        self._property_fn_names: set[str] = set()
 
     def _borrow_enforcement_enabled(self) -> bool:
         """Stage 66 Inc 3/4 — gate for the borrow-check enforcement
@@ -3550,6 +3557,19 @@ class TypeChecker:
         self._current_hbm_tile_indexables = set(kernel_hbm_indexables)
         self._current_return_ty = sig.ret
         self._current_fn_borrow_check = "borrow_check" in fn.attrs
+        # Stage 77 — register @property fn for the future test runner.
+        # Validate the contract: return type must be bool.
+        if "property" in fn.attrs:
+            if not (isinstance(sig.ret, TyPrim)
+                    and sig.ret.name == "bool"):
+                self.errors.append(TypeError_(
+                    f"@property fn {sig.name!r}: must return bool, "
+                    f"got {self._fmt(sig.ret)} (Stage 77 — property-"
+                    f"based tests can only assert pass/fail)",
+                    fn.span,
+                ))
+            else:
+                self._property_fn_names.add(sig.name)
         try:
             self._check_fn_body(fn, sig)
             completed = True
