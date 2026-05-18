@@ -344,10 +344,24 @@ These are blockers for any real ML training, in priority order.
 ## Tier 2 — high value (do after Tier 1)
 
 6. **Tensor codegen** with explicit memory-space movement
-   (HBM/SMEM/REG/TMEM). Phase-0 PTX lowering currently supports 1D
-   HBM `tile<f32, ...>` / `tile<i32, ...>` kernels plus a small scalar-op
-   subset. Broader tensor/tile codegen, SMEM/REG tiles, `bf16`, matmul,
-   and performance-oriented GPU lowering remain future work. **2-3 months.**
+   (HBM/SMEM/REG/TMEM). ✅ PARTIALLY DONE (audited 2026-05-18).
+   Phase-0 PTX lowering supports 1D HBM `tile<f32, ...>` /
+   `tile<i32, ...>` kernels plus a substantial tile IR surface:
+   `helixc/ir/tile_ir.py` has 35 TileOpKinds covering tile
+   creation (zeros/const), memory movement (HBM↔SMEM↔REG, plus
+   async TMA load/store + barrier_wait for Hopper/Blackwell),
+   tile compute (add/sub/mul/matmul/reduce), layout transforms
+   (transpose/reshape), scalar passthrough, GPU primitives
+   (thread_idx + tile_index_load/store_hbm). `emit_ptx()` at
+   `helixc/backend/ptx.py:621` consumes the tile IR end-to-end.
+   79 PTX regression pins all green.
+   Remaining for "full" tensor codegen: SMEM/REG tile
+   instantiation patterns beyond load_global, `bf16` dtype
+   support, performance-oriented lowering passes (autotune
+   now wired at Stage 56 helps here), and more matmul tiling
+   strategies. **Originally 2-3 months; the core IR + PTX
+   emission infrastructure is shipped — remaining is breadth-
+   of-ops + perf tuning, not greenfield.**
 
 7. **JAX-style pytrees.** Inc 1 ✅ SHIPPED 2026-05-18 (Stage 57
    commit 80f659b): rejection-lift for struct params in
