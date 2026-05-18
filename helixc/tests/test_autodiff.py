@@ -850,6 +850,47 @@ def test_stage54_inc1_clamp_i32_zero_derivative_forward():
         f"d/dx clamp_i32(x, 0, 1) should be 0, got: {out}"
 
 
+def test_stage54_inc2_forward_reverse_asymmetry_already_fixed():
+    """Stage 54 Inc 2 CONFIRMED no-op: the forward/reverse
+    asymmetry on unrecognized opaque multi-arg calls that the
+    Inc 2 blueprint described was already fixed at Stage 35.
+    Both forward and reverse modes now raise NotImplementedError
+    on opaque user-fn calls — confirmed by this pin.
+
+    Inc 2 was scoped to "align loud-fail behavior between modes".
+    Investigation showed Stage 35's autodiff.py:1132-1139 already
+    raises in forward mode, matching reverse mode's autodiff_
+    reverse.py:691-695 raise. So Inc 2 ships as a verified no-op."""
+    from helixc.frontend.autodiff_reverse import differentiate_reverse
+
+    src = (
+        "fn opaque(x: f64, y: f64) -> f64 { 0.0 } "
+        "fn g(z: f64) -> f64 { opaque(z, 1.0) }"
+    )
+    prog = parse(src)
+    g = [
+        it for it in prog.items
+        if isinstance(it, A.FnDecl) and it.name == "g"
+    ][0]
+    body = g.body.final_expr
+
+    # Forward: must raise.
+    try:
+        differentiate(body, "z")
+        raise AssertionError("forward should have raised")
+    except NotImplementedError as e:
+        assert "opaque call 'opaque'" in str(e), \
+            f"forward error msg mismatch: {e}"
+
+    # Reverse: must raise (same error class + same message shape).
+    try:
+        differentiate_reverse(body, ["z"])
+        raise AssertionError("reverse should have raised")
+    except NotImplementedError as e:
+        assert "opaque call 'opaque'" in str(e), \
+            f"reverse error msg mismatch: {e}"
+
+
 def test_stage54_inc1_min_chain_rule_in_composed_expr():
     """d/dx (__min_f64(x, 5.0) + x) = (if x<=5 then 1 else 0) + 1."""
     out = diff_expr("__min_f64(x, 5.0) + x", "x")
