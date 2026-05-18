@@ -673,6 +673,35 @@ def test_tree_to_csv_empty():
     assert tree_to_csv({}) == "path,value"
 
 
+def test_tree_csv_round_trips_basic():
+    """Stage 59 follow-on / Tier 2 #7 polish: round-trip pin —
+    tree_from_csv(tree_to_csv(d)) == d for basic float/int dicts."""
+    from helixc.frontend.pytree import tree_to_csv, tree_from_csv
+    original = {"w1": 1.5, "w2": -2.25, "b": 0.0}
+    csv = tree_to_csv(original)
+    restored = tree_from_csv(csv)
+    assert restored == original
+
+
+def test_tree_csv_round_trips_with_tuple_values():
+    """Stage 59 follow-on: round-trip preserves tuple values via
+    repr+literal_eval."""
+    from helixc.frontend.pytree import tree_to_csv, tree_from_csv
+    original = {"shape": (3, 4, 5), "x": 1.0}
+    csv = tree_to_csv(original)
+    restored = tree_from_csv(csv)
+    assert restored == original
+    assert isinstance(restored["shape"], tuple)
+
+
+def test_tree_from_csv_empty():
+    """Stage 59 follow-on: empty string + header-only CSV both
+    return empty dict."""
+    from helixc.frontend.pytree import tree_from_csv
+    assert tree_from_csv("") == {}
+    assert tree_from_csv("path,value") == {}
+
+
 def test_tree_canonical_json_round_trips():
     """Stage 59 follow-on / Tier 2 #7 polish: round-trip pin.
     tree_from_canonical_json(tree_to_canonical_json(d)) == d for

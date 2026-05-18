@@ -462,6 +462,45 @@ def tree_to_csv(leaves_by_path: dict) -> str:
     return "\n".join(lines)
 
 
+def tree_from_csv(s: str) -> dict:
+    """Stage 59 follow-on / Tier 2 #7 polish — parse a CSV (as
+    produced by tree_to_csv) back to a leaves-by-path dict.
+
+    Uses the standard library csv module + ast.literal_eval to
+    deserialize the value column. literal_eval is safe (no arbitrary
+    code execution; only Python literals) and handles the repr()
+    output produced by tree_to_csv for int/float/bool/None/str/tuple/
+    list.
+
+    Round-trip pin (held by test_pytree.py):
+        d == tree_from_csv(tree_to_csv(d))
+        for d with only ast.literal_eval-roundtrippable values
+        (i.e., int/float/bool/None/str/tuple/list).
+
+    Header row 'path,value' is required; the function skips it.
+    Empty CSV (header only or empty string) returns {}.
+    """
+    import csv
+    import ast
+    import io
+    if not s.strip():
+        return {}
+    reader = csv.reader(io.StringIO(s))
+    rows = list(reader)
+    if not rows:
+        return {}
+    # Skip header if present.
+    if rows[0] == ["path", "value"]:
+        rows = rows[1:]
+    out: dict = {}
+    for row in rows:
+        if len(row) != 2:
+            continue
+        path, val_str = row
+        out[path] = ast.literal_eval(val_str)
+    return out
+
+
 def tree_from_canonical_json(s: str) -> dict:
     """Stage 59 follow-on / Tier 2 #7 polish — inverse of
     tree_to_canonical_json. Parses a JSON object string back to a
