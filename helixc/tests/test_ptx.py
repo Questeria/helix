@@ -1034,6 +1034,40 @@ def test_c20_1_isize_usize_treated_as_64_bit_in_ptx():
     assert em._ld_reg_prefix("i32") == "r"
 
 
+def test_stage56_autotune_expand_produces_n_kernel_fns():
+    """Stage 56 / Tier 2 #8: @autotune @kernel emits N specialized
+    kernel FnDecls via autotune_expand. Verify by inspecting the
+    expanded program for N kernel fns with mangled names.
+
+    BLOCK_SIZE: [16, 32] → 2 variants → 2 @kernel FnDecls in the
+    expanded program. (End-to-end PTX emission is exercised via
+    test_stage56_autotune_expand_* in test_autotune.py.)
+    """
+    src = """
+@autotune(BLOCK_SIZE: [16, 32])
+@kernel fn vec_kernel(a: tile<f32, [16], HBM>) { }
+"""
+    from helixc.frontend.parser import parse as _parse
+    from helixc.frontend.autotune_expand import expand_autotune_kernels
+    from helixc.frontend import ast_nodes as A
+
+    prog = _parse(src)
+    prog = expand_autotune_kernels(prog)
+    kernel_fns = [it for it in prog.items
+                  if isinstance(it, A.FnDecl) and "kernel" in it.attrs]
+    names = sorted(f.name for f in kernel_fns)
+    assert names == [
+        "vec_kernel__autotune_BLOCK_SIZE_16",
+        "vec_kernel__autotune_BLOCK_SIZE_32",
+    ], f"unexpected kernel names after expansion: {names}"
+    # Each variant retains @kernel, drops @autotune, gains config attr.
+    for f in kernel_fns:
+        assert "kernel" in f.attrs
+        assert "autotune" not in f.attrs
+        assert any(a.startswith("autotune_config:BLOCK_SIZE=")
+                   for a in f.attrs)
+
+
 def main():
     tests = [(name, fn) for name, fn in globals().items()
              if name.startswith("test_") and callable(fn)]
