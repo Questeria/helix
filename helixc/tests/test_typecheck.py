@@ -5039,6 +5039,138 @@ def test_stage100_wrapper_tables_hoisted_to_class_level():
     assert len(TypeChecker._ALL_WRAPPER_CLS_NAMES) == 13
 
 
+def test_stage102_typed_hole_at_let_rhs_reports_expected_type():
+    """Stage 102 — `let x: i32 = _;` now emits an enriched typed-hole
+    diagnostic naming the declared type, mirroring the Stage 90
+    call-arg pattern. Generic Stage 89 hole still fires for backward
+    compat (users see BOTH the generic and the enriched message).
+    Extends Stage 90's expected-type plumbing beyond call-arg sites."""
+    from helixc.frontend.typecheck import typecheck
+    from helixc.frontend.parser import parse
+
+    src = """
+    fn user() -> i32 {
+        let x: i32 = _;
+        x
+    }
+    fn main() -> i32 { 0 }
+    """
+    prog = parse(src, include_stdlib=False)
+    errors = typecheck(prog)
+    inc1 = [e for e in errors
+            if "typed hole `_` at expression position" in str(e)]
+    stage102 = [e for e in errors
+                if "typed hole at let 'x' RHS" in str(e)
+                and "expected i32 here" in str(e)
+                and "Stage 102" in str(e)]
+    assert len(inc1) >= 1, (
+        f"missing generic Stage 89 hole; got: "
+        f"{[str(e) for e in errors]}")
+    assert len(stage102) >= 1, (
+        f"missing Stage 102 enriched let-RHS hole; got: "
+        f"{[str(e) for e in errors]}")
+
+
+def test_stage102_typed_hole_at_fn_return_reports_expected_type():
+    """Stage 102 — `return _;` in `fn f() -> i32` now reports the
+    declared return type. AI completion tools / human readers see
+    what type to write when filling the hole."""
+    from helixc.frontend.typecheck import typecheck
+    from helixc.frontend.parser import parse
+
+    src = """
+    fn user() -> i32 {
+        return _;
+    }
+    fn main() -> i32 { 0 }
+    """
+    prog = parse(src, include_stdlib=False)
+    errors = typecheck(prog)
+    stage102 = [e for e in errors
+                if "typed hole at return value of function 'user'"
+                   in str(e)
+                and "expected i32 here" in str(e)
+                and "Stage 102" in str(e)]
+    assert len(stage102) >= 1, (
+        f"missing Stage 102 enriched return hole; got: "
+        f"{[str(e) for e in errors]}")
+
+
+def test_stage102_typed_hole_at_struct_field_reports_expected_type():
+    """Stage 102 — `Pt { x: _, y: 5 }` reports the declared field
+    type (`f32` in this test). Critical for struct-literal completion
+    flows since the field type is locally known."""
+    from helixc.frontend.typecheck import typecheck
+    from helixc.frontend.parser import parse
+
+    src = """
+    struct Pt { x: f32, y: i32 }
+    fn user() -> i32 {
+        let p: Pt = Pt { x: _, y: 5 };
+        0
+    }
+    fn main() -> i32 { 0 }
+    """
+    prog = parse(src, include_stdlib=False)
+    errors = typecheck(prog)
+    stage102 = [e for e in errors
+                if "typed hole at struct 'Pt'.x" in str(e)
+                and "expected f32 here" in str(e)
+                and "Stage 102" in str(e)]
+    assert len(stage102) >= 1, (
+        f"missing Stage 102 enriched struct-field hole; got: "
+        f"{[str(e) for e in errors]}")
+
+
+def test_stage102_typed_hole_with_wrapper_expected_type():
+    """Stage 102 — when the expected type at any of the 3 new sites
+    is a Tier-S/A wrapper, the diagnostic renders the wrapper cleanly
+    (via Stage 74 _fmt). Verifies the helper composes with wrapper
+    pretty-printing."""
+    from helixc.frontend.typecheck import typecheck
+    from helixc.frontend.parser import parse
+
+    src = """
+    fn user() -> i32 {
+        let c: Confidential<f32> = _;
+        0
+    }
+    fn main() -> i32 { 0 }
+    """
+    prog = parse(src, include_stdlib=False)
+    errors = typecheck(prog)
+    stage102 = [e for e in errors
+                if "typed hole at let 'c' RHS" in str(e)
+                and "Confidential<f32>" in str(e)
+                and "Stage 102" in str(e)]
+    assert len(stage102) >= 1, (
+        f"missing Stage 102 wrapper-type hole; got: "
+        f"{[str(e) for e in errors]}")
+
+
+def test_stage102_no_hole_no_extra_diagnostic():
+    """Stage 102 — a well-typed program (no `_`) emits zero Stage 102
+    diagnostics. Helper must be a strict no-op when value_ty isn't a
+    typed_hole TyUnknown."""
+    from helixc.frontend.typecheck import typecheck
+    from helixc.frontend.parser import parse
+
+    src = """
+    struct Pt { x: f32, y: i32 }
+    fn user() -> i32 {
+        let x: i32 = 1;
+        let p: Pt = Pt { x: 1.0_f32, y: 2 };
+        return x;
+    }
+    fn main() -> i32 { 0 }
+    """
+    prog = parse(src, include_stdlib=False)
+    errors = typecheck(prog)
+    stage102 = [e for e in errors if "Stage 102" in str(e)]
+    assert len(stage102) == 0, (
+        f"Stage 102 helper false-positive: {[str(e) for e in stage102]}")
+
+
 def test_stage100_strip_wrapper_chain_still_correct_after_hoist():
     """Stage 100 — the hoisted `_strip_wrapper_chain` method
     produces identical results to the pre-Stage-100 closure-local

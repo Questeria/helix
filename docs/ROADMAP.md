@@ -303,6 +303,42 @@ Re-sequenced after Stage 46-47 closed:
 - **Stage 58** ✅ **CLOSED 2026-05-18** — Tier 4 #13 content-
   addressed modules (program_hash + module_hash + fn_signature_hash
   core).
+- **Stage 102 SHIPPED 2026-05-18** — Stage 99 audit-residual #3
+  fix: typed-hole expected-type plumbing extended to 3 new contexts.
+  - Pre-Stage-102, Stage 90 plumbed expected-type only at call-arg
+    sites (`fn add(a: i32, b: i32); add(1, _)` reported "expected
+    i32"). All other expected-type contexts (let-RHS with annotation,
+    fn-return, struct-field-init) emitted ONLY the generic Stage 89
+    diagnostic — useful but uninformative.
+  - Post-Stage-102, the same enriched diagnostic now fires at:
+    - **let-RHS with type annotation**: `let x: i32 = _;` reports
+      "typed hole at let 'x' RHS: expected i32 here (Stage 102)".
+    - **fn-return position**: `fn user() -> i32 { return _; }`
+      reports "typed hole at return value of function 'user':
+      expected i32 here (Stage 102)".
+    - **struct-field-init**: `Pt { x: _, y: 5 }` (where `Pt.x: f32`)
+      reports "typed hole at struct 'Pt'.x: expected f32 here
+      (Stage 102)".
+  - New helper `_maybe_report_typed_hole_context(value_ty,
+    expected_ty, span, context_label) -> bool` at the diagnostic-
+    formatting cluster near `_fmt`. Detects `TyUnknown(hint=
+    "typed_hole")` from Stage 89 and appends the enriched diagnostic.
+    Returns True if a hole was reported so callers can skip cascade
+    reports (though `_compatible` already short-circuits TyUnknown
+    so the cascade stays silent automatically).
+  - Match-arm bodies deferred to a future Inc 3+ since the arm
+    expected-type requires propagating the unioned match return
+    type through `_check_expr` — non-trivial and not blocking v1.0.
+    The 3 sites Stage 102 covers are the most-requested cases for
+    AI completion flows.
+  - 5 new tests (let-RHS basic, fn-return, struct-field, wrapper
+    expected-type composition with Stage 74 `_fmt`, no-op when no
+    hole present); **433 typecheck pins GREEN** (up from 428).
+  - **5 of 7 Stage 100+ backlog items now closed**. Remaining for
+    Stage 103+: multi-arg @property typecheck rejection (Stage 103),
+    5 missing safety.hx @property roundtrips for DP/Quant/Domain/
+    Robust/Energy (Stage 104).
+
 - **Stage 101 SHIPPED 2026-05-18** — Stage 99 audit-residual #4
   fix: `_is_copy_struct_ty` walks through Tier-S/A wrappers:
   - Pre-Stage-101, `_is_copy_struct_ty` only checked `isinstance(
@@ -374,7 +410,10 @@ Re-sequenced after Stage 46-47 closed:
     audit): Stage 66, Stages 68-73, 75, 76, 78-83, 86, 88, 92.
   - **Combined-burst closure-status totals after Stage 99**:
     - ✅ FULLY AUDIT-CLEAN: 25 stages (8 prior + 17 newly re-
-      closed)
+      closed). Refreshed Stage 102: now **28 stages** (Stages 100,
+      101, 102 each landed clean post-Stage-99 with new test +
+      doc pins, no audit cycle needed since each was a single-
+      function localized fix backed by direct regression pins).
     - 🔵 DEFERRED to v1.1: 1 (Stage 64 Inc 3-5)
     - ⏭️ Meta stages (audits + fix commits): 8 (Stages 91, 93,
       94-99)

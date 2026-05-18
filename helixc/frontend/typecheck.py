@@ -4449,6 +4449,18 @@ class TypeChecker:
                 value_ty = self._check_expr(stmt.value, scope)
             if stmt.ty is not None:
                 declared = self._resolve_type(stmt.ty, scope)
+                # Stage 102 — typed-hole expected-type plumbing at
+                # let-RHS. Mirrors the Stage 90 _check_call_basic
+                # pattern: if the RHS is a Stage-89 typed hole `_` and
+                # the let has a type annotation, emit the enriched
+                # "expected T here" diagnostic so AI completion tools
+                # can fill the hole. `_compatible` already short-
+                # circuits on TyUnknown so the regular mismatch report
+                # below stays silent for holes.
+                if stmt.value is not None:
+                    self._maybe_report_typed_hole_context(
+                        value_ty, declared, stmt.span,
+                        f"let {stmt.name!r} RHS")
                 if stmt.value is not None and not self._compatible(value_ty, declared):
                     self.errors.append(TypeError_(
                         f"let {stmt.name!r}: declared {self._fmt(declared)} "
@@ -8409,6 +8421,14 @@ class TypeChecker:
                 p = field_decl_by_name.get(fname)
                 if p is not None:
                     expected = self._resolve_type(p.ty, scope)
+                    # Stage 102 — typed-hole expected-type plumbing at
+                    # struct-field-init. `Pt { x: _, y: 5 }` now reports
+                    # the field's declared type so AI completion tools
+                    # / human readers can fill `_` with a well-typed
+                    # value.
+                    self._maybe_report_typed_hole_context(
+                        v_ty, expected, fval.span,
+                        f"struct {expr.name!r}.{fname}")
                     if not self._compatible(v_ty, expected):
                         self.errors.append(TypeError_(
                             f"struct {expr.name!r}.{fname}: expected "
@@ -8427,6 +8447,16 @@ class TypeChecker:
         if isinstance(expr, A.Return):
             if expr.value is not None:
                 value_ty = self._check_expr(expr.value, scope)
+                # Stage 102 — typed-hole expected-type plumbing at
+                # explicit fn-return position. (Implicit tail-expression
+                # returns flow through _check_block which already
+                # propagates the block's expected type through other
+                # paths.) Mirrors the Stage 90 pattern: enriched
+                # diagnostic naming the fn's declared return type.
+                self._maybe_report_typed_hole_context(
+                    value_ty, self._current_return_ty, expr.span,
+                    f"return value of function "
+                    f"{self._current_fn_name!r}")
                 if not self._compatible(value_ty, self._current_return_ty):
                     self.errors.append(TypeError_(
                         f"return value of function "
@@ -12041,6 +12071,39 @@ class TypeChecker:
                         f"pass {constructor}(x) to add the wrapper, "
                         f"or change the param type to {self._fmt(actual)}")
         return None
+
+    def _maybe_report_typed_hole_context(
+        self,
+        value_ty: Type,
+        expected_ty: Type,
+        span,
+        context_label: str,
+    ) -> bool:
+        """Stage 102 — if `value_ty` is a Stage-89 typed hole (TyUnknown
+        carrying hint='typed_hole'), emit an enriched diagnostic naming
+        the expected type at this position. Returns True if a hole was
+        reported (callers can use this to skip downstream cascade
+        reports); False otherwise.
+
+        Mirrors the Stage 90 pattern at _check_call_basic but extended
+        to non-call expected-type contexts: let-RHS with annotation,
+        fn-return position, struct-field-init. AI completion tools /
+        human readers see the expected type and fill the hole correctly.
+        Generic Stage 89 hole diagnostic still fires inside _check_expr
+        so users get BOTH the generic and the enriched messages — the
+        established Stage 90 convention.
+        """
+        if not (isinstance(value_ty, TyUnknown)
+                and getattr(value_ty, "hint", "") == "typed_hole"):
+            return False
+        self.errors.append(TypeError_(
+            f"typed hole at {context_label}: expected "
+            f"{self._fmt(expected_ty)} here (Stage 102)",
+            span,
+            hint=f"AI-completion: fill the hole with an expression "
+                 f"of type {self._fmt(expected_ty)}",
+        ))
+        return True
 
     def _fmt(self, t: Type) -> str:
         if isinstance(t, TyPrim): return t.name
