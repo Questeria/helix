@@ -63,6 +63,15 @@ HELIX_NUM_CELLS = 64
 HELIX_ARENA_CAP = 2097152
 HELIX_CELL_SIZE = 8
 
+# Stage 63 Inc 1 — Tier 3 #11 runtime trace wiring.
+# Each trace event is 8 bytes (4 fn_id + 4 kind+value). 1024 events
+# = 8 KB BSS overhead, more than enough for typical @trace fn-
+# instrumented programs. Phase-0 fail-closed: when the buffer is
+# full, subsequent events are silently dropped (rather than blocking
+# or wrapping). Tests can read back the count via the
+# __trace_event_count() builtin.
+HELIX_TRACE_CAP = 1024
+
 # Stage 44 closure gate-1 type-design MEDIUM fix: name the SysV
 # ABI constants that appear in both caller (CALL / FFI_CALL) and
 # callee (function prologue) stack-passed-arg handling. Pre-fix
@@ -979,6 +988,84 @@ class FnCompiler:
         # Pending strings (sym, bytes) emitted by PRINT ops in this function;
         # collected by the module driver and appended to the binary.
         self._pending_strings: list[tuple[str, bytes]] = []
+        # Stage 63 Inc 1 — Tier 3 #11 runtime trace wiring.
+        # Per-fn-name auto-assigned i32 id (stable across the module).
+        # Each @trace fn's TRACE_ENTRY/EXIT writes (fn_id, kind) into
+        # the global __helix_trace_buf at __helix_trace_count cursor.
+        self._trace_fn_ids: dict[str, int] = {}
+
+    def _intern_trace_fn_id(self, fn_name: str) -> int:
+        """Stage 63 Inc 1 — assign a stable i32 id for a fn name used
+        in TRACE_ENTRY/EXIT events. First-encounter assigns next index;
+        repeats return the cached id."""
+        if fn_name not in self._trace_fn_ids:
+            self._trace_fn_ids[fn_name] = len(self._trace_fn_ids)
+        return self._trace_fn_ids[fn_name]
+
+    def _emit_trace_event(self, fn_id: int, kind: int) -> None:
+        """Stage 63 Inc 1 — emit inline x86_64 assembly that appends
+        a (fn_id, kind) event to __helix_trace_buf when there's room.
+
+        Generated sequence (~50 bytes):
+          mov eax, [rip+__helix_trace_count]
+          cmp eax, HELIX_TRACE_CAP
+          jge skip                       ; full, drop event
+          mov ecx, eax
+          shl ecx, 3                     ; *8 (entry stride)
+          lea rdx, [rip+__helix_trace_buf]
+          mov [rdx+rcx],   <fn_id>       ; offset 0 = fn_id
+          mov [rdx+rcx+4], <kind>        ; offset 4 = kind
+          inc eax
+          mov [rip+__helix_trace_count], eax
+        skip:
+        """
+        buf = self.asm.b
+        # mov eax, [rip+__helix_trace_count]  (8B 05 disp32)
+        buf.emit(0x8B, 0x05)
+        off = buf.offset()
+        buf.emit_bytes(b"\x00\x00\x00\x00")
+        buf.fixups.append(Fixup(
+            offset=off, target="__helix_trace_count",
+            size=4, rel_base=off + 4))
+        # cmp eax, HELIX_TRACE_CAP  (3D imm32)
+        buf.emit(0x3D)
+        buf.emit_bytes(struct.pack("<I", HELIX_TRACE_CAP))
+        # jge skip (forward, rel8 placeholder)
+        buf.emit(0x7D, 0x00)
+        jge_off = buf.offset() - 1
+        jge_after = buf.offset()
+        # mov ecx, eax  (89 C1)
+        buf.emit(0x89, 0xC1)
+        # shl ecx, 3  (C1 E1 03)
+        buf.emit(0xC1, 0xE1, 0x03)
+        # lea rdx, [rip+__helix_trace_buf]  (48 8D 15 disp32)
+        buf.emit(0x48, 0x8D, 0x15)
+        off2 = buf.offset()
+        buf.emit_bytes(b"\x00\x00\x00\x00")
+        buf.fixups.append(Fixup(
+            offset=off2, target="__helix_trace_buf",
+            size=4, rel_base=off2 + 4))
+        # mov [rdx+rcx], <fn_id>   (C7 04 0A imm32)
+        buf.emit(0xC7, 0x04, 0x0A)
+        buf.emit_bytes(struct.pack("<I", fn_id))
+        # mov [rdx+rcx+4], <kind>  (C7 44 0A 04 imm32)
+        buf.emit(0xC7, 0x44, 0x0A, 0x04)
+        buf.emit_bytes(struct.pack("<I", kind))
+        # inc eax  (FF C0)
+        buf.emit(0xFF, 0xC0)
+        # mov [rip+__helix_trace_count], eax  (89 05 disp32)
+        buf.emit(0x89, 0x05)
+        off3 = buf.offset()
+        buf.emit_bytes(b"\x00\x00\x00\x00")
+        buf.fixups.append(Fixup(
+            offset=off3, target="__helix_trace_count",
+            size=4, rel_base=off3 + 4))
+        # skip:
+        skip_addr = buf.offset()
+        fwd = skip_addr - jge_after
+        if not (-128 <= fwd <= 127):
+            raise ValueError("trace event jge disp out of rel8")
+        buf.bytes_[jge_off] = fwd & 0xFF
 
     def _op_suffix(self, op: tir.Op) -> str:
         """Return a deterministic, hex-safe suffix identifying `op` within
@@ -3597,6 +3684,22 @@ class FnCompiler:
                     self.asm.mov_mem_rbp_eax(res_slot)
                 return
 
+            # Stage 63 Inc 1 — Tier 3 #11: __trace_event_count() returns
+            # the current trace cursor (i32 at __helix_trace_count).
+            if kind == "trace_event_count":
+                buf = self.asm.b
+                # mov eax, [rip+__helix_trace_count]  (8B 05 disp32)
+                buf.emit(0x8B, 0x05)
+                off = buf.offset()
+                buf.emit_bytes(b"\x00\x00\x00\x00")
+                buf.fixups.append(Fixup(
+                    offset=off, target="__helix_trace_count",
+                    size=4, rel_base=off + 4))
+                if op.results:
+                    res_slot = self._slot_of(op.results[0])
+                    self.asm.mov_mem_rbp_eax(res_slot)
+                return
+
             # Stage 60 Inc 2 — dynamic-path file I/O codegen.
             # read_file_to_arena_dyn(path_start, path_len) -> i32.
             # The path bytes live in arena[path_start..path_start+path_len)
@@ -4181,37 +4284,31 @@ class FnCompiler:
                 self.asm.mov_mem_rbp_eax(res_slot)
             return
         if op.kind == tir.OpKind.TRACE_ENTRY:
-            # Audit 28.8 A7 — Stage 25 @trace prologue. Real wiring
-            # calls `__helix_trace_entry(fn_name_ptr)` so the runtime
-            # records the entry event. Phase-0: the runtime helper
-            # does NOT exist yet (it's a Stage-30 deliverable), so we
-            # emit a no-op stub and stash the fn_name in
-            # `_pending_trace_names` for the linker to resolve later.
-            # The IR op is observable in --emit-ir dumps, so tests can
-            # verify the wiring lands regardless.
+            # Stage 63 Inc 1 — Tier 3 #11 runtime trace wiring.
+            # Inline assembly appends an entry event to the global
+            # __helix_trace_buf when count < HELIX_TRACE_CAP. Phase-0
+            # fail-closed: when buffer is full, event is silently
+            # dropped (deterministic; no allocation, no syscall).
+            #
+            # Event layout (8 bytes):
+            #   offset 0 (4 bytes): fn_id  (auto-assigned per fn name)
+            #   offset 4 (4 bytes): kind (0=entry, 1=exit) << 24
+            #
+            # Pre-Stage-63: this was a single NOP stub.
             fn_name = str(op.attrs.get("fn_name", ""))
-            # TODO(stage30): replace this no-op with the real call:
-            #   sym = self._intern_string(fn_name)
-            #   self.asm.lea_rdi_rip_rel(sym)
-            #   self.asm.call_rel32("__helix_trace_entry")
-            # For now: a single NOP keeps the binary aligned to the
-            # IR's expected instruction count without needing the
-            # runtime helper.
-            self.asm.b.emit(0x90)  # nop
+            fn_id = self._intern_trace_fn_id(fn_name)
+            self._emit_trace_event(fn_id, kind=0)
             return
         if op.kind == tir.OpKind.TRACE_EXIT:
-            # Audit 28.8 A7 — Stage 25 @trace epilogue. Real wiring:
-            #   __helix_trace_exit(fn_name_ptr, ret_val)
-            # Phase-0: NOP stub (matching TRACE_ENTRY). The return
-            # value operand is still consumed so liveness analysis
-            # keeps the value alive past the trace call.
+            # Stage 63 Inc 1 — TRACE_EXIT counterpart. Same as TRACE_ENTRY
+            # but kind=1. Return value operand is still consumed so
+            # liveness analysis keeps it alive past the trace call.
             if op.operands:
-                # Reference the operand slot so the register allocator
-                # / SSA passes don't elide it.
                 ret_slot = self._slot_of(op.operands[0])
-                # mov eax, [rbp+slot]  — consume into eax (clobber-safe).
                 self.asm.mov_eax_mem_rbp(ret_slot)
-            self.asm.b.emit(0x90)  # nop
+            fn_name = str(op.attrs.get("fn_name", ""))
+            fn_id = self._intern_trace_fn_id(fn_name)
+            self._emit_trace_event(fn_id, kind=1)
             return
         if op.kind == tir.OpKind.TRAP:
             # Stage 28.5 — panic("msg"). Emit the message to stderr (fd=2)
@@ -4684,6 +4781,19 @@ def compile_module_to_elf(module: tir.Module, entry_fn: str = "main") -> bytes:
     # to large values without disk-cost penalty.
     buf.define_symbol("__helix_arena_base")
     arena_extra = (HELIX_ARENA_CAP + 1) * 4
+
+    # Stage 63 Inc 1 — Tier 3 #11 runtime trace wiring.
+    # Trace buffer + cursor in BSS, immediately after the arena.
+    # Each trace entry is 8 bytes: 4 bytes fn_id + 4 bytes
+    # (kind << 24 | reserved | reserved | reserved).
+    # Cursor at __helix_trace_count (4 bytes); entries at
+    # __helix_trace_buf (HELIX_TRACE_CAP * 8 bytes).
+    buf.define_symbol("__helix_trace_count")
+    trace_count_extra = 4
+    buf.define_symbol("__helix_trace_buf")
+    trace_buf_extra = HELIX_TRACE_CAP * 8
+    trace_extra = trace_count_extra + trace_buf_extra
+    arena_extra += trace_extra
 
     buf.patch()
 

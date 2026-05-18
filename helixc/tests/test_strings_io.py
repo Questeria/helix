@@ -303,6 +303,78 @@ def test_stage60_inc4_write_file_dyn_round_trips():
     assert content == b"aliased", f"got {content!r}"
 
 
+def test_stage63_inc1_trace_event_count_zero_when_no_trace_fn():
+    """Stage 63 Inc 1 — Tier 3 #11 runtime trace wiring.
+    Without any @trace fn calls, __trace_event_count() returns 0
+    (BSS-zeroed counter)."""
+    src = """
+    fn plain() -> i32 { 7 }
+    fn main() -> i32 {
+        let _ = plain();
+        __trace_event_count()
+    }
+    """
+    rc, out, err = _build_and_run(src)
+    assert rc == 0, f"expected 0 events, got rc={rc} err={err!r}"
+
+
+def test_stage63_inc1_trace_event_count_increments_on_traced_calls():
+    """Stage 63 Inc 1: every @trace fn call records 2 events
+    (entry + exit). Calling a @trace fn 3 times should leave
+    __trace_event_count() at 6.
+
+    Pre-Stage-63: TRACE_ENTRY/EXIT were NOP stubs; count stayed at 0
+    no matter how many @trace calls. Stage 63 wires real inline
+    asm that increments the global counter."""
+    src = """
+    @trace
+    fn traced(x: i32) -> i32 { x + 1 }
+    fn main() -> i32 {
+        let _ = traced(1);
+        let _ = traced(2);
+        let _ = traced(3);
+        __trace_event_count()
+    }
+    """
+    rc, out, err = _build_and_run(src)
+    assert rc == 6, (
+        f"expected 6 trace events (3 calls × 2 entry/exit), "
+        f"got rc={rc} err={err!r}")
+
+
+def test_stage63_inc1_trace_buffer_caps_at_HELIX_TRACE_CAP():
+    """Stage 63 Inc 1: when the buffer is full (1024 entries),
+    subsequent events are silently dropped — counter does NOT
+    exceed HELIX_TRACE_CAP. Phase-0 fail-closed (deterministic).
+
+    Exit code wraps modulo 256 in Linux so we compare inside
+    Helix and return a sentinel (42 = capped, 99 = wrong)."""
+    src = """
+    @trace
+    fn t(x: i32) -> i32 { x }
+    fn loop_calls() -> i32 {
+        let mut i: i32 = 0;
+        // 600 iterations × 2 events each = 1200 events,
+        // capped at 1024.
+        while i < 600 {
+            let _ = t(i);
+            i = i + 1;
+        }
+        0
+    }
+    fn main() -> i32 {
+        let _ = loop_calls();
+        let cnt = __trace_event_count();
+        // Cap is HELIX_TRACE_CAP=1024. Compare in Helix to avoid
+        // the exit-code-modulo-256 wrap.
+        if cnt == 1024 { 42 } else { 99 }
+    }
+    """
+    rc, out, err = _build_and_run(src)
+    assert rc == 42, (
+        f"expected counter capped at 1024 (rc=42); got rc={rc} err={err!r}")
+
+
 def test_stage61_checkpoint_save_load_raw_round_trips(tmp_path):
     """Stage 61: checkpoint_save_raw + checkpoint_load_raw stdlib
     helpers work end-to-end. Helix saves arena bytes to a runtime

@@ -303,6 +303,27 @@ Re-sequenced after Stage 46-47 closed:
 - **Stage 58** ✅ **CLOSED 2026-05-18** — Tier 4 #13 content-
   addressed modules (program_hash + module_hash + fn_signature_hash
   core).
+- **Stage 63** ✅ **CLOSED 2026-05-18** — Tier 3 #11 runtime trace
+  wiring (see `docs/stage63-progress-2026-05-18.md`):
+  - Pre-Stage-63 state: TRACE_ENTRY / TRACE_EXIT IR ops emitted
+    by @trace fns lowered to single-NOP stubs (recording deferred
+    to "Stage 30").
+  - Stage 63 wires real inline x86_64 recording (no external C
+    runtime; matches Phase-0 self-contained ethos):
+    - New BSS symbols: `__helix_trace_count` (cursor) +
+      `__helix_trace_buf` (1024 × 8 byte events = 8 KB)
+    - TRACE_ENTRY / TRACE_EXIT now emit ~50-byte inline asm
+      sequence (load cursor, compare cap, append event, inc cursor)
+    - Fail-closed: silent-drop on overflow (no allocation, no
+      syscall, no wrapping)
+    - New `__trace_event_count()` builtin for test introspection
+  - 3 new tests; 1 cascade defect fixed inline (test exit-code
+    wrap-modulo-256 → in-Helix sentinel-value comparison).
+  - **Tier 3 #11 status**: Python API ✅ Stage 59 + IR emission ✅
+    Stage 25 + runtime recording ✅ Stage 63 (this) →
+    SUBSTANTIALLY COMPLETE. Bootstrap port + arena-dump builtin
+    deferred to incremental polish stages.
+
 - **Stage 62** ✅ **CLOSED 2026-05-18** (NARROWED SCOPE) — Tier 2
   #7 Inc 2 named per-leaf gradient accessors (see
   `docs/stage62-progress-2026-05-18.md`):

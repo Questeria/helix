@@ -2506,6 +2506,8 @@ class TypeChecker:
         "read_file_to_arena_dyn", "write_file_to_arena_dyn",
         "read_file_int_dyn", "write_file_dyn",
         "__arena_push", "__arena_get", "__arena_set", "__arena_len",
+        # Stage 63 Inc 1 — Tier 3 #11: read trace event counter.
+        "__trace_event_count",
         "__strlen", "__strbyte", "__streq", "__strlit_to_arena",
         "__hash_i32",
         # Stage 55 Inc 1 — runtime string builtins. Operate on

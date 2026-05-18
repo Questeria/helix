@@ -2917,6 +2917,17 @@ class Lowerer:
                     return self.builder.emit(
                         tir.OpKind.ARENA_LEN,
                         result_ty=tir.TIRScalar("i32"))
+                # Stage 63 Inc 1 — Tier 3 #11 runtime trace.
+                # __trace_event_count() returns the number of trace
+                # events recorded so far (i32 cursor at
+                # __helix_trace_count). Used by tests to verify
+                # @trace fn instrumentation works.
+                if (bn == "__trace_event_count"
+                        and len(expr.args) == 0):
+                    return self.builder.emit(
+                        tir.OpKind.PRINT,
+                        result_ty=tir.TIRScalar("i32"),
+                        attrs={"_kind": "trace_event_count"})
                 # f32/f64 bit-reinterpret. Used by Helix-side stdlib to
                 # store float bit patterns in the arena (which is i32-typed).
                 # bits_of: f32->i32 / f64->i64 (just relabel the same 4/8 bytes)
