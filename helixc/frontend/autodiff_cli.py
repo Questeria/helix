@@ -73,6 +73,8 @@ Introspection (Stage 28.9 + Stage 58 + Stage 59 polish):
         Topological sort: leaves first, then their dependents.
     --fn-isolated <file.hx>
         List orphan fns: no callers AND no callees (strongest dead-code).
+    --fn-call-path <file.hx> <from_fn> <to_fn>
+        Shortest call chain from <from_fn> to <to_fn> via BFS.
     --fn-leaves <file.hx>
         List 'leaf' fns (those that call no other fn) — sorted, one per line.
     --fn-roots <file.hx>
@@ -1587,6 +1589,106 @@ def _fn_roots(path: str) -> int:
     return 0
 
 
+def _fn_call_path(path: str, from_fn: str, to_fn: str) -> int:
+    """Stage 59 follow-on / Tier 4 #13 polish: shortest call chain
+    from `from_fn` to `to_fn` via BFS through the local callgraph.
+
+    Output: the path as ' -> '-separated fn names on one line.
+    If no path exists, prints 'no path' and exits 0 (not 1 — absent
+    path is a valid query result, not an error).
+
+    Use cases:
+    - 'How does fn A end up calling fn B?' — see the call chain
+    - Witness path for impact-zone analysis (--fn-reachable-from
+      tells you B is reachable; this tells you HOW)
+    - Refactor-step planning: shortest intercept point
+
+    Exit codes:
+      0 — success (path found OR 'no path' reported)
+      1 — either from_fn or to_fn not found in source
+      2 — bad args
+    """
+    from .ast_walker import iter_fn_decls
+    src = _read_source(path)
+    prog = _parse_or_exit(src, path)
+
+    all_fns = list(iter_fn_decls(prog))
+    all_names = {fn.name for fn in all_fns}
+    for needed in (from_fn, to_fn):
+        if needed not in all_names:
+            print(f"error: autodiff_cli: fn {needed!r} not found in {path}",
+                  file=sys.stderr)
+            return 1
+
+    graph: dict[str, set] = {}
+    for fn in all_fns:
+        callees: set = set()
+
+        def _walk(n) -> None:
+            if n is None:
+                return
+            if isinstance(n, A.Call):
+                if isinstance(n.callee, A.Name):
+                    callees.add(n.callee.name)
+                elif (isinstance(n.callee, A.Path)
+                      and n.callee.segments):
+                    callees.add(n.callee.segments[-1])
+            if hasattr(n, "__dataclass_fields__"):
+                for f in n.__dataclass_fields__:
+                    v = getattr(n, f)
+                    if isinstance(v, list):
+                        for x in v:
+                            _walk(x)
+                    elif isinstance(v, tuple):
+                        for x in v:
+                            _walk(x)
+                    else:
+                        _walk(v)
+
+        if fn.body is not None:
+            _walk(fn.body)
+        graph[fn.name] = {c for c in callees if c in all_names}
+
+    # BFS with predecessor tracking.
+    if from_fn == to_fn:
+        print(from_fn)
+        return 0
+    visited: set = {from_fn}
+    pred: dict[str, str] = {}
+    queue: list = [from_fn]
+    found = False
+    while queue:
+        next_queue: list = []
+        for v in queue:
+            for w in graph.get(v, set()):
+                if w not in visited:
+                    visited.add(w)
+                    pred[w] = v
+                    if w == to_fn:
+                        found = True
+                        break
+                    next_queue.append(w)
+            if found:
+                break
+        if found:
+            break
+        queue = next_queue
+
+    if not found:
+        print("no path")
+        return 0
+
+    # Reconstruct the path from to_fn back to from_fn.
+    path_nodes: list = [to_fn]
+    cur = to_fn
+    while cur != from_fn:
+        cur = pred[cur]
+        path_nodes.append(cur)
+    path_nodes.reverse()
+    print(" -> ".join(path_nodes))
+    return 0
+
+
 def _fn_isolated(path: str) -> int:
     """Stage 59 follow-on / Tier 4 #13 polish: list 'isolated' fns —
     fns with NO callers AND NO callees in the local callgraph (truly
@@ -2901,6 +3003,13 @@ def main():
             print("usage: --fn-isolated <file.hx>", file=sys.stderr)
             sys.exit(2)
         sys.exit(_fn_isolated(args[0]))
+
+    if "--fn-call-path" in flags:
+        if len(args) < 3:
+            print("usage: --fn-call-path <file.hx> <from_fn> <to_fn>",
+                  file=sys.stderr)
+            sys.exit(2)
+        sys.exit(_fn_call_path(args[0], args[1], args[2]))
 
     if "--fn-leaves" in flags:
         if len(args) < 1:
