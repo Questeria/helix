@@ -371,6 +371,45 @@ def tree_hash(leaves_by_path: dict) -> str:
     return h.hexdigest()
 
 
+def tree_count(leaves_by_path: dict, predicate) -> int:
+    """Stage 59 follow-on / Tier 2 #7 polish — count leaves matching
+    a predicate.
+
+    Equivalent to `sum(1 for v in tree_leaves(d) if predicate(v))`
+    but path-aware-friendly via tree_filter.
+
+    Use cases:
+    - Count NaN params: `tree_count(params, lambda v: v != v)`
+    - Count zero gradients: `tree_count(grads, lambda g: g == 0.0)`
+    - Count large weights: `tree_count(params, lambda w: abs(w) > 1.0)`
+
+    Determinism: iteration in sorted-by-path order (matters only if
+    predicate has side-effects, which it shouldn't).
+    """
+    return sum(1 for path in sorted(leaves_by_path.keys())
+               if predicate(leaves_by_path[path]))
+
+
+def tree_filter(leaves_by_path: dict, predicate) -> dict:
+    """Stage 59 follow-on / Tier 2 #7 polish — return subset of leaves
+    matching a predicate.
+
+    Returns a NEW dict with only those (path, value) entries where
+    `predicate(value)` is True. Original dict is unmodified.
+
+    Use cases:
+    - Extract NaN params for debugging: `tree_filter(params, isnan)`
+    - Subset gradients by magnitude: `tree_filter(grads, lambda g: abs(g) > 1.0)`
+    - Pair with tree_diff to extract the diverging leaves themselves
+      (not just their paths)
+
+    Composes with tree_size: `tree_size(tree_filter(d, p))
+    == tree_count(d, p)`.
+    """
+    return {path: v for path, v in leaves_by_path.items()
+            if predicate(v)}
+
+
 def tree_size(leaves_by_path: dict) -> int:
     """Stage 59 follow-on / Tier 2 #7 polish — JAX-style tree_size.
 

@@ -605,6 +605,46 @@ def test_tree_reduce_deterministic_order():
     assert seq == "123"
 
 
+def test_tree_count_matches_predicate():
+    """Stage 59 follow-on / Tier 2 #7 polish: tree_count returns the
+    number of leaves where predicate(value) is True."""
+    from helixc.frontend.pytree import tree_count
+    leaves = {"w1": 1.0, "w2": -2.0, "w3": 0.0, "b": 3.5}
+    # Count positive leaves
+    assert tree_count(leaves, lambda v: v > 0) == 2
+    # Count zero leaves
+    assert tree_count(leaves, lambda v: v == 0.0) == 1
+    # Count all (always true)
+    assert tree_count(leaves, lambda v: True) == 4
+    # Count none (always false)
+    assert tree_count(leaves, lambda v: False) == 0
+    # Empty dict
+    assert tree_count({}, lambda v: True) == 0
+
+
+def test_tree_filter_returns_matching_subset():
+    """Stage 59 follow-on: tree_filter returns a new dict with only
+    paths where predicate(value) is True; original dict unmodified."""
+    from helixc.frontend.pytree import tree_filter
+    leaves = {"w1": 1.0, "w2": -2.0, "w3": 0.0, "b": 3.5}
+    positive = tree_filter(leaves, lambda v: v > 0)
+    assert positive == {"w1": 1.0, "b": 3.5}
+    # Original untouched
+    assert leaves == {"w1": 1.0, "w2": -2.0, "w3": 0.0, "b": 3.5}
+    # Empty result when no match
+    assert tree_filter(leaves, lambda v: False) == {}
+
+
+def test_tree_filter_composes_with_tree_size():
+    """Stage 59 follow-on: tree_size(tree_filter(d, p)) ==
+    tree_count(d, p) — the composition identity."""
+    from helixc.frontend.pytree import tree_filter, tree_size, tree_count
+    leaves = {"a": 1, "b": 2, "c": 3, "d": 4, "e": 5}
+    p = lambda v: v % 2 == 1  # odd
+    assert tree_size(tree_filter(leaves, p)) == tree_count(leaves, p)
+    assert tree_size(tree_filter(leaves, p)) == 3  # 1, 3, 5
+
+
 def test_tree_size_counts_leaves():
     """Stage 59 follow-on / Tier 2 #7 polish: tree_size returns the
     number of leaves (len of the dict, but spelled clearly)."""
