@@ -5866,7 +5866,7 @@ def test_stage59_autodiff_cli_help_mentions_polish_flags():
         "--list-fns", "--list-fns-json",
         "--list-structs", "--list-structs-json",
         "--struct-fields", "--struct-fields-json",
-        "--list-uses", "--list-uses-json",
+        "--list-uses", "--list-uses-json", "--list-consts",
         "--list-fn-attrs", "--list-fn-attrs-json",
         "--list-fns-by-attr", "--list-fns-by-attr-json",
         "--fn-callgraph", "--fn-callers",
@@ -7378,6 +7378,29 @@ def test_stage59_list_uses_json(tmp_path):
         {"path": "foo.bar.baz", "segments": ["foo", "bar", "baz"]},
         {"path": "std.result", "segments": ["std", "result"]},
     ]}
+
+
+def test_stage59_list_consts(tmp_path):
+    """Stage 59 follow-on / Tier 4 #13 polish: --list-consts enumerates
+    top-level ConstDecls in declaration order."""
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "c.hx"
+    src.write_text(
+        "const MAX_BUF: i32 = 4096;\n"
+        "const PI: f64 = 3;\n"
+        "fn main() -> i32 { 0 }\n",
+        encoding="utf-8",
+    )
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--list-consts", str(src)],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0
+    lines = [l for l in proc.stdout.splitlines() if l]
+    # Declaration order: MAX_BUF before PI.
+    assert lines == ["MAX_BUF: i32", "PI: f64"]
 
 
 def test_stage59_list_uses(tmp_path):
