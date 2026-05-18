@@ -45,6 +45,12 @@ Introspection (Stage 28.9 + Stage 58 + Stage 59 polish):
         Same as --fn-sig-hash but JSON {name, hash_full, hash_short}.
     --parse-only-json <file.hx>
         Same as --parse-only but JSON {ok, path} on success.
+    --list-all-flags
+        CLI self-introspection: print every supported flag, one per
+        line, sorted alphabetically. No file argument required.
+    --list-all-flags-json
+        Same as --list-all-flags but JSON with JSON-parity audit
+        {flags, n_flags, n_with_json_twin, json_twins, text_only}.
     --autotune-budget-json <file.hx> <max_total>
         Same as --autotune-budget but JSON
         {within_budget, total_variants, budget, per_fn}.
@@ -6480,6 +6486,65 @@ def _diff_program_hash(path_a: str, path_b: str) -> int:
     return 1
 
 
+def _list_all_flags() -> int:
+    """Stage 59 follow-on / Tier 4 #13 polish: enumerate every CLI flag
+    accepted by autodiff_cli. Reads its own source to find dispatch
+    branches `if "--flag" in flags:`. One flag per line, sorted alpha.
+
+    Use case: CLI introspection — tooling can discover what flags exist
+    without parsing the human-readable --help docstring.
+
+    Exit 0 always.
+    """
+    import re
+    import os
+    here = os.path.abspath(__file__)
+    with open(here, "r", encoding="utf-8") as f:
+        src = f.read()
+    # Match `if "--flag-name" in flags:` patterns (the dispatch idiom).
+    flags = sorted(set(re.findall(r'if "(--[a-z-]+)" in flags:', src)))
+    for fl in flags:
+        print(fl)
+    return 0
+
+
+def _list_all_flags_json() -> int:
+    """Stage 59 follow-on / Tier 4 #13 polish: --list-all-flags in
+    machine-readable JSON form.
+
+    Output schema:
+      {"flags": ["<flag>", ...],
+       "n_flags": N,
+       "n_with_json_twin": N,
+       "json_twins": ["<flag>", ...],
+       "text_only": ["<flag>", ...]}
+
+    Cross-cuts the flag list with JSON-parity status — tooling can
+    audit which surfaces still need JSON twins.
+    """
+    import json
+    import re
+    import os
+    here = os.path.abspath(__file__)
+    with open(here, "r", encoding="utf-8") as f:
+        src = f.read()
+    flags = sorted(set(re.findall(r'if "(--[a-z-]+)" in flags:', src)))
+    flag_set = set(flags)
+    json_twins = sorted(f for f in flags if f.endswith("-json"))
+    text_only = sorted(
+        f for f in flags
+        if not f.endswith("-json") and (f + "-json") not in flag_set
+    )
+    print(json.dumps({
+        "flags": flags,
+        "n_flags": len(flags),
+        "n_with_json_twin": len(json_twins),
+        "json_twins": json_twins,
+        "text_only": text_only,
+    }, sort_keys=True, indent=2))
+    return 0
+
+
 def main():
     # Restart 49 B2: accept -h / --help → print docstring to stdout, exit 0
     # (matches check.py UX convention).
@@ -6504,6 +6569,13 @@ def main():
         sys.exit(2)
     args = [a for a in sys.argv[1:] if not a.startswith("--")]
     flags = {a for a in sys.argv[1:] if a.startswith("--")}
+
+    # CLI introspection flags (no file args required).
+    if "--list-all-flags" in flags:
+        sys.exit(_list_all_flags())
+
+    if "--list-all-flags-json" in flags:
+        sys.exit(_list_all_flags_json())
 
     if "--dump-ast-hashes" in flags:
         if len(args) < 1:

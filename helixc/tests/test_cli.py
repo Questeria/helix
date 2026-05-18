@@ -5897,6 +5897,7 @@ def test_stage59_autodiff_cli_help_mentions_polish_flags():
         "--program-hash-json", "--program-signature-hash-json",
         "--fn-sig-hash-json",
         "--parse-only-json", "--autotune-budget-json",
+        "--list-all-flags", "--list-all-flags-json",
         "--list-fn-attrs", "--list-fn-attrs-json",
         "--list-fns-by-attr", "--list-fns-by-attr-json",
         "--fn-callgraph", "--fn-callers",
@@ -7559,6 +7560,66 @@ def test_stage59_agent_methods_json(tmp_path):
         {"name": "propose", "params": ["i32"], "return_ty": "i32"},
         {"name": "evaluate", "params": ["i32", "i32"], "return_ty": "i32"},
     ]}
+
+
+def test_stage59_list_all_flags_text():
+    """Stage 59 follow-on / Tier 4 #13 polish: --list-all-flags prints
+    every supported CLI flag, sorted alphabetically, one per line.
+    No file argument required."""
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--list-all-flags"],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0
+    lines = [l for l in proc.stdout.strip().splitlines() if l]
+    assert len(lines) > 100  # we've shipped many flags by now
+    # Spot-check: --list-all-flags must include itself.
+    assert "--list-all-flags" in lines
+    assert "--list-all-flags-json" in lines
+    # Spot-check: known introspection flags present.
+    assert "--ast-stats" in lines
+    assert "--program-hash" in lines
+    # Sorted alphabetically.
+    assert lines == sorted(lines)
+
+
+def test_stage59_list_all_flags_json():
+    """Stage 59 follow-on / Tier 4 #13 polish: --list-all-flags-json
+    emits {flags, n_flags, n_with_json_twin, json_twins, text_only}
+    with JSON-parity audit."""
+    import json
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--list-all-flags-json"],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0
+    result = json.loads(proc.stdout)
+    # Schema check.
+    for key in ("flags", "n_flags", "n_with_json_twin",
+                 "json_twins", "text_only"):
+        assert key in result
+    assert result["n_flags"] == len(result["flags"])
+    # All json_twins end with -json.
+    for f in result["json_twins"]:
+        assert f.endswith("-json")
+    # No text_only flag has a JSON twin.
+    flag_set = set(result["flags"])
+    for f in result["text_only"]:
+        assert not f.endswith("-json")
+        assert (f + "-json") not in flag_set
+    # JSON-parity audit: text_only count + json_twins count is
+    # bounded by n_flags (json_twins also count their text-base
+    # in flags, so the math is: n_flags = (text-only flags) +
+    # (json-twin flags) + (flags with both text and json variants
+    # counted twice).
+    # Spot-check threshold: JSON-parity should be substantial now.
+    assert result["n_with_json_twin"] > 50
 
 
 def test_stage59_parse_only_json(tmp_path):
