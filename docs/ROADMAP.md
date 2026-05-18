@@ -196,21 +196,23 @@ Re-sequenced after Stage 46-47 closed:
   union (gate-7 HIGH-1+2) deferred to Stage 52 Inc 5 or rolled
   into Stage 53. Helper-fn indirection deferred to Stage 53
   (different defect class — inter-procedural taint).
-- **Stage 54** ✅ **CLOSED 2026-05-17** (Inc 1+2+3a SHIPPED +
-  closure gates 1-8 via 3-clean-gate protocol; Inc 3b deferred):
+- **Stage 54** ✅ **CLOSED 2026-05-18** (Inc 1+2+3a+3b SHIPPED +
+  closure gates 1-8 via 3-clean-gate protocol):
   Tier 1 #2 — AD across user-defined function calls broader
-  coverage. Substantially closes Tier 1 #2 at ~80% of original
-  blueprint scope.
+  coverage. 100% of original blueprint scope shipped.
   - Inc 1 ✅ (3d5b900): chain-rule arms for __min/__max/__clamp/
     __sign (11 names) in both forward + reverse modes.
   - Inc 2 ✅ (3fdd61f) CLOSED no-op: forward/reverse asymmetry
-    was already fixed at Stage 35 (verified by regression pin);
-    no code change needed.
+    was already fixed at Stage 35 (verified by regression pin).
   - Inc 3a ✅ (e011241): `_inline_user_calls.go()` walker
     descends into A.For/A.While/A.Loop bodies.
-  - Inc 3b (deferred to fresh session): bounded recursive
-    unrolling (~150 LOC + cache-key correctness hazard per
-    Stage C52-AD1 class). Lower-priority polish.
+  - Inc 3b ✅ (4873d07): bounded recursive unrolling via
+    per-fn `unroll_counts: dict[str, int]` + `max_unroll=3` +
+    `_args_are_unroll_safe` literal-only-arg detection.
+    Directly-recursive helpers with literal-counter args
+    (e.g., `power(x, 3)`) now unroll at compile time,
+    exposing the gradient. Mutual recursion + non-terminating
+    cases bounded by the cap.
   - **Closure gates 1-8** (5 commits, 16+ load-bearing regression
     pins, cascade trajectory 3→5→3→3→1→CLEAN→CLEAN→CLEAN):
     - Gate-1 (96fd97f): silent-failure HIGH-1 + Inc 3a load-
@@ -282,8 +284,8 @@ These are blockers for any real ML training, in priority order.
 1. **Transcendentals** ✅ DONE — Taylor series approximations for
    exp/log/sin/cos/sqrt + their AD chain rules. Stdlib auto-included.
 
-2. **AD across user-defined function calls.** ✅ SUBSTANTIALLY
-   DONE 2026-05-17 (Stage 54 CLOSED via 3-clean-gate protocol).
+2. **AD across user-defined function calls.** ✅ DONE 2026-05-18
+   (Stage 54 CLOSED via 3-clean-gate protocol + Inc 3b shipped).
    `grad(loss)` and `grad_rev(loss)` inline supported pure
    helper calls before differentiation; opaque/bodyless calls
    fail closed; loop-body descent works for pure helpers;
@@ -292,9 +294,11 @@ These are blockers for any real ML training, in priority order.
    modes with subgradient warnings on kink-crossing + clamp
    lo/hi dependency. _name_appears_in covers all AST kinds
    incl Modify/Quote/Splice/TileLit/StructLit/Match. Inc 3b
-   (bounded recursive unrolling) deferred to fresh session
-   per cache-key correctness hazard. ~80% of original
-   blueprint shipped.
+   (4873d07) added bounded recursive unrolling via
+   per-fn unroll_counts + max_unroll=3 + _args_are_unroll_safe
+   literal-only check — recursive helpers with literal-
+   counter args (e.g., `power(x, 3)`) now expand at compile
+   time. Tier 1 #2 100% of original blueprint shipped.
 
 3. **Multi-output reverse-mode AD.** ✅ DONE end-to-end
    (Python side + bootstrap side both shipped).
